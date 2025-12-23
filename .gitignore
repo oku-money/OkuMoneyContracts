@@ -13,6 +13,7 @@ docs/
 
 # Dotenv file
 .env
+.env.example
 
 # Dependencies
 node_modules/
@@ -34,3 +35,19 @@ Thumbs.db
 
 # Foundry
 foundry.lock
+
+# Hardhat
+cache_hardhat/
+typechain-types/
+
+# TypeScript
+dist/
+*.tsbuildinfo
+
+# Deployments (keep sepolia for reference)
+deployments/*
+!deployments/sepolia
+
+# Environment files
+.env.local
+.env.*.local

@@ -1,5 +1,6 @@
 import { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
+import "@openzeppelin/hardhat-upgrades";
 import "hardhat-deploy";
 import "hardhat-deploy-ethers";
 import "@typechain/hardhat";
@@ -34,11 +35,10 @@ const config: HardhatUserConfig = {
   networks: {
     hardhat: {
       chainId: 31337,
-      // Forking configuration - uncomment and set RPC URL to enable
-      // forking: {
-      //   url: process.env.MAINNET_RPC_URL || "",
-      //   blockNumber: 18000000, // Pin to specific block for reproducibility
-      // },
+      forking: process.env.MAINNET_RPC_URL ? {
+        url: process.env.MAINNET_RPC_URL,
+        blockNumber: 24172540,
+      } : undefined,
       allowUnlimitedContractSize: false,
       gas: "auto",
       gasPrice: "auto",

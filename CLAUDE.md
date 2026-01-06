@@ -32,11 +32,105 @@ Yield-bearing stablecoin backed 1:1 by US T-Bills. Centralized B2B infrastructur
 - **Transfers**: Operate on shares, not token amounts (MEV protection)
 - **Upgradeability**: OpenZeppelin TransparentUpgradeableProxy
 
+#### Requirements
+
+**Minting**
+- MUST only allow addresses with MINTER_ROLE to call mint()
+- MUST revert if mint would cause totalSupply() to exceed maxSupply
+- MUST revert if mint amount exceeds caller's minterAllowance
+- MUST decrement caller's minterAllowance by mint amount on success
+- MUST NOT restore minterAllowance on burn
+- MUST correctly convert token amount to shares when minting
+
+**Burning**
+- MUST allow any holder to burn their own tokens
+- MUST correctly convert token amount to shares when burning
+- MUST reduce totalSupply by burned amount
+- MUST NOT affect minterAllowance of any address
+
+**Transfers**
+- MUST transfer shares internally, not token amounts
+- MUST revert if sender is blacklisted
+- MUST revert if recipient is blacklisted
+- MUST revert if contract is paused (except for whitelisted operations)
+- MUST emit Transfer event with token amounts (not shares) for ERC20 compatibility
+
+**Rebasing**
+- MUST only allow authorized role to update rewardMultiplier
+- MUST NOT check maxSupply during rebase (supply grows organically)
+- MUST affect all balanceOf() return values immediately
+- MUST NOT change any user's share count
+- MUST emit RebaseEvent with old and new multiplier
+
+**Balance Queries**
+- balanceOf(user) MUST return _shares[user] × rewardMultiplier / PRECISION
+- sharesOf(user) MUST return raw _shares[user]
+- totalSupply() MUST return totalShares × rewardMultiplier / PRECISION
+- MUST handle zero balances without reverting
+
+**Pausing**
+- MUST only allow PAUSER_ROLE to call pause() and unpause()
+- MUST prevent transfers when paused
+- MUST prevent minting when paused
+- MUST prevent burning when paused
+- MUST allow blacklist() to execute while paused
+- MUST allow admin functions while paused
+
+**Blacklisting**
+- MUST only allow PAUSER_ROLE to call blacklist() and unblacklist()
+- MUST execute blacklist() even when contract is paused
+- MUST prevent blacklisted address from sending tokens
+- MUST prevent blacklisted address from receiving tokens
+- MUST NOT prevent admin from adjusting blacklisted address's allowances
+
+**Admin Functions**
+- MUST only allow DEFAULT_ADMIN_ROLE to adjust maxSupply
+- MUST only allow DEFAULT_ADMIN_ROLE to set/reset minterAllowance
+- MUST only allow DEFAULT_ADMIN_ROLE to grant/revoke roles
+- MUST emit events for all admin state changes
+
 ### wOkuUSD.sol (Non-Rebasing Wrapper)
 - **Standard**: ERC-4626 Tokenized Vault
 - **Holds**: Real OkuUSD backing all outstanding wOkuUSD
 - **Exchange rate**: Grows as underlying OkuUSD rebases
 - **Use case**: External protocol integrations (Uniswap V3, lending, aggregators)
+
+#### Requirements
+
+**ERC-4626 Compliance**
+- MUST implement all ERC-4626 functions (deposit, mint, withdraw, redeem, etc.)
+- MUST return OkuUSD address from asset()
+- MUST correctly report totalAssets() as vault's OkuUSD balance
+- MUST correctly calculate convertToShares() and convertToAssets()
+
+**Deposits**
+- MUST transfer OkuUSD from depositor to vault
+- MUST mint wOkuUSD shares proportional to deposit / totalAssets ratio
+- MUST NOT mint shares without receiving OkuUSD
+- MUST handle first deposit correctly (no division by zero)
+- MUST emit Deposit event
+
+**Withdrawals**
+- MUST burn wOkuUSD shares from owner
+- MUST transfer OkuUSD to receiver
+- MUST NOT allow withdrawing more OkuUSD than vault holds
+- MUST correctly calculate withdrawal amount based on current exchange rate
+- MUST emit Withdraw event
+
+**Exchange Rate**
+- Exchange rate MUST increase when underlying OkuUSD rebases
+- MUST NOT decrease exchange rate under normal operation
+- Rounding MUST favor the vault (protect against share inflation attacks)
+
+**Invariants**
+- okuUSD.balanceOf(vault) MUST always equal totalAssets()
+- User cannot extract more OkuUSD than they are entitled to based on shares
+- Wrap then immediate unwrap MUST return original amount (minus max 1 wei rounding)
+
+**Access Control**
+- MUST NOT have any admin functions that can drain vault
+- MUST NOT have pausability (always available as exit path)
+- MUST NOT have blacklist functionality (inherits from underlying OkuUSD)
 
 ### LitePSM.sol (Peg Stability Module)
 - **Function**: 1:1 USDC ↔ OkuUSD swaps, zero slippage
@@ -44,10 +138,99 @@ Yield-bearing stablecoin backed 1:1 by US T-Bills. Centralized B2B infrastructur
 - **PoR Check**: Where oracle exists, verify reserves before minting new supply
 - **Queue**: When buffer depleted, lock user's shares in FIFO queue; process when refilled
 
+#### Requirements
+
+**Minting (USDC → OkuUSD)**
+- MUST accept USDC and mint equivalent OkuUSD 1:1
+- MUST transfer USDC from user to PSM
+- MUST check PoR oracle before minting (where oracle configured)
+- MUST revert if oracle reports insufficient reserves
+- MUST revert if oracle data is stale (exceeds staleness threshold)
+- MUST revert if mint would exceed maxSupply
+- MUST work without oracle on chains where oracle is not configured
+- MUST emit Mint event with user, USDC amount, OkuUSD amount
+
+**Instant Redemption (OkuUSD → USDC)**
+- MUST accept OkuUSD and return equivalent USDC 1:1 when buffer sufficient
+- MUST burn user's OkuUSD on successful redemption
+- MUST transfer USDC from PSM to user
+- MUST revert if requesting more than user's balance
+- MUST emit Redeem event
+
+**Queue Entry (Insufficient Buffer)**
+- MUST lock user's shares (not token amount) when buffer insufficient
+- MUST transfer shares to contract custody
+- MUST record queue entry with user address, share count, timestamp
+- MUST emit RedemptionQueued event with queue position
+- MUST NOT burn tokens at queue entry time
+- User MUST continue earning yield on queued shares
+
+**Queue Processing**
+- MUST process queue in FIFO order
+- MUST calculate payout as: lockedShares × currentMultiplier
+- MUST burn locked shares when processing
+- MUST transfer calculated USDC amount to user
+- MUST only allow authorized role to call processQueue()
+- MUST emit RedemptionProcessed event
+- MUST handle partial queue processing if buffer insufficient for full queue
+
+**Oracle Integration**
+- MUST support configurable oracle address (can be zero for no oracle)
+- MUST support configurable staleness threshold
+- MUST query oracle before each mint operation (if configured)
+- MUST compare totalSupply + mintAmount against oracle reserve value
+- MUST NOT check oracle for burn/redeem operations
+- MUST NOT check oracle for queue processing (not new supply)
+
+**Buffer Management**
+- MUST only allow authorized role to deposit USDC buffer
+- MUST only allow authorized role to withdraw excess buffer
+- MUST correctly report available buffer
+- MUST NOT allow buffer withdrawal that would strand queued redemptions
+
+**Admin Functions**
+- MUST only allow admin to configure oracle address
+- MUST only allow admin to configure staleness threshold
+- MUST only allow admin to pause PSM operations
+- MUST emit events for all configuration changes
+
 ### OkuBridgeRouter.sol
 - **Function**: Convenience wrapper for bridging wOkuUSD
 - **Flow**: Unwrap wOkuUSD → burn OkuUSD → bridge → mint on destination
 - **No modifications**: Third-party bridges only see vanilla OkuUSD
+
+#### Requirements
+
+**Bridging wOkuUSD**
+- MUST accept wOkuUSD from user
+- MUST unwrap wOkuUSD to OkuUSD via vault.redeem()
+- MUST approve bridge adapter to spend OkuUSD
+- MUST call appropriate bridge adapter with OkuUSD amount
+- MUST pass destination chain and recipient to bridge
+- MUST emit BridgeInitiated event
+
+**Bridge Adapter Support**
+- MUST support OkuBridge (proprietary)
+- MUST support Wormhole NttManager
+- MUST support LayerZero OFTAdapter  
+- MUST support Chainlink CCIP BurnMintTokenPool
+- MUST allow admin to register/deregister bridge adapters
+- MUST revert if requested bridge adapter not registered
+
+**Direct OkuUSD Bridging**
+- MUST also support bridging OkuUSD directly (skip unwrap step)
+- MUST accept OkuUSD from user
+- MUST call appropriate bridge adapter
+
+**Access Control**
+- MUST NOT hold user funds beyond single transaction
+- MUST NOT have admin functions that can redirect bridge destinations
+- MUST only allow admin to manage adapter registry
+
+**Error Handling**
+- MUST revert entire transaction if unwrap fails
+- MUST revert entire transaction if bridge call fails
+- MUST NOT leave tokens stranded in router contract
 
 ## Access Control (RBAC)
 

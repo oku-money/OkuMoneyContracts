@@ -34,9 +34,7 @@ contract VaultInvariantsTest is BaseTest {
      */
     function invariant_VaultFullyBacked() public view {
         assertEq(
-            okuUSD.balanceOf(address(wokuUSD)),
-            wokuUSD.totalAssets(),
-            "Vault must be fully backed"
+            okuUSD.balanceOf(address(wokuUSD)), wokuUSD.totalAssets(), "Vault must be fully backed"
         );
     }
 

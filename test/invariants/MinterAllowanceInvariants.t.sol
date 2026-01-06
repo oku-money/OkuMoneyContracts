@@ -42,11 +42,7 @@ contract MinterAllowanceInvariantsTest is BaseTest {
 
         if (!handler.wasAllowanceReset()) {
             // No admin reset occurred, allowance should only decrease
-            assertLe(
-                currentAllowance,
-                initialAllowance,
-                "Allowance increased without admin reset"
-            );
+            assertLe(currentAllowance, initialAllowance, "Allowance increased without admin reset");
         }
         // If admin reset occurred, any value is valid
     }

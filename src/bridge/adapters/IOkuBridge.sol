@@ -18,7 +18,8 @@ interface IOkuBridge {
         uint256 amount,
         uint256 destinationChain,
         address recipient
-    ) external;
+    )
+        external;
 
     /**
      * @notice Receive bridged tokens from another chain

@@ -69,35 +69,28 @@ abstract contract BaseTest is Test {
 
         // Deploy OkuUSD implementation and proxy
         okuUSDImpl = new OkuUSD();
-        bytes memory okuInitData = abi.encodeCall(
-            OkuUSD.initialize,
-            ("OkuUSD", "OKUSD", admin, MAX_SUPPLY)
-        );
+        bytes memory okuInitData =
+            abi.encodeCall(OkuUSD.initialize, ("OkuUSD", "OKUSD", admin, MAX_SUPPLY));
         okuUSD = OkuUSD(address(new ERC1967Proxy(address(okuUSDImpl), okuInitData)));
 
         // Deploy wOkuUSD implementation and proxy
         wokuUSDImpl = new wOkuUSD();
         bytes memory wokuInitData = abi.encodeCall(
-            wOkuUSD.initialize,
-            (IERC20(address(okuUSD)), "Wrapped OkuUSD", "wOKUSD", admin)
+            wOkuUSD.initialize, (IERC20(address(okuUSD)), "Wrapped OkuUSD", "wOKUSD", admin)
         );
         wokuUSD = wOkuUSD(address(new ERC1967Proxy(address(wokuUSDImpl), wokuInitData)));
 
         // Deploy RedemptionQueue implementation and proxy
         redemptionQueueImpl = new RedemptionQueue();
-        bytes memory queueInitData = abi.encodeCall(
-            RedemptionQueue.initialize,
-            (address(okuUSD), admin)
-        );
-        redemptionQueue = RedemptionQueue(
-            address(new ERC1967Proxy(address(redemptionQueueImpl), queueInitData))
-        );
+        bytes memory queueInitData =
+            abi.encodeCall(RedemptionQueue.initialize, (address(okuUSD), admin));
+        redemptionQueue =
+            RedemptionQueue(address(new ERC1967Proxy(address(redemptionQueueImpl), queueInitData)));
 
         // Deploy LitePSM implementation and proxy
         litePSMImpl = new LitePSM();
         bytes memory psmInitData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(okuUSD), address(usdc), address(redemptionQueue), admin)
+            LitePSM.initialize, (address(okuUSD), address(usdc), address(redemptionQueue), admin)
         );
         litePSM = LitePSM(address(new ERC1967Proxy(address(litePSMImpl), psmInitData)));
     }
@@ -177,7 +170,7 @@ abstract contract BaseTest is Test {
     /// @notice Bound fuzz input to reasonable multiplier increase (0.01% to 100%)
     function _boundMultiplierIncrease(uint256 increase) internal view returns (uint256) {
         uint256 current = okuUSD.rewardMultiplier();
-        return bound(increase, current / 10000, current);
+        return bound(increase, current / 10_000, current);
     }
 
     /// @notice Get minimum of two values

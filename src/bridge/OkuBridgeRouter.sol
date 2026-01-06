@@ -3,8 +3,12 @@ pragma solidity ^0.8.28;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {
+    AccessControlUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {
+    PausableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -17,7 +21,13 @@ interface IOkuUSD {
 }
 
 interface IBridgeAdapter {
-    function bridge(address token, uint256 amount, uint256 destinationChain, address recipient) external;
+    function bridge(
+        address token,
+        uint256 amount,
+        uint256 destinationChain,
+        address recipient
+    )
+        external;
 }
 
 /**
@@ -83,7 +93,10 @@ contract OkuBridgeRouter is
         address adapter,
         uint256 destinationChain,
         address recipient
-    ) external whenNotPaused {
+    )
+        external
+        whenNotPaused
+    {
         require(supportedAdapters[adapter], "Unsupported adapter");
         require(recipient != address(0), "Invalid recipient");
 
@@ -97,12 +110,7 @@ contract OkuBridgeRouter is
         okuUSD.burn(address(this), okuUSDAmount);
 
         // Bridge via adapter
-        IBridgeAdapter(adapter).bridge(
-            address(okuUSD),
-            okuUSDAmount,
-            destinationChain,
-            recipient
-        );
+        IBridgeAdapter(adapter).bridge(address(okuUSD), okuUSDAmount, destinationChain, recipient);
 
         emit BridgeInitiated(msg.sender, adapter, okuUSDAmount, destinationChain, recipient);
     }
@@ -119,7 +127,10 @@ contract OkuBridgeRouter is
         address adapter,
         uint256 destinationChain,
         address recipient
-    ) external whenNotPaused {
+    )
+        external
+        whenNotPaused
+    {
         require(supportedAdapters[adapter], "Unsupported adapter");
         require(recipient != address(0), "Invalid recipient");
 
@@ -130,19 +141,20 @@ contract OkuBridgeRouter is
         okuUSD.burn(address(this), okuUSDAmount);
 
         // Bridge via adapter
-        IBridgeAdapter(adapter).bridge(
-            address(okuUSD),
-            okuUSDAmount,
-            destinationChain,
-            recipient
-        );
+        IBridgeAdapter(adapter).bridge(address(okuUSD), okuUSDAmount, destinationChain, recipient);
 
         emit BridgeInitiated(msg.sender, adapter, okuUSDAmount, destinationChain, recipient);
     }
 
     // ============ Admin Functions ============
 
-    function configureAdapter(address adapter, bool supported) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function configureAdapter(
+        address adapter,
+        bool supported
+    )
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
         supportedAdapters[adapter] = supported;
         emit AdapterConfigured(adapter, supported);
     }
@@ -157,5 +169,9 @@ contract OkuBridgeRouter is
 
     // ============ Upgradeability ============
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {}
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        override
+        onlyRole(UPGRADER_ROLE)
+    {}
 }

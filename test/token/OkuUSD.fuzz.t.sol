@@ -48,7 +48,9 @@ contract OkuUSDFuzzTest is BaseTest {
         assertLe(recoveredTokens, tokens, "Should not gain tokens");
         // Allow for rounding based on multiplier scale - at most lose multiplier/PRECISION worth
         uint256 maxLoss = (tokens * multiplier) / (PRECISION * PRECISION) + 2;
-        assertGe(recoveredTokens, tokens > maxLoss ? tokens - maxLoss : 0, "Excessive precision loss");
+        assertGe(
+            recoveredTokens, tokens > maxLoss ? tokens - maxLoss : 0, "Excessive precision loss"
+        );
     }
 
     // ============ Mint/Burn Consistency Tests ============
@@ -76,7 +78,9 @@ contract OkuUSDFuzzTest is BaseTest {
         uint256 amount1,
         uint256 amount2,
         uint256 burnAmount
-    ) public {
+    )
+        public
+    {
         amount1 = bound(amount1, 1e18, MAX_SUPPLY / 4);
         amount2 = bound(amount2, 1e18, MAX_SUPPLY / 4);
 
@@ -91,7 +95,11 @@ contract OkuUSDFuzzTest is BaseTest {
         vm.prank(minter);
         okuUSD.burn(user1, burnAmount);
 
-        assertEq(okuUSD.totalSupply(), amount1 + amount2 - burnAmount, "Supply should decrease by burn amount");
+        assertEq(
+            okuUSD.totalSupply(),
+            amount1 + amount2 - burnAmount,
+            "Supply should decrease by burn amount"
+        );
     }
 
     // ============ Transfer Consistency Tests ============
@@ -122,7 +130,9 @@ contract OkuUSDFuzzTest is BaseTest {
         uint256 mintAmount,
         uint256 transfer1,
         uint256 transfer2
-    ) public {
+    )
+        public
+    {
         mintAmount = bound(mintAmount, 10e18, MAX_SUPPLY / 2);
         _mintOkuUSD(user1, mintAmount);
 
@@ -183,7 +193,9 @@ contract OkuUSDFuzzTest is BaseTest {
         uint256 amount1,
         uint256 amount2,
         uint256 newMultiplier
-    ) public {
+    )
+        public
+    {
         amount1 = bound(amount1, 1e18, MAX_SUPPLY / 4);
         amount2 = bound(amount2, 1e18, MAX_SUPPLY / 4);
         newMultiplier = _boundMultiplier(newMultiplier);
@@ -206,7 +218,12 @@ contract OkuUSDFuzzTest is BaseTest {
     }
 
     /// @notice Total supply scales with multiplier after rebase
-    function testFuzz_TotalSupplyScalesWithMultiplier(uint256 mintAmount, uint256 newMultiplier) public {
+    function testFuzz_TotalSupplyScalesWithMultiplier(
+        uint256 mintAmount,
+        uint256 newMultiplier
+    )
+        public
+    {
         mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 10);
         newMultiplier = _boundMultiplier(newMultiplier);
 
@@ -229,7 +246,13 @@ contract OkuUSDFuzzTest is BaseTest {
     }
 
     /// @notice Sequential rebases accumulate correctly
-    function testFuzz_SequentialRebases(uint256 mintAmount, uint256 increase1, uint256 increase2) public {
+    function testFuzz_SequentialRebases(
+        uint256 mintAmount,
+        uint256 increase1,
+        uint256 increase2
+    )
+        public
+    {
         mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 100);
         increase1 = bound(increase1, PRECISION / 1000, PRECISION / 10); // 0.1% to 10%
         increase2 = bound(increase2, PRECISION / 1000, PRECISION / 10);
@@ -257,7 +280,12 @@ contract OkuUSDFuzzTest is BaseTest {
     // ============ Minter Allowance Tests ============
 
     /// @notice Minter allowance only decreases (never increases from mint/burn)
-    function testFuzz_MinterAllowanceOnlyDecreases(uint256 initialAllowance, uint256 mintAmount) public {
+    function testFuzz_MinterAllowanceOnlyDecreases(
+        uint256 initialAllowance,
+        uint256 mintAmount
+    )
+        public
+    {
         initialAllowance = bound(initialAllowance, 1e18, MAX_SUPPLY);
         mintAmount = bound(mintAmount, 1, _min(initialAllowance, MAX_SUPPLY));
 
@@ -270,16 +298,16 @@ contract OkuUSDFuzzTest is BaseTest {
         okuUSD.mint(user1, mintAmount);
 
         uint256 allowanceAfterMint = okuUSD.minterAllowance(minter);
-        assertEq(allowanceAfterMint, allowanceBefore - mintAmount, "Allowance decrements by mint amount");
+        assertEq(
+            allowanceAfterMint, allowanceBefore - mintAmount, "Allowance decrements by mint amount"
+        );
 
         // Burn should NOT restore allowance
         vm.prank(minter);
         okuUSD.burn(user1, mintAmount);
 
         assertEq(
-            okuUSD.minterAllowance(minter),
-            allowanceAfterMint,
-            "Burn does not restore allowance"
+            okuUSD.minterAllowance(minter), allowanceAfterMint, "Burn does not restore allowance"
         );
     }
 
@@ -408,7 +436,13 @@ contract OkuUSDFuzzTest is BaseTest {
     }
 
     /// @notice Mint after rebase calculates shares correctly
-    function testFuzz_MintAfterRebase(uint256 firstMint, uint256 multiplier, uint256 secondMint) public {
+    function testFuzz_MintAfterRebase(
+        uint256 firstMint,
+        uint256 multiplier,
+        uint256 secondMint
+    )
+        public
+    {
         // Use smaller amounts to avoid supply cap issues after rebase
         firstMint = bound(firstMint, 1e18, MAX_SUPPLY / 20);
         multiplier = bound(multiplier, PRECISION, PRECISION * 5);
@@ -431,10 +465,14 @@ contract OkuUSDFuzzTest is BaseTest {
         assertEq(user2Shares, expectedUser2Shares, "Shares calculated correctly after rebase");
 
         // Verify balances (allow small rounding due to share conversion)
-        assertEq(okuUSD.balanceOf(user1), (user1Shares * multiplier) / PRECISION, "User1 balance correct");
+        assertEq(
+            okuUSD.balanceOf(user1), (user1Shares * multiplier) / PRECISION, "User1 balance correct"
+        );
         // User2 balance may have rounding due to share conversion at different multipliers
         // At high multipliers, rounding can compound - allow up to multiplier/PRECISION wei
         uint256 maxRounding = (multiplier / PRECISION) + 1;
-        assertApproxEqAbs(okuUSD.balanceOf(user2), secondMint, maxRounding, "User2 balance equals mint amount");
+        assertApproxEqAbs(
+            okuUSD.balanceOf(user2), secondMint, maxRounding, "User2 balance equals mint amount"
+        );
     }
 }

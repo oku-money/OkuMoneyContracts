@@ -108,7 +108,8 @@ contract wOkuUSDHandler is Test {
     /// @notice Trigger rebase
     function rebase(uint256 multiplierIncrease) external {
         uint256 currentMultiplier = okuUSD.rewardMultiplier();
-        uint256 increase = bound(multiplierIncrease, currentMultiplier / 10000, currentMultiplier / 10);
+        uint256 increase =
+            bound(multiplierIncrease, currentMultiplier / 10_000, currentMultiplier / 10);
         uint256 newMultiplier = currentMultiplier + increase;
 
         vm.prank(admin);

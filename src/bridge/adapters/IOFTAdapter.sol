@@ -33,7 +33,10 @@ interface IOFTAdapter {
         SendParam calldata sendParam,
         MessagingFee calldata fee,
         address refundAddress
-    ) external payable returns (bytes memory msgReceipt, bytes memory oftReceipt);
+    )
+        external
+        payable
+        returns (bytes memory msgReceipt, bytes memory oftReceipt);
 
     /**
      * @notice Quote the fee for sending tokens
@@ -44,5 +47,8 @@ interface IOFTAdapter {
     function quoteSend(
         SendParam calldata sendParam,
         bool payInLzToken
-    ) external view returns (MessagingFee memory fee);
+    )
+        external
+        view
+        returns (MessagingFee memory fee);
 }

@@ -425,9 +425,7 @@ contract wOkuUSDTest is BaseTest {
 
         // Invariant: okuUSD.balanceOf(wokuUSD) == wokuUSD.totalAssets()
         assertEq(
-            okuUSD.balanceOf(address(wokuUSD)),
-            wokuUSD.totalAssets(),
-            "Vault backing invariant"
+            okuUSD.balanceOf(address(wokuUSD)), wokuUSD.totalAssets(), "Vault backing invariant"
         );
 
         // After rebase

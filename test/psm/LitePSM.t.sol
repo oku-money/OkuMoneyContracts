@@ -22,8 +22,8 @@ contract LitePSMTest is BaseTest {
     function setUp() public override {
         super.setUp();
         // Mint USDC to users and PSM buffer
-        _mintUSDC(user1, 10000e6);
-        _mintUSDC(user2, 10000e6);
+        _mintUSDC(user1, 10_000e6);
+        _mintUSDC(user2, 10_000e6);
         _mintUSDC(address(litePSM), 5000e6); // Initial buffer
     }
 
@@ -130,7 +130,7 @@ contract LitePSMTest is BaseTest {
 
     function test_Swap_RevertsOnStaleOracle() public {
         // Warp to a reasonable timestamp first
-        vm.warp(1000000);
+        vm.warp(1_000_000);
 
         // Configure oracle with short staleness
         vm.prank(admin);
@@ -219,15 +219,15 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_Redeem_QueuesWhenBufferInsufficient() public {
-        _mintOkuUSD(user1, 10000e6);
+        _mintOkuUSD(user1, 10_000e6);
 
         // PSM only has 5000e6 USDC buffer
         // User needs to approve both PSM (for immediate burns) and Queue (for queuing)
-        _approveOkuUSD(user1, address(litePSM), 10000e6);
-        _approveOkuUSD(user1, address(redemptionQueue), 10000e6);
+        _approveOkuUSD(user1, address(litePSM), 10_000e6);
+        _approveOkuUSD(user1, address(redemptionQueue), 10_000e6);
 
         vm.prank(user1);
-        litePSM.redeem(10000e6);
+        litePSM.redeem(10_000e6);
 
         // Should be queued, not immediate redemption
         // User still has their OkuUSD (transferred to queue contract)
@@ -237,7 +237,7 @@ contract LitePSMTest is BaseTest {
 
     function test_Redeem_NoOracleCheck() public {
         // Warp to reasonable timestamp first
-        vm.warp(1000000);
+        vm.warp(1_000_000);
 
         // Configure oracle
         vm.prank(admin);
@@ -253,7 +253,7 @@ contract LitePSMTest is BaseTest {
         vm.prank(user1);
         litePSM.redeem(100e6);
 
-        assertEq(usdc.balanceOf(user1), 10100e6); // Initial 10000 + 100 redeemed
+        assertEq(usdc.balanceOf(user1), 10_100e6); // Initial 10000 + 100 redeemed
     }
 
     function test_Redeem_RevertsZeroAmount() public {
@@ -314,7 +314,7 @@ contract LitePSMTest is BaseTest {
         assertEq(redemptionQueue.queueLength(), 2);
 
         // Refill buffer
-        _mintUSDC(address(litePSM), 15000e6);
+        _mintUSDC(address(litePSM), 15_000e6);
 
         // Grant queue ability to burn OkuUSD
         vm.prank(admin);
@@ -322,7 +322,7 @@ contract LitePSMTest is BaseTest {
 
         // PSM needs to approve queue to transfer USDC for payouts
         vm.prank(address(litePSM));
-        usdc.approve(address(redemptionQueue), 15000e6);
+        usdc.approve(address(redemptionQueue), 15_000e6);
 
         vm.prank(operator);
         litePSM.processQueue(10);

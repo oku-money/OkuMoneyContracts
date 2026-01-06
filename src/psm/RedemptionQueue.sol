@@ -3,7 +3,9 @@ pragma solidity ^0.8.28;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {
+    AccessControlUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -61,10 +63,7 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
      */
     function enqueue(address user, uint256 okuUSDAmount) external onlyRole(PSM_ROLE) {
         // Transfer OkuUSD to queue (locks it)
-        require(
-            okuUSD.transferFrom(user, address(this), okuUSDAmount),
-            "Transfer failed"
-        );
+        require(okuUSD.transferFrom(user, address(this), okuUSDAmount), "Transfer failed");
 
         queue.push(QueueEntry({user: user, okuUSDAmount: okuUSDAmount, timestamp: block.timestamp}));
 
@@ -81,7 +80,10 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         uint256 maxEntries,
         address usdcToken,
         address okuUSDToken
-    ) external onlyRole(PSM_ROLE) {
+    )
+        external
+        onlyRole(PSM_ROLE)
+    {
         IERC20 usdc = IERC20(usdcToken);
         IOkuUSD oku = IOkuUSD(okuUSDToken);
 
@@ -126,5 +128,9 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
     // ============ Upgradeability ============
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {}
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        override
+        onlyRole(UPGRADER_ROLE)
+    {}
 }

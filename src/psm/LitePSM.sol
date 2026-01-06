@@ -3,8 +3,12 @@ pragma solidity ^0.8.28;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {
+    AccessControlUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {
+    PausableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {RedemptionQueue} from "./RedemptionQueue.sol";
@@ -26,12 +30,7 @@ interface IAggregatorV3 {
  * @notice Peg Stability Module for 1:1 USDC <-> OkuUSD swaps with zero slippage
  * @dev Includes PoR oracle checks and redemption queue for when buffer is depleted
  */
-contract LitePSM is
-    Initializable,
-    AccessControlUpgradeable,
-    PausableUpgradeable,
-    UUPSUpgradeable
-{
+contract LitePSM is Initializable, AccessControlUpgradeable, PausableUpgradeable, UUPSUpgradeable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
@@ -63,7 +62,10 @@ contract LitePSM is
         address _usdc,
         address _redemptionQueue,
         address admin
-    ) public initializer {
+    )
+        public
+        initializer
+    {
         __AccessControl_init();
         __Pausable_init();
 
@@ -137,7 +139,10 @@ contract LitePSM is
         address _oracle,
         uint256 _stalenessThreshold,
         bool _enabled
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    )
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
         porOracle = IAggregatorV3(_oracle);
         stalenessThreshold = _stalenessThreshold;
         oracleEnabled = _enabled;
@@ -173,5 +178,9 @@ contract LitePSM is
 
     // ============ Upgradeability ============
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {}
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        override
+        onlyRole(UPGRADER_ROLE)
+    {}
 }

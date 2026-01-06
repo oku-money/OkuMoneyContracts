@@ -39,7 +39,9 @@ contract wOkuUSDFuzzTest is BaseTest {
     function testFuzz_WrapUnwrapRoundTripAtMultiplier(
         uint256 depositAmount,
         uint256 multiplier
-    ) public {
+    )
+        public
+    {
         depositAmount = bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
         multiplier = _boundMultiplier(multiplier);
 
@@ -58,7 +60,11 @@ contract wOkuUSDFuzzTest is BaseTest {
         // At high multipliers, rounding can compound through deposit and redeem
         // Max loss is proportional to multiplier ratio
         uint256 maxLoss = (depositAmount * multiplier) / (PRECISION * PRECISION) + 10;
-        assertGe(assetsBack, depositAmount > maxLoss ? depositAmount - maxLoss : 0, "Excessive loss on round trip");
+        assertGe(
+            assetsBack,
+            depositAmount > maxLoss ? depositAmount - maxLoss : 0,
+            "Excessive loss on round trip"
+        );
         assertLe(assetsBack, depositAmount, "Cannot gain on round trip");
     }
 
@@ -82,13 +88,20 @@ contract wOkuUSDFuzzTest is BaseTest {
 
         // User should receive scaled amount based on multiplier change
         uint256 expectedAssets = (depositAmount * newMultiplier) / PRECISION;
-        assertApproxEqRel(assetsBack, expectedAssets, 0.0001e18, "Assets should scale with multiplier");
+        assertApproxEqRel(
+            assetsBack, expectedAssets, 0.0001e18, "Assets should scale with multiplier"
+        );
     }
 
     // ============ Rebase Effect Tests ============
 
     /// @notice Rebase increases share value proportionally
-    function testFuzz_RebaseIncreasesShareValue(uint256 depositAmount, uint256 newMultiplier) public {
+    function testFuzz_RebaseIncreasesShareValue(
+        uint256 depositAmount,
+        uint256 newMultiplier
+    )
+        public
+    {
         depositAmount = bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
         // Ensure meaningful multiplier increase (at least 1% to avoid rounding issues)
         uint256 minMultiplier = okuUSD.rewardMultiplier() + (okuUSD.rewardMultiplier() / 100);
@@ -136,7 +149,9 @@ contract wOkuUSDFuzzTest is BaseTest {
     function testFuzz_TotalAssetsInvariantAfterRebase(
         uint256 depositAmount,
         uint256 newMultiplier
-    ) public {
+    )
+        public
+    {
         depositAmount = bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
         newMultiplier = _boundMultiplier(newMultiplier);
 
@@ -185,7 +200,12 @@ contract wOkuUSDFuzzTest is BaseTest {
     }
 
     /// @notice previewWithdraw matches actual withdraw
-    function testFuzz_PreviewWithdraw_MatchesActual(uint256 depositAmount, uint256 withdrawRatio) public {
+    function testFuzz_PreviewWithdraw_MatchesActual(
+        uint256 depositAmount,
+        uint256 withdrawRatio
+    )
+        public
+    {
         depositAmount = bound(depositAmount, 2e18, okuUSD.balanceOf(user1) / 2);
         withdrawRatio = bound(withdrawRatio, 1, 100); // 1% to 100%
 
@@ -244,7 +264,9 @@ contract wOkuUSDFuzzTest is BaseTest {
         uint256 initialDeposit,
         uint256 newMultiplier,
         uint256 queryAmount
-    ) public {
+    )
+        public
+    {
         initialDeposit = bound(initialDeposit, 10e18, okuUSD.balanceOf(user1) / 4);
         newMultiplier = _boundMultiplier(newMultiplier);
         queryAmount = bound(queryAmount, 1e18, initialDeposit);
@@ -273,7 +295,9 @@ contract wOkuUSDFuzzTest is BaseTest {
         uint256 deposit1,
         uint256 deposit2,
         uint256 withdraw1Ratio
-    ) public {
+    )
+        public
+    {
         deposit1 = bound(deposit1, 1e18, okuUSD.balanceOf(user1) / 2);
         deposit2 = bound(deposit2, 1e18, okuUSD.balanceOf(user2) / 2);
         withdraw1Ratio = bound(withdraw1Ratio, 1, 100);
@@ -314,7 +338,9 @@ contract wOkuUSDFuzzTest is BaseTest {
         uint256 deposit1,
         uint256 deposit2,
         uint256 newMultiplier
-    ) public {
+    )
+        public
+    {
         deposit1 = bound(deposit1, 1e18, okuUSD.balanceOf(user1) / 2);
         deposit2 = bound(deposit2, 1e18, okuUSD.balanceOf(user2) / 2);
         newMultiplier = _boundMultiplier(newMultiplier);
@@ -349,7 +375,7 @@ contract wOkuUSDFuzzTest is BaseTest {
 
     /// @notice Small deposits handled correctly
     function testFuzz_SmallDeposits(uint256 amount) public {
-        amount = bound(amount, 1, 10000); // Very small amounts
+        amount = bound(amount, 1, 10_000); // Very small amounts
 
         _mintOkuUSD(user3, amount);
         _approveOkuUSD(user3, address(wokuUSD), amount);

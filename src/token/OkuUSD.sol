@@ -3,9 +3,15 @@ pragma solidity ^0.8.28;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
+import {
+    AccessControlUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {
+    PausableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {
+    ERC20Upgradeable
+} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 
 /**
  * @title OkuUSD
@@ -58,7 +64,10 @@ contract OkuUSD is
         string memory symbol,
         address admin,
         uint256 initialMaxSupply
-    ) public initializer {
+    )
+        public
+        initializer
+    {
         __ERC20_init(name, symbol);
         __AccessControl_init();
         __Pausable_init();
@@ -131,7 +140,12 @@ contract OkuUSD is
         address from,
         address to,
         uint256 amount
-    ) public override whenNotPaused returns (bool) {
+    )
+        public
+        override
+        whenNotPaused
+        returns (bool)
+    {
         _spendAllowance(from, msg.sender, amount);
         _transferShares(from, to, tokensToShares(amount));
         return true;
@@ -191,7 +205,10 @@ contract OkuUSD is
     function configureMinterAllowance(
         address minter,
         uint256 allowance
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    )
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
         minterAllowance[minter] = allowance;
         emit MinterAllowanceConfigured(minter, allowance);
     }
@@ -228,5 +245,9 @@ contract OkuUSD is
 
     // ============ Upgradeability ============
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {}
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        override
+        onlyRole(UPGRADER_ROLE)
+    {}
 }

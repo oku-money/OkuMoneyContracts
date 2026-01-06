@@ -17,7 +17,10 @@ interface INttManager {
         uint256 amount,
         uint16 recipientChain,
         bytes32 recipient
-    ) external payable returns (uint64 messageSequence);
+    )
+        external
+        payable
+        returns (uint64 messageSequence);
 
     /**
      * @notice Receive tokens from another chain

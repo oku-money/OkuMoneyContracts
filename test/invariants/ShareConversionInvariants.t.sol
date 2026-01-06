@@ -38,11 +38,7 @@ contract ShareConversionInvariantsTest is BaseTest {
             uint256 shares = okuUSD.sharesOf(user);
             uint256 expectedBalance = (shares * okuUSD.rewardMultiplier()) / PRECISION;
 
-            assertEq(
-                okuUSD.balanceOf(user),
-                expectedBalance,
-                "balanceOf formula violated"
-            );
+            assertEq(okuUSD.balanceOf(user), expectedBalance, "balanceOf formula violated");
         }
     }
 
@@ -53,11 +49,7 @@ contract ShareConversionInvariantsTest is BaseTest {
         uint256 totalShares = okuUSD.totalShares();
         uint256 expectedSupply = (totalShares * okuUSD.rewardMultiplier()) / PRECISION;
 
-        assertEq(
-            okuUSD.totalSupply(),
-            expectedSupply,
-            "totalSupply formula violated"
-        );
+        assertEq(okuUSD.totalSupply(), expectedSupply, "totalSupply formula violated");
     }
 
     /**
@@ -72,11 +64,7 @@ contract ShareConversionInvariantsTest is BaseTest {
         }
 
         // Total shares should be >= sum (there may be other holders)
-        assertLe(
-            sumOfShares,
-            okuUSD.totalShares(),
-            "Sum of actor shares should not exceed total"
-        );
+        assertLe(sumOfShares, okuUSD.totalShares(), "Sum of actor shares should not exceed total");
     }
 
     /**
@@ -84,9 +72,7 @@ contract ShareConversionInvariantsTest is BaseTest {
      */
     function invariant_MultiplierNeverDecreases() public view {
         assertGe(
-            okuUSD.rewardMultiplier(),
-            PRECISION,
-            "Multiplier should never be below initial value"
+            okuUSD.rewardMultiplier(), PRECISION, "Multiplier should never be below initial value"
         );
     }
 
@@ -99,10 +85,6 @@ contract ShareConversionInvariantsTest is BaseTest {
         uint256 recoveredShares = okuUSD.tokensToShares(tokens);
 
         // Should recover original shares (or less due to rounding)
-        assertLe(
-            recoveredShares,
-            testShares,
-            "Conversion should not gain shares"
-        );
+        assertLe(recoveredShares, testShares, "Conversion should not gain shares");
     }
 }

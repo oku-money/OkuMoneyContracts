@@ -104,7 +104,8 @@ contract OkuUSDHandler is Test {
     function rebase(uint256 multiplierIncrease) external {
         uint256 currentMultiplier = okuUSD.rewardMultiplier();
         // Increase by 0.01% to 10%
-        uint256 increase = bound(multiplierIncrease, currentMultiplier / 10000, currentMultiplier / 10);
+        uint256 increase =
+            bound(multiplierIncrease, currentMultiplier / 10_000, currentMultiplier / 10);
         uint256 newMultiplier = currentMultiplier + increase;
 
         vm.prank(admin);

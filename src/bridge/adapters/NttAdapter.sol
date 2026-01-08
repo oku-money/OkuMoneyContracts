@@ -47,22 +47,18 @@ contract NttAdapter is Ownable {
     error InvalidRecipient();
     error InvalidAmount();
 
-    constructor(
-        address _nttManager,
-        address _token,
-        address _owner
-    ) Ownable(_owner) {
+    constructor(address _nttManager, address _token, address _owner) Ownable(_owner) {
         nttManager = INttManager(_nttManager);
         token = _token;
 
         // Pre-configure common chain mappings
         // See: https://docs.wormhole.com/wormhole/reference/constants
         wormholeChainId[1] = 2; // Ethereum
-        wormholeChainId[42161] = 23; // Arbitrum
+        wormholeChainId[42_161] = 23; // Arbitrum
         wormholeChainId[10] = 24; // Optimism
         wormholeChainId[137] = 5; // Polygon
         wormholeChainId[8453] = 30; // Base
-        wormholeChainId[43114] = 6; // Avalanche
+        wormholeChainId[43_114] = 6; // Avalanche
     }
 
     /**
@@ -79,7 +75,10 @@ contract NttAdapter is Ownable {
         uint256 amount,
         uint256 destinationChain,
         address recipient
-    ) external payable {
+    )
+        external
+        payable
+    {
         require(_token == token, "Invalid token");
         if (amount == 0) revert InvalidAmount();
         if (recipient == address(0)) revert InvalidRecipient();
@@ -93,11 +92,8 @@ contract NttAdapter is Ownable {
         // Call NTT transfer to send cross-chain message
         // Note: Tokens already burned by router - this is message-only
         // Forwards any ETH for Wormhole message fees
-        uint64 sequence = nttManager.transfer{value: msg.value}(
-            amount,
-            wormholeDestChain,
-            recipientBytes32
-        );
+        uint64 sequence =
+            nttManager.transfer{value: msg.value}(amount, wormholeDestChain, recipientBytes32);
 
         emit BridgeInitiated(msg.sender, amount, wormholeDestChain, recipientBytes32, sequence);
     }

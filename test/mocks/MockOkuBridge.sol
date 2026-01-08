@@ -40,13 +40,18 @@ contract MockOkuBridge is IOkuBridge, Test {
         uint256 amount,
         uint256 destinationChain,
         address recipient
-    ) external override {
-        pendingBridges.push(PendingBridge({
-            token: token,
-            amount: amount,
-            destinationChain: destinationChain,
-            recipient: recipient
-        }));
+    )
+        external
+        override
+    {
+        pendingBridges.push(
+            PendingBridge({
+                token: token,
+                amount: amount,
+                destinationChain: destinationChain,
+                recipient: recipient
+            })
+        );
 
         emit BridgeCalled(token, amount, destinationChain, recipient);
     }

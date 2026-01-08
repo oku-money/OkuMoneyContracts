@@ -77,7 +77,12 @@ contract MockNttManager is INttManager, Test {
         uint256 amount,
         uint16 recipientChain,
         bytes32 recipient
-    ) external payable override returns (uint64 messageSequence) {
+    )
+        external
+        payable
+        override
+        returns (uint64 messageSequence)
+    {
         // Check fee
         if (msg.value < messageFee) {
             revert InsufficientFee(messageFee, msg.value);

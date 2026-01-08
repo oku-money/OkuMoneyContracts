@@ -94,20 +94,11 @@ contract SupplyInvariantsTest is BaseTest {
         // At extreme multipliers from many rebases, this check becomes unreliable
         if (multiplier < 1e36) {
             uint256 maxShares = (MAX_SUPPLY * PRECISION) / multiplier;
-            assertLe(
-                totalShares,
-                maxShares * 2,
-                "Total shares exceeds reasonable maximum"
-            );
+            assertLe(totalShares, maxShares * 2, "Total shares exceeds reasonable maximum");
         }
 
         // Always verify the supply formula holds
         uint256 expectedSupply = (totalShares * multiplier) / PRECISION;
-        assertApproxEqAbs(
-            okuUSD.totalSupply(),
-            expectedSupply,
-            1,
-            "Supply formula should hold"
-        );
+        assertApproxEqAbs(okuUSD.totalSupply(), expectedSupply, 1, "Supply formula should hold");
     }
 }

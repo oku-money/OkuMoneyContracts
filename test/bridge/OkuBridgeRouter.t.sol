@@ -15,7 +15,7 @@ contract OkuBridgeRouterTest is BaseTest {
     OkuBridgeRouter public bridgeRouterImpl;
     MockOkuBridge public mockBridge;
 
-    uint256 public constant ARBITRUM_CHAIN_ID = 42161;
+    uint256 public constant ARBITRUM_CHAIN_ID = 42_161;
     uint256 public constant OPTIMISM_CHAIN_ID = 10;
 
     // Events
@@ -33,13 +33,10 @@ contract OkuBridgeRouterTest is BaseTest {
 
         // Deploy OkuBridgeRouter implementation and proxy
         bridgeRouterImpl = new OkuBridgeRouter();
-        bytes memory routerInitData = abi.encodeCall(
-            OkuBridgeRouter.initialize,
-            (address(wokuUSD), address(okuUSD), admin)
-        );
-        bridgeRouter = OkuBridgeRouter(
-            address(new ERC1967Proxy(address(bridgeRouterImpl), routerInitData))
-        );
+        bytes memory routerInitData =
+            abi.encodeCall(OkuBridgeRouter.initialize, (address(wokuUSD), address(okuUSD), admin));
+        bridgeRouter =
+            OkuBridgeRouter(address(new ERC1967Proxy(address(bridgeRouterImpl), routerInitData)));
 
         // Deploy mock bridge
         mockBridge = new MockOkuBridge(okuUSD, minter);
@@ -409,7 +406,12 @@ contract OkuBridgeRouterTest is BaseTest {
         assertEq(pending.amount, expectedOkuAmount);
     }
 
-    function testFuzz_BridgeWOkuUSD_AfterRebase(uint256 depositAmount, uint256 multiplierIncrease) public {
+    function testFuzz_BridgeWOkuUSD_AfterRebase(
+        uint256 depositAmount,
+        uint256 multiplierIncrease
+    )
+        public
+    {
         depositAmount = bound(depositAmount, 1e18, 100_000_000e18);
         multiplierIncrease = _boundMultiplierIncrease(multiplierIncrease);
 
@@ -493,7 +495,9 @@ contract OkuBridgeRouterTest is BaseTest {
 
             vm.startPrank(users[i]);
             wokuUSD.approve(address(bridgeRouter), shares);
-            bridgeRouter.bridgeWOkuUSD(shares, address(mockBridge), ARBITRUM_CHAIN_ID, destinations[i]);
+            bridgeRouter.bridgeWOkuUSD(
+                shares, address(mockBridge), ARBITRUM_CHAIN_ID, destinations[i]
+            );
             vm.stopPrank();
         }
 

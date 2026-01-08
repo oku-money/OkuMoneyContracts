@@ -35,7 +35,7 @@ contract NttBridgeTest is BaseTest {
     uint16 public constant WORMHOLE_BASE = 30;
 
     // EVM chain IDs
-    uint256 public constant ARBITRUM_CHAIN_ID = 42161;
+    uint256 public constant ARBITRUM_CHAIN_ID = 42_161;
     uint256 public constant OPTIMISM_CHAIN_ID = 10;
     uint256 public constant BASE_CHAIN_ID = 8453;
 
@@ -67,13 +67,10 @@ contract NttBridgeTest is BaseTest {
 
         // Deploy OkuBridgeRouter
         bridgeRouterImpl = new OkuBridgeRouter();
-        bytes memory routerInitData = abi.encodeCall(
-            OkuBridgeRouter.initialize,
-            (address(wokuUSD), address(okuUSD), admin)
-        );
-        bridgeRouter = OkuBridgeRouter(
-            address(new ERC1967Proxy(address(bridgeRouterImpl), routerInitData))
-        );
+        bytes memory routerInitData =
+            abi.encodeCall(OkuBridgeRouter.initialize, (address(wokuUSD), address(okuUSD), admin));
+        bridgeRouter =
+            OkuBridgeRouter(address(new ERC1967Proxy(address(bridgeRouterImpl), routerInitData)));
 
         // Configure roles
         vm.startPrank(admin);
@@ -145,13 +142,7 @@ contract NttBridgeTest is BaseTest {
         // Bridge call from user1
         vm.prank(user1);
         vm.expectEmit(true, false, false, true, address(nttAdapter));
-        emit BridgeInitiated(
-            user1,
-            amount,
-            WORMHOLE_ARBITRUM,
-            _addressToBytes32(user2),
-            0
-        );
+        emit BridgeInitiated(user1, amount, WORMHOLE_ARBITRUM, _addressToBytes32(user2), 0);
         nttAdapter.bridge(address(okuUSD), amount, ARBITRUM_CHAIN_ID, user2);
 
         // Verify transfer recorded in mock
@@ -165,8 +156,8 @@ contract NttBridgeTest is BaseTest {
         uint256 amount = 1000e18;
         // No tokens needed - adapter just sends message
 
-        vm.expectRevert(abi.encodeWithSelector(NttAdapter.UnsupportedChain.selector, 12345));
-        nttAdapter.bridge(address(okuUSD), amount, 12345, user2);
+        vm.expectRevert(abi.encodeWithSelector(NttAdapter.UnsupportedChain.selector, 12_345));
+        nttAdapter.bridge(address(okuUSD), amount, 12_345, user2);
     }
 
     function test_NttAdapter_Bridge_RevertInvalidRecipient() public {
@@ -199,7 +190,9 @@ contract NttBridgeTest is BaseTest {
 
         // Bridge with insufficient fee
         vm.deal(address(this), fee / 2);
-        vm.expectRevert(abi.encodeWithSelector(MockNttManager.InsufficientFee.selector, fee, fee / 2));
+        vm.expectRevert(
+            abi.encodeWithSelector(MockNttManager.InsufficientFee.selector, fee, fee / 2)
+        );
         nttAdapter.bridge{value: fee / 2}(address(okuUSD), amount, ARBITRUM_CHAIN_ID, user2);
     }
 
@@ -458,7 +451,9 @@ contract NttBridgeTest is BaseTest {
     function testFuzz_Integration_BridgeWOkuUSD_AfterRebase(
         uint256 depositAmount,
         uint256 multiplierIncrease
-    ) public {
+    )
+        public
+    {
         depositAmount = bound(depositAmount, 1e18, 100_000_000e18);
         multiplierIncrease = _boundMultiplierIncrease(multiplierIncrease);
 
@@ -486,7 +481,12 @@ contract NttBridgeTest is BaseTest {
         assertGe(pending.amount, depositAmount); // At least original amount
     }
 
-    function testFuzz_Integration_FullRoundTrip(uint256 initialOku, uint256 multiplierIncrease) public {
+    function testFuzz_Integration_FullRoundTrip(
+        uint256 initialOku,
+        uint256 multiplierIncrease
+    )
+        public
+    {
         initialOku = bound(initialOku, 1e18, 100_000_000e18);
         multiplierIncrease = _boundMultiplierIncrease(multiplierIncrease);
 
@@ -539,7 +539,9 @@ contract NttBridgeTest is BaseTest {
 
             vm.startPrank(users[i]);
             wokuUSD.approve(address(bridgeRouter), shares);
-            bridgeRouter.bridgeWOkuUSD(shares, address(nttAdapter), ARBITRUM_CHAIN_ID, destinations[i]);
+            bridgeRouter.bridgeWOkuUSD(
+                shares, address(nttAdapter), ARBITRUM_CHAIN_ID, destinations[i]
+            );
             vm.stopPrank();
         }
 

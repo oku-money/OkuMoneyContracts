@@ -12,8 +12,12 @@ import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 contract RedemptionQueueTest is BaseTest {
     // ============ Events ============
 
-    event RedemptionQueued(address indexed user, uint256 shares, uint256 okuUSDAmount, uint256 position);
-    event RedemptionProcessed(address indexed user, uint256 shares, uint256 okuUSDAmount, uint256 usdcAmount);
+    event RedemptionQueued(
+        address indexed user, uint256 shares, uint256 okuUSDAmount, uint256 position
+    );
+    event RedemptionProcessed(
+        address indexed user, uint256 shares, uint256 okuUSDAmount, uint256 usdcAmount
+    );
 
     // ============ Setup ============
 
@@ -466,14 +470,24 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
 
         // User should receive exact expected payout
-        assertEq(usdc.balanceOf(user1), user1USDCBefore + expectedPayout, "User should receive full yield");
+        assertEq(
+            usdc.balanceOf(user1),
+            user1USDCBefore + expectedPayout,
+            "User should receive full yield"
+        );
         assertEq(redemptionQueue.queueLength(), 0, "Queue should be empty");
     }
 
     /**
      * @notice Fuzz test: Multiple rebases compound correctly
      */
-    function testFuzz_MultipleRebasesCompound(uint256 amount, uint256 rebase1, uint256 rebase2) public {
+    function testFuzz_MultipleRebasesCompound(
+        uint256 amount,
+        uint256 rebase1,
+        uint256 rebase2
+    )
+        public
+    {
         amount = bound(amount, 1e18, 100_000e18);
         rebase1 = bound(rebase1, PRECISION / 100, PRECISION); // 1% to 100% increase
         rebase2 = bound(rebase2, PRECISION / 100, PRECISION); // 1% to 100% increase
@@ -563,7 +577,13 @@ contract RedemptionQueueTest is BaseTest {
      * @notice Fuzz test: Partial processing respects FIFO order
      * @dev Queues multiple users, processes only a subset, verifies first N get paid
      */
-    function testFuzz_FIFO_PartialProcessing(uint256 numUsers, uint256 numToProcess, uint256 baseSeed) public {
+    function testFuzz_FIFO_PartialProcessing(
+        uint256 numUsers,
+        uint256 numToProcess,
+        uint256 baseSeed
+    )
+        public
+    {
         numUsers = bound(numUsers, 3, 15);
         numToProcess = bound(numToProcess, 1, numUsers - 1); // Process less than all
 
@@ -574,7 +594,7 @@ contract RedemptionQueueTest is BaseTest {
 
         for (uint256 i = 0; i < numUsers; i++) {
             users[i] = makeAddr(string(abi.encodePacked("partialUser", i)));
-            amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 5_000e18);
+            amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 5000e18);
 
             _mintOkuUSD(users[i], amounts[i]);
             vm.prank(users[i]);
@@ -600,7 +620,11 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.processQueue(numToProcess, address(usdc), address(okuUSD));
 
         // Verify: first numToProcess users got paid, rest didn't
-        assertEq(redemptionQueue.queueLength(), numUsers - numToProcess, "Remaining queue length incorrect");
+        assertEq(
+            redemptionQueue.queueLength(),
+            numUsers - numToProcess,
+            "Remaining queue length incorrect"
+        );
 
         for (uint256 i = 0; i < numUsers; i++) {
             if (i < numToProcess) {
@@ -624,7 +648,13 @@ contract RedemptionQueueTest is BaseTest {
     /**
      * @notice Fuzz test: FIFO with rebase - each user gets correct yield-adjusted amount
      */
-    function testFuzz_FIFO_WithRebase(uint256 numUsers, uint256 multiplierIncrease, uint256 baseSeed) public {
+    function testFuzz_FIFO_WithRebase(
+        uint256 numUsers,
+        uint256 multiplierIncrease,
+        uint256 baseSeed
+    )
+        public
+    {
         numUsers = bound(numUsers, 2, 10);
         multiplierIncrease = bound(multiplierIncrease, PRECISION / 100, PRECISION * 2); // 1% to 200%
 
@@ -687,9 +717,15 @@ contract RedemptionQueueTest is BaseTest {
      * @notice Fuzz test: Buffer depletion stops processing correctly mid-queue
      * @dev Uses uniform amounts to ensure predictable FIFO behavior
      */
-    function testFuzz_FIFO_BufferDepletion(uint256 numUsers, uint256 amountPerUser, uint256 numToPay) public {
+    function testFuzz_FIFO_BufferDepletion(
+        uint256 numUsers,
+        uint256 amountPerUser,
+        uint256 numToPay
+    )
+        public
+    {
         numUsers = bound(numUsers, 3, 10);
-        amountPerUser = bound(amountPerUser, 1e18, 1_000e18);
+        amountPerUser = bound(amountPerUser, 1e18, 1000e18);
         numToPay = bound(numToPay, 1, numUsers - 1); // Pay some but not all
 
         address[] memory users = new address[](numUsers);
@@ -736,14 +772,23 @@ contract RedemptionQueueTest is BaseTest {
         }
 
         // Verify queue length
-        assertEq(redemptionQueue.queueLength(), numUsers - numToPay, "Queue length should match unprocessed");
+        assertEq(
+            redemptionQueue.queueLength(),
+            numUsers - numToPay,
+            "Queue length should match unprocessed"
+        );
     }
 
     /**
      * @notice Fuzz test: Variable amounts with buffer depletion
      * @dev Tests that processing stops at the right point with different amounts
      */
-    function testFuzz_FIFO_VariableAmountsBufferDepletion(uint256 numUsers, uint256 baseSeed) public {
+    function testFuzz_FIFO_VariableAmountsBufferDepletion(
+        uint256 numUsers,
+        uint256 baseSeed
+    )
+        public
+    {
         numUsers = bound(numUsers, 3, 8);
 
         address[] memory users = new address[](numUsers);

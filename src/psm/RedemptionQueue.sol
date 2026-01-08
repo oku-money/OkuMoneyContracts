@@ -29,7 +29,7 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
     struct QueueEntry {
         address user;
-        uint256 shares;  // Stored as shares so users earn yield while queued
+        uint256 shares; // Stored as shares so users earn yield while queued
         uint256 timestamp;
     }
 
@@ -39,8 +39,12 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     IOkuUSD public okuUSD;
 
     // Events
-    event RedemptionQueued(address indexed user, uint256 shares, uint256 okuUSDAmount, uint256 position);
-    event RedemptionProcessed(address indexed user, uint256 shares, uint256 okuUSDAmount, uint256 usdcAmount);
+    event RedemptionQueued(
+        address indexed user, uint256 shares, uint256 okuUSDAmount, uint256 position
+    );
+    event RedemptionProcessed(
+        address indexed user, uint256 shares, uint256 okuUSDAmount, uint256 usdcAmount
+    );
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {

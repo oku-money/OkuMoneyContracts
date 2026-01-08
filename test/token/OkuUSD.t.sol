@@ -232,7 +232,7 @@ contract OkuUSDTest is BaseTest {
         _mintOkuUSD(user1, 100e18);
 
         vm.prank(user1);
-        okuUSD.transfer(user2, 30e18);
+        assertTrue(okuUSD.transfer(user2, 30e18));
 
         assertEq(okuUSD.balanceOf(user1), 70e18);
         assertEq(okuUSD.balanceOf(user2), 30e18);
@@ -244,7 +244,7 @@ contract OkuUSDTest is BaseTest {
         uint256 totalSharesBefore = okuUSD.totalShares();
 
         vm.prank(user1);
-        okuUSD.transfer(user2, 30e18);
+        assertTrue(okuUSD.transfer(user2, 30e18));
 
         // Total shares should be unchanged (internal transfer)
         assertEq(okuUSD.totalShares(), totalSharesBefore);
@@ -263,6 +263,7 @@ contract OkuUSDTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert();
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuUSD.transfer(user2, 30e18);
     }
 
@@ -274,6 +275,7 @@ contract OkuUSDTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert("Sender blacklisted");
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuUSD.transfer(user2, 30e18);
     }
 
@@ -285,6 +287,7 @@ contract OkuUSDTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert("Recipient blacklisted");
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuUSD.transfer(user2, 30e18);
     }
 
@@ -293,6 +296,7 @@ contract OkuUSDTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert("Insufficient balance");
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuUSD.transfer(user2, 150e18);
     }
 
@@ -301,6 +305,7 @@ contract OkuUSDTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert("Transfer to zero address");
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuUSD.transfer(address(0), 30e18);
     }
 
@@ -312,7 +317,7 @@ contract OkuUSDTest is BaseTest {
         emit Transfer(user1, user2, 30e18);
 
         vm.prank(user1);
-        okuUSD.transfer(user2, 30e18);
+        assertTrue(okuUSD.transfer(user2, 30e18));
     }
 
     function test_Transfer_ToSelf() public {
@@ -320,7 +325,7 @@ contract OkuUSDTest is BaseTest {
         uint256 balanceBefore = okuUSD.balanceOf(user1);
 
         vm.prank(user1);
-        okuUSD.transfer(user1, 50e18);
+        assertTrue(okuUSD.transfer(user1, 50e18));
 
         assertEq(okuUSD.balanceOf(user1), balanceBefore);
     }
@@ -332,7 +337,7 @@ contract OkuUSDTest is BaseTest {
         _approveOkuUSD(user1, user2, 50e18);
 
         vm.prank(user2);
-        okuUSD.transferFrom(user1, user3, 30e18);
+        assertTrue(okuUSD.transferFrom(user1, user3, 30e18));
 
         assertEq(okuUSD.allowance(user1, user2), 20e18);
     }
@@ -343,6 +348,7 @@ contract OkuUSDTest is BaseTest {
 
         vm.prank(user2);
         vm.expectRevert();
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuUSD.transferFrom(user1, user3, 30e18);
     }
 
@@ -355,6 +361,7 @@ contract OkuUSDTest is BaseTest {
 
         vm.prank(user2);
         vm.expectRevert();
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuUSD.transferFrom(user1, user3, 30e18);
     }
 
@@ -463,6 +470,7 @@ contract OkuUSDTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert("Sender blacklisted");
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuUSD.transfer(user2, 50e18);
     }
 
@@ -474,6 +482,7 @@ contract OkuUSDTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert("Recipient blacklisted");
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuUSD.transfer(user2, 50e18);
     }
 
@@ -504,7 +513,7 @@ contract OkuUSDTest is BaseTest {
 
         // Should be able to transfer again
         vm.prank(user1);
-        okuUSD.transfer(user2, 50e18);
+        assertTrue(okuUSD.transfer(user2, 50e18));
 
         assertEq(okuUSD.balanceOf(user2), 50e18);
     }
@@ -536,6 +545,7 @@ contract OkuUSDTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert();
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuUSD.transfer(user2, 50e18);
     }
 
@@ -548,6 +558,7 @@ contract OkuUSDTest is BaseTest {
 
         vm.prank(user2);
         vm.expectRevert();
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuUSD.transferFrom(user1, user3, 50e18);
     }
 
@@ -582,7 +593,7 @@ contract OkuUSDTest is BaseTest {
 
         // Should be able to transfer again
         vm.prank(user1);
-        okuUSD.transfer(user2, 50e18);
+        assertTrue(okuUSD.transfer(user2, 50e18));
 
         assertEq(okuUSD.balanceOf(user2), 50e18);
     }
@@ -718,7 +729,7 @@ contract OkuUSDTest is BaseTest {
         _mintOkuUSD(user1, 100e18);
 
         vm.prank(user1);
-        okuUSD.transfer(user2, 0);
+        assertTrue(okuUSD.transfer(user2, 0));
 
         assertEq(okuUSD.balanceOf(user2), 0);
     }

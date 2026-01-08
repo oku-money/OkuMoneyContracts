@@ -129,7 +129,17 @@ contract LitePSM is Initializable, AccessControlUpgradeable, PausableUpgradeable
      * @param maxEntries Maximum number of queue entries to process
      */
     function processQueue(uint256 maxEntries) external onlyRole(OPERATOR_ROLE) {
+        //approve our USDC balance to the redemption queue so we can fill the orders
+        uint256 balance = usdc.balanceOf(address(this));
+        usdc.approve(address(redemptionQueue), balance);
+
+        //process queue
         redemptionQueue.processQueue(maxEntries, address(usdc), address(okuUSD));
+
+        //revoke approval for remaining USDC
+        usdc.approve(address(redemptionQueue), 0);
+
+        //emit
         emit BufferRefilled(usdc.balanceOf(address(this)));
     }
 
@@ -159,6 +169,8 @@ contract LitePSM is Initializable, AccessControlUpgradeable, PausableUpgradeable
         require(reserves >= 0, "Invalid oracle response");
 
         uint256 newSupply = okuUSD.totalSupply() + mintAmount;
+        // Safe cast: reserves >= 0 checked above
+        // forge-lint: disable-next-line(unsafe-typecast)
         require(uint256(reserves) >= newSupply, "Exceeds reserves");
     }
 

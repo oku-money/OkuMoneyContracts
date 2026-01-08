@@ -320,15 +320,85 @@ contract LitePSMTest is BaseTest {
         vm.prank(admin);
         okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
 
-        // PSM needs to approve queue to transfer USDC for payouts
-        vm.prank(address(litePSM));
-        usdc.approve(address(redemptionQueue), 15_000e6);
-
+        // processQueue now handles approve-use-revoke internally
         vm.prank(operator);
         litePSM.processQueue(10);
 
         // Queue should be processed
         assertEq(redemptionQueue.queueLength(), 0);
+    }
+
+    function test_ProcessQueue_ApprovesAndRevokesAllowance() public {
+        // Setup: create a queued redemption
+        _mintOkuUSD(user1, 6000e6);
+        _approveOkuUSD(user1, address(redemptionQueue), 6000e6);
+        _approveOkuUSD(user1, address(litePSM), 6000e6);
+
+        uint256 user1UsdcBefore = usdc.balanceOf(user1);
+
+        vm.prank(user1);
+        litePSM.redeem(6000e6); // Queued (buffer only 5000)
+
+        assertEq(redemptionQueue.queueLength(), 1);
+
+        // Refill buffer
+        _mintUSDC(address(litePSM), 10_000e6);
+
+        // Grant queue ability to burn OkuUSD
+        vm.prank(admin);
+        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+
+        // Verify allowance is 0 before processing
+        assertEq(usdc.allowance(address(litePSM), address(redemptionQueue)), 0);
+
+        // Process queue
+        vm.prank(operator);
+        litePSM.processQueue(10);
+
+        // Verify allowance is revoked back to 0 after processing
+        assertEq(usdc.allowance(address(litePSM), address(redemptionQueue)), 0);
+
+        // Queue should be processed
+        assertEq(redemptionQueue.queueLength(), 0);
+
+        // User should have received USDC (original balance + 6000e6 from queue)
+        assertEq(usdc.balanceOf(user1), user1UsdcBefore + 6000e6);
+    }
+
+    function test_ProcessQueue_PartialProcessingRevokesAllowance() public {
+        // Setup: create multiple queued redemptions
+        _mintOkuUSD(user1, 6000e6);
+        _mintOkuUSD(user2, 6000e6);
+
+        _approveOkuUSD(user1, address(redemptionQueue), 6000e6);
+        _approveOkuUSD(user2, address(redemptionQueue), 6000e6);
+        _approveOkuUSD(user1, address(litePSM), 6000e6);
+        _approveOkuUSD(user2, address(litePSM), 6000e6);
+
+        vm.prank(user1);
+        litePSM.redeem(6000e6);
+
+        vm.prank(user2);
+        litePSM.redeem(6000e6);
+
+        assertEq(redemptionQueue.queueLength(), 2);
+
+        // Refill buffer with only enough for one redemption
+        _mintUSDC(address(litePSM), 7000e6);
+
+        // Grant queue ability to burn OkuUSD
+        vm.prank(admin);
+        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+
+        // Process only 1 entry
+        vm.prank(operator);
+        litePSM.processQueue(1);
+
+        // Allowance should still be revoked even with partial processing
+        assertEq(usdc.allowance(address(litePSM), address(redemptionQueue)), 0);
+
+        // Only 1 entry processed
+        assertEq(redemptionQueue.queueLength(), 1);
     }
 
     // ============ Admin Tests ============

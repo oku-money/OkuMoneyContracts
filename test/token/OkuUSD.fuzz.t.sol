@@ -115,7 +115,7 @@ contract OkuUSDFuzzTest is BaseTest {
         uint256 combinedSharesBefore = okuUSD.sharesOf(user1) + okuUSD.sharesOf(user2);
 
         vm.prank(user1);
-        okuUSD.transfer(user2, transferAmount);
+        assertTrue(okuUSD.transfer(user2, transferAmount));
 
         assertEq(okuUSD.totalShares(), totalSharesBefore, "Total shares unchanged by transfer");
         assertEq(
@@ -141,12 +141,12 @@ contract OkuUSDFuzzTest is BaseTest {
         // Transfer user1 -> user2
         transfer1 = bound(transfer1, 1, mintAmount / 2);
         vm.prank(user1);
-        okuUSD.transfer(user2, transfer1);
+        assertTrue(okuUSD.transfer(user2, transfer1));
 
         // Transfer user2 -> user3
         transfer2 = bound(transfer2, 1, transfer1);
         vm.prank(user2);
-        okuUSD.transfer(user3, transfer2);
+        assertTrue(okuUSD.transfer(user3, transfer2));
 
         assertEq(okuUSD.totalSupply(), totalSupplyBefore, "Total supply unchanged by transfers");
         assertEq(
@@ -319,8 +319,6 @@ contract OkuUSDFuzzTest is BaseTest {
         // Mint some tokens to decrease allowance
         _mintOkuUSD(user1, mintAmount);
 
-        uint256 allowanceAfterMint = okuUSD.minterAllowance(minter);
-
         // Admin resets allowance
         vm.prank(admin);
         okuUSD.configureMinterAllowance(minter, newAllowance);
@@ -397,7 +395,7 @@ contract OkuUSDFuzzTest is BaseTest {
 
         if (amount > 1) {
             vm.prank(user1);
-            okuUSD.transfer(user2, amount - 1);
+            assertTrue(okuUSD.transfer(user2, amount - 1));
 
             assertGe(okuUSD.balanceOf(user2), 0, "Small transfer works");
         }
@@ -424,7 +422,7 @@ contract OkuUSDFuzzTest is BaseTest {
         // Transfer at high multiplier
         uint256 transferAmount = expectedBalance / 2;
         vm.prank(user1);
-        okuUSD.transfer(user2, transferAmount);
+        assertTrue(okuUSD.transfer(user2, transferAmount));
 
         // Verify transfer worked correctly
         assertApproxEqRel(

@@ -405,8 +405,6 @@ contract wOkuUSDTest is BaseTest {
         vm.prank(admin);
         okuUSD.updateRewardMultiplier(PRECISION * 3);
 
-        uint256 sharesBefore = wokuUSD.balanceOf(user1);
-
         // Withdraw odd amount
         vm.prank(user1);
         uint256 sharesBurned = wokuUSD.withdraw(50e18, user1, user1);

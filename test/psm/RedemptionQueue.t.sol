@@ -7,15 +7,13 @@ import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 /**
  * @title RedemptionQueueTest
  * @notice Unit tests for RedemptionQueue
- * @dev KNOWN BUG: Queue stores okuUSDAmount (tokens) instead of shares.
- *      Per CLAUDE.md spec, users should earn yield while waiting.
- *      Current implementation does NOT provide yield to queued users.
+ * @dev Queue stores shares so users earn yield while waiting (per CLAUDE.md spec)
  */
 contract RedemptionQueueTest is BaseTest {
     // ============ Events ============
 
-    event RedemptionQueued(address indexed user, uint256 okuUSDAmount, uint256 position);
-    event RedemptionProcessed(address indexed user, uint256 okuUSDAmount, uint256 usdcAmount);
+    event RedemptionQueued(address indexed user, uint256 shares, uint256 okuUSDAmount, uint256 position);
+    event RedemptionProcessed(address indexed user, uint256 shares, uint256 okuUSDAmount, uint256 usdcAmount);
 
     // ============ Setup ============
 
@@ -62,7 +60,8 @@ contract RedemptionQueueTest is BaseTest {
 
         RedemptionQueue.QueueEntry memory entry = redemptionQueue.getQueueEntry(0);
         assertEq(entry.user, user1);
-        assertEq(entry.okuUSDAmount, amount);
+        // At 1x multiplier, shares == tokens
+        assertEq(entry.shares, _tokensToShares(amount));
         assertGt(entry.timestamp, 0);
     }
 
@@ -84,8 +83,11 @@ contract RedemptionQueueTest is BaseTest {
         uint256 amount = 100e18;
         _approveOkuUSD(user1, address(redemptionQueue), amount);
 
+        // At 1x multiplier, shares == tokens
+        uint256 expectedShares = _tokensToShares(amount);
+
         vm.expectEmit(true, false, false, true);
-        emit RedemptionQueued(user1, amount, 0);
+        emit RedemptionQueued(user1, expectedShares, amount, 0);
 
         redemptionQueue.enqueue(user1, amount);
     }
@@ -231,8 +233,11 @@ contract RedemptionQueueTest is BaseTest {
         _mintUSDC(address(this), amount);
         _approveUSDC(address(this), address(redemptionQueue), amount);
 
+        // At 1x multiplier, shares == tokens
+        uint256 expectedShares = _tokensToShares(amount);
+
         vm.expectEmit(true, false, false, true);
-        emit RedemptionProcessed(user1, amount, amount);
+        emit RedemptionProcessed(user1, expectedShares, amount, amount);
 
         redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
     }
@@ -289,48 +294,520 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.getQueueEntry(0);
     }
 
-    // ============ KNOWN BUG DOCUMENTATION TEST ============
+    // ============ Yield Accrual Tests ============
 
     /**
-     * @notice Documents that current implementation stores tokens, not shares
-     * @dev Per CLAUDE.md spec, queue should store SHARES so users earn yield while waiting.
-     *      Current implementation stores okuUSDAmount (tokens), meaning users do NOT
-     *      earn yield on queued redemptions.
-     *
-     * Expected behavior (per spec):
-     *   - Queue entry stores shares, not token amount
-     *   - When processing, payout = lockedShares × currentMultiplier
-     *   - User earns yield while waiting in queue
-     *
-     * Actual behavior (current implementation):
-     *   - Queue entry stores okuUSDAmount (tokens)
-     *   - When processing, payout = stored okuUSDAmount (1:1)
-     *   - User does NOT earn yield while in queue
+     * @notice Verifies that users earn yield while waiting in queue
+     * @dev Per CLAUDE.md spec: queue stores shares so users earn yield while waiting
      */
-    function test_BUG_QueueStoresTokensNotShares() public {
+    function test_QueueStoresShares_YieldAccrues() public {
         uint256 amount = 100e18;
         _approveOkuUSD(user1, address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
-        // Get the stored entry
+        // Get the stored entry - should store shares
         RedemptionQueue.QueueEntry memory entry = redemptionQueue.getQueueEntry(0);
 
-        // BUG: Entry stores okuUSDAmount, not shares
-        // This field is called "okuUSDAmount" which is TOKEN amount, not shares
-        assertEq(entry.okuUSDAmount, amount);
+        // At 1x multiplier, shares == tokens
+        assertEq(entry.shares, amount);
 
-        // Now if we rebase, the queued user should earn yield (per spec)
-        // But they won't because we stored tokens not shares
-
+        // Now rebase - user should earn yield
         vm.prank(admin);
         okuUSD.updateRewardMultiplier(PRECISION * 2); // 2x rebase
 
-        // The entry still shows the same token amount (doesn't reflect rebase)
+        // The stored shares remain the same
         RedemptionQueue.QueueEntry memory entryAfterRebase = redemptionQueue.getQueueEntry(0);
-        assertEq(entryAfterRebase.okuUSDAmount, amount); // Still 100e18, not 200e18
+        assertEq(entryAfterRebase.shares, amount); // Still 100e18 shares
 
-        // This is a BUG - per spec, users should earn yield while queued
-        // To fix: store shares and convert to tokens at processing time
+        // But the VALUE has doubled via getQueueEntryValue()
+        uint256 currentValue = redemptionQueue.getQueueEntryValue(0);
+        assertEq(currentValue, amount * 2); // 200e18 tokens
+
+        // Process queue and verify user receives the increased amount
+        vm.prank(admin);
+        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+
+        // Need 200e18 USDC now (not 100e18)
+        _mintUSDC(address(this), amount * 2);
+        _approveUSDC(address(this), address(redemptionQueue), amount * 2);
+
+        uint256 user1USDCBefore = usdc.balanceOf(user1);
+
+        redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
+
+        // User should receive 200e18 USDC (earned 100% yield)
+        assertEq(usdc.balanceOf(user1), user1USDCBefore + amount * 2);
+    }
+
+    /**
+     * @notice Verifies yield accrual with multiple users in queue
+     */
+    function test_QueueYieldAccrual_MultipleUsers() public {
+        // User1 and User2 both queue 100e18
+        _approveOkuUSD(user1, address(redemptionQueue), 100e18);
+        _approveOkuUSD(user2, address(redemptionQueue), 100e18);
+
+        redemptionQueue.enqueue(user1, 100e18);
+        redemptionQueue.enqueue(user2, 100e18);
+
+        // Rebase 50%
+        vm.prank(admin);
+        okuUSD.updateRewardMultiplier(PRECISION * 3 / 2); // 1.5x
+
+        // Both should now be worth 150e18
+        assertEq(redemptionQueue.getQueueEntryValue(0), 150e18);
+        assertEq(redemptionQueue.getQueueEntryValue(1), 150e18);
+
+        // Setup for processing
+        vm.prank(admin);
+        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+
+        _mintUSDC(address(this), 300e18);
+        _approveUSDC(address(this), address(redemptionQueue), 300e18);
+
+        uint256 user1USDCBefore = usdc.balanceOf(user1);
+        uint256 user2USDCBefore = usdc.balanceOf(user2);
+
+        redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
+
+        // Both users receive 150e18 USDC
+        assertEq(usdc.balanceOf(user1), user1USDCBefore + 150e18);
+        assertEq(usdc.balanceOf(user2), user2USDCBefore + 150e18);
+    }
+
+    /**
+     * @notice Verifies that getQueueEntryValue returns correct current value
+     */
+    function test_GetQueueEntryValue_ReflectsCurrentMultiplier() public {
+        uint256 amount = 100e18;
+        _approveOkuUSD(user1, address(redemptionQueue), amount);
+
+        redemptionQueue.enqueue(user1, amount);
+
+        // Initially value equals original amount
+        assertEq(redemptionQueue.getQueueEntryValue(0), amount);
+
+        // After 2x rebase
+        vm.prank(admin);
+        okuUSD.updateRewardMultiplier(PRECISION * 2);
+        assertEq(redemptionQueue.getQueueEntryValue(0), amount * 2);
+
+        // After another 1.5x rebase (total 3x)
+        vm.prank(admin);
+        okuUSD.updateRewardMultiplier(PRECISION * 3);
+        assertEq(redemptionQueue.getQueueEntryValue(0), amount * 3);
+    }
+
+    // ============ Fuzz Tests for Yield Accrual ============
+
+    /**
+     * @notice Fuzz test: User earns correct yield while queued
+     */
+    function testFuzz_QueueYieldAccrual(uint256 amount, uint256 multiplierIncrease) public {
+        // Bound inputs to reasonable ranges
+        amount = bound(amount, 1e18, 1_000_000e18);
+        multiplierIncrease = bound(multiplierIncrease, 0, PRECISION * 9); // Up to 10x total
+
+        _mintOkuUSD(user1, amount);
+        _approveOkuUSD(user1, address(redemptionQueue), amount);
+
+        redemptionQueue.enqueue(user1, amount);
+
+        // Record initial shares
+        RedemptionQueue.QueueEntry memory entry = redemptionQueue.getQueueEntry(0);
+        uint256 initialShares = entry.shares;
+
+        // Rebase
+        uint256 newMultiplier = PRECISION + multiplierIncrease;
+        vm.prank(admin);
+        okuUSD.updateRewardMultiplier(newMultiplier);
+
+        // Verify shares unchanged
+        RedemptionQueue.QueueEntry memory entryAfter = redemptionQueue.getQueueEntry(0);
+        assertEq(entryAfter.shares, initialShares, "Shares should not change after rebase");
+
+        // Verify value increased correctly
+        uint256 expectedValue = (initialShares * newMultiplier) / PRECISION;
+        uint256 actualValue = redemptionQueue.getQueueEntryValue(0);
+        assertEq(actualValue, expectedValue, "Value should reflect new multiplier");
+    }
+
+    /**
+     * @notice Fuzz test: User receives correct USDC payout after yield
+     */
+    function testFuzz_QueuePayoutAfterYield(uint256 amount, uint256 multiplierIncrease) public {
+        // Bound inputs
+        amount = bound(amount, 1e18, 100_000e18);
+        multiplierIncrease = bound(multiplierIncrease, PRECISION / 100, PRECISION * 4); // 1% to 5x
+
+        _mintOkuUSD(user1, amount);
+        _approveOkuUSD(user1, address(redemptionQueue), amount);
+
+        redemptionQueue.enqueue(user1, amount);
+
+        // Rebase
+        uint256 newMultiplier = PRECISION + multiplierIncrease;
+        vm.prank(admin);
+        okuUSD.updateRewardMultiplier(newMultiplier);
+
+        // Calculate expected payout
+        uint256 expectedPayout = redemptionQueue.getQueueEntryValue(0);
+
+        // Setup for processing
+        vm.prank(admin);
+        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+
+        _mintUSDC(address(this), expectedPayout);
+        _approveUSDC(address(this), address(redemptionQueue), expectedPayout);
+
+        uint256 user1USDCBefore = usdc.balanceOf(user1);
+
+        redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
+
+        // User should receive exact expected payout
+        assertEq(usdc.balanceOf(user1), user1USDCBefore + expectedPayout, "User should receive full yield");
+        assertEq(redemptionQueue.queueLength(), 0, "Queue should be empty");
+    }
+
+    /**
+     * @notice Fuzz test: Multiple rebases compound correctly
+     */
+    function testFuzz_MultipleRebasesCompound(uint256 amount, uint256 rebase1, uint256 rebase2) public {
+        amount = bound(amount, 1e18, 100_000e18);
+        rebase1 = bound(rebase1, PRECISION / 100, PRECISION); // 1% to 100% increase
+        rebase2 = bound(rebase2, PRECISION / 100, PRECISION); // 1% to 100% increase
+
+        _mintOkuUSD(user1, amount);
+        _approveOkuUSD(user1, address(redemptionQueue), amount);
+
+        redemptionQueue.enqueue(user1, amount);
+
+        uint256 initialShares = redemptionQueue.getQueueEntry(0).shares;
+
+        // First rebase
+        uint256 multiplier1 = PRECISION + rebase1;
+        vm.prank(admin);
+        okuUSD.updateRewardMultiplier(multiplier1);
+
+        // Second rebase
+        uint256 multiplier2 = multiplier1 + rebase2;
+        vm.prank(admin);
+        okuUSD.updateRewardMultiplier(multiplier2);
+
+        // Final value should be shares * finalMultiplier / PRECISION
+        uint256 expectedValue = (initialShares * multiplier2) / PRECISION;
+        uint256 actualValue = redemptionQueue.getQueueEntryValue(0);
+
+        assertEq(actualValue, expectedValue, "Multiple rebases should compound correctly");
+    }
+
+    // ============ FIFO Ordering Fuzz Tests ============
+
+    /**
+     * @notice Fuzz test: Multiple users processed in FIFO order
+     * @dev Creates dynamic array of users, queues them, processes all, verifies order
+     */
+    function testFuzz_FIFO_MultipleUsers(uint256 numUsers, uint256 baseSeed) public {
+        numUsers = bound(numUsers, 2, 20); // 2-20 users
+
+        // Create dynamic user array
+        address[] memory users = new address[](numUsers);
+        uint256[] memory amounts = new uint256[](numUsers);
+        uint256[] memory initialBalances = new uint256[](numUsers);
+        uint256 totalNeeded = 0;
+
+        for (uint256 i = 0; i < numUsers; i++) {
+            users[i] = makeAddr(string(abi.encodePacked("queueUser", i)));
+            // Each user gets a different amount based on seed
+            amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 10_000e18);
+
+            // Mint and approve
+            _mintOkuUSD(users[i], amounts[i]);
+            vm.prank(users[i]);
+            okuUSD.approve(address(redemptionQueue), amounts[i]);
+
+            // Enqueue
+            redemptionQueue.enqueue(users[i], amounts[i]);
+
+            initialBalances[i] = usdc.balanceOf(users[i]);
+            totalNeeded += amounts[i];
+        }
+
+        // Verify queue length
+        assertEq(redemptionQueue.queueLength(), numUsers, "Queue should have all users");
+
+        // Setup for processing
+        vm.prank(admin);
+        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+
+        _mintUSDC(address(this), totalNeeded);
+        _approveUSDC(address(this), address(redemptionQueue), totalNeeded);
+
+        // Process all
+        redemptionQueue.processQueue(numUsers, address(usdc), address(okuUSD));
+
+        // Verify all processed in order (each received their amount)
+        assertEq(redemptionQueue.queueLength(), 0, "Queue should be empty");
+
+        for (uint256 i = 0; i < numUsers; i++) {
+            assertEq(
+                usdc.balanceOf(users[i]),
+                initialBalances[i] + amounts[i],
+                string(abi.encodePacked("User ", i, " should receive correct amount"))
+            );
+        }
+    }
+
+    /**
+     * @notice Fuzz test: Partial processing respects FIFO order
+     * @dev Queues multiple users, processes only a subset, verifies first N get paid
+     */
+    function testFuzz_FIFO_PartialProcessing(uint256 numUsers, uint256 numToProcess, uint256 baseSeed) public {
+        numUsers = bound(numUsers, 3, 15);
+        numToProcess = bound(numToProcess, 1, numUsers - 1); // Process less than all
+
+        address[] memory users = new address[](numUsers);
+        uint256[] memory amounts = new uint256[](numUsers);
+        uint256[] memory initialBalances = new uint256[](numUsers);
+        uint256 totalForProcessed = 0;
+
+        for (uint256 i = 0; i < numUsers; i++) {
+            users[i] = makeAddr(string(abi.encodePacked("partialUser", i)));
+            amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 5_000e18);
+
+            _mintOkuUSD(users[i], amounts[i]);
+            vm.prank(users[i]);
+            okuUSD.approve(address(redemptionQueue), amounts[i]);
+
+            redemptionQueue.enqueue(users[i], amounts[i]);
+
+            initialBalances[i] = usdc.balanceOf(users[i]);
+
+            if (i < numToProcess) {
+                totalForProcessed += amounts[i];
+            }
+        }
+
+        // Setup - only provide enough USDC for the ones we'll process
+        vm.prank(admin);
+        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+
+        _mintUSDC(address(this), totalForProcessed);
+        _approveUSDC(address(this), address(redemptionQueue), totalForProcessed);
+
+        // Process only numToProcess
+        redemptionQueue.processQueue(numToProcess, address(usdc), address(okuUSD));
+
+        // Verify: first numToProcess users got paid, rest didn't
+        assertEq(redemptionQueue.queueLength(), numUsers - numToProcess, "Remaining queue length incorrect");
+
+        for (uint256 i = 0; i < numUsers; i++) {
+            if (i < numToProcess) {
+                // Should have received payment
+                assertEq(
+                    usdc.balanceOf(users[i]),
+                    initialBalances[i] + amounts[i],
+                    "Processed user should receive payment"
+                );
+            } else {
+                // Should NOT have received payment
+                assertEq(
+                    usdc.balanceOf(users[i]),
+                    initialBalances[i],
+                    "Unprocessed user should not receive payment"
+                );
+            }
+        }
+    }
+
+    /**
+     * @notice Fuzz test: FIFO with rebase - each user gets correct yield-adjusted amount
+     */
+    function testFuzz_FIFO_WithRebase(uint256 numUsers, uint256 multiplierIncrease, uint256 baseSeed) public {
+        numUsers = bound(numUsers, 2, 10);
+        multiplierIncrease = bound(multiplierIncrease, PRECISION / 100, PRECISION * 2); // 1% to 200%
+
+        address[] memory users = new address[](numUsers);
+        uint256[] memory amounts = new uint256[](numUsers);
+        uint256[] memory shares = new uint256[](numUsers);
+        uint256[] memory initialBalances = new uint256[](numUsers);
+
+        for (uint256 i = 0; i < numUsers; i++) {
+            users[i] = makeAddr(string(abi.encodePacked("rebaseUser", i)));
+            amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 10_000e18);
+
+            _mintOkuUSD(users[i], amounts[i]);
+            vm.prank(users[i]);
+            okuUSD.approve(address(redemptionQueue), amounts[i]);
+
+            redemptionQueue.enqueue(users[i], amounts[i]);
+
+            // Record shares (at 1x multiplier, shares == tokens)
+            shares[i] = redemptionQueue.getQueueEntry(i).shares;
+            initialBalances[i] = usdc.balanceOf(users[i]);
+        }
+
+        // Rebase
+        uint256 newMultiplier = PRECISION + multiplierIncrease;
+        vm.prank(admin);
+        okuUSD.updateRewardMultiplier(newMultiplier);
+
+        // Calculate total needed after rebase
+        uint256 totalNeeded = 0;
+        uint256[] memory expectedPayouts = new uint256[](numUsers);
+        for (uint256 i = 0; i < numUsers; i++) {
+            expectedPayouts[i] = (shares[i] * newMultiplier) / PRECISION;
+            totalNeeded += expectedPayouts[i];
+        }
+
+        // Setup for processing
+        vm.prank(admin);
+        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+
+        _mintUSDC(address(this), totalNeeded);
+        _approveUSDC(address(this), address(redemptionQueue), totalNeeded);
+
+        // Process all
+        redemptionQueue.processQueue(numUsers, address(usdc), address(okuUSD));
+
+        // Verify each user got their yield-adjusted amount in FIFO order
+        assertEq(redemptionQueue.queueLength(), 0, "Queue should be empty");
+
+        for (uint256 i = 0; i < numUsers; i++) {
+            assertEq(
+                usdc.balanceOf(users[i]),
+                initialBalances[i] + expectedPayouts[i],
+                string(abi.encodePacked("User ", i, " should receive yield-adjusted amount"))
+            );
+        }
+    }
+
+    /**
+     * @notice Fuzz test: Buffer depletion stops processing correctly mid-queue
+     * @dev Uses uniform amounts to ensure predictable FIFO behavior
+     */
+    function testFuzz_FIFO_BufferDepletion(uint256 numUsers, uint256 amountPerUser, uint256 numToPay) public {
+        numUsers = bound(numUsers, 3, 10);
+        amountPerUser = bound(amountPerUser, 1e18, 1_000e18);
+        numToPay = bound(numToPay, 1, numUsers - 1); // Pay some but not all
+
+        address[] memory users = new address[](numUsers);
+        uint256[] memory initialBalances = new uint256[](numUsers);
+
+        for (uint256 i = 0; i < numUsers; i++) {
+            users[i] = makeAddr(string(abi.encodePacked("bufferUser", i)));
+
+            _mintOkuUSD(users[i], amountPerUser);
+            vm.prank(users[i]);
+            okuUSD.approve(address(redemptionQueue), amountPerUser);
+
+            redemptionQueue.enqueue(users[i], amountPerUser);
+
+            initialBalances[i] = usdc.balanceOf(users[i]);
+        }
+
+        // Setup - provide exactly enough for numToPay users
+        vm.prank(admin);
+        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+
+        uint256 bufferAmount = amountPerUser * numToPay;
+        _mintUSDC(address(this), bufferAmount);
+        _approveUSDC(address(this), address(redemptionQueue), bufferAmount);
+
+        // Try to process all - will stop after numToPay
+        redemptionQueue.processQueue(numUsers, address(usdc), address(okuUSD));
+
+        // Verify: first numToPay users got paid, rest didn't (FIFO)
+        for (uint256 i = 0; i < numUsers; i++) {
+            if (i < numToPay) {
+                assertEq(
+                    usdc.balanceOf(users[i]),
+                    initialBalances[i] + amountPerUser,
+                    "User within buffer should be paid"
+                );
+            } else {
+                assertEq(
+                    usdc.balanceOf(users[i]),
+                    initialBalances[i],
+                    "User beyond buffer should not be paid"
+                );
+            }
+        }
+
+        // Verify queue length
+        assertEq(redemptionQueue.queueLength(), numUsers - numToPay, "Queue length should match unprocessed");
+    }
+
+    /**
+     * @notice Fuzz test: Variable amounts with buffer depletion
+     * @dev Tests that processing stops at the right point with different amounts
+     */
+    function testFuzz_FIFO_VariableAmountsBufferDepletion(uint256 numUsers, uint256 baseSeed) public {
+        numUsers = bound(numUsers, 3, 8);
+
+        address[] memory users = new address[](numUsers);
+        uint256[] memory amounts = new uint256[](numUsers);
+        uint256[] memory initialBalances = new uint256[](numUsers);
+        uint256 totalQueued = 0;
+
+        for (uint256 i = 0; i < numUsers; i++) {
+            users[i] = makeAddr(string(abi.encodePacked("varUser", i)));
+            // Use smaller amounts to ensure some always fit
+            amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 100e18, 500e18);
+
+            _mintOkuUSD(users[i], amounts[i]);
+            vm.prank(users[i]);
+            okuUSD.approve(address(redemptionQueue), amounts[i]);
+
+            redemptionQueue.enqueue(users[i], amounts[i]);
+
+            initialBalances[i] = usdc.balanceOf(users[i]);
+            totalQueued += amounts[i];
+        }
+
+        // Setup - provide enough for roughly half
+        vm.prank(admin);
+        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+
+        uint256 bufferAmount = totalQueued / 2;
+        _mintUSDC(address(this), bufferAmount);
+        _approveUSDC(address(this), address(redemptionQueue), bufferAmount);
+
+        uint256 queueLengthBefore = redemptionQueue.queueLength();
+
+        // Process
+        redemptionQueue.processQueue(numUsers, address(usdc), address(okuUSD));
+
+        uint256 queueLengthAfter = redemptionQueue.queueLength();
+        uint256 processed = queueLengthBefore - queueLengthAfter;
+
+        // Verify FIFO: simulate what should have happened
+        uint256 simulatedBuffer = bufferAmount;
+        uint256 expectedProcessed = 0;
+        for (uint256 i = 0; i < numUsers; i++) {
+            if (simulatedBuffer >= amounts[i]) {
+                // Should be paid
+                assertEq(
+                    usdc.balanceOf(users[i]),
+                    initialBalances[i] + amounts[i],
+                    "Paid user should receive correct amount"
+                );
+                simulatedBuffer -= amounts[i];
+                expectedProcessed++;
+            } else {
+                // Should NOT be paid - and all subsequent shouldn't be paid either
+                for (uint256 j = i; j < numUsers; j++) {
+                    assertEq(
+                        usdc.balanceOf(users[j]),
+                        initialBalances[j],
+                        "Unpaid user should have unchanged balance"
+                    );
+                }
+                break;
+            }
+        }
+
+        assertEq(processed, expectedProcessed, "Processed count should match expected");
     }
 }

@@ -1,0 +1,22 @@
+[package]
+name = "lite-psm"
+version = "0.1.0"
+description = "LitePSM - USDC to OkuUSD peg stability module"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "lite_psm"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+
+[dependencies]
+anchor-lang = { version = "0.29.0", features = ["init-if-needed"] }
+anchor-spl = "0.29.0"
+# Note: Pyth SDK removed due to Anchor 0.29 version conflicts
+# Oracle check implemented manually using Pyth price account parsing

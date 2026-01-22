@@ -1,0 +1,22 @@
+[package]
+name = "oku-bridge-router"
+version = "0.1.0"
+description = "OkuBridgeRouter - Convenience wrapper for bridging wOkuUSD cross-chain"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "oku_bridge_router"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+
+[dependencies]
+anchor-lang = { version = "0.29.0", features = ["init-if-needed"] }
+anchor-spl = "0.29.0"
+wokusd-vault = { path = "../wokusd-vault", features = ["cpi"] }
+lite-psm = { path = "../lite-psm", features = ["cpi"] }

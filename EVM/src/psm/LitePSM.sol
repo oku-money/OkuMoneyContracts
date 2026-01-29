@@ -33,9 +33,14 @@ interface IAggregatorV3 {
 contract LitePSM is Initializable, AccessControlUpgradeable, PausableUpgradeable, UUPSUpgradeable {
     using SafeERC20 for IERC20;
 
-    bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
-    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
-    bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
+    // Granular RBAC roles (contract-specific prefixes)
+    bytes32 public constant PSM_UPGRADER_ROLE = keccak256("PSM_UPGRADER_ROLE");
+    bytes32 public constant PSM_PAUSER_ROLE = keccak256("PSM_PAUSER_ROLE");
+    bytes32 public constant PSM_UNPAUSER_ROLE = keccak256("PSM_UNPAUSER_ROLE");
+    bytes32 public constant QUEUE_PROCESSOR_ROLE = keccak256("QUEUE_PROCESSOR_ROLE");
+    bytes32 public constant BUFFER_DEPOSITOR_ROLE = keccak256("BUFFER_DEPOSITOR_ROLE");
+    bytes32 public constant BUFFER_WITHDRAWER_ROLE = keccak256("BUFFER_WITHDRAWER_ROLE");
+    bytes32 public constant ORACLE_MANAGER_ROLE = keccak256("ORACLE_MANAGER_ROLE");
 
     IOkuUSD public okuUSD;
     IERC20 public usdc;
@@ -51,6 +56,7 @@ contract LitePSM is Initializable, AccessControlUpgradeable, PausableUpgradeable
     event Redeem(address indexed user, uint256 okuUSDIn, uint256 usdcOut);
     event OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled);
     event BufferRefilled(uint256 amount);
+    event BufferDeposited(address indexed depositor, uint256 amount);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -74,9 +80,9 @@ contract LitePSM is Initializable, AccessControlUpgradeable, PausableUpgradeable
         redemptionQueue = RedemptionQueue(_redemptionQueue);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(UPGRADER_ROLE, admin);
-        _grantRole(PAUSER_ROLE, admin);
-        _grantRole(OPERATOR_ROLE, admin);
+        _grantRole(PSM_UPGRADER_ROLE, admin);
+        _grantRole(PSM_PAUSER_ROLE, admin);
+        _grantRole(QUEUE_PROCESSOR_ROLE, admin);
 
         stalenessThreshold = 1 hours;
     }
@@ -128,7 +134,7 @@ contract LitePSM is Initializable, AccessControlUpgradeable, PausableUpgradeable
      * @notice Process queued redemptions (called by operator when buffer refilled)
      * @param maxEntries Maximum number of queue entries to process
      */
-    function processQueue(uint256 maxEntries) external onlyRole(OPERATOR_ROLE) {
+    function processQueue(uint256 maxEntries) external onlyRole(QUEUE_PROCESSOR_ROLE) {
         //approve our USDC balance to the redemption queue so we can fill the orders
         uint256 balance = usdc.balanceOf(address(this));
         usdc.approve(address(redemptionQueue), balance);
@@ -151,7 +157,7 @@ contract LitePSM is Initializable, AccessControlUpgradeable, PausableUpgradeable
         bool _enabled
     )
         external
-        onlyRole(DEFAULT_ADMIN_ROLE)
+        onlyRole(ORACLE_MANAGER_ROLE)
     {
         porOracle = IAggregatorV3(_oracle);
         stalenessThreshold = _stalenessThreshold;
@@ -176,16 +182,25 @@ contract LitePSM is Initializable, AccessControlUpgradeable, PausableUpgradeable
 
     // ============ Admin Functions ============
 
-    function pause() external onlyRole(PAUSER_ROLE) {
+    function pause() external onlyRole(PSM_PAUSER_ROLE) {
         _pause();
     }
 
-    function unpause() external onlyRole(PAUSER_ROLE) {
+    function unpause() external onlyRole(PSM_UNPAUSER_ROLE) {
         _unpause();
     }
 
-    function withdrawUSDC(address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function withdrawUSDC(address to, uint256 amount) external onlyRole(BUFFER_WITHDRAWER_ROLE) {
         usdc.safeTransfer(to, amount);
+    }
+
+    /**
+     * @notice Deposit USDC to PSM buffer for redemptions
+     * @param amount Amount of USDC to deposit
+     */
+    function depositBuffer(uint256 amount) external onlyRole(BUFFER_DEPOSITOR_ROLE) {
+        usdc.safeTransferFrom(msg.sender, address(this), amount);
+        emit BufferDeposited(msg.sender, amount);
     }
 
     // ============ Upgradeability ============
@@ -193,6 +208,6 @@ contract LitePSM is Initializable, AccessControlUpgradeable, PausableUpgradeable
     function _authorizeUpgrade(address newImplementation)
         internal
         override
-        onlyRole(UPGRADER_ROLE)
+        onlyRole(PSM_UPGRADER_ROLE)
     {}
 }

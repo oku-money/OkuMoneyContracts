@@ -13,7 +13,7 @@ contract ShareConversionInvariantsTest is BaseTest {
 
     function setUp() public override {
         super.setUp();
-        handler = new OkuUSDHandler(okuUSD, minter, admin);
+        handler = new OkuUSDHandler(okuUSD, minter, rebaser, allowanceManager);
 
         targetContract(address(handler));
 

@@ -90,7 +90,7 @@ contract OkuUSDTest is BaseTest {
     }
 
     function test_Mint_RevertsExceedingAllowance() public {
-        vm.prank(admin);
+        vm.prank(allowanceManager);
         okuUSD.configureMinterAllowance(minter, 50e18);
 
         vm.prank(minter);
@@ -114,7 +114,7 @@ contract OkuUSDTest is BaseTest {
     }
 
     function test_Mint_RevertsToBlacklistedAddress() public {
-        vm.prank(pauser);
+        vm.prank(blacklister);
         okuUSD.blacklist(user1);
 
         vm.prank(minter);
@@ -195,7 +195,7 @@ contract OkuUSDTest is BaseTest {
     function test_Burn_RevertsForBlacklistedAccount() public {
         _mintOkuUSD(user1, 100e18);
 
-        vm.prank(pauser);
+        vm.prank(blacklister);
         okuUSD.blacklist(user1);
 
         vm.prank(minter);
@@ -270,7 +270,7 @@ contract OkuUSDTest is BaseTest {
     function test_Transfer_RevertsFromBlacklisted() public {
         _mintOkuUSD(user1, 100e18);
 
-        vm.prank(pauser);
+        vm.prank(blacklister);
         okuUSD.blacklist(user1);
 
         vm.prank(user1);
@@ -282,7 +282,7 @@ contract OkuUSDTest is BaseTest {
     function test_Transfer_RevertsToBlacklisted() public {
         _mintOkuUSD(user1, 100e18);
 
-        vm.prank(pauser);
+        vm.prank(blacklister);
         okuUSD.blacklist(user2);
 
         vm.prank(user1);
@@ -367,14 +367,14 @@ contract OkuUSDTest is BaseTest {
 
     // ============ Rebasing Tests ============
 
-    function test_UpdateRewardMultiplier_OnlyAdmin() public {
+    function test_UpdateRewardMultiplier_OnlyRebaser() public {
         vm.prank(user1);
         vm.expectRevert();
         okuUSD.updateRewardMultiplier(PRECISION * 2);
     }
 
     function test_UpdateRewardMultiplier_CannotDecrease() public {
-        vm.prank(admin);
+        vm.prank(rebaser);
         vm.expectRevert("Multiplier cannot decrease");
         okuUSD.updateRewardMultiplier(PRECISION - 1);
     }
@@ -384,7 +384,7 @@ contract OkuUSDTest is BaseTest {
         uint256 balanceBefore = okuUSD.balanceOf(user1);
 
         // Double the multiplier
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(PRECISION * 2);
 
         uint256 balanceAfter = okuUSD.balanceOf(user1);
@@ -395,7 +395,7 @@ contract OkuUSDTest is BaseTest {
         _mintOkuUSD(user1, 100e18);
         uint256 supplyBefore = okuUSD.totalSupply();
 
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(PRECISION * 2);
 
         assertEq(okuUSD.totalSupply(), supplyBefore * 2);
@@ -406,7 +406,7 @@ contract OkuUSDTest is BaseTest {
         uint256 sharesBefore = okuUSD.sharesOf(user1);
         uint256 totalSharesBefore = okuUSD.totalShares();
 
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(PRECISION * 2);
 
         assertEq(okuUSD.sharesOf(user1), sharesBefore);
@@ -418,7 +418,7 @@ contract OkuUSDTest is BaseTest {
         _mintOkuUSD(user1, MAX_SUPPLY);
 
         // Rebase should work even though it pushes supply above original maxSupply
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(PRECISION * 2);
 
         // Supply is now 2x max, but this is allowed for rebase
@@ -429,14 +429,14 @@ contract OkuUSDTest is BaseTest {
         vm.expectEmit(false, false, false, true);
         emit RewardMultiplierUpdated(PRECISION, PRECISION * 2);
 
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(PRECISION * 2);
     }
 
     function test_UpdateRewardMultiplier_SameMultiplier() public {
         uint256 currentMultiplier = okuUSD.rewardMultiplier();
 
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(currentMultiplier);
 
         assertEq(okuUSD.rewardMultiplier(), currentMultiplier);
@@ -444,7 +444,7 @@ contract OkuUSDTest is BaseTest {
 
     // ============ Blacklisting Tests ============
 
-    function test_Blacklist_OnlyPauserRole() public {
+    function test_Blacklist_OnlyBlacklisterRole() public {
         vm.prank(user1);
         vm.expectRevert();
         okuUSD.blacklist(user2);
@@ -456,7 +456,7 @@ contract OkuUSDTest is BaseTest {
         okuUSD.pause();
 
         // Blacklist should still work (critical for front-run protection)
-        vm.prank(pauser);
+        vm.prank(blacklister);
         okuUSD.blacklist(user1);
 
         assertTrue(okuUSD.isBlacklisted(user1));
@@ -465,7 +465,7 @@ contract OkuUSDTest is BaseTest {
     function test_Blacklist_BlocksTransfersFrom() public {
         _mintOkuUSD(user1, 100e18);
 
-        vm.prank(pauser);
+        vm.prank(blacklister);
         okuUSD.blacklist(user1);
 
         vm.prank(user1);
@@ -477,7 +477,7 @@ contract OkuUSDTest is BaseTest {
     function test_Blacklist_BlocksTransfersTo() public {
         _mintOkuUSD(user1, 100e18);
 
-        vm.prank(pauser);
+        vm.prank(blacklister);
         okuUSD.blacklist(user2);
 
         vm.prank(user1);
@@ -487,7 +487,7 @@ contract OkuUSDTest is BaseTest {
     }
 
     function test_Blacklist_BlocksMinting() public {
-        vm.prank(pauser);
+        vm.prank(blacklister);
         okuUSD.blacklist(user1);
 
         vm.prank(minter);
@@ -499,17 +499,18 @@ contract OkuUSDTest is BaseTest {
         vm.expectEmit(true, false, false, false);
         emit Blacklisted(user1);
 
-        vm.prank(pauser);
+        vm.prank(blacklister);
         okuUSD.blacklist(user1);
     }
 
     function test_Unblacklist_RestoresTransferability() public {
         _mintOkuUSD(user1, 100e18);
 
-        vm.startPrank(pauser);
+        vm.prank(blacklister);
         okuUSD.blacklist(user1);
+
+        vm.prank(unblacklister);
         okuUSD.unblacklist(user1);
-        vm.stopPrank();
 
         // Should be able to transfer again
         vm.prank(user1);
@@ -519,13 +520,13 @@ contract OkuUSDTest is BaseTest {
     }
 
     function test_Unblacklist_EmitsEvent() public {
-        vm.prank(pauser);
+        vm.prank(blacklister);
         okuUSD.blacklist(user1);
 
         vm.expectEmit(true, false, false, false);
         emit Unblacklisted(user1);
 
-        vm.prank(pauser);
+        vm.prank(unblacklister);
         okuUSD.unblacklist(user1);
     }
 
@@ -576,7 +577,7 @@ contract OkuUSDTest is BaseTest {
         okuUSD.pause();
 
         // Should still be able to blacklist while paused
-        vm.prank(pauser);
+        vm.prank(blacklister);
         okuUSD.blacklist(user1);
 
         assertTrue(okuUSD.isBlacklisted(user1));
@@ -588,7 +589,7 @@ contract OkuUSDTest is BaseTest {
         vm.prank(pauser);
         okuUSD.pause();
 
-        vm.prank(pauser);
+        vm.prank(unpauser);
         okuUSD.unpause();
 
         // Should be able to transfer again
@@ -600,21 +601,21 @@ contract OkuUSDTest is BaseTest {
 
     // ============ Minter Allowance Tests ============
 
-    function test_ConfigureMinterAllowance_OnlyAdmin() public {
+    function test_ConfigureMinterAllowance_OnlyAllowanceManager() public {
         vm.prank(user1);
         vm.expectRevert();
         okuUSD.configureMinterAllowance(minter, 1000e18);
     }
 
     function test_ConfigureMinterAllowance_CanIncrease() public {
-        vm.prank(admin);
+        vm.prank(allowanceManager);
         okuUSD.configureMinterAllowance(minter, MAX_SUPPLY * 2);
 
         assertEq(okuUSD.minterAllowance(minter), MAX_SUPPLY * 2);
     }
 
     function test_ConfigureMinterAllowance_CanDecrease() public {
-        vm.prank(admin);
+        vm.prank(allowanceManager);
         okuUSD.configureMinterAllowance(minter, 100e18);
 
         assertEq(okuUSD.minterAllowance(minter), 100e18);
@@ -626,7 +627,7 @@ contract OkuUSDTest is BaseTest {
         uint256 allowanceAfterMint = okuUSD.minterAllowance(minter);
 
         // Admin resets allowance
-        vm.prank(admin);
+        vm.prank(allowanceManager);
         okuUSD.configureMinterAllowance(minter, MAX_SUPPLY);
 
         assertEq(okuUSD.minterAllowance(minter), MAX_SUPPLY);
@@ -637,27 +638,27 @@ contract OkuUSDTest is BaseTest {
         vm.expectEmit(true, false, false, true);
         emit MinterAllowanceConfigured(minter, 1000e18);
 
-        vm.prank(admin);
+        vm.prank(allowanceManager);
         okuUSD.configureMinterAllowance(minter, 1000e18);
     }
 
     // ============ Supply Cap Tests ============
 
-    function test_SetMaxSupply_OnlyAdmin() public {
+    function test_SetMaxSupply_OnlyCapManager() public {
         vm.prank(user1);
         vm.expectRevert();
         okuUSD.setMaxSupply(MAX_SUPPLY * 2);
     }
 
     function test_SetMaxSupply_CanIncrease() public {
-        vm.prank(admin);
+        vm.prank(capManager);
         okuUSD.setMaxSupply(MAX_SUPPLY * 2);
 
         assertEq(okuUSD.maxSupply(), MAX_SUPPLY * 2);
     }
 
     function test_SetMaxSupply_CanDecrease() public {
-        vm.prank(admin);
+        vm.prank(capManager);
         okuUSD.setMaxSupply(MAX_SUPPLY / 2);
 
         assertEq(okuUSD.maxSupply(), MAX_SUPPLY / 2);
@@ -667,7 +668,7 @@ contract OkuUSDTest is BaseTest {
         _mintOkuUSD(user1, 100e18);
 
         // Lower cap below existing supply
-        vm.prank(admin);
+        vm.prank(capManager);
         okuUSD.setMaxSupply(50e18);
 
         // Existing tokens are not burned
@@ -679,7 +680,7 @@ contract OkuUSDTest is BaseTest {
         vm.expectEmit(false, false, false, true);
         emit MaxSupplyUpdated(MAX_SUPPLY, MAX_SUPPLY * 2);
 
-        vm.prank(admin);
+        vm.prank(capManager);
         okuUSD.setMaxSupply(MAX_SUPPLY * 2);
     }
 
@@ -698,7 +699,7 @@ contract OkuUSDTest is BaseTest {
     }
 
     function test_SharesToTokens_AfterRebase() public {
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(PRECISION * 2);
 
         uint256 shares = 100e18;
@@ -707,7 +708,7 @@ contract OkuUSDTest is BaseTest {
     }
 
     function test_TokensToShares_AfterRebase() public {
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(PRECISION * 2);
 
         uint256 tokens = 100e18;
@@ -743,7 +744,7 @@ contract OkuUSDTest is BaseTest {
 
     function test_ConversionAtHighMultiplier() public {
         // Set a high multiplier (100x)
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(PRECISION * 100);
 
         uint256 tokens = 100e18;
@@ -758,7 +759,7 @@ contract OkuUSDTest is BaseTest {
     function test_MultipleRebases_SameBlock() public {
         _mintOkuUSD(user1, 100e18);
 
-        vm.startPrank(admin);
+        vm.startPrank(rebaser);
         okuUSD.updateRewardMultiplier(PRECISION * 2);
         okuUSD.updateRewardMultiplier(PRECISION * 3);
         vm.stopPrank();

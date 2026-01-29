@@ -35,6 +35,10 @@ describe("LitePSM Scenarios", () => {
 
     const MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("MINTER_ROLE"))
     const PSM_ROLE = ethers.keccak256(ethers.toUtf8Bytes("PSM_ROLE"))
+    const ALLOWANCE_MANAGER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("ALLOWANCE_MANAGER_ROLE"))
+    const REBASER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("REBASER_ROLE"))
+    const BUFFER_WITHDRAWER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("BUFFER_WITHDRAWER_ROLE"))
+    const QUEUE_PROCESSOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PROCESSOR_ROLE"))
     const DEPOSIT_AMOUNT = parseUnits("10000", 6)
 
     // Helper to fund a user with USDC from whale
@@ -150,6 +154,13 @@ describe("LitePSM Scenarios", () => {
         await okuBridgeRouter.waitForDeployment()
 
         await okuUSD.connect(Frank).grantRole(MINTER_ROLE, await psm.getAddress())
+
+        // Grant RBAC roles to Frank for testing
+        await okuUSD.connect(Frank).grantRole(ALLOWANCE_MANAGER_ROLE, frankAddr)
+        await okuUSD.connect(Frank).grantRole(REBASER_ROLE, frankAddr)
+        await psm.connect(Frank).grantRole(BUFFER_WITHDRAWER_ROLE, frankAddr)
+        await psm.connect(Frank).grantRole(QUEUE_PROCESSOR_ROLE, frankAddr)
+
         await okuUSD.connect(Frank).configureMinterAllowance(
             await psm.getAddress(),
             parseEther("1000000000")

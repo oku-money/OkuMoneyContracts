@@ -34,6 +34,15 @@ describe("OkuUSD Scenarios", () => {
 
     const MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("MINTER_ROLE"))
     const PSM_ROLE = ethers.keccak256(ethers.toUtf8Bytes("PSM_ROLE"))
+    const ALLOWANCE_MANAGER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("ALLOWANCE_MANAGER_ROLE"))
+    const REBASER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("REBASER_ROLE"))
+    const PAUSER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("PAUSER_ROLE"))
+    const UNPAUSER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("UNPAUSER_ROLE"))
+    const BLACKLISTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("BLACKLISTER_ROLE"))
+    const UNBLACKLISTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("UNBLACKLISTER_ROLE"))
+    const CAP_MANAGER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("CAP_MANAGER_ROLE"))
+    const BUFFER_WITHDRAWER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("BUFFER_WITHDRAWER_ROLE"))
+    const QUEUE_PROCESSOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PROCESSOR_ROLE"))
 
     async function fundWithUSDC(user: Signer, amount: bigint) {
         await network.provider.request({
@@ -120,6 +129,20 @@ describe("OkuUSD Scenarios", () => {
         await okuBridgeRouter.waitForDeployment()
 
         await okuUSD.connect(Frank).grantRole(MINTER_ROLE, await psm.getAddress())
+
+        // Grant RBAC roles to Frank (admin) for testing
+        await okuUSD.connect(Frank).grantRole(ALLOWANCE_MANAGER_ROLE, frankAddr)
+        await okuUSD.connect(Frank).grantRole(REBASER_ROLE, frankAddr)
+        await okuUSD.connect(Frank).grantRole(PAUSER_ROLE, frankAddr)
+        await okuUSD.connect(Frank).grantRole(UNPAUSER_ROLE, frankAddr)
+        await okuUSD.connect(Frank).grantRole(BLACKLISTER_ROLE, frankAddr)
+        await okuUSD.connect(Frank).grantRole(UNBLACKLISTER_ROLE, frankAddr)
+        await okuUSD.connect(Frank).grantRole(CAP_MANAGER_ROLE, frankAddr)
+
+        // Grant PSM-specific roles to Frank
+        await psm.connect(Frank).grantRole(BUFFER_WITHDRAWER_ROLE, frankAddr)
+        await psm.connect(Frank).grantRole(QUEUE_PROCESSOR_ROLE, frankAddr)
+
         await okuUSD.connect(Frank).configureMinterAllowance(
             await psm.getAddress(),
             parseEther("1000000000")
@@ -249,6 +272,11 @@ describe("OkuUSD Scenarios", () => {
 
             // Grant PSM minter role with HIGH allowance (1B in 6 decimals)
             await freshOkuUSD.connect(Frank).grantRole(MINTER_ROLE, await freshPSM.getAddress())
+
+            // Grant RBAC roles to Frank for fresh contracts
+            await freshOkuUSD.connect(Frank).grantRole(ALLOWANCE_MANAGER_ROLE, frankAddr)
+            await freshOkuUSD.connect(Frank).grantRole(CAP_MANAGER_ROLE, frankAddr)
+
             await freshOkuUSD.connect(Frank).configureMinterAllowance(
                 await freshPSM.getAddress(),
                 parseUnits("1000000000", 6)

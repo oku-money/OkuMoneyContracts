@@ -13,7 +13,7 @@ contract VaultInvariantsTest is BaseTest {
 
     function setUp() public override {
         super.setUp();
-        handler = new wOkuUSDHandler(okuUSD, wokuUSD, minter, admin);
+        handler = new wOkuUSDHandler(okuUSD, wokuUSD, minter, rebaser);
 
         // Target the handler for invariant testing
         targetContract(address(handler));

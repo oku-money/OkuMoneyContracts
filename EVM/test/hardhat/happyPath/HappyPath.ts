@@ -40,6 +40,10 @@ describe("Happy Path Testing", () => {
     // Constants
     const MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("MINTER_ROLE"))
     const PSM_ROLE = ethers.keccak256(ethers.toUtf8Bytes("PSM_ROLE"))
+    const ALLOWANCE_MANAGER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("ALLOWANCE_MANAGER_ROLE"))
+    const REBASER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("REBASER_ROLE"))
+    const BUFFER_WITHDRAWER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("BUFFER_WITHDRAWER_ROLE"))
+    const QUEUE_PROCESSOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PROCESSOR_ROLE"))
     const DEPOSIT_AMOUNT = parseUnits("10000", 6) // 10,000 USDC (6 decimals)
 
     before(async () => {
@@ -116,6 +120,14 @@ describe("Happy Path Testing", () => {
 
         // Grant MINTER_ROLE to PSM so it can mint OkuUSD
         await okuUSD.connect(Frank).grantRole(MINTER_ROLE, await psm.getAddress())
+
+        // Grant RBAC roles to Frank (admin) for testing
+        await okuUSD.connect(Frank).grantRole(ALLOWANCE_MANAGER_ROLE, frankAddr)
+        await okuUSD.connect(Frank).grantRole(REBASER_ROLE, frankAddr)
+
+        // Grant PSM-specific roles to Frank
+        await psm.connect(Frank).grantRole(BUFFER_WITHDRAWER_ROLE, frankAddr)
+        await psm.connect(Frank).grantRole(QUEUE_PROCESSOR_ROLE, frankAddr)
 
         // Configure minter allowance for PSM (1 billion tokens)
         await okuUSD.connect(Frank).configureMinterAllowance(

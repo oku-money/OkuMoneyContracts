@@ -13,7 +13,7 @@ contract wOkuUSDHandler is Test {
     OkuUSD public okuUSD;
     wOkuUSD public wokuUSD;
     address public minter;
-    address public admin;
+    address public rebaser;
 
     address[] public actors;
     mapping(address => bool) public isActor;
@@ -26,11 +26,11 @@ contract wOkuUSDHandler is Test {
     uint256 public ghost_totalWithdrawn;
     uint256 public ghost_rebaseCount;
 
-    constructor(OkuUSD _okuUSD, wOkuUSD _wokuUSD, address _minter, address _admin) {
+    constructor(OkuUSD _okuUSD, wOkuUSD _wokuUSD, address _minter, address _rebaser) {
         okuUSD = _okuUSD;
         wokuUSD = _wokuUSD;
         minter = _minter;
-        admin = _admin;
+        rebaser = _rebaser;
 
         _addActor(makeAddr("vaultActor1"));
         _addActor(makeAddr("vaultActor2"));
@@ -49,11 +49,11 @@ contract wOkuUSDHandler is Test {
     /// @notice Mint OkuUSD to actors (so they have tokens to deposit)
     function mintOkuUSD(uint256 actorSeed, uint256 amount) external {
         address actor = actors[actorSeed % actors.length];
-        amount = bound(amount, 1e18, 1_000_000e18);
+        amount = __bound(amount, 1e18, 1_000_000e18);
 
         uint256 allowance = okuUSD.minterAllowance(minter);
         uint256 remaining = okuUSD.maxSupply() - okuUSD.totalSupply();
-        amount = bound(amount, 0, _min(allowance, remaining));
+        amount = __bound(amount, 0, _min(allowance, remaining));
 
         if (amount == 0) return;
 
@@ -65,7 +65,7 @@ contract wOkuUSDHandler is Test {
     function deposit(uint256 actorSeed, uint256 amount) external {
         address actor = actors[actorSeed % actors.length];
         uint256 balance = okuUSD.balanceOf(actor);
-        amount = bound(amount, 0, balance);
+        amount = __bound(amount, 0, balance);
 
         if (amount == 0) return;
 
@@ -81,7 +81,7 @@ contract wOkuUSDHandler is Test {
     function redeem(uint256 actorSeed, uint256 shares) external {
         address actor = actors[actorSeed % actors.length];
         uint256 balance = wokuUSD.balanceOf(actor);
-        shares = bound(shares, 0, balance);
+        shares = __bound(shares, 0, balance);
 
         if (shares == 0) return;
 
@@ -95,7 +95,7 @@ contract wOkuUSDHandler is Test {
     function withdraw(uint256 actorSeed, uint256 assets) external {
         address actor = actors[actorSeed % actors.length];
         uint256 maxAssets = wokuUSD.maxWithdraw(actor);
-        assets = bound(assets, 0, maxAssets);
+        assets = __bound(assets, 0, maxAssets);
 
         if (assets == 0) return;
 
@@ -109,10 +109,10 @@ contract wOkuUSDHandler is Test {
     function rebase(uint256 multiplierIncrease) external {
         uint256 currentMultiplier = okuUSD.rewardMultiplier();
         uint256 increase =
-            bound(multiplierIncrease, currentMultiplier / 10_000, currentMultiplier / 10);
+            __bound(multiplierIncrease, currentMultiplier / 10_000, currentMultiplier / 10);
         uint256 newMultiplier = currentMultiplier + increase;
 
-        vm.prank(admin);
+        vm.prank(rebaser);
         try okuUSD.updateRewardMultiplier(newMultiplier) {
             ghost_rebaseCount++;
         } catch {}
@@ -123,7 +123,7 @@ contract wOkuUSDHandler is Test {
         address from = actors[fromSeed % actors.length];
         address to = actors[toSeed % actors.length];
         uint256 balance = wokuUSD.balanceOf(from);
-        shares = bound(shares, 0, balance);
+        shares = __bound(shares, 0, balance);
 
         if (shares == 0 || from == to) return;
 
@@ -139,6 +139,15 @@ contract wOkuUSDHandler is Test {
 
     function getActorCount() external view returns (uint256) {
         return actors.length;
+    }
+
+    // ============ Helper Functions ============
+
+    /// @notice Custom bound function without console logging
+    function __bound(uint256 x, uint256 min, uint256 max) internal pure returns (uint256) {
+        if (x < min) return min;
+        if (x > max) return max;
+        return x;
     }
 
     function _min(uint256 a, uint256 b) internal pure returns (uint256) {

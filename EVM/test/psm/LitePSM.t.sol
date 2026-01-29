@@ -100,7 +100,7 @@ contract LitePSMTest is BaseTest {
 
     function test_Swap_ChecksOracleWhenEnabled() public {
         // Configure oracle
-        vm.prank(admin);
+        vm.prank(oracleManager);
         litePSM.configureOracle(address(oracle), 1 hours, true);
 
         // Set oracle to report sufficient reserves
@@ -115,7 +115,7 @@ contract LitePSMTest is BaseTest {
 
     function test_Swap_RevertsOnInsufficientReserves() public {
         // Configure oracle
-        vm.prank(admin);
+        vm.prank(oracleManager);
         litePSM.configureOracle(address(oracle), 1 hours, true);
 
         // Set oracle to report LOW reserves
@@ -133,7 +133,7 @@ contract LitePSMTest is BaseTest {
         vm.warp(1_000_000);
 
         // Configure oracle with short staleness
-        vm.prank(admin);
+        vm.prank(oracleManager);
         litePSM.configureOracle(address(oracle), 1 hours, true);
 
         // Make oracle stale by setting timestamp in the past
@@ -148,7 +148,7 @@ contract LitePSMTest is BaseTest {
 
     function test_Swap_SkipsOracleWhenDisabled() public {
         // Oracle configured but disabled
-        vm.prank(admin);
+        vm.prank(oracleManager);
         litePSM.configureOracle(address(oracle), 1 hours, false);
 
         // Even with stale/bad oracle values, should work since oracle is disabled
@@ -161,7 +161,7 @@ contract LitePSMTest is BaseTest {
         litePSM.swap(100e6);
     }
 
-    function test_ConfigureOracle_OnlyAdmin() public {
+    function test_ConfigureOracle_OnlyOracleManager() public {
         vm.prank(user1);
         vm.expectRevert();
         litePSM.configureOracle(address(oracle), 1 hours, true);
@@ -171,7 +171,7 @@ contract LitePSMTest is BaseTest {
         vm.expectEmit(true, false, false, true);
         emit OracleConfigured(address(oracle), 2 hours, true);
 
-        vm.prank(admin);
+        vm.prank(oracleManager);
         litePSM.configureOracle(address(oracle), 2 hours, true);
     }
 
@@ -240,7 +240,7 @@ contract LitePSMTest is BaseTest {
         vm.warp(1_000_000);
 
         // Configure oracle
-        vm.prank(admin);
+        vm.prank(oracleManager);
         litePSM.configureOracle(address(oracle), 1 hours, true);
 
         // Set oracle to stale (now safe since we warped forward)
@@ -287,7 +287,7 @@ contract LitePSMTest is BaseTest {
 
     // ============ ProcessQueue Tests ============
 
-    function test_ProcessQueue_OnlyOperator() public {
+    function test_ProcessQueue_OnlyQueueProcessor() public {
         vm.prank(user1);
         vm.expectRevert();
         litePSM.processQueue(10);
@@ -321,7 +321,7 @@ contract LitePSMTest is BaseTest {
         okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
 
         // processQueue now handles approve-use-revoke internally
-        vm.prank(operator);
+        vm.prank(queueProcessor);
         litePSM.processQueue(10);
 
         // Queue should be processed
@@ -352,7 +352,7 @@ contract LitePSMTest is BaseTest {
         assertEq(usdc.allowance(address(litePSM), address(redemptionQueue)), 0);
 
         // Process queue
-        vm.prank(operator);
+        vm.prank(queueProcessor);
         litePSM.processQueue(10);
 
         // Verify allowance is revoked back to 0 after processing
@@ -391,7 +391,7 @@ contract LitePSMTest is BaseTest {
         okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
 
         // Process only 1 entry
-        vm.prank(operator);
+        vm.prank(queueProcessor);
         litePSM.processQueue(1);
 
         // Allowance should still be revoked even with partial processing
@@ -409,7 +409,7 @@ contract LitePSMTest is BaseTest {
         litePSM.pause();
     }
 
-    function test_Unpause_OnlyPauser() public {
+    function test_Unpause_OnlyUnpauser() public {
         vm.prank(pauser);
         litePSM.pause();
 
@@ -418,7 +418,7 @@ contract LitePSMTest is BaseTest {
         litePSM.unpause();
     }
 
-    function test_WithdrawUSDC_OnlyAdmin() public {
+    function test_WithdrawUSDC_OnlyBufferWithdrawer() public {
         vm.prank(user1);
         vm.expectRevert();
         litePSM.withdrawUSDC(user1, 100e6);
@@ -428,7 +428,7 @@ contract LitePSMTest is BaseTest {
         uint256 amount = 100e6;
         uint256 user1Before = usdc.balanceOf(user1);
 
-        vm.prank(admin);
+        vm.prank(bufferWithdrawer);
         litePSM.withdrawUSDC(user1, amount);
 
         assertEq(usdc.balanceOf(user1), user1Before + amount);

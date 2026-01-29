@@ -21,7 +21,7 @@ contract wOkuUSDFuzzTest is BaseTest {
 
     /// @notice Wrap then unwrap should return original amount (max 1 wei loss)
     function testFuzz_WrapUnwrapRoundTrip(uint256 depositAmount) public {
-        depositAmount = bound(depositAmount, 1e18, okuUSD.balanceOf(user1));
+        depositAmount = __bound(depositAmount, 1e18, okuUSD.balanceOf(user1));
 
         _approveOkuUSD(user1, address(wokuUSD), depositAmount);
 
@@ -42,11 +42,11 @@ contract wOkuUSDFuzzTest is BaseTest {
     )
         public
     {
-        depositAmount = bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
+        depositAmount = __bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
         multiplier = _boundMultiplier(multiplier);
 
         // First, set the multiplier
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(multiplier);
 
         _approveOkuUSD(user1, address(wokuUSD), depositAmount);
@@ -70,7 +70,7 @@ contract wOkuUSDFuzzTest is BaseTest {
 
     /// @notice Round-trip with rebase in between
     function testFuzz_WrapRebaseUnwrap(uint256 depositAmount, uint256 newMultiplier) public {
-        depositAmount = bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
+        depositAmount = __bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
         newMultiplier = _boundMultiplier(newMultiplier);
 
         _approveOkuUSD(user1, address(wokuUSD), depositAmount);
@@ -79,7 +79,7 @@ contract wOkuUSDFuzzTest is BaseTest {
         uint256 shares = wokuUSD.deposit(depositAmount, user1);
 
         // Rebase occurs
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(newMultiplier);
 
         // Redeem after rebase
@@ -102,10 +102,10 @@ contract wOkuUSDFuzzTest is BaseTest {
     )
         public
     {
-        depositAmount = bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
+        depositAmount = __bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
         // Ensure meaningful multiplier increase (at least 1% to avoid rounding issues)
         uint256 minMultiplier = okuUSD.rewardMultiplier() + (okuUSD.rewardMultiplier() / 100);
-        newMultiplier = bound(newMultiplier, minMultiplier, okuUSD.rewardMultiplier() * 10);
+        newMultiplier = __bound(newMultiplier, minMultiplier, okuUSD.rewardMultiplier() * 10);
 
         _approveOkuUSD(user1, address(wokuUSD), depositAmount);
 
@@ -115,7 +115,7 @@ contract wOkuUSDFuzzTest is BaseTest {
         uint256 assetsBefore = wokuUSD.convertToAssets(shares);
         uint256 multiplierBefore = okuUSD.rewardMultiplier();
 
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(newMultiplier);
 
         uint256 assetsAfter = wokuUSD.convertToAssets(shares);
@@ -130,7 +130,7 @@ contract wOkuUSDFuzzTest is BaseTest {
 
     /// @notice Total assets equals vault's OkuUSD balance
     function testFuzz_TotalAssetsEqualsVaultBalance(uint256 depositAmount) public {
-        depositAmount = bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
+        depositAmount = __bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
 
         _approveOkuUSD(user1, address(wokuUSD), depositAmount);
 
@@ -152,7 +152,7 @@ contract wOkuUSDFuzzTest is BaseTest {
     )
         public
     {
-        depositAmount = bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
+        depositAmount = __bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
         newMultiplier = _boundMultiplier(newMultiplier);
 
         _approveOkuUSD(user1, address(wokuUSD), depositAmount);
@@ -160,7 +160,7 @@ contract wOkuUSDFuzzTest is BaseTest {
         vm.prank(user1);
         wokuUSD.deposit(depositAmount, user1);
 
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(newMultiplier);
 
         // Invariant still holds after rebase
@@ -175,7 +175,7 @@ contract wOkuUSDFuzzTest is BaseTest {
 
     /// @notice previewDeposit matches actual deposit
     function testFuzz_PreviewDeposit_MatchesActual(uint256 amount) public {
-        amount = bound(amount, 1e18, okuUSD.balanceOf(user1) / 2);
+        amount = __bound(amount, 1e18, okuUSD.balanceOf(user1) / 2);
 
         _approveOkuUSD(user1, address(wokuUSD), amount);
         uint256 preview = wokuUSD.previewDeposit(amount);
@@ -188,7 +188,7 @@ contract wOkuUSDFuzzTest is BaseTest {
 
     /// @notice previewMint matches actual mint
     function testFuzz_PreviewMint_MatchesActual(uint256 shares) public {
-        shares = bound(shares, 1e18, okuUSD.balanceOf(user1) / 2);
+        shares = __bound(shares, 1e18, okuUSD.balanceOf(user1) / 2);
 
         _approveOkuUSD(user1, address(wokuUSD), type(uint256).max);
         uint256 preview = wokuUSD.previewMint(shares);
@@ -206,8 +206,8 @@ contract wOkuUSDFuzzTest is BaseTest {
     )
         public
     {
-        depositAmount = bound(depositAmount, 2e18, okuUSD.balanceOf(user1) / 2);
-        withdrawRatio = bound(withdrawRatio, 1, 100); // 1% to 100%
+        depositAmount = __bound(depositAmount, 2e18, okuUSD.balanceOf(user1) / 2);
+        withdrawRatio = __bound(withdrawRatio, 1, 100); // 1% to 100%
 
         _approveOkuUSD(user1, address(wokuUSD), depositAmount);
 
@@ -225,7 +225,7 @@ contract wOkuUSDFuzzTest is BaseTest {
 
     /// @notice previewRedeem matches actual redeem
     function testFuzz_PreviewRedeem_MatchesActual(uint256 depositAmount) public {
-        depositAmount = bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
+        depositAmount = __bound(depositAmount, 1e18, okuUSD.balanceOf(user1) / 2);
 
         _approveOkuUSD(user1, address(wokuUSD), depositAmount);
 
@@ -244,7 +244,7 @@ contract wOkuUSDFuzzTest is BaseTest {
 
     /// @notice convertToShares and convertToAssets are inverse
     function testFuzz_ConversionFunctionsInverse(uint256 assets) public {
-        assets = bound(assets, 1e18, MAX_SUPPLY / 10);
+        assets = __bound(assets, 1e18, MAX_SUPPLY / 10);
 
         // Need some liquidity in vault first
         _approveOkuUSD(user1, address(wokuUSD), assets);
@@ -267,9 +267,9 @@ contract wOkuUSDFuzzTest is BaseTest {
     )
         public
     {
-        initialDeposit = bound(initialDeposit, 10e18, okuUSD.balanceOf(user1) / 4);
+        initialDeposit = __bound(initialDeposit, 10e18, okuUSD.balanceOf(user1) / 4);
         newMultiplier = _boundMultiplier(newMultiplier);
-        queryAmount = bound(queryAmount, 1e18, initialDeposit);
+        queryAmount = __bound(queryAmount, 1e18, initialDeposit);
 
         // Create initial liquidity
         _approveOkuUSD(user1, address(wokuUSD), initialDeposit);
@@ -277,7 +277,7 @@ contract wOkuUSDFuzzTest is BaseTest {
         wokuUSD.deposit(initialDeposit, user1);
 
         // Rebase to change exchange rate
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(newMultiplier);
 
         // Test conversions
@@ -298,9 +298,9 @@ contract wOkuUSDFuzzTest is BaseTest {
     )
         public
     {
-        deposit1 = bound(deposit1, 1e18, okuUSD.balanceOf(user1) / 2);
-        deposit2 = bound(deposit2, 1e18, okuUSD.balanceOf(user2) / 2);
-        withdraw1Ratio = bound(withdraw1Ratio, 1, 100);
+        deposit1 = __bound(deposit1, 1e18, okuUSD.balanceOf(user1) / 2);
+        deposit2 = __bound(deposit2, 1e18, okuUSD.balanceOf(user2) / 2);
+        withdraw1Ratio = __bound(withdraw1Ratio, 1, 100);
 
         // User1 deposits
         _approveOkuUSD(user1, address(wokuUSD), deposit1);
@@ -341,8 +341,8 @@ contract wOkuUSDFuzzTest is BaseTest {
     )
         public
     {
-        deposit1 = bound(deposit1, 1e18, okuUSD.balanceOf(user1) / 2);
-        deposit2 = bound(deposit2, 1e18, okuUSD.balanceOf(user2) / 2);
+        deposit1 = __bound(deposit1, 1e18, okuUSD.balanceOf(user1) / 2);
+        deposit2 = __bound(deposit2, 1e18, okuUSD.balanceOf(user2) / 2);
         newMultiplier = _boundMultiplier(newMultiplier);
 
         _approveOkuUSD(user1, address(wokuUSD), deposit1);
@@ -360,7 +360,7 @@ contract wOkuUSDFuzzTest is BaseTest {
         uint256 ratio2Before = (wokuUSD.balanceOf(user2) * PRECISION) / totalShares;
 
         // Rebase
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(newMultiplier);
 
         // Ownership ratios should be unchanged (shares don't change)
@@ -375,7 +375,7 @@ contract wOkuUSDFuzzTest is BaseTest {
 
     /// @notice Small deposits handled correctly
     function testFuzz_SmallDeposits(uint256 amount) public {
-        amount = bound(amount, 1, 10_000); // Very small amounts
+        amount = __bound(amount, 1, 10_000); // Very small amounts
 
         _mintOkuUSD(user3, amount);
         _approveOkuUSD(user3, address(wokuUSD), amount);
@@ -392,19 +392,19 @@ contract wOkuUSDFuzzTest is BaseTest {
 
     /// @notice Deposit and withdraw at high exchange rate
     function testFuzz_HighExchangeRate(uint256 depositAmount, uint256 multiplier) public {
-        depositAmount = bound(depositAmount, 1e18, 1e22); // Smaller max to avoid supply cap
-        multiplier = bound(multiplier, PRECISION * 10, PRECISION * 100);
+        depositAmount = __bound(depositAmount, 1e18, 1e22); // Smaller max to avoid supply cap
+        multiplier = __bound(multiplier, PRECISION * 10, PRECISION * 100);
 
         // Set high multiplier first
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(multiplier);
 
         // Increase max supply to accommodate high multiplier mints
-        vm.prank(admin);
+        vm.prank(capManager);
         okuUSD.setMaxSupply(MAX_SUPPLY * 1000);
 
         // Need to also increase minter allowance
-        vm.prank(admin);
+        vm.prank(allowanceManager);
         okuUSD.configureMinterAllowance(minter, MAX_SUPPLY * 1000);
 
         // Mint OkuUSD at high multiplier

@@ -12,7 +12,7 @@ contract OkuUSDFuzzTest is BaseTest {
 
     /// @notice tokens -> shares -> tokens should round-trip with max 1 wei loss
     function testFuzz_SharesRoundTrip(uint256 tokens) public view {
-        tokens = bound(tokens, 1, MAX_SUPPLY);
+        tokens = __bound(tokens, 1, MAX_SUPPLY);
 
         uint256 shares = okuUSD.tokensToShares(tokens);
         uint256 recoveredTokens = okuUSD.sharesToTokens(shares);
@@ -24,7 +24,7 @@ contract OkuUSDFuzzTest is BaseTest {
 
     /// @notice shares -> tokens -> shares should round-trip with possible loss
     function testFuzz_TokensRoundTrip(uint256 shares) public view {
-        shares = bound(shares, 1, type(uint128).max);
+        shares = __bound(shares, 1, type(uint128).max);
 
         uint256 tokens = okuUSD.sharesToTokens(shares);
         uint256 recoveredShares = okuUSD.tokensToShares(tokens);
@@ -36,10 +36,10 @@ contract OkuUSDFuzzTest is BaseTest {
     /// @notice Round-trip at various multipliers maintains precision
     function testFuzz_SharesRoundTripAtMultiplier(uint256 tokens, uint256 multiplier) public {
         // Use larger minimum to avoid edge cases with very small values
-        tokens = bound(tokens, 1e18, MAX_SUPPLY / 10);
-        multiplier = bound(multiplier, PRECISION, PRECISION * 10);
+        tokens = __bound(tokens, 1e18, MAX_SUPPLY / 10);
+        multiplier = __bound(multiplier, PRECISION, PRECISION * 10);
 
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(multiplier);
 
         uint256 shares = okuUSD.tokensToShares(tokens);
@@ -81,8 +81,8 @@ contract OkuUSDFuzzTest is BaseTest {
     )
         public
     {
-        amount1 = bound(amount1, 1e18, MAX_SUPPLY / 4);
-        amount2 = bound(amount2, 1e18, MAX_SUPPLY / 4);
+        amount1 = __bound(amount1, 1e18, MAX_SUPPLY / 4);
+        amount2 = __bound(amount2, 1e18, MAX_SUPPLY / 4);
 
         _mintOkuUSD(user1, amount1);
         _mintOkuUSD(user2, amount2);
@@ -91,7 +91,7 @@ contract OkuUSDFuzzTest is BaseTest {
         assertEq(totalSupplyAfterMints, amount1 + amount2, "Supply should equal sum of mints");
 
         // Burn partial from user1
-        burnAmount = bound(burnAmount, 1, amount1);
+        burnAmount = __bound(burnAmount, 1, amount1);
         vm.prank(minter);
         okuUSD.burn(user1, burnAmount);
 
@@ -109,7 +109,7 @@ contract OkuUSDFuzzTest is BaseTest {
         amount = _boundMintAmount(amount);
         _mintOkuUSD(user1, amount);
 
-        transferAmount = bound(transferAmount, 0, amount);
+        transferAmount = __bound(transferAmount, 0, amount);
 
         uint256 totalSharesBefore = okuUSD.totalShares();
         uint256 combinedSharesBefore = okuUSD.sharesOf(user1) + okuUSD.sharesOf(user2);
@@ -133,18 +133,18 @@ contract OkuUSDFuzzTest is BaseTest {
     )
         public
     {
-        mintAmount = bound(mintAmount, 10e18, MAX_SUPPLY / 2);
+        mintAmount = __bound(mintAmount, 10e18, MAX_SUPPLY / 2);
         _mintOkuUSD(user1, mintAmount);
 
         uint256 totalSupplyBefore = okuUSD.totalSupply();
 
         // Transfer user1 -> user2
-        transfer1 = bound(transfer1, 1, mintAmount / 2);
+        transfer1 = __bound(transfer1, 1, mintAmount / 2);
         vm.prank(user1);
         assertTrue(okuUSD.transfer(user2, transfer1));
 
         // Transfer user2 -> user3
-        transfer2 = bound(transfer2, 1, transfer1);
+        transfer2 = __bound(transfer2, 1, transfer1);
         vm.prank(user2);
         assertTrue(okuUSD.transfer(user3, transfer2));
 
@@ -160,7 +160,7 @@ contract OkuUSDFuzzTest is BaseTest {
 
     /// @notice Rebase increases all balances proportionally
     function testFuzz_RebaseIncreasesAllBalances(uint256 mintAmount, uint256 newMultiplier) public {
-        mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 10);
+        mintAmount = __bound(mintAmount, 1e18, MAX_SUPPLY / 10);
         newMultiplier = _boundMultiplier(newMultiplier);
 
         _mintOkuUSD(user1, mintAmount);
@@ -169,7 +169,7 @@ contract OkuUSDFuzzTest is BaseTest {
         uint256 sharesBefore = okuUSD.sharesOf(user1);
         uint256 multiplierBefore = okuUSD.rewardMultiplier();
 
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(newMultiplier);
 
         uint256 balanceAfter = okuUSD.balanceOf(user1);
@@ -196,8 +196,8 @@ contract OkuUSDFuzzTest is BaseTest {
     )
         public
     {
-        amount1 = bound(amount1, 1e18, MAX_SUPPLY / 4);
-        amount2 = bound(amount2, 1e18, MAX_SUPPLY / 4);
+        amount1 = __bound(amount1, 1e18, MAX_SUPPLY / 4);
+        amount2 = __bound(amount2, 1e18, MAX_SUPPLY / 4);
         newMultiplier = _boundMultiplier(newMultiplier);
 
         _mintOkuUSD(user1, amount1);
@@ -206,7 +206,7 @@ contract OkuUSDFuzzTest is BaseTest {
         uint256 ratio1Before = (okuUSD.balanceOf(user1) * PRECISION) / okuUSD.totalSupply();
         uint256 ratio2Before = (okuUSD.balanceOf(user2) * PRECISION) / okuUSD.totalSupply();
 
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(newMultiplier);
 
         uint256 ratio1After = (okuUSD.balanceOf(user1) * PRECISION) / okuUSD.totalSupply();
@@ -224,7 +224,7 @@ contract OkuUSDFuzzTest is BaseTest {
     )
         public
     {
-        mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 10);
+        mintAmount = __bound(mintAmount, 1e18, MAX_SUPPLY / 10);
         newMultiplier = _boundMultiplier(newMultiplier);
 
         _mintOkuUSD(user1, mintAmount);
@@ -232,7 +232,7 @@ contract OkuUSDFuzzTest is BaseTest {
         uint256 totalSharesBefore = okuUSD.totalShares();
         uint256 multiplierBefore = okuUSD.rewardMultiplier();
 
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(newMultiplier);
 
         // totalSupply = totalShares * multiplier / PRECISION
@@ -253,20 +253,20 @@ contract OkuUSDFuzzTest is BaseTest {
     )
         public
     {
-        mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 100);
-        increase1 = bound(increase1, PRECISION / 1000, PRECISION / 10); // 0.1% to 10%
-        increase2 = bound(increase2, PRECISION / 1000, PRECISION / 10);
+        mintAmount = __bound(mintAmount, 1e18, MAX_SUPPLY / 100);
+        increase1 = __bound(increase1, PRECISION / 1000, PRECISION / 10); // 0.1% to 10%
+        increase2 = __bound(increase2, PRECISION / 1000, PRECISION / 10);
 
         _mintOkuUSD(user1, mintAmount);
 
         uint256 sharesBefore = okuUSD.sharesOf(user1);
 
         // First rebase
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(PRECISION + increase1);
 
         // Second rebase
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(PRECISION + increase1 + increase2);
 
         // Shares should still be unchanged
@@ -286,10 +286,10 @@ contract OkuUSDFuzzTest is BaseTest {
     )
         public
     {
-        initialAllowance = bound(initialAllowance, 1e18, MAX_SUPPLY);
-        mintAmount = bound(mintAmount, 1, _min(initialAllowance, MAX_SUPPLY));
+        initialAllowance = __bound(initialAllowance, 1e18, MAX_SUPPLY);
+        mintAmount = __bound(mintAmount, 1, _min(initialAllowance, MAX_SUPPLY));
 
-        vm.prank(admin);
+        vm.prank(allowanceManager);
         okuUSD.configureMinterAllowance(minter, initialAllowance);
 
         uint256 allowanceBefore = okuUSD.minterAllowance(minter);
@@ -313,14 +313,14 @@ contract OkuUSDFuzzTest is BaseTest {
 
     /// @notice Only admin can increase allowance
     function testFuzz_OnlyAdminIncreasesAllowance(uint256 mintAmount, uint256 newAllowance) public {
-        mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 2);
-        newAllowance = bound(newAllowance, 0, MAX_SUPPLY);
+        mintAmount = __bound(mintAmount, 1e18, MAX_SUPPLY / 2);
+        newAllowance = __bound(newAllowance, 0, MAX_SUPPLY);
 
         // Mint some tokens to decrease allowance
         _mintOkuUSD(user1, mintAmount);
 
         // Admin resets allowance
-        vm.prank(admin);
+        vm.prank(allowanceManager);
         okuUSD.configureMinterAllowance(minter, newAllowance);
 
         assertEq(okuUSD.minterAllowance(minter), newAllowance, "Admin can set any allowance");
@@ -330,12 +330,12 @@ contract OkuUSDFuzzTest is BaseTest {
 
     /// @notice balanceOf always equals shares * multiplier / PRECISION
     function testFuzz_BalanceOfEqualsFormula(uint256 mintAmount, uint256 newMultiplier) public {
-        mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 2);
+        mintAmount = __bound(mintAmount, 1e18, MAX_SUPPLY / 2);
         newMultiplier = _boundMultiplier(newMultiplier);
 
         _mintOkuUSD(user1, mintAmount);
 
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(newMultiplier);
 
         uint256 shares = okuUSD.sharesOf(user1);
@@ -346,12 +346,12 @@ contract OkuUSDFuzzTest is BaseTest {
 
     /// @notice totalSupply always equals totalShares * multiplier / PRECISION
     function testFuzz_TotalSupplyEqualsFormula(uint256 mintAmount, uint256 newMultiplier) public {
-        mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 2);
+        mintAmount = __bound(mintAmount, 1e18, MAX_SUPPLY / 2);
         newMultiplier = _boundMultiplier(newMultiplier);
 
         _mintOkuUSD(user1, mintAmount);
 
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(newMultiplier);
 
         uint256 totalShares = okuUSD.totalShares();
@@ -373,10 +373,10 @@ contract OkuUSDFuzzTest is BaseTest {
         okuUSD.mint(user2, 1);
 
         // Bound multiplier increase to reasonable range
-        multiplierIncrease = bound(multiplierIncrease, PRECISION / 10, PRECISION); // 10% to 100% increase
+        multiplierIncrease = __bound(multiplierIncrease, PRECISION / 10, PRECISION); // 10% to 100% increase
 
         // But rebase should work and push supply above maxSupply
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(PRECISION + multiplierIncrease);
 
         // Supply now exceeds maxSupply
@@ -387,7 +387,7 @@ contract OkuUSDFuzzTest is BaseTest {
 
     /// @notice Very small amounts handled correctly
     function testFuzz_VerySmallAmounts(uint256 amount) public {
-        amount = bound(amount, 1, 1000); // 1 to 1000 wei
+        amount = __bound(amount, 1, 1000); // 1 to 1000 wei
 
         _mintOkuUSD(user1, amount);
 
@@ -403,13 +403,13 @@ contract OkuUSDFuzzTest is BaseTest {
 
     /// @notice Operations at high multiplier maintain precision
     function testFuzz_HighMultiplierPrecision(uint256 mintAmount, uint256 multiplier) public {
-        mintAmount = bound(mintAmount, 1e18, 1e24); // 1 to 1M tokens
-        multiplier = bound(multiplier, PRECISION * 10, PRECISION * 100); // 10x to 100x
+        mintAmount = __bound(mintAmount, 1e18, 1e24); // 1 to 1M tokens
+        multiplier = __bound(multiplier, PRECISION * 10, PRECISION * 100); // 10x to 100x
 
         _mintOkuUSD(user1, mintAmount);
         uint256 sharesBefore = okuUSD.sharesOf(user1);
 
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(multiplier);
 
         // Shares unchanged
@@ -442,16 +442,16 @@ contract OkuUSDFuzzTest is BaseTest {
         public
     {
         // Use smaller amounts to avoid supply cap issues after rebase
-        firstMint = bound(firstMint, 1e18, MAX_SUPPLY / 20);
-        multiplier = bound(multiplier, PRECISION, PRECISION * 5);
-        secondMint = bound(secondMint, 1e18, MAX_SUPPLY / 20);
+        firstMint = __bound(firstMint, 1e18, MAX_SUPPLY / 20);
+        multiplier = __bound(multiplier, PRECISION, PRECISION * 5);
+        secondMint = __bound(secondMint, 1e18, MAX_SUPPLY / 20);
 
         // First mint at initial multiplier
         _mintOkuUSD(user1, firstMint);
         uint256 user1Shares = okuUSD.sharesOf(user1);
 
         // Rebase
-        vm.prank(admin);
+        vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(multiplier);
 
         // Second mint at new multiplier

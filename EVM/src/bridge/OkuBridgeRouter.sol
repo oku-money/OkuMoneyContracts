@@ -43,8 +43,11 @@ contract OkuBridgeRouter is
 {
     using SafeERC20 for IERC20;
 
-    bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
-    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    // Granular RBAC roles (contract-specific prefixes)
+    bytes32 public constant ROUTER_UPGRADER_ROLE = keccak256("ROUTER_UPGRADER_ROLE");
+    bytes32 public constant ROUTER_PAUSER_ROLE = keccak256("ROUTER_PAUSER_ROLE");
+    bytes32 public constant ROUTER_UNPAUSER_ROLE = keccak256("ROUTER_UNPAUSER_ROLE");
+    bytes32 public constant ADAPTER_MANAGER_ROLE = keccak256("ADAPTER_MANAGER_ROLE");
 
     IwOkuUSD public wOkuUSD;
     IOkuUSD public okuUSD;
@@ -75,8 +78,8 @@ contract OkuBridgeRouter is
         okuUSD = IOkuUSD(_okuUSD);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(UPGRADER_ROLE, admin);
-        _grantRole(PAUSER_ROLE, admin);
+        _grantRole(ROUTER_UPGRADER_ROLE, admin);
+        _grantRole(ROUTER_PAUSER_ROLE, admin);
     }
 
     // ============ Bridge Functions ============
@@ -153,17 +156,17 @@ contract OkuBridgeRouter is
         bool supported
     )
         external
-        onlyRole(DEFAULT_ADMIN_ROLE)
+        onlyRole(ADAPTER_MANAGER_ROLE)
     {
         supportedAdapters[adapter] = supported;
         emit AdapterConfigured(adapter, supported);
     }
 
-    function pause() external onlyRole(PAUSER_ROLE) {
+    function pause() external onlyRole(ROUTER_PAUSER_ROLE) {
         _pause();
     }
 
-    function unpause() external onlyRole(PAUSER_ROLE) {
+    function unpause() external onlyRole(ROUTER_UNPAUSER_ROLE) {
         _unpause();
     }
 
@@ -172,6 +175,6 @@ contract OkuBridgeRouter is
     function _authorizeUpgrade(address newImplementation)
         internal
         override
-        onlyRole(UPGRADER_ROLE)
+        onlyRole(ROUTER_UPGRADER_ROLE)
     {}
 }

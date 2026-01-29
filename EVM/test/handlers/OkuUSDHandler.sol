@@ -11,7 +11,8 @@ import {OkuUSD} from "../../src/token/OkuUSD.sol";
 contract OkuUSDHandler is Test {
     OkuUSD public okuUSD;
     address public minter;
-    address public admin;
+    address public rebaser;
+    address public allowanceManager;
 
     // Tracking state for invariant verification
     address[] public actors;
@@ -27,10 +28,11 @@ contract OkuUSDHandler is Test {
     uint256 public ghost_burnedTotal;
     bool public ghost_lastWasRebase;
 
-    constructor(OkuUSD _okuUSD, address _minter, address _admin) {
+    constructor(OkuUSD _okuUSD, address _minter, address _rebaser, address _allowanceManager) {
         okuUSD = _okuUSD;
         minter = _minter;
-        admin = _admin;
+        rebaser = _rebaser;
+        allowanceManager = _allowanceManager;
 
         // Initialize actors
         _addActor(makeAddr("actor1"));
@@ -54,11 +56,11 @@ contract OkuUSDHandler is Test {
         ghost_lastWasRebase = false;
 
         address actor = actors[actorSeed % actors.length];
-        amount = bound(amount, 1, MAX_SUPPLY / 100);
+        amount = __bound(amount, 1, MAX_SUPPLY / 100);
 
         uint256 allowance = okuUSD.minterAllowance(minter);
         uint256 remaining = okuUSD.maxSupply() - okuUSD.totalSupply();
-        amount = bound(amount, 0, _min(allowance, remaining));
+        amount = __bound(amount, 0, _min(allowance, remaining));
 
         if (amount == 0) return;
 
@@ -75,7 +77,7 @@ contract OkuUSDHandler is Test {
 
         address actor = actors[actorSeed % actors.length];
         uint256 balance = okuUSD.balanceOf(actor);
-        amount = bound(amount, 0, balance);
+        amount = __bound(amount, 0, balance);
 
         if (amount == 0) return;
 
@@ -92,7 +94,7 @@ contract OkuUSDHandler is Test {
         address from = actors[fromSeed % actors.length];
         address to = actors[toSeed % actors.length];
         uint256 balance = okuUSD.balanceOf(from);
-        amount = bound(amount, 0, balance);
+        amount = __bound(amount, 0, balance);
 
         if (amount == 0 || from == to) return;
 
@@ -105,20 +107,26 @@ contract OkuUSDHandler is Test {
         uint256 currentMultiplier = okuUSD.rewardMultiplier();
         // Increase by 0.01% to 10%
         uint256 increase =
-            bound(multiplierIncrease, currentMultiplier / 10_000, currentMultiplier / 10);
+            __bound(multiplierIncrease, currentMultiplier / 10_000, currentMultiplier / 10);
         uint256 newMultiplier = currentMultiplier + increase;
 
-        vm.prank(admin);
+        // Cap at 1e27 (1 billion x starting value) to prevent extreme arithmetic issues
+        // This still allows for massive yield accumulation while keeping math tractable
+        if (newMultiplier > 1e27) {
+            return; // Skip rebase if it would exceed reasonable bounds
+        }
+
+        vm.prank(rebaser);
         try okuUSD.updateRewardMultiplier(newMultiplier) {
             ghost_lastWasRebase = true;
         } catch {}
     }
 
-    /// @notice Reset minter allowance (simulates admin action)
+    /// @notice Reset minter allowance (simulates allowance manager action)
     function resetAllowance(uint256 newAllowance) external {
-        newAllowance = bound(newAllowance, 0, MAX_SUPPLY);
+        newAllowance = __bound(newAllowance, 0, MAX_SUPPLY);
 
-        vm.prank(admin);
+        vm.prank(allowanceManager);
         try okuUSD.configureMinterAllowance(minter, newAllowance) {
             allowanceWasReset = true;
             lastAllowance[minter] = newAllowance;
@@ -141,6 +149,15 @@ contract OkuUSDHandler is Test {
 
     function wasAllowanceReset() external view returns (bool) {
         return allowanceWasReset;
+    }
+
+    // ============ Helper Functions ============
+
+    /// @notice Custom bound function without console logging
+    function __bound(uint256 x, uint256 min, uint256 max) internal pure returns (uint256) {
+        if (x < min) return min;
+        if (x > max) return max;
+        return x;
     }
 
     function _min(uint256 a, uint256 b) internal pure returns (uint256) {

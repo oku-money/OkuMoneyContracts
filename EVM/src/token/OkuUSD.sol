@@ -56,8 +56,8 @@ contract OkuUSD is
     mapping(address => bool) public isBlacklisted;
 
     // Events
-    event RewardMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier);
-    event MinterAllowanceConfigured(address indexed minter, uint256 allowance);
+    event RebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
+    event MinterAllowanceUpdated(address indexed minter, uint256 oldAllowance, uint256 newAllowance);
     event MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply);
     event Blacklisted(address indexed account);
     event Unblacklisted(address indexed account);
@@ -98,7 +98,7 @@ contract OkuUSD is
         require(newMultiplier >= rewardMultiplier, "Multiplier cannot decrease");
         uint256 oldMultiplier = rewardMultiplier;
         rewardMultiplier = newMultiplier;
-        emit RewardMultiplierUpdated(oldMultiplier, newMultiplier);
+        emit RebaseEvent(oldMultiplier, newMultiplier);
     }
 
     /**
@@ -217,8 +217,9 @@ contract OkuUSD is
         external
         onlyRole(ALLOWANCE_MANAGER_ROLE)
     {
+        uint256 oldAllowance = minterAllowance[minter];
         minterAllowance[minter] = allowance;
-        emit MinterAllowanceConfigured(minter, allowance);
+        emit MinterAllowanceUpdated(minter, oldAllowance, allowance);
     }
 
     // ============ Supply Cap Management ============

@@ -85,13 +85,13 @@ contract OkuBridgeRouter is
     // ============ Bridge Functions ============
 
     /**
-     * @notice Bridge wOkuUSD to another chain
+     * @notice Bridge wrapped OkuUSD to another chain (unwraps first)
      * @param wOkuUSDAmount Amount of wOkuUSD to bridge
      * @param adapter Bridge adapter to use
      * @param destinationChain Destination chain ID
      * @param recipient Recipient address on destination chain
      */
-    function bridgeWOkuUSD(
+    function bridgeWrapped(
         uint256 wOkuUSDAmount,
         address adapter,
         uint256 destinationChain,
@@ -119,13 +119,13 @@ contract OkuBridgeRouter is
     }
 
     /**
-     * @notice Bridge OkuUSD directly (already unwrapped)
+     * @notice Bridge OkuUSD directly (no unwrapping needed)
      * @param okuUSDAmount Amount of OkuUSD to bridge
      * @param adapter Bridge adapter to use
      * @param destinationChain Destination chain ID
      * @param recipient Recipient address on destination chain
      */
-    function bridgeOkuUSD(
+    function bridgeDirect(
         uint256 okuUSDAmount,
         address adapter,
         uint256 destinationChain,

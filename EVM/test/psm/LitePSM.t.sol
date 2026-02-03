@@ -12,7 +12,7 @@ import {BaseTest} from "../Base.t.sol";
 contract LitePSMTest is BaseTest {
     // ============ Events ============
 
-    event Swap(address indexed user, uint256 usdcIn, uint256 okuUSDOut);
+    event Mint(address indexed user, uint256 usdcAmount, uint256 okusdAmount);
     event Redeem(address indexed user, uint256 okuUSDIn, uint256 usdcOut);
     event OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled);
     event BufferRefilled(uint256 amount);
@@ -27,9 +27,9 @@ contract LitePSMTest is BaseTest {
         _mintUSDC(address(litePSM), 5000e6); // Initial buffer
     }
 
-    // ============ Swap Tests ============
+    // ============ Mint Tests ============
 
-    function test_Swap_TransfersUSDCIn() public {
+    function test_Mint_TransfersUSDCIn() public {
         uint256 amount = 100e6;
         uint256 user1BalanceBefore = usdc.balanceOf(user1);
         uint256 psmBalanceBefore = usdc.balanceOf(address(litePSM));
@@ -37,38 +37,38 @@ contract LitePSMTest is BaseTest {
         _approveUSDC(user1, address(litePSM), amount);
 
         vm.prank(user1);
-        litePSM.swap(amount);
+        litePSM.mint(amount);
 
         assertEq(usdc.balanceOf(user1), user1BalanceBefore - amount);
         assertEq(usdc.balanceOf(address(litePSM)), psmBalanceBefore + amount);
     }
 
-    function test_Swap_MintsOkuUSDOut() public {
+    function test_Mint_MintsOkuUSDOut() public {
         uint256 amount = 100e6;
 
         _approveUSDC(user1, address(litePSM), amount);
 
         vm.prank(user1);
-        litePSM.swap(amount);
+        litePSM.mint(amount);
 
-        // Note: 1:1 swap means OkuUSD minted = USDC amount
+        // Note: 1:1 mint means OkuUSD minted = USDC amount
         // This is a bug since decimals differ (6 vs 18)
         assertEq(okuUSD.balanceOf(user1), amount);
     }
 
-    function test_Swap_OneToOneRatio() public {
+    function test_Mint_OneToOneRatio() public {
         uint256 amount = 500e6;
 
         _approveUSDC(user1, address(litePSM), amount);
 
         vm.prank(user1);
-        litePSM.swap(amount);
+        litePSM.mint(amount);
 
         // Verify 1:1 ratio (despite decimal mismatch)
         assertEq(okuUSD.balanceOf(user1), amount);
     }
 
-    function test_Swap_RevertsWhenPaused() public {
+    function test_Mint_RevertsWhenPaused() public {
         vm.prank(pauser);
         litePSM.pause();
 
@@ -76,29 +76,29 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert();
-        litePSM.swap(100e6);
+        litePSM.mint(100e6);
     }
 
-    function test_Swap_RevertsZeroAmount() public {
+    function test_Mint_RevertsZeroAmount() public {
         vm.prank(user1);
         vm.expectRevert("Amount must be positive");
-        litePSM.swap(0);
+        litePSM.mint(0);
     }
 
-    function test_Swap_EmitsEvent() public {
+    function test_Mint_EmitsEvent() public {
         uint256 amount = 100e6;
         _approveUSDC(user1, address(litePSM), amount);
 
         vm.expectEmit(true, false, false, true);
-        emit Swap(user1, amount, amount);
+        emit Mint(user1, amount, amount);
 
         vm.prank(user1);
-        litePSM.swap(amount);
+        litePSM.mint(amount);
     }
 
     // ============ Oracle Tests ============
 
-    function test_Swap_ChecksOracleWhenEnabled() public {
+    function test_Mint_ChecksOracleWhenEnabled() public {
         // Configure oracle
         vm.prank(oracleManager);
         litePSM.configureOracle(address(oracle), 1 hours, true);
@@ -110,10 +110,10 @@ contract LitePSMTest is BaseTest {
 
         // Should succeed
         vm.prank(user1);
-        litePSM.swap(100e6);
+        litePSM.mint(100e6);
     }
 
-    function test_Swap_RevertsOnInsufficientReserves() public {
+    function test_Mint_RevertsOnInsufficientReserves() public {
         // Configure oracle
         vm.prank(oracleManager);
         litePSM.configureOracle(address(oracle), 1 hours, true);
@@ -125,10 +125,10 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert("Exceeds reserves");
-        litePSM.swap(100e6);
+        litePSM.mint(100e6);
     }
 
-    function test_Swap_RevertsOnStaleOracle() public {
+    function test_Mint_RevertsOnStaleOracle() public {
         // Warp to a reasonable timestamp first
         vm.warp(1_000_000);
 
@@ -143,10 +143,10 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert("Stale oracle data");
-        litePSM.swap(100e6);
+        litePSM.mint(100e6);
     }
 
-    function test_Swap_SkipsOracleWhenDisabled() public {
+    function test_Mint_SkipsOracleWhenDisabled() public {
         // Oracle configured but disabled
         vm.prank(oracleManager);
         litePSM.configureOracle(address(oracle), 1 hours, false);
@@ -158,7 +158,7 @@ contract LitePSMTest is BaseTest {
 
         // Should succeed because oracle is disabled
         vm.prank(user1);
-        litePSM.swap(100e6);
+        litePSM.mint(100e6);
     }
 
     function test_ConfigureOracle_OnlyOracleManager() public {

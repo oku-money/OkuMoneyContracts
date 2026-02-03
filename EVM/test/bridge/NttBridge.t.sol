@@ -278,7 +278,7 @@ contract NttBridgeTest is BaseTest {
 
         vm.startPrank(user1);
         okuUSD.approve(address(bridgeRouter), amount);
-        bridgeRouter.bridgeOkuUSD(amount, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
+        bridgeRouter.bridgeDirect(amount, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
         // Verify tokens burned from user
@@ -297,7 +297,7 @@ contract NttBridgeTest is BaseTest {
 
         vm.startPrank(user1);
         wokuUSD.approve(address(bridgeRouter), wokuShares);
-        bridgeRouter.bridgeWOkuUSD(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
+        bridgeRouter.bridgeWrapped(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
         // Verify wOkuUSD burned
@@ -318,7 +318,7 @@ contract NttBridgeTest is BaseTest {
         // Step 2: Bridge wOkuUSD via NTT
         vm.startPrank(user1);
         wokuUSD.approve(address(bridgeRouter), wokuShares);
-        bridgeRouter.bridgeWOkuUSD(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
+        bridgeRouter.bridgeWrapped(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
         // Step 3: Complete bridge on destination
@@ -350,7 +350,7 @@ contract NttBridgeTest is BaseTest {
         // Step 3: Bridge
         vm.startPrank(user1);
         wokuUSD.approve(address(bridgeRouter), wokuShares);
-        bridgeRouter.bridgeWOkuUSD(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
+        bridgeRouter.bridgeWrapped(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
         // Verify bridged amount includes rebase yield (allow 1 wei rounding from share conversion)
@@ -378,9 +378,9 @@ contract NttBridgeTest is BaseTest {
         vm.startPrank(user1);
         okuUSD.approve(address(bridgeRouter), amount1 + amount2 + amount3);
 
-        bridgeRouter.bridgeOkuUSD(amount1, address(nttAdapter), ARBITRUM_CHAIN_ID, dest1);
-        bridgeRouter.bridgeOkuUSD(amount2, address(nttAdapter), OPTIMISM_CHAIN_ID, dest2);
-        bridgeRouter.bridgeOkuUSD(amount3, address(nttAdapter), BASE_CHAIN_ID, dest3);
+        bridgeRouter.bridgeDirect(amount1, address(nttAdapter), ARBITRUM_CHAIN_ID, dest1);
+        bridgeRouter.bridgeDirect(amount2, address(nttAdapter), OPTIMISM_CHAIN_ID, dest2);
+        bridgeRouter.bridgeDirect(amount3, address(nttAdapter), BASE_CHAIN_ID, dest3);
         vm.stopPrank();
 
         // Verify all transfers
@@ -443,7 +443,7 @@ contract NttBridgeTest is BaseTest {
 
         vm.startPrank(user1);
         okuUSD.approve(address(bridgeRouter), amount);
-        bridgeRouter.bridgeOkuUSD(amount, address(nttAdapter), selectedChain, user2);
+        bridgeRouter.bridgeDirect(amount, address(nttAdapter), selectedChain, user2);
         vm.stopPrank();
 
         // Verify transfer
@@ -476,7 +476,7 @@ contract NttBridgeTest is BaseTest {
         // Bridge
         vm.startPrank(user1);
         wokuUSD.approve(address(bridgeRouter), wokuShares);
-        bridgeRouter.bridgeWOkuUSD(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
+        bridgeRouter.bridgeWrapped(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
         // Verify bridged amount
@@ -508,7 +508,7 @@ contract NttBridgeTest is BaseTest {
         // Step 3: Bridge via NTT
         vm.startPrank(user1);
         wokuUSD.approve(address(bridgeRouter), wokuShares);
-        bridgeRouter.bridgeWOkuUSD(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
+        bridgeRouter.bridgeWrapped(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
         // Step 4: Complete on destination
@@ -543,7 +543,7 @@ contract NttBridgeTest is BaseTest {
 
             vm.startPrank(users[i]);
             wokuUSD.approve(address(bridgeRouter), shares);
-            bridgeRouter.bridgeWOkuUSD(
+            bridgeRouter.bridgeWrapped(
                 shares, address(nttAdapter), ARBITRUM_CHAIN_ID, destinations[i]
             );
             vm.stopPrank();

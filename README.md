@@ -95,7 +95,7 @@ contracts/
 | Access control | OpenZeppelin AccessControl | Config account with authority pubkeys |
 | Multisig | Gnosis Safe | Squads Protocol |
 | Oracle | Chainlink | Pyth Network |
-| Upgradeability | TransparentUpgradeableProxy | Native program upgrade authority |
+| Upgradeability | UUPS (UUPSUpgradeable) | Native program upgrade authority |
 
 ## Access Control
 

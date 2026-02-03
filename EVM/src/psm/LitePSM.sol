@@ -9,6 +9,7 @@ import {
 import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {RedemptionQueue} from "./RedemptionQueue.sol";
@@ -30,7 +31,13 @@ interface IAggregatorV3 {
  * @notice Peg Stability Module for 1:1 USDC <-> OkuUSD swaps with zero slippage
  * @dev Includes PoR oracle checks and redemption queue for when buffer is depleted
  */
-contract LitePSM is Initializable, AccessControlUpgradeable, PausableUpgradeable, UUPSUpgradeable {
+contract LitePSM is
+    Initializable,
+    AccessControlUpgradeable,
+    PausableUpgradeable,
+    ReentrancyGuard,
+    UUPSUpgradeable
+{
     using SafeERC20 for IERC20;
 
     // Granular RBAC roles (contract-specific prefixes)
@@ -52,7 +59,7 @@ contract LitePSM is Initializable, AccessControlUpgradeable, PausableUpgradeable
     bool public oracleEnabled;
 
     // Events
-    event Swap(address indexed user, uint256 usdcIn, uint256 okuUSDOut);
+    event Mint(address indexed user, uint256 usdcAmount, uint256 okusdAmount);
     event Redeem(address indexed user, uint256 okuUSDIn, uint256 usdcOut);
     event OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled);
     event BufferRefilled(uint256 amount);
@@ -90,10 +97,10 @@ contract LitePSM is Initializable, AccessControlUpgradeable, PausableUpgradeable
     // ============ Swap Functions ============
 
     /**
-     * @notice Swap USDC for OkuUSD at 1:1 rate
-     * @param usdcAmount Amount of USDC to swap
+     * @notice Mint OkuUSD by depositing USDC at 1:1 rate
+     * @param usdcAmount Amount of USDC to deposit
      */
-    function swap(uint256 usdcAmount) external whenNotPaused {
+    function mint(uint256 usdcAmount) external whenNotPaused nonReentrant {
         require(usdcAmount > 0, "Amount must be positive");
 
         // Check PoR oracle if enabled
@@ -107,14 +114,14 @@ contract LitePSM is Initializable, AccessControlUpgradeable, PausableUpgradeable
         // Mint OkuUSD to user (1:1)
         okuUSD.mint(msg.sender, usdcAmount);
 
-        emit Swap(msg.sender, usdcAmount, usdcAmount);
+        emit Mint(msg.sender, usdcAmount, usdcAmount);
     }
 
     /**
      * @notice Redeem OkuUSD for USDC at 1:1 rate
      * @param okuUSDAmount Amount of OkuUSD to redeem
      */
-    function redeem(uint256 okuUSDAmount) external whenNotPaused {
+    function redeem(uint256 okuUSDAmount) external whenNotPaused nonReentrant {
         require(okuUSDAmount > 0, "Amount must be positive");
 
         uint256 usdcBalance = usdc.balanceOf(address(this));

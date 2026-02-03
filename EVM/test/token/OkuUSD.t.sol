@@ -13,8 +13,8 @@ contract OkuUSDTest is BaseTest {
     // ============ Events ============
 
     event Transfer(address indexed from, address indexed to, uint256 value);
-    event RewardMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier);
-    event MinterAllowanceConfigured(address indexed minter, uint256 allowance);
+    event RebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
+    event MinterAllowanceUpdated(address indexed minter, uint256 oldAllowance, uint256 newAllowance);
     event MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply);
     event Blacklisted(address indexed account);
     event Unblacklisted(address indexed account);
@@ -427,7 +427,7 @@ contract OkuUSDTest is BaseTest {
 
     function test_UpdateRewardMultiplier_EmitsEvent() public {
         vm.expectEmit(false, false, false, true);
-        emit RewardMultiplierUpdated(PRECISION, PRECISION * 2);
+        emit RebaseEvent(PRECISION, PRECISION * 2);
 
         vm.prank(rebaser);
         okuUSD.updateRewardMultiplier(PRECISION * 2);
@@ -636,7 +636,7 @@ contract OkuUSDTest is BaseTest {
 
     function test_ConfigureMinterAllowance_EmitsEvent() public {
         vm.expectEmit(true, false, false, true);
-        emit MinterAllowanceConfigured(minter, 1000e18);
+        emit MinterAllowanceUpdated(minter, MAX_SUPPLY, 1000e18);
 
         vm.prank(allowanceManager);
         okuUSD.configureMinterAllowance(minter, 1000e18);

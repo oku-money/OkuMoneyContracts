@@ -9,7 +9,7 @@ This document covers EVM-specific implementation details.
 - **Language**: Solidity 0.8.x
 - **Framework**: Foundry (Forge, Cast, Anvil)
 - **Dependencies**: OpenZeppelin Contracts (Upgradeable)
-- **Proxy Pattern**: TransparentUpgradeableProxy
+- **Proxy Pattern**: UUPS (UUPSUpgradeable)
 - **Oracle**: Chainlink AggregatorV3Interface
 
 ## Contract Structure
@@ -129,41 +129,47 @@ bytes32 public constant ORACLE_MANAGER_ROLE = keccak256("ORACLE_MANAGER_ROLE");
 
 ## OkuBridgeRouter.sol
 
-**Inherits**: AccessControlUpgradeable
+**Inherits**: AccessControlUpgradeable, PausableUpgradeable, UUPSUpgradeable
 
 **Storage**:
 ```solidity
-mapping(bytes32 => address) public bridgeAdapters;  // adapterId => adapter address
+mapping(address => bool) public supportedAdapters;  // adapter address => supported
 ```
 
 **Key implementation notes**:
 - `bridgeWrapped()`: Unwrap wOkuUSD → bridge OkuUSD
 - `bridgeDirect()`: Bridge OkuUSD directly
+- Pausable for emergency circuit-breaker functionality
 - Stateless—no funds held beyond single tx
 
 **Role bytes32 constants**:
 ```solidity
-bytes32 public constant ADAPTER_MANAGER_ROLE = keccak256("ADAPTER_MANAGER_ROLE");
 bytes32 public constant ROUTER_UPGRADER_ROLE = keccak256("ROUTER_UPGRADER_ROLE");
+bytes32 public constant ROUTER_PAUSER_ROLE = keccak256("ROUTER_PAUSER_ROLE");
+bytes32 public constant ROUTER_UNPAUSER_ROLE = keccak256("ROUTER_UNPAUSER_ROLE");
+bytes32 public constant ADAPTER_MANAGER_ROLE = keccak256("ADAPTER_MANAGER_ROLE");
 ```
 
 ## Proxy Deployment
 
-Each contract deployed behind TransparentUpgradeableProxy:
+Each contract deployed behind UUPS (ERC1967Proxy):
 
 ```solidity
 // Deploy implementation
 OkuUSD impl = new OkuUSD();
 
 // Deploy proxy
-TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(
+ERC1967Proxy proxy = new ERC1967Proxy(
     address(impl),
-    proxyAdmin,
-    abi.encodeCall(OkuUSD.initialize, (admin, pauser, ...))
+    abi.encodeCall(OkuUSD.initialize, ("OkuUSD", "OKUSD", admin, maxSupply))
 );
+
+// Proxy is now upgradeable via upgradeTo() call by UPGRADER_ROLE
 ```
 
-**ProxyAdmin ownership**: Cold Multisig (same entity with UPGRADER roles)
+**Upgrade authority**: Cold Multisig (holder of UPGRADER_ROLE on each contract)
+
+**Key difference from TransparentUpgradeableProxy**: Upgrade logic is in the implementation contract itself, authorized by role-based access control rather than a separate ProxyAdmin.
 
 ## Deterministic Deployment
 
@@ -221,9 +227,8 @@ event RedemptionProcessed(address indexed user, uint256 shares, uint256 usdcAmou
 event OracleUpdated(address oldOracle, address newOracle);
 
 // OkuBridgeRouter
-event BridgeInitiated(address indexed user, bytes32 adapterId, uint256 amount, uint16 destChain);
-event AdapterRegistered(bytes32 adapterId, address adapter);
-event AdapterDeregistered(bytes32 adapterId);
+event BridgeInitiated(address indexed user, address indexed adapter, uint256 amount, uint256 destinationChain, address recipient);
+event AdapterConfigured(address indexed adapter, bool supported);
 ```
 
 ## Dependencies

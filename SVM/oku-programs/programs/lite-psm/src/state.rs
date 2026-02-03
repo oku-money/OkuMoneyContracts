@@ -6,12 +6,34 @@ use anchor_lang::prelude::*;
 pub struct PsmConfig {
     /// PDA bump seed
     pub bump: u8,
-    /// Admin authority (cold multisig)
+
+    // ===== Granular Authorities - One Per Action =====
+    /// Meta role: grant/revoke roles (cold multisig)
     pub admin: Pubkey,
-    /// Pauser authority (warm multisig)
-    pub pauser: Pubkey,
-    /// Orchestrator authority (KMS-backed signer)
-    pub orchestrator: Pubkey,
+    /// Warm Multisig - pause only
+    pub psm_pauser: Pubkey,
+    /// Cold Multisig - unpause only
+    pub psm_unpauser: Pubkey,
+    /// Warm Multisig - freeze accounts
+    pub blacklister: Pubkey,
+    /// Cold Multisig - thaw accounts (requires deliberate review)
+    pub unblacklister: Pubkey,
+    /// Orchestrator - process redemption queue
+    pub queue_processor: Pubkey,
+    /// Orchestrator - deposit USDC buffer
+    pub buffer_depositor: Pubkey,
+    /// Cold Multisig - withdraw buffer
+    pub buffer_withdrawer: Pubkey,
+    /// Cold Multisig - configure oracle
+    pub oracle_manager: Pubkey,
+    /// Cold Multisig - set max supply
+    pub cap_manager: Pubkey,
+    /// Cold Multisig - reset minter allowance
+    pub allowance_manager: Pubkey,
+    /// Orchestrator - update interest rate
+    pub rebaser: Pubkey,
+
+    // ===== Token References =====
     /// USDC mint address
     pub usdc_mint: Pubkey,
     /// OkuUSD mint address (Token-2022)
@@ -21,12 +43,16 @@ pub struct PsmConfig {
     /// PSM's OkuUSD escrow vault for queued redemptions (ATA)
     /// Holds OkuUSD while users are in queue so they earn yield
     pub vault_okusd_ata: Pubkey,
+
+    // ===== Limits =====
     /// Maximum OkuUSD supply cap
     pub max_supply: u64,
     /// Bridge mint allowance remaining
     pub minter_allowance: u64,
     /// Whether the PSM is paused
     pub is_paused: bool,
+
+    // ===== Oracle =====
     /// Pyth oracle feed (or Pubkey::default() if disabled)
     pub oracle: Pubkey,
     /// Maximum oracle staleness in seconds
@@ -40,8 +66,9 @@ impl PsmConfig {
     pub const SEED: &'static [u8] = b"psm_config";
 
     /// Space needed for PsmConfig account
-    /// 8 (discriminator) + 1 (bump) + 32*7 (pubkeys) + 8*2 (u64s) + 1 (bool) + 32 (oracle) + 8 (i64) + 2 (i16)
-    pub const LEN: usize = 8 + 1 + 32 * 7 + 8 * 2 + 1 + 32 + 8 + 2;
+    /// 8 (discriminator) + 1 (bump) + 32*12 (authority pubkeys) + 32*4 (token pubkeys) + 8*2 (u64s) + 1 (bool) + 32 (oracle) + 8 (i64) + 2 (i16)
+    /// = 8 + 1 + 384 + 128 + 16 + 1 + 32 + 8 + 2 = 580 bytes
+    pub const LEN: usize = 8 + 1 + 32 * 12 + 32 * 4 + 8 * 2 + 1 + 32 + 8 + 2;
 }
 
 /// Redemption queue PDA

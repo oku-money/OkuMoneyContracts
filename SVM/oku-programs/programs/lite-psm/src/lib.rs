@@ -28,19 +28,36 @@ pub mod lite_psm {
     ) -> Result<()> {
         let config = &mut ctx.accounts.config;
         config.bump = ctx.bumps.config;
+
+        // Set all granular authorities
         config.admin = ctx.accounts.admin.key();
-        config.pauser = ctx.accounts.pauser.key();
-        config.orchestrator = ctx.accounts.orchestrator.key();
+        config.psm_pauser = ctx.accounts.psm_pauser.key();
+        config.psm_unpauser = ctx.accounts.psm_unpauser.key();
+        config.blacklister = ctx.accounts.blacklister.key();
+        config.unblacklister = ctx.accounts.unblacklister.key();
+        config.queue_processor = ctx.accounts.queue_processor.key();
+        config.buffer_depositor = ctx.accounts.buffer_depositor.key();
+        config.buffer_withdrawer = ctx.accounts.buffer_withdrawer.key();
+        config.oracle_manager = ctx.accounts.oracle_manager.key();
+        config.cap_manager = ctx.accounts.cap_manager.key();
+        config.allowance_manager = ctx.accounts.allowance_manager.key();
+        config.rebaser = ctx.accounts.rebaser.key();
+
+        // Set token references
         config.usdc_mint = ctx.accounts.usdc_mint.key();
         config.okusd_mint = ctx.accounts.okusd_mint.key();
         config.vault_usdc_ata = ctx.accounts.vault_usdc_ata.key();
         config.vault_okusd_ata = Pubkey::default(); // Set in setup_okusd_escrow
+
+        // Set limits
         config.max_supply = max_supply;
         config.minter_allowance = minter_allowance;
         config.is_paused = false;
+
+        // Set oracle config
         config.oracle = Pubkey::default(); // Oracle disabled initially
         config.staleness_threshold = 0;
-        config.current_rate_bps = 0; // Interest rate starts at 0, updated by orchestrator
+        config.current_rate_bps = 0; // Interest rate starts at 0, updated by rebaser
 
         // Initialize redemption queue
         let queue = &mut ctx.accounts.redemption_queue;
@@ -374,7 +391,7 @@ pub mod lite_psm {
         Ok(())
     }
 
-    /// Deposit USDC buffer (orchestrator)
+    /// Deposit USDC buffer (buffer_depositor role)
     pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
         require!(amount > 0, OkuError::ZeroAmount);
 
@@ -382,23 +399,23 @@ pub mod lite_psm {
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
                 anchor_spl::token::Transfer {
-                    from: ctx.accounts.orchestrator_usdc_ata.to_account_info(),
+                    from: ctx.accounts.buffer_depositor_usdc_ata.to_account_info(),
                     to: ctx.accounts.vault_usdc_ata.to_account_info(),
-                    authority: ctx.accounts.orchestrator.to_account_info(),
+                    authority: ctx.accounts.buffer_depositor.to_account_info(),
                 },
             ),
             amount,
         )?;
 
         emit!(BufferDepositEvent {
-            orchestrator: ctx.accounts.orchestrator.key(),
+            orchestrator: ctx.accounts.buffer_depositor.key(),
             amount,
         });
 
         Ok(())
     }
 
-    /// Withdraw USDC from buffer (admin only)
+    /// Withdraw USDC from buffer (buffer_withdrawer only)
     /// Used to reclaim excess buffer after redemptions processed
     pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> {
         require!(amount > 0, OkuError::ZeroAmount);
@@ -412,7 +429,7 @@ pub mod lite_psm {
                 ctx.accounts.token_program.to_account_info(),
                 anchor_spl::token::Transfer {
                     from: ctx.accounts.vault_usdc_ata.to_account_info(),
-                    to: ctx.accounts.admin_usdc_ata.to_account_info(),
+                    to: ctx.accounts.withdrawer_usdc_ata.to_account_info(),
                     authority: ctx.accounts.config.to_account_info(),
                 },
                 signer,
@@ -421,7 +438,7 @@ pub mod lite_psm {
         )?;
 
         emit!(BufferWithdrawEvent {
-            admin: ctx.accounts.admin.key(),
+            admin: ctx.accounts.buffer_withdrawer.key(),
             amount,
         });
 
@@ -514,48 +531,60 @@ pub mod lite_psm {
         Ok(())
     }
 
-    /// Pause or unpause the PSM
-    pub fn set_paused(ctx: Context<SetPaused>, paused: bool) -> Result<()> {
+    /// Pause the PSM (emergency response)
+    pub fn pause(ctx: Context<Pause>) -> Result<()> {
         let config = &mut ctx.accounts.config;
-        config.is_paused = paused;
+        config.is_paused = true;
 
         emit!(PauseEvent {
             pauser: ctx.accounts.pauser.key(),
-            paused,
+            paused: true,
         });
 
         Ok(())
     }
 
-    /// Update max supply
-    pub fn set_max_supply(ctx: Context<AdminOnly>, new_max_supply: u64) -> Result<()> {
+    /// Unpause the PSM (deliberate review required)
+    pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        config.is_paused = false;
+
+        emit!(UnpauseEvent {
+            unpauser: ctx.accounts.unpauser.key(),
+        });
+
+        Ok(())
+    }
+
+    /// Update max supply (cap_manager only)
+    pub fn set_max_supply(ctx: Context<CapManager>, new_max_supply: u64) -> Result<()> {
         let config = &mut ctx.accounts.config;
         config.max_supply = new_max_supply;
 
         emit!(MaxSupplyUpdatedEvent {
-            admin: ctx.accounts.admin.key(),
+            admin: ctx.accounts.cap_manager.key(),
             new_max_supply,
         });
 
         Ok(())
     }
 
-    /// Reset minter allowance
-    pub fn set_minter_allowance(ctx: Context<AdminOnly>, amount: u64) -> Result<()> {
+    /// Reset minter allowance (allowance_manager only)
+    pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()> {
         let config = &mut ctx.accounts.config;
         config.minter_allowance = amount;
 
         emit!(MinterAllowanceUpdatedEvent {
-            admin: ctx.accounts.admin.key(),
+            admin: ctx.accounts.allowance_manager.key(),
             new_allowance: amount,
         });
 
         Ok(())
     }
 
-    /// Update oracle config (deferred - oracle checks disabled)
+    /// Update oracle config (oracle_manager only)
     pub fn set_oracle(
-        ctx: Context<AdminOnly>,
+        ctx: Context<OracleManager>,
         oracle: Pubkey,
         staleness_threshold: i64,
     ) -> Result<()> {
@@ -564,7 +593,7 @@ pub mod lite_psm {
         config.staleness_threshold = staleness_threshold;
 
         emit!(OracleUpdatedEvent {
-            admin: ctx.accounts.admin.key(),
+            admin: ctx.accounts.oracle_manager.key(),
             oracle,
             staleness_threshold,
         });
@@ -654,7 +683,7 @@ pub mod lite_psm {
                     false,
                 ),
                 anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    ctx.accounts.rate_authority.key(),
+                    ctx.accounts.rebaser.key(),
                     true,
                 ),
             ],
@@ -666,7 +695,7 @@ pub mod lite_psm {
             &ix,
             &[
                 ctx.accounts.okusd_mint.to_account_info(),
-                ctx.accounts.rate_authority.to_account_info(),
+                ctx.accounts.rebaser.to_account_info(),
             ],
         )?;
 
@@ -675,7 +704,7 @@ pub mod lite_psm {
         config.current_rate_bps = new_rate;
 
         emit!(InterestRateUpdatedEvent {
-            rate_authority: ctx.accounts.rate_authority.key(),
+            rate_authority: ctx.accounts.rebaser.key(),
             new_rate,
         });
 
@@ -847,11 +876,29 @@ pub struct Initialize<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 
-    /// CHECK: Pauser authority
-    pub pauser: UncheckedAccount<'info>,
-
-    /// CHECK: Orchestrator authority
-    pub orchestrator: UncheckedAccount<'info>,
+    // ===== Granular Authority Accounts =====
+    /// CHECK: Authority pubkey for role assignment
+    pub psm_pauser: UncheckedAccount<'info>,
+    /// CHECK: Authority pubkey for role assignment
+    pub psm_unpauser: UncheckedAccount<'info>,
+    /// CHECK: Authority pubkey for role assignment
+    pub blacklister: UncheckedAccount<'info>,
+    /// CHECK: Authority pubkey for role assignment
+    pub unblacklister: UncheckedAccount<'info>,
+    /// CHECK: Authority pubkey for role assignment
+    pub queue_processor: UncheckedAccount<'info>,
+    /// CHECK: Authority pubkey for role assignment
+    pub buffer_depositor: UncheckedAccount<'info>,
+    /// CHECK: Authority pubkey for role assignment
+    pub buffer_withdrawer: UncheckedAccount<'info>,
+    /// CHECK: Authority pubkey for role assignment
+    pub oracle_manager: UncheckedAccount<'info>,
+    /// CHECK: Authority pubkey for role assignment
+    pub cap_manager: UncheckedAccount<'info>,
+    /// CHECK: Authority pubkey for role assignment
+    pub allowance_manager: UncheckedAccount<'info>,
+    /// CHECK: Authority pubkey for role assignment
+    pub rebaser: UncheckedAccount<'info>,
 
     #[account(
         init,
@@ -1068,9 +1115,9 @@ pub struct Redeem<'info> {
 #[derive(Accounts)]
 pub struct ProcessQueue<'info> {
     #[account(
-        constraint = orchestrator.key() == config.orchestrator @ OkuError::Unauthorized
+        constraint = queue_processor.key() == config.queue_processor @ OkuError::Unauthorized
     )]
-    pub orchestrator: Signer<'info>,
+    pub queue_processor: Signer<'info>,
 
     #[account(
         seeds = [PsmConfig::SEED],
@@ -1117,9 +1164,9 @@ pub struct ProcessQueue<'info> {
 #[derive(Accounts)]
 pub struct DepositBuffer<'info> {
     #[account(
-        constraint = orchestrator.key() == config.orchestrator @ OkuError::Unauthorized
+        constraint = buffer_depositor.key() == config.buffer_depositor @ OkuError::Unauthorized
     )]
-    pub orchestrator: Signer<'info>,
+    pub buffer_depositor: Signer<'info>,
 
     #[account(
         seeds = [PsmConfig::SEED],
@@ -1127,14 +1174,14 @@ pub struct DepositBuffer<'info> {
     )]
     pub config: Account<'info, PsmConfig>,
 
-    /// Orchestrator's USDC account
+    /// Buffer depositor's USDC account
     #[account(
         mut,
         associated_token::mint = usdc_mint,
-        associated_token::authority = orchestrator,
+        associated_token::authority = buffer_depositor,
         associated_token::token_program = token_program,
     )]
-    pub orchestrator_usdc_ata: Account<'info, TokenAccount>,
+    pub buffer_depositor_usdc_ata: Account<'info, TokenAccount>,
 
     /// PSM's USDC vault
     #[account(
@@ -1152,9 +1199,9 @@ pub struct DepositBuffer<'info> {
 #[derive(Accounts)]
 pub struct WithdrawBuffer<'info> {
     #[account(
-        constraint = admin.key() == config.admin @ OkuError::Unauthorized
+        constraint = buffer_withdrawer.key() == config.buffer_withdrawer @ OkuError::Unauthorized
     )]
-    pub admin: Signer<'info>,
+    pub buffer_withdrawer: Signer<'info>,
 
     #[account(
         seeds = [PsmConfig::SEED],
@@ -1162,13 +1209,13 @@ pub struct WithdrawBuffer<'info> {
     )]
     pub config: Account<'info, PsmConfig>,
 
-    /// Admin's USDC account (destination)
+    /// Buffer withdrawer's USDC account (destination)
     #[account(
         mut,
         token::mint = usdc_mint,
-        token::authority = admin,
+        token::authority = buffer_withdrawer,
     )]
-    pub admin_usdc_ata: Account<'info, TokenAccount>,
+    pub withdrawer_usdc_ata: Account<'info, TokenAccount>,
 
     /// PSM's USDC vault (source)
     #[account(
@@ -1185,10 +1232,13 @@ pub struct WithdrawBuffer<'info> {
 
 #[derive(Accounts)]
 pub struct BridgeMint<'info> {
+    // TODO: Replace with per-adapter MINTER roles with individual allowances
+    // See CLAUDE.md: "Bridge Adapters: MINTER (each adapter individually)"
+    // For now using queue_processor as temporary bridge authority
     #[account(
-        constraint = orchestrator.key() == config.orchestrator @ OkuError::Unauthorized
+        constraint = bridge_minter.key() == config.queue_processor @ OkuError::Unauthorized
     )]
-    pub orchestrator: Signer<'info>,
+    pub bridge_minter: Signer<'info>,
 
     #[account(
         mut,
@@ -1248,11 +1298,26 @@ pub struct BridgeBurn<'info> {
 }
 
 #[derive(Accounts)]
-pub struct SetPaused<'info> {
+pub struct Pause<'info> {
     #[account(
-        constraint = pauser.key() == config.pauser @ OkuError::Unauthorized
+        constraint = pauser.key() == config.psm_pauser @ OkuError::Unauthorized
     )]
     pub pauser: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [PsmConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Account<'info, PsmConfig>,
+}
+
+#[derive(Accounts)]
+pub struct Unpause<'info> {
+    #[account(
+        constraint = unpauser.key() == config.psm_unpauser @ OkuError::Unauthorized
+    )]
+    pub unpauser: Signer<'info>,
 
     #[account(
         mut,
@@ -1278,12 +1343,57 @@ pub struct AdminOnly<'info> {
 }
 
 #[derive(Accounts)]
-pub struct FreezeAccount<'info> {
-    /// Pauser authority - can freeze even when PSM is paused
+pub struct CapManager<'info> {
     #[account(
-        constraint = pauser.key() == config.pauser @ OkuError::Unauthorized
+        constraint = cap_manager.key() == config.cap_manager @ OkuError::Unauthorized
     )]
-    pub pauser: Signer<'info>,
+    pub cap_manager: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [PsmConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Account<'info, PsmConfig>,
+}
+
+#[derive(Accounts)]
+pub struct AllowanceManager<'info> {
+    #[account(
+        constraint = allowance_manager.key() == config.allowance_manager @ OkuError::Unauthorized
+    )]
+    pub allowance_manager: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [PsmConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Account<'info, PsmConfig>,
+}
+
+#[derive(Accounts)]
+pub struct OracleManager<'info> {
+    #[account(
+        constraint = oracle_manager.key() == config.oracle_manager @ OkuError::Unauthorized
+    )]
+    pub oracle_manager: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [PsmConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Account<'info, PsmConfig>,
+}
+
+#[derive(Accounts)]
+pub struct FreezeAccount<'info> {
+    /// Blacklister authority - can freeze even when PSM is paused
+    #[account(
+        constraint = blacklister.key() == config.blacklister @ OkuError::Unauthorized
+    )]
+    pub blacklister: Signer<'info>,
 
     #[account(
         seeds = [PsmConfig::SEED],
@@ -1311,11 +1421,11 @@ pub struct FreezeAccount<'info> {
 
 #[derive(Accounts)]
 pub struct ThawAccount<'info> {
-    /// Pauser authority - can thaw even when PSM is paused
+    /// Unblacklister authority - can thaw even when PSM is paused (requires deliberate review)
     #[account(
-        constraint = pauser.key() == config.pauser @ OkuError::Unauthorized
+        constraint = unblacklister.key() == config.unblacklister @ OkuError::Unauthorized
     )]
-    pub pauser: Signer<'info>,
+    pub unblacklister: Signer<'info>,
 
     #[account(
         seeds = [PsmConfig::SEED],
@@ -1344,11 +1454,11 @@ pub struct ThawAccount<'info> {
 #[derive(Accounts)]
 pub struct UpdateInterestRate<'info> {
     /// Rate authority - must be the designated rate authority on the mint
-    /// Typically the orchestrator (KMS-backed signer)
+    /// Rebaser role (typically orchestrator KMS-backed signer)
     #[account(
-        constraint = rate_authority.key() == config.orchestrator @ OkuError::Unauthorized
+        constraint = rebaser.key() == config.rebaser @ OkuError::Unauthorized
     )]
-    pub rate_authority: Signer<'info>,
+    pub rebaser: Signer<'info>,
 
     /// PSM config - stores current_rate_bps for queue processing
     #[account(
@@ -1359,7 +1469,7 @@ pub struct UpdateInterestRate<'info> {
     pub config: Account<'info, PsmConfig>,
 
     /// OkuUSD mint (Token-2022 with Interest Bearing extension)
-    /// CHECK: Validated by Token-2022 program - must have rate_authority as the rate authority
+    /// CHECK: Validated by Token-2022 program - must have rebaser as the rate authority
     #[account(mut)]
     pub okusd_mint: UncheckedAccount<'info>,
 
@@ -1436,6 +1546,11 @@ pub struct BridgeBurnEvent {
 pub struct PauseEvent {
     pub pauser: Pubkey,
     pub paused: bool,
+}
+
+#[event]
+pub struct UnpauseEvent {
+    pub unpauser: Pubkey,
 }
 
 #[event]

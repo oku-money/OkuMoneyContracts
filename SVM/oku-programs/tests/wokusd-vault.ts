@@ -37,8 +37,12 @@ describe("wokusd-vault", () => {
   let program: Program<WokusdVault>;
   let payer: Keypair;
 
-  // Keypairs
+  // Granular Authority Keypairs (RBAC)
   let admin: Keypair;
+  const warmMultisig = Keypair.generate(); // VAULT_PAUSER
+  const coldMultisig = Keypair.generate(); // VAULT_UNPAUSER
+
+  // User keypairs
   const user = Keypair.generate();
   const user2 = Keypair.generate();
 
@@ -69,10 +73,13 @@ describe("wokusd-vault", () => {
     program = new Program<WokusdVault>(IDL as any, PROGRAM_ID, provider);
     payer = (provider.wallet as anchor.Wallet).payer;
     admin = payer;
+
     // Airdrop SOL to test accounts
     await Promise.all([
       provider.connection.requestAirdrop(user.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL),
       provider.connection.requestAirdrop(user2.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL),
+      provider.connection.requestAirdrop(warmMultisig.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL),
+      provider.connection.requestAirdrop(coldMultisig.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL),
     ]);
 
     // Wait for airdrops to confirm
@@ -195,7 +202,7 @@ describe("wokusd-vault", () => {
   });
 
   describe("initialize", () => {
-    it("initializes the vault correctly", async () => {
+    it("initializes the vault with granular RBAC authorities", async () => {
       // Generate wOkuUSD mint keypair
       const wokusdMintKeypair = Keypair.generate();
 
@@ -203,6 +210,9 @@ describe("wokusd-vault", () => {
         .initialize()
         .accounts({
           admin: admin.publicKey,
+          // Granular authorities - RBAC separation
+          vaultPauser: warmMultisig.publicKey,
+          vaultUnpauser: coldMultisig.publicKey,
           config: configPda,
           okusdMint: okusdMint,
           wokusdMint: wokusdMintKeypair.publicKey,
@@ -218,9 +228,11 @@ describe("wokusd-vault", () => {
 
       wokusdMint = wokusdMintKeypair.publicKey;
 
-      // Verify config
+      // Verify config with granular authorities
       const config = await program.account.vaultConfig.fetch(configPda);
       expect(config.admin.toString()).to.equal(admin.publicKey.toString());
+      expect(config.vaultPauser.toString()).to.equal(warmMultisig.publicKey.toString());
+      expect(config.vaultUnpauser.toString()).to.equal(coldMultisig.publicKey.toString());
       expect(config.okusdMint.toString()).to.equal(okusdMint.toString());
       expect(config.wokusdMint.toString()).to.equal(wokusdMint.toString());
       expect(config.vaultOkusdAta.toString()).to.equal(vaultOkusdAta.toString());
@@ -319,13 +331,14 @@ describe("wokusd-vault", () => {
     });
 
     it("fails to wrap when paused", async () => {
-      // Pause the vault
+      // Pause the vault (uses warmMultisig)
       await program.methods
-        .setPaused(true)
+        .pause()
         .accounts({
-          admin: admin.publicKey,
+          pauser: warmMultisig.publicKey,
           config: configPda,
         })
+        .signers([warmMultisig])
         .rpc();
 
       try {
@@ -351,13 +364,14 @@ describe("wokusd-vault", () => {
         expect(err.error.errorCode.code).to.equal("Paused");
       }
 
-      // Unpause for future tests
+      // Unpause for future tests (uses coldMultisig)
       await program.methods
-        .setPaused(false)
+        .unpause()
         .accounts({
-          admin: admin.publicKey,
+          unpauser: coldMultisig.publicKey,
           config: configPda,
         })
+        .signers([coldMultisig])
         .rpc();
     });
 
@@ -434,14 +448,15 @@ describe("wokusd-vault", () => {
       expect(configBefore.totalShares.toNumber() - configAfter.totalShares.toNumber()).to.equal(unwrapShares.toNumber());
     });
 
-    it("allows unwrap when vault is paused", async () => {
-      // Pause the vault
+    it("CRITICAL: allows unwrap when vault is paused (users must always be able to exit)", async () => {
+      // Pause the vault (uses warmMultisig)
       await program.methods
-        .setPaused(true)
+        .pause()
         .accounts({
-          admin: admin.publicKey,
+          pauser: warmMultisig.publicKey,
           config: configPda,
         })
+        .signers([warmMultisig])
         .rpc();
 
       // Verify vault is paused
@@ -485,13 +500,14 @@ describe("wokusd-vault", () => {
       const userOkusdAfter = await getAccount(provider.connection, userOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
       expect(Number(userOkusdAfter.amount) - Number(userOkusdBefore.amount)).to.equal(expectedOkusd);
 
-      // Unpause for future tests
+      // Unpause for future tests (uses coldMultisig)
       await program.methods
-        .setPaused(false)
+        .unpause()
         .accounts({
-          admin: admin.publicKey,
+          unpauser: coldMultisig.publicKey,
           config: configPda,
         })
+        .signers([coldMultisig])
         .rpc();
     });
 
@@ -550,37 +566,94 @@ describe("wokusd-vault", () => {
     });
   });
 
-  describe("set_paused", () => {
-    it("allows admin to pause and unpause", async () => {
+  describe("RBAC: Pause/Unpause Role Separation", () => {
+    it("vault_pauser (warm multisig) can pause", async () => {
       await program.methods
-        .setPaused(true)
+        .pause()
         .accounts({
-          admin: admin.publicKey,
+          pauser: warmMultisig.publicKey,
           config: configPda,
         })
+        .signers([warmMultisig])
         .rpc();
 
-      let config = await program.account.vaultConfig.fetch(configPda);
+      const config = await program.account.vaultConfig.fetch(configPda);
       expect(config.isPaused).to.be.true;
+    });
 
+    it("vault_unpauser (cold multisig) can unpause", async () => {
       await program.methods
-        .setPaused(false)
+        .unpause()
         .accounts({
-          admin: admin.publicKey,
+          unpauser: coldMultisig.publicKey,
           config: configPda,
         })
+        .signers([coldMultisig])
         .rpc();
 
-      config = await program.account.vaultConfig.fetch(configPda);
+      const config = await program.account.vaultConfig.fetch(configPda);
       expect(config.isPaused).to.be.false;
     });
 
-    it("fails when non-admin tries to pause", async () => {
+    it("vault_pauser CANNOT unpause (prevents griefing)", async () => {
+      // First pause with warmMultisig
+      await program.methods
+        .pause()
+        .accounts({
+          pauser: warmMultisig.publicKey,
+          config: configPda,
+        })
+        .signers([warmMultisig])
+        .rpc();
+
+      // Now try to unpause with warmMultisig - should fail
       try {
         await program.methods
-          .setPaused(true)
+          .unpause()
           .accounts({
-            admin: user.publicKey,
+            unpauser: warmMultisig.publicKey, // Wrong authority
+            config: configPda,
+          })
+          .signers([warmMultisig])
+          .rpc();
+        expect.fail("Should have failed - pauser should not be able to unpause");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("Unauthorized");
+      }
+
+      // Cleanup: unpause with correct authority
+      await program.methods
+        .unpause()
+        .accounts({
+          unpauser: coldMultisig.publicKey,
+          config: configPda,
+        })
+        .signers([coldMultisig])
+        .rpc();
+    });
+
+    it("vault_unpauser CANNOT pause (role separation)", async () => {
+      try {
+        await program.methods
+          .pause()
+          .accounts({
+            pauser: coldMultisig.publicKey, // Wrong authority
+            config: configPda,
+          })
+          .signers([coldMultisig])
+          .rpc();
+        expect.fail("Should have failed - unpauser should not be able to pause");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("Unauthorized");
+      }
+    });
+
+    it("non-authority user cannot pause", async () => {
+      try {
+        await program.methods
+          .pause()
+          .accounts({
+            pauser: user.publicKey, // Wrong authority
             config: configPda,
           })
           .signers([user])
@@ -589,6 +662,43 @@ describe("wokusd-vault", () => {
       } catch (err: any) {
         expect(err.error.errorCode.code).to.equal("Unauthorized");
       }
+    });
+
+    it("non-authority user cannot unpause", async () => {
+      // First pause properly
+      await program.methods
+        .pause()
+        .accounts({
+          pauser: warmMultisig.publicKey,
+          config: configPda,
+        })
+        .signers([warmMultisig])
+        .rpc();
+
+      // Try to unpause with wrong authority
+      try {
+        await program.methods
+          .unpause()
+          .accounts({
+            unpauser: user.publicKey, // Wrong authority
+            config: configPda,
+          })
+          .signers([user])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("Unauthorized");
+      }
+
+      // Cleanup: unpause with correct authority
+      await program.methods
+        .unpause()
+        .accounts({
+          unpauser: coldMultisig.publicKey,
+          config: configPda,
+        })
+        .signers([coldMultisig])
+        .rpc();
     });
   });
 

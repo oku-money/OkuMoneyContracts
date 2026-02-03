@@ -81,15 +81,15 @@ Successfully cleaned up both Forge and Hardhat test suites, eliminating excessiv
 
 ### Forge Tests
 ```
-✅ 240 passing
-❌ 1 failing (pre-existing invariant test with extreme fuzz values)
+✅ 241 passing (100%)
+❌ 0 failing
 
 Test Suite Breakdown:
 - NttBridgeTest: 32/32 passing
 - OkuBridgeRouterTest: 25/25 passing
 - MinterAllowanceInvariantsTest: 3/3 passing
 - ShareConversionInvariantsTest: 5/5 passing
-- SupplyInvariantsTest: 2/3 passing (1 pre-existing failure)
+- SupplyInvariantsTest: 3/3 passing ✅
 - VaultInvariantsTest: 3/3 passing
 - LitePSMTest: 28/28 passing
 - RedemptionQueueTest: 27/27 passing
@@ -138,11 +138,12 @@ The following roles are now properly granted in test setup:
 
 ## Known Issues
 
-### Forge Tests
-**invariant_TotalSharesBounded** - Pre-existing issue, not related to RBAC changes
-- **Status**: Acknowledged, documented in previous summaries
-- **Cause**: Fuzzer provides extreme multiplier values (up to max uint256), causing arithmetic overflow
-- **Impact**: No impact on production code or RBAC functionality
+### Invariant Test Fix
+**invariant_TotalSharesBounded** - ✅ FIXED
+- **Issue**: Test was replaying a cached failure from before the handler had proper multiplier bounds
+- **Solution**: Removed cached failure file (`cache/invariant/failures/SupplyInvariantsTest/`)
+- **Status**: Now passing - handler's 1e27 multiplier cap prevents extreme overflow scenarios
+- **Result**: All 241 Forge tests now passing
 
 ## Verification Commands
 
@@ -161,10 +162,11 @@ forge test && npx hardhat test
 
 1. ✅ **Zero console spam** - Clean test output with no unnecessary logging
 2. ✅ **RBAC compliance** - All tests use correct granular roles
-3. ✅ **99.6% Forge test pass rate** (240/241)
+3. ✅ **100% Forge test pass rate** (241/241)
 4. ✅ **100% Hardhat test pass rate** (34/34)
-5. ✅ **Consistent role management** - All test files follow same pattern
-6. ✅ **Better maintainability** - Clear role separation in all test files
+5. ✅ **All invariant tests passing** - Fixed cached failure issue
+6. ✅ **Consistent role management** - All test files follow same pattern
+7. ✅ **Better maintainability** - Clear role separation in all test files
 
 ## Migration Notes
 

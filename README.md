@@ -1,247 +1,162 @@
-# okuMoney Smart Contracts
+# OkuUSD Contracts
 
-Modern Foundry/Forge development environment for Ethereum smart contracts.
+Smart contracts for OkuUSD, a yield-bearing stablecoin backed 1:1 by US Treasury Bills.
 
-## Environment
+## Overview
 
-- **Ubuntu**: 22.04.5 LTS
-- **GLIBC**: 2.35
-- **Foundry**: v1.5.1-nightly (December 22, 2025)
-- **Solidity**: 0.8.28
-- **EVM**: Cancun
-- **Dependencies**:
-  - forge-std v1.12.0
-  - OpenZeppelin Contracts v5.5.0
+OkuUSD is a centralized, regulated stablecoin product operated by Oku Money (FinCEN-registered MSB). Users deposit USDC, receive OkuUSD, and earn T-Bill yield automatically through a rebasing mechanism.
 
-## Foundry
+**This is not a DeFi protocol.** It's institutional-grade infrastructure for delivering government yield on-chain.
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+## Architecture
 
-Foundry consists of:
+```
+                    ┌─────────────────────────┐
+                    │    Off-Chain           │
+                    │    Orchestrator        │
+                    │    (Cloud KMS)         │
+                    └───────────┬────────────┘
+                                │
+        ┌───────────────────────┼───────────────────────┐
+        │                       │                       │
+        ▼                       ▼                       ▼
+   ┌─────────┐            ┌─────────┐            ┌─────────┐
+   │ Ethereum│            │ Arbitrum│            │ Solana  │
+   │   EVM   │            │   EVM   │            │   SVM   │
+   └─────────┘            └─────────┘            └─────────┘
+```
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools)
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL
+### Dual-Token Model
 
-## Project Structure
+| Token | Type | Purpose |
+|-------|------|---------|
+| **OkuUSD** | Rebasing | Hold and watch your balance grow |
+| **wOkuUSD** | Static (Vault) | Use in DeFi (AMMs, lending, etc.) |
+
+Users choose based on their needs:
+- **Retail**: Hold OkuUSD directly, balance increases automatically
+- **DeFi**: Wrap to wOkuUSD for compatibility with Uniswap, Aave, etc.
+
+### Core Components
+
+| Component | Function |
+|-----------|----------|
+| **OkuUSD** | Rebasing token — balance grows as T-Bill yield accrues |
+| **wOkuUSD** | ERC-4626 vault (EVM) / SPL vault (Solana) — static balance, growing exchange rate |
+| **LitePSM** | Peg Stability Module — 1:1 USDC ↔ OkuUSD swaps |
+| **OkuBridgeRouter** | Cross-chain bridging convenience wrapper |
+
+### Cross-Chain Consistency
+
+Same architecture on every chain:
+- Same token model (rebasing + wrapped)
+- Same RBAC roles and permissions
+- Same business logic and invariants
+- Burn-and-mint bridging (no liquidity fragmentation)
+
+## Repository Structure
 
 ```
 contracts/
-├── src/                    # Smart contracts (your contracts go here)
-├── test/                   # Test files (your tests go here)
-├── script/                 # Deployment scripts (your deployment scripts go here)
-├── lib/                    # Dependencies
-│   ├── forge-std/          # Foundry standard library v1.12.0
-│   └── openzeppelin-contracts/  # OpenZeppelin contracts v5.5.0
-├── foundry.toml            # Foundry configuration
-└── .gitignore              # Git ignore rules
+├── README.md               # This file
+├── CLAUDE.md               # Shared architecture & business logic
+├── CLAUDE_EVM.md           # EVM implementation specifics
+├── CLAUDE_SVM.md           # Solana implementation specifics
+│
+├── EVM/                    # Solidity contracts (Foundry)
+│   ├── src/
+│   │   ├── token/
+│   │   │   ├── OkuUSD.sol
+│   │   │   └── wOkuUSD.sol
+│   │   ├── psm/
+│   │   │   └── LitePSM.sol
+│   │   └── bridge/
+│   │       └── OkuBridgeRouter.sol
+│   ├── test/
+│   ├── script/
+│   └── foundry.toml
+│
+└── SVM/                    # Solana programs (Anchor)
+    └── oku-programs/
+        ├── programs/
+        │   ├── lite-psm/
+        │   └── wokusd-vault/
+        ├── tests/
+        └── Anchor.toml
 ```
 
-## Quick Commands
+## Implementation Differences
 
-### Build
+| Aspect | EVM | Solana |
+|--------|-----|--------|
+| Rebasing mechanism | Custom `balanceOf()` override | Token-2022 Interest-Bearing Extension |
+| Wrapped token | ERC-4626 vault | Custom Anchor program + SPL Token |
+| Blacklisting | Custom mapping | Token-2022 Freeze Authority |
+| Access control | OpenZeppelin AccessControl | Config account with authority pubkeys |
+| Multisig | Gnosis Safe | Squads Protocol |
+| Oracle | Chainlink | Pyth Network |
+| Upgradeability | TransparentUpgradeableProxy | Native program upgrade authority |
+
+## Access Control
+
+Granular RBAC — one role per action, multiple roles per address:
+
+| Entity | Capabilities |
+|--------|--------------|
+| **Cold Multisig** | Admin, upgrades, unpause, unblacklist, supply caps |
+| **Warm Multisig** | Pause, blacklist (emergency response) |
+| **Orchestrator** | Rebase/rate updates, queue processing, buffer deposits |
+| **Bridge Adapters** | Mint (bounded by per-adapter allowance) |
+
+Key security properties:
+- Pause and unpause are **separate roles** (compromised pauser can't undo)
+- Blacklist and unblacklist are **separate roles** (deliberate recovery)
+- Orchestrator **never** gets admin, upgrade, or unpause rights
+- Minter allowances are **one-way decrements** (burns don't restore)
+
+## Building
+
+### EVM
+
 ```bash
+cd EVM
+forge install
 forge build
-```
-
-### Test
-```bash
-# Run all tests
 forge test
-
-# Run with verbosity (show console.log)
-forge test -vv
-
-# Run with gas reporting
-forge test --gas-report
-
-# Run specific test
-forge test --match-test test_Increment
-
-# Run with stack traces on failure
-forge test -vvvv
 ```
 
-### Format
-```bash
-forge fmt
-```
-
-### Gas Snapshots
-```bash
-forge snapshot
-```
-
-### Deploy (Local)
-```bash
-# Terminal 1: Start local node
-anvil
-
-# Terminal 2: Deploy contract
-forge script script/Counter.s.sol --rpc-url http://localhost:8545 --broadcast
-```
-
-### Deploy (Testnet/Mainnet)
-```bash
-forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key> --broadcast
-```
-
-### Cast (Blockchain interaction)
-```bash
-# Get block number
-cast block-number --rpc-url <your_rpc_url>
-
-# Get balance
-cast balance <address> --rpc-url <your_rpc_url>
-
-# Call contract
-cast call <contract_address> "balanceOf(address)(uint256)" <address> --rpc-url <your_rpc_url>
-
-# Send transaction
-cast send <contract_address> "transfer(address,uint256)" <to> <amount> --private-key <your_private_key> --rpc-url <your_rpc_url>
-```
-
-## OpenZeppelin Contracts
-
-OpenZeppelin Contracts v5.5.0 is already installed and ready to use!
-
-### Available Contracts
-
-**Token Standards:**
-- **ERC20**: Fungible tokens
-- **ERC721**: Non-fungible tokens (NFTs)
-- **ERC1155**: Multi-token standard
-- **ERC6909**: Minimal multi-token
-
-**Access Control:**
-- **Ownable**: Single owner access control
-- **Ownable2Step**: Two-step ownership transfer
-- **AccessControl**: Role-based access control
-
-**Security:**
-- **ReentrancyGuard**: Prevent reentrancy attacks
-- **Pausable**: Emergency stop mechanism
-
-**Utilities:**
-- **SafeERC20**: Safe token operations
-- **Address**: Address utility functions
-- **Strings**: String operations
-- **Math**: Mathematical operations
-
-**Governance:**
-- **Governor**: On-chain governance
-- **Timelock**: Timelock controller
-- **Votes**: Voting power tracking
-
-**Finance:**
-- **VestingWallet**: Token vesting
-- **PaymentSplitter**: Revenue sharing
-
-### Usage Example
-
-```solidity
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-
-contract MyToken is ERC20, Ownable {
-    constructor() ERC20("My Token", "MTK") Ownable(msg.sender) {
-        _mint(msg.sender, 1_000_000 * 10 ** decimals());
-    }
-}
-```
-
-### Installing Additional Dependencies
-
-To install other libraries like Solmate:
-```bash
-forge install transmissions11/solmate
-```
-
-Remappings are configured in `foundry.toml`:
-```toml
-remappings = [
-    "forge-std/=lib/forge-std/src/",
-    "@openzeppelin/=lib/openzeppelin-contracts/",
-]
-```
-
-## Configuration Highlights
-
-The `foundry.toml` is configured with:
-- Solidity 0.8.28
-- Cancun EVM version
-- Optimizer enabled (200 runs)
-- Fuzz testing (256 runs)
-- Gas reporting enabled
-- Code formatting rules
-
-## Additional Commands
+### Solana
 
 ```bash
-# Update Foundry
-foundryup
-
-# Clean build artifacts
-forge clean
-
-# Check contract size
-forge build --sizes
-
-# Generate documentation
-forge doc
-
-# Coverage report
-forge coverage
-
-# Interactive Solidity REPL
-chisel
-```
-
-## Testing Features
-
-The setup includes:
-- **Unit tests**: `test_*` functions
-- **Fuzz tests**: `testFuzz_*` functions (runs 256 iterations)
-- **Gas reporting** for all contracts
-- **forge-std library** for testing utilities
-
-## Environment Variables
-
-Create a `.env` file for network deployments (never commit!):
-
-```bash
-# Private keys (NEVER COMMIT!)
-PRIVATE_KEY=your_private_key_here
-
-# API keys
-ETHERSCAN_API_KEY=your_etherscan_key
-
-# RPC URLs
-MAINNET_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/your-key
-SEPOLIA_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/your-key
-```
-
-## Next Steps
-
-1. Create your smart contracts in `src/`
-2. Write comprehensive tests in `test/`
-3. Create deployment scripts in `script/`
-4. Install any additional dependencies as needed
-5. Configure `.env` for network deployments (see Environment Variables section)
-
-## Help
-
-```bash
-forge --help
-anvil --help
-cast --help
-chisel --help
+cd SVM/oku-programs
+anchor build
+anchor test
 ```
 
 ## Documentation
 
-- [Foundry Book](https://book.getfoundry.sh/)
-- [Foundry GitHub](https://github.com/foundry-rs/foundry)
-- [forge-std Documentation](https://github.com/foundry-rs/forge-std)
-- [Solidity Documentation](https://docs.soliditylang.org/)
+| Document | Purpose |
+|----------|---------|
+| `CLAUDE.md` | Shared architecture, business requirements, RBAC design |
+| `CLAUDE_EVM.md` | Solidity patterns, OpenZeppelin usage, Foundry testing |
+| `CLAUDE_SVM.md` | Anchor patterns, Token-2022, PDA structures |
+| `OkuMoney_Technical_Architecture.docx` | Formal architecture specification |
+| `OkuUSD_Decision_Matrix.docx` | Design decision rationale |
+
+## Security
+
+### Audits
+
+*[To be updated after audits]*
+
+### Bug Bounty
+
+*[To be updated after launch]*
+
+### Contact
+
+Security issues: security@oku.money
+
+## License
+
+*[To be determined]*

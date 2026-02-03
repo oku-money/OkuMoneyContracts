@@ -23,10 +23,17 @@ pub mod wokusd_vault {
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
         let config = &mut ctx.accounts.config;
         config.bump = ctx.bumps.config;
+
+        // Set all granular authorities
         config.admin = ctx.accounts.admin.key();
+        config.vault_pauser = ctx.accounts.vault_pauser.key();
+        config.vault_unpauser = ctx.accounts.vault_unpauser.key();
+
+        // Set token references
         config.okusd_mint = ctx.accounts.okusd_mint.key();
         config.wokusd_mint = ctx.accounts.wokusd_mint.key();
         config.vault_okusd_ata = ctx.accounts.vault_okusd_ata.key();
+
         config.total_shares = 0;
         config.is_paused = false;
 
@@ -184,14 +191,26 @@ pub mod wokusd_vault {
         Ok(())
     }
 
-    /// Pause or unpause the vault
-    pub fn set_paused(ctx: Context<SetPaused>, paused: bool) -> Result<()> {
+    /// Pause the vault (emergency response)
+    pub fn pause(ctx: Context<Pause>) -> Result<()> {
         let config = &mut ctx.accounts.config;
-        config.is_paused = paused;
+        config.is_paused = true;
 
         emit!(PauseEvent {
-            admin: ctx.accounts.admin.key(),
-            paused,
+            admin: ctx.accounts.pauser.key(),
+            paused: true,
+        });
+
+        Ok(())
+    }
+
+    /// Unpause the vault (deliberate review required)
+    pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        config.is_paused = false;
+
+        emit!(UnpauseEvent {
+            unpauser: ctx.accounts.unpauser.key(),
         });
 
         Ok(())
@@ -206,6 +225,12 @@ pub mod wokusd_vault {
 pub struct Initialize<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
+
+    // ===== Granular Authority Accounts =====
+    /// CHECK: Authority pubkey for role assignment
+    pub vault_pauser: UncheckedAccount<'info>,
+    /// CHECK: Authority pubkey for role assignment
+    pub vault_unpauser: UncheckedAccount<'info>,
 
     #[account(
         init,
@@ -367,11 +392,26 @@ pub struct Unwrap<'info> {
 }
 
 #[derive(Accounts)]
-pub struct SetPaused<'info> {
+pub struct Pause<'info> {
     #[account(
-        constraint = admin.key() == config.admin @ VaultError::Unauthorized
+        constraint = pauser.key() == config.vault_pauser @ VaultError::Unauthorized
     )]
-    pub admin: Signer<'info>,
+    pub pauser: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [VaultConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Account<'info, VaultConfig>,
+}
+
+#[derive(Accounts)]
+pub struct Unpause<'info> {
+    #[account(
+        constraint = unpauser.key() == config.vault_unpauser @ VaultError::Unauthorized
+    )]
+    pub unpauser: Signer<'info>,
 
     #[account(
         mut,
@@ -410,4 +450,9 @@ pub struct UnwrapEvent {
 pub struct PauseEvent {
     pub admin: Pubkey,
     pub paused: bool,
+}
+
+#[event]
+pub struct UnpauseEvent {
+    pub unpauser: Pubkey,
 }

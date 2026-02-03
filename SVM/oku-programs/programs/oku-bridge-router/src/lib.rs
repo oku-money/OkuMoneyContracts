@@ -50,7 +50,7 @@ pub mod oku_bridge_router {
                 wokusd_mint: ctx.accounts.wokusd_mint.to_account_info(),
                 user_okusd_ata: ctx.accounts.user_okusd_ata.to_account_info(),
                 user_wokusd_ata: ctx.accounts.user_wokusd_ata.to_account_info(),
-                vault_okusd_ata: ctx.accounts.vault_okusd_ata.to_account_info(),
+                vault_okusd: ctx.accounts.vault_okusd.to_account_info(),
                 token_program: ctx.accounts.token_program.to_account_info(),
                 token_2022_program: ctx.accounts.token_2022_program.to_account_info(),
                 associated_token_program: ctx.accounts.associated_token_program.to_account_info(),
@@ -231,7 +231,7 @@ pub struct BridgeWrapped<'info> {
 
     /// Vault's OkuUSD account
     #[account(mut)]
-    pub vault_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
 
     // PSM program accounts
     /// CHECK: PSM config PDA - validated by PSM program CPI

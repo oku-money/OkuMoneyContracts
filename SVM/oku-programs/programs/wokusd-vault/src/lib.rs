@@ -25,20 +25,20 @@ pub mod wokusd_vault {
         config.bump = ctx.bumps.config;
 
         // Set all granular authorities
-        config.admin = ctx.accounts.admin.key();
-        config.vault_pauser = ctx.accounts.vault_pauser.key();
-        config.vault_unpauser = ctx.accounts.vault_unpauser.key();
+        config.role_admin = ctx.accounts.role_admin.key();
+        config.pauser = ctx.accounts.pauser.key();
+        config.unpauser = ctx.accounts.unpauser.key();
 
         // Set token references
         config.okusd_mint = ctx.accounts.okusd_mint.key();
         config.wokusd_mint = ctx.accounts.wokusd_mint.key();
-        config.vault_okusd_ata = ctx.accounts.vault_okusd_ata.key();
+        config.vault_okusd = ctx.accounts.vault_okusd.key();
 
         config.total_shares = 0;
         config.is_paused = false;
 
         emit!(InitializeEvent {
-            admin: config.admin,
+            role_admin: config.role_admin,
             okusd_mint: config.okusd_mint,
             wokusd_mint: config.wokusd_mint,
         });
@@ -53,7 +53,7 @@ pub mod wokusd_vault {
         let is_paused = ctx.accounts.config.is_paused;
         let total_shares = ctx.accounts.config.total_shares;
         let bump = ctx.accounts.config.bump;
-        let vault_balance = ctx.accounts.vault_okusd_ata.amount;
+        let vault_balance = ctx.accounts.vault_okusd.amount;
         let decimals = ctx.accounts.okusd_mint.decimals;
 
         require!(!is_paused, VaultError::Paused);
@@ -80,7 +80,7 @@ pub mod wokusd_vault {
                 ctx.accounts.token_2022_program.to_account_info(),
                 token_interface::TransferChecked {
                     from: ctx.accounts.user_okusd_ata.to_account_info(),
-                    to: ctx.accounts.vault_okusd_ata.to_account_info(),
+                    to: ctx.accounts.vault_okusd.to_account_info(),
                     authority: ctx.accounts.user.to_account_info(),
                     mint: ctx.accounts.okusd_mint.to_account_info(),
                 },
@@ -128,7 +128,7 @@ pub mod wokusd_vault {
         // Read state first (immutable borrows)
         let total_shares = ctx.accounts.config.total_shares;
         let bump = ctx.accounts.config.bump;
-        let vault_balance = ctx.accounts.vault_okusd_ata.amount;
+        let vault_balance = ctx.accounts.vault_okusd.amount;
         let decimals = ctx.accounts.okusd_mint.decimals;
 
         require!(shares > 0, VaultError::ZeroAmount);
@@ -165,7 +165,7 @@ pub mod wokusd_vault {
             CpiContext::new_with_signer(
                 ctx.accounts.token_2022_program.to_account_info(),
                 token_interface::TransferChecked {
-                    from: ctx.accounts.vault_okusd_ata.to_account_info(),
+                    from: ctx.accounts.vault_okusd.to_account_info(),
                     to: ctx.accounts.user_okusd_ata.to_account_info(),
                     authority: ctx.accounts.config.to_account_info(),
                     mint: ctx.accounts.okusd_mint.to_account_info(),
@@ -197,7 +197,7 @@ pub mod wokusd_vault {
         config.is_paused = true;
 
         emit!(PauseEvent {
-            admin: ctx.accounts.pauser.key(),
+            role_admin: ctx.accounts.pauser.key(),
             paused: true,
         });
 
@@ -215,6 +215,49 @@ pub mod wokusd_vault {
 
         Ok(())
     }
+
+    /// Update a specific authority role
+    /// Only role_admin can call this function
+    pub fn set_authority(
+        ctx: Context<SetAuthority>,
+        role: AuthorityRole,
+        new_authority: Pubkey,
+    ) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        let old_authority = match role {
+            AuthorityRole::RoleAdmin => {
+                let old = config.role_admin;
+                config.role_admin = new_authority;
+                old
+            }
+            AuthorityRole::Pauser => {
+                let old = config.pauser;
+                config.pauser = new_authority;
+                old
+            }
+            AuthorityRole::Unpauser => {
+                let old = config.unpauser;
+                config.unpauser = new_authority;
+                old
+            }
+        };
+
+        emit!(AuthorityUpdatedEvent {
+            role,
+            old_authority,
+            new_authority,
+        });
+
+        Ok(())
+    }
+}
+
+/// Authority roles that can be updated via set_authority
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorityRole {
+    RoleAdmin,
+    Pauser,
+    Unpauser,
 }
 
 // ============================================================================
@@ -224,17 +267,17 @@ pub mod wokusd_vault {
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(mut)]
-    pub admin: Signer<'info>,
+    pub role_admin: Signer<'info>,
 
     // ===== Granular Authority Accounts =====
     /// CHECK: Authority pubkey for role assignment
-    pub vault_pauser: UncheckedAccount<'info>,
+    pub pauser: UncheckedAccount<'info>,
     /// CHECK: Authority pubkey for role assignment
-    pub vault_unpauser: UncheckedAccount<'info>,
+    pub unpauser: UncheckedAccount<'info>,
 
     #[account(
         init,
-        payer = admin,
+        payer = role_admin,
         space = VaultConfig::LEN,
         seeds = [VaultConfig::SEED],
         bump
@@ -251,7 +294,7 @@ pub struct Initialize<'info> {
     /// Mint authority must be the config PDA
     #[account(
         init,
-        payer = admin,
+        payer = role_admin,
         mint::decimals = okusd_mint.decimals,
         mint::authority = config,
         mint::token_program = token_program,
@@ -261,12 +304,12 @@ pub struct Initialize<'info> {
     /// Vault's OkuUSD token account
     #[account(
         init,
-        payer = admin,
+        payer = role_admin,
         associated_token::mint = okusd_mint,
         associated_token::authority = config,
         associated_token::token_program = token_2022_program,
     )]
-    pub vault_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -323,9 +366,9 @@ pub struct Wrap<'info> {
     /// Vault's OkuUSD token account
     #[account(
         mut,
-        address = config.vault_okusd_ata
+        address = config.vault_okusd
     )]
-    pub vault_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -381,9 +424,9 @@ pub struct Unwrap<'info> {
     /// Vault's OkuUSD token account
     #[account(
         mut,
-        address = config.vault_okusd_ata
+        address = config.vault_okusd
     )]
-    pub vault_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -394,7 +437,7 @@ pub struct Unwrap<'info> {
 #[derive(Accounts)]
 pub struct Pause<'info> {
     #[account(
-        constraint = pauser.key() == config.vault_pauser @ VaultError::Unauthorized
+        constraint = pauser.key() == config.pauser @ VaultError::Unauthorized
     )]
     pub pauser: Signer<'info>,
 
@@ -409,10 +452,27 @@ pub struct Pause<'info> {
 #[derive(Accounts)]
 pub struct Unpause<'info> {
     #[account(
-        constraint = unpauser.key() == config.vault_unpauser @ VaultError::Unauthorized
+        constraint = unpauser.key() == config.unpauser @ VaultError::Unauthorized
     )]
     pub unpauser: Signer<'info>,
 
+    #[account(
+        mut,
+        seeds = [VaultConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Account<'info, VaultConfig>,
+}
+
+#[derive(Accounts)]
+pub struct SetAuthority<'info> {
+    /// Role admin - only role_admin can update authorities
+    #[account(
+        constraint = role_admin.key() == config.role_admin @ VaultError::Unauthorized
+    )]
+    pub role_admin: Signer<'info>,
+
+    /// Vault config
     #[account(
         mut,
         seeds = [VaultConfig::SEED],
@@ -427,7 +487,7 @@ pub struct Unpause<'info> {
 
 #[event]
 pub struct InitializeEvent {
-    pub admin: Pubkey,
+    pub role_admin: Pubkey,
     pub okusd_mint: Pubkey,
     pub wokusd_mint: Pubkey,
 }
@@ -448,11 +508,18 @@ pub struct UnwrapEvent {
 
 #[event]
 pub struct PauseEvent {
-    pub admin: Pubkey,
+    pub role_admin: Pubkey,
     pub paused: bool,
 }
 
 #[event]
 pub struct UnpauseEvent {
     pub unpauser: Pubkey,
+}
+
+#[event]
+pub struct AuthorityUpdatedEvent {
+    pub role: AuthorityRole,
+    pub old_authority: Pubkey,
+    pub new_authority: Pubkey,
 }

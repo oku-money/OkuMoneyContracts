@@ -54,7 +54,7 @@ describe("wokusd-vault", () => {
   let configBump: number;
 
   // Token accounts
-  let vaultOkusdAta: PublicKey;
+  let vaultOkusd: PublicKey;
   let userOkusdAta: PublicKey;
   let userWokusdAta: PublicKey;
   let user2OkusdAta: PublicKey;
@@ -211,12 +211,12 @@ describe("wokusd-vault", () => {
         .accounts({
           admin: admin.publicKey,
           // Granular authorities - RBAC separation
-          vaultPauser: warmMultisig.publicKey,
-          vaultUnpauser: coldMultisig.publicKey,
+          pauser: warmMultisig.publicKey,
+          unpauser: coldMultisig.publicKey,
           config: configPda,
           okusdMint: okusdMint,
           wokusdMint: wokusdMintKeypair.publicKey,
-          vaultOkusdAta: vaultOkusdAta,
+          vaultOkusd: vaultOkusdAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -230,12 +230,12 @@ describe("wokusd-vault", () => {
 
       // Verify config with granular authorities
       const config = await program.account.vaultConfig.fetch(configPda);
-      expect(config.admin.toString()).to.equal(admin.publicKey.toString());
-      expect(config.vaultPauser.toString()).to.equal(warmMultisig.publicKey.toString());
-      expect(config.vaultUnpauser.toString()).to.equal(coldMultisig.publicKey.toString());
+      expect(config.roleAdmin.toString()).to.equal(admin.publicKey.toString());
+      expect(config.pauser.toString()).to.equal(warmMultisig.publicKey.toString());
+      expect(config.unpauser.toString()).to.equal(coldMultisig.publicKey.toString());
       expect(config.okusdMint.toString()).to.equal(okusdMint.toString());
       expect(config.wokusdMint.toString()).to.equal(wokusdMint.toString());
-      expect(config.vaultOkusdAta.toString()).to.equal(vaultOkusdAta.toString());
+      expect(config.vaultOkusd.toString()).to.equal(vaultOkusdAta.toString());
       expect(config.totalShares.toNumber()).to.equal(0);
       expect(config.isPaused).to.be.false;
 
@@ -271,7 +271,7 @@ describe("wokusd-vault", () => {
           wokusdMint: wokusdMint,
           userOkusdAta: userOkusdAta,
           userWokusdAta: userWokusdAta,
-          vaultOkusdAta: vaultOkusdAta,
+          vaultOkusd: vaultOkusdAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -315,7 +315,7 @@ describe("wokusd-vault", () => {
           wokusdMint: wokusdMint,
           userOkusdAta: userOkusdAta,
           userWokusdAta: userWokusdAta,
-          vaultOkusdAta: vaultOkusdAta,
+          vaultOkusd: vaultOkusdAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -351,7 +351,7 @@ describe("wokusd-vault", () => {
             wokusdMint: wokusdMint,
             userOkusdAta: userOkusdAta,
             userWokusdAta: userWokusdAta,
-            vaultOkusdAta: vaultOkusdAta,
+            vaultOkusd: vaultOkusdAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -386,7 +386,7 @@ describe("wokusd-vault", () => {
             wokusdMint: wokusdMint,
             userOkusdAta: userOkusdAta,
             userWokusdAta: userWokusdAta,
-            vaultOkusdAta: vaultOkusdAta,
+            vaultOkusd: vaultOkusdAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -422,7 +422,7 @@ describe("wokusd-vault", () => {
           wokusdMint: wokusdMint,
           userOkusdAta: userOkusdAta,
           userWokusdAta: userWokusdAta,
-          vaultOkusdAta: vaultOkusdAta,
+          vaultOkusd: vaultOkusdAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -483,7 +483,7 @@ describe("wokusd-vault", () => {
           wokusdMint: wokusdMint,
           userOkusdAta: userOkusdAta,
           userWokusdAta: userWokusdAta,
-          vaultOkusdAta: vaultOkusdAta,
+          vaultOkusd: vaultOkusdAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -522,7 +522,7 @@ describe("wokusd-vault", () => {
             wokusdMint: wokusdMint,
             userOkusdAta: userOkusdAta,
             userWokusdAta: userWokusdAta,
-            vaultOkusdAta: vaultOkusdAta,
+            vaultOkusd: vaultOkusdAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -550,7 +550,7 @@ describe("wokusd-vault", () => {
             wokusdMint: wokusdMint,
             userOkusdAta: userOkusdAta,
             userWokusdAta: userWokusdAta,
-            vaultOkusdAta: vaultOkusdAta,
+            vaultOkusd: vaultOkusdAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -722,7 +722,7 @@ describe("wokusd-vault", () => {
           wokusdMint: wokusdMint,
           userOkusdAta: userOkusdAta,
           userWokusdAta: userWokusdAta,
-          vaultOkusdAta: vaultOkusdAta,
+          vaultOkusd: vaultOkusdAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -762,7 +762,7 @@ describe("wokusd-vault", () => {
           wokusdMint: wokusdMint,
           userOkusdAta: user2OkusdAta,
           userWokusdAta: user2WokusdAta,
-          vaultOkusdAta: vaultOkusdAta,
+          vaultOkusd: vaultOkusdAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -796,7 +796,7 @@ describe("wokusd-vault", () => {
           wokusdMint: wokusdMint,
           userOkusdAta: user2OkusdAta,
           userWokusdAta: user2WokusdAta,
-          vaultOkusdAta: vaultOkusdAta,
+          vaultOkusd: vaultOkusdAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -831,7 +831,7 @@ describe("wokusd-vault", () => {
           wokusdMint: wokusdMint,
           userOkusdAta: userOkusdAta,
           userWokusdAta: userWokusdAta,
-          vaultOkusdAta: vaultOkusdAta,
+          vaultOkusd: vaultOkusdAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -854,7 +854,7 @@ describe("wokusd-vault", () => {
           wokusdMint: wokusdMint,
           userOkusdAta: userOkusdAta,
           userWokusdAta: userWokusdAta,
-          vaultOkusdAta: vaultOkusdAta,
+          vaultOkusd: vaultOkusdAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,

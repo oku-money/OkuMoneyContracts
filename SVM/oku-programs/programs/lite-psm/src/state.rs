@@ -9,15 +9,15 @@ pub struct PsmConfig {
 
     // ===== Granular Authorities - One Per Action =====
     /// Meta role: grant/revoke roles (cold multisig)
-    pub admin: Pubkey,
+    pub role_admin: Pubkey,
     /// Warm Multisig - pause only
-    pub psm_pauser: Pubkey,
+    pub pauser: Pubkey,
     /// Cold Multisig - unpause only
-    pub psm_unpauser: Pubkey,
+    pub unpauser: Pubkey,
     /// Warm Multisig - freeze accounts
-    pub blacklister: Pubkey,
+    pub freezer: Pubkey,
     /// Cold Multisig - thaw accounts (requires deliberate review)
-    pub unblacklister: Pubkey,
+    pub unfreezer: Pubkey,
     /// Orchestrator - process redemption queue
     pub queue_processor: Pubkey,
     /// Orchestrator - deposit USDC buffer
@@ -39,10 +39,10 @@ pub struct PsmConfig {
     /// OkuUSD mint address (Token-2022)
     pub okusd_mint: Pubkey,
     /// PSM's USDC buffer vault (ATA)
-    pub vault_usdc_ata: Pubkey,
+    pub vault_usdc: Pubkey,
     /// PSM's OkuUSD escrow vault for queued redemptions (ATA)
     /// Holds OkuUSD while users are in queue so they earn yield
-    pub vault_okusd_ata: Pubkey,
+    pub vault_okusd: Pubkey,
 
     // ===== Limits =====
     /// Maximum OkuUSD supply cap
@@ -87,10 +87,9 @@ pub struct RedemptionQueue {
 
 impl RedemptionQueue {
     pub const SEED: &'static [u8] = b"redemption_queue";
-    // Limited to 100 entries to stay under Solana's 10KB realloc limit
-    // (8 header + 1 bump + 8 head/tail + 4 vec_len + 48*100 entries = 4,821 bytes)
-    // For production, consider zero-copy accounts or pagination for larger queues
-    pub const MAX_ENTRIES: usize = 100;
+    // Queue supports 500 entries as specified
+    // (8 header + 1 bump + 8 head/tail + 4 vec_len + 48*500 entries = 24,021 bytes)
+    pub const MAX_ENTRIES: usize = 500;
 
     /// Space needed for RedemptionQueue account
     /// 8 (discriminator) + 1 (bump) + 4*2 (head/tail) + 4 (vec len) + 48 * MAX_ENTRIES (entries)

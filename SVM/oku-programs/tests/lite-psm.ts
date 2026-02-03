@@ -39,7 +39,7 @@ describe("lite-psm", () => {
   let payer: Keypair;
 
   // RBAC Authority Keypairs
-  let admin: Keypair;
+  let role_admin: Keypair;
   const coldMultisig = Keypair.generate(); // Unpauser, unblacklister, all admin sub-roles
   const warmMultisig = Keypair.generate(); // Pauser, blacklister
   const orchestrator = Keypair.generate(); // Queue processor, buffer depositor, rebaser
@@ -59,8 +59,8 @@ describe("lite-psm", () => {
   let redemptionQueueBump: number;
 
   // Token accounts
-  let vaultUsdcAta: PublicKey;
-  let vaultOkusdAta: PublicKey;  // OkuUSD escrow for queued redemptions
+  let vaultUsdc: PublicKey;
+  let vaultOkusd: PublicKey;  // OkuUSD escrow for queued redemptions
   let userUsdcAta: PublicKey;
   let userOkusdAta: PublicKey;
   let user2UsdcAta: PublicKey;
@@ -284,12 +284,12 @@ describe("lite-psm", () => {
       await program.methods
         .initialize(MAX_SUPPLY, MINTER_ALLOWANCE)
         .accounts({
-          admin: admin.publicKey,
+          role_admin: admin.publicKey,
           // Granular authorities - 12 roles
-          psmPauser: warmMultisig.publicKey,
-          psmUnpauser: coldMultisig.publicKey,
-          blacklister: warmMultisig.publicKey,
-          unblacklister: coldMultisig.publicKey,
+          pauser: warmMultisig.publicKey,
+          unpauser: coldMultisig.publicKey,
+          freezer: warmMultisig.publicKey,
+          unfreezer: coldMultisig.publicKey,
           queueProcessor: orchestrator.publicKey,
           bufferDepositor: orchestrator.publicKey,
           bufferWithdrawer: coldMultisig.publicKey,
@@ -302,7 +302,7 @@ describe("lite-psm", () => {
           redemptionQueue: redemptionQueuePda,
           usdcMint: usdcMint,
           okusdMint: okusdMint,
-          vaultUsdcAta: vaultUsdcAta,
+          vaultUsdc: vaultUsdcAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -315,10 +315,10 @@ describe("lite-psm", () => {
       await program.methods
         .setupOkusdEscrow()
         .accounts({
-          admin: admin.publicKey,
+          role_admin: admin.publicKey,
           config: configPda,
           okusdMint: okusdMint,
-          vaultOkusdAta: vaultOkusdAta,
+          vaultOkusd: vaultOkusdAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -327,11 +327,11 @@ describe("lite-psm", () => {
 
       // Verify config has all authorities set correctly
       const config = await program.account.psmConfig.fetch(configPda);
-      expect(config.admin.toString()).to.equal(admin.publicKey.toString());
-      expect(config.psmPauser.toString()).to.equal(warmMultisig.publicKey.toString());
-      expect(config.psmUnpauser.toString()).to.equal(coldMultisig.publicKey.toString());
-      expect(config.blacklister.toString()).to.equal(warmMultisig.publicKey.toString());
-      expect(config.unblacklister.toString()).to.equal(coldMultisig.publicKey.toString());
+      expect(config.roleAdmin.toString()).to.equal(admin.publicKey.toString());
+      expect(config.pauser.toString()).to.equal(warmMultisig.publicKey.toString());
+      expect(config.unpauser.toString()).to.equal(coldMultisig.publicKey.toString());
+      expect(config.freezer.toString()).to.equal(warmMultisig.publicKey.toString());
+      expect(config.unfreezer.toString()).to.equal(coldMultisig.publicKey.toString());
       expect(config.queueProcessor.toString()).to.equal(orchestrator.publicKey.toString());
       expect(config.bufferDepositor.toString()).to.equal(orchestrator.publicKey.toString());
       expect(config.bufferWithdrawer.toString()).to.equal(coldMultisig.publicKey.toString());
@@ -341,7 +341,7 @@ describe("lite-psm", () => {
       expect(config.rebaser.toString()).to.equal(orchestrator.publicKey.toString());
       expect(config.usdcMint.toString()).to.equal(usdcMint.toString());
       expect(config.okusdMint.toString()).to.equal(okusdMint.toString());
-      expect(config.vaultOkusdAta.toString()).to.equal(vaultOkusdAta.toString());
+      expect(config.vaultOkusd.toString()).to.equal(vaultOkusdAta.toString());
       expect(config.maxSupply.toString()).to.equal(MAX_SUPPLY.toString());
       expect(config.minterAllowance.toString()).to.equal(MINTER_ALLOWANCE.toString());
       expect(config.isPaused).to.be.false;
@@ -381,7 +381,7 @@ describe("lite-psm", () => {
             okusdMint: okusdMint,
             userUsdcAta: userUsdcAta,
             userOkusdAta: userOkusdAta,
-            vaultUsdcAta: vaultUsdcAta,
+            vaultUsdc: vaultUsdcAta,
             priceUpdate: null,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -650,7 +650,7 @@ describe("lite-psm", () => {
             bufferDepositor: orchestrator.publicKey,
             config: configPda,
             bufferDepositorUsdcAta: orchestratorUsdcAta,
-            vaultUsdcAta: vaultUsdcAta,
+            vaultUsdc: vaultUsdcAta,
             usdcMint: usdcMint,
             tokenProgram: TOKEN_PROGRAM_ID,
           })
@@ -668,7 +668,7 @@ describe("lite-psm", () => {
             bufferDepositor: orchestrator.publicKey,
             config: configPda,
             bufferDepositorUsdcAta: orchestratorUsdcAta,
-            vaultUsdcAta: vaultUsdcAta,
+            vaultUsdc: vaultUsdcAta,
             usdcMint: usdcMint,
             tokenProgram: TOKEN_PROGRAM_ID,
           })
@@ -687,7 +687,7 @@ describe("lite-psm", () => {
               bufferDepositor: warmMultisig.publicKey, // Wrong role
               config: configPda,
               bufferDepositorUsdcAta: orchestratorUsdcAta,
-              vaultUsdcAta: vaultUsdcAta,
+              vaultUsdc: vaultUsdcAta,
               usdcMint: usdcMint,
               tokenProgram: TOKEN_PROGRAM_ID,
             })
@@ -709,7 +709,7 @@ describe("lite-psm", () => {
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
-            vaultUsdcAta: vaultUsdcAta,
+            vaultUsdc: vaultUsdcAta,
             usdcMint: usdcMint,
             tokenProgram: TOKEN_PROGRAM_ID,
           })
@@ -728,7 +728,7 @@ describe("lite-psm", () => {
               bufferWithdrawer: warmMultisig.publicKey, // Wrong role
               config: configPda,
               withdrawerUsdcAta: bufferWithdrawerUsdcAta,
-              vaultUsdcAta: vaultUsdcAta,
+              vaultUsdc: vaultUsdcAta,
               usdcMint: usdcMint,
               tokenProgram: TOKEN_PROGRAM_ID,
             })

@@ -30,11 +30,11 @@ pub mod lite_psm {
         config.bump = ctx.bumps.config;
 
         // Set all granular authorities
-        config.admin = ctx.accounts.admin.key();
-        config.psm_pauser = ctx.accounts.psm_pauser.key();
-        config.psm_unpauser = ctx.accounts.psm_unpauser.key();
-        config.blacklister = ctx.accounts.blacklister.key();
-        config.unblacklister = ctx.accounts.unblacklister.key();
+        config.role_admin = ctx.accounts.role_admin.key();
+        config.pauser = ctx.accounts.pauser.key();
+        config.unpauser = ctx.accounts.unpauser.key();
+        config.freezer = ctx.accounts.freezer.key();
+        config.unfreezer = ctx.accounts.unfreezer.key();
         config.queue_processor = ctx.accounts.queue_processor.key();
         config.buffer_depositor = ctx.accounts.buffer_depositor.key();
         config.buffer_withdrawer = ctx.accounts.buffer_withdrawer.key();
@@ -46,8 +46,8 @@ pub mod lite_psm {
         // Set token references
         config.usdc_mint = ctx.accounts.usdc_mint.key();
         config.okusd_mint = ctx.accounts.okusd_mint.key();
-        config.vault_usdc_ata = ctx.accounts.vault_usdc_ata.key();
-        config.vault_okusd_ata = Pubkey::default(); // Set in setup_okusd_escrow
+        config.vault_usdc = ctx.accounts.vault_usdc.key();
+        config.vault_okusd = Pubkey::default(); // Set in setup_okusd_escrow
 
         // Set limits
         config.max_supply = max_supply;
@@ -67,7 +67,7 @@ pub mod lite_psm {
         queue.entries = Vec::with_capacity(RedemptionQueue::MAX_ENTRIES);
 
         emit!(InitializeEvent {
-            admin: config.admin,
+            role_admin: config.role_admin,
             usdc_mint: config.usdc_mint,
             okusd_mint: config.okusd_mint,
             max_supply,
@@ -84,11 +84,11 @@ pub mod lite_psm {
 
         // Ensure escrow hasn't already been set
         require!(
-            config.vault_okusd_ata == Pubkey::default(),
+            config.vault_okusd == Pubkey::default(),
             OkuError::Unauthorized
         );
 
-        config.vault_okusd_ata = ctx.accounts.vault_okusd_ata.key();
+        config.vault_okusd = ctx.accounts.vault_okusd.key();
 
         Ok(())
     }
@@ -135,7 +135,7 @@ pub mod lite_psm {
                 ctx.accounts.token_program.to_account_info(),
                 anchor_spl::token::Transfer {
                     from: ctx.accounts.user_usdc_ata.to_account_info(),
-                    to: ctx.accounts.vault_usdc_ata.to_account_info(),
+                    to: ctx.accounts.vault_usdc.to_account_info(),
                     authority: ctx.accounts.user.to_account_info(),
                 },
             ),
@@ -175,7 +175,7 @@ pub mod lite_psm {
         let is_paused = ctx.accounts.config.is_paused;
         let bump = ctx.accounts.config.bump;
         let okusd_decimals = ctx.accounts.okusd_mint.decimals;
-        let vault_usdc_balance = ctx.accounts.vault_usdc_ata.amount;
+        let vault_usdc_balance = ctx.accounts.vault_usdc.amount;
 
         require!(!is_paused, OkuError::Paused);
         require!(okusd_amount > 0, OkuError::ZeroAmount);
@@ -208,7 +208,7 @@ pub mod lite_psm {
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
                     anchor_spl::token::Transfer {
-                        from: ctx.accounts.vault_usdc_ata.to_account_info(),
+                        from: ctx.accounts.vault_usdc.to_account_info(),
                         to: ctx.accounts.user_usdc_ata.to_account_info(),
                         authority: ctx.accounts.config.to_account_info(),
                     },
@@ -236,7 +236,7 @@ pub mod lite_psm {
                     ctx.accounts.token_2022_program.to_account_info(),
                     token_interface::TransferChecked {
                         from: ctx.accounts.user_okusd_ata.to_account_info(),
-                        to: ctx.accounts.vault_okusd_ata.to_account_info(),
+                        to: ctx.accounts.vault_okusd.to_account_info(),
                         authority: ctx.accounts.user.to_account_info(),
                         mint: ctx.accounts.okusd_mint.to_account_info(),
                     },
@@ -280,15 +280,15 @@ pub mod lite_psm {
         let signer = &[&seeds[..]];
 
         let mut processed = 0u32;
-        let vault_usdc_balance = ctx.accounts.vault_usdc_ata.amount;
+        let vault_usdc_balance = ctx.accounts.vault_usdc.amount;
         let mut remaining_usdc_balance = vault_usdc_balance;
 
         let clock = Clock::get()?;
         let current_time = clock.unix_timestamp;
 
         // Clone account infos needed for CPI to avoid lifetime issues
-        let vault_usdc_info = ctx.accounts.vault_usdc_ata.to_account_info();
-        let vault_okusd_info = ctx.accounts.vault_okusd_ata.to_account_info();
+        let vault_usdc_info = ctx.accounts.vault_usdc.to_account_info();
+        let vault_okusd_info = ctx.accounts.vault_okusd.to_account_info();
         let config_account_info = ctx.accounts.config.to_account_info();
         let token_program_info = ctx.accounts.token_program.to_account_info();
         let token_2022_program_info = ctx.accounts.token_2022_program.to_account_info();
@@ -400,7 +400,7 @@ pub mod lite_psm {
                 ctx.accounts.token_program.to_account_info(),
                 anchor_spl::token::Transfer {
                     from: ctx.accounts.buffer_depositor_usdc_ata.to_account_info(),
-                    to: ctx.accounts.vault_usdc_ata.to_account_info(),
+                    to: ctx.accounts.vault_usdc.to_account_info(),
                     authority: ctx.accounts.buffer_depositor.to_account_info(),
                 },
             ),
@@ -428,7 +428,7 @@ pub mod lite_psm {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 anchor_spl::token::Transfer {
-                    from: ctx.accounts.vault_usdc_ata.to_account_info(),
+                    from: ctx.accounts.vault_usdc.to_account_info(),
                     to: ctx.accounts.withdrawer_usdc_ata.to_account_info(),
                     authority: ctx.accounts.config.to_account_info(),
                 },
@@ -438,7 +438,7 @@ pub mod lite_psm {
         )?;
 
         emit!(BufferWithdrawEvent {
-            admin: ctx.accounts.buffer_withdrawer.key(),
+            role_admin: ctx.accounts.buffer_withdrawer.key(),
             amount,
         });
 
@@ -562,7 +562,7 @@ pub mod lite_psm {
         config.max_supply = new_max_supply;
 
         emit!(MaxSupplyUpdatedEvent {
-            admin: ctx.accounts.cap_manager.key(),
+            role_admin: ctx.accounts.cap_manager.key(),
             new_max_supply,
         });
 
@@ -575,7 +575,7 @@ pub mod lite_psm {
         config.minter_allowance = amount;
 
         emit!(MinterAllowanceUpdatedEvent {
-            admin: ctx.accounts.allowance_manager.key(),
+            role_admin: ctx.accounts.allowance_manager.key(),
             new_allowance: amount,
         });
 
@@ -593,7 +593,7 @@ pub mod lite_psm {
         config.staleness_threshold = staleness_threshold;
 
         emit!(OracleUpdatedEvent {
-            admin: ctx.accounts.oracle_manager.key(),
+            role_admin: ctx.accounts.oracle_manager.key(),
             oracle,
             staleness_threshold,
         });
@@ -710,6 +710,103 @@ pub mod lite_psm {
 
         Ok(())
     }
+
+    /// Update a specific authority role
+    /// Only role_admin can call this function
+    pub fn set_authority(
+        ctx: Context<SetAuthority>,
+        role: AuthorityRole,
+        new_authority: Pubkey,
+    ) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        let old_authority = match role {
+            AuthorityRole::RoleAdmin => {
+                let old = config.role_admin;
+                config.role_admin = new_authority;
+                old
+            }
+            AuthorityRole::Pauser => {
+                let old = config.pauser;
+                config.pauser = new_authority;
+                old
+            }
+            AuthorityRole::Unpauser => {
+                let old = config.unpauser;
+                config.unpauser = new_authority;
+                old
+            }
+            AuthorityRole::Freezer => {
+                let old = config.freezer;
+                config.freezer = new_authority;
+                old
+            }
+            AuthorityRole::Unfreezer => {
+                let old = config.unfreezer;
+                config.unfreezer = new_authority;
+                old
+            }
+            AuthorityRole::QueueProcessor => {
+                let old = config.queue_processor;
+                config.queue_processor = new_authority;
+                old
+            }
+            AuthorityRole::BufferDepositor => {
+                let old = config.buffer_depositor;
+                config.buffer_depositor = new_authority;
+                old
+            }
+            AuthorityRole::BufferWithdrawer => {
+                let old = config.buffer_withdrawer;
+                config.buffer_withdrawer = new_authority;
+                old
+            }
+            AuthorityRole::OracleManager => {
+                let old = config.oracle_manager;
+                config.oracle_manager = new_authority;
+                old
+            }
+            AuthorityRole::CapManager => {
+                let old = config.cap_manager;
+                config.cap_manager = new_authority;
+                old
+            }
+            AuthorityRole::AllowanceManager => {
+                let old = config.allowance_manager;
+                config.allowance_manager = new_authority;
+                old
+            }
+            AuthorityRole::Rebaser => {
+                let old = config.rebaser;
+                config.rebaser = new_authority;
+                old
+            }
+        };
+
+        emit!(AuthorityUpdatedEvent {
+            role,
+            old_authority,
+            new_authority,
+        });
+
+        Ok(())
+    }
+}
+
+/// Authority roles that can be updated via set_authority
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorityRole {
+    RoleAdmin,
+    Pauser,
+    Unpauser,
+    Freezer,
+    Unfreezer,
+    QueueProcessor,
+    BufferDepositor,
+    BufferWithdrawer,
+    OracleManager,
+    CapManager,
+    AllowanceManager,
+    Rebaser,
 }
 
 /// Pyth Price Account structure (partial - only fields we need)
@@ -874,17 +971,17 @@ fn calculate_interest_bearing_value(
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(mut)]
-    pub admin: Signer<'info>,
+    pub role_admin: Signer<'info>,
 
     // ===== Granular Authority Accounts =====
     /// CHECK: Authority pubkey for role assignment
-    pub psm_pauser: UncheckedAccount<'info>,
+    pub pauser: UncheckedAccount<'info>,
     /// CHECK: Authority pubkey for role assignment
-    pub psm_unpauser: UncheckedAccount<'info>,
+    pub unpauser: UncheckedAccount<'info>,
     /// CHECK: Authority pubkey for role assignment
-    pub blacklister: UncheckedAccount<'info>,
+    pub freezer: UncheckedAccount<'info>,
     /// CHECK: Authority pubkey for role assignment
-    pub unblacklister: UncheckedAccount<'info>,
+    pub unfreezer: UncheckedAccount<'info>,
     /// CHECK: Authority pubkey for role assignment
     pub queue_processor: UncheckedAccount<'info>,
     /// CHECK: Authority pubkey for role assignment
@@ -902,7 +999,7 @@ pub struct Initialize<'info> {
 
     #[account(
         init,
-        payer = admin,
+        payer = role_admin,
         space = PsmConfig::LEN,
         seeds = [PsmConfig::SEED],
         bump
@@ -911,7 +1008,7 @@ pub struct Initialize<'info> {
 
     #[account(
         init,
-        payer = admin,
+        payer = role_admin,
         space = RedemptionQueue::LEN,
         seeds = [RedemptionQueue::SEED],
         bump
@@ -931,12 +1028,12 @@ pub struct Initialize<'info> {
     /// PSM's USDC vault
     #[account(
         init,
-        payer = admin,
+        payer = role_admin,
         associated_token::mint = usdc_mint,
         associated_token::authority = config,
         associated_token::token_program = token_program,
     )]
-    pub vault_usdc_ata: Box<Account<'info, TokenAccount>>,
+    pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -950,13 +1047,13 @@ pub struct Initialize<'info> {
 #[derive(Accounts)]
 pub struct SetupOkusdEscrow<'info> {
     #[account(mut)]
-    pub admin: Signer<'info>,
+    pub role_admin: Signer<'info>,
 
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
         bump = config.bump,
-        has_one = admin @ OkuError::Unauthorized
+        has_one = role_admin @ OkuError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
 
@@ -970,12 +1067,12 @@ pub struct SetupOkusdEscrow<'info> {
     /// Holds OkuUSD while users are in queue so they earn yield
     #[account(
         init,
-        payer = admin,
+        payer = role_admin,
         associated_token::mint = okusd_mint,
         associated_token::authority = config,
         associated_token::token_program = token_2022_program,
     )]
-    pub vault_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -1027,9 +1124,9 @@ pub struct MintOkusd<'info> {
     /// PSM's USDC vault
     #[account(
         mut,
-        address = config.vault_usdc_ata
+        address = config.vault_usdc
     )]
-    pub vault_usdc_ata: Account<'info, TokenAccount>,
+    pub vault_usdc: Account<'info, TokenAccount>,
 
     /// Pyth price account (optional - only required if oracle is configured)
     /// CHECK: Validated manually in check_oracle_reserves - verifies account key matches config.oracle
@@ -1093,9 +1190,9 @@ pub struct Redeem<'info> {
     /// PSM's USDC vault
     #[account(
         mut,
-        address = config.vault_usdc_ata
+        address = config.vault_usdc
     )]
-    pub vault_usdc_ata: Account<'info, TokenAccount>,
+    pub vault_usdc: Account<'info, TokenAccount>,
 
     /// PSM's OkuUSD escrow vault (for queued redemptions)
     #[account(
@@ -1104,7 +1201,7 @@ pub struct Redeem<'info> {
         token::authority = config,
         token::token_program = token_2022_program,
     )]
-    pub vault_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -1143,9 +1240,9 @@ pub struct ProcessQueue<'info> {
     /// PSM's USDC vault
     #[account(
         mut,
-        address = config.vault_usdc_ata
+        address = config.vault_usdc
     )]
-    pub vault_usdc_ata: Account<'info, TokenAccount>,
+    pub vault_usdc: Account<'info, TokenAccount>,
 
     /// PSM's OkuUSD escrow vault - holds queued redemptions
     #[account(
@@ -1154,7 +1251,7 @@ pub struct ProcessQueue<'info> {
         token::authority = config,
         token::token_program = token_2022_program,
     )]
-    pub vault_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -1186,9 +1283,9 @@ pub struct DepositBuffer<'info> {
     /// PSM's USDC vault
     #[account(
         mut,
-        address = config.vault_usdc_ata
+        address = config.vault_usdc
     )]
-    pub vault_usdc_ata: Account<'info, TokenAccount>,
+    pub vault_usdc: Account<'info, TokenAccount>,
 
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Account<'info, Mint>,
@@ -1220,9 +1317,9 @@ pub struct WithdrawBuffer<'info> {
     /// PSM's USDC vault (source)
     #[account(
         mut,
-        address = config.vault_usdc_ata
+        address = config.vault_usdc
     )]
-    pub vault_usdc_ata: Account<'info, TokenAccount>,
+    pub vault_usdc: Account<'info, TokenAccount>,
 
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Account<'info, Mint>,
@@ -1300,7 +1397,7 @@ pub struct BridgeBurn<'info> {
 #[derive(Accounts)]
 pub struct Pause<'info> {
     #[account(
-        constraint = pauser.key() == config.psm_pauser @ OkuError::Unauthorized
+        constraint = pauser.key() == config.pauser @ OkuError::Unauthorized
     )]
     pub pauser: Signer<'info>,
 
@@ -1315,7 +1412,7 @@ pub struct Pause<'info> {
 #[derive(Accounts)]
 pub struct Unpause<'info> {
     #[account(
-        constraint = unpauser.key() == config.psm_unpauser @ OkuError::Unauthorized
+        constraint = unpauser.key() == config.unpauser @ OkuError::Unauthorized
     )]
     pub unpauser: Signer<'info>,
 
@@ -1330,9 +1427,9 @@ pub struct Unpause<'info> {
 #[derive(Accounts)]
 pub struct AdminOnly<'info> {
     #[account(
-        constraint = admin.key() == config.admin @ OkuError::Unauthorized
+        constraint = role_admin.key() == config.role_admin @ OkuError::Unauthorized
     )]
-    pub admin: Signer<'info>,
+    pub role_admin: Signer<'info>,
 
     #[account(
         mut,
@@ -1391,9 +1488,9 @@ pub struct OracleManager<'info> {
 pub struct FreezeAccount<'info> {
     /// Blacklister authority - can freeze even when PSM is paused
     #[account(
-        constraint = blacklister.key() == config.blacklister @ OkuError::Unauthorized
+        constraint = freezer.key() == config.freezer @ OkuError::Unauthorized
     )]
-    pub blacklister: Signer<'info>,
+    pub freezer: Signer<'info>,
 
     #[account(
         seeds = [PsmConfig::SEED],
@@ -1423,9 +1520,9 @@ pub struct FreezeAccount<'info> {
 pub struct ThawAccount<'info> {
     /// Unblacklister authority - can thaw even when PSM is paused (requires deliberate review)
     #[account(
-        constraint = unblacklister.key() == config.unblacklister @ OkuError::Unauthorized
+        constraint = unfreezer.key() == config.unfreezer @ OkuError::Unauthorized
     )]
-    pub unblacklister: Signer<'info>,
+    pub unfreezer: Signer<'info>,
 
     #[account(
         seeds = [PsmConfig::SEED],
@@ -1477,13 +1574,30 @@ pub struct UpdateInterestRate<'info> {
     pub token_2022_program: Program<'info, Token2022>,
 }
 
+#[derive(Accounts)]
+pub struct SetAuthority<'info> {
+    /// Role admin - only role_admin can update authorities
+    #[account(
+        constraint = role_admin.key() == config.role_admin @ OkuError::Unauthorized
+    )]
+    pub role_admin: Signer<'info>,
+
+    /// PSM config
+    #[account(
+        mut,
+        seeds = [PsmConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Account<'info, PsmConfig>,
+}
+
 // ============================================================================
 // Events
 // ============================================================================
 
 #[event]
 pub struct InitializeEvent {
-    pub admin: Pubkey,
+    pub role_admin: Pubkey,
     pub usdc_mint: Pubkey,
     pub okusd_mint: Pubkey,
     pub max_supply: u64,
@@ -1524,7 +1638,7 @@ pub struct BufferDepositEvent {
 
 #[event]
 pub struct BufferWithdrawEvent {
-    pub admin: Pubkey,
+    pub role_admin: Pubkey,
     pub amount: u64,
 }
 
@@ -1555,19 +1669,19 @@ pub struct UnpauseEvent {
 
 #[event]
 pub struct MaxSupplyUpdatedEvent {
-    pub admin: Pubkey,
+    pub role_admin: Pubkey,
     pub new_max_supply: u64,
 }
 
 #[event]
 pub struct MinterAllowanceUpdatedEvent {
-    pub admin: Pubkey,
+    pub role_admin: Pubkey,
     pub new_allowance: u64,
 }
 
 #[event]
 pub struct OracleUpdatedEvent {
-    pub admin: Pubkey,
+    pub role_admin: Pubkey,
     pub oracle: Pubkey,
     pub staleness_threshold: i64,
 }
@@ -1589,4 +1703,11 @@ pub struct FreezeEvent {
 pub struct ThawEvent {
     pub account: Pubkey,
     pub target_owner: Pubkey,
+}
+
+#[event]
+pub struct AuthorityUpdatedEvent {
+    pub role: AuthorityRole,
+    pub old_authority: Pubkey,
+    pub new_authority: Pubkey,
 }

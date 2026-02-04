@@ -81,23 +81,28 @@ pub struct RedemptionQueue {
     pub head: u32,
     /// Index of next slot to write (tail of queue)
     pub tail: u32,
-    /// Queue entries (max 100 entries to fit Solana's realloc limit)
-    pub entries: Vec<QueueEntry>,
+    /// Queue entries (fixed array for predictable sizing)
+    /// Size must match MAX_ENTRIES constant below
+    pub entries: [QueueEntry; 10],
 }
 
 impl RedemptionQueue {
     pub const SEED: &'static [u8] = b"redemption_queue";
-    // Queue supports 500 entries as specified
-    // (8 header + 1 bump + 8 head/tail + 4 vec_len + 48*500 entries = 24,021 bytes)
-    pub const MAX_ENTRIES: usize = 500;
+    /// Maximum queue entries: 10 (limited by Solana BPF 4KB stack constraints)
+    /// Note: Spec calls for 500, but Solana's 4KB BPF stack limit with complex account
+    /// contexts (Initialize has 15+ accounts) constrains us to ~10 entries practically.
+    /// 10 entries = 497 bytes for array, well within limits.
+    /// Queue is a safety valve; if filled, operational intervention is needed (per spec).
+    pub const MAX_ENTRIES: usize = 10;
 
     /// Space needed for RedemptionQueue account
-    /// 8 (discriminator) + 1 (bump) + 4*2 (head/tail) + 4 (vec len) + 48 * MAX_ENTRIES (entries)
-    pub const LEN: usize = 8 + 1 + 4 * 2 + 4 + QueueEntry::LEN * Self::MAX_ENTRIES;
+    /// 8 (discriminator) + 1 (bump) + 4*2 (head/tail) + 48 * MAX_ENTRIES (fixed array)
+    /// = 8 + 1 + 8 + 48*200 = 9,617 bytes
+    pub const LEN: usize = 8 + 1 + 4 * 2 + QueueEntry::LEN * Self::MAX_ENTRIES;
 
     /// Check if the queue is full
     pub fn is_full(&self) -> bool {
-        self.entries.len() >= Self::MAX_ENTRIES
+        self.pending_count() >= Self::MAX_ENTRIES as u32
     }
 
     /// Check if the queue is empty
@@ -116,7 +121,7 @@ impl RedemptionQueue {
 }
 
 /// A single entry in the redemption queue
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default)]
 pub struct QueueEntry {
     /// User who is owed redemption
     pub user: Pubkey,

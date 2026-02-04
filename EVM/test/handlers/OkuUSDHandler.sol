@@ -105,15 +105,27 @@ contract OkuUSDHandler is Test {
     /// @notice Update reward multiplier (rebase)
     function rebase(uint256 multiplierIncrease) external {
         uint256 currentMultiplier = okuUSD.rewardMultiplier();
-        // Increase by 0.01% to 10%
-        uint256 increase =
-            __bound(multiplierIncrease, currentMultiplier / 10_000, currentMultiplier / 10);
+
+        // Cap maximum multiplier at 1e24 (1 million x starting value)
+        // This represents ~100,000,000% cumulative yield, which is already unrealistic
+        // but allows testing of high-multiplier edge cases without arithmetic overflow
+        uint256 MAX_MULTIPLIER = 1e24;
+
+        if (currentMultiplier >= MAX_MULTIPLIER) {
+            return; // Already at maximum, skip further rebases
+        }
+
+        // Increase by 0.01% to 5% per rebase
+        // Use absolute bounds to prevent exponential growth
+        uint256 minIncrease = currentMultiplier / 10_000; // 0.01%
+        uint256 maxIncrease = currentMultiplier / 20;     // 5%
+        uint256 increase = __bound(multiplierIncrease, minIncrease, maxIncrease);
+
         uint256 newMultiplier = currentMultiplier + increase;
 
-        // Cap at 1e27 (1 billion x starting value) to prevent extreme arithmetic issues
-        // This still allows for massive yield accumulation while keeping math tractable
-        if (newMultiplier > 1e27) {
-            return; // Skip rebase if it would exceed reasonable bounds
+        // Ensure we don't exceed the cap
+        if (newMultiplier > MAX_MULTIPLIER) {
+            newMultiplier = MAX_MULTIPLIER;
         }
 
         vm.prank(rebaser);

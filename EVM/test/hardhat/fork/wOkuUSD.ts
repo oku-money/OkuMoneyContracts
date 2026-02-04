@@ -60,7 +60,7 @@ describe("wOkuUSD Scenarios", () => {
     async function getOkuUSD(user: Signer, usdcAmount: bigint) {
         await fundWithUSDC(user, usdcAmount)
         await usdc.connect(user).approve(await psm.getAddress(), usdcAmount)
-        await psm.connect(user).swap(usdcAmount)
+        await psm.connect(user).mint(usdcAmount)
     }
 
     before(async () => {
@@ -231,7 +231,7 @@ describe("wOkuUSD Scenarios", () => {
 
             // Verify approximately 10% yield
             const expectedReturn = okuUSDBalance * 110n / 100n
-            expect(okuUSDReturned).to.be.closeTo(expectedReturn, parseUnits("1", 6))
+            expect(okuUSDReturned).to.be.closeTo(expectedReturn, parseEther("1"))
         })
     })
 
@@ -257,10 +257,10 @@ describe("wOkuUSD Scenarios", () => {
             await getOkuUSD(Bob, bobDeposit)
             await getOkuUSD(Charlie, charlieDeposit)
 
-            // Deposit exactly what was just acquired (not full balance due to previous test accumulation)
-            const aliceOkuUSD = aliceDeposit
-            const bobOkuUSD = bobDeposit
-            const charlieOkuUSD = charlieDeposit
+            // Calculate OkuUSD amounts received (USDC deposits converted to OkuUSD in 18 decimals)
+            const aliceOkuUSD = parseEther("10000")
+            const bobOkuUSD = parseEther("20000")
+            const charlieOkuUSD = parseEther("30000")
 
             await okuUSD.connect(Alice).approve(wokuUSDAddr, aliceOkuUSD)
             await okuUSD.connect(Bob).approve(wokuUSDAddr, bobOkuUSD)
@@ -298,9 +298,9 @@ describe("wOkuUSD Scenarios", () => {
             const aliceReceived = (await okuUSD.balanceOf(aliceAddr)) - aliceOkuUSDBefore
 
             // All users should receive ~10% more than deposited
-            expect(aliceReceived).to.be.closeTo(aliceOkuUSD * 110n / 100n, parseUnits("1", 6))
-            expect(bobReceived).to.be.closeTo(bobOkuUSD * 110n / 100n, parseUnits("1", 6))
-            expect(charlieReceived).to.be.closeTo(charlieOkuUSD * 110n / 100n, parseUnits("1", 6))
+            expect(aliceReceived).to.be.closeTo(aliceOkuUSD * 110n / 100n, parseEther("1"))
+            expect(bobReceived).to.be.closeTo(bobOkuUSD * 110n / 100n, parseEther("1"))
+            expect(charlieReceived).to.be.closeTo(charlieOkuUSD * 110n / 100n, parseEther("1"))
         })
     })
 })

@@ -24,6 +24,9 @@ interface IOkuUSD {
 contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgradeable {
     using SafeERC20 for IERC20;
 
+    // Decimal conversion constant (USDC is 6 decimals, OkuUSD is 18 decimals)
+    uint256 private constant DECIMAL_MULTIPLIER = 10 ** 12; // 18 - 6 = 12
+
     bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
     bytes32 public constant PSM_ROLE = keccak256("PSM_ROLE");
 
@@ -107,16 +110,19 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
             // Convert shares to current token value (includes yield earned while queued)
             uint256 okuUSDAmount = oku.sharesToTokens(entry.shares);
 
-            if (usdcBalance >= okuUSDAmount) {
+            // Convert OkuUSD (18 decimals) to USDC amount (6 decimals)
+            uint256 usdcAmount = okuUSDAmount / DECIMAL_MULTIPLIER;
+
+            if (usdcBalance >= usdcAmount) {
                 // Burn OkuUSD from queue (use token amount)
                 oku.burn(address(this), okuUSDAmount);
 
-                // Transfer USDC to user (1:1 with OkuUSD token amount)
-                usdc.safeTransferFrom(msg.sender, entry.user, okuUSDAmount);
+                // Transfer USDC to user (1:1 value, converted for decimals)
+                usdc.safeTransferFrom(msg.sender, entry.user, usdcAmount);
 
-                emit RedemptionProcessed(entry.user, entry.shares, okuUSDAmount, okuUSDAmount);
+                emit RedemptionProcessed(entry.user, entry.shares, okuUSDAmount, usdcAmount);
 
-                usdcBalance -= okuUSDAmount;
+                usdcBalance -= usdcAmount;
                 queueHead++;
                 processed++;
             } else {

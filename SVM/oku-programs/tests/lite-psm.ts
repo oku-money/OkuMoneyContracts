@@ -39,9 +39,9 @@ describe("lite-psm", () => {
   let payer: Keypair;
 
   // RBAC Authority Keypairs
-  let role_admin: Keypair;
-  const coldMultisig = Keypair.generate(); // Unpauser, unblacklister, all admin sub-roles
-  const warmMultisig = Keypair.generate(); // Pauser, blacklister
+  let admin: Keypair;
+  const coldMultisig = Keypair.generate(); // Unpauser, unfreezer, all admin sub-roles
+  const warmMultisig = Keypair.generate(); // Pauser, freezer
   const orchestrator = Keypair.generate(); // Queue processor, buffer depositor, rebaser
 
   // Test user keypairs
@@ -59,8 +59,8 @@ describe("lite-psm", () => {
   let redemptionQueueBump: number;
 
   // Token accounts
-  let vaultUsdc: PublicKey;
-  let vaultOkusd: PublicKey;  // OkuUSD escrow for queued redemptions
+  let vaultUsdcAta: PublicKey;
+  let vaultOkusdAta: PublicKey;  // OkuUSD escrow for queued redemptions
   let userUsdcAta: PublicKey;
   let userOkusdAta: PublicKey;
   let user2UsdcAta: PublicKey;
@@ -284,7 +284,7 @@ describe("lite-psm", () => {
       await program.methods
         .initialize(MAX_SUPPLY, MINTER_ALLOWANCE)
         .accounts({
-          role_admin: admin.publicKey,
+          roleAdmin: admin.publicKey,
           // Granular authorities - 12 roles
           pauser: warmMultisig.publicKey,
           unpauser: coldMultisig.publicKey,
@@ -315,7 +315,7 @@ describe("lite-psm", () => {
       await program.methods
         .setupOkusdEscrow()
         .accounts({
-          role_admin: admin.publicKey,
+          roleAdmin: admin.publicKey,
           config: configPda,
           okusdMint: okusdMint,
           vaultOkusd: vaultOkusdAta,

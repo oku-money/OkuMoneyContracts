@@ -51,3 +51,6 @@ deployments/*
 # Environment files
 .env.local
 .env.*.local
+
+# Deployment addresses (auto-generated)
+EVM/scripts/config/addresses.json

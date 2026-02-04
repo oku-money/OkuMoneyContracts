@@ -35,10 +35,13 @@ const config: HardhatUserConfig = {
   networks: {
     hardhat: {
       chainId: 31337,
-      forking: process.env.MAINNET_RPC_URL ? {
-        url: process.env.MAINNET_RPC_URL,
-        blockNumber: 24172540,
-      } : undefined,
+      // Fork Optimism by default for OkuMoney testing
+      // Override with FORK_URL and FORK_BLOCK_NUMBER env vars
+      forking: {
+        url: process.env.FORK_URL || process.env.OPTIMISM_RPC_URL || "https://mainnet.optimism.io",
+        blockNumber: process.env.FORK_BLOCK_NUMBER ? parseInt(process.env.FORK_BLOCK_NUMBER) : undefined,
+        enabled: true,
+      },
       allowUnlimitedContractSize: false,
       gas: "auto",
       gasPrice: "auto",

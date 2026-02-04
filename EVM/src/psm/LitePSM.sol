@@ -9,7 +9,6 @@ import {
 import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {RedemptionQueue} from "./RedemptionQueue.sol";
@@ -35,10 +34,12 @@ contract LitePSM is
     Initializable,
     AccessControlUpgradeable,
     PausableUpgradeable,
-    ReentrancyGuard,
     UUPSUpgradeable
 {
     using SafeERC20 for IERC20;
+
+    // Decimal conversion constant (USDC is 6 decimals, OkuUSD is 18 decimals)
+    uint256 private constant DECIMAL_MULTIPLIER = 10 ** 12; // 18 - 6 = 12
 
     // Granular RBAC roles (contract-specific prefixes)
     bytes32 public constant PSM_UPGRADER_ROLE = keccak256("PSM_UPGRADER_ROLE");
@@ -98,39 +99,46 @@ contract LitePSM is
 
     /**
      * @notice Mint OkuUSD by depositing USDC at 1:1 rate
-     * @param usdcAmount Amount of USDC to deposit
+     * @param usdcAmount Amount of USDC to deposit (6 decimals)
      */
-    function mint(uint256 usdcAmount) external whenNotPaused nonReentrant {
+    function mint(uint256 usdcAmount) external whenNotPaused {
         require(usdcAmount > 0, "Amount must be positive");
+
+        // Convert USDC (6 decimals) to OkuUSD amount (18 decimals)
+        uint256 okuUSDAmount = usdcAmount * DECIMAL_MULTIPLIER;
 
         // Check PoR oracle if enabled
         if (oracleEnabled && address(porOracle) != address(0)) {
-            _checkReserves(usdcAmount);
+            _checkReserves(okuUSDAmount);
         }
 
         // Transfer USDC from user
         usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
 
-        // Mint OkuUSD to user (1:1)
-        okuUSD.mint(msg.sender, usdcAmount);
+        // Mint OkuUSD to user (1:1 in value, converted for decimals)
+        okuUSD.mint(msg.sender, okuUSDAmount);
 
-        emit Mint(msg.sender, usdcAmount, usdcAmount);
+        emit Mint(msg.sender, usdcAmount, okuUSDAmount);
     }
 
     /**
      * @notice Redeem OkuUSD for USDC at 1:1 rate
-     * @param okuUSDAmount Amount of OkuUSD to redeem
+     * @param okuUSDAmount Amount of OkuUSD to redeem (18 decimals)
      */
-    function redeem(uint256 okuUSDAmount) external whenNotPaused nonReentrant {
+    function redeem(uint256 okuUSDAmount) external whenNotPaused {
         require(okuUSDAmount > 0, "Amount must be positive");
+
+        // Convert OkuUSD (18 decimals) to USDC amount (6 decimals)
+        uint256 usdcAmount = okuUSDAmount / DECIMAL_MULTIPLIER;
+        require(usdcAmount > 0, "Amount too small");
 
         uint256 usdcBalance = usdc.balanceOf(address(this));
 
-        if (usdcBalance >= okuUSDAmount) {
+        if (usdcBalance >= usdcAmount) {
             // Sufficient buffer - process immediately
             okuUSD.burn(msg.sender, okuUSDAmount);
-            usdc.safeTransfer(msg.sender, okuUSDAmount);
-            emit Redeem(msg.sender, okuUSDAmount, okuUSDAmount);
+            usdc.safeTransfer(msg.sender, usdcAmount);
+            emit Redeem(msg.sender, okuUSDAmount, usdcAmount);
         } else {
             // Insufficient buffer - queue redemption
             redemptionQueue.enqueue(msg.sender, okuUSDAmount);

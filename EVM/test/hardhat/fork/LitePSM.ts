@@ -39,7 +39,8 @@ describe("LitePSM Scenarios", () => {
     const REBASER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("REBASER_ROLE"))
     const BUFFER_WITHDRAWER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("BUFFER_WITHDRAWER_ROLE"))
     const QUEUE_PROCESSOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PROCESSOR_ROLE"))
-    const DEPOSIT_AMOUNT = parseUnits("10000", 6)
+    const DEPOSIT_AMOUNT = parseUnits("10000", 6) // USDC amount (6 decimals)
+    const DECIMAL_MULTIPLIER = 10n ** 12n // Convert USDC (6 decimals) to OkuUSD (18 decimals)
 
     // Helper to fund a user with USDC from whale
     async function fundWithUSDC(user: Signer, amount: bigint) {
@@ -181,8 +182,8 @@ describe("LitePSM Scenarios", () => {
 
             await usdc.connect(Alice).approve(psmAddr, DEPOSIT_AMOUNT)
             await usdc.connect(Bob).approve(psmAddr, DEPOSIT_AMOUNT)
-            await psm.connect(Alice).swap(DEPOSIT_AMOUNT)
-            await psm.connect(Bob).swap(DEPOSIT_AMOUNT)
+            await psm.connect(Alice).mint(DEPOSIT_AMOUNT)
+            await psm.connect(Bob).mint(DEPOSIT_AMOUNT)
 
             // Verify PSM has buffer
             expect(await usdc.balanceOf(psmAddr)).to.equal(DEPOSIT_AMOUNT * 2n)
@@ -237,17 +238,17 @@ describe("LitePSM Scenarios", () => {
             await usdc.connect(Charlie).approve(psmAddr, freshAmount)
             await usdc.connect(Dave).approve(psmAddr, freshAmount)
 
-            await psm.connect(Alice).swap(freshAmount)
-            await psm.connect(Bob).swap(freshAmount)
-            await psm.connect(Charlie).swap(freshAmount)
-            await psm.connect(Dave).swap(freshAmount)
+            await psm.connect(Alice).mint(freshAmount)
+            await psm.connect(Bob).mint(freshAmount)
+            await psm.connect(Charlie).mint(freshAmount)
+            await psm.connect(Dave).mint(freshAmount)
 
             // Drain buffer completely
             await drainPSM()
             expect(await usdc.balanceOf(psmAddr)).to.equal(0)
 
-            // Each user queues 5,000 OkuUSD (half their balance)
-            const redeemAmount = parseUnits("5000", 6)
+            // Each user queues 5,000 OkuUSD (half their balance) - use 18 decimals for OkuUSD
+            const redeemAmount = parseEther("5000")
 
             await okuUSD.connect(Alice).approve(psmAddr, redeemAmount)
             await okuUSD.connect(Alice).approve(queueAddr, redeemAmount)
@@ -324,10 +325,10 @@ describe("LitePSM Scenarios", () => {
             await usdc.connect(Charlie).approve(psmAddr, depositAmount)
             await usdc.connect(Dave).approve(psmAddr, depositAmount)
 
-            await psm.connect(Alice).swap(depositAmount)
-            await psm.connect(Bob).swap(depositAmount)
-            await psm.connect(Charlie).swap(depositAmount)
-            await psm.connect(Dave).swap(depositAmount)
+            await psm.connect(Alice).mint(depositAmount)
+            await psm.connect(Bob).mint(depositAmount)
+            await psm.connect(Charlie).mint(depositAmount)
+            await psm.connect(Dave).mint(depositAmount)
 
             // PSM has 20,000 USDC - withdraw to leave only 10,000
             const psmBuffer = await usdc.balanceOf(psmAddr)
@@ -344,32 +345,35 @@ describe("LitePSM Scenarios", () => {
             const charlieUsdcBefore = await usdc.balanceOf(charlieAddr)
             const daveUsdcBefore = await usdc.balanceOf(daveAddr)
 
-            // Alice redeems 5,000 - INSTANT (buffer: 10,000 -> 5,000)
-            await okuUSD.connect(Alice).approve(psmAddr, depositAmount)
-            await psm.connect(Alice).redeem(depositAmount)
+            // Calculate OkuUSD amount to redeem (deposited 5000 USDC, got 5000 OkuUSD in 18 decimals)
+            const redeemOkuUSD = parseEther("5000")
+
+            // Alice redeems 5,000 OkuUSD - INSTANT (buffer: 10,000 -> 5,000)
+            await okuUSD.connect(Alice).approve(psmAddr, redeemOkuUSD)
+            await psm.connect(Alice).redeem(redeemOkuUSD)
 
             expect(await queue.queueLength()).to.equal(0)
             expect(await usdc.balanceOf(aliceAddr)).to.be.gt(aliceUsdcBefore)
 
-            // Bob redeems 5,000 - INSTANT (buffer: 5,000 -> 0)
-            await okuUSD.connect(Bob).approve(psmAddr, depositAmount)
-            await psm.connect(Bob).redeem(depositAmount)
+            // Bob redeems 5,000 OkuUSD - INSTANT (buffer: 5,000 -> 0)
+            await okuUSD.connect(Bob).approve(psmAddr, redeemOkuUSD)
+            await psm.connect(Bob).redeem(redeemOkuUSD)
 
             expect(await queue.queueLength()).to.equal(0)
             expect(await usdc.balanceOf(bobAddr)).to.be.gt(bobUsdcBefore)
 
-            // Charlie redeems 5,000 - QUEUED (buffer: 0)
-            await okuUSD.connect(Charlie).approve(psmAddr, depositAmount)
-            await okuUSD.connect(Charlie).approve(queueAddr, depositAmount)
-            await psm.connect(Charlie).redeem(depositAmount)
+            // Charlie redeems 5,000 OkuUSD - QUEUED (buffer: 0)
+            await okuUSD.connect(Charlie).approve(psmAddr, redeemOkuUSD)
+            await okuUSD.connect(Charlie).approve(queueAddr, redeemOkuUSD)
+            await psm.connect(Charlie).redeem(redeemOkuUSD)
 
             expect(await queue.queueLength()).to.equal(1)
             expect(await usdc.balanceOf(charlieAddr)).to.equal(charlieUsdcBefore)
 
-            // Dave redeems 5,000 - QUEUED
-            await okuUSD.connect(Dave).approve(psmAddr, depositAmount)
-            await okuUSD.connect(Dave).approve(queueAddr, depositAmount)
-            await psm.connect(Dave).redeem(depositAmount)
+            // Dave redeems 5,000 OkuUSD - QUEUED
+            await okuUSD.connect(Dave).approve(psmAddr, redeemOkuUSD)
+            await okuUSD.connect(Dave).approve(queueAddr, redeemOkuUSD)
+            await psm.connect(Dave).redeem(redeemOkuUSD)
 
             expect(await queue.queueLength()).to.equal(2)
             expect(await usdc.balanceOf(daveAddr)).to.equal(daveUsdcBefore)
@@ -400,8 +404,8 @@ describe("LitePSM Scenarios", () => {
             // Deposit
             await usdc.connect(Alice).approve(psmAddr, depositAmount)
             await usdc.connect(Bob).approve(psmAddr, depositAmount)
-            await psm.connect(Alice).swap(depositAmount)
-            await psm.connect(Bob).swap(depositAmount)
+            await psm.connect(Alice).mint(depositAmount)
+            await psm.connect(Bob).mint(depositAmount)
 
             // Drain buffer
             await drainPSM()
@@ -436,17 +440,21 @@ describe("LitePSM Scenarios", () => {
 
             expect(await queue.queueLength()).to.equal(0)
 
-            // Calculate received amounts
+            // Calculate received amounts (in USDC, 6 decimals)
             const aliceReceived = (await usdc.balanceOf(aliceAddr)) - aliceUsdcBefore
             const bobReceived = (await usdc.balanceOf(bobAddr)) - bobUsdcBefore
 
+            // Convert queued OkuUSD amounts to USDC amounts for comparison
+            const aliceQueuedUSDC = aliceOkuUSD / DECIMAL_MULTIPLIER
+            const bobQueuedUSDC = bobOkuUSD / DECIMAL_MULTIPLIER
+
             // Users should receive MORE than they originally queued (10% yield)
-            expect(aliceReceived).to.be.gt(aliceOkuUSD)
-            expect(bobReceived).to.be.gt(bobOkuUSD)
+            expect(aliceReceived).to.be.gt(aliceQueuedUSDC)
+            expect(bobReceived).to.be.gt(bobQueuedUSDC)
 
             // Verify approximately 10% more (allow 1 USDC tolerance for rounding)
-            const expectedAlice = aliceOkuUSD * 110n / 100n
-            const expectedBob = bobOkuUSD * 110n / 100n
+            const expectedAlice = aliceQueuedUSDC * 110n / 100n
+            const expectedBob = bobQueuedUSDC * 110n / 100n
 
             expect(aliceReceived).to.be.closeTo(expectedAlice, parseUnits("1", 6))
             expect(bobReceived).to.be.closeTo(expectedBob, parseUnits("1", 6))

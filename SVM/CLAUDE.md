@@ -165,10 +165,12 @@ pub struct PsmConfig {
     pub oracle_manager: Pubkey,         // Cold Multisig
     pub cap_manager: Pubkey,            // Cold Multisig
     pub allowance_manager: Pubkey,      // Cold Multisig
+    pub rebaser: Pubkey,                // Orchestrator
     // Token references
     pub usdc_mint: Pubkey,
     pub okusd_mint: Pubkey,
     pub vault_usdc: Pubkey,
+    pub vault_okusd: Pubkey,
     // Limits
     pub max_supply: u64,
     pub minter_allowance: u64,
@@ -176,6 +178,7 @@ pub struct PsmConfig {
     // Oracle
     pub oracle: Pubkey,                 // Pyth feed or Pubkey::default()
     pub staleness_threshold: i64,
+    pub current_rate_bps: i16,          // Current interest rate in basis points
 }
 ```
 
@@ -187,7 +190,7 @@ pub struct RedemptionQueue {
     pub bump: u8,
     pub head: u32,
     pub tail: u32,
-    pub entries: [QueueEntry; 500],     // Fixed 500 entries (~24KB)
+    pub entries: [QueueEntry; 10],      // Fixed 10 entries (~497 bytes)
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default)]
@@ -198,7 +201,7 @@ pub struct QueueEntry {
 }
 ```
 
-**Queue size rationale**: 500 entries is sufficient—queue is a safety valve, not normal operation. If hitting capacity, operational intervention needed anyway.
+**Queue size**: 10 entries (limited by Solana's 4KB BPF stack limit with complex account contexts). Queue is a safety valve for temporary liquidity shortfalls—persistent issues require operational intervention. *Note: Will revisit this limitation in future optimization.*
 
 ### Instructions
 

@@ -60,7 +60,7 @@ describe("OkuUSD Scenarios", () => {
     async function getOkuUSD(user: Signer, usdcAmount: bigint) {
         await fundWithUSDC(user, usdcAmount)
         await usdc.connect(user).approve(await psm.getAddress(), usdcAmount)
-        await psm.connect(user).swap(usdcAmount)
+        await psm.connect(user).mint(usdcAmount)
     }
 
     before(async () => {
@@ -205,39 +205,40 @@ describe("OkuUSD Scenarios", () => {
             const aliceAddr = await Alice.getAddress()
             const psmAddr = await psm.getAddress()
 
-            // Set PSM minter allowance to limited amount (50,000 OkuUSD in 6 decimals)
-            const limitedAllowance = parseUnits("50000", 6)
+            // Set PSM minter allowance to limited amount (50,000 OkuUSD in 18 decimals)
+            const limitedAllowance = parseEther("50000")
             await okuUSD.connect(Frank).configureMinterAllowance(psmAddr, limitedAllowance)
 
             // Verify allowance was set
             expect(await okuUSD.minterAllowance(psmAddr)).to.equal(limitedAllowance)
 
-            // Alice swaps 40,000 USDC (should succeed)
-            const firstSwap = parseUnits("40000", 6)
+            // Alice swaps 40,000 USDC (should succeed, receives 40,000 OkuUSD in 18 decimals)
+            const firstSwap = parseUnits("40000", 6) // USDC amount
             await fundWithUSDC(Alice, firstSwap)
             await usdc.connect(Alice).approve(psmAddr, firstSwap)
-            await psm.connect(Alice).swap(firstSwap)
+            await psm.connect(Alice).mint(firstSwap)
 
-            // Verify allowance decreased (PSM mints raw USDC amounts)
+            // Verify allowance decreased by OkuUSD amount minted (40,000 in 18 decimals)
             const remainingAllowance = await okuUSD.minterAllowance(psmAddr)
-            expect(remainingAllowance).to.be.closeTo(limitedAllowance - firstSwap, parseUnits("1", 6))
+            const expectedRemaining = limitedAllowance - parseEther("40000")
+            expect(remainingAllowance).to.be.closeTo(expectedRemaining, parseEther("1"))
 
-            // Alice tries to swap 20,000 more (should fail - exceeds remaining ~10k)
-            const secondSwap = parseUnits("20000", 6)
+            // Alice tries to swap 20,000 more USDC (should fail - exceeds remaining ~10k OkuUSD)
+            const secondSwap = parseUnits("20000", 6) // USDC amount
             await fundWithUSDC(Alice, secondSwap)
             await usdc.connect(Alice).approve(psmAddr, secondSwap)
-            await expect(psm.connect(Alice).swap(secondSwap)).to.be.revertedWith("Exceeds minter allowance")
+            await expect(psm.connect(Alice).mint(secondSwap)).to.be.revertedWith("Exceeds minter allowance")
 
             // Admin resets allowance
-            const newAllowance = parseUnits("100000", 6)
+            const newAllowance = parseEther("100000")
             await okuUSD.connect(Frank).configureMinterAllowance(psmAddr, newAllowance)
 
             // Now swap should succeed
-            await psm.connect(Alice).swap(secondSwap)
+            await psm.connect(Alice).mint(secondSwap)
 
-            // Verify Alice received OkuUSD from second swap
+            // Verify Alice received OkuUSD from second swap (60,000 OkuUSD total in 18 decimals)
             const aliceBalance = await okuUSD.balanceOf(aliceAddr)
-            expect(aliceBalance).to.be.gt(parseUnits("60000", 6))
+            expect(aliceBalance).to.be.gt(parseEther("60000"))
         })
     })
 
@@ -246,8 +247,8 @@ describe("OkuUSD Scenarios", () => {
             const frankAddr = await Frank.getAddress()
             const aliceAddr = await Alice.getAddress()
 
-            // Deploy fresh contracts with LOW maxSupply (100,000 OkuUSD in 6 decimals)
-            const lowMaxSupply = parseUnits("100000", 6)
+            // Deploy fresh contracts with LOW maxSupply (100,000 OkuUSD in 18 decimals)
+            const lowMaxSupply = parseEther("100000")
 
             const freshOkuUSD = await upgrades.deployProxy(
                 new OkuUSD__factory(Frank),
@@ -270,7 +271,7 @@ describe("OkuUSD Scenarios", () => {
             ) as unknown as LitePSM
             await freshPSM.waitForDeployment()
 
-            // Grant PSM minter role with HIGH allowance (1B in 6 decimals)
+            // Grant PSM minter role with HIGH allowance (1B in 18 decimals)
             await freshOkuUSD.connect(Frank).grantRole(MINTER_ROLE, await freshPSM.getAddress())
 
             // Grant RBAC roles to Frank for fresh contracts
@@ -279,34 +280,34 @@ describe("OkuUSD Scenarios", () => {
 
             await freshOkuUSD.connect(Frank).configureMinterAllowance(
                 await freshPSM.getAddress(),
-                parseUnits("1000000000", 6)
+                parseEther("1000000000")
             )
             await freshQueue.connect(Frank).grantRole(PSM_ROLE, await freshPSM.getAddress())
 
-            // Alice swaps 80,000 USDC (should succeed - under 100k cap)
-            const firstSwap = parseUnits("80000", 6)
+            // Alice swaps 80,000 USDC (should succeed - under 100k cap, receives 80,000 OkuUSD)
+            const firstSwap = parseUnits("80000", 6) // USDC amount
             await fundWithUSDC(Alice, firstSwap)
             await usdc.connect(Alice).approve(await freshPSM.getAddress(), firstSwap)
-            await freshPSM.connect(Alice).swap(firstSwap)
+            await freshPSM.connect(Alice).mint(firstSwap)
 
-            expect(await freshOkuUSD.balanceOf(aliceAddr)).to.be.closeTo(parseUnits("80000", 6), parseUnits("1", 6))
+            expect(await freshOkuUSD.balanceOf(aliceAddr)).to.be.closeTo(parseEther("80000"), parseEther("1"))
 
-            // Alice tries to swap 30,000 more (should fail - would exceed 100k cap)
-            const secondSwap = parseUnits("30000", 6)
+            // Alice tries to swap 30,000 more USDC (should fail - would exceed 100k OkuUSD cap)
+            const secondSwap = parseUnits("30000", 6) // USDC amount
             await fundWithUSDC(Alice, secondSwap)
             await usdc.connect(Alice).approve(await freshPSM.getAddress(), secondSwap)
-            await expect(freshPSM.connect(Alice).swap(secondSwap)).to.be.revertedWith("Exceeds supply cap")
+            await expect(freshPSM.connect(Alice).mint(secondSwap)).to.be.revertedWith("Exceeds supply cap")
 
             // Admin increases maxSupply
-            const newMaxSupply = parseUnits("200000", 6)
+            const newMaxSupply = parseEther("200000")
             await freshOkuUSD.connect(Frank).setMaxSupply(newMaxSupply)
 
             // Now swap should succeed
-            await freshPSM.connect(Alice).swap(secondSwap)
+            await freshPSM.connect(Alice).mint(secondSwap)
 
-            // Alice should have ~110,000 OkuUSD
+            // Alice should have ~110,000 OkuUSD (in 18 decimals)
             const aliceBalance = await freshOkuUSD.balanceOf(aliceAddr)
-            expect(aliceBalance).to.be.closeTo(parseUnits("110000", 6), parseUnits("1", 6))
+            expect(aliceBalance).to.be.closeTo(parseEther("110000"), parseEther("1"))
         })
     })
 
@@ -344,7 +345,7 @@ describe("OkuUSD Scenarios", () => {
             await fundWithUSDC(Alice, depositAmount)
             await usdc.connect(Alice).approve(await psm.getAddress(), depositAmount)
             await expect(
-                psm.connect(Alice).swap(depositAmount)
+                psm.connect(Alice).mint(depositAmount)
             ).to.be.revertedWithCustomError(okuUSD, "EnforcedPause")
 
             // Frank unpause

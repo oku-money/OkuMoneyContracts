@@ -6,10 +6,12 @@ import {BaseTest} from "../Base.t.sol";
 /**
  * @title LitePSMTest
  * @notice Unit tests for LitePSM (Peg Stability Module)
- * @dev Note: Current implementation assumes 1:1 amounts without decimal conversion.
- *      USDC has 6 decimals, OkuUSD has 18 - this is a known issue in the PSM.
+ * @dev Tests verify correct 1:1 value conversion between USDC (6 decimals) and OkuUSD (18 decimals).
+ *      The PSM multiplies by 10^12 when minting and divides by 10^12 when redeeming.
  */
 contract LitePSMTest is BaseTest {
+    // Decimal conversion constant
+    uint256 private constant DECIMAL_MULTIPLIER = 10 ** 12;
     // ============ Events ============
 
     event Mint(address indexed user, uint256 usdcAmount, uint256 okusdAmount);
@@ -44,28 +46,30 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_Mint_MintsOkuUSDOut() public {
-        uint256 amount = 100e6;
+        uint256 usdcAmount = 100e6; // 100 USDC (6 decimals)
 
-        _approveUSDC(user1, address(litePSM), amount);
+        _approveUSDC(user1, address(litePSM), usdcAmount);
 
         vm.prank(user1);
-        litePSM.mint(amount);
+        litePSM.mint(usdcAmount);
 
-        // Note: 1:1 mint means OkuUSD minted = USDC amount
-        // This is a bug since decimals differ (6 vs 18)
-        assertEq(okuUSD.balanceOf(user1), amount);
+        // Should mint 100 OkuUSD (18 decimals) = 100e6 * 10^12 = 100e18
+        uint256 expectedOkuUSD = usdcAmount * DECIMAL_MULTIPLIER;
+        assertEq(okuUSD.balanceOf(user1), expectedOkuUSD);
+        assertEq(okuUSD.balanceOf(user1), 100e18); // Explicit check: 100 OkuUSD
     }
 
     function test_Mint_OneToOneRatio() public {
-        uint256 amount = 500e6;
+        uint256 usdcAmount = 500e6; // 500 USDC
 
-        _approveUSDC(user1, address(litePSM), amount);
+        _approveUSDC(user1, address(litePSM), usdcAmount);
 
         vm.prank(user1);
-        litePSM.mint(amount);
+        litePSM.mint(usdcAmount);
 
-        // Verify 1:1 ratio (despite decimal mismatch)
-        assertEq(okuUSD.balanceOf(user1), amount);
+        // Verify 1:1 VALUE ratio: 500 USDC → 500 OkuUSD (with decimal conversion)
+        assertEq(okuUSD.balanceOf(user1), usdcAmount * DECIMAL_MULTIPLIER);
+        assertEq(okuUSD.balanceOf(user1), 500e18); // 500 OkuUSD
     }
 
     function test_Mint_RevertsWhenPaused() public {
@@ -86,14 +90,16 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_Mint_EmitsEvent() public {
-        uint256 amount = 100e6;
-        _approveUSDC(user1, address(litePSM), amount);
+        uint256 usdcAmount = 100e6;
+        uint256 okuUSDAmount = usdcAmount * DECIMAL_MULTIPLIER;
+
+        _approveUSDC(user1, address(litePSM), usdcAmount);
 
         vm.expectEmit(true, false, false, true);
-        emit Mint(user1, amount, amount);
+        emit Mint(user1, usdcAmount, okuUSDAmount);
 
         vm.prank(user1);
-        litePSM.mint(amount);
+        litePSM.mint(usdcAmount);
     }
 
     // ============ Oracle Tests ============
@@ -178,58 +184,68 @@ contract LitePSMTest is BaseTest {
     // ============ Redeem Tests ============
 
     function test_Redeem_TransfersUSDCOut() public {
-        // User needs OkuUSD first - mint via minter
-        _mintOkuUSD(user1, 100e6);
+        // User needs OkuUSD first - mint 100 OkuUSD (18 decimals)
+        uint256 okuUSDAmount = 100e18;
+        uint256 expectedUSDC = 100e6; // Should receive 100 USDC (6 decimals)
+
+        _mintOkuUSD(user1, okuUSDAmount);
 
         uint256 user1USDCBefore = usdc.balanceOf(user1);
         uint256 psmUSDCBefore = usdc.balanceOf(address(litePSM));
 
-        _approveOkuUSD(user1, address(litePSM), 100e6);
+        _approveOkuUSD(user1, address(litePSM), okuUSDAmount);
 
         vm.prank(user1);
-        litePSM.redeem(100e6);
+        litePSM.redeem(okuUSDAmount);
 
-        assertEq(usdc.balanceOf(user1), user1USDCBefore + 100e6);
-        assertEq(usdc.balanceOf(address(litePSM)), psmUSDCBefore - 100e6);
+        assertEq(usdc.balanceOf(user1), user1USDCBefore + expectedUSDC);
+        assertEq(usdc.balanceOf(address(litePSM)), psmUSDCBefore - expectedUSDC);
     }
 
     function test_Redeem_BurnsOkuUSD() public {
-        _mintOkuUSD(user1, 100e6);
+        uint256 okuUSDAmount = 100e18; // 100 OkuUSD
 
-        _approveOkuUSD(user1, address(litePSM), 100e6);
+        _mintOkuUSD(user1, okuUSDAmount);
+
+        _approveOkuUSD(user1, address(litePSM), okuUSDAmount);
 
         vm.prank(user1);
-        litePSM.redeem(100e6);
+        litePSM.redeem(okuUSDAmount);
 
         assertEq(okuUSD.balanceOf(user1), 0);
     }
 
     function test_Redeem_OneToOneRatio() public {
-        _mintOkuUSD(user1, 500e6);
+        uint256 okuUSDAmount = 500e18; // 500 OkuUSD
+        uint256 expectedUSDC = 500e6; // Should receive 500 USDC
+
+        _mintOkuUSD(user1, okuUSDAmount);
 
         uint256 user1USDCBefore = usdc.balanceOf(user1);
 
-        _approveOkuUSD(user1, address(litePSM), 500e6);
+        _approveOkuUSD(user1, address(litePSM), okuUSDAmount);
 
         vm.prank(user1);
-        litePSM.redeem(500e6);
+        litePSM.redeem(okuUSDAmount);
 
-        // 1:1 ratio
-        assertEq(usdc.balanceOf(user1), user1USDCBefore + 500e6);
+        // 1:1 VALUE ratio: 500 OkuUSD → 500 USDC (with decimal conversion)
+        assertEq(usdc.balanceOf(user1), user1USDCBefore + expectedUSDC);
     }
 
     function test_Redeem_QueuesWhenBufferInsufficient() public {
-        _mintOkuUSD(user1, 10_000e6);
+        uint256 okuUSDAmount = 10_000e18; // 10,000 OkuUSD
 
-        // PSM only has 5000e6 USDC buffer
+        _mintOkuUSD(user1, okuUSDAmount);
+
+        // PSM only has 5000e6 USDC buffer (worth 5,000 OkuUSD)
         // User needs to approve both PSM (for immediate burns) and Queue (for queuing)
-        _approveOkuUSD(user1, address(litePSM), 10_000e6);
-        _approveOkuUSD(user1, address(redemptionQueue), 10_000e6);
+        _approveOkuUSD(user1, address(litePSM), okuUSDAmount);
+        _approveOkuUSD(user1, address(redemptionQueue), okuUSDAmount);
 
         vm.prank(user1);
-        litePSM.redeem(10_000e6);
+        litePSM.redeem(okuUSDAmount);
 
-        // Should be queued, not immediate redemption
+        // Should be queued, not immediate redemption (buffer insufficient)
         // User still has their OkuUSD (transferred to queue contract)
         // Check queue has entry
         assertEq(redemptionQueue.queueLength(), 1);
@@ -246,12 +262,14 @@ contract LitePSMTest is BaseTest {
         // Set oracle to stale (now safe since we warped forward)
         oracle.setTimestamp(block.timestamp - 2 hours);
 
-        _mintOkuUSD(user1, 100e6);
-        _approveOkuUSD(user1, address(litePSM), 100e6);
+        uint256 okuUSDAmount = 100e18; // 100 OkuUSD
+
+        _mintOkuUSD(user1, okuUSDAmount);
+        _approveOkuUSD(user1, address(litePSM), okuUSDAmount);
 
         // Redeem should NOT check oracle
         vm.prank(user1);
-        litePSM.redeem(100e6);
+        litePSM.redeem(okuUSDAmount);
 
         assertEq(usdc.balanceOf(user1), 10_100e6); // Initial 10000 + 100 redeemed
     }
@@ -263,26 +281,31 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_Redeem_RevertsWhenPaused() public {
-        _mintOkuUSD(user1, 100e6);
-        _approveOkuUSD(user1, address(litePSM), 100e6);
+        uint256 okuUSDAmount = 100e18;
+
+        _mintOkuUSD(user1, okuUSDAmount);
+        _approveOkuUSD(user1, address(litePSM), okuUSDAmount);
 
         vm.prank(pauser);
         litePSM.pause();
 
         vm.prank(user1);
         vm.expectRevert();
-        litePSM.redeem(100e6);
+        litePSM.redeem(okuUSDAmount);
     }
 
     function test_Redeem_EmitsEvent() public {
-        _mintOkuUSD(user1, 100e6);
-        _approveOkuUSD(user1, address(litePSM), 100e6);
+        uint256 okuUSDAmount = 100e18;
+        uint256 usdcAmount = 100e6;
+
+        _mintOkuUSD(user1, okuUSDAmount);
+        _approveOkuUSD(user1, address(litePSM), okuUSDAmount);
 
         vm.expectEmit(true, false, false, true);
-        emit Redeem(user1, 100e6, 100e6);
+        emit Redeem(user1, okuUSDAmount, usdcAmount);
 
         vm.prank(user1);
-        litePSM.redeem(100e6);
+        litePSM.redeem(okuUSDAmount);
     }
 
     // ============ ProcessQueue Tests ============
@@ -295,21 +318,23 @@ contract LitePSMTest is BaseTest {
 
     function test_ProcessQueue_ProcessesFIFO() public {
         // Create queued redemptions
-        _mintOkuUSD(user1, 6000e6);
-        _mintOkuUSD(user2, 6000e6);
+        uint256 okuUSDAmount = 6000e18; // 6,000 OkuUSD each
+
+        _mintOkuUSD(user1, okuUSDAmount);
+        _mintOkuUSD(user2, okuUSDAmount);
 
         // Users need to approve queue for transferFrom
-        _approveOkuUSD(user1, address(redemptionQueue), 6000e6);
-        _approveOkuUSD(user2, address(redemptionQueue), 6000e6);
+        _approveOkuUSD(user1, address(redemptionQueue), okuUSDAmount);
+        _approveOkuUSD(user2, address(redemptionQueue), okuUSDAmount);
 
-        // Drain buffer first - redeem more than buffer (5000)
-        _approveOkuUSD(user1, address(litePSM), 6000e6);
+        // Drain buffer first - redeem more than buffer (5000 USDC worth)
+        _approveOkuUSD(user1, address(litePSM), okuUSDAmount);
         vm.prank(user1);
-        litePSM.redeem(6000e6); // Queued (buffer only 5000)
+        litePSM.redeem(okuUSDAmount); // Queued (buffer only 5000 USDC)
 
-        _approveOkuUSD(user2, address(litePSM), 6000e6);
+        _approveOkuUSD(user2, address(litePSM), okuUSDAmount);
         vm.prank(user2);
-        litePSM.redeem(6000e6); // Also queued
+        litePSM.redeem(okuUSDAmount); // Also queued
 
         assertEq(redemptionQueue.queueLength(), 2);
 
@@ -330,14 +355,16 @@ contract LitePSMTest is BaseTest {
 
     function test_ProcessQueue_ApprovesAndRevokesAllowance() public {
         // Setup: create a queued redemption
-        _mintOkuUSD(user1, 6000e6);
-        _approveOkuUSD(user1, address(redemptionQueue), 6000e6);
-        _approveOkuUSD(user1, address(litePSM), 6000e6);
+        uint256 okuUSDAmount = 6000e18; // 6,000 OkuUSD
+
+        _mintOkuUSD(user1, okuUSDAmount);
+        _approveOkuUSD(user1, address(redemptionQueue), okuUSDAmount);
+        _approveOkuUSD(user1, address(litePSM), okuUSDAmount);
 
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
 
         vm.prank(user1);
-        litePSM.redeem(6000e6); // Queued (buffer only 5000)
+        litePSM.redeem(okuUSDAmount); // Queued (buffer only 5000 USDC)
 
         assertEq(redemptionQueue.queueLength(), 1);
 
@@ -367,19 +394,21 @@ contract LitePSMTest is BaseTest {
 
     function test_ProcessQueue_PartialProcessingRevokesAllowance() public {
         // Setup: create multiple queued redemptions
-        _mintOkuUSD(user1, 6000e6);
-        _mintOkuUSD(user2, 6000e6);
+        uint256 okuUSDAmount = 6000e18; // 6,000 OkuUSD each
 
-        _approveOkuUSD(user1, address(redemptionQueue), 6000e6);
-        _approveOkuUSD(user2, address(redemptionQueue), 6000e6);
-        _approveOkuUSD(user1, address(litePSM), 6000e6);
-        _approveOkuUSD(user2, address(litePSM), 6000e6);
+        _mintOkuUSD(user1, okuUSDAmount);
+        _mintOkuUSD(user2, okuUSDAmount);
+
+        _approveOkuUSD(user1, address(redemptionQueue), okuUSDAmount);
+        _approveOkuUSD(user2, address(redemptionQueue), okuUSDAmount);
+        _approveOkuUSD(user1, address(litePSM), okuUSDAmount);
+        _approveOkuUSD(user2, address(litePSM), okuUSDAmount);
 
         vm.prank(user1);
-        litePSM.redeem(6000e6);
+        litePSM.redeem(okuUSDAmount);
 
         vm.prank(user2);
-        litePSM.redeem(6000e6);
+        litePSM.redeem(okuUSDAmount);
 
         assertEq(redemptionQueue.queueLength(), 2);
 
@@ -432,5 +461,111 @@ contract LitePSMTest is BaseTest {
         litePSM.withdrawUSDC(user1, amount);
 
         assertEq(usdc.balanceOf(user1), user1Before + amount);
+    }
+
+    // ============ Decimal Conversion Tests ============
+
+    function test_DecimalConversion_MintConvertsCorrectly() public {
+        uint256 usdcAmount = 1000e6; // 1000 USDC (6 decimals)
+
+        _approveUSDC(user1, address(litePSM), usdcAmount);
+
+        vm.prank(user1);
+        litePSM.mint(usdcAmount);
+
+        // Should mint exactly 1000 OkuUSD (18 decimals)
+        assertEq(okuUSD.balanceOf(user1), 1000e18);
+
+        // Verify the conversion factor
+        assertEq(okuUSD.balanceOf(user1), usdcAmount * DECIMAL_MULTIPLIER);
+    }
+
+    function test_DecimalConversion_RedeemConvertsCorrectly() public {
+        uint256 okuUSDAmount = 1000e18; // 1000 OkuUSD (18 decimals)
+
+        _mintOkuUSD(user1, okuUSDAmount);
+        _approveOkuUSD(user1, address(litePSM), okuUSDAmount);
+
+        uint256 usdcBefore = usdc.balanceOf(user1);
+
+        vm.prank(user1);
+        litePSM.redeem(okuUSDAmount);
+
+        // Should receive exactly 1000 USDC (6 decimals)
+        assertEq(usdc.balanceOf(user1) - usdcBefore, 1000e6);
+
+        // Verify the conversion factor
+        assertEq(usdc.balanceOf(user1) - usdcBefore, okuUSDAmount / DECIMAL_MULTIPLIER);
+    }
+
+    function test_DecimalConversion_RoundTripPreservesValue() public {
+        uint256 startingUSDC = 5000e6; // 5000 USDC
+
+        // Mint OkuUSD
+        _approveUSDC(user1, address(litePSM), startingUSDC);
+        vm.prank(user1);
+        litePSM.mint(startingUSDC);
+
+        uint256 okuUSDReceived = okuUSD.balanceOf(user1);
+        assertEq(okuUSDReceived, 5000e18); // 5000 OkuUSD
+
+        // Redeem back to USDC
+        _approveOkuUSD(user1, address(litePSM), okuUSDReceived);
+
+        uint256 usdcBefore = usdc.balanceOf(user1);
+        vm.prank(user1);
+        litePSM.redeem(okuUSDReceived);
+
+        // Should get back exactly what we started with
+        assertEq(usdc.balanceOf(user1) - usdcBefore, startingUSDC);
+    }
+
+    function test_DecimalConversion_SmallAmounts() public {
+        uint256 smallUSDC = 1e6; // 1 USDC (minimum realistic amount)
+
+        _approveUSDC(user1, address(litePSM), smallUSDC);
+        vm.prank(user1);
+        litePSM.mint(smallUSDC);
+
+        // Should mint 1 OkuUSD
+        assertEq(okuUSD.balanceOf(user1), 1e18);
+    }
+
+    function test_DecimalConversion_LargeAmounts() public {
+        uint256 largeUSDC = 1_000_000e6; // 1 million USDC
+
+        _mintUSDC(user1, largeUSDC); // Mint more USDC to user
+        _approveUSDC(user1, address(litePSM), largeUSDC);
+
+        vm.prank(user1);
+        litePSM.mint(largeUSDC);
+
+        // Should mint 1 million OkuUSD
+        assertEq(okuUSD.balanceOf(user1), 1_000_000e18);
+    }
+
+    function test_DecimalConversion_RedeemTooSmall() public {
+        // 1 wei of OkuUSD should fail since it rounds to 0 USDC
+        uint256 tinyAmount = 1; // 1 wei of OkuUSD
+
+        _mintOkuUSD(user1, tinyAmount);
+        _approveOkuUSD(user1, address(litePSM), tinyAmount);
+
+        vm.prank(user1);
+        vm.expectRevert("Amount too small");
+        litePSM.redeem(tinyAmount);
+    }
+
+    function test_DecimalConversion_ExactConversionFactor() public {
+        // Verify the conversion factor is exactly 10^12
+        uint256 usdcAmount = 123e6; // Arbitrary amount
+
+        _approveUSDC(user1, address(litePSM), usdcAmount);
+        vm.prank(user1);
+        litePSM.mint(usdcAmount);
+
+        // OkuUSD should be exactly USDC * 10^12
+        assertEq(okuUSD.balanceOf(user1), usdcAmount * (10 ** 12));
+        assertEq(okuUSD.balanceOf(user1), 123e18);
     }
 }

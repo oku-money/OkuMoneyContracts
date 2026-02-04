@@ -45,6 +45,7 @@ describe("Happy Path Testing", () => {
     const BUFFER_WITHDRAWER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("BUFFER_WITHDRAWER_ROLE"))
     const QUEUE_PROCESSOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PROCESSOR_ROLE"))
     const DEPOSIT_AMOUNT = parseUnits("10000", 6) // 10,000 USDC (6 decimals)
+    const DECIMAL_MULTIPLIER = 10n ** 12n // Convert USDC (6 decimals) to OkuUSD (18 decimals)
 
     before(async () => {
         // Reset network to initial fork state for test isolation
@@ -180,22 +181,23 @@ describe("Happy Path Testing", () => {
         await usdc.connect(Bob).approve(psmAddr, DEPOSIT_AMOUNT)
         await usdc.connect(Dave).approve(psmAddr, DEPOSIT_AMOUNT)
 
-        // All users deposit USDC via PSM.swap() and receive OkuUSD
-        await psm.connect(Alice).swap(DEPOSIT_AMOUNT)
-        await psm.connect(Charlie).swap(DEPOSIT_AMOUNT)
-        await psm.connect(Bob).swap(DEPOSIT_AMOUNT)
-        await psm.connect(Dave).swap(DEPOSIT_AMOUNT)
+        // All users deposit USDC via PSM.mint() and receive OkuUSD
+        await psm.connect(Alice).mint(DEPOSIT_AMOUNT)
+        await psm.connect(Charlie).mint(DEPOSIT_AMOUNT)
+        await psm.connect(Bob).mint(DEPOSIT_AMOUNT)
+        await psm.connect(Dave).mint(DEPOSIT_AMOUNT)
 
-        // Verify all users received OkuUSD
+        // Verify all users received OkuUSD (converted from 6 to 18 decimals)
         const aliceOkuUSD = await okuUSD.balanceOf(aliceAddr)
         const charlieOkuUSD = await okuUSD.balanceOf(charlieAddr)
         const bobOkuUSD = await okuUSD.balanceOf(bobAddr)
         const daveOkuUSD = await okuUSD.balanceOf(daveAddr)
 
-        expect(aliceOkuUSD).to.equal(DEPOSIT_AMOUNT)
-        expect(charlieOkuUSD).to.equal(DEPOSIT_AMOUNT)
-        expect(bobOkuUSD).to.equal(DEPOSIT_AMOUNT)
-        expect(daveOkuUSD).to.equal(DEPOSIT_AMOUNT)
+        const expectedOkuUSD = DEPOSIT_AMOUNT * DECIMAL_MULTIPLIER
+        expect(aliceOkuUSD).to.equal(expectedOkuUSD)
+        expect(charlieOkuUSD).to.equal(expectedOkuUSD)
+        expect(bobOkuUSD).to.equal(expectedOkuUSD)
+        expect(daveOkuUSD).to.equal(expectedOkuUSD)
 
         // Verify PSM received all the USDC
         const psmUsdc = await usdc.balanceOf(psmAddr)

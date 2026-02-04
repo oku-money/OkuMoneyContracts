@@ -71,7 +71,7 @@ describe("NTT Bridge Scenarios", () => {
     async function getOkuUSD(user: Signer, usdcAmount: bigint) {
         await fundWithUSDC(user, usdcAmount)
         await usdc.connect(user).approve(await psm.getAddress(), usdcAmount)
-        await psm.connect(user).swap(usdcAmount)
+        await psm.connect(user).mint(usdcAmount)
     }
 
     async function bridgeViaNtt(

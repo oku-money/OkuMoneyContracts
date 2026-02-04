@@ -64,7 +64,7 @@ pub mod lite_psm {
         queue.bump = ctx.bumps.redemption_queue;
         queue.head = 0;
         queue.tail = 0;
-        queue.entries = Vec::with_capacity(RedemptionQueue::MAX_ENTRIES);
+        // entries array is automatically zero-initialized by Anchor
 
         emit!(InitializeEvent {
             role_admin: config.role_admin,
@@ -252,8 +252,9 @@ pub mod lite_psm {
                 timestamp: clock.unix_timestamp,
             };
 
-            queue.entries.push(entry);
+            // Insert at tail position (fixed array, not Vec)
             let position = queue.tail;
+            queue.entries[position as usize] = entry;
             queue.tail = queue.tail.checked_add(1).ok_or(OkuError::Overflow)?;
 
             emit!(RedemptionQueuedEvent {
@@ -296,7 +297,8 @@ pub mod lite_psm {
 
         while processed < max_entries && !queue.is_empty() {
             let head_idx = queue.head as usize;
-            if head_idx >= queue.entries.len() {
+            // Ensure head is within valid range (tail is next write position)
+            if head_idx >= queue.tail as usize {
                 break;
             }
 
@@ -1154,7 +1156,7 @@ pub struct Redeem<'info> {
         seeds = [RedemptionQueue::SEED],
         bump = redemption_queue.bump
     )]
-    pub redemption_queue: Account<'info, RedemptionQueue>,
+    pub redemption_queue: Box<Account<'info, RedemptionQueue>>,
 
     /// USDC mint
     #[account(address = config.usdc_mint)]
@@ -1227,7 +1229,7 @@ pub struct ProcessQueue<'info> {
         seeds = [RedemptionQueue::SEED],
         bump = redemption_queue.bump
     )]
-    pub redemption_queue: Account<'info, RedemptionQueue>,
+    pub redemption_queue: Box<Account<'info, RedemptionQueue>>,
 
     /// OkuUSD mint (Token-2022) - needed for burn CPI
     #[account(

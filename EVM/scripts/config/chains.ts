@@ -1,6 +1,11 @@
 /**
- * Chain-specific configuration for Optimism and Arbitrum
+ * Chain-specific configuration for scripts
+ *
+ * This module re-exports from the centralized config and provides
+ * backward-compatible interfaces for existing scripts.
  */
+
+import { getChainMetadata, getTokenAddress, ChainMetadata } from "../../config/config";
 
 export interface ChainConfig {
   name: string;
@@ -9,38 +14,20 @@ export interface ChainConfig {
   rpcUrl: string;
 }
 
-export const CHAINS: Record<string, ChainConfig> = {
-  optimism: {
-    name: "Optimism",
-    chainId: 10,
-    usdc: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", // Mainnet USDC (bridged)
-    rpcUrl: process.env.OPTIMISM_RPC_URL || "https://mainnet.optimism.io",
-  },
-  arbitrum: {
-    name: "Arbitrum",
-    chainId: 42161,
-    usdc: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", // Mainnet USDC (native)
-    rpcUrl: process.env.ARBITRUM_RPC_URL || "https://arb1.arbitrum.io/rpc",
-  },
-  localhost: {
-    name: "Localhost (Fork)",
-    chainId: 31337,
-    usdc: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", // Use Optimism USDC for fork
-    rpcUrl: "http://127.0.0.1:8545",
-  },
-};
-
 /**
  * Get chain configuration by network name
+ * This wraps the centralized config for backward compatibility
  */
 export function getChainConfig(network: string): ChainConfig {
-  const config = CHAINS[network.toLowerCase()];
-  if (!config) {
-    throw new Error(
-      `Unknown network: ${network}. Supported networks: ${Object.keys(CHAINS).join(", ")}`
-    );
-  }
-  return config;
+  const metadata = getChainMetadata(network);
+  const usdcAddress = getTokenAddress(network, "usdc");
+
+  return {
+    name: metadata.name,
+    chainId: metadata.chainId,
+    usdc: usdcAddress,
+    rpcUrl: metadata.rpcUrl,
+  };
 }
 
 /**

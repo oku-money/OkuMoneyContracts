@@ -7,6 +7,7 @@
 
 import { ethers, network } from "hardhat";
 import { getChainConfig, getNetworkName } from "../config/chains";
+import { getTokenAddress } from "../../config/config";
 import { logger } from "./logger";
 
 async function main() {
@@ -24,10 +25,13 @@ async function main() {
 
   logger.info(`Dealing ${amountStr} USDC`);
 
+  // Get USDC address from centralized config
+  const usdcAddress = getTokenAddress(networkName, "usdc");
+
   // Get USDC contract
   const usdc = await ethers.getContractAt(
     ["function balanceOf(address) view returns (uint256)", "function transfer(address,uint256) returns (bool)"],
-    chainConfig.usdc
+    usdcAddress
   );
 
   // Check current balance
@@ -52,11 +56,11 @@ async function main() {
       const storageSlot = ethers.keccak256(ethers.concat([paddedAddress, paddedSlot]));
 
       // Get current value at this slot
-      const currentValue = await ethers.provider.getStorage(chainConfig.usdc, storageSlot);
+      const currentValue = await ethers.provider.getStorage(usdcAddress, storageSlot);
 
       // Try setting a test value
       await network.provider.send("hardhat_setStorageAt", [
-        chainConfig.usdc,
+        usdcAddress,
         storageSlot,
         ethers.zeroPadValue(ethers.toBeHex(ethers.parseUnits("12345", 6)), 32),
       ]);
@@ -71,7 +75,7 @@ async function main() {
 
         // Restore original value before continuing
         await network.provider.send("hardhat_setStorageAt", [
-          chainConfig.usdc,
+          usdcAddress,
           storageSlot,
           currentValue,
         ]);
@@ -100,7 +104,7 @@ async function main() {
 
   // Set the balance
   await network.provider.send("hardhat_setStorageAt", [
-    chainConfig.usdc,
+    usdcAddress,
     storageSlot,
     ethers.zeroPadValue(ethers.toBeHex(usdcAmount), 32),
   ]);

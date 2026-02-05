@@ -5,10 +5,11 @@
 
 import { ethers, network } from "hardhat";
 import { getChainConfig, getNetworkName } from "../config/chains";
+import { getTokenAddress, getWhaleAddress } from "../../config/config";
 import { logger } from "./logger";
 
-// Known USDC whales on different chains (will be checksummed when used)
-const USDC_WHALES: Record<string, string[]> = {
+// Backup whales if primary whale from config doesn't work
+const BACKUP_USDC_WHALES: Record<string, string[]> = {
   optimism: [
     "0x0A59649758aa4d66E25f08Dd01271e891fe52199", // Coinbase 14
     "0xd6216fc19db775df9774a6e33526131da7d19a2c", // KuCoin Hot Wallet
@@ -42,10 +43,13 @@ async function main() {
 
   logger.info(`Requesting ${amountStr} USDC`);
 
+  // Get USDC address from centralized config
+  const usdcAddress = getTokenAddress(networkName, "usdc");
+
   // Check if USDC contract exists at the address
-  const code = await ethers.provider.getCode(chainConfig.usdc);
+  const code = await ethers.provider.getCode(usdcAddress);
   if (code === "0x") {
-    logger.error(`No contract found at USDC address: ${chainConfig.usdc}`);
+    logger.error(`No contract found at USDC address: ${usdcAddress}`);
     logger.info("This usually means:");
     logger.info("1. The fork is not set up correctly");
     logger.info("2. You're forking from the wrong network");
@@ -62,7 +66,7 @@ async function main() {
   // Get USDC contract
   const usdc = await ethers.getContractAt(
     ["function balanceOf(address) view returns (uint256)", "function transfer(address,uint256) returns (bool)"],
-    chainConfig.usdc
+    usdcAddress
   );
 
   // Check current balance
@@ -76,14 +80,16 @@ async function main() {
     process.exit(1);
   }
 
-  // Get list of whales for this network
-  const whales = USDC_WHALES[networkName] || USDC_WHALES.localhost;
+  // Try primary whale from config first, then fall back to backup list
+  const primaryWhale = getWhaleAddress(networkName, "usdc");
+  const backupWhales = BACKUP_USDC_WHALES[networkName] || BACKUP_USDC_WHALES.localhost;
+  const allWhales = primaryWhale ? [primaryWhale, ...backupWhales] : backupWhales;
 
   logger.step(1, "Finding USDC whale with sufficient balance");
 
   let successfulWhale: string | null = null;
 
-  for (const whaleAddr of whales) {
+  for (const whaleAddr of allWhales) {
     try {
       // Properly checksum the address
       const whale = ethers.getAddress(whaleAddr);
@@ -103,9 +109,9 @@ async function main() {
 
   if (!successfulWhale) {
     logger.error("No whale found with sufficient USDC balance");
-    logger.info("Check Etherscan for current USDC holders and add to USDC_WHALES");
-    logger.info(`Optimism USDC: https://optimistic.etherscan.io/token/${chainConfig.usdc}#balances`);
-    logger.info(`Arbitrum USDC: https://arbiscan.io/token/${chainConfig.usdc}#balances`);
+    logger.info("Check Etherscan for current USDC holders and add to config/config.ts");
+    logger.info(`Optimism USDC: https://optimistic.etherscan.io/token/${usdcAddress}#balances`);
+    logger.info(`Arbitrum USDC: https://arbiscan.io/token/${usdcAddress}#balances`);
     process.exit(1);
   }
 

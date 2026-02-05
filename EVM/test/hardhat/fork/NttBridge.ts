@@ -14,19 +14,20 @@ import {
 import { Signer, parseEther, parseUnits, ContractFactory } from "ethers"
 import { ethers, network, upgrades } from "hardhat"
 import { expect } from "chai"
+import { getTokenAddress, getWhaleAddress, getChainMetadata, getWormholeChainId } from "../../../config/config"
 
-const USDC_MAINNET = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
-const USDC_WHALE = "0x37305B1cD40574E4C5Ce33f8e8306Be057fD7341"
+const USDC_MAINNET = getTokenAddress("mainnet", "usdc")
+const USDC_WHALE = getWhaleAddress("mainnet", "usdc")!
 
-// Wormhole chain ID mappings
-const ETHEREUM_CHAIN_ID = 1
-const WORMHOLE_ETHEREUM = 2
-const ARBITRUM_CHAIN_ID = 42161
-const WORMHOLE_ARBITRUM = 23
-const OPTIMISM_CHAIN_ID = 10
-const WORMHOLE_OPTIMISM = 24
-const BASE_CHAIN_ID = 8453
-const WORMHOLE_BASE = 30
+// Chain ID constants
+const ETHEREUM_CHAIN_ID = getChainMetadata("mainnet").chainId
+const WORMHOLE_ETHEREUM = getWormholeChainId(ETHEREUM_CHAIN_ID)
+const ARBITRUM_CHAIN_ID = getChainMetadata("arbitrum").chainId
+const WORMHOLE_ARBITRUM = getWormholeChainId(ARBITRUM_CHAIN_ID)
+const OPTIMISM_CHAIN_ID = getChainMetadata("optimism").chainId
+const WORMHOLE_OPTIMISM = getWormholeChainId(OPTIMISM_CHAIN_ID)
+const BASE_CHAIN_ID = getChainMetadata("base").chainId
+const WORMHOLE_BASE = getWormholeChainId(BASE_CHAIN_ID)
 
 describe("NTT Bridge Scenarios", () => {
     let Frank: Signer

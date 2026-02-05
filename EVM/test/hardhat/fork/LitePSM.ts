@@ -14,9 +14,10 @@ import {
 import { Signer, parseEther, parseUnits } from "ethers"
 import { ethers, network, upgrades } from "hardhat"
 import { expect } from "chai"
+import { getTokenAddress, getWhaleAddress } from "../../../config/config"
 
-const USDC_MAINNET = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
-const USDC_WHALE = "0x37305B1cD40574E4C5Ce33f8e8306Be057fD7341"
+const USDC_MAINNET = getTokenAddress("mainnet", "usdc")
+const USDC_WHALE = getWhaleAddress("mainnet", "usdc")!
 
 describe("LitePSM Scenarios", () => {
     let Frank: Signer

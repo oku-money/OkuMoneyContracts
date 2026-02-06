@@ -9,7 +9,7 @@ This document covers EVM-specific implementation details.
 - **Language**: Solidity 0.8.x
 - **Framework**: Foundry (Forge, Cast, Anvil)
 - **Dependencies**: OpenZeppelin Contracts (Upgradeable)
-- **Proxy Pattern**: UUPS (UUPSUpgradeable)
+- **Proxy Pattern**: TransparentUpgradeableProxy
 - **Oracle**: Chainlink AggregatorV3Interface
 
 ## Contract Structure
@@ -22,15 +22,13 @@ src/
   psm/
     LitePSM.sol             # USDC ↔ OkuUSD swaps
   bridge/
-    OkuBridgeRouter.sol     # Bridge convenience wrapper
-    adapters/
-      IOkuBridge.sol
-      INttManager.sol
-      IOFTAdapter.sol
+    OkuBridge.sol           # Cross-chain bridge (burn/mint)
+    OkuBridgeRouter.sol     # Convenience wrapper for wOkuUSD bridging
 test/
   OkuUSD.t.sol
   wOkuUSD.t.sol
   LitePSM.t.sol
+  OkuBridge.t.sol
   invariants/
     VaultInvariants.t.sol
     SupplyInvariants.t.sol
@@ -127,49 +125,133 @@ bytes32 public constant BUFFER_WITHDRAWER_ROLE = keccak256("BUFFER_WITHDRAWER_RO
 bytes32 public constant ORACLE_MANAGER_ROLE = keccak256("ORACLE_MANAGER_ROLE");
 ```
 
-## OkuBridgeRouter.sol
+## OkuBridge.sol
 
-**Inherits**: AccessControlUpgradeable, PausableUpgradeable, UUPSUpgradeable
+**Inherits**: AccessControlUpgradeable, PausableUpgradeable, ReentrancyGuardUpgradeable
 
 **Storage**:
 ```solidity
-mapping(address => bool) public supportedAdapters;  // adapter address => supported
+IOkuUSD public okuUSD;
+address public authorizedSigner;
+address public feeRecipient;
+uint256 public bridgeFee;                                    // In shares
+uint256 public minBridgeShares;
+uint256 public maxBridgeShares;
+mapping(uint256 => bool) public supportedChains;             // destChainId => supported
+mapping(uint256 => uint256) public outboundNonce;            // destChainId => nonce
+mapping(bytes32 => bool) public processedRequests;           // requestId => processed
 ```
 
-**Key implementation notes**:
-- `bridgeWrapped()`: Unwrap wOkuUSD → bridge OkuUSD
-- `bridgeDirect()`: Bridge OkuUSD directly
-- Pausable for emergency circuit-breaker functionality
-- Stateless—no funds held beyond single tx
+**EIP-712 Domain**:
+```solidity
+bytes32 public constant DOMAIN_TYPEHASH = keccak256(
+    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+);
+bytes32 public constant BRIDGE_REQUEST_TYPEHASH = keccak256(
+    "BridgeRequest(uint256 sourceChainId,uint256 destChainId,address sender,address recipient,uint256 shares,uint256 nonce,uint256 deadline)"
+);
+```
+
+**Key functions**:
+```solidity
+// Source chain: User burns shares to initiate bridge
+function bridgeBurn(
+    uint256 destChainId,
+    address recipient,
+    uint256 shares
+) external whenNotPaused nonReentrant returns (bytes32 requestId);
+
+// Destination chain: Mint shares with orchestrator signature
+function bridgeMint(
+    BridgeRequest calldata request,
+    bytes calldata signature
+) external nonReentrant;
+
+// Admin: Skip stuck nonce
+function skipNonce(uint256 destChainId) external onlyRole(BRIDGE_NONCE_ADMIN_ROLE);
+
+// Admin: Refund failed request
+function refundFailedRequest(
+    BridgeRequest calldata request,
+    bytes calldata proof
+) external onlyRole(BRIDGE_REFUND_ADMIN_ROLE);
+```
 
 **Role bytes32 constants**:
 ```solidity
-bytes32 public constant ROUTER_UPGRADER_ROLE = keccak256("ROUTER_UPGRADER_ROLE");
-bytes32 public constant ROUTER_PAUSER_ROLE = keccak256("ROUTER_PAUSER_ROLE");
-bytes32 public constant ROUTER_UNPAUSER_ROLE = keccak256("ROUTER_UNPAUSER_ROLE");
-bytes32 public constant ADAPTER_MANAGER_ROLE = keccak256("ADAPTER_MANAGER_ROLE");
+bytes32 public constant BRIDGE_SIGNER_MANAGER_ROLE = keccak256("BRIDGE_SIGNER_MANAGER_ROLE");
+bytes32 public constant BRIDGE_PAUSER_ROLE = keccak256("BRIDGE_PAUSER_ROLE");
+bytes32 public constant BRIDGE_UNPAUSER_ROLE = keccak256("BRIDGE_UNPAUSER_ROLE");
+bytes32 public constant BRIDGE_FEE_MANAGER_ROLE = keccak256("BRIDGE_FEE_MANAGER_ROLE");
+bytes32 public constant BRIDGE_NONCE_ADMIN_ROLE = keccak256("BRIDGE_NONCE_ADMIN_ROLE");
+bytes32 public constant BRIDGE_CHAIN_MANAGER_ROLE = keccak256("BRIDGE_CHAIN_MANAGER_ROLE");
+bytes32 public constant BRIDGE_LIMITS_MANAGER_ROLE = keccak256("BRIDGE_LIMITS_MANAGER_ROLE");
+bytes32 public constant BRIDGE_REFUND_ADMIN_ROLE = keccak256("BRIDGE_REFUND_ADMIN_ROLE");
 ```
+
+**Signature verification**:
+```solidity
+function _verifySignature(BridgeRequest calldata request, bytes calldata signature) internal view {
+    bytes32 structHash = keccak256(abi.encode(
+        BRIDGE_REQUEST_TYPEHASH,
+        request.sourceChainId,
+        request.destChainId,
+        request.sender,
+        request.recipient,
+        request.shares,
+        request.nonce,
+        request.deadline
+    ));
+    bytes32 digest = _hashTypedDataV4(structHash);
+    address signer = ECDSA.recover(digest, signature);
+    require(signer == authorizedSigner, "Invalid signature");
+    require(block.timestamp <= request.deadline, "Signature expired");
+}
+```
+
+## OkuBridgeRouter.sol
+
+**Inherits**: ReentrancyGuardUpgradeable (no access control needed)
+
+**Stateless convenience wrapper** for bridging wOkuUSD:
+
+```solidity
+function bridgeWrapped(
+    uint256 destChainId,
+    address recipient,
+    uint256 wokusdShares
+) external nonReentrant returns (bytes32 requestId) {
+    // 1. Transfer wOkuUSD from user
+    wOkuUSD.transferFrom(msg.sender, address(this), wokusdShares);
+    
+    // 2. Redeem wOkuUSD for OkuUSD
+    uint256 okusdShares = wOkuUSD.redeem(wokusdShares, address(this), address(this));
+    
+    // 3. Approve and call bridge
+    okuUSD.approve(address(bridge), okusdShares);
+    requestId = bridge.bridgeBurn(destChainId, recipient, okusdShares);
+}
+```
+
+No privileged roles — purely a helper contract.
 
 ## Proxy Deployment
 
-Each contract deployed behind UUPS (ERC1967Proxy):
+Each contract deployed behind TransparentUpgradeableProxy:
 
 ```solidity
 // Deploy implementation
 OkuUSD impl = new OkuUSD();
 
 // Deploy proxy
-ERC1967Proxy proxy = new ERC1967Proxy(
+TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(
     address(impl),
-    abi.encodeCall(OkuUSD.initialize, ("OkuUSD", "OKUSD", admin, maxSupply))
+    proxyAdmin,
+    abi.encodeCall(OkuUSD.initialize, (admin, pauser, ...))
 );
-
-// Proxy is now upgradeable via upgradeTo() call by UPGRADER_ROLE
 ```
 
-**Upgrade authority**: Cold Multisig (holder of UPGRADER_ROLE on each contract)
-
-**Key difference from TransparentUpgradeableProxy**: Upgrade logic is in the implementation contract itself, authorized by role-based access control rather than a separate ProxyAdmin.
+**ProxyAdmin ownership**: Cold Multisig (same entity with UPGRADER roles)
 
 ## Deterministic Deployment
 
@@ -201,6 +283,12 @@ forge test --match-contract VaultInvariants
 - Pause blocks operations, blacklist works while paused
 - Oracle staleness rejection
 - Role separation enforcement
+- Bridge: valid signature mints shares
+- Bridge: invalid/expired signature reverts
+- Bridge: replay prevention (same requestId rejected)
+- Bridge: nonce sequencing enforced
+- Bridge: fee collection and refund mechanics
+- Bridge: unsupported chain rejection
 
 ## Gas Optimization Notes
 
@@ -226,9 +314,28 @@ event RedemptionQueued(address indexed user, uint256 shares, uint256 queuePositi
 event RedemptionProcessed(address indexed user, uint256 shares, uint256 usdcAmount);
 event OracleUpdated(address oldOracle, address newOracle);
 
-// OkuBridgeRouter
-event BridgeInitiated(address indexed user, address indexed adapter, uint256 amount, uint256 destinationChain, address recipient);
-event AdapterConfigured(address indexed adapter, bool supported);
+// OkuBridge
+event BridgeBurn(
+    bytes32 indexed requestId,
+    address indexed sender,
+    address indexed recipient,
+    uint256 sourceChainId,
+    uint256 destChainId,
+    uint256 shares,
+    uint256 nonce
+);
+event BridgeMint(
+    bytes32 indexed requestId,
+    address indexed recipient,
+    uint256 sourceChainId,
+    uint256 shares
+);
+event SignerUpdated(address oldSigner, address newSigner);
+event FeeUpdated(uint256 oldFee, uint256 newFee);
+event ChainAdded(uint256 chainId);
+event ChainRemoved(uint256 chainId);
+event NonceSkipped(uint256 destChainId, uint256 skippedNonce);
+event RefundProcessed(bytes32 indexed requestId, address indexed recipient, uint256 shares);
 ```
 
 ## Dependencies

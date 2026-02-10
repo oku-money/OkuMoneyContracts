@@ -1,0 +1,457 @@
+   Compiling lite-psm v0.1.0 (/home/jbarber/gfx/okuMoney/contracts/SVM/oku-programs/programs/lite-psm)
+    Finished release [optimized] target(s) in 7.11s
+   Compiling lite-psm v0.1.0 (/home/jbarber/gfx/okuMoney/contracts/SVM/oku-programs/programs/lite-psm)
+   Compiling wokusd-vault v0.1.0 (/home/jbarber/gfx/okuMoney/contracts/SVM/oku-programs/programs/wokusd-vault)
+   Compiling oku-bridge-router v0.1.0 (/home/jbarber/gfx/okuMoney/contracts/SVM/oku-programs/programs/oku-bridge-router)
+    Finished release [optimized] target(s) in 10.93s
+   Compiling wokusd-vault v0.1.0 (/home/jbarber/gfx/okuMoney/contracts/SVM/oku-programs/programs/wokusd-vault)
+    Finished release [optimized] target(s) in 2.83s
+
+Found a 'test' script in the Anchor.toml. Running it as a test suite!
+
+Running test suite: "/home/jbarber/gfx/okuMoney/contracts/SVM/oku-programs/Anchor.toml"
+
+
+
+  Bridge Security Tests
+    Bridge Initialization
+      ✔ initializes bridge config with correct defaults
+      ✔ sets all 8 bridge authorities correctly
+    Ed25519 Signature Verification
+      1) accepts valid orchestrator signature
+      2) rejects invalid signature
+      ✔ rejects expired signature (past deadline)
+      ✔ rejects tampered message (wrong request_id)
+    Replay Attack Prevention
+      3) prevents duplicate request_id on second mint
+      4) allows different request_ids for different messages
+    Sequential Nonce Management
+      5) "before each" hook for "initializes nonce PDA on first burn to destination"
+    Bridge Fee Collection
+      6) "before all" hook for "calculates fee correctly (basis points)"
+    Chain Whitelist Validation
+      ✔ rejects burn to unsupported chain
+      ✔ allows chain_manager to add supported chain (695ms)
+      7) allows burn to supported chain after whitelisting
+      ✔ prevents duplicate chain addition
+      ✔ allows chain_manager to remove supported chain (949ms)
+      ✔ rejects add_chain from unauthorized account
+    Bridge Amount Limits
+      ✔ rejects burn below minimum amount
+      8) allows burn exactly at minimum
+      ✔ allows bridge_admin to update limits (1931ms)
+      ✔ rejects limit update with min > max
+    Bridge Pause/Unpause
+      ✔ bridge_pauser can pause bridge (965ms)
+      9) paused bridge blocks bridge_burn
+      10) paused bridge blocks bridge_mint
+      ✔ bridge_unpauser can unpause bridge (946ms)
+      ✔ bridge_pauser CANNOT unpause (1969ms)
+      11) bridge pause is independent from PSM pause
+    Bridge RBAC Enforcement
+      ✔ only bridge_admin can update orchestrator signer (1979ms)
+      ✔ rejects orchestrator update from non-admin
+      ✔ only fee_manager can update bridge fee (1962ms)
+      ✔ only bridge_admin can update fee recipient (1953ms)
+      ✔ enforces role separation for all bridge roles (2973ms)
+    End-to-End Bridge Flow
+      12) completes full burn -> mint cycle
+
+  lite-psm
+    initialize
+      13) initializes the PSM with all granular authorities
+    mint
+      14) fails to mint when paused
+    RBAC Role Separation Tests
+      pause/unpause separation
+        15) warm multisig can pause
+        16) cold multisig can unpause
+        17) warm multisig CANNOT unpause
+        ✔ cold multisig CANNOT pause
+      admin role separation
+        18) cap_manager can set max supply
+        ✔ non-cap_manager CANNOT set max supply
+        19) allowance_manager can set minter allowance
+        ✔ non-allowance_manager CANNOT set allowance
+        20) oracle_manager can set oracle
+        ✔ non-oracle_manager CANNOT set oracle
+      orchestrator role separation
+        21) "before all" hook for "buffer_depositor can deposit buffer"
+
+  oku-bridge-router
+    initialize
+      ✔ initializes the router config (959ms)
+    bridge_direct
+      22) fails when paused
+      23) fails with zero amount
+    admin functions
+      set_paused
+        ✔ allows admin to pause and unpause (1976ms)
+        ✔ fails when non-admin tries to pause
+
+  wokusd-vault
+    initialize
+      ✔ initializes the vault with granular RBAC authorities (977ms)
+    wrap
+      ✔ wraps OkuUSD -> wOkuUSD (first deposit 1:1) (986ms)
+      ✔ wraps OkuUSD -> wOkuUSD (subsequent deposit maintains ratio) (977ms)
+      ✔ fails to wrap when paused (1982ms)
+      ✔ fails to wrap zero amount
+    unwrap
+      ✔ unwraps wOkuUSD -> OkuUSD (983ms)
+      ✔ CRITICAL: allows unwrap when vault is paused (users must always be able to exit) (2948ms)
+      ✔ fails to unwrap zero shares
+      ✔ fails to unwrap more shares than owned
+    RBAC: Pause/Unpause Role Separation
+      ✔ vault_pauser (warm multisig) can pause (955ms)
+      ✔ vault_unpauser (cold multisig) can unpause (992ms)
+      ✔ vault_pauser CANNOT unpause (prevents griefing) (1965ms)
+      ✔ vault_unpauser CANNOT pause (role separation)
+      ✔ non-authority user cannot pause
+      ✔ non-authority user cannot unpause (1940ms)
+    exchange rate
+      ✔ maintains proper exchange rate after multiple operations (983ms)
+    second user operations
+      ✔ allows second user to wrap and receive proportional shares (980ms)
+      ✔ allows second user to unwrap (975ms)
+    round-trip accuracy
+      ✔ maintains accuracy on wrap -> unwrap round trip (1978ms)
+
+
+  46 passing (1m)
+  23 failing
+
+  1) Bridge Security Tests
+       Ed25519 Signature Verification
+         accepts valid orchestrator signature:
+     Error: Simulation failed. 
+Message: Transaction simulation failed: Error processing Instruction 1: custom program error: 0x1783. 
+Logs: 
+[
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX invoke [1]",
+  "Program log: Instruction: BridgeMint",
+  "Program 11111111111111111111111111111111 invoke [2]",
+  "Program 11111111111111111111111111111111 success",
+  "Program log: AnchorError thrown in programs/lite-psm/src/lib.rs:517. Error Code: InvalidRequestId. Error Number: 6019. Error Message: Request ID mismatch.",
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX consumed 28089 of 400000 compute units",
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX failed: custom program error: 0x1783"
+]. 
+Catch the `SendTransactionError` and call `getLogs()` on it for full details.
+      at Connection.sendEncodedTransaction (node_modules/@solana/web3.js/src/connection.ts:6053:13)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Connection.sendRawTransaction (node_modules/@solana/web3.js/src/connection.ts:6009:20)
+      at async sendAndConfirmRawTransaction (node_modules/@coral-xyz/anchor/src/provider.ts:370:21)
+      at async AnchorProvider.sendAndConfirm (node_modules/@coral-xyz/anchor/src/provider.ts:160:14)
+      at async Context.<anonymous> (tests/bridge_security.ts:719:7)
+
+  2) Bridge Security Tests
+       Ed25519 Signature Verification
+         rejects invalid signature:
+     AssertionError: expected 'Error: Simulation failed. \nMessage: …' to include 'InvalidSignature'
+      at expectError (tests/bridge_security.ts:270:63)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Context.<anonymous> (tests/bridge_security.ts:764:7)
+
+  3) Bridge Security Tests
+       Replay Attack Prevention
+         prevents duplicate request_id on second mint:
+     Error: Simulation failed. 
+Message: Transaction simulation failed: Error processing Instruction 1: custom program error: 0x1783. 
+Logs: 
+[
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX invoke [1]",
+  "Program log: Instruction: BridgeMint",
+  "Program 11111111111111111111111111111111 invoke [2]",
+  "Program 11111111111111111111111111111111 success",
+  "Program log: AnchorError thrown in programs/lite-psm/src/lib.rs:517. Error Code: InvalidRequestId. Error Number: 6019. Error Message: Request ID mismatch.",
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX consumed 32589 of 400000 compute units",
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX failed: custom program error: 0x1783"
+]. 
+Catch the `SendTransactionError` and call `getLogs()` on it for full details.
+      at Connection.sendEncodedTransaction (node_modules/@solana/web3.js/src/connection.ts:6053:13)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Connection.sendRawTransaction (node_modules/@solana/web3.js/src/connection.ts:6009:20)
+      at async sendAndConfirmRawTransaction (node_modules/@coral-xyz/anchor/src/provider.ts:370:21)
+      at async AnchorProvider.sendAndConfirm (node_modules/@coral-xyz/anchor/src/provider.ts:160:14)
+      at async Context.<anonymous> (tests/bridge_security.ts:888:7)
+
+  4) Bridge Security Tests
+       Replay Attack Prevention
+         allows different request_ids for different messages:
+     Error: Simulation failed. 
+Message: Transaction simulation failed: Error processing Instruction 1: custom program error: 0x1783. 
+Logs: 
+[
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX invoke [1]",
+  "Program log: Instruction: BridgeMint",
+  "Program 11111111111111111111111111111111 invoke [2]",
+  "Program 11111111111111111111111111111111 success",
+  "Program log: AnchorError thrown in programs/lite-psm/src/lib.rs:517. Error Code: InvalidRequestId. Error Number: 6019. Error Message: Request ID mismatch.",
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX consumed 29589 of 400000 compute units",
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX failed: custom program error: 0x1783"
+]. 
+Catch the `SendTransactionError` and call `getLogs()` on it for full details.
+      at Connection.sendEncodedTransaction (node_modules/@solana/web3.js/src/connection.ts:6053:13)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Connection.sendRawTransaction (node_modules/@solana/web3.js/src/connection.ts:6009:20)
+      at async sendAndConfirmRawTransaction (node_modules/@coral-xyz/anchor/src/provider.ts:370:21)
+      at async AnchorProvider.sendAndConfirm (node_modules/@coral-xyz/anchor/src/provider.ts:160:14)
+      at async Context.<anonymous> (tests/bridge_security.ts:983:7)
+
+  5) Bridge Security Tests
+       Sequential Nonce Management
+         "before each" hook for "initializes nonce PDA on first burn to destination":
+     Error: AnchorError thrown in programs/lite-psm/src/lib.rs:109. Error Code: Paused. Error Number: 6001. Error Message: Program is paused.
+      at Function.parse (node_modules/@coral-xyz/anchor/src/error.ts:151:14)
+      at translateError (node_modules/@coral-xyz/anchor/src/error.ts:276:35)
+      at MethodsBuilder.rpc (node_modules/@coral-xyz/anchor/src/program/namespace/rpc.ts:35:29)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Context.<anonymous> (tests/bridge_security.ts:1012:9)
+
+  6) Bridge Security Tests
+       Bridge Fee Collection
+         "before all" hook for "calculates fee correctly (basis points)":
+     Error: AnchorError thrown in programs/lite-psm/src/lib.rs:109. Error Code: Paused. Error Number: 6001. Error Message: Program is paused.
+      at Function.parse (node_modules/@coral-xyz/anchor/src/error.ts:151:14)
+      at translateError (node_modules/@coral-xyz/anchor/src/error.ts:276:35)
+      at MethodsBuilder.rpc (node_modules/@coral-xyz/anchor/src/program/namespace/rpc.ts:35:29)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Context.<anonymous> (tests/bridge_security.ts:1260:9)
+
+  7) Bridge Security Tests
+       Chain Whitelist Validation
+         allows burn to supported chain after whitelisting:
+     Simulation failed. 
+Message: Transaction simulation failed: Error processing Instruction 0: custom program error: 0x1. 
+Logs: 
+[
+  "Program log: Instruction: BridgeBurn",
+  "Program 11111111111111111111111111111111 invoke [2]",
+  "Program 11111111111111111111111111111111 success",
+  "Program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb invoke [2]",
+  "Program log: Instruction: Burn",
+  "Program log: Error: insufficient funds",
+  "Program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb consumed 5041 of 165279 compute units",
+  "Program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb failed: custom program error: 0x1",
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX consumed 39762 of 200000 compute units",
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX failed: custom program error: 0x1"
+]. 
+Catch the `SendTransactionError` and call `getLogs()` on it for full details.
+  
+
+  8) Bridge Security Tests
+       Bridge Amount Limits
+         allows burn exactly at minimum:
+     Simulation failed. 
+Message: Transaction simulation failed: Error processing Instruction 0: custom program error: 0x1. 
+Logs: 
+[
+  "Program log: Instruction: BridgeBurn",
+  "Program 11111111111111111111111111111111 invoke [2]",
+  "Program 11111111111111111111111111111111 success",
+  "Program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb invoke [2]",
+  "Program log: Instruction: Burn",
+  "Program log: Error: insufficient funds",
+  "Program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb consumed 5041 of 160787 compute units",
+  "Program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb failed: custom program error: 0x1",
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX consumed 44254 of 200000 compute units",
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX failed: custom program error: 0x1"
+]. 
+Catch the `SendTransactionError` and call `getLogs()` on it for full details.
+  
+
+  9) Bridge Security Tests
+       Bridge Pause/Unpause
+         paused bridge blocks bridge_burn:
+     AssertionError: expected 'Error: Simulation failed. \nMessage: …' to include 'BridgePaused'
+      at expectError (tests/bridge_security.ts:270:63)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Context.<anonymous> (tests/bridge_security.ts:1693:7)
+
+  10) Bridge Security Tests
+       Bridge Pause/Unpause
+         paused bridge blocks bridge_mint:
+     AssertionError: expected 'Error: Simulation failed. \nMessage: …' to include 'BridgePaused'
+      at expectError (tests/bridge_security.ts:270:63)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Context.<anonymous> (tests/bridge_security.ts:1753:7)
+
+  11) Bridge Security Tests
+       Bridge Pause/Unpause
+         bridge pause is independent from PSM pause:
+     Simulation failed. 
+Message: Transaction simulation failed: Error processing Instruction 0: custom program error: 0x1. 
+Logs: 
+[
+  "Program log: Instruction: BridgeBurn",
+  "Program 11111111111111111111111111111111 invoke [2]",
+  "Program 11111111111111111111111111111111 success",
+  "Program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb invoke [2]",
+  "Program log: Instruction: Burn",
+  "Program log: Error: insufficient funds",
+  "Program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb consumed 5041 of 160787 compute units",
+  "Program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb failed: custom program error: 0x1",
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX consumed 44254 of 200000 compute units",
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX failed: custom program error: 0x1"
+]. 
+Catch the `SendTransactionError` and call `getLogs()` on it for full details.
+  
+
+  12) Bridge Security Tests
+       End-to-End Bridge Flow
+         completes full burn -> mint cycle:
+     Error: AnchorError thrown in programs/lite-psm/src/lib.rs:109. Error Code: Paused. Error Number: 6001. Error Message: Program is paused.
+      at Function.parse (node_modules/@coral-xyz/anchor/src/error.ts:151:14)
+      at translateError (node_modules/@coral-xyz/anchor/src/error.ts:276:35)
+      at MethodsBuilder.rpc (node_modules/@coral-xyz/anchor/src/program/namespace/rpc.ts:35:29)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Context.<anonymous> (tests/bridge_security.ts:2092:9)
+
+  13) lite-psm
+       initialize
+         initializes the PSM with all granular authorities:
+     Simulation failed. 
+Message: Transaction simulation failed: Error processing Instruction 0: custom program error: 0x0. 
+Logs: 
+[
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX invoke [1]",
+  "Program log: Instruction: Initialize",
+  "Program 11111111111111111111111111111111 invoke [2]",
+  "Allocate: account Address { address: DFFZq7N2tNd7rfjcVjoFWBRkQ3Mxss3Nfv8EzhhwZiTF, base: None } already in use",
+  "Program 11111111111111111111111111111111 failed: custom program error: 0x0",
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX consumed 10887 of 200000 compute units",
+  "Program FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX failed: custom program error: 0x0"
+]. 
+Catch the `SendTransactionError` and call `getLogs()` on it for full details.
+  
+
+  14) lite-psm
+       mint
+         fails to mint when paused:
+     Error: AnchorError caused by account: config. Error Code: Unauthorized. Error Number: 6000. Error Message: Caller not authorized.
+Program log: Left:
+Program log: 4Ncb5t8xQaLoNUF1zX8SDPeGiZkrZYJ3w2phKVf88v2p
+Program log: Right:
+Program log: 2vFKCREEUSX2hkZ2UFeQyLgaCGDexpMeyD8AReWbs43r
+      at Function.parse (node_modules/@coral-xyz/anchor/src/error.ts:167:14)
+      at translateError (node_modules/@coral-xyz/anchor/src/error.ts:276:35)
+      at MethodsBuilder.rpc (node_modules/@coral-xyz/anchor/src/program/namespace/rpc.ts:35:29)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Context.<anonymous> (tests/lite-psm.ts:365:7)
+
+  15) lite-psm
+       RBAC Role Separation Tests
+         pause/unpause separation
+           warm multisig can pause:
+     Error: AnchorError caused by account: config. Error Code: Unauthorized. Error Number: 6000. Error Message: Caller not authorized.
+Program log: Left:
+Program log: 4Ncb5t8xQaLoNUF1zX8SDPeGiZkrZYJ3w2phKVf88v2p
+Program log: Right:
+Program log: 2vFKCREEUSX2hkZ2UFeQyLgaCGDexpMeyD8AReWbs43r
+      at Function.parse (node_modules/@coral-xyz/anchor/src/error.ts:167:14)
+      at translateError (node_modules/@coral-xyz/anchor/src/error.ts:276:35)
+      at MethodsBuilder.rpc (node_modules/@coral-xyz/anchor/src/program/namespace/rpc.ts:35:29)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Context.<anonymous> (tests/lite-psm.ts:413:9)
+
+  16) lite-psm
+       RBAC Role Separation Tests
+         pause/unpause separation
+           cold multisig can unpause:
+     Error: AnchorError caused by account: config. Error Code: Unauthorized. Error Number: 6000. Error Message: Caller not authorized.
+Program log: Left:
+Program log: 3cmrQPj17hZXoPJGip4NN8mkgXe7fybpiQDq21AxSsyf
+Program log: Right:
+Program log: 75E4pgMjDAYpu3KEUeXdUm5aySJks4hZFQwkcfBWuBmc
+      at Function.parse (node_modules/@coral-xyz/anchor/src/error.ts:167:14)
+      at translateError (node_modules/@coral-xyz/anchor/src/error.ts:276:35)
+      at MethodsBuilder.rpc (node_modules/@coral-xyz/anchor/src/program/namespace/rpc.ts:35:29)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Context.<anonymous> (tests/lite-psm.ts:427:9)
+
+  17) lite-psm
+       RBAC Role Separation Tests
+         pause/unpause separation
+           warm multisig CANNOT unpause:
+     Error: AnchorError caused by account: config. Error Code: Unauthorized. Error Number: 6000. Error Message: Caller not authorized.
+Program log: Left:
+Program log: 4Ncb5t8xQaLoNUF1zX8SDPeGiZkrZYJ3w2phKVf88v2p
+Program log: Right:
+Program log: 2vFKCREEUSX2hkZ2UFeQyLgaCGDexpMeyD8AReWbs43r
+      at Function.parse (node_modules/@coral-xyz/anchor/src/error.ts:167:14)
+      at translateError (node_modules/@coral-xyz/anchor/src/error.ts:276:35)
+      at MethodsBuilder.rpc (node_modules/@coral-xyz/anchor/src/program/namespace/rpc.ts:35:29)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Context.<anonymous> (tests/lite-psm.ts:442:9)
+
+  18) lite-psm
+       RBAC Role Separation Tests
+         admin role separation
+           cap_manager can set max supply:
+     Error: AnchorError caused by account: config. Error Code: Unauthorized. Error Number: 6000. Error Message: Caller not authorized.
+Program log: Left:
+Program log: 3cmrQPj17hZXoPJGip4NN8mkgXe7fybpiQDq21AxSsyf
+Program log: Right:
+Program log: 75E4pgMjDAYpu3KEUeXdUm5aySJks4hZFQwkcfBWuBmc
+      at Function.parse (node_modules/@coral-xyz/anchor/src/error.ts:167:14)
+      at translateError (node_modules/@coral-xyz/anchor/src/error.ts:276:35)
+      at MethodsBuilder.rpc (node_modules/@coral-xyz/anchor/src/program/namespace/rpc.ts:35:29)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Context.<anonymous> (tests/lite-psm.ts:503:9)
+
+  19) lite-psm
+       RBAC Role Separation Tests
+         admin role separation
+           allowance_manager can set minter allowance:
+     Error: AnchorError caused by account: config. Error Code: Unauthorized. Error Number: 6000. Error Message: Caller not authorized.
+Program log: Left:
+Program log: 3cmrQPj17hZXoPJGip4NN8mkgXe7fybpiQDq21AxSsyf
+Program log: Right:
+Program log: 75E4pgMjDAYpu3KEUeXdUm5aySJks4hZFQwkcfBWuBmc
+      at Function.parse (node_modules/@coral-xyz/anchor/src/error.ts:167:14)
+      at translateError (node_modules/@coral-xyz/anchor/src/error.ts:276:35)
+      at MethodsBuilder.rpc (node_modules/@coral-xyz/anchor/src/program/namespace/rpc.ts:35:29)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Context.<anonymous> (tests/lite-psm.ts:545:9)
+
+  20) lite-psm
+       RBAC Role Separation Tests
+         admin role separation
+           oracle_manager can set oracle:
+     Error: AnchorError caused by account: config. Error Code: Unauthorized. Error Number: 6000. Error Message: Caller not authorized.
+Program log: Left:
+Program log: 3cmrQPj17hZXoPJGip4NN8mkgXe7fybpiQDq21AxSsyf
+Program log: Right:
+Program log: 75E4pgMjDAYpu3KEUeXdUm5aySJks4hZFQwkcfBWuBmc
+      at Function.parse (node_modules/@coral-xyz/anchor/src/error.ts:167:14)
+      at translateError (node_modules/@coral-xyz/anchor/src/error.ts:276:35)
+      at MethodsBuilder.rpc (node_modules/@coral-xyz/anchor/src/program/namespace/rpc.ts:35:29)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Context.<anonymous> (tests/lite-psm.ts:578:9)
+
+  21) lite-psm
+       RBAC Role Separation Tests
+         orchestrator role separation
+           "before all" hook for "buffer_depositor can deposit buffer":
+     Error: AnchorError caused by account: buffer_depositor. Error Code: Unauthorized. Error Number: 6000. Error Message: Caller not authorized.
+      at Function.parse (node_modules/@coral-xyz/anchor/src/error.ts:167:14)
+      at translateError (node_modules/@coral-xyz/anchor/src/error.ts:276:35)
+      at MethodsBuilder.rpc (node_modules/@coral-xyz/anchor/src/program/namespace/rpc.ts:35:29)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+      at async Context.<anonymous> (tests/lite-psm.ts:665:9)
+
+  22) oku-bridge-router
+       bridge_direct
+         fails when paused:
+     AssertionError: expected 'Error: Invalid arguments: user not pr…' to include 'Paused'
+      at Context.<anonymous> (tests/oku-bridge-router.ts:197:30)
+      at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+
+  23) oku-bridge-router
+       bridge_direct
+         fails with zero amount:
+     AssertionError: expected 'Error: Invalid arguments: user not pr…' to include 'ZeroAmount'
+      at Context.<anonymous> (tests/oku-bridge-router.ts:229:30)
+
+
+

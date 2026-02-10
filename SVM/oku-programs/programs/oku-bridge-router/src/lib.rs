@@ -31,9 +31,11 @@ pub mod oku_bridge_router {
     /// Bridge wOkuUSD cross-chain in one transaction
     /// 1. Unwraps wOkuUSD -> OkuUSD via vault program
     /// 2. Burns OkuUSD via PSM bridge_burn
+    /// NOTE: This router needs updating for secure bridge - see NEEDS_UPDATE.md
     pub fn bridge_wrapped(
         ctx: Context<BridgeWrapped>,
         wokusd_shares: u64,
+        recipient: [u8; 20],      // EVM address on destination
         destination_chain: u16,
     ) -> Result<()> {
         let is_paused = ctx.accounts.config.is_paused;
@@ -67,13 +69,17 @@ pub mod oku_bridge_router {
             ctx.accounts.psm_program.to_account_info(),
             lite_psm::cpi::accounts::BridgeBurn {
                 user: ctx.accounts.user.to_account_info(),
+                bridge_config: ctx.accounts.bridge_config.to_account_info(),
                 config: ctx.accounts.psm_config.to_account_info(),
+                bridge_nonce: ctx.accounts.bridge_nonce.to_account_info(),
                 okusd_mint: ctx.accounts.okusd_mint.to_account_info(),
                 user_okusd_ata: ctx.accounts.user_okusd_ata.to_account_info(),
+                fee_recipient_ata: ctx.accounts.fee_recipient_ata.to_account_info(),
                 token_2022_program: ctx.accounts.token_2022_program.to_account_info(),
+                system_program: ctx.accounts.system_program.to_account_info(),
             },
         );
-        lite_psm::cpi::bridge_burn(bridge_burn_cpi_ctx, okusd_balance, destination_chain)?;
+        lite_psm::cpi::bridge_burn(bridge_burn_cpi_ctx, okusd_balance, recipient, destination_chain)?;
 
         emit!(BridgeWrappedEvent {
             user: ctx.accounts.user.key(),
@@ -86,9 +92,11 @@ pub mod oku_bridge_router {
     }
 
     /// Bridge OkuUSD directly (convenience wrapper for PSM bridge_burn)
+    /// NOTE: This router needs updating for secure bridge - see NEEDS_UPDATE.md
     pub fn bridge_direct(
         ctx: Context<BridgeDirect>,
         okusd_amount: u64,
+        recipient: [u8; 20],      // EVM address on destination
         destination_chain: u16,
     ) -> Result<()> {
         let is_paused = ctx.accounts.config.is_paused;
@@ -100,13 +108,17 @@ pub mod oku_bridge_router {
             ctx.accounts.psm_program.to_account_info(),
             lite_psm::cpi::accounts::BridgeBurn {
                 user: ctx.accounts.user.to_account_info(),
+                bridge_config: ctx.accounts.bridge_config.to_account_info(),
                 config: ctx.accounts.psm_config.to_account_info(),
+                bridge_nonce: ctx.accounts.bridge_nonce.to_account_info(),
                 okusd_mint: ctx.accounts.okusd_mint.to_account_info(),
                 user_okusd_ata: ctx.accounts.user_okusd_ata.to_account_info(),
+                fee_recipient_ata: ctx.accounts.fee_recipient_ata.to_account_info(),
                 token_2022_program: ctx.accounts.token_2022_program.to_account_info(),
+                system_program: ctx.accounts.system_program.to_account_info(),
             },
         );
-        lite_psm::cpi::bridge_burn(bridge_burn_cpi_ctx, okusd_amount, destination_chain)?;
+        lite_psm::cpi::bridge_burn(bridge_burn_cpi_ctx, okusd_amount, recipient, destination_chain)?;
 
         emit!(BridgeDirectEvent {
             user: ctx.accounts.user.key(),
@@ -234,8 +246,19 @@ pub struct BridgeWrapped<'info> {
     pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
 
     // PSM program accounts
+    /// CHECK: Bridge config PDA - validated by PSM program CPI
+    pub bridge_config: UncheckedAccount<'info>,
+
     /// CHECK: PSM config PDA - validated by PSM program CPI
     pub psm_config: UncheckedAccount<'info>,
+
+    /// CHECK: Bridge nonce PDA - validated by PSM program CPI
+    #[account(mut)]
+    pub bridge_nonce: UncheckedAccount<'info>,
+
+    /// CHECK: Fee recipient ATA - validated by PSM program CPI
+    #[account(mut)]
+    pub fee_recipient_ata: UncheckedAccount<'info>,
 
     /// CHECK: Vault program
     #[account(address = config.vault_program)]
@@ -262,8 +285,15 @@ pub struct BridgeDirect<'info> {
     )]
     pub config: Account<'info, RouterConfig>,
 
+    /// CHECK: Bridge config PDA - validated by PSM program CPI
+    pub bridge_config: UncheckedAccount<'info>,
+
     /// CHECK: PSM config PDA - validated by PSM program CPI
     pub psm_config: UncheckedAccount<'info>,
+
+    /// CHECK: Bridge nonce PDA - validated by PSM program CPI
+    #[account(mut)]
+    pub bridge_nonce: UncheckedAccount<'info>,
 
     /// OkuUSD mint (Token-2022)
     #[account(mut)]
@@ -273,11 +303,16 @@ pub struct BridgeDirect<'info> {
     #[account(mut)]
     pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
 
+    /// CHECK: Fee recipient ATA - validated by PSM program CPI
+    #[account(mut)]
+    pub fee_recipient_ata: UncheckedAccount<'info>,
+
     /// CHECK: PSM program
     #[account(address = config.psm_program)]
     pub psm_program: UncheckedAccount<'info>,
 
     pub token_2022_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]

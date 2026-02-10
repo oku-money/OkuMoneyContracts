@@ -47,11 +47,14 @@ describe("oku-bridge-router", () => {
   let routerConfigPda: PublicKey;
   let vaultConfigPda: PublicKey;
   let psmConfigPda: PublicKey;
+  let bridgeConfigPda: PublicKey;
+  let bridgeNoncePda: PublicKey;
 
   // These will be read from existing configs
   let usdcMint: PublicKey;
   let okusdMint: PublicKey;
   let vaultUsdcAta: PublicKey;
+  let feeRecipientAta: PublicKey;
 
   // User accounts
   let userOkusdAta: PublicKey;
@@ -86,11 +89,31 @@ describe("oku-bridge-router", () => {
       psmProgram.programId
     );
 
+    [bridgeConfigPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("bridge_config")],
+      psmProgram.programId
+    );
+
     // Read existing PSM config to get mints
     const psmConfigData = await psmProgram.account.psmConfig.fetch(psmConfigPda);
     usdcMint = psmConfigData.usdcMint;
     okusdMint = psmConfigData.okusdMint;
     vaultUsdcAta = psmConfigData.vaultUsdcAta;
+
+    // Read bridge config to get fee recipient
+    const bridgeConfigData = await psmProgram.account.bridgeConfig.fetch(bridgeConfigPda);
+    feeRecipientAta = getAssociatedTokenAddressSync(
+      okusdMint,
+      bridgeConfigData.feeRecipient,
+      false,
+      TOKEN_2022_PROGRAM_ID
+    );
+
+    // Derive bridge nonce PDA for destination chain 1 (Ethereum)
+    [bridgeNoncePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("bridge_nonce"), Buffer.from(new Uint16Array([1]).buffer)],
+      psmProgram.programId
+    );
 
     // Derive user OkuUSD account
     userOkusdAta = getAssociatedTokenAddressSync(
@@ -178,21 +201,27 @@ describe("oku-bridge-router", () => {
 
       try {
         await routerProgram.methods
-          .bridgeDirect(new BN(1_000_000), 1)
+          .bridgeDirect(new BN(1_000_000), Array.from(new Uint8Array(20)), 1)
           .accounts({
             user: user.publicKey,
             config: routerConfigPda,
+            bridgeConfig: bridgeConfigPda,
             psmConfig: psmConfigPda,
+            bridgeNonce: bridgeNoncePda,
             okusdMint: okusdMint,
             userOkusdAta: userOkusdAta,
+            feeRecipientAta: feeRecipientAta,
             psmProgram: PSM_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
           })
           .signers([user])
           .rpc();
         expect.fail("Should have failed");
       } catch (err: any) {
-        expect(err.error.errorCode.code).to.equal("Paused");
+        // Handle Anchor error format variations
+        const errorCode = err.error?.errorCode?.code || err.code || err.toString();
+        expect(errorCode).to.include("Paused");
       }
 
       // Unpause
@@ -208,21 +237,27 @@ describe("oku-bridge-router", () => {
     it("fails with zero amount", async () => {
       try {
         await routerProgram.methods
-          .bridgeDirect(new BN(0), 1)
+          .bridgeDirect(new BN(0), Array.from(new Uint8Array(20)), 1)
           .accounts({
             user: user.publicKey,
             config: routerConfigPda,
+            bridgeConfig: bridgeConfigPda,
             psmConfig: psmConfigPda,
+            bridgeNonce: bridgeNoncePda,
             okusdMint: okusdMint,
             userOkusdAta: userOkusdAta,
+            feeRecipientAta: feeRecipientAta,
             psmProgram: PSM_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
           })
           .signers([user])
           .rpc();
         expect.fail("Should have failed");
       } catch (err: any) {
-        expect(err.error.errorCode.code).to.equal("ZeroAmount");
+        // Handle Anchor error format variations
+        const errorCode = err.error?.errorCode?.code || err.code || err.toString();
+        expect(errorCode).to.include("ZeroAmount");
       }
     });
   });

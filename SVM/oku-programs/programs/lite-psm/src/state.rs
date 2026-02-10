@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use crate::errors::OkuError;
 
 /// PSM configuration PDA
 /// Seeds: ["psm_config"]
@@ -136,4 +137,132 @@ pub struct QueueEntry {
 impl QueueEntry {
     /// Space for a single queue entry: 32 + 8 + 8 = 48 bytes
     pub const LEN: usize = 32 + 8 + 8;
+}
+
+/// Bridge configuration PDA
+/// Seeds: ["bridge_config"]
+#[account]
+pub struct BridgeConfig {
+    /// PDA bump seed
+    pub bump: u8,
+
+    // ===== Bridge-Specific Authorities (8 roles, separate from PSM) =====
+    /// Bridge admin - manages bridge roles
+    pub bridge_admin: Pubkey,
+    /// Bridge pauser - emergency pause
+    pub bridge_pauser: Pubkey,
+    /// Bridge unpauser - unpause
+    pub bridge_unpauser: Pubkey,
+    /// Orchestrator signer - Ed25519 public key for signature verification
+    pub orchestrator_signer: Pubkey,
+    /// Fee recipient - receives bridge fees
+    pub fee_recipient: Pubkey,
+    /// Chain manager - add/remove supported chains
+    pub chain_manager: Pubkey,
+    /// Fee manager - update fee configuration
+    pub fee_manager: Pubkey,
+    /// Nonce admin - emergency nonce management
+    pub nonce_admin: Pubkey,
+
+    // ===== Configuration =====
+    /// Bridge fee in basis points (10 = 0.1%)
+    pub bridge_fee_bps: u16,
+    /// Minimum bridge amount
+    pub min_bridge_amount: u64,
+    /// Maximum bridge amount
+    pub max_bridge_amount: u64,
+    /// Whether bridge is paused
+    pub is_paused: bool,
+
+    // ===== Chain Whitelist =====
+    /// Supported destination chain IDs (fixed array, max 32 chains)
+    pub supported_chains: [u16; 32],
+    /// Number of active chains in the array
+    pub supported_chains_count: u8,
+}
+
+impl BridgeConfig {
+    pub const SEED: &'static [u8] = b"bridge_config";
+
+    /// Space needed for BridgeConfig account
+    /// 8 (discriminator) + 1 (bump) + 32*8 (authority pubkeys) + 2 (fee_bps) + 8*2 (min/max amounts) + 1 (is_paused) + 2*32 (chain array) + 1 (chain count)
+    /// = 8 + 1 + 256 + 2 + 16 + 1 + 64 + 1 = 349 bytes
+    pub const LEN: usize = 8 + 1 + 32 * 8 + 2 + 8 * 2 + 1 + 2 * 32 + 1;
+
+    /// Check if a chain is supported
+    pub fn is_chain_supported(&self, chain_id: u16) -> bool {
+        self.supported_chains[..self.supported_chains_count as usize]
+            .contains(&chain_id)
+    }
+
+    /// Add a supported chain (returns error if full or already exists)
+    pub fn add_chain(&mut self, chain_id: u16) -> Result<()> {
+        require!(!self.is_chain_supported(chain_id), OkuError::ChainAlreadySupported);
+        require!(self.supported_chains_count < 32, OkuError::ChainListFull);
+
+        self.supported_chains[self.supported_chains_count as usize] = chain_id;
+        self.supported_chains_count += 1;
+        Ok(())
+    }
+
+    /// Remove a supported chain
+    pub fn remove_chain(&mut self, chain_id: u16) -> Result<()> {
+        let count = self.supported_chains_count as usize;
+        for i in 0..count {
+            if self.supported_chains[i] == chain_id {
+                // Shift remaining elements left
+                for j in i..count - 1 {
+                    self.supported_chains[j] = self.supported_chains[j + 1];
+                }
+                self.supported_chains[count - 1] = 0;
+                self.supported_chains_count -= 1;
+                return Ok(());
+            }
+        }
+        Err(error!(OkuError::ChainNotFound))
+    }
+}
+
+/// Bridge nonce tracking PDA (one per destination chain)
+/// Seeds: ["bridge_nonce", destination_chain_id.to_le_bytes()]
+#[account]
+pub struct BridgeNonce {
+    /// PDA bump seed
+    pub bump: u8,
+    /// Destination chain ID
+    pub destination_chain: u16,
+    /// Next sequential nonce for this destination
+    pub next_nonce: u64,
+}
+
+impl BridgeNonce {
+    pub const SEED: &'static [u8] = b"bridge_nonce";
+
+    /// Space needed for BridgeNonce account
+    /// 8 (discriminator) + 1 (bump) + 2 (chain_id) + 8 (nonce) = 19 bytes
+    pub const LEN: usize = 8 + 1 + 2 + 8;
+}
+
+/// Processed bridge request PDA (prevents replay attacks)
+/// Seeds: ["bridge_request", request_id]
+#[account]
+pub struct ProcessedRequest {
+    /// PDA bump seed
+    pub bump: u8,
+    /// Request ID (keccak256 hash of request data)
+    pub request_id: [u8; 32],
+    /// Timestamp when processed
+    pub processed_at: i64,
+    /// Recipient who received tokens
+    pub recipient: Pubkey,
+    /// Amount minted
+    pub amount: u64,
+}
+
+impl ProcessedRequest {
+    pub const SEED: &'static [u8] = b"bridge_request";
+
+    /// Space needed for ProcessedRequest account
+    /// 8 (discriminator) + 1 (bump) + 32 (request_id) + 8 (timestamp) + 32 (recipient) + 8 (amount) = 89 bytes
+    pub const LEN: usize = 8 + 1 + 32 + 8 + 32 + 8;
 }

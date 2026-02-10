@@ -34,4 +34,32 @@ pub enum OkuError {
     OracleAccountMissing,
     #[msg("Invalid oracle response")]
     InvalidOracleResponse,
+
+    // ===== Bridge-Specific Errors =====
+    #[msg("Bridge is paused")]
+    BridgePaused,
+    #[msg("Signature has expired")]
+    SignatureExpired,
+    #[msg("Invalid Ed25519 signature")]
+    InvalidSignature,
+    #[msg("Recipient account does not match parameter")]
+    InvalidRecipient,
+    #[msg("Request ID mismatch")]
+    InvalidRequestId,
+    #[msg("Wrong destination chain")]
+    WrongDestinationChain,
+    #[msg("Chain not supported")]
+    UnsupportedChain,
+    #[msg("Request already processed")]
+    RequestAlreadyProcessed,
+    #[msg("Amount below minimum")]
+    BelowMinimum,
+    #[msg("Amount above maximum")]
+    AboveMaximum,
+    #[msg("Chain already supported")]
+    ChainAlreadySupported,
+    #[msg("Chain list is full (max 32)")]
+    ChainListFull,
+    #[msg("Chain not found in supported list")]
+    ChainNotFound,
 }

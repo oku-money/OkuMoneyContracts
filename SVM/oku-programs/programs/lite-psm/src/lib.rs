@@ -10,7 +10,7 @@ pub mod errors;
 pub mod state;
 
 use errors::OkuError;
-use state::{BridgeConfig, BridgeNonce, ProcessedRequest, PsmConfig, QueueEntry, RedemptionQueue};
+use state::{BridgeConfig, BridgeNonce, BridgeRequest, ProcessedRequest, PsmConfig, QueueEntry, RedemptionQueue};
 
 declare_id!("FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX");
 
@@ -452,15 +452,13 @@ pub mod lite_psm {
     /// Prevents replay attacks via request_id tracking
     pub fn bridge_mint(
         ctx: Context<BridgeMint>,
-        source_chain_id: u16,
-        destination_chain_id: u16,
-        sender: [u8; 20],         // EVM address (20 bytes)
-        recipient: Pubkey,        // Recipient ATA address for message reconstruction
-        amount: u64,
-        nonce: u64,
-        deadline: i64,
-        request_id: [u8; 32],     // Keccak256 hash for replay prevention
+        message_bytes: Vec<u8>,    // Raw serialized BridgeRequest (80 bytes)
+        signature: Vec<u8>,         // Ed25519 signature (64 bytes)
     ) -> Result<()> {
+        // 1. Validate lengths
+        require!(message_bytes.len() == 80, OkuError::InvalidMessageLength);
+        require!(signature.len() == 64, OkuError::InvalidSignature);
+
         // Read state
         let bridge_config = &ctx.accounts.bridge_config;
         let is_bridge_paused = bridge_config.is_paused;
@@ -470,91 +468,63 @@ pub mod lite_psm {
         let config_bump = ctx.accounts.config.bump;
         let current_supply = ctx.accounts.okusd_mint.supply;
 
-        // 1. Check bridge and PSM not paused
+        // 2. Check bridge and PSM not paused
         require!(!is_bridge_paused, OkuError::BridgePaused);
         require!(!is_psm_paused, OkuError::Paused);
-        require!(amount > 0, OkuError::ZeroAmount);
 
-        // 2. Verify destination chain matches Solana
-        // Note: destination_chain_id should be set to Solana's chain ID
-        // This check prevents minting tokens meant for other chains
-        // (In practice, orchestrator should never sign for wrong chain)
-
-        // 3. Check deadline not expired
-        let clock = Clock::get()?;
-        require!(clock.unix_timestamp <= deadline, OkuError::SignatureExpired);
-
-        // 4. Verify request not already processed (replay prevention)
-        // The init constraint on processed_request will fail if request_id already exists
-        // This is handled by the Anchor framework via the init constraint
-
-        // 5. Validate amount within limits
-        require!(
-            amount >= bridge_config.min_bridge_amount,
-            OkuError::BelowMinimum
-        );
-        require!(
-            amount <= bridge_config.max_bridge_amount,
-            OkuError::AboveMaximum
-        );
-
-        // 6. Verify recipient account matches parameter
-        require!(
-            ctx.accounts.recipient_okusd_ata.key() == recipient,
-            OkuError::InvalidRecipient
-        );
-
-        // 7. Verify Ed25519 signature
-        // Message format (must match orchestrator signing):
-        // source_chain_id (u16) || destination_chain_id (u16) ||
-        // sender (20 bytes) || recipient (32 bytes) ||
-        // amount (u64) || nonce (u64) || deadline (i64)
-        let recipient_bytes = recipient.to_bytes();
-
-        let mut message = Vec::with_capacity(2 + 2 + 20 + 32 + 8 + 8 + 8);
-        message.extend_from_slice(&source_chain_id.to_le_bytes());
-        message.extend_from_slice(&destination_chain_id.to_le_bytes());
-        message.extend_from_slice(&sender);
-        message.extend_from_slice(&recipient_bytes);
-        message.extend_from_slice(&amount.to_le_bytes());
-
-        msg!("DEBUG: Message components:");
-        msg!("  source_chain_id: {}", source_chain_id);
-        msg!("  destination_chain_id: {}", destination_chain_id);
-        msg!("  sender: {:?}", sender);
-        msg!("  recipient_bytes: {:?}", recipient_bytes);
-        msg!("  amount: {}", amount);
-        message.extend_from_slice(&nonce.to_le_bytes());
-        message.extend_from_slice(&deadline.to_le_bytes());
-
-        // 8. Verify request_id matches keccak256(message)
-        let computed_request_id = anchor_lang::solana_program::keccak::hash(&message).to_bytes();
-        msg!("DEBUG: Rust computed request_id: {:?}", computed_request_id);
-        msg!("DEBUG: TypeScript provided request_id: {:?}", request_id);
-        msg!("DEBUG: Message length: {}", message.len());
-        msg!("DEBUG: Recipient parameter: {:?}", recipient);
-        require!(computed_request_id == request_id, OkuError::InvalidRequestId);
-
-        // 9. Verify Ed25519 signature via instruction introspection
-        // The signature must be provided via Ed25519Program instruction in the same transaction
+        // 3. Verify Ed25519 signature over raw bytes (BEFORE parsing)
         verify_ed25519_signature(
             &ctx.accounts.instruction_sysvar,
             &bridge_config.orchestrator_signer.to_bytes(),
-            &message,
+            &message_bytes,
             &ctx.accounts.ed25519_program,
         )?;
 
-        // 10. Check PSM allowance and max supply
-        require!(amount <= minter_allowance, OkuError::AllowanceExceeded);
+        // 4. Parse message AFTER signature verified
+        let request = BridgeRequest::try_from_slice(&message_bytes)?;
+
+        // 5. Validate deadline
+        let clock = Clock::get()?;
+        require!(clock.unix_timestamp <= request.deadline, OkuError::SignatureExpired);
+
+        // 6. Validate amount
+        require!(request.amount > 0, OkuError::ZeroAmount);
         require!(
-            current_supply.checked_add(amount).ok_or(OkuError::Overflow)? <= max_supply,
+            request.amount >= bridge_config.min_bridge_amount,
+            OkuError::BelowMinimum
+        );
+        require!(
+            request.amount <= bridge_config.max_bridge_amount,
+            OkuError::AboveMaximum
+        );
+
+        // 7. Convert recipient bytes to Pubkey
+        let recipient_pubkey = Pubkey::new_from_array(request.recipient);
+
+        // 8. Validate recipient matches passed account (SECURITY FIX)
+        require!(
+            recipient_pubkey == ctx.accounts.recipient_okusd_ata.key(),
+            OkuError::InvalidRecipient
+        );
+
+        // 9. Calculate request_id from message bytes
+        let request_id = anchor_lang::solana_program::keccak::hash(&message_bytes).to_bytes();
+
+        // 10. Verify request not already processed (replay prevention)
+        // The init constraint on processed_request will fail if request_id already exists
+
+        // 11. Check PSM allowance and max supply
+        require!(request.amount <= minter_allowance, OkuError::AllowanceExceeded);
+        require!(
+            current_supply.checked_add(request.amount).ok_or(OkuError::Overflow)? <= max_supply,
             OkuError::MaxSupplyExceeded
         );
 
-        // 11. Mint OkuUSD to recipient
+        // 12. Mint OkuUSD to recipient
         let seeds = &[PsmConfig::SEED, &[config_bump]];
         let signer = &[&seeds[..]];
 
+        // 13. Mint tokens to recipient
         token_interface::mint_to(
             CpiContext::new_with_signer(
                 ctx.accounts.token_2022_program.to_account_info(),
@@ -565,30 +535,30 @@ pub mod lite_psm {
                 },
                 signer,
             ),
-            amount,
+            request.amount,
         )?;
 
-        // 11. Decrement minter allowance
+        // 14. Decrement minter allowance
         let config = &mut ctx.accounts.config;
         config.minter_allowance = minter_allowance
-            .checked_sub(amount)
+            .checked_sub(request.amount)
             .ok_or(OkuError::Overflow)?;
 
-        // 12. Create ProcessedRequest PDA
+        // 15. Create ProcessedRequest PDA
         let processed_request = &mut ctx.accounts.processed_request;
         processed_request.bump = ctx.bumps.processed_request;
         processed_request.request_id = request_id;
         processed_request.processed_at = clock.unix_timestamp;
         processed_request.recipient = ctx.accounts.recipient_okusd_ata.key();
-        processed_request.amount = amount;
+        processed_request.amount = request.amount;
 
-        // 13. Emit event
+        // 16. Emit event
         emit!(BridgeMintEvent {
             request_id,
-            source_chain_id,
+            source_chain_id: request.source_chain_id,
             recipient: ctx.accounts.recipient_okusd_ata.key(),
-            amount,
-            nonce,
+            amount: request.amount,
+            nonce: request.nonce,
         });
 
         Ok(())
@@ -1376,20 +1346,44 @@ fn verify_ed25519_signature<'info>(
     let data = &ed25519_ix.data;
     require!(data.len() >= 112, OkuError::InvalidSignature); // Minimum: header (14) + sig (64) + pubkey (32) + message (2)
 
-    // Extract signature (starts at offset 14, 64 bytes)
-    let signature_offset = 14;
-    let _signature = &data[signature_offset..signature_offset + 64];
+    // DEBUG: Log header
+    msg!("Ed25519 instruction data length: {}", data.len());
+    msg!("num_signatures: {}", data[0]);
+    msg!("signature_offset: {}", u16::from_le_bytes([data[2], data[3]]));
+    msg!("pubkey_offset: {}", u16::from_le_bytes([data[6], data[7]]));
+    msg!("message_offset: {}", u16::from_le_bytes([data[10], data[11]]));
+    msg!("message_size: {}", u16::from_le_bytes([data[12], data[13]]));
 
-    // Extract public key (starts after signature, 32 bytes)
-    let pubkey_offset = signature_offset + 64;
+    // Read offsets from header
+    let sig_offset = u16::from_le_bytes([data[2], data[3]]) as usize;
+    let pubkey_offset = u16::from_le_bytes([data[6], data[7]]) as usize;
+    let msg_offset = u16::from_le_bytes([data[10], data[11]]) as usize;
+    let msg_size = u16::from_le_bytes([data[12], data[13]]) as usize;
+
+    // Extract signature (64 bytes)
+    require!(sig_offset + 64 <= data.len(), OkuError::InvalidSignature);
+    let _signature = &data[sig_offset..sig_offset + 64];
+
+    // Extract public key (32 bytes)
+    require!(pubkey_offset + 32 <= data.len(), OkuError::InvalidSignature);
     let pubkey = &data[pubkey_offset..pubkey_offset + 32];
+
+    // DEBUG: Log public key comparison
+    msg!("Expected pubkey: {:?}", expected_pubkey);
+    msg!("Ed25519Ix pubkey: {:?}", pubkey);
 
     // Verify public key matches expected orchestrator signer
     require!(pubkey == expected_pubkey, OkuError::InvalidSignature);
 
-    // Extract message (starts after pubkey)
-    let message_offset = pubkey_offset + 32;
-    let ix_message = &data[message_offset..];
+    // Extract message (using offset from header)
+    require!(msg_offset + msg_size <= data.len(), OkuError::InvalidSignature);
+    let ix_message = &data[msg_offset..msg_offset + msg_size];
+
+    // DEBUG: Log message comparison
+    msg!("Expected message length: {}", message.len());
+    msg!("Ed25519Ix message length: {}", ix_message.len());
+    msg!("Expected message (first 20 bytes): {:?}", &message[..20.min(message.len())]);
+    msg!("Ed25519Ix message (first 20 bytes): {:?}", &ix_message[..20.min(ix_message.len())]);
 
     // Verify message matches expected message
     require!(ix_message == message, OkuError::InvalidSignature);
@@ -1763,15 +1757,7 @@ pub struct WithdrawBuffer<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(
-    source_chain_id: u16,
-    destination_chain_id: u16,
-    sender: [u8; 20],
-    amount: u64,
-    nonce: u64,
-    deadline: i64,
-    request_id: [u8; 32]
-)]
+#[instruction(message_bytes: Vec<u8>)]
 pub struct BridgeMint<'info> {
     /// Payer for ProcessedRequest PDA creation
     #[account(mut)]
@@ -1793,11 +1779,15 @@ pub struct BridgeMint<'info> {
     pub config: Account<'info, PsmConfig>,
 
     /// ProcessedRequest PDA (prevents replay attacks)
+    /// Seeds are derived from keccak256(message_bytes)
     #[account(
         init,
         payer = payer,
         space = ProcessedRequest::LEN,
-        seeds = [ProcessedRequest::SEED, &request_id],
+        seeds = [
+            ProcessedRequest::SEED,
+            &anchor_lang::solana_program::keccak::hash(&message_bytes).to_bytes()
+        ],
         bump
     )]
     pub processed_request: Account<'info, ProcessedRequest>,
@@ -1810,7 +1800,7 @@ pub struct BridgeMint<'info> {
     )]
     pub okusd_mint: InterfaceAccount<'info, MintInterface>,
 
-    /// Recipient's OkuUSD account
+    /// Recipient's OkuUSD account (will validate owner in function body)
     #[account(
         mut,
         token::mint = okusd_mint,

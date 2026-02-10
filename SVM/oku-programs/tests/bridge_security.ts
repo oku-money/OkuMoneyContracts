@@ -184,17 +184,12 @@ describe("Bridge Security Tests", () => {
     recipientAta: PublicKey; // The EXACT ATA used in message signing
     payer: Keypair;
     requestId: Uint8Array;
-    sourceChainId: number;
-    destinationChainId: number;
-    sender: Uint8Array;
-    amount: bigint;
-    nonce: bigint;
-    deadline: bigint;
   }): Promise<Transaction> {
     // Ed25519Program instruction MUST come first
+    console.log("Creating Ed25519 instruction with orchestrator pubkey:", params.orchestrator.publicKey.toString());
     const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
       publicKey: params.orchestrator.publicKey.toBytes(),
-      message: params.message,
+      message: new Uint8Array(params.message),  // Convert Buffer to Uint8Array
       signature: params.signature,
     });
 
@@ -205,26 +200,18 @@ describe("Bridge Security Tests", () => {
       params.program.programId
     );
 
-    // Create recipient ATA if needed
-    // The ATA should already exist from the before hook, but check to be safe
+    // Verify the recipient ATA exists
     try {
       await getAccount(provider.connection, params.recipientAta, undefined, TOKEN_2022_PROGRAM_ID);
     } catch {
-      // ATA doesn't exist - this shouldn't happen in tests but handle it gracefully
       throw new Error(`Recipient ATA ${params.recipientAta.toString()} does not exist. Create it in the test setup.`);
     }
 
-    // Bridge mint instruction
+    // Bridge mint instruction - pass message_bytes and signature as Buffer
     const bridgeMintIx = await params.program.methods
       .bridgeMint(
-        params.sourceChainId,
-        params.destinationChainId,
-        Array.from(params.sender),
-        params.recipientAta, // Add recipient parameter
-        new BN(params.amount.toString()),
-        new BN(params.nonce.toString()),
-        new BN(params.deadline.toString()),
-        Array.from(params.requestId)
+        params.message,    // Buffer (bytes type in IDL)
+        Buffer.from(params.signature)   // Buffer (bytes type in IDL)
       )
       .accounts({
         payer: params.payer.publicKey,
@@ -232,7 +219,7 @@ describe("Bridge Security Tests", () => {
         config: configPda,
         processedRequest: processedRequestPda,
         okusdMint: okusdMint,
-        recipientOkusdAta: params.recipientAta, // Use the exact ATA from params
+        recipientOkusdAta: params.recipientAta,
         instructionSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
         ed25519Program: Ed25519Program.programId,
         token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -537,6 +524,7 @@ describe("Bridge Security Tests", () => {
       .rpc();
 
     // Initialize bridge config
+    console.log("Initializing bridge with orchestrator pubkey:", orchestrator.publicKey.toString());
     await program.methods
       .initializeBridge()
       .accounts({
@@ -622,11 +610,7 @@ describe("Bridge Security Tests", () => {
     const userSignature = signMessage(userMessage, orchestrator);
     const userRequestId = calculateRequestId(userMessage);
 
-    console.log("User request ID:", Buffer.from(userRequestId).toString('hex'));
-    console.log("User message length:", userMessage.length);
-    console.log("User recipientAta:", userOkusdAta.toString());
-    debugMessage(userMessage);
-
+    console.log("Before calling createBridgeMintTx, orchestrator pubkey:", orchestrator.publicKey.toString());
     const userMintTx = await createBridgeMintTx({
       program,
       message: userMessage,
@@ -635,12 +619,6 @@ describe("Bridge Security Tests", () => {
       recipientAta: userOkusdAta,
       payer,
       requestId: userRequestId,
-      sourceChainId: ETH_CHAIN_ID,
-      destinationChainId: SOLANA_CHAIN_ID,
-      sender: userSender,
-      amount: userMintAmount,
-      nonce: userNonce,
-      deadline: userDeadline,
     });
 
     await provider.sendAndConfirm(userMintTx, [payer]);
@@ -668,12 +646,6 @@ describe("Bridge Security Tests", () => {
       recipientAta: user2OkusdAta,
       payer,
       requestId: user2RequestId,
-      sourceChainId: ETH_CHAIN_ID,
-      destinationChainId: SOLANA_CHAIN_ID,
-      sender: userSender,
-      amount: userMintAmount,
-      nonce: user2Nonce,
-      deadline: userDeadline,
     });
 
     await provider.sendAndConfirm(user2MintTx, [payer]);
@@ -866,12 +838,6 @@ describe("Bridge Security Tests", () => {
         recipientAta: userOkusdAta,
         payer,
         requestId,
-        sourceChainId: ETH_CHAIN_ID,
-        destinationChainId: SOLANA_CHAIN_ID,
-        sender: evmSender,
-        amount,
-        nonce,
-        deadline: validDeadline,
       });
 
       try {
@@ -918,12 +884,6 @@ describe("Bridge Security Tests", () => {
         recipientAta: user2OkusdAta,
         payer,
         requestId,
-        sourceChainId: ETH_CHAIN_ID,
-        destinationChainId: SOLANA_CHAIN_ID,
-        sender: evmSender,
-        amount,
-        nonce: 1n,
-        deadline: validDeadline,
       });
 
       await expectError(
@@ -956,12 +916,6 @@ describe("Bridge Security Tests", () => {
         recipientAta: user2OkusdAta,
         payer,
         requestId,
-        sourceChainId: ETH_CHAIN_ID,
-        destinationChainId: SOLANA_CHAIN_ID,
-        sender: evmSender,
-        amount,
-        nonce: 2n,
-        deadline: expiredDeadline,
       });
 
       await expectError(
@@ -992,12 +946,6 @@ describe("Bridge Security Tests", () => {
         recipientAta: user2OkusdAta,
         payer,
         requestId: wrongRequestId, // Wrong request ID
-        sourceChainId: ETH_CHAIN_ID,
-        destinationChainId: SOLANA_CHAIN_ID,
-        sender: evmSender,
-        amount,
-        nonce: 3n,
-        deadline: validDeadline,
       });
 
       await expectError(
@@ -1041,12 +989,6 @@ describe("Bridge Security Tests", () => {
         recipientAta: userOkusdAta,
         payer,
         requestId,
-        sourceChainId: ETH_CHAIN_ID,
-        destinationChainId: SOLANA_CHAIN_ID,
-        sender: evmSender,
-        amount,
-        nonce,
-        deadline: validDeadline,
       });
 
       // First mint succeeds
@@ -1061,12 +1003,6 @@ describe("Bridge Security Tests", () => {
         recipientAta: userOkusdAta,
         payer,
         requestId,
-        sourceChainId: ETH_CHAIN_ID,
-        destinationChainId: SOLANA_CHAIN_ID,
-        sender: evmSender,
-        amount,
-        nonce,
-        deadline: validDeadline,
       });
 
       await expectError(
@@ -1120,12 +1056,6 @@ describe("Bridge Security Tests", () => {
         recipientAta: userOkusdAta,
         payer,
         requestId: requestId1,
-        sourceChainId: ETH_CHAIN_ID,
-        destinationChainId: SOLANA_CHAIN_ID,
-        sender: evmSender,
-        amount: amount1,
-        nonce: nonce1,
-        deadline: validDeadline,
       });
 
       const tx2 = await createBridgeMintTx({
@@ -1136,12 +1066,6 @@ describe("Bridge Security Tests", () => {
         recipientAta: userOkusdAta,
         payer,
         requestId: requestId2,
-        sourceChainId: ETH_CHAIN_ID,
-        destinationChainId: SOLANA_CHAIN_ID,
-        sender: evmSender,
-        amount: amount2,
-        nonce: nonce2,
-        deadline: validDeadline,
       });
 
       // Both should succeed
@@ -1907,12 +1831,6 @@ describe("Bridge Security Tests", () => {
         recipientAta: user2OkusdAta,
         payer,
         requestId,
-        sourceChainId: ETH_CHAIN_ID,
-        destinationChainId: SOLANA_CHAIN_ID,
-        sender: evmSender,
-        amount,
-        nonce,
-        deadline: validDeadline,
       });
 
       await expectError(
@@ -2355,12 +2273,6 @@ describe("Bridge Security Tests", () => {
         recipientAta: userOkusdAta,
         payer,
         requestId,
-        sourceChainId: destChain,
-        destinationChainId: sourceChain,
-        sender: evmRecipient,
-        amount: burnAmount,
-        nonce: BigInt(usedNonce),
-        deadline,
       });
 
       await provider.sendAndConfirm(tx, [payer]);

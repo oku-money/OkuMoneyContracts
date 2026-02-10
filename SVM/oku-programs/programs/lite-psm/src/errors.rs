@@ -46,6 +46,8 @@ pub enum OkuError {
     InvalidRecipient,
     #[msg("Request ID mismatch")]
     InvalidRequestId,
+    #[msg("Invalid message length (expected 80 bytes)")]
+    InvalidMessageLength,
     #[msg("Wrong destination chain")]
     WrongDestinationChain,
     #[msg("Chain not supported")]

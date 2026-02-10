@@ -266,3 +266,38 @@ impl ProcessedRequest {
     /// 8 (discriminator) + 1 (bump) + 32 (request_id) + 8 (timestamp) + 32 (recipient) + 8 (amount) = 89 bytes
     pub const LEN: usize = 8 + 1 + 32 + 8 + 32 + 8;
 }
+
+/// Bridge request message format (80 bytes)
+/// Used for signature verification and replay prevention
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+pub struct BridgeRequest {
+    /// Source chain ID (EVM chain)
+    pub source_chain_id: u16,
+    /// Destination chain ID (Solana)
+    pub destination_chain_id: u16,
+    /// Sender address on source chain (20 bytes for EVM)
+    pub sender: [u8; 20],
+    /// Recipient address on destination chain (32 bytes for Solana)
+    pub recipient: [u8; 32],
+    /// Amount to mint (excluding fees)
+    pub amount: u64,
+    /// Sequential nonce for ordering
+    pub nonce: u64,
+    /// Request expiration timestamp
+    pub deadline: i64,
+}
+
+impl BridgeRequest {
+    /// Serialize to 80-byte message format for signature verification
+    pub fn to_message_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(80);
+        bytes.extend_from_slice(&self.source_chain_id.to_le_bytes());
+        bytes.extend_from_slice(&self.destination_chain_id.to_le_bytes());
+        bytes.extend_from_slice(&self.sender);
+        bytes.extend_from_slice(&self.recipient);
+        bytes.extend_from_slice(&self.amount.to_le_bytes());
+        bytes.extend_from_slice(&self.nonce.to_le_bytes());
+        bytes.extend_from_slice(&self.deadline.to_le_bytes());
+        bytes
+    }
+}

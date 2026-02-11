@@ -109,7 +109,6 @@ describe("lite-psm", () => {
       // Use existing mints from config
       usdcMint = existingConfig.usdcMint;
       okusdMint = existingConfig.okusdMint;
-      console.log("  ✓ PSM already initialized, using existing mints");
     } catch {
       psmExists = false;
     }
@@ -240,7 +239,6 @@ describe("lite-psm", () => {
         undefined,
         TOKEN_PROGRAM_ID
       );
-      console.log("  ✓ Orchestrator USDC ATA already exists");
     } catch {
       const createOrchestratorUsdcAtaTx = new anchor.web3.Transaction().add(
         createAssociatedTokenAccountInstruction(
@@ -302,8 +300,7 @@ describe("lite-psm", () => {
         );
       }
     } catch {
-      // Account doesn't exist yet, this shouldn't happen due to previous check
-      console.log("  ⚠ Orchestrator USDC ATA doesn't exist, skipping mint");
+      // Orchestrator USDC ATA doesn't exist, skip minting
     }
 
     // Initialize PSM using shared setup module

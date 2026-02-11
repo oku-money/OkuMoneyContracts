@@ -129,7 +129,6 @@ describe("oku-bridge-router", () => {
       // Skip if already initialized
       try {
         await routerProgram.account.routerConfig.fetch(routerConfigPda);
-        console.log("Router already initialized, skipping init test");
         return;
       } catch {
         // Not initialized, proceed

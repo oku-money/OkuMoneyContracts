@@ -156,21 +156,6 @@ describe("Bridge Security Tests", () => {
     return keccak_256(message);
   }
 
-  /**
-   * Debug utility to inspect message structure
-   */
-  function debugMessage(message: Buffer): void {
-    console.log("Message breakdown:");
-    console.log("  sourceChainId:", message.readUInt16LE(0));
-    console.log("  destChainId:", message.readUInt16LE(2));
-    console.log("  sender:", message.slice(4, 24).toString('hex'));
-    console.log("  recipient:", message.slice(24, 56).toString('hex'));
-    console.log("  amount:", message.readBigUInt64LE(56));
-    console.log("  nonce:", message.readBigUInt64LE(64));
-    console.log("  deadline:", message.readBigInt64LE(72));
-    console.log("  total length:", message.length);
-    console.log("  keccak256:", Buffer.from(keccak_256(message)).toString('hex'));
-  }
 
   /**
    * Sign message with Ed25519
@@ -193,7 +178,6 @@ describe("Bridge Security Tests", () => {
     requestId: Uint8Array;
   }): Promise<Transaction> {
     // Ed25519Program instruction MUST come first
-    console.log("Creating Ed25519 instruction with orchestrator pubkey:", params.orchestrator.publicKey.toString());
     const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
       publicKey: params.orchestrator.publicKey.toBytes(),
       message: new Uint8Array(params.message),  // Convert Buffer to Uint8Array
@@ -501,7 +485,6 @@ describe("Bridge Security Tests", () => {
     vaultOkusdAta = psmSetup.vaultOkusdAta;
 
     // Initialize bridge config
-    console.log("Initializing bridge with orchestrator pubkey:", orchestrator.publicKey.toString());
     await program.methods
       .initializeBridge()
       .accounts({
@@ -556,8 +539,6 @@ describe("Bridge Security Tests", () => {
 
     // Mint OkuUSD to users for burn tests using bridge_mint
     // This avoids needing to sign with the config PDA
-    console.log("Minting OkuUSD to test users for burn tests using bridge_mint...");
-
     // Add supported chain first
     await program.methods
       .addSupportedChain(ETH_CHAIN_ID)
@@ -587,7 +568,6 @@ describe("Bridge Security Tests", () => {
     const userSignature = signMessage(userMessage, orchestrator);
     const userRequestId = calculateRequestId(userMessage);
 
-    console.log("Before calling createBridgeMintTx, orchestrator pubkey:", orchestrator.publicKey.toString());
     const userMintTx = await createBridgeMintTx({
       program,
       message: userMessage,
@@ -640,8 +620,6 @@ describe("Bridge Security Tests", () => {
       undefined,
       TOKEN_2022_PROGRAM_ID
     );
-    console.log("User OkuUSD balance:", userAccount.amount.toString());
-    console.log("User2 OkuUSD balance:", user2Account.amount.toString());
   });
 
   beforeEach(async () => {
@@ -652,7 +630,6 @@ describe("Bridge Security Tests", () => {
       // Ensure bridge is unpaused
       const bridgeConfig = await program.account.bridgeConfig.fetch(bridgeConfigPda);
       if (bridgeConfig.isPaused) {
-        console.log("Unpausing bridge before test...");
         await program.methods
           .unpauseBridge()
           .accounts({
@@ -672,7 +649,6 @@ describe("Bridge Security Tests", () => {
         }
       }
     } catch (err) {
-      console.error("beforeEach hook error:", err);
       // Don't throw - let test fail naturally with better error message
     }
   });
@@ -758,34 +734,8 @@ describe("Bridge Security Tests", () => {
         deadline: validDeadline,
       });
 
-      // Debug message
-      console.log("\n=== Message Debug ===");
-      console.log("userOkusdAta:", userOkusdAta.toString());
-      debugMessage(message);
-
       const signature = signMessage(message, orchestrator);
       const requestId = calculateRequestId(message);
-      console.log("Request ID (hex):", Buffer.from(requestId).toString('hex'));
-
-      // Reconstruct message exactly as Rust does to verify
-      const rustStyleMessage = Buffer.alloc(80);
-      let off = 0;
-      off = rustStyleMessage.writeUInt16LE(ETH_CHAIN_ID, off);
-      off = rustStyleMessage.writeUInt16LE(SOLANA_CHAIN_ID, off);
-      rustStyleMessage.set(evmSender.slice(0, 20), off);
-      off += 20;
-      rustStyleMessage.set(userOkusdAta.toBytes(), off);
-      off += 32;
-      off = rustStyleMessage.writeBigUInt64LE(amount, off);
-      off = rustStyleMessage.writeBigUInt64LE(nonce, off);
-      rustStyleMessage.writeBigInt64LE(validDeadline, off);
-
-      const rustStyleRequestId = keccak_256(rustStyleMessage);
-      console.log("\nRust-style message hash:", Buffer.from(rustStyleRequestId).toString('hex'));
-      console.log("Our message hash:       ", Buffer.from(requestId).toString('hex'));
-      console.log("Messages match:", Buffer.from(rustStyleMessage).toString('hex') === message.toString('hex'));
-
-      console.log("\nAbout to call bridge_mint with recipientOkusdAta:", userOkusdAta.toString());
 
       const tx = await createBridgeMintTx({
         program,
@@ -797,14 +747,7 @@ describe("Bridge Security Tests", () => {
         requestId,
       });
 
-      try {
-        await provider.sendAndConfirm(tx, [payer]);
-      } catch (err) {
-        console.log("\nTransaction failed!");
-        console.log("Expected recipient:", userOkusdAta.toString());
-        console.log("Expected recipient (hex):", Buffer.from(userOkusdAta.toBytes()).toString('hex'));
-        throw err;
-      }
+      await provider.sendAndConfirm(tx, [payer]);
 
       // Verify ProcessedRequest PDA created
       const [processedRequestPda] = PublicKey.findProgramAddressSync(

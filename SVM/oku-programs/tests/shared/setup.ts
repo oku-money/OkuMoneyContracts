@@ -153,7 +153,6 @@ export async function initializePSMIfNeeded(
   // Check if already initialized on-chain
   try {
     await program.account.psmConfig.fetch(psmConfigPda);
-    console.log("  ✓ PSM already initialized, reusing existing config");
     psmInitialized = true;
     return {
       configPda: psmConfigPda,
@@ -166,7 +165,6 @@ export async function initializePSMIfNeeded(
   }
 
   // Airdrop SOL to shared authorities
-  console.log("  → Initializing PSM with shared authorities...");
   await Promise.all([
     provider.connection.requestAirdrop(
       coldMultisig.publicKey,
@@ -230,7 +228,6 @@ export async function initializePSMIfNeeded(
     })
     .rpc();
 
-  console.log("  ✓ PSM initialized successfully");
   psmInitialized = true;
 
   return {

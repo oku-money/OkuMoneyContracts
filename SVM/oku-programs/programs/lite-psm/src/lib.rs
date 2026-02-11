@@ -472,22 +472,27 @@ pub mod lite_psm {
         require!(!is_bridge_paused, OkuError::BridgePaused);
         require!(!is_psm_paused, OkuError::Paused);
 
-        // 3. Verify Ed25519 signature over raw bytes (BEFORE parsing)
+        // 3. Convert signature Vec to fixed array for verification
+        let signature_array: [u8; 64] = signature.as_slice()
+            .try_into()
+            .map_err(|_| OkuError::InvalidSignature)?;
+
+        // 4. Verify Ed25519 signature over raw bytes (BEFORE parsing)
         verify_ed25519_signature(
             &ctx.accounts.instruction_sysvar,
             &bridge_config.orchestrator_signer.to_bytes(),
             &message_bytes,
-            &ctx.accounts.ed25519_program,
+            &signature_array,
         )?;
 
-        // 4. Parse message AFTER signature verified
+        // 5. Parse message AFTER signature verified
         let request = BridgeRequest::try_from_slice(&message_bytes)?;
 
-        // 5. Validate deadline
+        // 6. Validate deadline
         let clock = Clock::get()?;
         require!(clock.unix_timestamp <= request.deadline, OkuError::SignatureExpired);
 
-        // 6. Validate amount
+        // 7. Validate amount
         require!(request.amount > 0, OkuError::ZeroAmount);
         require!(
             request.amount >= bridge_config.min_bridge_amount,
@@ -498,22 +503,22 @@ pub mod lite_psm {
             OkuError::AboveMaximum
         );
 
-        // 7. Convert recipient bytes to Pubkey
+        // 8. Convert recipient bytes to Pubkey
         let recipient_pubkey = Pubkey::new_from_array(request.recipient);
 
-        // 8. Validate recipient matches passed account (SECURITY FIX)
+        // 9. Validate recipient matches passed account (SECURITY FIX)
         require!(
             recipient_pubkey == ctx.accounts.recipient_okusd_ata.key(),
             OkuError::InvalidRecipient
         );
 
-        // 9. Calculate request_id from message bytes
+        // 10. Calculate request_id from message bytes
         let request_id = anchor_lang::solana_program::keccak::hash(&message_bytes).to_bytes();
 
-        // 10. Verify request not already processed (replay prevention)
+        // 11. Verify request not already processed (replay prevention)
         // The init constraint on processed_request will fail if request_id already exists
 
-        // 11. Check PSM allowance and max supply
+        // 12. Check PSM allowance and max supply
         require!(request.amount <= minter_allowance, OkuError::AllowanceExceeded);
         require!(
             current_supply.checked_add(request.amount).ok_or(OkuError::Overflow)? <= max_supply,
@@ -1297,100 +1302,80 @@ fn calculate_interest_bearing_value(
 /// Verify Ed25519 signature via instruction introspection
 /// Solana's Ed25519Program must be called in the same transaction with signature data
 /// This function verifies that signature check was performed correctly
+/// Verify Ed25519 signature via instruction introspection
+/// Production pattern: Don't parse - construct expected instruction and compare
 fn verify_ed25519_signature<'info>(
-    instruction_sysvar: &AccountInfo<'info>,
+    instructions_sysvar: &AccountInfo<'info>,
     expected_pubkey: &[u8; 32],
-    message: &[u8],
-    ed25519_program: &AccountInfo<'info>,
+    expected_message: &[u8],
+    signature: &[u8; 64],
 ) -> Result<()> {
     use anchor_lang::solana_program::{
-        ed25519_program::ID as ED25519_PROGRAM_ID,
-        sysvar::instructions::{load_instruction_at_checked, ID as INSTRUCTIONS_SYSVAR_ID},
+        ed25519_program,
+        sysvar::instructions::load_instruction_at_checked,
     };
 
-    // Verify instruction sysvar is correct
-    require!(
-        instruction_sysvar.key() == INSTRUCTIONS_SYSVAR_ID,
-        OkuError::InvalidSignature
-    );
-
-    // Verify ed25519_program is correct
-    require!(
-        ed25519_program.key() == ED25519_PROGRAM_ID,
-        OkuError::InvalidSignature
-    );
-
-    // Load the current instruction index
-    let current_index = anchor_lang::solana_program::sysvar::instructions::load_current_index_checked(
-        instruction_sysvar,
-    )?;
-
-    // Ed25519Program instruction must be called immediately before this instruction
-    let ed25519_ix_index = current_index.checked_sub(1).ok_or(OkuError::InvalidSignature)?;
-
-    // Load the Ed25519Program instruction
-    let ed25519_ix = load_instruction_at_checked(ed25519_ix_index as usize, instruction_sysvar)
+    // 1. Load what was actually passed (index 0 = first ix in tx)
+    let actual_ix = load_instruction_at_checked(0, instructions_sysvar)
         .map_err(|_| OkuError::InvalidSignature)?;
 
-    // Verify it's an Ed25519Program instruction
+    // 2. Verify program ID matches Ed25519Program
     require!(
-        ed25519_ix.program_id == ED25519_PROGRAM_ID,
+        actual_ix.program_id == ed25519_program::ID,
         OkuError::InvalidSignature
     );
 
-    // Parse Ed25519Program instruction data
-    // Format: num_signatures (u8) | padding (u8) | signature_offset (u16) | signature_instruction_index (u16) |
-    //         public_key_offset (u16) | public_key_instruction_index (u16) | message_data_offset (u16) |
-    //         message_data_size (u16) | message_instruction_index (u16) | [signature (64 bytes)] | [pubkey (32 bytes)] | [message]
+    // 3. Build expected instruction data manually
+    let expected_data = build_ed25519_instruction_data(
+        expected_pubkey,
+        expected_message,
+        signature,
+    );
 
-    let data = &ed25519_ix.data;
-    require!(data.len() >= 112, OkuError::InvalidSignature); // Minimum: header (14) + sig (64) + pubkey (32) + message (2)
+    // 4. Byte-for-byte comparison
+    // If orchestrator signed different message or used different key, bytes won't match
+    require!(
+        actual_ix.data == expected_data,
+        OkuError::InvalidSignature
+    );
 
-    // DEBUG: Log header
-    msg!("Ed25519 instruction data length: {}", data.len());
-    msg!("num_signatures: {}", data[0]);
-    msg!("signature_offset: {}", u16::from_le_bytes([data[2], data[3]]));
-    msg!("pubkey_offset: {}", u16::from_le_bytes([data[6], data[7]]));
-    msg!("message_offset: {}", u16::from_le_bytes([data[10], data[11]]));
-    msg!("message_size: {}", u16::from_le_bytes([data[12], data[13]]));
-
-    // Read offsets from header
-    let sig_offset = u16::from_le_bytes([data[2], data[3]]) as usize;
-    let pubkey_offset = u16::from_le_bytes([data[6], data[7]]) as usize;
-    let msg_offset = u16::from_le_bytes([data[10], data[11]]) as usize;
-    let msg_size = u16::from_le_bytes([data[12], data[13]]) as usize;
-
-    // Extract signature (64 bytes)
-    require!(sig_offset + 64 <= data.len(), OkuError::InvalidSignature);
-    let _signature = &data[sig_offset..sig_offset + 64];
-
-    // Extract public key (32 bytes)
-    require!(pubkey_offset + 32 <= data.len(), OkuError::InvalidSignature);
-    let pubkey = &data[pubkey_offset..pubkey_offset + 32];
-
-    // DEBUG: Log public key comparison
-    msg!("Expected pubkey: {:?}", expected_pubkey);
-    msg!("Ed25519Ix pubkey: {:?}", pubkey);
-
-    // Verify public key matches expected orchestrator signer
-    require!(pubkey == expected_pubkey, OkuError::InvalidSignature);
-
-    // Extract message (using offset from header)
-    require!(msg_offset + msg_size <= data.len(), OkuError::InvalidSignature);
-    let ix_message = &data[msg_offset..msg_offset + msg_size];
-
-    // DEBUG: Log message comparison
-    msg!("Expected message length: {}", message.len());
-    msg!("Ed25519Ix message length: {}", ix_message.len());
-    msg!("Expected message (first 20 bytes): {:?}", &message[..20.min(message.len())]);
-    msg!("Ed25519Ix message (first 20 bytes): {:?}", &ix_message[..20.min(ix_message.len())]);
-
-    // Verify message matches expected message
-    require!(ix_message == message, OkuError::InvalidSignature);
-
-    // If we reach here, Ed25519Program successfully verified the signature
-    // (If signature was invalid, Ed25519Program would have failed the transaction)
     Ok(())
+}
+
+/// Build Ed25519 instruction data that matches TypeScript's Ed25519Program.createInstructionWithPublicKey
+fn build_ed25519_instruction_data(
+    pubkey: &[u8; 32],
+    message: &[u8],
+    signature: &[u8; 64],
+) -> Vec<u8> {
+    // Ed25519 instruction format (single signature, all data inline):
+    // Header: 16 bytes, then PUBLIC KEY FIRST (32), signature (64), message (variable)
+    // This matches TypeScript's Ed25519Program.createInstructionWithPublicKey
+
+    let pubkey_offset: u16 = 16;
+    let signature_offset: u16 = 16 + 32;
+    let message_offset: u16 = 16 + 32 + 64;
+    let message_size: u16 = message.len() as u16;
+
+    let mut data = Vec::with_capacity(112 + message.len());
+
+    // Header
+    data.push(1);                                           // num_signatures
+    data.push(0);                                           // padding
+    data.extend_from_slice(&signature_offset.to_le_bytes());
+    data.extend_from_slice(&0xFFFFu16.to_le_bytes());       // sig in this ix
+    data.extend_from_slice(&pubkey_offset.to_le_bytes());
+    data.extend_from_slice(&0xFFFFu16.to_le_bytes());       // pubkey in this ix
+    data.extend_from_slice(&message_offset.to_le_bytes());
+    data.extend_from_slice(&message_size.to_le_bytes());
+    data.extend_from_slice(&0xFFFFu16.to_le_bytes());       // message in this ix
+
+    // Payload: pubkey FIRST, then signature, then message
+    data.extend_from_slice(pubkey);
+    data.extend_from_slice(signature);
+    data.extend_from_slice(message);
+
+    data
 }
 
 // ============================================================================
@@ -1812,11 +1797,6 @@ pub struct BridgeMint<'info> {
     /// CHECK: Verified in verify_ed25519_signature function
     #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
     pub instruction_sysvar: AccountInfo<'info>,
-
-    /// Ed25519 program for signature verification
-    /// CHECK: Verified in verify_ed25519_signature function
-    #[account(address = anchor_lang::solana_program::ed25519_program::ID)]
-    pub ed25519_program: AccountInfo<'info>,
 
     pub token_2022_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,

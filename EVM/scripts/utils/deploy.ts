@@ -42,6 +42,29 @@ export async function getDeployedContract(
 }
 
 /**
+ * Deploy a Transparent proxy with the specified contract factory and initialization arguments
+ */
+export async function deployTransparentProxy(
+  contractName: string,
+  initArgs: any[],
+  network: string
+): Promise<Contract> {
+  logger.info(`Deploying ${contractName} with Transparent proxy...`);
+
+  const Factory = await ethers.getContractFactory(contractName);
+  const proxy = await upgrades.deployProxy(Factory, initArgs, { kind: "transparent" });
+  await proxy.waitForDeployment();
+
+  const address = await proxy.getAddress();
+  logger.success(`${contractName} deployed at: ${address}`);
+
+  // Save address to address book
+  saveAddress(network, contractName, address);
+
+  return proxy;
+}
+
+/**
  * Wait for a transaction with logging
  */
 export async function waitForTx(tx: any, description: string): Promise<void> {

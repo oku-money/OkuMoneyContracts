@@ -24,10 +24,11 @@ Yield-bearing stablecoin backed 1:1 by US T-Bills. Centralized B2B infrastructur
 │  │   OkuUSD    │◄─┤   wOkuUSD   │  │   LitePSM   │              │
 │  │  (Rebase)   │  │   (Vault)   │  │   (USDC)    │              │
 │  └──────┬──────┘  └─────────────┘  └─────────────┘              │
-│         │ Minter                                                 │
+│         │                                                        │
 │  ┌──────▼──────────────────────────────────────────┐            │
-│  │              Bridge Adapters                     │            │
-│  │  OkuBridge | NttManager | OFTAdapter | CCIP     │            │
+│  │                   OkuBridge                      │            │
+│  │  (Burn on source → Orchestrator signs →          │            │
+│  │   Mint on destination)                           │            │
 │  └─────────────────────────────────────────────────┘            │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -42,7 +43,7 @@ Yield-bearing stablecoin backed 1:1 by US T-Bills. Centralized B2B infrastructur
 **User flows**:
 - Retail: Hold OkuUSD → watch balance grow
 - DeFi: Wrap OkuUSD → wOkuUSD → use in AMMs, lending, etc.
-- Bridge: Either token can bridge cross-chain
+- Bridge: OkuUSD via OkuBridge (wOkuUSD users unwrap first, or use OkuBridgeRouter)
 
 ## Core Components
 
@@ -169,14 +170,13 @@ balanceOf(user) = shares[user] × rewardMultiplier / PRECISION
 
 ### OkuBridgeRouter
 
-**Concept**: Convenience wrapper for bridging wOkuUSD cross-chain.
+**Concept**: Convenience wrapper for bridging wOkuUSD cross-chain via OkuBridge.
 
-**Flow**: Unwrap wOkuUSD → burn OkuUSD → bridge → mint on destination
+**Flow**: Unwrap wOkuUSD → call OkuBridge.bridgeBurn() → mint OkuUSD on destination → user wraps if desired
 
 **Requirements**:
-- MUST accept wOkuUSD, unwrap to OkuUSD, call bridge adapter
+- MUST accept wOkuUSD, unwrap to OkuUSD shares, call bridgeBurn
 - MUST support direct OkuUSD bridging (skip unwrap)
-- MUST only allow adapter manager role to register/deregister adapters
 - MUST NOT hold user funds beyond single transaction
 - MUST revert entire transaction if any step fails
 
@@ -218,12 +218,9 @@ balanceOf(user) = shares[user] × rewardMultiplier / PRECISION
 | ORACLE_MANAGER | setOracle(), setStalenessThreshold() |
 | PSM_UPGRADER | upgrade PSM |
 
-### OkuBridgeRouter Roles
+### OkuBridgeRouter
 
-| Role | Single Action |
-|------|---------------|
-| ADAPTER_MANAGER | register/deregister adapters |
-| ROUTER_UPGRADER | upgrade Router |
+No privileged roles — stateless convenience wrapper that calls OkuBridge.
 
 ### Meta Role
 
@@ -235,10 +232,10 @@ balanceOf(user) = shares[user] × rewardMultiplier / PRECISION
 
 | Entity | Roles Held |
 |--------|------------|
-| Cold Multisig | ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER, ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER, ORACLE_MANAGER |
-| Warm Multisig | all PAUSER, all BLACKLISTER |
-| Orchestrator | REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR |
-| Bridge Adapters | MINTER (each adapter individually) |
+| Cold Multisig | ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER, ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER, ORACLE_MANAGER, BRIDGE_SIGNER_MANAGER, BRIDGE_UNPAUSER, BRIDGE_NONCE_ADMIN, BRIDGE_CHAIN_MANAGER, BRIDGE_LIMITS_MANAGER, BRIDGE_REFUND_ADMIN |
+| Warm Multisig | all PAUSER, all BLACKLISTER, BRIDGE_PAUSER |
+| Orchestrator | REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR, BRIDGE_FEE_MANAGER |
+| OkuBridge | MINTER (bridge contract has minter role on each chain) |
 
 ### Security Rules
 
@@ -309,23 +306,130 @@ Prevent front-running of blacklist transactions:
 
 **Critical**: blacklist() cannot inherit pause checks.
 
-## Cross-Chain Bridging
+## Cross-Chain Bridging (OkuBridge)
 
-### Supported Bridges
-- OkuBridge (proprietary, orchestrator-signed)
-- Wormhole NTT
-- LayerZero OFT
-- Chainlink CCIP
+OkuBridge is our proprietary, orchestrator-signed bridge. No third-party bridge dependencies.
 
-### Bridging Model: Burn-and-Mint
-- Source chain: Burn OkuUSD
-- Destination chain: Mint OkuUSD (via bridge adapter with MINTER role)
-- No lock-and-mint (avoids liquidity fragmentation)
+### Design Principles
 
-### Exchange Rate Consistency
-- Global rate derived from: `Total T-Bill NAV / Total OkuUSD supply (all chains)`
-- Orchestrator syncs rate to all chains
-- Bridge transfers don't change global supply, just rebalance between chains
+- **Centralized by design**: Orchestrator controls message passing, consistent with overall trust model
+- **Shares, not tokens**: Bridge OkuUSD shares to avoid rebasing issues mid-flight
+- **OkuUSD only**: wOkuUSD users unwrap → bridge → rewrap via OkuBridgeRouter
+- **Burn-and-mint**: No liquidity fragmentation, no lock escrow
+
+### Bridge Flow
+
+```
+1. User calls bridgeBurn(destChainId, recipient, shares) on source
+2. Source contract:
+   - Validates destination chain, amounts
+   - Burns shares from user
+   - Transfers fee to treasury
+   - Increments nonce
+   - Emits BridgeBurnEvent
+
+3. Orchestrator:
+   - Observes event
+   - Waits for source chain finality
+   - Signs BridgeRequest with KMS (EIP-712)
+   - Submits to destination (or returns signature to user as fallback)
+
+4. Destination contract:
+   - Verifies signature against authorizedSigner
+   - Verifies deadline not passed
+   - Verifies requestId not processed
+   - Marks requestId as processed
+   - Mints shares to recipient
+   - Emits BridgeMintEvent
+```
+
+### Request Structure
+
+```
+BridgeRequest {
+    sourceChainId: uint256
+    destChainId: uint256
+    sender: address
+    recipient: address
+    shares: uint256        // Shares, not tokens
+    nonce: uint256
+    deadline: uint256
+}
+
+requestId = keccak256(abi.encode(request))
+```
+
+### Replay Prevention
+
+- Sequential nonces per (source chain, destination chain) pair
+- Nonce tracked on source chain
+- Destination tracks processed requestIds
+- Admin can skip stuck nonces via BRIDGE_NONCE_ADMIN_ROLE
+
+### Transaction Submission
+
+| Path | Who Pays Gas | Fee Treatment |
+|------|--------------|---------------|
+| Orchestrator submits (default) | Orchestrator | Full fee retained |
+| User submits (fallback) | User | Partial fee refund |
+
+### Fee Handling
+
+- Fee set by BRIDGE_FEE_MANAGER_ROLE (Orchestrator)
+- Collected on source chain in OkuUSD shares
+- Orchestrator adjusts based on destination gas costs
+- User sees total cost upfront
+
+### Request Validation
+
+| Check | Where | Enforcement |
+|-------|-------|-------------|
+| Destination chain supported | Source | `supportedChains[destChainId]` |
+| Minimum amount | Source | `shares >= minBridgeShares` |
+| Maximum amount | Source | `shares <= maxBridgeShares` |
+| Signature valid | Destination | `signer == authorizedSigner` |
+| Signature not expired | Destination | `block.timestamp <= deadline` |
+| Not already processed | Destination | `!processedRequests[requestId]` |
+
+### Finality Requirements
+
+Orchestrator waits for source chain finality before signing:
+
+| Chain | Finality Wait |
+|-------|---------------|
+| Ethereum | ~12-15 minutes |
+| Arbitrum | ~1 minute |
+| Base | ~1 minute |
+| Optimism | ~1 minute |
+
+### Failure Handling
+
+| Failure | Resolution |
+|---------|------------|
+| Destination paused | Orchestrator retries when unpaused |
+| Recipient blacklisted | Admin refunds shares on source |
+| Signature expired | User requests new signature |
+| Orchestrator down | User submits with signed payload |
+
+### OkuBridge Roles
+
+| Role | Action | Typical Holder |
+|------|--------|----------------|
+| BRIDGE_SIGNER_MANAGER_ROLE | Update authorized signer | Cold Multisig |
+| BRIDGE_PAUSER_ROLE | Pause bridge | Warm Multisig |
+| BRIDGE_UNPAUSER_ROLE | Unpause bridge | Cold Multisig |
+| BRIDGE_FEE_MANAGER_ROLE | Update fee, fee recipient | Orchestrator |
+| BRIDGE_NONCE_ADMIN_ROLE | Skip stuck nonces | Cold Multisig |
+| BRIDGE_CHAIN_MANAGER_ROLE | Add/remove supported chains | Cold Multisig |
+| BRIDGE_LIMITS_MANAGER_ROLE | Update min/max amounts | Cold Multisig |
+| BRIDGE_REFUND_ADMIN_ROLE | Process refunds for failed requests | Cold Multisig |
+
+### Why Not Third-Party Bridges?
+
+- **Trust model alignment**: Users already trust us; adding bridge trust assumptions adds complexity without benefit
+- **Rebasing complexity**: Third-party bridges assume static balances; handling shares requires customization they don't support
+- **Intent protocols fill UX gaps**: Solvers use our bridge for rebalancing; users get instant fills regardless of bridge speed
+- **Simplicity**: One bridge to maintain, audit, and secure
 
 ## Key Invariants
 

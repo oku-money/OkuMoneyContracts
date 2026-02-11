@@ -108,7 +108,7 @@ async function main() {
   success = runScript("scripts/deploy/2-deploy-psm.ts", "Step 2/4: Deploy LitePSM");
   if (!success) process.exit(1);
 
-  success = runScript("scripts/deploy/3-deploy-bridge.ts", "Step 3/4: Deploy Bridge Router");
+  success = runScript("scripts/deploy/3-deploy-bridge.ts", "Step 3/4: Deploy Bridge Contracts");
   if (!success) process.exit(1);
 
   success = runScript("scripts/deploy/4-configure-roles.ts", "Step 4/4: Configure Roles");

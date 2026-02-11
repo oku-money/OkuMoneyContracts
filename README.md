@@ -44,15 +44,30 @@ Users choose based on their needs:
 | **OkuUSD** | Rebasing token — balance grows as T-Bill yield accrues |
 | **wOkuUSD** | ERC-4626 vault (EVM) / SPL vault (Solana) — static balance, growing exchange rate |
 | **LitePSM** | Peg Stability Module — 1:1 USDC ↔ OkuUSD swaps |
-| **OkuBridgeRouter** | Cross-chain bridging convenience wrapper |
+| **OkuBridge** | Cross-chain bridge — burn on source, orchestrator signs, mint on destination |
+| **OkuBridgeRouter** | Convenience wrapper for bridging wOkuUSD |
 
-### Cross-Chain Consistency
+### Cross-Chain Bridging
 
-Same architecture on every chain:
-- Same token model (rebasing + wrapped)
-- Same RBAC roles and permissions
-- Same business logic and invariants
-- Burn-and-mint bridging (no liquidity fragmentation)
+OkuBridge is our proprietary, orchestrator-signed bridge:
+
+```
+User burns shares on source chain
+        ↓
+Orchestrator observes, waits for finality
+        ↓
+Orchestrator signs mint authorization (EIP-712)
+        ↓
+Orchestrator submits to destination (or user submits as fallback)
+        ↓
+Destination verifies signature, mints shares to recipient
+```
+
+**Key properties:**
+- Bridges **shares**, not tokens (avoids rebasing issues mid-flight)
+- Sequential nonces prevent replay
+- Orchestrator pays destination gas by default
+- User fallback with partial fee refund if orchestrator delayed
 
 ## Repository Structure
 
@@ -71,6 +86,7 @@ contracts/
 │   │   ├── psm/
 │   │   │   └── LitePSM.sol
 │   │   └── bridge/
+│   │       ├── OkuBridge.sol
 │   │       └── OkuBridgeRouter.sol
 │   ├── test/
 │   ├── script/
@@ -95,7 +111,7 @@ contracts/
 | Access control | OpenZeppelin AccessControl | Config account with authority pubkeys |
 | Multisig | Gnosis Safe | Squads Protocol |
 | Oracle | Chainlink | Pyth Network |
-| Upgradeability | UUPS (UUPSUpgradeable) | Native program upgrade authority |
+| Upgradeability | TransparentUpgradeableProxy | Native program upgrade authority |
 
 ## Access Control
 

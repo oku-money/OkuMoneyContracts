@@ -41,6 +41,7 @@ scripts/
 │   ├── mint-okuusd.ts         # Mint OkuUSD from USDC
 │   ├── wrap-okuusd.ts         # Wrap OkuUSD to wOkuUSD
 │   ├── rebalance.ts           # Update reward multiplier
+│   ├── relay-bridge.ts        # Bridge OkuUSD between chains
 │   └── check-balances.ts      # Query balances on all chains
 │
 ├── e2e/                # End-to-end testing
@@ -307,6 +308,52 @@ Update reward multiplier (rebase) on OkuUSD.
 - New multiplier must be strictly greater than current
 
 **Effect**: All OkuUSD balances increase proportionally.
+
+#### `interactions/relay-bridge.ts`
+Bridge OkuUSD between chains using the OkuBridge contract.
+
+**Two modes**:
+1. **Full relay** (default): Execute source burn → sign → execute dest mint
+2. **Complete mode** (`--complete`): Read from log file → execute dest mint only
+
+**Environment variables** (Full relay):
+- `SOURCE_NETWORK`: Source chain (default: current network)
+- `DEST_CHAIN_ID`: Destination chain ID (required)
+- `RECIPIENT`: Recipient address on destination chain (required)
+- `SHARES`: Amount of shares to bridge (default: 100)
+
+**Environment variables** (Complete mode):
+- `REQUEST_ID`: Request ID from log file (required)
+
+**Example usage**:
+```bash
+# Full relay from Optimism to Arbitrum
+SOURCE_NETWORK=optimism \
+DEST_CHAIN_ID=42161 \
+RECIPIENT=0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb \
+SHARES=100 \
+npx hardhat run scripts/interactions/relay-bridge.ts --network optimism
+
+# Complete pending bridge from log
+REQUEST_ID=0x1234... \
+npx hardhat run scripts/interactions/relay-bridge.ts --complete --network arbitrum
+```
+
+**Log file**: Bridge requests are logged to `scripts/logs/bridge-requests.jsonl` in JSON Lines format, including:
+- Request metadata (source, destination, amounts)
+- Network type (fork vs mainnet)
+- Transaction hashes
+- Status (pending, completed, failed)
+- EIP-712 signature for verification
+
+**View logs**:
+```bash
+# View all bridge requests
+cat scripts/logs/bridge-requests.jsonl | jq
+
+# View pending requests
+cat scripts/logs/bridge-requests.jsonl | jq 'select(.status == "pending")'
+```
 
 #### `interactions/check-balances.ts`
 Query OkuUSD and wOkuUSD balances across all deployed networks.

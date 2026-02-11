@@ -26,6 +26,14 @@ import {
 } from "@solana/spl-token";
 import { keccak_256 } from "@noble/hashes/sha3";
 import * as nacl from "tweetnacl";
+import {
+  coldMultisig,
+  warmMultisig,
+  psmOrchestrator,
+  bridgeOrchestrator,
+  initializePSMIfNeeded,
+  ensurePSMUnpaused,
+} from "./shared/setup";
 
 // Use anchor's web3 types
 const { SYSVAR_RENT_PUBKEY } = anchor.web3;
@@ -48,17 +56,16 @@ describe("Bridge Security Tests", () => {
   let bridgeAdmin: Keypair;
   let bridgePauser: Keypair;
   let bridgeUnpauser: Keypair;
-  let orchestrator: Keypair; // Ed25519 signer
+  // Use bridgeOrchestrator from shared setup for bridge operations
+  const orchestrator = bridgeOrchestrator; // Ed25519 signer
   let feeRecipient: Keypair;
   let chainManager: Keypair;
   let feeManager: Keypair;
   let nonceAdmin: Keypair;
 
-  // PSM authorities (for initialization)
+  // PSM authorities imported from shared setup:
+  // coldMultisig, warmMultisig, psmOrchestrator
   let psmAdmin: Keypair;
-  const coldMultisig = Keypair.generate();
-  const warmMultisig = Keypair.generate();
-  const psmOrchestrator = Keypair.generate();
 
   // Test users
   const user = Keypair.generate();
@@ -271,10 +278,10 @@ describe("Bridge Security Tests", () => {
     psmAdmin = payer;
 
     // Generate bridge authorities
+    // Note: orchestrator is already assigned from bridgeOrchestrator (shared setup)
     bridgeAdmin = Keypair.generate();
     bridgePauser = Keypair.generate();
     bridgeUnpauser = Keypair.generate();
-    orchestrator = Keypair.generate(); // Ed25519 signer for bridge_mint
     feeRecipient = Keypair.generate();
     chainManager = Keypair.generate();
     feeManager = Keypair.generate();
@@ -479,48 +486,19 @@ describe("Bridge Security Tests", () => {
       TOKEN_PROGRAM_ID
     );
 
-    // Initialize PSM
-    await program.methods
-      .initialize(MAX_SUPPLY, MINTER_ALLOWANCE)
-      .accounts({
-        roleAdmin: psmAdmin.publicKey,
-        pauser: warmMultisig.publicKey,
-        unpauser: coldMultisig.publicKey,
-        freezer: warmMultisig.publicKey,
-        unfreezer: coldMultisig.publicKey,
-        queueProcessor: psmOrchestrator.publicKey,
-        bufferDepositor: psmOrchestrator.publicKey,
-        bufferWithdrawer: coldMultisig.publicKey,
-        oracleManager: coldMultisig.publicKey,
-        capManager: coldMultisig.publicKey,
-        allowanceManager: coldMultisig.publicKey,
-        rebaser: psmOrchestrator.publicKey,
-        config: configPda,
-        redemptionQueue: redemptionQueuePda,
-        usdcMint: usdcMint,
-        okusdMint: okusdMint,
-        vaultUsdc: vaultUsdcAta,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-        rent: SYSVAR_RENT_PUBKEY,
-      })
-      .rpc();
+    // Initialize PSM using shared setup module
+    const psmSetup = await initializePSMIfNeeded(
+      program,
+      provider,
+      payer,
+      usdcMint,
+      okusdMint
+    );
 
-    // Setup OkuUSD escrow
-    await program.methods
-      .setupOkusdEscrow()
-      .accounts({
-        roleAdmin: psmAdmin.publicKey,
-        config: configPda,
-        okusdMint: okusdMint,
-        vaultOkusd: vaultOkusdAta,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
+    configPda = psmSetup.configPda;
+    redemptionQueuePda = psmSetup.redemptionQueuePda;
+    vaultUsdcAta = psmSetup.vaultUsdcAta;
+    vaultOkusdAta = psmSetup.vaultOkusdAta;
 
     // Initialize bridge config
     console.log("Initializing bridge with orchestrator pubkey:", orchestrator.publicKey.toString());
@@ -668,30 +646,10 @@ describe("Bridge Security Tests", () => {
 
   beforeEach(async () => {
     try {
-      // Ensure PSM is unpaused before each test
-      const config = await program.account.psmConfig.fetch(configPda);
-      if (config.isPaused) {
-        console.log("Unpausing PSM before test...");
-        await program.methods
-          .unpause()
-          .accounts({
-            unpauser: coldMultisig.publicKey,
-            config: configPda,
-          })
-          .signers([coldMultisig])
-          .rpc();
+      // Ensure PSM is unpaused using shared helper
+      await ensurePSMUnpaused(program, configPda);
 
-        // WAIT for unpause to confirm
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        // Verify unpause succeeded
-        const updatedConfig = await program.account.psmConfig.fetch(configPda);
-        if (updatedConfig.isPaused) {
-          throw new Error("Failed to unpause PSM");
-        }
-      }
-
-      // Ensure bridge is unpaused before each test
+      // Ensure bridge is unpaused
       const bridgeConfig = await program.account.bridgeConfig.fetch(bridgeConfigPda);
       if (bridgeConfig.isPaused) {
         console.log("Unpausing bridge before test...");
@@ -1077,18 +1035,8 @@ describe("Bridge Security Tests", () => {
 
   describe("Sequential Nonce Management", () => {
     beforeEach(async () => {
-      // Ensure PSM is unpaused
-      const config = await program.account.psmConfig.fetch(configPda);
-      if (config.isPaused) {
-        await program.methods
-          .unpause()
-          .accounts({
-            unpauser: coldMultisig.publicKey,
-            config: configPda,
-          })
-          .signers([coldMultisig])
-          .rpc();
-      }
+      // Ensure PSM is unpaused using shared helper
+      await ensurePSMUnpaused(program, configPda);
 
       // Ensure user has OkuUSD
       const userBalance = await getAccount(

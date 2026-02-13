@@ -12,7 +12,7 @@ pub mod state;
 use errors::VaultError;
 use state::VaultConfig;
 
-declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
+declare_id!("BjjK75Vxj6zsC49qYfcVYFPLqyXXkcaFzacTXwohmfVC");
 
 #[program]
 pub mod wokusd_vault {

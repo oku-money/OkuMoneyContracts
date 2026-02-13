@@ -6,7 +6,7 @@ use anchor_spl::{
     token_interface::{TokenAccount as TokenAccountInterface, Mint as MintInterface},
 };
 
-declare_id!("BRdgEiDLhPzrV2bJzjVdKaGm1FzLiVmSqLkQCJ2mX4Fq");
+declare_id!("7DtqfP4fyShjAoM35QC9m3a9Ukh4tqcVgzTNLuyTkgE");
 
 #[program]
 pub mod oku_bridge_router {

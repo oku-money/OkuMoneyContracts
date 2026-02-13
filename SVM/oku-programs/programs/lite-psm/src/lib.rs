@@ -12,7 +12,7 @@ pub mod state;
 use errors::OkuError;
 use state::{BridgeConfig, BridgeNonce, BridgeRequest, ProcessedRequest, PsmConfig, QueueEntry, RedemptionQueue};
 
-declare_id!("FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX");
+declare_id!("AhKZ4TT5W4mnvR3CsX1t9ymQmZx4535AN9SsrThu6C1T");
 
 #[program]
 pub mod lite_psm {

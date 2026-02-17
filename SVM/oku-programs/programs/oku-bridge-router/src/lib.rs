@@ -227,7 +227,7 @@ pub struct BridgeWrapped<'info> {
 
     /// OkuUSD mint (Token-2022)
     #[account(mut)]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// wOkuUSD mint (standard SPL)
     #[account(mut)]
@@ -235,7 +235,7 @@ pub struct BridgeWrapped<'info> {
 
     /// User's OkuUSD account
     #[account(mut)]
-    pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// User's wOkuUSD account
     #[account(mut)]
@@ -243,7 +243,7 @@ pub struct BridgeWrapped<'info> {
 
     /// Vault's OkuUSD account
     #[account(mut)]
-    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     // PSM program accounts
     /// CHECK: Bridge config PDA - validated by PSM program CPI
@@ -297,11 +297,11 @@ pub struct BridgeDirect<'info> {
 
     /// OkuUSD mint (Token-2022)
     #[account(mut)]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// User's OkuUSD account
     #[account(mut)]
-    pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// CHECK: Fee recipient ATA - validated by PSM program CPI
     #[account(mut)]

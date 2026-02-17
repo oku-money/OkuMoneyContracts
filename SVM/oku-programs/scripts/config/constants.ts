@@ -31,26 +31,13 @@ export const OKUSD_DECIMALS = 6;
 // Initial interest rate (0% - can be updated by orchestrator)
 export const INITIAL_INTEREST_RATE_BPS = 0;
 
-// Program IDs (from Anchor.toml)
-export const PROGRAM_IDS = {
-  localnet: {
-    litePsm: new PublicKey('FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX'),
-    wokusdVault: new PublicKey('Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS'),
-    okuBridgeRouter: new PublicKey('BRdgEiDLhPzrV2bJzjVdKaGm1FzLiVmSqLkQCJ2mX4Fq'),
-  },
-  devnet: {
-    litePsm: new PublicKey('FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX'),
-    wokusdVault: new PublicKey('Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS'),
-    okuBridgeRouter: new PublicKey('BRdgEiDLhPzrV2bJzjVdKaGm1FzLiVmSqLkQCJ2mX4Fq'),
-  },
-  'mainnet-beta': {
-    litePsm: new PublicKey('FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX'),
-    wokusdVault: new PublicKey('Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS'),
-    okuBridgeRouter: new PublicKey('BRdgEiDLhPzrV2bJzjVdKaGm1FzLiVmSqLkQCJ2mX4Fq'),
-  },
-};
+// Program IDs (from target/deploy keypair files - run `anchor keys list` to verify)
+const LITE_PSM_ID = new PublicKey('AhKZ4TT5W4mnvR3CsX1t9ymQmZx4535AN9SsrThu6C1T');
+const WOKUSD_VAULT_ID = new PublicKey('BjjK75Vxj6zsC49qYfcVYFPLqyXXkcaFzacTXwohmfVC');
+const OKU_BRIDGE_ROUTER_ID = new PublicKey('7DtqfP4fyShjAoM35QC9m3a9Ukh4tqcVgzTNLuyTkgE');
 
-// Token-2022 program
-export const TOKEN_2022_PROGRAM_ID = new PublicKey(
-  'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'
-);
+export const PROGRAM_IDS = {
+  localnet: { litePsm: LITE_PSM_ID, wokusdVault: WOKUSD_VAULT_ID, okuBridgeRouter: OKU_BRIDGE_ROUTER_ID },
+  devnet: { litePsm: LITE_PSM_ID, wokusdVault: WOKUSD_VAULT_ID, okuBridgeRouter: OKU_BRIDGE_ROUTER_ID },
+  'mainnet-beta': { litePsm: LITE_PSM_ID, wokusdVault: WOKUSD_VAULT_ID, okuBridgeRouter: OKU_BRIDGE_ROUTER_ID },
+};

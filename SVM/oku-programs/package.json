@@ -21,6 +21,7 @@
 
     "cost": "tsx scripts/utils/calculateDeploymentCost.ts",
     "localnet:start": "solana-test-validator --reset",
+    "localnet:deploy:fresh": "rm -f deployments/localnet.json && npm run deploy:localnet",
     "localnet:full": "npm run deploy:localnet && npm run simulate:full",
     "clean": "anchor clean && rm -rf deployments/"
   },

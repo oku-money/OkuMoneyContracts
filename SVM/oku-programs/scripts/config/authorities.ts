@@ -1,15 +1,12 @@
 /**
  * RBAC authority mappings
  *
- * Environment variables required:
- * - COLD_MULTISIG (required for devnet/mainnet)
- * - WARM_MULTISIG (required for devnet/mainnet)
- * - ORCHESTRATOR (required for devnet/mainnet)
- * - BRIDGE_ORCHESTRATOR (required for devnet/mainnet)
- * - FEE_RECIPIENT (required for devnet/mainnet)
+ * For localnet/devnet: uses deployer wallet for all authorities (simplifies signing)
+ * For mainnet: requires separate pubkeys via environment variables
  */
 
 import { Keypair, PublicKey } from '@solana/web3.js';
+import * as fs from 'fs';
 import { NetworkName } from './networks';
 
 export interface AuthorityConfig {
@@ -50,57 +47,61 @@ export interface AuthorityConfig {
 }
 
 /**
- * Load authorities from environment variables
- * For localnet, optionally pass deployerPubkey to use deployer as all authorities
+ * Build an AuthorityConfig where all 23 roles point to a single pubkey
+ */
+function allRolesToSingleKey(deployer: PublicKey): AuthorityConfig {
+  return {
+    psm: {
+      roleAdmin: deployer,
+      pauser: deployer,
+      unpauser: deployer,
+      freezer: deployer,
+      unfreezer: deployer,
+      queueProcessor: deployer,
+      bufferDepositor: deployer,
+      bufferWithdrawer: deployer,
+      oracleManager: deployer,
+      capManager: deployer,
+      allowanceManager: deployer,
+      rebaser: deployer,
+    },
+    bridge: {
+      bridgeAdmin: deployer,
+      bridgePauser: deployer,
+      bridgeUnpauser: deployer,
+      orchestratorSigner: deployer,
+      feeRecipient: deployer,
+      chainManager: deployer,
+      feeManager: deployer,
+      nonceAdmin: deployer,
+    },
+    vault: {
+      roleAdmin: deployer,
+      pauser: deployer,
+      unpauser: deployer,
+    },
+  };
+}
+
+/**
+ * Load authorities based on network
+ *
+ * - localnet/devnet: all roles use deployer wallet (for simplicity)
+ * - mainnet: loads separate pubkeys from MAINNET_* env vars
  */
 export function loadAuthorities(network: NetworkName, deployerPubkey?: PublicKey): AuthorityConfig {
-  const prefix = network === 'localnet' ? '' : network.toUpperCase() + '_';
-
-  // For localnet, use deployer wallet as all authorities (simplifies signing)
-  if (network === 'localnet') {
-    // If no deployer pubkey provided, try to get from environment or use a placeholder
-    const deployer = deployerPubkey || getEnvPubkey('DEPLOYER_PUBKEY', false);
-
-    // Use deployer for all authorities on localnet (they can sign)
-    return {
-      psm: {
-        roleAdmin: deployer,
-        pauser: deployer,
-        unpauser: deployer,
-        freezer: deployer,
-        unfreezer: deployer,
-        queueProcessor: deployer,
-        bufferDepositor: deployer,
-        bufferWithdrawer: deployer,
-        oracleManager: deployer,
-        capManager: deployer,
-        allowanceManager: deployer,
-        rebaser: deployer,
-      },
-      bridge: {
-        bridgeAdmin: deployer,
-        bridgePauser: deployer,
-        bridgeUnpauser: deployer,
-        orchestratorSigner: deployer,
-        feeRecipient: deployer,
-        chainManager: deployer,
-        feeManager: deployer,
-        nonceAdmin: deployer,
-      },
-      vault: {
-        roleAdmin: deployer,
-        pauser: deployer,
-        unpauser: deployer,
-      },
-    };
+  // For localnet and devnet, use deployer wallet for all authorities
+  if (network === 'localnet' || network === 'devnet') {
+    const deployer = deployerPubkey || PublicKey.default;
+    return allRolesToSingleKey(deployer);
   }
 
-  // For devnet/mainnet, load from environment
-  const coldMultisig = getEnvPubkey(`${prefix}COLD_MULTISIG`, true);
-  const warmMultisig = getEnvPubkey(`${prefix}WARM_MULTISIG`, true);
-  const orchestrator = getEnvPubkey(`${prefix}ORCHESTRATOR`, true);
-  const bridgeOrchestrator = getEnvPubkey(`${prefix}BRIDGE_ORCHESTRATOR`, true);
-  const feeRecipient = getEnvPubkey(`${prefix}FEE_RECIPIENT`, true);
+  // For mainnet, load separate authority pubkeys from environment
+  const coldMultisig = getEnvPubkey('MAINNET_COLD_MULTISIG', true);
+  const warmMultisig = getEnvPubkey('MAINNET_WARM_MULTISIG', true);
+  const orchestrator = getEnvPubkey('MAINNET_ORCHESTRATOR', true);
+  const bridgeOrchestrator = getEnvPubkey('MAINNET_BRIDGE_ORCHESTRATOR', true);
+  const feeRecipient = getEnvPubkey('MAINNET_FEE_RECIPIENT', true);
 
   return {
     psm: {

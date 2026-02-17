@@ -6,6 +6,7 @@
  * Runs all deployment scripts in sequence: 001-007
  */
 
+import 'dotenv/config';
 import { execSync } from 'child_process';
 import { logger } from './utils/logger';
 import { detectNetwork, confirmMainnetDeployment } from './utils/network';

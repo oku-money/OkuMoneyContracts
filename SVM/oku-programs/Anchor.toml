@@ -6,9 +6,14 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-lite_psm = "FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX"
-wokusd_vault = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
-oku_bridge_router = "BRdgEiDLhPzrV2bJzjVdKaGm1FzLiVmSqLkQCJ2mX4Fq"
+lite_psm = "AhKZ4TT5W4mnvR3CsX1t9ymQmZx4535AN9SsrThu6C1T"
+wokusd_vault = "BjjK75Vxj6zsC49qYfcVYFPLqyXXkcaFzacTXwohmfVC"
+oku_bridge_router = "7DtqfP4fyShjAoM35QC9m3a9Ukh4tqcVgzTNLuyTkgE"
+
+[programs.devnet]
+lite_psm = "AhKZ4TT5W4mnvR3CsX1t9ymQmZx4535AN9SsrThu6C1T"
+wokusd_vault = "BjjK75Vxj6zsC49qYfcVYFPLqyXXkcaFzacTXwohmfVC"
+oku_bridge_router = "7DtqfP4fyShjAoM35QC9m3a9Ukh4tqcVgzTNLuyTkgE"
 
 [registry]
 url = "https://api.apr.dev"

@@ -110,13 +110,11 @@ async function main() {
     } catch (error: any) {
       if (error.message?.includes('already in use')) {
         logger.warning('Vault already initialized (idempotent)');
-        // If vault exists, wOkuUSD mint should be in deployment - check again
-        const reloadedDeployment = loadDeployment(network);
-        if (reloadedDeployment.tokens.wokusd) {
-          wokusdMint = new PublicKey(reloadedDeployment.tokens.wokusd);
-        } else {
-          throw new Error('Vault initialized but wOkuUSD mint not found in deployment');
-        }
+        // Read wOkuUSD mint from on-chain vault config (manifest may be stale)
+        const vaultConfigAccount = await vaultProgram.account.vaultConfig.fetch(vaultConfig);
+        wokusdMint = (vaultConfigAccount as any).wokusdMint;
+        logger.info(`Read wOkuUSD mint from on-chain config: ${wokusdMint.toBase58()}`);
+        updateDeployment(network, 'tokens', { wokusd: wokusdMint.toBase58() });
       } else {
         logger.error(`Vault initialization failed: ${error.message}`);
         throw error;

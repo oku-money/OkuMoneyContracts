@@ -288,7 +288,7 @@ pub struct Initialize<'info> {
     #[account(
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// wOkuUSD mint (standard SPL Token)
     /// Mint authority must be the config PDA
@@ -309,7 +309,7 @@ pub struct Initialize<'info> {
         associated_token::authority = config,
         associated_token::token_program = token_2022_program,
     )]
-    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -335,7 +335,7 @@ pub struct Wrap<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// wOkuUSD mint (standard SPL)
     #[account(
@@ -351,7 +351,7 @@ pub struct Wrap<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// User's wOkuUSD token account
     #[account(
@@ -368,7 +368,7 @@ pub struct Wrap<'info> {
         mut,
         address = config.vault_okusd
     )]
-    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -393,7 +393,7 @@ pub struct Unwrap<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// wOkuUSD mint (standard SPL)
     #[account(
@@ -410,7 +410,7 @@ pub struct Unwrap<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// User's wOkuUSD token account
     #[account(
@@ -426,7 +426,7 @@ pub struct Unwrap<'info> {
         mut,
         address = config.vault_okusd
     )]
-    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,

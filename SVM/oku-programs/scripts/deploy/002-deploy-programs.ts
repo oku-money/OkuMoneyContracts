@@ -18,10 +18,9 @@ import { detectNetwork, confirmMainnetDeployment } from '../utils/network';
 import { logger } from '../utils/logger';
 import { updateDeployment } from '../utils/addressBook';
 import { loadAuthorities } from '../config/authorities';
-import { PROGRAM_IDS } from '../config/constants';
 
 /**
- * Read program ID from deployed keypair file (for localnet)
+ * Read program ID from deployed keypair file (source of truth)
  */
 function getDeployedProgramId(programName: string): PublicKey {
   const keypairPath = join(process.cwd(), 'target/deploy', `${programName}-keypair.json`);
@@ -49,7 +48,6 @@ async function main() {
 
   logger.section('Building Programs');
 
-  // Build all programs
   logger.info('Running: anchor build');
   try {
     execSync('anchor build', { stdio: 'inherit' });
@@ -62,7 +60,6 @@ async function main() {
   logger.log('');
   logger.section('Deploying Programs');
 
-  // Deploy programs
   logger.info('Running: anchor deploy');
   try {
     execSync(`anchor deploy --provider.cluster ${network}`, { stdio: 'inherit' });
@@ -72,16 +69,12 @@ async function main() {
     throw error;
   }
 
-  // Save program IDs
-  // For localnet, read actual deployed IDs from keypair files
-  // For devnet/mainnet, use declared IDs from constants
-  const programIds = network === 'localnet'
-    ? {
-        litePsm: getDeployedProgramId('lite_psm'),
-        wokusdVault: getDeployedProgramId('wokusd_vault'),
-        okuBridgeRouter: getDeployedProgramId('oku_bridge_router'),
-      }
-    : PROGRAM_IDS[network];
+  // Always read program IDs from keypair files (source of truth)
+  const programIds = {
+    litePsm: getDeployedProgramId('lite_psm'),
+    wokusdVault: getDeployedProgramId('wokusd_vault'),
+    okuBridgeRouter: getDeployedProgramId('oku_bridge_router'),
+  };
 
   updateDeployment(network, 'programs', {
     litePsm: programIds.litePsm.toBase58(),
@@ -97,12 +90,12 @@ async function main() {
     'oku-bridge-router': programIds.okuBridgeRouter.toBase58(),
   });
 
-  // Transfer upgrade authority on devnet/mainnet
-  if (network !== 'localnet') {
+  // Transfer upgrade authority only on mainnet
+  if (network === 'mainnet-beta') {
     logger.log('');
     logger.section('Transferring Upgrade Authority');
 
-    const coldMultisig = authorities.psm.roleAdmin; // Using cold multisig
+    const coldMultisig = authorities.psm.roleAdmin;
 
     logger.warning(
       `Transferring upgrade authority to: ${coldMultisig.toBase58()}`,
@@ -120,7 +113,7 @@ async function main() {
         logger.info(`Transferring ${program.name}...`);
 
         execSync(
-          `solana program set-upgrade-authority ${program.id.toBase58()} --new-upgrade-authority ${coldMultisig.toBase58()} --url ${network === 'devnet' ? 'devnet' : 'mainnet-beta'}`,
+          `solana program set-upgrade-authority ${program.id.toBase58()} --new-upgrade-authority ${coldMultisig.toBase58()} --url mainnet-beta`,
           { stdio: 'inherit' }
         );
 
@@ -133,7 +126,6 @@ async function main() {
 
     logger.log('');
     logger.warning('IMPORTANT: Verify upgrade authorities with Squads', false);
-    logger.warning('The multisig must approve future upgrades', false);
   }
 
   logger.log('');

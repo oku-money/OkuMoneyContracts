@@ -1,0 +1,12 @@
+{
+  "network": "devnet",
+  "timestamp": "2026-02-14T01:23:36.652Z",
+  "tokens": {
+    "usdc": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+    "okusd": "99UE97DBoSCNTTWc9yzv5UjsEa4V15tTaePJdkbnXhrb"
+  },
+  "programs": {},
+  "pdas": {},
+  "nonces": {},
+  "authorities": {}
+}

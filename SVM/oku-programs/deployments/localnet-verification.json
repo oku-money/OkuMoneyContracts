@@ -1,19 +1,19 @@
 {
   "network": "localnet",
-  "timestamp": "2026-02-13T19:51:23.046Z",
+  "timestamp": "2026-02-17T23:02:56.803Z",
   "verification": {
-    "passed": 13,
+    "passed": 14,
     "failed": 0,
-    "warnings": 1,
+    "warnings": 0,
     "status": "PASSED"
   },
   "deployment": {
     "network": "localnet",
-    "timestamp": "2026-02-13T19:51:22.385Z",
+    "timestamp": "2026-02-17T23:02:56.197Z",
     "tokens": {
-      "usdc": "7VHc9MUECHeRhmKfZhVSMtSzSMsFnanMX4x3NuQJntjo",
-      "okusd": "5RZViYK5h3BcM2o43W3sHvmLBvGmN4DswLYhYoTypHcf",
-      "wokusd": "GEnXHgWmP3CmQPtmsr39shaxRCHK1zqMr3R58m4c8kvE"
+      "usdc": "9QpAUohYaPjmRCpEfkDiSQ9ytNgzzAzrvdRE2B6WT4N6",
+      "okusd": "CfW9Wojo1xhMuzdY78hTBtg1PenskC1AZJe31ah9d7GW",
+      "wokusd": "Fmij132jd3pM8dp8XJAp46enSWn3BbiceqvycYAWtifm"
     },
     "programs": {
       "litePsm": "AhKZ4TT5W4mnvR3CsX1t9ymQmZx4535AN9SsrThu6C1T",
@@ -24,10 +24,10 @@
       "psmConfig": "4NrVHUvA9UgK69F1zAadoe45w2Rh7R7Y5AuFhZsUVtvX",
       "redemptionQueue": "GmNTi9NMqDgzzTGkiVu8JZg7GW3mVkB5j5Z6ZGP49V44",
       "bridgeConfig": "47KBkk5hcvYDGcgN6AhPjNNGBtFvRDAt6cj3GUqv2xz2",
-      "psmVaultUsdc": "2rFvhweAFLwRfNz9wX4yyiB7RtqH7GtF3V26LTMvF8F8",
-      "psmOkusdEscrow": "4ny3MPsptzKdRjNaT4z1qq95kKkjahfodovHzqoqp7KV",
+      "psmVaultUsdc": "6rgw37bbQbWXLN4gR71CkBhNQfHyTXWn9uV3ahbP8k6f",
+      "psmOkusdEscrow": "7t2XjLdvixSqzL7E2KVJashrLohJod1v8Wc2btWkEwQC",
       "vaultConfig": "E7wQ19t5DiKeTSLkJ5kd879fvSrrp7h4aj4hXpkABmdh",
-      "vaultOkusd": "2WpB6LS3SxBgoL47LT4MChCExYQctyFW4w9Ex5jQPaTq",
+      "vaultOkusd": "FCWNt1rNpSWdirjPcnmRfiTyR1YHPMJgRNdC79t2dueL",
       "routerConfig": "5dQYzE4XHspmk6k8hRLhfuXM5tncq6m7FFByBcqF7UhH"
     },
     "nonces": {

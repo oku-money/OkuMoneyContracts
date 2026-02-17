@@ -14,11 +14,7 @@ import {
   getNetworkConfig,
 } from '../utils/network';
 import { logger } from '../utils/logger';
-import {
-  saveDeployment,
-  loadDeployment,
-  updateDeployment,
-} from '../utils/addressBook';
+import { loadDeployment, updateDeployment } from '../utils/addressBook';
 import { createToken2022Mint, createSPLTokenMint } from '../utils/tokenHelpers';
 import { loadAuthorities } from '../config/authorities';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
@@ -29,16 +25,9 @@ import {
   PROGRAM_IDS,
 } from '../config/constants';
 
-/**
- * Check if an account exists on-chain
- */
 async function accountExists(connection: Connection, address: PublicKey): Promise<boolean> {
-  try {
-    const accountInfo = await connection.getAccountInfo(address);
-    return accountInfo !== null;
-  } catch {
-    return false;
-  }
+  const accountInfo = await connection.getAccountInfo(address);
+  return accountInfo !== null;
 }
 
 async function main() {
@@ -71,90 +60,54 @@ async function main() {
   let usdcMint: PublicKey;
 
   if (config.usdc.isNative) {
-    // Localnet: Create mock USDC
-    if (deployment.tokens.usdc) {
-      const existingUsdcMint = new PublicKey(deployment.tokens.usdc);
-      // Verify it actually exists on-chain (could be stale after validator reset)
-      if (await accountExists(provider.connection, existingUsdcMint)) {
-        logger.info(`Using existing USDC: ${deployment.tokens.usdc}`);
-        usdcMint = existingUsdcMint;
-      } else {
-        logger.warning('Deployment manifest has stale USDC address, creating new one...');
-        logger.info('Creating mock USDC (SPL Token)...');
-        usdcMint = await createSPLTokenMint(
-          provider.connection,
-          provider.wallet.payer,
-          USDC_DECIMALS,
-          provider.wallet.publicKey, // Mint authority (for testing)
-          null // No freeze authority
-        );
+    // Localnet: Create mock USDC (or reuse existing)
+    const existing = deployment.tokens.usdc ? new PublicKey(deployment.tokens.usdc) : null;
 
-        updateDeployment(network, 'tokens', { usdc: usdcMint.toBase58() });
-      }
+    if (existing && await accountExists(provider.connection, existing)) {
+      logger.info(`Using existing USDC: ${existing.toBase58()}`);
+      usdcMint = existing;
     } else {
+      if (existing) logger.warning('Stale USDC address in manifest, creating new one...');
       logger.info('Creating mock USDC (SPL Token)...');
       usdcMint = await createSPLTokenMint(
         provider.connection,
         provider.wallet.payer,
         USDC_DECIMALS,
-        provider.wallet.publicKey, // Mint authority (for testing)
-        null // No freeze authority
+        provider.wallet.publicKey,
+        null
       );
-
       updateDeployment(network, 'tokens', { usdc: usdcMint.toBase58() });
     }
   } else {
     // Devnet/Mainnet: Use existing USDC
     usdcMint = config.usdc.mint;
     logger.success(`Using existing USDC: ${usdcMint.toBase58()}`);
-
     updateDeployment(network, 'tokens', { usdc: usdcMint.toBase58() });
   }
 
-  // 2. Create OkuUSD (Token-2022)
+  // 2. Create OkuUSD (Token-2022) or reuse existing
   let okusdMint: PublicKey;
+  const existingOkusd = deployment.tokens.okusd ? new PublicKey(deployment.tokens.okusd) : null;
 
-  if (deployment.tokens.okusd) {
-    const existingOkusdMint = new PublicKey(deployment.tokens.okusd);
-    // Verify it actually exists on-chain (could be stale after validator reset)
-    if (await accountExists(provider.connection, existingOkusdMint)) {
-      logger.info(`Using existing OkuUSD: ${deployment.tokens.okusd}`);
-      okusdMint = existingOkusdMint;
-    } else {
-      logger.warning('Deployment manifest has stale OkuUSD address, creating new one...');
-      logger.info('Creating OkuUSD (Token-2022 with Interest-Bearing)...');
-      okusdMint = await createToken2022Mint({
-        connection: provider.connection,
-        payer: provider.wallet.payer,
-        decimals: OKUSD_DECIMALS,
-        mintAuthority: psmConfigPDA, // PSM will mint
-        freezeAuthority: psmConfigPDA, // PSM will freeze (compliance)
-        rateAuthority: authorities.psm.rebaser, // Orchestrator updates rate
-        initialRate: INITIAL_INTEREST_RATE_BPS,
-      });
-
-      updateDeployment(network, 'tokens', { okusd: okusdMint.toBase58() });
-    }
+  if (existingOkusd && await accountExists(provider.connection, existingOkusd)) {
+    logger.info(`Using existing OkuUSD: ${existingOkusd.toBase58()}`);
+    okusdMint = existingOkusd;
   } else {
+    if (existingOkusd) logger.warning('Stale OkuUSD address in manifest, creating new one...');
     logger.info('Creating OkuUSD (Token-2022 with Interest-Bearing)...');
-
     okusdMint = await createToken2022Mint({
       connection: provider.connection,
       payer: provider.wallet.payer,
       decimals: OKUSD_DECIMALS,
-      mintAuthority: psmConfigPDA, // PSM will mint
-      freezeAuthority: psmConfigPDA, // PSM will freeze (compliance)
-      rateAuthority: authorities.psm.rebaser, // Orchestrator updates rate
+      mintAuthority: psmConfigPDA,
+      freezeAuthority: psmConfigPDA,
+      rateAuthority: authorities.psm.rebaser,
       initialRate: INITIAL_INTEREST_RATE_BPS,
     });
-
     updateDeployment(network, 'tokens', { okusd: okusdMint.toBase58() });
 
     logger.log('');
-    logger.warning(
-      'IMPORTANT: Mint/freeze authorities are set to PSM config PDA',
-      false
-    );
+    logger.warning('IMPORTANT: Mint/freeze authorities are set to PSM config PDA', false);
     logger.warning('PSM config must be initialized before minting', false);
   }
 

@@ -287,7 +287,7 @@ async function main() {
 
       logger.success(`Chain ${chainId} added: ${tx}`);
     } catch (error: any) {
-      if (error.message?.includes('already exists')) {
+      if (error.message?.includes('already') || error.message?.includes('ChainAlreadySupported')) {
         logger.warning(`Chain ${chainId}: Already added (idempotent)`);
       } else {
         logger.error(`Failed to add chain ${chainId}: ${error.message}`);

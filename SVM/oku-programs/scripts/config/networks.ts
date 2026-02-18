@@ -38,9 +38,8 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
     name: 'devnet',
     cluster: 'https://api.devnet.solana.com',
     usdc: {
-      // Devnet USDC from Circle
-      mint: new PublicKey('4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'),
-      isNative: false,
+      mint: PublicKey.default, // Created during deployment (mock USDC, deployer as mint authority)
+      isNative: true,
     },
     oracle: {
       enabled: true,

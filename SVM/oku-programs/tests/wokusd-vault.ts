@@ -15,21 +15,11 @@ import {
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { WokusdVault } from "../target/types/wokusd_vault";
-import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
 
 // Use anchor's web3 to avoid version conflicts
 const { Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, PublicKey } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;
 type Keypair = anchor.web3.Keypair;
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const IDL = JSON.parse(readFileSync(join(__dirname, "../target/idl/wokusd_vault.json"), "utf-8"));
-// Program ID from Anchor.toml
-const PROGRAM_ID = new PublicKey("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
 describe("wokusd-vault", () => {
   // Delay initialization until tests run
@@ -54,7 +44,7 @@ describe("wokusd-vault", () => {
   let configBump: number;
 
   // Token accounts
-  let vaultOkusd: PublicKey;
+  let vaultOkusdAta: PublicKey;
   let userOkusdAta: PublicKey;
   let userWokusdAta: PublicKey;
   let user2OkusdAta: PublicKey;
@@ -69,21 +59,17 @@ describe("wokusd-vault", () => {
   before(async () => {
     provider = anchor.AnchorProvider.env();
     anchor.setProvider(provider);
-    // Anchor 0.29 API: new Program(idl, programId, provider)
-    program = new Program<WokusdVault>(IDL as any, PROGRAM_ID, provider);
+    program = anchor.workspace.WokusdVault as Program<WokusdVault>;
     payer = (provider.wallet as anchor.Wallet).payer;
     admin = payer;
 
-    // Airdrop SOL to test accounts
-    await Promise.all([
-      provider.connection.requestAirdrop(user.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL),
-      provider.connection.requestAirdrop(user2.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL),
-      provider.connection.requestAirdrop(warmMultisig.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL),
-      provider.connection.requestAirdrop(coldMultisig.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL),
-    ]);
-
-    // Wait for airdrops to confirm
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    // Airdrop SOL to test accounts with proper confirmation
+    const { safeAirdropAll } = await import("./shared/setup");
+    await safeAirdropAll(
+      provider.connection,
+      [user, user2, warmMultisig, coldMultisig],
+      10 * anchor.web3.LAMPORTS_PER_SOL
+    );
 
     // Derive PDAs
     [configPda, configBump] = PublicKey.findProgramAddressSync(
@@ -209,7 +195,7 @@ describe("wokusd-vault", () => {
       await program.methods
         .initialize()
         .accounts({
-          admin: admin.publicKey,
+          roleAdmin: admin.publicKey,
           // Granular authorities - RBAC separation
           pauser: warmMultisig.publicKey,
           unpauser: coldMultisig.publicKey,

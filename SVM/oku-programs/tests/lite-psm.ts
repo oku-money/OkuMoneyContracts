@@ -16,15 +16,13 @@ import {
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { LitePsm } from "../target/types/lite_psm";
-import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
 import {
   coldMultisig,
   warmMultisig,
   psmOrchestrator,
   initializePSMIfNeeded,
   ensurePSMUnpaused,
+  safeAirdropAll,
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
   DECIMALS,
@@ -34,13 +32,6 @@ import {
 const { Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, PublicKey } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;
 type Keypair = anchor.web3.Keypair;
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const IDL = JSON.parse(readFileSync(join(__dirname, "../target/idl/lite_psm.json"), "utf-8"));
-// Program ID from Anchor.toml
-const PROGRAM_ID = new PublicKey("FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX");
 
 describe("lite-psm", () => {
   // Delay initialization until tests run
@@ -85,8 +76,7 @@ describe("lite-psm", () => {
   before(async () => {
     provider = anchor.AnchorProvider.env();
     anchor.setProvider(provider);
-    // Anchor 0.29 API: new Program(idl, programId, provider)
-    program = new Program<LitePsm>(IDL as any, PROGRAM_ID, provider);
+    program = anchor.workspace.LitePsm as Program<LitePsm>;
     payer = (provider.wallet as anchor.Wallet).payer;
     admin = payer;
 
@@ -163,14 +153,12 @@ describe("lite-psm", () => {
       okusdMint = okusdMintKeypair.publicKey;
     }
 
-    // Airdrop SOL to test accounts (shared authorities are funded by initializePSMIfNeeded)
-    await Promise.all([
-      provider.connection.requestAirdrop(user.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL),
-      provider.connection.requestAirdrop(user2.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL),
-    ]);
-
-    // Wait for airdrops to confirm
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    // Airdrop SOL to test accounts with proper confirmation
+    await safeAirdropAll(
+      provider.connection,
+      [user, user2],
+      10 * anchor.web3.LAMPORTS_PER_SOL
+    );
 
     // Create user token accounts
     userUsdcAta = getAssociatedTokenAddressSync(

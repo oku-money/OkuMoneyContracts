@@ -19,6 +19,16 @@
     "simulate:full": "tsx scripts/simulate/full-flow.ts",
     "simulate:verify": "tsx scripts/simulate/verify-state.ts",
 
+    "devnet:test": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts",
+    "devnet:test:state": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts --step=state",
+    "devnet:test:mint": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts --step=mint",
+    "devnet:test:transfer": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts --step=transfer",
+    "devnet:test:rebase": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts --step=rebase",
+    "devnet:test:wrap": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts --step=wrap",
+    "devnet:test:unwrap": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts --step=unwrap",
+    "devnet:test:redeem": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts --step=redeem",
+    "devnet:test:bridge": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts --step=bridge",
+
     "cost": "tsx scripts/utils/calculateDeploymentCost.ts",
     "localnet:start": "solana-test-validator --reset",
     "localnet:deploy:fresh": "rm -f deployments/localnet.json && npm run deploy:localnet",

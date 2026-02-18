@@ -12,26 +12,10 @@ import { expect } from "chai";
 import { OkuBridgeRouter } from "../target/types/oku_bridge_router";
 import { WokusdVault } from "../target/types/wokusd_vault";
 import { LitePsm } from "../target/types/lite_psm";
-import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
 
 const { Keypair, SystemProgram, PublicKey } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;
 type Keypair = anchor.web3.Keypair;
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-// Load IDLs
-const ROUTER_IDL = JSON.parse(readFileSync(join(__dirname, "../target/idl/oku_bridge_router.json"), "utf-8"));
-const VAULT_IDL = JSON.parse(readFileSync(join(__dirname, "../target/idl/wokusd_vault.json"), "utf-8"));
-const PSM_IDL = JSON.parse(readFileSync(join(__dirname, "../target/idl/lite_psm.json"), "utf-8"));
-
-// Program IDs from Anchor.toml
-const ROUTER_PROGRAM_ID = new PublicKey("BRdgEiDLhPzrV2bJzjVdKaGm1FzLiVmSqLkQCJ2mX4Fq");
-const VAULT_PROGRAM_ID = new PublicKey("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
-const PSM_PROGRAM_ID = new PublicKey("FbYGHcN1wyXebY51vFpNmmNMuSZoXpEiEgCu3Lm9GujX");
 
 describe("oku-bridge-router", () => {
   let provider: anchor.AnchorProvider;
@@ -63,15 +47,15 @@ describe("oku-bridge-router", () => {
     provider = anchor.AnchorProvider.env();
     anchor.setProvider(provider);
 
-    routerProgram = new Program<OkuBridgeRouter>(ROUTER_IDL as any, ROUTER_PROGRAM_ID, provider);
-    vaultProgram = new Program<WokusdVault>(VAULT_IDL as any, VAULT_PROGRAM_ID, provider);
-    psmProgram = new Program<LitePsm>(PSM_IDL as any, PSM_PROGRAM_ID, provider);
+    routerProgram = anchor.workspace.OkuBridgeRouter as Program<OkuBridgeRouter>;
+    vaultProgram = anchor.workspace.WokusdVault as Program<WokusdVault>;
+    psmProgram = anchor.workspace.LitePsm as Program<LitePsm>;
     payer = (provider.wallet as anchor.Wallet).payer;
     admin = payer;
 
-    // Airdrop SOL to test user
-    await provider.connection.requestAirdrop(user.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    // Airdrop SOL to test user with proper confirmation
+    const { safeAirdrop } = await import("./shared/setup");
+    await safeAirdrop(provider.connection, user.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL);
 
     // Derive PDAs
     [routerConfigPda] = PublicKey.findProgramAddressSync(
@@ -139,16 +123,16 @@ describe("oku-bridge-router", () => {
         .accounts({
           admin: admin.publicKey,
           config: routerConfigPda,
-          psmProgram: PSM_PROGRAM_ID,
-          vaultProgram: VAULT_PROGRAM_ID,
+          psmProgram: psmProgram.programId,
+          vaultProgram: vaultProgram.programId,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
 
       const config = await routerProgram.account.routerConfig.fetch(routerConfigPda);
       expect(config.admin.toString()).to.equal(admin.publicKey.toString());
-      expect(config.psmProgram.toString()).to.equal(PSM_PROGRAM_ID.toString());
-      expect(config.vaultProgram.toString()).to.equal(VAULT_PROGRAM_ID.toString());
+      expect(config.psmProgram.toString()).to.equal(psmProgram.programId.toString());
+      expect(config.vaultProgram.toString()).to.equal(vaultProgram.programId.toString());
       expect(config.isPaused).to.be.false;
     });
   });
@@ -164,8 +148,8 @@ describe("oku-bridge-router", () => {
           .accounts({
             admin: admin.publicKey,
             config: routerConfigPda,
-            psmProgram: PSM_PROGRAM_ID,
-            vaultProgram: VAULT_PROGRAM_ID,
+            psmProgram: psmProgram.programId,
+            vaultProgram: vaultProgram.programId,
             systemProgram: SystemProgram.programId,
           })
           .rpc();
@@ -210,7 +194,7 @@ describe("oku-bridge-router", () => {
             okusdMint: okusdMint,
             userOkusdAta: userOkusdAta,
             feeRecipientAta: feeRecipientAta,
-            psmProgram: PSM_PROGRAM_ID,
+            psmProgram: psmProgram.programId,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
           })
@@ -246,7 +230,7 @@ describe("oku-bridge-router", () => {
             okusdMint: okusdMint,
             userOkusdAta: userOkusdAta,
             feeRecipientAta: feeRecipientAta,
-            psmProgram: PSM_PROGRAM_ID,
+            psmProgram: psmProgram.programId,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
           })
@@ -277,8 +261,8 @@ describe("oku-bridge-router", () => {
             .accounts({
               admin: admin.publicKey,
               config: routerConfigPda,
-              psmProgram: PSM_PROGRAM_ID,
-              vaultProgram: VAULT_PROGRAM_ID,
+              psmProgram: psmProgram.programId,
+              vaultProgram: vaultProgram.programId,
               systemProgram: SystemProgram.programId,
             })
             .rpc();

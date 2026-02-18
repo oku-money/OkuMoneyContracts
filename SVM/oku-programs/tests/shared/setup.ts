@@ -34,6 +34,55 @@ export const MINTER_ALLOWANCE = new BN(100_000_000_000); // 100k with 6 decimals
 export const DECIMALS = 6;
 
 // ============================================================================
+// Airdrop Helpers
+// ============================================================================
+
+/**
+ * Request an airdrop and wait for confirmation.
+ * Uses confirmTransaction instead of setTimeout for reliability.
+ */
+export async function safeAirdrop(
+  connection: anchor.web3.Connection,
+  pubkey: PublicKey,
+  lamports: number
+): Promise<void> {
+  const sig = await connection.requestAirdrop(pubkey, lamports);
+  const latestBlockhash = await connection.getLatestBlockhash();
+  await connection.confirmTransaction({
+    signature: sig,
+    blockhash: latestBlockhash.blockhash,
+    lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+  });
+}
+
+/**
+ * Airdrop SOL to multiple accounts and wait for all confirmations.
+ */
+export async function safeAirdropAll(
+  connection: anchor.web3.Connection,
+  accounts: Keypair[],
+  lamports: number
+): Promise<void> {
+  // Send airdrops in batches of 5 to avoid overwhelming the validator
+  for (let i = 0; i < accounts.length; i += 5) {
+    const batch = accounts.slice(i, i + 5);
+    const latestBlockhash = await connection.getLatestBlockhash();
+    const sigs = await Promise.all(
+      batch.map((kp) => connection.requestAirdrop(kp.publicKey, lamports))
+    );
+    await Promise.all(
+      sigs.map((sig) =>
+        connection.confirmTransaction({
+          signature: sig,
+          blockhash: latestBlockhash.blockhash,
+          lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+        })
+      )
+    );
+  }
+}
+
+// ============================================================================
 // Shared Authority Keypairs
 // ============================================================================
 // IMPORTANT: These keypairs are generated once at module load and reused
@@ -164,24 +213,12 @@ export async function initializePSMIfNeeded(
     // Not initialized yet, proceed with initialization
   }
 
-  // Airdrop SOL to shared authorities
-  await Promise.all([
-    provider.connection.requestAirdrop(
-      coldMultisig.publicKey,
-      10 * anchor.web3.LAMPORTS_PER_SOL
-    ),
-    provider.connection.requestAirdrop(
-      warmMultisig.publicKey,
-      10 * anchor.web3.LAMPORTS_PER_SOL
-    ),
-    provider.connection.requestAirdrop(
-      psmOrchestrator.publicKey,
-      10 * anchor.web3.LAMPORTS_PER_SOL
-    ),
-  ]);
-
-  // Wait for airdrops to confirm
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  // Airdrop SOL to shared authorities with proper confirmation
+  await safeAirdropAll(
+    provider.connection,
+    [coldMultisig, warmMultisig, psmOrchestrator],
+    10 * anchor.web3.LAMPORTS_PER_SOL
+  );
 
   // Initialize PSM with granular authorities
   await program.methods
@@ -265,8 +302,5 @@ export async function ensurePSMUnpaused(
       })
       .signers([coldMultisig])
       .rpc();
-
-    // Wait for transaction to confirm
-    await new Promise((resolve) => setTimeout(resolve, 500));
   }
 }

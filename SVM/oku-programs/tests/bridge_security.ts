@@ -33,6 +33,8 @@ import {
   bridgeOrchestrator,
   initializePSMIfNeeded,
   ensurePSMUnpaused,
+  safeAirdrop,
+  safeAirdropAll,
 } from "./shared/setup";
 
 // Use anchor's web3 types
@@ -274,37 +276,30 @@ describe("Bridge Security Tests", () => {
     // Ensure payer has sufficient SOL for rent (at least 10 SOL)
     const payerBalance = await provider.connection.getBalance(payer.publicKey);
     if (payerBalance < 10 * anchor.web3.LAMPORTS_PER_SOL) {
-      await provider.connection.requestAirdrop(
-        payer.publicKey,
-        10 * anchor.web3.LAMPORTS_PER_SOL
-      );
-      await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait for airdrop
+      await safeAirdrop(provider.connection, payer.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL);
     }
 
-    // Airdrop SOL to all test accounts
-    const airdropPromises = [
-      bridgeAdmin,
-      bridgePauser,
-      bridgeUnpauser,
-      orchestrator,
-      feeRecipient,
-      chainManager,
-      feeManager,
-      nonceAdmin,
-      coldMultisig,
-      warmMultisig,
-      psmOrchestrator,
-      user,
-      user2,
-      unauthorizedUser,
-    ].map((kp) =>
-      provider.connection.requestAirdrop(
-        kp.publicKey,
-        10 * anchor.web3.LAMPORTS_PER_SOL
-      )
+    // Airdrop SOL to all test accounts with proper confirmation
+    await safeAirdropAll(
+      provider.connection,
+      [
+        bridgeAdmin,
+        bridgePauser,
+        bridgeUnpauser,
+        orchestrator,
+        feeRecipient,
+        chainManager,
+        feeManager,
+        nonceAdmin,
+        coldMultisig,
+        warmMultisig,
+        psmOrchestrator,
+        user,
+        user2,
+        unauthorizedUser,
+      ],
+      10 * anchor.web3.LAMPORTS_PER_SOL
     );
-    await Promise.all(airdropPromises);
-    await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait for confirmations
 
     // Derive PDAs
     [configPda] = PublicKey.findProgramAddressSync(
@@ -638,9 +633,6 @@ describe("Bridge Security Tests", () => {
           })
           .signers([bridgeUnpauser])
           .rpc();
-
-        // WAIT for unpause to confirm
-        await new Promise(resolve => setTimeout(resolve, 500));
 
         // Verify unpause succeeded
         const updatedBridgeConfig = await program.account.bridgeConfig.fetch(bridgeConfigPda);

@@ -320,6 +320,7 @@ pub struct Initialize<'info> {
     pub wokusd_mint: Account<'info, Mint>,
 
     /// Vault's OkuUSD token account
+    /// NOTE: Unboxed to avoid Anchor 0.29 Box<InterfaceAccount> access violation with init CPI
     #[account(
         init,
         payer = role_admin,
@@ -327,7 +328,7 @@ pub struct Initialize<'info> {
         associated_token::authority = config,
         associated_token::token_program = token_2022_program,
     )]
-    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,

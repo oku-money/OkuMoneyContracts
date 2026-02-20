@@ -911,4 +911,64 @@ describe("lite-psm", () => {
   // For brevity, I've focused on the critical RBAC tests above.
   // The existing tests will need their authority references updated throughout.
 
+  // ============================================================================
+  // Diagnostic Tests: setup_okusd_escrow
+  // ============================================================================
+  describe("setup_okusd_escrow diagnosis", () => {
+    it("verifies okusdMint is owned by Token-2022 program", async () => {
+      const mintInfo = await provider.connection.getAccountInfo(okusdMint);
+      expect(mintInfo).to.not.be.null;
+      expect(mintInfo!.owner.toBase58()).to.equal(
+        TOKEN_2022_PROGRAM_ID.toBase58(),
+        "OkuUSD mint should be owned by Token-2022 program"
+      );
+      console.log("    okusdMint owner:", mintInfo!.owner.toBase58());
+      console.log("    Token-2022 program:", TOKEN_2022_PROGRAM_ID.toBase58());
+    });
+
+    it("verifies derived ATA address matches expected", async () => {
+      const expectedAta = getAssociatedTokenAddressSync(
+        okusdMint,
+        configPda,
+        true, // allowOwnerOffCurve for PDA
+        TOKEN_2022_PROGRAM_ID
+      );
+      console.log("    Expected ATA:", expectedAta.toBase58());
+      console.log("    Passed vaultOkusd:", vaultOkusdAta.toBase58());
+      expect(expectedAta.toBase58()).to.equal(
+        vaultOkusdAta.toBase58(),
+        "Derived ATA should match the vaultOkusdAta passed to instruction"
+      );
+    });
+
+    it("verifies setup_okusd_escrow succeeded (escrow ATA exists)", async () => {
+      // After the before() hook runs initializePSMIfNeeded which calls setupOkusdEscrow,
+      // the vault_okusd ATA should exist on-chain
+      const escrowInfo = await provider.connection.getAccountInfo(vaultOkusdAta);
+      expect(escrowInfo).to.not.be.null;
+      expect(escrowInfo!.owner.toBase58()).to.equal(
+        TOKEN_2022_PROGRAM_ID.toBase58(),
+        "Escrow ATA should be owned by Token-2022 program"
+      );
+      console.log("    Escrow ATA exists:", vaultOkusdAta.toBase58());
+      console.log("    Escrow ATA owner:", escrowInfo!.owner.toBase58());
+      console.log("    Escrow ATA data length:", escrowInfo!.data.length);
+    });
+
+    it("verifies config PDA stores correct vault_okusd reference", async () => {
+      const config = await program.account.psmConfig.fetch(configPda);
+      const expectedAta = getAssociatedTokenAddressSync(
+        okusdMint,
+        configPda,
+        true,
+        TOKEN_2022_PROGRAM_ID
+      );
+      expect(config.vaultOkusd.toBase58()).to.equal(
+        expectedAta.toBase58(),
+        "PsmConfig.vault_okusd should match the derived ATA address"
+      );
+      console.log("    Config vault_okusd:", config.vaultOkusd.toBase58());
+    });
+  });
+
 });

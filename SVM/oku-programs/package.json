@@ -30,6 +30,10 @@
     "devnet:test:bridge": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts --step=bridge",
 
     "cost": "tsx scripts/utils/calculateDeploymentCost.ts",
+    "localnet:test": "NETWORK=localnet tsx scripts/devnet/test-devnet.ts",
+    "localnet:test:state": "NETWORK=localnet tsx scripts/devnet/test-devnet.ts --step=state",
+    "localnet:test:mint": "NETWORK=localnet tsx scripts/devnet/test-devnet.ts --step=mint",
+
     "localnet:start": "solana-test-validator --reset",
     "localnet:deploy:fresh": "rm -f deployments/localnet.json && npm run deploy:localnet",
     "localnet:full": "npm run deploy:localnet && npm run simulate:full",

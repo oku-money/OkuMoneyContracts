@@ -42,17 +42,24 @@ pub mod oku_bridge_router {
         require!(!is_paused, RouterError::Paused);
         require!(wokusd_shares > 0, RouterError::ZeroAmount);
 
+        // Extract AccountInfo from boxed accounts BEFORE any CPI.
+        // After a CPI, the BPF runtime may invalidate heap pointers inside
+        // Box<InterfaceAccount>, causing access violations in subsequent CPIs.
+        let okusd_mint_info = ctx.accounts.okusd_mint.to_account_info();
+        let user_okusd_ata_info = ctx.accounts.user_okusd_ata.to_account_info();
+        let vault_okusd_info = ctx.accounts.vault_okusd.to_account_info();
+
         // Step 1: Unwrap wOkuUSD -> OkuUSD via vault program CPI
         let unwrap_cpi_ctx = CpiContext::new(
             ctx.accounts.vault_program.to_account_info(),
             wokusd_vault::cpi::accounts::Unwrap {
                 user: ctx.accounts.user.to_account_info(),
                 config: ctx.accounts.vault_config.to_account_info(),
-                okusd_mint: ctx.accounts.okusd_mint.to_account_info(),
+                okusd_mint: okusd_mint_info.clone(),
                 wokusd_mint: ctx.accounts.wokusd_mint.to_account_info(),
-                user_okusd_ata: ctx.accounts.user_okusd_ata.to_account_info(),
+                user_okusd_ata: user_okusd_ata_info.clone(),
                 user_wokusd_ata: ctx.accounts.user_wokusd_ata.to_account_info(),
-                vault_okusd: ctx.accounts.vault_okusd.to_account_info(),
+                vault_okusd: vault_okusd_info,
                 token_program: ctx.accounts.token_program.to_account_info(),
                 token_2022_program: ctx.accounts.token_2022_program.to_account_info(),
                 associated_token_program: ctx.accounts.associated_token_program.to_account_info(),
@@ -62,7 +69,8 @@ pub mod oku_bridge_router {
         wokusd_vault::cpi::unwrap(unwrap_cpi_ctx, wokusd_shares)?;
 
         // Step 2: Bridge burn OkuUSD via PSM CPI
-        // Get OkuUSD balance after unwrap
+        // Reload the user's OkuUSD ATA to get updated balance after unwrap
+        ctx.accounts.user_okusd_ata.reload()?;
         let okusd_balance = ctx.accounts.user_okusd_ata.amount;
 
         let bridge_burn_cpi_ctx = CpiContext::new(
@@ -72,8 +80,8 @@ pub mod oku_bridge_router {
                 bridge_config: ctx.accounts.bridge_config.to_account_info(),
                 config: ctx.accounts.psm_config.to_account_info(),
                 bridge_nonce: ctx.accounts.bridge_nonce.to_account_info(),
-                okusd_mint: ctx.accounts.okusd_mint.to_account_info(),
-                user_okusd_ata: ctx.accounts.user_okusd_ata.to_account_info(),
+                okusd_mint: okusd_mint_info,
+                user_okusd_ata: user_okusd_ata_info,
                 fee_recipient_ata: ctx.accounts.fee_recipient_ata.to_account_info(),
                 token_2022_program: ctx.accounts.token_2022_program.to_account_info(),
                 system_program: ctx.accounts.system_program.to_account_info(),

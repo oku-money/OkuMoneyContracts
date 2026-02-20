@@ -1,6 +1,6 @@
 {
   "network": "devnet",
-  "timestamp": "2026-02-17T23:22:57.427Z",
+  "timestamp": "2026-02-18T19:01:04.420Z",
   "verification": {
     "passed": 14,
     "failed": 0,
@@ -9,10 +9,10 @@
   },
   "deployment": {
     "network": "devnet",
-    "timestamp": "2026-02-17T23:22:56.351Z",
+    "timestamp": "2026-02-18T19:01:01.404Z",
     "tokens": {
-      "usdc": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
-      "okusd": "8vUcJ8jPz8w94FRaPUX4YZWHoWHW2vkQmurHKWdVdJcX",
+      "usdc": "Ckpi1XNbe1Qk5B3G5JgHq444LNN9Cq1rydEWW24AtKjz",
+      "okusd": "C3uHQQ1j8NvbPSfbUwbwhvXL5LeLECKWKxBM3MxZmz3D",
       "wokusd": "27AWaewySCWPXVgm5sP6QHypD8e6iP6XusPesYSTvKU2"
     },
     "programs": {
@@ -24,10 +24,10 @@
       "psmConfig": "4NrVHUvA9UgK69F1zAadoe45w2Rh7R7Y5AuFhZsUVtvX",
       "redemptionQueue": "GmNTi9NMqDgzzTGkiVu8JZg7GW3mVkB5j5Z6ZGP49V44",
       "bridgeConfig": "47KBkk5hcvYDGcgN6AhPjNNGBtFvRDAt6cj3GUqv2xz2",
-      "psmVaultUsdc": "Gz1rJgu6KRUU1vGFmoLik1wZ1utjJjxALZ9NuJxDPqJX",
-      "psmOkusdEscrow": "BzzMYr8PGLWAXAVBAaukqAgx5yPhcUxGKpfDkJ6YtTjo",
+      "psmVaultUsdc": "HD7hdWPQzKfnbW9DPZJaGegLS8CQZeFeofqPa7eFkQuT",
+      "psmOkusdEscrow": "DCuKshqXF2o5xpwrpPKpLScfLLMC4eiLL1b1EiZoED8v",
       "vaultConfig": "E7wQ19t5DiKeTSLkJ5kd879fvSrrp7h4aj4hXpkABmdh",
-      "vaultOkusd": "2LAd1hudjNYV1njFysF86HBACGSA2LTxsLMvbXttYazv",
+      "vaultOkusd": "5cqiQ71sDbAceBpQvy45aGRKmtrX1GVjDCGeeze6ruTt",
       "routerConfig": "5dQYzE4XHspmk6k8hRLhfuXM5tncq6m7FFByBcqF7UhH"
     },
     "nonces": {

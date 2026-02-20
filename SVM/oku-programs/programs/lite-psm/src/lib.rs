@@ -1502,7 +1502,7 @@ pub struct MintOkusd<'info> {
         seeds = [PsmConfig::SEED],
         bump = config.bump
     )]
-    pub config: Account<'info, PsmConfig>,
+    pub config: Box<Account<'info, PsmConfig>>,
 
     /// USDC mint
     #[account(address = config.usdc_mint)]
@@ -1514,7 +1514,7 @@ pub struct MintOkusd<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
 
     /// User's USDC account
     #[account(
@@ -1526,6 +1526,7 @@ pub struct MintOkusd<'info> {
     pub user_usdc_ata: Account<'info, TokenAccount>,
 
     /// User's OkuUSD account
+    /// NOTE: Unboxed to avoid Anchor 0.29 Box<InterfaceAccount> access violation with init_if_needed
     #[account(
         init_if_needed,
         payer = user,
@@ -1533,7 +1534,7 @@ pub struct MintOkusd<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
 
     /// PSM's USDC vault
     #[account(
@@ -1561,7 +1562,7 @@ pub struct Redeem<'info> {
         seeds = [PsmConfig::SEED],
         bump = config.bump
     )]
-    pub config: Account<'info, PsmConfig>,
+    pub config: Box<Account<'info, PsmConfig>>,
 
     #[account(
         mut,
@@ -1634,7 +1635,7 @@ pub struct ProcessQueue<'info> {
         seeds = [PsmConfig::SEED],
         bump = config.bump
     )]
-    pub config: Account<'info, PsmConfig>,
+    pub config: Box<Account<'info, PsmConfig>>,
 
     #[account(
         mut,
@@ -1683,7 +1684,7 @@ pub struct DepositBuffer<'info> {
         seeds = [PsmConfig::SEED],
         bump = config.bump
     )]
-    pub config: Account<'info, PsmConfig>,
+    pub config: Box<Account<'info, PsmConfig>>,
 
     /// Buffer depositor's USDC account
     #[account(
@@ -1718,7 +1719,7 @@ pub struct WithdrawBuffer<'info> {
         seeds = [PsmConfig::SEED],
         bump = config.bump
     )]
-    pub config: Account<'info, PsmConfig>,
+    pub config: Box<Account<'info, PsmConfig>>,
 
     /// Buffer withdrawer's USDC account (destination)
     #[account(
@@ -1761,7 +1762,7 @@ pub struct BridgeMint<'info> {
         seeds = [PsmConfig::SEED],
         bump = config.bump
     )]
-    pub config: Account<'info, PsmConfig>,
+    pub config: Box<Account<'info, PsmConfig>>,
 
     /// ProcessedRequest PDA (prevents replay attacks)
     /// Seeds are derived from keccak256(message_bytes)

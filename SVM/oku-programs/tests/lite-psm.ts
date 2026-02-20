@@ -345,12 +345,112 @@ describe("lite-psm", () => {
     });
   });
 
-  // NOTE: Skipped because test depends on pauser authority from bridge_security tests
   describe("mint", () => {
-    // NOTE: Basic mint tests removed due to Anchor test framework bug
-    // The pause check IS working correctly (proven by "fails to mint when paused" test below)
-    // Mint functionality IS working (used successfully in other tests like buffer_depositor, etc.)
-    // The issue is a test environment caching/state problem, not a contract bug.
+    it("mints OkuUSD 1:1 with USDC (pre-created ATA)", async () => {
+      const mintAmount = new BN(1_000_000); // 1 USDC/OkuUSD
+
+      // Pre-create OkuUSD ATA
+      try {
+        const createOkusdAtaTx = new anchor.web3.Transaction().add(
+          createAssociatedTokenAccountInstruction(
+            payer.publicKey,
+            userOkusdAta,
+            user.publicKey,
+            okusdMint,
+            TOKEN_2022_PROGRAM_ID
+          )
+        );
+        await provider.sendAndConfirm(createOkusdAtaTx, [payer]);
+      } catch {
+        // Already exists
+      }
+
+      // Get balances before
+      const userUsdcBefore = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
+      let userOkusdBefore: bigint;
+      try {
+        const acct = await getAccount(provider.connection, userOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+        userOkusdBefore = acct.amount;
+      } catch {
+        userOkusdBefore = BigInt(0);
+      }
+
+      await program.methods
+        .mint(mintAmount)
+        .accounts({
+          user: user.publicKey,
+          config: configPda,
+          usdcMint: usdcMint,
+          okusdMint: okusdMint,
+          userUsdcAta: userUsdcAta,
+          userOkusdAta: userOkusdAta,
+          vaultUsdc: vaultUsdcAta,
+          priceUpdate: null,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      // Verify balances
+      const userUsdcAfter = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
+      const userOkusdAfter = await getAccount(provider.connection, userOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+
+      expect(Number(userUsdcBefore.amount) - Number(userUsdcAfter.amount)).to.equal(mintAmount.toNumber());
+      expect(Number(userOkusdAfter.amount) - Number(userOkusdBefore)).to.equal(mintAmount.toNumber());
+    });
+
+    it("mints OkuUSD with init_if_needed ATA creation", async () => {
+      const freshUser = Keypair.generate();
+      const mintAmount = new BN(1_000_000); // 1 USDC/OkuUSD
+
+      await safeAirdropAll(provider.connection, [freshUser], 10 * anchor.web3.LAMPORTS_PER_SOL);
+
+      // Create and fund USDC ATA
+      const freshUserUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint, freshUser.publicKey, false, TOKEN_PROGRAM_ID
+      );
+      const freshUserOkusdAta = getAssociatedTokenAddressSync(
+        okusdMint, freshUser.publicKey, false, TOKEN_2022_PROGRAM_ID
+      );
+
+      const createAtaTx = new anchor.web3.Transaction().add(
+        createAssociatedTokenAccountInstruction(
+          payer.publicKey, freshUserUsdcAta, freshUser.publicKey, usdcMint, TOKEN_PROGRAM_ID
+        )
+      );
+      await provider.sendAndConfirm(createAtaTx, [payer]);
+      await mintTo(provider.connection, payer, usdcMint, freshUserUsdcAta, payer,
+        10_000_000, [], undefined, TOKEN_PROGRAM_ID);
+
+      // DO NOT pre-create OkuUSD ATA — let init_if_needed handle it
+      await program.methods
+        .mint(mintAmount)
+        .accounts({
+          user: freshUser.publicKey,
+          config: configPda,
+          usdcMint: usdcMint,
+          okusdMint: okusdMint,
+          userUsdcAta: freshUserUsdcAta,
+          userOkusdAta: freshUserOkusdAta,
+          vaultUsdc: vaultUsdcAta,
+          priceUpdate: null,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([freshUser])
+        .rpc();
+
+      // Verify OkuUSD was minted
+      const okusdAccount = await getAccount(
+        provider.connection, freshUserOkusdAta, undefined, TOKEN_2022_PROGRAM_ID
+      );
+      expect(Number(okusdAccount.amount)).to.equal(mintAmount.toNumber());
+    });
 
     it("fails to mint when paused", async () => {
       // Pause the PSM (warm multisig)
@@ -384,7 +484,11 @@ describe("lite-psm", () => {
           .rpc();
         expect.fail("Should have failed");
       } catch (err: any) {
-        expect(err.error.errorCode.code).to.equal("Paused");
+        // Error may come as AnchorError or SendTransactionError
+        const errorCode = err?.error?.errorCode?.code || err?.message;
+        expect(errorCode).to.satisfy((code: string) =>
+          code === "Paused" || code.includes("Paused")
+        );
       }
 
       // Unpause for future tests (cold multisig)
@@ -806,4 +910,5 @@ describe("lite-psm", () => {
   // should be updated similarly to use the new authority structure.
   // For brevity, I've focused on the critical RBAC tests above.
   // The existing tests will need their authority references updated throughout.
+
 });

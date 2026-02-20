@@ -2,13 +2,13 @@
 /**
  * scripts/devnet/test-devnet.ts
  *
- * Real on-chain devnet interaction tests.
+ * Real on-chain interaction tests (works on both localnet and devnet).
  * Each step sends actual transactions and verifies results.
  *
  * Usage:
- *   NETWORK=devnet tsx scripts/devnet/test-devnet.ts           # Run all steps
- *   NETWORK=devnet tsx scripts/devnet/test-devnet.ts --step=state   # Run single step
- *   NETWORK=devnet tsx scripts/devnet/test-devnet.ts --step=mint    # Run single step
+ *   NETWORK=localnet tsx scripts/devnet/test-devnet.ts              # Localnet (fast iteration)
+ *   NETWORK=devnet   tsx scripts/devnet/test-devnet.ts              # Devnet (real chain)
+ *   NETWORK=devnet   tsx scripts/devnet/test-devnet.ts --step=mint  # Single step
  */
 
 import {
@@ -35,6 +35,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import { detectNetwork, createProvider } from '../utils/network';
+import { NetworkName } from '../config/networks';
 import { logger } from '../utils/logger';
 import { loadDeployment, DeploymentAddresses } from '../utils/addressBook';
 import {
@@ -50,6 +51,7 @@ import {
 // ---------------------------------------------------------------------------
 
 interface TestContext {
+  network: NetworkName;
   provider: AnchorProvider;
   deployer: Keypair;
   deployment: DeploymentAddresses;
@@ -76,8 +78,12 @@ interface TestContext {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function solscanLink(sig: string): string {
-  return `https://solscan.io/tx/${sig}?cluster=devnet`;
+function explorerLink(network: NetworkName, sig: string): string {
+  if (network === 'devnet') {
+    return `https://solscan.io/tx/${sig}?cluster=devnet`;
+  }
+  // localnet has no explorer — just return the sig
+  return sig;
 }
 
 async function confirmTx(ctx: TestContext, sig: string): Promise<string> {
@@ -99,7 +105,7 @@ async function mintTestUsdc(ctx: TestContext, amount: number): Promise<string> {
   );
   const sig = await sendAndConfirmTransaction(ctx.provider.connection, tx, [ctx.deployer]);
   logger.success(`Minted ${amount / 1_000_000} USDC to deployer`);
-  logger.info(`Tx: ${solscanLink(sig)}`);
+  logger.info(`Tx: ${explorerLink(ctx.network, sig)}`);
   return sig;
 }
 
@@ -154,8 +160,8 @@ function fmtAmount(raw: bigint | number, decimals: number = 6): string {
 
 async function buildContext(): Promise<TestContext> {
   const network = detectNetwork();
-  if (network !== 'devnet') {
-    throw new Error(`Expected devnet, got ${network}. Set NETWORK=devnet`);
+  if (network === 'mainnet-beta') {
+    throw new Error('This test script is not intended for mainnet. Use localnet or devnet.');
   }
 
   const provider = createProvider(network);
@@ -163,7 +169,7 @@ async function buildContext(): Promise<TestContext> {
 
   const deployment = loadDeployment(network);
   if (!deployment) {
-    throw new Error('No deployment found. Run `npm run deploy:devnet` first.');
+    throw new Error(`No deployment found. Run \`npm run deploy:${network}\` first.`);
   }
 
   // Load IDLs
@@ -207,6 +213,7 @@ async function buildContext(): Promise<TestContext> {
     : getAssociatedTokenAddressSync(okusdMint, vaultConfig, true, TOKEN_2022_PROGRAM_ID);
 
   return {
+    network,
     provider,
     deployer,
     deployment,
@@ -381,7 +388,7 @@ async function testMint(ctx: TestContext) {
       })
       .rpc();
     await confirmTx(ctx, sig);
-    logger.success(`Oracle disabled. Tx: ${solscanLink(sig)}`);
+    logger.success(`Oracle disabled. Tx: ${explorerLink(ctx.network, sig)}`);
   } catch (e: any) {
     logger.warning(`Oracle may already be disabled: ${e.message}`);
   }
@@ -395,9 +402,9 @@ async function testMint(ctx: TestContext) {
   const okusdBefore = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
   logger.info(`Before - USDC: ${fmtAmount(usdcBefore)}, OkuUSD: ${fmtAmount(okusdBefore)}`);
 
-  // 4. Ensure deployer has OkuUSD ATA
+  // 4. Ensure ATAs exist (pre-create OkuUSD ATA to avoid init_if_needed CPI corruption)
+  const userUsdcAta = getAssociatedTokenAddressSync(ctx.usdcMint, ctx.deployer.publicKey, false, TOKEN_PROGRAM_ID);
   const userOkusdAta = await getOrCreateAta(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  const userUsdcAta = getAssociatedTokenAddressSync(ctx.usdcMint, ctx.deployer.publicKey, true, TOKEN_PROGRAM_ID);
 
   // 5. Call PSM mint
   logger.info(`Calling psm.mint(${amount / 1_000_000} USDC)...`);
@@ -415,11 +422,11 @@ async function testMint(ctx: TestContext) {
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      systemProgram: PublicKey.default,
+      systemProgram: SystemProgram.programId,
     })
     .rpc();
   await confirmTx(ctx, sig);
-  logger.success(`Mint tx: ${solscanLink(sig)}`);
+  logger.success(`Mint tx: ${explorerLink(ctx.network, sig)}`);
 
   // 6. Verify
   const usdcAfter = await getTokenBalance(ctx, ctx.usdcMint, ctx.deployer.publicKey, TOKEN_PROGRAM_ID);
@@ -485,7 +492,7 @@ async function testTransfer(ctx: TestContext) {
   );
   const sig = await sendAndConfirmTransaction(ctx.provider.connection, tx, [ctx.deployer]);
   await confirmTx(ctx, sig);
-  logger.success(`Transfer tx: ${solscanLink(sig)}`);
+  logger.success(`Transfer tx: ${explorerLink(ctx.network, sig)}`);
 
   // 5. Verify
   const senderBal = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
@@ -519,7 +526,7 @@ async function testRebase(ctx: TestContext) {
     })
     .rpc();
   await confirmTx(ctx, sig);
-  logger.success(`Rate update tx: ${solscanLink(sig)}`);
+  logger.success(`Rate update tx: ${explorerLink(ctx.network, sig)}`);
 
   // 3. Verify config
   const configAfter = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
@@ -581,7 +588,7 @@ async function testWrap(ctx: TestContext) {
     })
     .rpc();
   await confirmTx(ctx, sig);
-  logger.success(`Wrap tx: ${solscanLink(sig)}`);
+  logger.success(`Wrap tx: ${explorerLink(ctx.network, sig)}`);
 
   // 4. Verify
   const okusdAfter = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
@@ -631,7 +638,7 @@ async function testUnwrap(ctx: TestContext) {
     })
     .rpc();
   await confirmTx(ctx, sig);
-  logger.success(`Unwrap tx: ${solscanLink(sig)}`);
+  logger.success(`Unwrap tx: ${explorerLink(ctx.network, sig)}`);
 
   // 4. Verify
   const okusdAfter = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
@@ -674,7 +681,7 @@ async function testRedeem(ctx: TestContext) {
     })
     .rpc();
   await confirmTx(ctx, depositSig);
-  logger.success(`Buffer deposit tx: ${solscanLink(depositSig)}`);
+  logger.success(`Buffer deposit tx: ${explorerLink(ctx.network, depositSig)}`);
 
   // 2. Get balances before
   const usdcBefore = await getTokenBalance(ctx, ctx.usdcMint, ctx.deployer.publicKey, TOKEN_PROGRAM_ID);
@@ -711,7 +718,7 @@ async function testRedeem(ctx: TestContext) {
     })
     .rpc();
   await confirmTx(ctx, sig);
-  logger.success(`Redeem tx: ${solscanLink(sig)}`);
+  logger.success(`Redeem tx: ${explorerLink(ctx.network, sig)}`);
 
   // 5. Verify
   const usdcAfter = await getTokenBalance(ctx, ctx.usdcMint, ctx.deployer.publicKey, TOKEN_PROGRAM_ID);
@@ -776,7 +783,7 @@ async function testBridgeBurn(ctx: TestContext) {
     })
     .rpc();
   await confirmTx(ctx, sig);
-  logger.success(`Bridge burn tx: ${solscanLink(sig)}`);
+  logger.success(`Bridge burn tx: ${explorerLink(ctx.network, sig)}`);
 
   // 6. Verify
   const okusdAfter = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
@@ -808,7 +815,8 @@ const STEPS: Record<string, (ctx: TestContext) => Promise<void>> = {
 };
 
 async function main() {
-  logger.header('Devnet Interaction Tests');
+  const network = detectNetwork();
+  logger.header(`On-Chain Interaction Tests (${network})`);
 
   // Parse --step argument
   const stepArg = process.argv.find((a) => a.startsWith('--step='));

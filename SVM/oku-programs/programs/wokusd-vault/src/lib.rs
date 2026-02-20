@@ -74,15 +74,23 @@ pub mod wokusd_vault {
 
         require!(shares > 0, VaultError::ZeroAmount);
 
+        // Extract AccountInfo from boxed accounts BEFORE any CPI.
+        // After a CPI to a different program, the BPF runtime may invalidate
+        // heap pointers inside Box<InterfaceAccount>, causing access violations.
+        let okusd_mint_info = ctx.accounts.okusd_mint.to_account_info();
+        let user_okusd_ata_info = ctx.accounts.user_okusd_ata.to_account_info();
+        let vault_okusd_info = ctx.accounts.vault_okusd.to_account_info();
+        let token_2022_info = ctx.accounts.token_2022_program.to_account_info();
+
         // Transfer OkuUSD from user to vault (Token-2022)
         token_interface::transfer_checked(
             CpiContext::new(
-                ctx.accounts.token_2022_program.to_account_info(),
+                token_2022_info.clone(),
                 token_interface::TransferChecked {
-                    from: ctx.accounts.user_okusd_ata.to_account_info(),
-                    to: ctx.accounts.vault_okusd.to_account_info(),
+                    from: user_okusd_ata_info,
+                    to: vault_okusd_info,
                     authority: ctx.accounts.user.to_account_info(),
-                    mint: ctx.accounts.okusd_mint.to_account_info(),
+                    mint: okusd_mint_info,
                 },
             ),
             okusd_amount,
@@ -144,6 +152,15 @@ pub mod wokusd_vault {
 
         require!(okusd_out > 0, VaultError::ZeroAmount);
 
+        // Extract AccountInfo from boxed accounts BEFORE any CPI.
+        // After a CPI to a different program (SPL Token), the BPF runtime
+        // may invalidate heap pointers inside Box<InterfaceAccount>, causing
+        // access violations when building the second CPI context (Token-2022).
+        let okusd_mint_info = ctx.accounts.okusd_mint.to_account_info();
+        let user_okusd_ata_info = ctx.accounts.user_okusd_ata.to_account_info();
+        let vault_okusd_info = ctx.accounts.vault_okusd.to_account_info();
+        let token_2022_info = ctx.accounts.token_2022_program.to_account_info();
+
         // Burn wOkuUSD shares from user (standard SPL)
         anchor_spl::token::burn(
             CpiContext::new(
@@ -158,17 +175,18 @@ pub mod wokusd_vault {
         )?;
 
         // Transfer OkuUSD from vault to user (Token-2022)
+        // Uses pre-extracted AccountInfo to avoid Box invalidation after CPI
         let seeds = &[VaultConfig::SEED, &[bump]];
         let signer = &[&seeds[..]];
 
         token_interface::transfer_checked(
             CpiContext::new_with_signer(
-                ctx.accounts.token_2022_program.to_account_info(),
+                token_2022_info,
                 token_interface::TransferChecked {
-                    from: ctx.accounts.vault_okusd.to_account_info(),
-                    to: ctx.accounts.user_okusd_ata.to_account_info(),
+                    from: vault_okusd_info,
+                    to: user_okusd_ata_info,
                     authority: ctx.accounts.config.to_account_info(),
-                    mint: ctx.accounts.okusd_mint.to_account_info(),
+                    mint: okusd_mint_info,
                 },
                 signer,
             ),

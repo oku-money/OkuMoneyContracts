@@ -72,18 +72,12 @@ contract MinterAllowanceInvariantsTest is BaseTest {
     }
 
     /**
-     * @notice Minter allowance is always non-negative
+     * @notice Minter allowance is bounded by maxSupply
      */
-    function invariant_AllowanceNonNegative() public view {
-        // uint256 cannot be negative, but check it's not unexpectedly large
-        // after potential underflow (which would revert anyway)
+    function invariant_AllowanceBounded() public view {
         uint256 allowance = okuUSD.minterAllowance(minter);
 
-        // Sanity check: allowance shouldn't exceed max supply
-        assertLe(
-            allowance,
-            MAX_SUPPLY * 2, // Allow some headroom for resets
-            "Allowance exceeds reasonable maximum"
-        );
+        // Allowance should never exceed maxSupply (handler bounds resets to [0, MAX_SUPPLY])
+        assertLe(allowance, okuUSD.maxSupply(), "Allowance exceeds maxSupply");
     }
 }

@@ -47,11 +47,11 @@ contract VaultInvariantsTest is BaseTest {
 
         if (totalShares > 0) {
             uint256 convertedAssets = wokuUSD.convertToAssets(totalShares);
-            // Allow small rounding tolerance
+            // Allow 1 wei rounding per actor
             assertLe(
                 convertedAssets,
-                totalAssets + totalShares, // Generous upper bound
-                "Converted shares should not exceed assets significantly"
+                totalAssets + handler.getActorCount(),
+                "Converted shares should not exceed assets"
             );
         }
     }
@@ -81,5 +81,20 @@ contract VaultInvariantsTest is BaseTest {
             totalAssets + handler.getActorCount(), // Allow 1 wei per actor for edge cases
             "Sum of user assets should not exceed total assets"
         );
+    }
+
+    /**
+     * @notice Handler should have a reasonable success rate
+     */
+    function invariant_ReasonableSuccessRate() public view {
+        uint256 totalCalls = handler.ghost_totalCalls();
+        uint256 totalReverts = handler.ghost_totalReverts();
+        if (totalCalls > 10) {
+            assertGe(
+                ((totalCalls - totalReverts) * 100) / totalCalls,
+                30,
+                "Handler success rate too low"
+            );
+        }
     }
 }

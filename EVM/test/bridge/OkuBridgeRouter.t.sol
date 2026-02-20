@@ -5,6 +5,8 @@ import {BaseTest} from "../Base.t.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {OkuBridgeRouter} from "../../src/bridge/OkuBridgeRouter.sol";
 import {MockOkuBridge} from "../mocks/MockOkuBridge.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 /**
  * @title OkuBridgeRouterTest
@@ -96,7 +98,13 @@ contract OkuBridgeRouterTest is BaseTest {
 
     function test_ConfigureAdapter_RevertIfNotAdmin() public {
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                ADAPTER_MANAGER_ROLE
+            )
+        );
         bridgeRouter.configureAdapter(makeAddr("adapter"), true);
     }
 
@@ -109,7 +117,13 @@ contract OkuBridgeRouterTest is BaseTest {
 
     function test_Pause_RevertIfNotPauser() public {
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                ROUTER_PAUSER_ROLE
+            )
+        );
         bridgeRouter.pause();
     }
 
@@ -158,7 +172,7 @@ contract OkuBridgeRouterTest is BaseTest {
 
         vm.startPrank(user1);
         okuUSD.approve(address(bridgeRouter), amount);
-        vm.expectRevert();
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         bridgeRouter.bridgeDirect(amount, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
     }
@@ -192,7 +206,7 @@ contract OkuBridgeRouterTest is BaseTest {
 
         vm.startPrank(user1);
         okuUSD.approve(address(bridgeRouter), amount);
-        vm.expectRevert(); // SafeERC20 revert
+        vm.expectRevert("Insufficient balance");
         bridgeRouter.bridgeDirect(amount, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
     }
@@ -252,7 +266,7 @@ contract OkuBridgeRouterTest is BaseTest {
 
         vm.startPrank(user1);
         wokuUSD.approve(address(bridgeRouter), wokuShares);
-        vm.expectRevert();
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         bridgeRouter.bridgeWrapped(wokuShares, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
     }
@@ -371,7 +385,7 @@ contract OkuBridgeRouterTest is BaseTest {
     // ============ Fuzz Tests ============
 
     function testFuzz_BridgeOkuUSD_AmountConsistency(uint256 amount) public {
-        amount = __bound(amount, 1e18, 100_000_000e18);
+        amount = bound(amount, 1e18, 100_000_000e18);
 
         _mintOkuUSD(user1, amount);
         uint256 supplyBefore = okuUSD.totalSupply();
@@ -390,7 +404,7 @@ contract OkuBridgeRouterTest is BaseTest {
     }
 
     function testFuzz_BridgeWOkuUSD_AmountConsistency(uint256 okuAmount) public {
-        okuAmount = __bound(okuAmount, 1e18, 100_000_000e18);
+        okuAmount = bound(okuAmount, 1e18, 100_000_000e18);
 
         _mintOkuUSD(user1, okuAmount);
         uint256 wokuShares = _wrapOkuUSD(user1, okuAmount);
@@ -414,7 +428,7 @@ contract OkuBridgeRouterTest is BaseTest {
     )
         public
     {
-        depositAmount = __bound(depositAmount, 1e18, 100_000_000e18);
+        depositAmount = bound(depositAmount, 1e18, 100_000_000e18);
         multiplierIncrease = _boundMultiplierIncrease(multiplierIncrease);
 
         // Wrap tokens
@@ -441,7 +455,7 @@ contract OkuBridgeRouterTest is BaseTest {
     }
 
     function testFuzz_FullRoundTrip(uint256 initialOku, uint256 multiplierIncrease) public {
-        initialOku = __bound(initialOku, 1e18, 100_000_000e18);
+        initialOku = bound(initialOku, 1e18, 100_000_000e18);
         multiplierIncrease = _boundMultiplierIncrease(multiplierIncrease);
 
         // Step 1: Wrap
@@ -481,7 +495,7 @@ contract OkuBridgeRouterTest is BaseTest {
     }
 
     function testFuzz_MultipleBridges(uint256 numBridges, uint256 baseSeed) public {
-        numBridges = __bound(numBridges, 1, 20);
+        numBridges = bound(numBridges, 1, 20);
 
         address[] memory users = new address[](numBridges);
         uint256[] memory amounts = new uint256[](numBridges);
@@ -491,7 +505,7 @@ contract OkuBridgeRouterTest is BaseTest {
         for (uint256 i = 0; i < numBridges; i++) {
             users[i] = makeAddr(string(abi.encodePacked("bridgeUser", i)));
             destinations[i] = makeAddr(string(abi.encodePacked("dest", i)));
-            amounts[i] = __bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 10_000_000e18);
+            amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 10_000_000e18);
 
             uint256 shares = _mintAndWrap(users[i], amounts[i]);
 
@@ -515,7 +529,7 @@ contract OkuBridgeRouterTest is BaseTest {
 
     function testFuzz_RoundTripValueLoss(uint256 amount) public {
         // Test that round-trip through bridge loses at most 2 wei (1 per wrap operation)
-        amount = __bound(amount, 1e18, 100_000_000e18);
+        amount = bound(amount, 1e18, 100_000_000e18);
 
         // Initial state
         _mintOkuUSD(user1, amount);

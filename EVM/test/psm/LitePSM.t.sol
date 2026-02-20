@@ -112,11 +112,17 @@ contract LitePSMTest is BaseTest {
         // Set oracle to report sufficient reserves
         oracle.setAnswer(int256(1_000_000_000e18));
 
-        _approveUSDC(user1, address(litePSM), 100e6);
+        uint256 usdcAmount = 100e6;
+        _approveUSDC(user1, address(litePSM), usdcAmount);
+
+        uint256 balanceBefore = okuUSD.balanceOf(user1);
 
         // Should succeed
         vm.prank(user1);
-        litePSM.mint(100e6);
+        litePSM.mint(usdcAmount);
+
+        uint256 expectedOkuUSD = usdcAmount * DECIMAL_MULTIPLIER;
+        assertEq(okuUSD.balanceOf(user1), balanceBefore + expectedOkuUSD, "OkuUSD should be minted");
     }
 
     function test_Mint_RevertsOnInsufficientReserves() public {

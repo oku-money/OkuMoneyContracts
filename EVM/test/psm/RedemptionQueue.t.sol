@@ -135,9 +135,10 @@ contract RedemptionQueueTest is BaseTest {
         vm.prank(admin);
         okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
 
-        // Setup: approve USDC for transfer
-        _mintUSDC(address(this), amount);
-        _approveUSDC(address(this), address(redemptionQueue), amount);
+        // Setup: approve USDC for transfer (convert 18-decimal OkuUSD amount to 6-decimal USDC)
+        uint256 usdcAmount = amount / DECIMAL_MULTIPLIER;
+        _mintUSDC(address(this), usdcAmount);
+        _approveUSDC(address(this), address(redemptionQueue), usdcAmount);
 
         redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
 
@@ -418,8 +419,8 @@ contract RedemptionQueueTest is BaseTest {
      */
     function testFuzz_QueueYieldAccrual(uint256 amount, uint256 multiplierIncrease) public {
         // Bound inputs to reasonable ranges
-        amount = __bound(amount, 1e18, 1_000_000e18);
-        multiplierIncrease = __bound(multiplierIncrease, 0, PRECISION * 9); // Up to 10x total
+        amount = bound(amount, 1e18, 1_000_000e18);
+        multiplierIncrease = bound(multiplierIncrease, 0, PRECISION * 9); // Up to 10x total
 
         _mintOkuUSD(user1, amount);
         _approveOkuUSD(user1, address(redemptionQueue), amount);
@@ -450,8 +451,8 @@ contract RedemptionQueueTest is BaseTest {
      */
     function testFuzz_QueuePayoutAfterYield(uint256 amount, uint256 multiplierIncrease) public {
         // Bound inputs
-        amount = __bound(amount, 1e18, 100_000e18);
-        multiplierIncrease = __bound(multiplierIncrease, PRECISION / 100, PRECISION * 4); // 1% to 5x
+        amount = bound(amount, 1e18, 100_000e18);
+        multiplierIncrease = bound(multiplierIncrease, PRECISION / 100, PRECISION * 4); // 1% to 5x
 
         _mintOkuUSD(user1, amount);
         _approveOkuUSD(user1, address(redemptionQueue), amount);
@@ -498,9 +499,9 @@ contract RedemptionQueueTest is BaseTest {
     )
         public
     {
-        amount = __bound(amount, 1e18, 100_000e18);
-        rebase1 = __bound(rebase1, PRECISION / 100, PRECISION); // 1% to 100% increase
-        rebase2 = __bound(rebase2, PRECISION / 100, PRECISION); // 1% to 100% increase
+        amount = bound(amount, 1e18, 100_000e18);
+        rebase1 = bound(rebase1, PRECISION / 100, PRECISION); // 1% to 100% increase
+        rebase2 = bound(rebase2, PRECISION / 100, PRECISION); // 1% to 100% increase
 
         _mintOkuUSD(user1, amount);
         _approveOkuUSD(user1, address(redemptionQueue), amount);
@@ -533,7 +534,7 @@ contract RedemptionQueueTest is BaseTest {
      * @dev Creates dynamic array of users, queues them, processes all, verifies order
      */
     function testFuzz_FIFO_MultipleUsers(uint256 numUsers, uint256 baseSeed) public {
-        numUsers = __bound(numUsers, 2, 20); // 2-20 users
+        numUsers = bound(numUsers, 2, 20); // 2-20 users
 
         // Create dynamic user array
         address[] memory users = new address[](numUsers);
@@ -544,7 +545,7 @@ contract RedemptionQueueTest is BaseTest {
         for (uint256 i = 0; i < numUsers; i++) {
             users[i] = makeAddr(string(abi.encodePacked("queueUser", i)));
             // Each user gets a different amount based on seed
-            amounts[i] = __bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 10_000e18);
+            amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 10_000e18);
 
             // Mint and approve
             _mintOkuUSD(users[i], amounts[i]);
@@ -596,8 +597,8 @@ contract RedemptionQueueTest is BaseTest {
     )
         public
     {
-        numUsers = __bound(numUsers, 3, 15);
-        numToProcess = __bound(numToProcess, 1, numUsers - 1); // Process less than all
+        numUsers = bound(numUsers, 3, 15);
+        numToProcess = bound(numToProcess, 1, numUsers - 1); // Process less than all
 
         address[] memory users = new address[](numUsers);
         uint256[] memory amounts = new uint256[](numUsers);
@@ -606,7 +607,7 @@ contract RedemptionQueueTest is BaseTest {
 
         for (uint256 i = 0; i < numUsers; i++) {
             users[i] = makeAddr(string(abi.encodePacked("partialUser", i)));
-            amounts[i] = __bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 5000e18);
+            amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 5000e18);
 
             _mintOkuUSD(users[i], amounts[i]);
             vm.prank(users[i]);
@@ -669,8 +670,8 @@ contract RedemptionQueueTest is BaseTest {
     )
         public
     {
-        numUsers = __bound(numUsers, 2, 10);
-        multiplierIncrease = __bound(multiplierIncrease, PRECISION / 100, PRECISION * 2); // 1% to 200%
+        numUsers = bound(numUsers, 2, 10);
+        multiplierIncrease = bound(multiplierIncrease, PRECISION / 100, PRECISION * 2); // 1% to 200%
 
         address[] memory users = new address[](numUsers);
         uint256[] memory amounts = new uint256[](numUsers);
@@ -679,7 +680,7 @@ contract RedemptionQueueTest is BaseTest {
 
         for (uint256 i = 0; i < numUsers; i++) {
             users[i] = makeAddr(string(abi.encodePacked("rebaseUser", i)));
-            amounts[i] = __bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 10_000e18);
+            amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 10_000e18);
 
             _mintOkuUSD(users[i], amounts[i]);
             vm.prank(users[i]);
@@ -743,9 +744,9 @@ contract RedemptionQueueTest is BaseTest {
     )
         public
     {
-        numUsers = __bound(numUsers, 3, 10);
-        amountPerUser = __bound(amountPerUser, 1e18, 1000e18);
-        numToPay = __bound(numToPay, 1, numUsers - 1); // Pay some but not all
+        numUsers = bound(numUsers, 3, 10);
+        amountPerUser = bound(amountPerUser, 1e18, 1000e18);
+        numToPay = bound(numToPay, 1, numUsers - 1); // Pay some but not all
 
         address[] memory users = new address[](numUsers);
         uint256[] memory initialBalances = new uint256[](numUsers);
@@ -811,7 +812,7 @@ contract RedemptionQueueTest is BaseTest {
     )
         public
     {
-        numUsers = __bound(numUsers, 3, 8);
+        numUsers = bound(numUsers, 3, 8);
 
         address[] memory users = new address[](numUsers);
         uint256[] memory amounts = new uint256[](numUsers);
@@ -821,7 +822,7 @@ contract RedemptionQueueTest is BaseTest {
         for (uint256 i = 0; i < numUsers; i++) {
             users[i] = makeAddr(string(abi.encodePacked("varUser", i)));
             // Use smaller amounts to ensure some always fit
-            amounts[i] = __bound(uint256(keccak256(abi.encode(baseSeed, i))), 100e18, 500e18);
+            amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 100e18, 500e18);
 
             _mintOkuUSD(users[i], amounts[i]);
             vm.prank(users[i]);

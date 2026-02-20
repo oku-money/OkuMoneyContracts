@@ -5,6 +5,8 @@ import {BaseTest} from "../Base.t.sol";
 import {OkuBridge} from "../../src/bridge/OkuBridge.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 /**
  * @title OkuBridgeTest
@@ -201,7 +203,7 @@ contract OkuBridgeTest is BaseTest {
         okuBridge.pause();
 
         vm.prank(user1);
-        vm.expectRevert(); // OpenZeppelin 5.x uses EnforcedPause() custom error
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
     }
 
@@ -421,7 +423,7 @@ contract OkuBridgeTest is BaseTest {
         vm.prank(admin);
         okuBridge.pause();
 
-        vm.expectRevert(); // OpenZeppelin 5.x uses EnforcedPause() custom error
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         okuBridge.bridgeMint(request, signature);
     }
 
@@ -568,9 +570,16 @@ contract OkuBridgeTest is BaseTest {
 
     function test_UpdateAuthorizedSigner_RevertNotAuthorized() public {
         address newSigner = makeAddr("newSigner");
+        bytes32 role = okuBridge.BRIDGE_SIGNER_MANAGER_ROLE();
 
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                role
+            )
+        );
         vm.prank(user1);
-        vm.expectRevert();
         okuBridge.updateAuthorizedSigner(newSigner);
     }
 
@@ -678,8 +687,16 @@ contract OkuBridgeTest is BaseTest {
     }
 
     function test_SkipNonce_RevertNotAuthorized() public {
+        bytes32 role = okuBridge.BRIDGE_NONCE_ADMIN_ROLE();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                role
+            )
+        );
         vm.prank(user1);
-        vm.expectRevert();
         okuBridge.skipNonce(OPTIMISM_CHAIN_ID);
     }
 
@@ -694,15 +711,21 @@ contract OkuBridgeTest is BaseTest {
         assertEq(okuUSD.sharesOf(user1), 0);
 
         // Admin refunds the request
-        bytes memory proof = ""; // Simplified for MVP
+        // Note: proof param is unused in current MVP implementation (OkuBridge.sol)
+        bytes memory proof = "";
 
-        uint256 user1Before = okuUSD.sharesOf(user1);
+        uint256 user1SharesBefore = okuUSD.sharesOf(user1);
+        uint256 user1TokensBefore = okuUSD.balanceOf(user1);
 
         vm.prank(admin);
         okuBridge.refundFailedRequest(request, proof);
 
         // Verify shares returned to original sender
-        assertEq(okuUSD.sharesOf(user1), user1Before + shares);
+        assertEq(okuUSD.sharesOf(user1), user1SharesBefore + shares);
+
+        // Verify token balance reflects refunded shares at current multiplier
+        uint256 expectedTokens = okuUSD.sharesToTokens(shares);
+        assertEq(okuUSD.balanceOf(user1), user1TokensBefore + expectedTokens);
     }
 
     // ============ EIP-712 Signature Tests ============
@@ -777,7 +800,7 @@ contract OkuBridgeTest is BaseTest {
     // ============ Fuzz Tests ============
 
     function testFuzz_BridgeBurn_AmountConsistency(uint256 shares) public {
-        shares = __bound(shares, okuBridge.minBridgeShares(), okuBridge.maxBridgeShares());
+        shares = bound(shares, okuBridge.minBridgeShares(), okuBridge.maxBridgeShares());
 
         uint256 fee = (shares * 10) / 10000;
         _mintOkuUSD(user1, shares + fee);
@@ -793,7 +816,7 @@ contract OkuBridgeTest is BaseTest {
 
     function testFuzz_BridgeMint_SignatureValidation(uint256 shares, address recipient) public {
         vm.assume(recipient != address(0));
-        shares = __bound(shares, 1e18, 1000000e18);
+        shares = bound(shares, 1e18, 1000000e18);
 
         OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({
             sourceChainId: OPTIMISM_CHAIN_ID,
@@ -815,7 +838,7 @@ contract OkuBridgeTest is BaseTest {
     }
 
     function testFuzz_FullRoundTrip_ValuePreservation(uint256 shares) public {
-        shares = __bound(shares, okuBridge.minBridgeShares(), okuBridge.maxBridgeShares());
+        shares = bound(shares, okuBridge.minBridgeShares(), okuBridge.maxBridgeShares());
 
         uint256 fee = (shares * 10) / 10000;
         _mintOkuUSD(user1, shares + fee);

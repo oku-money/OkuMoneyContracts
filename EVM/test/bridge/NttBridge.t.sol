@@ -6,6 +6,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {OkuBridgeRouter} from "../../src/bridge/OkuBridgeRouter.sol";
 import {NttAdapter} from "../../src/bridge/adapters/NttAdapter.sol";
 import {MockNttManager} from "../mocks/MockNttManager.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
  * @title NttBridgeTest
@@ -133,7 +134,7 @@ contract NttBridgeTest is BaseTest {
 
     function test_NttAdapter_ConfigureChainId_RevertIfNotOwner() public {
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, user1));
         nttAdapter.configureChainId(999, 99);
     }
 
@@ -416,7 +417,7 @@ contract NttBridgeTest is BaseTest {
     }
 
     function testFuzz_NttTransfer_AmountConsistency(uint256 amount) public {
-        amount = __bound(amount, 1e18, 100_000_000e18);
+        amount = bound(amount, 1e18, 100_000_000e18);
 
         // Mock just records the message - no token movement
         vm.prank(user1);
@@ -430,7 +431,7 @@ contract NttBridgeTest is BaseTest {
     }
 
     function testFuzz_Integration_BridgeOkuUSD(uint256 amount, uint256 chainSelector) public {
-        amount = __bound(amount, 1e18, 100_000_000e18);
+        amount = bound(amount, 1e18, 100_000_000e18);
 
         // Select a valid chain
         uint256[] memory chains = new uint256[](3);
@@ -458,7 +459,7 @@ contract NttBridgeTest is BaseTest {
     )
         public
     {
-        depositAmount = __bound(depositAmount, 1e18, 100_000_000e18);
+        depositAmount = bound(depositAmount, 1e18, 100_000_000e18);
         multiplierIncrease = _boundMultiplierIncrease(multiplierIncrease);
 
         // Wrap tokens
@@ -491,7 +492,7 @@ contract NttBridgeTest is BaseTest {
     )
         public
     {
-        initialOku = __bound(initialOku, 1e18, 100_000_000e18);
+        initialOku = bound(initialOku, 1e18, 100_000_000e18);
         multiplierIncrease = _boundMultiplierIncrease(multiplierIncrease);
 
         // Step 1: Wrap
@@ -527,7 +528,7 @@ contract NttBridgeTest is BaseTest {
     }
 
     function testFuzz_MultipleBridges_ViaNtt(uint256 numBridges, uint256 baseSeed) public {
-        numBridges = __bound(numBridges, 1, 15);
+        numBridges = bound(numBridges, 1, 15);
 
         address[] memory users = new address[](numBridges);
         uint256[] memory amounts = new uint256[](numBridges);
@@ -537,7 +538,7 @@ contract NttBridgeTest is BaseTest {
         for (uint256 i = 0; i < numBridges; i++) {
             users[i] = makeAddr(string(abi.encodePacked("nttUser", i)));
             destinations[i] = makeAddr(string(abi.encodePacked("nttDest", i)));
-            amounts[i] = __bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 10_000_000e18);
+            amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 10_000_000e18);
 
             uint256 shares = _mintAndWrap(users[i], amounts[i]);
 
@@ -560,7 +561,7 @@ contract NttBridgeTest is BaseTest {
     }
 
     function testFuzz_SequenceNumbers(uint256 numTransfers) public {
-        numTransfers = __bound(numTransfers, 1, 20);
+        numTransfers = bound(numTransfers, 1, 20);
 
         for (uint256 i = 0; i < numTransfers; i++) {
             address sender = makeAddr(string(abi.encodePacked("sender", i)));

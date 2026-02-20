@@ -28,6 +28,21 @@ contract OkuUSDHandler is Test {
     uint256 public ghost_burnedTotal;
     bool public ghost_lastWasRebase;
 
+    // Ghost call/revert counters
+    uint256 public ghost_mintCallCount;
+    uint256 public ghost_mintRevertCount;
+    uint256 public ghost_burnCallCount;
+    uint256 public ghost_burnRevertCount;
+    uint256 public ghost_transferCallCount;
+    uint256 public ghost_transferRevertCount;
+    uint256 public ghost_rebaseCallCount;
+    uint256 public ghost_rebaseRevertCount;
+    uint256 public ghost_resetCallCount;
+    uint256 public ghost_resetRevertCount;
+
+    // Monotonic multiplier tracking
+    uint256 public ghost_lastMultiplier;
+
     constructor(OkuUSD _okuUSD, address _minter, address _rebaser, address _allowanceManager) {
         okuUSD = _okuUSD;
         minter = _minter;
@@ -40,6 +55,7 @@ contract OkuUSDHandler is Test {
         _addActor(makeAddr("actor3"));
 
         lastAllowance[minter] = okuUSD.minterAllowance(minter);
+        ghost_lastMultiplier = okuUSD.rewardMultiplier();
     }
 
     function _addActor(address actor) internal {
@@ -54,13 +70,14 @@ contract OkuUSDHandler is Test {
     /// @notice Mint tokens to a random actor
     function mint(uint256 actorSeed, uint256 amount) external {
         ghost_lastWasRebase = false;
+        ghost_mintCallCount++;
 
         address actor = actors[actorSeed % actors.length];
-        amount = __bound(amount, 1, MAX_SUPPLY / 100);
+        amount = bound(amount, 1, MAX_SUPPLY / 100);
 
         uint256 allowance = okuUSD.minterAllowance(minter);
         uint256 remaining = okuUSD.maxSupply() - okuUSD.totalSupply();
-        amount = __bound(amount, 0, _min(allowance, remaining));
+        amount = bound(amount, 0, _min(allowance, remaining));
 
         if (amount == 0) return;
 
@@ -68,47 +85,54 @@ contract OkuUSDHandler is Test {
         try okuUSD.mint(actor, amount) {
             ghost_mintedTotal += amount;
             lastAllowance[minter] = okuUSD.minterAllowance(minter);
-        } catch {}
+        } catch {
+            ghost_mintRevertCount++;
+        }
     }
 
     /// @notice Burn tokens from a random actor
     function burn(uint256 actorSeed, uint256 amount) external {
         ghost_lastWasRebase = false;
+        ghost_burnCallCount++;
 
         address actor = actors[actorSeed % actors.length];
         uint256 balance = okuUSD.balanceOf(actor);
-        amount = __bound(amount, 0, balance);
+        amount = bound(amount, 0, balance);
 
         if (amount == 0) return;
 
         vm.prank(minter);
         try okuUSD.burn(actor, amount) {
             ghost_burnedTotal += amount;
-        } catch {}
+        } catch {
+            ghost_burnRevertCount++;
+        }
     }
 
     /// @notice Transfer between random actors
     function transfer(uint256 fromSeed, uint256 toSeed, uint256 amount) external {
         ghost_lastWasRebase = false;
+        ghost_transferCallCount++;
 
         address from = actors[fromSeed % actors.length];
         address to = actors[toSeed % actors.length];
         uint256 balance = okuUSD.balanceOf(from);
-        amount = __bound(amount, 0, balance);
+        amount = bound(amount, 0, balance);
 
         if (amount == 0 || from == to) return;
 
         vm.prank(from);
-        try okuUSD.transfer(to, amount) {} catch {}
+        try okuUSD.transfer(to, amount) {} catch {
+            ghost_transferRevertCount++;
+        }
     }
 
     /// @notice Update reward multiplier (rebase)
     function rebase(uint256 multiplierIncrease) external {
+        ghost_rebaseCallCount++;
         uint256 currentMultiplier = okuUSD.rewardMultiplier();
 
         // Cap maximum multiplier at 1e24 (1 million x starting value)
-        // This represents ~100,000,000% cumulative yield, which is already unrealistic
-        // but allows testing of high-multiplier edge cases without arithmetic overflow
         uint256 MAX_MULTIPLIER = 1e24;
 
         if (currentMultiplier >= MAX_MULTIPLIER) {
@@ -116,10 +140,9 @@ contract OkuUSDHandler is Test {
         }
 
         // Increase by 0.01% to 5% per rebase
-        // Use absolute bounds to prevent exponential growth
         uint256 minIncrease = currentMultiplier / 10_000; // 0.01%
         uint256 maxIncrease = currentMultiplier / 20;     // 5%
-        uint256 increase = __bound(multiplierIncrease, minIncrease, maxIncrease);
+        uint256 increase = bound(multiplierIncrease, minIncrease, maxIncrease);
 
         uint256 newMultiplier = currentMultiplier + increase;
 
@@ -131,18 +154,24 @@ contract OkuUSDHandler is Test {
         vm.prank(rebaser);
         try okuUSD.updateRewardMultiplier(newMultiplier) {
             ghost_lastWasRebase = true;
-        } catch {}
+            ghost_lastMultiplier = newMultiplier;
+        } catch {
+            ghost_rebaseRevertCount++;
+        }
     }
 
     /// @notice Reset minter allowance (simulates allowance manager action)
     function resetAllowance(uint256 newAllowance) external {
-        newAllowance = __bound(newAllowance, 0, MAX_SUPPLY);
+        ghost_resetCallCount++;
+        newAllowance = bound(newAllowance, 0, MAX_SUPPLY);
 
         vm.prank(allowanceManager);
         try okuUSD.configureMinterAllowance(minter, newAllowance) {
             allowanceWasReset = true;
             lastAllowance[minter] = newAllowance;
-        } catch {}
+        } catch {
+            ghost_resetRevertCount++;
+        }
     }
 
     // ============ View Functions ============
@@ -163,14 +192,17 @@ contract OkuUSDHandler is Test {
         return allowanceWasReset;
     }
 
-    // ============ Helper Functions ============
-
-    /// @notice Custom bound function without console logging
-    function __bound(uint256 x, uint256 min, uint256 max) internal pure returns (uint256) {
-        if (x < min) return min;
-        if (x > max) return max;
-        return x;
+    function ghost_totalCalls() external view returns (uint256) {
+        return ghost_mintCallCount + ghost_burnCallCount + ghost_transferCallCount
+            + ghost_rebaseCallCount + ghost_resetCallCount;
     }
+
+    function ghost_totalReverts() external view returns (uint256) {
+        return ghost_mintRevertCount + ghost_burnRevertCount + ghost_transferRevertCount
+            + ghost_rebaseRevertCount + ghost_resetRevertCount;
+    }
+
+    // ============ Helper Functions ============
 
     function _min(uint256 a, uint256 b) internal pure returns (uint256) {
         return a < b ? a : b;

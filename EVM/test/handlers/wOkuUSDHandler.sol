@@ -26,6 +26,20 @@ contract wOkuUSDHandler is Test {
     uint256 public ghost_totalWithdrawn;
     uint256 public ghost_rebaseCount;
 
+    // Ghost call/revert counters
+    uint256 public ghost_mintOkuUSDCallCount;
+    uint256 public ghost_mintOkuUSDRevertCount;
+    uint256 public ghost_depositCallCount;
+    uint256 public ghost_depositRevertCount;
+    uint256 public ghost_redeemCallCount;
+    uint256 public ghost_redeemRevertCount;
+    uint256 public ghost_withdrawCallCount;
+    uint256 public ghost_withdrawRevertCount;
+    uint256 public ghost_rebaseCallCount;
+    uint256 public ghost_rebaseRevertCount;
+    uint256 public ghost_transferSharesCallCount;
+    uint256 public ghost_transferSharesRevertCount;
+
     constructor(OkuUSD _okuUSD, wOkuUSD _wokuUSD, address _minter, address _rebaser) {
         okuUSD = _okuUSD;
         wokuUSD = _wokuUSD;
@@ -48,24 +62,28 @@ contract wOkuUSDHandler is Test {
 
     /// @notice Mint OkuUSD to actors (so they have tokens to deposit)
     function mintOkuUSD(uint256 actorSeed, uint256 amount) external {
+        ghost_mintOkuUSDCallCount++;
         address actor = actors[actorSeed % actors.length];
-        amount = __bound(amount, 1e18, 1_000_000e18);
+        amount = bound(amount, 1e18, 1_000_000e18);
 
         uint256 allowance = okuUSD.minterAllowance(minter);
         uint256 remaining = okuUSD.maxSupply() - okuUSD.totalSupply();
-        amount = __bound(amount, 0, _min(allowance, remaining));
+        amount = bound(amount, 0, _min(allowance, remaining));
 
         if (amount == 0) return;
 
         vm.prank(minter);
-        try okuUSD.mint(actor, amount) {} catch {}
+        try okuUSD.mint(actor, amount) {} catch {
+            ghost_mintOkuUSDRevertCount++;
+        }
     }
 
     /// @notice Deposit OkuUSD into vault
     function deposit(uint256 actorSeed, uint256 amount) external {
+        ghost_depositCallCount++;
         address actor = actors[actorSeed % actors.length];
         uint256 balance = okuUSD.balanceOf(actor);
-        amount = __bound(amount, 0, balance);
+        amount = bound(amount, 0, balance);
 
         if (amount == 0) return;
 
@@ -73,62 +91,76 @@ contract wOkuUSDHandler is Test {
         okuUSD.approve(address(wokuUSD), amount);
         try wokuUSD.deposit(amount, actor) {
             ghost_totalDeposited += amount;
-        } catch {}
+        } catch {
+            ghost_depositRevertCount++;
+        }
         vm.stopPrank();
     }
 
     /// @notice Redeem shares from vault
     function redeem(uint256 actorSeed, uint256 shares) external {
+        ghost_redeemCallCount++;
         address actor = actors[actorSeed % actors.length];
         uint256 balance = wokuUSD.balanceOf(actor);
-        shares = __bound(shares, 0, balance);
+        shares = bound(shares, 0, balance);
 
         if (shares == 0) return;
 
         vm.prank(actor);
         try wokuUSD.redeem(shares, actor, actor) returns (uint256 assets) {
             ghost_totalWithdrawn += assets;
-        } catch {}
+        } catch {
+            ghost_redeemRevertCount++;
+        }
     }
 
     /// @notice Withdraw assets from vault
     function withdraw(uint256 actorSeed, uint256 assets) external {
+        ghost_withdrawCallCount++;
         address actor = actors[actorSeed % actors.length];
         uint256 maxAssets = wokuUSD.maxWithdraw(actor);
-        assets = __bound(assets, 0, maxAssets);
+        assets = bound(assets, 0, maxAssets);
 
         if (assets == 0) return;
 
         vm.prank(actor);
         try wokuUSD.withdraw(assets, actor, actor) {
             ghost_totalWithdrawn += assets;
-        } catch {}
+        } catch {
+            ghost_withdrawRevertCount++;
+        }
     }
 
     /// @notice Trigger rebase
     function rebase(uint256 multiplierIncrease) external {
+        ghost_rebaseCallCount++;
         uint256 currentMultiplier = okuUSD.rewardMultiplier();
         uint256 increase =
-            __bound(multiplierIncrease, currentMultiplier / 10_000, currentMultiplier / 10);
+            bound(multiplierIncrease, currentMultiplier / 10_000, currentMultiplier / 10);
         uint256 newMultiplier = currentMultiplier + increase;
 
         vm.prank(rebaser);
         try okuUSD.updateRewardMultiplier(newMultiplier) {
             ghost_rebaseCount++;
-        } catch {}
+        } catch {
+            ghost_rebaseRevertCount++;
+        }
     }
 
     /// @notice Transfer wOkuUSD between actors
     function transferShares(uint256 fromSeed, uint256 toSeed, uint256 shares) external {
+        ghost_transferSharesCallCount++;
         address from = actors[fromSeed % actors.length];
         address to = actors[toSeed % actors.length];
         uint256 balance = wokuUSD.balanceOf(from);
-        shares = __bound(shares, 0, balance);
+        shares = bound(shares, 0, balance);
 
         if (shares == 0 || from == to) return;
 
         vm.prank(from);
-        try wokuUSD.transfer(to, shares) {} catch {}
+        try wokuUSD.transfer(to, shares) {} catch {
+            ghost_transferSharesRevertCount++;
+        }
     }
 
     // ============ View Functions ============
@@ -141,14 +173,17 @@ contract wOkuUSDHandler is Test {
         return actors.length;
     }
 
-    // ============ Helper Functions ============
-
-    /// @notice Custom bound function without console logging
-    function __bound(uint256 x, uint256 min, uint256 max) internal pure returns (uint256) {
-        if (x < min) return min;
-        if (x > max) return max;
-        return x;
+    function ghost_totalCalls() external view returns (uint256) {
+        return ghost_mintOkuUSDCallCount + ghost_depositCallCount + ghost_redeemCallCount
+            + ghost_withdrawCallCount + ghost_rebaseCallCount + ghost_transferSharesCallCount;
     }
+
+    function ghost_totalReverts() external view returns (uint256) {
+        return ghost_mintOkuUSDRevertCount + ghost_depositRevertCount + ghost_redeemRevertCount
+            + ghost_withdrawRevertCount + ghost_rebaseRevertCount + ghost_transferSharesRevertCount;
+    }
+
+    // ============ Helper Functions ============
 
     function _min(uint256 a, uint256 b) internal pure returns (uint256) {
         return a < b ? a : b;

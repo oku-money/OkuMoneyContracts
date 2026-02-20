@@ -71,20 +71,32 @@ contract ShareConversionInvariantsTest is BaseTest {
      * @notice Reward multiplier never decreases
      */
     function invariant_MultiplierNeverDecreases() public view {
-        assertGe(
-            okuUSD.rewardMultiplier(), PRECISION, "Multiplier should never be below initial value"
-        );
+        uint256 current = okuUSD.rewardMultiplier();
+        assertGe(current, PRECISION, "Multiplier below initial value");
+        assertGe(current, handler.ghost_lastMultiplier(), "Multiplier decreased from previous value");
     }
 
     /**
      * @notice sharesToTokens and tokensToShares are consistent
      */
     function invariant_ConversionConsistency() public view {
-        uint256 testShares = 1e18;
-        uint256 tokens = okuUSD.sharesToTokens(testShares);
-        uint256 recoveredShares = okuUSD.tokensToShares(tokens);
+        // Test at multiple representative values
+        uint256[3] memory testValues = [uint256(1), 1e18, 1_000_000e18];
+        for (uint256 i = 0; i < 3; i++) {
+            uint256 tokens = okuUSD.sharesToTokens(testValues[i]);
+            uint256 recovered = okuUSD.tokensToShares(tokens);
+            assertLe(recovered, testValues[i], "Conversion should not gain shares");
+        }
 
-        // Should recover original shares (or less due to rounding)
-        assertLe(recoveredShares, testShares, "Conversion should not gain shares");
+        // Test with actual actor shares
+        address[] memory actors = handler.getActors();
+        for (uint256 i = 0; i < actors.length; i++) {
+            uint256 actorShares = okuUSD.sharesOf(actors[i]);
+            if (actorShares > 0) {
+                uint256 tokens = okuUSD.sharesToTokens(actorShares);
+                uint256 recovered = okuUSD.tokensToShares(tokens);
+                assertLe(recovered, actorShares, "Actor conversion should not gain shares");
+            }
+        }
     }
 }

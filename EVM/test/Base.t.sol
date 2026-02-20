@@ -166,15 +166,6 @@ abstract contract BaseTest is Test {
 
     // ============ Helper Functions ============
 
-    /// @notice Custom bound function without console logging
-    /// @dev Replacement for StdUtils.bound() to avoid excessive console output
-    function __bound(uint256 x, uint256 min, uint256 max) internal pure returns (uint256) {
-        require(min <= max, "Min must be <= max");
-        if (x < min) return min;
-        if (x > max) return max;
-        return x;
-    }
-
     /// @notice Mint OkuUSD tokens to a user
     function _mintOkuUSD(address to, uint256 amount) internal {
         vm.prank(minter);
@@ -211,19 +202,19 @@ abstract contract BaseTest is Test {
     /// @notice Bound fuzz input to reasonable mint amount
     function _boundMintAmount(uint256 amount) internal view returns (uint256) {
         uint256 remaining = MAX_SUPPLY - okuUSD.totalSupply();
-        return __bound(amount, 1, remaining > 0 ? remaining : 1);
+        return bound(amount, 1, remaining > 0 ? remaining : 1);
     }
 
     /// @notice Bound fuzz input to reasonable multiplier (current to 10x)
     function _boundMultiplier(uint256 multiplier) internal view returns (uint256) {
         uint256 current = okuUSD.rewardMultiplier();
-        return __bound(multiplier, current, current * 10);
+        return bound(multiplier, current, current * 10);
     }
 
     /// @notice Bound fuzz input to reasonable multiplier increase (0.01% to 100%)
     function _boundMultiplierIncrease(uint256 increase) internal view returns (uint256) {
         uint256 current = okuUSD.rewardMultiplier();
-        return __bound(increase, current / 10_000, current);
+        return bound(increase, current / 10_000, current);
     }
 
     /// @notice Get minimum of two values

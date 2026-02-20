@@ -34,33 +34,24 @@ contract SupplyInvariantsTest is BaseTest {
      * operation was a rebase. Mints are always checked against maxSupply.
      */
     function invariant_SupplyCapRespected() public view {
-        // If supply is 0, nothing to check yet
-        if (okuUSD.totalSupply() == 0) {
-            return;
-        }
+        if (okuUSD.totalSupply() == 0) return;
 
-        // After rebases the supply CAN exceed maxSupply legitimately.
-        // The contract enforces the cap on mint operations, so we just verify
-        // that if there was no rebase, supply doesn't exceed cap
         if (!handler.wasLastOperationRebase()) {
-            // Supply should be finite (this is a sanity check)
-            assertLt(okuUSD.totalSupply(), type(uint256).max, "Supply should be finite");
+            assertLe(
+                okuUSD.totalSupply(),
+                okuUSD.maxSupply(),
+                "Supply exceeds maxSupply after non-rebase operation"
+            );
         }
     }
 
     /**
      * @notice Minted total generally tracks with supply
-     * @dev This invariant just verifies basic sanity - supply is finite.
-     *      Exact tracking between minted/burned and supply is complex due to:
-     *      1. Rounding when converting between shares and tokens
-     *      2. Rebases changing token values without affecting shares
-     *      3. Very small mints may round to 0 shares
+     * @dev Verifies the supply formula holds and ghost variables provide
+     *      a coarse sanity bound on net minted tokens.
      */
     function invariant_MintBurnAccounting() public view {
         uint256 actualSupply = okuUSD.totalSupply();
-
-        // Supply should always be finite (sanity check)
-        assertLt(actualSupply, type(uint256).max, "Supply should be finite");
 
         // Total shares should be consistent with supply and multiplier
         uint256 totalShares = okuUSD.totalShares();
@@ -75,6 +66,11 @@ contract SupplyInvariantsTest is BaseTest {
                 1, // Allow 1 wei rounding
                 "Supply should equal shares * multiplier"
             );
+        }
+
+        // Coarse sanity check: if nothing was ever minted, supply must be zero
+        if (handler.ghost_mintedTotal() == 0) {
+            assertEq(actualSupply, 0, "Supply should be zero if nothing minted");
         }
     }
 
@@ -102,5 +98,21 @@ contract SupplyInvariantsTest is BaseTest {
         uint256 expectedSupply = (totalShares * multiplier) / PRECISION;
         uint256 tolerance = multiplier > 1e24 ? 1000 : (multiplier > 1e21 ? 10 : 1);
         assertApproxEqAbs(okuUSD.totalSupply(), expectedSupply, tolerance, "Supply formula should hold");
+    }
+
+    /**
+     * @notice Handler should have a reasonable success rate
+     * @dev If too many calls revert, the handler is not exercising the contract effectively
+     */
+    function invariant_ReasonableSuccessRate() public view {
+        uint256 totalCalls = handler.ghost_totalCalls();
+        uint256 totalReverts = handler.ghost_totalReverts();
+        if (totalCalls > 10) {
+            assertGe(
+                ((totalCalls - totalReverts) * 100) / totalCalls,
+                30,
+                "Handler success rate too low"
+            );
+        }
     }
 }

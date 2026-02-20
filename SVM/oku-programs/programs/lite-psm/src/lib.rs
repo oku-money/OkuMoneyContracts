@@ -1469,7 +1469,7 @@ pub struct SetupOkusdEscrow<'info> {
         bump = config.bump,
         has_one = role_admin @ OkuError::Unauthorized
     )]
-    pub config: Account<'info, PsmConfig>,
+    pub config: Box<Account<'info, PsmConfig>>,
 
     /// OkuUSD mint (Token-2022)
     #[account(
@@ -1479,6 +1479,7 @@ pub struct SetupOkusdEscrow<'info> {
 
     /// PSM's OkuUSD escrow vault for queued redemptions
     /// Holds OkuUSD while users are in queue so they earn yield
+    /// NOTE: Unboxed to avoid Anchor 0.29 Box<InterfaceAccount> access violation with init CPI
     #[account(
         init,
         payer = role_admin,
@@ -1486,7 +1487,7 @@ pub struct SetupOkusdEscrow<'info> {
         associated_token::authority = config,
         associated_token::token_program = token_2022_program,
     )]
-    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,

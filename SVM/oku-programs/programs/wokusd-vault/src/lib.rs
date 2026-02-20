@@ -74,9 +74,7 @@ pub mod wokusd_vault {
 
         require!(shares > 0, VaultError::ZeroAmount);
 
-        // Extract AccountInfo from boxed accounts BEFORE any CPI.
-        // After a CPI to a different program, the BPF runtime may invalidate
-        // heap pointers inside Box<InterfaceAccount>, causing access violations.
+        // Clone account infos for CPI reuse
         let okusd_mint_info = ctx.accounts.okusd_mint.to_account_info();
         let user_okusd_ata_info = ctx.accounts.user_okusd_ata.to_account_info();
         let vault_okusd_info = ctx.accounts.vault_okusd.to_account_info();
@@ -152,10 +150,7 @@ pub mod wokusd_vault {
 
         require!(okusd_out > 0, VaultError::ZeroAmount);
 
-        // Extract AccountInfo from boxed accounts BEFORE any CPI.
-        // After a CPI to a different program (SPL Token), the BPF runtime
-        // may invalidate heap pointers inside Box<InterfaceAccount>, causing
-        // access violations when building the second CPI context (Token-2022).
+        // Clone account infos for CPI reuse
         let okusd_mint_info = ctx.accounts.okusd_mint.to_account_info();
         let user_okusd_ata_info = ctx.accounts.user_okusd_ata.to_account_info();
         let vault_okusd_info = ctx.accounts.vault_okusd.to_account_info();
@@ -175,7 +170,6 @@ pub mod wokusd_vault {
         )?;
 
         // Transfer OkuUSD from vault to user (Token-2022)
-        // Uses pre-extracted AccountInfo to avoid Box invalidation after CPI
         let seeds = &[VaultConfig::SEED, &[bump]];
         let signer = &[&seeds[..]];
 
@@ -306,7 +300,7 @@ pub struct Initialize<'info> {
     #[account(
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
 
     /// wOkuUSD mint (standard SPL Token)
     /// Mint authority must be the config PDA
@@ -354,7 +348,7 @@ pub struct Wrap<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
 
     /// wOkuUSD mint (standard SPL)
     #[account(
@@ -370,7 +364,7 @@ pub struct Wrap<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
 
     /// User's wOkuUSD token account
     #[account(
@@ -387,7 +381,7 @@ pub struct Wrap<'info> {
         mut,
         address = config.vault_okusd
     )]
-    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -412,7 +406,7 @@ pub struct Unwrap<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
 
     /// wOkuUSD mint (standard SPL)
     #[account(
@@ -429,7 +423,7 @@ pub struct Unwrap<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
 
     /// User's wOkuUSD token account
     #[account(
@@ -445,7 +439,7 @@ pub struct Unwrap<'info> {
         mut,
         address = config.vault_okusd
     )]
-    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,

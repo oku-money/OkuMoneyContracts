@@ -580,6 +580,7 @@ pub mod lite_psm {
         let bridge_config = &ctx.accounts.bridge_config;
         let is_bridge_paused = bridge_config.is_paused;
         let is_psm_paused = ctx.accounts.config.is_paused;
+        let config_bump = ctx.accounts.config.bump;
 
         // 1. Check bridge and PSM not paused
         require!(!is_bridge_paused, OkuError::BridgePaused);
@@ -626,7 +627,6 @@ pub mod lite_psm {
 
         // 6. Mint fee to fee_recipient (if fee > 0)
         if fee_amount > 0 {
-            let config_bump = ctx.accounts.config.bump;
             let seeds = &[PsmConfig::SEED, &[config_bump]];
             let signer = &[&seeds[..]];
 
@@ -1437,7 +1437,7 @@ pub struct Initialize<'info> {
     #[account(
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
 
     /// PSM's USDC vault
     #[account(
@@ -1582,7 +1582,7 @@ pub struct Redeem<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
 
     /// User's USDC account
     #[account(
@@ -1601,7 +1601,7 @@ pub struct Redeem<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
 
     /// PSM's USDC vault
     #[account(
@@ -1617,7 +1617,7 @@ pub struct Redeem<'info> {
         token::authority = config,
         token::token_program = token_2022_program,
     )]
-    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -1651,7 +1651,7 @@ pub struct ProcessQueue<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
 
     /// PSM's USDC vault
     #[account(
@@ -1667,7 +1667,7 @@ pub struct ProcessQueue<'info> {
         token::authority = config,
         token::token_program = token_2022_program,
     )]
-    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -1785,7 +1785,7 @@ pub struct BridgeMint<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
 
     /// Recipient's OkuUSD account (will validate owner in function body)
     #[account(
@@ -1793,7 +1793,7 @@ pub struct BridgeMint<'info> {
         token::mint = okusd_mint,
         token::token_program = token_2022_program,
     )]
-    pub recipient_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub recipient_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
 
     /// Instruction sysvar for Ed25519 signature verification
     /// CHECK: Verified in verify_ed25519_signature function
@@ -1840,7 +1840,7 @@ pub struct BridgeBurn<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
 
     /// User's OkuUSD account
     #[account(
@@ -1849,7 +1849,7 @@ pub struct BridgeBurn<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
 
     /// Fee recipient's OkuUSD account
     #[account(
@@ -1858,7 +1858,7 @@ pub struct BridgeBurn<'info> {
         token::authority = bridge_config.fee_recipient,
         token::token_program = token_2022_program,
     )]
-    pub fee_recipient_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub fee_recipient_ata: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_2022_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,
@@ -1961,14 +1961,14 @@ pub struct FreezeAccount<'info> {
         seeds = [PsmConfig::SEED],
         bump = config.bump
     )]
-    pub config: Account<'info, PsmConfig>,
+    pub config: Box<Account<'info, PsmConfig>>,
 
     /// OkuUSD mint (Token-2022)
     #[account(
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
 
     /// Target account to freeze
     #[account(
@@ -1976,7 +1976,7 @@ pub struct FreezeAccount<'info> {
         token::mint = okusd_mint,
         token::token_program = token_2022_program,
     )]
-    pub target_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub target_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }
@@ -1993,14 +1993,14 @@ pub struct ThawAccount<'info> {
         seeds = [PsmConfig::SEED],
         bump = config.bump
     )]
-    pub config: Account<'info, PsmConfig>,
+    pub config: Box<Account<'info, PsmConfig>>,
 
     /// OkuUSD mint (Token-2022)
     #[account(
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
 
     /// Target account to thaw
     #[account(
@@ -2008,7 +2008,7 @@ pub struct ThawAccount<'info> {
         token::mint = okusd_mint,
         token::token_program = token_2022_program,
     )]
-    pub target_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub target_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }

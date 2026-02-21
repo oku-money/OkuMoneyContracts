@@ -44,7 +44,7 @@ describe("OkuBridge E2E", function () {
     )) as unknown as OkuUSD;
     await okuUSD.waitForDeployment();
 
-    // Deploy OkuBridge with transparent proxy
+    // Deploy OkuBridge with transparent proxy (OkuBridge uses transparent, not UUPS)
     okuBridge = (await upgrades.deployProxy(
       new OkuBridge__factory(admin),
       [
@@ -53,7 +53,7 @@ describe("OkuBridge E2E", function () {
         feeRecipient.address,
         admin.address,
       ],
-      { kind: "uups" }
+      { kind: "transparent" }
     )) as unknown as OkuBridge;
     await okuBridge.waitForDeployment();
 

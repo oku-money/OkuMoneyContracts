@@ -2,6 +2,8 @@
 pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 /**
  * @title LitePSMTest
@@ -79,7 +81,7 @@ contract LitePSMTest is BaseTest {
         _approveUSDC(user1, address(litePSM), 100e6);
 
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         litePSM.mint(100e6);
     }
 
@@ -159,23 +161,31 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_Mint_SkipsOracleWhenDisabled() public {
+        // Warp to reasonable timestamp to allow setStale to work without underflow
+        vm.warp(1_000_000);
+
         // Oracle configured but disabled
         vm.prank(oracleManager);
         litePSM.configureOracle(address(oracle), 1 hours, false);
 
-        // Even with stale/bad oracle values, should work since oracle is disabled
-        // Don't call setStale since it can underflow - just leave oracle in any state
+        // Set stale oracle data - should be ignored since oracle is disabled
+        oracle.setTimestamp(block.timestamp - 2 hours);
 
         _approveUSDC(user1, address(litePSM), 100e6);
+
+        uint256 balanceBefore = okuUSD.balanceOf(user1);
 
         // Should succeed because oracle is disabled
         vm.prank(user1);
         litePSM.mint(100e6);
+
+        uint256 expectedOkuUSD = 100e6 * DECIMAL_MULTIPLIER;
+        assertEq(okuUSD.balanceOf(user1), balanceBefore + expectedOkuUSD);
     }
 
     function test_ConfigureOracle_OnlyOracleManager() public {
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, ORACLE_MANAGER_ROLE));
         litePSM.configureOracle(address(oracle), 1 hours, true);
     }
 
@@ -296,7 +306,7 @@ contract LitePSMTest is BaseTest {
         litePSM.pause();
 
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         litePSM.redeem(okuUSDAmount);
     }
 
@@ -318,7 +328,7 @@ contract LitePSMTest is BaseTest {
 
     function test_ProcessQueue_OnlyQueueProcessor() public {
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, QUEUE_PROCESSOR_ROLE));
         litePSM.processQueue(10);
     }
 
@@ -440,7 +450,7 @@ contract LitePSMTest is BaseTest {
 
     function test_Pause_OnlyPauser() public {
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_PAUSER_ROLE));
         litePSM.pause();
     }
 
@@ -449,13 +459,13 @@ contract LitePSMTest is BaseTest {
         litePSM.pause();
 
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_UNPAUSER_ROLE));
         litePSM.unpause();
     }
 
     function test_WithdrawUSDC_OnlyBufferWithdrawer() public {
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BUFFER_WITHDRAWER_ROLE));
         litePSM.withdrawUSDC(user1, 100e6);
     }
 

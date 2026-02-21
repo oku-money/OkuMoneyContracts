@@ -199,6 +199,11 @@ abstract contract BaseTest is Test {
         return (shares * okuUSD.rewardMultiplier()) / PRECISION;
     }
 
+    /// @notice Override bound() to suppress "Bound result" console logs
+    function bound(uint256 x, uint256 min, uint256 max) internal pure override returns (uint256) {
+        return _bound(x, min, max);
+    }
+
     /// @notice Bound fuzz input to reasonable mint amount
     function _boundMintAmount(uint256 amount) internal view returns (uint256) {
         uint256 remaining = MAX_SUPPLY - okuUSD.totalSupply();

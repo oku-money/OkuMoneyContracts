@@ -58,6 +58,11 @@ contract wOkuUSDHandler is Test {
         }
     }
 
+    /// @notice Override bound() to suppress "Bound result" console logs
+    function bound(uint256 x, uint256 min, uint256 max) internal pure override returns (uint256) {
+        return _bound(x, min, max);
+    }
+
     // ============ Handler Functions ============
 
     /// @notice Mint OkuUSD to actors (so they have tokens to deposit)

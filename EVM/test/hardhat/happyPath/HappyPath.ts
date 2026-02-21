@@ -70,7 +70,7 @@ describe("Happy Path Testing", () => {
         usdc = IERC20__factory.connect(USDC_MAINNET, Bob)
     })
 
-    it("Deploy", async () => {
+    before("Deploy", async () => {
         const frankAddr = await Frank.getAddress()
         const MAX_SUPPLY = parseEther("1000000000") // 1 billion
 
@@ -328,11 +328,6 @@ describe("Happy Path Testing", () => {
         const bobUsdcAfter = await usdc.balanceOf(bobAddr)
         const daveUsdcAfter = await usdc.balanceOf(daveAddr)
 
-        expect(aliceUsdcAfter).to.be.gt(aliceUsdcBefore)
-        expect(charlieUsdcAfter).to.be.gt(charlieUsdcBefore)
-        expect(bobUsdcAfter).to.be.gt(bobUsdcBefore)
-        expect(daveUsdcAfter).to.be.gt(daveUsdcBefore)
-
         // Each user should have received ~5,250 USDC (10,000 * 1.05 / 2)
         // Check the delta (USDC received), not total balance
         const expectedPayout = parseUnits("5250", 6)
@@ -389,11 +384,6 @@ describe("Happy Path Testing", () => {
         const charlieUsdcAfter = await usdc.balanceOf(charlieAddr)
         const bobUsdcAfter = await usdc.balanceOf(bobAddr)
         const daveUsdcAfter = await usdc.balanceOf(daveAddr)
-
-        expect(aliceUsdcAfter).to.be.gt(aliceUsdcBefore)
-        expect(charlieUsdcAfter).to.be.gt(charlieUsdcBefore)
-        expect(bobUsdcAfter).to.be.gt(bobUsdcBefore)
-        expect(daveUsdcAfter).to.be.gt(daveUsdcBefore)
 
         // Each user should have received ~5,250 USDC (their remaining half after rebase)
         // Total USDC received across both redemptions should be ~10,500 (original + 5% yield)

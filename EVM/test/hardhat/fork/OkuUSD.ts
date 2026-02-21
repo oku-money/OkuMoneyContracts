@@ -90,7 +90,7 @@ describe("OkuUSD Scenarios", () => {
         })
     })
 
-    it("Deploy", async () => {
+    before("Deploy", async () => {
         const frankAddr = await Frank.getAddress()
         const MAX_SUPPLY = parseEther("1000000000")
 
@@ -162,16 +162,16 @@ describe("OkuUSD Scenarios", () => {
             await getOkuUSD(Alice, depositAmount)
             const aliceInitialBalance = await okuUSD.balanceOf(aliceAddr)
 
-            // Alice transfers 5,000 to Bob (PSM mints in USDC decimals)
-            const transferAmount = parseUnits("5000", 6)
+            // Alice transfers 5,000 OkuUSD to Bob (OkuUSD is 18 decimals)
+            const transferAmount = parseEther("5000")
             await okuUSD.connect(Alice).transfer(bobAddr, transferAmount)
 
             const aliceAfterTransfer = await okuUSD.balanceOf(aliceAddr)
             const bobAfterTransfer = await okuUSD.balanceOf(bobAddr)
 
             // Verify balances (allowing for small rounding)
-            expect(aliceAfterTransfer).to.be.closeTo(aliceInitialBalance - transferAmount, parseUnits("1", 6))
-            expect(bobAfterTransfer).to.be.closeTo(transferAmount, parseUnits("1", 6))
+            expect(aliceAfterTransfer).to.be.closeTo(aliceInitialBalance - transferAmount, parseEther("1"))
+            expect(bobAfterTransfer).to.be.closeTo(transferAmount, parseEther("1"))
 
             // Record balances before rebase
             const aliceBeforeRebase = await okuUSD.balanceOf(aliceAddr)
@@ -186,8 +186,8 @@ describe("OkuUSD Scenarios", () => {
             const aliceAfterRebase = await okuUSD.balanceOf(aliceAddr)
             const bobAfterRebase = await okuUSD.balanceOf(bobAddr)
 
-            expect(aliceAfterRebase).to.be.closeTo(aliceBeforeRebase * 110n / 100n, parseUnits("1", 6))
-            expect(bobAfterRebase).to.be.closeTo(bobBeforeRebase * 110n / 100n, parseUnits("1", 6))
+            expect(aliceAfterRebase).to.be.closeTo(aliceBeforeRebase * 110n / 100n, parseEther("1"))
+            expect(bobAfterRebase).to.be.closeTo(bobBeforeRebase * 110n / 100n, parseEther("1"))
 
             // Bob transfers back to Alice
             await okuUSD.connect(Bob).transfer(aliceAddr, bobAfterRebase)
@@ -196,8 +196,8 @@ describe("OkuUSD Scenarios", () => {
             const bobFinal = await okuUSD.balanceOf(bobAddr)
 
             // Alice should have approximately her rebased amount
-            expect(aliceFinal).to.be.closeTo(aliceInitialBalance * 110n / 100n, parseUnits("1", 6))
-            expect(bobFinal).to.be.closeTo(0n, parseUnits("1", 6))
+            expect(aliceFinal).to.be.closeTo(aliceInitialBalance * 110n / 100n, parseEther("1"))
+            expect(bobFinal).to.be.closeTo(0n, parseEther("1"))
         })
     })
 
@@ -324,9 +324,9 @@ describe("OkuUSD Scenarios", () => {
             expect(aliceBalance).to.be.gt(0)
 
             // Transfer works before pause
-            const transferAmount = parseUnits("1000", 6)
+            const transferAmount = parseEther("1000")
             await okuUSD.connect(Alice).transfer(bobAddr, transferAmount)
-            expect(await okuUSD.balanceOf(bobAddr)).to.be.closeTo(transferAmount, parseUnits("1", 6))
+            expect(await okuUSD.balanceOf(bobAddr)).to.be.closeTo(transferAmount, parseEther("1"))
 
             // Frank (admin) pauses the contract
             await okuUSD.connect(Frank).pause()
@@ -354,7 +354,7 @@ describe("OkuUSD Scenarios", () => {
 
             // Transfer works again after unpause
             await okuUSD.connect(Alice).transfer(bobAddr, transferAmount)
-            expect(await okuUSD.balanceOf(bobAddr)).to.be.closeTo(transferAmount * 2n, parseUnits("1", 6))
+            expect(await okuUSD.balanceOf(bobAddr)).to.be.closeTo(transferAmount * 2n, parseEther("1"))
         })
 
         it("Blacklisted addresses cannot send or receive", async () => {
@@ -368,7 +368,7 @@ describe("OkuUSD Scenarios", () => {
             await getOkuUSD(Bob, depositAmount)
             await getOkuUSD(Charlie, depositAmount)
 
-            const transferAmount = parseUnits("1000", 6)
+            const transferAmount = parseEther("1000")
 
             // Normal transfer works
             await okuUSD.connect(Alice).transfer(bobAddr, transferAmount)
@@ -418,7 +418,7 @@ describe("OkuUSD Scenarios", () => {
 
             // Verify transfers are blocked
             await expect(
-                okuUSD.connect(Alice).transfer(bobAddr, parseUnits("100", 6))
+                okuUSD.connect(Alice).transfer(bobAddr, parseEther("100"))
             ).to.be.revertedWithCustomError(okuUSD, "EnforcedPause")
 
             // STEP 2: Blacklist Alice while paused (CRITICAL - must work)
@@ -430,17 +430,17 @@ describe("OkuUSD Scenarios", () => {
 
             // Alice still cannot send (blacklisted)
             await expect(
-                okuUSD.connect(Alice).transfer(bobAddr, parseUnits("100", 6))
+                okuUSD.connect(Alice).transfer(bobAddr, parseEther("100"))
             ).to.be.revertedWith("Sender blacklisted")
 
             // Alice still cannot receive
             await getOkuUSD(Bob, depositAmount)
             await expect(
-                okuUSD.connect(Bob).transfer(aliceAddr, parseUnits("100", 6))
+                okuUSD.connect(Bob).transfer(aliceAddr, parseEther("100"))
             ).to.be.revertedWith("Recipient blacklisted")
 
             // Verify Alice's balance is frozen (still has funds, just can't move them)
-            expect(await okuUSD.balanceOf(aliceAddr)).to.be.closeTo(aliceBalance, parseUnits("1", 6))
+            expect(await okuUSD.balanceOf(aliceAddr)).to.be.closeTo(aliceBalance, parseEther("1"))
 
             // Cleanup: unblacklist Alice for other tests
             await okuUSD.connect(Frank).unblacklist(aliceAddr)

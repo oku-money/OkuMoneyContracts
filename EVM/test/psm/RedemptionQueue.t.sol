@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 /**
  * @title RedemptionQueueTest
@@ -42,7 +43,7 @@ contract RedemptionQueueTest is BaseTest {
         _approveOkuUSD(user1, address(redemptionQueue), 100e18);
 
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_ROLE));
         redemptionQueue.enqueue(user1, 100e18);
     }
 
@@ -69,7 +70,7 @@ contract RedemptionQueueTest is BaseTest {
         assertEq(entry.user, user1);
         // At 1x multiplier, shares == tokens
         assertEq(entry.shares, _tokensToShares(amount));
-        assertGt(entry.timestamp, 0);
+        assertEq(entry.timestamp, block.timestamp);
     }
 
     function test_Enqueue_IncrementsQueueLength() public {
@@ -120,7 +121,7 @@ contract RedemptionQueueTest is BaseTest {
 
     function test_ProcessQueue_OnlyPSMRole() public {
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_ROLE));
         redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
     }
 

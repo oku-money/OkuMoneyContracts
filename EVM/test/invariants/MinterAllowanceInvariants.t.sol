@@ -65,7 +65,7 @@ contract MinterAllowanceInvariantsTest is BaseTest {
             // (may be less if bounded by maxSupply)
             assertLe(
                 allowanceConsumed,
-                mintedTotal + 1e18, // Small tolerance for bounded mints
+                mintedTotal + 1, // Rounding tolerance
                 "Allowance consumed exceeds minted amount unexpectedly"
             );
         }

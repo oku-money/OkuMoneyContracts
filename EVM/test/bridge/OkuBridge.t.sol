@@ -507,7 +507,7 @@ contract OkuBridgeTest is BaseTest {
         assertEq(okuUSD.balanceOf(user2), expectedTokens);
     }
 
-    function test_FullRoundTrip_MultipleUsers() public {
+    function test_BridgeBurn_MultipleUsers_IncrementNonce() public {
         uint256 shares = 50e18;
 
         for (uint256 i = 0; i < 5; i++) {
@@ -711,7 +711,8 @@ contract OkuBridgeTest is BaseTest {
         assertEq(okuUSD.sharesOf(user1), 0);
 
         // Admin refunds the request
-        // Note: proof param is unused in current MVP implementation (OkuBridge.sol)
+        // proof param is unused in current implementation (OkuBridge.sol).
+        // When proof verification is added, this test must be updated with valid proof data.
         bytes memory proof = "";
 
         uint256 user1SharesBefore = okuUSD.sharesOf(user1);
@@ -781,20 +782,25 @@ contract OkuBridgeTest is BaseTest {
     }
 
     function test_EIP712_SignatureRecovery() public {
+        uint256 shares = 100e18;
+
         OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid,
             sender: user1,
             recipient: user2,
-            shares: 100e18,
+            shares: shares,
             nonce: 0,
             deadline: block.timestamp + 1 hours
         });
 
         bytes memory signature = _signBridgeRequest(request);
+        bytes32 requestId = keccak256(abi.encode(request));
 
-        // Should not revert (signature recovery works)
         okuBridge.bridgeMint(request, signature);
+
+        assertEq(okuUSD.sharesOf(user2), shares, "Signature recovery should mint shares");
+        assertTrue(okuBridge.processedRequests(requestId), "Request should be marked processed");
     }
 
     // ============ Fuzz Tests ============

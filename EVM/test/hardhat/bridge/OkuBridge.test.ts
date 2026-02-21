@@ -40,7 +40,7 @@ describe("OkuBridge E2E", function () {
     okuUSD = (await upgrades.deployProxy(
       new OkuUSD__factory(admin),
       ["OkuUSD", "OKUSD", admin.address, ethers.parseEther("1000000000")],
-      { kind: "transparent" }
+      { kind: "uups" }
     )) as unknown as OkuUSD;
     await okuUSD.waitForDeployment();
 
@@ -53,7 +53,7 @@ describe("OkuBridge E2E", function () {
         feeRecipient.address,
         admin.address,
       ],
-      { kind: "transparent" }
+      { kind: "uups" }
     )) as unknown as OkuBridge;
     await okuBridge.waitForDeployment();
 
@@ -321,7 +321,6 @@ describe("OkuBridge E2E", function () {
         .connect(user1)
         .bridgeBurn(ARBITRUM_CHAIN_ID, user2.address, shares);
       const burnReceipt = await burnTx.wait();
-      console.log("BridgeBurn gas used:", burnReceipt?.gasUsed.toString());
 
       // Verify gas is reasonable (<150k target)
       expect(burnReceipt?.gasUsed).to.be.lessThan(150000);
@@ -343,7 +342,6 @@ describe("OkuBridge E2E", function () {
       // Measure bridgeMint gas
       const mintTx = await okuBridge.bridgeMint(request, signature);
       const mintReceipt = await mintTx.wait();
-      console.log("BridgeMint gas used:", mintReceipt?.gasUsed.toString());
 
       // Verify gas is reasonable (<140k target, slightly higher than Forge due to proxy overhead)
       expect(mintReceipt?.gasUsed).to.be.lessThan(140000);

@@ -116,7 +116,7 @@ describe("LitePSM Scenarios", () => {
         })
     })
 
-    it("Deploy", async () => {
+    before("Deploy", async () => {
         const frankAddr = await Frank.getAddress()
         const MAX_SUPPLY = parseEther("1000000000")
 
@@ -197,7 +197,8 @@ describe("LitePSM Scenarios", () => {
             await okuUSD.connect(Alice).approve(psmAddr, aliceRedeemAmount)
             await psm.connect(Alice).redeem(aliceRedeemAmount)
 
-            expect(await usdc.balanceOf(aliceAddr)).to.be.gt(aliceUsdcBefore)
+            const expectedAliceUsdc = aliceRedeemAmount / BigInt(1e12)
+            expect((await usdc.balanceOf(aliceAddr)) - aliceUsdcBefore).to.be.closeTo(expectedAliceUsdc, parseUnits("1", 6))
             expect(await queue.queueLength()).to.equal(0)
 
             // Bob redeems half - should also be instant
@@ -208,7 +209,8 @@ describe("LitePSM Scenarios", () => {
             await okuUSD.connect(Bob).approve(psmAddr, bobRedeemAmount)
             await psm.connect(Bob).redeem(bobRedeemAmount)
 
-            expect(await usdc.balanceOf(bobAddr)).to.be.gt(bobUsdcBefore)
+            const expectedBobUsdc = bobRedeemAmount / BigInt(1e12)
+            expect((await usdc.balanceOf(bobAddr)) - bobUsdcBefore).to.be.closeTo(expectedBobUsdc, parseUnits("1", 6))
             expect(await queue.queueLength()).to.equal(0)
         })
     })
@@ -285,9 +287,10 @@ describe("LitePSM Scenarios", () => {
             // Should have processed Alice + Bob, leaving Charlie + Dave
             expect(await queue.queueLength()).to.equal(2)
 
-            // Alice and Bob received USDC
-            expect(await usdc.balanceOf(aliceAddr)).to.be.gt(aliceUsdcBefore)
-            expect(await usdc.balanceOf(bobAddr)).to.be.gt(bobUsdcBefore)
+            // Alice and Bob received ~5,000 USDC each
+            const expectedUsdc = parseUnits("5000", 6)
+            expect((await usdc.balanceOf(aliceAddr)) - aliceUsdcBefore).to.be.closeTo(expectedUsdc, parseUnits("1", 6))
+            expect((await usdc.balanceOf(bobAddr)) - bobUsdcBefore).to.be.closeTo(expectedUsdc, parseUnits("1", 6))
 
             // Charlie and Dave did NOT receive USDC yet
             expect(await usdc.balanceOf(charlieAddr)).to.equal(charlieUsdcBefore)

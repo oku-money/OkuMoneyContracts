@@ -6,6 +6,9 @@ import {wOkuUSD} from "../../src/token/wOkuUSD.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
+import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 
 /**
  * @title wOkuUSDTest
@@ -39,7 +42,7 @@ contract wOkuUSDTest is BaseTest {
     }
 
     function test_Initialize_CannotReinitialize() public {
-        vm.expectRevert();
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
         wokuUSD.initialize(IERC20(address(okuUSD)), "Wrapped OkuUSD", "wOKUSD", admin);
     }
 
@@ -104,7 +107,7 @@ contract wOkuUSDTest is BaseTest {
         // No approval
 
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(wokuUSD), 0, amount));
         wokuUSD.deposit(amount, user1);
     }
 
@@ -181,22 +184,14 @@ contract wOkuUSDTest is BaseTest {
         uint256 shares = wokuUSD.deposit(amount, user1);
 
         vm.prank(user1);
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(ERC4626Upgradeable.ERC4626ExceededMaxRedeem.selector, user1, shares + 1, shares));
         wokuUSD.redeem(shares + 1, user1, user1);
     }
 
     // ============ Exchange Rate & Rebase Tests ============
 
     function test_ExchangeRate_IncreasesAfterRebase() public {
-        uint256 conversionBefore = wokuUSD.convertToAssets(1e18);
-
-        // Rebase 2x
-        vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(PRECISION * 2);
-
-        // Need deposits for convertToAssets to be meaningful at non-zero supply
-        // With zero supply, convertToAssets returns 1:1
-        // But the underlying OkuUSD balance grows, so test with actual deposits
+        // Deposit first so convertToAssets is meaningful at non-zero supply
         uint256 amount = 100e18;
         _mintOkuUSD(user1, amount);
         _approveOkuUSD(user1, address(wokuUSD), amount);
@@ -204,12 +199,17 @@ contract wOkuUSDTest is BaseTest {
         vm.prank(user1);
         uint256 shares = wokuUSD.deposit(amount, user1);
 
-        // Rebase again
+        uint256 conversionBefore = wokuUSD.convertToAssets(1e18);
+
+        // Rebase 2x
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(PRECISION * 3);
+        okuUSD.updateRewardMultiplier(PRECISION * 2);
+
+        uint256 conversionAfter = wokuUSD.convertToAssets(1e18);
+        assertGt(conversionAfter, conversionBefore, "Exchange rate should increase after rebase");
 
         uint256 assetsAfter = wokuUSD.convertToAssets(shares);
-        // After rebase from 2x to 3x, the OkuUSD in vault grew by 50%
+        // After rebase from 1x to 2x, the OkuUSD in vault doubled
         assertGt(assetsAfter, amount);
     }
 
@@ -461,14 +461,14 @@ contract wOkuUSDTest is BaseTest {
     // ============ Always Available Tests ============
 
     function test_NoPauseFunctionality() public {
-        // wOkuUSD has no pause - confirm deposit/redeem always work
+        // Verify wOkuUSD has no pause function by attempting a low-level call
+        (bool success,) = address(wokuUSD).call(abi.encodeWithSignature("pause()"));
+        assertFalse(success, "wOkuUSD should not have pause functionality");
+
+        // Confirm deposit/redeem work normally
         uint256 amount = 100e18;
         _mintOkuUSD(user1, amount);
         _approveOkuUSD(user1, address(wokuUSD), amount);
-
-        // Even if OkuUSD is paused, wOkuUSD should have no pause of its own
-        // (Note: OkuUSD transfers would fail if OkuUSD is paused, but wOkuUSD
-        // itself doesn't have pause modifiers)
 
         vm.prank(user1);
         uint256 shares = wokuUSD.deposit(amount, user1);

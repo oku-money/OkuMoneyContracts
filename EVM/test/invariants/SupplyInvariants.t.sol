@@ -34,8 +34,6 @@ contract SupplyInvariantsTest is BaseTest {
      * operation was a rebase. Mints are always checked against maxSupply.
      */
     function invariant_SupplyCapRespected() public view {
-        if (okuUSD.totalSupply() == 0) return;
-
         if (!handler.wasLastOperationRebase()) {
             assertLe(
                 okuUSD.totalSupply(),
@@ -83,21 +81,16 @@ contract SupplyInvariantsTest is BaseTest {
         uint256 totalShares = okuUSD.totalShares();
         uint256 multiplier = okuUSD.rewardMultiplier();
 
-        // Sanity check: shares should be finite (not overflow territory)
-        assertLt(totalShares, type(uint256).max, "Total shares should be finite");
-
         // If multiplier is reasonable (< 1e36), check against computed bound
         // At extreme multipliers from many rebases, this check becomes unreliable
         if (multiplier < 1e36) {
             uint256 maxShares = (MAX_SUPPLY * PRECISION) / multiplier;
-            assertLe(totalShares, maxShares * 2, "Total shares exceeds reasonable maximum");
+            assertLe(totalShares, maxShares + handler.getActorCount(), "Total shares exceeds maximum");
         }
 
         // Always verify the supply formula holds
-        // At higher multipliers, allow more rounding tolerance (scale with multiplier magnitude)
         uint256 expectedSupply = (totalShares * multiplier) / PRECISION;
-        uint256 tolerance = multiplier > 1e24 ? 1000 : (multiplier > 1e21 ? 10 : 1);
-        assertApproxEqAbs(okuUSD.totalSupply(), expectedSupply, tolerance, "Supply formula should hold");
+        assertApproxEqAbs(okuUSD.totalSupply(), expectedSupply, 1, "Supply formula should hold");
     }
 
     /**

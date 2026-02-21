@@ -118,7 +118,7 @@ describe("NTT Bridge Scenarios", () => {
         })
     })
 
-    it("Deploy", async () => {
+    before("Deploy", async () => {
         const frankAddr = await Frank.getAddress()
         const MAX_SUPPLY = parseEther("1000000000")
 

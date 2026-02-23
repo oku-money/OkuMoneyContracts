@@ -72,14 +72,14 @@ contract OkuBridge is
 
     // ============ Role Constants ============
 
-    bytes32 public constant BRIDGE_SIGNER_MANAGER_ROLE = keccak256("BRIDGE_SIGNER_MANAGER_ROLE");
-    bytes32 public constant BRIDGE_PAUSER_ROLE = keccak256("BRIDGE_PAUSER_ROLE");
-    bytes32 public constant BRIDGE_UNPAUSER_ROLE = keccak256("BRIDGE_UNPAUSER_ROLE");
-    bytes32 public constant BRIDGE_FEE_MANAGER_ROLE = keccak256("BRIDGE_FEE_MANAGER_ROLE");
-    bytes32 public constant BRIDGE_NONCE_ADMIN_ROLE = keccak256("BRIDGE_NONCE_ADMIN_ROLE");
-    bytes32 public constant BRIDGE_CHAIN_MANAGER_ROLE = keccak256("BRIDGE_CHAIN_MANAGER_ROLE");
-    bytes32 public constant BRIDGE_LIMITS_MANAGER_ROLE = keccak256("BRIDGE_LIMITS_MANAGER_ROLE");
-    bytes32 public constant BRIDGE_REFUND_ADMIN_ROLE = keccak256("BRIDGE_REFUND_ADMIN_ROLE");
+    bytes32 public constant BRIDGE_SIGNER_MANAGER = keccak256("BRIDGE_SIGNER_MANAGER");
+    bytes32 public constant BRIDGE_PAUSER = keccak256("BRIDGE_PAUSER");
+    bytes32 public constant BRIDGE_UNPAUSER = keccak256("BRIDGE_UNPAUSER");
+    bytes32 public constant BRIDGE_FEE_MANAGER = keccak256("BRIDGE_FEE_MANAGER");
+    bytes32 public constant BRIDGE_NONCE_ADMIN = keccak256("BRIDGE_NONCE_ADMIN");
+    bytes32 public constant BRIDGE_CHAIN_MANAGER = keccak256("BRIDGE_CHAIN_MANAGER");
+    bytes32 public constant BRIDGE_LIMITS_MANAGER = keccak256("BRIDGE_LIMITS_MANAGER");
+    bytes32 public constant BRIDGE_REFUND_ADMIN = keccak256("BRIDGE_REFUND_ADMIN");
 
     // ============ EIP-712 Constants ============
 
@@ -179,14 +179,14 @@ contract OkuBridge is
 
         // Grant all roles to admin
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
-        _grantRole(BRIDGE_SIGNER_MANAGER_ROLE, _admin);
-        _grantRole(BRIDGE_PAUSER_ROLE, _admin);
-        _grantRole(BRIDGE_UNPAUSER_ROLE, _admin);
-        _grantRole(BRIDGE_CHAIN_MANAGER_ROLE, _admin);
-        _grantRole(BRIDGE_LIMITS_MANAGER_ROLE, _admin);
-        _grantRole(BRIDGE_NONCE_ADMIN_ROLE, _admin);
-        _grantRole(BRIDGE_REFUND_ADMIN_ROLE, _admin);
-        _grantRole(BRIDGE_FEE_MANAGER_ROLE, _admin);
+        _grantRole(BRIDGE_SIGNER_MANAGER, _admin);
+        _grantRole(BRIDGE_PAUSER, _admin);
+        _grantRole(BRIDGE_UNPAUSER, _admin);
+        _grantRole(BRIDGE_CHAIN_MANAGER, _admin);
+        _grantRole(BRIDGE_LIMITS_MANAGER, _admin);
+        _grantRole(BRIDGE_NONCE_ADMIN, _admin);
+        _grantRole(BRIDGE_REFUND_ADMIN, _admin);
+        _grantRole(BRIDGE_FEE_MANAGER, _admin);
 
         // Configure common chains
         supportedChains[1] = true;     // Ethereum
@@ -331,7 +331,7 @@ contract OkuBridge is
      * @dev Allows subsequent bridges to proceed even if one request fails
      * @param destChainId Destination chain to skip nonce for
      */
-    function skipNonce(uint256 destChainId) external onlyRole(BRIDGE_NONCE_ADMIN_ROLE) {
+    function skipNonce(uint256 destChainId) external onlyRole(BRIDGE_NONCE_ADMIN) {
         uint256 skippedNonce = outboundNonce[destChainId];
         outboundNonce[destChainId] = skippedNonce + 1;
         emit NonceSkipped(destChainId, skippedNonce);
@@ -345,7 +345,7 @@ contract OkuBridge is
     function refundFailedRequest(
         BridgeRequest calldata request,
         bytes calldata /* proof */
-    ) external onlyRole(BRIDGE_REFUND_ADMIN_ROLE) {
+    ) external onlyRole(BRIDGE_REFUND_ADMIN) {
         // Calculate request ID
         bytes32 requestId = keccak256(abi.encode(request));
 
@@ -367,7 +367,7 @@ contract OkuBridge is
      */
     function updateAuthorizedSigner(address newSigner)
         external
-        onlyRole(BRIDGE_SIGNER_MANAGER_ROLE)
+        onlyRole(BRIDGE_SIGNER_MANAGER)
     {
         if (newSigner == address(0)) revert ZeroAddress();
         address oldSigner = authorizedSigner;
@@ -379,7 +379,7 @@ contract OkuBridge is
      * @notice Update the bridge fee
      * @param newFee New fee in basis points (max 10000 = 100%)
      */
-    function updateFee(uint256 newFee) external onlyRole(BRIDGE_FEE_MANAGER_ROLE) {
+    function updateFee(uint256 newFee) external onlyRole(BRIDGE_FEE_MANAGER) {
         if (newFee > 10000) revert InvalidFee(newFee);
         uint256 oldFee = bridgeFee;
         bridgeFee = newFee;
@@ -392,7 +392,7 @@ contract OkuBridge is
      */
     function updateFeeRecipient(address newRecipient)
         external
-        onlyRole(BRIDGE_FEE_MANAGER_ROLE)
+        onlyRole(BRIDGE_FEE_MANAGER)
     {
         if (newRecipient == address(0)) revert ZeroAddress();
         address oldRecipient = feeRecipient;
@@ -406,7 +406,7 @@ contract OkuBridge is
      */
     function addSupportedChain(uint256 chainId)
         external
-        onlyRole(BRIDGE_CHAIN_MANAGER_ROLE)
+        onlyRole(BRIDGE_CHAIN_MANAGER)
     {
         supportedChains[chainId] = true;
         emit ChainAdded(chainId);
@@ -418,7 +418,7 @@ contract OkuBridge is
      */
     function removeSupportedChain(uint256 chainId)
         external
-        onlyRole(BRIDGE_CHAIN_MANAGER_ROLE)
+        onlyRole(BRIDGE_CHAIN_MANAGER)
     {
         supportedChains[chainId] = false;
         emit ChainRemoved(chainId);
@@ -431,7 +431,7 @@ contract OkuBridge is
      */
     function updateLimits(uint256 min, uint256 max)
         external
-        onlyRole(BRIDGE_LIMITS_MANAGER_ROLE)
+        onlyRole(BRIDGE_LIMITS_MANAGER)
     {
         if (min > max) revert InvalidLimits(min, max);
         minBridgeShares = min;
@@ -442,14 +442,14 @@ contract OkuBridge is
     /**
      * @notice Pause the bridge
      */
-    function pause() external onlyRole(BRIDGE_PAUSER_ROLE) {
+    function pause() external onlyRole(BRIDGE_PAUSER) {
         _pause();
     }
 
     /**
      * @notice Unpause the bridge
      */
-    function unpause() external onlyRole(BRIDGE_UNPAUSER_ROLE) {
+    function unpause() external onlyRole(BRIDGE_UNPAUSER) {
         _unpause();
     }
 

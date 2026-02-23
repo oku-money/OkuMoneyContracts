@@ -42,13 +42,13 @@ contract LitePSM is
     uint256 private constant DECIMAL_MULTIPLIER = 10 ** 12; // 18 - 6 = 12
 
     // Granular RBAC roles (contract-specific prefixes)
-    bytes32 public constant PSM_UPGRADER_ROLE = keccak256("PSM_UPGRADER_ROLE");
-    bytes32 public constant PSM_PAUSER_ROLE = keccak256("PSM_PAUSER_ROLE");
-    bytes32 public constant PSM_UNPAUSER_ROLE = keccak256("PSM_UNPAUSER_ROLE");
-    bytes32 public constant QUEUE_PROCESSOR_ROLE = keccak256("QUEUE_PROCESSOR_ROLE");
-    bytes32 public constant BUFFER_DEPOSITOR_ROLE = keccak256("BUFFER_DEPOSITOR_ROLE");
-    bytes32 public constant BUFFER_WITHDRAWER_ROLE = keccak256("BUFFER_WITHDRAWER_ROLE");
-    bytes32 public constant ORACLE_MANAGER_ROLE = keccak256("ORACLE_MANAGER_ROLE");
+    bytes32 public constant PSM_UPGRADER = keccak256("PSM_UPGRADER");
+    bytes32 public constant PSM_PAUSER = keccak256("PSM_PAUSER");
+    bytes32 public constant PSM_UNPAUSER = keccak256("PSM_UNPAUSER");
+    bytes32 public constant QUEUE_PROCESSOR = keccak256("QUEUE_PROCESSOR");
+    bytes32 public constant BUFFER_DEPOSITOR = keccak256("BUFFER_DEPOSITOR");
+    bytes32 public constant BUFFER_WITHDRAWER = keccak256("BUFFER_WITHDRAWER");
+    bytes32 public constant ORACLE_MANAGER = keccak256("ORACLE_MANAGER");
 
     IOkuUSD public okuUsd;
     IERC20 public usdc;
@@ -88,9 +88,9 @@ contract LitePSM is
         redemptionQueue = RedemptionQueue(_redemptionQueue);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(PSM_UPGRADER_ROLE, admin);
-        _grantRole(PSM_PAUSER_ROLE, admin);
-        _grantRole(QUEUE_PROCESSOR_ROLE, admin);
+        _grantRole(PSM_UPGRADER, admin);
+        _grantRole(PSM_PAUSER, admin);
+        _grantRole(QUEUE_PROCESSOR, admin);
 
         stalenessThreshold = 1 hours;
     }
@@ -149,7 +149,7 @@ contract LitePSM is
      * @notice Process queued redemptions (called by operator when buffer refilled)
      * @param maxEntries Maximum number of queue entries to process
      */
-    function processQueue(uint256 maxEntries) external onlyRole(QUEUE_PROCESSOR_ROLE) {
+    function processQueue(uint256 maxEntries) external onlyRole(QUEUE_PROCESSOR) {
         //approve our USDC balance to the redemption queue so we can fill the orders
         uint256 balance = usdc.balanceOf(address(this));
         usdc.approve(address(redemptionQueue), balance);
@@ -172,7 +172,7 @@ contract LitePSM is
         bool _enabled
     )
         external
-        onlyRole(ORACLE_MANAGER_ROLE)
+        onlyRole(ORACLE_MANAGER)
     {
         porOracle = IAggregatorV3(_oracle);
         stalenessThreshold = _stalenessThreshold;
@@ -197,15 +197,15 @@ contract LitePSM is
 
     // ============ Admin Functions ============
 
-    function pause() external onlyRole(PSM_PAUSER_ROLE) {
+    function pause() external onlyRole(PSM_PAUSER) {
         _pause();
     }
 
-    function unpause() external onlyRole(PSM_UNPAUSER_ROLE) {
+    function unpause() external onlyRole(PSM_UNPAUSER) {
         _unpause();
     }
 
-    function withdrawUsdc(address to, uint256 amount) external onlyRole(BUFFER_WITHDRAWER_ROLE) {
+    function withdrawUsdc(address to, uint256 amount) external onlyRole(BUFFER_WITHDRAWER) {
         usdc.safeTransfer(to, amount);
     }
 
@@ -213,7 +213,7 @@ contract LitePSM is
      * @notice Deposit USDC to PSM buffer for redemptions
      * @param amount Amount of USDC to deposit
      */
-    function depositBuffer(uint256 amount) external onlyRole(BUFFER_DEPOSITOR_ROLE) {
+    function depositBuffer(uint256 amount) external onlyRole(BUFFER_DEPOSITOR) {
         usdc.safeTransferFrom(msg.sender, address(this), amount);
         emit BufferDeposited(msg.sender, amount);
     }
@@ -223,6 +223,6 @@ contract LitePSM is
     function _authorizeUpgrade(address newImplementation)
         internal
         override
-        onlyRole(PSM_UPGRADER_ROLE)
+        onlyRole(PSM_UPGRADER)
     {}
 }

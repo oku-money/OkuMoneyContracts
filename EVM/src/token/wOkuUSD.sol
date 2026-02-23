@@ -18,7 +18,7 @@ import {
  *      Used for integrations with external protocols (Uniswap V3, lending, etc.)
  */
 contract wOkuUSD is Initializable, ERC4626Upgradeable, AccessControlUpgradeable, UUPSUpgradeable {
-    bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
+    bytes32 public constant UPGRADER = keccak256("UPGRADER");
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -39,7 +39,7 @@ contract wOkuUSD is Initializable, ERC4626Upgradeable, AccessControlUpgradeable,
         __AccessControl_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(UPGRADER_ROLE, admin);
+        _grantRole(UPGRADER, admin);
     }
 
     /**
@@ -55,6 +55,6 @@ contract wOkuUSD is Initializable, ERC4626Upgradeable, AccessControlUpgradeable,
     function _authorizeUpgrade(address newImplementation)
         internal
         override
-        onlyRole(UPGRADER_ROLE)
+        onlyRole(UPGRADER)
     {}
 }

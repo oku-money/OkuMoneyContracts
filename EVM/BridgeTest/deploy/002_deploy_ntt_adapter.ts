@@ -39,28 +39,28 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   });
   console.log("NttBridgeAdapter deployed to:", nttAdapter.address);
 
-  // Grant MINTER_ROLE to adapter
+  // Grant MINTER to adapter
   const BridgeToken = await hre.ethers.getContractAt("BridgeToken", bridgeToken.address);
-  const MINTER_ROLE = await BridgeToken.MINTER_ROLE();
-  const hasRole = await BridgeToken.hasRole(MINTER_ROLE, nttAdapter.address);
+  const MINTER = await BridgeToken.MINTER();
+  const hasRole = await BridgeToken.hasRole(MINTER, nttAdapter.address);
 
   if (!hasRole) {
-    console.log("Granting MINTER_ROLE to NttBridgeAdapter...");
-    const tx = await BridgeToken.grantRole(MINTER_ROLE, nttAdapter.address);
+    console.log("Granting MINTER to NttBridgeAdapter...");
+    const tx = await BridgeToken.grantRole(MINTER, nttAdapter.address);
     await tx.wait();
-    console.log("MINTER_ROLE granted to NttBridgeAdapter");
+    console.log("MINTER granted to NttBridgeAdapter");
   } else {
-    console.log("NttBridgeAdapter already has MINTER_ROLE");
+    console.log("NttBridgeAdapter already has MINTER");
   }
 
-  // For local testing, also grant MINTER_ROLE to MockNttManager
+  // For local testing, also grant MINTER to MockNttManager
   if (network.name === "hardhat" || network.name === "localhost") {
-    const mockHasRole = await BridgeToken.hasRole(MINTER_ROLE, nttManagerAddress);
+    const mockHasRole = await BridgeToken.hasRole(MINTER, nttManagerAddress);
     if (!mockHasRole) {
-      console.log("Granting MINTER_ROLE to MockNttManager...");
-      const tx = await BridgeToken.grantRole(MINTER_ROLE, nttManagerAddress);
+      console.log("Granting MINTER to MockNttManager...");
+      const tx = await BridgeToken.grantRole(MINTER, nttManagerAddress);
       await tx.wait();
-      console.log("MINTER_ROLE granted to MockNttManager");
+      console.log("MINTER granted to MockNttManager");
     }
   }
 };

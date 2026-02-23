@@ -27,9 +27,9 @@ contract RedemptionQueueTest is BaseTest {
 
     function setUp() public override {
         super.setUp();
-        // Setup: grant PSM_ROLE to a test address for direct testing
+        // Setup: grant PSM to a test address for direct testing
         vm.prank(admin);
-        redemptionQueue.grantRole(PSM_ROLE, address(this));
+        redemptionQueue.grantRole(PSM, address(this));
 
         // Mint OkuUSD to users
         _mintOkuUsd(user1, 1000e18);
@@ -43,7 +43,7 @@ contract RedemptionQueueTest is BaseTest {
         _approveOkuUsd(user1, address(redemptionQueue), 100e18);
 
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_ROLE));
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM));
         redemptionQueue.enqueue(user1, 100e18);
     }
 
@@ -121,7 +121,7 @@ contract RedemptionQueueTest is BaseTest {
 
     function test_ProcessQueue_OnlyPSMRole() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_ROLE));
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM));
         redemptionQueue.processQueue(10, address(usdc), address(okuUsd));
     }
 
@@ -134,7 +134,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup: give queue minter role to burn
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         // Setup: approve USDC for transfer (convert 18-decimal OkuUSD amount to 6-decimal USDC)
         uint256 usdcAmount = amount / DECIMAL_MULTIPLIER;
@@ -155,7 +155,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         _mintUsdc(address(this), usdcAmount);
         _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
@@ -178,7 +178,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
         _approveUsdc(address(this), address(redemptionQueue), 100e6);
@@ -203,7 +203,7 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.enqueue(user3, 100e18);
 
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         _mintUsdc(address(this), 300e6); // 300 USDC (6 decimals)
         _approveUsdc(address(this), address(redemptionQueue), 300e6);
@@ -222,7 +222,7 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.enqueue(user2, 100e18);
 
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         // Only provide enough USDC for 1 entry
         _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
@@ -242,7 +242,7 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.enqueue(user1, okuUsdAmount);
 
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         _mintUsdc(address(this), usdcAmount);
         _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
@@ -267,7 +267,7 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.enqueue(user3, 300e18);
 
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         // Only provide enough for first entry
         _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
@@ -295,7 +295,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Process one
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
         _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
         _approveUsdc(address(this), address(redemptionQueue), 100e6);
         redemptionQueue.processQueue(1, address(usdc), address(okuUsd));
@@ -340,7 +340,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Process queue and verify user receives the increased amount
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         // Need 200 USDC (6 decimals) now to match 200 OkuUSD value
         _mintUsdc(address(this), 200e6); // 200 USDC (6 decimals)
@@ -375,7 +375,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup for processing
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         _mintUsdc(address(this), 300e6); // 300 USDC (6 decimals)
         _approveUsdc(address(this), address(redemptionQueue), 300e6);
@@ -472,7 +472,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup for processing
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         _mintUsdc(address(this), expectedPayoutUsdc);
         _approveUsdc(address(this), address(redemptionQueue), expectedPayoutUsdc);
@@ -565,7 +565,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup for processing - convert OkuUSD amounts to USDC
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         uint256 totalNeededUsdc = totalNeeded / DECIMAL_MULTIPLIER;
         _mintUsdc(address(this), totalNeededUsdc);
@@ -625,7 +625,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup - only provide enough USDC for the ones we'll process
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         uint256 totalForProcessedUsdc = totalForProcessed / DECIMAL_MULTIPLIER;
         _mintUsdc(address(this), totalForProcessedUsdc);
@@ -714,7 +714,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup for processing
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         _mintUsdc(address(this), totalNeededUsdc);
         _approveUsdc(address(this), address(redemptionQueue), totalNeededUsdc);
@@ -766,7 +766,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup - provide exactly enough for numToPay users
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         uint256 bufferAmountOkuUsd = amountPerUser * numToPay;
         uint256 bufferAmountUsdc = bufferAmountOkuUsd / DECIMAL_MULTIPLIER;
@@ -837,7 +837,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup - provide enough for roughly half
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         // Convert to USDC amount inline
         uint256 bufferUsdc = (totalQueued / 2) / DECIMAL_MULTIPLIER;

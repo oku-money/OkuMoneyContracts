@@ -185,7 +185,7 @@ contract LitePSMTest is BaseTest {
 
     function test_ConfigureOracle_OnlyOracleManager() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, ORACLE_MANAGER_ROLE));
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, ORACLE_MANAGER));
         litePsm.configureOracle(address(oracle), 1 hours, true);
     }
 
@@ -328,7 +328,7 @@ contract LitePSMTest is BaseTest {
 
     function test_ProcessQueue_OnlyQueueProcessor() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, QUEUE_PROCESSOR_ROLE));
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, QUEUE_PROCESSOR));
         litePsm.processQueue(10);
     }
 
@@ -359,7 +359,7 @@ contract LitePSMTest is BaseTest {
 
         // Grant queue ability to burn OkuUSD
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         // processQueue now handles approve-use-revoke internally
         vm.prank(queueProcessor);
@@ -389,7 +389,7 @@ contract LitePSMTest is BaseTest {
 
         // Grant queue ability to burn OkuUSD
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         // Verify allowance is 0 before processing
         assertEq(usdc.allowance(address(litePsm), address(redemptionQueue)), 0);
@@ -433,7 +433,7 @@ contract LitePSMTest is BaseTest {
 
         // Grant queue ability to burn OkuUSD
         vm.prank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
 
         // Process only 1 entry
         vm.prank(queueProcessor);
@@ -450,7 +450,7 @@ contract LitePSMTest is BaseTest {
 
     function test_Pause_OnlyPauser() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_PAUSER_ROLE));
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_PAUSER));
         litePsm.pause();
     }
 
@@ -459,13 +459,13 @@ contract LitePSMTest is BaseTest {
         litePsm.pause();
 
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_UNPAUSER_ROLE));
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_UNPAUSER));
         litePsm.unpause();
     }
 
     function test_WithdrawUSDC_OnlyBufferWithdrawer() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BUFFER_WITHDRAWER_ROLE));
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BUFFER_WITHDRAWER));
         litePsm.withdrawUsdc(user1, 100e6);
     }
 

@@ -38,12 +38,12 @@ describe("Happy Path Testing", () => {
     let usdc: ReturnType<typeof IERC20__factory.connect>
 
     // Constants
-    const MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("MINTER_ROLE"))
-    const PSM_ROLE = ethers.keccak256(ethers.toUtf8Bytes("PSM_ROLE"))
-    const ALLOWANCE_MANAGER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("ALLOWANCE_MANAGER_ROLE"))
-    const REBASER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("REBASER_ROLE"))
-    const BUFFER_WITHDRAWER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("BUFFER_WITHDRAWER_ROLE"))
-    const QUEUE_PROCESSOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PROCESSOR_ROLE"))
+    const MINTER = ethers.keccak256(ethers.toUtf8Bytes("MINTER"))
+    const PSM = ethers.keccak256(ethers.toUtf8Bytes("PSM"))
+    const ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("ALLOWANCE_MANAGER"))
+    const REBASER = ethers.keccak256(ethers.toUtf8Bytes("REBASER"))
+    const BUFFER_WITHDRAWER = ethers.keccak256(ethers.toUtf8Bytes("BUFFER_WITHDRAWER"))
+    const QUEUE_PROCESSOR = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PROCESSOR"))
     const DEPOSIT_AMOUNT = parseUnits("10000", 6) // 10,000 USDC (6 decimals)
     const DECIMAL_MULTIPLIER = 10n ** 12n // Convert USDC (6 decimals) to OkuUSD (18 decimals)
 
@@ -119,16 +119,16 @@ describe("Happy Path Testing", () => {
         ) as unknown as OkuBridgeRouter
         await okuBridgeRouter.waitForDeployment()
 
-        // Grant MINTER_ROLE to PSM so it can mint OkuUSD
-        await okuUSD.connect(Frank).grantRole(MINTER_ROLE, await psm.getAddress())
+        // Grant MINTER to PSM so it can mint OkuUSD
+        await okuUSD.connect(Frank).grantRole(MINTER, await psm.getAddress())
 
         // Grant RBAC roles to Frank (admin) for testing
-        await okuUSD.connect(Frank).grantRole(ALLOWANCE_MANAGER_ROLE, frankAddr)
-        await okuUSD.connect(Frank).grantRole(REBASER_ROLE, frankAddr)
+        await okuUSD.connect(Frank).grantRole(ALLOWANCE_MANAGER, frankAddr)
+        await okuUSD.connect(Frank).grantRole(REBASER, frankAddr)
 
         // Grant PSM-specific roles to Frank
-        await psm.connect(Frank).grantRole(BUFFER_WITHDRAWER_ROLE, frankAddr)
-        await psm.connect(Frank).grantRole(QUEUE_PROCESSOR_ROLE, frankAddr)
+        await psm.connect(Frank).grantRole(BUFFER_WITHDRAWER, frankAddr)
+        await psm.connect(Frank).grantRole(QUEUE_PROCESSOR, frankAddr)
 
         // Configure minter allowance for PSM (1 billion tokens)
         await okuUSD.connect(Frank).configureMinterAllowance(
@@ -136,11 +136,11 @@ describe("Happy Path Testing", () => {
             parseEther("1000000000")
         )
 
-        // Grant PSM_ROLE to PSM on RedemptionQueue
-        await queue.connect(Frank).grantRole(PSM_ROLE, await psm.getAddress())
+        // Grant PSM to PSM on RedemptionQueue
+        await queue.connect(Frank).grantRole(PSM, await psm.getAddress())
 
-        // Grant MINTER_ROLE to queue so it can burn OkuUSD when processing
-        await okuUSD.connect(Frank).grantRole(MINTER_ROLE, await queue.getAddress())
+        // Grant MINTER to queue so it can burn OkuUSD when processing
+        await okuUSD.connect(Frank).grantRole(MINTER, await queue.getAddress())
     })
 
     it("Deposit", async () => {

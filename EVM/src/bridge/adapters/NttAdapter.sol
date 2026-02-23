@@ -12,7 +12,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  * @dev Converts IBridgeAdapter interface to INttManager interface
  *
  * Flow:
- * 1. OkuBridgeRouter burns OkuUSD (via MINTER_ROLE)
+ * 1. OkuBridgeRouter burns OkuUSD (via MINTER)
  * 2. Router calls this adapter's bridge() to send cross-chain message
  * 3. This adapter forwards to NttManager.transfer() for Wormhole messaging
  * 4. On destination, NttManager receives VAA and mints OkuUSD

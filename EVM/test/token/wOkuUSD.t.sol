@@ -37,7 +37,7 @@ contract wOkuUSDTest is BaseTest {
 
     function test_Initialize_SetsAdminRole() public view {
         assertTrue(wokuUsd.hasRole(DEFAULT_ADMIN_ROLE, admin));
-        assertTrue(wokuUsd.hasRole(keccak256("UPGRADER_ROLE"), admin));
+        assertTrue(wokuUsd.hasRole(keccak256("UPGRADER"), admin));
     }
 
     function test_Initialize_CannotReinitialize() public {
@@ -361,7 +361,7 @@ contract wOkuUSDTest is BaseTest {
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector,
                 user1,
-                keccak256("UPGRADER_ROLE")
+                keccak256("UPGRADER")
             )
         );
         wokuUsd.upgradeToAndCall(address(newImpl), "");

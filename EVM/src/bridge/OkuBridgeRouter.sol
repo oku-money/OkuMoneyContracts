@@ -44,10 +44,10 @@ contract OkuBridgeRouter is
     using SafeERC20 for IERC20;
 
     // Granular RBAC roles (contract-specific prefixes)
-    bytes32 public constant ROUTER_UPGRADER_ROLE = keccak256("ROUTER_UPGRADER_ROLE");
-    bytes32 public constant ROUTER_PAUSER_ROLE = keccak256("ROUTER_PAUSER_ROLE");
-    bytes32 public constant ROUTER_UNPAUSER_ROLE = keccak256("ROUTER_UNPAUSER_ROLE");
-    bytes32 public constant ADAPTER_MANAGER_ROLE = keccak256("ADAPTER_MANAGER_ROLE");
+    bytes32 public constant ROUTER_UPGRADER = keccak256("ROUTER_UPGRADER");
+    bytes32 public constant ROUTER_PAUSER = keccak256("ROUTER_PAUSER");
+    bytes32 public constant ROUTER_UNPAUSER = keccak256("ROUTER_UNPAUSER");
+    bytes32 public constant ADAPTER_MANAGER = keccak256("ADAPTER_MANAGER");
 
     IwOkuUSD public wOkuUsd;
     IOkuUSD public okuUsd;
@@ -78,8 +78,8 @@ contract OkuBridgeRouter is
         okuUsd = IOkuUSD(_okuUsd);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(ROUTER_UPGRADER_ROLE, admin);
-        _grantRole(ROUTER_PAUSER_ROLE, admin);
+        _grantRole(ROUTER_UPGRADER, admin);
+        _grantRole(ROUTER_PAUSER, admin);
     }
 
     // ============ Bridge Functions ============
@@ -156,17 +156,17 @@ contract OkuBridgeRouter is
         bool supported
     )
         external
-        onlyRole(ADAPTER_MANAGER_ROLE)
+        onlyRole(ADAPTER_MANAGER)
     {
         supportedAdapters[adapter] = supported;
         emit AdapterConfigured(adapter, supported);
     }
 
-    function pause() external onlyRole(ROUTER_PAUSER_ROLE) {
+    function pause() external onlyRole(ROUTER_PAUSER) {
         _pause();
     }
 
-    function unpause() external onlyRole(ROUTER_UNPAUSER_ROLE) {
+    function unpause() external onlyRole(ROUTER_UNPAUSER) {
         _unpause();
     }
 
@@ -175,6 +175,6 @@ contract OkuBridgeRouter is
     function _authorizeUpgrade(address newImplementation)
         internal
         override
-        onlyRole(ROUTER_UPGRADER_ROLE)
+        onlyRole(ROUTER_UPGRADER)
     {}
 }

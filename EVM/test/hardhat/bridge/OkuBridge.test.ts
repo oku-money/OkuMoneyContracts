@@ -58,14 +58,14 @@ describe("OkuBridge E2E", function () {
     await okuBridge.waitForDeployment();
 
     // Setup roles
-    const MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("MINTER_ROLE"));
-    const ALLOWANCE_MANAGER_ROLE = ethers.keccak256(
-      ethers.toUtf8Bytes("ALLOWANCE_MANAGER_ROLE")
+    const MINTER = ethers.keccak256(ethers.toUtf8Bytes("MINTER"));
+    const ALLOWANCE_MANAGER = ethers.keccak256(
+      ethers.toUtf8Bytes("ALLOWANCE_MANAGER")
     );
 
-    await okuUSD.connect(admin).grantRole(MINTER_ROLE, admin.address);
-    await okuUSD.connect(admin).grantRole(MINTER_ROLE, await okuBridge.getAddress());
-    await okuUSD.connect(admin).grantRole(ALLOWANCE_MANAGER_ROLE, admin.address);
+    await okuUSD.connect(admin).grantRole(MINTER, admin.address);
+    await okuUSD.connect(admin).grantRole(MINTER, await okuBridge.getAddress());
+    await okuUSD.connect(admin).grantRole(ALLOWANCE_MANAGER, admin.address);
 
     // Configure minter allowances
     const maxSupply = ethers.parseEther("1000000000");
@@ -360,8 +360,8 @@ describe("OkuBridge E2E", function () {
       await okuBridge.connect(user1).bridgeBurn(OPTIMISM_CHAIN_ID, user2.address, shares);
 
       // Apply rebase (increase multiplier by 50%)
-      const REBASER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("REBASER_ROLE"));
-      await okuUSD.connect(admin).grantRole(REBASER_ROLE, admin.address);
+      const REBASER = ethers.keccak256(ethers.toUtf8Bytes("REBASER"));
+      await okuUSD.connect(admin).grantRole(REBASER, admin.address);
 
       const oldMultiplier = await okuUSD.rewardMultiplier();
       const newMultiplier = (oldMultiplier * 150n) / 100n;

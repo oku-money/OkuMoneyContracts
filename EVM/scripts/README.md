@@ -263,10 +263,10 @@ Deploys **OkuBridgeRouter**: Cross-chain bridge router for wOkuUSD.
 
 #### 4. `deploy/4-configure-roles.ts`
 Configures all necessary roles:
-- **OkuUSD**: Grant MINTER_ROLE to LitePSM and RedemptionQueue
-- **RedemptionQueue**: Grant PSM_ROLE to LitePSM
-- **LitePSM**: Grant BUFFER_DEPOSITOR_ROLE to admin
-- **OkuBridgeRouter**: Grant ADAPTER_MANAGER_ROLE to admin
+- **OkuUSD**: Grant MINTER to LitePSM and RedemptionQueue
+- **RedemptionQueue**: Grant PSM to LitePSM
+- **LitePSM**: Grant BUFFER_DEPOSITOR to admin
+- **OkuBridgeRouter**: Grant ADAPTER_MANAGER to admin
 
 Also configures minter allowances (1 billion tokens each).
 
@@ -304,7 +304,7 @@ Update reward multiplier (rebase) on OkuUSD.
 - `MULTIPLIER`: New multiplier (default: 1.05 for 5% yield)
 
 **Requirements**:
-- Caller must have REBASER_ROLE
+- Caller must have REBASER
 - New multiplier must be strictly greater than current
 
 **Effect**: All OkuUSD balances increase proportionally.
@@ -508,7 +508,7 @@ Run `deploy/4-configure-roles.ts` to grant necessary roles.
 New multiplier must be strictly greater than current multiplier. Check current value with `check-balances.ts`.
 
 ### "UUPS: unauthorized upgrade"
-Caller must have UPGRADE_ROLE. By default, only admin has this role.
+Caller must have UPGRADER. By default, only admin has this role.
 
 ## Security Notes
 

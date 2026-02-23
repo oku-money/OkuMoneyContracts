@@ -19,29 +19,41 @@ pub mod lite_psm {
     use super::*;
 
     /// Initialize the PSM - Step 1
-    /// Creates config PDA, redemption queue, and USDC vault
-    /// Call setup_okusd_escrow afterwards to complete initialization
+    /// Creates config PDA and USDC vault
+    /// Call setup_redemption_queue and setup_okusd_escrow afterwards to complete initialization
+    /// Authority pubkeys passed as args to reduce stack usage (avoids BPF stack overflow)
     pub fn initialize(
         ctx: Context<Initialize>,
         max_supply: u64,
         minter_allowance: u64,
+        pauser: Pubkey,
+        unpauser: Pubkey,
+        freezer: Pubkey,
+        unfreezer: Pubkey,
+        queue_processor: Pubkey,
+        buffer_depositor: Pubkey,
+        buffer_withdrawer: Pubkey,
+        oracle_manager: Pubkey,
+        cap_manager: Pubkey,
+        allowance_manager: Pubkey,
+        rebaser: Pubkey,
     ) -> Result<()> {
         let config = &mut ctx.accounts.config;
         config.bump = ctx.bumps.config;
 
-        // Set all granular authorities
+        // Set all granular authorities (passed as args to avoid stack overflow)
         config.role_admin = ctx.accounts.role_admin.key();
-        config.pauser = ctx.accounts.pauser.key();
-        config.unpauser = ctx.accounts.unpauser.key();
-        config.freezer = ctx.accounts.freezer.key();
-        config.unfreezer = ctx.accounts.unfreezer.key();
-        config.queue_processor = ctx.accounts.queue_processor.key();
-        config.buffer_depositor = ctx.accounts.buffer_depositor.key();
-        config.buffer_withdrawer = ctx.accounts.buffer_withdrawer.key();
-        config.oracle_manager = ctx.accounts.oracle_manager.key();
-        config.cap_manager = ctx.accounts.cap_manager.key();
-        config.allowance_manager = ctx.accounts.allowance_manager.key();
-        config.rebaser = ctx.accounts.rebaser.key();
+        config.pauser = pauser;
+        config.unpauser = unpauser;
+        config.freezer = freezer;
+        config.unfreezer = unfreezer;
+        config.queue_processor = queue_processor;
+        config.buffer_depositor = buffer_depositor;
+        config.buffer_withdrawer = buffer_withdrawer;
+        config.oracle_manager = oracle_manager;
+        config.cap_manager = cap_manager;
+        config.allowance_manager = allowance_manager;
+        config.rebaser = rebaser;
 
         // Set token references
         config.usdc_mint = ctx.accounts.usdc_mint.key();
@@ -59,19 +71,25 @@ pub mod lite_psm {
         config.staleness_threshold = 0;
         config.current_rate_bps = 0; // Interest rate starts at 0, updated by rebaser
 
-        // Initialize redemption queue
-        let queue = &mut ctx.accounts.redemption_queue;
-        queue.bump = ctx.bumps.redemption_queue;
-        queue.head = 0;
-        queue.tail = 0;
-        // entries array is automatically zero-initialized by Anchor
-
         emit!(InitializeEvent {
             role_admin: config.role_admin,
             usdc_mint: config.usdc_mint,
             okusd_mint: config.okusd_mint,
             max_supply,
         });
+
+        Ok(())
+    }
+
+    /// Initialize the PSM - Step 2
+    /// Creates redemption queue PDA
+    /// Must be called after initialize()
+    pub fn setup_redemption_queue(ctx: Context<SetupRedemptionQueue>) -> Result<()> {
+        let queue = &mut ctx.accounts.redemption_queue;
+        queue.bump = ctx.bumps.redemption_queue;
+        queue.head = 0;
+        queue.tail = 0;
+        // entries array is automatically zero-initialized by Anchor
 
         Ok(())
     }
@@ -454,6 +472,7 @@ pub mod lite_psm {
         ctx: Context<BridgeMint>,
         message_bytes: Vec<u8>,    // Raw serialized BridgeRequest (80 bytes)
         signature: Vec<u8>,         // Ed25519 signature (64 bytes)
+        request_id: [u8; 32],      // keccak256(message_bytes) — used for PDA derivation
     ) -> Result<()> {
         // 1. Validate lengths
         require!(message_bytes.len() == 80, OkuError::InvalidMessageLength);
@@ -512,8 +531,9 @@ pub mod lite_psm {
             OkuError::InvalidRecipient
         );
 
-        // 10. Calculate request_id from message bytes
-        let request_id = anchor_lang::solana_program::keccak::hash(&message_bytes).to_bytes();
+        // 10. Verify request_id matches keccak256(message_bytes)
+        let computed_request_id = anchor_lang::solana_program::keccak::hash(&message_bytes).to_bytes();
+        require!(request_id == computed_request_id, OkuError::InvalidRequestId);
 
         // 11. Verify request not already processed (replay prevention)
         // The init constraint on processed_request will fail if request_id already exists
@@ -1144,22 +1164,6 @@ pub enum AuthorityRole {
     Rebaser,
 }
 
-/// Pyth Price Account structure (partial - only fields we need)
-/// See: https://docs.pyth.network/price-feeds/account-structure
-/// Pyth price accounts have magic number 0xa1b2c3d4 at start
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct PythPriceData {
-    /// Price value (may be negative for some feeds, but reserves should be positive)
-    pub price: i64,
-    /// Confidence interval
-    pub conf: u64,
-    /// Exponent (10^expo to get real price)
-    pub expo: i32,
-    /// Publish time (unix timestamp)
-    pub publish_time: i64,
-}
-
 /// Check oracle reserves before minting
 /// Returns Ok if reserves are sufficient, error otherwise
 /// Manually parses Pyth price account to avoid SDK dependency conflicts
@@ -1387,30 +1391,6 @@ pub struct Initialize<'info> {
     #[account(mut)]
     pub role_admin: Signer<'info>,
 
-    // ===== Granular Authority Accounts =====
-    /// CHECK: Authority pubkey for role assignment
-    pub pauser: UncheckedAccount<'info>,
-    /// CHECK: Authority pubkey for role assignment
-    pub unpauser: UncheckedAccount<'info>,
-    /// CHECK: Authority pubkey for role assignment
-    pub freezer: UncheckedAccount<'info>,
-    /// CHECK: Authority pubkey for role assignment
-    pub unfreezer: UncheckedAccount<'info>,
-    /// CHECK: Authority pubkey for role assignment
-    pub queue_processor: UncheckedAccount<'info>,
-    /// CHECK: Authority pubkey for role assignment
-    pub buffer_depositor: UncheckedAccount<'info>,
-    /// CHECK: Authority pubkey for role assignment
-    pub buffer_withdrawer: UncheckedAccount<'info>,
-    /// CHECK: Authority pubkey for role assignment
-    pub oracle_manager: UncheckedAccount<'info>,
-    /// CHECK: Authority pubkey for role assignment
-    pub cap_manager: UncheckedAccount<'info>,
-    /// CHECK: Authority pubkey for role assignment
-    pub allowance_manager: UncheckedAccount<'info>,
-    /// CHECK: Authority pubkey for role assignment
-    pub rebaser: UncheckedAccount<'info>,
-
     #[account(
         init,
         payer = role_admin,
@@ -1420,15 +1400,6 @@ pub struct Initialize<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    #[account(
-        init,
-        payer = role_admin,
-        space = RedemptionQueue::LEN,
-        seeds = [RedemptionQueue::SEED],
-        bump
-    )]
-    pub redemption_queue: Box<Account<'info, RedemptionQueue>>,
-
     /// USDC mint (standard SPL)
     pub usdc_mint: Box<Account<'info, Mint>>,
 
@@ -1437,7 +1408,7 @@ pub struct Initialize<'info> {
     #[account(
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// PSM's USDC vault
     #[account(
@@ -1454,6 +1425,30 @@ pub struct Initialize<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct SetupRedemptionQueue<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// PSM config must exist (initialize was called)
+    #[account(
+        seeds = [PsmConfig::SEED],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, PsmConfig>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = RedemptionQueue::LEN,
+        seeds = [RedemptionQueue::SEED],
+        bump
+    )]
+    pub redemption_queue: Box<Account<'info, RedemptionQueue>>,
+
+    pub system_program: Program<'info, System>,
 }
 
 /// Accounts for setup_okusd_escrow instruction
@@ -1479,7 +1474,6 @@ pub struct SetupOkusdEscrow<'info> {
 
     /// PSM's OkuUSD escrow vault for queued redemptions
     /// Holds OkuUSD while users are in queue so they earn yield
-    /// NOTE: Unboxed to avoid Anchor 0.29 Box<InterfaceAccount> access violation with init CPI
     #[account(
         init,
         payer = role_admin,
@@ -1487,7 +1481,7 @@ pub struct SetupOkusdEscrow<'info> {
         associated_token::authority = config,
         associated_token::token_program = token_2022_program,
     )]
-    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -1515,7 +1509,7 @@ pub struct MintOkusd<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// User's USDC account
     #[account(
@@ -1524,10 +1518,9 @@ pub struct MintOkusd<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_program,
     )]
-    pub user_usdc_ata: Account<'info, TokenAccount>,
+    pub user_usdc_ata: Box<Account<'info, TokenAccount>>,
 
     /// User's OkuUSD account
-    /// NOTE: Unboxed to avoid Anchor 0.29 Box<InterfaceAccount> access violation with init_if_needed
     #[account(
         init_if_needed,
         payer = user,
@@ -1535,14 +1528,14 @@ pub struct MintOkusd<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// PSM's USDC vault
     #[account(
         mut,
         address = config.vault_usdc
     )]
-    pub vault_usdc: Account<'info, TokenAccount>,
+    pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
     /// Pyth price account (optional - only required if oracle is configured)
     /// CHECK: Validated manually in check_oracle_reserves - verifies account key matches config.oracle
@@ -1574,7 +1567,7 @@ pub struct Redeem<'info> {
 
     /// USDC mint
     #[account(address = config.usdc_mint)]
-    pub usdc_mint: Account<'info, Mint>,
+    pub usdc_mint: Box<Account<'info, Mint>>,
 
     /// OkuUSD mint (Token-2022)
     #[account(
@@ -1582,7 +1575,7 @@ pub struct Redeem<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// User's USDC account
     #[account(
@@ -1592,7 +1585,7 @@ pub struct Redeem<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_program,
     )]
-    pub user_usdc_ata: Account<'info, TokenAccount>,
+    pub user_usdc_ata: Box<Account<'info, TokenAccount>>,
 
     /// User's OkuUSD account
     #[account(
@@ -1601,14 +1594,14 @@ pub struct Redeem<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// PSM's USDC vault
     #[account(
         mut,
         address = config.vault_usdc
     )]
-    pub vault_usdc: Account<'info, TokenAccount>,
+    pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
     /// PSM's OkuUSD escrow vault (for queued redemptions)
     #[account(
@@ -1617,7 +1610,7 @@ pub struct Redeem<'info> {
         token::authority = config,
         token::token_program = token_2022_program,
     )]
-    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -1651,14 +1644,14 @@ pub struct ProcessQueue<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// PSM's USDC vault
     #[account(
         mut,
         address = config.vault_usdc
     )]
-    pub vault_usdc: Account<'info, TokenAccount>,
+    pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
     /// PSM's OkuUSD escrow vault - holds queued redemptions
     #[account(
@@ -1667,7 +1660,7 @@ pub struct ProcessQueue<'info> {
         token::authority = config,
         token::token_program = token_2022_program,
     )]
-    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -1744,7 +1737,7 @@ pub struct WithdrawBuffer<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(message_bytes: Vec<u8>)]
+#[instruction(message_bytes: Vec<u8>, signature: Vec<u8>, request_id: [u8; 32])]
 pub struct BridgeMint<'info> {
     /// Payer for ProcessedRequest PDA creation
     #[account(mut)]
@@ -1766,14 +1759,14 @@ pub struct BridgeMint<'info> {
     pub config: Box<Account<'info, PsmConfig>>,
 
     /// ProcessedRequest PDA (prevents replay attacks)
-    /// Seeds are derived from keccak256(message_bytes)
+    /// Seeds are derived from keccak256(message_bytes), passed as request_id
     #[account(
         init,
         payer = payer,
         space = ProcessedRequest::LEN,
         seeds = [
             ProcessedRequest::SEED,
-            &anchor_lang::solana_program::keccak::hash(&message_bytes).to_bytes()
+            &request_id
         ],
         bump
     )]
@@ -1785,7 +1778,7 @@ pub struct BridgeMint<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// Recipient's OkuUSD account (will validate owner in function body)
     #[account(
@@ -1793,7 +1786,7 @@ pub struct BridgeMint<'info> {
         token::mint = okusd_mint,
         token::token_program = token_2022_program,
     )]
-    pub recipient_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub recipient_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// Instruction sysvar for Ed25519 signature verification
     /// CHECK: Verified in verify_ed25519_signature function
@@ -1840,7 +1833,7 @@ pub struct BridgeBurn<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// User's OkuUSD account
     #[account(
@@ -1849,7 +1842,7 @@ pub struct BridgeBurn<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// Fee recipient's OkuUSD account
     #[account(
@@ -1858,7 +1851,7 @@ pub struct BridgeBurn<'info> {
         token::authority = bridge_config.fee_recipient,
         token::token_program = token_2022_program,
     )]
-    pub fee_recipient_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub fee_recipient_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,
@@ -1968,7 +1961,7 @@ pub struct FreezeAccount<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// Target account to freeze
     #[account(
@@ -1976,7 +1969,7 @@ pub struct FreezeAccount<'info> {
         token::mint = okusd_mint,
         token::token_program = token_2022_program,
     )]
-    pub target_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub target_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }
@@ -2000,7 +1993,7 @@ pub struct ThawAccount<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// Target account to thaw
     #[account(
@@ -2008,7 +2001,7 @@ pub struct ThawAccount<'info> {
         token::mint = okusd_mint,
         token::token_program = token_2022_program,
     )]
-    pub target_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub target_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }

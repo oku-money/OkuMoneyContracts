@@ -55,7 +55,7 @@ async function main() {
       // This is better than waiting for first burn to auto-initialize
       const tx = await litePsmProgram.methods
         .skipNonce(chainId, new BN(0))
-        .accounts({
+        .accountsPartial({
           nonceAdmin: authorities.bridge.nonceAdmin,
           bridgeConfig: bridgeConfig,
           bridgeNonce: noncePDA,

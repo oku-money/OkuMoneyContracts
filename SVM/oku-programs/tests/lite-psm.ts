@@ -377,7 +377,7 @@ describe("lite-psm", () => {
 
       await program.methods
         .mint(mintAmount)
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           config: configPda,
           usdcMint: usdcMint,
@@ -428,7 +428,7 @@ describe("lite-psm", () => {
       // DO NOT pre-create OkuUSD ATA — let init_if_needed handle it
       await program.methods
         .mint(mintAmount)
-        .accounts({
+        .accountsPartial({
           user: freshUser.publicKey,
           config: configPda,
           usdcMint: usdcMint,
@@ -456,7 +456,7 @@ describe("lite-psm", () => {
       // Pause the PSM (warm multisig)
       await program.methods
         .pause()
-        .accounts({
+        .accountsPartial({
           pauser: warmMultisig.publicKey,
           config: configPda,
         })
@@ -466,7 +466,7 @@ describe("lite-psm", () => {
       try {
         await program.methods
           .mint(new BN(1_000_000))
-          .accounts({
+          .accountsPartial({
             user: user.publicKey,
             config: configPda,
             usdcMint: usdcMint,
@@ -494,7 +494,7 @@ describe("lite-psm", () => {
       // Unpause for future tests (cold multisig)
       await program.methods
         .unpause()
-        .accounts({
+        .accountsPartial({
           unpauser: coldMultisig.publicKey,
           config: configPda,
         })
@@ -510,7 +510,7 @@ describe("lite-psm", () => {
       it("warm multisig can pause", async () => {
         await program.methods
           .pause()
-          .accounts({
+          .accountsPartial({
             pauser: warmMultisig.publicKey,
             config: configPda,
           })
@@ -524,7 +524,7 @@ describe("lite-psm", () => {
       it("cold multisig can unpause", async () => {
         await program.methods
           .unpause()
-          .accounts({
+          .accountsPartial({
             unpauser: coldMultisig.publicKey,
             config: configPda,
           })
@@ -539,7 +539,7 @@ describe("lite-psm", () => {
         // First pause
         await program.methods
           .pause()
-          .accounts({
+          .accountsPartial({
             pauser: warmMultisig.publicKey,
             config: configPda,
           })
@@ -550,7 +550,7 @@ describe("lite-psm", () => {
         try {
           await program.methods
             .unpause()
-            .accounts({
+            .accountsPartial({
               unpauser: warmMultisig.publicKey, // Wrong authority
               config: configPda,
             })
@@ -564,7 +564,7 @@ describe("lite-psm", () => {
         // Cleanup: unpause with correct authority
         await program.methods
           .unpause()
-          .accounts({
+          .accountsPartial({
             unpauser: coldMultisig.publicKey,
             config: configPda,
           })
@@ -576,7 +576,7 @@ describe("lite-psm", () => {
         try {
           await program.methods
             .pause()
-            .accounts({
+            .accountsPartial({
               pauser: coldMultisig.publicKey, // Wrong authority
               config: configPda,
             })
@@ -600,7 +600,7 @@ describe("lite-psm", () => {
 
         await program.methods
           .setMaxSupply(newMaxSupply)
-          .accounts({
+          .accountsPartial({
             capManager: coldMultisig.publicKey,
             config: configPda,
           })
@@ -613,7 +613,7 @@ describe("lite-psm", () => {
         // Reset
         await program.methods
           .setMaxSupply(MAX_SUPPLY)
-          .accounts({
+          .accountsPartial({
             capManager: coldMultisig.publicKey,
             config: configPda,
           })
@@ -625,7 +625,7 @@ describe("lite-psm", () => {
         try {
           await program.methods
             .setMaxSupply(new BN(1))
-            .accounts({
+            .accountsPartial({
               capManager: warmMultisig.publicKey, // Wrong role
               config: configPda,
             })
@@ -642,7 +642,7 @@ describe("lite-psm", () => {
 
         await program.methods
           .setMinterAllowance(newAllowance)
-          .accounts({
+          .accountsPartial({
             allowanceManager: coldMultisig.publicKey,
             config: configPda,
           })
@@ -657,7 +657,7 @@ describe("lite-psm", () => {
         try {
           await program.methods
             .setMinterAllowance(new BN(1))
-            .accounts({
+            .accountsPartial({
               allowanceManager: warmMultisig.publicKey, // Wrong role
               config: configPda,
             })
@@ -675,7 +675,7 @@ describe("lite-psm", () => {
 
         await program.methods
           .setOracle(oracleKey, stalenessThreshold)
-          .accounts({
+          .accountsPartial({
             oracleManager: coldMultisig.publicKey,
             config: configPda,
           })
@@ -689,7 +689,7 @@ describe("lite-psm", () => {
         // Reset
         await program.methods
           .setOracle(PublicKey.default, new BN(0))
-          .accounts({
+          .accountsPartial({
             oracleManager: coldMultisig.publicKey,
             config: configPda,
           })
@@ -701,7 +701,7 @@ describe("lite-psm", () => {
         try {
           await program.methods
             .setOracle(Keypair.generate().publicKey, new BN(0))
-            .accounts({
+            .accountsPartial({
               oracleManager: warmMultisig.publicKey, // Wrong role
               config: configPda,
             })
@@ -762,7 +762,7 @@ describe("lite-psm", () => {
         // Ensure vault has balance
         await program.methods
           .depositBuffer(new BN(200_000_000))
-          .accounts({
+          .accountsPartial({
             bufferDepositor: orchestrator.publicKey,
             config: configPda,
             bufferDepositorUsdcAta: orchestratorUsdcAta,
@@ -780,7 +780,7 @@ describe("lite-psm", () => {
 
         await program.methods
           .depositBuffer(depositAmount)
-          .accounts({
+          .accountsPartial({
             bufferDepositor: orchestrator.publicKey,
             config: configPda,
             bufferDepositorUsdcAta: orchestratorUsdcAta,
@@ -799,7 +799,7 @@ describe("lite-psm", () => {
         try {
           await program.methods
             .depositBuffer(new BN(1_000_000))
-            .accounts({
+            .accountsPartial({
               bufferDepositor: warmMultisig.publicKey, // Wrong role
               config: configPda,
               bufferDepositorUsdcAta: orchestratorUsdcAta,
@@ -821,7 +821,7 @@ describe("lite-psm", () => {
 
         await program.methods
           .withdrawBuffer(withdrawAmount)
-          .accounts({
+          .accountsPartial({
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
@@ -840,7 +840,7 @@ describe("lite-psm", () => {
         try {
           await program.methods
             .withdrawBuffer(new BN(1_000_000))
-            .accounts({
+            .accountsPartial({
               bufferWithdrawer: warmMultisig.publicKey, // Wrong role
               config: configPda,
               withdrawerUsdcAta: bufferWithdrawerUsdcAta,
@@ -861,7 +861,7 @@ describe("lite-psm", () => {
 
         await program.methods
           .updateInterestRate(newRate)
-          .accounts({
+          .accountsPartial({
             rebaser: orchestrator.publicKey,
             config: configPda,
             okusdMint: okusdMint,
@@ -876,7 +876,7 @@ describe("lite-psm", () => {
         // Reset
         await program.methods
           .updateInterestRate(0)
-          .accounts({
+          .accountsPartial({
             rebaser: orchestrator.publicKey,
             config: configPda,
             okusdMint: okusdMint,
@@ -890,7 +890,7 @@ describe("lite-psm", () => {
         try {
           await program.methods
             .updateInterestRate(100)
-            .accounts({
+            .accountsPartial({
               rebaser: warmMultisig.publicKey, // Wrong role
               config: configPda,
               okusdMint: okusdMint,

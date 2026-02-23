@@ -70,6 +70,18 @@ const config: HardhatUserConfig = {
       },
     },
 
+    opSepolia: {
+      url: process.env.OP_SEPOLIA_RPC_URL || "https://sepolia.optimism.io",
+      chainId: 11155420,
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      verify: {
+        etherscan: {
+          apiUrl: "https://api-sepolia-optimistic.etherscan.io",
+          apiKey: process.env.OPTIMISTIC_ETHERSCAN_API_KEY || "",
+        },
+      },
+    },
+
     // Mainnets
     mainnet: {
       url: process.env.MAINNET_RPC_URL || "",
@@ -161,6 +173,7 @@ const config: HardhatUserConfig = {
       arbitrumOne: process.env.ARBISCAN_API_KEY || "",
       base: process.env.BASESCAN_API_KEY || "",
       optimisticEthereum: process.env.OPTIMISTIC_ETHERSCAN_API_KEY || "",
+      optimismSepolia: process.env.OPTIMISTIC_ETHERSCAN_API_KEY || "",
     },
   },
 

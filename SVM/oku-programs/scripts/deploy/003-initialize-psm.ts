@@ -172,7 +172,7 @@ async function main() {
         new BN(MAX_SUPPLY),
         new BN(MINTER_ALLOWANCE)
       )
-      .accounts({
+      .accountsPartial({
         roleAdmin: authorities.psm.roleAdmin,
         pauser: authorities.psm.pauser,
         unpauser: authorities.psm.unpauser,
@@ -215,7 +215,7 @@ async function main() {
 
     const tx = await litePsmProgram.methods
       .setupOkusdEscrow()
-      .accounts({
+      .accountsPartial({
         roleAdmin: authorities.psm.roleAdmin,
         config: psmConfig,
         okusdMint: okusdMint,
@@ -244,7 +244,7 @@ async function main() {
 
     const tx = await litePsmProgram.methods
       .initializeBridge()
-      .accounts({
+      .accountsPartial({
         bridgeAdmin: authorities.bridge.bridgeAdmin,
         bridgePauser: authorities.bridge.bridgePauser,
         bridgeUnpauser: authorities.bridge.bridgeUnpauser,
@@ -279,7 +279,7 @@ async function main() {
 
       const tx = await litePsmProgram.methods
         .addSupportedChain(chainId)
-        .accounts({
+        .accountsPartial({
           chainManager: authorities.bridge.chainManager,
           bridgeConfig: bridgeConfig,
         })

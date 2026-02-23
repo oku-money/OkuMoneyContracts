@@ -200,13 +200,14 @@ describe("Bridge Security Tests", () => {
       throw new Error(`Recipient ATA ${params.recipientAta.toString()} does not exist. Create it in the test setup.`);
     }
 
-    // Bridge mint instruction - pass message_bytes and signature as Buffer
+    // Bridge mint instruction - pass message_bytes, signature, and request_id
     const bridgeMintIx = await params.program.methods
       .bridgeMint(
         params.message,    // Buffer (bytes type in IDL)
-        Buffer.from(params.signature)   // Buffer (bytes type in IDL)
+        Buffer.from(params.signature),   // Buffer (bytes type in IDL)
+        Array.from(params.requestId)     // [u8; 32] as number array
       )
-      .accounts({
+      .accountsPartial({
         payer: params.payer.publicKey,
         bridgeConfig: bridgeConfigPda,
         config: configPda,
@@ -482,7 +483,7 @@ describe("Bridge Security Tests", () => {
     // Initialize bridge config
     await program.methods
       .initializeBridge()
-      .accounts({
+      .accountsPartial({
         bridgeAdmin: bridgeAdmin.publicKey,
         bridgePauser: bridgePauser.publicKey,
         bridgeUnpauser: bridgeUnpauser.publicKey,
@@ -537,7 +538,7 @@ describe("Bridge Security Tests", () => {
     // Add supported chain first
     await program.methods
       .addSupportedChain(ETH_CHAIN_ID)
-      .accounts({
+      .accountsPartial({
         chainManager: chainManager.publicKey,
         bridgeConfig: bridgeConfigPda,
       })
@@ -627,7 +628,7 @@ describe("Bridge Security Tests", () => {
       if (bridgeConfig.isPaused) {
         await program.methods
           .unpauseBridge()
-          .accounts({
+          .accountsPartial({
             bridgeUnpauser: bridgeUnpauser.publicKey,
             bridgeConfig: bridgeConfigPda,
           })
@@ -701,7 +702,7 @@ describe("Bridge Security Tests", () => {
       try {
         await program.methods
           .addSupportedChain(ETH_CHAIN_ID)
-          .accounts({
+          .accountsPartial({
             chainManager: chainManager.publicKey,
             bridgeConfig: bridgeConfigPda,
           })
@@ -984,7 +985,7 @@ describe("Bridge Security Tests", () => {
         // Mint some OkuUSD via PSM
         await program.methods
           .mint(new BN(50_000_000))
-          .accounts({
+          .accountsPartial({
             user: user.publicKey,
             config: configPda,
             usdcMint: usdcMint,
@@ -1025,7 +1026,7 @@ describe("Bridge Security Tests", () => {
             Array.from(randomEvmAddress()),
             ETH_CHAIN_ID
           )
-          .accounts({
+          .accountsPartial({
             user: user.publicKey,
             bridgeConfig: bridgeConfigPda,
             config: configPda,
@@ -1061,7 +1062,7 @@ describe("Bridge Security Tests", () => {
           Array.from(randomEvmAddress()),
           ETH_CHAIN_ID
         )
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           bridgeConfig: bridgeConfigPda,
           config: configPda,
@@ -1085,7 +1086,7 @@ describe("Bridge Security Tests", () => {
           Array.from(randomEvmAddress()),
           ETH_CHAIN_ID
         )
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           bridgeConfig: bridgeConfigPda,
           config: configPda,
@@ -1107,7 +1108,7 @@ describe("Bridge Security Tests", () => {
       // Add BSC to supported chains
       await program.methods
         .addSupportedChain(BSC_CHAIN_ID)
-        .accounts({
+        .accountsPartial({
           chainManager: chainManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1133,7 +1134,7 @@ describe("Bridge Security Tests", () => {
           Array.from(randomEvmAddress()),
           BSC_CHAIN_ID
         )
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           bridgeConfig: bridgeConfigPda,
           config: configPda,
@@ -1168,7 +1169,7 @@ describe("Bridge Security Tests", () => {
 
       await program.methods
         .skipNonce(ETH_CHAIN_ID, new BN(1000))
-        .accounts({
+        .accountsPartial({
           nonceAdmin: nonceAdmin.publicKey,
           bridgeConfig: bridgeConfigPda,
           bridgeNonce: noncePda,
@@ -1191,7 +1192,7 @@ describe("Bridge Security Tests", () => {
         () =>
           program.methods
             .skipNonce(ETH_CHAIN_ID, new BN(2000))
-            .accounts({
+            .accountsPartial({
               nonceAdmin: unauthorizedUser.publicKey,
               bridgeConfig: bridgeConfigPda,
               bridgeNonce: noncePda,
@@ -1214,7 +1215,7 @@ describe("Bridge Security Tests", () => {
       if (config.isPaused) {
         await program.methods
           .unpause()
-          .accounts({
+          .accountsPartial({
             unpauser: coldMultisig.publicKey,
             config: configPda,
           })
@@ -1232,7 +1233,7 @@ describe("Bridge Security Tests", () => {
       if (Number(userBalance.amount) < 100_000_000) {
         await program.methods
           .mint(new BN(100_000_000))
-          .accounts({
+          .accountsPartial({
             user: user.publicKey,
             config: configPda,
             usdcMint: usdcMint,
@@ -1282,7 +1283,7 @@ describe("Bridge Security Tests", () => {
           Array.from(randomEvmAddress()),
           ETH_CHAIN_ID
         )
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           bridgeConfig: bridgeConfigPda,
           config: configPda,
@@ -1328,7 +1329,7 @@ describe("Bridge Security Tests", () => {
       // Update fee to 0
       await program.methods
         .updateBridgeFee(0)
-        .accounts({
+        .accountsPartial({
           feeManager: feeManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1353,7 +1354,7 @@ describe("Bridge Security Tests", () => {
           Array.from(randomEvmAddress()),
           ETH_CHAIN_ID
         )
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           bridgeConfig: bridgeConfigPda,
           config: configPda,
@@ -1381,7 +1382,7 @@ describe("Bridge Security Tests", () => {
       // Restore default fee
       await program.methods
         .updateBridgeFee(10)
-        .accounts({
+        .accountsPartial({
           feeManager: feeManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1394,7 +1395,7 @@ describe("Bridge Security Tests", () => {
         () =>
           program.methods
             .updateBridgeFee(10001)
-            .accounts({
+            .accountsPartial({
               feeManager: feeManager.publicKey,
               bridgeConfig: bridgeConfigPda,
             })
@@ -1422,7 +1423,7 @@ describe("Bridge Security Tests", () => {
               Array.from(randomEvmAddress()),
               POLYGON_CHAIN_ID
             )
-            .accounts({
+            .accountsPartial({
               user: user.publicKey,
               bridgeConfig: bridgeConfigPda,
               config: configPda,
@@ -1442,7 +1443,7 @@ describe("Bridge Security Tests", () => {
     it("allows chain_manager to add supported chain", async () => {
       await program.methods
         .addSupportedChain(POLYGON_CHAIN_ID)
-        .accounts({
+        .accountsPartial({
           chainManager: chainManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1469,7 +1470,7 @@ describe("Bridge Security Tests", () => {
           Array.from(randomEvmAddress()),
           POLYGON_CHAIN_ID
         )
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           bridgeConfig: bridgeConfigPda,
           config: configPda,
@@ -1491,7 +1492,7 @@ describe("Bridge Security Tests", () => {
         () =>
           program.methods
             .addSupportedChain(POLYGON_CHAIN_ID)
-            .accounts({
+            .accountsPartial({
               chainManager: chainManager.publicKey,
               bridgeConfig: bridgeConfigPda,
             })
@@ -1504,7 +1505,7 @@ describe("Bridge Security Tests", () => {
     it("allows chain_manager to remove supported chain", async () => {
       await program.methods
         .removeSupportedChain(POLYGON_CHAIN_ID)
-        .accounts({
+        .accountsPartial({
           chainManager: chainManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1524,7 +1525,7 @@ describe("Bridge Security Tests", () => {
         () =>
           program.methods
             .addSupportedChain(42)
-            .accounts({
+            .accountsPartial({
               chainManager: unauthorizedUser.publicKey,
               bridgeConfig: bridgeConfigPda,
             })
@@ -1553,7 +1554,7 @@ describe("Bridge Security Tests", () => {
               Array.from(randomEvmAddress()),
               ETH_CHAIN_ID
             )
-            .accounts({
+            .accountsPartial({
               user: user.publicKey,
               bridgeConfig: bridgeConfigPda,
               config: configPda,
@@ -1582,7 +1583,7 @@ describe("Bridge Security Tests", () => {
           Array.from(randomEvmAddress()),
           ETH_CHAIN_ID
         )
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           bridgeConfig: bridgeConfigPda,
           config: configPda,
@@ -1604,7 +1605,7 @@ describe("Bridge Security Tests", () => {
 
       await program.methods
         .updateBridgeLimits(new BN(newMin), new BN(newMax))
-        .accounts({
+        .accountsPartial({
           bridgeAdmin: bridgeAdmin.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1618,7 +1619,7 @@ describe("Bridge Security Tests", () => {
       // Restore defaults
       await program.methods
         .updateBridgeLimits(new BN(MIN_AMOUNT), new BN(MAX_AMOUNT))
-        .accounts({
+        .accountsPartial({
           bridgeAdmin: bridgeAdmin.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1631,7 +1632,7 @@ describe("Bridge Security Tests", () => {
         () =>
           program.methods
             .updateBridgeLimits(new BN(1000), new BN(100))
-            .accounts({
+            .accountsPartial({
               bridgeAdmin: bridgeAdmin.publicKey,
               bridgeConfig: bridgeConfigPda,
             })
@@ -1646,7 +1647,7 @@ describe("Bridge Security Tests", () => {
     it("bridge_pauser can pause bridge", async () => {
       await program.methods
         .pauseBridge()
-        .accounts({
+        .accountsPartial({
           bridgePauser: bridgePauser.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1661,7 +1662,7 @@ describe("Bridge Security Tests", () => {
       // Pause the bridge first
       await program.methods
         .pauseBridge()
-        .accounts({
+        .accountsPartial({
           bridgePauser: bridgePauser.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1681,7 +1682,7 @@ describe("Bridge Security Tests", () => {
               Array.from(randomEvmAddress()),
               ETH_CHAIN_ID
             )
-            .accounts({
+            .accountsPartial({
               user: user.publicKey,
               bridgeConfig: bridgeConfigPda,
               config: configPda,
@@ -1702,7 +1703,7 @@ describe("Bridge Security Tests", () => {
       // Pause the bridge first
       await program.methods
         .pauseBridge()
-        .accounts({
+        .accountsPartial({
           bridgePauser: bridgePauser.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1746,7 +1747,7 @@ describe("Bridge Security Tests", () => {
     it("bridge_unpauser can unpause bridge", async () => {
       await program.methods
         .unpauseBridge()
-        .accounts({
+        .accountsPartial({
           bridgeUnpauser: bridgeUnpauser.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1761,7 +1762,7 @@ describe("Bridge Security Tests", () => {
       // Pause first
       await program.methods
         .pauseBridge()
-        .accounts({
+        .accountsPartial({
           bridgePauser: bridgePauser.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1773,7 +1774,7 @@ describe("Bridge Security Tests", () => {
         () =>
           program.methods
             .unpauseBridge()
-            .accounts({
+            .accountsPartial({
               bridgeUnpauser: bridgePauser.publicKey,
               bridgeConfig: bridgeConfigPda,
             })
@@ -1785,7 +1786,7 @@ describe("Bridge Security Tests", () => {
       // Cleanup: unpause with correct authority
       await program.methods
         .unpauseBridge()
-        .accounts({
+        .accountsPartial({
           bridgeUnpauser: bridgeUnpauser.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1797,7 +1798,7 @@ describe("Bridge Security Tests", () => {
       // Pause PSM (not bridge)
       await program.methods
         .pause()
-        .accounts({
+        .accountsPartial({
           pauser: warmMultisig.publicKey,
           config: configPda,
         })
@@ -1818,7 +1819,7 @@ describe("Bridge Security Tests", () => {
               Array.from(randomEvmAddress()),
               ETH_CHAIN_ID
             )
-            .accounts({
+            .accountsPartial({
               user: user.publicKey,
               bridgeConfig: bridgeConfigPda,
               config: configPda,
@@ -1837,7 +1838,7 @@ describe("Bridge Security Tests", () => {
       // Unpause PSM
       await program.methods
         .unpause()
-        .accounts({
+        .accountsPartial({
           unpauser: coldMultisig.publicKey,
           config: configPda,
         })
@@ -1851,7 +1852,7 @@ describe("Bridge Security Tests", () => {
           Array.from(randomEvmAddress()),
           ETH_CHAIN_ID
         )
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           bridgeConfig: bridgeConfigPda,
           config: configPda,
@@ -1874,7 +1875,7 @@ describe("Bridge Security Tests", () => {
 
       await program.methods
         .updateOrchestratorSigner(newOrchestrator.publicKey)
-        .accounts({
+        .accountsPartial({
           bridgeAdmin: bridgeAdmin.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1889,7 +1890,7 @@ describe("Bridge Security Tests", () => {
       // Restore original orchestrator
       await program.methods
         .updateOrchestratorSigner(orchestrator.publicKey)
-        .accounts({
+        .accountsPartial({
           bridgeAdmin: bridgeAdmin.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1902,7 +1903,7 @@ describe("Bridge Security Tests", () => {
         () =>
           program.methods
             .updateOrchestratorSigner(Keypair.generate().publicKey)
-            .accounts({
+            .accountsPartial({
               bridgeAdmin: unauthorizedUser.publicKey,
               bridgeConfig: bridgeConfigPda,
             })
@@ -1915,7 +1916,7 @@ describe("Bridge Security Tests", () => {
     it("only fee_manager can update bridge fee", async () => {
       await program.methods
         .updateBridgeFee(20)
-        .accounts({
+        .accountsPartial({
           feeManager: feeManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1928,7 +1929,7 @@ describe("Bridge Security Tests", () => {
       // Restore default
       await program.methods
         .updateBridgeFee(10)
-        .accounts({
+        .accountsPartial({
           feeManager: feeManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1941,7 +1942,7 @@ describe("Bridge Security Tests", () => {
 
       await program.methods
         .updateFeeRecipient(newRecipient)
-        .accounts({
+        .accountsPartial({
           bridgeAdmin: bridgeAdmin.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1954,7 +1955,7 @@ describe("Bridge Security Tests", () => {
       // Restore original
       await program.methods
         .updateFeeRecipient(feeRecipient.publicKey)
-        .accounts({
+        .accountsPartial({
           bridgeAdmin: bridgeAdmin.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1966,7 +1967,7 @@ describe("Bridge Security Tests", () => {
       // Test chain_manager
       await program.methods
         .addSupportedChain(999)
-        .accounts({
+        .accountsPartial({
           chainManager: chainManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -1977,7 +1978,7 @@ describe("Bridge Security Tests", () => {
         () =>
           program.methods
             .addSupportedChain(998)
-            .accounts({
+            .accountsPartial({
               chainManager: unauthorizedUser.publicKey,
               bridgeConfig: bridgeConfigPda,
             })
@@ -1991,7 +1992,7 @@ describe("Bridge Security Tests", () => {
         () =>
           program.methods
             .updateBridgeFee(50)
-            .accounts({
+            .accountsPartial({
               feeManager: unauthorizedUser.publicKey,
               bridgeConfig: bridgeConfigPda,
             })
@@ -2003,7 +2004,7 @@ describe("Bridge Security Tests", () => {
       // Test bridge_pauser
       await program.methods
         .pauseBridge()
-        .accounts({
+        .accountsPartial({
           bridgePauser: bridgePauser.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -2014,7 +2015,7 @@ describe("Bridge Security Tests", () => {
         () =>
           program.methods
             .pauseBridge()
-            .accounts({
+            .accountsPartial({
               bridgePauser: unauthorizedUser.publicKey,
               bridgeConfig: bridgeConfigPda,
             })
@@ -2026,7 +2027,7 @@ describe("Bridge Security Tests", () => {
       // Test bridge_unpauser
       await program.methods
         .unpauseBridge()
-        .accounts({
+        .accountsPartial({
           bridgeUnpauser: bridgeUnpauser.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
@@ -2037,7 +2038,7 @@ describe("Bridge Security Tests", () => {
         () =>
           program.methods
             .unpauseBridge()
-            .accounts({
+            .accountsPartial({
               bridgeUnpauser: unauthorizedUser.publicKey,
               bridgeConfig: bridgeConfigPda,
             })
@@ -2060,7 +2061,7 @@ describe("Bridge Security Tests", () => {
       if (config.isPaused) {
         await program.methods
           .unpause()
-          .accounts({
+          .accountsPartial({
             unpauser: coldMultisig.publicKey,
             config: configPda,
           })
@@ -2078,7 +2079,7 @@ describe("Bridge Security Tests", () => {
       if (Number(userBalance.amount) < Number(burnAmount) * 2) {
         await program.methods
           .mint(new BN(100_000_000))
-          .accounts({
+          .accountsPartial({
             user: user.publicKey,
             config: configPda,
             usdcMint: usdcMint,
@@ -2115,7 +2116,7 @@ describe("Bridge Security Tests", () => {
           Array.from(evmRecipient),
           destChain
         )
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           bridgeConfig: bridgeConfigPda,
           config: configPda,

@@ -104,6 +104,15 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
     },
   },
 
+  // OP Sepolia (testnet) - uses MockUSDC via address book for deployments
+  opSepolia: {
+    tokens: {
+      usdc: "0x5fd84259d66Cd46123540766Be93DFE6D43130D7", // Circle's official OP Sepolia USDC (faucet)
+      weth: "0x4200000000000000000000000000000000000006",
+    },
+    // No whales — testnet; MockUSDC is deployed and used instead via address book
+  },
+
   // Localhost (fork) - defaults to Optimism for consistency with tests
   localhost: {
     tokens: {
@@ -194,6 +203,13 @@ export const CHAIN_METADATA: Record<string, ChainMetadata> = {
     rpcUrl: process.env.BASE_RPC_URL || "https://mainnet.base.org",
     explorer: "https://basescan.org",
   },
+  opSepolia: {
+    name: "OP Sepolia",
+    chainId: 11155420,
+    rpcUrl: process.env.OP_SEPOLIA_RPC_URL || "https://sepolia.optimism.io",
+    explorer: "https://sepolia-optimistic.etherscan.io",
+  },
+
   localhost: {
     name: "Localhost (Fork)",
     chainId: 31337,

@@ -84,7 +84,7 @@ async function main() {
 
       const tx = await vaultProgram.methods
         .initialize()
-        .accounts({
+        .accountsPartial({
           roleAdmin: authorities.vault.roleAdmin,
           pauser: authorities.vault.pauser,
           unpauser: authorities.vault.unpauser,

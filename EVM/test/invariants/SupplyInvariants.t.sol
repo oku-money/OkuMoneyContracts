@@ -13,13 +13,13 @@ contract SupplyInvariantsTest is BaseTest {
 
     function setUp() public override {
         super.setUp();
-        handler = new OkuUSDHandler(okuUSD, minter, rebaser, allowanceManager);
+        handler = new OkuUSDHandler(okuUsd, minter, rebaser, allowanceManager);
 
         targetContract(address(handler));
 
-        excludeContract(address(okuUSD));
-        excludeContract(address(wokuUSD));
-        excludeContract(address(litePSM));
+        excludeContract(address(okuUsd));
+        excludeContract(address(wokuUsd));
+        excludeContract(address(litePsm));
         excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));
         excludeContract(address(oracle));
@@ -28,7 +28,7 @@ contract SupplyInvariantsTest is BaseTest {
     /**
      * @notice Supply cap never exceeded except by rebase
      * @dev Invariant from CLAUDE.md:
-     *      assert(okuUSD.totalSupply() <= maxSupply || lastOperationWasRebase);
+     *      assert(okuUsd.totalSupply() <= maxSupply || lastOperationWasRebase);
      *
      * Note: This invariant allows supply to exceed maxSupply ONLY if the last
      * operation was a rebase. Mints are always checked against maxSupply.
@@ -36,8 +36,8 @@ contract SupplyInvariantsTest is BaseTest {
     function invariant_SupplyCapRespected() public view {
         if (!handler.wasLastOperationRebase()) {
             assertLe(
-                okuUSD.totalSupply(),
-                okuUSD.maxSupply(),
+                okuUsd.totalSupply(),
+                okuUsd.maxSupply(),
                 "Supply exceeds maxSupply after non-rebase operation"
             );
         }
@@ -49,11 +49,11 @@ contract SupplyInvariantsTest is BaseTest {
      *      a coarse sanity bound on net minted tokens.
      */
     function invariant_MintBurnAccounting() public view {
-        uint256 actualSupply = okuUSD.totalSupply();
+        uint256 actualSupply = okuUsd.totalSupply();
 
         // Total shares should be consistent with supply and multiplier
-        uint256 totalShares = okuUSD.totalShares();
-        uint256 multiplier = okuUSD.rewardMultiplier();
+        uint256 totalShares = okuUsd.totalShares();
+        uint256 multiplier = okuUsd.rewardMultiplier();
 
         if (totalShares > 0) {
             // Supply should be shares * multiplier / precision (with rounding)
@@ -67,7 +67,7 @@ contract SupplyInvariantsTest is BaseTest {
         }
 
         // Coarse sanity check: if nothing was ever minted, supply must be zero
-        if (handler.ghost_mintedTotal() == 0) {
+        if (handler.ghostMintedTotal() == 0) {
             assertEq(actualSupply, 0, "Supply should be zero if nothing minted");
         }
     }
@@ -78,8 +78,8 @@ contract SupplyInvariantsTest is BaseTest {
      *      We check: 1) shares are finite, 2) supply formula is consistent
      */
     function invariant_TotalSharesBounded() public view {
-        uint256 totalShares = okuUSD.totalShares();
-        uint256 multiplier = okuUSD.rewardMultiplier();
+        uint256 totalShares = okuUsd.totalShares();
+        uint256 multiplier = okuUsd.rewardMultiplier();
 
         // If multiplier is reasonable (< 1e36), check against computed bound
         // At extreme multipliers from many rebases, this check becomes unreliable
@@ -90,7 +90,7 @@ contract SupplyInvariantsTest is BaseTest {
 
         // Always verify the supply formula holds
         uint256 expectedSupply = (totalShares * multiplier) / PRECISION;
-        assertApproxEqAbs(okuUSD.totalSupply(), expectedSupply, 1, "Supply formula should hold");
+        assertApproxEqAbs(okuUsd.totalSupply(), expectedSupply, 1, "Supply formula should hold");
     }
 
     /**
@@ -98,8 +98,8 @@ contract SupplyInvariantsTest is BaseTest {
      * @dev If too many calls revert, the handler is not exercising the contract effectively
      */
     function invariant_ReasonableSuccessRate() public view {
-        uint256 totalCalls = handler.ghost_totalCalls();
-        uint256 totalReverts = handler.ghost_totalReverts();
+        uint256 totalCalls = handler.ghostTotalCalls();
+        uint256 totalReverts = handler.ghostTotalReverts();
         if (totalCalls > 10) {
             assertGe(
                 ((totalCalls - totalReverts) * 100) / totalCalls,

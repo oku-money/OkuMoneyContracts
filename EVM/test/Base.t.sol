@@ -24,12 +24,12 @@ abstract contract BaseTest is Test {
 
     // ============ Contracts ============
 
-    OkuUSD public okuUSD;
-    OkuUSD public okuUSDImpl;
-    wOkuUSD public wokuUSD;
-    wOkuUSD public wokuUSDImpl;
-    LitePSM public litePSM;
-    LitePSM public litePSMImpl;
+    OkuUSD public okuUsd;
+    OkuUSD public okuUsdImpl;
+    wOkuUSD public wokuUsd;
+    wOkuUSD public wokuUsdImpl;
+    LitePSM public litePsm;
+    LitePSM public litePsmImpl;
     RedemptionQueue public redemptionQueue;
     RedemptionQueue public redemptionQueueImpl;
     MockUSDC public usdc;
@@ -102,101 +102,101 @@ abstract contract BaseTest is Test {
         oracle = new MockAggregatorV3();
 
         // Deploy OkuUSD implementation and proxy
-        okuUSDImpl = new OkuUSD();
+        okuUsdImpl = new OkuUSD();
         bytes memory okuInitData =
             abi.encodeCall(OkuUSD.initialize, ("OkuUSD", "OKUSD", admin, MAX_SUPPLY));
-        okuUSD = OkuUSD(address(new ERC1967Proxy(address(okuUSDImpl), okuInitData)));
+        okuUsd = OkuUSD(address(new ERC1967Proxy(address(okuUsdImpl), okuInitData)));
 
         // Deploy wOkuUSD implementation and proxy
-        wokuUSDImpl = new wOkuUSD();
+        wokuUsdImpl = new wOkuUSD();
         bytes memory wokuInitData = abi.encodeCall(
-            wOkuUSD.initialize, (IERC20(address(okuUSD)), "Wrapped OkuUSD", "wOKUSD", admin)
+            wOkuUSD.initialize, (IERC20(address(okuUsd)), "Wrapped OkuUSD", "wOKUSD", admin)
         );
-        wokuUSD = wOkuUSD(address(new ERC1967Proxy(address(wokuUSDImpl), wokuInitData)));
+        wokuUsd = wOkuUSD(address(new ERC1967Proxy(address(wokuUsdImpl), wokuInitData)));
 
         // Deploy RedemptionQueue implementation and proxy
         redemptionQueueImpl = new RedemptionQueue();
         bytes memory queueInitData =
-            abi.encodeCall(RedemptionQueue.initialize, (address(okuUSD), admin));
+            abi.encodeCall(RedemptionQueue.initialize, (address(okuUsd), admin));
         redemptionQueue =
             RedemptionQueue(address(new ERC1967Proxy(address(redemptionQueueImpl), queueInitData)));
 
         // Deploy LitePSM implementation and proxy
-        litePSMImpl = new LitePSM();
+        litePsmImpl = new LitePSM();
         bytes memory psmInitData = abi.encodeCall(
-            LitePSM.initialize, (address(okuUSD), address(usdc), address(redemptionQueue), admin)
+            LitePSM.initialize, (address(okuUsd), address(usdc), address(redemptionQueue), admin)
         );
-        litePSM = LitePSM(address(new ERC1967Proxy(address(litePSMImpl), psmInitData)));
+        litePsm = LitePSM(address(new ERC1967Proxy(address(litePsmImpl), psmInitData)));
     }
 
     function _setupRoles() internal {
         vm.startPrank(admin);
 
         // OkuUSD roles - Granular RBAC
-        okuUSD.grantRole(PAUSER_ROLE, pauser);
-        okuUSD.grantRole(UNPAUSER_ROLE, unpauser);
-        okuUSD.grantRole(MINTER_ROLE, minter);
-        okuUSD.grantRole(MINTER_ROLE, address(litePSM)); // PSM can mint
-        okuUSD.grantRole(REBASER_ROLE, rebaser);
-        okuUSD.grantRole(BLACKLISTER_ROLE, blacklister);
-        okuUSD.grantRole(UNBLACKLISTER_ROLE, unblacklister);
-        okuUSD.grantRole(CAP_MANAGER_ROLE, capManager);
-        okuUSD.grantRole(ALLOWANCE_MANAGER_ROLE, allowanceManager);
+        okuUsd.grantRole(PAUSER_ROLE, pauser);
+        okuUsd.grantRole(UNPAUSER_ROLE, unpauser);
+        okuUsd.grantRole(MINTER_ROLE, minter);
+        okuUsd.grantRole(MINTER_ROLE, address(litePsm)); // PSM can mint
+        okuUsd.grantRole(REBASER_ROLE, rebaser);
+        okuUsd.grantRole(BLACKLISTER_ROLE, blacklister);
+        okuUsd.grantRole(UNBLACKLISTER_ROLE, unblacklister);
+        okuUsd.grantRole(CAP_MANAGER_ROLE, capManager);
+        okuUsd.grantRole(ALLOWANCE_MANAGER_ROLE, allowanceManager);
 
         // LitePSM roles - Granular RBAC
-        litePSM.grantRole(PSM_PAUSER_ROLE, pauser);
-        litePSM.grantRole(PSM_UNPAUSER_ROLE, unpauser);
-        litePSM.grantRole(QUEUE_PROCESSOR_ROLE, queueProcessor);
-        litePSM.grantRole(BUFFER_DEPOSITOR_ROLE, bufferDepositor);
-        litePSM.grantRole(BUFFER_WITHDRAWER_ROLE, bufferWithdrawer);
-        litePSM.grantRole(ORACLE_MANAGER_ROLE, oracleManager);
+        litePsm.grantRole(PSM_PAUSER_ROLE, pauser);
+        litePsm.grantRole(PSM_UNPAUSER_ROLE, unpauser);
+        litePsm.grantRole(QUEUE_PROCESSOR_ROLE, queueProcessor);
+        litePsm.grantRole(BUFFER_DEPOSITOR_ROLE, bufferDepositor);
+        litePsm.grantRole(BUFFER_WITHDRAWER_ROLE, bufferWithdrawer);
+        litePsm.grantRole(ORACLE_MANAGER_ROLE, oracleManager);
 
         // RedemptionQueue roles
-        redemptionQueue.grantRole(PSM_ROLE, address(litePSM));
+        redemptionQueue.grantRole(PSM_ROLE, address(litePsm));
 
         vm.stopPrank();
     }
 
     function _setupMinterAllowances() internal {
         vm.startPrank(allowanceManager);
-        okuUSD.configureMinterAllowance(minter, MAX_SUPPLY);
-        okuUSD.configureMinterAllowance(address(litePSM), MAX_SUPPLY);
+        okuUsd.configureMinterAllowance(minter, MAX_SUPPLY);
+        okuUsd.configureMinterAllowance(address(litePsm), MAX_SUPPLY);
         vm.stopPrank();
     }
 
     // ============ Helper Functions ============
 
     /// @notice Mint OkuUSD tokens to a user
-    function _mintOkuUSD(address to, uint256 amount) internal {
+    function _mintOkuUsd(address to, uint256 amount) internal {
         vm.prank(minter);
-        okuUSD.mint(to, amount);
+        okuUsd.mint(to, amount);
     }
 
     /// @notice Mint USDC tokens to a user
-    function _mintUSDC(address to, uint256 amount) internal {
+    function _mintUsdc(address to, uint256 amount) internal {
         usdc.mint(to, amount);
     }
 
     /// @notice Approve OkuUSD spending
-    function _approveOkuUSD(address owner, address spender, uint256 amount) internal {
+    function _approveOkuUsd(address owner, address spender, uint256 amount) internal {
         vm.prank(owner);
-        okuUSD.approve(spender, amount);
+        okuUsd.approve(spender, amount);
     }
 
     /// @notice Approve USDC spending
-    function _approveUSDC(address owner, address spender, uint256 amount) internal {
+    function _approveUsdc(address owner, address spender, uint256 amount) internal {
         vm.prank(owner);
         usdc.approve(spender, amount);
     }
 
     /// @notice Calculate expected shares from tokens at current multiplier
     function _tokensToShares(uint256 tokens) internal view returns (uint256) {
-        return (tokens * PRECISION) / okuUSD.rewardMultiplier();
+        return (tokens * PRECISION) / okuUsd.rewardMultiplier();
     }
 
     /// @notice Calculate expected tokens from shares at current multiplier
     function _sharesToTokens(uint256 shares) internal view returns (uint256) {
-        return (shares * okuUSD.rewardMultiplier()) / PRECISION;
+        return (shares * okuUsd.rewardMultiplier()) / PRECISION;
     }
 
     /// @notice Override bound() to suppress "Bound result" console logs
@@ -206,19 +206,19 @@ abstract contract BaseTest is Test {
 
     /// @notice Bound fuzz input to reasonable mint amount
     function _boundMintAmount(uint256 amount) internal view returns (uint256) {
-        uint256 remaining = MAX_SUPPLY - okuUSD.totalSupply();
+        uint256 remaining = MAX_SUPPLY - okuUsd.totalSupply();
         return bound(amount, 1, remaining > 0 ? remaining : 1);
     }
 
     /// @notice Bound fuzz input to reasonable multiplier (current to 10x)
     function _boundMultiplier(uint256 multiplier) internal view returns (uint256) {
-        uint256 current = okuUSD.rewardMultiplier();
+        uint256 current = okuUsd.rewardMultiplier();
         return bound(multiplier, current, current * 10);
     }
 
     /// @notice Bound fuzz input to reasonable multiplier increase (0.01% to 100%)
     function _boundMultiplierIncrease(uint256 increase) internal view returns (uint256) {
-        uint256 current = okuUSD.rewardMultiplier();
+        uint256 current = okuUsd.rewardMultiplier();
         return bound(increase, current / 10_000, current);
     }
 

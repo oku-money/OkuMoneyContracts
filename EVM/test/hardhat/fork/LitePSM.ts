@@ -75,7 +75,7 @@ describe("LitePSM Scenarios", () => {
     async function drainPSM() {
         const balance = await usdc.balanceOf(await psm.getAddress())
         if (balance > 0n) {
-            await psm.connect(Frank).withdrawUSDC(await Frank.getAddress(), balance)
+            await psm.connect(Frank).withdrawUsdc(await Frank.getAddress(), balance)
         }
     }
 
@@ -336,7 +336,7 @@ describe("LitePSM Scenarios", () => {
 
             // PSM has 20,000 USDC - withdraw to leave only 10,000
             const psmBuffer = await usdc.balanceOf(psmAddr)
-            await psm.connect(Frank).withdrawUSDC(
+            await psm.connect(Frank).withdrawUsdc(
                 await Frank.getAddress(),
                 psmBuffer - parseUnits("10000", 6)
             )

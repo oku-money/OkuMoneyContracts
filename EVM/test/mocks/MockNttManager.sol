@@ -4,7 +4,6 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {INttManager} from "../../src/bridge/adapters/INttManager.sol";
 import {OkuUSD} from "../../src/token/OkuUSD.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
  * @title MockNttManager
@@ -38,7 +37,7 @@ contract MockNttManager is INttManager, Test {
     PendingTransfer[] public pendingTransfers;
     uint64 private nextSequence;
 
-    OkuUSD public okuUSD;
+    OkuUSD public okuUsd;
     address public minter;
 
     // Fee configuration
@@ -59,8 +58,8 @@ contract MockNttManager is INttManager, Test {
     error InvalidTransferIndex();
     error TransferAlreadyCompleted();
 
-    constructor(address _okuUSD, address _minter) {
-        okuUSD = OkuUSD(_okuUSD);
+    constructor(address _okuUsd, address _minter) {
+        okuUsd = OkuUSD(_okuUsd);
         minter = _minter;
     }
 
@@ -137,7 +136,7 @@ contract MockNttManager is INttManager, Test {
 
         // Mint OkuUSD on destination (using minter role)
         vm.prank(minter);
-        okuUSD.mint(recipient, p.amount);
+        okuUsd.mint(recipient, p.amount);
 
         emit TransferCompleted(index, recipient, p.amount);
     }
@@ -155,7 +154,7 @@ contract MockNttManager is INttManager, Test {
         p.completed = true;
 
         vm.prank(minter);
-        okuUSD.mint(to, p.amount);
+        okuUsd.mint(to, p.amount);
 
         emit TransferCompleted(index, to, p.amount);
     }

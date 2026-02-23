@@ -17,10 +17,10 @@ contract RedemptionQueueTest is BaseTest {
     // ============ Events ============
 
     event RedemptionQueued(
-        address indexed user, uint256 shares, uint256 okuUSDAmount, uint256 position
+        address indexed user, uint256 shares, uint256 okuUsdAmount, uint256 position
     );
     event RedemptionProcessed(
-        address indexed user, uint256 shares, uint256 okuUSDAmount, uint256 usdcAmount
+        address indexed user, uint256 shares, uint256 okuUsdAmount, uint256 usdcAmount
     );
 
     // ============ Setup ============
@@ -32,15 +32,15 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.grantRole(PSM_ROLE, address(this));
 
         // Mint OkuUSD to users
-        _mintOkuUSD(user1, 1000e18);
-        _mintOkuUSD(user2, 1000e18);
-        _mintOkuUSD(user3, 1000e18);
+        _mintOkuUsd(user1, 1000e18);
+        _mintOkuUsd(user2, 1000e18);
+        _mintOkuUsd(user3, 1000e18);
     }
 
     // ============ Enqueue Tests ============
 
     function test_Enqueue_OnlyPSMRole() public {
-        _approveOkuUSD(user1, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
 
         vm.prank(user1);
         vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_ROLE));
@@ -49,20 +49,20 @@ contract RedemptionQueueTest is BaseTest {
 
     function test_Enqueue_TransfersOkuUSD() public {
         uint256 amount = 100e18;
-        _approveOkuUSD(user1, address(redemptionQueue), amount);
+        _approveOkuUsd(user1, address(redemptionQueue), amount);
 
-        uint256 user1BalanceBefore = okuUSD.balanceOf(user1);
-        uint256 queueBalanceBefore = okuUSD.balanceOf(address(redemptionQueue));
+        uint256 user1BalanceBefore = okuUsd.balanceOf(user1);
+        uint256 queueBalanceBefore = okuUsd.balanceOf(address(redemptionQueue));
 
         redemptionQueue.enqueue(user1, amount);
 
-        assertEq(okuUSD.balanceOf(user1), user1BalanceBefore - amount);
-        assertEq(okuUSD.balanceOf(address(redemptionQueue)), queueBalanceBefore + amount);
+        assertEq(okuUsd.balanceOf(user1), user1BalanceBefore - amount);
+        assertEq(okuUsd.balanceOf(address(redemptionQueue)), queueBalanceBefore + amount);
     }
 
     function test_Enqueue_StoresEntry() public {
         uint256 amount = 100e18;
-        _approveOkuUSD(user1, address(redemptionQueue), amount);
+        _approveOkuUsd(user1, address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
@@ -76,12 +76,12 @@ contract RedemptionQueueTest is BaseTest {
     function test_Enqueue_IncrementsQueueLength() public {
         assertEq(redemptionQueue.queueLength(), 0);
 
-        _approveOkuUSD(user1, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
         redemptionQueue.enqueue(user1, 100e18);
 
         assertEq(redemptionQueue.queueLength(), 1);
 
-        _approveOkuUSD(user2, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user2, address(redemptionQueue), 100e18);
         redemptionQueue.enqueue(user2, 100e18);
 
         assertEq(redemptionQueue.queueLength(), 2);
@@ -89,7 +89,7 @@ contract RedemptionQueueTest is BaseTest {
 
     function test_Enqueue_EmitsEvent() public {
         uint256 amount = 100e18;
-        _approveOkuUSD(user1, address(redemptionQueue), amount);
+        _approveOkuUsd(user1, address(redemptionQueue), amount);
 
         // At 1x multiplier, shares == tokens
         uint256 expectedShares = _tokensToShares(amount);
@@ -101,9 +101,9 @@ contract RedemptionQueueTest is BaseTest {
     }
 
     function test_Enqueue_MultipleEntries() public {
-        _approveOkuUSD(user1, address(redemptionQueue), 100e18);
-        _approveOkuUSD(user2, address(redemptionQueue), 200e18);
-        _approveOkuUSD(user3, address(redemptionQueue), 300e18);
+        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user2, address(redemptionQueue), 200e18);
+        _approveOkuUsd(user3, address(redemptionQueue), 300e18);
 
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 200e18);
@@ -122,55 +122,55 @@ contract RedemptionQueueTest is BaseTest {
     function test_ProcessQueue_OnlyPSMRole() public {
         vm.prank(user1);
         vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_ROLE));
-        redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(10, address(usdc), address(okuUsd));
     }
 
     function test_ProcessQueue_BurnsOkuUSD() public {
         uint256 amount = 100e18;
-        _approveOkuUSD(user1, address(redemptionQueue), amount);
+        _approveOkuUsd(user1, address(redemptionQueue), amount);
         redemptionQueue.enqueue(user1, amount);
 
-        uint256 queueBalanceBefore = okuUSD.balanceOf(address(redemptionQueue));
+        uint256 queueBalanceBefore = okuUsd.balanceOf(address(redemptionQueue));
 
         // Setup: give queue minter role to burn
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
         // Setup: approve USDC for transfer (convert 18-decimal OkuUSD amount to 6-decimal USDC)
         uint256 usdcAmount = amount / DECIMAL_MULTIPLIER;
-        _mintUSDC(address(this), usdcAmount);
-        _approveUSDC(address(this), address(redemptionQueue), usdcAmount);
+        _mintUsdc(address(this), usdcAmount);
+        _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
 
-        redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(10, address(usdc), address(okuUsd));
 
-        assertEq(okuUSD.balanceOf(address(redemptionQueue)), queueBalanceBefore - amount);
+        assertEq(okuUsd.balanceOf(address(redemptionQueue)), queueBalanceBefore - amount);
     }
 
     function test_ProcessQueue_TransfersUSDC() public {
-        uint256 okuUSDAmount = 100e18; // 100 OkuUSD
+        uint256 okuUsdAmount = 100e18; // 100 OkuUSD
         uint256 usdcAmount = 100e6; // 100 USDC (6 decimals)
 
-        _approveOkuUSD(user1, address(redemptionQueue), okuUSDAmount);
-        redemptionQueue.enqueue(user1, okuUSDAmount);
+        _approveOkuUsd(user1, address(redemptionQueue), okuUsdAmount);
+        redemptionQueue.enqueue(user1, okuUsdAmount);
 
         // Setup
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
-        _mintUSDC(address(this), usdcAmount);
-        _approveUSDC(address(this), address(redemptionQueue), usdcAmount);
+        _mintUsdc(address(this), usdcAmount);
+        _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
 
-        uint256 user1USDCBefore = usdc.balanceOf(user1);
+        uint256 user1UsdcBefore = usdc.balanceOf(user1);
 
-        redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(10, address(usdc), address(okuUsd));
 
         // User should receive USDC (6 decimals), not OkuUSD amount (18 decimals)
-        assertEq(usdc.balanceOf(user1), user1USDCBefore + usdcAmount);
+        assertEq(usdc.balanceOf(user1), user1UsdcBefore + usdcAmount);
     }
 
     function test_ProcessQueue_AdvancesQueueHead() public {
-        _approveOkuUSD(user1, address(redemptionQueue), 100e18);
-        _approveOkuUSD(user2, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user2, address(redemptionQueue), 100e18);
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 100e18);
 
@@ -178,13 +178,13 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
-        _mintUSDC(address(this), 100e6); // 100 USDC (6 decimals)
-        _approveUSDC(address(this), address(redemptionQueue), 100e6);
+        _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
+        _approveUsdc(address(this), address(redemptionQueue), 100e6);
 
         // Process only 1 entry
-        redemptionQueue.processQueue(1, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(1, address(usdc), address(okuUsd));
 
         // Queue head should advance, length decreases
         assertEq(redemptionQueue.queueLength(), 1);
@@ -195,99 +195,99 @@ contract RedemptionQueueTest is BaseTest {
     }
 
     function test_ProcessQueue_RespectsMaxEntries() public {
-        _approveOkuUSD(user1, address(redemptionQueue), 100e18);
-        _approveOkuUSD(user2, address(redemptionQueue), 100e18);
-        _approveOkuUSD(user3, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user2, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user3, address(redemptionQueue), 100e18);
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 100e18);
         redemptionQueue.enqueue(user3, 100e18);
 
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
-        _mintUSDC(address(this), 300e6); // 300 USDC (6 decimals)
-        _approveUSDC(address(this), address(redemptionQueue), 300e6);
+        _mintUsdc(address(this), 300e6); // 300 USDC (6 decimals)
+        _approveUsdc(address(this), address(redemptionQueue), 300e6);
 
         // Process only 2 entries
-        redemptionQueue.processQueue(2, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(2, address(usdc), address(okuUsd));
 
         // Should have 1 entry left
         assertEq(redemptionQueue.queueLength(), 1);
     }
 
     function test_ProcessQueue_StopsWhenBufferDepleted() public {
-        _approveOkuUSD(user1, address(redemptionQueue), 100e18);
-        _approveOkuUSD(user2, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user2, address(redemptionQueue), 100e18);
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 100e18);
 
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
         // Only provide enough USDC for 1 entry
-        _mintUSDC(address(this), 100e6); // 100 USDC (6 decimals)
-        _approveUSDC(address(this), address(redemptionQueue), 100e6);
+        _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
+        _approveUsdc(address(this), address(redemptionQueue), 100e6);
 
-        redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(10, address(usdc), address(okuUsd));
 
         // Should have processed only 1
         assertEq(redemptionQueue.queueLength(), 1);
     }
 
     function test_ProcessQueue_EmitsEvent() public {
-        uint256 okuUSDAmount = 100e18; // 100 OkuUSD
+        uint256 okuUsdAmount = 100e18; // 100 OkuUSD
         uint256 usdcAmount = 100e6; // 100 USDC
 
-        _approveOkuUSD(user1, address(redemptionQueue), okuUSDAmount);
-        redemptionQueue.enqueue(user1, okuUSDAmount);
+        _approveOkuUsd(user1, address(redemptionQueue), okuUsdAmount);
+        redemptionQueue.enqueue(user1, okuUsdAmount);
 
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
-        _mintUSDC(address(this), usdcAmount);
-        _approveUSDC(address(this), address(redemptionQueue), usdcAmount);
+        _mintUsdc(address(this), usdcAmount);
+        _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
 
         // At 1x multiplier, shares == tokens
-        uint256 expectedShares = _tokensToShares(okuUSDAmount);
+        uint256 expectedShares = _tokensToShares(okuUsdAmount);
 
         vm.expectEmit(true, false, false, true);
-        emit RedemptionProcessed(user1, expectedShares, okuUSDAmount, usdcAmount);
+        emit RedemptionProcessed(user1, expectedShares, okuUsdAmount, usdcAmount);
 
-        redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(10, address(usdc), address(okuUsd));
     }
 
     function test_ProcessQueue_FIFO_Order() public {
         // Enqueue in order: user1, user2, user3
-        _approveOkuUSD(user1, address(redemptionQueue), 100e18);
-        _approveOkuUSD(user2, address(redemptionQueue), 200e18);
-        _approveOkuUSD(user3, address(redemptionQueue), 300e18);
+        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user2, address(redemptionQueue), 200e18);
+        _approveOkuUsd(user3, address(redemptionQueue), 300e18);
 
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 200e18);
         redemptionQueue.enqueue(user3, 300e18);
 
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
         // Only provide enough for first entry
-        _mintUSDC(address(this), 100e6); // 100 USDC (6 decimals)
-        _approveUSDC(address(this), address(redemptionQueue), 100e6);
+        _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
+        _approveUsdc(address(this), address(redemptionQueue), 100e6);
 
-        uint256 user1USDCBefore = usdc.balanceOf(user1);
-        uint256 user2USDCBefore = usdc.balanceOf(user2);
+        uint256 user1UsdcBefore = usdc.balanceOf(user1);
+        uint256 user2UsdcBefore = usdc.balanceOf(user2);
 
-        redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(10, address(usdc), address(okuUsd));
 
         // Only user1 (first in queue) should receive 100 USDC (6 decimals)
-        assertEq(usdc.balanceOf(user1), user1USDCBefore + 100e6);
-        assertEq(usdc.balanceOf(user2), user2USDCBefore); // Unchanged
+        assertEq(usdc.balanceOf(user1), user1UsdcBefore + 100e6);
+        assertEq(usdc.balanceOf(user2), user2UsdcBefore); // Unchanged
     }
 
     // ============ View Function Tests ============
 
     function test_QueueLength_ReturnsUnprocessed() public {
-        _approveOkuUSD(user1, address(redemptionQueue), 100e18);
-        _approveOkuUSD(user2, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user2, address(redemptionQueue), 100e18);
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 100e18);
 
@@ -295,10 +295,10 @@ contract RedemptionQueueTest is BaseTest {
 
         // Process one
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
-        _mintUSDC(address(this), 100e6); // 100 USDC (6 decimals)
-        _approveUSDC(address(this), address(redemptionQueue), 100e6);
-        redemptionQueue.processQueue(1, address(usdc), address(okuUSD));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
+        _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
+        _approveUsdc(address(this), address(redemptionQueue), 100e6);
+        redemptionQueue.processQueue(1, address(usdc), address(okuUsd));
 
         assertEq(redemptionQueue.queueLength(), 1);
     }
@@ -316,7 +316,7 @@ contract RedemptionQueueTest is BaseTest {
      */
     function test_QueueStoresShares_YieldAccrues() public {
         uint256 amount = 100e18;
-        _approveOkuUSD(user1, address(redemptionQueue), amount);
+        _approveOkuUsd(user1, address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
@@ -328,7 +328,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Now rebase - user should earn yield
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(PRECISION * 2); // 2x rebase
+        okuUsd.updateRewardMultiplier(PRECISION * 2); // 2x rebase
 
         // The stored shares remain the same
         RedemptionQueue.QueueEntry memory entryAfterRebase = redemptionQueue.getQueueEntry(0);
@@ -340,18 +340,18 @@ contract RedemptionQueueTest is BaseTest {
 
         // Process queue and verify user receives the increased amount
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
         // Need 200 USDC (6 decimals) now to match 200 OkuUSD value
-        _mintUSDC(address(this), 200e6); // 200 USDC (6 decimals)
-        _approveUSDC(address(this), address(redemptionQueue), 200e6);
+        _mintUsdc(address(this), 200e6); // 200 USDC (6 decimals)
+        _approveUsdc(address(this), address(redemptionQueue), 200e6);
 
-        uint256 user1USDCBefore = usdc.balanceOf(user1);
+        uint256 user1UsdcBefore = usdc.balanceOf(user1);
 
-        redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(10, address(usdc), address(okuUsd));
 
         // User should receive 200 USDC (6 decimals) - earned 100% yield
-        assertEq(usdc.balanceOf(user1), user1USDCBefore + 200e6);
+        assertEq(usdc.balanceOf(user1), user1UsdcBefore + 200e6);
     }
 
     /**
@@ -359,15 +359,15 @@ contract RedemptionQueueTest is BaseTest {
      */
     function test_QueueYieldAccrual_MultipleUsers() public {
         // User1 and User2 both queue 100e18
-        _approveOkuUSD(user1, address(redemptionQueue), 100e18);
-        _approveOkuUSD(user2, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
+        _approveOkuUsd(user2, address(redemptionQueue), 100e18);
 
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 100e18);
 
         // Rebase 50%
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(PRECISION * 3 / 2); // 1.5x
+        okuUsd.updateRewardMultiplier(PRECISION * 3 / 2); // 1.5x
 
         // Both should now be worth 150e18
         assertEq(redemptionQueue.getQueueEntryValue(0), 150e18);
@@ -375,19 +375,19 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup for processing
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
-        _mintUSDC(address(this), 300e6); // 300 USDC (6 decimals)
-        _approveUSDC(address(this), address(redemptionQueue), 300e6);
+        _mintUsdc(address(this), 300e6); // 300 USDC (6 decimals)
+        _approveUsdc(address(this), address(redemptionQueue), 300e6);
 
-        uint256 user1USDCBefore = usdc.balanceOf(user1);
-        uint256 user2USDCBefore = usdc.balanceOf(user2);
+        uint256 user1UsdcBefore = usdc.balanceOf(user1);
+        uint256 user2UsdcBefore = usdc.balanceOf(user2);
 
-        redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(10, address(usdc), address(okuUsd));
 
         // Both users receive 150 USDC (6 decimals)
-        assertEq(usdc.balanceOf(user1), user1USDCBefore + 150e6);
-        assertEq(usdc.balanceOf(user2), user2USDCBefore + 150e6);
+        assertEq(usdc.balanceOf(user1), user1UsdcBefore + 150e6);
+        assertEq(usdc.balanceOf(user2), user2UsdcBefore + 150e6);
     }
 
     /**
@@ -395,7 +395,7 @@ contract RedemptionQueueTest is BaseTest {
      */
     function test_GetQueueEntryValue_ReflectsCurrentMultiplier() public {
         uint256 amount = 100e18;
-        _approveOkuUSD(user1, address(redemptionQueue), amount);
+        _approveOkuUsd(user1, address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
@@ -404,12 +404,12 @@ contract RedemptionQueueTest is BaseTest {
 
         // After 2x rebase
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(PRECISION * 2);
+        okuUsd.updateRewardMultiplier(PRECISION * 2);
         assertEq(redemptionQueue.getQueueEntryValue(0), amount * 2);
 
         // After another 1.5x rebase (total 3x)
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(PRECISION * 3);
+        okuUsd.updateRewardMultiplier(PRECISION * 3);
         assertEq(redemptionQueue.getQueueEntryValue(0), amount * 3);
     }
 
@@ -423,8 +423,8 @@ contract RedemptionQueueTest is BaseTest {
         amount = bound(amount, 1e18, 1_000_000e18);
         multiplierIncrease = bound(multiplierIncrease, 0, PRECISION * 9); // Up to 10x total
 
-        _mintOkuUSD(user1, amount);
-        _approveOkuUSD(user1, address(redemptionQueue), amount);
+        _mintOkuUsd(user1, amount);
+        _approveOkuUsd(user1, address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
@@ -435,7 +435,7 @@ contract RedemptionQueueTest is BaseTest {
         // Rebase
         uint256 newMultiplier = PRECISION + multiplierIncrease;
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(newMultiplier);
+        okuUsd.updateRewardMultiplier(newMultiplier);
 
         // Verify shares unchanged
         RedemptionQueue.QueueEntry memory entryAfter = redemptionQueue.getQueueEntry(0);
@@ -455,36 +455,36 @@ contract RedemptionQueueTest is BaseTest {
         amount = bound(amount, 1e18, 100_000e18);
         multiplierIncrease = bound(multiplierIncrease, PRECISION / 100, PRECISION * 4); // 1% to 5x
 
-        _mintOkuUSD(user1, amount);
-        _approveOkuUSD(user1, address(redemptionQueue), amount);
+        _mintOkuUsd(user1, amount);
+        _approveOkuUsd(user1, address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
         // Rebase
         uint256 newMultiplier = PRECISION + multiplierIncrease;
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(newMultiplier);
+        okuUsd.updateRewardMultiplier(newMultiplier);
 
         // Calculate expected payout (in OkuUSD - 18 decimals)
-        uint256 expectedPayoutOkuUSD = redemptionQueue.getQueueEntryValue(0);
+        uint256 expectedPayoutOkuUsd = redemptionQueue.getQueueEntryValue(0);
         // Convert to USDC (6 decimals)
-        uint256 expectedPayoutUSDC = expectedPayoutOkuUSD / DECIMAL_MULTIPLIER;
+        uint256 expectedPayoutUsdc = expectedPayoutOkuUsd / DECIMAL_MULTIPLIER;
 
         // Setup for processing
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
-        _mintUSDC(address(this), expectedPayoutUSDC);
-        _approveUSDC(address(this), address(redemptionQueue), expectedPayoutUSDC);
+        _mintUsdc(address(this), expectedPayoutUsdc);
+        _approveUsdc(address(this), address(redemptionQueue), expectedPayoutUsdc);
 
-        uint256 user1USDCBefore = usdc.balanceOf(user1);
+        uint256 user1UsdcBefore = usdc.balanceOf(user1);
 
-        redemptionQueue.processQueue(10, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(10, address(usdc), address(okuUsd));
 
         // User should receive exact expected payout (in USDC - 6 decimals)
         assertEq(
             usdc.balanceOf(user1),
-            user1USDCBefore + expectedPayoutUSDC,
+            user1UsdcBefore + expectedPayoutUsdc,
             "User should receive full yield"
         );
         assertEq(redemptionQueue.queueLength(), 0, "Queue should be empty");
@@ -504,8 +504,8 @@ contract RedemptionQueueTest is BaseTest {
         rebase1 = bound(rebase1, PRECISION / 100, PRECISION); // 1% to 100% increase
         rebase2 = bound(rebase2, PRECISION / 100, PRECISION); // 1% to 100% increase
 
-        _mintOkuUSD(user1, amount);
-        _approveOkuUSD(user1, address(redemptionQueue), amount);
+        _mintOkuUsd(user1, amount);
+        _approveOkuUsd(user1, address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
@@ -514,12 +514,12 @@ contract RedemptionQueueTest is BaseTest {
         // First rebase
         uint256 multiplier1 = PRECISION + rebase1;
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(multiplier1);
+        okuUsd.updateRewardMultiplier(multiplier1);
 
         // Second rebase
         uint256 multiplier2 = multiplier1 + rebase2;
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(multiplier2);
+        okuUsd.updateRewardMultiplier(multiplier2);
 
         // Final value should be shares * finalMultiplier / PRECISION
         uint256 expectedValue = (initialShares * multiplier2) / PRECISION;
@@ -549,9 +549,9 @@ contract RedemptionQueueTest is BaseTest {
             amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 10_000e18);
 
             // Mint and approve
-            _mintOkuUSD(users[i], amounts[i]);
+            _mintOkuUsd(users[i], amounts[i]);
             vm.prank(users[i]);
-            okuUSD.approve(address(redemptionQueue), amounts[i]);
+            okuUsd.approve(address(redemptionQueue), amounts[i]);
 
             // Enqueue
             redemptionQueue.enqueue(users[i], amounts[i]);
@@ -565,23 +565,23 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup for processing - convert OkuUSD amounts to USDC
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
-        uint256 totalNeededUSDC = totalNeeded / DECIMAL_MULTIPLIER;
-        _mintUSDC(address(this), totalNeededUSDC);
-        _approveUSDC(address(this), address(redemptionQueue), totalNeededUSDC);
+        uint256 totalNeededUsdc = totalNeeded / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), totalNeededUsdc);
+        _approveUsdc(address(this), address(redemptionQueue), totalNeededUsdc);
 
         // Process all
-        redemptionQueue.processQueue(numUsers, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(numUsers, address(usdc), address(okuUsd));
 
         // Verify all processed in order (each received their amount in USDC)
         assertEq(redemptionQueue.queueLength(), 0, "Queue should be empty");
 
         for (uint256 i = 0; i < numUsers; i++) {
-            uint256 expectedUSDC = amounts[i] / DECIMAL_MULTIPLIER;
+            uint256 expectedUsdc = amounts[i] / DECIMAL_MULTIPLIER;
             assertEq(
                 usdc.balanceOf(users[i]),
-                initialBalances[i] + expectedUSDC,
+                initialBalances[i] + expectedUsdc,
                 string(abi.encodePacked("User ", i, " should receive correct amount"))
             );
         }
@@ -610,9 +610,9 @@ contract RedemptionQueueTest is BaseTest {
             users[i] = makeAddr(string(abi.encodePacked("partialUser", i)));
             amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 5000e18);
 
-            _mintOkuUSD(users[i], amounts[i]);
+            _mintOkuUsd(users[i], amounts[i]);
             vm.prank(users[i]);
-            okuUSD.approve(address(redemptionQueue), amounts[i]);
+            okuUsd.approve(address(redemptionQueue), amounts[i]);
 
             redemptionQueue.enqueue(users[i], amounts[i]);
 
@@ -625,14 +625,14 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup - only provide enough USDC for the ones we'll process
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
-        uint256 totalForProcessedUSDC = totalForProcessed / DECIMAL_MULTIPLIER;
-        _mintUSDC(address(this), totalForProcessedUSDC);
-        _approveUSDC(address(this), address(redemptionQueue), totalForProcessedUSDC);
+        uint256 totalForProcessedUsdc = totalForProcessed / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), totalForProcessedUsdc);
+        _approveUsdc(address(this), address(redemptionQueue), totalForProcessedUsdc);
 
         // Process only numToProcess
-        redemptionQueue.processQueue(numToProcess, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(numToProcess, address(usdc), address(okuUsd));
 
         // Verify: first numToProcess users got paid, rest didn't
         assertEq(
@@ -644,10 +644,10 @@ contract RedemptionQueueTest is BaseTest {
         for (uint256 i = 0; i < numUsers; i++) {
             if (i < numToProcess) {
                 // Should have received payment (in USDC - 6 decimals)
-                uint256 expectedUSDC = amounts[i] / DECIMAL_MULTIPLIER;
+                uint256 expectedUsdc = amounts[i] / DECIMAL_MULTIPLIER;
                 assertEq(
                     usdc.balanceOf(users[i]),
-                    initialBalances[i] + expectedUSDC,
+                    initialBalances[i] + expectedUsdc,
                     "Processed user should receive payment"
                 );
             } else {
@@ -683,9 +683,9 @@ contract RedemptionQueueTest is BaseTest {
             users[i] = makeAddr(string(abi.encodePacked("rebaseUser", i)));
             amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 10_000e18);
 
-            _mintOkuUSD(users[i], amounts[i]);
+            _mintOkuUsd(users[i], amounts[i]);
             vm.prank(users[i]);
-            okuUSD.approve(address(redemptionQueue), amounts[i]);
+            okuUsd.approve(address(redemptionQueue), amounts[i]);
 
             redemptionQueue.enqueue(users[i], amounts[i]);
 
@@ -697,30 +697,30 @@ contract RedemptionQueueTest is BaseTest {
         // Rebase
         uint256 newMultiplier = PRECISION + multiplierIncrease;
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(newMultiplier);
+        okuUsd.updateRewardMultiplier(newMultiplier);
 
         // Calculate total needed after rebase
-        uint256 totalNeededOkuUSD = 0;
-        uint256[] memory expectedPayoutsOkuUSD = new uint256[](numUsers);
-        uint256[] memory expectedPayoutsUSDC = new uint256[](numUsers);
+        uint256 totalNeededOkuUsd = 0;
+        uint256[] memory expectedPayoutsOkuUsd = new uint256[](numUsers);
+        uint256[] memory expectedPayoutsUsdc = new uint256[](numUsers);
         for (uint256 i = 0; i < numUsers; i++) {
-            expectedPayoutsOkuUSD[i] = (shares[i] * newMultiplier) / PRECISION;
-            expectedPayoutsUSDC[i] = expectedPayoutsOkuUSD[i] / DECIMAL_MULTIPLIER;
-            totalNeededOkuUSD += expectedPayoutsOkuUSD[i];
+            expectedPayoutsOkuUsd[i] = (shares[i] * newMultiplier) / PRECISION;
+            expectedPayoutsUsdc[i] = expectedPayoutsOkuUsd[i] / DECIMAL_MULTIPLIER;
+            totalNeededOkuUsd += expectedPayoutsOkuUsd[i];
         }
 
         // Convert total to USDC
-        uint256 totalNeededUSDC = totalNeededOkuUSD / DECIMAL_MULTIPLIER;
+        uint256 totalNeededUsdc = totalNeededOkuUsd / DECIMAL_MULTIPLIER;
 
         // Setup for processing
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
-        _mintUSDC(address(this), totalNeededUSDC);
-        _approveUSDC(address(this), address(redemptionQueue), totalNeededUSDC);
+        _mintUsdc(address(this), totalNeededUsdc);
+        _approveUsdc(address(this), address(redemptionQueue), totalNeededUsdc);
 
         // Process all
-        redemptionQueue.processQueue(numUsers, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(numUsers, address(usdc), address(okuUsd));
 
         // Verify each user got their yield-adjusted amount in FIFO order
         assertEq(redemptionQueue.queueLength(), 0, "Queue should be empty");
@@ -728,7 +728,7 @@ contract RedemptionQueueTest is BaseTest {
         for (uint256 i = 0; i < numUsers; i++) {
             assertEq(
                 usdc.balanceOf(users[i]),
-                initialBalances[i] + expectedPayoutsUSDC[i],
+                initialBalances[i] + expectedPayoutsUsdc[i],
                 string(abi.encodePacked("User ", i, " should receive yield-adjusted amount"))
             );
         }
@@ -755,9 +755,9 @@ contract RedemptionQueueTest is BaseTest {
         for (uint256 i = 0; i < numUsers; i++) {
             users[i] = makeAddr(string(abi.encodePacked("bufferUser", i)));
 
-            _mintOkuUSD(users[i], amountPerUser);
+            _mintOkuUsd(users[i], amountPerUser);
             vm.prank(users[i]);
-            okuUSD.approve(address(redemptionQueue), amountPerUser);
+            okuUsd.approve(address(redemptionQueue), amountPerUser);
 
             redemptionQueue.enqueue(users[i], amountPerUser);
 
@@ -766,24 +766,24 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup - provide exactly enough for numToPay users
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
-        uint256 bufferAmountOkuUSD = amountPerUser * numToPay;
-        uint256 bufferAmountUSDC = bufferAmountOkuUSD / DECIMAL_MULTIPLIER;
-        uint256 amountPerUserUSDC = amountPerUser / DECIMAL_MULTIPLIER;
+        uint256 bufferAmountOkuUsd = amountPerUser * numToPay;
+        uint256 bufferAmountUsdc = bufferAmountOkuUsd / DECIMAL_MULTIPLIER;
+        uint256 amountPerUserUsdc = amountPerUser / DECIMAL_MULTIPLIER;
 
-        _mintUSDC(address(this), bufferAmountUSDC);
-        _approveUSDC(address(this), address(redemptionQueue), bufferAmountUSDC);
+        _mintUsdc(address(this), bufferAmountUsdc);
+        _approveUsdc(address(this), address(redemptionQueue), bufferAmountUsdc);
 
         // Try to process all - will stop after numToPay
-        redemptionQueue.processQueue(numUsers, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(numUsers, address(usdc), address(okuUsd));
 
         // Verify: first numToPay users got paid, rest didn't (FIFO)
         for (uint256 i = 0; i < numUsers; i++) {
             if (i < numToPay) {
                 assertEq(
                     usdc.balanceOf(users[i]),
-                    initialBalances[i] + amountPerUserUSDC,
+                    initialBalances[i] + amountPerUserUsdc,
                     "User within buffer should be paid"
                 );
             } else {
@@ -825,9 +825,9 @@ contract RedemptionQueueTest is BaseTest {
             // Use smaller amounts to ensure some always fit
             amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 100e18, 500e18);
 
-            _mintOkuUSD(users[i], amounts[i]);
+            _mintOkuUsd(users[i], amounts[i]);
             vm.prank(users[i]);
-            okuUSD.approve(address(redemptionQueue), amounts[i]);
+            okuUsd.approve(address(redemptionQueue), amounts[i]);
 
             redemptionQueue.enqueue(users[i], amounts[i]);
 
@@ -837,23 +837,23 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup - provide enough for roughly half
         vm.prank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(redemptionQueue));
+        okuUsd.grantRole(MINTER_ROLE, address(redemptionQueue));
 
         // Convert to USDC amount inline
-        uint256 bufferUSDC = (totalQueued / 2) / DECIMAL_MULTIPLIER;
+        uint256 bufferUsdc = (totalQueued / 2) / DECIMAL_MULTIPLIER;
 
-        _mintUSDC(address(this), bufferUSDC);
-        _approveUSDC(address(this), address(redemptionQueue), bufferUSDC);
+        _mintUsdc(address(this), bufferUsdc);
+        _approveUsdc(address(this), address(redemptionQueue), bufferUsdc);
 
         uint256 queueLengthBefore = redemptionQueue.queueLength();
 
         // Process
-        redemptionQueue.processQueue(numUsers, address(usdc), address(okuUSD));
+        redemptionQueue.processQueue(numUsers, address(usdc), address(okuUsd));
 
         uint256 processed = queueLengthBefore - redemptionQueue.queueLength();
 
         // Verify FIFO: simulate what should have happened
-        uint256 simBuffer = bufferUSDC;
+        uint256 simBuffer = bufferUsdc;
         uint256 expectedProcessed = 0;
         for (uint256 i = 0; i < numUsers; i++) {
             uint256 usdcAmount = amounts[i] / DECIMAL_MULTIPLIER;

@@ -27,8 +27,8 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 contract NttAdapter is Ownable {
     using SafeERC20 for IERC20;
 
-    INttManager public immutable nttManager;
-    address public immutable token;
+    INttManager public immutable NTT_MANAGER;
+    address public immutable TOKEN;
 
     // Mapping from EVM chain ID to Wormhole chain ID
     mapping(uint256 => uint16) public wormholeChainId;
@@ -48,8 +48,8 @@ contract NttAdapter is Ownable {
     error InvalidAmount();
 
     constructor(address _nttManager, address _token, address _owner) Ownable(_owner) {
-        nttManager = INttManager(_nttManager);
-        token = _token;
+        NTT_MANAGER = INttManager(_nttManager);
+        TOKEN = _token;
 
         // Pre-configure common chain mappings
         // See: https://docs.wormhole.com/wormhole/reference/constants
@@ -79,7 +79,7 @@ contract NttAdapter is Ownable {
         external
         payable
     {
-        require(_token == token, "Invalid token");
+        require(_token == TOKEN, "Invalid token");
         if (amount == 0) revert InvalidAmount();
         if (recipient == address(0)) revert InvalidRecipient();
 
@@ -93,7 +93,7 @@ contract NttAdapter is Ownable {
         // Note: Tokens already burned by router - this is message-only
         // Forwards any ETH for Wormhole message fees
         uint64 sequence =
-            nttManager.transfer{value: msg.value}(amount, wormholeDestChain, recipientBytes32);
+            NTT_MANAGER.transfer{value: msg.value}(amount, wormholeDestChain, recipientBytes32);
 
         emit BridgeInitiated(msg.sender, amount, wormholeDestChain, recipientBytes32, sequence);
     }
@@ -111,7 +111,7 @@ contract NttAdapter is Ownable {
     /**
      * @notice Withdraw stuck ETH (from failed bridge attempts)
      */
-    function withdrawETH(address payable to) external onlyOwner {
+    function withdrawEth(address payable to) external onlyOwner {
         (bool success,) = to.call{value: address(this).balance}("");
         require(success, "ETH transfer failed");
     }

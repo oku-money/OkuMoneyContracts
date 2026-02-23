@@ -60,23 +60,23 @@ contract NttBridgeTest is BaseTest {
     function setUp() public override {
         super.setUp();
 
-        // Deploy MockNttManager (okuUSD address, minter address)
-        mockNtt = new MockNttManager(address(okuUSD), minter);
+        // Deploy MockNttManager (okuUsd address, minter address)
+        mockNtt = new MockNttManager(address(okuUsd), minter);
 
         // Deploy NttAdapter
-        nttAdapter = new NttAdapter(address(mockNtt), address(okuUSD), admin);
+        nttAdapter = new NttAdapter(address(mockNtt), address(okuUsd), admin);
 
         // Deploy OkuBridgeRouter
         bridgeRouterImpl = new OkuBridgeRouter();
         bytes memory routerInitData =
-            abi.encodeCall(OkuBridgeRouter.initialize, (address(wokuUSD), address(okuUSD), admin));
+            abi.encodeCall(OkuBridgeRouter.initialize, (address(wokuUsd), address(okuUsd), admin));
         bridgeRouter =
             OkuBridgeRouter(address(new ERC1967Proxy(address(bridgeRouterImpl), routerInitData)));
 
         // Configure roles
         vm.startPrank(admin);
         // Router needs MINTER_ROLE to burn tokens
-        okuUSD.grantRole(MINTER_ROLE, address(bridgeRouter));
+        okuUsd.grantRole(MINTER_ROLE, address(bridgeRouter));
         // Grant ADAPTER_MANAGER_ROLE to admin
         bridgeRouter.grantRole(ADAPTER_MANAGER_ROLE, admin);
         // Grant ROUTER_UNPAUSER_ROLE to admin
@@ -88,16 +88,16 @@ contract NttBridgeTest is BaseTest {
 
     // ============ Helper Functions ============
 
-    function _wrapOkuUSD(address user, uint256 amount) internal returns (uint256 shares) {
+    function _wrapOkuUsd(address user, uint256 amount) internal returns (uint256 shares) {
         vm.startPrank(user);
-        okuUSD.approve(address(wokuUSD), amount);
-        shares = wokuUSD.deposit(amount, user);
+        okuUsd.approve(address(wokuUsd), amount);
+        shares = wokuUsd.deposit(amount, user);
         vm.stopPrank();
     }
 
     function _mintAndWrap(address user, uint256 okuAmount) internal returns (uint256 wokuShares) {
-        _mintOkuUSD(user, okuAmount);
-        wokuShares = _wrapOkuUSD(user, okuAmount);
+        _mintOkuUsd(user, okuAmount);
+        wokuShares = _wrapOkuUsd(user, okuAmount);
     }
 
     function _addressToBytes32(address addr) internal pure returns (bytes32) {
@@ -111,8 +111,8 @@ contract NttBridgeTest is BaseTest {
     // ============ NttAdapter Unit Tests ============
 
     function test_NttAdapter_Initialize() public view {
-        assertEq(address(nttAdapter.nttManager()), address(mockNtt));
-        assertEq(address(nttAdapter.token()), address(okuUSD));
+        assertEq(address(nttAdapter.NTT_MANAGER()), address(mockNtt));
+        assertEq(address(nttAdapter.TOKEN()), address(okuUsd));
         assertEq(nttAdapter.owner(), admin);
     }
 
@@ -148,7 +148,7 @@ contract NttBridgeTest is BaseTest {
         vm.prank(user1);
         vm.expectEmit(true, false, false, true, address(nttAdapter));
         emit BridgeInitiated(user1, amount, WORMHOLE_ARBITRUM, _addressToBytes32(user2), 0);
-        nttAdapter.bridge(address(okuUSD), amount, ARBITRUM_CHAIN_ID, user2);
+        nttAdapter.bridge(address(okuUsd), amount, ARBITRUM_CHAIN_ID, user2);
 
         // Verify transfer recorded in mock
         MockNttManager.PendingTransfer memory pending = mockNtt.getLastTransfer();
@@ -162,7 +162,7 @@ contract NttBridgeTest is BaseTest {
         // No tokens needed - adapter just sends message
 
         vm.expectRevert(abi.encodeWithSelector(NttAdapter.UnsupportedChain.selector, 12_345));
-        nttAdapter.bridge(address(okuUSD), amount, 12_345, user2);
+        nttAdapter.bridge(address(okuUsd), amount, 12_345, user2);
     }
 
     function test_NttAdapter_Bridge_RevertInvalidRecipient() public {
@@ -170,7 +170,7 @@ contract NttBridgeTest is BaseTest {
         // No tokens needed - adapter just sends message
 
         vm.expectRevert(NttAdapter.InvalidRecipient.selector);
-        nttAdapter.bridge(address(okuUSD), amount, ARBITRUM_CHAIN_ID, address(0));
+        nttAdapter.bridge(address(okuUsd), amount, ARBITRUM_CHAIN_ID, address(0));
     }
 
     function test_NttAdapter_Bridge_WithFee() public {
@@ -181,7 +181,7 @@ contract NttBridgeTest is BaseTest {
 
         // Bridge with fee
         vm.deal(address(this), fee);
-        nttAdapter.bridge{value: fee}(address(okuUSD), amount, ARBITRUM_CHAIN_ID, user2);
+        nttAdapter.bridge{value: fee}(address(okuUsd), amount, ARBITRUM_CHAIN_ID, user2);
 
         // Verify transfer succeeded
         assertEq(mockNtt.pendingTransfersCount(), 1);
@@ -198,7 +198,7 @@ contract NttBridgeTest is BaseTest {
         vm.expectRevert(
             abi.encodeWithSelector(MockNttManager.InsufficientFee.selector, fee, fee / 2)
         );
-        nttAdapter.bridge{value: fee / 2}(address(okuUSD), amount, ARBITRUM_CHAIN_ID, user2);
+        nttAdapter.bridge{value: fee / 2}(address(okuUsd), amount, ARBITRUM_CHAIN_ID, user2);
     }
 
     // ============ MockNttManager Tests ============
@@ -238,7 +238,7 @@ contract NttBridgeTest is BaseTest {
         mockNtt.completeBridge(0);
 
         // Verify recipient received tokens
-        assertEq(okuUSD.balanceOf(user2), amount);
+        assertEq(okuUsd.balanceOf(user2), amount);
 
         // Verify marked as completed
         MockNttManager.PendingTransfer memory pending = mockNtt.getPendingTransfer(0);
@@ -275,15 +275,15 @@ contract NttBridgeTest is BaseTest {
 
     function test_Integration_BridgeOkuUSD_ViaNtt() public {
         uint256 amount = 1000e18;
-        _mintOkuUSD(user1, amount);
+        _mintOkuUsd(user1, amount);
 
         vm.startPrank(user1);
-        okuUSD.approve(address(bridgeRouter), amount);
+        okuUsd.approve(address(bridgeRouter), amount);
         bridgeRouter.bridgeDirect(amount, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
         // Verify tokens burned from user
-        assertEq(okuUSD.balanceOf(user1), 0);
+        assertEq(okuUsd.balanceOf(user1), 0);
 
         // Verify transfer recorded in NTT
         MockNttManager.PendingTransfer memory pending = mockNtt.getLastTransfer();
@@ -297,12 +297,12 @@ contract NttBridgeTest is BaseTest {
         uint256 wokuShares = _mintAndWrap(user1, okuAmount);
 
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), wokuShares);
+        wokuUsd.approve(address(bridgeRouter), wokuShares);
         bridgeRouter.bridgeWrapped(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
         // Verify wOkuUSD burned
-        assertEq(wokuUSD.balanceOf(user1), 0);
+        assertEq(wokuUsd.balanceOf(user1), 0);
 
         // Verify correct OkuUSD amount recorded
         MockNttManager.PendingTransfer memory pending = mockNtt.getLastTransfer();
@@ -313,12 +313,12 @@ contract NttBridgeTest is BaseTest {
         uint256 initialOku = 1000e18;
 
         // Step 1: Mint and wrap
-        _mintOkuUSD(user1, initialOku);
-        uint256 wokuShares = _wrapOkuUSD(user1, initialOku);
+        _mintOkuUsd(user1, initialOku);
+        uint256 wokuShares = _wrapOkuUsd(user1, initialOku);
 
         // Step 2: Bridge wOkuUSD via NTT
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), wokuShares);
+        wokuUsd.approve(address(bridgeRouter), wokuShares);
         bridgeRouter.bridgeWrapped(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
@@ -326,10 +326,10 @@ contract NttBridgeTest is BaseTest {
         mockNtt.completeBridge(0);
 
         // Step 4: Verify user2 received tokens
-        assertEq(okuUSD.balanceOf(user2), initialOku);
+        assertEq(okuUsd.balanceOf(user2), initialOku);
 
         // Step 5: User2 wraps tokens on destination
-        uint256 user2Shares = _wrapOkuUSD(user2, initialOku);
+        uint256 user2Shares = _wrapOkuUsd(user2, initialOku);
         assertEq(user2Shares, wokuShares);
     }
 
@@ -337,20 +337,20 @@ contract NttBridgeTest is BaseTest {
         uint256 initialOku = 1000e18;
 
         // Step 1: Mint and wrap
-        _mintOkuUSD(user1, initialOku);
-        uint256 wokuShares = _wrapOkuUSD(user1, initialOku);
+        _mintOkuUsd(user1, initialOku);
+        uint256 wokuShares = _wrapOkuUsd(user1, initialOku);
 
         // Step 2: Rebase
         uint256 newMultiplier = PRECISION * 12 / 10; // 20% increase
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(newMultiplier);
+        okuUsd.updateRewardMultiplier(newMultiplier);
 
-        uint256 okuValueAfterRebase = wokuUSD.previewRedeem(wokuShares);
+        uint256 okuValueAfterRebase = wokuUsd.previewRedeem(wokuShares);
         assertGt(okuValueAfterRebase, initialOku);
 
         // Step 3: Bridge
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), wokuShares);
+        wokuUsd.approve(address(bridgeRouter), wokuShares);
         bridgeRouter.bridgeWrapped(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
@@ -362,7 +362,7 @@ contract NttBridgeTest is BaseTest {
         mockNtt.completeBridge(0);
 
         // User2 gets the rebased amount (allow 1 wei rounding)
-        assertApproxEqAbs(okuUSD.balanceOf(user2), okuValueAfterRebase, 1);
+        assertApproxEqAbs(okuUsd.balanceOf(user2), okuValueAfterRebase, 1);
     }
 
     function test_Integration_MultipleChains() public {
@@ -374,10 +374,10 @@ contract NttBridgeTest is BaseTest {
         address dest2 = makeAddr("dest2");
         address dest3 = makeAddr("dest3");
 
-        _mintOkuUSD(user1, amount1 + amount2 + amount3);
+        _mintOkuUsd(user1, amount1 + amount2 + amount3);
 
         vm.startPrank(user1);
-        okuUSD.approve(address(bridgeRouter), amount1 + amount2 + amount3);
+        okuUsd.approve(address(bridgeRouter), amount1 + amount2 + amount3);
 
         bridgeRouter.bridgeDirect(amount1, address(nttAdapter), ARBITRUM_CHAIN_ID, dest1);
         bridgeRouter.bridgeDirect(amount2, address(nttAdapter), OPTIMISM_CHAIN_ID, dest2);
@@ -400,9 +400,9 @@ contract NttBridgeTest is BaseTest {
         mockNtt.completeBridge(1);
         mockNtt.completeBridge(2);
 
-        assertEq(okuUSD.balanceOf(dest1), amount1);
-        assertEq(okuUSD.balanceOf(dest2), amount2);
-        assertEq(okuUSD.balanceOf(dest3), amount3);
+        assertEq(okuUsd.balanceOf(dest1), amount1);
+        assertEq(okuUsd.balanceOf(dest2), amount2);
+        assertEq(okuUsd.balanceOf(dest3), amount3);
     }
 
     // ============ Fuzz Tests ============
@@ -440,10 +440,10 @@ contract NttBridgeTest is BaseTest {
         chains[2] = BASE_CHAIN_ID;
         uint256 selectedChain = chains[chainSelector % 3];
 
-        _mintOkuUSD(user1, amount);
+        _mintOkuUsd(user1, amount);
 
         vm.startPrank(user1);
-        okuUSD.approve(address(bridgeRouter), amount);
+        okuUsd.approve(address(bridgeRouter), amount);
         bridgeRouter.bridgeDirect(amount, address(nttAdapter), selectedChain, user2);
         vm.stopPrank();
 
@@ -463,20 +463,20 @@ contract NttBridgeTest is BaseTest {
         multiplierIncrease = _boundMultiplierIncrease(multiplierIncrease);
 
         // Wrap tokens
-        _mintOkuUSD(user1, depositAmount);
-        uint256 wokuShares = _wrapOkuUSD(user1, depositAmount);
+        _mintOkuUsd(user1, depositAmount);
+        uint256 wokuShares = _wrapOkuUsd(user1, depositAmount);
 
         // Apply rebase
-        uint256 newMultiplier = okuUSD.rewardMultiplier() + multiplierIncrease;
+        uint256 newMultiplier = okuUsd.rewardMultiplier() + multiplierIncrease;
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(newMultiplier);
+        okuUsd.updateRewardMultiplier(newMultiplier);
 
         // Calculate expected value
-        uint256 expectedOkuAmount = wokuUSD.previewRedeem(wokuShares);
+        uint256 expectedOkuAmount = wokuUsd.previewRedeem(wokuShares);
 
         // Bridge
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), wokuShares);
+        wokuUsd.approve(address(bridgeRouter), wokuShares);
         bridgeRouter.bridgeWrapped(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
@@ -496,19 +496,19 @@ contract NttBridgeTest is BaseTest {
         multiplierIncrease = _boundMultiplierIncrease(multiplierIncrease);
 
         // Step 1: Wrap
-        _mintOkuUSD(user1, initialOku);
-        uint256 wokuShares = _wrapOkuUSD(user1, initialOku);
+        _mintOkuUsd(user1, initialOku);
+        uint256 wokuShares = _wrapOkuUsd(user1, initialOku);
 
         // Step 2: Rebase
-        uint256 newMultiplier = okuUSD.rewardMultiplier() + multiplierIncrease;
+        uint256 newMultiplier = okuUsd.rewardMultiplier() + multiplierIncrease;
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(newMultiplier);
+        okuUsd.updateRewardMultiplier(newMultiplier);
 
-        uint256 valueBeforeBridge = wokuUSD.previewRedeem(wokuShares);
+        uint256 valueBeforeBridge = wokuUsd.previewRedeem(wokuShares);
 
         // Step 3: Bridge via NTT
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), wokuShares);
+        wokuUsd.approve(address(bridgeRouter), wokuShares);
         bridgeRouter.bridgeWrapped(wokuShares, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
@@ -516,14 +516,14 @@ contract NttBridgeTest is BaseTest {
         mockNtt.completeBridge(0);
 
         // Verify destination received expected amount (allow 2 wei rounding)
-        uint256 destBalance = okuUSD.balanceOf(user2);
+        uint256 destBalance = okuUsd.balanceOf(user2);
         assertApproxEqAbs(destBalance, valueBeforeBridge, 2);
 
         // Step 5: Wrap on destination
-        uint256 destWokuShares = _wrapOkuUSD(user2, destBalance);
+        uint256 destWokuShares = _wrapOkuUsd(user2, destBalance);
 
         // Verify value preserved (allow up to 5 wei rounding from multiple conversions)
-        uint256 destValue = wokuUSD.previewRedeem(destWokuShares);
+        uint256 destValue = wokuUsd.previewRedeem(destWokuShares);
         assertApproxEqAbs(destValue, valueBeforeBridge, 5);
     }
 
@@ -543,7 +543,7 @@ contract NttBridgeTest is BaseTest {
             uint256 shares = _mintAndWrap(users[i], amounts[i]);
 
             vm.startPrank(users[i]);
-            wokuUSD.approve(address(bridgeRouter), shares);
+            wokuUsd.approve(address(bridgeRouter), shares);
             bridgeRouter.bridgeWrapped(
                 shares, address(nttAdapter), ARBITRUM_CHAIN_ID, destinations[i]
             );
@@ -556,7 +556,7 @@ contract NttBridgeTest is BaseTest {
         // Complete all
         for (uint256 i = 0; i < numBridges; i++) {
             mockNtt.completeBridge(i);
-            assertEq(okuUSD.balanceOf(destinations[i]), amounts[i]);
+            assertEq(okuUsd.balanceOf(destinations[i]), amounts[i]);
         }
     }
 
@@ -565,14 +565,15 @@ contract NttBridgeTest is BaseTest {
 
         for (uint256 i = 0; i < numTransfers; i++) {
             address sender = makeAddr(string(abi.encodePacked("sender", i)));
-            _mintOkuUSD(sender, 100e18);
+            _mintOkuUsd(sender, 100e18);
 
             vm.startPrank(sender);
-            okuUSD.approve(address(mockNtt), 100e18);
+            okuUsd.approve(address(mockNtt), 100e18);
             uint64 sequence = mockNtt.transfer(100e18, WORMHOLE_ARBITRUM, _addressToBytes32(user2));
             vm.stopPrank();
 
             // Sequence should increment
+            // forge-lint: disable-next-line(unsafe-typecast)
             assertEq(sequence, uint64(i));
         }
 
@@ -583,12 +584,12 @@ contract NttBridgeTest is BaseTest {
 
     function test_NttAdapter_ZeroAmount() public {
         vm.expectRevert(NttAdapter.InvalidAmount.selector);
-        nttAdapter.bridge(address(okuUSD), 0, ARBITRUM_CHAIN_ID, user2);
+        nttAdapter.bridge(address(okuUsd), 0, ARBITRUM_CHAIN_ID, user2);
     }
 
     function test_NttAdapter_WrongToken() public {
         vm.expectRevert("Invalid token");
-        nttAdapter.bridge(address(wokuUSD), 100e18, ARBITRUM_CHAIN_ID, user2);
+        nttAdapter.bridge(address(wokuUsd), 100e18, ARBITRUM_CHAIN_ID, user2);
     }
 
     function test_MockNtt_InvalidIndex() public {
@@ -606,8 +607,8 @@ contract NttBridgeTest is BaseTest {
         address override_ = makeAddr("override");
         mockNtt.completeBridgeTo(0, override_);
 
-        assertEq(okuUSD.balanceOf(override_), amount);
-        assertEq(okuUSD.balanceOf(user2), 0);
+        assertEq(okuUsd.balanceOf(override_), amount);
+        assertEq(okuUsd.balanceOf(user2), 0);
     }
 
     function test_NttAdapter_WithdrawStuckETH() public {
@@ -618,7 +619,7 @@ contract NttBridgeTest is BaseTest {
         uint256 balanceBefore = recipient.balance;
 
         vm.prank(admin);
-        nttAdapter.withdrawETH(recipient);
+        nttAdapter.withdrawEth(recipient);
 
         assertEq(recipient.balance, balanceBefore + 1 ether);
         assertEq(address(nttAdapter).balance, 0);
@@ -627,14 +628,14 @@ contract NttBridgeTest is BaseTest {
     function test_NttAdapter_WithdrawStuckTokens() public {
         uint256 amount = 1000e18;
         // Simulate stuck tokens (could happen from failed operations or other issues)
-        _mintOkuUSD(address(nttAdapter), amount);
+        _mintOkuUsd(address(nttAdapter), amount);
 
         address recipient = makeAddr("tokenRecipient");
 
         vm.prank(admin);
-        nttAdapter.withdrawTokens(address(okuUSD), recipient, amount);
+        nttAdapter.withdrawTokens(address(okuUsd), recipient, amount);
 
-        assertEq(okuUSD.balanceOf(recipient), amount);
-        assertEq(okuUSD.balanceOf(address(nttAdapter)), 0);
+        assertEq(okuUsd.balanceOf(recipient), amount);
+        assertEq(okuUsd.balanceOf(address(nttAdapter)), 0);
     }
 }

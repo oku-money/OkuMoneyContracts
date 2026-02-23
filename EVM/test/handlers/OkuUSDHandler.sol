@@ -9,7 +9,7 @@ import {OkuUSD} from "../../src/token/OkuUSD.sol";
  * @notice Handler contract for OkuUSD invariant testing
  */
 contract OkuUSDHandler is Test {
-    OkuUSD public okuUSD;
+    OkuUSD public okuUsd;
     address public minter;
     address public rebaser;
     address public allowanceManager;
@@ -24,27 +24,27 @@ contract OkuUSDHandler is Test {
     uint256 public constant PRECISION = 1e18;
 
     // Ghost variables for tracking
-    uint256 public ghost_mintedTotal;
-    uint256 public ghost_burnedTotal;
-    bool public ghost_lastWasRebase;
+    uint256 public ghostMintedTotal;
+    uint256 public ghostBurnedTotal;
+    bool public ghostLastWasRebase;
 
     // Ghost call/revert counters
-    uint256 public ghost_mintCallCount;
-    uint256 public ghost_mintRevertCount;
-    uint256 public ghost_burnCallCount;
-    uint256 public ghost_burnRevertCount;
-    uint256 public ghost_transferCallCount;
-    uint256 public ghost_transferRevertCount;
-    uint256 public ghost_rebaseCallCount;
-    uint256 public ghost_rebaseRevertCount;
-    uint256 public ghost_resetCallCount;
-    uint256 public ghost_resetRevertCount;
+    uint256 public ghostMintCallCount;
+    uint256 public ghostMintRevertCount;
+    uint256 public ghostBurnCallCount;
+    uint256 public ghostBurnRevertCount;
+    uint256 public ghostTransferCallCount;
+    uint256 public ghostTransferRevertCount;
+    uint256 public ghostRebaseCallCount;
+    uint256 public ghostRebaseRevertCount;
+    uint256 public ghostResetCallCount;
+    uint256 public ghostResetRevertCount;
 
     // Monotonic multiplier tracking
-    uint256 public ghost_lastMultiplier;
+    uint256 public ghostLastMultiplier;
 
-    constructor(OkuUSD _okuUSD, address _minter, address _rebaser, address _allowanceManager) {
-        okuUSD = _okuUSD;
+    constructor(OkuUSD _okuUsd, address _minter, address _rebaser, address _allowanceManager) {
+        okuUsd = _okuUsd;
         minter = _minter;
         rebaser = _rebaser;
         allowanceManager = _allowanceManager;
@@ -54,8 +54,8 @@ contract OkuUSDHandler is Test {
         _addActor(makeAddr("actor2"));
         _addActor(makeAddr("actor3"));
 
-        lastAllowance[minter] = okuUSD.minterAllowance(minter);
-        ghost_lastMultiplier = okuUSD.rewardMultiplier();
+        lastAllowance[minter] = okuUsd.minterAllowance(minter);
+        ghostLastMultiplier = okuUsd.rewardMultiplier();
     }
 
     function _addActor(address actor) internal {
@@ -74,73 +74,73 @@ contract OkuUSDHandler is Test {
 
     /// @notice Mint tokens to a random actor
     function mint(uint256 actorSeed, uint256 amount) external {
-        ghost_lastWasRebase = false;
-        ghost_mintCallCount++;
+        ghostLastWasRebase = false;
+        ghostMintCallCount++;
 
         address actor = actors[actorSeed % actors.length];
         amount = bound(amount, 1, MAX_SUPPLY / 100);
 
-        uint256 allowance = okuUSD.minterAllowance(minter);
-        uint256 remaining = okuUSD.maxSupply() - okuUSD.totalSupply();
+        uint256 allowance = okuUsd.minterAllowance(minter);
+        uint256 remaining = okuUsd.maxSupply() - okuUsd.totalSupply();
         amount = bound(amount, 0, _min(allowance, remaining));
 
         if (amount == 0) return;
 
         vm.prank(minter);
-        try okuUSD.mint(actor, amount) {
-            ghost_mintedTotal += amount;
-            lastAllowance[minter] = okuUSD.minterAllowance(minter);
+        try okuUsd.mint(actor, amount) {
+            ghostMintedTotal += amount;
+            lastAllowance[minter] = okuUsd.minterAllowance(minter);
         } catch {
-            ghost_mintRevertCount++;
+            ghostMintRevertCount++;
         }
     }
 
     /// @notice Burn tokens from a random actor
     function burn(uint256 actorSeed, uint256 amount) external {
-        ghost_lastWasRebase = false;
-        ghost_burnCallCount++;
+        ghostLastWasRebase = false;
+        ghostBurnCallCount++;
 
         address actor = actors[actorSeed % actors.length];
-        uint256 balance = okuUSD.balanceOf(actor);
+        uint256 balance = okuUsd.balanceOf(actor);
         amount = bound(amount, 0, balance);
 
         if (amount == 0) return;
 
         vm.prank(minter);
-        try okuUSD.burn(actor, amount) {
-            ghost_burnedTotal += amount;
+        try okuUsd.burn(actor, amount) {
+            ghostBurnedTotal += amount;
         } catch {
-            ghost_burnRevertCount++;
+            ghostBurnRevertCount++;
         }
     }
 
     /// @notice Transfer between random actors
     function transfer(uint256 fromSeed, uint256 toSeed, uint256 amount) external {
-        ghost_lastWasRebase = false;
-        ghost_transferCallCount++;
+        ghostLastWasRebase = false;
+        ghostTransferCallCount++;
 
         address from = actors[fromSeed % actors.length];
         address to = actors[toSeed % actors.length];
-        uint256 balance = okuUSD.balanceOf(from);
+        uint256 balance = okuUsd.balanceOf(from);
         amount = bound(amount, 0, balance);
 
         if (amount == 0 || from == to) return;
 
         vm.prank(from);
-        try okuUSD.transfer(to, amount) {} catch {
-            ghost_transferRevertCount++;
+        try okuUsd.transfer(to, amount) {} catch {
+            ghostTransferRevertCount++;
         }
     }
 
     /// @notice Update reward multiplier (rebase)
     function rebase(uint256 multiplierIncrease) external {
-        ghost_rebaseCallCount++;
-        uint256 currentMultiplier = okuUSD.rewardMultiplier();
+        ghostRebaseCallCount++;
+        uint256 currentMultiplier = okuUsd.rewardMultiplier();
 
         // Cap maximum multiplier at 1e24 (1 million x starting value)
-        uint256 MAX_MULTIPLIER = 1e24;
+        uint256 maxMultiplier = 1e24;
 
-        if (currentMultiplier >= MAX_MULTIPLIER) {
+        if (currentMultiplier >= maxMultiplier) {
             return; // Already at maximum, skip further rebases
         }
 
@@ -152,30 +152,30 @@ contract OkuUSDHandler is Test {
         uint256 newMultiplier = currentMultiplier + increase;
 
         // Ensure we don't exceed the cap
-        if (newMultiplier > MAX_MULTIPLIER) {
-            newMultiplier = MAX_MULTIPLIER;
+        if (newMultiplier > maxMultiplier) {
+            newMultiplier = maxMultiplier;
         }
 
         vm.prank(rebaser);
-        try okuUSD.updateRewardMultiplier(newMultiplier) {
-            ghost_lastWasRebase = true;
-            ghost_lastMultiplier = newMultiplier;
+        try okuUsd.updateRewardMultiplier(newMultiplier) {
+            ghostLastWasRebase = true;
+            ghostLastMultiplier = newMultiplier;
         } catch {
-            ghost_rebaseRevertCount++;
+            ghostRebaseRevertCount++;
         }
     }
 
     /// @notice Reset minter allowance (simulates allowance manager action)
     function resetAllowance(uint256 newAllowance) external {
-        ghost_resetCallCount++;
+        ghostResetCallCount++;
         newAllowance = bound(newAllowance, 0, MAX_SUPPLY);
 
         vm.prank(allowanceManager);
-        try okuUSD.configureMinterAllowance(minter, newAllowance) {
+        try okuUsd.configureMinterAllowance(minter, newAllowance) {
             allowanceWasReset = true;
             lastAllowance[minter] = newAllowance;
         } catch {
-            ghost_resetRevertCount++;
+            ghostResetRevertCount++;
         }
     }
 
@@ -190,21 +190,21 @@ contract OkuUSDHandler is Test {
     }
 
     function wasLastOperationRebase() external view returns (bool) {
-        return ghost_lastWasRebase;
+        return ghostLastWasRebase;
     }
 
     function wasAllowanceReset() external view returns (bool) {
         return allowanceWasReset;
     }
 
-    function ghost_totalCalls() external view returns (uint256) {
-        return ghost_mintCallCount + ghost_burnCallCount + ghost_transferCallCount
-            + ghost_rebaseCallCount + ghost_resetCallCount;
+    function ghostTotalCalls() external view returns (uint256) {
+        return ghostMintCallCount + ghostBurnCallCount + ghostTransferCallCount
+            + ghostRebaseCallCount + ghostResetCallCount;
     }
 
-    function ghost_totalReverts() external view returns (uint256) {
-        return ghost_mintRevertCount + ghost_burnRevertCount + ghost_transferRevertCount
-            + ghost_rebaseRevertCount + ghost_resetRevertCount;
+    function ghostTotalReverts() external view returns (uint256) {
+        return ghostMintRevertCount + ghostBurnRevertCount + ghostTransferRevertCount
+            + ghostRebaseRevertCount + ghostResetRevertCount;
     }
 
     // ============ Helper Functions ============

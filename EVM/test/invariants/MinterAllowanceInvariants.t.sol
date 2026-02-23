@@ -14,16 +14,16 @@ contract MinterAllowanceInvariantsTest is BaseTest {
 
     function setUp() public override {
         super.setUp();
-        handler = new OkuUSDHandler(okuUSD, minter, rebaser, allowanceManager);
+        handler = new OkuUSDHandler(okuUsd, minter, rebaser, allowanceManager);
 
         // Record initial allowance
-        initialAllowance = okuUSD.minterAllowance(minter);
+        initialAllowance = okuUsd.minterAllowance(minter);
 
         targetContract(address(handler));
 
-        excludeContract(address(okuUSD));
-        excludeContract(address(wokuUSD));
-        excludeContract(address(litePSM));
+        excludeContract(address(okuUsd));
+        excludeContract(address(wokuUsd));
+        excludeContract(address(litePsm));
         excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));
         excludeContract(address(oracle));
@@ -38,7 +38,7 @@ contract MinterAllowanceInvariantsTest is BaseTest {
      * allowance should only decrease or stay the same.
      */
     function invariant_AllowanceMonotonicDecrease() public view {
-        uint256 currentAllowance = okuUSD.minterAllowance(minter);
+        uint256 currentAllowance = okuUsd.minterAllowance(minter);
 
         if (!handler.wasAllowanceReset()) {
             // No admin reset occurred, allowance should only decrease
@@ -53,8 +53,8 @@ contract MinterAllowanceInvariantsTest is BaseTest {
      *      The mint total should always be >= (initial allowance - current allowance)
      */
     function invariant_BurnDoesNotRestoreAllowance() public view {
-        uint256 currentAllowance = okuUSD.minterAllowance(minter);
-        uint256 mintedTotal = handler.ghost_mintedTotal();
+        uint256 currentAllowance = okuUsd.minterAllowance(minter);
+        uint256 mintedTotal = handler.ghostMintedTotal();
 
         if (!handler.wasAllowanceReset()) {
             // Allowance consumed should equal or exceed minted total
@@ -75,9 +75,9 @@ contract MinterAllowanceInvariantsTest is BaseTest {
      * @notice Minter allowance is bounded by maxSupply
      */
     function invariant_AllowanceBounded() public view {
-        uint256 allowance = okuUSD.minterAllowance(minter);
+        uint256 allowance = okuUsd.minterAllowance(minter);
 
         // Allowance should never exceed maxSupply (handler bounds resets to [0, MAX_SUPPLY])
-        assertLe(allowance, okuUSD.maxSupply(), "Allowance exceeds maxSupply");
+        assertLe(allowance, okuUsd.maxSupply(), "Allowance exceeds maxSupply");
     }
 }

@@ -60,33 +60,33 @@ abstract contract BaseTest is Test {
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
 
     // OkuUSD roles
-    bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
-    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
-    bytes32 public constant UNPAUSER_ROLE = keccak256("UNPAUSER_ROLE");
-    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
-    bytes32 public constant REBASER_ROLE = keccak256("REBASER_ROLE");
-    bytes32 public constant BLACKLISTER_ROLE = keccak256("BLACKLISTER_ROLE");
-    bytes32 public constant UNBLACKLISTER_ROLE = keccak256("UNBLACKLISTER_ROLE");
-    bytes32 public constant CAP_MANAGER_ROLE = keccak256("CAP_MANAGER_ROLE");
-    bytes32 public constant ALLOWANCE_MANAGER_ROLE = keccak256("ALLOWANCE_MANAGER_ROLE");
+    bytes32 public constant UPGRADER = keccak256("UPGRADER");
+    bytes32 public constant OKUUSD_PAUSER = keccak256("OKUUSD_PAUSER");
+    bytes32 public constant OKUUSD_UNPAUSER = keccak256("OKUUSD_UNPAUSER");
+    bytes32 public constant MINTER = keccak256("MINTER");
+    bytes32 public constant REBASER = keccak256("REBASER");
+    bytes32 public constant BLACKLISTER = keccak256("BLACKLISTER");
+    bytes32 public constant UNBLACKLISTER = keccak256("UNBLACKLISTER");
+    bytes32 public constant CAP_MANAGER = keccak256("CAP_MANAGER");
+    bytes32 public constant ALLOWANCE_MANAGER = keccak256("ALLOWANCE_MANAGER");
 
     // LitePSM roles
-    bytes32 public constant PSM_UPGRADER_ROLE = keccak256("PSM_UPGRADER_ROLE");
-    bytes32 public constant PSM_PAUSER_ROLE = keccak256("PSM_PAUSER_ROLE");
-    bytes32 public constant PSM_UNPAUSER_ROLE = keccak256("PSM_UNPAUSER_ROLE");
-    bytes32 public constant QUEUE_PROCESSOR_ROLE = keccak256("QUEUE_PROCESSOR_ROLE");
-    bytes32 public constant BUFFER_DEPOSITOR_ROLE = keccak256("BUFFER_DEPOSITOR_ROLE");
-    bytes32 public constant BUFFER_WITHDRAWER_ROLE = keccak256("BUFFER_WITHDRAWER_ROLE");
-    bytes32 public constant ORACLE_MANAGER_ROLE = keccak256("ORACLE_MANAGER_ROLE");
+    bytes32 public constant PSM_UPGRADER = keccak256("PSM_UPGRADER");
+    bytes32 public constant PSM_PAUSER = keccak256("PSM_PAUSER");
+    bytes32 public constant PSM_UNPAUSER = keccak256("PSM_UNPAUSER");
+    bytes32 public constant QUEUE_PROCESSOR = keccak256("QUEUE_PROCESSOR");
+    bytes32 public constant BUFFER_DEPOSITOR = keccak256("BUFFER_DEPOSITOR");
+    bytes32 public constant BUFFER_WITHDRAWER = keccak256("BUFFER_WITHDRAWER");
+    bytes32 public constant ORACLE_MANAGER = keccak256("ORACLE_MANAGER");
 
     // RedemptionQueue roles
-    bytes32 public constant PSM_ROLE = keccak256("PSM_ROLE");
+    bytes32 public constant PSM = keccak256("PSM");
 
     // OkuBridgeRouter roles
-    bytes32 public constant ROUTER_UPGRADER_ROLE = keccak256("ROUTER_UPGRADER_ROLE");
-    bytes32 public constant ROUTER_PAUSER_ROLE = keccak256("ROUTER_PAUSER_ROLE");
-    bytes32 public constant ROUTER_UNPAUSER_ROLE = keccak256("ROUTER_UNPAUSER_ROLE");
-    bytes32 public constant ADAPTER_MANAGER_ROLE = keccak256("ADAPTER_MANAGER_ROLE");
+    bytes32 public constant ROUTER_UPGRADER = keccak256("ROUTER_UPGRADER");
+    bytes32 public constant ROUTER_PAUSER = keccak256("ROUTER_PAUSER");
+    bytes32 public constant ROUTER_UNPAUSER = keccak256("ROUTER_UNPAUSER");
+    bytes32 public constant ADAPTER_MANAGER = keccak256("ADAPTER_MANAGER");
 
     // ============ Setup ============
 
@@ -133,26 +133,26 @@ abstract contract BaseTest is Test {
         vm.startPrank(admin);
 
         // OkuUSD roles - Granular RBAC
-        okuUsd.grantRole(PAUSER_ROLE, pauser);
-        okuUsd.grantRole(UNPAUSER_ROLE, unpauser);
-        okuUsd.grantRole(MINTER_ROLE, minter);
-        okuUsd.grantRole(MINTER_ROLE, address(litePsm)); // PSM can mint
-        okuUsd.grantRole(REBASER_ROLE, rebaser);
-        okuUsd.grantRole(BLACKLISTER_ROLE, blacklister);
-        okuUsd.grantRole(UNBLACKLISTER_ROLE, unblacklister);
-        okuUsd.grantRole(CAP_MANAGER_ROLE, capManager);
-        okuUsd.grantRole(ALLOWANCE_MANAGER_ROLE, allowanceManager);
+        okuUsd.grantRole(OKUUSD_PAUSER, pauser);
+        okuUsd.grantRole(OKUUSD_UNPAUSER, unpauser);
+        okuUsd.grantRole(MINTER, minter);
+        okuUsd.grantRole(MINTER, address(litePsm)); // PSM can mint
+        okuUsd.grantRole(REBASER, rebaser);
+        okuUsd.grantRole(BLACKLISTER, blacklister);
+        okuUsd.grantRole(UNBLACKLISTER, unblacklister);
+        okuUsd.grantRole(CAP_MANAGER, capManager);
+        okuUsd.grantRole(ALLOWANCE_MANAGER, allowanceManager);
 
         // LitePSM roles - Granular RBAC
-        litePsm.grantRole(PSM_PAUSER_ROLE, pauser);
-        litePsm.grantRole(PSM_UNPAUSER_ROLE, unpauser);
-        litePsm.grantRole(QUEUE_PROCESSOR_ROLE, queueProcessor);
-        litePsm.grantRole(BUFFER_DEPOSITOR_ROLE, bufferDepositor);
-        litePsm.grantRole(BUFFER_WITHDRAWER_ROLE, bufferWithdrawer);
-        litePsm.grantRole(ORACLE_MANAGER_ROLE, oracleManager);
+        litePsm.grantRole(PSM_PAUSER, pauser);
+        litePsm.grantRole(PSM_UNPAUSER, unpauser);
+        litePsm.grantRole(QUEUE_PROCESSOR, queueProcessor);
+        litePsm.grantRole(BUFFER_DEPOSITOR, bufferDepositor);
+        litePsm.grantRole(BUFFER_WITHDRAWER, bufferWithdrawer);
+        litePsm.grantRole(ORACLE_MANAGER, oracleManager);
 
         // RedemptionQueue roles
-        redemptionQueue.grantRole(PSM_ROLE, address(litePsm));
+        redemptionQueue.grantRole(PSM, address(litePsm));
 
         vm.stopPrank();
     }

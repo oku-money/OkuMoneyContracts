@@ -58,7 +58,7 @@ async function main() {
     if (error.message.includes("InvalidMultiplier")) {
       logger.error("New multiplier must be strictly greater than current multiplier");
     } else if (error.message.includes("AccessControl")) {
-      logger.error("Caller does not have REBASER_ROLE");
+      logger.error("Caller does not have REBASER");
     } else {
       throw error;
     }

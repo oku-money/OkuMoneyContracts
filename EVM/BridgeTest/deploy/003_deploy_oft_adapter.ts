@@ -39,28 +39,28 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   });
   console.log("OFTBridgeAdapter deployed to:", oftAdapter.address);
 
-  // Grant MINTER_ROLE to adapter
+  // Grant MINTER to adapter
   const BridgeToken = await hre.ethers.getContractAt("BridgeToken", bridgeToken.address);
-  const MINTER_ROLE = await BridgeToken.MINTER_ROLE();
-  const hasRole = await BridgeToken.hasRole(MINTER_ROLE, oftAdapter.address);
+  const MINTER = await BridgeToken.MINTER();
+  const hasRole = await BridgeToken.hasRole(MINTER, oftAdapter.address);
 
   if (!hasRole) {
-    console.log("Granting MINTER_ROLE to OFTBridgeAdapter...");
-    const tx = await BridgeToken.grantRole(MINTER_ROLE, oftAdapter.address);
+    console.log("Granting MINTER to OFTBridgeAdapter...");
+    const tx = await BridgeToken.grantRole(MINTER, oftAdapter.address);
     await tx.wait();
-    console.log("MINTER_ROLE granted to OFTBridgeAdapter");
+    console.log("MINTER granted to OFTBridgeAdapter");
   } else {
-    console.log("OFTBridgeAdapter already has MINTER_ROLE");
+    console.log("OFTBridgeAdapter already has MINTER");
   }
 
-  // For local testing, also grant MINTER_ROLE to MockOFTAdapter
+  // For local testing, also grant MINTER to MockOFTAdapter
   if (network.name === "hardhat" || network.name === "localhost") {
-    const mockHasRole = await BridgeToken.hasRole(MINTER_ROLE, oftAdapterAddress);
+    const mockHasRole = await BridgeToken.hasRole(MINTER, oftAdapterAddress);
     if (!mockHasRole) {
-      console.log("Granting MINTER_ROLE to MockOFTAdapter...");
-      const tx = await BridgeToken.grantRole(MINTER_ROLE, oftAdapterAddress);
+      console.log("Granting MINTER to MockOFTAdapter...");
+      const tx = await BridgeToken.grantRole(MINTER, oftAdapterAddress);
       await tx.wait();
-      console.log("MINTER_ROLE granted to MockOFTAdapter");
+      console.log("MINTER granted to MockOFTAdapter");
     }
   }
 };

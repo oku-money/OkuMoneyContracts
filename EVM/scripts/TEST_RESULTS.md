@@ -23,11 +23,11 @@
 ```
 
 **Roles Configured**:
-- ✅ MINTER_ROLE granted to LitePSM, RedemptionQueue, OkuBridge
-- ✅ REBASER_ROLE granted to Admin
-- ✅ ALLOWANCE_MANAGER_ROLE granted to Admin
-- ✅ PSM_ROLE granted to LitePSM
-- ✅ BUFFER_DEPOSITOR_ROLE granted to Admin
+- ✅ MINTER granted to LitePSM, RedemptionQueue, OkuBridge
+- ✅ REBASER granted to Admin
+- ✅ ALLOWANCE_MANAGER granted to Admin
+- ✅ PSM granted to LitePSM
+- ✅ BUFFER_DEPOSITOR granted to Admin
 - ✅ All OkuBridge roles granted to Admin
 
 ---

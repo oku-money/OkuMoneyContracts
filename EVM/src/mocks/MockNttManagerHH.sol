@@ -12,7 +12,7 @@ interface IOkuUSDMintable {
  * @title MockNttManagerHH
  * @notice Hardhat-compatible mock for Wormhole NTT Manager
  * @dev Unlike the Foundry version, this doesn't use vm.prank.
- *      Instead, grant MINTER_ROLE to this contract for completeBridge() to work.
+ *      Instead, grant MINTER to this contract for completeBridge() to work.
  *
  * Real NTT flow:
  * 1. Source: transfer() locks/burns tokens, emits Wormhole message
@@ -124,7 +124,7 @@ contract MockNttManagerHH is INttManager {
 
     /**
      * @notice Simulate destination chain mint
-     * @dev This contract must have MINTER_ROLE on OkuUSD for this to work
+     * @dev This contract must have MINTER on OkuUSD for this to work
      * @param index Index of pending transfer to complete
      */
     function completeBridge(uint256 index) external {
@@ -138,7 +138,7 @@ contract MockNttManagerHH is INttManager {
         address recipient = address(uint160(uint256(p.recipient)));
 
         // Mint OkuUSD on destination
-        // NOTE: This contract must have MINTER_ROLE granted
+        // NOTE: This contract must have MINTER granted
         okuUsd.mint(recipient, p.amount);
 
         emit TransferCompleted(index, recipient, p.amount);

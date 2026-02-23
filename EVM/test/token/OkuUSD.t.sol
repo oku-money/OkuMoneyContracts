@@ -56,7 +56,7 @@ contract OkuUSDTest is BaseTest {
 
     function test_Mint_OnlyMinterRole() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, MINTER_ROLE));
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, MINTER));
         okuUsd.mint(user1, 100e18);
     }
 
@@ -139,7 +139,7 @@ contract OkuUSDTest is BaseTest {
         _mintOkuUsd(user1, 100e18);
 
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, MINTER_ROLE));
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, MINTER));
         okuUsd.burn(user1, 50e18);
     }
 
@@ -371,7 +371,7 @@ contract OkuUSDTest is BaseTest {
 
     function test_UpdateRewardMultiplier_OnlyRebaser() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, REBASER_ROLE));
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, REBASER));
         okuUsd.updateRewardMultiplier(PRECISION * 2);
     }
 
@@ -448,7 +448,7 @@ contract OkuUSDTest is BaseTest {
 
     function test_Blacklist_OnlyBlacklisterRole() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BLACKLISTER_ROLE));
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BLACKLISTER));
         okuUsd.blacklist(user2);
     }
 
@@ -536,7 +536,7 @@ contract OkuUSDTest is BaseTest {
 
     function test_Pause_OnlyPauserRole() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PAUSER_ROLE));
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUUSD_PAUSER));
         okuUsd.pause();
     }
 
@@ -605,7 +605,7 @@ contract OkuUSDTest is BaseTest {
 
     function test_ConfigureMinterAllowance_OnlyAllowanceManager() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, ALLOWANCE_MANAGER_ROLE));
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, ALLOWANCE_MANAGER));
         okuUsd.configureMinterAllowance(minter, 1000e18);
     }
 
@@ -648,7 +648,7 @@ contract OkuUSDTest is BaseTest {
 
     function test_SetMaxSupply_OnlyCapManager() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, CAP_MANAGER_ROLE));
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, CAP_MANAGER));
         okuUsd.setMaxSupply(MAX_SUPPLY * 2);
     }
 

@@ -45,10 +45,10 @@ contract OkuBridgeRouterTest is BaseTest {
 
         // Configure roles and adapters
         vm.startPrank(admin);
-        bridgeRouter.grantRole(ADAPTER_MANAGER_ROLE, admin);
-        bridgeRouter.grantRole(ROUTER_UNPAUSER_ROLE, admin);
+        bridgeRouter.grantRole(ADAPTER_MANAGER, admin);
+        bridgeRouter.grantRole(ROUTER_UNPAUSER, admin);
         bridgeRouter.configureAdapter(address(mockBridge), true);
-        okuUsd.grantRole(MINTER_ROLE, address(bridgeRouter)); // Router needs MINTER_ROLE to burn
+        okuUsd.grantRole(MINTER, address(bridgeRouter)); // Router needs MINTER to burn
         vm.stopPrank();
     }
 
@@ -74,8 +74,8 @@ contract OkuBridgeRouterTest is BaseTest {
         assertEq(address(bridgeRouter.wOkuUsd()), address(wokuUsd));
         assertEq(address(bridgeRouter.okuUsd()), address(okuUsd));
         assertTrue(bridgeRouter.hasRole(DEFAULT_ADMIN_ROLE, admin));
-        assertTrue(bridgeRouter.hasRole(ROUTER_UPGRADER_ROLE, admin));
-        assertTrue(bridgeRouter.hasRole(ROUTER_PAUSER_ROLE, admin));
+        assertTrue(bridgeRouter.hasRole(ROUTER_UPGRADER, admin));
+        assertTrue(bridgeRouter.hasRole(ROUTER_PAUSER, admin));
     }
 
     function test_ConfigureAdapter() public {
@@ -102,7 +102,7 @@ contract OkuBridgeRouterTest is BaseTest {
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector,
                 user1,
-                ADAPTER_MANAGER_ROLE
+                ADAPTER_MANAGER
             )
         );
         bridgeRouter.configureAdapter(makeAddr("adapter"), true);
@@ -121,7 +121,7 @@ contract OkuBridgeRouterTest is BaseTest {
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector,
                 user1,
-                ROUTER_PAUSER_ROLE
+                ROUTER_PAUSER
             )
         );
         bridgeRouter.pause();

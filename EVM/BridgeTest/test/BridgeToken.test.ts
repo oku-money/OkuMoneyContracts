@@ -38,14 +38,14 @@ describe("BridgeToken", function () {
         .true;
     });
 
-    it("should grant admin MINTER_ROLE", async function () {
-      const MINTER_ROLE = await bridgeToken.MINTER_ROLE();
-      expect(await bridgeToken.hasRole(MINTER_ROLE, admin.address)).to.be.true;
+    it("should grant admin MINTER", async function () {
+      const MINTER = await bridgeToken.MINTER();
+      expect(await bridgeToken.hasRole(MINTER, admin.address)).to.be.true;
     });
   });
 
   describe("Minting", function () {
-    it("should allow MINTER_ROLE to mint", async function () {
+    it("should allow MINTER to mint", async function () {
       const amount = ethers.parseEther("1000");
       await bridgeToken.connect(admin).mint(user1.address, amount);
       expect(await bridgeToken.balanceOf(user1.address)).to.equal(amount);
@@ -65,7 +65,7 @@ describe("BridgeToken", function () {
       await bridgeToken.connect(admin).mint(user1.address, amount);
     });
 
-    it("should allow MINTER_ROLE to burn", async function () {
+    it("should allow MINTER to burn", async function () {
       const amount = ethers.parseEther("500");
       await bridgeToken.connect(admin).burn(user1.address, amount);
       expect(await bridgeToken.balanceOf(user1.address)).to.equal(
@@ -122,14 +122,14 @@ describe("NttBridgeAdapter", function () {
       admin.address
     );
 
-    // Grant MINTER_ROLE to adapter and mock
-    const MINTER_ROLE = await bridgeToken.MINTER_ROLE();
+    // Grant MINTER to adapter and mock
+    const MINTER = await bridgeToken.MINTER();
     await bridgeToken
       .connect(admin)
-      .grantRole(MINTER_ROLE, await nttAdapter.getAddress());
+      .grantRole(MINTER, await nttAdapter.getAddress());
     await bridgeToken
       .connect(admin)
-      .grantRole(MINTER_ROLE, await mockNttManager.getAddress());
+      .grantRole(MINTER, await mockNttManager.getAddress());
 
     // Mint tokens to user1 for testing
     await bridgeToken
@@ -267,14 +267,14 @@ describe("OFTBridgeAdapter", function () {
       admin.address
     );
 
-    // Grant MINTER_ROLE to adapter and mock
-    const MINTER_ROLE = await bridgeToken.MINTER_ROLE();
+    // Grant MINTER to adapter and mock
+    const MINTER = await bridgeToken.MINTER();
     await bridgeToken
       .connect(admin)
-      .grantRole(MINTER_ROLE, await oftAdapter.getAddress());
+      .grantRole(MINTER, await oftAdapter.getAddress());
     await bridgeToken
       .connect(admin)
-      .grantRole(MINTER_ROLE, await mockOftAdapter.getAddress());
+      .grantRole(MINTER, await mockOftAdapter.getAddress());
 
     // Mint tokens to user1 for testing
     await bridgeToken

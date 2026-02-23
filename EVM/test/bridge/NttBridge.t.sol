@@ -75,12 +75,12 @@ contract NttBridgeTest is BaseTest {
 
         // Configure roles
         vm.startPrank(admin);
-        // Router needs MINTER_ROLE to burn tokens
-        okuUsd.grantRole(MINTER_ROLE, address(bridgeRouter));
-        // Grant ADAPTER_MANAGER_ROLE to admin
-        bridgeRouter.grantRole(ADAPTER_MANAGER_ROLE, admin);
-        // Grant ROUTER_UNPAUSER_ROLE to admin
-        bridgeRouter.grantRole(ROUTER_UNPAUSER_ROLE, admin);
+        // Router needs MINTER to burn tokens
+        okuUsd.grantRole(MINTER, address(bridgeRouter));
+        // Grant ADAPTER_MANAGER to admin
+        bridgeRouter.grantRole(ADAPTER_MANAGER, admin);
+        // Grant ROUTER_UNPAUSER to admin
+        bridgeRouter.grantRole(ROUTER_UNPAUSER, admin);
         // Register NttAdapter as supported adapter
         bridgeRouter.configureAdapter(address(nttAdapter), true);
         vm.stopPrank();

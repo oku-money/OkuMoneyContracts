@@ -6,11 +6,11 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 /**
  * @title BridgeToken
- * @notice Simple ERC-20 token with MINTER_ROLE for burn/mint bridging
+ * @notice Simple ERC-20 token with MINTER for burn/mint bridging
  * @dev Minimal implementation for testing NTT and LayerZero bridging
  */
 contract BridgeToken is ERC20, AccessControl {
-    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+    bytes32 public constant MINTER = keccak256("MINTER");
 
     error ZeroAddress();
 
@@ -22,7 +22,7 @@ contract BridgeToken is ERC20, AccessControl {
         if (admin == address(0)) revert ZeroAddress();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(MINTER_ROLE, admin);
+        _grantRole(MINTER, admin);
     }
 
     /**
@@ -30,7 +30,7 @@ contract BridgeToken is ERC20, AccessControl {
      * @param to Recipient address
      * @param amount Amount to mint
      */
-    function mint(address to, uint256 amount) external onlyRole(MINTER_ROLE) {
+    function mint(address to, uint256 amount) external onlyRole(MINTER) {
         _mint(to, amount);
     }
 
@@ -40,7 +40,7 @@ contract BridgeToken is ERC20, AccessControl {
      * @param from Address to burn from
      * @param amount Amount to burn
      */
-    function burn(address from, uint256 amount) external onlyRole(MINTER_ROLE) {
+    function burn(address from, uint256 amount) external onlyRole(MINTER) {
         _burn(from, amount);
     }
 }

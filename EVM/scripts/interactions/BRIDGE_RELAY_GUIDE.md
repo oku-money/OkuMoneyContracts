@@ -262,7 +262,7 @@ cat scripts/logs/bridge-requests.jsonl | jq 'select(.status == "completed")' | w
 The script uses the first signer as the orchestrator key. In production:
 1. Use a dedicated orchestrator key (different from admin)
 2. Store the key securely (hardware wallet, KMS)
-3. Grant `BRIDGE_SIGNER_MANAGER_ROLE` only to trusted operators
+3. Grant `BRIDGE_SIGNER_MANAGER` only to trusted operators
 4. Monitor bridge activity for anomalies
 
 ### Signature Verification

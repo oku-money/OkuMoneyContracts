@@ -35,28 +35,28 @@ async function main() {
   // Configure OkuUSD roles
   logger.section("Configuring OkuUSD Roles");
 
-  logger.step(1, "Granting MINTER_ROLE to LitePSM");
+  logger.step(1, "Granting MINTER to LitePSM");
   await waitForTx(
-    await okuUSD.grantRole(ROLES.MINTER_ROLE, litePSMAddress),
-    "Grant MINTER_ROLE to LitePSM"
+    await okuUSD.grantRole(ROLES.MINTER, litePSMAddress),
+    "Grant MINTER to LitePSM"
   );
 
-  logger.step(2, "Granting MINTER_ROLE to RedemptionQueue");
+  logger.step(2, "Granting MINTER to RedemptionQueue");
   await waitForTx(
-    await okuUSD.grantRole(ROLES.MINTER_ROLE, redemptionQueueAddress),
-    "Grant MINTER_ROLE to RedemptionQueue"
+    await okuUSD.grantRole(ROLES.MINTER, redemptionQueueAddress),
+    "Grant MINTER to RedemptionQueue"
   );
 
-  logger.step(3, "Granting REBASER_ROLE to Admin");
+  logger.step(3, "Granting REBASER to Admin");
   await waitForTx(
-    await okuUSD.grantRole(ROLES.REBASER_ROLE, deployer.address),
-    "Grant REBASER_ROLE to Admin"
+    await okuUSD.grantRole(ROLES.REBASER, deployer.address),
+    "Grant REBASER to Admin"
   );
 
-  logger.step(4, "Granting ALLOWANCE_MANAGER_ROLE to Admin");
+  logger.step(4, "Granting ALLOWANCE_MANAGER to Admin");
   await waitForTx(
-    await okuUSD.grantRole(ROLES.ALLOWANCE_MANAGER_ROLE, deployer.address),
-    "Grant ALLOWANCE_MANAGER_ROLE to Admin"
+    await okuUSD.grantRole(ROLES.ALLOWANCE_MANAGER, deployer.address),
+    "Grant ALLOWANCE_MANAGER to Admin"
   );
 
   // Configure minter allowances (1 billion tokens)
@@ -74,10 +74,10 @@ async function main() {
     "Configure RedemptionQueue minter allowance"
   );
 
-  logger.step(7, "Granting MINTER_ROLE to OkuBridge");
+  logger.step(7, "Granting MINTER to OkuBridge");
   await waitForTx(
-    await okuUSD.grantRole(ROLES.MINTER_ROLE, okuBridgeAddress),
-    "Grant MINTER_ROLE to OkuBridge"
+    await okuUSD.grantRole(ROLES.MINTER, okuBridgeAddress),
+    "Grant MINTER to OkuBridge"
   );
 
   logger.step(8, "Configuring minter allowance for OkuBridge");
@@ -89,23 +89,23 @@ async function main() {
   // Configure RedemptionQueue roles
   logger.section("Configuring RedemptionQueue Roles");
 
-  logger.step(9, "Granting PSM_ROLE to LitePSM");
+  logger.step(9, "Granting PSM to LitePSM");
   await waitForTx(
-    await redemptionQueue.grantRole(ROLES.PSM_ROLE, litePSMAddress),
-    "Grant PSM_ROLE to LitePSM"
+    await redemptionQueue.grantRole(ROLES.PSM, litePSMAddress),
+    "Grant PSM to LitePSM"
   );
 
   // Configure LitePSM roles
   logger.section("Configuring LitePSM Roles");
 
-  logger.step(10, "Granting BUFFER_DEPOSITOR_ROLE to Admin");
+  logger.step(10, "Granting BUFFER_DEPOSITOR to Admin");
   await waitForTx(
-    await litePSM.grantRole(ROLES.BUFFER_DEPOSITOR_ROLE, deployer.address),
-    "Grant BUFFER_DEPOSITOR_ROLE to Admin"
+    await litePSM.grantRole(ROLES.BUFFER_DEPOSITOR, deployer.address),
+    "Grant BUFFER_DEPOSITOR to Admin"
   );
 
-  // QUEUE_PROCESSOR_ROLE is already granted to admin in initialize
-  logger.info("QUEUE_PROCESSOR_ROLE already granted to Admin during initialization");
+  // QUEUE_PROCESSOR is already granted to admin in initialize
+  logger.info("QUEUE_PROCESSOR already granted to Admin during initialization");
 
   // Configure OkuBridge roles
   logger.section("Configuring OkuBridge Roles");
@@ -117,10 +117,10 @@ async function main() {
   // Configure OkuBridgeRouter roles
   logger.section("Configuring OkuBridgeRouter Roles");
 
-  logger.step(11, "Granting ADAPTER_MANAGER_ROLE to Admin");
+  logger.step(11, "Granting ADAPTER_MANAGER to Admin");
   await waitForTx(
-    await bridgeRouter.grantRole(ROLES.ADAPTER_MANAGER_ROLE, deployer.address),
-    "Grant ADAPTER_MANAGER_ROLE to Admin"
+    await bridgeRouter.grantRole(ROLES.ADAPTER_MANAGER, deployer.address),
+    "Grant ADAPTER_MANAGER to Admin"
   );
 
   logger.section("Role Configuration Complete");

@@ -25,17 +25,17 @@ contract OkuUSD is
     PausableUpgradeable,
     UUPSUpgradeable
 {
-    bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
-    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
-    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+    bytes32 public constant UPGRADER = keccak256("UPGRADER");
+    bytes32 public constant OKUUSD_PAUSER = keccak256("OKUUSD_PAUSER");
+    bytes32 public constant MINTER = keccak256("MINTER");
 
     // Granular RBAC roles
-    bytes32 public constant UNPAUSER_ROLE = keccak256("UNPAUSER_ROLE");
-    bytes32 public constant REBASER_ROLE = keccak256("REBASER_ROLE");
-    bytes32 public constant BLACKLISTER_ROLE = keccak256("BLACKLISTER_ROLE");
-    bytes32 public constant UNBLACKLISTER_ROLE = keccak256("UNBLACKLISTER_ROLE");
-    bytes32 public constant CAP_MANAGER_ROLE = keccak256("CAP_MANAGER_ROLE");
-    bytes32 public constant ALLOWANCE_MANAGER_ROLE = keccak256("ALLOWANCE_MANAGER_ROLE");
+    bytes32 public constant OKUUSD_UNPAUSER = keccak256("OKUUSD_UNPAUSER");
+    bytes32 public constant REBASER = keccak256("REBASER");
+    bytes32 public constant BLACKLISTER = keccak256("BLACKLISTER");
+    bytes32 public constant UNBLACKLISTER = keccak256("UNBLACKLISTER");
+    bytes32 public constant CAP_MANAGER = keccak256("CAP_MANAGER");
+    bytes32 public constant ALLOWANCE_MANAGER = keccak256("ALLOWANCE_MANAGER");
 
     uint256 public constant PRECISION = 1e18;
 
@@ -81,8 +81,8 @@ contract OkuUSD is
         __Pausable_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(UPGRADER_ROLE, admin);
-        _grantRole(PAUSER_ROLE, admin);
+        _grantRole(UPGRADER, admin);
+        _grantRole(OKUUSD_PAUSER, admin);
 
         rewardMultiplier = PRECISION;
         maxSupply = initialMaxSupply;
@@ -94,7 +94,7 @@ contract OkuUSD is
      * @notice Update reward multiplier to distribute yield
      * @param newMultiplier New multiplier value (must be >= current)
      */
-    function updateRewardMultiplier(uint256 newMultiplier) external onlyRole(REBASER_ROLE) {
+    function updateRewardMultiplier(uint256 newMultiplier) external onlyRole(REBASER) {
         require(newMultiplier >= rewardMultiplier, "Multiplier cannot decrease");
         uint256 oldMultiplier = rewardMultiplier;
         rewardMultiplier = newMultiplier;
@@ -178,7 +178,7 @@ contract OkuUSD is
 
     // ============ Minting & Burning ============
 
-    function mint(address to, uint256 amount) external onlyRole(MINTER_ROLE) whenNotPaused {
+    function mint(address to, uint256 amount) external onlyRole(MINTER) whenNotPaused {
         require(!isBlacklisted[to], "Recipient blacklisted");
         require(totalSupply() + amount <= maxSupply, "Exceeds supply cap");
         require(minterAllowance[msg.sender] >= amount, "Exceeds minter allowance");
@@ -194,7 +194,7 @@ contract OkuUSD is
         emit Transfer(address(0), to, amount);
     }
 
-    function burn(address from, uint256 amount) external onlyRole(MINTER_ROLE) {
+    function burn(address from, uint256 amount) external onlyRole(MINTER) {
         require(!isBlacklisted[from], "Account blacklisted");
 
         uint256 shares = tokensToShares(amount);
@@ -215,7 +215,7 @@ contract OkuUSD is
         uint256 allowance
     )
         external
-        onlyRole(ALLOWANCE_MANAGER_ROLE)
+        onlyRole(ALLOWANCE_MANAGER)
     {
         uint256 oldAllowance = minterAllowance[minter];
         minterAllowance[minter] = allowance;
@@ -224,7 +224,7 @@ contract OkuUSD is
 
     // ============ Supply Cap Management ============
 
-    function setMaxSupply(uint256 newMaxSupply) external onlyRole(CAP_MANAGER_ROLE) {
+    function setMaxSupply(uint256 newMaxSupply) external onlyRole(CAP_MANAGER) {
         uint256 oldMaxSupply = maxSupply;
         maxSupply = newMaxSupply;
         emit MaxSupplyUpdated(oldMaxSupply, newMaxSupply);
@@ -232,23 +232,23 @@ contract OkuUSD is
 
     // ============ Blacklist (Works While Paused) ============
 
-    function blacklist(address account) external onlyRole(BLACKLISTER_ROLE) {
+    function blacklist(address account) external onlyRole(BLACKLISTER) {
         isBlacklisted[account] = true;
         emit Blacklisted(account);
     }
 
-    function unblacklist(address account) external onlyRole(UNBLACKLISTER_ROLE) {
+    function unblacklist(address account) external onlyRole(UNBLACKLISTER) {
         isBlacklisted[account] = false;
         emit Unblacklisted(account);
     }
 
     // ============ Pause Management ============
 
-    function pause() external onlyRole(PAUSER_ROLE) {
+    function pause() external onlyRole(OKUUSD_PAUSER) {
         _pause();
     }
 
-    function unpause() external onlyRole(UNPAUSER_ROLE) {
+    function unpause() external onlyRole(OKUUSD_UNPAUSER) {
         _unpause();
     }
 
@@ -257,6 +257,6 @@ contract OkuUSD is
     function _authorizeUpgrade(address newImplementation)
         internal
         override
-        onlyRole(UPGRADER_ROLE)
+        onlyRole(UPGRADER)
     {}
 }

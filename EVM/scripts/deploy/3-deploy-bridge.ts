@@ -63,7 +63,7 @@ async function main() {
   logger.success(`OkuBridgeRouter: ${await bridgeRouter.getAddress()}`);
   logger.info("");
   logger.info("Next steps:");
-  logger.info("1. Grant MINTER_ROLE to OkuBridge on OkuUSD");
+  logger.info("1. Grant MINTER to OkuBridge on OkuUSD");
   logger.info("2. Configure minter allowance for OkuBridge");
   logger.info("3. Update orchestrator signer address (if needed)");
   logger.info("4. Update fee recipient address (if needed)");

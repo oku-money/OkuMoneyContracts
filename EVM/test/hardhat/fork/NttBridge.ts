@@ -44,17 +44,17 @@ describe("NTT Bridge Scenarios", () => {
 
     let usdc: ReturnType<typeof IERC20__factory.connect>
 
-    const MINTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("MINTER_ROLE"))
-    const PSM_ROLE = ethers.keccak256(ethers.toUtf8Bytes("PSM_ROLE"))
-    const ALLOWANCE_MANAGER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("ALLOWANCE_MANAGER_ROLE"))
-    const REBASER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("REBASER_ROLE"))
-    const PAUSER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("PAUSER_ROLE"))
-    const UNPAUSER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("UNPAUSER_ROLE"))
-    const BLACKLISTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("BLACKLISTER_ROLE"))
-    const UNBLACKLISTER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("UNBLACKLISTER_ROLE"))
-    const CAP_MANAGER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("CAP_MANAGER_ROLE"))
-    const BUFFER_WITHDRAWER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("BUFFER_WITHDRAWER_ROLE"))
-    const QUEUE_PROCESSOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PROCESSOR_ROLE"))
+    const MINTER = ethers.keccak256(ethers.toUtf8Bytes("MINTER"))
+    const PSM = ethers.keccak256(ethers.toUtf8Bytes("PSM"))
+    const ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("ALLOWANCE_MANAGER"))
+    const REBASER = ethers.keccak256(ethers.toUtf8Bytes("REBASER"))
+    const OKUUSD_PAUSER = ethers.keccak256(ethers.toUtf8Bytes("OKUUSD_PAUSER"))
+    const OKUUSD_UNPAUSER = ethers.keccak256(ethers.toUtf8Bytes("OKUUSD_UNPAUSER"))
+    const BLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("BLACKLISTER"))
+    const UNBLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("UNBLACKLISTER"))
+    const CAP_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("CAP_MANAGER"))
+    const BUFFER_WITHDRAWER = ethers.keccak256(ethers.toUtf8Bytes("BUFFER_WITHDRAWER"))
+    const QUEUE_PROCESSOR = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PROCESSOR"))
 
     async function fundWithUSDC(user: Signer, amount: bigint) {
         await network.provider.request({
@@ -171,30 +171,30 @@ describe("NTT Bridge Scenarios", () => {
         await nttAdapter.waitForDeployment()
 
         // Configure roles
-        await okuUSD.connect(Frank).grantRole(MINTER_ROLE, await psm.getAddress())
+        await okuUSD.connect(Frank).grantRole(MINTER, await psm.getAddress())
 
         // Grant RBAC roles to Frank (admin) for testing
-        await okuUSD.connect(Frank).grantRole(ALLOWANCE_MANAGER_ROLE, frankAddr)
-        await okuUSD.connect(Frank).grantRole(REBASER_ROLE, frankAddr)
-        await okuUSD.connect(Frank).grantRole(PAUSER_ROLE, frankAddr)
-        await okuUSD.connect(Frank).grantRole(UNPAUSER_ROLE, frankAddr)
-        await okuUSD.connect(Frank).grantRole(BLACKLISTER_ROLE, frankAddr)
-        await okuUSD.connect(Frank).grantRole(UNBLACKLISTER_ROLE, frankAddr)
-        await okuUSD.connect(Frank).grantRole(CAP_MANAGER_ROLE, frankAddr)
+        await okuUSD.connect(Frank).grantRole(ALLOWANCE_MANAGER, frankAddr)
+        await okuUSD.connect(Frank).grantRole(REBASER, frankAddr)
+        await okuUSD.connect(Frank).grantRole(OKUUSD_PAUSER, frankAddr)
+        await okuUSD.connect(Frank).grantRole(OKUUSD_UNPAUSER, frankAddr)
+        await okuUSD.connect(Frank).grantRole(BLACKLISTER, frankAddr)
+        await okuUSD.connect(Frank).grantRole(UNBLACKLISTER, frankAddr)
+        await okuUSD.connect(Frank).grantRole(CAP_MANAGER, frankAddr)
 
         // Grant PSM-specific roles to Frank
-        await psm.connect(Frank).grantRole(BUFFER_WITHDRAWER_ROLE, frankAddr)
-        await psm.connect(Frank).grantRole(QUEUE_PROCESSOR_ROLE, frankAddr)
+        await psm.connect(Frank).grantRole(BUFFER_WITHDRAWER, frankAddr)
+        await psm.connect(Frank).grantRole(QUEUE_PROCESSOR, frankAddr)
 
         await okuUSD.connect(Frank).configureMinterAllowance(
             await psm.getAddress(),
             parseEther("1000000000")
         )
-        await queue.connect(Frank).grantRole(PSM_ROLE, await psm.getAddress())
-        await okuUSD.connect(Frank).grantRole(MINTER_ROLE, await queue.getAddress())
+        await queue.connect(Frank).grantRole(PSM, await psm.getAddress())
+        await okuUSD.connect(Frank).grantRole(MINTER, await queue.getAddress())
 
-        // Grant MINTER_ROLE to MockNttManager for completeBridge()
-        await okuUSD.connect(Frank).grantRole(MINTER_ROLE, await mockNttManager.getAddress())
+        // Grant MINTER to MockNttManager for completeBridge()
+        await okuUSD.connect(Frank).grantRole(MINTER, await mockNttManager.getAddress())
         await okuUSD.connect(Frank).configureMinterAllowance(
             await mockNttManager.getAddress(),
             parseEther("1000000000")

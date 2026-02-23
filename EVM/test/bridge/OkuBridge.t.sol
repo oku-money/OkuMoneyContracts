@@ -20,14 +20,14 @@ contract OkuBridgeTest is BaseTest {
     address public feeRecipient;
 
     // Bridge roles
-    bytes32 public constant BRIDGE_SIGNER_MANAGER_ROLE = keccak256("BRIDGE_SIGNER_MANAGER_ROLE");
-    bytes32 public constant BRIDGE_PAUSER_ROLE = keccak256("BRIDGE_PAUSER_ROLE");
-    bytes32 public constant BRIDGE_UNPAUSER_ROLE = keccak256("BRIDGE_UNPAUSER_ROLE");
-    bytes32 public constant BRIDGE_FEE_MANAGER_ROLE = keccak256("BRIDGE_FEE_MANAGER_ROLE");
-    bytes32 public constant BRIDGE_NONCE_ADMIN_ROLE = keccak256("BRIDGE_NONCE_ADMIN_ROLE");
-    bytes32 public constant BRIDGE_CHAIN_MANAGER_ROLE = keccak256("BRIDGE_CHAIN_MANAGER_ROLE");
-    bytes32 public constant BRIDGE_LIMITS_MANAGER_ROLE = keccak256("BRIDGE_LIMITS_MANAGER_ROLE");
-    bytes32 public constant BRIDGE_REFUND_ADMIN_ROLE = keccak256("BRIDGE_REFUND_ADMIN_ROLE");
+    bytes32 public constant BRIDGE_SIGNER_MANAGER = keccak256("BRIDGE_SIGNER_MANAGER");
+    bytes32 public constant BRIDGE_PAUSER = keccak256("BRIDGE_PAUSER");
+    bytes32 public constant BRIDGE_UNPAUSER = keccak256("BRIDGE_UNPAUSER");
+    bytes32 public constant BRIDGE_FEE_MANAGER = keccak256("BRIDGE_FEE_MANAGER");
+    bytes32 public constant BRIDGE_NONCE_ADMIN = keccak256("BRIDGE_NONCE_ADMIN");
+    bytes32 public constant BRIDGE_CHAIN_MANAGER = keccak256("BRIDGE_CHAIN_MANAGER");
+    bytes32 public constant BRIDGE_LIMITS_MANAGER = keccak256("BRIDGE_LIMITS_MANAGER");
+    bytes32 public constant BRIDGE_REFUND_ADMIN = keccak256("BRIDGE_REFUND_ADMIN");
 
     // Chain IDs for testing
     uint256 constant OPTIMISM_CHAIN_ID = 10;
@@ -53,7 +53,7 @@ contract OkuBridgeTest is BaseTest {
 
         // Grant bridge contract minter role for OkuUSD
         vm.startPrank(admin);
-        okuUsd.grantRole(MINTER_ROLE, address(okuBridge));
+        okuUsd.grantRole(MINTER, address(okuBridge));
         vm.startPrank(allowanceManager);
         okuUsd.configureMinterAllowance(address(okuBridge), MAX_SUPPLY);
         vm.stopPrank();
@@ -570,7 +570,7 @@ contract OkuBridgeTest is BaseTest {
 
     function test_UpdateAuthorizedSigner_RevertNotAuthorized() public {
         address newSigner = makeAddr("newSigner");
-        bytes32 role = okuBridge.BRIDGE_SIGNER_MANAGER_ROLE();
+        bytes32 role = okuBridge.BRIDGE_SIGNER_MANAGER();
 
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -687,7 +687,7 @@ contract OkuBridgeTest is BaseTest {
     }
 
     function test_SkipNonce_RevertNotAuthorized() public {
-        bytes32 role = okuBridge.BRIDGE_NONCE_ADMIN_ROLE();
+        bytes32 role = okuBridge.BRIDGE_NONCE_ADMIN();
 
         vm.expectRevert(
             abi.encodeWithSelector(

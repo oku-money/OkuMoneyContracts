@@ -27,8 +27,8 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     // Decimal conversion constant (USDC is 6 decimals, OkuUSD is 18 decimals)
     uint256 private constant DECIMAL_MULTIPLIER = 10 ** 12; // 18 - 6 = 12
 
-    bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
-    bytes32 public constant PSM_ROLE = keccak256("PSM_ROLE");
+    bytes32 public constant UPGRADER = keccak256("UPGRADER");
+    bytes32 public constant PSM = keccak256("PSM");
 
     struct QueueEntry {
         address user;
@@ -60,7 +60,7 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         okuUsd = IOkuUSD(_okuUsd);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(UPGRADER_ROLE, admin);
+        _grantRole(UPGRADER, admin);
     }
 
     // ============ Queue Management ============
@@ -71,7 +71,7 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
      * @param okuUsdAmount Amount of OkuUSD to redeem (in tokens)
      * @dev Converts tokens to shares for storage so users earn yield while queued
      */
-    function enqueue(address user, uint256 okuUsdAmount) external onlyRole(PSM_ROLE) {
+    function enqueue(address user, uint256 okuUsdAmount) external onlyRole(PSM) {
         // Transfer OkuUSD to queue (locks it)
         require(okuUsd.transferFrom(user, address(this), okuUsdAmount), "Transfer failed");
 
@@ -96,7 +96,7 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         address okuUsdToken
     )
         external
-        onlyRole(PSM_ROLE)
+        onlyRole(PSM)
     {
         IERC20 usdc = IERC20(usdcToken);
         IOkuUSD oku = IOkuUSD(okuUsdToken);
@@ -161,6 +161,6 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     function _authorizeUpgrade(address newImplementation)
         internal
         override
-        onlyRole(UPGRADER_ROLE)
+        onlyRole(UPGRADER)
     {}
 }

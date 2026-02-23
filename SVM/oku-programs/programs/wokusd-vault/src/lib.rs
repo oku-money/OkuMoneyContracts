@@ -20,14 +20,15 @@ pub mod wokusd_vault {
 
     /// Initialize the vault
     /// Creates config PDA and wOkuUSD mint (mint authority = config PDA)
-    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+    /// Authority pubkeys passed as args to reduce stack usage (avoids BPF stack overflow)
+    pub fn initialize(ctx: Context<Initialize>, pauser: Pubkey, unpauser: Pubkey) -> Result<()> {
         let config = &mut ctx.accounts.config;
         config.bump = ctx.bumps.config;
 
-        // Set all granular authorities
+        // Set all granular authorities (passed as args to avoid stack overflow)
         config.role_admin = ctx.accounts.role_admin.key();
-        config.pauser = ctx.accounts.pauser.key();
-        config.unpauser = ctx.accounts.unpauser.key();
+        config.pauser = pauser;
+        config.unpauser = unpauser;
 
         // Set token references
         config.okusd_mint = ctx.accounts.okusd_mint.key();
@@ -281,12 +282,6 @@ pub struct Initialize<'info> {
     #[account(mut)]
     pub role_admin: Signer<'info>,
 
-    // ===== Granular Authority Accounts =====
-    /// CHECK: Authority pubkey for role assignment
-    pub pauser: UncheckedAccount<'info>,
-    /// CHECK: Authority pubkey for role assignment
-    pub unpauser: UncheckedAccount<'info>,
-
     #[account(
         init,
         payer = role_admin,
@@ -294,13 +289,13 @@ pub struct Initialize<'info> {
         seeds = [VaultConfig::SEED],
         bump
     )]
-    pub config: Account<'info, VaultConfig>,
+    pub config: Box<Account<'info, VaultConfig>>,
 
     /// OkuUSD mint (Token-2022 with Interest-Bearing extension)
     #[account(
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// wOkuUSD mint (standard SPL Token)
     /// Mint authority must be the config PDA
@@ -311,10 +306,9 @@ pub struct Initialize<'info> {
         mint::authority = config,
         mint::token_program = token_program,
     )]
-    pub wokusd_mint: Account<'info, Mint>,
+    pub wokusd_mint: Box<Account<'info, Mint>>,
 
     /// Vault's OkuUSD token account
-    /// NOTE: Unboxed to avoid Anchor 0.29 Box<InterfaceAccount> access violation with init CPI
     #[account(
         init,
         payer = role_admin,
@@ -322,7 +316,7 @@ pub struct Initialize<'info> {
         associated_token::authority = config,
         associated_token::token_program = token_2022_program,
     )]
-    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -348,14 +342,14 @@ pub struct Wrap<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// wOkuUSD mint (standard SPL)
     #[account(
         mut,
         address = config.wokusd_mint
     )]
-    pub wokusd_mint: Account<'info, Mint>,
+    pub wokusd_mint: Box<Account<'info, Mint>>,
 
     /// User's OkuUSD token account
     #[account(
@@ -364,7 +358,7 @@ pub struct Wrap<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// User's wOkuUSD token account
     #[account(
@@ -374,14 +368,14 @@ pub struct Wrap<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_program,
     )]
-    pub user_wokusd_ata: Account<'info, TokenAccount>,
+    pub user_wokusd_ata: Box<Account<'info, TokenAccount>>,
 
     /// Vault's OkuUSD token account
     #[account(
         mut,
         address = config.vault_okusd
     )]
-    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -406,14 +400,14 @@ pub struct Unwrap<'info> {
         address = config.okusd_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: InterfaceAccount<'info, MintInterface>,
+    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// wOkuUSD mint (standard SPL)
     #[account(
         mut,
         address = config.wokusd_mint
     )]
-    pub wokusd_mint: Account<'info, Mint>,
+    pub wokusd_mint: Box<Account<'info, Mint>>,
 
     /// User's OkuUSD token account
     #[account(
@@ -423,7 +417,7 @@ pub struct Unwrap<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: InterfaceAccount<'info, TokenAccountInterface>,
+    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// User's wOkuUSD token account
     #[account(
@@ -432,14 +426,14 @@ pub struct Unwrap<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_program,
     )]
-    pub user_wokusd_ata: Account<'info, TokenAccount>,
+    pub user_wokusd_ata: Box<Account<'info, TokenAccount>>,
 
     /// Vault's OkuUSD token account
     #[account(
         mut,
         address = config.vault_okusd
     )]
-    pub vault_okusd: InterfaceAccount<'info, TokenAccountInterface>,
+    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,

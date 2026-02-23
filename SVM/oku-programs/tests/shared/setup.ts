@@ -220,26 +220,26 @@ export async function initializePSMIfNeeded(
     10 * anchor.web3.LAMPORTS_PER_SOL
   );
 
-  // Initialize PSM with granular authorities
+  // Initialize PSM with granular authorities (authority pubkeys passed as instruction args)
   await program.methods
-    .initialize(MAX_SUPPLY, MINTER_ALLOWANCE)
-    .accounts({
+    .initialize(
+      MAX_SUPPLY,
+      MINTER_ALLOWANCE,
+      warmMultisig.publicKey,       // pauser
+      coldMultisig.publicKey,       // unpauser
+      warmMultisig.publicKey,       // freezer
+      coldMultisig.publicKey,       // unfreezer
+      psmOrchestrator.publicKey,    // queueProcessor
+      psmOrchestrator.publicKey,    // bufferDepositor
+      coldMultisig.publicKey,       // bufferWithdrawer
+      coldMultisig.publicKey,       // oracleManager
+      coldMultisig.publicKey,       // capManager
+      coldMultisig.publicKey,       // allowanceManager
+      psmOrchestrator.publicKey,    // rebaser
+    )
+    .accountsPartial({
       roleAdmin: payer.publicKey,
-      // Granular authorities - 11 roles total
-      pauser: warmMultisig.publicKey,
-      unpauser: coldMultisig.publicKey,
-      freezer: warmMultisig.publicKey,
-      unfreezer: coldMultisig.publicKey,
-      queueProcessor: psmOrchestrator.publicKey,
-      bufferDepositor: psmOrchestrator.publicKey,
-      bufferWithdrawer: coldMultisig.publicKey,
-      oracleManager: coldMultisig.publicKey,
-      capManager: coldMultisig.publicKey,
-      allowanceManager: coldMultisig.publicKey,
-      rebaser: psmOrchestrator.publicKey,
-      // Infrastructure
       config: psmConfigPda,
-      redemptionQueue: redemptionQueuePda,
       usdcMint: usdcMint,
       okusdMint: okusdMint,
       vaultUsdc: vaultUsdcAta,
@@ -251,10 +251,21 @@ export async function initializePSMIfNeeded(
     })
     .rpc();
 
+  // Setup redemption queue (separate instruction after initialize)
+  await program.methods
+    .setupRedemptionQueue()
+    .accountsPartial({
+      payer: payer.publicKey,
+      config: psmConfigPda,
+      redemptionQueue: redemptionQueuePda,
+      systemProgram: SystemProgram.programId,
+    })
+    .rpc();
+
   // Setup OkuUSD escrow vault
   await program.methods
     .setupOkusdEscrow()
-    .accounts({
+    .accountsPartial({
       roleAdmin: payer.publicKey,
       config: psmConfigPda,
       okusdMint: okusdMint,
@@ -296,7 +307,7 @@ export async function ensurePSMUnpaused(
   if (config.isPaused) {
     await program.methods
       .unpause()
-      .accounts({
+      .accountsPartial({
         unpauser: coldMultisig.publicKey,
         config: configPda,
       })

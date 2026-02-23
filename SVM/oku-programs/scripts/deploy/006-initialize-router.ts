@@ -68,7 +68,7 @@ async function main() {
 
     const tx = await routerProgram.methods
       .initialize()
-      .accounts({
+      .accountsPartial({
         admin: authorities.psm.roleAdmin,
         config: routerConfig,
         psmProgram: litePsmProgramId,

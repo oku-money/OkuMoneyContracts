@@ -120,7 +120,7 @@ describe("oku-bridge-router", () => {
 
       await routerProgram.methods
         .initialize()
-        .accounts({
+        .accountsPartial({
           admin: admin.publicKey,
           config: routerConfigPda,
           psmProgram: psmProgram.programId,
@@ -145,7 +145,7 @@ describe("oku-bridge-router", () => {
       } catch {
         await routerProgram.methods
           .initialize()
-          .accounts({
+          .accountsPartial({
             admin: admin.publicKey,
             config: routerConfigPda,
             psmProgram: psmProgram.programId,
@@ -176,7 +176,7 @@ describe("oku-bridge-router", () => {
       // Pause router
       await routerProgram.methods
         .setPaused(true)
-        .accounts({
+        .accountsPartial({
           admin: admin.publicKey,
           config: routerConfigPda,
         })
@@ -185,7 +185,7 @@ describe("oku-bridge-router", () => {
       try {
         await routerProgram.methods
           .bridgeDirect(new BN(1_000_000), Array.from(new Uint8Array(20)), 1)
-          .accounts({
+          .accountsPartial({
             user: user.publicKey,
             config: routerConfigPda,
             bridgeConfig: bridgeConfigPda,
@@ -210,7 +210,7 @@ describe("oku-bridge-router", () => {
       // Unpause
       await routerProgram.methods
         .setPaused(false)
-        .accounts({
+        .accountsPartial({
           admin: admin.publicKey,
           config: routerConfigPda,
         })
@@ -221,7 +221,7 @@ describe("oku-bridge-router", () => {
       try {
         await routerProgram.methods
           .bridgeDirect(new BN(0), Array.from(new Uint8Array(20)), 1)
-          .accounts({
+          .accountsPartial({
             user: user.publicKey,
             config: routerConfigPda,
             bridgeConfig: bridgeConfigPda,
@@ -258,7 +258,7 @@ describe("oku-bridge-router", () => {
         } catch {
           await routerProgram.methods
             .initialize()
-            .accounts({
+            .accountsPartial({
               admin: admin.publicKey,
               config: routerConfigPda,
               psmProgram: psmProgram.programId,
@@ -272,7 +272,7 @@ describe("oku-bridge-router", () => {
       it("allows admin to pause and unpause", async () => {
         await routerProgram.methods
           .setPaused(true)
-          .accounts({
+          .accountsPartial({
             admin: admin.publicKey,
             config: routerConfigPda,
           })
@@ -283,7 +283,7 @@ describe("oku-bridge-router", () => {
 
         await routerProgram.methods
           .setPaused(false)
-          .accounts({
+          .accountsPartial({
             admin: admin.publicKey,
             config: routerConfigPda,
           })
@@ -297,7 +297,7 @@ describe("oku-bridge-router", () => {
         try {
           await routerProgram.methods
             .setPaused(true)
-            .accounts({
+            .accountsPartial({
               admin: user.publicKey,
               config: routerConfigPda,
             })

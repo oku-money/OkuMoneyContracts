@@ -193,12 +193,9 @@ describe("wokusd-vault", () => {
       const wokusdMintKeypair = Keypair.generate();
 
       await program.methods
-        .initialize()
-        .accounts({
+        .initialize(warmMultisig.publicKey, coldMultisig.publicKey)
+        .accountsPartial({
           roleAdmin: admin.publicKey,
-          // Granular authorities - RBAC separation
-          pauser: warmMultisig.publicKey,
-          unpauser: coldMultisig.publicKey,
           config: configPda,
           okusdMint: okusdMint,
           wokusdMint: wokusdMintKeypair.publicKey,
@@ -250,7 +247,7 @@ describe("wokusd-vault", () => {
 
       await program.methods
         .wrap(wrapAmount)
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           config: configPda,
           okusdMint: okusdMint,
@@ -294,7 +291,7 @@ describe("wokusd-vault", () => {
 
       await program.methods
         .wrap(wrapAmount)
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           config: configPda,
           okusdMint: okusdMint,
@@ -320,7 +317,7 @@ describe("wokusd-vault", () => {
       // Pause the vault (uses warmMultisig)
       await program.methods
         .pause()
-        .accounts({
+        .accountsPartial({
           pauser: warmMultisig.publicKey,
           config: configPda,
         })
@@ -330,7 +327,7 @@ describe("wokusd-vault", () => {
       try {
         await program.methods
           .wrap(new BN(1_000_000))
-          .accounts({
+          .accountsPartial({
             user: user.publicKey,
             config: configPda,
             okusdMint: okusdMint,
@@ -353,7 +350,7 @@ describe("wokusd-vault", () => {
       // Unpause for future tests (uses coldMultisig)
       await program.methods
         .unpause()
-        .accounts({
+        .accountsPartial({
           unpauser: coldMultisig.publicKey,
           config: configPda,
         })
@@ -365,7 +362,7 @@ describe("wokusd-vault", () => {
       try {
         await program.methods
           .wrap(new BN(0))
-          .accounts({
+          .accountsPartial({
             user: user.publicKey,
             config: configPda,
             okusdMint: okusdMint,
@@ -401,7 +398,7 @@ describe("wokusd-vault", () => {
 
       await program.methods
         .unwrap(unwrapShares)
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           config: configPda,
           okusdMint: okusdMint,
@@ -438,7 +435,7 @@ describe("wokusd-vault", () => {
       // Pause the vault (uses warmMultisig)
       await program.methods
         .pause()
-        .accounts({
+        .accountsPartial({
           pauser: warmMultisig.publicKey,
           config: configPda,
         })
@@ -462,7 +459,7 @@ describe("wokusd-vault", () => {
       // Unwrap should succeed even when paused
       await program.methods
         .unwrap(unwrapShares)
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           config: configPda,
           okusdMint: okusdMint,
@@ -489,7 +486,7 @@ describe("wokusd-vault", () => {
       // Unpause for future tests (uses coldMultisig)
       await program.methods
         .unpause()
-        .accounts({
+        .accountsPartial({
           unpauser: coldMultisig.publicKey,
           config: configPda,
         })
@@ -501,7 +498,7 @@ describe("wokusd-vault", () => {
       try {
         await program.methods
           .unwrap(new BN(0))
-          .accounts({
+          .accountsPartial({
             user: user.publicKey,
             config: configPda,
             okusdMint: okusdMint,
@@ -529,7 +526,7 @@ describe("wokusd-vault", () => {
       try {
         await program.methods
           .unwrap(excessiveShares)
-          .accounts({
+          .accountsPartial({
             user: user.publicKey,
             config: configPda,
             okusdMint: okusdMint,
@@ -556,7 +553,7 @@ describe("wokusd-vault", () => {
     it("vault_pauser (warm multisig) can pause", async () => {
       await program.methods
         .pause()
-        .accounts({
+        .accountsPartial({
           pauser: warmMultisig.publicKey,
           config: configPda,
         })
@@ -570,7 +567,7 @@ describe("wokusd-vault", () => {
     it("vault_unpauser (cold multisig) can unpause", async () => {
       await program.methods
         .unpause()
-        .accounts({
+        .accountsPartial({
           unpauser: coldMultisig.publicKey,
           config: configPda,
         })
@@ -585,7 +582,7 @@ describe("wokusd-vault", () => {
       // First pause with warmMultisig
       await program.methods
         .pause()
-        .accounts({
+        .accountsPartial({
           pauser: warmMultisig.publicKey,
           config: configPda,
         })
@@ -596,7 +593,7 @@ describe("wokusd-vault", () => {
       try {
         await program.methods
           .unpause()
-          .accounts({
+          .accountsPartial({
             unpauser: warmMultisig.publicKey, // Wrong authority
             config: configPda,
           })
@@ -610,7 +607,7 @@ describe("wokusd-vault", () => {
       // Cleanup: unpause with correct authority
       await program.methods
         .unpause()
-        .accounts({
+        .accountsPartial({
           unpauser: coldMultisig.publicKey,
           config: configPda,
         })
@@ -622,7 +619,7 @@ describe("wokusd-vault", () => {
       try {
         await program.methods
           .pause()
-          .accounts({
+          .accountsPartial({
             pauser: coldMultisig.publicKey, // Wrong authority
             config: configPda,
           })
@@ -638,7 +635,7 @@ describe("wokusd-vault", () => {
       try {
         await program.methods
           .pause()
-          .accounts({
+          .accountsPartial({
             pauser: user.publicKey, // Wrong authority
             config: configPda,
           })
@@ -654,7 +651,7 @@ describe("wokusd-vault", () => {
       // First pause properly
       await program.methods
         .pause()
-        .accounts({
+        .accountsPartial({
           pauser: warmMultisig.publicKey,
           config: configPda,
         })
@@ -665,7 +662,7 @@ describe("wokusd-vault", () => {
       try {
         await program.methods
           .unpause()
-          .accounts({
+          .accountsPartial({
             unpauser: user.publicKey, // Wrong authority
             config: configPda,
           })
@@ -679,7 +676,7 @@ describe("wokusd-vault", () => {
       // Cleanup: unpause with correct authority
       await program.methods
         .unpause()
-        .accounts({
+        .accountsPartial({
           unpauser: coldMultisig.publicKey,
           config: configPda,
         })
@@ -701,7 +698,7 @@ describe("wokusd-vault", () => {
       const wrapAmount = new BN(100_000_000); // 100 OkuUSD
       await program.methods
         .wrap(wrapAmount)
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           config: configPda,
           okusdMint: okusdMint,
@@ -741,7 +738,7 @@ describe("wokusd-vault", () => {
 
       await program.methods
         .wrap(wrapAmount)
-        .accounts({
+        .accountsPartial({
           user: user2.publicKey,
           config: configPda,
           okusdMint: okusdMint,
@@ -775,7 +772,7 @@ describe("wokusd-vault", () => {
 
       await program.methods
         .unwrap(unwrapShares)
-        .accounts({
+        .accountsPartial({
           user: user2.publicKey,
           config: configPda,
           okusdMint: okusdMint,
@@ -810,7 +807,7 @@ describe("wokusd-vault", () => {
 
       await program.methods
         .wrap(wrapAmount)
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           config: configPda,
           okusdMint: okusdMint,
@@ -833,7 +830,7 @@ describe("wokusd-vault", () => {
       // Unwrap all shares received
       await program.methods
         .unwrap(sharesReceived)
-        .accounts({
+        .accountsPartial({
           user: user.publicKey,
           config: configPda,
           okusdMint: okusdMint,

@@ -5,7 +5,7 @@
 import { ethers } from "hardhat";
 import { deployUUPSProxy } from "../utils/deploy";
 import { getNetworkName, getChainConfig } from "../config/chains";
-import { loadAddress } from "../utils/addressBook";
+import { hasAddress, loadAddress } from "../utils/addressBook";
 import { logger } from "../utils/logger";
 
 async function main() {
@@ -21,8 +21,14 @@ async function main() {
   const okuUSDAddress = loadAddress(network, "OkuUSD");
   const redemptionQueueAddress = loadAddress(network, "RedemptionQueue");
 
+  // Use MockUSDC from address book if present (testnet/fork deployments),
+  // otherwise fall back to the canonical USDC address from chain config (mainnet).
+  const usdcAddress = hasAddress(network, "MockUSDC")
+    ? loadAddress(network, "MockUSDC")
+    : chainConfig.usdc;
+
   logger.info(`OkuUSD address: ${okuUSDAddress}`);
-  logger.info(`USDC address: ${chainConfig.usdc}`);
+  logger.info(`USDC address: ${usdcAddress}${hasAddress(network, "MockUSDC") ? " (MockUSDC)" : ""}`);
   logger.info(`RedemptionQueue address: ${redemptionQueueAddress}`);
 
   // Deploy LitePSM
@@ -31,7 +37,7 @@ async function main() {
     "LitePSM",
     [
       okuUSDAddress, // okuUSD
-      chainConfig.usdc, // USDC
+      usdcAddress, // USDC
       redemptionQueueAddress, // redemptionQueue
       deployer.address, // admin
     ],

@@ -382,7 +382,7 @@ async function testMint(ctx: TestContext) {
   try {
     const sig = await ctx.psm.methods
       .setOracle(PublicKey.default, new BN(0))
-      .accounts({
+      .accountsPartial({
         oracleManager: ctx.deployer.publicKey,
         config: ctx.psmConfig,
       })
@@ -410,7 +410,7 @@ async function testMint(ctx: TestContext) {
   logger.info(`Calling psm.mint(${amount / 1_000_000} USDC)...`);
   const sig = await ctx.psm.methods
     .mint(new BN(amount))
-    .accounts({
+    .accountsPartial({
       user: ctx.deployer.publicKey,
       config: ctx.psmConfig,
       usdcMint: ctx.usdcMint,
@@ -518,7 +518,7 @@ async function testRebase(ctx: TestContext) {
   logger.info(`Setting interest rate to ${newRate} bps (${newRate / 100}% APY)...`);
   const sig = await ctx.psm.methods
     .updateInterestRate(newRate)
-    .accounts({
+    .accountsPartial({
       rebaser: ctx.deployer.publicKey,
       config: ctx.psmConfig,
       okusdMint: ctx.okusdMint,
@@ -573,7 +573,7 @@ async function testWrap(ctx: TestContext) {
   logger.info(`Calling vault.wrap(${wrapAmount / 1_000_000} OkuUSD)...`);
   const sig = await ctx.vault.methods
     .wrap(new BN(wrapAmount))
-    .accounts({
+    .accountsPartial({
       user: ctx.deployer.publicKey,
       config: ctx.vaultConfig,
       okusdMint: ctx.okusdMint,
@@ -623,7 +623,7 @@ async function testUnwrap(ctx: TestContext) {
   logger.info(`Calling vault.unwrap(${unwrapShares / 1_000_000} shares)...`);
   const sig = await ctx.vault.methods
     .unwrap(new BN(unwrapShares))
-    .accounts({
+    .accountsPartial({
       user: ctx.deployer.publicKey,
       config: ctx.vaultConfig,
       okusdMint: ctx.okusdMint,
@@ -671,7 +671,7 @@ async function testRedeem(ctx: TestContext) {
 
   const depositSig = await ctx.psm.methods
     .depositBuffer(new BN(bufferAmount))
-    .accounts({
+    .accountsPartial({
       bufferDepositor: ctx.deployer.publicKey,
       config: ctx.psmConfig,
       bufferDepositorUsdcAta,
@@ -701,7 +701,7 @@ async function testRedeem(ctx: TestContext) {
   logger.info(`Calling psm.redeem(${redeemAmount / 1_000_000} OkuUSD)...`);
   const sig = await ctx.psm.methods
     .redeem(new BN(redeemAmount))
-    .accounts({
+    .accountsPartial({
       user: ctx.deployer.publicKey,
       config: ctx.psmConfig,
       redemptionQueue: ctx.redemptionQueue,
@@ -770,7 +770,7 @@ async function testBridgeBurn(ctx: TestContext) {
       Array.from(evmRecipient),
       destinationChainId
     )
-    .accounts({
+    .accountsPartial({
       user: ctx.deployer.publicKey,
       bridgeConfig: ctx.bridgeConfig,
       config: ctx.psmConfig,

@@ -32,8 +32,8 @@ interface IBridgeAdapter {
 
 /**
  * @title OkuBridgeRouter
- * @notice Convenience wrapper for bridging wOkuUSD across chains
- * @dev Unwraps wOkuUSD -> burns OkuUSD -> bridges -> mints on destination
+ * @notice Convenience wrapper for bridging wOkuUsd across chains
+ * @dev Unwraps wOkuUsd -> burns OkuUSD -> bridges -> mints on destination
  */
 contract OkuBridgeRouter is
     Initializable,
@@ -49,8 +49,8 @@ contract OkuBridgeRouter is
     bytes32 public constant ROUTER_UNPAUSER_ROLE = keccak256("ROUTER_UNPAUSER_ROLE");
     bytes32 public constant ADAPTER_MANAGER_ROLE = keccak256("ADAPTER_MANAGER_ROLE");
 
-    IwOkuUSD public wOkuUSD;
-    IOkuUSD public okuUSD;
+    IwOkuUSD public wOkuUsd;
+    IOkuUSD public okuUsd;
 
     // Supported bridge adapters
     mapping(address => bool) public supportedAdapters;
@@ -70,12 +70,12 @@ contract OkuBridgeRouter is
         _disableInitializers();
     }
 
-    function initialize(address _wOkuUSD, address _okuUSD, address admin) public initializer {
+    function initialize(address _wOkuUsd, address _okuUsd, address admin) public initializer {
         __AccessControl_init();
         __Pausable_init();
 
-        wOkuUSD = IwOkuUSD(_wOkuUSD);
-        okuUSD = IOkuUSD(_okuUSD);
+        wOkuUsd = IwOkuUSD(_wOkuUsd);
+        okuUsd = IOkuUSD(_okuUsd);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(ROUTER_UPGRADER_ROLE, admin);
@@ -86,13 +86,13 @@ contract OkuBridgeRouter is
 
     /**
      * @notice Bridge wrapped OkuUSD to another chain (unwraps first)
-     * @param wOkuUSDAmount Amount of wOkuUSD to bridge
+     * @param wOkuUsdAmount Amount of wOkuUsd to bridge
      * @param adapter Bridge adapter to use
      * @param destinationChain Destination chain ID
      * @param recipient Recipient address on destination chain
      */
     function bridgeWrapped(
-        uint256 wOkuUSDAmount,
+        uint256 wOkuUsdAmount,
         address adapter,
         uint256 destinationChain,
         address recipient
@@ -103,30 +103,30 @@ contract OkuBridgeRouter is
         require(supportedAdapters[adapter], "Unsupported adapter");
         require(recipient != address(0), "Invalid recipient");
 
-        // Transfer wOkuUSD from user
-        IERC20(address(wOkuUSD)).safeTransferFrom(msg.sender, address(this), wOkuUSDAmount);
+        // Transfer wOkuUsd from user
+        IERC20(address(wOkuUsd)).safeTransferFrom(msg.sender, address(this), wOkuUsdAmount);
 
-        // Unwrap wOkuUSD to OkuUSD
-        uint256 okuUSDAmount = wOkuUSD.redeem(wOkuUSDAmount, address(this), address(this));
+        // Unwrap wOkuUsd to OkuUSD
+        uint256 okuUsdAmount = wOkuUsd.redeem(wOkuUsdAmount, address(this), address(this));
 
         // Burn OkuUSD
-        okuUSD.burn(address(this), okuUSDAmount);
+        okuUsd.burn(address(this), okuUsdAmount);
 
         // Bridge via adapter
-        IBridgeAdapter(adapter).bridge(address(okuUSD), okuUSDAmount, destinationChain, recipient);
+        IBridgeAdapter(adapter).bridge(address(okuUsd), okuUsdAmount, destinationChain, recipient);
 
-        emit BridgeInitiated(msg.sender, adapter, okuUSDAmount, destinationChain, recipient);
+        emit BridgeInitiated(msg.sender, adapter, okuUsdAmount, destinationChain, recipient);
     }
 
     /**
      * @notice Bridge OkuUSD directly (no unwrapping needed)
-     * @param okuUSDAmount Amount of OkuUSD to bridge
+     * @param okuUsdAmount Amount of OkuUSD to bridge
      * @param adapter Bridge adapter to use
      * @param destinationChain Destination chain ID
      * @param recipient Recipient address on destination chain
      */
     function bridgeDirect(
-        uint256 okuUSDAmount,
+        uint256 okuUsdAmount,
         address adapter,
         uint256 destinationChain,
         address recipient
@@ -138,15 +138,15 @@ contract OkuBridgeRouter is
         require(recipient != address(0), "Invalid recipient");
 
         // Transfer OkuUSD from user
-        IERC20(address(okuUSD)).safeTransferFrom(msg.sender, address(this), okuUSDAmount);
+        IERC20(address(okuUsd)).safeTransferFrom(msg.sender, address(this), okuUsdAmount);
 
         // Burn OkuUSD
-        okuUSD.burn(address(this), okuUSDAmount);
+        okuUsd.burn(address(this), okuUsdAmount);
 
         // Bridge via adapter
-        IBridgeAdapter(adapter).bridge(address(okuUSD), okuUSDAmount, destinationChain, recipient);
+        IBridgeAdapter(adapter).bridge(address(okuUsd), okuUsdAmount, destinationChain, recipient);
 
-        emit BridgeInitiated(msg.sender, adapter, okuUSDAmount, destinationChain, recipient);
+        emit BridgeInitiated(msg.sender, adapter, okuUsdAmount, destinationChain, recipient);
     }
 
     // ============ Admin Functions ============

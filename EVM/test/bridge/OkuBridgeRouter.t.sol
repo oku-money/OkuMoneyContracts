@@ -36,43 +36,43 @@ contract OkuBridgeRouterTest is BaseTest {
         // Deploy OkuBridgeRouter implementation and proxy
         bridgeRouterImpl = new OkuBridgeRouter();
         bytes memory routerInitData =
-            abi.encodeCall(OkuBridgeRouter.initialize, (address(wokuUSD), address(okuUSD), admin));
+            abi.encodeCall(OkuBridgeRouter.initialize, (address(wokuUsd), address(okuUsd), admin));
         bridgeRouter =
             OkuBridgeRouter(address(new ERC1967Proxy(address(bridgeRouterImpl), routerInitData)));
 
         // Deploy mock bridge
-        mockBridge = new MockOkuBridge(okuUSD, minter);
+        mockBridge = new MockOkuBridge(okuUsd, minter);
 
         // Configure roles and adapters
         vm.startPrank(admin);
         bridgeRouter.grantRole(ADAPTER_MANAGER_ROLE, admin);
         bridgeRouter.grantRole(ROUTER_UNPAUSER_ROLE, admin);
         bridgeRouter.configureAdapter(address(mockBridge), true);
-        okuUSD.grantRole(MINTER_ROLE, address(bridgeRouter)); // Router needs MINTER_ROLE to burn
+        okuUsd.grantRole(MINTER_ROLE, address(bridgeRouter)); // Router needs MINTER_ROLE to burn
         vm.stopPrank();
     }
 
     // ============ Helper Functions ============
 
     /// @notice Wrap OkuUSD into wOkuUSD for a user
-    function _wrapOkuUSD(address user, uint256 amount) internal returns (uint256 shares) {
+    function _wrapOkuUsd(address user, uint256 amount) internal returns (uint256 shares) {
         vm.startPrank(user);
-        okuUSD.approve(address(wokuUSD), amount);
-        shares = wokuUSD.deposit(amount, user);
+        okuUsd.approve(address(wokuUsd), amount);
+        shares = wokuUsd.deposit(amount, user);
         vm.stopPrank();
     }
 
     /// @notice Mint OkuUSD and wrap it for a user
     function _mintAndWrap(address user, uint256 okuAmount) internal returns (uint256 wokuShares) {
-        _mintOkuUSD(user, okuAmount);
-        wokuShares = _wrapOkuUSD(user, okuAmount);
+        _mintOkuUsd(user, okuAmount);
+        wokuShares = _wrapOkuUsd(user, okuAmount);
     }
 
     // ============ Router Configuration Tests ============
 
     function test_Initialize() public view {
-        assertEq(address(bridgeRouter.wOkuUSD()), address(wokuUSD));
-        assertEq(address(bridgeRouter.okuUSD()), address(okuUSD));
+        assertEq(address(bridgeRouter.wOkuUsd()), address(wokuUsd));
+        assertEq(address(bridgeRouter.okuUsd()), address(okuUsd));
         assertTrue(bridgeRouter.hasRole(DEFAULT_ADMIN_ROLE, admin));
         assertTrue(bridgeRouter.hasRole(ROUTER_UPGRADER_ROLE, admin));
         assertTrue(bridgeRouter.hasRole(ROUTER_PAUSER_ROLE, admin));
@@ -141,10 +141,10 @@ contract OkuBridgeRouterTest is BaseTest {
 
     function test_BridgeOkuUSD() public {
         uint256 amount = 1000e18;
-        _mintOkuUSD(user1, amount);
+        _mintOkuUsd(user1, amount);
 
         vm.startPrank(user1);
-        okuUSD.approve(address(bridgeRouter), amount);
+        okuUsd.approve(address(bridgeRouter), amount);
 
         vm.expectEmit(true, true, false, true);
         emit BridgeInitiated(user1, address(mockBridge), amount, ARBITRUM_CHAIN_ID, user2);
@@ -153,11 +153,11 @@ contract OkuBridgeRouterTest is BaseTest {
         vm.stopPrank();
 
         // Verify tokens burned
-        assertEq(okuUSD.balanceOf(user1), 0);
+        assertEq(okuUsd.balanceOf(user1), 0);
 
         // Verify bridge called
         MockOkuBridge.PendingBridge memory pending = mockBridge.getLastBridge();
-        assertEq(pending.token, address(okuUSD));
+        assertEq(pending.token, address(okuUsd));
         assertEq(pending.amount, amount);
         assertEq(pending.destinationChain, ARBITRUM_CHAIN_ID);
         assertEq(pending.recipient, user2);
@@ -165,13 +165,13 @@ contract OkuBridgeRouterTest is BaseTest {
 
     function test_BridgeOkuUSD_RevertWhenPaused() public {
         uint256 amount = 1000e18;
-        _mintOkuUSD(user1, amount);
+        _mintOkuUsd(user1, amount);
 
         vm.prank(admin);
         bridgeRouter.pause();
 
         vm.startPrank(user1);
-        okuUSD.approve(address(bridgeRouter), amount);
+        okuUsd.approve(address(bridgeRouter), amount);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         bridgeRouter.bridgeDirect(amount, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
@@ -179,11 +179,11 @@ contract OkuBridgeRouterTest is BaseTest {
 
     function test_BridgeOkuUSD_RevertIfAdapterNotSupported() public {
         uint256 amount = 1000e18;
-        _mintOkuUSD(user1, amount);
+        _mintOkuUsd(user1, amount);
         address unsupportedAdapter = makeAddr("unsupported");
 
         vm.startPrank(user1);
-        okuUSD.approve(address(bridgeRouter), amount);
+        okuUsd.approve(address(bridgeRouter), amount);
         vm.expectRevert("Unsupported adapter");
         bridgeRouter.bridgeDirect(amount, unsupportedAdapter, ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
@@ -191,10 +191,10 @@ contract OkuBridgeRouterTest is BaseTest {
 
     function test_BridgeOkuUSD_RevertIfInvalidRecipient() public {
         uint256 amount = 1000e18;
-        _mintOkuUSD(user1, amount);
+        _mintOkuUsd(user1, amount);
 
         vm.startPrank(user1);
-        okuUSD.approve(address(bridgeRouter), amount);
+        okuUsd.approve(address(bridgeRouter), amount);
         vm.expectRevert("Invalid recipient");
         bridgeRouter.bridgeDirect(amount, address(mockBridge), ARBITRUM_CHAIN_ID, address(0));
         vm.stopPrank();
@@ -205,7 +205,7 @@ contract OkuBridgeRouterTest is BaseTest {
         // Don't mint any tokens to user1
 
         vm.startPrank(user1);
-        okuUSD.approve(address(bridgeRouter), amount);
+        okuUsd.approve(address(bridgeRouter), amount);
         vm.expectRevert("Insufficient balance");
         bridgeRouter.bridgeDirect(amount, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
@@ -218,16 +218,16 @@ contract OkuBridgeRouterTest is BaseTest {
         uint256 wokuShares = _mintAndWrap(user1, okuAmount);
 
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), wokuShares);
+        wokuUsd.approve(address(bridgeRouter), wokuShares);
 
         bridgeRouter.bridgeWrapped(wokuShares, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
         // Verify wOkuUSD burned
-        assertEq(wokuUSD.balanceOf(user1), 0);
+        assertEq(wokuUsd.balanceOf(user1), 0);
 
         // Verify OkuUSD burned (not held by router)
-        assertEq(okuUSD.balanceOf(address(bridgeRouter)), 0);
+        assertEq(okuUsd.balanceOf(address(bridgeRouter)), 0);
 
         // Verify bridge received correct amount
         MockOkuBridge.PendingBridge memory pending = mockBridge.getLastBridge();
@@ -242,14 +242,14 @@ contract OkuBridgeRouterTest is BaseTest {
         // Rebase: 10% increase
         uint256 newMultiplier = PRECISION + (PRECISION / 10);
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(newMultiplier);
+        okuUsd.updateRewardMultiplier(newMultiplier);
 
         // wOkuUSD shares now represent more OkuUSD
-        uint256 expectedOkuAmount = wokuUSD.previewRedeem(wokuShares);
+        uint256 expectedOkuAmount = wokuUsd.previewRedeem(wokuShares);
         assertGt(expectedOkuAmount, initialOku); // Should be ~1100e18
 
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), wokuShares);
+        wokuUsd.approve(address(bridgeRouter), wokuShares);
         bridgeRouter.bridgeWrapped(wokuShares, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
@@ -265,7 +265,7 @@ contract OkuBridgeRouterTest is BaseTest {
         bridgeRouter.pause();
 
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), wokuShares);
+        wokuUsd.approve(address(bridgeRouter), wokuShares);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         bridgeRouter.bridgeWrapped(wokuShares, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
@@ -276,7 +276,7 @@ contract OkuBridgeRouterTest is BaseTest {
         uint256 wokuShares = _mintAndWrap(user1, okuAmount);
 
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), wokuShares);
+        wokuUsd.approve(address(bridgeRouter), wokuShares);
 
         vm.expectEmit(true, true, false, true);
         emit BridgeInitiated(user1, address(mockBridge), okuAmount, ARBITRUM_CHAIN_ID, user2);
@@ -291,12 +291,12 @@ contract OkuBridgeRouterTest is BaseTest {
         uint256 initialOku = 1000e18;
 
         // Step 1: User1 has OkuUSD, wraps it
-        _mintOkuUSD(user1, initialOku);
-        uint256 wokuShares = _wrapOkuUSD(user1, initialOku);
+        _mintOkuUsd(user1, initialOku);
+        uint256 wokuShares = _wrapOkuUsd(user1, initialOku);
 
         // Step 2: Bridge wOkuUSD
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), wokuShares);
+        wokuUsd.approve(address(bridgeRouter), wokuShares);
         bridgeRouter.bridgeWrapped(wokuShares, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
@@ -304,8 +304,8 @@ contract OkuBridgeRouterTest is BaseTest {
         mockBridge.completeBridge(0);
 
         // Step 4: User2 wraps received OkuUSD
-        uint256 user2OkuBalance = okuUSD.balanceOf(user2);
-        uint256 user2WokuShares = _wrapOkuUSD(user2, user2OkuBalance);
+        uint256 user2OkuBalance = okuUsd.balanceOf(user2);
+        uint256 user2WokuShares = _wrapOkuUsd(user2, user2OkuBalance);
 
         // Verify: user2 should have equivalent wOkuUSD shares
         assertEq(user2WokuShares, wokuShares);
@@ -316,20 +316,20 @@ contract OkuBridgeRouterTest is BaseTest {
         uint256 initialOku = 1000e18;
 
         // Step 1: Mint and wrap
-        _mintOkuUSD(user1, initialOku);
-        uint256 wokuShares = _wrapOkuUSD(user1, initialOku);
+        _mintOkuUsd(user1, initialOku);
+        uint256 wokuShares = _wrapOkuUsd(user1, initialOku);
 
         // Step 2: Rebase before bridging
         uint256 newMultiplier = PRECISION * 12 / 10; // 20% increase
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(newMultiplier);
+        okuUsd.updateRewardMultiplier(newMultiplier);
 
         // wOkuUSD now worth more OkuUSD
-        uint256 okuValueBeforeBridge = wokuUSD.previewRedeem(wokuShares);
+        uint256 okuValueBeforeBridge = wokuUsd.previewRedeem(wokuShares);
 
         // Step 3: Bridge
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), wokuShares);
+        wokuUsd.approve(address(bridgeRouter), wokuShares);
         bridgeRouter.bridgeWrapped(wokuShares, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
@@ -337,7 +337,7 @@ contract OkuBridgeRouterTest is BaseTest {
         mockBridge.completeBridge(0);
 
         // Verify: user2 receives the full rebased amount (allow 1 wei rounding)
-        uint256 user2Balance = okuUSD.balanceOf(user2);
+        uint256 user2Balance = okuUsd.balanceOf(user2);
         assertApproxEqAbs(user2Balance, okuValueBeforeBridge, 1);
         assertGt(user2Balance, initialOku); // More than original due to rebase
     }
@@ -357,17 +357,17 @@ contract OkuBridgeRouterTest is BaseTest {
         address dest3 = makeAddr("dest3");
 
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), shares1);
+        wokuUsd.approve(address(bridgeRouter), shares1);
         bridgeRouter.bridgeWrapped(shares1, address(mockBridge), ARBITRUM_CHAIN_ID, dest1);
         vm.stopPrank();
 
         vm.startPrank(user2);
-        wokuUSD.approve(address(bridgeRouter), shares2);
+        wokuUsd.approve(address(bridgeRouter), shares2);
         bridgeRouter.bridgeWrapped(shares2, address(mockBridge), OPTIMISM_CHAIN_ID, dest2);
         vm.stopPrank();
 
         vm.startPrank(user3);
-        wokuUSD.approve(address(bridgeRouter), shares3);
+        wokuUsd.approve(address(bridgeRouter), shares3);
         bridgeRouter.bridgeWrapped(shares3, address(mockBridge), ARBITRUM_CHAIN_ID, dest3);
         vm.stopPrank();
 
@@ -377,9 +377,9 @@ contract OkuBridgeRouterTest is BaseTest {
         mockBridge.completeBridge(2);
 
         // Verify all destinations received correct amounts
-        assertEq(okuUSD.balanceOf(dest1), amount1);
-        assertEq(okuUSD.balanceOf(dest2), amount2);
-        assertEq(okuUSD.balanceOf(dest3), amount3);
+        assertEq(okuUsd.balanceOf(dest1), amount1);
+        assertEq(okuUsd.balanceOf(dest2), amount2);
+        assertEq(okuUsd.balanceOf(dest3), amount3);
     }
 
     // ============ Fuzz Tests ============
@@ -387,16 +387,16 @@ contract OkuBridgeRouterTest is BaseTest {
     function testFuzz_BridgeOkuUSD_AmountConsistency(uint256 amount) public {
         amount = bound(amount, 1e18, 100_000_000e18);
 
-        _mintOkuUSD(user1, amount);
-        uint256 supplyBefore = okuUSD.totalSupply();
+        _mintOkuUsd(user1, amount);
+        uint256 supplyBefore = okuUsd.totalSupply();
 
         vm.startPrank(user1);
-        okuUSD.approve(address(bridgeRouter), amount);
+        okuUsd.approve(address(bridgeRouter), amount);
         bridgeRouter.bridgeDirect(amount, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
         // Verify exact amount burned
-        assertEq(okuUSD.totalSupply(), supplyBefore - amount);
+        assertEq(okuUsd.totalSupply(), supplyBefore - amount);
 
         // Verify exact amount recorded in bridge
         MockOkuBridge.PendingBridge memory pending = mockBridge.getLastBridge();
@@ -406,14 +406,14 @@ contract OkuBridgeRouterTest is BaseTest {
     function testFuzz_BridgeWOkuUSD_AmountConsistency(uint256 okuAmount) public {
         okuAmount = bound(okuAmount, 1e18, 100_000_000e18);
 
-        _mintOkuUSD(user1, okuAmount);
-        uint256 wokuShares = _wrapOkuUSD(user1, okuAmount);
+        _mintOkuUsd(user1, okuAmount);
+        uint256 wokuShares = _wrapOkuUsd(user1, okuAmount);
 
         // Calculate expected OkuUSD amount from redemption
-        uint256 expectedOkuAmount = wokuUSD.previewRedeem(wokuShares);
+        uint256 expectedOkuAmount = wokuUsd.previewRedeem(wokuShares);
 
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), wokuShares);
+        wokuUsd.approve(address(bridgeRouter), wokuShares);
         bridgeRouter.bridgeWrapped(wokuShares, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
@@ -432,19 +432,19 @@ contract OkuBridgeRouterTest is BaseTest {
         multiplierIncrease = _boundMultiplierIncrease(multiplierIncrease);
 
         // Wrap tokens
-        _mintOkuUSD(user1, depositAmount);
-        uint256 wokuShares = _wrapOkuUSD(user1, depositAmount);
+        _mintOkuUsd(user1, depositAmount);
+        uint256 wokuShares = _wrapOkuUsd(user1, depositAmount);
 
         // Apply rebase
-        uint256 newMultiplier = okuUSD.rewardMultiplier() + multiplierIncrease;
+        uint256 newMultiplier = okuUsd.rewardMultiplier() + multiplierIncrease;
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(newMultiplier);
+        okuUsd.updateRewardMultiplier(newMultiplier);
 
         // Calculate expected post-rebase value
-        uint256 expectedOkuAmount = wokuUSD.previewRedeem(wokuShares);
+        uint256 expectedOkuAmount = wokuUsd.previewRedeem(wokuShares);
 
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), wokuShares);
+        wokuUsd.approve(address(bridgeRouter), wokuShares);
         bridgeRouter.bridgeWrapped(wokuShares, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
@@ -459,19 +459,19 @@ contract OkuBridgeRouterTest is BaseTest {
         multiplierIncrease = _boundMultiplierIncrease(multiplierIncrease);
 
         // Step 1: Wrap
-        _mintOkuUSD(user1, initialOku);
-        uint256 wokuShares = _wrapOkuUSD(user1, initialOku);
+        _mintOkuUsd(user1, initialOku);
+        uint256 wokuShares = _wrapOkuUsd(user1, initialOku);
 
         // Step 2: Optional rebase
-        uint256 newMultiplier = okuUSD.rewardMultiplier() + multiplierIncrease;
+        uint256 newMultiplier = okuUsd.rewardMultiplier() + multiplierIncrease;
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(newMultiplier);
+        okuUsd.updateRewardMultiplier(newMultiplier);
 
-        uint256 valueBeforeBridge = wokuUSD.previewRedeem(wokuShares);
+        uint256 valueBeforeBridge = wokuUsd.previewRedeem(wokuShares);
 
         // Step 3: Bridge
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), wokuShares);
+        wokuUsd.approve(address(bridgeRouter), wokuShares);
         bridgeRouter.bridgeWrapped(wokuShares, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
@@ -480,15 +480,15 @@ contract OkuBridgeRouterTest is BaseTest {
 
         // Verify: destination received expected amount
         // Allow 2 wei rounding from share conversion during OkuUSD transfer
-        uint256 destBalance = okuUSD.balanceOf(user2);
+        uint256 destBalance = okuUsd.balanceOf(user2);
         assertApproxEqAbs(destBalance, valueBeforeBridge, 2);
 
         // Step 5: Wrap on destination
-        uint256 destWokuShares = _wrapOkuUSD(user2, destBalance);
+        uint256 destWokuShares = _wrapOkuUsd(user2, destBalance);
 
         // Verify: destination wOkuUSD VALUE equals source value (not share count)
         // Share counts differ after rebase, but underlying OkuUSD value should be preserved
-        uint256 destValue = wokuUSD.previewRedeem(destWokuShares);
+        uint256 destValue = wokuUsd.previewRedeem(destWokuShares);
         // Allow up to 5 wei rounding (accumulates across multiple share/token conversions)
         // Operations: source redeem, OkuUSD transfer (share conversion), mint, dest deposit, preview
         assertApproxEqAbs(destValue, valueBeforeBridge, 5);
@@ -510,7 +510,7 @@ contract OkuBridgeRouterTest is BaseTest {
             uint256 shares = _mintAndWrap(users[i], amounts[i]);
 
             vm.startPrank(users[i]);
-            wokuUSD.approve(address(bridgeRouter), shares);
+            wokuUsd.approve(address(bridgeRouter), shares);
             bridgeRouter.bridgeWrapped(
                 shares, address(mockBridge), ARBITRUM_CHAIN_ID, destinations[i]
             );
@@ -523,7 +523,7 @@ contract OkuBridgeRouterTest is BaseTest {
         // Complete all and verify
         for (uint256 i = 0; i < numBridges; i++) {
             mockBridge.completeBridge(i);
-            assertEq(okuUSD.balanceOf(destinations[i]), amounts[i]);
+            assertEq(okuUsd.balanceOf(destinations[i]), amounts[i]);
         }
     }
 
@@ -532,28 +532,28 @@ contract OkuBridgeRouterTest is BaseTest {
         amount = bound(amount, 1e18, 100_000_000e18);
 
         // Initial state
-        _mintOkuUSD(user1, amount);
+        _mintOkuUsd(user1, amount);
         uint256 initialValue = amount;
 
         // Wrap
-        uint256 shares1 = _wrapOkuUSD(user1, amount);
+        uint256 shares1 = _wrapOkuUsd(user1, amount);
 
         // Bridge
         vm.startPrank(user1);
-        wokuUSD.approve(address(bridgeRouter), shares1);
+        wokuUsd.approve(address(bridgeRouter), shares1);
         bridgeRouter.bridgeWrapped(shares1, address(mockBridge), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
         // Complete
         mockBridge.completeBridge(0);
-        uint256 receivedOku = okuUSD.balanceOf(user2);
+        uint256 receivedOku = okuUsd.balanceOf(user2);
 
         // Wrap again on destination
-        uint256 shares2 = _wrapOkuUSD(user2, receivedOku);
+        uint256 shares2 = _wrapOkuUsd(user2, receivedOku);
 
         // Redeem to get final OkuUSD value
         vm.prank(user2);
-        uint256 finalValue = wokuUSD.redeem(shares2, user2, user2);
+        uint256 finalValue = wokuUsd.redeem(shares2, user2, user2);
 
         // Max 2 wei loss (1 wei per wrap operation rounding)
         assertGe(initialValue, finalValue);

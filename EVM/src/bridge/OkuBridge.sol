@@ -44,7 +44,7 @@ contract OkuBridge is
     // ============ State Variables ============
 
     /// @notice OkuUSD token contract
-    IOkuUSD public okuUSD;
+    IOkuUSD public okuUsd;
 
     /// @notice Authorized signer address (orchestrator's KMS public key)
     address public authorizedSigner;
@@ -148,18 +148,18 @@ contract OkuBridge is
 
     /**
      * @notice Initialize the bridge contract
-     * @param _okuUSD OkuUSD token address
+     * @param _okuUsd OkuUSD token address
      * @param _authorizedSigner Orchestrator's authorized signer address
      * @param _feeRecipient Address to receive bridge fees
      * @param _admin Admin address for role management
      */
     function initialize(
-        address _okuUSD,
+        address _okuUsd,
         address _authorizedSigner,
         address _feeRecipient,
         address _admin
     ) external initializer {
-        if (_okuUSD == address(0)) revert ZeroAddress();
+        if (_okuUsd == address(0)) revert ZeroAddress();
         if (_authorizedSigner == address(0)) revert ZeroAddress();
         if (_feeRecipient == address(0)) revert ZeroAddress();
         if (_admin == address(0)) revert ZeroAddress();
@@ -168,7 +168,7 @@ contract OkuBridge is
         __Pausable_init();
         __EIP712_init("OkuBridge", "1");
 
-        okuUSD = IOkuUSD(_okuUSD);
+        okuUsd = IOkuUSD(_okuUsd);
         authorizedSigner = _authorizedSigner;
         feeRecipient = _feeRecipient;
 
@@ -227,15 +227,15 @@ contract OkuBridge is
 
         // Convert to token amounts for burn/mint
         uint256 sharesToBurn = shares + feeShares;
-        uint256 tokensToBurn = okuUSD.sharesToTokens(sharesToBurn);
+        uint256 tokensToBurn = okuUsd.sharesToTokens(sharesToBurn);
 
         // Burn tokens from user (OkuUSD.burn takes token amount)
-        okuUSD.burn(msg.sender, tokensToBurn);
+        okuUsd.burn(msg.sender, tokensToBurn);
 
         // Mint fee back to fee recipient (OkuUSD.mint takes token amount)
         if (feeShares > 0) {
-            uint256 feeTokens = okuUSD.sharesToTokens(feeShares);
-            okuUSD.mint(feeRecipient, feeTokens);
+            uint256 feeTokens = okuUsd.sharesToTokens(feeShares);
+            okuUsd.mint(feeRecipient, feeTokens);
         }
 
         // Get and increment nonce
@@ -317,8 +317,8 @@ contract OkuBridge is
         }
 
         // Convert shares to tokens and mint (OkuUSD.mint takes token amount)
-        uint256 tokensToMint = okuUSD.sharesToTokens(request.shares);
-        okuUSD.mint(request.recipient, tokensToMint);
+        uint256 tokensToMint = okuUsd.sharesToTokens(request.shares);
+        okuUsd.mint(request.recipient, tokensToMint);
 
         // Emit event
         emit BridgeMint(requestId, request.recipient, request.sourceChainId, request.shares);
@@ -341,36 +341,20 @@ contract OkuBridge is
      * @notice Refund shares for failed bridge request
      * @dev Used when destination mint fails and cannot be completed
      * @param request Original bridge request
-     * @param proof Proof of failure (signature or other evidence)
      */
     function refundFailedRequest(
         BridgeRequest calldata request,
-        bytes calldata proof
+        bytes calldata /* proof */
     ) external onlyRole(BRIDGE_REFUND_ADMIN_ROLE) {
         // Calculate request ID
         bytes32 requestId = keccak256(abi.encode(request));
 
-        // Verify proof (simplified for MVP - just check admin signed it)
-        bytes32 structHash = keccak256(
-            abi.encode(
-                BRIDGE_REQUEST_TYPEHASH,
-                request.sourceChainId,
-                request.destChainId,
-                request.sender,
-                request.recipient,
-                request.shares,
-                request.nonce,
-                request.deadline
-            )
-        );
-        bytes32 digest = _hashTypedDataV4(structHash);
-
-        // For refunds, we just need admin authorization via role check
-        // The proof parameter is kept for future enhancement
+        // Admin role check is sufficient authorization for refunds
+        // proof parameter reserved for future on-chain verification
 
         // Convert shares to tokens and mint back to original sender
-        uint256 tokensToMint = okuUSD.sharesToTokens(request.shares);
-        okuUSD.mint(request.sender, tokensToMint);
+        uint256 tokensToMint = okuUsd.sharesToTokens(request.shares);
+        okuUsd.mint(request.sender, tokensToMint);
 
         emit RefundProcessed(requestId, request.sender, request.shares);
     }

@@ -9,8 +9,8 @@ interface IOFTAdapter {
     struct SendParam {
         uint32 dstEid; // Destination endpoint ID
         bytes32 to; // Recipient address in bytes32 format
-        uint256 amountLD; // Amount in local decimals
-        uint256 minAmountLD; // Minimum amount to receive
+        uint256 amountLd; // Amount in local decimals
+        uint256 minAmountLd; // Minimum amount to receive
         bytes extraOptions; // Additional options
         bytes composeMsg; // Composed message for other operations
         bytes oftCmd; // OFT command

@@ -41,7 +41,7 @@ contract MockNttManagerHH is INttManager {
     uint64 private nextSequence;
 
     IERC20 public token;
-    IOkuUSDMintable public okuUSD;
+    IOkuUSDMintable public okuUsd;
 
     // Fee configuration
     uint256 public messageFee;
@@ -61,9 +61,9 @@ contract MockNttManagerHH is INttManager {
     error InvalidTransferIndex();
     error TransferAlreadyCompleted();
 
-    constructor(address _token, address _okuUSD) {
+    constructor(address _token, address _okuUsd) {
         token = IERC20(_token);
-        okuUSD = IOkuUSDMintable(_okuUSD);
+        okuUsd = IOkuUSDMintable(_okuUsd);
     }
 
     /**
@@ -139,7 +139,7 @@ contract MockNttManagerHH is INttManager {
 
         // Mint OkuUSD on destination
         // NOTE: This contract must have MINTER_ROLE granted
-        okuUSD.mint(recipient, p.amount);
+        okuUsd.mint(recipient, p.amount);
 
         emit TransferCompleted(index, recipient, p.amount);
     }
@@ -156,7 +156,7 @@ contract MockNttManagerHH is INttManager {
 
         p.completed = true;
 
-        okuUSD.mint(to, p.amount);
+        okuUsd.mint(to, p.amount);
 
         emit TransferCompleted(index, to, p.amount);
     }

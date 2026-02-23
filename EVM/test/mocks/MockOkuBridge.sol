@@ -19,15 +19,15 @@ contract MockOkuBridge is IOkuBridge, Test {
     }
 
     PendingBridge[] public pendingBridges;
-    OkuUSD public okuUSD;
+    OkuUSD public okuUsd;
     address public minter;
 
     // Events for testing
     event BridgeCalled(address token, uint256 amount, uint256 destinationChain, address recipient);
     event BridgeCompleted(uint256 index, address recipient, uint256 amount);
 
-    constructor(OkuUSD _okuUSD, address _minter) {
-        okuUSD = _okuUSD;
+    constructor(OkuUSD _okuUsd, address _minter) {
+        okuUsd = _okuUsd;
         minter = _minter;
     }
 
@@ -74,7 +74,7 @@ contract MockOkuBridge is IOkuBridge, Test {
         PendingBridge memory p = pendingBridges[index];
 
         vm.prank(minter);
-        okuUSD.mint(p.recipient, p.amount);
+        okuUsd.mint(p.recipient, p.amount);
 
         emit BridgeCompleted(index, p.recipient, p.amount);
     }
@@ -87,7 +87,7 @@ contract MockOkuBridge is IOkuBridge, Test {
         PendingBridge memory p = pendingBridges[index];
 
         vm.prank(minter);
-        okuUSD.mint(to, p.amount);
+        okuUsd.mint(to, p.amount);
 
         emit BridgeCompleted(index, to, p.amount);
     }

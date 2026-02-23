@@ -10,8 +10,8 @@ import {wOkuUSD} from "../../src/token/wOkuUSD.sol";
  * @notice Handler contract for wOkuUSD vault invariant testing
  */
 contract wOkuUSDHandler is Test {
-    OkuUSD public okuUSD;
-    wOkuUSD public wokuUSD;
+    OkuUSD public okuUsd;
+    wOkuUSD public wokuUsd;
     address public minter;
     address public rebaser;
 
@@ -22,27 +22,27 @@ contract wOkuUSDHandler is Test {
     uint256 public constant PRECISION = 1e18;
 
     // Ghost variables
-    uint256 public ghost_totalDeposited;
-    uint256 public ghost_totalWithdrawn;
-    uint256 public ghost_rebaseCount;
+    uint256 public ghostTotalDeposited;
+    uint256 public ghostTotalWithdrawn;
+    uint256 public ghostRebaseCount;
 
     // Ghost call/revert counters
-    uint256 public ghost_mintOkuUSDCallCount;
-    uint256 public ghost_mintOkuUSDRevertCount;
-    uint256 public ghost_depositCallCount;
-    uint256 public ghost_depositRevertCount;
-    uint256 public ghost_redeemCallCount;
-    uint256 public ghost_redeemRevertCount;
-    uint256 public ghost_withdrawCallCount;
-    uint256 public ghost_withdrawRevertCount;
-    uint256 public ghost_rebaseCallCount;
-    uint256 public ghost_rebaseRevertCount;
-    uint256 public ghost_transferSharesCallCount;
-    uint256 public ghost_transferSharesRevertCount;
+    uint256 public ghostMintOkuUsdCallCount;
+    uint256 public ghostMintOkuUsdRevertCount;
+    uint256 public ghostDepositCallCount;
+    uint256 public ghostDepositRevertCount;
+    uint256 public ghostRedeemCallCount;
+    uint256 public ghostRedeemRevertCount;
+    uint256 public ghostWithdrawCallCount;
+    uint256 public ghostWithdrawRevertCount;
+    uint256 public ghostRebaseCallCount;
+    uint256 public ghostRebaseRevertCount;
+    uint256 public ghostTransferSharesCallCount;
+    uint256 public ghostTransferSharesRevertCount;
 
-    constructor(OkuUSD _okuUSD, wOkuUSD _wokuUSD, address _minter, address _rebaser) {
-        okuUSD = _okuUSD;
-        wokuUSD = _wokuUSD;
+    constructor(OkuUSD _okuUsd, wOkuUSD _wokuUsd, address _minter, address _rebaser) {
+        okuUsd = _okuUsd;
+        wokuUsd = _wokuUsd;
         minter = _minter;
         rebaser = _rebaser;
 
@@ -66,105 +66,105 @@ contract wOkuUSDHandler is Test {
     // ============ Handler Functions ============
 
     /// @notice Mint OkuUSD to actors (so they have tokens to deposit)
-    function mintOkuUSD(uint256 actorSeed, uint256 amount) external {
-        ghost_mintOkuUSDCallCount++;
+    function mintOkuUsd(uint256 actorSeed, uint256 amount) external {
+        ghostMintOkuUsdCallCount++;
         address actor = actors[actorSeed % actors.length];
         amount = bound(amount, 1e18, 1_000_000e18);
 
-        uint256 allowance = okuUSD.minterAllowance(minter);
-        uint256 remaining = okuUSD.maxSupply() - okuUSD.totalSupply();
+        uint256 allowance = okuUsd.minterAllowance(minter);
+        uint256 remaining = okuUsd.maxSupply() - okuUsd.totalSupply();
         amount = bound(amount, 0, _min(allowance, remaining));
 
         if (amount == 0) return;
 
         vm.prank(minter);
-        try okuUSD.mint(actor, amount) {} catch {
-            ghost_mintOkuUSDRevertCount++;
+        try okuUsd.mint(actor, amount) {} catch {
+            ghostMintOkuUsdRevertCount++;
         }
     }
 
     /// @notice Deposit OkuUSD into vault
     function deposit(uint256 actorSeed, uint256 amount) external {
-        ghost_depositCallCount++;
+        ghostDepositCallCount++;
         address actor = actors[actorSeed % actors.length];
-        uint256 balance = okuUSD.balanceOf(actor);
+        uint256 balance = okuUsd.balanceOf(actor);
         amount = bound(amount, 0, balance);
 
         if (amount == 0) return;
 
         vm.startPrank(actor);
-        okuUSD.approve(address(wokuUSD), amount);
-        try wokuUSD.deposit(amount, actor) {
-            ghost_totalDeposited += amount;
+        okuUsd.approve(address(wokuUsd), amount);
+        try wokuUsd.deposit(amount, actor) {
+            ghostTotalDeposited += amount;
         } catch {
-            ghost_depositRevertCount++;
+            ghostDepositRevertCount++;
         }
         vm.stopPrank();
     }
 
     /// @notice Redeem shares from vault
     function redeem(uint256 actorSeed, uint256 shares) external {
-        ghost_redeemCallCount++;
+        ghostRedeemCallCount++;
         address actor = actors[actorSeed % actors.length];
-        uint256 balance = wokuUSD.balanceOf(actor);
+        uint256 balance = wokuUsd.balanceOf(actor);
         shares = bound(shares, 0, balance);
 
         if (shares == 0) return;
 
         vm.prank(actor);
-        try wokuUSD.redeem(shares, actor, actor) returns (uint256 assets) {
-            ghost_totalWithdrawn += assets;
+        try wokuUsd.redeem(shares, actor, actor) returns (uint256 assets) {
+            ghostTotalWithdrawn += assets;
         } catch {
-            ghost_redeemRevertCount++;
+            ghostRedeemRevertCount++;
         }
     }
 
     /// @notice Withdraw assets from vault
     function withdraw(uint256 actorSeed, uint256 assets) external {
-        ghost_withdrawCallCount++;
+        ghostWithdrawCallCount++;
         address actor = actors[actorSeed % actors.length];
-        uint256 maxAssets = wokuUSD.maxWithdraw(actor);
+        uint256 maxAssets = wokuUsd.maxWithdraw(actor);
         assets = bound(assets, 0, maxAssets);
 
         if (assets == 0) return;
 
         vm.prank(actor);
-        try wokuUSD.withdraw(assets, actor, actor) {
-            ghost_totalWithdrawn += assets;
+        try wokuUsd.withdraw(assets, actor, actor) {
+            ghostTotalWithdrawn += assets;
         } catch {
-            ghost_withdrawRevertCount++;
+            ghostWithdrawRevertCount++;
         }
     }
 
     /// @notice Trigger rebase
     function rebase(uint256 multiplierIncrease) external {
-        ghost_rebaseCallCount++;
-        uint256 currentMultiplier = okuUSD.rewardMultiplier();
+        ghostRebaseCallCount++;
+        uint256 currentMultiplier = okuUsd.rewardMultiplier();
         uint256 increase =
             bound(multiplierIncrease, currentMultiplier / 10_000, currentMultiplier / 10);
         uint256 newMultiplier = currentMultiplier + increase;
 
         vm.prank(rebaser);
-        try okuUSD.updateRewardMultiplier(newMultiplier) {
-            ghost_rebaseCount++;
+        try okuUsd.updateRewardMultiplier(newMultiplier) {
+            ghostRebaseCount++;
         } catch {
-            ghost_rebaseRevertCount++;
+            ghostRebaseRevertCount++;
         }
     }
 
     /// @notice Transfer wOkuUSD between actors
     function transferShares(uint256 fromSeed, uint256 toSeed, uint256 shares) external {
-        ghost_transferSharesCallCount++;
+        ghostTransferSharesCallCount++;
         address from = actors[fromSeed % actors.length];
         address to = actors[toSeed % actors.length];
-        uint256 balance = wokuUSD.balanceOf(from);
+        uint256 balance = wokuUsd.balanceOf(from);
         shares = bound(shares, 0, balance);
 
         if (shares == 0 || from == to) return;
 
         vm.prank(from);
-        try wokuUSD.transfer(to, shares) {} catch {
-            ghost_transferSharesRevertCount++;
+        try wokuUsd.transfer(to, shares) {} catch {
+            ghostTransferSharesRevertCount++;
         }
     }
 
@@ -178,14 +178,14 @@ contract wOkuUSDHandler is Test {
         return actors.length;
     }
 
-    function ghost_totalCalls() external view returns (uint256) {
-        return ghost_mintOkuUSDCallCount + ghost_depositCallCount + ghost_redeemCallCount
-            + ghost_withdrawCallCount + ghost_rebaseCallCount + ghost_transferSharesCallCount;
+    function ghostTotalCalls() external view returns (uint256) {
+        return ghostMintOkuUsdCallCount + ghostDepositCallCount + ghostRedeemCallCount
+            + ghostWithdrawCallCount + ghostRebaseCallCount + ghostTransferSharesCallCount;
     }
 
-    function ghost_totalReverts() external view returns (uint256) {
-        return ghost_mintOkuUSDRevertCount + ghost_depositRevertCount + ghost_redeemRevertCount
-            + ghost_withdrawRevertCount + ghost_rebaseRevertCount + ghost_transferSharesRevertCount;
+    function ghostTotalReverts() external view returns (uint256) {
+        return ghostMintOkuUsdRevertCount + ghostDepositRevertCount + ghostRedeemRevertCount
+            + ghostWithdrawRevertCount + ghostRebaseRevertCount + ghostTransferSharesRevertCount;
     }
 
     // ============ Helper Functions ============

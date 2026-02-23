@@ -39,14 +39,14 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     QueueEntry[] public queue;
     uint256 public queueHead;
 
-    IOkuUSD public okuUSD;
+    IOkuUSD public okuUsd;
 
     // Events
     event RedemptionQueued(
-        address indexed user, uint256 shares, uint256 okuUSDAmount, uint256 position
+        address indexed user, uint256 shares, uint256 okuUsdAmount, uint256 position
     );
     event RedemptionProcessed(
-        address indexed user, uint256 shares, uint256 okuUSDAmount, uint256 usdcAmount
+        address indexed user, uint256 shares, uint256 okuUsdAmount, uint256 usdcAmount
     );
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -54,10 +54,10 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         _disableInitializers();
     }
 
-    function initialize(address _okuUSD, address admin) public initializer {
+    function initialize(address _okuUsd, address admin) public initializer {
         __AccessControl_init();
 
-        okuUSD = IOkuUSD(_okuUSD);
+        okuUsd = IOkuUSD(_okuUsd);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(UPGRADER_ROLE, admin);
@@ -68,38 +68,38 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     /**
      * @notice Add redemption to queue
      * @param user User requesting redemption
-     * @param okuUSDAmount Amount of OkuUSD to redeem (in tokens)
+     * @param okuUsdAmount Amount of OkuUSD to redeem (in tokens)
      * @dev Converts tokens to shares for storage so users earn yield while queued
      */
-    function enqueue(address user, uint256 okuUSDAmount) external onlyRole(PSM_ROLE) {
+    function enqueue(address user, uint256 okuUsdAmount) external onlyRole(PSM_ROLE) {
         // Transfer OkuUSD to queue (locks it)
-        require(okuUSD.transferFrom(user, address(this), okuUSDAmount), "Transfer failed");
+        require(okuUsd.transferFrom(user, address(this), okuUsdAmount), "Transfer failed");
 
         // Convert tokens to shares for storage
-        uint256 shares = okuUSD.tokensToShares(okuUSDAmount);
+        uint256 shares = okuUsd.tokensToShares(okuUsdAmount);
 
         queue.push(QueueEntry({user: user, shares: shares, timestamp: block.timestamp}));
 
-        emit RedemptionQueued(user, shares, okuUSDAmount, queue.length - 1);
+        emit RedemptionQueued(user, shares, okuUsdAmount, queue.length - 1);
     }
 
     /**
      * @notice Process queued redemptions (FIFO)
      * @param maxEntries Maximum number of entries to process
      * @param usdcToken USDC token address
-     * @param okuUSDToken OkuUSD token address
+     * @param okuUsdToken OkuUSD token address
      * @dev Converts shares back to tokens at current multiplier - users benefit from yield accrued
      */
     function processQueue(
         uint256 maxEntries,
         address usdcToken,
-        address okuUSDToken
+        address okuUsdToken
     )
         external
         onlyRole(PSM_ROLE)
     {
         IERC20 usdc = IERC20(usdcToken);
-        IOkuUSD oku = IOkuUSD(okuUSDToken);
+        IOkuUSD oku = IOkuUSD(okuUsdToken);
 
         uint256 processed = 0;
         uint256 usdcBalance = usdc.balanceOf(msg.sender);
@@ -108,19 +108,19 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
             QueueEntry memory entry = queue[queueHead];
 
             // Convert shares to current token value (includes yield earned while queued)
-            uint256 okuUSDAmount = oku.sharesToTokens(entry.shares);
+            uint256 okuUsdAmount = oku.sharesToTokens(entry.shares);
 
             // Convert OkuUSD (18 decimals) to USDC amount (6 decimals)
-            uint256 usdcAmount = okuUSDAmount / DECIMAL_MULTIPLIER;
+            uint256 usdcAmount = okuUsdAmount / DECIMAL_MULTIPLIER;
 
             if (usdcBalance >= usdcAmount) {
                 // Burn OkuUSD from queue (use token amount)
-                oku.burn(address(this), okuUSDAmount);
+                oku.burn(address(this), okuUsdAmount);
 
                 // Transfer USDC to user (1:1 value, converted for decimals)
                 usdc.safeTransferFrom(msg.sender, entry.user, usdcAmount);
 
-                emit RedemptionProcessed(entry.user, entry.shares, okuUSDAmount, usdcAmount);
+                emit RedemptionProcessed(entry.user, entry.shares, okuUsdAmount, usdcAmount);
 
                 usdcBalance -= usdcAmount;
                 queueHead++;
@@ -153,7 +153,7 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
      */
     function getQueueEntryValue(uint256 index) external view returns (uint256) {
         require(index >= queueHead && index < queue.length, "Invalid index");
-        return okuUSD.sharesToTokens(queue[index].shares);
+        return okuUsd.sharesToTokens(queue[index].shares);
     }
 
     // ============ Upgradeability ============

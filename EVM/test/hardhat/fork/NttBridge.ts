@@ -429,7 +429,7 @@ describe("NTT Bridge Scenarios", () => {
 
             // Owner withdraws
             const frankBalanceBefore = await ethers.provider.getBalance(frankAddr)
-            const tx = await nttAdapter.connect(Frank).withdrawETH(frankAddr)
+            const tx = await nttAdapter.connect(Frank).withdrawEth(frankAddr)
             const receipt = await tx.wait()
             const gasUsed = receipt!.gasUsed * receipt!.gasPrice
 
@@ -483,7 +483,7 @@ describe("NTT Bridge Scenarios", () => {
 
             // Alice tries to withdraw
             await expect(
-                nttAdapter.connect(Alice).withdrawETH(await Alice.getAddress())
+                nttAdapter.connect(Alice).withdrawEth(await Alice.getAddress())
             ).to.be.revertedWithCustomError(nttAdapter, "OwnableUnauthorizedAccount")
         })
     })

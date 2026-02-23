@@ -4,7 +4,6 @@ pragma solidity ^0.8.28;
 import {BaseTest} from "../Base.t.sol";
 import {OkuBridge} from "../../src/bridge/OkuBridge.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
@@ -54,9 +53,9 @@ contract OkuBridgeTest is BaseTest {
 
         // Grant bridge contract minter role for OkuUSD
         vm.startPrank(admin);
-        okuUSD.grantRole(MINTER_ROLE, address(okuBridge));
+        okuUsd.grantRole(MINTER_ROLE, address(okuBridge));
         vm.startPrank(allowanceManager);
-        okuUSD.configureMinterAllowance(address(okuBridge), MAX_SUPPLY);
+        okuUsd.configureMinterAllowance(address(okuBridge), MAX_SUPPLY);
         vm.stopPrank();
     }
 
@@ -64,7 +63,7 @@ contract OkuBridgeTest is BaseTest {
         okuBridgeImpl = new OkuBridge();
         bytes memory initData = abi.encodeCall(
             OkuBridge.initialize,
-            (address(okuUSD), orchestratorSigner, feeRecipient, admin)
+            (address(okuUsd), orchestratorSigner, feeRecipient, admin)
         );
         okuBridge = OkuBridge(address(new ERC1967Proxy(address(okuBridgeImpl), initData)));
     }
@@ -101,7 +100,7 @@ contract OkuBridgeTest is BaseTest {
         address recipient
     ) internal returns (bytes32 requestId, OkuBridge.BridgeRequest memory request) {
         uint256 fee = (shares * okuBridge.bridgeFee()) / 10000;
-        _mintOkuUSD(user, (shares + fee)); // Mint tokens (will convert to shares)
+        _mintOkuUsd(user, (shares + fee)); // Mint tokens (will convert to shares)
 
         vm.startPrank(user);
         requestId = okuBridge.bridgeBurn(destChainId, recipient, shares);
@@ -126,20 +125,20 @@ contract OkuBridgeTest is BaseTest {
         uint256 shares = 100e18;
         uint256 fee = (shares * 10) / 10000; // 0.1% fee
 
-        _mintOkuUSD(user1, shares + fee);
+        _mintOkuUsd(user1, shares + fee);
 
-        uint256 user1SharesBefore = okuUSD.sharesOf(user1);
-        uint256 feeRecipientSharesBefore = okuUSD.sharesOf(feeRecipient);
+        uint256 user1SharesBefore = okuUsd.sharesOf(user1);
+        uint256 feeRecipientSharesBefore = okuUsd.sharesOf(feeRecipient);
         uint256 nonceBefore = okuBridge.outboundNonce(OPTIMISM_CHAIN_ID);
 
         vm.prank(user1);
         bytes32 requestId = okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
 
         // Verify shares burned from user
-        assertEq(okuUSD.sharesOf(user1), user1SharesBefore - shares - fee);
+        assertEq(okuUsd.sharesOf(user1), user1SharesBefore - shares - fee);
 
         // Verify fee collected
-        assertEq(okuUSD.sharesOf(feeRecipient), feeRecipientSharesBefore + fee);
+        assertEq(okuUsd.sharesOf(feeRecipient), feeRecipientSharesBefore + fee);
 
         // Verify nonce incremented
         assertEq(okuBridge.outboundNonce(OPTIMISM_CHAIN_ID), nonceBefore + 1);
@@ -160,7 +159,7 @@ contract OkuBridgeTest is BaseTest {
 
     function test_BridgeBurn_RevertUnsupportedChain() public {
         uint256 shares = 100e18;
-        _mintOkuUSD(user1, shares + (shares * 10) / 10000);
+        _mintOkuUsd(user1, shares + (shares * 10) / 10000);
 
         vm.prank(user1);
         vm.expectRevert(
@@ -173,7 +172,7 @@ contract OkuBridgeTest is BaseTest {
         uint256 minShares = okuBridge.minBridgeShares();
         uint256 shares = minShares - 1;
 
-        _mintOkuUSD(user1, shares + (shares * 10) / 10000);
+        _mintOkuUsd(user1, shares + (shares * 10) / 10000);
 
         vm.prank(user1);
         vm.expectRevert(
@@ -186,7 +185,7 @@ contract OkuBridgeTest is BaseTest {
         uint256 maxShares = okuBridge.maxBridgeShares();
         uint256 shares = maxShares + 1;
 
-        _mintOkuUSD(user1, shares + (shares * 10) / 10000);
+        _mintOkuUsd(user1, shares + (shares * 10) / 10000);
 
         vm.prank(user1);
         vm.expectRevert(
@@ -197,7 +196,7 @@ contract OkuBridgeTest is BaseTest {
 
     function test_BridgeBurn_RevertWhenPaused() public {
         uint256 shares = 100e18;
-        _mintOkuUSD(user1, shares + (shares * 10) / 10000);
+        _mintOkuUsd(user1, shares + (shares * 10) / 10000);
 
         vm.prank(admin);
         okuBridge.pause();
@@ -212,35 +211,35 @@ contract OkuBridgeTest is BaseTest {
 
         // Test with 0.1% fee (default)
         uint256 fee = (shares * 10) / 10000;
-        _mintOkuUSD(user1, shares + fee);
+        _mintOkuUsd(user1, shares + fee);
 
-        uint256 feeRecipientBefore = okuUSD.sharesOf(feeRecipient);
+        uint256 feeRecipientBefore = okuUsd.sharesOf(feeRecipient);
 
         vm.prank(user1);
         okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
 
-        assertEq(okuUSD.sharesOf(feeRecipient), feeRecipientBefore + fee);
+        assertEq(okuUsd.sharesOf(feeRecipient), feeRecipientBefore + fee);
 
         // Update fee to 1%
         vm.prank(admin);
         okuBridge.updateFee(100);
 
         uint256 newFee = (shares * 100) / 10000;
-        _mintOkuUSD(user1, shares + newFee);
+        _mintOkuUsd(user1, shares + newFee);
 
-        feeRecipientBefore = okuUSD.sharesOf(feeRecipient);
+        feeRecipientBefore = okuUsd.sharesOf(feeRecipient);
 
         vm.prank(user1);
         okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
 
-        assertEq(okuUSD.sharesOf(feeRecipient), feeRecipientBefore + newFee);
+        assertEq(okuUsd.sharesOf(feeRecipient), feeRecipientBefore + newFee);
     }
 
     function test_BridgeBurn_NonceIncrement() public {
         uint256 shares = 100e18;
 
         for (uint256 i = 0; i < 5; i++) {
-            _mintOkuUSD(user1, shares + (shares * 10) / 10000);
+            _mintOkuUsd(user1, shares + (shares * 10) / 10000);
 
             uint256 expectedNonce = okuBridge.outboundNonce(OPTIMISM_CHAIN_ID);
 
@@ -256,14 +255,14 @@ contract OkuBridgeTest is BaseTest {
 
         // Bridge to Optimism 3 times
         for (uint256 i = 0; i < 3; i++) {
-            _mintOkuUSD(user1, shares + (shares * 10) / 10000);
+            _mintOkuUsd(user1, shares + (shares * 10) / 10000);
             vm.prank(user1);
             okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
         }
 
         // Bridge to Arbitrum 3 times
         for (uint256 i = 0; i < 3; i++) {
-            _mintOkuUSD(user1, shares + (shares * 10) / 10000);
+            _mintOkuUsd(user1, shares + (shares * 10) / 10000);
             vm.prank(user1);
             okuBridge.bridgeBurn(ARBITRUM_CHAIN_ID, user2, shares);
         }
@@ -293,12 +292,12 @@ contract OkuBridgeTest is BaseTest {
         bytes memory signature = _signBridgeRequest(request);
         bytes32 requestId = keccak256(abi.encode(request));
 
-        uint256 user2SharesBefore = okuUSD.sharesOf(user2);
+        uint256 user2SharesBefore = okuUsd.sharesOf(user2);
 
         okuBridge.bridgeMint(request, signature);
 
         // Verify shares minted to recipient
-        assertEq(okuUSD.sharesOf(user2), user2SharesBefore + shares);
+        assertEq(okuUsd.sharesOf(user2), user2SharesBefore + shares);
 
         // Verify requestId marked as processed
         assertTrue(okuBridge.processedRequests(requestId));
@@ -433,13 +432,13 @@ contract OkuBridgeTest is BaseTest {
         uint256 shares = 100e18;
 
         // Step 1: User1 bridges from source
-        _mintOkuUSD(user1, shares + (shares * 10) / 10000);
+        _mintOkuUsd(user1, shares + (shares * 10) / 10000);
 
         vm.prank(user1);
-        bytes32 requestId = okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
 
         // Verify burn happened
-        assertEq(okuUSD.sharesOf(user1), 0);
+        assertEq(okuUsd.sharesOf(user1), 0);
 
         // Step 2: Create request for destination (same chainid for testing)
         OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({
@@ -455,15 +454,15 @@ contract OkuBridgeTest is BaseTest {
         bytes memory signature = _signBridgeRequest(request);
 
         // Step 3: Mint on destination
-        uint256 user2Before = okuUSD.sharesOf(user2);
+        uint256 user2Before = okuUsd.sharesOf(user2);
         okuBridge.bridgeMint(request, signature);
 
         // Verify shares minted to recipient
-        assertEq(okuUSD.sharesOf(user2), user2Before + shares);
+        assertEq(okuUsd.sharesOf(user2), user2Before + shares);
 
         // Verify fee was collected
         uint256 expectedFee = (shares * 10) / 10000;
-        assertEq(okuUSD.sharesOf(feeRecipient), expectedFee);
+        assertEq(okuUsd.sharesOf(feeRecipient), expectedFee);
     }
 
     function test_FullRoundTrip_WithRebase() public {
@@ -471,17 +470,17 @@ contract OkuBridgeTest is BaseTest {
 
         // Step 1: Mint and bridge
         uint256 fee = (shares * 10) / 10000;
-        _mintOkuUSD(user1, shares + fee);
+        _mintOkuUsd(user1, shares + fee);
 
         vm.prank(user1);
-        bytes32 requestId = okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
 
         // Step 2: Apply rebase (increase multiplier by 50%)
-        uint256 oldMultiplier = okuUSD.rewardMultiplier();
+        uint256 oldMultiplier = okuUsd.rewardMultiplier();
         uint256 newMultiplier = (oldMultiplier * 150) / 100;
 
         vm.prank(rebaser);
-        okuUSD.updateRewardMultiplier(newMultiplier);
+        okuUsd.updateRewardMultiplier(newMultiplier);
 
         // Step 3: Create request and sign
         OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({
@@ -500,19 +499,20 @@ contract OkuBridgeTest is BaseTest {
         okuBridge.bridgeMint(request, signature);
 
         // Verify user2 received exact share count (not affected by rebase)
-        assertEq(okuUSD.sharesOf(user2), shares);
+        assertEq(okuUsd.sharesOf(user2), shares);
 
         // But token balance reflects new multiplier
         uint256 expectedTokens = (shares * newMultiplier) / PRECISION;
-        assertEq(okuUSD.balanceOf(user2), expectedTokens);
+        assertEq(okuUsd.balanceOf(user2), expectedTokens);
     }
 
     function test_BridgeBurn_MultipleUsers_IncrementNonce() public {
         uint256 shares = 50e18;
 
         for (uint256 i = 0; i < 5; i++) {
+            // forge-lint: disable-next-line(unsafe-typecast)
             address user = address(uint160(i + 1000));
-            _mintOkuUSD(user, shares + (shares * 10) / 10000);
+            _mintOkuUsd(user, shares + (shares * 10) / 10000);
 
             vm.prank(user);
             okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user, shares);
@@ -529,15 +529,15 @@ contract OkuBridgeTest is BaseTest {
         vm.prank(admin);
         okuBridge.updateFee(0);
 
-        _mintOkuUSD(user1, shares);
+        _mintOkuUsd(user1, shares);
 
-        uint256 feeRecipientBefore = okuUSD.sharesOf(feeRecipient);
+        uint256 feeRecipientBefore = okuUsd.sharesOf(feeRecipient);
 
         vm.prank(user1);
         okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
 
         // Verify no fee collected
-        assertEq(okuUSD.sharesOf(feeRecipient), feeRecipientBefore);
+        assertEq(okuUsd.sharesOf(feeRecipient), feeRecipientBefore);
     }
 
     // ============ Admin Function Tests ============
@@ -610,7 +610,7 @@ contract OkuBridgeTest is BaseTest {
 
         // Verify can bridge to it
         uint256 shares = 100e18;
-        _mintOkuUSD(user1, shares + (shares * 10) / 10000);
+        _mintOkuUsd(user1, shares + (shares * 10) / 10000);
 
         vm.prank(user1);
         okuBridge.bridgeBurn(newChainId, user2, shares);
@@ -624,7 +624,7 @@ contract OkuBridgeTest is BaseTest {
 
         // Verify cannot bridge to it
         uint256 shares = 100e18;
-        _mintOkuUSD(user1, shares + (shares * 10) / 10000);
+        _mintOkuUsd(user1, shares + (shares * 10) / 10000);
 
         vm.prank(user1);
         vm.expectRevert(
@@ -645,7 +645,7 @@ contract OkuBridgeTest is BaseTest {
 
         // Test below new minimum
         uint256 fee = (newMin * 10) / 10000;
-        _mintOkuUSD(user1, newMin + fee);
+        _mintOkuUsd(user1, newMin + fee);
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(OkuBridge.AmountBelowMinimum.selector, newMin - 1, newMin)
@@ -678,7 +678,7 @@ contract OkuBridgeTest is BaseTest {
 
         // Verify subsequent bridges use new nonce
         uint256 shares = 100e18;
-        _mintOkuUSD(user1, shares + (shares * 10) / 10000);
+        _mintOkuUsd(user1, shares + (shares * 10) / 10000);
 
         vm.prank(user1);
         okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
@@ -704,29 +704,29 @@ contract OkuBridgeTest is BaseTest {
         uint256 shares = 100e18;
 
         // Create a bridge request that "failed" on destination
-        (bytes32 requestId, OkuBridge.BridgeRequest memory request) =
+        (, OkuBridge.BridgeRequest memory request) =
             _mintSharesAndBridge(user1, shares, OPTIMISM_CHAIN_ID, user2);
 
         // Verify user1 shares were burned
-        assertEq(okuUSD.sharesOf(user1), 0);
+        assertEq(okuUsd.sharesOf(user1), 0);
 
         // Admin refunds the request
         // proof param is unused in current implementation (OkuBridge.sol).
         // When proof verification is added, this test must be updated with valid proof data.
         bytes memory proof = "";
 
-        uint256 user1SharesBefore = okuUSD.sharesOf(user1);
-        uint256 user1TokensBefore = okuUSD.balanceOf(user1);
+        uint256 user1SharesBefore = okuUsd.sharesOf(user1);
+        uint256 user1TokensBefore = okuUsd.balanceOf(user1);
 
         vm.prank(admin);
         okuBridge.refundFailedRequest(request, proof);
 
         // Verify shares returned to original sender
-        assertEq(okuUSD.sharesOf(user1), user1SharesBefore + shares);
+        assertEq(okuUsd.sharesOf(user1), user1SharesBefore + shares);
 
         // Verify token balance reflects refunded shares at current multiplier
-        uint256 expectedTokens = okuUSD.sharesToTokens(shares);
-        assertEq(okuUSD.balanceOf(user1), user1TokensBefore + expectedTokens);
+        uint256 expectedTokens = okuUsd.sharesToTokens(shares);
+        assertEq(okuUsd.balanceOf(user1), user1TokensBefore + expectedTokens);
     }
 
     // ============ EIP-712 Signature Tests ============
@@ -799,7 +799,7 @@ contract OkuBridgeTest is BaseTest {
 
         okuBridge.bridgeMint(request, signature);
 
-        assertEq(okuUSD.sharesOf(user2), shares, "Signature recovery should mint shares");
+        assertEq(okuUsd.sharesOf(user2), shares, "Signature recovery should mint shares");
         assertTrue(okuBridge.processedRequests(requestId), "Request should be marked processed");
     }
 
@@ -809,15 +809,15 @@ contract OkuBridgeTest is BaseTest {
         shares = bound(shares, okuBridge.minBridgeShares(), okuBridge.maxBridgeShares());
 
         uint256 fee = (shares * 10) / 10000;
-        _mintOkuUSD(user1, shares + fee);
+        _mintOkuUsd(user1, shares + fee);
 
-        uint256 totalSharesBefore = okuUSD.totalShares();
+        uint256 totalSharesBefore = okuUsd.totalShares();
 
         vm.prank(user1);
         okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
 
         // Verify exact shares burned (net of fee which was minted back to recipient)
-        assertEq(okuUSD.totalShares(), totalSharesBefore - shares);
+        assertEq(okuUsd.totalShares(), totalSharesBefore - shares);
     }
 
     function testFuzz_BridgeMint_SignatureValidation(uint256 shares, address recipient) public {
@@ -836,18 +836,18 @@ contract OkuBridgeTest is BaseTest {
 
         bytes memory signature = _signBridgeRequest(request);
 
-        uint256 recipientBefore = okuUSD.sharesOf(recipient);
+        uint256 recipientBefore = okuUsd.sharesOf(recipient);
 
         okuBridge.bridgeMint(request, signature);
 
-        assertEq(okuUSD.sharesOf(recipient), recipientBefore + shares);
+        assertEq(okuUsd.sharesOf(recipient), recipientBefore + shares);
     }
 
     function testFuzz_FullRoundTrip_ValuePreservation(uint256 shares) public {
         shares = bound(shares, okuBridge.minBridgeShares(), okuBridge.maxBridgeShares());
 
         uint256 fee = (shares * 10) / 10000;
-        _mintOkuUSD(user1, shares + fee);
+        _mintOkuUsd(user1, shares + fee);
 
         // Bridge burn
         vm.prank(user1);
@@ -870,15 +870,15 @@ contract OkuBridgeTest is BaseTest {
         okuBridge.bridgeMint(request, signature);
 
         // Verify shares preserved (accounting for fee)
-        assertEq(okuUSD.sharesOf(user2), shares);
-        assertEq(okuUSD.sharesOf(feeRecipient), fee);
+        assertEq(okuUsd.sharesOf(user2), shares);
+        assertEq(okuUsd.sharesOf(feeRecipient), fee);
     }
 
     // ============ Event Tests ============
 
     function test_BridgeBurn_EmitsEvent() public {
         uint256 shares = 100e18;
-        _mintOkuUSD(user1, shares + (shares * 10) / 10000);
+        _mintOkuUsd(user1, shares + (shares * 10) / 10000);
 
         uint256 nonce = okuBridge.outboundNonce(OPTIMISM_CHAIN_ID);
 

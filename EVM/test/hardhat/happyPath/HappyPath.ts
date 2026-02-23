@@ -244,7 +244,7 @@ describe("Happy Path Testing", () => {
 
         // First, drain the PSM reserves (admin withdraws all USDC)
         const psmBalance = await usdc.balanceOf(psmAddr)
-        await psm.connect(Frank).withdrawUSDC(await Frank.getAddress(), psmBalance)
+        await psm.connect(Frank).withdrawUsdc(await Frank.getAddress(), psmBalance)
 
         // Verify PSM is empty
         expect(await usdc.balanceOf(psmAddr)).to.equal(0)

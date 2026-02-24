@@ -57,3 +57,12 @@ EVM/scripts/config/addresses.json
 
 # Bridge relay logs (auto-generated)
 EVM/scripts/logs/*.jsonl
+
+# Anchor (Solana test artifacts)
+.anchor/
+
+# Hardhat EDR cache
+edr-cache/
+
+# Rust build artifacts
+target/

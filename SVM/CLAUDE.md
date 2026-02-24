@@ -1,6 +1,6 @@
 # OkuUSD Solana Implementation
 
-> See `CLAUDE.md` for architecture, business logic, and RBAC design.
+> See [`../CLAUDE.md`](../CLAUDE.md) for shared architecture, business logic, and RBAC design.
 
 This document covers Solana-specific implementation details.
 

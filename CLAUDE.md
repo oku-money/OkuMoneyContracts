@@ -170,15 +170,21 @@ balanceOf(user) = shares[user] × rewardMultiplier / PRECISION
 
 ### OkuBridgeRouter
 
-**Concept**: Convenience wrapper for bridging wOkuUSD cross-chain via OkuBridge.
+**Concept**: Single user entry point for bridging. Normalizes tokens (redeeming wOkuUSD if needed) and routes to one of two paths.
 
-**Flow**: Unwrap wOkuUSD → call OkuBridge.bridgeBurn() → mint OkuUSD on destination → user wraps if desired
+**Native path** (OkuBridge owns the burn):
+- wOkuUSD or OkuUSD → tokensToShares → OkuBridge.bridgeBurn() (router never holds a balance)
+
+**Adapter path** (router is the burn authority):
+- wOkuUSD or OkuUSD → router burns → IBridgeAdapter.bridge() (message-only shim for NTT, CCIP, etc.)
+- Router holds MINTER role on OkuUSD for this path
 
 **Requirements**:
-- MUST accept wOkuUSD, unwrap to OkuUSD shares, call bridgeBurn
+- MUST normalize wOkuUSD → OkuUSD before bridging (both paths)
 - MUST support direct OkuUSD bridging (skip unwrap)
-- MUST NOT hold user funds beyond single transaction
+- MUST NOT hold user funds beyond a single transaction
 - MUST revert entire transaction if any step fails
+- Adapters MUST be registered via configureAdapter() before use
 
 ## Granular Access Control (RBAC)
 
@@ -220,7 +226,13 @@ balanceOf(user) = shares[user] × rewardMultiplier / PRECISION
 
 ### OkuBridgeRouter
 
-No privileged roles — stateless convenience wrapper that calls OkuBridge.
+| Role | Single Action |
+|------|---------------|
+| ROUTER_PAUSER | pause() |
+| ROUTER_UNPAUSER | unpause() |
+| ADAPTER_MANAGER | configureAdapter() |
+| BRIDGE_MANAGER | updateOkuBridge() |
+| ROUTER_UPGRADER | upgrade OkuBridgeRouter |
 
 ### Meta Role
 
@@ -274,6 +286,8 @@ All mints must pass:
 PSM mints additionally check (where oracle configured):
 3. `oracle.reserves >= totalSupply + amount` (PoR check)
 4. `oracle.timestamp` within staleness threshold
+5. EVM: `answeredInRound >= roundId` (Chainlink `latestRoundData()` freshness)
+   SVM: `publish_time` age check (Pyth, manual account parsing — no SDK dependency)
 
 ## Redemption Queue
 
@@ -285,8 +299,10 @@ QueueEntry {
 }
 
 // On redemption when buffer insufficient:
-// 1. Lock user's shares (transfer to contract)
-// 2. Emit RedemptionQueued(user, shares)
+// 1. PSM pulls OkuUSD from user (safeTransferFrom user → PSM)
+// 2. PSM transfers to queue/escrow (safeTransfer PSM → queue)
+// 3. PSM calls enqueue() — record-only, no further token pull
+// 4. Emit RedemptionQueued(user, shares)
 
 // On processQueue() when refilled:
 // 1. Calculate payout: shares × currentMultiplier
@@ -323,10 +339,9 @@ OkuBridge is our proprietary, orchestrator-signed bridge. No third-party bridge 
 1. User calls bridgeBurn(destChainId, recipient, shares) on source
 2. Source contract:
    - Validates destination chain, amounts
-   - Burns shares from user
-   - Transfers fee to treasury
+   - Burns `totalShares` from user (subtractive fee: `feeShares = totalShares × bridgeFee / 10000`; re-mints feeShares to fee recipient)
+   - Emits `BridgeBurnEvent` with `netShares = totalShares − feeShares` (what destination will mint)
    - Increments nonce
-   - Emits BridgeBurnEvent
 
 3. Orchestrator:
    - Observes event
@@ -371,14 +386,13 @@ requestId = keccak256(abi.encode(request))
 | Path | Who Pays Gas | Fee Treatment |
 |------|--------------|---------------|
 | Orchestrator submits (default) | Orchestrator | Full fee retained |
-| User submits (fallback) | User | Partial fee refund |
+| User submits (fallback) | User | Fee already collected on source (non-refundable) |
 
 ### Fee Handling
 
-- Fee set by BRIDGE_FEE_MANAGER_ROLE (Orchestrator)
-- Collected on source chain in OkuUSD shares
-- Orchestrator adjusts based on destination gas costs
-- User sees total cost upfront
+- **Subtractive model**: user burns `totalShares`; `feeShares = totalShares × bridgeFee / 10000`; recipient gets `netShares = totalShares − feeShares`
+- Fee re-minted to fee recipient on source chain; non-refundable
+- Fee rate set by BRIDGE_FEE_MANAGER_ROLE
 
 ### Request Validation
 
@@ -423,6 +437,29 @@ Orchestrator waits for source chain finality before signing:
 | BRIDGE_CHAIN_MANAGER_ROLE | Add/remove supported chains | Cold Multisig |
 | BRIDGE_LIMITS_MANAGER_ROLE | Update min/max amounts | Cold Multisig |
 | BRIDGE_REFUND_ADMIN_ROLE | Process refunds for failed requests | Cold Multisig |
+
+### EVM vs SVM
+
+| | EVM | SVM |
+|---|---|---|
+| Bridged value | Shares (manual `tokensToShares` conversion) | Raw token amounts (Token-2022 handles rebasing natively) |
+| Signature scheme | ECDSA via EIP-712 | Ed25519 via instruction introspection |
+| Hash function | keccak256 | keccak256 (cross-chain consistency) |
+| Nonce tracking | Per-destination mapping | Per-destination `BridgeNonce` PDA |
+| Replay prevention | `processedRequests` mapping | `ProcessedRequest` PDA init constraint |
+| Request ID | `keccak256(abi.encode(BridgeRequest))` | `keccak256(80-byte message)` |
+
+### Cross-Chain Message Format (80 bytes)
+
+```
+source_chain_id    2 bytes    chain where tokens are burned
+dest_chain_id      2 bytes    chain where tokens will be minted
+sender             20/32 bytes EVM: 20-byte address; SVM: 32-byte pubkey
+recipient          20/32 bytes EVM: 20-byte address; SVM: 32-byte pubkey
+amount/shares      8 bytes    net amount after fee deduction
+nonce              8 bytes    sequential per destination chain
+deadline           8 bytes    Unix timestamp — mints expire after 1 hour
+```
 
 ### Why Not Third-Party Bridges?
 

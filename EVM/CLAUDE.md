@@ -1,6 +1,6 @@
 # OkuUSD EVM Implementation
 
-> See `CLAUDE.md` for architecture, business logic, and RBAC design.
+> See [`../CLAUDE.md`](../CLAUDE.md) for shared architecture, business logic, and RBAC design.
 
 This document covers EVM-specific implementation details.
 
@@ -229,11 +229,10 @@ mapping(uint256 => uint256) public outboundNonce;            // destChainId => n
 mapping(bytes32 => bool) public processedRequests;           // requestId => processed
 ```
 
-**EIP-712 Domain**:
+**EIP-712 Domain**: Initialized via `__EIP712_init("OkuBridge", "1")`. Domain separator is computed and cached by `EIP712Upgradeable` (OZ); not an explicit constant.
+
 ```solidity
-bytes32 public constant DOMAIN_TYPEHASH = keccak256(
-    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
-);
+// Only the struct typehash is a contract constant:
 bytes32 public constant BRIDGE_REQUEST_TYPEHASH = keccak256(
     "BridgeRequest(uint256 sourceChainId,uint256 destChainId,address sender,address recipient,uint256 shares,uint256 nonce,uint256 deadline)"
 );
@@ -422,8 +421,8 @@ forge test --match-contract VaultInvariants
 - Bridge (OkuBridge): nonce sequencing enforced
 - Bridge (OkuBridge): fee collection and refund mechanics
 - Bridge (OkuBridge): unsupported chain rejection
-- Router native path: wOkuUSD → OkuBridge.bridgeBurn() (OkuBridge burns, router holds at most dust)
-- Router native path: fee-adjusted shares ensure total burn ≤ router's token balance
+- Router native path: wOkuUSD → OkuBridge.bridgeBurn() (OkuBridge burns, router retains zero balance)
+- Router native path: totalShares passed directly; OkuBridge applies subtractive fee and emits netShares
 - Router native path: fee collected by OkuBridge, not by router
 - Router adapter path: OkuUSD burned by router, then IBridgeAdapter.bridge() called (message-only)
 - Router adapter path: unsupported adapter reverts

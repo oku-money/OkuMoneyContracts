@@ -31,7 +31,7 @@ Process bridge requests:
 ```typescript
 // 1. Listen for BridgeBurn events
 const filter = okuBridge.filters.BridgeBurn();
-okuBridge.on(filter, async (requestId, sender, recipient, sourceChainId, destChainId, shares, nonce) => {
+okuBridge.on(filter, async (requestId, sender, recipient, sourceChainId, destChainId, shares, nonce, deadline) => {
   // 2. Wait for finality (e.g., 12 confirmations)
 
   // 3. Sign with EIP-712
@@ -239,7 +239,8 @@ event BridgeBurn(
     uint256 sourceChainId,
     uint256 destChainId,
     uint256 shares,
-    uint256 nonce
+    uint256 nonce,
+    uint256 deadline
 );
 
 event BridgeMint(
@@ -440,7 +441,6 @@ Additional chains can be added via `addSupportedChain()`.
 
 ## Resources
 
-- **Implementation Summary**: `BRIDGE_IMPLEMENTATION_SUMMARY.md`
 - **Main Spec**: `/home/jbarber/gfx/okuMoney/contracts/CLAUDE.md`
 - **Test Suite**: `test/bridge/OkuBridge.t.sol`
 - **Contract**: `src/bridge/OkuBridge.sol`

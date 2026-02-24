@@ -463,5 +463,5 @@ queue.head <= queue.tail
 ## Implementation
 
 See chain-specific documentation:
-- **EVM**: `CLAUDE_EVM.md` — Solidity, OpenZeppelin, Foundry, ERC-4626
-- **SVM**: `CLAUDE_SVM.md` — Anchor, Token-2022, Pyth, Squads
+- **EVM**: `EVM/CLAUDE.md` — Solidity, OpenZeppelin, Foundry, ERC-4626
+- **SVM**: `SVM/CLAUDE.md` — Anchor, Token-2022, Pyth, Squads

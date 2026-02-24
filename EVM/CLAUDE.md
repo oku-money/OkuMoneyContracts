@@ -146,33 +146,33 @@ bytes32 public constant WOKUSD_UPGRADER = keccak256("WOKUSD_UPGRADER");
 
 ## LitePSM.sol
 
-**Inherits**: AccessControlUpgradeable, PausableUpgradeable, ReentrancyGuardUpgradeable
+**Inherits**: AccessControlUpgradeable, PausableUpgradeable, ReentrancyGuard, UUPSUpgradeable
+
+Note: OZ v5 `ReentrancyGuard` is `@custom:stateless` (ERC-7201 namespaced storage slot). No `ReentrancyGuardUpgradeable` variant exists in this library version, and no `__ReentrancyGuard_init()` call is required.
 
 **Storage**:
 ```solidity
+IOkuUSD public okuUsd;
 IERC20 public usdc;
-IOkuUSD public okuUSD;
-AggregatorV3Interface public oracle;
+RedemptionQueue public redemptionQueue;   // external contract, not embedded queue
+IAggregatorV3 public porOracle;
 uint256 public stalenessThreshold;
-uint256 public queueHead;
-uint256 public queueTail;
-mapping(uint256 => QueueEntry) public redemptionQueue;
-
-struct QueueEntry {
-    address user;
-    uint256 shares;
-    uint256 timestamp;
-}
+bool public oracleEnabled;
 ```
 
 **Key implementation notes**:
 - `mint()`: USDC in → OkuUSD out (1:1), checks oracle if configured
 - `redeem()`: OkuUSD in → USDC out (1:1) or queue if buffer insufficient
 - `processQueue()`: FIFO processing, calculates payout at current multiplier
-- Oracle check: `oracle.latestRoundData()`, verify `answeredInRound >= roundId` and freshness
+- Oracle check: `porOracle.latestRoundData()`, verify `answeredInRound >= roundId` and freshness
+- `redeem()` queue path: PSM calls `safeTransferFrom(user → PSM)`, then
+  `safeTransfer(PSM → queue)`, then `redemptionQueue.enqueue()` (record-only, no token pull)
+- `withdrawUsdc()` calls `redemptionQueue.totalQueuedUsdc()` and reverts with
+  "Would strand queue" if `balance - amount < queueObligation`
 
 **Role bytes32 constants**:
 ```solidity
+bytes32 public constant PSM_UPGRADER = keccak256("PSM_UPGRADER");
 bytes32 public constant PSM_PAUSER = keccak256("PSM_PAUSER");
 bytes32 public constant PSM_UNPAUSER = keccak256("PSM_UNPAUSER");
 bytes32 public constant QUEUE_PROCESSOR = keccak256("QUEUE_PROCESSOR");
@@ -181,13 +181,44 @@ bytes32 public constant BUFFER_WITHDRAWER = keccak256("BUFFER_WITHDRAWER");
 bytes32 public constant ORACLE_MANAGER = keccak256("ORACLE_MANAGER");
 ```
 
-## OkuBridge.sol
+## RedemptionQueue.sol
 
-**Inherits**: AccessControlUpgradeable, PausableUpgradeable, ReentrancyGuardUpgradeable
+**Inherits**: Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
 **Storage**:
 ```solidity
-IOkuUSD public okuUSD;
+QueueEntry[] public queue;
+uint256 public queueHead;
+IOkuUSD public okuUsd;
+
+struct QueueEntry {
+    address user;
+    uint256 shares;   // stored as shares so users earn yield while waiting
+    uint256 timestamp;
+}
+```
+
+**Key implementation notes**:
+- Tokens arrive pre-funded by the PSM before `enqueue()` is called; `enqueue()` is record-only (no `transferFrom`)
+- Stores shares, not token amounts, so users continue to earn yield while queued
+- `totalQueuedUsdc()` sums outstanding USDC obligations for all queued entries; used by `LitePSM.withdrawUsdc()` to prevent stranding queued redemptions
+- Called exclusively by LitePSM via the `PSM` role; users interact only through LitePSM
+
+**Role bytes32 constants**:
+```solidity
+bytes32 public constant UPGRADER = keccak256("UPGRADER");
+bytes32 public constant PSM = keccak256("PSM");
+```
+
+## OkuBridge.sol
+
+**Inherits**: AccessControlUpgradeable, PausableUpgradeable, ReentrancyGuard, EIP712Upgradeable
+
+Note: OZ v5 `ReentrancyGuard` is `@custom:stateless` (ERC-7201 namespaced storage slot). No `ReentrancyGuardUpgradeable` variant exists, and no `__ReentrancyGuard_init()` call is required.
+
+**Storage**:
+```solidity
+IOkuUSD public okuUsd;
 address public authorizedSigner;
 address public feeRecipient;
 uint256 public bridgeFee;                                    // In basis points (10 = 0.1%)
@@ -416,10 +447,14 @@ event MinterAllowanceUpdated(address indexed minter, uint256 oldAllowance, uint2
 
 // LitePSM
 event Mint(address indexed user, uint256 usdcAmount, uint256 okusdAmount);
-event Redeem(address indexed user, uint256 okusdAmount, uint256 usdcAmount);
-event RedemptionQueued(address indexed user, uint256 shares, uint256 queuePosition);
-event RedemptionProcessed(address indexed user, uint256 shares, uint256 usdcAmount);
-event OracleUpdated(address oldOracle, address newOracle);
+event Redeem(address indexed user, uint256 okuUsdIn, uint256 usdcOut);
+event OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled);
+event BufferRefilled(uint256 amount);
+event BufferDeposited(address indexed depositor, uint256 amount);
+
+// RedemptionQueue
+event RedemptionQueued(address indexed user, uint256 shares, uint256 okuUsdAmount, uint256 position);
+event RedemptionProcessed(address indexed user, uint256 shares, uint256 okuUsdAmount, uint256 usdcAmount);
 
 // OkuBridge
 event BridgeBurn(
@@ -429,7 +464,8 @@ event BridgeBurn(
     uint256 sourceChainId,
     uint256 destChainId,
     uint256 shares,
-    uint256 nonce
+    uint256 nonce,
+    uint256 deadline
 );
 event BridgeMint(
     bytes32 indexed requestId,

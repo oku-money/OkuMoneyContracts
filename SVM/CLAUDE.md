@@ -7,9 +7,9 @@ This document covers Solana-specific implementation details.
 ## Stack
 
 - **Language**: Rust
-- **Framework**: Anchor 0.30.x
+- **Framework**: Anchor 0.31.x
 - **Token Standard**: Token-2022 (OkuUSD), SPL Token (wOkuUSD)
-- **Oracle**: Pyth Network
+- **Oracle**: Pyth (manual account parsing, no SDK dependency)
 - **Multisig**: Squads Protocol
 
 ## Key Solana Difference: Native Rebasing
@@ -35,30 +35,23 @@ Users on older/incompatible protocols wrap OkuUSD → wOkuUSD.
 
 ## Program Structure
 
+All instructions and events live in each program's `lib.rs` (no `instructions/` subdirectory).
+
 ```
 programs/
   lite-psm/
     src/
-      lib.rs
+      lib.rs        (all instructions + events)
       state.rs
-      instructions/
-        mint.rs
-        redeem.rs
-        process_queue.rs
-        bridge.rs
-        admin.rs
       errors.rs
-      events.rs
   wokusd-vault/
     src/
-      lib.rs
+      lib.rs        (all instructions + events)
       state.rs
-      instructions/
-        wrap.rs
-        unwrap.rs
-        admin.rs
       errors.rs
-      events.rs
+  oku-bridge-router/
+    src/
+      lib.rs        (bridge_wrapped: unwrap + bridge_burn in one tx)
 tests/
   lite-psm.ts
   wokusd-vault.ts
@@ -86,17 +79,17 @@ spl-token create-token --program-id TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb 
 |-----------|--------|--------|
 | Mint Authority | PSM Program PDA | Mint new OkuUSD |
 | Freeze Authority | PSM Program PDA | Freeze/thaw (proxied via config authorities) |
-| Rate Authority | Orchestrator (KMS) | Update interest rate |
+| Rate Authority | Rebaser (Orchestrator/KMS) | Update interest rate via `update_interest_rate` |
 
-**Rate updates** (Orchestrator calls):
+**Rate updates** via the PSM `update_interest_rate` instruction (rebaser role):
 ```rust
-update_rate_interest_bearing_mint(
-    &token_2022_program,
-    &okusd_mint,
-    &rate_authority,
-    new_rate_bps,
-)?;
+// Token-2022 InterestBearingMintExtension::UpdateRate CPI
+// Byte 0: 33 (InterestBearingMintExtension discriminator)
+// Byte 1: 1  (UpdateRate discriminator)
+// Bytes 2-3: new_rate as i16 little-endian
+pub fn update_interest_rate(ctx: Context<UpdateInterestRate>, new_rate: i16) -> Result<()>
 ```
+The new rate is also stored in `PsmConfig.current_rate_bps` for queue interest calculations.
 
 ## wOkuUSD Vault Program
 
@@ -122,12 +115,15 @@ pub struct VaultConfig {
 ### Instructions
 
 ```rust
+pub fn initialize(ctx: Context<Initialize>, pauser: Pubkey, unpauser: Pubkey) -> Result<()>
 pub fn wrap(ctx: Context<Wrap>, okusd_amount: u64) -> Result<()>
 pub fn unwrap(ctx: Context<Unwrap>, shares: u64) -> Result<()>
 pub fn pause(ctx: Context<Pause>) -> Result<()>
 pub fn unpause(ctx: Context<Unpause>) -> Result<()>
-pub fn set_authority(ctx: Context<SetAuthority>, role: AuthorityRole, new_auth: Pubkey) -> Result<()>
+pub fn set_authority(ctx: Context<SetAuthority>, role: AuthorityRole, new_authority: Pubkey) -> Result<()>
 ```
+
+Note: `unwrap` is always allowed even when paused—users must always be able to exit.
 
 ### Share Math
 
@@ -165,10 +161,12 @@ pub struct PsmConfig {
     pub oracle_manager: Pubkey,         // Cold Multisig
     pub cap_manager: Pubkey,            // Cold Multisig
     pub allowance_manager: Pubkey,      // Cold Multisig
+    pub rebaser: Pubkey,                // Orchestrator/KMS - update interest rate
     // Token references
     pub usdc_mint: Pubkey,
     pub okusd_mint: Pubkey,
-    pub vault_usdc: Pubkey,
+    pub vault_usdc: Pubkey,             // USDC buffer vault (ATA)
+    pub vault_okusd: Pubkey,            // OkuUSD escrow vault for queued redemptions (ATA)
     // Limits
     pub max_supply: u64,
     pub minter_allowance: u64,
@@ -176,6 +174,7 @@ pub struct PsmConfig {
     // Oracle
     pub oracle: Pubkey,                 // Pyth feed or Pubkey::default()
     pub staleness_threshold: i64,
+    pub current_rate_bps: i16,          // Stored for queue interest calculations
 }
 ```
 
@@ -187,24 +186,35 @@ pub struct RedemptionQueue {
     pub bump: u8,
     pub head: u32,
     pub tail: u32,
-    pub entries: [QueueEntry; 500],     // Fixed 500 entries (~24KB)
+    pub entries: [QueueEntry; 10],      // Fixed 10 entries
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default)]
 pub struct QueueEntry {
     pub user: Pubkey,
-    pub okusd_amount: u64,              // Amount owed
-    pub timestamp: i64,
+    pub okusd_raw_amount: u64,          // Raw stored amount (not UI amount)
+    pub timestamp: i64,                 // Used to calculate accrued yield at processing time
 }
 ```
 
-**Queue size rationale**: 500 entries is sufficient—queue is a safety valve, not normal operation. If hitting capacity, operational intervention needed anyway.
+**Queue size rationale**: Capped at 10 entries due to Solana's 4KB BPF stack limit—complex account contexts with 15+ accounts leave insufficient stack for larger arrays. Queue is a safety valve; if it fills, operational intervention is needed regardless.
+
+**Yield alignment**: When queued, OkuUSD is transferred to an escrow vault (`vault_okusd`) rather than burned. At `process_queue` time the interest-bearing USDC payout is calculated using `current_rate_bps` and `time_elapsed`, so users continue to earn yield while waiting.
 
 ### Instructions
 
 ```rust
+// Initialization (3-step)
+pub fn initialize(ctx: Context<Initialize>, max_supply: u64, minter_allowance: u64,
+    pauser: Pubkey, unpauser: Pubkey, freezer: Pubkey, unfreezer: Pubkey,
+    queue_processor: Pubkey, buffer_depositor: Pubkey, buffer_withdrawer: Pubkey,
+    oracle_manager: Pubkey, cap_manager: Pubkey, allowance_manager: Pubkey,
+    rebaser: Pubkey) -> Result<()>
+pub fn setup_redemption_queue(ctx: Context<SetupRedemptionQueue>) -> Result<()>
+pub fn setup_okusd_escrow(ctx: Context<SetupOkusdEscrow>) -> Result<()>
+
 // User operations
-pub fn mint(ctx: Context<Mint>, usdc_amount: u64) -> Result<()>
+pub fn mint(ctx: Context<MintOkusd>, usdc_amount: u64) -> Result<()>
 pub fn redeem(ctx: Context<Redeem>, okusd_amount: u64) -> Result<()>
 
 // Orchestrator operations
@@ -212,68 +222,79 @@ pub fn process_queue(ctx: Context<ProcessQueue>, max_entries: u32) -> Result<()>
 pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()>
 
 // Bridge operations
-pub fn bridge_mint(ctx: Context<BridgeMint>, amount: u64, recipient: Pubkey) -> Result<()>
-pub fn bridge_burn(ctx: Context<BridgeBurn>, amount: u64, dest_chain: u16) -> Result<()>
+pub fn bridge_mint(ctx: Context<BridgeMint>, message_bytes: Vec<u8>, signature: Vec<u8>, request_id: [u8; 32]) -> Result<()>
+pub fn bridge_burn(ctx: Context<BridgeBurn>, amount: u64, recipient: [u8; 20], destination_chain_id: u16) -> Result<()>
 
 // Compliance (freeze authority held by PSM PDA, proxied via config)
-pub fn freeze_account(ctx: Context<FreezeAccount>, target: Pubkey) -> Result<()>
-pub fn thaw_account(ctx: Context<ThawAccount>, target: Pubkey) -> Result<()>
+pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()>
+pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()>
 
 // Admin operations
 pub fn pause(ctx: Context<Pause>) -> Result<()>
 pub fn unpause(ctx: Context<Unpause>) -> Result<()>
-pub fn set_max_supply(ctx: Context<SetMaxSupply>, new_cap: u64) -> Result<()>
-pub fn set_minter_allowance(ctx: Context<SetMinterAllowance>, amount: u64) -> Result<()>
-pub fn set_oracle(ctx: Context<SetOracle>, oracle: Pubkey, staleness: i64) -> Result<()>
-pub fn set_authority(ctx: Context<SetAuthority>, role: AuthorityRole, new_auth: Pubkey) -> Result<()>
+pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()>
+pub fn set_max_supply(ctx: Context<CapManager>, new_max_supply: u64) -> Result<()>
+pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()>
+pub fn set_oracle(ctx: Context<OracleManager>, oracle: Pubkey, staleness_threshold: i64) -> Result<()>
+pub fn update_interest_rate(ctx: Context<UpdateInterestRate>, new_rate: i16) -> Result<()>
+pub fn set_authority(ctx: Context<SetAuthority>, role: AuthorityRole, new_authority: Pubkey) -> Result<()>
 ```
 
 ## Pyth Oracle Integration
 
-```rust
-use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
+Oracle is checked on `mint()` only (new supply creation). The implementation manually parses the Pyth price account rather than using the Pyth SDK, to avoid dependency conflicts:
 
-pub fn check_oracle(price_update: &PriceUpdateV2, config: &PsmConfig) -> Result<u64> {
-    let price = price_update.get_price_no_older_than(
-        &Clock::get()?,
-        config.staleness_threshold as u64,
-        &config.oracle,
-    )?;
-    Ok(price.price as u64)
-}
+```rust
+// Manual Pyth V2 price account parsing
+// price at byte offset 208, publish_time at byte offset 232
+// Verifies account key matches config.oracle
+// Checks age <= config.staleness_threshold
+// Checks reserves (price) >= current_supply + mint_amount
+fn check_oracle_reserves(price_account_info, oracle_feed, staleness_threshold, current_supply, mint_amount) -> Result<()>
 ```
 
 - Oracle check on `mint()` only (new supply creation)
 - No check on redeem, bridge, or queue operations
-- If `oracle == Pubkey::default()`, skip check
+- If `oracle == Pubkey::default()`, skip check (oracle disabled)
+- Price account passed as `Option<UncheckedAccount>` in `MintOkusd` context
 
 ## Error Codes
 
 ```rust
 #[error_code]
 pub enum OkuError {
-    #[msg("Caller not authorized")]
+    // PSM errors
     Unauthorized,
-    #[msg("Program is paused")]
     Paused,
-    #[msg("Mint would exceed max supply")]
     MaxSupplyExceeded,
-    #[msg("Mint would exceed minter allowance")]
     AllowanceExceeded,
-    #[msg("Oracle data is stale")]
     StaleOracle,
-    #[msg("Insufficient reserves per oracle")]
     InsufficientReserves,
-    #[msg("Insufficient buffer for redemption")]
     InsufficientBuffer,
-    #[msg("Account is frozen")]
     AccountFrozen,
-    #[msg("Queue is empty")]
     QueueEmpty,
-    #[msg("Queue is full")]
     QueueFull,
-    #[msg("Arithmetic overflow")]
     Overflow,
+    ZeroAmount,
+    InsufficientAccounts,
+    RecipientMismatch,
+    OracleAccountMissing,
+    InvalidOracleResponse,
+    // Bridge errors
+    BridgePaused,
+    SignatureExpired,
+    InvalidSignature,
+    InvalidRecipient,
+    InvalidRequestId,
+    InvalidMessageLength,
+    WrongDestinationChain,
+    UnsupportedChain,
+    RequestAlreadyProcessed,
+    BelowMinimum,
+    AboveMaximum,
+    ChainAlreadySupported,
+    ChainListFull,
+    ChainNotFound,
 }
 ```
 
@@ -290,6 +311,10 @@ pub struct RedemptionQueuedEvent { pub user: Pubkey, pub okusd_amount: u64, pub 
 #[event]
 pub struct RedemptionProcessedEvent { pub user: Pubkey, pub usdc_amount: u64 }
 #[event]
+pub struct BufferDepositEvent { pub orchestrator: Pubkey, pub amount: u64 }
+#[event]
+pub struct BufferWithdrawEvent { pub role_admin: Pubkey, pub amount: u64 }
+#[event]
 pub struct BridgeMintEvent {
     pub request_id: [u8; 32],
     pub source_chain_id: u16,
@@ -301,17 +326,53 @@ pub struct BridgeMintEvent {
 pub struct BridgeBurnEvent {
     pub request_id: [u8; 32],
     pub user: Pubkey,
-    pub recipient: [u8; 20],
+    pub recipient: [u8; 20],        // EVM address
     pub source_chain_id: u16,
     pub destination_chain: u16,
-    pub amount: u64,
+    pub amount: u64,                // Excluding fee
     pub nonce: u64,
     pub deadline: i64,
 }
 #[event]
-pub struct FreezeEvent { pub account: Pubkey }
+pub struct FreezeEvent { pub account: Pubkey, pub target_owner: Pubkey }
 #[event]
-pub struct ThawEvent { pub account: Pubkey }
+pub struct ThawEvent { pub account: Pubkey, pub target_owner: Pubkey }
+#[event]
+pub struct PauseEvent { pub pauser: Pubkey, pub paused: bool }
+#[event]
+pub struct UnpauseEvent { pub unpauser: Pubkey }
+#[event]
+pub struct MaxSupplyUpdatedEvent { pub role_admin: Pubkey, pub new_max_supply: u64 }
+#[event]
+pub struct MinterAllowanceUpdatedEvent { pub role_admin: Pubkey, pub new_allowance: u64 }
+#[event]
+pub struct OracleUpdatedEvent { pub role_admin: Pubkey, pub oracle: Pubkey, pub staleness_threshold: i64 }
+#[event]
+pub struct InterestRateUpdatedEvent { pub rate_authority: Pubkey, pub new_rate: i16 }
+#[event]
+pub struct AuthorityUpdatedEvent { pub role: AuthorityRole, pub old_authority: Pubkey, pub new_authority: Pubkey }
+
+// Bridge Admin Events
+#[event]
+pub struct BridgeInitializedEvent { pub bridge_admin: Pubkey, pub orchestrator_signer: Pubkey, pub fee_bps: u16 }
+#[event]
+pub struct ChainAddedEvent { pub chain_id: u16 }
+#[event]
+pub struct ChainRemovedEvent { pub chain_id: u16 }
+#[event]
+pub struct BridgeFeeUpdatedEvent { pub new_fee_bps: u16 }
+#[event]
+pub struct FeeRecipientUpdatedEvent { pub new_recipient: Pubkey }
+#[event]
+pub struct BridgeLimitsUpdatedEvent { pub min_amount: u64, pub max_amount: u64 }
+#[event]
+pub struct BridgePauseEvent { pub pauser: Pubkey, pub paused: bool }
+#[event]
+pub struct BridgeUnpauseEvent { pub unpauser: Pubkey }
+#[event]
+pub struct NonceSkippedEvent { pub destination_chain_id: u16, pub old_nonce: u64, pub new_nonce: u64 }
+#[event]
+pub struct OrchestratorSignerUpdatedEvent { pub new_signer: Pubkey }
 
 // Vault Events
 #[event]
@@ -322,30 +383,33 @@ pub struct UnwrapEvent { pub user: Pubkey, pub shares_burned: u64, pub okusd_amo
 
 ## Cross-Chain Bridging
 
-### Wormhole NTT Flow
-```
-EVM → Solana:
-1. Burn OkuUSD on EVM
-2. Guardians attest
-3. NTT calls bridge_mint() on Solana
-
-Solana → EVM:
-1. User calls bridge_burn() on Solana
-2. Guardians attest
-3. NTT mints OkuUSD on EVM
-```
-
 ### OkuBridge (Proprietary) Flow
 ```
 EVM → Solana:
 1. User burns via bridgeOut() on EVM
 2. Orchestrator observes, waits for finality
-3. Orchestrator calls bridge_mint() on Solana
+3. Orchestrator signs BridgeRequest message (Ed25519)
+4. Orchestrator submits tx: [Ed25519Program ix, bridge_mint ix]
 
 Solana → EVM:
 1. User calls bridge_burn() on Solana
-2. Orchestrator observes, waits for finality
+2. Orchestrator observes BridgeBurnEvent, waits for finality
 3. Orchestrator signs for EVM bridgeIn()
+```
+
+### oku-bridge-router Program
+
+A convenience program that atomically combines unwrap + bridge_burn in a single transaction for wOkuUSD holders:
+
+```rust
+pub fn bridge_wrapped(
+    ctx: Context<BridgeWrapped>,
+    wokusd_shares: u64,
+    recipient: [u8; 20],      // EVM address
+    destination_chain: u16,
+) -> Result<()>
+// 1. CPI to wokusd-vault: unwrap(wokusd_shares)
+// 2. CPI to lite-psm: bridge_burn(okusd_balance, recipient, destination_chain)
 ```
 
 ## Bridge Security Architecture
@@ -356,8 +420,8 @@ The SVM bridge implements production-grade security matching the EVM bridge's Ok
 
 **1. Ed25519 Signature Verification**
 - Orchestrator signs mint requests with Ed25519 keypair (Solana native)
-- Signature includes all request metadata to prevent tampering
-- Verification via Solana's Ed25519Program instruction introspection
+- Signature covers all 80 bytes of request message to prevent tampering
+- Transaction must include an Ed25519Program instruction at index 0; `bridge_mint` introspects the instruction sysvar and byte-for-byte compares the expected Ed25519 instruction data
 - Invalid signatures cause transaction failure
 
 **2. Sequential Nonces Per Destination**
@@ -367,7 +431,7 @@ The SVM bridge implements production-grade security matching the EVM bridge's Ok
 - Emergency nonce skip function for stuck nonces
 
 **3. Request ID-Based Replay Prevention**
-- Request ID = keccak256(message data)
+- Request ID = keccak256(80-byte message)
 - ProcessedRequest PDA created on mint (init constraint enforces uniqueness)
 - Duplicate request IDs rejected automatically
 - Cross-chain consistency with EVM bridge
@@ -375,12 +439,11 @@ The SVM bridge implements production-grade security matching the EVM bridge's Ok
 **4. Deadline Validation**
 - All mint requests include expiration timestamp
 - Expired signatures rejected via Clock sysvar check
-- Default 1-hour validity window
+- Burns auto-assign a 1-hour deadline
 
 **5. Fee Collection**
 - Bridge fee in basis points (default 10 bps = 0.1%)
-- Total burn = amount + fee
-- Fee minted to fee_recipient address
+- Total burn = amount + fee; fee re-minted to fee_recipient
 - Collected on source chain (burn side)
 
 **6. Chain Whitelisting**
@@ -448,23 +511,20 @@ pub struct ProcessedRequest {
 
 **Core Operations:**
 ```rust
-// Secure mint with signature verification
+// Secure mint with Ed25519 signature verification via instruction introspection.
+// Transaction must have Ed25519Program ix at index 0 signing over message_bytes.
 pub fn bridge_mint(
     ctx: Context<BridgeMint>,
-    source_chain_id: u16,
-    destination_chain_id: u16,
-    sender: [u8; 20],           // EVM address
-    amount: u64,
-    nonce: u64,
-    deadline: i64,
-    request_id: [u8; 32],
+    message_bytes: Vec<u8>,     // 80-byte serialized BridgeRequest
+    signature: Vec<u8>,          // 64-byte Ed25519 signature (also in Ed25519Program ix)
+    request_id: [u8; 32],       // keccak256(message_bytes) — used for PDA derivation
 ) -> Result<()>
 
 // Burn with fee collection and nonce tracking
 pub fn bridge_burn(
     ctx: Context<BridgeBurn>,
     amount: u64,
-    recipient: [u8; 20],        // EVM address
+    recipient: [u8; 20],        // EVM address on destination chain
     destination_chain_id: u16,
 ) -> Result<()>
 ```
@@ -476,16 +536,16 @@ pub fn add_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -> R
 pub fn remove_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -> Result<()>
 pub fn update_bridge_fee(ctx: Context<BridgeFeeManager>, new_fee_bps: u16) -> Result<()>
 pub fn update_fee_recipient(ctx: Context<BridgeAdmin>, new_recipient: Pubkey) -> Result<()>
-pub fn update_bridge_limits(ctx: Context<BridgeAdmin>, min: u64, max: u64) -> Result<()>
+pub fn update_bridge_limits(ctx: Context<BridgeAdmin>, min_amount: u64, max_amount: u64) -> Result<()>
 pub fn pause_bridge(ctx: Context<BridgePause>) -> Result<()>
 pub fn unpause_bridge(ctx: Context<BridgeUnpause>) -> Result<()>
-pub fn skip_nonce(ctx: Context<BridgeNonceAdmin>, chain_id: u16, new_nonce: u64) -> Result<()>
+pub fn skip_nonce(ctx: Context<BridgeNonceAdmin>, destination_chain_id: u16, new_nonce: u64) -> Result<()>
 pub fn update_orchestrator_signer(ctx: Context<BridgeAdmin>, new_signer: Pubkey) -> Result<()>
 ```
 
 ### Message Format (Must Match Orchestrator)
 
-**Mint Message** (80 bytes):
+**Mint Message** (80 bytes, EVM→SVM):
 ```
 source_chain_id      u16      (2 bytes, little-endian)
 destination_chain_id u16      (2 bytes, little-endian)
@@ -496,9 +556,11 @@ nonce                u64      (8 bytes, little-endian)
 deadline             i64      (8 bytes, little-endian)
 ```
 
+For SVM→EVM burns, the layout mirrors this with `sender` as the 32-byte Solana pubkey and `recipient` as the 20-byte EVM address (same 80-byte total).
+
 **Request ID Calculation:**
 ```rust
-let request_id = anchor_lang::solana_program::keccak::hash(&message).to_bytes();
+let request_id = anchor_lang::solana_program::keccak::hash(&message_bytes).to_bytes();
 ```
 
 ### RBAC: Bridge-Specific Roles
@@ -552,8 +614,8 @@ This maintains value parity across chains without manual share conversion.
 1. Monitor Solana for `BridgeBurnEvent`
 2. Wait for finality (32 confirmed blocks)
 3. Extract event data (request_id, user, recipient, amount, nonce, deadline)
-4. Sign message with Ed25519 keypair
-5. Construct transaction with Ed25519Program instruction + bridge_mint instruction
+4. Sign the 80-byte message with Ed25519 keypair
+5. Construct transaction: [Ed25519Program instruction at index 0, bridge_mint instruction]
 6. Submit to Solana
 7. Log completion
 
@@ -562,26 +624,26 @@ This maintains value parity across chains without manual share conversion.
 import nacl from 'tweetnacl';
 import { Ed25519Program } from '@solana/web3.js';
 
-// Sign the message
+// Sign the 80-byte message
 const signature = nacl.sign.detached(message, orchestratorKeypair.secretKey);
 
-// Add Ed25519Program instruction to transaction
+// Ed25519Program instruction MUST be at index 0
 const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
   publicKey: orchestratorKeypair.publicKey.toBytes(),
   message: message,
   signature: signature,
 });
 
-transaction.add(ed25519Ix);
-transaction.add(bridgeMintIx);
+transaction.add(ed25519Ix);    // index 0 — introspected by bridge_mint
+transaction.add(bridgeMintIx); // passes message_bytes + signature as args
 ```
 
 ### Security Considerations
 
 - **Ed25519 vs ECDSA**: Solana uses Ed25519 natively, verification is ~34K compute units
-- **Signature placement**: Must be in same transaction as bridge_mint via instruction sysvar
+- **Signature placement**: Ed25519Program instruction must be at tx index 0; `bridge_mint` introspects `instructions_sysvar` and byte-compares expected instruction data
 - **Request ID consistency**: Both chains must calculate request_id identically (keccak256)
-- **Nonce gaps**: Emergency skip_nonce function for stuck nonces (requires NONCE_ADMIN)
+- **Nonce gaps**: Emergency `skip_nonce` function for stuck nonces (requires NONCE_ADMIN)
 - **Fee manipulation**: Fee collected before orchestrator relay prevents fee avoidance
 - **Chain ID validation**: Destination chain check prevents minting tokens meant for other chains
 - **Deadline enforcement**: Expired signatures rejected, prevents delayed replay
@@ -594,34 +656,6 @@ Typical compute usage:
 - PDA creation: ~5,000 CU
 - **Total**: ~44,000 CU (well under 200K limit)
 
-### Events
-
-**Bridge-specific events:**
-```rust
-#[event]
-pub struct BridgeMintEvent {
-    pub request_id: [u8; 32],
-    pub source_chain_id: u16,
-    pub recipient: Pubkey,
-    pub amount: u64,
-    pub nonce: u64,
-}
-
-#[event]
-pub struct BridgeBurnEvent {
-    pub request_id: [u8; 32],
-    pub user: Pubkey,
-    pub recipient: [u8; 20],        // EVM address
-    pub source_chain_id: u16,
-    pub destination_chain: u16,
-    pub amount: u64,                // Excluding fee
-    pub nonce: u64,
-    pub deadline: i64,
-}
-```
-
-All metadata required for orchestrator indexing and cross-chain verification included in events.
-
 ## Deployment
 
 ```bash
@@ -629,47 +663,46 @@ All metadata required for orchestrator indexing and cross-chain verification inc
 spl-token create-token --program-id TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb \
   --enable-freeze --enable-interest-bearing --interest-rate 450
 
-# 2. Set rate authority to orchestrator
-spl-token authorize <OKUSD_MINT> rate <ORCHESTRATOR_PUBKEY>
-
-# 3. Build and deploy programs
+# 2. Build and deploy programs
 anchor build
 anchor deploy
 
-# 4. Transfer mint/freeze authorities to PSM PDA
+# 3. Transfer mint/freeze authorities to PSM PDA
 spl-token authorize <OKUSD_MINT> mint <PSM_CONFIG_PDA>
 spl-token authorize <OKUSD_MINT> freeze <PSM_CONFIG_PDA>
+# Rate authority stays with the rebaser key (orchestrator/KMS)
+# and is managed via the update_interest_rate instruction
 
-# 5. Set program upgrade authorities to cold multisig
+# 4. Set program upgrade authorities to cold multisig
 solana program set-upgrade-authority <LITE_PSM_PROGRAM> --new-upgrade-authority <SQUADS_COLD_VAULT>
 solana program set-upgrade-authority <WOKUSD_VAULT_PROGRAM> --new-upgrade-authority <SQUADS_COLD_VAULT>
 
-# 6. Initialize program configs
+# 5. Initialize program configs (3-step for PSM)
 anchor run initialize
+# Step 1: initialize
+# Step 2: setup_redemption_queue
+# Step 3: setup_okusd_escrow
+# Then: initialize_bridge
 ```
 
 ## Dependencies
 
 ```toml
 [dependencies]
-anchor-lang = "0.30.1"
-anchor-spl = "0.30.1"
-spl-token-2022 = "4.0"
-pyth-solana-receiver-sdk = "0.3"
-
-[dev-dependencies]
-solana-program-test = "1.18"
+anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
+anchor-spl = "0.31.1"
 ```
 
 ## Security Considerations
 
 - **Token-2022 support**: Verify integrated protocols support Token-2022 before launch
-- **Interest rate authority**: Must be KMS-backed, rate changes are sensitive
+- **Interest rate authority**: `rebaser` role must be KMS-backed; rate changes affect queue payout calculations
 - **Freeze authority**: Held by PSM PDA, program implements granular freeze/unfreeze
 - **Mint authority**: Held by PSM PDA, not EOA
 - **Rent exemption**: All PDAs must be rent-exempt
 - **Integer overflow**: Use checked_* math everywhere
 - **Time manipulation**: Interest-Bearing uses on-chain clock, minimal risk
+- **Queue escrow**: OkuUSD is held in `vault_okusd` during queue processing; ensure escrow is initialized before first redeem
 
 ## Testing
 
@@ -685,8 +718,11 @@ anchor deploy --provider.cluster devnet
 ```
 
 **Key test scenarios**:
-- Interest-bearing rate updates affect ui_amount
+- Interest-bearing rate updates affect ui_amount and queue payout calculations
 - Wrap/unwrap round-trip with growing vault balance
-- Queue entry when buffer empty, processing when refilled
+- Queue entry when buffer empty, processing when refilled (yield earned while queued)
 - Freeze via PSM (config.freezer), thaw via PSM (config.unfreezer)
 - Authority separation enforcement
+- Bridge mint replay rejection (duplicate request_id)
+- Bridge mint with expired deadline rejection
+- bridge_wrapped: wOkuUSD → EVM in single tx via oku-bridge-router

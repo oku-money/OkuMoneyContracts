@@ -87,6 +87,7 @@ abstract contract BaseTest is Test {
     bytes32 public constant ROUTER_PAUSER = keccak256("ROUTER_PAUSER");
     bytes32 public constant ROUTER_UNPAUSER = keccak256("ROUTER_UNPAUSER");
     bytes32 public constant ADAPTER_MANAGER = keccak256("ADAPTER_MANAGER");
+    bytes32 public constant BRIDGE_MANAGER = keccak256("BRIDGE_MANAGER");
 
     // ============ Setup ============
 

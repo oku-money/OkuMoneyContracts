@@ -44,7 +44,11 @@ contract RedemptionQueueTest is BaseTest {
     function test_Enqueue_OnlyPSMRole() public {
         // No pre-funding needed — test reverts on RBAC before any token ops
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM
+            )
+        );
         redemptionQueue.enqueue(user1, 100e18);
     }
 
@@ -138,7 +142,11 @@ contract RedemptionQueueTest is BaseTest {
 
     function test_ProcessQueue_OnlyPSMRole() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM
+            )
+        );
         redemptionQueue.processQueue(10, address(usdc), address(okuUsd));
     }
 

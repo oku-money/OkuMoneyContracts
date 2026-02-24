@@ -127,7 +127,8 @@ contract OkuUSDHandler is Test {
         if (amount == 0 || from == to) return;
 
         vm.prank(from);
-        try okuUsd.transfer(to, amount) {} catch {
+        try okuUsd.transfer(to, amount) {}
+        catch {
             ghostTransferRevertCount++;
         }
     }
@@ -146,7 +147,7 @@ contract OkuUSDHandler is Test {
 
         // Increase by 0.01% to 5% per rebase
         uint256 minIncrease = currentMultiplier / 10_000; // 0.01%
-        uint256 maxIncrease = currentMultiplier / 20;     // 5%
+        uint256 maxIncrease = currentMultiplier / 20; // 5%
         uint256 increase = bound(multiplierIncrease, minIncrease, maxIncrease);
 
         uint256 newMultiplier = currentMultiplier + increase;

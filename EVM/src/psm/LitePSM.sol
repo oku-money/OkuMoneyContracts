@@ -197,7 +197,7 @@ contract LitePSM is
     function _checkReserves(uint256 mintAmount) internal view {
         require(address(porOracle) != address(0), "Oracle not configured");
 
-        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) =
+        (uint80 roundId, int256 answer,, uint256 updatedAt, uint80 answeredInRound) =
             porOracle.latestRoundData();
 
         require(answeredInRound >= roundId, "Incomplete oracle round");

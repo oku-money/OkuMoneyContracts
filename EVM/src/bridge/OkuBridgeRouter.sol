@@ -22,7 +22,11 @@ interface IOkuUSD {
 }
 
 interface IOkuBridgeNative {
-    function bridgeBurn(uint256 destChainId, address recipient, uint256 shares)
+    function bridgeBurn(
+        uint256 destChainId,
+        address recipient,
+        uint256 shares
+    )
         external
         returns (bytes32 requestId);
 }
@@ -271,13 +275,7 @@ contract OkuBridgeRouter is
 
     // ============ Admin Functions ============
 
-    function configureAdapter(
-        address adapter,
-        bool supported
-    )
-        external
-        onlyRole(ADAPTER_MANAGER)
-    {
+    function configureAdapter(address adapter, bool supported) external onlyRole(ADAPTER_MANAGER) {
         supportedAdapters[adapter] = supported;
         emit AdapterConfigured(adapter, supported);
     }

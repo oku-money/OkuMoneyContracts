@@ -3,7 +3,9 @@ pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {
+    PausableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 /**
  * @title LitePSMTest
@@ -203,7 +205,11 @@ contract LitePSMTest is BaseTest {
 
     function test_ConfigureOracle_OnlyOracleManager() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, ORACLE_MANAGER));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, ORACLE_MANAGER
+            )
+        );
         litePsm.configureOracle(address(oracle), 1 hours, true);
     }
 
@@ -362,7 +368,11 @@ contract LitePSMTest is BaseTest {
 
     function test_ProcessQueue_OnlyQueueProcessor() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, QUEUE_PROCESSOR));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, QUEUE_PROCESSOR
+            )
+        );
         litePsm.processQueue(10);
     }
 
@@ -478,7 +488,11 @@ contract LitePSMTest is BaseTest {
 
     function test_Pause_OnlyPauser() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_PAUSER));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_PAUSER
+            )
+        );
         litePsm.pause();
     }
 
@@ -487,13 +501,21 @@ contract LitePSMTest is BaseTest {
         litePsm.pause();
 
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_UNPAUSER));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_UNPAUSER
+            )
+        );
         litePsm.unpause();
     }
 
     function test_WithdrawUSDC_OnlyBufferWithdrawer() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BUFFER_WITHDRAWER));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BUFFER_WITHDRAWER
+            )
+        );
         litePsm.withdrawUsdc(user1, 100e6);
     }
 

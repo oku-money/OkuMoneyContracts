@@ -52,9 +52,5 @@ contract wOkuUSD is Initializable, ERC4626Upgradeable, AccessControlUpgradeable,
 
     // ============ Upgradeability ============
 
-    function _authorizeUpgrade(address newImplementation)
-        internal
-        override
-        onlyRole(UPGRADER)
-    {}
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER) {}
 }

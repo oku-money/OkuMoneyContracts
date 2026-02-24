@@ -91,9 +91,7 @@ contract VaultInvariantsTest is BaseTest {
         uint256 totalReverts = handler.ghostTotalReverts();
         if (totalCalls > 10) {
             assertGe(
-                ((totalCalls - totalReverts) * 100) / totalCalls,
-                30,
-                "Handler success rate too low"
+                ((totalCalls - totalReverts) * 100) / totalCalls, 30, "Handler success rate too low"
             );
         }
     }

@@ -3,7 +3,9 @@ pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {
+    PausableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 
@@ -16,7 +18,9 @@ contract OkuUSDTest is BaseTest {
 
     event Transfer(address indexed from, address indexed to, uint256 value);
     event RebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
-    event MinterAllowanceUpdated(address indexed minter, uint256 oldAllowance, uint256 newAllowance);
+    event MinterAllowanceUpdated(
+        address indexed minter, uint256 oldAllowance, uint256 newAllowance
+    );
     event MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply);
     event Blacklisted(address indexed account);
     event Unblacklisted(address indexed account);
@@ -56,7 +60,11 @@ contract OkuUSDTest is BaseTest {
 
     function test_Mint_OnlyMinterRole() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, MINTER));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, MINTER
+            )
+        );
         okuUsd.mint(user1, 100e18);
     }
 
@@ -139,7 +147,11 @@ contract OkuUSDTest is BaseTest {
         _mintOkuUsd(user1, 100e18);
 
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, MINTER));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, MINTER
+            )
+        );
         okuUsd.burn(user1, 50e18);
     }
 
@@ -349,7 +361,11 @@ contract OkuUSDTest is BaseTest {
         _approveOkuUsd(user1, user2, 20e18);
 
         vm.prank(user2);
-        vm.expectRevert(abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, user2, 20e18, 30e18));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IERC20Errors.ERC20InsufficientAllowance.selector, user2, 20e18, 30e18
+            )
+        );
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuUsd.transferFrom(user1, user3, 30e18);
     }
@@ -371,7 +387,11 @@ contract OkuUSDTest is BaseTest {
 
     function test_UpdateRewardMultiplier_OnlyRebaser() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, REBASER));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, REBASER
+            )
+        );
         okuUsd.updateRewardMultiplier(PRECISION * 2);
     }
 
@@ -448,7 +468,11 @@ contract OkuUSDTest is BaseTest {
 
     function test_Blacklist_OnlyBlacklisterRole() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BLACKLISTER));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BLACKLISTER
+            )
+        );
         okuUsd.blacklist(user2);
     }
 
@@ -536,7 +560,11 @@ contract OkuUSDTest is BaseTest {
 
     function test_Pause_OnlyPauserRole() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUUSD_PAUSER));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUUSD_PAUSER
+            )
+        );
         okuUsd.pause();
     }
 
@@ -605,7 +633,11 @@ contract OkuUSDTest is BaseTest {
 
     function test_ConfigureMinterAllowance_OnlyAllowanceManager() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, ALLOWANCE_MANAGER));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, ALLOWANCE_MANAGER
+            )
+        );
         okuUsd.configureMinterAllowance(minter, 1000e18);
     }
 
@@ -648,7 +680,11 @@ contract OkuUSDTest is BaseTest {
 
     function test_SetMaxSupply_OnlyCapManager() public {
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, CAP_MANAGER));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, CAP_MANAGER
+            )
+        );
         okuUsd.setMaxSupply(MAX_SUPPLY * 2);
     }
 

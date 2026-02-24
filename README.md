@@ -1,10 +1,6 @@
 # OkuUSD Contracts
 
-Smart contracts for OkuUSD, a yield-bearing stablecoin backed 1:1 by US Treasury Bills.
-
-## Overview
-
-OkuUSD is a centralized, regulated stablecoin product operated by Oku Money (FinCEN-registered MSB). Users deposit USDC, receive OkuUSD, and earn T-Bill yield automatically through a rebasing mechanism.
+Smart contracts for OkuUSD, a yield-bearing stablecoin backed 1:1 by US Treasury Bills, operated by Oku Money (FinCEN-registered MSB).
 
 **This is not a DeFi protocol.** It's institutional-grade infrastructure for delivering government yield on-chain.
 
@@ -26,48 +22,15 @@ OkuUSD is a centralized, regulated stablecoin product operated by Oku Money (Fin
    └─────────┘            └─────────┘            └─────────┘
 ```
 
-### Dual-Token Model
-
-| Token | Type | Purpose |
-|-------|------|---------|
-| **OkuUSD** | Rebasing | Hold and watch your balance grow |
-| **wOkuUSD** | Static (Vault) | Use in DeFi (AMMs, lending, etc.) |
-
-Users choose based on their needs:
-- **Retail**: Hold OkuUSD directly, balance increases automatically
-- **DeFi**: Wrap to wOkuUSD for compatibility with Uniswap, Aave, etc.
-
-### Core Components
+## Core Components
 
 | Component | Function |
 |-----------|----------|
 | **OkuUSD** | Rebasing token — balance grows as T-Bill yield accrues |
 | **wOkuUSD** | ERC-4626 vault (EVM) / SPL vault (Solana) — static balance, growing exchange rate |
 | **LitePSM** | Peg Stability Module — 1:1 USDC ↔ OkuUSD swaps |
-| **OkuBridge** | Cross-chain bridge — burn on source, orchestrator signs, mint on destination |
-| **OkuBridgeRouter** | Convenience wrapper for bridging wOkuUSD |
-
-### Cross-Chain Bridging
-
-OkuBridge is our proprietary, orchestrator-signed bridge:
-
-```
-User burns shares on source chain
-        ↓
-Orchestrator observes, waits for finality
-        ↓
-Orchestrator signs mint authorization (EIP-712)
-        ↓
-Orchestrator submits to destination (or user submits as fallback)
-        ↓
-Destination verifies signature, mints shares to recipient
-```
-
-**Key properties:**
-- Bridges **shares**, not tokens (avoids rebasing issues mid-flight)
-- Sequential nonces prevent replay
-- Orchestrator pays destination gas by default
-- User fallback with partial fee refund if orchestrator delayed
+| **OkuBridge** | Cross-chain bridge — orchestrator-signed burn/mint |
+| **OkuBridgeRouter** | User entry point for bridging OkuUSD and wOkuUSD |
 
 ## Repository Structure
 
@@ -75,10 +38,9 @@ Destination verifies signature, mints shares to recipient
 contracts/
 ├── README.md               # This file
 ├── CLAUDE.md               # Shared architecture & business logic
-├── CLAUDE_EVM.md           # EVM implementation specifics
-├── CLAUDE_SVM.md           # Solana implementation specifics
 │
 ├── EVM/                    # Solidity contracts (Foundry)
+│   ├── CLAUDE.md           # EVM implementation specifics
 │   ├── src/
 │   │   ├── token/
 │   │   │   ├── OkuUSD.sol
@@ -93,6 +55,7 @@ contracts/
 │   └── foundry.toml
 │
 └── SVM/                    # Solana programs (Anchor)
+    ├── CLAUDE.md           # Solana implementation specifics
     └── oku-programs/
         ├── programs/
         │   ├── lite-psm/
@@ -111,24 +74,7 @@ contracts/
 | Access control | OpenZeppelin AccessControl | Config account with authority pubkeys |
 | Multisig | Gnosis Safe | Squads Protocol |
 | Oracle | Chainlink | Pyth Network |
-| Upgradeability | TransparentUpgradeableProxy | Native program upgrade authority |
-
-## Access Control
-
-Granular RBAC — one role per action, multiple roles per address:
-
-| Entity | Capabilities |
-|--------|--------------|
-| **Cold Multisig** | Admin, upgrades, unpause, unblacklist, supply caps |
-| **Warm Multisig** | Pause, blacklist (emergency response) |
-| **Orchestrator** | Rebase/rate updates, queue processing, buffer deposits |
-| **Bridge Adapters** | Mint (bounded by per-adapter allowance) |
-
-Key security properties:
-- Pause and unpause are **separate roles** (compromised pauser can't undo)
-- Blacklist and unblacklist are **separate roles** (deliberate recovery)
-- Orchestrator **never** gets admin, upgrade, or unpause rights
-- Minter allowances are **one-way decrements** (burns don't restore)
+| Upgradeability | TransparentUpgradeableProxy / UUPS | Native program upgrade authority |
 
 ## Building
 
@@ -154,8 +100,8 @@ anchor test
 | Document | Purpose |
 |----------|---------|
 | `CLAUDE.md` | Shared architecture, business requirements, RBAC design |
-| `CLAUDE_EVM.md` | Solidity patterns, OpenZeppelin usage, Foundry testing |
-| `CLAUDE_SVM.md` | Anchor patterns, Token-2022, PDA structures |
+| `EVM/CLAUDE.md` | EVM Solidity patterns, OpenZeppelin usage, Foundry testing |
+| `SVM/CLAUDE.md` | Solana/Anchor patterns, Token-2022, PDA structures |
 | `OkuMoney_Technical_Architecture.docx` | Formal architecture specification |
 | `OkuUSD_Decision_Matrix.docx` | Design decision rationale |
 

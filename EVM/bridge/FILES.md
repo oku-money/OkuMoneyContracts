@@ -49,17 +49,6 @@
 
 ## Documentation
 
-### Implementation Summary
-- **Path**: `/home/jbarber/gfx/okuMoney/contracts/EVM/BRIDGE_IMPLEMENTATION_SUMMARY.md`
-- **Contents**:
-  - Complete implementation overview
-  - Architecture and design decisions
-  - Test results and coverage
-  - Gas performance metrics
-  - Security considerations
-  - Manual testing workflow
-  - Success criteria checklist
-
 ### Developer Guide (README)
 - **Path**: `/home/jbarber/gfx/okuMoney/contracts/EVM/bridge/README.md`
 - **Contents**:
@@ -141,7 +130,6 @@ contracts/EVM/
 ├── bridge/
 │   ├── README.md                       ← Developer guide
 │   └── FILES.md                        ← This file
-├── BRIDGE_IMPLEMENTATION_SUMMARY.md   ← Implementation summary
 └── foundry.toml                        ← Foundry config
 ```
 
@@ -190,5 +178,5 @@ contracts/EVM/
 
 For questions or issues:
 - Review test suites for usage examples
-- Check documentation in README.md and BRIDGE_IMPLEMENTATION_SUMMARY.md
+- Check documentation in README.md
 - Examine contract source code with inline comments

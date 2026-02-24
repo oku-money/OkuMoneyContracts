@@ -118,8 +118,6 @@ pub mod lite_psm {
         let is_paused = ctx.accounts.config.is_paused;
         let max_supply = ctx.accounts.config.max_supply;
         let bump = ctx.accounts.config.bump;
-        let _okusd_decimals = ctx.accounts.okusd_mint.decimals;
-        let _usdc_decimals = ctx.accounts.usdc_mint.decimals;
         let current_supply = ctx.accounts.okusd_mint.supply;
         let oracle = ctx.accounts.config.oracle;
         let staleness_threshold = ctx.accounts.config.staleness_threshold;
@@ -681,13 +679,11 @@ pub mod lite_psm {
         let clock = Clock::get()?;
         let deadline = clock.unix_timestamp.checked_add(3600).ok_or(OkuError::Overflow)?; // 1 hour deadline
 
-        // Note: source_chain_id would be Solana's chain ID (e.g., 1399811151 for devnet)
-        // For simplicity, using a placeholder. In production, this should be a constant.
-        const SOLANA_CHAIN_ID: u16 = 1151; // Placeholder
+        let source_chain_id = ctx.accounts.bridge_config.source_chain_id;
 
         let sender_bytes = ctx.accounts.user.key().to_bytes();
         let mut message = Vec::with_capacity(2 + 2 + 32 + 20 + 8 + 8 + 8);
-        message.extend_from_slice(&SOLANA_CHAIN_ID.to_le_bytes());
+        message.extend_from_slice(&source_chain_id.to_le_bytes());
         message.extend_from_slice(&destination_chain_id.to_le_bytes());
         message.extend_from_slice(&sender_bytes);
         message.extend_from_slice(&recipient);
@@ -702,7 +698,7 @@ pub mod lite_psm {
             request_id,
             user: ctx.accounts.user.key(),
             recipient,
-            source_chain_id: SOLANA_CHAIN_ID,
+            source_chain_id,
             destination_chain: destination_chain_id,
             amount,
             nonce,
@@ -898,7 +894,7 @@ pub mod lite_psm {
 
     /// Initialize the bridge configuration
     /// Sets up all bridge authorities and default configuration
-    pub fn initialize_bridge(ctx: Context<InitializeBridge>) -> Result<()> {
+    pub fn initialize_bridge(ctx: Context<InitializeBridge>, source_chain_id: u16) -> Result<()> {
         let config = &mut ctx.accounts.bridge_config;
         config.bump = ctx.bumps.bridge_config;
 
@@ -917,6 +913,9 @@ pub mod lite_psm {
         config.min_bridge_amount = 1_000_000; // 1 token (assuming 6 decimals)
         config.max_bridge_amount = 1_000_000_000_000; // 1,000,000 tokens
         config.is_paused = false;
+
+        // Set source chain identity
+        config.source_chain_id = source_chain_id;
 
         // Initialize empty chain whitelist
         config.supported_chains = [0u16; 32];

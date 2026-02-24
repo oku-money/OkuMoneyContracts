@@ -6,8 +6,6 @@ pub enum VaultError {
     Unauthorized,
     #[msg("Vault is paused")]
     Paused,
-    #[msg("Account is frozen")]
-    AccountFrozen,
     #[msg("Arithmetic overflow")]
     Overflow,
     #[msg("Insufficient shares to unwrap")]

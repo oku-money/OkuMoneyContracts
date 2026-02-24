@@ -98,7 +98,7 @@ impl RedemptionQueue {
 
     /// Space needed for RedemptionQueue account
     /// 8 (discriminator) + 1 (bump) + 4*2 (head/tail) + 48 * MAX_ENTRIES (fixed array)
-    /// = 8 + 1 + 8 + 48*200 = 9,617 bytes
+    /// = 8 + 1 + 8 + 48*10 = 497 bytes
     pub const LEN: usize = 8 + 1 + 4 * 2 + QueueEntry::LEN * Self::MAX_ENTRIES;
 
     /// Check if the queue is full
@@ -174,6 +174,10 @@ pub struct BridgeConfig {
     /// Whether bridge is paused
     pub is_paused: bool,
 
+    // ===== Chain Identity =====
+    /// This chain's ID (e.g., Solana), set during initialize_bridge
+    pub source_chain_id: u16,
+
     // ===== Chain Whitelist =====
     /// Supported destination chain IDs (fixed array, max 32 chains)
     pub supported_chains: [u16; 32],
@@ -185,9 +189,9 @@ impl BridgeConfig {
     pub const SEED: &'static [u8] = b"bridge_config";
 
     /// Space needed for BridgeConfig account
-    /// 8 (discriminator) + 1 (bump) + 32*8 (authority pubkeys) + 2 (fee_bps) + 8*2 (min/max amounts) + 1 (is_paused) + 2*32 (chain array) + 1 (chain count)
-    /// = 8 + 1 + 256 + 2 + 16 + 1 + 64 + 1 = 349 bytes
-    pub const LEN: usize = 8 + 1 + 32 * 8 + 2 + 8 * 2 + 1 + 2 * 32 + 1;
+    /// 8 (discriminator) + 1 (bump) + 32*8 (authority pubkeys) + 2 (fee_bps) + 8*2 (min/max amounts) + 1 (is_paused) + 2 (source_chain_id) + 2*32 (chain array) + 1 (chain count)
+    /// = 8 + 1 + 256 + 2 + 16 + 1 + 2 + 64 + 1 = 351 bytes
+    pub const LEN: usize = 8 + 1 + 32 * 8 + 2 + 8 * 2 + 1 + 2 + 2 * 32 + 1;
 
     /// Check if a chain is supported
     pub fn is_chain_supported(&self, chain_id: u16) -> bool {

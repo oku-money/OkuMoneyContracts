@@ -544,7 +544,10 @@ describe("wokusd-vault", () => {
         expect.fail("Should have failed");
       } catch (err: any) {
         // Should fail due to insufficient balance (SPL token error or our custom error)
-        expect(err).to.exist;
+        const errorCode = err.error?.errorCode?.code || err.message || "";
+        expect(errorCode).to.satisfy((code: string) =>
+          code === "InsufficientShares" || code.includes("insufficient") || code.includes("Error")
+        );
       }
     });
   });

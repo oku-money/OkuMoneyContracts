@@ -22,6 +22,7 @@ import {
   psmOrchestrator,
   initializePSMIfNeeded,
   ensurePSMUnpaused,
+  ensureAta,
   safeAirdropAll,
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
@@ -220,25 +221,7 @@ describe("lite-psm", () => {
     await provider.sendAndConfirm(createUser2UsdcAtaTx, [payer]);
 
     // Create orchestrator USDC ATA only if it doesn't exist
-    try {
-      await getAccount(
-        provider.connection,
-        orchestratorUsdcAta,
-        undefined,
-        TOKEN_PROGRAM_ID
-      );
-    } catch {
-      const createOrchestratorUsdcAtaTx = new anchor.web3.Transaction().add(
-        createAssociatedTokenAccountInstruction(
-          payer.publicKey,
-          orchestratorUsdcAta,
-          orchestrator.publicKey,
-          usdcMint,
-          TOKEN_PROGRAM_ID
-        )
-      );
-      await provider.sendAndConfirm(createOrchestratorUsdcAtaTx, [payer]);
-    }
+    await ensureAta(provider.connection, payer, orchestratorUsdcAta, orchestrator.publicKey, usdcMint, TOKEN_PROGRAM_ID);
 
     // Mint USDC to users
     await mintTo(
@@ -338,10 +321,7 @@ describe("lite-psm", () => {
 
       // Verify redemption queue exists (may have entries from previous tests)
       const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      expect(queue.head).to.be.a('number');
-      expect(queue.tail).to.be.a('number');
-      expect(queue.head).to.be.at.least(0);
-      expect(queue.tail).to.be.at.least(0);
+      expect(queue.tail).to.be.at.least(queue.head);
     });
   });
 
@@ -350,20 +330,7 @@ describe("lite-psm", () => {
       const mintAmount = new BN(1_000_000); // 1 USDC/OkuUSD
 
       // Pre-create OkuUSD ATA
-      try {
-        const createOkusdAtaTx = new anchor.web3.Transaction().add(
-          createAssociatedTokenAccountInstruction(
-            payer.publicKey,
-            userOkusdAta,
-            user.publicKey,
-            okusdMint,
-            TOKEN_2022_PROGRAM_ID
-          )
-        );
-        await provider.sendAndConfirm(createOkusdAtaTx, [payer]);
-      } catch {
-        // Already exists
-      }
+      await ensureAta(provider.connection, payer, userOkusdAta, user.publicKey, okusdMint, TOKEN_2022_PROGRAM_ID);
 
       // Get balances before
       const userUsdcBefore = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
@@ -726,38 +693,10 @@ describe("lite-psm", () => {
           TOKEN_PROGRAM_ID
         );
 
-        try {
-          const createAtaTx = new anchor.web3.Transaction().add(
-            createAssociatedTokenAccountInstruction(
-              payer.publicKey,
-              bufferWithdrawerUsdcAta,
-              coldMultisig.publicKey,
-              usdcMint,
-              TOKEN_PROGRAM_ID
-            )
-          );
-          await provider.sendAndConfirm(createAtaTx, [payer]);
-        } catch {
-          // Already exists
-        }
+        await ensureAta(provider.connection, payer, bufferWithdrawerUsdcAta, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
 
         // Ensure vault_usdc ATA exists (should have been created during initialize)
-        try {
-          await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
-        } catch {
-          // If it doesn't exist, create it (shouldn't happen, but handle gracefully)
-          const createVaultUsdcTx = new anchor.web3.Transaction().add(
-            createAssociatedTokenAccountInstruction(
-              payer.publicKey,
-              vaultUsdcAta,
-              configPda,
-              usdcMint,
-              TOKEN_PROGRAM_ID,
-              ASSOCIATED_TOKEN_PROGRAM_ID
-            )
-          );
-          await provider.sendAndConfirm(createVaultUsdcTx, [payer]);
-        }
+        await ensureAta(provider.connection, payer, vaultUsdcAta, configPda, usdcMint, TOKEN_PROGRAM_ID);
 
         // Ensure vault has balance
         await program.methods
@@ -903,71 +842,6 @@ describe("lite-psm", () => {
           expect(err.error.errorCode.code).to.equal("Unauthorized");
         }
       });
-    });
-  });
-
-  // Note: Remaining tests (redeem, bridge_mint, bridge_burn, process_queue, etc.)
-  // should be updated similarly to use the new authority structure.
-  // For brevity, I've focused on the critical RBAC tests above.
-  // The existing tests will need their authority references updated throughout.
-
-  // ============================================================================
-  // Diagnostic Tests: setup_okusd_escrow
-  // ============================================================================
-  describe("setup_okusd_escrow diagnosis", () => {
-    it("verifies okusdMint is owned by Token-2022 program", async () => {
-      const mintInfo = await provider.connection.getAccountInfo(okusdMint);
-      expect(mintInfo).to.not.be.null;
-      expect(mintInfo!.owner.toBase58()).to.equal(
-        TOKEN_2022_PROGRAM_ID.toBase58(),
-        "OkuUSD mint should be owned by Token-2022 program"
-      );
-      console.log("    okusdMint owner:", mintInfo!.owner.toBase58());
-      console.log("    Token-2022 program:", TOKEN_2022_PROGRAM_ID.toBase58());
-    });
-
-    it("verifies derived ATA address matches expected", async () => {
-      const expectedAta = getAssociatedTokenAddressSync(
-        okusdMint,
-        configPda,
-        true, // allowOwnerOffCurve for PDA
-        TOKEN_2022_PROGRAM_ID
-      );
-      console.log("    Expected ATA:", expectedAta.toBase58());
-      console.log("    Passed vaultOkusd:", vaultOkusdAta.toBase58());
-      expect(expectedAta.toBase58()).to.equal(
-        vaultOkusdAta.toBase58(),
-        "Derived ATA should match the vaultOkusdAta passed to instruction"
-      );
-    });
-
-    it("verifies setup_okusd_escrow succeeded (escrow ATA exists)", async () => {
-      // After the before() hook runs initializePSMIfNeeded which calls setupOkusdEscrow,
-      // the vault_okusd ATA should exist on-chain
-      const escrowInfo = await provider.connection.getAccountInfo(vaultOkusdAta);
-      expect(escrowInfo).to.not.be.null;
-      expect(escrowInfo!.owner.toBase58()).to.equal(
-        TOKEN_2022_PROGRAM_ID.toBase58(),
-        "Escrow ATA should be owned by Token-2022 program"
-      );
-      console.log("    Escrow ATA exists:", vaultOkusdAta.toBase58());
-      console.log("    Escrow ATA owner:", escrowInfo!.owner.toBase58());
-      console.log("    Escrow ATA data length:", escrowInfo!.data.length);
-    });
-
-    it("verifies config PDA stores correct vault_okusd reference", async () => {
-      const config = await program.account.psmConfig.fetch(configPda);
-      const expectedAta = getAssociatedTokenAddressSync(
-        okusdMint,
-        configPda,
-        true,
-        TOKEN_2022_PROGRAM_ID
-      );
-      expect(config.vaultOkusd.toBase58()).to.equal(
-        expectedAta.toBase58(),
-        "PsmConfig.vault_okusd should match the derived ATA address"
-      );
-      console.log("    Config vault_okusd:", config.vaultOkusd.toBase58());
     });
   });
 

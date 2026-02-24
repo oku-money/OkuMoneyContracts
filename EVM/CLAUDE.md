@@ -241,7 +241,8 @@ bytes32 public constant BRIDGE_REQUEST_TYPEHASH = keccak256(
 
 **Key functions**:
 ```solidity
-// Source chain: User burns shares to initiate bridge
+// Source chain: Burns `shares` from caller, deducts feeShares, emits netShares = shares - feeShares
+// in BridgeRequest and BridgeBurn event (destination mints netShares to recipient)
 function bridgeBurn(
     uint256 destChainId,
     address recipient,
@@ -313,20 +314,20 @@ mapping(address => bool) public supportedAdapters; // Registered IBridgeAdapter 
 
 **Native path** — OkuBridge owns the burn:
 ```solidity
-// wOkuUSD → redeem → tokensToShares → fee-adjust → OkuBridge.bridgeBurn()
+// wOkuUSD → redeem → tokensToShares → OkuBridge.bridgeBurn()
 function bridgeWrapped(uint256 wOkuUsdAmount, uint256 destinationChain, address recipient)
     external whenNotPaused returns (bytes32 requestId);
 
-// OkuUSD → tokensToShares → fee-adjust → OkuBridge.bridgeBurn()
+// OkuUSD → tokensToShares → OkuBridge.bridgeBurn()
 function bridgeDirect(uint256 okuUsdAmount, uint256 destinationChain, address recipient)
     external whenNotPaused returns (bytes32 requestId);
 ```
 
-**Fee-adjusted share calculation**: OkuBridge.bridgeBurn(shares) burns `shares + feeShares` from
-msg.sender (the router). The router computes net shares so the total burn fits within the tokens
-it holds: `shares = totalShares * 10000 / (10000 + bridgeFee)`. This means the fee comes out of
-the user's gross input amount (not charged on top). Up to 1-2 wei of dust may remain in the
-router from integer division rounding.
+**Subtractive fee model**: The router passes `totalShares` directly to `OkuBridge.bridgeBurn()`.
+OkuBridge burns `totalShares` from the router, computes `feeShares = totalShares * bridgeFee / 10000`,
+and emits `netShares = totalShares - feeShares` as the bridge amount (encoded in the `BridgeRequest`
+and minted to the recipient on destination). The fee comes out of the user's input (not charged on
+top). No dust remains in the router.
 
 **Adapter path** — Router pre-burns, then calls message-only adapter:
 ```solidity

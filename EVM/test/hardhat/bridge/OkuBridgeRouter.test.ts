@@ -60,7 +60,7 @@ describe("OkuBridgeRouter", function () {
     okuBridge = (await upgrades.deployProxy(
       new OkuBridge__factory(admin),
       [await okuUSD.getAddress(), orchestratorSigner.address, feeRecipient.address, admin.address],
-      { kind: "transparent" }
+      { kind: "transparent", unsafeAllow: ["constructor"] }
     )) as unknown as OkuBridge;
     await okuBridge.waitForDeployment();
 

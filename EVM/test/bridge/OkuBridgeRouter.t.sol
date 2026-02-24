@@ -271,8 +271,8 @@ contract OkuBridgeRouterTest is BaseTest {
         bytes32 requestId = bridgeRouter.bridgeWrapped(wokuShares, ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
-        // Router holds at most dust (1-2 wei from integer division in fee-adjusted share calc)
-        assertLe(okuUsd.balanceOf(address(bridgeRouter)), 2);
+        // Router holds no OkuUSD (subtractive model: OkuBridge burns exactly totalShares)
+        assertEq(okuUsd.balanceOf(address(bridgeRouter)), 0);
         // User has no wOkuUSD
         assertEq(wokuUsd.balanceOf(user1), 0);
         // requestId is non-zero
@@ -341,8 +341,9 @@ contract OkuBridgeRouterTest is BaseTest {
         // OkuBridge received shares representing the full rebased value (minus fee)
         // Verify by checking nonce incremented (OkuBridge processed the bridge)
         assertEq(okuBridgeContract.outboundNonce(ARBITRUM_CHAIN_ID), 1);
-        // Router holds at most dust from integer division
-        assertLe(okuUsd.balanceOf(address(bridgeRouter)), 2);
+        // Router holds at most 1 wei of dust from the tokensToShares/sharesToTokens round-trip
+        // at a non-unit rewardMultiplier. There is no fee-related dust.
+        assertLe(okuUsd.balanceOf(address(bridgeRouter)), 1);
     }
 
     function test_BridgeWrapped_FeeCollected() public {
@@ -358,13 +359,12 @@ contract OkuBridgeRouterTest is BaseTest {
         bridgeRouter.bridgeWrapped(wokuShares, ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
-        // Fee recipient should have received ~1% as OkuUSD.
-        // The router uses a gross-deduction model: fee comes out of the input amount.
-        // Net shares bridged = gross * 10000 / (10000 + fee), so fee ≈ gross * fee / (10000 + fee).
+        // Fee recipient should have received exactly 1% as OkuUSD.
+        // Subtractive model: fee = totalShares * bridgeFee / 10000 = okuAmount * bridgeFee / 10000.
         uint256 feeBalance = okuUsd.balanceOf(feeRecipient);
         assertGt(feeBalance, 0);
         uint256 currentFee = okuBridgeContract.bridgeFee(); // 100 bps
-        assertApproxEqAbs(feeBalance, okuAmount * currentFee / (10000 + currentFee), 2);
+        assertEq(feeBalance, okuAmount * currentFee / 10000);
     }
 
     // ============ Native Path: bridgeDirect ============
@@ -383,8 +383,8 @@ contract OkuBridgeRouterTest is BaseTest {
         vm.stopPrank();
 
         assertEq(okuUsd.balanceOf(user1), 0);
-        // Router holds at most dust from integer division in fee-adjusted share calc
-        assertLe(okuUsd.balanceOf(address(bridgeRouter)), 2);
+        // Router holds no OkuUSD (no dust with subtractive model)
+        assertEq(okuUsd.balanceOf(address(bridgeRouter)), 0);
         assertNotEq(requestId, bytes32(0));
         assertEq(okuBridgeContract.outboundNonce(ARBITRUM_CHAIN_ID), 1);
     }
@@ -642,11 +642,9 @@ contract OkuBridgeRouterTest is BaseTest {
     // ============ Fuzz Tests ============
 
     function testFuzz_BridgeWrapped_NativePath(uint256 okuAmount) public {
-        // Bound so that fee-adjusted shares land within [minBridgeShares, maxBridgeShares].
-        // shares = totalShares * 10000 / (10000 + fee), so minimum okuAmount = ceil(min * (10000+fee) / 10000).
-        uint256 fee = okuBridgeContract.bridgeFee();
-        uint256 minOku = (okuBridgeContract.minBridgeShares() * (10000 + fee) + 9999) / 10000;
-        okuAmount = bound(okuAmount, minOku, okuBridgeContract.maxBridgeShares());
+        // With the subtractive model, totalShares is passed directly to OkuBridge.
+        // Bound okuAmount within [minBridgeShares, maxBridgeShares] directly.
+        okuAmount = bound(okuAmount, okuBridgeContract.minBridgeShares(), okuBridgeContract.maxBridgeShares());
         uint256 wokuShares = _mintAndWrap(user1, okuAmount);
 
         vm.startPrank(user1);
@@ -654,18 +652,16 @@ contract OkuBridgeRouterTest is BaseTest {
         bytes32 requestId = bridgeRouter.bridgeWrapped(wokuShares, ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
-        // Router holds at most dust (1-2 wei) from integer division in fee-adjusted share calc
-        assertLe(okuUsd.balanceOf(address(bridgeRouter)), 2);
+        // Router holds no OkuUSD (no dust with subtractive model)
+        assertEq(okuUsd.balanceOf(address(bridgeRouter)), 0);
         assertEq(wokuUsd.balanceOf(user1), 0);
         assertNotEq(requestId, bytes32(0));
     }
 
     function testFuzz_BridgeDirect_NativePath(uint256 okuAmount) public {
-        // Bound so that fee-adjusted shares land within [minBridgeShares, maxBridgeShares].
-        // shares = totalShares * 10000 / (10000 + fee), so minimum okuAmount = ceil(min * (10000+fee) / 10000).
-        uint256 fee = okuBridgeContract.bridgeFee();
-        uint256 minOku = (okuBridgeContract.minBridgeShares() * (10000 + fee) + 9999) / 10000;
-        okuAmount = bound(okuAmount, minOku, okuBridgeContract.maxBridgeShares());
+        // With the subtractive model, totalShares is passed directly to OkuBridge.
+        // Bound okuAmount within [minBridgeShares, maxBridgeShares] directly.
+        okuAmount = bound(okuAmount, okuBridgeContract.minBridgeShares(), okuBridgeContract.maxBridgeShares());
         _mintOkuUsd(user1, okuAmount);
 
         vm.startPrank(user1);
@@ -674,8 +670,8 @@ contract OkuBridgeRouterTest is BaseTest {
         vm.stopPrank();
 
         assertEq(okuUsd.balanceOf(user1), 0);
-        // Router holds at most dust (1-2 wei) from integer division in fee-adjusted share calc
-        assertLe(okuUsd.balanceOf(address(bridgeRouter)), 2);
+        // Router holds no OkuUSD (no dust with subtractive model)
+        assertEq(okuUsd.balanceOf(address(bridgeRouter)), 0);
         assertNotEq(requestId, bytes32(0));
     }
 

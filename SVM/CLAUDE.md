@@ -55,7 +55,10 @@ programs/
 tests/
   lite-psm.ts
   wokusd-vault.ts
-  integration.ts
+  oku-bridge-router.ts
+  bridge_security.ts
+  shared/
+    setup.ts
 scripts/
   initialize-okusd-mint.ts
   deploy.ts
@@ -303,6 +306,8 @@ pub enum OkuError {
 ```rust
 // PSM Events
 #[event]
+pub struct InitializeEvent { pub role_admin: Pubkey, pub usdc_mint: Pubkey, pub okusd_mint: Pubkey, pub max_supply: u64 }
+#[event]
 pub struct MintEvent { pub user: Pubkey, pub usdc_amount: u64, pub okusd_amount: u64 }
 #[event]
 pub struct RedeemEvent { pub user: Pubkey, pub okusd_amount: u64, pub usdc_amount: u64 }
@@ -376,9 +381,15 @@ pub struct OrchestratorSignerUpdatedEvent { pub new_signer: Pubkey }
 
 // Vault Events
 #[event]
+pub struct InitializeEvent { pub role_admin: Pubkey, pub okusd_mint: Pubkey, pub wokusd_mint: Pubkey }
+#[event]
 pub struct WrapEvent { pub user: Pubkey, pub okusd_amount: u64, pub shares_minted: u64 }
 #[event]
 pub struct UnwrapEvent { pub user: Pubkey, pub shares_burned: u64, pub okusd_amount: u64 }
+
+// Router Events
+#[event]
+pub struct BridgeWrappedEvent { pub user: Pubkey, pub wokusd_shares: u64, pub okusd_amount: u64, pub destination_chain: u16 }
 ```
 
 ## Cross-Chain Bridging
@@ -402,6 +413,8 @@ Solana → EVM:
 A convenience program that atomically combines unwrap + bridge_burn in a single transaction for wOkuUSD holders:
 
 ```rust
+pub fn initialize(ctx: Context<Initialize>) -> Result<()>
+pub fn set_paused(ctx: Context<SetPaused>, paused: bool) -> Result<()>
 pub fn bridge_wrapped(
     ctx: Context<BridgeWrapped>,
     wokusd_shares: u64,
@@ -443,7 +456,8 @@ The SVM bridge implements production-grade security matching the EVM bridge's Ok
 
 **5. Fee Collection**
 - Bridge fee in basis points (default 10 bps = 0.1%)
-- Total burn = amount + fee; fee re-minted to fee_recipient
+- Subtractive model: user specifies total to burn, fee deducted from bridged value (net_amount = amount - fee)
+- Fee re-minted to fee_recipient
 - Collected on source chain (burn side)
 
 **6. Chain Whitelisting**
@@ -463,7 +477,7 @@ The SVM bridge implements production-grade security matching the EVM bridge's Ok
 
 ### Bridge State Structures
 
-**BridgeConfig PDA** (seeds: `["bridge_config"]`, 349 bytes):
+**BridgeConfig PDA** (seeds: `["bridge_config"]`, 351 bytes):
 ```rust
 pub struct BridgeConfig {
     pub bump: u8,
@@ -481,6 +495,7 @@ pub struct BridgeConfig {
     pub min_bridge_amount: u64,
     pub max_bridge_amount: u64,
     pub is_paused: bool,
+    pub source_chain_id: u16,
     // Chain whitelist
     pub supported_chains: [u16; 32],
     pub supported_chains_count: u8,
@@ -520,10 +535,11 @@ pub fn bridge_mint(
     request_id: [u8; 32],       // keccak256(message_bytes) — used for PDA derivation
 ) -> Result<()>
 
-// Burn with fee collection and nonce tracking
+// Burn with subtractive fee collection and nonce tracking
+// amount = total deducted from user; net_amount = amount - fee is bridged to destination
 pub fn bridge_burn(
     ctx: Context<BridgeBurn>,
-    amount: u64,
+    amount: u64,                // Total to deduct from user (fee subtracted from this)
     recipient: [u8; 20],        // EVM address on destination chain
     destination_chain_id: u16,
 ) -> Result<()>
@@ -598,7 +614,7 @@ EVM uses shares because `balanceOf()` implements custom rebasing logic. SVM uses
 
 ```rust
 // SVM: Bridge raw amounts directly
-bridge_burn(amount: 1_000_000)  // 1 token (6 decimals)
+bridge_burn(amount: 1_000_000)  // Burns 1 token, bridges (1 - fee) to destination
 
 // Token-2022 automatically calculates UI amount:
 // ui_amount = amount × e^(rate × time_elapsed)

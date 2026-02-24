@@ -144,7 +144,7 @@ describe("LitePSM Scenarios", () => {
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
             [await okuUSD.getAddress(), USDC_MAINNET, await queue.getAddress(), frankAddr],
-            { kind: "uups" }
+            { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()
 

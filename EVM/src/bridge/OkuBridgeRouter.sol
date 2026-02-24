@@ -25,7 +25,6 @@ interface IOkuBridgeNative {
     function bridgeBurn(uint256 destChainId, address recipient, uint256 shares)
         external
         returns (bytes32 requestId);
-    function bridgeFee() external view returns (uint256);
 }
 
 interface IBridgeAdapter {
@@ -148,8 +147,8 @@ contract OkuBridgeRouter is
     // ============ Native Bridge Path ============
     // OkuBridge owns its own burn lifecycle. The router only normalizes the token
     // (redeeming wOkuUSD if needed) before handing off to OkuBridge.bridgeBurn().
-    // OkuBridge (as a MINTER on OkuUSD) burns from this contract, collects its fee,
-    // increments its nonce, and emits BridgeBurn for the orchestrator to observe.
+    // OkuBridge (as a MINTER on OkuUSD) burns totalShares from this contract, deducts
+    // feeShares, and emits netShares = totalShares - feeShares as the bridge amount.
 
     /**
      * @notice Bridge wOkuUSD to another chain via the native OkuBridge
@@ -174,13 +173,8 @@ contract OkuBridgeRouter is
         uint256 okuUsdAmount = wOkuUsd.redeem(wOkuUsdAmount, address(this), address(this));
         uint256 totalShares = okuUsd.tokensToShares(okuUsdAmount);
 
-        // OkuBridge burns (shares + fee_shares) from this contract. Compute net shares to
-        // bridge such that shares + fee(shares) <= totalShares held by this contract.
-        uint256 fee = okuBridge.bridgeFee();
-        uint256 shares = totalShares * 10000 / (10000 + fee);
-
-        // OkuBridge burns from address(this), collects fee, emits BridgeBurn
-        requestId = okuBridge.bridgeBurn(destinationChain, recipient, shares);
+        // OkuBridge burns totalShares from this contract, deducts fee, emits BridgeBurn
+        requestId = okuBridge.bridgeBurn(destinationChain, recipient, totalShares);
 
         emit NativeBridgeInitiated(msg.sender, requestId, okuUsdAmount, destinationChain, recipient);
     }
@@ -207,13 +201,8 @@ contract OkuBridgeRouter is
         IERC20(address(okuUsd)).safeTransferFrom(msg.sender, address(this), okuUsdAmount);
         uint256 totalShares = okuUsd.tokensToShares(okuUsdAmount);
 
-        // OkuBridge burns (shares + fee_shares) from this contract. Compute net shares to
-        // bridge such that shares + fee(shares) <= totalShares held by this contract.
-        uint256 fee = okuBridge.bridgeFee();
-        uint256 shares = totalShares * 10000 / (10000 + fee);
-
-        // OkuBridge burns from address(this), collects fee, emits BridgeBurn
-        requestId = okuBridge.bridgeBurn(destinationChain, recipient, shares);
+        // OkuBridge burns totalShares from this contract, deducts fee, emits BridgeBurn
+        requestId = okuBridge.bridgeBurn(destinationChain, recipient, totalShares);
 
         emit NativeBridgeInitiated(msg.sender, requestId, okuUsdAmount, destinationChain, recipient);
     }

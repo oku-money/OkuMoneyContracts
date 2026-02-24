@@ -225,33 +225,30 @@ contract OkuBridge is
             revert AmountAboveMaximum(shares, maxBridgeShares);
         }
 
-        // Calculate fee in shares
+        // Calculate fee in shares (subtractive model: fee comes out of bridged amount)
         uint256 feeShares = (shares * bridgeFee) / 10000;
+        // Net shares the recipient will receive on destination
+        uint256 netShares = shares - feeShares;
 
-        // Convert to token amounts for burn/mint
-        uint256 sharesToBurn = shares + feeShares;
-        uint256 tokensToBurn = okuUsd.sharesToTokens(sharesToBurn);
+        // Burn the full input from user (OkuUSD.burn takes token amount)
+        okuUsd.burn(msg.sender, okuUsd.sharesToTokens(shares));
 
-        // Burn tokens from user (OkuUSD.burn takes token amount)
-        okuUsd.burn(msg.sender, tokensToBurn);
-
-        // Mint fee back to fee recipient (OkuUSD.mint takes token amount)
+        // Mint fee to fee recipient (OkuUSD.mint takes token amount)
         if (feeShares > 0) {
-            uint256 feeTokens = okuUsd.sharesToTokens(feeShares);
-            okuUsd.mint(feeRecipient, feeTokens);
+            okuUsd.mint(feeRecipient, okuUsd.sharesToTokens(feeShares));
         }
 
         // Get and increment nonce
         uint256 nonce = outboundNonce[destChainId];
         outboundNonce[destChainId] = nonce + 1;
 
-        // Construct request
+        // Construct request (encodes netShares — what destination will mint)
         BridgeRequest memory request = BridgeRequest({
             sourceChainId: block.chainid,
             destChainId: destChainId,
             sender: msg.sender,
             recipient: recipient,
-            shares: shares,
+            shares: netShares,
             nonce: nonce,
             deadline: block.timestamp + 1 hours // Default 1 hour deadline
         });
@@ -266,7 +263,7 @@ contract OkuBridge is
             recipient,
             block.chainid,
             destChainId,
-            shares,
+            netShares,
             nonce,
             request.deadline
         );

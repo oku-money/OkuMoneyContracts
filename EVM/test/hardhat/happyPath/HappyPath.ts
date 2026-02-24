@@ -240,7 +240,6 @@ describe("Happy Path Testing", () => {
         const bobAddr = await Bob.getAddress()
         const daveAddr = await Dave.getAddress()
         const psmAddr = await psm.getAddress()
-        const queueAddr = await queue.getAddress()
 
         // First, drain the PSM reserves (admin withdraws all USDC)
         const psmBalance = await usdc.balanceOf(psmAddr)
@@ -260,15 +259,12 @@ describe("Happy Path Testing", () => {
         const bobRedeemAmount = bobBalance / 2n
         const daveRedeemAmount = daveBalance / 2n
 
-        // All users approve PSM and Queue to handle their OkuUSD
+        // All users approve PSM to handle their OkuUSD
+        // PSM handles the transfer to queue internally — no queue approval needed
         await okuUSD.connect(Alice).approve(psmAddr, aliceRedeemAmount)
-        await okuUSD.connect(Alice).approve(queueAddr, aliceRedeemAmount)
         await okuUSD.connect(Charlie).approve(psmAddr, charlieRedeemAmount)
-        await okuUSD.connect(Charlie).approve(queueAddr, charlieRedeemAmount)
         await okuUSD.connect(Bob).approve(psmAddr, bobRedeemAmount)
-        await okuUSD.connect(Bob).approve(queueAddr, bobRedeemAmount)
         await okuUSD.connect(Dave).approve(psmAddr, daveRedeemAmount)
-        await okuUSD.connect(Dave).approve(queueAddr, daveRedeemAmount)
 
         // Users redeem in order: Alice, Charlie, Bob, Dave (FIFO queue order)
         await psm.connect(Alice).redeem(aliceRedeemAmount)
@@ -342,12 +338,129 @@ describe("Happy Path Testing", () => {
         expect(daveReceived).to.be.closeTo(expectedPayout, parseUnits("1", 6))
     })
 
+    it("Partial buffer redemption (mixed instant + queued)", async () => {
+        const aliceAddr = await Alice.getAddress()
+        const charlieAddr = await Charlie.getAddress()
+        const bobAddr = await Bob.getAddress()
+        const daveAddr = await Dave.getAddress()
+        const psmAddr = await psm.getAddress()
+
+        // Each user has ~5,250 OkuUSD remaining after the previous steps.
+        // Drain the PSM, then re-fund with only enough USDC for ~2 users
+        // so the first two redemptions are instant and the last two get queued.
+        const psmBalance = await usdc.balanceOf(psmAddr)
+        await psm.connect(Frank).withdrawUsdc(await Frank.getAddress(), psmBalance)
+        expect(await usdc.balanceOf(psmAddr)).to.equal(0)
+
+        // Replenish with only enough for 2 users (~5,250 USDC)
+        const partialBuffer = parseUnits("5250", 6)
+        await network.provider.request({
+            method: "hardhat_impersonateAccount",
+            params: [USDC_WHALE]
+        })
+        const whale = await ethers.getSigner(USDC_WHALE)
+        await usdc.connect(whale).transfer(psmAddr, partialBuffer)
+        await network.provider.request({
+            method: "hardhat_stopImpersonatingAccount",
+            params: [USDC_WHALE]
+        })
+
+        // Each user will try to redeem ~2,625 OkuUSD (half their remaining balance)
+        const aliceBalance = await okuUSD.balanceOf(aliceAddr)
+        const charlieBalance = await okuUSD.balanceOf(charlieAddr)
+        const bobBalance = await okuUSD.balanceOf(bobAddr)
+        const daveBalance = await okuUSD.balanceOf(daveAddr)
+
+        const aliceRedeem = aliceBalance / 2n
+        const charlieRedeem = charlieBalance / 2n
+        const bobRedeem = bobBalance / 2n
+        const daveRedeem = daveBalance / 2n
+
+        // Approve PSM for all users — PSM handles the transfer to queue internally
+        await okuUSD.connect(Alice).approve(psmAddr, aliceRedeem)
+        await okuUSD.connect(Charlie).approve(psmAddr, charlieRedeem)
+        await okuUSD.connect(Bob).approve(psmAddr, bobRedeem)
+        await okuUSD.connect(Dave).approve(psmAddr, daveRedeem)
+
+        // Snapshot USDC balances before redemptions
+        const aliceUsdcBefore = await usdc.balanceOf(aliceAddr)
+        const charlieUsdcBefore = await usdc.balanceOf(charlieAddr)
+        const bobUsdcBefore = await usdc.balanceOf(bobAddr)
+        const daveUsdcBefore = await usdc.balanceOf(daveAddr)
+
+        // Alice and Charlie redeem first — buffer has ~10,500 USDC, enough for both (~2,625 each)
+        await psm.connect(Alice).redeem(aliceRedeem)
+        await psm.connect(Charlie).redeem(charlieRedeem)
+
+        // Verify Alice and Charlie received USDC instantly (no queue)
+        const aliceUsdcAfterInstant = await usdc.balanceOf(aliceAddr)
+        const charlieUsdcAfterInstant = await usdc.balanceOf(charlieAddr)
+        expect(aliceUsdcAfterInstant - aliceUsdcBefore).to.be.gt(0)
+        expect(charlieUsdcAfterInstant - charlieUsdcBefore).to.be.gt(0)
+        expect(await queue.queueLength()).to.equal(0)
+
+        // Bob and Dave redeem — buffer is now depleted, these should be queued
+        await psm.connect(Bob).redeem(bobRedeem)
+        await psm.connect(Dave).redeem(daveRedeem)
+
+        // Verify Bob and Dave are queued
+        expect(await queue.queueLength()).to.equal(2)
+
+        // Bob and Dave should NOT have received any USDC
+        expect(await usdc.balanceOf(bobAddr)).to.equal(bobUsdcBefore)
+        expect(await usdc.balanceOf(daveAddr)).to.equal(daveUsdcBefore)
+
+        // Admin replenishes PSM and processes the queue
+        await network.provider.request({
+            method: "hardhat_impersonateAccount",
+            params: [USDC_WHALE]
+        })
+        const whale2 = await ethers.getSigner(USDC_WHALE)
+        await usdc.connect(whale2).transfer(psmAddr, parseUnits("10000", 6))
+        await network.provider.request({
+            method: "hardhat_stopImpersonatingAccount",
+            params: [USDC_WHALE]
+        })
+
+        await psm.connect(Frank).processQueue(10)
+
+        // Queue should now be empty
+        expect(await queue.queueLength()).to.equal(0)
+
+        // Bob and Dave should have received USDC from queue processing
+        const bobUsdcAfter = await usdc.balanceOf(bobAddr)
+        const daveUsdcAfter = await usdc.balanceOf(daveAddr)
+        expect(bobUsdcAfter - bobUsdcBefore).to.be.gt(0)
+        expect(daveUsdcAfter - daveUsdcBefore).to.be.gt(0)
+
+        // All four users should have received roughly equal USDC amounts
+        const aliceReceived = aliceUsdcAfterInstant - aliceUsdcBefore
+        const charlieReceived = charlieUsdcAfterInstant - charlieUsdcBefore
+        const bobReceived = bobUsdcAfter - bobUsdcBefore
+        const daveReceived = daveUsdcAfter - daveUsdcBefore
+
+        expect(aliceReceived).to.be.closeTo(bobReceived, parseUnits("1", 6))
+        expect(charlieReceived).to.be.closeTo(daveReceived, parseUnits("1", 6))
+    })
+
     it("Withdraw", async () => {
         const aliceAddr = await Alice.getAddress()
         const charlieAddr = await Charlie.getAddress()
         const bobAddr = await Bob.getAddress()
         const daveAddr = await Dave.getAddress()
         const psmAddr = await psm.getAddress()
+
+        // Ensure PSM has enough USDC for all remaining redemptions
+        await network.provider.request({
+            method: "hardhat_impersonateAccount",
+            params: [USDC_WHALE]
+        })
+        const whale = await ethers.getSigner(USDC_WHALE)
+        await usdc.connect(whale).transfer(psmAddr, parseUnits("20000", 6))
+        await network.provider.request({
+            method: "hardhat_stopImpersonatingAccount",
+            params: [USDC_WHALE]
+        })
 
         // Get all users' remaining OkuUSD
         const aliceOkuUSD = await okuUSD.balanceOf(aliceAddr)
@@ -385,9 +498,8 @@ describe("Happy Path Testing", () => {
         const bobUsdcAfter = await usdc.balanceOf(bobAddr)
         const daveUsdcAfter = await usdc.balanceOf(daveAddr)
 
-        // Each user should have received ~5,250 USDC (their remaining half after rebase)
-        // Total USDC received across both redemptions should be ~10,500 (original + 5% yield)
-        const expectedSecondPayout = parseUnits("5250", 6)
+        // Each user should have received ~2,625 USDC (quarter of post-rebase balance)
+        const expectedSecondPayout = parseUnits("2625", 6)
         const aliceReceived = aliceUsdcAfter - aliceUsdcBefore
         const charlieReceived = charlieUsdcAfter - charlieUsdcBefore
         const bobReceived = bobUsdcAfter - bobUsdcBefore

@@ -45,7 +45,8 @@ contract OkuBridgeRouterTest is BaseTest {
         uint256 sourceChainId,
         uint256 destChainId,
         uint256 shares,
-        uint256 nonce
+        uint256 nonce,
+        uint256 deadline
     );
 
     // Events from OkuBridgeRouter
@@ -265,7 +266,7 @@ contract OkuBridgeRouterTest is BaseTest {
 
         // Expect BridgeBurn from OkuBridge (the canonical native path event)
         vm.expectEmit(false, true, true, false, address(okuBridgeContract));
-        emit BridgeBurn(bytes32(0), address(bridgeRouter), user2, 0, ARBITRUM_CHAIN_ID, 0, 0);
+        emit BridgeBurn(bytes32(0), address(bridgeRouter), user2, 0, ARBITRUM_CHAIN_ID, 0, 0, 0);
 
         bytes32 requestId = bridgeRouter.bridgeWrapped(wokuShares, ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
@@ -376,7 +377,7 @@ contract OkuBridgeRouterTest is BaseTest {
         okuUsd.approve(address(bridgeRouter), okuAmount);
 
         vm.expectEmit(false, true, true, false, address(okuBridgeContract));
-        emit BridgeBurn(bytes32(0), address(bridgeRouter), user2, 0, ARBITRUM_CHAIN_ID, 0, 0);
+        emit BridgeBurn(bytes32(0), address(bridgeRouter), user2, 0, ARBITRUM_CHAIN_ID, 0, 0, 0);
 
         bytes32 requestId = bridgeRouter.bridgeDirect(okuAmount, ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();

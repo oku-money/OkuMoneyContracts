@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
@@ -39,6 +40,7 @@ contract OkuBridge is
     Initializable,
     AccessControlUpgradeable,
     PausableUpgradeable,
+    ReentrancyGuard,
     EIP712Upgradeable
 {
     // ============ State Variables ============
@@ -112,7 +114,8 @@ contract OkuBridge is
         uint256 sourceChainId,
         uint256 destChainId,
         uint256 shares,
-        uint256 nonce
+        uint256 nonce,
+        uint256 deadline
     );
 
     event BridgeMint(
@@ -208,7 +211,7 @@ contract OkuBridge is
         uint256 destChainId,
         address recipient,
         uint256 shares
-    ) external whenNotPaused returns (bytes32 requestId) {
+    ) external whenNotPaused nonReentrant returns (bytes32 requestId) {
         // Validate destination chain
         if (!supportedChains[destChainId]) {
             revert UnsupportedChain(destChainId);
@@ -264,7 +267,8 @@ contract OkuBridge is
             block.chainid,
             destChainId,
             shares,
-            nonce
+            nonce,
+            request.deadline
         );
     }
 
@@ -276,7 +280,7 @@ contract OkuBridge is
     function bridgeMint(
         BridgeRequest calldata request,
         bytes calldata signature
-    ) external whenNotPaused {
+    ) external whenNotPaused nonReentrant {
         // Validate destination chain
         if (request.destChainId != block.chainid) {
             revert WrongChain(request.destChainId, block.chainid);

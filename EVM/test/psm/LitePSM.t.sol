@@ -160,6 +160,24 @@ contract LitePSMTest is BaseTest {
         litePsm.mint(100e6);
     }
 
+    function test_Mint_RevertsOnIncompleteRound() public {
+        // Warp to a reasonable timestamp first
+        vm.warp(1_000_000);
+
+        // Configure oracle
+        vm.prank(oracleManager);
+        litePsm.configureOracle(address(oracle), 1 hours, true);
+
+        // Simulate an incomplete round (answeredInRound < roundId)
+        oracle.setRoundIncomplete();
+
+        _approveUsdc(user1, address(litePsm), 100e6);
+
+        vm.prank(user1);
+        vm.expectRevert("Incomplete oracle round");
+        litePsm.mint(100e6);
+    }
+
     function test_Mint_SkipsOracleWhenDisabled() public {
         // Warp to reasonable timestamp to allow setStale to work without underflow
         vm.warp(1_000_000);
@@ -254,9 +272,8 @@ contract LitePSMTest is BaseTest {
         _mintOkuUsd(user1, okuUsdAmount);
 
         // PSM only has 5000e6 USDC buffer (worth 5,000 OkuUSD)
-        // User needs to approve both PSM (for immediate burns) and Queue (for queuing)
+        // User only needs to approve PSM — PSM handles the transfer to queue
         _approveOkuUsd(user1, address(litePsm), okuUsdAmount);
-        _approveOkuUsd(user1, address(redemptionQueue), okuUsdAmount);
 
         vm.prank(user1);
         litePsm.redeem(okuUsdAmount);
@@ -265,6 +282,23 @@ contract LitePSMTest is BaseTest {
         // User still has their OkuUSD (transferred to queue contract)
         // Check queue has entry
         assertEq(redemptionQueue.queueLength(), 1);
+    }
+
+    function test_Redeem_QueuesWithOnlyPSMApproval() public {
+        uint256 okuUsdAmount = 10_000e18; // 10,000 OkuUSD (buffer only has 5000 USDC worth)
+
+        _mintOkuUsd(user1, okuUsdAmount);
+
+        // Verify only PSM approval is needed — no queue approval at all
+        _approveOkuUsd(user1, address(litePsm), okuUsdAmount);
+        // Deliberately do NOT approve the queue
+
+        vm.prank(user1);
+        litePsm.redeem(okuUsdAmount); // Must succeed with only PSM approval
+
+        assertEq(redemptionQueue.queueLength(), 1);
+        // OkuUSD is now held by the queue contract
+        assertEq(okuUsd.balanceOf(address(redemptionQueue)), okuUsdAmount);
     }
 
     function test_Redeem_NoOracleCheck() public {
@@ -339,11 +373,8 @@ contract LitePSMTest is BaseTest {
         _mintOkuUsd(user1, okuUsdAmount);
         _mintOkuUsd(user2, okuUsdAmount);
 
-        // Users need to approve queue for transferFrom
-        _approveOkuUsd(user1, address(redemptionQueue), okuUsdAmount);
-        _approveOkuUsd(user2, address(redemptionQueue), okuUsdAmount);
-
         // Drain buffer first - redeem more than buffer (5000 USDC worth)
+        // Only PSM approval needed; PSM moves tokens to queue internally
         _approveOkuUsd(user1, address(litePsm), okuUsdAmount);
         vm.prank(user1);
         litePsm.redeem(okuUsdAmount); // Queued (buffer only 5000 USDC)
@@ -374,7 +405,6 @@ contract LitePSMTest is BaseTest {
         uint256 okuUsdAmount = 6000e18; // 6,000 OkuUSD
 
         _mintOkuUsd(user1, okuUsdAmount);
-        _approveOkuUsd(user1, address(redemptionQueue), okuUsdAmount);
         _approveOkuUsd(user1, address(litePsm), okuUsdAmount);
 
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
@@ -415,8 +445,6 @@ contract LitePSMTest is BaseTest {
         _mintOkuUsd(user1, okuUsdAmount);
         _mintOkuUsd(user2, okuUsdAmount);
 
-        _approveOkuUsd(user1, address(redemptionQueue), okuUsdAmount);
-        _approveOkuUsd(user2, address(redemptionQueue), okuUsdAmount);
         _approveOkuUsd(user1, address(litePsm), okuUsdAmount);
         _approveOkuUsd(user2, address(litePsm), okuUsdAmount);
 
@@ -477,6 +505,33 @@ contract LitePSMTest is BaseTest {
         litePsm.withdrawUsdc(user1, amount);
 
         assertEq(usdc.balanceOf(user1), user1Before + amount);
+    }
+
+    function test_WithdrawUSDC_RevertsWhenWouldStrandQueue() public {
+        // Queue a redemption to create an obligation
+        uint256 okuUsdAmount = 10_000e18; // 10,000 OkuUSD (needs 10,000 USDC)
+        _mintOkuUsd(user1, okuUsdAmount);
+        _approveOkuUsd(user1, address(litePsm), okuUsdAmount);
+
+        vm.prank(user1);
+        litePsm.redeem(okuUsdAmount); // Buffer (5000e6) < 10000e6 → queued
+
+        // PSM buffer is 0 now (all USDC went nowhere, but queue obligation is 10000 USDC)
+        // Actually buffer is still 5000e6 since no USDC was moved, only OkuUSD was queued
+        // Trying to withdraw the full buffer would strand the 10000 USDC obligation
+        uint256 obligation = redemptionQueue.totalQueuedUsdc();
+        assertGt(obligation, 0, "Queue should have obligation");
+
+        // Withdrawing more than (balance - obligation) should revert
+        uint256 balance = usdc.balanceOf(address(litePsm));
+        uint256 safeWithdraw = balance > obligation ? balance - obligation : 0;
+        uint256 unsafeAmount = safeWithdraw + 1e6;
+
+        if (unsafeAmount <= balance) {
+            vm.prank(bufferWithdrawer);
+            vm.expectRevert("Would strand queue");
+            litePsm.withdrawUsdc(user1, unsafeAmount);
+        }
     }
 
     // ============ Decimal Conversion Tests ============

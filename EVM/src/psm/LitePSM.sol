@@ -9,6 +9,7 @@ import {
 import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {RedemptionQueue} from "./RedemptionQueue.sol";
@@ -21,8 +22,16 @@ interface IOkuUSD {
 }
 
 interface IAggregatorV3 {
-    function latestAnswer() external view returns (int256);
-    function latestTimestamp() external view returns (uint256);
+    function latestRoundData()
+        external
+        view
+        returns (
+            uint80 roundId,
+            int256 answer,
+            uint256 startedAt,
+            uint256 updatedAt,
+            uint80 answeredInRound
+        );
 }
 
 /**
@@ -34,6 +43,7 @@ contract LitePSM is
     Initializable,
     AccessControlUpgradeable,
     PausableUpgradeable,
+    ReentrancyGuard,
     UUPSUpgradeable
 {
     using SafeERC20 for IERC20;
@@ -101,7 +111,7 @@ contract LitePSM is
      * @notice Mint OkuUSD by depositing USDC at 1:1 rate
      * @param usdcAmount Amount of USDC to deposit (6 decimals)
      */
-    function mint(uint256 usdcAmount) external whenNotPaused {
+    function mint(uint256 usdcAmount) external whenNotPaused nonReentrant {
         require(usdcAmount > 0, "Amount must be positive");
 
         // Convert USDC (6 decimals) to OkuUSD amount (18 decimals)
@@ -125,7 +135,7 @@ contract LitePSM is
      * @notice Redeem OkuUSD for USDC at 1:1 rate
      * @param okuUsdAmount Amount of OkuUSD to redeem (18 decimals)
      */
-    function redeem(uint256 okuUsdAmount) external whenNotPaused {
+    function redeem(uint256 okuUsdAmount) external whenNotPaused nonReentrant {
         require(okuUsdAmount > 0, "Amount must be positive");
 
         // Convert OkuUSD (18 decimals) to USDC amount (6 decimals)
@@ -141,6 +151,10 @@ contract LitePSM is
             emit Redeem(msg.sender, okuUsdAmount, usdcAmount);
         } else {
             // Insufficient buffer - queue redemption
+            // Pull OkuUSD from user to PSM (user approved PSM)
+            IERC20(address(okuUsd)).safeTransferFrom(msg.sender, address(this), okuUsdAmount);
+            // Transfer from PSM to queue, then record
+            IERC20(address(okuUsd)).safeTransfer(address(redemptionQueue), okuUsdAmount);
             redemptionQueue.enqueue(msg.sender, okuUsdAmount);
         }
     }
@@ -149,7 +163,7 @@ contract LitePSM is
      * @notice Process queued redemptions (called by operator when buffer refilled)
      * @param maxEntries Maximum number of queue entries to process
      */
-    function processQueue(uint256 maxEntries) external onlyRole(QUEUE_PROCESSOR) {
+    function processQueue(uint256 maxEntries) external onlyRole(QUEUE_PROCESSOR) nonReentrant {
         //approve our USDC balance to the redemption queue so we can fill the orders
         uint256 balance = usdc.balanceOf(address(this));
         usdc.approve(address(redemptionQueue), balance);
@@ -183,16 +197,17 @@ contract LitePSM is
     function _checkReserves(uint256 mintAmount) internal view {
         require(address(porOracle) != address(0), "Oracle not configured");
 
-        int256 reserves = porOracle.latestAnswer();
-        uint256 lastUpdate = porOracle.latestTimestamp();
+        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) =
+            porOracle.latestRoundData();
 
-        require(block.timestamp - lastUpdate < stalenessThreshold, "Stale oracle data");
-        require(reserves >= 0, "Invalid oracle response");
+        require(answeredInRound >= roundId, "Incomplete oracle round");
+        require(block.timestamp - updatedAt < stalenessThreshold, "Stale oracle data");
+        require(answer >= 0, "Invalid oracle response");
 
         uint256 newSupply = okuUsd.totalSupply() + mintAmount;
-        // Safe cast: reserves >= 0 checked above
+        // Safe cast: answer >= 0 checked above
         // forge-lint: disable-next-line(unsafe-typecast)
-        require(uint256(reserves) >= newSupply, "Exceeds reserves");
+        require(uint256(answer) >= newSupply, "Exceeds reserves");
     }
 
     // ============ Admin Functions ============
@@ -206,6 +221,8 @@ contract LitePSM is
     }
 
     function withdrawUsdc(address to, uint256 amount) external onlyRole(BUFFER_WITHDRAWER) {
+        uint256 queueObligation = redemptionQueue.totalQueuedUsdc();
+        require(usdc.balanceOf(address(this)) - amount >= queueObligation, "Would strand queue");
         usdc.safeTransfer(to, amount);
     }
 

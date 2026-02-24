@@ -902,7 +902,8 @@ contract OkuBridgeTest is BaseTest {
             block.chainid,
             OPTIMISM_CHAIN_ID,
             shares,
-            nonce
+            nonce,
+            block.timestamp + 1 hours
         );
 
         vm.prank(user1);

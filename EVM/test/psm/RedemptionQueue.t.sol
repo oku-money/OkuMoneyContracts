@@ -8,7 +8,9 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 /**
  * @title RedemptionQueueTest
  * @notice Unit tests for RedemptionQueue
- * @dev Queue stores shares so users earn yield while waiting (per CLAUDE.md spec)
+ * @dev Queue stores shares so users earn yield while waiting (per CLAUDE.md spec).
+ *      enqueue() is record-only; the PSM transfers tokens into the queue before calling it.
+ *      Tests simulate this by calling _mintOkuUsd(address(redemptionQueue), amount) first.
  */
 contract RedemptionQueueTest is BaseTest {
     // Decimal conversion constant
@@ -40,8 +42,7 @@ contract RedemptionQueueTest is BaseTest {
     // ============ Enqueue Tests ============
 
     function test_Enqueue_OnlyPSMRole() public {
-        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
-
+        // No pre-funding needed — test reverts on RBAC before any token ops
         vm.prank(user1);
         vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM));
         redemptionQueue.enqueue(user1, 100e18);
@@ -49,20 +50,36 @@ contract RedemptionQueueTest is BaseTest {
 
     function test_Enqueue_TransfersOkuUSD() public {
         uint256 amount = 100e18;
-        _approveOkuUsd(user1, address(redemptionQueue), amount);
+        // Pre-fund queue (simulating PSM already moved tokens there)
+        _mintOkuUsd(address(redemptionQueue), amount);
 
         uint256 user1BalanceBefore = okuUsd.balanceOf(user1);
         uint256 queueBalanceBefore = okuUsd.balanceOf(address(redemptionQueue));
 
+        // enqueue is now record-only — tokens already in queue
         redemptionQueue.enqueue(user1, amount);
 
-        assertEq(okuUsd.balanceOf(user1), user1BalanceBefore - amount);
-        assertEq(okuUsd.balanceOf(address(redemptionQueue)), queueBalanceBefore + amount);
+        // user1 balance unchanged (no transfer from user)
+        assertEq(okuUsd.balanceOf(user1), user1BalanceBefore);
+        // queue balance unchanged (tokens were pre-funded, enqueue doesn't move them)
+        assertEq(okuUsd.balanceOf(address(redemptionQueue)), queueBalanceBefore);
+    }
+
+    function test_Enqueue_DoesNotTransferFromUser() public {
+        uint256 amount = 100e18;
+        uint256 user1BalanceBefore = okuUsd.balanceOf(user1);
+
+        // Call enqueue without pre-funding — record-only, no transferFrom
+        redemptionQueue.enqueue(user1, amount);
+
+        // user1 balance completely unchanged
+        assertEq(okuUsd.balanceOf(user1), user1BalanceBefore);
+        assertEq(redemptionQueue.queueLength(), 1);
     }
 
     function test_Enqueue_StoresEntry() public {
         uint256 amount = 100e18;
-        _approveOkuUsd(user1, address(redemptionQueue), amount);
+        _mintOkuUsd(address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
@@ -76,12 +93,12 @@ contract RedemptionQueueTest is BaseTest {
     function test_Enqueue_IncrementsQueueLength() public {
         assertEq(redemptionQueue.queueLength(), 0);
 
-        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
         redemptionQueue.enqueue(user1, 100e18);
 
         assertEq(redemptionQueue.queueLength(), 1);
 
-        _approveOkuUsd(user2, address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
         redemptionQueue.enqueue(user2, 100e18);
 
         assertEq(redemptionQueue.queueLength(), 2);
@@ -89,7 +106,7 @@ contract RedemptionQueueTest is BaseTest {
 
     function test_Enqueue_EmitsEvent() public {
         uint256 amount = 100e18;
-        _approveOkuUsd(user1, address(redemptionQueue), amount);
+        _mintOkuUsd(address(redemptionQueue), amount);
 
         // At 1x multiplier, shares == tokens
         uint256 expectedShares = _tokensToShares(amount);
@@ -101,9 +118,9 @@ contract RedemptionQueueTest is BaseTest {
     }
 
     function test_Enqueue_MultipleEntries() public {
-        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
-        _approveOkuUsd(user2, address(redemptionQueue), 200e18);
-        _approveOkuUsd(user3, address(redemptionQueue), 300e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 200e18);
+        _mintOkuUsd(address(redemptionQueue), 300e18);
 
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 200e18);
@@ -127,7 +144,7 @@ contract RedemptionQueueTest is BaseTest {
 
     function test_ProcessQueue_BurnsOkuUSD() public {
         uint256 amount = 100e18;
-        _approveOkuUsd(user1, address(redemptionQueue), amount);
+        _mintOkuUsd(address(redemptionQueue), amount);
         redemptionQueue.enqueue(user1, amount);
 
         uint256 queueBalanceBefore = okuUsd.balanceOf(address(redemptionQueue));
@@ -150,7 +167,7 @@ contract RedemptionQueueTest is BaseTest {
         uint256 okuUsdAmount = 100e18; // 100 OkuUSD
         uint256 usdcAmount = 100e6; // 100 USDC (6 decimals)
 
-        _approveOkuUsd(user1, address(redemptionQueue), okuUsdAmount);
+        _mintOkuUsd(address(redemptionQueue), okuUsdAmount);
         redemptionQueue.enqueue(user1, okuUsdAmount);
 
         // Setup
@@ -169,8 +186,8 @@ contract RedemptionQueueTest is BaseTest {
     }
 
     function test_ProcessQueue_AdvancesQueueHead() public {
-        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
-        _approveOkuUsd(user2, address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 100e18);
 
@@ -195,9 +212,9 @@ contract RedemptionQueueTest is BaseTest {
     }
 
     function test_ProcessQueue_RespectsMaxEntries() public {
-        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
-        _approveOkuUsd(user2, address(redemptionQueue), 100e18);
-        _approveOkuUsd(user3, address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 100e18);
         redemptionQueue.enqueue(user3, 100e18);
@@ -216,8 +233,8 @@ contract RedemptionQueueTest is BaseTest {
     }
 
     function test_ProcessQueue_StopsWhenBufferDepleted() public {
-        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
-        _approveOkuUsd(user2, address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 100e18);
 
@@ -238,7 +255,7 @@ contract RedemptionQueueTest is BaseTest {
         uint256 okuUsdAmount = 100e18; // 100 OkuUSD
         uint256 usdcAmount = 100e6; // 100 USDC
 
-        _approveOkuUsd(user1, address(redemptionQueue), okuUsdAmount);
+        _mintOkuUsd(address(redemptionQueue), okuUsdAmount);
         redemptionQueue.enqueue(user1, okuUsdAmount);
 
         vm.prank(admin);
@@ -258,9 +275,9 @@ contract RedemptionQueueTest is BaseTest {
 
     function test_ProcessQueue_FIFO_Order() public {
         // Enqueue in order: user1, user2, user3
-        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
-        _approveOkuUsd(user2, address(redemptionQueue), 200e18);
-        _approveOkuUsd(user3, address(redemptionQueue), 300e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 200e18);
+        _mintOkuUsd(address(redemptionQueue), 300e18);
 
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 200e18);
@@ -286,8 +303,8 @@ contract RedemptionQueueTest is BaseTest {
     // ============ View Function Tests ============
 
     function test_QueueLength_ReturnsUnprocessed() public {
-        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
-        _approveOkuUsd(user2, address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 100e18);
 
@@ -316,7 +333,7 @@ contract RedemptionQueueTest is BaseTest {
      */
     function test_QueueStoresShares_YieldAccrues() public {
         uint256 amount = 100e18;
-        _approveOkuUsd(user1, address(redemptionQueue), amount);
+        _mintOkuUsd(address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
@@ -359,8 +376,8 @@ contract RedemptionQueueTest is BaseTest {
      */
     function test_QueueYieldAccrual_MultipleUsers() public {
         // User1 and User2 both queue 100e18
-        _approveOkuUsd(user1, address(redemptionQueue), 100e18);
-        _approveOkuUsd(user2, address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
+        _mintOkuUsd(address(redemptionQueue), 100e18);
 
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 100e18);
@@ -395,7 +412,7 @@ contract RedemptionQueueTest is BaseTest {
      */
     function test_GetQueueEntryValue_ReflectsCurrentMultiplier() public {
         uint256 amount = 100e18;
-        _approveOkuUsd(user1, address(redemptionQueue), amount);
+        _mintOkuUsd(address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
@@ -424,7 +441,7 @@ contract RedemptionQueueTest is BaseTest {
         multiplierIncrease = bound(multiplierIncrease, 0, PRECISION * 9); // Up to 10x total
 
         _mintOkuUsd(user1, amount);
-        _approveOkuUsd(user1, address(redemptionQueue), amount);
+        _mintOkuUsd(address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
@@ -456,7 +473,7 @@ contract RedemptionQueueTest is BaseTest {
         multiplierIncrease = bound(multiplierIncrease, PRECISION / 100, PRECISION * 4); // 1% to 5x
 
         _mintOkuUsd(user1, amount);
-        _approveOkuUsd(user1, address(redemptionQueue), amount);
+        _mintOkuUsd(address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
@@ -505,7 +522,7 @@ contract RedemptionQueueTest is BaseTest {
         rebase2 = bound(rebase2, PRECISION / 100, PRECISION); // 1% to 100% increase
 
         _mintOkuUsd(user1, amount);
-        _approveOkuUsd(user1, address(redemptionQueue), amount);
+        _mintOkuUsd(address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
@@ -548,10 +565,8 @@ contract RedemptionQueueTest is BaseTest {
             // Each user gets a different amount based on seed
             amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 10_000e18);
 
-            // Mint and approve
-            _mintOkuUsd(users[i], amounts[i]);
-            vm.prank(users[i]);
-            okuUsd.approve(address(redemptionQueue), amounts[i]);
+            // Pre-fund queue (simulating PSM moving tokens before enqueue)
+            _mintOkuUsd(address(redemptionQueue), amounts[i]);
 
             // Enqueue
             redemptionQueue.enqueue(users[i], amounts[i]);
@@ -610,10 +625,7 @@ contract RedemptionQueueTest is BaseTest {
             users[i] = makeAddr(string(abi.encodePacked("partialUser", i)));
             amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 5000e18);
 
-            _mintOkuUsd(users[i], amounts[i]);
-            vm.prank(users[i]);
-            okuUsd.approve(address(redemptionQueue), amounts[i]);
-
+            _mintOkuUsd(address(redemptionQueue), amounts[i]);
             redemptionQueue.enqueue(users[i], amounts[i]);
 
             initialBalances[i] = usdc.balanceOf(users[i]);
@@ -683,10 +695,7 @@ contract RedemptionQueueTest is BaseTest {
             users[i] = makeAddr(string(abi.encodePacked("rebaseUser", i)));
             amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 1e18, 10_000e18);
 
-            _mintOkuUsd(users[i], amounts[i]);
-            vm.prank(users[i]);
-            okuUsd.approve(address(redemptionQueue), amounts[i]);
-
+            _mintOkuUsd(address(redemptionQueue), amounts[i]);
             redemptionQueue.enqueue(users[i], amounts[i]);
 
             // Record shares (at 1x multiplier, shares == tokens)
@@ -755,10 +764,7 @@ contract RedemptionQueueTest is BaseTest {
         for (uint256 i = 0; i < numUsers; i++) {
             users[i] = makeAddr(string(abi.encodePacked("bufferUser", i)));
 
-            _mintOkuUsd(users[i], amountPerUser);
-            vm.prank(users[i]);
-            okuUsd.approve(address(redemptionQueue), amountPerUser);
-
+            _mintOkuUsd(address(redemptionQueue), amountPerUser);
             redemptionQueue.enqueue(users[i], amountPerUser);
 
             initialBalances[i] = usdc.balanceOf(users[i]);
@@ -825,10 +831,7 @@ contract RedemptionQueueTest is BaseTest {
             // Use smaller amounts to ensure some always fit
             amounts[i] = bound(uint256(keccak256(abi.encode(baseSeed, i))), 100e18, 500e18);
 
-            _mintOkuUsd(users[i], amounts[i]);
-            vm.prank(users[i]);
-            okuUsd.approve(address(redemptionQueue), amounts[i]);
-
+            _mintOkuUsd(address(redemptionQueue), amounts[i]);
             redemptionQueue.enqueue(users[i], amounts[i]);
 
             initialBalances[i] = usdc.balanceOf(users[i]);

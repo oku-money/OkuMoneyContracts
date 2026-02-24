@@ -11,7 +11,6 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 interface IOkuUSD {
     function burn(address from, uint256 amount) external;
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
     function tokensToShares(uint256 tokens) external view returns (uint256);
     function sharesToTokens(uint256 shares) external view returns (uint256);
 }
@@ -19,7 +18,9 @@ interface IOkuUSD {
 /**
  * @title RedemptionQueue
  * @notice FIFO queue for OkuUSD redemptions when PSM buffer is depleted
- * @dev Stores shares (not tokens) so users earn yield while waiting
+ * @dev Stores shares (not tokens) so users earn yield while waiting.
+ *      Tokens are transferred into the queue by the PSM before enqueue() is called;
+ *      enqueue() is record-only and does not pull tokens from the user.
  */
 contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgradeable {
     using SafeERC20 for IERC20;
@@ -66,15 +67,13 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     // ============ Queue Management ============
 
     /**
-     * @notice Add redemption to queue
+     * @notice Record a redemption in the queue
      * @param user User requesting redemption
      * @param okuUsdAmount Amount of OkuUSD to redeem (in tokens)
-     * @dev Converts tokens to shares for storage so users earn yield while queued
+     * @dev Tokens must already be in this contract before calling (PSM transfers them first).
+     *      This function is record-only: it converts tokens to shares and pushes an entry.
      */
     function enqueue(address user, uint256 okuUsdAmount) external onlyRole(PSM) {
-        // Transfer OkuUSD to queue (locks it)
-        require(okuUsd.transferFrom(user, address(this), okuUsdAmount), "Transfer failed");
-
         // Convert tokens to shares for storage
         uint256 shares = okuUsd.tokensToShares(okuUsdAmount);
 
@@ -128,6 +127,16 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
             } else {
                 break;
             }
+        }
+    }
+
+    /**
+     * @notice Get total USDC owed across all pending queue entries
+     * @return total Sum of USDC owed to all queued users at current multiplier
+     */
+    function totalQueuedUsdc() external view returns (uint256 total) {
+        for (uint256 i = queueHead; i < queue.length; i++) {
+            total += okuUsd.sharesToTokens(queue[i].shares) / DECIMAL_MULTIPLIER;
         }
     }
 

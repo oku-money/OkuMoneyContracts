@@ -8,15 +8,20 @@ pragma solidity ^0.8.28;
 contract MockAggregatorV3 {
     int256 private _answer;
     uint256 private _timestamp;
+    uint80 private _roundId;
+    uint80 private _answeredInRound;
 
     constructor() {
         _answer = int256(1_000_000_000e18); // 1B reserves
         _timestamp = block.timestamp;
+        _roundId = 1;
+        _answeredInRound = 1; // complete round by default
     }
 
     function setAnswer(int256 answer) external {
         _answer = answer;
         _timestamp = block.timestamp;
+        _answeredInRound = _roundId; // complete round
     }
 
     function setAnswerWithoutTimestamp(int256 answer) external {
@@ -31,11 +36,23 @@ contract MockAggregatorV3 {
         _timestamp = block.timestamp - 2 hours;
     }
 
-    function latestAnswer() external view returns (int256) {
-        return _answer;
+    /// @notice Simulate an incomplete round (answeredInRound < roundId)
+    function setRoundIncomplete() external {
+        _roundId = 2;
+        _answeredInRound = 1; // answeredInRound < roundId
     }
 
-    function latestTimestamp() external view returns (uint256) {
-        return _timestamp;
+    function latestRoundData()
+        external
+        view
+        returns (
+            uint80 roundId,
+            int256 answer,
+            uint256 startedAt,
+            uint256 updatedAt,
+            uint80 answeredInRound
+        )
+    {
+        return (_roundId, _answer, 0, _timestamp, _answeredInRound);
     }
 }

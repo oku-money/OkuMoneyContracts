@@ -1257,7 +1257,7 @@ describe("Bridge Security Tests", () => {
       expect(expectedFee).to.equal(10_000); // 0.01 tokens
     });
 
-    it("burns amount + fee from user and mints fee to fee_recipient", async () => {
+    it("burns exact amount from user and mints fee to fee_recipient", async () => {
       const [noncePda] = PublicKey.findProgramAddressSync(
         [Buffer.from("bridge_nonce"), Buffer.from([ETH_CHAIN_ID, 0])],
         program.programId
@@ -1313,7 +1313,7 @@ describe("Bridge Security Tests", () => {
 
       const totalBurned =
         Number(userBalanceBefore.amount) - Number(userBalanceAfter.amount);
-      const expectedTotal = BURN_AMOUNT + (BURN_AMOUNT * FEE_BPS) / 10000;
+      const expectedTotal = BURN_AMOUNT;
 
       expect(totalBurned).to.equal(expectedTotal);
 
@@ -2139,8 +2139,7 @@ describe("Bridge Security Tests", () => {
 
       const totalBurned =
         Number(userBalanceBefore.amount) - Number(userBalanceAfter.amount);
-      const expectedBurn =
-        Number(burnAmount) + (Number(burnAmount) * 10) / 10000; // amount + fee
+      const expectedBurn = Number(burnAmount);
       expect(totalBurned).to.equal(expectedBurn);
 
       // Step 2: Get nonce used
@@ -2148,13 +2147,14 @@ describe("Bridge Security Tests", () => {
       const usedNonce = nonceAccount.nextNonce.toNumber() - 1;
 
       // Step 3: Simulate orchestrator signing for mint on Solana (return trip)
+      const netAmount = burnAmount - (burnAmount * BigInt(10)) / BigInt(10000);
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
       const message = serializeBridgeMessage({
         sourceChainId: destChain, // EVM is source for return trip
         destinationChainId: sourceChain, // Solana is destination
         sender: evmRecipient,
         recipientAta: userOkusdAta, // Use recipient's OkuUSD ATA
-        amount: burnAmount, // Amount excluding fee
+        amount: netAmount, // Net amount after fee deduction
         nonce: BigInt(usedNonce),
         deadline,
       });
@@ -2193,7 +2193,7 @@ describe("Bridge Security Tests", () => {
       const minted =
         Number(recipientBalanceAfter.amount) -
         Number(recipientBalanceBefore.amount);
-      expect(minted).to.equal(Number(burnAmount));
+      expect(minted).to.equal(Number(netAmount));
 
       // Step 6: Verify ProcessedRequest PDA created
       const [processedRequestPda] = PublicKey.findProgramAddressSync(
@@ -2203,7 +2203,7 @@ describe("Bridge Security Tests", () => {
       const processedRequest = await program.account.processedRequest.fetch(
         processedRequestPda
       );
-      expect(processedRequest.amount.toNumber()).to.equal(Number(burnAmount));
+      expect(processedRequest.amount.toNumber()).to.equal(Number(netAmount));
     });
   });
 });

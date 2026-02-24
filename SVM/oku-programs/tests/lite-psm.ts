@@ -13,6 +13,7 @@ import {
   getMintLen,
   createInitializeMintInstruction,
   createInitializeInterestBearingMintInstruction,
+  getAssociatedTokenAddress,
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { LitePsm } from "../target/types/lite_psm";
@@ -24,6 +25,7 @@ import {
   ensurePSMUnpaused,
   ensureAta,
   safeAirdropAll,
+  mintOkusdViaProgram,
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
   DECIMALS,
@@ -842,6 +844,1054 @@ describe("lite-psm", () => {
           expect(err.error.errorCode.code).to.equal("Unauthorized");
         }
       });
+    });
+  });
+
+  // ==========================================================================
+  // NEW COVERAGE: mint edge cases
+  // ==========================================================================
+  describe("mint edge cases", () => {
+    before(async () => {
+      // Ensure user has OkuUSD ATA
+      await ensureAta(provider.connection, payer, userOkusdAta, user.publicKey, okusdMint, TOKEN_2022_PROGRAM_ID);
+    });
+
+    it("fails to mint zero amount", async () => {
+      try {
+        await program.methods
+          .mint(new BN(0))
+          .accountsPartial({
+            user: user.publicKey,
+            config: configPda,
+            usdcMint,
+            okusdMint,
+            userUsdcAta,
+            userOkusdAta,
+            vaultUsdc: vaultUsdcAta,
+            priceUpdate: null,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        const errorCode = err?.error?.errorCode?.code || err?.message || "";
+        expect(errorCode).to.satisfy((c: string) => c === "ZeroAmount" || c.includes("ZeroAmount"));
+      }
+    });
+
+    it("fails to mint when max supply exceeded", async () => {
+      // Set max supply very low
+      await program.methods
+        .setMaxSupply(new BN(1))
+        .accountsPartial({
+          capManager: coldMultisig.publicKey,
+          config: configPda,
+        })
+        .signers([coldMultisig])
+        .rpc();
+
+      try {
+        await program.methods
+          .mint(new BN(1_000_000))
+          .accountsPartial({
+            user: user.publicKey,
+            config: configPda,
+            usdcMint,
+            okusdMint,
+            userUsdcAta,
+            userOkusdAta,
+            vaultUsdc: vaultUsdcAta,
+            priceUpdate: null,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        const errorCode = err?.error?.errorCode?.code || err?.message || "";
+        expect(errorCode).to.satisfy((c: string) => c === "MaxSupplyExceeded" || c.includes("MaxSupplyExceeded"));
+      }
+
+      // Restore max supply
+      await program.methods
+        .setMaxSupply(MAX_SUPPLY)
+        .accountsPartial({
+          capManager: coldMultisig.publicKey,
+          config: configPda,
+        })
+        .signers([coldMultisig])
+        .rpc();
+    });
+
+    it("fails when oracle configured but no price account passed", async () => {
+      const oracleKey = Keypair.generate().publicKey;
+
+      // Set oracle
+      await program.methods
+        .setOracle(oracleKey, new BN(3600))
+        .accountsPartial({
+          oracleManager: coldMultisig.publicKey,
+          config: configPda,
+        })
+        .signers([coldMultisig])
+        .rpc();
+
+      try {
+        await program.methods
+          .mint(new BN(1_000_000))
+          .accountsPartial({
+            user: user.publicKey,
+            config: configPda,
+            usdcMint,
+            okusdMint,
+            userUsdcAta,
+            userOkusdAta,
+            vaultUsdc: vaultUsdcAta,
+            priceUpdate: null, // Oracle configured but no account passed
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        const errorCode = err?.error?.errorCode?.code || err?.message || "";
+        expect(errorCode).to.satisfy((c: string) =>
+          c === "OracleAccountMissing" || c.includes("OracleAccountMissing") || c.includes("oracle")
+        );
+      }
+
+      // Reset oracle to disabled
+      await program.methods
+        .setOracle(PublicKey.default, new BN(0))
+        .accountsPartial({
+          oracleManager: coldMultisig.publicKey,
+          config: configPda,
+        })
+        .signers([coldMultisig])
+        .rpc();
+    });
+  });
+
+  // ==========================================================================
+  // NEW COVERAGE: redeem - instant path
+  // ==========================================================================
+  describe("redeem - instant", () => {
+    const MINT_AMOUNT = new BN(10_000_000); // 10 OkuUSD
+    const BUFFER_AMOUNT = new BN(50_000_000); // 50 USDC buffer
+
+    before(async () => {
+      // Ensure user has OkuUSD ATA and mint OkuUSD
+      await ensureAta(provider.connection, payer, userOkusdAta, user.publicKey, okusdMint, TOKEN_2022_PROGRAM_ID);
+      await mintOkusdViaProgram(program, user, MINT_AMOUNT, configPda, usdcMint, okusdMint, userUsdcAta, userOkusdAta, vaultUsdcAta);
+
+      // Ensure buffer has enough USDC for instant redemption
+      await program.methods
+        .depositBuffer(BUFFER_AMOUNT)
+        .accountsPartial({
+          bufferDepositor: orchestrator.publicKey,
+          config: configPda,
+          bufferDepositorUsdcAta: orchestratorUsdcAta,
+          vaultUsdc: vaultUsdcAta,
+          usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+    });
+
+    it("redeems OkuUSD for USDC instantly when buffer sufficient", async () => {
+      const redeemAmount = new BN(1_000_000); // 1 OkuUSD
+
+      const userUsdcBefore = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
+      const userOkusdBefore = await getAccount(provider.connection, userOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const vaultUsdcBefore = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
+
+      await program.methods
+        .redeem(redeemAmount)
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          usdcMint,
+          okusdMint,
+          userUsdcAta,
+          userOkusdAta,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkusd: vaultOkusdAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      const userUsdcAfter = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
+      const userOkusdAfter = await getAccount(provider.connection, userOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const vaultUsdcAfter = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
+
+      // OkuUSD burned from user
+      expect(Number(userOkusdBefore.amount) - Number(userOkusdAfter.amount)).to.equal(redeemAmount.toNumber());
+      // USDC sent to user
+      expect(Number(userUsdcAfter.amount) - Number(userUsdcBefore.amount)).to.equal(redeemAmount.toNumber());
+      // Vault USDC decreased
+      expect(Number(vaultUsdcBefore.amount) - Number(vaultUsdcAfter.amount)).to.equal(redeemAmount.toNumber());
+    });
+
+    it("fails to redeem when paused", async () => {
+      await program.methods
+        .pause()
+        .accountsPartial({ pauser: warmMultisig.publicKey, config: configPda })
+        .signers([warmMultisig])
+        .rpc();
+
+      try {
+        await program.methods
+          .redeem(new BN(1_000_000))
+          .accountsPartial({
+            user: user.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            usdcMint,
+            okusdMint,
+            userUsdcAta,
+            userOkusdAta,
+            vaultUsdc: vaultUsdcAta,
+            vaultOkusd: vaultOkusdAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        const errorCode = err?.error?.errorCode?.code || err?.message || "";
+        expect(errorCode).to.satisfy((c: string) => c === "Paused" || c.includes("Paused"));
+      }
+
+      // Cleanup
+      await program.methods
+        .unpause()
+        .accountsPartial({ unpauser: coldMultisig.publicKey, config: configPda })
+        .signers([coldMultisig])
+        .rpc();
+    });
+
+    it("fails to redeem zero amount", async () => {
+      try {
+        await program.methods
+          .redeem(new BN(0))
+          .accountsPartial({
+            user: user.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            usdcMint,
+            okusdMint,
+            userUsdcAta,
+            userOkusdAta,
+            vaultUsdc: vaultUsdcAta,
+            vaultOkusd: vaultOkusdAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        const errorCode = err?.error?.errorCode?.code || err?.message || "";
+        expect(errorCode).to.satisfy((c: string) => c === "ZeroAmount" || c.includes("ZeroAmount"));
+      }
+    });
+
+    it("fails to redeem more than user owns", async () => {
+      const userOkusd = await getAccount(provider.connection, userOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const excessive = new BN(Number(userOkusd.amount) + 1_000_000_000);
+
+      try {
+        await program.methods
+          .redeem(excessive)
+          .accountsPartial({
+            user: user.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            usdcMint,
+            okusdMint,
+            userUsdcAta,
+            userOkusdAta,
+            vaultUsdc: vaultUsdcAta,
+            vaultOkusd: vaultOkusdAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        // Token-2022 burn failure or custom error
+        expect(err).to.exist;
+      }
+    });
+  });
+
+  // ==========================================================================
+  // NEW COVERAGE: redeem - queued path
+  // ==========================================================================
+  describe("redeem - queued", () => {
+    const MINT_AMOUNT = new BN(20_000_000); // 20 OkuUSD
+
+    before(async () => {
+      // Ensure user has OkuUSD
+      await ensureAta(provider.connection, payer, userOkusdAta, user.publicKey, okusdMint, TOKEN_2022_PROGRAM_ID);
+      await ensureAta(provider.connection, payer, user2OkusdAta, user2.publicKey, okusdMint, TOKEN_2022_PROGRAM_ID);
+      await mintOkusdViaProgram(program, user, MINT_AMOUNT, configPda, usdcMint, okusdMint, userUsdcAta, userOkusdAta, vaultUsdcAta);
+      await mintOkusdViaProgram(program, user2, MINT_AMOUNT, configPda, usdcMint, okusdMint, user2UsdcAta, user2OkusdAta, vaultUsdcAta);
+
+      // Drain the USDC buffer so redemptions go to queue
+      const vaultUsdc = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
+      if (Number(vaultUsdc.amount) > 0) {
+        const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
+          usdcMint, coldMultisig.publicKey, false, TOKEN_PROGRAM_ID
+        );
+        await ensureAta(provider.connection, payer, bufferWithdrawerUsdcAta, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+        await program.methods
+          .withdrawBuffer(new BN(Number(vaultUsdc.amount)))
+          .accountsPartial({
+            bufferWithdrawer: coldMultisig.publicKey,
+            config: configPda,
+            withdrawerUsdcAta: bufferWithdrawerUsdcAta,
+            vaultUsdc: vaultUsdcAta,
+            usdcMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([coldMultisig])
+          .rpc();
+      }
+    });
+
+    it("queues redemption when buffer insufficient", async () => {
+      const redeemAmount = new BN(1_000_000); // 1 OkuUSD
+      const queueBefore = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      const escrowBefore = await getAccount(provider.connection, vaultOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+
+      await program.methods
+        .redeem(redeemAmount)
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          usdcMint,
+          okusdMint,
+          userUsdcAta,
+          userOkusdAta,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkusd: vaultOkusdAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      const queueAfter = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      const escrowAfter = await getAccount(provider.connection, vaultOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+
+      // Tail should advance
+      expect(queueAfter.tail).to.equal(queueBefore.tail + 1);
+      // OkuUSD transferred to escrow
+      expect(Number(escrowAfter.amount) - Number(escrowBefore.amount)).to.equal(redeemAmount.toNumber());
+      // Queue entry has correct user
+      const entry = queueAfter.entries[queueBefore.tail];
+      expect(entry.user.toString()).to.equal(user.publicKey.toString());
+      expect(Number(entry.okusdRawAmount)).to.equal(redeemAmount.toNumber());
+    });
+
+    it("queues multiple from different users", async () => {
+      const redeemAmount = new BN(1_000_000);
+      const queueBefore = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+
+      await program.methods
+        .redeem(redeemAmount)
+        .accountsPartial({
+          user: user2.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          usdcMint,
+          okusdMint,
+          userUsdcAta: user2UsdcAta,
+          userOkusdAta: user2OkusdAta,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkusd: vaultOkusdAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user2])
+        .rpc();
+
+      const queueAfter = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      expect(queueAfter.tail).to.equal(queueBefore.tail + 1);
+      const entry = queueAfter.entries[queueBefore.tail];
+      expect(entry.user.toString()).to.equal(user2.publicKey.toString());
+    });
+  });
+
+  // ==========================================================================
+  // NEW COVERAGE: process_queue
+  // ==========================================================================
+  describe("process_queue", () => {
+    before(async () => {
+      // Deposit buffer to process queued entries
+      await program.methods
+        .depositBuffer(new BN(50_000_000))
+        .accountsPartial({
+          bufferDepositor: orchestrator.publicKey,
+          config: configPda,
+          bufferDepositorUsdcAta: orchestratorUsdcAta,
+          vaultUsdc: vaultUsdcAta,
+          usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+    });
+
+    it("processes single queue entry", async () => {
+      const queueBefore = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      if (queueBefore.head >= queueBefore.tail) {
+        // Queue is empty, create an entry first
+        await mintOkusdViaProgram(program, user, new BN(2_000_000), configPda, usdcMint, okusdMint, userUsdcAta, userOkusdAta, vaultUsdcAta);
+        // Drain buffer to force queuing
+        const vaultUsdc = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
+        const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
+          usdcMint, coldMultisig.publicKey, false, TOKEN_PROGRAM_ID
+        );
+        await ensureAta(provider.connection, payer, bufferWithdrawerUsdcAta, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+        if (Number(vaultUsdc.amount) > 0) {
+          await program.methods
+            .withdrawBuffer(new BN(Number(vaultUsdc.amount)))
+            .accountsPartial({
+              bufferWithdrawer: coldMultisig.publicKey,
+              config: configPda,
+              withdrawerUsdcAta: bufferWithdrawerUsdcAta,
+              vaultUsdc: vaultUsdcAta,
+              usdcMint,
+              tokenProgram: TOKEN_PROGRAM_ID,
+            })
+            .signers([coldMultisig])
+            .rpc();
+        }
+        await program.methods
+          .redeem(new BN(1_000_000))
+          .accountsPartial({
+            user: user.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            usdcMint,
+            okusdMint,
+            userUsdcAta,
+            userOkusdAta,
+            vaultUsdc: vaultUsdcAta,
+            vaultOkusd: vaultOkusdAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+        // Re-deposit buffer for processing
+        await program.methods
+          .depositBuffer(new BN(10_000_000))
+          .accountsPartial({
+            bufferDepositor: orchestrator.publicKey,
+            config: configPda,
+            bufferDepositorUsdcAta: orchestratorUsdcAta,
+            vaultUsdc: vaultUsdcAta,
+            usdcMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([orchestrator])
+          .rpc();
+      }
+
+      const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      const headBefore = queue.head;
+      const entry = queue.entries[headBefore];
+      const recipientUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint, entry.user, false, TOKEN_PROGRAM_ID
+      );
+      await ensureAta(provider.connection, payer, recipientUsdcAta, entry.user, usdcMint, TOKEN_PROGRAM_ID);
+
+      const recipientUsdcBefore = await getAccount(provider.connection, recipientUsdcAta, undefined, TOKEN_PROGRAM_ID);
+
+      await program.methods
+        .processQueue(1)
+        .accountsPartial({
+          queueProcessor: orchestrator.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          okusdMint,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkusd: vaultOkusdAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .remainingAccounts([
+          { pubkey: recipientUsdcAta, isSigner: false, isWritable: true },
+        ])
+        .signers([orchestrator])
+        .rpc();
+
+      const queueAfter = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      expect(queueAfter.head).to.equal(headBefore + 1);
+
+      const recipientUsdcAfter = await getAccount(provider.connection, recipientUsdcAta, undefined, TOKEN_PROGRAM_ID);
+      expect(Number(recipientUsdcAfter.amount)).to.be.greaterThan(Number(recipientUsdcBefore.amount));
+    });
+
+    it("processes multiple entries FIFO", async () => {
+      // Create two queued entries
+      // First drain buffer
+      const vaultUsdc = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
+      const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint, coldMultisig.publicKey, false, TOKEN_PROGRAM_ID
+      );
+      await ensureAta(provider.connection, payer, bufferWithdrawerUsdcAta, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+      if (Number(vaultUsdc.amount) > 0) {
+        await program.methods
+          .withdrawBuffer(new BN(Number(vaultUsdc.amount)))
+          .accountsPartial({
+            bufferWithdrawer: coldMultisig.publicKey,
+            config: configPda,
+            withdrawerUsdcAta: bufferWithdrawerUsdcAta,
+            vaultUsdc: vaultUsdcAta,
+            usdcMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([coldMultisig])
+          .rpc();
+      }
+
+      // Mint and queue for user1 and user2
+      await mintOkusdViaProgram(program, user, new BN(5_000_000), configPda, usdcMint, okusdMint, userUsdcAta, userOkusdAta, vaultUsdcAta);
+      await mintOkusdViaProgram(program, user2, new BN(5_000_000), configPda, usdcMint, okusdMint, user2UsdcAta, user2OkusdAta, vaultUsdcAta);
+
+      // Drain buffer again (mint deposits USDC into vault)
+      const vaultUsdc2 = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
+      if (Number(vaultUsdc2.amount) > 0) {
+        await program.methods
+          .withdrawBuffer(new BN(Number(vaultUsdc2.amount)))
+          .accountsPartial({
+            bufferWithdrawer: coldMultisig.publicKey,
+            config: configPda,
+            withdrawerUsdcAta: bufferWithdrawerUsdcAta,
+            vaultUsdc: vaultUsdcAta,
+            usdcMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([coldMultisig])
+          .rpc();
+      }
+
+      await program.methods
+        .redeem(new BN(2_000_000))
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          usdcMint,
+          okusdMint,
+          userUsdcAta,
+          userOkusdAta,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkusd: vaultOkusdAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      await program.methods
+        .redeem(new BN(2_000_000))
+        .accountsPartial({
+          user: user2.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          usdcMint,
+          okusdMint,
+          userUsdcAta: user2UsdcAta,
+          userOkusdAta: user2OkusdAta,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkusd: vaultOkusdAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user2])
+        .rpc();
+
+      // Now deposit buffer and process both
+      await program.methods
+        .depositBuffer(new BN(20_000_000))
+        .accountsPartial({
+          bufferDepositor: orchestrator.publicKey,
+          config: configPda,
+          bufferDepositorUsdcAta: orchestratorUsdcAta,
+          vaultUsdc: vaultUsdcAta,
+          usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      const queueBefore = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      const headBefore = queueBefore.head;
+
+      // Build remaining_accounts in FIFO order
+      const entry1 = queueBefore.entries[headBefore];
+      const entry2 = queueBefore.entries[headBefore + 1];
+      const ata1 = getAssociatedTokenAddressSync(usdcMint, entry1.user, false, TOKEN_PROGRAM_ID);
+      const ata2 = getAssociatedTokenAddressSync(usdcMint, entry2.user, false, TOKEN_PROGRAM_ID);
+      await ensureAta(provider.connection, payer, ata1, entry1.user, usdcMint, TOKEN_PROGRAM_ID);
+      await ensureAta(provider.connection, payer, ata2, entry2.user, usdcMint, TOKEN_PROGRAM_ID);
+
+      await program.methods
+        .processQueue(2)
+        .accountsPartial({
+          queueProcessor: orchestrator.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          okusdMint,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkusd: vaultOkusdAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .remainingAccounts([
+          { pubkey: ata1, isSigner: false, isWritable: true },
+          { pubkey: ata2, isSigner: false, isWritable: true },
+        ])
+        .signers([orchestrator])
+        .rpc();
+
+      const queueAfter = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      expect(queueAfter.head).to.equal(headBefore + 2);
+    });
+
+    it("fails with QueueEmpty when no entries", async () => {
+      // Ensure queue is empty (head == tail)
+      const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      if (queue.head < queue.tail) {
+        // Process remaining entries first
+        const remaining = queue.tail - queue.head;
+        const accounts = [];
+        for (let i = queue.head; i < queue.tail; i++) {
+          const entry = queue.entries[i];
+          const ata = getAssociatedTokenAddressSync(usdcMint, entry.user, false, TOKEN_PROGRAM_ID);
+          await ensureAta(provider.connection, payer, ata, entry.user, usdcMint, TOKEN_PROGRAM_ID);
+          accounts.push({ pubkey: ata, isSigner: false, isWritable: true });
+        }
+        // Ensure enough buffer
+        await program.methods
+          .depositBuffer(new BN(100_000_000))
+          .accountsPartial({
+            bufferDepositor: orchestrator.publicKey,
+            config: configPda,
+            bufferDepositorUsdcAta: orchestratorUsdcAta,
+            vaultUsdc: vaultUsdcAta,
+            usdcMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([orchestrator])
+          .rpc();
+
+        await program.methods
+          .processQueue(remaining)
+          .accountsPartial({
+            queueProcessor: orchestrator.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okusdMint,
+            vaultUsdc: vaultUsdcAta,
+            vaultOkusd: vaultOkusdAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .remainingAccounts(accounts)
+          .signers([orchestrator])
+          .rpc();
+      }
+
+      try {
+        await program.methods
+          .processQueue(1)
+          .accountsPartial({
+            queueProcessor: orchestrator.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okusdMint,
+            vaultUsdc: vaultUsdcAta,
+            vaultOkusd: vaultOkusdAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .remainingAccounts([])
+          .signers([orchestrator])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        const errorCode = err?.error?.errorCode?.code || err?.message || "";
+        expect(errorCode).to.satisfy((c: string) => c === "QueueEmpty" || c.includes("QueueEmpty"));
+      }
+    });
+
+    it("non-queue_processor rejected", async () => {
+      try {
+        await program.methods
+          .processQueue(1)
+          .accountsPartial({
+            queueProcessor: warmMultisig.publicKey, // Wrong authority
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okusdMint,
+            vaultUsdc: vaultUsdcAta,
+            vaultOkusd: vaultOkusdAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .remainingAccounts([])
+          .signers([warmMultisig])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        const errorCode = err?.error?.errorCode?.code || err?.message || "";
+        expect(errorCode).to.satisfy((c: string) =>
+          c === "Unauthorized" || c.includes("Unauthorized") || c.includes("Error")
+        );
+      }
+    });
+  });
+
+  // ==========================================================================
+  // NEW COVERAGE: freeze/thaw
+  // ==========================================================================
+  describe("freeze/thaw", () => {
+    const freezeTarget = Keypair.generate();
+    let freezeTargetOkusdAta: PublicKey;
+
+    before(async () => {
+      // Create target user, fund, get OkuUSD
+      await safeAirdropAll(provider.connection, [freezeTarget], 10 * anchor.web3.LAMPORTS_PER_SOL);
+
+      const freezeTargetUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint, freezeTarget.publicKey, false, TOKEN_PROGRAM_ID
+      );
+      freezeTargetOkusdAta = getAssociatedTokenAddressSync(
+        okusdMint, freezeTarget.publicKey, false, TOKEN_2022_PROGRAM_ID
+      );
+
+      // Create USDC ATA and fund
+      const createAtaTx = new anchor.web3.Transaction().add(
+        createAssociatedTokenAccountInstruction(
+          payer.publicKey, freezeTargetUsdcAta, freezeTarget.publicKey, usdcMint, TOKEN_PROGRAM_ID
+        )
+      );
+      await provider.sendAndConfirm(createAtaTx, [payer]);
+      await mintTo(provider.connection, payer, usdcMint, freezeTargetUsdcAta, payer,
+        10_000_000, [], undefined, TOKEN_PROGRAM_ID);
+
+      // Mint OkuUSD via PSM
+      await ensureAta(provider.connection, payer, freezeTargetOkusdAta, freezeTarget.publicKey, okusdMint, TOKEN_2022_PROGRAM_ID);
+      await mintOkusdViaProgram(program, freezeTarget, new BN(5_000_000), configPda, usdcMint, okusdMint, freezeTargetUsdcAta, freezeTargetOkusdAta, vaultUsdcAta);
+    });
+
+    it("freezer can freeze a user's OkuUSD account", async () => {
+      await program.methods
+        .freezeAccount()
+        .accountsPartial({
+          freezer: warmMultisig.publicKey,
+          config: configPda,
+          okusdMint,
+          targetOkusdAta: freezeTargetOkusdAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([warmMultisig])
+        .rpc();
+
+      const acct = await getAccount(provider.connection, freezeTargetOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+      expect(acct.isFrozen).to.be.true;
+    });
+
+    it("unfreezer can thaw a frozen account", async () => {
+      await program.methods
+        .thawAccount()
+        .accountsPartial({
+          unfreezer: coldMultisig.publicKey,
+          config: configPda,
+          okusdMint,
+          targetOkusdAta: freezeTargetOkusdAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([coldMultisig])
+        .rpc();
+
+      const acct = await getAccount(provider.connection, freezeTargetOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+      expect(acct.isFrozen).to.be.false;
+    });
+
+    it("non-freezer CANNOT freeze", async () => {
+      try {
+        await program.methods
+          .freezeAccount()
+          .accountsPartial({
+            freezer: coldMultisig.publicKey, // Wrong authority
+            config: configPda,
+            okusdMint,
+            targetOkusdAta: freezeTargetOkusdAta,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([coldMultisig])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("Unauthorized");
+      }
+    });
+
+    it("non-unfreezer CANNOT thaw", async () => {
+      // First freeze the account
+      await program.methods
+        .freezeAccount()
+        .accountsPartial({
+          freezer: warmMultisig.publicKey,
+          config: configPda,
+          okusdMint,
+          targetOkusdAta: freezeTargetOkusdAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([warmMultisig])
+        .rpc();
+
+      try {
+        await program.methods
+          .thawAccount()
+          .accountsPartial({
+            unfreezer: warmMultisig.publicKey, // Wrong authority
+            config: configPda,
+            okusdMint,
+            targetOkusdAta: freezeTargetOkusdAta,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([warmMultisig])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("Unauthorized");
+      }
+
+      // Cleanup: thaw with correct authority
+      await program.methods
+        .thawAccount()
+        .accountsPartial({
+          unfreezer: coldMultisig.publicKey,
+          config: configPda,
+          okusdMint,
+          targetOkusdAta: freezeTargetOkusdAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([coldMultisig])
+        .rpc();
+    });
+
+    it("freeze works even when PSM is paused", async () => {
+      // Pause PSM
+      await program.methods
+        .pause()
+        .accountsPartial({ pauser: warmMultisig.publicKey, config: configPda })
+        .signers([warmMultisig])
+        .rpc();
+
+      // Freeze should still work
+      await program.methods
+        .freezeAccount()
+        .accountsPartial({
+          freezer: warmMultisig.publicKey,
+          config: configPda,
+          okusdMint,
+          targetOkusdAta: freezeTargetOkusdAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([warmMultisig])
+        .rpc();
+
+      const acct = await getAccount(provider.connection, freezeTargetOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+      expect(acct.isFrozen).to.be.true;
+
+      // Cleanup
+      await program.methods
+        .unpause()
+        .accountsPartial({ unpauser: coldMultisig.publicKey, config: configPda })
+        .signers([coldMultisig])
+        .rpc();
+      await program.methods
+        .thawAccount()
+        .accountsPartial({
+          unfreezer: coldMultisig.publicKey,
+          config: configPda,
+          okusdMint,
+          targetOkusdAta: freezeTargetOkusdAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([coldMultisig])
+        .rpc();
+    });
+  });
+
+  // ==========================================================================
+  // NEW COVERAGE: set_authority (PSM)
+  // ==========================================================================
+  describe("set_authority", () => {
+    it("role_admin can update pauser", async () => {
+      const newPauser = Keypair.generate();
+
+      await program.methods
+        .setAuthority({ pauser: {} }, newPauser.publicKey)
+        .accountsPartial({
+          roleAdmin: admin.publicKey,
+          config: configPda,
+        })
+        .rpc();
+
+      const config = await program.account.psmConfig.fetch(configPda);
+      expect(config.pauser.toString()).to.equal(newPauser.publicKey.toString());
+
+      // Restore
+      await program.methods
+        .setAuthority({ pauser: {} }, warmMultisig.publicKey)
+        .accountsPartial({
+          roleAdmin: admin.publicKey,
+          config: configPda,
+        })
+        .rpc();
+    });
+
+    it("role_admin can transfer admin role and transfer back", async () => {
+      const tempAdmin = Keypair.generate();
+      await safeAirdropAll(provider.connection, [tempAdmin], 5 * anchor.web3.LAMPORTS_PER_SOL);
+
+      // Transfer admin to tempAdmin
+      await program.methods
+        .setAuthority({ roleAdmin: {} }, tempAdmin.publicKey)
+        .accountsPartial({
+          roleAdmin: admin.publicKey,
+          config: configPda,
+        })
+        .rpc();
+
+      let config = await program.account.psmConfig.fetch(configPda);
+      expect(config.roleAdmin.toString()).to.equal(tempAdmin.publicKey.toString());
+
+      // Transfer back
+      await program.methods
+        .setAuthority({ roleAdmin: {} }, admin.publicKey)
+        .accountsPartial({
+          roleAdmin: tempAdmin.publicKey,
+          config: configPda,
+        })
+        .signers([tempAdmin])
+        .rpc();
+
+      config = await program.account.psmConfig.fetch(configPda);
+      expect(config.roleAdmin.toString()).to.equal(admin.publicKey.toString());
+    });
+
+    it("non-role_admin rejected", async () => {
+      try {
+        await program.methods
+          .setAuthority({ pauser: {} }, Keypair.generate().publicKey)
+          .accountsPartial({
+            roleAdmin: warmMultisig.publicKey, // Not admin
+            config: configPda,
+          })
+          .signers([warmMultisig])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("Unauthorized");
+      }
+    });
+  });
+
+  // ==========================================================================
+  // NEW COVERAGE: buffer edge cases
+  // ==========================================================================
+  describe("buffer edge cases", () => {
+    it("deposit_buffer fails with zero amount", async () => {
+      try {
+        await program.methods
+          .depositBuffer(new BN(0))
+          .accountsPartial({
+            bufferDepositor: orchestrator.publicKey,
+            config: configPda,
+            bufferDepositorUsdcAta: orchestratorUsdcAta,
+            vaultUsdc: vaultUsdcAta,
+            usdcMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([orchestrator])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        const errorCode = err?.error?.errorCode?.code || err?.message || "";
+        expect(errorCode).to.satisfy((c: string) => c === "ZeroAmount" || c.includes("ZeroAmount"));
+      }
+    });
+
+    it("withdraw_buffer fails with zero amount", async () => {
+      const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint, coldMultisig.publicKey, false, TOKEN_PROGRAM_ID
+      );
+      await ensureAta(provider.connection, payer, bufferWithdrawerUsdcAta, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+
+      try {
+        await program.methods
+          .withdrawBuffer(new BN(0))
+          .accountsPartial({
+            bufferWithdrawer: coldMultisig.publicKey,
+            config: configPda,
+            withdrawerUsdcAta: bufferWithdrawerUsdcAta,
+            vaultUsdc: vaultUsdcAta,
+            usdcMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([coldMultisig])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        const errorCode = err?.error?.errorCode?.code || err?.message || "";
+        expect(errorCode).to.satisfy((c: string) => c === "ZeroAmount" || c.includes("ZeroAmount"));
+      }
     });
   });
 

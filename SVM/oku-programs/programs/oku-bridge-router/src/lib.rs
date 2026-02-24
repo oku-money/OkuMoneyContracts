@@ -31,7 +31,6 @@ pub mod oku_bridge_router {
     /// Bridge wOkuUSD cross-chain in one transaction
     /// 1. Unwraps wOkuUSD -> OkuUSD via vault program
     /// 2. Burns OkuUSD via PSM bridge_burn
-    /// NOTE: This router needs updating for secure bridge - see NEEDS_UPDATE.md
     pub fn bridge_wrapped(
         ctx: Context<BridgeWrapped>,
         wokusd_shares: u64,
@@ -93,44 +92,6 @@ pub mod oku_bridge_router {
             user: ctx.accounts.user.key(),
             wokusd_shares,
             okusd_amount: okusd_balance,
-            destination_chain,
-        });
-
-        Ok(())
-    }
-
-    /// Bridge OkuUSD directly (convenience wrapper for PSM bridge_burn)
-    /// NOTE: This router needs updating for secure bridge - see NEEDS_UPDATE.md
-    pub fn bridge_direct(
-        ctx: Context<BridgeDirect>,
-        okusd_amount: u64,
-        recipient: [u8; 20],      // EVM address on destination
-        destination_chain: u16,
-    ) -> Result<()> {
-        let is_paused = ctx.accounts.config.is_paused;
-        require!(!is_paused, RouterError::Paused);
-        require!(okusd_amount > 0, RouterError::ZeroAmount);
-
-        // CPI to PSM bridge_burn
-        let bridge_burn_cpi_ctx = CpiContext::new(
-            ctx.accounts.psm_program.to_account_info(),
-            lite_psm::cpi::accounts::BridgeBurn {
-                user: ctx.accounts.user.to_account_info(),
-                bridge_config: ctx.accounts.bridge_config.to_account_info(),
-                config: ctx.accounts.psm_config.to_account_info(),
-                bridge_nonce: ctx.accounts.bridge_nonce.to_account_info(),
-                okusd_mint: ctx.accounts.okusd_mint.to_account_info(),
-                user_okusd_ata: ctx.accounts.user_okusd_ata.to_account_info(),
-                fee_recipient_ata: ctx.accounts.fee_recipient_ata.to_account_info(),
-                token_2022_program: ctx.accounts.token_2022_program.to_account_info(),
-                system_program: ctx.accounts.system_program.to_account_info(),
-            },
-        );
-        lite_psm::cpi::bridge_burn(bridge_burn_cpi_ctx, okusd_amount, recipient, destination_chain)?;
-
-        emit!(BridgeDirectEvent {
-            user: ctx.accounts.user.key(),
-            okusd_amount,
             destination_chain,
         });
 
@@ -283,47 +244,6 @@ pub struct BridgeWrapped<'info> {
 }
 
 #[derive(Accounts)]
-pub struct BridgeDirect<'info> {
-    #[account(mut)]
-    pub user: Signer<'info>,
-
-    #[account(
-        seeds = [RouterConfig::SEED],
-        bump = config.bump
-    )]
-    pub config: Account<'info, RouterConfig>,
-
-    /// CHECK: Bridge config PDA - validated by PSM program CPI
-    pub bridge_config: UncheckedAccount<'info>,
-
-    /// CHECK: PSM config PDA - validated by PSM program CPI
-    pub psm_config: UncheckedAccount<'info>,
-
-    /// CHECK: Bridge nonce PDA - validated by PSM program CPI
-    #[account(mut)]
-    pub bridge_nonce: UncheckedAccount<'info>,
-
-    /// OkuUSD mint (Token-2022)
-    #[account(mut)]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
-
-    /// User's OkuUSD account
-    #[account(mut)]
-    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
-
-    /// CHECK: Fee recipient ATA - validated by PSM program CPI
-    #[account(mut)]
-    pub fee_recipient_ata: UncheckedAccount<'info>,
-
-    /// CHECK: PSM program
-    #[account(address = config.psm_program)]
-    pub psm_program: UncheckedAccount<'info>,
-
-    pub token_2022_program: Program<'info, Token2022>,
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
 pub struct SetPaused<'info> {
     #[account(
         constraint = admin.key() == config.admin @ RouterError::Unauthorized
@@ -351,13 +271,6 @@ pub struct InitializeEvent {
 pub struct BridgeWrappedEvent {
     pub user: Pubkey,
     pub wokusd_shares: u64,
-    pub okusd_amount: u64,
-    pub destination_chain: u16,
-}
-
-#[event]
-pub struct BridgeDirectEvent {
-    pub user: Pubkey,
     pub okusd_amount: u64,
     pub destination_chain: u16,
 }

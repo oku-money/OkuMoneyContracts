@@ -23,6 +23,8 @@ import {
   TOKEN_2022_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
+  getAccount,
+  createAssociatedTokenAccountInstruction,
 } from "@solana/spl-token";
 
 // ============================================================================
@@ -79,6 +81,38 @@ export async function safeAirdropAll(
         })
       )
     );
+  }
+}
+
+// ============================================================================
+// ATA Helpers
+// ============================================================================
+
+/**
+ * Ensure an Associated Token Account exists, creating it if needed.
+ * Handles "already exists" errors gracefully.
+ */
+export async function ensureAta(
+  connection: anchor.web3.Connection,
+  payer: Keypair,
+  ata: PublicKey,
+  owner: PublicKey,
+  mint: PublicKey,
+  tokenProgramId: PublicKey = TOKEN_PROGRAM_ID
+): Promise<void> {
+  try {
+    await getAccount(connection, ata, undefined, tokenProgramId);
+  } catch {
+    const tx = new anchor.web3.Transaction().add(
+      createAssociatedTokenAccountInstruction(
+        payer.publicKey,
+        ata,
+        owner,
+        mint,
+        tokenProgramId
+      )
+    );
+    await new anchor.AnchorProvider(connection, new anchor.Wallet(payer), {}).sendAndConfirm(tx, [payer]);
   }
 }
 

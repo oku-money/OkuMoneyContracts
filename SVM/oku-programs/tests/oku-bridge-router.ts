@@ -1,13 +1,5 @@
 import * as anchor from "@coral-xyz/anchor";
-import { Program, BN } from "@coral-xyz/anchor";
-import {
-  TOKEN_PROGRAM_ID,
-  TOKEN_2022_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  getAccount,
-  getAssociatedTokenAddressSync,
-  createAssociatedTokenAccountInstruction,
-} from "@solana/spl-token";
+import { Program } from "@coral-xyz/anchor";
 import { expect } from "chai";
 import { OkuBridgeRouter } from "../target/types/oku_bridge_router";
 import { WokusdVault } from "../target/types/wokusd_vault";
@@ -29,19 +21,6 @@ describe("oku-bridge-router", () => {
 
   // PDAs
   let routerConfigPda: PublicKey;
-  let vaultConfigPda: PublicKey;
-  let psmConfigPda: PublicKey;
-  let bridgeConfigPda: PublicKey;
-  let bridgeNoncePda: PublicKey;
-
-  // These will be read from existing configs
-  let usdcMint: PublicKey;
-  let okusdMint: PublicKey;
-  let vaultUsdcAta: PublicKey;
-  let feeRecipientAta: PublicKey;
-
-  // User accounts
-  let userOkusdAta: PublicKey;
 
   before(async () => {
     provider = anchor.AnchorProvider.env();
@@ -62,60 +41,25 @@ describe("oku-bridge-router", () => {
       [Buffer.from("router_config")],
       routerProgram.programId
     );
-
-    [vaultConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("vault_config")],
-      vaultProgram.programId
-    );
-
-    [psmConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config")],
-      psmProgram.programId
-    );
-
-    [bridgeConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("bridge_config")],
-      psmProgram.programId
-    );
-
-    // Read existing PSM config to get mints
-    const psmConfigData = await psmProgram.account.psmConfig.fetch(psmConfigPda);
-    usdcMint = psmConfigData.usdcMint;
-    okusdMint = psmConfigData.okusdMint;
-    vaultUsdcAta = psmConfigData.vaultUsdcAta;
-
-    // Read bridge config to get fee recipient
-    const bridgeConfigData = await psmProgram.account.bridgeConfig.fetch(bridgeConfigPda);
-    feeRecipientAta = getAssociatedTokenAddressSync(
-      okusdMint,
-      bridgeConfigData.feeRecipient,
-      false,
-      TOKEN_2022_PROGRAM_ID
-    );
-
-    // Derive bridge nonce PDA for destination chain 1 (Ethereum)
-    [bridgeNoncePda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("bridge_nonce"), Buffer.from(new Uint16Array([1]).buffer)],
-      psmProgram.programId
-    );
-
-    // Derive user OkuUSD account
-    userOkusdAta = getAssociatedTokenAddressSync(
-      okusdMint,
-      user.publicKey,
-      false,
-      TOKEN_2022_PROGRAM_ID
-    );
   });
 
   describe("initialize", () => {
     it("initializes the router config", async () => {
-      // Skip if already initialized
+      // Skip if already initialized (validator state may persist across runs)
+      let alreadyInitialized = false;
       try {
         await routerProgram.account.routerConfig.fetch(routerConfigPda);
-        return;
+        alreadyInitialized = true;
       } catch {
         // Not initialized, proceed
+      }
+
+      if (alreadyInitialized) {
+        // Still verify the config is correct
+        const config = await routerProgram.account.routerConfig.fetch(routerConfigPda);
+        expect(config.psmProgram.toString()).to.equal(psmProgram.programId.toString());
+        expect(config.vaultProgram.toString()).to.equal(vaultProgram.programId.toString());
+        return;
       }
 
       await routerProgram.methods
@@ -136,118 +80,6 @@ describe("oku-bridge-router", () => {
       expect(config.isPaused).to.be.false;
     });
   });
-
-  describe("bridge_direct", () => {
-    before(async () => {
-      // Initialize router if not done
-      try {
-        await routerProgram.account.routerConfig.fetch(routerConfigPda);
-      } catch {
-        await routerProgram.methods
-          .initialize()
-          .accountsPartial({
-            admin: admin.publicKey,
-            config: routerConfigPda,
-            psmProgram: psmProgram.programId,
-            vaultProgram: vaultProgram.programId,
-            systemProgram: SystemProgram.programId,
-          })
-          .rpc();
-      }
-
-      // Create user's OkuUSD account
-      try {
-        const createUserOkusdTx = new anchor.web3.Transaction().add(
-          createAssociatedTokenAccountInstruction(
-            payer.publicKey,
-            userOkusdAta,
-            user.publicKey,
-            okusdMint,
-            TOKEN_2022_PROGRAM_ID
-          )
-        );
-        await provider.sendAndConfirm(createUserOkusdTx, [payer]);
-      } catch {
-        // Already exists
-      }
-    });
-
-    it("fails when paused", async () => {
-      // Pause router
-      await routerProgram.methods
-        .setPaused(true)
-        .accountsPartial({
-          admin: admin.publicKey,
-          config: routerConfigPda,
-        })
-        .rpc();
-
-      try {
-        await routerProgram.methods
-          .bridgeDirect(new BN(1_000_000), Array.from(new Uint8Array(20)), 1)
-          .accountsPartial({
-            user: user.publicKey,
-            config: routerConfigPda,
-            bridgeConfig: bridgeConfigPda,
-            psmConfig: psmConfigPda,
-            bridgeNonce: bridgeNoncePda,
-            okusdMint: okusdMint,
-            userOkusdAta: userOkusdAta,
-            feeRecipientAta: feeRecipientAta,
-            psmProgram: psmProgram.programId,
-            token2022Program: TOKEN_2022_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
-          })
-          .signers([user])
-          .rpc();
-        expect.fail("Should have failed");
-      } catch (err: any) {
-        // Handle Anchor error format variations
-        const errorCode = err.error?.errorCode?.code || err.code || err.toString();
-        expect(errorCode).to.include("Paused");
-      }
-
-      // Unpause
-      await routerProgram.methods
-        .setPaused(false)
-        .accountsPartial({
-          admin: admin.publicKey,
-          config: routerConfigPda,
-        })
-        .rpc();
-    });
-
-    it("fails with zero amount", async () => {
-      try {
-        await routerProgram.methods
-          .bridgeDirect(new BN(0), Array.from(new Uint8Array(20)), 1)
-          .accountsPartial({
-            user: user.publicKey,
-            config: routerConfigPda,
-            bridgeConfig: bridgeConfigPda,
-            psmConfig: psmConfigPda,
-            bridgeNonce: bridgeNoncePda,
-            okusdMint: okusdMint,
-            userOkusdAta: userOkusdAta,
-            feeRecipientAta: feeRecipientAta,
-            psmProgram: psmProgram.programId,
-            token2022Program: TOKEN_2022_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
-          })
-          .signers([user])
-          .rpc();
-        expect.fail("Should have failed");
-      } catch (err: any) {
-        // Handle Anchor error format variations
-        const errorCode = err.error?.errorCode?.code || err.code || err.toString();
-        expect(errorCode).to.include("ZeroAmount");
-      }
-    });
-  });
-
-  // Note: bridge_wrapped tests removed - functionality is covered by:
-  // - vault.unwrap tested in wokusd-vault.ts
-  // - PSM.bridge_burn tested in lite-psm.ts
 
   describe("admin functions", () => {
     describe("set_paused", () => {

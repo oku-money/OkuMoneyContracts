@@ -13,6 +13,9 @@ export const BRIDGE_FEE_BPS = 10; // 0.1% (10 basis points)
 export const MIN_BRIDGE_AMOUNT = 1 * 1_000_000; // 1 OkuUSD
 export const MAX_BRIDGE_AMOUNT = 10_000_000 * 1_000_000; // 10M OkuUSD
 
+// Solana source chain ID (used in bridge messages)
+export const SOLANA_CHAIN_ID = 1151;
+
 // Supported destination chains (EVM chain IDs)
 export const SUPPORTED_CHAINS = [
   1, // Ethereum Mainnet

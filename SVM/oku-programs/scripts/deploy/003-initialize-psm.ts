@@ -36,6 +36,7 @@ import {
   BRIDGE_FEE_BPS,
   MIN_BRIDGE_AMOUNT,
   MAX_BRIDGE_AMOUNT,
+  SOLANA_CHAIN_ID,
 } from '../config/constants';
 import litePsmIDL from '../../target/idl/lite_psm.json';
 
@@ -243,7 +244,7 @@ async function main() {
     logger.info('Initializing bridge config...');
 
     const tx = await litePsmProgram.methods
-      .initializeBridge()
+      .initializeBridge(SOLANA_CHAIN_ID)
       .accountsPartial({
         bridgeAdmin: authorities.bridge.bridgeAdmin,
         bridgePauser: authorities.bridge.bridgePauser,

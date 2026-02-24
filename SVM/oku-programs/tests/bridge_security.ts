@@ -482,7 +482,7 @@ describe("Bridge Security Tests", () => {
 
     // Initialize bridge config
     await program.methods
-      .initializeBridge()
+      .initializeBridge(SOLANA_CHAIN_ID)
       .accountsPartial({
         bridgeAdmin: bridgeAdmin.publicKey,
         bridgePauser: bridgePauser.publicKey,

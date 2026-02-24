@@ -7,7 +7,9 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
-import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
+import {
+    ERC4626Upgradeable
+} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 
 /**
  * @title wOkuUSDTest
@@ -18,7 +20,11 @@ contract wOkuUSDTest is BaseTest {
 
     event Deposit(address indexed sender, address indexed owner, uint256 assets, uint256 shares);
     event Withdraw(
-        address indexed sender, address indexed receiver, address indexed owner, uint256 assets, uint256 shares
+        address indexed sender,
+        address indexed receiver,
+        address indexed owner,
+        uint256 assets,
+        uint256 shares
     );
 
     // ============ Initialization Tests ============
@@ -106,7 +112,11 @@ contract wOkuUSDTest is BaseTest {
         // No approval
 
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(wokuUsd), 0, amount));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IERC20Errors.ERC20InsufficientAllowance.selector, address(wokuUsd), 0, amount
+            )
+        );
         wokuUsd.deposit(amount, user1);
     }
 
@@ -183,7 +193,11 @@ contract wOkuUSDTest is BaseTest {
         uint256 shares = wokuUsd.deposit(amount, user1);
 
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(ERC4626Upgradeable.ERC4626ExceededMaxRedeem.selector, user1, shares + 1, shares));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ERC4626Upgradeable.ERC4626ExceededMaxRedeem.selector, user1, shares + 1, shares
+            )
+        );
         wokuUsd.redeem(shares + 1, user1, user1);
     }
 

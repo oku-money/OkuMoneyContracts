@@ -397,7 +397,12 @@ contract OkuUSDFuzzTest is BaseTest {
             vm.prank(user1);
             assertTrue(okuUsd.transfer(user2, amount - 1));
 
-            assertApproxEqAbs(okuUsd.balanceOf(user2), amount - 1, 1, "Balance should approximate transferred amount");
+            assertApproxEqAbs(
+                okuUsd.balanceOf(user2),
+                amount - 1,
+                1,
+                "Balance should approximate transferred amount"
+            );
         }
     }
 

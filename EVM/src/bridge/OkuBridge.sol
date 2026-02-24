@@ -2,10 +2,16 @@
 pragma solidity 0.8.28;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {
+    AccessControlUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {
+    PausableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
+import {
+    EIP712Upgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 interface IOkuUSD {
@@ -100,7 +106,7 @@ contract OkuBridge is
         uint256 destChainId;
         address sender;
         address recipient;
-        uint256 shares;  // Shares, not token amounts!
+        uint256 shares; // Shares, not token amounts!
         uint256 nonce;
         uint256 deadline;
     }
@@ -119,10 +125,7 @@ contract OkuBridge is
     );
 
     event BridgeMint(
-        bytes32 indexed requestId,
-        address indexed recipient,
-        uint256 sourceChainId,
-        uint256 shares
+        bytes32 indexed requestId, address indexed recipient, uint256 sourceChainId, uint256 shares
     );
 
     event SignerUpdated(address indexed oldSigner, address indexed newSigner);
@@ -161,7 +164,10 @@ contract OkuBridge is
         address _authorizedSigner,
         address _feeRecipient,
         address _admin
-    ) external initializer {
+    )
+        external
+        initializer
+    {
         if (_okuUsd == address(0)) revert ZeroAddress();
         if (_authorizedSigner == address(0)) revert ZeroAddress();
         if (_feeRecipient == address(0)) revert ZeroAddress();
@@ -176,9 +182,9 @@ contract OkuBridge is
         feeRecipient = _feeRecipient;
 
         // Default limits (can be updated later)
-        minBridgeShares = 1e18;      // 1 share minimum
-        maxBridgeShares = 1000000e18; // 1M shares maximum
-        bridgeFee = 10;              // 0.1% (10 basis points)
+        minBridgeShares = 1e18; // 1 share minimum
+        maxBridgeShares = 1_000_000e18; // 1M shares maximum
+        bridgeFee = 10; // 0.1% (10 basis points)
 
         // Grant all roles to admin
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
@@ -192,10 +198,10 @@ contract OkuBridge is
         _grantRole(BRIDGE_FEE_MANAGER, _admin);
 
         // Configure common chains
-        supportedChains[1] = true;     // Ethereum
-        supportedChains[10] = true;    // Optimism
-        supportedChains[8453] = true;  // Base
-        supportedChains[42161] = true; // Arbitrum
+        supportedChains[1] = true; // Ethereum
+        supportedChains[10] = true; // Optimism
+        supportedChains[8453] = true; // Base
+        supportedChains[42_161] = true; // Arbitrum
     }
 
     // ============ Core Bridge Functions ============
@@ -211,7 +217,12 @@ contract OkuBridge is
         uint256 destChainId,
         address recipient,
         uint256 shares
-    ) external whenNotPaused nonReentrant returns (bytes32 requestId) {
+    )
+        external
+        whenNotPaused
+        nonReentrant
+        returns (bytes32 requestId)
+    {
         // Validate destination chain
         if (!supportedChains[destChainId]) {
             revert UnsupportedChain(destChainId);
@@ -226,7 +237,7 @@ contract OkuBridge is
         }
 
         // Calculate fee in shares (subtractive model: fee comes out of bridged amount)
-        uint256 feeShares = (shares * bridgeFee) / 10000;
+        uint256 feeShares = (shares * bridgeFee) / 10_000;
         // Net shares the recipient will receive on destination
         uint256 netShares = shares - feeShares;
 
@@ -277,7 +288,11 @@ contract OkuBridge is
     function bridgeMint(
         BridgeRequest calldata request,
         bytes calldata signature
-    ) external whenNotPaused nonReentrant {
+    )
+        external
+        whenNotPaused
+        nonReentrant
+    {
         // Validate destination chain
         if (request.destChainId != block.chainid) {
             revert WrongChain(request.destChainId, block.chainid);
@@ -346,7 +361,10 @@ contract OkuBridge is
     function refundFailedRequest(
         BridgeRequest calldata request,
         bytes calldata /* proof */
-    ) external onlyRole(BRIDGE_REFUND_ADMIN) {
+    )
+        external
+        onlyRole(BRIDGE_REFUND_ADMIN)
+    {
         // Calculate request ID
         bytes32 requestId = keccak256(abi.encode(request));
 
@@ -366,10 +384,7 @@ contract OkuBridge is
      * @notice Update the authorized signer address
      * @param newSigner New signer address
      */
-    function updateAuthorizedSigner(address newSigner)
-        external
-        onlyRole(BRIDGE_SIGNER_MANAGER)
-    {
+    function updateAuthorizedSigner(address newSigner) external onlyRole(BRIDGE_SIGNER_MANAGER) {
         if (newSigner == address(0)) revert ZeroAddress();
         address oldSigner = authorizedSigner;
         authorizedSigner = newSigner;
@@ -381,7 +396,7 @@ contract OkuBridge is
      * @param newFee New fee in basis points (max 10000 = 100%)
      */
     function updateFee(uint256 newFee) external onlyRole(BRIDGE_FEE_MANAGER) {
-        if (newFee > 10000) revert InvalidFee(newFee);
+        if (newFee > 10_000) revert InvalidFee(newFee);
         uint256 oldFee = bridgeFee;
         bridgeFee = newFee;
         emit FeeUpdated(oldFee, newFee);
@@ -391,10 +406,7 @@ contract OkuBridge is
      * @notice Update the fee recipient address
      * @param newRecipient New fee recipient address
      */
-    function updateFeeRecipient(address newRecipient)
-        external
-        onlyRole(BRIDGE_FEE_MANAGER)
-    {
+    function updateFeeRecipient(address newRecipient) external onlyRole(BRIDGE_FEE_MANAGER) {
         if (newRecipient == address(0)) revert ZeroAddress();
         address oldRecipient = feeRecipient;
         feeRecipient = newRecipient;
@@ -405,10 +417,7 @@ contract OkuBridge is
      * @notice Add a supported destination chain
      * @param chainId Chain ID to add
      */
-    function addSupportedChain(uint256 chainId)
-        external
-        onlyRole(BRIDGE_CHAIN_MANAGER)
-    {
+    function addSupportedChain(uint256 chainId) external onlyRole(BRIDGE_CHAIN_MANAGER) {
         supportedChains[chainId] = true;
         emit ChainAdded(chainId);
     }
@@ -417,10 +426,7 @@ contract OkuBridge is
      * @notice Remove a supported destination chain
      * @param chainId Chain ID to remove
      */
-    function removeSupportedChain(uint256 chainId)
-        external
-        onlyRole(BRIDGE_CHAIN_MANAGER)
-    {
+    function removeSupportedChain(uint256 chainId) external onlyRole(BRIDGE_CHAIN_MANAGER) {
         supportedChains[chainId] = false;
         emit ChainRemoved(chainId);
     }
@@ -430,10 +436,7 @@ contract OkuBridge is
      * @param min New minimum shares
      * @param max New maximum shares
      */
-    function updateLimits(uint256 min, uint256 max)
-        external
-        onlyRole(BRIDGE_LIMITS_MANAGER)
-    {
+    function updateLimits(uint256 min, uint256 max) external onlyRole(BRIDGE_LIMITS_MANAGER) {
         if (min > max) revert InvalidLimits(min, max);
         minBridgeShares = min;
         maxBridgeShares = max;

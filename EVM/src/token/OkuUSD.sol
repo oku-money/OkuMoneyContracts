@@ -57,7 +57,9 @@ contract OkuUSD is
 
     // Events
     event RebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
-    event MinterAllowanceUpdated(address indexed minter, uint256 oldAllowance, uint256 newAllowance);
+    event MinterAllowanceUpdated(
+        address indexed minter, uint256 oldAllowance, uint256 newAllowance
+    );
     event MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply);
     event Blacklisted(address indexed account);
     event Unblacklisted(address indexed account);
@@ -254,9 +256,5 @@ contract OkuUSD is
 
     // ============ Upgradeability ============
 
-    function _authorizeUpgrade(address newImplementation)
-        internal
-        override
-        onlyRole(UPGRADER)
-    {}
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER) {}
 }

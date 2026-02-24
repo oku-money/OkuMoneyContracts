@@ -85,7 +85,9 @@ contract SupplyInvariantsTest is BaseTest {
         // At extreme multipliers from many rebases, this check becomes unreliable
         if (multiplier < 1e36) {
             uint256 maxShares = (MAX_SUPPLY * PRECISION) / multiplier;
-            assertLe(totalShares, maxShares + handler.getActorCount(), "Total shares exceeds maximum");
+            assertLe(
+                totalShares, maxShares + handler.getActorCount(), "Total shares exceeds maximum"
+            );
         }
 
         // Always verify the supply formula holds
@@ -102,9 +104,7 @@ contract SupplyInvariantsTest is BaseTest {
         uint256 totalReverts = handler.ghostTotalReverts();
         if (totalCalls > 10) {
             assertGe(
-                ((totalCalls - totalReverts) * 100) / totalCalls,
-                30,
-                "Handler success rate too low"
+                ((totalCalls - totalReverts) * 100) / totalCalls, 30, "Handler success rate too low"
             );
         }
     }

@@ -7,7 +7,9 @@ import {OkuBridge} from "../../src/bridge/OkuBridge.sol";
 import {OkuBridgeRouter} from "../../src/bridge/OkuBridgeRouter.sol";
 import {MockOkuBridge} from "../mocks/MockOkuBridge.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {
+    PausableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 /**
  * @title OkuBridgeRouterTest
@@ -151,7 +153,8 @@ contract OkuBridgeRouterTest is BaseTest {
         new ERC1967Proxy(
             address(impl),
             abi.encodeCall(
-                OkuBridgeRouter.initialize, (address(0), address(okuUsd), address(okuBridgeContract), admin)
+                OkuBridgeRouter.initialize,
+                (address(0), address(okuUsd), address(okuBridgeContract), admin)
             )
         );
 
@@ -159,7 +162,8 @@ contract OkuBridgeRouterTest is BaseTest {
         new ERC1967Proxy(
             address(impl),
             abi.encodeCall(
-                OkuBridgeRouter.initialize, (address(wokuUsd), address(0), address(okuBridgeContract), admin)
+                OkuBridgeRouter.initialize,
+                (address(wokuUsd), address(0), address(okuBridgeContract), admin)
             )
         );
 
@@ -364,7 +368,7 @@ contract OkuBridgeRouterTest is BaseTest {
         uint256 feeBalance = okuUsd.balanceOf(feeRecipient);
         assertGt(feeBalance, 0);
         uint256 currentFee = okuBridgeContract.bridgeFee(); // 100 bps
-        assertEq(feeBalance, okuAmount * currentFee / 10000);
+        assertEq(feeBalance, okuAmount * currentFee / 10_000);
     }
 
     // ============ Native Path: bridgeDirect ============
@@ -644,7 +648,9 @@ contract OkuBridgeRouterTest is BaseTest {
     function testFuzz_BridgeWrapped_NativePath(uint256 okuAmount) public {
         // With the subtractive model, totalShares is passed directly to OkuBridge.
         // Bound okuAmount within [minBridgeShares, maxBridgeShares] directly.
-        okuAmount = bound(okuAmount, okuBridgeContract.minBridgeShares(), okuBridgeContract.maxBridgeShares());
+        okuAmount = bound(
+            okuAmount, okuBridgeContract.minBridgeShares(), okuBridgeContract.maxBridgeShares()
+        );
         uint256 wokuShares = _mintAndWrap(user1, okuAmount);
 
         vm.startPrank(user1);
@@ -661,7 +667,9 @@ contract OkuBridgeRouterTest is BaseTest {
     function testFuzz_BridgeDirect_NativePath(uint256 okuAmount) public {
         // With the subtractive model, totalShares is passed directly to OkuBridge.
         // Bound okuAmount within [minBridgeShares, maxBridgeShares] directly.
-        okuAmount = bound(okuAmount, okuBridgeContract.minBridgeShares(), okuBridgeContract.maxBridgeShares());
+        okuAmount = bound(
+            okuAmount, okuBridgeContract.minBridgeShares(), okuBridgeContract.maxBridgeShares()
+        );
         _mintOkuUsd(user1, okuAmount);
 
         vm.startPrank(user1);

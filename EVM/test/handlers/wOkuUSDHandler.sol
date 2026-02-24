@@ -78,7 +78,8 @@ contract wOkuUSDHandler is Test {
         if (amount == 0) return;
 
         vm.prank(minter);
-        try okuUsd.mint(actor, amount) {} catch {
+        try okuUsd.mint(actor, amount) {}
+        catch {
             ghostMintOkuUsdRevertCount++;
         }
     }
@@ -163,7 +164,8 @@ contract wOkuUSDHandler is Test {
         if (shares == 0 || from == to) return;
 
         vm.prank(from);
-        try wokuUsd.transfer(to, shares) {} catch {
+        try wokuUsd.transfer(to, shares) {}
+        catch {
             ghostTransferSharesRevertCount++;
         }
     }

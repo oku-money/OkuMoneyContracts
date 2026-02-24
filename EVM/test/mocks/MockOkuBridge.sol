@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
-import {IOkuBridge} from "../../src/bridge/adapters/IOkuBridge.sol";
+import {IBridgeAdapter} from "../../src/bridge/adapters/IBridgeAdapter.sol";
 import {OkuUSD} from "../../src/token/OkuUSD.sol";
 
 /**
@@ -10,7 +10,7 @@ import {OkuUSD} from "../../src/token/OkuUSD.sol";
  * @notice Mock bridge adapter for testing OkuBridgeRouter
  * @dev Records bridge requests and allows simulating destination chain mints
  */
-contract MockOkuBridge is IOkuBridge, Test {
+contract MockOkuBridge is IBridgeAdapter, Test {
     struct PendingBridge {
         address token;
         uint256 amount;

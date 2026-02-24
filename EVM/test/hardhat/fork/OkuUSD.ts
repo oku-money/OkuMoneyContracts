@@ -124,7 +124,7 @@ describe("OkuUSD Scenarios", () => {
 
         okuBridgeRouter = await upgrades.deployProxy(
             new OkuBridgeRouter__factory(Frank),
-            [await wokuUSD.getAddress(), await okuUSD.getAddress(), frankAddr],
+            [await wokuUSD.getAddress(), await okuUSD.getAddress(), frankAddr, frankAddr],
             { kind: "uups" }
         ) as unknown as OkuBridgeRouter
         await okuBridgeRouter.waitForDeployment()

@@ -22,19 +22,74 @@ src/
   psm/
     LitePSM.sol             # USDC ↔ OkuUSD swaps
   bridge/
-    OkuBridge.sol           # Cross-chain bridge (burn/mint)
-    OkuBridgeRouter.sol     # Convenience wrapper for wOkuUSD bridging
+    OkuBridge.sol           # Native cross-chain bridge (full burn/mint protocol)
+    OkuBridgeRouter.sol     # Entry point: token normalization + bridge path selection
+    adapters/
+      IBridgeAdapter.sol    # Interface for third-party message-only adapters
+      IOFTAdapter.sol       # LayerZero OFT interface
+      INttManager.sol       # Wormhole NTT interface
+      NttAdapter.sol        # Wormhole NTT adapter implementation
+  mocks/
+    MockBridgeAdapterHH.sol # Hardhat-compatible IBridgeAdapter mock
+    MockNttManagerHH.sol    # Hardhat-compatible NTT Manager mock
 test/
   OkuUSD.t.sol
   wOkuUSD.t.sol
   LitePSM.t.sol
-  OkuBridge.t.sol
+  bridge/
+    OkuBridge.t.sol
+    OkuBridgeRouter.t.sol
+  hardhat/
+    bridge/
+      OkuBridge.test.ts
+      OkuBridgeRouter.test.ts
   invariants/
     VaultInvariants.t.sol
     SupplyInvariants.t.sol
 script/
   Deploy.s.sol
 ```
+
+## Bridge Architecture
+
+The bridge system has a clear three-tier hierarchy:
+
+```
+OkuBridgeRouter          ← single user entry point; token normalization layer
+  ├── native path        → OkuBridge.bridgeBurn() directly (no pre-burn by router)
+  └── adapter path       → pre-burn → IBridgeAdapter.bridge() (message-only shims)
+
+OkuBridge                ← full native protocol (source burn + destination mint)
+  bridgeBurn()           ← burns from caller, collects fee, emits event for orchestrator
+  bridgeMint()           ← destination: validate EIP-712 sig, mint shares
+
+IBridgeAdapter shims     ← third-party protocol adapters (NTT, CCIP, etc.)
+  NttAdapter             ← translates IBridgeAdapter → Wormhole NTT
+  (future CcipAdapter)
+```
+
+### Two Bridge Models
+
+**Native path** — OkuBridge owns its own burn lifecycle:
+- Router redeems wOkuUSD if needed, then calls `OkuBridge.bridgeBurn()`
+- OkuBridge (as MINTER on OkuUSD) burns from the router, collects fee, increments nonce, emits `BridgeBurn`
+- Orchestrator observes the event, waits for finality, signs a `BridgeRequest` (EIP-712)
+- Anyone calls `OkuBridge.bridgeMint()` on destination with the signed request
+
+**Adapter path** — Router is the burn authority:
+- Router burns OkuUSD itself, then calls `IBridgeAdapter.bridge()` (message-only)
+- Adapter translates the call to the third-party protocol (Wormhole VAA, CCIP message, etc.)
+- The third-party protocol handles destination minting natively (no OkuBridge.bridgeMint involved)
+
+### Key Design Distinctions
+
+| | Native (OkuBridge) | Third-party (NTT/CCIP) |
+|---|---|---|
+| Who burns on source | OkuBridge (called by router) | OkuBridgeRouter |
+| Destination mint | OkuBridge.bridgeMint() + EIP-712 | Protocol-native |
+| Fee model | Oku-controlled (bps in shares) | Protocol-native |
+| Recovery | skipNonce, refundFailedRequest | Protocol-native |
+| Trust model | Oku orchestrator key | Wormhole Guardians / CCIP DON |
 
 ## OkuUSD.sol
 
@@ -58,14 +113,15 @@ mapping(address => bool) public blacklisted;
 
 **Role bytes32 constants**:
 ```solidity
-bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
-bytes32 public constant REBASER_ROLE = keccak256("REBASER_ROLE");
-bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
-bytes32 public constant UNPAUSER_ROLE = keccak256("UNPAUSER_ROLE");
-bytes32 public constant BLACKLISTER_ROLE = keccak256("BLACKLISTER_ROLE");
-bytes32 public constant UNBLACKLISTER_ROLE = keccak256("UNBLACKLISTER_ROLE");
-bytes32 public constant CAP_MANAGER_ROLE = keccak256("CAP_MANAGER_ROLE");
-bytes32 public constant ALLOWANCE_MANAGER_ROLE = keccak256("ALLOWANCE_MANAGER_ROLE");
+bytes32 public constant UPGRADER = keccak256("UPGRADER");
+bytes32 public constant OKUUSD_PAUSER = keccak256("OKUUSD_PAUSER");
+bytes32 public constant OKUUSD_UNPAUSER = keccak256("OKUUSD_UNPAUSER");
+bytes32 public constant MINTER = keccak256("MINTER");
+bytes32 public constant REBASER = keccak256("REBASER");
+bytes32 public constant BLACKLISTER = keccak256("BLACKLISTER");
+bytes32 public constant UNBLACKLISTER = keccak256("UNBLACKLISTER");
+bytes32 public constant CAP_MANAGER = keccak256("CAP_MANAGER");
+bytes32 public constant ALLOWANCE_MANAGER = keccak256("ALLOWANCE_MANAGER");
 ```
 
 **Critical**: `blacklist()` must NOT use `whenNotPaused` modifier.
@@ -85,7 +141,7 @@ bytes32 public constant ALLOWANCE_MANAGER_ROLE = keccak256("ALLOWANCE_MANAGER_RO
 
 **Role bytes32 constants**:
 ```solidity
-bytes32 public constant WOKUSD_UPGRADER_ROLE = keccak256("WOKUSD_UPGRADER_ROLE");
+bytes32 public constant WOKUSD_UPGRADER = keccak256("WOKUSD_UPGRADER");
 ```
 
 ## LitePSM.sol
@@ -117,12 +173,12 @@ struct QueueEntry {
 
 **Role bytes32 constants**:
 ```solidity
-bytes32 public constant PSM_PAUSER_ROLE = keccak256("PSM_PAUSER_ROLE");
-bytes32 public constant PSM_UNPAUSER_ROLE = keccak256("PSM_UNPAUSER_ROLE");
-bytes32 public constant QUEUE_PROCESSOR_ROLE = keccak256("QUEUE_PROCESSOR_ROLE");
-bytes32 public constant BUFFER_DEPOSITOR_ROLE = keccak256("BUFFER_DEPOSITOR_ROLE");
-bytes32 public constant BUFFER_WITHDRAWER_ROLE = keccak256("BUFFER_WITHDRAWER_ROLE");
-bytes32 public constant ORACLE_MANAGER_ROLE = keccak256("ORACLE_MANAGER_ROLE");
+bytes32 public constant PSM_PAUSER = keccak256("PSM_PAUSER");
+bytes32 public constant PSM_UNPAUSER = keccak256("PSM_UNPAUSER");
+bytes32 public constant QUEUE_PROCESSOR = keccak256("QUEUE_PROCESSOR");
+bytes32 public constant BUFFER_DEPOSITOR = keccak256("BUFFER_DEPOSITOR");
+bytes32 public constant BUFFER_WITHDRAWER = keccak256("BUFFER_WITHDRAWER");
+bytes32 public constant ORACLE_MANAGER = keccak256("ORACLE_MANAGER");
 ```
 
 ## OkuBridge.sol
@@ -134,7 +190,7 @@ bytes32 public constant ORACLE_MANAGER_ROLE = keccak256("ORACLE_MANAGER_ROLE");
 IOkuUSD public okuUSD;
 address public authorizedSigner;
 address public feeRecipient;
-uint256 public bridgeFee;                                    // In shares
+uint256 public bridgeFee;                                    // In basis points (10 = 0.1%)
 uint256 public minBridgeShares;
 uint256 public maxBridgeShares;
 mapping(uint256 => bool) public supportedChains;             // destChainId => supported
@@ -168,25 +224,25 @@ function bridgeMint(
 ) external nonReentrant;
 
 // Admin: Skip stuck nonce
-function skipNonce(uint256 destChainId) external onlyRole(BRIDGE_NONCE_ADMIN_ROLE);
+function skipNonce(uint256 destChainId) external onlyRole(BRIDGE_NONCE_ADMIN);
 
 // Admin: Refund failed request
 function refundFailedRequest(
     BridgeRequest calldata request,
     bytes calldata proof
-) external onlyRole(BRIDGE_REFUND_ADMIN_ROLE);
+) external onlyRole(BRIDGE_REFUND_ADMIN);
 ```
 
 **Role bytes32 constants**:
 ```solidity
-bytes32 public constant BRIDGE_SIGNER_MANAGER_ROLE = keccak256("BRIDGE_SIGNER_MANAGER_ROLE");
-bytes32 public constant BRIDGE_PAUSER_ROLE = keccak256("BRIDGE_PAUSER_ROLE");
-bytes32 public constant BRIDGE_UNPAUSER_ROLE = keccak256("BRIDGE_UNPAUSER_ROLE");
-bytes32 public constant BRIDGE_FEE_MANAGER_ROLE = keccak256("BRIDGE_FEE_MANAGER_ROLE");
-bytes32 public constant BRIDGE_NONCE_ADMIN_ROLE = keccak256("BRIDGE_NONCE_ADMIN_ROLE");
-bytes32 public constant BRIDGE_CHAIN_MANAGER_ROLE = keccak256("BRIDGE_CHAIN_MANAGER_ROLE");
-bytes32 public constant BRIDGE_LIMITS_MANAGER_ROLE = keccak256("BRIDGE_LIMITS_MANAGER_ROLE");
-bytes32 public constant BRIDGE_REFUND_ADMIN_ROLE = keccak256("BRIDGE_REFUND_ADMIN_ROLE");
+bytes32 public constant BRIDGE_SIGNER_MANAGER = keccak256("BRIDGE_SIGNER_MANAGER");
+bytes32 public constant BRIDGE_PAUSER = keccak256("BRIDGE_PAUSER");
+bytes32 public constant BRIDGE_UNPAUSER = keccak256("BRIDGE_UNPAUSER");
+bytes32 public constant BRIDGE_FEE_MANAGER = keccak256("BRIDGE_FEE_MANAGER");
+bytes32 public constant BRIDGE_NONCE_ADMIN = keccak256("BRIDGE_NONCE_ADMIN");
+bytes32 public constant BRIDGE_CHAIN_MANAGER = keccak256("BRIDGE_CHAIN_MANAGER");
+bytes32 public constant BRIDGE_LIMITS_MANAGER = keccak256("BRIDGE_LIMITS_MANAGER");
+bytes32 public constant BRIDGE_REFUND_ADMIN = keccak256("BRIDGE_REFUND_ADMIN");
 ```
 
 **Signature verification**:
@@ -211,29 +267,74 @@ function _verifySignature(BridgeRequest calldata request, bytes calldata signatu
 
 ## OkuBridgeRouter.sol
 
-**Inherits**: ReentrancyGuardUpgradeable (no access control needed)
+**Inherits**: Initializable, AccessControlUpgradeable, PausableUpgradeable, UUPSUpgradeable
 
-**Stateless convenience wrapper** for bridging wOkuUSD:
+**Entry point** for all user-facing bridging. Handles token normalization (wOkuUSD → OkuUSD)
+and routes to either the native OkuBridge or a registered third-party adapter.
 
+**Storage**:
 ```solidity
-function bridgeWrapped(
-    uint256 destChainId,
-    address recipient,
-    uint256 wokusdShares
-) external nonReentrant returns (bytes32 requestId) {
-    // 1. Transfer wOkuUSD from user
-    wOkuUSD.transferFrom(msg.sender, address(this), wokusdShares);
-    
-    // 2. Redeem wOkuUSD for OkuUSD
-    uint256 okusdShares = wOkuUSD.redeem(wokusdShares, address(this), address(this));
-    
-    // 3. Approve and call bridge
-    okuUSD.approve(address(bridge), okusdShares);
-    requestId = bridge.bridgeBurn(destChainId, recipient, okusdShares);
-}
+IwOkuUSD public wOkuUsd;
+IOkuUSD public okuUsd;
+IOkuBridgeNative public okuBridge;               // Native bridge (direct call, no pre-burn)
+mapping(address => bool) public supportedAdapters; // Registered IBridgeAdapter shims
 ```
 
-No privileged roles — purely a helper contract.
+**Native path** — OkuBridge owns the burn:
+```solidity
+// wOkuUSD → redeem → tokensToShares → fee-adjust → OkuBridge.bridgeBurn()
+function bridgeWrapped(uint256 wOkuUsdAmount, uint256 destinationChain, address recipient)
+    external whenNotPaused returns (bytes32 requestId);
+
+// OkuUSD → tokensToShares → fee-adjust → OkuBridge.bridgeBurn()
+function bridgeDirect(uint256 okuUsdAmount, uint256 destinationChain, address recipient)
+    external whenNotPaused returns (bytes32 requestId);
+```
+
+**Fee-adjusted share calculation**: OkuBridge.bridgeBurn(shares) burns `shares + feeShares` from
+msg.sender (the router). The router computes net shares so the total burn fits within the tokens
+it holds: `shares = totalShares * 10000 / (10000 + bridgeFee)`. This means the fee comes out of
+the user's gross input amount (not charged on top). Up to 1-2 wei of dust may remain in the
+router from integer division rounding.
+
+**Adapter path** — Router pre-burns, then calls message-only adapter:
+```solidity
+// wOkuUSD → redeem → burn → IBridgeAdapter.bridge()
+function bridgeWrappedVia(uint256 wOkuUsdAmount, address adapter, uint256 destinationChain, address recipient)
+    external whenNotPaused;
+
+// OkuUSD → burn → IBridgeAdapter.bridge()
+function bridgeDirectVia(uint256 okuUsdAmount, address adapter, uint256 destinationChain, address recipient)
+    external whenNotPaused;
+```
+
+**Role bytes32 constants**:
+```solidity
+bytes32 public constant ROUTER_UPGRADER = keccak256("ROUTER_UPGRADER");
+bytes32 public constant ROUTER_PAUSER = keccak256("ROUTER_PAUSER");
+bytes32 public constant ROUTER_UNPAUSER = keccak256("ROUTER_UNPAUSER");
+bytes32 public constant ADAPTER_MANAGER = keccak256("ADAPTER_MANAGER");
+bytes32 public constant BRIDGE_MANAGER = keccak256("BRIDGE_MANAGER");
+```
+
+**MINTER role requirements**:
+- `OkuBridge` must hold `MINTER` role on OkuUSD (burns from router in native path, mints fees)
+- `OkuBridgeRouter` must hold `MINTER` role on OkuUSD (burns in adapter path)
+
+**Custom errors**:
+```solidity
+error UnsupportedAdapter(address adapter);
+error InvalidRecipient();
+error ZeroAddress();
+```
+
+**Events**:
+```solidity
+// Emitted on adapter path
+event BridgeInitiated(address indexed user, address indexed adapter, uint256 amount, uint256 destinationChain, address recipient);
+// Emitted on native path
+event NativeBridgeInitiated(address indexed user, bytes32 indexed requestId, uint256 amount, uint256 destinationChain, address recipient);
+```
 
 ## Proxy Deployment
 
@@ -283,12 +384,18 @@ forge test --match-contract VaultInvariants
 - Pause blocks operations, blacklist works while paused
 - Oracle staleness rejection
 - Role separation enforcement
-- Bridge: valid signature mints shares
-- Bridge: invalid/expired signature reverts
-- Bridge: replay prevention (same requestId rejected)
-- Bridge: nonce sequencing enforced
-- Bridge: fee collection and refund mechanics
-- Bridge: unsupported chain rejection
+- Bridge (OkuBridge): valid signature mints shares
+- Bridge (OkuBridge): invalid/expired signature reverts
+- Bridge (OkuBridge): replay prevention (same requestId rejected)
+- Bridge (OkuBridge): nonce sequencing enforced
+- Bridge (OkuBridge): fee collection and refund mechanics
+- Bridge (OkuBridge): unsupported chain rejection
+- Router native path: wOkuUSD → OkuBridge.bridgeBurn() (OkuBridge burns, router holds at most dust)
+- Router native path: fee-adjusted shares ensure total burn ≤ router's token balance
+- Router native path: fee collected by OkuBridge, not by router
+- Router adapter path: OkuUSD burned by router, then IBridgeAdapter.bridge() called (message-only)
+- Router adapter path: unsupported adapter reverts
+- Router: both paths revert when paused
 
 ## Gas Optimization Notes
 
@@ -336,6 +443,12 @@ event ChainAdded(uint256 chainId);
 event ChainRemoved(uint256 chainId);
 event NonceSkipped(uint256 destChainId, uint256 skippedNonce);
 event RefundProcessed(bytes32 indexed requestId, address indexed recipient, uint256 shares);
+
+// OkuBridgeRouter
+event BridgeInitiated(address indexed user, address indexed adapter, uint256 amount, uint256 destinationChain, address recipient);  // adapter path
+event NativeBridgeInitiated(address indexed user, bytes32 indexed requestId, uint256 amount, uint256 destinationChain, address recipient);  // native path
+event AdapterConfigured(address indexed adapter, bool supported);
+event OkuBridgeUpdated(address indexed oldBridge, address indexed newBridge);
 ```
 
 ## Dependencies

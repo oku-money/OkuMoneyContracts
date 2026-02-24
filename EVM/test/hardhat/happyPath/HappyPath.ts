@@ -111,10 +111,10 @@ describe("Happy Path Testing", () => {
         await psm.waitForDeployment()
 
         // Deploy OkuBridgeRouter
-        // initialize(_wOkuUSD, _okuUSD, admin)
+        // initialize(_wOkuUSD, _okuUSD, _okuBridge, admin)
         okuBridgeRouter = await upgrades.deployProxy(
             new OkuBridgeRouter__factory(Frank),
-            [await wokuUSD.getAddress(), await okuUSD.getAddress(), frankAddr],
+            [await wokuUSD.getAddress(), await okuUSD.getAddress(), frankAddr, frankAddr],
             { kind: "uups" }
         ) as unknown as OkuBridgeRouter
         await okuBridgeRouter.waitForDeployment()

@@ -591,7 +591,7 @@ pub mod lite_psm {
     /// Burns user tokens, collects bridge fee, tracks sequential nonce, emits full metadata
     pub fn bridge_burn(
         ctx: Context<BridgeBurn>,
-        amount: u64,              // Amount to bridge (excluding fee)
+        amount: u64,              // Total amount to deduct from user (fee deducted from this)
         recipient: [u8; 20],      // EVM address on destination chain
         destination_chain_id: u16,
     ) -> Result<()> {
@@ -628,9 +628,10 @@ pub mod lite_psm {
             .checked_div(10000)
             .ok_or(OkuError::Overflow)? as u64;
 
-        let total_burn = amount.checked_add(fee_amount).ok_or(OkuError::Overflow)?;
+        let net_amount = amount.checked_sub(fee_amount).ok_or(OkuError::Overflow)?;
+        require!(net_amount > 0, OkuError::ZeroAmount);
 
-        // 5. Burn total amount (amount + fee) from user
+        // 5. Burn exact amount from user (fee deducted from bridged value)
         token_interface::burn(
             CpiContext::new(
                 ctx.accounts.token_2022_program.to_account_info(),
@@ -640,7 +641,7 @@ pub mod lite_psm {
                     authority: ctx.accounts.user.to_account_info(),
                 },
             ),
-            total_burn,
+            amount,
         )?;
 
         // 6. Mint fee to fee_recipient (if fee > 0)
@@ -687,7 +688,7 @@ pub mod lite_psm {
         message.extend_from_slice(&destination_chain_id.to_le_bytes());
         message.extend_from_slice(&sender_bytes);
         message.extend_from_slice(&recipient);
-        message.extend_from_slice(&amount.to_le_bytes());
+        message.extend_from_slice(&net_amount.to_le_bytes());
         message.extend_from_slice(&nonce.to_le_bytes());
         message.extend_from_slice(&deadline.to_le_bytes());
 
@@ -700,7 +701,7 @@ pub mod lite_psm {
             recipient,
             source_chain_id,
             destination_chain: destination_chain_id,
-            amount,
+            amount: net_amount,
             nonce,
             deadline,
         });

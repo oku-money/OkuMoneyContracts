@@ -325,6 +325,43 @@ export async function initializePSMIfNeeded(
 // ============================================================================
 
 /**
+ * Mint OkuUSD to a user via the PSM program's mint instruction.
+ *
+ * Prerequisite: user must have a funded USDC ATA and an OkuUSD ATA must exist.
+ * This handles the standard mint call with priceUpdate: null (oracle disabled).
+ */
+export async function mintOkusdViaProgram(
+  program: Program,
+  user: Keypair,
+  amount: BN,
+  configPda: PublicKey,
+  usdcMint: PublicKey,
+  okusdMint: PublicKey,
+  userUsdcAta: PublicKey,
+  userOkusdAta: PublicKey,
+  vaultUsdcAta: PublicKey,
+): Promise<void> {
+  await program.methods
+    .mint(amount)
+    .accountsPartial({
+      user: user.publicKey,
+      config: configPda,
+      usdcMint,
+      okusdMint,
+      userUsdcAta,
+      userOkusdAta,
+      vaultUsdc: vaultUsdcAta,
+      priceUpdate: null,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      token2022Program: TOKEN_2022_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .signers([user])
+    .rpc();
+}
+
+/**
  * Ensure PSM is unpaused before tests.
  *
  * Call this in beforeEach hooks to guarantee PSM is in unpaused state.

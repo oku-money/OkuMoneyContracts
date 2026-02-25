@@ -382,6 +382,7 @@ describe("oku-bridge-router", () => {
           sharesToBridge,
           Array.from(evmRecipient) as any,
           ETH_CHAIN_ID,
+          new BN(0), // min_okusd_out: no slippage check
         )
         .accountsPartial({
           user: user.publicKey,
@@ -434,6 +435,7 @@ describe("oku-bridge-router", () => {
             new BN(1_000_000),
             Array.from(evmRecipient) as any,
             ETH_CHAIN_ID,
+            new BN(0),
           )
           .accountsPartial({
             user: user.publicKey,
@@ -488,6 +490,7 @@ describe("oku-bridge-router", () => {
             new BN(0),
             Array.from(evmRecipient) as any,
             ETH_CHAIN_ID,
+            new BN(0),
           )
           .accountsPartial({
             user: user.publicKey,
@@ -547,6 +550,7 @@ describe("oku-bridge-router", () => {
             new BN(1_000_000),
             Array.from(evmRecipient) as any,
             ETH_CHAIN_ID,
+            new BN(0),
           )
           .accountsPartial({
             user: noWokusdUser.publicKey,
@@ -574,6 +578,314 @@ describe("oku-bridge-router", () => {
       } catch (err: any) {
         // Should fail due to insufficient wOkuUSD balance
         expect(err).to.exist;
+      }
+    });
+
+    it("only bridges unwrapped amount, not pre-existing balance", async function () {
+      if (!bridgeSetupDone) return this.skip();
+
+      const { ensureAta, mintOkusdViaProgram } = await import("./shared/setup");
+
+      // Ensure user has some pre-existing OkuUSD in their ATA
+      let preExistingBalance: bigint;
+      try {
+        const acct = await getAccount(provider.connection, userOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+        preExistingBalance = acct.amount;
+      } catch {
+        preExistingBalance = BigInt(0);
+      }
+
+      // If user doesn't have pre-existing OkuUSD, mint some directly
+      if (preExistingBalance < BigInt(1_000_000)) {
+        try {
+          await mintOkusdViaProgram(
+            psmProgram as any, user, new BN(3_000_000),
+            psmConfigPda, usdcMint, okusdMint, userUsdcAta, userOkusdAta, vaultUsdcAta
+          );
+        } catch (e: any) {
+          console.log("    ⚠ Could not mint pre-existing OkuUSD:", e.message?.substring(0, 100));
+          return this.skip();
+        }
+      }
+
+      // Get user's OkuUSD balance before bridge_wrapped
+      const okusdBefore = await getAccount(provider.connection, userOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const preBalance = Number(okusdBefore.amount);
+      expect(preBalance).to.be.greaterThan(0, "User should have pre-existing OkuUSD");
+
+      // Ensure user has wOkuUSD to bridge — mint more OkuUSD and wrap it
+      const userWokusd = await getAccount(provider.connection, userWokusdAta, undefined, TOKEN_PROGRAM_ID);
+      let sharesToBridge = Number(userWokusd.amount);
+      if (sharesToBridge < 1_000_000) {
+        try {
+          await mintOkusdViaProgram(
+            psmProgram as any, user, new BN(5_000_000),
+            psmConfigPda, usdcMint, okusdMint, userUsdcAta, userOkusdAta, vaultUsdcAta
+          );
+          await vaultProgram.methods
+            .wrap(new BN(3_000_000))
+            .accountsPartial({
+              user: user.publicKey,
+              config: vaultConfigPda,
+              okusdMint,
+              wokusdMint,
+              userOkusdAta,
+              userWokusdAta,
+              vaultOkusd: wVaultOkusdAta,
+              tokenProgram: TOKEN_PROGRAM_ID,
+              token2022Program: TOKEN_2022_PROGRAM_ID,
+              associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+              systemProgram: SystemProgram.programId,
+            })
+            .signers([user])
+            .rpc();
+          const refreshed = await getAccount(provider.connection, userWokusdAta, undefined, TOKEN_PROGRAM_ID);
+          sharesToBridge = Number(refreshed.amount);
+        } catch (e: any) {
+          console.log("    ⚠ Could not prepare wOkuUSD:", e.message?.substring(0, 100));
+          return this.skip();
+        }
+      }
+
+      // Re-read OkuUSD balance after wrap (wrap reduces it)
+      const okusdBeforeBridge = await getAccount(provider.connection, userOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const balanceBefore = Number(okusdBeforeBridge.amount);
+      expect(balanceBefore).to.be.greaterThan(0, "User should still have pre-existing OkuUSD after wrap");
+
+      const evmRecipient = Buffer.alloc(20);
+      evmRecipient[19] = 0x42;
+      const chainIdBytes = Buffer.alloc(2);
+      chainIdBytes.writeUInt16LE(ETH_CHAIN_ID);
+      const [bridgeNoncePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_nonce"), chainIdBytes],
+        psmProgram.programId
+      );
+
+      const bridgeAmount = new BN(Math.min(sharesToBridge, 1_000_000));
+      await routerProgram.methods
+        .bridgeWrapped(
+          bridgeAmount,
+          Array.from(evmRecipient) as any,
+          ETH_CHAIN_ID,
+          new BN(0),
+        )
+        .accountsPartial({
+          user: user.publicKey,
+          config: routerConfigPda,
+          vaultConfig: vaultConfigPda,
+          okusdMint,
+          wokusdMint,
+          userOkusdAta,
+          userWokusdAta,
+          vaultOkusd: wVaultOkusdAta,
+          bridgeConfig: bridgeConfigPda,
+          psmConfig: psmConfigPda,
+          bridgeNonce: bridgeNoncePda,
+          feeRecipientAta,
+          vaultProgram: vaultProgram.programId,
+          psmProgram: psmProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      // Verify pre-existing OkuUSD balance was NOT swept
+      const okusdAfter = await getAccount(provider.connection, userOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+      // The pre-existing balance should remain (only the unwrapped delta was burned)
+      expect(Number(okusdAfter.amount)).to.equal(balanceBefore,
+        "Pre-existing OkuUSD balance should be untouched");
+    });
+
+    it("respects min_okusd_out slippage check", async function () {
+      if (!bridgeSetupDone) return this.skip();
+
+      const userWokusd = await getAccount(provider.connection, userWokusdAta, undefined, TOKEN_PROGRAM_ID);
+      if (Number(userWokusd.amount) === 0) return this.skip();
+
+      const sharesToBridge = new BN(Math.min(Number(userWokusd.amount), 1_000_000));
+      const evmRecipient = Buffer.alloc(20);
+      evmRecipient[19] = 0x42;
+      const chainIdBytes = Buffer.alloc(2);
+      chainIdBytes.writeUInt16LE(ETH_CHAIN_ID);
+      const [bridgeNoncePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_nonce"), chainIdBytes],
+        psmProgram.programId
+      );
+
+      // Set min_okusd_out absurdly high so slippage check fails
+      const absurdMinOut = new BN("999999999999999");
+
+      try {
+        await routerProgram.methods
+          .bridgeWrapped(
+            sharesToBridge,
+            Array.from(evmRecipient) as any,
+            ETH_CHAIN_ID,
+            absurdMinOut,
+          )
+          .accountsPartial({
+            user: user.publicKey,
+            config: routerConfigPda,
+            vaultConfig: vaultConfigPda,
+            okusdMint,
+            wokusdMint,
+            userOkusdAta,
+            userWokusdAta,
+            vaultOkusd: wVaultOkusdAta,
+            bridgeConfig: bridgeConfigPda,
+            psmConfig: psmConfigPda,
+            bridgeNonce: bridgeNoncePda,
+            feeRecipientAta,
+            vaultProgram: vaultProgram.programId,
+            psmProgram: psmProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+        expect.fail("Should have failed with SlippageExceeded");
+      } catch (err: any) {
+        const errorCode = err?.error?.errorCode?.code || err?.message || "";
+        expect(errorCode).to.satisfy((c: string) =>
+          c === "SlippageExceeded" || c.includes("SlippageExceeded")
+        );
+      }
+    });
+
+    it("slippage check passes when met", async function () {
+      if (!bridgeSetupDone) return this.skip();
+
+      const userWokusd = await getAccount(provider.connection, userWokusdAta, undefined, TOKEN_PROGRAM_ID);
+      if (Number(userWokusd.amount) === 0) return this.skip();
+
+      const sharesToBridge = new BN(Math.min(Number(userWokusd.amount), 1_000_000));
+      const evmRecipient = Buffer.alloc(20);
+      evmRecipient[19] = 0x42;
+      const chainIdBytes = Buffer.alloc(2);
+      chainIdBytes.writeUInt16LE(ETH_CHAIN_ID);
+      const [bridgeNoncePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_nonce"), chainIdBytes],
+        psmProgram.programId
+      );
+
+      // Set min_okusd_out to 1 — should easily pass
+      await routerProgram.methods
+        .bridgeWrapped(
+          sharesToBridge,
+          Array.from(evmRecipient) as any,
+          ETH_CHAIN_ID,
+          new BN(1), // min_okusd_out: reasonable minimum
+        )
+        .accountsPartial({
+          user: user.publicKey,
+          config: routerConfigPda,
+          vaultConfig: vaultConfigPda,
+          okusdMint,
+          wokusdMint,
+          userOkusdAta,
+          userWokusdAta,
+          vaultOkusd: wVaultOkusdAta,
+          bridgeConfig: bridgeConfigPda,
+          psmConfig: psmConfigPda,
+          bridgeNonce: bridgeNoncePda,
+          feeRecipientAta,
+          vaultProgram: vaultProgram.programId,
+          psmProgram: psmProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      // If we got here, slippage check passed successfully
+    });
+  });
+
+  // ==========================================================================
+  // update_config
+  // ==========================================================================
+  describe("update_config", () => {
+    it("admin can update config", async () => {
+      const newPsm = Keypair.generate().publicKey;
+      const newVault = Keypair.generate().publicKey;
+
+      const configBefore = await routerProgram.account.routerConfig.fetch(routerConfigPda);
+      const oldPsm = configBefore.psmProgram;
+      const oldVault = configBefore.vaultProgram;
+
+      await routerProgram.methods
+        .updateConfig(newPsm, newVault)
+        .accountsPartial({
+          admin: admin.publicKey,
+          config: routerConfigPda,
+        })
+        .rpc();
+
+      const config = await routerProgram.account.routerConfig.fetch(routerConfigPda);
+      expect(config.psmProgram.toString()).to.equal(newPsm.toString());
+      expect(config.vaultProgram.toString()).to.equal(newVault.toString());
+
+      // Restore original values so subsequent tests work
+      await routerProgram.methods
+        .updateConfig(oldPsm, oldVault)
+        .accountsPartial({
+          admin: admin.publicKey,
+          config: routerConfigPda,
+        })
+        .rpc();
+
+      const restored = await routerProgram.account.routerConfig.fetch(routerConfigPda);
+      expect(restored.psmProgram.toString()).to.equal(oldPsm.toString());
+      expect(restored.vaultProgram.toString()).to.equal(oldVault.toString());
+    });
+
+    it("admin can update only psm_program", async () => {
+      const newPsm = Keypair.generate().publicKey;
+      const configBefore = await routerProgram.account.routerConfig.fetch(routerConfigPda);
+      const oldPsm = configBefore.psmProgram;
+
+      await routerProgram.methods
+        .updateConfig(newPsm, null)
+        .accountsPartial({
+          admin: admin.publicKey,
+          config: routerConfigPda,
+        })
+        .rpc();
+
+      const config = await routerProgram.account.routerConfig.fetch(routerConfigPda);
+      expect(config.psmProgram.toString()).to.equal(newPsm.toString());
+      expect(config.vaultProgram.toString()).to.equal(configBefore.vaultProgram.toString());
+
+      // Restore
+      await routerProgram.methods
+        .updateConfig(oldPsm, null)
+        .accountsPartial({
+          admin: admin.publicKey,
+          config: routerConfigPda,
+        })
+        .rpc();
+    });
+
+    it("non-admin cannot update config", async () => {
+      try {
+        await routerProgram.methods
+          .updateConfig(Keypair.generate().publicKey, null)
+          .accountsPartial({
+            admin: user.publicKey,
+            config: routerConfigPda,
+          })
+          .signers([user])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("Unauthorized");
       }
     });
   });

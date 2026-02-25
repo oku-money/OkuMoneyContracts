@@ -36,6 +36,7 @@ pub mod oku_bridge_router {
         wokusd_shares: u64,
         recipient: [u8; 20],      // EVM address on destination
         destination_chain: u16,
+        min_okusd_out: u64,        // Slippage protection
     ) -> Result<()> {
         let is_paused = ctx.accounts.config.is_paused;
         require!(!is_paused, RouterError::Paused);
@@ -47,6 +48,9 @@ pub mod oku_bridge_router {
         let okusd_mint_info = ctx.accounts.okusd_mint.to_account_info();
         let user_okusd_ata_info = ctx.accounts.user_okusd_ata.to_account_info();
         let vault_okusd_info = ctx.accounts.vault_okusd.to_account_info();
+
+        // Snapshot user's OkuUSD balance BEFORE unwrap to compute delta
+        let balance_before = ctx.accounts.user_okusd_ata.amount;
 
         // Step 1: Unwrap wOkuUSD -> OkuUSD via vault program CPI
         let unwrap_cpi_ctx = CpiContext::new(
@@ -67,10 +71,14 @@ pub mod oku_bridge_router {
         );
         wokusd_vault::cpi::unwrap(unwrap_cpi_ctx, wokusd_shares)?;
 
-        // Step 2: Bridge burn OkuUSD via PSM CPI
-        // Reload the user's OkuUSD ATA to get updated balance after unwrap
+        // Step 2: Bridge burn only the OkuUSD received from unwrap (not total balance)
         ctx.accounts.user_okusd_ata.reload()?;
-        let okusd_balance = ctx.accounts.user_okusd_ata.amount;
+        let okusd_received = ctx.accounts.user_okusd_ata.amount
+            .checked_sub(balance_before)
+            .ok_or(RouterError::MathError)?;
+
+        // Slippage protection
+        require!(okusd_received >= min_okusd_out, RouterError::SlippageExceeded);
 
         let bridge_burn_cpi_ctx = CpiContext::new(
             ctx.accounts.psm_program.to_account_info(),
@@ -86,12 +94,12 @@ pub mod oku_bridge_router {
                 system_program: ctx.accounts.system_program.to_account_info(),
             },
         );
-        lite_psm::cpi::bridge_burn(bridge_burn_cpi_ctx, okusd_balance, recipient, destination_chain)?;
+        lite_psm::cpi::bridge_burn(bridge_burn_cpi_ctx, okusd_received, recipient, destination_chain)?;
 
         emit!(BridgeWrappedEvent {
             user: ctx.accounts.user.key(),
             wokusd_shares,
-            okusd_amount: okusd_balance,
+            okusd_amount: okusd_received,
             destination_chain,
         });
 
@@ -106,6 +114,34 @@ pub mod oku_bridge_router {
         emit!(PausedEvent {
             admin: ctx.accounts.admin.key(),
             paused,
+        });
+
+        Ok(())
+    }
+
+    /// Update program references in the router config
+    pub fn update_config(
+        ctx: Context<UpdateConfig>,
+        new_psm_program: Option<Pubkey>,
+        new_vault_program: Option<Pubkey>,
+    ) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        let old_psm = config.psm_program;
+        let old_vault = config.vault_program;
+
+        if let Some(psm) = new_psm_program {
+            config.psm_program = psm;
+        }
+        if let Some(vault) = new_vault_program {
+            config.vault_program = vault;
+        }
+
+        emit!(ConfigUpdatedEvent {
+            admin: ctx.accounts.admin.key(),
+            old_psm_program: old_psm,
+            new_psm_program: config.psm_program,
+            old_vault_program: old_vault,
+            new_vault_program: config.vault_program,
         });
 
         Ok(())
@@ -149,6 +185,10 @@ pub enum RouterError {
     Paused,
     #[msg("Amount must be greater than zero")]
     ZeroAmount,
+    #[msg("Unexpected balance decrease")]
+    MathError,
+    #[msg("Slippage tolerance exceeded")]
+    SlippageExceeded,
 }
 
 // ============================================================================
@@ -258,6 +298,21 @@ pub struct SetPaused<'info> {
     pub config: Account<'info, RouterConfig>,
 }
 
+#[derive(Accounts)]
+pub struct UpdateConfig<'info> {
+    #[account(
+        constraint = admin.key() == config.admin @ RouterError::Unauthorized
+    )]
+    pub admin: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [RouterConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Account<'info, RouterConfig>,
+}
+
 // ============================================================================
 // Events
 // ============================================================================
@@ -279,4 +334,13 @@ pub struct BridgeWrappedEvent {
 pub struct PausedEvent {
     pub admin: Pubkey,
     pub paused: bool,
+}
+
+#[event]
+pub struct ConfigUpdatedEvent {
+    pub admin: Pubkey,
+    pub old_psm_program: Pubkey,
+    pub new_psm_program: Pubkey,
+    pub old_vault_program: Pubkey,
+    pub new_vault_program: Pubkey,
 }

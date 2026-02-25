@@ -1217,7 +1217,7 @@ describe("lite-psm", () => {
       // OkuUSD transferred to escrow
       expect(Number(escrowAfter.amount) - Number(escrowBefore.amount)).to.equal(redeemAmount.toNumber());
       // Queue entry has correct user
-      const entry = queueAfter.entries[queueBefore.tail];
+      const entry = queueAfter.entries[queueBefore.tail % 10];
       expect(entry.user.toString()).to.equal(user.publicKey.toString());
       expect(Number(entry.okusdRawAmount)).to.equal(redeemAmount.toNumber());
     });
@@ -1248,7 +1248,7 @@ describe("lite-psm", () => {
 
       const queueAfter = await program.account.redemptionQueue.fetch(redemptionQueuePda);
       expect(queueAfter.tail).to.equal(queueBefore.tail + 1);
-      const entry = queueAfter.entries[queueBefore.tail];
+      const entry = queueAfter.entries[queueBefore.tail % 10];
       expect(entry.user.toString()).to.equal(user2.publicKey.toString());
     });
   });
@@ -1334,7 +1334,7 @@ describe("lite-psm", () => {
 
       const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
       const headBefore = queue.head;
-      const entry = queue.entries[headBefore];
+      const entry = queue.entries[headBefore % 10];
       const recipientUsdcAta = getAssociatedTokenAddressSync(
         usdcMint, entry.user, false, TOKEN_PROGRAM_ID
       );
@@ -1469,8 +1469,8 @@ describe("lite-psm", () => {
       const headBefore = queueBefore.head;
 
       // Build remaining_accounts in FIFO order
-      const entry1 = queueBefore.entries[headBefore];
-      const entry2 = queueBefore.entries[headBefore + 1];
+      const entry1 = queueBefore.entries[headBefore % 10];
+      const entry2 = queueBefore.entries[(headBefore + 1) % 10];
       const ata1 = getAssociatedTokenAddressSync(usdcMint, entry1.user, false, TOKEN_PROGRAM_ID);
       const ata2 = getAssociatedTokenAddressSync(usdcMint, entry2.user, false, TOKEN_PROGRAM_ID);
       await ensureAta(provider.connection, payer, ata1, entry1.user, usdcMint, TOKEN_PROGRAM_ID);
@@ -1507,7 +1507,7 @@ describe("lite-psm", () => {
         const remaining = queue.tail - queue.head;
         const accounts = [];
         for (let i = queue.head; i < queue.tail; i++) {
-          const entry = queue.entries[i];
+          const entry = queue.entries[i % 10];
           const ata = getAssociatedTokenAddressSync(usdcMint, entry.user, false, TOKEN_PROGRAM_ID);
           await ensureAta(provider.connection, payer, ata, entry.user, usdcMint, TOKEN_PROGRAM_ID);
           accounts.push({ pubkey: ata, isSigner: false, isWritable: true });
@@ -1590,6 +1590,133 @@ describe("lite-psm", () => {
           c === "Unauthorized" || c.includes("Unauthorized") || c.includes("Error")
         );
       }
+    });
+  });
+
+  // ==========================================================================
+  // NEW COVERAGE: ring buffer wraparound
+  // ==========================================================================
+  describe("queue ring buffer wraparound", () => {
+    // This test exercises the ring buffer by cycling through 12 queue/process
+    // iterations, forcing tail past MAX_ENTRIES (10) and verifying modulo
+    // indexing wraps correctly back to entries[0].
+    const TOTAL_CYCLES = 12;
+    const REDEEM_AMOUNT = new BN(500_000); // 0.5 OkuUSD per cycle
+
+    before(async () => {
+      // Ensure user has enough OkuUSD for all cycles
+      const mintAmount = new BN(REDEEM_AMOUNT.toNumber() * TOTAL_CYCLES * 2);
+      await mintOkusdViaProgram(program, user, mintAmount, configPda, usdcMint, okusdMint, userUsdcAta, userOkusdAta, vaultUsdcAta);
+    });
+
+    it("queues and processes 12 cycles without panicking", async () => {
+      const queueStart = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      const startTail = queueStart.tail;
+      const startHead = queueStart.head;
+
+      const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint, coldMultisig.publicKey, false, TOKEN_PROGRAM_ID
+      );
+      await ensureAta(provider.connection, payer, bufferWithdrawerUsdcAta, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+
+      for (let cycle = 0; cycle < TOTAL_CYCLES; cycle++) {
+        // Drain buffer so redemption goes to queue
+        const vaultUsdc = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
+        if (Number(vaultUsdc.amount) > 0) {
+          await program.methods
+            .withdrawBuffer(new BN(Number(vaultUsdc.amount)))
+            .accountsPartial({
+              bufferWithdrawer: coldMultisig.publicKey,
+              config: configPda,
+              withdrawerUsdcAta: bufferWithdrawerUsdcAta,
+              vaultUsdc: vaultUsdcAta,
+              usdcMint,
+              tokenProgram: TOKEN_PROGRAM_ID,
+            })
+            .signers([coldMultisig])
+            .rpc();
+        }
+
+        // Queue a redemption
+        await program.methods
+          .redeem(REDEEM_AMOUNT)
+          .accountsPartial({
+            user: user.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            usdcMint,
+            okusdMint,
+            userUsdcAta,
+            userOkusdAta,
+            vaultUsdc: vaultUsdcAta,
+            vaultOkusd: vaultOkusdAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+
+        // Verify tail advanced
+        const queueAfterRedeem = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+        expect(queueAfterRedeem.tail).to.equal(startTail + cycle + 1);
+
+        // Verify entry written at correct ring buffer slot
+        const expectedSlot = (startTail + cycle) % 10;
+        const entry = queueAfterRedeem.entries[expectedSlot];
+        expect(entry.user.toString()).to.equal(user.publicKey.toString());
+        expect(Number(entry.okusdRawAmount)).to.equal(REDEEM_AMOUNT.toNumber());
+
+        // Deposit buffer and process the single entry
+        await program.methods
+          .depositBuffer(new BN(2_000_000))
+          .accountsPartial({
+            bufferDepositor: orchestrator.publicKey,
+            config: configPda,
+            bufferDepositorUsdcAta: orchestratorUsdcAta,
+            vaultUsdc: vaultUsdcAta,
+            usdcMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([orchestrator])
+          .rpc();
+
+        const recipientUsdcAta = getAssociatedTokenAddressSync(
+          usdcMint, user.publicKey, false, TOKEN_PROGRAM_ID
+        );
+        await ensureAta(provider.connection, payer, recipientUsdcAta, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+
+        await program.methods
+          .processQueue(1)
+          .accountsPartial({
+            queueProcessor: orchestrator.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okusdMint,
+            vaultUsdc: vaultUsdcAta,
+            vaultOkusd: vaultOkusdAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .remainingAccounts([
+            { pubkey: recipientUsdcAta, isSigner: false, isWritable: true },
+          ])
+          .signers([orchestrator])
+          .rpc();
+
+        // Verify head advanced
+        const queueAfterProcess = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+        expect(queueAfterProcess.head).to.equal(startHead + cycle + 1);
+        // Queue should now be empty
+        expect(queueAfterProcess.head).to.equal(queueAfterProcess.tail);
+      }
+
+      // Final verification: tail went well past MAX_ENTRIES
+      const queueFinal = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      expect(queueFinal.tail).to.equal(startTail + TOTAL_CYCLES);
+      expect(queueFinal.tail).to.be.greaterThan(10, "tail should have wrapped past MAX_ENTRIES");
+      expect(queueFinal.head).to.equal(queueFinal.tail, "queue should be empty after all cycles");
     });
   });
 

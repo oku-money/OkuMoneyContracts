@@ -108,16 +108,12 @@ impl RedemptionQueue {
 
     /// Check if the queue is empty
     pub fn is_empty(&self) -> bool {
-        self.head >= self.tail
+        self.head == self.tail
     }
 
-    /// Get number of pending entries
+    /// Get number of pending entries (wrapping subtraction handles u32 overflow)
     pub fn pending_count(&self) -> u32 {
-        if self.tail > self.head {
-            self.tail - self.head
-        } else {
-            0
-        }
+        self.tail.wrapping_sub(self.head)
     }
 }
 

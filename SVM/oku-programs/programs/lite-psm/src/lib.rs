@@ -5,6 +5,8 @@ use anchor_spl::{
     token_2022::Token2022,
     token_interface::{self, Mint as MintInterface, TokenAccount as TokenAccountInterface},
 };
+use anchor_lang::solana_program::program_pack::Pack;
+use anchor_spl::token::spl_token::state::Account as SplTokenAccount;
 
 pub mod errors;
 pub mod state;
@@ -268,10 +270,10 @@ pub mod lite_psm {
                 timestamp: clock.unix_timestamp,
             };
 
-            // Insert at tail position (fixed array, not Vec)
-            let position = queue.tail;
+            // Insert at tail position (ring buffer: modulo into fixed array)
+            let position = queue.tail % RedemptionQueue::MAX_ENTRIES as u32;
             queue.entries[position as usize] = entry;
-            queue.tail = queue.tail.checked_add(1).ok_or(OkuError::Overflow)?;
+            queue.tail = queue.tail.wrapping_add(1);
 
             emit!(RedemptionQueuedEvent {
                 user: ctx.accounts.user.key(),
@@ -312,11 +314,7 @@ pub mod lite_psm {
         let okusd_mint_info = ctx.accounts.okusd_mint.to_account_info();
 
         while processed < max_entries && !queue.is_empty() {
-            let head_idx = queue.head as usize;
-            // Ensure head is within valid range (tail is next write position)
-            if head_idx >= queue.tail as usize {
-                break;
-            }
+            let head_idx = (queue.head % RedemptionQueue::MAX_ENTRIES as u32) as usize;
 
             let entry = &queue.entries[head_idx];
 
@@ -343,16 +341,11 @@ pub mod lite_psm {
 
             let recipient_usdc_ata = &ctx.remaining_accounts[recipient_account_idx];
 
-            // Verify the account belongs to the queued user by manually parsing TokenAccount data
-            // TokenAccount layout: mint (32) + owner (32) + amount (8) + ...
+            // Verify the account belongs to the queued user
             let account_data = recipient_usdc_ata.try_borrow_data()?;
-            require!(account_data.len() >= 72, OkuError::RecipientMismatch);
-
-            // Owner is at offset 32 (after mint pubkey)
-            let owner_bytes: [u8; 32] = account_data[32..64]
-                .try_into()
+            let parsed = SplTokenAccount::unpack(&account_data)
                 .map_err(|_| OkuError::RecipientMismatch)?;
-            let token_account_owner = Pubkey::from(owner_bytes);
+            let token_account_owner = parsed.owner;
 
             require!(
                 token_account_owner == entry.user,
@@ -397,7 +390,7 @@ pub mod lite_psm {
                 .checked_sub(usdc_amount)
                 .ok_or(OkuError::Overflow)?;
 
-            queue.head = queue.head.checked_add(1).ok_or(OkuError::Overflow)?;
+            queue.head = queue.head.wrapping_add(1);
             processed += 1;
 
             emit!(RedemptionProcessedEvent {

@@ -29,6 +29,7 @@ contract NttAdapter is Ownable {
 
     INttManager public immutable NTT_MANAGER;
     address public immutable TOKEN;
+    address public immutable ROUTER;
 
     // Mapping from EVM chain ID to Wormhole chain ID
     mapping(uint256 => uint16) public wormholeChainId;
@@ -46,8 +47,10 @@ contract NttAdapter is Ownable {
     error UnsupportedChain(uint256 chainId);
     error InvalidRecipient();
     error InvalidAmount();
+    error UnauthorizedCaller();
 
-    constructor(address _nttManager, address _token, address _owner) Ownable(_owner) {
+    constructor(address _nttManager, address _token, address _router, address _owner) Ownable(_owner) {
+        ROUTER = _router;
         NTT_MANAGER = INttManager(_nttManager);
         TOKEN = _token;
 
@@ -79,6 +82,7 @@ contract NttAdapter is Ownable {
         external
         payable
     {
+        if (msg.sender != ROUTER) revert UnauthorizedCaller();
         require(_token == TOKEN, "Invalid token");
         if (amount == 0) revert InvalidAmount();
         if (recipient == address(0)) revert InvalidRecipient();

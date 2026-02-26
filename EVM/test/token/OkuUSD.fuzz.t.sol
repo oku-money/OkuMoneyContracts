@@ -62,15 +62,16 @@ contract OkuUSDFuzzTest is BaseTest {
         uint256 totalSharesBefore = okuUsd.totalShares();
         uint256 totalSupplyBefore = okuUsd.totalSupply();
 
-        _mintOkuUsd(user1, amount);
+        // Mint to minter so it can self-burn
+        _mintOkuUsd(minter, amount);
 
         vm.prank(minter);
-        okuUsd.burn(user1, amount);
+        okuUsd.burn(amount);
 
         // Should return to original state
         assertEq(okuUsd.totalShares(), totalSharesBefore, "Total shares should return to original");
         assertEq(okuUsd.totalSupply(), totalSupplyBefore, "Total supply should return to original");
-        assertEq(okuUsd.balanceOf(user1), 0, "User balance should be zero");
+        assertEq(okuUsd.balanceOf(minter), 0, "Minter balance should be zero");
     }
 
     /// @notice Multiple mints and burns maintain consistency
@@ -84,16 +85,17 @@ contract OkuUSDFuzzTest is BaseTest {
         amount1 = bound(amount1, 1e18, MAX_SUPPLY / 4);
         amount2 = bound(amount2, 1e18, MAX_SUPPLY / 4);
 
-        _mintOkuUsd(user1, amount1);
+        // Mint to minter so it can self-burn
+        _mintOkuUsd(minter, amount1);
         _mintOkuUsd(user2, amount2);
 
         uint256 totalSupplyAfterMints = okuUsd.totalSupply();
         assertEq(totalSupplyAfterMints, amount1 + amount2, "Supply should equal sum of mints");
 
-        // Burn partial from user1
+        // Burn partial from minter (self-burn)
         burnAmount = bound(burnAmount, 1, amount1);
         vm.prank(minter);
-        okuUsd.burn(user1, burnAmount);
+        okuUsd.burn(burnAmount);
 
         assertEq(
             okuUsd.totalSupply(),
@@ -302,9 +304,13 @@ contract OkuUSDFuzzTest is BaseTest {
             allowanceAfterMint, allowanceBefore - mintAmount, "Allowance decrements by mint amount"
         );
 
+        // Transfer tokens to minter so it can self-burn
+        vm.prank(user1);
+        okuUsd.transfer(minter, mintAmount);
+
         // Burn should NOT restore allowance
         vm.prank(minter);
-        okuUsd.burn(user1, mintAmount);
+        okuUsd.burn(mintAmount);
 
         assertEq(
             okuUsd.minterAllowance(minter), allowanceAfterMint, "Burn does not restore allowance"

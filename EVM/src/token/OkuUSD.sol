@@ -12,6 +12,9 @@ import {
 import {
     ERC20Upgradeable
 } from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
+import {
+    ERC20PermitUpgradeable
+} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 
 /**
  * @title OkuUSD
@@ -21,6 +24,7 @@ import {
 contract OkuUSD is
     Initializable,
     ERC20Upgradeable,
+    ERC20PermitUpgradeable,
     AccessControlUpgradeable,
     PausableUpgradeable,
     UUPSUpgradeable
@@ -79,6 +83,7 @@ contract OkuUSD is
         initializer
     {
         __ERC20_init(name, symbol);
+        __ERC20Permit_init(name);
         __AccessControl_init();
         __Pausable_init();
 
@@ -170,10 +175,8 @@ contract OkuUSD is
         uint256 fromBalance = _shares[from];
         require(fromBalance >= shares, "Insufficient balance");
 
-        unchecked {
-            _shares[from] = fromBalance - shares;
-            _shares[to] += shares;
-        }
+        _shares[from] = fromBalance - shares;
+        _shares[to] += shares;
 
         emit Transfer(from, to, sharesToTokens(shares));
     }
@@ -196,18 +199,16 @@ contract OkuUSD is
         emit Transfer(address(0), to, amount);
     }
 
-    function burn(address from, uint256 amount) external onlyRole(MINTER) {
-        require(!isBlacklisted[from], "Account blacklisted");
+    function burn(uint256 amount) external onlyRole(MINTER) {
+        require(!isBlacklisted[msg.sender], "Account blacklisted");
 
         uint256 shares = tokensToShares(amount);
-        require(_shares[from] >= shares, "Insufficient balance");
+        require(_shares[msg.sender] >= shares, "Insufficient balance");
 
-        unchecked {
-            _shares[from] -= shares;
-            _totalShares -= shares;
-        }
+        _shares[msg.sender] -= shares;
+        _totalShares -= shares;
 
-        emit Transfer(from, address(0), amount);
+        emit Transfer(msg.sender, address(0), amount);
     }
 
     // ============ Minter Allowance Management ============

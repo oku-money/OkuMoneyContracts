@@ -63,10 +63,7 @@ contract NttBridgeTest is BaseTest {
         // Deploy MockNttManager (okuUsd address, minter address)
         mockNtt = new MockNttManager(address(okuUsd), minter);
 
-        // Deploy NttAdapter
-        nttAdapter = new NttAdapter(address(mockNtt), address(okuUsd), admin);
-
-        // Deploy OkuBridgeRouter (native bridge unused in NTT tests, pass placeholder)
+        // Deploy OkuBridgeRouter first (native bridge unused in NTT tests, pass placeholder)
         bridgeRouterImpl = new OkuBridgeRouter();
         bytes memory routerInitData = abi.encodeCall(
             OkuBridgeRouter.initialize,
@@ -74,6 +71,9 @@ contract NttBridgeTest is BaseTest {
         );
         bridgeRouter =
             OkuBridgeRouter(address(new ERC1967Proxy(address(bridgeRouterImpl), routerInitData)));
+
+        // Deploy NttAdapter with router address for caller restriction
+        nttAdapter = new NttAdapter(address(mockNtt), address(okuUsd), address(bridgeRouter), admin);
 
         // Configure roles
         vm.startPrank(admin);
@@ -115,6 +115,7 @@ contract NttBridgeTest is BaseTest {
     function test_NttAdapter_Initialize() public view {
         assertEq(address(nttAdapter.NTT_MANAGER()), address(mockNtt));
         assertEq(address(nttAdapter.TOKEN()), address(okuUsd));
+        assertEq(nttAdapter.ROUTER(), address(bridgeRouter));
         assertEq(nttAdapter.owner(), admin);
     }
 
@@ -146,10 +147,10 @@ contract NttBridgeTest is BaseTest {
         // In real flow, tokens are already burned by router before calling adapter
         // We just test the message recording functionality
 
-        // Bridge call from user1
-        vm.prank(user1);
+        // Bridge call from router (only router can call bridge)
+        vm.prank(address(bridgeRouter));
         vm.expectEmit(true, false, false, true, address(nttAdapter));
-        emit BridgeInitiated(user1, amount, WORMHOLE_ARBITRUM, _addressToBytes32(user2), 0);
+        emit BridgeInitiated(address(bridgeRouter), amount, WORMHOLE_ARBITRUM, _addressToBytes32(user2), 0);
         nttAdapter.bridge(address(okuUsd), amount, ARBITRUM_CHAIN_ID, user2);
 
         // Verify transfer recorded in mock
@@ -159,18 +160,27 @@ contract NttBridgeTest is BaseTest {
         assertEq(_bytes32ToAddress(pending.recipient), user2);
     }
 
+    function test_NttAdapter_Bridge_RevertUnauthorizedCaller() public {
+        uint256 amount = 1000e18;
+
+        // Non-router caller should revert
+        vm.prank(user1);
+        vm.expectRevert(NttAdapter.UnauthorizedCaller.selector);
+        nttAdapter.bridge(address(okuUsd), amount, ARBITRUM_CHAIN_ID, user2);
+    }
+
     function test_NttAdapter_Bridge_RevertUnsupportedChain() public {
         uint256 amount = 1000e18;
-        // No tokens needed - adapter just sends message
 
+        vm.prank(address(bridgeRouter));
         vm.expectRevert(abi.encodeWithSelector(NttAdapter.UnsupportedChain.selector, 12_345));
         nttAdapter.bridge(address(okuUsd), amount, 12_345, user2);
     }
 
     function test_NttAdapter_Bridge_RevertInvalidRecipient() public {
         uint256 amount = 1000e18;
-        // No tokens needed - adapter just sends message
 
+        vm.prank(address(bridgeRouter));
         vm.expectRevert(NttAdapter.InvalidRecipient.selector);
         nttAdapter.bridge(address(okuUsd), amount, ARBITRUM_CHAIN_ID, address(0));
     }
@@ -181,8 +191,9 @@ contract NttBridgeTest is BaseTest {
 
         mockNtt.setMessageFee(fee);
 
-        // Bridge with fee
-        vm.deal(address(this), fee);
+        // Bridge with fee (called by router)
+        vm.deal(address(bridgeRouter), fee);
+        vm.prank(address(bridgeRouter));
         nttAdapter.bridge{value: fee}(address(okuUsd), amount, ARBITRUM_CHAIN_ID, user2);
 
         // Verify transfer succeeded
@@ -195,8 +206,9 @@ contract NttBridgeTest is BaseTest {
 
         mockNtt.setMessageFee(fee);
 
-        // Bridge with insufficient fee
-        vm.deal(address(this), fee / 2);
+        // Bridge with insufficient fee (called by router)
+        vm.deal(address(bridgeRouter), fee / 2);
+        vm.prank(address(bridgeRouter));
         vm.expectRevert(
             abi.encodeWithSelector(MockNttManager.InsufficientFee.selector, fee, fee / 2)
         );
@@ -585,11 +597,13 @@ contract NttBridgeTest is BaseTest {
     // ============ Edge Case Tests ============
 
     function test_NttAdapter_ZeroAmount() public {
+        vm.prank(address(bridgeRouter));
         vm.expectRevert(NttAdapter.InvalidAmount.selector);
         nttAdapter.bridge(address(okuUsd), 0, ARBITRUM_CHAIN_ID, user2);
     }
 
     function test_NttAdapter_WrongToken() public {
+        vm.prank(address(bridgeRouter));
         vm.expectRevert("Invalid token");
         nttAdapter.bridge(address(wokuUsd), 100e18, ARBITRUM_CHAIN_ID, user2);
     }

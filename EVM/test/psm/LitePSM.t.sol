@@ -373,7 +373,7 @@ contract LitePSMTest is BaseTest {
                 IAccessControl.AccessControlUnauthorizedAccount.selector, user1, QUEUE_PROCESSOR
             )
         );
-        litePsm.processQueue(10);
+        litePsm.processQueue(10, 0);
     }
 
     function test_ProcessQueue_ProcessesFIFO() public {
@@ -404,7 +404,7 @@ contract LitePSMTest is BaseTest {
 
         // processQueue now handles approve-use-revoke internally
         vm.prank(queueProcessor);
-        litePsm.processQueue(10);
+        litePsm.processQueue(10, 12_000e6); // 6000 USDC * 2 entries
 
         // Queue should be processed
         assertEq(redemptionQueue.queueLength(), 0);
@@ -436,7 +436,7 @@ contract LitePSMTest is BaseTest {
 
         // Process queue
         vm.prank(queueProcessor);
-        litePsm.processQueue(10);
+        litePsm.processQueue(10, 6000e6);
 
         // Verify allowance is revoked back to 0 after processing
         assertEq(usdc.allowance(address(litePsm), address(redemptionQueue)), 0);
@@ -475,7 +475,7 @@ contract LitePSMTest is BaseTest {
 
         // Process only 1 entry
         vm.prank(queueProcessor);
-        litePsm.processQueue(1);
+        litePsm.processQueue(1, 6000e6);
 
         // Allowance should still be revoked even with partial processing
         assertEq(usdc.allowance(address(litePsm), address(redemptionQueue)), 0);

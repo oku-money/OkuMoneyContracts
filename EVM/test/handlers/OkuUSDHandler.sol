@@ -95,7 +95,7 @@ contract OkuUSDHandler is Test {
         }
     }
 
-    /// @notice Burn tokens from a random actor
+    /// @notice Burn tokens from a random actor (transfer to minter, then self-burn)
     function burn(uint256 actorSeed, uint256 amount) external {
         ghostLastWasRebase = false;
         ghostBurnCallCount++;
@@ -106,9 +106,15 @@ contract OkuUSDHandler is Test {
 
         if (amount == 0) return;
 
-        vm.prank(minter);
-        try okuUsd.burn(actor, amount) {
-            ghostBurnedTotal += amount;
+        // Transfer tokens to minter first (self-burn model)
+        vm.prank(actor);
+        try okuUsd.transfer(minter, amount) {
+            vm.prank(minter);
+            try okuUsd.burn(amount) {
+                ghostBurnedTotal += amount;
+            } catch {
+                ghostBurnRevertCount++;
+            }
         } catch {
             ghostBurnRevertCount++;
         }

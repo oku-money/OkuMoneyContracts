@@ -762,4 +762,43 @@ contract OkuBridgeRouterTest is BaseTest {
         assertGe(amount, finalValue);
         assertLe(amount - finalValue, 2);
     }
+
+    // ============ UUPS Upgrade Tests ============
+
+    function test_UUPS_UpgradeRouter() public {
+        OkuBridgeRouter newImpl = new OkuBridgeRouter();
+
+        vm.prank(admin);
+        bridgeRouter.upgradeToAndCall(address(newImpl), "");
+
+        // State preserved
+        assertEq(address(bridgeRouter.wOkuUsd()), address(wokuUsd));
+        assertEq(address(bridgeRouter.okuUsd()), address(okuUsd));
+        assertEq(address(bridgeRouter.okuBridge()), address(okuBridgeContract));
+    }
+
+    function test_UUPS_UpgradeRouter_RevertNotUpgrader() public {
+        OkuBridgeRouter newImpl = new OkuBridgeRouter();
+
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, ROUTER_UPGRADER
+            )
+        );
+        bridgeRouter.upgradeToAndCall(address(newImpl), "");
+    }
+
+    function test_Unpause_RevertNotUnpauser() public {
+        vm.prank(admin);
+        bridgeRouter.pause();
+
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, ROUTER_UNPAUSER
+            )
+        );
+        bridgeRouter.unpause();
+    }
 }

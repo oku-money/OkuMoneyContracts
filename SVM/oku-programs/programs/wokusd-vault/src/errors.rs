@@ -12,4 +12,10 @@ pub enum VaultError {
     InsufficientShares,
     #[msg("Amount must be greater than zero")]
     ZeroAmount,
+    #[msg("First deposit must exceed minimum liquidity threshold")]
+    MinimumLiquidity,
+    #[msg("OkuUSD mint has malformed InterestBearingConfig extension data")]
+    InvalidMintExtension,
+    #[msg("Interest-adjusted payout exceeds raw vault balance; orchestrator must top up")]
+    InsufficientVaultBalance,
 }

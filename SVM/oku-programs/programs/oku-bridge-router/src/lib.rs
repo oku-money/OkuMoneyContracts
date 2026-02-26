@@ -13,16 +13,17 @@ pub mod oku_bridge_router {
     use super::*;
 
     /// Initialize the bridge router config
-    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+    /// Takes pauser and unpauser as args; signer becomes role_admin
+    pub fn initialize(ctx: Context<Initialize>, pauser: Pubkey, unpauser: Pubkey) -> Result<()> {
         let config = &mut ctx.accounts.config;
         config.bump = ctx.bumps.config;
-        config.admin = ctx.accounts.admin.key();
-        config.psm_program = ctx.accounts.psm_program.key();
-        config.vault_program = ctx.accounts.vault_program.key();
+        config.role_admin = ctx.accounts.role_admin.key();
+        config.pauser = pauser;
+        config.unpauser = unpauser;
         config.is_paused = false;
 
         emit!(InitializeEvent {
-            admin: config.admin,
+            role_admin: config.role_admin,
         });
 
         Ok(())
@@ -101,51 +102,81 @@ pub mod oku_bridge_router {
             wokusd_shares,
             okusd_amount: okusd_received,
             destination_chain,
+            recipient,
         });
 
         Ok(())
     }
 
-    /// Pause or unpause the router
-    pub fn set_paused(ctx: Context<SetPaused>, paused: bool) -> Result<()> {
+    /// Pause the router (emergency response)
+    pub fn pause(ctx: Context<Pause>) -> Result<()> {
         let config = &mut ctx.accounts.config;
-        config.is_paused = paused;
+        config.is_paused = true;
 
-        emit!(PausedEvent {
-            admin: ctx.accounts.admin.key(),
-            paused,
+        emit!(PauseEvent {
+            pauser: ctx.accounts.pauser.key(),
+            paused: true,
         });
 
         Ok(())
     }
 
-    /// Update program references in the router config
-    pub fn update_config(
-        ctx: Context<UpdateConfig>,
-        new_psm_program: Option<Pubkey>,
-        new_vault_program: Option<Pubkey>,
+    /// Unpause the router (deliberate review required)
+    pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        config.is_paused = false;
+
+        emit!(UnpauseEvent {
+            unpauser: ctx.accounts.unpauser.key(),
+        });
+
+        Ok(())
+    }
+
+    /// Update a specific authority role
+    /// Only role_admin can call this function
+    pub fn set_authority(
+        ctx: Context<SetAuthority>,
+        role: RouterAuthorityRole,
+        new_authority: Pubkey,
     ) -> Result<()> {
+        require!(new_authority != Pubkey::default(), RouterError::Unauthorized);
+
         let config = &mut ctx.accounts.config;
-        let old_psm = config.psm_program;
-        let old_vault = config.vault_program;
+        let old_authority = match role {
+            RouterAuthorityRole::RoleAdmin => {
+                let old = config.role_admin;
+                config.role_admin = new_authority;
+                old
+            }
+            RouterAuthorityRole::Pauser => {
+                let old = config.pauser;
+                config.pauser = new_authority;
+                old
+            }
+            RouterAuthorityRole::Unpauser => {
+                let old = config.unpauser;
+                config.unpauser = new_authority;
+                old
+            }
+        };
 
-        if let Some(psm) = new_psm_program {
-            config.psm_program = psm;
-        }
-        if let Some(vault) = new_vault_program {
-            config.vault_program = vault;
-        }
-
-        emit!(ConfigUpdatedEvent {
-            admin: ctx.accounts.admin.key(),
-            old_psm_program: old_psm,
-            new_psm_program: config.psm_program,
-            old_vault_program: old_vault,
-            new_vault_program: config.vault_program,
+        emit!(AuthorityUpdatedEvent {
+            role,
+            old_authority,
+            new_authority,
         });
 
         Ok(())
     }
+}
+
+/// Authority roles that can be updated via set_authority
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum RouterAuthorityRole {
+    RoleAdmin,
+    Pauser,
+    Unpauser,
 }
 
 // ============================================================================
@@ -157,12 +188,12 @@ pub mod oku_bridge_router {
 pub struct RouterConfig {
     /// PDA bump seed
     pub bump: u8,
-    /// Admin authority
-    pub admin: Pubkey,
-    /// LitePSM program ID
-    pub psm_program: Pubkey,
-    /// wOkuUSD vault program ID
-    pub vault_program: Pubkey,
+    /// Meta role: grant/revoke roles (cold multisig)
+    pub role_admin: Pubkey,
+    /// Warm Multisig - pause only
+    pub pauser: Pubkey,
+    /// Cold Multisig - unpause only
+    pub unpauser: Pubkey,
     /// Whether the router is paused
     pub is_paused: bool,
 }
@@ -198,22 +229,16 @@ pub enum RouterError {
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(mut)]
-    pub admin: Signer<'info>,
+    pub role_admin: Signer<'info>,
 
     #[account(
         init,
-        payer = admin,
+        payer = role_admin,
         space = RouterConfig::LEN,
         seeds = [RouterConfig::SEED],
         bump
     )]
     pub config: Account<'info, RouterConfig>,
-
-    /// CHECK: PSM program ID - validated by admin
-    pub psm_program: UncheckedAccount<'info>,
-
-    /// CHECK: Vault program ID - validated by admin
-    pub vault_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -269,12 +294,12 @@ pub struct BridgeWrapped<'info> {
     #[account(mut)]
     pub fee_recipient_ata: UncheckedAccount<'info>,
 
-    /// CHECK: Vault program
-    #[account(address = config.vault_program)]
+    /// CHECK: Vault program — hardcoded to wokusd_vault::ID
+    #[account(address = wokusd_vault::ID)]
     pub vault_program: UncheckedAccount<'info>,
 
-    /// CHECK: PSM program
-    #[account(address = config.psm_program)]
+    /// CHECK: PSM program — hardcoded to lite_psm::ID
+    #[account(address = lite_psm::ID)]
     pub psm_program: UncheckedAccount<'info>,
 
     pub token_program: Program<'info, Token>,
@@ -284,11 +309,11 @@ pub struct BridgeWrapped<'info> {
 }
 
 #[derive(Accounts)]
-pub struct SetPaused<'info> {
+pub struct Pause<'info> {
     #[account(
-        constraint = admin.key() == config.admin @ RouterError::Unauthorized
+        constraint = pauser.key() == config.pauser @ RouterError::Unauthorized
     )]
-    pub admin: Signer<'info>,
+    pub pauser: Signer<'info>,
 
     #[account(
         mut,
@@ -299,12 +324,29 @@ pub struct SetPaused<'info> {
 }
 
 #[derive(Accounts)]
-pub struct UpdateConfig<'info> {
+pub struct Unpause<'info> {
     #[account(
-        constraint = admin.key() == config.admin @ RouterError::Unauthorized
+        constraint = unpauser.key() == config.unpauser @ RouterError::Unauthorized
     )]
-    pub admin: Signer<'info>,
+    pub unpauser: Signer<'info>,
 
+    #[account(
+        mut,
+        seeds = [RouterConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Account<'info, RouterConfig>,
+}
+
+#[derive(Accounts)]
+pub struct SetAuthority<'info> {
+    /// Role admin - only role_admin can update authorities
+    #[account(
+        constraint = role_admin.key() == config.role_admin @ RouterError::Unauthorized
+    )]
+    pub role_admin: Signer<'info>,
+
+    /// Router config
     #[account(
         mut,
         seeds = [RouterConfig::SEED],
@@ -319,7 +361,7 @@ pub struct UpdateConfig<'info> {
 
 #[event]
 pub struct InitializeEvent {
-    pub admin: Pubkey,
+    pub role_admin: Pubkey,
 }
 
 #[event]
@@ -328,19 +370,23 @@ pub struct BridgeWrappedEvent {
     pub wokusd_shares: u64,
     pub okusd_amount: u64,
     pub destination_chain: u16,
+    pub recipient: [u8; 20],
 }
 
 #[event]
-pub struct PausedEvent {
-    pub admin: Pubkey,
+pub struct PauseEvent {
+    pub pauser: Pubkey,
     pub paused: bool,
 }
 
 #[event]
-pub struct ConfigUpdatedEvent {
-    pub admin: Pubkey,
-    pub old_psm_program: Pubkey,
-    pub new_psm_program: Pubkey,
-    pub old_vault_program: Pubkey,
-    pub new_vault_program: Pubkey,
+pub struct UnpauseEvent {
+    pub unpauser: Pubkey,
+}
+
+#[event]
+pub struct AuthorityUpdatedEvent {
+    pub role: RouterAuthorityRole,
+    pub old_authority: Pubkey,
+    pub new_authority: Pubkey,
 }

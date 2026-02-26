@@ -75,15 +75,15 @@ describe("NTT Bridge Scenarios", () => {
         await psm.connect(user).mint(usdcAmount)
     }
 
+    // Bridge via NttAdapter — only ROUTER (Frank) can call bridge()
+    // In production, OkuBridgeRouter calls adapter.bridge() after burning tokens
     async function bridgeViaNtt(
-        user: Signer,
         amount: bigint,
         destChain: number,
         recipient: string,
         fee: bigint = 0n
     ) {
-        await okuUSD.connect(user).approve(await nttAdapter.getAddress(), amount)
-        await nttAdapter.connect(user).bridge(
+        await nttAdapter.connect(Frank).bridge(
             await okuUSD.getAddress(),
             amount,
             destChain,
@@ -162,11 +162,13 @@ describe("NTT Bridge Scenarios", () => {
         )
         await mockNttManager.waitForDeployment()
 
-        // Deploy NttAdapter
+        // Deploy NttAdapter (frankAddr is both ROUTER and owner for testing)
+        // In production, ROUTER would be the OkuBridgeRouter address
         nttAdapter = await new NttAdapter__factory(Frank).deploy(
             await mockNttManager.getAddress(),
             await okuUSD.getAddress(),
-            frankAddr
+            frankAddr,  // ROUTER — only this address can call bridge()
+            frankAddr   // owner
         )
         await nttAdapter.waitForDeployment()
 
@@ -214,7 +216,7 @@ describe("NTT Bridge Scenarios", () => {
             const pendingCountBefore = await mockNttManager.pendingTransfersCount()
 
             // Call bridge (adapter doesn't transfer tokens, just records message)
-            await nttAdapter.connect(Alice).bridge(
+            await nttAdapter.connect(Frank).bridge(
                 await okuUSD.getAddress(),
                 bridgeAmount,
                 ARBITRUM_CHAIN_ID,
@@ -237,7 +239,7 @@ describe("NTT Bridge Scenarios", () => {
             const bridgeAmount = parseUnits("5000", 6)
 
             // Bridge to Bob
-            await nttAdapter.connect(Alice).bridge(
+            await nttAdapter.connect(Frank).bridge(
                 await okuUSD.getAddress(),
                 bridgeAmount,
                 ARBITRUM_CHAIN_ID,
@@ -262,7 +264,7 @@ describe("NTT Bridge Scenarios", () => {
 
             // Try to bridge to unsupported chain
             await expect(
-                nttAdapter.connect(Alice).bridge(
+                nttAdapter.connect(Frank).bridge(
                     await okuUSD.getAddress(),
                     bridgeAmount,
                     999,  // Unsupported chain
@@ -281,7 +283,7 @@ describe("NTT Bridge Scenarios", () => {
 
             // Try to bridge without fee
             await expect(
-                nttAdapter.connect(Alice).bridge(
+                nttAdapter.connect(Frank).bridge(
                     await okuUSD.getAddress(),
                     bridgeAmount,
                     ARBITRUM_CHAIN_ID,
@@ -304,7 +306,7 @@ describe("NTT Bridge Scenarios", () => {
 
             const mockBalanceBefore = await ethers.provider.getBalance(await mockNttManager.getAddress())
 
-            await nttAdapter.connect(Alice).bridge(
+            await nttAdapter.connect(Frank).bridge(
                 await okuUSD.getAddress(),
                 bridgeAmount,
                 ARBITRUM_CHAIN_ID,
@@ -337,7 +339,7 @@ describe("NTT Bridge Scenarios", () => {
             const bobAddr = await Bob.getAddress()
             const bridgeAmount = parseUnits("1000", 6)
 
-            await nttAdapter.connect(Alice).bridge(
+            await nttAdapter.connect(Frank).bridge(
                 await okuUSD.getAddress(),
                 bridgeAmount,
                 BSC_CHAIN_ID,
@@ -358,7 +360,7 @@ describe("NTT Bridge Scenarios", () => {
             const bobBalanceBefore = await okuUSD.balanceOf(bobAddr)
 
             // Bridge to Bob (adapter records message, doesn't handle tokens)
-            await nttAdapter.connect(Alice).bridge(
+            await nttAdapter.connect(Frank).bridge(
                 await okuUSD.getAddress(),
                 bridgeAmount,
                 ARBITRUM_CHAIN_ID,
@@ -379,7 +381,7 @@ describe("NTT Bridge Scenarios", () => {
             const bridgeAmount = parseUnits("10000", 6)
 
             // Bridge to Charlie
-            await nttAdapter.connect(Alice).bridge(
+            await nttAdapter.connect(Frank).bridge(
                 await okuUSD.getAddress(),
                 bridgeAmount,
                 OPTIMISM_CHAIN_ID,

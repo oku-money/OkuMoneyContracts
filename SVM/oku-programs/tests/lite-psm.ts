@@ -765,6 +765,7 @@ describe("lite-psm", () => {
           .accountsPartial({
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
+            redemptionQueue: redemptionQueuePda,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint: usdcMint,
@@ -784,6 +785,7 @@ describe("lite-psm", () => {
             .accountsPartial({
               bufferWithdrawer: warmMultisig.publicKey, // Wrong role
               config: configPda,
+              redemptionQueue: redemptionQueuePda,
               withdrawerUsdcAta: bufferWithdrawerUsdcAta,
               vaultUsdc: vaultUsdcAta,
               usdcMint: usdcMint,
@@ -1174,6 +1176,7 @@ describe("lite-psm", () => {
           .accountsPartial({
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
+            redemptionQueue: redemptionQueuePda,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint,
@@ -1290,6 +1293,7 @@ describe("lite-psm", () => {
             .accountsPartial({
               bufferWithdrawer: coldMultisig.publicKey,
               config: configPda,
+              redemptionQueue: redemptionQueuePda,
               withdrawerUsdcAta: bufferWithdrawerUsdcAta,
               vaultUsdc: vaultUsdcAta,
               usdcMint,
@@ -1368,6 +1372,39 @@ describe("lite-psm", () => {
     });
 
     it("processes multiple entries FIFO", async () => {
+      // Process any leftover queue entries from prior tests (Fix 10: withdrawBuffer
+      // now protects queued redemptions, so we must clear the queue before draining)
+      const queuePre = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      if (queuePre.head < queuePre.tail) {
+        const pendingCount = queuePre.tail - queuePre.head;
+        // Collect remaining accounts for each pending entry
+        const remainingAccts = [];
+        for (let i = 0; i < pendingCount; i++) {
+          const idx = (queuePre.head + i) % 10;
+          const entryUser = queuePre.entries[idx].user;
+          const entryUsdcAta = getAssociatedTokenAddressSync(
+            usdcMint, entryUser, false, TOKEN_PROGRAM_ID
+          );
+          await ensureAta(provider.connection, payer, entryUsdcAta, entryUser, usdcMint, TOKEN_PROGRAM_ID);
+          remainingAccts.push({ pubkey: entryUsdcAta, isSigner: false, isWritable: true });
+        }
+        await program.methods
+          .processQueue(pendingCount)
+          .accountsPartial({
+            queueProcessor: orchestrator.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okusdMint,
+            vaultUsdc: vaultUsdcAta,
+            vaultOkusd: vaultOkusdAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .remainingAccounts(remainingAccts)
+          .signers([orchestrator])
+          .rpc();
+      }
+
       // Create two queued entries
       // First drain buffer
       const vaultUsdc = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
@@ -1381,6 +1418,7 @@ describe("lite-psm", () => {
           .accountsPartial({
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
+            redemptionQueue: redemptionQueuePda,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint,
@@ -1402,6 +1440,7 @@ describe("lite-psm", () => {
           .accountsPartial({
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
+            redemptionQueue: redemptionQueuePda,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint,
@@ -1628,6 +1667,7 @@ describe("lite-psm", () => {
             .accountsPartial({
               bufferWithdrawer: coldMultisig.publicKey,
               config: configPda,
+              redemptionQueue: redemptionQueuePda,
               withdrawerUsdcAta: bufferWithdrawerUsdcAta,
               vaultUsdc: vaultUsdcAta,
               usdcMint,
@@ -2007,6 +2047,7 @@ describe("lite-psm", () => {
           .accountsPartial({
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
+            redemptionQueue: redemptionQueuePda,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint,

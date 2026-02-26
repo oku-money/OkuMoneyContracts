@@ -8,6 +8,7 @@ import {
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
+import {OkuUSD} from "../../src/token/OkuUSD.sol";
 
 /**
  * @title OkuUSDTest
@@ -805,5 +806,213 @@ contract OkuUSDTest is BaseTest {
 
         assertEq(okuUsd.rewardMultiplier(), PRECISION * 3);
         assertEq(okuUsd.balanceOf(user1), 300e18);
+    }
+
+    // ============ EIP-2612 Permit Tests ============
+
+    function test_Permit_SetsAllowance() public {
+        uint256 userPk = 0xBEEF;
+        address user = vm.addr(userPk);
+
+        uint256 amount = 100e18;
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 nonce = okuUsd.nonces(user);
+
+        bytes32 domainSeparator = _getOkuUsdDomainSeparator();
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                user,
+                user2,
+                amount,
+                nonce,
+                deadline
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userPk, digest);
+
+        okuUsd.permit(user, user2, amount, deadline, v, r, s);
+
+        assertEq(okuUsd.allowance(user, user2), amount);
+        assertEq(okuUsd.nonces(user), nonce + 1);
+    }
+
+    function test_Permit_RevertsExpired() public {
+        uint256 userPk = 0xBEEF;
+        address user = vm.addr(userPk);
+
+        uint256 amount = 100e18;
+        uint256 deadline = block.timestamp - 1; // Expired
+
+        bytes32 domainSeparator = _getOkuUsdDomainSeparator();
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                user,
+                user2,
+                amount,
+                okuUsd.nonces(user),
+                deadline
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userPk, digest);
+
+        vm.expectRevert(); // ERC2612ExpiredSignature
+        okuUsd.permit(user, user2, amount, deadline, v, r, s);
+    }
+
+    function test_Permit_RevertsInvalidSignature() public {
+        uint256 userPk = 0xBEEF;
+        address user = vm.addr(userPk);
+        uint256 wrongPk = 0xDEAD;
+
+        uint256 amount = 100e18;
+        uint256 deadline = block.timestamp + 1 hours;
+
+        bytes32 domainSeparator = _getOkuUsdDomainSeparator();
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                user,
+                user2,
+                amount,
+                okuUsd.nonces(user),
+                deadline
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(wrongPk, digest); // Wrong signer
+
+        vm.expectRevert(); // ERC2612InvalidSigner
+        okuUsd.permit(user, user2, amount, deadline, v, r, s);
+    }
+
+    function test_Permit_NonceIncrementsOnSecondUse() public {
+        uint256 userPk = 0xBEEF;
+        address user = vm.addr(userPk);
+
+        // First permit
+        _signAndPermit(userPk, user, user2, 50e18, block.timestamp + 1 hours);
+        assertEq(okuUsd.nonces(user), 1);
+
+        // Second permit (nonce=1 now)
+        _signAndPermit(userPk, user, user2, 75e18, block.timestamp + 1 hours);
+        assertEq(okuUsd.nonces(user), 2);
+        assertEq(okuUsd.allowance(user, user2), 75e18);
+    }
+
+    function test_Permit_ReplayReverts() public {
+        uint256 userPk = 0xBEEF;
+        address user = vm.addr(userPk);
+
+        uint256 amount = 100e18;
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 nonce = okuUsd.nonces(user);
+
+        bytes32 domainSeparator = _getOkuUsdDomainSeparator();
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                user,
+                user2,
+                amount,
+                nonce,
+                deadline
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userPk, digest);
+
+        // First call succeeds
+        okuUsd.permit(user, user2, amount, deadline, v, r, s);
+
+        // Replay with same nonce reverts
+        vm.expectRevert(); // ERC2612InvalidSigner (nonce mismatch)
+        okuUsd.permit(user, user2, amount, deadline, v, r, s);
+    }
+
+    function test_Permit_AllowsTransferFrom() public {
+        uint256 userPk = 0xBEEF;
+        address user = vm.addr(userPk);
+
+        uint256 amount = 100e18;
+        _mintOkuUsd(user, amount);
+
+        // Sign permit for user2 to spend user's tokens
+        _signAndPermit(userPk, user, user2, amount, block.timestamp + 1 hours);
+
+        // user2 can now transferFrom
+        vm.prank(user2);
+        assertTrue(okuUsd.transferFrom(user, user3, amount));
+
+        assertEq(okuUsd.balanceOf(user3), amount);
+        assertEq(okuUsd.balanceOf(user), 0);
+    }
+
+    // ============ UUPS Upgrade Tests ============
+
+    function test_UUPS_UpgradeOkuUSD() public {
+        OkuUSD newImpl = new OkuUSD();
+
+        vm.prank(admin);
+        okuUsd.upgradeToAndCall(address(newImpl), "");
+
+        // State preserved
+        assertEq(okuUsd.name(), "OkuUSD");
+        assertEq(okuUsd.rewardMultiplier(), PRECISION);
+        assertEq(okuUsd.maxSupply(), MAX_SUPPLY);
+    }
+
+    function test_UUPS_UpgradeOkuUSD_RevertNotUpgrader() public {
+        OkuUSD newImpl = new OkuUSD();
+
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, UPGRADER
+            )
+        );
+        okuUsd.upgradeToAndCall(address(newImpl), "");
+    }
+
+    // ============ Internal Helpers ============
+
+    function _getOkuUsdDomainSeparator() internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes("OkuUSD")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(okuUsd)
+            )
+        );
+    }
+
+    function _signAndPermit(
+        uint256 ownerPk,
+        address owner,
+        address spender,
+        uint256 value,
+        uint256 deadline
+    )
+        internal
+    {
+        bytes32 domainSeparator = _getOkuUsdDomainSeparator();
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                owner,
+                spender,
+                value,
+                okuUsd.nonces(owner),
+                deadline
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPk, digest);
+        okuUsd.permit(owner, spender, value, deadline, v, r, s);
     }
 }

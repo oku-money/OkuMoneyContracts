@@ -24,7 +24,11 @@ describe("oku-bridge-router", () => {
   let vaultProgram: Program<WokusdVault>;
   let psmProgram: Program<LitePsm>;
   let payer: Keypair;
-  let admin: Keypair;
+  let roleAdmin: Keypair;
+
+  // Separate pause/unpause authorities
+  const pauser = Keypair.generate();
+  const unpauser = Keypair.generate();
 
   const user = Keypair.generate();
 
@@ -55,11 +59,11 @@ describe("oku-bridge-router", () => {
     vaultProgram = anchor.workspace.WokusdVault as Program<WokusdVault>;
     psmProgram = anchor.workspace.LitePsm as Program<LitePsm>;
     payer = (provider.wallet as anchor.Wallet).payer;
-    admin = payer;
+    roleAdmin = payer;
 
-    // Airdrop SOL to test user with proper confirmation
-    const { safeAirdrop } = await import("./shared/setup");
-    await safeAirdrop(provider.connection, user.publicKey, 10 * anchor.web3.LAMPORTS_PER_SOL);
+    // Airdrop SOL to test users and authorities
+    const { safeAirdrop, safeAirdropAll } = await import("./shared/setup");
+    await safeAirdropAll(provider.connection, [user, pauser, unpauser], 10 * anchor.web3.LAMPORTS_PER_SOL);
 
     // Derive PDAs
     [routerConfigPda] = PublicKey.findProgramAddressSync(
@@ -69,7 +73,7 @@ describe("oku-bridge-router", () => {
   });
 
   describe("initialize", () => {
-    it("initializes the router config", async () => {
+    it("initializes the router config with RBAC", async () => {
       // Skip if already initialized (validator state may persist across runs)
       let alreadyInitialized = false;
       try {
@@ -82,80 +86,170 @@ describe("oku-bridge-router", () => {
       if (alreadyInitialized) {
         // Still verify the config is correct
         const config = await routerProgram.account.routerConfig.fetch(routerConfigPda);
-        expect(config.psmProgram.toString()).to.equal(psmProgram.programId.toString());
-        expect(config.vaultProgram.toString()).to.equal(vaultProgram.programId.toString());
+        expect(config.roleAdmin).to.exist;
         return;
       }
 
       await routerProgram.methods
-        .initialize()
+        .initialize(pauser.publicKey, unpauser.publicKey)
         .accountsPartial({
-          admin: admin.publicKey,
+          roleAdmin: roleAdmin.publicKey,
           config: routerConfigPda,
-          psmProgram: psmProgram.programId,
-          vaultProgram: vaultProgram.programId,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
 
       const config = await routerProgram.account.routerConfig.fetch(routerConfigPda);
-      expect(config.admin.toString()).to.equal(admin.publicKey.toString());
-      expect(config.psmProgram.toString()).to.equal(psmProgram.programId.toString());
-      expect(config.vaultProgram.toString()).to.equal(vaultProgram.programId.toString());
+      expect(config.roleAdmin.toString()).to.equal(roleAdmin.publicKey.toString());
+      expect(config.pauser.toString()).to.equal(pauser.publicKey.toString());
+      expect(config.unpauser.toString()).to.equal(unpauser.publicKey.toString());
       expect(config.isPaused).to.be.false;
     });
   });
 
   describe("admin functions", () => {
-    describe("set_paused", () => {
+    describe("pause / unpause", () => {
       before(async () => {
         // Initialize router if needed
         try {
           await routerProgram.account.routerConfig.fetch(routerConfigPda);
         } catch {
           await routerProgram.methods
-            .initialize()
+            .initialize(pauser.publicKey, unpauser.publicKey)
             .accountsPartial({
-              admin: admin.publicKey,
+              roleAdmin: roleAdmin.publicKey,
               config: routerConfigPda,
-              psmProgram: psmProgram.programId,
-              vaultProgram: vaultProgram.programId,
               systemProgram: SystemProgram.programId,
             })
             .rpc();
         }
       });
 
-      it("allows admin to pause and unpause", async () => {
+      it("pauser can pause and unpauser can unpause", async () => {
         await routerProgram.methods
-          .setPaused(true)
+          .pause()
           .accountsPartial({
-            admin: admin.publicKey,
+            pauser: pauser.publicKey,
             config: routerConfigPda,
           })
+          .signers([pauser])
           .rpc();
 
         let config = await routerProgram.account.routerConfig.fetch(routerConfigPda);
         expect(config.isPaused).to.be.true;
 
         await routerProgram.methods
-          .setPaused(false)
+          .unpause()
           .accountsPartial({
-            admin: admin.publicKey,
+            unpauser: unpauser.publicKey,
             config: routerConfigPda,
           })
+          .signers([unpauser])
           .rpc();
 
         config = await routerProgram.account.routerConfig.fetch(routerConfigPda);
         expect(config.isPaused).to.be.false;
       });
 
-      it("fails when non-admin tries to pause", async () => {
+      it("fails when non-pauser tries to pause", async () => {
         try {
           await routerProgram.methods
-            .setPaused(true)
+            .pause()
             .accountsPartial({
-              admin: user.publicKey,
+              pauser: user.publicKey,
+              config: routerConfigPda,
+            })
+            .signers([user])
+            .rpc();
+          expect.fail("Should have failed");
+        } catch (err: any) {
+          expect(err.error.errorCode.code).to.equal("Unauthorized");
+        }
+      });
+
+      it("fails when non-unpauser tries to unpause", async () => {
+        // First pause it
+        await routerProgram.methods
+          .pause()
+          .accountsPartial({
+            pauser: pauser.publicKey,
+            config: routerConfigPda,
+          })
+          .signers([pauser])
+          .rpc();
+
+        try {
+          await routerProgram.methods
+            .unpause()
+            .accountsPartial({
+              unpauser: user.publicKey,
+              config: routerConfigPda,
+            })
+            .signers([user])
+            .rpc();
+          expect.fail("Should have failed");
+        } catch (err: any) {
+          expect(err.error.errorCode.code).to.equal("Unauthorized");
+        }
+
+        // Clean up: unpause
+        await routerProgram.methods
+          .unpause()
+          .accountsPartial({
+            unpauser: unpauser.publicKey,
+            config: routerConfigPda,
+          })
+          .signers([unpauser])
+          .rpc();
+      });
+    });
+
+    describe("set_authority", () => {
+      it("role_admin can rotate pauser", async () => {
+        const newPauser = Keypair.generate();
+
+        await routerProgram.methods
+          .setAuthority({ pauser: {} }, newPauser.publicKey)
+          .accountsPartial({
+            roleAdmin: roleAdmin.publicKey,
+            config: routerConfigPda,
+          })
+          .rpc();
+
+        const config = await routerProgram.account.routerConfig.fetch(routerConfigPda);
+        expect(config.pauser.toString()).to.equal(newPauser.publicKey.toString());
+
+        // Restore original pauser
+        await routerProgram.methods
+          .setAuthority({ pauser: {} }, pauser.publicKey)
+          .accountsPartial({
+            roleAdmin: roleAdmin.publicKey,
+            config: routerConfigPda,
+          })
+          .rpc();
+      });
+
+      it("rejects Pubkey::default() as new authority", async () => {
+        try {
+          await routerProgram.methods
+            .setAuthority({ pauser: {} }, PublicKey.default)
+            .accountsPartial({
+              roleAdmin: roleAdmin.publicKey,
+              config: routerConfigPda,
+            })
+            .rpc();
+          expect.fail("Should have failed");
+        } catch (err: any) {
+          expect(err.error.errorCode.code).to.equal("Unauthorized");
+        }
+      });
+
+      it("non-admin cannot set authority", async () => {
+        try {
+          await routerProgram.methods
+            .setAuthority({ pauser: {} }, Keypair.generate().publicKey)
+            .accountsPartial({
+              roleAdmin: user.publicKey,
               config: routerConfigPda,
             })
             .signers([user])
@@ -169,7 +263,7 @@ describe("oku-bridge-router", () => {
   });
 
   // ==========================================================================
-  // NEW COVERAGE: bridge_wrapped (unwrap + bridge_burn in one tx)
+  // bridge_wrapped (unwrap + bridge_burn in one tx)
   // ==========================================================================
   describe("bridge_wrapped", () => {
     const ETH_CHAIN_ID = 1;
@@ -183,7 +277,6 @@ describe("oku-bridge-router", () => {
       } = await import("./shared/setup");
 
       // Use the shared PSM — it may already be initialized by other test files.
-      // We need to read its config to get the USDC and OkuUSD mints.
       [psmConfigPda] = PublicKey.findProgramAddressSync(
         [Buffer.from("psm_config")], psmProgram.programId
       );
@@ -201,8 +294,6 @@ describe("oku-bridge-router", () => {
         usdcMint = psmConfig.usdcMint;
         okusdMint = psmConfig.okusdMint;
       } catch {
-        // PSM not initialized — skip bridge_wrapped tests
-        // (they depend on the shared PSM being set up by lite-psm or bridge_security tests)
         console.log("    ⚠ PSM not initialized, skipping bridge_wrapped tests");
         return;
       }
@@ -286,10 +377,6 @@ describe("oku-bridge-router", () => {
       // Ensure fee recipient ATA exists
       await ensureAta(provider.connection, payer, feeRecipientAta, bridgeConfig.feeRecipient, okusdMint, TOKEN_2022_PROGRAM_ID);
 
-      // We need user to have wOkuUSD. The flow is:
-      // 1. User gets OkuUSD from PSM mint (needs USDC)
-      // 2. User wraps OkuUSD -> wOkuUSD via vault
-
       // Check if user already has OkuUSD
       let userOkusdBalance = BigInt(0);
       try {
@@ -298,7 +385,6 @@ describe("oku-bridge-router", () => {
       } catch {}
 
       if (userOkusdBalance < BigInt(5_000_000)) {
-        // Try to mint OkuUSD via PSM (user needs USDC)
         try {
           const userUsdc = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
           if (Number(userUsdc.amount) >= 10_000_000) {
@@ -316,6 +402,16 @@ describe("oku-bridge-router", () => {
       // Wrap OkuUSD -> wOkuUSD
       try {
         await ensureAta(provider.connection, payer, userWokusdAta, user.publicKey, wokusdMint, TOKEN_PROGRAM_ID);
+
+        // Check if this is the first deposit (need dead shares ATA)
+        const vaultCfg = await vaultProgram.account.vaultConfig.fetch(vaultConfigPda);
+        let deadSharesAta: PublicKey | null = null;
+        if (vaultCfg.totalShares.toNumber() === 0) {
+          const { getAssociatedTokenAddressSync: getAta } = await import("@solana/spl-token");
+          deadSharesAta = getAta(wokusdMint, SystemProgram.programId, true, TOKEN_PROGRAM_ID);
+          await ensureAta(provider.connection, payer, deadSharesAta, SystemProgram.programId, wokusdMint, TOKEN_PROGRAM_ID);
+        }
+
         await vaultProgram.methods
           .wrap(new BN(5_000_000))
           .accountsPartial({
@@ -326,6 +422,7 @@ describe("oku-bridge-router", () => {
             userOkusdAta,
             userWokusdAta,
             vaultOkusd: wVaultOkusdAta,
+            deadSharesAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -416,8 +513,9 @@ describe("oku-bridge-router", () => {
 
       // Pause the router
       await routerProgram.methods
-        .setPaused(true)
-        .accountsPartial({ admin: admin.publicKey, config: routerConfigPda })
+        .pause()
+        .accountsPartial({ pauser: pauser.publicKey, config: routerConfigPda })
+        .signers([pauser])
         .rpc();
 
       const evmRecipient = Buffer.alloc(20);
@@ -467,8 +565,9 @@ describe("oku-bridge-router", () => {
 
       // Unpause
       await routerProgram.methods
-        .setPaused(false)
-        .accountsPartial({ admin: admin.publicKey, config: routerConfigPda })
+        .unpause()
+        .accountsPartial({ unpauser: unpauser.publicKey, config: routerConfigPda })
+        .signers([unpauser])
         .rpc();
     });
 
@@ -613,7 +712,7 @@ describe("oku-bridge-router", () => {
       const preBalance = Number(okusdBefore.amount);
       expect(preBalance).to.be.greaterThan(0, "User should have pre-existing OkuUSD");
 
-      // Ensure user has wOkuUSD to bridge — mint more OkuUSD and wrap it
+      // Ensure user has wOkuUSD to bridge
       const userWokusd = await getAccount(provider.connection, userWokusdAta, undefined, TOKEN_PROGRAM_ID);
       let sharesToBridge = Number(userWokusd.amount);
       if (sharesToBridge < 1_000_000) {
@@ -632,6 +731,7 @@ describe("oku-bridge-router", () => {
               userOkusdAta,
               userWokusdAta,
               vaultOkusd: wVaultOkusdAta,
+              deadSharesAta: null,
               tokenProgram: TOKEN_PROGRAM_ID,
               token2022Program: TOKEN_2022_PROGRAM_ID,
               associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -647,7 +747,7 @@ describe("oku-bridge-router", () => {
         }
       }
 
-      // Re-read OkuUSD balance after wrap (wrap reduces it)
+      // Re-read OkuUSD balance after wrap
       const okusdBeforeBridge = await getAccount(provider.connection, userOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
       const balanceBefore = Number(okusdBeforeBridge.amount);
       expect(balanceBefore).to.be.greaterThan(0, "User should still have pre-existing OkuUSD after wrap");
@@ -694,7 +794,6 @@ describe("oku-bridge-router", () => {
 
       // Verify pre-existing OkuUSD balance was NOT swept
       const okusdAfter = await getAccount(provider.connection, userOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
-      // The pre-existing balance should remain (only the unwrapped delta was burned)
       expect(Number(okusdAfter.amount)).to.equal(balanceBefore,
         "Pre-existing OkuUSD balance should be untouched");
     });
@@ -805,88 +904,6 @@ describe("oku-bridge-router", () => {
         .rpc();
 
       // If we got here, slippage check passed successfully
-    });
-  });
-
-  // ==========================================================================
-  // update_config
-  // ==========================================================================
-  describe("update_config", () => {
-    it("admin can update config", async () => {
-      const newPsm = Keypair.generate().publicKey;
-      const newVault = Keypair.generate().publicKey;
-
-      const configBefore = await routerProgram.account.routerConfig.fetch(routerConfigPda);
-      const oldPsm = configBefore.psmProgram;
-      const oldVault = configBefore.vaultProgram;
-
-      await routerProgram.methods
-        .updateConfig(newPsm, newVault)
-        .accountsPartial({
-          admin: admin.publicKey,
-          config: routerConfigPda,
-        })
-        .rpc();
-
-      const config = await routerProgram.account.routerConfig.fetch(routerConfigPda);
-      expect(config.psmProgram.toString()).to.equal(newPsm.toString());
-      expect(config.vaultProgram.toString()).to.equal(newVault.toString());
-
-      // Restore original values so subsequent tests work
-      await routerProgram.methods
-        .updateConfig(oldPsm, oldVault)
-        .accountsPartial({
-          admin: admin.publicKey,
-          config: routerConfigPda,
-        })
-        .rpc();
-
-      const restored = await routerProgram.account.routerConfig.fetch(routerConfigPda);
-      expect(restored.psmProgram.toString()).to.equal(oldPsm.toString());
-      expect(restored.vaultProgram.toString()).to.equal(oldVault.toString());
-    });
-
-    it("admin can update only psm_program", async () => {
-      const newPsm = Keypair.generate().publicKey;
-      const configBefore = await routerProgram.account.routerConfig.fetch(routerConfigPda);
-      const oldPsm = configBefore.psmProgram;
-
-      await routerProgram.methods
-        .updateConfig(newPsm, null)
-        .accountsPartial({
-          admin: admin.publicKey,
-          config: routerConfigPda,
-        })
-        .rpc();
-
-      const config = await routerProgram.account.routerConfig.fetch(routerConfigPda);
-      expect(config.psmProgram.toString()).to.equal(newPsm.toString());
-      expect(config.vaultProgram.toString()).to.equal(configBefore.vaultProgram.toString());
-
-      // Restore
-      await routerProgram.methods
-        .updateConfig(oldPsm, null)
-        .accountsPartial({
-          admin: admin.publicKey,
-          config: routerConfigPda,
-        })
-        .rpc();
-    });
-
-    it("non-admin cannot update config", async () => {
-      try {
-        await routerProgram.methods
-          .updateConfig(Keypair.generate().publicKey, null)
-          .accountsPartial({
-            admin: user.publicKey,
-            config: routerConfigPda,
-          })
-          .signers([user])
-          .rpc();
-        expect.fail("Should have failed");
-      } catch (err: any) {
-        expect(err.error.errorCode.code).to.equal("Unauthorized");
-      }
     });
   });
 });

@@ -82,6 +82,9 @@ abstract contract BaseTest is Test {
     // RedemptionQueue roles
     bytes32 public constant PSM = keccak256("PSM");
 
+    // OkuBridge roles
+    bytes32 public constant BRIDGE_UPGRADER = keccak256("BRIDGE_UPGRADER");
+
     // OkuBridgeRouter roles
     bytes32 public constant ROUTER_UPGRADER = keccak256("ROUTER_UPGRADER");
     bytes32 public constant ROUTER_PAUSER = keccak256("ROUTER_PAUSER");
@@ -155,6 +158,9 @@ abstract contract BaseTest is Test {
         // RedemptionQueue roles
         redemptionQueue.grantRole(PSM, address(litePsm));
 
+        // Grant RedemptionQueue MINTER role on OkuUSD (needed for self-burn in processQueue)
+        okuUsd.grantRole(MINTER, address(redemptionQueue));
+
         vm.stopPrank();
     }
 
@@ -162,6 +168,7 @@ abstract contract BaseTest is Test {
         vm.startPrank(allowanceManager);
         okuUsd.configureMinterAllowance(minter, MAX_SUPPLY);
         okuUsd.configureMinterAllowance(address(litePsm), MAX_SUPPLY);
+        okuUsd.configureMinterAllowance(address(redemptionQueue), MAX_SUPPLY);
         vm.stopPrank();
     }
 

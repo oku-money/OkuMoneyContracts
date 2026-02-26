@@ -11,14 +11,10 @@ import {
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IOkuUSD} from "../interfaces/IOkuUSD.sol";
 
 interface IwOkuUSD {
     function redeem(uint256 shares, address receiver, address owner) external returns (uint256);
-}
-
-interface IOkuUSD {
-    function burn(address from, uint256 amount) external;
-    function tokensToShares(uint256 amount) external view returns (uint256);
 }
 
 interface IOkuBridgeNative {
@@ -177,15 +173,21 @@ contract OkuBridgeRouter is
         uint256 okuUsdAmount = wOkuUsd.redeem(wOkuUsdAmount, address(this), address(this));
         uint256 totalShares = okuUsd.tokensToShares(okuUsdAmount);
 
-        // OkuBridge burns totalShares from this contract, deducts fee, emits BridgeBurn
+        // Approve OkuBridge to pull OkuUSD (bridgeBurn uses safeTransferFrom)
+        IERC20(address(okuUsd)).approve(address(okuBridge), okuUsdAmount);
+
+        // OkuBridge pulls OkuUSD, self-burns, deducts fee, emits BridgeBurn
         requestId = okuBridge.bridgeBurn(destinationChain, recipient, totalShares);
+
+        // Revoke any remaining approval
+        IERC20(address(okuUsd)).approve(address(okuBridge), 0);
 
         emit NativeBridgeInitiated(msg.sender, requestId, okuUsdAmount, destinationChain, recipient);
     }
 
     /**
      * @notice Bridge OkuUSD directly to another chain via the native OkuBridge
-     * @dev OkuUSD is converted to shares; OkuBridge burns from this contract.
+     * @dev OkuUSD is converted to shares; OkuBridge pulls and self-burns.
      * @param okuUsdAmount Amount of OkuUSD to bridge (token units, not shares)
      * @param destinationChain Destination chain ID (must be configured in OkuBridge)
      * @param recipient Recipient address on destination chain
@@ -205,8 +207,14 @@ contract OkuBridgeRouter is
         IERC20(address(okuUsd)).safeTransferFrom(msg.sender, address(this), okuUsdAmount);
         uint256 totalShares = okuUsd.tokensToShares(okuUsdAmount);
 
-        // OkuBridge burns totalShares from this contract, deducts fee, emits BridgeBurn
+        // Approve OkuBridge to pull OkuUSD (bridgeBurn uses safeTransferFrom)
+        IERC20(address(okuUsd)).approve(address(okuBridge), okuUsdAmount);
+
+        // OkuBridge pulls OkuUSD, self-burns, deducts fee, emits BridgeBurn
         requestId = okuBridge.bridgeBurn(destinationChain, recipient, totalShares);
+
+        // Revoke any remaining approval
+        IERC20(address(okuUsd)).approve(address(okuBridge), 0);
 
         emit NativeBridgeInitiated(msg.sender, requestId, okuUsdAmount, destinationChain, recipient);
     }
@@ -239,7 +247,7 @@ contract OkuBridgeRouter is
         IERC20(address(wOkuUsd)).safeTransferFrom(msg.sender, address(this), wOkuUsdAmount);
         uint256 okuUsdAmount = wOkuUsd.redeem(wOkuUsdAmount, address(this), address(this));
 
-        okuUsd.burn(address(this), okuUsdAmount);
+        okuUsd.burn(okuUsdAmount);
         IBridgeAdapter(adapter).bridge(address(okuUsd), okuUsdAmount, destinationChain, recipient);
 
         emit BridgeInitiated(msg.sender, adapter, okuUsdAmount, destinationChain, recipient);
@@ -267,7 +275,7 @@ contract OkuBridgeRouter is
 
         IERC20(address(okuUsd)).safeTransferFrom(msg.sender, address(this), okuUsdAmount);
 
-        okuUsd.burn(address(this), okuUsdAmount);
+        okuUsd.burn(okuUsdAmount);
         IBridgeAdapter(adapter).bridge(address(okuUsd), okuUsdAmount, destinationChain, recipient);
 
         emit BridgeInitiated(msg.sender, adapter, okuUsdAmount, destinationChain, recipient);

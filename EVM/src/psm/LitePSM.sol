@@ -12,14 +12,9 @@ import {
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {RedemptionQueue} from "./RedemptionQueue.sol";
-
-interface IOkuUSD {
-    function mint(address to, uint256 amount) external;
-    function burn(address from, uint256 amount) external;
-    function balanceOf(address account) external view returns (uint256);
-    function totalSupply() external view returns (uint256);
-}
+import {IOkuUSD} from "../interfaces/IOkuUSD.sol";
 
 interface IAggregatorV3 {
     function latestRoundData()
@@ -136,45 +131,83 @@ contract LitePSM is
      * @param okuUsdAmount Amount of OkuUSD to redeem (18 decimals)
      */
     function redeem(uint256 okuUsdAmount) external whenNotPaused nonReentrant {
+        _redeem(msg.sender, okuUsdAmount);
+    }
+
+    /**
+     * @notice Redeem OkuUSD for USDC using EIP-2612 permit (single transaction)
+     * @param okuUsdAmount Amount of OkuUSD to redeem (18 decimals)
+     * @param deadline Permit deadline
+     * @param v Signature v
+     * @param r Signature r
+     * @param s Signature s
+     */
+    function redeemWithPermit(
+        uint256 okuUsdAmount,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    )
+        external
+        whenNotPaused
+        nonReentrant
+    {
+        IERC20Permit(address(okuUsd)).permit(msg.sender, address(this), okuUsdAmount, deadline, v, r, s);
+        _redeem(msg.sender, okuUsdAmount);
+    }
+
+    function _redeem(address user, uint256 okuUsdAmount) internal {
         require(okuUsdAmount > 0, "Amount must be positive");
 
         // Convert OkuUSD (18 decimals) to USDC amount (6 decimals)
         uint256 usdcAmount = okuUsdAmount / DECIMAL_MULTIPLIER;
         require(usdcAmount > 0, "Amount too small");
 
+        // Align OkuUSD amount to USDC precision to avoid truncation loss
+        // User keeps any sub-USDC dust
+        uint256 alignedOkuUsdAmount = usdcAmount * DECIMAL_MULTIPLIER;
+
         uint256 usdcBalance = usdc.balanceOf(address(this));
 
         if (usdcBalance >= usdcAmount) {
-            // Sufficient buffer - process immediately
-            okuUsd.burn(msg.sender, okuUsdAmount);
-            usdc.safeTransfer(msg.sender, usdcAmount);
-            emit Redeem(msg.sender, okuUsdAmount, usdcAmount);
+            // Sufficient buffer - transfer-then-burn (Circle model: self-burn only)
+            IERC20(address(okuUsd)).safeTransferFrom(user, address(this), alignedOkuUsdAmount);
+            okuUsd.burn(alignedOkuUsdAmount);
+            usdc.safeTransfer(user, usdcAmount);
+            emit Redeem(user, alignedOkuUsdAmount, usdcAmount);
         } else {
             // Insufficient buffer - queue redemption
-            // Pull OkuUSD from user to PSM (user approved PSM)
-            IERC20(address(okuUsd)).safeTransferFrom(msg.sender, address(this), okuUsdAmount);
+            // Pull aligned OkuUSD from user to PSM
+            IERC20(address(okuUsd)).safeTransferFrom(user, address(this), alignedOkuUsdAmount);
             // Transfer from PSM to queue, then record
-            IERC20(address(okuUsd)).safeTransfer(address(redemptionQueue), okuUsdAmount);
-            redemptionQueue.enqueue(msg.sender, okuUsdAmount);
+            IERC20(address(okuUsd)).safeTransfer(address(redemptionQueue), alignedOkuUsdAmount);
+            redemptionQueue.enqueue(user, alignedOkuUsdAmount);
         }
     }
 
     /**
      * @notice Process queued redemptions (called by operator when buffer refilled)
      * @param maxEntries Maximum number of queue entries to process
+     * @param approveAmount USDC amount to approve for processing (backend calculates by summing entries)
      */
-    function processQueue(uint256 maxEntries) external onlyRole(QUEUE_PROCESSOR) nonReentrant {
-        //approve our USDC balance to the redemption queue so we can fill the orders
-        uint256 balance = usdc.balanceOf(address(this));
-        usdc.approve(address(redemptionQueue), balance);
+    function processQueue(
+        uint256 maxEntries,
+        uint256 approveAmount
+    )
+        external
+        onlyRole(QUEUE_PROCESSOR)
+        nonReentrant
+    {
+        // Approve exact amount needed for queue processing
+        usdc.approve(address(redemptionQueue), approveAmount);
 
-        //process queue
+        // Process queue
         redemptionQueue.processQueue(maxEntries, address(usdc), address(okuUsd));
 
-        //revoke approval for remaining USDC
+        // Revoke approval for remaining USDC
         usdc.approve(address(redemptionQueue), 0);
 
-        //emit
         emit BufferRefilled(usdc.balanceOf(address(this)));
     }
 
@@ -221,8 +254,10 @@ contract LitePSM is
     }
 
     function withdrawUsdc(address to, uint256 amount) external onlyRole(BUFFER_WITHDRAWER) {
+        uint256 balance = usdc.balanceOf(address(this));
+        require(balance >= amount, "Insufficient USDC balance");
         uint256 queueObligation = redemptionQueue.totalQueuedUsdc();
-        require(usdc.balanceOf(address(this)) - amount >= queueObligation, "Would strand queue");
+        require(balance - amount >= queueObligation, "Would strand queue");
         usdc.safeTransfer(to, amount);
     }
 

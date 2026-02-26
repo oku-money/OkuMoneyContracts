@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+pragma solidity ^0.8.28;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {
     AccessControlUpgradeable
 } from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
@@ -13,16 +14,9 @@ import {
     EIP712Upgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-
-interface IOkuUSD {
-    function mint(address to, uint256 amount) external;
-    function burn(address from, uint256 amount) external;
-    function transfer(address to, uint256 amount) external returns (bool);
-    function sharesOf(address account) external view returns (uint256);
-    function sharesToTokens(uint256 shares) external view returns (uint256);
-    function tokensToShares(uint256 amount) external view returns (uint256);
-    function rewardMultiplier() external view returns (uint256);
-}
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IOkuUSD} from "../interfaces/IOkuUSD.sol";
 
 /**
  * @title OkuBridge
@@ -47,8 +41,10 @@ contract OkuBridge is
     AccessControlUpgradeable,
     PausableUpgradeable,
     ReentrancyGuard,
-    EIP712Upgradeable
+    EIP712Upgradeable,
+    UUPSUpgradeable
 {
+    using SafeERC20 for IERC20;
     // ============ State Variables ============
 
     /// @notice OkuUSD token contract
@@ -78,6 +74,12 @@ contract OkuBridge is
     /// @notice Processed request IDs (destination chain only)
     mapping(bytes32 => bool) public processedRequests;
 
+    /// @notice Refunded request IDs (prevents replay of refunds)
+    mapping(bytes32 => bool) public refundedRequests;
+
+    /// @notice Configurable bridge deadline for requests
+    uint256 public bridgeDeadline;
+
     // ============ Role Constants ============
 
     bytes32 public constant BRIDGE_SIGNER_MANAGER = keccak256("BRIDGE_SIGNER_MANAGER");
@@ -88,6 +90,7 @@ contract OkuBridge is
     bytes32 public constant BRIDGE_CHAIN_MANAGER = keccak256("BRIDGE_CHAIN_MANAGER");
     bytes32 public constant BRIDGE_LIMITS_MANAGER = keccak256("BRIDGE_LIMITS_MANAGER");
     bytes32 public constant BRIDGE_REFUND_ADMIN = keccak256("BRIDGE_REFUND_ADMIN");
+    bytes32 public constant BRIDGE_UPGRADER = keccak256("BRIDGE_UPGRADER");
 
     // ============ EIP-712 Constants ============
 
@@ -136,6 +139,7 @@ contract OkuBridge is
     event LimitsUpdated(uint256 minShares, uint256 maxShares);
     event NonceSkipped(uint256 indexed destChainId, uint256 skippedNonce);
     event RefundProcessed(bytes32 indexed requestId, address indexed recipient, uint256 shares);
+    event DeadlineUpdated(uint256 oldDeadline, uint256 newDeadline);
 
     // ============ Errors ============
 
@@ -149,6 +153,12 @@ contract OkuBridge is
     error ZeroAddress();
     error InvalidFee(uint256 fee);
     error InvalidLimits(uint256 min, uint256 max);
+    error AlreadyRefunded(bytes32 requestId);
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
 
     // ============ Initialization ============
 
@@ -185,6 +195,7 @@ contract OkuBridge is
         minBridgeShares = 1e18; // 1 share minimum
         maxBridgeShares = 1_000_000e18; // 1M shares maximum
         bridgeFee = 10; // 0.1% (10 basis points)
+        bridgeDeadline = 1 hours;
 
         // Grant all roles to admin
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
@@ -196,6 +207,7 @@ contract OkuBridge is
         _grantRole(BRIDGE_NONCE_ADMIN, _admin);
         _grantRole(BRIDGE_REFUND_ADMIN, _admin);
         _grantRole(BRIDGE_FEE_MANAGER, _admin);
+        _grantRole(BRIDGE_UPGRADER, _admin);
 
         // Configure common chains
         supportedChains[1] = true; // Ethereum
@@ -223,6 +235,9 @@ contract OkuBridge is
         nonReentrant
         returns (bytes32 requestId)
     {
+        // Validate recipient
+        if (recipient == address(0)) revert ZeroAddress();
+
         // Validate destination chain
         if (!supportedChains[destChainId]) {
             revert UnsupportedChain(destChainId);
@@ -241,8 +256,10 @@ contract OkuBridge is
         // Net shares the recipient will receive on destination
         uint256 netShares = shares - feeShares;
 
-        // Burn the full input from user (OkuUSD.burn takes token amount)
-        okuUsd.burn(msg.sender, okuUsd.sharesToTokens(shares));
+        // Transfer tokens from caller, then self-burn (Circle model: burn only own tokens)
+        uint256 burnTokenAmount = okuUsd.sharesToTokens(shares);
+        IERC20(address(okuUsd)).safeTransferFrom(msg.sender, address(this), burnTokenAmount);
+        okuUsd.burn(burnTokenAmount);
 
         // Mint fee to fee recipient (OkuUSD.mint takes token amount)
         if (feeShares > 0) {
@@ -261,7 +278,7 @@ contract OkuBridge is
             recipient: recipient,
             shares: netShares,
             nonce: nonce,
-            deadline: block.timestamp + 1 hours // Default 1 hour deadline
+            deadline: block.timestamp + bridgeDeadline
         });
 
         // Calculate request ID
@@ -368,8 +385,15 @@ contract OkuBridge is
         // Calculate request ID
         bytes32 requestId = keccak256(abi.encode(request));
 
+        // Prevent refund replay
+        if (refundedRequests[requestId]) revert AlreadyRefunded(requestId);
+        refundedRequests[requestId] = true;
+
         // Admin role check is sufficient authorization for refunds
         // proof parameter reserved for future on-chain verification
+        // NOTE: The orchestrator MUST NOT sign a bridgeMint for any refunded request.
+        // This cross-chain invariant cannot be enforced on-chain since source and
+        // destination are different chains.
 
         // Convert shares to tokens and mint back to original sender
         uint256 tokensToMint = okuUsd.sharesToTokens(request.shares);
@@ -444,6 +468,17 @@ contract OkuBridge is
     }
 
     /**
+     * @notice Update the bridge deadline for new requests
+     * @param newDeadline New deadline duration in seconds
+     */
+    function updateDeadline(uint256 newDeadline) external onlyRole(BRIDGE_LIMITS_MANAGER) {
+        require(newDeadline > 0, "Deadline must be positive");
+        uint256 oldDeadline = bridgeDeadline;
+        bridgeDeadline = newDeadline;
+        emit DeadlineUpdated(oldDeadline, newDeadline);
+    }
+
+    /**
      * @notice Pause the bridge
      */
     function pause() external onlyRole(BRIDGE_PAUSER) {
@@ -456,6 +491,10 @@ contract OkuBridge is
     function unpause() external onlyRole(BRIDGE_UNPAUSER) {
         _unpause();
     }
+
+    // ============ Upgradeability ============
+
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(BRIDGE_UPGRADER) {}
 
     // ============ View Functions ============
 

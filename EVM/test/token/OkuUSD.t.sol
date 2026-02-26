@@ -152,33 +152,34 @@ contract OkuUSDTest is BaseTest {
                 IAccessControl.AccessControlUnauthorizedAccount.selector, user1, MINTER
             )
         );
-        okuUsd.burn(user1, 50e18);
+        okuUsd.burn(50e18);
     }
 
     function test_Burn_DecreasesBalance() public {
-        _mintOkuUsd(user1, 100e18);
+        // Mint to minter so it can self-burn
+        _mintOkuUsd(minter, 100e18);
 
         vm.prank(minter);
-        okuUsd.burn(user1, 40e18);
+        okuUsd.burn(40e18);
 
-        assertEq(okuUsd.balanceOf(user1), 60e18);
+        assertEq(okuUsd.balanceOf(minter), 60e18);
     }
 
     function test_Burn_DecreasesShares() public {
-        _mintOkuUsd(user1, 100e18);
-        uint256 sharesBefore = okuUsd.sharesOf(user1);
+        _mintOkuUsd(minter, 100e18);
+        uint256 sharesBefore = okuUsd.sharesOf(minter);
 
         vm.prank(minter);
-        okuUsd.burn(user1, 40e18);
+        okuUsd.burn(40e18);
 
-        assertEq(okuUsd.sharesOf(user1), sharesBefore - _tokensToShares(40e18));
+        assertEq(okuUsd.sharesOf(minter), sharesBefore - _tokensToShares(40e18));
     }
 
     function test_Burn_DecreasesTotalSupply() public {
-        _mintOkuUsd(user1, 100e18);
+        _mintOkuUsd(minter, 100e18);
 
         vm.prank(minter);
-        okuUsd.burn(user1, 40e18);
+        okuUsd.burn(40e18);
 
         assertEq(okuUsd.totalSupply(), 60e18);
     }
@@ -187,11 +188,11 @@ contract OkuUSDTest is BaseTest {
         uint256 amount = 100e18;
         uint256 allowanceBefore = okuUsd.minterAllowance(minter);
 
-        _mintOkuUsd(user1, amount);
+        _mintOkuUsd(minter, amount);
         uint256 allowanceAfterMint = okuUsd.minterAllowance(minter);
 
         vm.prank(minter);
-        okuUsd.burn(user1, amount);
+        okuUsd.burn(amount);
 
         // Allowance should NOT be restored after burn
         assertEq(okuUsd.minterAllowance(minter), allowanceAfterMint);
@@ -199,45 +200,45 @@ contract OkuUSDTest is BaseTest {
     }
 
     function test_Burn_RevertsInsufficientBalance() public {
-        _mintOkuUsd(user1, 100e18);
+        _mintOkuUsd(minter, 100e18);
 
         vm.prank(minter);
         vm.expectRevert("Insufficient balance");
-        okuUsd.burn(user1, 150e18);
+        okuUsd.burn(150e18);
     }
 
     function test_Burn_RevertsForBlacklistedAccount() public {
-        _mintOkuUsd(user1, 100e18);
+        _mintOkuUsd(minter, 100e18);
 
         vm.prank(blacklister);
-        okuUsd.blacklist(user1);
+        okuUsd.blacklist(minter);
 
         vm.prank(minter);
         vm.expectRevert("Account blacklisted");
-        okuUsd.burn(user1, 50e18);
+        okuUsd.burn(50e18);
     }
 
     function test_Burn_WorksWhenPaused() public {
-        _mintOkuUsd(user1, 100e18);
+        _mintOkuUsd(minter, 100e18);
 
         vm.prank(pauser);
         okuUsd.pause();
 
         // Burn should work when paused (no whenNotPaused modifier)
         vm.prank(minter);
-        okuUsd.burn(user1, 50e18);
+        okuUsd.burn(50e18);
 
-        assertEq(okuUsd.balanceOf(user1), 50e18);
+        assertEq(okuUsd.balanceOf(minter), 50e18);
     }
 
     function test_Burn_EmitsTransferEvent() public {
-        _mintOkuUsd(user1, 100e18);
+        _mintOkuUsd(minter, 100e18);
 
         vm.expectEmit(true, true, false, true);
-        emit Transfer(user1, address(0), 50e18);
+        emit Transfer(minter, address(0), 50e18);
 
         vm.prank(minter);
-        okuUsd.burn(user1, 50e18);
+        okuUsd.burn(50e18);
     }
 
     // ============ Transfer Tests ============

@@ -45,6 +45,7 @@ describe("OkuBridge E2E", function () {
     await okuUSD.waitForDeployment();
 
     // Deploy OkuBridge with UUPS proxy
+    // OZ v5 ReentrancyGuard is @custom:stateless (ERC-7201 namespaced slot) — safe for proxies
     okuBridge = (await upgrades.deployProxy(
       new OkuBridge__factory(admin),
       [
@@ -53,7 +54,7 @@ describe("OkuBridge E2E", function () {
         feeRecipient.address,
         admin.address,
       ],
-      { kind: "uups" }
+      { kind: "uups", unsafeAllow: ["constructor"] }
     )) as unknown as OkuBridge;
     await okuBridge.waitForDeployment();
 

@@ -7,6 +7,8 @@ import {OkuBridgeRouter} from "../../src/bridge/OkuBridgeRouter.sol";
 import {NttAdapter} from "../../src/bridge/adapters/NttAdapter.sol";
 import {MockNttManager} from "../mocks/MockNttManager.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 
 /**
  * @title NttBridgeTest
@@ -56,6 +58,7 @@ contract NttBridgeTest is BaseTest {
         uint64 sequence
     );
     event TransferCompleted(uint256 index, address recipient, uint256 amount);
+    event ChainIdConfigured(uint256 evmChainId, uint16 wormholeChainId);
 
     function setUp() public override {
         super.setUp();
@@ -653,5 +656,59 @@ contract NttBridgeTest is BaseTest {
 
         assertEq(okuUsd.balanceOf(recipient), amount);
         assertEq(okuUsd.balanceOf(address(nttAdapter)), 0);
+    }
+
+    // ============ NttAdapter Role Enforcement ============
+
+    function test_NttAdapter_WithdrawTokens_RevertIfNotOwner() public {
+        _mintOkuUsd(address(nttAdapter), 1000e18);
+
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, user1));
+        nttAdapter.withdrawTokens(address(okuUsd), user1, 1000e18);
+    }
+
+    function test_NttAdapter_WithdrawEth_RevertIfNotOwner() public {
+        vm.deal(address(nttAdapter), 1 ether);
+
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, user1));
+        nttAdapter.withdrawEth(payable(user1));
+    }
+
+    function test_NttAdapter_ConfigureChainId_EmitsEvent() public {
+        uint256 newChainId = 999;
+        uint16 newWormholeId = 99;
+
+        vm.expectEmit(false, false, false, true, address(nttAdapter));
+        emit ChainIdConfigured(newChainId, newWormholeId);
+
+        vm.prank(admin);
+        nttAdapter.configureChainId(newChainId, newWormholeId);
+    }
+
+    // ============ RedemptionQueue UUPS Upgrade ============
+
+    function test_UUPS_UpgradeRedemptionQueue() public {
+        RedemptionQueue newImpl = new RedemptionQueue();
+
+        vm.prank(admin);
+        redemptionQueue.upgradeToAndCall(address(newImpl), "");
+
+        // State preserved
+        assertEq(address(redemptionQueue.okuUsd()), address(okuUsd));
+    }
+
+    function test_UUPS_UpgradeRedemptionQueue_RevertNotUpgrader() public {
+        RedemptionQueue newImpl = new RedemptionQueue();
+
+        vm.prank(user1);
+        bytes32 QUEUE_UPGRADER = keccak256("UPGRADER");
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, QUEUE_UPGRADER
+            )
+        );
+        redemptionQueue.upgradeToAndCall(address(newImpl), "");
     }
 }

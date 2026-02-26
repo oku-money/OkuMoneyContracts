@@ -110,7 +110,7 @@ describe("Bridge Security Tests", () => {
     sourceChainId: number;
     destinationChainId: number;
     sender: Uint8Array; // 20 bytes (EVM) or 32 bytes (Solana)
-    recipientAta: PublicKey; // 32 bytes - recipient's OkuUSD ATA address
+    recipientWallet: PublicKey; // 32 bytes - recipient's wallet pubkey (not ATA)
     amount: bigint;
     nonce: bigint;
     deadline: bigint;
@@ -130,8 +130,8 @@ describe("Bridge Security Tests", () => {
     message.set(sender, offset);
     offset += 20;
 
-    // recipient ATA (EXACTLY 32 bytes)
-    const recipientBytes = params.recipientAta.toBytes();
+    // recipient wallet pubkey (EXACTLY 32 bytes)
+    const recipientBytes = params.recipientWallet.toBytes();
     if (recipientBytes.length !== 32) {
       throw new Error(`Recipient must be 32 bytes, got ${recipientBytes.length}`);
     }
@@ -168,14 +168,14 @@ describe("Bridge Security Tests", () => {
 
   /**
    * Create bridge mint transaction with Ed25519 verification
-   * CRITICAL: recipientAta parameter must match what was used in message signing
+   * CRITICAL: recipientWallet is the wallet pubkey (Fix 3: matches ATA owner, not ATA address)
    */
   async function createBridgeMintTx(params: {
     program: Program<LitePsm>;
     message: Buffer;
     signature: Uint8Array;
     orchestrator: Keypair;
-    recipientAta: PublicKey; // The EXACT ATA used in message signing
+    recipientWallet: PublicKey; // Wallet pubkey — ATA is derived from this
     payer: Keypair;
     requestId: Uint8Array;
   }): Promise<Transaction> {
@@ -193,11 +193,16 @@ describe("Bridge Security Tests", () => {
       params.program.programId
     );
 
+    // Derive recipient's OkuUSD ATA from wallet pubkey
+    const recipientAta = getAssociatedTokenAddressSync(
+      okusdMint, params.recipientWallet, true, TOKEN_2022_PROGRAM_ID
+    );
+
     // Verify the recipient ATA exists
     try {
-      await getAccount(provider.connection, params.recipientAta, undefined, TOKEN_2022_PROGRAM_ID);
+      await getAccount(provider.connection, recipientAta, undefined, TOKEN_2022_PROGRAM_ID);
     } catch {
-      throw new Error(`Recipient ATA ${params.recipientAta.toString()} does not exist. Create it in the test setup.`);
+      throw new Error(`Recipient ATA ${recipientAta.toString()} does not exist. Create it in the test setup.`);
     }
 
     // Bridge mint instruction - pass message_bytes, signature, and request_id
@@ -213,7 +218,7 @@ describe("Bridge Security Tests", () => {
         config: configPda,
         processedRequest: processedRequestPda,
         okusdMint: okusdMint,
-        recipientOkusdAta: params.recipientAta,
+        recipientOkusdAta: recipientAta,
         instructionSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
@@ -555,7 +560,7 @@ describe("Bridge Security Tests", () => {
       sourceChainId: ETH_CHAIN_ID,
       destinationChainId: SOLANA_CHAIN_ID,
       sender: userSender,
-      recipientAta: userOkusdAta,
+      recipientWallet: user.publicKey,
       amount: userMintAmount,
       nonce: userNonce,
       deadline: userDeadline,
@@ -569,7 +574,7 @@ describe("Bridge Security Tests", () => {
       message: userMessage,
       signature: userSignature,
       orchestrator,
-      recipientAta: userOkusdAta,
+      recipientWallet: user.publicKey,
       payer,
       requestId: userRequestId,
     });
@@ -582,7 +587,7 @@ describe("Bridge Security Tests", () => {
       sourceChainId: ETH_CHAIN_ID,
       destinationChainId: SOLANA_CHAIN_ID,
       sender: userSender,
-      recipientAta: user2OkusdAta,
+      recipientWallet: user2.publicKey,
       amount: userMintAmount,
       nonce: user2Nonce,
       deadline: userDeadline,
@@ -596,7 +601,7 @@ describe("Bridge Security Tests", () => {
       message: user2Message,
       signature: user2Signature,
       orchestrator,
-      recipientAta: user2OkusdAta,
+      recipientWallet: user2.publicKey,
       payer,
       requestId: user2RequestId,
     });
@@ -721,7 +726,7 @@ describe("Bridge Security Tests", () => {
         sourceChainId: ETH_CHAIN_ID,
         destinationChainId: SOLANA_CHAIN_ID,
         sender: evmSender,
-        recipientAta: userOkusdAta,
+        recipientWallet: user.publicKey,
         amount,
         nonce,
         deadline: validDeadline,
@@ -735,7 +740,7 @@ describe("Bridge Security Tests", () => {
         message,
         signature,
         orchestrator,
-        recipientAta: userOkusdAta,
+        recipientWallet: user.publicKey,
         payer,
         requestId,
       });
@@ -759,7 +764,7 @@ describe("Bridge Security Tests", () => {
         sourceChainId: ETH_CHAIN_ID,
         destinationChainId: SOLANA_CHAIN_ID,
         sender: evmSender,
-        recipientAta: user2OkusdAta,
+        recipientWallet: user2.publicKey,
         amount,
         nonce: 1n,
         deadline: validDeadline,
@@ -774,7 +779,7 @@ describe("Bridge Security Tests", () => {
         message,
         signature,
         orchestrator, // Correct orchestrator in accounts, but wrong signature
-        recipientAta: user2OkusdAta,
+        recipientWallet: user2.publicKey,
         payer,
         requestId,
       });
@@ -793,7 +798,7 @@ describe("Bridge Security Tests", () => {
         sourceChainId: ETH_CHAIN_ID,
         destinationChainId: SOLANA_CHAIN_ID,
         sender: evmSender,
-        recipientAta: user2OkusdAta,
+        recipientWallet: user2.publicKey,
         amount,
         nonce: 2n,
         deadline: expiredDeadline,
@@ -807,7 +812,7 @@ describe("Bridge Security Tests", () => {
         message,
         signature,
         orchestrator,
-        recipientAta: user2OkusdAta,
+        recipientWallet: user2.publicKey,
         payer,
         requestId,
       });
@@ -823,7 +828,7 @@ describe("Bridge Security Tests", () => {
         sourceChainId: ETH_CHAIN_ID,
         destinationChainId: SOLANA_CHAIN_ID,
         sender: evmSender,
-        recipientAta: user2OkusdAta,
+        recipientWallet: user2.publicKey,
         amount,
         nonce: 3n,
         deadline: validDeadline,
@@ -837,7 +842,7 @@ describe("Bridge Security Tests", () => {
         message,
         signature,
         orchestrator,
-        recipientAta: user2OkusdAta,
+        recipientWallet: user2.publicKey,
         payer,
         requestId: wrongRequestId, // Wrong request ID
       });
@@ -867,7 +872,7 @@ describe("Bridge Security Tests", () => {
         sourceChainId: ETH_CHAIN_ID,
         destinationChainId: SOLANA_CHAIN_ID,
         sender: evmSender,
-        recipientAta: userOkusdAta,
+        recipientWallet: user.publicKey,
         amount,
         nonce,
         deadline: validDeadline,
@@ -881,7 +886,7 @@ describe("Bridge Security Tests", () => {
         message,
         signature,
         orchestrator,
-        recipientAta: userOkusdAta,
+        recipientWallet: user.publicKey,
         payer,
         requestId,
       });
@@ -895,7 +900,7 @@ describe("Bridge Security Tests", () => {
         message,
         signature,
         orchestrator,
-        recipientAta: userOkusdAta,
+        recipientWallet: user.publicKey,
         payer,
         requestId,
       });
@@ -916,7 +921,7 @@ describe("Bridge Security Tests", () => {
         sourceChainId: ETH_CHAIN_ID,
         destinationChainId: SOLANA_CHAIN_ID,
         sender: evmSender,
-        recipientAta: userOkusdAta,
+        recipientWallet: user.publicKey,
         amount: amount1,
         nonce: nonce1,
         deadline: validDeadline,
@@ -926,7 +931,7 @@ describe("Bridge Security Tests", () => {
         sourceChainId: ETH_CHAIN_ID,
         destinationChainId: SOLANA_CHAIN_ID,
         sender: evmSender,
-        recipientAta: userOkusdAta,
+        recipientWallet: user.publicKey,
         amount: amount2,
         nonce: nonce2,
         deadline: validDeadline,
@@ -948,7 +953,7 @@ describe("Bridge Security Tests", () => {
         message: message1,
         signature: signature1,
         orchestrator,
-        recipientAta: userOkusdAta,
+        recipientWallet: user.publicKey,
         payer,
         requestId: requestId1,
       });
@@ -958,7 +963,7 @@ describe("Bridge Security Tests", () => {
         message: message2,
         signature: signature2,
         orchestrator,
-        recipientAta: userOkusdAta,
+        recipientWallet: user.publicKey,
         payer,
         requestId: requestId2,
       });
@@ -1201,6 +1206,32 @@ describe("Bridge Security Tests", () => {
             .signers([unauthorizedUser])
             .rpc(),
         "Unauthorized"
+      );
+    });
+
+    it("rejects skip_nonce with backward nonce", async () => {
+      const [noncePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_nonce"), Buffer.from([ETH_CHAIN_ID, 0])],
+        program.programId
+      );
+
+      // Read current nonce (should be 1000 from the earlier skip)
+      const currentNonce = await program.account.bridgeNonce.fetch(noncePda);
+      const backwardNonce = currentNonce.nextNonce.toNumber() - 1;
+
+      await expectError(
+        () =>
+          program.methods
+            .skipNonce(ETH_CHAIN_ID, new BN(backwardNonce))
+            .accountsPartial({
+              nonceAdmin: nonceAdmin.publicKey,
+              bridgeConfig: bridgeConfigPda,
+              bridgeNonce: noncePda,
+              systemProgram: SystemProgram.programId,
+            })
+            .signers([nonceAdmin])
+            .rpc(),
+        "BelowMinimum"
       );
     });
   });
@@ -1719,7 +1750,7 @@ describe("Bridge Security Tests", () => {
         sourceChainId: ETH_CHAIN_ID,
         destinationChainId: SOLANA_CHAIN_ID,
         sender: evmSender,
-        recipientAta: user2OkusdAta,
+        recipientWallet: user2.publicKey,
         amount,
         nonce,
         deadline: validDeadline,
@@ -1733,7 +1764,7 @@ describe("Bridge Security Tests", () => {
         message,
         signature,
         orchestrator,
-        recipientAta: user2OkusdAta,
+        recipientWallet: user2.publicKey,
         payer,
         requestId,
       });
@@ -2153,7 +2184,7 @@ describe("Bridge Security Tests", () => {
         sourceChainId: destChain, // EVM is source for return trip
         destinationChainId: sourceChain, // Solana is destination
         sender: evmRecipient,
-        recipientAta: userOkusdAta, // Use recipient's OkuUSD ATA
+        recipientWallet: user.publicKey, // Recipient's wallet pubkey
         amount: netAmount, // Net amount after fee deduction
         nonce: BigInt(usedNonce),
         deadline,
@@ -2175,7 +2206,7 @@ describe("Bridge Security Tests", () => {
         message,
         signature,
         orchestrator,
-        recipientAta: userOkusdAta,
+        recipientWallet: user.publicKey,
         payer,
         requestId,
       });

@@ -5,6 +5,10 @@ use anchor_spl::{
     token_2022::Token2022,
     token_interface::{self, Mint as MintInterface, TokenAccount as TokenAccountInterface},
 };
+use anchor_spl::token_2022::spl_token_2022::{
+    extension::{interest_bearing_mint::InterestBearingConfig, BaseStateWithExtensions, StateWithExtensions},
+    state::Mint as SplMint,
+};
 
 pub mod errors;
 pub mod state;
@@ -13,6 +17,85 @@ use errors::VaultError;
 use state::VaultConfig;
 
 declare_id!("BjjK75Vxj6zsC49qYfcVYFPLqyXXkcaFzacTXwohmfVC");
+
+/// Dead shares permanently locked in an ATA owned by the System Program.
+/// Nobody holds the System Program's private key, so the tokens are unrecoverable.
+const MINIMUM_LIQUIDITY: u64 = 1_000_000; // 10^6 = 1 OkuUSD (6 decimals)
+
+/// Seconds per year used by Token-2022's InterestBearing extension (365.24 days).
+const SECONDS_PER_YEAR: f64 = 31_556_736.0;
+
+/// Basis points denominator used by Token-2022's InterestBearing extension.
+const BPS_DENOMINATOR: f64 = 10_000.0;
+
+/// Compute the interest-adjusted balance for a Token-2022 account with an
+/// InterestBearing extension.  Uses the same continuous-compounding formula as
+/// Token-2022 so that vault share math matches the balance wallets display:
+///
+///   adjusted = raw_amount × e^(r1 × t1 / (10000 × 31556736))
+///                         × e^(r2 × t2 / (10000 × 31556736))
+///
+/// where r1 = pre_update_average_rate, t1 = time from init to last rate change,
+///       r2 = current_rate, t2 = time from last rate change to now.
+///
+/// Falls back to `raw_amount` if the mint has no InterestBearing extension.
+fn compute_interest_adjusted_balance(
+    raw_amount: u64,
+    mint_account_info: &AccountInfo,
+    unix_timestamp: i64,
+) -> Result<u64> {
+    if raw_amount == 0 {
+        return Ok(0);
+    }
+
+    let mint_data = mint_account_info.data.borrow();
+    let mint_state = StateWithExtensions::<SplMint>::unpack(&mint_data)
+        .map_err(|_| VaultError::InvalidMintExtension)?;
+
+    let interest_config = match mint_state.get_extension::<InterestBearingConfig>() {
+        Ok(cfg) => cfg,
+        Err(_) => return Ok(raw_amount), // No extension — return raw
+    };
+
+    let init_ts = i64::from(interest_config.initialization_timestamp) as f64;
+    let last_update_ts = i64::from(interest_config.last_update_timestamp) as f64;
+    let pre_rate = i16::from(interest_config.pre_update_average_rate) as f64;
+    let cur_rate = i16::from(interest_config.current_rate) as f64;
+    let now = unix_timestamp as f64;
+
+    // Time intervals
+    let t1 = (last_update_ts - init_ts).max(0.0);
+    let t2 = (now - last_update_ts).max(0.0);
+
+    let exp1 = (pre_rate * t1 / (BPS_DENOMINATOR * SECONDS_PER_YEAR)).exp();
+    let exp2 = (cur_rate * t2 / (BPS_DENOMINATOR * SECONDS_PER_YEAR)).exp();
+
+    // Guard: f64 can only represent integers exactly up to 2^53
+    if raw_amount > (1u64 << 53) {
+        return Err(VaultError::Overflow.into());
+    }
+
+    let adjusted = (raw_amount as f64) * exp1 * exp2;
+
+    // Guard against NaN / Infinity from corrupted clock or rate data
+    if !adjusted.is_finite() {
+        return Err(VaultError::InvalidMintExtension.into());
+    }
+
+    // Guard: result must fit in u64
+    if adjusted > u64::MAX as f64 {
+        return Err(VaultError::Overflow.into());
+    }
+
+    let result = adjusted.floor() as u64;
+
+    // Sanity: if rates are non-negative the adjusted value should be >= raw
+    if cur_rate >= 0.0 && pre_rate >= 0.0 && result < raw_amount {
+        return Ok(raw_amount);
+    }
+
+    Ok(result)
+}
 
 #[program]
 pub mod wokusd_vault {
@@ -48,32 +131,31 @@ pub mod wokusd_vault {
     }
 
     /// Wrap OkuUSD -> wOkuUSD
-    /// Transfers OkuUSD from user to vault, mints wOkuUSD shares to user
+    /// Transfers OkuUSD from user to vault, mints wOkuUSD shares to user.
+    ///
+    /// First deposit: subtracts MINIMUM_LIQUIDITY dead shares to prevent
+    /// inflation attacks. `dead_shares_ata` (optional account) must be provided
+    /// on the first deposit — it receives the permanently-locked dead shares.
     pub fn wrap(ctx: Context<Wrap>, okusd_amount: u64) -> Result<()> {
         // Read state first (immutable borrows)
         let is_paused = ctx.accounts.config.is_paused;
-        let total_shares = ctx.accounts.config.total_shares;
+        // Use on-chain mint supply as canonical source of truth for share calculations
+        let total_shares = ctx.accounts.wokusd_mint.supply;
         let bump = ctx.accounts.config.bump;
-        let vault_balance = ctx.accounts.vault_okusd.amount;
+        let raw_vault_balance = ctx.accounts.vault_okusd.amount;
         let decimals = ctx.accounts.okusd_mint.decimals;
 
         require!(!is_paused, VaultError::Paused);
         require!(okusd_amount > 0, VaultError::ZeroAmount);
 
-        // Calculate shares to mint
-        // First deposit: 1:1 ratio
-        // Subsequent: shares = okusd_amount * total_shares / vault_balance
-        let shares = if total_shares == 0 {
-            okusd_amount
-        } else {
-            okusd_amount
-                .checked_mul(total_shares)
-                .ok_or(VaultError::Overflow)?
-                .checked_div(vault_balance)
-                .ok_or(VaultError::Overflow)?
-        };
-
-        require!(shares > 0, VaultError::ZeroAmount);
+        // Compute interest-adjusted vault balance
+        let clock = Clock::get()?;
+        let mint_info = ctx.accounts.okusd_mint.to_account_info();
+        let adjusted_vault_balance = compute_interest_adjusted_balance(
+            raw_vault_balance,
+            &mint_info,
+            clock.unix_timestamp,
+        )?;
 
         // Clone account infos for CPI reuse
         let okusd_mint_info = ctx.accounts.okusd_mint.to_account_info();
@@ -96,34 +178,100 @@ pub mod wokusd_vault {
             decimals,
         )?;
 
-        // Mint wOkuUSD shares to user (standard SPL)
         let seeds = &[VaultConfig::SEED, &[bump]];
         let signer = &[&seeds[..]];
 
-        anchor_spl::token::mint_to(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                anchor_spl::token::MintTo {
-                    mint: ctx.accounts.wokusd_mint.to_account_info(),
-                    to: ctx.accounts.user_wokusd_ata.to_account_info(),
-                    authority: ctx.accounts.config.to_account_info(),
-                },
-                signer,
-            ),
-            shares,
-        )?;
+        if total_shares == 0 {
+            // First deposit — enforce minimum liquidity and mint dead shares
+            require!(okusd_amount > MINIMUM_LIQUIDITY, VaultError::MinimumLiquidity);
 
-        // Update total shares (mutable borrow now)
-        let config = &mut ctx.accounts.config;
-        config.total_shares = total_shares
-            .checked_add(shares)
-            .ok_or(VaultError::Overflow)?;
+            let user_shares = okusd_amount
+                .checked_sub(MINIMUM_LIQUIDITY)
+                .ok_or(VaultError::Overflow)?;
 
-        emit!(WrapEvent {
-            user: ctx.accounts.user.key(),
-            okusd_amount,
-            shares_minted: shares,
-        });
+            let dead_ata = ctx.accounts.dead_shares_ata
+                .as_ref()
+                .ok_or(VaultError::MinimumLiquidity)?;
+
+            // Verify the dead ATA is for the correct mint (wOkuUSD)
+            require!(dead_ata.mint == ctx.accounts.wokusd_mint.key(), VaultError::MinimumLiquidity);
+
+            // Verify the dead ATA is owned by the System Program (truly unrecoverable)
+            require!(dead_ata.owner == anchor_lang::system_program::ID, VaultError::MinimumLiquidity);
+
+            // Mint user shares
+            anchor_spl::token::mint_to(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    anchor_spl::token::MintTo {
+                        mint: ctx.accounts.wokusd_mint.to_account_info(),
+                        to: ctx.accounts.user_wokusd_ata.to_account_info(),
+                        authority: ctx.accounts.config.to_account_info(),
+                    },
+                    signer,
+                ),
+                user_shares,
+            )?;
+
+            // Mint dead shares (permanently locked)
+            anchor_spl::token::mint_to(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    anchor_spl::token::MintTo {
+                        mint: ctx.accounts.wokusd_mint.to_account_info(),
+                        to: dead_ata.to_account_info(),
+                        authority: ctx.accounts.config.to_account_info(),
+                    },
+                    signer,
+                ),
+                MINIMUM_LIQUIDITY,
+            )?;
+
+            // total_shares = user_shares + dead shares = okusd_amount
+            let config = &mut ctx.accounts.config;
+            config.total_shares = okusd_amount;
+
+            emit!(WrapEvent {
+                user: ctx.accounts.user.key(),
+                okusd_amount,
+                shares_minted: user_shares,
+            });
+        } else {
+            // Subsequent deposits — proportional shares using u128 to prevent overflow
+            let shares = (okusd_amount as u128)
+                .checked_mul(total_shares as u128)
+                .ok_or(VaultError::Overflow)?
+                .checked_div(adjusted_vault_balance as u128)
+                .ok_or(VaultError::Overflow)? as u64;
+
+            require!(shares > 0, VaultError::ZeroAmount);
+
+            // Mint wOkuUSD shares to user (standard SPL)
+            anchor_spl::token::mint_to(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    anchor_spl::token::MintTo {
+                        mint: ctx.accounts.wokusd_mint.to_account_info(),
+                        to: ctx.accounts.user_wokusd_ata.to_account_info(),
+                        authority: ctx.accounts.config.to_account_info(),
+                    },
+                    signer,
+                ),
+                shares,
+            )?;
+
+            // Update total shares (mutable borrow now)
+            let config = &mut ctx.accounts.config;
+            config.total_shares = total_shares
+                .checked_add(shares)
+                .ok_or(VaultError::Overflow)?;
+
+            emit!(WrapEvent {
+                user: ctx.accounts.user.key(),
+                okusd_amount,
+                shares_minted: shares,
+            });
+        }
 
         Ok(())
     }
@@ -133,23 +281,37 @@ pub mod wokusd_vault {
     /// NOTE: Unwrap always allowed even when paused - users must always be able to exit
     pub fn unwrap(ctx: Context<Unwrap>, shares: u64) -> Result<()> {
         // Read state first (immutable borrows)
-        let total_shares = ctx.accounts.config.total_shares;
+        // Use on-chain mint supply as canonical source of truth for share calculations
+        let total_shares = ctx.accounts.wokusd_mint.supply;
         let bump = ctx.accounts.config.bump;
-        let vault_balance = ctx.accounts.vault_okusd.amount;
+        let raw_vault_balance = ctx.accounts.vault_okusd.amount;
         let decimals = ctx.accounts.okusd_mint.decimals;
 
         require!(shares > 0, VaultError::ZeroAmount);
         require!(shares <= total_shares, VaultError::InsufficientShares);
 
-        // Calculate OkuUSD to return
-        // okusd_out = shares * vault_balance / total_shares
-        let okusd_out = shares
-            .checked_mul(vault_balance)
+        // Compute interest-adjusted vault balance
+        let clock = Clock::get()?;
+        let mint_info = ctx.accounts.okusd_mint.to_account_info();
+        let adjusted_vault_balance = compute_interest_adjusted_balance(
+            raw_vault_balance,
+            &mint_info,
+            clock.unix_timestamp,
+        )?;
+
+        // Calculate OkuUSD to return using adjusted balance (u128 intermediaries)
+        let okusd_out = (shares as u128)
+            .checked_mul(adjusted_vault_balance as u128)
             .ok_or(VaultError::Overflow)?
-            .checked_div(total_shares)
-            .ok_or(VaultError::Overflow)?;
+            .checked_div(total_shares as u128)
+            .ok_or(VaultError::Overflow)? as u64;
 
         require!(okusd_out > 0, VaultError::ZeroAmount);
+
+        // Safety: revert if the adjusted payout exceeds raw balance.
+        // Orchestrator must top up the vault with additional OkuUSD to cover interest.
+        // Off-chain monitoring should watch for failed unwraps to trigger top-ups.
+        require!(okusd_out <= raw_vault_balance, VaultError::InsufficientVaultBalance);
 
         // Clone account infos for CPI reuse
         let okusd_mint_info = ctx.accounts.okusd_mint.to_account_info();
@@ -210,7 +372,7 @@ pub mod wokusd_vault {
         config.is_paused = true;
 
         emit!(PauseEvent {
-            role_admin: ctx.accounts.pauser.key(),
+            pauser: ctx.accounts.pauser.key(),
             paused: true,
         });
 
@@ -236,6 +398,8 @@ pub mod wokusd_vault {
         role: AuthorityRole,
         new_authority: Pubkey,
     ) -> Result<()> {
+        require!(new_authority != Pubkey::default(), VaultError::Unauthorized);
+
         let config = &mut ctx.accounts.config;
         let old_authority = match role {
             AuthorityRole::RoleAdmin => {
@@ -360,10 +524,9 @@ pub struct Wrap<'info> {
     )]
     pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// User's wOkuUSD token account
+    /// User's wOkuUSD token account (must be pre-created by frontend)
     #[account(
-        init_if_needed,
-        payer = user,
+        mut,
         associated_token::mint = wokusd_mint,
         associated_token::authority = user,
         associated_token::token_program = token_program,
@@ -376,6 +539,12 @@ pub struct Wrap<'info> {
         address = config.vault_okusd
     )]
     pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    /// Dead shares ATA — only required on the first deposit (total_shares == 0).
+    /// This is a wOkuUSD ATA owned by a known dead address (System Program)
+    /// where MINIMUM_LIQUIDITY shares are permanently locked.
+    #[account(mut)]
+    pub dead_shares_ata: Option<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -409,10 +578,9 @@ pub struct Unwrap<'info> {
     )]
     pub wokusd_mint: Box<Account<'info, Mint>>,
 
-    /// User's OkuUSD token account
+    /// User's OkuUSD token account (must be pre-created by frontend)
     #[account(
-        init_if_needed,
-        payer = user,
+        mut,
         associated_token::mint = okusd_mint,
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
@@ -515,7 +683,7 @@ pub struct UnwrapEvent {
 
 #[event]
 pub struct PauseEvent {
-    pub role_admin: Pubkey,
+    pub pauser: Pubkey,
     pub paused: bool,
 }
 

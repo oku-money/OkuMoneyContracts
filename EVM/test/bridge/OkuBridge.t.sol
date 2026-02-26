@@ -966,6 +966,236 @@ contract OkuBridgeTest is BaseTest {
         assertEq(requestId, keccak256(abi.encode(expected)));
     }
 
+    // ============ Missing Coverage Tests ============
+
+    function test_RefundFailedRequest_RevertAlreadyRefunded() public {
+        uint256 shares = 100e18;
+
+        (, OkuBridge.BridgeRequest memory request) =
+            _mintSharesAndBridge(user1, shares, OPTIMISM_CHAIN_ID, user2);
+
+        bytes memory proof = "";
+
+        // First refund succeeds
+        vm.prank(admin);
+        okuBridge.refundFailedRequest(request, proof);
+
+        // Second refund reverts with AlreadyRefunded
+        bytes32 requestId = keccak256(abi.encode(request));
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(OkuBridge.AlreadyRefunded.selector, requestId));
+        okuBridge.refundFailedRequest(request, proof);
+    }
+
+    function test_BridgeBurn_RevertZeroRecipient() public {
+        uint256 shares = 100e18;
+        _mintOkuUsd(user1, shares);
+
+        vm.startPrank(user1);
+        okuUsd.approve(address(okuBridge), okuUsd.balanceOf(user1));
+        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, address(0), shares);
+        vm.stopPrank();
+    }
+
+    function test_UpdateDeadline_Success() public {
+        uint256 newDeadline = 2 hours;
+
+        vm.prank(admin);
+        vm.expectEmit(false, false, false, true);
+        emit OkuBridge.DeadlineUpdated(1 hours, newDeadline);
+        okuBridge.updateDeadline(newDeadline);
+
+        assertEq(okuBridge.bridgeDeadline(), newDeadline);
+    }
+
+    function test_UpdateDeadline_RevertZero() public {
+        vm.prank(admin);
+        vm.expectRevert("Deadline must be positive");
+        okuBridge.updateDeadline(0);
+    }
+
+    function test_UpdateDeadline_RevertNotAuthorized() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BRIDGE_LIMITS_MANAGER
+            )
+        );
+        okuBridge.updateDeadline(2 hours);
+    }
+
+    function test_UpdateFeeRecipient_Success() public {
+        address newRecipient = makeAddr("newFeeRecipient");
+
+        vm.prank(admin);
+        vm.expectEmit(true, true, false, false);
+        emit OkuBridge.FeeRecipientUpdated(feeRecipient, newRecipient);
+        okuBridge.updateFeeRecipient(newRecipient);
+
+        assertEq(okuBridge.feeRecipient(), newRecipient);
+    }
+
+    function test_UpdateFeeRecipient_RevertZeroAddress() public {
+        vm.prank(admin);
+        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        okuBridge.updateFeeRecipient(address(0));
+    }
+
+    function test_UpdateFeeRecipient_RevertNotAuthorized() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BRIDGE_FEE_MANAGER
+            )
+        );
+        okuBridge.updateFeeRecipient(makeAddr("x"));
+    }
+
+    function test_Initialize_RevertZeroOkuUsd() public {
+        OkuBridge impl = new OkuBridge();
+        bytes memory initData = abi.encodeCall(
+            OkuBridge.initialize, (address(0), orchestratorSigner, feeRecipient, admin)
+        );
+        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    function test_Initialize_RevertZeroSigner() public {
+        OkuBridge impl = new OkuBridge();
+        bytes memory initData = abi.encodeCall(
+            OkuBridge.initialize, (address(okuUsd), address(0), feeRecipient, admin)
+        );
+        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    function test_Initialize_RevertZeroFeeRecipient() public {
+        OkuBridge impl = new OkuBridge();
+        bytes memory initData = abi.encodeCall(
+            OkuBridge.initialize, (address(okuUsd), orchestratorSigner, address(0), admin)
+        );
+        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    function test_Initialize_RevertZeroAdmin() public {
+        OkuBridge impl = new OkuBridge();
+        bytes memory initData = abi.encodeCall(
+            OkuBridge.initialize, (address(okuUsd), orchestratorSigner, feeRecipient, address(0))
+        );
+        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    function test_UUPS_UpgradeWithBridgeUpgrader() public {
+        OkuBridge newImpl = new OkuBridge();
+
+        vm.prank(admin);
+        okuBridge.upgradeToAndCall(address(newImpl), "");
+
+        // Verify upgrade succeeded (still functional)
+        assertEq(okuBridge.bridgeFee(), 10);
+    }
+
+    function test_UUPS_RevertUpgradeNotAuthorized() public {
+        OkuBridge newImpl = new OkuBridge();
+
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BRIDGE_UPGRADER
+            )
+        );
+        okuBridge.upgradeToAndCall(address(newImpl), "");
+    }
+
+    function test_BridgeMint_AtExactDeadline() public {
+        uint256 shares = 100e18;
+
+        OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({
+            sourceChainId: OPTIMISM_CHAIN_ID,
+            destChainId: block.chainid,
+            sender: user1,
+            recipient: user2,
+            shares: shares,
+            nonce: 0,
+            deadline: block.timestamp // exactly now
+        });
+
+        bytes memory signature = _signBridgeRequest(request);
+
+        // Should succeed — condition is block.timestamp > deadline (strict >)
+        okuBridge.bridgeMint(request, signature);
+        assertEq(okuUsd.sharesOf(user2), shares);
+    }
+
+    function test_Pause_RevertNotAuthorized() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BRIDGE_PAUSER
+            )
+        );
+        okuBridge.pause();
+    }
+
+    function test_Unpause_RevertNotAuthorized() public {
+        vm.prank(admin);
+        okuBridge.pause();
+
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BRIDGE_UNPAUSER
+            )
+        );
+        okuBridge.unpause();
+    }
+
+    function test_SkipNonce_EmitsEvent() public {
+        uint256 nonce = okuBridge.outboundNonce(OPTIMISM_CHAIN_ID);
+
+        vm.prank(admin);
+        vm.expectEmit(true, false, false, true);
+        emit OkuBridge.NonceSkipped(OPTIMISM_CHAIN_ID, nonce);
+        okuBridge.skipNonce(OPTIMISM_CHAIN_ID);
+    }
+
+    function test_RefundFailedRequest_EmitsEvent() public {
+        uint256 shares = 100e18;
+
+        (, OkuBridge.BridgeRequest memory request) =
+            _mintSharesAndBridge(user1, shares, OPTIMISM_CHAIN_ID, user2);
+
+        bytes32 requestId = keccak256(abi.encode(request));
+
+        vm.prank(admin);
+        vm.expectEmit(true, true, false, true);
+        emit OkuBridge.RefundProcessed(requestId, user1, request.shares);
+        okuBridge.refundFailedRequest(request, "");
+    }
+
+    function test_AddSupportedChain_RevertNotAuthorized() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BRIDGE_CHAIN_MANAGER
+            )
+        );
+        okuBridge.addSupportedChain(137);
+    }
+
+    function test_UpdateLimits_RevertNotAuthorized() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BRIDGE_LIMITS_MANAGER
+            )
+        );
+        okuBridge.updateLimits(1e18, 100e18);
+    }
+
     function test_BridgeMint_EmitsEvent() public {
         uint256 shares = 100e18;
 

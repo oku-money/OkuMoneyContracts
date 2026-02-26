@@ -6,6 +6,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {LitePSM} from "../../src/psm/LitePSM.sol";
 
 /**
  * @title LitePSMTest
@@ -22,6 +23,7 @@ contract LitePSMTest is BaseTest {
     event Redeem(address indexed user, uint256 okuUsdIn, uint256 usdcOut);
     event OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled);
     event BufferRefilled(uint256 amount);
+    event BufferDeposited(address indexed depositor, uint256 amount);
 
     // ============ Setup ============
 
@@ -660,5 +662,196 @@ contract LitePSMTest is BaseTest {
         // OkuUSD should be exactly USDC * 10^12
         assertEq(okuUsd.balanceOf(user1), usdcAmount * (10 ** 12));
         assertEq(okuUsd.balanceOf(user1), 123e18);
+    }
+
+    // ============ Truncation Dust Retention Tests (Finding 7) ============
+
+    function test_Redeem_TruncationDustRetainedByUser() public {
+        // Mint OkuUSD with sub-USDC dust: 100.5e12 wei = 100 USDC + 0.5e12 dust
+        uint256 okuUsdAmount = 100e18 + 5e11; // 100 OkuUSD + 0.0000005 OkuUSD dust
+
+        _mintOkuUsd(user1, okuUsdAmount);
+        // Only approve aligned amount (PSM only takes aligned)
+        _approveOkuUsd(user1, address(litePsm), okuUsdAmount);
+
+        uint256 okuBalanceBefore = okuUsd.balanceOf(user1);
+
+        vm.prank(user1);
+        litePsm.redeem(okuUsdAmount);
+
+        // User should have received 100 USDC (truncated down)
+        // And retained 5e11 dust in their OkuUSD balance
+        uint256 dustRetained = okuUsd.balanceOf(user1);
+        assertEq(dustRetained, 5e11, "User should retain sub-USDC dust");
+        assertEq(okuBalanceBefore - dustRetained, 100e18, "PSM should only take aligned amount");
+    }
+
+    function test_Redeem_QueuePath_TruncationDustRetained() public {
+        // Amount that exceeds buffer AND has dust
+        uint256 okuUsdAmount = 10_000e18 + 7e11;
+
+        _mintOkuUsd(user1, okuUsdAmount);
+        _approveOkuUsd(user1, address(litePsm), okuUsdAmount);
+
+        vm.prank(user1);
+        litePsm.redeem(okuUsdAmount);
+
+        // User should retain sub-USDC dust
+        assertEq(okuUsd.balanceOf(user1), 7e11, "Queue path should also retain dust");
+
+        // Queue should hold aligned amount
+        assertEq(okuUsd.balanceOf(address(redemptionQueue)), 10_000e18);
+    }
+
+    // ============ DepositBuffer Tests ============
+
+    function test_DepositBuffer_OnlyBufferDepositor() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BUFFER_DEPOSITOR
+            )
+        );
+        litePsm.depositBuffer(100e6);
+    }
+
+    function test_DepositBuffer_TransfersUSDC() public {
+        uint256 amount = 1000e6;
+        _mintUsdc(bufferDepositor, amount);
+        _approveUsdc(bufferDepositor, address(litePsm), amount);
+
+        uint256 psmBefore = usdc.balanceOf(address(litePsm));
+
+        vm.prank(bufferDepositor);
+        litePsm.depositBuffer(amount);
+
+        assertEq(usdc.balanceOf(address(litePsm)), psmBefore + amount);
+        assertEq(usdc.balanceOf(bufferDepositor), 0);
+    }
+
+    function test_DepositBuffer_EmitsEvent() public {
+        uint256 amount = 500e6;
+        _mintUsdc(bufferDepositor, amount);
+        _approveUsdc(bufferDepositor, address(litePsm), amount);
+
+        vm.expectEmit(true, false, false, true);
+        emit BufferDeposited(bufferDepositor, amount);
+
+        vm.prank(bufferDepositor);
+        litePsm.depositBuffer(amount);
+    }
+
+    // ============ WithdrawUSDC Underflow Guard (Finding 8) ============
+
+    function test_WithdrawUSDC_RevertInsufficientBalance() public {
+        // PSM has 5000e6 buffer. Try to withdraw more than balance.
+        uint256 balance = usdc.balanceOf(address(litePsm));
+
+        vm.prank(bufferWithdrawer);
+        vm.expectRevert("Insufficient USDC balance");
+        litePsm.withdrawUsdc(user1, balance + 1);
+    }
+
+    // ============ RedeemWithPermit Tests ============
+
+    function test_RedeemWithPermit_Success() public {
+        uint256 amount = 100e18;
+        _mintOkuUsd(user1, amount);
+
+        // Generate permit signature
+        uint256 user1Pk = 0xA11CE; // Private key for signing
+        address user1Addr = vm.addr(user1Pk);
+
+        // Mint to the permit user instead
+        _mintOkuUsd(user1Addr, amount);
+
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes32 domainSeparator = _getOkuUsdDomainSeparator();
+        bytes32 permitHash = keccak256(
+            abi.encode(
+                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                user1Addr,
+                address(litePsm),
+                amount,
+                okuUsd.nonces(user1Addr),
+                deadline
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, permitHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(user1Pk, digest);
+
+        uint256 usdcBefore = usdc.balanceOf(user1Addr);
+
+        vm.prank(user1Addr);
+        litePsm.redeemWithPermit(amount, deadline, v, r, s);
+
+        // Should redeem 100 USDC
+        assertEq(usdc.balanceOf(user1Addr), usdcBefore + 100e6);
+        assertEq(okuUsd.balanceOf(user1Addr), 0);
+    }
+
+    function test_RedeemWithPermit_RevertsExpiredDeadline() public {
+        uint256 amount = 100e18;
+        uint256 user1Pk = 0xA11CE;
+        address user1Addr = vm.addr(user1Pk);
+        _mintOkuUsd(user1Addr, amount);
+
+        uint256 deadline = block.timestamp - 1; // Already expired
+        bytes32 domainSeparator = _getOkuUsdDomainSeparator();
+        bytes32 permitHash = keccak256(
+            abi.encode(
+                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                user1Addr,
+                address(litePsm),
+                amount,
+                okuUsd.nonces(user1Addr),
+                deadline
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, permitHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(user1Pk, digest);
+
+        vm.prank(user1Addr);
+        vm.expectRevert(); // ERC2612ExpiredSignature
+        litePsm.redeemWithPermit(amount, deadline, v, r, s);
+    }
+
+    // ============ UUPS Upgrade (Finding 24) ============
+
+    function test_UUPS_UpgradePSM() public {
+        LitePSM newImpl = new LitePSM();
+
+        vm.prank(admin);
+        litePsm.upgradeToAndCall(address(newImpl), "");
+
+        // Verify state preserved (okuUsd address still set)
+        assertEq(address(litePsm.okuUsd()), address(okuUsd));
+    }
+
+    function test_UUPS_UpgradePSM_RevertNotUpgrader() public {
+        LitePSM newImpl = new LitePSM();
+
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_UPGRADER
+            )
+        );
+        litePsm.upgradeToAndCall(address(newImpl), "");
+    }
+
+    // ============ Internal Helpers ============
+
+    function _getOkuUsdDomainSeparator() internal view returns (bytes32) {
+        // EIP-712 domain separator for OkuUSD
+        return keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes("OkuUSD")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(okuUsd)
+            )
+        );
     }
 }

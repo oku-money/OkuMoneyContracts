@@ -119,6 +119,7 @@ pub mod lite_psm {
         // Read state first
         let is_paused = ctx.accounts.config.is_paused;
         let max_supply = ctx.accounts.config.max_supply;
+        let minter_allowance = ctx.accounts.config.minter_allowance;
         let bump = ctx.accounts.config.bump;
         let current_supply = ctx.accounts.okusd_mint.supply;
         let oracle = ctx.accounts.config.oracle;
@@ -135,6 +136,9 @@ pub mod lite_psm {
             current_supply.checked_add(okusd_amount).ok_or(OkuError::Overflow)? <= max_supply,
             OkuError::MaxSupplyExceeded
         );
+
+        // Check minter allowance
+        require!(okusd_amount <= minter_allowance, OkuError::AllowanceExceeded);
 
         // Oracle check if configured (oracle != Pubkey::default())
         if oracle != Pubkey::default() {
@@ -164,6 +168,9 @@ pub mod lite_psm {
         let seeds = &[PsmConfig::SEED, &[bump]];
         let signer = &[&seeds[..]];
 
+        // Capture user key before mutable borrow
+        let user_key = ctx.accounts.user.key();
+
         token_interface::mint_to(
             CpiContext::new_with_signer(
                 ctx.accounts.token_2022_program.to_account_info(),
@@ -177,8 +184,14 @@ pub mod lite_psm {
             okusd_amount,
         )?;
 
+        // Decrement minter allowance (one-way: burns do NOT restore)
+        let config = &mut ctx.accounts.config;
+        config.minter_allowance = minter_allowance
+            .checked_sub(okusd_amount)
+            .ok_or(OkuError::Overflow)?;
+
         emit!(MintEvent {
-            user: ctx.accounts.user.key(),
+            user: user_key,
             usdc_amount,
             okusd_amount,
         });
@@ -288,6 +301,7 @@ pub mod lite_psm {
     /// Process redemption queue (FIFO) - supports multiple recipients
     /// Recipient USDC ATAs must be passed in remaining_accounts in queue order
     /// Burns OkuUSD from escrow (including accrued yield) and transfers equivalent USDC
+    /// NOTE: Deliberately allowed during pause — users must be able to receive queued redemptions
     pub fn process_queue<'info>(ctx: Context<'_, '_, '_, 'info, ProcessQueue<'info>>, max_entries: u32) -> Result<()> {
         let queue = &mut ctx.accounts.redemption_queue;
         let bump = ctx.accounts.config.bump;
@@ -428,8 +442,25 @@ pub mod lite_psm {
 
     /// Withdraw USDC from buffer (buffer_withdrawer only)
     /// Used to reclaim excess buffer after redemptions processed
+    /// Protects queued redemptions: cannot withdraw if it would strand queued entries
     pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> {
         require!(amount > 0, OkuError::ZeroAmount);
+
+        // Protect queued redemptions: sum pending entries' raw amounts as reserved USDC
+        let queue = &ctx.accounts.redemption_queue;
+        let mut reserved: u64 = 0;
+        let pending = queue.pending_count();
+        for i in 0..pending {
+            let idx = ((queue.head.wrapping_add(i)) % RedemptionQueue::MAX_ENTRIES as u32) as usize;
+            reserved = reserved
+                .checked_add(queue.entries[idx].okusd_raw_amount)
+                .ok_or(OkuError::Overflow)?;
+        }
+        let vault_balance = ctx.accounts.vault_usdc.amount;
+        require!(
+            vault_balance.checked_sub(amount).ok_or(OkuError::Overflow)? >= reserved,
+            OkuError::InsufficientBuffer
+        );
 
         let bump = ctx.accounts.config.bump;
         let seeds = &[PsmConfig::SEED, &[bump]];
@@ -498,6 +529,12 @@ pub mod lite_psm {
         // 5. Parse message AFTER signature verified
         let request = BridgeRequest::try_from_slice(&message_bytes)?;
 
+        // 5b. Validate destination chain matches this chain
+        require!(
+            request.destination_chain_id == bridge_config.source_chain_id,
+            OkuError::WrongDestinationChain
+        );
+
         // 6. Validate deadline
         let clock = Clock::get()?;
         require!(clock.unix_timestamp <= request.deadline, OkuError::SignatureExpired);
@@ -516,9 +553,9 @@ pub mod lite_psm {
         // 8. Convert recipient bytes to Pubkey
         let recipient_pubkey = Pubkey::new_from_array(request.recipient);
 
-        // 9. Validate recipient matches passed account (SECURITY FIX)
+        // 9. Validate recipient matches ATA owner (wallet address, not derived ATA)
         require!(
-            recipient_pubkey == ctx.accounts.recipient_okusd_ata.key(),
+            recipient_pubkey == ctx.accounts.recipient_okusd_ata.owner,
             OkuError::InvalidRecipient
         );
 
@@ -638,6 +675,8 @@ pub mod lite_psm {
         )?;
 
         // 6. Mint fee to fee_recipient (if fee > 0)
+        // Note: This fee mint intentionally bypasses minter_allowance because the
+        // bridge_burn is a net-supply-decreasing operation (burn > fee re-mint).
         if fee_amount > 0 {
             let seeds = &[PsmConfig::SEED, &[config_bump]];
             let signer = &[&seeds[..]];
@@ -1035,6 +1074,7 @@ pub mod lite_psm {
         }
 
         let old_nonce = bridge_nonce.next_nonce;
+        require!(new_nonce > old_nonce, OkuError::BelowMinimum);
         bridge_nonce.next_nonce = new_nonce;
 
         emit!(NonceSkippedEvent {
@@ -1059,6 +1099,68 @@ pub mod lite_psm {
         Ok(())
     }
 
+    /// Update a specific bridge authority role
+    /// Only bridge_admin can call this function
+    pub fn set_bridge_authority(
+        ctx: Context<BridgeAdmin>,
+        role: BridgeAuthorityRole,
+        new_authority: Pubkey,
+    ) -> Result<()> {
+        require!(new_authority != Pubkey::default(), OkuError::Unauthorized);
+
+        let config = &mut ctx.accounts.bridge_config;
+        let old_authority = match role {
+            BridgeAuthorityRole::BridgeAdmin => {
+                let old = config.bridge_admin;
+                config.bridge_admin = new_authority;
+                old
+            }
+            BridgeAuthorityRole::BridgePauser => {
+                let old = config.bridge_pauser;
+                config.bridge_pauser = new_authority;
+                old
+            }
+            BridgeAuthorityRole::BridgeUnpauser => {
+                let old = config.bridge_unpauser;
+                config.bridge_unpauser = new_authority;
+                old
+            }
+            BridgeAuthorityRole::OrchestratorSigner => {
+                let old = config.orchestrator_signer;
+                config.orchestrator_signer = new_authority;
+                old
+            }
+            BridgeAuthorityRole::FeeRecipient => {
+                let old = config.fee_recipient;
+                config.fee_recipient = new_authority;
+                old
+            }
+            BridgeAuthorityRole::ChainManager => {
+                let old = config.chain_manager;
+                config.chain_manager = new_authority;
+                old
+            }
+            BridgeAuthorityRole::FeeManager => {
+                let old = config.fee_manager;
+                config.fee_manager = new_authority;
+                old
+            }
+            BridgeAuthorityRole::NonceAdmin => {
+                let old = config.nonce_admin;
+                config.nonce_admin = new_authority;
+                old
+            }
+        };
+
+        emit!(BridgeAuthorityUpdatedEvent {
+            role,
+            old_authority,
+            new_authority,
+        });
+
+        Ok(())
+    }
+
     /// Update a specific authority role
     /// Only role_admin can call this function
     pub fn set_authority(
@@ -1066,6 +1168,8 @@ pub mod lite_psm {
         role: AuthorityRole,
         new_authority: Pubkey,
     ) -> Result<()> {
+        require!(new_authority != Pubkey::default(), OkuError::Unauthorized);
+
         let config = &mut ctx.accounts.config;
         let old_authority = match role {
             AuthorityRole::RoleAdmin => {
@@ -1140,6 +1244,19 @@ pub mod lite_psm {
     }
 }
 
+/// Bridge authority roles that can be updated via set_bridge_authority
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum BridgeAuthorityRole {
+    BridgeAdmin,
+    BridgePauser,
+    BridgeUnpauser,
+    OrchestratorSigner,
+    FeeRecipient,
+    ChainManager,
+    FeeManager,
+    NonceAdmin,
+}
+
 /// Authority roles that can be updated via set_authority
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorityRole {
@@ -1205,8 +1322,8 @@ fn check_oracle_reserves<'info>(
     // For the purposes of Proof of Reserves, we expect a simple format
     // where price represents total USD value of reserves
 
-    // Minimum data length check (price feed should have at least 200 bytes)
-    require!(data.len() >= 200, OkuError::InvalidOracleResponse);
+    // Minimum data length check — code reads up to offset 240 (timestamp at 232 + 8 bytes)
+    require!(data.len() >= 240, OkuError::InvalidOracleResponse);
 
     // Read price at offset 208 (Pyth V2 price account agg.price offset)
     // and timestamp at offset 232
@@ -1245,13 +1362,10 @@ fn check_oracle_reserves<'info>(
 }
 
 /// Calculate the interest-bearing value of a raw OkuUSD amount
-/// Uses the Token-2022 Interest-Bearing extension formula:
-/// ui_amount = raw_amount × e^(rate × time_elapsed)
+/// Uses the Token-2022 Interest-Bearing extension formula (continuous compounding):
+/// ui_amount = raw_amount × e^(rate_bps × time_elapsed / (10000 × SECONDS_PER_YEAR))
 ///
-/// For practical purposes, we use a linear approximation for small rates/times:
-/// ui_amount ≈ raw_amount × (1 + rate_per_second × time_elapsed)
-///
-/// Where rate_per_second = rate_bps / 10000 / SECONDS_PER_YEAR
+/// Matches the vault's `compute_interest_adjusted_balance` and Token-2022's native formula.
 fn calculate_interest_bearing_value(
     raw_amount: u64,
     rate_bps: i16,
@@ -1262,38 +1376,22 @@ fn calculate_interest_bearing_value(
         return Ok(raw_amount);
     }
 
-    // Constants for calculation
-    // SECONDS_PER_YEAR = 365.25 * 24 * 60 * 60 = 31,557,600
-    const SECONDS_PER_YEAR: u128 = 31_557_600;
-    const BPS_PRECISION: u128 = 10_000; // basis points
+    /// Seconds per year used by Token-2022's InterestBearing extension (365.24 days).
+    const SECONDS_PER_YEAR: f64 = 31_556_736.0;
+    const BPS_DENOMINATOR: f64 = 10_000.0;
 
-    let raw = raw_amount as u128;
-    let rate = rate_bps as u128;
-    let time = time_elapsed_secs as u128;
+    let exponent = (rate_bps as f64) * (time_elapsed_secs as f64)
+        / (BPS_DENOMINATOR * SECONDS_PER_YEAR);
+    let adjusted = (raw_amount as f64) * exponent.exp();
 
-    // Calculate: raw_amount × (1 + rate_bps × time_elapsed / (10000 × SECONDS_PER_YEAR))
-    // To avoid overflow and maintain precision:
-    // = raw_amount + (raw_amount × rate_bps × time_elapsed) / (10000 × SECONDS_PER_YEAR)
+    // Guard against NaN / Infinity from corrupted data
+    if !adjusted.is_finite() {
+        return Err(OkuError::Overflow.into());
+    }
 
-    let interest_numerator = raw
-        .checked_mul(rate)
-        .ok_or(OkuError::Overflow)?
-        .checked_mul(time)
-        .ok_or(OkuError::Overflow)?;
+    let result = adjusted.floor() as u64;
 
-    let interest_denominator = BPS_PRECISION.checked_mul(SECONDS_PER_YEAR)
-        .ok_or(OkuError::Overflow)?;
-
-    let interest_amount = interest_numerator
-        .checked_div(interest_denominator)
-        .ok_or(OkuError::Overflow)?;
-
-    let ui_amount = raw
-        .checked_add(interest_amount)
-        .ok_or(OkuError::Overflow)?;
-
-    // Convert back to u64, capping at u64::MAX if overflow
-    Ok(ui_amount.min(u64::MAX as u128) as u64)
+    Ok(result)
 }
 
 /// Verify Ed25519 signature via instruction introspection
@@ -1487,6 +1585,7 @@ pub struct MintOkusd<'info> {
     pub user: Signer<'info>,
 
     #[account(
+        mut,
         seeds = [PsmConfig::SEED],
         bump = config.bump
     )]
@@ -1707,6 +1806,13 @@ pub struct WithdrawBuffer<'info> {
         bump = config.bump
     )]
     pub config: Box<Account<'info, PsmConfig>>,
+
+    /// Redemption queue (read-only) — used to calculate reserved USDC for pending entries
+    #[account(
+        seeds = [RedemptionQueue::SEED],
+        bump = redemption_queue.bump
+    )]
+    pub redemption_queue: Account<'info, RedemptionQueue>,
 
     /// Buffer withdrawer's USDC account (destination)
     #[account(
@@ -2018,7 +2124,7 @@ pub struct UpdateInterestRate<'info> {
 
     /// OkuUSD mint (Token-2022 with Interest Bearing extension)
     /// CHECK: Validated by Token-2022 program - must have rebaser as the rate authority
-    #[account(mut)]
+    #[account(mut, address = config.okusd_mint)]
     pub okusd_mint: UncheckedAccount<'info>,
 
     /// Token-2022 program
@@ -2364,4 +2470,11 @@ pub struct NonceSkippedEvent {
 #[event]
 pub struct OrchestratorSignerUpdatedEvent {
     pub new_signer: Pubkey,
+}
+
+#[event]
+pub struct BridgeAuthorityUpdatedEvent {
+    pub role: BridgeAuthorityRole,
+    pub old_authority: Pubkey,
+    pub new_authority: Pubkey,
 }

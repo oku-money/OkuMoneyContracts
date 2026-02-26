@@ -197,6 +197,7 @@ impl BridgeConfig {
 
     /// Add a supported chain (returns error if full or already exists)
     pub fn add_chain(&mut self, chain_id: u16) -> Result<()> {
+        require!(chain_id != 0, OkuError::UnsupportedChain);
         require!(!self.is_chain_supported(chain_id), OkuError::ChainAlreadySupported);
         require!(self.supported_chains_count < 32, OkuError::ChainListFull);
 

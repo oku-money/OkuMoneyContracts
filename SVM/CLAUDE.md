@@ -82,17 +82,36 @@ spl-token create-token --program-id TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb 
 |-----------|--------|--------|
 | Mint Authority | PSM Program PDA | Mint new OkuUSD |
 | Freeze Authority | PSM Program PDA | Freeze/thaw (proxied via config authorities) |
-| Rate Authority | Rebaser (Orchestrator/KMS) | Update interest rate via `update_interest_rate` |
+| Rate Authority | Rebaser (Orchestrator/KMS) | Update interest rate via rate scheduling instructions |
 
-**Rate updates** via the PSM `update_interest_rate` instruction (rebaser role):
+**Rate updates** via the PSM rebaser role:
 ```rust
 // Token-2022 InterestBearingMintExtension::UpdateRate CPI
 // Byte 0: 33 (InterestBearingMintExtension discriminator)
 // Byte 1: 1  (UpdateRate discriminator)
 // Bytes 2-3: new_rate as i16 little-endian
 pub fn update_interest_rate(ctx: Context<UpdateInterestRate>, new_rate: i16) -> Result<()>
+pub fn set_yield_rate(ctx: Context<UpdateInterestRate>, new_rate: i16, end_timestamp: i64) -> Result<()>
+pub fn set_next_yield_rate(ctx: Context<SetNextYieldRate>, new_rate: i16) -> Result<()>
+pub fn apply_pending_rate(ctx: Context<UpdateInterestRate>) -> Result<()>
 ```
 The new rate is also stored in `PsmConfig.current_rate_bps` for queue interest calculations.
+
+### Rate Scheduling
+
+Both EVM and SVM support rate scheduling with head-to-tail chaining. The orchestrator can pre-schedule the next rate period so rate transitions happen without gaps.
+
+**Workflow:**
+1. `set_yield_rate(rate, endTimestamp)` — Set rate with optional expiry. CPIs to Token-2022 immediately.
+2. `set_next_yield_rate(rate)` — Schedule next rate (requires current rate has `rate_end`). No CPI — just stores in config.
+3. `apply_pending_rate()` — Orchestrator calls when `rate_end` arrives. CPIs to Token-2022 with pending rate.
+4. `update_interest_rate(rate)` — Emergency override. Clears all scheduling state.
+
+**EVM vs SVM difference:** EVM handles rate crossovers in the `rewardMultiplier()` view function (pure math, no transaction needed at transition). SVM requires an explicit `apply_pending_rate` transaction because Token-2022 rate changes require a CPI. A few seconds of lag means Token-2022 keeps compounding at the old rate — sub-dust imprecision, not a security issue.
+
+**Config fields:**
+- `rate_end: i64` — When current rate expires (0 = no expiry)
+- `pending_rate_bps: i16` — Next rate, applied when `rate_end` passes (0 = none)
 
 ## wOkuUSD Vault Program
 
@@ -146,7 +165,7 @@ let okusd_out = shares.checked_mul(vault_okusd_balance)?
 
 ## LitePSM Program
 
-### PsmConfig (PDA seeds: `["psm_config"]`)
+### PsmConfig (PDA seeds: `["psm_config"]`, 590 bytes)
 
 ```rust
 #[account]
@@ -178,6 +197,8 @@ pub struct PsmConfig {
     pub oracle: Pubkey,                 // Pyth feed or Pubkey::default()
     pub staleness_threshold: i64,
     pub current_rate_bps: i16,          // Stored for queue interest calculations
+    pub rate_end: i64,                  // When current rate expires (0 = no expiry)
+    pub pending_rate_bps: i16,          // Next rate, applied when rate_end passes (0 = none)
 }
 ```
 
@@ -240,6 +261,9 @@ pub fn set_max_supply(ctx: Context<CapManager>, new_max_supply: u64) -> Result<(
 pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()>
 pub fn set_oracle(ctx: Context<OracleManager>, oracle: Pubkey, staleness_threshold: i64) -> Result<()>
 pub fn update_interest_rate(ctx: Context<UpdateInterestRate>, new_rate: i16) -> Result<()>
+pub fn set_yield_rate(ctx: Context<UpdateInterestRate>, new_rate: i16, end_timestamp: i64) -> Result<()>
+pub fn set_next_yield_rate(ctx: Context<SetNextYieldRate>, new_rate: i16) -> Result<()>
+pub fn apply_pending_rate(ctx: Context<UpdateInterestRate>) -> Result<()>
 pub fn set_authority(ctx: Context<SetAuthority>, role: AuthorityRole, new_authority: Pubkey) -> Result<()>
 ```
 
@@ -283,6 +307,9 @@ pub enum OkuError {
     RecipientMismatch,
     OracleAccountMissing,
     InvalidOracleResponse,
+    NoRateEnd,
+    RateEndNotFuture,
+    RateEndNotPassed,
     // Bridge errors
     BridgePaused,
     SignatureExpired,
@@ -354,6 +381,12 @@ pub struct MinterAllowanceUpdatedEvent { pub role_admin: Pubkey, pub new_allowan
 pub struct OracleUpdatedEvent { pub role_admin: Pubkey, pub oracle: Pubkey, pub staleness_threshold: i64 }
 #[event]
 pub struct InterestRateUpdatedEvent { pub rate_authority: Pubkey, pub new_rate: i16 }
+#[event]
+pub struct YieldRateSetEvent { pub rate_authority: Pubkey, pub new_rate: i16, pub end_timestamp: i64 }
+#[event]
+pub struct NextYieldRateSetEvent { pub rate_authority: Pubkey, pub new_rate: i16, pub activates_at: i64 }
+#[event]
+pub struct PendingRateAppliedEvent { pub rate_authority: Pubkey, pub applied_rate: i16 }
 #[event]
 pub struct AuthorityUpdatedEvent { pub role: AuthorityRole, pub old_authority: Pubkey, pub new_authority: Pubkey }
 
@@ -692,7 +725,7 @@ anchor deploy
 spl-token authorize <OKUSD_MINT> mint <PSM_CONFIG_PDA>
 spl-token authorize <OKUSD_MINT> freeze <PSM_CONFIG_PDA>
 # Rate authority stays with the rebaser key (orchestrator/KMS)
-# and is managed via the update_interest_rate instruction
+# and is managed via rate scheduling instructions (set_yield_rate, apply_pending_rate, etc.)
 
 # 4. Set program upgrade authorities to cold multisig
 solana program set-upgrade-authority <LITE_PSM_PROGRAM> --new-upgrade-authority <SQUADS_COLD_VAULT>
@@ -740,6 +773,7 @@ anchor deploy --provider.cluster devnet
 
 **Key test scenarios**:
 - Interest-bearing rate updates affect ui_amount and queue payout calculations
+- Rate scheduling: set_yield_rate with/without end time, set_next_yield_rate, apply_pending_rate after expiry, emergency override clears scheduling
 - Wrap/unwrap round-trip with growing vault balance
 - Queue entry when buffer empty, processing when refilled (yield earned while queued)
 - Freeze via PSM (config.freezer), thaw via PSM (config.unfreezer)

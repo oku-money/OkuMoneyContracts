@@ -72,6 +72,8 @@ balanceOf(user) = shares[user] × rewardMultiplier() / PRECISION
 - `rewardMultiplier()` — Computed view function. Handles current rate, expiry crossover, and pending rate seamlessly.
 - `_rpow(x, n, b)` — Exponentiation by squaring (MakerDAO DSS, battle-tested since 2017).
 
+**Cross-Chain Parity**: Both EVM and SVM support rate scheduling with head-to-tail chaining. EVM handles crossovers in the `rewardMultiplier()` view function (pure math, no transaction needed at transition). SVM requires an explicit `apply_pending_rate` transaction because Token-2022 rate changes require a CPI call.
+
 **Requirements**:
 
 *Minting*

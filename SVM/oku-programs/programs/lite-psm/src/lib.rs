@@ -72,6 +72,8 @@ pub mod lite_psm {
         config.oracle = Pubkey::default(); // Oracle disabled initially
         config.staleness_threshold = 0;
         config.current_rate_bps = 0; // Interest rate starts at 0, updated by rebaser
+        config.rate_end = 0;
+        config.pending_rate_bps = 0;
 
         emit!(InitializeEvent {
             role_admin: config.role_admin,
@@ -870,52 +872,106 @@ pub mod lite_psm {
     }
 
     /// Update the interest rate on the OkuUSD mint (Token-2022 Interest Bearing extension)
-    /// This reflects new accrued yield from T-Bill backing
+    /// Emergency override: sets rate immediately and clears all scheduling state.
     /// Rate is in basis points (e.g., 450 = 4.5% APY)
     /// Also stores the rate in config for queue processing interest calculations
     pub fn update_interest_rate(ctx: Context<UpdateInterestRate>, new_rate: i16) -> Result<()> {
-        use anchor_lang::solana_program::{instruction::Instruction, program::invoke};
-
-        // Token-2022 instruction format for InterestBearingMintExtension::UpdateRate:
-        // - Byte 0: TokenInstruction discriminator (33 = InterestBearingMintExtension)
-        // - Byte 1: InterestBearingMintInstruction discriminator (1 = UpdateRate)
-        // - Bytes 2-3: rate as i16 little-endian
-        let mut data = Vec::with_capacity(4);
-        data.push(33u8); // TokenInstruction::InterestBearingMintExtension
-        data.push(1u8);  // InterestBearingMintInstruction::UpdateRate
-        data.extend_from_slice(&new_rate.to_le_bytes());
-
-        let ix = Instruction {
-            program_id: ctx.accounts.token_2022_program.key(),
-            accounts: vec![
-                anchor_lang::solana_program::instruction::AccountMeta::new(
-                    ctx.accounts.okusd_mint.key(),
-                    false,
-                ),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    ctx.accounts.rebaser.key(),
-                    true,
-                ),
-            ],
-            data,
-        };
-
-        // Invoke the Token-2022 program
-        invoke(
-            &ix,
-            &[
-                ctx.accounts.okusd_mint.to_account_info(),
-                ctx.accounts.rebaser.to_account_info(),
-            ],
+        cpi_update_token2022_rate(
+            &ctx.accounts.token_2022_program.to_account_info(),
+            &ctx.accounts.okusd_mint.to_account_info(),
+            &ctx.accounts.rebaser.to_account_info(),
+            new_rate,
         )?;
 
-        // Also store the rate in config for queue processing interest calculations
         let config = &mut ctx.accounts.config;
         config.current_rate_bps = new_rate;
+        config.rate_end = 0;
+        config.pending_rate_bps = 0;
 
         emit!(InterestRateUpdatedEvent {
             rate_authority: ctx.accounts.rebaser.key(),
             new_rate,
+        });
+
+        Ok(())
+    }
+
+    /// Set yield rate with optional end timestamp for rate scheduling.
+    /// CPIs to Token-2022 UpdateRate immediately.
+    /// If end_timestamp > 0, the rate is considered temporary and a pending rate can be scheduled.
+    /// If end_timestamp == 0, the rate has no expiry.
+    pub fn set_yield_rate(ctx: Context<UpdateInterestRate>, new_rate: i16, end_timestamp: i64) -> Result<()> {
+        let clock = Clock::get()?;
+        require!(
+            end_timestamp == 0 || end_timestamp > clock.unix_timestamp,
+            OkuError::RateEndNotFuture
+        );
+
+        cpi_update_token2022_rate(
+            &ctx.accounts.token_2022_program.to_account_info(),
+            &ctx.accounts.okusd_mint.to_account_info(),
+            &ctx.accounts.rebaser.to_account_info(),
+            new_rate,
+        )?;
+
+        let config = &mut ctx.accounts.config;
+        config.current_rate_bps = new_rate;
+        config.rate_end = end_timestamp;
+        config.pending_rate_bps = 0;
+
+        emit!(YieldRateSetEvent {
+            rate_authority: ctx.accounts.rebaser.key(),
+            new_rate,
+            end_timestamp,
+        });
+
+        Ok(())
+    }
+
+    /// Schedule the next yield rate to take effect when the current rate expires.
+    /// Does NOT CPI to Token-2022 — the pending rate is only stored in config.
+    /// The orchestrator calls apply_pending_rate when rate_end arrives.
+    pub fn set_next_yield_rate(ctx: Context<SetNextYieldRate>, new_rate: i16) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        require!(config.rate_end != 0, OkuError::NoRateEnd);
+
+        config.pending_rate_bps = new_rate;
+
+        emit!(NextYieldRateSetEvent {
+            rate_authority: ctx.accounts.rebaser.key(),
+            new_rate,
+            activates_at: config.rate_end,
+        });
+
+        Ok(())
+    }
+
+    /// Apply the pending rate after rate_end has passed.
+    /// CPIs to Token-2022 UpdateRate with the pending rate.
+    /// Clears scheduling state after application.
+    pub fn apply_pending_rate(ctx: Context<UpdateInterestRate>) -> Result<()> {
+        let clock = Clock::get()?;
+        let config = &ctx.accounts.config;
+        require!(config.rate_end != 0, OkuError::NoRateEnd);
+        require!(clock.unix_timestamp >= config.rate_end, OkuError::RateEndNotPassed);
+
+        let pending_rate = config.pending_rate_bps;
+
+        cpi_update_token2022_rate(
+            &ctx.accounts.token_2022_program.to_account_info(),
+            &ctx.accounts.okusd_mint.to_account_info(),
+            &ctx.accounts.rebaser.to_account_info(),
+            pending_rate,
+        )?;
+
+        let config = &mut ctx.accounts.config;
+        config.current_rate_bps = pending_rate;
+        config.rate_end = 0;
+        config.pending_rate_bps = 0;
+
+        emit!(PendingRateAppliedEvent {
+            rate_authority: ctx.accounts.rebaser.key(),
+            applied_rate: pending_rate,
         });
 
         Ok(())
@@ -1272,6 +1328,46 @@ pub enum AuthorityRole {
     CapManager,
     AllowanceManager,
     Rebaser,
+}
+
+/// CPI helper: invoke Token-2022 InterestBearingMintExtension::UpdateRate
+fn cpi_update_token2022_rate<'info>(
+    token_2022_program: &AccountInfo<'info>,
+    okusd_mint: &AccountInfo<'info>,
+    rate_authority: &AccountInfo<'info>,
+    new_rate: i16,
+) -> Result<()> {
+    use anchor_lang::solana_program::{instruction::Instruction, program::invoke};
+
+    let mut data = Vec::with_capacity(4);
+    data.push(33u8); // TokenInstruction::InterestBearingMintExtension
+    data.push(1u8);  // InterestBearingMintInstruction::UpdateRate
+    data.extend_from_slice(&new_rate.to_le_bytes());
+
+    let ix = Instruction {
+        program_id: token_2022_program.key(),
+        accounts: vec![
+            anchor_lang::solana_program::instruction::AccountMeta::new(
+                okusd_mint.key(),
+                false,
+            ),
+            anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                rate_authority.key(),
+                true,
+            ),
+        ],
+        data,
+    };
+
+    invoke(
+        &ix,
+        &[
+            okusd_mint.clone(),
+            rate_authority.clone(),
+        ],
+    )?;
+
+    Ok(())
 }
 
 /// Check oracle reserves before minting
@@ -2132,6 +2228,17 @@ pub struct UpdateInterestRate<'info> {
 }
 
 #[derive(Accounts)]
+pub struct SetNextYieldRate<'info> {
+    /// Rebaser role - only rebaser can schedule next rate
+    #[account(constraint = rebaser.key() == config.rebaser @ OkuError::Unauthorized)]
+    pub rebaser: Signer<'info>,
+
+    /// PSM config - stores rate scheduling state
+    #[account(mut, seeds = [PsmConfig::SEED], bump = config.bump)]
+    pub config: Account<'info, PsmConfig>,
+}
+
+#[derive(Accounts)]
 pub struct SetAuthority<'info> {
     /// Role admin - only role_admin can update authorities
     #[account(
@@ -2391,6 +2498,26 @@ pub struct InterestRateUpdatedEvent {
     pub rate_authority: Pubkey,
     /// New interest rate in basis points (e.g., 450 = 4.5% APY)
     pub new_rate: i16,
+}
+
+#[event]
+pub struct YieldRateSetEvent {
+    pub rate_authority: Pubkey,
+    pub new_rate: i16,
+    pub end_timestamp: i64,
+}
+
+#[event]
+pub struct NextYieldRateSetEvent {
+    pub rate_authority: Pubkey,
+    pub new_rate: i16,
+    pub activates_at: i64,
+}
+
+#[event]
+pub struct PendingRateAppliedEvent {
+    pub rate_authority: Pubkey,
+    pub applied_rate: i16,
 }
 
 #[event]

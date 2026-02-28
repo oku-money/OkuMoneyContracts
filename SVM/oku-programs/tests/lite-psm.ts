@@ -850,6 +850,459 @@ describe("lite-psm", () => {
   });
 
   // ==========================================================================
+  // Rate Scheduling
+  // ==========================================================================
+  describe("rate scheduling", () => {
+    it("set_yield_rate: rebaser can set rate with end time", async () => {
+      const clock = await provider.connection.getBlockTime(
+        await provider.connection.getSlot()
+      );
+      const endTime = new BN(clock! + 60); // 60 seconds from now
+
+      await program.methods
+        .setYieldRate(450, endTime)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      const config = await program.account.psmConfig.fetch(configPda);
+      expect(config.currentRateBps).to.equal(450);
+      expect(config.rateEnd.toNumber()).to.equal(endTime.toNumber());
+      expect(config.pendingRateBps).to.equal(0);
+    });
+
+    it("set_yield_rate: can set rate without end time", async () => {
+      await program.methods
+        .setYieldRate(300, new BN(0))
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      const config = await program.account.psmConfig.fetch(configPda);
+      expect(config.currentRateBps).to.equal(300);
+      expect(config.rateEnd.toNumber()).to.equal(0);
+      expect(config.pendingRateBps).to.equal(0);
+    });
+
+    it("set_yield_rate: clears pending rate", async () => {
+      const clock = await provider.connection.getBlockTime(
+        await provider.connection.getSlot()
+      );
+      const endTime = new BN(clock! + 60);
+
+      // Set rate with end time
+      await program.methods
+        .setYieldRate(400, endTime)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      // Schedule next rate
+      await program.methods
+        .setNextYieldRate(500)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      let config = await program.account.psmConfig.fetch(configPda);
+      expect(config.pendingRateBps).to.equal(500);
+
+      // set_yield_rate should clear pending
+      await program.methods
+        .setYieldRate(350, new BN(0))
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      config = await program.account.psmConfig.fetch(configPda);
+      expect(config.currentRateBps).to.equal(350);
+      expect(config.rateEnd.toNumber()).to.equal(0);
+      expect(config.pendingRateBps).to.equal(0);
+    });
+
+    it("set_yield_rate: rejects non-rebaser", async () => {
+      try {
+        await program.methods
+          .setYieldRate(100, new BN(0))
+          .accountsPartial({
+            rebaser: warmMultisig.publicKey,
+            config: configPda,
+            okusdMint: okusdMint,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([warmMultisig])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("Unauthorized");
+      }
+    });
+
+    it("set_yield_rate: rejects past end time", async () => {
+      try {
+        await program.methods
+          .setYieldRate(100, new BN(1)) // timestamp 1 is in the past
+          .accountsPartial({
+            rebaser: orchestrator.publicKey,
+            config: configPda,
+            okusdMint: okusdMint,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([orchestrator])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("RateEndNotFuture");
+      }
+    });
+
+    it("set_next_yield_rate: rebaser can schedule next rate", async () => {
+      const clock = await provider.connection.getBlockTime(
+        await provider.connection.getSlot()
+      );
+      const endTime = new BN(clock! + 60);
+
+      // First set rate with end time
+      await program.methods
+        .setYieldRate(400, endTime)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      // Schedule next rate
+      await program.methods
+        .setNextYieldRate(500)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      const config = await program.account.psmConfig.fetch(configPda);
+      expect(config.pendingRateBps).to.equal(500);
+    });
+
+    it("set_next_yield_rate: reverts if no rate_end", async () => {
+      // Set rate without end time
+      await program.methods
+        .setYieldRate(300, new BN(0))
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      try {
+        await program.methods
+          .setNextYieldRate(500)
+          .accountsPartial({
+            rebaser: orchestrator.publicKey,
+            config: configPda,
+          })
+          .signers([orchestrator])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("NoRateEnd");
+      }
+    });
+
+    it("set_next_yield_rate: rejects non-rebaser", async () => {
+      const clock = await provider.connection.getBlockTime(
+        await provider.connection.getSlot()
+      );
+      const endTime = new BN(clock! + 60);
+
+      // Set rate with end time first
+      await program.methods
+        .setYieldRate(400, endTime)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      try {
+        await program.methods
+          .setNextYieldRate(500)
+          .accountsPartial({
+            rebaser: warmMultisig.publicKey,
+            config: configPda,
+          })
+          .signers([warmMultisig])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("Unauthorized");
+      }
+    });
+
+    it("apply_pending_rate: rebaser can apply after rate_end passes", async () => {
+      const clock = await provider.connection.getBlockTime(
+        await provider.connection.getSlot()
+      );
+      const endTime = new BN(clock! + 2); // 2 seconds from now
+
+      // Set rate with short end time
+      await program.methods
+        .setYieldRate(400, endTime)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      // Schedule next rate
+      await program.methods
+        .setNextYieldRate(250)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      // Wait for rate_end to pass
+      await new Promise((r) => setTimeout(r, 3000));
+
+      // Apply pending rate
+      await program.methods
+        .applyPendingRate()
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      const config = await program.account.psmConfig.fetch(configPda);
+      expect(config.currentRateBps).to.equal(250);
+      expect(config.rateEnd.toNumber()).to.equal(0);
+      expect(config.pendingRateBps).to.equal(0);
+    });
+
+    it("apply_pending_rate: reverts if rate_end not yet passed", async () => {
+      const clock = await provider.connection.getBlockTime(
+        await provider.connection.getSlot()
+      );
+      const endTime = new BN(clock! + 120); // 2 minutes from now
+
+      await program.methods
+        .setYieldRate(400, endTime)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      await program.methods
+        .setNextYieldRate(250)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      try {
+        await program.methods
+          .applyPendingRate()
+          .accountsPartial({
+            rebaser: orchestrator.publicKey,
+            config: configPda,
+            okusdMint: okusdMint,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([orchestrator])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("RateEndNotPassed");
+      }
+    });
+
+    it("apply_pending_rate: reverts if no rate_end", async () => {
+      // Set rate without end time
+      await program.methods
+        .setYieldRate(300, new BN(0))
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      try {
+        await program.methods
+          .applyPendingRate()
+          .accountsPartial({
+            rebaser: orchestrator.publicKey,
+            config: configPda,
+            okusdMint: okusdMint,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([orchestrator])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("NoRateEnd");
+      }
+    });
+
+    it("apply_pending_rate: rejects non-rebaser", async () => {
+      const clock = await provider.connection.getBlockTime(
+        await provider.connection.getSlot()
+      );
+      const endTime = new BN(clock! + 2);
+
+      await program.methods
+        .setYieldRate(400, endTime)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      await program.methods
+        .setNextYieldRate(250)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      await new Promise((r) => setTimeout(r, 3000));
+
+      try {
+        await program.methods
+          .applyPendingRate()
+          .accountsPartial({
+            rebaser: warmMultisig.publicKey,
+            config: configPda,
+            okusdMint: okusdMint,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([warmMultisig])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("Unauthorized");
+      }
+    });
+
+    it("emergency override: update_interest_rate clears scheduling state", async () => {
+      const clock = await provider.connection.getBlockTime(
+        await provider.connection.getSlot()
+      );
+      const endTime = new BN(clock! + 60);
+
+      // Set up scheduled rate with pending
+      await program.methods
+        .setYieldRate(400, endTime)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      await program.methods
+        .setNextYieldRate(500)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      let config = await program.account.psmConfig.fetch(configPda);
+      expect(config.currentRateBps).to.equal(400);
+      expect(config.rateEnd.toNumber()).to.equal(endTime.toNumber());
+      expect(config.pendingRateBps).to.equal(500);
+
+      // Emergency override should clear everything
+      await program.methods
+        .updateInterestRate(100)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      config = await program.account.psmConfig.fetch(configPda);
+      expect(config.currentRateBps).to.equal(100);
+      expect(config.rateEnd.toNumber()).to.equal(0);
+      expect(config.pendingRateBps).to.equal(0);
+
+      // Reset rate to 0
+      await program.methods
+        .updateInterestRate(0)
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okusdMint: okusdMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+    });
+  });
+
+  // ==========================================================================
   // NEW COVERAGE: mint edge cases
   // ==========================================================================
   describe("mint edge cases", () => {

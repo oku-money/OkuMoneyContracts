@@ -61,15 +61,19 @@ pub struct PsmConfig {
     /// Current interest rate in basis points (e.g., 450 = 4.5% APY)
     /// Stored here for queue processing interest calculations
     pub current_rate_bps: i16,
+    /// When current rate expires (0 = no expiry)
+    pub rate_end: i64,
+    /// Next rate, applied when rate_end passes (0 = none)
+    pub pending_rate_bps: i16,
 }
 
 impl PsmConfig {
     pub const SEED: &'static [u8] = b"psm_config";
 
     /// Space needed for PsmConfig account
-    /// 8 (discriminator) + 1 (bump) + 32*12 (authority pubkeys) + 32*4 (token pubkeys) + 8*2 (u64s) + 1 (bool) + 32 (oracle) + 8 (i64) + 2 (i16)
-    /// = 8 + 1 + 384 + 128 + 16 + 1 + 32 + 8 + 2 = 580 bytes
-    pub const LEN: usize = 8 + 1 + 32 * 12 + 32 * 4 + 8 * 2 + 1 + 32 + 8 + 2;
+    /// 8 (discriminator) + 1 (bump) + 32*12 (authority pubkeys) + 32*4 (token pubkeys) + 8*2 (u64s) + 1 (bool) + 32 (oracle) + 8 (i64) + 2 (i16) + 8 (i64 rate_end) + 2 (i16 pending_rate_bps)
+    /// = 8 + 1 + 384 + 128 + 16 + 1 + 32 + 8 + 2 + 8 + 2 = 590 bytes
+    pub const LEN: usize = 8 + 1 + 32 * 12 + 32 * 4 + 8 * 2 + 1 + 32 + 8 + 2 + 8 + 2;
 }
 
 /// Redemption queue PDA

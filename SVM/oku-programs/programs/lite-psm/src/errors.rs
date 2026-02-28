@@ -34,6 +34,12 @@ pub enum OkuError {
     OracleAccountMissing,
     #[msg("Invalid oracle response")]
     InvalidOracleResponse,
+    #[msg("Current rate has no end time set")]
+    NoRateEnd,
+    #[msg("Rate end time must be in the future")]
+    RateEndNotFuture,
+    #[msg("Rate end has not yet passed")]
+    RateEndNotPassed,
 
     // ===== Bridge-Specific Errors =====
     #[msg("Bridge is paused")]

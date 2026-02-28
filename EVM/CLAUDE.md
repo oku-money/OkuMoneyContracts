@@ -93,23 +93,36 @@ IBridgeAdapter shims     ← third-party protocol adapters (NTT, CCIP, etc.)
 
 ## OkuUSD.sol
 
-**Inherits**: ERC20Upgradeable, AccessControlUpgradeable, PausableUpgradeable
+**Inherits**: ERC20Upgradeable, ERC20PermitUpgradeable, AccessControlUpgradeable, PausableUpgradeable, UUPSUpgradeable
 
 **Storage**:
 ```solidity
 mapping(address => uint256) private _shares;
-uint256 public totalShares;
-uint256 public rewardMultiplier;  // Scaled by PRECISION (1e18)
+uint256 private _totalShares;           // public getter: totalShares()
+uint256 internal _baseMultiplier;       // last snapshot of multiplier (public getter: baseMultiplier())
+uint256 public ratePerSecond;           // compound rate per second (1e18 = no yield)
+uint256 public lastAccrualTime;         // timestamp of last _baseMultiplier snapshot
+uint256 public rateEnd;                 // when current rate expires (0 = no expiry)
+uint256 public pendingRatePerSecond;    // next rate, activates at rateEnd
 uint256 public maxSupply;
 mapping(address => uint256) public minterAllowance;
-mapping(address => bool) public blacklisted;
+mapping(address => bool) public isBlacklisted;
 ```
 
+**Continuous yield accrual**:
+- `rewardMultiplier()` is a computed view function (not a storage variable)
+- Yield accrues continuously via `_rpow(ratePerSecond, elapsed, PRECISION)` (MakerDAO DSS exponentiation by squaring)
+- Handles rate expiry + pending rate crossover seamlessly in the view function
+- `setYieldRate(rate, endTimestamp)` — REBASER sets active rate, snapshots current multiplier
+- `setNextYieldRate(rate)` — REBASER schedules next rate (head-to-tail chaining)
+- `updateRewardMultiplier()` — Emergency override, snapshots computed multiplier, resets rate to zero
+- External interface unchanged: `rewardMultiplier()` was a public storage variable, now a public view function — same selector
+
 **Key implementation notes**:
-- `balanceOf()` returns `_shares[user] * rewardMultiplier / PRECISION`
+- `balanceOf()` returns `_shares[user] * rewardMultiplier() / PRECISION`
 - `transfer()` and `transferFrom()` operate on shares, not tokens
 - `Transfer` event emits token amounts for ERC20 compatibility
-- `_beforeTokenTransfer` checks pause and blacklist status
+- `_transferShares()` checks pause and blacklist status
 
 **Role bytes32 constants**:
 ```solidity
@@ -141,7 +154,7 @@ bytes32 public constant ALLOWANCE_MANAGER = keccak256("ALLOWANCE_MANAGER");
 
 **Role bytes32 constants**:
 ```solidity
-bytes32 public constant WOKUSD_UPGRADER = keccak256("WOKUSD_UPGRADER");
+bytes32 public constant UPGRADER = keccak256("UPGRADER");
 ```
 
 ## LitePSM.sol
@@ -157,13 +170,15 @@ IERC20 public usdc;
 RedemptionQueue public redemptionQueue;   // external contract, not embedded queue
 IAggregatorV3 public porOracle;
 uint256 public stalenessThreshold;
-bool public oracleEnabled;
+bool public oracleEnabled;               // oracle checks require both oracleEnabled AND oracle != address(0)
 ```
 
 **Key implementation notes**:
 - `mint()`: USDC in → OkuUSD out (1:1), checks oracle if configured
 - `redeem()`: OkuUSD in → USDC out (1:1) or queue if buffer insufficient
+- `redeemWithPermit()`: Convenience wrapper using ERC20Permit — `redeemWithPermit(uint256 okuUsdAmount, uint256 deadline, uint8 v, bytes32 r, bytes32 s)`
 - `processQueue()`: FIFO processing, calculates payout at current multiplier
+- `configureOracle()`: Combined oracle configuration — `configureOracle(address _oracle, uint256 _stalenessThreshold, bool _enabled)`
 - Oracle check: `porOracle.latestRoundData()`, verify `answeredInRound >= roundId` and freshness
 - `redeem()` queue path: PSM calls `safeTransferFrom(user → PSM)`, then
   `safeTransfer(PSM → queue)`, then `redemptionQueue.enqueue()` (record-only, no token pull)
@@ -187,9 +202,11 @@ bytes32 public constant ORACLE_MANAGER = keccak256("ORACLE_MANAGER");
 
 **Storage**:
 ```solidity
-QueueEntry[] public queue;
+mapping(uint256 => QueueEntry) public queue;
 uint256 public queueHead;
+uint256 public queueTail;
 IOkuUSD public okuUsd;
+uint256 public totalQueuedShares;   // running counter for O(1) totalQueuedUsdc() calculation
 
 struct QueueEntry {
     address user;
@@ -227,6 +244,8 @@ uint256 public maxBridgeShares;
 mapping(uint256 => bool) public supportedChains;             // destChainId => supported
 mapping(uint256 => uint256) public outboundNonce;            // destChainId => nonce
 mapping(bytes32 => bool) public processedRequests;           // requestId => processed
+mapping(bytes32 => bool) public refundedRequests;           // requestId => refunded (replay prevention for refunds)
+uint256 public bridgeDeadline;                              // configurable deadline duration (default 1 hour)
 ```
 
 **EIP-712 Domain**: Initialized via `__EIP712_init("OkuBridge", "1")`. Domain separator is computed and cached by `EIP712Upgradeable` (OZ); not an explicit constant.
@@ -262,6 +281,9 @@ function refundFailedRequest(
     BridgeRequest calldata request,
     bytes calldata proof
 ) external onlyRole(BRIDGE_REFUND_ADMIN);
+
+// Admin: Update deadline duration
+function updateDeadline(uint256 newDeadline) external onlyRole(BRIDGE_LIMITS_MANAGER);
 ```
 
 **Role bytes32 constants**:
@@ -274,6 +296,7 @@ bytes32 public constant BRIDGE_NONCE_ADMIN = keccak256("BRIDGE_NONCE_ADMIN");
 bytes32 public constant BRIDGE_CHAIN_MANAGER = keccak256("BRIDGE_CHAIN_MANAGER");
 bytes32 public constant BRIDGE_LIMITS_MANAGER = keccak256("BRIDGE_LIMITS_MANAGER");
 bytes32 public constant BRIDGE_REFUND_ADMIN = keccak256("BRIDGE_REFUND_ADMIN");
+bytes32 public constant BRIDGE_UPGRADER = keccak256("BRIDGE_UPGRADER");
 ```
 
 **Signature verification**:
@@ -330,11 +353,11 @@ top). No dust remains in the router.
 
 **Adapter path** — Router pre-burns, then calls message-only adapter:
 ```solidity
-// wOkuUSD → redeem → burn → IBridgeAdapter.bridge()
+// wOkuUSD → redeem → burn → IBridgeAdapter.bridge() (no return — adapter path has no OkuBridge request)
 function bridgeWrappedVia(uint256 wOkuUsdAmount, address adapter, uint256 destinationChain, address recipient)
     external whenNotPaused;
 
-// OkuUSD → burn → IBridgeAdapter.bridge()
+// OkuUSD → burn → IBridgeAdapter.bridge() (no return — adapter path has no OkuBridge request)
 function bridgeDirectVia(uint256 okuUsdAmount, address adapter, uint256 destinationChain, address recipient)
     external whenNotPaused;
 ```
@@ -410,6 +433,12 @@ forge test --match-contract VaultInvariants
 **Key test scenarios**:
 - Mint/burn with allowance tracking
 - Rebase affects all balances proportionally
+- Continuous yield accrual: setYieldRate grows multiplier over time
+- Continuous yield accrual: setNextYieldRate head-to-tail seamless transition
+- Continuous yield accrual: front-running unprofitable (<$0.01 on $1M for 2s L2 block)
+- Continuous yield accrual: APY accuracy (~4.5% over 365 days)
+- Continuous yield accrual: emergency override snapshots + resets rate
+- Continuous yield accrual: rate expiry stops yield with no pending rate
 - Wrap/unwrap round-trip accuracy
 - Queue entry and processing
 - Pause blocks operations, blacklist works while paused
@@ -440,6 +469,8 @@ forge test --match-contract VaultInvariants
 ```solidity
 // OkuUSD
 event RebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
+event YieldRateUpdated(uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotMultiplier);
+event NextYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
 event Blacklisted(address indexed account);
 event Unblacklisted(address indexed account);
 event MaxSupplyUpdated(uint256 oldCap, uint256 newCap);

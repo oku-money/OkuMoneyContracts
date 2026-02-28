@@ -19,6 +19,8 @@ contract OkuUSDTest is BaseTest {
 
     event Transfer(address indexed from, address indexed to, uint256 value);
     event RebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
+    event YieldRateUpdated(uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotMultiplier);
+    event NextYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
     );
@@ -806,6 +808,315 @@ contract OkuUSDTest is BaseTest {
 
         assertEq(okuUsd.rewardMultiplier(), PRECISION * 3);
         assertEq(okuUsd.balanceOf(user1), 300e18);
+    }
+
+    // ============ Continuous Yield Accrual Tests ============
+
+    function test_SetYieldRate_OnlyRebaser() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, REBASER
+            )
+        );
+        okuUsd.setYieldRate(PRECISION + 1, 0);
+    }
+
+    function test_SetYieldRate_MultiplierGrowsOverTime() public {
+        uint256 rate = 1000000001547125957; // ~5% APY per second
+
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(rate, 0);
+
+        uint256 multiplierBefore = okuUsd.rewardMultiplier();
+
+        vm.warp(block.timestamp + 1 days);
+
+        uint256 multiplierAfter = okuUsd.rewardMultiplier();
+        assertGt(multiplierAfter, multiplierBefore);
+    }
+
+    function test_SetYieldRate_BalancesGrowContinuously() public {
+        _mintOkuUsd(user1, 1000e18);
+        uint256 balanceBefore = okuUsd.balanceOf(user1);
+
+        uint256 rate = 1000000001547125957; // ~5% APY
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(rate, 0);
+
+        vm.warp(block.timestamp + 1 days);
+
+        uint256 balanceAfter = okuUsd.balanceOf(user1);
+        assertGt(balanceAfter, balanceBefore);
+    }
+
+    function test_SetYieldRate_SnapshotPreservesValue() public {
+        _mintOkuUsd(user1, 1000e18);
+
+        uint256 rate = 1000000001547125957; // ~5% APY
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(rate, 0);
+
+        vm.warp(block.timestamp + 30 days);
+
+        uint256 balanceBefore = okuUsd.balanceOf(user1);
+
+        // Set a new rate — should snapshot accrued yield, not lose it
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(rate, 0);
+
+        uint256 balanceAfter = okuUsd.balanceOf(user1);
+        assertEq(balanceAfter, balanceBefore);
+    }
+
+    function test_SetYieldRate_RateCannotBeNegative() public {
+        vm.prank(rebaser);
+        vm.expectRevert("Rate cannot be negative");
+        okuUsd.setYieldRate(PRECISION - 1, 0);
+    }
+
+    function test_SetYieldRate_EndMustBeInFuture() public {
+        // Warp to a realistic timestamp so block.timestamp - 1 != 0
+        vm.warp(1000);
+
+        vm.prank(rebaser);
+        vm.expectRevert("End must be in the future");
+        okuUsd.setYieldRate(PRECISION + 1, block.timestamp - 1);
+    }
+
+    function test_SetYieldRate_EmitsEvent() public {
+        uint256 rate = 1000000001547125957;
+
+        vm.expectEmit(false, false, false, true);
+        emit YieldRateUpdated(rate, 0, PRECISION);
+
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(rate, 0);
+    }
+
+    function test_SetYieldRate_ZeroRateStopsAccrual() public {
+        _mintOkuUsd(user1, 1000e18);
+
+        uint256 rate = 1000000001547125957;
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(rate, 0);
+
+        vm.warp(block.timestamp + 30 days);
+        uint256 balanceMid = okuUsd.balanceOf(user1);
+
+        // Set rate to PRECISION (no yield)
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(PRECISION, 0);
+
+        vm.warp(block.timestamp + 30 days);
+        uint256 balanceEnd = okuUsd.balanceOf(user1);
+
+        // Balance should not change after stopping accrual
+        assertEq(balanceEnd, balanceMid);
+    }
+
+    function test_SetNextYieldRate_ActivatesAtRateEnd() public {
+        _mintOkuUsd(user1, 1000e18);
+
+        uint256 rate1 = 1000000001547125957; // ~5% APY
+        uint256 rate2 = 1000000002877801985; // ~9.5% APY
+        uint256 endTime = block.timestamp + 30 days;
+
+        vm.startPrank(rebaser);
+        okuUsd.setYieldRate(rate1, endTime);
+        okuUsd.setNextYieldRate(rate2);
+        vm.stopPrank();
+
+        // Before rateEnd — rate1 applies
+        vm.warp(endTime - 1);
+        uint256 balanceBeforeEnd = okuUsd.balanceOf(user1);
+
+        // After rateEnd — rate2 takes over
+        vm.warp(endTime + 30 days);
+        uint256 balanceAfterEnd = okuUsd.balanceOf(user1);
+        assertGt(balanceAfterEnd, balanceBeforeEnd);
+    }
+
+    function test_SetNextYieldRate_RequiresRateEnd() public {
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(PRECISION + 1, 0); // no end time
+
+        vm.prank(rebaser);
+        vm.expectRevert("Current rate has no end");
+        okuUsd.setNextYieldRate(PRECISION + 1);
+    }
+
+    function test_SetNextYieldRate_HeadToTail() public {
+        _mintOkuUsd(user1, 1000e18);
+
+        uint256 rate = 1000000001547125957; // ~5% APY
+        uint256 endTime = block.timestamp + 30 days;
+
+        vm.startPrank(rebaser);
+        okuUsd.setYieldRate(rate, endTime);
+        okuUsd.setNextYieldRate(rate); // same rate continues
+        vm.stopPrank();
+
+        // Warp to just before boundary
+        vm.warp(endTime - 1);
+        uint256 balanceBefore = okuUsd.balanceOf(user1);
+
+        // Warp to just after boundary
+        vm.warp(endTime + 1);
+        uint256 balanceAfter = okuUsd.balanceOf(user1);
+
+        // Should have grown by ~2 seconds worth of yield — no gap, no jump
+        assertGt(balanceAfter, balanceBefore);
+        // The difference should be small (just 2 seconds of yield on 1000 tokens)
+        uint256 diff = balanceAfter - balanceBefore;
+        assertLt(diff, 1e15); // less than 0.001 OkuUSD for 2 seconds
+    }
+
+    function test_SetNextYieldRate_EmitsEvent() public {
+        uint256 rate = 1000000001547125957;
+        uint256 endTime = block.timestamp + 30 days;
+
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(rate, endTime);
+
+        uint256 nextRate = 1000000002877801985;
+        vm.expectEmit(false, false, false, true);
+        emit NextYieldRateSet(nextRate, endTime);
+
+        vm.prank(rebaser);
+        okuUsd.setNextYieldRate(nextRate);
+    }
+
+    function test_SetNextYieldRate_OnlyRebaser() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(PRECISION + 1, endTime);
+
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, REBASER
+            )
+        );
+        okuUsd.setNextYieldRate(PRECISION + 1);
+    }
+
+    function test_ContinuousAccrual_FrontRunUnprofitable() public {
+        // Set up a realistic 4.5% APY rate
+        // rate = (1.045)^(1/31536000) ≈ 1.000000001395766... × 1e18
+        uint256 rate = 1000000001395766300;
+
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(rate, 0);
+
+        uint256 usdcAttackAmount = 1_000_000e6; // $1M in USDC (6 decimals)
+
+        // Fund buffer via bufferDepositor so redemption works
+        _mintUsdc(bufferDepositor, usdcAttackAmount);
+        vm.startPrank(bufferDepositor);
+        usdc.approve(address(litePsm), usdcAttackAmount);
+        litePsm.depositBuffer(usdcAttackAmount);
+        vm.stopPrank();
+
+        // Attacker mints via PSM (PSM takes USDC amount in 6 decimals)
+        _mintUsdc(user1, usdcAttackAmount);
+        vm.startPrank(user1);
+        usdc.approve(address(litePsm), usdcAttackAmount);
+        litePsm.mint(usdcAttackAmount);
+        vm.stopPrank();
+
+        uint256 balanceAfterMint = okuUsd.balanceOf(user1);
+
+        // Advance 2 seconds (L2 block time)
+        vm.warp(block.timestamp + 2);
+
+        uint256 balanceAfterWarp = okuUsd.balanceOf(user1);
+        uint256 profit = balanceAfterWarp - balanceAfterMint;
+
+        // At 4.5% APY, 2 seconds on $1M ≈ $0.00285 OkuUSD
+        // This is less than gas costs for mint + redeem on any chain
+        assertLt(profit, 1e16); // less than 0.01 OkuUSD ($0.01) for $1M attack
+    }
+
+    function test_ContinuousAccrual_MatchesExpectedAPY() public {
+        _mintOkuUsd(user1, 1000e18);
+
+        // 4.5% APY: rate = (1.045)^(1/31536000) ≈ 1.000000001395766... × 1e18
+        uint256 rate = 1000000001395766300;
+
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(rate, 0);
+
+        // Warp 365 days
+        vm.warp(block.timestamp + 365 days);
+
+        uint256 balance = okuUsd.balanceOf(user1);
+
+        // Expected: 1000 * 1.045 = 1045 (within rounding tolerance)
+        // Allow 0.1% tolerance for compounding approximation
+        assertGt(balance, 1044e18); // at least 4.4%
+        assertLt(balance, 1046e18); // at most 4.6%
+    }
+
+    function test_UpdateRewardMultiplier_EmergencyOverride() public {
+        _mintOkuUsd(user1, 1000e18);
+
+        uint256 rate = 1000000001547125957;
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(rate, 0);
+
+        vm.warp(block.timestamp + 30 days);
+
+        uint256 computedMultiplier = okuUsd.rewardMultiplier();
+        uint256 balanceBefore = okuUsd.balanceOf(user1);
+
+        // Emergency override — set exact multiplier, stops accrual
+        vm.prank(rebaser);
+        okuUsd.updateRewardMultiplier(computedMultiplier);
+
+        // Multiplier should now be the exact snapshot
+        assertEq(okuUsd.rewardMultiplier(), computedMultiplier);
+        // Rate should be reset
+        assertEq(okuUsd.ratePerSecond(), PRECISION);
+        // Balance should be unchanged
+        assertEq(okuUsd.balanceOf(user1), balanceBefore);
+
+        // Warp more — balance should not grow (rate is zero)
+        vm.warp(block.timestamp + 30 days);
+        assertEq(okuUsd.balanceOf(user1), balanceBefore);
+    }
+
+    function test_BaseMultiplier_ReturnsSnapshotValue() public {
+        assertEq(okuUsd.baseMultiplier(), PRECISION);
+
+        uint256 rate = 1000000001547125957;
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(rate, 0);
+
+        vm.warp(block.timestamp + 30 days);
+
+        // baseMultiplier should still be PRECISION (snapshot hasn't been updated)
+        assertEq(okuUsd.baseMultiplier(), PRECISION);
+        // rewardMultiplier should be higher
+        assertGt(okuUsd.rewardMultiplier(), PRECISION);
+    }
+
+    function test_RateExpiry_StopsYieldWhenNoPendingRate() public {
+        _mintOkuUsd(user1, 1000e18);
+
+        uint256 rate = 1000000001547125957;
+        uint256 endTime = block.timestamp + 30 days;
+
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(rate, endTime);
+
+        // Warp past end with no pending rate
+        vm.warp(endTime + 30 days);
+        uint256 balanceAtExpiry = okuUsd.balanceOf(user1);
+
+        // Warp more — balance should not grow
+        vm.warp(endTime + 60 days);
+        assertEq(okuUsd.balanceOf(user1), balanceAtExpiry);
     }
 
     // ============ EIP-2612 Permit Tests ============

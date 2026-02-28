@@ -378,6 +378,8 @@ pub struct BridgeUnpauseEvent { pub unpauser: Pubkey }
 pub struct NonceSkippedEvent { pub destination_chain_id: u16, pub old_nonce: u64, pub new_nonce: u64 }
 #[event]
 pub struct OrchestratorSignerUpdatedEvent { pub new_signer: Pubkey }
+#[event]
+pub struct BridgeAuthorityUpdatedEvent { pub role: BridgeAuthorityRole, pub old_authority: Pubkey, pub new_authority: Pubkey }
 
 // Vault Events
 #[event]
@@ -389,7 +391,7 @@ pub struct UnwrapEvent { pub user: Pubkey, pub shares_burned: u64, pub okusd_amo
 
 // Router Events
 #[event]
-pub struct BridgeWrappedEvent { pub user: Pubkey, pub wokusd_shares: u64, pub okusd_amount: u64, pub destination_chain: u16 }
+pub struct BridgeWrappedEvent { pub user: Pubkey, pub wokusd_shares: u64, pub okusd_amount: u64, pub destination_chain: u16, pub recipient: [u8; 20] }
 ```
 
 ## Cross-Chain Bridging
@@ -413,13 +415,15 @@ Solana → EVM:
 A convenience program that atomically combines unwrap + bridge_burn in a single transaction for wOkuUSD holders:
 
 ```rust
-pub fn initialize(ctx: Context<Initialize>) -> Result<()>
-pub fn set_paused(ctx: Context<SetPaused>, paused: bool) -> Result<()>
+pub fn initialize(ctx: Context<Initialize>, pauser: Pubkey, unpauser: Pubkey) -> Result<()>
+pub fn pause(ctx: Context<Pause>) -> Result<()>
+pub fn unpause(ctx: Context<Unpause>) -> Result<()>
 pub fn bridge_wrapped(
     ctx: Context<BridgeWrapped>,
     wokusd_shares: u64,
     recipient: [u8; 20],      // EVM address
     destination_chain: u16,
+    min_okusd_out: u64,        // Slippage protection
 ) -> Result<()>
 // 1. CPI to wokusd-vault: unwrap(wokusd_shares)
 // 2. CPI to lite-psm: bridge_burn(okusd_balance, recipient, destination_chain)
@@ -547,7 +551,7 @@ pub fn bridge_burn(
 
 **Admin Functions:**
 ```rust
-pub fn initialize_bridge(ctx: Context<InitializeBridge>) -> Result<()>
+pub fn initialize_bridge(ctx: Context<InitializeBridge>, source_chain_id: u16) -> Result<()>
 pub fn add_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -> Result<()>
 pub fn remove_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -> Result<()>
 pub fn update_bridge_fee(ctx: Context<BridgeFeeManager>, new_fee_bps: u16) -> Result<()>
@@ -557,6 +561,7 @@ pub fn pause_bridge(ctx: Context<BridgePause>) -> Result<()>
 pub fn unpause_bridge(ctx: Context<BridgeUnpause>) -> Result<()>
 pub fn skip_nonce(ctx: Context<BridgeNonceAdmin>, destination_chain_id: u16, new_nonce: u64) -> Result<()>
 pub fn update_orchestrator_signer(ctx: Context<BridgeAdmin>, new_signer: Pubkey) -> Result<()>
+pub fn set_bridge_authority(ctx: Context<BridgeAdmin>, role: BridgeAuthorityRole, new_authority: Pubkey) -> Result<()>
 ```
 
 ### Message Format (Must Match Orchestrator)

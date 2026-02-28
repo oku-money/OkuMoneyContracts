@@ -15,4 +15,11 @@ interface IOkuUSD {
     function sharesToTokens(uint256 shares) external view returns (uint256);
     function tokensToShares(uint256 amount) external view returns (uint256);
     function rewardMultiplier() external view returns (uint256);
+    function baseMultiplier() external view returns (uint256);
+    function ratePerSecond() external view returns (uint256);
+    function lastAccrualTime() external view returns (uint256);
+    function rateEnd() external view returns (uint256);
+    function pendingRatePerSecond() external view returns (uint256);
+    function setYieldRate(uint256 newRatePerSecond, uint256 endTimestamp) external;
+    function setNextYieldRate(uint256 newRatePerSecond) external;
 }

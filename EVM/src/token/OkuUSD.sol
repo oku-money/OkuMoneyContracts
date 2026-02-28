@@ -47,8 +47,12 @@ contract OkuUSD is
     mapping(address => uint256) private _shares;
     uint256 private _totalShares;
 
-    // Rebasing mechanism
-    uint256 public rewardMultiplier;
+    // Rebasing mechanism — continuous yield accrual
+    uint256 internal _baseMultiplier;
+    uint256 public ratePerSecond;
+    uint256 public lastAccrualTime;
+    uint256 public rateEnd;
+    uint256 public pendingRatePerSecond;
 
     // Minter allowance system (Circle pattern)
     mapping(address => uint256) public minterAllowance;
@@ -61,6 +65,8 @@ contract OkuUSD is
 
     // Events
     event RebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
+    event YieldRateUpdated(uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotMultiplier);
+    event NextYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
     );
@@ -91,21 +97,110 @@ contract OkuUSD is
         _grantRole(UPGRADER, admin);
         _grantRole(OKUUSD_PAUSER, admin);
 
-        rewardMultiplier = PRECISION;
+        _baseMultiplier = PRECISION;
+        ratePerSecond = PRECISION;
+        lastAccrualTime = block.timestamp;
+        pendingRatePerSecond = PRECISION;
         maxSupply = initialMaxSupply;
     }
 
     // ============ Rebasing Logic ============
 
     /**
-     * @notice Update reward multiplier to distribute yield
-     * @param newMultiplier New multiplier value (must be >= current)
+     * @notice Computed reward multiplier with continuous yield accrual
+     * @dev Handles current rate, rate expiry, and pending rate crossover
+     */
+    function rewardMultiplier() public view returns (uint256) {
+        uint256 rate = ratePerSecond;
+        if (rate <= PRECISION) {
+            // No yield accrual — check if pending rate has activated
+            if (rateEnd != 0 && block.timestamp > rateEnd) {
+                uint256 pendingRate = pendingRatePerSecond;
+                if (pendingRate > PRECISION) {
+                    uint256 elapsedPending = block.timestamp - rateEnd;
+                    return (_baseMultiplier * _rpow(pendingRate, elapsedPending, PRECISION)) / PRECISION;
+                }
+            }
+            return _baseMultiplier;
+        }
+
+        uint256 base = _baseMultiplier;
+
+        if (rateEnd != 0 && block.timestamp > rateEnd) {
+            // Current rate expired — accrue current rate up to rateEnd, then pending rate after
+            uint256 elapsedCurrent = rateEnd - lastAccrualTime;
+            if (elapsedCurrent > 0) {
+                base = (base * _rpow(rate, elapsedCurrent, PRECISION)) / PRECISION;
+            }
+            // Apply pending rate for remaining time
+            uint256 pendingRate = pendingRatePerSecond;
+            if (pendingRate > PRECISION) {
+                uint256 elapsedPending = block.timestamp - rateEnd;
+                if (elapsedPending > 0) {
+                    base = (base * _rpow(pendingRate, elapsedPending, PRECISION)) / PRECISION;
+                }
+            }
+            return base;
+        }
+
+        uint256 elapsed = block.timestamp - lastAccrualTime;
+        if (elapsed == 0) return base;
+        return (base * _rpow(rate, elapsed, PRECISION)) / PRECISION;
+    }
+
+    /**
+     * @notice Get the base multiplier (last snapshot, before accrual)
+     */
+    function baseMultiplier() public view returns (uint256) {
+        return _baseMultiplier;
+    }
+
+    /**
+     * @notice Set active yield rate with optional end time
+     * @param newRatePerSecond Compound rate per second (1e18 = no yield)
+     * @param endTimestamp When current rate expires (0 = no expiry)
+     */
+    function setYieldRate(uint256 newRatePerSecond, uint256 endTimestamp) external onlyRole(REBASER) {
+        require(newRatePerSecond >= PRECISION, "Rate cannot be negative");
+        require(endTimestamp == 0 || endTimestamp > block.timestamp, "End must be in the future");
+
+        // Snapshot current state
+        _baseMultiplier = rewardMultiplier();
+        lastAccrualTime = block.timestamp;
+
+        ratePerSecond = newRatePerSecond;
+        rateEnd = endTimestamp;
+        pendingRatePerSecond = PRECISION;
+
+        emit YieldRateUpdated(newRatePerSecond, endTimestamp, _baseMultiplier);
+    }
+
+    /**
+     * @notice Schedule the next yield rate (activates when current rate expires)
+     * @param newRatePerSecond Compound rate per second for the next period
+     */
+    function setNextYieldRate(uint256 newRatePerSecond) external onlyRole(REBASER) {
+        require(newRatePerSecond >= PRECISION, "Rate cannot be negative");
+        require(rateEnd != 0, "Current rate has no end");
+
+        pendingRatePerSecond = newRatePerSecond;
+
+        emit NextYieldRateSet(newRatePerSecond, rateEnd);
+    }
+
+    /**
+     * @notice Emergency override — snapshots computed multiplier, resets rate to zero yield
+     * @param newMultiplier New multiplier value (must be >= current computed multiplier)
      */
     function updateRewardMultiplier(uint256 newMultiplier) external onlyRole(REBASER) {
-        require(newMultiplier >= rewardMultiplier, "Multiplier cannot decrease");
-        uint256 oldMultiplier = rewardMultiplier;
-        rewardMultiplier = newMultiplier;
-        emit RebaseEvent(oldMultiplier, newMultiplier);
+        uint256 currentMultiplier = rewardMultiplier();
+        require(newMultiplier >= currentMultiplier, "Multiplier cannot decrease");
+        _baseMultiplier = newMultiplier;
+        ratePerSecond = PRECISION;
+        rateEnd = 0;
+        pendingRatePerSecond = PRECISION;
+        lastAccrualTime = block.timestamp;
+        emit RebaseEvent(currentMultiplier, newMultiplier);
     }
 
     /**
@@ -126,14 +221,51 @@ contract OkuUSD is
      * @notice Convert shares to token amount
      */
     function sharesToTokens(uint256 shares) public view returns (uint256) {
-        return (shares * rewardMultiplier) / PRECISION;
+        return (shares * rewardMultiplier()) / PRECISION;
     }
 
     /**
      * @notice Convert token amount to shares
      */
     function tokensToShares(uint256 tokens) public view returns (uint256) {
-        return (tokens * PRECISION) / rewardMultiplier;
+        return (tokens * PRECISION) / rewardMultiplier();
+    }
+
+    // ============ Exponentiation by Squaring (MakerDAO DSS) ============
+
+    /**
+     * @notice Raise x to the power of n, modulo base b (exponentiation by squaring)
+     * @dev Copied from MakerDAO's jug.sol / pot.sol — battle-tested since 2017
+     */
+    function _rpow(uint256 x, uint256 n, uint256 b) internal pure returns (uint256 z) {
+        assembly {
+            switch x
+            case 0 {
+                switch n
+                case 0 { z := b }
+                default { z := 0 }
+            }
+            default {
+                switch mod(n, 2)
+                case 0 { z := b }
+                default { z := x }
+                let half := div(b, 2)
+                for { n := div(n, 2) } n { n := div(n, 2) } {
+                    let xx := mul(x, x)
+                    if iszero(eq(div(xx, x), x)) { revert(0, 0) }
+                    let xxRound := add(xx, half)
+                    if lt(xxRound, xx) { revert(0, 0) }
+                    x := div(xxRound, b)
+                    if mod(n, 2) {
+                        let zx := mul(z, x)
+                        if and(iszero(iszero(x)), iszero(eq(div(zx, x), z))) { revert(0, 0) }
+                        let zxRound := add(zx, half)
+                        if lt(zxRound, zx) { revert(0, 0) }
+                        z := div(zxRound, b)
+                    }
+                }
+            }
+        }
     }
 
     // ============ ERC20 Overrides (Share-based) ============
@@ -196,7 +328,7 @@ contract OkuUSD is
         _totalShares += shares;
         _shares[to] += shares;
 
-        emit Transfer(address(0), to, amount);
+        emit Transfer(address(0), to, sharesToTokens(shares));
     }
 
     function burn(uint256 amount) external onlyRole(MINTER) {
@@ -208,7 +340,7 @@ contract OkuUSD is
         _shares[msg.sender] -= shares;
         _totalShares -= shares;
 
-        emit Transfer(msg.sender, address(0), amount);
+        emit Transfer(msg.sender, address(0), sharesToTokens(shares));
     }
 
     // ============ Minter Allowance Management ============

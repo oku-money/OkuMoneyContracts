@@ -49,11 +49,28 @@ Yield-bearing stablecoin backed 1:1 by US T-Bills. Centralized B2B infrastructur
 
 ### OkuUSD (Rebasing Token)
 
-**Concept**: User balances stored as static shares; displayed balance calculated dynamically.
+**Concept**: User balances stored as static shares; displayed balance calculated dynamically via a continuously accruing multiplier.
 
 ```
-balanceOf(user) = shares[user] × rewardMultiplier / PRECISION
+rewardMultiplier() = _baseMultiplier × _rpow(ratePerSecond, elapsed, PRECISION) / PRECISION
+balanceOf(user) = shares[user] × rewardMultiplier() / PRECISION
 ```
+
+**Continuous Yield Accrual**: Instead of discrete `updateRewardMultiplier()` calls that create front-running arbitrage vectors (attackers mint via PSM before rebase, capture yield jump, redeem), yield accrues every second via a compound rate. Per-second yield on a 2s L2 block < gas cost, making front-running unprofitable.
+
+**Storage**:
+- `_baseMultiplier` — last snapshot of the multiplier (internal)
+- `ratePerSecond` — compound rate per second (1e18 = no yield)
+- `lastAccrualTime` — timestamp of last `_baseMultiplier` snapshot
+- `rateEnd` — when current rate expires (0 = no expiry)
+- `pendingRatePerSecond` — next rate, activates automatically at `rateEnd`
+
+**Rate Management**:
+- `setYieldRate(rate, endTimestamp)` — REBASER sets active rate with optional end time. Snapshots current computed multiplier before switching.
+- `setNextYieldRate(rate)` — REBASER schedules next rate that activates when current expires (head-to-tail chaining, no tx needed at transition).
+- `updateRewardMultiplier(newMultiplier)` — Emergency override. Snapshots computed multiplier, resets rate to zero yield.
+- `rewardMultiplier()` — Computed view function. Handles current rate, expiry crossover, and pending rate seamlessly.
+- `_rpow(x, n, b)` — Exponentiation by squaring (MakerDAO DSS, battle-tested since 2017).
 
 **Requirements**:
 
@@ -66,10 +83,10 @@ balanceOf(user) = shares[user] × rewardMultiplier / PRECISION
 - MUST correctly convert token amount to shares when minting
 
 *Burning*
-- MUST allow any holder to burn their own tokens
+- MUST only allow addresses with minter role to burn
+- Burn is restricted to MINTER role for operational safety (burn is part of bridge/PSM flows, not a user-facing action)
 - MUST correctly convert token amount to shares when burning
 - MUST reduce totalSupply by burned amount
-- MUST NOT affect minterAllowance of any address
 
 *Transfers*
 - MUST transfer shares internally, not token amounts
@@ -78,17 +95,22 @@ balanceOf(user) = shares[user] × rewardMultiplier / PRECISION
 - MUST revert if contract is paused
 - MUST emit Transfer event with token amounts (not shares) for compatibility
 
-*Rebasing*
-- MUST only allow rebaser role to update rewardMultiplier
-- MUST NOT check maxSupply during rebase (supply grows organically)
-- MUST affect all balanceOf() return values immediately
-- MUST NOT change any user's share count
-- MUST emit RebaseEvent with old and new multiplier
+*Continuous Yield Accrual*
+- `rewardMultiplier()` MUST be a computed view function (not a storage variable)
+- MUST accrue yield continuously based on `ratePerSecond` and elapsed time since `lastAccrualTime`
+- MUST handle rate expiry: accrue current rate up to `rateEnd`, then apply `pendingRatePerSecond` after
+- `setYieldRate()` MUST snapshot current computed multiplier before updating rate
+- `setYieldRate()` MUST only allow REBASER role
+- `setYieldRate()` MUST revert if rate < PRECISION (negative yield)
+- `setNextYieldRate()` MUST only allow REBASER role
+- `setNextYieldRate()` MUST revert if current rate has no end time
+- `updateRewardMultiplier()` MUST snapshot computed multiplier, reset rate to PRECISION, and clear pending state
+- `updateRewardMultiplier()` MUST revert if newMultiplier < current computed multiplier
 
 *Balance Queries*
-- balanceOf(user) MUST return shares[user] × rewardMultiplier / PRECISION
+- balanceOf(user) MUST return shares[user] × rewardMultiplier() / PRECISION
 - sharesOf(user) MUST return raw shares[user]
-- totalSupply() MUST return totalShares × rewardMultiplier / PRECISION
+- totalSupply() MUST return totalShares × rewardMultiplier() / PRECISION
 
 ### wOkuUSD (Non-Rebasing Wrapper)
 
@@ -159,7 +181,8 @@ balanceOf(user) = shares[user] × rewardMultiplier / PRECISION
 *Oracle Integration*
 - MUST support configurable oracle address (can be zero for no oracle)
 - MUST support configurable staleness threshold
-- MUST query oracle before each mint operation (if configured)
+- MUST support `oracleEnabled` flag: oracle checks require both `oracleEnabled == true` AND `oracle address != zero`
+- MUST query oracle before each mint operation (if configured and enabled)
 - MUST compare totalSupply + mintAmount against oracle reserve value
 - MUST NOT check oracle for burn/redeem/queue operations
 
@@ -195,14 +218,14 @@ balanceOf(user) = shares[user] × rewardMultiplier / PRECISION
 | Role | Single Action |
 |------|---------------|
 | MINTER | mint() |
-| REBASER | setRewardMultiplier() / updateRate() |
+| REBASER | setYieldRate() / setNextYieldRate() / updateRewardMultiplier() |
 | PAUSER | pause() |
 | UNPAUSER | unpause() |
 | BLACKLISTER | blacklist() / freeze() |
 | UNBLACKLISTER | unblacklist() / thaw() |
 | CAP_MANAGER | setMaxSupply() |
-| ALLOWANCE_MANAGER | setMinterAllowance() |
-| OKUSD_UPGRADER | upgrade OkuUSD |
+| ALLOWANCE_MANAGER | configureMinterAllowance() |
+| UPGRADER | upgrade OkuUSD |
 
 ### wOkuUSD Vault Roles
 
@@ -221,7 +244,7 @@ balanceOf(user) = shares[user] × rewardMultiplier / PRECISION
 | QUEUE_PROCESSOR | processQueue() |
 | BUFFER_DEPOSITOR | depositBuffer() |
 | BUFFER_WITHDRAWER | withdrawBuffer() |
-| ORACLE_MANAGER | setOracle(), setStalenessThreshold() |
+| ORACLE_MANAGER | configureOracle() (combined: address, staleness, enable/disable) |
 | PSM_UPGRADER | upgrade PSM |
 
 ### OkuBridgeRouter
@@ -309,7 +332,7 @@ QueueEntry {
 // 2. Burn shares, transfer USDC to user
 ```
 
-Queue is a **safety valve**, not normal operation. Fixed capacity is sufficient.
+EVM implementation uses a mapping-based queue with head/tail pointers and a `totalQueuedShares` running counter for O(1) obligation queries. Queue is a **safety valve**, not normal operation. Fixed capacity is sufficient.
 
 ## Pause-to-Blacklist Protocol
 
@@ -437,6 +460,7 @@ Orchestrator waits for source chain finality before signing:
 | BRIDGE_CHAIN_MANAGER_ROLE | Add/remove supported chains | Cold Multisig |
 | BRIDGE_LIMITS_MANAGER_ROLE | Update min/max amounts | Cold Multisig |
 | BRIDGE_REFUND_ADMIN_ROLE | Process refunds for failed requests | Cold Multisig |
+| BRIDGE_UPGRADER | Upgrade bridge contract | Cold Multisig |
 
 ### EVM vs SVM
 
@@ -458,7 +482,7 @@ sender             20/32 bytes EVM: 20-byte address; SVM: 32-byte pubkey
 recipient          20/32 bytes EVM: 20-byte address; SVM: 32-byte pubkey
 amount/shares      8 bytes    net amount after fee deduction
 nonce              8 bytes    sequential per destination chain
-deadline           8 bytes    Unix timestamp — mints expire after 1 hour
+deadline           8 bytes    Unix timestamp — mints expire after configurable deadline (default 1 hour)
 ```
 
 ### Why Not Third-Party Bridges?

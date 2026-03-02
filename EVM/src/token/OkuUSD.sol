@@ -328,7 +328,7 @@ contract OkuUSD is
         _totalShares += shares;
         _shares[to] += shares;
 
-        emit Transfer(address(0), to, sharesToTokens(shares));
+        emit Transfer(address(0), to, amount);
     }
 
     function burn(uint256 amount) external onlyRole(MINTER) {
@@ -340,7 +340,7 @@ contract OkuUSD is
         _shares[msg.sender] -= shares;
         _totalShares -= shares;
 
-        emit Transfer(msg.sender, address(0), sharesToTokens(shares));
+        emit Transfer(msg.sender, address(0), amount);
     }
 
     // ============ Minter Allowance Management ============
@@ -390,4 +390,8 @@ contract OkuUSD is
     // ============ Upgradeability ============
 
     function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER) {}
+
+    // ============ Storage Gap ============
+
+    uint256[40] private __gap;
 }

@@ -511,4 +511,8 @@ contract OkuBridge is
     function hashTypedDataV4(bytes32 structHash) external view returns (bytes32) {
         return _hashTypedDataV4(structHash);
     }
+
+    // ============ Storage Gap ============
+
+    uint256[39] private __gap;
 }

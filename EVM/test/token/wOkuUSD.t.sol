@@ -471,6 +471,70 @@ contract wOkuUSDTest is BaseTest {
         assertApproxEqAbs(assets2, amount2 * 2, 1);
     }
 
+    // ============ Repeated Wrap/Unwrap Cycle Tests (rUSDY H-01 mitigation) ============
+
+    function test_RepeatedWrapUnwrap_NoShareInflation() public {
+        uint256 initialAmount = 1000e18;
+        _mintOkuUsd(user1, initialAmount);
+        _approveOkuUsd(user1, address(wokuUsd), type(uint256).max);
+
+        vm.startPrank(user1);
+
+        // Run 1000 deposit/redeem cycles
+        for (uint256 i = 0; i < 1000; i++) {
+            uint256 bal = okuUsd.balanceOf(user1);
+            if (bal == 0) break;
+            uint256 shares = wokuUsd.deposit(bal, user1);
+            wokuUsd.redeem(shares, user1, user1);
+        }
+
+        vm.stopPrank();
+
+        uint256 finalBalance = okuUsd.balanceOf(user1);
+
+        // Must not gain tokens (no free share accumulation)
+        assertLe(finalBalance, initialAmount, "Balance must not increase from wrap/unwrap cycles");
+        // Max 1 wei loss per cycle
+        assertGe(finalBalance, initialAmount - 1000, "Excessive rounding loss");
+    }
+
+    function test_RepeatedWrapUnwrap_NoShareInflation_AfterRebase() public {
+        uint256 initialAmount = 1000e18;
+        _mintOkuUsd(user1, initialAmount);
+        _approveOkuUsd(user1, address(wokuUsd), type(uint256).max);
+
+        // Deposit some from user2 first so vault has non-trivial exchange rate
+        _mintOkuUsd(user2, 5000e18);
+        _approveOkuUsd(user2, address(wokuUsd), 5000e18);
+        vm.prank(user2);
+        wokuUsd.deposit(5000e18, user2);
+
+        // Rebase to 1.5x
+        vm.prank(rebaser);
+        okuUsd.updateRewardMultiplier((PRECISION * 3) / 2);
+
+        uint256 balanceAfterRebase = okuUsd.balanceOf(user1);
+
+        vm.startPrank(user1);
+
+        // Run 1000 deposit/redeem cycles at non-1.0 multiplier
+        for (uint256 i = 0; i < 1000; i++) {
+            uint256 bal = okuUsd.balanceOf(user1);
+            if (bal == 0) break;
+            uint256 shares = wokuUsd.deposit(bal, user1);
+            wokuUsd.redeem(shares, user1, user1);
+        }
+
+        vm.stopPrank();
+
+        uint256 finalBalance = okuUsd.balanceOf(user1);
+
+        // Must not gain tokens
+        assertLe(finalBalance, balanceAfterRebase, "Balance must not increase from wrap/unwrap cycles");
+        // Max 1 wei loss per cycle
+        assertGe(finalBalance, balanceAfterRebase - 1000, "Excessive rounding loss");
+    }
+
     // ============ Always Available Tests ============
 
     function test_NoPauseFunctionality() public {

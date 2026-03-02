@@ -70,6 +70,7 @@ contract LitePSM is
     event OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled);
     event BufferRefilled(uint256 amount);
     event BufferDeposited(address indexed depositor, uint256 amount);
+    event BufferWithdrawn(address indexed to, uint256 amount);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -259,6 +260,7 @@ contract LitePSM is
         uint256 queueObligation = redemptionQueue.totalQueuedUsdc();
         require(balance - amount >= queueObligation, "Would strand queue");
         usdc.safeTransfer(to, amount);
+        emit BufferWithdrawn(to, amount);
     }
 
     /**
@@ -277,4 +279,8 @@ contract LitePSM is
         override
         onlyRole(PSM_UPGRADER)
     {}
+
+    // ============ Storage Gap ============
+
+    uint256[44] private __gap;
 }

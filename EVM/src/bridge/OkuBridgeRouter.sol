@@ -310,4 +310,8 @@ contract OkuBridgeRouter is
         override
         onlyRole(ROUTER_UPGRADER)
     {}
+
+    // ============ Storage Gap ============
+
+    uint256[46] private __gap;
 }

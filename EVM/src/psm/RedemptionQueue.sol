@@ -176,4 +176,8 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     // ============ Upgradeability ============
 
     function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER) {}
+
+    // ============ Storage Gap ============
+
+    uint256[45] private __gap;
 }

@@ -342,6 +342,7 @@ contract OkuUSD is
         }
 
         uint256 shares = tokensToShares(amount);
+        require(shares > 0, "Amount too small");
         _totalShares += shares;
         _shares[to] += shares;
 

@@ -85,31 +85,33 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     }
 
     /**
-     * @notice Process queued redemptions (FIFO)
-     * @param maxEntries Maximum number of entries to process
+     * @notice Process queued redemptions within an index range
+     * @param startIndex First queue index to process (inclusive)
+     * @param endIndex Last queue index to process (exclusive)
      * @param usdcToken USDC token address
      * @param - OkuUSD token address (unused, kept for interface compat)
-     * @dev Converts shares back to tokens at current multiplier - users benefit from yield accrued.
-     *      Per-entry truncation from 18->6 decimal conversion is at most ~$0.000001.
+     * @dev Allows operator to skip blocked entries (e.g., USDC-blacklisted users).
+     *      Entries are deleted after processing. queueHead advances past consecutive
+     *      deleted entries at the front of the queue.
      */
     function processQueue(
-        uint256 maxEntries,
+        uint256 startIndex,
+        uint256 endIndex,
         address usdcToken,
         address /* okuUsdToken */
     )
         external
         onlyRole(PSM)
     {
-        IERC20 usdc = IERC20(usdcToken);
+        require(startIndex >= queueHead, "Start below head");
+        require(endIndex <= queueTail, "End above tail");
 
-        uint256 processed = 0;
+        IERC20 usdc = IERC20(usdcToken);
         uint256 usdcBalance = usdc.balanceOf(msg.sender);
 
-        while (processed < maxEntries && usdcBalance > 0) {
-            // Enforce queueHead < queueTail (no processing empty/ghost mappings)
-            if (queueHead >= queueTail) break;
-
-            QueueEntry memory entry = queue[queueHead];
+        for (uint256 i = startIndex; i < endIndex && usdcBalance > 0; i++) {
+            QueueEntry memory entry = queue[i];
+            if (entry.user == address(0)) continue; // Already processed/deleted
 
             // Convert shares to current token value (includes yield earned while queued)
             uint256 okuUsdAmount = okuUsd.sharesToTokens(entry.shares);
@@ -117,26 +119,25 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
             // Convert OkuUSD (18 decimals) to USDC amount (6 decimals)
             uint256 usdcAmount = okuUsdAmount / DECIMAL_MULTIPLIER;
 
-            if (usdcBalance >= usdcAmount) {
-                // Self-burn OkuUSD held by queue (Circle model)
-                okuUsd.burn(okuUsdAmount);
+            if (usdcBalance < usdcAmount) break;
 
-                // Transfer USDC to user (1:1 value, converted for decimals)
-                usdc.safeTransferFrom(msg.sender, entry.user, usdcAmount);
+            // Self-burn OkuUSD held by queue (Circle model)
+            okuUsd.burn(okuUsdAmount);
 
-                totalQueuedShares -= entry.shares;
+            // Transfer USDC to user (1:1 value, converted for decimals)
+            usdc.safeTransferFrom(msg.sender, entry.user, usdcAmount);
 
-                emit RedemptionProcessed(entry.user, entry.shares, okuUsdAmount, usdcAmount);
+            totalQueuedShares -= entry.shares;
 
-                // Delete processed entry (gas refund)
-                delete queue[queueHead];
+            emit RedemptionProcessed(entry.user, entry.shares, okuUsdAmount, usdcAmount);
 
-                usdcBalance -= usdcAmount;
-                queueHead++;
-                processed++;
-            } else {
-                break;
-            }
+            delete queue[i];
+            usdcBalance -= usdcAmount;
+        }
+
+        // Advance head past consecutive deleted/processed entries
+        while (queueHead < queueTail && queue[queueHead].user == address(0)) {
+            queueHead++;
         }
     }
 

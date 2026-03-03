@@ -190,11 +190,13 @@ contract LitePSM is
 
     /**
      * @notice Process queued redemptions (called by operator when buffer refilled)
-     * @param maxEntries Maximum number of queue entries to process
+     * @param startIndex First queue index to process (inclusive)
+     * @param endIndex Last queue index to process (exclusive)
      * @param approveAmount USDC amount to approve for processing (backend calculates by summing entries)
      */
     function processQueue(
-        uint256 maxEntries,
+        uint256 startIndex,
+        uint256 endIndex,
         uint256 approveAmount
     )
         external
@@ -205,7 +207,7 @@ contract LitePSM is
         usdc.approve(address(redemptionQueue), approveAmount);
 
         // Process queue
-        redemptionQueue.processQueue(maxEntries, address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(startIndex, endIndex, address(usdc), address(okuUsd));
 
         // Revoke approval for remaining USDC
         usdc.approve(address(redemptionQueue), 0);

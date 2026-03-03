@@ -255,7 +255,9 @@ contract OkuBridgeRouter is
         uint256 okuUsdAmount = wOkuUsd.redeem(wOkuUsdAmount, address(this), address(this));
 
         okuUsd.burn(okuUsdAmount);
-        IBridgeAdapter(adapter).bridge{value: msg.value}(address(okuUsd), okuUsdAmount, destinationChain, recipient);
+        IBridgeAdapter(adapter).bridge{value: msg.value}(
+            address(okuUsd), okuUsdAmount, destinationChain, recipient
+        );
 
         emit BridgeInitiated(msg.sender, adapter, okuUsdAmount, destinationChain, recipient);
     }
@@ -285,7 +287,9 @@ contract OkuBridgeRouter is
         IERC20(address(okuUsd)).safeTransferFrom(msg.sender, address(this), okuUsdAmount);
 
         okuUsd.burn(okuUsdAmount);
-        IBridgeAdapter(adapter).bridge{value: msg.value}(address(okuUsd), okuUsdAmount, destinationChain, recipient);
+        IBridgeAdapter(adapter).bridge{value: msg.value}(
+            address(okuUsd), okuUsdAmount, destinationChain, recipient
+        );
 
         emit BridgeInitiated(msg.sender, adapter, okuUsdAmount, destinationChain, recipient);
     }

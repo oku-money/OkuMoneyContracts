@@ -166,7 +166,9 @@ contract RedemptionQueueTest is BaseTest {
         _mintUsdc(address(this), usdcAmount);
         _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
 
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd)
+        );
 
         assertEq(okuUsd.balanceOf(address(redemptionQueue)), queueBalanceBefore - amount);
     }
@@ -187,7 +189,9 @@ contract RedemptionQueueTest is BaseTest {
 
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
 
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd)
+        );
 
         // User should receive USDC (6 decimals), not OkuUSD amount (18 decimals)
         assertEq(usdc.balanceOf(user1), user1UsdcBefore + usdcAmount);
@@ -209,7 +213,12 @@ contract RedemptionQueueTest is BaseTest {
         _approveUsdc(address(this), address(redemptionQueue), 100e6);
 
         // Process only 1 entry
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueHead() + 1, address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(),
+            redemptionQueue.queueHead() + 1,
+            address(usdc),
+            address(okuUsd)
+        );
 
         // Queue head should advance, length decreases
         assertEq(redemptionQueue.queueLength(), 1);
@@ -234,7 +243,12 @@ contract RedemptionQueueTest is BaseTest {
         _approveUsdc(address(this), address(redemptionQueue), 300e6);
 
         // Process only 2 entries
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueHead() + 2, address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(),
+            redemptionQueue.queueHead() + 2,
+            address(usdc),
+            address(okuUsd)
+        );
 
         // Should have 1 entry left
         assertEq(redemptionQueue.queueLength(), 1);
@@ -253,7 +267,9 @@ contract RedemptionQueueTest is BaseTest {
         _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
         _approveUsdc(address(this), address(redemptionQueue), 100e6);
 
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd)
+        );
 
         // Should have processed only 1
         assertEq(redemptionQueue.queueLength(), 1);
@@ -278,7 +294,9 @@ contract RedemptionQueueTest is BaseTest {
         vm.expectEmit(true, false, false, true);
         emit RedemptionProcessed(user1, expectedShares, okuUsdAmount, usdcAmount);
 
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd)
+        );
     }
 
     function test_ProcessQueue_FIFO_Order() public {
@@ -301,7 +319,9 @@ contract RedemptionQueueTest is BaseTest {
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
         uint256 user2UsdcBefore = usdc.balanceOf(user2);
 
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd)
+        );
 
         // Only user1 (first in queue) should receive 100 USDC (6 decimals)
         assertEq(usdc.balanceOf(user1), user1UsdcBefore + 100e6);
@@ -323,7 +343,12 @@ contract RedemptionQueueTest is BaseTest {
         okuUsd.grantRole(MINTER, address(redemptionQueue));
         _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
         _approveUsdc(address(this), address(redemptionQueue), 100e6);
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueHead() + 1, address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(),
+            redemptionQueue.queueHead() + 1,
+            address(usdc),
+            address(okuUsd)
+        );
 
         assertEq(redemptionQueue.queueLength(), 1);
     }
@@ -373,7 +398,9 @@ contract RedemptionQueueTest is BaseTest {
 
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
 
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd)
+        );
 
         // User should receive 200 USDC (6 decimals) - earned 100% yield
         assertEq(usdc.balanceOf(user1), user1UsdcBefore + 200e6);
@@ -408,7 +435,9 @@ contract RedemptionQueueTest is BaseTest {
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
         uint256 user2UsdcBefore = usdc.balanceOf(user2);
 
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd)
+        );
 
         // Both users receive 150 USDC (6 decimals)
         assertEq(usdc.balanceOf(user1), user1UsdcBefore + 150e6);
@@ -504,7 +533,9 @@ contract RedemptionQueueTest is BaseTest {
 
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
 
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd)
+        );
 
         // User should receive exact expected payout (in USDC - 6 decimals)
         assertEq(
@@ -595,7 +626,9 @@ contract RedemptionQueueTest is BaseTest {
         _approveUsdc(address(this), address(redemptionQueue), totalNeededUsdc);
 
         // Process all
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd)
+        );
 
         // Verify all processed in order (each received their amount in USDC)
         assertEq(redemptionQueue.queueLength(), 0, "Queue should be empty");
@@ -652,7 +685,12 @@ contract RedemptionQueueTest is BaseTest {
         _approveUsdc(address(this), address(redemptionQueue), totalForProcessedUsdc);
 
         // Process only numToProcess
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueHead() + numToProcess, address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(),
+            redemptionQueue.queueHead() + numToProcess,
+            address(usdc),
+            address(okuUsd)
+        );
 
         // Verify: first numToProcess users got paid, rest didn't
         assertEq(
@@ -737,7 +775,9 @@ contract RedemptionQueueTest is BaseTest {
         _approveUsdc(address(this), address(redemptionQueue), totalNeededUsdc);
 
         // Process all
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd)
+        );
 
         // Verify each user got their yield-adjusted amount in FIFO order
         assertEq(redemptionQueue.queueLength(), 0, "Queue should be empty");
@@ -790,7 +830,9 @@ contract RedemptionQueueTest is BaseTest {
         _approveUsdc(address(this), address(redemptionQueue), bufferAmountUsdc);
 
         // Try to process all - will stop after numToPay
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd)
+        );
 
         // Verify: first numToPay users got paid, rest didn't (FIFO)
         for (uint256 i = 0; i < numUsers; i++) {
@@ -859,7 +901,9 @@ contract RedemptionQueueTest is BaseTest {
         uint256 queueLengthBefore = redemptionQueue.queueLength();
 
         // Process
-        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd));
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc), address(okuUsd)
+        );
 
         uint256 processed = queueLengthBefore - redemptionQueue.queueLength();
 

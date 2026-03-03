@@ -313,7 +313,7 @@ describe("Happy Path Testing", () => {
         })
 
         // Admin processes the queue
-        await psm.connect(Frank).processQueue(10, parseUnits("50000", 6))
+        await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("50000", 6))
 
         // Verify queue is now empty
         expect(await queue.queueLength()).to.equal(0)
@@ -422,7 +422,7 @@ describe("Happy Path Testing", () => {
             params: [USDC_WHALE]
         })
 
-        await psm.connect(Frank).processQueue(10, parseUnits("10000", 6))
+        await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("10000", 6))
 
         // Queue should now be empty
         expect(await queue.queueLength()).to.equal(0)

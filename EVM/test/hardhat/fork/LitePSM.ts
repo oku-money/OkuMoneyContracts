@@ -85,7 +85,7 @@ describe("LitePSM Scenarios", () => {
         if (queueLen > 0n) {
             await fundPSM(parseUnits("1000000", 6))
             // approveAmount: generous amount to cover all queued entries
-            await psm.connect(Frank).processQueue(100, parseUnits("1000000", 6))
+            await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("1000000", 6))
         }
     }
 
@@ -283,7 +283,7 @@ describe("LitePSM Scenarios", () => {
             await fundPSM(parseUnits("10000", 6))
 
             // Process queue (approve enough for all entries — queue will stop when buffer runs out)
-            await psm.connect(Frank).processQueue(10, parseUnits("20000", 6))
+            await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("20000", 6))
 
             // Should have processed Alice + Bob, leaving Charlie + Dave
             expect(await queue.queueLength()).to.equal(2)
@@ -299,7 +299,7 @@ describe("LitePSM Scenarios", () => {
 
             // Cleanup: process remaining
             await fundPSM(parseUnits("20000", 6))
-            await psm.connect(Frank).processQueue(10, parseUnits("20000", 6))
+            await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("20000", 6))
             expect(await queue.queueLength()).to.equal(0)
         })
     })
@@ -385,7 +385,7 @@ describe("LitePSM Scenarios", () => {
 
             // Cleanup
             await fundPSM(parseUnits("20000", 6))
-            await psm.connect(Frank).processQueue(10, parseUnits("20000", 6))
+            await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("20000", 6))
             expect(await queue.queueLength()).to.equal(0)
         })
     })
@@ -441,7 +441,7 @@ describe("LitePSM Scenarios", () => {
 
             // Replenish and process
             await fundPSM(parseUnits("50000", 6))
-            await psm.connect(Frank).processQueue(10, parseUnits("50000", 6))
+            await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("50000", 6))
 
             expect(await queue.queueLength()).to.equal(0)
 

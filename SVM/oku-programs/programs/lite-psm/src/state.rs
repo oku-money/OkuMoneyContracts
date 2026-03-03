@@ -243,6 +243,8 @@ impl BridgeConfig {
 pub struct BridgeNonce {
     /// PDA bump seed
     pub bump: u8,
+    /// Whether this nonce account has been initialized (avoids ambiguity with chain_id == 0)
+    pub is_initialized: bool,
     /// Destination chain ID
     pub destination_chain: u16,
     /// Next sequential nonce for this destination
@@ -253,8 +255,8 @@ impl BridgeNonce {
     pub const SEED: &'static [u8] = b"bridge_nonce";
 
     /// Space needed for BridgeNonce account
-    /// 8 (discriminator) + 1 (bump) + 2 (chain_id) + 8 (nonce) = 19 bytes
-    pub const LEN: usize = 8 + 1 + 2 + 8;
+    /// 8 (discriminator) + 1 (bump) + 1 (is_initialized) + 2 (chain_id) + 8 (nonce) = 20 bytes
+    pub const LEN: usize = 8 + 1 + 1 + 2 + 8;
 }
 
 /// Processed bridge request PDA (prevents replay attacks)

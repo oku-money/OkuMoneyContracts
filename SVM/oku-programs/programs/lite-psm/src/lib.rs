@@ -448,14 +448,22 @@ pub mod lite_psm {
     pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> {
         require!(amount > 0, OkuError::ZeroAmount);
 
-        // Protect queued redemptions: sum pending entries' raw amounts as reserved USDC
+        // Protect queued redemptions: sum pending entries' interest-adjusted amounts as reserved USDC
+        // process_queue() pays interest-adjusted values, so we must reserve the same
         let queue = &ctx.accounts.redemption_queue;
+        let current_rate_bps = ctx.accounts.config.current_rate_bps;
+        let clock = Clock::get()?;
         let mut reserved: u64 = 0;
         let pending = queue.pending_count();
         for i in 0..pending {
             let idx = ((queue.head.wrapping_add(i)) % RedemptionQueue::MAX_ENTRIES as u32) as usize;
+            let entry = &queue.entries[idx];
+            let time_elapsed = clock.unix_timestamp.saturating_sub(entry.timestamp);
+            let adjusted = calculate_interest_bearing_value(
+                entry.okusd_raw_amount, current_rate_bps, time_elapsed,
+            )?;
             reserved = reserved
-                .checked_add(queue.entries[idx].okusd_raw_amount)
+                .checked_add(adjusted)
                 .ok_or(OkuError::Overflow)?;
         }
         let vault_balance = ctx.accounts.vault_usdc.amount;
@@ -694,8 +702,9 @@ pub mod lite_psm {
         let bridge_nonce = &mut ctx.accounts.bridge_nonce;
 
         // Initialize if this is a new nonce account
-        if bridge_nonce.destination_chain == 0 {
+        if !bridge_nonce.is_initialized {
             bridge_nonce.bump = ctx.bumps.bridge_nonce;
+            bridge_nonce.is_initialized = true;
             bridge_nonce.destination_chain = destination_chain_id;
             bridge_nonce.next_nonce = 0;
         }
@@ -1121,8 +1130,9 @@ pub mod lite_psm {
         let bridge_nonce = &mut ctx.accounts.bridge_nonce;
 
         // Initialize if needed
-        if bridge_nonce.destination_chain == 0 {
+        if !bridge_nonce.is_initialized {
             bridge_nonce.bump = ctx.bumps.bridge_nonce;
+            bridge_nonce.is_initialized = true;
             bridge_nonce.destination_chain = destination_chain_id;
         }
 
@@ -1173,7 +1183,17 @@ pub mod lite_psm {
         // The sender_okusd_ata owner is validated in the accounts struct
         let sender_pubkey = ctx.accounts.sender_okusd_ata.owner;
 
-        // 7. Mint tokens back to sender
+        // 7. Check supply cap and minter allowance (parity with EVM refundFailedRequest)
+        let current_supply = ctx.accounts.okusd_mint.supply;
+        let max_supply = ctx.accounts.config.max_supply;
+        let minter_allowance = ctx.accounts.config.minter_allowance;
+        require!(
+            current_supply.checked_add(request.amount).ok_or(OkuError::Overflow)? <= max_supply,
+            OkuError::MaxSupplyExceeded
+        );
+        require!(request.amount <= minter_allowance, OkuError::AllowanceExceeded);
+
+        // 8. Mint tokens back to sender
         let config_bump = ctx.accounts.config.bump;
         let seeds = &[PsmConfig::SEED, &[config_bump]];
         let signer = &[&seeds[..]];
@@ -1191,7 +1211,13 @@ pub mod lite_psm {
             request.amount,
         )?;
 
-        // 8. Record refund in PDA (init constraint prevents double-refund)
+        // 9. Decrement minter allowance (one-way: burns do NOT restore)
+        let config = &mut ctx.accounts.config;
+        config.minter_allowance = minter_allowance
+            .checked_sub(request.amount)
+            .ok_or(OkuError::Overflow)?;
+
+        // 11. Record refund in PDA (init constraint prevents double-refund)
         let refunded = &mut ctx.accounts.refunded_request;
         refunded.bump = ctx.bumps.refunded_request;
         refunded.request_id = request_id;
@@ -1474,6 +1500,12 @@ fn cpi_update_token2022_rate<'info>(
 /// Check oracle reserves before minting
 /// Returns Ok if reserves are sufficient, error otherwise
 /// Manually parses Pyth price account to avoid SDK dependency conflicts
+///
+/// IMPORTANT: Oracle must report total reserves in raw token base units
+/// matching OkuUSD's supply denomination. No Pyth exponent adjustment
+/// is applied -- the raw i64 price value IS the reserves figure.
+/// Example: If OkuUSD uses 6 decimals and reserves are $10M,
+/// oracle should report 10_000_000_000_000 (10M * 10^6).
 fn check_oracle_reserves<'info>(
     price_account_info: &Option<UncheckedAccount<'info>>,
     oracle_feed: Pubkey,
@@ -1563,6 +1595,9 @@ fn check_oracle_reserves<'info>(
 /// ui_amount = raw_amount × e^(rate_bps × time_elapsed / (10000 × SECONDS_PER_YEAR))
 ///
 /// Matches the vault's `compute_interest_adjusted_balance` and Token-2022's native formula.
+///
+// TODO: Revisit f64 usage — consider replacing with fixed-point integer math
+// (u128 Taylor series) if BPF float determinism proves problematic. See audit notes.
 fn calculate_interest_bearing_value(
     raw_amount: u64,
     rate_bps: i16,

@@ -1350,4 +1350,48 @@ contract OkuUSDTest is BaseTest {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPk, digest);
         okuUsd.permit(owner, spender, value, deadline, v, r, s);
     }
+
+    // ============ MAX_RATE Tests ============
+
+    function test_SetYieldRate_RevertsAboveMaxRate() public {
+        uint256 maxRate = okuUsd.MAX_RATE();
+
+        vm.prank(rebaser);
+        vm.expectRevert("Rate too high");
+        okuUsd.setYieldRate(maxRate + 1, 0);
+    }
+
+    function test_SetYieldRate_AcceptsMaxRate() public {
+        uint256 maxRate = okuUsd.MAX_RATE();
+
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(maxRate, 0);
+
+        assertEq(okuUsd.ratePerSecond(), maxRate);
+    }
+
+    function test_SetNextYieldRate_RevertsAboveMaxRate() public {
+        uint256 maxRate = okuUsd.MAX_RATE();
+        uint256 endTime = block.timestamp + 30 days;
+
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(PRECISION + 1, endTime);
+
+        vm.prank(rebaser);
+        vm.expectRevert("Rate too high");
+        okuUsd.setNextYieldRate(maxRate + 1);
+    }
+
+    function test_SetNextYieldRate_AcceptsMaxRate() public {
+        uint256 maxRate = okuUsd.MAX_RATE();
+        uint256 endTime = block.timestamp + 30 days;
+
+        vm.prank(rebaser);
+        okuUsd.setYieldRate(PRECISION + 1, endTime);
+
+        vm.prank(rebaser);
+        okuUsd.setNextYieldRate(maxRate);
+
+        assertEq(okuUsd.pendingRatePerSecond(), maxRate);
+    }
 }

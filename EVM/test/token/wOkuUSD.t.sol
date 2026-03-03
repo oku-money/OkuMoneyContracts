@@ -537,14 +537,66 @@ contract wOkuUSDTest is BaseTest {
         assertGe(finalBalance, balanceAfterRebase - 1000, "Excessive rounding loss");
     }
 
-    // ============ Always Available Tests ============
+    // ============ Pause Tests (VAULT_PAUSER compliance) ============
 
-    function test_NoPauseFunctionality() public {
-        // Verify wOkuUSD has no pause function by attempting a low-level call
-        (bool success,) = address(wokuUsd).call(abi.encodeWithSignature("pause()"));
-        assertFalse(success, "wOkuUSD should not have pause functionality");
+    function test_Pause_BlocksTransfer() public {
+        uint256 amount = 100e18;
+        _mintOkuUsd(user1, amount);
+        _approveOkuUsd(user1, address(wokuUsd), amount);
 
-        // Confirm deposit/redeem work normally
+        vm.prank(user1);
+        wokuUsd.deposit(amount, user1);
+
+        // Pause
+        vm.prank(vaultPauser);
+        wokuUsd.pause();
+
+        // Transfer should revert
+        vm.prank(user1);
+        vm.expectRevert("wOkuUSD: transfers paused");
+        wokuUsd.transfer(user2, 50e18);
+    }
+
+    function test_Pause_BlocksTransferFrom() public {
+        uint256 amount = 100e18;
+        _mintOkuUsd(user1, amount);
+        _approveOkuUsd(user1, address(wokuUsd), amount);
+
+        vm.prank(user1);
+        wokuUsd.deposit(amount, user1);
+
+        // user1 approves user2
+        vm.prank(user1);
+        wokuUsd.approve(user2, 50e18);
+
+        // Pause
+        vm.prank(vaultPauser);
+        wokuUsd.pause();
+
+        // TransferFrom should revert
+        vm.prank(user2);
+        vm.expectRevert("wOkuUSD: transfers paused");
+        wokuUsd.transferFrom(user1, user2, 50e18);
+    }
+
+    function test_Pause_AllowsDeposit() public {
+        uint256 amount = 100e18;
+        _mintOkuUsd(user1, amount);
+        _approveOkuUsd(user1, address(wokuUsd), amount);
+
+        // Pause
+        vm.prank(vaultPauser);
+        wokuUsd.pause();
+
+        // Deposit (wrap) should still work — from=address(0) is a mint
+        vm.prank(user1);
+        uint256 shares = wokuUsd.deposit(amount, user1);
+
+        assertGt(shares, 0);
+        assertEq(wokuUsd.balanceOf(user1), shares);
+    }
+
+    function test_Pause_AllowsWithdraw() public {
         uint256 amount = 100e18;
         _mintOkuUsd(user1, amount);
         _approveOkuUsd(user1, address(wokuUsd), amount);
@@ -552,9 +604,141 @@ contract wOkuUSDTest is BaseTest {
         vm.prank(user1);
         uint256 shares = wokuUsd.deposit(amount, user1);
 
+        // Pause
+        vm.prank(vaultPauser);
+        wokuUsd.pause();
+
+        // Withdraw (unwrap) should still work — to=address(0) is a burn
         vm.prank(user1);
         uint256 assets = wokuUsd.redeem(shares, user1, user1);
 
         assertEq(assets, amount);
+    }
+
+    function test_Pause_OnlyVaultPauser() public {
+        // user1 should not be able to pause
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                VAULT_PAUSER
+            )
+        );
+        wokuUsd.pause();
+
+        // pauser (OkuUSD pauser) should not be able to pause wOkuUSD
+        vm.prank(pauser);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                pauser,
+                VAULT_PAUSER
+            )
+        );
+        wokuUsd.pause();
+    }
+
+    function test_Unpause_OnlyVaultUnpauser() public {
+        // Pause first
+        vm.prank(vaultPauser);
+        wokuUsd.pause();
+
+        // user1 should not be able to unpause
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                VAULT_UNPAUSER
+            )
+        );
+        wokuUsd.unpause();
+
+        // vaultPauser should not be able to unpause (separate roles)
+        vm.prank(vaultPauser);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                vaultPauser,
+                VAULT_UNPAUSER
+            )
+        );
+        wokuUsd.unpause();
+
+        // vaultUnpauser can unpause
+        vm.prank(vaultUnpauser);
+        wokuUsd.unpause();
+    }
+
+    function test_PauseToBlacklist_FullProtocol() public {
+        // Setup: user1 has wOkuUSD and OkuUSD
+        uint256 amount = 100e18;
+        _mintOkuUsd(user1, amount * 2);
+        _approveOkuUsd(user1, address(wokuUsd), amount);
+
+        vm.prank(user1);
+        wokuUsd.deposit(amount, user1);
+
+        // 1. Pause OkuUSD — blocks OkuUSD transfers
+        vm.prank(pauser);
+        okuUsd.pause();
+
+        // 2. Pause wOkuUSD — blocks wOkuUSD transfers
+        vm.prank(vaultPauser);
+        wokuUsd.pause();
+
+        // Verify both transfers blocked
+        vm.prank(user1);
+        vm.expectRevert("wOkuUSD: transfers paused");
+        wokuUsd.transfer(user2, 50e18);
+
+        // 3. Blacklist the target in OkuUSD
+        vm.prank(blacklister);
+        okuUsd.blacklist(user1);
+
+        // 4. Unpause wOkuUSD — resume wrapper operations
+        vm.prank(vaultUnpauser);
+        wokuUsd.unpause();
+
+        // 5. Unpause OkuUSD — resume token operations
+        vm.prank(unpauser);
+        okuUsd.unpause();
+
+        // Verify: blacklisted user cannot unwrap (OkuUSD transfer to blacklisted recipient blocked)
+        uint256 user1WokuBalance = wokuUsd.balanceOf(user1);
+        vm.prank(user1);
+        vm.expectRevert("Recipient blacklisted");
+        wokuUsd.redeem(user1WokuBalance, user1, user1);
+
+        // Verify: non-blacklisted user2 can still operate wOkuUSD
+        _mintOkuUsd(user2, amount);
+        _approveOkuUsd(user2, address(wokuUsd), amount);
+
+        vm.prank(user2);
+        uint256 shares2 = wokuUsd.deposit(amount, user2);
+        assertGt(shares2, 0);
+    }
+
+    function test_Pause_TransfersResumeAfterUnpause() public {
+        uint256 amount = 100e18;
+        _mintOkuUsd(user1, amount);
+        _approveOkuUsd(user1, address(wokuUsd), amount);
+
+        vm.prank(user1);
+        wokuUsd.deposit(amount, user1);
+
+        // Pause then unpause
+        vm.prank(vaultPauser);
+        wokuUsd.pause();
+
+        vm.prank(vaultUnpauser);
+        wokuUsd.unpause();
+
+        // Transfers should work again
+        vm.prank(user1);
+        wokuUsd.transfer(user2, 50e18);
+
+        assertEq(wokuUsd.balanceOf(user2), 50e18);
     }
 }

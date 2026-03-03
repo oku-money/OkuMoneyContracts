@@ -356,6 +356,7 @@ contract OkuBridge is
 
         // Extract EVM address from bytes32 recipient
         address mintTo = address(uint160(uint256(request.recipient)));
+        if (mintTo == address(0)) revert ZeroAddress();
 
         // Convert shares to tokens and mint (OkuUSD.mint takes token amount)
         uint256 tokensToMint = okuUsd.sharesToTokens(request.shares);
@@ -426,7 +427,6 @@ contract OkuBridge is
      * @notice Update the bridge fee
      * @param newFee New fee in basis points (max 10000 = 100%)
      */
-    // TODO: Consider adding a maximum fee cap (e.g., 1000 bps) to limit blast radius of compromised orchestrator
     function updateFee(uint256 newFee) external onlyRole(BRIDGE_FEE_MANAGER) {
         if (newFee > 10_000) revert InvalidFee(newFee);
         uint256 oldFee = bridgeFee;

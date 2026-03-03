@@ -762,12 +762,22 @@ contract OkuUSDTest is BaseTest {
 
     // ============ Edge Case Tests ============
 
-    function test_Mint_ZeroAmount() public {
-        // Zero mint should technically work but results in no change
+    function test_Mint_ZeroAmount_RevertsAmountTooSmall() public {
+        // Zero mint converts to zero shares and should revert
         vm.prank(minter);
+        vm.expectRevert("Amount too small");
         okuUsd.mint(user1, 0);
+    }
 
-        assertEq(okuUsd.balanceOf(user1), 0);
+    function test_Mint_SubShareAmount_RevertsAfterRebase() public {
+        // At a high multiplier, tiny token amounts round to 0 shares
+        vm.prank(rebaser);
+        okuUsd.updateRewardMultiplier(PRECISION * 100); // 100x multiplier
+
+        // 1 wei of tokens / 100x multiplier = 0 shares (rounds down)
+        vm.prank(minter);
+        vm.expectRevert("Amount too small");
+        okuUsd.mint(user1, 1);
     }
 
     function test_Transfer_ZeroAmount() public {

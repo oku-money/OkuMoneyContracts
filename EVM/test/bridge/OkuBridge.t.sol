@@ -1241,6 +1241,51 @@ contract OkuBridgeTest is BaseTest {
         okuBridge.bridgeMint(request, signature);
     }
 
+    // ============ M-2: Zero Recipient Validation ============
+
+    function test_BridgeMint_RevertZeroRecipient() public {
+        uint256 shares = 100e18;
+
+        // Craft a request where the lower 20 bytes of recipient are zero
+        // (e.g., a Solana pubkey whose lower 20 bytes happen to be 0x0)
+        bytes32 solanaPubkeyLowerZero = bytes32(uint256(0xDEADBEEF) << 160);
+
+        OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({
+            sourceChainId: OPTIMISM_CHAIN_ID,
+            destChainId: block.chainid,
+            sender: user1,
+            recipient: solanaPubkeyLowerZero,
+            shares: shares,
+            nonce: 0,
+            deadline: block.timestamp + 1 hours
+        });
+
+        bytes memory signature = _signBridgeRequest(request);
+
+        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        okuBridge.bridgeMint(request, signature);
+    }
+
+    function test_BridgeMint_RevertPureZeroRecipient() public {
+        uint256 shares = 100e18;
+
+        // Recipient is bytes32(0) — lower 20 bytes are also zero
+        OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({
+            sourceChainId: OPTIMISM_CHAIN_ID,
+            destChainId: block.chainid,
+            sender: user1,
+            recipient: bytes32(0),
+            shares: shares,
+            nonce: 0,
+            deadline: block.timestamp + 1 hours
+        });
+
+        bytes memory signature = _signBridgeRequest(request);
+
+        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        okuBridge.bridgeMint(request, signature);
+    }
+
     // ============ Dust Sweep Tests ============
 
     function test_SweepDust_RecoverAccumulatedRounding() public {

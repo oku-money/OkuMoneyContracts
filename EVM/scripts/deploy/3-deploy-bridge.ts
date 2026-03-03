@@ -51,9 +51,10 @@ async function main() {
   const bridgeRouter = await deployUUPSProxy(
     "OkuBridgeRouter",
     [
-      wOkuUSDAddress,   // wOkuUSD
-      okuUSDAddress,    // okuUSD
-      deployer.address, // admin
+      wOkuUSDAddress,    // wOkuUSD
+      okuUSDAddress,     // okuUSD
+      okuBridgeAddress,  // okuBridge
+      deployer.address,  // admin
     ],
     network
   );

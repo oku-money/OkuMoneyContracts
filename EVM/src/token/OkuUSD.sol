@@ -63,9 +63,16 @@ contract OkuUSD is
     // Blacklist
     mapping(address => bool) public isBlacklisted;
 
+    // Blacklist-exempt infrastructure addresses (bridge, router)
+    address public blacklistExempt1;
+    address public blacklistExempt2;
+    bool private _blacklistExemptInitialized;
+
     // Events
     event RebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
-    event YieldRateUpdated(uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotMultiplier);
+    event YieldRateUpdated(
+        uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotMultiplier
+    );
     event NextYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
@@ -118,7 +125,9 @@ contract OkuUSD is
                 uint256 pendingRate = pendingRatePerSecond;
                 if (pendingRate > PRECISION) {
                     uint256 elapsedPending = block.timestamp - rateEnd;
-                    return (_baseMultiplier * _rpow(pendingRate, elapsedPending, PRECISION)) / PRECISION;
+                    return
+                        (_baseMultiplier * _rpow(pendingRate, elapsedPending, PRECISION))
+                            / PRECISION;
                 }
             }
             return _baseMultiplier;
@@ -160,7 +169,13 @@ contract OkuUSD is
      * @param newRatePerSecond Compound rate per second (1e18 = no yield)
      * @param endTimestamp When current rate expires (0 = no expiry)
      */
-    function setYieldRate(uint256 newRatePerSecond, uint256 endTimestamp) external onlyRole(REBASER) {
+    function setYieldRate(
+        uint256 newRatePerSecond,
+        uint256 endTimestamp
+    )
+        external
+        onlyRole(REBASER)
+    {
         require(newRatePerSecond >= PRECISION, "Rate cannot be negative");
         require(endTimestamp == 0 || endTimestamp > block.timestamp, "End must be in the future");
 
@@ -258,7 +273,9 @@ contract OkuUSD is
                     x := div(xxRound, b)
                     if mod(n, 2) {
                         let zx := mul(z, x)
-                        if and(iszero(iszero(x)), iszero(eq(div(zx, x), z))) { revert(0, 0) }
+                        if and(iszero(iszero(x)), iszero(eq(div(zx, x), z))) {
+                            revert(0, 0)
+                        }
                         let zxRound := add(zx, half)
                         if lt(zxRound, zx) { revert(0, 0) }
                         z := div(zxRound, b)
@@ -365,9 +382,33 @@ contract OkuUSD is
         emit MaxSupplyUpdated(oldMaxSupply, newMaxSupply);
     }
 
+    // ============ Blacklist-Exempt Infrastructure ============
+
+    /**
+     * @notice One-time setter for blacklist-exempt infrastructure addresses (bridge, router)
+     * @dev Uses CREATE2 deterministic addresses. Cannot be called twice.
+     */
+    function initializeBlacklistExempt(
+        address bridge,
+        address router
+    )
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        require(!_blacklistExemptInitialized, "Already initialized");
+        require(bridge != address(0) && router != address(0), "Zero address");
+        blacklistExempt1 = bridge;
+        blacklistExempt2 = router;
+        _blacklistExemptInitialized = true;
+    }
+
     // ============ Blacklist (Works While Paused) ============
 
     function blacklist(address account) external onlyRole(BLACKLISTER) {
+        require(
+            account != blacklistExempt1 && account != blacklistExempt2,
+            "Account is blacklist-exempt"
+        );
         isBlacklisted[account] = true;
         emit Blacklisted(account);
     }
@@ -393,5 +434,5 @@ contract OkuUSD is
 
     // ============ Storage Gap ============
 
-    uint256[40] private __gap;
+    uint256[37] private __gap;
 }

@@ -154,7 +154,8 @@ contract LitePSM is
         whenNotPaused
         nonReentrant
     {
-        IERC20Permit(address(okuUsd)).permit(msg.sender, address(this), okuUsdAmount, deadline, v, r, s);
+        IERC20Permit(address(okuUsd))
+            .permit(msg.sender, address(this), okuUsdAmount, deadline, v, r, s);
         _redeem(msg.sender, okuUsdAmount);
     }
 

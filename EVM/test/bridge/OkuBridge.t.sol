@@ -39,7 +39,7 @@ contract OkuBridgeTest is BaseTest {
 
     // EIP-712 typehash
     bytes32 public constant BRIDGE_REQUEST_TYPEHASH = keccak256(
-        "BridgeRequest(uint256 sourceChainId,uint256 destChainId,address sender,address recipient,uint256 shares,uint256 nonce,uint256 deadline)"
+        "BridgeRequest(uint256 sourceChainId,uint256 destChainId,address sender,bytes32 recipient,uint256 shares,uint256 nonce,uint256 deadline)"
     );
 
     function setUp() public override {
@@ -72,14 +72,19 @@ contract OkuBridgeTest is BaseTest {
     // ============ Helper Functions ============
 
     /// @notice Approve bridge and call bridgeBurn (user must hold tokens)
-    function _approveBridgeBurn(address user, uint256 destChainId, address recipient, uint256 shares)
+    function _approveBridgeBurn(
+        address user,
+        uint256 destChainId,
+        address recipient,
+        uint256 shares
+    )
         internal
         returns (bytes32 requestId)
     {
         uint256 tokenAmount = okuUsd.sharesToTokens(shares);
         vm.startPrank(user);
         okuUsd.approve(address(okuBridge), tokenAmount);
-        requestId = okuBridge.bridgeBurn(destChainId, recipient, shares);
+        requestId = okuBridge.bridgeBurn(destChainId, bytes32(uint256(uint160(recipient))), shares);
         vm.stopPrank();
     }
 
@@ -121,7 +126,7 @@ contract OkuBridgeTest is BaseTest {
         uint256 tokenAmount = okuUsd.sharesToTokens(shares);
         vm.startPrank(user);
         okuUsd.approve(address(okuBridge), tokenAmount);
-        requestId = okuBridge.bridgeBurn(destChainId, recipient, shares);
+        requestId = okuBridge.bridgeBurn(destChainId, bytes32(uint256(uint160(recipient))), shares);
         vm.stopPrank();
 
         // Construct expected request (shares = netShares, what destination will mint)
@@ -131,7 +136,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: block.chainid,
             destChainId: destChainId,
             sender: user,
-            recipient: recipient,
+            recipient: bytes32(uint256(uint160(recipient))),
             shares: netShares,
             nonce: nonce,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -153,7 +158,8 @@ contract OkuBridgeTest is BaseTest {
 
         vm.startPrank(user1);
         okuUsd.approve(address(okuBridge), okuUsd.balanceOf(user1));
-        bytes32 requestId = okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
+        bytes32 requestId =
+            okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user2))), shares);
         vm.stopPrank();
 
         // Verify exact shares burned from user
@@ -170,7 +176,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: block.chainid,
             destChainId: OPTIMISM_CHAIN_ID,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: netShares,
             nonce: nonceBefore,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -188,7 +194,7 @@ contract OkuBridgeTest is BaseTest {
         vm.expectRevert(
             abi.encodeWithSelector(OkuBridge.UnsupportedChain.selector, UNSUPPORTED_CHAIN_ID)
         );
-        okuBridge.bridgeBurn(UNSUPPORTED_CHAIN_ID, user2, shares);
+        okuBridge.bridgeBurn(UNSUPPORTED_CHAIN_ID, bytes32(uint256(uint160(user2))), shares);
         vm.stopPrank();
     }
 
@@ -203,7 +209,7 @@ contract OkuBridgeTest is BaseTest {
         vm.expectRevert(
             abi.encodeWithSelector(OkuBridge.AmountBelowMinimum.selector, shares, minShares)
         );
-        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user2))), shares);
         vm.stopPrank();
     }
 
@@ -218,7 +224,7 @@ contract OkuBridgeTest is BaseTest {
         vm.expectRevert(
             abi.encodeWithSelector(OkuBridge.AmountAboveMaximum.selector, shares, maxShares)
         );
-        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user2))), shares);
         vm.stopPrank();
     }
 
@@ -232,7 +238,7 @@ contract OkuBridgeTest is BaseTest {
         vm.startPrank(user1);
         okuUsd.approve(address(okuBridge), okuUsd.balanceOf(user1));
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user2))), shares);
         vm.stopPrank();
     }
 
@@ -308,7 +314,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: shares,
             nonce: 0,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -335,7 +341,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: shares,
             nonce: 0,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -370,7 +376,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: shares,
             nonce: 0,
             deadline: block.timestamp - 1 // Past deadline
@@ -389,7 +395,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: ARBITRUM_CHAIN_ID, // Wrong chain
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: shares,
             nonce: 0,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -410,7 +416,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: shares,
             nonce: 0,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -434,7 +440,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: shares,
             nonce: 0,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -470,7 +476,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid, // Use current chainid
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: netShares,
             nonce: 0,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -511,7 +517,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: netShares,
             nonce: 0,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -540,7 +546,7 @@ contract OkuBridgeTest is BaseTest {
 
             vm.startPrank(user);
             okuUsd.approve(address(okuBridge), okuUsd.balanceOf(user));
-            okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user, shares);
+            okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user))), shares);
             vm.stopPrank();
         }
 
@@ -581,7 +587,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: shares,
             nonce: 0,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -653,7 +659,7 @@ contract OkuBridgeTest is BaseTest {
         vm.expectRevert(
             abi.encodeWithSelector(OkuBridge.UnsupportedChain.selector, OPTIMISM_CHAIN_ID)
         );
-        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user2))), shares);
         vm.stopPrank();
     }
 
@@ -674,10 +680,10 @@ contract OkuBridgeTest is BaseTest {
         vm.expectRevert(
             abi.encodeWithSelector(OkuBridge.AmountBelowMinimum.selector, newMin - 1, newMin)
         );
-        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, newMin - 1);
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user2))), newMin - 1);
 
         // Test at new minimum (should work — approval already covers newMin)
-        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, newMin);
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user2))), newMin);
         vm.stopPrank();
     }
 
@@ -733,10 +739,13 @@ contract OkuBridgeTest is BaseTest {
         // Verify user1 shares were burned
         assertEq(okuUsd.sharesOf(user1), 0);
 
-        // Admin refunds the request
+        // Admin refunds the request — must wait for mint window to close
         // proof param is unused in current implementation (OkuBridge.sol).
         // When proof verification is added, this test must be updated with valid proof data.
         bytes memory proof = "";
+
+        // Warp past the deadline so the mint window is closed
+        vm.warp(request.deadline + 1);
 
         uint256 user1SharesBefore = okuUsd.sharesOf(user1);
         uint256 user1TokensBefore = okuUsd.balanceOf(user1);
@@ -776,7 +785,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: 100e18,
             nonce: 0,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -811,7 +820,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: shares,
             nonce: 0,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -851,7 +860,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid,
             sender: user1,
-            recipient: recipient,
+            recipient: bytes32(uint256(uint160(recipient))),
             shares: shares,
             nonce: 0,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -881,7 +890,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: block.chainid,
             destChainId: block.chainid,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: netShares,
             nonce: 0,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -911,7 +920,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: block.chainid,
             destChainId: OPTIMISM_CHAIN_ID,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: netShares,
             nonce: nonce,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -921,11 +930,11 @@ contract OkuBridgeTest is BaseTest {
         vm.startPrank(user1);
         okuUsd.approve(address(okuBridge), okuUsd.balanceOf(user1));
 
-        vm.expectEmit(true, true, true, true);
+        vm.expectEmit(true, true, false, true);
         emit OkuBridge.BridgeBurn(
             expectedRequestId,
             user1,
-            user2,
+            bytes32(uint256(uint160(user2))),
             block.chainid,
             OPTIMISM_CHAIN_ID,
             netShares,
@@ -933,7 +942,7 @@ contract OkuBridgeTest is BaseTest {
             block.timestamp + okuBridge.bridgeDeadline()
         );
 
-        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, user2, shares);
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user2))), shares);
         vm.stopPrank();
     }
 
@@ -958,7 +967,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: block.chainid,
             destChainId: OPTIMISM_CHAIN_ID,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: netShares,
             nonce: 0,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -975,6 +984,9 @@ contract OkuBridgeTest is BaseTest {
             _mintSharesAndBridge(user1, shares, OPTIMISM_CHAIN_ID, user2);
 
         bytes memory proof = "";
+
+        // Warp past the deadline so the mint window is closed
+        vm.warp(request.deadline + 1);
 
         // First refund succeeds
         vm.prank(admin);
@@ -994,7 +1006,7 @@ contract OkuBridgeTest is BaseTest {
         vm.startPrank(user1);
         okuUsd.approve(address(okuBridge), okuUsd.balanceOf(user1));
         vm.expectRevert(OkuBridge.ZeroAddress.selector);
-        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, address(0), shares);
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(0), shares);
         vm.stopPrank();
     }
 
@@ -1019,7 +1031,9 @@ contract OkuBridgeTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BRIDGE_LIMITS_MANAGER
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                BRIDGE_LIMITS_MANAGER
             )
         );
         okuBridge.updateDeadline(2 hours);
@@ -1117,7 +1131,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: shares,
             nonce: 0,
             deadline: block.timestamp // exactly now
@@ -1170,6 +1184,9 @@ contract OkuBridgeTest is BaseTest {
 
         bytes32 requestId = keccak256(abi.encode(request));
 
+        // Warp past the deadline so the mint window is closed
+        vm.warp(request.deadline + 1);
+
         vm.prank(admin);
         vm.expectEmit(true, true, false, true);
         emit OkuBridge.RefundProcessed(requestId, user1, request.shares);
@@ -1180,7 +1197,9 @@ contract OkuBridgeTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BRIDGE_CHAIN_MANAGER
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                BRIDGE_CHAIN_MANAGER
             )
         );
         okuBridge.addSupportedChain(137);
@@ -1190,7 +1209,9 @@ contract OkuBridgeTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BRIDGE_LIMITS_MANAGER
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                BRIDGE_LIMITS_MANAGER
             )
         );
         okuBridge.updateLimits(1e18, 100e18);
@@ -1203,7 +1224,7 @@ contract OkuBridgeTest is BaseTest {
             sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid,
             sender: user1,
-            recipient: user2,
+            recipient: bytes32(uint256(uint160(user2))),
             shares: shares,
             nonce: 0,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
@@ -1212,9 +1233,121 @@ contract OkuBridgeTest is BaseTest {
         bytes memory signature = _signBridgeRequest(request);
         bytes32 requestId = keccak256(abi.encode(request));
 
-        vm.expectEmit(true, true, true, true);
-        emit OkuBridge.BridgeMint(requestId, user2, OPTIMISM_CHAIN_ID, shares);
+        vm.expectEmit(true, true, false, true);
+        emit OkuBridge.BridgeMint(
+            requestId, bytes32(uint256(uint160(user2))), OPTIMISM_CHAIN_ID, shares
+        );
 
         okuBridge.bridgeMint(request, signature);
+    }
+
+    // ============ Dust Sweep Tests ============
+
+    function test_SweepDust_RecoverAccumulatedRounding() public {
+        // Perform a bridge at a non-unit multiplier to create rounding dust
+        uint256 newMultiplier = PRECISION * 3 / 2; // 1.5x
+        vm.prank(rebaser);
+        okuUsd.updateRewardMultiplier(newMultiplier);
+
+        uint256 shares = 100e18;
+        _mintOkuUsd(user1, okuUsd.sharesToTokens(shares));
+
+        vm.startPrank(user1);
+        okuUsd.approve(address(okuBridge), okuUsd.balanceOf(user1));
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user2))), shares);
+        vm.stopPrank();
+
+        uint256 dustBalance = okuUsd.balanceOf(address(okuBridge));
+
+        // Sweep dust to feeRecipient
+        uint256 feeRecipientBefore = okuUsd.balanceOf(feeRecipient);
+
+        vm.prank(admin);
+        okuBridge.sweepDust();
+
+        // Bridge balance is now zero
+        assertEq(okuUsd.balanceOf(address(okuBridge)), 0);
+        // Fee recipient received the dust
+        assertEq(okuUsd.balanceOf(feeRecipient), feeRecipientBefore + dustBalance);
+    }
+
+    function test_SweepDust_EmitsEvent() public {
+        // Force some dust by minting directly to bridge (simulating rounding)
+        _mintOkuUsd(address(okuBridge), 1);
+        uint256 dustBalance = okuUsd.balanceOf(address(okuBridge));
+        assertGt(dustBalance, 0);
+
+        vm.prank(admin);
+        vm.expectEmit(true, false, false, true);
+        emit OkuBridge.DustSwept(feeRecipient, dustBalance);
+        okuBridge.sweepDust();
+    }
+
+    function test_SweepDust_NoOpWhenZeroBalance() public {
+        // Bridge has zero balance — sweepDust should be a no-op (no revert)
+        assertEq(okuUsd.balanceOf(address(okuBridge)), 0);
+
+        vm.prank(admin);
+        okuBridge.sweepDust(); // should not revert
+    }
+
+    function test_SweepDust_RevertNotAuthorized() public {
+        bytes32 role = okuBridge.DUST_SWEEPER();
+
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, role
+            )
+        );
+        okuBridge.sweepDust();
+    }
+
+    // ============ Refund Deadline Enforcement Tests ============
+
+    function test_RefundFailedRequest_RevertMintWindowStillOpen() public {
+        uint256 shares = 100e18;
+
+        (, OkuBridge.BridgeRequest memory request) =
+            _mintSharesAndBridge(user1, shares, OPTIMISM_CHAIN_ID, user2);
+
+        // Deadline is in the future — refund should revert
+        assertLe(block.timestamp, request.deadline);
+
+        vm.prank(admin);
+        vm.expectRevert(OkuBridge.MintWindowStillOpen.selector);
+        okuBridge.refundFailedRequest(request, "");
+    }
+
+    function test_RefundFailedRequest_RevertAtExactDeadline() public {
+        uint256 shares = 100e18;
+
+        (, OkuBridge.BridgeRequest memory request) =
+            _mintSharesAndBridge(user1, shares, OPTIMISM_CHAIN_ID, user2);
+
+        // Warp to exactly the deadline — should still revert (condition is block.timestamp <= deadline)
+        vm.warp(request.deadline);
+
+        vm.prank(admin);
+        vm.expectRevert(OkuBridge.MintWindowStillOpen.selector);
+        okuBridge.refundFailedRequest(request, "");
+    }
+
+    function test_RefundFailedRequest_SucceedsAfterDeadline() public {
+        uint256 shares = 100e18;
+
+        (, OkuBridge.BridgeRequest memory request) =
+            _mintSharesAndBridge(user1, shares, OPTIMISM_CHAIN_ID, user2);
+
+        // Warp past the deadline
+        vm.warp(request.deadline + 1);
+
+        uint256 user1SharesBefore = okuUsd.sharesOf(user1);
+
+        vm.prank(admin);
+        okuBridge.refundFailedRequest(request, "");
+
+        // Verify refund succeeded
+        assertEq(okuUsd.sharesOf(user1), user1SharesBefore + request.shares);
     }
 }

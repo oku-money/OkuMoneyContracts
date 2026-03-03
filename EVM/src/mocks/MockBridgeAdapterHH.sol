@@ -35,6 +35,7 @@ contract MockBridgeAdapterHH is IBridgeAdapter {
         address recipient
     )
         external
+        payable
         override
     {
         pendingBridges.push(

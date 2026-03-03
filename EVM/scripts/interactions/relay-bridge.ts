@@ -225,11 +225,11 @@ async function executeBridgeBurn(
   const [user] = await ethers.getSigners();
   logger.info(`User: ${user.address}`);
 
-  // Check balance and fee
+  // Check balance and fee (subtractive model: fee comes out of input shares)
   const bridgeFee = await okuBridge.bridgeFee();
   const feeShares = (shares * bridgeFee) / 10000n;
-  const totalShares = shares + feeShares;
-  const totalTokens = await okuUSD.sharesToTokens(totalShares);
+  const netShares = shares - feeShares;
+  const totalTokens = await okuUSD.sharesToTokens(shares);
 
   const userBalance = await okuUSD.balanceOf(user.address);
   if (userBalance < totalTokens) {
@@ -239,7 +239,7 @@ async function executeBridgeBurn(
   }
 
   logger.info(`Fee: ${ethers.formatEther(feeShares)} shares (${Number(bridgeFee) / 100}%)`);
-  logger.info(`Total: ${ethers.formatEther(totalShares)} shares (${ethers.formatEther(totalTokens)} tokens)`);
+  logger.info(`Net: ${ethers.formatEther(netShares)} shares, Total: ${ethers.formatEther(shares)} shares (${ethers.formatEther(totalTokens)} tokens)`);
 
   // Check if destination chain is supported
   const isSupported = await okuBridge.supportedChains(destChainId);

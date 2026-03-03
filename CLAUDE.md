@@ -347,6 +347,10 @@ Prevent front-running of blacklist transactions:
 
 **Critical**: blacklist() cannot inherit pause checks.
 
+### Blacklist-Exempt Infrastructure
+
+Bridge and router addresses are marked as blacklist-exempt to prevent accidental blacklisting of critical infrastructure. On EVM, `initializeBlacklistExempt(bridge, router)` is a one-time setter gated by `DEFAULT_ADMIN_ROLE`. `blacklist()` reverts if the target is either exempt address.
+
 ## Cross-Chain Bridging (OkuBridge)
 
 OkuBridge is our proprietary, orchestrator-signed bridge. No third-party bridge dependencies.
@@ -390,7 +394,7 @@ BridgeRequest {
     sourceChainId: uint256
     destChainId: uint256
     sender: address
-    recipient: address
+    recipient: bytes32     // bytes32 to support non-EVM destinations (Solana 32-byte pubkeys)
     shares: uint256        // Shares, not tokens
     nonce: uint256
     deadline: uint256
@@ -398,6 +402,9 @@ BridgeRequest {
 
 requestId = keccak256(abi.encode(request))
 ```
+
+On EVM destination, the recipient address is extracted: `address mintTo = address(uint160(uint256(request.recipient)))`.
+On SVM destination, the full 32 bytes are used as a Solana Pubkey.
 
 ### Replay Prevention
 
@@ -446,9 +453,11 @@ Orchestrator waits for source chain finality before signing:
 | Failure | Resolution |
 |---------|------------|
 | Destination paused | Orchestrator retries when unpaused |
-| Recipient blacklisted | Admin refunds shares on source |
+| Recipient blacklisted | Admin refunds shares on source via `refundFailedRequest` (EVM) or `refund_bridge_request` (SVM) |
 | Signature expired | User requests new signature |
 | Orchestrator down | User submits with signed payload |
+
+**Deadline-based refund safety**: Refunds require `block.timestamp > request.deadline` (EVM) / `clock.unix_timestamp > request.deadline` (SVM). Since `bridgeMint` requires `timestamp <= deadline`, once the deadline passes, the mint window is closed and refund is safe. This invariant is enforced on-chain, not by orchestrator trust.
 
 ### OkuBridge Roles
 
@@ -461,7 +470,8 @@ Orchestrator waits for source chain finality before signing:
 | BRIDGE_NONCE_ADMIN_ROLE | Skip stuck nonces | Cold Multisig |
 | BRIDGE_CHAIN_MANAGER_ROLE | Add/remove supported chains | Cold Multisig |
 | BRIDGE_LIMITS_MANAGER_ROLE | Update min/max amounts | Cold Multisig |
-| BRIDGE_REFUND_ADMIN_ROLE | Process refunds for failed requests | Cold Multisig |
+| BRIDGE_REFUND_ADMIN_ROLE | Process refunds for failed requests (after deadline) | Cold Multisig |
+| DUST_SWEEPER | Sweep accumulated rounding dust (EVM only) | Cold Multisig |
 | BRIDGE_UPGRADER | Upgrade bridge contract | Cold Multisig |
 
 ### EVM vs SVM
@@ -469,10 +479,12 @@ Orchestrator waits for source chain finality before signing:
 | | EVM | SVM |
 |---|---|---|
 | Bridged value | Shares (manual `tokensToShares` conversion) | Raw token amounts (Token-2022 handles rebasing natively) |
+| Recipient type | `bytes32` (supports EVM and Solana destinations) | `[u8; 20]` EVM / `[u8; 32]` Solana |
 | Signature scheme | ECDSA via EIP-712 | Ed25519 via instruction introspection |
 | Hash function | keccak256 | keccak256 (cross-chain consistency) |
 | Nonce tracking | Per-destination mapping | Per-destination `BridgeNonce` PDA |
 | Replay prevention | `processedRequests` mapping | `ProcessedRequest` PDA init constraint |
+| Refund mechanism | `refundFailedRequest()` after deadline | `refund_bridge_request` after deadline (RefundedRequest PDA) |
 | Request ID | `keccak256(abi.encode(BridgeRequest))` | `keccak256(80-byte message)` |
 
 ### Cross-Chain Message Format (80 bytes)

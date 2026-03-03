@@ -2237,4 +2237,427 @@ describe("Bridge Security Tests", () => {
       expect(processedRequest.amount.toNumber()).to.equal(Number(netAmount));
     });
   });
+
+  describe("Refund Bridge Request", () => {
+    /**
+     * Serialize a SVM->EVM bridge burn message (80 bytes).
+     * Layout matches bridge_burn's message construction in lib.rs:
+     *   source_chain_id (2 LE) | dest_chain_id (2 LE) | sender (32 bytes Solana pubkey) |
+     *   recipient (20 bytes EVM addr) | net_amount (8 LE) | nonce (8 LE) | deadline (8 LE)
+     */
+    function serializeBurnMessage(params: {
+      sourceChainId: number;
+      destinationChainId: number;
+      sender: PublicKey;
+      recipient: Uint8Array; // 20 bytes EVM address
+      amount: bigint;
+      nonce: bigint;
+      deadline: bigint;
+    }): Buffer {
+      const message = Buffer.alloc(80);
+      let offset = 0;
+
+      offset = message.writeUInt16LE(params.sourceChainId, offset);
+      offset = message.writeUInt16LE(params.destinationChainId, offset);
+
+      const senderBytes = params.sender.toBytes();
+      message.set(senderBytes, offset);
+      offset += 32;
+
+      const recipientBytes = params.recipient.slice(0, 20);
+      message.set(recipientBytes, offset);
+      offset += 20;
+
+      offset = message.writeBigUInt64LE(params.amount, offset);
+      offset = message.writeBigUInt64LE(params.nonce, offset);
+      message.writeBigInt64LE(params.deadline, offset);
+
+      return message;
+    }
+
+    it("refunds a failed bridge request after deadline expires", async () => {
+      // Ensure user has enough OkuUSD for the burn
+      const userBalance = await getAccount(
+        provider.connection,
+        userOkusdAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      if (Number(userBalance.amount) < 50_000_000) {
+        await program.methods
+          .mint(new BN(100_000_000))
+          .accountsPartial({
+            user: user.publicKey,
+            config: configPda,
+            usdcMint: usdcMint,
+            okusdMint: okusdMint,
+            userUsdcAta: userUsdcAta,
+            userOkusdAta: userOkusdAta,
+            vaultUsdc: vaultUsdcAta,
+            priceUpdate: null,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+      }
+
+      // Construct a burn message manually with a deadline in the past (Unix timestamp 1)
+      const evmRecipient = randomEvmAddress();
+      const pastDeadline = 1n; // 1970-01-01, definitely expired
+      const refundAmount = BigInt(5_000_000);
+      const refundNonce = 88888n;
+
+      const messageBytes = serializeBurnMessage({
+        sourceChainId: SOLANA_CHAIN_ID,
+        destinationChainId: ETH_CHAIN_ID,
+        sender: user.publicKey,
+        recipient: evmRecipient,
+        amount: refundAmount,
+        nonce: refundNonce,
+        deadline: pastDeadline,
+      });
+
+      const requestId = calculateRequestId(messageBytes);
+
+      // Derive RefundedRequest PDA
+      const [refundedRequestPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_refund"), Buffer.from(requestId)],
+        program.programId
+      );
+
+      // Get user balance before refund
+      const userBalanceBefore = await getAccount(
+        provider.connection,
+        userOkusdAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      // Call refund_bridge_request (refund_admin defaults to bridgeAdmin)
+      await program.methods
+        .refundBridgeRequest(
+          Buffer.from(messageBytes),
+          Array.from(requestId)
+        )
+        .accountsPartial({
+          refundAdmin: bridgeAdmin.publicKey,
+          bridgeConfig: bridgeConfigPda,
+          config: configPda,
+          refundedRequest: refundedRequestPda,
+          okusdMint: okusdMint,
+          senderOkusdAta: userOkusdAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([bridgeAdmin])
+        .rpc();
+
+      // Verify tokens were minted back to the sender
+      const userBalanceAfter = await getAccount(
+        provider.connection,
+        userOkusdAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      const minted =
+        Number(userBalanceAfter.amount) - Number(userBalanceBefore.amount);
+      expect(minted).to.equal(Number(refundAmount));
+
+      // Verify RefundedRequest PDA was created
+      const refundedRequest = await program.account.refundedRequest.fetch(
+        refundedRequestPda
+      );
+      expect(refundedRequest.requestId).to.deep.equal(Array.from(requestId));
+      expect(refundedRequest.amount.toNumber()).to.equal(Number(refundAmount));
+      expect(refundedRequest.recipient.toString()).to.equal(
+        user.publicKey.toString()
+      );
+    });
+
+    it("rejects double-refund for the same request", async () => {
+      // Use the same message from the happy path (already refunded above)
+      const evmRecipient = new Uint8Array(20).fill(0xaa); // deterministic address
+      const pastDeadline = 1n;
+      const refundAmount = BigInt(3_000_000);
+      const refundNonce = 77777n;
+
+      const messageBytes = serializeBurnMessage({
+        sourceChainId: SOLANA_CHAIN_ID,
+        destinationChainId: ETH_CHAIN_ID,
+        sender: user.publicKey,
+        recipient: evmRecipient,
+        amount: refundAmount,
+        nonce: refundNonce,
+        deadline: pastDeadline,
+      });
+
+      const requestId = calculateRequestId(messageBytes);
+
+      const [refundedRequestPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_refund"), Buffer.from(requestId)],
+        program.programId
+      );
+
+      // First refund should succeed
+      await program.methods
+        .refundBridgeRequest(
+          Buffer.from(messageBytes),
+          Array.from(requestId)
+        )
+        .accountsPartial({
+          refundAdmin: bridgeAdmin.publicKey,
+          bridgeConfig: bridgeConfigPda,
+          config: configPda,
+          refundedRequest: refundedRequestPda,
+          okusdMint: okusdMint,
+          senderOkusdAta: userOkusdAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([bridgeAdmin])
+        .rpc();
+
+      // Second refund with same request_id should fail (PDA already exists)
+      await expectError(
+        () =>
+          program.methods
+            .refundBridgeRequest(
+              Buffer.from(messageBytes),
+              Array.from(requestId)
+            )
+            .accountsPartial({
+              refundAdmin: bridgeAdmin.publicKey,
+              bridgeConfig: bridgeConfigPda,
+              config: configPda,
+              refundedRequest: refundedRequestPda,
+              okusdMint: okusdMint,
+              senderOkusdAta: userOkusdAta,
+              token2022Program: TOKEN_2022_PROGRAM_ID,
+              systemProgram: SystemProgram.programId,
+            })
+            .signers([bridgeAdmin])
+            .rpc(),
+        "already in use" // Anchor init constraint error - PDA already exists
+      );
+    });
+
+    it("rejects refund before deadline expires (MintWindowStillOpen)", async () => {
+      const evmRecipient = randomEvmAddress();
+      const futureDeadline = BigInt(Math.floor(Date.now() / 1000) + 99999); // far in the future
+      const refundAmount = BigInt(2_000_000);
+      const refundNonce = 66666n;
+
+      const messageBytes = serializeBurnMessage({
+        sourceChainId: SOLANA_CHAIN_ID,
+        destinationChainId: ETH_CHAIN_ID,
+        sender: user.publicKey,
+        recipient: evmRecipient,
+        amount: refundAmount,
+        nonce: refundNonce,
+        deadline: futureDeadline,
+      });
+
+      const requestId = calculateRequestId(messageBytes);
+
+      const [refundedRequestPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_refund"), Buffer.from(requestId)],
+        program.programId
+      );
+
+      await expectError(
+        () =>
+          program.methods
+            .refundBridgeRequest(
+              Buffer.from(messageBytes),
+              Array.from(requestId)
+            )
+            .accountsPartial({
+              refundAdmin: bridgeAdmin.publicKey,
+              bridgeConfig: bridgeConfigPda,
+              config: configPda,
+              refundedRequest: refundedRequestPda,
+              okusdMint: okusdMint,
+              senderOkusdAta: userOkusdAta,
+              token2022Program: TOKEN_2022_PROGRAM_ID,
+              systemProgram: SystemProgram.programId,
+            })
+            .signers([bridgeAdmin])
+            .rpc(),
+        "MintWindowStillOpen"
+      );
+    });
+  });
+
+  describe("Bridge Mint Without Amount Limits", () => {
+    it("accepts bridge_mint below min_bridge_amount (limits removed from mint)", async () => {
+      // min_bridge_amount is 1_000_000 (1 token). Mint 100 (0.0001 tokens) — should succeed now.
+      const smallAmount = BigInt(100);
+      const evmSender = randomEvmAddress();
+      const validDeadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+      const nonce = 55555n;
+
+      const message = serializeBridgeMessage({
+        sourceChainId: ETH_CHAIN_ID,
+        destinationChainId: SOLANA_CHAIN_ID,
+        sender: evmSender,
+        recipientWallet: user.publicKey,
+        amount: smallAmount,
+        nonce,
+        deadline: validDeadline,
+      });
+
+      const signature = signMessage(message, orchestrator);
+      const requestId = calculateRequestId(message);
+
+      const tx = await createBridgeMintTx({
+        program,
+        message,
+        signature,
+        orchestrator,
+        recipientWallet: user.publicKey,
+        payer,
+        requestId,
+      });
+
+      // Should succeed — amount limit checks were removed from bridge_mint
+      await provider.sendAndConfirm(tx, [payer]);
+
+      // Verify tokens were minted
+      const [processedRequestPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_request"), requestId],
+        program.programId
+      );
+      const processedRequest = await program.account.processedRequest.fetch(
+        processedRequestPda
+      );
+      expect(processedRequest.amount.toNumber()).to.equal(Number(smallAmount));
+    });
+  });
+
+  describe("Configurable Bridge Deadline", () => {
+    it("update_bridge_deadline sets new deadline", async () => {
+      const newDeadlineSecs = 7200; // 2 hours
+
+      await program.methods
+        .updateBridgeDeadline(new BN(newDeadlineSecs))
+        .accountsPartial({
+          bridgeAdmin: bridgeAdmin.publicKey,
+          bridgeConfig: bridgeConfigPda,
+        })
+        .signers([bridgeAdmin])
+        .rpc();
+
+      const config = await program.account.bridgeConfig.fetch(bridgeConfigPda);
+      expect(config.bridgeDeadlineSecs.toNumber()).to.equal(newDeadlineSecs);
+    });
+
+    it("bridge_burn uses the configured deadline", async () => {
+      // Set a custom deadline of 120 seconds
+      const customDeadlineSecs = 120;
+      await program.methods
+        .updateBridgeDeadline(new BN(customDeadlineSecs))
+        .accountsPartial({
+          bridgeAdmin: bridgeAdmin.publicKey,
+          bridgeConfig: bridgeConfigPda,
+        })
+        .signers([bridgeAdmin])
+        .rpc();
+
+      // Ensure user has tokens
+      const userBalance = await getAccount(
+        provider.connection,
+        userOkusdAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      if (Number(userBalance.amount) < 10_000_000) {
+        await program.methods
+          .mint(new BN(50_000_000))
+          .accountsPartial({
+            user: user.publicKey,
+            config: configPda,
+            usdcMint: usdcMint,
+            okusdMint: okusdMint,
+            userUsdcAta: userUsdcAta,
+            userOkusdAta: userOkusdAta,
+            vaultUsdc: vaultUsdcAta,
+            priceUpdate: null,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+      }
+
+      const [noncePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_nonce"), Buffer.from([ETH_CHAIN_ID, 0])],
+        program.programId
+      );
+
+      // Listen for BridgeBurnEvent
+      const listener = program.addEventListener("bridgeBurnEvent", (event) => {
+        // Event deadline should be ~now + customDeadlineSecs
+        const now = Math.floor(Date.now() / 1000);
+        const eventDeadline = event.deadline.toNumber();
+        // Deadline should be within a few seconds of now + customDeadlineSecs
+        expect(eventDeadline).to.be.greaterThanOrEqual(now + customDeadlineSecs - 5);
+        expect(eventDeadline).to.be.lessThanOrEqual(now + customDeadlineSecs + 5);
+      });
+
+      await program.methods
+        .bridgeBurn(
+          new BN(1_000_000),
+          Array.from(randomEvmAddress()),
+          ETH_CHAIN_ID
+        )
+        .accountsPartial({
+          user: user.publicKey,
+          bridgeConfig: bridgeConfigPda,
+          config: configPda,
+          bridgeNonce: noncePda,
+          okusdMint: okusdMint,
+          userOkusdAta: userOkusdAta,
+          feeRecipientAta: feeRecipientAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      // Give the event listener a moment to fire
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      program.removeEventListener(listener);
+
+      // Restore default deadline
+      await program.methods
+        .updateBridgeDeadline(new BN(3600))
+        .accountsPartial({
+          bridgeAdmin: bridgeAdmin.publicKey,
+          bridgeConfig: bridgeConfigPda,
+        })
+        .signers([bridgeAdmin])
+        .rpc();
+    });
+
+    it("rejects update_bridge_deadline with zero value", async () => {
+      await expectError(
+        () =>
+          program.methods
+            .updateBridgeDeadline(new BN(0))
+            .accountsPartial({
+              bridgeAdmin: bridgeAdmin.publicKey,
+              bridgeConfig: bridgeConfigPda,
+            })
+            .signers([bridgeAdmin])
+            .rpc(),
+        "InvalidDeadline"
+      );
+    });
+  });
 });

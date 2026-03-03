@@ -163,6 +163,8 @@ pub struct BridgeConfig {
     pub fee_manager: Pubkey,
     /// Nonce admin - emergency nonce management
     pub nonce_admin: Pubkey,
+    /// Refund admin - process refunds for failed requests (Cold Multisig)
+    pub refund_admin: Pubkey,
 
     // ===== Configuration =====
     /// Bridge fee in basis points (10 = 0.1%)
@@ -173,6 +175,9 @@ pub struct BridgeConfig {
     pub max_bridge_amount: u64,
     /// Whether bridge is paused
     pub is_paused: bool,
+
+    /// Configurable bridge deadline in seconds (default 3600 = 1 hour)
+    pub bridge_deadline_secs: i64,
 
     // ===== Chain Identity =====
     /// This chain's ID (e.g., Solana), set during initialize_bridge
@@ -189,9 +194,9 @@ impl BridgeConfig {
     pub const SEED: &'static [u8] = b"bridge_config";
 
     /// Space needed for BridgeConfig account
-    /// 8 (discriminator) + 1 (bump) + 32*8 (authority pubkeys) + 2 (fee_bps) + 8*2 (min/max amounts) + 1 (is_paused) + 2 (source_chain_id) + 2*32 (chain array) + 1 (chain count)
-    /// = 8 + 1 + 256 + 2 + 16 + 1 + 2 + 64 + 1 = 351 bytes
-    pub const LEN: usize = 8 + 1 + 32 * 8 + 2 + 8 * 2 + 1 + 2 + 2 * 32 + 1;
+    /// 8 (discriminator) + 1 (bump) + 32*9 (authority pubkeys incl refund_admin) + 2 (fee_bps) + 8*2 (min/max amounts) + 1 (is_paused) + 8 (bridge_deadline_secs) + 2 (source_chain_id) + 2*32 (chain array) + 1 (chain count)
+    /// = 8 + 1 + 288 + 2 + 16 + 1 + 8 + 2 + 64 + 1 = 391 bytes
+    pub const LEN: usize = 8 + 1 + 32 * 9 + 2 + 8 * 2 + 1 + 8 + 2 + 2 * 32 + 1;
 
     /// Check if a chain is supported
     pub fn is_chain_supported(&self, chain_id: u16) -> bool {
@@ -268,6 +273,30 @@ impl ProcessedRequest {
     pub const SEED: &'static [u8] = b"bridge_request";
 
     /// Space needed for ProcessedRequest account
+    /// 8 (discriminator) + 1 (bump) + 32 (request_id) + 8 (timestamp) + 32 (recipient) + 8 (amount) = 89 bytes
+    pub const LEN: usize = 8 + 1 + 32 + 8 + 32 + 8;
+}
+
+/// Refunded bridge request PDA (prevents double-refund)
+/// Seeds: ["bridge_refund", request_id]
+#[account]
+pub struct RefundedRequest {
+    /// PDA bump seed
+    pub bump: u8,
+    /// Request ID (keccak256 hash of request data)
+    pub request_id: [u8; 32],
+    /// Timestamp when refunded
+    pub refunded_at: i64,
+    /// Original sender who received refund
+    pub recipient: Pubkey,
+    /// Amount refunded
+    pub amount: u64,
+}
+
+impl RefundedRequest {
+    pub const SEED: &'static [u8] = b"bridge_refund";
+
+    /// Space needed for RefundedRequest account
     /// 8 (discriminator) + 1 (bump) + 32 (request_id) + 8 (timestamp) + 32 (recipient) + 8 (amount) = 89 bytes
     pub const LEN: usize = 8 + 1 + 32 + 8 + 32 + 8;
 }

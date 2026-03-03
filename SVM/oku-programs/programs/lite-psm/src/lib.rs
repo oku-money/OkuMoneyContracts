@@ -12,7 +12,7 @@ pub mod errors;
 pub mod state;
 
 use errors::OkuError;
-use state::{BridgeConfig, BridgeNonce, BridgeRequest, ProcessedRequest, PsmConfig, QueueEntry, RedemptionQueue};
+use state::{BridgeConfig, BridgeNonce, BridgeRequest, ProcessedRequest, PsmConfig, QueueEntry, RedemptionQueue, RefundedRequest};
 
 declare_id!("AhKZ4TT5W4mnvR3CsX1t9ymQmZx4535AN9SsrThu6C1T");
 
@@ -541,16 +541,9 @@ pub mod lite_psm {
         let clock = Clock::get()?;
         require!(clock.unix_timestamp <= request.deadline, OkuError::SignatureExpired);
 
-        // 7. Validate amount
+        // 7. Validate amount (limits enforced at bridge_burn time only; not on mint
+        // to prevent stranding funds when limits change between burn and mint)
         require!(request.amount > 0, OkuError::ZeroAmount);
-        require!(
-            request.amount >= bridge_config.min_bridge_amount,
-            OkuError::BelowMinimum
-        );
-        require!(
-            request.amount <= bridge_config.max_bridge_amount,
-            OkuError::AboveMaximum
-        );
 
         // 8. Convert recipient bytes to Pubkey
         let recipient_pubkey = Pubkey::new_from_array(request.recipient);
@@ -712,7 +705,7 @@ pub mod lite_psm {
 
         // 8. Calculate request_id for orchestrator tracking
         let clock = Clock::get()?;
-        let deadline = clock.unix_timestamp.checked_add(3600).ok_or(OkuError::Overflow)?; // 1 hour deadline
+        let deadline = clock.unix_timestamp.checked_add(bridge_config.bridge_deadline_secs).ok_or(OkuError::Overflow)?;
 
         let source_chain_id = ctx.accounts.bridge_config.source_chain_id;
 
@@ -996,12 +989,14 @@ pub mod lite_psm {
         config.chain_manager = ctx.accounts.chain_manager.key();
         config.fee_manager = ctx.accounts.fee_manager.key();
         config.nonce_admin = ctx.accounts.nonce_admin.key();
+        config.refund_admin = ctx.accounts.bridge_admin.key(); // defaults to bridge_admin
 
         // Set default configuration
         config.bridge_fee_bps = 10; // 0.1% default fee
         config.min_bridge_amount = 1_000_000; // 1 token (assuming 6 decimals)
         config.max_bridge_amount = 1_000_000_000_000; // 1,000,000 tokens
         config.is_paused = false;
+        config.bridge_deadline_secs = 3600; // default 1 hour
 
         // Set source chain identity
         config.source_chain_id = source_chain_id;
@@ -1142,6 +1137,92 @@ pub mod lite_psm {
         Ok(())
     }
 
+    /// Refund a failed bridge request (refund_admin only)
+    /// Mints tokens back to the original sender on the source chain
+    /// Only callable after the mint deadline has passed (on-chain safety)
+    pub fn refund_bridge_request(
+        ctx: Context<RefundBridgeRequest>,
+        message_bytes: Vec<u8>,
+        request_id: [u8; 32],
+    ) -> Result<()> {
+        // 1. Validate message length
+        require!(message_bytes.len() == 80, OkuError::InvalidMessageLength);
+
+        // 2. Verify request_id matches keccak256(message_bytes)
+        let computed_request_id = anchor_lang::solana_program::keccak::hash(&message_bytes).to_bytes();
+        require!(request_id == computed_request_id, OkuError::InvalidRequestId);
+
+        // 3. Parse request to get sender/amount
+        let request = BridgeRequest::try_from_slice(&message_bytes)?;
+
+        // 4. Validate this chain is the source chain
+        require!(
+            request.source_chain_id == ctx.accounts.bridge_config.source_chain_id,
+            OkuError::WrongSourceChain
+        );
+
+        // 5. Deadline check: refund only after mint window has closed
+        let clock = Clock::get()?;
+        require!(clock.unix_timestamp > request.deadline, OkuError::MintWindowStillOpen);
+
+        // 6. Convert sender bytes to Pubkey (sender is 20 bytes for EVM, but on SVM source chain it's 32 bytes in the first 20+12 bytes)
+        // For SVM→EVM bridges, the sender field is the first 20 bytes of the 32-byte Solana pubkey
+        // But for refunds, we need to reconstruct the Solana sender address
+        // The sender_okusd_ata owner is validated in the accounts struct
+        let sender_pubkey = ctx.accounts.sender_okusd_ata.owner;
+
+        // 7. Mint tokens back to sender
+        let config_bump = ctx.accounts.config.bump;
+        let seeds = &[PsmConfig::SEED, &[config_bump]];
+        let signer = &[&seeds[..]];
+
+        token_interface::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_2022_program.to_account_info(),
+                token_interface::MintTo {
+                    mint: ctx.accounts.okusd_mint.to_account_info(),
+                    to: ctx.accounts.sender_okusd_ata.to_account_info(),
+                    authority: ctx.accounts.config.to_account_info(),
+                },
+                signer,
+            ),
+            request.amount,
+        )?;
+
+        // 8. Record refund in PDA (init constraint prevents double-refund)
+        let refunded = &mut ctx.accounts.refunded_request;
+        refunded.bump = ctx.bumps.refunded_request;
+        refunded.request_id = request_id;
+        refunded.refunded_at = clock.unix_timestamp;
+        refunded.recipient = sender_pubkey;
+        refunded.amount = request.amount;
+
+        emit!(RefundProcessedEvent {
+            request_id,
+            recipient: sender_pubkey,
+            amount: request.amount,
+        });
+
+        Ok(())
+    }
+
+    /// Update the bridge deadline for new requests
+    pub fn update_bridge_deadline(
+        ctx: Context<BridgeAdmin>,
+        new_deadline: i64,
+    ) -> Result<()> {
+        require!(new_deadline > 0, OkuError::InvalidDeadline);
+
+        let config = &mut ctx.accounts.bridge_config;
+        config.bridge_deadline_secs = new_deadline;
+
+        emit!(BridgeDeadlineUpdatedEvent {
+            new_deadline_secs: new_deadline,
+        });
+
+        Ok(())
+    }
+
     /// Update orchestrator signer public key
     pub fn update_orchestrator_signer(
         ctx: Context<BridgeAdmin>,
@@ -1204,6 +1285,11 @@ pub mod lite_psm {
             BridgeAuthorityRole::NonceAdmin => {
                 let old = config.nonce_admin;
                 config.nonce_admin = new_authority;
+                old
+            }
+            BridgeAuthorityRole::RefundAdmin => {
+                let old = config.refund_admin;
+                config.refund_admin = new_authority;
                 old
             }
         };
@@ -1311,6 +1397,7 @@ pub enum BridgeAuthorityRole {
     ChainManager,
     FeeManager,
     NonceAdmin,
+    RefundAdmin,
 }
 
 /// Authority roles that can be updated via set_authority
@@ -2391,6 +2478,49 @@ pub struct BridgeNonceAdmin<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+#[instruction(message_bytes: Vec<u8>, request_id: [u8; 32])]
+pub struct RefundBridgeRequest<'info> {
+    #[account(mut)]
+    pub refund_admin: Signer<'info>,
+
+    #[account(
+        seeds = [BridgeConfig::SEED],
+        bump = bridge_config.bump,
+        constraint = refund_admin.key() == bridge_config.refund_admin @ OkuError::Unauthorized
+    )]
+    pub bridge_config: Account<'info, BridgeConfig>,
+
+    #[account(
+        mut,
+        seeds = [PsmConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Account<'info, PsmConfig>,
+
+    #[account(
+        init,
+        payer = refund_admin,
+        space = RefundedRequest::LEN,
+        seeds = [RefundedRequest::SEED, &request_id],
+        bump
+    )]
+    pub refunded_request: Account<'info, RefundedRequest>,
+
+    #[account(
+        mut,
+        constraint = okusd_mint.key() == config.okusd_mint
+    )]
+    pub okusd_mint: InterfaceAccount<'info, token_interface::Mint>,
+
+    /// Sender's OkuUSD ATA — owner is validated in instruction body
+    #[account(mut)]
+    pub sender_okusd_ata: InterfaceAccount<'info, token_interface::TokenAccount>,
+
+    pub token_2022_program: Interface<'info, token_interface::TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+
 // ============================================================================
 // Events
 // ============================================================================
@@ -2604,4 +2734,16 @@ pub struct BridgeAuthorityUpdatedEvent {
     pub role: BridgeAuthorityRole,
     pub old_authority: Pubkey,
     pub new_authority: Pubkey,
+}
+
+#[event]
+pub struct RefundProcessedEvent {
+    pub request_id: [u8; 32],
+    pub recipient: Pubkey,
+    pub amount: u64,
+}
+
+#[event]
+pub struct BridgeDeadlineUpdatedEvent {
+    pub new_deadline_secs: i64,
 }

@@ -248,6 +248,8 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()>
 // Bridge operations
 pub fn bridge_mint(ctx: Context<BridgeMint>, message_bytes: Vec<u8>, signature: Vec<u8>, request_id: [u8; 32]) -> Result<()>
 pub fn bridge_burn(ctx: Context<BridgeBurn>, amount: u64, recipient: [u8; 20], destination_chain_id: u16) -> Result<()>
+pub fn refund_bridge_request(ctx: Context<RefundBridgeRequest>, message_bytes: Vec<u8>, request_id: [u8; 32]) -> Result<()>
+pub fn update_bridge_deadline(ctx: Context<BridgeAdmin>, new_deadline: i64) -> Result<()>
 
 // Compliance (freeze authority held by PSM PDA, proxied via config)
 pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()>
@@ -325,6 +327,9 @@ pub enum OkuError {
     ChainAlreadySupported,
     ChainListFull,
     ChainNotFound,
+    MintWindowStillOpen,
+    WrongSourceChain,
+    InvalidDeadline,
 }
 ```
 
@@ -518,7 +523,7 @@ The SVM bridge implements production-grade security matching the EVM bridge's Ok
 ```rust
 pub struct BridgeConfig {
     pub bump: u8,
-    // 8 bridge-specific authorities
+    // 9 bridge-specific authorities
     pub bridge_admin: Pubkey,
     pub bridge_pauser: Pubkey,
     pub bridge_unpauser: Pubkey,
@@ -527,11 +532,13 @@ pub struct BridgeConfig {
     pub chain_manager: Pubkey,
     pub fee_manager: Pubkey,
     pub nonce_admin: Pubkey,
+    pub refund_admin: Pubkey,              // Cold Multisig — process refunds
     // Configuration
     pub bridge_fee_bps: u16,
     pub min_bridge_amount: u64,
     pub max_bridge_amount: u64,
     pub is_paused: bool,
+    pub bridge_deadline_secs: i64,         // Configurable deadline (default 3600)
     pub source_chain_id: u16,
     // Chain whitelist
     pub supported_chains: [u16; 32],
@@ -559,12 +566,25 @@ pub struct ProcessedRequest {
 }
 ```
 
+**RefundedRequest PDA** (seeds: `["bridge_refund", request_id]`, 89 bytes):
+```rust
+pub struct RefundedRequest {
+    pub bump: u8,
+    pub request_id: [u8; 32],
+    pub refunded_at: i64,
+    pub recipient: Pubkey,
+    pub amount: u64,
+}
+```
+
 ### Bridge Instructions
 
 **Core Operations:**
 ```rust
 // Secure mint with Ed25519 signature verification via instruction introspection.
 // Transaction must have Ed25519Program ix at index 0 signing over message_bytes.
+// NOTE: Amount limits (min/max) are NOT checked on mint — only on burn.
+// This prevents stranding funds when limits change between burn and mint.
 pub fn bridge_mint(
     ctx: Context<BridgeMint>,
     message_bytes: Vec<u8>,     // 80-byte serialized BridgeRequest
@@ -595,6 +615,8 @@ pub fn unpause_bridge(ctx: Context<BridgeUnpause>) -> Result<()>
 pub fn skip_nonce(ctx: Context<BridgeNonceAdmin>, destination_chain_id: u16, new_nonce: u64) -> Result<()>
 pub fn update_orchestrator_signer(ctx: Context<BridgeAdmin>, new_signer: Pubkey) -> Result<()>
 pub fn set_bridge_authority(ctx: Context<BridgeAdmin>, role: BridgeAuthorityRole, new_authority: Pubkey) -> Result<()>
+pub fn refund_bridge_request(ctx: Context<RefundBridgeRequest>, message_bytes: Vec<u8>, request_id: [u8; 32]) -> Result<()>
+pub fn update_bridge_deadline(ctx: Context<BridgeAdmin>, new_deadline: i64) -> Result<()>
 ```
 
 ### Message Format (Must Match Orchestrator)
@@ -629,6 +651,7 @@ Separate from PSM roles for security isolation:
 | BRIDGE_CHAIN_MANAGER | Warm Multisig | Add/remove supported chains |
 | BRIDGE_FEE_MANAGER | Cold Multisig | Update fee configuration |
 | BRIDGE_NONCE_ADMIN | Cold Multisig | Emergency nonce management |
+| BRIDGE_REFUND_ADMIN | Cold Multisig | Process refunds for failed requests (after deadline) |
 | Orchestrator Signer | KMS-backed key | Sign mint requests (Ed25519) |
 | Fee Recipient | Treasury/DAO | Receive bridge fees |
 

@@ -769,7 +769,9 @@ contract LitePSMTest is BaseTest {
         bytes32 domainSeparator = _getOkuUsdDomainSeparator();
         bytes32 permitHash = keccak256(
             abi.encode(
-                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                keccak256(
+                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+                ),
                 user1Addr,
                 address(litePsm),
                 amount,
@@ -800,7 +802,9 @@ contract LitePSMTest is BaseTest {
         bytes32 domainSeparator = _getOkuUsdDomainSeparator();
         bytes32 permitHash = keccak256(
             abi.encode(
-                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                keccak256(
+                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+                ),
                 user1Addr,
                 address(litePsm),
                 amount,
@@ -846,7 +850,9 @@ contract LitePSMTest is BaseTest {
         // EIP-712 domain separator for OkuUSD
         return keccak256(
             abi.encode(
-                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(
+                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                ),
                 keccak256(bytes("OkuUSD")),
                 keccak256(bytes("1")),
                 block.chainid,

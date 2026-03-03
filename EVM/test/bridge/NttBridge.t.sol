@@ -153,7 +153,9 @@ contract NttBridgeTest is BaseTest {
         // Bridge call from router (only router can call bridge)
         vm.prank(address(bridgeRouter));
         vm.expectEmit(true, false, false, true, address(nttAdapter));
-        emit BridgeInitiated(address(bridgeRouter), amount, WORMHOLE_ARBITRUM, _addressToBytes32(user2), 0);
+        emit BridgeInitiated(
+            address(bridgeRouter), amount, WORMHOLE_ARBITRUM, _addressToBytes32(user2), 0
+        );
         nttAdapter.bridge(address(okuUsd), amount, ARBITRUM_CHAIN_ID, user2);
 
         // Verify transfer recorded in mock

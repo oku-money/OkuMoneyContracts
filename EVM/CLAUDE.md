@@ -139,6 +139,8 @@ bytes32 public constant ALLOWANCE_MANAGER = keccak256("ALLOWANCE_MANAGER");
 
 **Critical**: `blacklist()` must NOT use `whenNotPaused` modifier.
 
+**Blacklist-exempt addresses**: Bridge and router addresses can be marked exempt from blacklisting via `initializeBlacklistExempt(bridge, router)` (one-time, `DEFAULT_ADMIN_ROLE`). Prevents accidental blacklisting of infrastructure contracts that would break bridging. Storage: `blacklistExempt1`, `blacklistExempt2`, `_blacklistExemptInitialized`.
+
 ## wOkuUSD.sol
 
 **Inherits**: ERC4626Upgradeable, AccessControlUpgradeable
@@ -253,7 +255,7 @@ uint256 public bridgeDeadline;                              // configurable dead
 ```solidity
 // Only the struct typehash is a contract constant:
 bytes32 public constant BRIDGE_REQUEST_TYPEHASH = keccak256(
-    "BridgeRequest(uint256 sourceChainId,uint256 destChainId,address sender,address recipient,uint256 shares,uint256 nonce,uint256 deadline)"
+    "BridgeRequest(uint256 sourceChainId,uint256 destChainId,address sender,bytes32 recipient,uint256 shares,uint256 nonce,uint256 deadline)"
 );
 ```
 
@@ -263,7 +265,7 @@ bytes32 public constant BRIDGE_REQUEST_TYPEHASH = keccak256(
 // in BridgeRequest and BridgeBurn event (destination mints netShares to recipient)
 function bridgeBurn(
     uint256 destChainId,
-    address recipient,
+    bytes32 recipient,     // bytes32 to support non-EVM destinations (Solana pubkeys)
     uint256 shares
 ) external whenNotPaused nonReentrant returns (bytes32 requestId);
 
@@ -276,11 +278,14 @@ function bridgeMint(
 // Admin: Skip stuck nonce
 function skipNonce(uint256 destChainId) external onlyRole(BRIDGE_NONCE_ADMIN);
 
-// Admin: Refund failed request
+// Admin: Refund failed request (only after mint deadline has passed)
 function refundFailedRequest(
     BridgeRequest calldata request,
     bytes calldata proof
 ) external onlyRole(BRIDGE_REFUND_ADMIN);
+
+// Admin: Sweep accumulated rounding dust to feeRecipient
+function sweepDust() external onlyRole(DUST_SWEEPER);
 
 // Admin: Update deadline duration
 function updateDeadline(uint256 newDeadline) external onlyRole(BRIDGE_LIMITS_MANAGER);
@@ -297,6 +302,7 @@ bytes32 public constant BRIDGE_CHAIN_MANAGER = keccak256("BRIDGE_CHAIN_MANAGER")
 bytes32 public constant BRIDGE_LIMITS_MANAGER = keccak256("BRIDGE_LIMITS_MANAGER");
 bytes32 public constant BRIDGE_REFUND_ADMIN = keccak256("BRIDGE_REFUND_ADMIN");
 bytes32 public constant BRIDGE_UPGRADER = keccak256("BRIDGE_UPGRADER");
+bytes32 public constant DUST_SWEEPER = keccak256("DUST_SWEEPER");
 ```
 
 **Signature verification**:
@@ -337,12 +343,12 @@ mapping(address => bool) public supportedAdapters; // Registered IBridgeAdapter 
 **Native path** — OkuBridge owns the burn:
 ```solidity
 // wOkuUSD → redeem → tokensToShares → OkuBridge.bridgeBurn()
-function bridgeWrapped(uint256 wOkuUsdAmount, uint256 destinationChain, address recipient)
-    external whenNotPaused returns (bytes32 requestId);
+function bridgeWrapped(uint256 wOkuUsdAmount, uint256 destinationChain, bytes32 recipient)
+    external whenNotPaused nonReentrant returns (bytes32 requestId);
 
 // OkuUSD → tokensToShares → OkuBridge.bridgeBurn()
-function bridgeDirect(uint256 okuUsdAmount, uint256 destinationChain, address recipient)
-    external whenNotPaused returns (bytes32 requestId);
+function bridgeDirect(uint256 okuUsdAmount, uint256 destinationChain, bytes32 recipient)
+    external whenNotPaused nonReentrant returns (bytes32 requestId);
 ```
 
 **Subtractive fee model**: The router passes `totalShares` directly to `OkuBridge.bridgeBurn()`.
@@ -355,11 +361,11 @@ top). No dust remains in the router.
 ```solidity
 // wOkuUSD → redeem → burn → IBridgeAdapter.bridge() (no return — adapter path has no OkuBridge request)
 function bridgeWrappedVia(uint256 wOkuUsdAmount, address adapter, uint256 destinationChain, address recipient)
-    external whenNotPaused;
+    external whenNotPaused nonReentrant;
 
 // OkuUSD → burn → IBridgeAdapter.bridge() (no return — adapter path has no OkuBridge request)
 function bridgeDirectVia(uint256 okuUsdAmount, address adapter, uint256 destinationChain, address recipient)
-    external whenNotPaused;
+    external whenNotPaused nonReentrant;
 ```
 
 **Role bytes32 constants**:
@@ -387,8 +393,10 @@ error ZeroAddress();
 // Emitted on adapter path
 event BridgeInitiated(address indexed user, address indexed adapter, uint256 amount, uint256 destinationChain, address recipient);
 // Emitted on native path
-event NativeBridgeInitiated(address indexed user, bytes32 indexed requestId, uint256 amount, uint256 destinationChain, address recipient);
+event NativeBridgeInitiated(address indexed user, bytes32 indexed requestId, uint256 amount, uint256 destinationChain, bytes32 recipient);
 ```
+
+**Reentrancy protection**: Inherits `ReentrancyGuard` (OZ v5). All four bridge functions are guarded with `nonReentrant` to prevent reentrant calls through external adapter contracts.
 
 ## Proxy Deployment
 
@@ -513,7 +521,7 @@ event RefundProcessed(bytes32 indexed requestId, address indexed recipient, uint
 
 // OkuBridgeRouter
 event BridgeInitiated(address indexed user, address indexed adapter, uint256 amount, uint256 destinationChain, address recipient);  // adapter path
-event NativeBridgeInitiated(address indexed user, bytes32 indexed requestId, uint256 amount, uint256 destinationChain, address recipient);  // native path
+event NativeBridgeInitiated(address indexed user, bytes32 indexed requestId, uint256 amount, uint256 destinationChain, bytes32 recipient);  // native path
 event AdapterConfigured(address indexed adapter, bool supported);
 event OkuBridgeUpdated(address indexed oldBridge, address indexed newBridge);
 ```

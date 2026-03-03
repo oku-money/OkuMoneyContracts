@@ -9,6 +9,7 @@ import {
 import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IOkuUSD} from "../interfaces/IOkuUSD.sol";
@@ -20,7 +21,7 @@ interface IwOkuUSD {
 interface IOkuBridgeNative {
     function bridgeBurn(
         uint256 destChainId,
-        address recipient,
+        bytes32 recipient,
         uint256 shares
     )
         external
@@ -58,6 +59,7 @@ contract OkuBridgeRouter is
     Initializable,
     AccessControlUpgradeable,
     PausableUpgradeable,
+    ReentrancyGuard,
     UUPSUpgradeable
 {
     using SafeERC20 for IERC20;
@@ -98,7 +100,7 @@ contract OkuBridgeRouter is
         bytes32 indexed requestId,
         uint256 amount,
         uint256 destinationChain,
-        address recipient
+        bytes32 recipient
     );
 
     event AdapterConfigured(address indexed adapter, bool supported);
@@ -161,13 +163,14 @@ contract OkuBridgeRouter is
     function bridgeWrapped(
         uint256 wOkuUsdAmount,
         uint256 destinationChain,
-        address recipient
+        bytes32 recipient
     )
         external
         whenNotPaused
+        nonReentrant
         returns (bytes32 requestId)
     {
-        if (recipient == address(0)) revert InvalidRecipient();
+        if (recipient == bytes32(0)) revert InvalidRecipient();
 
         IERC20(address(wOkuUsd)).safeTransferFrom(msg.sender, address(this), wOkuUsdAmount);
         uint256 okuUsdAmount = wOkuUsd.redeem(wOkuUsdAmount, address(this), address(this));
@@ -196,13 +199,14 @@ contract OkuBridgeRouter is
     function bridgeDirect(
         uint256 okuUsdAmount,
         uint256 destinationChain,
-        address recipient
+        bytes32 recipient
     )
         external
         whenNotPaused
+        nonReentrant
         returns (bytes32 requestId)
     {
-        if (recipient == address(0)) revert InvalidRecipient();
+        if (recipient == bytes32(0)) revert InvalidRecipient();
 
         IERC20(address(okuUsd)).safeTransferFrom(msg.sender, address(this), okuUsdAmount);
         uint256 totalShares = okuUsd.tokensToShares(okuUsdAmount);
@@ -240,6 +244,7 @@ contract OkuBridgeRouter is
     )
         external
         whenNotPaused
+        nonReentrant
     {
         if (!supportedAdapters[adapter]) revert UnsupportedAdapter(adapter);
         if (recipient == address(0)) revert InvalidRecipient();
@@ -269,6 +274,7 @@ contract OkuBridgeRouter is
     )
         external
         whenNotPaused
+        nonReentrant
     {
         if (!supportedAdapters[adapter]) revert UnsupportedAdapter(adapter);
         if (recipient == address(0)) revert InvalidRecipient();

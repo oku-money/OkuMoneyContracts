@@ -22,7 +22,8 @@ interface IBridgeAdapter {
         uint256 destinationChain,
         address recipient
     )
-        external;
+        external
+        payable;
 
     /**
      * @notice Receive bridged tokens from another chain

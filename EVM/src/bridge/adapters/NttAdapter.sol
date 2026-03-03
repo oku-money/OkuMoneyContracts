@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {INttManager} from "./INttManager.sol";
+import {IBridgeAdapter} from "./IBridgeAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -24,7 +25,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  * Note: Tokens are already burned before this adapter is called.
  * This adapter only handles the cross-chain message, not token movement.
  */
-contract NttAdapter is Ownable {
+contract NttAdapter is IBridgeAdapter, Ownable {
     using SafeERC20 for IERC20;
 
     INttManager public immutable NTT_MANAGER;
@@ -49,7 +50,14 @@ contract NttAdapter is Ownable {
     error InvalidAmount();
     error UnauthorizedCaller();
 
-    constructor(address _nttManager, address _token, address _router, address _owner) Ownable(_owner) {
+    constructor(
+        address _nttManager,
+        address _token,
+        address _router,
+        address _owner
+    )
+        Ownable(_owner)
+    {
         ROUTER = _router;
         NTT_MANAGER = INttManager(_nttManager);
         TOKEN = _token;
@@ -81,6 +89,7 @@ contract NttAdapter is Ownable {
     )
         external
         payable
+        override
     {
         if (msg.sender != ROUTER) revert UnauthorizedCaller();
         require(_token == TOKEN, "Invalid token");
@@ -125,6 +134,13 @@ contract NttAdapter is Ownable {
      */
     function withdrawTokens(address _token, address to, uint256 amount) external onlyOwner {
         IERC20(_token).safeTransfer(to, amount);
+    }
+
+    /**
+     * @notice Not implemented — NTT handles destination minting natively via VAA
+     */
+    function receiveBridge(address, uint256, address) external pure {
+        revert("NttAdapter: use NTT native receive");
     }
 
     receive() external payable {}

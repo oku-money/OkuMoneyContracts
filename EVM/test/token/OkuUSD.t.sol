@@ -19,7 +19,9 @@ contract OkuUSDTest is BaseTest {
 
     event Transfer(address indexed from, address indexed to, uint256 value);
     event RebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
-    event YieldRateUpdated(uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotMultiplier);
+    event YieldRateUpdated(
+        uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotMultiplier
+    );
     event NextYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
@@ -823,7 +825,7 @@ contract OkuUSDTest is BaseTest {
     }
 
     function test_SetYieldRate_MultiplierGrowsOverTime() public {
-        uint256 rate = 1000000001547125957; // ~5% APY per second
+        uint256 rate = 1_000_000_001_547_125_957; // ~5% APY per second
 
         vm.prank(rebaser);
         okuUsd.setYieldRate(rate, 0);
@@ -840,7 +842,7 @@ contract OkuUSDTest is BaseTest {
         _mintOkuUsd(user1, 1000e18);
         uint256 balanceBefore = okuUsd.balanceOf(user1);
 
-        uint256 rate = 1000000001547125957; // ~5% APY
+        uint256 rate = 1_000_000_001_547_125_957; // ~5% APY
         vm.prank(rebaser);
         okuUsd.setYieldRate(rate, 0);
 
@@ -853,7 +855,7 @@ contract OkuUSDTest is BaseTest {
     function test_SetYieldRate_SnapshotPreservesValue() public {
         _mintOkuUsd(user1, 1000e18);
 
-        uint256 rate = 1000000001547125957; // ~5% APY
+        uint256 rate = 1_000_000_001_547_125_957; // ~5% APY
         vm.prank(rebaser);
         okuUsd.setYieldRate(rate, 0);
 
@@ -885,7 +887,7 @@ contract OkuUSDTest is BaseTest {
     }
 
     function test_SetYieldRate_EmitsEvent() public {
-        uint256 rate = 1000000001547125957;
+        uint256 rate = 1_000_000_001_547_125_957;
 
         vm.expectEmit(false, false, false, true);
         emit YieldRateUpdated(rate, 0, PRECISION);
@@ -897,7 +899,7 @@ contract OkuUSDTest is BaseTest {
     function test_SetYieldRate_ZeroRateStopsAccrual() public {
         _mintOkuUsd(user1, 1000e18);
 
-        uint256 rate = 1000000001547125957;
+        uint256 rate = 1_000_000_001_547_125_957;
         vm.prank(rebaser);
         okuUsd.setYieldRate(rate, 0);
 
@@ -918,8 +920,8 @@ contract OkuUSDTest is BaseTest {
     function test_SetNextYieldRate_ActivatesAtRateEnd() public {
         _mintOkuUsd(user1, 1000e18);
 
-        uint256 rate1 = 1000000001547125957; // ~5% APY
-        uint256 rate2 = 1000000002877801985; // ~9.5% APY
+        uint256 rate1 = 1_000_000_001_547_125_957; // ~5% APY
+        uint256 rate2 = 1_000_000_002_877_801_985; // ~9.5% APY
         uint256 endTime = block.timestamp + 30 days;
 
         vm.startPrank(rebaser);
@@ -949,7 +951,7 @@ contract OkuUSDTest is BaseTest {
     function test_SetNextYieldRate_HeadToTail() public {
         _mintOkuUsd(user1, 1000e18);
 
-        uint256 rate = 1000000001547125957; // ~5% APY
+        uint256 rate = 1_000_000_001_547_125_957; // ~5% APY
         uint256 endTime = block.timestamp + 30 days;
 
         vm.startPrank(rebaser);
@@ -973,13 +975,13 @@ contract OkuUSDTest is BaseTest {
     }
 
     function test_SetNextYieldRate_EmitsEvent() public {
-        uint256 rate = 1000000001547125957;
+        uint256 rate = 1_000_000_001_547_125_957;
         uint256 endTime = block.timestamp + 30 days;
 
         vm.prank(rebaser);
         okuUsd.setYieldRate(rate, endTime);
 
-        uint256 nextRate = 1000000002877801985;
+        uint256 nextRate = 1_000_000_002_877_801_985;
         vm.expectEmit(false, false, false, true);
         emit NextYieldRateSet(nextRate, endTime);
 
@@ -1004,7 +1006,7 @@ contract OkuUSDTest is BaseTest {
     function test_ContinuousAccrual_FrontRunUnprofitable() public {
         // Set up a realistic 4.5% APY rate
         // rate = (1.045)^(1/31536000) ≈ 1.000000001395766... × 1e18
-        uint256 rate = 1000000001395766300;
+        uint256 rate = 1_000_000_001_395_766_300;
 
         vm.prank(rebaser);
         okuUsd.setYieldRate(rate, 0);
@@ -1042,7 +1044,7 @@ contract OkuUSDTest is BaseTest {
         _mintOkuUsd(user1, 1000e18);
 
         // 4.5% APY: rate = (1.045)^(1/31536000) ≈ 1.000000001395766... × 1e18
-        uint256 rate = 1000000001395766300;
+        uint256 rate = 1_000_000_001_395_766_300;
 
         vm.prank(rebaser);
         okuUsd.setYieldRate(rate, 0);
@@ -1061,7 +1063,7 @@ contract OkuUSDTest is BaseTest {
     function test_UpdateRewardMultiplier_EmergencyOverride() public {
         _mintOkuUsd(user1, 1000e18);
 
-        uint256 rate = 1000000001547125957;
+        uint256 rate = 1_000_000_001_547_125_957;
         vm.prank(rebaser);
         okuUsd.setYieldRate(rate, 0);
 
@@ -1089,7 +1091,7 @@ contract OkuUSDTest is BaseTest {
     function test_BaseMultiplier_ReturnsSnapshotValue() public {
         assertEq(okuUsd.baseMultiplier(), PRECISION);
 
-        uint256 rate = 1000000001547125957;
+        uint256 rate = 1_000_000_001_547_125_957;
         vm.prank(rebaser);
         okuUsd.setYieldRate(rate, 0);
 
@@ -1104,7 +1106,7 @@ contract OkuUSDTest is BaseTest {
     function test_RateExpiry_StopsYieldWhenNoPendingRate() public {
         _mintOkuUsd(user1, 1000e18);
 
-        uint256 rate = 1000000001547125957;
+        uint256 rate = 1_000_000_001_547_125_957;
         uint256 endTime = block.timestamp + 30 days;
 
         vm.prank(rebaser);
@@ -1132,7 +1134,9 @@ contract OkuUSDTest is BaseTest {
         bytes32 domainSeparator = _getOkuUsdDomainSeparator();
         bytes32 structHash = keccak256(
             abi.encode(
-                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                keccak256(
+                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+                ),
                 user,
                 user2,
                 amount,
@@ -1159,7 +1163,9 @@ contract OkuUSDTest is BaseTest {
         bytes32 domainSeparator = _getOkuUsdDomainSeparator();
         bytes32 structHash = keccak256(
             abi.encode(
-                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                keccak256(
+                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+                ),
                 user,
                 user2,
                 amount,
@@ -1185,7 +1191,9 @@ contract OkuUSDTest is BaseTest {
         bytes32 domainSeparator = _getOkuUsdDomainSeparator();
         bytes32 structHash = keccak256(
             abi.encode(
-                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                keccak256(
+                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+                ),
                 user,
                 user2,
                 amount,
@@ -1225,7 +1233,9 @@ contract OkuUSDTest is BaseTest {
         bytes32 domainSeparator = _getOkuUsdDomainSeparator();
         bytes32 structHash = keccak256(
             abi.encode(
-                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                keccak256(
+                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+                ),
                 user,
                 user2,
                 amount,
@@ -1293,7 +1303,9 @@ contract OkuUSDTest is BaseTest {
     function _getOkuUsdDomainSeparator() internal view returns (bytes32) {
         return keccak256(
             abi.encode(
-                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(
+                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                ),
                 keccak256(bytes("OkuUSD")),
                 keccak256(bytes("1")),
                 block.chainid,
@@ -1314,7 +1326,9 @@ contract OkuUSDTest is BaseTest {
         bytes32 domainSeparator = _getOkuUsdDomainSeparator();
         bytes32 structHash = keccak256(
             abi.encode(
-                keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                keccak256(
+                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+                ),
                 owner,
                 spender,
                 value,

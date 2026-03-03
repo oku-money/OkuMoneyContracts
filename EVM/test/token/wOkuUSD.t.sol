@@ -530,7 +530,9 @@ contract wOkuUSDTest is BaseTest {
         uint256 finalBalance = okuUsd.balanceOf(user1);
 
         // Must not gain tokens
-        assertLe(finalBalance, balanceAfterRebase, "Balance must not increase from wrap/unwrap cycles");
+        assertLe(
+            finalBalance, balanceAfterRebase, "Balance must not increase from wrap/unwrap cycles"
+        );
         // Max 1 wei loss per cycle
         assertGe(finalBalance, balanceAfterRebase - 1000, "Excessive rounding loss");
     }

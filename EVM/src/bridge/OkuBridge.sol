@@ -95,8 +95,10 @@ contract OkuBridge is
     // ============ EIP-712 Constants ============
 
     bytes32 public constant BRIDGE_REQUEST_TYPEHASH = keccak256(
-        "BridgeRequest(uint256 sourceChainId,uint256 destChainId,address sender,address recipient,uint256 shares,uint256 nonce,uint256 deadline)"
+        "BridgeRequest(uint256 sourceChainId,uint256 destChainId,address sender,bytes32 recipient,uint256 shares,uint256 nonce,uint256 deadline)"
     );
+
+    bytes32 public constant DUST_SWEEPER = keccak256("DUST_SWEEPER");
 
     // ============ Structs ============
 
@@ -108,7 +110,7 @@ contract OkuBridge is
         uint256 sourceChainId;
         uint256 destChainId;
         address sender;
-        address recipient;
+        bytes32 recipient; // bytes32 to support non-EVM destinations (e.g. Solana 32-byte pubkeys)
         uint256 shares; // Shares, not token amounts!
         uint256 nonce;
         uint256 deadline;
@@ -119,7 +121,7 @@ contract OkuBridge is
     event BridgeBurn(
         bytes32 indexed requestId,
         address indexed sender,
-        address indexed recipient,
+        bytes32 recipient,
         uint256 sourceChainId,
         uint256 destChainId,
         uint256 shares,
@@ -128,7 +130,7 @@ contract OkuBridge is
     );
 
     event BridgeMint(
-        bytes32 indexed requestId, address indexed recipient, uint256 sourceChainId, uint256 shares
+        bytes32 indexed requestId, bytes32 indexed recipient, uint256 sourceChainId, uint256 shares
     );
 
     event SignerUpdated(address indexed oldSigner, address indexed newSigner);
@@ -138,7 +140,8 @@ contract OkuBridge is
     event ChainRemoved(uint256 indexed chainId);
     event LimitsUpdated(uint256 minShares, uint256 maxShares);
     event NonceSkipped(uint256 indexed destChainId, uint256 skippedNonce);
-    event RefundProcessed(bytes32 indexed requestId, address indexed recipient, uint256 shares);
+    event RefundProcessed(bytes32 indexed requestId, address indexed sender, uint256 shares);
+    event DustSwept(address indexed recipient, uint256 amount);
     event DeadlineUpdated(uint256 oldDeadline, uint256 newDeadline);
 
     // ============ Errors ============
@@ -154,6 +157,7 @@ contract OkuBridge is
     error InvalidFee(uint256 fee);
     error InvalidLimits(uint256 min, uint256 max);
     error AlreadyRefunded(bytes32 requestId);
+    error MintWindowStillOpen();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -208,6 +212,7 @@ contract OkuBridge is
         _grantRole(BRIDGE_REFUND_ADMIN, _admin);
         _grantRole(BRIDGE_FEE_MANAGER, _admin);
         _grantRole(BRIDGE_UPGRADER, _admin);
+        _grantRole(DUST_SWEEPER, _admin);
 
         // Configure common chains
         supportedChains[1] = true; // Ethereum
@@ -227,7 +232,7 @@ contract OkuBridge is
      */
     function bridgeBurn(
         uint256 destChainId,
-        address recipient,
+        bytes32 recipient,
         uint256 shares
     )
         external
@@ -236,7 +241,7 @@ contract OkuBridge is
         returns (bytes32 requestId)
     {
         // Validate recipient
-        if (recipient == address(0)) revert ZeroAddress();
+        if (recipient == bytes32(0)) revert ZeroAddress();
 
         // Validate destination chain
         if (!supportedChains[destChainId]) {
@@ -349,9 +354,12 @@ contract OkuBridge is
             revert InvalidSignature();
         }
 
+        // Extract EVM address from bytes32 recipient
+        address mintTo = address(uint160(uint256(request.recipient)));
+
         // Convert shares to tokens and mint (OkuUSD.mint takes token amount)
         uint256 tokensToMint = okuUsd.sharesToTokens(request.shares);
-        okuUsd.mint(request.recipient, tokensToMint);
+        okuUsd.mint(mintTo, tokensToMint);
 
         // Emit event
         emit BridgeMint(requestId, request.recipient, request.sourceChainId, request.shares);
@@ -382,18 +390,17 @@ contract OkuBridge is
         external
         onlyRole(BRIDGE_REFUND_ADMIN)
     {
+        // Deadline-based safety: refund only after mint window has closed.
+        // bridgeMint requires block.timestamp <= request.deadline, so once the
+        // deadline passes, the mint window is closed and refund is safe.
+        if (block.timestamp <= request.deadline) revert MintWindowStillOpen();
+
         // Calculate request ID
         bytes32 requestId = keccak256(abi.encode(request));
 
         // Prevent refund replay
         if (refundedRequests[requestId]) revert AlreadyRefunded(requestId);
         refundedRequests[requestId] = true;
-
-        // Admin role check is sufficient authorization for refunds
-        // proof parameter reserved for future on-chain verification
-        // NOTE: The orchestrator MUST NOT sign a bridgeMint for any refunded request.
-        // This cross-chain invariant cannot be enforced on-chain since source and
-        // destination are different chains.
 
         // Convert shares to tokens and mint back to original sender
         uint256 tokensToMint = okuUsd.sharesToTokens(request.shares);
@@ -419,6 +426,7 @@ contract OkuBridge is
      * @notice Update the bridge fee
      * @param newFee New fee in basis points (max 10000 = 100%)
      */
+    // TODO: Consider adding a maximum fee cap (e.g., 1000 bps) to limit blast radius of compromised orchestrator
     function updateFee(uint256 newFee) external onlyRole(BRIDGE_FEE_MANAGER) {
         if (newFee > 10_000) revert InvalidFee(newFee);
         uint256 oldFee = bridgeFee;
@@ -492,9 +500,27 @@ contract OkuBridge is
         _unpause();
     }
 
+    // ============ Dust Recovery ============
+
+    /**
+     * @notice Sweep accumulated rounding dust (at most 1 wei per bridge tx)
+     * @dev Transfers the bridge's entire OkuUSD balance to feeRecipient
+     */
+    function sweepDust() external onlyRole(DUST_SWEEPER) {
+        uint256 balance = IERC20(address(okuUsd)).balanceOf(address(this));
+        if (balance > 0) {
+            IERC20(address(okuUsd)).safeTransfer(feeRecipient, balance);
+            emit DustSwept(feeRecipient, balance);
+        }
+    }
+
     // ============ Upgradeability ============
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(BRIDGE_UPGRADER) {}
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        override
+        onlyRole(BRIDGE_UPGRADER)
+    {}
 
     // ============ View Functions ============
 

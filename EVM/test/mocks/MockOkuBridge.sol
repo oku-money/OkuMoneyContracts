@@ -42,6 +42,7 @@ contract MockOkuBridge is IBridgeAdapter, Test {
         address recipient
     )
         external
+        payable
         override
     {
         pendingBridges.push(

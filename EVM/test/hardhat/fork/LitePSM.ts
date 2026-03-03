@@ -152,7 +152,7 @@ describe("LitePSM Scenarios", () => {
         okuBridgeRouter = await upgrades.deployProxy(
             new OkuBridgeRouter__factory(Frank),
             [await wokuUSD.getAddress(), await okuUSD.getAddress(), frankAddr, frankAddr],
-            { kind: "uups" }
+            { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as OkuBridgeRouter
         await okuBridgeRouter.waitForDeployment()
 

@@ -249,7 +249,7 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()>
 pub fn bridge_mint(ctx: Context<BridgeMint>, message_bytes: Vec<u8>, signature: Vec<u8>, request_id: [u8; 32]) -> Result<()>
 pub fn bridge_burn(ctx: Context<BridgeBurn>, amount: u64, recipient: [u8; 20], destination_chain_id: u16) -> Result<()>
 pub fn refund_bridge_request(ctx: Context<RefundBridgeRequest>, message_bytes: Vec<u8>, request_id: [u8; 32]) -> Result<()>
-pub fn update_bridge_deadline(ctx: Context<BridgeAdmin>, new_deadline: i64) -> Result<()>
+pub fn update_bridge_deadline(ctx: Context<BridgeLimitsManager>, new_deadline: i64) -> Result<()>
 
 // Compliance (freeze authority held by PSM PDA, proxied via config)
 pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()>
@@ -610,15 +610,15 @@ pub fn initialize_bridge(ctx: Context<InitializeBridge>, source_chain_id: u16) -
 pub fn add_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -> Result<()>
 pub fn remove_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -> Result<()>
 pub fn update_bridge_fee(ctx: Context<BridgeFeeManager>, new_fee_bps: u16) -> Result<()>
-pub fn update_fee_recipient(ctx: Context<BridgeAdmin>, new_recipient: Pubkey) -> Result<()>
-pub fn update_bridge_limits(ctx: Context<BridgeAdmin>, min_amount: u64, max_amount: u64) -> Result<()>
+pub fn update_fee_recipient(ctx: Context<BridgeFeeManager>, new_recipient: Pubkey) -> Result<()>
+pub fn update_bridge_limits(ctx: Context<BridgeLimitsManager>, min_amount: u64, max_amount: u64) -> Result<()>
 pub fn pause_bridge(ctx: Context<BridgePause>) -> Result<()>
 pub fn unpause_bridge(ctx: Context<BridgeUnpause>) -> Result<()>
 pub fn skip_nonce(ctx: Context<BridgeNonceAdmin>, destination_chain_id: u16, new_nonce: u64) -> Result<()>
-pub fn update_orchestrator_signer(ctx: Context<BridgeAdmin>, new_signer: Pubkey) -> Result<()>
+pub fn update_orchestrator_signer(ctx: Context<BridgeSignerManager>, new_signer: Pubkey) -> Result<()>
 pub fn set_bridge_authority(ctx: Context<BridgeAdmin>, role: BridgeAuthorityRole, new_authority: Pubkey) -> Result<()>
 pub fn refund_bridge_request(ctx: Context<RefundBridgeRequest>, message_bytes: Vec<u8>, request_id: [u8; 32]) -> Result<()>
-pub fn update_bridge_deadline(ctx: Context<BridgeAdmin>, new_deadline: i64) -> Result<()>
+pub fn update_bridge_deadline(ctx: Context<BridgeLimitsManager>, new_deadline: i64) -> Result<()>
 ```
 
 ### Message Format (Must Match Orchestrator)

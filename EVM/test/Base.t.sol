@@ -51,6 +51,8 @@ abstract contract BaseTest is Test {
     address public bufferWithdrawer = makeAddr("bufferWithdrawer");
     address public oracleManager = makeAddr("oracleManager");
     address public adapterManager = makeAddr("adapterManager");
+    address public vaultPauser = makeAddr("vaultPauser");
+    address public vaultUnpauser = makeAddr("vaultUnpauser");
     address public user1 = makeAddr("user1");
     address public user2 = makeAddr("user2");
     address public user3 = makeAddr("user3");
@@ -81,6 +83,10 @@ abstract contract BaseTest is Test {
 
     // RedemptionQueue roles
     bytes32 public constant PSM = keccak256("PSM");
+
+    // wOkuUSD roles
+    bytes32 public constant VAULT_PAUSER = keccak256("VAULT_PAUSER");
+    bytes32 public constant VAULT_UNPAUSER = keccak256("VAULT_UNPAUSER");
 
     // OkuBridge roles
     bytes32 public constant BRIDGE_UPGRADER = keccak256("BRIDGE_UPGRADER");
@@ -154,6 +160,10 @@ abstract contract BaseTest is Test {
         litePsm.grantRole(BUFFER_DEPOSITOR, bufferDepositor);
         litePsm.grantRole(BUFFER_WITHDRAWER, bufferWithdrawer);
         litePsm.grantRole(ORACLE_MANAGER, oracleManager);
+
+        // wOkuUSD roles
+        wokuUsd.grantRole(VAULT_PAUSER, vaultPauser);
+        wokuUsd.grantRole(VAULT_UNPAUSER, vaultUnpauser);
 
         // RedemptionQueue roles
         redemptionQueue.grantRole(PSM, address(litePsm));

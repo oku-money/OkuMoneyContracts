@@ -865,4 +865,21 @@ contract LitePSMTest is BaseTest {
             )
         );
     }
+
+    // ============ Oracle Edge Case Tests ============
+
+    function test_Mint_SkipsOracleWhenEnabledButAddressZero() public {
+        // Oracle enabled but address is zero — both conditions must hold for check
+        vm.prank(oracleManager);
+        litePsm.configureOracle(address(0), 1 hours, true);
+
+        _approveUsdc(user1, address(litePsm), 100e6);
+
+        // Should succeed because oracle address is zero
+        vm.prank(user1);
+        litePsm.mint(100e6);
+
+        uint256 expectedOkuUsd = 100e6 * DECIMAL_MULTIPLIER;
+        assertEq(okuUsd.balanceOf(user1), expectedOkuUsd);
+    }
 }

@@ -26,12 +26,23 @@ describe("OkuBridge E2E", function () {
       { name: "sourceChainId", type: "uint256" },
       { name: "destChainId", type: "uint256" },
       { name: "sender", type: "address" },
-      { name: "recipient", type: "address" },
+      { name: "recipient", type: "bytes32" },
       { name: "shares", type: "uint256" },
       { name: "nonce", type: "uint256" },
       { name: "deadline", type: "uint256" },
     ],
   };
+
+  // Helper to convert an address to bytes32 (left-padded with zeros)
+  function addressToBytes32(addr: string): string {
+    return ethers.zeroPadValue(addr, 32);
+  }
+
+  // Helper to get a future deadline based on the EVM block timestamp (not wall clock)
+  async function futureDeadline(seconds: number = 3600): Promise<number> {
+    const block = await ethers.provider.getBlock("latest");
+    return block!.timestamp + seconds;
+  }
 
   beforeEach(async function () {
     [admin, orchestratorSigner, feeRecipient, user1, user2] = await ethers.getSigners();
@@ -97,7 +108,7 @@ describe("OkuBridge E2E", function () {
       // Approve bridge to pull tokens, then bridge
       const tokenAmount = await okuUSD.sharesToTokens(shares);
       await okuUSD.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
-      await okuBridge.connect(user1).bridgeBurn(OPTIMISM_CHAIN_ID, user2.address, shares);
+      await okuBridge.connect(user1).bridgeBurn(OPTIMISM_CHAIN_ID, addressToBytes32(user2.address), shares);
 
       // Create BridgeRequest for destination (netShares after fee deduction)
       const chainId = (await ethers.provider.getNetwork()).chainId;
@@ -105,10 +116,10 @@ describe("OkuBridge E2E", function () {
         sourceChainId: OPTIMISM_CHAIN_ID,
         destChainId: chainId,
         sender: user1.address,
-        recipient: user2.address,
+        recipient: addressToBytes32(user2.address),
         shares: netShares,
         nonce: 0,
-        deadline: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now
+        deadline: await futureDeadline(), // 1 hour from now
       };
 
       // Sign with EIP-712
@@ -130,10 +141,10 @@ describe("OkuBridge E2E", function () {
         sourceChainId: OPTIMISM_CHAIN_ID,
         destChainId: chainId,
         sender: user1.address,
-        recipient: user2.address,
+        recipient: addressToBytes32(user2.address),
         shares: shares,
         nonce: 0,
-        deadline: Math.floor(Date.now() / 1000) + 3600,
+        deadline: await futureDeadline(),
       };
 
       // Sign with wrong signer (user1 instead of orchestrator)
@@ -154,10 +165,10 @@ describe("OkuBridge E2E", function () {
         sourceChainId: OPTIMISM_CHAIN_ID,
         destChainId: chainId,
         sender: user1.address,
-        recipient: user2.address,
+        recipient: addressToBytes32(user2.address),
         shares: shares,
         nonce: 0,
-        deadline: Math.floor(Date.now() / 1000) - 3600, // 1 hour ago (expired)
+        deadline: await futureDeadline(-3600), // 1 hour ago (expired)
       };
 
       const signature = await orchestratorSigner.signTypedData(domain, types, request);
@@ -183,10 +194,10 @@ describe("OkuBridge E2E", function () {
           sourceChainId: sourceChainId,
           destChainId: chainId,
           sender: user1.address,
-          recipient: user2.address,
+          recipient: addressToBytes32(user2.address),
           shares: shares,
           nonce: i,
-          deadline: Math.floor(Date.now() / 1000) + 3600,
+          deadline: await futureDeadline(),
         };
 
         const signature = await orchestratorSigner.signTypedData(domain, types, request);
@@ -206,32 +217,16 @@ describe("OkuBridge E2E", function () {
         sourceChainId: OPTIMISM_CHAIN_ID,
         destChainId: chainId,
         sender: user1.address,
-        recipient: user2.address,
+        recipient: addressToBytes32(user2.address),
         shares: shares,
         nonce: 0,
-        deadline: Math.floor(Date.now() / 1000) + 3600,
+        deadline: await futureDeadline(),
       };
 
       const signature = await orchestratorSigner.signTypedData(domain, types, request);
 
       // First mint should succeed
       await okuBridge.bridgeMint(request, signature);
-
-      // Second mint with same request should fail
-      const requestId = ethers.keccak256(
-        ethers.AbiCoder.defaultAbiCoder().encode(
-          ["uint256", "uint256", "address", "address", "uint256", "uint256", "uint256"],
-          [
-            request.sourceChainId,
-            request.destChainId,
-            request.sender,
-            request.recipient,
-            request.shares,
-            request.nonce,
-            request.deadline,
-          ]
-        )
-      );
 
       await expect(okuBridge.bridgeMint(request, signature)).to.be.revertedWithCustomError(
         okuBridge,
@@ -254,7 +249,7 @@ describe("OkuBridge E2E", function () {
       // Approve and bridge
       const tokenAmount = await okuUSD.sharesToTokens(totalShares);
       await okuUSD.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
-      await okuBridge.connect(user1).bridgeBurn(ARBITRUM_CHAIN_ID, user2.address, totalShares);
+      await okuBridge.connect(user1).bridgeBurn(ARBITRUM_CHAIN_ID, addressToBytes32(user2.address), totalShares);
 
       const feeRecipientBalanceAfter = await okuUSD.sharesOf(feeRecipient.address);
       expect(feeRecipientBalanceAfter - feeRecipientBalanceBefore).to.equal(expectedFee);
@@ -274,7 +269,7 @@ describe("OkuBridge E2E", function () {
       // Approve and bridge
       const tokenAmount = await okuUSD.sharesToTokens(shares);
       await okuUSD.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
-      await okuBridge.connect(user1).bridgeBurn(ARBITRUM_CHAIN_ID, user2.address, shares);
+      await okuBridge.connect(user1).bridgeBurn(ARBITRUM_CHAIN_ID, addressToBytes32(user2.address), shares);
 
       const feeRecipientBalanceAfter = await okuUSD.sharesOf(feeRecipient.address);
       expect(feeRecipientBalanceAfter).to.equal(feeRecipientBalanceBefore);
@@ -300,13 +295,17 @@ describe("OkuBridge E2E", function () {
         sourceChainId: OPTIMISM_CHAIN_ID,
         destChainId: chainId,
         sender: user1.address,
-        recipient: user2.address,
+        recipient: addressToBytes32(user2.address),
         shares: shares,
         nonce: 0,
-        deadline: Math.floor(Date.now() / 1000) + 3600,
+        deadline: await futureDeadline(),
       };
 
       const user1BalanceBefore = await okuUSD.sharesOf(user1.address);
+
+      // Advance time past the deadline so the mint window is closed
+      await ethers.provider.send("evm_increaseTime", [3601]);
+      await ethers.provider.send("evm_mine", []);
 
       // Admin refunds (simulating destination failure)
       await okuBridge.connect(admin).refundFailedRequest(request, "0x");
@@ -323,11 +322,15 @@ describe("OkuBridge E2E", function () {
         sourceChainId: OPTIMISM_CHAIN_ID,
         destChainId: chainId,
         sender: user1.address,
-        recipient: user2.address,
+        recipient: addressToBytes32(user2.address),
         shares: shares,
         nonce: 0,
-        deadline: Math.floor(Date.now() / 1000) + 3600,
+        deadline: await futureDeadline(),
       };
+
+      // Advance time past the deadline so the mint window is closed
+      await ethers.provider.send("evm_increaseTime", [3601]);
+      await ethers.provider.send("evm_mine", []);
 
       // First refund succeeds
       await okuBridge.connect(admin).refundFailedRequest(request, "0x");
@@ -351,7 +354,7 @@ describe("OkuBridge E2E", function () {
       await okuUSD.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
       const burnTx = await okuBridge
         .connect(user1)
-        .bridgeBurn(ARBITRUM_CHAIN_ID, user2.address, shares);
+        .bridgeBurn(ARBITRUM_CHAIN_ID, addressToBytes32(user2.address), shares);
       const burnReceipt = await burnTx.wait();
 
       // Verify gas is reasonable (<200k target; safeTransferFrom + nonReentrant overhead)
@@ -363,10 +366,10 @@ describe("OkuBridge E2E", function () {
         sourceChainId: OPTIMISM_CHAIN_ID,
         destChainId: chainId,
         sender: user1.address,
-        recipient: user2.address,
+        recipient: addressToBytes32(user2.address),
         shares: shares,
         nonce: 0,
-        deadline: Math.floor(Date.now() / 1000) + 3600,
+        deadline: await futureDeadline(),
       };
 
       const signature = await orchestratorSigner.signTypedData(domain, types, request);
@@ -392,7 +395,7 @@ describe("OkuBridge E2E", function () {
       // Approve and bridge burn
       const tokenAmount = await okuUSD.sharesToTokens(shares);
       await okuUSD.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
-      await okuBridge.connect(user1).bridgeBurn(OPTIMISM_CHAIN_ID, user2.address, shares);
+      await okuBridge.connect(user1).bridgeBurn(OPTIMISM_CHAIN_ID, addressToBytes32(user2.address), shares);
 
       // Apply rebase (increase multiplier by 50%)
       const REBASER = ethers.keccak256(ethers.toUtf8Bytes("REBASER"));
@@ -408,10 +411,10 @@ describe("OkuBridge E2E", function () {
         sourceChainId: OPTIMISM_CHAIN_ID,
         destChainId: chainId,
         sender: user1.address,
-        recipient: user2.address,
+        recipient: addressToBytes32(user2.address),
         shares: netShares,
         nonce: 0,
-        deadline: Math.floor(Date.now() / 1000) + 3600,
+        deadline: await futureDeadline(),
       };
 
       const signature = await orchestratorSigner.signTypedData(domain, types, request);

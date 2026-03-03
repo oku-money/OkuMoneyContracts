@@ -42,6 +42,8 @@ contract OkuUSD is
     bytes32 public constant ALLOWANCE_MANAGER = keccak256("ALLOWANCE_MANAGER");
 
     uint256 public constant PRECISION = 1e18;
+    // Max rate: ~3700% APY safety cap (well beyond any T-Bill rate)
+    uint256 public constant MAX_RATE = PRECISION + 1e11;
 
     // Share-based storage
     mapping(address => uint256) private _shares;
@@ -177,6 +179,7 @@ contract OkuUSD is
         onlyRole(REBASER)
     {
         require(newRatePerSecond >= PRECISION, "Rate cannot be negative");
+        require(newRatePerSecond <= MAX_RATE, "Rate too high");
         require(endTimestamp == 0 || endTimestamp > block.timestamp, "End must be in the future");
 
         // Snapshot current state
@@ -196,6 +199,7 @@ contract OkuUSD is
      */
     function setNextYieldRate(uint256 newRatePerSecond) external onlyRole(REBASER) {
         require(newRatePerSecond >= PRECISION, "Rate cannot be negative");
+        require(newRatePerSecond <= MAX_RATE, "Rate too high");
         require(rateEnd != 0, "Current rate has no end");
 
         pendingRatePerSecond = newRatePerSecond;

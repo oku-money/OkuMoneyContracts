@@ -70,4 +70,10 @@ pub enum OkuError {
     ChainListFull,
     #[msg("Chain not found in supported list")]
     ChainNotFound,
+    #[msg("Mint window still open, cannot refund yet")]
+    MintWindowStillOpen,
+    #[msg("Request source chain does not match this chain")]
+    WrongSourceChain,
+    #[msg("Invalid deadline value")]
+    InvalidDeadline,
 }

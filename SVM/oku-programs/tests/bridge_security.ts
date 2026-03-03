@@ -54,7 +54,7 @@ describe("Bridge Security Tests", () => {
   let program: Program<LitePsm>;
   let payer: Keypair;
 
-  // Bridge authorities (8 roles)
+  // Bridge authorities (11 roles)
   let bridgeAdmin: Keypair;
   let bridgePauser: Keypair;
   let bridgeUnpauser: Keypair;
@@ -64,6 +64,8 @@ describe("Bridge Security Tests", () => {
   let chainManager: Keypair;
   let feeManager: Keypair;
   let nonceAdmin: Keypair;
+  let signerManager: Keypair;
+  let limitsManager: Keypair;
 
   // PSM authorities imported from shared setup:
   // coldMultisig, warmMultisig, psmOrchestrator
@@ -278,6 +280,8 @@ describe("Bridge Security Tests", () => {
     chainManager = Keypair.generate();
     feeManager = Keypair.generate();
     nonceAdmin = Keypair.generate();
+    signerManager = Keypair.generate();
+    limitsManager = Keypair.generate();
 
     // Ensure payer has sufficient SOL for rent (at least 10 SOL)
     const payerBalance = await provider.connection.getBalance(payer.publicKey);
@@ -297,6 +301,8 @@ describe("Bridge Security Tests", () => {
         chainManager,
         feeManager,
         nonceAdmin,
+        signerManager,
+        limitsManager,
         coldMultisig,
         warmMultisig,
         psmOrchestrator,
@@ -497,6 +503,8 @@ describe("Bridge Security Tests", () => {
         chainManager: chainManager.publicKey,
         feeManager: feeManager.publicKey,
         nonceAdmin: nonceAdmin.publicKey,
+        signerManager: signerManager.publicKey,
+        limitsManager: limitsManager.publicKey,
         bridgeConfig: bridgeConfigPda,
         systemProgram: SystemProgram.programId,
       })
@@ -666,7 +674,7 @@ describe("Bridge Security Tests", () => {
       expect(config.supportedChainsCount).to.equal(1); // ETH chain added in before hook
     });
 
-    it("sets all 8 bridge authorities correctly", async () => {
+    it("sets all 11 bridge authorities correctly", async () => {
       const config = await program.account.bridgeConfig.fetch(bridgeConfigPda);
 
       expect(config.bridgeAdmin.toString()).to.equal(
@@ -692,6 +700,12 @@ describe("Bridge Security Tests", () => {
       );
       expect(config.nonceAdmin.toString()).to.equal(
         nonceAdmin.publicKey.toString()
+      );
+      expect(config.signerManager.toString()).to.equal(
+        signerManager.publicKey.toString()
+      );
+      expect(config.limitsManager.toString()).to.equal(
+        limitsManager.publicKey.toString()
       );
     });
   });
@@ -1630,17 +1644,17 @@ describe("Bridge Security Tests", () => {
       // Should succeed
     });
 
-    it("allows bridge_admin to update limits", async () => {
+    it("allows limits_manager to update limits", async () => {
       const newMin = 2_000_000;
       const newMax = 2_000_000_000_000;
 
       await program.methods
         .updateBridgeLimits(new BN(newMin), new BN(newMax))
         .accountsPartial({
-          bridgeAdmin: bridgeAdmin.publicKey,
+          limitsManager: limitsManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
-        .signers([bridgeAdmin])
+        .signers([limitsManager])
         .rpc();
 
       const config = await program.account.bridgeConfig.fetch(bridgeConfigPda);
@@ -1651,10 +1665,10 @@ describe("Bridge Security Tests", () => {
       await program.methods
         .updateBridgeLimits(new BN(MIN_AMOUNT), new BN(MAX_AMOUNT))
         .accountsPartial({
-          bridgeAdmin: bridgeAdmin.publicKey,
+          limitsManager: limitsManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
-        .signers([bridgeAdmin])
+        .signers([limitsManager])
         .rpc();
     });
 
@@ -1664,10 +1678,10 @@ describe("Bridge Security Tests", () => {
           program.methods
             .updateBridgeLimits(new BN(1000), new BN(100))
             .accountsPartial({
-              bridgeAdmin: bridgeAdmin.publicKey,
+              limitsManager: limitsManager.publicKey,
               bridgeConfig: bridgeConfigPda,
             })
-            .signers([bridgeAdmin])
+            .signers([limitsManager])
             .rpc(),
         "BelowMinimum"
       );
@@ -1901,16 +1915,16 @@ describe("Bridge Security Tests", () => {
   });
 
   describe("Bridge RBAC Enforcement", () => {
-    it("only bridge_admin can update orchestrator signer", async () => {
+    it("only signer_manager can update orchestrator signer", async () => {
       const newOrchestrator = Keypair.generate();
 
       await program.methods
         .updateOrchestratorSigner(newOrchestrator.publicKey)
         .accountsPartial({
-          bridgeAdmin: bridgeAdmin.publicKey,
+          signerManager: signerManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
-        .signers([bridgeAdmin])
+        .signers([signerManager])
         .rpc();
 
       const config = await program.account.bridgeConfig.fetch(bridgeConfigPda);
@@ -1922,20 +1936,20 @@ describe("Bridge Security Tests", () => {
       await program.methods
         .updateOrchestratorSigner(orchestrator.publicKey)
         .accountsPartial({
-          bridgeAdmin: bridgeAdmin.publicKey,
+          signerManager: signerManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
-        .signers([bridgeAdmin])
+        .signers([signerManager])
         .rpc();
     });
 
-    it("rejects orchestrator update from non-admin", async () => {
+    it("rejects orchestrator update from non-signer_manager", async () => {
       await expectError(
         () =>
           program.methods
             .updateOrchestratorSigner(Keypair.generate().publicKey)
             .accountsPartial({
-              bridgeAdmin: unauthorizedUser.publicKey,
+              signerManager: unauthorizedUser.publicKey,
               bridgeConfig: bridgeConfigPda,
             })
             .signers([unauthorizedUser])
@@ -1968,16 +1982,16 @@ describe("Bridge Security Tests", () => {
         .rpc();
     });
 
-    it("only bridge_admin can update fee recipient", async () => {
+    it("only fee_manager can update fee recipient", async () => {
       const newRecipient = Keypair.generate().publicKey;
 
       await program.methods
         .updateFeeRecipient(newRecipient)
         .accountsPartial({
-          bridgeAdmin: bridgeAdmin.publicKey,
+          feeManager: feeManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
-        .signers([bridgeAdmin])
+        .signers([feeManager])
         .rpc();
 
       const config = await program.account.bridgeConfig.fetch(bridgeConfigPda);
@@ -1987,10 +2001,10 @@ describe("Bridge Security Tests", () => {
       await program.methods
         .updateFeeRecipient(feeRecipient.publicKey)
         .accountsPartial({
-          bridgeAdmin: bridgeAdmin.publicKey,
+          feeManager: feeManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
-        .signers([bridgeAdmin])
+        .signers([feeManager])
         .rpc();
     });
 
@@ -2545,10 +2559,10 @@ describe("Bridge Security Tests", () => {
       await program.methods
         .updateBridgeDeadline(new BN(newDeadlineSecs))
         .accountsPartial({
-          bridgeAdmin: bridgeAdmin.publicKey,
+          limitsManager: limitsManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
-        .signers([bridgeAdmin])
+        .signers([limitsManager])
         .rpc();
 
       const config = await program.account.bridgeConfig.fetch(bridgeConfigPda);
@@ -2561,10 +2575,10 @@ describe("Bridge Security Tests", () => {
       await program.methods
         .updateBridgeDeadline(new BN(customDeadlineSecs))
         .accountsPartial({
-          bridgeAdmin: bridgeAdmin.publicKey,
+          limitsManager: limitsManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
-        .signers([bridgeAdmin])
+        .signers([limitsManager])
         .rpc();
 
       // Ensure user has tokens
@@ -2638,10 +2652,10 @@ describe("Bridge Security Tests", () => {
       await program.methods
         .updateBridgeDeadline(new BN(3600))
         .accountsPartial({
-          bridgeAdmin: bridgeAdmin.publicKey,
+          limitsManager: limitsManager.publicKey,
           bridgeConfig: bridgeConfigPda,
         })
-        .signers([bridgeAdmin])
+        .signers([limitsManager])
         .rpc();
     });
 
@@ -2651,10 +2665,10 @@ describe("Bridge Security Tests", () => {
           program.methods
             .updateBridgeDeadline(new BN(0))
             .accountsPartial({
-              bridgeAdmin: bridgeAdmin.publicKey,
+              limitsManager: limitsManager.publicKey,
               bridgeConfig: bridgeConfigPda,
             })
-            .signers([bridgeAdmin])
+            .signers([limitsManager])
             .rpc(),
         "InvalidDeadline"
       );

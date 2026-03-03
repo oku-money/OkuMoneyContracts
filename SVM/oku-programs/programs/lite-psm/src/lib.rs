@@ -990,6 +990,8 @@ pub mod lite_psm {
         config.fee_manager = ctx.accounts.fee_manager.key();
         config.nonce_admin = ctx.accounts.nonce_admin.key();
         config.refund_admin = ctx.accounts.bridge_admin.key(); // defaults to bridge_admin
+        config.signer_manager = ctx.accounts.signer_manager.key();
+        config.limits_manager = ctx.accounts.limits_manager.key();
 
         // Set default configuration
         config.bridge_fee_bps = 10; // 0.1% default fee
@@ -1054,7 +1056,7 @@ pub mod lite_psm {
 
     /// Update fee recipient address
     pub fn update_fee_recipient(
-        ctx: Context<BridgeAdmin>,
+        ctx: Context<BridgeFeeManager>,
         new_recipient: Pubkey,
     ) -> Result<()> {
         let config = &mut ctx.accounts.bridge_config;
@@ -1067,7 +1069,7 @@ pub mod lite_psm {
 
     /// Update bridge amount limits
     pub fn update_bridge_limits(
-        ctx: Context<BridgeAdmin>,
+        ctx: Context<BridgeLimitsManager>,
         min_amount: u64,
         max_amount: u64,
     ) -> Result<()> {
@@ -1208,7 +1210,7 @@ pub mod lite_psm {
 
     /// Update the bridge deadline for new requests
     pub fn update_bridge_deadline(
-        ctx: Context<BridgeAdmin>,
+        ctx: Context<BridgeLimitsManager>,
         new_deadline: i64,
     ) -> Result<()> {
         require!(new_deadline > 0, OkuError::InvalidDeadline);
@@ -1225,7 +1227,7 @@ pub mod lite_psm {
 
     /// Update orchestrator signer public key
     pub fn update_orchestrator_signer(
-        ctx: Context<BridgeAdmin>,
+        ctx: Context<BridgeSignerManager>,
         new_signer: Pubkey,
     ) -> Result<()> {
         let config = &mut ctx.accounts.bridge_config;
@@ -1290,6 +1292,16 @@ pub mod lite_psm {
             BridgeAuthorityRole::RefundAdmin => {
                 let old = config.refund_admin;
                 config.refund_admin = new_authority;
+                old
+            }
+            BridgeAuthorityRole::SignerManager => {
+                let old = config.signer_manager;
+                config.signer_manager = new_authority;
+                old
+            }
+            BridgeAuthorityRole::LimitsManager => {
+                let old = config.limits_manager;
+                config.limits_manager = new_authority;
                 old
             }
         };
@@ -1398,6 +1410,8 @@ pub enum BridgeAuthorityRole {
     FeeManager,
     NonceAdmin,
     RefundAdmin,
+    SignerManager,
+    LimitsManager,
 }
 
 /// Authority roles that can be updated via set_authority
@@ -2365,6 +2379,10 @@ pub struct InitializeBridge<'info> {
     pub fee_manager: UncheckedAccount<'info>,
     /// CHECK: Nonce admin pubkey
     pub nonce_admin: UncheckedAccount<'info>,
+    /// CHECK: Signer manager pubkey
+    pub signer_manager: UncheckedAccount<'info>,
+    /// CHECK: Limits manager pubkey
+    pub limits_manager: UncheckedAccount<'info>,
 
     #[account(
         init,
@@ -2399,6 +2417,36 @@ pub struct BridgeFeeManager<'info> {
         constraint = fee_manager.key() == bridge_config.fee_manager @ OkuError::Unauthorized
     )]
     pub fee_manager: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [BridgeConfig::SEED],
+        bump = bridge_config.bump
+    )]
+    pub bridge_config: Account<'info, BridgeConfig>,
+}
+
+#[derive(Accounts)]
+pub struct BridgeSignerManager<'info> {
+    #[account(
+        constraint = signer_manager.key() == bridge_config.signer_manager @ OkuError::Unauthorized
+    )]
+    pub signer_manager: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [BridgeConfig::SEED],
+        bump = bridge_config.bump
+    )]
+    pub bridge_config: Account<'info, BridgeConfig>,
+}
+
+#[derive(Accounts)]
+pub struct BridgeLimitsManager<'info> {
+    #[account(
+        constraint = limits_manager.key() == bridge_config.limits_manager @ OkuError::Unauthorized
+    )]
+    pub limits_manager: Signer<'info>,
 
     #[account(
         mut,

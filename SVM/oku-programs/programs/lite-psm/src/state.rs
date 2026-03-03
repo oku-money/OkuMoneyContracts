@@ -146,8 +146,8 @@ pub struct BridgeConfig {
     /// PDA bump seed
     pub bump: u8,
 
-    // ===== Bridge-Specific Authorities (8 roles, separate from PSM) =====
-    /// Bridge admin - manages bridge roles
+    // ===== Bridge-Specific Authorities (11 roles, separate from PSM) =====
+    /// Bridge admin - manages bridge roles (meta-role)
     pub bridge_admin: Pubkey,
     /// Bridge pauser - emergency pause
     pub bridge_pauser: Pubkey,
@@ -159,12 +159,16 @@ pub struct BridgeConfig {
     pub fee_recipient: Pubkey,
     /// Chain manager - add/remove supported chains
     pub chain_manager: Pubkey,
-    /// Fee manager - update fee configuration
+    /// Fee manager - update fee configuration and fee recipient
     pub fee_manager: Pubkey,
     /// Nonce admin - emergency nonce management
     pub nonce_admin: Pubkey,
     /// Refund admin - process refunds for failed requests (Cold Multisig)
     pub refund_admin: Pubkey,
+    /// Signer manager - update orchestrator signer (Cold Multisig)
+    pub signer_manager: Pubkey,
+    /// Limits manager - update bridge limits and deadline (Cold Multisig)
+    pub limits_manager: Pubkey,
 
     // ===== Configuration =====
     /// Bridge fee in basis points (10 = 0.1%)
@@ -194,9 +198,9 @@ impl BridgeConfig {
     pub const SEED: &'static [u8] = b"bridge_config";
 
     /// Space needed for BridgeConfig account
-    /// 8 (discriminator) + 1 (bump) + 32*9 (authority pubkeys incl refund_admin) + 2 (fee_bps) + 8*2 (min/max amounts) + 1 (is_paused) + 8 (bridge_deadline_secs) + 2 (source_chain_id) + 2*32 (chain array) + 1 (chain count)
-    /// = 8 + 1 + 288 + 2 + 16 + 1 + 8 + 2 + 64 + 1 = 391 bytes
-    pub const LEN: usize = 8 + 1 + 32 * 9 + 2 + 8 * 2 + 1 + 8 + 2 + 2 * 32 + 1;
+    /// 8 (discriminator) + 1 (bump) + 32*11 (authority pubkeys incl refund_admin, signer_manager, limits_manager) + 2 (fee_bps) + 8*2 (min/max amounts) + 1 (is_paused) + 8 (bridge_deadline_secs) + 2 (source_chain_id) + 2*32 (chain array) + 1 (chain count)
+    /// = 8 + 1 + 352 + 2 + 16 + 1 + 8 + 2 + 64 + 1 = 455 bytes
+    pub const LEN: usize = 8 + 1 + 32 * 11 + 2 + 8 * 2 + 1 + 8 + 2 + 2 * 32 + 1;
 
     /// Check if a chain is supported
     pub fn is_chain_supported(&self, chain_id: u16) -> bool {

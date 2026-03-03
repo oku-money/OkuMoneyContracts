@@ -519,20 +519,22 @@ The SVM bridge implements production-grade security matching the EVM bridge's Ok
 
 ### Bridge State Structures
 
-**BridgeConfig PDA** (seeds: `["bridge_config"]`, 351 bytes):
+**BridgeConfig PDA** (seeds: `["bridge_config"]`, 455 bytes):
 ```rust
 pub struct BridgeConfig {
     pub bump: u8,
-    // 9 bridge-specific authorities
+    // 11 bridge-specific authorities
     pub bridge_admin: Pubkey,
     pub bridge_pauser: Pubkey,
     pub bridge_unpauser: Pubkey,
     pub orchestrator_signer: Pubkey,       // Ed25519 pubkey
     pub fee_recipient: Pubkey,
     pub chain_manager: Pubkey,
-    pub fee_manager: Pubkey,
+    pub fee_manager: Pubkey,               // fee config + fee recipient
     pub nonce_admin: Pubkey,
     pub refund_admin: Pubkey,              // Cold Multisig — process refunds
+    pub signer_manager: Pubkey,            // Cold Multisig — update orchestrator signer
+    pub limits_manager: Pubkey,            // Cold Multisig — update limits and deadline
     // Configuration
     pub bridge_fee_bps: u16,
     pub min_bridge_amount: u64,
@@ -645,13 +647,15 @@ Separate from PSM roles for security isolation:
 
 | Role | Authority | Operations |
 |------|-----------|------------|
-| BRIDGE_ADMIN | Cold Multisig | Update orchestrator signer, fee recipient, limits |
+| BRIDGE_ADMIN | Cold Multisig | Manage bridge roles (`set_bridge_authority`) |
 | BRIDGE_PAUSER | Warm Multisig | Emergency pause |
 | BRIDGE_UNPAUSER | Cold Multisig | Resume operations |
 | BRIDGE_CHAIN_MANAGER | Warm Multisig | Add/remove supported chains |
-| BRIDGE_FEE_MANAGER | Cold Multisig | Update fee configuration |
+| BRIDGE_FEE_MANAGER | Cold Multisig | Update fee configuration and fee recipient |
 | BRIDGE_NONCE_ADMIN | Cold Multisig | Emergency nonce management |
 | BRIDGE_REFUND_ADMIN | Cold Multisig | Process refunds for failed requests (after deadline) |
+| BRIDGE_SIGNER_MANAGER | Cold Multisig | Update orchestrator signer |
+| BRIDGE_LIMITS_MANAGER | Cold Multisig | Update bridge limits and deadline |
 | Orchestrator Signer | KMS-backed key | Sign mint requests (Ed25519) |
 | Fee Recipient | Treasury/DAO | Receive bridge fees |
 

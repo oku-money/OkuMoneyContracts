@@ -139,8 +139,13 @@ balanceOf(user) = shares[user] × rewardMultiplier() / PRECISION
 
 *Access Control*
 - MUST NOT have any admin functions that can drain vault
-- MUST NOT have pausability (always available as exit path)
 - MUST NOT have blacklist functionality (inherits from underlying OkuUSD)
+
+*Pausability*
+- Pause MUST block peer-to-peer wOkuUSD transfers only
+- Wrap (deposit) and unwrap (withdraw) MUST always be available, even when paused
+- Users must always have an exit path
+- **Cross-chain difference**: EVM allows both wrap and unwrap when paused. SVM blocks wrap when paused but always allows unwrap. Both guarantee the exit path.
 
 ### LitePSM (Peg Stability Module)
 

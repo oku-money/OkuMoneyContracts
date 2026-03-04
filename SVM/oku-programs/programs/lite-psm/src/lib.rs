@@ -1217,7 +1217,7 @@ pub mod lite_psm {
             .checked_sub(request.amount)
             .ok_or(OkuError::Overflow)?;
 
-        // 11. Record refund in PDA (init constraint prevents double-refund)
+        // 10. Record refund in PDA (init constraint prevents double-refund)
         let refunded = &mut ctx.accounts.refunded_request;
         refunded.bump = ctx.bumps.refunded_request;
         refunded.request_id = request_id;

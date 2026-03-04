@@ -143,7 +143,7 @@ bytes32 public constant ALLOWANCE_MANAGER = keccak256("ALLOWANCE_MANAGER");
 
 ## wOkuUSD.sol
 
-**Inherits**: ERC4626Upgradeable, AccessControlUpgradeable
+**Inherits**: ERC4626Upgradeable, AccessControlUpgradeable, PausableUpgradeable
 
 **Standard**: Full ERC-4626 compliance
 
@@ -152,11 +152,13 @@ bytes32 public constant ALLOWANCE_MANAGER = keccak256("ALLOWANCE_MANAGER");
 - `totalAssets()` returns `okuUSD.balanceOf(address(this))`
 - Exchange rate grows automatically as underlying OkuUSD rebases
 - Rounding: Use `_convertToShares` with rounding down, `_convertToAssets` with rounding down (favor vault)
-- No pause functionality—always available as exit path
+- Pause blocks peer-to-peer wOkuUSD transfers only; wrap (deposit) and unwrap (withdraw) always available
 
 **Role bytes32 constants**:
 ```solidity
 bytes32 public constant UPGRADER = keccak256("UPGRADER");
+bytes32 public constant VAULT_PAUSER = keccak256("VAULT_PAUSER");
+bytes32 public constant VAULT_UNPAUSER = keccak256("VAULT_UNPAUSER");
 ```
 
 ## LitePSM.sol

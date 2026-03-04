@@ -85,14 +85,7 @@ contract wOkuUSD is
      *      so that deposit/withdraw (wrap/unwrap) remain functional during pause.
      *      Only peer-to-peer transfers are blocked.
      */
-    function _update(
-        address from,
-        address to,
-        uint256 amount
-    )
-        internal
-        override(ERC20Upgradeable)
-    {
+    function _update(address from, address to, uint256 amount) internal override(ERC20Upgradeable) {
         if (from != address(0) && to != address(0)) {
             require(!paused(), "wOkuUSD: transfers paused");
         }

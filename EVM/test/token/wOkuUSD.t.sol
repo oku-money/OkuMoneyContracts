@@ -620,9 +620,7 @@ contract wOkuUSDTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                user1,
-                VAULT_PAUSER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, VAULT_PAUSER
             )
         );
         wokuUsd.pause();
@@ -631,9 +629,7 @@ contract wOkuUSDTest is BaseTest {
         vm.prank(pauser);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                pauser,
-                VAULT_PAUSER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, pauser, VAULT_PAUSER
             )
         );
         wokuUsd.pause();
@@ -648,9 +644,7 @@ contract wOkuUSDTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                user1,
-                VAULT_UNPAUSER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, VAULT_UNPAUSER
             )
         );
         wokuUsd.unpause();

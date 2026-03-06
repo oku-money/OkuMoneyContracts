@@ -12,11 +12,8 @@ import {
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IOkuNote} from "../interfaces/IOkuNote.sol";
 import {IOkuUSD} from "../interfaces/IOkuUSD.sol";
-
-interface IwOkuUSD {
-    function redeem(uint256 shares, address receiver, address owner) external returns (uint256);
-}
 
 interface IOkuBridgeNative {
     function bridgeBurn(
@@ -41,20 +38,20 @@ interface IBridgeAdapter {
 
 /**
  * @title OkuBridgeRouter
- * @notice Entry point for bridging OkuUSD and wOkuUSD across chains
+ * @notice Entry point for bridging OkuNote and OkuUSD across chains
  * @dev Provides two explicit bridge paths:
  *
  *   NATIVE PATH — delegates to OkuBridge directly. OkuBridge owns its own burn lifecycle
  *   (burn, fee collection, nonce, EIP-712 signed mint on destination). The router only
- *   normalizes the input token (redeeming wOkuUSD if needed) before handing off.
- *     bridgeWrapped(wOkuUsdAmount, destChain, recipient)
- *     bridgeDirect(okuUsdAmount, destChain, recipient)
+ *   normalizes the input token (unwrapping OkuUSD if needed) before handing off.
+ *     bridge_OkuUSD(usdAmount, destChain, recipient)
+ *     bridge_OkuNote(noteAmount, destChain, recipient)
  *
- *   ADAPTER PATH — router is the burn authority. It burns OkuUSD then calls a message-only
+ *   ADAPTER PATH — router is the burn authority. It burns OkuNote then calls a message-only
  *   adapter shim (NTT, CCIP, etc.) that delivers the cross-chain message. The third-party
  *   protocol handles destination minting natively.
- *     bridgeWrappedVia(wOkuUsdAmount, adapter, destChain, recipient)
- *     bridgeDirectVia(okuUsdAmount, adapter, destChain, recipient)
+ *     bridgeWrappedVia(usdAmount, adapter, destChain, recipient)
+ *     bridgeVia(noteAmount, adapter, destChain, recipient)
  */
 contract OkuBridgeRouter is
     Initializable,
@@ -75,8 +72,8 @@ contract OkuBridgeRouter is
 
     // ============ State ============
 
-    IwOkuUSD public wOkuUsd;
     IOkuUSD public okuUsd;
+    IOkuNote public okuNote;
 
     /// @notice The native OkuBridge contract — handles its own burn, fee, nonce, and event
     IOkuBridgeNative public okuBridge;
@@ -119,24 +116,24 @@ contract OkuBridgeRouter is
     }
 
     function initialize(
-        address _wOkuUsd,
         address _okuUsd,
+        address _okuNote,
         address _okuBridge,
         address admin
     )
         public
         initializer
     {
-        if (_wOkuUsd == address(0)) revert ZeroAddress();
         if (_okuUsd == address(0)) revert ZeroAddress();
+        if (_okuNote == address(0)) revert ZeroAddress();
         if (_okuBridge == address(0)) revert ZeroAddress();
         if (admin == address(0)) revert ZeroAddress();
 
         __AccessControl_init();
         __Pausable_init();
 
-        wOkuUsd = IwOkuUSD(_wOkuUsd);
         okuUsd = IOkuUSD(_okuUsd);
+        okuNote = IOkuNote(_okuNote);
         okuBridge = IOkuBridgeNative(_okuBridge);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
@@ -149,20 +146,20 @@ contract OkuBridgeRouter is
 
     // ============ Native Bridge Path ============
     // OkuBridge owns its own burn lifecycle. The router only normalizes the token
-    // (redeeming wOkuUSD if needed) before handing off to OkuBridge.bridgeBurn().
-    // OkuBridge (as a MINTER on OkuUSD) burns totalShares from this contract, deducts
+    // (unwrapping OkuUSD if needed) before handing off to OkuBridge.bridgeBurn().
+    // OkuBridge (as a MINTER on OkuNote) burns totalShares from this contract, deducts
     // feeShares, and emits netShares = totalShares - feeShares as the bridge amount.
 
     /**
-     * @notice Bridge wOkuUSD to another chain via the native OkuBridge
-     * @dev wOkuUSD is redeemed to OkuUSD; OkuBridge then burns from this contract.
-     * @param wOkuUsdAmount Amount of wOkuUSD to bridge
+     * @notice Bridge OkuUSD to another chain via the native OkuBridge
+     * @dev OkuUSD is unwrapped to OkuNote; OkuBridge then burns from this contract.
+     * @param usdAmount Amount of OkuUSD to bridge
      * @param destinationChain Destination chain ID (must be configured in OkuBridge)
      * @param recipient Recipient address on destination chain
      * @return requestId Bridge request ID from OkuBridge (for orchestrator tracking)
      */
-    function bridgeWrapped(
-        uint256 wOkuUsdAmount,
+    function bridge_OkuUSD(
+        uint256 usdAmount,
         uint256 destinationChain,
         bytes32 recipient
     )
@@ -173,32 +170,36 @@ contract OkuBridgeRouter is
     {
         if (recipient == bytes32(0)) revert InvalidRecipient();
 
-        IERC20(address(wOkuUsd)).safeTransferFrom(msg.sender, address(this), wOkuUsdAmount);
-        uint256 okuUsdAmount = wOkuUsd.redeem(wOkuUsdAmount, address(this), address(this));
-        uint256 totalShares = okuUsd.tokensToShares(okuUsdAmount);
+        // Pull OkuUSD from user
+        IERC20(address(okuUsd)).safeTransferFrom(msg.sender, address(this), usdAmount);
 
-        // Approve OkuBridge to pull OkuUSD (bridgeBurn uses safeTransferFrom)
-        IERC20(address(okuUsd)).approve(address(okuBridge), okuUsdAmount);
+        // Unwrap OkuUSD → get OkuNote (reverts if vault undercollateralized)
+        uint256 noteAmount = okuUsd.unwrap(usdAmount, address(this));
 
-        // OkuBridge pulls OkuUSD, self-burns, deducts fee, emits BridgeBurn
+        uint256 totalShares = okuNote.tokensToShares(noteAmount);
+
+        // Approve OkuBridge to pull OkuNote (bridgeBurn uses safeTransferFrom)
+        IERC20(address(okuNote)).approve(address(okuBridge), noteAmount);
+
+        // OkuBridge pulls OkuNote, self-burns, deducts fee, emits BridgeBurn
         requestId = okuBridge.bridgeBurn(destinationChain, recipient, totalShares);
 
         // Revoke any remaining approval
-        IERC20(address(okuUsd)).approve(address(okuBridge), 0);
+        IERC20(address(okuNote)).approve(address(okuBridge), 0);
 
-        emit NativeBridgeInitiated(msg.sender, requestId, okuUsdAmount, destinationChain, recipient);
+        emit NativeBridgeInitiated(msg.sender, requestId, usdAmount, destinationChain, recipient);
     }
 
     /**
-     * @notice Bridge OkuUSD directly to another chain via the native OkuBridge
-     * @dev OkuUSD is converted to shares; OkuBridge pulls and self-burns.
-     * @param okuUsdAmount Amount of OkuUSD to bridge (token units, not shares)
+     * @notice Bridge OkuNote directly to another chain via the native OkuBridge
+     * @dev OkuNote is converted to shares; OkuBridge pulls and self-burns.
+     * @param noteAmount Amount of OkuNote to bridge (token units, not shares)
      * @param destinationChain Destination chain ID (must be configured in OkuBridge)
      * @param recipient Recipient address on destination chain
      * @return requestId Bridge request ID from OkuBridge (for orchestrator tracking)
      */
-    function bridgeDirect(
-        uint256 okuUsdAmount,
+    function bridge_OkuNote(
+        uint256 noteAmount,
         uint256 destinationChain,
         bytes32 recipient
     )
@@ -209,36 +210,36 @@ contract OkuBridgeRouter is
     {
         if (recipient == bytes32(0)) revert InvalidRecipient();
 
-        IERC20(address(okuUsd)).safeTransferFrom(msg.sender, address(this), okuUsdAmount);
-        uint256 totalShares = okuUsd.tokensToShares(okuUsdAmount);
+        IERC20(address(okuNote)).safeTransferFrom(msg.sender, address(this), noteAmount);
+        uint256 totalShares = okuNote.tokensToShares(noteAmount);
 
-        // Approve OkuBridge to pull OkuUSD (bridgeBurn uses safeTransferFrom)
-        IERC20(address(okuUsd)).approve(address(okuBridge), okuUsdAmount);
+        // Approve OkuBridge to pull OkuNote (bridgeBurn uses safeTransferFrom)
+        IERC20(address(okuNote)).approve(address(okuBridge), noteAmount);
 
-        // OkuBridge pulls OkuUSD, self-burns, deducts fee, emits BridgeBurn
+        // OkuBridge pulls OkuNote, self-burns, deducts fee, emits BridgeBurn
         requestId = okuBridge.bridgeBurn(destinationChain, recipient, totalShares);
 
         // Revoke any remaining approval
-        IERC20(address(okuUsd)).approve(address(okuBridge), 0);
+        IERC20(address(okuNote)).approve(address(okuBridge), 0);
 
-        emit NativeBridgeInitiated(msg.sender, requestId, okuUsdAmount, destinationChain, recipient);
+        emit NativeBridgeInitiated(msg.sender, requestId, noteAmount, destinationChain, recipient);
     }
 
     // ============ Adapter Bridge Path ============
-    // The router is the burn authority. It burns OkuUSD then calls a message-only adapter
+    // The router is the burn authority. It burns OkuNote then calls a message-only adapter
     // shim. The third-party protocol (NTT, CCIP, etc.) handles destination minting natively.
 
     /**
-     * @notice Bridge wOkuUSD to another chain via a registered third-party adapter
-     * @dev wOkuUSD is redeemed and OkuUSD burned by this contract; adapter delivers the
+     * @notice Bridge OkuUSD to another chain via a registered third-party adapter
+     * @dev OkuUSD is unwrapped and OkuNote burned by this contract; adapter delivers the
      *      cross-chain message only. The third-party protocol handles destination minting.
-     * @param wOkuUsdAmount Amount of wOkuUSD to bridge
+     * @param usdAmount Amount of OkuUSD to bridge
      * @param adapter Registered IBridgeAdapter address (e.g. NttAdapter, CcipAdapter)
      * @param destinationChain Destination chain ID
      * @param recipient Recipient address on destination chain
      */
     function bridgeWrappedVia(
-        uint256 wOkuUsdAmount,
+        uint256 usdAmount,
         address adapter,
         uint256 destinationChain,
         address recipient
@@ -251,27 +252,30 @@ contract OkuBridgeRouter is
         if (!supportedAdapters[adapter]) revert UnsupportedAdapter(adapter);
         if (recipient == address(0)) revert InvalidRecipient();
 
-        IERC20(address(wOkuUsd)).safeTransferFrom(msg.sender, address(this), wOkuUsdAmount);
-        uint256 okuUsdAmount = wOkuUsd.redeem(wOkuUsdAmount, address(this), address(this));
+        // Pull OkuUSD from user
+        IERC20(address(okuUsd)).safeTransferFrom(msg.sender, address(this), usdAmount);
 
-        okuUsd.burn(okuUsdAmount);
+        // Unwrap OkuUSD → get OkuNote (reverts if vault undercollateralized)
+        uint256 noteAmount = okuUsd.unwrap(usdAmount, address(this));
+
+        okuNote.burn(noteAmount);
         IBridgeAdapter(adapter).bridge{value: msg.value}(
-            address(okuUsd), okuUsdAmount, destinationChain, recipient
+            address(okuNote), noteAmount, destinationChain, recipient
         );
 
-        emit BridgeInitiated(msg.sender, adapter, okuUsdAmount, destinationChain, recipient);
+        emit BridgeInitiated(msg.sender, adapter, noteAmount, destinationChain, recipient);
     }
 
     /**
-     * @notice Bridge OkuUSD directly to another chain via a registered third-party adapter
-     * @dev OkuUSD is burned by this contract; adapter delivers the cross-chain message only.
-     * @param okuUsdAmount Amount of OkuUSD to bridge
+     * @notice Bridge OkuNote directly to another chain via a registered third-party adapter
+     * @dev OkuNote is burned by this contract; adapter delivers the cross-chain message only.
+     * @param noteAmount Amount of OkuNote to bridge
      * @param adapter Registered IBridgeAdapter address (e.g. NttAdapter, CcipAdapter)
      * @param destinationChain Destination chain ID
      * @param recipient Recipient address on destination chain
      */
-    function bridgeDirectVia(
-        uint256 okuUsdAmount,
+    function bridgeVia(
+        uint256 noteAmount,
         address adapter,
         uint256 destinationChain,
         address recipient
@@ -284,14 +288,14 @@ contract OkuBridgeRouter is
         if (!supportedAdapters[adapter]) revert UnsupportedAdapter(adapter);
         if (recipient == address(0)) revert InvalidRecipient();
 
-        IERC20(address(okuUsd)).safeTransferFrom(msg.sender, address(this), okuUsdAmount);
+        IERC20(address(okuNote)).safeTransferFrom(msg.sender, address(this), noteAmount);
 
-        okuUsd.burn(okuUsdAmount);
+        okuNote.burn(noteAmount);
         IBridgeAdapter(adapter).bridge{value: msg.value}(
-            address(okuUsd), okuUsdAmount, destinationChain, recipient
+            address(okuNote), noteAmount, destinationChain, recipient
         );
 
-        emit BridgeInitiated(msg.sender, adapter, okuUsdAmount, destinationChain, recipient);
+        emit BridgeInitiated(msg.sender, adapter, noteAmount, destinationChain, recipient);
     }
 
     // ============ Admin Functions ============

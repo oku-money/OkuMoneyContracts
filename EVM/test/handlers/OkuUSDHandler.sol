@@ -2,60 +2,52 @@
 pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
+import {OkuNote} from "../../src/token/OkuNote.sol";
 import {OkuUSD} from "../../src/token/OkuUSD.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
  * @title OkuUSDHandler
- * @notice Handler contract for OkuUSD invariant testing
+ * @notice Handler contract for OkuUSD vault invariant testing
  */
 contract OkuUSDHandler is Test {
+    OkuNote public okuNote;
     OkuUSD public okuUsd;
     address public minter;
     address public rebaser;
-    address public allowanceManager;
 
-    // Tracking state for invariant verification
     address[] public actors;
     mapping(address => bool) public isActor;
-    mapping(address => uint256) public lastAllowance;
-    bool public allowanceWasReset;
 
     uint256 public constant MAX_SUPPLY = 1_000_000_000e18;
     uint256 public constant PRECISION = 1e18;
 
-    // Ghost variables for tracking
-    uint256 public ghostMintedTotal;
-    uint256 public ghostBurnedTotal;
-    bool public ghostLastWasRebase;
+    // Ghost variables
+    uint256 public ghostTotalWrapped;
+    uint256 public ghostTotalUnwrapped;
+    uint256 public ghostRebaseCount;
 
     // Ghost call/revert counters
-    uint256 public ghostMintCallCount;
-    uint256 public ghostMintRevertCount;
-    uint256 public ghostBurnCallCount;
-    uint256 public ghostBurnRevertCount;
-    uint256 public ghostTransferCallCount;
-    uint256 public ghostTransferRevertCount;
+    uint256 public ghostMintOkuNoteCallCount;
+    uint256 public ghostMintOkuNoteRevertCount;
+    uint256 public ghostWrapCallCount;
+    uint256 public ghostWrapRevertCount;
+    uint256 public ghostUnwrapCallCount;
+    uint256 public ghostUnwrapRevertCount;
     uint256 public ghostRebaseCallCount;
     uint256 public ghostRebaseRevertCount;
-    uint256 public ghostResetCallCount;
-    uint256 public ghostResetRevertCount;
+    uint256 public ghostTransferCallCount;
+    uint256 public ghostTransferRevertCount;
 
-    // Monotonic multiplier tracking
-    uint256 public ghostLastMultiplier;
-
-    constructor(OkuUSD _okuUsd, address _minter, address _rebaser, address _allowanceManager) {
+    constructor(OkuNote _okuNote, OkuUSD _okuUsd, address _minter, address _rebaser) {
+        okuNote = _okuNote;
         okuUsd = _okuUsd;
         minter = _minter;
         rebaser = _rebaser;
-        allowanceManager = _allowanceManager;
 
-        // Initialize actors
-        _addActor(makeAddr("actor1"));
-        _addActor(makeAddr("actor2"));
-        _addActor(makeAddr("actor3"));
-
-        lastAllowance[minter] = okuUsd.minterAllowance(minter);
-        ghostLastMultiplier = okuUsd.rewardMultiplier();
+        _addActor(makeAddr("vaultActor1"));
+        _addActor(makeAddr("vaultActor2"));
+        _addActor(makeAddr("vaultActor3"));
     }
 
     function _addActor(address actor) internal {
@@ -72,59 +64,80 @@ contract OkuUSDHandler is Test {
 
     // ============ Handler Functions ============
 
-    /// @notice Mint tokens to a random actor
-    function mint(uint256 actorSeed, uint256 amount) external {
-        ghostLastWasRebase = false;
-        ghostMintCallCount++;
-
+    /// @notice Mint OkuNote to actors (so they have tokens to wrap)
+    function mintOkuNote(uint256 actorSeed, uint256 amount) external {
+        ghostMintOkuNoteCallCount++;
         address actor = actors[actorSeed % actors.length];
-        amount = bound(amount, 1, MAX_SUPPLY / 100);
+        amount = bound(amount, 1e18, 1_000_000e18);
 
-        uint256 allowance = okuUsd.minterAllowance(minter);
-        uint256 remaining = okuUsd.maxSupply() - okuUsd.totalSupply();
+        uint256 allowance = okuNote.minterAllowance(minter);
+        uint256 remaining = okuNote.maxSupply() - okuNote.totalSupply();
         amount = bound(amount, 0, _min(allowance, remaining));
 
         if (amount == 0) return;
 
         vm.prank(minter);
-        try okuUsd.mint(actor, amount) {
-            ghostMintedTotal += amount;
-            lastAllowance[minter] = okuUsd.minterAllowance(minter);
-        } catch {
-            ghostMintRevertCount++;
+        try okuNote.mint(actor, amount) {}
+        catch {
+            ghostMintOkuNoteRevertCount++;
         }
     }
 
-    /// @notice Burn tokens from a random actor (transfer to minter, then self-burn)
-    function burn(uint256 actorSeed, uint256 amount) external {
-        ghostLastWasRebase = false;
-        ghostBurnCallCount++;
+    /// @notice Wrap OkuNote into OkuUSD vault
+    function wrap(uint256 actorSeed, uint256 amount) external {
+        ghostWrapCallCount++;
+        address actor = actors[actorSeed % actors.length];
+        uint256 balance = okuNote.balanceOf(actor);
+        amount = bound(amount, 0, balance);
 
+        if (amount == 0) return;
+
+        vm.startPrank(actor);
+        IERC20(address(okuNote)).approve(address(okuUsd), amount);
+        try okuUsd.wrap(amount, actor) {
+            ghostTotalWrapped += amount;
+        } catch {
+            ghostWrapRevertCount++;
+        }
+        vm.stopPrank();
+    }
+
+    /// @notice Unwrap OkuUSD to get OkuNote back
+    function unwrap(uint256 actorSeed, uint256 amount) external {
+        ghostUnwrapCallCount++;
         address actor = actors[actorSeed % actors.length];
         uint256 balance = okuUsd.balanceOf(actor);
         amount = bound(amount, 0, balance);
 
         if (amount == 0) return;
 
-        // Transfer tokens to minter first (self-burn model)
         vm.prank(actor);
-        try okuUsd.transfer(minter, amount) {
-            vm.prank(minter);
-            try okuUsd.burn(amount) {
-                ghostBurnedTotal += amount;
-            } catch {
-                ghostBurnRevertCount++;
-            }
+        try okuUsd.unwrap(amount, actor) returns (uint256 notesReturned) {
+            ghostTotalUnwrapped += notesReturned;
         } catch {
-            ghostBurnRevertCount++;
+            ghostUnwrapRevertCount++;
         }
     }
 
-    /// @notice Transfer between random actors
-    function transfer(uint256 fromSeed, uint256 toSeed, uint256 amount) external {
-        ghostLastWasRebase = false;
-        ghostTransferCallCount++;
+    /// @notice Trigger note rebase
+    function rebase(uint256 multiplierIncrease) external {
+        ghostRebaseCallCount++;
+        uint256 currentMultiplier = okuNote.rewardMultiplier();
+        uint256 increase =
+            bound(multiplierIncrease, currentMultiplier / 10_000, currentMultiplier / 10);
+        uint256 newMultiplier = currentMultiplier + increase;
 
+        vm.prank(rebaser);
+        try okuNote.updateRewardMultiplier(newMultiplier) {
+            ghostRebaseCount++;
+        } catch {
+            ghostRebaseRevertCount++;
+        }
+    }
+
+    /// @notice Transfer OkuUSD between actors
+    function transfer(uint256 fromSeed, uint256 toSeed, uint256 amount) external {
+        ghostTransferCallCount++;
         address from = actors[fromSeed % actors.length];
         address to = actors[toSeed % actors.length];
         uint256 balance = okuUsd.balanceOf(from);
@@ -139,53 +152,6 @@ contract OkuUSDHandler is Test {
         }
     }
 
-    /// @notice Update reward multiplier (rebase)
-    function rebase(uint256 multiplierIncrease) external {
-        ghostRebaseCallCount++;
-        uint256 currentMultiplier = okuUsd.rewardMultiplier();
-
-        // Cap maximum multiplier at 1e24 (1 million x starting value)
-        uint256 maxMultiplier = 1e24;
-
-        if (currentMultiplier >= maxMultiplier) {
-            return; // Already at maximum, skip further rebases
-        }
-
-        // Increase by 0.01% to 5% per rebase
-        uint256 minIncrease = currentMultiplier / 10_000; // 0.01%
-        uint256 maxIncrease = currentMultiplier / 20; // 5%
-        uint256 increase = bound(multiplierIncrease, minIncrease, maxIncrease);
-
-        uint256 newMultiplier = currentMultiplier + increase;
-
-        // Ensure we don't exceed the cap
-        if (newMultiplier > maxMultiplier) {
-            newMultiplier = maxMultiplier;
-        }
-
-        vm.prank(rebaser);
-        try okuUsd.updateRewardMultiplier(newMultiplier) {
-            ghostLastWasRebase = true;
-            ghostLastMultiplier = newMultiplier;
-        } catch {
-            ghostRebaseRevertCount++;
-        }
-    }
-
-    /// @notice Reset minter allowance (simulates allowance manager action)
-    function resetAllowance(uint256 newAllowance) external {
-        ghostResetCallCount++;
-        newAllowance = bound(newAllowance, 0, MAX_SUPPLY);
-
-        vm.prank(allowanceManager);
-        try okuUsd.configureMinterAllowance(minter, newAllowance) {
-            allowanceWasReset = true;
-            lastAllowance[minter] = newAllowance;
-        } catch {
-            ghostResetRevertCount++;
-        }
-    }
-
     // ============ View Functions ============
 
     function getActors() external view returns (address[] memory) {
@@ -196,22 +162,14 @@ contract OkuUSDHandler is Test {
         return actors.length;
     }
 
-    function wasLastOperationRebase() external view returns (bool) {
-        return ghostLastWasRebase;
-    }
-
-    function wasAllowanceReset() external view returns (bool) {
-        return allowanceWasReset;
-    }
-
     function ghostTotalCalls() external view returns (uint256) {
-        return ghostMintCallCount + ghostBurnCallCount + ghostTransferCallCount
-            + ghostRebaseCallCount + ghostResetCallCount;
+        return ghostMintOkuNoteCallCount + ghostWrapCallCount + ghostUnwrapCallCount
+            + ghostRebaseCallCount + ghostTransferCallCount;
     }
 
     function ghostTotalReverts() external view returns (uint256) {
-        return ghostMintRevertCount + ghostBurnRevertCount + ghostTransferRevertCount
-            + ghostRebaseRevertCount + ghostResetRevertCount;
+        return ghostMintOkuNoteRevertCount + ghostWrapRevertCount + ghostUnwrapRevertCount
+            + ghostRebaseRevertCount + ghostTransferRevertCount;
     }
 
     // ============ Helper Functions ============

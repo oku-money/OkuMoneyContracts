@@ -2,25 +2,25 @@
 pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
-import {wOkuUSDHandler} from "../handlers/wOkuUSDHandler.sol";
+import {OkuUSDHandler} from "../handlers/OkuUSDHandler.sol";
 
 /**
  * @title VaultInvariantsTest
- * @notice Invariant tests for wOkuUSD vault backing
+ * @notice Invariant tests for OkuUSD vault backing
  */
 contract VaultInvariantsTest is BaseTest {
-    wOkuUSDHandler public handler;
+    OkuUSDHandler public handler;
 
     function setUp() public override {
         super.setUp();
-        handler = new wOkuUSDHandler(okuUsd, wokuUsd, minter, rebaser);
+        handler = new OkuUSDHandler(okuNote, okuUsd, minter, rebaser);
 
         // Target the handler for invariant testing
         targetContract(address(handler));
 
         // Exclude other contracts from being called directly
+        excludeContract(address(okuNote));
         excludeContract(address(okuUsd));
-        excludeContract(address(wokuUsd));
         excludeContract(address(litePsm));
         excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));
@@ -28,58 +28,57 @@ contract VaultInvariantsTest is BaseTest {
     }
 
     /**
-     * @notice wOkuUSD is always fully backed by OkuUSD
-     * @dev Invariant from CLAUDE.md:
-     *      assert(okuUsd.balanceOf(address(wOkuUSD)) == wOkuUSD.totalAssets());
+     * @notice OkuUSD vault is backed by OkuNote reserves (within rounding tolerance)
+     * @dev Each wrap operation can introduce up to 1 wei of rounding deficit
+     *      (wrap rounds DOWN shares, but usdMinted = noteAmount, so totalSupply can
+     *      fractionally exceed reserves). Tolerance = total wrap calls.
      */
-    function invariant_VaultFullyBacked() public view {
-        assertEq(
-            okuUsd.balanceOf(address(wokuUsd)), wokuUsd.totalAssets(), "Vault must be fully backed"
+    function invariant_VaultBacked() public view {
+        uint256 reserves = okuNote.balanceOf(address(okuUsd));
+        uint256 obligations = okuUsd.totalSupply();
+        uint256 tolerance = handler.ghostWrapCallCount() + 1;
+
+        assertGe(
+            reserves + tolerance,
+            obligations,
+            "Vault must be backed by note reserves (within rounding tolerance)"
         );
     }
 
     /**
-     * @notice Total shares cannot extract more than total assets
+     * @notice Collateralization ratio stays approximately >= 100%
+     * @dev Same rounding tolerance as invariant_VaultBacked
      */
-    function invariant_SharesDoNotExceedAssets() public view {
-        uint256 totalShares = wokuUsd.totalSupply();
-        uint256 totalAssets = wokuUsd.totalAssets();
-
-        if (totalShares > 0) {
-            uint256 convertedAssets = wokuUsd.convertToAssets(totalShares);
-            // Allow 1 wei rounding per actor
-            assertLe(
-                convertedAssets,
-                totalAssets + handler.getActorCount(),
-                "Converted shares should not exceed assets"
+    function invariant_CollateralizationRatio() public view {
+        uint256 obligations = okuUsd.totalSupply();
+        if (obligations > 0) {
+            uint256 reserves = okuNote.balanceOf(address(okuUsd));
+            uint256 tolerance = handler.ghostWrapCallCount() + 1;
+            assertGe(
+                reserves + tolerance,
+                obligations,
+                "Collateralization should be approximately >= 100%"
             );
         }
     }
 
     /**
-     * @notice Sum of all user assets should not exceed total assets
-     * @dev Due to rounding down in convertToAssets(), sum may be less than total.
-     *      The important invariant is that users can never extract more than exists.
+     * @notice Sum of all user OkuUSD balances should not exceed total supply
      */
-    function invariant_UserAssetsSumDoesNotExceedTotal() public view {
+    function invariant_UserBalancesSumDoesNotExceedTotal() public view {
         address[] memory actors = handler.getActors();
-        uint256 sumOfAssets = 0;
+        uint256 sumOfBalances = 0;
 
         for (uint256 i = 0; i < actors.length; i++) {
-            uint256 shares = wokuUsd.balanceOf(actors[i]);
-            if (shares > 0) {
-                sumOfAssets += wokuUsd.convertToAssets(shares);
-            }
+            sumOfBalances += okuUsd.balanceOf(actors[i]);
         }
 
-        uint256 totalAssets = wokuUsd.totalAssets();
+        uint256 totalSupply = okuUsd.totalSupply();
 
-        // Critical: sum should never exceed total (users can't extract more than exists)
-        // Sum may be less due to rounding down, which is fine (favors vault)
         assertLe(
-            sumOfAssets,
-            totalAssets + handler.getActorCount(), // Allow 1 wei per actor for edge cases
-            "Sum of user assets should not exceed total assets"
+            sumOfBalances,
+            totalSupply + handler.getActorCount(),
+            "Sum of user balances should not exceed total supply"
         );
     }
 

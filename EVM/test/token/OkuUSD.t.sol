@@ -3,32 +3,23 @@ pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {
-    PausableUpgradeable
-} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
-import {OkuUSD} from "../../src/token/OkuUSD.sol";
 
 /**
  * @title OkuUSDTest
- * @notice Unit tests for OkuUSD rebasing token
+ * @notice Unit tests for OkuUSD rebasing stablecoin vault (NOT ERC-4626)
  */
 contract OkuUSDTest is BaseTest {
     // ============ Events ============
 
     event Transfer(address indexed from, address indexed to, uint256 value);
-    event RebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
-    event YieldRateUpdated(
+    event UsdRebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
+    event UsdYieldRateUpdated(
         uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotMultiplier
     );
-    event NextYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
-    event MinterAllowanceUpdated(
-        address indexed minter, uint256 oldAllowance, uint256 newAllowance
-    );
-    event MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply);
-    event Blacklisted(address indexed account);
-    event Unblacklisted(address indexed account);
+    event NextUsdYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
+    event MinCollateralRatioUpdated(uint256 oldRatio, uint256 newRatio);
+    event ReservesDeposited(address indexed depositor, uint256 noteAmount);
+    event SurplusWithdrawn(address indexed to, uint256 noteAmount);
 
     // ============ Initialization Tests ============
 
@@ -44,1354 +35,1376 @@ contract OkuUSDTest is BaseTest {
         assertEq(okuUsd.decimals(), 18);
     }
 
-    function test_Initialize_SetsCorrectAdmin() public view {
+    function test_Initialize_SetsOkuNoteReference() public view {
+        assertEq(address(okuUsd.okuNote()), address(okuNote));
+    }
+
+    function test_Initialize_SetsMinCollateralRatio() public view {
+        assertEq(okuUsd.minCollateralRatio(), 95e16);
+    }
+
+    function test_Initialize_UsdMultiplierStartsAtPrecision() public view {
+        assertEq(okuUsd.usdMultiplier(), PRECISION);
+    }
+
+    function test_Initialize_SetsAdminRoles() public view {
         assertTrue(okuUsd.hasRole(DEFAULT_ADMIN_ROLE, admin));
+        assertTrue(okuUsd.hasRole(UPGRADER, admin));
     }
 
-    function test_Initialize_SetsCorrectMaxSupply() public view {
-        assertEq(okuUsd.maxSupply(), MAX_SUPPLY);
-    }
+    // ============ Wrap Tests ============
 
-    function test_Initialize_SetsInitialMultiplier() public view {
-        assertEq(okuUsd.rewardMultiplier(), PRECISION);
-    }
-
-    function test_Initialize_CannotReinitialize() public {
-        vm.expectRevert(Initializable.InvalidInitialization.selector);
-        okuUsd.initialize("OkuUSD2", "OKUSD2", admin, MAX_SUPPLY);
-    }
-
-    // ============ Minting Tests ============
-
-    function test_Mint_OnlyMinterRole() public {
-        vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, MINTER
-            )
-        );
-        okuUsd.mint(user1, 100e18);
-    }
-
-    function test_Mint_IncreasesBalance() public {
-        uint256 amount = 100e18;
-        _mintOkuUsd(user1, amount);
-        assertEq(okuUsd.balanceOf(user1), amount);
-    }
-
-    function test_Mint_IncreasesShares() public {
-        uint256 amount = 100e18;
-        _mintOkuUsd(user1, amount);
-        assertEq(okuUsd.sharesOf(user1), _tokensToShares(amount));
-    }
-
-    function test_Mint_IncreasesTotalSupply() public {
-        uint256 amount = 100e18;
-        _mintOkuUsd(user1, amount);
-        assertEq(okuUsd.totalSupply(), amount);
-    }
-
-    function test_Mint_IncreasesTotalShares() public {
-        uint256 amount = 100e18;
-        _mintOkuUsd(user1, amount);
-        assertEq(okuUsd.totalShares(), _tokensToShares(amount));
-    }
-
-    function test_Mint_DecrementsMinterAllowance() public {
-        uint256 amount = 100e18;
-        uint256 allowanceBefore = okuUsd.minterAllowance(minter);
-        _mintOkuUsd(user1, amount);
-        assertEq(okuUsd.minterAllowance(minter), allowanceBefore - amount);
-    }
-
-    function test_Mint_RevertsExceedingAllowance() public {
-        vm.prank(allowanceManager);
-        okuUsd.configureMinterAllowance(minter, 50e18);
-
-        vm.prank(minter);
-        vm.expectRevert("Exceeds minter allowance");
-        okuUsd.mint(user1, 100e18);
-    }
-
-    function test_Mint_RevertsExceedingMaxSupply() public {
-        vm.prank(minter);
-        vm.expectRevert("Exceeds supply cap");
-        okuUsd.mint(user1, MAX_SUPPLY + 1);
-    }
-
-    function test_Mint_RevertsWhenPaused() public {
-        vm.prank(pauser);
-        okuUsd.pause();
-
-        vm.prank(minter);
-        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        okuUsd.mint(user1, 100e18);
-    }
-
-    function test_Mint_RevertsToBlacklistedAddress() public {
-        vm.prank(blacklister);
-        okuUsd.blacklist(user1);
-
-        vm.prank(minter);
-        vm.expectRevert("Recipient blacklisted");
-        okuUsd.mint(user1, 100e18);
-    }
-
-    function test_Mint_EmitsTransferEvent() public {
-        uint256 amount = 100e18;
-        vm.expectEmit(true, true, false, true);
-        emit Transfer(address(0), user1, amount);
-
-        vm.prank(minter);
-        okuUsd.mint(user1, amount);
-    }
-
-    // ============ Burning Tests ============
-
-    function test_Burn_OnlyMinterRole() public {
-        _mintOkuUsd(user1, 100e18);
+    function test_Wrap_MintsCorrectUsdShares() public {
+        uint256 noteAmount = 100e18;
+        _mintOkuNote(user1, noteAmount);
+        _approveOkuNote(user1, address(okuUsd), noteAmount);
 
         vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, MINTER
-            )
-        );
-        okuUsd.burn(50e18);
+        uint256 usdMinted = okuUsd.wrap(noteAmount, user1);
+
+        // At 1x multiplier, 1 note = 1 OkuUSD
+        assertEq(usdMinted, noteAmount);
+        assertEq(okuUsd.balanceOf(user1), noteAmount);
+        assertEq(okuUsd.usdSharesOf(user1), noteAmount);
     }
 
-    function test_Burn_DecreasesBalance() public {
-        // Mint to minter so it can self-burn
-        _mintOkuUsd(minter, 100e18);
+    function test_Wrap_TransfersNotesToVault() public {
+        uint256 noteAmount = 100e18;
+        _mintOkuNote(user1, noteAmount);
+        _approveOkuNote(user1, address(okuUsd), noteAmount);
 
-        vm.prank(minter);
-        okuUsd.burn(40e18);
+        uint256 vaultBefore = okuNote.balanceOf(address(okuUsd));
 
-        assertEq(okuUsd.balanceOf(minter), 60e18);
+        vm.prank(user1);
+        okuUsd.wrap(noteAmount, user1);
+
+        assertEq(okuNote.balanceOf(user1), 0);
+        assertEq(okuNote.balanceOf(address(okuUsd)), vaultBefore + noteAmount);
     }
 
-    function test_Burn_DecreasesShares() public {
-        _mintOkuUsd(minter, 100e18);
-        uint256 sharesBefore = okuUsd.sharesOf(minter);
-
-        vm.prank(minter);
-        okuUsd.burn(40e18);
-
-        assertEq(okuUsd.sharesOf(minter), sharesBefore - _tokensToShares(40e18));
-    }
-
-    function test_Burn_DecreasesTotalSupply() public {
-        _mintOkuUsd(minter, 100e18);
-
-        vm.prank(minter);
-        okuUsd.burn(40e18);
-
-        assertEq(okuUsd.totalSupply(), 60e18);
-    }
-
-    function test_Burn_DoesNotRestoreAllowance() public {
-        uint256 amount = 100e18;
-        uint256 allowanceBefore = okuUsd.minterAllowance(minter);
-
-        _mintOkuUsd(minter, amount);
-        uint256 allowanceAfterMint = okuUsd.minterAllowance(minter);
-
-        vm.prank(minter);
-        okuUsd.burn(amount);
-
-        // Allowance should NOT be restored after burn
-        assertEq(okuUsd.minterAllowance(minter), allowanceAfterMint);
-        assertEq(okuUsd.minterAllowance(minter), allowanceBefore - amount);
-    }
-
-    function test_Burn_RevertsInsufficientBalance() public {
-        _mintOkuUsd(minter, 100e18);
-
-        vm.prank(minter);
-        vm.expectRevert("Insufficient balance");
-        okuUsd.burn(150e18);
-    }
-
-    function test_Burn_RevertsForBlacklistedAccount() public {
-        _mintOkuUsd(minter, 100e18);
-
-        vm.prank(blacklister);
-        okuUsd.blacklist(minter);
-
-        vm.prank(minter);
-        vm.expectRevert("Account blacklisted");
-        okuUsd.burn(50e18);
-    }
-
-    function test_Burn_WorksWhenPaused() public {
-        _mintOkuUsd(minter, 100e18);
-
-        vm.prank(pauser);
-        okuUsd.pause();
-
-        // Burn should work when paused (no whenNotPaused modifier)
-        vm.prank(minter);
-        okuUsd.burn(50e18);
-
-        assertEq(okuUsd.balanceOf(minter), 50e18);
-    }
-
-    function test_Burn_EmitsTransferEvent() public {
-        _mintOkuUsd(minter, 100e18);
+    function test_Wrap_EmitsTransferFromZero() public {
+        uint256 noteAmount = 100e18;
+        _mintOkuNote(user1, noteAmount);
+        _approveOkuNote(user1, address(okuUsd), noteAmount);
 
         vm.expectEmit(true, true, false, true);
-        emit Transfer(minter, address(0), 50e18);
-
-        vm.prank(minter);
-        okuUsd.burn(50e18);
-    }
-
-    // ============ Transfer Tests ============
-
-    function test_Transfer_UpdatesBalances() public {
-        _mintOkuUsd(user1, 100e18);
+        emit Transfer(address(0), user1, noteAmount);
 
         vm.prank(user1);
-        assertTrue(okuUsd.transfer(user2, 30e18));
-
-        assertEq(okuUsd.balanceOf(user1), 70e18);
-        assertEq(okuUsd.balanceOf(user2), 30e18);
+        okuUsd.wrap(noteAmount, user1);
     }
 
-    function test_Transfer_OperatesOnShares() public {
-        _mintOkuUsd(user1, 100e18);
-        uint256 user1SharesBefore = okuUsd.sharesOf(user1);
-        uint256 totalSharesBefore = okuUsd.totalShares();
+    function test_Wrap_ToReceiver() public {
+        uint256 noteAmount = 100e18;
+        _mintOkuNote(user1, noteAmount);
+        _approveOkuNote(user1, address(okuUsd), noteAmount);
 
         vm.prank(user1);
-        assertTrue(okuUsd.transfer(user2, 30e18));
+        okuUsd.wrap(noteAmount, user2);
 
-        // Total shares should be unchanged (internal transfer)
-        assertEq(okuUsd.totalShares(), totalSharesBefore);
-
-        // User shares should transfer correctly
-        uint256 transferredShares = _tokensToShares(30e18);
-        assertEq(okuUsd.sharesOf(user1), user1SharesBefore - transferredShares);
-        assertEq(okuUsd.sharesOf(user2), transferredShares);
+        assertEq(okuUsd.balanceOf(user2), noteAmount);
+        assertEq(okuUsd.balanceOf(user1), 0);
     }
 
-    function test_Transfer_RevertsWhenPaused() public {
-        _mintOkuUsd(user1, 100e18);
+    function test_Wrap_RevertsOnZeroAmount() public {
+        vm.prank(user1);
+        vm.expectRevert("Amount must be positive");
+        okuUsd.wrap(0, user1);
+    }
 
-        vm.prank(pauser);
-        okuUsd.pause();
+    function test_Wrap_RevertsOnZeroReceiver() public {
+        uint256 noteAmount = 100e18;
+        _mintOkuNote(user1, noteAmount);
+        _approveOkuNote(user1, address(okuUsd), noteAmount);
 
         vm.prank(user1);
-        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        okuUsd.transfer(user2, 30e18);
+        vm.expectRevert("Zero receiver");
+        okuUsd.wrap(noteAmount, address(0));
     }
 
-    function test_Transfer_RevertsFromBlacklisted() public {
-        _mintOkuUsd(user1, 100e18);
+    // ============ Wrap Rounding Tests ============
 
-        vm.prank(blacklister);
-        okuUsd.blacklist(user1);
+    function test_Wrap_SharesRoundDown_FavorsVault() public {
+        // Wrap some so vault is non-empty
+        _mintOkuUsd(user1, 1000e18);
+
+        // Increase USD multiplier to 3x
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier(PRECISION * 3);
+
+        // Wrap an odd amount at 3x multiplier
+        // shares = noteAmount * PRECISION / (3 * PRECISION) = noteAmount / 3
+        // For 10e18 notes: shares = 10e18 / 3 = 3333333333333333333 (rounds down)
+        uint256 noteAmount = 10e18;
+        _mintOkuNote(user2, noteAmount);
+        _approveOkuNote(user2, address(okuUsd), noteAmount);
+
+        vm.prank(user2);
+        okuUsd.wrap(noteAmount, user2);
+
+        // balanceOf(user2) = shares * multiplier / PRECISION <= noteAmount (rounds down favors vault)
+        assertLe(okuUsd.balanceOf(user2), noteAmount);
+    }
+
+    // ============ Unwrap Tests ============
+
+    function test_Unwrap_ReturnsCorrectNotes() public {
+        uint256 noteAmount = 100e18;
+        _mintOkuUsd(user1, noteAmount);
+
+        uint256 userNotesBefore = okuNote.balanceOf(user1);
 
         vm.prank(user1);
-        vm.expectRevert("Sender blacklisted");
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        okuUsd.transfer(user2, 30e18);
+        uint256 notesReturned = okuUsd.unwrap(noteAmount, user1);
+
+        assertEq(notesReturned, noteAmount);
+        assertEq(okuNote.balanceOf(user1), userNotesBefore + noteAmount);
+        assertEq(okuUsd.balanceOf(user1), 0);
     }
 
-    function test_Transfer_RevertsToBlacklisted() public {
-        _mintOkuUsd(user1, 100e18);
+    function test_Unwrap_BurnsUsdShares() public {
+        uint256 noteAmount = 100e18;
+        _mintOkuUsd(user1, noteAmount);
 
-        vm.prank(blacklister);
-        okuUsd.blacklist(user2);
+        uint256 sharesBefore = okuUsd.usdSharesOf(user1);
+        assertGt(sharesBefore, 0);
 
         vm.prank(user1);
-        vm.expectRevert("Recipient blacklisted");
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        okuUsd.transfer(user2, 30e18);
+        okuUsd.unwrap(noteAmount, user1);
+
+        assertEq(okuUsd.usdSharesOf(user1), 0);
+        assertEq(okuUsd.totalUsdShares(), 0);
     }
 
-    function test_Transfer_RevertsInsufficientBalance() public {
-        _mintOkuUsd(user1, 100e18);
+    function test_Unwrap_EmitsTransferToZero() public {
+        uint256 noteAmount = 100e18;
+        _mintOkuUsd(user1, noteAmount);
 
-        vm.prank(user1);
-        vm.expectRevert("Insufficient balance");
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        okuUsd.transfer(user2, 150e18);
-    }
-
-    function test_Transfer_RevertsToZeroAddress() public {
-        _mintOkuUsd(user1, 100e18);
-
-        vm.prank(user1);
-        vm.expectRevert("Transfer to zero address");
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        okuUsd.transfer(address(0), 30e18);
-    }
-
-    function test_Transfer_EmitsTransferEventWithTokenAmounts() public {
-        _mintOkuUsd(user1, 100e18);
-
-        // Event should emit token amount, not shares
         vm.expectEmit(true, true, false, true);
-        emit Transfer(user1, user2, 30e18);
+        emit Transfer(user1, address(0), noteAmount);
 
         vm.prank(user1);
-        assertTrue(okuUsd.transfer(user2, 30e18));
+        okuUsd.unwrap(noteAmount, user1);
     }
 
-    function test_Transfer_ToSelf() public {
-        _mintOkuUsd(user1, 100e18);
-        uint256 balanceBefore = okuUsd.balanceOf(user1);
+    function test_Unwrap_ToReceiver() public {
+        uint256 noteAmount = 100e18;
+        _mintOkuUsd(user1, noteAmount);
 
         vm.prank(user1);
-        assertTrue(okuUsd.transfer(user1, 50e18));
+        okuUsd.unwrap(noteAmount, user2);
 
-        assertEq(okuUsd.balanceOf(user1), balanceBefore);
+        assertEq(okuNote.balanceOf(user2), noteAmount);
+        assertEq(okuNote.balanceOf(user1), 0);
     }
 
-    // ============ TransferFrom Tests ============
-
-    function test_TransferFrom_UpdatesAllowance() public {
-        _mintOkuUsd(user1, 100e18);
-        _approveOkuUsd(user1, user2, 50e18);
-
-        vm.prank(user2);
-        assertTrue(okuUsd.transferFrom(user1, user3, 30e18));
-
-        assertEq(okuUsd.allowance(user1, user2), 20e18);
-    }
-
-    function test_TransferFrom_RevertsInsufficientAllowance() public {
-        _mintOkuUsd(user1, 100e18);
-        _approveOkuUsd(user1, user2, 20e18);
-
-        vm.prank(user2);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IERC20Errors.ERC20InsufficientAllowance.selector, user2, 20e18, 30e18
-            )
-        );
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        okuUsd.transferFrom(user1, user3, 30e18);
-    }
-
-    function test_TransferFrom_RevertsWhenPaused() public {
-        _mintOkuUsd(user1, 100e18);
-        _approveOkuUsd(user1, user2, 50e18);
-
-        vm.prank(pauser);
-        okuUsd.pause();
-
-        vm.prank(user2);
-        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        okuUsd.transferFrom(user1, user3, 30e18);
-    }
-
-    // ============ Rebasing Tests ============
-
-    function test_UpdateRewardMultiplier_OnlyRebaser() public {
+    function test_Unwrap_RevertsOnZeroAmount() public {
         vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, REBASER
-            )
-        );
-        okuUsd.updateRewardMultiplier(PRECISION * 2);
+        vm.expectRevert("Amount must be positive");
+        okuUsd.unwrap(0, user1);
     }
 
-    function test_UpdateRewardMultiplier_CannotDecrease() public {
+    function test_Unwrap_RevertsOnZeroReceiver() public {
+        uint256 noteAmount = 100e18;
+        _mintOkuUsd(user1, noteAmount);
+
+        vm.prank(user1);
+        vm.expectRevert("Zero receiver");
+        okuUsd.unwrap(noteAmount, address(0));
+    }
+
+    // ============ Unwrap Rounding Tests ============
+
+    function test_Unwrap_SharesBurnedRoundUp_FavorsVault() public {
+        // Wrap at 1x, then bump multiplier so unwrap has fractional shares
+        _mintOkuUsd(user1, 1000e18);
+
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier(PRECISION * 3);
+
+        // user1 balance is now 1000e18 * 3 = 3000e18
+        // Unwrap 1e18: sharesToBurn = ceil(1e18 * 1e18 / (3e18)) = ceil(1/3 * 1e18)
+        uint256 sharesBefore = okuUsd.usdSharesOf(user1);
+
+        vm.prank(user1);
+        okuUsd.unwrap(1e18, user1);
+
+        uint256 sharesAfter = okuUsd.usdSharesOf(user1);
+        uint256 sharesBurned = sharesBefore - sharesAfter;
+
+        // Round-up check: sharesBurned * multiplier / PRECISION >= 1e18
+        assertGe((sharesBurned * okuUsd.usdMultiplier()) / PRECISION, 1e18);
+    }
+
+    // ============ Insufficient Reserves ============
+
+    function test_Unwrap_RevertsOnInsufficientReserves() public {
+        // Wrap notes normally
+        _mintOkuUsd(user1, 100e18);
+
+        // Deposit extra reserves then withdraw most to leave vault underfunded
+        _mintOkuNote(reserveManager, 200e18);
+        _approveOkuNote(reserveManager, address(okuUsd), 200e18);
+        vm.prank(reserveManager);
+        okuUsd.depositReserves(200e18);
+
+        // Allow full withdrawal for test purposes
+        vm.prank(admin);
+        okuUsd.setMinCollateralRatio(0);
+        vm.prank(reserveManager);
+        okuUsd.withdrawSurplus(250e18);
+
+        // Vault only has 50e18 notes but user has 100e18 OkuUSD
+        vm.prank(user1);
+        vm.expectRevert("Insufficient reserves");
+        okuUsd.unwrap(100e18, user1);
+    }
+
+    // ============ Dollar-for-Dollar Tests ============
+
+    function test_DollarForDollar_OneNoteWrapsToOneOkuUSD() public {
+        uint256 noteAmount = 1e18;
+        _mintOkuNote(user1, noteAmount);
+        _approveOkuNote(user1, address(okuUsd), noteAmount);
+
+        vm.prank(user1);
+        uint256 usdMinted = okuUsd.wrap(noteAmount, user1);
+
+        assertEq(usdMinted, 1e18, "1 note should produce exactly 1 OkuUSD");
+        assertEq(okuUsd.balanceOf(user1), 1e18);
+    }
+
+    function test_DollarForDollar_AfterNoteRebase() public {
+        // Note rebases to 2x, but OkuUSD stays at 1x
+        // Wrapping 100 notes (each worth $2 post-rebase) should still produce 100 OkuUSD
+        // because both are denominated in dollar tokens (post-rebase balances)
         vm.prank(rebaser);
+        okuNote.updateRewardMultiplier(PRECISION * 2);
+
+        uint256 noteAmount = 100e18;
+        _mintOkuNote(user1, noteAmount);
+        _approveOkuNote(user1, address(okuUsd), noteAmount);
+
+        vm.prank(user1);
+        uint256 usdMinted = okuUsd.wrap(noteAmount, user1);
+
+        // Dollar-for-dollar: 100 note tokens = 100 OkuUSD
+        assertEq(usdMinted, noteAmount);
+    }
+
+    // ============ Wrap/Unwrap Round Trip ============
+
+    function test_WrapUnwrap_RoundTrip_MaxOneWeiLoss() public {
+        uint256 noteAmount = 100e18;
+        _mintOkuNote(user1, noteAmount);
+        _approveOkuNote(user1, address(okuUsd), noteAmount);
+
+        vm.startPrank(user1);
+        okuUsd.wrap(noteAmount, user1);
+
+        uint256 balance = okuUsd.balanceOf(user1);
+        uint256 notesBack = okuUsd.unwrap(balance, user1);
+        vm.stopPrank();
+
+        assertGe(notesBack, noteAmount - 1, "Round trip should lose at most 1 wei");
+        assertLe(notesBack, noteAmount, "Round trip should not gain tokens");
+    }
+
+    function test_WrapUnwrap_RoundTrip_AfterMultiplierChange() public {
+        // Wrap at 1x
+        uint256 noteAmount = 100e18;
+        _mintOkuUsd(user1, noteAmount);
+
+        // Bump USD multiplier to 1.5x
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier((PRECISION * 3) / 2);
+
+        // user1 OkuUSD balance grew to 150e18, but still backed by 100 notes
+        // Unwrapping 100e18 should return 100 notes
+        vm.prank(user1);
+        uint256 notesBack = okuUsd.unwrap(100e18, user1);
+
+        assertEq(notesBack, 100e18);
+    }
+
+    // ============ USD Multiplier Tests ============
+
+    function test_UsdMultiplier_GrowsOverTime() public {
+        // ~4.5% APY = 1e18 + ~1.393e9 per second
+        uint256 rate = PRECISION + 1393e6;
+
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(rate, 0);
+
+        uint256 multBefore = okuUsd.usdMultiplier();
+
+        // Warp forward 1 day
+        vm.warp(block.timestamp + 1 days);
+
+        uint256 multAfter = okuUsd.usdMultiplier();
+        assertGt(multAfter, multBefore, "Multiplier should grow over time");
+    }
+
+    function test_UsdMultiplier_AccruesContinuously() public {
+        uint256 rate = PRECISION + 1393e6;
+
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(rate, 0);
+
+        uint256 start = block.timestamp;
+
+        // Warp 100 seconds
+        vm.warp(start + 100);
+        uint256 multAt100 = okuUsd.usdMultiplier();
+
+        // The multiplier is a pure function of elapsed time, always deterministic
+        assertGt(multAt100, PRECISION);
+        assertEq(okuUsd.usdMultiplier(), multAt100);
+    }
+
+    function test_UsdMultiplier_AffectsBalances() public {
+        _mintOkuUsd(user1, 100e18);
+
+        assertEq(okuUsd.balanceOf(user1), 100e18);
+
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier(PRECISION * 2);
+
+        assertEq(okuUsd.balanceOf(user1), 200e18);
+    }
+
+    function test_UsdMultiplier_AffectsTotalSupply() public {
+        _mintOkuUsd(user1, 100e18);
+
+        assertEq(okuUsd.totalSupply(), 100e18);
+
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier(PRECISION * 2);
+
+        assertEq(okuUsd.totalSupply(), 200e18);
+    }
+
+    // ============ setUsdYieldRate Tests ============
+
+    function test_SetUsdYieldRate_OnlyUsdRebaser() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, USD_REBASER
+            )
+        );
+        okuUsd.setUsdYieldRate(PRECISION + 1e9, 0);
+    }
+
+    function test_SetUsdYieldRate_SnapshotsMultiplier() public {
+        uint256 rate = PRECISION + 1393e6;
+
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(rate, 0);
+
+        vm.warp(block.timestamp + 1 days);
+
+        uint256 multBefore = okuUsd.usdMultiplier();
+        assertGt(multBefore, PRECISION);
+
+        // Set a new rate -- should snapshot current multiplier
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(PRECISION, 0); // zero yield
+
+        uint256 baseAfter = okuUsd.usdBaseMultiplier();
+        assertEq(baseAfter, multBefore, "Base multiplier should be snapshotted");
+    }
+
+    function test_SetUsdYieldRate_RevertsOnNegativeRate() public {
+        vm.prank(usdRebaser);
+        vm.expectRevert("Rate cannot be negative");
+        okuUsd.setUsdYieldRate(PRECISION - 1, 0);
+    }
+
+    function test_SetUsdYieldRate_RevertsOnRateTooHigh() public {
+        vm.prank(usdRebaser);
+        vm.expectRevert("Rate too high");
+        okuUsd.setUsdYieldRate(PRECISION + 1e11 + 1, 0);
+    }
+
+    function test_SetUsdYieldRate_WithEndTimestamp() public {
+        uint256 endTime = block.timestamp + 30 days;
+
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(PRECISION + 1393e6, endTime);
+
+        assertEq(okuUsd.usdRateEnd(), endTime);
+    }
+
+    function test_SetUsdYieldRate_RevertsOnPastEndTimestamp() public {
+        // Warp forward so block.timestamp - 1 is non-zero (avoiding endTimestamp == 0 no-expiry case)
+        vm.warp(1000);
+        vm.prank(usdRebaser);
+        vm.expectRevert("End must be in the future");
+        okuUsd.setUsdYieldRate(PRECISION + 1393e6, block.timestamp - 1);
+    }
+
+    function test_SetUsdYieldRate_ClearsPendingRate() public {
+        uint256 endTime = block.timestamp + 30 days;
+
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(PRECISION + 1393e6, endTime);
+
+        vm.prank(usdRebaser);
+        okuUsd.setNextUsdYieldRate(PRECISION + 2000e6);
+
+        // Setting a new rate should clear pending
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(PRECISION + 1000e6, 0);
+
+        assertEq(okuUsd.usdPendingRatePerSecond(), PRECISION);
+    }
+
+    // ============ setNextUsdYieldRate Tests ============
+
+    function test_SetNextUsdYieldRate_OnlyUsdRebaser() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, USD_REBASER
+            )
+        );
+        okuUsd.setNextUsdYieldRate(PRECISION + 1e9);
+    }
+
+    function test_SetNextUsdYieldRate_SchedulesNextRate() public {
+        uint256 endTime = block.timestamp + 30 days;
+
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(PRECISION + 1393e6, endTime);
+
+        uint256 nextRate = PRECISION + 2000e6;
+        vm.prank(usdRebaser);
+        okuUsd.setNextUsdYieldRate(nextRate);
+
+        assertEq(okuUsd.usdPendingRatePerSecond(), nextRate);
+    }
+
+    function test_SetNextUsdYieldRate_RevertsWhenNoEnd() public {
+        // Set rate with no end time
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(PRECISION + 1393e6, 0);
+
+        vm.prank(usdRebaser);
+        vm.expectRevert("Current rate has no end");
+        okuUsd.setNextUsdYieldRate(PRECISION + 2000e6);
+    }
+
+    function test_SetNextUsdYieldRate_RevertsOnNegativeRate() public {
+        uint256 endTime = block.timestamp + 30 days;
+
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(PRECISION + 1393e6, endTime);
+
+        vm.prank(usdRebaser);
+        vm.expectRevert("Rate cannot be negative");
+        okuUsd.setNextUsdYieldRate(PRECISION - 1);
+    }
+
+    function test_SetNextUsdYieldRate_HeadToTailTransition() public {
+        uint256 rate1 = PRECISION + 1393e6;
+        uint256 rate2 = PRECISION + 2000e6;
+        uint256 endTime = block.timestamp + 30 days;
+
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(rate1, endTime);
+
+        vm.prank(usdRebaser);
+        okuUsd.setNextUsdYieldRate(rate2);
+
+        // Warp past end time -- pending rate should take over
+        vm.warp(endTime + 1 days);
+
+        uint256 mult = okuUsd.usdMultiplier();
+        // Should be greater than what rate1 alone would have produced at endTime
+        assertGt(mult, PRECISION, "Multiplier should have grown through both rate periods");
+    }
+
+    // ============ updateUsdMultiplier Tests ============
+
+    function test_UpdateUsdMultiplier_OnlyUsdRebaser() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, USD_REBASER
+            )
+        );
+        okuUsd.updateUsdMultiplier(PRECISION * 2);
+    }
+
+    function test_UpdateUsdMultiplier_SetsNewMultiplier() public {
+        uint256 newMult = PRECISION * 2;
+
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier(newMult);
+
+        assertEq(okuUsd.usdMultiplier(), newMult);
+        assertEq(okuUsd.usdBaseMultiplier(), newMult);
+    }
+
+    function test_UpdateUsdMultiplier_ResetsRateToZero() public {
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(PRECISION + 1393e6, 0);
+
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier(PRECISION * 2);
+
+        assertEq(okuUsd.usdRatePerSecond(), PRECISION);
+        assertEq(okuUsd.usdRateEnd(), 0);
+        assertEq(okuUsd.usdPendingRatePerSecond(), PRECISION);
+    }
+
+    function test_UpdateUsdMultiplier_RevertsOnDecrease() public {
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier(PRECISION * 2);
+
+        vm.prank(usdRebaser);
         vm.expectRevert("Multiplier cannot decrease");
-        okuUsd.updateRewardMultiplier(PRECISION - 1);
+        okuUsd.updateUsdMultiplier(PRECISION);
     }
 
-    function test_UpdateRewardMultiplier_UpdatesBalances() public {
-        _mintOkuUsd(user1, 100e18);
-        uint256 balanceBefore = okuUsd.balanceOf(user1);
-
-        // Double the multiplier
-        vm.prank(rebaser);
-        okuUsd.updateRewardMultiplier(PRECISION * 2);
-
-        uint256 balanceAfter = okuUsd.balanceOf(user1);
-        assertEq(balanceAfter, balanceBefore * 2);
-    }
-
-    function test_UpdateRewardMultiplier_UpdatesTotalSupply() public {
-        _mintOkuUsd(user1, 100e18);
-        uint256 supplyBefore = okuUsd.totalSupply();
-
-        vm.prank(rebaser);
-        okuUsd.updateRewardMultiplier(PRECISION * 2);
-
-        assertEq(okuUsd.totalSupply(), supplyBefore * 2);
-    }
-
-    function test_UpdateRewardMultiplier_SharesUnchanged() public {
-        _mintOkuUsd(user1, 100e18);
-        uint256 sharesBefore = okuUsd.sharesOf(user1);
-        uint256 totalSharesBefore = okuUsd.totalShares();
-
-        vm.prank(rebaser);
-        okuUsd.updateRewardMultiplier(PRECISION * 2);
-
-        assertEq(okuUsd.sharesOf(user1), sharesBefore);
-        assertEq(okuUsd.totalShares(), totalSharesBefore);
-    }
-
-    function test_UpdateRewardMultiplier_NoMaxSupplyCheck() public {
-        // Mint close to max supply
-        _mintOkuUsd(user1, MAX_SUPPLY);
-
-        // Rebase should work even though it pushes supply above original maxSupply
-        vm.prank(rebaser);
-        okuUsd.updateRewardMultiplier(PRECISION * 2);
-
-        // Supply is now 2x max, but this is allowed for rebase
-        assertEq(okuUsd.totalSupply(), MAX_SUPPLY * 2);
-    }
-
-    function test_UpdateRewardMultiplier_EmitsEvent() public {
+    function test_UpdateUsdMultiplier_EmitsEvent() public {
         vm.expectEmit(false, false, false, true);
-        emit RebaseEvent(PRECISION, PRECISION * 2);
+        emit UsdRebaseEvent(PRECISION, PRECISION * 2);
 
-        vm.prank(rebaser);
-        okuUsd.updateRewardMultiplier(PRECISION * 2);
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier(PRECISION * 2);
     }
 
-    function test_UpdateRewardMultiplier_SameMultiplier() public {
-        uint256 currentMultiplier = okuUsd.rewardMultiplier();
+    // ============ depositReserves Tests ============
 
-        vm.prank(rebaser);
-        okuUsd.updateRewardMultiplier(currentMultiplier);
-
-        assertEq(okuUsd.rewardMultiplier(), currentMultiplier);
-    }
-
-    // ============ Blacklisting Tests ============
-
-    function test_Blacklist_OnlyBlacklisterRole() public {
+    function test_DepositReserves_OnlyReserveManager() public {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BLACKLISTER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, RESERVE_MANAGER
             )
         );
-        okuUsd.blacklist(user2);
+        okuUsd.depositReserves(100e18);
     }
 
-    function test_Blacklist_WorksWhilePaused() public {
-        // Pause the contract
-        vm.prank(pauser);
-        okuUsd.pause();
-
-        // Blacklist should still work (critical for front-run protection)
-        vm.prank(blacklister);
-        okuUsd.blacklist(user1);
-
-        assertTrue(okuUsd.isBlacklisted(user1));
-    }
-
-    function test_Blacklist_BlocksTransfersFrom() public {
+    function test_DepositReserves_IncreasesReservesWithoutMintingShares() public {
         _mintOkuUsd(user1, 100e18);
 
-        vm.prank(blacklister);
-        okuUsd.blacklist(user1);
+        uint256 sharesBefore = okuUsd.totalUsdShares();
+        uint256 reservesBefore = okuUsd.totalNoteReserves();
 
-        vm.prank(user1);
-        vm.expectRevert("Sender blacklisted");
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        okuUsd.transfer(user2, 50e18);
+        _mintOkuNote(reserveManager, 50e18);
+        _approveOkuNote(reserveManager, address(okuUsd), 50e18);
+
+        vm.prank(reserveManager);
+        okuUsd.depositReserves(50e18);
+
+        assertEq(okuUsd.totalUsdShares(), sharesBefore, "Shares should not change");
+        assertEq(okuUsd.totalNoteReserves(), reservesBefore + 50e18, "Reserves should increase");
     }
 
-    function test_Blacklist_BlocksTransfersTo() public {
+    function test_DepositReserves_IncreasesCollateralizationRatio() public {
         _mintOkuUsd(user1, 100e18);
 
-        vm.prank(blacklister);
-        okuUsd.blacklist(user2);
+        uint256 ratioBefore = okuUsd.collateralizationRatio();
 
+        _mintOkuNote(reserveManager, 50e18);
+        _approveOkuNote(reserveManager, address(okuUsd), 50e18);
+
+        vm.prank(reserveManager);
+        okuUsd.depositReserves(50e18);
+
+        uint256 ratioAfter = okuUsd.collateralizationRatio();
+        assertGt(ratioAfter, ratioBefore, "Collateralization ratio should increase");
+    }
+
+    function test_DepositReserves_RevertsOnZeroAmount() public {
+        vm.prank(reserveManager);
+        vm.expectRevert("Amount must be positive");
+        okuUsd.depositReserves(0);
+    }
+
+    function test_DepositReserves_EmitsEvent() public {
+        _mintOkuNote(reserveManager, 50e18);
+        _approveOkuNote(reserveManager, address(okuUsd), 50e18);
+
+        vm.expectEmit(true, false, false, true);
+        emit ReservesDeposited(reserveManager, 50e18);
+
+        vm.prank(reserveManager);
+        okuUsd.depositReserves(50e18);
+    }
+
+    // ============ withdrawSurplus Tests ============
+
+    function test_WithdrawSurplus_OnlyReserveManager() public {
         vm.prank(user1);
-        vm.expectRevert("Recipient blacklisted");
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        okuUsd.transfer(user2, 50e18);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, RESERVE_MANAGER
+            )
+        );
+        okuUsd.withdrawSurplus(1e18);
     }
 
-    function test_Blacklist_BlocksMinting() public {
-        vm.prank(blacklister);
-        okuUsd.blacklist(user1);
-
-        vm.prank(minter);
-        vm.expectRevert("Recipient blacklisted");
-        okuUsd.mint(user1, 100e18);
-    }
-
-    function test_Blacklist_EmitsEvent() public {
-        vm.expectEmit(true, false, false, false);
-        emit Blacklisted(user1);
-
-        vm.prank(blacklister);
-        okuUsd.blacklist(user1);
-    }
-
-    function test_Unblacklist_RestoresTransferability() public {
+    function test_WithdrawSurplus_ExtractsSurplus() public {
         _mintOkuUsd(user1, 100e18);
 
-        vm.prank(blacklister);
-        okuUsd.blacklist(user1);
+        // Deposit extra reserves to create surplus
+        _mintOkuNote(reserveManager, 50e18);
+        _approveOkuNote(reserveManager, address(okuUsd), 50e18);
+        vm.prank(reserveManager);
+        okuUsd.depositReserves(50e18);
 
-        vm.prank(unblacklister);
-        okuUsd.unblacklist(user1);
+        // Reserves: 150e18, obligations: 100e18, surplus: 50e18
+        assertEq(okuUsd.surplus(), 50e18);
 
-        // Should be able to transfer again
-        vm.prank(user1);
-        assertTrue(okuUsd.transfer(user2, 50e18));
+        uint256 managerNotesBefore = okuNote.balanceOf(reserveManager);
 
-        assertEq(okuUsd.balanceOf(user2), 50e18);
+        vm.prank(reserveManager);
+        okuUsd.withdrawSurplus(30e18);
+
+        assertEq(okuNote.balanceOf(reserveManager), managerNotesBefore + 30e18);
+        assertEq(okuUsd.surplus(), 20e18);
     }
 
-    function test_Unblacklist_EmitsEvent() public {
-        vm.prank(blacklister);
-        okuUsd.blacklist(user1);
+    function test_WithdrawSurplus_EnforcesMinCollateralRatio() public {
+        _mintOkuUsd(user1, 100e18);
+        // minCollateralRatio is 95e16 (95%)
 
-        vm.expectEmit(true, false, false, false);
-        emit Unblacklisted(user1);
+        // Deposit 10e18 extra -- reserves = 110, obligations = 100, ratio = 110%
+        _mintOkuNote(reserveManager, 10e18);
+        _approveOkuNote(reserveManager, address(okuUsd), 10e18);
+        vm.prank(reserveManager);
+        okuUsd.depositReserves(10e18);
 
-        vm.prank(unblacklister);
-        okuUsd.unblacklist(user1);
+        // Try to withdraw 16e18 -- would leave 94e18 reserves / 100e18 obligations = 94%
+        vm.prank(reserveManager);
+        vm.expectRevert("Below minimum collateral ratio");
+        okuUsd.withdrawSurplus(16e18);
+    }
+
+    function test_WithdrawSurplus_SucceedsAtExactFloor() public {
+        _mintOkuUsd(user1, 100e18);
+
+        // Deposit 10e18 extra -- reserves = 110, obligations = 100
+        _mintOkuNote(reserveManager, 10e18);
+        _approveOkuNote(reserveManager, address(okuUsd), 10e18);
+        vm.prank(reserveManager);
+        okuUsd.depositReserves(10e18);
+
+        // Withdraw 15e18 -- leaves 95e18 / 100e18 = 95% = minCollateralRatio exactly
+        vm.prank(reserveManager);
+        okuUsd.withdrawSurplus(15e18);
+
+        assertEq(okuUsd.collateralizationRatio(), 95e16);
+    }
+
+    function test_WithdrawSurplus_RevertsOnZeroAmount() public {
+        vm.prank(reserveManager);
+        vm.expectRevert("Amount must be positive");
+        okuUsd.withdrawSurplus(0);
+    }
+
+    function test_WithdrawSurplus_EmitsEvent() public {
+        _mintOkuUsd(user1, 100e18);
+
+        _mintOkuNote(reserveManager, 50e18);
+        _approveOkuNote(reserveManager, address(okuUsd), 50e18);
+        vm.prank(reserveManager);
+        okuUsd.depositReserves(50e18);
+
+        vm.expectEmit(true, false, false, true);
+        emit SurplusWithdrawn(reserveManager, 20e18);
+
+        vm.prank(reserveManager);
+        okuUsd.withdrawSurplus(20e18);
+    }
+
+    // ============ setMinCollateralRatio Tests ============
+
+    function test_SetMinCollateralRatio_OnlyAdmin() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, DEFAULT_ADMIN_ROLE
+            )
+        );
+        okuUsd.setMinCollateralRatio(90e16);
+    }
+
+    function test_SetMinCollateralRatio_UpdatesRatio() public {
+        vm.prank(admin);
+        okuUsd.setMinCollateralRatio(90e16);
+
+        assertEq(okuUsd.minCollateralRatio(), 90e16);
+    }
+
+    function test_SetMinCollateralRatio_RevertsAbovePrecision() public {
+        vm.prank(admin);
+        vm.expectRevert("Ratio exceeds 100%");
+        okuUsd.setMinCollateralRatio(PRECISION + 1);
+    }
+
+    function test_SetMinCollateralRatio_AllowsZero() public {
+        vm.prank(admin);
+        okuUsd.setMinCollateralRatio(0);
+
+        assertEq(okuUsd.minCollateralRatio(), 0);
+    }
+
+    function test_SetMinCollateralRatio_AllowsPrecision() public {
+        vm.prank(admin);
+        okuUsd.setMinCollateralRatio(PRECISION);
+
+        assertEq(okuUsd.minCollateralRatio(), PRECISION);
+    }
+
+    function test_SetMinCollateralRatio_EmitsEvent() public {
+        vm.expectEmit(false, false, false, true);
+        emit MinCollateralRatioUpdated(95e16, 90e16);
+
+        vm.prank(admin);
+        okuUsd.setMinCollateralRatio(90e16);
+    }
+
+    // ============ Collateralization Views Tests ============
+
+    function test_TotalNoteReserves_EqualsNoteBalance() public {
+        _mintOkuUsd(user1, 100e18);
+
+        assertEq(okuUsd.totalNoteReserves(), okuNote.balanceOf(address(okuUsd)));
+    }
+
+    function test_TotalUsdObligations_EqualsTotalSupply() public {
+        _mintOkuUsd(user1, 100e18);
+
+        assertEq(okuUsd.totalUsdObligations(), okuUsd.totalSupply());
+    }
+
+    function test_CollateralizationRatio_100Percent_AtStart() public {
+        _mintOkuUsd(user1, 100e18);
+
+        // Reserves = 100, obligations = 100, ratio = 100%
+        assertEq(okuUsd.collateralizationRatio(), PRECISION);
+    }
+
+    function test_CollateralizationRatio_MaxWhenEmpty() public view {
+        // No obligations -> type(uint256).max
+        assertEq(okuUsd.collateralizationRatio(), type(uint256).max);
+    }
+
+    function test_CollateralizationRatio_IncreasesWithDeposit() public {
+        _mintOkuUsd(user1, 100e18);
+
+        _mintOkuNote(reserveManager, 100e18);
+        _approveOkuNote(reserveManager, address(okuUsd), 100e18);
+        vm.prank(reserveManager);
+        okuUsd.depositReserves(100e18);
+
+        // 200 reserves / 100 obligations = 200%
+        assertEq(okuUsd.collateralizationRatio(), PRECISION * 2);
+    }
+
+    function test_Surplus_ReturnsCorrectAmount() public {
+        _mintOkuUsd(user1, 100e18);
+
+        // At 100% collateralized, surplus = 0
+        assertEq(okuUsd.surplus(), 0);
+
+        // Add extra reserves
+        _mintOkuNote(reserveManager, 50e18);
+        _approveOkuNote(reserveManager, address(okuUsd), 50e18);
+        vm.prank(reserveManager);
+        okuUsd.depositReserves(50e18);
+
+        assertEq(okuUsd.surplus(), 50e18);
+    }
+
+    function test_Surplus_ZeroWhenUndercollateralized() public {
+        _mintOkuUsd(user1, 100e18);
+
+        // Increase USD multiplier -- obligations grow but reserves stay the same
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier(PRECISION * 2);
+
+        // Reserves: 100e18 notes, obligations: 200e18 OkuUSD
+        assertEq(okuUsd.surplus(), 0);
     }
 
     // ============ Pause Tests ============
 
-    function test_Pause_OnlyPauserRole() public {
-        vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUUSD_PAUSER
-            )
-        );
-        okuUsd.pause();
-    }
-
-    function test_Pause_BlocksTransfers() public {
+    function test_Pause_BlocksTransfer() public {
         _mintOkuUsd(user1, 100e18);
 
-        vm.prank(pauser);
+        vm.prank(vaultPauser);
         okuUsd.pause();
 
         vm.prank(user1);
-        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
+        vm.expectRevert();
         okuUsd.transfer(user2, 50e18);
     }
 
     function test_Pause_BlocksTransferFrom() public {
         _mintOkuUsd(user1, 100e18);
-        _approveOkuUsd(user1, user2, 100e18);
 
-        vm.prank(pauser);
+        vm.prank(user1);
+        okuUsd.approve(user2, 50e18);
+
+        vm.prank(vaultPauser);
         okuUsd.pause();
 
         vm.prank(user2);
-        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        okuUsd.transferFrom(user1, user3, 50e18);
+        vm.expectRevert();
+        okuUsd.transferFrom(user1, user2, 50e18);
     }
 
-    function test_Pause_BlocksMinting() public {
-        vm.prank(pauser);
+    function test_Pause_AllowsWrap() public {
+        vm.prank(vaultPauser);
         okuUsd.pause();
 
-        vm.prank(minter);
-        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        okuUsd.mint(user1, 100e18);
+        uint256 noteAmount = 100e18;
+        _mintOkuNote(user1, noteAmount);
+        _approveOkuNote(user1, address(okuUsd), noteAmount);
+
+        vm.prank(user1);
+        uint256 usdMinted = okuUsd.wrap(noteAmount, user1);
+
+        assertEq(usdMinted, noteAmount);
     }
 
-    function test_Pause_AllowsBlacklisting() public {
-        vm.prank(pauser);
-        okuUsd.pause();
-
-        // Should still be able to blacklist while paused
-        vm.prank(blacklister);
-        okuUsd.blacklist(user1);
-
-        assertTrue(okuUsd.isBlacklisted(user1));
-    }
-
-    function test_Unpause_RestoresOperations() public {
+    function test_Pause_AllowsUnwrap() public {
         _mintOkuUsd(user1, 100e18);
 
-        vm.prank(pauser);
+        vm.prank(vaultPauser);
         okuUsd.pause();
 
-        vm.prank(unpauser);
+        vm.prank(user1);
+        uint256 notesBack = okuUsd.unwrap(100e18, user1);
+
+        assertEq(notesBack, 100e18);
+    }
+
+    function test_Pause_OnlyVaultPauser() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, VAULT_PAUSER
+            )
+        );
+        okuUsd.pause();
+
+        // Note pauser cannot pause OkuUSD vault
+        vm.prank(pauser);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, pauser, VAULT_PAUSER
+            )
+        );
+        okuUsd.pause();
+    }
+
+    function test_Unpause_OnlyVaultUnpauser() public {
+        vm.prank(vaultPauser);
+        okuUsd.pause();
+
+        // user1 cannot unpause
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, VAULT_UNPAUSER
+            )
+        );
         okuUsd.unpause();
 
-        // Should be able to transfer again
+        // Separate roles: pauser cannot unpause
+        vm.prank(vaultPauser);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                vaultPauser,
+                VAULT_UNPAUSER
+            )
+        );
+        okuUsd.unpause();
+
+        // Vault unpauser can unpause
+        vm.prank(vaultUnpauser);
+        okuUsd.unpause();
+    }
+
+    function test_Pause_TransfersResumeAfterUnpause() public {
+        _mintOkuUsd(user1, 100e18);
+
+        vm.prank(vaultPauser);
+        okuUsd.pause();
+
+        vm.prank(vaultUnpauser);
+        okuUsd.unpause();
+
         vm.prank(user1);
-        assertTrue(okuUsd.transfer(user2, 50e18));
+        okuUsd.transfer(user2, 50e18);
 
         assertEq(okuUsd.balanceOf(user2), 50e18);
     }
 
-    // ============ Minter Allowance Tests ============
+    // ============ ERC-20 Compliance Tests ============
 
-    function test_ConfigureMinterAllowance_OnlyAllowanceManager() public {
-        vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, ALLOWANCE_MANAGER
-            )
-        );
-        okuUsd.configureMinterAllowance(minter, 1000e18);
-    }
-
-    function test_ConfigureMinterAllowance_CanIncrease() public {
-        vm.prank(allowanceManager);
-        okuUsd.configureMinterAllowance(minter, MAX_SUPPLY * 2);
-
-        assertEq(okuUsd.minterAllowance(minter), MAX_SUPPLY * 2);
-    }
-
-    function test_ConfigureMinterAllowance_CanDecrease() public {
-        vm.prank(allowanceManager);
-        okuUsd.configureMinterAllowance(minter, 100e18);
-
-        assertEq(okuUsd.minterAllowance(minter), 100e18);
-    }
-
-    function test_ConfigureMinterAllowance_CanReset() public {
-        // Use some allowance
-        _mintOkuUsd(user1, 100e18);
-        uint256 allowanceAfterMint = okuUsd.minterAllowance(minter);
-
-        // Admin resets allowance
-        vm.prank(allowanceManager);
-        okuUsd.configureMinterAllowance(minter, MAX_SUPPLY);
-
-        assertEq(okuUsd.minterAllowance(minter), MAX_SUPPLY);
-        assertGt(okuUsd.minterAllowance(minter), allowanceAfterMint);
-    }
-
-    function test_ConfigureMinterAllowance_EmitsEvent() public {
-        vm.expectEmit(true, false, false, true);
-        emit MinterAllowanceUpdated(minter, MAX_SUPPLY, 1000e18);
-
-        vm.prank(allowanceManager);
-        okuUsd.configureMinterAllowance(minter, 1000e18);
-    }
-
-    // ============ Supply Cap Tests ============
-
-    function test_SetMaxSupply_OnlyCapManager() public {
-        vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, CAP_MANAGER
-            )
-        );
-        okuUsd.setMaxSupply(MAX_SUPPLY * 2);
-    }
-
-    function test_SetMaxSupply_CanIncrease() public {
-        vm.prank(capManager);
-        okuUsd.setMaxSupply(MAX_SUPPLY * 2);
-
-        assertEq(okuUsd.maxSupply(), MAX_SUPPLY * 2);
-    }
-
-    function test_SetMaxSupply_CanDecrease() public {
-        vm.prank(capManager);
-        okuUsd.setMaxSupply(MAX_SUPPLY / 2);
-
-        assertEq(okuUsd.maxSupply(), MAX_SUPPLY / 2);
-    }
-
-    function test_SetMaxSupply_DoesNotAffectExistingSupply() public {
+    function test_Transfer_MovesSharesInternally() public {
         _mintOkuUsd(user1, 100e18);
 
-        // Lower cap below existing supply
-        vm.prank(capManager);
-        okuUsd.setMaxSupply(50e18);
+        vm.prank(user1);
+        okuUsd.transfer(user2, 40e18);
 
-        // Existing tokens are not burned
+        assertEq(okuUsd.balanceOf(user1), 60e18);
+        assertEq(okuUsd.balanceOf(user2), 40e18);
+    }
+
+    function test_Transfer_EmitsTokenAmounts() public {
+        _mintOkuUsd(user1, 100e18);
+
+        vm.expectEmit(true, true, false, true);
+        emit Transfer(user1, user2, 40e18);
+
+        vm.prank(user1);
+        okuUsd.transfer(user2, 40e18);
+    }
+
+    function test_TransferFrom_WithApproval() public {
+        _mintOkuUsd(user1, 100e18);
+
+        vm.prank(user1);
+        okuUsd.approve(user2, 50e18);
+
+        vm.prank(user2);
+        okuUsd.transferFrom(user1, user2, 50e18);
+
+        assertEq(okuUsd.balanceOf(user2), 50e18);
+        assertEq(okuUsd.balanceOf(user1), 50e18);
+    }
+
+    function test_TransferFrom_RevertsOnInsufficientAllowance() public {
+        _mintOkuUsd(user1, 100e18);
+
+        vm.prank(user2);
+        vm.expectRevert();
+        okuUsd.transferFrom(user1, user2, 50e18);
+    }
+
+    function test_Transfer_RevertsOnInsufficientBalance() public {
+        _mintOkuUsd(user1, 100e18);
+
+        vm.prank(user1);
+        vm.expectRevert("Insufficient balance");
+        okuUsd.transfer(user2, 101e18);
+    }
+
+    function test_Approve_SetsAllowance() public {
+        vm.prank(user1);
+        okuUsd.approve(user2, 100e18);
+
+        assertEq(okuUsd.allowance(user1, user2), 100e18);
+    }
+
+    function test_TotalSupply_ReflectsAllShares() public {
+        _mintOkuUsd(user1, 100e18);
+        _mintOkuUsd(user2, 200e18);
+
+        assertEq(okuUsd.totalSupply(), 300e18);
+    }
+
+    function test_Transfer_ShareBased_AfterMultiplierChange() public {
+        _mintOkuUsd(user1, 100e18);
+
+        // Increase multiplier to 2x
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier(PRECISION * 2);
+
+        // user1 balance is now 200e18. Transfer 100e18 (50 shares)
+        vm.prank(user1);
+        okuUsd.transfer(user2, 100e18);
+
         assertEq(okuUsd.balanceOf(user1), 100e18);
-        assertEq(okuUsd.totalSupply(), 100e18);
+        assertEq(okuUsd.balanceOf(user2), 100e18);
     }
 
-    function test_SetMaxSupply_EmitsEvent() public {
-        vm.expectEmit(false, false, false, true);
-        emit MaxSupplyUpdated(MAX_SUPPLY, MAX_SUPPLY * 2);
-
-        vm.prank(capManager);
-        okuUsd.setMaxSupply(MAX_SUPPLY * 2);
-    }
-
-    // ============ Share/Token Conversion Tests ============
-
-    function test_SharesToTokens_AtInitialMultiplier() public view {
-        uint256 shares = 100e18;
-        uint256 tokens = okuUsd.sharesToTokens(shares);
-        assertEq(tokens, shares); // At 1x multiplier, shares == tokens
-    }
-
-    function test_TokensToShares_AtInitialMultiplier() public view {
-        uint256 tokens = 100e18;
-        uint256 shares = okuUsd.tokensToShares(tokens);
-        assertEq(shares, tokens); // At 1x multiplier, shares == tokens
-    }
-
-    function test_SharesToTokens_AfterRebase() public {
-        vm.prank(rebaser);
-        okuUsd.updateRewardMultiplier(PRECISION * 2);
-
-        uint256 shares = 100e18;
-        uint256 tokens = okuUsd.sharesToTokens(shares);
-        assertEq(tokens, shares * 2); // At 2x multiplier, tokens = shares * 2
-    }
-
-    function test_TokensToShares_AfterRebase() public {
-        vm.prank(rebaser);
-        okuUsd.updateRewardMultiplier(PRECISION * 2);
-
-        uint256 tokens = 100e18;
-        uint256 shares = okuUsd.tokensToShares(tokens);
-        assertEq(shares, tokens / 2); // At 2x multiplier, shares = tokens / 2
-    }
-
-    // ============ Edge Case Tests ============
-
-    function test_Mint_ZeroAmount_RevertsAmountTooSmall() public {
-        // Zero mint converts to zero shares and should revert
-        vm.prank(minter);
-        vm.expectRevert("Amount too small");
-        okuUsd.mint(user1, 0);
-    }
-
-    function test_Mint_SubShareAmount_RevertsAfterRebase() public {
-        // At a high multiplier, tiny token amounts round to 0 shares
-        vm.prank(rebaser);
-        okuUsd.updateRewardMultiplier(PRECISION * 100); // 100x multiplier
-
-        // 1 wei of tokens / 100x multiplier = 0 shares (rounds down)
-        vm.prank(minter);
-        vm.expectRevert("Amount too small");
-        okuUsd.mint(user1, 1);
-    }
-
-    function test_Transfer_ZeroAmount() public {
+    function test_BalanceOf_ReflectsMultiplier() public {
         _mintOkuUsd(user1, 100e18);
 
-        vm.prank(user1);
-        assertTrue(okuUsd.transfer(user2, 0));
+        assertEq(okuUsd.balanceOf(user1), 100e18);
+        assertEq(okuUsd.usdSharesOf(user1), 100e18);
 
-        assertEq(okuUsd.balanceOf(user2), 0);
+        // Multiplier 2x -> balanceOf doubles, shares unchanged
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier(PRECISION * 2);
+
+        assertEq(okuUsd.balanceOf(user1), 200e18);
+        assertEq(okuUsd.usdSharesOf(user1), 100e18);
     }
 
-    function test_Mint_ExactMaxSupply() public {
-        vm.prank(minter);
-        okuUsd.mint(user1, MAX_SUPPLY);
+    // ============ Role Enforcement Tests ============
 
-        assertEq(okuUsd.totalSupply(), MAX_SUPPLY);
-    }
-
-    function test_ConversionAtHighMultiplier() public {
-        // Set a high multiplier (100x)
-        vm.prank(rebaser);
-        okuUsd.updateRewardMultiplier(PRECISION * 100);
-
-        uint256 tokens = 100e18;
-        uint256 shares = okuUsd.tokensToShares(tokens);
-        uint256 recovered = okuUsd.sharesToTokens(shares);
-
-        // Should round-trip with minimal loss
-        assertLe(recovered, tokens);
-        assertGe(recovered, tokens - 100); // Allow some rounding
-    }
-
-    function test_MultipleRebases_SameBlock() public {
-        _mintOkuUsd(user1, 100e18);
-
-        vm.startPrank(rebaser);
-        okuUsd.updateRewardMultiplier(PRECISION * 2);
-        okuUsd.updateRewardMultiplier(PRECISION * 3);
-        vm.stopPrank();
-
-        assertEq(okuUsd.rewardMultiplier(), PRECISION * 3);
-        assertEq(okuUsd.balanceOf(user1), 300e18);
-    }
-
-    // ============ Continuous Yield Accrual Tests ============
-
-    function test_SetYieldRate_OnlyRebaser() public {
-        vm.prank(user1);
+    function test_RoleEnforcement_NoteRebaserCannotSetUsdRate() public {
+        vm.prank(rebaser); // note rebaser, not USD rebaser
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, REBASER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, rebaser, USD_REBASER
             )
         );
-        okuUsd.setYieldRate(PRECISION + 1, 0);
+        okuUsd.setUsdYieldRate(PRECISION + 1e9, 0);
     }
 
-    function test_SetYieldRate_MultiplierGrowsOverTime() public {
-        uint256 rate = 1_000_000_001_547_125_957; // ~5% APY per second
-
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(rate, 0);
-
-        uint256 multiplierBefore = okuUsd.rewardMultiplier();
-
-        vm.warp(block.timestamp + 1 days);
-
-        uint256 multiplierAfter = okuUsd.rewardMultiplier();
-        assertGt(multiplierAfter, multiplierBefore);
-    }
-
-    function test_SetYieldRate_BalancesGrowContinuously() public {
-        _mintOkuUsd(user1, 1000e18);
-        uint256 balanceBefore = okuUsd.balanceOf(user1);
-
-        uint256 rate = 1_000_000_001_547_125_957; // ~5% APY
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(rate, 0);
-
-        vm.warp(block.timestamp + 1 days);
-
-        uint256 balanceAfter = okuUsd.balanceOf(user1);
-        assertGt(balanceAfter, balanceBefore);
-    }
-
-    function test_SetYieldRate_SnapshotPreservesValue() public {
-        _mintOkuUsd(user1, 1000e18);
-
-        uint256 rate = 1_000_000_001_547_125_957; // ~5% APY
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(rate, 0);
-
-        vm.warp(block.timestamp + 30 days);
-
-        uint256 balanceBefore = okuUsd.balanceOf(user1);
-
-        // Set a new rate — should snapshot accrued yield, not lose it
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(rate, 0);
-
-        uint256 balanceAfter = okuUsd.balanceOf(user1);
-        assertEq(balanceAfter, balanceBefore);
-    }
-
-    function test_SetYieldRate_RateCannotBeNegative() public {
-        vm.prank(rebaser);
-        vm.expectRevert("Rate cannot be negative");
-        okuUsd.setYieldRate(PRECISION - 1, 0);
-    }
-
-    function test_SetYieldRate_EndMustBeInFuture() public {
-        // Warp to a realistic timestamp so block.timestamp - 1 != 0
-        vm.warp(1000);
-
-        vm.prank(rebaser);
-        vm.expectRevert("End must be in the future");
-        okuUsd.setYieldRate(PRECISION + 1, block.timestamp - 1);
-    }
-
-    function test_SetYieldRate_EmitsEvent() public {
-        uint256 rate = 1_000_000_001_547_125_957;
-
-        vm.expectEmit(false, false, false, true);
-        emit YieldRateUpdated(rate, 0, PRECISION);
-
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(rate, 0);
-    }
-
-    function test_SetYieldRate_ZeroRateStopsAccrual() public {
-        _mintOkuUsd(user1, 1000e18);
-
-        uint256 rate = 1_000_000_001_547_125_957;
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(rate, 0);
-
-        vm.warp(block.timestamp + 30 days);
-        uint256 balanceMid = okuUsd.balanceOf(user1);
-
-        // Set rate to PRECISION (no yield)
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(PRECISION, 0);
-
-        vm.warp(block.timestamp + 30 days);
-        uint256 balanceEnd = okuUsd.balanceOf(user1);
-
-        // Balance should not change after stopping accrual
-        assertEq(balanceEnd, balanceMid);
-    }
-
-    function test_SetNextYieldRate_ActivatesAtRateEnd() public {
-        _mintOkuUsd(user1, 1000e18);
-
-        uint256 rate1 = 1_000_000_001_547_125_957; // ~5% APY
-        uint256 rate2 = 1_000_000_002_877_801_985; // ~9.5% APY
-        uint256 endTime = block.timestamp + 30 days;
-
-        vm.startPrank(rebaser);
-        okuUsd.setYieldRate(rate1, endTime);
-        okuUsd.setNextYieldRate(rate2);
-        vm.stopPrank();
-
-        // Before rateEnd — rate1 applies
-        vm.warp(endTime - 1);
-        uint256 balanceBeforeEnd = okuUsd.balanceOf(user1);
-
-        // After rateEnd — rate2 takes over
-        vm.warp(endTime + 30 days);
-        uint256 balanceAfterEnd = okuUsd.balanceOf(user1);
-        assertGt(balanceAfterEnd, balanceBeforeEnd);
-    }
-
-    function test_SetNextYieldRate_RequiresRateEnd() public {
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(PRECISION + 1, 0); // no end time
-
-        vm.prank(rebaser);
-        vm.expectRevert("Current rate has no end");
-        okuUsd.setNextYieldRate(PRECISION + 1);
-    }
-
-    function test_SetNextYieldRate_HeadToTail() public {
-        _mintOkuUsd(user1, 1000e18);
-
-        uint256 rate = 1_000_000_001_547_125_957; // ~5% APY
-        uint256 endTime = block.timestamp + 30 days;
-
-        vm.startPrank(rebaser);
-        okuUsd.setYieldRate(rate, endTime);
-        okuUsd.setNextYieldRate(rate); // same rate continues
-        vm.stopPrank();
-
-        // Warp to just before boundary
-        vm.warp(endTime - 1);
-        uint256 balanceBefore = okuUsd.balanceOf(user1);
-
-        // Warp to just after boundary
-        vm.warp(endTime + 1);
-        uint256 balanceAfter = okuUsd.balanceOf(user1);
-
-        // Should have grown by ~2 seconds worth of yield — no gap, no jump
-        assertGt(balanceAfter, balanceBefore);
-        // The difference should be small (just 2 seconds of yield on 1000 tokens)
-        uint256 diff = balanceAfter - balanceBefore;
-        assertLt(diff, 1e15); // less than 0.001 OkuUSD for 2 seconds
-    }
-
-    function test_SetNextYieldRate_EmitsEvent() public {
-        uint256 rate = 1_000_000_001_547_125_957;
-        uint256 endTime = block.timestamp + 30 days;
-
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(rate, endTime);
-
-        uint256 nextRate = 1_000_000_002_877_801_985;
-        vm.expectEmit(false, false, false, true);
-        emit NextYieldRateSet(nextRate, endTime);
-
-        vm.prank(rebaser);
-        okuUsd.setNextYieldRate(nextRate);
-    }
-
-    function test_SetNextYieldRate_OnlyRebaser() public {
-        uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(PRECISION + 1, endTime);
+    function test_RoleEnforcement_NonReserveManagerCannotDeposit() public {
+        _mintOkuNote(user1, 100e18);
+        _approveOkuNote(user1, address(okuUsd), 100e18);
 
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, REBASER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, RESERVE_MANAGER
             )
         );
-        okuUsd.setNextYieldRate(PRECISION + 1);
+        okuUsd.depositReserves(100e18);
     }
 
-    function test_ContinuousAccrual_FrontRunUnprofitable() public {
-        // Set up a realistic 4.5% APY rate
-        // rate = (1.045)^(1/31536000) ≈ 1.000000001395766... × 1e18
-        uint256 rate = 1_000_000_001_395_766_300;
+    function test_RoleEnforcement_NonReserveManagerCannotWithdraw() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, RESERVE_MANAGER
+            )
+        );
+        okuUsd.withdrawSurplus(1e18);
+    }
 
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(rate, 0);
+    function test_RoleEnforcement_NonAdminCannotSetCollateralRatio() public {
+        vm.prank(reserveManager);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                reserveManager,
+                DEFAULT_ADMIN_ROLE
+            )
+        );
+        okuUsd.setMinCollateralRatio(90e16);
+    }
 
-        uint256 usdcAttackAmount = 1_000_000e6; // $1M in USDC (6 decimals)
+    // ============ Repeated Wrap/Unwrap (rUSDY H-01 Mitigation) ============
 
-        // Fund buffer via bufferDepositor so redemption works
-        _mintUsdc(bufferDepositor, usdcAttackAmount);
-        vm.startPrank(bufferDepositor);
-        usdc.approve(address(litePsm), usdcAttackAmount);
-        litePsm.depositBuffer(usdcAttackAmount);
-        vm.stopPrank();
+    function test_RepeatedWrapUnwrap_NoShareInflation() public {
+        uint256 initialNotes = 1000e18;
+        _mintOkuNote(user1, initialNotes);
+        _approveOkuNote(user1, address(okuUsd), type(uint256).max);
 
-        // Attacker mints via PSM (PSM takes USDC amount in 6 decimals)
-        _mintUsdc(user1, usdcAttackAmount);
         vm.startPrank(user1);
-        usdc.approve(address(litePsm), usdcAttackAmount);
-        litePsm.mint(usdcAttackAmount);
+
+        for (uint256 i = 0; i < 1000; i++) {
+            uint256 noteBal = okuNote.balanceOf(user1);
+            if (noteBal == 0) break;
+            okuUsd.wrap(noteBal, user1);
+            uint256 usdBal = okuUsd.balanceOf(user1);
+            if (usdBal == 0) break;
+            okuUsd.unwrap(usdBal, user1);
+        }
+
         vm.stopPrank();
 
-        uint256 balanceAfterMint = okuUsd.balanceOf(user1);
+        uint256 finalNotes = okuNote.balanceOf(user1);
 
-        // Advance 2 seconds (L2 block time)
-        vm.warp(block.timestamp + 2);
-
-        uint256 balanceAfterWarp = okuUsd.balanceOf(user1);
-        uint256 profit = balanceAfterWarp - balanceAfterMint;
-
-        // At 4.5% APY, 2 seconds on $1M ≈ $0.00285 OkuUSD
-        // This is less than gas costs for mint + redeem on any chain
-        assertLt(profit, 1e16); // less than 0.01 OkuUSD ($0.01) for $1M attack
+        // Must not gain tokens (no free share accumulation)
+        assertLe(finalNotes, initialNotes, "Balance must not increase from wrap/unwrap cycles");
+        // Max 1 wei loss per cycle
+        assertGe(finalNotes, initialNotes - 1000, "Excessive rounding loss");
     }
 
-    function test_ContinuousAccrual_MatchesExpectedAPY() public {
-        _mintOkuUsd(user1, 1000e18);
+    function test_RepeatedWrapUnwrap_NoShareInflation_AfterMultiplierChange() public {
+        // Create some existing vault state
+        _mintOkuUsd(user2, 5000e18);
 
-        // 4.5% APY: rate = (1.045)^(1/31536000) ≈ 1.000000001395766... × 1e18
-        uint256 rate = 1_000_000_001_395_766_300;
+        // Bump USD multiplier to 1.5x
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier((PRECISION * 3) / 2);
 
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(rate, 0);
+        // Now user1 does repeated wrap/unwrap at non-1.0 multiplier
+        uint256 initialNotes = 1000e18;
+        _mintOkuNote(user1, initialNotes);
+        _approveOkuNote(user1, address(okuUsd), type(uint256).max);
 
-        // Warp 365 days
+        vm.startPrank(user1);
+
+        for (uint256 i = 0; i < 1000; i++) {
+            uint256 noteBal = okuNote.balanceOf(user1);
+            if (noteBal == 0) break;
+            okuUsd.wrap(noteBal, user1);
+            uint256 usdBal = okuUsd.balanceOf(user1);
+            if (usdBal == 0) break;
+            okuUsd.unwrap(usdBal, user1);
+        }
+
+        vm.stopPrank();
+
+        uint256 finalNotes = okuNote.balanceOf(user1);
+
+        assertLe(finalNotes, initialNotes, "Balance must not increase from wrap/unwrap cycles");
+        assertGe(finalNotes, initialNotes - 1000, "Excessive rounding loss");
+    }
+
+    // ============ Rate Expiry Tests ============
+
+    function test_RateExpiry_StopsYieldWhenNoPending() public {
+        uint256 rate = PRECISION + 1393e6;
+        uint256 endTime = block.timestamp + 30 days;
+
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(rate, endTime);
+
+        // Warp to 1 second before end
+        vm.warp(endTime - 1);
+        uint256 multBeforeEnd = okuUsd.usdMultiplier();
+
+        // Warp 100 days past end -- no pending rate, so yield should stop
+        vm.warp(endTime + 100 days);
+        uint256 multLongAfterEnd = okuUsd.usdMultiplier();
+
+        // The multiplier should only accrue 1 more second of yield (from endTime-1 to endTime)
+        // After that, no growth (pending rate is PRECISION = no yield)
+        uint256 multAtEnd = okuUsd.usdMultiplier(); // already at endTime + 100 days
+        // Re-check: after endTime the multiplier should freeze
+        // The mult at endTime-1 and the mult 100 days later should differ only by ~1 second of rate
+        assertGt(multLongAfterEnd, multBeforeEnd, "Should accrue the final second");
+        // The difference should be tiny (1 second of a ~4.5% APY rate)
+        assertApproxEqRel(multLongAfterEnd, multBeforeEnd, 1e14); // within 0.01%
+    }
+
+    function test_RateExpiry_PendingRateTakesOver() public {
+        uint256 rate1 = PRECISION + 1393e6; // ~4.5% APY
+        uint256 rate2 = PRECISION + 634e6; // ~2% APY
+        uint256 endTime = block.timestamp + 30 days;
+
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(rate1, endTime);
+
+        vm.prank(usdRebaser);
+        okuUsd.setNextUsdYieldRate(rate2);
+
+        // Warp past end + 365 days: should have 30d of rate1 + 365d of rate2
+        vm.warp(endTime + 365 days);
+
+        uint256 mult = okuUsd.usdMultiplier();
+        assertGt(mult, PRECISION, "Must have accrued yield through both periods");
+
+        // Compare against just rate1 for 30 days (rate2 adds more)
+        // Approximate: 30 days of ~4.5% + 365 days of ~2% => well above PRECISION
+        assertGt(mult, PRECISION + 1e16, "Should have meaningful accrual");
+    }
+
+    // ============ APY Accuracy Tests ============
+
+    function test_APYAccuracy_FourPointFivePercent() public {
+        // ~4.5% APY compounding per second
+        // rate = e^(ln(1.045) / 31536000) * 1e18 ~= 1000000001395766281
+        uint256 rate = 1_000_000_001_395_766_281;
+
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(rate, 0);
+
+        uint256 startMult = okuUsd.usdMultiplier();
+
         vm.warp(block.timestamp + 365 days);
 
-        uint256 balance = okuUsd.balanceOf(user1);
+        uint256 endMult = okuUsd.usdMultiplier();
+        uint256 expectedMult = 1045e15; // 1.045e18
 
-        // Expected: 1000 * 1.045 = 1045 (within rounding tolerance)
-        // Allow 0.1% tolerance for compounding approximation
-        assertGt(balance, 1044e18); // at least 4.4%
-        assertLt(balance, 1046e18); // at most 4.6%
+        // Within 0.1% tolerance
+        assertApproxEqRel(endMult, expectedMult, 1e15);
+        assertGt(endMult, startMult);
     }
 
-    function test_UpdateRewardMultiplier_EmergencyOverride() public {
-        _mintOkuUsd(user1, 1000e18);
+    // ============ Independent Multiplier Tests ============
 
-        uint256 rate = 1_000_000_001_547_125_957;
+    function test_UsdMultiplier_IndependentOfNoteMultiplier() public {
+        // Set different rates for note and USD
+        uint256 noteRate = 1_000_000_001_395_766_281; // ~4.5% APY
+        uint256 usdRate = PRECISION + 634e6; // ~2% APY
+
         vm.prank(rebaser);
-        okuUsd.setYieldRate(rate, 0);
+        okuNote.setYieldRate(noteRate, 0);
+
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(usdRate, 0);
+
+        vm.warp(block.timestamp + 365 days);
+
+        uint256 noteMult = okuNote.rewardMultiplier();
+        uint256 usdMult = okuUsd.usdMultiplier();
+
+        // They should be different (note grows faster)
+        assertGt(noteMult, usdMult, "Note multiplier should be higher at higher rate");
+        assertTrue(noteMult != usdMult, "Multipliers must be independent");
+    }
+
+    // ============ Continuous Yield + Balance/Supply Tests ============
+
+    function test_ContinuousYield_BalanceGrowsOverTime() public {
+        _mintOkuUsd(user1, 100e18);
+
+        uint256 rate = PRECISION + 1393e6;
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(rate, 0);
+
+        uint256 balBefore = okuUsd.balanceOf(user1);
 
         vm.warp(block.timestamp + 30 days);
 
-        uint256 computedMultiplier = okuUsd.rewardMultiplier();
-        uint256 balanceBefore = okuUsd.balanceOf(user1);
-
-        // Emergency override — set exact multiplier, stops accrual
-        vm.prank(rebaser);
-        okuUsd.updateRewardMultiplier(computedMultiplier);
-
-        // Multiplier should now be the exact snapshot
-        assertEq(okuUsd.rewardMultiplier(), computedMultiplier);
-        // Rate should be reset
-        assertEq(okuUsd.ratePerSecond(), PRECISION);
-        // Balance should be unchanged
-        assertEq(okuUsd.balanceOf(user1), balanceBefore);
-
-        // Warp more — balance should not grow (rate is zero)
-        vm.warp(block.timestamp + 30 days);
-        assertEq(okuUsd.balanceOf(user1), balanceBefore);
+        uint256 balAfter = okuUsd.balanceOf(user1);
+        assertGt(balAfter, balBefore, "Balance must grow via continuous yield");
     }
 
-    function test_BaseMultiplier_ReturnsSnapshotValue() public {
-        assertEq(okuUsd.baseMultiplier(), PRECISION);
+    function test_ContinuousYield_TotalSupplyGrowsOverTime() public {
+        _mintOkuUsd(user1, 100e18);
+        _mintOkuUsd(user2, 200e18);
 
-        uint256 rate = 1_000_000_001_547_125_957;
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(rate, 0);
+        uint256 rate = PRECISION + 1393e6;
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(rate, 0);
+
+        uint256 supplyBefore = okuUsd.totalSupply();
 
         vm.warp(block.timestamp + 30 days);
 
-        // baseMultiplier should still be PRECISION (snapshot hasn't been updated)
-        assertEq(okuUsd.baseMultiplier(), PRECISION);
-        // rewardMultiplier should be higher
-        assertGt(okuUsd.rewardMultiplier(), PRECISION);
+        uint256 supplyAfter = okuUsd.totalSupply();
+        assertGt(supplyAfter, supplyBefore, "Total supply must grow via continuous yield");
     }
 
-    function test_RateExpiry_StopsYieldWhenNoPendingRate() public {
-        _mintOkuUsd(user1, 1000e18);
+    // ============ TransferFrom Share-Based with Multiplier ============
 
-        uint256 rate = 1_000_000_001_547_125_957;
-        uint256 endTime = block.timestamp + 30 days;
+    function test_TransferFrom_ShareBased_AfterMultiplierChange() public {
+        _mintOkuUsd(user1, 100e18);
 
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(rate, endTime);
+        // Increase multiplier to 2x
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier(PRECISION * 2);
 
-        // Warp past end with no pending rate
-        vm.warp(endTime + 30 days);
-        uint256 balanceAtExpiry = okuUsd.balanceOf(user1);
-
-        // Warp more — balance should not grow
-        vm.warp(endTime + 60 days);
-        assertEq(okuUsd.balanceOf(user1), balanceAtExpiry);
-    }
-
-    // ============ EIP-2612 Permit Tests ============
-
-    function test_Permit_SetsAllowance() public {
-        uint256 userPk = 0xBEEF;
-        address user = vm.addr(userPk);
-
-        uint256 amount = 100e18;
-        uint256 deadline = block.timestamp + 1 hours;
-        uint256 nonce = okuUsd.nonces(user);
-
-        bytes32 domainSeparator = _getOkuUsdDomainSeparator();
-        bytes32 structHash = keccak256(
-            abi.encode(
-                keccak256(
-                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
-                ),
-                user,
-                user2,
-                amount,
-                nonce,
-                deadline
-            )
-        );
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userPk, digest);
-
-        okuUsd.permit(user, user2, amount, deadline, v, r, s);
-
-        assertEq(okuUsd.allowance(user, user2), amount);
-        assertEq(okuUsd.nonces(user), nonce + 1);
-    }
-
-    function test_Permit_RevertsExpired() public {
-        uint256 userPk = 0xBEEF;
-        address user = vm.addr(userPk);
-
-        uint256 amount = 100e18;
-        uint256 deadline = block.timestamp - 1; // Expired
-
-        bytes32 domainSeparator = _getOkuUsdDomainSeparator();
-        bytes32 structHash = keccak256(
-            abi.encode(
-                keccak256(
-                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
-                ),
-                user,
-                user2,
-                amount,
-                okuUsd.nonces(user),
-                deadline
-            )
-        );
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userPk, digest);
-
-        vm.expectRevert(); // ERC2612ExpiredSignature
-        okuUsd.permit(user, user2, amount, deadline, v, r, s);
-    }
-
-    function test_Permit_RevertsInvalidSignature() public {
-        uint256 userPk = 0xBEEF;
-        address user = vm.addr(userPk);
-        uint256 wrongPk = 0xDEAD;
-
-        uint256 amount = 100e18;
-        uint256 deadline = block.timestamp + 1 hours;
-
-        bytes32 domainSeparator = _getOkuUsdDomainSeparator();
-        bytes32 structHash = keccak256(
-            abi.encode(
-                keccak256(
-                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
-                ),
-                user,
-                user2,
-                amount,
-                okuUsd.nonces(user),
-                deadline
-            )
-        );
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(wrongPk, digest); // Wrong signer
-
-        vm.expectRevert(); // ERC2612InvalidSigner
-        okuUsd.permit(user, user2, amount, deadline, v, r, s);
-    }
-
-    function test_Permit_NonceIncrementsOnSecondUse() public {
-        uint256 userPk = 0xBEEF;
-        address user = vm.addr(userPk);
-
-        // First permit
-        _signAndPermit(userPk, user, user2, 50e18, block.timestamp + 1 hours);
-        assertEq(okuUsd.nonces(user), 1);
-
-        // Second permit (nonce=1 now)
-        _signAndPermit(userPk, user, user2, 75e18, block.timestamp + 1 hours);
-        assertEq(okuUsd.nonces(user), 2);
-        assertEq(okuUsd.allowance(user, user2), 75e18);
-    }
-
-    function test_Permit_ReplayReverts() public {
-        uint256 userPk = 0xBEEF;
-        address user = vm.addr(userPk);
-
-        uint256 amount = 100e18;
-        uint256 deadline = block.timestamp + 1 hours;
-        uint256 nonce = okuUsd.nonces(user);
-
-        bytes32 domainSeparator = _getOkuUsdDomainSeparator();
-        bytes32 structHash = keccak256(
-            abi.encode(
-                keccak256(
-                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
-                ),
-                user,
-                user2,
-                amount,
-                nonce,
-                deadline
-            )
-        );
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userPk, digest);
-
-        // First call succeeds
-        okuUsd.permit(user, user2, amount, deadline, v, r, s);
-
-        // Replay with same nonce reverts
-        vm.expectRevert(); // ERC2612InvalidSigner (nonce mismatch)
-        okuUsd.permit(user, user2, amount, deadline, v, r, s);
-    }
-
-    function test_Permit_AllowsTransferFrom() public {
-        uint256 userPk = 0xBEEF;
-        address user = vm.addr(userPk);
-
-        uint256 amount = 100e18;
-        _mintOkuUsd(user, amount);
-
-        // Sign permit for user2 to spend user's tokens
-        _signAndPermit(userPk, user, user2, amount, block.timestamp + 1 hours);
-
-        // user2 can now transferFrom
-        vm.prank(user2);
-        assertTrue(okuUsd.transferFrom(user, user3, amount));
-
-        assertEq(okuUsd.balanceOf(user3), amount);
-        assertEq(okuUsd.balanceOf(user), 0);
-    }
-
-    // ============ UUPS Upgrade Tests ============
-
-    function test_UUPS_UpgradeOkuUSD() public {
-        OkuUSD newImpl = new OkuUSD();
-
-        vm.prank(admin);
-        okuUsd.upgradeToAndCall(address(newImpl), "");
-
-        // State preserved
-        assertEq(okuUsd.name(), "OkuUSD");
-        assertEq(okuUsd.rewardMultiplier(), PRECISION);
-        assertEq(okuUsd.maxSupply(), MAX_SUPPLY);
-    }
-
-    function test_UUPS_UpgradeOkuUSD_RevertNotUpgrader() public {
-        OkuUSD newImpl = new OkuUSD();
-
+        // user1 has 200 OkuUSD (100 shares * 2x)
         vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, UPGRADER
-            )
-        );
-        okuUsd.upgradeToAndCall(address(newImpl), "");
+        okuUsd.approve(user2, 100e18);
+
+        vm.prank(user2);
+        okuUsd.transferFrom(user1, user2, 100e18);
+
+        // 100 OkuUSD = 50 shares at 2x multiplier
+        assertEq(okuUsd.usdSharesOf(user1), 50e18);
+        assertEq(okuUsd.usdSharesOf(user2), 50e18);
+        assertEq(okuUsd.balanceOf(user1), 100e18);
+        assertEq(okuUsd.balanceOf(user2), 100e18);
     }
 
-    // ============ Internal Helpers ============
+    // ============ Multi-User Tests ============
 
-    function _getOkuUsdDomainSeparator() internal view returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                keccak256(
-                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
-                ),
-                keccak256(bytes("OkuUSD")),
-                keccak256(bytes("1")),
-                block.chainid,
-                address(okuUsd)
-            )
-        );
+    function test_MultiUser_IndependentAccounting() public {
+        _mintOkuUsd(user1, 100e18);
+        _mintOkuUsd(user2, 200e18);
+
+        // Unwrap user1 should not affect user2
+        vm.prank(user1);
+        okuUsd.unwrap(100e18, user1);
+
+        assertEq(okuUsd.balanceOf(user1), 0);
+        assertEq(okuUsd.balanceOf(user2), 200e18);
     }
 
-    function _signAndPermit(
-        uint256 ownerPk,
-        address owner,
-        address spender,
-        uint256 value,
-        uint256 deadline
-    )
-        internal
-    {
-        bytes32 domainSeparator = _getOkuUsdDomainSeparator();
-        bytes32 structHash = keccak256(
-            abi.encode(
-                keccak256(
-                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
-                ),
-                owner,
-                spender,
-                value,
-                okuUsd.nonces(owner),
-                deadline
-            )
-        );
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPk, digest);
-        okuUsd.permit(owner, spender, value, deadline, v, r, s);
+    function test_MultiUser_ProportionalYield() public {
+        _mintOkuUsd(user1, 100e18);
+        _mintOkuUsd(user2, 300e18);
+
+        // Bump multiplier to 2x
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier(PRECISION * 2);
+
+        // user1 should have 200e18, user2 should have 600e18
+        assertEq(okuUsd.balanceOf(user1), 200e18);
+        assertEq(okuUsd.balanceOf(user2), 600e18);
     }
 
-    // ============ MAX_RATE Tests ============
+    function test_MultiUser_ProportionalShares() public {
+        _mintOkuUsd(user1, 100e18);
+        _mintOkuUsd(user2, 300e18);
 
-    function test_SetYieldRate_RevertsAboveMaxRate() public {
-        uint256 maxRate = okuUsd.MAX_RATE();
-
-        vm.prank(rebaser);
-        vm.expectRevert("Rate too high");
-        okuUsd.setYieldRate(maxRate + 1, 0);
+        // user2 should have 3x the shares of user1
+        assertEq(okuUsd.usdSharesOf(user2), okuUsd.usdSharesOf(user1) * 3);
+        assertEq(okuUsd.totalUsdShares(), okuUsd.usdSharesOf(user1) + okuUsd.usdSharesOf(user2));
     }
 
-    function test_SetYieldRate_AcceptsMaxRate() public {
-        uint256 maxRate = okuUsd.MAX_RATE();
+    function test_MultiUser_YieldAccruesProportionally() public {
+        _mintOkuUsd(user1, 100e18);
+        _mintOkuUsd(user2, 300e18);
 
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(maxRate, 0);
+        uint256 rate = 1_000_000_001_395_766_281; // ~4.5% APY
+        vm.prank(usdRebaser);
+        okuUsd.setUsdYieldRate(rate, 0);
 
-        assertEq(okuUsd.ratePerSecond(), maxRate);
+        vm.warp(block.timestamp + 365 days);
+
+        uint256 bal1 = okuUsd.balanceOf(user1);
+        uint256 bal2 = okuUsd.balanceOf(user2);
+
+        // Both accrue ~4.5%
+        assertApproxEqRel(bal1, 104.5e18, 1e15); // within 0.1%
+        assertApproxEqRel(bal2, 313.5e18, 1e15);
+
+        // Proportions preserved (1:3 ratio)
+        assertApproxEqRel(bal2, bal1 * 3, 1e15);
     }
 
-    function test_SetNextYieldRate_RevertsAboveMaxRate() public {
-        uint256 maxRate = okuUsd.MAX_RATE();
-        uint256 endTime = block.timestamp + 30 days;
+    function test_MultiUser_WrapUnwrapDoesNotAffectOthers() public {
+        _mintOkuUsd(user1, 100e18);
+        _mintOkuUsd(user2, 200e18);
 
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(PRECISION + 1, endTime);
+        uint256 user2BalBefore = okuUsd.balanceOf(user2);
+        uint256 user2SharesBefore = okuUsd.usdSharesOf(user2);
 
-        vm.prank(rebaser);
-        vm.expectRevert("Rate too high");
-        okuUsd.setNextYieldRate(maxRate + 1);
+        // User1 unwraps half
+        vm.prank(user1);
+        okuUsd.unwrap(50e18, user1);
+
+        // User2's balance and shares should be unchanged
+        assertEq(okuUsd.balanceOf(user2), user2BalBefore);
+        assertEq(okuUsd.usdSharesOf(user2), user2SharesBefore);
+
+        // User3 wraps new notes
+        _mintOkuUsd(user3, 500e18);
+
+        // User2 still unchanged
+        assertEq(okuUsd.balanceOf(user2), user2BalBefore);
+        assertEq(okuUsd.usdSharesOf(user2), user2SharesBefore);
     }
 
-    function test_SetNextYieldRate_AcceptsMaxRate() public {
-        uint256 maxRate = okuUsd.MAX_RATE();
-        uint256 endTime = block.timestamp + 30 days;
+    // ============ Fuzz Round-Trip Test ============
 
-        vm.prank(rebaser);
-        okuUsd.setYieldRate(PRECISION + 1, endTime);
+    function test_Fuzz_WrapUnwrap_RoundTrip(uint256 mult) public {
+        mult = bound(mult, PRECISION, 5e18); // 1x to 5x
 
-        vm.prank(rebaser);
-        okuUsd.setNextYieldRate(maxRate);
+        vm.prank(usdRebaser);
+        okuUsd.updateUsdMultiplier(mult);
 
-        assertEq(okuUsd.pendingRatePerSecond(), maxRate);
+        uint256 noteAmount = 77.777e18;
+        _mintOkuNote(user1, noteAmount);
+        _approveOkuNote(user1, address(okuUsd), noteAmount);
+
+        vm.startPrank(user1);
+        okuUsd.wrap(noteAmount, user1);
+
+        uint256 bal = okuUsd.balanceOf(user1);
+        okuUsd.unwrap(bal, user1);
+        vm.stopPrank();
+
+        uint256 finalNotes = okuNote.balanceOf(user1);
+        // Wrap rounds down shares, balanceOf rounds down tokens, unwrap rounds up shares burned.
+        // The maximum note-denominated loss is bounded by (mult / PRECISION) rounded up,
+        // because each rounding step loses at most 1 share and 1 share = mult/PRECISION tokens.
+        // At 5x multiplier, max loss is ~5 wei.
+        assertApproxEqAbs(finalNotes, noteAmount, 5, "Round trip rounding loss within bounds");
+        assertLe(finalNotes, noteAmount, "Must not gain from round trip");
     }
 }

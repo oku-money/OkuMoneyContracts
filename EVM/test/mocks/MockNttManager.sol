@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {INttManager} from "../../src/bridge/adapters/INttManager.sol";
-import {OkuUSD} from "../../src/token/OkuUSD.sol";
+import {OkuNote} from "../../src/token/OkuNote.sol";
 
 /**
  * @title MockNttManager
@@ -37,7 +37,7 @@ contract MockNttManager is INttManager, Test {
     PendingTransfer[] public pendingTransfers;
     uint64 private nextSequence;
 
-    OkuUSD public okuUsd;
+    OkuNote public okuNote;
     address public minter;
 
     // Fee configuration
@@ -58,8 +58,8 @@ contract MockNttManager is INttManager, Test {
     error InvalidTransferIndex();
     error TransferAlreadyCompleted();
 
-    constructor(address _okuUsd, address _minter) {
-        okuUsd = OkuUSD(_okuUsd);
+    constructor(address _okuNote, address _minter) {
+        okuNote = OkuNote(_okuNote);
         minter = _minter;
     }
 
@@ -134,9 +134,9 @@ contract MockNttManager is INttManager, Test {
         // Convert bytes32 back to address
         address recipient = address(uint160(uint256(p.recipient)));
 
-        // Mint OkuUSD on destination (using minter role)
+        // Mint OkuNote on destination (using minter role)
         vm.prank(minter);
-        okuUsd.mint(recipient, p.amount);
+        okuNote.mint(recipient, p.amount);
 
         emit TransferCompleted(index, recipient, p.amount);
     }
@@ -154,7 +154,7 @@ contract MockNttManager is INttManager, Test {
         p.completed = true;
 
         vm.prank(minter);
-        okuUsd.mint(to, p.amount);
+        okuNote.mint(to, p.amount);
 
         emit TransferCompleted(index, to, p.amount);
     }

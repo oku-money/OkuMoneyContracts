@@ -4,7 +4,7 @@ pragma solidity ^0.8.28;
 import {INttManager} from "../bridge/adapters/INttManager.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-interface IOkuUSDMintable {
+interface IOkuNoteMintable {
     function mint(address to, uint256 amount) external;
 }
 
@@ -23,7 +23,7 @@ interface IOkuUSDMintable {
  * 1. transfer() records pending transfer (tokens already burned by router)
  * 2. Test calls completeBridge() to simulate destination mint
  *
- * Note: This mock does NOT pull tokens because in the OkuUSD architecture,
+ * Note: This mock does NOT pull tokens because in the OkuNote architecture,
  * the OkuBridgeRouter burns tokens BEFORE calling the adapter.
  */
 contract MockNttManagerHH is INttManager {
@@ -41,7 +41,7 @@ contract MockNttManagerHH is INttManager {
     uint64 private nextSequence;
 
     IERC20 public token;
-    IOkuUSDMintable public okuUsd;
+    IOkuNoteMintable public okuNote;
 
     // Fee configuration
     uint256 public messageFee;
@@ -61,9 +61,9 @@ contract MockNttManagerHH is INttManager {
     error InvalidTransferIndex();
     error TransferAlreadyCompleted();
 
-    constructor(address _token, address _okuUsd) {
+    constructor(address _token, address _okuNote) {
         token = IERC20(_token);
-        okuUsd = IOkuUSDMintable(_okuUsd);
+        okuNote = IOkuNoteMintable(_okuNote);
     }
 
     /**
@@ -88,7 +88,7 @@ contract MockNttManagerHH is INttManager {
             revert InsufficientFee(messageFee, msg.value);
         }
 
-        // Note: We don't pull tokens here because in the OkuUSD architecture,
+        // Note: We don't pull tokens here because in the OkuNote architecture,
         // the OkuBridgeRouter burns tokens BEFORE calling the adapter.
         // The adapter just emits the cross-chain message.
 
@@ -124,7 +124,7 @@ contract MockNttManagerHH is INttManager {
 
     /**
      * @notice Simulate destination chain mint
-     * @dev This contract must have MINTER on OkuUSD for this to work
+     * @dev This contract must have MINTER on OkuNote for this to work
      * @param index Index of pending transfer to complete
      */
     function completeBridge(uint256 index) external {
@@ -137,9 +137,9 @@ contract MockNttManagerHH is INttManager {
         // Convert bytes32 back to address
         address recipient = address(uint160(uint256(p.recipient)));
 
-        // Mint OkuUSD on destination
+        // Mint OkuNote on destination
         // NOTE: This contract must have MINTER granted
-        okuUsd.mint(recipient, p.amount);
+        okuNote.mint(recipient, p.amount);
 
         emit TransferCompleted(index, recipient, p.amount);
     }
@@ -156,7 +156,7 @@ contract MockNttManagerHH is INttManager {
 
         p.completed = true;
 
-        okuUsd.mint(to, p.amount);
+        okuNote.mint(to, p.amount);
 
         emit TransferCompleted(index, to, p.amount);
     }

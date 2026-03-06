@@ -15,11 +15,16 @@ import {
 import {
     ERC20PermitUpgradeable
 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IOkuNote} from "../interfaces/IOkuNote.sol";
 
 /**
  * @title OkuUSD
- * @notice Rebasing yield-bearing stablecoin backed 1:1 by US T-Bills
- * @dev Implements share-based storage where balanceOf = shares * rewardMultiplier
+ * @notice Rebasing $1-pegged stablecoin with independent yield rate, backed by OkuNote reserves
+ * @dev NOT an ERC-4626 vault. Custom rebasing token with its own shares/multiplier.
+ *      Holds OkuNotes as reserves. Independent yield rate enables revenue extraction
+ *      (note rate > USD rate) or forward-facing yield (USD rate > note rate).
  */
 contract OkuUSD is
     Initializable,
@@ -29,59 +34,47 @@ contract OkuUSD is
     PausableUpgradeable,
     UUPSUpgradeable
 {
-    bytes32 public constant UPGRADER = keccak256("UPGRADER");
-    bytes32 public constant OKUUSD_PAUSER = keccak256("OKUUSD_PAUSER");
-    bytes32 public constant MINTER = keccak256("MINTER");
+    using SafeERC20 for IERC20;
 
-    // Granular RBAC roles
-    bytes32 public constant OKUUSD_UNPAUSER = keccak256("OKUUSD_UNPAUSER");
-    bytes32 public constant REBASER = keccak256("REBASER");
-    bytes32 public constant BLACKLISTER = keccak256("BLACKLISTER");
-    bytes32 public constant UNBLACKLISTER = keccak256("UNBLACKLISTER");
-    bytes32 public constant CAP_MANAGER = keccak256("CAP_MANAGER");
-    bytes32 public constant ALLOWANCE_MANAGER = keccak256("ALLOWANCE_MANAGER");
+    // ============ Roles ============
+
+    bytes32 public constant UPGRADER = keccak256("UPGRADER");
+    bytes32 public constant USD_REBASER = keccak256("USD_REBASER");
+    bytes32 public constant RESERVE_MANAGER = keccak256("RESERVE_MANAGER");
+    bytes32 public constant VAULT_PAUSER = keccak256("VAULT_PAUSER");
+    bytes32 public constant VAULT_UNPAUSER = keccak256("VAULT_UNPAUSER");
+
+    // ============ Constants ============
 
     uint256 public constant PRECISION = 1e18;
-    // Max rate: ~3700% APY safety cap (well beyond any T-Bill rate)
     uint256 public constant MAX_RATE = PRECISION + 1e11;
 
-    // Share-based storage
-    mapping(address => uint256) private _shares;
-    uint256 private _totalShares;
+    // ============ State ============
 
-    // Rebasing mechanism — continuous yield accrual
-    uint256 internal _baseMultiplier;
-    uint256 public ratePerSecond;
-    uint256 public lastAccrualTime;
-    uint256 public rateEnd;
-    uint256 public pendingRatePerSecond;
+    IOkuNote public okuNote;
 
-    // Minter allowance system (Circle pattern)
-    mapping(address => uint256) public minterAllowance;
+    // USD rebasing mechanism (mirrors OkuNote pattern)
+    mapping(address => uint256) private _usdShares;
+    uint256 private _totalUsdShares;
+    uint256 internal _usdBaseMultiplier;
+    uint256 public usdRatePerSecond;
+    uint256 public usdLastAccrualTime;
+    uint256 public usdRateEnd;
+    uint256 public usdPendingRatePerSecond;
 
-    // Supply cap
-    uint256 public maxSupply;
+    // Collateralization
+    uint256 public minCollateralRatio;
 
-    // Blacklist
-    mapping(address => bool) public isBlacklisted;
+    // ============ Events ============
 
-    // Blacklist-exempt infrastructure addresses (bridge, router)
-    address public blacklistExempt1;
-    address public blacklistExempt2;
-    bool private _blacklistExemptInitialized;
-
-    // Events
-    event RebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
-    event YieldRateUpdated(
+    event UsdRebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
+    event UsdYieldRateUpdated(
         uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotMultiplier
     );
-    event NextYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
-    event MinterAllowanceUpdated(
-        address indexed minter, uint256 oldAllowance, uint256 newAllowance
-    );
-    event MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply);
-    event Blacklisted(address indexed account);
-    event Unblacklisted(address indexed account);
+    event NextUsdYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
+    event MinCollateralRatioUpdated(uint256 oldRatio, uint256 newRatio);
+    event ReservesDeposited(address indexed depositor, uint256 noteAmount);
+    event SurplusWithdrawn(address indexed to, uint256 noteAmount);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -89,64 +82,67 @@ contract OkuUSD is
     }
 
     function initialize(
+        address _okuNote,
         string memory name,
         string memory symbol,
         address admin,
-        uint256 initialMaxSupply
+        uint256 _minCollateralRatio
     )
         public
         initializer
     {
+        require(_okuNote != address(0), "Zero address");
+        require(_minCollateralRatio <= PRECISION, "Ratio exceeds 100%");
+
         __ERC20_init(name, symbol);
         __ERC20Permit_init(name);
         __AccessControl_init();
         __Pausable_init();
 
+        okuNote = IOkuNote(_okuNote);
+        minCollateralRatio = _minCollateralRatio;
+
+        _usdBaseMultiplier = PRECISION;
+        usdRatePerSecond = PRECISION;
+        usdLastAccrualTime = block.timestamp;
+        usdPendingRatePerSecond = PRECISION;
+
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(UPGRADER, admin);
-        _grantRole(OKUUSD_PAUSER, admin);
-
-        _baseMultiplier = PRECISION;
-        ratePerSecond = PRECISION;
-        lastAccrualTime = block.timestamp;
-        pendingRatePerSecond = PRECISION;
-        maxSupply = initialMaxSupply;
+        _grantRole(VAULT_PAUSER, admin);
+        _grantRole(VAULT_UNPAUSER, admin);
     }
 
-    // ============ Rebasing Logic ============
+    // ============ USD Multiplier (Continuous Accrual) ============
 
     /**
-     * @notice Computed reward multiplier with continuous yield accrual
-     * @dev Handles current rate, rate expiry, and pending rate crossover
+     * @notice Computed USD multiplier with continuous yield accrual
+     * @dev Same _rpow pattern as OkuNote.rewardMultiplier()
      */
-    function rewardMultiplier() public view returns (uint256) {
-        uint256 rate = ratePerSecond;
+    function usdMultiplier() public view returns (uint256) {
+        uint256 rate = usdRatePerSecond;
         if (rate <= PRECISION) {
-            // No yield accrual — check if pending rate has activated
-            if (rateEnd != 0 && block.timestamp > rateEnd) {
-                uint256 pendingRate = pendingRatePerSecond;
+            if (usdRateEnd != 0 && block.timestamp > usdRateEnd) {
+                uint256 pendingRate = usdPendingRatePerSecond;
                 if (pendingRate > PRECISION) {
-                    uint256 elapsedPending = block.timestamp - rateEnd;
-                    return
-                        (_baseMultiplier * _rpow(pendingRate, elapsedPending, PRECISION))
-                            / PRECISION;
+                    uint256 elapsedPending = block.timestamp - usdRateEnd;
+                    return (_usdBaseMultiplier * _rpow(pendingRate, elapsedPending, PRECISION))
+                        / PRECISION;
                 }
             }
-            return _baseMultiplier;
+            return _usdBaseMultiplier;
         }
 
-        uint256 base = _baseMultiplier;
+        uint256 base = _usdBaseMultiplier;
 
-        if (rateEnd != 0 && block.timestamp > rateEnd) {
-            // Current rate expired — accrue current rate up to rateEnd, then pending rate after
-            uint256 elapsedCurrent = rateEnd - lastAccrualTime;
+        if (usdRateEnd != 0 && block.timestamp > usdRateEnd) {
+            uint256 elapsedCurrent = usdRateEnd - usdLastAccrualTime;
             if (elapsedCurrent > 0) {
                 base = (base * _rpow(rate, elapsedCurrent, PRECISION)) / PRECISION;
             }
-            // Apply pending rate for remaining time
-            uint256 pendingRate = pendingRatePerSecond;
+            uint256 pendingRate = usdPendingRatePerSecond;
             if (pendingRate > PRECISION) {
-                uint256 elapsedPending = block.timestamp - rateEnd;
+                uint256 elapsedPending = block.timestamp - usdRateEnd;
                 if (elapsedPending > 0) {
                     base = (base * _rpow(pendingRate, elapsedPending, PRECISION)) / PRECISION;
                 }
@@ -154,108 +150,242 @@ contract OkuUSD is
             return base;
         }
 
-        uint256 elapsed = block.timestamp - lastAccrualTime;
+        uint256 elapsed = block.timestamp - usdLastAccrualTime;
         if (elapsed == 0) return base;
         return (base * _rpow(rate, elapsed, PRECISION)) / PRECISION;
     }
 
+    function usdBaseMultiplier() public view returns (uint256) {
+        return _usdBaseMultiplier;
+    }
+
+    function totalUsdShares() public view returns (uint256) {
+        return _totalUsdShares;
+    }
+
+    function usdSharesOf(address account) public view returns (uint256) {
+        return _usdShares[account];
+    }
+
+    // ============ ERC20 Overrides (USD Share-based) ============
+
+    function totalSupply() public view override returns (uint256) {
+        return (_totalUsdShares * usdMultiplier()) / PRECISION;
+    }
+
+    function balanceOf(address account) public view override returns (uint256) {
+        return (_usdShares[account] * usdMultiplier()) / PRECISION;
+    }
+
+    function transfer(address to, uint256 amount) public override whenNotPaused returns (bool) {
+        uint256 shares = (amount * PRECISION) / usdMultiplier();
+        _transferUsdShares(msg.sender, to, shares);
+        return true;
+    }
+
+    function transferFrom(
+        address from,
+        address to,
+        uint256 amount
+    )
+        public
+        override
+        whenNotPaused
+        returns (bool)
+    {
+        _spendAllowance(from, msg.sender, amount);
+        uint256 shares = (amount * PRECISION) / usdMultiplier();
+        _transferUsdShares(from, to, shares);
+        return true;
+    }
+
+    function _transferUsdShares(address from, address to, uint256 shares) internal {
+        require(from != address(0), "Transfer from zero address");
+        require(to != address(0), "Transfer to zero address");
+
+        uint256 fromBalance = _usdShares[from];
+        require(fromBalance >= shares, "Insufficient balance");
+
+        _usdShares[from] = fromBalance - shares;
+        _usdShares[to] += shares;
+
+        emit Transfer(from, to, (shares * usdMultiplier()) / PRECISION);
+    }
+
+    // ============ Wrap / Unwrap ============
+
     /**
-     * @notice Get the base multiplier (last snapshot, before accrual)
+     * @notice Wrap OkuNotes into OkuUSD (dollar-for-dollar, both $1-pegged)
+     * @param noteAmount Amount of OkuNote tokens to wrap
+     * @param receiver Address to receive OkuUSD
+     * @return usdMinted Amount of OkuUSD minted
      */
-    function baseMultiplier() public view returns (uint256) {
-        return _baseMultiplier;
+    function wrap(uint256 noteAmount, address receiver) external returns (uint256 usdMinted) {
+        require(noteAmount > 0, "Amount must be positive");
+        require(receiver != address(0), "Zero receiver");
+
+        // Pull notes from sender
+        IERC20(address(okuNote)).safeTransferFrom(msg.sender, address(this), noteAmount);
+
+        // Dollar-for-dollar: 1 note token = 1 OkuUSD (both $1-pegged post-rebase)
+        usdMinted = noteAmount;
+
+        // Calculate USD shares to mint (rounds DOWN — favors vault)
+        uint256 sharesToMint = (noteAmount * PRECISION) / usdMultiplier();
+        require(sharesToMint > 0, "Amount too small");
+
+        _totalUsdShares += sharesToMint;
+        _usdShares[receiver] += sharesToMint;
+
+        emit Transfer(address(0), receiver, usdMinted);
     }
 
     /**
-     * @notice Set active yield rate with optional end time
-     * @param newRatePerSecond Compound rate per second (1e18 = no yield)
-     * @param endTimestamp When current rate expires (0 = no expiry)
+     * @notice Unwrap OkuUSD back to OkuNotes (dollar-for-dollar)
+     * @param usdAmount Amount of OkuUSD to unwrap
+     * @param receiver Address to receive OkuNotes
+     * @return notesReturned Amount of OkuNote tokens returned
      */
-    function setYieldRate(
-        uint256 newRatePerSecond,
-        uint256 endTimestamp
-    )
-        external
-        onlyRole(REBASER)
-    {
-        require(newRatePerSecond >= PRECISION, "Rate cannot be negative");
-        require(newRatePerSecond <= MAX_RATE, "Rate too high");
+    function unwrap(uint256 usdAmount, address receiver) external returns (uint256 notesReturned) {
+        require(usdAmount > 0, "Amount must be positive");
+        require(receiver != address(0), "Zero receiver");
+
+        // Dollar-for-dollar
+        notesReturned = usdAmount;
+
+        // Calculate USD shares to burn (rounds UP — favors vault)
+        uint256 mult = usdMultiplier();
+        uint256 sharesToBurn = (usdAmount * PRECISION + mult - 1) / mult;
+        require(_usdShares[msg.sender] >= sharesToBurn, "Insufficient balance");
+
+        _usdShares[msg.sender] -= sharesToBurn;
+        _totalUsdShares -= sharesToBurn;
+
+        // Ensure vault has enough notes
+        require(
+            IERC20(address(okuNote)).balanceOf(address(this)) >= notesReturned,
+            "Insufficient reserves"
+        );
+
+        IERC20(address(okuNote)).safeTransfer(receiver, notesReturned);
+
+        emit Transfer(msg.sender, address(0), usdAmount);
+    }
+
+    // ============ Reserve Management ============
+
+    /**
+     * @notice Deposit notes without minting OkuUSD shares (top up reserves)
+     * @param noteAmount Amount of OkuNote tokens to deposit
+     */
+    function depositReserves(uint256 noteAmount) external onlyRole(RESERVE_MANAGER) {
+        require(noteAmount > 0, "Amount must be positive");
+        IERC20(address(okuNote)).safeTransferFrom(msg.sender, address(this), noteAmount);
+        emit ReservesDeposited(msg.sender, noteAmount);
+    }
+
+    /**
+     * @notice Withdraw surplus notes without burning OkuUSD shares
+     * @param noteAmount Amount of OkuNote tokens to withdraw
+     */
+    function withdrawSurplus(uint256 noteAmount) external onlyRole(RESERVE_MANAGER) {
+        require(noteAmount > 0, "Amount must be positive");
+
+        IERC20(address(okuNote)).safeTransfer(msg.sender, noteAmount);
+
+        // Enforce collateralization floor AFTER withdrawal
+        require(collateralizationRatio() >= minCollateralRatio, "Below minimum collateral ratio");
+
+        emit SurplusWithdrawn(msg.sender, noteAmount);
+    }
+
+    // ============ Admin ============
+
+    function setMinCollateralRatio(uint256 newRatio) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(newRatio <= PRECISION, "Ratio exceeds 100%");
+        uint256 oldRatio = minCollateralRatio;
+        minCollateralRatio = newRatio;
+        emit MinCollateralRatioUpdated(oldRatio, newRatio);
+    }
+
+    // ============ Collateralization Views ============
+
+    function totalNoteReserves() public view returns (uint256) {
+        return IERC20(address(okuNote)).balanceOf(address(this));
+    }
+
+    function totalUsdObligations() public view returns (uint256) {
+        return totalSupply();
+    }
+
+    function collateralizationRatio() public view returns (uint256) {
+        uint256 obligations = totalUsdObligations();
+        if (obligations == 0) return type(uint256).max;
+        return (totalNoteReserves() * PRECISION) / obligations;
+    }
+
+    function surplus() public view returns (uint256) {
+        uint256 reserves = totalNoteReserves();
+        uint256 obligations = totalUsdObligations();
+        if (reserves > obligations) {
+            return reserves - obligations;
+        }
+        return 0;
+    }
+
+    // ============ Rate Management (USD_REBASER) ============
+
+    function setUsdYieldRate(uint256 newRate, uint256 endTimestamp) external onlyRole(USD_REBASER) {
+        require(newRate >= PRECISION, "Rate cannot be negative");
+        require(newRate <= MAX_RATE, "Rate too high");
         require(endTimestamp == 0 || endTimestamp > block.timestamp, "End must be in the future");
 
-        // Snapshot current state
-        _baseMultiplier = rewardMultiplier();
-        lastAccrualTime = block.timestamp;
+        _usdBaseMultiplier = usdMultiplier();
+        usdLastAccrualTime = block.timestamp;
 
-        ratePerSecond = newRatePerSecond;
-        rateEnd = endTimestamp;
-        pendingRatePerSecond = PRECISION;
+        usdRatePerSecond = newRate;
+        usdRateEnd = endTimestamp;
+        usdPendingRatePerSecond = PRECISION;
 
-        emit YieldRateUpdated(newRatePerSecond, endTimestamp, _baseMultiplier);
+        emit UsdYieldRateUpdated(newRate, endTimestamp, _usdBaseMultiplier);
     }
 
-    /**
-     * @notice Schedule the next yield rate (activates when current rate expires)
-     * @param newRatePerSecond Compound rate per second for the next period
-     */
-    function setNextYieldRate(uint256 newRatePerSecond) external onlyRole(REBASER) {
-        require(newRatePerSecond >= PRECISION, "Rate cannot be negative");
-        require(newRatePerSecond <= MAX_RATE, "Rate too high");
-        require(rateEnd != 0, "Current rate has no end");
+    function setNextUsdYieldRate(uint256 newRate) external onlyRole(USD_REBASER) {
+        require(newRate >= PRECISION, "Rate cannot be negative");
+        require(newRate <= MAX_RATE, "Rate too high");
+        require(usdRateEnd != 0, "Current rate has no end");
 
-        pendingRatePerSecond = newRatePerSecond;
+        usdPendingRatePerSecond = newRate;
 
-        emit NextYieldRateSet(newRatePerSecond, rateEnd);
+        emit NextUsdYieldRateSet(newRate, usdRateEnd);
     }
 
     /**
      * @notice Emergency override — snapshots computed multiplier, resets rate to zero yield
-     * @param newMultiplier New multiplier value (must be >= current computed multiplier)
      */
-    function updateRewardMultiplier(uint256 newMultiplier) external onlyRole(REBASER) {
-        uint256 currentMultiplier = rewardMultiplier();
+    function updateUsdMultiplier(uint256 newMultiplier) external onlyRole(USD_REBASER) {
+        uint256 currentMultiplier = usdMultiplier();
         require(newMultiplier >= currentMultiplier, "Multiplier cannot decrease");
-        _baseMultiplier = newMultiplier;
-        ratePerSecond = PRECISION;
-        rateEnd = 0;
-        pendingRatePerSecond = PRECISION;
-        lastAccrualTime = block.timestamp;
-        emit RebaseEvent(currentMultiplier, newMultiplier);
+        _usdBaseMultiplier = newMultiplier;
+        usdRatePerSecond = PRECISION;
+        usdRateEnd = 0;
+        usdPendingRatePerSecond = PRECISION;
+        usdLastAccrualTime = block.timestamp;
+        emit UsdRebaseEvent(currentMultiplier, newMultiplier);
     }
 
-    /**
-     * @notice Get shares owned by account
-     */
-    function sharesOf(address account) public view returns (uint256) {
-        return _shares[account];
+    // ============ Pause Management ============
+
+    function pause() external onlyRole(VAULT_PAUSER) {
+        _pause();
     }
 
-    /**
-     * @notice Get total shares
-     */
-    function totalShares() public view returns (uint256) {
-        return _totalShares;
-    }
-
-    /**
-     * @notice Convert shares to token amount
-     */
-    function sharesToTokens(uint256 shares) public view returns (uint256) {
-        return (shares * rewardMultiplier()) / PRECISION;
-    }
-
-    /**
-     * @notice Convert token amount to shares
-     */
-    function tokensToShares(uint256 tokens) public view returns (uint256) {
-        return (tokens * PRECISION) / rewardMultiplier();
+    function unpause() external onlyRole(VAULT_UNPAUSER) {
+        _unpause();
     }
 
     // ============ Exponentiation by Squaring (MakerDAO DSS) ============
 
-    /**
-     * @notice Raise x to the power of n, modulo base b (exponentiation by squaring)
-     * @dev Copied from MakerDAO's jug.sol / pot.sol — battle-tested since 2017
-     */
     function _rpow(uint256 x, uint256 n, uint256 b) internal pure returns (uint256 z) {
         assembly {
             switch x
@@ -287,150 +417,6 @@ contract OkuUSD is
                 }
             }
         }
-    }
-
-    // ============ ERC20 Overrides (Share-based) ============
-
-    function totalSupply() public view override returns (uint256) {
-        return sharesToTokens(_totalShares);
-    }
-
-    function balanceOf(address account) public view override returns (uint256) {
-        return sharesToTokens(_shares[account]);
-    }
-
-    function transfer(address to, uint256 amount) public override whenNotPaused returns (bool) {
-        _transferShares(msg.sender, to, tokensToShares(amount));
-        return true;
-    }
-
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    )
-        public
-        override
-        whenNotPaused
-        returns (bool)
-    {
-        _spendAllowance(from, msg.sender, amount);
-        _transferShares(from, to, tokensToShares(amount));
-        return true;
-    }
-
-    function _transferShares(address from, address to, uint256 shares) internal {
-        require(from != address(0), "Transfer from zero address");
-        require(to != address(0), "Transfer to zero address");
-        require(!isBlacklisted[from], "Sender blacklisted");
-        require(!isBlacklisted[to], "Recipient blacklisted");
-
-        uint256 fromBalance = _shares[from];
-        require(fromBalance >= shares, "Insufficient balance");
-
-        _shares[from] = fromBalance - shares;
-        _shares[to] += shares;
-
-        emit Transfer(from, to, sharesToTokens(shares));
-    }
-
-    // ============ Minting & Burning ============
-
-    function mint(address to, uint256 amount) external onlyRole(MINTER) whenNotPaused {
-        require(!isBlacklisted[to], "Recipient blacklisted");
-        require(totalSupply() + amount <= maxSupply, "Exceeds supply cap");
-        require(minterAllowance[msg.sender] >= amount, "Exceeds minter allowance");
-
-        unchecked {
-            minterAllowance[msg.sender] -= amount;
-        }
-
-        uint256 shares = tokensToShares(amount);
-        require(shares > 0, "Amount too small");
-        _totalShares += shares;
-        _shares[to] += shares;
-
-        emit Transfer(address(0), to, amount);
-    }
-
-    function burn(uint256 amount) external onlyRole(MINTER) {
-        require(!isBlacklisted[msg.sender], "Account blacklisted");
-
-        uint256 shares = tokensToShares(amount);
-        require(_shares[msg.sender] >= shares, "Insufficient balance");
-
-        _shares[msg.sender] -= shares;
-        _totalShares -= shares;
-
-        emit Transfer(msg.sender, address(0), amount);
-    }
-
-    // ============ Minter Allowance Management ============
-
-    function configureMinterAllowance(
-        address minter,
-        uint256 allowance
-    )
-        external
-        onlyRole(ALLOWANCE_MANAGER)
-    {
-        uint256 oldAllowance = minterAllowance[minter];
-        minterAllowance[minter] = allowance;
-        emit MinterAllowanceUpdated(minter, oldAllowance, allowance);
-    }
-
-    // ============ Supply Cap Management ============
-
-    function setMaxSupply(uint256 newMaxSupply) external onlyRole(CAP_MANAGER) {
-        uint256 oldMaxSupply = maxSupply;
-        maxSupply = newMaxSupply;
-        emit MaxSupplyUpdated(oldMaxSupply, newMaxSupply);
-    }
-
-    // ============ Blacklist-Exempt Infrastructure ============
-
-    /**
-     * @notice One-time setter for blacklist-exempt infrastructure addresses (bridge, router)
-     * @dev Uses CREATE2 deterministic addresses. Cannot be called twice.
-     */
-    function initializeBlacklistExempt(
-        address bridge,
-        address router
-    )
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-    {
-        require(!_blacklistExemptInitialized, "Already initialized");
-        require(bridge != address(0) && router != address(0), "Zero address");
-        blacklistExempt1 = bridge;
-        blacklistExempt2 = router;
-        _blacklistExemptInitialized = true;
-    }
-
-    // ============ Blacklist (Works While Paused) ============
-
-    function blacklist(address account) external onlyRole(BLACKLISTER) {
-        require(
-            account != blacklistExempt1 && account != blacklistExempt2,
-            "Account is blacklist-exempt"
-        );
-        isBlacklisted[account] = true;
-        emit Blacklisted(account);
-    }
-
-    function unblacklist(address account) external onlyRole(UNBLACKLISTER) {
-        isBlacklisted[account] = false;
-        emit Unblacklisted(account);
-    }
-
-    // ============ Pause Management ============
-
-    function pause() external onlyRole(OKUUSD_PAUSER) {
-        _pause();
-    }
-
-    function unpause() external onlyRole(OKUUSD_UNPAUSER) {
-        _unpause();
     }
 
     // ============ Upgradeability ============

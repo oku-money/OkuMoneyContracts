@@ -2,27 +2,27 @@
 pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
-import {OkuUSDHandler} from "../handlers/OkuUSDHandler.sol";
+import {OkuNoteHandler} from "../handlers/OkuNoteHandler.sol";
 
 /**
  * @title MinterAllowanceInvariantsTest
  * @notice Invariant tests for minter allowance monotonic decrease
  */
 contract MinterAllowanceInvariantsTest is BaseTest {
-    OkuUSDHandler public handler;
+    OkuNoteHandler public handler;
     uint256 public initialAllowance;
 
     function setUp() public override {
         super.setUp();
-        handler = new OkuUSDHandler(okuUsd, minter, rebaser, allowanceManager);
+        handler = new OkuNoteHandler(okuNote, minter, rebaser, allowanceManager);
 
         // Record initial allowance
-        initialAllowance = okuUsd.minterAllowance(minter);
+        initialAllowance = okuNote.minterAllowance(minter);
 
         targetContract(address(handler));
 
+        excludeContract(address(okuNote));
         excludeContract(address(okuUsd));
-        excludeContract(address(wokuUsd));
         excludeContract(address(litePsm));
         excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));
@@ -31,41 +31,28 @@ contract MinterAllowanceInvariantsTest is BaseTest {
 
     /**
      * @notice Minter allowance only decreases unless admin resets
-     * @dev Invariant from CLAUDE.md:
-     *      assert(newAllowance <= previousAllowance || msg.sender == admin);
-     *
-     * The handler tracks whether admin reset occurred. If no reset,
-     * allowance should only decrease or stay the same.
      */
     function invariant_AllowanceMonotonicDecrease() public view {
-        uint256 currentAllowance = okuUsd.minterAllowance(minter);
+        uint256 currentAllowance = okuNote.minterAllowance(minter);
 
         if (!handler.wasAllowanceReset()) {
-            // No admin reset occurred, allowance should only decrease
             assertLe(currentAllowance, initialAllowance, "Allowance increased without admin reset");
         }
-        // If admin reset occurred, any value is valid
     }
 
     /**
      * @notice Burns do NOT restore minter allowance
-     * @dev This is checked by tracking ghost variables in handler.
-     *      The mint total should always be >= (initial allowance - current allowance)
      */
     function invariant_BurnDoesNotRestoreAllowance() public view {
-        uint256 currentAllowance = okuUsd.minterAllowance(minter);
+        uint256 currentAllowance = okuNote.minterAllowance(minter);
         uint256 mintedTotal = handler.ghostMintedTotal();
 
         if (!handler.wasAllowanceReset()) {
-            // Allowance consumed should equal or exceed minted total
-            // (can be less if some mints failed or were bounded)
             uint256 allowanceConsumed = initialAllowance - currentAllowance;
 
-            // Minted total should roughly match allowance consumed
-            // (may be less if bounded by maxSupply)
             assertLe(
                 allowanceConsumed,
-                mintedTotal + 1, // Rounding tolerance
+                mintedTotal + 1,
                 "Allowance consumed exceeds minted amount unexpectedly"
             );
         }
@@ -75,9 +62,7 @@ contract MinterAllowanceInvariantsTest is BaseTest {
      * @notice Minter allowance is bounded by maxSupply
      */
     function invariant_AllowanceBounded() public view {
-        uint256 allowance = okuUsd.minterAllowance(minter);
-
-        // Allowance should never exceed maxSupply (handler bounds resets to [0, MAX_SUPPLY])
-        assertLe(allowance, okuUsd.maxSupply(), "Allowance exceeds maxSupply");
+        uint256 allowance = okuNote.minterAllowance(minter);
+        assertLe(allowance, okuNote.maxSupply(), "Allowance exceeds maxSupply");
     }
 }

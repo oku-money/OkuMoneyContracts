@@ -5,8 +5,8 @@ import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+import {OkuNote} from "../src/token/OkuNote.sol";
 import {OkuUSD} from "../src/token/OkuUSD.sol";
-import {wOkuUSD} from "../src/token/wOkuUSD.sol";
 import {LitePSM} from "../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../src/psm/RedemptionQueue.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
@@ -24,10 +24,10 @@ abstract contract BaseTest is Test {
 
     // ============ Contracts ============
 
+    OkuNote public okuNote;
+    OkuNote public okuNoteImpl;
     OkuUSD public okuUsd;
     OkuUSD public okuUsdImpl;
-    wOkuUSD public wokuUsd;
-    wOkuUSD public wokuUsdImpl;
     LitePSM public litePsm;
     LitePSM public litePsmImpl;
     RedemptionQueue public redemptionQueue;
@@ -42,6 +42,8 @@ abstract contract BaseTest is Test {
     address public unpauser = makeAddr("unpauser");
     address public minter = makeAddr("minter");
     address public rebaser = makeAddr("rebaser");
+    address public usdRebaser = makeAddr("usdRebaser");
+    address public reserveManager = makeAddr("reserveManager");
     address public blacklister = makeAddr("blacklister");
     address public unblacklister = makeAddr("unblacklister");
     address public capManager = makeAddr("capManager");
@@ -61,16 +63,22 @@ abstract contract BaseTest is Test {
 
     bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
 
-    // OkuUSD roles
+    // OkuNote roles
     bytes32 public constant UPGRADER = keccak256("UPGRADER");
-    bytes32 public constant OKUUSD_PAUSER = keccak256("OKUUSD_PAUSER");
-    bytes32 public constant OKUUSD_UNPAUSER = keccak256("OKUUSD_UNPAUSER");
+    bytes32 public constant NOTE_PAUSER = keccak256("NOTE_PAUSER");
+    bytes32 public constant NOTE_UNPAUSER = keccak256("NOTE_UNPAUSER");
     bytes32 public constant MINTER = keccak256("MINTER");
-    bytes32 public constant REBASER = keccak256("REBASER");
+    bytes32 public constant NOTE_REBASER = keccak256("NOTE_REBASER");
     bytes32 public constant BLACKLISTER = keccak256("BLACKLISTER");
     bytes32 public constant UNBLACKLISTER = keccak256("UNBLACKLISTER");
     bytes32 public constant CAP_MANAGER = keccak256("CAP_MANAGER");
     bytes32 public constant ALLOWANCE_MANAGER = keccak256("ALLOWANCE_MANAGER");
+
+    // OkuUSD vault roles
+    bytes32 public constant USD_REBASER = keccak256("USD_REBASER");
+    bytes32 public constant RESERVE_MANAGER = keccak256("RESERVE_MANAGER");
+    bytes32 public constant VAULT_PAUSER = keccak256("VAULT_PAUSER");
+    bytes32 public constant VAULT_UNPAUSER = keccak256("VAULT_UNPAUSER");
 
     // LitePSM roles
     bytes32 public constant PSM_UPGRADER = keccak256("PSM_UPGRADER");
@@ -83,10 +91,6 @@ abstract contract BaseTest is Test {
 
     // RedemptionQueue roles
     bytes32 public constant PSM = keccak256("PSM");
-
-    // wOkuUSD roles
-    bytes32 public constant VAULT_PAUSER = keccak256("VAULT_PAUSER");
-    bytes32 public constant VAULT_UNPAUSER = keccak256("VAULT_UNPAUSER");
 
     // OkuBridge roles
     bytes32 public constant BRIDGE_UPGRADER = keccak256("BRIDGE_UPGRADER");
@@ -111,30 +115,32 @@ abstract contract BaseTest is Test {
         usdc = new MockUSDC();
         oracle = new MockAggregatorV3();
 
-        // Deploy OkuUSD implementation and proxy
-        okuUsdImpl = new OkuUSD();
-        bytes memory okuInitData =
-            abi.encodeCall(OkuUSD.initialize, ("OkuUSD", "OKUSD", admin, MAX_SUPPLY));
-        okuUsd = OkuUSD(address(new ERC1967Proxy(address(okuUsdImpl), okuInitData)));
+        // Deploy OkuNote implementation and proxy
+        okuNoteImpl = new OkuNote();
+        bytes memory noteInitData =
+            abi.encodeCall(OkuNote.initialize, ("OkuNote", "OKUNOTE", admin, MAX_SUPPLY));
+        okuNote = OkuNote(address(new ERC1967Proxy(address(okuNoteImpl), noteInitData)));
 
-        // Deploy wOkuUSD implementation and proxy
-        wokuUsdImpl = new wOkuUSD();
-        bytes memory wokuInitData = abi.encodeCall(
-            wOkuUSD.initialize, (IERC20(address(okuUsd)), "Wrapped OkuUSD", "wOKUSD", admin)
+        // Deploy OkuUSD vault implementation and proxy
+        okuUsdImpl = new OkuUSD();
+        bytes memory usdInitData = abi.encodeCall(
+            OkuUSD.initialize,
+            (address(okuNote), "OkuUSD", "OKUSD", admin, 95e16) // 95% min collateral ratio
         );
-        wokuUsd = wOkuUSD(address(new ERC1967Proxy(address(wokuUsdImpl), wokuInitData)));
+        okuUsd = OkuUSD(address(new ERC1967Proxy(address(okuUsdImpl), usdInitData)));
 
         // Deploy RedemptionQueue implementation and proxy
         redemptionQueueImpl = new RedemptionQueue();
         bytes memory queueInitData =
-            abi.encodeCall(RedemptionQueue.initialize, (address(okuUsd), admin));
+            abi.encodeCall(RedemptionQueue.initialize, (address(okuNote), admin));
         redemptionQueue =
             RedemptionQueue(address(new ERC1967Proxy(address(redemptionQueueImpl), queueInitData)));
 
         // Deploy LitePSM implementation and proxy
         litePsmImpl = new LitePSM();
         bytes memory psmInitData = abi.encodeCall(
-            LitePSM.initialize, (address(okuUsd), address(usdc), address(redemptionQueue), admin)
+            LitePSM.initialize,
+            (address(okuNote), address(okuUsd), address(usdc), address(redemptionQueue), admin)
         );
         litePsm = LitePSM(address(new ERC1967Proxy(address(litePsmImpl), psmInitData)));
     }
@@ -142,16 +148,22 @@ abstract contract BaseTest is Test {
     function _setupRoles() internal {
         vm.startPrank(admin);
 
-        // OkuUSD roles - Granular RBAC
-        okuUsd.grantRole(OKUUSD_PAUSER, pauser);
-        okuUsd.grantRole(OKUUSD_UNPAUSER, unpauser);
-        okuUsd.grantRole(MINTER, minter);
-        okuUsd.grantRole(MINTER, address(litePsm)); // PSM can mint
-        okuUsd.grantRole(REBASER, rebaser);
-        okuUsd.grantRole(BLACKLISTER, blacklister);
-        okuUsd.grantRole(UNBLACKLISTER, unblacklister);
-        okuUsd.grantRole(CAP_MANAGER, capManager);
-        okuUsd.grantRole(ALLOWANCE_MANAGER, allowanceManager);
+        // OkuNote roles - Granular RBAC
+        okuNote.grantRole(NOTE_PAUSER, pauser);
+        okuNote.grantRole(NOTE_UNPAUSER, unpauser);
+        okuNote.grantRole(MINTER, minter);
+        okuNote.grantRole(MINTER, address(litePsm)); // PSM can mint
+        okuNote.grantRole(NOTE_REBASER, rebaser);
+        okuNote.grantRole(BLACKLISTER, blacklister);
+        okuNote.grantRole(UNBLACKLISTER, unblacklister);
+        okuNote.grantRole(CAP_MANAGER, capManager);
+        okuNote.grantRole(ALLOWANCE_MANAGER, allowanceManager);
+
+        // OkuUSD vault roles
+        okuUsd.grantRole(USD_REBASER, usdRebaser);
+        okuUsd.grantRole(RESERVE_MANAGER, reserveManager);
+        okuUsd.grantRole(VAULT_PAUSER, vaultPauser);
+        okuUsd.grantRole(VAULT_UNPAUSER, vaultUnpauser);
 
         // LitePSM roles - Granular RBAC
         litePsm.grantRole(PSM_PAUSER, pauser);
@@ -161,38 +173,52 @@ abstract contract BaseTest is Test {
         litePsm.grantRole(BUFFER_WITHDRAWER, bufferWithdrawer);
         litePsm.grantRole(ORACLE_MANAGER, oracleManager);
 
-        // wOkuUSD roles
-        wokuUsd.grantRole(VAULT_PAUSER, vaultPauser);
-        wokuUsd.grantRole(VAULT_UNPAUSER, vaultUnpauser);
-
         // RedemptionQueue roles
         redemptionQueue.grantRole(PSM, address(litePsm));
 
-        // Grant RedemptionQueue MINTER role on OkuUSD (needed for self-burn in processQueue)
-        okuUsd.grantRole(MINTER, address(redemptionQueue));
+        // Grant RedemptionQueue MINTER role on OkuNote (needed for self-burn in processQueue)
+        okuNote.grantRole(MINTER, address(redemptionQueue));
 
         vm.stopPrank();
     }
 
     function _setupMinterAllowances() internal {
         vm.startPrank(allowanceManager);
-        okuUsd.configureMinterAllowance(minter, MAX_SUPPLY);
-        okuUsd.configureMinterAllowance(address(litePsm), MAX_SUPPLY);
-        okuUsd.configureMinterAllowance(address(redemptionQueue), MAX_SUPPLY);
+        okuNote.configureMinterAllowance(minter, MAX_SUPPLY);
+        okuNote.configureMinterAllowance(address(litePsm), MAX_SUPPLY);
+        okuNote.configureMinterAllowance(address(redemptionQueue), MAX_SUPPLY);
         vm.stopPrank();
     }
 
     // ============ Helper Functions ============
 
-    /// @notice Mint OkuUSD tokens to a user
-    function _mintOkuUsd(address to, uint256 amount) internal {
+    /// @notice Mint OkuNote tokens to a user
+    function _mintOkuNote(address to, uint256 amount) internal {
         vm.prank(minter);
-        okuUsd.mint(to, amount);
+        okuNote.mint(to, amount);
+    }
+
+    /// @notice Mint OkuUSD tokens to a user via wrap flow
+    function _mintOkuUsd(address to, uint256 noteAmount) internal {
+        // Mint notes to the to address first
+        _mintOkuNote(to, noteAmount);
+        // Approve vault to pull notes
+        vm.startPrank(to);
+        IERC20(address(okuNote)).approve(address(okuUsd), noteAmount);
+        // Wrap notes into OkuUSD
+        okuUsd.wrap(noteAmount, to);
+        vm.stopPrank();
     }
 
     /// @notice Mint USDC tokens to a user
     function _mintUsdc(address to, uint256 amount) internal {
         usdc.mint(to, amount);
+    }
+
+    /// @notice Approve OkuNote spending
+    function _approveOkuNote(address owner, address spender, uint256 amount) internal {
+        vm.prank(owner);
+        okuNote.approve(spender, amount);
     }
 
     /// @notice Approve OkuUSD spending
@@ -207,14 +233,14 @@ abstract contract BaseTest is Test {
         usdc.approve(spender, amount);
     }
 
-    /// @notice Calculate expected shares from tokens at current multiplier
+    /// @notice Calculate expected shares from tokens at current note multiplier
     function _tokensToShares(uint256 tokens) internal view returns (uint256) {
-        return (tokens * PRECISION) / okuUsd.rewardMultiplier();
+        return (tokens * PRECISION) / okuNote.rewardMultiplier();
     }
 
-    /// @notice Calculate expected tokens from shares at current multiplier
+    /// @notice Calculate expected tokens from shares at current note multiplier
     function _sharesToTokens(uint256 shares) internal view returns (uint256) {
-        return (shares * okuUsd.rewardMultiplier()) / PRECISION;
+        return (shares * okuNote.rewardMultiplier()) / PRECISION;
     }
 
     /// @notice Override bound() to suppress "Bound result" console logs
@@ -224,19 +250,19 @@ abstract contract BaseTest is Test {
 
     /// @notice Bound fuzz input to reasonable mint amount
     function _boundMintAmount(uint256 amount) internal view returns (uint256) {
-        uint256 remaining = MAX_SUPPLY - okuUsd.totalSupply();
+        uint256 remaining = MAX_SUPPLY - okuNote.totalSupply();
         return bound(amount, 1, remaining > 0 ? remaining : 1);
     }
 
     /// @notice Bound fuzz input to reasonable multiplier (current to 10x)
     function _boundMultiplier(uint256 multiplier) internal view returns (uint256) {
-        uint256 current = okuUsd.rewardMultiplier();
+        uint256 current = okuNote.rewardMultiplier();
         return bound(multiplier, current, current * 10);
     }
 
     /// @notice Bound fuzz input to reasonable multiplier increase (0.01% to 100%)
     function _boundMultiplierIncrease(uint256 increase) internal view returns (uint256) {
-        uint256 current = okuUsd.rewardMultiplier();
+        uint256 current = okuNote.rewardMultiplier();
         return bound(increase, current / 10_000, current);
     }
 

@@ -1,12 +1,12 @@
 import {
     LitePSM,
     LitePSM__factory,
+    OkuNote,
+    OkuNote__factory,
     OkuUSD,
     OkuUSD__factory,
     RedemptionQueue,
     RedemptionQueue__factory,
-    WOkuUSD,
-    WOkuUSD__factory,
     NttAdapter,
     NttAdapter__factory,
     IERC20__factory
@@ -37,8 +37,8 @@ describe("NTT Bridge Scenarios", () => {
 
     let psm: LitePSM
     let queue: RedemptionQueue
-    let okuUSD: OkuUSD
-    let wokuUSD: WOkuUSD
+    let okuNote: OkuNote
+    let okuUsd: OkuUSD
     let nttAdapter: NttAdapter
     let mockNttManager: any  // MockNttManagerHH (dynamic import)
 
@@ -47,9 +47,9 @@ describe("NTT Bridge Scenarios", () => {
     const MINTER = ethers.keccak256(ethers.toUtf8Bytes("MINTER"))
     const PSM = ethers.keccak256(ethers.toUtf8Bytes("PSM"))
     const ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("ALLOWANCE_MANAGER"))
-    const REBASER = ethers.keccak256(ethers.toUtf8Bytes("REBASER"))
-    const OKUUSD_PAUSER = ethers.keccak256(ethers.toUtf8Bytes("OKUUSD_PAUSER"))
-    const OKUUSD_UNPAUSER = ethers.keccak256(ethers.toUtf8Bytes("OKUUSD_UNPAUSER"))
+    const NOTE_REBASER = ethers.keccak256(ethers.toUtf8Bytes("NOTE_REBASER"))
+    const NOTE_PAUSER = ethers.keccak256(ethers.toUtf8Bytes("NOTE_PAUSER"))
+    const NOTE_UNPAUSER = ethers.keccak256(ethers.toUtf8Bytes("NOTE_UNPAUSER"))
     const BLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("BLACKLISTER"))
     const UNBLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("UNBLACKLISTER"))
     const CAP_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("CAP_MANAGER"))
@@ -69,10 +69,10 @@ describe("NTT Bridge Scenarios", () => {
         })
     }
 
-    async function getOkuUSD(user: Signer, usdcAmount: bigint) {
+    async function getOkuNote(user: Signer, usdcAmount: bigint) {
         await fundWithUSDC(user, usdcAmount)
         await usdc.connect(user).approve(await psm.getAddress(), usdcAmount)
-        await psm.connect(user).mint(usdcAmount)
+        await psm.connect(user).mint_OkuNote(usdcAmount)
     }
 
     // Bridge via NttAdapter — only ROUTER (Frank) can call bridge()
@@ -84,7 +84,7 @@ describe("NTT Bridge Scenarios", () => {
         fee: bigint = 0n
     ) {
         await nttAdapter.connect(Frank).bridge(
-            await okuUSD.getAddress(),
+            await okuNote.getAddress(),
             amount,
             destChain,
             recipient,
@@ -122,26 +122,26 @@ describe("NTT Bridge Scenarios", () => {
         const frankAddr = await Frank.getAddress()
         const MAX_SUPPLY = parseEther("1000000000")
 
-        // Deploy OkuUSD
-        okuUSD = await upgrades.deployProxy(
+        // Deploy OkuNote
+        okuNote = await upgrades.deployProxy(
+            new OkuNote__factory(Frank),
+            ["OkuNote", "OKUNOTE", frankAddr, MAX_SUPPLY],
+            { kind: "uups" }
+        ) as unknown as OkuNote
+        await okuNote.waitForDeployment()
+
+        // Deploy OkuUSD vault
+        okuUsd = await upgrades.deployProxy(
             new OkuUSD__factory(Frank),
-            ["OkuUSD", "OKUSD", frankAddr, MAX_SUPPLY],
+            [await okuNote.getAddress(), "OkuUSD", "OKUSD", frankAddr, parseEther("0.95")],
             { kind: "uups" }
         ) as unknown as OkuUSD
-        await okuUSD.waitForDeployment()
-
-        // Deploy wOkuUSD
-        wokuUSD = await upgrades.deployProxy(
-            new WOkuUSD__factory(Frank),
-            [await okuUSD.getAddress(), "Wrapped OkuUSD", "wOKUSD", frankAddr],
-            { kind: "uups" }
-        ) as unknown as WOkuUSD
-        await wokuUSD.waitForDeployment()
+        await okuUsd.waitForDeployment()
 
         // Deploy RedemptionQueue
         queue = await upgrades.deployProxy(
             new RedemptionQueue__factory(Frank),
-            [await okuUSD.getAddress(), frankAddr],
+            [await okuNote.getAddress(), frankAddr],
             { kind: "uups" }
         ) as unknown as RedemptionQueue
         await queue.waitForDeployment()
@@ -149,7 +149,7 @@ describe("NTT Bridge Scenarios", () => {
         // Deploy LitePSM
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            [await okuUSD.getAddress(), USDC_MAINNET, await queue.getAddress(), frankAddr],
+            [await okuNote.getAddress(), await okuUsd.getAddress(), USDC_MAINNET, await queue.getAddress(), frankAddr],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()
@@ -157,8 +157,8 @@ describe("NTT Bridge Scenarios", () => {
         // Deploy MockNttManagerHH
         const MockNttManagerHH = await ethers.getContractFactory("MockNttManagerHH", Frank)
         mockNttManager = await MockNttManagerHH.deploy(
-            await okuUSD.getAddress(),
-            await okuUSD.getAddress()
+            await okuNote.getAddress(),
+            await okuNote.getAddress()
         )
         await mockNttManager.waitForDeployment()
 
@@ -166,38 +166,38 @@ describe("NTT Bridge Scenarios", () => {
         // In production, ROUTER would be the OkuBridgeRouter address
         nttAdapter = await new NttAdapter__factory(Frank).deploy(
             await mockNttManager.getAddress(),
-            await okuUSD.getAddress(),
+            await okuNote.getAddress(),
             frankAddr,  // ROUTER — only this address can call bridge()
             frankAddr   // owner
         )
         await nttAdapter.waitForDeployment()
 
         // Configure roles
-        await okuUSD.connect(Frank).grantRole(MINTER, await psm.getAddress())
+        await okuNote.connect(Frank).grantRole(MINTER, await psm.getAddress())
 
         // Grant RBAC roles to Frank (admin) for testing
-        await okuUSD.connect(Frank).grantRole(ALLOWANCE_MANAGER, frankAddr)
-        await okuUSD.connect(Frank).grantRole(REBASER, frankAddr)
-        await okuUSD.connect(Frank).grantRole(OKUUSD_PAUSER, frankAddr)
-        await okuUSD.connect(Frank).grantRole(OKUUSD_UNPAUSER, frankAddr)
-        await okuUSD.connect(Frank).grantRole(BLACKLISTER, frankAddr)
-        await okuUSD.connect(Frank).grantRole(UNBLACKLISTER, frankAddr)
-        await okuUSD.connect(Frank).grantRole(CAP_MANAGER, frankAddr)
+        await okuNote.connect(Frank).grantRole(ALLOWANCE_MANAGER, frankAddr)
+        await okuNote.connect(Frank).grantRole(NOTE_REBASER, frankAddr)
+        await okuNote.connect(Frank).grantRole(NOTE_PAUSER, frankAddr)
+        await okuNote.connect(Frank).grantRole(NOTE_UNPAUSER, frankAddr)
+        await okuNote.connect(Frank).grantRole(BLACKLISTER, frankAddr)
+        await okuNote.connect(Frank).grantRole(UNBLACKLISTER, frankAddr)
+        await okuNote.connect(Frank).grantRole(CAP_MANAGER, frankAddr)
 
         // Grant PSM-specific roles to Frank
         await psm.connect(Frank).grantRole(BUFFER_WITHDRAWER, frankAddr)
         await psm.connect(Frank).grantRole(QUEUE_PROCESSOR, frankAddr)
 
-        await okuUSD.connect(Frank).configureMinterAllowance(
+        await okuNote.connect(Frank).configureMinterAllowance(
             await psm.getAddress(),
             parseEther("1000000000")
         )
         await queue.connect(Frank).grantRole(PSM, await psm.getAddress())
-        await okuUSD.connect(Frank).grantRole(MINTER, await queue.getAddress())
+        await okuNote.connect(Frank).grantRole(MINTER, await queue.getAddress())
 
         // Grant MINTER to MockNttManager for completeBridge()
-        await okuUSD.connect(Frank).grantRole(MINTER, await mockNttManager.getAddress())
-        await okuUSD.connect(Frank).configureMinterAllowance(
+        await okuNote.connect(Frank).grantRole(MINTER, await mockNttManager.getAddress())
+        await okuNote.connect(Frank).configureMinterAllowance(
             await mockNttManager.getAddress(),
             parseEther("1000000000")
         )
@@ -209,15 +209,11 @@ describe("NTT Bridge Scenarios", () => {
             const bobAddr = await Bob.getAddress()
             const bridgeAmount = parseUnits("10000", 6)
 
-            // Note: In production, the router burns tokens before calling adapter.
-            // For standalone testing, we just verify the adapter correctly calls NttManager.
-            // The adapter doesn't handle tokens - it just forwards the bridge message.
-
             const pendingCountBefore = await mockNttManager.pendingTransfersCount()
 
             // Call bridge (adapter doesn't transfer tokens, just records message)
             await nttAdapter.connect(Frank).bridge(
-                await okuUSD.getAddress(),
+                await okuNote.getAddress(),
                 bridgeAmount,
                 ARBITRUM_CHAIN_ID,
                 bobAddr
@@ -240,7 +236,7 @@ describe("NTT Bridge Scenarios", () => {
 
             // Bridge to Bob
             await nttAdapter.connect(Frank).bridge(
-                await okuUSD.getAddress(),
+                await okuNote.getAddress(),
                 bridgeAmount,
                 ARBITRUM_CHAIN_ID,
                 bobAddr
@@ -265,7 +261,7 @@ describe("NTT Bridge Scenarios", () => {
             // Try to bridge to unsupported chain
             await expect(
                 nttAdapter.connect(Frank).bridge(
-                    await okuUSD.getAddress(),
+                    await okuNote.getAddress(),
                     bridgeAmount,
                     999,  // Unsupported chain
                     bobAddr
@@ -284,7 +280,7 @@ describe("NTT Bridge Scenarios", () => {
             // Try to bridge without fee
             await expect(
                 nttAdapter.connect(Frank).bridge(
-                    await okuUSD.getAddress(),
+                    await okuNote.getAddress(),
                     bridgeAmount,
                     ARBITRUM_CHAIN_ID,
                     bobAddr,
@@ -307,7 +303,7 @@ describe("NTT Bridge Scenarios", () => {
             const mockBalanceBefore = await ethers.provider.getBalance(await mockNttManager.getAddress())
 
             await nttAdapter.connect(Frank).bridge(
-                await okuUSD.getAddress(),
+                await okuNote.getAddress(),
                 bridgeAmount,
                 ARBITRUM_CHAIN_ID,
                 bobAddr,
@@ -340,7 +336,7 @@ describe("NTT Bridge Scenarios", () => {
             const bridgeAmount = parseUnits("1000", 6)
 
             await nttAdapter.connect(Frank).bridge(
-                await okuUSD.getAddress(),
+                await okuNote.getAddress(),
                 bridgeAmount,
                 BSC_CHAIN_ID,
                 bobAddr
@@ -357,11 +353,11 @@ describe("NTT Bridge Scenarios", () => {
             const bridgeAmount = parseUnits("10000", 6)
 
             // Record Bob's balance before
-            const bobBalanceBefore = await okuUSD.balanceOf(bobAddr)
+            const bobBalanceBefore = await okuNote.balanceOf(bobAddr)
 
             // Bridge to Bob (adapter records message, doesn't handle tokens)
             await nttAdapter.connect(Frank).bridge(
-                await okuUSD.getAddress(),
+                await okuNote.getAddress(),
                 bridgeAmount,
                 ARBITRUM_CHAIN_ID,
                 bobAddr
@@ -371,8 +367,8 @@ describe("NTT Bridge Scenarios", () => {
             const pendingCount = await mockNttManager.pendingTransfersCount()
             await mockNttManager.completeBridge(pendingCount - 1n)
 
-            // Bob should have received OkuUSD
-            const bobBalanceAfter = await okuUSD.balanceOf(bobAddr)
+            // Bob should have received OkuNote
+            const bobBalanceAfter = await okuNote.balanceOf(bobAddr)
             expect(bobBalanceAfter - bobBalanceBefore).to.equal(bridgeAmount)
         })
 
@@ -382,7 +378,7 @@ describe("NTT Bridge Scenarios", () => {
 
             // Bridge to Charlie
             await nttAdapter.connect(Frank).bridge(
-                await okuUSD.getAddress(),
+                await okuNote.getAddress(),
                 bridgeAmount,
                 OPTIMISM_CHAIN_ID,
                 charlieAddr
@@ -397,18 +393,18 @@ describe("NTT Bridge Scenarios", () => {
             const recordedAmount = transfer.amount
 
             // Rebase +10% AFTER bridge message recorded
-            const multiplierBefore = await okuUSD.rewardMultiplier()
+            const multiplierBefore = await okuNote.rewardMultiplier()
             const newMultiplier = multiplierBefore * 110n / 100n
-            await okuUSD.connect(Frank).updateRewardMultiplier(newMultiplier)
+            await okuNote.connect(Frank).updateRewardMultiplier(newMultiplier)
 
             // Complete the bridge
-            const charlieBalanceBefore = await okuUSD.balanceOf(charlieAddr)
+            const charlieBalanceBefore = await okuNote.balanceOf(charlieAddr)
             await mockNttManager.completeBridge(transferIndex)
-            const charlieBalanceAfter = await okuUSD.balanceOf(charlieAddr)
+            const charlieBalanceAfter = await okuNote.balanceOf(charlieAddr)
 
             // Charlie receives the recorded amount (raw token units)
             // The mock mints exactly what was recorded
-            // Note: 1 wei rounding possible due to OkuUSD share conversion
+            // Note: 1 wei rounding possible due to OkuNote share conversion
             const received = charlieBalanceAfter - charlieBalanceBefore
             expect(received).to.be.closeTo(recordedAmount, 1n)
         })
@@ -450,30 +446,30 @@ describe("NTT Bridge Scenarios", () => {
             const frankAddr = await Frank.getAddress()
             const depositAmount = parseUnits("1000", 6)
 
-            // Get OkuUSD and accidentally send to adapter
-            await getOkuUSD(Frank, depositAmount)
-            const okuUSDBalance = await okuUSD.balanceOf(frankAddr)
+            // Get OkuNote and accidentally send to adapter
+            await getOkuNote(Frank, depositAmount)
+            const okuNoteBalance = await okuNote.balanceOf(frankAddr)
 
             // Transfer directly to adapter (accident)
-            await okuUSD.connect(Frank).transfer(await nttAdapter.getAddress(), okuUSDBalance)
+            await okuNote.connect(Frank).transfer(await nttAdapter.getAddress(), okuNoteBalance)
 
             // Verify tokens stuck
-            expect(await okuUSD.balanceOf(await nttAdapter.getAddress())).to.be.gt(0)
+            expect(await okuNote.balanceOf(await nttAdapter.getAddress())).to.be.gt(0)
 
             // Owner recovers
-            const frankBalanceBefore = await okuUSD.balanceOf(frankAddr)
+            const frankBalanceBefore = await okuNote.balanceOf(frankAddr)
             await nttAdapter.connect(Frank).withdrawTokens(
-                await okuUSD.getAddress(),
+                await okuNote.getAddress(),
                 frankAddr,
-                await okuUSD.balanceOf(await nttAdapter.getAddress())
+                await okuNote.balanceOf(await nttAdapter.getAddress())
             )
 
             // Verify tokens recovered
-            const frankBalanceAfter = await okuUSD.balanceOf(frankAddr)
+            const frankBalanceAfter = await okuNote.balanceOf(frankAddr)
             expect(frankBalanceAfter).to.be.gt(frankBalanceBefore)
 
-            // Adapter should be empty (allow 1 wei rounding from OkuUSD share math)
-            expect(await okuUSD.balanceOf(await nttAdapter.getAddress())).to.be.lte(1)
+            // Adapter should be empty (allow 1 wei rounding from OkuNote share math)
+            expect(await okuNote.balanceOf(await nttAdapter.getAddress())).to.be.lte(1)
         })
 
         it("Non-owner cannot withdraw", async () => {

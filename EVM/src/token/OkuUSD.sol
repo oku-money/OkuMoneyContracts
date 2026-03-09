@@ -224,14 +224,16 @@ contract OkuUSD is
         require(noteAmount > 0, "Amount must be positive");
         require(receiver != address(0), "Zero receiver");
 
-        // Pull notes from sender
+        // Measure actual notes received (OkuNote rounds down in tokensToShares)
+        uint256 balBefore = IERC20(address(okuNote)).balanceOf(address(this));
         IERC20(address(okuNote)).safeTransferFrom(msg.sender, address(this), noteAmount);
+        uint256 actualReceived = IERC20(address(okuNote)).balanceOf(address(this)) - balBefore;
 
-        // Dollar-for-dollar: 1 note token = 1 OkuUSD (both $1-pegged post-rebase)
-        usdMinted = noteAmount;
+        // Dollar-for-dollar based on actual notes received (not requested amount)
+        usdMinted = actualReceived;
 
         // Calculate USD shares to mint (rounds DOWN — favors vault)
-        uint256 sharesToMint = (noteAmount * PRECISION) / usdMultiplier();
+        uint256 sharesToMint = (actualReceived * PRECISION) / usdMultiplier();
         require(sharesToMint > 0, "Amount too small");
 
         _totalUsdShares += sharesToMint;

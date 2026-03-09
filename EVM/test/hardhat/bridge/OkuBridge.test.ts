@@ -1,11 +1,11 @@
 import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
-import { OkuBridge, OkuUSD, OkuBridge__factory, OkuUSD__factory } from "../../../typechain-types";
+import { OkuBridge, OkuNote, OkuBridge__factory, OkuNote__factory } from "../../../typechain-types";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 
 describe("OkuBridge E2E", function () {
   let okuBridge: OkuBridge;
-  let okuUSD: OkuUSD;
+  let okuNote: OkuNote;
 
   let admin: SignerWithAddress;
   let orchestratorSigner: SignerWithAddress;
@@ -47,20 +47,20 @@ describe("OkuBridge E2E", function () {
   beforeEach(async function () {
     [admin, orchestratorSigner, feeRecipient, user1, user2] = await ethers.getSigners();
 
-    // Deploy OkuUSD with transparent proxy
-    okuUSD = (await upgrades.deployProxy(
-      new OkuUSD__factory(admin),
-      ["OkuUSD", "OKUSD", admin.address, ethers.parseEther("1000000000")],
+    // Deploy OkuNote with UUPS proxy
+    okuNote = (await upgrades.deployProxy(
+      new OkuNote__factory(admin),
+      ["OkuNote", "OKUNOTE", admin.address, ethers.parseEther("1000000000")],
       { kind: "uups" }
-    )) as unknown as OkuUSD;
-    await okuUSD.waitForDeployment();
+    )) as unknown as OkuNote;
+    await okuNote.waitForDeployment();
 
     // Deploy OkuBridge with UUPS proxy
     // OZ v5 ReentrancyGuard is @custom:stateless (ERC-7201 namespaced slot) — safe for proxies
     okuBridge = (await upgrades.deployProxy(
       new OkuBridge__factory(admin),
       [
-        await okuUSD.getAddress(),
+        await okuNote.getAddress(),
         orchestratorSigner.address,
         feeRecipient.address,
         admin.address,
@@ -75,14 +75,14 @@ describe("OkuBridge E2E", function () {
       ethers.toUtf8Bytes("ALLOWANCE_MANAGER")
     );
 
-    await okuUSD.connect(admin).grantRole(MINTER, admin.address);
-    await okuUSD.connect(admin).grantRole(MINTER, await okuBridge.getAddress());
-    await okuUSD.connect(admin).grantRole(ALLOWANCE_MANAGER, admin.address);
+    await okuNote.connect(admin).grantRole(MINTER, admin.address);
+    await okuNote.connect(admin).grantRole(MINTER, await okuBridge.getAddress());
+    await okuNote.connect(admin).grantRole(ALLOWANCE_MANAGER, admin.address);
 
     // Configure minter allowances
     const maxSupply = ethers.parseEther("1000000000");
-    await okuUSD.connect(admin).configureMinterAllowance(admin.address, maxSupply);
-    await okuUSD
+    await okuNote.connect(admin).configureMinterAllowance(admin.address, maxSupply);
+    await okuNote
       .connect(admin)
       .configureMinterAllowance(await okuBridge.getAddress(), maxSupply);
 
@@ -103,11 +103,11 @@ describe("OkuBridge E2E", function () {
       const netShares = shares - fee;
 
       // Mint OkuUSD to user1 (subtractive fee: user provides total shares, fee deducted)
-      await okuUSD.connect(admin).mint(user1.address, shares);
+      await okuNote.connect(admin).mint(user1.address, shares);
 
       // Approve bridge to pull tokens, then bridge
-      const tokenAmount = await okuUSD.sharesToTokens(shares);
-      await okuUSD.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
+      const tokenAmount = await okuNote.sharesToTokens(shares);
+      await okuNote.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
       await okuBridge.connect(user1).bridgeBurn(OPTIMISM_CHAIN_ID, addressToBytes32(user2.address), shares);
 
       // Create BridgeRequest for destination (netShares after fee deduction)
@@ -129,7 +129,7 @@ describe("OkuBridge E2E", function () {
       await okuBridge.bridgeMint(request, signature);
 
       // Verify net shares minted (fee already deducted on source)
-      const recipientShares = await okuUSD.sharesOf(user2.address);
+      const recipientShares = await okuNote.sharesOf(user2.address);
       expect(recipientShares).to.equal(netShares);
     });
 
@@ -205,7 +205,7 @@ describe("OkuBridge E2E", function () {
       }
 
       // Verify total shares minted
-      const totalShares = await okuUSD.sharesOf(user2.address);
+      const totalShares = await okuNote.sharesOf(user2.address);
       expect(totalShares).to.equal(shares * 10n);
     });
 
@@ -242,16 +242,16 @@ describe("OkuBridge E2E", function () {
       const expectedFee = (totalShares * fee) / 10000n;
 
       // Mint shares to user1 (subtractive: user provides totalShares, fee deducted from it)
-      await okuUSD.connect(admin).mint(user1.address, totalShares);
+      await okuNote.connect(admin).mint(user1.address, totalShares);
 
-      const feeRecipientBalanceBefore = await okuUSD.sharesOf(feeRecipient.address);
+      const feeRecipientBalanceBefore = await okuNote.sharesOf(feeRecipient.address);
 
       // Approve and bridge
-      const tokenAmount = await okuUSD.sharesToTokens(totalShares);
-      await okuUSD.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
+      const tokenAmount = await okuNote.sharesToTokens(totalShares);
+      await okuNote.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
       await okuBridge.connect(user1).bridgeBurn(ARBITRUM_CHAIN_ID, addressToBytes32(user2.address), totalShares);
 
-      const feeRecipientBalanceAfter = await okuUSD.sharesOf(feeRecipient.address);
+      const feeRecipientBalanceAfter = await okuNote.sharesOf(feeRecipient.address);
       expect(feeRecipientBalanceAfter - feeRecipientBalanceBefore).to.equal(expectedFee);
     });
 
@@ -262,16 +262,16 @@ describe("OkuBridge E2E", function () {
       await okuBridge.connect(admin).updateFee(0);
 
       // Mint shares to user1
-      await okuUSD.connect(admin).mint(user1.address, shares);
+      await okuNote.connect(admin).mint(user1.address, shares);
 
-      const feeRecipientBalanceBefore = await okuUSD.sharesOf(feeRecipient.address);
+      const feeRecipientBalanceBefore = await okuNote.sharesOf(feeRecipient.address);
 
       // Approve and bridge
-      const tokenAmount = await okuUSD.sharesToTokens(shares);
-      await okuUSD.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
+      const tokenAmount = await okuNote.sharesToTokens(shares);
+      await okuNote.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
       await okuBridge.connect(user1).bridgeBurn(ARBITRUM_CHAIN_ID, addressToBytes32(user2.address), shares);
 
-      const feeRecipientBalanceAfter = await okuUSD.sharesOf(feeRecipient.address);
+      const feeRecipientBalanceAfter = await okuNote.sharesOf(feeRecipient.address);
       expect(feeRecipientBalanceAfter).to.equal(feeRecipientBalanceBefore);
     });
   });
@@ -301,7 +301,7 @@ describe("OkuBridge E2E", function () {
         deadline: await futureDeadline(),
       };
 
-      const user1BalanceBefore = await okuUSD.sharesOf(user1.address);
+      const user1BalanceBefore = await okuNote.sharesOf(user1.address);
 
       // Advance time past the deadline so the mint window is closed
       await ethers.provider.send("evm_increaseTime", [3601]);
@@ -310,7 +310,7 @@ describe("OkuBridge E2E", function () {
       // Admin refunds (simulating destination failure)
       await okuBridge.connect(admin).refundFailedRequest(request, "0x");
 
-      const user1BalanceAfter = await okuUSD.sharesOf(user1.address);
+      const user1BalanceAfter = await okuNote.sharesOf(user1.address);
       expect(user1BalanceAfter - user1BalanceBefore).to.equal(shares);
     });
 
@@ -347,11 +347,11 @@ describe("OkuBridge E2E", function () {
       const shares = ethers.parseEther("100");
 
       // Mint to user1 (subtractive fee model)
-      await okuUSD.connect(admin).mint(user1.address, shares);
+      await okuNote.connect(admin).mint(user1.address, shares);
 
       // Approve and measure bridgeBurn gas
-      const tokenAmount = await okuUSD.sharesToTokens(shares);
-      await okuUSD.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
+      const tokenAmount = await okuNote.sharesToTokens(shares);
+      await okuNote.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
       const burnTx = await okuBridge
         .connect(user1)
         .bridgeBurn(ARBITRUM_CHAIN_ID, addressToBytes32(user2.address), shares);
@@ -390,20 +390,20 @@ describe("OkuBridge E2E", function () {
       const netShares = shares - fee;
 
       // Mint to user1 (subtractive fee model)
-      await okuUSD.connect(admin).mint(user1.address, shares);
+      await okuNote.connect(admin).mint(user1.address, shares);
 
       // Approve and bridge burn
-      const tokenAmount = await okuUSD.sharesToTokens(shares);
-      await okuUSD.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
+      const tokenAmount = await okuNote.sharesToTokens(shares);
+      await okuNote.connect(user1).approve(await okuBridge.getAddress(), tokenAmount);
       await okuBridge.connect(user1).bridgeBurn(OPTIMISM_CHAIN_ID, addressToBytes32(user2.address), shares);
 
       // Apply rebase (increase multiplier by 50%)
-      const REBASER = ethers.keccak256(ethers.toUtf8Bytes("REBASER"));
-      await okuUSD.connect(admin).grantRole(REBASER, admin.address);
+      const REBASER = ethers.keccak256(ethers.toUtf8Bytes("NOTE_REBASER"));
+      await okuNote.connect(admin).grantRole(REBASER, admin.address);
 
-      const oldMultiplier = await okuUSD.rewardMultiplier();
+      const oldMultiplier = await okuNote.rewardMultiplier();
       const newMultiplier = (oldMultiplier * 150n) / 100n;
-      await okuUSD.connect(admin).updateRewardMultiplier(newMultiplier);
+      await okuNote.connect(admin).updateRewardMultiplier(newMultiplier);
 
       // Mint on destination with netShares (fee already deducted on source)
       const chainId = (await ethers.provider.getNetwork()).chainId;
@@ -421,12 +421,12 @@ describe("OkuBridge E2E", function () {
       await okuBridge.bridgeMint(request, signature);
 
       // Verify net shares are preserved
-      const recipientShares = await okuUSD.sharesOf(user2.address);
+      const recipientShares = await okuNote.sharesOf(user2.address);
       expect(recipientShares).to.equal(netShares);
 
       // Verify token balance reflects new multiplier
-      const recipientTokens = await okuUSD.balanceOf(user2.address);
-      const expectedTokens = await okuUSD.sharesToTokens(netShares);
+      const recipientTokens = await okuNote.balanceOf(user2.address);
+      const expectedTokens = await okuNote.sharesToTokens(netShares);
       expect(recipientTokens).to.equal(expectedTokens);
     });
   });

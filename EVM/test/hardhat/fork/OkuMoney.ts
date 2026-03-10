@@ -3,10 +3,10 @@ import {
     LitePSM__factory,
     OkuBridgeRouter,
     OkuBridgeRouter__factory,
-    OkuNote,
-    OkuNote__factory,
-    OkuUSD,
-    OkuUSD__factory,
+    OkuMoney,
+    OkuMoney__factory,
+    OkuDollar,
+    OkuDollar__factory,
     RedemptionQueue,
     RedemptionQueue__factory,
     IERC20__factory
@@ -28,7 +28,7 @@ describe("OkuNote Scenarios", () => {
     let okuBridgeRouter: OkuBridgeRouter
     let psm: LitePSM
     let queue: RedemptionQueue
-    let okuNote: OkuNote
+    let okuMoney: OkuNote
     let okuUsd: OkuUSD
 
     let usdc: ReturnType<typeof IERC20__factory.connect>
@@ -36,9 +36,9 @@ describe("OkuNote Scenarios", () => {
     const MINTER = ethers.keccak256(ethers.toUtf8Bytes("MINTER"))
     const PSM = ethers.keccak256(ethers.toUtf8Bytes("PSM"))
     const ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("ALLOWANCE_MANAGER"))
-    const NOTE_REBASER = ethers.keccak256(ethers.toUtf8Bytes("NOTE_REBASER"))
-    const NOTE_PAUSER = ethers.keccak256(ethers.toUtf8Bytes("NOTE_PAUSER"))
-    const NOTE_UNPAUSER = ethers.keccak256(ethers.toUtf8Bytes("NOTE_UNPAUSER"))
+    const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
+    const OKUM_PAUSER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_PAUSER"))
+    const OKUM_UNPAUSER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_UNPAUSER"))
     const BLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("BLACKLISTER"))
     const UNBLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("UNBLACKLISTER"))
     const CAP_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("CAP_MANAGER"))
@@ -61,7 +61,7 @@ describe("OkuNote Scenarios", () => {
     async function getOkuNote(user: Signer, usdcAmount: bigint) {
         await fundWithUSDC(user, usdcAmount)
         await usdc.connect(user).approve(await psm.getAddress(), usdcAmount)
-        await psm.connect(user).mint_OkuNote(usdcAmount)
+        await psm.connect(user).mint_OkuM(usdcAmount)
     }
 
     before(async () => {
@@ -94,62 +94,62 @@ describe("OkuNote Scenarios", () => {
         const frankAddr = await Frank.getAddress()
         const MAX_SUPPLY = parseEther("1000000000")
 
-        okuNote = await upgrades.deployProxy(
-            new OkuNote__factory(Frank),
-            ["OkuNote", "OKUNOTE", frankAddr, MAX_SUPPLY],
+        okuMoney = await upgrades.deployProxy(
+            new OkuMoney__factory(Frank),
+            ["OkuMoney", "OkuM", frankAddr, MAX_SUPPLY],
             { kind: "uups" }
         ) as unknown as OkuNote
-        await okuNote.waitForDeployment()
+        await okuMoney.waitForDeployment()
 
         okuUsd = await upgrades.deployProxy(
-            new OkuUSD__factory(Frank),
-            [await okuNote.getAddress(), "OkuUSD", "OKUSD", frankAddr, parseEther("0.95")],
+            new OkuDollar__factory(Frank),
+            [await okuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr, parseEther("0.95")],
             { kind: "uups" }
         ) as unknown as OkuUSD
         await okuUsd.waitForDeployment()
 
         queue = await upgrades.deployProxy(
             new RedemptionQueue__factory(Frank),
-            [await okuNote.getAddress(), frankAddr],
+            [await okuMoney.getAddress(), frankAddr],
             { kind: "uups" }
         ) as unknown as RedemptionQueue
         await queue.waitForDeployment()
 
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            [await okuNote.getAddress(), await okuUsd.getAddress(), USDC_MAINNET, await queue.getAddress(), frankAddr],
+            [await okuMoney.getAddress(), await okuUsd.getAddress(), USDC_MAINNET, await queue.getAddress(), frankAddr],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()
 
         okuBridgeRouter = await upgrades.deployProxy(
             new OkuBridgeRouter__factory(Frank),
-            [await okuUsd.getAddress(), await okuNote.getAddress(), frankAddr, frankAddr],
+            [await okuUsd.getAddress(), await okuMoney.getAddress(), frankAddr, frankAddr],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as OkuBridgeRouter
         await okuBridgeRouter.waitForDeployment()
 
-        await okuNote.connect(Frank).grantRole(MINTER, await psm.getAddress())
+        await okuMoney.connect(Frank).grantRole(MINTER, await psm.getAddress())
 
         // Grant RBAC roles to Frank (admin) for testing
-        await okuNote.connect(Frank).grantRole(ALLOWANCE_MANAGER, frankAddr)
-        await okuNote.connect(Frank).grantRole(NOTE_REBASER, frankAddr)
-        await okuNote.connect(Frank).grantRole(NOTE_PAUSER, frankAddr)
-        await okuNote.connect(Frank).grantRole(NOTE_UNPAUSER, frankAddr)
-        await okuNote.connect(Frank).grantRole(BLACKLISTER, frankAddr)
-        await okuNote.connect(Frank).grantRole(UNBLACKLISTER, frankAddr)
-        await okuNote.connect(Frank).grantRole(CAP_MANAGER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(ALLOWANCE_MANAGER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(OKUM_REBASER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(OKUM_PAUSER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(OKUM_UNPAUSER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(BLACKLISTER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(UNBLACKLISTER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(CAP_MANAGER, frankAddr)
 
         // Grant PSM-specific roles to Frank
         await psm.connect(Frank).grantRole(BUFFER_WITHDRAWER, frankAddr)
         await psm.connect(Frank).grantRole(QUEUE_PROCESSOR, frankAddr)
 
-        await okuNote.connect(Frank).configureMinterAllowance(
+        await okuMoney.connect(Frank).configureMinterAllowance(
             await psm.getAddress(),
             parseEther("1000000000")
         )
         await queue.connect(Frank).grantRole(PSM, await psm.getAddress())
-        await okuNote.connect(Frank).grantRole(MINTER, await queue.getAddress())
+        await okuMoney.connect(Frank).grantRole(MINTER, await queue.getAddress())
     })
 
     describe("User-to-User Transfers", () => {
@@ -158,45 +158,45 @@ describe("OkuNote Scenarios", () => {
             const bobAddr = await Bob.getAddress()
             const depositAmount = parseUnits("10000", 6)
 
-            // Alice gets OkuNote via PSM
+            // Alice gets OkuMoney via PSM
             await getOkuNote(Alice, depositAmount)
-            const aliceInitialBalance = await okuNote.balanceOf(aliceAddr)
+            const aliceInitialBalance = await okuMoney.balanceOf(aliceAddr)
 
-            // Alice transfers 5,000 OkuNote to Bob (OkuNote is 18 decimals)
+            // Alice transfers 5,000 OkuMoney to Bob (OkuNote is 18 decimals)
             const transferAmount = parseEther("5000")
-            await okuNote.connect(Alice).transfer(bobAddr, transferAmount)
+            await okuMoney.connect(Alice).transfer(bobAddr, transferAmount)
 
-            const aliceAfterTransfer = await okuNote.balanceOf(aliceAddr)
-            const bobAfterTransfer = await okuNote.balanceOf(bobAddr)
+            const aliceAfterTransfer = await okuMoney.balanceOf(aliceAddr)
+            const bobAfterTransfer = await okuMoney.balanceOf(bobAddr)
 
             // Verify balances (allowing for small rounding)
             expect(aliceAfterTransfer).to.be.closeTo(aliceInitialBalance - transferAmount, parseEther("1"))
             expect(bobAfterTransfer).to.be.closeTo(transferAmount, parseEther("1"))
 
             // Record balances before notePrice update
-            const aliceBeforeUpdate = await okuNote.balanceOf(aliceAddr)
-            const bobBeforeUpdate = await okuNote.balanceOf(bobAddr)
+            const aliceBeforeUpdate = await okuMoney.balanceOf(aliceAddr)
+            const bobBeforeUpdate = await okuMoney.balanceOf(bobAddr)
 
             // Admin performs 10% notePrice increase (non-rebasing: balances do NOT change)
-            const priceBefore = await okuNote.notePrice()
+            const priceBefore = await okuMoney.okuMPrice()
             const newPrice = priceBefore * 110n / 100n
-            await okuNote.connect(Frank).updateNotePrice(newPrice)
+            await okuMoney.connect(Frank).updateOkuMPrice(newPrice)
 
             // Verify notePrice increased
-            expect(await okuNote.notePrice()).to.equal(newPrice)
+            expect(await okuMoney.okuMPrice()).to.equal(newPrice)
 
             // Balances should be UNCHANGED (non-rebasing)
-            const aliceAfterUpdate = await okuNote.balanceOf(aliceAddr)
-            const bobAfterUpdate = await okuNote.balanceOf(bobAddr)
+            const aliceAfterUpdate = await okuMoney.balanceOf(aliceAddr)
+            const bobAfterUpdate = await okuMoney.balanceOf(bobAddr)
 
             expect(aliceAfterUpdate).to.equal(aliceBeforeUpdate)
             expect(bobAfterUpdate).to.equal(bobBeforeUpdate)
 
             // Bob transfers back to Alice
-            await okuNote.connect(Bob).transfer(aliceAddr, bobAfterUpdate)
+            await okuMoney.connect(Bob).transfer(aliceAddr, bobAfterUpdate)
 
-            const aliceFinal = await okuNote.balanceOf(aliceAddr)
-            const bobFinal = await okuNote.balanceOf(bobAddr)
+            const aliceFinal = await okuMoney.balanceOf(aliceAddr)
+            const bobFinal = await okuMoney.balanceOf(bobAddr)
 
             // Alice should have her original balance back (no rebase growth)
             expect(aliceFinal).to.be.closeTo(aliceInitialBalance, parseEther("1"))
@@ -211,14 +211,14 @@ describe("OkuNote Scenarios", () => {
             const PRECISION = parseEther("1")
 
             // Get current notePrice (may be elevated from earlier tests)
-            const currentPrice = await okuNote.notePrice()
+            const currentPrice = await okuMoney.okuMPrice()
 
-            // Set PSM minter allowance to limited amount (50,000 OkuNote in 18 decimals)
+            // Set PSM minter allowance to limited amount (50,000 OkuMoney in 18 decimals)
             const limitedAllowance = parseEther("50000")
-            await okuNote.connect(Frank).configureMinterAllowance(psmAddr, limitedAllowance)
+            await okuMoney.connect(Frank).configureMinterAllowance(psmAddr, limitedAllowance)
 
             // Verify allowance was set
-            expect(await okuNote.minterAllowance(psmAddr)).to.equal(limitedAllowance)
+            expect(await okuMoney.minterAllowance(psmAddr)).to.equal(limitedAllowance)
 
             // Alice swaps 40,000 USDC — price-aware: noteAmount = usdcValue18 × PRECISION / notePrice
             const firstSwap = parseUnits("40000", 6) // USDC amount
@@ -226,10 +226,10 @@ describe("OkuNote Scenarios", () => {
             const expectedFirstMint = (firstSwap18 * PRECISION) / currentPrice
             await fundWithUSDC(Alice, firstSwap)
             await usdc.connect(Alice).approve(psmAddr, firstSwap)
-            await psm.connect(Alice).mint_OkuNote(firstSwap)
+            await psm.connect(Alice).mint_OkuM(firstSwap)
 
-            // Verify allowance decreased by price-adjusted OkuNote amount minted
-            const remainingAllowance = await okuNote.minterAllowance(psmAddr)
+            // Verify allowance decreased by price-adjusted OkuMoney amount minted
+            const remainingAllowance = await okuMoney.minterAllowance(psmAddr)
             const expectedRemaining = limitedAllowance - expectedFirstMint
             expect(remainingAllowance).to.be.closeTo(expectedRemaining, parseEther("1"))
 
@@ -237,17 +237,17 @@ describe("OkuNote Scenarios", () => {
             const secondSwap = parseUnits("20000", 6) // USDC amount
             await fundWithUSDC(Alice, secondSwap)
             await usdc.connect(Alice).approve(psmAddr, secondSwap)
-            await expect(psm.connect(Alice).mint_OkuNote(secondSwap)).to.be.revertedWith("Exceeds minter allowance")
+            await expect(psm.connect(Alice).mint_OkuM(secondSwap)).to.be.revertedWith("Exceeds minter allowance")
 
             // Admin resets allowance
             const newAllowance = parseEther("100000")
-            await okuNote.connect(Frank).configureMinterAllowance(psmAddr, newAllowance)
+            await okuMoney.connect(Frank).configureMinterAllowance(psmAddr, newAllowance)
 
             // Now swap should succeed
-            await psm.connect(Alice).mint_OkuNote(secondSwap)
+            await psm.connect(Alice).mint_OkuM(secondSwap)
 
-            // Verify Alice received OkuNote from both swaps
-            const aliceBalance = await okuNote.balanceOf(aliceAddr)
+            // Verify Alice received OkuMoney from both swaps
+            const aliceBalance = await okuMoney.balanceOf(aliceAddr)
             const secondSwap18 = secondSwap * 10n ** 12n
             const expectedSecondMint = (secondSwap18 * PRECISION) / currentPrice
             // Alice may have balance from earlier tests, just verify she got at least both mints
@@ -260,19 +260,19 @@ describe("OkuNote Scenarios", () => {
             const frankAddr = await Frank.getAddress()
             const aliceAddr = await Alice.getAddress()
 
-            // Deploy fresh contracts with LOW maxSupply (100,000 OkuNote in 18 decimals)
+            // Deploy fresh contracts with LOW maxSupply (100,000 OkuMoney in 18 decimals)
             const lowMaxSupply = parseEther("100000")
 
             const freshOkuNote = await upgrades.deployProxy(
-                new OkuNote__factory(Frank),
+                new OkuMoney__factory(Frank),
                 ["OkuNote-Low", "OKUNOTE-L", frankAddr, lowMaxSupply],
                 { kind: "uups" }
             ) as unknown as OkuNote
             await freshOkuNote.waitForDeployment()
 
             const freshOkuUsd = await upgrades.deployProxy(
-                new OkuUSD__factory(Frank),
-                [await freshOkuNote.getAddress(), "OkuUSD", "OKUSD", frankAddr, parseEther("0.95")],
+                new OkuDollar__factory(Frank),
+                [await freshOkuNote.getAddress(), "OkuDollar", "usdOku", frankAddr, parseEther("0.95")],
                 { kind: "uups" }
             ) as unknown as OkuUSD
             await freshOkuUsd.waitForDeployment()
@@ -308,24 +308,24 @@ describe("OkuNote Scenarios", () => {
             const firstSwap = parseUnits("80000", 6) // USDC amount
             await fundWithUSDC(Alice, firstSwap)
             await usdc.connect(Alice).approve(await freshPSM.getAddress(), firstSwap)
-            await freshPSM.connect(Alice).mint_OkuNote(firstSwap)
+            await freshPSM.connect(Alice).mint_OkuM(firstSwap)
 
             expect(await freshOkuNote.balanceOf(aliceAddr)).to.be.closeTo(parseEther("80000"), parseEther("1"))
 
-            // Alice tries to swap 30,000 more USDC (should fail - would exceed 100k OkuNote cap)
+            // Alice tries to swap 30,000 more USDC (should fail - would exceed 100k OkuMoney cap)
             const secondSwap = parseUnits("30000", 6) // USDC amount
             await fundWithUSDC(Alice, secondSwap)
             await usdc.connect(Alice).approve(await freshPSM.getAddress(), secondSwap)
-            await expect(freshPSM.connect(Alice).mint_OkuNote(secondSwap)).to.be.revertedWith("Exceeds supply cap")
+            await expect(freshPSM.connect(Alice).mint_OkuM(secondSwap)).to.be.revertedWith("Exceeds supply cap")
 
             // Admin increases maxSupply
             const newMaxSupply = parseEther("200000")
             await freshOkuNote.connect(Frank).setMaxSupply(newMaxSupply)
 
             // Now swap should succeed
-            await freshPSM.connect(Alice).mint_OkuNote(secondSwap)
+            await freshPSM.connect(Alice).mint_OkuM(secondSwap)
 
-            // Alice should have ~110,000 OkuNote (in 18 decimals)
+            // Alice should have ~110,000 OkuMoney (in 18 decimals)
             const aliceBalance = await freshOkuNote.balanceOf(aliceAddr)
             expect(aliceBalance).to.be.closeTo(parseEther("110000"), parseEther("1"))
         })
@@ -334,7 +334,7 @@ describe("OkuNote Scenarios", () => {
     describe("Access Control / Safety", () => {
         before(async () => {
             // Reset minter allowance for PSM (may have been consumed by earlier tests)
-            await okuNote.connect(Frank).configureMinterAllowance(
+            await okuMoney.connect(Frank).configureMinterAllowance(
                 await psm.getAddress(),
                 parseEther("1000000000")
             )
@@ -345,43 +345,43 @@ describe("OkuNote Scenarios", () => {
             const bobAddr = await Bob.getAddress()
             const depositAmount = parseUnits("10000", 6)
 
-            // Alice gets OkuNote via PSM
+            // Alice gets OkuMoney via PSM
             await getOkuNote(Alice, depositAmount)
-            const aliceBalance = await okuNote.balanceOf(aliceAddr)
+            const aliceBalance = await okuMoney.balanceOf(aliceAddr)
             expect(aliceBalance).to.be.gt(0)
 
             // Transfer works before pause
             const transferAmount = parseEther("1000")
-            await okuNote.connect(Alice).transfer(bobAddr, transferAmount)
-            expect(await okuNote.balanceOf(bobAddr)).to.be.closeTo(transferAmount, parseEther("1"))
+            await okuMoney.connect(Alice).transfer(bobAddr, transferAmount)
+            expect(await okuMoney.balanceOf(bobAddr)).to.be.closeTo(transferAmount, parseEther("1"))
 
             // Frank (admin) pauses the contract
-            await okuNote.connect(Frank).pause()
+            await okuMoney.connect(Frank).pause()
 
             // Transfer should fail when paused
             await expect(
-                okuNote.connect(Alice).transfer(bobAddr, transferAmount)
-            ).to.be.revertedWithCustomError(okuNote, "EnforcedPause")
+                okuMoney.connect(Alice).transfer(bobAddr, transferAmount)
+            ).to.be.revertedWithCustomError(okuMoney, "EnforcedPause")
 
             // TransferFrom should also fail when paused
-            await okuNote.connect(Alice).approve(bobAddr, transferAmount)
+            await okuMoney.connect(Alice).approve(bobAddr, transferAmount)
             await expect(
-                okuNote.connect(Bob).transferFrom(aliceAddr, bobAddr, transferAmount)
-            ).to.be.revertedWithCustomError(okuNote, "EnforcedPause")
+                okuMoney.connect(Bob).transferFrom(aliceAddr, bobAddr, transferAmount)
+            ).to.be.revertedWithCustomError(okuMoney, "EnforcedPause")
 
             // Minting via PSM should fail when paused
             await fundWithUSDC(Alice, depositAmount)
             await usdc.connect(Alice).approve(await psm.getAddress(), depositAmount)
             await expect(
-                psm.connect(Alice).mint_OkuNote(depositAmount)
-            ).to.be.revertedWithCustomError(okuNote, "EnforcedPause")
+                psm.connect(Alice).mint_OkuM(depositAmount)
+            ).to.be.revertedWithCustomError(okuMoney, "EnforcedPause")
 
             // Frank unpause
-            await okuNote.connect(Frank).unpause()
+            await okuMoney.connect(Frank).unpause()
 
             // Transfer works again after unpause
-            await okuNote.connect(Alice).transfer(bobAddr, transferAmount)
-            expect(await okuNote.balanceOf(bobAddr)).to.be.closeTo(transferAmount * 2n, parseEther("1"))
+            await okuMoney.connect(Alice).transfer(bobAddr, transferAmount)
+            expect(await okuMoney.balanceOf(bobAddr)).to.be.closeTo(transferAmount * 2n, parseEther("1"))
         })
 
         it("Blacklisted addresses cannot send or receive", async () => {
@@ -398,37 +398,37 @@ describe("OkuNote Scenarios", () => {
             const transferAmount = parseEther("1000")
 
             // Normal transfer works
-            await okuNote.connect(Alice).transfer(bobAddr, transferAmount)
+            await okuMoney.connect(Alice).transfer(bobAddr, transferAmount)
 
             // Frank blacklists Bob
-            await okuNote.connect(Frank).blacklist(bobAddr)
-            expect(await okuNote.isBlacklisted(bobAddr)).to.equal(true)
+            await okuMoney.connect(Frank).blacklist(bobAddr)
+            expect(await okuMoney.isBlacklisted(bobAddr)).to.equal(true)
 
             // Bob cannot SEND (blacklisted sender)
             await expect(
-                okuNote.connect(Bob).transfer(charlieAddr, transferAmount)
+                okuMoney.connect(Bob).transfer(charlieAddr, transferAmount)
             ).to.be.revertedWith("Sender blacklisted")
 
             // Bob cannot RECEIVE (blacklisted recipient)
             await expect(
-                okuNote.connect(Alice).transfer(bobAddr, transferAmount)
+                okuMoney.connect(Alice).transfer(bobAddr, transferAmount)
             ).to.be.revertedWith("Recipient blacklisted")
 
             // Bob cannot receive via transferFrom either
-            await okuNote.connect(Charlie).approve(aliceAddr, transferAmount)
+            await okuMoney.connect(Charlie).approve(aliceAddr, transferAmount)
             await expect(
-                okuNote.connect(Alice).transferFrom(charlieAddr, bobAddr, transferAmount)
+                okuMoney.connect(Alice).transferFrom(charlieAddr, bobAddr, transferAmount)
             ).to.be.revertedWith("Recipient blacklisted")
 
             // Frank unblacklists Bob
-            await okuNote.connect(Frank).unblacklist(bobAddr)
-            expect(await okuNote.isBlacklisted(bobAddr)).to.equal(false)
+            await okuMoney.connect(Frank).unblacklist(bobAddr)
+            expect(await okuMoney.isBlacklisted(bobAddr)).to.equal(false)
 
             // Bob can send again
-            await okuNote.connect(Bob).transfer(charlieAddr, transferAmount)
+            await okuMoney.connect(Bob).transfer(charlieAddr, transferAmount)
 
             // Bob can receive again
-            await okuNote.connect(Alice).transfer(bobAddr, transferAmount)
+            await okuMoney.connect(Alice).transfer(bobAddr, transferAmount)
         })
 
         it("Blacklist works while paused (pause-to-blacklist protocol)", async () => {
@@ -438,39 +438,39 @@ describe("OkuNote Scenarios", () => {
 
             // Setup: Alice gets OkuNote
             await getOkuNote(Alice, depositAmount)
-            const aliceBalance = await okuNote.balanceOf(aliceAddr)
+            const aliceBalance = await okuMoney.balanceOf(aliceAddr)
 
             // STEP 1: Pause the contract (freeze all transfers)
-            await okuNote.connect(Frank).pause()
+            await okuMoney.connect(Frank).pause()
 
             // Verify transfers are blocked
             await expect(
-                okuNote.connect(Alice).transfer(bobAddr, parseEther("100"))
-            ).to.be.revertedWithCustomError(okuNote, "EnforcedPause")
+                okuMoney.connect(Alice).transfer(bobAddr, parseEther("100"))
+            ).to.be.revertedWithCustomError(okuMoney, "EnforcedPause")
 
             // STEP 2: Blacklist Alice while paused (CRITICAL - must work)
-            await okuNote.connect(Frank).blacklist(aliceAddr)
-            expect(await okuNote.isBlacklisted(aliceAddr)).to.equal(true)
+            await okuMoney.connect(Frank).blacklist(aliceAddr)
+            expect(await okuMoney.isBlacklisted(aliceAddr)).to.equal(true)
 
             // STEP 3: Unpause the contract
-            await okuNote.connect(Frank).unpause()
+            await okuMoney.connect(Frank).unpause()
 
             // Alice still cannot send (blacklisted)
             await expect(
-                okuNote.connect(Alice).transfer(bobAddr, parseEther("100"))
+                okuMoney.connect(Alice).transfer(bobAddr, parseEther("100"))
             ).to.be.revertedWith("Sender blacklisted")
 
             // Alice still cannot receive
             await getOkuNote(Bob, depositAmount)
             await expect(
-                okuNote.connect(Bob).transfer(aliceAddr, parseEther("100"))
+                okuMoney.connect(Bob).transfer(aliceAddr, parseEther("100"))
             ).to.be.revertedWith("Recipient blacklisted")
 
             // Verify Alice's balance is frozen (still has funds, just can't move them)
-            expect(await okuNote.balanceOf(aliceAddr)).to.be.closeTo(aliceBalance, parseEther("1"))
+            expect(await okuMoney.balanceOf(aliceAddr)).to.be.closeTo(aliceBalance, parseEther("1"))
 
             // Cleanup: unblacklist Alice for other tests
-            await okuNote.connect(Frank).unblacklist(aliceAddr)
+            await okuMoney.connect(Frank).unblacklist(aliceAddr)
         })
     })
 })

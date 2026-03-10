@@ -3,10 +3,10 @@ import {
     LitePSM__factory,
     OkuBridgeRouter,
     OkuBridgeRouter__factory,
-    OkuNote,
-    OkuNote__factory,
-    OkuUSD,
-    OkuUSD__factory,
+    OkuMoney,
+    OkuMoney__factory,
+    OkuDollar,
+    OkuDollar__factory,
     RedemptionQueue,
     RedemptionQueue__factory,
     IERC20__factory
@@ -29,7 +29,7 @@ describe("LitePSM Scenarios", () => {
     let okuBridgeRouter: OkuBridgeRouter
     let psm: LitePSM
     let queue: RedemptionQueue
-    let okuNote: OkuNote
+    let okuMoney: OkuNote
     let okuUsd: OkuUSD
 
     let usdc: ReturnType<typeof IERC20__factory.connect>
@@ -37,11 +37,11 @@ describe("LitePSM Scenarios", () => {
     const MINTER = ethers.keccak256(ethers.toUtf8Bytes("MINTER"))
     const PSM = ethers.keccak256(ethers.toUtf8Bytes("PSM"))
     const ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("ALLOWANCE_MANAGER"))
-    const NOTE_REBASER = ethers.keccak256(ethers.toUtf8Bytes("NOTE_REBASER"))
+    const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
     const BUFFER_WITHDRAWER = ethers.keccak256(ethers.toUtf8Bytes("BUFFER_WITHDRAWER"))
     const QUEUE_PROCESSOR = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PROCESSOR"))
     const DEPOSIT_AMOUNT = parseUnits("10000", 6) // USDC amount (6 decimals)
-    const DECIMAL_MULTIPLIER = 10n ** 12n // Convert USDC (6 decimals) to OkuNote (18 decimals)
+    const DECIMAL_MULTIPLIER = 10n ** 12n // Convert USDC (6 decimals) to OkuMoney (18 decimals)
 
     // Helper to fund a user with USDC from whale
     async function fundWithUSDC(user: Signer, amount: bigint) {
@@ -121,55 +121,55 @@ describe("LitePSM Scenarios", () => {
         const frankAddr = await Frank.getAddress()
         const MAX_SUPPLY = parseEther("1000000000")
 
-        okuNote = await upgrades.deployProxy(
-            new OkuNote__factory(Frank),
-            ["OkuNote", "OKUNOTE", frankAddr, MAX_SUPPLY],
+        okuMoney = await upgrades.deployProxy(
+            new OkuMoney__factory(Frank),
+            ["OkuMoney", "OkuM", frankAddr, MAX_SUPPLY],
             { kind: "uups" }
         ) as unknown as OkuNote
-        await okuNote.waitForDeployment()
+        await okuMoney.waitForDeployment()
 
         okuUsd = await upgrades.deployProxy(
-            new OkuUSD__factory(Frank),
-            [await okuNote.getAddress(), "OkuUSD", "OKUSD", frankAddr, parseEther("0.95")],
+            new OkuDollar__factory(Frank),
+            [await okuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr, parseEther("0.95")],
             { kind: "uups" }
         ) as unknown as OkuUSD
         await okuUsd.waitForDeployment()
 
         queue = await upgrades.deployProxy(
             new RedemptionQueue__factory(Frank),
-            [await okuNote.getAddress(), frankAddr],
+            [await okuMoney.getAddress(), frankAddr],
             { kind: "uups" }
         ) as unknown as RedemptionQueue
         await queue.waitForDeployment()
 
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            [await okuNote.getAddress(), await okuUsd.getAddress(), USDC_MAINNET, await queue.getAddress(), frankAddr],
+            [await okuMoney.getAddress(), await okuUsd.getAddress(), USDC_MAINNET, await queue.getAddress(), frankAddr],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()
 
         okuBridgeRouter = await upgrades.deployProxy(
             new OkuBridgeRouter__factory(Frank),
-            [await okuUsd.getAddress(), await okuNote.getAddress(), frankAddr, frankAddr],
+            [await okuUsd.getAddress(), await okuMoney.getAddress(), frankAddr, frankAddr],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as OkuBridgeRouter
         await okuBridgeRouter.waitForDeployment()
 
-        await okuNote.connect(Frank).grantRole(MINTER, await psm.getAddress())
+        await okuMoney.connect(Frank).grantRole(MINTER, await psm.getAddress())
 
         // Grant RBAC roles to Frank for testing
-        await okuNote.connect(Frank).grantRole(ALLOWANCE_MANAGER, frankAddr)
-        await okuNote.connect(Frank).grantRole(NOTE_REBASER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(ALLOWANCE_MANAGER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(OKUM_REBASER, frankAddr)
         await psm.connect(Frank).grantRole(BUFFER_WITHDRAWER, frankAddr)
         await psm.connect(Frank).grantRole(QUEUE_PROCESSOR, frankAddr)
 
-        await okuNote.connect(Frank).configureMinterAllowance(
+        await okuMoney.connect(Frank).configureMinterAllowance(
             await psm.getAddress(),
             parseEther("1000000000")
         )
         await queue.connect(Frank).grantRole(PSM, await psm.getAddress())
-        await okuNote.connect(Frank).grantRole(MINTER, await queue.getAddress())
+        await okuMoney.connect(Frank).grantRole(MINTER, await queue.getAddress())
     })
 
     describe("Instant Redemption", () => {
@@ -184,31 +184,31 @@ describe("LitePSM Scenarios", () => {
 
             await usdc.connect(Alice).approve(psmAddr, DEPOSIT_AMOUNT)
             await usdc.connect(Bob).approve(psmAddr, DEPOSIT_AMOUNT)
-            await psm.connect(Alice).mint_OkuNote(DEPOSIT_AMOUNT)
-            await psm.connect(Bob).mint_OkuNote(DEPOSIT_AMOUNT)
+            await psm.connect(Alice).mint_OkuM(DEPOSIT_AMOUNT)
+            await psm.connect(Bob).mint_OkuM(DEPOSIT_AMOUNT)
 
             // Verify PSM has buffer
             expect(await usdc.balanceOf(psmAddr)).to.equal(DEPOSIT_AMOUNT * 2n)
 
             // Alice redeems half - should be instant
-            const aliceOkuUSD = await okuNote.balanceOf(aliceAddr)
+            const aliceOkuUSD = await okuMoney.balanceOf(aliceAddr)
             const aliceRedeemAmount = aliceOkuUSD / 2n
             const aliceUsdcBefore = await usdc.balanceOf(aliceAddr)
 
-            await okuNote.connect(Alice).approve(psmAddr, aliceRedeemAmount)
-            await psm.connect(Alice).redeem_OkuNote(aliceRedeemAmount)
+            await okuMoney.connect(Alice).approve(psmAddr, aliceRedeemAmount)
+            await psm.connect(Alice).redeem_OkuM(aliceRedeemAmount)
 
             const expectedAliceUsdc = aliceRedeemAmount / BigInt(1e12)
             expect((await usdc.balanceOf(aliceAddr)) - aliceUsdcBefore).to.be.closeTo(expectedAliceUsdc, parseUnits("1", 6))
             expect(await queue.queueLength()).to.equal(0)
 
             // Bob redeems half - should also be instant
-            const bobOkuUSD = await okuNote.balanceOf(bobAddr)
+            const bobOkuUSD = await okuMoney.balanceOf(bobAddr)
             const bobRedeemAmount = bobOkuUSD / 2n
             const bobUsdcBefore = await usdc.balanceOf(bobAddr)
 
-            await okuNote.connect(Bob).approve(psmAddr, bobRedeemAmount)
-            await psm.connect(Bob).redeem_OkuNote(bobRedeemAmount)
+            await okuMoney.connect(Bob).approve(psmAddr, bobRedeemAmount)
+            await psm.connect(Bob).redeem_OkuM(bobRedeemAmount)
 
             const expectedBobUsdc = bobRedeemAmount / BigInt(1e12)
             expect((await usdc.balanceOf(bobAddr)) - bobUsdcBefore).to.be.closeTo(expectedBobUsdc, parseUnits("1", 6))
@@ -242,33 +242,33 @@ describe("LitePSM Scenarios", () => {
             await usdc.connect(Charlie).approve(psmAddr, freshAmount)
             await usdc.connect(Dave).approve(psmAddr, freshAmount)
 
-            await psm.connect(Alice).mint_OkuNote(freshAmount)
-            await psm.connect(Bob).mint_OkuNote(freshAmount)
-            await psm.connect(Charlie).mint_OkuNote(freshAmount)
-            await psm.connect(Dave).mint_OkuNote(freshAmount)
+            await psm.connect(Alice).mint_OkuM(freshAmount)
+            await psm.connect(Bob).mint_OkuM(freshAmount)
+            await psm.connect(Charlie).mint_OkuM(freshAmount)
+            await psm.connect(Dave).mint_OkuM(freshAmount)
 
             // Drain buffer completely
             await drainPSM()
             expect(await usdc.balanceOf(psmAddr)).to.equal(0)
 
-            // Each user queues 5,000 OkuUSD (half their balance) - use 18 decimals for OkuUSD
+            // Each user queues 5,000 OkuDollar (half their balance) - use 18 decimals for OkuUSD
             const redeemAmount = parseEther("5000")
 
-            await okuNote.connect(Alice).approve(psmAddr, redeemAmount)
-            await okuNote.connect(Alice).approve(queueAddr, redeemAmount)
-            await psm.connect(Alice).redeem_OkuNote(redeemAmount)
+            await okuMoney.connect(Alice).approve(psmAddr, redeemAmount)
+            await okuMoney.connect(Alice).approve(queueAddr, redeemAmount)
+            await psm.connect(Alice).redeem_OkuM(redeemAmount)
 
-            await okuNote.connect(Bob).approve(psmAddr, redeemAmount)
-            await okuNote.connect(Bob).approve(queueAddr, redeemAmount)
-            await psm.connect(Bob).redeem_OkuNote(redeemAmount)
+            await okuMoney.connect(Bob).approve(psmAddr, redeemAmount)
+            await okuMoney.connect(Bob).approve(queueAddr, redeemAmount)
+            await psm.connect(Bob).redeem_OkuM(redeemAmount)
 
-            await okuNote.connect(Charlie).approve(psmAddr, redeemAmount)
-            await okuNote.connect(Charlie).approve(queueAddr, redeemAmount)
-            await psm.connect(Charlie).redeem_OkuNote(redeemAmount)
+            await okuMoney.connect(Charlie).approve(psmAddr, redeemAmount)
+            await okuMoney.connect(Charlie).approve(queueAddr, redeemAmount)
+            await psm.connect(Charlie).redeem_OkuM(redeemAmount)
 
-            await okuNote.connect(Dave).approve(psmAddr, redeemAmount)
-            await okuNote.connect(Dave).approve(queueAddr, redeemAmount)
-            await psm.connect(Dave).redeem_OkuNote(redeemAmount)
+            await okuMoney.connect(Dave).approve(psmAddr, redeemAmount)
+            await okuMoney.connect(Dave).approve(queueAddr, redeemAmount)
+            await psm.connect(Dave).redeem_OkuM(redeemAmount)
 
             // All 4 should be queued (5000 each = 20000 total)
             expect(await queue.queueLength()).to.equal(4)
@@ -330,10 +330,10 @@ describe("LitePSM Scenarios", () => {
             await usdc.connect(Charlie).approve(psmAddr, depositAmount)
             await usdc.connect(Dave).approve(psmAddr, depositAmount)
 
-            await psm.connect(Alice).mint_OkuNote(depositAmount)
-            await psm.connect(Bob).mint_OkuNote(depositAmount)
-            await psm.connect(Charlie).mint_OkuNote(depositAmount)
-            await psm.connect(Dave).mint_OkuNote(depositAmount)
+            await psm.connect(Alice).mint_OkuM(depositAmount)
+            await psm.connect(Bob).mint_OkuM(depositAmount)
+            await psm.connect(Charlie).mint_OkuM(depositAmount)
+            await psm.connect(Dave).mint_OkuM(depositAmount)
 
             // PSM has 20,000 USDC - withdraw to leave only 10,000
             const psmBuffer = await usdc.balanceOf(psmAddr)
@@ -350,35 +350,35 @@ describe("LitePSM Scenarios", () => {
             const charlieUsdcBefore = await usdc.balanceOf(charlieAddr)
             const daveUsdcBefore = await usdc.balanceOf(daveAddr)
 
-            // Calculate OkuUSD amount to redeem (deposited 5000 USDC, got 5000 OkuUSD in 18 decimals)
+            // Calculate OkuDollar amount to redeem (deposited 5000 USDC, got 5000 OkuDollar in 18 decimals)
             const redeemOkuUSD = parseEther("5000")
 
-            // Alice redeems 5,000 OkuUSD - INSTANT (buffer: 10,000 -> 5,000)
-            await okuNote.connect(Alice).approve(psmAddr, redeemOkuUSD)
-            await psm.connect(Alice).redeem_OkuNote(redeemOkuUSD)
+            // Alice redeems 5,000 OkuDollar - INSTANT (buffer: 10,000 -> 5,000)
+            await okuMoney.connect(Alice).approve(psmAddr, redeemOkuUSD)
+            await psm.connect(Alice).redeem_OkuM(redeemOkuUSD)
 
             expect(await queue.queueLength()).to.equal(0)
             expect(await usdc.balanceOf(aliceAddr)).to.be.gt(aliceUsdcBefore)
 
-            // Bob redeems 5,000 OkuUSD - INSTANT (buffer: 5,000 -> 0)
-            await okuNote.connect(Bob).approve(psmAddr, redeemOkuUSD)
-            await psm.connect(Bob).redeem_OkuNote(redeemOkuUSD)
+            // Bob redeems 5,000 OkuDollar - INSTANT (buffer: 5,000 -> 0)
+            await okuMoney.connect(Bob).approve(psmAddr, redeemOkuUSD)
+            await psm.connect(Bob).redeem_OkuM(redeemOkuUSD)
 
             expect(await queue.queueLength()).to.equal(0)
             expect(await usdc.balanceOf(bobAddr)).to.be.gt(bobUsdcBefore)
 
-            // Charlie redeems 5,000 OkuUSD - QUEUED (buffer: 0)
-            await okuNote.connect(Charlie).approve(psmAddr, redeemOkuUSD)
-            await okuNote.connect(Charlie).approve(queueAddr, redeemOkuUSD)
-            await psm.connect(Charlie).redeem_OkuNote(redeemOkuUSD)
+            // Charlie redeems 5,000 OkuDollar - QUEUED (buffer: 0)
+            await okuMoney.connect(Charlie).approve(psmAddr, redeemOkuUSD)
+            await okuMoney.connect(Charlie).approve(queueAddr, redeemOkuUSD)
+            await psm.connect(Charlie).redeem_OkuM(redeemOkuUSD)
 
             expect(await queue.queueLength()).to.equal(1)
             expect(await usdc.balanceOf(charlieAddr)).to.equal(charlieUsdcBefore)
 
-            // Dave redeems 5,000 OkuUSD - QUEUED
-            await okuNote.connect(Dave).approve(psmAddr, redeemOkuUSD)
-            await okuNote.connect(Dave).approve(queueAddr, redeemOkuUSD)
-            await psm.connect(Dave).redeem_OkuNote(redeemOkuUSD)
+            // Dave redeems 5,000 OkuDollar - QUEUED
+            await okuMoney.connect(Dave).approve(psmAddr, redeemOkuUSD)
+            await okuMoney.connect(Dave).approve(queueAddr, redeemOkuUSD)
+            await psm.connect(Dave).redeem_OkuM(redeemOkuUSD)
 
             expect(await queue.queueLength()).to.equal(2)
             expect(await usdc.balanceOf(daveAddr)).to.equal(daveUsdcBefore)
@@ -409,31 +409,31 @@ describe("LitePSM Scenarios", () => {
             // Deposit
             await usdc.connect(Alice).approve(psmAddr, depositAmount)
             await usdc.connect(Bob).approve(psmAddr, depositAmount)
-            await psm.connect(Alice).mint_OkuNote(depositAmount)
-            await psm.connect(Bob).mint_OkuNote(depositAmount)
+            await psm.connect(Alice).mint_OkuM(depositAmount)
+            await psm.connect(Bob).mint_OkuM(depositAmount)
 
             // Drain buffer
             await drainPSM()
 
-            // Record OkuUSD balances (what they're queuing)
-            const aliceOkuUSD = await okuNote.balanceOf(aliceAddr)
-            const bobOkuUSD = await okuNote.balanceOf(bobAddr)
+            // Record OkuDollar balances (what they're queuing)
+            const aliceOkuUSD = await okuMoney.balanceOf(aliceAddr)
+            const bobOkuUSD = await okuMoney.balanceOf(bobAddr)
 
             // Queue full balances
-            await okuNote.connect(Alice).approve(psmAddr, aliceOkuUSD)
-            await okuNote.connect(Alice).approve(queueAddr, aliceOkuUSD)
-            await psm.connect(Alice).redeem_OkuNote(aliceOkuUSD)
+            await okuMoney.connect(Alice).approve(psmAddr, aliceOkuUSD)
+            await okuMoney.connect(Alice).approve(queueAddr, aliceOkuUSD)
+            await psm.connect(Alice).redeem_OkuM(aliceOkuUSD)
 
-            await okuNote.connect(Bob).approve(psmAddr, bobOkuUSD)
-            await okuNote.connect(Bob).approve(queueAddr, bobOkuUSD)
-            await psm.connect(Bob).redeem_OkuNote(bobOkuUSD)
+            await okuMoney.connect(Bob).approve(psmAddr, bobOkuUSD)
+            await okuMoney.connect(Bob).approve(queueAddr, bobOkuUSD)
+            await psm.connect(Bob).redeem_OkuM(bobOkuUSD)
 
             expect(await queue.queueLength()).to.equal(2)
 
             // NotePrice increase: 10% while users are in queue
-            const priceBefore = await okuNote.notePrice()
+            const priceBefore = await okuMoney.okuMPrice()
             const newPrice = priceBefore * 110n / 100n
-            await okuNote.connect(Frank).updateNotePrice(newPrice)
+            await okuMoney.connect(Frank).updateOkuMPrice(newPrice)
 
             // Record USDC balances before processing
             const aliceUsdcBefore = await usdc.balanceOf(aliceAddr)
@@ -449,7 +449,7 @@ describe("LitePSM Scenarios", () => {
             const aliceReceived = (await usdc.balanceOf(aliceAddr)) - aliceUsdcBefore
             const bobReceived = (await usdc.balanceOf(bobAddr)) - bobUsdcBefore
 
-            // Convert queued OkuUSD amounts to USDC amounts for comparison
+            // Convert queued OkuDollar amounts to USDC amounts for comparison
             const aliceQueuedUSDC = aliceOkuUSD / DECIMAL_MULTIPLIER
             const bobQueuedUSDC = bobOkuUSD / DECIMAL_MULTIPLIER
 

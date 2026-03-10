@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {IBridgeAdapter} from "../../src/bridge/adapters/IBridgeAdapter.sol";
-import {OkuNote} from "../../src/token/OkuNote.sol";
+import {OkuMoney} from "../../src/token/OkuMoney.sol";
 
 /**
  * @title MockOkuBridge
@@ -19,15 +19,15 @@ contract MockOkuBridge is IBridgeAdapter, Test {
     }
 
     PendingBridge[] public pendingBridges;
-    OkuNote public okuNote;
+    OkuMoney public okuMoney;
     address public minter;
 
     // Events for testing
     event BridgeCalled(address token, uint256 amount, uint256 destinationChain, address recipient);
     event BridgeCompleted(uint256 index, address recipient, uint256 amount);
 
-    constructor(OkuNote _okuNote, address _minter) {
-        okuNote = _okuNote;
+    constructor(OkuMoney _okuMoney, address _minter) {
+        okuMoney = _okuMoney;
         minter = _minter;
     }
 
@@ -75,7 +75,7 @@ contract MockOkuBridge is IBridgeAdapter, Test {
         PendingBridge memory p = pendingBridges[index];
 
         vm.prank(minter);
-        okuNote.mint(p.recipient, p.amount);
+        okuMoney.mint(p.recipient, p.amount);
 
         emit BridgeCompleted(index, p.recipient, p.amount);
     }
@@ -88,7 +88,7 @@ contract MockOkuBridge is IBridgeAdapter, Test {
         PendingBridge memory p = pendingBridges[index];
 
         vm.prank(minter);
-        okuNote.mint(to, p.amount);
+        okuMoney.mint(to, p.amount);
 
         emit BridgeCompleted(index, to, p.amount);
     }

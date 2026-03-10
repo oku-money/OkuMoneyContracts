@@ -12,7 +12,7 @@ import {
 /**
  * @title OkuBridgeTest
  * @notice Comprehensive test suite for OkuBridge contract
- * @dev Updated for OkuNote non-rebasing redesign. Bridge operates on raw token
+ * @dev Updated for OkuMoney non-rebasing redesign. Bridge operates on raw token
  *      amounts — no share conversion. Round-trip amounts are exact (no rounding).
  */
 contract OkuBridgeTest is BaseTest {
@@ -39,7 +39,7 @@ contract OkuBridgeTest is BaseTest {
     uint256 constant BASE_CHAIN_ID = 8453;
     uint256 constant UNSUPPORTED_CHAIN_ID = 999;
 
-    // EIP-712 typehash (uses "amount" — OkuNote is non-rebasing)
+    // EIP-712 typehash (uses "amount" — OkuMoney is non-rebasing)
     bytes32 public constant BRIDGE_REQUEST_TYPEHASH = keccak256(
         "BridgeRequest(uint256 sourceChainId,uint256 destChainId,address sender,bytes32 recipient,uint256 amount,uint256 nonce,uint256 deadline)"
     );
@@ -55,18 +55,18 @@ contract OkuBridgeTest is BaseTest {
         // Deploy OkuBridge
         _deployBridge();
 
-        // Grant bridge contract minter role for OkuNote
+        // Grant bridge contract minter role for OkuMoney
         vm.startPrank(admin);
-        okuNote.grantRole(MINTER, address(okuBridge));
+        okuMoney.grantRole(MINTER, address(okuBridge));
         vm.startPrank(allowanceManager);
-        okuNote.configureMinterAllowance(address(okuBridge), MAX_SUPPLY);
+        okuMoney.configureMinterAllowance(address(okuBridge), MAX_SUPPLY);
         vm.stopPrank();
     }
 
     function _deployBridge() internal {
         okuBridgeImpl = new OkuBridge();
         bytes memory initData = abi.encodeCall(
-            OkuBridge.initialize, (address(okuNote), orchestratorSigner, feeRecipient, admin)
+            OkuBridge.initialize, (address(okuMoney), orchestratorSigner, feeRecipient, admin)
         );
         okuBridge = OkuBridge(address(new ERC1967Proxy(address(okuBridgeImpl), initData)));
     }
@@ -84,7 +84,7 @@ contract OkuBridgeTest is BaseTest {
         returns (bytes32 requestId)
     {
         vm.startPrank(user);
-        okuNote.approve(address(okuBridge), amount);
+        okuMoney.approve(address(okuBridge), amount);
         requestId = okuBridge.bridgeBurn(destChainId, bytes32(uint256(uint160(recipient))), amount);
         vm.stopPrank();
     }
@@ -121,10 +121,10 @@ contract OkuBridgeTest is BaseTest {
         internal
         returns (bytes32 requestId, OkuBridge.BridgeRequest memory request)
     {
-        _mintOkuNote(user, amount);
+        _mintOkuMoney(user, amount);
 
         vm.startPrank(user);
-        okuNote.approve(address(okuBridge), amount);
+        okuMoney.approve(address(okuBridge), amount);
         requestId = okuBridge.bridgeBurn(destChainId, bytes32(uint256(uint160(recipient))), amount);
         vm.stopPrank();
 
@@ -149,23 +149,23 @@ contract OkuBridgeTest is BaseTest {
         uint256 fee = (amount * 10) / 10_000; // 0.1% fee
         uint256 netAmount = amount - fee;
 
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
-        uint256 user1BalanceBefore = okuNote.balanceOf(user1);
-        uint256 feeRecipientBalanceBefore = okuNote.balanceOf(feeRecipient);
+        uint256 user1BalanceBefore = okuMoney.balanceOf(user1);
+        uint256 feeRecipientBalanceBefore = okuMoney.balanceOf(feeRecipient);
         uint256 nonceBefore = okuBridge.outboundNonce(OPTIMISM_CHAIN_ID);
 
         vm.startPrank(user1);
-        okuNote.approve(address(okuBridge), okuNote.balanceOf(user1));
+        okuMoney.approve(address(okuBridge), okuMoney.balanceOf(user1));
         bytes32 requestId =
             okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user2))), amount);
         vm.stopPrank();
 
         // Verify exact amount burned from user
-        assertEq(okuNote.balanceOf(user1), user1BalanceBefore - amount);
+        assertEq(okuMoney.balanceOf(user1), user1BalanceBefore - amount);
 
         // Verify fee collected
-        assertEq(okuNote.balanceOf(feeRecipient), feeRecipientBalanceBefore + fee);
+        assertEq(okuMoney.balanceOf(feeRecipient), feeRecipientBalanceBefore + fee);
 
         // Verify nonce incremented
         assertEq(okuBridge.outboundNonce(OPTIMISM_CHAIN_ID), nonceBefore + 1);
@@ -186,10 +186,10 @@ contract OkuBridgeTest is BaseTest {
 
     function test_BridgeBurn_RevertUnsupportedChain() public {
         uint256 amount = 100e18;
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(okuBridge), okuNote.balanceOf(user1));
+        okuMoney.approve(address(okuBridge), okuMoney.balanceOf(user1));
         vm.expectRevert(
             abi.encodeWithSelector(OkuBridge.UnsupportedChain.selector, UNSUPPORTED_CHAIN_ID)
         );
@@ -201,10 +201,10 @@ contract OkuBridgeTest is BaseTest {
         uint256 minAmount = okuBridge.minBridgeAmount();
         uint256 amount = minAmount - 1;
 
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(okuBridge), okuNote.balanceOf(user1));
+        okuMoney.approve(address(okuBridge), okuMoney.balanceOf(user1));
         vm.expectRevert(
             abi.encodeWithSelector(OkuBridge.AmountBelowMinimum.selector, amount, minAmount)
         );
@@ -216,10 +216,10 @@ contract OkuBridgeTest is BaseTest {
         uint256 maxAmount = okuBridge.maxBridgeAmount();
         uint256 amount = maxAmount + 1;
 
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(okuBridge), okuNote.balanceOf(user1));
+        okuMoney.approve(address(okuBridge), okuMoney.balanceOf(user1));
         vm.expectRevert(
             abi.encodeWithSelector(OkuBridge.AmountAboveMaximum.selector, amount, maxAmount)
         );
@@ -229,13 +229,13 @@ contract OkuBridgeTest is BaseTest {
 
     function test_BridgeBurn_RevertWhenPaused() public {
         uint256 amount = 100e18;
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         vm.prank(admin);
         okuBridge.pause();
 
         vm.startPrank(user1);
-        okuNote.approve(address(okuBridge), okuNote.balanceOf(user1));
+        okuMoney.approve(address(okuBridge), okuMoney.balanceOf(user1));
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user2))), amount);
         vm.stopPrank();
@@ -246,33 +246,33 @@ contract OkuBridgeTest is BaseTest {
 
         // Test with 0.1% fee (default)
         uint256 fee = (amount * 10) / 10_000;
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
-        uint256 feeRecipientBefore = okuNote.balanceOf(feeRecipient);
+        uint256 feeRecipientBefore = okuMoney.balanceOf(feeRecipient);
 
         _approveBridgeBurn(user1, OPTIMISM_CHAIN_ID, user2, amount);
 
-        assertEq(okuNote.balanceOf(feeRecipient), feeRecipientBefore + fee);
+        assertEq(okuMoney.balanceOf(feeRecipient), feeRecipientBefore + fee);
 
         // Update fee to 1%
         vm.prank(admin);
         okuBridge.updateFee(100);
 
         uint256 newFee = (amount * 100) / 10_000;
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
-        feeRecipientBefore = okuNote.balanceOf(feeRecipient);
+        feeRecipientBefore = okuMoney.balanceOf(feeRecipient);
 
         _approveBridgeBurn(user1, OPTIMISM_CHAIN_ID, user2, amount);
 
-        assertEq(okuNote.balanceOf(feeRecipient), feeRecipientBefore + newFee);
+        assertEq(okuMoney.balanceOf(feeRecipient), feeRecipientBefore + newFee);
     }
 
     function test_BridgeBurn_NonceIncrement() public {
         uint256 amount = 100e18;
 
         for (uint256 i = 0; i < 5; i++) {
-            _mintOkuNote(user1, amount);
+            _mintOkuMoney(user1, amount);
 
             uint256 expectedNonce = okuBridge.outboundNonce(OPTIMISM_CHAIN_ID);
 
@@ -287,13 +287,13 @@ contract OkuBridgeTest is BaseTest {
 
         // Bridge to Optimism 3 times
         for (uint256 i = 0; i < 3; i++) {
-            _mintOkuNote(user1, amount);
+            _mintOkuMoney(user1, amount);
             _approveBridgeBurn(user1, OPTIMISM_CHAIN_ID, user2, amount);
         }
 
         // Bridge to Arbitrum 3 times
         for (uint256 i = 0; i < 3; i++) {
-            _mintOkuNote(user1, amount);
+            _mintOkuMoney(user1, amount);
             _approveBridgeBurn(user1, ARBITRUM_CHAIN_ID, user2, amount);
         }
 
@@ -322,12 +322,12 @@ contract OkuBridgeTest is BaseTest {
         bytes memory signature = _signBridgeRequest(request);
         bytes32 requestId = keccak256(abi.encode(request));
 
-        uint256 user2BalanceBefore = okuNote.balanceOf(user2);
+        uint256 user2BalanceBefore = okuMoney.balanceOf(user2);
 
         okuBridge.bridgeMint(request, signature);
 
         // Verify amount minted to recipient
-        assertEq(okuNote.balanceOf(user2), user2BalanceBefore + amount);
+        assertEq(okuMoney.balanceOf(user2), user2BalanceBefore + amount);
 
         // Verify requestId marked as processed
         assertTrue(okuBridge.processedRequests(requestId));
@@ -462,12 +462,12 @@ contract OkuBridgeTest is BaseTest {
         uint256 netAmount = amount - fee;
 
         // Step 1: User1 bridges from source
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         _approveBridgeBurn(user1, OPTIMISM_CHAIN_ID, user2, amount);
 
         // Verify burn happened
-        assertEq(okuNote.balanceOf(user1), 0);
+        assertEq(okuMoney.balanceOf(user1), 0);
 
         // Step 2: Create request for destination (same chainid for testing)
         // Request encodes netAmount — what destination will mint
@@ -484,14 +484,14 @@ contract OkuBridgeTest is BaseTest {
         bytes memory signature = _signBridgeRequest(request);
 
         // Step 3: Mint on destination
-        uint256 user2Before = okuNote.balanceOf(user2);
+        uint256 user2Before = okuMoney.balanceOf(user2);
         okuBridge.bridgeMint(request, signature);
 
         // Verify exact netAmount minted to recipient (no rounding — non-rebasing)
-        assertEq(okuNote.balanceOf(user2), user2Before + netAmount);
+        assertEq(okuMoney.balanceOf(user2), user2Before + netAmount);
 
         // Verify fee was collected
-        assertEq(okuNote.balanceOf(feeRecipient), fee);
+        assertEq(okuMoney.balanceOf(feeRecipient), fee);
     }
 
     function test_FullRoundTrip_WithNotePriceIncrease() public {
@@ -500,18 +500,18 @@ contract OkuBridgeTest is BaseTest {
         uint256 netAmount = amount - fee;
 
         // Step 1: Mint and bridge
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         _approveBridgeBurn(user1, OPTIMISM_CHAIN_ID, user2, amount);
 
         // Step 2: Increase notePrice by 50%
-        // OkuNote is non-rebasing: notePrice tracks price appreciation but does NOT
+        // OkuMoney is non-rebasing: notePrice tracks price appreciation but does NOT
         // change balanceOf(). Bridge amounts are unaffected.
-        uint256 oldPrice = okuNote.notePrice();
+        uint256 oldPrice = okuMoney.okuMPrice();
         uint256 newPrice = (oldPrice * 150) / 100;
 
         vm.prank(rebaser);
-        okuNote.updateNotePrice(newPrice);
+        okuMoney.updateOkuMPrice(newPrice);
 
         // Step 3: Create request and sign (encodes netAmount)
         OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({
@@ -530,8 +530,8 @@ contract OkuBridgeTest is BaseTest {
         okuBridge.bridgeMint(request, signature);
 
         // Verify user2 received exact netAmount (notePrice change has no effect
-        // on balanceOf — OkuNote is non-rebasing)
-        assertEq(okuNote.balanceOf(user2), netAmount);
+        // on balanceOf — OkuMoney is non-rebasing)
+        assertEq(okuMoney.balanceOf(user2), netAmount);
     }
 
     function test_BridgeBurn_MultipleUsers_IncrementNonce() public {
@@ -540,10 +540,10 @@ contract OkuBridgeTest is BaseTest {
         for (uint256 i = 0; i < 5; i++) {
             // forge-lint: disable-next-line(unsafe-typecast)
             address user = address(uint160(i + 1000));
-            _mintOkuNote(user, amount);
+            _mintOkuMoney(user, amount);
 
             vm.startPrank(user);
-            okuNote.approve(address(okuBridge), okuNote.balanceOf(user));
+            okuMoney.approve(address(okuBridge), okuMoney.balanceOf(user));
             okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user))), amount);
             vm.stopPrank();
         }
@@ -559,14 +559,14 @@ contract OkuBridgeTest is BaseTest {
         vm.prank(admin);
         okuBridge.updateFee(0);
 
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
-        uint256 feeRecipientBefore = okuNote.balanceOf(feeRecipient);
+        uint256 feeRecipientBefore = okuMoney.balanceOf(feeRecipient);
 
         _approveBridgeBurn(user1, OPTIMISM_CHAIN_ID, user2, amount);
 
         // Verify no fee collected
-        assertEq(okuNote.balanceOf(feeRecipient), feeRecipientBefore);
+        assertEq(okuMoney.balanceOf(feeRecipient), feeRecipientBefore);
     }
 
     // ============ Admin Function Tests ============
@@ -637,7 +637,7 @@ contract OkuBridgeTest is BaseTest {
 
         // Verify can bridge to it
         uint256 amount = 100e18;
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         _approveBridgeBurn(user1, newChainId, user2, amount);
     }
@@ -650,10 +650,10 @@ contract OkuBridgeTest is BaseTest {
 
         // Verify cannot bridge to it
         uint256 amount = 100e18;
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(okuBridge), okuNote.balanceOf(user1));
+        okuMoney.approve(address(okuBridge), okuMoney.balanceOf(user1));
         vm.expectRevert(
             abi.encodeWithSelector(OkuBridge.UnsupportedChain.selector, OPTIMISM_CHAIN_ID)
         );
@@ -672,9 +672,9 @@ contract OkuBridgeTest is BaseTest {
         assertEq(okuBridge.maxBridgeAmount(), newMax);
 
         // Test below new minimum (mint enough for the valid bridgeBurn at newMin)
-        _mintOkuNote(user1, newMin);
+        _mintOkuMoney(user1, newMin);
         vm.startPrank(user1);
-        okuNote.approve(address(okuBridge), okuNote.balanceOf(user1));
+        okuMoney.approve(address(okuBridge), okuMoney.balanceOf(user1));
         vm.expectRevert(
             abi.encodeWithSelector(OkuBridge.AmountBelowMinimum.selector, newMin - 1, newMin)
         );
@@ -706,7 +706,7 @@ contract OkuBridgeTest is BaseTest {
 
         // Verify subsequent bridges use new nonce
         uint256 amount = 100e18;
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         _approveBridgeBurn(user1, OPTIMISM_CHAIN_ID, user2, amount);
 
@@ -735,7 +735,7 @@ contract OkuBridgeTest is BaseTest {
             _mintAndBridge(user1, amount, OPTIMISM_CHAIN_ID, user2);
 
         // Verify user1 balance was burned
-        assertEq(okuNote.balanceOf(user1), 0);
+        assertEq(okuMoney.balanceOf(user1), 0);
 
         // Admin refunds the request — must wait for mint window to close
         bytes memory proof = "";
@@ -743,13 +743,13 @@ contract OkuBridgeTest is BaseTest {
         // Warp past the deadline so the mint window is closed
         vm.warp(request.deadline + 1);
 
-        uint256 user1BalanceBefore = okuNote.balanceOf(user1);
+        uint256 user1BalanceBefore = okuMoney.balanceOf(user1);
 
         vm.prank(admin);
         okuBridge.refundFailedRequest(request, proof);
 
         // Verify netAmount returned to original sender (fee is non-refundable)
-        assertEq(okuNote.balanceOf(user1), user1BalanceBefore + netAmount);
+        assertEq(okuMoney.balanceOf(user1), user1BalanceBefore + netAmount);
     }
 
     // ============ EIP-712 Signature Tests ============
@@ -822,7 +822,7 @@ contract OkuBridgeTest is BaseTest {
 
         okuBridge.bridgeMint(request, signature);
 
-        assertEq(okuNote.balanceOf(user2), amount, "Signature recovery should mint tokens");
+        assertEq(okuMoney.balanceOf(user2), amount, "Signature recovery should mint tokens");
         assertTrue(okuBridge.processedRequests(requestId), "Request should be marked processed");
     }
 
@@ -833,14 +833,14 @@ contract OkuBridgeTest is BaseTest {
 
         uint256 fee = (amount * okuBridge.bridgeFee()) / 10_000;
         uint256 netAmount = amount - fee;
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
-        uint256 totalSupplyBefore = okuNote.totalSupply();
+        uint256 totalSupplyBefore = okuMoney.totalSupply();
 
         _approveBridgeBurn(user1, OPTIMISM_CHAIN_ID, user2, amount);
 
         // Net supply change: burned amount - minted fee = netAmount decrease
-        assertEq(okuNote.totalSupply(), totalSupplyBefore - netAmount);
+        assertEq(okuMoney.totalSupply(), totalSupplyBefore - netAmount);
     }
 
     function testFuzz_BridgeMint_SignatureValidation(uint256 amount, address recipient) public {
@@ -859,11 +859,11 @@ contract OkuBridgeTest is BaseTest {
 
         bytes memory signature = _signBridgeRequest(request);
 
-        uint256 recipientBefore = okuNote.balanceOf(recipient);
+        uint256 recipientBefore = okuMoney.balanceOf(recipient);
 
         okuBridge.bridgeMint(request, signature);
 
-        assertEq(okuNote.balanceOf(recipient), recipientBefore + amount);
+        assertEq(okuMoney.balanceOf(recipient), recipientBefore + amount);
     }
 
     function testFuzz_FullRoundTrip_ValuePreservation(uint256 amount) public {
@@ -871,7 +871,7 @@ contract OkuBridgeTest is BaseTest {
 
         uint256 fee = (amount * okuBridge.bridgeFee()) / 10_000;
         uint256 netAmount = amount - fee;
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         // Bridge burn
         _approveBridgeBurn(user1, OPTIMISM_CHAIN_ID, user2, amount);
@@ -893,9 +893,9 @@ contract OkuBridgeTest is BaseTest {
         okuBridge.bridgeMint(request, signature);
 
         // Verify exact netAmount minted on destination; fee collected on source
-        // No rounding tolerance needed — OkuNote is non-rebasing
-        assertEq(okuNote.balanceOf(user2), netAmount);
-        assertEq(okuNote.balanceOf(feeRecipient), fee);
+        // No rounding tolerance needed — OkuMoney is non-rebasing
+        assertEq(okuMoney.balanceOf(user2), netAmount);
+        assertEq(okuMoney.balanceOf(feeRecipient), fee);
     }
 
     // ============ Event Tests ============
@@ -903,7 +903,7 @@ contract OkuBridgeTest is BaseTest {
     function test_BridgeBurn_EmitsEvent() public {
         uint256 amount = 100e18;
         uint256 netAmount = amount - (amount * 10) / 10_000;
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         uint256 nonce = okuBridge.outboundNonce(OPTIMISM_CHAIN_ID);
 
@@ -920,7 +920,7 @@ contract OkuBridgeTest is BaseTest {
         bytes32 expectedRequestId = keccak256(abi.encode(expectedRequest));
 
         vm.startPrank(user1);
-        okuNote.approve(address(okuBridge), okuNote.balanceOf(user1));
+        okuMoney.approve(address(okuBridge), okuMoney.balanceOf(user1));
 
         vm.expectEmit(true, true, false, true);
         emit OkuBridge.BridgeBurn(
@@ -942,7 +942,7 @@ contract OkuBridgeTest is BaseTest {
     function test_BridgeBurn_EntireBalance() public {
         uint256 amount = 100e18;
         // Mint ONLY the bridge amount — no extra for fees
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         uint256 feeAmount = (amount * okuBridge.bridgeFee()) / 10_000;
         uint256 netAmount = amount - feeAmount;
@@ -950,9 +950,9 @@ contract OkuBridgeTest is BaseTest {
         bytes32 requestId = _approveBridgeBurn(user1, OPTIMISM_CHAIN_ID, user2, amount);
 
         // User has zero balance remaining
-        assertEq(okuNote.balanceOf(user1), 0);
+        assertEq(okuMoney.balanceOf(user1), 0);
         // Fee recipient collected the fee
-        assertEq(okuNote.balanceOf(feeRecipient), feeAmount);
+        assertEq(okuMoney.balanceOf(feeRecipient), feeAmount);
         // Request ID encodes netAmount (what destination will mint)
         OkuBridge.BridgeRequest memory expected = OkuBridge.BridgeRequest({
             sourceChainId: block.chainid,
@@ -992,10 +992,10 @@ contract OkuBridgeTest is BaseTest {
 
     function test_BridgeBurn_RevertZeroRecipient() public {
         uint256 amount = 100e18;
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(okuBridge), okuNote.balanceOf(user1));
+        okuMoney.approve(address(okuBridge), okuMoney.balanceOf(user1));
         vm.expectRevert(OkuBridge.ZeroAddress.selector);
         okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(0), amount);
         vm.stopPrank();
@@ -1069,7 +1069,7 @@ contract OkuBridgeTest is BaseTest {
     function test_Initialize_RevertZeroSigner() public {
         OkuBridge impl = new OkuBridge();
         bytes memory initData = abi.encodeCall(
-            OkuBridge.initialize, (address(okuNote), address(0), feeRecipient, admin)
+            OkuBridge.initialize, (address(okuMoney), address(0), feeRecipient, admin)
         );
         vm.expectRevert(OkuBridge.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -1078,7 +1078,7 @@ contract OkuBridgeTest is BaseTest {
     function test_Initialize_RevertZeroFeeRecipient() public {
         OkuBridge impl = new OkuBridge();
         bytes memory initData = abi.encodeCall(
-            OkuBridge.initialize, (address(okuNote), orchestratorSigner, address(0), admin)
+            OkuBridge.initialize, (address(okuMoney), orchestratorSigner, address(0), admin)
         );
         vm.expectRevert(OkuBridge.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -1087,7 +1087,7 @@ contract OkuBridgeTest is BaseTest {
     function test_Initialize_RevertZeroAdmin() public {
         OkuBridge impl = new OkuBridge();
         bytes memory initData = abi.encodeCall(
-            OkuBridge.initialize, (address(okuNote), orchestratorSigner, feeRecipient, address(0))
+            OkuBridge.initialize, (address(okuMoney), orchestratorSigner, feeRecipient, address(0))
         );
         vm.expectRevert(OkuBridge.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -1132,7 +1132,7 @@ contract OkuBridgeTest is BaseTest {
 
         // Should succeed — condition is block.timestamp > deadline (strict >)
         okuBridge.bridgeMint(request, signature);
-        assertEq(okuNote.balanceOf(user2), amount);
+        assertEq(okuMoney.balanceOf(user2), amount);
     }
 
     function test_Pause_RevertNotAuthorized() public {
@@ -1280,31 +1280,31 @@ contract OkuBridgeTest is BaseTest {
     // ============ Dust Sweep Tests ============
 
     function test_SweepDust_RecoverAccumulatedDust() public {
-        // With non-rebasing OkuNote there should be no rounding dust from
+        // With non-rebasing OkuMoney there should be no rounding dust from
         // share conversion, but the sweepDust mechanism still exists for
         // any tokens that end up in the bridge contract.
         // Force some dust by minting directly to bridge.
-        _mintOkuNote(address(okuBridge), 1);
+        _mintOkuMoney(address(okuBridge), 1);
 
-        uint256 dustBalance = okuNote.balanceOf(address(okuBridge));
+        uint256 dustBalance = okuMoney.balanceOf(address(okuBridge));
         assertGt(dustBalance, 0);
 
         // Sweep dust to feeRecipient
-        uint256 feeRecipientBefore = okuNote.balanceOf(feeRecipient);
+        uint256 feeRecipientBefore = okuMoney.balanceOf(feeRecipient);
 
         vm.prank(admin);
         okuBridge.sweepDust();
 
         // Bridge balance is now zero
-        assertEq(okuNote.balanceOf(address(okuBridge)), 0);
+        assertEq(okuMoney.balanceOf(address(okuBridge)), 0);
         // Fee recipient received the dust
-        assertEq(okuNote.balanceOf(feeRecipient), feeRecipientBefore + dustBalance);
+        assertEq(okuMoney.balanceOf(feeRecipient), feeRecipientBefore + dustBalance);
     }
 
     function test_SweepDust_EmitsEvent() public {
         // Force some dust by minting directly to bridge
-        _mintOkuNote(address(okuBridge), 1);
-        uint256 dustBalance = okuNote.balanceOf(address(okuBridge));
+        _mintOkuMoney(address(okuBridge), 1);
+        uint256 dustBalance = okuMoney.balanceOf(address(okuBridge));
         assertGt(dustBalance, 0);
 
         vm.prank(admin);
@@ -1315,7 +1315,7 @@ contract OkuBridgeTest is BaseTest {
 
     function test_SweepDust_NoOpWhenZeroBalance() public {
         // Bridge has zero balance — sweepDust should be a no-op (no revert)
-        assertEq(okuNote.balanceOf(address(okuBridge)), 0);
+        assertEq(okuMoney.balanceOf(address(okuBridge)), 0);
 
         vm.prank(admin);
         okuBridge.sweepDust(); // should not revert
@@ -1372,12 +1372,12 @@ contract OkuBridgeTest is BaseTest {
         // Warp past the deadline
         vm.warp(request.deadline + 1);
 
-        uint256 user1BalanceBefore = okuNote.balanceOf(user1);
+        uint256 user1BalanceBefore = okuMoney.balanceOf(user1);
 
         vm.prank(admin);
         okuBridge.refundFailedRequest(request, "");
 
         // Verify refund succeeded — exact amount, no rounding
-        assertEq(okuNote.balanceOf(user1), user1BalanceBefore + request.amount);
+        assertEq(okuMoney.balanceOf(user1), user1BalanceBefore + request.amount);
     }
 }

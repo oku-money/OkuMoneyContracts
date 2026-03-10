@@ -4,13 +4,13 @@ pragma solidity ^0.8.28;
 /**
  * @title IBridgeAdapter
  * @notice Interface for third-party bridge adapters (Wormhole NTT, LayerZero OFT, CCIP, etc.)
- * @dev Adapters are message-only shims. OkuBridgeRouter pre-burns OkuUSD before calling
+ * @dev Adapters are message-only shims. OkuBridgeRouter pre-burns OkuMoney before calling
  *      bridge(), so adapters are responsible only for cross-chain message delivery.
  *      The third-party protocol handles destination-side minting natively.
  */
 interface IBridgeAdapter {
     /**
-     * @notice Send a cross-chain message after OkuUSD has already been burned
+     * @notice Send a cross-chain message after OkuMoney has already been burned
      * @param token Token address that was burned (for validation)
      * @param amount Amount that was burned
      * @param destinationChain Destination chain ID

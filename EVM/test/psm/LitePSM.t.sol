@@ -11,12 +11,12 @@ import {LitePSM} from "../../src/psm/LitePSM.sol";
 /**
  * @title LitePSMTest
  * @notice Unit tests for LitePSM (Peg Stability Module)
- * @dev Tests verify price-aware conversion between USDC (6 decimals) and OkuNote (18 decimals).
- *      OkuNote is a standard non-rebasing ERC-20. notePrice() tracks price appreciation
+ * @dev Tests verify price-aware conversion between USDC (6 decimals) and OkuMoney (18 decimals).
+ *      OkuMoney is a standard non-rebasing ERC-20. okuMPrice() tracks price appreciation
  *      separately from balanceOf().
  *
- *      Mint:   noteAmount = usdcValue18 × PRECISION / notePrice()
- *      Redeem: usdcAmount = noteAmount × notePrice() / PRECISION  (scaled to 6 decimals)
+ *      Mint:   okuMAmount = usdcValue18 × PRECISION / okuMPrice()
+ *      Redeem: usdcAmount = okuMAmount × okuMPrice() / PRECISION  (scaled to 6 decimals)
  *
  *      At initial notePrice=1e18, behavior is identical to a 1:1 decimal-scaled swap.
  */
@@ -25,7 +25,7 @@ contract LitePSMTest is BaseTest {
     uint256 private constant DECIMAL_MULTIPLIER = 10 ** 12;
     // ============ Events ============
 
-    event MintNote(address indexed user, uint256 usdcAmount, uint256 noteAmount);
+    event MintNote(address indexed user, uint256 usdcAmount, uint256 okuMAmount);
     event RedeemNote(address indexed user, uint256 noteIn, uint256 usdcOut);
     event OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled);
     event BufferRefilled(uint256 amount);
@@ -46,21 +46,21 @@ contract LitePSMTest is BaseTest {
     /// @notice Calculate expected note amount from USDC deposit at current notePrice
     function _expectedNotesFromUsdc(uint256 usdcAmount) internal view returns (uint256) {
         uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
-        uint256 price = okuNote.notePrice();
+        uint256 price = okuMoney.okuMPrice();
         return (usdcValue18 * PRECISION) / price;
     }
 
     /// @notice Calculate expected USDC output from note redemption at current notePrice
-    function _expectedUsdcFromNotes(uint256 noteAmount) internal view returns (uint256) {
-        uint256 price = okuNote.notePrice();
-        uint256 dollarValue18 = (noteAmount * price) / PRECISION;
+    function _expectedUsdcFromNotes(uint256 okuMAmount) internal view returns (uint256) {
+        uint256 price = okuMoney.okuMPrice();
+        uint256 dollarValue18 = (okuMAmount * price) / PRECISION;
         return dollarValue18 / DECIMAL_MULTIPLIER;
     }
 
     /// @notice Raise notePrice to a specific value using updateNotePrice
     function _setNotePrice(uint256 newPrice) internal {
         vm.prank(rebaser);
-        okuNote.updateNotePrice(newPrice);
+        okuMoney.updateOkuMPrice(newPrice);
     }
 
     // ============ Mint Tests ============
@@ -73,24 +73,24 @@ contract LitePSMTest is BaseTest {
         _approveUsdc(user1, address(litePsm), amount);
 
         vm.prank(user1);
-        litePsm.mint_OkuNote(amount);
+        litePsm.mint_OkuM(amount);
 
         assertEq(usdc.balanceOf(user1), user1BalanceBefore - amount);
         assertEq(usdc.balanceOf(address(litePsm)), psmBalanceBefore + amount);
     }
 
-    function test_Mint_MintsOkuNoteOut() public {
+    function test_Mint_MintsOkuMoneyOut() public {
         uint256 usdcAmount = 100e6; // 100 USDC (6 decimals)
 
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
         vm.prank(user1);
-        litePsm.mint_OkuNote(usdcAmount);
+        litePsm.mint_OkuM(usdcAmount);
 
-        // At base notePrice=1e18: noteAmount = 100e18 * 1e18 / 1e18 = 100e18
-        uint256 expectedOkuNote = _expectedNotesFromUsdc(usdcAmount);
-        assertEq(okuNote.balanceOf(user1), expectedOkuNote);
-        assertEq(okuNote.balanceOf(user1), 100e18); // Explicit check: 100 OkuNote at base price
+        // At base notePrice=1e18: okuMAmount = 100e18 * 1e18 / 1e18 = 100e18
+        uint256 expectedOkuMoney = _expectedNotesFromUsdc(usdcAmount);
+        assertEq(okuMoney.balanceOf(user1), expectedOkuMoney);
+        assertEq(okuMoney.balanceOf(user1), 100e18); // Explicit check: 100 OkuMoney at base price
     }
 
     function test_Mint_OneToOneRatioAtBasePrice() public {
@@ -99,11 +99,11 @@ contract LitePSMTest is BaseTest {
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
         vm.prank(user1);
-        litePsm.mint_OkuNote(usdcAmount);
+        litePsm.mint_OkuM(usdcAmount);
 
-        // At base notePrice=1e18: 500 USDC → 500 OkuNote (price-aware, same as 1:1)
-        assertEq(okuNote.balanceOf(user1), _expectedNotesFromUsdc(usdcAmount));
-        assertEq(okuNote.balanceOf(user1), 500e18); // 500 OkuNote
+        // At base notePrice=1e18: 500 USDC → 500 OkuMoney (price-aware, same as 1:1)
+        assertEq(okuMoney.balanceOf(user1), _expectedNotesFromUsdc(usdcAmount));
+        assertEq(okuMoney.balanceOf(user1), 500e18); // 500 OkuMoney
     }
 
     function test_Mint_RevertsWhenPaused() public {
@@ -114,26 +114,26 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        litePsm.mint_OkuNote(100e6);
+        litePsm.mint_OkuM(100e6);
     }
 
     function test_Mint_RevertsZeroAmount() public {
         vm.prank(user1);
         vm.expectRevert("Amount must be positive");
-        litePsm.mint_OkuNote(0);
+        litePsm.mint_OkuM(0);
     }
 
     function test_Mint_EmitsEvent() public {
         uint256 usdcAmount = 100e6;
-        uint256 noteAmount = _expectedNotesFromUsdc(usdcAmount);
+        uint256 okuMAmount = _expectedNotesFromUsdc(usdcAmount);
 
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
         vm.expectEmit(true, false, false, true);
-        emit MintNote(user1, usdcAmount, noteAmount);
+        emit MintNote(user1, usdcAmount, okuMAmount);
 
         vm.prank(user1);
-        litePsm.mint_OkuNote(usdcAmount);
+        litePsm.mint_OkuM(usdcAmount);
     }
 
     // ============ Price-Aware Mint Tests ============
@@ -147,14 +147,14 @@ contract LitePSMTest is BaseTest {
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
         vm.prank(user1);
-        litePsm.mint_OkuNote(usdcAmount);
+        litePsm.mint_OkuM(usdcAmount);
 
-        // noteAmount = 100e18 * 1e18 / 1.05e18 = ~95.238095238095238095e18
+        // okuMAmount = 100e18 * 1e18 / 1.05e18 = ~95.238095238095238095e18
         uint256 expectedNotes = _expectedNotesFromUsdc(usdcAmount);
-        assertEq(okuNote.balanceOf(user1), expectedNotes);
+        assertEq(okuMoney.balanceOf(user1), expectedNotes);
         // At $1.05, 100 USDC buys fewer notes
-        assertLt(okuNote.balanceOf(user1), 100e18, "Should receive fewer notes at elevated price");
-        assertGt(okuNote.balanceOf(user1), 95e18, "Should receive ~95.24 notes at $1.05");
+        assertLt(okuMoney.balanceOf(user1), 100e18, "Should receive fewer notes at elevated price");
+        assertGt(okuMoney.balanceOf(user1), 95e18, "Should receive ~95.24 notes at $1.05");
     }
 
     function test_Mint_PriceAware_HighPrice() public {
@@ -166,10 +166,10 @@ contract LitePSMTest is BaseTest {
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
         vm.prank(user1);
-        litePsm.mint_OkuNote(usdcAmount);
+        litePsm.mint_OkuM(usdcAmount);
 
-        // noteAmount = 100e18 * 1e18 / 2e18 = 50e18
-        assertEq(okuNote.balanceOf(user1), 50e18, "100 USDC at $2/note = 50 notes");
+        // okuMAmount = 100e18 * 1e18 / 2e18 = 50e18
+        assertEq(okuMoney.balanceOf(user1), 50e18, "100 USDC at $2/note = 50 notes");
     }
 
     function test_Mint_PriceAware_EmitsCorrectAmounts() public {
@@ -184,7 +184,7 @@ contract LitePSMTest is BaseTest {
         emit MintNote(user1, usdcAmount, expectedNotes);
 
         vm.prank(user1);
-        litePsm.mint_OkuNote(usdcAmount);
+        litePsm.mint_OkuM(usdcAmount);
     }
 
     // ============ Oracle Tests ============
@@ -200,15 +200,15 @@ contract LitePSMTest is BaseTest {
         uint256 usdcAmount = 100e6;
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
-        uint256 balanceBefore = okuNote.balanceOf(user1);
+        uint256 balanceBefore = okuMoney.balanceOf(user1);
 
         // Should succeed
         vm.prank(user1);
-        litePsm.mint_OkuNote(usdcAmount);
+        litePsm.mint_OkuM(usdcAmount);
 
-        uint256 expectedOkuNote = _expectedNotesFromUsdc(usdcAmount);
+        uint256 expectedOkuMoney = _expectedNotesFromUsdc(usdcAmount);
         assertEq(
-            okuNote.balanceOf(user1), balanceBefore + expectedOkuNote, "OkuNote should be minted"
+            okuMoney.balanceOf(user1), balanceBefore + expectedOkuMoney, "OkuMoney should be minted"
         );
     }
 
@@ -224,7 +224,7 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert("Exceeds reserves");
-        litePsm.mint_OkuNote(100e6);
+        litePsm.mint_OkuM(100e6);
     }
 
     function test_Mint_RevertsOnStaleOracle() public {
@@ -242,7 +242,7 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert("Stale oracle data");
-        litePsm.mint_OkuNote(100e6);
+        litePsm.mint_OkuM(100e6);
     }
 
     function test_Mint_RevertsOnIncompleteRound() public {
@@ -260,7 +260,7 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert("Incomplete oracle round");
-        litePsm.mint_OkuNote(100e6);
+        litePsm.mint_OkuM(100e6);
     }
 
     function test_Mint_SkipsOracleWhenDisabled() public {
@@ -276,14 +276,14 @@ contract LitePSMTest is BaseTest {
 
         _approveUsdc(user1, address(litePsm), 100e6);
 
-        uint256 balanceBefore = okuNote.balanceOf(user1);
+        uint256 balanceBefore = okuMoney.balanceOf(user1);
 
         // Should succeed because oracle is disabled
         vm.prank(user1);
-        litePsm.mint_OkuNote(100e6);
+        litePsm.mint_OkuM(100e6);
 
-        uint256 expectedOkuNote = _expectedNotesFromUsdc(100e6);
-        assertEq(okuNote.balanceOf(user1), balanceBefore + expectedOkuNote);
+        uint256 expectedOkuMoney = _expectedNotesFromUsdc(100e6);
+        assertEq(okuMoney.balanceOf(user1), balanceBefore + expectedOkuMoney);
     }
 
     function test_ConfigureOracle_OnlyOracleManager() public {
@@ -307,87 +307,87 @@ contract LitePSMTest is BaseTest {
     // ============ Redeem Tests ============
 
     function test_Redeem_TransfersUSDCOut() public {
-        // User needs OkuNote first - mint 100 OkuNote (18 decimals)
-        uint256 noteAmount = 100e18;
-        uint256 expectedUsdc = _expectedUsdcFromNotes(noteAmount); // 100e6 at base price
+        // User needs OkuMoney first - mint 100 OkuMoney (18 decimals)
+        uint256 okuMAmount = 100e18;
+        uint256 expectedUsdc = _expectedUsdcFromNotes(okuMAmount); // 100e6 at base price
 
-        _mintOkuNote(user1, noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
 
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
         uint256 psmUsdcBefore = usdc.balanceOf(address(litePsm));
 
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
 
         assertEq(usdc.balanceOf(user1), user1UsdcBefore + expectedUsdc);
         assertEq(usdc.balanceOf(address(litePsm)), psmUsdcBefore - expectedUsdc);
     }
 
-    function test_Redeem_BurnsOkuNote() public {
-        uint256 noteAmount = 100e18; // 100 OkuNote
+    function test_Redeem_BurnsOkuMoney() public {
+        uint256 okuMAmount = 100e18; // 100 OkuMoney
 
-        _mintOkuNote(user1, noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
 
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
 
-        assertEq(okuNote.balanceOf(user1), 0);
+        assertEq(okuMoney.balanceOf(user1), 0);
     }
 
     function test_Redeem_OneToOneRatioAtBasePrice() public {
-        uint256 noteAmount = 500e18; // 500 OkuNote
+        uint256 okuMAmount = 500e18; // 500 OkuMoney
         uint256 expectedUsdc = 500e6; // At base price: 500 USDC
 
-        _mintOkuNote(user1, noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
 
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
 
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
 
-        // At base notePrice=1e18: 500 OkuNote → 500 USDC (price-aware, same as 1:1)
+        // At base notePrice=1e18: 500 OkuMoney → 500 USDC (price-aware, same as 1:1)
         assertEq(usdc.balanceOf(user1), user1UsdcBefore + expectedUsdc);
     }
 
     function test_Redeem_QueuesWhenBufferInsufficient() public {
-        uint256 noteAmount = 10_000e18; // 10,000 OkuNote
+        uint256 okuMAmount = 10_000e18; // 10,000 OkuMoney
 
-        _mintOkuNote(user1, noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
 
-        // PSM only has 5000e6 USDC buffer (worth 5,000 OkuNote at base price)
+        // PSM only has 5000e6 USDC buffer (worth 5,000 OkuMoney at base price)
         // User only needs to approve PSM — PSM handles the transfer to queue
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
 
         // Should be queued, not immediate redemption (buffer insufficient)
-        // User still has their OkuNote (transferred to queue contract)
+        // User still has their OkuMoney (transferred to queue contract)
         // Check queue has entry
         assertEq(redemptionQueue.queueLength(), 1);
     }
 
     function test_Redeem_QueuesWithOnlyPSMApproval() public {
-        uint256 noteAmount = 10_000e18; // 10,000 OkuNote (buffer only has 5000 USDC worth)
+        uint256 okuMAmount = 10_000e18; // 10,000 OkuMoney (buffer only has 5000 USDC worth)
 
-        _mintOkuNote(user1, noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
 
         // Verify only PSM approval is needed — no queue approval at all
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
         // Deliberately do NOT approve the queue
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount); // Must succeed with only PSM approval
+        litePsm.redeem_OkuM(okuMAmount); // Must succeed with only PSM approval
 
         assertEq(redemptionQueue.queueLength(), 1);
-        // OkuNote is now held by the queue contract
-        assertEq(okuNote.balanceOf(address(redemptionQueue)), noteAmount);
+        // OkuMoney is now held by the queue contract
+        assertEq(okuMoney.balanceOf(address(redemptionQueue)), okuMAmount);
     }
 
     function test_Redeem_NoOracleCheck() public {
@@ -401,14 +401,14 @@ contract LitePSMTest is BaseTest {
         // Set oracle to stale (now safe since we warped forward)
         oracle.setTimestamp(block.timestamp - 2 hours);
 
-        uint256 noteAmount = 100e18; // 100 OkuNote
+        uint256 okuMAmount = 100e18; // 100 OkuMoney
 
-        _mintOkuNote(user1, noteAmount);
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         // Redeem should NOT check oracle
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
 
         assertEq(usdc.balanceOf(user1), 10_100e6); // Initial 10000 + 100 redeemed
     }
@@ -416,108 +416,108 @@ contract LitePSMTest is BaseTest {
     function test_Redeem_RevertsZeroAmount() public {
         vm.prank(user1);
         vm.expectRevert("Amount must be positive");
-        litePsm.redeem_OkuNote(0);
+        litePsm.redeem_OkuM(0);
     }
 
     function test_Redeem_RevertsWhenPaused() public {
-        uint256 noteAmount = 100e18;
+        uint256 okuMAmount = 100e18;
 
-        _mintOkuNote(user1, noteAmount);
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.prank(pauser);
         litePsm.pause();
 
         vm.prank(user1);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
     }
 
     function test_Redeem_EmitsEvent() public {
-        uint256 noteAmount = 100e18;
-        uint256 usdcAmount = _expectedUsdcFromNotes(noteAmount); // 100e6 at base price
+        uint256 okuMAmount = 100e18;
+        uint256 usdcAmount = _expectedUsdcFromNotes(okuMAmount); // 100e6 at base price
 
-        _mintOkuNote(user1, noteAmount);
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.expectEmit(true, false, false, true);
-        emit RedeemNote(user1, noteAmount, usdcAmount);
+        emit RedeemNote(user1, okuMAmount, usdcAmount);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
     }
 
     // ============ Price-Aware Redeem Tests ============
 
     function test_Redeem_PriceAware_ElevatedPrice() public {
         // Mint notes at base price, then raise price before redeeming
-        uint256 noteAmount = 100e18;
+        uint256 okuMAmount = 100e18;
 
-        _mintOkuNote(user1, noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
 
         // Raise notePrice to 1.05e18 ($1.05)
         _setNotePrice(1.05e18);
 
         // Now each note is worth $1.05 → 100 notes = $105
-        uint256 expectedUsdc = _expectedUsdcFromNotes(noteAmount);
+        uint256 expectedUsdc = _expectedUsdcFromNotes(okuMAmount);
         // 100e18 * 1.05e18 / 1e18 = 105e18 dollarValue → 105e18 / 1e12 = 105e6
         assertEq(expectedUsdc, 105e6, "100 notes at $1.05 = 105 USDC");
 
         // Need extra buffer to cover elevated price
         _mintUsdc(address(litePsm), 1000e6);
 
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         uint256 usdcBefore = usdc.balanceOf(user1);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
 
         assertEq(usdc.balanceOf(user1), usdcBefore + 105e6, "Should receive 105 USDC");
-        assertEq(okuNote.balanceOf(user1), 0, "All notes burned");
+        assertEq(okuMoney.balanceOf(user1), 0, "All notes burned");
     }
 
     function test_Redeem_PriceAware_HighPrice() public {
-        uint256 noteAmount = 50e18;
+        uint256 okuMAmount = 50e18;
 
-        _mintOkuNote(user1, noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
 
         // Raise notePrice to 2e18 ($2.00)
         _setNotePrice(2e18);
 
         // 50 notes at $2 = $100
-        uint256 expectedUsdc = _expectedUsdcFromNotes(noteAmount);
+        uint256 expectedUsdc = _expectedUsdcFromNotes(okuMAmount);
         assertEq(expectedUsdc, 100e6, "50 notes at $2.00 = 100 USDC");
 
         _mintUsdc(address(litePsm), 1000e6);
 
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         uint256 usdcBefore = usdc.balanceOf(user1);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
 
         assertEq(usdc.balanceOf(user1), usdcBefore + 100e6);
     }
 
     function test_Redeem_PriceAware_EmitsCorrectAmounts() public {
-        uint256 noteAmount = 100e18;
+        uint256 okuMAmount = 100e18;
 
-        _mintOkuNote(user1, noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
 
         _setNotePrice(1.05e18);
-        uint256 expectedUsdc = _expectedUsdcFromNotes(noteAmount); // 105e6
+        uint256 expectedUsdc = _expectedUsdcFromNotes(okuMAmount); // 105e6
 
         _mintUsdc(address(litePsm), 1000e6);
 
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.expectEmit(true, false, false, true);
-        emit RedeemNote(user1, noteAmount, expectedUsdc);
+        emit RedeemNote(user1, okuMAmount, expectedUsdc);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
     }
 
     // ============ Price-Aware Round-Trip Tests ============
@@ -531,19 +531,19 @@ contract LitePSMTest is BaseTest {
         _approveUsdc(user1, address(litePsm), usdcDeposit);
 
         vm.prank(user1);
-        litePsm.mint_OkuNote(usdcDeposit);
+        litePsm.mint_OkuM(usdcDeposit);
 
-        uint256 notesReceived = okuNote.balanceOf(user1);
+        uint256 notesReceived = okuMoney.balanceOf(user1);
         // 100e18 * 1e18 / 1.05e18 = ~95.238095238095238095e18
         assertLt(notesReceived, 100e18, "Fewer notes at elevated price");
 
         // Redeem all notes back
-        _approveOkuNote(user1, address(litePsm), notesReceived);
+        _approveOkuMoney(user1, address(litePsm), notesReceived);
 
         uint256 usdcBefore = usdc.balanceOf(user1);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(notesReceived);
+        litePsm.redeem_OkuM(notesReceived);
 
         uint256 usdcReceived = usdc.balanceOf(user1) - usdcBefore;
 
@@ -561,18 +561,18 @@ contract LitePSMTest is BaseTest {
         _approveUsdc(user1, address(litePsm), usdcDeposit);
 
         vm.prank(user1);
-        litePsm.mint_OkuNote(usdcDeposit);
+        litePsm.mint_OkuM(usdcDeposit);
 
         // 200 USDC at $2/note = 100 notes
-        uint256 notesReceived = okuNote.balanceOf(user1);
+        uint256 notesReceived = okuMoney.balanceOf(user1);
         assertEq(notesReceived, 100e18, "200 USDC at $2/note = 100 notes");
 
-        _approveOkuNote(user1, address(litePsm), notesReceived);
+        _approveOkuMoney(user1, address(litePsm), notesReceived);
 
         uint256 usdcBefore = usdc.balanceOf(user1);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(notesReceived);
+        litePsm.redeem_OkuM(notesReceived);
 
         // 100 notes at $2 = 200 USDC — clean round-trip
         assertEq(usdc.balanceOf(user1) - usdcBefore, 200e6, "Clean round-trip at $2");
@@ -592,29 +592,29 @@ contract LitePSMTest is BaseTest {
 
     function test_ProcessQueue_ProcessesFIFO() public {
         // Create queued redemptions
-        uint256 noteAmount = 6000e18; // 6,000 OkuNote each
+        uint256 okuMAmount = 6000e18; // 6,000 OkuMoney each
 
-        _mintOkuNote(user1, noteAmount);
-        _mintOkuNote(user2, noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
+        _mintOkuMoney(user2, okuMAmount);
 
         // Drain buffer first - redeem more than buffer (5000 USDC worth at base price)
         // Only PSM approval needed; PSM moves tokens to queue internally
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount); // Queued (buffer only 5000 USDC)
+        litePsm.redeem_OkuM(okuMAmount); // Queued (buffer only 5000 USDC)
 
-        _approveOkuNote(user2, address(litePsm), noteAmount);
+        _approveOkuMoney(user2, address(litePsm), okuMAmount);
         vm.prank(user2);
-        litePsm.redeem_OkuNote(noteAmount); // Also queued
+        litePsm.redeem_OkuM(okuMAmount); // Also queued
 
         assertEq(redemptionQueue.queueLength(), 2);
 
         // Refill buffer
         _mintUsdc(address(litePsm), 15_000e6);
 
-        // Grant queue ability to burn OkuNote
+        // Grant queue ability to burn OkuMoney
         vm.prank(admin);
-        okuNote.grantRole(MINTER, address(redemptionQueue));
+        okuMoney.grantRole(MINTER, address(redemptionQueue));
 
         // processQueue now handles approve-use-revoke internally
         uint256 head = redemptionQueue.queueHead();
@@ -628,24 +628,24 @@ contract LitePSMTest is BaseTest {
 
     function test_ProcessQueue_ApprovesAndRevokesAllowance() public {
         // Setup: create a queued redemption
-        uint256 noteAmount = 6000e18; // 6,000 OkuNote
+        uint256 okuMAmount = 6000e18; // 6,000 OkuMoney
 
-        _mintOkuNote(user1, noteAmount);
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount); // Queued (buffer only 5000 USDC)
+        litePsm.redeem_OkuM(okuMAmount); // Queued (buffer only 5000 USDC)
 
         assertEq(redemptionQueue.queueLength(), 1);
 
         // Refill buffer
         _mintUsdc(address(litePsm), 10_000e6);
 
-        // Grant queue ability to burn OkuNote
+        // Grant queue ability to burn OkuMoney
         vm.prank(admin);
-        okuNote.grantRole(MINTER, address(redemptionQueue));
+        okuMoney.grantRole(MINTER, address(redemptionQueue));
 
         // Verify allowance is 0 before processing
         assertEq(usdc.allowance(address(litePsm), address(redemptionQueue)), 0);
@@ -668,28 +668,28 @@ contract LitePSMTest is BaseTest {
 
     function test_ProcessQueue_PartialProcessingRevokesAllowance() public {
         // Setup: create multiple queued redemptions
-        uint256 noteAmount = 6000e18; // 6,000 OkuNote each
+        uint256 okuMAmount = 6000e18; // 6,000 OkuMoney each
 
-        _mintOkuNote(user1, noteAmount);
-        _mintOkuNote(user2, noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
+        _mintOkuMoney(user2, okuMAmount);
 
-        _approveOkuNote(user1, address(litePsm), noteAmount);
-        _approveOkuNote(user2, address(litePsm), noteAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
+        _approveOkuMoney(user2, address(litePsm), okuMAmount);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
 
         vm.prank(user2);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
 
         assertEq(redemptionQueue.queueLength(), 2);
 
         // Refill buffer with only enough for one redemption
         _mintUsdc(address(litePsm), 7000e6);
 
-        // Grant queue ability to burn OkuNote
+        // Grant queue ability to burn OkuMoney
         vm.prank(admin);
-        okuNote.grantRole(MINTER, address(redemptionQueue));
+        okuMoney.grantRole(MINTER, address(redemptionQueue));
 
         // Process only 1 entry
         uint256 head = redemptionQueue.queueHead();
@@ -707,28 +707,28 @@ contract LitePSMTest is BaseTest {
 
     function test_ProcessQueue_PriceAware_YieldAccruesWhileQueued() public {
         // Queue at base price, then process at elevated price
-        uint256 noteAmount = 6000e18;
+        uint256 okuMAmount = 6000e18;
 
-        _mintOkuNote(user1, noteAmount);
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount); // Queued at base price (buffer only 5000 USDC)
+        litePsm.redeem_OkuM(okuMAmount); // Queued at base price (buffer only 5000 USDC)
 
         assertEq(redemptionQueue.queueLength(), 1);
 
         // Raise notePrice to 1.05e18 — queued notes now worth more USDC
         _setNotePrice(1.05e18);
 
-        // Queue entry stores noteAmount=6000e18. At $1.05: USDC = 6000 * 1.05 = 6300
-        uint256 expectedUsdc = _expectedUsdcFromNotes(noteAmount);
+        // Queue entry stores okuMAmount=6000e18. At $1.05: USDC = 6000 * 1.05 = 6300
+        uint256 expectedUsdc = _expectedUsdcFromNotes(okuMAmount);
         assertEq(expectedUsdc, 6300e6, "6000 notes at $1.05 = 6300 USDC");
 
         // Refill buffer with enough for elevated price
         _mintUsdc(address(litePsm), 10_000e6);
 
         vm.prank(admin);
-        okuNote.grantRole(MINTER, address(redemptionQueue));
+        okuMoney.grantRole(MINTER, address(redemptionQueue));
 
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
         uint256 head = redemptionQueue.queueHead();
@@ -751,21 +751,21 @@ contract LitePSMTest is BaseTest {
         // But at $1.05, 4900 notes → 5145 USDC (exceeds buffer).
         _setNotePrice(1.05e18);
 
-        uint256 noteAmount = 4900e18;
+        uint256 okuMAmount = 4900e18;
 
-        _mintOkuNote(user1, noteAmount);
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
-        uint256 expectedUsdc = _expectedUsdcFromNotes(noteAmount);
+        uint256 expectedUsdc = _expectedUsdcFromNotes(okuMAmount);
         assertEq(expectedUsdc, 5145e6, "4900 notes at $1.05 = 5145 USDC");
         assertGt(expectedUsdc, usdc.balanceOf(address(litePsm)), "Should exceed buffer");
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
 
         // Should be queued because USDC needed (5145) exceeds buffer (5000)
         assertEq(redemptionQueue.queueLength(), 1, "Should be queued");
-        assertEq(okuNote.balanceOf(address(redemptionQueue)), noteAmount, "Notes held by queue");
+        assertEq(okuMoney.balanceOf(address(redemptionQueue)), okuMAmount, "Notes held by queue");
     }
 
     // ============ Admin Tests ============
@@ -815,14 +815,14 @@ contract LitePSMTest is BaseTest {
 
     function test_WithdrawUSDC_RevertsWhenWouldStrandQueue() public {
         // Queue a redemption to create an obligation
-        uint256 noteAmount = 10_000e18; // 10,000 OkuNote (needs 10,000 USDC at base price)
-        _mintOkuNote(user1, noteAmount);
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        uint256 okuMAmount = 10_000e18; // 10,000 OkuMoney (needs 10,000 USDC at base price)
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount); // Buffer (5000e6) < 10000e6 → queued
+        litePsm.redeem_OkuM(okuMAmount); // Buffer (5000e6) < 10000e6 → queued
 
-        // PSM buffer is still 5000e6 since no USDC was moved, only OkuNote was queued
+        // PSM buffer is still 5000e6 since no USDC was moved, only OkuMoney was queued
         // Trying to withdraw the full buffer would strand the obligation
         uint256 obligation = redemptionQueue.totalQueuedUsdc();
         assertGt(obligation, 0, "Queue should have obligation");
@@ -847,50 +847,50 @@ contract LitePSMTest is BaseTest {
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
         vm.prank(user1);
-        litePsm.mint_OkuNote(usdcAmount);
+        litePsm.mint_OkuM(usdcAmount);
 
-        // At base notePrice=1e18: should mint exactly 1000 OkuNote (18 decimals)
-        assertEq(okuNote.balanceOf(user1), 1000e18);
+        // At base notePrice=1e18: should mint exactly 1000 OkuMoney (18 decimals)
+        assertEq(okuMoney.balanceOf(user1), 1000e18);
 
         // Verify the price-aware conversion equals decimal multiplier at base price
-        assertEq(okuNote.balanceOf(user1), _expectedNotesFromUsdc(usdcAmount));
+        assertEq(okuMoney.balanceOf(user1), _expectedNotesFromUsdc(usdcAmount));
     }
 
     function test_DecimalConversion_RedeemConvertsCorrectly() public {
-        uint256 noteAmount = 1000e18; // 1000 OkuNote (18 decimals)
+        uint256 okuMAmount = 1000e18; // 1000 OkuMoney (18 decimals)
 
-        _mintOkuNote(user1, noteAmount);
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         uint256 usdcBefore = usdc.balanceOf(user1);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
 
         // At base notePrice=1e18: should receive exactly 1000 USDC (6 decimals)
         assertEq(usdc.balanceOf(user1) - usdcBefore, 1000e6);
 
         // Verify via price-aware helper
-        assertEq(usdc.balanceOf(user1) - usdcBefore, _expectedUsdcFromNotes(noteAmount));
+        assertEq(usdc.balanceOf(user1) - usdcBefore, _expectedUsdcFromNotes(okuMAmount));
     }
 
     function test_DecimalConversion_RoundTripPreservesValue() public {
         uint256 startingUsdc = 5000e6; // 5000 USDC
 
-        // Mint OkuNote
+        // Mint OkuMoney
         _approveUsdc(user1, address(litePsm), startingUsdc);
         vm.prank(user1);
-        litePsm.mint_OkuNote(startingUsdc);
+        litePsm.mint_OkuM(startingUsdc);
 
-        uint256 noteReceived = okuNote.balanceOf(user1);
-        assertEq(noteReceived, 5000e18); // 5000 OkuNote at base price
+        uint256 noteReceived = okuMoney.balanceOf(user1);
+        assertEq(noteReceived, 5000e18); // 5000 OkuMoney at base price
 
         // Redeem back to USDC
-        _approveOkuNote(user1, address(litePsm), noteReceived);
+        _approveOkuMoney(user1, address(litePsm), noteReceived);
 
         uint256 usdcBefore = usdc.balanceOf(user1);
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteReceived);
+        litePsm.redeem_OkuM(noteReceived);
 
         // Should get back exactly what we started with at base price
         assertEq(usdc.balanceOf(user1) - usdcBefore, startingUsdc);
@@ -901,10 +901,10 @@ contract LitePSMTest is BaseTest {
 
         _approveUsdc(user1, address(litePsm), smallUsdc);
         vm.prank(user1);
-        litePsm.mint_OkuNote(smallUsdc);
+        litePsm.mint_OkuM(smallUsdc);
 
-        // At base price: should mint 1 OkuNote
-        assertEq(okuNote.balanceOf(user1), 1e18);
+        // At base price: should mint 1 OkuMoney
+        assertEq(okuMoney.balanceOf(user1), 1e18);
     }
 
     function test_DecimalConversion_LargeAmounts() public {
@@ -914,22 +914,22 @@ contract LitePSMTest is BaseTest {
         _approveUsdc(user1, address(litePsm), largeUsdc);
 
         vm.prank(user1);
-        litePsm.mint_OkuNote(largeUsdc);
+        litePsm.mint_OkuM(largeUsdc);
 
-        // At base price: should mint 1 million OkuNote
-        assertEq(okuNote.balanceOf(user1), 1_000_000e18);
+        // At base price: should mint 1 million OkuMoney
+        assertEq(okuMoney.balanceOf(user1), 1_000_000e18);
     }
 
     function test_DecimalConversion_RedeemTooSmall() public {
-        // 1 wei of OkuNote should fail since it rounds to 0 USDC
-        uint256 tinyAmount = 1; // 1 wei of OkuNote
+        // 1 wei of OkuMoney should fail since it rounds to 0 USDC
+        uint256 tinyAmount = 1; // 1 wei of OkuMoney
 
-        _mintOkuNote(user1, tinyAmount);
-        _approveOkuNote(user1, address(litePsm), tinyAmount);
+        _mintOkuMoney(user1, tinyAmount);
+        _approveOkuMoney(user1, address(litePsm), tinyAmount);
 
         vm.prank(user1);
         vm.expectRevert("Amount too small");
-        litePsm.redeem_OkuNote(tinyAmount);
+        litePsm.redeem_OkuM(tinyAmount);
     }
 
     function test_DecimalConversion_ExactConversionFactor() public {
@@ -938,32 +938,32 @@ contract LitePSMTest is BaseTest {
 
         _approveUsdc(user1, address(litePsm), usdcAmount);
         vm.prank(user1);
-        litePsm.mint_OkuNote(usdcAmount);
+        litePsm.mint_OkuM(usdcAmount);
 
-        // At base price: OkuNote = USDC * 10^12
-        assertEq(okuNote.balanceOf(user1), usdcAmount * (10 ** 12));
-        assertEq(okuNote.balanceOf(user1), 123e18);
+        // At base price: OkuMoney = USDC * 10^12
+        assertEq(okuMoney.balanceOf(user1), usdcAmount * (10 ** 12));
+        assertEq(okuMoney.balanceOf(user1), 123e18);
     }
 
     // ============ Truncation Dust Retention Tests (Finding 7) ============
 
     function test_Redeem_TruncationDustBurnedWithNote() public {
-        // Mint OkuNote with sub-USDC dust: 100.0000005 OkuNote
-        uint256 noteAmount = 100e18 + 5e11; // 100 OkuNote + 0.0000005 OkuNote dust
+        // Mint OkuMoney with sub-USDC dust: 100.0000005 OkuMoney
+        uint256 okuMAmount = 100e18 + 5e11; // 100 OkuMoney + 0.0000005 OkuMoney dust
 
-        _mintOkuNote(user1, noteAmount);
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         uint256 usdcBefore = usdc.balanceOf(user1);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
 
-        // At base price: dollarValue18 = noteAmount * 1e18 / 1e18 = noteAmount
-        // usdcAmount = noteAmount / 1e12 = 100e6 (truncated down, dust lost)
-        // PSM transfers and burns the FULL noteAmount — user retains nothing.
+        // At base price: dollarValue18 = okuMAmount * 1e18 / 1e18 = okuMAmount
+        // usdcAmount = okuMAmount / 1e12 = 100e6 (truncated down, dust lost)
+        // PSM transfers and burns the FULL okuMAmount — user retains nothing.
         // The sub-USDC dust value is lost in the integer truncation.
-        assertEq(okuNote.balanceOf(user1), 0, "All notes transferred and burned");
+        assertEq(okuMoney.balanceOf(user1), 0, "All notes transferred and burned");
         assertEq(
             usdc.balanceOf(user1) - usdcBefore,
             100e6,
@@ -973,23 +973,23 @@ contract LitePSMTest is BaseTest {
 
     function test_Redeem_QueuePath_TruncationDustQueuedWithNote() public {
         // Amount that exceeds buffer AND has dust
-        uint256 noteAmount = 10_000e18 + 7e11;
+        uint256 okuMAmount = 10_000e18 + 7e11;
 
-        _mintOkuNote(user1, noteAmount);
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
 
-        // PSM transfers the full noteAmount (including dust) to the queue.
+        // PSM transfers the full okuMAmount (including dust) to the queue.
         // User retains nothing — all notes are moved.
-        assertEq(okuNote.balanceOf(user1), 0, "All notes transferred to queue");
+        assertEq(okuMoney.balanceOf(user1), 0, "All notes transferred to queue");
 
         // Queue holds the full amount including dust
         assertEq(
-            okuNote.balanceOf(address(redemptionQueue)),
-            noteAmount,
-            "Queue holds full noteAmount including dust"
+            okuMoney.balanceOf(address(redemptionQueue)),
+            okuMAmount,
+            "Queue holds full okuMAmount including dust"
         );
     }
 
@@ -1000,22 +1000,22 @@ contract LitePSMTest is BaseTest {
         // 100 notes at $1.05: dollarValue18 = 100e18 * 1.05e18 / 1e18 = 105e18
         // usdcAmount = 105e18 / 1e12 = 105e6 (clean, no dust)
         // Add sub-USDC dust in dollar-value terms
-        // dollarValue18 = noteAmount * 1.05e18 / 1e18
+        // dollarValue18 = okuMAmount * 1.05e18 / 1e18
         // For dust to appear: we need dollarValue18 to have sub-1e12 residue
-        // noteAmount = 100e18 + 1 → dollarValue18 = (100e18 + 1) * 1.05e18 / 1e18
+        // okuMAmount = 100e18 + 1 → dollarValue18 = (100e18 + 1) * 1.05e18 / 1e18
         //            = 105e18 + 1.05 (truncated to 105e18 + 1)
         // usdcAmount = (105e18 + 1) / 1e12 = 105e6 (same, dust lost in USDC truncation)
-        uint256 noteAmount = 100e18;
+        uint256 okuMAmount = 100e18;
 
-        _mintOkuNote(user1, noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
         _mintUsdc(address(litePsm), 1000e6);
 
-        _approveOkuNote(user1, address(litePsm), noteAmount);
+        _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.prank(user1);
-        litePsm.redeem_OkuNote(noteAmount);
+        litePsm.redeem_OkuM(okuMAmount);
 
-        uint256 expectedUsdc = _expectedUsdcFromNotes(noteAmount);
+        uint256 expectedUsdc = _expectedUsdcFromNotes(okuMAmount);
         assertEq(expectedUsdc, 105e6, "100 notes at $1.05 = 105 USDC");
     }
 
@@ -1072,17 +1072,17 @@ contract LitePSMTest is BaseTest {
 
     function test_RedeemWithPermit_Success() public {
         uint256 amount = 100e18;
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         // Generate permit signature
         uint256 user1Pk = 0xA11CE; // Private key for signing
         address user1Addr = vm.addr(user1Pk);
 
         // Mint to the permit user instead
-        _mintOkuNote(user1Addr, amount);
+        _mintOkuMoney(user1Addr, amount);
 
         uint256 deadline = block.timestamp + 1 hours;
-        bytes32 domainSeparator = _getOkuNoteDomainSeparator();
+        bytes32 domainSeparator = _getOkuMoneyDomainSeparator();
         bytes32 permitHash = keccak256(
             abi.encode(
                 keccak256(
@@ -1091,7 +1091,7 @@ contract LitePSMTest is BaseTest {
                 user1Addr,
                 address(litePsm),
                 amount,
-                okuNote.nonces(user1Addr),
+                okuMoney.nonces(user1Addr),
                 deadline
             )
         );
@@ -1101,22 +1101,22 @@ contract LitePSMTest is BaseTest {
         uint256 usdcBefore = usdc.balanceOf(user1Addr);
 
         vm.prank(user1Addr);
-        litePsm.redeem_OkuNoteWithPermit(amount, deadline, v, r, s);
+        litePsm.redeem_OkuMWithPermit(amount, deadline, v, r, s);
 
         // At base price: should redeem 100 USDC
         uint256 expectedUsdc = _expectedUsdcFromNotes(amount);
         assertEq(usdc.balanceOf(user1Addr), usdcBefore + expectedUsdc);
-        assertEq(okuNote.balanceOf(user1Addr), 0);
+        assertEq(okuMoney.balanceOf(user1Addr), 0);
     }
 
     function test_RedeemWithPermit_RevertsExpiredDeadline() public {
         uint256 amount = 100e18;
         uint256 user1Pk = 0xA11CE;
         address user1Addr = vm.addr(user1Pk);
-        _mintOkuNote(user1Addr, amount);
+        _mintOkuMoney(user1Addr, amount);
 
         uint256 deadline = block.timestamp - 1; // Already expired
-        bytes32 domainSeparator = _getOkuNoteDomainSeparator();
+        bytes32 domainSeparator = _getOkuMoneyDomainSeparator();
         bytes32 permitHash = keccak256(
             abi.encode(
                 keccak256(
@@ -1125,7 +1125,7 @@ contract LitePSMTest is BaseTest {
                 user1Addr,
                 address(litePsm),
                 amount,
-                okuNote.nonces(user1Addr),
+                okuMoney.nonces(user1Addr),
                 deadline
             )
         );
@@ -1134,7 +1134,7 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(user1Addr);
         vm.expectRevert(); // ERC2612ExpiredSignature
-        litePsm.redeem_OkuNoteWithPermit(amount, deadline, v, r, s);
+        litePsm.redeem_OkuMWithPermit(amount, deadline, v, r, s);
     }
 
     // ============ UUPS Upgrade (Finding 24) ============
@@ -1145,8 +1145,8 @@ contract LitePSMTest is BaseTest {
         vm.prank(admin);
         litePsm.upgradeToAndCall(address(newImpl), "");
 
-        // Verify state preserved (okuNote address still set)
-        assertEq(address(litePsm.okuNote()), address(okuNote));
+        // Verify state preserved (okuMoney address still set)
+        assertEq(address(litePsm.okuMoney()), address(okuMoney));
     }
 
     function test_UUPS_UpgradePSM_RevertNotUpgrader() public {
@@ -1163,17 +1163,17 @@ contract LitePSMTest is BaseTest {
 
     // ============ Internal Helpers ============
 
-    function _getOkuNoteDomainSeparator() internal view returns (bytes32) {
-        // EIP-712 domain separator for OkuNote
+    function _getOkuMoneyDomainSeparator() internal view returns (bytes32) {
+        // EIP-712 domain separator for OkuMoney
         return keccak256(
             abi.encode(
                 keccak256(
                     "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
                 ),
-                keccak256(bytes("OkuNote")),
+                keccak256(bytes("OkuMoney")),
                 keccak256(bytes("1")),
                 block.chainid,
-                address(okuNote)
+                address(okuMoney)
             )
         );
     }
@@ -1189,9 +1189,9 @@ contract LitePSMTest is BaseTest {
 
         // Should succeed because oracle address is zero
         vm.prank(user1);
-        litePsm.mint_OkuNote(100e6);
+        litePsm.mint_OkuM(100e6);
 
-        uint256 expectedOkuNote = _expectedNotesFromUsdc(100e6);
-        assertEq(okuNote.balanceOf(user1), expectedOkuNote);
+        uint256 expectedOkuMoney = _expectedNotesFromUsdc(100e6);
+        assertEq(okuMoney.balanceOf(user1), expectedOkuMoney);
     }
 }

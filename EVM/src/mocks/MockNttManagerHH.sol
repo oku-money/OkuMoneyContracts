@@ -4,7 +4,7 @@ pragma solidity ^0.8.28;
 import {INttManager} from "../bridge/adapters/INttManager.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-interface IOkuNoteMintable {
+interface IOkuMoneyMintable {
     function mint(address to, uint256 amount) external;
 }
 
@@ -23,7 +23,7 @@ interface IOkuNoteMintable {
  * 1. transfer() records pending transfer (tokens already burned by router)
  * 2. Test calls completeBridge() to simulate destination mint
  *
- * Note: This mock does NOT pull tokens because in the OkuNote architecture,
+ * Note: This mock does NOT pull tokens because in the OkuMoney architecture,
  * the OkuBridgeRouter burns tokens BEFORE calling the adapter.
  */
 contract MockNttManagerHH is INttManager {
@@ -41,7 +41,7 @@ contract MockNttManagerHH is INttManager {
     uint64 private nextSequence;
 
     IERC20 public token;
-    IOkuNoteMintable public okuNote;
+    IOkuMoneyMintable public okuMoney;
 
     // Fee configuration
     uint256 public messageFee;
@@ -61,9 +61,9 @@ contract MockNttManagerHH is INttManager {
     error InvalidTransferIndex();
     error TransferAlreadyCompleted();
 
-    constructor(address _token, address _okuNote) {
+    constructor(address _token, address _okuMoney) {
         token = IERC20(_token);
-        okuNote = IOkuNoteMintable(_okuNote);
+        okuMoney = IOkuMoneyMintable(_okuMoney);
     }
 
     /**
@@ -88,7 +88,7 @@ contract MockNttManagerHH is INttManager {
             revert InsufficientFee(messageFee, msg.value);
         }
 
-        // Note: We don't pull tokens here because in the OkuNote architecture,
+        // Note: We don't pull tokens here because in the OkuMoney architecture,
         // the OkuBridgeRouter burns tokens BEFORE calling the adapter.
         // The adapter just emits the cross-chain message.
 
@@ -137,9 +137,9 @@ contract MockNttManagerHH is INttManager {
         // Convert bytes32 back to address
         address recipient = address(uint160(uint256(p.recipient)));
 
-        // Mint OkuNote on destination
+        // Mint OkuMoney on destination
         // NOTE: This contract must have MINTER granted
-        okuNote.mint(recipient, p.amount);
+        okuMoney.mint(recipient, p.amount);
 
         emit TransferCompleted(index, recipient, p.amount);
     }
@@ -156,7 +156,7 @@ contract MockNttManagerHH is INttManager {
 
         p.completed = true;
 
-        okuNote.mint(to, p.amount);
+        okuMoney.mint(to, p.amount);
 
         emit TransferCompleted(index, to, p.amount);
     }

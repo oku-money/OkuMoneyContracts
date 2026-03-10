@@ -16,12 +16,12 @@ import {
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IOkuNote} from "../interfaces/IOkuNote.sol";
+import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 
 /**
  * @title OkuBridge
- * @notice Orchestrator-signed cross-chain bridge for OkuNote using burn-and-mint pattern
- * @dev Operates on raw token amounts (OkuNote is non-rebasing — no share conversion needed).
+ * @notice Orchestrator-signed cross-chain bridge for OkuMoney using burn-and-mint pattern
+ * @dev Operates on raw token amounts (OkuMoney is non-rebasing — no share conversion needed).
  *
  * Architecture:
  * 1. Source Chain: User calls bridgeBurn() → burns tokens, collects fee, emits event
@@ -47,8 +47,8 @@ contract OkuBridge is
     using SafeERC20 for IERC20;
     // ============ State Variables ============
 
-    /// @notice OkuNote token contract
-    IOkuNote public okuNote;
+    /// @notice OkuMoney token contract
+    IOkuMoney public okuMoney;
 
     /// @notice Authorized signer address (orchestrator's KMS public key)
     address public authorizedSigner;
@@ -111,7 +111,7 @@ contract OkuBridge is
         uint256 destChainId;
         address sender;
         bytes32 recipient; // bytes32 to support non-EVM destinations (e.g. Solana 32-byte pubkeys)
-        uint256 amount; // Raw token amount (OkuNote is non-rebasing)
+        uint256 amount; // Raw token amount (OkuMoney is non-rebasing)
         uint256 nonce;
         uint256 deadline;
     }
@@ -168,13 +168,13 @@ contract OkuBridge is
 
     /**
      * @notice Initialize the bridge contract
-     * @param _okuNote OkuNote token address
+     * @param _okuMoney OkuMoney token address
      * @param _authorizedSigner Orchestrator's authorized signer address
      * @param _feeRecipient Address to receive bridge fees
      * @param _admin Admin address for role management
      */
     function initialize(
-        address _okuNote,
+        address _okuMoney,
         address _authorizedSigner,
         address _feeRecipient,
         address _admin
@@ -182,7 +182,7 @@ contract OkuBridge is
         external
         initializer
     {
-        if (_okuNote == address(0)) revert ZeroAddress();
+        if (_okuMoney == address(0)) revert ZeroAddress();
         if (_authorizedSigner == address(0)) revert ZeroAddress();
         if (_feeRecipient == address(0)) revert ZeroAddress();
         if (_admin == address(0)) revert ZeroAddress();
@@ -191,7 +191,7 @@ contract OkuBridge is
         __Pausable_init();
         __EIP712_init("OkuBridge", "1");
 
-        okuNote = IOkuNote(_okuNote);
+        okuMoney = IOkuMoney(_okuMoney);
         authorizedSigner = _authorizedSigner;
         feeRecipient = _feeRecipient;
 
@@ -262,12 +262,12 @@ contract OkuBridge is
         uint256 netAmount = amount - feeAmount;
 
         // Transfer tokens from caller, then self-burn (Circle model: burn only own tokens)
-        IERC20(address(okuNote)).safeTransferFrom(msg.sender, address(this), amount);
-        okuNote.burn(amount);
+        IERC20(address(okuMoney)).safeTransferFrom(msg.sender, address(this), amount);
+        okuMoney.burn(amount);
 
         // Mint fee to fee recipient
         if (feeAmount > 0) {
-            okuNote.mint(feeRecipient, feeAmount);
+            okuMoney.mint(feeRecipient, feeAmount);
         }
 
         // Get and increment nonce
@@ -357,8 +357,8 @@ contract OkuBridge is
         address mintTo = address(uint160(uint256(request.recipient)));
         if (mintTo == address(0)) revert ZeroAddress();
 
-        // Mint tokens directly (OkuNote is non-rebasing, no share conversion)
-        okuNote.mint(mintTo, request.amount);
+        // Mint tokens directly (OkuMoney is non-rebasing, no share conversion)
+        okuMoney.mint(mintTo, request.amount);
 
         // Emit event
         emit BridgeMint(requestId, request.recipient, request.sourceChainId, request.amount);
@@ -402,7 +402,7 @@ contract OkuBridge is
         refundedRequests[requestId] = true;
 
         // Mint tokens back to original sender (raw amount, no share conversion)
-        okuNote.mint(request.sender, request.amount);
+        okuMoney.mint(request.sender, request.amount);
 
         emit RefundProcessed(requestId, request.sender, request.amount);
     }
@@ -501,12 +501,12 @@ contract OkuBridge is
 
     /**
      * @notice Sweep accumulated rounding dust (at most 1 wei per bridge tx)
-     * @dev Transfers the bridge's entire OkuNote balance to feeRecipient
+     * @dev Transfers the bridge's entire OkuMoney balance to feeRecipient
      */
     function sweepDust() external onlyRole(DUST_SWEEPER) {
-        uint256 balance = IERC20(address(okuNote)).balanceOf(address(this));
+        uint256 balance = IERC20(address(okuMoney)).balanceOf(address(this));
         if (balance > 0) {
-            IERC20(address(okuNote)).safeTransfer(feeRecipient, balance);
+            IERC20(address(okuMoney)).safeTransfer(feeRecipient, balance);
             emit DustSwept(feeRecipient, balance);
         }
     }

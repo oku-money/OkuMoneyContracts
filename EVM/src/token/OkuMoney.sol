@@ -17,16 +17,16 @@ import {
 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 
 /**
- * @title OkuNote
+ * @title OkuMoney
  * @notice Non-rebasing base token backed by US T-Bills with rear-facing yield
  * @dev Standard ERC-20 balances (static). Yield is expressed through price appreciation
- *      tracked by an internal `notePrice()` view function using `_rpow` continuous accrual.
+ *      tracked by an internal `okuMPrice()` view function using `_rpow` continuous accrual.
  *      DeFi and bridge compatible out of the box — no share conversion needed.
  *
  *      Key distinction: balanceOf() returns raw token count (standard ERC-20).
- *      notePrice() is a separate view function for pricing — used by PSM and vault.
+ *      okuMPrice() is a separate view function for pricing — used by PSM and vault.
  */
-contract OkuNote is
+contract OkuMoney is
     Initializable,
     ERC20Upgradeable,
     ERC20PermitUpgradeable,
@@ -35,12 +35,12 @@ contract OkuNote is
     UUPSUpgradeable
 {
     bytes32 public constant UPGRADER = keccak256("UPGRADER");
-    bytes32 public constant NOTE_PAUSER = keccak256("NOTE_PAUSER");
+    bytes32 public constant OKUM_PAUSER = keccak256("OKUM_PAUSER");
     bytes32 public constant MINTER = keccak256("MINTER");
 
     // Granular RBAC roles
-    bytes32 public constant NOTE_UNPAUSER = keccak256("NOTE_UNPAUSER");
-    bytes32 public constant NOTE_REBASER = keccak256("NOTE_REBASER");
+    bytes32 public constant OKUM_UNPAUSER = keccak256("OKUM_UNPAUSER");
+    bytes32 public constant OKUM_REBASER = keccak256("OKUM_REBASER");
     bytes32 public constant BLACKLISTER = keccak256("BLACKLISTER");
     bytes32 public constant UNBLACKLISTER = keccak256("UNBLACKLISTER");
     bytes32 public constant CAP_MANAGER = keccak256("CAP_MANAGER");
@@ -72,7 +72,7 @@ contract OkuNote is
     bool private _blacklistExemptInitialized;
 
     // Events
-    event NotePriceUpdated(uint256 oldPrice, uint256 newPrice);
+    event OkuMPriceUpdated(uint256 oldPrice, uint256 newPrice);
     event YieldRateUpdated(uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotPrice);
     event NextYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
     event MinterAllowanceUpdated(
@@ -103,7 +103,7 @@ contract OkuNote is
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(UPGRADER, admin);
-        _grantRole(NOTE_PAUSER, admin);
+        _grantRole(OKUM_PAUSER, admin);
 
         _basePrice = PRECISION;
         ratePerSecond = PRECISION;
@@ -115,15 +115,15 @@ contract OkuNote is
     // ============ Price Accrual Logic ============
 
     /**
-     * @notice Computed note price with continuous yield accrual
+     * @notice Computed OkuM price with continuous yield accrual
      * @dev Handles current rate, rate expiry, and pending rate crossover.
-     *      notePrice() starts at 1e18 ($1.00) and grows as rear-facing T-Bill yield accrues.
-     *      After one year at 4.5% APY, notePrice() returns ~1.045e18 ($1.045).
+     *      okuMPrice() starts at 1e18 ($1.00) and grows as rear-facing T-Bill yield accrues.
+     *      After one year at 4.5% APY, okuMPrice() returns ~1.045e18 ($1.045).
      *
-     *      Key: balanceOf() is NOT affected by notePrice(). Price appreciation is
+     *      Key: balanceOf() is NOT affected by okuMPrice(). Price appreciation is
      *      tracked separately for use by the PSM and vault.
      */
-    function notePrice() public view returns (uint256) {
+    function okuMPrice() public view returns (uint256) {
         uint256 rate = ratePerSecond;
         if (rate <= PRECISION) {
             // No yield accrual — check if pending rate has activated
@@ -178,14 +178,14 @@ contract OkuNote is
         uint256 endTimestamp
     )
         external
-        onlyRole(NOTE_REBASER)
+        onlyRole(OKUM_REBASER)
     {
         require(newRatePerSecond >= PRECISION, "Rate cannot be negative");
         require(newRatePerSecond <= MAX_RATE, "Rate too high");
         require(endTimestamp == 0 || endTimestamp > block.timestamp, "End must be in the future");
 
         // Snapshot current state
-        _basePrice = notePrice();
+        _basePrice = okuMPrice();
         lastAccrualTime = block.timestamp;
 
         ratePerSecond = newRatePerSecond;
@@ -199,7 +199,7 @@ contract OkuNote is
      * @notice Schedule the next yield rate (activates when current rate expires)
      * @param newRatePerSecond Compound rate per second for the next period
      */
-    function setNextYieldRate(uint256 newRatePerSecond) external onlyRole(NOTE_REBASER) {
+    function setNextYieldRate(uint256 newRatePerSecond) external onlyRole(OKUM_REBASER) {
         require(newRatePerSecond >= PRECISION, "Rate cannot be negative");
         require(newRatePerSecond <= MAX_RATE, "Rate too high");
         require(rateEnd != 0, "Current rate has no end");
@@ -213,15 +213,15 @@ contract OkuNote is
      * @notice Emergency override — snapshots computed price, resets rate to zero yield
      * @param newPrice New price value (must be >= current computed price)
      */
-    function updateNotePrice(uint256 newPrice) external onlyRole(NOTE_REBASER) {
-        uint256 currentPrice = notePrice();
+    function updateOkuMPrice(uint256 newPrice) external onlyRole(OKUM_REBASER) {
+        uint256 currentPrice = okuMPrice();
         require(newPrice >= currentPrice, "Price cannot decrease");
         _basePrice = newPrice;
         ratePerSecond = PRECISION;
         rateEnd = 0;
         pendingRatePerSecond = PRECISION;
         lastAccrualTime = block.timestamp;
-        emit NotePriceUpdated(currentPrice, newPrice);
+        emit OkuMPriceUpdated(currentPrice, newPrice);
     }
 
     // ============ Exponentiation by Squaring (MakerDAO DSS) ============
@@ -293,8 +293,8 @@ contract OkuNote is
 
     /**
      * @notice Mint raw tokens to an address
-     * @dev Creates raw tokens; minting 100 tokens when notePrice = $1.05 creates $105 of value.
-     *      The PSM handles USDC <-> note conversion using notePrice().
+     * @dev Creates raw tokens; minting 100 tokens when okuMPrice = $1.05 creates $105 of value.
+     *      The PSM handles USDC <-> OkuM conversion using okuMPrice().
      */
     function mint(address to, uint256 amount) external onlyRole(MINTER) whenNotPaused {
         require(!isBlacklisted[to], "Recipient blacklisted");
@@ -378,11 +378,11 @@ contract OkuNote is
 
     // ============ Pause Management ============
 
-    function pause() external onlyRole(NOTE_PAUSER) {
+    function pause() external onlyRole(OKUM_PAUSER) {
         _pause();
     }
 
-    function unpause() external onlyRole(NOTE_UNPAUSER) {
+    function unpause() external onlyRole(OKUM_UNPAUSER) {
         _unpause();
     }
 

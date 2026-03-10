@@ -3,10 +3,10 @@ import {
     LitePSM__factory,
     OkuBridgeRouter,
     OkuBridgeRouter__factory,
-    OkuNote,
-    OkuNote__factory,
-    OkuUSD,
-    OkuUSD__factory,
+    OkuMoney,
+    OkuMoney__factory,
+    OkuDollar,
+    OkuDollar__factory,
     RedemptionQueue,
     RedemptionQueue__factory,
     IERC20__factory
@@ -19,7 +19,7 @@ import { getTokenAddress, getWhaleAddress } from "../../../config/config"
 const USDC_MAINNET = getTokenAddress("mainnet", "usdc")
 const USDC_WHALE = getWhaleAddress("mainnet", "usdc")!
 
-describe("OkuUSD Vault Scenarios", () => {
+describe("OkuDollar Vault Scenarios", () => {
     let Frank: Signer
     let Bob: Signer
     let Alice: Signer
@@ -28,7 +28,7 @@ describe("OkuUSD Vault Scenarios", () => {
     let okuBridgeRouter: OkuBridgeRouter
     let psm: LitePSM
     let queue: RedemptionQueue
-    let okuNote: OkuNote
+    let okuMoney: OkuNote
     let okuUsd: OkuUSD
 
     let usdc: ReturnType<typeof IERC20__factory.connect>
@@ -36,9 +36,9 @@ describe("OkuUSD Vault Scenarios", () => {
     const MINTER = ethers.keccak256(ethers.toUtf8Bytes("MINTER"))
     const PSM = ethers.keccak256(ethers.toUtf8Bytes("PSM"))
     const ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("ALLOWANCE_MANAGER"))
-    const NOTE_REBASER = ethers.keccak256(ethers.toUtf8Bytes("NOTE_REBASER"))
-    const NOTE_PAUSER = ethers.keccak256(ethers.toUtf8Bytes("NOTE_PAUSER"))
-    const NOTE_UNPAUSER = ethers.keccak256(ethers.toUtf8Bytes("NOTE_UNPAUSER"))
+    const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
+    const OKUM_PAUSER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_PAUSER"))
+    const OKUM_UNPAUSER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_UNPAUSER"))
     const BLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("BLACKLISTER"))
     const UNBLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("UNBLACKLISTER"))
     const CAP_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("CAP_MANAGER"))
@@ -61,7 +61,7 @@ describe("OkuUSD Vault Scenarios", () => {
     async function getOkuNote(user: Signer, usdcAmount: bigint) {
         await fundWithUSDC(user, usdcAmount)
         await usdc.connect(user).approve(await psm.getAddress(), usdcAmount)
-        await psm.connect(user).mint_OkuNote(usdcAmount)
+        await psm.connect(user).mint_OkuM(usdcAmount)
     }
 
     before(async () => {
@@ -94,78 +94,78 @@ describe("OkuUSD Vault Scenarios", () => {
         const frankAddr = await Frank.getAddress()
         const MAX_SUPPLY = parseEther("1000000000")
 
-        okuNote = await upgrades.deployProxy(
-            new OkuNote__factory(Frank),
-            ["OkuNote", "OKUNOTE", frankAddr, MAX_SUPPLY],
+        okuMoney = await upgrades.deployProxy(
+            new OkuMoney__factory(Frank),
+            ["OkuMoney", "OkuM", frankAddr, MAX_SUPPLY],
             { kind: "uups" }
         ) as unknown as OkuNote
-        await okuNote.waitForDeployment()
+        await okuMoney.waitForDeployment()
 
         okuUsd = await upgrades.deployProxy(
-            new OkuUSD__factory(Frank),
-            [await okuNote.getAddress(), "OkuUSD", "OKUSD", frankAddr, parseEther("0.95")],
+            new OkuDollar__factory(Frank),
+            [await okuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr, parseEther("0.95")],
             { kind: "uups" }
         ) as unknown as OkuUSD
         await okuUsd.waitForDeployment()
 
         queue = await upgrades.deployProxy(
             new RedemptionQueue__factory(Frank),
-            [await okuNote.getAddress(), frankAddr],
+            [await okuMoney.getAddress(), frankAddr],
             { kind: "uups" }
         ) as unknown as RedemptionQueue
         await queue.waitForDeployment()
 
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            [await okuNote.getAddress(), await okuUsd.getAddress(), USDC_MAINNET, await queue.getAddress(), frankAddr],
+            [await okuMoney.getAddress(), await okuUsd.getAddress(), USDC_MAINNET, await queue.getAddress(), frankAddr],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()
 
         okuBridgeRouter = await upgrades.deployProxy(
             new OkuBridgeRouter__factory(Frank),
-            [await okuUsd.getAddress(), await okuNote.getAddress(), frankAddr, frankAddr],
+            [await okuUsd.getAddress(), await okuMoney.getAddress(), frankAddr, frankAddr],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as OkuBridgeRouter
         await okuBridgeRouter.waitForDeployment()
 
-        await okuNote.connect(Frank).grantRole(MINTER, await psm.getAddress())
+        await okuMoney.connect(Frank).grantRole(MINTER, await psm.getAddress())
 
         // Grant RBAC roles to Frank (admin) for testing
-        await okuNote.connect(Frank).grantRole(ALLOWANCE_MANAGER, frankAddr)
-        await okuNote.connect(Frank).grantRole(NOTE_REBASER, frankAddr)
-        await okuNote.connect(Frank).grantRole(NOTE_PAUSER, frankAddr)
-        await okuNote.connect(Frank).grantRole(NOTE_UNPAUSER, frankAddr)
-        await okuNote.connect(Frank).grantRole(BLACKLISTER, frankAddr)
-        await okuNote.connect(Frank).grantRole(UNBLACKLISTER, frankAddr)
-        await okuNote.connect(Frank).grantRole(CAP_MANAGER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(ALLOWANCE_MANAGER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(OKUM_REBASER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(OKUM_PAUSER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(OKUM_UNPAUSER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(BLACKLISTER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(UNBLACKLISTER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(CAP_MANAGER, frankAddr)
 
         // Grant PSM-specific roles to Frank
         await psm.connect(Frank).grantRole(BUFFER_WITHDRAWER, frankAddr)
         await psm.connect(Frank).grantRole(QUEUE_PROCESSOR, frankAddr)
 
-        await okuNote.connect(Frank).configureMinterAllowance(
+        await okuMoney.connect(Frank).configureMinterAllowance(
             await psm.getAddress(),
             parseEther("1000000000")
         )
         await queue.connect(Frank).grantRole(PSM, await psm.getAddress())
-        await okuNote.connect(Frank).grantRole(MINTER, await queue.getAddress())
+        await okuMoney.connect(Frank).grantRole(MINTER, await queue.getAddress())
     })
 
     describe("Wrap/Unwrap Round-Trip", () => {
-        it("Wrap OkuNote and unwrap with minimal loss", async () => {
+        it("Wrap OkuMoney and unwrap with minimal loss", async () => {
             const aliceAddr = await Alice.getAddress()
             const okuUsdAddr = await okuUsd.getAddress()
             const depositAmount = parseUnits("10000", 6)
 
-            // Get OkuNote via PSM
+            // Get OkuMoney via PSM
             await getOkuNote(Alice, depositAmount)
 
-            const noteBalance = await okuNote.balanceOf(aliceAddr)
+            const noteBalance = await okuMoney.balanceOf(aliceAddr)
             expect(noteBalance).to.be.gt(0)
 
-            // Wrap OkuNote into OkuUSD vault
-            await okuNote.connect(Alice).approve(okuUsdAddr, noteBalance)
+            // Wrap OkuMoney into OkuDollar vault
+            await okuMoney.connect(Alice).approve(okuUsdAddr, noteBalance)
             const okuUsdBefore = await okuUsd.balanceOf(aliceAddr)
             await okuUsd.connect(Alice).wrap(noteBalance, aliceAddr)
 
@@ -173,22 +173,22 @@ describe("OkuUSD Vault Scenarios", () => {
             expect(okuUsdReceived).to.be.gt(okuUsdBefore)
 
             // Verify vault holds the notes
-            const vaultNotes = await okuNote.balanceOf(okuUsdAddr)
-            const totalReserves = await okuUsd.totalNoteReserves()
+            const vaultNotes = await okuMoney.balanceOf(okuUsdAddr)
+            const totalReserves = await okuUsd.totalOkuMReserves()
             expect(vaultNotes).to.equal(totalReserves)
 
-            // Unwrap all OkuUSD immediately
-            const notesBefore = await okuNote.balanceOf(aliceAddr)
+            // Unwrap all OkuDollar immediately
+            const notesBefore = await okuMoney.balanceOf(aliceAddr)
             await okuUsd.connect(Alice).unwrap(okuUsdReceived, aliceAddr)
 
-            const notesAfter = await okuNote.balanceOf(aliceAddr)
+            const notesAfter = await okuMoney.balanceOf(aliceAddr)
             const notesReturned = notesAfter - notesBefore
 
             // Should get back original note amount (± 1 wei rounding)
             expect(notesReturned).to.be.closeTo(noteBalance, 1n)
 
             // Vault should be empty
-            expect(await okuUsd.totalNoteReserves()).to.equal(0)
+            expect(await okuUsd.totalOkuMReserves()).to.equal(0)
         })
     })
 
@@ -198,26 +198,26 @@ describe("OkuUSD Vault Scenarios", () => {
             const okuUsdAddr = await okuUsd.getAddress()
             const depositAmount = parseUnits("10000", 6)
 
-            // Get OkuNote via PSM
+            // Get OkuMoney via PSM
             await getOkuNote(Alice, depositAmount)
-            const noteBalance = await okuNote.balanceOf(aliceAddr)
+            const noteBalance = await okuMoney.balanceOf(aliceAddr)
 
             // Wrap into vault
-            await okuNote.connect(Alice).approve(okuUsdAddr, noteBalance)
+            await okuMoney.connect(Alice).approve(okuUsdAddr, noteBalance)
             await okuUsd.connect(Alice).wrap(noteBalance, aliceAddr)
 
             const okuUsdBalance = await okuUsd.balanceOf(aliceAddr)
 
             // Record initial note reserves (raw token count)
-            const initialReserves = await okuUsd.totalNoteReserves()
+            const initialReserves = await okuUsd.totalOkuMReserves()
 
             // Admin increases notePrice by 10% (non-rebasing: token counts don't change)
-            const priceBefore = await okuNote.notePrice()
+            const priceBefore = await okuMoney.okuMPrice()
             const newPrice = priceBefore * 110n / 100n
-            await okuNote.connect(Frank).updateNotePrice(newPrice)
+            await okuMoney.connect(Frank).updateOkuMPrice(newPrice)
 
             // Note reserves (raw token count) should be UNCHANGED
-            const newReserves = await okuUsd.totalNoteReserves()
+            const newReserves = await okuUsd.totalOkuMReserves()
             expect(newReserves).to.equal(initialReserves)
 
             // But the dollar VALUE of reserves increased → surplus exists
@@ -226,9 +226,9 @@ describe("OkuUSD Vault Scenarios", () => {
 
             // Unwrap is price-aware: notesReturned = okuUsdBalance × usdMultiplier / notePrice
             // After notePrice increase, each note is worth more → fewer notes returned
-            const notesBefore = await okuNote.balanceOf(aliceAddr)
+            const notesBefore = await okuMoney.balanceOf(aliceAddr)
             await okuUsd.connect(Alice).unwrap(okuUsdBalance, aliceAddr)
-            const notesAfter = await okuNote.balanceOf(aliceAddr)
+            const notesAfter = await okuMoney.balanceOf(aliceAddr)
             const notesReturned = notesAfter - notesBefore
 
             // Expected: notesReturned = okuUsdBalance × usdMultiplier / notePrice
@@ -239,7 +239,7 @@ describe("OkuUSD Vault Scenarios", () => {
             expect(notesReturned).to.be.closeTo(expectedNotes, 1n)
 
             // Vault should be nearly empty (surplus notes remain)
-            expect(await okuUsd.totalNoteReserves()).to.be.closeTo(surplus, 1n)
+            expect(await okuUsd.totalOkuMReserves()).to.be.closeTo(surplus, 1n)
         })
     })
 
@@ -256,67 +256,67 @@ describe("OkuUSD Vault Scenarios", () => {
             const charlieDeposit = parseUnits("30000", 6)
 
             // Record note balances before PSM minting (may have from previous tests)
-            const aliceNotesPreMint = await okuNote.balanceOf(aliceAddr)
-            const bobNotesPreMint = await okuNote.balanceOf(bobAddr)
-            const charlieNotesPreMint = await okuNote.balanceOf(charlieAddr)
+            const aliceNotesPreMint = await okuMoney.balanceOf(aliceAddr)
+            const bobNotesPreMint = await okuMoney.balanceOf(bobAddr)
+            const charlieNotesPreMint = await okuMoney.balanceOf(charlieAddr)
 
-            // All users get OkuNote (price-aware: amount depends on current notePrice)
+            // All users get OkuMoney (price-aware: amount depends on current notePrice)
             await getOkuNote(Alice, aliceDeposit)
             await getOkuNote(Bob, bobDeposit)
             await getOkuNote(Charlie, charlieDeposit)
 
             // Use actual minted amounts (price-aware, not hardcoded)
-            const aliceNotes = (await okuNote.balanceOf(aliceAddr)) - aliceNotesPreMint
-            const bobNotes = (await okuNote.balanceOf(bobAddr)) - bobNotesPreMint
-            const charlieNotes = (await okuNote.balanceOf(charlieAddr)) - charlieNotesPreMint
+            const aliceNotes = (await okuMoney.balanceOf(aliceAddr)) - aliceNotesPreMint
+            const bobNotes = (await okuMoney.balanceOf(bobAddr)) - bobNotesPreMint
+            const charlieNotes = (await okuMoney.balanceOf(charlieAddr)) - charlieNotesPreMint
 
-            // Record initial OkuUSD balances (may have from previous tests)
+            // Record initial OkuDollar balances (may have from previous tests)
             const aliceUsdBefore = await okuUsd.balanceOf(aliceAddr)
             const bobUsdBefore = await okuUsd.balanceOf(bobAddr)
             const charlieUsdBefore = await okuUsd.balanceOf(charlieAddr)
 
-            await okuNote.connect(Alice).approve(okuUsdAddr, aliceNotes)
-            await okuNote.connect(Bob).approve(okuUsdAddr, bobNotes)
-            await okuNote.connect(Charlie).approve(okuUsdAddr, charlieNotes)
+            await okuMoney.connect(Alice).approve(okuUsdAddr, aliceNotes)
+            await okuMoney.connect(Bob).approve(okuUsdAddr, bobNotes)
+            await okuMoney.connect(Charlie).approve(okuUsdAddr, charlieNotes)
 
             await okuUsd.connect(Alice).wrap(aliceNotes, aliceAddr)
             await okuUsd.connect(Bob).wrap(bobNotes, bobAddr)
             await okuUsd.connect(Charlie).wrap(charlieNotes, charlieAddr)
 
-            // Calculate OkuUSD gained in this test only
+            // Calculate OkuDollar gained in this test only
             const aliceUsdGained = (await okuUsd.balanceOf(aliceAddr)) - aliceUsdBefore
             const bobUsdGained = (await okuUsd.balanceOf(bobAddr)) - bobUsdBefore
             const charlieUsdGained = (await okuUsd.balanceOf(charlieAddr)) - charlieUsdBefore
 
-            // Verify proportional OkuUSD received (1:2:3 ratio approximately)
+            // Verify proportional OkuDollar received (1:2:3 ratio approximately)
             expect(bobUsdGained).to.be.closeTo(aliceUsdGained * 2n, aliceUsdGained / 10n)
             expect(charlieUsdGained).to.be.closeTo(aliceUsdGained * 3n, aliceUsdGained / 10n)
 
             // Admin increases notePrice by 10% — vault accumulates surplus
-            const priceBefore = await okuNote.notePrice()
+            const priceBefore = await okuMoney.okuMPrice()
             const newPrice = priceBefore * 110n / 100n
-            await okuNote.connect(Frank).updateNotePrice(newPrice)
+            await okuMoney.connect(Frank).updateOkuMPrice(newPrice)
 
             // Vault is now overcollateralized
             expect(await okuUsd.surplus()).to.be.gt(0)
 
-            // Users unwrap their gained OkuUSD in reverse order
+            // Users unwrap their gained OkuDollar in reverse order
             // Unwrap is price-aware: notesReturned = usdAmount × usdMultiplier / notePrice
             // After notePrice increase, each user gets FEWER notes back (each note worth more)
             const usdMult = await okuUsd.usdMultiplier()
-            const currentPrice = await okuNote.notePrice()
+            const currentPrice = await okuMoney.okuMPrice()
 
-            const charlieNotesBefore = await okuNote.balanceOf(charlieAddr)
+            const charlieNotesBefore = await okuMoney.balanceOf(charlieAddr)
             await okuUsd.connect(Charlie).unwrap(charlieUsdGained, charlieAddr)
-            const charlieReceived = (await okuNote.balanceOf(charlieAddr)) - charlieNotesBefore
+            const charlieReceived = (await okuMoney.balanceOf(charlieAddr)) - charlieNotesBefore
 
-            const bobNotesBefore = await okuNote.balanceOf(bobAddr)
+            const bobNotesBefore = await okuMoney.balanceOf(bobAddr)
             await okuUsd.connect(Bob).unwrap(bobUsdGained, bobAddr)
-            const bobReceived = (await okuNote.balanceOf(bobAddr)) - bobNotesBefore
+            const bobReceived = (await okuMoney.balanceOf(bobAddr)) - bobNotesBefore
 
-            const aliceNotesBefore = await okuNote.balanceOf(aliceAddr)
+            const aliceNotesBefore = await okuMoney.balanceOf(aliceAddr)
             await okuUsd.connect(Alice).unwrap(aliceUsdGained, aliceAddr)
-            const aliceReceived = (await okuNote.balanceOf(aliceAddr)) - aliceNotesBefore
+            const aliceReceived = (await okuMoney.balanceOf(aliceAddr)) - aliceNotesBefore
 
             // Price-aware: each user receives notes = usdGained × usdMultiplier / notePrice
             const expectedAlice = (aliceUsdGained * usdMult) / currentPrice

@@ -16,10 +16,10 @@ import {
  * @title OkuBridgeRouterTest
  * @notice Tests for OkuBridgeRouter covering both bridge paths:
  *
- *   NATIVE PATH  — bridge_OkuUSD / bridge_OkuNote -> OkuBridge.bridgeBurn()
+ *   NATIVE PATH  — bridge_usdOku / bridge_OkuM -> OkuBridge.bridgeBurn()
  *   ADAPTER PATH — bridgeWrappedVia / bridgeVia -> IBridgeAdapter.bridge()
  *
- * @dev OkuNote is non-rebasing. notePrice() tracks price appreciation separately
+ * @dev OkuMoney is non-rebasing. okuMPrice() tracks price appreciation separately
  *      from balanceOf(). Token amounts are passed directly to the bridge — no share
  *      conversion is needed.
  */
@@ -82,53 +82,53 @@ contract OkuBridgeRouterTest is BaseTest {
         orchestratorSigner = vm.addr(orchestratorPk);
         feeRecipient = makeAddr("feeRecipient");
 
-        // Deploy OkuBridge (native bridge) — operates on OkuNote
+        // Deploy OkuBridge (native bridge) — operates on OkuMoney
         okuBridgeImpl = new OkuBridge();
         bytes memory bridgeInitData = abi.encodeCall(
-            OkuBridge.initialize, (address(okuNote), orchestratorSigner, feeRecipient, admin)
+            OkuBridge.initialize, (address(okuMoney), orchestratorSigner, feeRecipient, admin)
         );
         okuBridgeContract =
             OkuBridge(address(new ERC1967Proxy(address(okuBridgeImpl), bridgeInitData)));
 
-        // Deploy OkuBridgeRouter — references OkuUSD vault and OkuNote base token
+        // Deploy OkuBridgeRouter — references OkuDollar vault and OkuMoney base token
         bridgeRouterImpl = new OkuBridgeRouter();
         bytes memory routerInitData = abi.encodeCall(
             OkuBridgeRouter.initialize,
-            (address(okuUsd), address(okuNote), address(okuBridgeContract), admin)
+            (address(usdOku), address(okuMoney), address(okuBridgeContract), admin)
         );
         bridgeRouter =
             OkuBridgeRouter(address(new ERC1967Proxy(address(bridgeRouterImpl), routerInitData)));
 
-        // Deploy mock adapter (for adapter path tests) — operates on OkuNote
-        mockAdapter = new MockOkuBridge(okuNote, minter);
+        // Deploy mock adapter (for adapter path tests) — operates on OkuMoney
+        mockAdapter = new MockOkuBridge(okuMoney, minter);
 
         vm.startPrank(admin);
 
-        // Grant OkuBridge MINTER role on OkuNote — it burns from router (native path) and mints fees
-        okuNote.grantRole(MINTER, address(okuBridgeContract));
+        // Grant OkuBridge MINTER role on OkuMoney — it burns from router (native path) and mints fees
+        okuMoney.grantRole(MINTER, address(okuBridgeContract));
 
-        // Grant router MINTER role on OkuNote — it burns OkuNote directly (adapter path)
-        okuNote.grantRole(MINTER, address(bridgeRouter));
+        // Grant router MINTER role on OkuMoney — it burns OkuMoney directly (adapter path)
+        okuMoney.grantRole(MINTER, address(bridgeRouter));
 
         // Register mock adapter for adapter path tests
         bridgeRouter.configureAdapter(address(mockAdapter), true);
 
         vm.stopPrank();
 
-        // Grant OkuBridge minter allowance on OkuNote for fee minting
+        // Grant OkuBridge minter allowance on OkuMoney for fee minting
         vm.prank(allowanceManager);
-        okuNote.configureMinterAllowance(address(okuBridgeContract), MAX_SUPPLY);
+        okuMoney.configureMinterAllowance(address(okuBridgeContract), MAX_SUPPLY);
 
-        // Grant router minter allowance on OkuNote (needed for adapter path burn)
+        // Grant router minter allowance on OkuMoney (needed for adapter path burn)
         vm.prank(allowanceManager);
-        okuNote.configureMinterAllowance(address(bridgeRouter), MAX_SUPPLY);
+        okuMoney.configureMinterAllowance(address(bridgeRouter), MAX_SUPPLY);
     }
 
     // ============ Initialization Tests ============
 
     function test_Initialize() public view {
-        assertEq(address(bridgeRouter.okuUsd()), address(okuUsd));
-        assertEq(address(bridgeRouter.okuNote()), address(okuNote));
+        assertEq(address(bridgeRouter.usdOku()), address(usdOku));
+        assertEq(address(bridgeRouter.okuMoney()), address(okuMoney));
         assertEq(address(bridgeRouter.okuBridge()), address(okuBridgeContract));
         assertTrue(bridgeRouter.hasRole(DEFAULT_ADMIN_ROLE, admin));
         assertTrue(bridgeRouter.hasRole(ROUTER_UPGRADER, admin));
@@ -140,23 +140,23 @@ contract OkuBridgeRouterTest is BaseTest {
     function test_Initialize_RevertZeroAddresses() public {
         OkuBridgeRouter impl = new OkuBridgeRouter();
 
-        // Zero okuUsd
+        // Zero usdOku
         vm.expectRevert(OkuBridgeRouter.ZeroAddress.selector);
         new ERC1967Proxy(
             address(impl),
             abi.encodeCall(
                 OkuBridgeRouter.initialize,
-                (address(0), address(okuNote), address(okuBridgeContract), admin)
+                (address(0), address(okuMoney), address(okuBridgeContract), admin)
             )
         );
 
-        // Zero okuNote
+        // Zero okuMoney
         vm.expectRevert(OkuBridgeRouter.ZeroAddress.selector);
         new ERC1967Proxy(
             address(impl),
             abi.encodeCall(
                 OkuBridgeRouter.initialize,
-                (address(okuUsd), address(0), address(okuBridgeContract), admin)
+                (address(usdOku), address(0), address(okuBridgeContract), admin)
             )
         );
 
@@ -165,7 +165,7 @@ contract OkuBridgeRouterTest is BaseTest {
         new ERC1967Proxy(
             address(impl),
             abi.encodeCall(
-                OkuBridgeRouter.initialize, (address(okuUsd), address(okuNote), address(0), admin)
+                OkuBridgeRouter.initialize, (address(usdOku), address(okuMoney), address(0), admin)
             )
         );
     }
@@ -266,14 +266,14 @@ contract OkuBridgeRouterTest is BaseTest {
         bridgeRouter.unpause();
     }
 
-    // ============ Native Path: bridge_OkuNote ============
+    // ============ Native Path: bridge_OkuM ============
 
-    function test_BridgeOkuNote_Success() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuNote(user1, noteAmount);
+    function test_BridgeOkuMoney_Success() public {
+        uint256 okuMAmount = 1000e18;
+        _mintOkuMoney(user1, okuMAmount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), noteAmount);
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
 
         // Expect BridgeBurn from OkuBridge (the canonical native path event)
         vm.expectEmit(false, true, false, false, address(okuBridgeContract));
@@ -288,121 +288,121 @@ contract OkuBridgeRouterTest is BaseTest {
             0
         );
 
-        bytes32 requestId = bridgeRouter.bridge_OkuNote(
-            noteAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
+        bytes32 requestId = bridgeRouter.bridge_OkuM(
+            okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
         );
         vm.stopPrank();
 
-        // Router holds no OkuNote
-        assertEq(okuNote.balanceOf(address(bridgeRouter)), 0);
-        // User has no OkuNote
-        assertEq(okuNote.balanceOf(user1), 0);
+        // Router holds no OkuMoney
+        assertEq(okuMoney.balanceOf(address(bridgeRouter)), 0);
+        // User has no OkuMoney
+        assertEq(okuMoney.balanceOf(user1), 0);
         // requestId is non-zero
         assertNotEq(requestId, bytes32(0));
-        // Fee recipient received fee in OkuNote
-        assertGt(okuNote.balanceOf(feeRecipient), 0);
+        // Fee recipient received fee in OkuMoney
+        assertGt(okuMoney.balanceOf(feeRecipient), 0);
         // Nonce incremented on OkuBridge
         assertEq(okuBridgeContract.outboundNonce(ARBITRUM_CHAIN_ID), 1);
     }
 
-    function test_BridgeOkuNote_EmitsNativeBridgeInitiated() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuNote(user1, noteAmount);
+    function test_BridgeOkuMoney_EmitsNativeBridgeInitiated() public {
+        uint256 okuMAmount = 1000e18;
+        _mintOkuMoney(user1, okuMAmount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), noteAmount);
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
 
         vm.expectEmit(true, false, false, false, address(bridgeRouter));
         emit NativeBridgeInitiated(
-            user1, bytes32(0), noteAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
+            user1, bytes32(0), okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
         );
 
-        bridgeRouter.bridge_OkuNote(noteAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridge_OkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
     }
 
-    function test_BridgeOkuNote_RevertWhenPaused() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuNote(user1, noteAmount);
+    function test_BridgeOkuMoney_RevertWhenPaused() public {
+        uint256 okuMAmount = 1000e18;
+        _mintOkuMoney(user1, okuMAmount);
 
         vm.prank(admin);
         bridgeRouter.pause();
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), noteAmount);
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        bridgeRouter.bridge_OkuNote(noteAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridge_OkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
     }
 
-    function test_BridgeOkuNote_RevertInvalidRecipient() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuNote(user1, noteAmount);
+    function test_BridgeOkuMoney_RevertInvalidRecipient() public {
+        uint256 okuMAmount = 1000e18;
+        _mintOkuMoney(user1, okuMAmount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), noteAmount);
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
         vm.expectRevert(OkuBridgeRouter.InvalidRecipient.selector);
-        bridgeRouter.bridge_OkuNote(noteAmount, ARBITRUM_CHAIN_ID, bytes32(0));
+        bridgeRouter.bridge_OkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(0));
         vm.stopPrank();
     }
 
-    function test_BridgeOkuNote_FeeCollected() public {
+    function test_BridgeOkuMoney_FeeCollected() public {
         // Set bridge fee to 1% for clear arithmetic
         vm.prank(admin);
         okuBridgeContract.updateFee(100); // 100 bps = 1%
 
-        uint256 noteAmount = 10_000e18;
-        _mintOkuNote(user1, noteAmount);
+        uint256 okuMAmount = 10_000e18;
+        _mintOkuMoney(user1, okuMAmount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), noteAmount);
-        bridgeRouter.bridge_OkuNote(noteAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
+        bridgeRouter.bridge_OkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
 
-        // Fee recipient should have received exactly 1% in OkuNote
-        uint256 feeBalance = okuNote.balanceOf(feeRecipient);
+        // Fee recipient should have received exactly 1% in OkuMoney
+        uint256 feeBalance = okuMoney.balanceOf(feeRecipient);
         assertGt(feeBalance, 0);
         uint256 currentFee = okuBridgeContract.bridgeFee(); // 100 bps
-        assertEq(feeBalance, noteAmount * currentFee / 10_000);
+        assertEq(feeBalance, okuMAmount * currentFee / 10_000);
     }
 
-    function test_BridgeOkuNote_TokenAmountsPreservedAcrossNotePrice() public {
-        // OkuNote is non-rebasing: notePrice changes do NOT affect balanceOf().
+    function test_BridgeOkuMoney_TokenAmountsPreservedAcrossNotePrice() public {
+        // OkuMoney is non-rebasing: notePrice changes do NOT affect balanceOf().
         // The exact token amount is passed through to the bridge.
-        uint256 noteAmount = 1000e18;
-        _mintOkuNote(user1, noteAmount);
+        uint256 okuMAmount = 1000e18;
+        _mintOkuMoney(user1, okuMAmount);
 
         // Increase notePrice by 20% — user's balance is unchanged
-        uint256 newPrice = okuNote.notePrice() * 12 / 10;
+        uint256 newPrice = okuMoney.okuMPrice() * 12 / 10;
         vm.prank(rebaser);
-        okuNote.updateNotePrice(newPrice);
+        okuMoney.updateOkuMPrice(newPrice);
 
         // User's balance is unchanged (non-rebasing)
-        uint256 userBalance = okuNote.balanceOf(user1);
-        assertEq(userBalance, noteAmount);
+        uint256 userBalance = okuMoney.balanceOf(user1);
+        assertEq(userBalance, okuMAmount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), noteAmount);
-        bridgeRouter.bridge_OkuNote(noteAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
+        bridgeRouter.bridge_OkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
 
         // OkuBridge processed the bridge
         assertEq(okuBridgeContract.outboundNonce(ARBITRUM_CHAIN_ID), 1);
-        // Router holds no residual OkuNote (exact, no rounding)
-        assertEq(okuNote.balanceOf(address(bridgeRouter)), 0);
-        // User's OkuNote fully consumed
-        assertEq(okuNote.balanceOf(user1), 0);
+        // Router holds no residual OkuMoney (exact, no rounding)
+        assertEq(okuMoney.balanceOf(address(bridgeRouter)), 0);
+        // User's OkuMoney fully consumed
+        assertEq(okuMoney.balanceOf(user1), 0);
     }
 
-    // ============ Native Path: bridge_OkuUSD ============
+    // ============ Native Path: bridge_usdOku ============
 
-    function test_BridgeOkuUSD_Success() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuUsd(user1, noteAmount);
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+    function test_BridgeOkuDollar_Success() public {
+        uint256 okuMAmount = 1000e18;
+        _mintUsdOku(user1, okuMAmount);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
+        usdOku.approve(address(bridgeRouter), usdBalance);
 
         vm.expectEmit(false, true, false, false, address(okuBridgeContract));
         emit BridgeBurn(
@@ -416,253 +416,253 @@ contract OkuBridgeRouterTest is BaseTest {
             0
         );
 
-        bytes32 requestId = bridgeRouter.bridge_OkuUSD(
+        bytes32 requestId = bridgeRouter.bridge_usdOku(
             usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
         );
         vm.stopPrank();
 
-        // User has no OkuUSD
-        assertEq(okuUsd.balanceOf(user1), 0);
-        // Router holds no OkuUSD or OkuNote
-        assertEq(okuUsd.balanceOf(address(bridgeRouter)), 0);
-        assertLe(okuNote.balanceOf(address(bridgeRouter)), 1);
+        // User has no OkuDollar
+        assertEq(usdOku.balanceOf(user1), 0);
+        // Router holds no OkuDollar or OkuMoney
+        assertEq(usdOku.balanceOf(address(bridgeRouter)), 0);
+        assertLe(okuMoney.balanceOf(address(bridgeRouter)), 1);
         // requestId is non-zero
         assertNotEq(requestId, bytes32(0));
         // Nonce incremented on OkuBridge
         assertEq(okuBridgeContract.outboundNonce(ARBITRUM_CHAIN_ID), 1);
     }
 
-    function test_BridgeOkuUSD_EmitsNativeBridgeInitiated() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuUsd(user1, noteAmount);
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+    function test_BridgeOkuDollar_EmitsNativeBridgeInitiated() public {
+        uint256 okuMAmount = 1000e18;
+        _mintUsdOku(user1, okuMAmount);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
+        usdOku.approve(address(bridgeRouter), usdBalance);
 
         vm.expectEmit(true, false, false, false, address(bridgeRouter));
         emit NativeBridgeInitiated(
             user1, bytes32(0), usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
         );
 
-        bridgeRouter.bridge_OkuUSD(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
     }
 
-    function test_BridgeOkuUSD_RevertWhenPaused() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuUsd(user1, noteAmount);
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+    function test_BridgeOkuDollar_RevertWhenPaused() public {
+        uint256 okuMAmount = 1000e18;
+        _mintUsdOku(user1, okuMAmount);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
         vm.prank(admin);
         bridgeRouter.pause();
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
+        usdOku.approve(address(bridgeRouter), usdBalance);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        bridgeRouter.bridge_OkuUSD(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
     }
 
-    function test_BridgeOkuUSD_RevertInvalidRecipient() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuUsd(user1, noteAmount);
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+    function test_BridgeOkuDollar_RevertInvalidRecipient() public {
+        uint256 okuMAmount = 1000e18;
+        _mintUsdOku(user1, okuMAmount);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
+        usdOku.approve(address(bridgeRouter), usdBalance);
         vm.expectRevert(OkuBridgeRouter.InvalidRecipient.selector);
-        bridgeRouter.bridge_OkuUSD(usdBalance, ARBITRUM_CHAIN_ID, bytes32(0));
+        bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(0));
         vm.stopPrank();
     }
 
-    function test_BridgeOkuUSD_UnwrapsToNotesAndBridges() public {
-        // Verify the full flow: OkuUSD -> unwrap to notes (price-aware) -> bridge notes via OkuBridge
-        uint256 noteAmount = 1000e18;
-        _mintOkuUsd(user1, noteAmount);
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+    function test_BridgeOkuDollar_UnwrapsToNotesAndBridges() public {
+        // Verify the full flow: OkuDollar -> unwrap to notes (price-aware) -> bridge notes via OkuBridge
+        uint256 okuMAmount = 1000e18;
+        _mintUsdOku(user1, okuMAmount);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
-        uint256 noteSupplyBefore = okuNote.totalSupply();
+        uint256 noteSupplyBefore = okuMoney.totalSupply();
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
-        bridgeRouter.bridge_OkuUSD(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        usdOku.approve(address(bridgeRouter), usdBalance);
+        bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
 
         // Notes were burned (net reduction = amount minus fee reminted to feeRecipient)
-        uint256 noteSupplyAfter = okuNote.totalSupply();
-        uint256 feeBalance = okuNote.balanceOf(feeRecipient);
+        uint256 noteSupplyAfter = okuMoney.totalSupply();
+        uint256 feeBalance = okuMoney.balanceOf(feeRecipient);
         // totalSupply decreased by the burned amount and increased by fee mint
-        // so: noteSupplyBefore - noteAmount + feeBalance ~= noteSupplyAfter (within rounding)
+        // so: noteSupplyBefore - okuMAmount + feeBalance ~= noteSupplyAfter (within rounding)
         assertLe(noteSupplyAfter, noteSupplyBefore);
         assertGt(feeBalance, 0);
     }
 
-    function test_BridgeOkuUSD_AfterNotePriceIncrease() public {
-        // notePrice increase does NOT change OkuNote balances (non-rebasing).
-        // OkuUSD unwrap is price-aware: same OkuUSD amount yields fewer notes
+    function test_BridgeOkuDollar_AfterNotePriceIncrease() public {
+        // notePrice increase does NOT change OkuMoney balances (non-rebasing).
+        // OkuDollar unwrap is price-aware: same OkuDollar amount yields fewer notes
         // when notePrice is higher (each note is worth more).
-        uint256 noteAmount = 1000e18;
-        _mintOkuUsd(user1, noteAmount);
+        uint256 okuMAmount = 1000e18;
+        _mintUsdOku(user1, okuMAmount);
 
         // Increase notePrice by 10%
-        uint256 newPrice = okuNote.notePrice() * 11 / 10;
+        uint256 newPrice = okuMoney.okuMPrice() * 11 / 10;
         vm.prank(rebaser);
-        okuNote.updateNotePrice(newPrice);
+        okuMoney.updateOkuMPrice(newPrice);
 
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
-        bridgeRouter.bridge_OkuUSD(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        usdOku.approve(address(bridgeRouter), usdBalance);
+        bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
 
         assertEq(okuBridgeContract.outboundNonce(ARBITRUM_CHAIN_ID), 1);
-        assertEq(okuUsd.balanceOf(address(bridgeRouter)), 0);
-        assertLe(okuNote.balanceOf(address(bridgeRouter)), 1);
+        assertEq(usdOku.balanceOf(address(bridgeRouter)), 0);
+        assertLe(okuMoney.balanceOf(address(bridgeRouter)), 1);
     }
 
-    function test_BridgeOkuUSD_FeeCollected() public {
+    function test_BridgeOkuDollar_FeeCollected() public {
         // Set bridge fee to 1% for clear arithmetic
         vm.prank(admin);
         okuBridgeContract.updateFee(100); // 100 bps = 1%
 
-        uint256 noteAmount = 10_000e18;
-        _mintOkuUsd(user1, noteAmount);
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+        uint256 okuMAmount = 10_000e18;
+        _mintUsdOku(user1, okuMAmount);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
-        bridgeRouter.bridge_OkuUSD(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        usdOku.approve(address(bridgeRouter), usdBalance);
+        bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
 
-        // Fee recipient should have received fee in OkuNote (bridge operates on notes)
-        uint256 feeBalance = okuNote.balanceOf(feeRecipient);
+        // Fee recipient should have received fee in OkuMoney (bridge operates on notes)
+        uint256 feeBalance = okuMoney.balanceOf(feeRecipient);
         assertGt(feeBalance, 0);
     }
 
     // ============ Adapter Path: bridgeVia ============
 
     function test_BridgeVia_Success() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuNote(user1, noteAmount);
+        uint256 okuMAmount = 1000e18;
+        _mintOkuMoney(user1, okuMAmount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), noteAmount);
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
 
         vm.expectEmit(true, true, false, true);
-        emit BridgeInitiated(user1, address(mockAdapter), noteAmount, ARBITRUM_CHAIN_ID, user2);
+        emit BridgeInitiated(user1, address(mockAdapter), okuMAmount, ARBITRUM_CHAIN_ID, user2);
 
-        bridgeRouter.bridgeVia(noteAmount, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
+        bridgeRouter.bridgeVia(okuMAmount, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
-        // OkuNote burned
-        assertEq(okuNote.balanceOf(user1), 0);
-        // Router holds no OkuNote (burned before adapter call)
-        assertEq(okuNote.balanceOf(address(bridgeRouter)), 0);
-        // Adapter received the call with OkuNote token address
+        // OkuMoney burned
+        assertEq(okuMoney.balanceOf(user1), 0);
+        // Router holds no OkuMoney (burned before adapter call)
+        assertEq(okuMoney.balanceOf(address(bridgeRouter)), 0);
+        // Adapter received the call with OkuMoney token address
         MockOkuBridge.PendingBridge memory pending = mockAdapter.getLastBridge();
-        assertEq(pending.token, address(okuNote));
-        assertEq(pending.amount, noteAmount);
+        assertEq(pending.token, address(okuMoney));
+        assertEq(pending.amount, okuMAmount);
         assertEq(pending.destinationChain, ARBITRUM_CHAIN_ID);
         assertEq(pending.recipient, user2);
     }
 
     function test_BridgeVia_RevertWhenPaused() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuNote(user1, noteAmount);
+        uint256 okuMAmount = 1000e18;
+        _mintOkuMoney(user1, okuMAmount);
 
         vm.prank(admin);
         bridgeRouter.pause();
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), noteAmount);
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        bridgeRouter.bridgeVia(noteAmount, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
+        bridgeRouter.bridgeVia(okuMAmount, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
     }
 
     function test_BridgeVia_RevertUnsupportedAdapter() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuNote(user1, noteAmount);
+        uint256 okuMAmount = 1000e18;
+        _mintOkuMoney(user1, okuMAmount);
         address unsupported = makeAddr("unsupported");
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), noteAmount);
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
         vm.expectRevert(
             abi.encodeWithSelector(OkuBridgeRouter.UnsupportedAdapter.selector, unsupported)
         );
-        bridgeRouter.bridgeVia(noteAmount, unsupported, ARBITRUM_CHAIN_ID, user2);
+        bridgeRouter.bridgeVia(okuMAmount, unsupported, ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
     }
 
     function test_BridgeVia_RevertInvalidRecipient() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuNote(user1, noteAmount);
+        uint256 okuMAmount = 1000e18;
+        _mintOkuMoney(user1, okuMAmount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), noteAmount);
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
         vm.expectRevert(OkuBridgeRouter.InvalidRecipient.selector);
-        bridgeRouter.bridgeVia(noteAmount, address(mockAdapter), ARBITRUM_CHAIN_ID, address(0));
+        bridgeRouter.bridgeVia(okuMAmount, address(mockAdapter), ARBITRUM_CHAIN_ID, address(0));
         vm.stopPrank();
     }
 
     // ============ Adapter Path: bridgeWrappedVia ============
 
     function test_BridgeWrappedVia_Success() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuUsd(user1, noteAmount);
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+        uint256 okuMAmount = 1000e18;
+        _mintUsdOku(user1, okuMAmount);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
-        // At initial notePrice=1e18, unwrapping usdBalance returns noteAmount notes
-        uint256 expectedNotes = (usdBalance * okuUsd.usdMultiplier()) / okuNote.notePrice();
+        // At initial notePrice=1e18, unwrapping usdBalance returns okuMAmount notes
+        uint256 expectedNotes = (usdBalance * usdOku.usdMultiplier()) / okuMoney.okuMPrice();
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
+        usdOku.approve(address(bridgeRouter), usdBalance);
 
-        // The router unwraps OkuUSD to notes (price-aware), then burns the notes
+        // The router unwraps OkuDollar to notes (price-aware), then burns the notes
         vm.expectEmit(true, true, false, true);
         emit BridgeInitiated(user1, address(mockAdapter), expectedNotes, ARBITRUM_CHAIN_ID, user2);
 
         bridgeRouter.bridgeWrappedVia(usdBalance, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
-        // OkuUSD gone
-        assertEq(okuUsd.balanceOf(user1), 0);
-        // Router holds no OkuNote or OkuUSD (notes burned before adapter call)
-        assertEq(okuNote.balanceOf(address(bridgeRouter)), 0);
-        assertEq(okuUsd.balanceOf(address(bridgeRouter)), 0);
-        // Adapter received the call with OkuNote token address
+        // OkuDollar gone
+        assertEq(usdOku.balanceOf(user1), 0);
+        // Router holds no OkuMoney or OkuDollar (notes burned before adapter call)
+        assertEq(okuMoney.balanceOf(address(bridgeRouter)), 0);
+        assertEq(usdOku.balanceOf(address(bridgeRouter)), 0);
+        // Adapter received the call with OkuMoney token address
         MockOkuBridge.PendingBridge memory pending = mockAdapter.getLastBridge();
-        assertEq(pending.token, address(okuNote));
+        assertEq(pending.token, address(okuMoney));
         assertEq(pending.amount, expectedNotes);
         assertEq(pending.destinationChain, ARBITRUM_CHAIN_ID);
         assertEq(pending.recipient, user2);
     }
 
     function test_BridgeWrappedVia_RevertWhenPaused() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuUsd(user1, noteAmount);
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+        uint256 okuMAmount = 1000e18;
+        _mintUsdOku(user1, okuMAmount);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
         vm.prank(admin);
         bridgeRouter.pause();
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
+        usdOku.approve(address(bridgeRouter), usdBalance);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         bridgeRouter.bridgeWrappedVia(usdBalance, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
     }
 
     function test_BridgeWrappedVia_RevertUnsupportedAdapter() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuUsd(user1, noteAmount);
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+        uint256 okuMAmount = 1000e18;
+        _mintUsdOku(user1, okuMAmount);
+        uint256 usdBalance = usdOku.balanceOf(user1);
         address unsupported = makeAddr("unsupported");
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
+        usdOku.approve(address(bridgeRouter), usdBalance);
         vm.expectRevert(
             abi.encodeWithSelector(OkuBridgeRouter.UnsupportedAdapter.selector, unsupported)
         );
@@ -671,12 +671,12 @@ contract OkuBridgeRouterTest is BaseTest {
     }
 
     function test_BridgeWrappedVia_RevertInvalidRecipient() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuUsd(user1, noteAmount);
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+        uint256 okuMAmount = 1000e18;
+        _mintUsdOku(user1, okuMAmount);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
+        usdOku.approve(address(bridgeRouter), usdBalance);
         vm.expectRevert(OkuBridgeRouter.InvalidRecipient.selector);
         bridgeRouter.bridgeWrappedVia(
             usdBalance, address(mockAdapter), ARBITRUM_CHAIN_ID, address(0)
@@ -685,77 +685,77 @@ contract OkuBridgeRouterTest is BaseTest {
     }
 
     function test_BridgeWrappedVia_FewerNotesAfterNotePriceIncrease() public {
-        // After notePrice increases, unwrapping the same OkuUSD amount gives fewer notes
+        // After notePrice increases, unwrapping the same OkuDollar amount gives fewer notes
         // because each note is worth more.
-        uint256 noteAmount = 1000e18;
-        _mintOkuUsd(user1, noteAmount);
+        uint256 okuMAmount = 1000e18;
+        _mintUsdOku(user1, okuMAmount);
 
         // Increase notePrice by 10%
-        uint256 newPrice = okuNote.notePrice() + (okuNote.notePrice() / 10);
+        uint256 newPrice = okuMoney.okuMPrice() + (okuMoney.okuMPrice() / 10);
         vm.prank(rebaser);
-        okuNote.updateNotePrice(newPrice);
+        okuMoney.updateOkuMPrice(newPrice);
 
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
         // Calculate expected notes from price-aware unwrap:
-        // notesReturned = usdAmount × usdMultiplier / notePrice
-        uint256 expectedNotes = (usdBalance * okuUsd.usdMultiplier()) / okuNote.notePrice();
+        // okuMReturned = usdAmount × usdMultiplier / notePrice
+        uint256 expectedNotes = (usdBalance * usdOku.usdMultiplier()) / okuMoney.okuMPrice();
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
+        usdOku.approve(address(bridgeRouter), usdBalance);
         bridgeRouter.bridgeWrappedVia(usdBalance, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
         MockOkuBridge.PendingBridge memory pending = mockAdapter.getLastBridge();
         // Fewer notes returned because notePrice increased
-        assertLt(pending.amount, noteAmount);
+        assertLt(pending.amount, okuMAmount);
         assertEq(pending.amount, expectedNotes);
     }
 
     // ============ Full Round-Trip Tests (Native Path) ============
 
-    function test_FullRoundTrip_NativePath_OkuNote() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuNote(user1, noteAmount);
+    function test_FullRoundTrip_NativePath_OkuMoney() public {
+        uint256 okuMAmount = 1000e18;
+        _mintOkuMoney(user1, okuMAmount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), noteAmount);
-        bridgeRouter.bridge_OkuNote(noteAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
+        bridgeRouter.bridge_OkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
 
         // Verify nonce incremented (full EIP-712 round-trip covered in OkuBridge.t.sol)
         assertEq(okuBridgeContract.outboundNonce(ARBITRUM_CHAIN_ID), 1);
     }
 
-    function test_FullRoundTrip_NativePath_OkuUSD() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuUsd(user1, noteAmount);
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+    function test_FullRoundTrip_NativePath_OkuDollar() public {
+        uint256 okuMAmount = 1000e18;
+        _mintUsdOku(user1, okuMAmount);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
-        bridgeRouter.bridge_OkuUSD(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        usdOku.approve(address(bridgeRouter), usdBalance);
+        bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
 
         assertEq(okuBridgeContract.outboundNonce(ARBITRUM_CHAIN_ID), 1);
     }
 
     function test_FullRoundTrip_AdapterPath() public {
-        uint256 noteAmount = 1000e18;
-        _mintOkuNote(user1, noteAmount);
+        uint256 okuMAmount = 1000e18;
+        _mintOkuMoney(user1, okuMAmount);
 
         // Bridge via adapter
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), noteAmount);
-        bridgeRouter.bridgeVia(noteAmount, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
+        bridgeRouter.bridgeVia(okuMAmount, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
-        // Complete bridge on destination (mock mints OkuNote to recipient)
+        // Complete bridge on destination (mock mints OkuMoney to recipient)
         mockAdapter.completeBridge(0);
 
-        // User2 received OkuNote on destination
-        uint256 user2NoteBalance = okuNote.balanceOf(user2);
-        assertEq(user2NoteBalance, noteAmount);
+        // User2 received OkuMoney on destination
+        uint256 user2NoteBalance = okuMoney.balanceOf(user2);
+        assertEq(user2NoteBalance, okuMAmount);
     }
 
     function test_FullRoundTrip_AdapterPath_MultipleUsers() public {
@@ -763,26 +763,26 @@ contract OkuBridgeRouterTest is BaseTest {
         uint256 amount2 = 2000e18;
         uint256 amount3 = 500e18;
 
-        _mintOkuNote(user1, amount1);
-        _mintOkuNote(user2, amount2);
-        _mintOkuNote(user3, amount3);
+        _mintOkuMoney(user1, amount1);
+        _mintOkuMoney(user2, amount2);
+        _mintOkuMoney(user3, amount3);
 
         address dest1 = makeAddr("dest1");
         address dest2 = makeAddr("dest2");
         address dest3 = makeAddr("dest3");
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), amount1);
+        okuMoney.approve(address(bridgeRouter), amount1);
         bridgeRouter.bridgeVia(amount1, address(mockAdapter), ARBITRUM_CHAIN_ID, dest1);
         vm.stopPrank();
 
         vm.startPrank(user2);
-        okuNote.approve(address(bridgeRouter), amount2);
+        okuMoney.approve(address(bridgeRouter), amount2);
         bridgeRouter.bridgeVia(amount2, address(mockAdapter), OPTIMISM_CHAIN_ID, dest2);
         vm.stopPrank();
 
         vm.startPrank(user3);
-        okuNote.approve(address(bridgeRouter), amount3);
+        okuMoney.approve(address(bridgeRouter), amount3);
         bridgeRouter.bridgeVia(amount3, address(mockAdapter), ARBITRUM_CHAIN_ID, dest3);
         vm.stopPrank();
 
@@ -790,80 +790,80 @@ contract OkuBridgeRouterTest is BaseTest {
         mockAdapter.completeBridge(1);
         mockAdapter.completeBridge(2);
 
-        assertEq(okuNote.balanceOf(dest1), amount1);
-        assertEq(okuNote.balanceOf(dest2), amount2);
-        assertEq(okuNote.balanceOf(dest3), amount3);
+        assertEq(okuMoney.balanceOf(dest1), amount1);
+        assertEq(okuMoney.balanceOf(dest2), amount2);
+        assertEq(okuMoney.balanceOf(dest3), amount3);
     }
 
     // ============ Fuzz Tests ============
 
-    function testFuzz_BridgeOkuNote_NativePath(uint256 noteAmount) public {
-        // Bound noteAmount within [minBridgeAmount, maxBridgeAmount]
-        noteAmount = bound(
-            noteAmount, okuBridgeContract.minBridgeAmount(), okuBridgeContract.maxBridgeAmount()
+    function testFuzz_BridgeOkuMoney_NativePath(uint256 okuMAmount) public {
+        // Bound okuMAmount within [minBridgeAmount, maxBridgeAmount]
+        okuMAmount = bound(
+            okuMAmount, okuBridgeContract.minBridgeAmount(), okuBridgeContract.maxBridgeAmount()
         );
-        _mintOkuNote(user1, noteAmount);
+        _mintOkuMoney(user1, okuMAmount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), noteAmount);
-        bytes32 requestId = bridgeRouter.bridge_OkuNote(
-            noteAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
+        bytes32 requestId = bridgeRouter.bridge_OkuM(
+            okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
         );
         vm.stopPrank();
 
-        // Router holds no OkuNote (exact, no rounding — non-rebasing)
-        assertEq(okuNote.balanceOf(address(bridgeRouter)), 0);
-        assertEq(okuNote.balanceOf(user1), 0);
+        // Router holds no OkuMoney (exact, no rounding — non-rebasing)
+        assertEq(okuMoney.balanceOf(address(bridgeRouter)), 0);
+        assertEq(okuMoney.balanceOf(user1), 0);
         assertNotEq(requestId, bytes32(0));
     }
 
-    function testFuzz_BridgeOkuUSD_NativePath(uint256 noteAmount) public {
-        noteAmount = bound(
-            noteAmount, okuBridgeContract.minBridgeAmount(), okuBridgeContract.maxBridgeAmount()
+    function testFuzz_BridgeOkuDollar_NativePath(uint256 okuMAmount) public {
+        okuMAmount = bound(
+            okuMAmount, okuBridgeContract.minBridgeAmount(), okuBridgeContract.maxBridgeAmount()
         );
-        _mintOkuUsd(user1, noteAmount);
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+        _mintUsdOku(user1, okuMAmount);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
-        bytes32 requestId = bridgeRouter.bridge_OkuUSD(
+        usdOku.approve(address(bridgeRouter), usdBalance);
+        bytes32 requestId = bridgeRouter.bridge_usdOku(
             usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
         );
         vm.stopPrank();
 
-        assertEq(okuUsd.balanceOf(user1), 0);
-        assertEq(okuUsd.balanceOf(address(bridgeRouter)), 0);
-        assertLe(okuNote.balanceOf(address(bridgeRouter)), 1);
+        assertEq(usdOku.balanceOf(user1), 0);
+        assertEq(usdOku.balanceOf(address(bridgeRouter)), 0);
+        assertLe(okuMoney.balanceOf(address(bridgeRouter)), 1);
         assertNotEq(requestId, bytes32(0));
     }
 
-    function testFuzz_BridgeVia_AmountConsistency(uint256 noteAmount) public {
-        noteAmount = bound(noteAmount, 1e18, 100_000_000e18);
-        _mintOkuNote(user1, noteAmount);
+    function testFuzz_BridgeVia_AmountConsistency(uint256 okuMAmount) public {
+        okuMAmount = bound(okuMAmount, 1e18, 100_000_000e18);
+        _mintOkuMoney(user1, okuMAmount);
 
-        uint256 supplyBefore = okuNote.totalSupply();
+        uint256 supplyBefore = okuMoney.totalSupply();
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), noteAmount);
-        bridgeRouter.bridgeVia(noteAmount, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
+        bridgeRouter.bridgeVia(okuMAmount, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
         // Exact amount burned
-        assertEq(okuNote.totalSupply(), supplyBefore - noteAmount);
+        assertEq(okuMoney.totalSupply(), supplyBefore - okuMAmount);
         MockOkuBridge.PendingBridge memory pending = mockAdapter.getLastBridge();
-        assertEq(pending.amount, noteAmount);
+        assertEq(pending.amount, okuMAmount);
     }
 
-    function testFuzz_BridgeWrappedVia_AmountConsistency(uint256 noteAmount) public {
-        noteAmount = bound(noteAmount, 1e18, 100_000_000e18);
-        _mintOkuUsd(user1, noteAmount);
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+    function testFuzz_BridgeWrappedVia_AmountConsistency(uint256 okuMAmount) public {
+        okuMAmount = bound(okuMAmount, 1e18, 100_000_000e18);
+        _mintUsdOku(user1, okuMAmount);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
         // At initial notePrice=1e18 and usdMultiplier=1e18, unwrap is 1:1
-        uint256 expectedNotes = (usdBalance * okuUsd.usdMultiplier()) / okuNote.notePrice();
+        uint256 expectedNotes = (usdBalance * usdOku.usdMultiplier()) / okuMoney.okuMPrice();
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
+        usdOku.approve(address(bridgeRouter), usdBalance);
         bridgeRouter.bridgeWrappedVia(usdBalance, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
@@ -879,22 +879,22 @@ contract OkuBridgeRouterTest is BaseTest {
         public
     {
         depositAmount = bound(depositAmount, 1e18, 100_000_000e18);
-        priceIncrease = _boundNotePriceIncrease(priceIncrease);
+        priceIncrease = _boundOkuMPriceIncrease(priceIncrease);
 
-        _mintOkuUsd(user1, depositAmount);
+        _mintUsdOku(user1, depositAmount);
 
         // Update notePrice (makes vault overcollateralized — each note worth more)
-        uint256 newPrice = okuNote.notePrice() + priceIncrease;
+        uint256 newPrice = okuMoney.okuMPrice() + priceIncrease;
         vm.prank(rebaser);
-        okuNote.updateNotePrice(newPrice);
+        okuMoney.updateOkuMPrice(newPrice);
 
-        uint256 usdBalance = okuUsd.balanceOf(user1);
+        uint256 usdBalance = usdOku.balanceOf(user1);
 
-        // Price-aware unwrap: notesReturned = usdAmount × usdMultiplier / notePrice
-        uint256 expectedNotes = (usdBalance * okuUsd.usdMultiplier()) / okuNote.notePrice();
+        // Price-aware unwrap: okuMReturned = usdAmount × usdMultiplier / notePrice
+        uint256 expectedNotes = (usdBalance * usdOku.usdMultiplier()) / okuMoney.okuMPrice();
 
         vm.startPrank(user1);
-        okuUsd.approve(address(bridgeRouter), usdBalance);
+        usdOku.approve(address(bridgeRouter), usdBalance);
         bridgeRouter.bridgeWrappedVia(usdBalance, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
@@ -906,18 +906,18 @@ contract OkuBridgeRouterTest is BaseTest {
 
     function testFuzz_AdapterPath_RoundTripValueLoss(uint256 amount) public {
         // Round-trip through adapter bridge: mint notes -> bridge -> complete -> receive notes
-        // OkuNote is non-rebasing — exact token amounts, no rounding
+        // OkuMoney is non-rebasing — exact token amounts, no rounding
         amount = bound(amount, 1e18, 100_000_000e18);
 
-        _mintOkuNote(user1, amount);
+        _mintOkuMoney(user1, amount);
 
         vm.startPrank(user1);
-        okuNote.approve(address(bridgeRouter), amount);
+        okuMoney.approve(address(bridgeRouter), amount);
         bridgeRouter.bridgeVia(amount, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
         mockAdapter.completeBridge(0);
-        uint256 receivedNote = okuNote.balanceOf(user2);
+        uint256 receivedNote = okuMoney.balanceOf(user2);
 
         // Exact round-trip (no wrapping involved, direct burn/mint)
         assertEq(receivedNote, amount);
@@ -932,8 +932,8 @@ contract OkuBridgeRouterTest is BaseTest {
         bridgeRouter.upgradeToAndCall(address(newImpl), "");
 
         // State preserved
-        assertEq(address(bridgeRouter.okuUsd()), address(okuUsd));
-        assertEq(address(bridgeRouter.okuNote()), address(okuNote));
+        assertEq(address(bridgeRouter.usdOku()), address(usdOku));
+        assertEq(address(bridgeRouter.okuMoney()), address(okuMoney));
         assertEq(address(bridgeRouter.okuBridge()), address(okuBridgeContract));
     }
 

@@ -17,19 +17,19 @@ import {
 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IOkuNote} from "../interfaces/IOkuNote.sol";
+import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 
 /**
- * @title OkuUSD
- * @notice Rebasing $1-pegged stablecoin with independent yield rate, backed by OkuNote reserves
+ * @title OkuDollar
+ * @notice Rebasing $1-pegged stablecoin with independent yield rate, backed by OkuMoney reserves
  * @dev NOT an ERC-4626 vault. Custom rebasing token with its own shares/multiplier.
- *      Holds OkuNotes as reserves. Independent yield rate enables revenue extraction
- *      (note rate > USD rate) or forward-facing yield (USD rate > note rate).
+ *      Holds OkuMoney as reserves. Independent yield rate enables revenue extraction
+ *      (OkuM rate > USD rate) or forward-facing yield (USD rate > OkuM rate).
  *
- *      Wrap/unwrap are price-aware: they use notePrice() and usdMultiplier() to convert
- *      between note token amounts and OkuUSD amounts at their respective dollar values.
+ *      Wrap/unwrap are price-aware: they use okuMPrice() and usdMultiplier() to convert
+ *      between OkuMoney token amounts and OkuDollar amounts at their respective dollar values.
  */
-contract OkuUSD is
+contract OkuDollar is
     Initializable,
     ERC20Upgradeable,
     ERC20PermitUpgradeable,
@@ -54,9 +54,9 @@ contract OkuUSD is
 
     // ============ State ============
 
-    IOkuNote public okuNote;
+    IOkuMoney public okuMoney;
 
-    // USD rebasing mechanism (mirrors OkuNote pattern)
+    // USD rebasing mechanism (mirrors OkuMoney pattern)
     mapping(address => uint256) private _usdShares;
     uint256 private _totalUsdShares;
     uint256 internal _usdBaseMultiplier;
@@ -76,8 +76,8 @@ contract OkuUSD is
     );
     event NextUsdYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
     event MinCollateralRatioUpdated(uint256 oldRatio, uint256 newRatio);
-    event ReservesDeposited(address indexed depositor, uint256 noteAmount);
-    event SurplusWithdrawn(address indexed to, uint256 noteAmount);
+    event ReservesDeposited(address indexed depositor, uint256 okuMAmount);
+    event SurplusWithdrawn(address indexed to, uint256 okuMAmount);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -85,7 +85,7 @@ contract OkuUSD is
     }
 
     function initialize(
-        address _okuNote,
+        address _okuMoney,
         string memory name,
         string memory symbol,
         address admin,
@@ -94,7 +94,7 @@ contract OkuUSD is
         public
         initializer
     {
-        require(_okuNote != address(0), "Zero address");
+        require(_okuMoney != address(0), "Zero address");
         require(_minCollateralRatio <= PRECISION, "Ratio exceeds 100%");
 
         __ERC20_init(name, symbol);
@@ -102,7 +102,7 @@ contract OkuUSD is
         __AccessControl_init();
         __Pausable_init();
 
-        okuNote = IOkuNote(_okuNote);
+        okuMoney = IOkuMoney(_okuMoney);
         minCollateralRatio = _minCollateralRatio;
 
         _usdBaseMultiplier = PRECISION;
@@ -120,7 +120,7 @@ contract OkuUSD is
 
     /**
      * @notice Computed USD multiplier with continuous yield accrual
-     * @dev Same _rpow pattern as OkuNote.notePrice()
+     * @dev Same _rpow pattern as OkuMoney.okuMPrice()
      */
     function usdMultiplier() public view returns (uint256) {
         uint256 rate = usdRatePerSecond;
@@ -218,26 +218,26 @@ contract OkuUSD is
     // ============ Wrap / Unwrap (Price-Aware) ============
 
     /**
-     * @notice Wrap OkuNotes into OkuUSD (price-aware)
-     * @dev usdMinted = noteAmount × notePrice() / usdMultiplier()
-     *      100 note tokens at notePrice=$1.05, usdMultiplier=1.0 → 105 OkuUSD.
-     *      The note's dollar value is converted to OkuUSD at the current usdMultiplier.
-     * @param noteAmount Amount of OkuNote tokens to wrap
-     * @param receiver Address to receive OkuUSD
-     * @return usdMinted Amount of OkuUSD minted
+     * @notice Wrap OkuMoney into OkuDollar (price-aware)
+     * @dev usdMinted = okuMAmount × okuMPrice() / usdMultiplier()
+     *      100 OkuM tokens at okuMPrice=$1.05, usdMultiplier=1.0 → 105 usdOku.
+     *      The OkuM dollar value is converted to OkuDollar at the current usdMultiplier.
+     * @param okuMAmount Amount of OkuMoney tokens to wrap
+     * @param receiver Address to receive OkuDollar
+     * @return usdMinted Amount of OkuDollar minted
      */
-    function wrap(uint256 noteAmount, address receiver) external returns (uint256 usdMinted) {
-        require(noteAmount > 0, "Amount must be positive");
+    function wrap(uint256 okuMAmount, address receiver) external returns (uint256 usdMinted) {
+        require(okuMAmount > 0, "Amount must be positive");
         require(receiver != address(0), "Zero receiver");
 
-        // Measure actual notes received (handles fee-on-transfer edge cases)
-        uint256 balBefore = IERC20(address(okuNote)).balanceOf(address(this));
-        IERC20(address(okuNote)).safeTransferFrom(msg.sender, address(this), noteAmount);
-        uint256 actualReceived = IERC20(address(okuNote)).balanceOf(address(this)) - balBefore;
+        // Measure actual tokens received (handles fee-on-transfer edge cases)
+        uint256 balBefore = IERC20(address(okuMoney)).balanceOf(address(this));
+        IERC20(address(okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
+        uint256 actualReceived = IERC20(address(okuMoney)).balanceOf(address(this)) - balBefore;
 
-        // Price-aware: convert note token value to OkuUSD amount
-        // usdMinted = actualReceived × notePrice / usdMultiplier
-        uint256 price = okuNote.notePrice();
+        // Price-aware: convert OkuM token value to OkuDollar amount
+        // usdMinted = actualReceived × okuMPrice / usdMultiplier
+        uint256 price = okuMoney.okuMPrice();
         uint256 mult = usdMultiplier();
         usdMinted = (actualReceived * price) / mult;
 
@@ -252,23 +252,23 @@ contract OkuUSD is
     }
 
     /**
-     * @notice Unwrap OkuUSD back to OkuNotes (price-aware)
-     * @dev notesReturned = usdAmount × usdMultiplier() / notePrice()
-     *      105 OkuUSD at usdMultiplier=1.0, notePrice=$1.05 → 100 note tokens.
-     *      Reverts if vault holds insufficient notes.
-     * @param usdAmount Amount of OkuUSD to unwrap
-     * @param receiver Address to receive OkuNotes
-     * @return notesReturned Amount of OkuNote tokens returned
+     * @notice Unwrap OkuDollar back to OkuMoney (price-aware)
+     * @dev okuMReturned = usdAmount × usdMultiplier() / okuMPrice()
+     *      105 usdOku at usdMultiplier=1.0, okuMPrice=$1.05 → 100 OkuM tokens.
+     *      Reverts if vault holds insufficient OkuMoney.
+     * @param usdAmount Amount of OkuDollar to unwrap
+     * @param receiver Address to receive OkuMoney
+     * @return okuMReturned Amount of OkuMoney tokens returned
      */
-    function unwrap(uint256 usdAmount, address receiver) external returns (uint256 notesReturned) {
+    function unwrap(uint256 usdAmount, address receiver) external returns (uint256 okuMReturned) {
         require(usdAmount > 0, "Amount must be positive");
         require(receiver != address(0), "Zero receiver");
 
-        // Price-aware: convert OkuUSD amount to note token count
-        // notesReturned = usdAmount × usdMultiplier / notePrice
+        // Price-aware: convert OkuDollar amount to OkuM token count
+        // okuMReturned = usdAmount × usdMultiplier / okuMPrice
         uint256 mult = usdMultiplier();
-        uint256 price = okuNote.notePrice();
-        notesReturned = (usdAmount * mult) / price;
+        uint256 price = okuMoney.okuMPrice();
+        okuMReturned = (usdAmount * mult) / price;
 
         // Calculate USD shares to burn (rounds UP — favors vault)
         uint256 sharesToBurn = (usdAmount * PRECISION + mult - 1) / mult;
@@ -277,13 +277,13 @@ contract OkuUSD is
         _usdShares[msg.sender] -= sharesToBurn;
         _totalUsdShares -= sharesToBurn;
 
-        // Ensure vault has enough notes
+        // Ensure vault has enough OkuMoney
         require(
-            IERC20(address(okuNote)).balanceOf(address(this)) >= notesReturned,
+            IERC20(address(okuMoney)).balanceOf(address(this)) >= okuMReturned,
             "Insufficient reserves"
         );
 
-        IERC20(address(okuNote)).safeTransfer(receiver, notesReturned);
+        IERC20(address(okuMoney)).safeTransfer(receiver, okuMReturned);
 
         emit Transfer(msg.sender, address(0), usdAmount);
     }
@@ -291,33 +291,33 @@ contract OkuUSD is
     // ============ Reserve Management ============
 
     /**
-     * @notice Deposit notes without minting OkuUSD shares (top up reserves)
-     * @dev Used when USD rate > note rate (vault undercollateralized).
-     *      Since OkuNote is non-rebasing, note tokens are NOT dollar-denominated —
-     *      their value depends on notePrice().
-     * @param noteAmount Amount of OkuNote tokens to deposit
+     * @notice Deposit OkuMoney without minting OkuDollar shares (top up reserves)
+     * @dev Used when USD rate > OkuM rate (vault undercollateralized).
+     *      Since OkuMoney is non-rebasing, OkuM tokens are NOT dollar-denominated —
+     *      their value depends on okuMPrice().
+     * @param okuMAmount Amount of OkuMoney tokens to deposit
      */
-    function depositReserves(uint256 noteAmount) external onlyRole(RESERVE_MANAGER) {
-        require(noteAmount > 0, "Amount must be positive");
-        IERC20(address(okuNote)).safeTransferFrom(msg.sender, address(this), noteAmount);
-        emit ReservesDeposited(msg.sender, noteAmount);
+    function depositReserves(uint256 okuMAmount) external onlyRole(RESERVE_MANAGER) {
+        require(okuMAmount > 0, "Amount must be positive");
+        IERC20(address(okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
+        emit ReservesDeposited(msg.sender, okuMAmount);
     }
 
     /**
-     * @notice Withdraw surplus notes without burning OkuUSD shares
-     * @dev Used when USD rate < note rate (vault overcollateralized).
+     * @notice Withdraw surplus OkuMoney without burning OkuDollar shares
+     * @dev Used when USD rate < OkuM rate (vault overcollateralized).
      *      Enforces collateralizationRatio() >= minCollateralRatio AFTER withdrawal.
-     * @param noteAmount Amount of OkuNote tokens to withdraw
+     * @param okuMAmount Amount of OkuMoney tokens to withdraw
      */
-    function withdrawSurplus(uint256 noteAmount) external onlyRole(RESERVE_MANAGER) {
-        require(noteAmount > 0, "Amount must be positive");
+    function withdrawSurplus(uint256 okuMAmount) external onlyRole(RESERVE_MANAGER) {
+        require(okuMAmount > 0, "Amount must be positive");
 
-        IERC20(address(okuNote)).safeTransfer(msg.sender, noteAmount);
+        IERC20(address(okuMoney)).safeTransfer(msg.sender, okuMAmount);
 
         // Enforce collateralization floor AFTER withdrawal
         require(collateralizationRatio() >= minCollateralRatio, "Below minimum collateral ratio");
 
-        emit SurplusWithdrawn(msg.sender, noteAmount);
+        emit SurplusWithdrawn(msg.sender, okuMAmount);
     }
 
     // ============ Admin ============
@@ -332,14 +332,14 @@ contract OkuUSD is
     // ============ Collateralization Views (Price-Aware) ============
 
     /**
-     * @notice Total note tokens held as reserves
+     * @notice Total OkuMoney tokens held as reserves
      */
-    function totalNoteReserves() public view returns (uint256) {
-        return IERC20(address(okuNote)).balanceOf(address(this));
+    function totalOkuMReserves() public view returns (uint256) {
+        return IERC20(address(okuMoney)).balanceOf(address(this));
     }
 
     /**
-     * @notice Total OkuUSD obligations (in dollar terms)
+     * @notice Total OkuDollar obligations (in dollar terms)
      */
     function totalUsdObligations() public view returns (uint256) {
         return totalSupply();
@@ -347,27 +347,27 @@ contract OkuUSD is
 
     /**
      * @notice Price-aware collateralization ratio
-     * @dev collateralizationRatio = (noteBalance × notePrice / PRECISION) × PRECISION / totalSupply
-     *      The numerator converts note token count to dollar value via notePrice().
+     * @dev collateralizationRatio = (okuMBalance × okuMPrice / PRECISION) × PRECISION / totalSupply
+     *      The numerator converts OkuM token count to dollar value via okuMPrice().
      *      The denominator (totalSupply) is already in dollar terms (usdShares × usdMultiplier).
      */
     function collateralizationRatio() public view returns (uint256) {
         uint256 obligations = totalUsdObligations();
         if (obligations == 0) return type(uint256).max;
-        uint256 reservesDollarValue = (totalNoteReserves() * okuNote.notePrice()) / PRECISION;
+        uint256 reservesDollarValue = (totalOkuMReserves() * okuMoney.okuMPrice()) / PRECISION;
         return (reservesDollarValue * PRECISION) / obligations;
     }
 
     /**
-     * @notice Extractable surplus as note tokens (0 if undercollateralized)
-     * @dev Calculates dollar surplus, then converts back to note tokens via notePrice()
+     * @notice Extractable surplus as OkuMoney tokens (0 if undercollateralized)
+     * @dev Calculates dollar surplus, then converts back to OkuM tokens via okuMPrice()
      */
     function surplus() public view returns (uint256) {
-        uint256 price = okuNote.notePrice();
-        uint256 reservesDollarValue = (totalNoteReserves() * price) / PRECISION;
+        uint256 price = okuMoney.okuMPrice();
+        uint256 reservesDollarValue = (totalOkuMReserves() * price) / PRECISION;
         uint256 obligations = totalUsdObligations();
         if (reservesDollarValue > obligations) {
-            // Convert dollar surplus back to note token count
+            // Convert dollar surplus back to OkuM token count
             uint256 dollarSurplus = reservesDollarValue - obligations;
             return (dollarSurplus * PRECISION) / price;
         }

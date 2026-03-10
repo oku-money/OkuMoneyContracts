@@ -2,17 +2,17 @@
 pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
-import {OkuNote} from "../../src/token/OkuNote.sol";
-import {OkuUSD} from "../../src/token/OkuUSD.sol";
+import {OkuMoney} from "../../src/token/OkuMoney.sol";
+import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
- * @title OkuUSDHandler
- * @notice Handler contract for OkuUSD vault invariant testing
+ * @title OkuDollarHandler
+ * @notice Handler contract for OkuDollar vault invariant testing
  */
-contract OkuUSDHandler is Test {
-    OkuNote public okuNote;
-    OkuUSD public okuUsd;
+contract OkuDollarHandler is Test {
+    OkuMoney public okuMoney;
+    OkuDollar public usdOku;
     address public minter;
     address public rebaser;
 
@@ -28,8 +28,8 @@ contract OkuUSDHandler is Test {
     uint256 public ghostRebaseCount;
 
     // Ghost call/revert counters
-    uint256 public ghostMintOkuNoteCallCount;
-    uint256 public ghostMintOkuNoteRevertCount;
+    uint256 public ghostMintOkuMCallCount;
+    uint256 public ghostMintOkuMRevertCount;
     uint256 public ghostWrapCallCount;
     uint256 public ghostWrapRevertCount;
     uint256 public ghostUnwrapCallCount;
@@ -39,9 +39,9 @@ contract OkuUSDHandler is Test {
     uint256 public ghostTransferCallCount;
     uint256 public ghostTransferRevertCount;
 
-    constructor(OkuNote _okuNote, OkuUSD _okuUsd, address _minter, address _rebaser) {
-        okuNote = _okuNote;
-        okuUsd = _okuUsd;
+    constructor(OkuMoney _okuMoney, OkuDollar _usdOku, address _minter, address _rebaser) {
+        okuMoney = _okuMoney;
+        usdOku = _usdOku;
         minter = _minter;
         rebaser = _rebaser;
 
@@ -64,37 +64,37 @@ contract OkuUSDHandler is Test {
 
     // ============ Handler Functions ============
 
-    /// @notice Mint OkuNote to actors (so they have tokens to wrap)
-    function mintOkuNote(uint256 actorSeed, uint256 amount) external {
-        ghostMintOkuNoteCallCount++;
+    /// @notice Mint OkuMoney to actors (so they have tokens to wrap)
+    function mintOkuM(uint256 actorSeed, uint256 amount) external {
+        ghostMintOkuMCallCount++;
         address actor = actors[actorSeed % actors.length];
         amount = bound(amount, 1e18, 1_000_000e18);
 
-        uint256 allowance = okuNote.minterAllowance(minter);
-        uint256 remaining = okuNote.maxSupply() - okuNote.totalSupply();
+        uint256 allowance = okuMoney.minterAllowance(minter);
+        uint256 remaining = okuMoney.maxSupply() - okuMoney.totalSupply();
         amount = bound(amount, 0, _min(allowance, remaining));
 
         if (amount == 0) return;
 
         vm.prank(minter);
-        try okuNote.mint(actor, amount) {}
+        try okuMoney.mint(actor, amount) {}
         catch {
-            ghostMintOkuNoteRevertCount++;
+            ghostMintOkuMRevertCount++;
         }
     }
 
-    /// @notice Wrap OkuNote into OkuUSD vault
+    /// @notice Wrap OkuMoney into OkuDollar vault
     function wrap(uint256 actorSeed, uint256 amount) external {
         ghostWrapCallCount++;
         address actor = actors[actorSeed % actors.length];
-        uint256 balance = okuNote.balanceOf(actor);
+        uint256 balance = okuMoney.balanceOf(actor);
         amount = bound(amount, 0, balance);
 
         if (amount == 0) return;
 
         vm.startPrank(actor);
-        IERC20(address(okuNote)).approve(address(okuUsd), amount);
-        try okuUsd.wrap(amount, actor) {
+        IERC20(address(okuMoney)).approve(address(usdOku), amount);
+        try usdOku.wrap(amount, actor) {
             ghostTotalWrapped += amount;
         } catch {
             ghostWrapRevertCount++;
@@ -102,50 +102,50 @@ contract OkuUSDHandler is Test {
         vm.stopPrank();
     }
 
-    /// @notice Unwrap OkuUSD to get OkuNote back
+    /// @notice Unwrap OkuDollar to get OkuMoney back
     function unwrap(uint256 actorSeed, uint256 amount) external {
         ghostUnwrapCallCount++;
         address actor = actors[actorSeed % actors.length];
-        uint256 balance = okuUsd.balanceOf(actor);
+        uint256 balance = usdOku.balanceOf(actor);
         amount = bound(amount, 0, balance);
 
         if (amount == 0) return;
 
         vm.prank(actor);
-        try okuUsd.unwrap(amount, actor) returns (uint256 notesReturned) {
-            ghostTotalUnwrapped += notesReturned;
+        try usdOku.unwrap(amount, actor) returns (uint256 okuMReturned) {
+            ghostTotalUnwrapped += okuMReturned;
         } catch {
             ghostUnwrapRevertCount++;
         }
     }
 
-    /// @notice Trigger note price update (rebase)
+    /// @notice Trigger OkuM price update (rebase)
     function rebase(uint256 priceIncrease) external {
         ghostRebaseCallCount++;
-        uint256 currentPrice = okuNote.notePrice();
+        uint256 currentPrice = okuMoney.okuMPrice();
         uint256 increase = bound(priceIncrease, currentPrice / 10_000, currentPrice / 10);
         uint256 newPrice = currentPrice + increase;
 
         vm.prank(rebaser);
-        try okuNote.updateNotePrice(newPrice) {
+        try okuMoney.updateOkuMPrice(newPrice) {
             ghostRebaseCount++;
         } catch {
             ghostRebaseRevertCount++;
         }
     }
 
-    /// @notice Transfer OkuUSD between actors
+    /// @notice Transfer OkuDollar between actors
     function transfer(uint256 fromSeed, uint256 toSeed, uint256 amount) external {
         ghostTransferCallCount++;
         address from = actors[fromSeed % actors.length];
         address to = actors[toSeed % actors.length];
-        uint256 balance = okuUsd.balanceOf(from);
+        uint256 balance = usdOku.balanceOf(from);
         amount = bound(amount, 0, balance);
 
         if (amount == 0 || from == to) return;
 
         vm.prank(from);
-        try okuUsd.transfer(to, amount) {}
+        try usdOku.transfer(to, amount) {}
         catch {
             ghostTransferRevertCount++;
         }
@@ -162,12 +162,12 @@ contract OkuUSDHandler is Test {
     }
 
     function ghostTotalCalls() external view returns (uint256) {
-        return ghostMintOkuNoteCallCount + ghostWrapCallCount + ghostUnwrapCallCount
+        return ghostMintOkuMCallCount + ghostWrapCallCount + ghostUnwrapCallCount
             + ghostRebaseCallCount + ghostTransferCallCount;
     }
 
     function ghostTotalReverts() external view returns (uint256) {
-        return ghostMintOkuNoteRevertCount + ghostWrapRevertCount + ghostUnwrapRevertCount
+        return ghostMintOkuMRevertCount + ghostWrapRevertCount + ghostUnwrapRevertCount
             + ghostRebaseRevertCount + ghostTransferRevertCount;
     }
 

@@ -1,8 +1,8 @@
-# OkuUSD EVM Implementation
+# OkuMoney EVM Implementation
 
 > See [`../README.md`](../README.md) for shared architecture, business logic, and RBAC design.
 
-Solidity smart contracts for OkuUSD — a yield-bearing stablecoin backed by US Treasury Bills.
+Solidity smart contracts for OkuMoney — institutional-grade yield infrastructure backed by US Treasury Bills.
 
 ## Stack
 
@@ -16,11 +16,11 @@ Solidity smart contracts for OkuUSD — a yield-bearing stablecoin backed by US 
 
 | Contract | Description |
 |----------|-------------|
-| `OkuNote.sol` | Non-rebasing base token — static balance, appreciating price via `notePrice()` |
-| `OkuUSD.sol` | Rebasing $1-pegged stablecoin — growing balance, independent yield rate |
-| `LitePSM.sol` | Peg Stability Module — price-aware USDC ↔ OkuNote + OkuUSD convenience functions |
+| `OkuMoney.sol` | Non-rebasing base token (OkuM) — static balance, appreciating price via `okuMPrice()` |
+| `OkuDollar.sol` | Rebasing $1-pegged stablecoin (usdOku) — growing balance, independent yield rate |
+| `LitePSM.sol` | Peg Stability Module — price-aware USDC ↔ OkuM + usdOku convenience functions |
 | `OkuBridge.sol` | Native cross-chain bridge (burn/mint with EIP-712 orchestrator signatures) |
-| `OkuBridgeRouter.sol` | User entry point for bridging OkuNote and OkuUSD |
+| `OkuBridgeRouter.sol` | User entry point for bridging OkuMoney and OkuDollar |
 | `NttAdapter.sol` | Wormhole NTT bridge adapter (third-party adapter path) |
 
 ## Quick Start
@@ -36,8 +36,8 @@ forge build
 forge test
 
 # Run specific contract tests
-forge test --match-contract OkuNoteTest -vv
-forge test --match-contract OkuUSDTest -vv
+forge test --match-contract OkuMoneyTest -vv
+forge test --match-contract OkuDollarTest -vv
 forge test --match-contract OkuBridgeTest -vv
 forge test --match-contract OkuBridgeRouterTest -vv
 ```
@@ -54,10 +54,10 @@ npx hardhat test
 ```
 src/
   token/
-    OkuNote.sol             # Non-rebasing base token (price appreciates via notePrice())
-    OkuUSD.sol              # Rebasing stablecoin vault (independent yield rate, $1 peg)
+    OkuMoney.sol            # Non-rebasing base token (price appreciates via okuMPrice())
+    OkuDollar.sol           # Rebasing stablecoin vault (independent yield rate, $1 peg)
   psm/
-    LitePSM.sol             # USDC ↔ OkuNote (price-aware) + OkuUSD convenience functions
+    LitePSM.sol             # USDC ↔ OkuM (price-aware) + usdOku convenience functions
     RedemptionQueue.sol     # Queue for when PSM USDC buffer is insufficient
   bridge/
     OkuBridge.sol           # Native cross-chain bridge (full burn/mint protocol)
@@ -68,17 +68,17 @@ src/
       INttManager.sol       # Wormhole NTT interface
       NttAdapter.sol        # Wormhole NTT adapter implementation
   interfaces/
-    IOkuNote.sol            # OkuNote interface
-    IOkuUSD.sol             # OkuUSD vault interface
+    IOkuMoney.sol           # OkuMoney interface
+    IOkuDollar.sol          # OkuDollar vault interface
   mocks/
     MockBridgeAdapterHH.sol # Hardhat-compatible IBridgeAdapter mock
     MockNttManagerHH.sol    # Hardhat-compatible NTT Manager mock
 test/
   token/
-    OkuNote.t.sol
-    OkuNote.fuzz.t.sol
-    OkuUSD.t.sol
-    OkuUSD.fuzz.t.sol
+    OkuMoney.t.sol
+    OkuMoney.fuzz.t.sol
+    OkuDollar.t.sol
+    OkuDollar.fuzz.t.sol
   psm/
     LitePSM.t.sol
     RedemptionQueue.t.sol
@@ -90,15 +90,15 @@ test/
       OkuBridge.test.ts
       OkuBridgeRouter.test.ts
     fork/
-      OkuUSD.ts
+      OkuDollar.ts
   invariants/
     VaultInvariants.t.sol
     SupplyInvariants.t.sol
-    ShareConversionInvariants.t.sol
+    OkuMPriceInvariants.t.sol
     MinterAllowanceInvariants.t.sol
   handlers/
-    OkuNoteHandler.sol
-    OkuUSDHandler.sol
+    OkuMoneyHandler.sol
+    OkuDollarHandler.sol
   Base.t.sol
 script/
   Deploy.s.sol
@@ -106,17 +106,17 @@ script/
 
 ## Dual-Token Split-Economy Model
 
-OkuNote and OkuUSD have **independent yield rates** controlled by separate roles. This enables three operational modes:
+OkuMoney and OkuDollar have **independent yield rates** controlled by separate roles. This enables three operational modes:
 
 ```
-USD rate > Note rate  →  Vault undercollateralized → Oku tops up (depositReserves)
-USD rate = Note rate  →  Vault fully collateralized → No action needed
-USD rate < Note rate  →  Vault overcollateralized  → Oku extracts revenue (withdrawSurplus)
+usdOku rate > OkuM rate  →  Vault undercollateralized → Oku tops up (depositReserves)
+usdOku rate = OkuM rate  →  Vault fully collateralized → No action needed
+usdOku rate < OkuM rate  →  Vault overcollateralized  → Oku extracts revenue (withdrawSurplus)
 ```
 
-The note is the solvency anchor (rear-facing, always backed). OkuUSD is a policy lever.
+OkuMoney is the solvency anchor (rear-facing, always backed). OkuDollar is a policy lever.
 
-**Key distinction**: OkuNote is **non-rebasing** (standard ERC-20, price appreciates). OkuUSD is **rebasing** ($1-pegged, balance grows). This is NOT the same as the previous OkuUSD/wOkuUSD architecture where both tokens shared a single rate.
+**Key distinction**: OkuMoney is **non-rebasing** (standard ERC-20, price appreciates). OkuDollar is **rebasing** ($1-pegged, balance grows).
 
 ## Bridge Architecture
 
@@ -139,13 +139,13 @@ IBridgeAdapter shims     ← third-party protocol adapters (NTT, CCIP, etc.)
 ### Two Bridge Models
 
 **Native path** — OkuBridge owns its own burn lifecycle:
-- Router unwraps OkuUSD to OkuNote if needed, then calls `OkuBridge.bridgeBurn()`
-- OkuBridge (as MINTER on OkuNote) burns from the router, collects fee, increments nonce, emits `BridgeBurn`
+- Router unwraps OkuDollar to OkuMoney if needed, then calls `OkuBridge.bridgeBurn()`
+- OkuBridge (as MINTER on OkuMoney) burns from the router, collects fee, increments nonce, emits `BridgeBurn`
 - Orchestrator observes the event, waits for finality, signs a `BridgeRequest` (EIP-712)
 - Anyone calls `OkuBridge.bridgeMint()` on destination with the signed request
 
 **Adapter path** — Router is the burn authority:
-- Router burns OkuNote itself, then calls `IBridgeAdapter.bridge()` (message-only)
+- Router burns OkuMoney itself, then calls `IBridgeAdapter.bridge()` (message-only)
 - Adapter translates the call to the third-party protocol (Wormhole VAA, CCIP message, etc.)
 - The third-party protocol handles destination minting natively (no OkuBridge.bridgeMint involved)
 
@@ -162,24 +162,24 @@ IBridgeAdapter shims     ← third-party protocol adapters (NTT, CCIP, etc.)
 ### Router Functions
 
 ```
-bridge_OkuNote(amount, destChain, recipient)     — direct bridge of note tokens
-bridge_OkuUSD(amount, destChain, recipient)      — unwrap OkuUSD → notes → bridge notes
-                                                    destination: mint notes → wrap → deliver OkuUSD
-bridgeVia(amount, adapter, destChain, recipient)  — note bridge via third-party adapter
-bridgeWrappedVia(amount, adapter, destChain, recipient) — unwrap OkuUSD → adapter bridge
+bridge_OkuM(amount, destChain, recipient)     — direct bridge of OkuMoney tokens
+bridge_usdOku(amount, destChain, recipient)   — unwrap usdOku → OkuM → bridge
+                                                 destination: mint OkuM → wrap → deliver usdOku
+bridgeVia(amount, adapter, destChain, recipient)  — OkuM bridge via third-party adapter
+bridgeWrappedVia(amount, adapter, destChain, recipient) — unwrap usdOku → adapter bridge
 ```
 
 All four bridge functions are guarded with `nonReentrant` to prevent reentrant calls through external adapter contracts.
 
-**DeFi & bridge compatibility**: Since OkuNote is a standard non-rebasing ERC-20, third-party bridges (LayerZero OFT, Wormhole NTT, CCIP) can handle it natively without share conversion.
+**DeFi & bridge compatibility**: Since OkuMoney is a standard non-rebasing ERC-20, third-party bridges (LayerZero OFT, Wormhole NTT, CCIP) can handle it natively without share conversion.
 
 ---
 
-## OkuNote.sol
+## OkuMoney.sol
 
 **Inherits**: ERC20Upgradeable, ERC20PermitUpgradeable, AccessControlUpgradeable, PausableUpgradeable, UUPSUpgradeable
 
-**Concept**: Non-rebasing base token with rear-facing yield. Standard ERC-20 balances (static). Yield is expressed through price appreciation tracked by an internal `notePrice()` view function using `_rpow` continuous accrual. DeFi and bridge compatible out of the box.
+**Concept**: Non-rebasing base token with rear-facing yield. Standard ERC-20 balances (static). Yield is expressed through price appreciation tracked by an internal `okuMPrice()` view function using `_rpow` continuous accrual. DeFi and bridge compatible out of the box.
 
 ### Storage
 
@@ -200,43 +200,43 @@ mapping(address => bool) public isBlacklisted;
 
 ### Price Accrual
 
-`notePrice()` is a computed view function. Yield accrues continuously via `_rpow(ratePerSecond, elapsed, PRECISION)` (MakerDAO DSS exponentiation by squaring):
+`okuMPrice()` is a computed view function. Yield accrues continuously via `_rpow(ratePerSecond, elapsed, PRECISION)` (MakerDAO DSS exponentiation by squaring):
 
 ```
-notePrice() = _basePrice × _rpow(ratePerSecond, elapsed, PRECISION) / PRECISION
+okuMPrice() = _basePrice × _rpow(ratePerSecond, elapsed, PRECISION) / PRECISION
 ```
 
-The note starts at `notePrice() = 1e18` ($1.00). Over time, `notePrice()` grows as rear-facing T-Bill yield accrues. After one year at 4.5% APY, `notePrice()` returns ~1.045e18 ($1.045).
+The token starts at `okuMPrice() = 1e18` ($1.00). Over time, `okuMPrice()` grows as rear-facing T-Bill yield accrues. After one year at 4.5% APY, `okuMPrice()` returns ~1.045e18 ($1.045).
 
-**Key difference from old design**: `balanceOf()` returns raw token count (standard ERC-20). It is NOT affected by `notePrice()`. Price appreciation is tracked separately for use by the PSM and vault.
+**Key difference from old design**: `balanceOf()` returns raw token count (standard ERC-20). It is NOT affected by `okuMPrice()`. Price appreciation is tracked separately for use by the PSM and vault.
 
 ### Rate Management
 
-- `setYieldRate(rate, endTimestamp)` — NOTE_REBASER sets active rate with optional end time. Snapshots current price before switching.
-- `setNextYieldRate(rate)` — NOTE_REBASER schedules next rate that activates when current expires (head-to-tail chaining, no tx needed at transition).
-- `updateNotePrice(newPrice)` — Emergency override. Snapshots computed price, resets rate to zero yield.
-- `notePrice()` — Computed view function. Handles current rate, expiry crossover, and pending rate seamlessly.
+- `setYieldRate(rate, endTimestamp)` — OKUM_REBASER sets active rate with optional end time. Snapshots current price before switching.
+- `setNextYieldRate(rate)` — OKUM_REBASER schedules next rate that activates when current expires (head-to-tail chaining, no tx needed at transition).
+- `updateOkuMPrice(newPrice)` — Emergency override. Snapshots computed price, resets rate to zero yield.
+- `okuMPrice()` — Computed view function. Handles current rate, expiry crossover, and pending rate seamlessly.
 - `_rpow(x, n, b)` — Exponentiation by squaring (MakerDAO DSS, battle-tested since 2017).
 
-**Rear-facing yield**: The orchestrator feeds realized T-Bill returns (not projected). January's actual yield gets distributed as February's `ratePerSecond`. The contract does not know or care whether the rate is forward or rear-derived — this is purely an orchestrator-side operational choice. The note is always fully backed because it only distributes yield that has already been earned.
+**Rear-facing yield**: The orchestrator feeds realized T-Bill returns (not projected). January's actual yield gets distributed as February's `ratePerSecond`. The contract does not know or care whether the rate is forward or rear-derived — this is purely an orchestrator-side operational choice. OkuMoney is always fully backed because it only distributes yield that has already been earned.
 
 ### Key Implementation Notes
 
 - `balanceOf()` returns standard ERC-20 balance (raw token count, not price-adjusted)
 - `transfer()` and `transferFrom()` are standard ERC-20 (no share conversion)
-- `notePrice()` is a view function for pricing — used by PSM and vault, not by balanceOf
-- `mint()` creates raw tokens; minting 100 tokens when notePrice = $1.05 creates $105 of value
-- The PSM handles USDC ↔ note conversion using `notePrice()`
+- `okuMPrice()` is a view function for pricing — used by PSM and vault, not by `balanceOf`
+- `mint()` creates raw tokens; minting 100 tokens when okuMPrice = $1.05 creates $105 of value
+- The PSM handles USDC ↔ OkuMoney conversion using `okuMPrice()`
 - Blacklist and pause checks apply to transfers
 
 ### Role Constants
 
 ```solidity
 bytes32 public constant UPGRADER = keccak256("UPGRADER");
-bytes32 public constant NOTE_PAUSER = keccak256("NOTE_PAUSER");
-bytes32 public constant NOTE_UNPAUSER = keccak256("NOTE_UNPAUSER");
+bytes32 public constant OKUM_PAUSER = keccak256("OKUM_PAUSER");
+bytes32 public constant OKUM_UNPAUSER = keccak256("OKUM_UNPAUSER");
 bytes32 public constant MINTER = keccak256("MINTER");
-bytes32 public constant NOTE_REBASER = keccak256("NOTE_REBASER");
+bytes32 public constant OKUM_REBASER = keccak256("OKUM_REBASER");
 bytes32 public constant BLACKLISTER = keccak256("BLACKLISTER");
 bytes32 public constant UNBLACKLISTER = keccak256("UNBLACKLISTER");
 bytes32 public constant CAP_MANAGER = keccak256("CAP_MANAGER");
@@ -245,20 +245,20 @@ bytes32 public constant ALLOWANCE_MANAGER = keccak256("ALLOWANCE_MANAGER");
 
 **Critical**: `blacklist()` must NOT use `whenNotPaused` modifier.
 
-**Blacklist-exempt addresses**: Bridge and router addresses can be marked exempt from blacklisting via `initializeBlacklistExempt(bridge, router)` (one-time, `DEFAULT_ADMIN_ROLE`). Prevents accidental blacklisting of infrastructure contracts that would break bridging.
+**Blacklist-exempt addresses**: Bridge and router addresses can be marked exempt from blacklisting via `initializeBlacklistExempt(bridge, router)` (one-time, `DEFAULT_ADMIN_ROLE`). Prevents accidental blacklisting of infrastructure contracts that would break bridging. Storage: `blacklistExempt1`, `blacklistExempt2`, `_blacklistExemptInitialized`.
 
 ---
 
-## OkuUSD.sol
+## OkuDollar.sol
 
 **Inherits**: ERC20Upgradeable, ERC20PermitUpgradeable, AccessControlUpgradeable, PausableUpgradeable, UUPSUpgradeable
 
-**Concept**: Rebasing $1-pegged stablecoin with an independent yield rate. Holds OkuNotes as reserves. Has its own USD shares mapping and its own continuous multiplier, decoupled from the note's price. This is NOT an ERC-4626 vault — it is a custom rebasing token with reserve management.
+**Concept**: Rebasing $1-pegged stablecoin with an independent yield rate. Holds OkuMoney as reserves. Has its own USD shares mapping and its own continuous multiplier, decoupled from OkuMoney's price. This is NOT an ERC-4626 vault — it is a custom rebasing token with reserve management.
 
 ### Storage
 
 ```solidity
-IOkuNote public okuNote;                    // reference to note contract
+IOkuMoney public okuMoney;                  // reference to OkuMoney contract
 
 // USD rebasing mechanism
 mapping(address => uint256) private _usdShares;
@@ -275,60 +275,60 @@ uint256 public minCollateralRatio;          // e.g. 95e16 = 95%, enforced on wit
 
 ### Key Implementation Notes
 
-- `usdMultiplier()` is a computed view function — same `_rpow` pattern as OkuNote's `notePrice()`
+- `usdMultiplier()` is a computed view function — same `_rpow` pattern as OkuMoney's `okuMPrice()`
 - `balanceOf(user)` returns `_usdShares[user] * usdMultiplier() / PRECISION`
 - `totalSupply()` returns `_totalUsdShares * usdMultiplier() / PRECISION`
 - Transfers operate on USD shares internally, emit token amounts for ERC-20 compatibility
 - Parent ERC20Upgradeable's `_balances` mapping is fully suppressed — all balance state is in `_usdShares`
-- Pause blocks peer-to-peer OkuUSD transfers only; wrap and unwrap always available
+- Pause blocks peer-to-peer OkuDollar transfers only; wrap and unwrap always available
 
-### Wrap/Unwrap
+### Wrap/Unwrap (Price-Aware)
 
 ```solidity
-// wrap: deposit notes, receive OkuUSD (price-aware)
-// usdMinted = noteAmount × notePrice() / usdMultiplier()
-function wrap(uint256 noteAmount, address receiver) external returns (uint256 usdMinted);
+// wrap: deposit OkuMoney, receive OkuDollar
+// usdMinted = okuMAmount × okuMPrice() / usdMultiplier()
+function wrap(uint256 okuMAmount, address receiver) external returns (uint256 usdMinted);
 
-// unwrap: burn OkuUSD, receive notes (price-aware)
-// notesReturned = usdAmount × usdMultiplier() / notePrice()
-// Reverts if vault holds insufficient notes
-function unwrap(uint256 usdAmount, address receiver) external returns (uint256 notesReturned);
+// unwrap: burn OkuDollar, receive OkuMoney
+// okuMReturned = usdAmount × usdMultiplier() / okuMPrice()
+// Reverts if vault holds insufficient OkuMoney
+function unwrap(uint256 usdAmount, address receiver) external returns (uint256 okuMReturned);
 ```
 
-Wrap pricing: price-aware. 100 note tokens at notePrice = $1.05, usdMultiplier = 1.0 produces 105 OkuUSD. The note's dollar value (`noteAmount × notePrice()`) is converted to OkuUSD at the current usdMultiplier.
+Wrap pricing: price-aware. 100 OkuM at okuMPrice = $1.05, usdMultiplier = 1.0 produces 105 usdOku. The dollar value (`okuMAmount × okuMPrice()`) is converted to OkuDollar at the current usdMultiplier.
 
-Unwrap pricing: price-aware inverse. 105 OkuUSD at usdMultiplier = 1.0, notePrice = $1.05 returns 100 note tokens. Reverts if `OkuNote.balanceOf(address(this))` is insufficient.
+Unwrap pricing: price-aware inverse. 105 usdOku at usdMultiplier = 1.0, okuMPrice = $1.05 returns 100 OkuM. Reverts if `OkuMoney.balanceOf(address(this))` is insufficient.
 
 ### Reserve Management (RESERVE_MANAGER)
 
 ```solidity
-// Top up: deposit notes without minting OkuUSD shares
-// Used when USD rate > note rate (vault undercollateralized)
-function depositReserves(uint256 noteAmount) external onlyRole(RESERVE_MANAGER);
+// Top up: deposit OkuMoney without minting usdOku shares
+// Used when usdOku rate > OkuM rate (vault undercollateralized)
+function depositReserves(uint256 okuMAmount) external onlyRole(RESERVE_MANAGER);
 
-// Extract surplus: withdraw notes without burning OkuUSD shares
-// Used when USD rate < note rate (vault overcollateralized)
+// Extract surplus: withdraw OkuMoney without burning usdOku shares
+// Used when usdOku rate < OkuM rate (vault overcollateralized)
 // MUST enforce: collateralizationRatio() >= minCollateralRatio AFTER withdrawal
-function withdrawSurplus(uint256 noteAmount) external onlyRole(RESERVE_MANAGER);
+function withdrawSurplus(uint256 okuMAmount) external onlyRole(RESERVE_MANAGER);
 ```
 
-Both functions accept note token amounts. Since OkuNote is non-rebasing, note tokens are NOT dollar-denominated — their value depends on `notePrice()`. The collateralization ratio recalculates automatically on the next read.
+Both functions accept OkuMoney token amounts. Since OkuMoney is non-rebasing, token amounts are NOT dollar-denominated — their value depends on `okuMPrice()`. The collateralization ratio recalculates automatically on the next read.
 
 ### Collateralization Views
 
 ```solidity
-function totalNoteReserves() public view returns (uint256);       // OkuNote.balanceOf(this)
+function totalOkuMReserves() public view returns (uint256);       // OkuMoney.balanceOf(this)
 function totalUsdObligations() public view returns (uint256);     // totalSupply()
 function collateralizationRatio() public view returns (uint256);  // price-aware ratio
-function surplus() public view returns (uint256);                 // extractable notes (0 if undercollateralized)
+function surplus() public view returns (uint256);                 // extractable OkuM (0 if undercollateralized)
 ```
 
 Collateralization ratio formula (price-aware):
 ```
-collateralizationRatio = (OkuNote.balanceOf(this) × notePrice() / PRECISION) × PRECISION / totalSupply()
+collateralizationRatio = (OkuMoney.balanceOf(this) × okuMPrice() / PRECISION) × PRECISION / totalSupply()
 ```
 
-The numerator converts note token count to dollar value via `notePrice()`. The denominator (`totalSupply()`) is already in dollar terms (usdShares × usdMultiplier).
+The numerator converts OkuMoney token count to dollar value via `okuMPrice()`. The denominator (`totalSupply()`) is already in dollar terms (usdShares × usdMultiplier).
 
 ### Admin
 
@@ -346,7 +346,7 @@ function setNextUsdYieldRate(uint256 newRate) external onlyRole(USD_REBASER);
 function updateUsdMultiplier(uint256 newMultiplier) external onlyRole(USD_REBASER); // emergency
 ```
 
-Same mechanics as OkuNote's rate management — snapshot before switching, head-to-tail chaining, `_rpow` continuous accrual. The rate is a policy decision set by Oku, independent of the note's rate.
+Same mechanics as OkuMoney's rate management — snapshot before switching, head-to-tail chaining, `_rpow` continuous accrual. The rate is a policy decision set by Oku, independent of OkuMoney's rate.
 
 ### Role Constants
 
@@ -360,21 +360,21 @@ bytes32 public constant VAULT_UNPAUSER = keccak256("VAULT_UNPAUSER");
 
 ### Operational Examples
 
-Revenue extraction (USD rate < note rate):
+Revenue extraction (usdOku rate < OkuM rate):
 ```
-Note rate: 4.5% APY (realized)
-USD rate:  4.0% APY (policy — Oku retains 0.5% spread)
-Over time: vault accumulates surplus notes
-Oku calls: withdrawSurplus(surplusAmount)
-Safety:    collateralizationRatio must remain >= minCollateralRatio after withdrawal
+OkuM rate:   4.5% APY (realized)
+usdOku rate: 4.0% APY (policy — Oku retains 0.5% spread)
+Over time:   vault accumulates surplus OkuMoney
+Oku calls:   withdrawSurplus(surplusAmount)
+Safety:      collateralizationRatio must remain >= minCollateralRatio after withdrawal
 ```
 
-Forward-facing yield (USD rate > note rate):
+Forward-facing yield (usdOku rate > OkuM rate):
 ```
-Note rate: 4.0% APY (last period's realized)
-USD rate:  4.5% APY (policy — streaming projected yield as a feature)
-Over time: vault becomes slightly undercollateralized
-Oku calls: depositReserves(gapAmount) to top up
+OkuM rate:   4.0% APY (last period's realized)
+usdOku rate: 4.5% APY (policy — streaming projected yield as a feature)
+Over time:   vault becomes slightly undercollateralized
+Oku calls:   depositReserves(gapAmount) to top up
 ```
 
 ---
@@ -385,40 +385,42 @@ Oku calls: depositReserves(gapAmount) to top up
 
 Note: OZ v5 `ReentrancyGuard` is `@custom:stateless` (ERC-7201 namespaced storage slot). No `ReentrancyGuardUpgradeable` variant exists in this library version, and no `__ReentrancyGuard_init()` call is required.
 
-**Concept**: Price-aware USDC ↔ OkuNote swaps. Queue handles insufficient buffer. Convenience functions route through the OkuUSD vault for single-transaction mint/redeem of the stablecoin.
+**Concept**: Price-aware USDC ↔ OkuMoney swaps. Queue handles insufficient buffer. Convenience functions route through the OkuDollar vault for single-transaction mint/redeem of the stablecoin.
 
-### Core PSM Functions (Note ↔ USDC — Price-Aware)
+### Core PSM Functions (OkuM ↔ USDC — Price-Aware)
 
 ```solidity
-// USDC → OkuNote: noteAmount = usdcValue × PRECISION / notePrice()
-function mint_OkuNote(uint256 usdcAmount) external;
+// USDC → OkuMoney: okuMAmount = usdcValue × PRECISION / okuMPrice()
+function mint_OkuM(uint256 usdcAmount) external;
 
-// OkuNote → USDC: usdcAmount = noteAmount × notePrice() / PRECISION (scaled to 6 decimals)
-function redeem_OkuNote(uint256 noteAmount) external;
+// OkuMoney → USDC: usdcAmount = okuMAmount × okuMPrice() / PRECISION (scaled to 6 decimals)
+function redeem_OkuM(uint256 okuMAmount) external;
 ```
 
-The PSM is no longer 1:1 in token terms. If `notePrice()` is $1.05, depositing 100 USDC gives ~95.24 notes. Redeeming 95.24 notes returns ~100 USDC. The PSM always transacts in dollar-value terms — the user thinks in USDC, the PSM handles the price conversion internally.
+The PSM is no longer 1:1 in token terms. If `okuMPrice()` is $1.05, depositing 100 USDC gives ~95.24 OkuM. Redeeming 95.24 OkuM returns ~100 USDC. The PSM always transacts in dollar-value terms — the user thinks in USDC, the PSM handles the price conversion internally.
 
-### Convenience Functions (OkuUSD ↔ USDC via Vault)
+### Convenience Functions (usdOku ↔ USDC via Vault)
 
 ```solidity
-// USDC → mint note internally → wrap into vault → deliver OkuUSD to user
-function mint_OkuUSD(uint256 usdcAmount) external;
+// USDC → mint OkuM internally → wrap into vault → deliver usdOku to user
+function mint_usdOku(uint256 usdcAmount) external;
 
-// Receive OkuUSD → unwrap to notes → burn notes → deliver USDC to user
+// Receive usdOku → unwrap to OkuM → burn OkuM → deliver USDC to user
 // Two failure modes: (a) vault undercollateralized → unwrap reverts → entire tx reverts
-//                    (b) vault has notes but PSM buffer insufficient → notes go to queue
-function redeem_OkuUSD(uint256 usdAmount) external;
+//                    (b) vault has OkuM but PSM buffer insufficient → OkuM goes to queue
+function redeem_usdOku(uint256 usdAmount) external;
 
 // Permit variant for single-tx UX
-function redeem_OkuUSDWithPermit(uint256 usdAmount, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;
+function redeem_usdOkuWithPermit(uint256 usdAmount, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;
 ```
 
-PSM has MINTER role on OkuNote. For `mint_OkuUSD`, the PSM mints note to self, approves vault, calls `vault.wrap(noteAmount, msg.sender)`. For `redeem_OkuUSD`, the PSM receives OkuUSD, calls `vault.unwrap(usdAmount, address(this))`, receives notes, then burns via normal price-aware redeem path.
+PSM has MINTER role on OkuMoney. For `mint_usdOku`, the PSM mints OkuM to self, approves vault, calls `vault.wrap(okuMAmount, msg.sender)`. For `redeem_usdOku`, the PSM receives usdOku, calls `vault.unwrap(usdAmount, address(this))`, receives OkuM, then redeems via normal price-aware redeem path.
+
+**Storage, RBAC, queue, buffer management, oracle checks**: Core PSM mechanics unchanged. Existing `mint()` / `redeem()` become `mint_OkuM()` / `redeem_OkuM()`.
 
 ### Queue Behavior
 
-The redemption queue operates on OkuNote tokens. Since OkuNote is non-rebasing, queued note tokens do not grow in balance — but they appreciate in price via `notePrice()`. When the queue processes, the user receives USDC based on `noteAmount × notePrice()` at processing time. The economic result is the same as the old design (user earns yield while queued) but through price appreciation rather than balance growth.
+The redemption queue operates on OkuMoney tokens. Since OkuMoney is non-rebasing, queued tokens do not grow in balance — but they appreciate in price via `okuMPrice()`. When the queue processes, the user receives USDC based on `okuMAmount × okuMPrice()` at processing time. The economic result is the same (user earns yield while queued) but through price appreciation rather than balance growth.
 
 ---
 
@@ -428,13 +430,13 @@ Each contract deployed behind TransparentUpgradeableProxy:
 
 ```solidity
 // Deploy implementation
-OkuNote impl = new OkuNote();
+OkuMoney impl = new OkuMoney();
 
 // Deploy proxy
 TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(
     address(impl),
     proxyAdmin,
-    abi.encodeCall(OkuNote.initialize, (admin, pauser, ...))
+    abi.encodeCall(OkuMoney.initialize, (admin, pauser, ...))
 );
 ```
 
@@ -445,7 +447,8 @@ TransparentUpgradeableProxy proxy = new TransparentUpgradeableProxy(
 Use CREATE2 via deterministic deployer for same addresses across chains:
 
 ```solidity
-bytes32 salt = keccak256("OkuNote-v1");
+// Same salt + same bytecode = same address on all EVM chains
+bytes32 salt = keccak256("OkuMoney-v1");
 address deployed = deployer.deploy(salt, bytecode);
 ```
 
@@ -456,8 +459,8 @@ address deployed = deployer.deploy(salt, bytecode);
 ### Unit Tests (Forge)
 
 ```bash
-forge test --match-contract OkuNoteTest
-forge test --match-contract OkuUSDTest
+forge test --match-contract OkuMoneyTest
+forge test --match-contract OkuDollarTest
 ```
 
 ### Invariant Tests (Forge)
@@ -469,44 +472,51 @@ forge test --match-contract SupplyInvariants
 
 ### Key Test Scenarios
 
-*OkuNote (non-rebasing with price oracle):*
-- Standard ERC-20: balanceOf returns raw balance, unaffected by notePrice
-- notePrice starts at PRECISION ($1.00), grows with setYieldRate
+*OkuMoney (non-rebasing with price oracle):*
+- Standard ERC-20: balanceOf returns raw balance, unaffected by okuMPrice
+- okuMPrice starts at PRECISION ($1.00), grows with setYieldRate over time
 - setNextYieldRate head-to-tail seamless transition
-- notePrice emergency override via updateNotePrice
-- Mint/burn with allowance tracking (raw token amounts, no shares)
-- Blacklist, pause, supply cap
+- okuMPrice emergency override via updateOkuMPrice
+- balanceOf and totalSupply do NOT change when okuMPrice increases
+- Mint/burn with allowance tracking (raw token amounts)
+- Continuous yield accrual: APY accuracy (~4.5% over 365 days)
+- Continuous yield accrual: rate expiry stops price growth with no pending rate
+- Pause blocks operations, blacklist works while paused
 - Permit
 - Role separation enforcement
 
-*OkuUSD (rebasing vault):*
-- Wrap: price-aware — noteAmount × notePrice / usdMultiplier = correct OkuUSD
+*OkuDollar (rebasing vault):*
+- Wrap: price-aware — okuMAmount × okuMPrice / usdMultiplier = correct usdOku
 - Unwrap: price-aware inverse, revert if insufficient reserves
-- Wrap/unwrap round-trip accuracy at various notePrice/usdMultiplier combinations
+- Wrap/unwrap round-trip accuracy at various okuMPrice/usdMultiplier combinations
 - Independent USD multiplier grows via its own _rpow
-- USD rate independent of note rate
+- USD rate independent of OkuM rate
 - depositReserves increases collateralization ratio without minting shares
 - withdrawSurplus extracts excess, enforces minCollateralRatio
-- Overcollateralized / undercollateralized scenarios
-- Pause blocks peer-to-peer OkuUSD transfers but allows wrap/unwrap
+- withdrawSurplus reverts if would breach minCollateralRatio
+- Overcollateralized scenario: surplus() returns correct extractable amount
+- Undercollateralized scenario: unwrap reverts when insufficient OkuMoney
+- Pause blocks peer-to-peer usdOku transfers but allows wrap/unwrap
 - Repeated wrap/unwrap cycles: no share inflation (rUSDY H-01 mitigation)
+- Collateralization ratio accuracy across various rate combinations
 - ERC-20 compliance with share-based math
 - Role enforcement
 
 *LitePSM:*
-- mint_OkuNote / redeem_OkuNote: price-aware conversions via notePrice()
-- mint_OkuUSD / redeem_OkuUSD: convenience functions
-- redeem_OkuUSD: vault undercollateralized → revert (distinct from buffer-insufficient queue)
-- Queue: notes appreciate in price while queued, USDC output based on notePrice() at processing
+- mint_OkuM / redeem_OkuM: price-aware conversions via okuMPrice()
+- mint_usdOku / redeem_usdOku: convenience functions
+- redeem_usdOku: vault undercollateralized → revert (distinct from buffer-insufficient queue)
+- Queue: OkuMoney appreciates in price while queued, USDC output based on okuMPrice() at processing
 - Oracle staleness rejection
+- Decimal conversion accuracy
 
 *Bridge:*
-- OkuBridge: valid signature mints tokens (not shares)
+- OkuBridge: valid signature mints tokens (not shares — standard ERC-20 amounts)
 - OkuBridge: invalid/expired signature reverts
 - OkuBridge: replay prevention
-- OkuBridgeRouter: bridge_OkuNote routes correctly (standard ERC-20 token amounts)
-- OkuBridgeRouter: bridge_OkuUSD unwraps then bridges
-- OkuBridgeRouter: bridge_OkuUSD reverts when vault undercollateralized
+- OkuBridgeRouter: bridge_OkuM routes correctly (standard ERC-20 token amounts)
+- OkuBridgeRouter: bridge_usdOku unwraps then bridges
+- OkuBridgeRouter: bridge_usdOku reverts when vault undercollateralized
 - OkuBridgeRouter: adapter path burns and delegates
 
 ---
@@ -514,35 +524,35 @@ forge test --match-contract SupplyInvariants
 ## Key Invariants
 
 ```
-// OkuNote: standard ERC-20 (no shares, no multiplier in balanceOf)
+// OkuMoney: standard ERC-20 (no shares, no multiplier in balanceOf)
 balanceOf(user) == _balances[user]
 
-// OkuNote: notePrice never decreases
-notePrice() >= previousNotePrice
+// OkuMoney: okuMPrice never decreases
+okuMPrice() >= previousOkuMPrice
 
-// OkuNote: supply cap respected
+// OkuMoney: supply cap respected
 totalSupply() <= maxSupply
 
-// OkuNote: minter allowance only decreases
+// OkuMoney: minter allowance only decreases (until admin reset)
 newAllowance <= previousAllowance || caller == ALLOWANCE_MANAGER
 
-// OkuUSD: share/token conversion
+// OkuDollar: share/token conversion
 balanceOf(user) == usdSharesOf(user) * usdMultiplier / PRECISION
 
-// OkuUSD: collateralization floor (enforced on withdrawSurplus only)
+// OkuDollar: collateralization floor (enforced on withdrawSurplus only)
 afterWithdrawSurplus: collateralizationRatio() >= minCollateralRatio
 
-// OkuUSD: collateralization is price-aware
-collateralizationRatio = (noteBalance × notePrice / PRECISION) × PRECISION / totalSupply
+// OkuDollar: collateralization is price-aware
+collateralizationRatio = (okuMBalance × okuMPrice / PRECISION) × PRECISION / totalSupply
 
-// OkuUSD: wrap/unwrap round-trip (max 1 unit rounding loss in note terms)
-unwrap(wrap(noteAmount)) >= noteAmount - 1
+// OkuDollar: wrap/unwrap round-trip (max 1 unit rounding loss in OkuM terms)
+unwrap(wrap(okuMAmount)) >= okuMAmount - 1
 
-// OkuUSD: reserve accounting
-totalNoteReserves() == OkuNote.balanceOf(address(okuUsdVault))
+// OkuDollar: reserve accounting
+totalOkuMReserves() == OkuMoney.balanceOf(address(okuDollarVault))
 
-// OkuUSD: surplus is price-aware extractable overcollateralization
-surplus() == max(0, (noteReserves × notePrice / PRECISION) - totalUsdObligations) converted to note tokens
+// OkuDollar: surplus is price-aware extractable overcollateralization
+surplus() == max(0, (okuMReserves × okuMPrice / PRECISION) - totalUsdObligations) converted to OkuM tokens
 
 // Queue integrity
 queue.head <= queue.tail

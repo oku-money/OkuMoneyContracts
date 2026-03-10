@@ -2,14 +2,14 @@
 pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
-import {OkuNote} from "../../src/token/OkuNote.sol";
+import {OkuMoney} from "../../src/token/OkuMoney.sol";
 
 /**
- * @title OkuNoteHandler
- * @notice Handler contract for OkuNote invariant testing
+ * @title OkuMoneyHandler
+ * @notice Handler contract for OkuMoney invariant testing
  */
-contract OkuNoteHandler is Test {
-    OkuNote public okuNote;
+contract OkuMoneyHandler is Test {
+    OkuMoney public okuMoney;
     address public minter;
     address public rebaser;
     address public allowanceManager;
@@ -40,11 +40,11 @@ contract OkuNoteHandler is Test {
     uint256 public ghostResetCallCount;
     uint256 public ghostResetRevertCount;
 
-    // Monotonic notePrice tracking
-    uint256 public ghostLastNotePrice;
+    // Monotonic okuMPrice tracking
+    uint256 public ghostLastOkuMPrice;
 
-    constructor(OkuNote _okuNote, address _minter, address _rebaser, address _allowanceManager) {
-        okuNote = _okuNote;
+    constructor(OkuMoney _okuMoney, address _minter, address _rebaser, address _allowanceManager) {
+        okuMoney = _okuMoney;
         minter = _minter;
         rebaser = _rebaser;
         allowanceManager = _allowanceManager;
@@ -54,8 +54,8 @@ contract OkuNoteHandler is Test {
         _addActor(makeAddr("actor2"));
         _addActor(makeAddr("actor3"));
 
-        lastAllowance[minter] = okuNote.minterAllowance(minter);
-        ghostLastNotePrice = okuNote.notePrice();
+        lastAllowance[minter] = okuMoney.minterAllowance(minter);
+        ghostLastOkuMPrice = okuMoney.okuMPrice();
     }
 
     function _addActor(address actor) internal {
@@ -80,16 +80,16 @@ contract OkuNoteHandler is Test {
         address actor = actors[actorSeed % actors.length];
         amount = bound(amount, 1, MAX_SUPPLY / 100);
 
-        uint256 allowance = okuNote.minterAllowance(minter);
-        uint256 remaining = okuNote.maxSupply() - okuNote.totalSupply();
+        uint256 allowance = okuMoney.minterAllowance(minter);
+        uint256 remaining = okuMoney.maxSupply() - okuMoney.totalSupply();
         amount = bound(amount, 0, _min(allowance, remaining));
 
         if (amount == 0) return;
 
         vm.prank(minter);
-        try okuNote.mint(actor, amount) {
+        try okuMoney.mint(actor, amount) {
             ghostMintedTotal += amount;
-            lastAllowance[minter] = okuNote.minterAllowance(minter);
+            lastAllowance[minter] = okuMoney.minterAllowance(minter);
         } catch {
             ghostMintRevertCount++;
         }
@@ -101,16 +101,16 @@ contract OkuNoteHandler is Test {
         ghostBurnCallCount++;
 
         address actor = actors[actorSeed % actors.length];
-        uint256 balance = okuNote.balanceOf(actor);
+        uint256 balance = okuMoney.balanceOf(actor);
         amount = bound(amount, 0, balance);
 
         if (amount == 0) return;
 
         // Transfer tokens to minter first (self-burn model)
         vm.prank(actor);
-        try okuNote.transfer(minter, amount) {
+        try okuMoney.transfer(minter, amount) {
             vm.prank(minter);
-            try okuNote.burn(amount) {
+            try okuMoney.burn(amount) {
                 ghostBurnedTotal += amount;
             } catch {
                 ghostBurnRevertCount++;
@@ -127,22 +127,22 @@ contract OkuNoteHandler is Test {
 
         address from = actors[fromSeed % actors.length];
         address to = actors[toSeed % actors.length];
-        uint256 balance = okuNote.balanceOf(from);
+        uint256 balance = okuMoney.balanceOf(from);
         amount = bound(amount, 0, balance);
 
         if (amount == 0 || from == to) return;
 
         vm.prank(from);
-        try okuNote.transfer(to, amount) {}
+        try okuMoney.transfer(to, amount) {}
         catch {
             ghostTransferRevertCount++;
         }
     }
 
-    /// @notice Update note price (rebase)
+    /// @notice Update OkuM price (rebase)
     function rebase(uint256 priceIncrease) external {
         ghostRebaseCallCount++;
-        uint256 currentPrice = okuNote.notePrice();
+        uint256 currentPrice = okuMoney.okuMPrice();
 
         // Cap maximum price at 1e24 (1 million x starting value)
         uint256 maxPrice = 1e24;
@@ -164,9 +164,9 @@ contract OkuNoteHandler is Test {
         }
 
         vm.prank(rebaser);
-        try okuNote.updateNotePrice(newPrice) {
+        try okuMoney.updateOkuMPrice(newPrice) {
             ghostLastWasRebase = true;
-            ghostLastNotePrice = newPrice;
+            ghostLastOkuMPrice = newPrice;
         } catch {
             ghostRebaseRevertCount++;
         }
@@ -178,7 +178,7 @@ contract OkuNoteHandler is Test {
         newAllowance = bound(newAllowance, 0, MAX_SUPPLY);
 
         vm.prank(allowanceManager);
-        try okuNote.configureMinterAllowance(minter, newAllowance) {
+        try okuMoney.configureMinterAllowance(minter, newAllowance) {
             allowanceWasReset = true;
             lastAllowance[minter] = newAllowance;
         } catch {

@@ -5,10 +5,13 @@ import {BaseTest} from "../Base.t.sol";
 import {OkuNoteHandler} from "../handlers/OkuNoteHandler.sol";
 
 /**
- * @title ShareConversionInvariantsTest
- * @notice Invariant tests for OkuNote share/token conversion formulas
+ * @title NotePriceInvariantsTest
+ * @notice Invariant tests for OkuNote notePrice() monotonicity and balance consistency
+ * @dev Updated for non-rebasing OkuNote redesign. Replaces old ShareConversionInvariants.
+ *      OkuNote is a standard ERC-20: balanceOf() returns raw token amounts.
+ *      notePrice() tracks price appreciation separately and must never decrease.
  */
-contract ShareConversionInvariantsTest is BaseTest {
+contract NotePriceInvariantsTest is BaseTest {
     OkuNoteHandler public handler;
 
     function setUp() public override {
@@ -26,72 +29,45 @@ contract ShareConversionInvariantsTest is BaseTest {
     }
 
     /**
-     * @notice balanceOf always equals shares * multiplier / PRECISION
+     * @notice Sum of all user balances equals totalSupply (standard ERC-20 invariant)
      */
-    function invariant_BalanceOfFormula() public view {
+    function invariant_BalancesSumToTotalSupply() public view {
         address[] memory actors = handler.getActors();
+        uint256 sumOfBalances = 0;
 
         for (uint256 i = 0; i < actors.length; i++) {
-            address user = actors[i];
-            uint256 shares = okuNote.sharesOf(user);
-            uint256 expectedBalance = (shares * okuNote.rewardMultiplier()) / PRECISION;
-
-            assertEq(okuNote.balanceOf(user), expectedBalance, "balanceOf formula violated");
+            sumOfBalances += okuNote.balanceOf(actors[i]);
         }
+
+        // Sum of actor balances should not exceed total supply
+        // (other addresses like minter may also hold tokens)
+        assertLe(
+            sumOfBalances,
+            okuNote.totalSupply(),
+            "Sum of actor balances should not exceed totalSupply"
+        );
     }
 
     /**
-     * @notice totalSupply always equals totalShares * multiplier / PRECISION
+     * @notice notePrice() never decreases
      */
-    function invariant_TotalSupplyFormula() public view {
-        uint256 totalShares = okuNote.totalShares();
-        uint256 expectedSupply = (totalShares * okuNote.rewardMultiplier()) / PRECISION;
-
-        assertEq(okuNote.totalSupply(), expectedSupply, "totalSupply formula violated");
+    function invariant_NotePriceNeverDecreases() public view {
+        uint256 current = okuNote.notePrice();
+        assertGe(current, PRECISION, "notePrice below initial value");
+        assertGe(current, handler.ghostLastNotePrice(), "notePrice decreased from previous value");
     }
 
     /**
-     * @notice Sum of all user shares equals totalShares
+     * @notice notePrice() does not affect totalSupply (non-rebasing)
+     * @dev After a rebase (notePrice update), totalSupply should remain unchanged.
      */
-    function invariant_SharesSumToTotal() public view {
-        address[] memory actors = handler.getActors();
-        uint256 sumOfShares = 0;
-
-        for (uint256 i = 0; i < actors.length; i++) {
-            sumOfShares += okuNote.sharesOf(actors[i]);
-        }
-
-        assertLe(sumOfShares, okuNote.totalShares(), "Sum of actor shares should not exceed total");
-    }
-
-    /**
-     * @notice Reward multiplier never decreases
-     */
-    function invariant_MultiplierNeverDecreases() public view {
-        uint256 current = okuNote.rewardMultiplier();
-        assertGe(current, PRECISION, "Multiplier below initial value");
-        assertGe(current, handler.ghostLastMultiplier(), "Multiplier decreased from previous value");
-    }
-
-    /**
-     * @notice sharesToTokens and tokensToShares are consistent
-     */
-    function invariant_ConversionConsistency() public view {
-        uint256[3] memory testValues = [uint256(1), 1e18, 1_000_000e18];
-        for (uint256 i = 0; i < 3; i++) {
-            uint256 tokens = okuNote.sharesToTokens(testValues[i]);
-            uint256 recovered = okuNote.tokensToShares(tokens);
-            assertLe(recovered, testValues[i], "Conversion should not gain shares");
-        }
-
-        address[] memory actors = handler.getActors();
-        for (uint256 i = 0; i < actors.length; i++) {
-            uint256 actorShares = okuNote.sharesOf(actors[i]);
-            if (actorShares > 0) {
-                uint256 tokens = okuNote.sharesToTokens(actorShares);
-                uint256 recovered = okuNote.tokensToShares(tokens);
-                assertLe(recovered, actorShares, "Actor conversion should not gain shares");
-            }
-        }
+    function invariant_NotePriceDoesNotAffectSupply() public view {
+        // totalSupply is always minted - burned, regardless of notePrice
+        uint256 expectedSupply = handler.ghostMintedTotal() - handler.ghostBurnedTotal();
+        assertEq(
+            okuNote.totalSupply(),
+            expectedSupply,
+            "totalSupply should equal minted - burned regardless of notePrice"
+        );
     }
 }

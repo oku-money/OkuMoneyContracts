@@ -5,61 +5,17 @@ import {BaseTest} from "../Base.t.sol";
 
 /**
  * @title OkuNoteFuzzTest
- * @notice Fuzz tests for OkuNote focusing on share/token math and rebasing
+ * @notice Fuzz tests for OkuNote (non-rebasing ERC-20 with separate notePrice tracking)
+ * @dev OkuNote is a standard ERC-20: balanceOf() returns raw token count, unaffected by
+ *      notePrice(). Price appreciation is tracked separately for PSM/vault use.
  */
 contract OkuNoteFuzzTest is BaseTest {
-    // ============ Share/Token Conversion Math Tests ============
-
-    /// @notice tokens -> shares -> tokens should round-trip with max 1 wei loss
-    function testFuzz_SharesRoundTrip(uint256 tokens) public view {
-        tokens = bound(tokens, 1, MAX_SUPPLY);
-
-        uint256 shares = okuNote.tokensToShares(tokens);
-        uint256 recoveredTokens = okuNote.sharesToTokens(shares);
-
-        // Due to integer division, recovered may be slightly less
-        assertLe(recoveredTokens, tokens, "Conversion should not gain tokens");
-        assertGe(recoveredTokens, tokens - 1, "Max 1 wei loss on round trip");
-    }
-
-    /// @notice shares -> tokens -> shares should round-trip with possible loss
-    function testFuzz_TokensRoundTrip(uint256 shares) public view {
-        shares = bound(shares, 1, type(uint128).max);
-
-        uint256 tokens = okuNote.sharesToTokens(shares);
-        uint256 recoveredShares = okuNote.tokensToShares(tokens);
-
-        // Due to integer division, recovered may be slightly less
-        assertLe(recoveredShares, shares, "Conversion should not gain shares");
-    }
-
-    /// @notice Round-trip at various multipliers maintains precision
-    function testFuzz_SharesRoundTripAtMultiplier(uint256 tokens, uint256 multiplier) public {
-        // Use larger minimum to avoid edge cases with very small values
-        tokens = bound(tokens, 1e18, MAX_SUPPLY / 10);
-        multiplier = bound(multiplier, PRECISION, PRECISION * 10);
-
-        vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(multiplier);
-
-        uint256 shares = okuNote.tokensToShares(tokens);
-        uint256 recoveredTokens = okuNote.sharesToTokens(shares);
-
-        assertLe(recoveredTokens, tokens, "Should not gain tokens");
-        // Allow for rounding based on multiplier scale - at most lose multiplier/PRECISION worth
-        uint256 maxLoss = (tokens * multiplier) / (PRECISION * PRECISION) + 2;
-        assertGe(
-            recoveredTokens, tokens > maxLoss ? tokens - maxLoss : 0, "Excessive precision loss"
-        );
-    }
-
     // ============ Mint/Burn Consistency Tests ============
 
     /// @notice Minting then burning same amount returns to original state
     function testFuzz_MintBurnConsistency(uint256 amount) public {
         amount = _boundMintAmount(amount);
 
-        uint256 totalSharesBefore = okuNote.totalShares();
         uint256 totalSupplyBefore = okuNote.totalSupply();
 
         // Mint to minter so it can self-burn
@@ -69,7 +25,6 @@ contract OkuNoteFuzzTest is BaseTest {
         okuNote.burn(amount);
 
         // Should return to original state
-        assertEq(okuNote.totalShares(), totalSharesBefore, "Total shares should return to original");
         assertEq(okuNote.totalSupply(), totalSupplyBefore, "Total supply should return to original");
         assertEq(okuNote.balanceOf(minter), 0, "Minter balance should be zero");
     }
@@ -106,24 +61,28 @@ contract OkuNoteFuzzTest is BaseTest {
 
     // ============ Transfer Consistency Tests ============
 
-    /// @notice Transfers preserve total shares
-    function testFuzz_TransferPreservesShares(uint256 amount, uint256 transferAmount) public {
+    /// @notice Transfers preserve total supply and individual balances sum
+    function testFuzz_TransferPreservesBalances(uint256 amount, uint256 transferAmount) public {
         amount = _boundMintAmount(amount);
         _mintOkuNote(user1, amount);
 
         transferAmount = bound(transferAmount, 0, amount);
 
-        uint256 totalSharesBefore = okuNote.totalShares();
-        uint256 combinedSharesBefore = okuNote.sharesOf(user1) + okuNote.sharesOf(user2);
+        uint256 totalSupplyBefore = okuNote.totalSupply();
+        uint256 combinedBalanceBefore = okuNote.balanceOf(user1) + okuNote.balanceOf(user2);
 
         vm.prank(user1);
         assertTrue(okuNote.transfer(user2, transferAmount));
 
-        assertEq(okuNote.totalShares(), totalSharesBefore, "Total shares unchanged by transfer");
+        assertEq(okuNote.totalSupply(), totalSupplyBefore, "Total supply unchanged by transfer");
         assertEq(
-            okuNote.sharesOf(user1) + okuNote.sharesOf(user2),
-            combinedSharesBefore,
-            "Individual shares sum unchanged"
+            okuNote.balanceOf(user1) + okuNote.balanceOf(user2),
+            combinedBalanceBefore,
+            "Individual balances sum unchanged"
+        );
+        assertEq(okuNote.balanceOf(user2), transferAmount, "Receiver got exact transfer amount");
+        assertEq(
+            okuNote.balanceOf(user1), amount - transferAmount, "Sender lost exact transfer amount"
         );
     }
 
@@ -158,49 +117,66 @@ contract OkuNoteFuzzTest is BaseTest {
         );
     }
 
-    // ============ Rebasing Tests ============
+    // ============ notePrice Independence Tests ============
 
-    /// @notice Rebase increases all balances proportionally
-    function testFuzz_RebaseIncreasesAllBalances(uint256 mintAmount, uint256 newMultiplier) public {
+    /// @notice notePrice change does NOT affect any user balances
+    function testFuzz_NotePriceDoesNotAffectBalances(uint256 mintAmount, uint256 newPrice) public {
         mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 10);
-        newMultiplier = _boundMultiplier(newMultiplier);
+        newPrice = _boundNotePrice(newPrice);
 
         _mintOkuNote(user1, mintAmount);
 
         uint256 balanceBefore = okuNote.balanceOf(user1);
-        uint256 sharesBefore = okuNote.sharesOf(user1);
-        uint256 multiplierBefore = okuNote.rewardMultiplier();
+        uint256 totalSupplyBefore = okuNote.totalSupply();
 
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(newMultiplier);
+        okuNote.updateNotePrice(newPrice);
 
-        uint256 balanceAfter = okuNote.balanceOf(user1);
-        uint256 sharesAfter = okuNote.sharesOf(user1);
-
-        // Shares should be unchanged
-        assertEq(sharesAfter, sharesBefore, "Shares unchanged by rebase");
-
-        // Balance should scale with multiplier ratio
-        if (newMultiplier > multiplierBefore) {
-            assertGt(balanceAfter, balanceBefore, "Balance should increase with multiplier");
-        }
-
-        // Verify the formula: balance = shares * multiplier / PRECISION
-        uint256 expectedBalance = (sharesBefore * newMultiplier) / PRECISION;
-        assertEq(balanceAfter, expectedBalance, "Balance matches formula");
+        // Balances must be completely unaffected
+        assertEq(
+            okuNote.balanceOf(user1), balanceBefore, "balanceOf unchanged after notePrice update"
+        );
+        assertEq(
+            okuNote.totalSupply(), totalSupplyBefore, "totalSupply unchanged after notePrice update"
+        );
     }
 
-    /// @notice Rebase affects all users proportionally
-    function testFuzz_RebaseAffectsAllUsersProportionally(
+    /// @notice notePrice change does NOT affect multiple users' balances
+    function testFuzz_NotePriceDoesNotAffectMultipleUsers(
         uint256 amount1,
         uint256 amount2,
-        uint256 newMultiplier
+        uint256 newPrice
     )
         public
     {
         amount1 = bound(amount1, 1e18, MAX_SUPPLY / 4);
         amount2 = bound(amount2, 1e18, MAX_SUPPLY / 4);
-        newMultiplier = _boundMultiplier(newMultiplier);
+        newPrice = _boundNotePrice(newPrice);
+
+        _mintOkuNote(user1, amount1);
+        _mintOkuNote(user2, amount2);
+
+        uint256 balance1Before = okuNote.balanceOf(user1);
+        uint256 balance2Before = okuNote.balanceOf(user2);
+
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(newPrice);
+
+        assertEq(okuNote.balanceOf(user1), balance1Before, "User1 balance unchanged");
+        assertEq(okuNote.balanceOf(user2), balance2Before, "User2 balance unchanged");
+    }
+
+    /// @notice Balance ratios unchanged after notePrice update
+    function testFuzz_BalanceRatiosUnchangedAfterPriceUpdate(
+        uint256 amount1,
+        uint256 amount2,
+        uint256 newPrice
+    )
+        public
+    {
+        amount1 = bound(amount1, 1e18, MAX_SUPPLY / 4);
+        amount2 = bound(amount2, 1e18, MAX_SUPPLY / 4);
+        newPrice = _boundNotePrice(newPrice);
 
         _mintOkuNote(user1, amount1);
         _mintOkuNote(user2, amount2);
@@ -209,74 +185,116 @@ contract OkuNoteFuzzTest is BaseTest {
         uint256 ratio2Before = (okuNote.balanceOf(user2) * PRECISION) / okuNote.totalSupply();
 
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(newMultiplier);
+        okuNote.updateNotePrice(newPrice);
 
         uint256 ratio1After = (okuNote.balanceOf(user1) * PRECISION) / okuNote.totalSupply();
         uint256 ratio2After = (okuNote.balanceOf(user2) * PRECISION) / okuNote.totalSupply();
 
-        // Ratios should be preserved (within rounding tolerance)
-        assertApproxEqRel(ratio1After, ratio1Before, 0.0001e18, "User1 ratio preserved");
-        assertApproxEqRel(ratio2After, ratio2Before, 0.0001e18, "User2 ratio preserved");
+        // Ratios must be exactly preserved (standard ERC-20, no rounding)
+        assertEq(ratio1After, ratio1Before, "User1 ratio exactly preserved");
+        assertEq(ratio2After, ratio2Before, "User2 ratio exactly preserved");
     }
 
-    /// @notice Total supply scales with multiplier after rebase
-    function testFuzz_TotalSupplyScalesWithMultiplier(
-        uint256 mintAmount,
-        uint256 newMultiplier
-    )
-        public
-    {
+    // ============ notePrice Monotonicity Tests ============
+
+    /// @notice notePrice can only increase via updateNotePrice
+    function testFuzz_NotePriceNeverDecreases(uint256 newPrice) public {
+        uint256 currentPrice = okuNote.notePrice();
+        newPrice = _boundNotePrice(newPrice);
+
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(newPrice);
+
+        assertGe(okuNote.notePrice(), currentPrice, "notePrice must never decrease");
+    }
+
+    /// @notice Sequential notePrice updates accumulate correctly
+    function testFuzz_SequentialNotePriceUpdates(uint256 increase1, uint256 increase2) public {
+        increase1 = _boundNotePriceIncrease(increase1);
+        increase2 = _boundNotePriceIncrease(increase2);
+
+        uint256 priceBefore = okuNote.notePrice();
+
+        // First price update
+        uint256 price1 = priceBefore + increase1;
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(price1);
+
+        assertEq(okuNote.notePrice(), price1, "Price after first update");
+
+        // Second price update
+        uint256 price2 = price1 + increase2;
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(price2);
+
+        assertEq(okuNote.notePrice(), price2, "Price after second update");
+        assertGt(okuNote.notePrice(), priceBefore, "Final price greater than initial");
+    }
+
+    /// @notice notePrice reverts if new price is less than current
+    function testFuzz_NotePriceCannotDecrease(uint256 increase, uint256 decrease) public {
+        increase = _boundNotePriceIncrease(increase);
+
+        uint256 currentPrice = okuNote.notePrice();
+        uint256 higherPrice = currentPrice + increase;
+
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(higherPrice);
+
+        // Try to set a lower price (any amount below current)
+        decrease = bound(decrease, 1, higherPrice);
+        uint256 lowerPrice = higherPrice - decrease;
+
+        vm.prank(rebaser);
+        vm.expectRevert("Price cannot decrease");
+        okuNote.updateNotePrice(lowerPrice);
+    }
+
+    // ============ Yield Rate Accrual Tests ============
+
+    /// @notice notePrice accrues over time with setYieldRate
+    function testFuzz_NotePriceAccruesWithYieldRate(uint256 elapsed) public {
+        elapsed = bound(elapsed, 1, 365 days);
+
+        // Set a modest yield rate (~4.5% APY = ~1.000000001395 per second)
+        uint256 rate = PRECISION + 1_395_000_000; // ~4.5% APY
+
+        vm.prank(rebaser);
+        okuNote.setYieldRate(rate, 0);
+
+        uint256 priceBefore = okuNote.notePrice();
+
+        // Advance time
+        vm.warp(block.timestamp + elapsed);
+
+        uint256 priceAfter = okuNote.notePrice();
+        assertGt(priceAfter, priceBefore, "Price should increase over time with positive rate");
+    }
+
+    /// @notice Yield rate does not affect balances even after time passes
+    function testFuzz_YieldRateDoesNotAffectBalances(uint256 mintAmount, uint256 elapsed) public {
         mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 10);
-        newMultiplier = _boundMultiplier(newMultiplier);
+        elapsed = bound(elapsed, 1, 365 days);
 
         _mintOkuNote(user1, mintAmount);
+        uint256 balanceBefore = okuNote.balanceOf(user1);
+        uint256 totalSupplyBefore = okuNote.totalSupply();
 
-        uint256 totalSharesBefore = okuNote.totalShares();
-        uint256 multiplierBefore = okuNote.rewardMultiplier();
-
+        // Set yield rate
+        uint256 rate = PRECISION + 1_395_000_000; // ~4.5% APY
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(newMultiplier);
+        okuNote.setYieldRate(rate, 0);
 
-        // totalSupply = totalShares * multiplier / PRECISION
-        uint256 expectedSupply = (totalSharesBefore * newMultiplier) / PRECISION;
-        assertEq(okuNote.totalSupply(), expectedSupply, "Total supply matches formula");
+        // Advance time
+        vm.warp(block.timestamp + elapsed);
 
-        // Verify proportional change
-        uint256 supplyRatio = (okuNote.totalSupply() * PRECISION) / mintAmount;
-        uint256 multiplierRatio = (newMultiplier * PRECISION) / multiplierBefore;
-        assertApproxEqRel(supplyRatio, multiplierRatio, 0.0001e18, "Supply scales with multiplier");
-    }
-
-    /// @notice Sequential rebases accumulate correctly
-    function testFuzz_SequentialRebases(
-        uint256 mintAmount,
-        uint256 increase1,
-        uint256 increase2
-    )
-        public
-    {
-        mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 100);
-        increase1 = bound(increase1, PRECISION / 1000, PRECISION / 10); // 0.1% to 10%
-        increase2 = bound(increase2, PRECISION / 1000, PRECISION / 10);
-
-        _mintOkuNote(user1, mintAmount);
-
-        uint256 sharesBefore = okuNote.sharesOf(user1);
-
-        // First rebase
-        vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION + increase1);
-
-        // Second rebase
-        vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION + increase1 + increase2);
-
-        // Shares should still be unchanged
-        assertEq(okuNote.sharesOf(user1), sharesBefore, "Shares unchanged after multiple rebases");
-
-        // Balance should reflect final multiplier
-        uint256 expectedBalance = (sharesBefore * (PRECISION + increase1 + increase2)) / PRECISION;
-        assertEq(okuNote.balanceOf(user1), expectedBalance, "Balance reflects final multiplier");
+        // Balances MUST be unaffected
+        assertEq(okuNote.balanceOf(user1), balanceBefore, "Balance unchanged after yield accrual");
+        assertEq(
+            okuNote.totalSupply(), totalSupplyBefore, "Total supply unchanged after yield accrual"
+        );
+        // But notePrice should have increased
+        assertGt(okuNote.notePrice(), PRECISION, "notePrice should have grown");
     }
 
     // ============ Minter Allowance Tests ============
@@ -332,158 +350,200 @@ contract OkuNoteFuzzTest is BaseTest {
         assertEq(okuNote.minterAllowance(minter), newAllowance, "Admin can set any allowance");
     }
 
-    // ============ Balance Formula Invariant Tests ============
+    // ============ Balance Invariant Tests (Standard ERC-20) ============
 
-    /// @notice balanceOf always equals shares * multiplier / PRECISION
-    function testFuzz_BalanceOfEqualsFormula(uint256 mintAmount, uint256 newMultiplier) public {
-        mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 2);
-        newMultiplier = _boundMultiplier(newMultiplier);
+    /// @notice balanceOf always equals exact minted amount (standard ERC-20)
+    function testFuzz_BalanceOfEqualsExactMintedAmount(uint256 mintAmount) public {
+        mintAmount = bound(mintAmount, 1, MAX_SUPPLY);
 
         _mintOkuNote(user1, mintAmount);
 
-        vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(newMultiplier);
-
-        uint256 shares = okuNote.sharesOf(user1);
-        uint256 expectedBalance = (shares * newMultiplier) / PRECISION;
-
-        assertEq(okuNote.balanceOf(user1), expectedBalance, "balanceOf matches formula");
+        assertEq(okuNote.balanceOf(user1), mintAmount, "balanceOf equals exact minted amount");
     }
 
-    /// @notice totalSupply always equals totalShares * multiplier / PRECISION
-    function testFuzz_TotalSupplyEqualsFormula(uint256 mintAmount, uint256 newMultiplier) public {
-        mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 2);
-        newMultiplier = _boundMultiplier(newMultiplier);
+    /// @notice totalSupply always equals sum of all minted minus burned
+    function testFuzz_TotalSupplyEqualsNetMinted(
+        uint256 amount1,
+        uint256 amount2,
+        uint256 burnAmount
+    )
+        public
+    {
+        amount1 = bound(amount1, 1e18, MAX_SUPPLY / 4);
+        amount2 = bound(amount2, 1e18, MAX_SUPPLY / 4);
+
+        _mintOkuNote(user1, amount1);
+        _mintOkuNote(minter, amount2);
+
+        burnAmount = bound(burnAmount, 0, amount2);
+        if (burnAmount > 0) {
+            vm.prank(minter);
+            okuNote.burn(burnAmount);
+        }
+
+        assertEq(
+            okuNote.totalSupply(), amount1 + amount2 - burnAmount, "totalSupply equals net minted"
+        );
+    }
+
+    /// @notice Sum of all balances equals totalSupply after multiple operations
+    function testFuzz_SumOfBalancesEqualsTotalSupply(
+        uint256 mintAmount,
+        uint256 transfer1,
+        uint256 newPrice
+    )
+        public
+    {
+        mintAmount = bound(mintAmount, 10e18, MAX_SUPPLY / 2);
+        newPrice = _boundNotePrice(newPrice);
 
         _mintOkuNote(user1, mintAmount);
 
+        // Update notePrice (should not affect balances)
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(newMultiplier);
+        okuNote.updateNotePrice(newPrice);
 
-        uint256 totalShares = okuNote.totalShares();
-        uint256 expectedSupply = (totalShares * newMultiplier) / PRECISION;
+        // Transfer some tokens
+        transfer1 = bound(transfer1, 1, mintAmount / 2);
+        vm.prank(user1);
+        okuNote.transfer(user2, transfer1);
 
-        assertEq(okuNote.totalSupply(), expectedSupply, "totalSupply matches formula");
+        // Sum of all balances must equal totalSupply
+        uint256 sumOfBalances =
+            okuNote.balanceOf(user1) + okuNote.balanceOf(user2) + okuNote.balanceOf(user3);
+        assertEq(sumOfBalances, okuNote.totalSupply(), "Sum of balances equals total supply");
     }
 
     // ============ Supply Cap Tests ============
 
-    /// @notice Supply cap enforced on mint but not rebase
-    function testFuzz_SupplyCapEnforcedOnMintNotRebase(uint256 multiplierIncrease) public {
+    /// @notice Supply cap enforced on mint (raw token cap)
+    function testFuzz_SupplyCapEnforcedOnMint(uint256 extraAmount) public {
         // Mint exactly at max supply
         _mintOkuNote(user1, MAX_SUPPLY);
 
-        // Should not be able to mint more (supply is at max)
+        extraAmount = bound(extraAmount, 1, MAX_SUPPLY);
+
+        // Should not be able to mint more
         vm.prank(minter);
         vm.expectRevert("Exceeds supply cap");
-        okuNote.mint(user2, 1);
+        okuNote.mint(user2, extraAmount);
+    }
 
-        // Bound multiplier increase to reasonable range
-        multiplierIncrease = bound(multiplierIncrease, PRECISION / 10, PRECISION); // 10% to 100% increase
+    /// @notice notePrice update does NOT affect supply cap enforcement
+    function testFuzz_NotePriceDoesNotAffectSupplyCap(uint256 newPrice) public {
+        newPrice = _boundNotePrice(newPrice);
 
-        // But rebase should work and push supply above maxSupply
+        // Mint half the supply
+        _mintOkuNote(user1, MAX_SUPPLY / 2);
+
+        // Update notePrice
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION + multiplierIncrease);
+        okuNote.updateNotePrice(newPrice);
 
-        // Supply now exceeds maxSupply
-        assertGt(okuNote.totalSupply(), MAX_SUPPLY, "Rebase can push supply above cap");
+        // Should still be able to mint up to the cap (totalSupply is unaffected by notePrice)
+        uint256 remaining = MAX_SUPPLY - okuNote.totalSupply();
+        _mintOkuNote(user2, remaining);
+
+        assertEq(okuNote.totalSupply(), MAX_SUPPLY, "Can mint up to cap after price update");
+
+        // But no more
+        vm.prank(minter);
+        vm.expectRevert("Exceeds supply cap");
+        okuNote.mint(user3, 1);
+    }
+
+    // ============ Mint After notePrice Change Tests ============
+
+    /// @notice Minting after notePrice change gives exact token amount (no share conversion)
+    function testFuzz_MintAfterNotePriceChange(
+        uint256 firstMint,
+        uint256 newPrice,
+        uint256 secondMint
+    )
+        public
+    {
+        firstMint = bound(firstMint, 1e18, MAX_SUPPLY / 4);
+        newPrice = _boundNotePrice(newPrice);
+        secondMint = bound(secondMint, 1e18, MAX_SUPPLY / 4);
+
+        // First mint
+        _mintOkuNote(user1, firstMint);
+        assertEq(okuNote.balanceOf(user1), firstMint, "User1 gets exact first mint");
+
+        // Update notePrice
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(newPrice);
+
+        // Second mint at new price — user still gets exact token amount
+        _mintOkuNote(user2, secondMint);
+        assertEq(okuNote.balanceOf(user2), secondMint, "User2 gets exact second mint");
+
+        // User1 balance unaffected by notePrice change
+        assertEq(okuNote.balanceOf(user1), firstMint, "User1 balance unchanged by price update");
+
+        // Total supply is exact sum
+        assertEq(okuNote.totalSupply(), firstMint + secondMint, "Total supply equals sum of mints");
     }
 
     // ============ Edge Case Tests ============
 
-    /// @notice Very small amounts handled correctly
+    /// @notice Very small amounts handled correctly (standard ERC-20 precision)
     function testFuzz_VerySmallAmounts(uint256 amount) public {
         amount = bound(amount, 1, 1000); // 1 to 1000 wei
 
         _mintOkuNote(user1, amount);
 
-        assertEq(okuNote.balanceOf(user1), amount, "Small mint works");
+        assertEq(okuNote.balanceOf(user1), amount, "Small mint gives exact balance");
 
         if (amount > 1) {
             vm.prank(user1);
             assertTrue(okuNote.transfer(user2, amount - 1));
 
-            assertApproxEqAbs(
-                okuNote.balanceOf(user2),
-                amount - 1,
-                1,
-                "Balance should approximate transferred amount"
-            );
+            assertEq(okuNote.balanceOf(user2), amount - 1, "Transfer gives exact amount");
+            assertEq(okuNote.balanceOf(user1), 1, "Sender retains exact remainder");
         }
     }
 
-    /// @notice Operations at high multiplier maintain precision
-    function testFuzz_HighMultiplierPrecision(uint256 mintAmount, uint256 multiplier) public {
+    /// @notice Operations after notePrice update maintain exact precision
+    function testFuzz_PrecisionAfterNotePriceUpdate(uint256 mintAmount, uint256 newPrice) public {
         mintAmount = bound(mintAmount, 1e18, 1e24); // 1 to 1M tokens
-        multiplier = bound(multiplier, PRECISION * 10, PRECISION * 100); // 10x to 100x
+        newPrice = _boundNotePrice(newPrice);
 
         _mintOkuNote(user1, mintAmount);
-        uint256 sharesBefore = okuNote.sharesOf(user1);
 
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(multiplier);
+        okuNote.updateNotePrice(newPrice);
 
-        // Shares unchanged
-        assertEq(okuNote.sharesOf(user1), sharesBefore, "Shares unchanged at high multiplier");
+        // Balance unchanged (standard ERC-20)
+        assertEq(okuNote.balanceOf(user1), mintAmount, "Balance exact after notePrice update");
 
-        // Balance scales correctly
-        uint256 expectedBalance = (sharesBefore * multiplier) / PRECISION;
-        assertEq(okuNote.balanceOf(user1), expectedBalance, "Balance correct at high multiplier");
-
-        // Transfer at high multiplier
-        uint256 transferAmount = expectedBalance / 2;
+        // Transfer at any notePrice
+        uint256 transferAmount = mintAmount / 2;
         vm.prank(user1);
         assertTrue(okuNote.transfer(user2, transferAmount));
 
-        // Verify transfer worked correctly
-        assertApproxEqRel(
+        // Exact balance preservation (no rounding in standard ERC-20)
+        assertEq(
             okuNote.balanceOf(user1) + okuNote.balanceOf(user2),
-            expectedBalance,
-            0.0001e18,
-            "Total balance preserved after transfer"
+            mintAmount,
+            "Total balance exactly preserved after transfer"
         );
+        assertEq(okuNote.balanceOf(user1), mintAmount - transferAmount, "Sender balance exact");
+        assertEq(okuNote.balanceOf(user2), transferAmount, "Receiver balance exact");
     }
 
-    /// @notice Mint after rebase calculates shares correctly
-    function testFuzz_MintAfterRebase(
-        uint256 firstMint,
-        uint256 multiplier,
-        uint256 secondMint
-    )
-        public
-    {
-        // Use smaller amounts to avoid supply cap issues after rebase
-        firstMint = bound(firstMint, 1e18, MAX_SUPPLY / 20);
-        multiplier = bound(multiplier, PRECISION, PRECISION * 5);
-        secondMint = bound(secondMint, 1e18, MAX_SUPPLY / 20);
+    /// @notice basePrice reflects last snapshot before accrual
+    function testFuzz_BasePriceReflectsSnapshot(uint256 newPrice) public {
+        newPrice = _boundNotePrice(newPrice);
 
-        // First mint at initial multiplier
-        _mintOkuNote(user1, firstMint);
-        uint256 user1Shares = okuNote.sharesOf(user1);
-
-        // Rebase
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(multiplier);
+        okuNote.updateNotePrice(newPrice);
 
-        // Second mint at new multiplier
-        _mintOkuNote(user2, secondMint);
-        uint256 user2Shares = okuNote.sharesOf(user2);
-
-        // User2 should get fewer shares for same token amount at higher multiplier
-        uint256 expectedUser2Shares = (secondMint * PRECISION) / multiplier;
-        assertEq(user2Shares, expectedUser2Shares, "Shares calculated correctly after rebase");
-
-        // Verify balances (allow small rounding due to share conversion)
+        assertEq(okuNote.basePrice(), newPrice, "basePrice equals set price after updateNotePrice");
         assertEq(
-            okuNote.balanceOf(user1),
-            (user1Shares * multiplier) / PRECISION,
-            "User1 balance correct"
-        );
-        // User2 balance may have rounding due to share conversion at different multipliers
-        // At high multipliers, rounding can compound - allow up to multiplier/PRECISION wei
-        uint256 maxRounding = (multiplier / PRECISION) + 1;
-        assertApproxEqAbs(
-            okuNote.balanceOf(user2), secondMint, maxRounding, "User2 balance equals mint amount"
+            okuNote.notePrice(),
+            newPrice,
+            "notePrice equals basePrice immediately after updateNotePrice"
         );
     }
 }

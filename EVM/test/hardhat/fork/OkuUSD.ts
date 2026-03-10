@@ -192,8 +192,8 @@ describe("OkuUSD Vault Scenarios", () => {
         })
     })
 
-    describe("Exchange Rate After Rebase", () => {
-        it("OkuNote rebase increases vault reserves (surplus), unwrap returns dollar-for-dollar", async () => {
+    describe("Exchange Rate After NotePrice Update", () => {
+        it("NotePrice increase creates surplus, unwrap returns fewer notes (price-aware)", async () => {
             const aliceAddr = await Alice.getAddress()
             const okuUsdAddr = await okuUsd.getAddress()
             const depositAmount = parseUnits("10000", 6)
@@ -208,33 +208,38 @@ describe("OkuUSD Vault Scenarios", () => {
 
             const okuUsdBalance = await okuUsd.balanceOf(aliceAddr)
 
-            // Record initial note reserves
+            // Record initial note reserves (raw token count)
             const initialReserves = await okuUsd.totalNoteReserves()
 
-            // Admin performs 10% rebase on OkuNote
-            const multiplierBefore = await okuNote.rewardMultiplier()
-            const newMultiplier = multiplierBefore * 110n / 100n
-            await okuNote.connect(Frank).updateRewardMultiplier(newMultiplier)
+            // Admin increases notePrice by 10% (non-rebasing: token counts don't change)
+            const priceBefore = await okuNote.notePrice()
+            const newPrice = priceBefore * 110n / 100n
+            await okuNote.connect(Frank).updateNotePrice(newPrice)
 
-            // Note reserves should have increased (OkuNote rebased)
+            // Note reserves (raw token count) should be UNCHANGED
             const newReserves = await okuUsd.totalNoteReserves()
-            expect(newReserves).to.be.gt(initialReserves)
-            // Reserves grew ~10%
-            expect(newReserves).to.be.closeTo(initialReserves * 110n / 100n, parseEther("1"))
+            expect(newReserves).to.equal(initialReserves)
 
-            // Vault is now overcollateralized — surplus exists
+            // But the dollar VALUE of reserves increased → surplus exists
             const surplus = await okuUsd.surplus()
             expect(surplus).to.be.gt(0)
 
-            // Unwrap is dollar-for-dollar: OkuUSD amount = notes returned
-            // Since OkuUSD multiplier hasn't changed, user gets back same note amount they wrapped
+            // Unwrap is price-aware: notesReturned = okuUsdBalance × usdMultiplier / notePrice
+            // After notePrice increase, each note is worth more → fewer notes returned
             const notesBefore = await okuNote.balanceOf(aliceAddr)
             await okuUsd.connect(Alice).unwrap(okuUsdBalance, aliceAddr)
             const notesAfter = await okuNote.balanceOf(aliceAddr)
             const notesReturned = notesAfter - notesBefore
 
-            // Dollar-for-dollar: unwrap(okuUsdBalance) returns okuUsdBalance notes
-            expect(notesReturned).to.be.closeTo(okuUsdBalance, 1n)
+            // Expected: notesReturned = okuUsdBalance × usdMultiplier / notePrice
+            // With usdMultiplier = 1e18, notePrice = 1.1e18: notesReturned ≈ okuUsdBalance / 1.1
+            const PRECISION = parseEther("1")
+            const usdMult = await okuUsd.usdMultiplier()
+            const expectedNotes = (okuUsdBalance * usdMult) / newPrice
+            expect(notesReturned).to.be.closeTo(expectedNotes, 1n)
+
+            // Vault should be nearly empty (surplus notes remain)
+            expect(await okuUsd.totalNoteReserves()).to.be.closeTo(surplus, 1n)
         })
     })
 
@@ -250,15 +255,20 @@ describe("OkuUSD Vault Scenarios", () => {
             const bobDeposit = parseUnits("20000", 6)
             const charlieDeposit = parseUnits("30000", 6)
 
-            // All users get OkuNote
+            // Record note balances before PSM minting (may have from previous tests)
+            const aliceNotesPreMint = await okuNote.balanceOf(aliceAddr)
+            const bobNotesPreMint = await okuNote.balanceOf(bobAddr)
+            const charlieNotesPreMint = await okuNote.balanceOf(charlieAddr)
+
+            // All users get OkuNote (price-aware: amount depends on current notePrice)
             await getOkuNote(Alice, aliceDeposit)
             await getOkuNote(Bob, bobDeposit)
             await getOkuNote(Charlie, charlieDeposit)
 
-            // Calculate OkuNote amounts (USDC deposits converted to OkuNote in 18 decimals)
-            const aliceNotes = parseEther("10000")
-            const bobNotes = parseEther("20000")
-            const charlieNotes = parseEther("30000")
+            // Use actual minted amounts (price-aware, not hardcoded)
+            const aliceNotes = (await okuNote.balanceOf(aliceAddr)) - aliceNotesPreMint
+            const bobNotes = (await okuNote.balanceOf(bobAddr)) - bobNotesPreMint
+            const charlieNotes = (await okuNote.balanceOf(charlieAddr)) - charlieNotesPreMint
 
             // Record initial OkuUSD balances (may have from previous tests)
             const aliceUsdBefore = await okuUsd.balanceOf(aliceAddr)
@@ -282,16 +292,20 @@ describe("OkuUSD Vault Scenarios", () => {
             expect(bobUsdGained).to.be.closeTo(aliceUsdGained * 2n, aliceUsdGained / 10n)
             expect(charlieUsdGained).to.be.closeTo(aliceUsdGained * 3n, aliceUsdGained / 10n)
 
-            // Admin performs 10% rebase on OkuNote — vault accumulates surplus
-            const multiplierBefore = await okuNote.rewardMultiplier()
-            const newMultiplier = multiplierBefore * 110n / 100n
-            await okuNote.connect(Frank).updateRewardMultiplier(newMultiplier)
+            // Admin increases notePrice by 10% — vault accumulates surplus
+            const priceBefore = await okuNote.notePrice()
+            const newPrice = priceBefore * 110n / 100n
+            await okuNote.connect(Frank).updateNotePrice(newPrice)
 
             // Vault is now overcollateralized
             expect(await okuUsd.surplus()).to.be.gt(0)
 
             // Users unwrap their gained OkuUSD in reverse order
-            // Unwrap is dollar-for-dollar: they get back the same note amount they wrapped
+            // Unwrap is price-aware: notesReturned = usdAmount × usdMultiplier / notePrice
+            // After notePrice increase, each user gets FEWER notes back (each note worth more)
+            const usdMult = await okuUsd.usdMultiplier()
+            const currentPrice = await okuNote.notePrice()
+
             const charlieNotesBefore = await okuNote.balanceOf(charlieAddr)
             await okuUsd.connect(Charlie).unwrap(charlieUsdGained, charlieAddr)
             const charlieReceived = (await okuNote.balanceOf(charlieAddr)) - charlieNotesBefore
@@ -304,10 +318,13 @@ describe("OkuUSD Vault Scenarios", () => {
             await okuUsd.connect(Alice).unwrap(aliceUsdGained, aliceAddr)
             const aliceReceived = (await okuNote.balanceOf(aliceAddr)) - aliceNotesBefore
 
-            // Dollar-for-dollar: each user receives back what they wrapped (± 1 wei)
-            expect(aliceReceived).to.be.closeTo(aliceNotes, 1n)
-            expect(bobReceived).to.be.closeTo(bobNotes, 1n)
-            expect(charlieReceived).to.be.closeTo(charlieNotes, 1n)
+            // Price-aware: each user receives notes = usdGained × usdMultiplier / notePrice
+            const expectedAlice = (aliceUsdGained * usdMult) / currentPrice
+            const expectedBob = (bobUsdGained * usdMult) / currentPrice
+            const expectedCharlie = (charlieUsdGained * usdMult) / currentPrice
+            expect(aliceReceived).to.be.closeTo(expectedAlice, 1n)
+            expect(bobReceived).to.be.closeTo(expectedBob, 1n)
+            expect(charlieReceived).to.be.closeTo(expectedCharlie, 1n)
         })
     })
 })

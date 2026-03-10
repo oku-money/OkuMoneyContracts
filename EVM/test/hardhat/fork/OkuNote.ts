@@ -153,7 +153,7 @@ describe("OkuNote Scenarios", () => {
     })
 
     describe("User-to-User Transfers", () => {
-        it("Transfers work correctly and both balances grow with rebase", async () => {
+        it("Transfers work correctly and balances are unaffected by notePrice update", async () => {
             const aliceAddr = await Alice.getAddress()
             const bobAddr = await Bob.getAddress()
             const depositAmount = parseUnits("10000", 6)
@@ -173,30 +173,33 @@ describe("OkuNote Scenarios", () => {
             expect(aliceAfterTransfer).to.be.closeTo(aliceInitialBalance - transferAmount, parseEther("1"))
             expect(bobAfterTransfer).to.be.closeTo(transferAmount, parseEther("1"))
 
-            // Record balances before rebase
-            const aliceBeforeRebase = await okuNote.balanceOf(aliceAddr)
-            const bobBeforeRebase = await okuNote.balanceOf(bobAddr)
+            // Record balances before notePrice update
+            const aliceBeforeUpdate = await okuNote.balanceOf(aliceAddr)
+            const bobBeforeUpdate = await okuNote.balanceOf(bobAddr)
 
-            // Admin performs 10% rebase
-            const multiplierBefore = await okuNote.rewardMultiplier()
-            const newMultiplier = multiplierBefore * 110n / 100n
-            await okuNote.connect(Frank).updateRewardMultiplier(newMultiplier)
+            // Admin performs 10% notePrice increase (non-rebasing: balances do NOT change)
+            const priceBefore = await okuNote.notePrice()
+            const newPrice = priceBefore * 110n / 100n
+            await okuNote.connect(Frank).updateNotePrice(newPrice)
 
-            // Both balances should grow by 10%
-            const aliceAfterRebase = await okuNote.balanceOf(aliceAddr)
-            const bobAfterRebase = await okuNote.balanceOf(bobAddr)
+            // Verify notePrice increased
+            expect(await okuNote.notePrice()).to.equal(newPrice)
 
-            expect(aliceAfterRebase).to.be.closeTo(aliceBeforeRebase * 110n / 100n, parseEther("1"))
-            expect(bobAfterRebase).to.be.closeTo(bobBeforeRebase * 110n / 100n, parseEther("1"))
+            // Balances should be UNCHANGED (non-rebasing)
+            const aliceAfterUpdate = await okuNote.balanceOf(aliceAddr)
+            const bobAfterUpdate = await okuNote.balanceOf(bobAddr)
+
+            expect(aliceAfterUpdate).to.equal(aliceBeforeUpdate)
+            expect(bobAfterUpdate).to.equal(bobBeforeUpdate)
 
             // Bob transfers back to Alice
-            await okuNote.connect(Bob).transfer(aliceAddr, bobAfterRebase)
+            await okuNote.connect(Bob).transfer(aliceAddr, bobAfterUpdate)
 
             const aliceFinal = await okuNote.balanceOf(aliceAddr)
             const bobFinal = await okuNote.balanceOf(bobAddr)
 
-            // Alice should have approximately her rebased amount
-            expect(aliceFinal).to.be.closeTo(aliceInitialBalance * 110n / 100n, parseEther("1"))
+            // Alice should have her original balance back (no rebase growth)
+            expect(aliceFinal).to.be.closeTo(aliceInitialBalance, parseEther("1"))
             expect(bobFinal).to.be.closeTo(0n, parseEther("1"))
         })
     })
@@ -205,6 +208,10 @@ describe("OkuNote Scenarios", () => {
         it("PSM cannot mint beyond allowance, admin can reset", async () => {
             const aliceAddr = await Alice.getAddress()
             const psmAddr = await psm.getAddress()
+            const PRECISION = parseEther("1")
+
+            // Get current notePrice (may be elevated from earlier tests)
+            const currentPrice = await okuNote.notePrice()
 
             // Set PSM minter allowance to limited amount (50,000 OkuNote in 18 decimals)
             const limitedAllowance = parseEther("50000")
@@ -213,18 +220,20 @@ describe("OkuNote Scenarios", () => {
             // Verify allowance was set
             expect(await okuNote.minterAllowance(psmAddr)).to.equal(limitedAllowance)
 
-            // Alice swaps 40,000 USDC (should succeed, receives 40,000 OkuNote in 18 decimals)
+            // Alice swaps 40,000 USDC — price-aware: noteAmount = usdcValue18 × PRECISION / notePrice
             const firstSwap = parseUnits("40000", 6) // USDC amount
+            const firstSwap18 = firstSwap * 10n ** 12n
+            const expectedFirstMint = (firstSwap18 * PRECISION) / currentPrice
             await fundWithUSDC(Alice, firstSwap)
             await usdc.connect(Alice).approve(psmAddr, firstSwap)
             await psm.connect(Alice).mint_OkuNote(firstSwap)
 
-            // Verify allowance decreased by OkuNote amount minted (40,000 in 18 decimals)
+            // Verify allowance decreased by price-adjusted OkuNote amount minted
             const remainingAllowance = await okuNote.minterAllowance(psmAddr)
-            const expectedRemaining = limitedAllowance - parseEther("40000")
+            const expectedRemaining = limitedAllowance - expectedFirstMint
             expect(remainingAllowance).to.be.closeTo(expectedRemaining, parseEther("1"))
 
-            // Alice tries to swap 20,000 more USDC (should fail - exceeds remaining ~10k OkuNote)
+            // Alice tries to swap 20,000 more USDC (should fail - exceeds remaining allowance)
             const secondSwap = parseUnits("20000", 6) // USDC amount
             await fundWithUSDC(Alice, secondSwap)
             await usdc.connect(Alice).approve(psmAddr, secondSwap)
@@ -237,9 +246,12 @@ describe("OkuNote Scenarios", () => {
             // Now swap should succeed
             await psm.connect(Alice).mint_OkuNote(secondSwap)
 
-            // Verify Alice received OkuNote from second swap (60,000 OkuNote total in 18 decimals)
+            // Verify Alice received OkuNote from both swaps
             const aliceBalance = await okuNote.balanceOf(aliceAddr)
-            expect(aliceBalance).to.be.gt(parseEther("60000"))
+            const secondSwap18 = secondSwap * 10n ** 12n
+            const expectedSecondMint = (secondSwap18 * PRECISION) / currentPrice
+            // Alice may have balance from earlier tests, just verify she got at least both mints
+            expect(aliceBalance).to.be.gte(expectedFirstMint + expectedSecondMint)
         })
     })
 
@@ -320,6 +332,14 @@ describe("OkuNote Scenarios", () => {
     })
 
     describe("Access Control / Safety", () => {
+        before(async () => {
+            // Reset minter allowance for PSM (may have been consumed by earlier tests)
+            await okuNote.connect(Frank).configureMinterAllowance(
+                await psm.getAddress(),
+                parseEther("1000000000")
+            )
+        })
+
         it("Pause/unpause blocks and allows transfers", async () => {
             const aliceAddr = await Alice.getAddress()
             const bobAddr = await Bob.getAddress()

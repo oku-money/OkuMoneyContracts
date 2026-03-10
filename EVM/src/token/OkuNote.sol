@@ -18,8 +18,13 @@ import {
 
 /**
  * @title OkuNote
- * @notice Rebasing base redeemable note backed 1:1 by US T-Bills (rear-facing yield)
- * @dev Implements share-based storage where balanceOf = shares * rewardMultiplier
+ * @notice Non-rebasing base token backed by US T-Bills with rear-facing yield
+ * @dev Standard ERC-20 balances (static). Yield is expressed through price appreciation
+ *      tracked by an internal `notePrice()` view function using `_rpow` continuous accrual.
+ *      DeFi and bridge compatible out of the box — no share conversion needed.
+ *
+ *      Key distinction: balanceOf() returns raw token count (standard ERC-20).
+ *      notePrice() is a separate view function for pricing — used by PSM and vault.
  */
 contract OkuNote is
     Initializable,
@@ -45,21 +50,17 @@ contract OkuNote is
     // Max rate: ~3700% APY safety cap (well beyond any T-Bill rate)
     uint256 public constant MAX_RATE = PRECISION + 1e11;
 
-    // Share-based storage
-    mapping(address => uint256) private _shares;
-    uint256 private _totalShares;
-
-    // Rebasing mechanism — continuous yield accrual
-    uint256 internal _baseMultiplier;
-    uint256 public ratePerSecond;
-    uint256 public lastAccrualTime;
-    uint256 public rateEnd;
-    uint256 public pendingRatePerSecond;
+    // Price accrual mechanism (continuous)
+    uint256 internal _basePrice; // last snapshot of price (starts at 1e18 = $1.00)
+    uint256 public ratePerSecond; // compound rate per second (1e18 = no yield)
+    uint256 public lastAccrualTime; // timestamp of last _basePrice snapshot
+    uint256 public rateEnd; // when current rate expires (0 = no expiry)
+    uint256 public pendingRatePerSecond; // next rate, activates at rateEnd
 
     // Minter allowance system (Circle pattern)
     mapping(address => uint256) public minterAllowance;
 
-    // Supply cap
+    // Supply cap in token units
     uint256 public maxSupply;
 
     // Blacklist
@@ -71,10 +72,8 @@ contract OkuNote is
     bool private _blacklistExemptInitialized;
 
     // Events
-    event RebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
-    event YieldRateUpdated(
-        uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotMultiplier
-    );
+    event NotePriceUpdated(uint256 oldPrice, uint256 newPrice);
+    event YieldRateUpdated(uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotPrice);
     event NextYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
@@ -106,20 +105,25 @@ contract OkuNote is
         _grantRole(UPGRADER, admin);
         _grantRole(NOTE_PAUSER, admin);
 
-        _baseMultiplier = PRECISION;
+        _basePrice = PRECISION;
         ratePerSecond = PRECISION;
         lastAccrualTime = block.timestamp;
         pendingRatePerSecond = PRECISION;
         maxSupply = initialMaxSupply;
     }
 
-    // ============ Rebasing Logic ============
+    // ============ Price Accrual Logic ============
 
     /**
-     * @notice Computed reward multiplier with continuous yield accrual
-     * @dev Handles current rate, rate expiry, and pending rate crossover
+     * @notice Computed note price with continuous yield accrual
+     * @dev Handles current rate, rate expiry, and pending rate crossover.
+     *      notePrice() starts at 1e18 ($1.00) and grows as rear-facing T-Bill yield accrues.
+     *      After one year at 4.5% APY, notePrice() returns ~1.045e18 ($1.045).
+     *
+     *      Key: balanceOf() is NOT affected by notePrice(). Price appreciation is
+     *      tracked separately for use by the PSM and vault.
      */
-    function rewardMultiplier() public view returns (uint256) {
+    function notePrice() public view returns (uint256) {
         uint256 rate = ratePerSecond;
         if (rate <= PRECISION) {
             // No yield accrual — check if pending rate has activated
@@ -127,15 +131,13 @@ contract OkuNote is
                 uint256 pendingRate = pendingRatePerSecond;
                 if (pendingRate > PRECISION) {
                     uint256 elapsedPending = block.timestamp - rateEnd;
-                    return
-                        (_baseMultiplier * _rpow(pendingRate, elapsedPending, PRECISION))
-                            / PRECISION;
+                    return (_basePrice * _rpow(pendingRate, elapsedPending, PRECISION)) / PRECISION;
                 }
             }
-            return _baseMultiplier;
+            return _basePrice;
         }
 
-        uint256 base = _baseMultiplier;
+        uint256 base = _basePrice;
 
         if (rateEnd != 0 && block.timestamp > rateEnd) {
             // Current rate expired — accrue current rate up to rateEnd, then pending rate after
@@ -160,10 +162,10 @@ contract OkuNote is
     }
 
     /**
-     * @notice Get the base multiplier (last snapshot, before accrual)
+     * @notice Get the base price (last snapshot, before accrual)
      */
-    function baseMultiplier() public view returns (uint256) {
-        return _baseMultiplier;
+    function basePrice() public view returns (uint256) {
+        return _basePrice;
     }
 
     /**
@@ -183,14 +185,14 @@ contract OkuNote is
         require(endTimestamp == 0 || endTimestamp > block.timestamp, "End must be in the future");
 
         // Snapshot current state
-        _baseMultiplier = rewardMultiplier();
+        _basePrice = notePrice();
         lastAccrualTime = block.timestamp;
 
         ratePerSecond = newRatePerSecond;
         rateEnd = endTimestamp;
         pendingRatePerSecond = PRECISION;
 
-        emit YieldRateUpdated(newRatePerSecond, endTimestamp, _baseMultiplier);
+        emit YieldRateUpdated(newRatePerSecond, endTimestamp, _basePrice);
     }
 
     /**
@@ -208,46 +210,18 @@ contract OkuNote is
     }
 
     /**
-     * @notice Emergency override — snapshots computed multiplier, resets rate to zero yield
-     * @param newMultiplier New multiplier value (must be >= current computed multiplier)
+     * @notice Emergency override — snapshots computed price, resets rate to zero yield
+     * @param newPrice New price value (must be >= current computed price)
      */
-    function updateRewardMultiplier(uint256 newMultiplier) external onlyRole(NOTE_REBASER) {
-        uint256 currentMultiplier = rewardMultiplier();
-        require(newMultiplier >= currentMultiplier, "Multiplier cannot decrease");
-        _baseMultiplier = newMultiplier;
+    function updateNotePrice(uint256 newPrice) external onlyRole(NOTE_REBASER) {
+        uint256 currentPrice = notePrice();
+        require(newPrice >= currentPrice, "Price cannot decrease");
+        _basePrice = newPrice;
         ratePerSecond = PRECISION;
         rateEnd = 0;
         pendingRatePerSecond = PRECISION;
         lastAccrualTime = block.timestamp;
-        emit RebaseEvent(currentMultiplier, newMultiplier);
-    }
-
-    /**
-     * @notice Get shares owned by account
-     */
-    function sharesOf(address account) public view returns (uint256) {
-        return _shares[account];
-    }
-
-    /**
-     * @notice Get total shares
-     */
-    function totalShares() public view returns (uint256) {
-        return _totalShares;
-    }
-
-    /**
-     * @notice Convert shares to token amount
-     */
-    function sharesToTokens(uint256 shares) public view returns (uint256) {
-        return (shares * rewardMultiplier()) / PRECISION;
-    }
-
-    /**
-     * @notice Convert token amount to shares
-     */
-    function tokensToShares(uint256 tokens) public view returns (uint256) {
-        return (tokens * PRECISION) / rewardMultiplier();
+        emit NotePriceUpdated(currentPrice, newPrice);
     }
 
     // ============ Exponentiation by Squaring (MakerDAO DSS) ============
@@ -289,53 +263,39 @@ contract OkuNote is
         }
     }
 
-    // ============ ERC20 Overrides (Share-based) ============
+    // ============ ERC20 Transfer Hook (Blacklist + Pause) ============
 
-    function totalSupply() public view override returns (uint256) {
-        return sharesToTokens(_totalShares);
-    }
+    /**
+     * @dev Override _update to enforce blacklist and pause checks on all transfers.
+     *      Mint (from == address(0)): blacklist checked on recipient only.
+     *      Burn (to == address(0)): no pause check — burn works while paused.
+     *      Transfer: blocked when paused, blocked if either party is blacklisted.
+     */
+    function _update(address from, address to, uint256 amount) internal override {
+        // Blacklist checks (skip for mint/burn zero-address side)
+        if (from != address(0)) {
+            require(!isBlacklisted[from], "Sender blacklisted");
+        }
+        if (to != address(0)) {
+            require(!isBlacklisted[to], "Recipient blacklisted");
+        }
 
-    function balanceOf(address account) public view override returns (uint256) {
-        return sharesToTokens(_shares[account]);
-    }
+        // Pause check: block peer-to-peer transfers when paused.
+        // Mint has its own whenNotPaused modifier. Burn is always allowed.
+        if (from != address(0) && to != address(0)) {
+            _requireNotPaused();
+        }
 
-    function transfer(address to, uint256 amount) public override whenNotPaused returns (bool) {
-        _transferShares(msg.sender, to, tokensToShares(amount));
-        return true;
-    }
-
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    )
-        public
-        override
-        whenNotPaused
-        returns (bool)
-    {
-        _spendAllowance(from, msg.sender, amount);
-        _transferShares(from, to, tokensToShares(amount));
-        return true;
-    }
-
-    function _transferShares(address from, address to, uint256 shares) internal {
-        require(from != address(0), "Transfer from zero address");
-        require(to != address(0), "Transfer to zero address");
-        require(!isBlacklisted[from], "Sender blacklisted");
-        require(!isBlacklisted[to], "Recipient blacklisted");
-
-        uint256 fromBalance = _shares[from];
-        require(fromBalance >= shares, "Insufficient balance");
-
-        _shares[from] = fromBalance - shares;
-        _shares[to] += shares;
-
-        emit Transfer(from, to, sharesToTokens(shares));
+        super._update(from, to, amount);
     }
 
     // ============ Minting & Burning ============
 
+    /**
+     * @notice Mint raw tokens to an address
+     * @dev Creates raw tokens; minting 100 tokens when notePrice = $1.05 creates $105 of value.
+     *      The PSM handles USDC <-> note conversion using notePrice().
+     */
     function mint(address to, uint256 amount) external onlyRole(MINTER) whenNotPaused {
         require(!isBlacklisted[to], "Recipient blacklisted");
         require(totalSupply() + amount <= maxSupply, "Exceeds supply cap");
@@ -345,24 +305,17 @@ contract OkuNote is
             minterAllowance[msg.sender] -= amount;
         }
 
-        uint256 shares = tokensToShares(amount);
-        require(shares > 0, "Amount too small");
-        _totalShares += shares;
-        _shares[to] += shares;
-
-        emit Transfer(address(0), to, amount);
+        require(amount > 0, "Amount too small");
+        _mint(to, amount);
     }
 
+    /**
+     * @notice Burn raw tokens from caller
+     * @dev No whenNotPaused — burn works while paused.
+     */
     function burn(uint256 amount) external onlyRole(MINTER) {
         require(!isBlacklisted[msg.sender], "Account blacklisted");
-
-        uint256 shares = tokensToShares(amount);
-        require(_shares[msg.sender] >= shares, "Insufficient balance");
-
-        _shares[msg.sender] -= shares;
-        _totalShares -= shares;
-
-        emit Transfer(msg.sender, address(0), amount);
+        _burn(msg.sender, amount);
     }
 
     // ============ Minter Allowance Management ============

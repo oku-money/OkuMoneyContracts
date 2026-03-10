@@ -8,7 +8,8 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 /**
  * @title RedemptionQueueTest
  * @notice Unit tests for RedemptionQueue
- * @dev Queue stores shares so users earn yield while waiting (per CLAUDE.md spec).
+ * @dev Queue stores raw note token amounts (non-rebasing). Users earn yield while
+ *      waiting through notePrice() appreciation, not balance growth.
  *      enqueue() is record-only; the PSM transfers tokens into the queue before calling it.
  *      Tests simulate this by calling _mintOkuNote(address(redemptionQueue), amount) first.
  */
@@ -18,12 +19,8 @@ contract RedemptionQueueTest is BaseTest {
 
     // ============ Events ============
 
-    event RedemptionQueued(
-        address indexed user, uint256 shares, uint256 okuNoteAmount, uint256 position
-    );
-    event RedemptionProcessed(
-        address indexed user, uint256 shares, uint256 okuNoteAmount, uint256 usdcAmount
-    );
+    event RedemptionQueued(address indexed user, uint256 noteAmount, uint256 position);
+    event RedemptionProcessed(address indexed user, uint256 noteAmount, uint256 usdcAmount);
 
     // ============ Setup ============
 
@@ -89,8 +86,8 @@ contract RedemptionQueueTest is BaseTest {
 
         RedemptionQueue.QueueEntry memory entry = redemptionQueue.getQueueEntry(0);
         assertEq(entry.user, user1);
-        // At 1x multiplier, shares == tokens
-        assertEq(entry.shares, _tokensToShares(amount));
+        // Non-rebasing: noteAmount stored directly, no share conversion
+        assertEq(entry.noteAmount, amount);
         assertEq(entry.timestamp, block.timestamp);
     }
 
@@ -112,11 +109,8 @@ contract RedemptionQueueTest is BaseTest {
         uint256 amount = 100e18;
         _mintOkuNote(address(redemptionQueue), amount);
 
-        // At 1x multiplier, shares == tokens
-        uint256 expectedShares = _tokensToShares(amount);
-
         vm.expectEmit(true, false, false, true);
-        emit RedemptionQueued(user1, expectedShares, amount, 0);
+        emit RedemptionQueued(user1, amount, 0);
 
         redemptionQueue.enqueue(user1, amount);
     }
@@ -161,8 +155,9 @@ contract RedemptionQueueTest is BaseTest {
         vm.prank(admin);
         okuNote.grantRole(MINTER, address(redemptionQueue));
 
-        // Setup: approve USDC for transfer (convert 18-decimal OkuNote amount to 6-decimal USDC)
-        uint256 usdcAmount = amount / DECIMAL_MULTIPLIER;
+        // Setup: approve USDC for transfer
+        // At 1x notePrice, usdcAmount = noteAmount * notePrice / PRECISION / DECIMAL_MULTIPLIER
+        uint256 usdcAmount = amount * okuNote.notePrice() / PRECISION / DECIMAL_MULTIPLIER;
         _mintUsdc(address(this), usdcAmount);
         _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
 
@@ -178,7 +173,7 @@ contract RedemptionQueueTest is BaseTest {
 
     function test_ProcessQueue_TransfersUSDC() public {
         uint256 okuNoteAmount = 100e18; // 100 OkuNote
-        uint256 usdcAmount = 100e6; // 100 USDC (6 decimals)
+        uint256 usdcAmount = 100e6; // 100 USDC (6 decimals) at 1x notePrice
 
         _mintOkuNote(address(redemptionQueue), okuNoteAmount);
         redemptionQueue.enqueue(user1, okuNoteAmount);
@@ -297,11 +292,8 @@ contract RedemptionQueueTest is BaseTest {
         _mintUsdc(address(this), usdcAmount);
         _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
 
-        // At 1x multiplier, shares == tokens
-        uint256 expectedShares = _tokensToShares(okuNoteAmount);
-
         vm.expectEmit(true, false, false, true);
-        emit RedemptionProcessed(user1, expectedShares, okuNoteAmount, usdcAmount);
+        emit RedemptionProcessed(user1, okuNoteAmount, usdcAmount);
 
         redemptionQueue.processQueue(
             redemptionQueue.queueHead(),
@@ -373,41 +365,42 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.getQueueEntry(0);
     }
 
-    // ============ Yield Accrual Tests ============
+    // ============ Price Appreciation Tests ============
 
     /**
-     * @notice Verifies that users earn yield while waiting in queue
-     * @dev Per CLAUDE.md spec: queue stores shares so users earn yield while waiting
+     * @notice Verifies that users earn yield while waiting in queue via notePrice() appreciation
+     * @dev Non-rebasing: the note token count is unchanged, but notePrice() increases
+     *      mean the USDC output at processing time is higher than at enqueue time.
      */
-    function test_QueueStoresShares_YieldAccrues() public {
+    function test_QueueStoresNoteAmount_PriceAppreciates() public {
         uint256 amount = 100e18;
         _mintOkuNote(address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
-        // Get the stored entry - should store shares
+        // Get the stored entry - should store raw noteAmount
         RedemptionQueue.QueueEntry memory entry = redemptionQueue.getQueueEntry(0);
 
-        // At 1x multiplier, shares == tokens
-        assertEq(entry.shares, amount);
+        // Non-rebasing: noteAmount == the raw token amount
+        assertEq(entry.noteAmount, amount);
 
-        // Now rebase - user should earn yield
+        // Now increase notePrice - user should earn yield via price appreciation
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION * 2); // 2x rebase
+        okuNote.updateNotePrice(PRECISION * 2); // 2x price
 
-        // The stored shares remain the same
-        RedemptionQueue.QueueEntry memory entryAfterRebase = redemptionQueue.getQueueEntry(0);
-        assertEq(entryAfterRebase.shares, amount); // Still 100e18 shares
+        // The stored noteAmount remains the same (non-rebasing)
+        RedemptionQueue.QueueEntry memory entryAfterPrice = redemptionQueue.getQueueEntry(0);
+        assertEq(entryAfterPrice.noteAmount, amount); // Still 100e18 noteAmount
 
-        // But the VALUE has doubled via getQueueEntryValue()
+        // But the dollar VALUE has doubled via getQueueEntryValue()
         uint256 currentValue = redemptionQueue.getQueueEntryValue(0);
-        assertEq(currentValue, amount * 2); // 200e18 tokens
+        assertEq(currentValue, amount * 2); // 200e18 dollar value
 
         // Process queue and verify user receives the increased amount
         vm.prank(admin);
         okuNote.grantRole(MINTER, address(redemptionQueue));
 
-        // Need 200 USDC (6 decimals) now to match 200 OkuNote value
+        // Need 200 USDC (6 decimals) now to match 200e18 dollar value
         _mintUsdc(address(this), 200e6); // 200 USDC (6 decimals)
         _approveUsdc(address(this), address(redemptionQueue), 200e6);
 
@@ -420,14 +413,14 @@ contract RedemptionQueueTest is BaseTest {
             address(okuNote)
         );
 
-        // User should receive 200 USDC (6 decimals) - earned 100% yield
+        // User should receive 200 USDC (6 decimals) - earned 100% yield via price appreciation
         assertEq(usdc.balanceOf(user1), user1UsdcBefore + 200e6);
     }
 
     /**
-     * @notice Verifies yield accrual with multiple users in queue
+     * @notice Verifies price appreciation with multiple users in queue
      */
-    function test_QueueYieldAccrual_MultipleUsers() public {
+    function test_QueuePriceAppreciation_MultipleUsers() public {
         // User1 and User2 both queue 100e18
         _mintOkuNote(address(redemptionQueue), 100e18);
         _mintOkuNote(address(redemptionQueue), 100e18);
@@ -435,11 +428,11 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.enqueue(user1, 100e18);
         redemptionQueue.enqueue(user2, 100e18);
 
-        // Rebase 50%
+        // Increase notePrice by 50%
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION * 3 / 2); // 1.5x
+        okuNote.updateNotePrice(PRECISION * 3 / 2); // 1.5x price
 
-        // Both should now be worth 150e18
+        // Both should now have dollar value of 150e18
         assertEq(redemptionQueue.getQueueEntryValue(0), 150e18);
         assertEq(redemptionQueue.getQueueEntryValue(1), 150e18);
 
@@ -466,84 +459,93 @@ contract RedemptionQueueTest is BaseTest {
     }
 
     /**
-     * @notice Verifies that getQueueEntryValue returns correct current value
+     * @notice Verifies that getQueueEntryValue returns correct current dollar value
      */
-    function test_GetQueueEntryValue_ReflectsCurrentMultiplier() public {
+    function test_GetQueueEntryValue_ReflectsCurrentNotePrice() public {
         uint256 amount = 100e18;
         _mintOkuNote(address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
-        // Initially value equals original amount
+        // Initially value equals original amount (notePrice == 1e18)
         assertEq(redemptionQueue.getQueueEntryValue(0), amount);
 
-        // After 2x rebase
+        // After 2x notePrice
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION * 2);
+        okuNote.updateNotePrice(PRECISION * 2);
         assertEq(redemptionQueue.getQueueEntryValue(0), amount * 2);
 
-        // After another 1.5x rebase (total 3x)
+        // After another price increase (total 3x)
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION * 3);
+        okuNote.updateNotePrice(PRECISION * 3);
         assertEq(redemptionQueue.getQueueEntryValue(0), amount * 3);
     }
 
-    // ============ Fuzz Tests for Yield Accrual ============
+    // ============ Fuzz Tests for Price Appreciation ============
 
     /**
-     * @notice Fuzz test: User earns correct yield while queued
+     * @notice Fuzz test: User earns correct yield while queued via notePrice appreciation
      */
-    function testFuzz_QueueYieldAccrual(uint256 amount, uint256 multiplierIncrease) public {
+    function testFuzz_QueuePriceAppreciation(uint256 amount, uint256 priceIncrease) public {
         // Bound inputs to reasonable ranges
         amount = bound(amount, 1e18, 1_000_000e18);
-        multiplierIncrease = bound(multiplierIncrease, 0, PRECISION * 9); // Up to 10x total
+        priceIncrease = bound(priceIncrease, 0, PRECISION * 9); // Up to 10x total
 
         _mintOkuNote(user1, amount);
         _mintOkuNote(address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
-        // Record initial shares
+        // Record initial noteAmount
         RedemptionQueue.QueueEntry memory entry = redemptionQueue.getQueueEntry(0);
-        uint256 initialShares = entry.shares;
+        uint256 initialNoteAmount = entry.noteAmount;
 
-        // Rebase
-        uint256 newMultiplier = PRECISION + multiplierIncrease;
+        // Increase notePrice
+        uint256 newPrice = PRECISION + priceIncrease;
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(newMultiplier);
+        okuNote.updateNotePrice(newPrice);
 
-        // Verify shares unchanged
+        // Verify noteAmount unchanged (non-rebasing)
         RedemptionQueue.QueueEntry memory entryAfter = redemptionQueue.getQueueEntry(0);
-        assertEq(entryAfter.shares, initialShares, "Shares should not change after rebase");
+        assertEq(
+            entryAfter.noteAmount,
+            initialNoteAmount,
+            "noteAmount should not change after price update"
+        );
 
-        // Verify value increased correctly
-        uint256 expectedValue = (initialShares * newMultiplier) / PRECISION;
+        // Verify dollar value increased correctly
+        uint256 expectedValue = (initialNoteAmount * newPrice) / PRECISION;
         uint256 actualValue = redemptionQueue.getQueueEntryValue(0);
-        assertEq(actualValue, expectedValue, "Value should reflect new multiplier");
+        assertEq(actualValue, expectedValue, "Value should reflect new notePrice");
     }
 
     /**
-     * @notice Fuzz test: User receives correct USDC payout after yield
+     * @notice Fuzz test: User receives correct USDC payout after price appreciation
      */
-    function testFuzz_QueuePayoutAfterYield(uint256 amount, uint256 multiplierIncrease) public {
+    function testFuzz_QueuePayoutAfterPriceAppreciation(
+        uint256 amount,
+        uint256 priceIncrease
+    )
+        public
+    {
         // Bound inputs
         amount = bound(amount, 1e18, 100_000e18);
-        multiplierIncrease = bound(multiplierIncrease, PRECISION / 100, PRECISION * 4); // 1% to 5x
+        priceIncrease = bound(priceIncrease, PRECISION / 100, PRECISION * 4); // 1% to 5x
 
         _mintOkuNote(user1, amount);
         _mintOkuNote(address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
-        // Rebase
-        uint256 newMultiplier = PRECISION + multiplierIncrease;
+        // Increase notePrice
+        uint256 newPrice = PRECISION + priceIncrease;
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(newMultiplier);
+        okuNote.updateNotePrice(newPrice);
 
-        // Calculate expected payout (in OkuNote - 18 decimals)
-        uint256 expectedPayoutOkuNote = redemptionQueue.getQueueEntryValue(0);
+        // Calculate expected payout: noteAmount * notePrice / PRECISION (dollar value in 18 dec)
+        uint256 expectedDollarValue = redemptionQueue.getQueueEntryValue(0);
         // Convert to USDC (6 decimals)
-        uint256 expectedPayoutUsdc = expectedPayoutOkuNote / DECIMAL_MULTIPLIER;
+        uint256 expectedPayoutUsdc = expectedDollarValue / DECIMAL_MULTIPLIER;
 
         // Setup for processing
         vm.prank(admin);
@@ -565,47 +567,47 @@ contract RedemptionQueueTest is BaseTest {
         assertEq(
             usdc.balanceOf(user1),
             user1UsdcBefore + expectedPayoutUsdc,
-            "User should receive full yield"
+            "User should receive full yield from price appreciation"
         );
         assertEq(redemptionQueue.queueLength(), 0, "Queue should be empty");
     }
 
     /**
-     * @notice Fuzz test: Multiple rebases compound correctly
+     * @notice Fuzz test: Multiple notePrice increases compound correctly
      */
-    function testFuzz_MultipleRebasesCompound(
+    function testFuzz_MultiplePriceIncreasesCompound(
         uint256 amount,
-        uint256 rebase1,
-        uint256 rebase2
+        uint256 increase1,
+        uint256 increase2
     )
         public
     {
         amount = bound(amount, 1e18, 100_000e18);
-        rebase1 = bound(rebase1, PRECISION / 100, PRECISION); // 1% to 100% increase
-        rebase2 = bound(rebase2, PRECISION / 100, PRECISION); // 1% to 100% increase
+        increase1 = bound(increase1, PRECISION / 100, PRECISION); // 1% to 100% increase
+        increase2 = bound(increase2, PRECISION / 100, PRECISION); // 1% to 100% increase
 
         _mintOkuNote(user1, amount);
         _mintOkuNote(address(redemptionQueue), amount);
 
         redemptionQueue.enqueue(user1, amount);
 
-        uint256 initialShares = redemptionQueue.getQueueEntry(0).shares;
+        uint256 initialNoteAmount = redemptionQueue.getQueueEntry(0).noteAmount;
 
-        // First rebase
-        uint256 multiplier1 = PRECISION + rebase1;
+        // First price increase
+        uint256 price1 = PRECISION + increase1;
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(multiplier1);
+        okuNote.updateNotePrice(price1);
 
-        // Second rebase
-        uint256 multiplier2 = multiplier1 + rebase2;
+        // Second price increase
+        uint256 price2 = price1 + increase2;
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(multiplier2);
+        okuNote.updateNotePrice(price2);
 
-        // Final value should be shares * finalMultiplier / PRECISION
-        uint256 expectedValue = (initialShares * multiplier2) / PRECISION;
+        // Final dollar value should be noteAmount * finalPrice / PRECISION
+        uint256 expectedValue = (initialNoteAmount * price2) / PRECISION;
         uint256 actualValue = redemptionQueue.getQueueEntryValue(0);
 
-        assertEq(actualValue, expectedValue, "Multiple rebases should compound correctly");
+        assertEq(actualValue, expectedValue, "Multiple price increases should compound correctly");
     }
 
     // ============ FIFO Ordering Fuzz Tests ============
@@ -641,7 +643,8 @@ contract RedemptionQueueTest is BaseTest {
         // Verify queue length
         assertEq(redemptionQueue.queueLength(), numUsers, "Queue should have all users");
 
-        // Setup for processing - convert OkuNote amounts to USDC
+        // Setup for processing - convert note dollar value to USDC
+        // At 1x notePrice, dollar value == noteAmount
         vm.prank(admin);
         okuNote.grantRole(MINTER, address(redemptionQueue));
 
@@ -747,21 +750,20 @@ contract RedemptionQueueTest is BaseTest {
     }
 
     /**
-     * @notice Fuzz test: FIFO with rebase - each user gets correct yield-adjusted amount
+     * @notice Fuzz test: FIFO with price appreciation - each user gets correct price-adjusted amount
      */
-    function testFuzz_FIFO_WithRebase(
+    function testFuzz_FIFO_WithPriceAppreciation(
         uint256 numUsers,
-        uint256 multiplierIncrease,
+        uint256 priceIncrease,
         uint256 baseSeed
     )
         public
     {
         numUsers = bound(numUsers, 2, 10);
-        multiplierIncrease = bound(multiplierIncrease, PRECISION / 100, PRECISION * 2); // 1% to 200%
+        priceIncrease = bound(priceIncrease, PRECISION / 100, PRECISION * 2); // 1% to 200%
 
         address[] memory users = new address[](numUsers);
         uint256[] memory amounts = new uint256[](numUsers);
-        uint256[] memory shares = new uint256[](numUsers);
         uint256[] memory initialBalances = new uint256[](numUsers);
 
         for (uint256 i = 0; i < numUsers; i++) {
@@ -771,28 +773,23 @@ contract RedemptionQueueTest is BaseTest {
             _mintOkuNote(address(redemptionQueue), amounts[i]);
             redemptionQueue.enqueue(users[i], amounts[i]);
 
-            // Record shares (at 1x multiplier, shares == tokens)
-            shares[i] = redemptionQueue.getQueueEntry(i).shares;
             initialBalances[i] = usdc.balanceOf(users[i]);
         }
 
-        // Rebase
-        uint256 newMultiplier = PRECISION + multiplierIncrease;
+        // Increase notePrice
+        uint256 newPrice = PRECISION + priceIncrease;
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(newMultiplier);
+        okuNote.updateNotePrice(newPrice);
 
-        // Calculate total needed after rebase
-        uint256 totalNeededOkuNote = 0;
-        uint256[] memory expectedPayoutsOkuNote = new uint256[](numUsers);
+        // Calculate total needed after price appreciation
+        uint256 totalNeededUsdc = 0;
         uint256[] memory expectedPayoutsUsdc = new uint256[](numUsers);
         for (uint256 i = 0; i < numUsers; i++) {
-            expectedPayoutsOkuNote[i] = (shares[i] * newMultiplier) / PRECISION;
-            expectedPayoutsUsdc[i] = expectedPayoutsOkuNote[i] / DECIMAL_MULTIPLIER;
-            totalNeededOkuNote += expectedPayoutsOkuNote[i];
+            // dollarValue = noteAmount * notePrice / PRECISION
+            uint256 dollarValue = (amounts[i] * newPrice) / PRECISION;
+            expectedPayoutsUsdc[i] = dollarValue / DECIMAL_MULTIPLIER;
+            totalNeededUsdc += expectedPayoutsUsdc[i];
         }
-
-        // Convert total to USDC
-        uint256 totalNeededUsdc = totalNeededOkuNote / DECIMAL_MULTIPLIER;
 
         // Setup for processing
         vm.prank(admin);
@@ -809,14 +806,14 @@ contract RedemptionQueueTest is BaseTest {
             address(okuNote)
         );
 
-        // Verify each user got their yield-adjusted amount in FIFO order
+        // Verify each user got their price-adjusted amount in FIFO order
         assertEq(redemptionQueue.queueLength(), 0, "Queue should be empty");
 
         for (uint256 i = 0; i < numUsers; i++) {
             assertEq(
                 usdc.balanceOf(users[i]),
                 initialBalances[i] + expectedPayoutsUsdc[i],
-                string(abi.encodePacked("User ", i, " should receive yield-adjusted amount"))
+                string(abi.encodePacked("User ", i, " should receive price-adjusted amount"))
             );
         }
     }
@@ -852,8 +849,8 @@ contract RedemptionQueueTest is BaseTest {
         vm.prank(admin);
         okuNote.grantRole(MINTER, address(redemptionQueue));
 
-        uint256 bufferAmountOkuNote = amountPerUser * numToPay;
-        uint256 bufferAmountUsdc = bufferAmountOkuNote / DECIMAL_MULTIPLIER;
+        uint256 bufferAmountNotes = amountPerUser * numToPay;
+        uint256 bufferAmountUsdc = bufferAmountNotes / DECIMAL_MULTIPLIER;
         uint256 amountPerUserUsdc = amountPerUser / DECIMAL_MULTIPLIER;
 
         _mintUsdc(address(this), bufferAmountUsdc);

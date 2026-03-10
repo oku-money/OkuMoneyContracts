@@ -392,10 +392,10 @@ describe("NTT Bridge Scenarios", () => {
             const transfer = await mockNttManager.getPendingTransfer(transferIndex)
             const recordedAmount = transfer.amount
 
-            // Rebase +10% AFTER bridge message recorded
-            const multiplierBefore = await okuNote.rewardMultiplier()
-            const newMultiplier = multiplierBefore * 110n / 100n
-            await okuNote.connect(Frank).updateRewardMultiplier(newMultiplier)
+            // NotePrice +10% AFTER bridge message recorded
+            const priceBefore = await okuNote.notePrice()
+            const newPrice = priceBefore * 110n / 100n
+            await okuNote.connect(Frank).updateNotePrice(newPrice)
 
             // Complete the bridge
             const charlieBalanceBefore = await okuNote.balanceOf(charlieAddr)

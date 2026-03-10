@@ -15,6 +15,8 @@ import {MockAggregatorV3} from "./mocks/MockAggregatorV3.sol";
 /**
  * @title BaseTest
  * @notice Base test contract with deployment helpers, actors, and utility functions
+ * @dev Updated for OkuNote non-rebasing redesign. OkuNote is a standard ERC-20 with
+ *      notePrice() tracking price appreciation separately from balanceOf().
  */
 abstract contract BaseTest is Test {
     // ============ Constants ============
@@ -192,13 +194,13 @@ abstract contract BaseTest is Test {
 
     // ============ Helper Functions ============
 
-    /// @notice Mint OkuNote tokens to a user
+    /// @notice Mint OkuNote tokens to a user (raw token amount, no share conversion)
     function _mintOkuNote(address to, uint256 amount) internal {
         vm.prank(minter);
         okuNote.mint(to, amount);
     }
 
-    /// @notice Mint OkuUSD tokens to a user via wrap flow
+    /// @notice Mint OkuUSD tokens to a user via wrap flow (price-aware)
     function _mintOkuUsd(address to, uint256 noteAmount) internal {
         // Mint notes to the to address first
         _mintOkuNote(to, noteAmount);
@@ -233,16 +235,6 @@ abstract contract BaseTest is Test {
         usdc.approve(spender, amount);
     }
 
-    /// @notice Calculate expected shares from tokens at current note multiplier
-    function _tokensToShares(uint256 tokens) internal view returns (uint256) {
-        return (tokens * PRECISION) / okuNote.rewardMultiplier();
-    }
-
-    /// @notice Calculate expected tokens from shares at current note multiplier
-    function _sharesToTokens(uint256 shares) internal view returns (uint256) {
-        return (shares * okuNote.rewardMultiplier()) / PRECISION;
-    }
-
     /// @notice Override bound() to suppress "Bound result" console logs
     function bound(uint256 x, uint256 min, uint256 max) internal pure override returns (uint256) {
         return _bound(x, min, max);
@@ -254,15 +246,15 @@ abstract contract BaseTest is Test {
         return bound(amount, 1, remaining > 0 ? remaining : 1);
     }
 
-    /// @notice Bound fuzz input to reasonable multiplier (current to 10x)
-    function _boundMultiplier(uint256 multiplier) internal view returns (uint256) {
-        uint256 current = okuNote.rewardMultiplier();
-        return bound(multiplier, current, current * 10);
+    /// @notice Bound fuzz input to reasonable notePrice (current to 10x)
+    function _boundNotePrice(uint256 price) internal view returns (uint256) {
+        uint256 current = okuNote.notePrice();
+        return bound(price, current, current * 10);
     }
 
-    /// @notice Bound fuzz input to reasonable multiplier increase (0.01% to 100%)
-    function _boundMultiplierIncrease(uint256 increase) internal view returns (uint256) {
-        uint256 current = okuNote.rewardMultiplier();
+    /// @notice Bound fuzz input to reasonable notePrice increase (0.01% to 100%)
+    function _boundNotePriceIncrease(uint256 increase) internal view returns (uint256) {
+        uint256 current = okuNote.notePrice();
         return bound(increase, current / 10_000, current);
     }
 

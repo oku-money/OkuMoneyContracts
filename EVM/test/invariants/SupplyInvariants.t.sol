@@ -7,6 +7,8 @@ import {OkuNoteHandler} from "../handlers/OkuNoteHandler.sol";
 /**
  * @title SupplyInvariantsTest
  * @notice Invariant tests for OkuNote supply cap enforcement
+ * @dev Updated for non-rebasing OkuNote redesign. totalSupply() is standard ERC-20;
+ *      notePrice() tracks price appreciation separately.
  */
 contract SupplyInvariantsTest is BaseTest {
     OkuNoteHandler public handler;
@@ -26,57 +28,27 @@ contract SupplyInvariantsTest is BaseTest {
     }
 
     /**
-     * @notice Supply cap never exceeded except by rebase
-     * @dev Invariant from CLAUDE.md:
-     *      assert(okuNote.totalSupply() <= maxSupply || lastOperationWasRebase);
+     * @notice Supply cap never exceeded
+     * @dev OkuNote is non-rebasing: totalSupply() is raw token count,
+     *      notePrice() updates do not change totalSupply().
      */
     function invariant_SupplyCapRespected() public view {
-        if (!handler.wasLastOperationRebase()) {
-            assertLe(
-                okuNote.totalSupply(),
-                okuNote.maxSupply(),
-                "Supply exceeds maxSupply after non-rebase operation"
-            );
-        }
+        assertLe(okuNote.totalSupply(), okuNote.maxSupply(), "Supply exceeds maxSupply");
     }
 
     /**
-     * @notice Minted total generally tracks with supply
+     * @notice Minted total tracks with supply (minted - burned = totalSupply)
      */
     function invariant_MintBurnAccounting() public view {
         uint256 actualSupply = okuNote.totalSupply();
 
-        uint256 totalShares = okuNote.totalShares();
-        uint256 multiplier = okuNote.rewardMultiplier();
-
-        if (totalShares > 0) {
-            uint256 expectedSupply = (totalShares * multiplier) / PRECISION;
-            assertApproxEqAbs(
-                actualSupply, expectedSupply, 1, "Supply should equal shares * multiplier"
-            );
-        }
-
         if (handler.ghostMintedTotal() == 0) {
             assertEq(actualSupply, 0, "Supply should be zero if nothing minted");
         }
-    }
 
-    /**
-     * @notice Total shares is non-negative and bounded
-     */
-    function invariant_TotalSharesBounded() public view {
-        uint256 totalShares = okuNote.totalShares();
-        uint256 multiplier = okuNote.rewardMultiplier();
-
-        if (multiplier < 1e36) {
-            uint256 maxShares = (MAX_SUPPLY * PRECISION) / multiplier;
-            assertLe(
-                totalShares, maxShares + handler.getActorCount(), "Total shares exceeds maximum"
-            );
-        }
-
-        uint256 expectedSupply = (totalShares * multiplier) / PRECISION;
-        assertApproxEqAbs(okuNote.totalSupply(), expectedSupply, 1, "Supply formula should hold");
+        // totalSupply = minted - burned
+        uint256 expectedSupply = handler.ghostMintedTotal() - handler.ghostBurnedTotal();
+        assertEq(actualSupply, expectedSupply, "Supply should equal minted - burned");
     }
 
     /**

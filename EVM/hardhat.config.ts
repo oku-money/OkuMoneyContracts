@@ -1,6 +1,7 @@
 import { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
 import "@openzeppelin/hardhat-upgrades";
+import { silenceWarnings } from "@openzeppelin/upgrades-core";
 import "hardhat-deploy";
 import "hardhat-deploy-ethers";
 import "@typechain/hardhat";
@@ -8,6 +9,9 @@ import "@typechain/hardhat";
 // Load environment variables
 import * as dotenv from "dotenv";
 dotenv.config();
+
+// Suppress "Potentially unsafe deployment" warnings for unsafeAllow options
+silenceWarnings();
 
 const config: HardhatUserConfig = {
   solidity: {

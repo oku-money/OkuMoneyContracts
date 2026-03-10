@@ -13,7 +13,12 @@ import {IOkuNote} from "../interfaces/IOkuNote.sol";
 /**
  * @title RedemptionQueue
  * @notice FIFO queue for OkuNote redemptions when PSM buffer is depleted
- * @dev Stores shares (not tokens) so users earn yield while waiting.
+ * @dev Stores note token amounts (not shares — OkuNote is non-rebasing).
+ *      Queued note tokens do not grow in balance, but appreciate in price via notePrice().
+ *      When the queue processes, the user receives USDC based on noteAmount × notePrice()
+ *      at processing time. The economic result is that users earn yield while queued
+ *      through price appreciation rather than balance growth.
+ *
  *      Tokens are transferred into the queue by the PSM before enqueue() is called;
  *      enqueue() is record-only and does not pull tokens from the user.
  */
@@ -22,13 +27,14 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
     // Decimal conversion constant (USDC is 6 decimals, OkuNote is 18 decimals)
     uint256 private constant DECIMAL_MULTIPLIER = 10 ** 12; // 18 - 6 = 12
+    uint256 private constant PRECISION = 1e18;
 
     bytes32 public constant UPGRADER = keccak256("UPGRADER");
     bytes32 public constant PSM = keccak256("PSM");
 
     struct QueueEntry {
         address user;
-        uint256 shares; // Stored as shares so users earn yield while queued
+        uint256 noteAmount; // Raw note token amount (non-rebasing, appreciates via notePrice)
         uint256 timestamp;
     }
 
@@ -36,18 +42,14 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     uint256 public queueHead;
     uint256 public queueTail;
 
-    /// @notice Running counter of shares queued (O(1) totalQueuedUsdc)
-    uint256 public totalQueuedShares;
+    /// @notice Running counter of note tokens queued (O(1) totalQueuedUsdc)
+    uint256 public totalQueuedNotes;
 
     IOkuNote public okuNote;
 
     // Events
-    event RedemptionQueued(
-        address indexed user, uint256 shares, uint256 okuNoteAmount, uint256 position
-    );
-    event RedemptionProcessed(
-        address indexed user, uint256 shares, uint256 okuNoteAmount, uint256 usdcAmount
-    );
+    event RedemptionQueued(address indexed user, uint256 noteAmount, uint256 position);
+    event RedemptionProcessed(address indexed user, uint256 noteAmount, uint256 usdcAmount);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -68,20 +70,18 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     /**
      * @notice Record a redemption in the queue
      * @param user User requesting redemption
-     * @param okuNoteAmount Amount of OkuNote to redeem (in tokens)
+     * @param noteTokenAmount Amount of OkuNote tokens to redeem
      * @dev Tokens must already be in this contract before calling (PSM transfers them first).
-     *      This function is record-only: it converts tokens to shares and pushes an entry.
+     *      This function is record-only: it stores the raw note amount and pushes an entry.
      */
-    function enqueue(address user, uint256 okuNoteAmount) external onlyRole(PSM) {
-        // Convert tokens to shares for storage
-        uint256 shares = okuNote.tokensToShares(okuNoteAmount);
-
+    function enqueue(address user, uint256 noteTokenAmount) external onlyRole(PSM) {
         uint256 position = queueTail;
-        queue[position] = QueueEntry({user: user, shares: shares, timestamp: block.timestamp});
+        queue[position] =
+            QueueEntry({user: user, noteAmount: noteTokenAmount, timestamp: block.timestamp});
         queueTail = position + 1;
-        totalQueuedShares += shares;
+        totalQueuedNotes += noteTokenAmount;
 
-        emit RedemptionQueued(user, shares, okuNoteAmount, position);
+        emit RedemptionQueued(user, noteTokenAmount, position);
     }
 
     /**
@@ -90,7 +90,8 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
      * @param endIndex Last queue index to process (exclusive)
      * @param usdcToken USDC token address
      * @param - OkuNote token address (unused, kept for interface compat)
-     * @dev Allows operator to skip blocked entries (e.g., USDC-blacklisted users).
+     * @dev Price-aware: USDC output = noteAmount × notePrice() / PRECISION (scaled to 6 decimals).
+     *      Allows operator to skip blocked entries (e.g., USDC-blacklisted users).
      *      Entries are deleted after processing. queueHead advances past consecutive
      *      deleted entries at the front of the queue.
      */
@@ -113,23 +114,24 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
             QueueEntry memory entry = queue[i];
             if (entry.user == address(0)) continue; // Already processed/deleted
 
-            // Convert shares to current token value (includes yield earned while queued)
-            uint256 okuNoteAmount = okuNote.sharesToTokens(entry.shares);
+            // Price-aware: dollarValue = noteAmount × notePrice / PRECISION
+            uint256 price = okuNote.notePrice();
+            uint256 dollarValue18 = (entry.noteAmount * price) / PRECISION;
 
-            // Convert OkuNote (18 decimals) to USDC amount (6 decimals)
-            uint256 usdcAmount = okuNoteAmount / DECIMAL_MULTIPLIER;
+            // Convert to USDC (6 decimals)
+            uint256 usdcAmount = dollarValue18 / DECIMAL_MULTIPLIER;
 
             if (usdcBalance < usdcAmount) break;
 
-            // Self-burn OkuNote held by queue (Circle model)
-            okuNote.burn(okuNoteAmount);
+            // Burn note tokens held by queue
+            okuNote.burn(entry.noteAmount);
 
-            // Transfer USDC to user (1:1 value, converted for decimals)
+            // Transfer USDC to user (price-aware value)
             usdc.safeTransferFrom(msg.sender, entry.user, usdcAmount);
 
-            totalQueuedShares -= entry.shares;
+            totalQueuedNotes -= entry.noteAmount;
 
-            emit RedemptionProcessed(entry.user, entry.shares, okuNoteAmount, usdcAmount);
+            emit RedemptionProcessed(entry.user, entry.noteAmount, usdcAmount);
 
             delete queue[i];
             usdcBalance -= usdcAmount;
@@ -142,11 +144,12 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     }
 
     /**
-     * @notice Get total USDC owed across all pending queue entries
-     * @return O(1) calculation via running totalQueuedShares counter
+     * @notice Get total USDC owed across all pending queue entries (price-aware)
+     * @return O(1) calculation via running totalQueuedNotes counter and notePrice()
      */
     function totalQueuedUsdc() external view returns (uint256) {
-        return okuNote.sharesToTokens(totalQueuedShares) / DECIMAL_MULTIPLIER;
+        uint256 dollarValue18 = (totalQueuedNotes * okuNote.notePrice()) / PRECISION;
+        return dollarValue18 / DECIMAL_MULTIPLIER;
     }
 
     /**
@@ -165,13 +168,13 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     }
 
     /**
-     * @notice Get current token value for a queue entry (includes accrued yield)
+     * @notice Get current dollar value for a queue entry (price-aware)
      * @param index Queue index
-     * @return Current OkuNote token value of the queued shares
+     * @return Current dollar value of the queued note tokens (18 decimals)
      */
     function getQueueEntryValue(uint256 index) external view returns (uint256) {
         require(index >= queueHead && index < queueTail, "Invalid index");
-        return okuNote.sharesToTokens(queue[index].shares);
+        return (queue[index].noteAmount * okuNote.notePrice()) / PRECISION;
     }
 
     // ============ Upgradeability ============

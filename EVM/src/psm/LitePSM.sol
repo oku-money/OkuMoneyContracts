@@ -32,9 +32,12 @@ interface IAggregatorV3 {
 
 /**
  * @title LitePSM
- * @notice Peg Stability Module for 1:1 USDC <-> OkuNote/OkuUSD swaps with zero slippage
- * @dev Includes PoR oracle checks and redemption queue for when buffer is depleted.
- *      Provides convenience functions for OkuUSD (vault) mint/redeem via the note.
+ * @notice Price-aware Peg Stability Module for USDC <-> OkuNote/OkuUSD swaps
+ * @dev OkuNote is non-rebasing — notePrice() tracks appreciation separately.
+ *      PSM converts at dollar-value via notePrice(): depositing 100 USDC when
+ *      notePrice=$1.05 gives ~95.24 notes. Redeeming those notes returns ~100 USDC.
+ *      Includes PoR oracle checks and redemption queue for when buffer is depleted.
+ *      Provides convenience functions for OkuUSD mint/redeem via the vault.
  */
 contract LitePSM is
     Initializable,
@@ -47,6 +50,7 @@ contract LitePSM is
 
     // Decimal conversion constant (USDC is 6 decimals, OkuNote/OkuUSD is 18 decimals)
     uint256 private constant DECIMAL_MULTIPLIER = 10 ** 12; // 18 - 6 = 12
+    uint256 private constant PRECISION = 1e18;
 
     // Granular RBAC roles (contract-specific prefixes)
     bytes32 public constant PSM_UPGRADER = keccak256("PSM_UPGRADER");
@@ -108,17 +112,24 @@ contract LitePSM is
         stalenessThreshold = 1 hours;
     }
 
-    // ============ OkuNote Swap Functions ============
+    // ============ OkuNote Swap Functions (Price-Aware) ============
 
     /**
-     * @notice Mint OkuNote by depositing USDC at 1:1 rate
+     * @notice Mint OkuNote by depositing USDC (price-aware)
+     * @dev noteAmount = usdcValue × PRECISION / notePrice()
+     *      If notePrice=$1.05, depositing 100 USDC gives ~95.24 notes.
      * @param usdcAmount Amount of USDC to deposit (6 decimals)
      */
     function mint_OkuNote(uint256 usdcAmount) external whenNotPaused nonReentrant {
         require(usdcAmount > 0, "Amount must be positive");
 
-        // Convert USDC (6 decimals) to OkuNote amount (18 decimals)
-        uint256 noteAmount = usdcAmount * DECIMAL_MULTIPLIER;
+        // Convert USDC (6 decimals) to 18-decimal dollar value
+        uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
+
+        // Price-aware conversion: noteAmount = dollarValue × PRECISION / notePrice
+        uint256 price = okuNote.notePrice();
+        uint256 noteAmount = (usdcValue18 * PRECISION) / price;
+        require(noteAmount > 0, "Amount too small");
 
         // Check PoR oracle if enabled
         if (oracleEnabled && address(porOracle) != address(0)) {
@@ -128,14 +139,16 @@ contract LitePSM is
         // Transfer USDC from user
         usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
 
-        // Mint OkuNote to user (1:1 in value, converted for decimals)
+        // Mint OkuNote to user (raw token amount, price-adjusted)
         okuNote.mint(msg.sender, noteAmount);
 
         emit MintNote(msg.sender, usdcAmount, noteAmount);
     }
 
     /**
-     * @notice Redeem OkuNote for USDC at 1:1 rate
+     * @notice Redeem OkuNote for USDC (price-aware)
+     * @dev usdcAmount = noteAmount × notePrice() / PRECISION (scaled to 6 decimals)
+     *      If notePrice=$1.05, redeeming 95.24 notes returns ~100 USDC.
      * @param noteAmount Amount of OkuNote to redeem (18 decimals)
      */
     function redeem_OkuNote(uint256 noteAmount) external whenNotPaused nonReentrant {
@@ -169,29 +182,29 @@ contract LitePSM is
     function _redeemNote(address user, uint256 noteAmount) internal {
         require(noteAmount > 0, "Amount must be positive");
 
-        // Convert OkuNote (18 decimals) to USDC amount (6 decimals)
-        uint256 usdcAmount = noteAmount / DECIMAL_MULTIPLIER;
-        require(usdcAmount > 0, "Amount too small");
+        // Price-aware conversion: dollarValue = noteAmount × notePrice / PRECISION
+        uint256 price = okuNote.notePrice();
+        uint256 dollarValue18 = (noteAmount * price) / PRECISION;
 
-        // Align OkuNote amount to USDC precision to avoid truncation loss
-        // User keeps any sub-USDC dust
-        uint256 alignedNoteAmount = usdcAmount * DECIMAL_MULTIPLIER;
+        // Convert to USDC (6 decimals) — truncates sub-USDC dust
+        uint256 usdcAmount = dollarValue18 / DECIMAL_MULTIPLIER;
+        require(usdcAmount > 0, "Amount too small");
 
         uint256 usdcBalance = usdc.balanceOf(address(this));
 
         if (usdcBalance >= usdcAmount) {
             // Sufficient buffer - transfer-then-burn (Circle model: self-burn only)
-            IERC20(address(okuNote)).safeTransferFrom(user, address(this), alignedNoteAmount);
-            okuNote.burn(alignedNoteAmount);
+            IERC20(address(okuNote)).safeTransferFrom(user, address(this), noteAmount);
+            okuNote.burn(noteAmount);
             usdc.safeTransfer(user, usdcAmount);
-            emit RedeemNote(user, alignedNoteAmount, usdcAmount);
+            emit RedeemNote(user, noteAmount, usdcAmount);
         } else {
             // Insufficient buffer - queue redemption
-            // Pull aligned OkuNote from user to PSM
-            IERC20(address(okuNote)).safeTransferFrom(user, address(this), alignedNoteAmount);
+            // Pull OkuNote from user to PSM
+            IERC20(address(okuNote)).safeTransferFrom(user, address(this), noteAmount);
             // Transfer from PSM to queue, then record
-            IERC20(address(okuNote)).safeTransfer(address(redemptionQueue), alignedNoteAmount);
-            redemptionQueue.enqueue(user, alignedNoteAmount);
+            IERC20(address(okuNote)).safeTransfer(address(redemptionQueue), noteAmount);
+            redemptionQueue.enqueue(user, noteAmount);
         }
     }
 
@@ -199,13 +212,19 @@ contract LitePSM is
 
     /**
      * @notice Mint OkuUSD by depositing USDC (USDC → mint note → wrap → OkuUSD to user)
+     * @dev Price-aware: USDC converted to notes via notePrice(), then wrapped into vault.
      * @param usdcAmount Amount of USDC to deposit (6 decimals)
      */
     function mint_OkuUSD(uint256 usdcAmount) external whenNotPaused nonReentrant {
         require(usdcAmount > 0, "Amount must be positive");
 
-        // Convert USDC (6 decimals) to note amount (18 decimals)
-        uint256 noteAmount = usdcAmount * DECIMAL_MULTIPLIER;
+        // Convert USDC (6 decimals) to 18-decimal dollar value
+        uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
+
+        // Price-aware conversion: noteAmount = dollarValue × PRECISION / notePrice
+        uint256 price = okuNote.notePrice();
+        uint256 noteAmount = (usdcValue18 * PRECISION) / price;
+        require(noteAmount > 0, "Amount too small");
 
         // Check PoR oracle if enabled
         if (oracleEnabled && address(porOracle) != address(0)) {
@@ -222,19 +241,20 @@ contract LitePSM is
         IERC20(address(okuNote)).approve(address(okuUsd), noteAmount);
 
         // Wrap notes into OkuUSD, delivering directly to user
-        okuUsd.wrap(noteAmount, msg.sender);
+        uint256 usdMinted = okuUsd.wrap(noteAmount, msg.sender);
 
         // Revoke any remaining approval
         IERC20(address(okuNote)).approve(address(okuUsd), 0);
 
-        emit MintUSD(msg.sender, usdcAmount, noteAmount);
+        emit MintUSD(msg.sender, usdcAmount, usdMinted);
     }
 
     /**
      * @notice Redeem OkuUSD for USDC (OkuUSD → unwrap to notes → burn notes → USDC to user)
      * @param usdAmount Amount of OkuUSD to redeem (18 decimals)
      * @dev Reverts if vault is undercollateralized (unwrap fails).
-     *      If USDC buffer insufficient, notes go to queue (user earns yield while queued).
+     *      If USDC buffer insufficient, notes go to queue (user earns yield while queued
+     *      via notePrice() appreciation).
      */
     function redeem_OkuUSD(uint256 usdAmount) external whenNotPaused nonReentrant {
         _redeemUSD(msg.sender, usdAmount);
@@ -270,7 +290,7 @@ contract LitePSM is
         // Pull OkuUSD from user
         IERC20(address(okuUsd)).safeTransferFrom(user, address(this), usdAmount);
 
-        // Unwrap OkuUSD → get notes back to PSM
+        // Unwrap OkuUSD → get notes back to PSM (price-aware)
         // NOTE: Reverts if vault undercollateralized (distinct failure mode)
         uint256 notesReturned = okuUsd.unwrap(usdAmount, address(this));
 
@@ -280,27 +300,29 @@ contract LitePSM is
 
     /**
      * @dev Internal note redemption (notes already held by PSM)
+     *      Price-aware: USDC output = noteAmount × notePrice() / PRECISION (scaled to 6 decimals)
      */
     function _redeemNoteInternal(address user, uint256 noteAmount) internal {
-        // Convert OkuNote (18 decimals) to USDC amount (6 decimals)
-        uint256 usdcAmount = noteAmount / DECIMAL_MULTIPLIER;
-        require(usdcAmount > 0, "Amount too small");
+        // Price-aware conversion: dollarValue = noteAmount × notePrice / PRECISION
+        uint256 price = okuNote.notePrice();
+        uint256 dollarValue18 = (noteAmount * price) / PRECISION;
 
-        // Align note amount to USDC precision
-        uint256 alignedNoteAmount = usdcAmount * DECIMAL_MULTIPLIER;
+        // Convert to USDC (6 decimals)
+        uint256 usdcAmount = dollarValue18 / DECIMAL_MULTIPLIER;
+        require(usdcAmount > 0, "Amount too small");
 
         uint256 usdcBalance = usdc.balanceOf(address(this));
 
         if (usdcBalance >= usdcAmount) {
             // Sufficient buffer - burn notes, transfer USDC
-            okuNote.burn(alignedNoteAmount);
+            okuNote.burn(noteAmount);
             usdc.safeTransfer(user, usdcAmount);
-            emit RedeemNote(user, alignedNoteAmount, usdcAmount);
+            emit RedeemNote(user, noteAmount, usdcAmount);
         } else {
             // Insufficient buffer - queue redemption
             // Transfer notes from PSM to queue, then record
-            IERC20(address(okuNote)).safeTransfer(address(redemptionQueue), alignedNoteAmount);
-            redemptionQueue.enqueue(user, alignedNoteAmount);
+            IERC20(address(okuNote)).safeTransfer(address(redemptionQueue), noteAmount);
+            redemptionQueue.enqueue(user, noteAmount);
         }
     }
 

@@ -119,16 +119,15 @@ contract OkuUSDHandler is Test {
         }
     }
 
-    /// @notice Trigger note rebase
-    function rebase(uint256 multiplierIncrease) external {
+    /// @notice Trigger note price update (rebase)
+    function rebase(uint256 priceIncrease) external {
         ghostRebaseCallCount++;
-        uint256 currentMultiplier = okuNote.rewardMultiplier();
-        uint256 increase =
-            bound(multiplierIncrease, currentMultiplier / 10_000, currentMultiplier / 10);
-        uint256 newMultiplier = currentMultiplier + increase;
+        uint256 currentPrice = okuNote.notePrice();
+        uint256 increase = bound(priceIncrease, currentPrice / 10_000, currentPrice / 10);
+        uint256 newPrice = currentPrice + increase;
 
         vm.prank(rebaser);
-        try okuNote.updateRewardMultiplier(newMultiplier) {
+        try okuNote.updateNotePrice(newPrice) {
             ghostRebaseCount++;
         } catch {
             ghostRebaseRevertCount++;

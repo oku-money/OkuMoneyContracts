@@ -29,35 +29,41 @@ contract VaultInvariantsTest is BaseTest {
 
     /**
      * @notice OkuUSD vault is backed by OkuNote reserves (within rounding tolerance)
-     * @dev Each wrap operation can introduce up to 1 wei of rounding deficit
-     *      (wrap rounds DOWN shares, but usdMinted = noteAmount, so totalSupply can
-     *      fractionally exceed reserves). Tolerance = total wrap calls.
+     * @dev Price-aware: reserves are valued at notePrice(). Each wrap can introduce
+     *      up to ~1 wei of rounding deficit in dollar terms.
+     *      reservesDollarValue = reserves × notePrice / PRECISION
+     *      obligations = totalSupply (already in dollar terms)
      */
     function invariant_VaultBacked() public view {
         uint256 reserves = okuNote.balanceOf(address(okuUsd));
         uint256 obligations = okuUsd.totalSupply();
+        uint256 notePrice = okuNote.notePrice();
+        uint256 reservesDollarValue = (reserves * notePrice) / 1e18;
+        // Each wrap introduces up to 1 wei rounding in dollar terms
         uint256 tolerance = handler.ghostWrapCallCount() + 1;
 
         assertGe(
-            reserves + tolerance,
+            reservesDollarValue + tolerance,
             obligations,
-            "Vault must be backed by note reserves (within rounding tolerance)"
+            "Vault must be backed by note reserves in dollar terms (within rounding tolerance)"
         );
     }
 
     /**
      * @notice Collateralization ratio stays approximately >= 100%
-     * @dev Same rounding tolerance as invariant_VaultBacked
+     * @dev Price-aware: same dollar-value comparison as invariant_VaultBacked
      */
     function invariant_CollateralizationRatio() public view {
         uint256 obligations = okuUsd.totalSupply();
         if (obligations > 0) {
             uint256 reserves = okuNote.balanceOf(address(okuUsd));
+            uint256 notePrice = okuNote.notePrice();
+            uint256 reservesDollarValue = (reserves * notePrice) / 1e18;
             uint256 tolerance = handler.ghostWrapCallCount() + 1;
             assertGe(
-                reserves + tolerance,
+                reservesDollarValue + tolerance,
                 obligations,
-                "Collateralization should be approximately >= 100%"
+                "Collateralization should be approximately >= 100% in dollar terms"
             );
         }
     }

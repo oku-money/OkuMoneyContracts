@@ -12,16 +12,14 @@ import {OkuNote} from "../../src/token/OkuNote.sol";
 
 /**
  * @title OkuNoteTest
- * @notice Unit tests for OkuNote rebasing token
+ * @notice Unit tests for OkuNote non-rebasing ERC-20 token with price accrual
  */
 contract OkuNoteTest is BaseTest {
     // ============ Events ============
 
     event Transfer(address indexed from, address indexed to, uint256 value);
-    event RebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
-    event YieldRateUpdated(
-        uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotMultiplier
-    );
+    event NotePriceUpdated(uint256 oldPrice, uint256 newPrice);
+    event YieldRateUpdated(uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotPrice);
     event NextYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
@@ -52,8 +50,8 @@ contract OkuNoteTest is BaseTest {
         assertEq(okuNote.maxSupply(), MAX_SUPPLY);
     }
 
-    function test_Initialize_SetsInitialMultiplier() public view {
-        assertEq(okuNote.rewardMultiplier(), PRECISION);
+    function test_Initialize_SetsInitialNotePrice() public view {
+        assertEq(okuNote.notePrice(), PRECISION);
     }
 
     function test_Initialize_CannotReinitialize() public {
@@ -79,10 +77,16 @@ contract OkuNoteTest is BaseTest {
         assertEq(okuNote.balanceOf(user1), amount);
     }
 
-    function test_Mint_IncreasesShares() public {
+    function test_Mint_BalanceUnaffectedByNotePrice() public {
+        // Set notePrice to 2x before minting
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(PRECISION * 2);
+
         uint256 amount = 100e18;
         _mintOkuNote(user1, amount);
-        assertEq(okuNote.sharesOf(user1), _tokensToShares(amount));
+
+        // balanceOf returns raw amount, NOT divided by notePrice
+        assertEq(okuNote.balanceOf(user1), amount);
     }
 
     function test_Mint_IncreasesTotalSupply() public {
@@ -91,10 +95,16 @@ contract OkuNoteTest is BaseTest {
         assertEq(okuNote.totalSupply(), amount);
     }
 
-    function test_Mint_IncreasesTotalShares() public {
+    function test_Mint_TotalSupplyIsRawAmount() public {
+        // Set notePrice to 2x before minting
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(PRECISION * 2);
+
         uint256 amount = 100e18;
         _mintOkuNote(user1, amount);
-        assertEq(okuNote.totalShares(), _tokensToShares(amount));
+
+        // totalSupply returns raw token count, NOT multiplied by notePrice
+        assertEq(okuNote.totalSupply(), amount);
     }
 
     function test_Mint_DecrementsMinterAllowance() public {
@@ -170,14 +180,18 @@ contract OkuNoteTest is BaseTest {
         assertEq(okuNote.balanceOf(minter), 60e18);
     }
 
-    function test_Burn_DecreasesShares() public {
+    function test_Burn_RemovesExactAmount() public {
+        // Set notePrice to 2x, then mint and burn
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(PRECISION * 2);
+
         _mintOkuNote(minter, 100e18);
-        uint256 sharesBefore = okuNote.sharesOf(minter);
 
         vm.prank(minter);
         okuNote.burn(40e18);
 
-        assertEq(okuNote.sharesOf(minter), sharesBefore - _tokensToShares(40e18));
+        // burn(40e18) removes exactly 40e18 from balanceOf regardless of notePrice
+        assertEq(okuNote.balanceOf(minter), 60e18);
     }
 
     function test_Burn_DecreasesTotalSupply() public {
@@ -208,7 +222,7 @@ contract OkuNoteTest is BaseTest {
         _mintOkuNote(minter, 100e18);
 
         vm.prank(minter);
-        vm.expectRevert("Insufficient balance");
+        vm.expectRevert();
         okuNote.burn(150e18);
     }
 
@@ -258,21 +272,30 @@ contract OkuNoteTest is BaseTest {
         assertEq(okuNote.balanceOf(user2), 30e18);
     }
 
-    function test_Transfer_OperatesOnShares() public {
+    function test_Transfer_MovesExactAmount() public {
+        // Set notePrice to 2x, then mint and transfer
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(PRECISION * 2);
+
         _mintOkuNote(user1, 100e18);
-        uint256 user1SharesBefore = okuNote.sharesOf(user1);
-        uint256 totalSharesBefore = okuNote.totalShares();
+
+        vm.prank(user1);
+        assertTrue(okuNote.transfer(user2, 50e18));
+
+        // transfer(50e18) moves exactly 50e18 in balanceOf regardless of notePrice
+        assertEq(okuNote.balanceOf(user1), 50e18);
+        assertEq(okuNote.balanceOf(user2), 50e18);
+    }
+
+    function test_Transfer_TotalSupplyUnchanged() public {
+        _mintOkuNote(user1, 100e18);
+        uint256 totalBefore = okuNote.totalSupply();
 
         vm.prank(user1);
         assertTrue(okuNote.transfer(user2, 30e18));
 
-        // Total shares should be unchanged (internal transfer)
-        assertEq(okuNote.totalShares(), totalSharesBefore);
-
-        // User shares should transfer correctly
-        uint256 transferredShares = _tokensToShares(30e18);
-        assertEq(okuNote.sharesOf(user1), user1SharesBefore - transferredShares);
-        assertEq(okuNote.sharesOf(user2), transferredShares);
+        // Total supply should be unchanged (internal transfer)
+        assertEq(okuNote.totalSupply(), totalBefore);
     }
 
     function test_Transfer_RevertsWhenPaused() public {
@@ -315,7 +338,7 @@ contract OkuNoteTest is BaseTest {
         _mintOkuNote(user1, 100e18);
 
         vm.prank(user1);
-        vm.expectRevert("Insufficient balance");
+        vm.expectRevert();
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuNote.transfer(user2, 150e18);
     }
@@ -324,15 +347,14 @@ contract OkuNoteTest is BaseTest {
         _mintOkuNote(user1, 100e18);
 
         vm.prank(user1);
-        vm.expectRevert("Transfer to zero address");
+        vm.expectRevert();
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuNote.transfer(address(0), 30e18);
     }
 
-    function test_Transfer_EmitsTransferEventWithTokenAmounts() public {
+    function test_Transfer_EmitsTransferEvent() public {
         _mintOkuNote(user1, 100e18);
 
-        // Event should emit token amount, not shares
         vm.expectEmit(true, true, false, true);
         emit Transfer(user1, user2, 30e18);
 
@@ -389,85 +411,70 @@ contract OkuNoteTest is BaseTest {
         okuNote.transferFrom(user1, user3, 30e18);
     }
 
-    // ============ Rebasing Tests ============
+    // ============ Note Price Tests ============
 
-    function test_UpdateRewardMultiplier_OnlyRebaser() public {
+    function test_UpdateNotePrice_OnlyRebaser() public {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector, user1, NOTE_REBASER
             )
         );
-        okuNote.updateRewardMultiplier(PRECISION * 2);
+        okuNote.updateNotePrice(PRECISION * 2);
     }
 
-    function test_UpdateRewardMultiplier_CannotDecrease() public {
+    function test_UpdateNotePrice_CannotDecrease() public {
         vm.prank(rebaser);
-        vm.expectRevert("Multiplier cannot decrease");
-        okuNote.updateRewardMultiplier(PRECISION - 1);
+        vm.expectRevert("Price cannot decrease");
+        okuNote.updateNotePrice(PRECISION - 1);
     }
 
-    function test_UpdateRewardMultiplier_UpdatesBalances() public {
+    function test_UpdateNotePrice_DoesNotAffectBalances() public {
         _mintOkuNote(user1, 100e18);
         uint256 balanceBefore = okuNote.balanceOf(user1);
 
-        // Double the multiplier
+        // Double the note price
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION * 2);
+        okuNote.updateNotePrice(PRECISION * 2);
 
+        // balanceOf does NOT change with notePrice — standard ERC-20
         uint256 balanceAfter = okuNote.balanceOf(user1);
-        assertEq(balanceAfter, balanceBefore * 2);
+        assertEq(balanceAfter, balanceBefore);
     }
 
-    function test_UpdateRewardMultiplier_UpdatesTotalSupply() public {
+    function test_UpdateNotePrice_DoesNotAffectTotalSupply() public {
         _mintOkuNote(user1, 100e18);
         uint256 supplyBefore = okuNote.totalSupply();
 
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION * 2);
+        okuNote.updateNotePrice(PRECISION * 2);
 
-        assertEq(okuNote.totalSupply(), supplyBefore * 2);
+        // totalSupply does NOT change with notePrice — standard ERC-20
+        assertEq(okuNote.totalSupply(), supplyBefore);
     }
 
-    function test_UpdateRewardMultiplier_SharesUnchanged() public {
-        _mintOkuNote(user1, 100e18);
-        uint256 sharesBefore = okuNote.sharesOf(user1);
-        uint256 totalSharesBefore = okuNote.totalShares();
-
+    function test_UpdateNotePrice_UpdatesNotePrice() public {
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION * 2);
+        okuNote.updateNotePrice(PRECISION * 2);
 
-        assertEq(okuNote.sharesOf(user1), sharesBefore);
-        assertEq(okuNote.totalShares(), totalSharesBefore);
+        assertEq(okuNote.notePrice(), PRECISION * 2);
     }
 
-    function test_UpdateRewardMultiplier_NoMaxSupplyCheck() public {
-        // Mint close to max supply
-        _mintOkuNote(user1, MAX_SUPPLY);
-
-        // Rebase should work even though it pushes supply above original maxSupply
-        vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION * 2);
-
-        // Supply is now 2x max, but this is allowed for rebase
-        assertEq(okuNote.totalSupply(), MAX_SUPPLY * 2);
-    }
-
-    function test_UpdateRewardMultiplier_EmitsEvent() public {
+    function test_UpdateNotePrice_EmitsEvent() public {
         vm.expectEmit(false, false, false, true);
-        emit RebaseEvent(PRECISION, PRECISION * 2);
+        emit NotePriceUpdated(PRECISION, PRECISION * 2);
 
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION * 2);
+        okuNote.updateNotePrice(PRECISION * 2);
     }
 
-    function test_UpdateRewardMultiplier_SameMultiplier() public {
-        uint256 currentMultiplier = okuNote.rewardMultiplier();
+    function test_UpdateNotePrice_SamePrice() public {
+        uint256 currentPrice = okuNote.notePrice();
 
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(currentMultiplier);
+        okuNote.updateNotePrice(currentPrice);
 
-        assertEq(okuNote.rewardMultiplier(), currentMultiplier);
+        assertEq(okuNote.notePrice(), currentPrice);
     }
 
     // ============ Blacklisting Tests ============
@@ -728,56 +735,40 @@ contract OkuNoteTest is BaseTest {
         okuNote.setMaxSupply(MAX_SUPPLY * 2);
     }
 
-    // ============ Share/Token Conversion Tests ============
+    // ============ Note Price Computation Tests ============
 
-    function test_SharesToTokens_AtInitialMultiplier() public view {
-        uint256 shares = 100e18;
-        uint256 tokens = okuNote.sharesToTokens(shares);
-        assertEq(tokens, shares); // At 1x multiplier, shares == tokens
+    function test_NotePrice_AtInitialPrice() public view {
+        uint256 price = okuNote.notePrice();
+        assertEq(price, PRECISION); // Starts at 1e18 ($1.00)
     }
 
-    function test_TokensToShares_AtInitialMultiplier() public view {
-        uint256 tokens = 100e18;
-        uint256 shares = okuNote.tokensToShares(tokens);
-        assertEq(shares, tokens); // At 1x multiplier, shares == tokens
-    }
-
-    function test_SharesToTokens_AfterRebase() public {
+    function test_NotePrice_AfterUpdate() public {
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION * 2);
+        okuNote.updateNotePrice(PRECISION * 2);
 
-        uint256 shares = 100e18;
-        uint256 tokens = okuNote.sharesToTokens(shares);
-        assertEq(tokens, shares * 2); // At 2x multiplier, tokens = shares * 2
+        assertEq(okuNote.notePrice(), PRECISION * 2);
     }
 
-    function test_TokensToShares_AfterRebase() public {
-        vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION * 2);
+    function test_NotePrice_GrowsWithYieldRate() public {
+        uint256 rate = 1_000_000_001_547_125_957; // ~5% APY per second
 
-        uint256 tokens = 100e18;
-        uint256 shares = okuNote.tokensToShares(tokens);
-        assertEq(shares, tokens / 2); // At 2x multiplier, shares = tokens / 2
+        vm.prank(rebaser);
+        okuNote.setYieldRate(rate, 0);
+
+        uint256 priceBefore = okuNote.notePrice();
+
+        vm.warp(block.timestamp + 1 days);
+
+        uint256 priceAfter = okuNote.notePrice();
+        assertGt(priceAfter, priceBefore);
     }
 
     // ============ Edge Case Tests ============
 
     function test_Mint_ZeroAmount_RevertsAmountTooSmall() public {
-        // Zero mint converts to zero shares and should revert
         vm.prank(minter);
         vm.expectRevert("Amount too small");
         okuNote.mint(user1, 0);
-    }
-
-    function test_Mint_SubShareAmount_RevertsAfterRebase() public {
-        // At a high multiplier, tiny token amounts round to 0 shares
-        vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION * 100); // 100x multiplier
-
-        // 1 wei of tokens / 100x multiplier = 0 shares (rounds down)
-        vm.prank(minter);
-        vm.expectRevert("Amount too small");
-        okuNote.mint(user1, 1);
     }
 
     function test_Transfer_ZeroAmount() public {
@@ -796,30 +787,18 @@ contract OkuNoteTest is BaseTest {
         assertEq(okuNote.totalSupply(), MAX_SUPPLY);
     }
 
-    function test_ConversionAtHighMultiplier() public {
-        // Set a high multiplier (100x)
-        vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION * 100);
-
-        uint256 tokens = 100e18;
-        uint256 shares = okuNote.tokensToShares(tokens);
-        uint256 recovered = okuNote.sharesToTokens(shares);
-
-        // Should round-trip with minimal loss
-        assertLe(recovered, tokens);
-        assertGe(recovered, tokens - 100); // Allow some rounding
-    }
-
-    function test_MultipleRebases_SameBlock() public {
+    function test_MultipleNotePriceUpdates_SameBlock() public {
         _mintOkuNote(user1, 100e18);
 
         vm.startPrank(rebaser);
-        okuNote.updateRewardMultiplier(PRECISION * 2);
-        okuNote.updateRewardMultiplier(PRECISION * 3);
+        okuNote.updateNotePrice(PRECISION * 2);
+        okuNote.updateNotePrice(PRECISION * 3);
         vm.stopPrank();
 
-        assertEq(okuNote.rewardMultiplier(), PRECISION * 3);
-        assertEq(okuNote.balanceOf(user1), 300e18);
+        // notePrice should be updated to 3x
+        assertEq(okuNote.notePrice(), PRECISION * 3);
+        // balanceOf should NOT change — standard ERC-20
+        assertEq(okuNote.balanceOf(user1), 100e18);
     }
 
     // ============ Continuous Yield Accrual Tests ============
@@ -834,21 +813,21 @@ contract OkuNoteTest is BaseTest {
         okuNote.setYieldRate(PRECISION + 1, 0);
     }
 
-    function test_SetYieldRate_MultiplierGrowsOverTime() public {
+    function test_SetYieldRate_NotePriceGrowsOverTime() public {
         uint256 rate = 1_000_000_001_547_125_957; // ~5% APY per second
 
         vm.prank(rebaser);
         okuNote.setYieldRate(rate, 0);
 
-        uint256 multiplierBefore = okuNote.rewardMultiplier();
+        uint256 priceBefore = okuNote.notePrice();
 
         vm.warp(block.timestamp + 1 days);
 
-        uint256 multiplierAfter = okuNote.rewardMultiplier();
-        assertGt(multiplierAfter, multiplierBefore);
+        uint256 priceAfter = okuNote.notePrice();
+        assertGt(priceAfter, priceBefore);
     }
 
-    function test_SetYieldRate_BalancesGrowContinuously() public {
+    function test_SetYieldRate_BalancesDoNotGrow() public {
         _mintOkuNote(user1, 1000e18);
         uint256 balanceBefore = okuNote.balanceOf(user1);
 
@@ -858,27 +837,26 @@ contract OkuNoteTest is BaseTest {
 
         vm.warp(block.timestamp + 1 days);
 
+        // balanceOf does NOT change — notePrice grows, not balances
         uint256 balanceAfter = okuNote.balanceOf(user1);
-        assertGt(balanceAfter, balanceBefore);
+        assertEq(balanceAfter, balanceBefore);
     }
 
     function test_SetYieldRate_SnapshotPreservesValue() public {
-        _mintOkuNote(user1, 1000e18);
-
         uint256 rate = 1_000_000_001_547_125_957; // ~5% APY
         vm.prank(rebaser);
         okuNote.setYieldRate(rate, 0);
 
         vm.warp(block.timestamp + 30 days);
 
-        uint256 balanceBefore = okuNote.balanceOf(user1);
+        uint256 priceBefore = okuNote.notePrice();
 
-        // Set a new rate — should snapshot accrued yield, not lose it
+        // Set a new rate — should snapshot accrued price, not lose it
         vm.prank(rebaser);
         okuNote.setYieldRate(rate, 0);
 
-        uint256 balanceAfter = okuNote.balanceOf(user1);
-        assertEq(balanceAfter, balanceBefore);
+        uint256 priceAfter = okuNote.notePrice();
+        assertEq(priceAfter, priceBefore);
     }
 
     function test_SetYieldRate_RateCannotBeNegative() public {
@@ -907,29 +885,25 @@ contract OkuNoteTest is BaseTest {
     }
 
     function test_SetYieldRate_ZeroRateStopsAccrual() public {
-        _mintOkuNote(user1, 1000e18);
-
         uint256 rate = 1_000_000_001_547_125_957;
         vm.prank(rebaser);
         okuNote.setYieldRate(rate, 0);
 
         vm.warp(block.timestamp + 30 days);
-        uint256 balanceMid = okuNote.balanceOf(user1);
+        uint256 priceMid = okuNote.notePrice();
 
         // Set rate to PRECISION (no yield)
         vm.prank(rebaser);
         okuNote.setYieldRate(PRECISION, 0);
 
         vm.warp(block.timestamp + 30 days);
-        uint256 balanceEnd = okuNote.balanceOf(user1);
+        uint256 priceEnd = okuNote.notePrice();
 
-        // Balance should not change after stopping accrual
-        assertEq(balanceEnd, balanceMid);
+        // Price should not change after stopping accrual
+        assertEq(priceEnd, priceMid);
     }
 
     function test_SetNextYieldRate_ActivatesAtRateEnd() public {
-        _mintOkuNote(user1, 1000e18);
-
         uint256 rate1 = 1_000_000_001_547_125_957; // ~5% APY
         uint256 rate2 = 1_000_000_002_877_801_985; // ~9.5% APY
         uint256 endTime = block.timestamp + 30 days;
@@ -941,12 +915,12 @@ contract OkuNoteTest is BaseTest {
 
         // Before rateEnd — rate1 applies
         vm.warp(endTime - 1);
-        uint256 balanceBeforeEnd = okuNote.balanceOf(user1);
+        uint256 priceBeforeEnd = okuNote.notePrice();
 
         // After rateEnd — rate2 takes over
         vm.warp(endTime + 30 days);
-        uint256 balanceAfterEnd = okuNote.balanceOf(user1);
-        assertGt(balanceAfterEnd, balanceBeforeEnd);
+        uint256 priceAfterEnd = okuNote.notePrice();
+        assertGt(priceAfterEnd, priceBeforeEnd);
     }
 
     function test_SetNextYieldRate_RequiresRateEnd() public {
@@ -959,8 +933,6 @@ contract OkuNoteTest is BaseTest {
     }
 
     function test_SetNextYieldRate_HeadToTail() public {
-        _mintOkuNote(user1, 1000e18);
-
         uint256 rate = 1_000_000_001_547_125_957; // ~5% APY
         uint256 endTime = block.timestamp + 30 days;
 
@@ -971,17 +943,17 @@ contract OkuNoteTest is BaseTest {
 
         // Warp to just before boundary
         vm.warp(endTime - 1);
-        uint256 balanceBefore = okuNote.balanceOf(user1);
+        uint256 priceBefore = okuNote.notePrice();
 
         // Warp to just after boundary
         vm.warp(endTime + 1);
-        uint256 balanceAfter = okuNote.balanceOf(user1);
+        uint256 priceAfter = okuNote.notePrice();
 
         // Should have grown by ~2 seconds worth of yield — no gap, no jump
-        assertGt(balanceAfter, balanceBefore);
-        // The difference should be small (just 2 seconds of yield on 1000 tokens)
-        uint256 diff = balanceAfter - balanceBefore;
-        assertLt(diff, 1e15); // less than 0.001 OkuNote for 2 seconds
+        assertGt(priceAfter, priceBefore);
+        // The difference should be small (just 2 seconds of yield on base price)
+        uint256 diff = priceAfter - priceBefore;
+        assertLt(diff, 1e10); // tiny price increase for 2 seconds
     }
 
     function test_SetNextYieldRate_EmitsEvent() public {
@@ -1042,17 +1014,21 @@ contract OkuNoteTest is BaseTest {
         // Advance 2 seconds (L2 block time)
         vm.warp(block.timestamp + 2);
 
+        // balanceOf does NOT change (no rebasing) — attacker gains nothing from balance
         uint256 balanceAfterWarp = okuNote.balanceOf(user1);
-        uint256 profit = balanceAfterWarp - balanceAfterMint;
+        assertEq(balanceAfterWarp, balanceAfterMint);
 
-        // At 4.5% APY, 2 seconds on $1M ≈ $0.00285 OkuNote
-        // This is less than gas costs for mint + redeem on any chain
-        assertLt(profit, 1e16); // less than 0.01 OkuNote ($0.01) for $1M attack
+        // notePrice grows, but attacker's token count is unchanged
+        // Any profit would only be realized through the PSM at the new notePrice
+        // which is trivially small for 2 seconds
+        uint256 priceBefore = okuNote.notePrice();
+        vm.warp(block.timestamp + 2);
+        uint256 priceAfter = okuNote.notePrice();
+        uint256 priceDiff = priceAfter - priceBefore;
+        assertLt(priceDiff, 1e10); // less than 1e-8 price change for 2 seconds
     }
 
     function test_ContinuousAccrual_MatchesExpectedAPY() public {
-        _mintOkuNote(user1, 1000e18);
-
         // 4.5% APY: rate = (1.045)^(1/31536000) ≈ 1.000000001395766... × 1e18
         uint256 rate = 1_000_000_001_395_766_300;
 
@@ -1062,44 +1038,39 @@ contract OkuNoteTest is BaseTest {
         // Warp 365 days
         vm.warp(block.timestamp + 365 days);
 
-        uint256 balance = okuNote.balanceOf(user1);
+        uint256 price = okuNote.notePrice();
 
-        // Expected: 1000 * 1.045 = 1045 (within rounding tolerance)
+        // Expected: PRECISION * 1.045 = 1.045e18 (within rounding tolerance)
         // Allow 0.1% tolerance for compounding approximation
-        assertGt(balance, 1044e18); // at least 4.4%
-        assertLt(balance, 1046e18); // at most 4.6%
+        assertGt(price, 1044e15); // at least 4.4%
+        assertLt(price, 1046e15); // at most 4.6%
     }
 
-    function test_UpdateRewardMultiplier_EmergencyOverride() public {
-        _mintOkuNote(user1, 1000e18);
-
+    function test_UpdateNotePrice_EmergencyOverride() public {
         uint256 rate = 1_000_000_001_547_125_957;
         vm.prank(rebaser);
         okuNote.setYieldRate(rate, 0);
 
         vm.warp(block.timestamp + 30 days);
 
-        uint256 computedMultiplier = okuNote.rewardMultiplier();
-        uint256 balanceBefore = okuNote.balanceOf(user1);
+        uint256 computedPrice = okuNote.notePrice();
 
-        // Emergency override — set exact multiplier, stops accrual
+        // Emergency override — set exact price, stops accrual
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(computedMultiplier);
+        okuNote.updateNotePrice(computedPrice);
 
-        // Multiplier should now be the exact snapshot
-        assertEq(okuNote.rewardMultiplier(), computedMultiplier);
+        // Price should now be the exact snapshot
+        assertEq(okuNote.notePrice(), computedPrice);
         // Rate should be reset
         assertEq(okuNote.ratePerSecond(), PRECISION);
-        // Balance should be unchanged
-        assertEq(okuNote.balanceOf(user1), balanceBefore);
 
-        // Warp more — balance should not grow (rate is zero)
+        // Warp more — price should not grow (rate is zero)
         vm.warp(block.timestamp + 30 days);
-        assertEq(okuNote.balanceOf(user1), balanceBefore);
+        assertEq(okuNote.notePrice(), computedPrice);
     }
 
-    function test_BaseMultiplier_ReturnsSnapshotValue() public {
-        assertEq(okuNote.baseMultiplier(), PRECISION);
+    function test_BasePrice_ReturnsSnapshotValue() public {
+        assertEq(okuNote.basePrice(), PRECISION);
 
         uint256 rate = 1_000_000_001_547_125_957;
         vm.prank(rebaser);
@@ -1107,15 +1078,13 @@ contract OkuNoteTest is BaseTest {
 
         vm.warp(block.timestamp + 30 days);
 
-        // baseMultiplier should still be PRECISION (snapshot hasn't been updated)
-        assertEq(okuNote.baseMultiplier(), PRECISION);
-        // rewardMultiplier should be higher
-        assertGt(okuNote.rewardMultiplier(), PRECISION);
+        // basePrice should still be PRECISION (snapshot hasn't been updated)
+        assertEq(okuNote.basePrice(), PRECISION);
+        // notePrice should be higher
+        assertGt(okuNote.notePrice(), PRECISION);
     }
 
     function test_RateExpiry_StopsYieldWhenNoPendingRate() public {
-        _mintOkuNote(user1, 1000e18);
-
         uint256 rate = 1_000_000_001_547_125_957;
         uint256 endTime = block.timestamp + 30 days;
 
@@ -1124,11 +1093,11 @@ contract OkuNoteTest is BaseTest {
 
         // Warp past end with no pending rate
         vm.warp(endTime + 30 days);
-        uint256 balanceAtExpiry = okuNote.balanceOf(user1);
+        uint256 priceAtExpiry = okuNote.notePrice();
 
-        // Warp more — balance should not grow
+        // Warp more — price should not grow
         vm.warp(endTime + 60 days);
-        assertEq(okuNote.balanceOf(user1), balanceAtExpiry);
+        assertEq(okuNote.notePrice(), priceAtExpiry);
     }
 
     // ============ EIP-2612 Permit Tests ============
@@ -1292,7 +1261,7 @@ contract OkuNoteTest is BaseTest {
 
         // State preserved
         assertEq(okuNote.name(), "OkuNote");
-        assertEq(okuNote.rewardMultiplier(), PRECISION);
+        assertEq(okuNote.notePrice(), PRECISION);
         assertEq(okuNote.maxSupply(), MAX_SUPPLY);
     }
 

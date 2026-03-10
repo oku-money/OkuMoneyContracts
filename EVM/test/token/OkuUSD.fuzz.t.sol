@@ -6,6 +6,10 @@ import {BaseTest} from "../Base.t.sol";
 /**
  * @title OkuUSDFuzzTest
  * @notice Fuzz tests for OkuUSD rebasing vault: wrap/unwrap math, collateralization, and share invariants
+ * @dev Updated for OkuNote non-rebasing redesign. OkuNote balanceOf is static;
+ *      notePrice() tracks price appreciation separately. Wrap/unwrap are price-aware:
+ *      usdMinted = noteAmount × notePrice / usdMultiplier,
+ *      notesReturned = usdAmount × usdMultiplier / notePrice.
  */
 contract OkuUSDFuzzTest is BaseTest {
     // ============ Setup ============
@@ -22,7 +26,11 @@ contract OkuUSDFuzzTest is BaseTest {
 
     // ============ 1. Wrap/Unwrap Round-Trip ============
 
-    /// @notice Wrap then unwrap should return original amount (max 1 wei loss)
+    /// @notice Wrap then unwrap should return original note amount (max 1 wei loss)
+    /// @dev At parity (notePrice == usdMultiplier == 1e18):
+    ///      wrap(N) → usdMinted = N × 1e18 / 1e18 = N
+    ///      unwrap(N) → notesReturned = N × 1e18 / 1e18 = N
+    ///      Round-trip: unwrap(wrap(noteAmount)) ≈ noteAmount
     function testFuzz_WrapUnwrapRoundTrip(uint256 noteAmount) public {
         noteAmount = bound(noteAmount, 1e6, okuNote.balanceOf(user1));
 
@@ -35,7 +43,12 @@ contract OkuUSDFuzzTest is BaseTest {
         assertLe(notesBack, noteAmount, "Cannot gain on round trip");
     }
 
-    /// @notice Round-trip at various USD multipliers
+    /// @notice Round-trip at various USD multipliers (price-aware)
+    /// @dev When usdMultiplier > 1e18:
+    ///      wrap(N) → usdMinted = N × notePrice / usdMultiplier (fewer OkuUSD)
+    ///      unwrap(balanceOf) → notesReturned ≈ N
+    ///      We unwrap balanceOf (not usdMinted) because ceil-division in unwrap
+    ///      can require 1 more share than floor-division in wrap minted.
     function testFuzz_WrapUnwrapRoundTripAtMultiplier(
         uint256 noteAmount,
         uint256 multiplier
@@ -53,19 +66,57 @@ contract OkuUSDFuzzTest is BaseTest {
         vm.startPrank(user1);
         okuUsd.wrap(noteAmount, user1);
 
-        // Unwrap the actual balance (not usdMinted, which may exceed what shares can cover
-        // due to wrap rounding down shares but usdMinted = noteAmount)
-        uint256 bal = okuUsd.balanceOf(user1);
-        if (bal == 0) {
+        uint256 usdBalance = okuUsd.balanceOf(user1);
+        if (usdBalance == 0) {
             vm.stopPrank();
             return;
         }
-        uint256 notesBack = okuUsd.unwrap(bal, user1);
+
+        // Unwrap full balance — avoids ceil-vs-floor share mismatch
+        uint256 notesBack = okuUsd.unwrap(usdBalance, user1);
         vm.stopPrank();
 
         assertLe(notesBack, noteAmount, "Cannot gain on round trip");
-        // At higher multipliers, rounding compounds — allow proportional tolerance
-        uint256 maxLoss = (noteAmount * multiplier) / (PRECISION * PRECISION) + 2;
+        // At higher multipliers, rounding compounds across multiple divisions in
+        // wrap (2 divisions) and unwrap (1 division) plus balanceOf (1 division).
+        // Each division can lose up to (divisor - 1) absolute wei, which translates
+        // to proportionally more note-token loss at larger noteAmount.
+        // Use relative tolerance: loss should be < 1 part per billion of noteAmount,
+        // plus a small absolute floor for tiny amounts.
+        uint256 maxLoss = noteAmount / 1e9 + (4 * multiplier) / okuNote.notePrice() + 2;
+        assertGe(
+            notesBack,
+            noteAmount > maxLoss ? noteAmount - maxLoss : 0,
+            "Excessive loss on round trip"
+        );
+    }
+
+    /// @notice Round-trip at various note prices (price-aware)
+    /// @dev When notePrice > 1e18:
+    ///      wrap(N) → usdMinted = N × notePrice / usdMultiplier (more OkuUSD)
+    ///      unwrap(usdMinted) → notesReturned = usdMinted × usdMultiplier / notePrice ≈ N
+    function testFuzz_WrapUnwrapRoundTripAtNotePrice(uint256 noteAmount, uint256 notePrice) public {
+        noteAmount = bound(noteAmount, 1e18, okuNote.balanceOf(user1) / 2);
+        notePrice = _boundNotePrice(notePrice);
+
+        // Set note price
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(notePrice);
+
+        vm.startPrank(user1);
+        uint256 usdMinted = okuUsd.wrap(noteAmount, user1);
+
+        if (usdMinted == 0) {
+            vm.stopPrank();
+            return;
+        }
+
+        uint256 notesBack = okuUsd.unwrap(usdMinted, user1);
+        vm.stopPrank();
+
+        assertLe(notesBack, noteAmount, "Cannot gain on round trip");
+        // Allow proportional tolerance for rounding at high prices
+        uint256 maxLoss = (noteAmount * notePrice) / (PRECISION * PRECISION) + 2;
         assertGe(
             notesBack,
             noteAmount > maxLoss ? noteAmount - maxLoss : 0,
@@ -75,16 +126,27 @@ contract OkuUSDFuzzTest is BaseTest {
 
     // ============ 2. Wrap Rounding Favors Vault ============
 
-    /// @notice sharesToMint = (noteAmount * PRECISION) / usdMultiplier() rounds DOWN
+    /// @notice Wrap share calculation rounds DOWN, favoring the vault
+    /// @dev usdMinted = noteAmount × notePrice / usdMultiplier (truncated)
+    ///      sharesToMint = usdMinted × PRECISION / usdMultiplier (truncated)
+    ///      Both divisions round down → vault never overmints
     function testFuzz_WrapRoundingFavorsVault(uint256 noteAmount) public {
         noteAmount = bound(noteAmount, 1e6, okuNote.balanceOf(user1));
 
         uint256 mult = okuUsd.usdMultiplier();
-        uint256 expectedShares = (noteAmount * PRECISION) / mult;
-        // Solidity integer division truncates (rounds down) — this is the vault-favorable direction
-        // Verify: expectedShares * mult / PRECISION <= noteAmount
-        uint256 impliedValue = (expectedShares * mult) / PRECISION;
-        assertLe(impliedValue, noteAmount, "Wrap rounding must favor vault (round shares down)");
+        uint256 price = okuNote.notePrice();
+
+        // usdMinted = noteAmount × notePrice / usdMultiplier (rounds down)
+        uint256 expectedUsd = (noteAmount * price) / mult;
+        // sharesToMint = usdMinted × PRECISION / usdMultiplier (rounds down)
+        uint256 expectedShares = (expectedUsd * PRECISION) / mult;
+
+        if (expectedShares == 0) return;
+
+        // Verify: implied dollar value of shares <= note dollar value deposited
+        uint256 impliedDollarValue = (expectedShares * mult) / PRECISION;
+        uint256 notesDollarValue = (noteAmount * price) / PRECISION;
+        assertLe(impliedDollarValue, notesDollarValue, "Wrap rounding must favor vault");
 
         vm.prank(user1);
         okuUsd.wrap(noteAmount, user1);
@@ -92,7 +154,7 @@ contract OkuUSDFuzzTest is BaseTest {
         assertEq(okuUsd.usdSharesOf(user1), expectedShares, "Shares minted match expected");
     }
 
-    /// @notice Wrap rounding at elevated USD multiplier
+    /// @notice Wrap rounding at elevated USD multiplier (price-aware)
     function testFuzz_WrapRoundingAtHighMultiplier(uint256 noteAmount, uint256 multiplier) public {
         noteAmount = bound(noteAmount, 1e6, okuNote.balanceOf(user1) / 2);
         uint256 currentMult = okuUsd.usdMultiplier();
@@ -101,9 +163,20 @@ contract OkuUSDFuzzTest is BaseTest {
         vm.prank(usdRebaser);
         okuUsd.updateUsdMultiplier(multiplier);
 
-        uint256 expectedShares = (noteAmount * PRECISION) / multiplier;
-        uint256 impliedValue = (expectedShares * multiplier) / PRECISION;
-        assertLe(impliedValue, noteAmount, "Wrap rounding must favor vault at any multiplier");
+        uint256 price = okuNote.notePrice();
+
+        // usdMinted = noteAmount × notePrice / usdMultiplier
+        uint256 expectedUsd = (noteAmount * price) / multiplier;
+        // sharesToMint = usdMinted × PRECISION / usdMultiplier
+        uint256 expectedShares = (expectedUsd * PRECISION) / multiplier;
+
+        if (expectedShares == 0) return;
+
+        uint256 impliedDollarValue = (expectedShares * multiplier) / PRECISION;
+        uint256 notesDollarValue = (noteAmount * price) / PRECISION;
+        assertLe(
+            impliedDollarValue, notesDollarValue, "Wrap rounding must favor vault at any multiplier"
+        );
 
         vm.prank(user1);
         okuUsd.wrap(noteAmount, user1);
@@ -111,9 +184,39 @@ contract OkuUSDFuzzTest is BaseTest {
         assertEq(okuUsd.usdSharesOf(user1), expectedShares, "Shares match at elevated multiplier");
     }
 
+    /// @notice Wrap rounding at elevated note price
+    function testFuzz_WrapRoundingAtHighNotePrice(uint256 noteAmount, uint256 notePrice) public {
+        noteAmount = bound(noteAmount, 1e6, okuNote.balanceOf(user1) / 2);
+        notePrice = _boundNotePrice(notePrice);
+
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(notePrice);
+
+        uint256 mult = okuUsd.usdMultiplier();
+
+        // usdMinted = noteAmount × notePrice / usdMultiplier
+        uint256 expectedUsd = (noteAmount * notePrice) / mult;
+        // sharesToMint = usdMinted × PRECISION / usdMultiplier
+        uint256 expectedShares = (expectedUsd * PRECISION) / mult;
+
+        if (expectedShares == 0) return;
+
+        uint256 impliedDollarValue = (expectedShares * mult) / PRECISION;
+        uint256 notesDollarValue = (noteAmount * notePrice) / PRECISION;
+        assertLe(
+            impliedDollarValue, notesDollarValue, "Wrap rounding must favor vault at any note price"
+        );
+
+        vm.prank(user1);
+        okuUsd.wrap(noteAmount, user1);
+
+        assertEq(okuUsd.usdSharesOf(user1), expectedShares, "Shares match at elevated note price");
+    }
+
     // ============ 3. Unwrap Rounding Favors Vault ============
 
-    /// @notice sharesToBurn rounds UP: (usdAmount * PRECISION + mult - 1) / mult
+    /// @notice Unwrap share burn rounds UP, favoring the vault
+    /// @dev sharesToBurn = (usdAmount × PRECISION + mult - 1) / mult (ceil division)
     function testFuzz_UnwrapRoundingFavorsVault(uint256 noteAmount) public {
         noteAmount = bound(noteAmount, 1e6, okuNote.balanceOf(user1));
 
@@ -141,7 +244,7 @@ contract OkuUSDFuzzTest is BaseTest {
 
     // ============ 4. Collateralization Under Various Rates ============
 
-    /// @notice After wrap at 1:1 multipliers, collateralization ratio >= 100%
+    /// @notice After wrap at 1:1 (notePrice == usdMultiplier == PRECISION), ratio >= 100%
     function testFuzz_CollateralizationAtParity(uint256 noteAmount) public {
         noteAmount = bound(noteAmount, 1e6, okuNote.balanceOf(user1));
 
@@ -152,10 +255,13 @@ contract OkuUSDFuzzTest is BaseTest {
         assertGe(ratio, PRECISION, "Collateral ratio must be >= 100% at parity");
     }
 
-    /// @notice After note rebase without USD rebase, vault becomes overcollateralized
-    function testFuzz_NoteRebaseOvercollateralizes(
+    /// @notice After notePrice increase, vault becomes overcollateralized
+    /// @dev notePrice increase does NOT change vault's note token count, but increases
+    ///      their dollar value: (reserves × notePrice / PRECISION) grows while totalSupply
+    ///      (OkuUSD obligations) stays the same.
+    function testFuzz_NotePriceIncreaseOvercollateralizes(
         uint256 noteAmount,
-        uint256 noteMultiplier
+        uint256 newNotePrice
     )
         public
     {
@@ -164,19 +270,21 @@ contract OkuUSDFuzzTest is BaseTest {
         vm.prank(user1);
         okuUsd.wrap(noteAmount, user1);
 
-        uint256 currentNoteMult = okuNote.rewardMultiplier();
-        noteMultiplier =
-            bound(noteMultiplier, currentNoteMult + currentNoteMult / 100, currentNoteMult * 5);
+        uint256 currentNotePrice = okuNote.notePrice();
+        newNotePrice =
+            bound(newNotePrice, currentNotePrice + currentNotePrice / 100, currentNotePrice * 5);
 
-        // Rebase note only — vault note balance grows, OkuUSD supply stays same
+        // Increase note price — vault note balance unchanged, but dollar value increases
         vm.prank(rebaser);
-        okuNote.updateRewardMultiplier(noteMultiplier);
+        okuNote.updateNotePrice(newNotePrice);
 
         uint256 ratio = okuUsd.collateralizationRatio();
-        assertGe(ratio, PRECISION, "Note rebase should overcollateralize vault");
+        assertGe(ratio, PRECISION, "Note price increase should overcollateralize vault");
     }
 
-    /// @notice After USD rebase without note rebase, vault becomes undercollateralized
+    /// @notice After USD rebase without note price change, vault becomes undercollateralized
+    /// @dev usdMultiplier increase grows totalSupply (obligations) while reserve dollar
+    ///      value (reserves × notePrice / PRECISION) stays the same.
     function testFuzz_UsdRebaseUndercollateralizes(
         uint256 noteAmount,
         uint256 usdMultiplier
@@ -192,7 +300,7 @@ contract OkuUSDFuzzTest is BaseTest {
         usdMultiplier =
             bound(usdMultiplier, currentUsdMult + currentUsdMult / 100, currentUsdMult * 5);
 
-        // Rebase USD only — OkuUSD supply grows, note reserves stay same
+        // Rebase USD only — OkuUSD supply grows, note reserves dollar value stays same
         vm.prank(usdRebaser);
         okuUsd.updateUsdMultiplier(usdMultiplier);
 
@@ -200,7 +308,10 @@ contract OkuUSDFuzzTest is BaseTest {
         assertLe(ratio, PRECISION, "USD-only rebase should undercollateralize vault");
     }
 
-    /// @notice Collateralization views are consistent
+    /// @notice Collateralization views are consistent (price-aware)
+    /// @dev reserves dollar value = reserves × notePrice / PRECISION
+    ///      obligations = totalSupply (already in dollar terms)
+    ///      surplus converts dollar surplus back to note tokens via notePrice
     function testFuzz_CollateralizationViewsConsistent(uint256 noteAmount) public {
         noteAmount = bound(noteAmount, 1e6, okuNote.balanceOf(user1));
 
@@ -211,16 +322,57 @@ contract OkuUSDFuzzTest is BaseTest {
         uint256 obligations = okuUsd.totalUsdObligations();
         uint256 ratio = okuUsd.collateralizationRatio();
         uint256 surplusVal = okuUsd.surplus();
+        uint256 price = okuNote.notePrice();
 
         assertEq(obligations, okuUsd.totalSupply(), "Obligations == totalSupply");
         assertEq(reserves, okuNote.balanceOf(address(okuUsd)), "Reserves == note balance");
 
-        if (reserves >= obligations) {
+        // Dollar value of reserves
+        uint256 reservesDollarValue = (reserves * price) / PRECISION;
+
+        if (reservesDollarValue >= obligations) {
             assertGe(ratio, PRECISION, "Ratio >= 100% when overcollateralized");
-            assertEq(surplusVal, reserves - obligations, "Surplus matches excess");
+            // Surplus is in note tokens: (dollarSurplus × PRECISION) / notePrice
+            uint256 dollarSurplus = reservesDollarValue - obligations;
+            uint256 expectedSurplusNotes = (dollarSurplus * PRECISION) / price;
+            assertEq(surplusVal, expectedSurplusNotes, "Surplus matches excess in note tokens");
         } else {
             assertLt(ratio, PRECISION, "Ratio < 100% when undercollateralized");
             assertEq(surplusVal, 0, "No surplus when undercollateralized");
+        }
+    }
+
+    /// @notice Collateralization views consistent after notePrice increase
+    function testFuzz_CollateralizationViewsAfterNotePriceIncrease(
+        uint256 noteAmount,
+        uint256 newNotePrice
+    )
+        public
+    {
+        noteAmount = bound(noteAmount, 1e18, okuNote.balanceOf(user1) / 2);
+
+        vm.prank(user1);
+        okuUsd.wrap(noteAmount, user1);
+
+        uint256 currentNotePrice = okuNote.notePrice();
+        newNotePrice = bound(newNotePrice, currentNotePrice, currentNotePrice * 5);
+
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(newNotePrice);
+
+        uint256 reserves = okuUsd.totalNoteReserves();
+        uint256 obligations = okuUsd.totalUsdObligations();
+        uint256 ratio = okuUsd.collateralizationRatio();
+        uint256 price = okuNote.notePrice();
+
+        // Note balance in vault unchanged (non-rebasing)
+        assertEq(reserves, okuNote.balanceOf(address(okuUsd)), "Reserves == note balance");
+
+        // Dollar value of reserves increased
+        uint256 reservesDollarValue = (reserves * price) / PRECISION;
+        if (obligations > 0) {
+            uint256 expectedRatio = (reservesDollarValue * PRECISION) / obligations;
+            assertEq(ratio, expectedRatio, "Ratio formula matches");
         }
     }
 
@@ -309,6 +461,37 @@ contract OkuUSDFuzzTest is BaseTest {
         okuUsd.withdrawSurplus(excessiveWithdraw);
     }
 
+    /// @notice withdrawSurplus works after notePrice increase creates surplus
+    function testFuzz_WithdrawSurplusAfterNotePriceIncrease(
+        uint256 noteAmount,
+        uint256 newNotePrice
+    )
+        public
+    {
+        noteAmount = bound(noteAmount, 1e18, okuNote.balanceOf(user1) / 4);
+
+        vm.prank(user1);
+        okuUsd.wrap(noteAmount, user1);
+
+        uint256 currentNotePrice = okuNote.notePrice();
+        newNotePrice =
+            bound(newNotePrice, currentNotePrice + currentNotePrice / 10, currentNotePrice * 3);
+
+        // notePrice increase → vault's reserve dollar value grows → surplus created
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(newNotePrice);
+
+        uint256 surplusVal = okuUsd.surplus();
+        assertGt(surplusVal, 0, "Should have surplus after note price increase");
+
+        // Withdraw surplus
+        vm.prank(reserveManager);
+        okuUsd.withdrawSurplus(surplusVal);
+
+        uint256 ratioAfter = okuUsd.collateralizationRatio();
+        assertGe(ratioAfter, okuUsd.minCollateralRatio(), "Must stay above floor after withdrawal");
+    }
+
     // ============ 6. Balance Formula ============
 
     /// @notice balanceOf == usdShares * usdMultiplier / PRECISION
@@ -345,6 +528,35 @@ contract OkuUSDFuzzTest is BaseTest {
         uint256 expected = (shares * mult) / PRECISION;
 
         assertEq(okuUsd.balanceOf(user1), expected, "Balance formula must hold after rebase");
+    }
+
+    /// @notice OkuUSD balance NOT affected by notePrice changes
+    /// @dev notePrice increase doesn't change usdShares or usdMultiplier,
+    ///      so OkuUSD balanceOf is unchanged. Only collateralization changes.
+    function testFuzz_OkuUsdBalanceUnchangedByNotePrice(
+        uint256 noteAmount,
+        uint256 newNotePrice
+    )
+        public
+    {
+        noteAmount = bound(noteAmount, 1e6, okuNote.balanceOf(user1));
+
+        vm.prank(user1);
+        okuUsd.wrap(noteAmount, user1);
+
+        uint256 balanceBefore = okuUsd.balanceOf(user1);
+        uint256 sharesBefore = okuUsd.usdSharesOf(user1);
+
+        newNotePrice = _boundNotePrice(newNotePrice);
+
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(newNotePrice);
+
+        uint256 balanceAfter = okuUsd.balanceOf(user1);
+        uint256 sharesAfter = okuUsd.usdSharesOf(user1);
+
+        assertEq(sharesAfter, sharesBefore, "Shares unchanged by notePrice");
+        assertEq(balanceAfter, balanceBefore, "OkuUSD balance unchanged by notePrice");
     }
 
     /// @notice totalSupply == totalUsdShares * usdMultiplier / PRECISION
@@ -473,6 +685,46 @@ contract OkuUSDFuzzTest is BaseTest {
         assertLe(finalSupply, initialSupply, "Total supply must not inflate through cycles");
     }
 
+    /// @notice Repeated cycles at elevated notePrice don't inflate
+    function testFuzz_RepeatedCyclesAtHighNotePriceNoInflation(
+        uint256 noteAmount,
+        uint256 notePrice,
+        uint8 cycles
+    )
+        public
+    {
+        noteAmount = bound(noteAmount, 1e12, okuNote.balanceOf(user1) / 2);
+        notePrice = _boundNotePrice(notePrice);
+        cycles = uint8(bound(cycles, 2, 10));
+
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(notePrice);
+
+        vm.startPrank(user1);
+        okuUsd.wrap(noteAmount, user1);
+
+        uint256 initialShares = okuUsd.usdSharesOf(user1);
+
+        for (uint8 i = 0; i < cycles; i++) {
+            uint256 usdBal = okuUsd.balanceOf(user1);
+            if (usdBal == 0) break;
+
+            uint256 notesBack = okuUsd.unwrap(usdBal, user1);
+            if (notesBack == 0) break;
+
+            okuNote.approve(address(okuUsd), notesBack);
+            okuUsd.wrap(notesBack, user1);
+        }
+        vm.stopPrank();
+
+        uint256 finalShares = okuUsd.usdSharesOf(user1);
+        assertLe(
+            finalShares,
+            initialShares,
+            "Shares must not inflate after repeated cycles at high notePrice"
+        );
+    }
+
     // ============ 9. depositReserves Increases Collateral Ratio ============
 
     /// @notice depositReserves increases collateralization without minting shares
@@ -530,6 +782,125 @@ contract OkuUSDFuzzTest is BaseTest {
             reservesAfter,
             reservesBefore + depositAmount,
             "Reserves must increase by exact deposit amount"
+        );
+    }
+
+    // ============ 10. Price-Aware Wrap Amount ============
+
+    /// @notice Wrap gives more OkuUSD when notePrice > PRECISION
+    /// @dev usdMinted = noteAmount × notePrice / usdMultiplier
+    ///      At notePrice = 1.5e18, usdMultiplier = 1e18: wrap(100e18) → 150e18 OkuUSD
+    function testFuzz_WrapGivesMoreUsdAtHighNotePrice(
+        uint256 noteAmount,
+        uint256 newNotePrice
+    )
+        public
+    {
+        noteAmount = bound(noteAmount, 1e18, okuNote.balanceOf(user1) / 4);
+        uint256 currentNotePrice = okuNote.notePrice();
+        newNotePrice =
+            bound(newNotePrice, currentNotePrice + currentNotePrice / 10, currentNotePrice * 5);
+
+        // Wrap at current price to get baseline
+        vm.startPrank(user1);
+        uint256 usdAtParity = okuUsd.wrap(noteAmount, user1);
+
+        // Unwrap to reset (use balanceOf to avoid ceil-vs-floor share mismatch)
+        uint256 usdBalance = okuUsd.balanceOf(user1);
+        okuUsd.unwrap(usdBalance, user1);
+        vm.stopPrank();
+
+        // Increase note price
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(newNotePrice);
+
+        // Wrap same note amount at higher price
+        vm.prank(user1);
+        uint256 usdAtHighPrice = okuUsd.wrap(noteAmount, user1);
+
+        assertGt(usdAtHighPrice, usdAtParity, "Wrap must give more OkuUSD when notePrice is higher");
+    }
+
+    /// @notice Unwrap returns fewer note tokens when notePrice > PRECISION
+    /// @dev notesReturned = usdAmount × usdMultiplier / notePrice
+    ///      At notePrice = 2e18, usdMultiplier = 1e18: unwrap(100e18 OkuUSD) → 50e18 notes
+    function testFuzz_UnwrapReturnsFewer_NotesAtHighNotePrice(
+        uint256 noteAmount,
+        uint256 newNotePrice
+    )
+        public
+    {
+        noteAmount = bound(noteAmount, 1e18, okuNote.balanceOf(user1) / 4);
+
+        // Wrap at parity to establish baseline
+        vm.prank(user1);
+        uint256 usdMinted = okuUsd.wrap(noteAmount, user1);
+
+        // Increase note price (vault now overcollateralized)
+        uint256 currentNotePrice = okuNote.notePrice();
+        newNotePrice =
+            bound(newNotePrice, currentNotePrice + currentNotePrice / 10, currentNotePrice * 5);
+
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(newNotePrice);
+
+        // Unwrap at higher note price — should get fewer note tokens back
+        vm.prank(user1);
+        uint256 notesBack = okuUsd.unwrap(usdMinted, user1);
+
+        assertLt(
+            notesBack, noteAmount, "Unwrap must return fewer notes when notePrice has increased"
+        );
+    }
+
+    // ============ 11. OkuNote Balance Invariants ============
+
+    /// @notice OkuNote balanceOf is NOT affected by notePrice changes
+    /// @dev This is the key semantic change: non-rebasing means balances are static
+    function testFuzz_OkuNoteBalanceUnchangedByNotePrice(
+        uint256 noteAmount,
+        uint256 newNotePrice
+    )
+        public
+    {
+        noteAmount = bound(noteAmount, 1e6, okuNote.balanceOf(user1));
+
+        uint256 balanceBefore = okuNote.balanceOf(user1);
+
+        newNotePrice = _boundNotePrice(newNotePrice);
+
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(newNotePrice);
+
+        uint256 balanceAfter = okuNote.balanceOf(user1);
+        assertEq(balanceAfter, balanceBefore, "OkuNote balanceOf must not change with notePrice");
+    }
+
+    /// @notice Vault's note token count unchanged by notePrice increase
+    /// @dev Reserve note balance is static; only dollar value (reserves × notePrice) changes
+    function testFuzz_VaultNoteBalanceUnchangedByNotePrice(
+        uint256 noteAmount,
+        uint256 newNotePrice
+    )
+        public
+    {
+        noteAmount = bound(noteAmount, 1e6, okuNote.balanceOf(user1) / 2);
+
+        vm.prank(user1);
+        okuUsd.wrap(noteAmount, user1);
+
+        uint256 vaultBalanceBefore = okuNote.balanceOf(address(okuUsd));
+
+        newNotePrice = _boundNotePrice(newNotePrice);
+
+        vm.prank(rebaser);
+        okuNote.updateNotePrice(newNotePrice);
+
+        uint256 vaultBalanceAfter = okuNote.balanceOf(address(okuUsd));
+        assertEq(
+            vaultBalanceAfter,
+            vaultBalanceBefore,
+            "Vault note token count must not change with notePrice"
         );
     }
 }

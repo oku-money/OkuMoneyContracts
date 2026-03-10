@@ -21,19 +21,19 @@ import {IOkuNote} from "../interfaces/IOkuNote.sol";
 /**
  * @title OkuBridge
  * @notice Orchestrator-signed cross-chain bridge for OkuNote using burn-and-mint pattern
- * @dev Operates on shares (not token amounts) to avoid rebasing complications during transit
+ * @dev Operates on raw token amounts (OkuNote is non-rebasing — no share conversion needed).
  *
  * Architecture:
- * 1. Source Chain: User calls bridgeBurn() → burns shares, collects fee, emits event
+ * 1. Source Chain: User calls bridgeBurn() → burns tokens, collects fee, emits event
  * 2. Off-Chain: Orchestrator observes event, waits for finality, signs with EIP-712
- * 3. Destination Chain: Orchestrator (or user) calls bridgeMint() → validates signature, mints shares
+ * 3. Destination Chain: Orchestrator (or user) calls bridgeMint() → validates signature, mints tokens
  *
  * Key Design:
- * - Uses shares to preserve value across rebasing events
+ * - Uses raw token amounts (standard ERC-20, no share conversion)
  * - EIP-712 signatures for structured data signing
  * - Sequential nonces per destination on source chain
  * - Request ID tracking on destination to prevent replay
- * - Fee collected in shares on source chain
+ * - Fee collected in tokens on source chain (subtractive model)
  * - Admin recovery mechanisms for edge cases
  */
 contract OkuBridge is
@@ -59,11 +59,11 @@ contract OkuBridge is
     /// @notice Bridge fee in basis points (10 = 0.1%, 100 = 1%)
     uint256 public bridgeFee;
 
-    /// @notice Minimum shares that can be bridged
-    uint256 public minBridgeShares;
+    /// @notice Minimum token amount that can be bridged
+    uint256 public minBridgeAmount;
 
-    /// @notice Maximum shares that can be bridged
-    uint256 public maxBridgeShares;
+    /// @notice Maximum token amount that can be bridged
+    uint256 public maxBridgeAmount;
 
     /// @notice Supported destination chains
     mapping(uint256 => bool) public supportedChains;
@@ -95,7 +95,7 @@ contract OkuBridge is
     // ============ EIP-712 Constants ============
 
     bytes32 public constant BRIDGE_REQUEST_TYPEHASH = keccak256(
-        "BridgeRequest(uint256 sourceChainId,uint256 destChainId,address sender,bytes32 recipient,uint256 shares,uint256 nonce,uint256 deadline)"
+        "BridgeRequest(uint256 sourceChainId,uint256 destChainId,address sender,bytes32 recipient,uint256 amount,uint256 nonce,uint256 deadline)"
     );
 
     bytes32 public constant DUST_SWEEPER = keccak256("DUST_SWEEPER");
@@ -111,7 +111,7 @@ contract OkuBridge is
         uint256 destChainId;
         address sender;
         bytes32 recipient; // bytes32 to support non-EVM destinations (e.g. Solana 32-byte pubkeys)
-        uint256 shares; // Shares, not token amounts!
+        uint256 amount; // Raw token amount (OkuNote is non-rebasing)
         uint256 nonce;
         uint256 deadline;
     }
@@ -124,13 +124,13 @@ contract OkuBridge is
         bytes32 recipient,
         uint256 sourceChainId,
         uint256 destChainId,
-        uint256 shares,
+        uint256 amount,
         uint256 nonce,
         uint256 deadline
     );
 
     event BridgeMint(
-        bytes32 indexed requestId, bytes32 indexed recipient, uint256 sourceChainId, uint256 shares
+        bytes32 indexed requestId, bytes32 indexed recipient, uint256 sourceChainId, uint256 amount
     );
 
     event SignerUpdated(address indexed oldSigner, address indexed newSigner);
@@ -138,17 +138,17 @@ contract OkuBridge is
     event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
     event ChainAdded(uint256 indexed chainId);
     event ChainRemoved(uint256 indexed chainId);
-    event LimitsUpdated(uint256 minShares, uint256 maxShares);
+    event LimitsUpdated(uint256 minAmount, uint256 maxAmount);
     event NonceSkipped(uint256 indexed destChainId, uint256 skippedNonce);
-    event RefundProcessed(bytes32 indexed requestId, address indexed sender, uint256 shares);
+    event RefundProcessed(bytes32 indexed requestId, address indexed sender, uint256 amount);
     event DustSwept(address indexed recipient, uint256 amount);
     event DeadlineUpdated(uint256 oldDeadline, uint256 newDeadline);
 
     // ============ Errors ============
 
     error UnsupportedChain(uint256 chainId);
-    error AmountBelowMinimum(uint256 shares, uint256 minimum);
-    error AmountAboveMaximum(uint256 shares, uint256 maximum);
+    error AmountBelowMinimum(uint256 amount, uint256 minimum);
+    error AmountAboveMaximum(uint256 amount, uint256 maximum);
     error InvalidSignature();
     error SignatureExpired();
     error WrongChain(uint256 expected, uint256 actual);
@@ -196,8 +196,8 @@ contract OkuBridge is
         feeRecipient = _feeRecipient;
 
         // Default limits (can be updated later)
-        minBridgeShares = 1e18; // 1 share minimum
-        maxBridgeShares = 1_000_000e18; // 1M shares maximum
+        minBridgeAmount = 1e18; // 1 token minimum
+        maxBridgeAmount = 1_000_000e18; // 1M tokens maximum
         bridgeFee = 10; // 0.1% (10 basis points)
         bridgeDeadline = 1 hours;
 
@@ -224,16 +224,16 @@ contract OkuBridge is
     // ============ Core Bridge Functions ============
 
     /**
-     * @notice Burn shares on source chain to initiate bridge transfer
+     * @notice Burn tokens on source chain to initiate bridge transfer
      * @param destChainId Destination chain ID
      * @param recipient Recipient address on destination chain
-     * @param shares Number of shares to bridge
+     * @param amount Number of tokens to bridge
      * @return requestId Unique identifier for this bridge request
      */
     function bridgeBurn(
         uint256 destChainId,
         bytes32 recipient,
-        uint256 shares
+        uint256 amount
     )
         external
         whenNotPaused
@@ -249,39 +249,38 @@ contract OkuBridge is
         }
 
         // Validate amount
-        if (shares < minBridgeShares) {
-            revert AmountBelowMinimum(shares, minBridgeShares);
+        if (amount < minBridgeAmount) {
+            revert AmountBelowMinimum(amount, minBridgeAmount);
         }
-        if (shares > maxBridgeShares) {
-            revert AmountAboveMaximum(shares, maxBridgeShares);
+        if (amount > maxBridgeAmount) {
+            revert AmountAboveMaximum(amount, maxBridgeAmount);
         }
 
-        // Calculate fee in shares (subtractive model: fee comes out of bridged amount)
-        uint256 feeShares = (shares * bridgeFee) / 10_000;
-        // Net shares the recipient will receive on destination
-        uint256 netShares = shares - feeShares;
+        // Calculate fee in tokens (subtractive model: fee comes out of bridged amount)
+        uint256 feeAmount = (amount * bridgeFee) / 10_000;
+        // Net amount the recipient will receive on destination
+        uint256 netAmount = amount - feeAmount;
 
         // Transfer tokens from caller, then self-burn (Circle model: burn only own tokens)
-        uint256 burnTokenAmount = okuNote.sharesToTokens(shares);
-        IERC20(address(okuNote)).safeTransferFrom(msg.sender, address(this), burnTokenAmount);
-        okuNote.burn(burnTokenAmount);
+        IERC20(address(okuNote)).safeTransferFrom(msg.sender, address(this), amount);
+        okuNote.burn(amount);
 
-        // Mint fee to fee recipient (OkuNote.mint takes token amount)
-        if (feeShares > 0) {
-            okuNote.mint(feeRecipient, okuNote.sharesToTokens(feeShares));
+        // Mint fee to fee recipient
+        if (feeAmount > 0) {
+            okuNote.mint(feeRecipient, feeAmount);
         }
 
         // Get and increment nonce
         uint256 nonce = outboundNonce[destChainId];
         outboundNonce[destChainId] = nonce + 1;
 
-        // Construct request (encodes netShares — what destination will mint)
+        // Construct request (encodes netAmount — what destination will mint)
         BridgeRequest memory request = BridgeRequest({
             sourceChainId: block.chainid,
             destChainId: destChainId,
             sender: msg.sender,
             recipient: recipient,
-            shares: netShares,
+            amount: netAmount,
             nonce: nonce,
             deadline: block.timestamp + bridgeDeadline
         });
@@ -296,14 +295,14 @@ contract OkuBridge is
             recipient,
             block.chainid,
             destChainId,
-            netShares,
+            netAmount,
             nonce,
             request.deadline
         );
     }
 
     /**
-     * @notice Mint shares on destination chain with valid orchestrator signature
+     * @notice Mint tokens on destination chain with valid orchestrator signature
      * @param request Bridge request details
      * @param signature EIP-712 signature from authorized signer
      */
@@ -342,7 +341,7 @@ contract OkuBridge is
                 request.destChainId,
                 request.sender,
                 request.recipient,
-                request.shares,
+                request.amount,
                 request.nonce,
                 request.deadline
             )
@@ -358,12 +357,11 @@ contract OkuBridge is
         address mintTo = address(uint160(uint256(request.recipient)));
         if (mintTo == address(0)) revert ZeroAddress();
 
-        // Convert shares to tokens and mint (OkuNote.mint takes token amount)
-        uint256 tokensToMint = okuNote.sharesToTokens(request.shares);
-        okuNote.mint(mintTo, tokensToMint);
+        // Mint tokens directly (OkuNote is non-rebasing, no share conversion)
+        okuNote.mint(mintTo, request.amount);
 
         // Emit event
-        emit BridgeMint(requestId, request.recipient, request.sourceChainId, request.shares);
+        emit BridgeMint(requestId, request.recipient, request.sourceChainId, request.amount);
     }
 
     // ============ Admin Recovery Functions ============
@@ -380,7 +378,7 @@ contract OkuBridge is
     }
 
     /**
-     * @notice Refund shares for failed bridge request
+     * @notice Refund tokens for failed bridge request
      * @dev Used when destination mint fails and cannot be completed
      * @param request Original bridge request
      */
@@ -403,11 +401,10 @@ contract OkuBridge is
         if (refundedRequests[requestId]) revert AlreadyRefunded(requestId);
         refundedRequests[requestId] = true;
 
-        // Convert shares to tokens and mint back to original sender
-        uint256 tokensToMint = okuNote.sharesToTokens(request.shares);
-        okuNote.mint(request.sender, tokensToMint);
+        // Mint tokens back to original sender (raw amount, no share conversion)
+        okuNote.mint(request.sender, request.amount);
 
-        emit RefundProcessed(requestId, request.sender, request.shares);
+        emit RefundProcessed(requestId, request.sender, request.amount);
     }
 
     // ============ Admin Configuration Functions ============
@@ -465,13 +462,13 @@ contract OkuBridge is
 
     /**
      * @notice Update minimum and maximum bridge limits
-     * @param min New minimum shares
-     * @param max New maximum shares
+     * @param min New minimum token amount
+     * @param max New maximum token amount
      */
     function updateLimits(uint256 min, uint256 max) external onlyRole(BRIDGE_LIMITS_MANAGER) {
         if (min > max) revert InvalidLimits(min, max);
-        minBridgeShares = min;
-        maxBridgeShares = max;
+        minBridgeAmount = min;
+        maxBridgeAmount = max;
         emit LimitsUpdated(min, max);
     }
 

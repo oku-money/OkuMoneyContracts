@@ -25,6 +25,9 @@ import {IOkuNote} from "../interfaces/IOkuNote.sol";
  * @dev NOT an ERC-4626 vault. Custom rebasing token with its own shares/multiplier.
  *      Holds OkuNotes as reserves. Independent yield rate enables revenue extraction
  *      (note rate > USD rate) or forward-facing yield (USD rate > note rate).
+ *
+ *      Wrap/unwrap are price-aware: they use notePrice() and usdMultiplier() to convert
+ *      between note token amounts and OkuUSD amounts at their respective dollar values.
  */
 contract OkuUSD is
     Initializable,
@@ -117,7 +120,7 @@ contract OkuUSD is
 
     /**
      * @notice Computed USD multiplier with continuous yield accrual
-     * @dev Same _rpow pattern as OkuNote.rewardMultiplier()
+     * @dev Same _rpow pattern as OkuNote.notePrice()
      */
     function usdMultiplier() public view returns (uint256) {
         uint256 rate = usdRatePerSecond;
@@ -212,10 +215,13 @@ contract OkuUSD is
         emit Transfer(from, to, (shares * usdMultiplier()) / PRECISION);
     }
 
-    // ============ Wrap / Unwrap ============
+    // ============ Wrap / Unwrap (Price-Aware) ============
 
     /**
-     * @notice Wrap OkuNotes into OkuUSD (dollar-for-dollar, both $1-pegged)
+     * @notice Wrap OkuNotes into OkuUSD (price-aware)
+     * @dev usdMinted = noteAmount × notePrice() / usdMultiplier()
+     *      100 note tokens at notePrice=$1.05, usdMultiplier=1.0 → 105 OkuUSD.
+     *      The note's dollar value is converted to OkuUSD at the current usdMultiplier.
      * @param noteAmount Amount of OkuNote tokens to wrap
      * @param receiver Address to receive OkuUSD
      * @return usdMinted Amount of OkuUSD minted
@@ -224,16 +230,19 @@ contract OkuUSD is
         require(noteAmount > 0, "Amount must be positive");
         require(receiver != address(0), "Zero receiver");
 
-        // Measure actual notes received (OkuNote rounds down in tokensToShares)
+        // Measure actual notes received (handles fee-on-transfer edge cases)
         uint256 balBefore = IERC20(address(okuNote)).balanceOf(address(this));
         IERC20(address(okuNote)).safeTransferFrom(msg.sender, address(this), noteAmount);
         uint256 actualReceived = IERC20(address(okuNote)).balanceOf(address(this)) - balBefore;
 
-        // Dollar-for-dollar based on actual notes received (not requested amount)
-        usdMinted = actualReceived;
+        // Price-aware: convert note token value to OkuUSD amount
+        // usdMinted = actualReceived × notePrice / usdMultiplier
+        uint256 price = okuNote.notePrice();
+        uint256 mult = usdMultiplier();
+        usdMinted = (actualReceived * price) / mult;
 
         // Calculate USD shares to mint (rounds DOWN — favors vault)
-        uint256 sharesToMint = (actualReceived * PRECISION) / usdMultiplier();
+        uint256 sharesToMint = (usdMinted * PRECISION) / mult;
         require(sharesToMint > 0, "Amount too small");
 
         _totalUsdShares += sharesToMint;
@@ -243,7 +252,10 @@ contract OkuUSD is
     }
 
     /**
-     * @notice Unwrap OkuUSD back to OkuNotes (dollar-for-dollar)
+     * @notice Unwrap OkuUSD back to OkuNotes (price-aware)
+     * @dev notesReturned = usdAmount × usdMultiplier() / notePrice()
+     *      105 OkuUSD at usdMultiplier=1.0, notePrice=$1.05 → 100 note tokens.
+     *      Reverts if vault holds insufficient notes.
      * @param usdAmount Amount of OkuUSD to unwrap
      * @param receiver Address to receive OkuNotes
      * @return notesReturned Amount of OkuNote tokens returned
@@ -252,11 +264,13 @@ contract OkuUSD is
         require(usdAmount > 0, "Amount must be positive");
         require(receiver != address(0), "Zero receiver");
 
-        // Dollar-for-dollar
-        notesReturned = usdAmount;
+        // Price-aware: convert OkuUSD amount to note token count
+        // notesReturned = usdAmount × usdMultiplier / notePrice
+        uint256 mult = usdMultiplier();
+        uint256 price = okuNote.notePrice();
+        notesReturned = (usdAmount * mult) / price;
 
         // Calculate USD shares to burn (rounds UP — favors vault)
-        uint256 mult = usdMultiplier();
         uint256 sharesToBurn = (usdAmount * PRECISION + mult - 1) / mult;
         require(_usdShares[msg.sender] >= sharesToBurn, "Insufficient balance");
 
@@ -278,6 +292,9 @@ contract OkuUSD is
 
     /**
      * @notice Deposit notes without minting OkuUSD shares (top up reserves)
+     * @dev Used when USD rate > note rate (vault undercollateralized).
+     *      Since OkuNote is non-rebasing, note tokens are NOT dollar-denominated —
+     *      their value depends on notePrice().
      * @param noteAmount Amount of OkuNote tokens to deposit
      */
     function depositReserves(uint256 noteAmount) external onlyRole(RESERVE_MANAGER) {
@@ -288,6 +305,8 @@ contract OkuUSD is
 
     /**
      * @notice Withdraw surplus notes without burning OkuUSD shares
+     * @dev Used when USD rate < note rate (vault overcollateralized).
+     *      Enforces collateralizationRatio() >= minCollateralRatio AFTER withdrawal.
      * @param noteAmount Amount of OkuNote tokens to withdraw
      */
     function withdrawSurplus(uint256 noteAmount) external onlyRole(RESERVE_MANAGER) {
@@ -310,27 +329,47 @@ contract OkuUSD is
         emit MinCollateralRatioUpdated(oldRatio, newRatio);
     }
 
-    // ============ Collateralization Views ============
+    // ============ Collateralization Views (Price-Aware) ============
 
+    /**
+     * @notice Total note tokens held as reserves
+     */
     function totalNoteReserves() public view returns (uint256) {
         return IERC20(address(okuNote)).balanceOf(address(this));
     }
 
+    /**
+     * @notice Total OkuUSD obligations (in dollar terms)
+     */
     function totalUsdObligations() public view returns (uint256) {
         return totalSupply();
     }
 
+    /**
+     * @notice Price-aware collateralization ratio
+     * @dev collateralizationRatio = (noteBalance × notePrice / PRECISION) × PRECISION / totalSupply
+     *      The numerator converts note token count to dollar value via notePrice().
+     *      The denominator (totalSupply) is already in dollar terms (usdShares × usdMultiplier).
+     */
     function collateralizationRatio() public view returns (uint256) {
         uint256 obligations = totalUsdObligations();
         if (obligations == 0) return type(uint256).max;
-        return (totalNoteReserves() * PRECISION) / obligations;
+        uint256 reservesDollarValue = (totalNoteReserves() * okuNote.notePrice()) / PRECISION;
+        return (reservesDollarValue * PRECISION) / obligations;
     }
 
+    /**
+     * @notice Extractable surplus as note tokens (0 if undercollateralized)
+     * @dev Calculates dollar surplus, then converts back to note tokens via notePrice()
+     */
     function surplus() public view returns (uint256) {
-        uint256 reserves = totalNoteReserves();
+        uint256 price = okuNote.notePrice();
+        uint256 reservesDollarValue = (totalNoteReserves() * price) / PRECISION;
         uint256 obligations = totalUsdObligations();
-        if (reserves > obligations) {
-            return reserves - obligations;
+        if (reservesDollarValue > obligations) {
+            // Convert dollar surplus back to note token count
+            uint256 dollarSurplus = reservesDollarValue - obligations;
+            return (dollarSurplus * PRECISION) / price;
         }
         return 0;
     }

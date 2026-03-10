@@ -40,8 +40,8 @@ contract OkuNoteHandler is Test {
     uint256 public ghostResetCallCount;
     uint256 public ghostResetRevertCount;
 
-    // Monotonic multiplier tracking
-    uint256 public ghostLastMultiplier;
+    // Monotonic notePrice tracking
+    uint256 public ghostLastNotePrice;
 
     constructor(OkuNote _okuNote, address _minter, address _rebaser, address _allowanceManager) {
         okuNote = _okuNote;
@@ -55,7 +55,7 @@ contract OkuNoteHandler is Test {
         _addActor(makeAddr("actor3"));
 
         lastAllowance[minter] = okuNote.minterAllowance(minter);
-        ghostLastMultiplier = okuNote.rewardMultiplier();
+        ghostLastNotePrice = okuNote.notePrice();
     }
 
     function _addActor(address actor) internal {
@@ -139,34 +139,34 @@ contract OkuNoteHandler is Test {
         }
     }
 
-    /// @notice Update reward multiplier (rebase)
-    function rebase(uint256 multiplierIncrease) external {
+    /// @notice Update note price (rebase)
+    function rebase(uint256 priceIncrease) external {
         ghostRebaseCallCount++;
-        uint256 currentMultiplier = okuNote.rewardMultiplier();
+        uint256 currentPrice = okuNote.notePrice();
 
-        // Cap maximum multiplier at 1e24 (1 million x starting value)
-        uint256 maxMultiplier = 1e24;
+        // Cap maximum price at 1e24 (1 million x starting value)
+        uint256 maxPrice = 1e24;
 
-        if (currentMultiplier >= maxMultiplier) {
+        if (currentPrice >= maxPrice) {
             return; // Already at maximum, skip further rebases
         }
 
         // Increase by 0.01% to 5% per rebase
-        uint256 minIncrease = currentMultiplier / 10_000; // 0.01%
-        uint256 maxIncrease = currentMultiplier / 20; // 5%
-        uint256 increase = bound(multiplierIncrease, minIncrease, maxIncrease);
+        uint256 minIncrease = currentPrice / 10_000; // 0.01%
+        uint256 maxIncrease = currentPrice / 20; // 5%
+        uint256 increase = bound(priceIncrease, minIncrease, maxIncrease);
 
-        uint256 newMultiplier = currentMultiplier + increase;
+        uint256 newPrice = currentPrice + increase;
 
         // Ensure we don't exceed the cap
-        if (newMultiplier > maxMultiplier) {
-            newMultiplier = maxMultiplier;
+        if (newPrice > maxPrice) {
+            newPrice = maxPrice;
         }
 
         vm.prank(rebaser);
-        try okuNote.updateRewardMultiplier(newMultiplier) {
+        try okuNote.updateNotePrice(newPrice) {
             ghostLastWasRebase = true;
-            ghostLastMultiplier = newMultiplier;
+            ghostLastNotePrice = newPrice;
         } catch {
             ghostRebaseRevertCount++;
         }

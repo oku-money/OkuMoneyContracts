@@ -199,7 +199,7 @@ describe("Happy Path Testing", () => {
         expect(psmUsdc).to.equal(DEPOSIT_AMOUNT * 4n)
     })
 
-    it("Rebase", async () => {
+    it("NotePrice Update", async () => {
         const aliceAddr = await Alice.getAddress()
         const charlieAddr = await Charlie.getAddress()
         const bobAddr = await Bob.getAddress()
@@ -210,23 +210,26 @@ describe("Happy Path Testing", () => {
         const bobBefore = await okuNote.balanceOf(bobAddr)
         const daveBefore = await okuNote.balanceOf(daveAddr)
 
-        // Get current multiplier
-        const multiplierBefore = await okuNote.rewardMultiplier()
+        // Get current notePrice
+        const priceBefore = await okuNote.notePrice()
 
-        // Admin increases multiplier by 5% (simulating yield accrual)
-        const newMultiplier = multiplierBefore * 105n / 100n
-        await okuNote.connect(Frank).updateRewardMultiplier(newMultiplier)
+        // Admin increases notePrice by 5% (simulating yield accrual)
+        const newPrice = priceBefore * 105n / 100n
+        await okuNote.connect(Frank).updateNotePrice(newPrice)
 
-        // Verify all users' balances increased by 5%
+        // Verify notePrice increased
+        expect(await okuNote.notePrice()).to.equal(newPrice)
+
+        // Balances should be UNCHANGED (non-rebasing)
         const aliceAfter = await okuNote.balanceOf(aliceAddr)
         const charlieAfter = await okuNote.balanceOf(charlieAddr)
         const bobAfter = await okuNote.balanceOf(bobAddr)
         const daveAfter = await okuNote.balanceOf(daveAddr)
 
-        expect(aliceAfter).to.equal(aliceBefore * 105n / 100n)
-        expect(charlieAfter).to.equal(charlieBefore * 105n / 100n)
-        expect(bobAfter).to.equal(bobBefore * 105n / 100n)
-        expect(daveAfter).to.equal(daveBefore * 105n / 100n)
+        expect(aliceAfter).to.equal(aliceBefore)
+        expect(charlieAfter).to.equal(charlieBefore)
+        expect(bobAfter).to.equal(bobBefore)
+        expect(daveAfter).to.equal(daveBefore)
     })
 
     it("Withdraw with insufficient reserves", async () => {

@@ -23,6 +23,10 @@ contract OkuBridgeTest is BaseTest {
     uint256 public orchestratorPk;
     address public feeRecipient;
 
+    // Two-step refund: initiator and confirmer must be different addresses
+    address public refundInitiator;
+    address public refundConfirmer;
+
     // Bridge roles
     bytes32 public constant BRIDGE_SIGNER_MANAGER = keccak256("BRIDGE_SIGNER_MANAGER");
     bytes32 public constant BRIDGE_PAUSER = keccak256("BRIDGE_PAUSER");
@@ -31,7 +35,8 @@ contract OkuBridgeTest is BaseTest {
     bytes32 public constant BRIDGE_NONCE_ADMIN = keccak256("BRIDGE_NONCE_ADMIN");
     bytes32 public constant BRIDGE_CHAIN_MANAGER = keccak256("BRIDGE_CHAIN_MANAGER");
     bytes32 public constant BRIDGE_LIMITS_MANAGER = keccak256("BRIDGE_LIMITS_MANAGER");
-    bytes32 public constant BRIDGE_REFUND_ADMIN = keccak256("BRIDGE_REFUND_ADMIN");
+    bytes32 public constant BRIDGE_REFUND_INITIATOR = keccak256("BRIDGE_REFUND_INITIATOR");
+    bytes32 public constant BRIDGE_REFUND_CONFIRMER = keccak256("BRIDGE_REFUND_CONFIRMER");
 
     // Chain IDs for testing
     uint256 constant OPTIMISM_CHAIN_ID = 10;
@@ -51,6 +56,8 @@ contract OkuBridgeTest is BaseTest {
         orchestratorPk = 0xA11CE;
         orchestratorSigner = vm.addr(orchestratorPk);
         feeRecipient = makeAddr("feeRecipient");
+        refundInitiator = makeAddr("refundInitiator");
+        refundConfirmer = makeAddr("refundConfirmer");
 
         // Deploy OkuBridge
         _deployBridge();
@@ -58,6 +65,10 @@ contract OkuBridgeTest is BaseTest {
         // Grant bridge contract minter role for OkuMoney
         vm.startPrank(admin);
         okuMoney.grantRole(MINTER, address(okuBridge));
+        // Grant two-step refund roles to separate addresses
+        okuBridge.grantRole(BRIDGE_REFUND_INITIATOR, refundInitiator);
+        okuBridge.grantRole(BRIDGE_REFUND_CONFIRMER, refundConfirmer);
+        vm.stopPrank();
         vm.startPrank(allowanceManager);
         okuMoney.configureMinterAllowance(address(okuBridge), MAX_SUPPLY);
         vm.stopPrank();
@@ -140,6 +151,14 @@ contract OkuBridgeTest is BaseTest {
             nonce: nonce,
             deadline: block.timestamp + okuBridge.bridgeDeadline()
         });
+    }
+
+    /// @notice Execute both steps of the two-step refund flow using the dedicated role addresses
+    function _twoStepRefund(OkuBridge.BridgeRequest memory request) internal {
+        vm.prank(refundInitiator);
+        okuBridge.initiateRefund(request);
+        vm.prank(refundConfirmer);
+        okuBridge.confirmRefund(request);
     }
 
     // ============ Unit Tests - bridgeBurn() ============
@@ -737,16 +756,13 @@ contract OkuBridgeTest is BaseTest {
         // Verify user1 balance was burned
         assertEq(okuMoney.balanceOf(user1), 0);
 
-        // Admin refunds the request — must wait for mint window to close
-        bytes memory proof = "";
-
         // Warp past the deadline so the mint window is closed
         vm.warp(request.deadline + 1);
 
         uint256 user1BalanceBefore = okuMoney.balanceOf(user1);
 
-        vm.prank(admin);
-        okuBridge.refundFailedRequest(request, proof);
+        // Two-step refund: initiator proposes, confirmer executes
+        _twoStepRefund(request);
 
         // Verify netAmount returned to original sender (fee is non-refundable)
         assertEq(okuMoney.balanceOf(user1), user1BalanceBefore + netAmount);
@@ -876,9 +892,12 @@ contract OkuBridgeTest is BaseTest {
         // Bridge burn
         _approveBridgeBurn(user1, OPTIMISM_CHAIN_ID, user2, amount);
 
-        // Create request (encodes netAmount, what destination will mint)
+        // Create request (encodes netAmount, what destination will mint).
+        // sourceChainId must be a supported chain — use OPTIMISM_CHAIN_ID to simulate
+        // a cross-chain flow (burned on Optimism, minting here). block.chainid (31337)
+        // is not in supportedChains so would fail the L-10 sourceChainId guard.
         OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({
-            sourceChainId: block.chainid,
+            sourceChainId: OPTIMISM_CHAIN_ID,
             destChainId: block.chainid,
             sender: user1,
             recipient: bytes32(uint256(uint160(user2))),
@@ -974,20 +993,17 @@ contract OkuBridgeTest is BaseTest {
         (, OkuBridge.BridgeRequest memory request) =
             _mintAndBridge(user1, amount, OPTIMISM_CHAIN_ID, user2);
 
-        bytes memory proof = "";
-
         // Warp past the deadline so the mint window is closed
         vm.warp(request.deadline + 1);
 
         // First refund succeeds
-        vm.prank(admin);
-        okuBridge.refundFailedRequest(request, proof);
+        _twoStepRefund(request);
 
-        // Second refund reverts with AlreadyRefunded
+        // Second initiation reverts with AlreadyRefunded
         bytes32 requestId = keccak256(abi.encode(request));
-        vm.prank(admin);
+        vm.prank(refundInitiator);
         vm.expectRevert(abi.encodeWithSelector(OkuBridge.AlreadyRefunded.selector, requestId));
-        okuBridge.refundFailedRequest(request, proof);
+        okuBridge.initiateRefund(request);
     }
 
     function test_BridgeBurn_RevertZeroRecipient() public {
@@ -1178,10 +1194,17 @@ contract OkuBridgeTest is BaseTest {
         // Warp past the deadline so the mint window is closed
         vm.warp(request.deadline + 1);
 
-        vm.prank(admin);
+        // Step 1: initiate — emits RefundInitiated
+        vm.prank(refundInitiator);
+        vm.expectEmit(true, true, false, false);
+        emit OkuBridge.RefundInitiated(requestId, refundInitiator);
+        okuBridge.initiateRefund(request);
+
+        // Step 2: confirm — emits RefundConfirmed
+        vm.prank(refundConfirmer);
         vm.expectEmit(true, true, false, true);
-        emit OkuBridge.RefundProcessed(requestId, user1, request.amount);
-        okuBridge.refundFailedRequest(request, "");
+        emit OkuBridge.RefundConfirmed(requestId, user1, request.amount);
+        okuBridge.confirmRefund(request);
     }
 
     function test_AddSupportedChain_RevertNotAuthorized() public {
@@ -1341,12 +1364,12 @@ contract OkuBridgeTest is BaseTest {
         (, OkuBridge.BridgeRequest memory request) =
             _mintAndBridge(user1, amount, OPTIMISM_CHAIN_ID, user2);
 
-        // Deadline is in the future — refund should revert
+        // Deadline is in the future — initiation should revert
         assertLe(block.timestamp, request.deadline);
 
-        vm.prank(admin);
+        vm.prank(refundInitiator);
         vm.expectRevert(OkuBridge.MintWindowStillOpen.selector);
-        okuBridge.refundFailedRequest(request, "");
+        okuBridge.initiateRefund(request);
     }
 
     function test_RefundFailedRequest_RevertAtExactDeadline() public {
@@ -1358,9 +1381,9 @@ contract OkuBridgeTest is BaseTest {
         // Warp to exactly the deadline — should still revert (condition is block.timestamp <= deadline)
         vm.warp(request.deadline);
 
-        vm.prank(admin);
+        vm.prank(refundInitiator);
         vm.expectRevert(OkuBridge.MintWindowStillOpen.selector);
-        okuBridge.refundFailedRequest(request, "");
+        okuBridge.initiateRefund(request);
     }
 
     function test_RefundFailedRequest_SucceedsAfterDeadline() public {
@@ -1374,10 +1397,43 @@ contract OkuBridgeTest is BaseTest {
 
         uint256 user1BalanceBefore = okuMoney.balanceOf(user1);
 
-        vm.prank(admin);
-        okuBridge.refundFailedRequest(request, "");
+        _twoStepRefund(request);
 
         // Verify refund succeeded — exact amount, no rounding
         assertEq(okuMoney.balanceOf(user1), user1BalanceBefore + request.amount);
+    }
+
+    function test_Refund_RevertInitiatorCannotConfirm() public {
+        uint256 amount = 100e18;
+
+        (, OkuBridge.BridgeRequest memory request) =
+            _mintAndBridge(user1, amount, OPTIMISM_CHAIN_ID, user2);
+
+        vm.warp(request.deadline + 1);
+
+        // Grant refundInitiator also the confirmer role (still same address — should revert)
+        vm.prank(admin);
+        okuBridge.grantRole(BRIDGE_REFUND_CONFIRMER, refundInitiator);
+
+        vm.prank(refundInitiator);
+        okuBridge.initiateRefund(request);
+
+        vm.prank(refundInitiator);
+        vm.expectRevert(OkuBridge.InitiatorCannotConfirm.selector);
+        okuBridge.confirmRefund(request);
+    }
+
+    function test_Refund_RevertConfirmWithoutInitiate() public {
+        uint256 amount = 100e18;
+
+        (, OkuBridge.BridgeRequest memory request) =
+            _mintAndBridge(user1, amount, OPTIMISM_CHAIN_ID, user2);
+
+        vm.warp(request.deadline + 1);
+
+        bytes32 requestId = keccak256(abi.encode(request));
+        vm.prank(refundConfirmer);
+        vm.expectRevert(abi.encodeWithSelector(OkuBridge.RefundNotInitiated.selector, requestId));
+        okuBridge.confirmRefund(request);
     }
 }

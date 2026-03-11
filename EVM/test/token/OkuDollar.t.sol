@@ -1048,7 +1048,7 @@ contract OkuDollarTest is BaseTest {
         usdOku.transferFrom(user1, user2, 50e18);
     }
 
-    function test_Pause_AllowsWrap() public {
+    function test_Pause_BlocksWrap() public {
         vm.prank(vaultPauser);
         usdOku.pause();
 
@@ -1056,24 +1056,22 @@ contract OkuDollarTest is BaseTest {
         _mintOkuMoney(user1, okuMAmount);
         _approveOkuMoney(user1, address(usdOku), okuMAmount);
 
+        // M-4 fix: wrap is now blocked when paused (full freeze)
         vm.prank(user1);
-        uint256 usdMinted = usdOku.wrap(okuMAmount, user1);
-
-        // At notePrice=1e18: 100 notes → 100 OkuDollar
-        assertEq(usdMinted, okuMAmount);
+        vm.expectRevert();
+        usdOku.wrap(okuMAmount, user1);
     }
 
-    function test_Pause_AllowsUnwrap() public {
+    function test_Pause_BlocksUnwrap() public {
         _mintUsdOku(user1, 100e18);
 
         vm.prank(vaultPauser);
         usdOku.pause();
 
+        // M-4 fix: unwrap is now blocked when paused (full freeze)
         vm.prank(user1);
-        uint256 notesBack = usdOku.unwrap(100e18, user1);
-
-        // At notePrice=1e18: 100 OkuDollar → 100 notes
-        assertEq(notesBack, 100e18);
+        vm.expectRevert();
+        usdOku.unwrap(100e18, user1);
     }
 
     function test_Pause_OnlyVaultPauser() public {

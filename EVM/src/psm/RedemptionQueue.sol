@@ -21,6 +21,11 @@ import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
  *
  *      Tokens are transferred into the queue by the PSM before enqueue() is called;
  *      enqueue() is record-only and does not pull tokens from the user.
+ *
+ *      If a queue entry becomes permanently unprocessable (e.g., USDC-blacklisted recipient),
+ *      the QUEUE_RESCUER role can call rescueQueueEntry() to return the OkuMoney to the
+ *      original user or an alternate address and clear the slot. Operators should call
+ *      rescueQueueEntry() on any stuck entries before running processQueue() on that range.
  */
 contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgradeable {
     using SafeERC20 for IERC20;
@@ -31,6 +36,9 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
     bytes32 public constant UPGRADER = keccak256("UPGRADER");
     bytes32 public constant PSM = keccak256("PSM");
+
+    /// @notice Role that can rescue stuck queue entries by returning OkuMoney to an alternate address
+    bytes32 public constant QUEUE_RESCUER = keccak256("QUEUE_RESCUER");
 
     struct QueueEntry {
         address user;
@@ -51,6 +59,14 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     event RedemptionQueued(address indexed user, uint256 okuMAmount, uint256 position);
     event RedemptionProcessed(address indexed user, uint256 okuMAmount, uint256 usdcAmount);
 
+    /// @notice Emitted when QUEUE_RESCUER returns OkuMoney for a stuck entry
+    event RedemptionRescued(
+        uint256 indexed index,
+        address indexed originalUser,
+        address indexed recipient,
+        uint256 okuMAmount
+    );
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -63,6 +79,10 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(UPGRADER, admin);
+        _grantRole(QUEUE_RESCUER, admin);
+        // NOTE: PSM role is NOT granted here — must be granted post-deployment to the
+        // LitePSM proxy address. This is intentional to avoid a circular dependency
+        // at deployment time.
     }
 
     // ============ Queue Management ============
@@ -91,7 +111,10 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
      * @param usdcToken USDC token address
      * @param - OkuMoney token address (unused, kept for interface compat)
      * @dev Price-aware: USDC output = okuMAmount × okuMPrice() / PRECISION (scaled to 6 decimals).
-     *      Allows operator to skip blocked entries (e.g., USDC-blacklisted users).
+     *      okuMPrice() is cached once before the loop — all entries in a batch are converted at
+     *      the same price, which is consistent within a single block and saves gas.
+     *      Allows operator to skip blocked entries (e.g., USDC-blacklisted users) by calling
+     *      rescueQueueEntry() first, then processing the cleared range.
      *      Entries are deleted after processing. queueHead advances past consecutive
      *      deleted entries at the front of the queue.
      */
@@ -110,13 +133,15 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         IERC20 usdc = IERC20(usdcToken);
         uint256 usdcBalance = usdc.balanceOf(msg.sender);
 
+        // Cache price once — consistent within a block, avoids repeated external calls
+        uint256 cachedPrice = okuMoney.okuMPrice();
+
         for (uint256 i = startIndex; i < endIndex && usdcBalance > 0; i++) {
             QueueEntry memory entry = queue[i];
-            if (entry.user == address(0)) continue; // Already processed/deleted
+            if (entry.user == address(0)) continue; // Already processed/deleted or rescued
 
-            // Price-aware: dollarValue = okuMAmount × okuMPrice / PRECISION
-            uint256 price = okuMoney.okuMPrice();
-            uint256 dollarValue18 = (entry.okuMAmount * price) / PRECISION;
+            // Price-aware: dollarValue = okuMAmount × cachedPrice / PRECISION
+            uint256 dollarValue18 = (entry.okuMAmount * cachedPrice) / PRECISION;
 
             // Convert to USDC (6 decimals)
             uint256 usdcAmount = dollarValue18 / DECIMAL_MULTIPLIER;
@@ -144,6 +169,45 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     }
 
     /**
+     * @notice Return OkuMoney for a stuck queue entry without burning it
+     * @dev Used when an entry is permanently unprocessable (e.g., recipient is USDC-blacklisted).
+     *      Transfers the queued OkuMoney back to the original user or an alternate address,
+     *      then deletes the entry and advances queueHead if possible.
+     *
+     *      Operator flow: identify stuck entry → rescueQueueEntry(index, recipient) → processQueue
+     *
+     * @param index Queue index to rescue
+     * @param alternateRecipient Address to receive the OkuMoney (can be the original user or another)
+     */
+    function rescueQueueEntry(
+        uint256 index,
+        address alternateRecipient
+    )
+        external
+        onlyRole(QUEUE_RESCUER)
+    {
+        require(index >= queueHead && index < queueTail, "Invalid index");
+        require(alternateRecipient != address(0), "Zero recipient");
+
+        QueueEntry memory entry = queue[index];
+        require(entry.user != address(0), "Entry already cleared");
+
+        // Transfer OkuMoney back — do not burn, the user is reclaiming their tokens
+        IERC20(address(okuMoney)).safeTransfer(alternateRecipient, entry.okuMAmount);
+
+        totalQueuedOkuM -= entry.okuMAmount;
+
+        emit RedemptionRescued(index, entry.user, alternateRecipient, entry.okuMAmount);
+
+        delete queue[index];
+
+        // Advance head past any contiguous cleared entries at the front
+        while (queueHead < queueTail && queue[queueHead].user == address(0)) {
+            queueHead++;
+        }
+    }
+
+    /**
      * @notice Get total USDC owed across all pending queue entries (price-aware)
      * @return O(1) calculation via running totalQueuedOkuM counter and okuMPrice()
      */
@@ -153,7 +217,8 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     }
 
     /**
-     * @notice Get queue length
+     * @notice Get queue length (upper bound — includes any rescued/processed slots not yet past head)
+     * @dev This is an approximation. Use off-chain iteration for an exact live-entry count.
      */
     function queueLength() external view returns (uint256) {
         return queueTail - queueHead;

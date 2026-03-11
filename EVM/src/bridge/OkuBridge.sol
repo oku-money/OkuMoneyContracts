@@ -34,7 +34,7 @@ import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
  * - Sequential nonces per destination on source chain
  * - Request ID tracking on destination to prevent replay
  * - Fee collected in tokens on source chain (subtractive model)
- * - Admin recovery mechanisms for edge cases
+ * - Two-step refund (BRIDGE_REFUND_INITIATOR + BRIDGE_REFUND_CONFIRMER) prevents single-key double-mint
  */
 contract OkuBridge is
     Initializable,
@@ -80,6 +80,10 @@ contract OkuBridge is
     /// @notice Configurable bridge deadline for requests
     uint256 public bridgeDeadline;
 
+    /// @notice Pending refund proposals (requestId => initiator address)
+    /// @dev Set by BRIDGE_REFUND_INITIATOR; cleared and acted on by BRIDGE_REFUND_CONFIRMER
+    mapping(bytes32 => address) public pendingRefundInitiator;
+
     // ============ Role Constants ============
 
     bytes32 public constant BRIDGE_SIGNER_MANAGER = keccak256("BRIDGE_SIGNER_MANAGER");
@@ -89,16 +93,21 @@ contract OkuBridge is
     bytes32 public constant BRIDGE_NONCE_ADMIN = keccak256("BRIDGE_NONCE_ADMIN");
     bytes32 public constant BRIDGE_CHAIN_MANAGER = keccak256("BRIDGE_CHAIN_MANAGER");
     bytes32 public constant BRIDGE_LIMITS_MANAGER = keccak256("BRIDGE_LIMITS_MANAGER");
-    bytes32 public constant BRIDGE_REFUND_ADMIN = keccak256("BRIDGE_REFUND_ADMIN");
     bytes32 public constant BRIDGE_UPGRADER = keccak256("BRIDGE_UPGRADER");
+    bytes32 public constant DUST_SWEEPER = keccak256("DUST_SWEEPER");
+
+    /// @notice First step of two-step refund: proposes a refund after independent verification
+    bytes32 public constant BRIDGE_REFUND_INITIATOR = keccak256("BRIDGE_REFUND_INITIATOR");
+
+    /// @notice Second step of two-step refund: confirms and executes after independent verification
+    /// @dev Must be held by a different key than BRIDGE_REFUND_INITIATOR
+    bytes32 public constant BRIDGE_REFUND_CONFIRMER = keccak256("BRIDGE_REFUND_CONFIRMER");
 
     // ============ EIP-712 Constants ============
 
     bytes32 public constant BRIDGE_REQUEST_TYPEHASH = keccak256(
         "BridgeRequest(uint256 sourceChainId,uint256 destChainId,address sender,bytes32 recipient,uint256 amount,uint256 nonce,uint256 deadline)"
     );
-
-    bytes32 public constant DUST_SWEEPER = keccak256("DUST_SWEEPER");
 
     // ============ Structs ============
 
@@ -140,9 +149,19 @@ contract OkuBridge is
     event ChainRemoved(uint256 indexed chainId);
     event LimitsUpdated(uint256 minAmount, uint256 maxAmount);
     event NonceSkipped(uint256 indexed destChainId, uint256 skippedNonce);
-    event RefundProcessed(bytes32 indexed requestId, address indexed sender, uint256 amount);
     event DustSwept(address indexed recipient, uint256 amount);
     event DeadlineUpdated(uint256 oldDeadline, uint256 newDeadline);
+
+    /// @notice Emitted when BRIDGE_REFUND_INITIATOR proposes a refund
+    event RefundInitiated(bytes32 indexed requestId, address indexed initiator);
+
+    /// @notice Emitted when BRIDGE_REFUND_CONFIRMER executes a proposed refund
+    event RefundConfirmed(bytes32 indexed requestId, address indexed sender, uint256 amount);
+
+    /// @notice Emitted when a pending refund proposal is cancelled by the initiator or an admin
+    event RefundCancelled(
+        bytes32 indexed requestId, address indexed initiator, address indexed cancelledBy
+    );
 
     // ============ Errors ============
 
@@ -158,6 +177,8 @@ contract OkuBridge is
     error InvalidLimits(uint256 min, uint256 max);
     error AlreadyRefunded(bytes32 requestId);
     error MintWindowStillOpen();
+    error RefundNotInitiated(bytes32 requestId);
+    error InitiatorCannotConfirm();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -209,12 +230,13 @@ contract OkuBridge is
         _grantRole(BRIDGE_CHAIN_MANAGER, _admin);
         _grantRole(BRIDGE_LIMITS_MANAGER, _admin);
         _grantRole(BRIDGE_NONCE_ADMIN, _admin);
-        _grantRole(BRIDGE_REFUND_ADMIN, _admin);
+        _grantRole(BRIDGE_REFUND_INITIATOR, _admin);
+        _grantRole(BRIDGE_REFUND_CONFIRMER, _admin);
         _grantRole(BRIDGE_FEE_MANAGER, _admin);
         _grantRole(BRIDGE_UPGRADER, _admin);
         _grantRole(DUST_SWEEPER, _admin);
 
-        // Configure common chains
+        // Configure common chains (self-chain excluded by belt-and-suspenders check in bridgeBurn)
         supportedChains[1] = true; // Ethereum
         supportedChains[10] = true; // Optimism
         supportedChains[8453] = true; // Base
@@ -242,6 +264,9 @@ contract OkuBridge is
     {
         // Validate recipient
         if (recipient == bytes32(0)) revert ZeroAddress();
+
+        // Prevent bridging to the same chain (belt-and-suspenders with addSupportedChain guard)
+        if (destChainId == block.chainid) revert UnsupportedChain(destChainId);
 
         // Validate destination chain
         if (!supportedChains[destChainId]) {
@@ -319,6 +344,11 @@ contract OkuBridge is
             revert WrongChain(request.destChainId, block.chainid);
         }
 
+        // Validate that the source chain is a known supported chain
+        if (!supportedChains[request.sourceChainId]) {
+            revert UnsupportedChain(request.sourceChainId);
+        }
+
         // Validate deadline
         if (block.timestamp > request.deadline) {
             revert SignatureExpired();
@@ -364,6 +394,104 @@ contract OkuBridge is
         emit BridgeMint(requestId, request.recipient, request.sourceChainId, request.amount);
     }
 
+    // ============ Two-Step Refund Functions ============
+
+    /**
+     * @notice Step 1: Propose a refund for a failed bridge request
+     * @dev Called by BRIDGE_REFUND_INITIATOR after independently verifying the destination
+     *      mint did not occur. Records the proposal on-chain; a separate key must confirm.
+     * @param request Original bridge request
+     */
+    function initiateRefund(BridgeRequest calldata request)
+        external
+        onlyRole(BRIDGE_REFUND_INITIATOR)
+    {
+        // Refund only valid after mint window has closed
+        if (block.timestamp <= request.deadline) revert MintWindowStillOpen();
+
+        bytes32 requestId = keccak256(abi.encode(request));
+
+        // Cannot refund a request that was already minted on destination
+        if (processedRequests[requestId]) revert AlreadyProcessed(requestId);
+
+        // Cannot re-initiate if already refunded
+        if (refundedRequests[requestId]) revert AlreadyRefunded(requestId);
+
+        // Record the initiator — confirmRefund will verify msg.sender differs
+        pendingRefundInitiator[requestId] = msg.sender;
+
+        emit RefundInitiated(requestId, msg.sender);
+    }
+
+    /**
+     * @notice Step 2: Confirm and execute a proposed refund
+     * @dev Called by BRIDGE_REFUND_CONFIRMER after independently verifying the destination
+     *      mint did not occur. Caller must be a different address than the initiator.
+     *
+     *      Check ordering is deliberate:
+     *      1. processedRequests  — primary double-mint guard; checked first regardless of proposal state
+     *      2. refundedRequests   — replay protection on the refund itself
+     *      3. pending proposal   — dual-role defense-in-depth on top of the above
+     *      4. key separation     — confirmer != initiator address
+     * @param request Original bridge request
+     */
+    function confirmRefund(BridgeRequest calldata request)
+        external
+        onlyRole(BRIDGE_REFUND_CONFIRMER)
+    {
+        bytes32 requestId = keccak256(abi.encode(request));
+
+        // Primary double-mint guard: reject if bridgeMint already executed on destination.
+        // This is the most important check — evaluated first so it cannot be bypassed by
+        // proposal state or role manipulation.
+        if (processedRequests[requestId]) revert AlreadyProcessed(requestId);
+
+        // Replay protection: cannot refund the same request twice
+        if (refundedRequests[requestId]) revert AlreadyRefunded(requestId);
+
+        // Require a pending proposal recorded by the initiator step
+        address initiator = pendingRefundInitiator[requestId];
+        if (initiator == address(0)) revert RefundNotInitiated(requestId);
+
+        // Enforce key separation: confirmer must be a different address than the initiator.
+        // Prevents a single compromised key from completing the full refund flow unilaterally.
+        if (msg.sender == initiator) revert InitiatorCannotConfirm();
+
+        // Mark refunded and clear pending proposal atomically
+        refundedRequests[requestId] = true;
+        delete pendingRefundInitiator[requestId];
+
+        // Mint tokens back to original sender (raw amount, no share conversion)
+        okuMoney.mint(request.sender, request.amount);
+
+        emit RefundConfirmed(requestId, request.sender, request.amount);
+    }
+
+    /**
+     * @notice Cancel a pending refund proposal
+     * @dev Allows the original initiator or any DEFAULT_ADMIN_ROLE holder to withdraw a stale
+     *      or erroneous proposal before it is confirmed. This is a safety valve — if the
+     *      initiator made an error (e.g., the destination mint actually succeeded after the
+     *      proposal was recorded), the proposal can be cancelled before the confirmer acts.
+     *      Only pending proposals can be cancelled; already-confirmed refunds are immutable.
+     * @param request Original bridge request whose pending proposal should be cancelled
+     */
+    function cancelRefund(BridgeRequest calldata request) external {
+        bytes32 requestId = keccak256(abi.encode(request));
+
+        address initiator = pendingRefundInitiator[requestId];
+        if (initiator == address(0)) revert RefundNotInitiated(requestId);
+
+        // Only the original initiator or an admin can cancel
+        bool isInitiator = msg.sender == initiator;
+        bool isAdmin = hasRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        require(isInitiator || isAdmin, "Not initiator or admin");
+
+        delete pendingRefundInitiator[requestId];
+
+        emit RefundCancelled(requestId, initiator, msg.sender);
+    }
+
     // ============ Admin Recovery Functions ============
 
     /**
@@ -375,36 +503,6 @@ contract OkuBridge is
         uint256 skippedNonce = outboundNonce[destChainId];
         outboundNonce[destChainId] = skippedNonce + 1;
         emit NonceSkipped(destChainId, skippedNonce);
-    }
-
-    /**
-     * @notice Refund tokens for failed bridge request
-     * @dev Used when destination mint fails and cannot be completed
-     * @param request Original bridge request
-     */
-    function refundFailedRequest(
-        BridgeRequest calldata request,
-        bytes calldata /* proof */
-    )
-        external
-        onlyRole(BRIDGE_REFUND_ADMIN)
-    {
-        // Deadline-based safety: refund only after mint window has closed.
-        // bridgeMint requires block.timestamp <= request.deadline, so once the
-        // deadline passes, the mint window is closed and refund is safe.
-        if (block.timestamp <= request.deadline) revert MintWindowStillOpen();
-
-        // Calculate request ID
-        bytes32 requestId = keccak256(abi.encode(request));
-
-        // Prevent refund replay
-        if (refundedRequests[requestId]) revert AlreadyRefunded(requestId);
-        refundedRequests[requestId] = true;
-
-        // Mint tokens back to original sender (raw amount, no share conversion)
-        okuMoney.mint(request.sender, request.amount);
-
-        emit RefundProcessed(requestId, request.sender, request.amount);
     }
 
     // ============ Admin Configuration Functions ============
@@ -447,6 +545,8 @@ contract OkuBridge is
      * @param chainId Chain ID to add
      */
     function addSupportedChain(uint256 chainId) external onlyRole(BRIDGE_CHAIN_MANAGER) {
+        // Prevent adding the current chain as a destination (no same-chain bridges)
+        if (chainId == block.chainid) revert UnsupportedChain(chainId);
         supportedChains[chainId] = true;
         emit ChainAdded(chainId);
     }
@@ -537,5 +637,5 @@ contract OkuBridge is
 
     // ============ Storage Gap ============
 
-    uint256[39] private __gap;
+    uint256[38] private __gap;
 }

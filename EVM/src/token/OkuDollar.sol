@@ -183,6 +183,9 @@ contract OkuDollar is
     function transfer(address to, uint256 amount) public override whenNotPaused returns (bool) {
         uint256 shares = (amount * PRECISION) / usdMultiplier();
         _transferUsdShares(msg.sender, to, shares);
+        // Emit the caller-specified amount — not the share-reconverted value, which can
+        // diverge by 1 wei due to integer truncation and confuse ERC-20 indexers.
+        emit Transfer(msg.sender, to, amount);
         return true;
     }
 
@@ -199,6 +202,8 @@ contract OkuDollar is
         _spendAllowance(from, msg.sender, amount);
         uint256 shares = (amount * PRECISION) / usdMultiplier();
         _transferUsdShares(from, to, shares);
+        // Emit the caller-specified amount — not the share-reconverted value.
+        emit Transfer(from, to, amount);
         return true;
     }
 
@@ -211,8 +216,8 @@ contract OkuDollar is
 
         _usdShares[from] = fromBalance - shares;
         _usdShares[to] += shares;
-
-        emit Transfer(from, to, (shares * usdMultiplier()) / PRECISION);
+        // NOTE: Transfer event is emitted by the calling public function (transfer / transferFrom)
+        // with the original token amount. Do not emit here to avoid double-emitting.
     }
 
     // ============ Wrap / Unwrap (Price-Aware) ============
@@ -226,7 +231,14 @@ contract OkuDollar is
      * @param receiver Address to receive OkuDollar
      * @return usdMinted Amount of OkuDollar minted
      */
-    function wrap(uint256 okuMAmount, address receiver) external returns (uint256 usdMinted) {
+    function wrap(
+        uint256 okuMAmount,
+        address receiver
+    )
+        external
+        whenNotPaused
+        returns (uint256 usdMinted)
+    {
         require(okuMAmount > 0, "Amount must be positive");
         require(receiver != address(0), "Zero receiver");
 
@@ -260,7 +272,14 @@ contract OkuDollar is
      * @param receiver Address to receive OkuMoney
      * @return okuMReturned Amount of OkuMoney tokens returned
      */
-    function unwrap(uint256 usdAmount, address receiver) external returns (uint256 okuMReturned) {
+    function unwrap(
+        uint256 usdAmount,
+        address receiver
+    )
+        external
+        whenNotPaused
+        returns (uint256 okuMReturned)
+    {
         require(usdAmount > 0, "Amount must be positive");
         require(receiver != address(0), "Zero receiver");
 

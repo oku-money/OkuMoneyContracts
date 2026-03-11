@@ -304,8 +304,13 @@ describe("OkuBridge E2E", function () {
       await ethers.provider.send("evm_increaseTime", [3601]);
       await ethers.provider.send("evm_mine", []);
 
-      // Admin refunds (simulating destination failure)
-      await okuBridge.connect(admin).refundFailedRequest(request, "0x");
+      // Two-step refund: admin initiates, user2 (granted confirmer role) confirms.
+      // The confirmer must be a different address than the initiator.
+      const BRIDGE_REFUND_CONFIRMER = ethers.keccak256(ethers.toUtf8Bytes("BRIDGE_REFUND_CONFIRMER"));
+      await okuBridge.connect(admin).grantRole(BRIDGE_REFUND_CONFIRMER, user2.address);
+
+      await okuBridge.connect(admin).initiateRefund(request);
+      await okuBridge.connect(user2).confirmRefund(request);
 
       const user1BalanceAfter = await okuMoney.balanceOf(user1.address);
       expect(user1BalanceAfter - user1BalanceBefore).to.equal(amount);
@@ -329,12 +334,17 @@ describe("OkuBridge E2E", function () {
       await ethers.provider.send("evm_increaseTime", [3601]);
       await ethers.provider.send("evm_mine", []);
 
-      // First refund succeeds
-      await okuBridge.connect(admin).refundFailedRequest(request, "0x");
+      // Grant confirmer role to a separate address
+      const BRIDGE_REFUND_CONFIRMER = ethers.keccak256(ethers.toUtf8Bytes("BRIDGE_REFUND_CONFIRMER"));
+      await okuBridge.connect(admin).grantRole(BRIDGE_REFUND_CONFIRMER, user2.address);
 
-      // Second refund should revert with AlreadyRefunded
+      // First refund succeeds
+      await okuBridge.connect(admin).initiateRefund(request);
+      await okuBridge.connect(user2).confirmRefund(request);
+
+      // Second initiation should revert with AlreadyRefunded
       await expect(
-        okuBridge.connect(admin).refundFailedRequest(request, "0x")
+        okuBridge.connect(admin).initiateRefund(request)
       ).to.be.revertedWithCustomError(okuBridge, "AlreadyRefunded");
     });
   });

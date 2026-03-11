@@ -23,6 +23,9 @@ interface IOkuBridgeNative {
     )
         external
         returns (bytes32 requestId);
+
+    /// @notice Bridge fee in basis points (e.g. 10 = 0.1%)
+    function bridgeFee() external view returns (uint256);
 }
 
 interface IBridgeAdapter {
@@ -96,10 +99,15 @@ contract OkuBridgeRouter is
     );
 
     /// @notice Emitted when a bridge is initiated via the native OkuBridge path
+    /// @param inputAmount  Tokens sent by the user (pre-fee OkuM, or OkuDollar for wrapped path)
+    /// @param bridgedAmount Post-fee OkuM amount that will be minted on the destination
+    /// @param feeAmount    Fee deducted by OkuBridge (bridgedAmount = inputOkuM - feeAmount)
     event NativeBridgeInitiated(
         address indexed user,
         bytes32 indexed requestId,
-        uint256 amount,
+        uint256 inputAmount,
+        uint256 bridgedAmount,
+        uint256 feeAmount,
         uint256 destinationChain,
         bytes32 recipient
     );
@@ -176,8 +184,19 @@ contract OkuBridgeRouter is
         // Pull OkuDollar from user
         IERC20(address(usdOku)).safeTransferFrom(msg.sender, address(this), usdAmount);
 
-        // Unwrap OkuDollar → get OkuMoney (price-aware, reverts if vault undercollateralized)
+        // Router holds usdOku shares from safeTransferFrom above — unwrap burns from msg.sender (this)
         uint256 okuMAmount = usdOku.unwrap(usdAmount, address(this));
+
+        // Compute fee locally for event accuracy (OkuBridge deducts this before minting on dest).
+        // Uses the same formula as OkuBridge.bridgeBurn: feeAmount = amount * bridgeFee / 10_000.
+        // TOCTOU note: bridgeFee is read here, then bridgeBurn executes in the same tx. If a fee
+        // update were to land between these two operations (impossible within a single tx, and fee
+        // changes are admin operations that don't race with user bridges in practice), the emitted
+        // feeAmount would not match the actual deduction. Accepted: the emitted values are
+        // best-effort for indexers; the on-chain BridgeBurn event from OkuBridge is authoritative.
+        uint256 feeBps = okuBridge.bridgeFee();
+        uint256 feeAmount = (okuMAmount * feeBps) / 10_000;
+        uint256 bridgedAmount = okuMAmount - feeAmount;
 
         // Approve OkuBridge to pull OkuMoney (bridgeBurn uses safeTransferFrom)
         IERC20(address(okuMoney)).approve(address(okuBridge), okuMAmount);
@@ -189,7 +208,9 @@ contract OkuBridgeRouter is
         // Revoke any remaining approval
         IERC20(address(okuMoney)).approve(address(okuBridge), 0);
 
-        emit NativeBridgeInitiated(msg.sender, requestId, usdAmount, destinationChain, recipient);
+        emit NativeBridgeInitiated(
+            msg.sender, requestId, usdAmount, bridgedAmount, feeAmount, destinationChain, recipient
+        );
     }
 
     /**
@@ -214,6 +235,11 @@ contract OkuBridgeRouter is
 
         IERC20(address(okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
 
+        // Compute fee locally for event accuracy. See bridge_usdOku for TOCTOU note.
+        uint256 feeBps = okuBridge.bridgeFee();
+        uint256 feeAmount = (okuMAmount * feeBps) / 10_000;
+        uint256 bridgedAmount = okuMAmount - feeAmount;
+
         // Approve OkuBridge to pull OkuMoney (bridgeBurn uses safeTransferFrom)
         IERC20(address(okuMoney)).approve(address(okuBridge), okuMAmount);
 
@@ -224,7 +250,9 @@ contract OkuBridgeRouter is
         // Revoke any remaining approval
         IERC20(address(okuMoney)).approve(address(okuBridge), 0);
 
-        emit NativeBridgeInitiated(msg.sender, requestId, okuMAmount, destinationChain, recipient);
+        emit NativeBridgeInitiated(
+            msg.sender, requestId, okuMAmount, bridgedAmount, feeAmount, destinationChain, recipient
+        );
     }
 
     // ============ Adapter Bridge Path ============

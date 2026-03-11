@@ -66,10 +66,9 @@ contract OkuMoney is
     // Blacklist
     mapping(address => bool) public isBlacklisted;
 
-    // Blacklist-exempt infrastructure addresses (bridge, router)
-    address public blacklistExempt1;
-    address public blacklistExempt2;
-    bool private _blacklistExemptInitialized;
+    // Storage gap accounts for three slots previously occupied by blacklist-exempt variables
+    // (blacklistExempt1, blacklistExempt2, _blacklistExemptInitialized) that have been removed.
+    // Gap is [40] instead of [37] to maintain the same total storage footprint across upgrades.
 
     // Events
     event OkuMPriceUpdated(uint256 oldPrice, uint256 newPrice);
@@ -297,6 +296,7 @@ contract OkuMoney is
      *      The PSM handles USDC <-> OkuM conversion using okuMPrice().
      */
     function mint(address to, uint256 amount) external onlyRole(MINTER) whenNotPaused {
+        require(amount > 0, "Amount too small");
         require(!isBlacklisted[to], "Recipient blacklisted");
         require(totalSupply() + amount <= maxSupply, "Exceeds supply cap");
         require(minterAllowance[msg.sender] >= amount, "Exceeds minter allowance");
@@ -305,7 +305,6 @@ contract OkuMoney is
             minterAllowance[msg.sender] -= amount;
         }
 
-        require(amount > 0, "Amount too small");
         _mint(to, amount);
     }
 
@@ -335,38 +334,15 @@ contract OkuMoney is
     // ============ Supply Cap Management ============
 
     function setMaxSupply(uint256 newMaxSupply) external onlyRole(CAP_MANAGER) {
+        require(newMaxSupply >= totalSupply(), "Below current supply");
         uint256 oldMaxSupply = maxSupply;
         maxSupply = newMaxSupply;
         emit MaxSupplyUpdated(oldMaxSupply, newMaxSupply);
     }
 
-    // ============ Blacklist-Exempt Infrastructure ============
-
-    /**
-     * @notice One-time setter for blacklist-exempt infrastructure addresses (bridge, router)
-     * @dev Uses CREATE2 deterministic addresses. Cannot be called twice.
-     */
-    function initializeBlacklistExempt(
-        address bridge,
-        address router
-    )
-        external
-        onlyRole(DEFAULT_ADMIN_ROLE)
-    {
-        require(!_blacklistExemptInitialized, "Already initialized");
-        require(bridge != address(0) && router != address(0), "Zero address");
-        blacklistExempt1 = bridge;
-        blacklistExempt2 = router;
-        _blacklistExemptInitialized = true;
-    }
-
     // ============ Blacklist (Works While Paused) ============
 
     function blacklist(address account) external onlyRole(BLACKLISTER) {
-        require(
-            account != blacklistExempt1 && account != blacklistExempt2,
-            "Account is blacklist-exempt"
-        );
         isBlacklisted[account] = true;
         emit Blacklisted(account);
     }
@@ -392,5 +368,7 @@ contract OkuMoney is
 
     // ============ Storage Gap ============
 
-    uint256[37] private __gap;
+    // [40] = original [37] + 3 slots reclaimed from removed blacklist-exempt variables
+    // (blacklistExempt1, blacklistExempt2, _blacklistExemptInitialized)
+    uint256[40] private __gap;
 }

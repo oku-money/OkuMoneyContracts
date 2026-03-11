@@ -718,13 +718,16 @@ contract OkuMoneyTest is BaseTest {
     function test_SetMaxSupply_DoesNotAffectExistingSupply() public {
         _mintOkuMoney(user1, 100e18);
 
-        // Lower cap below existing supply
+        // Cannot lower cap below existing supply (M-3 fix: floor guard)
         vm.prank(capManager);
+        vm.expectRevert("Below current supply");
         okuMoney.setMaxSupply(50e18);
 
-        // Existing tokens are not burned
+        // Existing tokens are not burned — supply unchanged after revert
         assertEq(okuMoney.balanceOf(user1), 100e18);
         assertEq(okuMoney.totalSupply(), 100e18);
+        // maxSupply also unchanged
+        assertEq(okuMoney.maxSupply(), MAX_SUPPLY);
     }
 
     function test_SetMaxSupply_EmitsEvent() public {

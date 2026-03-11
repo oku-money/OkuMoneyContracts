@@ -68,7 +68,9 @@ contract OkuBridgeRouterTest is BaseTest {
     event NativeBridgeInitiated(
         address indexed user,
         bytes32 indexed requestId,
-        uint256 amount,
+        uint256 inputAmount,
+        uint256 bridgedAmount,
+        uint256 feeAmount,
         uint256 destinationChain,
         bytes32 recipient
     );
@@ -309,12 +311,23 @@ contract OkuBridgeRouterTest is BaseTest {
         uint256 okuMAmount = 1000e18;
         _mintOkuMoney(user1, okuMAmount);
 
+        uint256 feeBps = okuBridgeContract.bridgeFee();
+        uint256 feeAmount = (okuMAmount * feeBps) / 10_000;
+        uint256 bridgedAmount = okuMAmount - feeAmount;
+
         vm.startPrank(user1);
         okuMoney.approve(address(bridgeRouter), okuMAmount);
 
-        vm.expectEmit(true, false, false, false, address(bridgeRouter));
+        // Only check indexed `user` field (requestId is not known until bridgeBurn executes)
+        vm.expectEmit(true, false, false, true, address(bridgeRouter));
         emit NativeBridgeInitiated(
-            user1, bytes32(0), okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
+            user1,
+            bytes32(0), // requestId — not checked (indexed=false for second param)
+            okuMAmount,
+            bridgedAmount,
+            feeAmount,
+            ARBITRUM_CHAIN_ID,
+            bytes32(uint256(uint160(user2)))
         );
 
         bridgeRouter.bridge_OkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
@@ -437,12 +450,26 @@ contract OkuBridgeRouterTest is BaseTest {
         _mintUsdOku(user1, okuMAmount);
         uint256 usdBalance = usdOku.balanceOf(user1);
 
+        // At initial notePrice=1e18 and usdMultiplier=1e18, unwrap is 1:1
+        // okuMFromUnwrap = usdBalance * usdMultiplier / okuMPrice = usdBalance
+        uint256 okuMFromUnwrap = usdBalance; // 1:1 at base prices
+        uint256 feeBps = okuBridgeContract.bridgeFee();
+        uint256 feeAmount = (okuMFromUnwrap * feeBps) / 10_000;
+        uint256 bridgedAmount = okuMFromUnwrap - feeAmount;
+
         vm.startPrank(user1);
         usdOku.approve(address(bridgeRouter), usdBalance);
 
-        vm.expectEmit(true, false, false, false, address(bridgeRouter));
+        // Only check indexed `user` field (requestId is not known until bridgeBurn executes)
+        vm.expectEmit(true, false, false, true, address(bridgeRouter));
         emit NativeBridgeInitiated(
-            user1, bytes32(0), usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
+            user1,
+            bytes32(0), // requestId — not checked (indexed=false for second param)
+            usdBalance,
+            bridgedAmount,
+            feeAmount,
+            ARBITRUM_CHAIN_ID,
+            bytes32(uint256(uint160(user2)))
         );
 
         bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));

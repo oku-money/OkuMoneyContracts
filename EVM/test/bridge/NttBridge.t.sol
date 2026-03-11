@@ -47,11 +47,7 @@ contract NttBridgeTest is BaseTest {
 
     // Events
     event BridgeInitiated(
-        address indexed sender,
-        uint256 amount,
-        uint16 wormholeChainId,
-        bytes32 recipient,
-        uint64 sequence
+        uint256 amount, uint16 wormholeChainId, bytes32 recipient, uint64 sequence
     );
     event TransferInitiated(
         address indexed sender,
@@ -148,10 +144,8 @@ contract NttBridgeTest is BaseTest {
 
         // Bridge call from router (only router can call bridge)
         vm.prank(address(bridgeRouter));
-        vm.expectEmit(true, false, false, true, address(nttAdapter));
-        emit BridgeInitiated(
-            address(bridgeRouter), amount, WORMHOLE_ARBITRUM, _addressToBytes32(user2), 0
-        );
+        vm.expectEmit(false, false, false, true, address(nttAdapter));
+        emit BridgeInitiated(amount, WORMHOLE_ARBITRUM, _addressToBytes32(user2), 0);
         nttAdapter.bridge(address(okuMoney), amount, ARBITRUM_CHAIN_ID, user2);
 
         // Verify transfer recorded in mock

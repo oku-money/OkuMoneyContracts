@@ -156,7 +156,7 @@ IBridgeAdapter shims     ← third-party protocol adapters (NTT, CCIP, etc.)
 | Who burns on source | OkuBridge (called by router) | OkuBridgeRouter |
 | Destination mint | OkuBridge.bridgeMint() + EIP-712 | Protocol-native |
 | Fee model | Oku-controlled (bps in tokens) | Protocol-native |
-| Recovery | skipNonce, refundFailedRequest | Protocol-native |
+| Recovery | skipNonce, initiateRefund + confirmRefund | Protocol-native |
 | Trust model | Oku orchestrator key | Wormhole Guardians / CCIP DON |
 
 ### Router Functions
@@ -170,6 +170,15 @@ bridgeWrappedVia(amount, adapter, destChain, recipient) — unwrap usdOku → ad
 ```
 
 All four bridge functions are guarded with `nonReentrant` to prevent reentrant calls through external adapter contracts.
+
+### Two-Step Refund
+
+Failed bridge requests (where the destination mint did not occur) are recovered via a two-step refund process requiring two separate keys:
+
+1. `initiateRefund(request)` — called by `BRIDGE_REFUND_INITIATOR` after the request deadline has passed and after independently verifying no destination mint occurred. Records the proposal on-chain.
+2. `confirmRefund(request)` — called by `BRIDGE_REFUND_CONFIRMER` (must be a **different address** than the initiator) after its own independent verification. Executes the mint back to the original sender.
+
+This 2-of-2 design prevents a single compromised key from minting a fraudulent refund for a request that was already minted on the destination chain. The confirmer cannot be the same address as the initiator — enforced at execution time via `InitiatorCannotConfirm` error.
 
 **DeFi & bridge compatibility**: Since OkuMoney is a standard non-rebasing ERC-20, third-party bridges (LayerZero OFT, Wormhole NTT, CCIP) can handle it natively without share conversion.
 
@@ -245,7 +254,7 @@ bytes32 public constant ALLOWANCE_MANAGER = keccak256("ALLOWANCE_MANAGER");
 
 **Critical**: `blacklist()` must NOT use `whenNotPaused` modifier.
 
-**Blacklist-exempt addresses**: Bridge and router addresses can be marked exempt from blacklisting via `initializeBlacklistExempt(bridge, router)` (one-time, `DEFAULT_ADMIN_ROLE`). Prevents accidental blacklisting of infrastructure contracts that would break bridging. Storage: `blacklistExempt1`, `blacklistExempt2`, `_blacklistExemptInitialized`.
+**Blacklist and infrastructure addresses**: There is no contract-level blacklist exemption for bridge or router addresses. Operators must ensure infrastructure contract addresses are never passed to `blacklist()`. This is an operational constraint, not a contract-level enforcement.
 
 ---
 
@@ -280,7 +289,7 @@ uint256 public minCollateralRatio;          // e.g. 95e16 = 95%, enforced on wit
 - `totalSupply()` returns `_totalUsdShares * usdMultiplier() / PRECISION`
 - Transfers operate on USD shares internally, emit token amounts for ERC-20 compatibility
 - Parent ERC20Upgradeable's `_balances` mapping is fully suppressed — all balance state is in `_usdShares`
-- Pause blocks peer-to-peer OkuDollar transfers only; wrap and unwrap always available
+- Pause is a **full freeze**: peer-to-peer OkuDollar transfers, `wrap`, and `unwrap` are all blocked while paused. As a consequence, `redeem_usdOku` in LitePSM is also blocked (it calls `unwrap` internally).
 
 ### Wrap/Unwrap (Price-Aware)
 
@@ -422,6 +431,17 @@ PSM has MINTER role on OkuMoney. For `mint_usdOku`, the PSM mints OkuM to self, 
 
 The redemption queue operates on OkuMoney tokens. Since OkuMoney is non-rebasing, queued tokens do not grow in balance — but they appreciate in price via `okuMPrice()`. When the queue processes, the user receives USDC based on `okuMAmount × okuMPrice()` at processing time. The economic result is the same (user earns yield while queued) but through price appreciation rather than balance growth.
 
+### Stuck Queue Entries
+
+If a queue entry becomes permanently unprocessable (e.g., the recipient's address is USDC-blacklisted after entering the queue), the `QUEUE_RESCUER` role can call `rescueQueueEntry(index, alternateRecipient)` to return the OkuMoney to the original user or an admin-specified alternate address.
+
+**Operator flow for blocked batches:**
+1. Identify the stuck entry index via `getQueueEntry(index)`
+2. Call `rescueQueueEntry(index, alternateRecipient)` — transfers OkuM back (not burned), deletes the slot, advances `queueHead` if applicable
+3. Call `processQueue(startIndex, endIndex, ...)` on the remaining live entries as normal
+
+`queueLength()` returns an upper-bound approximation (`queueTail - queueHead`) and may briefly over-count if entries between `queueHead` and the current processing range have been rescued but `queueHead` has not yet advanced past them.
+
 ---
 
 ## Proxy Deployment
@@ -500,6 +520,7 @@ forge test --match-contract SupplyInvariants
 - Repeated wrap/unwrap cycles: no share inflation (rUSDY H-01 mitigation)
 - Collateralization ratio accuracy across various rate combinations
 - ERC-20 compliance with share-based math
+- Pause full-freeze: wrap, unwrap, and transfer all revert while paused
 - Role enforcement
 
 *LitePSM:*

@@ -37,11 +37,7 @@ contract NttAdapter is IBridgeAdapter, Ownable {
 
     // Events
     event BridgeInitiated(
-        address indexed sender,
-        uint256 amount,
-        uint16 wormholeChainId,
-        bytes32 recipient,
-        uint64 sequence
+        uint256 amount, uint16 wormholeChainId, bytes32 recipient, uint64 sequence
     );
     event ChainIdConfigured(uint256 evmChainId, uint16 wormholeChainId);
 
@@ -108,7 +104,7 @@ contract NttAdapter is IBridgeAdapter, Ownable {
         uint64 sequence =
             NTT_MANAGER.transfer{value: msg.value}(amount, wormholeDestChain, recipientBytes32);
 
-        emit BridgeInitiated(msg.sender, amount, wormholeDestChain, recipientBytes32, sequence);
+        emit BridgeInitiated(amount, wormholeDestChain, recipientBytes32, sequence);
     }
 
     /**

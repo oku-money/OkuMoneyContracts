@@ -25,7 +25,9 @@ contract OkuMoneyFuzzTest is BaseTest {
         okuMoney.burn(amount);
 
         // Should return to original state
-        assertEq(okuMoney.totalSupply(), totalSupplyBefore, "Total supply should return to original");
+        assertEq(
+            okuMoney.totalSupply(), totalSupplyBefore, "Total supply should return to original"
+        );
         assertEq(okuMoney.balanceOf(minter), 0, "Minter balance should be zero");
     }
 
@@ -137,7 +139,9 @@ contract OkuMoneyFuzzTest is BaseTest {
             okuMoney.balanceOf(user1), balanceBefore, "balanceOf unchanged after notePrice update"
         );
         assertEq(
-            okuMoney.totalSupply(), totalSupplyBefore, "totalSupply unchanged after notePrice update"
+            okuMoney.totalSupply(),
+            totalSupplyBefore,
+            "totalSupply unchanged after notePrice update"
         );
     }
 

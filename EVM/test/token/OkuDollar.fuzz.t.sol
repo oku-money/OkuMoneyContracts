@@ -818,7 +818,9 @@ contract OkuDollarFuzzTest is BaseTest {
         vm.prank(user1);
         uint256 usdAtHighPrice = usdOku.wrap(okuMAmount, user1);
 
-        assertGt(usdAtHighPrice, usdAtParity, "Wrap must give more OkuDollar when notePrice is higher");
+        assertGt(
+            usdAtHighPrice, usdAtParity, "Wrap must give more OkuDollar when notePrice is higher"
+        );
     }
 
     /// @notice Unwrap returns fewer note tokens when notePrice > PRECISION

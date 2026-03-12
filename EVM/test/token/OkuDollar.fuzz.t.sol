@@ -36,7 +36,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1));
 
         vm.startPrank(user1);
-        uint256 usdMinted = usdOku.wrap(okuMAmount, user1);
+        uint256 usdMinted = usdOku.wrap(okuMAmount, user1, 0);
         uint256 notesBack = usdOku.unwrap(usdMinted, user1);
         vm.stopPrank();
 
@@ -81,7 +81,7 @@ contract OkuDollarFuzzTest is BaseTest {
         uint256 price = okuMoney.okuMPrice(); // Still at PRECISION
 
         vm.startPrank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 usdBalance = usdOku.balanceOf(user1);
         if (usdBalance == 0) {
@@ -128,7 +128,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMoney.updateOkuMPrice(notePrice);
 
         vm.startPrank(user1);
-        uint256 usdMinted = usdOku.wrap(okuMAmount, user1);
+        uint256 usdMinted = usdOku.wrap(okuMAmount, user1, 0);
 
         if (usdMinted == 0) {
             vm.stopPrank();
@@ -173,7 +173,7 @@ contract OkuDollarFuzzTest is BaseTest {
         assertLe(impliedDollarValue, notesDollarValue, "Wrap rounding must favor vault");
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         assertEq(usdOku.usdSharesOf(user1), expectedShares, "Shares minted match expected");
     }
@@ -202,7 +202,7 @@ contract OkuDollarFuzzTest is BaseTest {
         );
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         assertEq(usdOku.usdSharesOf(user1), expectedShares, "Shares match at elevated multiplier");
     }
@@ -231,7 +231,7 @@ contract OkuDollarFuzzTest is BaseTest {
         );
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         assertEq(usdOku.usdSharesOf(user1), expectedShares, "Shares match at elevated note price");
     }
@@ -244,7 +244,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1));
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 usdBalance = usdOku.balanceOf(user1);
         if (usdBalance == 0) return;
@@ -272,7 +272,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1));
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 ratio = usdOku.collateralizationRatio();
         assertGe(ratio, PRECISION, "Collateral ratio must be >= 100% at parity");
@@ -291,7 +291,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1) / 2);
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 currentNotePrice = okuMoney.okuMPrice();
         newNotePrice =
@@ -317,7 +317,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1) / 2);
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 currentUsdMult = usdOku.usdMultiplier();
         usdMultiplier =
@@ -339,7 +339,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1));
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 reserves = usdOku.totalOkuMReserves();
         uint256 obligations = usdOku.totalUsdObligations();
@@ -375,7 +375,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e18, okuMoney.balanceOf(user1) / 2);
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 currentNotePrice = okuMoney.okuMPrice();
         newNotePrice = bound(newNotePrice, currentNotePrice, currentNotePrice * 5);
@@ -406,7 +406,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1) / 2);
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 surplusVal = usdOku.surplus();
 
@@ -434,7 +434,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         // Wrap to create OkuDollar supply
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         // Deposit extra reserves (overcollateralize)
         _mintOkuMoney(reserveManager, extraNotes);
@@ -467,7 +467,7 @@ contract OkuDollarFuzzTest is BaseTest {
         extraNotes = bound(extraNotes, 1e6, okuMAmount / 10);
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         // Small extra deposit
         _mintOkuMoney(reserveManager, extraNotes);
@@ -494,7 +494,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e18, okuMoney.balanceOf(user1) / 4);
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 currentNotePrice = okuMoney.okuMPrice();
         newNotePrice =
@@ -522,7 +522,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1));
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 shares = usdOku.usdSharesOf(user1);
         uint256 mult = usdOku.usdMultiplier();
@@ -538,7 +538,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1));
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 currentMult = usdOku.usdMultiplier();
         newMultiplier = bound(newMultiplier, currentMult, currentMult * 10);
@@ -565,7 +565,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1));
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 balanceBefore = usdOku.balanceOf(user1);
         uint256 sharesBefore = usdOku.usdSharesOf(user1);
@@ -588,10 +588,10 @@ contract OkuDollarFuzzTest is BaseTest {
         amount2 = bound(amount2, 1e6, okuMoney.balanceOf(user2) / 2);
 
         vm.prank(user1);
-        usdOku.wrap(amount1, user1);
+        usdOku.wrap(amount1, user1, 0);
 
         vm.prank(user2);
-        usdOku.wrap(amount2, user2);
+        usdOku.wrap(amount2, user2, 0);
 
         uint256 totalShares = usdOku.totalUsdShares();
         uint256 mult = usdOku.usdMultiplier();
@@ -609,7 +609,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1));
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 usdBalance = usdOku.balanceOf(user1);
         transferAmount = bound(transferAmount, 1, usdBalance);
@@ -629,7 +629,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1));
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 usdBalance = usdOku.balanceOf(user1);
         transferAmount = bound(transferAmount, 1, usdBalance);
@@ -659,7 +659,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         // First wrap
         vm.startPrank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 initialShares = usdOku.usdSharesOf(user1);
 
@@ -672,7 +672,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
             // Re-approve note for vault
             okuMoney.approve(address(usdOku), notesBack);
-            usdOku.wrap(notesBack, user1);
+            usdOku.wrap(notesBack, user1, 0);
         }
         vm.stopPrank();
 
@@ -688,7 +688,7 @@ contract OkuDollarFuzzTest is BaseTest {
         cycles = uint8(bound(cycles, 2, 10));
 
         vm.startPrank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 initialSupply = usdOku.totalSupply();
 
@@ -700,7 +700,7 @@ contract OkuDollarFuzzTest is BaseTest {
             if (notesBack == 0) break;
 
             okuMoney.approve(address(usdOku), notesBack);
-            usdOku.wrap(notesBack, user1);
+            usdOku.wrap(notesBack, user1, 0);
         }
         vm.stopPrank();
 
@@ -724,7 +724,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMoney.updateOkuMPrice(notePrice);
 
         vm.startPrank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 initialShares = usdOku.usdSharesOf(user1);
 
@@ -736,7 +736,7 @@ contract OkuDollarFuzzTest is BaseTest {
             if (notesBack == 0) break;
 
             okuMoney.approve(address(usdOku), notesBack);
-            usdOku.wrap(notesBack, user1);
+            usdOku.wrap(notesBack, user1, 0);
         }
         vm.stopPrank();
 
@@ -762,7 +762,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         // Create OkuDollar supply
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 sharesBefore = usdOku.totalUsdShares();
         uint256 ratioBefore = usdOku.collateralizationRatio();
@@ -791,7 +791,7 @@ contract OkuDollarFuzzTest is BaseTest {
         depositAmount = bound(depositAmount, 1e6, okuMoney.balanceOf(user1) / 4);
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 reservesBefore = usdOku.totalOkuMReserves();
 
@@ -826,7 +826,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         // Wrap at current price to get baseline
         vm.startPrank(user1);
-        uint256 usdAtParity = usdOku.wrap(okuMAmount, user1);
+        uint256 usdAtParity = usdOku.wrap(okuMAmount, user1, 0);
 
         // Unwrap to reset (use balanceOf to avoid ceil-vs-floor share mismatch)
         uint256 usdBalance = usdOku.balanceOf(user1);
@@ -839,7 +839,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         // Wrap same note amount at higher price
         vm.prank(user1);
-        uint256 usdAtHighPrice = usdOku.wrap(okuMAmount, user1);
+        uint256 usdAtHighPrice = usdOku.wrap(okuMAmount, user1, 0);
 
         assertGt(
             usdAtHighPrice, usdAtParity, "Wrap must give more OkuDollar when notePrice is higher"
@@ -859,7 +859,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         // Wrap at parity to establish baseline
         vm.prank(user1);
-        uint256 usdMinted = usdOku.wrap(okuMAmount, user1);
+        uint256 usdMinted = usdOku.wrap(okuMAmount, user1, 0);
 
         // Increase note price (vault now overcollateralized)
         uint256 currentNotePrice = okuMoney.okuMPrice();
@@ -912,7 +912,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1) / 2);
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 vaultBalanceBefore = okuMoney.balanceOf(address(usdOku));
 

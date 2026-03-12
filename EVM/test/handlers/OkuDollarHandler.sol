@@ -94,7 +94,7 @@ contract OkuDollarHandler is Test {
 
         vm.startPrank(actor);
         IERC20(address(okuMoney)).approve(address(usdOku), amount);
-        try usdOku.wrap(amount, actor) {
+        try usdOku.wrap(amount, actor, 0) {
             ghostTotalWrapped += amount;
         } catch {
             ghostWrapRevertCount++;

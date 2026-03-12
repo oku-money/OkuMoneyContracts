@@ -15,16 +15,21 @@ import {
 import {
     ERC20PermitUpgradeable
 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
+import {Roles} from "../lib/Roles.sol";
+import {Constants} from "../lib/Constants.sol";
+import {MathLib} from "../lib/MathLib.sol";
 
 /**
  * @title OkuMoney
  * @notice Non-rebasing base token backed by US T-Bills with rear-facing yield
  * @dev Standard ERC-20 balances (static). Yield is expressed through price appreciation
- *      tracked by an internal `okuMPrice()` view function using `_rpow` continuous accrual.
+ *      tracked by an internal `okuMPrice()` view function using `MathLib.rpow` continuous accrual.
  *      DeFi and bridge compatible out of the box — no share conversion needed.
  *
  *      Key distinction: balanceOf() returns raw token count (standard ERC-20).
  *      okuMPrice() is a separate view function for pricing — used by PSM and vault.
+ *
+ *      Storage: Uses ERC-7201 namespaced storage pattern for upgrade safety.
  */
 contract OkuMoney is
     Initializable,
@@ -34,42 +39,53 @@ contract OkuMoney is
     PausableUpgradeable,
     UUPSUpgradeable
 {
-    // Granular RBAC roles (all prefixed with OKUM_ for consistency)
-    bytes32 public constant OKUM_UPGRADER = keccak256("OKUM_UPGRADER");
-    bytes32 public constant OKUM_PAUSER = keccak256("OKUM_PAUSER");
-    bytes32 public constant OKUM_UNPAUSER = keccak256("OKUM_UNPAUSER");
-    bytes32 public constant OKUM_MINTER = keccak256("OKUM_MINTER");
-    bytes32 public constant OKUM_REBASER = keccak256("OKUM_REBASER");
-    bytes32 public constant OKUM_BLACKLISTER = keccak256("OKUM_BLACKLISTER");
-    bytes32 public constant OKUM_UNBLACKLISTER = keccak256("OKUM_UNBLACKLISTER");
-    bytes32 public constant OKUM_CAP_MANAGER = keccak256("OKUM_CAP_MANAGER");
-    bytes32 public constant OKUM_ALLOWANCE_MANAGER = keccak256("OKUM_ALLOWANCE_MANAGER");
+    // ============ ERC-7201 Namespaced Storage ============
 
-    uint256 public constant PRECISION = 1e18;
-    // Max rate: ~3700% APY safety cap (well beyond any T-Bill rate)
-    uint256 public constant MAX_RATE = PRECISION + 1e11;
+    /// @custom:storage-location erc7201:okumoney.storage.OkuMoney
+    struct OkuMoneyStorage {
+        // Price accrual mechanism (continuous)
+        uint256 basePrice; // last snapshot of price (starts at 1e18 = $1.00)
+        uint256 ratePerSecond; // compound rate per second (1e18 = no yield)
+        uint256 lastAccrualTime; // timestamp of last basePrice snapshot
+        uint256 rateEnd; // when current rate expires (0 = no expiry)
+        uint256 pendingRatePerSecond; // next rate, activates at rateEnd
+        // Minter allowance system (Circle pattern)
+        mapping(address => uint256) minterAllowance;
+        // Supply cap in token units
+        uint256 maxSupply;
+        // Blacklist
+        mapping(address => bool) isBlacklisted;
+    }
 
-    // Price accrual mechanism (continuous)
-    uint256 internal _basePrice; // last snapshot of price (starts at 1e18 = $1.00)
-    uint256 public ratePerSecond; // compound rate per second (1e18 = no yield)
-    uint256 public lastAccrualTime; // timestamp of last _basePrice snapshot
-    uint256 public rateEnd; // when current rate expires (0 = no expiry)
-    uint256 public pendingRatePerSecond; // next rate, activates at rateEnd
+    // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuMoney")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant OKUMONEY_STORAGE_LOCATION =
+        0x7b4f5e3a1c8d9f0a2b3e4c5d6a7f8e9d0c1b2a3e4f5d6c7b8a9e0f1d2c3b4a00;
 
-    // Minter allowance system (Circle pattern)
-    mapping(address => uint256) public minterAllowance;
+    function _getOkuMoneyStorage() private pure returns (OkuMoneyStorage storage $) {
+        assembly {
+            $.slot := OKUMONEY_STORAGE_LOCATION
+        }
+    }
 
-    // Supply cap in token units
-    uint256 public maxSupply;
+    // ============ Role Constants (from shared library) ============
 
-    // Blacklist
-    mapping(address => bool) public isBlacklisted;
+    bytes32 public constant OKUM_UPGRADER = Roles.OKUM_UPGRADER;
+    bytes32 public constant OKUM_PAUSER = Roles.OKUM_PAUSER;
+    bytes32 public constant OKUM_UNPAUSER = Roles.OKUM_UNPAUSER;
+    bytes32 public constant OKUM_MINTER = Roles.OKUM_MINTER;
+    bytes32 public constant OKUM_REBASER = Roles.OKUM_REBASER;
+    bytes32 public constant OKUM_BLACKLISTER = Roles.OKUM_BLACKLISTER;
+    bytes32 public constant OKUM_UNBLACKLISTER = Roles.OKUM_UNBLACKLISTER;
+    bytes32 public constant OKUM_CAP_MANAGER = Roles.OKUM_CAP_MANAGER;
+    bytes32 public constant OKUM_ALLOWANCE_MANAGER = Roles.OKUM_ALLOWANCE_MANAGER;
 
-    // Storage gap accounts for three slots previously occupied by blacklist-exempt variables
-    // (blacklistExempt1, blacklistExempt2, _blacklistExemptInitialized) that have been removed.
-    // Gap is [40] instead of [37] to maintain the same total storage footprint across upgrades.
+    // ============ Constants (from shared library) ============
 
-    // Events
+    uint256 public constant PRECISION = Constants.PRECISION;
+    uint256 public constant MAX_RATE = Constants.MAX_RATE;
+
+    // ============ Events ============
+
     event OkuMPriceUpdated(uint256 oldPrice, uint256 newPrice);
     event YieldRateUpdated(uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotPrice);
     event NextYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
@@ -80,7 +96,8 @@ contract OkuMoney is
     event Blacklisted(address indexed account);
     event Unblacklisted(address indexed account);
 
-    // Custom errors
+    // ============ Custom Errors ============
+
     error ZeroAddress();
     error InvalidRate();
     error RateTooHigh();
@@ -116,15 +133,46 @@ contract OkuMoney is
         __AccessControl_init();
         __Pausable_init();
 
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        $.basePrice = PRECISION;
+        $.ratePerSecond = PRECISION;
+        $.lastAccrualTime = block.timestamp;
+        $.pendingRatePerSecond = PRECISION;
+        $.maxSupply = initialMaxSupply;
+
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(OKUM_UPGRADER, admin);
         _grantRole(OKUM_PAUSER, admin);
+    }
 
-        _basePrice = PRECISION;
-        ratePerSecond = PRECISION;
-        lastAccrualTime = block.timestamp;
-        pendingRatePerSecond = PRECISION;
-        maxSupply = initialMaxSupply;
+    // ============ Storage Accessor Views ============
+
+    function ratePerSecond() public view returns (uint256) {
+        return _getOkuMoneyStorage().ratePerSecond;
+    }
+
+    function lastAccrualTime() public view returns (uint256) {
+        return _getOkuMoneyStorage().lastAccrualTime;
+    }
+
+    function rateEnd() public view returns (uint256) {
+        return _getOkuMoneyStorage().rateEnd;
+    }
+
+    function pendingRatePerSecond() public view returns (uint256) {
+        return _getOkuMoneyStorage().pendingRatePerSecond;
+    }
+
+    function minterAllowance(address minter_) public view returns (uint256) {
+        return _getOkuMoneyStorage().minterAllowance[minter_];
+    }
+
+    function maxSupply() public view returns (uint256) {
+        return _getOkuMoneyStorage().maxSupply;
+    }
+
+    function isBlacklisted(address account) public view returns (bool) {
+        return _getOkuMoneyStorage().isBlacklisted[account];
     }
 
     // ============ Price Accrual Logic ============
@@ -139,48 +187,51 @@ contract OkuMoney is
      *      tracked separately for use by the PSM and vault.
      */
     function okuMPrice() public view returns (uint256) {
-        uint256 rate = ratePerSecond;
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        uint256 rate = $.ratePerSecond;
+
         if (rate <= PRECISION) {
             // No yield accrual — check if pending rate has activated
-            if (rateEnd != 0 && block.timestamp > rateEnd) {
-                uint256 pendingRate = pendingRatePerSecond;
+            if ($.rateEnd != 0 && block.timestamp > $.rateEnd) {
+                uint256 pendingRate = $.pendingRatePerSecond;
                 if (pendingRate > PRECISION) {
-                    uint256 elapsedPending = block.timestamp - rateEnd;
-                    return (_basePrice * _rpow(pendingRate, elapsedPending, PRECISION)) / PRECISION;
+                    uint256 elapsedPending = block.timestamp - $.rateEnd;
+                    return ($.basePrice * MathLib.rpow(pendingRate, elapsedPending, PRECISION))
+                        / PRECISION;
                 }
             }
-            return _basePrice;
+            return $.basePrice;
         }
 
-        uint256 base = _basePrice;
+        uint256 base = $.basePrice;
 
-        if (rateEnd != 0 && block.timestamp > rateEnd) {
+        if ($.rateEnd != 0 && block.timestamp > $.rateEnd) {
             // Current rate expired — accrue current rate up to rateEnd, then pending rate after
-            uint256 elapsedCurrent = rateEnd - lastAccrualTime;
+            uint256 elapsedCurrent = $.rateEnd - $.lastAccrualTime;
             if (elapsedCurrent > 0) {
-                base = (base * _rpow(rate, elapsedCurrent, PRECISION)) / PRECISION;
+                base = (base * MathLib.rpow(rate, elapsedCurrent, PRECISION)) / PRECISION;
             }
             // Apply pending rate for remaining time
-            uint256 pendingRate = pendingRatePerSecond;
+            uint256 pendingRate = $.pendingRatePerSecond;
             if (pendingRate > PRECISION) {
-                uint256 elapsedPending = block.timestamp - rateEnd;
+                uint256 elapsedPending = block.timestamp - $.rateEnd;
                 if (elapsedPending > 0) {
-                    base = (base * _rpow(pendingRate, elapsedPending, PRECISION)) / PRECISION;
+                    base = (base * MathLib.rpow(pendingRate, elapsedPending, PRECISION)) / PRECISION;
                 }
             }
             return base;
         }
 
-        uint256 elapsed = block.timestamp - lastAccrualTime;
+        uint256 elapsed = block.timestamp - $.lastAccrualTime;
         if (elapsed == 0) return base;
-        return (base * _rpow(rate, elapsed, PRECISION)) / PRECISION;
+        return (base * MathLib.rpow(rate, elapsed, PRECISION)) / PRECISION;
     }
 
     /**
      * @notice Get the base price (last snapshot, before accrual)
      */
     function basePrice() public view returns (uint256) {
-        return _basePrice;
+        return _getOkuMoneyStorage().basePrice;
     }
 
     /**
@@ -199,15 +250,17 @@ contract OkuMoney is
         if (newRatePerSecond > MAX_RATE) revert RateTooHigh();
         if (endTimestamp != 0 && endTimestamp <= block.timestamp) revert EndTimestampInPast();
 
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+
         // Snapshot current state
-        _basePrice = okuMPrice();
-        lastAccrualTime = block.timestamp;
+        $.basePrice = okuMPrice();
+        $.lastAccrualTime = block.timestamp;
 
-        ratePerSecond = newRatePerSecond;
-        rateEnd = endTimestamp;
-        pendingRatePerSecond = PRECISION;
+        $.ratePerSecond = newRatePerSecond;
+        $.rateEnd = endTimestamp;
+        $.pendingRatePerSecond = PRECISION;
 
-        emit YieldRateUpdated(newRatePerSecond, endTimestamp, _basePrice);
+        emit YieldRateUpdated(newRatePerSecond, endTimestamp, $.basePrice);
     }
 
     /**
@@ -217,11 +270,13 @@ contract OkuMoney is
     function setNextYieldRate(uint256 newRatePerSecond) external onlyRole(OKUM_REBASER) {
         if (newRatePerSecond < PRECISION) revert InvalidRate();
         if (newRatePerSecond > MAX_RATE) revert RateTooHigh();
-        if (rateEnd == 0) revert NoRateEndSet();
 
-        pendingRatePerSecond = newRatePerSecond;
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        if ($.rateEnd == 0) revert NoRateEndSet();
 
-        emit NextYieldRateSet(newRatePerSecond, rateEnd);
+        $.pendingRatePerSecond = newRatePerSecond;
+
+        emit NextYieldRateSet(newRatePerSecond, $.rateEnd);
     }
 
     /**
@@ -231,51 +286,15 @@ contract OkuMoney is
     function updateOkuMPrice(uint256 newPrice) external onlyRole(OKUM_REBASER) {
         uint256 currentPrice = okuMPrice();
         if (newPrice < currentPrice) revert PriceCannotDecrease();
-        _basePrice = newPrice;
-        ratePerSecond = PRECISION;
-        rateEnd = 0;
-        pendingRatePerSecond = PRECISION;
-        lastAccrualTime = block.timestamp;
+
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        $.basePrice = newPrice;
+        $.ratePerSecond = PRECISION;
+        $.rateEnd = 0;
+        $.pendingRatePerSecond = PRECISION;
+        $.lastAccrualTime = block.timestamp;
+
         emit OkuMPriceUpdated(currentPrice, newPrice);
-    }
-
-    // ============ Exponentiation by Squaring (MakerDAO DSS) ============
-
-    /**
-     * @notice Raise x to the power of n, modulo base b (exponentiation by squaring)
-     * @dev Copied from MakerDAO's jug.sol / pot.sol — battle-tested since 2017
-     */
-    function _rpow(uint256 x, uint256 n, uint256 b) internal pure returns (uint256 z) {
-        assembly {
-            switch x
-            case 0 {
-                switch n
-                case 0 { z := b }
-                default { z := 0 }
-            }
-            default {
-                switch mod(n, 2)
-                case 0 { z := b }
-                default { z := x }
-                let half := div(b, 2)
-                for { n := div(n, 2) } n { n := div(n, 2) } {
-                    let xx := mul(x, x)
-                    if iszero(eq(div(xx, x), x)) { revert(0, 0) }
-                    let xxRound := add(xx, half)
-                    if lt(xxRound, xx) { revert(0, 0) }
-                    x := div(xxRound, b)
-                    if mod(n, 2) {
-                        let zx := mul(z, x)
-                        if and(iszero(iszero(x)), iszero(eq(div(zx, x), z))) {
-                            revert(0, 0)
-                        }
-                        let zxRound := add(zx, half)
-                        if lt(zxRound, zx) { revert(0, 0) }
-                        z := div(zxRound, b)
-                    }
-                }
-            }
-        }
     }
 
     // ============ ERC20Permit Override (Blacklist Check) ============
@@ -283,6 +302,7 @@ contract OkuMoney is
     /**
      * @dev Override permit to check blacklist status of owner and spender
      *      Prevents blacklisted users from pre-signing permits before being blacklisted
+     *      Note: Intentionally does NOT check pause state — approvals are allowed while paused
      */
     function permit(
         address owner,
@@ -297,8 +317,9 @@ contract OkuMoney is
         virtual
         override
     {
-        if (isBlacklisted[owner]) revert SenderBlacklisted();
-        if (isBlacklisted[spender]) revert RecipientBlacklisted();
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        if ($.isBlacklisted[owner]) revert SenderBlacklisted();
+        if ($.isBlacklisted[spender]) revert RecipientBlacklisted();
         super.permit(owner, spender, value, deadline, v, r, s);
     }
 
@@ -311,12 +332,14 @@ contract OkuMoney is
      *      Transfer: blocked when paused, blocked if either party is blacklisted.
      */
     function _update(address from, address to, uint256 amount) internal override {
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+
         // Blacklist checks (skip for mint/burn zero-address side)
         if (from != address(0)) {
-            if (isBlacklisted[from]) revert SenderBlacklisted();
+            if ($.isBlacklisted[from]) revert SenderBlacklisted();
         }
         if (to != address(0)) {
-            if (isBlacklisted[to]) revert RecipientBlacklisted();
+            if ($.isBlacklisted[to]) revert RecipientBlacklisted();
         }
 
         // Pause check: block peer-to-peer transfers when paused.
@@ -336,13 +359,14 @@ contract OkuMoney is
      *      The PSM handles USDC <-> OkuM conversion using okuMPrice().
      */
     function mint(address to, uint256 amount) external onlyRole(OKUM_MINTER) whenNotPaused {
-        // Note: amount > 0 check removed per L-5 - let users waste gas if they want
-        if (isBlacklisted[to]) revert RecipientBlacklisted();
-        if (totalSupply() + amount > maxSupply) revert ExceedsSupplyCap();
-        if (minterAllowance[msg.sender] < amount) revert ExceedsAllowance();
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+
+        if ($.isBlacklisted[to]) revert RecipientBlacklisted();
+        if (totalSupply() + amount > $.maxSupply) revert ExceedsSupplyCap();
+        if ($.minterAllowance[msg.sender] < amount) revert ExceedsAllowance();
 
         unchecked {
-            minterAllowance[msg.sender] -= amount;
+            $.minterAllowance[msg.sender] -= amount;
         }
 
         _mint(to, amount);
@@ -353,7 +377,8 @@ contract OkuMoney is
      * @dev No whenNotPaused — burn works while paused.
      */
     function burn(uint256 amount) external onlyRole(OKUM_MINTER) {
-        if (isBlacklisted[msg.sender]) revert SenderBlacklisted();
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        if ($.isBlacklisted[msg.sender]) revert SenderBlacklisted();
         _burn(msg.sender, amount);
     }
 
@@ -366,8 +391,9 @@ contract OkuMoney is
         external
         onlyRole(OKUM_ALLOWANCE_MANAGER)
     {
-        uint256 oldAllowance = minterAllowance[minter_];
-        minterAllowance[minter_] = allowance;
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        uint256 oldAllowance = $.minterAllowance[minter_];
+        $.minterAllowance[minter_] = allowance;
         emit MinterAllowanceUpdated(minter_, oldAllowance, allowance);
     }
 
@@ -375,22 +401,25 @@ contract OkuMoney is
 
     function setMaxSupply(uint256 newMaxSupply) external onlyRole(OKUM_CAP_MANAGER) {
         if (newMaxSupply < totalSupply()) revert BelowCurrentSupply();
-        uint256 oldMaxSupply = maxSupply;
-        maxSupply = newMaxSupply;
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        uint256 oldMaxSupply = $.maxSupply;
+        $.maxSupply = newMaxSupply;
         emit MaxSupplyUpdated(oldMaxSupply, newMaxSupply);
     }
 
     // ============ Blacklist (Works While Paused) ============
 
     function blacklist(address account) external onlyRole(OKUM_BLACKLISTER) {
-        if (isBlacklisted[account]) revert AlreadyBlacklisted();
-        isBlacklisted[account] = true;
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        if ($.isBlacklisted[account]) revert AlreadyBlacklisted();
+        $.isBlacklisted[account] = true;
         emit Blacklisted(account);
     }
 
     function unblacklist(address account) external onlyRole(OKUM_UNBLACKLISTER) {
-        if (!isBlacklisted[account]) revert NotBlacklisted();
-        isBlacklisted[account] = false;
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        if (!$.isBlacklisted[account]) revert NotBlacklisted();
+        $.isBlacklisted[account] = false;
         emit Unblacklisted(account);
     }
 
@@ -411,22 +440,4 @@ contract OkuMoney is
         override
         onlyRole(OKUM_UPGRADER)
     {}
-
-    // ============ Storage Gap ============
-
-    /**
-     * Storage layout:
-     * - _basePrice: 1 slot
-     * - ratePerSecond: 1 slot
-     * - lastAccrualTime: 1 slot
-     * - rateEnd: 1 slot
-     * - pendingRatePerSecond: 1 slot
-     * - minterAllowance mapping: 1 slot (mapping head)
-     * - maxSupply: 1 slot
-     * - isBlacklisted mapping: 1 slot (mapping head)
-     * Total: 8 slots used
-     * Gap: 50 - 8 - 2 (parent contracts) = 40 slots
-     * Note: [40] accounts for 3 slots reclaimed from removed blacklist-exempt variables
-     */
-    uint256[40] private __gap;
 }

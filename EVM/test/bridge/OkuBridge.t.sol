@@ -686,8 +686,8 @@ contract OkuBridgeTest is BaseTest {
     }
 
     function test_UpdateLimits_Success() public {
-        uint256 newMin = 10e18;
-        uint256 newMax = 5000e18;
+        uint128 newMin = 10e18;
+        uint128 newMax = 5000e18;
 
         vm.prank(admin);
         okuBridge.updateLimits(newMin, newMax);
@@ -710,8 +710,8 @@ contract OkuBridgeTest is BaseTest {
     }
 
     function test_UpdateLimits_RevertInvalidLimits() public {
-        uint256 min = 1000e18;
-        uint256 max = 100e18; // max < min
+        uint128 min = 1000e18;
+        uint128 max = 100e18; // max < min
 
         vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(OkuBridge.InvalidLimits.selector, min, max));
@@ -1239,7 +1239,7 @@ contract OkuBridgeTest is BaseTest {
                 BRIDGE_LIMITS_MANAGER
             )
         );
-        okuBridge.updateLimits(1e18, 100e18);
+        okuBridge.updateLimits(uint128(1e18), uint128(100e18));
     }
 
     function test_BridgeMint_EmitsEvent() public {

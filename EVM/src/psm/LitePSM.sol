@@ -9,13 +9,16 @@ import {
 import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardUpgradeable} from "../lib/ReentrancyGuardUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {RedemptionQueue} from "./RedemptionQueue.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
+import {Roles} from "../lib/Roles.sol";
+import {Constants} from "../lib/Constants.sol";
+import {MathLib} from "../lib/MathLib.sol";
 
 interface IAggregatorV3 {
     function latestRoundData()
@@ -38,40 +41,59 @@ interface IAggregatorV3 {
  *      okuMPrice=$1.05 gives ~95.24 OkuM. Redeeming those OkuM returns ~100 USDC.
  *      Includes PoR oracle checks and redemption queue for when buffer is depleted.
  *      Provides convenience functions for OkuDollar mint/redeem via the vault.
+ *
+ *      Storage: Uses ERC-7201 namespaced storage pattern for upgrade safety.
  */
 contract LitePSM is
     Initializable,
     AccessControlUpgradeable,
     PausableUpgradeable,
-    ReentrancyGuard,
+    ReentrancyGuardUpgradeable,
     UUPSUpgradeable
 {
     using SafeERC20 for IERC20;
 
-    // Decimal conversion constant (USDC is 6 decimals, OkuMoney/OkuDollar is 18 decimals)
-    uint256 private constant DECIMAL_MULTIPLIER = 10 ** 12; // 18 - 6 = 12
-    uint256 private constant PRECISION = 1e18;
+    // ============ ERC-7201 Namespaced Storage ============
 
-    // Granular RBAC roles (contract-specific prefixes)
-    bytes32 public constant PSM_UPGRADER = keccak256("PSM_UPGRADER");
-    bytes32 public constant PSM_PAUSER = keccak256("PSM_PAUSER");
-    bytes32 public constant PSM_UNPAUSER = keccak256("PSM_UNPAUSER");
-    bytes32 public constant PSM_QUEUE_PROCESSOR = keccak256("PSM_QUEUE_PROCESSOR");
-    bytes32 public constant PSM_BUFFER_DEPOSITOR = keccak256("PSM_BUFFER_DEPOSITOR");
-    bytes32 public constant PSM_BUFFER_WITHDRAWER = keccak256("PSM_BUFFER_WITHDRAWER");
-    bytes32 public constant PSM_ORACLE_MANAGER = keccak256("PSM_ORACLE_MANAGER");
+    /// @custom:storage-location erc7201:okumoney.storage.LitePSM
+    struct LitePSMStorage {
+        IOkuMoney okuMoney;
+        IOkuDollar usdOku;
+        IERC20 usdc;
+        RedemptionQueue redemptionQueue;
+        // Oracle configuration
+        IAggregatorV3 porOracle;
+        uint256 stalenessThreshold;
+        bool oracleEnabled;
+    }
 
-    IOkuMoney public okuMoney;
-    IOkuDollar public usdOku;
-    IERC20 public usdc;
-    RedemptionQueue public redemptionQueue;
+    // keccak256(abi.encode(uint256(keccak256("okumoney.storage.LitePSM")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant LITEPSM_STORAGE_LOCATION =
+        0x3d9e0f1a4b5c6d7e8a9f0e1d2c3b4a5e6f7d8c9b0a1e2f3d4c5b6a7e8f9d0c00;
 
-    // Oracle configuration
-    IAggregatorV3 public porOracle;
-    uint256 public stalenessThreshold;
-    bool public oracleEnabled;
+    function _getLitePSMStorage() private pure returns (LitePSMStorage storage $) {
+        assembly {
+            $.slot := LITEPSM_STORAGE_LOCATION
+        }
+    }
 
-    // Events
+    // ============ Constants (from shared library) ============
+
+    uint256 private constant DECIMAL_MULTIPLIER = Constants.DECIMAL_MULTIPLIER;
+    uint256 private constant PRECISION = Constants.PRECISION;
+
+    // ============ Role Constants (from shared library) ============
+
+    bytes32 public constant PSM_UPGRADER = Roles.PSM_UPGRADER;
+    bytes32 public constant PSM_PAUSER = Roles.PSM_PAUSER;
+    bytes32 public constant PSM_UNPAUSER = Roles.PSM_UNPAUSER;
+    bytes32 public constant PSM_QUEUE_PROCESSOR = Roles.PSM_QUEUE_PROCESSOR;
+    bytes32 public constant PSM_BUFFER_DEPOSITOR = Roles.PSM_BUFFER_DEPOSITOR;
+    bytes32 public constant PSM_BUFFER_WITHDRAWER = Roles.PSM_BUFFER_WITHDRAWER;
+    bytes32 public constant PSM_ORACLE_MANAGER = Roles.PSM_ORACLE_MANAGER;
+
+    // ============ Events ============
+
     event MintNote(address indexed user, uint256 usdcAmount, uint256 okuMAmount);
     event RedeemNote(address indexed user, uint256 okuMIn, uint256 usdcOut);
     event MintUSD(address indexed user, uint256 usdcAmount, uint256 usdAmount);
@@ -81,7 +103,8 @@ contract LitePSM is
     event BufferDeposited(address indexed depositor, uint256 amount);
     event BufferWithdrawn(address indexed to, uint256 amount);
 
-    // Custom errors
+    // ============ Custom Errors ============
+
     error ZeroAddress();
     error ZeroAmount();
     error AmountTooSmall();
@@ -117,18 +140,49 @@ contract LitePSM is
 
         __AccessControl_init();
         __Pausable_init();
+        __ReentrancyGuard_init();
 
-        okuMoney = IOkuMoney(_okuMoney);
-        usdOku = IOkuDollar(_usdOku);
-        usdc = IERC20(_usdc);
-        redemptionQueue = RedemptionQueue(_redemptionQueue);
+        LitePSMStorage storage $ = _getLitePSMStorage();
+        $.okuMoney = IOkuMoney(_okuMoney);
+        $.usdOku = IOkuDollar(_usdOku);
+        $.usdc = IERC20(_usdc);
+        $.redemptionQueue = RedemptionQueue(_redemptionQueue);
+        $.stalenessThreshold = 1 hours;
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(PSM_UPGRADER, admin);
         _grantRole(PSM_PAUSER, admin);
         _grantRole(PSM_QUEUE_PROCESSOR, admin);
+    }
 
-        stalenessThreshold = 1 hours;
+    // ============ Storage Accessor Views ============
+
+    function okuMoney() public view returns (IOkuMoney) {
+        return _getLitePSMStorage().okuMoney;
+    }
+
+    function usdOku() public view returns (IOkuDollar) {
+        return _getLitePSMStorage().usdOku;
+    }
+
+    function usdc() public view returns (IERC20) {
+        return _getLitePSMStorage().usdc;
+    }
+
+    function redemptionQueue() public view returns (RedemptionQueue) {
+        return _getLitePSMStorage().redemptionQueue;
+    }
+
+    function porOracle() public view returns (IAggregatorV3) {
+        return _getLitePSMStorage().porOracle;
+    }
+
+    function stalenessThreshold() public view returns (uint256) {
+        return _getLitePSMStorage().stalenessThreshold;
+    }
+
+    function oracleEnabled() public view returns (bool) {
+        return _getLitePSMStorage().oracleEnabled;
     }
 
     // ============ OkuMoney Swap Functions (Price-Aware) ============
@@ -142,30 +196,32 @@ contract LitePSM is
     function mintOkuM(uint256 usdcAmount) external whenNotPaused nonReentrant {
         if (usdcAmount == 0) revert ZeroAmount();
 
+        LitePSMStorage storage $ = _getLitePSMStorage();
+
         // Convert USDC (6 decimals) to 18-decimal dollar value
-        uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
+        uint256 usdcValue18 = MathLib.usdcToDollars(usdcAmount);
 
         // Price-aware conversion: okuMAmount = dollarValue × PRECISION / okuMPrice
-        uint256 price = okuMoney.okuMPrice();
-        uint256 okuMAmount = (usdcValue18 * PRECISION) / price;
+        uint256 price = $.okuMoney.okuMPrice();
+        uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, price);
         if (okuMAmount == 0) revert AmountTooSmall();
 
         // Slippage protection: output dollar value must be >= input (USDC-aligned)
-        uint256 outputDollarValue = (okuMAmount * price) / PRECISION;
+        uint256 outputDollarValue = MathLib.okuMToDollars(okuMAmount, price);
         if (outputDollarValue < usdcValue18) {
             revert OutputBelowMinimum(outputDollarValue, usdcValue18);
         }
 
         // Check PoR oracle if enabled
-        if (oracleEnabled && address(porOracle) != address(0)) {
+        if ($.oracleEnabled && address($.porOracle) != address(0)) {
             _checkReserves(okuMAmount);
         }
 
         // Transfer USDC from user
-        usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
+        $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
 
         // Mint OkuMoney to user (raw token amount, price-adjusted)
-        okuMoney.mint(msg.sender, okuMAmount);
+        $.okuMoney.mint(msg.sender, okuMAmount);
 
         emit MintNote(msg.sender, usdcAmount, okuMAmount);
     }
@@ -199,7 +255,8 @@ contract LitePSM is
         whenNotPaused
         nonReentrant
     {
-        IERC20Permit(address(okuMoney))
+        LitePSMStorage storage $ = _getLitePSMStorage();
+        IERC20Permit(address($.okuMoney))
             .permit(msg.sender, address(this), okuMAmount, deadline, v, r, s);
         _redeemOkuM(msg.sender, okuMAmount);
     }
@@ -207,36 +264,38 @@ contract LitePSM is
     function _redeemOkuM(address user, uint256 okuMAmount) internal {
         if (okuMAmount == 0) revert ZeroAmount();
 
+        LitePSMStorage storage $ = _getLitePSMStorage();
+
         // Price-aware conversion: dollarValue = okuMAmount × okuMPrice / PRECISION
-        uint256 price = okuMoney.okuMPrice();
-        uint256 dollarValue18 = (okuMAmount * price) / PRECISION;
+        uint256 price = $.okuMoney.okuMPrice();
+        uint256 dollarValue18 = MathLib.okuMToDollars(okuMAmount, price);
 
         // Convert to USDC (6 decimals) — truncates sub-USDC dust
-        uint256 usdcAmount = dollarValue18 / DECIMAL_MULTIPLIER;
+        uint256 usdcAmount = MathLib.dollarsToUsdc(dollarValue18);
         if (usdcAmount == 0) revert AmountTooSmall();
 
         // Slippage protection: truncate input to USDC-representable floor
         uint256 okuMFloor = (okuMAmount / DECIMAL_MULTIPLIER) * DECIMAL_MULTIPLIER;
-        uint256 minUsdcExpected = (okuMFloor * price) / PRECISION / DECIMAL_MULTIPLIER;
+        uint256 minUsdcExpected = MathLib.dollarsToUsdc(MathLib.okuMToDollars(okuMFloor, price));
         if (usdcAmount < minUsdcExpected) {
             revert OutputBelowMinimum(usdcAmount, minUsdcExpected);
         }
 
-        uint256 usdcBalance = usdc.balanceOf(address(this));
+        uint256 usdcBalance = $.usdc.balanceOf(address(this));
 
         if (usdcBalance >= usdcAmount) {
             // Sufficient buffer - transfer-then-burn (Circle model: self-burn only)
-            IERC20(address(okuMoney)).safeTransferFrom(user, address(this), okuMAmount);
-            okuMoney.burn(okuMAmount);
-            usdc.safeTransfer(user, usdcAmount);
+            IERC20(address($.okuMoney)).safeTransferFrom(user, address(this), okuMAmount);
+            $.okuMoney.burn(okuMAmount);
+            $.usdc.safeTransfer(user, usdcAmount);
             emit RedeemNote(user, okuMAmount, usdcAmount);
         } else {
             // Insufficient buffer - queue redemption
             // Pull OkuMoney from user to PSM
-            IERC20(address(okuMoney)).safeTransferFrom(user, address(this), okuMAmount);
+            IERC20(address($.okuMoney)).safeTransferFrom(user, address(this), okuMAmount);
             // Transfer from PSM to queue, then record
-            IERC20(address(okuMoney)).safeTransfer(address(redemptionQueue), okuMAmount);
-            redemptionQueue.enqueue(user, okuMAmount);
+            IERC20(address($.okuMoney)).safeTransfer(address($.redemptionQueue), okuMAmount);
+            $.redemptionQueue.enqueue(user, okuMAmount);
         }
     }
 
@@ -250,33 +309,36 @@ contract LitePSM is
     function mintUsdOku(uint256 usdcAmount) external whenNotPaused nonReentrant {
         if (usdcAmount == 0) revert ZeroAmount();
 
+        LitePSMStorage storage $ = _getLitePSMStorage();
+
         // Convert USDC (6 decimals) to 18-decimal dollar value
-        uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
+        uint256 usdcValue18 = MathLib.usdcToDollars(usdcAmount);
 
         // Price-aware conversion: okuMAmount = dollarValue × PRECISION / okuMPrice
-        uint256 price = okuMoney.okuMPrice();
-        uint256 okuMAmount = (usdcValue18 * PRECISION) / price;
+        uint256 price = $.okuMoney.okuMPrice();
+        uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, price);
         if (okuMAmount == 0) revert AmountTooSmall();
 
         // Check PoR oracle if enabled
-        if (oracleEnabled && address(porOracle) != address(0)) {
+        if ($.oracleEnabled && address($.porOracle) != address(0)) {
             _checkReserves(okuMAmount);
         }
 
         // Transfer USDC from user
-        usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
+        $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
 
         // Mint OkuMoney to PSM (self)
-        okuMoney.mint(address(this), okuMAmount);
+        $.okuMoney.mint(address(this), okuMAmount);
 
         // Approve vault to pull OkuMoney
-        IERC20(address(okuMoney)).approve(address(usdOku), okuMAmount);
+        IERC20(address($.okuMoney)).approve(address($.usdOku), okuMAmount);
 
         // Wrap OkuMoney into OkuDollar, delivering directly to user
-        uint256 usdMinted = usdOku.wrap(okuMAmount, msg.sender);
+        // Pass 0 for minAmountOut as we check slippage after
+        uint256 usdMinted = $.usdOku.wrap(okuMAmount, msg.sender, 0);
 
         // Revoke any remaining approval
-        IERC20(address(okuMoney)).approve(address(usdOku), 0);
+        IERC20(address($.okuMoney)).approve(address($.usdOku), 0);
 
         // Slippage protection: usdOku minted must be >= input dollar value
         if (usdMinted < usdcValue18) {
@@ -316,7 +378,8 @@ contract LitePSM is
         whenNotPaused
         nonReentrant
     {
-        IERC20Permit(address(usdOku))
+        LitePSMStorage storage $ = _getLitePSMStorage();
+        IERC20Permit(address($.usdOku))
             .permit(msg.sender, address(this), usdAmount, deadline, v, r, s);
         _redeemUsdOku(msg.sender, usdAmount);
     }
@@ -324,12 +387,14 @@ contract LitePSM is
     function _redeemUsdOku(address user, uint256 usdAmount) internal {
         if (usdAmount == 0) revert ZeroAmount();
 
+        LitePSMStorage storage $ = _getLitePSMStorage();
+
         // Pull OkuDollar from user
-        IERC20(address(usdOku)).safeTransferFrom(user, address(this), usdAmount);
+        IERC20(address($.usdOku)).safeTransferFrom(user, address(this), usdAmount);
 
         // Unwrap OkuDollar → get OkuMoney back to PSM (price-aware)
         // NOTE: Reverts if vault undercollateralized (distinct failure mode)
-        uint256 okuMReturned = usdOku.unwrap(usdAmount, address(this));
+        uint256 okuMReturned = $.usdOku.unwrap(usdAmount, address(this));
 
         // Now redeem the OkuMoney for USDC (same path as redeemOkuM)
         _redeemOkuMInternal(user, okuMReturned);
@@ -340,33 +405,35 @@ contract LitePSM is
      *      Price-aware: USDC output = okuMAmount × okuMPrice() / PRECISION (scaled to 6 decimals)
      */
     function _redeemOkuMInternal(address user, uint256 okuMAmount) internal {
+        LitePSMStorage storage $ = _getLitePSMStorage();
+
         // Price-aware conversion: dollarValue = okuMAmount × okuMPrice / PRECISION
-        uint256 price = okuMoney.okuMPrice();
-        uint256 dollarValue18 = (okuMAmount * price) / PRECISION;
+        uint256 price = $.okuMoney.okuMPrice();
+        uint256 dollarValue18 = MathLib.okuMToDollars(okuMAmount, price);
 
         // Convert to USDC (6 decimals)
-        uint256 usdcAmount = dollarValue18 / DECIMAL_MULTIPLIER;
+        uint256 usdcAmount = MathLib.dollarsToUsdc(dollarValue18);
         if (usdcAmount == 0) revert AmountTooSmall();
 
         // Slippage protection: truncate input to USDC-representable floor
         uint256 okuMFloor = (okuMAmount / DECIMAL_MULTIPLIER) * DECIMAL_MULTIPLIER;
-        uint256 minUsdcExpected = (okuMFloor * price) / PRECISION / DECIMAL_MULTIPLIER;
+        uint256 minUsdcExpected = MathLib.dollarsToUsdc(MathLib.okuMToDollars(okuMFloor, price));
         if (usdcAmount < minUsdcExpected) {
             revert OutputBelowMinimum(usdcAmount, minUsdcExpected);
         }
 
-        uint256 usdcBalance = usdc.balanceOf(address(this));
+        uint256 usdcBalance = $.usdc.balanceOf(address(this));
 
         if (usdcBalance >= usdcAmount) {
             // Sufficient buffer - burn OkuMoney, transfer USDC
-            okuMoney.burn(okuMAmount);
-            usdc.safeTransfer(user, usdcAmount);
+            $.okuMoney.burn(okuMAmount);
+            $.usdc.safeTransfer(user, usdcAmount);
             emit RedeemNote(user, okuMAmount, usdcAmount);
         } else {
             // Insufficient buffer - queue redemption
             // Transfer OkuMoney from PSM to queue, then record
-            IERC20(address(okuMoney)).safeTransfer(address(redemptionQueue), okuMAmount);
-            redemptionQueue.enqueue(user, okuMAmount);
+            IERC20(address($.okuMoney)).safeTransfer(address($.redemptionQueue), okuMAmount);
+            $.redemptionQueue.enqueue(user, okuMAmount);
         }
     }
 
@@ -385,16 +452,18 @@ contract LitePSM is
         onlyRole(PSM_QUEUE_PROCESSOR)
         nonReentrant
     {
+        LitePSMStorage storage $ = _getLitePSMStorage();
+
         // Approve exact amount needed for queue processing
-        usdc.approve(address(redemptionQueue), approveAmount);
+        $.usdc.approve(address($.redemptionQueue), approveAmount);
 
         // Process queue
-        redemptionQueue.processQueue(startIndex, endIndex, address(usdc), address(okuMoney));
+        $.redemptionQueue.processQueue(startIndex, endIndex, address($.usdc), address($.okuMoney));
 
         // Revoke approval for remaining USDC
-        usdc.approve(address(redemptionQueue), 0);
+        $.usdc.approve(address($.redemptionQueue), 0);
 
-        emit BufferRefilled(usdc.balanceOf(address(this)));
+        emit BufferRefilled($.usdc.balanceOf(address(this)));
     }
 
     // ============ Oracle Management ============
@@ -407,23 +476,25 @@ contract LitePSM is
         external
         onlyRole(PSM_ORACLE_MANAGER)
     {
-        porOracle = IAggregatorV3(_oracle);
-        stalenessThreshold = _stalenessThreshold;
-        oracleEnabled = _enabled;
+        LitePSMStorage storage $ = _getLitePSMStorage();
+        $.porOracle = IAggregatorV3(_oracle);
+        $.stalenessThreshold = _stalenessThreshold;
+        $.oracleEnabled = _enabled;
         emit OracleConfigured(_oracle, _stalenessThreshold, _enabled);
     }
 
     function _checkReserves(uint256 mintAmount) internal view {
-        if (address(porOracle) == address(0)) revert OracleNotConfigured();
+        LitePSMStorage storage $ = _getLitePSMStorage();
+        if (address($.porOracle) == address(0)) revert OracleNotConfigured();
 
         (uint80 roundId, int256 answer,, uint256 updatedAt, uint80 answeredInRound) =
-            porOracle.latestRoundData();
+            $.porOracle.latestRoundData();
 
         if (answeredInRound < roundId) revert IncompleteOracleRound();
-        if (block.timestamp - updatedAt >= stalenessThreshold) revert StaleOracleData();
+        if (block.timestamp - updatedAt >= $.stalenessThreshold) revert StaleOracleData();
         if (answer < 0) revert InvalidOracleResponse();
 
-        uint256 newSupply = okuMoney.totalSupply() + mintAmount;
+        uint256 newSupply = $.okuMoney.totalSupply() + mintAmount;
         // Safe cast: answer >= 0 checked above
         // forge-lint: disable-next-line(unsafe-typecast)
         uint256 reserves = uint256(answer);
@@ -441,14 +512,15 @@ contract LitePSM is
     }
 
     function withdrawUsdc(address to, uint256 amount) external onlyRole(PSM_BUFFER_WITHDRAWER) {
-        uint256 balance = usdc.balanceOf(address(this));
+        LitePSMStorage storage $ = _getLitePSMStorage();
+        uint256 balance = $.usdc.balanceOf(address(this));
         if (balance < amount) revert InsufficientBuffer(balance, amount);
-        uint256 queueObligation = redemptionQueue.totalQueuedUsdc();
+        uint256 queueObligation = $.redemptionQueue.totalQueuedUsdc();
         uint256 remainingBalance = balance - amount;
         if (remainingBalance < queueObligation) {
             revert WouldStrandQueue(remainingBalance, queueObligation);
         }
-        usdc.safeTransfer(to, amount);
+        $.usdc.safeTransfer(to, amount);
         emit BufferWithdrawn(to, amount);
     }
 
@@ -457,7 +529,8 @@ contract LitePSM is
      * @param amount Amount of USDC to deposit
      */
     function depositBuffer(uint256 amount) external onlyRole(PSM_BUFFER_DEPOSITOR) {
-        usdc.safeTransferFrom(msg.sender, address(this), amount);
+        LitePSMStorage storage $ = _getLitePSMStorage();
+        $.usdc.safeTransferFrom(msg.sender, address(this), amount);
         emit BufferDeposited(msg.sender, amount);
     }
 
@@ -468,20 +541,4 @@ contract LitePSM is
         override
         onlyRole(PSM_UPGRADER)
     {}
-
-    // ============ Storage Gap ============
-
-    /**
-     * Storage layout:
-     * - okuMoney: 1 slot
-     * - usdOku: 1 slot
-     * - usdc: 1 slot
-     * - redemptionQueue: 1 slot
-     * - porOracle: 1 slot
-     * - stalenessThreshold: 1 slot
-     * - oracleEnabled: 1 slot (packed with stalenessThreshold potentially)
-     * Total: ~7 slots used
-     * Gap: 50 - 7 = 43 slots
-     */
-    uint256[43] private __gap;
 }

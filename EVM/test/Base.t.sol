@@ -211,8 +211,8 @@ abstract contract BaseTest is Test {
         // Approve vault to pull OkuMoney
         vm.startPrank(to);
         IERC20(address(okuMoney)).approve(address(usdOku), okuMAmount);
-        // Wrap OkuMoney into OkuDollar
-        usdOku.wrap(okuMAmount, to);
+        // Wrap OkuMoney into OkuDollar (0 minAmountOut for test helpers)
+        usdOku.wrap(okuMAmount, to, 0);
         vm.stopPrank();
     }
 

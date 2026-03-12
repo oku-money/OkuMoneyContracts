@@ -44,7 +44,10 @@ contract NttAdapter is IBridgeAdapter, Ownable {
     error UnsupportedChain(uint256 chainId);
     error InvalidRecipient();
     error InvalidAmount();
+    error InvalidToken(address provided, address expected);
     error UnauthorizedCaller();
+    error EthTransferFailed();
+    error NttNativeReceiveOnly();
 
     constructor(
         address _nttManager,
@@ -88,7 +91,7 @@ contract NttAdapter is IBridgeAdapter, Ownable {
         override
     {
         if (msg.sender != ROUTER) revert UnauthorizedCaller();
-        require(_token == TOKEN, "Invalid token");
+        if (_token != TOKEN) revert InvalidToken(_token, TOKEN);
         if (amount == 0) revert InvalidAmount();
         if (recipient == address(0)) revert InvalidRecipient();
 
@@ -122,7 +125,7 @@ contract NttAdapter is IBridgeAdapter, Ownable {
      */
     function withdrawEth(address payable to) external onlyOwner {
         (bool success,) = to.call{value: address(this).balance}("");
-        require(success, "ETH transfer failed");
+        if (!success) revert EthTransferFailed();
     }
 
     /**
@@ -136,7 +139,7 @@ contract NttAdapter is IBridgeAdapter, Ownable {
      * @notice Not implemented — NTT handles destination minting natively via VAA
      */
     function receiveBridge(address, uint256, address) external pure {
-        revert("NttAdapter: use NTT native receive");
+        revert NttNativeReceiveOnly();
     }
 
     receive() external payable {}

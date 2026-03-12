@@ -179,7 +179,7 @@ describe("OkuDollar Vault Scenarios", () => {
             // Wrap OkuMoney into OkuDollar vault
             await okuMoney.connect(Alice).approve(okuUsdAddr, noteBalance)
             const okuUsdBefore = await okuUsd.balanceOf(aliceAddr)
-            await okuUsd.connect(Alice).wrap(noteBalance, aliceAddr)
+            await okuUsd.connect(Alice).wrap(noteBalance, aliceAddr, 0)
 
             const okuUsdReceived = await okuUsd.balanceOf(aliceAddr)
             expect(okuUsdReceived).to.be.gt(okuUsdBefore)
@@ -216,7 +216,7 @@ describe("OkuDollar Vault Scenarios", () => {
 
             // Wrap into vault
             await okuMoney.connect(Alice).approve(okuUsdAddr, noteBalance)
-            await okuUsd.connect(Alice).wrap(noteBalance, aliceAddr)
+            await okuUsd.connect(Alice).wrap(noteBalance, aliceAddr, 0)
 
             const okuUsdBalance = await okuUsd.balanceOf(aliceAddr)
 
@@ -291,9 +291,9 @@ describe("OkuDollar Vault Scenarios", () => {
             await okuMoney.connect(Bob).approve(okuUsdAddr, bobNotes)
             await okuMoney.connect(Charlie).approve(okuUsdAddr, charlieNotes)
 
-            await okuUsd.connect(Alice).wrap(aliceNotes, aliceAddr)
-            await okuUsd.connect(Bob).wrap(bobNotes, bobAddr)
-            await okuUsd.connect(Charlie).wrap(charlieNotes, charlieAddr)
+            await okuUsd.connect(Alice).wrap(aliceNotes, aliceAddr, 0)
+            await okuUsd.connect(Bob).wrap(bobNotes, bobAddr, 0)
+            await okuUsd.connect(Charlie).wrap(charlieNotes, charlieAddr, 0)
 
             // Calculate OkuDollar gained in this test only
             const aliceUsdGained = (await okuUsd.balanceOf(aliceAddr)) - aliceUsdBefore

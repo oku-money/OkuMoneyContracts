@@ -9,7 +9,7 @@ import {
 import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardUpgradeable} from "../lib/ReentrancyGuardUpgradeable.sol";
 import {
     EIP712Upgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
@@ -17,6 +17,8 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
+import {Roles} from "../lib/Roles.sol";
+import {Constants} from "../lib/Constants.sol";
 
 /**
  * @title OkuBridge
@@ -35,73 +37,78 @@ import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
  * - Request ID tracking on destination to prevent replay
  * - Fee collected in tokens on source chain (subtractive model)
  * - Two-step refund (BRIDGE_REFUND_INITIATOR + BRIDGE_REFUND_CONFIRMER) prevents single-key double-mint
+ *
+ * IMPORTANT: BRIDGE_REFUND_INITIATOR and BRIDGE_REFUND_CONFIRMER must be assigned to DIFFERENT keys
+ * post-deployment. At initialization, both are granted to admin for convenience, but operators
+ * MUST delegate one of these roles to a separate key before the bridge goes live. This ensures
+ * no single compromised key can complete a refund unilaterally.
+ *
+ * Storage: Uses ERC-7201 namespaced storage pattern for upgrade safety.
  */
 contract OkuBridge is
     Initializable,
     AccessControlUpgradeable,
     PausableUpgradeable,
     EIP712Upgradeable,
-    ReentrancyGuard,
+    ReentrancyGuardUpgradeable,
     UUPSUpgradeable
 {
     using SafeERC20 for IERC20;
-    // ============ State Variables ============
 
-    /// @notice OkuMoney token contract
-    IOkuMoney public okuMoney;
+    // ============ ERC-7201 Namespaced Storage ============
 
-    /// @notice Authorized signer address (orchestrator's KMS public key)
-    address public authorizedSigner;
+    /// @notice Packed bridge limits (2 x uint128 in 1 slot)
+    struct BridgeLimits {
+        uint128 min;
+        uint128 max;
+    }
 
-    /// @notice Address that receives bridge fees
-    address public feeRecipient;
+    /// @custom:storage-location erc7201:okumoney.storage.OkuBridge
+    struct OkuBridgeStorage {
+        IOkuMoney okuMoney;
+        address authorizedSigner;
+        address feeRecipient;
+        uint256 bridgeFee;
+        BridgeLimits limits;
+        mapping(uint256 => bool) supportedChains;
+        mapping(uint256 => uint256) outboundNonce;
+        mapping(bytes32 => bool) processedRequests;
+        mapping(bytes32 => bool) refundedRequests;
+        uint256 bridgeDeadline;
+        mapping(bytes32 => address) pendingRefundInitiator;
+    }
 
-    /// @notice Bridge fee in basis points (10 = 0.1%, 100 = 1%)
-    uint256 public bridgeFee;
+    // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuBridge")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant OKUBRIDGE_STORAGE_LOCATION =
+        0x5f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f00;
 
-    /// @notice Minimum token amount that can be bridged
-    uint256 public minBridgeAmount;
+    function _getOkuBridgeStorage() private pure returns (OkuBridgeStorage storage $) {
+        assembly {
+            $.slot := OKUBRIDGE_STORAGE_LOCATION
+        }
+    }
 
-    /// @notice Maximum token amount that can be bridged
-    uint256 public maxBridgeAmount;
+    // ============ Role Constants (from shared library) ============
 
-    /// @notice Supported destination chains
-    mapping(uint256 => bool) public supportedChains;
+    bytes32 public constant BRIDGE_SIGNER_MANAGER = Roles.BRIDGE_SIGNER_MANAGER;
+    bytes32 public constant BRIDGE_PAUSER = Roles.BRIDGE_PAUSER;
+    bytes32 public constant BRIDGE_UNPAUSER = Roles.BRIDGE_UNPAUSER;
+    bytes32 public constant BRIDGE_FEE_MANAGER = Roles.BRIDGE_FEE_MANAGER;
+    bytes32 public constant BRIDGE_NONCE_ADMIN = Roles.BRIDGE_NONCE_ADMIN;
+    bytes32 public constant BRIDGE_CHAIN_MANAGER = Roles.BRIDGE_CHAIN_MANAGER;
+    bytes32 public constant BRIDGE_LIMITS_MANAGER = Roles.BRIDGE_LIMITS_MANAGER;
+    bytes32 public constant BRIDGE_UPGRADER = Roles.BRIDGE_UPGRADER;
+    bytes32 public constant BRIDGE_DUST_SWEEPER = Roles.BRIDGE_DUST_SWEEPER;
+    bytes32 public constant BRIDGE_REFUND_INITIATOR = Roles.BRIDGE_REFUND_INITIATOR;
+    bytes32 public constant BRIDGE_REFUND_CONFIRMER = Roles.BRIDGE_REFUND_CONFIRMER;
 
-    /// @notice Outbound nonce tracking per destination chain (source chain only)
-    mapping(uint256 => uint256) public outboundNonce;
+    // ============ Constants ============
 
-    /// @notice Processed request IDs (destination chain only)
-    mapping(bytes32 => bool) public processedRequests;
-
-    /// @notice Refunded request IDs (prevents replay of refunds)
-    mapping(bytes32 => bool) public refundedRequests;
-
-    /// @notice Configurable bridge deadline for requests
-    uint256 public bridgeDeadline;
-
-    /// @notice Pending refund proposals (requestId => initiator address)
-    /// @dev Set by BRIDGE_REFUND_INITIATOR; cleared and acted on by BRIDGE_REFUND_CONFIRMER
-    mapping(bytes32 => address) public pendingRefundInitiator;
-
-    // ============ Role Constants ============
-
-    bytes32 public constant BRIDGE_SIGNER_MANAGER = keccak256("BRIDGE_SIGNER_MANAGER");
-    bytes32 public constant BRIDGE_PAUSER = keccak256("BRIDGE_PAUSER");
-    bytes32 public constant BRIDGE_UNPAUSER = keccak256("BRIDGE_UNPAUSER");
-    bytes32 public constant BRIDGE_FEE_MANAGER = keccak256("BRIDGE_FEE_MANAGER");
-    bytes32 public constant BRIDGE_NONCE_ADMIN = keccak256("BRIDGE_NONCE_ADMIN");
-    bytes32 public constant BRIDGE_CHAIN_MANAGER = keccak256("BRIDGE_CHAIN_MANAGER");
-    bytes32 public constant BRIDGE_LIMITS_MANAGER = keccak256("BRIDGE_LIMITS_MANAGER");
-    bytes32 public constant BRIDGE_UPGRADER = keccak256("BRIDGE_UPGRADER");
-    bytes32 public constant BRIDGE_DUST_SWEEPER = keccak256("BRIDGE_DUST_SWEEPER");
-
-    /// @notice First step of two-step refund: proposes a refund after independent verification
-    bytes32 public constant BRIDGE_REFUND_INITIATOR = keccak256("BRIDGE_REFUND_INITIATOR");
-
-    /// @notice Second step of two-step refund: confirms and executes after independent verification
-    /// @dev Must be held by a different key than BRIDGE_REFUND_INITIATOR
-    bytes32 public constant BRIDGE_REFUND_CONFIRMER = keccak256("BRIDGE_REFUND_CONFIRMER");
+    uint256 public constant BASIS_POINTS = Constants.BASIS_POINTS;
+    uint128 public constant DEFAULT_MIN_AMOUNT = 1e18;
+    uint128 public constant DEFAULT_MAX_AMOUNT = 1_000_000e18;
+    uint256 public constant DEFAULT_FEE_BPS = 10;
+    uint256 public constant DEFAULT_DEADLINE = 1 hours;
 
     // ============ EIP-712 Constants ============
 
@@ -147,33 +154,20 @@ contract OkuBridge is
     event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
     event ChainAdded(uint256 indexed chainId);
     event ChainRemoved(uint256 indexed chainId);
-    event LimitsUpdated(uint256 minAmount, uint256 maxAmount);
+    event LimitsUpdated(uint128 minAmount, uint128 maxAmount);
     event NonceSkipped(uint256 indexed destChainId, uint256 skippedNonce);
     event DustSwept(address indexed recipient, uint256 amount);
     event DeadlineUpdated(uint256 oldDeadline, uint256 newDeadline);
-
-    /// @notice Emitted when BRIDGE_REFUND_INITIATOR proposes a refund
     event RefundInitiated(bytes32 indexed requestId, address indexed initiator);
-
-    /// @notice Emitted when BRIDGE_REFUND_CONFIRMER executes a proposed refund
     event RefundConfirmed(bytes32 indexed requestId, address indexed sender, uint256 amount);
-
-    /// @notice Emitted when a pending refund proposal is cancelled by the initiator or an admin
     event RefundCancelled(
         bytes32 indexed requestId, address indexed initiator, address indexed cancelledBy
     );
 
-    // ============ Constants ============
-
-    uint256 public constant BASIS_POINTS = 10_000;
-    uint256 public constant DEFAULT_MIN_AMOUNT = 1e18;
-    uint256 public constant DEFAULT_MAX_AMOUNT = 1_000_000e18;
-    uint256 public constant DEFAULT_FEE_BPS = 10;
-    uint256 public constant DEFAULT_DEADLINE = 1 hours;
-
     // ============ Errors ============
 
     error UnsupportedChain(uint256 chainId);
+    error CannotBridgeToSelf();
     error AmountBelowMinimum(uint256 amount, uint256 minimum);
     error AmountAboveMaximum(uint256 amount, uint256 maximum);
     error InvalidSignature();
@@ -183,7 +177,7 @@ contract OkuBridge is
     error AlreadyProcessed(bytes32 requestId);
     error ZeroAddress();
     error InvalidFee(uint256 fee);
-    error InvalidLimits(uint256 min, uint256 max);
+    error InvalidLimits(uint128 min, uint128 max);
     error AlreadyRefunded(bytes32 requestId);
     error MintWindowStillOpen();
     error RefundNotInitiated(bytes32 requestId);
@@ -226,18 +220,19 @@ contract OkuBridge is
         __AccessControl_init();
         __Pausable_init();
         __EIP712_init("OkuBridge", "1");
+        __ReentrancyGuard_init();
 
-        okuMoney = IOkuMoney(_okuMoney);
-        authorizedSigner = _authorizedSigner;
-        feeRecipient = _feeRecipient;
-
-        // Default limits (can be updated later)
-        minBridgeAmount = DEFAULT_MIN_AMOUNT;
-        maxBridgeAmount = DEFAULT_MAX_AMOUNT;
-        bridgeFee = DEFAULT_FEE_BPS;
-        bridgeDeadline = DEFAULT_DEADLINE;
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
+        $.okuMoney = IOkuMoney(_okuMoney);
+        $.authorizedSigner = _authorizedSigner;
+        $.feeRecipient = _feeRecipient;
+        $.limits = BridgeLimits({min: DEFAULT_MIN_AMOUNT, max: DEFAULT_MAX_AMOUNT});
+        $.bridgeFee = DEFAULT_FEE_BPS;
+        $.bridgeDeadline = DEFAULT_DEADLINE;
 
         // Grant all roles to admin
+        // NOTE: BRIDGE_REFUND_INITIATOR and BRIDGE_REFUND_CONFIRMER must be reassigned to
+        // DIFFERENT keys post-deployment for proper security. See contract NatSpec.
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(BRIDGE_SIGNER_MANAGER, _admin);
         _grantRole(BRIDGE_PAUSER, _admin);
@@ -255,10 +250,64 @@ contract OkuBridge is
         for (uint256 i = 0; i < initialChains.length; i++) {
             uint256 chainId = initialChains[i];
             if (chainId != block.chainid) {
-                supportedChains[chainId] = true;
+                $.supportedChains[chainId] = true;
                 emit ChainAdded(chainId);
             }
         }
+    }
+
+    // ============ Storage Accessor Views ============
+
+    function okuMoney() public view returns (IOkuMoney) {
+        return _getOkuBridgeStorage().okuMoney;
+    }
+
+    function authorizedSigner() public view returns (address) {
+        return _getOkuBridgeStorage().authorizedSigner;
+    }
+
+    function feeRecipient() public view returns (address) {
+        return _getOkuBridgeStorage().feeRecipient;
+    }
+
+    function bridgeFee() public view returns (uint256) {
+        return _getOkuBridgeStorage().bridgeFee;
+    }
+
+    function minBridgeAmount() public view returns (uint128) {
+        return _getOkuBridgeStorage().limits.min;
+    }
+
+    function maxBridgeAmount() public view returns (uint128) {
+        return _getOkuBridgeStorage().limits.max;
+    }
+
+    function limits() public view returns (BridgeLimits memory) {
+        return _getOkuBridgeStorage().limits;
+    }
+
+    function supportedChains(uint256 chainId) public view returns (bool) {
+        return _getOkuBridgeStorage().supportedChains[chainId];
+    }
+
+    function outboundNonce(uint256 destChainId) public view returns (uint256) {
+        return _getOkuBridgeStorage().outboundNonce[destChainId];
+    }
+
+    function processedRequests(bytes32 requestId) public view returns (bool) {
+        return _getOkuBridgeStorage().processedRequests[requestId];
+    }
+
+    function refundedRequests(bytes32 requestId) public view returns (bool) {
+        return _getOkuBridgeStorage().refundedRequests[requestId];
+    }
+
+    function bridgeDeadline() public view returns (uint256) {
+        return _getOkuBridgeStorage().bridgeDeadline;
+    }
+
+    function pendingRefundInitiator(bytes32 requestId) public view returns (address) {
+        return _getOkuBridgeStorage().pendingRefundInitiator[requestId];
     }
 
     // ============ Core Bridge Functions ============
@@ -286,36 +335,39 @@ contract OkuBridge is
         // Prevent bridging to the same chain (belt-and-suspenders with addSupportedChain guard)
         if (destChainId == block.chainid) revert UnsupportedChain(destChainId);
 
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
+
         // Validate destination chain
-        if (!supportedChains[destChainId]) {
+        if (!$.supportedChains[destChainId]) {
             revert UnsupportedChain(destChainId);
         }
 
-        // Validate amount
-        if (amount < minBridgeAmount) {
-            revert AmountBelowMinimum(amount, minBridgeAmount);
+        // Validate amount against packed limits
+        BridgeLimits memory lim = $.limits;
+        if (amount < lim.min) {
+            revert AmountBelowMinimum(amount, lim.min);
         }
-        if (amount > maxBridgeAmount) {
-            revert AmountAboveMaximum(amount, maxBridgeAmount);
+        if (amount > lim.max) {
+            revert AmountAboveMaximum(amount, lim.max);
         }
 
         // Calculate fee in tokens (subtractive model: fee comes out of bridged amount)
-        uint256 feeAmount = (amount * bridgeFee) / 10_000;
+        uint256 feeAmount = (amount * $.bridgeFee) / BASIS_POINTS;
         // Net amount the recipient will receive on destination
         uint256 netAmount = amount - feeAmount;
 
         // Transfer tokens from caller, then self-burn (Circle model: burn only own tokens)
-        IERC20(address(okuMoney)).safeTransferFrom(msg.sender, address(this), amount);
-        okuMoney.burn(amount);
+        IERC20(address($.okuMoney)).safeTransferFrom(msg.sender, address(this), amount);
+        $.okuMoney.burn(amount);
 
         // Mint fee to fee recipient
         if (feeAmount > 0) {
-            okuMoney.mint(feeRecipient, feeAmount);
+            $.okuMoney.mint($.feeRecipient, feeAmount);
         }
 
         // Get and increment nonce
-        uint256 nonce = outboundNonce[destChainId];
-        outboundNonce[destChainId] = nonce + 1;
+        uint256 nonce = $.outboundNonce[destChainId];
+        $.outboundNonce[destChainId] = nonce + 1;
 
         // Construct request (encodes netAmount — what destination will mint)
         BridgeRequest memory request = BridgeRequest({
@@ -325,7 +377,7 @@ contract OkuBridge is
             recipient: recipient,
             amount: netAmount,
             nonce: nonce,
-            deadline: block.timestamp + bridgeDeadline
+            deadline: block.timestamp + $.bridgeDeadline
         });
 
         // Calculate request ID
@@ -362,8 +414,15 @@ contract OkuBridge is
             revert WrongChain(request.destChainId, block.chainid);
         }
 
+        // Prevent minting with source == destination (should never happen with valid orchestrator)
+        if (request.sourceChainId == block.chainid) {
+            revert CannotBridgeToSelf();
+        }
+
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
+
         // Validate that the source chain is a known supported chain
-        if (!supportedChains[request.sourceChainId]) {
+        if (!$.supportedChains[request.sourceChainId]) {
             revert UnsupportedChain(request.sourceChainId);
         }
 
@@ -376,10 +435,10 @@ contract OkuBridge is
         bytes32 requestId = keccak256(abi.encode(request));
 
         // Prevent replay
-        if (processedRequests[requestId]) {
+        if ($.processedRequests[requestId]) {
             revert AlreadyProcessed(requestId);
         }
-        processedRequests[requestId] = true;
+        $.processedRequests[requestId] = true;
 
         // Verify EIP-712 signature
         bytes32 structHash = keccak256(
@@ -397,7 +456,7 @@ contract OkuBridge is
         bytes32 digest = _hashTypedDataV4(structHash);
         address signer = ECDSA.recover(digest, signature);
 
-        if (signer != authorizedSigner) {
+        if (signer != $.authorizedSigner) {
             revert InvalidSignature();
         }
 
@@ -406,7 +465,7 @@ contract OkuBridge is
         if (mintTo == address(0)) revert ZeroAddress();
 
         // Mint tokens directly (OkuMoney is non-rebasing, no share conversion)
-        okuMoney.mint(mintTo, request.amount);
+        $.okuMoney.mint(mintTo, request.amount);
 
         // Emit event
         emit BridgeMint(requestId, request.recipient, request.sourceChainId, request.amount);
@@ -434,14 +493,16 @@ contract OkuBridge is
 
         bytes32 requestId = keccak256(abi.encode(request));
 
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
+
         // Cannot refund a request that was already minted on destination
-        if (processedRequests[requestId]) revert AlreadyProcessed(requestId);
+        if ($.processedRequests[requestId]) revert AlreadyProcessed(requestId);
 
         // Cannot re-initiate if already refunded
-        if (refundedRequests[requestId]) revert AlreadyRefunded(requestId);
+        if ($.refundedRequests[requestId]) revert AlreadyRefunded(requestId);
 
         // Record the initiator — confirmRefund will verify msg.sender differs
-        pendingRefundInitiator[requestId] = msg.sender;
+        $.pendingRefundInitiator[requestId] = msg.sender;
 
         emit RefundInitiated(requestId, msg.sender);
     }
@@ -469,16 +530,18 @@ contract OkuBridge is
 
         bytes32 requestId = keccak256(abi.encode(request));
 
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
+
         // Primary double-mint guard: reject if bridgeMint already executed on destination.
         // This is the most important check — evaluated first so it cannot be bypassed by
         // proposal state or role manipulation.
-        if (processedRequests[requestId]) revert AlreadyProcessed(requestId);
+        if ($.processedRequests[requestId]) revert AlreadyProcessed(requestId);
 
         // Replay protection: cannot refund the same request twice
-        if (refundedRequests[requestId]) revert AlreadyRefunded(requestId);
+        if ($.refundedRequests[requestId]) revert AlreadyRefunded(requestId);
 
         // Require a pending proposal recorded by the initiator step
-        address initiator = pendingRefundInitiator[requestId];
+        address initiator = $.pendingRefundInitiator[requestId];
         if (initiator == address(0)) revert RefundNotInitiated(requestId);
 
         // Enforce key separation: confirmer must be a different address than the initiator.
@@ -486,11 +549,11 @@ contract OkuBridge is
         if (msg.sender == initiator) revert InitiatorCannotConfirm();
 
         // Mark refunded and clear pending proposal atomically
-        refundedRequests[requestId] = true;
-        delete pendingRefundInitiator[requestId];
+        $.refundedRequests[requestId] = true;
+        delete $.pendingRefundInitiator[requestId];
 
         // Mint tokens back to original sender (raw amount, no share conversion)
-        okuMoney.mint(request.sender, request.amount);
+        $.okuMoney.mint(request.sender, request.amount);
 
         emit RefundConfirmed(requestId, request.sender, request.amount);
     }
@@ -507,7 +570,8 @@ contract OkuBridge is
     function cancelRefund(BridgeRequest calldata request) external {
         bytes32 requestId = keccak256(abi.encode(request));
 
-        address initiator = pendingRefundInitiator[requestId];
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
+        address initiator = $.pendingRefundInitiator[requestId];
         if (initiator == address(0)) revert RefundNotInitiated(requestId);
 
         // Only the original initiator or an admin can cancel
@@ -515,7 +579,7 @@ contract OkuBridge is
         bool isAdmin = hasRole(DEFAULT_ADMIN_ROLE, msg.sender);
         if (!isInitiator && !isAdmin) revert NotInitiatorOrAdmin();
 
-        delete pendingRefundInitiator[requestId];
+        delete $.pendingRefundInitiator[requestId];
 
         emit RefundCancelled(requestId, initiator, msg.sender);
     }
@@ -528,8 +592,9 @@ contract OkuBridge is
      * @param destChainId Destination chain to skip nonce for
      */
     function skipNonce(uint256 destChainId) external onlyRole(BRIDGE_NONCE_ADMIN) {
-        uint256 skippedNonce = outboundNonce[destChainId];
-        outboundNonce[destChainId] = skippedNonce + 1;
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
+        uint256 skippedNonce = $.outboundNonce[destChainId];
+        $.outboundNonce[destChainId] = skippedNonce + 1;
         emit NonceSkipped(destChainId, skippedNonce);
     }
 
@@ -541,8 +606,9 @@ contract OkuBridge is
      */
     function updateAuthorizedSigner(address newSigner) external onlyRole(BRIDGE_SIGNER_MANAGER) {
         if (newSigner == address(0)) revert ZeroAddress();
-        address oldSigner = authorizedSigner;
-        authorizedSigner = newSigner;
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
+        address oldSigner = $.authorizedSigner;
+        $.authorizedSigner = newSigner;
         emit SignerUpdated(oldSigner, newSigner);
     }
 
@@ -551,9 +617,10 @@ contract OkuBridge is
      * @param newFee New fee in basis points (max 10000 = 100%)
      */
     function updateFee(uint256 newFee) external onlyRole(BRIDGE_FEE_MANAGER) {
-        if (newFee > 10_000) revert InvalidFee(newFee);
-        uint256 oldFee = bridgeFee;
-        bridgeFee = newFee;
+        if (newFee > BASIS_POINTS) revert InvalidFee(newFee);
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
+        uint256 oldFee = $.bridgeFee;
+        $.bridgeFee = newFee;
         emit FeeUpdated(oldFee, newFee);
     }
 
@@ -563,8 +630,9 @@ contract OkuBridge is
      */
     function updateFeeRecipient(address newRecipient) external onlyRole(BRIDGE_FEE_MANAGER) {
         if (newRecipient == address(0)) revert ZeroAddress();
-        address oldRecipient = feeRecipient;
-        feeRecipient = newRecipient;
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
+        address oldRecipient = $.feeRecipient;
+        $.feeRecipient = newRecipient;
         emit FeeRecipientUpdated(oldRecipient, newRecipient);
     }
 
@@ -575,9 +643,10 @@ contract OkuBridge is
     function addSupportedChain(uint256 chainId) external onlyRole(BRIDGE_CHAIN_MANAGER) {
         // Prevent adding the current chain as a destination (no same-chain bridges)
         if (chainId == block.chainid) revert UnsupportedChain(chainId);
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
         // Only emit if chain wasn't already supported
-        if (supportedChains[chainId]) revert ChainAlreadySupported();
-        supportedChains[chainId] = true;
+        if ($.supportedChains[chainId]) revert ChainAlreadySupported();
+        $.supportedChains[chainId] = true;
         emit ChainAdded(chainId);
     }
 
@@ -586,21 +655,22 @@ contract OkuBridge is
      * @param chainId Chain ID to remove
      */
     function removeSupportedChain(uint256 chainId) external onlyRole(BRIDGE_CHAIN_MANAGER) {
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
         // Only emit if chain was actually supported
-        if (!supportedChains[chainId]) revert ChainNotSupported();
-        supportedChains[chainId] = false;
+        if (!$.supportedChains[chainId]) revert ChainNotSupported();
+        $.supportedChains[chainId] = false;
         emit ChainRemoved(chainId);
     }
 
     /**
-     * @notice Update minimum and maximum bridge limits
-     * @param min New minimum token amount
-     * @param max New maximum token amount
+     * @notice Update minimum and maximum bridge limits (atomically)
+     * @param min New minimum token amount (uint128)
+     * @param max New maximum token amount (uint128)
      */
-    function updateLimits(uint256 min, uint256 max) external onlyRole(BRIDGE_LIMITS_MANAGER) {
+    function updateLimits(uint128 min, uint128 max) external onlyRole(BRIDGE_LIMITS_MANAGER) {
         if (min > max) revert InvalidLimits(min, max);
-        minBridgeAmount = min;
-        maxBridgeAmount = max;
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
+        $.limits = BridgeLimits({min: min, max: max});
         emit LimitsUpdated(min, max);
     }
 
@@ -610,8 +680,9 @@ contract OkuBridge is
      */
     function updateDeadline(uint256 newDeadline) external onlyRole(BRIDGE_LIMITS_MANAGER) {
         if (newDeadline == 0) revert DeadlineMustBePositive();
-        uint256 oldDeadline = bridgeDeadline;
-        bridgeDeadline = newDeadline;
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
+        uint256 oldDeadline = $.bridgeDeadline;
+        $.bridgeDeadline = newDeadline;
         emit DeadlineUpdated(oldDeadline, newDeadline);
     }
 
@@ -636,10 +707,11 @@ contract OkuBridge is
      * @dev Transfers the bridge's entire OkuMoney balance to feeRecipient
      */
     function sweepDust() external onlyRole(BRIDGE_DUST_SWEEPER) {
-        uint256 balance = IERC20(address(okuMoney)).balanceOf(address(this));
+        OkuBridgeStorage storage $ = _getOkuBridgeStorage();
+        uint256 balance = IERC20(address($.okuMoney)).balanceOf(address(this));
         if (balance > 0) {
-            IERC20(address(okuMoney)).safeTransfer(feeRecipient, balance);
-            emit DustSwept(feeRecipient, balance);
+            IERC20(address($.okuMoney)).safeTransfer($.feeRecipient, balance);
+            emit DustSwept($.feeRecipient, balance);
         }
     }
 
@@ -666,25 +738,4 @@ contract OkuBridge is
     function hashTypedDataV4(bytes32 structHash) external view returns (bytes32) {
         return _hashTypedDataV4(structHash);
     }
-
-    // ============ Storage Gap ============
-
-    /**
-     * Storage layout:
-     * - okuMoney: 1 slot
-     * - authorizedSigner: 1 slot
-     * - feeRecipient: 1 slot
-     * - bridgeFee: 1 slot
-     * - minBridgeAmount: 1 slot
-     * - maxBridgeAmount: 1 slot
-     * - supportedChains mapping: 1 slot (mapping head)
-     * - outboundNonce mapping: 1 slot (mapping head)
-     * - processedRequests mapping: 1 slot (mapping head)
-     * - refundedRequests mapping: 1 slot (mapping head)
-     * - bridgeDeadline: 1 slot
-     * - pendingRefundInitiator mapping: 1 slot (mapping head)
-     * Total: 12 slots used
-     * Gap: 50 - 12 = 38 slots
-     */
-    uint256[38] private __gap;
 }

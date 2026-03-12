@@ -9,6 +9,9 @@ import {
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
+import {Roles} from "../lib/Roles.sol";
+import {Constants} from "../lib/Constants.sol";
+import {MathLib} from "../lib/MathLib.sol";
 
 /**
  * @title RedemptionQueue
@@ -26,20 +29,13 @@ import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
  *      the QUEUE_RESCUER role can call rescueQueueEntry() to return the OkuMoney to the
  *      original user or an alternate address and clear the slot. Operators should call
  *      rescueQueueEntry() on any stuck entries before running processQueue() on that range.
+ *
+ *      Storage: Uses ERC-7201 namespaced storage pattern for upgrade safety.
  */
 contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgradeable {
     using SafeERC20 for IERC20;
 
-    // Decimal conversion constant (USDC is 6 decimals, OkuMoney is 18 decimals)
-    uint256 private constant DECIMAL_MULTIPLIER = 10 ** 12; // 18 - 6 = 12
-    uint256 private constant PRECISION = 1e18;
-
-    // Granular RBAC roles (prefixed with QUEUE_ for consistency)
-    bytes32 public constant QUEUE_UPGRADER = keccak256("QUEUE_UPGRADER");
-    bytes32 public constant QUEUE_PSM = keccak256("QUEUE_PSM");
-
-    /// @notice Role that can rescue stuck queue entries by returning OkuMoney to an alternate address
-    bytes32 public constant QUEUE_RESCUER = keccak256("QUEUE_RESCUER");
+    // ============ ERC-7201 Namespaced Storage ============
 
     struct QueueEntry {
         address user;
@@ -47,18 +43,43 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         uint256 timestamp;
     }
 
-    mapping(uint256 => QueueEntry) public queue;
-    uint256 public queueHead;
-    uint256 public queueTail;
+    /// @custom:storage-location erc7201:okumoney.storage.RedemptionQueue
+    struct RedemptionQueueStorage {
+        mapping(uint256 => QueueEntry) queue;
+        uint256 queueHead;
+        uint256 queueTail;
+        uint256 totalQueuedOkuM;
+        IOkuMoney okuMoney;
+    }
 
-    /// @notice Running counter of OkuM tokens queued (O(1) totalQueuedUsdc)
-    uint256 public totalQueuedOkuM;
+    // keccak256(abi.encode(uint256(keccak256("okumoney.storage.RedemptionQueue")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant REDEMPTIONQUEUE_STORAGE_LOCATION =
+        0x4e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e00;
 
-    IOkuMoney public okuMoney;
+    function _getRedemptionQueueStorage() private pure returns (RedemptionQueueStorage storage $) {
+        assembly {
+            $.slot := REDEMPTIONQUEUE_STORAGE_LOCATION
+        }
+    }
 
-    // Events
+    // ============ Constants (from shared library) ============
+
+    uint256 private constant DECIMAL_MULTIPLIER = Constants.DECIMAL_MULTIPLIER;
+    uint256 private constant PRECISION = Constants.PRECISION;
+
+    // ============ Role Constants (from shared library) ============
+
+    bytes32 public constant QUEUE_UPGRADER = Roles.QUEUE_UPGRADER;
+    bytes32 public constant QUEUE_PSM = Roles.QUEUE_PSM;
+    bytes32 public constant QUEUE_RESCUER = Roles.QUEUE_RESCUER;
+
+    // ============ Events ============
+
     event RedemptionQueued(address indexed user, uint256 okuMAmount, uint256 position);
     event RedemptionProcessed(address indexed user, uint256 okuMAmount, uint256 usdcAmount);
+
+    /// @notice Emitted when processQueue skips a cleared/rescued entry
+    event RedemptionSkipped(uint256 indexed index, RedemptionSkipReason reason);
 
     /// @notice Emitted when QUEUE_RESCUER returns OkuMoney for a stuck entry
     event RedemptionRescued(
@@ -68,7 +89,15 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         uint256 okuMAmount
     );
 
-    // Custom errors
+    // ============ Enums ============
+
+    enum RedemptionSkipReason {
+        AlreadyCleared, // Entry was previously processed or rescued
+        InsufficientFunds // Not enough USDC to process this entry
+    }
+
+    // ============ Custom Errors ============
+
     error ZeroAddress();
     error StartBelowHead();
     error EndAboveTail();
@@ -86,7 +115,8 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
         __AccessControl_init();
 
-        okuMoney = IOkuMoney(_okuMoney);
+        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+        $.okuMoney = IOkuMoney(_okuMoney);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(QUEUE_UPGRADER, admin);
@@ -94,6 +124,28 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         // NOTE: QUEUE_PSM role is NOT granted here — must be granted post-deployment to the
         // LitePSM proxy address. This is intentional to avoid a circular dependency
         // at deployment time.
+    }
+
+    // ============ Storage Accessor Views ============
+
+    function okuMoney() public view returns (IOkuMoney) {
+        return _getRedemptionQueueStorage().okuMoney;
+    }
+
+    function queueHead() public view returns (uint256) {
+        return _getRedemptionQueueStorage().queueHead;
+    }
+
+    function queueTail() public view returns (uint256) {
+        return _getRedemptionQueueStorage().queueTail;
+    }
+
+    function totalQueuedOkuM() public view returns (uint256) {
+        return _getRedemptionQueueStorage().totalQueuedOkuM;
+    }
+
+    function queue(uint256 index) public view returns (QueueEntry memory) {
+        return _getRedemptionQueueStorage().queue[index];
     }
 
     // ============ Queue Management ============
@@ -106,11 +158,12 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
      *      This function is record-only: it stores the raw OkuM amount and pushes an entry.
      */
     function enqueue(address user, uint256 okuMTokenAmount) external onlyRole(QUEUE_PSM) {
-        uint256 position = queueTail;
-        queue[position] =
+        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+        uint256 position = $.queueTail;
+        $.queue[position] =
             QueueEntry({user: user, okuMAmount: okuMTokenAmount, timestamp: block.timestamp});
-        queueTail = position + 1;
-        totalQueuedOkuM += okuMTokenAmount;
+        $.queueTail = position + 1;
+        $.totalQueuedOkuM += okuMTokenAmount;
 
         emit RedemptionQueued(user, okuMTokenAmount, position);
     }
@@ -138,44 +191,53 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         external
         onlyRole(QUEUE_PSM)
     {
-        if (startIndex < queueHead) revert StartBelowHead();
-        if (endIndex > queueTail) revert EndAboveTail();
+        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+        if (startIndex < $.queueHead) revert StartBelowHead();
+        if (endIndex > $.queueTail) revert EndAboveTail();
 
-        IERC20 usdc = IERC20(usdcToken);
-        uint256 usdcBalance = usdc.balanceOf(msg.sender);
+        IERC20 usdcContract = IERC20(usdcToken);
+        uint256 usdcBalance = usdcContract.balanceOf(msg.sender);
 
         // Cache price once — consistent within a block, avoids repeated external calls
-        uint256 cachedPrice = okuMoney.okuMPrice();
+        uint256 cachedPrice = $.okuMoney.okuMPrice();
 
-        for (uint256 i = startIndex; i < endIndex && usdcBalance > 0; i++) {
-            QueueEntry memory entry = queue[i];
-            if (entry.user == address(0)) continue; // Already processed/deleted or rescued
+        for (uint256 i = startIndex; i < endIndex; i++) {
+            QueueEntry memory entry = $.queue[i];
+
+            if (entry.user == address(0)) {
+                // Already processed/deleted or rescued
+                emit RedemptionSkipped(i, RedemptionSkipReason.AlreadyCleared);
+                continue;
+            }
 
             // Price-aware: dollarValue = okuMAmount × cachedPrice / PRECISION
-            uint256 dollarValue18 = (entry.okuMAmount * cachedPrice) / PRECISION;
+            uint256 dollarValue18 = MathLib.okuMToDollars(entry.okuMAmount, cachedPrice);
 
             // Convert to USDC (6 decimals)
-            uint256 usdcAmount = dollarValue18 / DECIMAL_MULTIPLIER;
+            uint256 usdcAmount = MathLib.dollarsToUsdc(dollarValue18);
 
-            if (usdcBalance < usdcAmount) break;
+            if (usdcBalance < usdcAmount) {
+                emit RedemptionSkipped(i, RedemptionSkipReason.InsufficientFunds);
+                break;
+            }
 
             // Burn OkuM tokens held by queue
-            okuMoney.burn(entry.okuMAmount);
+            $.okuMoney.burn(entry.okuMAmount);
 
             // Transfer USDC to user (price-aware value)
-            usdc.safeTransferFrom(msg.sender, entry.user, usdcAmount);
+            usdcContract.safeTransferFrom(msg.sender, entry.user, usdcAmount);
 
-            totalQueuedOkuM -= entry.okuMAmount;
+            $.totalQueuedOkuM -= entry.okuMAmount;
 
             emit RedemptionProcessed(entry.user, entry.okuMAmount, usdcAmount);
 
-            delete queue[i];
+            delete $.queue[i];
             usdcBalance -= usdcAmount;
         }
 
         // Advance head past consecutive deleted/processed entries
-        while (queueHead < queueTail && queue[queueHead].user == address(0)) {
-            queueHead++;
+        while ($.queueHead < $.queueTail && $.queue[$.queueHead].user == address(0)) {
+            $.queueHead++;
         }
     }
 
@@ -197,24 +259,25 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         external
         onlyRole(QUEUE_RESCUER)
     {
-        if (index < queueHead || index >= queueTail) revert InvalidIndex();
+        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+        if (index < $.queueHead || index >= $.queueTail) revert InvalidIndex();
         if (alternateRecipient == address(0)) revert ZeroAddress();
 
-        QueueEntry memory entry = queue[index];
+        QueueEntry memory entry = $.queue[index];
         if (entry.user == address(0)) revert EntryAlreadyCleared();
 
         // Transfer OkuMoney back — do not burn, the user is reclaiming their tokens
-        IERC20(address(okuMoney)).safeTransfer(alternateRecipient, entry.okuMAmount);
+        IERC20(address($.okuMoney)).safeTransfer(alternateRecipient, entry.okuMAmount);
 
-        totalQueuedOkuM -= entry.okuMAmount;
+        $.totalQueuedOkuM -= entry.okuMAmount;
 
         emit RedemptionRescued(index, entry.user, alternateRecipient, entry.okuMAmount);
 
-        delete queue[index];
+        delete $.queue[index];
 
         // Advance head past any contiguous cleared entries at the front
-        while (queueHead < queueTail && queue[queueHead].user == address(0)) {
-            queueHead++;
+        while ($.queueHead < $.queueTail && $.queue[$.queueHead].user == address(0)) {
+            $.queueHead++;
         }
     }
 
@@ -223,8 +286,9 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
      * @return O(1) calculation via running totalQueuedOkuM counter and okuMPrice()
      */
     function totalQueuedUsdc() external view returns (uint256) {
-        uint256 dollarValue18 = (totalQueuedOkuM * okuMoney.okuMPrice()) / PRECISION;
-        return dollarValue18 / DECIMAL_MULTIPLIER;
+        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+        uint256 dollarValue18 = MathLib.okuMToDollars($.totalQueuedOkuM, $.okuMoney.okuMPrice());
+        return MathLib.dollarsToUsdc(dollarValue18);
     }
 
     /**
@@ -232,15 +296,17 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
      * @dev This is an approximation. Use off-chain iteration for an exact live-entry count.
      */
     function queueUpperBound() external view returns (uint256) {
-        return queueTail - queueHead;
+        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+        return $.queueTail - $.queueHead;
     }
 
     /**
      * @notice Get queue entry at index
      */
     function getQueueEntry(uint256 index) external view returns (QueueEntry memory) {
-        if (index < queueHead || index >= queueTail) revert InvalidIndex();
-        return queue[index];
+        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+        if (index < $.queueHead || index >= $.queueTail) revert InvalidIndex();
+        return $.queue[index];
     }
 
     /**
@@ -249,8 +315,9 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
      * @return Current dollar value of the queued OkuM tokens (18 decimals)
      */
     function getQueueEntryValue(uint256 index) external view returns (uint256) {
-        if (index < queueHead || index >= queueTail) revert InvalidIndex();
-        return (queue[index].okuMAmount * okuMoney.okuMPrice()) / PRECISION;
+        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+        if (index < $.queueHead || index >= $.queueTail) revert InvalidIndex();
+        return MathLib.okuMToDollars($.queue[index].okuMAmount, $.okuMoney.okuMPrice());
     }
 
     // ============ Upgradeability ============
@@ -260,18 +327,4 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         override
         onlyRole(QUEUE_UPGRADER)
     {}
-
-    // ============ Storage Gap ============
-
-    /**
-     * Storage layout:
-     * - queue mapping: 1 slot (mapping head)
-     * - queueHead: 1 slot
-     * - queueTail: 1 slot
-     * - totalQueuedOkuM: 1 slot
-     * - okuMoney: 1 slot
-     * Total: 5 slots used
-     * Gap: 50 - 5 = 45 slots
-     */
-    uint256[45] private __gap;
 }

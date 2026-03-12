@@ -176,7 +176,7 @@ describe("OkuBridgeRouter", function () {
     async function setupWrapped(amount: bigint) {
       await okuMoney.connect(admin).mint(user1.address, amount);
       await okuMoney.connect(user1).approve(await okuUsd.getAddress(), amount);
-      await okuUsd.connect(user1).wrap(amount, user1.address);
+      await okuUsd.connect(user1).wrap(amount, user1.address, 0);
     }
 
     it("should bridge OkuDollar via native OkuBridge path", async function () {
@@ -326,7 +326,7 @@ describe("OkuBridgeRouter", function () {
 
       await okuMoney.connect(admin).mint(user1.address, noteAmount);
       await okuMoney.connect(user1).approve(await okuUsd.getAddress(), noteAmount);
-      await okuUsd.connect(user1).wrap(noteAmount, user1.address);
+      await okuUsd.connect(user1).wrap(noteAmount, user1.address, 0);
 
       const okuUsdBalance = await okuUsd.balanceOf(user1.address);
       await okuUsd.connect(user1).approve(await bridgeRouter.getAddress(), okuUsdBalance);
@@ -353,7 +353,7 @@ describe("OkuBridgeRouter", function () {
 
       await okuMoney.connect(admin).mint(user1.address, noteAmount);
       await okuMoney.connect(user1).approve(await okuUsd.getAddress(), noteAmount);
-      await okuUsd.connect(user1).wrap(noteAmount, user1.address);
+      await okuUsd.connect(user1).wrap(noteAmount, user1.address, 0);
 
       const okuUsdBalance = await okuUsd.balanceOf(user1.address);
       await okuUsd.connect(user1).approve(await bridgeRouter.getAddress(), okuUsdBalance);
@@ -373,7 +373,7 @@ describe("OkuBridgeRouter", function () {
 
       await okuMoney.connect(admin).mint(user1.address, noteAmount);
       await okuMoney.connect(user1).approve(await okuUsd.getAddress(), noteAmount);
-      await okuUsd.connect(user1).wrap(noteAmount, user1.address);
+      await okuUsd.connect(user1).wrap(noteAmount, user1.address, 0);
 
       const okuUsdBalance = await okuUsd.balanceOf(user1.address);
       await okuUsd.connect(user1).approve(await bridgeRouter.getAddress(), okuUsdBalance);
@@ -390,7 +390,7 @@ describe("OkuBridgeRouter", function () {
 
       await okuMoney.connect(admin).mint(user1.address, noteAmount);
       await okuMoney.connect(user1).approve(await okuUsd.getAddress(), noteAmount);
-      await okuUsd.connect(user1).wrap(noteAmount, user1.address);
+      await okuUsd.connect(user1).wrap(noteAmount, user1.address, 0);
 
       const okuUsdBalance = await okuUsd.balanceOf(user1.address);
       await bridgeRouter.connect(admin).pause();

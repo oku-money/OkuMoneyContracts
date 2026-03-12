@@ -9,12 +9,14 @@ import {
 import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardUpgradeable} from "../lib/ReentrancyGuardUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
 import {IOkuBridgeNative} from "../interfaces/IOkuBridgeNative.sol";
+import {Roles} from "../lib/Roles.sol";
+import {Constants} from "../lib/Constants.sol";
 
 interface IBridgeAdapter {
     function bridge(
@@ -35,8 +37,8 @@ interface IBridgeAdapter {
  *   NATIVE PATH — delegates to OkuBridge directly. OkuBridge owns its own burn lifecycle
  *   (burn, fee collection, nonce, EIP-712 signed mint on destination). The router only
  *   normalizes the input token (unwrapping OkuDollar if needed) before handing off.
- *     bridge_usdOku(usdAmount, destChain, recipient)
- *     bridge_OkuM(okuMAmount, destChain, recipient)
+ *     bridgeUsdOku(usdAmount, destChain, recipient)
+ *     bridgeOkuM(okuMAmount, destChain, recipient)
  *
  *   ADAPTER PATH — router is the burn authority. It burns OkuMoney then calls a message-only
  *   adapter shim (NTT, CCIP, etc.) that delivers the cross-chain message. The third-party
@@ -46,34 +48,49 @@ interface IBridgeAdapter {
  *
  *   Since OkuMoney is a standard non-rebasing ERC-20, no share conversion is needed.
  *   Token amounts are passed directly to the bridge.
+ *
+ *   Storage: Uses ERC-7201 namespaced storage pattern for upgrade safety.
  */
 contract OkuBridgeRouter is
     Initializable,
     AccessControlUpgradeable,
     PausableUpgradeable,
-    ReentrancyGuard,
+    ReentrancyGuardUpgradeable,
     UUPSUpgradeable
 {
     using SafeERC20 for IERC20;
 
-    // ============ Roles ============
+    // ============ ERC-7201 Namespaced Storage ============
 
-    bytes32 public constant ROUTER_UPGRADER = keccak256("ROUTER_UPGRADER");
-    bytes32 public constant ROUTER_PAUSER = keccak256("ROUTER_PAUSER");
-    bytes32 public constant ROUTER_UNPAUSER = keccak256("ROUTER_UNPAUSER");
-    bytes32 public constant ROUTER_ADAPTER_MANAGER = keccak256("ROUTER_ADAPTER_MANAGER");
-    bytes32 public constant ROUTER_BRIDGE_MANAGER = keccak256("ROUTER_BRIDGE_MANAGER");
+    /// @custom:storage-location erc7201:okumoney.storage.OkuBridgeRouter
+    struct OkuBridgeRouterStorage {
+        IOkuDollar usdOku;
+        IOkuMoney okuMoney;
+        IOkuBridgeNative okuBridge;
+        mapping(address => bool) supportedAdapters;
+    }
 
-    // ============ State ============
+    // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuBridgeRouter")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant OKUBRIDGEROUTER_STORAGE_LOCATION =
+        0x6a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a00;
 
-    IOkuDollar public usdOku;
-    IOkuMoney public okuMoney;
+    function _getOkuBridgeRouterStorage() private pure returns (OkuBridgeRouterStorage storage $) {
+        assembly {
+            $.slot := OKUBRIDGEROUTER_STORAGE_LOCATION
+        }
+    }
 
-    /// @notice The native OkuBridge contract — handles its own burn, fee, nonce, and event
-    IOkuBridgeNative public okuBridge;
+    // ============ Role Constants (from shared library) ============
 
-    /// @notice Registered third-party bridge adapters (message-only shims)
-    mapping(address => bool) public supportedAdapters;
+    bytes32 public constant ROUTER_UPGRADER = Roles.ROUTER_UPGRADER;
+    bytes32 public constant ROUTER_PAUSER = Roles.ROUTER_PAUSER;
+    bytes32 public constant ROUTER_UNPAUSER = Roles.ROUTER_UNPAUSER;
+    bytes32 public constant ROUTER_ADAPTER_MANAGER = Roles.ROUTER_ADAPTER_MANAGER;
+    bytes32 public constant ROUTER_BRIDGE_MANAGER = Roles.ROUTER_BRIDGE_MANAGER;
+
+    // ============ Constants ============
+
+    uint256 public constant BASIS_POINTS = Constants.BASIS_POINTS;
 
     // ============ Events ============
 
@@ -104,17 +121,13 @@ contract OkuBridgeRouter is
     event OkuBridgeUpdated(address indexed oldBridge, address indexed newBridge);
     event Swept(address indexed token, address indexed to, uint256 amount);
 
-    // ============ Constants ============
-
-    uint256 public constant BASIS_POINTS = 10_000;
-
     // ============ Errors ============
 
     error UnsupportedAdapter(address adapter);
     error InvalidRecipient();
     error ZeroAddress();
     error InsufficientBalance();
-    error SweepFailed();
+    error CannotSweepOperationalToken(address token);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -137,10 +150,12 @@ contract OkuBridgeRouter is
 
         __AccessControl_init();
         __Pausable_init();
+        __ReentrancyGuard_init();
 
-        usdOku = IOkuDollar(_usdOku);
-        okuMoney = IOkuMoney(_okuMoney);
-        okuBridge = IOkuBridgeNative(_okuBridge);
+        OkuBridgeRouterStorage storage $ = _getOkuBridgeRouterStorage();
+        $.usdOku = IOkuDollar(_usdOku);
+        $.okuMoney = IOkuMoney(_okuMoney);
+        $.okuBridge = IOkuBridgeNative(_okuBridge);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(ROUTER_UPGRADER, admin);
@@ -148,6 +163,24 @@ contract OkuBridgeRouter is
         _grantRole(ROUTER_UNPAUSER, admin);
         _grantRole(ROUTER_ADAPTER_MANAGER, admin);
         _grantRole(ROUTER_BRIDGE_MANAGER, admin);
+    }
+
+    // ============ Storage Accessor Views ============
+
+    function usdOku() public view returns (IOkuDollar) {
+        return _getOkuBridgeRouterStorage().usdOku;
+    }
+
+    function okuMoney() public view returns (IOkuMoney) {
+        return _getOkuBridgeRouterStorage().okuMoney;
+    }
+
+    function okuBridge() public view returns (IOkuBridgeNative) {
+        return _getOkuBridgeRouterStorage().okuBridge;
+    }
+
+    function supportedAdapters(address adapter) public view returns (bool) {
+        return _getOkuBridgeRouterStorage().supportedAdapters[adapter];
     }
 
     // ============ Native Bridge Path ============
@@ -176,11 +209,13 @@ contract OkuBridgeRouter is
     {
         if (recipient == bytes32(0)) revert InvalidRecipient();
 
+        OkuBridgeRouterStorage storage $ = _getOkuBridgeRouterStorage();
+
         // Pull OkuDollar from user
-        IERC20(address(usdOku)).safeTransferFrom(msg.sender, address(this), usdAmount);
+        IERC20(address($.usdOku)).safeTransferFrom(msg.sender, address(this), usdAmount);
 
         // Router holds usdOku shares from safeTransferFrom above — unwrap burns from msg.sender (this)
-        uint256 okuMAmount = usdOku.unwrap(usdAmount, address(this));
+        uint256 okuMAmount = $.usdOku.unwrap(usdAmount, address(this));
 
         // Compute fee locally for event accuracy (OkuBridge deducts this before minting on dest).
         // Uses the same formula as OkuBridge.bridgeBurn: feeAmount = amount * bridgeFee / 10_000.
@@ -189,19 +224,19 @@ contract OkuBridgeRouter is
         // changes are admin operations that don't race with user bridges in practice), the emitted
         // feeAmount would not match the actual deduction. Accepted: the emitted values are
         // best-effort for indexers; the on-chain BridgeBurn event from OkuBridge is authoritative.
-        uint256 feeBps = okuBridge.bridgeFee();
-        uint256 feeAmount = (okuMAmount * feeBps) / 10_000;
+        uint256 feeBps = $.okuBridge.bridgeFee();
+        uint256 feeAmount = (okuMAmount * feeBps) / BASIS_POINTS;
         uint256 bridgedAmount = okuMAmount - feeAmount;
 
         // Approve OkuBridge to pull OkuMoney (bridgeBurn uses safeTransferFrom)
-        IERC20(address(okuMoney)).approve(address(okuBridge), okuMAmount);
+        IERC20(address($.okuMoney)).approve(address($.okuBridge), okuMAmount);
 
         // OkuBridge pulls OkuMoney, self-burns, deducts fee, emits BridgeBurn
         // No share conversion needed — pass raw token amount directly
-        requestId = okuBridge.bridgeBurn(destinationChain, recipient, okuMAmount);
+        requestId = $.okuBridge.bridgeBurn(destinationChain, recipient, okuMAmount);
 
         // Revoke any remaining approval
-        IERC20(address(okuMoney)).approve(address(okuBridge), 0);
+        IERC20(address($.okuMoney)).approve(address($.okuBridge), 0);
 
         emit NativeBridgeInitiated(
             msg.sender, requestId, usdAmount, bridgedAmount, feeAmount, destinationChain, recipient
@@ -228,22 +263,24 @@ contract OkuBridgeRouter is
     {
         if (recipient == bytes32(0)) revert InvalidRecipient();
 
-        IERC20(address(okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
+        OkuBridgeRouterStorage storage $ = _getOkuBridgeRouterStorage();
 
-        // Compute fee locally for event accuracy. See bridge_usdOku for TOCTOU note.
-        uint256 feeBps = okuBridge.bridgeFee();
-        uint256 feeAmount = (okuMAmount * feeBps) / 10_000;
+        IERC20(address($.okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
+
+        // Compute fee locally for event accuracy. See bridgeUsdOku for TOCTOU note.
+        uint256 feeBps = $.okuBridge.bridgeFee();
+        uint256 feeAmount = (okuMAmount * feeBps) / BASIS_POINTS;
         uint256 bridgedAmount = okuMAmount - feeAmount;
 
         // Approve OkuBridge to pull OkuMoney (bridgeBurn uses safeTransferFrom)
-        IERC20(address(okuMoney)).approve(address(okuBridge), okuMAmount);
+        IERC20(address($.okuMoney)).approve(address($.okuBridge), okuMAmount);
 
         // OkuBridge pulls OkuMoney, self-burns, deducts fee, emits BridgeBurn
         // No share conversion needed — pass raw token amount directly
-        requestId = okuBridge.bridgeBurn(destinationChain, recipient, okuMAmount);
+        requestId = $.okuBridge.bridgeBurn(destinationChain, recipient, okuMAmount);
 
         // Revoke any remaining approval
-        IERC20(address(okuMoney)).approve(address(okuBridge), 0);
+        IERC20(address($.okuMoney)).approve(address($.okuBridge), 0);
 
         emit NativeBridgeInitiated(
             msg.sender, requestId, okuMAmount, bridgedAmount, feeAmount, destinationChain, recipient
@@ -275,18 +312,19 @@ contract OkuBridgeRouter is
         whenNotPaused
         nonReentrant
     {
-        if (!supportedAdapters[adapter]) revert UnsupportedAdapter(adapter);
+        OkuBridgeRouterStorage storage $ = _getOkuBridgeRouterStorage();
+        if (!$.supportedAdapters[adapter]) revert UnsupportedAdapter(adapter);
         if (recipient == address(0)) revert InvalidRecipient();
 
         // Pull OkuDollar from user
-        IERC20(address(usdOku)).safeTransferFrom(msg.sender, address(this), usdAmount);
+        IERC20(address($.usdOku)).safeTransferFrom(msg.sender, address(this), usdAmount);
 
         // Unwrap OkuDollar → get OkuMoney (price-aware, reverts if vault undercollateralized)
-        uint256 okuMAmount = usdOku.unwrap(usdAmount, address(this));
+        uint256 okuMAmount = $.usdOku.unwrap(usdAmount, address(this));
 
-        okuMoney.burn(okuMAmount);
+        $.okuMoney.burn(okuMAmount);
         IBridgeAdapter(adapter).bridge{value: msg.value}(
-            address(okuMoney), okuMAmount, destinationChain, recipient
+            address($.okuMoney), okuMAmount, destinationChain, recipient
         );
 
         emit BridgeInitiated(msg.sender, adapter, okuMAmount, destinationChain, recipient);
@@ -311,14 +349,15 @@ contract OkuBridgeRouter is
         whenNotPaused
         nonReentrant
     {
-        if (!supportedAdapters[adapter]) revert UnsupportedAdapter(adapter);
+        OkuBridgeRouterStorage storage $ = _getOkuBridgeRouterStorage();
+        if (!$.supportedAdapters[adapter]) revert UnsupportedAdapter(adapter);
         if (recipient == address(0)) revert InvalidRecipient();
 
-        IERC20(address(okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
+        IERC20(address($.okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
 
-        okuMoney.burn(okuMAmount);
+        $.okuMoney.burn(okuMAmount);
         IBridgeAdapter(adapter).bridge{value: msg.value}(
-            address(okuMoney), okuMAmount, destinationChain, recipient
+            address($.okuMoney), okuMAmount, destinationChain, recipient
         );
 
         emit BridgeInitiated(msg.sender, adapter, okuMAmount, destinationChain, recipient);
@@ -333,14 +372,16 @@ contract OkuBridgeRouter is
         external
         onlyRole(ROUTER_ADAPTER_MANAGER)
     {
-        supportedAdapters[adapter] = supported;
+        OkuBridgeRouterStorage storage $ = _getOkuBridgeRouterStorage();
+        $.supportedAdapters[adapter] = supported;
         emit AdapterConfigured(adapter, supported);
     }
 
     function updateOkuBridge(address newBridge) external onlyRole(ROUTER_BRIDGE_MANAGER) {
         if (newBridge == address(0)) revert ZeroAddress();
-        address old = address(okuBridge);
-        okuBridge = IOkuBridgeNative(newBridge);
+        OkuBridgeRouterStorage storage $ = _getOkuBridgeRouterStorage();
+        address old = address($.okuBridge);
+        $.okuBridge = IOkuBridgeNative(newBridge);
         emit OkuBridgeUpdated(old, newBridge);
     }
 
@@ -354,7 +395,9 @@ contract OkuBridgeRouter is
 
     /**
      * @notice Sweep stuck tokens from the router
-     * @param token Token address to sweep
+     * @dev Cannot sweep OkuMoney or OkuDollar (operational tokens) to prevent misuse.
+     *      Use this only for accidentally sent tokens (e.g., wrong ERC-20).
+     * @param token Token address to sweep (must not be OkuMoney or OkuDollar)
      * @param to Recipient address
      * @param amount Amount to sweep
      */
@@ -367,6 +410,13 @@ contract OkuBridgeRouter is
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
         if (to == address(0)) revert ZeroAddress();
+
+        OkuBridgeRouterStorage storage $ = _getOkuBridgeRouterStorage();
+
+        // Prevent sweeping operational tokens
+        if (token == address($.okuMoney)) revert CannotSweepOperationalToken(token);
+        if (token == address($.usdOku)) revert CannotSweepOperationalToken(token);
+
         uint256 balance = IERC20(token).balanceOf(address(this));
         if (balance < amount) revert InsufficientBalance();
         IERC20(token).safeTransfer(to, amount);
@@ -380,17 +430,4 @@ contract OkuBridgeRouter is
         override
         onlyRole(ROUTER_UPGRADER)
     {}
-
-    // ============ Storage Gap ============
-
-    /**
-     * Storage layout:
-     * - usdOku: 1 slot
-     * - okuMoney: 1 slot
-     * - okuBridge: 1 slot
-     * - supportedAdapters mapping: 1 slot (mapping head)
-     * Total: 4 slots used
-     * Gap: 50 - 4 = 46 slots
-     */
-    uint256[46] private __gap;
 }

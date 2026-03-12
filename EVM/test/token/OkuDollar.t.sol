@@ -65,7 +65,7 @@ contract OkuDollarTest is BaseTest {
         _approveOkuMoney(user1, address(usdOku), okuMAmount);
 
         vm.prank(user1);
-        uint256 usdMinted = usdOku.wrap(okuMAmount, user1);
+        uint256 usdMinted = usdOku.wrap(okuMAmount, user1, 0);
 
         // At notePrice=1e18 and usdMultiplier=1e18: 100 notes → 100 OkuDollar
         assertEq(usdMinted, okuMAmount);
@@ -81,7 +81,7 @@ contract OkuDollarTest is BaseTest {
         uint256 vaultBefore = okuMoney.balanceOf(address(usdOku));
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         assertEq(okuMoney.balanceOf(user1), 0);
         assertEq(okuMoney.balanceOf(address(usdOku)), vaultBefore + okuMAmount);
@@ -97,7 +97,7 @@ contract OkuDollarTest is BaseTest {
         emit Transfer(address(0), user1, okuMAmount);
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
     }
 
     function test_Wrap_ToReceiver() public {
@@ -106,7 +106,7 @@ contract OkuDollarTest is BaseTest {
         _approveOkuMoney(user1, address(usdOku), okuMAmount);
 
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user2);
+        usdOku.wrap(okuMAmount, user2, 0);
 
         // At notePrice=1e18: 100 notes → 100 OkuDollar
         assertEq(usdOku.balanceOf(user2), okuMAmount);
@@ -116,7 +116,7 @@ contract OkuDollarTest is BaseTest {
     function test_Wrap_RevertsOnZeroAmount() public {
         vm.prank(user1);
         vm.expectRevert(OkuDollar.ZeroAmount.selector);
-        usdOku.wrap(0, user1);
+        usdOku.wrap(0, user1, 0);
     }
 
     function test_Wrap_RevertsOnZeroReceiver() public {
@@ -126,7 +126,7 @@ contract OkuDollarTest is BaseTest {
 
         vm.prank(user1);
         vm.expectRevert(OkuDollar.ZeroAddress.selector);
-        usdOku.wrap(okuMAmount, address(0));
+        usdOku.wrap(okuMAmount, address(0), 0);
     }
 
     // ============ Wrap Rounding Tests ============
@@ -147,7 +147,7 @@ contract OkuDollarTest is BaseTest {
         _approveOkuMoney(user2, address(usdOku), okuMAmount);
 
         vm.prank(user2);
-        usdOku.wrap(okuMAmount, user2);
+        usdOku.wrap(okuMAmount, user2, 0);
 
         // Shares calculation rounds down (favors vault)
         // sharesToMint = okuMAmount * notePrice / usdMultiplier
@@ -175,7 +175,7 @@ contract OkuDollarTest is BaseTest {
         _approveOkuMoney(user1, address(usdOku), okuMAmount);
 
         vm.prank(user1);
-        uint256 usdMinted = usdOku.wrap(okuMAmount, user1);
+        uint256 usdMinted = usdOku.wrap(okuMAmount, user1, 0);
 
         // usdMinted = 100e18 * 1.05e18 / 1e18 = 105e18
         assertEq(usdMinted, 105e18, "100 notes at $1.05 should produce 105 OkuDollar");
@@ -192,7 +192,7 @@ contract OkuDollarTest is BaseTest {
         _approveOkuMoney(user1, address(usdOku), okuMAmount);
 
         vm.prank(user1);
-        uint256 usdMinted = usdOku.wrap(okuMAmount, user1);
+        uint256 usdMinted = usdOku.wrap(okuMAmount, user1, 0);
 
         // usdMinted = 50e18 * 2e18 / 1e18 = 100e18
         assertEq(usdMinted, 100e18, "50 notes at $2.00 should produce 100 OkuDollar");
@@ -211,7 +211,7 @@ contract OkuDollarTest is BaseTest {
         _approveOkuMoney(user1, address(usdOku), okuMAmount);
 
         vm.prank(user1);
-        uint256 usdMinted = usdOku.wrap(okuMAmount, user1);
+        uint256 usdMinted = usdOku.wrap(okuMAmount, user1, 0);
 
         // sharesToMint = 100e18 * 1.05e18 / 1.02e18 ≈ 102.94e18
         // usdMinted = sharesToMint * 1.02e18 / 1e18 (reconstructed from shares)
@@ -352,7 +352,7 @@ contract OkuDollarTest is BaseTest {
         _approveOkuMoney(user1, address(usdOku), okuMAmount);
 
         vm.startPrank(user1);
-        uint256 usdMinted = usdOku.wrap(okuMAmount, user1);
+        uint256 usdMinted = usdOku.wrap(okuMAmount, user1, 0);
 
         // usdMinted = 100e18 * 1.05e18 / 1e18 = 105e18
         assertEq(usdMinted, 105e18);
@@ -399,7 +399,7 @@ contract OkuDollarTest is BaseTest {
         _approveOkuMoney(user1, address(usdOku), okuMAmount);
 
         vm.prank(user1);
-        uint256 usdMinted = usdOku.wrap(okuMAmount, user1);
+        uint256 usdMinted = usdOku.wrap(okuMAmount, user1, 0);
 
         assertEq(usdMinted, 1e18, "1 note at $1.00 should produce exactly 1 OkuDollar");
         assertEq(usdOku.balanceOf(user1), 1e18);
@@ -415,7 +415,7 @@ contract OkuDollarTest is BaseTest {
         _approveOkuMoney(user1, address(usdOku), okuMAmount);
 
         vm.prank(user1);
-        uint256 usdMinted = usdOku.wrap(okuMAmount, user1);
+        uint256 usdMinted = usdOku.wrap(okuMAmount, user1, 0);
 
         // 100 note tokens × $2.00/token / $1.00 usdMultiplier = 200 OkuDollar
         assertEq(usdMinted, 200e18, "100 notes at $2.00 should produce 200 OkuDollar");
@@ -444,7 +444,7 @@ contract OkuDollarTest is BaseTest {
         _approveOkuMoney(user1, address(usdOku), okuMAmount);
 
         vm.startPrank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 balance = usdOku.balanceOf(user1);
         uint256 notesBack = usdOku.unwrap(balance, user1);
@@ -1081,7 +1081,7 @@ contract OkuDollarTest is BaseTest {
         // M-4 fix: wrap is now blocked when paused (full freeze)
         vm.prank(user1);
         vm.expectRevert();
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
     }
 
     function test_Pause_BlocksUnwrap() public {
@@ -1316,7 +1316,7 @@ contract OkuDollarTest is BaseTest {
         for (uint256 i = 0; i < 1000; i++) {
             uint256 noteBal = okuMoney.balanceOf(user1);
             if (noteBal == 0) break;
-            usdOku.wrap(noteBal, user1);
+            usdOku.wrap(noteBal, user1, 0);
             uint256 usdBal = usdOku.balanceOf(user1);
             if (usdBal == 0) break;
             usdOku.unwrap(usdBal, user1);
@@ -1345,7 +1345,7 @@ contract OkuDollarTest is BaseTest {
         _mintOkuMoney(user2, 5000e18);
         _approveOkuMoney(user2, address(usdOku), 5000e18);
         vm.prank(user2);
-        usdOku.wrap(5000e18, user2);
+        usdOku.wrap(5000e18, user2, 0);
 
         // Now user1 does repeated wrap/unwrap at elevated notePrice
         uint256 initialNotes = 1000e18;
@@ -1357,7 +1357,7 @@ contract OkuDollarTest is BaseTest {
         for (uint256 i = 0; i < 1000; i++) {
             uint256 noteBal = okuMoney.balanceOf(user1);
             if (noteBal == 0) break;
-            usdOku.wrap(noteBal, user1);
+            usdOku.wrap(noteBal, user1, 0);
             uint256 usdBal = usdOku.balanceOf(user1);
             if (usdBal == 0) break;
             usdOku.unwrap(usdBal, user1);
@@ -1389,7 +1389,7 @@ contract OkuDollarTest is BaseTest {
         for (uint256 i = 0; i < 1000; i++) {
             uint256 noteBal = okuMoney.balanceOf(user1);
             if (noteBal == 0) break;
-            usdOku.wrap(noteBal, user1);
+            usdOku.wrap(noteBal, user1, 0);
             uint256 usdBal = usdOku.balanceOf(user1);
             if (usdBal == 0) break;
             usdOku.unwrap(usdBal, user1);
@@ -1648,7 +1648,7 @@ contract OkuDollarTest is BaseTest {
 
         // Wrap
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         // Unwrap full balance
         uint256 bal = usdOku.balanceOf(user1);
@@ -1673,7 +1673,7 @@ contract OkuDollarTest is BaseTest {
         _approveOkuMoney(user1, address(usdOku), okuMAmount);
 
         vm.startPrank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         uint256 bal = usdOku.balanceOf(user1);
         usdOku.unwrap(bal, user1);
@@ -1704,7 +1704,7 @@ contract OkuDollarTest is BaseTest {
 
         // Wrap
         vm.prank(user1);
-        usdOku.wrap(okuMAmount, user1);
+        usdOku.wrap(okuMAmount, user1, 0);
 
         // Unwrap full balance
         uint256 bal = usdOku.balanceOf(user1);

@@ -162,8 +162,8 @@ IBridgeAdapter shims     ← third-party protocol adapters (NTT, CCIP, etc.)
 ### Router Functions
 
 ```
-bridge_OkuM(amount, destChain, recipient)     — direct bridge of OkuMoney tokens
-bridge_usdOku(amount, destChain, recipient)   — unwrap usdOku → OkuM → bridge
+bridgeOkuM(amount, destChain, recipient)      — direct bridge of OkuMoney tokens
+bridgeUsdOku(amount, destChain, recipient)    — unwrap usdOku → OkuM → bridge
                                                  destination: mint OkuM → wrap → deliver usdOku
 bridgeVia(amount, adapter, destChain, recipient)  — OkuM bridge via third-party adapter
 bridgeWrappedVia(amount, adapter, destChain, recipient) — unwrap usdOku → adapter bridge
@@ -289,7 +289,7 @@ uint256 public minCollateralRatio;          // e.g. 95e16 = 95%, enforced on wit
 - `totalSupply()` returns `_totalUsdShares * usdMultiplier() / PRECISION`
 - Transfers operate on USD shares internally, emit token amounts for ERC-20 compatibility
 - Parent ERC20Upgradeable's `_balances` mapping is fully suppressed — all balance state is in `_usdShares`
-- Pause is a **full freeze**: peer-to-peer OkuDollar transfers, `wrap`, and `unwrap` are all blocked while paused. As a consequence, `redeem_usdOku` in LitePSM is also blocked (it calls `unwrap` internally).
+- Pause is a **full freeze**: peer-to-peer OkuDollar transfers, `wrap`, and `unwrap` are all blocked while paused. As a consequence, `redeemUsdOku` in LitePSM is also blocked (it calls `unwrap` internally).
 
 ### Wrap/Unwrap (Price-Aware)
 
@@ -400,10 +400,10 @@ Note: OZ v5 `ReentrancyGuard` is `@custom:stateless` (ERC-7201 namespaced storag
 
 ```solidity
 // USDC → OkuMoney: okuMAmount = usdcValue × PRECISION / okuMPrice()
-function mint_OkuM(uint256 usdcAmount) external;
+function mintOkuM(uint256 usdcAmount) external;
 
 // OkuMoney → USDC: usdcAmount = okuMAmount × okuMPrice() / PRECISION (scaled to 6 decimals)
-function redeem_OkuM(uint256 okuMAmount) external;
+function redeemOkuM(uint256 okuMAmount) external;
 ```
 
 The PSM is no longer 1:1 in token terms. If `okuMPrice()` is $1.05, depositing 100 USDC gives ~95.24 OkuM. Redeeming 95.24 OkuM returns ~100 USDC. The PSM always transacts in dollar-value terms — the user thinks in USDC, the PSM handles the price conversion internally.
@@ -412,20 +412,20 @@ The PSM is no longer 1:1 in token terms. If `okuMPrice()` is $1.05, depositing 1
 
 ```solidity
 // USDC → mint OkuM internally → wrap into vault → deliver usdOku to user
-function mint_usdOku(uint256 usdcAmount) external;
+function mintUsdOku(uint256 usdcAmount) external;
 
 // Receive usdOku → unwrap to OkuM → burn OkuM → deliver USDC to user
 // Two failure modes: (a) vault undercollateralized → unwrap reverts → entire tx reverts
 //                    (b) vault has OkuM but PSM buffer insufficient → OkuM goes to queue
-function redeem_usdOku(uint256 usdAmount) external;
+function redeemUsdOku(uint256 usdAmount) external;
 
 // Permit variant for single-tx UX
-function redeem_usdOkuWithPermit(uint256 usdAmount, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;
+function redeemUsdOkuWithPermit(uint256 usdAmount, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;
 ```
 
-PSM has MINTER role on OkuMoney. For `mint_usdOku`, the PSM mints OkuM to self, approves vault, calls `vault.wrap(okuMAmount, msg.sender)`. For `redeem_usdOku`, the PSM receives usdOku, calls `vault.unwrap(usdAmount, address(this))`, receives OkuM, then redeems via normal price-aware redeem path.
+PSM has MINTER role on OkuMoney. For `mintUsdOku`, the PSM mints OkuM to self, approves vault, calls `vault.wrap(okuMAmount, msg.sender)`. For `redeemUsdOku`, the PSM receives usdOku, calls `vault.unwrap(usdAmount, address(this))`, receives OkuM, then redeems via normal price-aware redeem path.
 
-**Storage, RBAC, queue, buffer management, oracle checks**: Core PSM mechanics unchanged. Existing `mint()` / `redeem()` become `mint_OkuM()` / `redeem_OkuM()`.
+**Storage, RBAC, queue, buffer management, oracle checks**: Core PSM mechanics unchanged. Existing `mint()` / `redeem()` become `mintOkuM()` / `redeemOkuM()`.
 
 ### Queue Behavior
 
@@ -524,9 +524,9 @@ forge test --match-contract SupplyInvariants
 - Role enforcement
 
 *LitePSM:*
-- mint_OkuM / redeem_OkuM: price-aware conversions via okuMPrice()
-- mint_usdOku / redeem_usdOku: convenience functions
-- redeem_usdOku: vault undercollateralized → revert (distinct from buffer-insufficient queue)
+- mintOkuM / redeemOkuM: price-aware conversions via okuMPrice()
+- mintUsdOku / redeemUsdOku: convenience functions
+- redeemUsdOku: vault undercollateralized → revert (distinct from buffer-insufficient queue)
 - Queue: OkuMoney appreciates in price while queued, USDC output based on okuMPrice() at processing
 - Oracle staleness rejection
 - Decimal conversion accuracy
@@ -535,9 +535,9 @@ forge test --match-contract SupplyInvariants
 - OkuBridge: valid signature mints tokens (not shares — standard ERC-20 amounts)
 - OkuBridge: invalid/expired signature reverts
 - OkuBridge: replay prevention
-- OkuBridgeRouter: bridge_OkuM routes correctly (standard ERC-20 token amounts)
-- OkuBridgeRouter: bridge_usdOku unwraps then bridges
-- OkuBridgeRouter: bridge_usdOku reverts when vault undercollateralized
+- OkuBridgeRouter: bridgeOkuM routes correctly (standard ERC-20 token amounts)
+- OkuBridgeRouter: bridgeUsdOku unwraps then bridges
+- OkuBridgeRouter: bridgeUsdOku reverts when vault undercollateralized
 - OkuBridgeRouter: adapter path burns and delegates
 
 ---

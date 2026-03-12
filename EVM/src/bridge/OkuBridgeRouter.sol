@@ -61,8 +61,8 @@ contract OkuBridgeRouter is
     bytes32 public constant ROUTER_UPGRADER = keccak256("ROUTER_UPGRADER");
     bytes32 public constant ROUTER_PAUSER = keccak256("ROUTER_PAUSER");
     bytes32 public constant ROUTER_UNPAUSER = keccak256("ROUTER_UNPAUSER");
-    bytes32 public constant ADAPTER_MANAGER = keccak256("ADAPTER_MANAGER");
-    bytes32 public constant BRIDGE_MANAGER = keccak256("BRIDGE_MANAGER");
+    bytes32 public constant ROUTER_ADAPTER_MANAGER = keccak256("ROUTER_ADAPTER_MANAGER");
+    bytes32 public constant ROUTER_BRIDGE_MANAGER = keccak256("ROUTER_BRIDGE_MANAGER");
 
     // ============ State ============
 
@@ -146,8 +146,8 @@ contract OkuBridgeRouter is
         _grantRole(ROUTER_UPGRADER, admin);
         _grantRole(ROUTER_PAUSER, admin);
         _grantRole(ROUTER_UNPAUSER, admin);
-        _grantRole(ADAPTER_MANAGER, admin);
-        _grantRole(BRIDGE_MANAGER, admin);
+        _grantRole(ROUTER_ADAPTER_MANAGER, admin);
+        _grantRole(ROUTER_BRIDGE_MANAGER, admin);
     }
 
     // ============ Native Bridge Path ============
@@ -326,12 +326,18 @@ contract OkuBridgeRouter is
 
     // ============ Admin Functions ============
 
-    function configureAdapter(address adapter, bool supported) external onlyRole(ADAPTER_MANAGER) {
+    function configureAdapter(
+        address adapter,
+        bool supported
+    )
+        external
+        onlyRole(ROUTER_ADAPTER_MANAGER)
+    {
         supportedAdapters[adapter] = supported;
         emit AdapterConfigured(adapter, supported);
     }
 
-    function updateOkuBridge(address newBridge) external onlyRole(BRIDGE_MANAGER) {
+    function updateOkuBridge(address newBridge) external onlyRole(ROUTER_BRIDGE_MANAGER) {
         if (newBridge == address(0)) revert ZeroAddress();
         address old = address(okuBridge);
         okuBridge = IOkuBridgeNative(newBridge);

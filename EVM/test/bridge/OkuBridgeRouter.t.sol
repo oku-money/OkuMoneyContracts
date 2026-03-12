@@ -86,8 +86,12 @@ contract OkuBridgeRouterTest is BaseTest {
 
         // Deploy OkuBridge (native bridge) — operates on OkuMoney
         okuBridgeImpl = new OkuBridge();
+        uint256[] memory initialChains = new uint256[](2);
+        initialChains[0] = ARBITRUM_CHAIN_ID;
+        initialChains[1] = OPTIMISM_CHAIN_ID;
         bytes memory bridgeInitData = abi.encodeCall(
-            OkuBridge.initialize, (address(okuMoney), orchestratorSigner, feeRecipient, admin)
+            OkuBridge.initialize,
+            (address(okuMoney), orchestratorSigner, feeRecipient, admin, initialChains)
         );
         okuBridgeContract =
             OkuBridge(address(new ERC1967Proxy(address(okuBridgeImpl), bridgeInitData)));
@@ -107,10 +111,10 @@ contract OkuBridgeRouterTest is BaseTest {
         vm.startPrank(admin);
 
         // Grant OkuBridge MINTER role on OkuMoney — it burns from router (native path) and mints fees
-        okuMoney.grantRole(MINTER, address(okuBridgeContract));
+        okuMoney.grantRole(OKUM_MINTER, address(okuBridgeContract));
 
         // Grant router MINTER role on OkuMoney — it burns OkuMoney directly (adapter path)
-        okuMoney.grantRole(MINTER, address(bridgeRouter));
+        okuMoney.grantRole(OKUM_MINTER, address(bridgeRouter));
 
         // Register mock adapter for adapter path tests
         bridgeRouter.configureAdapter(address(mockAdapter), true);
@@ -135,8 +139,8 @@ contract OkuBridgeRouterTest is BaseTest {
         assertTrue(bridgeRouter.hasRole(DEFAULT_ADMIN_ROLE, admin));
         assertTrue(bridgeRouter.hasRole(ROUTER_UPGRADER, admin));
         assertTrue(bridgeRouter.hasRole(ROUTER_PAUSER, admin));
-        assertTrue(bridgeRouter.hasRole(ADAPTER_MANAGER, admin));
-        assertTrue(bridgeRouter.hasRole(BRIDGE_MANAGER, admin));
+        assertTrue(bridgeRouter.hasRole(ROUTER_ADAPTER_MANAGER, admin));
+        assertTrue(bridgeRouter.hasRole(ROUTER_BRIDGE_MANAGER, admin));
     }
 
     function test_Initialize_RevertZeroAddresses() public {
@@ -195,7 +199,9 @@ contract OkuBridgeRouterTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, ADAPTER_MANAGER
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                ROUTER_ADAPTER_MANAGER
             )
         );
         bridgeRouter.configureAdapter(makeAddr("adapter"), true);
@@ -223,7 +229,9 @@ contract OkuBridgeRouterTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BRIDGE_MANAGER
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                ROUTER_BRIDGE_MANAGER
             )
         );
         bridgeRouter.updateOkuBridge(makeAddr("bridge"));
@@ -290,7 +298,7 @@ contract OkuBridgeRouterTest is BaseTest {
             0
         );
 
-        bytes32 requestId = bridgeRouter.bridge_OkuM(
+        bytes32 requestId = bridgeRouter.bridgeOkuM(
             okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
         );
         vm.stopPrank();
@@ -330,7 +338,7 @@ contract OkuBridgeRouterTest is BaseTest {
             bytes32(uint256(uint160(user2)))
         );
 
-        bridgeRouter.bridge_OkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridgeOkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
     }
 
@@ -344,7 +352,7 @@ contract OkuBridgeRouterTest is BaseTest {
         vm.startPrank(user1);
         okuMoney.approve(address(bridgeRouter), okuMAmount);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        bridgeRouter.bridge_OkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridgeOkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
     }
 
@@ -355,7 +363,7 @@ contract OkuBridgeRouterTest is BaseTest {
         vm.startPrank(user1);
         okuMoney.approve(address(bridgeRouter), okuMAmount);
         vm.expectRevert(OkuBridgeRouter.InvalidRecipient.selector);
-        bridgeRouter.bridge_OkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(0));
+        bridgeRouter.bridgeOkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(0));
         vm.stopPrank();
     }
 
@@ -369,7 +377,7 @@ contract OkuBridgeRouterTest is BaseTest {
 
         vm.startPrank(user1);
         okuMoney.approve(address(bridgeRouter), okuMAmount);
-        bridgeRouter.bridge_OkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridgeOkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
 
         // Fee recipient should have received exactly 1% in OkuMoney
@@ -396,7 +404,7 @@ contract OkuBridgeRouterTest is BaseTest {
 
         vm.startPrank(user1);
         okuMoney.approve(address(bridgeRouter), okuMAmount);
-        bridgeRouter.bridge_OkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridgeOkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
 
         // OkuBridge processed the bridge
@@ -429,7 +437,7 @@ contract OkuBridgeRouterTest is BaseTest {
             0
         );
 
-        bytes32 requestId = bridgeRouter.bridge_usdOku(
+        bytes32 requestId = bridgeRouter.bridgeUsdOku(
             usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
         );
         vm.stopPrank();
@@ -472,7 +480,7 @@ contract OkuBridgeRouterTest is BaseTest {
             bytes32(uint256(uint160(user2)))
         );
 
-        bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridgeUsdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
     }
 
@@ -487,7 +495,7 @@ contract OkuBridgeRouterTest is BaseTest {
         vm.startPrank(user1);
         usdOku.approve(address(bridgeRouter), usdBalance);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridgeUsdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
     }
 
@@ -499,7 +507,7 @@ contract OkuBridgeRouterTest is BaseTest {
         vm.startPrank(user1);
         usdOku.approve(address(bridgeRouter), usdBalance);
         vm.expectRevert(OkuBridgeRouter.InvalidRecipient.selector);
-        bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(0));
+        bridgeRouter.bridgeUsdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(0));
         vm.stopPrank();
     }
 
@@ -513,7 +521,7 @@ contract OkuBridgeRouterTest is BaseTest {
 
         vm.startPrank(user1);
         usdOku.approve(address(bridgeRouter), usdBalance);
-        bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridgeUsdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
 
         // Notes were burned (net reduction = amount minus fee reminted to feeRecipient)
@@ -541,7 +549,7 @@ contract OkuBridgeRouterTest is BaseTest {
 
         vm.startPrank(user1);
         usdOku.approve(address(bridgeRouter), usdBalance);
-        bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridgeUsdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
 
         assertEq(okuBridgeContract.outboundNonce(ARBITRUM_CHAIN_ID), 1);
@@ -560,7 +568,7 @@ contract OkuBridgeRouterTest is BaseTest {
 
         vm.startPrank(user1);
         usdOku.approve(address(bridgeRouter), usdBalance);
-        bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridgeUsdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
 
         // Fee recipient should have received fee in OkuMoney (bridge operates on notes)
@@ -747,7 +755,7 @@ contract OkuBridgeRouterTest is BaseTest {
 
         vm.startPrank(user1);
         okuMoney.approve(address(bridgeRouter), okuMAmount);
-        bridgeRouter.bridge_OkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridgeOkuM(okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
 
         // Verify nonce incremented (full EIP-712 round-trip covered in OkuBridge.t.sol)
@@ -761,7 +769,7 @@ contract OkuBridgeRouterTest is BaseTest {
 
         vm.startPrank(user1);
         usdOku.approve(address(bridgeRouter), usdBalance);
-        bridgeRouter.bridge_usdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
+        bridgeRouter.bridgeUsdOku(usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2))));
         vm.stopPrank();
 
         assertEq(okuBridgeContract.outboundNonce(ARBITRUM_CHAIN_ID), 1);
@@ -833,7 +841,7 @@ contract OkuBridgeRouterTest is BaseTest {
 
         vm.startPrank(user1);
         okuMoney.approve(address(bridgeRouter), okuMAmount);
-        bytes32 requestId = bridgeRouter.bridge_OkuM(
+        bytes32 requestId = bridgeRouter.bridgeOkuM(
             okuMAmount, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
         );
         vm.stopPrank();
@@ -853,7 +861,7 @@ contract OkuBridgeRouterTest is BaseTest {
 
         vm.startPrank(user1);
         usdOku.approve(address(bridgeRouter), usdBalance);
-        bytes32 requestId = bridgeRouter.bridge_usdOku(
+        bytes32 requestId = bridgeRouter.bridgeUsdOku(
             usdBalance, ARBITRUM_CHAIN_ID, bytes32(uint256(uint160(user2)))
         );
         vm.stopPrank();

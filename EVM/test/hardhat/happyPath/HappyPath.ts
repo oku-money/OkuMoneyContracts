@@ -37,13 +37,13 @@ describe("Happy Path Testing", () => {
     // USDC contract
     let usdc: ReturnType<typeof IERC20__factory.connect>
 
-    // Constants
-    const MINTER = ethers.keccak256(ethers.toUtf8Bytes("MINTER"))
-    const PSM = ethers.keccak256(ethers.toUtf8Bytes("PSM"))
-    const ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("ALLOWANCE_MANAGER"))
+    // Constants (role names must match contract constants)
+    const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"))
+    const QUEUE_PSM = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PSM"))
+    const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"))
     const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
-    const BUFFER_WITHDRAWER = ethers.keccak256(ethers.toUtf8Bytes("BUFFER_WITHDRAWER"))
-    const QUEUE_PROCESSOR = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PROCESSOR"))
+    const PSM_BUFFER_WITHDRAWER = ethers.keccak256(ethers.toUtf8Bytes("PSM_BUFFER_WITHDRAWER"))
+    const PSM_QUEUE_PROCESSOR = ethers.keccak256(ethers.toUtf8Bytes("PSM_QUEUE_PROCESSOR"))
     const DEPOSIT_AMOUNT = parseUnits("10000", 6) // 10,000 USDC (6 decimals)
     const DECIMAL_MULTIPLIER = 10n ** 12n // Convert USDC (6 decimals) to OkuMoney (18 decimals)
 
@@ -86,7 +86,7 @@ describe("Happy Path Testing", () => {
         okuUsd = await upgrades.deployProxy(
             new OkuDollar__factory(Frank),
             [await okuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr, parseEther("0.95")],
-            { kind: "uups" }
+            { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as OkuUSD
         await okuUsd.waitForDeployment()
 
@@ -115,15 +115,15 @@ describe("Happy Path Testing", () => {
         await okuBridgeRouter.waitForDeployment()
 
         // Grant MINTER to PSM so it can mint OkuNote
-        await okuMoney.connect(Frank).grantRole(MINTER, await psm.getAddress())
+        await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await psm.getAddress())
 
         // Grant RBAC roles to Frank (admin) for testing
-        await okuMoney.connect(Frank).grantRole(ALLOWANCE_MANAGER, frankAddr)
+        await okuMoney.connect(Frank).grantRole(OKUM_ALLOWANCE_MANAGER, frankAddr)
         await okuMoney.connect(Frank).grantRole(OKUM_REBASER, frankAddr)
 
         // Grant PSM-specific roles to Frank
-        await psm.connect(Frank).grantRole(BUFFER_WITHDRAWER, frankAddr)
-        await psm.connect(Frank).grantRole(QUEUE_PROCESSOR, frankAddr)
+        await psm.connect(Frank).grantRole(PSM_BUFFER_WITHDRAWER, frankAddr)
+        await psm.connect(Frank).grantRole(PSM_QUEUE_PROCESSOR, frankAddr)
 
         // Configure minter allowance for PSM (1 billion tokens)
         await okuMoney.connect(Frank).configureMinterAllowance(
@@ -132,10 +132,10 @@ describe("Happy Path Testing", () => {
         )
 
         // Grant PSM to PSM on RedemptionQueue
-        await queue.connect(Frank).grantRole(PSM, await psm.getAddress())
+        await queue.connect(Frank).grantRole(QUEUE_PSM, await psm.getAddress())
 
         // Grant MINTER to queue so it can burn OkuMoney when processing
-        await okuMoney.connect(Frank).grantRole(MINTER, await queue.getAddress())
+        await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await queue.getAddress())
     })
 
     it("Deposit", async () => {
@@ -177,10 +177,10 @@ describe("Happy Path Testing", () => {
         await usdc.connect(Dave).approve(psmAddr, DEPOSIT_AMOUNT)
 
         // All users deposit USDC via PSM.mint() and receive OkuUSD
-        await psm.connect(Alice).mint_OkuM(DEPOSIT_AMOUNT)
-        await psm.connect(Charlie).mint_OkuM(DEPOSIT_AMOUNT)
-        await psm.connect(Bob).mint_OkuM(DEPOSIT_AMOUNT)
-        await psm.connect(Dave).mint_OkuM(DEPOSIT_AMOUNT)
+        await psm.connect(Alice).mintOkuM(DEPOSIT_AMOUNT)
+        await psm.connect(Charlie).mintOkuM(DEPOSIT_AMOUNT)
+        await psm.connect(Bob).mintOkuM(DEPOSIT_AMOUNT)
+        await psm.connect(Dave).mintOkuM(DEPOSIT_AMOUNT)
 
         // Verify all users received OkuDollar (converted from 6 to 18 decimals)
         const aliceOkuUSD = await okuMoney.balanceOf(aliceAddr)
@@ -265,13 +265,13 @@ describe("Happy Path Testing", () => {
         await okuMoney.connect(Dave).approve(psmAddr, daveRedeemAmount)
 
         // Users redeem in order: Alice, Charlie, Bob, Dave (FIFO queue order)
-        await psm.connect(Alice).redeem_OkuM(aliceRedeemAmount)
-        await psm.connect(Charlie).redeem_OkuM(charlieRedeemAmount)
-        await psm.connect(Bob).redeem_OkuM(bobRedeemAmount)
-        await psm.connect(Dave).redeem_OkuM(daveRedeemAmount)
+        await psm.connect(Alice).redeemOkuM(aliceRedeemAmount)
+        await psm.connect(Charlie).redeemOkuM(charlieRedeemAmount)
+        await psm.connect(Bob).redeemOkuM(bobRedeemAmount)
+        await psm.connect(Dave).redeemOkuM(daveRedeemAmount)
 
         // Verify all 4 users are in the queue
-        expect(await queue.queueLength()).to.equal(4)
+        expect(await queue.queueUpperBound()).to.equal(4)
 
         // Each user still has half their OkuDollar (the other half is locked in queue)
         expect(await okuMoney.balanceOf(aliceAddr)).to.equal(aliceBalance - aliceRedeemAmount)
@@ -314,7 +314,7 @@ describe("Happy Path Testing", () => {
         await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("50000", 6))
 
         // Verify queue is now empty
-        expect(await queue.queueLength()).to.equal(0)
+        expect(await queue.queueUpperBound()).to.equal(0)
 
         // Verify all users received USDC
         const aliceUsdcAfter = await usdc.balanceOf(aliceAddr)
@@ -387,22 +387,22 @@ describe("Happy Path Testing", () => {
         const daveUsdcBefore = await usdc.balanceOf(daveAddr)
 
         // Alice and Charlie redeem first — buffer has ~10,500 USDC, enough for both (~2,625 each)
-        await psm.connect(Alice).redeem_OkuM(aliceRedeem)
-        await psm.connect(Charlie).redeem_OkuM(charlieRedeem)
+        await psm.connect(Alice).redeemOkuM(aliceRedeem)
+        await psm.connect(Charlie).redeemOkuM(charlieRedeem)
 
         // Verify Alice and Charlie received USDC instantly (no queue)
         const aliceUsdcAfterInstant = await usdc.balanceOf(aliceAddr)
         const charlieUsdcAfterInstant = await usdc.balanceOf(charlieAddr)
         expect(aliceUsdcAfterInstant - aliceUsdcBefore).to.be.gt(0)
         expect(charlieUsdcAfterInstant - charlieUsdcBefore).to.be.gt(0)
-        expect(await queue.queueLength()).to.equal(0)
+        expect(await queue.queueUpperBound()).to.equal(0)
 
         // Bob and Dave redeem — buffer is now depleted, these should be queued
-        await psm.connect(Bob).redeem_OkuM(bobRedeem)
-        await psm.connect(Dave).redeem_OkuM(daveRedeem)
+        await psm.connect(Bob).redeemOkuM(bobRedeem)
+        await psm.connect(Dave).redeemOkuM(daveRedeem)
 
         // Verify Bob and Dave are queued
-        expect(await queue.queueLength()).to.equal(2)
+        expect(await queue.queueUpperBound()).to.equal(2)
 
         // Bob and Dave should NOT have received any USDC
         expect(await usdc.balanceOf(bobAddr)).to.equal(bobUsdcBefore)
@@ -423,7 +423,7 @@ describe("Happy Path Testing", () => {
         await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("10000", 6))
 
         // Queue should now be empty
-        expect(await queue.queueLength()).to.equal(0)
+        expect(await queue.queueUpperBound()).to.equal(0)
 
         // Bob and Dave should have received USDC from queue processing
         const bobUsdcAfter = await usdc.balanceOf(bobAddr)
@@ -479,10 +479,10 @@ describe("Happy Path Testing", () => {
         await okuMoney.connect(Dave).approve(psmAddr, daveOkuUSD)
 
         // All users redeem remaining OkuDollar for USDC
-        await psm.connect(Alice).redeem_OkuM(aliceOkuUSD)
-        await psm.connect(Charlie).redeem_OkuM(charlieOkuUSD)
-        await psm.connect(Bob).redeem_OkuM(bobOkuUSD)
-        await psm.connect(Dave).redeem_OkuM(daveOkuUSD)
+        await psm.connect(Alice).redeemOkuM(aliceOkuUSD)
+        await psm.connect(Charlie).redeemOkuM(charlieOkuUSD)
+        await psm.connect(Bob).redeemOkuM(bobOkuUSD)
+        await psm.connect(Dave).redeemOkuM(daveOkuUSD)
 
         // Verify all users' OkuDollar is now 0
         expect(await okuMoney.balanceOf(aliceAddr)).to.equal(0)

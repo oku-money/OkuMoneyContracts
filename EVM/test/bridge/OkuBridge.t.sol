@@ -64,7 +64,7 @@ contract OkuBridgeTest is BaseTest {
 
         // Grant bridge contract minter role for OkuMoney
         vm.startPrank(admin);
-        okuMoney.grantRole(MINTER, address(okuBridge));
+        okuMoney.grantRole(OKUM_MINTER, address(okuBridge));
         // Grant two-step refund roles to separate addresses
         okuBridge.grantRole(BRIDGE_REFUND_INITIATOR, refundInitiator);
         okuBridge.grantRole(BRIDGE_REFUND_CONFIRMER, refundConfirmer);
@@ -76,8 +76,13 @@ contract OkuBridgeTest is BaseTest {
 
     function _deployBridge() internal {
         okuBridgeImpl = new OkuBridge();
+        uint256[] memory initialChains = new uint256[](3);
+        initialChains[0] = OPTIMISM_CHAIN_ID;
+        initialChains[1] = ARBITRUM_CHAIN_ID;
+        initialChains[2] = BASE_CHAIN_ID;
         bytes memory initData = abi.encodeCall(
-            OkuBridge.initialize, (address(okuMoney), orchestratorSigner, feeRecipient, admin)
+            OkuBridge.initialize,
+            (address(okuMoney), orchestratorSigner, feeRecipient, admin, initialChains)
         );
         okuBridge = OkuBridge(address(new ERC1967Proxy(address(okuBridgeImpl), initData)));
     }
@@ -1030,7 +1035,7 @@ contract OkuBridgeTest is BaseTest {
 
     function test_UpdateDeadline_RevertZero() public {
         vm.prank(admin);
-        vm.expectRevert("Deadline must be positive");
+        vm.expectRevert(OkuBridge.DeadlineMustBePositive.selector);
         okuBridge.updateDeadline(0);
     }
 
@@ -1075,8 +1080,9 @@ contract OkuBridgeTest is BaseTest {
 
     function test_Initialize_RevertZeroOkuUsd() public {
         OkuBridge impl = new OkuBridge();
+        uint256[] memory emptyChains = new uint256[](0);
         bytes memory initData = abi.encodeCall(
-            OkuBridge.initialize, (address(0), orchestratorSigner, feeRecipient, admin)
+            OkuBridge.initialize, (address(0), orchestratorSigner, feeRecipient, admin, emptyChains)
         );
         vm.expectRevert(OkuBridge.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -1084,8 +1090,9 @@ contract OkuBridgeTest is BaseTest {
 
     function test_Initialize_RevertZeroSigner() public {
         OkuBridge impl = new OkuBridge();
+        uint256[] memory emptyChains = new uint256[](0);
         bytes memory initData = abi.encodeCall(
-            OkuBridge.initialize, (address(okuMoney), address(0), feeRecipient, admin)
+            OkuBridge.initialize, (address(okuMoney), address(0), feeRecipient, admin, emptyChains)
         );
         vm.expectRevert(OkuBridge.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -1093,8 +1100,10 @@ contract OkuBridgeTest is BaseTest {
 
     function test_Initialize_RevertZeroFeeRecipient() public {
         OkuBridge impl = new OkuBridge();
+        uint256[] memory emptyChains = new uint256[](0);
         bytes memory initData = abi.encodeCall(
-            OkuBridge.initialize, (address(okuMoney), orchestratorSigner, address(0), admin)
+            OkuBridge.initialize,
+            (address(okuMoney), orchestratorSigner, address(0), admin, emptyChains)
         );
         vm.expectRevert(OkuBridge.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -1102,8 +1111,10 @@ contract OkuBridgeTest is BaseTest {
 
     function test_Initialize_RevertZeroAdmin() public {
         OkuBridge impl = new OkuBridge();
+        uint256[] memory emptyChains = new uint256[](0);
         bytes memory initData = abi.encodeCall(
-            OkuBridge.initialize, (address(okuMoney), orchestratorSigner, feeRecipient, address(0))
+            OkuBridge.initialize,
+            (address(okuMoney), orchestratorSigner, feeRecipient, address(0), emptyChains)
         );
         vm.expectRevert(OkuBridge.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -1345,7 +1356,7 @@ contract OkuBridgeTest is BaseTest {
     }
 
     function test_SweepDust_RevertNotAuthorized() public {
-        bytes32 role = okuBridge.DUST_SWEEPER();
+        bytes32 role = okuBridge.BRIDGE_DUST_SWEEPER();
 
         vm.prank(user1);
         vm.expectRevert(

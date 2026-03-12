@@ -64,20 +64,21 @@ describe("OkuBridge E2E", function () {
         orchestratorSigner.address,
         feeRecipient.address,
         admin.address,
+        [OPTIMISM_CHAIN_ID, ARBITRUM_CHAIN_ID, BASE_CHAIN_ID], // initialChains
       ],
       { kind: "uups", unsafeAllow: ["constructor"] }
     )) as unknown as OkuBridge;
     await okuBridge.waitForDeployment();
 
     // Setup roles
-    const MINTER = ethers.keccak256(ethers.toUtf8Bytes("MINTER"));
-    const ALLOWANCE_MANAGER = ethers.keccak256(
-      ethers.toUtf8Bytes("ALLOWANCE_MANAGER")
+    const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"));
+    const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(
+      ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER")
     );
 
-    await okuMoney.connect(admin).grantRole(MINTER, admin.address);
-    await okuMoney.connect(admin).grantRole(MINTER, await okuBridge.getAddress());
-    await okuMoney.connect(admin).grantRole(ALLOWANCE_MANAGER, admin.address);
+    await okuMoney.connect(admin).grantRole(OKUM_MINTER, admin.address);
+    await okuMoney.connect(admin).grantRole(OKUM_MINTER, await okuBridge.getAddress());
+    await okuMoney.connect(admin).grantRole(OKUM_ALLOWANCE_MANAGER, admin.address);
 
     // Configure minter allowances
     const maxSupply = ethers.parseEther("1000000000");
@@ -287,10 +288,11 @@ describe("OkuBridge E2E", function () {
       const amount = ethers.parseEther("100");
       const chainId = (await ethers.provider.getNetwork()).chainId;
 
-      // Create bridge request
+      // Create bridge request - sourceChainId must match current chain for refund
+      // (refund is initiated on the chain where tokens were burned, i.e., the source chain)
       const request = {
-        sourceChainId: OPTIMISM_CHAIN_ID,
-        destChainId: chainId,
+        sourceChainId: chainId,
+        destChainId: OPTIMISM_CHAIN_ID,
         sender: user1.address,
         recipient: addressToBytes32(user2.address),
         amount: amount,
@@ -320,13 +322,14 @@ describe("OkuBridge E2E", function () {
       const amount = ethers.parseEther("100");
       const chainId = (await ethers.provider.getNetwork()).chainId;
 
+      // sourceChainId must match current chain for refund
       const request = {
-        sourceChainId: OPTIMISM_CHAIN_ID,
-        destChainId: chainId,
+        sourceChainId: chainId,
+        destChainId: OPTIMISM_CHAIN_ID,
         sender: user1.address,
         recipient: addressToBytes32(user2.address),
         amount: amount,
-        nonce: 0,
+        nonce: 1, // different nonce to avoid collision with prior test
         deadline: await futureDeadline(),
       };
 

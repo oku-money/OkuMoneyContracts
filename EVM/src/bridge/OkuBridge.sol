@@ -94,7 +94,7 @@ contract OkuBridge is
     bytes32 public constant BRIDGE_CHAIN_MANAGER = keccak256("BRIDGE_CHAIN_MANAGER");
     bytes32 public constant BRIDGE_LIMITS_MANAGER = keccak256("BRIDGE_LIMITS_MANAGER");
     bytes32 public constant BRIDGE_UPGRADER = keccak256("BRIDGE_UPGRADER");
-    bytes32 public constant DUST_SWEEPER = keccak256("DUST_SWEEPER");
+    bytes32 public constant BRIDGE_DUST_SWEEPER = keccak256("BRIDGE_DUST_SWEEPER");
 
     /// @notice First step of two-step refund: proposes a refund after independent verification
     bytes32 public constant BRIDGE_REFUND_INITIATOR = keccak256("BRIDGE_REFUND_INITIATOR");
@@ -249,7 +249,7 @@ contract OkuBridge is
         _grantRole(BRIDGE_REFUND_CONFIRMER, _admin);
         _grantRole(BRIDGE_FEE_MANAGER, _admin);
         _grantRole(BRIDGE_UPGRADER, _admin);
-        _grantRole(DUST_SWEEPER, _admin);
+        _grantRole(BRIDGE_DUST_SWEEPER, _admin);
 
         // Configure initial supported chains (excluding self-chain)
         for (uint256 i = 0; i < initialChains.length; i++) {
@@ -635,7 +635,7 @@ contract OkuBridge is
      * @notice Sweep accumulated rounding dust (at most 1 wei per bridge tx)
      * @dev Transfers the bridge's entire OkuMoney balance to feeRecipient
      */
-    function sweepDust() external onlyRole(DUST_SWEEPER) {
+    function sweepDust() external onlyRole(BRIDGE_DUST_SWEEPER) {
         uint256 balance = IERC20(address(okuMoney)).balanceOf(address(this));
         if (balance > 0) {
             IERC20(address(okuMoney)).safeTransfer(feeRecipient, balance);

@@ -80,10 +80,10 @@ contract NttBridgeTest is BaseTest {
 
         // Configure roles
         vm.startPrank(admin);
-        // Router needs MINTER on OkuMoney to burn tokens
-        okuMoney.grantRole(MINTER, address(bridgeRouter));
-        // Grant ADAPTER_MANAGER to admin
-        bridgeRouter.grantRole(ADAPTER_MANAGER, admin);
+        // Router needs OKUM_MINTER on OkuMoney to burn tokens
+        okuMoney.grantRole(OKUM_MINTER, address(bridgeRouter));
+        // Grant ROUTER_ADAPTER_MANAGER to admin
+        bridgeRouter.grantRole(ROUTER_ADAPTER_MANAGER, admin);
         // Grant ROUTER_UNPAUSER to admin
         bridgeRouter.grantRole(ROUTER_UNPAUSER, admin);
         // Register NttAdapter as supported adapter
@@ -682,13 +682,15 @@ contract NttBridgeTest is BaseTest {
     function test_UUPS_UpgradeRedemptionQueue_RevertNotUpgrader() public {
         RedemptionQueue newImpl = new RedemptionQueue();
 
-        vm.prank(user1);
-        bytes32 QUEUE_UPGRADER = keccak256("UPGRADER");
+        // Cache the role before prank to avoid consuming it
+        bytes32 upgraderRole = redemptionQueue.QUEUE_UPGRADER();
+
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, QUEUE_UPGRADER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, upgraderRole
             )
         );
+        vm.prank(user1);
         redemptionQueue.upgradeToAndCall(address(newImpl), "");
     }
 }

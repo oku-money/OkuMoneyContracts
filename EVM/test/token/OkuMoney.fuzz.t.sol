@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
+import {OkuMoney} from "../../src/token/OkuMoney.sol";
 
 /**
  * @title OkuMoneyFuzzTest
@@ -250,7 +251,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 lowerPrice = higherPrice - decrease;
 
         vm.prank(rebaser);
-        vm.expectRevert("Price cannot decrease");
+        vm.expectRevert(OkuMoney.PriceCannotDecrease.selector);
         okuMoney.updateOkuMPrice(lowerPrice);
     }
 
@@ -429,7 +430,7 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         // Should not be able to mint more
         vm.prank(minter);
-        vm.expectRevert("Exceeds supply cap");
+        vm.expectRevert(OkuMoney.ExceedsSupplyCap.selector);
         okuMoney.mint(user2, extraAmount);
     }
 
@@ -452,7 +453,7 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         // But no more
         vm.prank(minter);
-        vm.expectRevert("Exceeds supply cap");
+        vm.expectRevert(OkuMoney.ExceedsSupplyCap.selector);
         okuMoney.mint(user3, 1);
     }
 

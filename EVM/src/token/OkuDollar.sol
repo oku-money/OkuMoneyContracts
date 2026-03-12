@@ -43,9 +43,9 @@ contract OkuDollar is
 
     // ============ Roles ============
 
-    bytes32 public constant UPGRADER = keccak256("UPGRADER");
-    bytes32 public constant USD_REBASER = keccak256("USD_REBASER");
-    bytes32 public constant RESERVE_MANAGER = keccak256("RESERVE_MANAGER");
+    bytes32 public constant VAULT_UPGRADER = keccak256("VAULT_UPGRADER");
+    bytes32 public constant VAULT_REBASER = keccak256("VAULT_REBASER");
+    bytes32 public constant VAULT_RESERVE_MANAGER = keccak256("VAULT_RESERVE_MANAGER");
     bytes32 public constant VAULT_PAUSER = keccak256("VAULT_PAUSER");
     bytes32 public constant VAULT_UNPAUSER = keccak256("VAULT_UNPAUSER");
 
@@ -128,7 +128,7 @@ contract OkuDollar is
         usdPendingRatePerSecond = PRECISION;
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(UPGRADER, admin);
+        _grantRole(VAULT_UPGRADER, admin);
         _grantRole(VAULT_PAUSER, admin);
         _grantRole(VAULT_UNPAUSER, admin);
     }
@@ -335,7 +335,7 @@ contract OkuDollar is
      *      their value depends on okuMPrice().
      * @param okuMAmount Amount of OkuMoney tokens to deposit
      */
-    function depositReserves(uint256 okuMAmount) external onlyRole(RESERVE_MANAGER) {
+    function depositReserves(uint256 okuMAmount) external onlyRole(VAULT_RESERVE_MANAGER) {
         if (okuMAmount == 0) revert ZeroAmount();
         uint256 balBefore = IERC20(address(okuMoney)).balanceOf(address(this));
         IERC20(address(okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
@@ -349,7 +349,7 @@ contract OkuDollar is
      *      Enforces collateralizationRatio() >= minCollateralRatio AFTER withdrawal.
      * @param okuMAmount Amount of OkuMoney tokens to withdraw
      */
-    function withdrawSurplus(uint256 okuMAmount) external onlyRole(RESERVE_MANAGER) {
+    function withdrawSurplus(uint256 okuMAmount) external onlyRole(VAULT_RESERVE_MANAGER) {
         if (okuMAmount == 0) revert ZeroAmount();
 
         IERC20(address(okuMoney)).safeTransfer(msg.sender, okuMAmount);
@@ -416,7 +416,13 @@ contract OkuDollar is
 
     // ============ Rate Management (USD_REBASER) ============
 
-    function setUsdYieldRate(uint256 newRate, uint256 endTimestamp) external onlyRole(USD_REBASER) {
+    function setUsdYieldRate(
+        uint256 newRate,
+        uint256 endTimestamp
+    )
+        external
+        onlyRole(VAULT_REBASER)
+    {
         if (newRate < PRECISION) revert InvalidRate();
         if (newRate > MAX_RATE) revert RateTooHigh();
         if (endTimestamp != 0 && endTimestamp <= block.timestamp) revert EndTimestampInPast();
@@ -431,7 +437,7 @@ contract OkuDollar is
         emit UsdYieldRateUpdated(newRate, endTimestamp, _usdBaseMultiplier);
     }
 
-    function setNextUsdYieldRate(uint256 newRate) external onlyRole(USD_REBASER) {
+    function setNextUsdYieldRate(uint256 newRate) external onlyRole(VAULT_REBASER) {
         if (newRate < PRECISION) revert InvalidRate();
         if (newRate > MAX_RATE) revert RateTooHigh();
         if (usdRateEnd == 0) revert NoRateEndSet();
@@ -444,7 +450,7 @@ contract OkuDollar is
     /**
      * @notice Emergency override — snapshots computed multiplier, resets rate to zero yield
      */
-    function updateUsdMultiplier(uint256 newMultiplier) external onlyRole(USD_REBASER) {
+    function updateUsdMultiplier(uint256 newMultiplier) external onlyRole(VAULT_REBASER) {
         uint256 currentMultiplier = usdMultiplier();
         if (newMultiplier < currentMultiplier) revert MultiplierCannotDecrease();
         _usdBaseMultiplier = newMultiplier;
@@ -502,7 +508,11 @@ contract OkuDollar is
 
     // ============ Upgradeability ============
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER) {}
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        override
+        onlyRole(VAULT_UPGRADER)
+    {}
 
     // ============ Storage Gap ============
 

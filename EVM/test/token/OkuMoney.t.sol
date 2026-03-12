@@ -65,7 +65,7 @@ contract OkuMoneyTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, MINTER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_MINTER
             )
         );
         okuMoney.mint(user1, 100e18);
@@ -119,13 +119,13 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.configureMinterAllowance(minter, 50e18);
 
         vm.prank(minter);
-        vm.expectRevert("Exceeds minter allowance");
+        vm.expectRevert(OkuMoney.ExceedsAllowance.selector);
         okuMoney.mint(user1, 100e18);
     }
 
     function test_Mint_RevertsExceedingMaxSupply() public {
         vm.prank(minter);
-        vm.expectRevert("Exceeds supply cap");
+        vm.expectRevert(OkuMoney.ExceedsSupplyCap.selector);
         okuMoney.mint(user1, MAX_SUPPLY + 1);
     }
 
@@ -143,7 +143,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user1);
 
         vm.prank(minter);
-        vm.expectRevert("Recipient blacklisted");
+        vm.expectRevert(OkuMoney.RecipientBlacklisted.selector);
         okuMoney.mint(user1, 100e18);
     }
 
@@ -164,7 +164,7 @@ contract OkuMoneyTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, MINTER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_MINTER
             )
         );
         okuMoney.burn(50e18);
@@ -233,7 +233,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(minter);
 
         vm.prank(minter);
-        vm.expectRevert("Account blacklisted");
+        vm.expectRevert(OkuMoney.SenderBlacklisted.selector);
         okuMoney.burn(50e18);
     }
 
@@ -317,7 +317,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user1);
 
         vm.prank(user1);
-        vm.expectRevert("Sender blacklisted");
+        vm.expectRevert(OkuMoney.SenderBlacklisted.selector);
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuMoney.transfer(user2, 30e18);
     }
@@ -329,7 +329,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user2);
 
         vm.prank(user1);
-        vm.expectRevert("Recipient blacklisted");
+        vm.expectRevert(OkuMoney.RecipientBlacklisted.selector);
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuMoney.transfer(user2, 30e18);
     }
@@ -425,7 +425,7 @@ contract OkuMoneyTest is BaseTest {
 
     function test_UpdateNotePrice_CannotDecrease() public {
         vm.prank(rebaser);
-        vm.expectRevert("Price cannot decrease");
+        vm.expectRevert(OkuMoney.PriceCannotDecrease.selector);
         okuMoney.updateOkuMPrice(PRECISION - 1);
     }
 
@@ -483,7 +483,7 @@ contract OkuMoneyTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, BLACKLISTER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_BLACKLISTER
             )
         );
         okuMoney.blacklist(user2);
@@ -508,7 +508,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user1);
 
         vm.prank(user1);
-        vm.expectRevert("Sender blacklisted");
+        vm.expectRevert(OkuMoney.SenderBlacklisted.selector);
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuMoney.transfer(user2, 50e18);
     }
@@ -520,7 +520,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user2);
 
         vm.prank(user1);
-        vm.expectRevert("Recipient blacklisted");
+        vm.expectRevert(OkuMoney.RecipientBlacklisted.selector);
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
         okuMoney.transfer(user2, 50e18);
     }
@@ -530,7 +530,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.blacklist(user1);
 
         vm.prank(minter);
-        vm.expectRevert("Recipient blacklisted");
+        vm.expectRevert(OkuMoney.RecipientBlacklisted.selector);
         okuMoney.mint(user1, 100e18);
     }
 
@@ -648,7 +648,9 @@ contract OkuMoneyTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, ALLOWANCE_MANAGER
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                OKUM_ALLOWANCE_MANAGER
             )
         );
         okuMoney.configureMinterAllowance(minter, 1000e18);
@@ -695,7 +697,7 @@ contract OkuMoneyTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, CAP_MANAGER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_CAP_MANAGER
             )
         );
         okuMoney.setMaxSupply(MAX_SUPPLY * 2);
@@ -720,7 +722,7 @@ contract OkuMoneyTest is BaseTest {
 
         // Cannot lower cap below existing supply (M-3 fix: floor guard)
         vm.prank(capManager);
-        vm.expectRevert("Below current supply");
+        vm.expectRevert(OkuMoney.BelowCurrentSupply.selector);
         okuMoney.setMaxSupply(50e18);
 
         // Existing tokens are not burned — supply unchanged after revert
@@ -768,10 +770,12 @@ contract OkuMoneyTest is BaseTest {
 
     // ============ Edge Case Tests ============
 
-    function test_Mint_ZeroAmount_RevertsAmountTooSmall() public {
+    function test_Mint_ZeroAmount_Succeeds() public {
+        // L-5: amount > 0 check removed - let users waste gas if they want
+        uint256 balanceBefore = okuMoney.balanceOf(user1);
         vm.prank(minter);
-        vm.expectRevert("Amount too small");
         okuMoney.mint(user1, 0);
+        assertEq(okuMoney.balanceOf(user1), balanceBefore);
     }
 
     function test_Transfer_ZeroAmount() public {
@@ -864,7 +868,7 @@ contract OkuMoneyTest is BaseTest {
 
     function test_SetYieldRate_RateCannotBeNegative() public {
         vm.prank(rebaser);
-        vm.expectRevert("Rate cannot be negative");
+        vm.expectRevert(OkuMoney.InvalidRate.selector);
         okuMoney.setYieldRate(PRECISION - 1, 0);
     }
 
@@ -873,7 +877,7 @@ contract OkuMoneyTest is BaseTest {
         vm.warp(1000);
 
         vm.prank(rebaser);
-        vm.expectRevert("End must be in the future");
+        vm.expectRevert(OkuMoney.EndTimestampInPast.selector);
         okuMoney.setYieldRate(PRECISION + 1, block.timestamp - 1);
     }
 
@@ -931,7 +935,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.setYieldRate(PRECISION + 1, 0); // no end time
 
         vm.prank(rebaser);
-        vm.expectRevert("Current rate has no end");
+        vm.expectRevert(OkuMoney.NoRateEndSet.selector);
         okuMoney.setNextYieldRate(PRECISION + 1);
     }
 
@@ -1009,7 +1013,7 @@ contract OkuMoneyTest is BaseTest {
         _mintUsdc(user1, usdcAttackAmount);
         vm.startPrank(user1);
         usdc.approve(address(litePsm), usdcAttackAmount);
-        litePsm.mint_OkuM(usdcAttackAmount);
+        litePsm.mintOkuM(usdcAttackAmount);
         vm.stopPrank();
 
         uint256 balanceAfterMint = okuMoney.balanceOf(user1);
@@ -1274,7 +1278,7 @@ contract OkuMoneyTest is BaseTest {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, UPGRADER
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_UPGRADER
             )
         );
         okuMoney.upgradeToAndCall(address(okuMoneyV2), "");
@@ -1329,7 +1333,7 @@ contract OkuMoneyTest is BaseTest {
         uint256 maxRate = okuMoney.MAX_RATE();
 
         vm.prank(rebaser);
-        vm.expectRevert("Rate too high");
+        vm.expectRevert(OkuMoney.RateTooHigh.selector);
         okuMoney.setYieldRate(maxRate + 1, 0);
     }
 
@@ -1350,7 +1354,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.setYieldRate(PRECISION + 1, endTime);
 
         vm.prank(rebaser);
-        vm.expectRevert("Rate too high");
+        vm.expectRevert(OkuMoney.RateTooHigh.selector);
         okuMoney.setNextYieldRate(maxRate + 1);
     }
 

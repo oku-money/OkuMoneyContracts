@@ -37,10 +37,10 @@ describe("OkuBridgeRouter", function () {
   }
 
   // Role hashes — no _ROLE suffix, matching contract constants
-  const MINTER = ethers.keccak256(ethers.toUtf8Bytes("MINTER"));
-  const ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("ALLOWANCE_MANAGER"));
-  const ADAPTER_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("ADAPTER_MANAGER"));
-  const BRIDGE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("BRIDGE_MANAGER"));
+  const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"));
+  const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"));
+  const ROUTER_ADAPTER_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("ROUTER_ADAPTER_MANAGER"));
+  const ROUTER_BRIDGE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("ROUTER_BRIDGE_MANAGER"));
 
   beforeEach(async function () {
     [admin, orchestratorSigner, feeRecipient, user1, user2] = await ethers.getSigners();
@@ -57,7 +57,7 @@ describe("OkuBridgeRouter", function () {
     okuUsd = (await upgrades.deployProxy(
       new OkuDollar__factory(admin),
       [await okuMoney.getAddress(), "OkuDollar", "usdOku", admin.address, ethers.parseEther("0.95")],
-      { kind: "uups" }
+      { kind: "uups", unsafeAllow: ["constructor"] }
     )) as unknown as OkuDollar;
     await okuUsd.waitForDeployment();
 
@@ -65,7 +65,7 @@ describe("OkuBridgeRouter", function () {
     // OZ v5 ReentrancyGuard is @custom:stateless (ERC-7201 namespaced slot) — safe for proxies
     okuBridge = (await upgrades.deployProxy(
       new OkuBridge__factory(admin),
-      [await okuMoney.getAddress(), orchestratorSigner.address, feeRecipient.address, admin.address],
+      [await okuMoney.getAddress(), orchestratorSigner.address, feeRecipient.address, admin.address, [ARBITRUM_CHAIN_ID, OPTIMISM_CHAIN_ID]], // initialChains
       { kind: "uups", unsafeAllow: ["constructor"] }
     )) as unknown as OkuBridge;
     await okuBridge.waitForDeployment();
@@ -88,17 +88,17 @@ describe("OkuBridgeRouter", function () {
     await mockAdapter.waitForDeployment();
 
     // Setup roles on OkuNote
-    await okuMoney.connect(admin).grantRole(ALLOWANCE_MANAGER, admin.address);
-    await okuMoney.connect(admin).grantRole(MINTER, admin.address);
+    await okuMoney.connect(admin).grantRole(OKUM_ALLOWANCE_MANAGER, admin.address);
+    await okuMoney.connect(admin).grantRole(OKUM_MINTER, admin.address);
 
     // OkuBridge needs MINTER (burns from router in native path, mints fee)
-    await okuMoney.connect(admin).grantRole(MINTER, await okuBridge.getAddress());
+    await okuMoney.connect(admin).grantRole(OKUM_MINTER, await okuBridge.getAddress());
     await okuMoney
       .connect(admin)
       .configureMinterAllowance(await okuBridge.getAddress(), MAX_SUPPLY);
 
     // Router needs MINTER (burns OkuMoney in adapter path)
-    await okuMoney.connect(admin).grantRole(MINTER, await bridgeRouter.getAddress());
+    await okuMoney.connect(admin).grantRole(OKUM_MINTER, await bridgeRouter.getAddress());
     await okuMoney
       .connect(admin)
       .configureMinterAllowance(await bridgeRouter.getAddress(), MAX_SUPPLY);
@@ -120,8 +120,8 @@ describe("OkuBridgeRouter", function () {
 
       const DEFAULT_ADMIN_ROLE = ethers.ZeroHash;
       expect(await bridgeRouter.hasRole(DEFAULT_ADMIN_ROLE, admin.address)).to.be.true;
-      expect(await bridgeRouter.hasRole(ADAPTER_MANAGER, admin.address)).to.be.true;
-      expect(await bridgeRouter.hasRole(BRIDGE_MANAGER, admin.address)).to.be.true;
+      expect(await bridgeRouter.hasRole(ROUTER_ADAPTER_MANAGER, admin.address)).to.be.true;
+      expect(await bridgeRouter.hasRole(ROUTER_BRIDGE_MANAGER, admin.address)).to.be.true;
     });
 
     it("should register mock adapter as supported", async function () {
@@ -170,9 +170,9 @@ describe("OkuBridgeRouter", function () {
     });
   });
 
-  // ============ Native Path: bridge_usdOku ============
+  // ============ Native Path: bridgeUsdOku ============
 
-  describe("Native Path: bridge_usdOku()", function () {
+  describe("Native Path: bridgeUsdOku()", function () {
     async function setupWrapped(amount: bigint) {
       await okuMoney.connect(admin).mint(user1.address, amount);
       await okuMoney.connect(user1).approve(await okuUsd.getAddress(), amount);
@@ -190,7 +190,7 @@ describe("OkuBridgeRouter", function () {
 
       const tx = await bridgeRouter
         .connect(user1)
-        .bridge_usdOku(okuUsdBalance, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address));
+        .bridgeUsdOku(okuUsdBalance, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address));
       await tx.wait();
 
       // OkuBridge nonce incremented (proves bridgeBurn was called)
@@ -212,7 +212,7 @@ describe("OkuBridgeRouter", function () {
       await okuUsd.connect(user1).approve(await bridgeRouter.getAddress(), okuUsdBalance);
 
       await expect(
-        bridgeRouter.connect(user1).bridge_usdOku(okuUsdBalance, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address))
+        bridgeRouter.connect(user1).bridgeUsdOku(okuUsdBalance, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address))
       ).to.emit(bridgeRouter, "NativeBridgeInitiated");
     });
 
@@ -226,7 +226,7 @@ describe("OkuBridgeRouter", function () {
 
       await bridgeRouter
         .connect(user1)
-        .bridge_usdOku(okuUsdBalance, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address));
+        .bridgeUsdOku(okuUsdBalance, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address));
 
       // Fee recipient received OkuMoney (0.1% default fee)
       const feeBalance = await okuMoney.balanceOf(feeRecipient.address);
@@ -244,7 +244,7 @@ describe("OkuBridgeRouter", function () {
 
       await okuUsd.connect(user1).approve(await bridgeRouter.getAddress(), okuUsdBalance);
       await expect(
-        bridgeRouter.connect(user1).bridge_usdOku(okuUsdBalance, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address))
+        bridgeRouter.connect(user1).bridgeUsdOku(okuUsdBalance, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address))
       ).to.be.revertedWithCustomError(bridgeRouter, "EnforcedPause");
     });
 
@@ -259,21 +259,21 @@ describe("OkuBridgeRouter", function () {
       await expect(
         bridgeRouter
           .connect(user1)
-          .bridge_usdOku(okuUsdBalance, ARBITRUM_CHAIN_ID, ethers.ZeroHash)
+          .bridgeUsdOku(okuUsdBalance, ARBITRUM_CHAIN_ID, ethers.ZeroHash)
       ).to.be.revertedWithCustomError(bridgeRouter, "InvalidRecipient");
     });
   });
 
   // ============ Native Path: bridge_OkuNote ============
 
-  describe("Native Path: bridge_OkuM()", function () {
+  describe("Native Path: bridgeOkuM()", function () {
     it("should bridge OkuMoney directly via native OkuBridge path", async function () {
       const noteAmount = ethers.parseEther("1000");
 
       await okuMoney.connect(admin).mint(user1.address, noteAmount);
       await okuMoney.connect(user1).approve(await bridgeRouter.getAddress(), noteAmount);
 
-      await bridgeRouter.connect(user1).bridge_OkuM(noteAmount, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address));
+      await bridgeRouter.connect(user1).bridgeOkuM(noteAmount, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address));
 
       expect(await okuBridge.outboundNonce(ARBITRUM_CHAIN_ID)).to.equal(1n);
       expect(await okuMoney.balanceOf(user1.address)).to.equal(0n);
@@ -288,7 +288,7 @@ describe("OkuBridgeRouter", function () {
       await okuMoney.connect(user1).approve(await bridgeRouter.getAddress(), noteAmount);
 
       await expect(
-        bridgeRouter.connect(user1).bridge_OkuM(noteAmount, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address))
+        bridgeRouter.connect(user1).bridgeOkuM(noteAmount, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address))
       ).to.emit(bridgeRouter, "NativeBridgeInitiated");
     });
 
@@ -300,7 +300,7 @@ describe("OkuBridgeRouter", function () {
 
       await okuMoney.connect(user1).approve(await bridgeRouter.getAddress(), noteAmount);
       await expect(
-        bridgeRouter.connect(user1).bridge_OkuM(noteAmount, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address))
+        bridgeRouter.connect(user1).bridgeOkuM(noteAmount, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address))
       ).to.be.revertedWithCustomError(bridgeRouter, "EnforcedPause");
     });
 
@@ -313,7 +313,7 @@ describe("OkuBridgeRouter", function () {
       await expect(
         bridgeRouter
           .connect(user1)
-          .bridge_OkuM(noteAmount, ARBITRUM_CHAIN_ID, ethers.ZeroHash)
+          .bridgeOkuM(noteAmount, ARBITRUM_CHAIN_ID, ethers.ZeroHash)
       ).to.be.revertedWithCustomError(bridgeRouter, "InvalidRecipient");
     });
   });
@@ -469,7 +469,7 @@ describe("OkuBridgeRouter", function () {
       // Native path: bridge_OkuNote
       await okuMoney.connect(admin).mint(user1.address, noteAmount);
       await okuMoney.connect(user1).approve(await bridgeRouter.getAddress(), noteAmount);
-      await bridgeRouter.connect(user1).bridge_OkuM(noteAmount, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address));
+      await bridgeRouter.connect(user1).bridgeOkuM(noteAmount, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address));
       expect(await okuBridge.outboundNonce(ARBITRUM_CHAIN_ID)).to.equal(1n);
       expect(await mockAdapter.pendingBridgesCount()).to.equal(0n);
 
@@ -489,7 +489,7 @@ describe("OkuBridgeRouter", function () {
       // Native path
       await okuMoney.connect(admin).mint(user1.address, noteAmount);
       await okuMoney.connect(user1).approve(await bridgeRouter.getAddress(), noteAmount);
-      await bridgeRouter.connect(user1).bridge_OkuM(noteAmount, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address));
+      await bridgeRouter.connect(user1).bridgeOkuM(noteAmount, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address));
       const nativeFee = await okuMoney.balanceOf(feeRecipient.address);
       expect(nativeFee).to.be.greaterThan(0n);
 

@@ -56,10 +56,10 @@ contract LitePSM is
     bytes32 public constant PSM_UPGRADER = keccak256("PSM_UPGRADER");
     bytes32 public constant PSM_PAUSER = keccak256("PSM_PAUSER");
     bytes32 public constant PSM_UNPAUSER = keccak256("PSM_UNPAUSER");
-    bytes32 public constant QUEUE_PROCESSOR = keccak256("QUEUE_PROCESSOR");
-    bytes32 public constant BUFFER_DEPOSITOR = keccak256("BUFFER_DEPOSITOR");
-    bytes32 public constant BUFFER_WITHDRAWER = keccak256("BUFFER_WITHDRAWER");
-    bytes32 public constant ORACLE_MANAGER = keccak256("ORACLE_MANAGER");
+    bytes32 public constant PSM_QUEUE_PROCESSOR = keccak256("PSM_QUEUE_PROCESSOR");
+    bytes32 public constant PSM_BUFFER_DEPOSITOR = keccak256("PSM_BUFFER_DEPOSITOR");
+    bytes32 public constant PSM_BUFFER_WITHDRAWER = keccak256("PSM_BUFFER_WITHDRAWER");
+    bytes32 public constant PSM_ORACLE_MANAGER = keccak256("PSM_ORACLE_MANAGER");
 
     IOkuMoney public okuMoney;
     IOkuDollar public usdOku;
@@ -126,7 +126,7 @@ contract LitePSM is
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(PSM_UPGRADER, admin);
         _grantRole(PSM_PAUSER, admin);
-        _grantRole(QUEUE_PROCESSOR, admin);
+        _grantRole(PSM_QUEUE_PROCESSOR, admin);
 
         stalenessThreshold = 1 hours;
     }
@@ -382,7 +382,7 @@ contract LitePSM is
         uint256 approveAmount
     )
         external
-        onlyRole(QUEUE_PROCESSOR)
+        onlyRole(PSM_QUEUE_PROCESSOR)
         nonReentrant
     {
         // Approve exact amount needed for queue processing
@@ -405,7 +405,7 @@ contract LitePSM is
         bool _enabled
     )
         external
-        onlyRole(ORACLE_MANAGER)
+        onlyRole(PSM_ORACLE_MANAGER)
     {
         porOracle = IAggregatorV3(_oracle);
         stalenessThreshold = _stalenessThreshold;
@@ -440,7 +440,7 @@ contract LitePSM is
         _unpause();
     }
 
-    function withdrawUsdc(address to, uint256 amount) external onlyRole(BUFFER_WITHDRAWER) {
+    function withdrawUsdc(address to, uint256 amount) external onlyRole(PSM_BUFFER_WITHDRAWER) {
         uint256 balance = usdc.balanceOf(address(this));
         if (balance < amount) revert InsufficientBuffer(balance, amount);
         uint256 queueObligation = redemptionQueue.totalQueuedUsdc();
@@ -456,7 +456,7 @@ contract LitePSM is
      * @notice Deposit USDC to PSM buffer for redemptions
      * @param amount Amount of USDC to deposit
      */
-    function depositBuffer(uint256 amount) external onlyRole(BUFFER_DEPOSITOR) {
+    function depositBuffer(uint256 amount) external onlyRole(PSM_BUFFER_DEPOSITOR) {
         usdc.safeTransferFrom(msg.sender, address(this), amount);
         emit BufferDeposited(msg.sender, amount);
     }

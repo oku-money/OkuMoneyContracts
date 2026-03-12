@@ -14,19 +14,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
-
-interface IOkuBridgeNative {
-    function bridgeBurn(
-        uint256 destChainId,
-        bytes32 recipient,
-        uint256 amount
-    )
-        external
-        returns (bytes32 requestId);
-
-    /// @notice Bridge fee in basis points (e.g. 10 = 0.1%)
-    function bridgeFee() external view returns (uint256);
-}
+import {IOkuBridgeNative} from "../interfaces/IOkuBridgeNative.sol";
 
 interface IBridgeAdapter {
     function bridge(
@@ -114,12 +102,19 @@ contract OkuBridgeRouter is
 
     event AdapterConfigured(address indexed adapter, bool supported);
     event OkuBridgeUpdated(address indexed oldBridge, address indexed newBridge);
+    event Swept(address indexed token, address indexed to, uint256 amount);
+
+    // ============ Constants ============
+
+    uint256 public constant BASIS_POINTS = 10_000;
 
     // ============ Errors ============
 
     error UnsupportedAdapter(address adapter);
     error InvalidRecipient();
     error ZeroAddress();
+    error InsufficientBalance();
+    error SweepFailed();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -169,7 +164,7 @@ contract OkuBridgeRouter is
      * @param recipient Recipient address on destination chain
      * @return requestId Bridge request ID from OkuBridge (for orchestrator tracking)
      */
-    function bridge_usdOku(
+    function bridgeUsdOku(
         uint256 usdAmount,
         uint256 destinationChain,
         bytes32 recipient
@@ -221,7 +216,7 @@ contract OkuBridgeRouter is
      * @param recipient Recipient address on destination chain
      * @return requestId Bridge request ID from OkuBridge (for orchestrator tracking)
      */
-    function bridge_OkuM(
+    function bridgeOkuM(
         uint256 okuMAmount,
         uint256 destinationChain,
         bytes32 recipient
@@ -351,6 +346,27 @@ contract OkuBridgeRouter is
         _unpause();
     }
 
+    /**
+     * @notice Sweep stuck tokens from the router
+     * @param token Token address to sweep
+     * @param to Recipient address
+     * @param amount Amount to sweep
+     */
+    function sweep(
+        address token,
+        address to,
+        uint256 amount
+    )
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        if (to == address(0)) revert ZeroAddress();
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        if (balance < amount) revert InsufficientBalance();
+        IERC20(token).safeTransfer(to, amount);
+        emit Swept(token, to, amount);
+    }
+
     // ============ Upgradeability ============
 
     function _authorizeUpgrade(address newImplementation)
@@ -361,5 +377,14 @@ contract OkuBridgeRouter is
 
     // ============ Storage Gap ============
 
+    /**
+     * Storage layout:
+     * - usdOku: 1 slot
+     * - okuMoney: 1 slot
+     * - okuBridge: 1 slot
+     * - supportedAdapters mapping: 1 slot (mapping head)
+     * Total: 4 slots used
+     * Gap: 50 - 4 = 46 slots
+     */
     uint256[46] private __gap;
 }

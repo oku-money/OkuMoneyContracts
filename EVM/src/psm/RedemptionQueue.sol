@@ -34,8 +34,9 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     uint256 private constant DECIMAL_MULTIPLIER = 10 ** 12; // 18 - 6 = 12
     uint256 private constant PRECISION = 1e18;
 
-    bytes32 public constant UPGRADER = keccak256("UPGRADER");
-    bytes32 public constant PSM = keccak256("PSM");
+    // Granular RBAC roles (prefixed with QUEUE_ for consistency)
+    bytes32 public constant QUEUE_UPGRADER = keccak256("QUEUE_UPGRADER");
+    bytes32 public constant QUEUE_PSM = keccak256("QUEUE_PSM");
 
     /// @notice Role that can rescue stuck queue entries by returning OkuMoney to an alternate address
     bytes32 public constant QUEUE_RESCUER = keccak256("QUEUE_RESCUER");
@@ -67,20 +68,30 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         uint256 okuMAmount
     );
 
+    // Custom errors
+    error ZeroAddress();
+    error StartBelowHead();
+    error EndAboveTail();
+    error InvalidIndex();
+    error EntryAlreadyCleared();
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
     function initialize(address _okuMoney, address admin) public initializer {
+        if (_okuMoney == address(0)) revert ZeroAddress();
+        if (admin == address(0)) revert ZeroAddress();
+
         __AccessControl_init();
 
         okuMoney = IOkuMoney(_okuMoney);
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(UPGRADER, admin);
+        _grantRole(QUEUE_UPGRADER, admin);
         _grantRole(QUEUE_RESCUER, admin);
-        // NOTE: PSM role is NOT granted here — must be granted post-deployment to the
+        // NOTE: QUEUE_PSM role is NOT granted here — must be granted post-deployment to the
         // LitePSM proxy address. This is intentional to avoid a circular dependency
         // at deployment time.
     }
@@ -94,7 +105,7 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
      * @dev Tokens must already be in this contract before calling (PSM transfers them first).
      *      This function is record-only: it stores the raw OkuM amount and pushes an entry.
      */
-    function enqueue(address user, uint256 okuMTokenAmount) external onlyRole(PSM) {
+    function enqueue(address user, uint256 okuMTokenAmount) external onlyRole(QUEUE_PSM) {
         uint256 position = queueTail;
         queue[position] =
             QueueEntry({user: user, okuMAmount: okuMTokenAmount, timestamp: block.timestamp});
@@ -125,10 +136,10 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         address /* okuMoneyToken */
     )
         external
-        onlyRole(PSM)
+        onlyRole(QUEUE_PSM)
     {
-        require(startIndex >= queueHead, "Start below head");
-        require(endIndex <= queueTail, "End above tail");
+        if (startIndex < queueHead) revert StartBelowHead();
+        if (endIndex > queueTail) revert EndAboveTail();
 
         IERC20 usdc = IERC20(usdcToken);
         uint256 usdcBalance = usdc.balanceOf(msg.sender);
@@ -186,11 +197,11 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         external
         onlyRole(QUEUE_RESCUER)
     {
-        require(index >= queueHead && index < queueTail, "Invalid index");
-        require(alternateRecipient != address(0), "Zero recipient");
+        if (index < queueHead || index >= queueTail) revert InvalidIndex();
+        if (alternateRecipient == address(0)) revert ZeroAddress();
 
         QueueEntry memory entry = queue[index];
-        require(entry.user != address(0), "Entry already cleared");
+        if (entry.user == address(0)) revert EntryAlreadyCleared();
 
         // Transfer OkuMoney back — do not burn, the user is reclaiming their tokens
         IERC20(address(okuMoney)).safeTransfer(alternateRecipient, entry.okuMAmount);
@@ -217,10 +228,10 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     }
 
     /**
-     * @notice Get queue length (upper bound — includes any rescued/processed slots not yet past head)
+     * @notice Get queue upper bound (includes any rescued/processed slots not yet past head)
      * @dev This is an approximation. Use off-chain iteration for an exact live-entry count.
      */
-    function queueLength() external view returns (uint256) {
+    function queueUpperBound() external view returns (uint256) {
         return queueTail - queueHead;
     }
 
@@ -228,7 +239,7 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
      * @notice Get queue entry at index
      */
     function getQueueEntry(uint256 index) external view returns (QueueEntry memory) {
-        require(index >= queueHead && index < queueTail, "Invalid index");
+        if (index < queueHead || index >= queueTail) revert InvalidIndex();
         return queue[index];
     }
 
@@ -238,15 +249,29 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
      * @return Current dollar value of the queued OkuM tokens (18 decimals)
      */
     function getQueueEntryValue(uint256 index) external view returns (uint256) {
-        require(index >= queueHead && index < queueTail, "Invalid index");
+        if (index < queueHead || index >= queueTail) revert InvalidIndex();
         return (queue[index].okuMAmount * okuMoney.okuMPrice()) / PRECISION;
     }
 
     // ============ Upgradeability ============
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER) {}
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        override
+        onlyRole(QUEUE_UPGRADER)
+    {}
 
     // ============ Storage Gap ============
 
+    /**
+     * Storage layout:
+     * - queue mapping: 1 slot (mapping head)
+     * - queueHead: 1 slot
+     * - queueTail: 1 slot
+     * - totalQueuedOkuM: 1 slot
+     * - okuMoney: 1 slot
+     * Total: 5 slots used
+     * Gap: 50 - 5 = 45 slots
+     */
     uint256[45] private __gap;
 }

@@ -81,6 +81,19 @@ contract LitePSM is
     event BufferDeposited(address indexed depositor, uint256 amount);
     event BufferWithdrawn(address indexed to, uint256 amount);
 
+    // Custom errors
+    error ZeroAddress();
+    error ZeroAmount();
+    error AmountTooSmall();
+    error OutputBelowMinimum(uint256 actual, uint256 minimum);
+    error OracleNotConfigured();
+    error IncompleteOracleRound();
+    error StaleOracleData();
+    error InvalidOracleResponse();
+    error ExceedsReserves(uint256 newSupply, uint256 reserves);
+    error InsufficientBuffer(uint256 available, uint256 required);
+    error WouldStrandQueue(uint256 remainingBalance, uint256 queueObligation);
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -96,6 +109,12 @@ contract LitePSM is
         public
         initializer
     {
+        if (_okuMoney == address(0)) revert ZeroAddress();
+        if (_usdOku == address(0)) revert ZeroAddress();
+        if (_usdc == address(0)) revert ZeroAddress();
+        if (_redemptionQueue == address(0)) revert ZeroAddress();
+        if (admin == address(0)) revert ZeroAddress();
+
         __AccessControl_init();
         __Pausable_init();
 
@@ -120,8 +139,8 @@ contract LitePSM is
      *      If okuMPrice=$1.05, depositing 100 USDC gives ~95.24 OkuM.
      * @param usdcAmount Amount of USDC to deposit (6 decimals)
      */
-    function mint_OkuM(uint256 usdcAmount) external whenNotPaused nonReentrant {
-        require(usdcAmount > 0, "Amount must be positive");
+    function mintOkuM(uint256 usdcAmount) external whenNotPaused nonReentrant {
+        if (usdcAmount == 0) revert ZeroAmount();
 
         // Convert USDC (6 decimals) to 18-decimal dollar value
         uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
@@ -129,7 +148,13 @@ contract LitePSM is
         // Price-aware conversion: okuMAmount = dollarValue × PRECISION / okuMPrice
         uint256 price = okuMoney.okuMPrice();
         uint256 okuMAmount = (usdcValue18 * PRECISION) / price;
-        require(okuMAmount > 0, "Amount too small");
+        if (okuMAmount == 0) revert AmountTooSmall();
+
+        // Slippage protection: output dollar value must be >= input (USDC-aligned)
+        uint256 outputDollarValue = (okuMAmount * price) / PRECISION;
+        if (outputDollarValue < usdcValue18) {
+            revert OutputBelowMinimum(outputDollarValue, usdcValue18);
+        }
 
         // Check PoR oracle if enabled
         if (oracleEnabled && address(porOracle) != address(0)) {
@@ -151,7 +176,7 @@ contract LitePSM is
      *      If okuMPrice=$1.05, redeeming 95.24 OkuM returns ~100 USDC.
      * @param okuMAmount Amount of OkuMoney to redeem (18 decimals)
      */
-    function redeem_OkuM(uint256 okuMAmount) external whenNotPaused nonReentrant {
+    function redeemOkuM(uint256 okuMAmount) external whenNotPaused nonReentrant {
         _redeemOkuM(msg.sender, okuMAmount);
     }
 
@@ -163,7 +188,7 @@ contract LitePSM is
      * @param r Signature r
      * @param s Signature s
      */
-    function redeem_OkuMWithPermit(
+    function redeemOkuMWithPermit(
         uint256 okuMAmount,
         uint256 deadline,
         uint8 v,
@@ -180,7 +205,7 @@ contract LitePSM is
     }
 
     function _redeemOkuM(address user, uint256 okuMAmount) internal {
-        require(okuMAmount > 0, "Amount must be positive");
+        if (okuMAmount == 0) revert ZeroAmount();
 
         // Price-aware conversion: dollarValue = okuMAmount × okuMPrice / PRECISION
         uint256 price = okuMoney.okuMPrice();
@@ -188,7 +213,14 @@ contract LitePSM is
 
         // Convert to USDC (6 decimals) — truncates sub-USDC dust
         uint256 usdcAmount = dollarValue18 / DECIMAL_MULTIPLIER;
-        require(usdcAmount > 0, "Amount too small");
+        if (usdcAmount == 0) revert AmountTooSmall();
+
+        // Slippage protection: truncate input to USDC-representable floor
+        uint256 okuMFloor = (okuMAmount / DECIMAL_MULTIPLIER) * DECIMAL_MULTIPLIER;
+        uint256 minUsdcExpected = (okuMFloor * price) / PRECISION / DECIMAL_MULTIPLIER;
+        if (usdcAmount < minUsdcExpected) {
+            revert OutputBelowMinimum(usdcAmount, minUsdcExpected);
+        }
 
         uint256 usdcBalance = usdc.balanceOf(address(this));
 
@@ -215,8 +247,8 @@ contract LitePSM is
      * @dev Price-aware: USDC converted to OkuM via okuMPrice(), then wrapped into vault.
      * @param usdcAmount Amount of USDC to deposit (6 decimals)
      */
-    function mint_usdOku(uint256 usdcAmount) external whenNotPaused nonReentrant {
-        require(usdcAmount > 0, "Amount must be positive");
+    function mintUsdOku(uint256 usdcAmount) external whenNotPaused nonReentrant {
+        if (usdcAmount == 0) revert ZeroAmount();
 
         // Convert USDC (6 decimals) to 18-decimal dollar value
         uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
@@ -224,7 +256,7 @@ contract LitePSM is
         // Price-aware conversion: okuMAmount = dollarValue × PRECISION / okuMPrice
         uint256 price = okuMoney.okuMPrice();
         uint256 okuMAmount = (usdcValue18 * PRECISION) / price;
-        require(okuMAmount > 0, "Amount too small");
+        if (okuMAmount == 0) revert AmountTooSmall();
 
         // Check PoR oracle if enabled
         if (oracleEnabled && address(porOracle) != address(0)) {
@@ -246,6 +278,11 @@ contract LitePSM is
         // Revoke any remaining approval
         IERC20(address(okuMoney)).approve(address(usdOku), 0);
 
+        // Slippage protection: usdOku minted must be >= input dollar value
+        if (usdMinted < usdcValue18) {
+            revert OutputBelowMinimum(usdMinted, usdcValue18);
+        }
+
         emit MintUSD(msg.sender, usdcAmount, usdMinted);
     }
 
@@ -256,7 +293,7 @@ contract LitePSM is
      *      If USDC buffer insufficient, OkuM goes to queue (user earns yield while queued
      *      via okuMPrice() appreciation).
      */
-    function redeem_usdOku(uint256 usdAmount) external whenNotPaused nonReentrant {
+    function redeemUsdOku(uint256 usdAmount) external whenNotPaused nonReentrant {
         _redeemUsdOku(msg.sender, usdAmount);
     }
 
@@ -268,7 +305,7 @@ contract LitePSM is
      * @param r Signature r
      * @param s Signature s
      */
-    function redeem_usdOkuWithPermit(
+    function redeemUsdOkuWithPermit(
         uint256 usdAmount,
         uint256 deadline,
         uint8 v,
@@ -285,7 +322,7 @@ contract LitePSM is
     }
 
     function _redeemUsdOku(address user, uint256 usdAmount) internal {
-        require(usdAmount > 0, "Amount must be positive");
+        if (usdAmount == 0) revert ZeroAmount();
 
         // Pull OkuDollar from user
         IERC20(address(usdOku)).safeTransferFrom(user, address(this), usdAmount);
@@ -294,7 +331,7 @@ contract LitePSM is
         // NOTE: Reverts if vault undercollateralized (distinct failure mode)
         uint256 okuMReturned = usdOku.unwrap(usdAmount, address(this));
 
-        // Now redeem the OkuMoney for USDC (same path as redeem_OkuM)
+        // Now redeem the OkuMoney for USDC (same path as redeemOkuM)
         _redeemOkuMInternal(user, okuMReturned);
     }
 
@@ -309,7 +346,14 @@ contract LitePSM is
 
         // Convert to USDC (6 decimals)
         uint256 usdcAmount = dollarValue18 / DECIMAL_MULTIPLIER;
-        require(usdcAmount > 0, "Amount too small");
+        if (usdcAmount == 0) revert AmountTooSmall();
+
+        // Slippage protection: truncate input to USDC-representable floor
+        uint256 okuMFloor = (okuMAmount / DECIMAL_MULTIPLIER) * DECIMAL_MULTIPLIER;
+        uint256 minUsdcExpected = (okuMFloor * price) / PRECISION / DECIMAL_MULTIPLIER;
+        if (usdcAmount < minUsdcExpected) {
+            revert OutputBelowMinimum(usdcAmount, minUsdcExpected);
+        }
 
         uint256 usdcBalance = usdc.balanceOf(address(this));
 
@@ -370,19 +414,20 @@ contract LitePSM is
     }
 
     function _checkReserves(uint256 mintAmount) internal view {
-        require(address(porOracle) != address(0), "Oracle not configured");
+        if (address(porOracle) == address(0)) revert OracleNotConfigured();
 
         (uint80 roundId, int256 answer,, uint256 updatedAt, uint80 answeredInRound) =
             porOracle.latestRoundData();
 
-        require(answeredInRound >= roundId, "Incomplete oracle round");
-        require(block.timestamp - updatedAt < stalenessThreshold, "Stale oracle data");
-        require(answer >= 0, "Invalid oracle response");
+        if (answeredInRound < roundId) revert IncompleteOracleRound();
+        if (block.timestamp - updatedAt >= stalenessThreshold) revert StaleOracleData();
+        if (answer < 0) revert InvalidOracleResponse();
 
         uint256 newSupply = okuMoney.totalSupply() + mintAmount;
         // Safe cast: answer >= 0 checked above
         // forge-lint: disable-next-line(unsafe-typecast)
-        require(uint256(answer) >= newSupply, "Exceeds reserves");
+        uint256 reserves = uint256(answer);
+        if (reserves < newSupply) revert ExceedsReserves(newSupply, reserves);
     }
 
     // ============ Admin Functions ============
@@ -397,9 +442,12 @@ contract LitePSM is
 
     function withdrawUsdc(address to, uint256 amount) external onlyRole(BUFFER_WITHDRAWER) {
         uint256 balance = usdc.balanceOf(address(this));
-        require(balance >= amount, "Insufficient USDC balance");
+        if (balance < amount) revert InsufficientBuffer(balance, amount);
         uint256 queueObligation = redemptionQueue.totalQueuedUsdc();
-        require(balance - amount >= queueObligation, "Would strand queue");
+        uint256 remainingBalance = balance - amount;
+        if (remainingBalance < queueObligation) {
+            revert WouldStrandQueue(remainingBalance, queueObligation);
+        }
         usdc.safeTransfer(to, amount);
         emit BufferWithdrawn(to, amount);
     }
@@ -423,5 +471,17 @@ contract LitePSM is
 
     // ============ Storage Gap ============
 
+    /**
+     * Storage layout:
+     * - okuMoney: 1 slot
+     * - usdOku: 1 slot
+     * - usdc: 1 slot
+     * - redemptionQueue: 1 slot
+     * - porOracle: 1 slot
+     * - stalenessThreshold: 1 slot
+     * - oracleEnabled: 1 slot (packed with stalenessThreshold potentially)
+     * Total: ~7 slots used
+     * Gap: 50 - 7 = 43 slots
+     */
     uint256[43] private __gap;
 }

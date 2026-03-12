@@ -34,17 +34,16 @@ contract OkuMoney is
     PausableUpgradeable,
     UUPSUpgradeable
 {
-    bytes32 public constant UPGRADER = keccak256("UPGRADER");
+    // Granular RBAC roles (all prefixed with OKUM_ for consistency)
+    bytes32 public constant OKUM_UPGRADER = keccak256("OKUM_UPGRADER");
     bytes32 public constant OKUM_PAUSER = keccak256("OKUM_PAUSER");
-    bytes32 public constant MINTER = keccak256("MINTER");
-
-    // Granular RBAC roles
     bytes32 public constant OKUM_UNPAUSER = keccak256("OKUM_UNPAUSER");
+    bytes32 public constant OKUM_MINTER = keccak256("OKUM_MINTER");
     bytes32 public constant OKUM_REBASER = keccak256("OKUM_REBASER");
-    bytes32 public constant BLACKLISTER = keccak256("BLACKLISTER");
-    bytes32 public constant UNBLACKLISTER = keccak256("UNBLACKLISTER");
-    bytes32 public constant CAP_MANAGER = keccak256("CAP_MANAGER");
-    bytes32 public constant ALLOWANCE_MANAGER = keccak256("ALLOWANCE_MANAGER");
+    bytes32 public constant OKUM_BLACKLISTER = keccak256("OKUM_BLACKLISTER");
+    bytes32 public constant OKUM_UNBLACKLISTER = keccak256("OKUM_UNBLACKLISTER");
+    bytes32 public constant OKUM_CAP_MANAGER = keccak256("OKUM_CAP_MANAGER");
+    bytes32 public constant OKUM_ALLOWANCE_MANAGER = keccak256("OKUM_ALLOWANCE_MANAGER");
 
     uint256 public constant PRECISION = 1e18;
     // Max rate: ~3700% APY safety cap (well beyond any T-Bill rate)
@@ -81,6 +80,21 @@ contract OkuMoney is
     event Blacklisted(address indexed account);
     event Unblacklisted(address indexed account);
 
+    // Custom errors
+    error ZeroAddress();
+    error InvalidRate();
+    error RateTooHigh();
+    error EndTimestampInPast();
+    error NoRateEndSet();
+    error PriceCannotDecrease();
+    error ExceedsSupplyCap();
+    error BelowCurrentSupply();
+    error ExceedsAllowance();
+    error SenderBlacklisted();
+    error RecipientBlacklisted();
+    error AlreadyBlacklisted();
+    error NotBlacklisted();
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -95,13 +109,15 @@ contract OkuMoney is
         public
         initializer
     {
+        if (admin == address(0)) revert ZeroAddress();
+
         __ERC20_init(name, symbol);
         __ERC20Permit_init(name);
         __AccessControl_init();
         __Pausable_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(UPGRADER, admin);
+        _grantRole(OKUM_UPGRADER, admin);
         _grantRole(OKUM_PAUSER, admin);
 
         _basePrice = PRECISION;
@@ -179,9 +195,9 @@ contract OkuMoney is
         external
         onlyRole(OKUM_REBASER)
     {
-        require(newRatePerSecond >= PRECISION, "Rate cannot be negative");
-        require(newRatePerSecond <= MAX_RATE, "Rate too high");
-        require(endTimestamp == 0 || endTimestamp > block.timestamp, "End must be in the future");
+        if (newRatePerSecond < PRECISION) revert InvalidRate();
+        if (newRatePerSecond > MAX_RATE) revert RateTooHigh();
+        if (endTimestamp != 0 && endTimestamp <= block.timestamp) revert EndTimestampInPast();
 
         // Snapshot current state
         _basePrice = okuMPrice();
@@ -199,9 +215,9 @@ contract OkuMoney is
      * @param newRatePerSecond Compound rate per second for the next period
      */
     function setNextYieldRate(uint256 newRatePerSecond) external onlyRole(OKUM_REBASER) {
-        require(newRatePerSecond >= PRECISION, "Rate cannot be negative");
-        require(newRatePerSecond <= MAX_RATE, "Rate too high");
-        require(rateEnd != 0, "Current rate has no end");
+        if (newRatePerSecond < PRECISION) revert InvalidRate();
+        if (newRatePerSecond > MAX_RATE) revert RateTooHigh();
+        if (rateEnd == 0) revert NoRateEndSet();
 
         pendingRatePerSecond = newRatePerSecond;
 
@@ -214,7 +230,7 @@ contract OkuMoney is
      */
     function updateOkuMPrice(uint256 newPrice) external onlyRole(OKUM_REBASER) {
         uint256 currentPrice = okuMPrice();
-        require(newPrice >= currentPrice, "Price cannot decrease");
+        if (newPrice < currentPrice) revert PriceCannotDecrease();
         _basePrice = newPrice;
         ratePerSecond = PRECISION;
         rateEnd = 0;
@@ -262,6 +278,30 @@ contract OkuMoney is
         }
     }
 
+    // ============ ERC20Permit Override (Blacklist Check) ============
+
+    /**
+     * @dev Override permit to check blacklist status of owner and spender
+     *      Prevents blacklisted users from pre-signing permits before being blacklisted
+     */
+    function permit(
+        address owner,
+        address spender,
+        uint256 value,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    )
+        public
+        virtual
+        override
+    {
+        if (isBlacklisted[owner]) revert SenderBlacklisted();
+        if (isBlacklisted[spender]) revert RecipientBlacklisted();
+        super.permit(owner, spender, value, deadline, v, r, s);
+    }
+
     // ============ ERC20 Transfer Hook (Blacklist + Pause) ============
 
     /**
@@ -273,10 +313,10 @@ contract OkuMoney is
     function _update(address from, address to, uint256 amount) internal override {
         // Blacklist checks (skip for mint/burn zero-address side)
         if (from != address(0)) {
-            require(!isBlacklisted[from], "Sender blacklisted");
+            if (isBlacklisted[from]) revert SenderBlacklisted();
         }
         if (to != address(0)) {
-            require(!isBlacklisted[to], "Recipient blacklisted");
+            if (isBlacklisted[to]) revert RecipientBlacklisted();
         }
 
         // Pause check: block peer-to-peer transfers when paused.
@@ -295,11 +335,11 @@ contract OkuMoney is
      * @dev Creates raw tokens; minting 100 tokens when okuMPrice = $1.05 creates $105 of value.
      *      The PSM handles USDC <-> OkuM conversion using okuMPrice().
      */
-    function mint(address to, uint256 amount) external onlyRole(MINTER) whenNotPaused {
-        require(amount > 0, "Amount too small");
-        require(!isBlacklisted[to], "Recipient blacklisted");
-        require(totalSupply() + amount <= maxSupply, "Exceeds supply cap");
-        require(minterAllowance[msg.sender] >= amount, "Exceeds minter allowance");
+    function mint(address to, uint256 amount) external onlyRole(OKUM_MINTER) whenNotPaused {
+        // Note: amount > 0 check removed per L-5 - let users waste gas if they want
+        if (isBlacklisted[to]) revert RecipientBlacklisted();
+        if (totalSupply() + amount > maxSupply) revert ExceedsSupplyCap();
+        if (minterAllowance[msg.sender] < amount) revert ExceedsAllowance();
 
         unchecked {
             minterAllowance[msg.sender] -= amount;
@@ -312,8 +352,8 @@ contract OkuMoney is
      * @notice Burn raw tokens from caller
      * @dev No whenNotPaused — burn works while paused.
      */
-    function burn(uint256 amount) external onlyRole(MINTER) {
-        require(!isBlacklisted[msg.sender], "Account blacklisted");
+    function burn(uint256 amount) external onlyRole(OKUM_MINTER) {
+        if (isBlacklisted[msg.sender]) revert SenderBlacklisted();
         _burn(msg.sender, amount);
     }
 
@@ -324,7 +364,7 @@ contract OkuMoney is
         uint256 allowance
     )
         external
-        onlyRole(ALLOWANCE_MANAGER)
+        onlyRole(OKUM_ALLOWANCE_MANAGER)
     {
         uint256 oldAllowance = minterAllowance[minter_];
         minterAllowance[minter_] = allowance;
@@ -333,8 +373,8 @@ contract OkuMoney is
 
     // ============ Supply Cap Management ============
 
-    function setMaxSupply(uint256 newMaxSupply) external onlyRole(CAP_MANAGER) {
-        require(newMaxSupply >= totalSupply(), "Below current supply");
+    function setMaxSupply(uint256 newMaxSupply) external onlyRole(OKUM_CAP_MANAGER) {
+        if (newMaxSupply < totalSupply()) revert BelowCurrentSupply();
         uint256 oldMaxSupply = maxSupply;
         maxSupply = newMaxSupply;
         emit MaxSupplyUpdated(oldMaxSupply, newMaxSupply);
@@ -342,12 +382,14 @@ contract OkuMoney is
 
     // ============ Blacklist (Works While Paused) ============
 
-    function blacklist(address account) external onlyRole(BLACKLISTER) {
+    function blacklist(address account) external onlyRole(OKUM_BLACKLISTER) {
+        if (isBlacklisted[account]) revert AlreadyBlacklisted();
         isBlacklisted[account] = true;
         emit Blacklisted(account);
     }
 
-    function unblacklist(address account) external onlyRole(UNBLACKLISTER) {
+    function unblacklist(address account) external onlyRole(OKUM_UNBLACKLISTER) {
+        if (!isBlacklisted[account]) revert NotBlacklisted();
         isBlacklisted[account] = false;
         emit Unblacklisted(account);
     }
@@ -364,11 +406,27 @@ contract OkuMoney is
 
     // ============ Upgradeability ============
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER) {}
+    function _authorizeUpgrade(address newImplementation)
+        internal
+        override
+        onlyRole(OKUM_UPGRADER)
+    {}
 
     // ============ Storage Gap ============
 
-    // [40] = original [37] + 3 slots reclaimed from removed blacklist-exempt variables
-    // (blacklistExempt1, blacklistExempt2, _blacklistExemptInitialized)
+    /**
+     * Storage layout:
+     * - _basePrice: 1 slot
+     * - ratePerSecond: 1 slot
+     * - lastAccrualTime: 1 slot
+     * - rateEnd: 1 slot
+     * - pendingRatePerSecond: 1 slot
+     * - minterAllowance mapping: 1 slot (mapping head)
+     * - maxSupply: 1 slot
+     * - isBlacklisted mapping: 1 slot (mapping head)
+     * Total: 8 slots used
+     * Gap: 50 - 8 - 2 (parent contracts) = 40 slots
+     * Note: [40] accounts for 3 slots reclaimed from removed blacklist-exempt variables
+     */
     uint256[40] private __gap;
 }

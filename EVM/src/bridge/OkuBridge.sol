@@ -40,8 +40,8 @@ contract OkuBridge is
     Initializable,
     AccessControlUpgradeable,
     PausableUpgradeable,
-    ReentrancyGuard,
     EIP712Upgradeable,
+    ReentrancyGuard,
     UUPSUpgradeable
 {
     using SafeERC20 for IERC20;
@@ -163,6 +163,14 @@ contract OkuBridge is
         bytes32 indexed requestId, address indexed initiator, address indexed cancelledBy
     );
 
+    // ============ Constants ============
+
+    uint256 public constant BASIS_POINTS = 10_000;
+    uint256 public constant DEFAULT_MIN_AMOUNT = 1e18;
+    uint256 public constant DEFAULT_MAX_AMOUNT = 1_000_000e18;
+    uint256 public constant DEFAULT_FEE_BPS = 10;
+    uint256 public constant DEFAULT_DEADLINE = 1 hours;
+
     // ============ Errors ============
 
     error UnsupportedChain(uint256 chainId);
@@ -171,6 +179,7 @@ contract OkuBridge is
     error InvalidSignature();
     error SignatureExpired();
     error WrongChain(uint256 expected, uint256 actual);
+    error WrongSourceChain(uint256 expected, uint256 actual);
     error AlreadyProcessed(bytes32 requestId);
     error ZeroAddress();
     error InvalidFee(uint256 fee);
@@ -179,6 +188,10 @@ contract OkuBridge is
     error MintWindowStillOpen();
     error RefundNotInitiated(bytes32 requestId);
     error InitiatorCannotConfirm();
+    error NotInitiatorOrAdmin();
+    error DeadlineMustBePositive();
+    error ChainAlreadySupported();
+    error ChainNotSupported();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -193,12 +206,14 @@ contract OkuBridge is
      * @param _authorizedSigner Orchestrator's authorized signer address
      * @param _feeRecipient Address to receive bridge fees
      * @param _admin Admin address for role management
+     * @param initialChains Array of chain IDs to support at initialization
      */
     function initialize(
         address _okuMoney,
         address _authorizedSigner,
         address _feeRecipient,
-        address _admin
+        address _admin,
+        uint256[] calldata initialChains
     )
         external
         initializer
@@ -217,10 +232,10 @@ contract OkuBridge is
         feeRecipient = _feeRecipient;
 
         // Default limits (can be updated later)
-        minBridgeAmount = 1e18; // 1 token minimum
-        maxBridgeAmount = 1_000_000e18; // 1M tokens maximum
-        bridgeFee = 10; // 0.1% (10 basis points)
-        bridgeDeadline = 1 hours;
+        minBridgeAmount = DEFAULT_MIN_AMOUNT;
+        maxBridgeAmount = DEFAULT_MAX_AMOUNT;
+        bridgeFee = DEFAULT_FEE_BPS;
+        bridgeDeadline = DEFAULT_DEADLINE;
 
         // Grant all roles to admin
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
@@ -236,11 +251,14 @@ contract OkuBridge is
         _grantRole(BRIDGE_UPGRADER, _admin);
         _grantRole(DUST_SWEEPER, _admin);
 
-        // Configure common chains (self-chain excluded by belt-and-suspenders check in bridgeBurn)
-        supportedChains[1] = true; // Ethereum
-        supportedChains[10] = true; // Optimism
-        supportedChains[8453] = true; // Base
-        supportedChains[42_161] = true; // Arbitrum
+        // Configure initial supported chains (excluding self-chain)
+        for (uint256 i = 0; i < initialChains.length; i++) {
+            uint256 chainId = initialChains[i];
+            if (chainId != block.chainid) {
+                supportedChains[chainId] = true;
+                emit ChainAdded(chainId);
+            }
+        }
     }
 
     // ============ Core Bridge Functions ============
@@ -406,6 +424,11 @@ contract OkuBridge is
         external
         onlyRole(BRIDGE_REFUND_INITIATOR)
     {
+        // Refund must be initiated on the source chain (where tokens were burned)
+        if (request.sourceChainId != block.chainid) {
+            revert WrongSourceChain(block.chainid, request.sourceChainId);
+        }
+
         // Refund only valid after mint window has closed
         if (block.timestamp <= request.deadline) revert MintWindowStillOpen();
 
@@ -439,6 +462,11 @@ contract OkuBridge is
         external
         onlyRole(BRIDGE_REFUND_CONFIRMER)
     {
+        // Refund must be confirmed on the source chain (where tokens were burned)
+        if (request.sourceChainId != block.chainid) {
+            revert WrongSourceChain(block.chainid, request.sourceChainId);
+        }
+
         bytes32 requestId = keccak256(abi.encode(request));
 
         // Primary double-mint guard: reject if bridgeMint already executed on destination.
@@ -485,7 +513,7 @@ contract OkuBridge is
         // Only the original initiator or an admin can cancel
         bool isInitiator = msg.sender == initiator;
         bool isAdmin = hasRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        require(isInitiator || isAdmin, "Not initiator or admin");
+        if (!isInitiator && !isAdmin) revert NotInitiatorOrAdmin();
 
         delete pendingRefundInitiator[requestId];
 
@@ -547,6 +575,8 @@ contract OkuBridge is
     function addSupportedChain(uint256 chainId) external onlyRole(BRIDGE_CHAIN_MANAGER) {
         // Prevent adding the current chain as a destination (no same-chain bridges)
         if (chainId == block.chainid) revert UnsupportedChain(chainId);
+        // Only emit if chain wasn't already supported
+        if (supportedChains[chainId]) revert ChainAlreadySupported();
         supportedChains[chainId] = true;
         emit ChainAdded(chainId);
     }
@@ -556,6 +586,8 @@ contract OkuBridge is
      * @param chainId Chain ID to remove
      */
     function removeSupportedChain(uint256 chainId) external onlyRole(BRIDGE_CHAIN_MANAGER) {
+        // Only emit if chain was actually supported
+        if (!supportedChains[chainId]) revert ChainNotSupported();
         supportedChains[chainId] = false;
         emit ChainRemoved(chainId);
     }
@@ -577,7 +609,7 @@ contract OkuBridge is
      * @param newDeadline New deadline duration in seconds
      */
     function updateDeadline(uint256 newDeadline) external onlyRole(BRIDGE_LIMITS_MANAGER) {
-        require(newDeadline > 0, "Deadline must be positive");
+        if (newDeadline == 0) revert DeadlineMustBePositive();
         uint256 oldDeadline = bridgeDeadline;
         bridgeDeadline = newDeadline;
         emit DeadlineUpdated(oldDeadline, newDeadline);
@@ -637,5 +669,22 @@ contract OkuBridge is
 
     // ============ Storage Gap ============
 
+    /**
+     * Storage layout:
+     * - okuMoney: 1 slot
+     * - authorizedSigner: 1 slot
+     * - feeRecipient: 1 slot
+     * - bridgeFee: 1 slot
+     * - minBridgeAmount: 1 slot
+     * - maxBridgeAmount: 1 slot
+     * - supportedChains mapping: 1 slot (mapping head)
+     * - outboundNonce mapping: 1 slot (mapping head)
+     * - processedRequests mapping: 1 slot (mapping head)
+     * - refundedRequests mapping: 1 slot (mapping head)
+     * - bridgeDeadline: 1 slot
+     * - pendingRefundInitiator mapping: 1 slot (mapping head)
+     * Total: 12 slots used
+     * Gap: 50 - 12 = 38 slots
+     */
     uint256[38] private __gap;
 }

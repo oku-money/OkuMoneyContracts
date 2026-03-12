@@ -9,6 +9,7 @@ import {
 import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {
     ERC20Upgradeable
 } from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
@@ -35,6 +36,7 @@ contract OkuDollar is
     ERC20PermitUpgradeable,
     AccessControlUpgradeable,
     PausableUpgradeable,
+    ReentrancyGuard,
     UUPSUpgradeable
 {
     using SafeERC20 for IERC20;
@@ -84,6 +86,20 @@ contract OkuDollar is
         _disableInitializers();
     }
 
+    // Custom errors
+    error ZeroAddress();
+    error RatioExceedsMax();
+    error ZeroAmount();
+    error AmountTooSmall();
+    error InsufficientReserves();
+    error InsufficientCollateral();
+    error BelowMinimumCollateral();
+    error InvalidRate();
+    error RateTooHigh();
+    error EndTimestampInPast();
+    error NoRateEndSet();
+    error MultiplierCannotDecrease();
+
     function initialize(
         address _okuMoney,
         string memory name,
@@ -94,8 +110,9 @@ contract OkuDollar is
         public
         initializer
     {
-        require(_okuMoney != address(0), "Zero address");
-        require(_minCollateralRatio <= PRECISION, "Ratio exceeds 100%");
+        if (_okuMoney == address(0)) revert ZeroAddress();
+        if (admin == address(0)) revert ZeroAddress();
+        if (_minCollateralRatio > PRECISION) revert RatioExceedsMax();
 
         __ERC20_init(name, symbol);
         __ERC20Permit_init(name);
@@ -208,11 +225,11 @@ contract OkuDollar is
     }
 
     function _transferUsdShares(address from, address to, uint256 shares) internal {
-        require(from != address(0), "Transfer from zero address");
-        require(to != address(0), "Transfer to zero address");
+        if (from == address(0)) revert ZeroAddress();
+        if (to == address(0)) revert ZeroAddress();
 
         uint256 fromBalance = _usdShares[from];
-        require(fromBalance >= shares, "Insufficient balance");
+        if (fromBalance < shares) revert InsufficientCollateral();
 
         _usdShares[from] = fromBalance - shares;
         _usdShares[to] += shares;
@@ -237,25 +254,26 @@ contract OkuDollar is
     )
         external
         whenNotPaused
+        nonReentrant
         returns (uint256 usdMinted)
     {
-        require(okuMAmount > 0, "Amount must be positive");
-        require(receiver != address(0), "Zero receiver");
+        if (okuMAmount == 0) revert ZeroAmount();
+        if (receiver == address(0)) revert ZeroAddress();
 
         // Measure actual tokens received (handles fee-on-transfer edge cases)
         uint256 balBefore = IERC20(address(okuMoney)).balanceOf(address(this));
         IERC20(address(okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
         uint256 actualReceived = IERC20(address(okuMoney)).balanceOf(address(this)) - balBefore;
 
-        // Price-aware: convert OkuM token value to OkuDollar amount
-        // usdMinted = actualReceived × okuMPrice / usdMultiplier
+        // Price-aware: convert OkuM token value to OkuDollar shares
+        // shares = actualReceived × okuMPrice / usdMultiplier
         uint256 price = okuMoney.okuMPrice();
         uint256 mult = usdMultiplier();
-        usdMinted = (actualReceived * price) / mult;
+        uint256 sharesToMint = (actualReceived * price) / mult;
+        if (sharesToMint == 0) revert AmountTooSmall();
 
-        // Calculate USD shares to mint (rounds DOWN — favors vault)
-        uint256 sharesToMint = (usdMinted * PRECISION) / mult;
-        require(sharesToMint > 0, "Amount too small");
+        // Calculate dollar value for event (from shares × multiplier)
+        usdMinted = (sharesToMint * mult) / PRECISION;
 
         _totalUsdShares += sharesToMint;
         _usdShares[receiver] += sharesToMint;
@@ -278,10 +296,11 @@ contract OkuDollar is
     )
         external
         whenNotPaused
+        nonReentrant
         returns (uint256 okuMReturned)
     {
-        require(usdAmount > 0, "Amount must be positive");
-        require(receiver != address(0), "Zero receiver");
+        if (usdAmount == 0) revert ZeroAmount();
+        if (receiver == address(0)) revert ZeroAddress();
 
         // Price-aware: convert OkuDollar amount to OkuM token count
         // okuMReturned = usdAmount × usdMultiplier / okuMPrice
@@ -289,19 +308,19 @@ contract OkuDollar is
         uint256 price = okuMoney.okuMPrice();
         okuMReturned = (usdAmount * mult) / price;
 
-        // Calculate USD shares to burn (rounds UP — favors vault)
-        uint256 sharesToBurn = (usdAmount * PRECISION + mult - 1) / mult;
-        require(_usdShares[msg.sender] >= sharesToBurn, "Insufficient balance");
+        // Calculate shares to burn
+        uint256 sharesToBurn = (usdAmount * PRECISION) / mult;
+        if (_usdShares[msg.sender] < sharesToBurn) revert InsufficientCollateral();
 
-        _usdShares[msg.sender] -= sharesToBurn;
+        // Check vault has enough OkuMoney
+        uint256 reserves = IERC20(address(okuMoney)).balanceOf(address(this));
+        if (reserves < okuMReturned) revert InsufficientReserves();
+
+        // Burn user's shares
         _totalUsdShares -= sharesToBurn;
+        _usdShares[msg.sender] -= sharesToBurn;
 
-        // Ensure vault has enough OkuMoney
-        require(
-            IERC20(address(okuMoney)).balanceOf(address(this)) >= okuMReturned,
-            "Insufficient reserves"
-        );
-
+        // Transfer OkuMoney to receiver
         IERC20(address(okuMoney)).safeTransfer(receiver, okuMReturned);
 
         emit Transfer(msg.sender, address(0), usdAmount);
@@ -317,9 +336,11 @@ contract OkuDollar is
      * @param okuMAmount Amount of OkuMoney tokens to deposit
      */
     function depositReserves(uint256 okuMAmount) external onlyRole(RESERVE_MANAGER) {
-        require(okuMAmount > 0, "Amount must be positive");
+        if (okuMAmount == 0) revert ZeroAmount();
+        uint256 balBefore = IERC20(address(okuMoney)).balanceOf(address(this));
         IERC20(address(okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
-        emit ReservesDeposited(msg.sender, okuMAmount);
+        uint256 actualReceived = IERC20(address(okuMoney)).balanceOf(address(this)) - balBefore;
+        emit ReservesDeposited(msg.sender, actualReceived);
     }
 
     /**
@@ -329,12 +350,12 @@ contract OkuDollar is
      * @param okuMAmount Amount of OkuMoney tokens to withdraw
      */
     function withdrawSurplus(uint256 okuMAmount) external onlyRole(RESERVE_MANAGER) {
-        require(okuMAmount > 0, "Amount must be positive");
+        if (okuMAmount == 0) revert ZeroAmount();
 
         IERC20(address(okuMoney)).safeTransfer(msg.sender, okuMAmount);
 
         // Enforce collateralization floor AFTER withdrawal
-        require(collateralizationRatio() >= minCollateralRatio, "Below minimum collateral ratio");
+        if (collateralizationRatio() < minCollateralRatio) revert BelowMinimumCollateral();
 
         emit SurplusWithdrawn(msg.sender, okuMAmount);
     }
@@ -342,7 +363,7 @@ contract OkuDollar is
     // ============ Admin ============
 
     function setMinCollateralRatio(uint256 newRatio) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(newRatio <= PRECISION, "Ratio exceeds 100%");
+        if (newRatio > PRECISION) revert RatioExceedsMax();
         uint256 oldRatio = minCollateralRatio;
         minCollateralRatio = newRatio;
         emit MinCollateralRatioUpdated(oldRatio, newRatio);
@@ -396,9 +417,9 @@ contract OkuDollar is
     // ============ Rate Management (USD_REBASER) ============
 
     function setUsdYieldRate(uint256 newRate, uint256 endTimestamp) external onlyRole(USD_REBASER) {
-        require(newRate >= PRECISION, "Rate cannot be negative");
-        require(newRate <= MAX_RATE, "Rate too high");
-        require(endTimestamp == 0 || endTimestamp > block.timestamp, "End must be in the future");
+        if (newRate < PRECISION) revert InvalidRate();
+        if (newRate > MAX_RATE) revert RateTooHigh();
+        if (endTimestamp != 0 && endTimestamp <= block.timestamp) revert EndTimestampInPast();
 
         _usdBaseMultiplier = usdMultiplier();
         usdLastAccrualTime = block.timestamp;
@@ -411,9 +432,9 @@ contract OkuDollar is
     }
 
     function setNextUsdYieldRate(uint256 newRate) external onlyRole(USD_REBASER) {
-        require(newRate >= PRECISION, "Rate cannot be negative");
-        require(newRate <= MAX_RATE, "Rate too high");
-        require(usdRateEnd != 0, "Current rate has no end");
+        if (newRate < PRECISION) revert InvalidRate();
+        if (newRate > MAX_RATE) revert RateTooHigh();
+        if (usdRateEnd == 0) revert NoRateEndSet();
 
         usdPendingRatePerSecond = newRate;
 
@@ -425,7 +446,7 @@ contract OkuDollar is
      */
     function updateUsdMultiplier(uint256 newMultiplier) external onlyRole(USD_REBASER) {
         uint256 currentMultiplier = usdMultiplier();
-        require(newMultiplier >= currentMultiplier, "Multiplier cannot decrease");
+        if (newMultiplier < currentMultiplier) revert MultiplierCannotDecrease();
         _usdBaseMultiplier = newMultiplier;
         usdRatePerSecond = PRECISION;
         usdRateEnd = 0;
@@ -485,5 +506,19 @@ contract OkuDollar is
 
     // ============ Storage Gap ============
 
+    /**
+     * Storage layout:
+     * - okuMoney: 1 slot
+     * - _usdShares mapping: 1 slot (mapping head)
+     * - _totalUsdShares: 1 slot
+     * - _usdBaseMultiplier: 1 slot
+     * - usdRatePerSecond: 1 slot
+     * - usdLastAccrualTime: 1 slot
+     * - usdRateEnd: 1 slot
+     * - usdPendingRatePerSecond: 1 slot
+     * - minCollateralRatio: 1 slot
+     * Total: 9 slots used
+     * Gap: 50 - 9 - 4 (parent contracts) = 37 slots
+     */
     uint256[37] private __gap;
 }

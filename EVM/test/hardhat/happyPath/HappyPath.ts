@@ -53,8 +53,7 @@ describe("Happy Path Testing", () => {
             method: "hardhat_reset",
             params: [{
                 forking: {
-                    jsonRpcUrl: process.env.MAINNET_RPC_URL,
-                    blockNumber: 24172540
+                    jsonRpcUrl: process.env.MAINNET_RPC_URL
                 }
             }]
         })
@@ -215,7 +214,7 @@ describe("Happy Path Testing", () => {
 
         // Admin increases notePrice by 5% (simulating yield accrual)
         const newPrice = priceBefore * 105n / 100n
-        await okuMoney.connect(Frank).updateOkuMPrice(newPrice)
+        await okuMoney.connect(Frank).setOkuMPrice(newPrice)
 
         // Verify notePrice increased
         expect(await okuMoney.okuMPrice()).to.equal(newPrice)

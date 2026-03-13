@@ -82,8 +82,7 @@ describe("OkuDollar Vault Scenarios", () => {
             method: "hardhat_reset",
             params: [{
                 forking: {
-                    jsonRpcUrl: process.env.MAINNET_RPC_URL,
-                    blockNumber: 24172540
+                    jsonRpcUrl: process.env.MAINNET_RPC_URL
                 }
             }]
         })
@@ -226,7 +225,7 @@ describe("OkuDollar Vault Scenarios", () => {
             // Admin increases notePrice by 10% (non-rebasing: token counts don't change)
             const priceBefore = await okuMoney.okuMPrice()
             const newPrice = priceBefore * 110n / 100n
-            await okuMoney.connect(Frank).updateOkuMPrice(newPrice)
+            await okuMoney.connect(Frank).setOkuMPrice(newPrice)
 
             // Note reserves (raw token count) should be UNCHANGED
             const newReserves = await okuUsd.totalOkuMReserves()
@@ -307,7 +306,7 @@ describe("OkuDollar Vault Scenarios", () => {
             // Admin increases notePrice by 10% — vault accumulates surplus
             const priceBefore = await okuMoney.okuMPrice()
             const newPrice = priceBefore * 110n / 100n
-            await okuMoney.connect(Frank).updateOkuMPrice(newPrice)
+            await okuMoney.connect(Frank).setOkuMPrice(newPrice)
 
             // Vault is now overcollateralized
             expect(await okuUsd.surplus()).to.be.gt(0)

@@ -86,12 +86,12 @@ describe("OkuNote Scenarios", () => {
 
     before(async () => {
         // Reset network to initial fork state for test isolation
+        // No blockNumber pin: non-archival public nodes prune old state
         await network.provider.request({
             method: "hardhat_reset",
             params: [{
                 forking: {
-                    jsonRpcUrl: process.env.MAINNET_RPC_URL,
-                    blockNumber: 24172540
+                    jsonRpcUrl: process.env.MAINNET_RPC_URL
                 }
             }]
         })
@@ -184,7 +184,12 @@ describe("OkuNote Scenarios", () => {
 
             // Alice transfers 5,000 OkuMoney to Bob (OkuNote is 18 decimals)
             const transferAmount = parseEther("5000")
-            await okuMoney.connect(Alice).transfer(bobAddr, transferAmount)
+            const priceAtTransfer = await okuMoney.okuMPrice()
+            const PRECISION = parseEther("1")
+            const expectedDollarValue = (transferAmount * priceAtTransfer) / PRECISION
+            await expect(okuMoney.connect(Alice).transfer(bobAddr, transferAmount))
+                .to.emit(okuMoney, "TransferValue")
+                .withArgs(aliceAddr, bobAddr, transferAmount, expectedDollarValue)
 
             const aliceAfterTransfer = await okuMoney.balanceOf(aliceAddr)
             const bobAfterTransfer = await okuMoney.balanceOf(bobAddr)
@@ -200,7 +205,7 @@ describe("OkuNote Scenarios", () => {
             // Admin performs 10% notePrice increase (non-rebasing: balances do NOT change)
             const priceBefore = await okuMoney.okuMPrice()
             const newPrice = priceBefore * 110n / 100n
-            await okuMoney.connect(Frank).updateOkuMPrice(newPrice)
+            await okuMoney.connect(Frank).setOkuMPrice(newPrice)
 
             // Verify notePrice increased
             expect(await okuMoney.okuMPrice()).to.equal(newPrice)

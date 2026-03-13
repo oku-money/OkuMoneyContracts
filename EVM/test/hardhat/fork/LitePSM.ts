@@ -95,8 +95,7 @@ describe("LitePSM Scenarios", () => {
             method: "hardhat_reset",
             params: [{
                 forking: {
-                    jsonRpcUrl: process.env.MAINNET_RPC_URL,
-                    blockNumber: 24172540
+                    jsonRpcUrl: process.env.MAINNET_RPC_URL
                 }
             }]
         })
@@ -433,7 +432,7 @@ describe("LitePSM Scenarios", () => {
             // NotePrice increase: 10% while users are in queue
             const priceBefore = await okuMoney.okuMPrice()
             const newPrice = priceBefore * 110n / 100n
-            await okuMoney.connect(Frank).updateOkuMPrice(newPrice)
+            await okuMoney.connect(Frank).setOkuMPrice(newPrice)
 
             // Record USDC balances before processing
             const aliceUsdcBefore = await usdc.balanceOf(aliceAddr)

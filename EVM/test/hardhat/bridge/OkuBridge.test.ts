@@ -411,7 +411,7 @@ describe("OkuBridge E2E", function () {
 
       const oldPrice = await okuMoney.okuMPrice();
       const newPrice = (oldPrice * 150n) / 100n;
-      await okuMoney.connect(admin).updateOkuMPrice(newPrice);
+      await okuMoney.connect(admin).setOkuMPrice(newPrice);
 
       // Mint on destination with netAmount (fee already deducted on source)
       const chainId = (await ethers.provider.getNetwork()).chainId;

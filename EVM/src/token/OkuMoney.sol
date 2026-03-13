@@ -88,6 +88,9 @@ contract OkuMoney is
     event MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply);
     event Blacklisted(address indexed account);
     event Unblacklisted(address indexed account);
+    /// @notice Emitted alongside the standard ERC-20 Transfer with the dollar-denominated value
+    /// @dev dollarValue = amount × okuMPrice / PRECISION
+    event TransferValue(address indexed from, address indexed to, uint256 amount, uint256 dollarValue);
 
     // ============ Custom Errors ============
 
@@ -240,6 +243,9 @@ contract OkuMoney is
         }
 
         super._update(from, to, amount);
+
+        uint256 dollarValue = (amount * $.okuMPrice) / PRECISION;
+        emit TransferValue(from, to, amount, dollarValue);
     }
 
     // ============ Minting & Burning ============

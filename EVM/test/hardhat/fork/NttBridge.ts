@@ -110,8 +110,7 @@ describe("NTT Bridge Scenarios", () => {
             method: "hardhat_reset",
             params: [{
                 forking: {
-                    jsonRpcUrl: process.env.MAINNET_RPC_URL,
-                    blockNumber: 24172540
+                    jsonRpcUrl: process.env.MAINNET_RPC_URL
                 }
             }]
         })
@@ -407,7 +406,7 @@ describe("NTT Bridge Scenarios", () => {
             // NotePrice +10% AFTER bridge message recorded
             const priceBefore = await okuMoney.okuMPrice()
             const newPrice = priceBefore * 110n / 100n
-            await okuMoney.connect(Frank).updateOkuMPrice(newPrice)
+            await okuMoney.connect(Frank).setOkuMPrice(newPrice)
 
             // Complete the bridge
             const charlieBalanceBefore = await okuMoney.balanceOf(charlieAddr)

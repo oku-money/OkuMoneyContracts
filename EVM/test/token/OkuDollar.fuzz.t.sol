@@ -125,7 +125,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         // Set note price
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(notePrice);
+        okuMoney.setOkuMPrice(notePrice);
 
         vm.startPrank(user1);
         uint256 usdMinted = usdOku.wrap(okuMAmount, user1, 0);
@@ -213,7 +213,7 @@ contract OkuDollarFuzzTest is BaseTest {
         notePrice = _boundOkuMPrice(notePrice);
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(notePrice);
+        okuMoney.setOkuMPrice(notePrice);
 
         uint256 mult = usdOku.usdMultiplier();
 
@@ -299,7 +299,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         // Increase note price — vault note balance unchanged, but dollar value increases
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newNotePrice);
+        okuMoney.setOkuMPrice(newNotePrice);
 
         uint256 ratio = usdOku.collateralizationRatio();
         assertGe(ratio, PRECISION, "Note price increase should overcollateralize vault");
@@ -381,7 +381,7 @@ contract OkuDollarFuzzTest is BaseTest {
         newNotePrice = bound(newNotePrice, currentNotePrice, currentNotePrice * 5);
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newNotePrice);
+        okuMoney.setOkuMPrice(newNotePrice);
 
         uint256 reserves = usdOku.totalOkuMReserves();
         uint256 obligations = usdOku.totalUsdObligations();
@@ -502,7 +502,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         // notePrice increase → vault's reserve dollar value grows → surplus created
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newNotePrice);
+        okuMoney.setOkuMPrice(newNotePrice);
 
         uint256 surplusVal = usdOku.surplus();
         assertGt(surplusVal, 0, "Should have surplus after note price increase");
@@ -573,7 +573,7 @@ contract OkuDollarFuzzTest is BaseTest {
         newNotePrice = _boundOkuMPrice(newNotePrice);
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newNotePrice);
+        okuMoney.setOkuMPrice(newNotePrice);
 
         uint256 balanceAfter = usdOku.balanceOf(user1);
         uint256 sharesAfter = usdOku.usdSharesOf(user1);
@@ -721,7 +721,7 @@ contract OkuDollarFuzzTest is BaseTest {
         cycles = uint8(bound(cycles, 2, 10));
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(notePrice);
+        okuMoney.setOkuMPrice(notePrice);
 
         vm.startPrank(user1);
         usdOku.wrap(okuMAmount, user1, 0);
@@ -835,7 +835,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         // Increase note price
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newNotePrice);
+        okuMoney.setOkuMPrice(newNotePrice);
 
         // Wrap same note amount at higher price
         vm.prank(user1);
@@ -867,7 +867,7 @@ contract OkuDollarFuzzTest is BaseTest {
             bound(newNotePrice, currentNotePrice + currentNotePrice / 10, currentNotePrice * 5);
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newNotePrice);
+        okuMoney.setOkuMPrice(newNotePrice);
 
         // Unwrap at higher note price — should get fewer note tokens back
         vm.prank(user1);
@@ -895,7 +895,7 @@ contract OkuDollarFuzzTest is BaseTest {
         newNotePrice = _boundOkuMPrice(newNotePrice);
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newNotePrice);
+        okuMoney.setOkuMPrice(newNotePrice);
 
         uint256 balanceAfter = okuMoney.balanceOf(user1);
         assertEq(balanceAfter, balanceBefore, "OkuMoney balanceOf must not change with notePrice");
@@ -919,7 +919,7 @@ contract OkuDollarFuzzTest is BaseTest {
         newNotePrice = _boundOkuMPrice(newNotePrice);
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newNotePrice);
+        okuMoney.setOkuMPrice(newNotePrice);
 
         uint256 vaultBalanceAfter = okuMoney.balanceOf(address(usdOku));
         assertEq(

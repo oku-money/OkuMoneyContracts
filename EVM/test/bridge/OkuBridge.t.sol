@@ -535,7 +535,7 @@ contract OkuBridgeTest is BaseTest {
         uint256 newPrice = (oldPrice * 150) / 100;
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         // Step 3: Create request and sign (encodes netAmount)
         OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({

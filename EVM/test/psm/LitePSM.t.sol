@@ -60,7 +60,7 @@ contract LitePSMTest is BaseTest {
     /// @notice Raise notePrice to a specific value using updateNotePrice
     function _setNotePrice(uint256 newPrice) internal {
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
     }
 
     // ============ Mint Tests ============

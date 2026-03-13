@@ -168,7 +168,7 @@ contract OkuDollarTest is BaseTest {
     function test_Wrap_PriceAware_NotePriceIncrease() public {
         // Increase notePrice to 1.05e18 ($1.05 per note token)
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(105e16);
+        okuMoney.setOkuMPrice(105e16);
 
         uint256 okuMAmount = 100e18;
         _mintOkuMoney(user1, okuMAmount);
@@ -185,7 +185,7 @@ contract OkuDollarTest is BaseTest {
     function test_Wrap_PriceAware_HighNotePrice() public {
         // notePrice = 2e18 ($2.00 per note token)
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 2);
 
         uint256 okuMAmount = 50e18;
         _mintOkuMoney(user1, okuMAmount);
@@ -201,7 +201,7 @@ contract OkuDollarTest is BaseTest {
     function test_Wrap_PriceAware_BothMultipliersElevated() public {
         // notePrice = 1.05e18, usdMultiplier = 1.02e18
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(105e16);
+        okuMoney.setOkuMPrice(105e16);
 
         vm.prank(usdRebaser);
         usdOku.updateUsdMultiplier(102e16);
@@ -327,7 +327,7 @@ contract OkuDollarTest is BaseTest {
 
         // Increase notePrice to 1.05e18
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(105e16);
+        okuMoney.setOkuMPrice(105e16);
 
         // Unwrap 105 OkuDollar at notePrice=1.05e18
         // okuMReturned = 105e18 * 1e18 / 1.05e18 = 100e18
@@ -345,7 +345,7 @@ contract OkuDollarTest is BaseTest {
     function test_Unwrap_PriceAware_RoundTrip_AtHighPrice() public {
         // Set notePrice to 1.05e18 BEFORE wrapping
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(105e16);
+        okuMoney.setOkuMPrice(105e16);
 
         uint256 okuMAmount = 100e18;
         _mintOkuMoney(user1, okuMAmount);
@@ -408,7 +408,7 @@ contract OkuDollarTest is BaseTest {
     function test_PriceAware_AfterNotePriceIncrease_MoreOkuDollarMinted() public {
         // notePrice increases to 2x — each note token is worth $2.00
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 2);
 
         uint256 okuMAmount = 100e18;
         _mintOkuMoney(user1, okuMAmount);
@@ -430,7 +430,7 @@ contract OkuDollarTest is BaseTest {
 
         // Increase notePrice — vault token balance is unchanged (non-rebasing)
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 2);
 
         uint256 vaultBalAfter = okuMoney.balanceOf(address(usdOku));
         assertEq(vaultBalAfter, vaultBalBefore, "Note rebase should not change vault token count");
@@ -487,7 +487,7 @@ contract OkuDollarTest is BaseTest {
         // Vault still has 100 note tokens, but each is worth $1.50 → $150 backing
         // Obligations: 100 OkuDollar → overcollateralized
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice((PRECISION * 3) / 2);
+        okuMoney.setOkuMPrice((PRECISION * 3) / 2);
 
         // Unwrap 100 OkuDollar: okuMReturned = 100e18 * 1e18 / 1.5e18 ≈ 66.67e18
         vm.prank(user1);
@@ -995,7 +995,7 @@ contract OkuDollarTest is BaseTest {
         // Dollar value of reserves: 100 * $1.50 = $150, obligations: 100 OkuDollar
         // ratio = $150 / $100 = 150%
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice((PRECISION * 3) / 2);
+        okuMoney.setOkuMPrice((PRECISION * 3) / 2);
 
         assertEq(usdOku.collateralizationRatio(), (PRECISION * 3) / 2);
     }
@@ -1036,7 +1036,7 @@ contract OkuDollarTest is BaseTest {
         // Dollar surplus: $150 - $100 = $50
         // Surplus in note tokens: $50 * 1e18 / $1.50 ≈ 33.33e18
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice((PRECISION * 3) / 2);
+        okuMoney.setOkuMPrice((PRECISION * 3) / 2);
 
         uint256 expectedSurplus = (50e18 * PRECISION) / ((PRECISION * 3) / 2);
         assertEq(usdOku.surplus(), expectedSurplus);
@@ -1338,7 +1338,7 @@ contract OkuDollarTest is BaseTest {
         uint256 elevatedPrice = 15e17; // 1.5e18
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(elevatedPrice);
+        okuMoney.setOkuMPrice(elevatedPrice);
         // usdMultiplier stays at default PRECISION
 
         // Create some existing vault state at elevated price
@@ -1377,7 +1377,7 @@ contract OkuDollarTest is BaseTest {
 
         // Bump notePrice to 1.5e18
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice((PRECISION * 3) / 2);
+        okuMoney.setOkuMPrice((PRECISION * 3) / 2);
 
         // Now user1 does repeated wrap/unwrap at non-1.0 notePrice
         uint256 initialNotes = 1000e18;
@@ -1474,12 +1474,11 @@ contract OkuDollarTest is BaseTest {
     // ============ Independent Multiplier Tests ============
 
     function test_UsdMultiplier_IndependentOfNotePrice() public {
-        // Set different rates for note and USD
-        uint256 noteRate = 1_000_000_001_395_766_281; // ~4.5% APY
+        // Set OkuM price discretely; set USD rate separately
         uint256 usdRate = PRECISION + 634e6; // ~2% APY
 
         vm.prank(rebaser);
-        okuMoney.setYieldRate(noteRate, 0);
+        okuMoney.setOkuMPrice(PRECISION * 1045 / 1000); // simulate ~4.5% price appreciation
 
         vm.prank(usdRebaser);
         usdOku.setUsdYieldRate(usdRate, 0);
@@ -1489,8 +1488,8 @@ contract OkuDollarTest is BaseTest {
         uint256 noteP = okuMoney.okuMPrice();
         uint256 usdMult = usdOku.usdMultiplier();
 
-        // They should be different (note grows faster)
-        assertGt(noteP, usdMult, "Note price should be higher at higher rate");
+        // They should be different (note at 4.5%, USD ~2% after 1 year)
+        assertGt(noteP, usdMult, "Note price should be higher than USD multiplier");
         assertTrue(noteP != usdMult, "Note price and USD multiplier must be independent");
     }
 
@@ -1639,7 +1638,7 @@ contract OkuDollarTest is BaseTest {
 
         // Only set notePrice (not multiplier) to avoid collateralization issues
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(mult);
+        okuMoney.setOkuMPrice(mult);
         // usdMultiplier stays at default 1e18
 
         uint256 okuMAmount = 77.777e18;
@@ -1666,7 +1665,7 @@ contract OkuDollarTest is BaseTest {
         price = bound(price, PRECISION, 3e18); // $1.00 to $3.00
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(price);
+        okuMoney.setOkuMPrice(price);
 
         uint256 okuMAmount = 77.777e18;
         _mintOkuMoney(user1, okuMAmount);
@@ -1694,7 +1693,7 @@ contract OkuDollarTest is BaseTest {
         uint256 mult = PRECISION;
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(price);
+        okuMoney.setOkuMPrice(price);
 
         // usdMultiplier stays at default PRECISION
 

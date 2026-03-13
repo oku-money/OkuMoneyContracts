@@ -351,7 +351,7 @@ contract NttBridgeTest is BaseTest {
         // Step 2: Increase notePrice (does NOT change balanceOf — OkuMoney is non-rebasing)
         uint256 newPrice = PRECISION * 12 / 10; // 20% price increase
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         // balanceOf is unchanged — OkuMoney is a standard ERC-20
         uint256 noteBalanceAfterPriceChange = okuMoney.balanceOf(user1);
@@ -479,7 +479,7 @@ contract NttBridgeTest is BaseTest {
         // Increase notePrice (does NOT change OkuMoney balances — non-rebasing)
         uint256 newPrice = okuMoney.okuMPrice() + priceIncrease;
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         // OkuDollar balance is independent of note price change (vault token with its own multiplier)
         uint256 usdBalance = usdOku.balanceOf(user1);
@@ -510,7 +510,7 @@ contract NttBridgeTest is BaseTest {
         // Step 2: Increase notePrice (balanceOf unchanged — non-rebasing)
         uint256 newPrice = okuMoney.okuMPrice() + priceIncrease;
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         // balanceOf is unchanged for a non-rebasing token
         uint256 balanceBeforeBridge = okuMoney.balanceOf(user1);

@@ -17,14 +17,13 @@ import {
 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
-import {MathLib} from "../lib/MathLib.sol";
 
 /**
  * @title OkuMoney
  * @notice Non-rebasing base token backed by US T-Bills with rear-facing yield
  * @dev Standard ERC-20 balances (static). Yield is expressed through price appreciation
- *      tracked by an internal `okuMPrice()` view function using `MathLib.rpow` continuous accrual.
- *      DeFi and bridge compatible out of the box — no share conversion needed.
+ *      tracked by a stored `okuMPrice` written discretely by an orchestrator via
+ *      `setOkuMPrice()` or `distributeYield()`.
  *
  *      Key distinction: balanceOf() returns raw token count (standard ERC-20).
  *      okuMPrice() is a separate view function for pricing — used by PSM and vault.
@@ -43,12 +42,8 @@ contract OkuMoney is
 
     /// @custom:storage-location erc7201:okumoney.storage.OkuMoney
     struct OkuMoneyStorage {
-        // Price accrual mechanism (continuous)
-        uint256 basePrice; // last snapshot of price (starts at 1e18 = $1.00)
-        uint256 ratePerSecond; // compound rate per second (1e18 = no yield)
-        uint256 lastAccrualTime; // timestamp of last basePrice snapshot
-        uint256 rateEnd; // when current rate expires (0 = no expiry)
-        uint256 pendingRatePerSecond; // next rate, activates at rateEnd
+        // Stored price ratio (starts at 1e18 = $1.00, written by OKUM_REBASER)
+        uint256 okuMPrice;
         // Minter allowance system (Circle pattern)
         mapping(address => uint256) minterAllowance;
         // Supply cap in token units
@@ -82,13 +77,11 @@ contract OkuMoney is
     // ============ Constants (from shared library) ============
 
     uint256 public constant PRECISION = Constants.PRECISION;
-    uint256 public constant MAX_RATE = Constants.MAX_RATE;
 
     // ============ Events ============
 
     event OkuMPriceUpdated(uint256 oldPrice, uint256 newPrice);
-    event YieldRateUpdated(uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotPrice);
-    event NextYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
+    event YieldDistributed(uint256 yieldAmount, uint256 oldPrice, uint256 newPrice);
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
     );
@@ -99,11 +92,8 @@ contract OkuMoney is
     // ============ Custom Errors ============
 
     error ZeroAddress();
-    error InvalidRate();
-    error RateTooHigh();
-    error EndTimestampInPast();
-    error NoRateEndSet();
     error PriceCannotDecrease();
+    error ZeroSupply();
     error ExceedsSupplyCap();
     error BelowCurrentSupply();
     error ExceedsAllowance();
@@ -134,10 +124,7 @@ contract OkuMoney is
         __Pausable_init();
 
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        $.basePrice = PRECISION;
-        $.ratePerSecond = PRECISION;
-        $.lastAccrualTime = block.timestamp;
-        $.pendingRatePerSecond = PRECISION;
+        $.okuMPrice = PRECISION;
         $.maxSupply = initialMaxSupply;
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
@@ -146,22 +133,6 @@ contract OkuMoney is
     }
 
     // ============ Storage Accessor Views ============
-
-    function ratePerSecond() public view returns (uint256) {
-        return _getOkuMoneyStorage().ratePerSecond;
-    }
-
-    function lastAccrualTime() public view returns (uint256) {
-        return _getOkuMoneyStorage().lastAccrualTime;
-    }
-
-    function rateEnd() public view returns (uint256) {
-        return _getOkuMoneyStorage().rateEnd;
-    }
-
-    function pendingRatePerSecond() public view returns (uint256) {
-        return _getOkuMoneyStorage().pendingRatePerSecond;
-    }
 
     function minterAllowance(address minter_) public view returns (uint256) {
         return _getOkuMoneyStorage().minterAllowance[minter_];
@@ -175,126 +146,46 @@ contract OkuMoney is
         return _getOkuMoneyStorage().isBlacklisted[account];
     }
 
-    // ============ Price Accrual Logic ============
+    // ============ Price Logic ============
 
     /**
-     * @notice Computed OkuM price with continuous yield accrual
-     * @dev Handles current rate, rate expiry, and pending rate crossover.
-     *      okuMPrice() starts at 1e18 ($1.00) and grows as rear-facing T-Bill yield accrues.
-     *      After one year at 4.5% APY, okuMPrice() returns ~1.045e18 ($1.045).
+     * @notice Stored OkuM price ratio
+     * @dev Starts at 1e18 ($1.00). Written discretely by OKUM_REBASER via setOkuMPrice
+     *      or distributeYield. Never decreases.
      *
      *      Key: balanceOf() is NOT affected by okuMPrice(). Price appreciation is
      *      tracked separately for use by the PSM and vault.
      */
     function okuMPrice() public view returns (uint256) {
-        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        uint256 rate = $.ratePerSecond;
-
-        if (rate <= PRECISION) {
-            // No yield accrual — check if pending rate has activated
-            if ($.rateEnd != 0 && block.timestamp > $.rateEnd) {
-                uint256 pendingRate = $.pendingRatePerSecond;
-                if (pendingRate > PRECISION) {
-                    uint256 elapsedPending = block.timestamp - $.rateEnd;
-                    return ($.basePrice * MathLib.rpow(pendingRate, elapsedPending, PRECISION))
-                        / PRECISION;
-                }
-            }
-            return $.basePrice;
-        }
-
-        uint256 base = $.basePrice;
-
-        if ($.rateEnd != 0 && block.timestamp > $.rateEnd) {
-            // Current rate expired — accrue current rate up to rateEnd, then pending rate after
-            uint256 elapsedCurrent = $.rateEnd - $.lastAccrualTime;
-            if (elapsedCurrent > 0) {
-                base = (base * MathLib.rpow(rate, elapsedCurrent, PRECISION)) / PRECISION;
-            }
-            // Apply pending rate for remaining time
-            uint256 pendingRate = $.pendingRatePerSecond;
-            if (pendingRate > PRECISION) {
-                uint256 elapsedPending = block.timestamp - $.rateEnd;
-                if (elapsedPending > 0) {
-                    base = (base * MathLib.rpow(pendingRate, elapsedPending, PRECISION)) / PRECISION;
-                }
-            }
-            return base;
-        }
-
-        uint256 elapsed = block.timestamp - $.lastAccrualTime;
-        if (elapsed == 0) return base;
-        return (base * MathLib.rpow(rate, elapsed, PRECISION)) / PRECISION;
+        return _getOkuMoneyStorage().okuMPrice;
     }
 
     /**
-     * @notice Get the base price (last snapshot, before accrual)
+     * @notice Directly override the stored price ratio
+     * @param newPrice New price value (must be >= current price)
      */
-    function basePrice() public view returns (uint256) {
-        return _getOkuMoneyStorage().basePrice;
-    }
-
-    /**
-     * @notice Set active yield rate with optional end time
-     * @param newRatePerSecond Compound rate per second (1e18 = no yield)
-     * @param endTimestamp When current rate expires (0 = no expiry)
-     */
-    function setYieldRate(
-        uint256 newRatePerSecond,
-        uint256 endTimestamp
-    )
-        external
-        onlyRole(OKUM_REBASER)
-    {
-        if (newRatePerSecond < PRECISION) revert InvalidRate();
-        if (newRatePerSecond > MAX_RATE) revert RateTooHigh();
-        if (endTimestamp != 0 && endTimestamp <= block.timestamp) revert EndTimestampInPast();
-
-        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-
-        // Snapshot current state
-        $.basePrice = okuMPrice();
-        $.lastAccrualTime = block.timestamp;
-
-        $.ratePerSecond = newRatePerSecond;
-        $.rateEnd = endTimestamp;
-        $.pendingRatePerSecond = PRECISION;
-
-        emit YieldRateUpdated(newRatePerSecond, endTimestamp, $.basePrice);
-    }
-
-    /**
-     * @notice Schedule the next yield rate (activates when current rate expires)
-     * @param newRatePerSecond Compound rate per second for the next period
-     */
-    function setNextYieldRate(uint256 newRatePerSecond) external onlyRole(OKUM_REBASER) {
-        if (newRatePerSecond < PRECISION) revert InvalidRate();
-        if (newRatePerSecond > MAX_RATE) revert RateTooHigh();
-
-        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        if ($.rateEnd == 0) revert NoRateEndSet();
-
-        $.pendingRatePerSecond = newRatePerSecond;
-
-        emit NextYieldRateSet(newRatePerSecond, $.rateEnd);
-    }
-
-    /**
-     * @notice Emergency override — snapshots computed price, resets rate to zero yield
-     * @param newPrice New price value (must be >= current computed price)
-     */
-    function updateOkuMPrice(uint256 newPrice) external onlyRole(OKUM_REBASER) {
-        uint256 currentPrice = okuMPrice();
+    function setOkuMPrice(uint256 newPrice) external onlyRole(OKUM_REBASER) {
+        uint256 currentPrice = _getOkuMoneyStorage().okuMPrice;
         if (newPrice < currentPrice) revert PriceCannotDecrease();
-
-        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        $.basePrice = newPrice;
-        $.ratePerSecond = PRECISION;
-        $.rateEnd = 0;
-        $.pendingRatePerSecond = PRECISION;
-        $.lastAccrualTime = block.timestamp;
-
+        _getOkuMoneyStorage().okuMPrice = newPrice;
         emit OkuMPriceUpdated(currentPrice, newPrice);
+    }
+
+    /**
+     * @notice Distribute realized dollar yield across all token holders
+     * @dev Increases okuMPrice by yieldAmount / totalSupply.
+     *      yieldAmount is dollar-denominated (18 decimals).
+     *      E.g., $1000 yield on 10000 tokens → +$0.10/token.
+     * @param yieldAmount Dollar yield to distribute (18 decimals)
+     */
+    function distributeYield(uint256 yieldAmount) external onlyRole(OKUM_REBASER) {
+        uint256 supply = totalSupply();
+        if (supply == 0) revert ZeroSupply();
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        uint256 oldPrice = $.okuMPrice;
+        uint256 newPrice = oldPrice + (yieldAmount * PRECISION / supply);
+        $.okuMPrice = newPrice;
+        emit YieldDistributed(yieldAmount, oldPrice, newPrice);
     }
 
     // ============ ERC20Permit Override (Blacklist Check) ============

@@ -127,7 +127,7 @@ contract OkuDollarHandler is Test {
         uint256 newPrice = currentPrice + increase;
 
         vm.prank(rebaser);
-        try okuMoney.updateOkuMPrice(newPrice) {
+        try okuMoney.setOkuMPrice(newPrice) {
             ghostRebaseCount++;
         } catch {
             ghostRebaseRevertCount++;

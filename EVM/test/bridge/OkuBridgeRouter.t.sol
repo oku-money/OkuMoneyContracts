@@ -396,7 +396,7 @@ contract OkuBridgeRouterTest is BaseTest {
         // Increase notePrice by 20% — user's balance is unchanged
         uint256 newPrice = okuMoney.okuMPrice() * 12 / 10;
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         // User's balance is unchanged (non-rebasing)
         uint256 userBalance = okuMoney.balanceOf(user1);
@@ -543,7 +543,7 @@ contract OkuBridgeRouterTest is BaseTest {
         // Increase notePrice by 10%
         uint256 newPrice = okuMoney.okuMPrice() * 11 / 10;
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         uint256 usdBalance = usdOku.balanceOf(user1);
 
@@ -728,7 +728,7 @@ contract OkuBridgeRouterTest is BaseTest {
         // Increase notePrice by 10%
         uint256 newPrice = okuMoney.okuMPrice() + (okuMoney.okuMPrice() / 10);
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         uint256 usdBalance = usdOku.balanceOf(user1);
 
@@ -921,7 +921,7 @@ contract OkuBridgeRouterTest is BaseTest {
         // Update notePrice (makes vault overcollateralized — each note worth more)
         uint256 newPrice = okuMoney.okuMPrice() + priceIncrease;
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         uint256 usdBalance = usdOku.balanceOf(user1);
 

@@ -164,7 +164,7 @@ contract OkuMoneyHandler is Test {
         }
 
         vm.prank(rebaser);
-        try okuMoney.updateOkuMPrice(newPrice) {
+        try okuMoney.setOkuMPrice(newPrice) {
             ghostLastWasRebase = true;
             ghostLastOkuMPrice = newPrice;
         } catch {

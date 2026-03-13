@@ -88,6 +88,9 @@ contract OkuDollar is
 
     // ============ Events ============
 
+    event TransferValue(
+        address indexed from, address indexed to, uint256 shares, uint256 dollarValue
+    );
     event UsdRebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
     event UsdYieldRateUpdated(
         uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotMultiplier
@@ -281,6 +284,8 @@ contract OkuDollar is
 
         $.usdShares[from] = fromBalance - shares;
         $.usdShares[to] += shares;
+        uint256 dollarValue = (shares * usdMultiplier()) / PRECISION;
+        emit TransferValue(from, to, shares, dollarValue);
         // NOTE: Transfer event is emitted by the calling public function (transfer / transferFrom)
         // with the original token amount. Do not emit here to avoid double-emitting.
     }
@@ -336,6 +341,7 @@ contract OkuDollar is
         $.usdShares[receiver] += sharesToMint;
 
         emit Transfer(address(0), receiver, usdMinted);
+        emit TransferValue(address(0), receiver, sharesToMint, usdMinted);
     }
 
     /**
@@ -383,6 +389,7 @@ contract OkuDollar is
         IERC20(address($.okuMoney)).safeTransfer(receiver, okuMReturned);
 
         emit Transfer(msg.sender, address(0), usdAmount);
+        emit TransferValue(msg.sender, address(0), sharesToBurn, usdAmount);
     }
 
     // ============ Reserve Management ============

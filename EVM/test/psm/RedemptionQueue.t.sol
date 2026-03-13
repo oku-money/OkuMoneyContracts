@@ -386,7 +386,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Now increase notePrice - user should earn yield via price appreciation
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2); // 2x price
+        okuMoney.setOkuMPrice(PRECISION * 2); // 2x price
 
         // The stored okuMAmount remains the same (non-rebasing)
         RedemptionQueue.QueueEntry memory entryAfterPrice = redemptionQueue.getQueueEntry(0);
@@ -430,7 +430,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Increase notePrice by 50%
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 3 / 2); // 1.5x price
+        okuMoney.setOkuMPrice(PRECISION * 3 / 2); // 1.5x price
 
         // Both should now have dollar value of 150e18
         assertEq(redemptionQueue.getQueueEntryValue(0), 150e18);
@@ -472,12 +472,12 @@ contract RedemptionQueueTest is BaseTest {
 
         // After 2x notePrice
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 2);
         assertEq(redemptionQueue.getQueueEntryValue(0), amount * 2);
 
         // After another price increase (total 3x)
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 3);
+        okuMoney.setOkuMPrice(PRECISION * 3);
         assertEq(redemptionQueue.getQueueEntryValue(0), amount * 3);
     }
 
@@ -503,7 +503,7 @@ contract RedemptionQueueTest is BaseTest {
         // Increase notePrice
         uint256 newPrice = PRECISION + priceIncrease;
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         // Verify okuMAmount unchanged (non-rebasing)
         RedemptionQueue.QueueEntry memory entryAfter = redemptionQueue.getQueueEntry(0);
@@ -540,7 +540,7 @@ contract RedemptionQueueTest is BaseTest {
         // Increase notePrice
         uint256 newPrice = PRECISION + priceIncrease;
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         // Calculate expected payout: okuMAmount * notePrice / PRECISION (dollar value in 18 dec)
         uint256 expectedDollarValue = redemptionQueue.getQueueEntryValue(0);
@@ -596,12 +596,12 @@ contract RedemptionQueueTest is BaseTest {
         // First price increase
         uint256 price1 = PRECISION + increase1;
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(price1);
+        okuMoney.setOkuMPrice(price1);
 
         // Second price increase
         uint256 price2 = price1 + increase2;
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(price2);
+        okuMoney.setOkuMPrice(price2);
 
         // Final dollar value should be okuMAmount * finalPrice / PRECISION
         uint256 expectedValue = (initialNoteAmount * price2) / PRECISION;
@@ -779,7 +779,7 @@ contract RedemptionQueueTest is BaseTest {
         // Increase notePrice
         uint256 newPrice = PRECISION + priceIncrease;
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         // Calculate total needed after price appreciation
         uint256 totalNeededUsdc = 0;

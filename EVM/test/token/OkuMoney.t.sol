@@ -12,15 +12,14 @@ import {OkuMoney} from "../../src/token/OkuMoney.sol";
 
 /**
  * @title OkuMoneyTest
- * @notice Unit tests for OkuMoney non-rebasing ERC-20 token with price accrual
+ * @notice Unit tests for OkuMoney non-rebasing ERC-20 token with stored price ratio
  */
 contract OkuMoneyTest is BaseTest {
     // ============ Events ============
 
     event Transfer(address indexed from, address indexed to, uint256 value);
     event OkuMPriceUpdated(uint256 oldPrice, uint256 newPrice);
-    event YieldRateUpdated(uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotPrice);
-    event NextYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
+    event YieldDistributed(uint256 yieldAmount, uint256 oldPrice, uint256 newPrice);
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
     );
@@ -80,7 +79,7 @@ contract OkuMoneyTest is BaseTest {
     function test_Mint_BalanceUnaffectedByNotePrice() public {
         // Set notePrice to 2x before minting
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 2);
 
         uint256 amount = 100e18;
         _mintOkuMoney(user1, amount);
@@ -98,7 +97,7 @@ contract OkuMoneyTest is BaseTest {
     function test_Mint_TotalSupplyIsRawAmount() public {
         // Set notePrice to 2x before minting
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 2);
 
         uint256 amount = 100e18;
         _mintOkuMoney(user1, amount);
@@ -183,7 +182,7 @@ contract OkuMoneyTest is BaseTest {
     function test_Burn_RemovesExactAmount() public {
         // Set notePrice to 2x, then mint and burn
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 2);
 
         _mintOkuMoney(minter, 100e18);
 
@@ -275,7 +274,7 @@ contract OkuMoneyTest is BaseTest {
     function test_Transfer_MovesExactAmount() public {
         // Set notePrice to 2x, then mint and transfer
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 2);
 
         _mintOkuMoney(user1, 100e18);
 
@@ -411,70 +410,178 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.transferFrom(user1, user3, 30e18);
     }
 
-    // ============ Note Price Tests ============
+    // ============ setOkuMPrice Tests ============
 
-    function test_UpdateNotePrice_OnlyRebaser() public {
+    function test_SetOkuMPrice_OnlyRebaser() public {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_REBASER
             )
         );
-        okuMoney.updateOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 2);
     }
 
-    function test_UpdateNotePrice_CannotDecrease() public {
+    function test_SetOkuMPrice_CannotDecrease() public {
         vm.prank(rebaser);
         vm.expectRevert(OkuMoney.PriceCannotDecrease.selector);
-        okuMoney.updateOkuMPrice(PRECISION - 1);
+        okuMoney.setOkuMPrice(PRECISION - 1);
     }
 
-    function test_UpdateNotePrice_DoesNotAffectBalances() public {
+    function test_SetOkuMPrice_DoesNotAffectBalances() public {
         _mintOkuMoney(user1, 100e18);
         uint256 balanceBefore = okuMoney.balanceOf(user1);
 
         // Double the note price
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 2);
 
         // balanceOf does NOT change with notePrice — standard ERC-20
         uint256 balanceAfter = okuMoney.balanceOf(user1);
         assertEq(balanceAfter, balanceBefore);
     }
 
-    function test_UpdateNotePrice_DoesNotAffectTotalSupply() public {
+    function test_SetOkuMPrice_DoesNotAffectTotalSupply() public {
         _mintOkuMoney(user1, 100e18);
         uint256 supplyBefore = okuMoney.totalSupply();
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 2);
 
         // totalSupply does NOT change with notePrice — standard ERC-20
         assertEq(okuMoney.totalSupply(), supplyBefore);
     }
 
-    function test_UpdateNotePrice_UpdatesNotePrice() public {
+    function test_SetOkuMPrice_UpdatesPrice() public {
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 2);
 
         assertEq(okuMoney.okuMPrice(), PRECISION * 2);
     }
 
-    function test_UpdateNotePrice_EmitsEvent() public {
+    function test_SetOkuMPrice_EmitsEvent() public {
         vm.expectEmit(false, false, false, true);
         emit OkuMPriceUpdated(PRECISION, PRECISION * 2);
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 2);
     }
 
-    function test_UpdateNotePrice_SamePrice() public {
+    function test_SetOkuMPrice_SamePrice() public {
         uint256 currentPrice = okuMoney.okuMPrice();
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(currentPrice);
+        okuMoney.setOkuMPrice(currentPrice);
 
         assertEq(okuMoney.okuMPrice(), currentPrice);
+    }
+
+    // ============ distributeYield Tests ============
+
+    function test_DistributeYield_OnlyRebaser() public {
+        _mintOkuMoney(user1, 10_000e18);
+
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_REBASER
+            )
+        );
+        okuMoney.distributeYield(1000e18);
+    }
+
+    function test_DistributeYield_CorrectPriceMath() public {
+        // $1000 yield on 10000 tokens → +$0.10/token
+        uint256 supply = 10_000e18;
+        _mintOkuMoney(user1, supply);
+
+        uint256 priceBefore = okuMoney.okuMPrice();
+
+        vm.prank(rebaser);
+        okuMoney.distributeYield(1000e18);
+
+        uint256 priceAfter = okuMoney.okuMPrice();
+        assertEq(priceAfter, priceBefore + 0.1e18);
+    }
+
+    function test_DistributeYield_ZeroSupplyReverts() public {
+        // No tokens minted
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.ZeroSupply.selector);
+        okuMoney.distributeYield(1000e18);
+    }
+
+    function test_DistributeYield_EmitsEvent() public {
+        uint256 supply = 10_000e18;
+        _mintOkuMoney(user1, supply);
+
+        uint256 yieldAmount = 1000e18;
+        uint256 expectedOldPrice = PRECISION;
+        uint256 expectedNewPrice = PRECISION + 0.1e18;
+
+        vm.expectEmit(false, false, false, true);
+        emit YieldDistributed(yieldAmount, expectedOldPrice, expectedNewPrice);
+
+        vm.prank(rebaser);
+        okuMoney.distributeYield(yieldAmount);
+    }
+
+    function test_DistributeYield_MonotonicallyIncreases() public {
+        _mintOkuMoney(user1, 10_000e18);
+
+        uint256 price0 = okuMoney.okuMPrice();
+
+        vm.prank(rebaser);
+        okuMoney.distributeYield(100e18);
+        uint256 price1 = okuMoney.okuMPrice();
+        assertGt(price1, price0);
+
+        vm.prank(rebaser);
+        okuMoney.distributeYield(200e18);
+        uint256 price2 = okuMoney.okuMPrice();
+        assertGt(price2, price1);
+    }
+
+    function test_DistributeYield_DoesNotAffectBalances() public {
+        uint256 supply = 10_000e18;
+        _mintOkuMoney(user1, supply);
+
+        uint256 balanceBefore = okuMoney.balanceOf(user1);
+        uint256 totalSupplyBefore = okuMoney.totalSupply();
+
+        vm.prank(rebaser);
+        okuMoney.distributeYield(1000e18);
+
+        assertEq(okuMoney.balanceOf(user1), balanceBefore, "balanceOf unchanged after yield");
+        assertEq(okuMoney.totalSupply(), totalSupplyBefore, "totalSupply unchanged after yield");
+    }
+
+    // ============ okuMPrice Storage Tests ============
+
+    function test_OkuMPrice_ReturnsStoredValue() public {
+        // No time dependency — price is a stored value
+        assertEq(okuMoney.okuMPrice(), PRECISION);
+
+        vm.prank(rebaser);
+        okuMoney.setOkuMPrice(PRECISION * 3);
+
+        assertEq(okuMoney.okuMPrice(), PRECISION * 3);
+    }
+
+    function test_PriceConstantBetweenUpdates() public {
+        // Price does not change without an explicit call
+        uint256 price0 = okuMoney.okuMPrice();
+
+        // No calls — price stays the same
+        assertEq(okuMoney.okuMPrice(), price0);
+
+        vm.prank(rebaser);
+        okuMoney.setOkuMPrice(PRECISION * 2);
+        uint256 price1 = okuMoney.okuMPrice();
+        assertEq(price1, PRECISION * 2);
+
+        // Still no automatic change
+        assertEq(okuMoney.okuMPrice(), price1);
     }
 
     // ============ Blacklisting Tests ============
@@ -740,7 +847,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.setMaxSupply(MAX_SUPPLY * 2);
     }
 
-    // ============ Note Price Computation Tests ============
+    // ============ okuMPrice Computation Tests ============
 
     function test_NotePrice_AtInitialPrice() public view {
         uint256 price = okuMoney.okuMPrice();
@@ -749,23 +856,9 @@ contract OkuMoneyTest is BaseTest {
 
     function test_NotePrice_AfterUpdate() public {
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 2);
 
         assertEq(okuMoney.okuMPrice(), PRECISION * 2);
-    }
-
-    function test_NotePrice_GrowsWithYieldRate() public {
-        uint256 rate = 1_000_000_001_547_125_957; // ~5% APY per second
-
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, 0);
-
-        uint256 priceBefore = okuMoney.okuMPrice();
-
-        vm.warp(block.timestamp + 1 days);
-
-        uint256 priceAfter = okuMoney.okuMPrice();
-        assertGt(priceAfter, priceBefore);
     }
 
     // ============ Edge Case Tests ============
@@ -798,313 +891,14 @@ contract OkuMoneyTest is BaseTest {
         _mintOkuMoney(user1, 100e18);
 
         vm.startPrank(rebaser);
-        okuMoney.updateOkuMPrice(PRECISION * 2);
-        okuMoney.updateOkuMPrice(PRECISION * 3);
+        okuMoney.setOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMPrice(PRECISION * 3);
         vm.stopPrank();
 
         // notePrice should be updated to 3x
         assertEq(okuMoney.okuMPrice(), PRECISION * 3);
         // balanceOf should NOT change — standard ERC-20
         assertEq(okuMoney.balanceOf(user1), 100e18);
-    }
-
-    // ============ Continuous Yield Accrual Tests ============
-
-    function test_SetYieldRate_OnlyRebaser() public {
-        vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_REBASER
-            )
-        );
-        okuMoney.setYieldRate(PRECISION + 1, 0);
-    }
-
-    function test_SetYieldRate_NotePriceGrowsOverTime() public {
-        uint256 rate = 1_000_000_001_547_125_957; // ~5% APY per second
-
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, 0);
-
-        uint256 priceBefore = okuMoney.okuMPrice();
-
-        vm.warp(block.timestamp + 1 days);
-
-        uint256 priceAfter = okuMoney.okuMPrice();
-        assertGt(priceAfter, priceBefore);
-    }
-
-    function test_SetYieldRate_BalancesDoNotGrow() public {
-        _mintOkuMoney(user1, 1000e18);
-        uint256 balanceBefore = okuMoney.balanceOf(user1);
-
-        uint256 rate = 1_000_000_001_547_125_957; // ~5% APY
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, 0);
-
-        vm.warp(block.timestamp + 1 days);
-
-        // balanceOf does NOT change — notePrice grows, not balances
-        uint256 balanceAfter = okuMoney.balanceOf(user1);
-        assertEq(balanceAfter, balanceBefore);
-    }
-
-    function test_SetYieldRate_SnapshotPreservesValue() public {
-        uint256 rate = 1_000_000_001_547_125_957; // ~5% APY
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, 0);
-
-        vm.warp(block.timestamp + 30 days);
-
-        uint256 priceBefore = okuMoney.okuMPrice();
-
-        // Set a new rate — should snapshot accrued price, not lose it
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, 0);
-
-        uint256 priceAfter = okuMoney.okuMPrice();
-        assertEq(priceAfter, priceBefore);
-    }
-
-    function test_SetYieldRate_RateCannotBeNegative() public {
-        vm.prank(rebaser);
-        vm.expectRevert(OkuMoney.InvalidRate.selector);
-        okuMoney.setYieldRate(PRECISION - 1, 0);
-    }
-
-    function test_SetYieldRate_EndMustBeInFuture() public {
-        // Warp to a realistic timestamp so block.timestamp - 1 != 0
-        vm.warp(1000);
-
-        vm.prank(rebaser);
-        vm.expectRevert(OkuMoney.EndTimestampInPast.selector);
-        okuMoney.setYieldRate(PRECISION + 1, block.timestamp - 1);
-    }
-
-    function test_SetYieldRate_EmitsEvent() public {
-        uint256 rate = 1_000_000_001_547_125_957;
-
-        vm.expectEmit(false, false, false, true);
-        emit YieldRateUpdated(rate, 0, PRECISION);
-
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, 0);
-    }
-
-    function test_SetYieldRate_ZeroRateStopsAccrual() public {
-        uint256 rate = 1_000_000_001_547_125_957;
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, 0);
-
-        vm.warp(block.timestamp + 30 days);
-        uint256 priceMid = okuMoney.okuMPrice();
-
-        // Set rate to PRECISION (no yield)
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(PRECISION, 0);
-
-        vm.warp(block.timestamp + 30 days);
-        uint256 priceEnd = okuMoney.okuMPrice();
-
-        // Price should not change after stopping accrual
-        assertEq(priceEnd, priceMid);
-    }
-
-    function test_SetNextYieldRate_ActivatesAtRateEnd() public {
-        uint256 rate1 = 1_000_000_001_547_125_957; // ~5% APY
-        uint256 rate2 = 1_000_000_002_877_801_985; // ~9.5% APY
-        uint256 endTime = block.timestamp + 30 days;
-
-        vm.startPrank(rebaser);
-        okuMoney.setYieldRate(rate1, endTime);
-        okuMoney.setNextYieldRate(rate2);
-        vm.stopPrank();
-
-        // Before rateEnd — rate1 applies
-        vm.warp(endTime - 1);
-        uint256 priceBeforeEnd = okuMoney.okuMPrice();
-
-        // After rateEnd — rate2 takes over
-        vm.warp(endTime + 30 days);
-        uint256 priceAfterEnd = okuMoney.okuMPrice();
-        assertGt(priceAfterEnd, priceBeforeEnd);
-    }
-
-    function test_SetNextYieldRate_RequiresRateEnd() public {
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(PRECISION + 1, 0); // no end time
-
-        vm.prank(rebaser);
-        vm.expectRevert(OkuMoney.NoRateEndSet.selector);
-        okuMoney.setNextYieldRate(PRECISION + 1);
-    }
-
-    function test_SetNextYieldRate_HeadToTail() public {
-        uint256 rate = 1_000_000_001_547_125_957; // ~5% APY
-        uint256 endTime = block.timestamp + 30 days;
-
-        vm.startPrank(rebaser);
-        okuMoney.setYieldRate(rate, endTime);
-        okuMoney.setNextYieldRate(rate); // same rate continues
-        vm.stopPrank();
-
-        // Warp to just before boundary
-        vm.warp(endTime - 1);
-        uint256 priceBefore = okuMoney.okuMPrice();
-
-        // Warp to just after boundary
-        vm.warp(endTime + 1);
-        uint256 priceAfter = okuMoney.okuMPrice();
-
-        // Should have grown by ~2 seconds worth of yield — no gap, no jump
-        assertGt(priceAfter, priceBefore);
-        // The difference should be small (just 2 seconds of yield on base price)
-        uint256 diff = priceAfter - priceBefore;
-        assertLt(diff, 1e10); // tiny price increase for 2 seconds
-    }
-
-    function test_SetNextYieldRate_EmitsEvent() public {
-        uint256 rate = 1_000_000_001_547_125_957;
-        uint256 endTime = block.timestamp + 30 days;
-
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, endTime);
-
-        uint256 nextRate = 1_000_000_002_877_801_985;
-        vm.expectEmit(false, false, false, true);
-        emit NextYieldRateSet(nextRate, endTime);
-
-        vm.prank(rebaser);
-        okuMoney.setNextYieldRate(nextRate);
-    }
-
-    function test_SetNextYieldRate_OnlyRebaser() public {
-        uint256 endTime = block.timestamp + 30 days;
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(PRECISION + 1, endTime);
-
-        vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_REBASER
-            )
-        );
-        okuMoney.setNextYieldRate(PRECISION + 1);
-    }
-
-    function test_ContinuousAccrual_FrontRunUnprofitable() public {
-        // Set up a realistic 4.5% APY rate
-        // rate = (1.045)^(1/31536000) ≈ 1.000000001395766... × 1e18
-        uint256 rate = 1_000_000_001_395_766_300;
-
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, 0);
-
-        uint256 usdcAttackAmount = 1_000_000e6; // $1M in USDC (6 decimals)
-
-        // Fund buffer via bufferDepositor so redemption works
-        _mintUsdc(bufferDepositor, usdcAttackAmount);
-        vm.startPrank(bufferDepositor);
-        usdc.approve(address(litePsm), usdcAttackAmount);
-        litePsm.depositBuffer(usdcAttackAmount);
-        vm.stopPrank();
-
-        // Attacker mints via PSM (PSM takes USDC amount in 6 decimals)
-        _mintUsdc(user1, usdcAttackAmount);
-        vm.startPrank(user1);
-        usdc.approve(address(litePsm), usdcAttackAmount);
-        litePsm.mintOkuM(usdcAttackAmount);
-        vm.stopPrank();
-
-        uint256 balanceAfterMint = okuMoney.balanceOf(user1);
-
-        // Advance 2 seconds (L2 block time)
-        vm.warp(block.timestamp + 2);
-
-        // balanceOf does NOT change (no rebasing) — attacker gains nothing from balance
-        uint256 balanceAfterWarp = okuMoney.balanceOf(user1);
-        assertEq(balanceAfterWarp, balanceAfterMint);
-
-        // notePrice grows, but attacker's token count is unchanged
-        // Any profit would only be realized through the PSM at the new notePrice
-        // which is trivially small for 2 seconds
-        uint256 priceBefore = okuMoney.okuMPrice();
-        vm.warp(block.timestamp + 2);
-        uint256 priceAfter = okuMoney.okuMPrice();
-        uint256 priceDiff = priceAfter - priceBefore;
-        assertLt(priceDiff, 1e10); // less than 1e-8 price change for 2 seconds
-    }
-
-    function test_ContinuousAccrual_MatchesExpectedAPY() public {
-        // 4.5% APY: rate = (1.045)^(1/31536000) ≈ 1.000000001395766... × 1e18
-        uint256 rate = 1_000_000_001_395_766_300;
-
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, 0);
-
-        // Warp 365 days
-        vm.warp(block.timestamp + 365 days);
-
-        uint256 price = okuMoney.okuMPrice();
-
-        // Expected: PRECISION * 1.045 = 1.045e18 (within rounding tolerance)
-        // Allow 0.1% tolerance for compounding approximation
-        assertGt(price, 1044e15); // at least 4.4%
-        assertLt(price, 1046e15); // at most 4.6%
-    }
-
-    function test_UpdateNotePrice_EmergencyOverride() public {
-        uint256 rate = 1_000_000_001_547_125_957;
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, 0);
-
-        vm.warp(block.timestamp + 30 days);
-
-        uint256 computedPrice = okuMoney.okuMPrice();
-
-        // Emergency override — set exact price, stops accrual
-        vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(computedPrice);
-
-        // Price should now be the exact snapshot
-        assertEq(okuMoney.okuMPrice(), computedPrice);
-        // Rate should be reset
-        assertEq(okuMoney.ratePerSecond(), PRECISION);
-
-        // Warp more — price should not grow (rate is zero)
-        vm.warp(block.timestamp + 30 days);
-        assertEq(okuMoney.okuMPrice(), computedPrice);
-    }
-
-    function test_BasePrice_ReturnsSnapshotValue() public {
-        assertEq(okuMoney.basePrice(), PRECISION);
-
-        uint256 rate = 1_000_000_001_547_125_957;
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, 0);
-
-        vm.warp(block.timestamp + 30 days);
-
-        // basePrice should still be PRECISION (snapshot hasn't been updated)
-        assertEq(okuMoney.basePrice(), PRECISION);
-        // notePrice should be higher
-        assertGt(okuMoney.okuMPrice(), PRECISION);
-    }
-
-    function test_RateExpiry_StopsYieldWhenNoPendingRate() public {
-        uint256 rate = 1_000_000_001_547_125_957;
-        uint256 endTime = block.timestamp + 30 days;
-
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, endTime);
-
-        // Warp past end with no pending rate
-        vm.warp(endTime + 30 days);
-        uint256 priceAtExpiry = okuMoney.okuMPrice();
-
-        // Warp more — price should not grow
-        vm.warp(endTime + 60 days);
-        assertEq(okuMoney.okuMPrice(), priceAtExpiry);
     }
 
     // ============ EIP-2612 Permit Tests ============
@@ -1325,49 +1119,5 @@ contract OkuMoneyTest is BaseTest {
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPk, digest);
         okuMoney.permit(owner, spender, value, deadline, v, r, s);
-    }
-
-    // ============ MAX_RATE Tests ============
-
-    function test_SetYieldRate_RevertsAboveMaxRate() public {
-        uint256 maxRate = okuMoney.MAX_RATE();
-
-        vm.prank(rebaser);
-        vm.expectRevert(OkuMoney.RateTooHigh.selector);
-        okuMoney.setYieldRate(maxRate + 1, 0);
-    }
-
-    function test_SetYieldRate_AcceptsMaxRate() public {
-        uint256 maxRate = okuMoney.MAX_RATE();
-
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(maxRate, 0);
-
-        assertEq(okuMoney.ratePerSecond(), maxRate);
-    }
-
-    function test_SetNextYieldRate_RevertsAboveMaxRate() public {
-        uint256 maxRate = okuMoney.MAX_RATE();
-        uint256 endTime = block.timestamp + 30 days;
-
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(PRECISION + 1, endTime);
-
-        vm.prank(rebaser);
-        vm.expectRevert(OkuMoney.RateTooHigh.selector);
-        okuMoney.setNextYieldRate(maxRate + 1);
-    }
-
-    function test_SetNextYieldRate_AcceptsMaxRate() public {
-        uint256 maxRate = okuMoney.MAX_RATE();
-        uint256 endTime = block.timestamp + 30 days;
-
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(PRECISION + 1, endTime);
-
-        vm.prank(rebaser);
-        okuMoney.setNextYieldRate(maxRate);
-
-        assertEq(okuMoney.pendingRatePerSecond(), maxRate);
     }
 }

@@ -133,7 +133,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 totalSupplyBefore = okuMoney.totalSupply();
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         // Balances must be completely unaffected
         assertEq(
@@ -165,7 +165,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 balance2Before = okuMoney.balanceOf(user2);
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         assertEq(okuMoney.balanceOf(user1), balance1Before, "User1 balance unchanged");
         assertEq(okuMoney.balanceOf(user2), balance2Before, "User2 balance unchanged");
@@ -190,7 +190,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 ratio2Before = (okuMoney.balanceOf(user2) * PRECISION) / okuMoney.totalSupply();
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         uint256 ratio1After = (okuMoney.balanceOf(user1) * PRECISION) / okuMoney.totalSupply();
         uint256 ratio2After = (okuMoney.balanceOf(user2) * PRECISION) / okuMoney.totalSupply();
@@ -202,13 +202,13 @@ contract OkuMoneyFuzzTest is BaseTest {
 
     // ============ notePrice Monotonicity Tests ============
 
-    /// @notice notePrice can only increase via updateNotePrice
+    /// @notice notePrice can only increase via setOkuMPrice
     function testFuzz_NotePriceNeverDecreases(uint256 newPrice) public {
         uint256 currentPrice = okuMoney.okuMPrice();
         newPrice = _boundOkuMPrice(newPrice);
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         assertGe(okuMoney.okuMPrice(), currentPrice, "notePrice must never decrease");
     }
@@ -223,14 +223,14 @@ contract OkuMoneyFuzzTest is BaseTest {
         // First price update
         uint256 price1 = priceBefore + increase1;
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(price1);
+        okuMoney.setOkuMPrice(price1);
 
         assertEq(okuMoney.okuMPrice(), price1, "Price after first update");
 
         // Second price update
         uint256 price2 = price1 + increase2;
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(price2);
+        okuMoney.setOkuMPrice(price2);
 
         assertEq(okuMoney.okuMPrice(), price2, "Price after second update");
         assertGt(okuMoney.okuMPrice(), priceBefore, "Final price greater than initial");
@@ -244,7 +244,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 higherPrice = currentPrice + increase;
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(higherPrice);
+        okuMoney.setOkuMPrice(higherPrice);
 
         // Try to set a lower price (any amount below current)
         decrease = bound(decrease, 1, higherPrice);
@@ -252,54 +252,29 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         vm.prank(rebaser);
         vm.expectRevert(OkuMoney.PriceCannotDecrease.selector);
-        okuMoney.updateOkuMPrice(lowerPrice);
+        okuMoney.setOkuMPrice(lowerPrice);
     }
 
-    // ============ Yield Rate Accrual Tests ============
+    // ============ distributeYield Fuzz Tests ============
 
-    /// @notice notePrice accrues over time with setYieldRate
-    function testFuzz_NotePriceAccruesWithYieldRate(uint256 elapsed) public {
-        elapsed = bound(elapsed, 1, 365 days);
+    /// @notice distributeYield increases price monotonically
+    function testFuzz_DistributeYield(uint256 supply, uint256 yieldAmount) public {
+        supply = bound(supply, 1e18, MAX_SUPPLY / 2);
+        yieldAmount = bound(yieldAmount, 1, 1e30);
 
-        // Set a modest yield rate (~4.5% APY = ~1.000000001395 per second)
-        uint256 rate = PRECISION + 1_395_000_000; // ~4.5% APY
-
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, 0);
+        _mintOkuMoney(user1, supply);
 
         uint256 priceBefore = okuMoney.okuMPrice();
 
-        // Advance time
-        vm.warp(block.timestamp + elapsed);
+        vm.prank(rebaser);
+        okuMoney.distributeYield(yieldAmount);
 
         uint256 priceAfter = okuMoney.okuMPrice();
-        assertGt(priceAfter, priceBefore, "Price should increase over time with positive rate");
-    }
+        assertGe(priceAfter, priceBefore, "price must not decrease after distributeYield");
 
-    /// @notice Yield rate does not affect balances even after time passes
-    function testFuzz_YieldRateDoesNotAffectBalances(uint256 mintAmount, uint256 elapsed) public {
-        mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 10);
-        elapsed = bound(elapsed, 1, 365 days);
-
-        _mintOkuMoney(user1, mintAmount);
-        uint256 balanceBefore = okuMoney.balanceOf(user1);
-        uint256 totalSupplyBefore = okuMoney.totalSupply();
-
-        // Set yield rate
-        uint256 rate = PRECISION + 1_395_000_000; // ~4.5% APY
-        vm.prank(rebaser);
-        okuMoney.setYieldRate(rate, 0);
-
-        // Advance time
-        vm.warp(block.timestamp + elapsed);
-
-        // Balances MUST be unaffected
-        assertEq(okuMoney.balanceOf(user1), balanceBefore, "Balance unchanged after yield accrual");
-        assertEq(
-            okuMoney.totalSupply(), totalSupplyBefore, "Total supply unchanged after yield accrual"
-        );
-        // But notePrice should have increased
-        assertGt(okuMoney.okuMPrice(), PRECISION, "notePrice should have grown");
+        // Verify math: newPrice = oldPrice + yieldAmount * PRECISION / supply
+        uint256 expectedIncrease = (yieldAmount * PRECISION) / supply;
+        assertEq(priceAfter, priceBefore + expectedIncrease, "price increase equals yield/supply");
     }
 
     // ============ Minter Allowance Tests ============
@@ -406,7 +381,7 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         // Update notePrice (should not affect balances)
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         // Transfer some tokens
         transfer1 = bound(transfer1, 1, mintAmount / 2);
@@ -443,7 +418,7 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         // Update notePrice
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         // Should still be able to mint up to the cap (totalSupply is unaffected by notePrice)
         uint256 remaining = MAX_SUPPLY - okuMoney.totalSupply();
@@ -477,7 +452,7 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         // Update notePrice
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         // Second mint at new price — user still gets exact token amount
         _mintOkuMoney(user2, secondMint);
@@ -517,7 +492,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         _mintOkuMoney(user1, mintAmount);
 
         vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
+        okuMoney.setOkuMPrice(newPrice);
 
         // Balance unchanged (standard ERC-20)
         assertEq(okuMoney.balanceOf(user1), mintAmount, "Balance exact after notePrice update");
@@ -535,20 +510,5 @@ contract OkuMoneyFuzzTest is BaseTest {
         );
         assertEq(okuMoney.balanceOf(user1), mintAmount - transferAmount, "Sender balance exact");
         assertEq(okuMoney.balanceOf(user2), transferAmount, "Receiver balance exact");
-    }
-
-    /// @notice basePrice reflects last snapshot before accrual
-    function testFuzz_BasePriceReflectsSnapshot(uint256 newPrice) public {
-        newPrice = _boundOkuMPrice(newPrice);
-
-        vm.prank(rebaser);
-        okuMoney.updateOkuMPrice(newPrice);
-
-        assertEq(okuMoney.basePrice(), newPrice, "basePrice equals set price after updateNotePrice");
-        assertEq(
-            okuMoney.okuMPrice(),
-            newPrice,
-            "notePrice equals basePrice immediately after updateNotePrice"
-        );
     }
 }

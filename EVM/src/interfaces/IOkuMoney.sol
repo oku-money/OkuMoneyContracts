@@ -14,11 +14,6 @@ interface IOkuMoney {
     function balanceOf(address account) external view returns (uint256);
     function totalSupply() external view returns (uint256);
     function okuMPrice() external view returns (uint256);
-    function basePrice() external view returns (uint256);
-    function ratePerSecond() external view returns (uint256);
-    function lastAccrualTime() external view returns (uint256);
-    function rateEnd() external view returns (uint256);
-    function pendingRatePerSecond() external view returns (uint256);
-    function setYieldRate(uint256 newRatePerSecond, uint256 endTimestamp) external;
-    function setNextYieldRate(uint256 newRatePerSecond) external;
+    function setOkuMPrice(uint256 newPrice) external;
+    function distributeYield(uint256 yieldAmount) external;
 }

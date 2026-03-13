@@ -90,7 +90,9 @@ contract OkuMoney is
     event Unblacklisted(address indexed account);
     /// @notice Emitted alongside the standard ERC-20 Transfer with the dollar-denominated value
     /// @dev dollarValue = amount × okuMPrice / PRECISION
-    event TransferValue(address indexed from, address indexed to, uint256 amount, uint256 dollarValue);
+    event TransferValue(
+        address indexed from, address indexed to, uint256 amount, uint256 dollarValue
+    );
 
     // ============ Custom Errors ============
 

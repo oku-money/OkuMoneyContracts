@@ -115,6 +115,7 @@ contract OkuDollar is
     error EndTimestampInPast();
     error NoRateEndSet();
     error MultiplierCannotDecrease();
+    error YieldDistributionInProgress();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -290,6 +291,22 @@ contract OkuDollar is
         // with the original token amount. Do not emit here to avoid double-emitting.
     }
 
+    // ============ Yield Distribution Lock ============
+
+    /**
+     * @notice Modifier to prevent sandwich attacks during yield distribution
+     * @dev Blocks wrap/unwrap operations in the same block as yield distribution.
+     *      This prevents arbitrageurs from frontrunning distributeYield() with wrap()
+     *      and backrunning with unwrap() to capture unearned yield.
+     */
+    modifier whenYieldNotDistributing() {
+        OkuDollarStorage storage $ = _getOkuDollarStorage();
+        if (block.number == $.okuMoney.lastYieldDistributionBlock()) {
+            revert YieldDistributionInProgress();
+        }
+        _;
+    }
+
     // ============ Wrap / Unwrap (Price-Aware) ============
 
     /**
@@ -309,6 +326,7 @@ contract OkuDollar is
     )
         external
         whenNotPaused
+        whenYieldNotDistributing
         nonReentrant
         returns (uint256 usdMinted)
     {
@@ -359,6 +377,7 @@ contract OkuDollar is
     )
         external
         whenNotPaused
+        whenYieldNotDistributing
         nonReentrant
         returns (uint256 okuMReturned)
     {

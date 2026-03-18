@@ -123,9 +123,8 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e18, okuMoney.balanceOf(user1) / 2);
         notePrice = _boundOkuMPrice(notePrice);
 
-        // Set note price
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(notePrice);
+        // Set note price and roll to next block to avoid yield distribution lock
+        _setOkuMPriceAndRoll(notePrice);
 
         vm.startPrank(user1);
         uint256 usdMinted = usdOku.wrap(okuMAmount, user1, 0);
@@ -212,8 +211,7 @@ contract OkuDollarFuzzTest is BaseTest {
         okuMAmount = bound(okuMAmount, 1e6, okuMoney.balanceOf(user1) / 2);
         notePrice = _boundOkuMPrice(notePrice);
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(notePrice);
+        _setOkuMPriceAndRoll(notePrice);
 
         uint256 mult = usdOku.usdMultiplier();
 
@@ -298,6 +296,7 @@ contract OkuDollarFuzzTest is BaseTest {
             bound(newNotePrice, currentNotePrice + currentNotePrice / 100, currentNotePrice * 5);
 
         // Increase note price — vault note balance unchanged, but dollar value increases
+        // No need to roll here since we're only checking collateralization, not wrapping/unwrapping
         vm.prank(rebaser);
         okuMoney.setOkuMPrice(newNotePrice);
 
@@ -720,8 +719,7 @@ contract OkuDollarFuzzTest is BaseTest {
         notePrice = _boundOkuMPrice(notePrice);
         cycles = uint8(bound(cycles, 2, 10));
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(notePrice);
+        _setOkuMPriceAndRoll(notePrice);
 
         vm.startPrank(user1);
         usdOku.wrap(okuMAmount, user1, 0);
@@ -833,9 +831,8 @@ contract OkuDollarFuzzTest is BaseTest {
         usdOku.unwrap(usdBalance, user1);
         vm.stopPrank();
 
-        // Increase note price
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newNotePrice);
+        // Increase note price and roll to avoid yield distribution lock
+        _setOkuMPriceAndRoll(newNotePrice);
 
         // Wrap same note amount at higher price
         vm.prank(user1);
@@ -866,8 +863,7 @@ contract OkuDollarFuzzTest is BaseTest {
         newNotePrice =
             bound(newNotePrice, currentNotePrice + currentNotePrice / 10, currentNotePrice * 5);
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newNotePrice);
+        _setOkuMPriceAndRoll(newNotePrice);
 
         // Unwrap at higher note price — should get fewer note tokens back
         vm.prank(user1);

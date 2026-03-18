@@ -584,6 +584,68 @@ contract OkuMoneyTest is BaseTest {
         assertEq(okuMoney.okuMPrice(), price1);
     }
 
+    // ============ Yield Distribution Block Tests (Sandwich Attack Prevention) ============
+
+    event YieldDistributionBlockSet(uint256 blockNumber);
+
+    function test_LastYieldDistributionBlock_InitiallyZero() public view {
+        assertEq(okuMoney.lastYieldDistributionBlock(), 0);
+    }
+
+    function test_DistributeYield_SetsLastYieldDistributionBlock() public {
+        uint256 supply = 10_000e18;
+        _mintOkuMoney(user1, supply);
+
+        vm.prank(rebaser);
+        okuMoney.distributeYield(1000e18);
+
+        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
+    }
+
+    function test_SetOkuMPrice_SetsLastYieldDistributionBlock() public {
+        vm.prank(rebaser);
+        okuMoney.setOkuMPrice(PRECISION * 2);
+
+        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
+    }
+
+    function test_DistributeYield_EmitsYieldDistributionBlockSet() public {
+        uint256 supply = 10_000e18;
+        _mintOkuMoney(user1, supply);
+
+        vm.expectEmit(true, true, true, true);
+        emit YieldDistributionBlockSet(block.number);
+
+        vm.prank(rebaser);
+        okuMoney.distributeYield(1000e18);
+    }
+
+    function test_SetOkuMPrice_EmitsYieldDistributionBlockSet() public {
+        vm.expectEmit(true, true, true, true);
+        emit YieldDistributionBlockSet(block.number);
+
+        vm.prank(rebaser);
+        okuMoney.setOkuMPrice(PRECISION * 2);
+    }
+
+    function test_LastYieldDistributionBlock_UpdatesOnEachDistribution() public {
+        uint256 supply = 10_000e18;
+        _mintOkuMoney(user1, supply);
+
+        vm.prank(rebaser);
+        okuMoney.distributeYield(100e18);
+        uint256 block1 = okuMoney.lastYieldDistributionBlock();
+
+        // Roll forward and distribute again
+        vm.roll(block.number + 10);
+
+        vm.prank(rebaser);
+        okuMoney.distributeYield(100e18);
+        uint256 block2 = okuMoney.lastYieldDistributionBlock();
+
+        assertEq(block2, block1 + 10);
+    }
+
     // ============ Blacklisting Tests ============
 
     function test_Blacklist_OnlyBlacklisterRole() public {

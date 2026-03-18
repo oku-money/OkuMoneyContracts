@@ -50,6 +50,8 @@ contract OkuMoney is
         uint256 maxSupply;
         // Blacklist
         mapping(address => bool) isBlacklisted;
+        // Block number of last yield distribution (for sandwich attack prevention)
+        uint256 lastYieldDistributionBlock;
     }
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuMoney")) - 1)) & ~bytes32(uint256(0xff))
@@ -93,6 +95,7 @@ contract OkuMoney is
     event TransferValue(
         address indexed from, address indexed to, uint256 amount, uint256 dollarValue
     );
+    event YieldDistributionBlockSet(uint256 blockNumber);
 
     // ============ Custom Errors ============
 
@@ -151,6 +154,15 @@ contract OkuMoney is
         return _getOkuMoneyStorage().isBlacklisted[account];
     }
 
+    /**
+     * @notice Block number when yield was last distributed
+     * @dev Used by PSM and OkuDollar to prevent sandwich attacks during yield distribution.
+     *      Operations in the same block as yield distribution are blocked.
+     */
+    function lastYieldDistributionBlock() public view returns (uint256) {
+        return _getOkuMoneyStorage().lastYieldDistributionBlock;
+    }
+
     // ============ Price Logic ============
 
     /**
@@ -168,11 +180,15 @@ contract OkuMoney is
     /**
      * @notice Directly override the stored price ratio
      * @param newPrice New price value (must be >= current price)
+     * @dev Records block.number to prevent sandwich attacks via PSM/vault operations
      */
     function setOkuMPrice(uint256 newPrice) external onlyRole(OKUM_REBASER) {
-        uint256 currentPrice = _getOkuMoneyStorage().okuMPrice;
+        OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        uint256 currentPrice = $.okuMPrice;
         if (newPrice < currentPrice) revert PriceCannotDecrease();
-        _getOkuMoneyStorage().okuMPrice = newPrice;
+        $.lastYieldDistributionBlock = block.number;
+        $.okuMPrice = newPrice;
+        emit YieldDistributionBlockSet(block.number);
         emit OkuMPriceUpdated(currentPrice, newPrice);
     }
 
@@ -181,15 +197,18 @@ contract OkuMoney is
      * @dev Increases okuMPrice by yieldAmount / totalSupply.
      *      yieldAmount is dollar-denominated (18 decimals).
      *      E.g., $1000 yield on 10000 tokens → +$0.10/token.
+     *      Records block.number to prevent sandwich attacks via PSM/vault operations.
      * @param yieldAmount Dollar yield to distribute (18 decimals)
      */
     function distributeYield(uint256 yieldAmount) external onlyRole(OKUM_REBASER) {
         uint256 supply = totalSupply();
         if (supply == 0) revert ZeroSupply();
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
+        $.lastYieldDistributionBlock = block.number;
         uint256 oldPrice = $.okuMPrice;
         uint256 newPrice = oldPrice + (yieldAmount * PRECISION / supply);
         $.okuMPrice = newPrice;
+        emit YieldDistributionBlockSet(block.number);
         emit YieldDistributed(yieldAmount, oldPrice, newPrice);
     }
 

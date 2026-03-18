@@ -116,6 +116,7 @@ contract LitePSM is
     error ExceedsReserves(uint256 newSupply, uint256 reserves);
     error InsufficientBuffer(uint256 available, uint256 required);
     error WouldStrandQueue(uint256 remainingBalance, uint256 queueObligation);
+    error YieldDistributionInProgress();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -185,6 +186,22 @@ contract LitePSM is
         return _getLitePSMStorage().oracleEnabled;
     }
 
+    // ============ Yield Distribution Lock ============
+
+    /**
+     * @notice Modifier to prevent sandwich attacks during yield distribution
+     * @dev Blocks PSM operations in the same block as yield distribution.
+     *      This prevents arbitrageurs from frontrunning distributeYield() with mintOkuM()
+     *      and backrunning with redeemOkuM() to capture unearned yield.
+     */
+    modifier whenYieldNotDistributing() {
+        LitePSMStorage storage $ = _getLitePSMStorage();
+        if (block.number == $.okuMoney.lastYieldDistributionBlock()) {
+            revert YieldDistributionInProgress();
+        }
+        _;
+    }
+
     // ============ OkuMoney Swap Functions (Price-Aware) ============
 
     /**
@@ -193,7 +210,12 @@ contract LitePSM is
      *      If okuMPrice=$1.05, depositing 100 USDC gives ~95.24 OkuM.
      * @param usdcAmount Amount of USDC to deposit (6 decimals)
      */
-    function mintOkuM(uint256 usdcAmount) external whenNotPaused nonReentrant {
+    function mintOkuM(uint256 usdcAmount)
+        external
+        whenNotPaused
+        whenYieldNotDistributing
+        nonReentrant
+    {
         if (usdcAmount == 0) revert ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
@@ -232,7 +254,12 @@ contract LitePSM is
      *      If okuMPrice=$1.05, redeeming 95.24 OkuM returns ~100 USDC.
      * @param okuMAmount Amount of OkuMoney to redeem (18 decimals)
      */
-    function redeemOkuM(uint256 okuMAmount) external whenNotPaused nonReentrant {
+    function redeemOkuM(uint256 okuMAmount)
+        external
+        whenNotPaused
+        whenYieldNotDistributing
+        nonReentrant
+    {
         _redeemOkuM(msg.sender, okuMAmount);
     }
 
@@ -253,6 +280,7 @@ contract LitePSM is
     )
         external
         whenNotPaused
+        whenYieldNotDistributing
         nonReentrant
     {
         LitePSMStorage storage $ = _getLitePSMStorage();
@@ -306,7 +334,12 @@ contract LitePSM is
      * @dev Price-aware: USDC converted to OkuM via okuMPrice(), then wrapped into vault.
      * @param usdcAmount Amount of USDC to deposit (6 decimals)
      */
-    function mintUsdOku(uint256 usdcAmount) external whenNotPaused nonReentrant {
+    function mintUsdOku(uint256 usdcAmount)
+        external
+        whenNotPaused
+        whenYieldNotDistributing
+        nonReentrant
+    {
         if (usdcAmount == 0) revert ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
@@ -355,7 +388,12 @@ contract LitePSM is
      *      If USDC buffer insufficient, OkuM goes to queue (user earns yield while queued
      *      via okuMPrice() appreciation).
      */
-    function redeemUsdOku(uint256 usdAmount) external whenNotPaused nonReentrant {
+    function redeemUsdOku(uint256 usdAmount)
+        external
+        whenNotPaused
+        whenYieldNotDistributing
+        nonReentrant
+    {
         _redeemUsdOku(msg.sender, usdAmount);
     }
 
@@ -376,6 +414,7 @@ contract LitePSM is
     )
         external
         whenNotPaused
+        whenYieldNotDistributing
         nonReentrant
     {
         LitePSMStorage storage $ = _getLitePSMStorage();

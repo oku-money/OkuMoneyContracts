@@ -167,8 +167,7 @@ contract OkuDollarTest is BaseTest {
 
     function test_Wrap_PriceAware_NotePriceIncrease() public {
         // Increase notePrice to 1.05e18 ($1.05 per note token)
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(105e16);
+        _setOkuMPriceAndRoll(105e16);
 
         uint256 okuMAmount = 100e18;
         _mintOkuMoney(user1, okuMAmount);
@@ -184,8 +183,7 @@ contract OkuDollarTest is BaseTest {
 
     function test_Wrap_PriceAware_HighNotePrice() public {
         // notePrice = 2e18 ($2.00 per note token)
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        _setOkuMPriceAndRoll(PRECISION * 2);
 
         uint256 okuMAmount = 50e18;
         _mintOkuMoney(user1, okuMAmount);
@@ -200,8 +198,7 @@ contract OkuDollarTest is BaseTest {
 
     function test_Wrap_PriceAware_BothMultipliersElevated() public {
         // notePrice = 1.05e18, usdMultiplier = 1.02e18
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(105e16);
+        _setOkuMPriceAndRoll(105e16);
 
         vm.prank(usdRebaser);
         usdOku.updateUsdMultiplier(102e16);
@@ -326,8 +323,7 @@ contract OkuDollarTest is BaseTest {
         _mintUsdOku(user1, 100e18);
 
         // Increase notePrice to 1.05e18
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(105e16);
+        _setOkuMPriceAndRoll(105e16);
 
         // Unwrap 105 OkuDollar at notePrice=1.05e18
         // okuMReturned = 105e18 * 1e18 / 1.05e18 = 100e18
@@ -344,8 +340,7 @@ contract OkuDollarTest is BaseTest {
 
     function test_Unwrap_PriceAware_RoundTrip_AtHighPrice() public {
         // Set notePrice to 1.05e18 BEFORE wrapping
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(105e16);
+        _setOkuMPriceAndRoll(105e16);
 
         uint256 okuMAmount = 100e18;
         _mintOkuMoney(user1, okuMAmount);
@@ -407,8 +402,7 @@ contract OkuDollarTest is BaseTest {
 
     function test_PriceAware_AfterNotePriceIncrease_MoreOkuDollarMinted() public {
         // notePrice increases to 2x — each note token is worth $2.00
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        _setOkuMPriceAndRoll(PRECISION * 2);
 
         uint256 okuMAmount = 100e18;
         _mintOkuMoney(user1, okuMAmount);
@@ -486,8 +480,7 @@ contract OkuDollarTest is BaseTest {
         // Increase notePrice to 1.5e18
         // Vault still has 100 note tokens, but each is worth $1.50 → $150 backing
         // Obligations: 100 OkuDollar → overcollateralized
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice((PRECISION * 3) / 2);
+        _setOkuMPriceAndRoll((PRECISION * 3) / 2);
 
         // Unwrap 100 OkuDollar: okuMReturned = 100e18 * 1e18 / 1.5e18 ≈ 66.67e18
         vm.prank(user1);
@@ -1337,8 +1330,7 @@ contract OkuDollarTest is BaseTest {
         // This tests the overcollateralized scenario (price > mult)
         uint256 elevatedPrice = 15e17; // 1.5e18
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(elevatedPrice);
+        _setOkuMPriceAndRoll(elevatedPrice);
         // usdMultiplier stays at default PRECISION
 
         // Create some existing vault state at elevated price
@@ -1376,8 +1368,7 @@ contract OkuDollarTest is BaseTest {
         _mintUsdOku(user2, 5000e18);
 
         // Bump notePrice to 1.5e18
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice((PRECISION * 3) / 2);
+        _setOkuMPriceAndRoll((PRECISION * 3) / 2);
 
         // Now user1 does repeated wrap/unwrap at non-1.0 notePrice
         uint256 initialNotes = 1000e18;
@@ -1637,8 +1628,7 @@ contract OkuDollarTest is BaseTest {
         mult = bound(mult, PRECISION, 5e18);
 
         // Only set notePrice (not multiplier) to avoid collateralization issues
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(mult);
+        _setOkuMPriceAndRoll(mult);
         // usdMultiplier stays at default 1e18
 
         uint256 okuMAmount = 77.777e18;
@@ -1664,8 +1654,7 @@ contract OkuDollarTest is BaseTest {
     function test_Fuzz_WrapUnwrap_RoundTrip_WithNotePrice(uint256 price) public {
         price = bound(price, PRECISION, 3e18); // $1.00 to $3.00
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(price);
+        _setOkuMPriceAndRoll(price);
 
         uint256 okuMAmount = 77.777e18;
         _mintOkuMoney(user1, okuMAmount);
@@ -1692,8 +1681,7 @@ contract OkuDollarTest is BaseTest {
         // Keep mult at base - this ensures vault stays solvent (price >= mult means overcollateralized)
         uint256 mult = PRECISION;
 
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(price);
+        _setOkuMPriceAndRoll(price);
 
         // usdMultiplier stays at default PRECISION
 
@@ -1717,5 +1705,118 @@ contract OkuDollarTest is BaseTest {
             (5 * mult + PRECISION - 1) / PRECISION + (5 * price + PRECISION - 1) / PRECISION + 10;
         assertApproxEqAbs(finalNotes, okuMAmount, maxLoss, "Round trip rounding loss within bounds");
         assertLe(finalNotes, okuMAmount, "Must not gain from round trip");
+    }
+
+    // ============ Yield Distribution Lock Tests (Sandwich Attack Prevention) ============
+
+    function test_Wrap_RevertsInYieldDistributionBlock() public {
+        // Setup: user1 has OkuMoney
+        _mintOkuMoney(user1, 100e18);
+        _approveOkuMoney(user1, address(usdOku), 100e18);
+
+        // Distribute yield to set lastYieldDistributionBlock
+        vm.prank(rebaser);
+        okuMoney.distributeYield(10e18);
+
+        // Same block — wrap should revert
+        vm.prank(user1);
+        vm.expectRevert(OkuDollar.YieldDistributionInProgress.selector);
+        usdOku.wrap(50e18, user1, 0);
+    }
+
+    function test_Wrap_SucceedsInNextBlock() public {
+        // Setup: user1 has OkuMoney
+        _mintOkuMoney(user1, 100e18);
+        _approveOkuMoney(user1, address(usdOku), 100e18);
+
+        // Distribute yield
+        vm.prank(rebaser);
+        okuMoney.distributeYield(10e18);
+
+        // Roll to next block
+        vm.roll(block.number + 1);
+
+        // Now wrap should succeed
+        vm.prank(user1);
+        usdOku.wrap(50e18, user1, 0);
+
+        assertGt(usdOku.balanceOf(user1), 0);
+    }
+
+    function test_Unwrap_RevertsInYieldDistributionBlock() public {
+        // Setup: user1 has usdOku
+        _mintUsdOku(user1, 100e18);
+
+        // Distribute yield to set lastYieldDistributionBlock
+        vm.prank(rebaser);
+        okuMoney.distributeYield(10e18);
+
+        // Same block — unwrap should revert
+        vm.prank(user1);
+        vm.expectRevert(OkuDollar.YieldDistributionInProgress.selector);
+        usdOku.unwrap(50e18, user1);
+    }
+
+    function test_Unwrap_SucceedsInNextBlock() public {
+        // Setup: user1 has usdOku
+        _mintUsdOku(user1, 100e18);
+
+        // Distribute yield
+        vm.prank(rebaser);
+        okuMoney.distributeYield(10e18);
+
+        // Roll to next block
+        vm.roll(block.number + 1);
+
+        // Now unwrap should succeed
+        uint256 okuMBefore = okuMoney.balanceOf(user1);
+        vm.prank(user1);
+        usdOku.unwrap(50e18, user1);
+
+        assertGt(okuMoney.balanceOf(user1), okuMBefore);
+    }
+
+    function test_SetOkuMPrice_AlsoBlocksWrapUnwrap() public {
+        // Setup: user1 has OkuMoney
+        _mintOkuMoney(user1, 100e18);
+        _approveOkuMoney(user1, address(usdOku), 100e18);
+
+        // setOkuMPrice also sets lastYieldDistributionBlock
+        vm.prank(rebaser);
+        okuMoney.setOkuMPrice(PRECISION * 2);
+
+        // Same block — wrap should revert
+        vm.prank(user1);
+        vm.expectRevert(OkuDollar.YieldDistributionInProgress.selector);
+        usdOku.wrap(50e18, user1, 0);
+    }
+
+    function test_YieldLock_NoEffectBeforeFirstDistribution() public {
+        // Before any yield distribution, lastYieldDistributionBlock is 0
+        // Operations should work normally
+        assertEq(okuMoney.lastYieldDistributionBlock(), 0);
+
+        _mintOkuMoney(user1, 100e18);
+        _approveOkuMoney(user1, address(usdOku), 100e18);
+
+        vm.prank(user1);
+        usdOku.wrap(100e18, user1, 0);
+
+        assertGt(usdOku.balanceOf(user1), 0);
+    }
+
+    function test_YieldLock_TransfersStillWorkDuringLock() public {
+        // Setup: user1 has usdOku
+        _mintUsdOku(user1, 100e18);
+
+        // Distribute yield
+        vm.prank(rebaser);
+        okuMoney.distributeYield(10e18);
+
+        // Same block — transfers should still work (only wrap/unwrap are blocked)
+        vm.prank(user1);
+        usdOku.transfer(user2, 50e18);
+
+        assertGt(usdOku.balanceOf(user2), 0);
     }
 }

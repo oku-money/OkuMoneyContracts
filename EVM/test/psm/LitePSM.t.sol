@@ -58,9 +58,11 @@ contract LitePSMTest is BaseTest {
     }
 
     /// @notice Raise notePrice to a specific value using updateNotePrice
+    /// @dev Rolls to next block after setting price to avoid yield distribution lock
     function _setNotePrice(uint256 newPrice) internal {
         vm.prank(rebaser);
         okuMoney.setOkuMPrice(newPrice);
+        vm.roll(block.number + 1); // Avoid yield distribution lock
     }
 
     // ============ Mint Tests ============
@@ -1207,5 +1209,127 @@ contract LitePSMTest is BaseTest {
 
         uint256 expectedOkuMoney = _expectedNotesFromUsdc(100e6);
         assertEq(okuMoney.balanceOf(user1), expectedOkuMoney);
+    }
+
+    // ============ Yield Distribution Lock Tests (Sandwich Attack Prevention) ============
+
+    function test_MintOkuM_RevertsInYieldDistributionBlock() public {
+        // Distribute yield to set lastYieldDistributionBlock
+        _mintOkuMoney(user2, 10_000e18); // Need supply for distributeYield
+        vm.prank(rebaser);
+        okuMoney.distributeYield(100e18);
+
+        // Same block — mintOkuM should revert
+        _approveUsdc(user1, address(litePsm), 100e6);
+        vm.prank(user1);
+        vm.expectRevert(LitePSM.YieldDistributionInProgress.selector);
+        litePsm.mintOkuM(100e6);
+    }
+
+    function test_MintOkuM_SucceedsInNextBlock() public {
+        // Use setOkuMPrice instead of distributeYield to avoid slippage issues
+        // (setOkuMPrice also sets lastYieldDistributionBlock)
+        vm.prank(rebaser);
+        okuMoney.setOkuMPrice(PRECISION); // No actual price change, just sets the block
+
+        // Roll to next block
+        vm.roll(block.number + 1);
+
+        // Now mintOkuM should succeed
+        _approveUsdc(user1, address(litePsm), 100e6);
+        vm.prank(user1);
+        litePsm.mintOkuM(100e6);
+
+        assertGt(okuMoney.balanceOf(user1), 0);
+    }
+
+    function test_RedeemOkuM_RevertsInYieldDistributionBlock() public {
+        // Setup: user1 has OkuMoney
+        _mintOkuMoney(user1, 100e18);
+        vm.prank(user1);
+        okuMoney.approve(address(litePsm), 100e18);
+
+        // Distribute yield to set lastYieldDistributionBlock
+        vm.prank(rebaser);
+        okuMoney.distributeYield(100e18);
+
+        // Same block — redeemOkuM should revert
+        vm.prank(user1);
+        vm.expectRevert(LitePSM.YieldDistributionInProgress.selector);
+        litePsm.redeemOkuM(50e18);
+    }
+
+    function test_RedeemOkuM_SucceedsInNextBlock() public {
+        // Setup: user1 has OkuMoney
+        _mintOkuMoney(user1, 100e18);
+        vm.prank(user1);
+        okuMoney.approve(address(litePsm), 100e18);
+
+        // Distribute yield
+        vm.prank(rebaser);
+        okuMoney.distributeYield(100e18);
+
+        // Roll to next block
+        vm.roll(block.number + 1);
+
+        // Now redeemOkuM should succeed
+        uint256 usdcBefore = usdc.balanceOf(user1);
+        vm.prank(user1);
+        litePsm.redeemOkuM(50e18);
+
+        assertGt(usdc.balanceOf(user1), usdcBefore);
+    }
+
+    function test_MintUsdOku_RevertsInYieldDistributionBlock() public {
+        // Distribute yield
+        _mintOkuMoney(user2, 10_000e18);
+        vm.prank(rebaser);
+        okuMoney.distributeYield(100e18);
+
+        // Same block — mintUsdOku should revert
+        _approveUsdc(user1, address(litePsm), 100e6);
+        vm.prank(user1);
+        vm.expectRevert(LitePSM.YieldDistributionInProgress.selector);
+        litePsm.mintUsdOku(100e6);
+    }
+
+    function test_RedeemUsdOku_RevertsInYieldDistributionBlock() public {
+        // Setup: user1 has usdOku
+        _mintUsdOku(user1, 100e18);
+        vm.prank(user1);
+        usdOku.approve(address(litePsm), 100e18);
+
+        // Distribute yield
+        vm.prank(rebaser);
+        okuMoney.distributeYield(100e18);
+
+        // Same block — redeemUsdOku should revert
+        vm.prank(user1);
+        vm.expectRevert(LitePSM.YieldDistributionInProgress.selector);
+        litePsm.redeemUsdOku(50e18);
+    }
+
+    function test_SetOkuMPrice_AlsoBlocksPSMOperations() public {
+        // setOkuMPrice also sets lastYieldDistributionBlock
+        vm.prank(rebaser);
+        okuMoney.setOkuMPrice(PRECISION * 2);
+
+        // Same block — mintOkuM should revert
+        _approveUsdc(user1, address(litePsm), 100e6);
+        vm.prank(user1);
+        vm.expectRevert(LitePSM.YieldDistributionInProgress.selector);
+        litePsm.mintOkuM(100e6);
+    }
+
+    function test_YieldLock_NoEffectBeforeFirstDistribution() public {
+        // Before any yield distribution, lastYieldDistributionBlock is 0
+        // Operations should work normally
+        assertEq(okuMoney.lastYieldDistributionBlock(), 0);
+
+        _approveUsdc(user1, address(litePsm), 100e6);
+        vm.prank(user1);
+        litePsm.mintOkuM(100e6);
+
+        assertGt(okuMoney.balanceOf(user1), 0);
     }
 }

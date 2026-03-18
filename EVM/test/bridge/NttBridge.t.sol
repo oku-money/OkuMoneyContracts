@@ -478,8 +478,7 @@ contract NttBridgeTest is BaseTest {
 
         // Increase notePrice (does NOT change OkuMoney balances — non-rebasing)
         uint256 newPrice = okuMoney.okuMPrice() + priceIncrease;
-        vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        _setOkuMPriceAndRoll(newPrice);
 
         // OkuDollar balance is independent of note price change (vault token with its own multiplier)
         uint256 usdBalance = usdOku.balanceOf(user1);

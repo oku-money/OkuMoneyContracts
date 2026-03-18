@@ -271,4 +271,13 @@ abstract contract BaseTest is Test {
     function _max(uint256 a, uint256 b) internal pure returns (uint256) {
         return a > b ? a : b;
     }
+
+    /// @notice Set OkuMoney price and roll to next block to avoid yield distribution lock
+    /// @dev Use this helper when testing price-aware operations that would be blocked
+    ///      in the same block as a price change (sandwich attack prevention).
+    function _setOkuMPriceAndRoll(uint256 newPrice) internal {
+        vm.prank(rebaser);
+        okuMoney.setOkuMPrice(newPrice);
+        vm.roll(block.number + 1);
+    }
 }

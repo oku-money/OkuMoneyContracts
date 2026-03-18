@@ -16,4 +16,6 @@ interface IOkuMoney {
     function okuMPrice() external view returns (uint256);
     function setOkuMPrice(uint256 newPrice) external;
     function distributeYield(uint256 yieldAmount) external;
+    /// @notice Block number of last yield distribution (for sandwich attack prevention)
+    function lastYieldDistributionBlock() external view returns (uint256);
 }

@@ -238,6 +238,45 @@ The token starts at `okuMPrice() = 1e18` ($1.00). Over time, `okuMPrice()` grows
 - The PSM handles USDC ↔ OkuMoney conversion using `okuMPrice()`
 - Blacklist and pause checks apply to transfers
 
+### Yield Distribution Lock (Sandwich Attack Prevention)
+
+OkuMoney uses discrete yield distribution via `distributeYield()` or `setOkuMPrice()`. Without protection, this creates an arbitrage window where attackers can:
+
+1. Watch mempool for `distributeYield()` transactions
+2. Frontrun: Call `mintOkuM()` at the current (lower) price
+3. Let the yield distribution execute: Price increases
+4. Backrun: Call `redeemOkuM()` at the new (higher) price
+5. Capture yield they didn't earn by holding
+
+**Solution**: Single-block enforcement via `lastYieldDistributionBlock`:
+
+```solidity
+// OkuMoney records the block number when yield is distributed
+function distributeYield(uint256 yieldAmount) external onlyRole(OKUM_REBASER) {
+    $.lastYieldDistributionBlock = block.number;
+    // ... yield distribution logic
+}
+
+// LitePSM and OkuDollar check before allowing operations
+modifier whenYieldNotDistributing() {
+    if (block.number == $.okuMoney.lastYieldDistributionBlock()) {
+        revert YieldDistributionInProgress();
+    }
+    _;
+}
+```
+
+**Protected operations** (blocked in same block as yield distribution):
+- `LitePSM.mintOkuM()` / `redeemOkuM()` / `mintUsdOku()` / `redeemUsdOku()`
+- `OkuDollar.wrap()` / `unwrap()`
+
+**Unaffected operations**:
+- OkuMoney transfers (no price sensitivity)
+- OkuDollar transfers (no price sensitivity)
+- Operations in subsequent blocks (lock auto-releases)
+
+**Backend impact**: None. The orchestrator calls `distributeYield()` as before. Protection is automatic — no additional transactions needed.
+
 ### Role Constants
 
 ```solidity
@@ -577,4 +616,8 @@ surplus() == max(0, (okuMReserves × okuMPrice / PRECISION) - totalUsdObligation
 
 // Queue integrity
 queue.head <= queue.tail
+
+// Yield distribution lock (sandwich prevention)
+lastYieldDistributionBlock is set on distributeYield() and setOkuMPrice()
+PSM and vault operations revert when block.number == lastYieldDistributionBlock
 ```

@@ -1,4 +1,4 @@
-use crate::contexts::{BridgeUsdOku, Initialize};
+use crate::contexts::{BridgeOkuM, BridgeUsdOku, Initialize};
 use crate::errors::RouterError;
 use crate::events::*;
 use anchor_lang::prelude::*;
@@ -102,6 +102,50 @@ pub fn bridge_usd_oku(
         user: ctx.accounts.user.key(),
         usd_oku_shares,
         oku_money_amount: oku_money_received,
+        destination_chain,
+        recipient,
+    });
+
+    Ok(())
+}
+
+/// Bridge OkuMoney directly cross-chain (no unwrap needed)
+/// Calls PSM bridge_burn directly — for users holding raw OkuMoney.
+/// Matches EVM OkuBridgeRouter.bridgeOkuM()
+pub fn bridge_oku_m(
+    ctx: Context<BridgeOkuM>,
+    oku_m_amount: u64,
+    recipient: [u8; 20],
+    destination_chain: u16,
+) -> Result<()> {
+    let is_paused = ctx.accounts.config.is_paused;
+    require!(!is_paused, RouterError::Paused);
+    require!(oku_m_amount > 0, RouterError::ZeroAmount);
+
+    let bridge_burn_cpi_ctx = CpiContext::new(
+        ctx.accounts.psm_program.to_account_info(),
+        lite_psm::cpi::accounts::BridgeBurn {
+            user: ctx.accounts.user.to_account_info(),
+            bridge_config: ctx.accounts.bridge_config.to_account_info(),
+            config: ctx.accounts.psm_config.to_account_info(),
+            bridge_nonce: ctx.accounts.bridge_nonce.to_account_info(),
+            oku_money_mint: ctx.accounts.oku_money_mint.to_account_info(),
+            user_oku_money_ata: ctx.accounts.user_oku_money_ata.to_account_info(),
+            fee_recipient_ata: ctx.accounts.fee_recipient_ata.to_account_info(),
+            token_2022_program: ctx.accounts.token_2022_program.to_account_info(),
+            system_program: ctx.accounts.system_program.to_account_info(),
+        },
+    );
+    lite_psm::cpi::bridge_burn(
+        bridge_burn_cpi_ctx,
+        oku_m_amount,
+        recipient,
+        destination_chain,
+    )?;
+
+    emit!(BridgeOkuMEvent {
+        user: ctx.accounts.user.key(),
+        oku_money_amount: oku_m_amount,
         destination_chain,
         recipient,
     });

@@ -94,6 +94,50 @@ pub struct BridgeUsdOku<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Bridge OkuMoney directly cross-chain (no unwrap needed)
+/// Calls PSM bridge_burn directly
+#[derive(Accounts)]
+pub struct BridgeOkuM<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        seeds = [RouterConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Account<'info, RouterConfig>,
+
+    /// OkuMoney mint (Token-2022)
+    #[account(mut)]
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    /// User's OkuMoney account
+    #[account(mut)]
+    pub user_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    // PSM program accounts
+    /// CHECK: Bridge config PDA - validated by PSM program CPI
+    pub bridge_config: UncheckedAccount<'info>,
+
+    /// CHECK: PSM config PDA - validated by PSM program CPI
+    pub psm_config: UncheckedAccount<'info>,
+
+    /// CHECK: Bridge nonce PDA - validated by PSM program CPI
+    #[account(mut)]
+    pub bridge_nonce: UncheckedAccount<'info>,
+
+    /// CHECK: Fee recipient ATA - validated by PSM program CPI
+    #[account(mut)]
+    pub fee_recipient_ata: UncheckedAccount<'info>,
+
+    /// CHECK: PSM program — hardcoded to lite_psm::ID
+    #[account(address = lite_psm::ID)]
+    pub psm_program: UncheckedAccount<'info>,
+
+    pub token_2022_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
 #[derive(Accounts)]
 pub struct Pause<'info> {
     #[account(

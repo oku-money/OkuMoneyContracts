@@ -39,6 +39,17 @@ pub mod oku_bridge_router {
         )
     }
 
+    /// Bridge OkuMoney directly cross-chain
+    /// Calls PSM bridge_burn directly — no vault unwrap needed
+    pub fn bridge_oku_m(
+        ctx: Context<BridgeOkuM>,
+        oku_m_amount: u64,
+        recipient: [u8; 20],
+        destination_chain: u16,
+    ) -> Result<()> {
+        instructions::core::bridge_oku_m(ctx, oku_m_amount, recipient, destination_chain)
+    }
+
     pub fn pause(ctx: Context<Pause>) -> Result<()> {
         instructions::admin::pause(ctx)
     }

@@ -90,6 +90,12 @@ pub mod lite_psm {
         instructions::psm::withdraw_buffer(ctx, amount)
     }
 
+    /// Rescue a stuck queue entry — returns escrowed OkuMoney to recipient
+    /// Only queue_processor can call (matches EVM's rescueQueueEntry)
+    pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u32) -> Result<()> {
+        instructions::psm::rescue_queue_entry(ctx, queue_index)
+    }
+
     // ===== PSM Admin =====
 
     pub fn pause(ctx: Context<Pause>) -> Result<()> {

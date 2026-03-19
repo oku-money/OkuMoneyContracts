@@ -72,26 +72,29 @@ pub fn usd_to_oku_money(usd_value: u64, oku_m_price: u64) -> Result<u64> {
     Ok(result as u64)
 }
 
-/// Convert usdOku shares to OkuMoney amount
+/// Convert usdOku shares to OkuMoney amount (price-aware)
 ///
-/// Formula: oku_m_amount = (usd_oku_shares * usd_multiplier) / PRECISION
+/// Formula: oku_m_amount = (usd_oku_shares * usd_multiplier) / oku_m_price
 ///
-/// This represents how much OkuMoney backing corresponds to the given usdOku shares.
+/// Matches EVM: okuMReturned = (shares * usdMultiplier) / okuMPrice
 ///
 /// # Arguments
 /// * `usd_oku_shares` - Amount of usdOku shares (6 decimals)
 /// * `usd_multiplier` - USD multiplier from OkuDollarConfig (1e9 = 1:1)
+/// * `oku_m_price` - OkuMoney price from PsmConfig (1e9 = $1.00)
 ///
 /// # Returns
 /// * Amount of OkuMoney tokens (6 decimals)
-pub fn shares_to_oku_money(usd_oku_shares: u64, usd_multiplier: u64) -> Result<u64> {
+pub fn shares_to_oku_money(usd_oku_shares: u64, usd_multiplier: u64, oku_m_price: u64) -> Result<u64> {
+    require!(oku_m_price > 0, OkuDollarError::InvalidPrice);
+
     // Use u128 for intermediate calculation to prevent overflow
     let numerator = (usd_oku_shares as u128)
         .checked_mul(usd_multiplier as u128)
         .ok_or(OkuDollarError::Overflow)?;
 
     let result = numerator
-        .checked_div(PRECISION as u128)
+        .checked_div(oku_m_price as u128)
         .ok_or(OkuDollarError::Overflow)?;
 
     // Ensure result fits in u64
@@ -102,24 +105,26 @@ pub fn shares_to_oku_money(usd_oku_shares: u64, usd_multiplier: u64) -> Result<u
     Ok(result as u64)
 }
 
-/// Convert OkuMoney amount to usdOku shares
+/// Convert OkuMoney amount to usdOku shares (price-aware)
 ///
-/// Formula: usd_oku_shares = (oku_m_amount * PRECISION) / usd_multiplier
+/// Formula: usd_oku_shares = (oku_m_amount * oku_m_price) / usd_multiplier
 ///
-/// This calculates how many usdOku shares correspond to a given OkuMoney deposit.
+/// Matches EVM: sharesToMint = (actualReceived * okuMPrice) / usdMultiplier
 ///
 /// # Arguments
 /// * `oku_m_amount` - Amount of OkuMoney tokens (6 decimals)
 /// * `usd_multiplier` - USD multiplier from OkuDollarConfig (1e9 = 1:1)
+/// * `oku_m_price` - OkuMoney price from PsmConfig (1e9 = $1.00)
 ///
 /// # Returns
 /// * Amount of usdOku shares (6 decimals)
-pub fn oku_money_to_shares(oku_m_amount: u64, usd_multiplier: u64) -> Result<u64> {
+pub fn oku_money_to_shares(oku_m_amount: u64, usd_multiplier: u64, oku_m_price: u64) -> Result<u64> {
     require!(usd_multiplier > 0, OkuDollarError::InvalidMultiplier);
+    require!(oku_m_price > 0, OkuDollarError::InvalidPrice);
 
     // Use u128 for intermediate calculation to prevent overflow
     let numerator = (oku_m_amount as u128)
-        .checked_mul(PRECISION as u128)
+        .checked_mul(oku_m_price as u128)
         .ok_or(OkuDollarError::Overflow)?;
 
     let result = numerator
@@ -134,17 +139,19 @@ pub fn oku_money_to_shares(oku_m_amount: u64, usd_multiplier: u64) -> Result<u64
     Ok(result as u64)
 }
 
-/// Calculate the collateralization ratio of the vault
+/// Calculate the collateralization ratio of the vault (price-aware)
 ///
-/// Formula: ratio = (reserve_balance * PRECISION) / total_usd_oku_supply
+/// Matches EVM:
+///   reservesDollarValue = (totalOkuMReserves * okuMPrice) / PRECISION
+///   ratio = (reservesDollarValue * PRECISION) / totalUsdObligations
 ///
-/// Where reserve_balance is in OkuMoney terms and total_usd_oku_supply
-/// is converted to OkuMoney-equivalent using usd_multiplier.
+/// Simplified: ratio = (reserve_balance * oku_m_price * PRECISION) / (total_usd_oku_supply * usd_multiplier)
 ///
 /// # Arguments
 /// * `reserve_balance` - OkuMoney balance in reserve vault (6 decimals)
 /// * `total_usd_oku_supply` - Total usdOku supply (6 decimals)
 /// * `usd_multiplier` - USD multiplier from OkuDollarConfig (1e9 = 1:1)
+/// * `oku_m_price` - OkuMoney price from PsmConfig (1e9 = $1.00)
 ///
 /// # Returns
 /// * Collateralization ratio scaled by PRECISION (1e9 = 100%)
@@ -152,26 +159,31 @@ pub fn calculate_collateral_ratio(
     reserve_balance: u64,
     total_usd_oku_supply: u64,
     usd_multiplier: u64,
+    oku_m_price: u64,
 ) -> Result<u64> {
     // If no usdOku supply, ratio is infinite (represented as max)
     if total_usd_oku_supply == 0 {
         return Ok(u64::MAX);
     }
 
-    // Calculate OkuMoney-equivalent of total usdOku supply
-    let required_oku_money = shares_to_oku_money(total_usd_oku_supply, usd_multiplier)?;
+    // total_usd_obligations = (total_usd_oku_supply * usd_multiplier) / PRECISION
+    let denominator = (total_usd_oku_supply as u128)
+        .checked_mul(usd_multiplier as u128)
+        .ok_or(OkuDollarError::Overflow)?;
 
-    if required_oku_money == 0 {
+    if denominator == 0 {
         return Ok(u64::MAX);
     }
 
-    // Calculate ratio: (reserve_balance * PRECISION) / required_oku_money
+    // ratio = (reserve_balance * oku_m_price * PRECISION) / (total_usd_oku_supply * usd_multiplier)
     let numerator = (reserve_balance as u128)
+        .checked_mul(oku_m_price as u128)
+        .ok_or(OkuDollarError::Overflow)?
         .checked_mul(PRECISION as u128)
         .ok_or(OkuDollarError::Overflow)?;
 
     let result = numerator
-        .checked_div(required_oku_money as u128)
+        .checked_div(denominator)
         .ok_or(OkuDollarError::Overflow)?;
 
     // Cap at u64::MAX
@@ -188,6 +200,7 @@ pub fn calculate_collateral_ratio(
 /// * `reserve_balance` - OkuMoney balance in reserve vault (6 decimals)
 /// * `total_usd_oku_supply` - Total usdOku supply (6 decimals)
 /// * `usd_multiplier` - USD multiplier from OkuDollarConfig (1e9 = 1:1)
+/// * `oku_m_price` - OkuMoney price from PsmConfig (1e9 = $1.00)
 /// * `min_collateral_ratio` - Minimum required ratio (scaled by PRECISION)
 ///
 /// # Returns
@@ -196,9 +209,10 @@ pub fn is_sufficiently_collateralized(
     reserve_balance: u64,
     total_usd_oku_supply: u64,
     usd_multiplier: u64,
+    oku_m_price: u64,
     min_collateral_ratio: u64,
 ) -> Result<bool> {
-    let ratio = calculate_collateral_ratio(reserve_balance, total_usd_oku_supply, usd_multiplier)?;
+    let ratio = calculate_collateral_ratio(reserve_balance, total_usd_oku_supply, usd_multiplier, oku_m_price)?;
     Ok(ratio >= min_collateral_ratio)
 }
 
@@ -244,52 +258,81 @@ mod tests {
 
     #[test]
     fn test_shares_to_oku_money() {
-        // At 1:1 multiplier (PRECISION), 1 usdOku = 1 OkuMoney
+        // At 1:1 multiplier, price $1.00: 1 usdOku = 1 OkuMoney
         assert_eq!(
-            shares_to_oku_money(1_000_000, PRECISION).unwrap(),
+            shares_to_oku_money(1_000_000, PRECISION, PRECISION).unwrap(),
             1_000_000
         );
 
-        // At 1.1:1 multiplier, 1 usdOku = 1.1 OkuMoney
+        // At 1.1:1 multiplier, price $1.00: 1 usdOku = 1.1 OkuMoney
         assert_eq!(
-            shares_to_oku_money(1_000_000, 1_100_000_000).unwrap(),
+            shares_to_oku_money(1_000_000, 1_100_000_000, PRECISION).unwrap(),
             1_100_000
+        );
+
+        // At 1:1 multiplier, price $1.05: 1 usdOku = ~0.952381 OkuMoney
+        // (1_000_000 * 1_000_000_000) / 1_050_000_000 = 952_380
+        assert_eq!(
+            shares_to_oku_money(1_000_000, PRECISION, 1_050_000_000).unwrap(),
+            952_380
+        );
+
+        // At 1:1 multiplier, price $1.05: 105 usdOku = 100 OkuMoney
+        assert_eq!(
+            shares_to_oku_money(105_000_000, PRECISION, 1_050_000_000).unwrap(),
+            100_000_000
         );
     }
 
     #[test]
     fn test_oku_money_to_shares() {
-        // At 1:1 multiplier (PRECISION), 1 OkuMoney = 1 usdOku
+        // At 1:1 multiplier, price $1.00: 1 OkuMoney = 1 usdOku
         assert_eq!(
-            oku_money_to_shares(1_000_000, PRECISION).unwrap(),
+            oku_money_to_shares(1_000_000, PRECISION, PRECISION).unwrap(),
             1_000_000
         );
 
-        // At 1.1:1 multiplier, 1.1 OkuMoney = 1 usdOku
+        // At 1.1:1 multiplier, price $1.00: 1.1 OkuMoney = 1 usdOku
         assert_eq!(
-            oku_money_to_shares(1_100_000, 1_100_000_000).unwrap(),
+            oku_money_to_shares(1_100_000, 1_100_000_000, PRECISION).unwrap(),
             1_000_000
+        );
+
+        // At 1:1 multiplier, price $1.05: 100 OkuMoney = 105 usdOku
+        // (100_000_000 * 1_050_000_000) / 1_000_000_000 = 105_000_000
+        assert_eq!(
+            oku_money_to_shares(100_000_000, PRECISION, 1_050_000_000).unwrap(),
+            105_000_000
         );
     }
 
     #[test]
     fn test_calculate_collateral_ratio() {
-        // 100% collateralized at 1:1 multiplier
+        // 100% collateralized at 1:1 multiplier, price $1.00
         assert_eq!(
-            calculate_collateral_ratio(100_000_000, 100_000_000, PRECISION).unwrap(),
+            calculate_collateral_ratio(100_000_000, 100_000_000, PRECISION, PRECISION).unwrap(),
             PRECISION
         );
 
-        // 110% collateralized (reserve = 110, supply = 100, multiplier = 1:1)
+        // 110% collateralized (reserve = 110, supply = 100, multiplier = 1:1, price $1.00)
         assert_eq!(
-            calculate_collateral_ratio(110_000_000, 100_000_000, PRECISION).unwrap(),
+            calculate_collateral_ratio(110_000_000, 100_000_000, PRECISION, PRECISION).unwrap(),
             1_100_000_000
         );
 
-        // 95% collateralized (reserve = 95, supply = 100, multiplier = 1:1)
+        // 95% collateralized (reserve = 95, supply = 100, multiplier = 1:1, price $1.00)
         assert_eq!(
-            calculate_collateral_ratio(95_000_000, 100_000_000, PRECISION).unwrap(),
+            calculate_collateral_ratio(95_000_000, 100_000_000, PRECISION, PRECISION).unwrap(),
             950_000_000
+        );
+
+        // Price-aware: reserve = 100 OkuM at price $1.05, supply = 100 usdOku at multiplier 1:1
+        // reservesDollarValue = (100 * 1.05) = $105
+        // totalUsdObligations = (100 * 1.0) = $100
+        // ratio = 105/100 = 1.05 = 1_050_000_000
+        assert_eq!(
+            calculate_collateral_ratio(100_000_000, 100_000_000, PRECISION, 1_050_000_000).unwrap(),
+            1_050_000_000
         );
     }
 }

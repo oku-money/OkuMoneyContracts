@@ -69,32 +69,35 @@ const DEAD_ADDRESS = SystemProgram.programId;
  * Calculate expected shares from OkuMoney deposit
  * Formula: shares = (oku_m_amount * PRECISION) / usd_multiplier
  */
-function calculateExpectedShares(okuMAmount: BN, usdMultiplier: BN): BN {
-  return okuMAmount.mul(PRECISION).div(usdMultiplier);
+function calculateExpectedShares(okuMAmount: BN, usdMultiplier: BN, okuMPrice?: BN): BN {
+  const price = okuMPrice || PRECISION;
+  return okuMAmount.mul(price).div(usdMultiplier);
 }
 
 /**
  * Calculate expected OkuMoney from shares withdrawal
- * Formula: oku_m_amount = (shares * usd_multiplier) / PRECISION
+ * Formula: oku_m_amount = (shares * usd_multiplier) / oku_m_price
  */
-function calculateExpectedOkuMoney(shares: BN, usdMultiplier: BN): BN {
-  return shares.mul(usdMultiplier).div(PRECISION);
+function calculateExpectedOkuMoney(shares: BN, usdMultiplier: BN, okuMPrice?: BN): BN {
+  const price = okuMPrice || PRECISION;
+  return shares.mul(usdMultiplier).div(price);
 }
 
 /**
- * Calculate collateralization ratio
- * Formula: ratio = (reserve_balance * PRECISION) / required_oku_money
- * Where required_oku_money = (total_supply * usd_multiplier) / PRECISION
+ * Calculate collateralization ratio (price-aware)
+ * Formula: ratio = (reserve_balance * oku_m_price * PRECISION) / (total_supply * usd_multiplier)
  */
 function calculateCollateralRatio(
   reserveBalance: BN,
   totalSupply: BN,
-  usdMultiplier: BN
+  usdMultiplier: BN,
+  okuMPrice?: BN
 ): BN {
+  const price = okuMPrice || PRECISION;
   if (totalSupply.isZero()) return new BN(Number.MAX_SAFE_INTEGER);
-  const requiredOkuMoney = totalSupply.mul(usdMultiplier).div(PRECISION);
-  if (requiredOkuMoney.isZero()) return new BN(Number.MAX_SAFE_INTEGER);
-  return reserveBalance.mul(PRECISION).div(requiredOkuMoney);
+  const denominator = totalSupply.mul(usdMultiplier);
+  if (denominator.isZero()) return new BN(Number.MAX_SAFE_INTEGER);
+  return reserveBalance.mul(price).mul(PRECISION).div(denominator);
 }
 
 // ============================================================================
@@ -475,7 +478,7 @@ describe("oku-dollar", () => {
         const wrapAmount = new BN(100_000_000); // 100 OkuMoney
         
         await program.methods
-          .wrap(wrapAmount)
+          .wrap(wrapAmount, new BN(0))
           .accountsPartial({
             user: user1.publicKey,
             config: vaultConfigPda,
@@ -501,13 +504,14 @@ describe("oku-dollar", () => {
       // First deposit
       const wrapAmount = new BN(1_000_000_000); // 1000 OkuMoney
       const config = await program.account.okuDollarConfig.fetch(vaultConfigPda);
-      const expectedShares = calculateExpectedShares(wrapAmount, config.usdMultiplier);
+      const psmConfig = await psmProgram.account.psmConfig.fetch(psmConfigPda);
+      const expectedShares = calculateExpectedShares(wrapAmount, config.usdMultiplier, psmConfig.okuMPrice);
       const expectedUserShares = expectedShares.sub(MINIMUM_LIQUIDITY);
 
       const user1OkuMoneyBefore = await getAccount(provider.connection, user1OkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
 
       await program.methods
-        .wrap(wrapAmount)
+        .wrap(wrapAmount, new BN(0))
         .accountsPartial({
           user: user1.publicKey,
           config: vaultConfigPda,
@@ -544,12 +548,13 @@ describe("oku-dollar", () => {
     it("wraps OkuMoney -> usdOku (subsequent deposit)", async () => {
       const wrapAmount = new BN(500_000_000); // 500 OkuMoney
       const config = await program.account.okuDollarConfig.fetch(vaultConfigPda);
-      const expectedShares = calculateExpectedShares(wrapAmount, config.usdMultiplier);
+      const psmConfig = await psmProgram.account.psmConfig.fetch(psmConfigPda);
+      const expectedShares = calculateExpectedShares(wrapAmount, config.usdMultiplier, psmConfig.okuMPrice);
 
       const user1UsdOkuBefore = await getAccount(provider.connection, user1UsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
 
       await program.methods
-        .wrap(wrapAmount)
+        .wrap(wrapAmount, new BN(0))
         .accountsPartial({
           user: user1.publicKey,
           config: vaultConfigPda,
@@ -586,7 +591,7 @@ describe("oku-dollar", () => {
 
       try {
         await program.methods
-          .wrap(new BN(1_000_000))
+          .wrap(new BN(1_000_000), new BN(0))
           .accountsPartial({
             user: user1.publicKey,
             config: vaultConfigPda,
@@ -622,7 +627,7 @@ describe("oku-dollar", () => {
     it("fails to wrap zero amount", async () => {
       try {
         await program.methods
-          .wrap(new BN(0))
+          .wrap(new BN(0), new BN(0))
           .accountsPartial({
             user: user1.publicKey,
             config: vaultConfigPda,
@@ -653,11 +658,12 @@ describe("oku-dollar", () => {
   describe("unwrap", () => {
     it("unwraps usdOku -> OkuMoney", async () => {
       const config = await program.account.okuDollarConfig.fetch(vaultConfigPda);
+      const psmConfig = await psmProgram.account.psmConfig.fetch(psmConfigPda);
       const user1UsdOkuBefore = await getAccount(provider.connection, user1UsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
       const user1OkuMoneyBefore = await getAccount(provider.connection, user1OkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
 
       const unwrapShares = new BN(Math.floor(Number(user1UsdOkuBefore.amount) / 4)); // Unwrap 25%
-      const expectedOkuMoney = calculateExpectedOkuMoney(unwrapShares, config.usdMultiplier);
+      const expectedOkuMoney = calculateExpectedOkuMoney(unwrapShares, config.usdMultiplier, psmConfig.okuMPrice);
 
       await program.methods
         .unwrap(unwrapShares)
@@ -776,6 +782,7 @@ describe("oku-dollar", () => {
           config: vaultConfigPda,
           reserveVault: reserveVault,
           usdOkuMint: usdOkuMint,
+          psmConfig: psmConfigPda,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([usdRebaser])
@@ -797,6 +804,7 @@ describe("oku-dollar", () => {
             config: vaultConfigPda,
             reserveVault: reserveVault,
             usdOkuMint: usdOkuMint,
+            psmConfig: psmConfigPda,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([usdRebaser])
@@ -819,6 +827,7 @@ describe("oku-dollar", () => {
             config: vaultConfigPda,
             reserveVault: reserveVault,
             usdOkuMint: usdOkuMint,
+            psmConfig: psmConfigPda,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([user1])
@@ -855,6 +864,7 @@ describe("oku-dollar", () => {
             config: vaultConfigPda,
             reserveVault: reserveVault,
             usdOkuMint: usdOkuMint,
+            psmConfig: psmConfigPda,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([usdRebaser])
@@ -954,6 +964,7 @@ describe("oku-dollar", () => {
           destinationAta: reserveManagerOkuMoneyAta,
           reserveVault: reserveVault,
           usdOkuMint: usdOkuMint,
+          psmConfig: psmConfigPda,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([reserveManager])
@@ -977,6 +988,7 @@ describe("oku-dollar", () => {
             destinationAta: reserveManagerOkuMoneyAta,
             reserveVault: reserveVault,
             usdOkuMint: usdOkuMint,
+            psmConfig: psmConfigPda,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([reserveManager])
@@ -1105,7 +1117,7 @@ describe("oku-dollar", () => {
       const user1UsdOkuBefore = await getAccount(provider.connection, user1UsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
 
       await program.methods
-        .wrap(wrapAmount)
+        .wrap(wrapAmount, new BN(0))
         .accountsPartial({
           user: user1.publicKey,
           config: vaultConfigPda,
@@ -1152,7 +1164,8 @@ describe("oku-dollar", () => {
       // With multiplier >= 1.0 (due to previous yield distribution), user should get back at least original
       // or slightly more (due to yield). Difference should be minimal (rounding only).
       const configAfter = await program.account.okuDollarConfig.fetch(vaultConfigPda);
-      const expectedReturn = sharesReceived.mul(configAfter.usdMultiplier).div(PRECISION);
+      const psmConfigAfter = await psmProgram.account.psmConfig.fetch(psmConfigPda);
+      const expectedReturn = sharesReceived.mul(configAfter.usdMultiplier).div(psmConfigAfter.okuMPrice);
       
       const actualReturn = Number(user1OkuMoneyFinal.amount) - (Number(user1OkuMoneyInitial.amount) - wrapAmount.toNumber());
       expect(actualReturn).to.be.closeTo(expectedReturn.toNumber(), 1);
@@ -1171,8 +1184,9 @@ describe("oku-dollar", () => {
 
       // Even with large multiplier, a small deposit should get meaningful shares
       const config = await program.account.okuDollarConfig.fetch(vaultConfigPda);
+      const psmConfigNow = await psmProgram.account.psmConfig.fetch(psmConfigPda);
       const smallDeposit = new BN(2_000_000); // 2 OkuMoney
-      const expectedShares = calculateExpectedShares(smallDeposit, config.usdMultiplier);
+      const expectedShares = calculateExpectedShares(smallDeposit, config.usdMultiplier, psmConfigNow.okuMPrice);
 
       expect(expectedShares.toNumber()).to.be.greaterThan(0, "Small depositor should receive meaningful shares");
     });

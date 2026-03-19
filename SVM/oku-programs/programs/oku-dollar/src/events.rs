@@ -18,6 +18,7 @@ pub struct WrapEvent {
     pub oku_m_amount: u64,
     pub shares_minted: u64,
     pub usd_multiplier: u64,
+    pub oku_m_price: u64,
 }
 
 #[event]
@@ -26,6 +27,7 @@ pub struct UnwrapEvent {
     pub shares_burned: u64,
     pub oku_m_amount: u64,
     pub usd_multiplier: u64,
+    pub oku_m_price: u64,
 }
 
 #[event]

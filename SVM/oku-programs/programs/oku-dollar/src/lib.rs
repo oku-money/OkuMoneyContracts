@@ -39,8 +39,8 @@ pub mod oku_dollar {
 
     /// Wrap OkuMoney -> usdOku
     /// Deposits OkuMoney and mints usdOku shares
-    pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64) -> Result<()> {
-        instructions::core::wrap(ctx, oku_m_amount)
+    pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Result<()> {
+        instructions::core::wrap(ctx, oku_m_amount, min_shares_out)
     }
 
     /// Unwrap usdOku -> OkuMoney

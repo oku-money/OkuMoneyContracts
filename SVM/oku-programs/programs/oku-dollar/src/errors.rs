@@ -52,4 +52,7 @@ pub enum OkuDollarError {
 
     #[msg("Invalid mint extension")]
     InvalidMintExtension,
+
+    #[msg("Output below minimum (slippage exceeded)")]
+    SlippageExceeded,
 }

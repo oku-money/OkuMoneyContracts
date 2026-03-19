@@ -82,4 +82,8 @@ pub enum OkuError {
     WrongSourceChain,
     #[msg("Invalid deadline value")]
     InvalidDeadline,
+    #[msg("Invalid queue index")]
+    InvalidQueueIndex,
+    #[msg("Queue entry already cleared")]
+    EntryAlreadyCleared,
 }

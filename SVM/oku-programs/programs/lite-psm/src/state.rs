@@ -83,6 +83,9 @@ impl PsmConfig {
     pub const LEN: usize = 8 + 1 + 32 * 12 + 32 * 4 + 8 * 2 + 1 + 32 + 8 + 8 + 8 + 32 * 2;
 }
 
+// Compile-time assertion: if PsmConfig layout changes, this will fail to compile
+const _: () = assert!(PsmConfig::LEN == 658);
+
 /// Redemption queue PDA
 /// Seeds: ["redemption_queue"]
 #[account]

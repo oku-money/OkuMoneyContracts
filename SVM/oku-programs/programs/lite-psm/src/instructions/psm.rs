@@ -1,4 +1,4 @@
-use crate::contexts::{DepositBuffer, MintOkuM, ProcessQueue, RedeemOkuM, WithdrawBuffer};
+use crate::contexts::{DepositBuffer, MintOkuM, ProcessQueue, RedeemOkuM, RescueQueueEntry, WithdrawBuffer};
 use crate::errors::OkuError;
 use crate::events::*;
 use crate::helpers::{check_oracle_reserves, check_yield_lock, PRECISION};
@@ -440,6 +440,80 @@ pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> 
     emit!(BufferWithdrawEvent {
         role_admin: ctx.accounts.buffer_withdrawer.key(),
         amount,
+    });
+
+    Ok(())
+}
+
+/// Rescue a stuck queue entry — return escrowed OkuMoney to a recipient
+///
+/// Matches EVM's rescueQueueEntry(). The queue_processor can rescue any
+/// pending entry by returning the escrowed OkuMoney (not burning it).
+/// The entry is cleared and the head advances past contiguous cleared entries.
+///
+/// # Arguments
+/// * `queue_index` - Absolute index of the entry to rescue (must be between head and tail)
+pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u32) -> Result<()> {
+    let queue = &mut ctx.accounts.redemption_queue;
+    let bump = ctx.accounts.config.bump;
+
+    // Validate index is within pending range
+    require!(
+        queue_index >= queue.head && queue_index < queue.tail,
+        OkuError::InvalidQueueIndex
+    );
+
+    let position = (queue_index % RedemptionQueue::MAX_ENTRIES as u32) as usize;
+    let entry = &queue.entries[position];
+
+    // Check entry hasn't already been cleared
+    require!(
+        entry.user != Pubkey::default(),
+        OkuError::EntryAlreadyCleared
+    );
+
+    let original_user = entry.user;
+    let oku_m_amount = entry.oku_m_amount;
+    let oku_money_decimals = ctx.accounts.oku_money_mint.decimals;
+
+    // Transfer OkuMoney from escrow back to recipient (not burning — user reclaims tokens)
+    let seeds = &[PsmConfig::SEED, &[bump]];
+    let signer = &[&seeds[..]];
+
+    token_interface::transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_2022_program.to_account_info(),
+            token_interface::TransferChecked {
+                from: ctx.accounts.vault_oku_money.to_account_info(),
+                to: ctx.accounts.recipient_oku_money_ata.to_account_info(),
+                authority: ctx.accounts.config.to_account_info(),
+                mint: ctx.accounts.oku_money_mint.to_account_info(),
+            },
+            signer,
+        ),
+        oku_m_amount,
+        oku_money_decimals,
+    )?;
+
+    // Clear the entry
+    let queue = &mut ctx.accounts.redemption_queue;
+    queue.entries[position] = QueueEntry::default();
+
+    // Advance head past contiguous cleared entries (matches EVM behavior)
+    while queue.head < queue.tail {
+        let head_pos = (queue.head % RedemptionQueue::MAX_ENTRIES as u32) as usize;
+        if queue.entries[head_pos].user == Pubkey::default() {
+            queue.head = queue.head.wrapping_add(1);
+        } else {
+            break;
+        }
+    }
+
+    emit!(RedemptionRescuedEvent {
+        queue_index,
+        original_user,
+        recipient: ctx.accounts.recipient_oku_money_ata.owner,
+        oku_m_amount,
     });
 
     Ok(())

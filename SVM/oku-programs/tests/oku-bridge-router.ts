@@ -275,7 +275,7 @@ describe("oku-bridge-router", () => {
 
     // Wrap some OkuMoney to get usdOku
     await vaultProgram.methods
-      .wrap(new BN(1_000_000_000)) // 1000 OkuMoney
+      .wrap(new BN(1_000_000_000), new BN(0)) // 1000 OkuMoney, no slippage protection
       .accountsPartial({
         user: user.publicKey,
         config: vaultConfigPda,

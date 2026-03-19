@@ -45,6 +45,14 @@ pub struct RedemptionProcessedEvent {
 }
 
 #[event]
+pub struct RedemptionRescuedEvent {
+    pub queue_index: u32,
+    pub original_user: Pubkey,
+    pub recipient: Pubkey,
+    pub oku_m_amount: u64,
+}
+
+#[event]
 pub struct BufferDepositEvent {
     pub orchestrator: Pubkey,
     pub amount: u64,

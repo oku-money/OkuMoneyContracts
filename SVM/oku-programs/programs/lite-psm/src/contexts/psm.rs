@@ -271,3 +271,46 @@ pub struct WithdrawBuffer<'info> {
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
 }
+
+/// Rescue a stuck queue entry — return escrowed OkuMoney to an alternate recipient
+/// Only queue_processor can call this (matches EVM's QUEUE_RESCUER role)
+#[derive(Accounts)]
+pub struct RescueQueueEntry<'info> {
+    #[account(
+        constraint = queue_processor.key() == config.queue_processor @ OkuError::Unauthorized
+    )]
+    pub queue_processor: Signer<'info>,
+
+    #[account(
+        seeds = [PsmConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Box<Account<'info, PsmConfig>>,
+
+    #[account(
+        mut,
+        seeds = [RedemptionQueue::SEED],
+        bump = redemption_queue.bump
+    )]
+    pub redemption_queue: Box<Account<'info, RedemptionQueue>>,
+
+    /// OkuMoney mint (Token-2022)
+    #[account(
+        address = config.oku_money_mint,
+        mint::token_program = token_2022_program
+    )]
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    /// PSM's OkuMoney escrow vault — holds queued redemptions
+    #[account(
+        mut,
+        address = config.vault_oku_money
+    )]
+    pub vault_oku_money: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    /// Recipient's OkuMoney account (can be original user or alternate)
+    #[account(mut)]
+    pub recipient_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    pub token_2022_program: Program<'info, Token2022>,
+}

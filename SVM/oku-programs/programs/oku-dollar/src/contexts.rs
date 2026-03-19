@@ -232,6 +232,12 @@ pub struct UpdateUsdMultiplier<'info> {
     )]
     pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
+    /// PSM config account (for reading oku_m_price for collateral check)
+    #[account(
+        address = config.psm_config
+    )]
+    pub psm_config: Account<'info, PsmConfig>,
+
     pub token_2022_program: Program<'info, Token2022>,
 }
 
@@ -318,6 +324,12 @@ pub struct WithdrawReserves<'info> {
         mint::token_program = token_2022_program
     )]
     pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    /// PSM config account (for reading oku_m_price for collateral check)
+    #[account(
+        address = config.psm_config
+    )]
+    pub psm_config: Account<'info, PsmConfig>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }

@@ -10,6 +10,7 @@ use crate::helpers::{
 use crate::state::OkuDollarConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
+use lite_psm::helpers::yield_lock::check_yield_lock;
 
 /// Initialize the OkuDollar vault
 /// Creates config PDA, usdOku mint, and reserve vault
@@ -73,22 +74,27 @@ pub fn initialize(
 /// Wrap OkuMoney -> usdOku
 /// Transfers OkuMoney from user to reserve vault, mints usdOku shares to user.
 ///
-/// Shares minted = (oku_m_amount * PRECISION) / usd_multiplier
+/// Shares minted = (oku_m_amount * oku_m_price) / usd_multiplier
+/// Matches EVM: sharesToMint = (actualReceived * okuMPrice) / usdMultiplier
 ///
 /// First deposit: subtracts MINIMUM_LIQUIDITY dead shares to prevent
 /// inflation attacks. `dead_shares_ata` (optional account) must be provided
 /// on the first deposit — it receives the permanently-locked dead shares.
-pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64) -> Result<()> {
+pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Result<()> {
+    // Yield lock: block wrap in same slot as yield distribution (prevents sandwich attacks)
+    check_yield_lock(&ctx.accounts.psm_config)?;
+
     // Read state
     let total_supply = ctx.accounts.usd_oku_mint.supply;
     let bump = ctx.accounts.config.bump;
     let usd_multiplier = ctx.accounts.config.usd_multiplier;
+    let oku_m_price = ctx.accounts.psm_config.oku_m_price;
     let decimals = ctx.accounts.oku_money_mint.decimals;
 
     require!(oku_m_amount > 0, OkuDollarError::ZeroAmount);
 
-    // Calculate shares to mint based on current multiplier
-    let shares = oku_money_to_shares(oku_m_amount, usd_multiplier)?;
+    // Calculate shares to mint based on current multiplier and price
+    let shares = oku_money_to_shares(oku_m_amount, usd_multiplier, oku_m_price)?;
     require!(shares > 0, OkuDollarError::ZeroAmount);
 
     // Transfer OkuMoney from user to reserve vault (Token-2022)
@@ -116,6 +122,9 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64) -> Result<()> {
         let user_shares = shares
             .checked_sub(MINIMUM_LIQUIDITY)
             .ok_or(OkuDollarError::Overflow)?;
+
+        // Slippage protection (on user shares after dead shares subtraction)
+        require!(user_shares >= min_shares_out, OkuDollarError::SlippageExceeded);
 
         let dead_ata = ctx
             .accounts
@@ -168,8 +177,12 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64) -> Result<()> {
             oku_m_amount,
             shares_minted: user_shares,
             usd_multiplier,
+            oku_m_price,
         });
     } else {
+        // Slippage protection
+        require!(shares >= min_shares_out, OkuDollarError::SlippageExceeded);
+
         // Subsequent deposits — direct share calculation
         // Mint usdOku shares to user (Token-2022)
         token_interface::mint_to(
@@ -190,6 +203,7 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64) -> Result<()> {
             oku_m_amount,
             shares_minted: shares,
             usd_multiplier,
+            oku_m_price,
         });
     }
 
@@ -199,23 +213,28 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64) -> Result<()> {
 /// Unwrap usdOku -> OkuMoney
 /// Burns usdOku shares from user, transfers OkuMoney from reserve vault to user.
 ///
-/// OkuMoney returned = (shares * usd_multiplier) / PRECISION
+/// OkuMoney returned = (shares * usd_multiplier) / oku_m_price
+/// Matches EVM: okuMReturned = (usdAmount * usdMultiplier) / okuMPrice
 ///
 /// NOTE: Unwrap is blocked when paused (matches EVM behavior).
 /// Users must wait for unpause to exit.
 pub fn unwrap(ctx: Context<Unwrap>, shares: u64) -> Result<()> {
+    // Yield lock: block unwrap in same slot as yield distribution (prevents sandwich attacks)
+    check_yield_lock(&ctx.accounts.psm_config)?;
+
     // Read state
     let total_supply = ctx.accounts.usd_oku_mint.supply;
     let bump = ctx.accounts.config.bump;
     let usd_multiplier = ctx.accounts.config.usd_multiplier;
+    let oku_m_price = ctx.accounts.psm_config.oku_m_price;
     let reserve_balance = ctx.accounts.reserve_vault.amount;
     let decimals = ctx.accounts.oku_money_mint.decimals;
 
     require!(shares > 0, OkuDollarError::ZeroAmount);
     require!(shares <= total_supply, OkuDollarError::InsufficientShares);
 
-    // Calculate OkuMoney to return based on current multiplier
-    let oku_m_out = shares_to_oku_money(shares, usd_multiplier)?;
+    // Calculate OkuMoney to return based on current multiplier and price
+    let oku_m_out = shares_to_oku_money(shares, usd_multiplier, oku_m_price)?;
     require!(oku_m_out > 0, OkuDollarError::ZeroAmount);
 
     // Safety: ensure we have enough reserves
@@ -261,6 +280,7 @@ pub fn unwrap(ctx: Context<Unwrap>, shares: u64) -> Result<()> {
         shares_burned: shares,
         oku_m_amount: oku_m_out,
         usd_multiplier,
+        oku_m_price,
     });
 
     Ok(())
@@ -292,6 +312,7 @@ pub fn update_usd_multiplier(
     // Check collateralization after the update
     let reserve_balance = ctx.accounts.reserve_vault.amount;
     let total_supply = ctx.accounts.usd_oku_mint.supply;
+    let oku_m_price = ctx.accounts.psm_config.oku_m_price;
 
     // Verify the vault remains sufficiently collateralized with new multiplier
     require!(
@@ -299,6 +320,7 @@ pub fn update_usd_multiplier(
             reserve_balance,
             total_supply,
             new_usd_multiplier,
+            oku_m_price,
             min_collateral_ratio,
         )?,
         OkuDollarError::InsufficientCollateral
@@ -360,6 +382,7 @@ pub fn withdraw_reserves(ctx: Context<WithdrawReserves>, amount: u64) -> Result<
     let min_collateral_ratio = ctx.accounts.config.min_collateral_ratio;
     let reserve_balance = ctx.accounts.reserve_vault.amount;
     let total_supply = ctx.accounts.usd_oku_mint.supply;
+    let oku_m_price = ctx.accounts.psm_config.oku_m_price;
     let decimals = ctx.accounts.oku_money_mint.decimals;
 
     require!(
@@ -378,6 +401,7 @@ pub fn withdraw_reserves(ctx: Context<WithdrawReserves>, amount: u64) -> Result<
             new_reserve_balance,
             total_supply,
             usd_multiplier,
+            oku_m_price,
             min_collateral_ratio,
         )?,
         OkuDollarError::InsufficientCollateral

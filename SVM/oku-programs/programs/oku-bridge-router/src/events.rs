@@ -16,6 +16,14 @@ pub struct BridgeUsdOkuEvent {
 }
 
 #[event]
+pub struct BridgeOkuMEvent {
+    pub user: Pubkey,
+    pub oku_money_amount: u64,
+    pub destination_chain: u16,
+    pub recipient: [u8; 20],
+}
+
+#[event]
 pub struct PauseEvent {
     pub pauser: Pubkey,
     pub paused: bool,

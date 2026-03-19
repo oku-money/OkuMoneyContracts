@@ -1,0 +1,411 @@
+use crate::contexts::{
+    DepositReserves, Initialize, Unwrap, UpdateUsdMultiplier, WithdrawReserves, Wrap,
+};
+use crate::errors::OkuDollarError;
+use crate::events::*;
+use crate::helpers::{
+    is_sufficiently_collateralized, oku_money_to_shares, shares_to_oku_money, MINIMUM_LIQUIDITY,
+    PRECISION,
+};
+use crate::state::OkuDollarConfig;
+use anchor_lang::prelude::*;
+use anchor_spl::token_interface;
+
+/// Initialize the OkuDollar vault
+/// Creates config PDA, usdOku mint, and reserve vault
+///
+/// # Arguments
+/// * `pauser` - Address that can pause the vault
+/// * `unpauser` - Address that can unpause the vault
+/// * `usd_rebaser` - Address that can update USD multiplier (orchestrator)
+/// * `reserve_manager` - Address that can deposit/withdraw reserves
+/// * `min_collateral_ratio` - Minimum collateral ratio (scaled by PRECISION)
+pub fn initialize(
+    ctx: Context<Initialize>,
+    pauser: Pubkey,
+    unpauser: Pubkey,
+    usd_rebaser: Pubkey,
+    reserve_manager: Pubkey,
+    min_collateral_ratio: u64,
+) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    config.bump = ctx.bumps.config;
+
+    // Set granular authorities
+    config.role_admin = ctx.accounts.role_admin.key();
+    config.pauser = pauser;
+    config.unpauser = unpauser;
+    config.usd_rebaser = usd_rebaser;
+    config.reserve_manager = reserve_manager;
+
+    // Set token references
+    config.oku_money_mint = ctx.accounts.oku_money_mint.key();
+    config.usd_oku_mint = ctx.accounts.usd_oku_mint.key();
+    config.reserve_vault = ctx.accounts.reserve_vault.key();
+    config.psm_config = ctx.accounts.psm_config.key();
+
+    // Initialize USD multiplier at 1:1 (PRECISION)
+    config.usd_multiplier = PRECISION;
+    config.usd_last_update_time = Clock::get()?.unix_timestamp;
+
+    // Set minimum collateral ratio (must be >= floor)
+    require!(
+        min_collateral_ratio >= crate::helpers::MIN_COLLATERAL_RATIO_FLOOR,
+        OkuDollarError::InvalidCollateralRatio
+    );
+    config.min_collateral_ratio = min_collateral_ratio;
+
+    config.is_paused = false;
+
+    emit!(InitializeEvent {
+        role_admin: config.role_admin,
+        oku_money_mint: config.oku_money_mint,
+        usd_oku_mint: config.usd_oku_mint,
+        reserve_vault: config.reserve_vault,
+        psm_config: config.psm_config,
+        usd_multiplier: config.usd_multiplier,
+        min_collateral_ratio: config.min_collateral_ratio,
+    });
+
+    Ok(())
+}
+
+/// Wrap OkuMoney -> usdOku
+/// Transfers OkuMoney from user to reserve vault, mints usdOku shares to user.
+///
+/// Shares minted = (oku_m_amount * PRECISION) / usd_multiplier
+///
+/// First deposit: subtracts MINIMUM_LIQUIDITY dead shares to prevent
+/// inflation attacks. `dead_shares_ata` (optional account) must be provided
+/// on the first deposit — it receives the permanently-locked dead shares.
+pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64) -> Result<()> {
+    // Read state
+    let total_supply = ctx.accounts.usd_oku_mint.supply;
+    let bump = ctx.accounts.config.bump;
+    let usd_multiplier = ctx.accounts.config.usd_multiplier;
+    let decimals = ctx.accounts.oku_money_mint.decimals;
+
+    require!(oku_m_amount > 0, OkuDollarError::ZeroAmount);
+
+    // Calculate shares to mint based on current multiplier
+    let shares = oku_money_to_shares(oku_m_amount, usd_multiplier)?;
+    require!(shares > 0, OkuDollarError::ZeroAmount);
+
+    // Transfer OkuMoney from user to reserve vault (Token-2022)
+    token_interface::transfer_checked(
+        CpiContext::new(
+            ctx.accounts.token_2022_program.to_account_info(),
+            token_interface::TransferChecked {
+                from: ctx.accounts.user_oku_money_ata.to_account_info(),
+                to: ctx.accounts.reserve_vault.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
+                mint: ctx.accounts.oku_money_mint.to_account_info(),
+            },
+        ),
+        oku_m_amount,
+        decimals,
+    )?;
+
+    let seeds = &[OkuDollarConfig::SEED, &[bump]];
+    let signer = &[&seeds[..]];
+
+    if total_supply == 0 {
+        // First deposit — enforce minimum liquidity and mint dead shares
+        require!(shares > MINIMUM_LIQUIDITY, OkuDollarError::MinimumLiquidity);
+
+        let user_shares = shares
+            .checked_sub(MINIMUM_LIQUIDITY)
+            .ok_or(OkuDollarError::Overflow)?;
+
+        let dead_ata = ctx
+            .accounts
+            .dead_shares_ata
+            .as_ref()
+            .ok_or(OkuDollarError::MinimumLiquidity)?;
+
+        // Verify the dead ATA is for the correct mint (usdOku)
+        require!(
+            dead_ata.mint == ctx.accounts.usd_oku_mint.key(),
+            OkuDollarError::MinimumLiquidity
+        );
+
+        // Verify the dead ATA is owned by the System Program (truly unrecoverable)
+        require!(
+            dead_ata.owner == anchor_lang::system_program::ID,
+            OkuDollarError::MinimumLiquidity
+        );
+
+        // Mint user shares (Token-2022)
+        token_interface::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_2022_program.to_account_info(),
+                token_interface::MintTo {
+                    mint: ctx.accounts.usd_oku_mint.to_account_info(),
+                    to: ctx.accounts.user_usd_oku_ata.to_account_info(),
+                    authority: ctx.accounts.config.to_account_info(),
+                },
+                signer,
+            ),
+            user_shares,
+        )?;
+
+        // Mint dead shares (permanently locked)
+        token_interface::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_2022_program.to_account_info(),
+                token_interface::MintTo {
+                    mint: ctx.accounts.usd_oku_mint.to_account_info(),
+                    to: dead_ata.to_account_info(),
+                    authority: ctx.accounts.config.to_account_info(),
+                },
+                signer,
+            ),
+            MINIMUM_LIQUIDITY,
+        )?;
+
+        emit!(WrapEvent {
+            user: ctx.accounts.user.key(),
+            oku_m_amount,
+            shares_minted: user_shares,
+            usd_multiplier,
+        });
+    } else {
+        // Subsequent deposits — direct share calculation
+        // Mint usdOku shares to user (Token-2022)
+        token_interface::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_2022_program.to_account_info(),
+                token_interface::MintTo {
+                    mint: ctx.accounts.usd_oku_mint.to_account_info(),
+                    to: ctx.accounts.user_usd_oku_ata.to_account_info(),
+                    authority: ctx.accounts.config.to_account_info(),
+                },
+                signer,
+            ),
+            shares,
+        )?;
+
+        emit!(WrapEvent {
+            user: ctx.accounts.user.key(),
+            oku_m_amount,
+            shares_minted: shares,
+            usd_multiplier,
+        });
+    }
+
+    Ok(())
+}
+
+/// Unwrap usdOku -> OkuMoney
+/// Burns usdOku shares from user, transfers OkuMoney from reserve vault to user.
+///
+/// OkuMoney returned = (shares * usd_multiplier) / PRECISION
+///
+/// NOTE: Unwrap is blocked when paused (matches EVM behavior).
+/// Users must wait for unpause to exit.
+pub fn unwrap(ctx: Context<Unwrap>, shares: u64) -> Result<()> {
+    // Read state
+    let total_supply = ctx.accounts.usd_oku_mint.supply;
+    let bump = ctx.accounts.config.bump;
+    let usd_multiplier = ctx.accounts.config.usd_multiplier;
+    let reserve_balance = ctx.accounts.reserve_vault.amount;
+    let decimals = ctx.accounts.oku_money_mint.decimals;
+
+    require!(shares > 0, OkuDollarError::ZeroAmount);
+    require!(shares <= total_supply, OkuDollarError::InsufficientShares);
+
+    // Calculate OkuMoney to return based on current multiplier
+    let oku_m_out = shares_to_oku_money(shares, usd_multiplier)?;
+    require!(oku_m_out > 0, OkuDollarError::ZeroAmount);
+
+    // Safety: ensure we have enough reserves
+    require!(
+        oku_m_out <= reserve_balance,
+        OkuDollarError::InsufficientReserves
+    );
+
+    // Burn usdOku shares from user (Token-2022)
+    token_interface::burn(
+        CpiContext::new(
+            ctx.accounts.token_2022_program.to_account_info(),
+            token_interface::Burn {
+                mint: ctx.accounts.usd_oku_mint.to_account_info(),
+                from: ctx.accounts.user_usd_oku_ata.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
+            },
+        ),
+        shares,
+    )?;
+
+    // Transfer OkuMoney from reserve vault to user (Token-2022)
+    let seeds = &[OkuDollarConfig::SEED, &[bump]];
+    let signer = &[&seeds[..]];
+
+    token_interface::transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_2022_program.to_account_info(),
+            token_interface::TransferChecked {
+                from: ctx.accounts.reserve_vault.to_account_info(),
+                to: ctx.accounts.user_oku_money_ata.to_account_info(),
+                authority: ctx.accounts.config.to_account_info(),
+                mint: ctx.accounts.oku_money_mint.to_account_info(),
+            },
+            signer,
+        ),
+        oku_m_out,
+        decimals,
+    )?;
+
+    emit!(UnwrapEvent {
+        user: ctx.accounts.user.key(),
+        shares_burned: shares,
+        oku_m_amount: oku_m_out,
+        usd_multiplier,
+    });
+
+    Ok(())
+}
+
+/// Update the USD multiplier (rebasing)
+/// Called by usd_rebaser (orchestrator) to distribute yield discretely.
+///
+/// The new multiplier must:
+/// 1. Be greater than or equal to the current multiplier (yield cannot decrease)
+/// 2. Maintain sufficient collateralization after the update
+///
+/// # Arguments
+/// * `new_usd_multiplier` - New USD multiplier (scaled by PRECISION)
+pub fn update_usd_multiplier(
+    ctx: Context<UpdateUsdMultiplier>,
+    new_usd_multiplier: u64,
+) -> Result<()> {
+    let config = &ctx.accounts.config;
+    let old_multiplier = config.usd_multiplier;
+    let min_collateral_ratio = config.min_collateral_ratio;
+
+    // Multiplier can only increase (yield distribution) or stay same
+    require!(
+        new_usd_multiplier >= old_multiplier,
+        OkuDollarError::MultiplierCannotDecrease
+    );
+
+    // Check collateralization after the update
+    let reserve_balance = ctx.accounts.reserve_vault.amount;
+    let total_supply = ctx.accounts.usd_oku_mint.supply;
+
+    // Verify the vault remains sufficiently collateralized with new multiplier
+    require!(
+        is_sufficiently_collateralized(
+            reserve_balance,
+            total_supply,
+            new_usd_multiplier,
+            min_collateral_ratio,
+        )?,
+        OkuDollarError::InsufficientCollateral
+    );
+
+    // Update the multiplier
+    let config = &mut ctx.accounts.config;
+    config.usd_multiplier = new_usd_multiplier;
+    config.usd_last_update_time = Clock::get()?.unix_timestamp;
+
+    emit!(UsdMultiplierUpdatedEvent {
+        old_multiplier,
+        new_multiplier: new_usd_multiplier,
+        timestamp: config.usd_last_update_time,
+    });
+
+    Ok(())
+}
+
+/// Deposit OkuMoney reserves (reserve manager)
+/// Allows reserve manager to add OkuMoney to the vault without minting usdOku.
+/// This increases the collateralization ratio.
+pub fn deposit_reserves(ctx: Context<DepositReserves>, amount: u64) -> Result<()> {
+    require!(amount > 0, OkuDollarError::ZeroAmount);
+
+    let decimals = ctx.accounts.oku_money_mint.decimals;
+
+    // Transfer OkuMoney from reserve manager to reserve vault
+    token_interface::transfer_checked(
+        CpiContext::new(
+            ctx.accounts.token_2022_program.to_account_info(),
+            token_interface::TransferChecked {
+                from: ctx.accounts.source_ata.to_account_info(),
+                to: ctx.accounts.reserve_vault.to_account_info(),
+                authority: ctx.accounts.reserve_manager.to_account_info(),
+                mint: ctx.accounts.oku_money_mint.to_account_info(),
+            },
+        ),
+        amount,
+        decimals,
+    )?;
+
+    emit!(ReservesDepositedEvent {
+        reserve_manager: ctx.accounts.reserve_manager.key(),
+        amount,
+    });
+
+    Ok(())
+}
+
+/// Withdraw OkuMoney reserves (reserve manager)
+/// Allows reserve manager to remove excess OkuMoney from the vault.
+/// Must maintain minimum collateralization ratio after withdrawal.
+pub fn withdraw_reserves(ctx: Context<WithdrawReserves>, amount: u64) -> Result<()> {
+    require!(amount > 0, OkuDollarError::ZeroAmount);
+
+    let bump = ctx.accounts.config.bump;
+    let usd_multiplier = ctx.accounts.config.usd_multiplier;
+    let min_collateral_ratio = ctx.accounts.config.min_collateral_ratio;
+    let reserve_balance = ctx.accounts.reserve_vault.amount;
+    let total_supply = ctx.accounts.usd_oku_mint.supply;
+    let decimals = ctx.accounts.oku_money_mint.decimals;
+
+    require!(
+        amount <= reserve_balance,
+        OkuDollarError::InsufficientReserves
+    );
+
+    // Calculate new reserve balance after withdrawal
+    let new_reserve_balance = reserve_balance
+        .checked_sub(amount)
+        .ok_or(OkuDollarError::Overflow)?;
+
+    // Verify the vault remains sufficiently collateralized
+    require!(
+        is_sufficiently_collateralized(
+            new_reserve_balance,
+            total_supply,
+            usd_multiplier,
+            min_collateral_ratio,
+        )?,
+        OkuDollarError::InsufficientCollateral
+    );
+
+    // Transfer OkuMoney from reserve vault to reserve manager
+    let seeds = &[OkuDollarConfig::SEED, &[bump]];
+    let signer = &[&seeds[..]];
+
+    token_interface::transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_2022_program.to_account_info(),
+            token_interface::TransferChecked {
+                from: ctx.accounts.reserve_vault.to_account_info(),
+                to: ctx.accounts.destination_ata.to_account_info(),
+                authority: ctx.accounts.config.to_account_info(),
+                mint: ctx.accounts.oku_money_mint.to_account_info(),
+            },
+            signer,
+        ),
+        amount,
+        decimals,
+    )?;
+
+    emit!(ReservesWithdrawnEvent {
+        reserve_manager: ctx.accounts.reserve_manager.key(),
+        amount,
+    });
+
+    Ok(())
+}

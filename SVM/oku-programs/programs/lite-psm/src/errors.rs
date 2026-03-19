@@ -34,12 +34,18 @@ pub enum OkuError {
     OracleAccountMissing,
     #[msg("Invalid oracle response")]
     InvalidOracleResponse,
-    #[msg("Current rate has no end time set")]
-    NoRateEnd,
-    #[msg("Rate end time must be in the future")]
-    RateEndNotFuture,
-    #[msg("Rate end has not yet passed")]
-    RateEndNotPassed,
+    #[msg("Cannot perform operation in same slot as yield distribution")]
+    YieldDistributionInProgress,
+    #[msg("New price must be >= current price")]
+    PriceCannotDecrease,
+    #[msg("Invalid mint extension configuration")]
+    InvalidMintExtension,
+    #[msg("Invalid PSM config account")]
+    InvalidPsmConfig,
+    #[msg("Account is blacklist exempt and cannot be frozen")]
+    BlacklistExempt,
+    #[msg("Blacklist exemption already initialized")]
+    BlacklistExemptAlreadyInitialized,
 
     // ===== Bridge-Specific Errors =====
     #[msg("Bridge is paused")]

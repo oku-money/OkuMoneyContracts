@@ -1,110 +1,91 @@
-use anchor_lang::prelude::*;
-use crate::contexts::{UpdateInterestRate, SetNextYieldRate};
+use crate::contexts::{DistributeYield, SetOkuMPrice};
 use crate::errors::OkuError;
 use crate::events::*;
-use crate::helpers::cpi_update_token2022_rate;
+use crate::helpers::PRECISION;
+use anchor_lang::prelude::*;
 
-/// Update the interest rate on the OkuUSD mint (Token-2022 Interest Bearing extension)
-/// Emergency override: sets rate immediately and clears all scheduling state.
-/// Rate is in basis points (e.g., 450 = 4.5% APY)
-/// Also stores the rate in config for queue processing interest calculations
-pub fn update_interest_rate(ctx: Context<UpdateInterestRate>, new_rate: i16) -> Result<()> {
-    cpi_update_token2022_rate(
-        &ctx.accounts.token_2022_program.to_account_info(),
-        &ctx.accounts.okusd_mint.to_account_info(),
-        &ctx.accounts.rebaser.to_account_info(),
-        new_rate,
-    )?;
-
+/// Set OkuMoney price directly
+///
+/// REBASER only. Sets last_yield_distribution_slot for sandwich prevention.
+/// new_multiplier must be >= current (price never decreases).
+///
+/// This is the SVM equivalent of EVM's `setOkuMPrice(uint256 newPrice)`.
+pub fn set_oku_m_price(ctx: Context<SetOkuMPrice>, new_multiplier: u64) -> Result<()> {
     let config = &mut ctx.accounts.config;
-    config.current_rate_bps = new_rate;
-    config.rate_end = 0;
-    config.pending_rate_bps = 0;
 
-    emit!(InterestRateUpdatedEvent {
-        rate_authority: ctx.accounts.rebaser.key(),
-        new_rate,
-    });
+    // Read current multiplier from config
+    let current_multiplier = config.oku_m_price;
 
-    Ok(())
-}
-
-/// Set yield rate with optional end timestamp for rate scheduling.
-/// CPIs to Token-2022 UpdateRate immediately.
-/// If end_timestamp > 0, the rate is considered temporary and a pending rate can be scheduled.
-/// If end_timestamp == 0, the rate has no expiry.
-pub fn set_yield_rate(ctx: Context<UpdateInterestRate>, new_rate: i16, end_timestamp: i64) -> Result<()> {
-    let clock = Clock::get()?;
+    // Price can only increase (or stay the same)
     require!(
-        end_timestamp == 0 || end_timestamp > clock.unix_timestamp,
-        OkuError::RateEndNotFuture
+        new_multiplier >= current_multiplier,
+        OkuError::PriceCannotDecrease
     );
 
-    cpi_update_token2022_rate(
-        &ctx.accounts.token_2022_program.to_account_info(),
-        &ctx.accounts.okusd_mint.to_account_info(),
-        &ctx.accounts.rebaser.to_account_info(),
-        new_rate,
-    )?;
-
-    let config = &mut ctx.accounts.config;
-    config.current_rate_bps = new_rate;
-    config.rate_end = end_timestamp;
-    config.pending_rate_bps = 0;
-
-    emit!(YieldRateSetEvent {
-        rate_authority: ctx.accounts.rebaser.key(),
-        new_rate,
-        end_timestamp,
-    });
-
-    Ok(())
-}
-
-/// Schedule the next yield rate to take effect when the current rate expires.
-/// Does NOT CPI to Token-2022 — the pending rate is only stored in config.
-/// The orchestrator calls apply_pending_rate when rate_end arrives.
-pub fn set_next_yield_rate(ctx: Context<SetNextYieldRate>, new_rate: i16) -> Result<()> {
-    let config = &mut ctx.accounts.config;
-    require!(config.rate_end != 0, OkuError::NoRateEnd);
-
-    config.pending_rate_bps = new_rate;
-
-    emit!(NextYieldRateSetEvent {
-        rate_authority: ctx.accounts.rebaser.key(),
-        new_rate,
-        activates_at: config.rate_end,
-    });
-
-    Ok(())
-}
-
-/// Apply the pending rate after rate_end has passed.
-/// CPIs to Token-2022 UpdateRate with the pending rate.
-/// Clears scheduling state after application.
-pub fn apply_pending_rate(ctx: Context<UpdateInterestRate>) -> Result<()> {
+    // Set yield distribution slot FIRST (before price update for atomicity)
     let clock = Clock::get()?;
-    let config = &ctx.accounts.config;
-    require!(config.rate_end != 0, OkuError::NoRateEnd);
-    require!(clock.unix_timestamp >= config.rate_end, OkuError::RateEndNotPassed);
+    config.last_yield_distribution_slot = clock.slot;
 
-    let pending_rate = config.pending_rate_bps;
+    // Update the stored price
+    config.oku_m_price = new_multiplier;
 
-    cpi_update_token2022_rate(
-        &ctx.accounts.token_2022_program.to_account_info(),
-        &ctx.accounts.okusd_mint.to_account_info(),
-        &ctx.accounts.rebaser.to_account_info(),
-        pending_rate,
-    )?;
+    emit!(YieldDistributionSlotSet { slot: clock.slot });
+
+    emit!(OkuMPriceUpdated {
+        old_multiplier: current_multiplier,
+        new_multiplier,
+        timestamp: clock.unix_timestamp,
+    });
+
+    Ok(())
+}
+
+/// Distribute dollar-denominated yield across all OkuMoney holders
+///
+/// new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)
+///
+/// REBASER only. Sets last_yield_distribution_slot for sandwich prevention.
+///
+/// This is the SVM equivalent of EVM's `distributeYield(uint256 yieldAmount)`.
+pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Result<()> {
+    require!(yield_amount > 0, OkuError::ZeroAmount);
+
+    let total_supply = ctx.accounts.oku_money_mint.supply;
+    require!(total_supply > 0, OkuError::ZeroAmount);
 
     let config = &mut ctx.accounts.config;
-    config.current_rate_bps = pending_rate;
-    config.rate_end = 0;
-    config.pending_rate_bps = 0;
 
-    emit!(PendingRateAppliedEvent {
-        rate_authority: ctx.accounts.rebaser.key(),
-        applied_rate: pending_rate,
+    // Read current multiplier from config
+    let current_multiplier = config.oku_m_price;
+
+    // Calculate new multiplier
+    // new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)
+    // This distributes the yield proportionally across all holders
+    let yield_per_token = (yield_amount as u128)
+        .checked_mul(PRECISION as u128)
+        .ok_or(OkuError::Overflow)?
+        .checked_div(total_supply as u128)
+        .ok_or(OkuError::Overflow)? as u64;
+
+    let new_multiplier = current_multiplier
+        .checked_add(yield_per_token)
+        .ok_or(OkuError::Overflow)?;
+
+    // Set yield distribution slot FIRST
+    let clock = Clock::get()?;
+    config.last_yield_distribution_slot = clock.slot;
+
+    // Update the stored price
+    config.oku_m_price = new_multiplier;
+
+    emit!(YieldDistributionSlotSet { slot: clock.slot });
+
+    emit!(YieldDistributed {
+        yield_amount,
+        old_multiplier: current_multiplier,
+        new_multiplier,
+        total_supply,
+        timestamp: clock.unix_timestamp,
     });
 
     Ok(())

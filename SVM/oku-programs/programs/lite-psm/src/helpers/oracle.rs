@@ -1,5 +1,5 @@
-use anchor_lang::prelude::*;
 use crate::errors::OkuError;
+use anchor_lang::prelude::*;
 
 /// Check oracle reserves before minting
 /// Returns Ok if reserves are sufficient, error otherwise
@@ -42,13 +42,13 @@ pub fn check_oracle_reserves<'info>(
     let price = i64::from_le_bytes(
         data[price_offset..price_offset + 8]
             .try_into()
-            .map_err(|_| OkuError::InvalidOracleResponse)?
+            .map_err(|_| OkuError::InvalidOracleResponse)?,
     );
 
     let publish_time = i64::from_le_bytes(
         data[timestamp_offset..timestamp_offset + 8]
             .try_into()
-            .map_err(|_| OkuError::InvalidOracleResponse)?
+            .map_err(|_| OkuError::InvalidOracleResponse)?,
     );
 
     // Check staleness

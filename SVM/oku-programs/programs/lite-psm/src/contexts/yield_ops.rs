@@ -1,18 +1,39 @@
-use anchor_lang::prelude::*;
-use anchor_spl::token_2022::Token2022;
 use crate::errors::OkuError;
 use crate::state::PsmConfig;
+use anchor_lang::prelude::*;
+use anchor_spl::token_2022::Token2022;
+use anchor_spl::token_interface::Mint as MintInterface;
 
+/// Context for setting the OkuMoney price directly
+/// REBASER only. Sets last_yield_distribution_slot for sandwich prevention.
 #[derive(Accounts)]
-pub struct UpdateInterestRate<'info> {
-    /// Rate authority - must be the designated rate authority on the mint
-    /// Rebaser role (typically orchestrator KMS-backed signer)
+pub struct SetOkuMPrice<'info> {
+    /// Rebaser role - authorized to update OkuMoney price
     #[account(
         constraint = rebaser.key() == config.rebaser @ OkuError::Unauthorized
     )]
     pub rebaser: Signer<'info>,
 
-    /// PSM config - stores current_rate_bps for queue processing
+    /// PSM config - stores oku_m_price and last_yield_distribution_slot
+    #[account(
+        mut,
+        seeds = [PsmConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Account<'info, PsmConfig>,
+}
+
+/// Context for distributing yield across all OkuMoney holders
+/// REBASER only. Calculates new price based on yield amount and total supply.
+#[derive(Accounts)]
+pub struct DistributeYield<'info> {
+    /// Rebaser role - authorized to distribute yield
+    #[account(
+        constraint = rebaser.key() == config.rebaser @ OkuError::Unauthorized
+    )]
+    pub rebaser: Signer<'info>,
+
+    /// PSM config - stores oku_m_price and last_yield_distribution_slot
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
@@ -20,22 +41,13 @@ pub struct UpdateInterestRate<'info> {
     )]
     pub config: Account<'info, PsmConfig>,
 
-    /// OkuUSD mint (Token-2022 with Interest Bearing extension)
-    /// CHECK: Validated by Token-2022 program - must have rebaser as the rate authority
-    #[account(mut, address = config.okusd_mint)]
-    pub okusd_mint: UncheckedAccount<'info>,
+    /// OkuMoney mint - needed to read total supply for yield distribution calculation
+    #[account(
+        address = config.oku_money_mint,
+        mint::token_program = token_2022_program
+    )]
+    pub oku_money_mint: InterfaceAccount<'info, MintInterface>,
 
     /// Token-2022 program
     pub token_2022_program: Program<'info, Token2022>,
-}
-
-#[derive(Accounts)]
-pub struct SetNextYieldRate<'info> {
-    /// Rebaser role - only rebaser can schedule next rate
-    #[account(constraint = rebaser.key() == config.rebaser @ OkuError::Unauthorized)]
-    pub rebaser: Signer<'info>,
-
-    /// PSM config - stores rate scheduling state
-    #[account(mut, seeds = [PsmConfig::SEED], bump = config.bump)]
-    pub config: Account<'info, PsmConfig>,
 }

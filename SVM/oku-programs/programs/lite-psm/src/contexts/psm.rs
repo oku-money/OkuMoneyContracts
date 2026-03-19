@@ -1,3 +1,5 @@
+use crate::errors::OkuError;
+use crate::state::{PsmConfig, RedemptionQueue};
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
@@ -5,11 +7,9 @@ use anchor_spl::{
     token_2022::Token2022,
     token_interface::{Mint as MintInterface, TokenAccount as TokenAccountInterface},
 };
-use crate::errors::OkuError;
-use crate::state::{PsmConfig, RedemptionQueue};
 
 #[derive(Accounts)]
-pub struct MintOkusd<'info> {
+pub struct MintOkuM<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
@@ -24,13 +24,13 @@ pub struct MintOkusd<'info> {
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Account<'info, Mint>,
 
-    /// OkuUSD mint (Token-2022)
+    /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
     #[account(
         mut,
-        address = config.okusd_mint,
+        address = config.oku_money_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// User's USDC account
     #[account(
@@ -41,15 +41,15 @@ pub struct MintOkusd<'info> {
     )]
     pub user_usdc_ata: Box<Account<'info, TokenAccount>>,
 
-    /// User's OkuUSD account
+    /// User's OkuMoney account
     #[account(
         init_if_needed,
         payer = user,
-        associated_token::mint = okusd_mint,
+        associated_token::mint = oku_money_mint,
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub user_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// PSM's USDC vault
     #[account(
@@ -69,7 +69,7 @@ pub struct MintOkusd<'info> {
 }
 
 #[derive(Accounts)]
-pub struct Redeem<'info> {
+pub struct RedeemOkuM<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
@@ -90,13 +90,13 @@ pub struct Redeem<'info> {
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Box<Account<'info, Mint>>,
 
-    /// OkuUSD mint (Token-2022)
+    /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
     #[account(
         mut,
-        address = config.okusd_mint,
+        address = config.oku_money_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// User's USDC account
     #[account(
@@ -108,14 +108,14 @@ pub struct Redeem<'info> {
     )]
     pub user_usdc_ata: Box<Account<'info, TokenAccount>>,
 
-    /// User's OkuUSD account
+    /// User's OkuMoney account
     #[account(
         mut,
-        associated_token::mint = okusd_mint,
+        associated_token::mint = oku_money_mint,
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub user_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// PSM's USDC vault
     #[account(
@@ -124,14 +124,14 @@ pub struct Redeem<'info> {
     )]
     pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
-    /// PSM's OkuUSD escrow vault (for queued redemptions)
+    /// PSM's OkuMoney escrow vault (for queued redemptions)
     #[account(
         mut,
-        token::mint = okusd_mint,
+        token::mint = oku_money_mint,
         token::authority = config,
         token::token_program = token_2022_program,
     )]
-    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub vault_oku_money: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -159,13 +159,13 @@ pub struct ProcessQueue<'info> {
     )]
     pub redemption_queue: Box<Account<'info, RedemptionQueue>>,
 
-    /// OkuUSD mint (Token-2022) - needed for burn CPI
+    /// OkuMoney mint (Token-2022) - needed for burn CPI and price reads
     #[account(
         mut,
-        address = config.okusd_mint,
+        address = config.oku_money_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// PSM's USDC vault
     #[account(
@@ -174,14 +174,14 @@ pub struct ProcessQueue<'info> {
     )]
     pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
-    /// PSM's OkuUSD escrow vault - holds queued redemptions
+    /// PSM's OkuMoney escrow vault - holds queued redemptions
     #[account(
         mut,
-        token::mint = okusd_mint,
+        token::mint = oku_money_mint,
         token::authority = config,
         token::token_program = token_2022_program,
     )]
-    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub vault_oku_money: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -236,12 +236,19 @@ pub struct WithdrawBuffer<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// Redemption queue (read-only) — used to calculate reserved USDC for pending entries
+    /// Redemption queue (read-only) - used to calculate reserved USDC for pending entries
     #[account(
         seeds = [RedemptionQueue::SEED],
         bump = redemption_queue.bump
     )]
     pub redemption_queue: Account<'info, RedemptionQueue>,
+
+    /// OkuMoney mint - needed to read current price for reserve calculation
+    #[account(
+        address = config.oku_money_mint,
+        mint::token_program = token_2022_program
+    )]
+    pub oku_money_mint: InterfaceAccount<'info, MintInterface>,
 
     /// Buffer withdrawer's USDC account (destination)
     #[account(
@@ -262,4 +269,5 @@ pub struct WithdrawBuffer<'info> {
     pub usdc_mint: Account<'info, Mint>,
 
     pub token_program: Program<'info, Token>,
+    pub token_2022_program: Program<'info, Token2022>,
 }

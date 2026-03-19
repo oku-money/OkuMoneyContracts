@@ -1,12 +1,11 @@
+use crate::errors::RouterError;
+use crate::state::RouterConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{Token, TokenAccount, Mint},
     token_2022::Token2022,
-    token_interface::{TokenAccount as TokenAccountInterface, Mint as MintInterface},
+    token_interface::{Mint as MintInterface, TokenAccount as TokenAccountInterface},
 };
-use crate::errors::RouterError;
-use crate::state::RouterConfig;
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
@@ -25,8 +24,11 @@ pub struct Initialize<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Bridge usdOku cross-chain in one transaction
+/// 1. Unwraps usdOku -> OkuMoney via oku-dollar vault
+/// 2. Burns OkuMoney via PSM bridge_burn
 #[derive(Accounts)]
-pub struct BridgeWrapped<'info> {
+pub struct BridgeUsdOku<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
@@ -36,30 +38,33 @@ pub struct BridgeWrapped<'info> {
     )]
     pub config: Account<'info, RouterConfig>,
 
-    // Vault program accounts
-    /// CHECK: Vault config PDA - validated by vault program CPI
+    // OkuDollar vault program accounts
+    /// CHECK: OkuDollar config PDA - validated by vault program CPI
     #[account(mut)]
     pub vault_config: UncheckedAccount<'info>,
 
-    /// OkuUSD mint (Token-2022)
+    /// OkuMoney mint (Token-2022)
     #[account(mut)]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// wOkuUSD mint (standard SPL)
+    /// usdOku mint (Token-2022)
     #[account(mut)]
-    pub wokusd_mint: Account<'info, Mint>,
+    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// User's OkuUSD account
+    /// User's OkuMoney account
     #[account(mut)]
-    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub user_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// User's wOkuUSD account
+    /// User's usdOku account
     #[account(mut)]
-    pub user_wokusd_ata: Account<'info, TokenAccount>,
+    pub user_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// Vault's OkuUSD account
+    /// Vault's OkuMoney reserve account
     #[account(mut)]
-    pub vault_okusd: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub reserve_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    /// CHECK: PSM config account - needed by vault for reading oku_m_price
+    pub vault_psm_config: UncheckedAccount<'info>,
 
     // PSM program accounts
     /// CHECK: Bridge config PDA - validated by PSM program CPI
@@ -76,15 +81,14 @@ pub struct BridgeWrapped<'info> {
     #[account(mut)]
     pub fee_recipient_ata: UncheckedAccount<'info>,
 
-    /// CHECK: Vault program — hardcoded to wokusd_vault::ID
-    #[account(address = wokusd_vault::ID)]
+    /// CHECK: Vault program — hardcoded to oku_dollar::ID
+    #[account(address = oku_dollar::ID)]
     pub vault_program: UncheckedAccount<'info>,
 
     /// CHECK: PSM program — hardcoded to lite_psm::ID
     #[account(address = lite_psm::ID)]
     pub psm_program: UncheckedAccount<'info>,
 
-    pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,

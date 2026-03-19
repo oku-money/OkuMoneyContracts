@@ -1,12 +1,12 @@
 use anchor_lang::prelude::*;
 
-pub mod errors;
-pub mod state;
-pub mod events;
-pub mod roles;
-pub mod helpers;
 pub mod contexts;
+pub mod errors;
+pub mod events;
+pub mod helpers;
 pub mod instructions;
+pub mod roles;
+pub mod state;
 
 use contexts::*;
 use roles::*;
@@ -35,28 +35,50 @@ pub mod lite_psm {
         allowance_manager: Pubkey,
         rebaser: Pubkey,
     ) -> Result<()> {
-        instructions::init::initialize(ctx, max_supply, minter_allowance, pauser, unpauser, freezer, unfreezer, queue_processor, buffer_depositor, buffer_withdrawer, oracle_manager, cap_manager, allowance_manager, rebaser)
+        instructions::init::initialize(
+            ctx,
+            max_supply,
+            minter_allowance,
+            pauser,
+            unpauser,
+            freezer,
+            unfreezer,
+            queue_processor,
+            buffer_depositor,
+            buffer_withdrawer,
+            oracle_manager,
+            cap_manager,
+            allowance_manager,
+            rebaser,
+        )
     }
 
     pub fn setup_redemption_queue(ctx: Context<SetupRedemptionQueue>) -> Result<()> {
         instructions::init::setup_redemption_queue(ctx)
     }
 
-    pub fn setup_okusd_escrow(ctx: Context<SetupOkusdEscrow>) -> Result<()> {
-        instructions::init::setup_okusd_escrow(ctx)
+    pub fn setup_oku_money_escrow(ctx: Context<SetupOkuMoneyEscrow>) -> Result<()> {
+        instructions::init::setup_oku_money_escrow(ctx)
     }
 
     // ===== PSM Operations =====
 
-    pub fn mint(ctx: Context<MintOkusd>, usdc_amount: u64) -> Result<()> {
-        instructions::psm::mint(ctx, usdc_amount)
+    /// Mint OkuMoney with USDC (price-aware)
+    /// oku_m_amount = usdc_amount * PRECISION / oku_m_price
+    pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
+        instructions::psm::mint_oku_m(ctx, usdc_amount)
     }
 
-    pub fn redeem(ctx: Context<Redeem>, okusd_amount: u64) -> Result<()> {
-        instructions::psm::redeem(ctx, okusd_amount)
+    /// Redeem OkuMoney for USDC (price-aware)
+    /// usdc_amount = oku_m_amount * oku_m_price / PRECISION
+    pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
+        instructions::psm::redeem_oku_m(ctx, oku_m_amount)
     }
 
-    pub fn process_queue<'info>(ctx: Context<'_, '_, '_, 'info, ProcessQueue<'info>>, max_entries: u32) -> Result<()> {
+    pub fn process_queue<'info>(
+        ctx: Context<'_, '_, '_, 'info, ProcessQueue<'info>>,
+        max_entries: u32,
+    ) -> Result<()> {
         instructions::psm::process_queue(ctx, max_entries)
     }
 
@@ -86,7 +108,11 @@ pub mod lite_psm {
         instructions::psm_admin::set_minter_allowance(ctx, amount)
     }
 
-    pub fn set_oracle(ctx: Context<OracleManager>, oracle: Pubkey, staleness_threshold: i64) -> Result<()> {
+    pub fn set_oracle(
+        ctx: Context<OracleManager>,
+        oracle: Pubkey,
+        staleness_threshold: i64,
+    ) -> Result<()> {
         instructions::psm_admin::set_oracle(ctx, oracle, staleness_threshold)
     }
 
@@ -98,39 +124,62 @@ pub mod lite_psm {
         instructions::psm_admin::thaw_account(ctx)
     }
 
-    pub fn set_authority(ctx: Context<SetAuthority>, role: AuthorityRole, new_authority: Pubkey) -> Result<()> {
+    pub fn set_authority(
+        ctx: Context<SetAuthority>,
+        role: AuthorityRole,
+        new_authority: Pubkey,
+    ) -> Result<()> {
         instructions::psm_admin::set_authority(ctx, role, new_authority)
+    }
+
+    /// Initialize blacklist exemption for bridge and router (one-time, ROLE_ADMIN only)
+    pub fn initialize_blacklist_exempt(
+        ctx: Context<InitializeBlacklistExempt>,
+        bridge: Pubkey,
+        router: Pubkey,
+    ) -> Result<()> {
+        instructions::psm_admin::initialize_blacklist_exempt(ctx, bridge, router)
     }
 
     // ===== Yield Operations =====
 
-    pub fn update_interest_rate(ctx: Context<UpdateInterestRate>, new_rate: i16) -> Result<()> {
-        instructions::yield_ops::update_interest_rate(ctx, new_rate)
+    /// Set OkuMoney price directly (REBASER only)
+    /// Sets last_yield_distribution_slot for sandwich prevention
+    pub fn set_oku_m_price(ctx: Context<SetOkuMPrice>, new_multiplier: u64) -> Result<()> {
+        instructions::yield_ops::set_oku_m_price(ctx, new_multiplier)
     }
 
-    pub fn set_yield_rate(ctx: Context<UpdateInterestRate>, new_rate: i16, end_timestamp: i64) -> Result<()> {
-        instructions::yield_ops::set_yield_rate(ctx, new_rate, end_timestamp)
-    }
-
-    pub fn set_next_yield_rate(ctx: Context<SetNextYieldRate>, new_rate: i16) -> Result<()> {
-        instructions::yield_ops::set_next_yield_rate(ctx, new_rate)
-    }
-
-    pub fn apply_pending_rate(ctx: Context<UpdateInterestRate>) -> Result<()> {
-        instructions::yield_ops::apply_pending_rate(ctx)
+    /// Distribute yield across all OkuMoney holders (REBASER only)
+    /// new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)
+    pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Result<()> {
+        instructions::yield_ops::distribute_yield(ctx, yield_amount)
     }
 
     // ===== Bridge Operations =====
 
-    pub fn bridge_mint(ctx: Context<BridgeMint>, message_bytes: Vec<u8>, signature: Vec<u8>, request_id: [u8; 32]) -> Result<()> {
+    pub fn bridge_mint(
+        ctx: Context<BridgeMint>,
+        message_bytes: Vec<u8>,
+        signature: Vec<u8>,
+        request_id: [u8; 32],
+    ) -> Result<()> {
         instructions::bridge::bridge_mint(ctx, message_bytes, signature, request_id)
     }
 
-    pub fn bridge_burn(ctx: Context<BridgeBurn>, amount: u64, recipient: [u8; 20], destination_chain_id: u16) -> Result<()> {
+    pub fn bridge_burn(
+        ctx: Context<BridgeBurn>,
+        amount: u64,
+        recipient: [u8; 20],
+        destination_chain_id: u16,
+    ) -> Result<()> {
         instructions::bridge::bridge_burn(ctx, amount, recipient, destination_chain_id)
     }
 
-    pub fn refund_bridge_request(ctx: Context<RefundBridgeRequest>, message_bytes: Vec<u8>, request_id: [u8; 32]) -> Result<()> {
+    pub fn refund_bridge_request(
+        ctx: Context<RefundBridgeRequest>,
+        message_bytes: Vec<u8>,
+        request_id: [u8; 32],
+    ) -> Result<()> {
         instructions::bridge::refund_bridge_request(ctx, message_bytes, request_id)
     }
 
@@ -152,11 +201,18 @@ pub mod lite_psm {
         instructions::bridge_admin::update_bridge_fee(ctx, new_fee_bps)
     }
 
-    pub fn update_fee_recipient(ctx: Context<BridgeFeeManager>, new_recipient: Pubkey) -> Result<()> {
+    pub fn update_fee_recipient(
+        ctx: Context<BridgeFeeManager>,
+        new_recipient: Pubkey,
+    ) -> Result<()> {
         instructions::bridge_admin::update_fee_recipient(ctx, new_recipient)
     }
 
-    pub fn update_bridge_limits(ctx: Context<BridgeLimitsManager>, min_amount: u64, max_amount: u64) -> Result<()> {
+    pub fn update_bridge_limits(
+        ctx: Context<BridgeLimitsManager>,
+        min_amount: u64,
+        max_amount: u64,
+    ) -> Result<()> {
         instructions::bridge_admin::update_bridge_limits(ctx, min_amount, max_amount)
     }
 
@@ -168,19 +224,33 @@ pub mod lite_psm {
         instructions::bridge_admin::unpause_bridge(ctx)
     }
 
-    pub fn skip_nonce(ctx: Context<BridgeNonceAdmin>, destination_chain_id: u16, new_nonce: u64) -> Result<()> {
+    pub fn skip_nonce(
+        ctx: Context<BridgeNonceAdmin>,
+        destination_chain_id: u16,
+        new_nonce: u64,
+    ) -> Result<()> {
         instructions::bridge_admin::skip_nonce(ctx, destination_chain_id, new_nonce)
     }
 
-    pub fn update_bridge_deadline(ctx: Context<BridgeLimitsManager>, new_deadline: i64) -> Result<()> {
+    pub fn update_bridge_deadline(
+        ctx: Context<BridgeLimitsManager>,
+        new_deadline: i64,
+    ) -> Result<()> {
         instructions::bridge_admin::update_bridge_deadline(ctx, new_deadline)
     }
 
-    pub fn update_orchestrator_signer(ctx: Context<BridgeSignerManager>, new_signer: Pubkey) -> Result<()> {
+    pub fn update_orchestrator_signer(
+        ctx: Context<BridgeSignerManager>,
+        new_signer: Pubkey,
+    ) -> Result<()> {
         instructions::bridge_admin::update_orchestrator_signer(ctx, new_signer)
     }
 
-    pub fn set_bridge_authority(ctx: Context<BridgeAdmin>, role: BridgeAuthorityRole, new_authority: Pubkey) -> Result<()> {
+    pub fn set_bridge_authority(
+        ctx: Context<BridgeAdmin>,
+        role: BridgeAuthorityRole,
+        new_authority: Pubkey,
+    ) -> Result<()> {
         instructions::bridge_admin::set_bridge_authority(ctx, role, new_authority)
     }
 }

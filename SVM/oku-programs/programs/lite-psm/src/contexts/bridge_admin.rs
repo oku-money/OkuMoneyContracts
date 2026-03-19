@@ -1,6 +1,6 @@
-use anchor_lang::prelude::*;
 use crate::errors::OkuError;
 use crate::state::{BridgeConfig, BridgeNonce};
+use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
 pub struct InitializeBridge<'info> {

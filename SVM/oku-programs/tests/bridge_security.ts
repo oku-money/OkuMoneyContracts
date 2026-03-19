@@ -78,21 +78,21 @@ describe("Bridge Security Tests", () => {
 
   // Mints
   const usdcMintKeypair = Keypair.generate();
-  const okusdMintKeypair = Keypair.generate();
+  const okuMoneyMintKeypair = Keypair.generate();
   let usdcMint: PublicKey;
-  let okusdMint: PublicKey;
+  let okuMoneyMint: PublicKey;
 
   // PDAs
   let configPda: PublicKey;
   let bridgeConfigPda: PublicKey;
   let redemptionQueuePda: PublicKey;
   let vaultUsdcAta: PublicKey;
-  let vaultOkusdAta: PublicKey;
+  let vaultOkuMoneyAta: PublicKey;
 
   // Token accounts
   let userUsdcAta: PublicKey;
-  let userOkusdAta: PublicKey;
-  let user2OkusdAta: PublicKey;
+  let userOkuMoneyAta: PublicKey;
+  let user2OkuMoneyAta: PublicKey;
   let feeRecipientAta: PublicKey;
   let orchestratorUsdcAta: PublicKey;
 
@@ -106,7 +106,7 @@ describe("Bridge Security Tests", () => {
 
   /**
    * Serialize bridge message (must match Rust exactly)
-   * CRITICAL: recipient must be the OkuUSD ATA address, not the user's pubkey
+   * CRITICAL: recipient must be the OkuMoney ATA address, not the user's pubkey
    */
   function serializeBridgeMessage(params: {
     sourceChainId: number;
@@ -195,9 +195,9 @@ describe("Bridge Security Tests", () => {
       params.program.programId
     );
 
-    // Derive recipient's OkuUSD ATA from wallet pubkey
+    // Derive recipient's OkuMoney ATA from wallet pubkey
     const recipientAta = getAssociatedTokenAddressSync(
-      okusdMint, params.recipientWallet, true, TOKEN_2022_PROGRAM_ID
+      okuMoneyMint, params.recipientWallet, true, TOKEN_2022_PROGRAM_ID
     );
 
     // Verify the recipient ATA exists
@@ -219,8 +219,8 @@ describe("Bridge Security Tests", () => {
         bridgeConfig: bridgeConfigPda,
         config: configPda,
         processedRequest: processedRequestPda,
-        okusdMint: okusdMint,
-        recipientOkusdAta: recipientAta,
+        okuMoneyMint: okuMoneyMint,
+        recipientOkuMoneyAta: recipientAta,
         instructionSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
@@ -341,7 +341,7 @@ describe("Bridge Security Tests", () => {
       TOKEN_PROGRAM_ID
     );
 
-    // Create OkuUSD mint (Token-2022 with Interest-Bearing extension)
+    // Create OkuMoney mint (Token-2022 with Interest-Bearing extension)
     const mintLen = getMintLen([ExtensionType.InterestBearingConfig]);
     const lamports = await provider.connection.getMinimumBalanceForRentExemption(
       mintLen
@@ -349,21 +349,21 @@ describe("Bridge Security Tests", () => {
 
     const createAccountIx = SystemProgram.createAccount({
       fromPubkey: payer.publicKey,
-      newAccountPubkey: okusdMintKeypair.publicKey,
+      newAccountPubkey: okuMoneyMintKeypair.publicKey,
       space: mintLen,
       lamports,
       programId: TOKEN_2022_PROGRAM_ID,
     });
 
     const initInterestBearingIx = createInitializeInterestBearingMintInstruction(
-      okusdMintKeypair.publicKey,
+      okuMoneyMintKeypair.publicKey,
       psmOrchestrator.publicKey, // rate authority
       0, // initial rate
       TOKEN_2022_PROGRAM_ID
     );
 
     const initMintIx = createInitializeMintInstruction(
-      okusdMintKeypair.publicKey,
+      okuMoneyMintKeypair.publicKey,
       DECIMALS,
       configPda, // mint authority = PSM config PDA
       configPda, // freeze authority = PSM config PDA
@@ -375,8 +375,8 @@ describe("Bridge Security Tests", () => {
       initInterestBearingIx,
       initMintIx
     );
-    await provider.sendAndConfirm(tx, [payer, okusdMintKeypair]);
-    okusdMint = okusdMintKeypair.publicKey;
+    await provider.sendAndConfirm(tx, [payer, okuMoneyMintKeypair]);
+    okuMoneyMint = okuMoneyMintKeypair.publicKey;
 
     // Derive vault ATAs
     vaultUsdcAta = getAssociatedTokenAddressSync(
@@ -386,8 +386,8 @@ describe("Bridge Security Tests", () => {
       TOKEN_PROGRAM_ID
     );
 
-    vaultOkusdAta = getAssociatedTokenAddressSync(
-      okusdMint,
+    vaultOkuMoneyAta = getAssociatedTokenAddressSync(
+      okuMoneyMint,
       configPda,
       true,
       TOKEN_2022_PROGRAM_ID
@@ -401,22 +401,22 @@ describe("Bridge Security Tests", () => {
       TOKEN_PROGRAM_ID
     );
 
-    userOkusdAta = getAssociatedTokenAddressSync(
-      okusdMint,
+    userOkuMoneyAta = getAssociatedTokenAddressSync(
+      okuMoneyMint,
       user.publicKey,
       false,
       TOKEN_2022_PROGRAM_ID
     );
 
-    user2OkusdAta = getAssociatedTokenAddressSync(
-      okusdMint,
+    user2OkuMoneyAta = getAssociatedTokenAddressSync(
+      okuMoneyMint,
       user2.publicKey,
       false,
       TOKEN_2022_PROGRAM_ID
     );
 
     feeRecipientAta = getAssociatedTokenAddressSync(
-      okusdMint,
+      okuMoneyMint,
       feeRecipient.publicKey,
       false,
       TOKEN_2022_PROGRAM_ID
@@ -483,13 +483,13 @@ describe("Bridge Security Tests", () => {
       provider,
       payer,
       usdcMint,
-      okusdMint
+      okuMoneyMint
     );
 
     configPda = psmSetup.configPda;
     redemptionQueuePda = psmSetup.redemptionQueuePda;
     vaultUsdcAta = psmSetup.vaultUsdcAta;
-    vaultOkusdAta = psmSetup.vaultOkusdAta;
+    vaultOkuMoneyAta = psmSetup.vaultOkuMoneyAta;
 
     // Initialize bridge config
     await program.methods
@@ -517,36 +517,36 @@ describe("Bridge Security Tests", () => {
         payer.publicKey,
         feeRecipientAta,
         feeRecipient.publicKey,
-        okusdMint,
+        okuMoneyMint,
         TOKEN_2022_PROGRAM_ID
       )
     );
     await provider.sendAndConfirm(createFeeRecipientAtaTx, [payer]);
 
-    // Create user OkuUSD ATAs (for bridge mint recipients)
-    const createUserOkusdAtaTx = new Transaction().add(
+    // Create user OkuMoney ATAs (for bridge mint recipients)
+    const createUserOkuMoneyAtaTx = new Transaction().add(
       createAssociatedTokenAccountInstruction(
         payer.publicKey,
-        userOkusdAta,
+        userOkuMoneyAta,
         user.publicKey,
-        okusdMint,
+        okuMoneyMint,
         TOKEN_2022_PROGRAM_ID
       )
     );
-    await provider.sendAndConfirm(createUserOkusdAtaTx, [payer]);
+    await provider.sendAndConfirm(createUserOkuMoneyAtaTx, [payer]);
 
-    const createUser2OkusdAtaTx = new Transaction().add(
+    const createUser2OkuMoneyAtaTx = new Transaction().add(
       createAssociatedTokenAccountInstruction(
         payer.publicKey,
-        user2OkusdAta,
+        user2OkuMoneyAta,
         user2.publicKey,
-        okusdMint,
+        okuMoneyMint,
         TOKEN_2022_PROGRAM_ID
       )
     );
-    await provider.sendAndConfirm(createUser2OkusdAtaTx, [payer]);
+    await provider.sendAndConfirm(createUser2OkuMoneyAtaTx, [payer]);
 
-    // Mint OkuUSD to users for burn tests using bridge_mint
+    // Mint OkuMoney to users for burn tests using bridge_mint
     // This avoids needing to sign with the config PDA
     // Add supported chain first
     await program.methods
@@ -619,13 +619,13 @@ describe("Bridge Security Tests", () => {
     // Verify users have tokens
     const userAccount = await getAccount(
       provider.connection,
-      userOkusdAta,
+      userOkuMoneyAta,
       undefined,
       TOKEN_2022_PROGRAM_ID
     );
     const user2Account = await getAccount(
       provider.connection,
-      user2OkusdAta,
+      user2OkuMoneyAta,
       undefined,
       TOKEN_2022_PROGRAM_ID
     );
@@ -993,24 +993,24 @@ describe("Bridge Security Tests", () => {
       // Ensure PSM is unpaused using shared helper
       await ensurePSMUnpaused(program, configPda);
 
-      // Ensure user has OkuUSD
+      // Ensure user has OkuMoney
       const userBalance = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
       if (Number(userBalance.amount) < 100_000_000) {
-        // Mint some OkuUSD via PSM
+        // Mint some OkuMoney via PSM
         await program.methods
-          .mint(new BN(50_000_000))
+          .mintOkuM(new BN(50_000_000))
           .accountsPartial({
             user: user.publicKey,
             config: configPda,
             usdcMint: usdcMint,
-            okusdMint: okusdMint,
+            okuMoneyMint: okuMoneyMint,
             userUsdcAta: userUsdcAta,
-            userOkusdAta: userOkusdAta,
+            userOkuMoneyAta: userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
             priceUpdate: null,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -1050,8 +1050,8 @@ describe("Bridge Security Tests", () => {
             bridgeConfig: bridgeConfigPda,
             config: configPda,
             bridgeNonce: noncePda,
-            okusdMint: okusdMint,
-            userOkusdAta: userOkusdAta,
+            okuMoneyMint: okuMoneyMint,
+            userOkuMoneyAta: userOkuMoneyAta,
             feeRecipientAta: feeRecipientAta,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
@@ -1086,8 +1086,8 @@ describe("Bridge Security Tests", () => {
           bridgeConfig: bridgeConfigPda,
           config: configPda,
           bridgeNonce: noncePda,
-          okusdMint: okusdMint,
-          userOkusdAta: userOkusdAta,
+          okuMoneyMint: okuMoneyMint,
+          userOkuMoneyAta: userOkuMoneyAta,
           feeRecipientAta: feeRecipientAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -1110,8 +1110,8 @@ describe("Bridge Security Tests", () => {
           bridgeConfig: bridgeConfigPda,
           config: configPda,
           bridgeNonce: noncePda,
-          okusdMint: okusdMint,
-          userOkusdAta: userOkusdAta,
+          okuMoneyMint: okuMoneyMint,
+          userOkuMoneyAta: userOkuMoneyAta,
           feeRecipientAta: feeRecipientAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -1158,8 +1158,8 @@ describe("Bridge Security Tests", () => {
           bridgeConfig: bridgeConfigPda,
           config: configPda,
           bridgeNonce: bscNoncePda,
-          okusdMint: okusdMint,
-          userOkusdAta: userOkusdAta,
+          okuMoneyMint: okuMoneyMint,
+          userOkuMoneyAta: userOkuMoneyAta,
           feeRecipientAta: feeRecipientAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -1268,23 +1268,23 @@ describe("Bridge Security Tests", () => {
           .rpc();
       }
 
-      // Ensure user has enough OkuUSD
+      // Ensure user has enough OkuMoney
       const userBalance = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
       if (Number(userBalance.amount) < 100_000_000) {
         await program.methods
-          .mint(new BN(100_000_000))
+          .mintOkuM(new BN(100_000_000))
           .accountsPartial({
             user: user.publicKey,
             config: configPda,
             usdcMint: usdcMint,
-            okusdMint: okusdMint,
+            okuMoneyMint: okuMoneyMint,
             userUsdcAta: userUsdcAta,
-            userOkusdAta: userOkusdAta,
+            userOkuMoneyAta: userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
             priceUpdate: null,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -1310,7 +1310,7 @@ describe("Bridge Security Tests", () => {
 
       const userBalanceBefore = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -1333,8 +1333,8 @@ describe("Bridge Security Tests", () => {
           bridgeConfig: bridgeConfigPda,
           config: configPda,
           bridgeNonce: noncePda,
-          okusdMint: okusdMint,
-          userOkusdAta: userOkusdAta,
+          okuMoneyMint: okuMoneyMint,
+          userOkuMoneyAta: userOkuMoneyAta,
           feeRecipientAta: feeRecipientAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -1344,7 +1344,7 @@ describe("Bridge Security Tests", () => {
 
       const userBalanceAfter = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -1388,7 +1388,7 @@ describe("Bridge Security Tests", () => {
 
       const userBalanceBefore = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -1404,8 +1404,8 @@ describe("Bridge Security Tests", () => {
           bridgeConfig: bridgeConfigPda,
           config: configPda,
           bridgeNonce: noncePda,
-          okusdMint: okusdMint,
-          userOkusdAta: userOkusdAta,
+          okuMoneyMint: okuMoneyMint,
+          userOkuMoneyAta: userOkuMoneyAta,
           feeRecipientAta: feeRecipientAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -1415,7 +1415,7 @@ describe("Bridge Security Tests", () => {
 
       const userBalanceAfter = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -1473,8 +1473,8 @@ describe("Bridge Security Tests", () => {
               bridgeConfig: bridgeConfigPda,
               config: configPda,
               bridgeNonce: noncePda,
-              okusdMint: okusdMint,
-              userOkusdAta: userOkusdAta,
+              okuMoneyMint: okuMoneyMint,
+              userOkuMoneyAta: userOkuMoneyAta,
               feeRecipientAta: feeRecipientAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
               systemProgram: SystemProgram.programId,
@@ -1520,8 +1520,8 @@ describe("Bridge Security Tests", () => {
           bridgeConfig: bridgeConfigPda,
           config: configPda,
           bridgeNonce: noncePda,
-          okusdMint: okusdMint,
-          userOkusdAta: userOkusdAta,
+          okuMoneyMint: okuMoneyMint,
+          userOkuMoneyAta: userOkuMoneyAta,
           feeRecipientAta: feeRecipientAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -1604,8 +1604,8 @@ describe("Bridge Security Tests", () => {
               bridgeConfig: bridgeConfigPda,
               config: configPda,
               bridgeNonce: noncePda,
-              okusdMint: okusdMint,
-              userOkusdAta: userOkusdAta,
+              okuMoneyMint: okuMoneyMint,
+              userOkuMoneyAta: userOkuMoneyAta,
               feeRecipientAta: feeRecipientAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
               systemProgram: SystemProgram.programId,
@@ -1633,8 +1633,8 @@ describe("Bridge Security Tests", () => {
           bridgeConfig: bridgeConfigPda,
           config: configPda,
           bridgeNonce: noncePda,
-          okusdMint: okusdMint,
-          userOkusdAta: userOkusdAta,
+          okuMoneyMint: okuMoneyMint,
+          userOkuMoneyAta: userOkuMoneyAta,
           feeRecipientAta: feeRecipientAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -1732,8 +1732,8 @@ describe("Bridge Security Tests", () => {
               bridgeConfig: bridgeConfigPda,
               config: configPda,
               bridgeNonce: noncePda,
-              okusdMint: okusdMint,
-              userOkusdAta: userOkusdAta,
+              okuMoneyMint: okuMoneyMint,
+              userOkuMoneyAta: userOkuMoneyAta,
               feeRecipientAta: feeRecipientAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
               systemProgram: SystemProgram.programId,
@@ -1869,8 +1869,8 @@ describe("Bridge Security Tests", () => {
               bridgeConfig: bridgeConfigPda,
               config: configPda,
               bridgeNonce: noncePda,
-              okusdMint: okusdMint,
-              userOkusdAta: userOkusdAta,
+              okuMoneyMint: okuMoneyMint,
+              userOkuMoneyAta: userOkuMoneyAta,
               feeRecipientAta: feeRecipientAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
               systemProgram: SystemProgram.programId,
@@ -1902,8 +1902,8 @@ describe("Bridge Security Tests", () => {
           bridgeConfig: bridgeConfigPda,
           config: configPda,
           bridgeNonce: noncePda,
-          okusdMint: okusdMint,
-          userOkusdAta: userOkusdAta,
+          okuMoneyMint: okuMoneyMint,
+          userOkuMoneyAta: userOkuMoneyAta,
           feeRecipientAta: feeRecipientAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -2114,23 +2114,23 @@ describe("Bridge Security Tests", () => {
           .rpc();
       }
 
-      // Ensure user has enough OkuUSD
+      // Ensure user has enough OkuMoney
       const userBalance = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
       if (Number(userBalance.amount) < Number(burnAmount) * 2) {
         await program.methods
-          .mint(new BN(100_000_000))
+          .mintOkuM(new BN(100_000_000))
           .accountsPartial({
             user: user.publicKey,
             config: configPda,
             usdcMint: usdcMint,
-            okusdMint: okusdMint,
+            okuMoneyMint: okuMoneyMint,
             userUsdcAta: userUsdcAta,
-            userOkusdAta: userOkusdAta,
+            userOkuMoneyAta: userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
             priceUpdate: null,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -2142,7 +2142,7 @@ describe("Bridge Security Tests", () => {
           .rpc();
       }
 
-      // Step 1: User burns OkuUSD on Solana
+      // Step 1: User burns OkuMoney on Solana
       const [noncePda] = PublicKey.findProgramAddressSync(
         [Buffer.from("bridge_nonce"), Buffer.from([destChain, 0])],
         program.programId
@@ -2150,7 +2150,7 @@ describe("Bridge Security Tests", () => {
 
       const userBalanceBefore = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -2166,8 +2166,8 @@ describe("Bridge Security Tests", () => {
           bridgeConfig: bridgeConfigPda,
           config: configPda,
           bridgeNonce: noncePda,
-          okusdMint: okusdMint,
-          userOkusdAta: userOkusdAta,
+          okuMoneyMint: okuMoneyMint,
+          userOkuMoneyAta: userOkuMoneyAta,
           feeRecipientAta: feeRecipientAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -2177,7 +2177,7 @@ describe("Bridge Security Tests", () => {
 
       const userBalanceAfter = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -2210,7 +2210,7 @@ describe("Bridge Security Tests", () => {
       // Step 4: Execute bridge_mint on Solana
       const recipientBalanceBefore = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -2230,7 +2230,7 @@ describe("Bridge Security Tests", () => {
       // Step 5: Verify tokens minted to recipient
       const recipientBalanceAfter = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -2290,23 +2290,23 @@ describe("Bridge Security Tests", () => {
     }
 
     it("refunds a failed bridge request after deadline expires", async () => {
-      // Ensure user has enough OkuUSD for the burn
+      // Ensure user has enough OkuMoney for the burn
       const userBalance = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
       if (Number(userBalance.amount) < 50_000_000) {
         await program.methods
-          .mint(new BN(100_000_000))
+          .mintOkuM(new BN(100_000_000))
           .accountsPartial({
             user: user.publicKey,
             config: configPda,
             usdcMint: usdcMint,
-            okusdMint: okusdMint,
+            okuMoneyMint: okuMoneyMint,
             userUsdcAta: userUsdcAta,
-            userOkusdAta: userOkusdAta,
+            userOkuMoneyAta: userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
             priceUpdate: null,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -2345,7 +2345,7 @@ describe("Bridge Security Tests", () => {
       // Get user balance before refund
       const userBalanceBefore = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -2361,8 +2361,8 @@ describe("Bridge Security Tests", () => {
           bridgeConfig: bridgeConfigPda,
           config: configPda,
           refundedRequest: refundedRequestPda,
-          okusdMint: okusdMint,
-          senderOkusdAta: userOkusdAta,
+          okuMoneyMint: okuMoneyMint,
+          senderOkuMoneyAta: userOkuMoneyAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -2372,7 +2372,7 @@ describe("Bridge Security Tests", () => {
       // Verify tokens were minted back to the sender
       const userBalanceAfter = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -2427,8 +2427,8 @@ describe("Bridge Security Tests", () => {
           bridgeConfig: bridgeConfigPda,
           config: configPda,
           refundedRequest: refundedRequestPda,
-          okusdMint: okusdMint,
-          senderOkusdAta: userOkusdAta,
+          okuMoneyMint: okuMoneyMint,
+          senderOkuMoneyAta: userOkuMoneyAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -2448,8 +2448,8 @@ describe("Bridge Security Tests", () => {
               bridgeConfig: bridgeConfigPda,
               config: configPda,
               refundedRequest: refundedRequestPda,
-              okusdMint: okusdMint,
-              senderOkusdAta: userOkusdAta,
+              okuMoneyMint: okuMoneyMint,
+              senderOkuMoneyAta: userOkuMoneyAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
               systemProgram: SystemProgram.programId,
             })
@@ -2494,8 +2494,8 @@ describe("Bridge Security Tests", () => {
               bridgeConfig: bridgeConfigPda,
               config: configPda,
               refundedRequest: refundedRequestPda,
-              okusdMint: okusdMint,
-              senderOkusdAta: userOkusdAta,
+              okuMoneyMint: okuMoneyMint,
+              senderOkuMoneyAta: userOkuMoneyAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
               systemProgram: SystemProgram.programId,
             })
@@ -2584,20 +2584,20 @@ describe("Bridge Security Tests", () => {
       // Ensure user has tokens
       const userBalance = await getAccount(
         provider.connection,
-        userOkusdAta,
+        userOkuMoneyAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
       if (Number(userBalance.amount) < 10_000_000) {
         await program.methods
-          .mint(new BN(50_000_000))
+          .mintOkuM(new BN(50_000_000))
           .accountsPartial({
             user: user.publicKey,
             config: configPda,
             usdcMint: usdcMint,
-            okusdMint: okusdMint,
+            okuMoneyMint: okuMoneyMint,
             userUsdcAta: userUsdcAta,
-            userOkusdAta: userOkusdAta,
+            userOkuMoneyAta: userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
             priceUpdate: null,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -2635,8 +2635,8 @@ describe("Bridge Security Tests", () => {
           bridgeConfig: bridgeConfigPda,
           config: configPda,
           bridgeNonce: noncePda,
-          okusdMint: okusdMint,
-          userOkusdAta: userOkusdAta,
+          okuMoneyMint: okuMoneyMint,
+          userOkuMoneyAta: userOkuMoneyAta,
           feeRecipientAta: feeRecipientAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,

@@ -1,5 +1,5 @@
-use anchor_lang::prelude::*;
 use crate::roles::{AuthorityRole, BridgeAuthorityRole};
+use anchor_lang::prelude::*;
 
 // ============================================================================
 // PSM Events
@@ -9,7 +9,7 @@ use crate::roles::{AuthorityRole, BridgeAuthorityRole};
 pub struct InitializeEvent {
     pub role_admin: Pubkey,
     pub usdc_mint: Pubkey,
-    pub okusd_mint: Pubkey,
+    pub oku_money_mint: Pubkey,
     pub max_supply: u64,
 }
 
@@ -17,20 +17,24 @@ pub struct InitializeEvent {
 pub struct MintEvent {
     pub user: Pubkey,
     pub usdc_amount: u64,
-    pub okusd_amount: u64,
+    pub oku_m_amount: u64,
+    /// Dollar value of the minted amount (oku_m_amount * oku_m_price / PRECISION)
+    pub dollar_value: u64,
 }
 
 #[event]
 pub struct RedeemEvent {
     pub user: Pubkey,
-    pub okusd_amount: u64,
+    pub oku_m_amount: u64,
     pub usdc_amount: u64,
+    /// Dollar value of the redeemed amount
+    pub dollar_value: u64,
 }
 
 #[event]
 pub struct RedemptionQueuedEvent {
     pub user: Pubkey,
-    pub okusd_amount: u64,
+    pub oku_m_amount: u64,
     pub queue_position: u32,
 }
 
@@ -65,10 +69,10 @@ pub struct BridgeMintEvent {
 pub struct BridgeBurnEvent {
     pub request_id: [u8; 32],
     pub user: Pubkey,
-    pub recipient: [u8; 20],       // EVM address
-    pub source_chain_id: u16,       // Solana chain ID
+    pub recipient: [u8; 20],  // EVM address
+    pub source_chain_id: u16, // Solana chain ID
     pub destination_chain: u16,
-    pub amount: u64,                // Excluding fee
+    pub amount: u64, // Excluding fee
     pub nonce: u64,
     pub deadline: i64,
 }
@@ -103,31 +107,35 @@ pub struct OracleUpdatedEvent {
     pub staleness_threshold: i64,
 }
 
+/// Emitted when OkuMoney price is updated directly
 #[event]
-pub struct InterestRateUpdatedEvent {
-    pub rate_authority: Pubkey,
-    /// New interest rate in basis points (e.g., 450 = 4.5% APY)
-    pub new_rate: i16,
+pub struct OkuMPriceUpdated {
+    pub old_multiplier: u64,
+    pub new_multiplier: u64,
+    pub timestamp: i64,
 }
 
+/// Emitted when yield is distributed across all OkuMoney holders
 #[event]
-pub struct YieldRateSetEvent {
-    pub rate_authority: Pubkey,
-    pub new_rate: i16,
-    pub end_timestamp: i64,
+pub struct YieldDistributed {
+    pub yield_amount: u64,
+    pub old_multiplier: u64,
+    pub new_multiplier: u64,
+    pub total_supply: u64,
+    pub timestamp: i64,
 }
 
+/// Emitted when yield distribution slot is set (for sandwich prevention)
 #[event]
-pub struct NextYieldRateSetEvent {
-    pub rate_authority: Pubkey,
-    pub new_rate: i16,
-    pub activates_at: i64,
+pub struct YieldDistributionSlotSet {
+    pub slot: u64,
 }
 
+/// Emitted when blacklist exemption is initialized
 #[event]
-pub struct PendingRateAppliedEvent {
-    pub rate_authority: Pubkey,
-    pub applied_rate: i16,
+pub struct BlacklistExemptInitialized {
+    pub bridge: Pubkey,
+    pub router: Pubkey,
 }
 
 #[event]

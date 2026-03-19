@@ -1,11 +1,11 @@
-use anchor_lang::prelude::*;
 use crate::contexts::{
-    InitializeBridge, BridgeChainManager, BridgeFeeManager, BridgeSignerManager,
-    BridgeLimitsManager, BridgeAdmin, BridgePause, BridgeUnpause, BridgeNonceAdmin,
+    BridgeAdmin, BridgeChainManager, BridgeFeeManager, BridgeLimitsManager, BridgeNonceAdmin,
+    BridgePause, BridgeSignerManager, BridgeUnpause, InitializeBridge,
 };
 use crate::errors::OkuError;
 use crate::events::*;
 use crate::roles::BridgeAuthorityRole;
+use anchor_lang::prelude::*;
 
 /// Initialize the bridge configuration
 /// Sets up all bridge authorities and default configuration
@@ -50,10 +50,7 @@ pub fn initialize_bridge(ctx: Context<InitializeBridge>, source_chain_id: u16) -
 }
 
 /// Add a supported destination chain
-pub fn add_supported_chain(
-    ctx: Context<BridgeChainManager>,
-    chain_id: u16,
-) -> Result<()> {
+pub fn add_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -> Result<()> {
     let config = &mut ctx.accounts.bridge_config;
     config.add_chain(chain_id)?;
 
@@ -63,10 +60,7 @@ pub fn add_supported_chain(
 }
 
 /// Remove a supported destination chain
-pub fn remove_supported_chain(
-    ctx: Context<BridgeChainManager>,
-    chain_id: u16,
-) -> Result<()> {
+pub fn remove_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -> Result<()> {
     let config = &mut ctx.accounts.bridge_config;
     config.remove_chain(chain_id)?;
 
@@ -88,10 +82,7 @@ pub fn update_bridge_fee(ctx: Context<BridgeFeeManager>, new_fee_bps: u16) -> Re
 }
 
 /// Update fee recipient address
-pub fn update_fee_recipient(
-    ctx: Context<BridgeFeeManager>,
-    new_recipient: Pubkey,
-) -> Result<()> {
+pub fn update_fee_recipient(ctx: Context<BridgeFeeManager>, new_recipient: Pubkey) -> Result<()> {
     let config = &mut ctx.accounts.bridge_config;
     config.fee_recipient = new_recipient;
 
@@ -174,10 +165,7 @@ pub fn skip_nonce(
 }
 
 /// Update the bridge deadline for new requests
-pub fn update_bridge_deadline(
-    ctx: Context<BridgeLimitsManager>,
-    new_deadline: i64,
-) -> Result<()> {
+pub fn update_bridge_deadline(ctx: Context<BridgeLimitsManager>, new_deadline: i64) -> Result<()> {
     require!(new_deadline > 0, OkuError::InvalidDeadline);
 
     let config = &mut ctx.accounts.bridge_config;

@@ -1,13 +1,13 @@
-use anchor_lang::prelude::*;
-use anchor_spl::token_interface;
 use crate::contexts::{
-    Pause, Unpause, CapManager, AllowanceManager, OracleManager,
-    FreezeAccount, ThawAccount, SetAuthority,
+    AllowanceManager, CapManager, FreezeAccount, InitializeBlacklistExempt, OracleManager, Pause,
+    SetAuthority, ThawAccount, Unpause,
 };
 use crate::errors::OkuError;
 use crate::events::*;
 use crate::roles::AuthorityRole;
 use crate::state::PsmConfig;
+use anchor_lang::prelude::*;
+use anchor_spl::token_interface;
 
 /// Pause the PSM (emergency response)
 pub fn pause(ctx: Context<Pause>) -> Result<()> {
@@ -79,36 +79,45 @@ pub fn set_oracle(
     Ok(())
 }
 
-/// Freeze an OkuUSD token account (compliance/blacklist)
+/// Freeze an OkuMoney token account (compliance/blacklist)
 /// Uses Token-2022 freeze authority CPI
 /// MUST work even when PSM is paused (no pause check)
+/// Cannot freeze blacklist-exempt addresses (bridge, router)
 pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
-    let bump = ctx.accounts.config.bump;
+    let config = &ctx.accounts.config;
+    let target_owner = ctx.accounts.target_oku_money_ata.owner;
+
+    // Check blacklist exemption
+    require!(
+        target_owner != config.blacklist_exempt_bridge
+            && target_owner != config.blacklist_exempt_router,
+        OkuError::BlacklistExempt
+    );
+
+    let bump = config.bump;
     let seeds = &[PsmConfig::SEED, &[bump]];
     let signer = &[&seeds[..]];
 
     // CPI to Token-2022 to freeze the account
-    token_interface::freeze_account(
-        CpiContext::new_with_signer(
-            ctx.accounts.token_2022_program.to_account_info(),
-            token_interface::FreezeAccount {
-                account: ctx.accounts.target_okusd_ata.to_account_info(),
-                mint: ctx.accounts.okusd_mint.to_account_info(),
-                authority: ctx.accounts.config.to_account_info(),
-            },
-            signer,
-        ),
-    )?;
+    token_interface::freeze_account(CpiContext::new_with_signer(
+        ctx.accounts.token_2022_program.to_account_info(),
+        token_interface::FreezeAccount {
+            account: ctx.accounts.target_oku_money_ata.to_account_info(),
+            mint: ctx.accounts.oku_money_mint.to_account_info(),
+            authority: ctx.accounts.config.to_account_info(),
+        },
+        signer,
+    ))?;
 
     emit!(FreezeEvent {
-        account: ctx.accounts.target_okusd_ata.key(),
-        target_owner: ctx.accounts.target_okusd_ata.owner,
+        account: ctx.accounts.target_oku_money_ata.key(),
+        target_owner,
     });
 
     Ok(())
 }
 
-/// Thaw a frozen OkuUSD token account
+/// Thaw a frozen OkuMoney token account
 /// Uses Token-2022 thaw authority CPI
 /// MUST work even when PSM is paused (no pause check)
 pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
@@ -117,22 +126,44 @@ pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
     let signer = &[&seeds[..]];
 
     // CPI to Token-2022 to thaw the account
-    token_interface::thaw_account(
-        CpiContext::new_with_signer(
-            ctx.accounts.token_2022_program.to_account_info(),
-            token_interface::ThawAccount {
-                account: ctx.accounts.target_okusd_ata.to_account_info(),
-                mint: ctx.accounts.okusd_mint.to_account_info(),
-                authority: ctx.accounts.config.to_account_info(),
-            },
-            signer,
-        ),
-    )?;
+    token_interface::thaw_account(CpiContext::new_with_signer(
+        ctx.accounts.token_2022_program.to_account_info(),
+        token_interface::ThawAccount {
+            account: ctx.accounts.target_oku_money_ata.to_account_info(),
+            mint: ctx.accounts.oku_money_mint.to_account_info(),
+            authority: ctx.accounts.config.to_account_info(),
+        },
+        signer,
+    ))?;
 
     emit!(ThawEvent {
-        account: ctx.accounts.target_okusd_ata.key(),
-        target_owner: ctx.accounts.target_okusd_ata.owner,
+        account: ctx.accounts.target_oku_money_ata.key(),
+        target_owner: ctx.accounts.target_oku_money_ata.owner,
     });
+
+    Ok(())
+}
+
+/// Initialize blacklist exemption for bridge and router addresses
+/// One-time admin call - cannot be changed after set
+pub fn initialize_blacklist_exempt(
+    ctx: Context<InitializeBlacklistExempt>,
+    bridge: Pubkey,
+    router: Pubkey,
+) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+
+    // Ensure not already initialized
+    require!(
+        config.blacklist_exempt_bridge == Pubkey::default()
+            && config.blacklist_exempt_router == Pubkey::default(),
+        OkuError::BlacklistExemptAlreadyInitialized
+    );
+
+    config.blacklist_exempt_bridge = bridge;
+    config.blacklist_exempt_router = router;
+
+    emit!(BlacklistExemptInitialized { bridge, router });
 
     Ok(())
 }

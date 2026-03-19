@@ -1,8 +1,8 @@
-use anchor_lang::prelude::*;
-use crate::contexts::{Pause, Unpause, SetAuthority};
+use crate::contexts::{Pause, SetAuthority, Unpause};
 use crate::errors::RouterError;
 use crate::events::*;
 use crate::roles::RouterAuthorityRole;
+use anchor_lang::prelude::*;
 
 /// Pause the router (emergency response)
 pub fn pause(ctx: Context<Pause>) -> Result<()> {
@@ -36,7 +36,10 @@ pub fn set_authority(
     role: RouterAuthorityRole,
     new_authority: Pubkey,
 ) -> Result<()> {
-    require!(new_authority != Pubkey::default(), RouterError::Unauthorized);
+    require!(
+        new_authority != Pubkey::default(),
+        RouterError::Unauthorized
+    );
 
     let config = &mut ctx.accounts.config;
     let old_authority = match role {

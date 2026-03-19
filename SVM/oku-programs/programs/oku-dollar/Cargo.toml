@@ -1,12 +1,12 @@
 [package]
-name = "wokusd-vault"
+name = "oku-dollar"
 version = "0.1.0"
-description = "wOkuUSD vault - wrap/unwrap OkuUSD to wOkuUSD"
+description = "OkuDollar vault - rebasing $1-pegged stablecoin backed by OkuMoney"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "wokusd_vault"
+name = "oku_dollar"
 
 [features]
 default = []
@@ -20,5 +20,6 @@ custom-panic = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]
-anchor-lang = "0.31.1"
+anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
 anchor-spl = "0.31.1"
+lite-psm = { path = "../lite-psm", features = ["cpi"] }

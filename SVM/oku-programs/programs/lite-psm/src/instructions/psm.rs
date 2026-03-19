@@ -1,39 +1,61 @@
+use crate::contexts::{DepositBuffer, MintOkuM, ProcessQueue, RedeemOkuM, WithdrawBuffer};
+use crate::errors::OkuError;
+use crate::events::*;
+use crate::helpers::{check_oracle_reserves, check_yield_lock, PRECISION};
+use crate::state::{PsmConfig, QueueEntry, RedemptionQueue};
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
 use anchor_spl::token::spl_token::state::Account as SplTokenAccount;
 use anchor_spl::token_interface;
-use crate::contexts::{MintOkusd, Redeem, ProcessQueue, DepositBuffer, WithdrawBuffer};
-use crate::errors::OkuError;
-use crate::events::*;
-use crate::helpers::{check_oracle_reserves, calculate_interest_bearing_value};
-use crate::state::{PsmConfig, RedemptionQueue, QueueEntry};
 
-/// Mint OkuUSD with USDC (1:1)
-/// If oracle is configured, checks reserves before minting
-pub fn mint(ctx: Context<MintOkusd>, usdc_amount: u64) -> Result<()> {
-    // Read state first
+/// Mint OkuMoney with USDC (price-aware)
+///
+/// oku_m_amount = usdc_amount * PRECISION / oku_m_price
+/// When oku_m_price > PRECISION, you get fewer OkuM tokens per USDC
+///
+/// If oracle is configured, checks reserves before minting.
+/// Blocked during same slot as yield distribution (sandwich prevention).
+pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
+    // Check yield distribution lock FIRST
+    check_yield_lock(&ctx.accounts.config)?;
+
+    // Read state
     let is_paused = ctx.accounts.config.is_paused;
     let max_supply = ctx.accounts.config.max_supply;
     let minter_allowance = ctx.accounts.config.minter_allowance;
     let bump = ctx.accounts.config.bump;
-    let current_supply = ctx.accounts.okusd_mint.supply;
+    let current_supply = ctx.accounts.oku_money_mint.supply;
     let oracle = ctx.accounts.config.oracle;
     let staleness_threshold = ctx.accounts.config.staleness_threshold;
 
     require!(!is_paused, OkuError::Paused);
     require!(usdc_amount > 0, OkuError::ZeroAmount);
 
-    // Calculate OkuUSD amount (1:1, adjusting for decimal differences if any)
-    let okusd_amount = usdc_amount; // Assuming same decimals
+    // Read current price from config
+    let oku_m_price = ctx.accounts.config.oku_m_price;
+
+    // Calculate OkuMoney amount (price-aware)
+    // oku_m_amount = usdc_amount * PRECISION / oku_m_price
+    let oku_m_amount = (usdc_amount as u128)
+        .checked_mul(PRECISION as u128)
+        .ok_or(OkuError::Overflow)?
+        .checked_div(oku_m_price as u128)
+        .ok_or(OkuError::Overflow)? as u64;
 
     // Check max supply
     require!(
-        current_supply.checked_add(okusd_amount).ok_or(OkuError::Overflow)? <= max_supply,
+        current_supply
+            .checked_add(oku_m_amount)
+            .ok_or(OkuError::Overflow)?
+            <= max_supply,
         OkuError::MaxSupplyExceeded
     );
 
     // Check minter allowance
-    require!(okusd_amount <= minter_allowance, OkuError::AllowanceExceeded);
+    require!(
+        oku_m_amount <= minter_allowance,
+        OkuError::AllowanceExceeded
+    );
 
     // Oracle check if configured (oracle != Pubkey::default())
     if oracle != Pubkey::default() {
@@ -42,7 +64,7 @@ pub fn mint(ctx: Context<MintOkusd>, usdc_amount: u64) -> Result<()> {
             oracle,
             staleness_threshold,
             current_supply,
-            okusd_amount,
+            oku_m_amount,
         )?;
     }
 
@@ -59,7 +81,7 @@ pub fn mint(ctx: Context<MintOkusd>, usdc_amount: u64) -> Result<()> {
         usdc_amount,
     )?;
 
-    // Mint OkuUSD to user (Token-2022)
+    // Mint OkuMoney to user (Token-2022)
     let seeds = &[PsmConfig::SEED, &[bump]];
     let signer = &[&seeds[..]];
 
@@ -70,61 +92,85 @@ pub fn mint(ctx: Context<MintOkusd>, usdc_amount: u64) -> Result<()> {
         CpiContext::new_with_signer(
             ctx.accounts.token_2022_program.to_account_info(),
             token_interface::MintTo {
-                mint: ctx.accounts.okusd_mint.to_account_info(),
-                to: ctx.accounts.user_okusd_ata.to_account_info(),
+                mint: ctx.accounts.oku_money_mint.to_account_info(),
+                to: ctx.accounts.user_oku_money_ata.to_account_info(),
                 authority: ctx.accounts.config.to_account_info(),
             },
             signer,
         ),
-        okusd_amount,
+        oku_m_amount,
     )?;
 
     // Decrement minter allowance (one-way: burns do NOT restore)
     let config = &mut ctx.accounts.config;
     config.minter_allowance = minter_allowance
-        .checked_sub(okusd_amount)
+        .checked_sub(oku_m_amount)
         .ok_or(OkuError::Overflow)?;
+
+    // Calculate dollar value for event
+    let dollar_value = (oku_m_amount as u128)
+        .checked_mul(oku_m_price as u128)
+        .ok_or(OkuError::Overflow)?
+        .checked_div(PRECISION as u128)
+        .ok_or(OkuError::Overflow)? as u64;
 
     emit!(MintEvent {
         user: user_key,
         usdc_amount,
-        okusd_amount,
+        oku_m_amount,
+        dollar_value,
     });
 
     Ok(())
 }
 
-/// Redeem OkuUSD for USDC (instant if buffer sufficient, otherwise queued)
-/// When queued, OkuUSD is held in escrow to earn yield while waiting
-pub fn redeem(ctx: Context<Redeem>, okusd_amount: u64) -> Result<()> {
-    // Read state first
+/// Redeem OkuMoney for USDC (price-aware)
+///
+/// usdc_amount = oku_m_amount * oku_m_price / PRECISION
+/// When oku_m_price > PRECISION, you get more USDC per OkuM token
+///
+/// Instant if buffer sufficient, otherwise queued.
+/// Blocked during same slot as yield distribution (sandwich prevention).
+pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
+    // Check yield distribution lock FIRST
+    check_yield_lock(&ctx.accounts.config)?;
+
+    // Read state
     let is_paused = ctx.accounts.config.is_paused;
     let bump = ctx.accounts.config.bump;
-    let okusd_decimals = ctx.accounts.okusd_mint.decimals;
+    let oku_money_decimals = ctx.accounts.oku_money_mint.decimals;
     let vault_usdc_balance = ctx.accounts.vault_usdc.amount;
 
     require!(!is_paused, OkuError::Paused);
-    require!(okusd_amount > 0, OkuError::ZeroAmount);
+    require!(oku_m_amount > 0, OkuError::ZeroAmount);
 
-    // Calculate USDC amount (1:1 with OkuUSD, both have same decimals)
-    let usdc_amount = okusd_amount;
+    // Read current price from config
+    let oku_m_price = ctx.accounts.config.oku_m_price;
+
+    // Calculate USDC amount (price-aware)
+    // usdc_amount = oku_m_amount * oku_m_price / PRECISION
+    let usdc_amount = (oku_m_amount as u128)
+        .checked_mul(oku_m_price as u128)
+        .ok_or(OkuError::Overflow)?
+        .checked_div(PRECISION as u128)
+        .ok_or(OkuError::Overflow)? as u64;
 
     // Check if buffer is sufficient for instant redemption
     if vault_usdc_balance >= usdc_amount {
         // Instant redemption path:
-        // 1. Burn OkuUSD from user
+        // 1. Burn OkuMoney from user
         // 2. Transfer USDC to user
 
         token_interface::burn(
             CpiContext::new(
                 ctx.accounts.token_2022_program.to_account_info(),
                 token_interface::Burn {
-                    mint: ctx.accounts.okusd_mint.to_account_info(),
-                    from: ctx.accounts.user_okusd_ata.to_account_info(),
+                    mint: ctx.accounts.oku_money_mint.to_account_info(),
+                    from: ctx.accounts.user_oku_money_ata.to_account_info(),
                     authority: ctx.accounts.user.to_account_info(),
                 },
             ),
-            okusd_amount,
+            oku_m_amount,
         )?;
 
         let seeds = &[PsmConfig::SEED, &[bump]];
@@ -145,36 +191,37 @@ pub fn redeem(ctx: Context<Redeem>, okusd_amount: u64) -> Result<()> {
 
         emit!(RedeemEvent {
             user: ctx.accounts.user.key(),
-            okusd_amount,
+            oku_m_amount,
             usdc_amount,
+            dollar_value: usdc_amount, // USDC is dollar-denominated
         });
     } else {
         // Queue redemption path:
-        // 1. Transfer OkuUSD to escrow (NOT burn - so it earns yield while queued)
-        // 2. Record entry in queue with timestamp for interest calculation
+        // 1. Transfer OkuMoney to escrow
+        // 2. Record entry in queue
 
         let queue = &mut ctx.accounts.redemption_queue;
         require!(!queue.is_full(), OkuError::QueueFull);
 
-        // Transfer OkuUSD from user to escrow vault (yield accrues while in escrow)
+        // Transfer OkuMoney from user to escrow vault
         token_interface::transfer_checked(
             CpiContext::new(
                 ctx.accounts.token_2022_program.to_account_info(),
                 token_interface::TransferChecked {
-                    from: ctx.accounts.user_okusd_ata.to_account_info(),
-                    to: ctx.accounts.vault_okusd.to_account_info(),
+                    from: ctx.accounts.user_oku_money_ata.to_account_info(),
+                    to: ctx.accounts.vault_oku_money.to_account_info(),
                     authority: ctx.accounts.user.to_account_info(),
-                    mint: ctx.accounts.okusd_mint.to_account_info(),
+                    mint: ctx.accounts.oku_money_mint.to_account_info(),
                 },
             ),
-            okusd_amount,
-            okusd_decimals,
+            oku_m_amount,
+            oku_money_decimals,
         )?;
 
         let clock = Clock::get()?;
         let entry = QueueEntry {
             user: ctx.accounts.user.key(),
-            okusd_raw_amount: okusd_amount,
+            oku_m_amount,
             timestamp: clock.unix_timestamp,
         };
 
@@ -185,7 +232,7 @@ pub fn redeem(ctx: Context<Redeem>, okusd_amount: u64) -> Result<()> {
 
         emit!(RedemptionQueuedEvent {
             user: ctx.accounts.user.key(),
-            okusd_amount,
+            oku_m_amount,
             queue_position: position,
         });
     }
@@ -194,47 +241,50 @@ pub fn redeem(ctx: Context<Redeem>, okusd_amount: u64) -> Result<()> {
 }
 
 /// Process redemption queue (FIFO) - supports multiple recipients
-/// Recipient USDC ATAs must be passed in remaining_accounts in queue order
-/// Burns OkuUSD from escrow (including accrued yield) and transfers equivalent USDC
-/// NOTE: Deliberately allowed during pause — users must be able to receive queued redemptions
-pub fn process_queue<'info>(ctx: Context<'_, '_, '_, 'info, ProcessQueue<'info>>, max_entries: u32) -> Result<()> {
+///
+/// Uses current oku_m_price for all entries in the batch (cached once).
+/// Recipient USDC ATAs must be passed in remaining_accounts in queue order.
+///
+/// NOTE: Deliberately allowed during pause - users must be able to receive queued redemptions.
+pub fn process_queue<'info>(
+    ctx: Context<'_, '_, '_, 'info, ProcessQueue<'info>>,
+    max_entries: u32,
+) -> Result<()> {
     let queue = &mut ctx.accounts.redemption_queue;
     let bump = ctx.accounts.config.bump;
-    let current_rate_bps = ctx.accounts.config.current_rate_bps;
 
     require!(!queue.is_empty(), OkuError::QueueEmpty);
 
     let seeds = &[PsmConfig::SEED, &[bump]];
     let signer = &[&seeds[..]];
 
+    // Cache price once for batch consistency (matches EVM behavior)
+    let oku_m_price = ctx.accounts.config.oku_m_price;
+
     let mut processed = 0u32;
     let vault_usdc_balance = ctx.accounts.vault_usdc.amount;
     let mut remaining_usdc_balance = vault_usdc_balance;
 
-    let clock = Clock::get()?;
-    let current_time = clock.unix_timestamp;
-
     // Clone account infos needed for CPI to avoid lifetime issues
     let vault_usdc_info = ctx.accounts.vault_usdc.to_account_info();
-    let vault_okusd_info = ctx.accounts.vault_okusd.to_account_info();
+    let vault_oku_money_info = ctx.accounts.vault_oku_money.to_account_info();
     let config_account_info = ctx.accounts.config.to_account_info();
     let token_program_info = ctx.accounts.token_program.to_account_info();
     let token_2022_program_info = ctx.accounts.token_2022_program.to_account_info();
-    let okusd_mint_info = ctx.accounts.okusd_mint.to_account_info();
+    let oku_money_mint_info = ctx.accounts.oku_money_mint.to_account_info();
 
     while processed < max_entries && !queue.is_empty() {
         let head_idx = (queue.head % RedemptionQueue::MAX_ENTRIES as u32) as usize;
 
         let entry = &queue.entries[head_idx];
 
-        // Calculate interest-bearing value (OkuUSD amount including accrued yield)
-        // Formula: ui_amount = raw_amount × (1 + rate × time_elapsed / seconds_per_year)
-        let time_elapsed = current_time.saturating_sub(entry.timestamp);
-        let usdc_amount = calculate_interest_bearing_value(
-            entry.okusd_raw_amount,
-            current_rate_bps,
-            time_elapsed,
-        )?;
+        // Calculate USDC payout using current price
+        // usdc_amount = oku_m_amount * oku_m_price / PRECISION
+        let usdc_amount = (entry.oku_m_amount as u128)
+            .checked_mul(oku_m_price as u128)
+            .ok_or(OkuError::Overflow)?
+            .checked_div(PRECISION as u128)
+            .ok_or(OkuError::Overflow)? as u64;
 
         // Check if we have enough USDC
         if remaining_usdc_balance < usdc_amount {
@@ -252,8 +302,8 @@ pub fn process_queue<'info>(ctx: Context<'_, '_, '_, 'info, ProcessQueue<'info>>
 
         // Verify the account belongs to the queued user
         let account_data = recipient_usdc_ata.try_borrow_data()?;
-        let parsed = SplTokenAccount::unpack(&account_data)
-            .map_err(|_| OkuError::RecipientMismatch)?;
+        let parsed =
+            SplTokenAccount::unpack(&account_data).map_err(|_| OkuError::RecipientMismatch)?;
         let token_account_owner = parsed.owner;
 
         require!(
@@ -262,26 +312,26 @@ pub fn process_queue<'info>(ctx: Context<'_, '_, '_, 'info, ProcessQueue<'info>>
         );
 
         let user = entry.user;
-        let okusd_raw_amount = entry.okusd_raw_amount;
+        let oku_m_amount = entry.oku_m_amount;
 
         // Drop the borrow before CPI
         drop(account_data);
 
-        // Burn OkuUSD from escrow vault (the raw amount that was stored)
+        // Burn OkuMoney from escrow vault
         token_interface::burn(
             CpiContext::new_with_signer(
                 token_2022_program_info.clone(),
                 token_interface::Burn {
-                    mint: okusd_mint_info.clone(),
-                    from: vault_okusd_info.clone(),
+                    mint: oku_money_mint_info.clone(),
+                    from: vault_oku_money_info.clone(),
                     authority: config_account_info.clone(),
                 },
                 signer,
             ),
-            okusd_raw_amount,
+            oku_m_amount,
         )?;
 
-        // Transfer USDC to recipient (amount includes yield accrued while queued)
+        // Transfer USDC to recipient
         anchor_spl::token::transfer(
             CpiContext::new_with_signer(
                 token_program_info.clone(),
@@ -302,10 +352,7 @@ pub fn process_queue<'info>(ctx: Context<'_, '_, '_, 'info, ProcessQueue<'info>>
         queue.head = queue.head.wrapping_add(1);
         processed += 1;
 
-        emit!(RedemptionProcessedEvent {
-            user,
-            usdc_amount,
-        });
+        emit!(RedemptionProcessedEvent { user, usdc_amount });
     }
 
     Ok(())
@@ -336,32 +383,40 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
 }
 
 /// Withdraw USDC from buffer (buffer_withdrawer only)
-/// Used to reclaim excess buffer after redemptions processed
-/// Protects queued redemptions: cannot withdraw if it would strand queued entries
+///
+/// Used to reclaim excess buffer after redemptions processed.
+/// Protects queued redemptions: cannot withdraw if it would strand queued entries.
 pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> {
     require!(amount > 0, OkuError::ZeroAmount);
 
-    // Protect queued redemptions: sum pending entries' interest-adjusted amounts as reserved USDC
-    // process_queue() pays interest-adjusted values, so we must reserve the same
+    // Protect queued redemptions: sum pending entries' price-adjusted amounts as reserved USDC
     let queue = &ctx.accounts.redemption_queue;
-    let current_rate_bps = ctx.accounts.config.current_rate_bps;
-    let clock = Clock::get()?;
+
+    // Read current price from config to calculate reserved USDC
+    let oku_m_price = ctx.accounts.config.oku_m_price;
+
     let mut reserved: u64 = 0;
     let pending = queue.pending_count();
     for i in 0..pending {
         let idx = ((queue.head.wrapping_add(i)) % RedemptionQueue::MAX_ENTRIES as u32) as usize;
         let entry = &queue.entries[idx];
-        let time_elapsed = clock.unix_timestamp.saturating_sub(entry.timestamp);
-        let adjusted = calculate_interest_bearing_value(
-            entry.okusd_raw_amount, current_rate_bps, time_elapsed,
-        )?;
-        reserved = reserved
-            .checked_add(adjusted)
-            .ok_or(OkuError::Overflow)?;
+
+        // Calculate USDC value of this entry at current price
+        let usdc_value = (entry.oku_m_amount as u128)
+            .checked_mul(oku_m_price as u128)
+            .ok_or(OkuError::Overflow)?
+            .checked_div(PRECISION as u128)
+            .ok_or(OkuError::Overflow)? as u64;
+
+        reserved = reserved.checked_add(usdc_value).ok_or(OkuError::Overflow)?;
     }
+
     let vault_balance = ctx.accounts.vault_usdc.amount;
     require!(
-        vault_balance.checked_sub(amount).ok_or(OkuError::Overflow)? >= reserved,
+        vault_balance
+            .checked_sub(amount)
+            .ok_or(OkuError::Overflow)?
+            >= reserved,
         OkuError::InsufficientBuffer
     );
 

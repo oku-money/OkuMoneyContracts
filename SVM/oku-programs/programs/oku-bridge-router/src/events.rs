@@ -1,5 +1,5 @@
-use anchor_lang::prelude::*;
 use crate::roles::RouterAuthorityRole;
+use anchor_lang::prelude::*;
 
 #[event]
 pub struct InitializeEvent {
@@ -7,10 +7,10 @@ pub struct InitializeEvent {
 }
 
 #[event]
-pub struct BridgeWrappedEvent {
+pub struct BridgeUsdOkuEvent {
     pub user: Pubkey,
-    pub wokusd_shares: u64,
-    pub okusd_amount: u64,
+    pub usd_oku_shares: u64,
+    pub oku_money_amount: u64,
     pub destination_chain: u16,
     pub recipient: [u8; 20],
 }

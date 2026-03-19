@@ -1,5 +1,5 @@
-use anchor_lang::prelude::*;
 use crate::errors::OkuError;
+use anchor_lang::prelude::*;
 
 /// PSM configuration PDA
 /// Seeds: ["psm_config"]
@@ -37,13 +37,13 @@ pub struct PsmConfig {
     // ===== Token References =====
     /// USDC mint address
     pub usdc_mint: Pubkey,
-    /// OkuUSD mint address (Token-2022)
-    pub okusd_mint: Pubkey,
+    /// OkuMoney mint address (Token-2022 with Scaled UI Amount extension)
+    pub oku_money_mint: Pubkey,
     /// PSM's USDC buffer vault (ATA)
     pub vault_usdc: Pubkey,
-    /// PSM's OkuUSD escrow vault for queued redemptions (ATA)
-    /// Holds OkuUSD while users are in queue so they earn yield
-    pub vault_okusd: Pubkey,
+    /// PSM's OkuMoney escrow vault for queued redemptions (ATA)
+    /// Holds OkuMoney while users are in queue (yield comes from price appreciation)
+    pub vault_oku_money: Pubkey,
 
     // ===== Limits =====
     /// Maximum OkuUSD supply cap
@@ -58,22 +58,29 @@ pub struct PsmConfig {
     pub oracle: Pubkey,
     /// Maximum oracle staleness in seconds
     pub staleness_threshold: i64,
-    /// Current interest rate in basis points (e.g., 450 = 4.5% APY)
-    /// Stored here for queue processing interest calculations
-    pub current_rate_bps: i16,
-    /// When current rate expires (0 = no expiry)
-    pub rate_end: i64,
-    /// Next rate, applied when rate_end passes (0 = none)
-    pub pending_rate_bps: i16,
+    /// Solana slot of last yield distribution (sandwich prevention)
+    /// Operations like mint/redeem are blocked in the same slot as yield distribution
+    pub last_yield_distribution_slot: u64,
+
+    // ===== OkuMoney Price =====
+    /// Current OkuMoney price multiplier (1e9 = $1.00)
+    /// Updated by set_oku_m_price() or distribute_yield()
+    /// Matches EVM's okuMPrice() storage pattern
+    pub oku_m_price: u64,
+
+    /// Blacklist-exempt bridge address (cannot be frozen)
+    pub blacklist_exempt_bridge: Pubkey,
+    /// Blacklist-exempt router address (cannot be frozen)
+    pub blacklist_exempt_router: Pubkey,
 }
 
 impl PsmConfig {
     pub const SEED: &'static [u8] = b"psm_config";
 
     /// Space needed for PsmConfig account
-    /// 8 (discriminator) + 1 (bump) + 32*12 (authority pubkeys) + 32*4 (token pubkeys) + 8*2 (u64s) + 1 (bool) + 32 (oracle) + 8 (i64) + 2 (i16) + 8 (i64 rate_end) + 2 (i16 pending_rate_bps)
-    /// = 8 + 1 + 384 + 128 + 16 + 1 + 32 + 8 + 2 + 8 + 2 = 590 bytes
-    pub const LEN: usize = 8 + 1 + 32 * 12 + 32 * 4 + 8 * 2 + 1 + 32 + 8 + 2 + 8 + 2;
+    /// 8 (discriminator) + 1 (bump) + 32*12 (authority pubkeys) + 32*4 (token pubkeys) + 8*2 (u64s) + 1 (bool) + 32 (oracle) + 8 (i64 staleness) + 8 (u64 last_yield_slot) + 8 (u64 oku_m_price) + 32*2 (blacklist_exempt pubkeys)
+    /// = 8 + 1 + 384 + 128 + 16 + 1 + 32 + 8 + 8 + 8 + 64 = 658 bytes
+    pub const LEN: usize = 8 + 1 + 32 * 12 + 32 * 4 + 8 * 2 + 1 + 32 + 8 + 8 + 8 + 32 * 2;
 }
 
 /// Redemption queue PDA
@@ -126,11 +133,11 @@ impl RedemptionQueue {
 pub struct QueueEntry {
     /// User who is owed redemption
     pub user: Pubkey,
-    /// OkuUSD raw amount held in escrow (stored amount, not UI amount)
+    /// OkuMoney amount held in escrow
     /// The actual USDC payout will be calculated at process_queue time
-    /// using the interest rate and time elapsed to include accrued yield
-    pub okusd_raw_amount: u64,
-    /// Timestamp when queued (used for interest calculation)
+    /// using the current oku_m_price multiplier
+    pub oku_m_amount: u64,
+    /// Timestamp when queued (kept for audit trail)
     pub timestamp: i64,
 }
 
@@ -204,14 +211,16 @@ impl BridgeConfig {
 
     /// Check if a chain is supported
     pub fn is_chain_supported(&self, chain_id: u16) -> bool {
-        self.supported_chains[..self.supported_chains_count as usize]
-            .contains(&chain_id)
+        self.supported_chains[..self.supported_chains_count as usize].contains(&chain_id)
     }
 
     /// Add a supported chain (returns error if full or already exists)
     pub fn add_chain(&mut self, chain_id: u16) -> Result<()> {
         require!(chain_id != 0, OkuError::UnsupportedChain);
-        require!(!self.is_chain_supported(chain_id), OkuError::ChainAlreadySupported);
+        require!(
+            !self.is_chain_supported(chain_id),
+            OkuError::ChainAlreadySupported
+        );
         require!(self.supported_chains_count < 32, OkuError::ChainListFull);
 
         self.supported_chains[self.supported_chains_count as usize] = chain_id;

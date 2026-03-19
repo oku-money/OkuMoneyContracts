@@ -1,10 +1,10 @@
+use crate::errors::OkuError;
+use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::{
     token_2022::Token2022,
     token_interface::{Mint as MintInterface, TokenAccount as TokenAccountInterface},
 };
-use crate::errors::OkuError;
-use crate::state::PsmConfig;
 
 #[derive(Accounts)]
 pub struct Pause<'info> {
@@ -105,20 +105,20 @@ pub struct FreezeAccount<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// OkuUSD mint (Token-2022)
+    /// OkuMoney mint (Token-2022)
     #[account(
-        address = config.okusd_mint,
+        address = config.oku_money_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// Target account to freeze
     #[account(
         mut,
-        token::mint = okusd_mint,
+        token::mint = oku_money_mint,
         token::token_program = token_2022_program,
     )]
-    pub target_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub target_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }
@@ -137,22 +137,39 @@ pub struct ThawAccount<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// OkuUSD mint (Token-2022)
+    /// OkuMoney mint (Token-2022)
     #[account(
-        address = config.okusd_mint,
+        address = config.oku_money_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// Target account to thaw
     #[account(
         mut,
-        token::mint = okusd_mint,
+        token::mint = oku_money_mint,
         token::token_program = token_2022_program,
     )]
-    pub target_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub target_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,
+}
+
+#[derive(Accounts)]
+pub struct InitializeBlacklistExempt<'info> {
+    /// Role admin - only role_admin can set blacklist exemptions
+    #[account(
+        constraint = role_admin.key() == config.role_admin @ OkuError::Unauthorized
+    )]
+    pub role_admin: Signer<'info>,
+
+    /// PSM config
+    #[account(
+        mut,
+        seeds = [PsmConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Account<'info, PsmConfig>,
 }
 
 #[derive(Accounts)]

@@ -6,4 +6,6 @@ pub enum AuthorityRole {
     RoleAdmin,
     Pauser,
     Unpauser,
+    UsdRebaser,
+    ReserveManager,
 }

@@ -1,8 +1,10 @@
+use crate::errors::OkuError;
+use crate::state::{BridgeConfig, BridgeNonce, ProcessedRequest, PsmConfig, RefundedRequest};
 use anchor_lang::prelude::*;
 use anchor_spl::token_2022::Token2022;
-use anchor_spl::token_interface::{self, Mint as MintInterface, TokenAccount as TokenAccountInterface};
-use crate::errors::OkuError;
-use crate::state::{BridgeConfig, BridgeNonce, PsmConfig, ProcessedRequest, RefundedRequest};
+use anchor_spl::token_interface::{
+    self, Mint as MintInterface, TokenAccount as TokenAccountInterface,
+};
 
 #[derive(Accounts)]
 #[instruction(message_bytes: Vec<u8>, signature: Vec<u8>, request_id: [u8; 32])]
@@ -40,21 +42,21 @@ pub struct BridgeMint<'info> {
     )]
     pub processed_request: Account<'info, ProcessedRequest>,
 
-    /// OkuUSD mint (Token-2022)
+    /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
     #[account(
         mut,
-        address = config.okusd_mint,
+        address = config.oku_money_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// Recipient's OkuUSD account (will validate owner in function body)
+    /// Recipient's OkuMoney account (will validate owner in function body)
     #[account(
         mut,
-        token::mint = okusd_mint,
+        token::mint = oku_money_mint,
         token::token_program = token_2022_program,
     )]
-    pub recipient_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub recipient_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// Instruction sysvar for Ed25519 signature verification
     /// CHECK: Verified in verify_ed25519_signature function
@@ -95,27 +97,27 @@ pub struct BridgeBurn<'info> {
     )]
     pub bridge_nonce: Account<'info, BridgeNonce>,
 
-    /// OkuUSD mint (Token-2022)
+    /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
     #[account(
         mut,
-        address = config.okusd_mint,
+        address = config.oku_money_mint,
         mint::token_program = token_2022_program
     )]
-    pub okusd_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// User's OkuUSD account
+    /// User's OkuMoney account
     #[account(
         mut,
-        associated_token::mint = okusd_mint,
+        associated_token::mint = oku_money_mint,
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_okusd_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub user_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// Fee recipient's OkuUSD account
+    /// Fee recipient's OkuMoney account
     #[account(
         mut,
-        token::mint = okusd_mint,
+        token::mint = oku_money_mint,
         token::authority = bridge_config.fee_recipient,
         token::token_program = token_2022_program,
     )]
@@ -154,15 +156,16 @@ pub struct RefundBridgeRequest<'info> {
     )]
     pub refunded_request: Account<'info, RefundedRequest>,
 
+    /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
     #[account(
         mut,
-        constraint = okusd_mint.key() == config.okusd_mint
+        constraint = oku_money_mint.key() == config.oku_money_mint
     )]
-    pub okusd_mint: InterfaceAccount<'info, token_interface::Mint>,
+    pub oku_money_mint: InterfaceAccount<'info, token_interface::Mint>,
 
-    /// Sender's OkuUSD ATA — owner is validated in instruction body
+    /// Sender's OkuMoney ATA - owner is validated in instruction body
     #[account(mut)]
-    pub sender_okusd_ata: InterfaceAccount<'info, token_interface::TokenAccount>,
+    pub sender_oku_money_ata: InterfaceAccount<'info, token_interface::TokenAccount>,
 
     pub token_2022_program: Interface<'info, token_interface::TokenInterface>,
     pub system_program: Program<'info, System>,

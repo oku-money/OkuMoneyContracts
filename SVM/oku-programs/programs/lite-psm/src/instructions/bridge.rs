@@ -1,19 +1,19 @@
-use anchor_lang::prelude::*;
-use anchor_spl::token_interface;
-use crate::contexts::{BridgeMint, BridgeBurn, RefundBridgeRequest};
+use crate::contexts::{BridgeBurn, BridgeMint, RefundBridgeRequest};
 use crate::errors::OkuError;
 use crate::events::*;
 use crate::helpers::verify_ed25519_signature;
 use crate::state::{BridgeRequest, PsmConfig};
+use anchor_lang::prelude::*;
+use anchor_spl::token_interface;
 
 /// Bridge mint (from cross-chain) - SECURE VERSION with Ed25519 signature verification
 /// Verifies orchestrator signature over bridge request data
 /// Prevents replay attacks via request_id tracking
 pub fn bridge_mint(
     ctx: Context<BridgeMint>,
-    message_bytes: Vec<u8>,    // Raw serialized BridgeRequest (80 bytes)
-    signature: Vec<u8>,         // Ed25519 signature (64 bytes)
-    request_id: [u8; 32],      // keccak256(message_bytes) — used for PDA derivation
+    message_bytes: Vec<u8>, // Raw serialized BridgeRequest (80 bytes)
+    signature: Vec<u8>,     // Ed25519 signature (64 bytes)
+    request_id: [u8; 32],   // keccak256(message_bytes) — used for PDA derivation
 ) -> Result<()> {
     // 1. Validate lengths
     require!(message_bytes.len() == 80, OkuError::InvalidMessageLength);
@@ -26,14 +26,15 @@ pub fn bridge_mint(
     let max_supply = ctx.accounts.config.max_supply;
     let minter_allowance = ctx.accounts.config.minter_allowance;
     let config_bump = ctx.accounts.config.bump;
-    let current_supply = ctx.accounts.okusd_mint.supply;
+    let current_supply = ctx.accounts.oku_money_mint.supply;
 
     // 2. Check bridge and PSM not paused
     require!(!is_bridge_paused, OkuError::BridgePaused);
     require!(!is_psm_paused, OkuError::Paused);
 
     // 3. Convert signature Vec to fixed array for verification
-    let signature_array: [u8; 64] = signature.as_slice()
+    let signature_array: [u8; 64] = signature
+        .as_slice()
         .try_into()
         .map_err(|_| OkuError::InvalidSignature)?;
 
@@ -56,7 +57,10 @@ pub fn bridge_mint(
 
     // 6. Validate deadline
     let clock = Clock::get()?;
-    require!(clock.unix_timestamp <= request.deadline, OkuError::SignatureExpired);
+    require!(
+        clock.unix_timestamp <= request.deadline,
+        OkuError::SignatureExpired
+    );
 
     // 7. Validate amount (limits enforced at bridge_burn time only; not on mint
     // to prevent stranding funds when limits change between burn and mint)
@@ -67,25 +71,34 @@ pub fn bridge_mint(
 
     // 9. Validate recipient matches ATA owner (wallet address, not derived ATA)
     require!(
-        recipient_pubkey == ctx.accounts.recipient_okusd_ata.owner,
+        recipient_pubkey == ctx.accounts.recipient_oku_money_ata.owner,
         OkuError::InvalidRecipient
     );
 
     // 10. Verify request_id matches keccak256(message_bytes)
     let computed_request_id = anchor_lang::solana_program::keccak::hash(&message_bytes).to_bytes();
-    require!(request_id == computed_request_id, OkuError::InvalidRequestId);
+    require!(
+        request_id == computed_request_id,
+        OkuError::InvalidRequestId
+    );
 
     // 11. Verify request not already processed (replay prevention)
     // The init constraint on processed_request will fail if request_id already exists
 
     // 12. Check PSM allowance and max supply
-    require!(request.amount <= minter_allowance, OkuError::AllowanceExceeded);
     require!(
-        current_supply.checked_add(request.amount).ok_or(OkuError::Overflow)? <= max_supply,
+        request.amount <= minter_allowance,
+        OkuError::AllowanceExceeded
+    );
+    require!(
+        current_supply
+            .checked_add(request.amount)
+            .ok_or(OkuError::Overflow)?
+            <= max_supply,
         OkuError::MaxSupplyExceeded
     );
 
-    // 12. Mint OkuUSD to recipient
+    // 12. Mint OkuMoney to recipient
     let seeds = &[PsmConfig::SEED, &[config_bump]];
     let signer = &[&seeds[..]];
 
@@ -94,8 +107,8 @@ pub fn bridge_mint(
         CpiContext::new_with_signer(
             ctx.accounts.token_2022_program.to_account_info(),
             token_interface::MintTo {
-                mint: ctx.accounts.okusd_mint.to_account_info(),
-                to: ctx.accounts.recipient_okusd_ata.to_account_info(),
+                mint: ctx.accounts.oku_money_mint.to_account_info(),
+                to: ctx.accounts.recipient_oku_money_ata.to_account_info(),
                 authority: ctx.accounts.config.to_account_info(),
             },
             signer,
@@ -114,14 +127,14 @@ pub fn bridge_mint(
     processed_request.bump = ctx.bumps.processed_request;
     processed_request.request_id = request_id;
     processed_request.processed_at = clock.unix_timestamp;
-    processed_request.recipient = ctx.accounts.recipient_okusd_ata.key();
+    processed_request.recipient = ctx.accounts.recipient_oku_money_ata.key();
     processed_request.amount = request.amount;
 
     // 16. Emit event
     emit!(BridgeMintEvent {
         request_id,
         source_chain_id: request.source_chain_id,
-        recipient: ctx.accounts.recipient_okusd_ata.key(),
+        recipient: ctx.accounts.recipient_oku_money_ata.key(),
         amount: request.amount,
         nonce: request.nonce,
     });
@@ -133,8 +146,8 @@ pub fn bridge_mint(
 /// Burns user tokens, collects bridge fee, tracks sequential nonce, emits full metadata
 pub fn bridge_burn(
     ctx: Context<BridgeBurn>,
-    amount: u64,              // Total amount to deduct from user (fee deducted from this)
-    recipient: [u8; 20],      // EVM address on destination chain
+    amount: u64,         // Total amount to deduct from user (fee deducted from this)
+    recipient: [u8; 20], // EVM address on destination chain
     destination_chain_id: u16,
 ) -> Result<()> {
     let bridge_config = &ctx.accounts.bridge_config;
@@ -178,8 +191,8 @@ pub fn bridge_burn(
         CpiContext::new(
             ctx.accounts.token_2022_program.to_account_info(),
             token_interface::Burn {
-                mint: ctx.accounts.okusd_mint.to_account_info(),
-                from: ctx.accounts.user_okusd_ata.to_account_info(),
+                mint: ctx.accounts.oku_money_mint.to_account_info(),
+                from: ctx.accounts.user_oku_money_ata.to_account_info(),
                 authority: ctx.accounts.user.to_account_info(),
             },
         ),
@@ -197,7 +210,7 @@ pub fn bridge_burn(
             CpiContext::new_with_signer(
                 ctx.accounts.token_2022_program.to_account_info(),
                 token_interface::MintTo {
-                    mint: ctx.accounts.okusd_mint.to_account_info(),
+                    mint: ctx.accounts.oku_money_mint.to_account_info(),
                     to: ctx.accounts.fee_recipient_ata.to_account_info(),
                     authority: ctx.accounts.config.to_account_info(),
                 },
@@ -223,7 +236,10 @@ pub fn bridge_burn(
 
     // 8. Calculate request_id for orchestrator tracking
     let clock = Clock::get()?;
-    let deadline = clock.unix_timestamp.checked_add(bridge_config.bridge_deadline_secs).ok_or(OkuError::Overflow)?;
+    let deadline = clock
+        .unix_timestamp
+        .checked_add(bridge_config.bridge_deadline_secs)
+        .ok_or(OkuError::Overflow)?;
 
     let source_chain_id = ctx.accounts.bridge_config.source_chain_id;
 
@@ -267,7 +283,10 @@ pub fn refund_bridge_request(
 
     // 2. Verify request_id matches keccak256(message_bytes)
     let computed_request_id = anchor_lang::solana_program::keccak::hash(&message_bytes).to_bytes();
-    require!(request_id == computed_request_id, OkuError::InvalidRequestId);
+    require!(
+        request_id == computed_request_id,
+        OkuError::InvalidRequestId
+    );
 
     // 3. Parse request to get sender/amount
     let request = BridgeRequest::try_from_slice(&message_bytes)?;
@@ -280,23 +299,32 @@ pub fn refund_bridge_request(
 
     // 5. Deadline check: refund only after mint window has closed
     let clock = Clock::get()?;
-    require!(clock.unix_timestamp > request.deadline, OkuError::MintWindowStillOpen);
+    require!(
+        clock.unix_timestamp > request.deadline,
+        OkuError::MintWindowStillOpen
+    );
 
     // 6. Convert sender bytes to Pubkey (sender is 20 bytes for EVM, but on SVM source chain it's 32 bytes in the first 20+12 bytes)
     // For SVM→EVM bridges, the sender field is the first 20 bytes of the 32-byte Solana pubkey
     // But for refunds, we need to reconstruct the Solana sender address
-    // The sender_okusd_ata owner is validated in the accounts struct
-    let sender_pubkey = ctx.accounts.sender_okusd_ata.owner;
+    // The sender_oku_money_ata owner is validated in the accounts struct
+    let sender_pubkey = ctx.accounts.sender_oku_money_ata.owner;
 
     // 7. Check supply cap and minter allowance (parity with EVM refundFailedRequest)
-    let current_supply = ctx.accounts.okusd_mint.supply;
+    let current_supply = ctx.accounts.oku_money_mint.supply;
     let max_supply = ctx.accounts.config.max_supply;
     let minter_allowance = ctx.accounts.config.minter_allowance;
     require!(
-        current_supply.checked_add(request.amount).ok_or(OkuError::Overflow)? <= max_supply,
+        current_supply
+            .checked_add(request.amount)
+            .ok_or(OkuError::Overflow)?
+            <= max_supply,
         OkuError::MaxSupplyExceeded
     );
-    require!(request.amount <= minter_allowance, OkuError::AllowanceExceeded);
+    require!(
+        request.amount <= minter_allowance,
+        OkuError::AllowanceExceeded
+    );
 
     // 8. Mint tokens back to sender
     let config_bump = ctx.accounts.config.bump;
@@ -307,8 +335,8 @@ pub fn refund_bridge_request(
         CpiContext::new_with_signer(
             ctx.accounts.token_2022_program.to_account_info(),
             token_interface::MintTo {
-                mint: ctx.accounts.okusd_mint.to_account_info(),
-                to: ctx.accounts.sender_okusd_ata.to_account_info(),
+                mint: ctx.accounts.oku_money_mint.to_account_info(),
+                to: ctx.accounts.sender_oku_money_ata.to_account_info(),
                 authority: ctx.accounts.config.to_account_info(),
             },
             signer,

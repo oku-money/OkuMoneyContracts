@@ -1,11 +1,11 @@
 use anchor_lang::prelude::*;
 
-pub mod state;
+pub mod contexts;
 pub mod errors;
 pub mod events;
-pub mod roles;
-pub mod contexts;
 pub mod instructions;
+pub mod roles;
+pub mod state;
 
 use contexts::*;
 use roles::*;
@@ -20,14 +20,23 @@ pub mod oku_bridge_router {
         instructions::core::initialize(ctx, pauser, unpauser)
     }
 
-    pub fn bridge_wrapped(
-        ctx: Context<BridgeWrapped>,
-        wokusd_shares: u64,
+    /// Bridge usdOku cross-chain in one transaction
+    /// 1. Unwraps usdOku -> OkuMoney via oku-dollar vault
+    /// 2. Burns OkuMoney via PSM bridge_burn
+    pub fn bridge_usd_oku(
+        ctx: Context<BridgeUsdOku>,
+        usd_oku_shares: u64,
         recipient: [u8; 20],
         destination_chain: u16,
-        min_okusd_out: u64,
+        min_oku_money_out: u64,
     ) -> Result<()> {
-        instructions::core::bridge_wrapped(ctx, wokusd_shares, recipient, destination_chain, min_okusd_out)
+        instructions::core::bridge_usd_oku(
+            ctx,
+            usd_oku_shares,
+            recipient,
+            destination_chain,
+            min_oku_money_out,
+        )
     }
 
     pub fn pause(ctx: Context<Pause>) -> Result<()> {
@@ -38,7 +47,11 @@ pub mod oku_bridge_router {
         instructions::admin::unpause(ctx)
     }
 
-    pub fn set_authority(ctx: Context<SetAuthority>, role: RouterAuthorityRole, new_authority: Pubkey) -> Result<()> {
+    pub fn set_authority(
+        ctx: Context<SetAuthority>,
+        role: RouterAuthorityRole,
+        new_authority: Pubkey,
+    ) -> Result<()> {
         instructions::admin::set_authority(ctx, role, new_authority)
     }
 }

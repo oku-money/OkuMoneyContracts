@@ -155,14 +155,14 @@ export const bridgeOrchestrator = Keypair.generate();
 let psmConfigPda: PublicKey | null = null;
 let redemptionQueuePda: PublicKey | null = null;
 let vaultUsdcAta: PublicKey | null = null;
-let vaultOkusdAta: PublicKey | null = null;
+let vaultOkuMoneyAta: PublicKey | null = null;
 let psmInitialized = false;
 
 export interface PSMSetupResult {
   configPda: PublicKey;
   redemptionQueuePda: PublicKey;
   vaultUsdcAta: PublicKey;
-  vaultOkusdAta: PublicKey;
+  vaultOkuMoneyAta: PublicKey;
 }
 
 // ============================================================================
@@ -195,15 +195,15 @@ export async function initializePSMIfNeeded(
   provider: anchor.AnchorProvider,
   payer: Keypair,
   usdcMint: PublicKey,
-  okusdMint: PublicKey
+  okuMoneyMint: PublicKey
 ): Promise<PSMSetupResult> {
   // Return cached if already initialized
-  if (psmInitialized && psmConfigPda && redemptionQueuePda && vaultUsdcAta && vaultOkusdAta) {
+  if (psmInitialized && psmConfigPda && redemptionQueuePda && vaultUsdcAta && vaultOkuMoneyAta) {
     return {
       configPda: psmConfigPda,
       redemptionQueuePda,
       vaultUsdcAta,
-      vaultOkusdAta,
+      vaultOkuMoneyAta,
     };
   }
 
@@ -226,8 +226,8 @@ export async function initializePSMIfNeeded(
     TOKEN_PROGRAM_ID
   );
 
-  vaultOkusdAta = getAssociatedTokenAddressSync(
-    okusdMint,
+  vaultOkuMoneyAta = getAssociatedTokenAddressSync(
+    okuMoneyMint,
     psmConfigPda,
     true,
     TOKEN_2022_PROGRAM_ID
@@ -241,7 +241,7 @@ export async function initializePSMIfNeeded(
       configPda: psmConfigPda,
       redemptionQueuePda,
       vaultUsdcAta,
-      vaultOkusdAta,
+      vaultOkuMoneyAta,
     };
   } catch {
     // Not initialized yet, proceed with initialization
@@ -275,7 +275,7 @@ export async function initializePSMIfNeeded(
       roleAdmin: payer.publicKey,
       config: psmConfigPda,
       usdcMint: usdcMint,
-      okusdMint: okusdMint,
+      okuMoneyMint: okuMoneyMint,
       vaultUsdc: vaultUsdcAta,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -296,14 +296,14 @@ export async function initializePSMIfNeeded(
     })
     .rpc();
 
-  // Setup OkuUSD escrow vault
+  // Setup OkuMoney escrow vault
   await program.methods
-    .setupOkusdEscrow()
+    .setupOkuMoneyEscrow()
     .accountsPartial({
       roleAdmin: payer.publicKey,
       config: psmConfigPda,
-      okusdMint: okusdMint,
-      vaultOkusd: vaultOkusdAta,
+      okuMoneyMint: okuMoneyMint,
+      vaultOkuMoney: vaultOkuMoneyAta,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
@@ -316,7 +316,7 @@ export async function initializePSMIfNeeded(
     configPda: psmConfigPda,
     redemptionQueuePda,
     vaultUsdcAta,
-    vaultOkusdAta,
+    vaultOkuMoneyAta,
   };
 }
 
@@ -325,31 +325,31 @@ export async function initializePSMIfNeeded(
 // ============================================================================
 
 /**
- * Mint OkuUSD to a user via the PSM program's mint instruction.
+ * Mint OkuMoney to a user via the PSM program's mintOkuM instruction.
  *
- * Prerequisite: user must have a funded USDC ATA and an OkuUSD ATA must exist.
+ * Prerequisite: user must have a funded USDC ATA and an OkuMoney ATA must exist.
  * This handles the standard mint call with priceUpdate: null (oracle disabled).
  */
-export async function mintOkusdViaProgram(
+export async function mintOkuMoneyViaProgram(
   program: Program,
   user: Keypair,
   amount: BN,
   configPda: PublicKey,
   usdcMint: PublicKey,
-  okusdMint: PublicKey,
+  okuMoneyMint: PublicKey,
   userUsdcAta: PublicKey,
-  userOkusdAta: PublicKey,
+  userOkuMoneyAta: PublicKey,
   vaultUsdcAta: PublicKey,
 ): Promise<void> {
   await program.methods
-    .mint(amount)
+    .mintOkuM(amount)
     .accountsPartial({
       user: user.publicKey,
       config: configPda,
       usdcMint,
-      okusdMint,
+      okuMoneyMint,
       userUsdcAta,
-      userOkusdAta,
+      userOkuMoneyAta,
       vaultUsdc: vaultUsdcAta,
       priceUpdate: null,
       tokenProgram: TOKEN_PROGRAM_ID,
@@ -360,6 +360,9 @@ export async function mintOkusdViaProgram(
     .signers([user])
     .rpc();
 }
+
+// Backwards compatibility alias
+export const mintOkusdViaProgram = mintOkuMoneyViaProgram;
 
 /**
  * Ensure PSM is unpaused before tests.

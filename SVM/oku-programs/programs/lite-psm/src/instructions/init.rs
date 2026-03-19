@@ -1,7 +1,7 @@
-use anchor_lang::prelude::*;
-use crate::contexts::{Initialize, SetupRedemptionQueue, SetupOkusdEscrow};
+use crate::contexts::{Initialize, SetupOkuMoneyEscrow, SetupRedemptionQueue};
 use crate::errors::OkuError;
 use crate::events::InitializeEvent;
+use anchor_lang::prelude::*;
 
 /// Initialize the PSM - Step 1
 /// Creates config PDA and USDC vault
@@ -42,9 +42,9 @@ pub fn initialize(
 
     // Set token references
     config.usdc_mint = ctx.accounts.usdc_mint.key();
-    config.okusd_mint = ctx.accounts.okusd_mint.key();
+    config.oku_money_mint = ctx.accounts.oku_money_mint.key();
     config.vault_usdc = ctx.accounts.vault_usdc.key();
-    config.vault_okusd = Pubkey::default(); // Set in setup_okusd_escrow
+    config.vault_oku_money = Pubkey::default(); // Set in setup_oku_money_escrow
 
     // Set limits
     config.max_supply = max_supply;
@@ -54,14 +54,21 @@ pub fn initialize(
     // Set oracle config
     config.oracle = Pubkey::default(); // Oracle disabled initially
     config.staleness_threshold = 0;
-    config.current_rate_bps = 0; // Interest rate starts at 0, updated by rebaser
-    config.rate_end = 0;
-    config.pending_rate_bps = 0;
+
+    // Yield distribution lock - starts at 0 (no lock)
+    config.last_yield_distribution_slot = 0;
+
+    // OkuMoney price - starts at PRECISION (1e9 = $1.00)
+    config.oku_m_price = 1_000_000_000; // PRECISION
+
+    // Blacklist exemptions - set via initialize_blacklist_exempt
+    config.blacklist_exempt_bridge = Pubkey::default();
+    config.blacklist_exempt_router = Pubkey::default();
 
     emit!(InitializeEvent {
         role_admin: config.role_admin,
         usdc_mint: config.usdc_mint,
-        okusd_mint: config.okusd_mint,
+        oku_money_mint: config.oku_money_mint,
         max_supply,
     });
 
@@ -81,19 +88,19 @@ pub fn setup_redemption_queue(ctx: Context<SetupRedemptionQueue>) -> Result<()> 
     Ok(())
 }
 
-/// Initialize the PSM - Step 2
-/// Creates OkuUSD escrow vault for queue yield alignment
+/// Initialize the PSM - Step 3
+/// Creates OkuMoney escrow vault for queued redemptions
 /// Must be called after initialize()
-pub fn setup_okusd_escrow(ctx: Context<SetupOkusdEscrow>) -> Result<()> {
+pub fn setup_oku_money_escrow(ctx: Context<SetupOkuMoneyEscrow>) -> Result<()> {
     let config = &mut ctx.accounts.config;
 
     // Ensure escrow hasn't already been set
     require!(
-        config.vault_okusd == Pubkey::default(),
+        config.vault_oku_money == Pubkey::default(),
         OkuError::Unauthorized
     );
 
-    config.vault_okusd = ctx.accounts.vault_okusd.key();
+    config.vault_oku_money = ctx.accounts.vault_oku_money.key();
 
     Ok(())
 }

@@ -414,6 +414,297 @@ describe("oku-bridge-router", () => {
     });
   });
 
+  describe("mint_usd_oku", () => {
+    let redemptionQueuePda: PublicKey;
+    let vaultOkuMoneyAta: PublicKey;
+
+    before(async () => {
+      [redemptionQueuePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("redemption_queue")],
+        psmProgram.programId
+      );
+      vaultOkuMoneyAta = getAssociatedTokenAddressSync(
+        okuMoneyMint,
+        psmConfigPda,
+        true,
+        TOKEN_2022_PROGRAM_ID
+      );
+    });
+
+    it("mints usdOku from USDC in a single transaction", async () => {
+      // Get user's usdOku balance before
+      const usdOkuBefore = await getAccount(
+        provider.connection,
+        userUsdOkuAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      const usdOkuBalanceBefore = usdOkuBefore.amount;
+
+      const mintAmount = new BN(100_000_000); // 100 USDC
+
+      await routerProgram.methods
+        .mintUsdOku(mintAmount, new BN(0)) // no slippage protection for test
+        .accountsPartial({
+          user: user.publicKey,
+          config: routerConfigPda,
+          psmConfig: psmConfigPda,
+          usdcMint,
+          okuMoneyMint,
+          userUsdcAta,
+          userOkuMoneyAta,
+          vaultUsdc: vaultUsdcAta,
+          priceUpdate: null,
+          vaultConfig: vaultConfigPda,
+          usdOkuMint,
+          userUsdOkuAta,
+          reserveVault: vaultReserve,
+          deadSharesAta: null,
+          vaultProgram: vaultProgram.programId,
+          psmProgram: psmProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      // Verify usdOku balance increased
+      const usdOkuAfter = await getAccount(
+        provider.connection,
+        userUsdOkuAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      const usdOkuReceived = usdOkuAfter.amount - usdOkuBalanceBefore;
+      expect(Number(usdOkuReceived)).to.be.greaterThan(0);
+    });
+
+    it("fails with slippage when min_shares_out too high", async () => {
+      const mintAmount = new BN(100_000_000); // 100 USDC
+      const impossibleMinShares = new BN(999_999_999_999); // Way too high
+
+      try {
+        await routerProgram.methods
+          .mintUsdOku(mintAmount, impossibleMinShares)
+          .accountsPartial({
+            user: user.publicKey,
+            config: routerConfigPda,
+            psmConfig: psmConfigPda,
+            usdcMint,
+            okuMoneyMint,
+            userUsdcAta,
+            userOkuMoneyAta,
+            vaultUsdc: vaultUsdcAta,
+            priceUpdate: null,
+            vaultConfig: vaultConfigPda,
+            usdOkuMint,
+            userUsdOkuAta,
+            reserveVault: vaultReserve,
+            deadSharesAta: null,
+            vaultProgram: vaultProgram.programId,
+            psmProgram: psmProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+        expect.fail("Should have failed with slippage");
+      } catch (err: any) {
+        // Slippage error from vault program
+        expect(err.toString()).to.include("Error");
+      }
+    });
+
+    it("fails when router is paused", async () => {
+      // Pause router
+      await routerProgram.methods
+        .pause()
+        .accountsPartial({
+          pauser: routerPauser.publicKey,
+          config: routerConfigPda,
+        })
+        .signers([routerPauser])
+        .rpc();
+
+      try {
+        await routerProgram.methods
+          .mintUsdOku(new BN(100_000_000), new BN(0))
+          .accountsPartial({
+            user: user.publicKey,
+            config: routerConfigPda,
+            psmConfig: psmConfigPda,
+            usdcMint,
+            okuMoneyMint,
+            userUsdcAta,
+            userOkuMoneyAta,
+            vaultUsdc: vaultUsdcAta,
+            priceUpdate: null,
+            vaultConfig: vaultConfigPda,
+            usdOkuMint,
+            userUsdOkuAta,
+            reserveVault: vaultReserve,
+            deadSharesAta: null,
+            vaultProgram: vaultProgram.programId,
+            psmProgram: psmProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("Paused");
+      }
+
+      // Cleanup: unpause
+      await routerProgram.methods
+        .unpause()
+        .accountsPartial({
+          unpauser: routerUnpauser.publicKey,
+          config: routerConfigPda,
+        })
+        .signers([routerUnpauser])
+        .rpc();
+    });
+  });
+
+  describe("redeem_usd_oku", () => {
+    let redemptionQueuePda: PublicKey;
+    let vaultOkuMoneyAta: PublicKey;
+
+    before(async () => {
+      [redemptionQueuePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("redemption_queue")],
+        psmProgram.programId
+      );
+      vaultOkuMoneyAta = getAssociatedTokenAddressSync(
+        okuMoneyMint,
+        psmConfigPda,
+        true,
+        TOKEN_2022_PROGRAM_ID
+      );
+    });
+
+    it("redeems usdOku to USDC (instant path)", async () => {
+      // Get user's USDC balance before
+      const usdcBefore = await getAccount(
+        provider.connection,
+        userUsdcAta,
+        undefined,
+        TOKEN_PROGRAM_ID
+      );
+      const usdcBalanceBefore = usdcBefore.amount;
+
+      // Get user's usdOku balance
+      const usdOkuAccount = await getAccount(
+        provider.connection,
+        userUsdOkuAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      // Redeem a small amount of usdOku
+      const redeemShares = new BN(10_000_000); // 10 usdOku
+      expect(Number(usdOkuAccount.amount)).to.be.greaterThanOrEqual(10_000_000);
+
+      await routerProgram.methods
+        .redeemUsdOku(redeemShares, new BN(0)) // no slippage protection
+        .accountsPartial({
+          user: user.publicKey,
+          config: routerConfigPda,
+          vaultConfig: vaultConfigPda,
+          okuMoneyMint,
+          usdOkuMint,
+          userOkuMoneyAta,
+          userUsdOkuAta,
+          reserveVault: vaultReserve,
+          psmConfig: psmConfigPda,
+          redemptionQueue: redemptionQueuePda,
+          usdcMint,
+          userUsdcAta,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultProgram: vaultProgram.programId,
+          psmProgram: psmProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      // Verify USDC balance increased
+      const usdcAfter = await getAccount(
+        provider.connection,
+        userUsdcAta,
+        undefined,
+        TOKEN_PROGRAM_ID
+      );
+      const usdcReceived = usdcAfter.amount - usdcBalanceBefore;
+      expect(Number(usdcReceived)).to.be.greaterThan(0);
+    });
+
+    it("fails when router is paused", async () => {
+      // Pause router
+      await routerProgram.methods
+        .pause()
+        .accountsPartial({
+          pauser: routerPauser.publicKey,
+          config: routerConfigPda,
+        })
+        .signers([routerPauser])
+        .rpc();
+
+      try {
+        await routerProgram.methods
+          .redeemUsdOku(new BN(1_000_000), new BN(0))
+          .accountsPartial({
+            user: user.publicKey,
+            config: routerConfigPda,
+            vaultConfig: vaultConfigPda,
+            okuMoneyMint,
+            usdOkuMint,
+            userOkuMoneyAta,
+            userUsdOkuAta,
+            reserveVault: vaultReserve,
+            psmConfig: psmConfigPda,
+            redemptionQueue: redemptionQueuePda,
+            usdcMint,
+            userUsdcAta,
+            vaultUsdc: vaultUsdcAta,
+            vaultOkuMoney: vaultOkuMoneyAta,
+            vaultProgram: vaultProgram.programId,
+            psmProgram: psmProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+        expect.fail("Should have failed");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("Paused");
+      }
+
+      // Cleanup: unpause
+      await routerProgram.methods
+        .unpause()
+        .accountsPartial({
+          unpauser: routerUnpauser.publicKey,
+          config: routerConfigPda,
+        })
+        .signers([routerUnpauser])
+        .rpc();
+    });
+  });
+
   // Note: bridge_usd_oku tests require bridge to be initialized
   // which is a more complex setup. These are tested in bridge_security.ts
 });

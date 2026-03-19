@@ -194,6 +194,35 @@ pub fn calculate_collateral_ratio(
     Ok(result as u64)
 }
 
+/// Calculate extractable surplus in OkuMoney tokens
+/// surplus = reserve_balance - required_reserves
+/// where required_reserves = (total_usd_oku_supply * usd_multiplier) / oku_m_price
+///
+/// Returns 0 if undercollateralized (no surplus)
+pub fn calculate_surplus(
+    reserve_balance: u64,
+    total_usd_oku_supply: u64,
+    usd_multiplier: u64,
+    oku_m_price: u64,
+) -> Result<u64> {
+    if total_usd_oku_supply == 0 {
+        return Ok(reserve_balance); // All reserves are surplus
+    }
+    require!(oku_m_price > 0, OkuDollarError::InvalidPrice);
+
+    // required = (total_usd_oku_supply * usd_multiplier) / oku_m_price
+    let required = (total_usd_oku_supply as u128)
+        .checked_mul(usd_multiplier as u128)
+        .ok_or(OkuDollarError::Overflow)?
+        .checked_div(oku_m_price as u128)
+        .ok_or(OkuDollarError::Overflow)?;
+
+    if required > reserve_balance as u128 {
+        return Ok(0);
+    }
+    Ok(reserve_balance.saturating_sub(required as u64))
+}
+
 /// Check if the vault is sufficiently collateralized
 ///
 /// # Arguments
@@ -333,6 +362,43 @@ mod tests {
         assert_eq!(
             calculate_collateral_ratio(100_000_000, 100_000_000, PRECISION, 1_050_000_000).unwrap(),
             1_050_000_000
+        );
+    }
+
+    #[test]
+    fn test_calculate_surplus() {
+        // 100% collateralized → surplus = 0
+        // required = (100 * 1e9) / 1e9 = 100
+        assert_eq!(
+            calculate_surplus(100_000_000, 100_000_000, PRECISION, PRECISION).unwrap(),
+            0
+        );
+
+        // 110% collateralized → surplus = 10% of reserves
+        // required = (100 * 1e9) / 1e9 = 100, surplus = 110 - 100 = 10
+        assert_eq!(
+            calculate_surplus(110_000_000, 100_000_000, PRECISION, PRECISION).unwrap(),
+            10_000_000
+        );
+
+        // Price > 1.0 → surplus increases (reserves worth more, fewer needed)
+        // required = (100 * 1e9) / 1.05e9 = 95_238_095
+        // surplus = 100_000_000 - 95_238_095 = 4_761_905
+        assert_eq!(
+            calculate_surplus(100_000_000, 100_000_000, PRECISION, 1_050_000_000).unwrap(),
+            4_761_905
+        );
+
+        // Undercollateralized → surplus = 0
+        assert_eq!(
+            calculate_surplus(90_000_000, 100_000_000, PRECISION, PRECISION).unwrap(),
+            0
+        );
+
+        // No supply → all reserves are surplus
+        assert_eq!(
+            calculate_surplus(50_000_000, 0, PRECISION, PRECISION).unwrap(),
+            50_000_000
         );
     }
 }

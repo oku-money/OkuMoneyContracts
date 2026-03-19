@@ -96,6 +96,8 @@ pub struct RedemptionQueue {
     pub head: u32,
     /// Index of next slot to write (tail of queue)
     pub tail: u32,
+    /// Running total of OkuMoney held in escrow (updated on enqueue/process/rescue)
+    pub total_queued_oku_m: u64,
     /// Queue entries (fixed array for predictable sizing)
     /// Size must match MAX_ENTRIES constant below
     pub entries: [QueueEntry; 10],
@@ -111,9 +113,9 @@ impl RedemptionQueue {
     pub const MAX_ENTRIES: usize = 10;
 
     /// Space needed for RedemptionQueue account
-    /// 8 (discriminator) + 1 (bump) + 4*2 (head/tail) + 48 * MAX_ENTRIES (fixed array)
-    /// = 8 + 1 + 8 + 48*10 = 497 bytes
-    pub const LEN: usize = 8 + 1 + 4 * 2 + QueueEntry::LEN * Self::MAX_ENTRIES;
+    /// 8 (discriminator) + 1 (bump) + 4*2 (head/tail) + 8 (total_queued_oku_m) + 48 * MAX_ENTRIES (fixed array)
+    /// = 8 + 1 + 8 + 8 + 48*10 = 505 bytes
+    pub const LEN: usize = 8 + 1 + 4 * 2 + 8 + QueueEntry::LEN * Self::MAX_ENTRIES;
 
     /// Check if the queue is full
     pub fn is_full(&self) -> bool {

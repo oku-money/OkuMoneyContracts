@@ -24,6 +24,23 @@ pub struct BridgeOkuMEvent {
 }
 
 #[event]
+pub struct MintUsdOkuEvent {
+    pub user: Pubkey,
+    pub usdc_amount: u64,
+    pub oku_money_intermediate: u64,
+    pub usd_oku_shares: u64,
+}
+
+#[event]
+pub struct RedeemUsdOkuEvent {
+    pub user: Pubkey,
+    pub usd_oku_shares: u64,
+    pub oku_money_intermediate: u64,
+    pub usdc_amount: u64,
+    pub queued: bool,
+}
+
+#[event]
 pub struct PauseEvent {
     pub pauser: Pubkey,
     pub paused: bool,

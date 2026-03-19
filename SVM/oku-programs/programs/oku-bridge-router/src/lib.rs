@@ -50,6 +50,28 @@ pub mod oku_bridge_router {
         instructions::core::bridge_oku_m(ctx, oku_m_amount, recipient, destination_chain)
     }
 
+    /// Mint usdOku from USDC in one transaction
+    /// 1. PSM mint_oku_m: USDC -> OkuMoney
+    /// 2. Vault wrap: OkuMoney -> usdOku
+    pub fn mint_usd_oku(
+        ctx: Context<MintUsdOku>,
+        usdc_amount: u64,
+        min_shares_out: u64,
+    ) -> Result<()> {
+        instructions::core::mint_usd_oku(ctx, usdc_amount, min_shares_out)
+    }
+
+    /// Redeem usdOku to USDC in one transaction
+    /// 1. Vault unwrap: usdOku -> OkuMoney
+    /// 2. PSM redeem_oku_m: OkuMoney -> USDC (instant or queued)
+    pub fn redeem_usd_oku(
+        ctx: Context<RedeemUsdOku>,
+        usd_oku_shares: u64,
+        min_oku_money_out: u64,
+    ) -> Result<()> {
+        instructions::core::redeem_usd_oku(ctx, usd_oku_shares, min_oku_money_out)
+    }
+
     pub fn pause(ctx: Context<Pause>) -> Result<()> {
         instructions::admin::pause(ctx)
     }

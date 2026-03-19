@@ -4,8 +4,8 @@ use crate::contexts::{
 use crate::errors::OkuDollarError;
 use crate::events::*;
 use crate::helpers::{
-    is_sufficiently_collateralized, oku_money_to_shares, shares_to_oku_money, MINIMUM_LIQUIDITY,
-    PRECISION,
+    is_sufficiently_collateralized, oku_money_to_shares, shares_to_oku_money,
+    MINIMUM_LIQUIDITY, PRECISION,
 };
 use crate::state::OkuDollarConfig;
 use anchor_lang::prelude::*;
@@ -80,7 +80,7 @@ pub fn initialize(
 /// First deposit: subtracts MINIMUM_LIQUIDITY dead shares to prevent
 /// inflation attacks. `dead_shares_ata` (optional account) must be provided
 /// on the first deposit — it receives the permanently-locked dead shares.
-pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Result<()> {
+pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Result<u64> {
     // Yield lock: block wrap in same slot as yield distribution (prevents sandwich attacks)
     check_yield_lock(&ctx.accounts.psm_config)?;
 
@@ -179,6 +179,8 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
             usd_multiplier,
             oku_m_price,
         });
+
+        return Ok(user_shares);
     } else {
         // Slippage protection
         require!(shares >= min_shares_out, OkuDollarError::SlippageExceeded);
@@ -205,9 +207,9 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
             usd_multiplier,
             oku_m_price,
         });
-    }
 
-    Ok(())
+        return Ok(shares);
+    }
 }
 
 /// Unwrap usdOku -> OkuMoney

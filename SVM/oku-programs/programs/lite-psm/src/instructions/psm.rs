@@ -230,6 +230,12 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
         queue.entries[position as usize] = entry;
         queue.tail = queue.tail.wrapping_add(1);
 
+        // Update running counter
+        queue.total_queued_oku_m = queue
+            .total_queued_oku_m
+            .checked_add(oku_m_amount)
+            .ok_or(OkuError::Overflow)?;
+
         emit!(RedemptionQueuedEvent {
             user: ctx.accounts.user.key(),
             oku_m_amount,
@@ -352,6 +358,9 @@ pub fn process_queue<'info>(
         queue.head = queue.head.wrapping_add(1);
         processed += 1;
 
+        // Update running counter
+        queue.total_queued_oku_m = queue.total_queued_oku_m.saturating_sub(oku_m_amount);
+
         emit!(RedemptionProcessedEvent { user, usdc_amount });
     }
 
@@ -395,21 +404,12 @@ pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> 
     // Read current price from config to calculate reserved USDC
     let oku_m_price = ctx.accounts.config.oku_m_price;
 
-    let mut reserved: u64 = 0;
-    let pending = queue.pending_count();
-    for i in 0..pending {
-        let idx = ((queue.head.wrapping_add(i)) % RedemptionQueue::MAX_ENTRIES as u32) as usize;
-        let entry = &queue.entries[idx];
-
-        // Calculate USDC value of this entry at current price
-        let usdc_value = (entry.oku_m_amount as u128)
-            .checked_mul(oku_m_price as u128)
-            .ok_or(OkuError::Overflow)?
-            .checked_div(PRECISION as u128)
-            .ok_or(OkuError::Overflow)? as u64;
-
-        reserved = reserved.checked_add(usdc_value).ok_or(OkuError::Overflow)?;
-    }
+    // Calculate reserved USDC from running counter (O(1) instead of iterating)
+    let reserved = (queue.total_queued_oku_m as u128)
+        .checked_mul(oku_m_price as u128)
+        .ok_or(OkuError::Overflow)?
+        .checked_div(PRECISION as u128)
+        .ok_or(OkuError::Overflow)? as u64;
 
     let vault_balance = ctx.accounts.vault_usdc.amount;
     require!(
@@ -498,6 +498,9 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u32) -> R
     // Clear the entry
     let queue = &mut ctx.accounts.redemption_queue;
     queue.entries[position] = QueueEntry::default();
+
+    // Update running counter
+    queue.total_queued_oku_m = queue.total_queued_oku_m.saturating_sub(oku_m_amount);
 
     // Advance head past contiguous cleared entries (matches EVM behavior)
     while queue.head < queue.tail {

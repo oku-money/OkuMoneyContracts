@@ -219,7 +219,9 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
 /// Burns usdOku shares from user, transfers OkuMoney from reserve vault to user.
 ///
 /// OkuMoney returned = (shares * usd_multiplier) / oku_m_price
-/// Matches EVM: okuMReturned = (usdAmount * usdMultiplier) / okuMPrice
+///
+/// Equivalent to EVM: okuMReturned = (usdAmount * PRECISION) / okuMPrice
+/// (EVM takes dollar amount as input, SVM takes shares directly)
 ///
 /// NOTE: Unwrap is blocked when paused (matches EVM behavior).
 /// Users must wait for unpause to exit.

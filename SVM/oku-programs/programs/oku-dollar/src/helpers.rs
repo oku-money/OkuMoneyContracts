@@ -76,7 +76,8 @@ pub fn usd_to_oku_money(usd_value: u64, oku_m_price: u64) -> Result<u64> {
 ///
 /// Formula: oku_m_amount = (usd_oku_shares * usd_multiplier) / oku_m_price
 ///
-/// Matches EVM: okuMReturned = (shares * usdMultiplier) / okuMPrice
+/// Equivalent to EVM: okuMReturned = (usdAmount * PRECISION) / okuMPrice
+/// (EVM takes dollar amount, SVM takes shares — mathematically equivalent end-to-end)
 ///
 /// # Arguments
 /// * `usd_oku_shares` - Amount of usdOku shares (6 decimals)
@@ -85,7 +86,11 @@ pub fn usd_to_oku_money(usd_value: u64, oku_m_price: u64) -> Result<u64> {
 ///
 /// # Returns
 /// * Amount of OkuMoney tokens (6 decimals)
-pub fn shares_to_oku_money(usd_oku_shares: u64, usd_multiplier: u64, oku_m_price: u64) -> Result<u64> {
+pub fn shares_to_oku_money(
+    usd_oku_shares: u64,
+    usd_multiplier: u64,
+    oku_m_price: u64,
+) -> Result<u64> {
     require!(oku_m_price > 0, OkuDollarError::InvalidPrice);
 
     // Use u128 for intermediate calculation to prevent overflow
@@ -118,7 +123,11 @@ pub fn shares_to_oku_money(usd_oku_shares: u64, usd_multiplier: u64, oku_m_price
 ///
 /// # Returns
 /// * Amount of usdOku shares (6 decimals)
-pub fn oku_money_to_shares(oku_m_amount: u64, usd_multiplier: u64, oku_m_price: u64) -> Result<u64> {
+pub fn oku_money_to_shares(
+    oku_m_amount: u64,
+    usd_multiplier: u64,
+    oku_m_price: u64,
+) -> Result<u64> {
     require!(usd_multiplier > 0, OkuDollarError::InvalidMultiplier);
     require!(oku_m_price > 0, OkuDollarError::InvalidPrice);
 
@@ -241,7 +250,12 @@ pub fn is_sufficiently_collateralized(
     oku_m_price: u64,
     min_collateral_ratio: u64,
 ) -> Result<bool> {
-    let ratio = calculate_collateral_ratio(reserve_balance, total_usd_oku_supply, usd_multiplier, oku_m_price)?;
+    let ratio = calculate_collateral_ratio(
+        reserve_balance,
+        total_usd_oku_supply,
+        usd_multiplier,
+        oku_m_price,
+    )?;
     Ok(ratio >= min_collateral_ratio)
 }
 

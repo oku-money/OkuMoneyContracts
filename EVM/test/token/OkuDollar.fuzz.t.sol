@@ -9,8 +9,9 @@ import {OkuDollar} from "../../src/token/OkuDollar.sol";
  * @notice Fuzz tests for OkuDollar rebasing vault: wrap/unwrap math, collateralization, and share invariants
  * @dev Updated for OkuMoney non-rebasing redesign. OkuMoney balanceOf is static;
  *      okuMPrice() tracks price appreciation separately. Wrap/unwrap are price-aware:
- *      usdMinted = okuMAmount × notePrice / usdMultiplier,
- *      okuMReturned = usdAmount × usdMultiplier / notePrice.
+ *      sharesToMint = okuMAmount × okuMPrice / usdMultiplier,
+ *      okuMReturned = usdAmount × PRECISION / okuMPrice.
+ *      Note: usdMultiplier converts shares↔dollars, NOT dollars↔OkuMoney.
  */
 contract OkuDollarFuzzTest is BaseTest {
     // ============ Setup ============

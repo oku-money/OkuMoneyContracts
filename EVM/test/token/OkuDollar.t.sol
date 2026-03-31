@@ -460,16 +460,18 @@ contract OkuDollarTest is BaseTest {
         usdOku.updateUsdMultiplier((PRECISION * 3) / 2);
 
         // user1 OkuDollar balance grew to 150e18 (100 shares * 1.5x), but vault has 100 notes.
-        // Unwrap 150e18 OkuDollar: okuMReturned = 150e18 * 1.5e18 / 1e18 = 225e18 — but vault
-        // only has 100 notes! The vault is undercollateralized after a pure USD rebase.
+        // The vault is undercollateralized after a pure USD rebase without reserve top-up.
         //
-        // Instead, unwrap a partial amount that the vault CAN cover.
-        // okuMReturned = usdAmount * usdMultiplier / notePrice
-        // For 66e18 OkuDollar: okuMReturned = 66e18 * 1.5e18 / 1e18 = 99e18 notes
+        // Unwrap a partial amount. The CORRECT formula is:
+        // okuMReturned = usdAmount × PRECISION / okuMPrice (multiplier is irrelevant for output)
+        // For 66e18 OkuDollar at okuMPrice=1e18: okuMReturned = 66e18 × 1e18 / 1e18 = 66e18 notes
+        //
+        // This is correct because usdMultiplier converts shares↔dollars, not dollars↔OkuMoney.
         vm.prank(user1);
         uint256 notesBack = usdOku.unwrap(66e18, user1);
 
-        uint256 expected = (66e18 * (PRECISION * 3 / 2)) / PRECISION;
+        // Expected = usdAmount × PRECISION / okuMPrice = 66e18 × 1e18 / 1e18 = 66e18
+        uint256 expected = (66e18 * PRECISION) / PRECISION;
         assertEq(notesBack, expected);
     }
 
@@ -492,6 +494,45 @@ contract OkuDollarTest is BaseTest {
         assertEq(notesBack, expected);
         // Fewer notes returned, but each note is worth more dollars
         assertLt(notesBack, 100e18, "Should return fewer notes at higher note price");
+    }
+
+    /// @notice CRITICAL: Test that caught the okuMReturned formula bug
+    /// @dev When both okuMPrice and usdMultiplier are elevated by the same amount (matched rates),
+    ///      a user wrapping N OkuMoney should get back exactly N OkuMoney on unwrap.
+    ///      The OLD buggy formula (usdAmount * mult / price) would return MORE OkuMoney than deposited
+    ///      and revert at the reserve check, breaking unwrap entirely at elevated multipliers.
+    ///      The CORRECT formula (usdAmount * PRECISION / price) returns exactly N.
+    function test_WrapUnwrap_RoundTrip_MatchedPriceAndMultiplier() public {
+        // Wrap 100 OkuMoney at parity (notePrice=1e18, usdMult=1e18)
+        uint256 okuMAmount = 100e18;
+        _mintUsdOku(user1, okuMAmount);
+        // user1 has 100 OkuDollar (100 shares), vault has 100 OkuMoney
+
+        // Simulate 1 year of 4% yield on BOTH okuMPrice and usdMultiplier (matched rates)
+        // After 1 year: okuMPrice = 1.04e18, usdMultiplier = 1.04e18
+        uint256 elevatedValue = (PRECISION * 104) / 100; // 1.04e18
+
+        _setOkuMPriceAndRoll(elevatedValue);
+        vm.prank(usdRebaser);
+        usdOku.updateUsdMultiplier(elevatedValue);
+        vm.roll(block.number + 1); // Roll past yield lock
+
+        // user1 OkuDollar balance: 100 shares × 1.04 mult / 1e18 = 104 OkuDollar
+        uint256 usdBalance = usdOku.balanceOf(user1);
+        assertEq(usdBalance, 104e18, "Balance should be 104 OkuDollar");
+
+        // Vault still has exactly 100 OkuMoney tokens (no extra reserves added)
+        uint256 vaultReserves = okuMoney.balanceOf(address(usdOku));
+        assertEq(vaultReserves, 100e18, "Vault should have 100 OkuMoney");
+
+        // User unwraps full balance (104 OkuDollar)
+        // CORRECT formula: okuMReturned = 104e18 × 1e18 / 1.04e18 = 100e18
+        // BUGGY formula would be: 104e18 × 1.04e18 / 1.04e18 = 104e18 (reverts!)
+        vm.prank(user1);
+        uint256 notesBack = usdOku.unwrap(usdBalance, user1);
+
+        // Should get back EXACTLY what was deposited (within rounding)
+        assertEq(notesBack, okuMAmount, "Round trip at matched rates should return original amount");
     }
 
     // ============ USD Multiplier Tests ============

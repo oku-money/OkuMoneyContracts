@@ -367,10 +367,11 @@ contract OkuDollar is
 
     /**
      * @notice Unwrap OkuDollar back to OkuMoney (price-aware)
-     * @dev okuMReturned = usdAmount × usdMultiplier() / okuMPrice()
-     *      105 usdOku at usdMultiplier=1.0, okuMPrice=$1.05 → 100 OkuM tokens.
+     * @dev okuMReturned = usdAmount × PRECISION / okuMPrice()
+     *      105 usdOku at okuMPrice=$1.05 → 100 OkuM tokens (regardless of usdMultiplier).
+     *      The usdMultiplier converts shares ↔ dollars, not dollars ↔ OkuMoney.
      *      Reverts if vault holds insufficient OkuMoney.
-     * @param usdAmount Amount of OkuDollar to unwrap
+     * @param usdAmount Amount of OkuDollar to unwrap (in dollar terms)
      * @param receiver Address to receive OkuMoney
      * @return okuMReturned Amount of OkuMoney tokens returned
      */
@@ -390,10 +391,12 @@ contract OkuDollar is
         OkuDollarStorage storage $ = _getOkuDollarStorage();
 
         // Price-aware: convert OkuDollar amount to OkuM token count
-        // okuMReturned = usdAmount × usdMultiplier / okuMPrice
+        // usdAmount is in dollar terms. To convert dollars to OkuMoney:
+        // okuMReturned = usdAmount × PRECISION / okuMPrice
+        // Note: multiplier converts shares ↔ dollars, NOT dollars ↔ OkuMoney
         uint256 mult = usdMultiplier();
         uint256 price = $.okuMoney.okuMPrice();
-        okuMReturned = (usdAmount * mult) / price;
+        okuMReturned = (usdAmount * PRECISION) / price;
 
         // Calculate shares to burn (round UP to favor vault)
         // Ceiling division: (a + b - 1) / b

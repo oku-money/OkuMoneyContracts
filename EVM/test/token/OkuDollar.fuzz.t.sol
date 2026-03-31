@@ -49,20 +49,15 @@ contract OkuDollarFuzzTest is BaseTest {
     ///      wrap(N) → sharesToMint = N × notePrice / usdMultiplier
     ///      balanceOf = shares × usdMultiplier / PRECISION
     ///
-    ///      For the vault to stay solvent on unwrap, the reserves (in note dollar value)
-    ///      must cover the OkuDollar balance. At elevated usdMultiplier with notePrice=PRECISION,
-    ///      the user gets fewer shares (and fewer OkuDollar) per note deposited, so round-trip
-    ///      works because unwrap returns: (usdBalance × mult) / price notes.
+    ///      Key insight: The usdMultiplier converts shares↔dollars, NOT dollars↔OkuMoney.
+    ///      unwrap formula: okuMReturned = usdAmount × PRECISION / okuMPrice
     ///
-    ///      Key insight: When notePrice = PRECISION and usdMultiplier > PRECISION:
+    ///      At elevated usdMultiplier with notePrice=PRECISION:
     ///      - wrap(N): shares = N × PRECISION / mult (fewer shares)
-    ///      - balanceOf: shares × mult / PRECISION = N (unchanged)
-    ///      - unwrap(N): okuMReturned = N × mult / PRECISION (MORE than N!)
+    ///      - balanceOf: shares × mult / PRECISION = N (unchanged dollar balance)
+    ///      - unwrap(N): okuMReturned = N × PRECISION / PRECISION = N (correct!)
     ///
-    ///      This means at elevated multipliers, unwrap would need more reserves than deposited.
-    ///      We keep notePrice = PRECISION for this test - varying only multiplier,
-    ///      and accept that unwrap of full balance will require excess reserves.
-    ///      We unwrap only what the reserves can cover.
+    ///      The vault stays solvent because the multiplier doesn't inflate OkuMoney output.
     function testFuzz_WrapUnwrapRoundTripAtMultiplier(
         uint256 okuMAmount,
         uint256 multiplier
@@ -89,22 +84,16 @@ contract OkuDollarFuzzTest is BaseTest {
             return;
         }
 
-        // Calculate how much OkuDollar we can unwrap given available reserves
-        // unwrap formula: okuMReturned = usdAmount × mult / price
-        // We have `okuMAmount` reserves, so max unwrapable = okuMAmount × price / mult
-        uint256 maxUnwrapableUsd = (okuMAmount * price) / multiplier;
-        uint256 usdToUnwrap = usdBalance < maxUnwrapableUsd ? usdBalance : maxUnwrapableUsd;
-
-        if (usdToUnwrap == 0) {
-            vm.stopPrank();
-            return;
-        }
+        // With correct formula, unwrap returns: usdAmount × PRECISION / okuMPrice
+        // At okuMPrice = PRECISION: unwrap(usdBalance) returns usdBalance OkuMoney
+        // So we can always unwrap full balance if reserves == wrapped amount
+        uint256 usdToUnwrap = usdBalance;
 
         uint256 notesBack = usdOku.unwrap(usdToUnwrap, user1);
         vm.stopPrank();
 
-        // Expected notes back = usdToUnwrap × mult / price
-        uint256 expectedNotes = (usdToUnwrap * multiplier) / price;
+        // Expected notes back = usdToUnwrap × PRECISION / price
+        uint256 expectedNotes = (usdToUnwrap * PRECISION) / price;
 
         // Should get approximately expected (within rounding)
         assertLe(notesBack, expectedNotes + 1, "Cannot gain more than expected");
@@ -118,7 +107,7 @@ contract OkuDollarFuzzTest is BaseTest {
     /// @notice Round-trip at various note prices (price-aware)
     /// @dev When notePrice > 1e18:
     ///      wrap(N) → usdMinted = N × notePrice / usdMultiplier (more OkuDollar)
-    ///      unwrap(usdMinted) → okuMReturned = usdMinted × usdMultiplier / notePrice ≈ N
+    ///      unwrap(usdMinted) → okuMReturned = usdMinted × PRECISION / notePrice ≈ N
     function testFuzz_WrapUnwrapRoundTripAtNotePrice(uint256 okuMAmount, uint256 notePrice) public {
         okuMAmount = bound(okuMAmount, 1e18, okuMoney.balanceOf(user1) / 2);
         notePrice = _boundOkuMPrice(notePrice);

@@ -5,10 +5,10 @@
  * Simulate complete user flow:
  * 1. Setup test user, airdrop SOL
  * 2. Mint test USDC (localnet only)
- * 3. Mint OkuUSD via PSM
- * 4. Wrap OkuUSD → wOkuUSD
- * 5. Unwrap wOkuUSD → OkuUSD
- * 6. Redeem OkuUSD → USDC
+ * 3. Mint OkuMoney via PSM (USDC -> OkuM)
+ * 4. Wrap OkuMoney -> usdOku via oku-dollar vault
+ * 5. Unwrap usdOku -> OkuMoney
+ * 6. Redeem OkuMoney -> USDC via PSM
  * 7. Bridge burn (initiate cross-chain transfer)
  * 8. Verify events and state
  */
@@ -39,10 +39,10 @@ async function main() {
   logger.section('Deployment Summary');
   logger.table({
     'USDC Mint': deployment.tokens.usdc || 'Not deployed',
-    'OkuUSD Mint': deployment.tokens.okusd || 'Not deployed',
-    'wOkuUSD Mint': deployment.tokens.wokusd || 'Not deployed',
-    'PSM Program': deployment.programs.litePsm || 'Not deployed',
-    'Vault Program': deployment.programs.wokusdVault || 'Not deployed',
+    'OkuMoney Mint': deployment.tokens.okusd || 'Not deployed',
+    'usdOku Mint': deployment.tokens.wokusd || 'Not deployed',
+    'PSM Program (lite-psm)': deployment.programs.litePsm || 'Not deployed',
+    'Vault Program (oku-dollar)': deployment.programs.wokusdVault || 'Not deployed',
     'Router Program': deployment.programs.okuBridgeRouter || 'Not deployed',
   });
 
@@ -82,55 +82,55 @@ async function main() {
     logger.warning('On devnet/mainnet, use faucet or pre-funded account', false);
   }
 
-  // Step 3: Mint OkuUSD via PSM
+  // Step 3: Mint OkuMoney via PSM
   logger.log('');
-  logger.section('[Step 3] Mint OkuUSD (USDC → OkuUSD)');
+  logger.section('[Step 3] Mint OkuMoney (USDC -> OkuM)');
 
   const mintAmount = 1000 * 1_000_000; // 1000 USDC
-  logger.info(`Amount: ${mintAmount / 1_000_000} USDC → OkuUSD`);
+  logger.info(`Amount: ${mintAmount / 1_000_000} USDC -> OkuMoney`);
   logger.warning('NOTE: Requires program IDL and anchor client', false);
-  logger.info('Transaction would call: lite_psm::mint(1000_000000)');
+  logger.info('Transaction would call: lite_psm::mint_oku_m(1000_000000)');
 
   // Placeholder for actual transaction
-  logger.success('✓ Minted 1000 OkuUSD (simulated)');
+  logger.success('✓ Minted 1000 OkuMoney (simulated)');
   logger.info('  User USDC balance: 0');
-  logger.info('  User OkuUSD balance: 1000');
+  logger.info('  User OkuMoney balance: 1000');
 
-  // Step 4: Wrap OkuUSD → wOkuUSD
+  // Step 4: Wrap OkuMoney -> usdOku
   logger.log('');
-  logger.section('[Step 4] Wrap OkuUSD → wOkuUSD');
+  logger.section('[Step 4] Wrap OkuMoney -> usdOku');
 
-  const wrapAmount = 500 * 1_000_000; // 500 OkuUSD
-  logger.info(`Amount: ${wrapAmount / 1_000_000} OkuUSD → wOkuUSD`);
+  const wrapAmount = 500 * 1_000_000; // 500 OkuMoney
+  logger.info(`Amount: ${wrapAmount / 1_000_000} OkuMoney -> usdOku`);
   logger.warning('NOTE: Requires program IDL and anchor client', false);
-  logger.info('Transaction would call: wokusd_vault::wrap(500_000000)');
+  logger.info('Transaction would call: oku_dollar::wrap(500_000000)');
 
-  logger.success('✓ Wrapped 500 OkuUSD → 500 wOkuUSD (simulated)');
-  logger.info('  User OkuUSD balance: 500');
-  logger.info('  User wOkuUSD balance: 500');
+  logger.success('✓ Wrapped 500 OkuMoney -> usdOku shares (simulated)');
+  logger.info('  User OkuMoney balance: 500');
+  logger.info('  User usdOku balance: 500');
 
-  // Step 5: Unwrap wOkuUSD → OkuUSD
+  // Step 5: Unwrap usdOku -> OkuMoney
   logger.log('');
-  logger.section('[Step 5] Unwrap wOkuUSD → OkuUSD');
+  logger.section('[Step 5] Unwrap usdOku -> OkuMoney');
 
-  const unwrapAmount = 250 * 1_000_000; // 250 wOkuUSD
-  logger.info(`Amount: ${unwrapAmount / 1_000_000} wOkuUSD → OkuUSD`);
-  logger.info('Transaction would call: wokusd_vault::unwrap(250_000000)');
+  const unwrapAmount = 250 * 1_000_000; // 250 usdOku shares
+  logger.info(`Amount: ${unwrapAmount / 1_000_000} usdOku -> OkuMoney`);
+  logger.info('Transaction would call: oku_dollar::unwrap(250_000000)');
 
-  logger.success('✓ Unwrapped 250 wOkuUSD → 250 OkuUSD (simulated)');
-  logger.info('  User OkuUSD balance: 750');
-  logger.info('  User wOkuUSD balance: 250');
+  logger.success('✓ Unwrapped 250 usdOku -> OkuMoney (simulated)');
+  logger.info('  User OkuMoney balance: 750');
+  logger.info('  User usdOku balance: 250');
 
-  // Step 6: Redeem OkuUSD → USDC
+  // Step 6: Redeem OkuMoney -> USDC
   logger.log('');
-  logger.section('[Step 6] Redeem OkuUSD → USDC');
+  logger.section('[Step 6] Redeem OkuMoney -> USDC');
 
-  const redeemAmount = 250 * 1_000_000; // 250 OkuUSD
-  logger.info(`Amount: ${redeemAmount / 1_000_000} OkuUSD → USDC`);
-  logger.info('Transaction would call: lite_psm::redeem(250_000000)');
+  const redeemAmount = 250 * 1_000_000; // 250 OkuMoney
+  logger.info(`Amount: ${redeemAmount / 1_000_000} OkuMoney -> USDC`);
+  logger.info('Transaction would call: lite_psm::redeem_oku_m(250_000000)');
 
-  logger.success('✓ Redeemed 250 OkuUSD → 250 USDC (simulated)');
-  logger.info('  User OkuUSD balance: 500');
+  logger.success('✓ Redeemed 250 OkuMoney -> 250 USDC (simulated)');
+  logger.info('  User OkuMoney balance: 500');
   logger.info('  User USDC balance: 250');
   logger.info('  Status: Immediate (sufficient buffer)');
 
@@ -138,12 +138,12 @@ async function main() {
   logger.log('');
   logger.section('[Step 7] Bridge Burn (Solana → Optimism)');
 
-  const bridgeAmount = 500 * 1_000_000; // 500 OkuUSD
+  const bridgeAmount = 500 * 1_000_000; // 500 OkuMoney
   const bridgeFee = Math.floor((bridgeAmount * 10) / 10000); // 0.1%
   const recipient = '0x' + '1234'.repeat(10); // Mock EVM address
 
-  logger.info(`Amount: ${bridgeAmount / 1_000_000} OkuUSD`);
-  logger.info(`Fee: ${bridgeFee / 1_000_000} OkuUSD (0.1%)`);
+  logger.info(`Amount: ${bridgeAmount / 1_000_000} OkuMoney`);
+  logger.info(`Fee: ${bridgeFee / 1_000_000} OkuMoney (0.1%)`);
   logger.info(`Recipient: ${recipient}`);
   logger.info(`Destination: Optimism (chain ID 10)`);
   logger.info('Transaction would call: lite_psm::bridge_burn(500_000000, recipient, 10)');
@@ -175,8 +175,8 @@ async function main() {
 
   logger.table({
     'USDC': '250.00',
-    'OkuUSD': '0.00 (burned for bridge)',
-    'wOkuUSD': '250.00',
+    'OkuMoney': '0.00 (burned for bridge)',
+    'usdOku': '250.00',
   });
 
   // Summary
@@ -188,11 +188,11 @@ async function main() {
     steps: [
       { step: 1, action: 'Setup user', result: 'Airdropped SOL' },
       { step: 2, action: 'Acquire USDC', result: 'Ready for minting' },
-      { step: 3, action: 'Mint OkuUSD', result: '1000 OkuUSD minted' },
-      { step: 4, action: 'Wrap', result: '500 wOkuUSD received' },
-      { step: 5, action: 'Unwrap', result: '250 OkuUSD received' },
-      { step: 6, action: 'Redeem', result: '250 USDC received' },
-      { step: 7, action: 'Bridge burn', result: '500 OkuUSD burned, event emitted' },
+      { step: 3, action: 'Mint OkuMoney', result: '1000 OkuMoney minted via lite-psm' },
+      { step: 4, action: 'Wrap', result: '500 usdOku received via oku-dollar' },
+      { step: 5, action: 'Unwrap', result: '250 OkuMoney received' },
+      { step: 6, action: 'Redeem', result: '250 USDC received via lite-psm' },
+      { step: 7, action: 'Bridge burn', result: '500 OkuMoney burned, event emitted' },
     ],
     note: 'This is a structural simulation. Actual transactions require program IDL.',
   };

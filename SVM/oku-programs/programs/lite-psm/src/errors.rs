@@ -38,6 +38,8 @@ pub enum OkuError {
     YieldDistributionInProgress,
     #[msg("New price must be >= current price")]
     PriceCannotDecrease,
+    #[msg("Yield amount too small to affect price (truncates to zero)")]
+    YieldTooSmall,
     #[msg("Invalid mint extension configuration")]
     InvalidMintExtension,
     #[msg("Invalid PSM config account")]

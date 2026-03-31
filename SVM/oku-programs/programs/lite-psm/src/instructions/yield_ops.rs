@@ -67,6 +67,10 @@ pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Res
         .checked_div(total_supply as u128)
         .ok_or(OkuError::Overflow)? as u64;
 
+    // Prevent no-op distributions that waste the yield lock slot
+    // This can happen when yield_amount is tiny relative to total_supply
+    require!(yield_per_token > 0, OkuError::YieldTooSmall);
+
     let new_multiplier = current_multiplier
         .checked_add(yield_per_token)
         .ok_or(OkuError::Overflow)?;

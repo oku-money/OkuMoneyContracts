@@ -67,7 +67,7 @@ const DEAD_ADDRESS = SystemProgram.programId;
 
 /**
  * Calculate expected shares from OkuMoney deposit
- * Formula: shares = (oku_m_amount * PRECISION) / usd_multiplier
+ * Formula: shares = (oku_m_amount * oku_m_price) / usd_multiplier
  */
 function calculateExpectedShares(okuMAmount: BN, usdMultiplier: BN, okuMPrice?: BN): BN {
   const price = okuMPrice || PRECISION;

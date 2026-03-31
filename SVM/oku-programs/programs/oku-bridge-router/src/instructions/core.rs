@@ -5,13 +5,23 @@ use anchor_lang::prelude::*;
 
 /// Initialize the bridge router config
 /// Takes pauser and unpauser as args; signer becomes role_admin
+/// Stores mint addresses for validation (matches EVM pattern of storing downstream refs)
+/// Validates zero addresses (matches EVM OkuBridgeRouter.initialize())
 pub fn initialize(ctx: Context<Initialize>, pauser: Pubkey, unpauser: Pubkey) -> Result<()> {
+    // Validate zero addresses (matches EVM pattern)
+    require!(pauser != Pubkey::default(), RouterError::InvalidAuthority);
+    require!(unpauser != Pubkey::default(), RouterError::InvalidAuthority);
+
     let config = &mut ctx.accounts.config;
     config.bump = ctx.bumps.config;
     config.role_admin = ctx.accounts.role_admin.key();
     config.pauser = pauser;
     config.unpauser = unpauser;
     config.is_paused = false;
+
+    // Store mint addresses for validation in subsequent calls
+    config.oku_money_mint = ctx.accounts.oku_money_mint.key();
+    config.usd_oku_mint = ctx.accounts.usd_oku_mint.key();
 
     emit!(InitializeEvent {
         role_admin: config.role_admin,
@@ -33,6 +43,10 @@ pub fn bridge_usd_oku(
     let is_paused = ctx.accounts.config.is_paused;
     require!(!is_paused, RouterError::Paused);
     require!(usd_oku_shares > 0, RouterError::ZeroAmount);
+    // Prevent bridging to zero address (would permanently burn funds)
+    require!(recipient != [0u8; 20], RouterError::InvalidRecipient);
+    // Validate destination chain is non-zero
+    require!(destination_chain != 0, RouterError::InvalidDestinationChain);
 
     // Extract AccountInfo from boxed accounts BEFORE any CPI.
     // After a CPI, the BPF runtime may invalidate heap pointers inside
@@ -44,6 +58,7 @@ pub fn bridge_usd_oku(
     let balance_before = ctx.accounts.user_oku_money_ata.amount;
 
     // Step 1: Unwrap usdOku -> OkuMoney via oku-dollar vault CPI
+    // Note: psm_config is used for both vault (reads oku_m_price) and PSM (as config)
     let unwrap_cpi_ctx = CpiContext::new(
         ctx.accounts.vault_program.to_account_info(),
         oku_dollar::cpi::accounts::Unwrap {
@@ -54,7 +69,7 @@ pub fn bridge_usd_oku(
             user_oku_money_ata: user_oku_money_ata_info.clone(),
             user_usd_oku_ata: ctx.accounts.user_usd_oku_ata.to_account_info(),
             reserve_vault: ctx.accounts.reserve_vault.to_account_info(),
-            psm_config: ctx.accounts.vault_psm_config.to_account_info(),
+            psm_config: ctx.accounts.psm_config.to_account_info(),
             token_2022_program: ctx.accounts.token_2022_program.to_account_info(),
             associated_token_program: ctx.accounts.associated_token_program.to_account_info(),
             system_program: ctx.accounts.system_program.to_account_info(),
@@ -121,6 +136,10 @@ pub fn bridge_oku_m(
     let is_paused = ctx.accounts.config.is_paused;
     require!(!is_paused, RouterError::Paused);
     require!(oku_m_amount > 0, RouterError::ZeroAmount);
+    // Prevent bridging to zero address (would permanently burn funds)
+    require!(recipient != [0u8; 20], RouterError::InvalidRecipient);
+    // Validate destination chain is non-zero
+    require!(destination_chain != 0, RouterError::InvalidDestinationChain);
 
     let bridge_burn_cpi_ctx = CpiContext::new(
         ctx.accounts.psm_program.to_account_info(),
@@ -156,11 +175,7 @@ pub fn bridge_oku_m(
 /// Mint usdOku from USDC in one transaction
 /// 1. PSM mint_oku_m: USDC -> OkuMoney
 /// 2. Vault wrap: OkuMoney -> usdOku
-pub fn mint_usd_oku(
-    ctx: Context<MintUsdOku>,
-    usdc_amount: u64,
-    min_shares_out: u64,
-) -> Result<()> {
+pub fn mint_usd_oku(ctx: Context<MintUsdOku>, usdc_amount: u64, min_shares_out: u64) -> Result<()> {
     let is_paused = ctx.accounts.config.is_paused;
     require!(!is_paused, RouterError::Paused);
     require!(usdc_amount > 0, RouterError::ZeroAmount);
@@ -333,15 +348,13 @@ pub fn redeem_usd_oku(
     );
     lite_psm::cpi::redeem_oku_m(redeem_cpi_ctx, oku_money_received)?;
 
-    // We can't easily determine if the redemption was instant or queued from here
-    // without reading the PSM's vault_usdc balance. Emit with usdc_amount=0 and queued=false
-    // as a simplification — the PSM's own events will have the details.
+    // Note: The final USDC amount and queue status are determined by the PSM.
+    // The router only emits what it can accurately determine. Check PSM events
+    // (RedeemEvent or RedemptionQueuedEvent) for the final redemption details.
     emit!(RedeemUsdOkuEvent {
         user: ctx.accounts.user.key(),
         usd_oku_shares,
         oku_money_intermediate: oku_money_received,
-        usdc_amount: 0,
-        queued: false,
     });
 
     Ok(())

@@ -5,8 +5,13 @@ use crate::roles::RouterAuthorityRole;
 use anchor_lang::prelude::*;
 
 /// Pause the router (emergency response)
+/// Reverts if already paused (matches OZ Pausable behavior)
 pub fn pause(ctx: Context<Pause>) -> Result<()> {
     let config = &mut ctx.accounts.config;
+
+    // Prevent redundant pause (matches OZ Pausable)
+    require!(!config.is_paused, RouterError::AlreadyPaused);
+
     config.is_paused = true;
 
     emit!(PauseEvent {
@@ -18,8 +23,13 @@ pub fn pause(ctx: Context<Pause>) -> Result<()> {
 }
 
 /// Unpause the router (deliberate review required)
+/// Reverts if not paused (matches OZ Pausable behavior)
 pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
     let config = &mut ctx.accounts.config;
+
+    // Prevent redundant unpause (matches OZ Pausable)
+    require!(config.is_paused, RouterError::NotPaused);
+
     config.is_paused = false;
 
     emit!(UnpauseEvent {
@@ -36,9 +46,10 @@ pub fn set_authority(
     role: RouterAuthorityRole,
     new_authority: Pubkey,
 ) -> Result<()> {
+    // Reject zero address to prevent accidental lockout
     require!(
         new_authority != Pubkey::default(),
-        RouterError::Unauthorized
+        RouterError::InvalidAuthority
     );
 
     let config = &mut ctx.accounts.config;

@@ -22,6 +22,15 @@ pub struct Initialize<'info> {
     )]
     pub config: Account<'info, RouterConfig>,
 
+    /// OkuMoney mint (Token-2022) - stored in config for validation
+    #[account(mint::token_program = token_2022_program)]
+    pub oku_money_mint: InterfaceAccount<'info, MintInterface>,
+
+    /// usdOku mint (Token-2022) - stored in config for validation
+    #[account(mint::token_program = token_2022_program)]
+    pub usd_oku_mint: InterfaceAccount<'info, MintInterface>,
+
+    pub token_2022_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,
 }
 
@@ -44,34 +53,46 @@ pub struct BridgeUsdOku<'info> {
     #[account(mut)]
     pub vault_config: UncheckedAccount<'info>,
 
-    /// OkuMoney mint (Token-2022)
-    #[account(mut)]
+    /// OkuMoney mint (Token-2022) - validated against stored config
+    #[account(
+        mut,
+        address = config.oku_money_mint
+    )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// usdOku mint (Token-2022)
-    #[account(mut)]
+    /// usdOku mint (Token-2022) - validated against stored config
+    #[account(
+        mut,
+        address = config.usd_oku_mint
+    )]
     pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// User's OkuMoney account
-    #[account(mut)]
+    /// User's OkuMoney account - validated to belong to user (defense-in-depth)
+    #[account(
+        mut,
+        token::authority = user,
+        token::mint = oku_money_mint
+    )]
     pub user_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// User's usdOku account
-    #[account(mut)]
+    /// User's usdOku account - validated to belong to user (defense-in-depth)
+    #[account(
+        mut,
+        token::authority = user,
+        token::mint = usd_oku_mint
+    )]
     pub user_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// Vault's OkuMoney reserve account
     #[account(mut)]
     pub reserve_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// CHECK: PSM config account - needed by vault for reading oku_m_price
-    pub vault_psm_config: UncheckedAccount<'info>,
-
     // PSM program accounts
     /// CHECK: Bridge config PDA - validated by PSM program CPI
     pub bridge_config: UncheckedAccount<'info>,
 
-    /// CHECK: PSM config PDA - validated by PSM program CPI
+    /// CHECK: PSM config PDA - used by both vault (for oku_m_price) and PSM (as config)
+    /// Single account passed to both CPIs to avoid duplication
     pub psm_config: UncheckedAccount<'info>,
 
     /// CHECK: Bridge nonce PDA - validated by PSM program CPI
@@ -108,12 +129,19 @@ pub struct BridgeOkuM<'info> {
     )]
     pub config: Account<'info, RouterConfig>,
 
-    /// OkuMoney mint (Token-2022)
-    #[account(mut)]
+    /// OkuMoney mint (Token-2022) - validated against stored config
+    #[account(
+        mut,
+        address = config.oku_money_mint
+    )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// User's OkuMoney account
-    #[account(mut)]
+    /// User's OkuMoney account - validated to belong to user (defense-in-depth)
+    #[account(
+        mut,
+        token::authority = user,
+        token::mint = oku_money_mint
+    )]
     pub user_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     // PSM program accounts
@@ -154,7 +182,6 @@ pub struct MintUsdOku<'info> {
     pub config: Account<'info, RouterConfig>,
 
     // --- PSM mint_oku_m accounts ---
-
     /// CHECK: PSM config PDA - validated by PSM CPI (also used by vault wrap as psm_config)
     #[account(mut)]
     pub psm_config: UncheckedAccount<'info>,
@@ -162,16 +189,23 @@ pub struct MintUsdOku<'info> {
     /// CHECK: USDC mint - validated by PSM CPI
     pub usdc_mint: UncheckedAccount<'info>,
 
-    /// OkuMoney mint (Token-2022)
-    #[account(mut)]
+    /// OkuMoney mint (Token-2022) - validated against stored config
+    #[account(
+        mut,
+        address = config.oku_money_mint
+    )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// CHECK: User's USDC account - validated by PSM CPI
     #[account(mut)]
     pub user_usdc_ata: UncheckedAccount<'info>,
 
-    /// User's OkuMoney account (need InterfaceAccount for balance-diff)
-    #[account(mut)]
+    /// User's OkuMoney account - validated to belong to user (defense-in-depth)
+    #[account(
+        mut,
+        token::authority = user,
+        token::mint = oku_money_mint
+    )]
     pub user_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// CHECK: PSM's USDC vault - validated by PSM CPI
@@ -182,17 +216,23 @@ pub struct MintUsdOku<'info> {
     pub price_update: Option<UncheckedAccount<'info>>,
 
     // --- Vault wrap accounts ---
-
     /// CHECK: OkuDollar vault config PDA - validated by vault CPI
     #[account(mut)]
     pub vault_config: UncheckedAccount<'info>,
 
-    /// usdOku mint (Token-2022)
-    #[account(mut)]
+    /// usdOku mint (Token-2022) - validated against stored config
+    #[account(
+        mut,
+        address = config.usd_oku_mint
+    )]
     pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// User's usdOku account (need InterfaceAccount for balance-diff)
-    #[account(mut)]
+    /// User's usdOku account - validated to belong to user (defense-in-depth)
+    #[account(
+        mut,
+        token::authority = user,
+        token::mint = usd_oku_mint
+    )]
     pub user_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// Vault's OkuMoney reserve account
@@ -205,7 +245,6 @@ pub struct MintUsdOku<'info> {
     pub dead_shares_ata: Option<InterfaceAccount<'info, TokenAccountInterface>>,
 
     // --- Programs ---
-
     /// CHECK: Vault program — hardcoded to oku_dollar::ID
     #[account(address = oku_dollar::ID)]
     pub vault_program: UncheckedAccount<'info>,
@@ -235,25 +274,38 @@ pub struct RedeemUsdOku<'info> {
     pub config: Account<'info, RouterConfig>,
 
     // --- Vault unwrap accounts ---
-
     /// CHECK: OkuDollar vault config PDA - validated by vault CPI
     #[account(mut)]
     pub vault_config: UncheckedAccount<'info>,
 
-    /// OkuMoney mint (Token-2022)
-    #[account(mut)]
+    /// OkuMoney mint (Token-2022) - validated against stored config
+    #[account(
+        mut,
+        address = config.oku_money_mint
+    )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// usdOku mint (Token-2022)
-    #[account(mut)]
+    /// usdOku mint (Token-2022) - validated against stored config
+    #[account(
+        mut,
+        address = config.usd_oku_mint
+    )]
     pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// User's OkuMoney account (need InterfaceAccount for balance-diff)
-    #[account(mut)]
+    /// User's OkuMoney account - validated to belong to user (defense-in-depth)
+    #[account(
+        mut,
+        token::authority = user,
+        token::mint = oku_money_mint
+    )]
     pub user_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// User's usdOku account
-    #[account(mut)]
+    /// User's usdOku account - validated to belong to user (defense-in-depth)
+    #[account(
+        mut,
+        token::authority = user,
+        token::mint = usd_oku_mint
+    )]
     pub user_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// Vault's OkuMoney reserve account
@@ -265,7 +317,6 @@ pub struct RedeemUsdOku<'info> {
     pub psm_config: UncheckedAccount<'info>,
 
     // --- PSM redeem_oku_m accounts ---
-
     /// CHECK: Redemption queue PDA - validated by PSM CPI
     #[account(mut)]
     pub redemption_queue: UncheckedAccount<'info>,
@@ -286,7 +337,6 @@ pub struct RedeemUsdOku<'info> {
     pub vault_oku_money: UncheckedAccount<'info>,
 
     // --- Programs ---
-
     /// CHECK: Vault program — hardcoded to oku_dollar::ID
     #[account(address = oku_dollar::ID)]
     pub vault_program: UncheckedAccount<'info>,

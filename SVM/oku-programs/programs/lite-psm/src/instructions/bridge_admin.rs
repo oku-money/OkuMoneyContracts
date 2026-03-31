@@ -71,7 +71,7 @@ pub fn remove_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -
 
 /// Update bridge fee (in basis points, max 10000 = 100%)
 pub fn update_bridge_fee(ctx: Context<BridgeFeeManager>, new_fee_bps: u16) -> Result<()> {
-    require!(new_fee_bps <= 10000, OkuError::Overflow);
+    require!(new_fee_bps <= 10000, OkuError::InvalidFeeBps);
 
     let config = &mut ctx.accounts.bridge_config;
     config.bridge_fee_bps = new_fee_bps;
@@ -82,7 +82,14 @@ pub fn update_bridge_fee(ctx: Context<BridgeFeeManager>, new_fee_bps: u16) -> Re
 }
 
 /// Update fee recipient address
+/// Matches EVM OkuBridge.updateFeeRecipient() which validates zero address
 pub fn update_fee_recipient(ctx: Context<BridgeFeeManager>, new_recipient: Pubkey) -> Result<()> {
+    // Reject zero address to prevent accidental lockout (matches EVM)
+    require!(
+        new_recipient != Pubkey::default(),
+        OkuError::InvalidRecipient
+    );
+
     let config = &mut ctx.accounts.bridge_config;
     config.fee_recipient = new_recipient;
 
@@ -179,10 +186,14 @@ pub fn update_bridge_deadline(ctx: Context<BridgeLimitsManager>, new_deadline: i
 }
 
 /// Update orchestrator signer public key
+/// Matches EVM OkuBridge.updateAuthorizedSigner() which validates zero address
 pub fn update_orchestrator_signer(
     ctx: Context<BridgeSignerManager>,
     new_signer: Pubkey,
 ) -> Result<()> {
+    // Reject zero address to prevent accidental lockout (matches EVM)
+    require!(new_signer != Pubkey::default(), OkuError::InvalidRecipient);
+
     let config = &mut ctx.accounts.bridge_config;
     config.orchestrator_signer = new_signer;
 
@@ -198,7 +209,11 @@ pub fn set_bridge_authority(
     role: BridgeAuthorityRole,
     new_authority: Pubkey,
 ) -> Result<()> {
-    require!(new_authority != Pubkey::default(), OkuError::Unauthorized);
+    // Reject zero address to prevent accidental lockout
+    require!(
+        new_authority != Pubkey::default(),
+        OkuError::InvalidRecipient
+    );
 
     let config = &mut ctx.accounts.bridge_config;
     let old_authority = match role {

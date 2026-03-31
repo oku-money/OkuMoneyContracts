@@ -1,7 +1,7 @@
 use crate::contexts::{BridgeBurn, BridgeMint, RefundBridgeRequest};
 use crate::errors::OkuError;
 use crate::events::*;
-use crate::helpers::verify_ed25519_signature;
+use crate::helpers::{check_yield_lock, verify_ed25519_signature};
 use crate::state::{BridgeRequest, PsmConfig};
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
@@ -31,6 +31,10 @@ pub fn bridge_mint(
     // 2. Check bridge and PSM not paused
     require!(!is_bridge_paused, OkuError::BridgePaused);
     require!(!is_psm_paused, OkuError::Paused);
+
+    // 2b. Yield lock: block mint in same slot as yield distribution (prevents sandwich attacks)
+    // Matches EVM PSM's whenYieldNotDistributing modifier on mintOkuM
+    check_yield_lock(&ctx.accounts.config)?;
 
     // 3. Convert signature Vec to fixed array for verification
     let signature_array: [u8; 64] = signature
@@ -273,6 +277,10 @@ pub fn bridge_burn(
 /// Refund a failed bridge request (refund_admin only)
 /// Mints tokens back to the original sender on the source chain
 /// Only callable after the mint deadline has passed (on-chain safety)
+///
+/// NOTE: Deliberately does NOT check pause state (matches EVM OkuBridge.confirmRefund).
+/// Refunds must work during emergencies to allow users to recover funds.
+/// However, yield lock IS checked to prevent sandwich attacks.
 pub fn refund_bridge_request(
     ctx: Context<RefundBridgeRequest>,
     message_bytes: Vec<u8>,
@@ -281,6 +289,10 @@ pub fn refund_bridge_request(
     // 1. Validate message length
     require!(message_bytes.len() == 80, OkuError::InvalidMessageLength);
 
+    // 1b. Yield lock: block refund mint in same slot as yield distribution
+    // Prevents sandwich attacks while still allowing refunds during pause
+    check_yield_lock(&ctx.accounts.config)?;
+
     // 2. Verify request_id matches keccak256(message_bytes)
     let computed_request_id = anchor_lang::solana_program::keccak::hash(&message_bytes).to_bytes();
     require!(
@@ -288,27 +300,34 @@ pub fn refund_bridge_request(
         OkuError::InvalidRequestId
     );
 
-    // 3. Parse request to get sender/amount
-    let request = BridgeRequest::try_from_slice(&message_bytes)?;
+    // 3. Parse message bytes manually for SVM→EVM burn refunds
+    // Message format (80 bytes): source_chain(2) + dest_chain(2) + sender(32) + recipient(20) + amount(8) + nonce(8) + deadline(8)
+    // Note: BridgeRequest struct uses 20-byte sender for EVM→SVM direction, so we parse manually here
+    let source_chain_id = u16::from_le_bytes(message_bytes[0..2].try_into().unwrap());
+    let sender_bytes: [u8; 32] = message_bytes[4..36].try_into().unwrap();
+    let amount = u64::from_le_bytes(message_bytes[56..64].try_into().unwrap());
+    let deadline = i64::from_le_bytes(message_bytes[72..80].try_into().unwrap());
 
     // 4. Validate this chain is the source chain
     require!(
-        request.source_chain_id == ctx.accounts.bridge_config.source_chain_id,
+        source_chain_id == ctx.accounts.bridge_config.source_chain_id,
         OkuError::WrongSourceChain
     );
 
     // 5. Deadline check: refund only after mint window has closed
     let clock = Clock::get()?;
     require!(
-        clock.unix_timestamp > request.deadline,
+        clock.unix_timestamp > deadline,
         OkuError::MintWindowStillOpen
     );
 
-    // 6. Convert sender bytes to Pubkey (sender is 20 bytes for EVM, but on SVM source chain it's 32 bytes in the first 20+12 bytes)
-    // For SVM→EVM bridges, the sender field is the first 20 bytes of the 32-byte Solana pubkey
-    // But for refunds, we need to reconstruct the Solana sender address
-    // The sender_oku_money_ata owner is validated in the accounts struct
-    let sender_pubkey = ctx.accounts.sender_oku_money_ata.owner;
+    // 6. Validate sender_oku_money_ata owner matches the sender from the signed message
+    // This prevents refund_admin from redirecting funds to an arbitrary address
+    let sender_pubkey = Pubkey::new_from_array(sender_bytes);
+    require!(
+        ctx.accounts.sender_oku_money_ata.owner == sender_pubkey,
+        OkuError::InvalidRecipient
+    );
 
     // 7. Check supply cap and minter allowance (parity with EVM refundFailedRequest)
     let current_supply = ctx.accounts.oku_money_mint.supply;
@@ -316,15 +335,12 @@ pub fn refund_bridge_request(
     let minter_allowance = ctx.accounts.config.minter_allowance;
     require!(
         current_supply
-            .checked_add(request.amount)
+            .checked_add(amount)
             .ok_or(OkuError::Overflow)?
             <= max_supply,
         OkuError::MaxSupplyExceeded
     );
-    require!(
-        request.amount <= minter_allowance,
-        OkuError::AllowanceExceeded
-    );
+    require!(amount <= minter_allowance, OkuError::AllowanceExceeded);
 
     // 8. Mint tokens back to sender
     let config_bump = ctx.accounts.config.bump;
@@ -341,13 +357,13 @@ pub fn refund_bridge_request(
             },
             signer,
         ),
-        request.amount,
+        amount,
     )?;
 
     // 9. Decrement minter allowance (one-way: burns do NOT restore)
     let config = &mut ctx.accounts.config;
     config.minter_allowance = minter_allowance
-        .checked_sub(request.amount)
+        .checked_sub(amount)
         .ok_or(OkuError::Overflow)?;
 
     // 10. Record refund in PDA (init constraint prevents double-refund)
@@ -356,12 +372,12 @@ pub fn refund_bridge_request(
     refunded.request_id = request_id;
     refunded.refunded_at = clock.unix_timestamp;
     refunded.recipient = sender_pubkey;
-    refunded.amount = request.amount;
+    refunded.amount = amount;
 
     emit!(RefundProcessedEvent {
         request_id,
         recipient: sender_pubkey,
-        amount: request.amount,
+        amount,
     });
 
     Ok(())

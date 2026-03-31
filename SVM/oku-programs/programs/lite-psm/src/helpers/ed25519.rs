@@ -5,6 +5,10 @@ use anchor_lang::prelude::*;
 /// Solana's Ed25519Program must be called in the same transaction with signature data
 /// This function verifies that signature check was performed correctly
 /// Production pattern: Don't parse - construct expected instruction and compare
+///
+/// SECURITY: This function searches through all instructions in the transaction
+/// to find the Ed25519 program instruction, rather than hardcoding an index.
+/// This handles variable transaction layouts (e.g., compute budget instructions).
 pub fn verify_ed25519_signature<'info>(
     instructions_sysvar: &AccountInfo<'info>,
     expected_pubkey: &[u8; 32],
@@ -15,23 +19,39 @@ pub fn verify_ed25519_signature<'info>(
         ed25519_program, sysvar::instructions::load_instruction_at_checked,
     };
 
-    // 1. Load what was actually passed (index 0 = first ix in tx)
-    let actual_ix = load_instruction_at_checked(0, instructions_sysvar)
-        .map_err(|_| OkuError::InvalidSignature)?;
-
-    // 2. Verify program ID matches Ed25519Program
-    require!(
-        actual_ix.program_id == ed25519_program::ID,
-        OkuError::InvalidSignature
-    );
-
-    // 3. Build expected instruction data manually
+    // Build expected instruction data first
     let expected_data =
         build_ed25519_instruction_data(expected_pubkey, expected_message, signature);
 
-    // 4. Byte-for-byte comparison
-    // If orchestrator signed different message or used different key, bytes won't match
-    require!(actual_ix.data == expected_data, OkuError::InvalidSignature);
+    // Search through instructions to find the Ed25519 program instruction
+    // We check indices 0-15 which covers all reasonable transaction layouts
+    // (compute budget + priority fee + ed25519 + our instruction + versioned lookups + extras)
+    // Extended from 0-7 to handle edge cases with many preceding instructions
+    let mut found_valid_signature = false;
+
+    for ix_index in 0..16i16 {
+        // Try to load instruction at this index
+        // Use get_instruction_relative with offset from current instruction
+        let ix_result = load_instruction_at_checked(ix_index as usize, instructions_sysvar);
+
+        let actual_ix = match ix_result {
+            Ok(ix) => ix,
+            Err(_) => break, // No more instructions
+        };
+
+        // Check if this is an Ed25519 program instruction
+        if actual_ix.program_id == ed25519_program::ID {
+            // Verify the instruction data matches what we expect
+            if actual_ix.data == expected_data {
+                found_valid_signature = true;
+                break;
+            }
+            // If it's an Ed25519 instruction but data doesn't match,
+            // continue searching (there might be multiple Ed25519 instructions)
+        }
+    }
+
+    require!(found_valid_signature, OkuError::InvalidSignature);
 
     Ok(())
 }

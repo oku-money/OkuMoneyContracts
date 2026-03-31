@@ -4,8 +4,8 @@ use crate::contexts::{
 use crate::errors::OkuDollarError;
 use crate::events::*;
 use crate::helpers::{
-    is_sufficiently_collateralized, oku_money_to_shares, shares_to_oku_money,
-    MINIMUM_LIQUIDITY, PRECISION,
+    is_sufficiently_collateralized, oku_money_to_shares, shares_to_oku_money, MINIMUM_LIQUIDITY,
+    PRECISION,
 };
 use crate::state::OkuDollarConfig;
 use anchor_lang::prelude::*;
@@ -124,7 +124,10 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
             .ok_or(OkuDollarError::Overflow)?;
 
         // Slippage protection (on user shares after dead shares subtraction)
-        require!(user_shares >= min_shares_out, OkuDollarError::SlippageExceeded);
+        require!(
+            user_shares >= min_shares_out,
+            OkuDollarError::SlippageExceeded
+        );
 
         let dead_ata = ctx
             .accounts
@@ -225,15 +228,20 @@ pub fn unwrap(ctx: Context<Unwrap>, shares: u64) -> Result<()> {
     check_yield_lock(&ctx.accounts.psm_config)?;
 
     // Read state
-    let total_supply = ctx.accounts.usd_oku_mint.supply;
     let bump = ctx.accounts.config.bump;
     let usd_multiplier = ctx.accounts.config.usd_multiplier;
     let oku_m_price = ctx.accounts.psm_config.oku_m_price;
     let reserve_balance = ctx.accounts.reserve_vault.amount;
     let decimals = ctx.accounts.oku_money_mint.decimals;
+    let user_shares_balance = ctx.accounts.user_usd_oku_ata.amount;
 
     require!(shares > 0, OkuDollarError::ZeroAmount);
-    require!(shares <= total_supply, OkuDollarError::InsufficientShares);
+    // Check against user's actual balance, not total supply
+    // The burn CPI would fail anyway, but this provides a clearer error message
+    require!(
+        shares <= user_shares_balance,
+        OkuDollarError::InsufficientShares
+    );
 
     // Calculate OkuMoney to return based on current multiplier and price
     let oku_m_out = shares_to_oku_money(shares, usd_multiplier, oku_m_price)?;

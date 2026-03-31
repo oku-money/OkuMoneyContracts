@@ -97,7 +97,7 @@ pub fn setup_oku_money_escrow(ctx: Context<SetupOkuMoneyEscrow>) -> Result<()> {
     // Ensure escrow hasn't already been set
     require!(
         config.vault_oku_money == Pubkey::default(),
-        OkuError::Unauthorized
+        OkuError::EscrowAlreadyInitialized
     );
 
     config.vault_oku_money = ctx.accounts.vault_oku_money.key();

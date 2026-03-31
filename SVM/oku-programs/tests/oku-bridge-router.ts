@@ -307,6 +307,9 @@ describe("oku-bridge-router", () => {
         .accountsPartial({
           roleAdmin: payer.publicKey,
           config: routerConfigPda,
+          okuMoneyMint,
+          usdOkuMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
@@ -319,6 +322,9 @@ describe("oku-bridge-router", () => {
       const config = await routerProgram.account.routerConfig.fetch(routerConfigPda);
       expect(config.roleAdmin.toString()).to.equal(payer.publicKey.toString());
       expect(config.isPaused).to.be.false;
+      // Verify mint addresses are stored (D3 fix: matches EVM pattern)
+      expect(config.okuMoneyMint.toString()).to.equal(okuMoneyMint.toString());
+      expect(config.usdOkuMint.toString()).to.equal(usdOkuMint.toString());
     });
   });
 

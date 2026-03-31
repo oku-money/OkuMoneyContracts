@@ -1,5 +1,11 @@
 use crate::errors::OkuError;
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::pubkey;
+
+/// Pyth Oracle Program IDs (mainnet and devnet)
+/// These are the only valid owners for Pyth price accounts
+pub const PYTH_MAINNET_PROGRAM_ID: Pubkey = pubkey!("FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH");
+pub const PYTH_DEVNET_PROGRAM_ID: Pubkey = pubkey!("gSbePebfvPy7tRqimPoVecS2UsBvYv46ynrzWocc92s");
 
 /// Check oracle reserves before minting
 /// Returns Ok if reserves are sufficient, error otherwise
@@ -10,6 +16,9 @@ use anchor_lang::prelude::*;
 /// is applied -- the raw i64 price value IS the reserves figure.
 /// Example: If OkuUSD uses 6 decimals and reserves are $10M,
 /// oracle should report 10_000_000_000_000 (10M * 10^6).
+///
+/// SECURITY: Validates that the oracle account is owned by the Pyth program
+/// to prevent attackers from providing arbitrary data as oracle responses.
 pub fn check_oracle_reserves<'info>(
     price_account_info: &Option<UncheckedAccount<'info>>,
     oracle_feed: Pubkey,
@@ -25,6 +34,14 @@ pub fn check_oracle_reserves<'info>(
     // Verify the account key matches the expected oracle feed
     require!(
         price_account.key() == oracle_feed,
+        OkuError::InvalidOracleResponse
+    );
+
+    // SECURITY: Verify the oracle account is owned by the Pyth program
+    // This prevents attackers from crafting fake oracle data
+    let owner = price_account.owner;
+    require!(
+        *owner == PYTH_MAINNET_PROGRAM_ID || *owner == PYTH_DEVNET_PROGRAM_ID,
         OkuError::InvalidOracleResponse
     );
 

@@ -80,6 +80,12 @@ pub enum OkuError {
     MintWindowStillOpen,
     #[msg("Request source chain does not match this chain")]
     WrongSourceChain,
+    #[msg("Request was already minted, cannot refund")]
+    RequestAlreadyMinted,
+    #[msg("Escrow vault already initialized")]
+    EscrowAlreadyInitialized,
+    #[msg("Invalid fee basis points (must be <= 10000)")]
+    InvalidFeeBps,
     #[msg("Invalid deadline value")]
     InvalidDeadline,
     #[msg("Invalid queue index")]

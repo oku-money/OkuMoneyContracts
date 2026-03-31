@@ -1,4 +1,6 @@
-use crate::contexts::{DepositBuffer, MintOkuM, ProcessQueue, RedeemOkuM, RescueQueueEntry, WithdrawBuffer};
+use crate::contexts::{
+    DepositBuffer, MintOkuM, ProcessQueue, RedeemOkuM, RescueQueueEntry, WithdrawBuffer,
+};
 use crate::errors::OkuError;
 use crate::events::*;
 use crate::helpers::{check_oracle_reserves, check_yield_lock, PRECISION};
@@ -359,7 +361,11 @@ pub fn process_queue<'info>(
         processed += 1;
 
         // Update running counter
-        queue.total_queued_oku_m = queue.total_queued_oku_m.saturating_sub(oku_m_amount);
+        // Use checked_sub to catch any accounting bugs early rather than silently clamping
+        queue.total_queued_oku_m = queue
+            .total_queued_oku_m
+            .checked_sub(oku_m_amount)
+            .ok_or(OkuError::Overflow)?;
 
         emit!(RedemptionProcessedEvent { user, usdc_amount });
     }
@@ -500,7 +506,11 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u32) -> R
     queue.entries[position] = QueueEntry::default();
 
     // Update running counter
-    queue.total_queued_oku_m = queue.total_queued_oku_m.saturating_sub(oku_m_amount);
+    // Use checked_sub to catch any accounting bugs early rather than silently clamping
+    queue.total_queued_oku_m = queue
+        .total_queued_oku_m
+        .checked_sub(oku_m_amount)
+        .ok_or(OkuError::Overflow)?;
 
     // Advance head past contiguous cleared entries (matches EVM behavior)
     while queue.head < queue.tail {

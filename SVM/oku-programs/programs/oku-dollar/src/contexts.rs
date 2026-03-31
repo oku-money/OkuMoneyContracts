@@ -70,8 +70,9 @@ pub struct Wrap<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
+    // Config is read-only in wrap (only reads bump, usd_multiplier)
+    // Not marking as mut saves ~2000 CU on serialization
     #[account(
-        mut,
         seeds = [OkuDollarConfig::SEED],
         bump = config.bump,
         constraint = !config.is_paused @ OkuDollarError::VaultPaused
@@ -143,8 +144,9 @@ pub struct Unwrap<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
+    // Config is read-only in unwrap (only reads bump, usd_multiplier)
+    // Not marking as mut saves ~2000 CU on serialization
     #[account(
-        mut,
         seeds = [OkuDollarConfig::SEED],
         bump = config.bump,
         // Note: Unwrap blocked when paused (matches EVM behavior)
@@ -205,6 +207,10 @@ pub struct Unwrap<'info> {
 }
 
 /// Update the USD multiplier (rebasing)
+///
+/// NOTE: No pause check - matches EVM OkuDollar.updateUsdMultiplier()
+/// Rebasing must remain available during emergencies to update the price
+/// multiplier (e.g., to reflect accrued yield or respond to market conditions)
 #[derive(Accounts)]
 pub struct UpdateUsdMultiplier<'info> {
     #[account(
@@ -242,6 +248,10 @@ pub struct UpdateUsdMultiplier<'info> {
 }
 
 /// Deposit reserves (reserve manager)
+///
+/// NOTE: No pause check - matches EVM OkuDollar.depositReserves()
+/// Reserve deposits must remain available during emergencies to add collateral
+/// (e.g., to restore solvency or respond to a crisis)
 #[derive(Accounts)]
 pub struct DepositReserves<'info> {
     #[account(
@@ -282,6 +292,10 @@ pub struct DepositReserves<'info> {
 }
 
 /// Withdraw reserves (reserve manager)
+///
+/// NOTE: No pause check - matches EVM OkuDollar.withdrawReserves()
+/// Reserve withdrawals must remain available during emergencies to move
+/// collateral (e.g., to respond to protocol migration or critical fixes)
 #[derive(Accounts)]
 pub struct WithdrawReserves<'info> {
     #[account(

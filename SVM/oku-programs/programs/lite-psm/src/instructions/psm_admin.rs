@@ -175,7 +175,11 @@ pub fn set_authority(
     role: AuthorityRole,
     new_authority: Pubkey,
 ) -> Result<()> {
-    require!(new_authority != Pubkey::default(), OkuError::Unauthorized);
+    // Reject zero address to prevent accidental lockout
+    require!(
+        new_authority != Pubkey::default(),
+        OkuError::InvalidRecipient
+    );
 
     let config = &mut ctx.accounts.config;
     let old_authority = match role {

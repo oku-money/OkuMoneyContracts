@@ -31,13 +31,17 @@ pub struct MintUsdOkuEvent {
     pub usd_oku_shares: u64,
 }
 
+/// Event emitted when redeeming usdOku via the router
+/// NOTE: The final USDC amount and queue status are determined by the PSM,
+/// not the router. Check PSM's RedeemEvent or RedemptionQueuedEvent for details.
 #[event]
 pub struct RedeemUsdOkuEvent {
     pub user: Pubkey,
     pub usd_oku_shares: u64,
     pub oku_money_intermediate: u64,
-    pub usdc_amount: u64,
-    pub queued: bool,
+    // NOTE: usdc_amount and queued fields removed because the router cannot
+    // accurately determine these values. The PSM emits its own events with
+    // the correct information (RedeemEvent for instant, RedemptionQueuedEvent for queued).
 }
 
 #[event]

@@ -1446,7 +1446,7 @@ describe("Bridge Security Tests", () => {
             })
             .signers([feeManager])
             .rpc(),
-        "Overflow"
+        "InvalidFeeBps"
       );
     });
   });
@@ -2342,6 +2342,12 @@ describe("Bridge Security Tests", () => {
         program.programId
       );
 
+      // Derive ProcessedRequest PDA (for double-mint prevention check)
+      const [processedRequestPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_request"), Buffer.from(requestId)],
+        program.programId
+      );
+
       // Get user balance before refund
       const userBalanceBefore = await getAccount(
         provider.connection,
@@ -2361,6 +2367,7 @@ describe("Bridge Security Tests", () => {
           bridgeConfig: bridgeConfigPda,
           config: configPda,
           refundedRequest: refundedRequestPda,
+          processedRequest: processedRequestPda,
           okuMoneyMint: okuMoneyMint,
           senderOkuMoneyAta: userOkuMoneyAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -2416,6 +2423,12 @@ describe("Bridge Security Tests", () => {
         program.programId
       );
 
+      // Derive ProcessedRequest PDA (for double-mint prevention check)
+      const [processedRequestPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_request"), Buffer.from(requestId)],
+        program.programId
+      );
+
       // First refund should succeed
       await program.methods
         .refundBridgeRequest(
@@ -2427,6 +2440,7 @@ describe("Bridge Security Tests", () => {
           bridgeConfig: bridgeConfigPda,
           config: configPda,
           refundedRequest: refundedRequestPda,
+          processedRequest: processedRequestPda,
           okuMoneyMint: okuMoneyMint,
           senderOkuMoneyAta: userOkuMoneyAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -2448,6 +2462,7 @@ describe("Bridge Security Tests", () => {
               bridgeConfig: bridgeConfigPda,
               config: configPda,
               refundedRequest: refundedRequestPda,
+              processedRequest: processedRequestPda,
               okuMoneyMint: okuMoneyMint,
               senderOkuMoneyAta: userOkuMoneyAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -2482,6 +2497,12 @@ describe("Bridge Security Tests", () => {
         program.programId
       );
 
+      // Derive ProcessedRequest PDA (for double-mint prevention check)
+      const [processedRequestPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_request"), Buffer.from(requestId)],
+        program.programId
+      );
+
       await expectError(
         () =>
           program.methods
@@ -2494,6 +2515,7 @@ describe("Bridge Security Tests", () => {
               bridgeConfig: bridgeConfigPda,
               config: configPda,
               refundedRequest: refundedRequestPda,
+              processedRequest: processedRequestPda,
               okuMoneyMint: okuMoneyMint,
               senderOkuMoneyAta: userOkuMoneyAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -2502,6 +2524,110 @@ describe("Bridge Security Tests", () => {
             .signers([bridgeAdmin])
             .rpc(),
         "MintWindowStillOpen"
+      );
+    });
+
+    it("rejects refund for a request that was already minted (RequestAlreadyMinted)", async () => {
+      // First, create and execute a successful bridge_mint
+      const evmSender = randomEvmAddress();
+      const validDeadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+      const mintAmount = BigInt(1_000_000);
+      const mintNonce = 99999n;
+
+      const mintMessage = serializeBridgeMessage({
+        sourceChainId: ETH_CHAIN_ID,
+        destinationChainId: SOLANA_CHAIN_ID,
+        sender: evmSender,
+        recipientWallet: user.publicKey,
+        amount: mintAmount,
+        nonce: mintNonce,
+        deadline: validDeadline,
+      });
+
+      const signature = signMessage(mintMessage, orchestrator);
+      const requestId = calculateRequestId(mintMessage);
+
+      // Execute the mint successfully
+      const tx = await createBridgeMintTx({
+        program,
+        message: mintMessage,
+        signature,
+        orchestrator,
+        recipientWallet: user.publicKey,
+        payer,
+        requestId,
+      });
+      await provider.sendAndConfirm(tx, [payer]);
+
+      // Now construct the corresponding burn message (EVM→SVM format differs from SVM→EVM)
+      // For refund, we need the SVM→EVM burn message format
+      const refundMessage = serializeBurnMessage({
+        sourceChainId: SOLANA_CHAIN_ID, // SVM is source for refund
+        destinationChainId: ETH_CHAIN_ID,
+        sender: user.publicKey,
+        recipient: evmSender,
+        amount: mintAmount,
+        nonce: mintNonce,
+        deadline: 1n, // Past deadline to allow refund attempt
+      });
+
+      const refundRequestId = calculateRequestId(refundMessage);
+
+      const [refundedRequestPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_refund"), Buffer.from(refundRequestId)],
+        program.programId
+      );
+
+      // The ProcessedRequest PDA should exist from the mint
+      const [processedRequestPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_request"), Buffer.from(requestId)],
+        program.programId
+      );
+
+      // Attempt refund should fail because the ProcessedRequest exists
+      // (but we need to use the SAME requestId that was minted, not a different one)
+      // Actually, the refund check is for the same request_id, so we need to try
+      // to refund the SAME request that was already minted
+
+      // For the proper test, we'd need to attempt a refund using the same
+      // requestId that was used in bridge_mint. The refund message format
+      // uses SVM→EVM format, but the processedRequest check uses the requestId.
+      
+      // Let's use the MINT requestId and see if refund is blocked
+      const [mintRefundedPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_refund"), Buffer.from(requestId)],
+        program.programId
+      );
+
+      // The mint's ProcessedRequest PDA
+      const [mintProcessedPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_request"), Buffer.from(requestId)],
+        program.programId
+      );
+
+      // Try to refund using the same message that was minted
+      // This should fail with RequestAlreadyMinted because processedRequest exists
+      await expectError(
+        () =>
+          program.methods
+            .refundBridgeRequest(
+              Buffer.from(mintMessage),
+              Array.from(requestId)
+            )
+            .accountsPartial({
+              refundAdmin: bridgeAdmin.publicKey,
+              bridgeConfig: bridgeConfigPda,
+              config: configPda,
+              refundedRequest: mintRefundedPda,
+              processedRequest: mintProcessedPda,
+              okuMoneyMint: okuMoneyMint,
+              senderOkuMoneyAta: userOkuMoneyAta,
+              token2022Program: TOKEN_2022_PROGRAM_ID,
+              systemProgram: SystemProgram.programId,
+            })
+            .signers([bridgeAdmin])
+            .rpc(),
+        "RequestAlreadyMinted"
       );
     });
   });

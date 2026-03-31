@@ -156,6 +156,16 @@ pub struct RefundBridgeRequest<'info> {
     )]
     pub refunded_request: Account<'info, RefundedRequest>,
 
+    /// ProcessedRequest PDA - must NOT exist (checked via constraint)
+    /// This prevents refunding a request that was already successfully minted
+    /// CHECK: We verify this account does NOT exist by checking its data length is 0
+    #[account(
+        seeds = [ProcessedRequest::SEED, &request_id],
+        bump,
+        constraint = processed_request.data_is_empty() @ OkuError::RequestAlreadyMinted
+    )]
+    pub processed_request: AccountInfo<'info>,
+
     /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
     #[account(
         mut,

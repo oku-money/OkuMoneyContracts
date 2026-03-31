@@ -53,3 +53,6 @@ impl OkuDollarConfig {
     /// = 8 + 1 + 160 + 128 + 16 + 8 + 1 = 322 bytes
     pub const LEN: usize = 8 + 1 + 32 * 5 + 32 * 4 + 8 * 2 + 8 + 1;
 }
+
+// Compile-time assertion: if OkuDollarConfig layout changes, this will fail to compile
+const _: () = assert!(OkuDollarConfig::LEN == 322);

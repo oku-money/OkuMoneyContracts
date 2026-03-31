@@ -12,4 +12,14 @@ pub enum RouterError {
     MathError,
     #[msg("Slippage tolerance exceeded")]
     SlippageExceeded,
+    #[msg("Invalid recipient (zero address)")]
+    InvalidRecipient,
+    #[msg("Invalid destination chain")]
+    InvalidDestinationChain,
+    #[msg("Invalid authority address (zero address)")]
+    InvalidAuthority,
+    #[msg("Router is already paused")]
+    AlreadyPaused,
+    #[msg("Router is not paused")]
+    NotPaused,
 }

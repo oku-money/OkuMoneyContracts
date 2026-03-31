@@ -89,7 +89,9 @@ pub struct SetupOkuMoneyEscrow<'info> {
     pub config: Box<Account<'info, PsmConfig>>,
 
     /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
+    /// Must match the mint stored in config during initialize
     #[account(
+        address = config.oku_money_mint,
         mint::token_program = token_2022_program
     )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,

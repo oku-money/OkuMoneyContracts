@@ -372,14 +372,16 @@ contract OkuDollarTest is BaseTest {
         vm.prank(reserveManager);
         usdOku.depositReserves(200e18);
 
-        // Allow full withdrawal for test purposes
+        // Set collateral ratio to floor (90%) for test purposes
         vm.prank(admin);
-        usdOku.setMinCollateralRatio(0);
+        usdOku.setMinCollateralRatio(9e17);
+        // Withdraw surplus: vault has 300, obligations are 100, can withdraw down to 90
+        // At 90% ratio, reserves must be >= 90. So we can withdraw up to 210.
         vm.prank(reserveManager);
-        usdOku.withdrawSurplus(250e18);
+        usdOku.withdrawSurplus(210e18);
 
-        // Vault only has 50e18 notes but user has 100e18 OkuDollar
-        // At notePrice=1e18: unwrap(100e18) needs 100 notes, vault has 50
+        // Vault only has 90e18 notes but user has 100e18 OkuDollar
+        // At notePrice=1e18: unwrap(100e18) needs 100 notes, vault has 90
         vm.prank(user1);
         vm.expectRevert(OkuDollar.InsufficientReserves.selector);
         usdOku.unwrap(100e18, user1);
@@ -918,11 +920,23 @@ contract OkuDollarTest is BaseTest {
         usdOku.setMinCollateralRatio(PRECISION + 1);
     }
 
-    function test_SetMinCollateralRatio_AllowsZero() public {
+    function test_SetMinCollateralRatio_RejectsZero() public {
         vm.prank(admin);
+        vm.expectRevert(OkuDollar.RatioBelowFloor.selector);
         usdOku.setMinCollateralRatio(0);
+    }
 
-        assertEq(usdOku.minCollateralRatio(), 0);
+    function test_SetMinCollateralRatio_RejectsBelowFloor() public {
+        vm.prank(admin);
+        vm.expectRevert(OkuDollar.RatioBelowFloor.selector);
+        usdOku.setMinCollateralRatio(89e16); // 89% is below 90% floor
+    }
+
+    function test_SetMinCollateralRatio_AllowsFloor() public {
+        vm.prank(admin);
+        usdOku.setMinCollateralRatio(9e17); // 90% is the floor
+
+        assertEq(usdOku.minCollateralRatio(), 9e17);
     }
 
     function test_SetMinCollateralRatio_AllowsPrecision() public {

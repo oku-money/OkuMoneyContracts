@@ -85,6 +85,7 @@ contract OkuDollar is
 
     uint256 public constant PRECISION = Constants.PRECISION;
     uint256 public constant MAX_RATE = Constants.MAX_RATE;
+    uint256 public constant MIN_COLLATERAL_RATIO_FLOOR = 9e17; // 90% minimum floor (matches SVM)
 
     // ============ Events ============
 
@@ -104,6 +105,7 @@ contract OkuDollar is
 
     error ZeroAddress();
     error RatioExceedsMax();
+    error RatioBelowFloor();
     error ZeroAmount();
     error AmountTooSmall();
     error OutputBelowMinimum(uint256 actual, uint256 minimum);
@@ -135,6 +137,7 @@ contract OkuDollar is
         if (_okuMoney == address(0)) revert ZeroAddress();
         if (admin == address(0)) revert ZeroAddress();
         if (_minCollateralRatio > PRECISION) revert RatioExceedsMax();
+        if (_minCollateralRatio < MIN_COLLATERAL_RATIO_FLOOR) revert RatioBelowFloor();
 
         __ERC20_init(name, symbol);
         __ERC20Permit_init(name);
@@ -392,8 +395,9 @@ contract OkuDollar is
         uint256 price = $.okuMoney.okuMPrice();
         okuMReturned = (usdAmount * mult) / price;
 
-        // Calculate shares to burn
-        uint256 sharesToBurn = (usdAmount * PRECISION) / mult;
+        // Calculate shares to burn (round UP to favor vault)
+        // Ceiling division: (a + b - 1) / b
+        uint256 sharesToBurn = ((usdAmount * PRECISION) + mult - 1) / mult;
         if ($.usdShares[msg.sender] < sharesToBurn) revert InsufficientCollateral();
 
         // Check vault has enough OkuMoney
@@ -451,6 +455,7 @@ contract OkuDollar is
 
     function setMinCollateralRatio(uint256 newRatio) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newRatio > PRECISION) revert RatioExceedsMax();
+        if (newRatio < MIN_COLLATERAL_RATIO_FLOOR) revert RatioBelowFloor();
         OkuDollarStorage storage $ = _getOkuDollarStorage();
         uint256 oldRatio = $.minCollateralRatio;
         $.minCollateralRatio = newRatio;

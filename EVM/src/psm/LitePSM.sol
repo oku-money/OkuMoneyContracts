@@ -228,10 +228,13 @@ contract LitePSM is
         uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, price);
         if (okuMAmount == 0) revert AmountTooSmall();
 
-        // Slippage protection: output dollar value must be >= input (USDC-aligned)
-        uint256 outputDollarValue = MathLib.okuMToDollars(okuMAmount, price);
-        if (outputDollarValue < usdcValue18) {
-            revert OutputBelowMinimum(outputDollarValue, usdcValue18);
+        // Slippage protection: verify output USDC value is within 1 unit of input
+        // The dollarsToOkuM conversion truncates, losing up to 1 USDC unit of value.
+        // This is always in the protocol's favor (user gets slightly fewer OkuMoney).
+        // We allow 1 unit tolerance to prevent reverts at non-even prices like $1.05.
+        uint256 outputUsdc = MathLib.dollarsToUsdc(MathLib.okuMToDollars(okuMAmount, price));
+        if (outputUsdc + 1 < usdcAmount) {
+            revert OutputBelowMinimum(outputUsdc, usdcAmount);
         }
 
         // Check PoR oracle if enabled

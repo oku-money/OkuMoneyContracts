@@ -141,7 +141,7 @@ contract LitePSMTest is BaseTest {
     // ============ Price-Aware Mint Tests ============
 
     function test_Mint_PriceAware_ElevatedPrice() public {
-        // Set notePrice to 2e18 ($2.00) - even multiplier avoids rounding in slippage check
+        // Set notePrice to 2e18 ($2.00)
         _setNotePrice(2e18);
 
         uint256 usdcAmount = 100e6; // 100 USDC
@@ -174,8 +174,57 @@ contract LitePSMTest is BaseTest {
         assertEq(okuMoney.balanceOf(user1), 50e18, "100 USDC at $2/note = 50 notes");
     }
 
+    /// @notice CRITICAL: Test that mint works at non-even prices (e.g., $1.05)
+    /// @dev This test catches the slippage check bug where 18-decimal rounding
+    ///      caused valid transactions to revert at prices that don't evenly divide.
+    ///      The fix compares in USDC terms (6 decimals) to absorb the rounding.
+    function test_Mint_PriceAware_NonEvenPrice() public {
+        // Set notePrice to 1.05e18 ($1.05) - a typical post-yield price
+        _setNotePrice(105e16);
+
+        uint256 usdcAmount = 100e6; // 100 USDC
+
+        _approveUsdc(user1, address(litePsm), usdcAmount);
+
+        // This would revert with the old buggy slippage check
+        vm.prank(user1);
+        litePsm.mintOkuM(usdcAmount);
+
+        // okuMAmount = 100e18 * 1e18 / 1.05e18 ≈ 95.238e18
+        uint256 expectedNotes = (100e18 * PRECISION) / 105e16;
+        assertEq(okuMoney.balanceOf(user1), expectedNotes, "Should mint at non-even price");
+        assertLt(okuMoney.balanceOf(user1), 100e18, "Should receive fewer notes at $1.05");
+        assertGt(okuMoney.balanceOf(user1), 95e18, "Should receive ~95.24 notes");
+    }
+
+    /// @notice Test mint at various realistic post-yield prices
+    function test_Mint_PriceAware_VariousPrices() public {
+        uint256[] memory prices = new uint256[](5);
+        prices[0] = 1_000_375e12; // $1.000375 (tiny yield)
+        prices[1] = 10_025e14; // $1.0025 (small yield)
+        prices[2] = 1015e15; // $1.015 (moderate yield)
+        prices[3] = 105e16; // $1.05 (5% yield)
+        prices[4] = 11e17; // $1.10 (10% yield)
+
+        uint256 usdcAmount = 100e6;
+
+        for (uint256 i = 0; i < prices.length; i++) {
+            // Reset user balance
+            deal(address(okuMoney), user1, 0);
+
+            _setNotePrice(prices[i]);
+            _approveUsdc(user1, address(litePsm), usdcAmount);
+
+            vm.prank(user1);
+            litePsm.mintOkuM(usdcAmount);
+
+            uint256 balance = okuMoney.balanceOf(user1);
+            assertGt(balance, 0, "Should mint at any valid price");
+        }
+    }
+
     function test_Mint_PriceAware_EmitsCorrectAmounts() public {
-        // Use an even price to avoid rounding issues with slippage check
+        // Set notePrice to 2e18 ($2.00)
         _setNotePrice(2e18);
 
         uint256 usdcAmount = 100e6;
@@ -528,7 +577,7 @@ contract LitePSMTest is BaseTest {
     // ============ Price-Aware Round-Trip Tests ============
 
     function test_RoundTrip_PriceAware_MintThenRedeem() public {
-        // Use an even price to avoid slippage check failures from rounding
+        // Use $2.00 for exact round-trip math (no rounding loss)
         _setNotePrice(2e18);
 
         uint256 usdcDeposit = 100e6; // 100 USDC

@@ -41,10 +41,11 @@ import {
 const { SYSVAR_RENT_PUBKEY } = anchor.web3;
 
 describe("Bridge Security Tests", () => {
-  // Constants
-  const SOLANA_CHAIN_ID = 1151;
+  // Constants - Chain IDs use OkuMoney protocol-internal identifiers (Ankr convention for Solana)
+  const SOLANA_CHAIN_ID = 103; // Solana Devnet
   const ETH_CHAIN_ID = 1;
   const BSC_CHAIN_ID = 56;
+  const OP_SEPOLIA_CHAIN_ID = 11155420;
   const ONE_TOKEN = 1_000_000; // 6 decimals
   const TEN_TOKENS = 10_000_000;
   const ONE_MILLION_TOKENS = 1_000_000_000_000;

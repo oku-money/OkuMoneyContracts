@@ -13,6 +13,32 @@ dotenv.config();
 // Suppress "Potentially unsafe deployment" warnings for unsafeAllow options
 silenceWarnings();
 
+// ============================================================================
+// Dynamic RPC URL construction using Alchemy API key
+// ============================================================================
+
+const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY || "";
+
+// Helper to construct Alchemy RPC URLs
+function alchemyUrl(network: string): string {
+  if (!ALCHEMY_API_KEY) {
+    // Fallback to public RPCs if no Alchemy key
+    const publicRpcs: Record<string, string> = {
+      "eth-mainnet": "https://eth.llamarpc.com",
+      "eth-sepolia": "https://rpc.sepolia.org",
+      "opt-mainnet": "https://mainnet.optimism.io",
+      "opt-sepolia": "https://sepolia.optimism.io",
+      "arb-mainnet": "https://arb1.arbitrum.io/rpc",
+      "base-mainnet": "https://mainnet.base.org",
+    };
+    return publicRpcs[network] || "";
+  }
+  return `https://${network}.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
+}
+
+// Impersonation address for local fork testing
+const FORK_IMPERSONATE_ADDRESS = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
+
 const config: HardhatUserConfig = {
   solidity: {
     version: "0.8.28",
@@ -22,8 +48,6 @@ const config: HardhatUserConfig = {
         runs: 200,
       },
       evmVersion: "cancun",
-      // Match Foundry's remappings for OpenZeppelin
-      // Note: Hardhat handles node_modules imports automatically
     },
   },
 
@@ -39,16 +63,16 @@ const config: HardhatUserConfig = {
   networks: {
     hardhat: {
       chainId: 31337,
-      // Fork Optimism by default for OkuMoney testing
-      // Override with FORK_URL and FORK_BLOCK_NUMBER env vars
+      // Fork OP Sepolia for testnet simulation, or Optimism for mainnet simulation
       forking: {
-        url: process.env.FORK_URL || process.env.OPTIMISM_RPC_URL || "https://mainnet.optimism.io",
+        url: process.env.FORK_URL || alchemyUrl("opt-sepolia"),
         blockNumber: process.env.FORK_BLOCK_NUMBER ? parseInt(process.env.FORK_BLOCK_NUMBER) : undefined,
         enabled: true,
       },
       allowUnlimitedContractSize: false,
       gas: "auto",
       gasPrice: "auto",
+      // Impersonate your wallet for local testing
       accounts: {
         mnemonic: "test test test test test test test test test test test junk",
         count: 20,
@@ -63,7 +87,7 @@ const config: HardhatUserConfig = {
 
     // Testnets
     sepolia: {
-      url: process.env.SEPOLIA_RPC_URL || "",
+      url: process.env.SEPOLIA_RPC_URL || alchemyUrl("eth-sepolia"),
       chainId: 11155111,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -75,7 +99,7 @@ const config: HardhatUserConfig = {
     },
 
     opSepolia: {
-      url: process.env.OP_SEPOLIA_RPC_URL || "https://sepolia.optimism.io",
+      url: process.env.OP_SEPOLIA_RPC_URL || alchemyUrl("opt-sepolia"),
       chainId: 11155420,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -88,7 +112,7 @@ const config: HardhatUserConfig = {
 
     // Mainnets
     mainnet: {
-      url: process.env.MAINNET_RPC_URL || "",
+      url: process.env.MAINNET_RPC_URL || alchemyUrl("eth-mainnet"),
       chainId: 1,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -100,7 +124,7 @@ const config: HardhatUserConfig = {
     },
 
     arbitrum: {
-      url: process.env.ARBITRUM_RPC_URL || "https://arb1.arbitrum.io/rpc",
+      url: process.env.ARBITRUM_RPC_URL || alchemyUrl("arb-mainnet"),
       chainId: 42161,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -112,7 +136,7 @@ const config: HardhatUserConfig = {
     },
 
     base: {
-      url: process.env.BASE_RPC_URL || "https://mainnet.base.org",
+      url: process.env.BASE_RPC_URL || alchemyUrl("base-mainnet"),
       chainId: 8453,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -124,7 +148,7 @@ const config: HardhatUserConfig = {
     },
 
     optimism: {
-      url: process.env.OPTIMISM_RPC_URL || "https://mainnet.optimism.io",
+      url: process.env.OPTIMISM_RPC_URL || alchemyUrl("opt-mainnet"),
       chainId: 10,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -186,5 +210,8 @@ const config: HardhatUserConfig = {
     timeout: 200000, // 200 seconds for fork tests
   },
 };
+
+// Export impersonation address for scripts to use
+export { FORK_IMPERSONATE_ADDRESS };
 
 export default config;

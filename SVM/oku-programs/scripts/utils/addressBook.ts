@@ -118,8 +118,8 @@ export function saveDeployment(
  */
 export function updateDeployment(
   network: NetworkName,
-  section: keyof DeploymentAddresses,
-  data: any
+  section: keyof Omit<DeploymentAddresses, 'network' | 'timestamp'>,
+  data: Record<string, string>
 ) {
   const existing = loadDeployment(network) || {
     network,
@@ -131,9 +131,10 @@ export function updateDeployment(
     authorities: {},
   };
 
+  const existingSection = existing[section] || {};
   saveDeployment(network, {
     ...existing,
-    [section]: { ...existing[section], ...data },
+    [section]: { ...existingSection, ...data },
   });
 }
 

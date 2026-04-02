@@ -1,10 +1,10 @@
 /**
- * Check OkuUSD and wOkuUSD balances on all deployed chains
+ * Check OkuMoney and OkuDollar balances on all deployed chains
  * Usage: npx hardhat run scripts/interactions/check-balances.ts
  */
 
 import { ethers } from "hardhat";
-import { getNetworkName, getChainConfig, CHAINS } from "../config/chains";
+import { getNetworkName, getChainConfig } from "../config/chains";
 import { loadAddressBook, hasAddress } from "../utils/addressBook";
 import { logger } from "../utils/logger";
 import { getDeployedContract } from "../utils/deploy";
@@ -15,7 +15,7 @@ async function checkBalancesForNetwork(network: string, userAddress: string) {
   logger.section(`Balances on ${chainConfig.name}`);
 
   // Check if contracts are deployed on this network
-  if (!hasAddress(network, "OkuUSD")) {
+  if (!hasAddress(network, "OkuMoney")) {
     logger.warning(`No contracts deployed on ${network}`);
     return;
   }
@@ -27,54 +27,67 @@ async function checkBalancesForNetwork(network: string, userAddress: string) {
   const addressBook = loadAddressBook();
   const addresses = addressBook[network];
 
-  const okuUSDAddress = addresses.OkuUSD;
-  const wOkuUSDAddress = addresses.wOkuUSD;
+  const okuMoneyAddress = addresses.OkuMoney;
+  const okuDollarAddress = addresses.OkuDollar;
 
   // Get contract instances
-  const okuUSD = new ethers.Contract(
-    okuUSDAddress,
-    ["function balanceOf(address) view returns (uint256)", "function rewardMultiplier() view returns (uint256)"],
+  const okuMoney = new ethers.Contract(
+    okuMoneyAddress,
+    ["function balanceOf(address) view returns (uint256)", "function okuMPrice() view returns (uint256)"],
     provider
   );
 
-  const wOkuUSD = new ethers.Contract(
-    wOkuUSDAddress,
+  const okuDollar = new ethers.Contract(
+    okuDollarAddress,
     [
       "function balanceOf(address) view returns (uint256)",
       "function totalAssets() view returns (uint256)",
       "function totalSupply() view returns (uint256)",
       "function convertToAssets(uint256) view returns (uint256)",
+      "function usdMultiplier() view returns (uint256)",
     ],
     provider
   );
 
-  // Get OkuUSD balance
-  const okuUSDBalance = await okuUSD.balanceOf(userAddress);
-  logger.info(`OkuUSD balance: ${ethers.formatUnits(okuUSDBalance, 18)}`);
+  // Get OkuMoney balance
+  const okuMoneyBalance = await okuMoney.balanceOf(userAddress);
+  logger.info(`OkuMoney balance: ${ethers.formatUnits(okuMoneyBalance, 18)} OkuM`);
 
-  // Get reward multiplier
-  const rewardMultiplier = await okuUSD.rewardMultiplier();
-  logger.info(`Reward multiplier: ${ethers.formatUnits(rewardMultiplier, 18)}`);
-
-  // Get wOkuUSD balance
-  const wOkuUSDBalance = await wOkuUSD.balanceOf(userAddress);
-  logger.info(`wOkuUSD shares: ${ethers.formatUnits(wOkuUSDBalance, 18)}`);
-
-  // Convert wOkuUSD shares to assets
-  if (wOkuUSDBalance > 0n) {
-    const wOkuUSDAssets = await wOkuUSD.convertToAssets(wOkuUSDBalance);
-    logger.info(`wOkuUSD value: ${ethers.formatUnits(wOkuUSDAssets, 18)} okuUSD`);
+  // Get OkuM price
+  try {
+    const okuMPrice = await okuMoney.okuMPrice();
+    logger.info(`OkuM Price: ${ethers.formatUnits(okuMPrice, 18)}`);
+  } catch (e) {
+    // okuMPrice might not exist on older versions
   }
 
-  // Get wOkuUSD stats
-  const totalAssets = await wOkuUSD.totalAssets();
-  const totalSupply = await wOkuUSD.totalSupply();
-  logger.info(`wOkuUSD total assets: ${ethers.formatUnits(totalAssets, 18)}`);
-  logger.info(`wOkuUSD total supply: ${ethers.formatUnits(totalSupply, 18)}`);
+  // Get OkuDollar balance
+  const okuDollarBalance = await okuDollar.balanceOf(userAddress);
+  logger.info(`OkuDollar balance: ${ethers.formatUnits(okuDollarBalance, 18)} usdOku`);
+
+  // Convert OkuDollar to OkuMoney assets
+  if (okuDollarBalance > 0n) {
+    const okuDollarAssets = await okuDollar.convertToAssets(okuDollarBalance);
+    logger.info(`OkuDollar value: ${ethers.formatUnits(okuDollarAssets, 18)} OkuM`);
+  }
+
+  // Get OkuDollar stats
+  const totalAssets = await okuDollar.totalAssets();
+  const totalSupply = await okuDollar.totalSupply();
+  logger.info(`OkuDollar total assets: ${ethers.formatUnits(totalAssets, 18)} OkuM`);
+  logger.info(`OkuDollar total supply: ${ethers.formatUnits(totalSupply, 18)} usdOku`);
+
+  // Get USD multiplier
+  try {
+    const usdMultiplier = await okuDollar.usdMultiplier();
+    logger.info(`USD Multiplier: ${ethers.formatUnits(usdMultiplier, 18)}`);
+  } catch (e) {
+    // Might not exist
+  }
 
   if (totalSupply > 0n) {
     const rate = (Number(totalAssets) / Number(totalSupply)).toFixed(6);
-    logger.info(`Conversion rate: 1 wOkuUSD = ${rate} okuUSD`);
+    logger.info(`Conversion rate: 1 usdOku = ${rate} OkuM`);
   }
 }
 

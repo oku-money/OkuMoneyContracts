@@ -1,6 +1,8 @@
 /**
  * Role constants for OkuMoney contracts
  * These are the keccak256 hashes of role names used in AccessControl
+ *
+ * NOTE: These must match the roles defined in src/lib/Roles.sol
  */
 
 import { keccak256, toUtf8Bytes } from "ethers";
@@ -9,25 +11,39 @@ export const ROLES = {
   // Default admin role (AccessControl)
   DEFAULT_ADMIN_ROLE: "0x0000000000000000000000000000000000000000000000000000000000000000",
 
-  // OkuUSD roles
-  MINTER: keccak256(toUtf8Bytes("MINTER")),
-  REBASER: keccak256(toUtf8Bytes("REBASER")),
-  ALLOWANCE_MANAGER: keccak256(toUtf8Bytes("ALLOWANCE_MANAGER")),
-  OKUUSD_PAUSER: keccak256(toUtf8Bytes("OKUUSD_PAUSER")),
-  UPGRADER: keccak256(toUtf8Bytes("UPGRADER")),
+  // ============ OkuMoney Roles ============
+  OKUM_UPGRADER: keccak256(toUtf8Bytes("OKUM_UPGRADER")),
+  OKUM_PAUSER: keccak256(toUtf8Bytes("OKUM_PAUSER")),
+  OKUM_UNPAUSER: keccak256(toUtf8Bytes("OKUM_UNPAUSER")),
+  OKUM_MINTER: keccak256(toUtf8Bytes("OKUM_MINTER")),
+  OKUM_REBASER: keccak256(toUtf8Bytes("OKUM_REBASER")),
+  OKUM_BLACKLISTER: keccak256(toUtf8Bytes("OKUM_BLACKLISTER")),
+  OKUM_UNBLACKLISTER: keccak256(toUtf8Bytes("OKUM_UNBLACKLISTER")),
+  OKUM_CAP_MANAGER: keccak256(toUtf8Bytes("OKUM_CAP_MANAGER")),
+  OKUM_ALLOWANCE_MANAGER: keccak256(toUtf8Bytes("OKUM_ALLOWANCE_MANAGER")),
 
-  // RedemptionQueue roles
-  PSM: keccak256(toUtf8Bytes("PSM")),
+  // ============ OkuDollar (Vault) Roles ============
+  VAULT_UPGRADER: keccak256(toUtf8Bytes("VAULT_UPGRADER")),
+  VAULT_REBASER: keccak256(toUtf8Bytes("VAULT_REBASER")),
+  VAULT_RESERVE_MANAGER: keccak256(toUtf8Bytes("VAULT_RESERVE_MANAGER")),
+  VAULT_PAUSER: keccak256(toUtf8Bytes("VAULT_PAUSER")),
+  VAULT_UNPAUSER: keccak256(toUtf8Bytes("VAULT_UNPAUSER")),
 
-  // LitePSM roles
-  BUFFER_DEPOSITOR: keccak256(toUtf8Bytes("BUFFER_DEPOSITOR")),
-  QUEUE_PROCESSOR: keccak256(toUtf8Bytes("QUEUE_PROCESSOR")),
+  // ============ LitePSM Roles ============
+  PSM_UPGRADER: keccak256(toUtf8Bytes("PSM_UPGRADER")),
+  PSM_PAUSER: keccak256(toUtf8Bytes("PSM_PAUSER")),
+  PSM_UNPAUSER: keccak256(toUtf8Bytes("PSM_UNPAUSER")),
+  PSM_QUEUE_PROCESSOR: keccak256(toUtf8Bytes("PSM_QUEUE_PROCESSOR")),
+  PSM_BUFFER_DEPOSITOR: keccak256(toUtf8Bytes("PSM_BUFFER_DEPOSITOR")),
+  PSM_BUFFER_WITHDRAWER: keccak256(toUtf8Bytes("PSM_BUFFER_WITHDRAWER")),
+  PSM_ORACLE_MANAGER: keccak256(toUtf8Bytes("PSM_ORACLE_MANAGER")),
 
-  // OkuBridgeRouter roles
-  ADAPTER_MANAGER: keccak256(toUtf8Bytes("ADAPTER_MANAGER")),
-  BRIDGE_OPERATOR: keccak256(toUtf8Bytes("BRIDGE_OPERATOR")),
+  // ============ RedemptionQueue Roles ============
+  QUEUE_UPGRADER: keccak256(toUtf8Bytes("QUEUE_UPGRADER")),
+  QUEUE_PSM: keccak256(toUtf8Bytes("QUEUE_PSM")),
+  QUEUE_RESCUER: keccak256(toUtf8Bytes("QUEUE_RESCUER")),
 
-  // OkuBridge roles
+  // ============ OkuBridge Roles ============
   BRIDGE_SIGNER_MANAGER: keccak256(toUtf8Bytes("BRIDGE_SIGNER_MANAGER")),
   BRIDGE_PAUSER: keccak256(toUtf8Bytes("BRIDGE_PAUSER")),
   BRIDGE_UNPAUSER: keccak256(toUtf8Bytes("BRIDGE_UNPAUSER")),
@@ -35,7 +51,17 @@ export const ROLES = {
   BRIDGE_NONCE_ADMIN: keccak256(toUtf8Bytes("BRIDGE_NONCE_ADMIN")),
   BRIDGE_CHAIN_MANAGER: keccak256(toUtf8Bytes("BRIDGE_CHAIN_MANAGER")),
   BRIDGE_LIMITS_MANAGER: keccak256(toUtf8Bytes("BRIDGE_LIMITS_MANAGER")),
-  BRIDGE_REFUND_ADMIN: keccak256(toUtf8Bytes("BRIDGE_REFUND_ADMIN")),
+  BRIDGE_UPGRADER: keccak256(toUtf8Bytes("BRIDGE_UPGRADER")),
+  BRIDGE_DUST_SWEEPER: keccak256(toUtf8Bytes("BRIDGE_DUST_SWEEPER")),
+  BRIDGE_REFUND_INITIATOR: keccak256(toUtf8Bytes("BRIDGE_REFUND_INITIATOR")),
+  BRIDGE_REFUND_CONFIRMER: keccak256(toUtf8Bytes("BRIDGE_REFUND_CONFIRMER")),
+
+  // ============ OkuBridgeRouter Roles ============
+  ROUTER_UPGRADER: keccak256(toUtf8Bytes("ROUTER_UPGRADER")),
+  ROUTER_PAUSER: keccak256(toUtf8Bytes("ROUTER_PAUSER")),
+  ROUTER_UNPAUSER: keccak256(toUtf8Bytes("ROUTER_UNPAUSER")),
+  ROUTER_ADAPTER_MANAGER: keccak256(toUtf8Bytes("ROUTER_ADAPTER_MANAGER")),
+  ROUTER_BRIDGE_MANAGER: keccak256(toUtf8Bytes("ROUTER_BRIDGE_MANAGER")),
 };
 
 /**

@@ -18,7 +18,7 @@ async function main() {
   logger.info(`Deployer address: ${deployer.address}`);
 
   // Load deployed contract addresses
-  const okuUSDAddress = loadAddress(network, "OkuUSD");
+  const okuMoneyAddress = loadAddress(network, "OkuMoney");
   const redemptionQueueAddress = loadAddress(network, "RedemptionQueue");
 
   // Use MockUSDC from address book if present (testnet/fork deployments),
@@ -27,7 +27,7 @@ async function main() {
     ? loadAddress(network, "MockUSDC")
     : chainConfig.usdc;
 
-  logger.info(`OkuUSD address: ${okuUSDAddress}`);
+  logger.info(`OkuMoney address: ${okuMoneyAddress}`);
   logger.info(`USDC address: ${usdcAddress}${hasAddress(network, "MockUSDC") ? " (MockUSDC)" : ""}`);
   logger.info(`RedemptionQueue address: ${redemptionQueueAddress}`);
 
@@ -36,7 +36,7 @@ async function main() {
   const litePSM = await deployUUPSProxy(
     "LitePSM",
     [
-      okuUSDAddress, // okuUSD
+      okuMoneyAddress, // okuMoney
       usdcAddress, // USDC
       redemptionQueueAddress, // redemptionQueue
       deployer.address, // admin

@@ -1,0 +1,39 @@
+{
+  "evm": {
+    "network": "op-sepolia",
+    "chainId": 11155420,
+    "rpcUrl": "${OP_SEPOLIA_RPC_URL}",
+    "contracts": {
+      "okuMoney": "",
+      "okuDollar": "",
+      "litePSM": "",
+      "redemptionQueue": "",
+      "okuBridge": "",
+      "okuBridgeRouter": "",
+      "mockUSDC": ""
+    },
+    "orchestrator": ""
+  },
+  "svm": {
+    "network": "devnet",
+    "chainId": 103,
+    "rpcUrl": "https://api.devnet.solana.com",
+    "programs": {
+      "litePsm": "",
+      "okuDollar": "",
+      "okuBridgeRouter": ""
+    },
+    "mints": {
+      "okuMoney": "",
+      "usdOku": "",
+      "usdc": ""
+    },
+    "pdas": {
+      "psmConfig": "",
+      "bridgeConfig": "",
+      "vaultConfig": "",
+      "routerConfig": ""
+    },
+    "orchestrator": ""
+  }
+}

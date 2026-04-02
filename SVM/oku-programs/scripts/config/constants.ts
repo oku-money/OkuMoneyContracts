@@ -10,19 +10,50 @@ export const MINTER_ALLOWANCE = 100_000_000 * 1_000_000; // 100M initial allowan
 
 // Bridge configuration
 export const BRIDGE_FEE_BPS = 10; // 0.1% (10 basis points)
-export const MIN_BRIDGE_AMOUNT = 1 * 1_000_000; // 1 OkuUSD
-export const MAX_BRIDGE_AMOUNT = 10_000_000 * 1_000_000; // 10M OkuUSD
+export const MIN_BRIDGE_AMOUNT = 1 * 1_000_000; // 1 OkuMoney
+export const MAX_BRIDGE_AMOUNT = 10_000_000 * 1_000_000; // 10M OkuMoney
 
-// Solana source chain ID (used in bridge messages)
-export const SOLANA_CHAIN_ID = 1151;
+// ============================================================================
+// Cross-Chain Bridge Constants (OkuMoney Protocol-Internal IDs)
+// ============================================================================
+
+/**
+ * Solana chain IDs (Ankr convention - OkuMoney protocol-internal identifiers)
+ * These are NOT universal standards; they appear in bridge messages,
+ * BridgeConfig state, and supportedChains mappings.
+ */
+export const SOLANA_MAINNET_CHAIN_ID = 101;
+export const SOLANA_TESTNET_CHAIN_ID = 102; // Not used by OkuMoney
+export const SOLANA_DEVNET_CHAIN_ID = 103;
+
+// Default chain ID for current environment (use devnet for testnet deployments)
+export const SOLANA_CHAIN_ID = SOLANA_DEVNET_CHAIN_ID;
+
+/**
+ * EVM chain IDs follow EIP-155
+ */
+export const OP_SEPOLIA_CHAIN_ID = 11155420;
+export const OPTIMISM_CHAIN_ID = 10;
+export const ARBITRUM_CHAIN_ID = 42161;
+export const BASE_CHAIN_ID = 8453;
+export const ETHEREUM_CHAIN_ID = 1;
 
 // Supported destination chains (EVM chain IDs)
-export const SUPPORTED_CHAINS = [
-  1, // Ethereum Mainnet
-  10, // Optimism
-  42161, // Arbitrum One
-  8453, // Base
+// Production chains
+export const SUPPORTED_CHAINS_MAINNET = [
+  ETHEREUM_CHAIN_ID, // Ethereum Mainnet
+  OPTIMISM_CHAIN_ID, // Optimism
+  ARBITRUM_CHAIN_ID, // Arbitrum One
+  BASE_CHAIN_ID, // Base
 ];
+
+// Testnet chains (for devnet deployment)
+export const SUPPORTED_CHAINS_TESTNET = [
+  OP_SEPOLIA_CHAIN_ID, // OP Sepolia
+];
+
+// Default supported chains (use testnet for devnet deployments)
+export const SUPPORTED_CHAINS = SUPPORTED_CHAINS_TESTNET;
 
 // Oracle configuration
 export const ORACLE_STALENESS_THRESHOLD = 60; // 60 seconds

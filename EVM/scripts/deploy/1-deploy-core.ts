@@ -1,5 +1,5 @@
 /**
- * Deploy core contracts: OkuUSD, wOkuUSD, RedemptionQueue
+ * Deploy core contracts: OkuMoney, OkuDollar, RedemptionQueue
  */
 
 import { ethers } from "hardhat";
@@ -17,29 +17,29 @@ async function main() {
   logger.info(`Deployer address: ${deployer.address}`);
   logger.info(`Deployer balance: ${ethers.formatEther(await ethers.provider.getBalance(deployer.address))} ETH`);
 
-  // Deploy OkuUSD
-  logger.step(1, "Deploying OkuUSD...");
+  // Deploy OkuMoney
+  logger.step(1, "Deploying OkuMoney...");
   const maxSupply = ethers.parseUnits("1000000000", 18); // 1 billion tokens
-  const okuUSD = await deployUUPSProxy(
-    "OkuUSD",
+  const okuMoney = await deployUUPSProxy(
+    "OkuMoney",
     [
-      "Oku USD", // name
-      "okuUSD",  // symbol
+      "Oku Money", // name
+      "OkuM",      // symbol
       deployer.address, // admin
       maxSupply, // maxSupply
     ],
     network
   );
-  const okuUSDAddress = await okuUSD.getAddress();
+  const okuMoneyAddress = await okuMoney.getAddress();
 
-  // Deploy wOkuUSD
-  logger.step(2, "Deploying wOkuUSD...");
-  const wOkuUSD = await deployUUPSProxy(
-    "wOkuUSD",
+  // Deploy OkuDollar
+  logger.step(2, "Deploying OkuDollar...");
+  const okuDollar = await deployUUPSProxy(
+    "OkuDollar",
     [
-      okuUSDAddress, // underlying OkuUSD
-      "Wrapped Oku USD", // name
-      "wOkuUSD", // symbol
+      okuMoneyAddress, // underlying OkuMoney
+      "Oku Dollar", // name
+      "usdOku", // symbol
       deployer.address, // admin
     ],
     network
@@ -50,15 +50,15 @@ async function main() {
   const redemptionQueue = await deployUUPSProxy(
     "RedemptionQueue",
     [
-      okuUSDAddress, // okuUSD
+      okuMoneyAddress, // okuMoney
       deployer.address, // admin
     ],
     network
   );
 
   logger.section("Core Contracts Deployment Summary");
-  logger.success(`OkuUSD: ${okuUSDAddress}`);
-  logger.success(`wOkuUSD: ${await wOkuUSD.getAddress()}`);
+  logger.success(`OkuMoney: ${okuMoneyAddress}`);
+  logger.success(`OkuDollar: ${await okuDollar.getAddress()}`);
   logger.success(`RedemptionQueue: ${await redemptionQueue.getAddress()}`);
 }
 

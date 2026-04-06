@@ -5,6 +5,7 @@ use crate::helpers::{check_yield_lock, verify_ed25519_signature};
 use crate::state::{BridgeRequest, PsmConfig};
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
+use solana_keccak_hasher::hash as keccak_hash;
 
 /// Bridge mint (from cross-chain) - SECURE VERSION with Ed25519 signature verification
 /// Verifies orchestrator signature over bridge request data
@@ -80,7 +81,7 @@ pub fn bridge_mint(
     );
 
     // 10. Verify request_id matches keccak256(message_bytes)
-    let computed_request_id = anchor_lang::solana_program::keccak::hash(&message_bytes).to_bytes();
+    let computed_request_id = keccak_hash(&message_bytes).to_bytes();
     require!(
         request_id == computed_request_id,
         OkuError::InvalidRequestId
@@ -109,7 +110,7 @@ pub fn bridge_mint(
     // 13. Mint tokens to recipient
     token_interface::mint_to(
         CpiContext::new_with_signer(
-            ctx.accounts.token_2022_program.to_account_info(),
+            ctx.accounts.token_2022_program.key(),
             token_interface::MintTo {
                 mint: ctx.accounts.oku_money_mint.to_account_info(),
                 to: ctx.accounts.recipient_oku_money_ata.to_account_info(),
@@ -193,7 +194,7 @@ pub fn bridge_burn(
     // 5. Burn exact amount from user (fee deducted from bridged value)
     token_interface::burn(
         CpiContext::new(
-            ctx.accounts.token_2022_program.to_account_info(),
+            ctx.accounts.token_2022_program.key(),
             token_interface::Burn {
                 mint: ctx.accounts.oku_money_mint.to_account_info(),
                 from: ctx.accounts.user_oku_money_ata.to_account_info(),
@@ -212,7 +213,7 @@ pub fn bridge_burn(
 
         token_interface::mint_to(
             CpiContext::new_with_signer(
-                ctx.accounts.token_2022_program.to_account_info(),
+                ctx.accounts.token_2022_program.key(),
                 token_interface::MintTo {
                     mint: ctx.accounts.oku_money_mint.to_account_info(),
                     to: ctx.accounts.fee_recipient_ata.to_account_info(),
@@ -257,7 +258,7 @@ pub fn bridge_burn(
     message.extend_from_slice(&nonce.to_le_bytes());
     message.extend_from_slice(&deadline.to_le_bytes());
 
-    let request_id = anchor_lang::solana_program::keccak::hash(&message).to_bytes();
+    let request_id = keccak_hash(&message).to_bytes();
 
     // 9. Emit event with full metadata
     emit!(BridgeBurnEvent {
@@ -294,7 +295,7 @@ pub fn refund_bridge_request(
     check_yield_lock(&ctx.accounts.config)?;
 
     // 2. Verify request_id matches keccak256(message_bytes)
-    let computed_request_id = anchor_lang::solana_program::keccak::hash(&message_bytes).to_bytes();
+    let computed_request_id = keccak_hash(&message_bytes).to_bytes();
     require!(
         request_id == computed_request_id,
         OkuError::InvalidRequestId
@@ -349,7 +350,7 @@ pub fn refund_bridge_request(
 
     token_interface::mint_to(
         CpiContext::new_with_signer(
-            ctx.accounts.token_2022_program.to_account_info(),
+            ctx.accounts.token_2022_program.key(),
             token_interface::MintTo {
                 mint: ctx.accounts.oku_money_mint.to_account_info(),
                 to: ctx.accounts.sender_oku_money_ata.to_account_info(),

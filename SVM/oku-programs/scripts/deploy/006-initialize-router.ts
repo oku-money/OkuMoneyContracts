@@ -9,7 +9,7 @@
  */
 
 import { PublicKey, SystemProgram } from '@solana/web3.js';
-import { Program } from '@coral-xyz/anchor';
+import { Program } from '@anchor-lang/core';
 import { detectNetwork, createProvider } from '../utils/network';
 import { logger } from '../utils/logger';
 import { loadDeployment, updateDeployment } from '../utils/addressBook';

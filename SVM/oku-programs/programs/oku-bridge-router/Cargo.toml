@@ -20,7 +20,7 @@ custom-panic = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]
-anchor-lang = "0.31.1"
-anchor-spl = "0.31.1"
+anchor-lang = "1.0.0"
+anchor-spl = "1.0.0"
 oku-dollar = { path = "../oku-dollar", features = ["cpi"] }
 lite-psm = { path = "../lite-psm", features = ["cpi"] }

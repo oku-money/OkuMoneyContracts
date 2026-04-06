@@ -241,14 +241,14 @@ pub struct WithdrawBuffer<'info> {
         seeds = [RedemptionQueue::SEED],
         bump = redemption_queue.bump
     )]
-    pub redemption_queue: Account<'info, RedemptionQueue>,
+    pub redemption_queue: Box<Account<'info, RedemptionQueue>>,
 
     /// OkuMoney mint - needed to read current price for reserve calculation
     #[account(
         address = config.oku_money_mint,
         mint::token_program = token_2022_program
     )]
-    pub oku_money_mint: InterfaceAccount<'info, MintInterface>,
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// Buffer withdrawer's USDC account (destination)
     #[account(
@@ -256,17 +256,17 @@ pub struct WithdrawBuffer<'info> {
         token::mint = usdc_mint,
         token::authority = buffer_withdrawer,
     )]
-    pub withdrawer_usdc_ata: Account<'info, TokenAccount>,
+    pub withdrawer_usdc_ata: Box<Account<'info, TokenAccount>>,
 
     /// PSM's USDC vault (source)
     #[account(
         mut,
         address = config.vault_usdc
     )]
-    pub vault_usdc: Account<'info, TokenAccount>,
+    pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
     #[account(address = config.usdc_mint)]
-    pub usdc_mint: Account<'info, Mint>,
+    pub usdc_mint: Box<Account<'info, Mint>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,

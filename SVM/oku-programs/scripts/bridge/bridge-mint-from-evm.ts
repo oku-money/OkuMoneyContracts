@@ -13,8 +13,8 @@
  *   NETWORK=devnet tsx scripts/bridge/bridge-mint-from-evm.ts --request=./custom-request.json
  */
 
-import * as anchor from '@coral-xyz/anchor';
-import { Program, BN } from '@coral-xyz/anchor';
+import * as anchor from '@anchor-lang/core';
+import { Program, BN } from '@anchor-lang/core';
 import {
   PublicKey,
   Keypair,

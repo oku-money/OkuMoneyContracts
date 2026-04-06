@@ -10,8 +10,8 @@
  *   NETWORK=devnet tsx scripts/bridge/check-bridge-state.ts
  */
 
-import * as anchor from '@coral-xyz/anchor';
-import { Program } from '@coral-xyz/anchor';
+import * as anchor from '@anchor-lang/core';
+import { Program } from '@anchor-lang/core';
 import { PublicKey } from '@solana/web3.js';
 import {
   TOKEN_2022_PROGRAM_ID,

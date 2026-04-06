@@ -1,5 +1,10 @@
 use crate::errors::OkuError;
 use anchor_lang::prelude::*;
+use solana_instructions_sysvar::load_instruction_at_checked;
+
+/// Ed25519 program ID - standard Solana precompile
+pub const ED25519_PROGRAM_ID: Pubkey =
+    solana_pubkey::pubkey!("Ed25519SigVerify111111111111111111111111111");
 
 /// Verify Ed25519 signature via instruction introspection
 /// Solana's Ed25519Program must be called in the same transaction with signature data
@@ -15,10 +20,6 @@ pub fn verify_ed25519_signature<'info>(
     expected_message: &[u8],
     signature: &[u8; 64],
 ) -> Result<()> {
-    use anchor_lang::solana_program::{
-        ed25519_program, sysvar::instructions::load_instruction_at_checked,
-    };
-
     // Build expected instruction data first
     let expected_data =
         build_ed25519_instruction_data(expected_pubkey, expected_message, signature);
@@ -40,7 +41,7 @@ pub fn verify_ed25519_signature<'info>(
         };
 
         // Check if this is an Ed25519 program instruction
-        if actual_ix.program_id == ed25519_program::ID {
+        if actual_ix.program_id == ED25519_PROGRAM_ID {
             // Verify the instruction data matches what we expect
             if actual_ix.data == expected_data {
                 found_valid_signature = true;

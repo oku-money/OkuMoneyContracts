@@ -124,14 +124,14 @@ pub struct Wrap<'info> {
     #[account(
         address = config.psm_config
     )]
-    pub psm_config: Account<'info, PsmConfig>,
+    pub psm_config: Box<Account<'info, PsmConfig>>,
 
     /// Dead shares ATA — only required on the first deposit (total_shares == 0).
     /// This is a usdOku ATA owned by a known dead address (System Program)
     /// where MINIMUM_LIQUIDITY shares are permanently locked.
     /// CHECK: Validated in handler when needed
     #[account(mut)]
-    pub dead_shares_ata: Option<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub dead_shares_ata: Option<Box<InterfaceAccount<'info, TokenAccountInterface>>>,
 
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -199,7 +199,7 @@ pub struct Unwrap<'info> {
     #[account(
         address = config.psm_config
     )]
-    pub psm_config: Account<'info, PsmConfig>,
+    pub psm_config: Box<Account<'info, PsmConfig>>,
 
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -242,7 +242,7 @@ pub struct UpdateUsdMultiplier<'info> {
     #[account(
         address = config.psm_config
     )]
-    pub psm_config: Account<'info, PsmConfig>,
+    pub psm_config: Box<Account<'info, PsmConfig>>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }
@@ -343,7 +343,7 @@ pub struct WithdrawReserves<'info> {
     #[account(
         address = config.psm_config
     )]
-    pub psm_config: Account<'info, PsmConfig>,
+    pub psm_config: Box<Account<'info, PsmConfig>>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }

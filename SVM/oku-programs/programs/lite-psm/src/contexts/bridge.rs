@@ -5,6 +5,7 @@ use anchor_spl::token_2022::Token2022;
 use anchor_spl::token_interface::{
     self, Mint as MintInterface, TokenAccount as TokenAccountInterface,
 };
+use solana_instructions_sysvar::ID as INSTRUCTIONS_SYSVAR_ID;
 
 #[derive(Accounts)]
 #[instruction(message_bytes: Vec<u8>, signature: Vec<u8>, request_id: [u8; 32])]
@@ -60,8 +61,8 @@ pub struct BridgeMint<'info> {
 
     /// Instruction sysvar for Ed25519 signature verification
     /// CHECK: Verified in verify_ed25519_signature function
-    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
-    pub instruction_sysvar: AccountInfo<'info>,
+    #[account(address = INSTRUCTIONS_SYSVAR_ID)]
+    pub instruction_sysvar: UncheckedAccount<'info>,
 
     pub token_2022_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,
@@ -138,14 +139,14 @@ pub struct RefundBridgeRequest<'info> {
         bump = bridge_config.bump,
         constraint = refund_admin.key() == bridge_config.refund_admin @ OkuError::Unauthorized
     )]
-    pub bridge_config: Account<'info, BridgeConfig>,
+    pub bridge_config: Box<Account<'info, BridgeConfig>>,
 
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
         bump = config.bump
     )]
-    pub config: Account<'info, PsmConfig>,
+    pub config: Box<Account<'info, PsmConfig>>,
 
     #[account(
         init,
@@ -154,7 +155,7 @@ pub struct RefundBridgeRequest<'info> {
         seeds = [RefundedRequest::SEED, &request_id],
         bump
     )]
-    pub refunded_request: Account<'info, RefundedRequest>,
+    pub refunded_request: Box<Account<'info, RefundedRequest>>,
 
     /// ProcessedRequest PDA - must NOT exist (checked via constraint)
     /// This prevents refunding a request that was already successfully minted
@@ -164,18 +165,18 @@ pub struct RefundBridgeRequest<'info> {
         bump,
         constraint = processed_request.data_is_empty() @ OkuError::RequestAlreadyMinted
     )]
-    pub processed_request: AccountInfo<'info>,
+    pub processed_request: UncheckedAccount<'info>,
 
     /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
     #[account(
         mut,
         constraint = oku_money_mint.key() == config.oku_money_mint
     )]
-    pub oku_money_mint: InterfaceAccount<'info, token_interface::Mint>,
+    pub oku_money_mint: Box<InterfaceAccount<'info, token_interface::Mint>>,
 
     /// Sender's OkuMoney ATA - owner is validated in instruction body
     #[account(mut)]
-    pub sender_oku_money_ata: InterfaceAccount<'info, token_interface::TokenAccount>,
+    pub sender_oku_money_ata: Box<InterfaceAccount<'info, token_interface::TokenAccount>>,
 
     pub token_2022_program: Interface<'info, token_interface::TokenInterface>,
     pub system_program: Program<'info, System>,

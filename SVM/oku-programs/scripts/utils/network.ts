@@ -4,7 +4,7 @@
 
 import 'dotenv/config';
 import { Connection, Keypair } from '@solana/web3.js';
-import { AnchorProvider, Wallet } from '@coral-xyz/anchor';
+import { AnchorProvider, Wallet } from '@anchor-lang/core';
 import * as fs from 'fs';
 import * as path from 'path';
 import { NETWORK_CONFIGS, NetworkConfig, NetworkName } from '../config/networks';

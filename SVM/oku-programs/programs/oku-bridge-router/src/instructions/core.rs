@@ -60,7 +60,7 @@ pub fn bridge_usd_oku(
     // Step 1: Unwrap usdOku -> OkuMoney via oku-dollar vault CPI
     // Note: psm_config is used for both vault (reads oku_m_price) and PSM (as config)
     let unwrap_cpi_ctx = CpiContext::new(
-        ctx.accounts.vault_program.to_account_info(),
+        ctx.accounts.vault_program.key(),
         oku_dollar::cpi::accounts::Unwrap {
             user: ctx.accounts.user.to_account_info(),
             config: ctx.accounts.vault_config.to_account_info(),
@@ -93,7 +93,7 @@ pub fn bridge_usd_oku(
     );
 
     let bridge_burn_cpi_ctx = CpiContext::new(
-        ctx.accounts.psm_program.to_account_info(),
+        ctx.accounts.psm_program.key(),
         lite_psm::cpi::accounts::BridgeBurn {
             user: ctx.accounts.user.to_account_info(),
             bridge_config: ctx.accounts.bridge_config.to_account_info(),
@@ -142,7 +142,7 @@ pub fn bridge_oku_m(
     require!(destination_chain != 0, RouterError::InvalidDestinationChain);
 
     let bridge_burn_cpi_ctx = CpiContext::new(
-        ctx.accounts.psm_program.to_account_info(),
+        ctx.accounts.psm_program.key(),
         lite_psm::cpi::accounts::BridgeBurn {
             user: ctx.accounts.user.to_account_info(),
             bridge_config: ctx.accounts.bridge_config.to_account_info(),
@@ -195,7 +195,7 @@ pub fn mint_usd_oku(ctx: Context<MintUsdOku>, usdc_amount: u64, min_shares_out: 
 
     // Step 1: CPI to PSM mint_oku_m — USDC -> OkuMoney
     let mint_cpi_ctx = CpiContext::new(
-        ctx.accounts.psm_program.to_account_info(),
+        ctx.accounts.psm_program.key(),
         lite_psm::cpi::accounts::MintOkuM {
             user: ctx.accounts.user.to_account_info(),
             config: ctx.accounts.psm_config.to_account_info(),
@@ -234,7 +234,7 @@ pub fn mint_usd_oku(ctx: Context<MintUsdOku>, usdc_amount: u64, min_shares_out: 
         .map(|a| a.to_account_info());
 
     let wrap_cpi_ctx = CpiContext::new(
-        ctx.accounts.vault_program.to_account_info(),
+        ctx.accounts.vault_program.key(),
         oku_dollar::cpi::accounts::Wrap {
             user: ctx.accounts.user.to_account_info(),
             config: ctx.accounts.vault_config.to_account_info(),
@@ -295,7 +295,7 @@ pub fn redeem_usd_oku(
 
     // Step 1: CPI to vault unwrap — usdOku -> OkuMoney
     let unwrap_cpi_ctx = CpiContext::new(
-        ctx.accounts.vault_program.to_account_info(),
+        ctx.accounts.vault_program.key(),
         oku_dollar::cpi::accounts::Unwrap {
             user: ctx.accounts.user.to_account_info(),
             config: ctx.accounts.vault_config.to_account_info(),
@@ -329,7 +329,7 @@ pub fn redeem_usd_oku(
 
     // Step 2: CPI to PSM redeem_oku_m — OkuMoney -> USDC (or queued)
     let redeem_cpi_ctx = CpiContext::new(
-        ctx.accounts.psm_program.to_account_info(),
+        ctx.accounts.psm_program.key(),
         lite_psm::cpi::accounts::RedeemOkuM {
             user: ctx.accounts.user.to_account_info(),
             config: ctx.accounts.psm_config.to_account_info(),

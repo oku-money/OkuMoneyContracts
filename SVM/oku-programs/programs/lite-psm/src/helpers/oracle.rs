@@ -1,6 +1,6 @@
 use crate::errors::OkuError;
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::pubkey;
+use solana_pubkey::pubkey;
 
 /// Pyth Oracle Program IDs (mainnet and devnet)
 /// These are the only valid owners for Pyth price accounts

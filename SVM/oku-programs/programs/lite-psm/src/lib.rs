@@ -76,7 +76,7 @@ pub mod lite_psm {
     }
 
     pub fn process_queue<'info>(
-        ctx: Context<'_, '_, '_, 'info, ProcessQueue<'info>>,
+        ctx: Context<'info, ProcessQueue<'info>>,
         max_entries: u32,
     ) -> Result<()> {
         instructions::psm::process_queue(ctx, max_entries)

@@ -100,7 +100,7 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
     // Transfer OkuMoney from user to reserve vault (Token-2022)
     token_interface::transfer_checked(
         CpiContext::new(
-            ctx.accounts.token_2022_program.to_account_info(),
+            ctx.accounts.token_2022_program.key(),
             token_interface::TransferChecked {
                 from: ctx.accounts.user_oku_money_ata.to_account_info(),
                 to: ctx.accounts.reserve_vault.to_account_info(),
@@ -150,7 +150,7 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
         // Mint user shares (Token-2022)
         token_interface::mint_to(
             CpiContext::new_with_signer(
-                ctx.accounts.token_2022_program.to_account_info(),
+                ctx.accounts.token_2022_program.key(),
                 token_interface::MintTo {
                     mint: ctx.accounts.usd_oku_mint.to_account_info(),
                     to: ctx.accounts.user_usd_oku_ata.to_account_info(),
@@ -164,7 +164,7 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
         // Mint dead shares (permanently locked)
         token_interface::mint_to(
             CpiContext::new_with_signer(
-                ctx.accounts.token_2022_program.to_account_info(),
+                ctx.accounts.token_2022_program.key(),
                 token_interface::MintTo {
                     mint: ctx.accounts.usd_oku_mint.to_account_info(),
                     to: dead_ata.to_account_info(),
@@ -192,7 +192,7 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
         // Mint usdOku shares to user (Token-2022)
         token_interface::mint_to(
             CpiContext::new_with_signer(
-                ctx.accounts.token_2022_program.to_account_info(),
+                ctx.accounts.token_2022_program.key(),
                 token_interface::MintTo {
                     mint: ctx.accounts.usd_oku_mint.to_account_info(),
                     to: ctx.accounts.user_usd_oku_ata.to_account_info(),
@@ -258,7 +258,7 @@ pub fn unwrap(ctx: Context<Unwrap>, shares: u64) -> Result<()> {
     // Burn usdOku shares from user (Token-2022)
     token_interface::burn(
         CpiContext::new(
-            ctx.accounts.token_2022_program.to_account_info(),
+            ctx.accounts.token_2022_program.key(),
             token_interface::Burn {
                 mint: ctx.accounts.usd_oku_mint.to_account_info(),
                 from: ctx.accounts.user_usd_oku_ata.to_account_info(),
@@ -274,7 +274,7 @@ pub fn unwrap(ctx: Context<Unwrap>, shares: u64) -> Result<()> {
 
     token_interface::transfer_checked(
         CpiContext::new_with_signer(
-            ctx.accounts.token_2022_program.to_account_info(),
+            ctx.accounts.token_2022_program.key(),
             token_interface::TransferChecked {
                 from: ctx.accounts.reserve_vault.to_account_info(),
                 to: ctx.accounts.user_oku_money_ata.to_account_info(),
@@ -363,7 +363,7 @@ pub fn deposit_reserves(ctx: Context<DepositReserves>, amount: u64) -> Result<()
     // Transfer OkuMoney from reserve manager to reserve vault
     token_interface::transfer_checked(
         CpiContext::new(
-            ctx.accounts.token_2022_program.to_account_info(),
+            ctx.accounts.token_2022_program.key(),
             token_interface::TransferChecked {
                 from: ctx.accounts.source_ata.to_account_info(),
                 to: ctx.accounts.reserve_vault.to_account_info(),
@@ -425,7 +425,7 @@ pub fn withdraw_reserves(ctx: Context<WithdrawReserves>, amount: u64) -> Result<
 
     token_interface::transfer_checked(
         CpiContext::new_with_signer(
-            ctx.accounts.token_2022_program.to_account_info(),
+            ctx.accounts.token_2022_program.key(),
             token_interface::TransferChecked {
                 from: ctx.accounts.reserve_vault.to_account_info(),
                 to: ctx.accounts.destination_ata.to_account_info(),

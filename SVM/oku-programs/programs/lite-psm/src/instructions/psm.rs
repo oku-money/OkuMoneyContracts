@@ -73,7 +73,7 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     // Transfer USDC from user to vault (standard SPL)
     anchor_spl::token::transfer(
         CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
+            ctx.accounts.token_program.key(),
             anchor_spl::token::Transfer {
                 from: ctx.accounts.user_usdc_ata.to_account_info(),
                 to: ctx.accounts.vault_usdc.to_account_info(),
@@ -92,7 +92,7 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
 
     token_interface::mint_to(
         CpiContext::new_with_signer(
-            ctx.accounts.token_2022_program.to_account_info(),
+            ctx.accounts.token_2022_program.key(),
             token_interface::MintTo {
                 mint: ctx.accounts.oku_money_mint.to_account_info(),
                 to: ctx.accounts.user_oku_money_ata.to_account_info(),
@@ -165,7 +165,7 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
 
         token_interface::burn(
             CpiContext::new(
-                ctx.accounts.token_2022_program.to_account_info(),
+                ctx.accounts.token_2022_program.key(),
                 token_interface::Burn {
                     mint: ctx.accounts.oku_money_mint.to_account_info(),
                     from: ctx.accounts.user_oku_money_ata.to_account_info(),
@@ -180,7 +180,7 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
 
         anchor_spl::token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 anchor_spl::token::Transfer {
                     from: ctx.accounts.vault_usdc.to_account_info(),
                     to: ctx.accounts.user_usdc_ata.to_account_info(),
@@ -208,7 +208,7 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
         // Transfer OkuMoney from user to escrow vault
         token_interface::transfer_checked(
             CpiContext::new(
-                ctx.accounts.token_2022_program.to_account_info(),
+                ctx.accounts.token_2022_program.key(),
                 token_interface::TransferChecked {
                     from: ctx.accounts.user_oku_money_ata.to_account_info(),
                     to: ctx.accounts.vault_oku_money.to_account_info(),
@@ -255,7 +255,7 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
 ///
 /// NOTE: Deliberately allowed during pause - users must be able to receive queued redemptions.
 pub fn process_queue<'info>(
-    ctx: Context<'_, '_, '_, 'info, ProcessQueue<'info>>,
+    ctx: Context<'info, ProcessQueue<'info>>,
     max_entries: u32,
 ) -> Result<()> {
     let queue = &mut ctx.accounts.redemption_queue;
@@ -277,8 +277,8 @@ pub fn process_queue<'info>(
     let vault_usdc_info = ctx.accounts.vault_usdc.to_account_info();
     let vault_oku_money_info = ctx.accounts.vault_oku_money.to_account_info();
     let config_account_info = ctx.accounts.config.to_account_info();
-    let token_program_info = ctx.accounts.token_program.to_account_info();
-    let token_2022_program_info = ctx.accounts.token_2022_program.to_account_info();
+    let token_program_key = ctx.accounts.token_program.key();
+    let token_2022_program_key = ctx.accounts.token_2022_program.key();
     let oku_money_mint_info = ctx.accounts.oku_money_mint.to_account_info();
 
     while processed < max_entries && !queue.is_empty() {
@@ -328,7 +328,7 @@ pub fn process_queue<'info>(
         // Burn OkuMoney from escrow vault
         token_interface::burn(
             CpiContext::new_with_signer(
-                token_2022_program_info.clone(),
+                token_2022_program_key,
                 token_interface::Burn {
                     mint: oku_money_mint_info.clone(),
                     from: vault_oku_money_info.clone(),
@@ -342,7 +342,7 @@ pub fn process_queue<'info>(
         // Transfer USDC to recipient
         anchor_spl::token::transfer(
             CpiContext::new_with_signer(
-                token_program_info.clone(),
+                token_program_key,
                 anchor_spl::token::Transfer {
                     from: vault_usdc_info.clone(),
                     to: recipient_usdc_ata.clone(),
@@ -379,7 +379,7 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
 
     anchor_spl::token::transfer(
         CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
+            ctx.accounts.token_program.key(),
             anchor_spl::token::Transfer {
                 from: ctx.accounts.buffer_depositor_usdc_ata.to_account_info(),
                 to: ctx.accounts.vault_usdc.to_account_info(),
@@ -432,7 +432,7 @@ pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> 
 
     anchor_spl::token::transfer(
         CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
+            ctx.accounts.token_program.key(),
             anchor_spl::token::Transfer {
                 from: ctx.accounts.vault_usdc.to_account_info(),
                 to: ctx.accounts.withdrawer_usdc_ata.to_account_info(),
@@ -488,7 +488,7 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u32) -> R
 
     token_interface::transfer_checked(
         CpiContext::new_with_signer(
-            ctx.accounts.token_2022_program.to_account_info(),
+            ctx.accounts.token_2022_program.key(),
             token_interface::TransferChecked {
                 from: ctx.accounts.vault_oku_money.to_account_info(),
                 to: ctx.accounts.recipient_oku_money_ata.to_account_info(),

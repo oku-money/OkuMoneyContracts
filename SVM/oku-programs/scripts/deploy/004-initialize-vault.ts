@@ -10,7 +10,7 @@
 
 import { PublicKey, Keypair, SystemProgram, SYSVAR_RENT_PUBKEY } from '@solana/web3.js';
 import { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
-import { Program } from '@coral-xyz/anchor';
+import { Program } from '@anchor-lang/core';
 import { detectNetwork, createProvider } from '../utils/network';
 import { logger } from '../utils/logger';
 import { loadDeployment, updateDeployment } from '../utils/addressBook';

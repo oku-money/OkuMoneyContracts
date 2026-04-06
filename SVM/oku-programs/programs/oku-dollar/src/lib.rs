@@ -11,7 +11,7 @@ pub mod state;
 use contexts::*;
 use roles::*;
 
-declare_id!("BjjK75Vxj6zsC49qYfcVYFPLqyXXkcaFzacTXwohmfVC");
+declare_id!("EhYumXw6rb4C6M3p6uwozbXwAFALRHTp4RW9YoEudH6d");
 
 #[program]
 pub mod oku_dollar {

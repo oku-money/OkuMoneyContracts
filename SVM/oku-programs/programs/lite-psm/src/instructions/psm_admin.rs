@@ -100,7 +100,7 @@ pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
 
     // CPI to Token-2022 to freeze the account
     token_interface::freeze_account(CpiContext::new_with_signer(
-        ctx.accounts.token_2022_program.to_account_info(),
+        ctx.accounts.token_2022_program.key(),
         token_interface::FreezeAccount {
             account: ctx.accounts.target_oku_money_ata.to_account_info(),
             mint: ctx.accounts.oku_money_mint.to_account_info(),
@@ -127,7 +127,7 @@ pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
 
     // CPI to Token-2022 to thaw the account
     token_interface::thaw_account(CpiContext::new_with_signer(
-        ctx.accounts.token_2022_program.to_account_info(),
+        ctx.accounts.token_2022_program.key(),
         token_interface::ThawAccount {
             account: ctx.accounts.target_oku_money_ata.to_account_info(),
             mint: ctx.accounts.oku_money_mint.to_account_info(),

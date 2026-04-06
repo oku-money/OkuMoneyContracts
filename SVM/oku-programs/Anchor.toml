@@ -21,6 +21,8 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
+# Default test command uses Surfpool (Anchor 1.0.0 default)
+# For Ed25519-dependent tests (bridge_security.ts), use: anchor test --validator legacy
 test = "npx mocha --require tsx --timeout 1000000 'tests/**/*.ts'"
 
 [hooks]
@@ -29,7 +31,3 @@ test = "npx mocha --require tsx --timeout 1000000 'tests/**/*.ts'"
 startup_wait = 30000
 shutdown_wait = 2000
 upgradeable = false
-
-[test.validator]
-type = "legacy"
-bind_address = "127.0.0.1"

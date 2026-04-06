@@ -85,6 +85,49 @@ export async function safeAirdropAll(
 }
 
 // ============================================================================
+// Token Helpers
+// ============================================================================
+
+/**
+ * Safe wrapper around mintTo that handles blockhash properly for Surfpool.
+ * Uses sendAndConfirm with explicit blockhash fetching.
+ */
+export async function safeMintTo(
+  connection: anchor.web3.Connection,
+  payer: Keypair,
+  mint: PublicKey,
+  destination: PublicKey,
+  authority: Keypair,
+  amount: number | bigint,
+  tokenProgramId: PublicKey = TOKEN_PROGRAM_ID
+): Promise<void> {
+  const { createMintToInstruction } = await import("@solana/spl-token");
+  
+  const tx = new anchor.web3.Transaction().add(
+    createMintToInstruction(
+      mint,
+      destination,
+      authority.publicKey,
+      amount,
+      [],
+      tokenProgramId
+    )
+  );
+  
+  const latestBlockhash = await connection.getLatestBlockhash();
+  tx.recentBlockhash = latestBlockhash.blockhash;
+  tx.feePayer = payer.publicKey;
+  tx.sign(payer, authority);
+  
+  const sig = await connection.sendRawTransaction(tx.serialize());
+  await connection.confirmTransaction({
+    signature: sig,
+    blockhash: latestBlockhash.blockhash,
+    lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+  });
+}
+
+// ============================================================================
 // ATA Helpers
 // ============================================================================
 

@@ -25,6 +25,7 @@ import {
   ensurePSMUnpaused,
   ensureAta,
   safeAirdropAll,
+  safeMintTo,
   mintOkusdViaProgram,
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
@@ -1848,8 +1849,8 @@ describe("lite-psm", () => {
         )
       );
       await provider.sendAndConfirm(createAtaTx, [payer]);
-      await mintTo(provider.connection, payer, usdcMint, freezeTargetUsdcAta, payer,
-        10_000_000, [], undefined, TOKEN_PROGRAM_ID);
+      await safeMintTo(provider.connection, payer, usdcMint, freezeTargetUsdcAta, payer,
+        10_000_000, TOKEN_PROGRAM_ID);
 
       // Mint OkuMoney via PSM
       await ensureAta(provider.connection, payer, freezeTargetOkusdAta, freezeTarget.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);

@@ -68,7 +68,7 @@ async function main() {
   ];
 
   for (const chain of chainsToCheck) {
-    const isSupported = await okuBridge.isSupportedChain(chain.id);
+    const isSupported = await okuBridge.supportedChains(chain.id);
     const status = isSupported ? "SUPPORTED" : "not supported";
     if (isSupported) {
       const outboundNonce = await okuBridge.outboundNonce(chain.id);

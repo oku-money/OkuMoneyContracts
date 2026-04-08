@@ -8,5 +8,11 @@ export const logger = {
   info: (msg: string) => console.log(`\x1b[36mℹ\x1b[0m ${msg}`),
   warning: (msg: string) => console.log(`\x1b[33m⚠\x1b[0m ${msg}`),
   section: (msg: string) => console.log(`\n\x1b[1m=== ${msg} ===\x1b[0m`),
-  step: (num: number, msg: string) => console.log(`\x1b[1m${num}.\x1b[0m ${msg}`),
+  step: (num: number, msg: string) => console.log(`\n\x1b[1m${num}.\x1b[0m ${msg}`),
+  header: (msg: string) => {
+    console.log();
+    console.log(`\x1b[36m${"=".repeat(60)}\x1b[0m`);
+    console.log(`\x1b[1m\x1b[36m  ${msg}\x1b[0m`);
+    console.log(`\x1b[36m${"=".repeat(60)}\x1b[0m`);
+  },
 };

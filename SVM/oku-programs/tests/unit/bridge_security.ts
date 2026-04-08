@@ -1,6 +1,6 @@
 import * as anchor from "@anchor-lang/core";
 import { Program, BN } from "@anchor-lang/core";
-import { LitePsm } from "../target/types/lite_psm";
+import { LitePsm } from "../../target/types/lite_psm";
 import { expect } from "chai";
 import {
   Keypair,
@@ -35,7 +35,7 @@ import {
   ensurePSMUnpaused,
   safeAirdrop,
   safeAirdropAll,
-} from "./shared/setup";
+} from "../shared/setup";
 
 // Use anchor's web3 types
 const { SYSVAR_RENT_PUBKEY } = anchor.web3;

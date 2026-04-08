@@ -24,9 +24,9 @@ import {
   createInitializeInterestBearingMintInstruction,
 } from "@solana/spl-token";
 import { expect } from "chai";
-import { OkuBridgeRouter } from "../target/types/oku_bridge_router";
-import { OkuDollar } from "../target/types/oku_dollar";
-import { LitePsm } from "../target/types/lite_psm";
+import { OkuBridgeRouter } from "../../target/types/oku_bridge_router";
+import { OkuDollar } from "../../target/types/oku_dollar";
+import { LitePsm } from "../../target/types/lite_psm";
 import {
   coldMultisig,
   warmMultisig,
@@ -36,7 +36,7 @@ import {
   ensureAta,
   initializePSMIfNeeded,
   DECIMALS,
-} from "./shared/setup";
+} from "../shared/setup";
 
 const { Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, PublicKey } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;

@@ -8,6 +8,7 @@
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/bridge/check-bridge-state.ts
+ *   NETWORK=devnet-fork tsx scripts/bridge/check-bridge-state.ts  # On Surfpool fork
  */
 
 import * as anchor from '@anchor-lang/core';
@@ -30,6 +31,7 @@ import {
   BASE_CHAIN_ID,
   ETHEREUM_CHAIN_ID,
 } from '../config/constants';
+import { logSurfpoolStatus } from '../utils/surfpool';
 
 async function main() {
   const network = detectNetwork();
@@ -39,10 +41,15 @@ async function main() {
   const provider = createProvider(network);
   anchor.setProvider(provider);
 
+  // Check if running on Surfpool
+  await logSurfpoolStatus(provider.connection);
+
   // Load addresses
-  const addresses = loadDeployment(network);
+  // For devnet-fork, load from devnet deployment file
+  const effectiveNetwork = network === 'devnet-fork' ? 'devnet' : network;
+  const addresses = loadDeployment(effectiveNetwork as any);
   if (!addresses) {
-    throw new Error(`No addresses found for network: ${network}. Run deploy scripts first.`);
+    throw new Error(`No addresses found for network: ${effectiveNetwork}. Run deploy scripts first.`);
   }
 
   // Load program

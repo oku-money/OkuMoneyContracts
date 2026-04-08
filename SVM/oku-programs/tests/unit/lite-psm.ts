@@ -16,7 +16,7 @@ import {
   getAssociatedTokenAddress,
 } from "@solana/spl-token";
 import { expect } from "chai";
-import { LitePsm } from "../target/types/lite_psm";
+import { LitePsm } from "../../target/types/lite_psm";
 import {
   coldMultisig,
   warmMultisig,
@@ -30,7 +30,7 @@ import {
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
   DECIMALS,
-} from "./shared/setup";
+} from "../shared/setup";
 
 // Use anchor's web3 to avoid version conflicts
 const { Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, PublicKey } = anchor.web3;

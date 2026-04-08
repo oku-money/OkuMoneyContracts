@@ -9,6 +9,7 @@
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/bridge/bridge-burn-to-evm.ts
+ *   NETWORK=devnet-fork tsx scripts/bridge/bridge-burn-to-evm.ts  # On Surfpool fork
  */
 
 import * as anchor from '@anchor-lang/core';
@@ -32,6 +33,7 @@ import {
   SOLANA_CHAIN_ID,
   OP_SEPOLIA_CHAIN_ID,
 } from '../config/constants';
+import { logSurfpoolStatus } from '../utils/surfpool';
 
 // Bridge request output interface (for EVM relay script)
 interface BridgeRequestOutput {
@@ -58,10 +60,15 @@ async function main() {
   const wallet = provider.wallet as anchor.Wallet;
   logger.info(`Sender: ${wallet.publicKey.toBase58()}`);
 
+  // Check if running on Surfpool
+  await logSurfpoolStatus(provider.connection);
+
   // Load deployment addresses
-  const deployment = loadDeployment(network);
+  // For devnet-fork, load from devnet deployment file
+  const effectiveNetwork = network === 'devnet-fork' ? 'devnet' : network;
+  const deployment = loadDeployment(effectiveNetwork as any);
   if (!deployment || !deployment.programs?.litePsm) {
-    throw new Error(`No deployment found for network: ${network}. Run deploy scripts first.`);
+    throw new Error(`No deployment found for network: ${effectiveNetwork}. Run deploy scripts first.`);
   }
 
   // Load program

@@ -4,7 +4,7 @@
 
 import { PublicKey } from '@solana/web3.js';
 
-export type NetworkName = 'localnet' | 'devnet' | 'mainnet-beta';
+export type NetworkName = 'localnet' | 'devnet' | 'devnet-fork' | 'mainnet-beta';
 
 export interface NetworkConfig {
   name: NetworkName;
@@ -44,6 +44,31 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
     oracle: {
       enabled: true,
       // Pyth devnet USDC/USD feed
+      feed: new PublicKey('5SSkXsEKQepHHAewytPVwdej4epN1nxgLVM84L4KXgy7'),
+    },
+    confirmationCommitment: 'confirmed',
+  },
+
+  /**
+   * Devnet fork via Surfpool - for local testing of bridge scripts
+   * before executing on live devnet. Uses Surfpool's forking capability
+   * to create a local replica of devnet state.
+   *
+   * Usage:
+   *   surfpool start --rpc-url https://api.devnet.solana.com
+   *   NETWORK=devnet-fork tsx scripts/bridge/bridge-burn-to-evm.ts
+   */
+  'devnet-fork': {
+    name: 'devnet-fork',
+    cluster: 'http://127.0.0.1:8899', // Surfpool local endpoint
+    usdc: {
+      // Will be loaded from devnet deployment file
+      mint: PublicKey.default,
+      isNative: false, // Forked from devnet, not created locally
+    },
+    oracle: {
+      enabled: true,
+      // Pyth devnet USDC/USD feed (forked from devnet)
       feed: new PublicKey('5SSkXsEKQepHHAewytPVwdej4epN1nxgLVM84L4KXgy7'),
     },
     confirmationCommitment: 'confirmed',

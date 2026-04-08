@@ -11,6 +11,7 @@
  * Usage:
  *   NETWORK=devnet tsx scripts/bridge/bridge-mint-from-evm.ts
  *   NETWORK=devnet tsx scripts/bridge/bridge-mint-from-evm.ts --request=./custom-request.json
+ *   NETWORK=devnet-fork tsx scripts/bridge/bridge-mint-from-evm.ts  # On Surfpool fork
  */
 
 import * as anchor from '@anchor-lang/core';
@@ -40,6 +41,7 @@ import { createProvider, detectNetwork, loadKeypair } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { SOLANA_CHAIN_ID } from '../config/constants';
+import { logSurfpoolStatus } from '../utils/surfpool';
 
 // Bridge request from EVM (post-burn event data)
 interface EVMBridgeRequest {
@@ -64,10 +66,15 @@ async function main() {
   const wallet = provider.wallet as anchor.Wallet;
   logger.info(`Orchestrator: ${wallet.publicKey.toBase58()}`);
 
+  // Check if running on Surfpool
+  await logSurfpoolStatus(provider.connection);
+
   // Load addresses
-  const addresses = loadDeployment(network);
+  // For devnet-fork, load from devnet deployment file
+  const effectiveNetwork = network === 'devnet-fork' ? 'devnet' : network;
+  const addresses = loadDeployment(effectiveNetwork as any);
   if (!addresses) {
-    throw new Error(`No addresses found for network: ${network}`);
+    throw new Error(`No addresses found for network: ${effectiveNetwork}`);
   }
 
   // Load program

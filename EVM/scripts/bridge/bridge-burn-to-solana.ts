@@ -86,17 +86,17 @@ async function main() {
     logger.success("MockUSDC minted");
   }
 
-  logger.section("Step 2: Deposit USDC to LitePSM for OkuMoney");
+  logger.section("Step 2: Mint OkuMoney via LitePSM");
   
   // Approve LitePSM to spend USDC
   logger.info("Approving LitePSM to spend USDC...");
   const approveTx1 = await mockUSDC.approve(litePSMAddress, USDC_AMOUNT);
   await approveTx1.wait();
   
-  // Deposit USDC and get OkuMoney
-  logger.info(`Depositing ${ethers.formatUnits(USDC_AMOUNT, 6)} USDC to LitePSM...`);
-  const depositTx = await litePSM.deposit(USDC_AMOUNT, deployer.address);
-  await depositTx.wait();
+  // Mint OkuMoney using USDC via LitePSM
+  logger.info(`Minting OkuMoney with ${ethers.formatUnits(USDC_AMOUNT, 6)} USDC via LitePSM...`);
+  const mintTx = await litePSM.mintOkuM(USDC_AMOUNT);
+  await mintTx.wait();
   
   const okuMoneyBalance = await okuMoney.balanceOf(deployer.address);
   logger.success(`OkuMoney balance: ${ethers.formatUnits(okuMoneyBalance, 18)} OkuM`);

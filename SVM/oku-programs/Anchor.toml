@@ -21,9 +21,21 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-# Default test command uses Surfpool (Anchor 1.0.0 default)
-# For Ed25519-dependent tests (bridge_security.ts), use: anchor test --validator legacy
-test = "npx mocha --require tsx --timeout 1000000 'tests/**/*.ts'"
+# Test suite configuration
+# Test directories:
+#   - tests/unit/     - Core functionality tests (lite-psm, oku-dollar, bridge)
+#   - tests/fuzz/     - Property-based fuzz tests (fast-check)
+#   - tests/invariant/ - Stateful invariant tests
+#   - tests/fork/     - Mainnet fork tests (requires separate npm run test:fork)
+#
+# NOTE: Use `anchor test --validator legacy` until Surfpool offline mode is fixed.
+#       Alternatively, use `npm run test` which defaults to legacy validator.
+#
+# Commands:
+#   anchor test --validator legacy   - Run unit/fuzz/invariant tests (recommended)
+#   npm run test:fork                - Run fork tests with mainnet forking
+#   npm run test:all                 - Run all tests (unit + fork)
+test = "npx mocha --require tsx --timeout 1000000 --grep Fork --invert 'tests/**/*.ts'"
 
 [hooks]
 
@@ -31,3 +43,16 @@ test = "npx mocha --require tsx --timeout 1000000 'tests/**/*.ts'"
 startup_wait = 30000
 shutdown_wait = 2000
 upgradeable = false
+
+# ============================================================================
+# Fork Testing (Separate from anchor test)
+# ============================================================================
+# Fork tests require mainnet state and are run separately via:
+#   npm run test:fork
+#
+# This script automatically manages Surfpool:
+#   - If Surfpool is already running with mainnet fork, uses it (won't stop it)
+#   - If not running, starts Surfpool with --rpc-url, runs tests, then stops it
+#
+# To manually run Surfpool with mainnet fork (for faster iteration):
+#   source .env && surfpool start --rpc-url "https://solana-mainnet.g.alchemy.com/v2/$API_KEY"

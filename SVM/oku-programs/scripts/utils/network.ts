@@ -54,7 +54,7 @@ export function detectNetwork(): NetworkName {
 }
 
 function isValidNetwork(network: string): network is NetworkName {
-  return network === 'localnet' || network === 'devnet' || network === 'mainnet-beta';
+  return network === 'localnet' || network === 'devnet' || network === 'devnet-fork' || network === 'mainnet-beta';
 }
 
 /**

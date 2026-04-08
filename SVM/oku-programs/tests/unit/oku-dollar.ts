@@ -27,8 +27,8 @@ import {
   mintTo,
 } from "@solana/spl-token";
 import { expect } from "chai";
-import { OkuDollar } from "../target/types/oku_dollar";
-import { LitePsm } from "../target/types/lite_psm";
+import { OkuDollar } from "../../target/types/oku_dollar";
+import { LitePsm } from "../../target/types/lite_psm";
 import {
   psmOrchestrator,
   coldMultisig as psmColdMultisig,
@@ -36,7 +36,7 @@ import {
   safeAirdropAll,
   ensureAta,
   DECIMALS,
-} from "./shared/setup";
+} from "../shared/setup";
 
 const { Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, PublicKey } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;
@@ -315,7 +315,7 @@ describe("oku-dollar", () => {
     await mintTo(provider.connection, payer, usdcMint, reserveManagerUsdcAta, payer, OKU_MONEY_PER_USER, [], undefined, TOKEN_PROGRAM_ID);
 
     // Mint OkuMoney via PSM
-    const { mintOkusdViaProgram } = await import("./shared/setup");
+    const { mintOkusdViaProgram } = await import("../shared/setup");
     await mintOkusdViaProgram(
       psmProgram as any, user1, new BN(OKU_MONEY_PER_USER), psmConfigPda,
       usdcMint, okuMoneyMint, user1UsdcAta, user1OkuMoneyAta, psmConfig.vaultUsdc

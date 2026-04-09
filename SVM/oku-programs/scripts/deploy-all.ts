@@ -9,9 +9,15 @@
 import 'dotenv/config';
 import { execSync } from 'child_process';
 import { logger } from './utils/logger';
-import { detectNetwork, confirmMainnetDeployment } from './utils/network';
+import { detectNetwork, confirmMainnetDeployment, isForkNetwork, getParentNetwork } from './utils/network';
 
-const DEPLOYMENT_SCRIPTS = [
+interface DeploymentStep {
+  name: string;
+  script: string;
+}
+
+// All steps run for all networks - fork networks deploy fresh just like live networks
+const DEPLOYMENT_SCRIPTS: DeploymentStep[] = [
   { name: 'Deploy Tokens', script: 'scripts/deploy/001-deploy-tokens.ts' },
   { name: 'Deploy Programs', script: 'scripts/deploy/002-deploy-programs.ts' },
   { name: 'Initialize PSM', script: 'scripts/deploy/003-initialize-psm.ts' },
@@ -25,13 +31,17 @@ async function main() {
   logger.header('OkuUSD SVM Deployment');
 
   const network = detectNetwork();
+  const isForked = isForkNetwork(network);
 
   logger.info(`Network: ${network}`, false);
+  if (isForked) {
+    logger.info(`Mode: Fork (inherits network state like oracles, deploys fresh contracts)`, false);
+  }
   logger.info(`Total steps: ${DEPLOYMENT_SCRIPTS.length}`, false);
   logger.log('');
 
-  // Mainnet confirmation
-  if (network === 'mainnet-beta') {
+  // Mainnet confirmation (also for mainnet-fork to be safe)
+  if (network === 'mainnet-beta' || network === 'mainnet-fork') {
     const confirmed = await confirmMainnetDeployment();
     if (!confirmed) {
       logger.error('Mainnet deployment cancelled', false);

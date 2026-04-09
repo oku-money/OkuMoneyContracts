@@ -30,13 +30,20 @@ export const SOLANA_DEVNET_CHAIN_ID = 103;
 export const SOLANA_CHAIN_ID = SOLANA_DEVNET_CHAIN_ID;
 
 /**
- * EVM chain IDs follow EIP-155
+ * EVM chain IDs (OkuMoney protocol-internal u16 identifiers)
+ * NOTE: Real EVM chain IDs (EIP-155) can exceed u16 max (65535).
+ * The Solana program uses u16 for chain IDs, so we map EVM chains to smaller IDs.
+ * These are internal bridge identifiers, NOT the actual EVM chain IDs.
  */
-export const OP_SEPOLIA_CHAIN_ID = 11155420;
+export const OP_SEPOLIA_CHAIN_ID = 420; // Mapped from real EIP-155 ID 11155420
 export const OPTIMISM_CHAIN_ID = 10;
-export const ARBITRUM_CHAIN_ID = 42161;
-export const BASE_CHAIN_ID = 8453;
+export const ARBITRUM_CHAIN_ID = 421; // Mapped from real EIP-155 ID 42161
+export const BASE_CHAIN_ID = 845; // Mapped from real EIP-155 ID 8453
 export const ETHEREUM_CHAIN_ID = 1;
+
+// Local testing chain IDs (Hardhat defaults)
+// Hardhat uses 31337, but that exceeds u16 max so we use a smaller internal ID
+export const HARDHAT_CHAIN_ID = 313; // Protocol-internal ID for Hardhat localhost (31337)
 
 // Supported destination chains (EVM chain IDs)
 // Production chains
@@ -70,8 +77,16 @@ const LITE_PSM_ID = new PublicKey('AhKZ4TT5W4mnvR3CsX1t9ymQmZx4535AN9SsrThu6C1T'
 const WOKUSD_VAULT_ID = new PublicKey('BjjK75Vxj6zsC49qYfcVYFPLqyXXkcaFzacTXwohmfVC');
 const OKU_BRIDGE_ROUTER_ID = new PublicKey('7DtqfP4fyShjAoM35QC9m3a9Ukh4tqcVgzTNLuyTkgE');
 
+// Fork program IDs (from target/deploy-fork keypair files)
+// These are separate from devnet/mainnet to avoid PDA collisions with forked state
+const FORK_LITE_PSM_ID = new PublicKey('GtjZJFmhrAxYDrK2JqK7H3My6u5m7qmkzXqd9p6NLWgS');
+const FORK_OKU_DOLLAR_ID = new PublicKey('9CRADsxW3dN4xnmwLH7DHRfo4BM86B5NNXE7ku2pYGy9'); // aka wokusdVault
+const FORK_OKU_BRIDGE_ROUTER_ID = new PublicKey('GEs9yWYSAJDwjibhQZc5eY8Wex7M9hFscThnL4RGafJu');
+
 export const PROGRAM_IDS = {
   localnet: { litePsm: LITE_PSM_ID, wokusdVault: WOKUSD_VAULT_ID, okuBridgeRouter: OKU_BRIDGE_ROUTER_ID },
   devnet: { litePsm: LITE_PSM_ID, wokusdVault: WOKUSD_VAULT_ID, okuBridgeRouter: OKU_BRIDGE_ROUTER_ID },
+  'devnet-fork': { litePsm: FORK_LITE_PSM_ID, wokusdVault: FORK_OKU_DOLLAR_ID, okuBridgeRouter: FORK_OKU_BRIDGE_ROUTER_ID },
   'mainnet-beta': { litePsm: LITE_PSM_ID, wokusdVault: WOKUSD_VAULT_ID, okuBridgeRouter: OKU_BRIDGE_ROUTER_ID },
+  'mainnet-fork': { litePsm: FORK_LITE_PSM_ID, wokusdVault: FORK_OKU_DOLLAR_ID, okuBridgeRouter: FORK_OKU_BRIDGE_ROUTER_ID },
 };

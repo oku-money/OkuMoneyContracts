@@ -63,12 +63,10 @@ async function main() {
   // Check if running on Surfpool
   await logSurfpoolStatus(provider.connection);
 
-  // Load deployment addresses
-  // For devnet-fork, load from devnet deployment file
-  const effectiveNetwork = network === 'devnet-fork' ? 'devnet' : network;
-  const deployment = loadDeployment(effectiveNetwork as any);
+  // Load deployment addresses for current network
+  const deployment = loadDeployment(network);
   if (!deployment || !deployment.programs?.litePsm) {
-    throw new Error(`No deployment found for network: ${effectiveNetwork}. Run deploy scripts first.`);
+    throw new Error(`No deployment found for network: ${network}. Run deploy scripts first.`);
   }
 
   // Load program

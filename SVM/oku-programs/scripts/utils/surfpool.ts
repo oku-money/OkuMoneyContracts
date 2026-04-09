@@ -161,3 +161,134 @@ export async function timeTravel(
     return false;
   }
 }
+
+/**
+ * Deploy a program using surfnet_writeProgram cheatcode.
+ * This bypasses the standard BPFLoaderUpgradeable deployment which can timeout
+ * on large programs (>200KB). The cheatcode writes program data directly in chunks.
+ *
+ * @param connection - The RPC connection
+ * @param programId - The program ID (public key) to deploy to
+ * @param programData - The raw .so file data as Buffer
+ * @param authority - Optional upgrade authority (defaults to system program)
+ * @returns true if deployment succeeded
+ */
+export async function deployProgramViaCheatcode(
+  connection: Connection,
+  programId: string,
+  programData: Buffer,
+  authority?: string
+): Promise<boolean> {
+  // Surfpool's cheatcode supports up to 5MB per chunk (limited by RPC max size)
+  // Use 4MB chunks to leave room for JSON overhead
+  const CHUNK_SIZE = 4 * 1024 * 1024;
+  const totalSize = programData.length;
+  const numChunks = Math.ceil(totalSize / CHUNK_SIZE);
+
+  logger.info(`Deploying ${programId} via surfnet_writeProgram (${totalSize} bytes, ${numChunks} chunk(s))`);
+
+  for (let i = 0; i < numChunks; i++) {
+    const offset = i * CHUNK_SIZE;
+    const chunk = programData.subarray(offset, Math.min(offset + CHUNK_SIZE, totalSize));
+    // Note: surfnet_writeProgram expects raw hex without 0x prefix
+    const hexData = chunk.toString('hex');
+
+    const params: [string, string, number, string?] = [programId, hexData, offset];
+    if (authority) {
+      params.push(authority);
+    }
+
+    try {
+      const response = await fetch(connection.rpcEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'surfnet_writeProgram',
+          params,
+        }),
+      });
+
+      const json = await response.json();
+
+      if (json.error) {
+        logger.error(`Chunk ${i + 1}/${numChunks} failed: ${JSON.stringify(json.error)}`);
+        return false;
+      }
+
+      const percent = Math.round(((i + 1) / numChunks) * 100);
+      logger.info(`  Chunk ${i + 1}/${numChunks} written (${percent}%)`);
+    } catch (err) {
+      logger.error(`Chunk ${i + 1}/${numChunks} network error: ${err}`);
+      return false;
+    }
+  }
+
+  logger.success(`Program ${programId} deployed via cheatcode`);
+  return true;
+}
+
+/**
+ * Set upgrade authority for a program (Surfpool only).
+ */
+export async function setProgramAuthority(
+  connection: Connection,
+  programId: string,
+  newAuthority?: string
+): Promise<boolean> {
+  try {
+    const params: [string, string?] = [programId];
+    if (newAuthority) {
+      params.push(newAuthority);
+    }
+
+    const response = await fetch(connection.rpcEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'surfnet_setProgramAuthority',
+        params,
+      }),
+    });
+
+    const json = await response.json();
+    return !json.error;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Register an IDL with Surfpool for account parsing.
+ */
+export async function registerIdl(
+  connection: Connection,
+  idl: any,
+  slot?: number
+): Promise<boolean> {
+  try {
+    const params: [any, number?] = [idl];
+    if (slot !== undefined) {
+      params.push(slot);
+    }
+
+    const response = await fetch(connection.rpcEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'surfnet_registerIdl',
+        params,
+      }),
+    });
+
+    const json = await response.json();
+    return !json.error;
+  } catch {
+    return false;
+  }
+}

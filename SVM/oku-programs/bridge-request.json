@@ -1,0 +1,12 @@
+{
+  "requestId": "0x6b93994e0ad9f0b816cff2788d3a36bb1a8a71e20dd1a00cc47bafb2c258a8f6",
+  "sourceChainId": 103,
+  "destChainId": 420,
+  "sender": "0x317fd4ffd20d3fd1034c53ab4dd9ef4b726e2076cfda08b2c919091b2c1f83bd",
+  "recipient": "0x0000000000000000000000003CB68a6762041aA05E762814A8791CA9d98E79A0",
+  "amount": "49950000",
+  "nonce": 0,
+  "deadline": 1779361,
+  "timestamp": 1775761756,
+  "txSignature": "5nLJe8aji6uhogaLK1oSEbnDNWNLDWSSJUAJjTHb5k8kyfm57v9TRTExLNgPQ2gfwkCgPh9m4C2ZbMpKpckEEZCE"
+}

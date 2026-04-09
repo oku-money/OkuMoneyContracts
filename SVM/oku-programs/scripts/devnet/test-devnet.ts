@@ -186,8 +186,12 @@ async function buildContext(): Promise<TestContext> {
   const litePsmId = new PublicKey(deployment.programs.litePsm!);
   const wokusdVaultId = new PublicKey(deployment.programs.wokusdVault!);
 
-  const psm = new Program(psmIdl, litePsmId, provider);
-  const vault = new Program(vaultIdl, wokusdVaultId, provider);
+  // Set the address in the IDL for 2-arg Program constructor (Anchor 1.0 compatibility)
+  psmIdl.address = litePsmId.toBase58();
+  vaultIdl.address = wokusdVaultId.toBase58();
+
+  const psm = new Program(psmIdl, provider);
+  const vault = new Program(vaultIdl, provider);
 
   // Mints
   const usdcMint = new PublicKey(deployment.tokens.usdc!);

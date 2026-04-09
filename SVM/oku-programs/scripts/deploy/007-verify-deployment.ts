@@ -29,7 +29,7 @@ async function main() {
   logger.info(`Network: ${network}`, false);
   logger.log('');
 
-  // Load deployment
+  // Load deployment from current network
   const deployment = loadDeployment(network);
   if (!deployment) {
     logger.error('No deployment found. Run scripts 001-006 first.', false);

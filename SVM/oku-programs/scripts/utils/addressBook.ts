@@ -175,3 +175,19 @@ export function clearDeployment(network: NetworkName) {
     fs.unlinkSync(filepath);
   }
 }
+
+/**
+ * Load deployment for the effective network.
+ * For fork networks (devnet-fork, mainnet-fork), loads from the parent network
+ * since programs/tokens are forked from there.
+ */
+export function loadDeploymentForFork(network: NetworkName): DeploymentAddresses | null {
+  // For fork networks, load from parent network
+  if (network === 'devnet-fork') {
+    return loadDeployment('devnet');
+  }
+  if (network === 'mainnet-fork') {
+    return loadDeployment('mainnet-beta');
+  }
+  return loadDeployment(network);
+}

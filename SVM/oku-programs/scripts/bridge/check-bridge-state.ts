@@ -12,7 +12,7 @@
  */
 
 import * as anchor from '@anchor-lang/core';
-import { Program } from '@anchor-lang/core';
+import { Program, AnchorProvider } from '@anchor-lang/core';
 import { PublicKey } from '@solana/web3.js';
 import {
   TOKEN_2022_PROGRAM_ID,
@@ -30,8 +30,24 @@ import {
   ARBITRUM_CHAIN_ID,
   BASE_CHAIN_ID,
   ETHEREUM_CHAIN_ID,
+  PROGRAM_IDS,
 } from '../config/constants';
 import { logSurfpoolStatus } from '../utils/surfpool';
+import litePsmIdlRaw from '../../target/idl/lite_psm.json';
+
+/**
+ * Load IDL with correct program ID for the current network.
+ */
+function loadIdlForNetwork(idl: any, network: string, programKey: keyof typeof PROGRAM_IDS['localnet']): any {
+  const programId = PROGRAM_IDS[network as keyof typeof PROGRAM_IDS]?.[programKey];
+  if (!programId) {
+    throw new Error(`No program ID found for ${programKey} on ${network}`);
+  }
+  return {
+    ...idl,
+    address: programId.toBase58(),
+  };
+}
 
 async function main() {
   const network = detectNetwork();
@@ -44,17 +60,17 @@ async function main() {
   // Check if running on Surfpool
   await logSurfpoolStatus(provider.connection);
 
-  // Load addresses
-  // For devnet-fork, load from devnet deployment file
-  const effectiveNetwork = network === 'devnet-fork' ? 'devnet' : network;
-  const addresses = loadDeployment(effectiveNetwork as any);
+  // Load addresses from deployment file
+  // Fork networks have their own deployment files (devnet-fork.json, mainnet-fork.json)
+  const addresses = loadDeployment(network);
   if (!addresses) {
-    throw new Error(`No addresses found for network: ${effectiveNetwork}. Run deploy scripts first.`);
+    throw new Error(`No addresses found for network: ${network}. Run deploy scripts first.`);
   }
 
-  // Load program
+  // Load program with correct program ID for the network
   const programId = new PublicKey(addresses.programs.litePsm);
-  const program = anchor.workspace.LitePsm as Program<LitePsm>;
+  const litePsmIdl = loadIdlForNetwork(litePsmIdlRaw, network, 'litePsm');
+  const program = new Program(litePsmIdl as any, provider) as Program<LitePsm>;
 
   logger.info(`Program ID: ${programId.toBase58()}`);
 

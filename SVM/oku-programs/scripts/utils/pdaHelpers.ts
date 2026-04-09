@@ -23,9 +23,18 @@ export function deriveRedemptionQueuePDA(programId: PublicKey): [PublicKey, numb
 
 /**
  * Derive vault config PDA
+ * Seeds: ["oku_dollar_config"]
  */
 export function deriveVaultConfigPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from('vault_config')], programId);
+  return PublicKey.findProgramAddressSync([Buffer.from('oku_dollar_config')], programId);
+}
+
+/**
+ * Derive usdOku mint PDA
+ * Seeds: ["usd_oku_mint"]
+ */
+export function deriveUsdOkuMintPDA(programId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync([Buffer.from('usd_oku_mint')], programId);
 }
 
 /**

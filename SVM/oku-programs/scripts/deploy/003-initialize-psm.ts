@@ -37,8 +37,24 @@ import {
   MIN_BRIDGE_AMOUNT,
   MAX_BRIDGE_AMOUNT,
   SOLANA_CHAIN_ID,
+  PROGRAM_IDS,
 } from '../config/constants';
-import litePsmIDL from '../../target/idl/lite_psm.json';
+import litePsmIDLRaw from '../../target/idl/lite_psm.json';
+
+/**
+ * Load IDL with correct program ID for the current network.
+ * Fork networks use different program IDs to avoid PDA collisions.
+ */
+function loadIdlForNetwork(idl: any, network: string, programKey: keyof typeof PROGRAM_IDS['localnet']): any {
+  const programId = PROGRAM_IDS[network as keyof typeof PROGRAM_IDS]?.[programKey];
+  if (!programId) {
+    throw new Error(`No program ID found for ${programKey} on ${network}`);
+  }
+  return {
+    ...idl,
+    address: programId.toBase58(),
+  };
+}
 
 async function main() {
   logger.header('Initialize PSM & Bridge (003)');
@@ -51,7 +67,7 @@ async function main() {
   logger.info(`Network: ${network}`, false);
   logger.log('');
 
-  // Load deployment
+  // Load deployment from current network (scripts 001 and 002 should have run first)
   const deployment = loadDeployment(network);
   if (!deployment?.programs?.litePsm || !deployment?.tokens?.usdc || !deployment?.tokens?.okusd) {
     logger.error('Missing deployment data. Run scripts 001 and 002 first.', false);
@@ -158,38 +174,44 @@ async function main() {
     feeRecipient: authorities.bridge.feeRecipient.toBase58(),
   });
 
-  // Load program
+  // Load program - Anchor 1.0 uses 2-arg constructor: Program(idl, provider)
+  // The program ID is read from idl.address
+  // For fork networks, we override the IDL address with the fork program ID
   logger.log('');
   logger.section('Initializing PSM Program');
 
-  const litePsmProgram = new Program(litePsmIDL as any, litePsmProgramId, provider);
+  const litePsmIDL = loadIdlForNetwork(litePsmIDLRaw, network, 'litePsm');
+  logger.info(`IDL address: ${litePsmIDL.address}`);
+  logger.info(`Expected program ID: ${PROGRAM_IDS[network as keyof typeof PROGRAM_IDS].litePsm.toBase58()}`);
+  const litePsmProgram = new Program(litePsmIDL as any, provider);
+  logger.info(`Program instance ID: ${litePsmProgram.programId.toBase58()}`);
 
   // Step 1: Initialize PSM config
+  // According to IDL, authorities are passed as args, not accounts
   try {
     logger.info('Calling initialize() on PSM...');
 
     const tx = await litePsmProgram.methods
       .initialize(
         new BN(MAX_SUPPLY),
-        new BN(MINTER_ALLOWANCE)
+        new BN(MINTER_ALLOWANCE),
+        authorities.psm.pauser,
+        authorities.psm.unpauser,
+        authorities.psm.freezer,
+        authorities.psm.unfreezer,
+        authorities.psm.queueProcessor,
+        authorities.psm.bufferDepositor,
+        authorities.psm.bufferWithdrawer,
+        authorities.psm.oracleManager,
+        authorities.psm.capManager,
+        authorities.psm.allowanceManager,
+        authorities.psm.rebaser
       )
       .accountsPartial({
         roleAdmin: authorities.psm.roleAdmin,
-        pauser: authorities.psm.pauser,
-        unpauser: authorities.psm.unpauser,
-        freezer: authorities.psm.freezer,
-        unfreezer: authorities.psm.unfreezer,
-        queueProcessor: authorities.psm.queueProcessor,
-        bufferDepositor: authorities.psm.bufferDepositor,
-        bufferWithdrawer: authorities.psm.bufferWithdrawer,
-        oracleManager: authorities.psm.oracleManager,
-        capManager: authorities.psm.capManager,
-        allowanceManager: authorities.psm.allowanceManager,
-        rebaser: authorities.psm.rebaser,
         config: psmConfig,
-        redemptionQueue: redemptionQueue,
         usdcMint: usdcMint,
-        okusdMint: okusdMint,
+        okuMoneyMint: okusdMint,
         vaultUsdc: vaultUsdc,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -209,36 +231,62 @@ async function main() {
     }
   }
 
-  // Step 2: Setup OkuUSD escrow
+  // Step 2: Setup redemption queue
   try {
     logger.log('');
-    logger.info('Setting up OkuUSD escrow...');
+    logger.info('Setting up redemption queue...');
 
     const tx = await litePsmProgram.methods
-      .setupOkusdEscrow()
+      .setupRedemptionQueue()
+      .accountsPartial({
+        payer: provider.wallet.publicKey,
+        config: psmConfig,
+        redemptionQueue: redemptionQueue,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    logger.success(`Redemption queue created: ${tx}`);
+    logger.info(`Transaction: https://explorer.solana.com/tx/${tx}?cluster=${network}`);
+  } catch (error: any) {
+    if (error.message?.includes('already in use')) {
+      logger.warning('Redemption queue already exists (idempotent)');
+    } else {
+      logger.error(`Redemption queue setup failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Step 3: Setup OkuMoney escrow (OkuUSD vault for queued redemptions)
+  try {
+    logger.log('');
+    logger.info('Setting up OkuMoney escrow...');
+
+    const tx = await litePsmProgram.methods
+      .setupOkuMoneyEscrow()
       .accountsPartial({
         roleAdmin: authorities.psm.roleAdmin,
         config: psmConfig,
-        okusdMint: okusdMint,
-        vaultOkusd: psmOkusdEscrow,
+        okuMoneyMint: okusdMint,
+        vaultOkuMoney: psmOkusdEscrow,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
 
-    logger.success(`OkuUSD escrow created: ${tx}`);
+    logger.success(`OkuMoney escrow created: ${tx}`);
     logger.info(`Transaction: https://explorer.solana.com/tx/${tx}?cluster=${network}`);
   } catch (error: any) {
     if (error.message?.includes('already in use') || error.message?.includes('Unauthorized')) {
-      logger.warning('OkuUSD escrow already exists (idempotent)');
+      logger.warning('OkuMoney escrow already exists (idempotent)');
     } else {
-      logger.error(`OkuUSD escrow setup failed: ${error.message}`);
+      logger.error(`OkuMoney escrow setup failed: ${error.message}`);
       throw error;
     }
   }
 
-  // Step 3: Initialize bridge config
+  // Step 4: Initialize bridge config
   try {
     logger.log('');
     logger.info('Initializing bridge config...');
@@ -254,6 +302,8 @@ async function main() {
         chainManager: authorities.bridge.chainManager,
         feeManager: authorities.bridge.feeManager,
         nonceAdmin: authorities.bridge.nonceAdmin,
+        signerManager: authorities.bridge.signerManager,
+        limitsManager: authorities.bridge.limitsManager,
         bridgeConfig: bridgeConfig,
         systemProgram: SystemProgram.programId,
       })

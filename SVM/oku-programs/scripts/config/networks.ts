@@ -4,7 +4,7 @@
 
 import { PublicKey } from '@solana/web3.js';
 
-export type NetworkName = 'localnet' | 'devnet' | 'devnet-fork' | 'mainnet-beta';
+export type NetworkName = 'localnet' | 'devnet' | 'devnet-fork' | 'mainnet-beta' | 'mainnet-fork';
 
 export interface NetworkConfig {
   name: NetworkName;
@@ -62,9 +62,9 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
     name: 'devnet-fork',
     cluster: 'http://127.0.0.1:8899', // Surfpool local endpoint
     usdc: {
-      // Will be loaded from devnet deployment file
+      // Create mock USDC on the fork for testing
       mint: PublicKey.default,
-      isNative: false, // Forked from devnet, not created locally
+      isNative: true, // Create our own USDC for testing
     },
     oracle: {
       enabled: true,
@@ -88,5 +88,28 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
       feed: new PublicKey('Gnt27xtC473ZT2Mw5u8wZ68Z3gULkSTb5DuxJy7eJotD'),
     },
     confirmationCommitment: 'finalized',
+  },
+
+  /**
+   * Mainnet fork via Surfpool - for local testing against mainnet state.
+   *
+   * Usage:
+   *   surfpool start --rpc-url https://api.mainnet-beta.solana.com
+   *   NETWORK=mainnet-fork tsx scripts/deploy-all.ts
+   */
+  'mainnet-fork': {
+    name: 'mainnet-fork',
+    cluster: 'http://127.0.0.1:8899', // Surfpool local endpoint
+    usdc: {
+      // Forked from mainnet
+      mint: new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'),
+      isNative: false,
+    },
+    oracle: {
+      enabled: true,
+      // Pyth mainnet USDC/USD feed (forked from mainnet)
+      feed: new PublicKey('Gnt27xtC473ZT2Mw5u8wZ68Z3gULkSTb5DuxJy7eJotD'),
+    },
+    confirmationCommitment: 'confirmed',
   },
 };

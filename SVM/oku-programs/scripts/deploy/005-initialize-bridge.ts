@@ -3,30 +3,45 @@
  * 005-initialize-bridge.ts
  *
  * Note: Bridge config is part of lite-psm program and was initialized in script 003.
- * This script initializes bridge nonce PDAs for all supported chains.
+ * Bridge nonce PDAs are created lazily via init_if_needed when the first bridge burn
+ * happens for each chain, so no explicit initialization is needed here.
+ *
+ * This script now just verifies the bridge configuration is correct.
  */
 
-import { PublicKey, SystemProgram } from '@solana/web3.js';
-import { Program, BN } from '@anchor-lang/core';
+import { PublicKey } from '@solana/web3.js';
+import { Program } from '@anchor-lang/core';
 import { detectNetwork, createProvider } from '../utils/network';
 import { logger } from '../utils/logger';
 import { loadDeployment } from '../utils/addressBook';
-import { loadAuthorities } from '../config/authorities';
 import { deriveBridgeNoncePDA } from '../utils/pdaHelpers';
-import { SUPPORTED_CHAINS } from '../config/constants';
-import litePsmIDL from '../../target/idl/lite_psm.json';
+import { SUPPORTED_CHAINS, PROGRAM_IDS } from '../config/constants';
+import litePsmIDLRaw from '../../target/idl/lite_psm.json';
+
+/**
+ * Load IDL with correct program ID for the current network.
+ */
+function loadIdlForNetwork(idl: any, network: string, programKey: keyof typeof PROGRAM_IDS['localnet']): any {
+  const programId = PROGRAM_IDS[network as keyof typeof PROGRAM_IDS]?.[programKey];
+  if (!programId) {
+    throw new Error(`No program ID found for ${programKey} on ${network}`);
+  }
+  return {
+    ...idl,
+    address: programId.toBase58(),
+  };
+}
 
 async function main() {
-  logger.header('Initialize Bridge Nonces (005)');
+  logger.header('Verify Bridge Configuration (005)');
 
   const network = detectNetwork();
   const provider = createProvider(network);
-  const authorities = loadAuthorities(network, provider.wallet.publicKey);
 
   logger.info(`Network: ${network}`, false);
   logger.log('');
 
-  // Load deployment
+  // Load deployment from current network
   const deployment = loadDeployment(network);
   if (!deployment?.programs?.litePsm || !deployment?.pdas?.bridgeConfig) {
     logger.error('Missing deployment data. Run scripts 001-003 first.', false);
@@ -34,50 +49,63 @@ async function main() {
   }
 
   const litePsmProgramId = new PublicKey(deployment.programs.litePsm);
-  const bridgeConfig = new PublicKey(deployment.pdas.bridgeConfig);
-
-  logger.section('Bridge Configuration');
-  logger.success(`Bridge Config PDA: ${bridgeConfig.toBase58()}`);
-
-  logger.log('');
-  logger.section('Initializing Nonce PDAs');
+  const bridgeConfigPDA = new PublicKey(deployment.pdas.bridgeConfig);
 
   // Load program
-  const litePsmProgram = new Program(litePsmIDL as any, litePsmProgramId, provider);
+  const litePsmIDL = loadIdlForNetwork(litePsmIDLRaw, network, 'litePsm');
+  const litePsmProgram = new Program(litePsmIDL as any, provider);
 
-  for (const chainId of SUPPORTED_CHAINS) {
-    const [noncePDA, bump] = deriveBridgeNoncePDA(litePsmProgramId, chainId);
+  logger.section('Bridge Configuration');
 
-    try {
-      logger.info(`Initializing nonce for chain ${chainId}...`);
+  // Fetch and display bridge config
+  try {
+    const bridgeConfig = await litePsmProgram.account.bridgeConfig.fetch(bridgeConfigPDA);
+    
+    logger.table({
+      'Bridge Config PDA': bridgeConfigPDA.toBase58(),
+      'Bridge Admin': (bridgeConfig as any).bridgeAdmin.toBase58(),
+      'Bridge Pauser': (bridgeConfig as any).bridgePauser.toBase58(),
+      'Bridge Fee (bps)': (bridgeConfig as any).bridgeFeeBps.toString(),
+      'Min Amount': (bridgeConfig as any).minBridgeAmount.toString(),
+      'Max Amount': (bridgeConfig as any).maxBridgeAmount.toString(),
+      'Deadline (secs)': (bridgeConfig as any).bridgeDeadlineSecs.toString(),
+      'Is Paused': (bridgeConfig as any).isPaused.toString(),
+    });
 
-      // Use skip_nonce(chainId, 0) to pre-create nonce PDA
-      // This is better than waiting for first burn to auto-initialize
-      const tx = await litePsmProgram.methods
-        .skipNonce(chainId, new BN(0))
-        .accountsPartial({
-          nonceAdmin: authorities.bridge.nonceAdmin,
-          bridgeConfig: bridgeConfig,
-          bridgeNonce: noncePDA,
-          systemProgram: SystemProgram.programId,
-        })
-        .rpc();
-
-      logger.success(`Chain ${chainId}: ${noncePDA.toBase58()}`);
-      logger.info(`  Transaction: ${tx}`);
-    } catch (error: any) {
-      if (error.message?.includes('already in use')) {
-        logger.warning(`Chain ${chainId}: Already initialized (idempotent)`);
-        logger.success(`  PDA: ${noncePDA.toBase58()}`);
-      } else {
-        logger.error(`Chain ${chainId} initialization failed: ${error.message}`);
-        throw error;
+    // Display supported chains
+    const supportedChainsCount = (bridgeConfig as any).supportedChainsCount;
+    const supportedChains = (bridgeConfig as any).supportedChains.slice(0, supportedChainsCount);
+    
+    logger.log('');
+    logger.section('Supported Chains');
+    if (supportedChains.length === 0) {
+      logger.warning('No chains configured');
+    } else {
+      for (const chainId of supportedChains) {
+        const [noncePDA] = deriveBridgeNoncePDA(litePsmProgramId, chainId);
+        logger.success(`Chain ${chainId}: Nonce PDA = ${noncePDA.toBase58()}`);
+        logger.info(`  (Nonce PDA created lazily on first bridge burn)`);
       }
     }
+
+    // Verify expected chains are configured
+    logger.log('');
+    logger.section('Chain Verification');
+    for (const expectedChain of SUPPORTED_CHAINS) {
+      if (supportedChains.includes(expectedChain)) {
+        logger.success(`Chain ${expectedChain}: Configured`);
+      } else {
+        logger.error(`Chain ${expectedChain}: NOT configured (expected)`);
+      }
+    }
+
+  } catch (error: any) {
+    logger.error(`Failed to fetch bridge config: ${error.message}`);
+    throw error;
   }
 
   logger.log('');
-  logger.success('Bridge nonce initialization complete!', false);
+  logger.success('Bridge verification complete!', false);
   logger.info('Next: Run script 006 to initialize router', false);
 }
 

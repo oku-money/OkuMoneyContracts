@@ -26,7 +26,7 @@ export interface AuthorityConfig {
     rebaser: PublicKey;
   };
 
-  // Bridge authorities (8 roles)
+  // Bridge authorities (10 roles)
   bridge: {
     bridgeAdmin: PublicKey;
     bridgePauser: PublicKey;
@@ -36,13 +36,17 @@ export interface AuthorityConfig {
     chainManager: PublicKey;
     feeManager: PublicKey;
     nonceAdmin: PublicKey;
+    signerManager: PublicKey;
+    limitsManager: PublicKey;
   };
 
-  // Vault authorities (3 roles)
+  // Vault authorities (5 roles)
   vault: {
     roleAdmin: PublicKey;
     pauser: PublicKey;
     unpauser: PublicKey;
+    usdRebaser: PublicKey;
+    reserveManager: PublicKey;
   };
 }
 
@@ -74,29 +78,45 @@ function allRolesToSingleKey(deployer: PublicKey): AuthorityConfig {
       chainManager: deployer,
       feeManager: deployer,
       nonceAdmin: deployer,
+      signerManager: deployer,
+      limitsManager: deployer,
     },
     vault: {
       roleAdmin: deployer,
       pauser: deployer,
       unpauser: deployer,
+      usdRebaser: deployer,
+      reserveManager: deployer,
     },
   };
 }
 
 /**
+ * Check if network uses deployer wallet for all authorities (testnet/fork mode)
+ */
+function isTestnetOrFork(network: NetworkName): boolean {
+  return (
+    network === 'localnet' ||
+    network === 'devnet' ||
+    network === 'devnet-fork' ||
+    network === 'mainnet-fork'
+  );
+}
+
+/**
  * Load authorities based on network
  *
- * - localnet/devnet: all roles use deployer wallet (for simplicity)
- * - mainnet: loads separate pubkeys from MAINNET_* env vars
+ * - localnet/devnet/devnet-fork/mainnet-fork: all roles use deployer wallet (for simplicity)
+ * - mainnet-beta: loads separate pubkeys from MAINNET_* env vars
  */
 export function loadAuthorities(network: NetworkName, deployerPubkey?: PublicKey): AuthorityConfig {
-  // For localnet and devnet, use deployer wallet for all authorities
-  if (network === 'localnet' || network === 'devnet') {
+  // For testnet and fork networks, use deployer wallet for all authorities
+  if (isTestnetOrFork(network)) {
     const deployer = deployerPubkey || PublicKey.default;
     return allRolesToSingleKey(deployer);
   }
 
-  // For mainnet, load separate authority pubkeys from environment
+  // For mainnet-beta only, load separate authority pubkeys from environment
   const coldMultisig = getEnvPubkey('MAINNET_COLD_MULTISIG', true);
   const warmMultisig = getEnvPubkey('MAINNET_WARM_MULTISIG', true);
   const orchestrator = getEnvPubkey('MAINNET_ORCHESTRATOR', true);
@@ -127,11 +147,15 @@ export function loadAuthorities(network: NetworkName, deployerPubkey?: PublicKey
       chainManager: warmMultisig,
       feeManager: coldMultisig,
       nonceAdmin: coldMultisig,
+      signerManager: coldMultisig,
+      limitsManager: coldMultisig,
     },
     vault: {
       roleAdmin: coldMultisig,
       pauser: warmMultisig,
       unpauser: coldMultisig,
+      usdRebaser: orchestrator,
+      reserveManager: coldMultisig,
     },
   };
 }

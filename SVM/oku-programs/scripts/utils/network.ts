@@ -54,7 +54,29 @@ export function detectNetwork(): NetworkName {
 }
 
 function isValidNetwork(network: string): network is NetworkName {
-  return network === 'localnet' || network === 'devnet' || network === 'devnet-fork' || network === 'mainnet-beta';
+  return (
+    network === 'localnet' ||
+    network === 'devnet' ||
+    network === 'devnet-fork' ||
+    network === 'mainnet-beta' ||
+    network === 'mainnet-fork'
+  );
+}
+
+/**
+ * Check if we're running on a forked network
+ */
+export function isForkNetwork(network: NetworkName): boolean {
+  return network === 'devnet-fork' || network === 'mainnet-fork';
+}
+
+/**
+ * Get the parent network for a fork (e.g., devnet-fork -> devnet)
+ */
+export function getParentNetwork(network: NetworkName): NetworkName {
+  if (network === 'devnet-fork') return 'devnet';
+  if (network === 'mainnet-fork') return 'mainnet-beta';
+  return network;
 }
 
 /**
@@ -103,6 +125,15 @@ export function loadKeypair(filepath: string): Keypair {
 
   const secretKey = JSON.parse(fs.readFileSync(filepath, 'utf-8'));
   return Keypair.fromSecretKey(new Uint8Array(secretKey));
+}
+
+/**
+ * Get the wallet keypair from default location or WALLET_PATH env var
+ */
+export function getWalletKeypair(): Keypair {
+  const walletPath =
+    process.env.WALLET_PATH || path.join(process.env.HOME!, '.config/solana/id.json');
+  return loadKeypair(walletPath);
 }
 
 /**

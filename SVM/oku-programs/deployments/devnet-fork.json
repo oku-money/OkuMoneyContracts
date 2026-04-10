@@ -1,9 +1,9 @@
 {
   "network": "devnet-fork",
-  "timestamp": "2026-04-09T20:35:43.246Z",
+  "timestamp": "2026-04-10T18:04:51.692Z",
   "tokens": {
-    "usdc": "AbveM6CPiEUdSxQ4VSbF6Yaiba2XtDRFPKrZuEvF8u3F",
-    "okusd": "2YuxJu1bMRc1KbLYYkzKLKp2DLHYvQ5xm141ixr2KW1j",
+    "usdc": "EmXws3XbCBPkGfQZ8nS7rYNu3tVPMarir2oean2XvtyD",
+    "okusd": "8RB8jGZacyAs8Jq3AKHhLcp3fFwecJog3ahiTTf1JwX1",
     "usdOku": "9W8QfD7pPmbU7zdJV6ipTRjDuPAoYUauG9uuskBqTM69"
   },
   "programs": {
@@ -15,21 +15,14 @@
     "psmConfig": "2FC6FvAjGjK8othNzDjJqmKurwFD2EoS6nobhmyZsxk3",
     "redemptionQueue": "FXN1JKEeDaePr7cNmZsNBGxzhiRabmpUZ8sokdbPphFB",
     "bridgeConfig": "7k5MxycaYeH6s3o1qNz7st2jwR92yHjttG3h3qc2Uwtu",
-    "psmVaultUsdc": "5fVyJa1cawBneZTkyJMULiZd6A5Ghg7tD7EBNHrzWiGG",
-    "psmOkusdEscrow": "68PLrESV2umwmEU5KckSHou58JytNvjzN4NUePGwVP5S",
     "vaultConfig": "54K3SqXvnZkHtD19ii6VHxcNxEdk6zfvVVRDScobNX5h",
-    "usdOkuMint": "9W8QfD7pPmbU7zdJV6ipTRjDuPAoYUauG9uuskBqTM69",
-    "reserveVault": "CF28PPwQhUgKrUTuaqvPro1SJTWuCgorTWYYXBwN52c7",
     "routerConfig": "Bb7fT9brJRKT1F88vhty5BRBG1pSgd7Dj9qLgnrjN9b"
   },
-  "nonces": {
-    "420": "B96wDhwBWbTMfpJN7zaVmN5j1XqFpK4QJzHEBsMKy3pZ"
-  },
+  "nonces": {},
   "authorities": {
     "coldMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
     "warmMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
     "orchestrator": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
-    "bridgeOrchestrator": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
     "feeRecipient": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
   }
 }

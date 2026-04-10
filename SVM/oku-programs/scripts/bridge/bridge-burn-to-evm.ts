@@ -32,7 +32,14 @@ import { logger } from '../utils/logger';
 import {
   SOLANA_CHAIN_ID,
   OP_SEPOLIA_CHAIN_ID,
+  HARDHAT_CHAIN_ID,
 } from '../config/constants';
+
+// Destination chain ID - can be overridden via EVM_DEST_CHAIN_ID env var
+// Use HARDHAT_CHAIN_ID (31337) for localhost testing
+const DEST_CHAIN_ID = process.env.EVM_DEST_CHAIN_ID 
+  ? parseInt(process.env.EVM_DEST_CHAIN_ID)
+  : OP_SEPOLIA_CHAIN_ID;
 import { logSurfpoolStatus } from '../utils/surfpool';
 
 // Bridge request output interface (for EVM relay script)
@@ -139,15 +146,34 @@ async function main() {
     TOKEN_2022_PROGRAM_ID
   );
 
+  // Create fee recipient ATA if it doesn't exist
+  try {
+    await getAccount(provider.connection, feeRecipientAta, 'confirmed', TOKEN_2022_PROGRAM_ID);
+    logger.info('Fee recipient ATA exists');
+  } catch {
+    logger.info('Creating fee recipient ATA...');
+    const { createAssociatedTokenAccountInstruction } = await import('@solana/spl-token');
+    const createAtaIx = createAssociatedTokenAccountInstruction(
+      wallet.publicKey,
+      feeRecipientAta,
+      feeRecipient,
+      okuMoneyMint,
+      TOKEN_2022_PROGRAM_ID
+    );
+    const tx = new anchor.web3.Transaction().add(createAtaIx);
+    await provider.sendAndConfirm(tx);
+    logger.success('Fee recipient ATA created');
+  }
+
   // BridgeNonce PDA
   const [bridgeNonce] = PublicKey.findProgramAddressSync(
-    [Buffer.from('bridge_nonce'), Buffer.from(new Uint16Array([OP_SEPOLIA_CHAIN_ID]).buffer)],
+    [Buffer.from('bridge_nonce'), Buffer.from(new Uint16Array([DEST_CHAIN_ID]).buffer)],
     programId
   );
 
   logger.nextStep('Executing bridge_burn');
   logger.info(`Amount: ${BRIDGE_AMOUNT.toNumber() / 1_000_000} OkuM`);
-  logger.info(`Destination: OP Sepolia (chain ${OP_SEPOLIA_CHAIN_ID})`);
+  logger.info(`Destination: chain ${DEST_CHAIN_ID}`);
   logger.info(`Recipient: ${EVM_RECIPIENT}`);
 
   // Call bridge_burn
@@ -155,7 +181,7 @@ async function main() {
     .bridgeBurn(
       BRIDGE_AMOUNT,
       Array.from(recipientBytes) as number[], // [u8; 20]
-      OP_SEPOLIA_CHAIN_ID
+      DEST_CHAIN_ID
     )
     .accountsPartial({
       user: wallet.publicKey,
@@ -202,8 +228,10 @@ async function main() {
   const netAmount = BRIDGE_AMOUNT.toNumber() - feeAmount;
 
   // Calculate deadline
-  const blockTime = txDetails.blockTime || Math.floor(Date.now() / 1000);
-  const deadline = blockTime + bridgeConfigAccount.bridgeDeadlineSecs.toNumber();
+  // Note: On Surfpool, blockTime may be simulated and not match real-world time
+  // For testing purposes, use actual unix time
+  const now = Math.floor(Date.now() / 1000);
+  const deadline = now + bridgeConfigAccount.bridgeDeadlineSecs.toNumber();
 
   // Calculate request_id
   // Message format: source_chain(2) + dest_chain(2) + sender(32) + recipient(20) + amount(8) + nonce(8) + deadline(8)
@@ -215,7 +243,7 @@ async function main() {
   offset += 2;
   
   // dest_chain_id (u16 LE)
-  messageBuffer.writeUInt16LE(OP_SEPOLIA_CHAIN_ID, offset);
+  messageBuffer.writeUInt16LE(DEST_CHAIN_ID, offset);
   offset += 2;
   
   // sender (32 bytes)
@@ -252,7 +280,7 @@ async function main() {
   logger.info(`  Sender: ${wallet.publicKey.toBase58()}`);
   logger.info(`  Recipient: ${EVM_RECIPIENT}`);
   logger.info(`  Source Chain: ${SOLANA_CHAIN_ID}`);
-  logger.info(`  Dest Chain: ${OP_SEPOLIA_CHAIN_ID}`);
+  logger.info(`  Dest Chain: ${DEST_CHAIN_ID}`);
   logger.info(`  Amount: ${netAmount / 1_000_000} OkuM (post-fee)`);
   logger.info(`  Fee: ${feeAmount / 1_000_000} OkuM`);
   logger.info(`  Nonce: ${nonce}`);
@@ -263,7 +291,7 @@ async function main() {
   const bridgeRequest: BridgeRequestOutput = {
     requestId: requestId,
     sourceChainId: SOLANA_CHAIN_ID,
-    destChainId: OP_SEPOLIA_CHAIN_ID,
+    destChainId: DEST_CHAIN_ID,
     sender: senderHex,
     recipient: recipientBytes32,
     amount: netAmount.toString(),

@@ -95,7 +95,7 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
    *
    * Usage:
    *   surfpool start --rpc-url https://api.mainnet-beta.solana.com
-   *   NETWORK=mainnet-fork tsx scripts/deploy-all.ts
+   *   npm run deploy:mainnet-fork
    */
   'mainnet-fork': {
     name: 'mainnet-fork',

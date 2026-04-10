@@ -42,8 +42,8 @@ export const BASE_CHAIN_ID = 845; // Mapped from real EIP-155 ID 8453
 export const ETHEREUM_CHAIN_ID = 1;
 
 // Local testing chain IDs (Hardhat defaults)
-// Hardhat uses 31337, but that exceeds u16 max so we use a smaller internal ID
-export const HARDHAT_CHAIN_ID = 313; // Protocol-internal ID for Hardhat localhost (31337)
+// Hardhat uses 31337 which fits in u16 (max 65535)
+export const HARDHAT_CHAIN_ID = 31337; // Hardhat localhost actual chain ID
 
 // Supported destination chains (EVM chain IDs)
 // Production chains

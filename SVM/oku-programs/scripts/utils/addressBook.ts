@@ -13,7 +13,7 @@ export interface DeploymentAddresses {
   tokens: {
     usdc?: string;
     okusd?: string;
-    wokusd?: string;
+    usdOku?: string;
   };
   programs: {
     litePsm?: string;

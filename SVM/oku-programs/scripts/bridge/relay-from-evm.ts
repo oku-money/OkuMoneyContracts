@@ -71,11 +71,13 @@ async function main() {
   await logSurfpoolStatus(provider.connection);
 
   // Load addresses
-  // For devnet-fork, load from devnet deployment file
-  const effectiveNetwork = network === 'devnet-fork' ? 'devnet' : network;
-  const addresses = loadDeployment(effectiveNetwork as any);
+  // For devnet-fork, try devnet-fork deployment first, then fall back to devnet
+  let addresses = loadDeployment(network as any);
+  if (!addresses && network === 'devnet-fork') {
+    addresses = loadDeployment('devnet' as any);
+  }
   if (!addresses) {
-    throw new Error(`No addresses found for network: ${effectiveNetwork}`);
+    throw new Error(`No addresses found for network: ${network}`);
   }
 
   // Load program
@@ -225,8 +227,10 @@ async function main() {
   );
 
   // Ed25519 instruction
+  // Note: secretKey in @solana/web3.js is 64 bytes (private + public key concatenated)
+  // createInstructionWithPrivateKey expects the full 64-byte secretKey
   const ed25519Ix = Ed25519Program.createInstructionWithPrivateKey({
-    privateKey: walletKeypair.secretKey.slice(0, 32),
+    privateKey: walletKeypair.secretKey,
     message: messageBuffer,
   });
 

@@ -158,28 +158,41 @@ pub struct BridgeConfig {
     /// PDA bump seed
     pub bump: u8,
 
-    // ===== Bridge-Specific Authorities (11 roles, separate from PSM) =====
+    // ===== Bridge-Specific Authorities (12 roles, separate from PSM) =====
     /// Bridge admin - manages bridge roles (meta-role)
+    /// EVM: DEFAULT_ADMIN_ROLE
     pub bridge_admin: Pubkey,
     /// Bridge pauser - emergency pause
+    /// EVM: BRIDGE_PAUSER
     pub bridge_pauser: Pubkey,
     /// Bridge unpauser - unpause
+    /// EVM: BRIDGE_UNPAUSER
     pub bridge_unpauser: Pubkey,
     /// Orchestrator signer - Ed25519 public key for signature verification
     pub orchestrator_signer: Pubkey,
     /// Fee recipient - receives bridge fees
     pub fee_recipient: Pubkey,
     /// Chain manager - add/remove supported chains
+    /// EVM: BRIDGE_CHAIN_MANAGER
     pub chain_manager: Pubkey,
     /// Fee manager - update fee configuration and fee recipient
+    /// EVM: BRIDGE_FEE_MANAGER
     pub fee_manager: Pubkey,
     /// Nonce admin - emergency nonce management
+    /// EVM: BRIDGE_NONCE_ADMIN
     pub nonce_admin: Pubkey,
-    /// Refund admin - process refunds for failed requests (Cold Multisig)
-    pub refund_admin: Pubkey,
+    /// Refund initiator - initiate refunds (step 1 of two-step refund)
+    /// EVM: BRIDGE_REFUND_INITIATOR
+    pub refund_initiator: Pubkey,
+    /// Refund confirmer - confirm refunds (step 2 of two-step refund)
+    /// Must be different key than refund_initiator to prevent single-key double-mint
+    /// EVM: BRIDGE_REFUND_CONFIRMER
+    pub refund_confirmer: Pubkey,
     /// Signer manager - update orchestrator signer (Cold Multisig)
+    /// EVM: BRIDGE_SIGNER_MANAGER
     pub signer_manager: Pubkey,
     /// Limits manager - update bridge limits and deadline (Cold Multisig)
+    /// EVM: BRIDGE_LIMITS_MANAGER
     pub limits_manager: Pubkey,
 
     // ===== Configuration =====
@@ -210,9 +223,9 @@ impl BridgeConfig {
     pub const SEED: &'static [u8] = b"bridge_config";
 
     /// Space needed for BridgeConfig account
-    /// 8 (discriminator) + 1 (bump) + 32*11 (authority pubkeys incl refund_admin, signer_manager, limits_manager) + 2 (fee_bps) + 8*2 (min/max amounts) + 1 (is_paused) + 8 (bridge_deadline_secs) + 2 (source_chain_id) + 2*32 (chain array) + 1 (chain count)
-    /// = 8 + 1 + 352 + 2 + 16 + 1 + 8 + 2 + 64 + 1 = 455 bytes
-    pub const LEN: usize = 8 + 1 + 32 * 11 + 2 + 8 * 2 + 1 + 8 + 2 + 2 * 32 + 1;
+    /// 8 (discriminator) + 1 (bump) + 32*12 (authority pubkeys) + 2 (fee_bps) + 8*2 (min/max amounts) + 1 (is_paused) + 8 (bridge_deadline_secs) + 2 (source_chain_id) + 2*32 (chain array) + 1 (chain count)
+    /// = 8 + 1 + 384 + 2 + 16 + 1 + 8 + 2 + 64 + 1 = 487 bytes
+    pub const LEN: usize = 8 + 1 + 32 * 12 + 2 + 8 * 2 + 1 + 8 + 2 + 2 * 32 + 1;
 
     /// Check if a chain is supported
     pub fn is_chain_supported(&self, chain_id: u16) -> bool {
@@ -319,6 +332,39 @@ impl RefundedRequest {
     /// Space needed for RefundedRequest account
     /// 8 (discriminator) + 1 (bump) + 32 (request_id) + 8 (timestamp) + 32 (recipient) + 8 (amount) = 89 bytes
     pub const LEN: usize = 8 + 1 + 32 + 8 + 32 + 8;
+}
+
+/// Pending refund PDA (two-step refund pattern)
+/// Seeds: ["pending_refund", request_id]
+///
+/// This implements the EVM OkuBridge two-step refund pattern:
+/// 1. RefundInitiator calls initiate_refund() to create this PDA
+/// 2. RefundConfirmer (different key) calls confirm_refund() to complete
+/// 3. Either party can call cancel_refund() to abort
+///
+/// This prevents a single compromised key from completing refunds unilaterally.
+#[account]
+pub struct PendingRefund {
+    /// PDA bump seed
+    pub bump: u8,
+    /// Request ID (keccak256 hash of original request data)
+    pub request_id: [u8; 32],
+    /// Original sender who will receive the refund
+    pub recipient: Pubkey,
+    /// Amount to be refunded
+    pub amount: u64,
+    /// Timestamp when refund was initiated
+    pub initiated_at: i64,
+    /// Who initiated the refund (for audit trail)
+    pub initiator: Pubkey,
+}
+
+impl PendingRefund {
+    pub const SEED: &'static [u8] = b"pending_refund";
+
+    /// Space needed for PendingRefund account
+    /// 8 (discriminator) + 1 (bump) + 32 (request_id) + 32 (recipient) + 8 (amount) + 8 (timestamp) + 32 (initiator) = 121 bytes
+    pub const LEN: usize = 8 + 1 + 32 + 32 + 8 + 8 + 32;
 }
 
 /// Bridge request message format (80 bytes)

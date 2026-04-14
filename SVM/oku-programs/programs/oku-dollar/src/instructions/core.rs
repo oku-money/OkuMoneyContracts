@@ -4,8 +4,8 @@ use crate::contexts::{
 use crate::errors::OkuDollarError;
 use crate::events::*;
 use crate::helpers::{
-    is_sufficiently_collateralized, oku_money_to_shares, shares_to_oku_money, MINIMUM_LIQUIDITY,
-    PRECISION,
+    calculate_collateral_ratio, is_sufficiently_collateralized, oku_money_to_shares,
+    oku_money_to_usd, shares_to_oku_money, MINIMUM_LIQUIDITY, PRECISION,
 };
 use crate::state::OkuDollarConfig;
 use anchor_lang::prelude::*;
@@ -175,12 +175,17 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
             MINIMUM_LIQUIDITY,
         )?;
 
+        // Calculate dollar value
+        let dollar_value = oku_money_to_usd(oku_m_amount, oku_m_price)?;
+
         emit!(WrapEvent {
             user: ctx.accounts.user.key(),
+            receiver: ctx.accounts.user.key(),
             oku_m_amount,
             shares_minted: user_shares,
             usd_multiplier,
             oku_m_price,
+            dollar_value,
         });
 
         return Ok(user_shares);
@@ -203,12 +208,17 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
             shares,
         )?;
 
+        // Calculate dollar value
+        let dollar_value = oku_money_to_usd(oku_m_amount, oku_m_price)?;
+
         emit!(WrapEvent {
             user: ctx.accounts.user.key(),
+            receiver: ctx.accounts.user.key(),
             oku_m_amount,
             shares_minted: shares,
             usd_multiplier,
             oku_m_price,
+            dollar_value,
         });
 
         return Ok(shares);
@@ -287,12 +297,17 @@ pub fn unwrap(ctx: Context<Unwrap>, shares: u64) -> Result<()> {
         decimals,
     )?;
 
+    // Calculate dollar value
+    let dollar_value = oku_money_to_usd(oku_m_out, oku_m_price)?;
+
     emit!(UnwrapEvent {
         user: ctx.accounts.user.key(),
+        receiver: ctx.accounts.user.key(),
         shares_burned: shares,
         oku_m_amount: oku_m_out,
         usd_multiplier,
         oku_m_price,
+        dollar_value,
     });
 
     Ok(())
@@ -346,6 +361,7 @@ pub fn update_usd_multiplier(
     emit!(UsdMultiplierUpdatedEvent {
         old_multiplier,
         new_multiplier: new_usd_multiplier,
+        total_supply,
         timestamp: config.usd_last_update_time,
     });
 
@@ -375,9 +391,28 @@ pub fn deposit_reserves(ctx: Context<DepositReserves>, amount: u64) -> Result<()
         decimals,
     )?;
 
+    // Calculate dollar value and collateralization ratio after deposit
+    let oku_m_price = ctx.accounts.psm_config.oku_m_price;
+    let dollar_value = oku_money_to_usd(amount, oku_m_price)?;
+
+    // Reload reserve vault balance after transfer
+    ctx.accounts.reserve_vault.reload()?;
+    let new_reserve_balance = ctx.accounts.reserve_vault.amount;
+    let total_supply = ctx.accounts.usd_oku_mint.supply;
+    let usd_multiplier = ctx.accounts.config.usd_multiplier;
+
+    let collateralization_ratio = calculate_collateral_ratio(
+        new_reserve_balance,
+        total_supply,
+        usd_multiplier,
+        oku_m_price,
+    )?;
+
     emit!(ReservesDepositedEvent {
         reserve_manager: ctx.accounts.reserve_manager.key(),
         amount,
+        dollar_value,
+        collateralization_ratio,
     });
 
     Ok(())
@@ -438,9 +473,22 @@ pub fn withdraw_reserves(ctx: Context<WithdrawReserves>, amount: u64) -> Result<
         decimals,
     )?;
 
+    // Calculate dollar value
+    let dollar_value = oku_money_to_usd(amount, oku_m_price)?;
+
+    // Calculate collateralization ratio after withdrawal
+    let collateralization_ratio = calculate_collateral_ratio(
+        new_reserve_balance,
+        total_supply,
+        usd_multiplier,
+        oku_m_price,
+    )?;
+
     emit!(ReservesWithdrawnEvent {
         reserve_manager: ctx.accounts.reserve_manager.key(),
         amount,
+        dollar_value,
+        collateralization_ratio,
     });
 
     Ok(())

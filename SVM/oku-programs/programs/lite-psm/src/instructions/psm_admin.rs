@@ -37,10 +37,12 @@ pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
 /// Update max supply (cap_manager only)
 pub fn set_max_supply(ctx: Context<CapManager>, new_max_supply: u64) -> Result<()> {
     let config = &mut ctx.accounts.config;
+    let old_max_supply = config.max_supply;
     config.max_supply = new_max_supply;
 
     emit!(MaxSupplyUpdatedEvent {
         role_admin: ctx.accounts.cap_manager.key(),
+        old_max_supply,
         new_max_supply,
     });
 
@@ -50,10 +52,12 @@ pub fn set_max_supply(ctx: Context<CapManager>, new_max_supply: u64) -> Result<(
 /// Reset minter allowance (allowance_manager only)
 pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()> {
     let config = &mut ctx.accounts.config;
+    let old_allowance = config.minter_allowance;
     config.minter_allowance = amount;
 
     emit!(MinterAllowanceUpdatedEvent {
         role_admin: ctx.accounts.allowance_manager.key(),
+        old_allowance,
         new_allowance: amount,
     });
 

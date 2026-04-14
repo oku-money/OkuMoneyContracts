@@ -121,6 +121,7 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
         usdc_amount,
         oku_m_amount,
         dollar_value,
+        oku_m_price,
     });
 
     Ok(())
@@ -196,6 +197,7 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
             oku_m_amount,
             usdc_amount,
             dollar_value: usdc_amount, // USDC is dollar-denominated
+            oku_m_price,
         });
     } else {
         // Queue redemption path:
@@ -238,10 +240,19 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
             .checked_add(oku_m_amount)
             .ok_or(OkuError::Overflow)?;
 
+        // Calculate dollar value at time of queueing
+        let dollar_value = (oku_m_amount as u128)
+            .checked_mul(oku_m_price as u128)
+            .ok_or(OkuError::Overflow)?
+            .checked_div(PRECISION as u128)
+            .ok_or(OkuError::Overflow)? as u64;
+
         emit!(RedemptionQueuedEvent {
             user: ctx.accounts.user.key(),
             oku_m_amount,
+            dollar_value,
             queue_position: position,
+            queue_length: queue.pending_count(),
         });
     }
 
@@ -321,6 +332,7 @@ pub fn process_queue<'info>(
 
         let user = entry.user;
         let oku_m_amount = entry.oku_m_amount;
+        let entry_timestamp = entry.timestamp;
 
         // Drop the borrow before CPI
         drop(account_data);
@@ -367,7 +379,24 @@ pub fn process_queue<'info>(
             .checked_sub(oku_m_amount)
             .ok_or(OkuError::Overflow)?;
 
-        emit!(RedemptionProcessedEvent { user, usdc_amount });
+        // Calculate dollar value at time of processing
+        let dollar_value = (oku_m_amount as u128)
+            .checked_mul(oku_m_price as u128)
+            .ok_or(OkuError::Overflow)?
+            .checked_div(PRECISION as u128)
+            .ok_or(OkuError::Overflow)? as u64;
+
+        // Calculate wait time
+        let clock = Clock::get()?;
+        let wait_time = clock.unix_timestamp.saturating_sub(entry_timestamp);
+
+        emit!(RedemptionProcessedEvent {
+            user,
+            oku_m_amount,
+            dollar_value,
+            usdc_amount,
+            wait_time,
+        });
     }
 
     Ok(())
@@ -389,9 +418,14 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
         amount,
     )?;
 
+    // Reload vault balance after transfer
+    ctx.accounts.vault_usdc.reload()?;
+    let new_buffer_balance = ctx.accounts.vault_usdc.amount;
+
     emit!(BufferDepositEvent {
         orchestrator: ctx.accounts.buffer_depositor.key(),
         amount,
+        new_buffer_balance,
     });
 
     Ok(())
@@ -443,9 +477,14 @@ pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> 
         amount,
     )?;
 
+    // Reload vault balance after transfer
+    ctx.accounts.vault_usdc.reload()?;
+    let new_buffer_balance = ctx.accounts.vault_usdc.amount;
+
     emit!(BufferWithdrawEvent {
         role_admin: ctx.accounts.buffer_withdrawer.key(),
         amount,
+        new_buffer_balance,
     });
 
     Ok(())
@@ -522,11 +561,20 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u32) -> R
         }
     }
 
+    // Calculate dollar value at time of rescue
+    let oku_m_price = ctx.accounts.config.oku_m_price;
+    let dollar_value = (oku_m_amount as u128)
+        .checked_mul(oku_m_price as u128)
+        .ok_or(OkuError::Overflow)?
+        .checked_div(PRECISION as u128)
+        .ok_or(OkuError::Overflow)? as u64;
+
     emit!(RedemptionRescuedEvent {
         queue_index,
         original_user,
         recipient: ctx.accounts.recipient_oku_money_ata.owner,
         oku_m_amount,
+        dollar_value,
     });
 
     Ok(())

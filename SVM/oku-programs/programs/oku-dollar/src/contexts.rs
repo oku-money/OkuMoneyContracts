@@ -272,6 +272,13 @@ pub struct DepositReserves<'info> {
     )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
+    /// usdOku mint (for reading total supply for collateralization calculation)
+    #[account(
+        address = config.usd_oku_mint,
+        mint::token_program = token_2022_program
+    )]
+    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
     /// Reserve manager's OkuMoney source account
     #[account(
         mut,
@@ -287,6 +294,12 @@ pub struct DepositReserves<'info> {
         address = config.reserve_vault
     )]
     pub reserve_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    /// PSM config account (for reading oku_m_price)
+    #[account(
+        address = config.psm_config
+    )]
+    pub psm_config: Box<Account<'info, PsmConfig>>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }

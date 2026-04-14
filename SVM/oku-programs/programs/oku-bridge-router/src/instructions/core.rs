@@ -25,6 +25,8 @@ pub fn initialize(ctx: Context<Initialize>, pauser: Pubkey, unpauser: Pubkey) ->
 
     emit!(InitializeEvent {
         role_admin: config.role_admin,
+        oku_money_mint: config.oku_money_mint,
+        usd_oku_mint: config.usd_oku_mint,
     });
 
     Ok(())

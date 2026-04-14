@@ -1,60 +1,102 @@
+//! # OkuBridgeRouter Events
+//!
+//! Event definitions for the OkuBridgeRouter program.
+//! Aligned with EVM contract events from `OkuBridgeRouter.sol`.
+//!
+//! ## Note on Event Design
+//!
+//! The router is a convenience wrapper that composes multiple CPIs.
+//! For authoritative event data (dollar_value, nonce, fee_amount), check
+//! the underlying PSM and Vault events:
+//! - `lite_psm::BridgeBurnEvent` - Contains nonce, fee_amount, dollar_value
+//! - `oku_dollar::WrapEvent` / `UnwrapEvent` - Contains dollar_value
+//! - `lite_psm::MintEvent` / `RedeemEvent` - Contains dollar_value
+//!
+//! The router emits its own events for convenience but they are supplementary.
+
 use crate::roles::RouterAuthorityRole;
 use anchor_lang::prelude::*;
 
+/// Emitted when router is initialized.
 #[event]
 pub struct InitializeEvent {
     pub role_admin: Pubkey,
+    pub oku_money_mint: Pubkey,
+    pub usd_oku_mint: Pubkey,
 }
 
+/// Emitted when usdOku is bridged cross-chain (unwrap + burn).
+/// For authoritative bridge data (nonce, fee, dollar_value), check PSM's BridgeBurnEvent.
 #[event]
 pub struct BridgeUsdOkuEvent {
+    /// User who initiated the bridge
     pub user: Pubkey,
+    /// OkuDollar shares unwrapped
     pub usd_oku_shares: u64,
+    /// OkuMoney amount after unwrap (burned for bridge)
     pub oku_money_amount: u64,
+    /// Destination chain ID
     pub destination_chain: u16,
+    /// Recipient on destination chain (EVM address)
     pub recipient: [u8; 20],
 }
 
+/// Emitted when OkuMoney is bridged directly cross-chain.
+/// For authoritative bridge data (nonce, fee, dollar_value), check PSM's BridgeBurnEvent.
 #[event]
 pub struct BridgeOkuMEvent {
+    /// User who initiated the bridge
     pub user: Pubkey,
+    /// OkuMoney amount burned
     pub oku_money_amount: u64,
+    /// Destination chain ID
     pub destination_chain: u16,
+    /// Recipient on destination chain (EVM address)
     pub recipient: [u8; 20],
 }
 
+/// Emitted when usdOku is minted from USDC (PSM mint + vault wrap).
+/// For authoritative mint data (dollar_value), check PSM's MintEvent and Vault's WrapEvent.
 #[event]
 pub struct MintUsdOkuEvent {
+    /// User who minted
     pub user: Pubkey,
+    /// USDC deposited (6 decimals)
     pub usdc_amount: u64,
+    /// Intermediate OkuMoney amount
     pub oku_money_intermediate: u64,
+    /// OkuDollar shares minted
     pub usd_oku_shares: u64,
 }
 
-/// Event emitted when redeeming usdOku via the router
+/// Emitted when usdOku is redeemed for USDC (vault unwrap + PSM redeem).
+///
 /// NOTE: The final USDC amount and queue status are determined by the PSM,
 /// not the router. Check PSM's RedeemEvent or RedemptionQueuedEvent for details.
 #[event]
 pub struct RedeemUsdOkuEvent {
+    /// User who redeemed
     pub user: Pubkey,
+    /// OkuDollar shares burned
     pub usd_oku_shares: u64,
+    /// Intermediate OkuMoney amount
     pub oku_money_intermediate: u64,
-    // NOTE: usdc_amount and queued fields removed because the router cannot
-    // accurately determine these values. The PSM emits its own events with
-    // the correct information (RedeemEvent for instant, RedemptionQueuedEvent for queued).
 }
 
+/// Emitted when router is paused.
 #[event]
 pub struct PauseEvent {
     pub pauser: Pubkey,
     pub paused: bool,
 }
 
+/// Emitted when router is unpaused.
 #[event]
 pub struct UnpauseEvent {
     pub unpauser: Pubkey,
 }
 
+/// Emitted when a router authority role is updated.
 #[event]
 pub struct AuthorityUpdatedEvent {
     pub role: RouterAuthorityRole,

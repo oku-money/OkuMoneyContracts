@@ -1,7 +1,9 @@
-use crate::contexts::{BridgeBurn, BridgeMint, RefundBridgeRequest};
+use crate::contexts::{
+    BridgeBurn, BridgeMint, CancelRefund, ConfirmRefund, InitiateRefund, RefundBridgeRequest,
+};
 use crate::errors::OkuError;
 use crate::events::*;
-use crate::helpers::{check_yield_lock, verify_ed25519_signature};
+use crate::helpers::{check_yield_lock, verify_ed25519_signature, PRECISION};
 use crate::state::{BridgeRequest, PsmConfig};
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
@@ -135,13 +137,22 @@ pub fn bridge_mint(
     processed_request.recipient = ctx.accounts.recipient_oku_money_ata.key();
     processed_request.amount = request.amount;
 
-    // 16. Emit event
+    // 16. Calculate dollar value for event
+    let oku_m_price = ctx.accounts.config.oku_m_price;
+    let dollar_value = (request.amount as u128)
+        .checked_mul(oku_m_price as u128)
+        .ok_or(OkuError::Overflow)?
+        .checked_div(PRECISION as u128)
+        .ok_or(OkuError::Overflow)? as u64;
+
+    // 17. Emit event
     emit!(BridgeMintEvent {
         request_id,
         source_chain_id: request.source_chain_id,
         recipient: ctx.accounts.recipient_oku_money_ata.key(),
         amount: request.amount,
         nonce: request.nonce,
+        dollar_value,
     });
 
     Ok(())
@@ -260,7 +271,15 @@ pub fn bridge_burn(
 
     let request_id = keccak_hash(&message).to_bytes();
 
-    // 9. Emit event with full metadata
+    // 9. Calculate dollar value for event
+    let oku_m_price = ctx.accounts.config.oku_m_price;
+    let dollar_value = (net_amount as u128)
+        .checked_mul(oku_m_price as u128)
+        .ok_or(OkuError::Overflow)?
+        .checked_div(PRECISION as u128)
+        .ok_or(OkuError::Overflow)? as u64;
+
+    // 10. Emit event with full metadata
     emit!(BridgeBurnEvent {
         request_id,
         user: ctx.accounts.user.key(),
@@ -270,6 +289,8 @@ pub fn bridge_burn(
         amount: net_amount,
         nonce,
         deadline,
+        dollar_value,
+        fee_amount,
     });
 
     Ok(())
@@ -379,6 +400,162 @@ pub fn refund_bridge_request(
         request_id,
         recipient: sender_pubkey,
         amount,
+    });
+
+    Ok(())
+}
+
+// ============================================================================
+// Two-Step Refund Instructions (matching EVM OkuBridge)
+// ============================================================================
+
+/// Initiate a refund (step 1 of two-step refund pattern)
+/// Creates a PendingRefund PDA that must be confirmed by a different key
+///
+/// This prevents a single compromised key from completing refunds unilaterally.
+/// Matches EVM OkuBridge.initiateRefund() pattern.
+///
+/// NOTE: Deliberately does NOT check pause state - refunds must work during emergencies.
+/// However, this step doesn't mint tokens, so yield lock is not checked here.
+pub fn initiate_refund(
+    ctx: Context<InitiateRefund>,
+    message_bytes: Vec<u8>,
+    request_id: [u8; 32],
+) -> Result<()> {
+    // 1. Validate message length
+    require!(message_bytes.len() == 80, OkuError::InvalidMessageLength);
+
+    // 2. Verify request_id matches keccak256(message_bytes)
+    let computed_request_id = keccak_hash(&message_bytes).to_bytes();
+    require!(
+        request_id == computed_request_id,
+        OkuError::InvalidRequestId
+    );
+
+    // 3. Parse message bytes for SVM→EVM burn refunds
+    let source_chain_id = u16::from_le_bytes(message_bytes[0..2].try_into().unwrap());
+    let sender_bytes: [u8; 32] = message_bytes[4..36].try_into().unwrap();
+    let amount = u64::from_le_bytes(message_bytes[56..64].try_into().unwrap());
+    let deadline = i64::from_le_bytes(message_bytes[72..80].try_into().unwrap());
+
+    // 4. Validate this chain is the source chain
+    require!(
+        source_chain_id == ctx.accounts.bridge_config.source_chain_id,
+        OkuError::WrongSourceChain
+    );
+
+    // 5. Deadline check: refund only after mint window has closed
+    let clock = Clock::get()?;
+    require!(
+        clock.unix_timestamp > deadline,
+        OkuError::MintWindowStillOpen
+    );
+
+    // 6. Create PendingRefund PDA
+    let pending = &mut ctx.accounts.pending_refund;
+    pending.bump = ctx.bumps.pending_refund;
+    pending.request_id = request_id;
+    pending.recipient = Pubkey::new_from_array(sender_bytes);
+    pending.amount = amount;
+    pending.initiated_at = clock.unix_timestamp;
+    pending.initiator = ctx.accounts.refund_initiator.key();
+
+    emit!(RefundInitiatedEvent {
+        request_id,
+        recipient: pending.recipient,
+        amount,
+        initiator: pending.initiator,
+    });
+
+    Ok(())
+}
+
+/// Confirm a refund (step 2 of two-step refund pattern)
+/// Mints tokens back to the original sender and closes the PendingRefund PDA
+///
+/// Must be called by a different key (refund_confirmer) than the initiator.
+/// This ensures no single compromised key can complete a refund unilaterally.
+///
+/// Matches EVM OkuBridge.confirmRefund() pattern.
+///
+/// NOTE: Deliberately does NOT check pause state - refunds must work during emergencies.
+/// However, yield lock IS checked to prevent sandwich attacks on the mint.
+pub fn confirm_refund(ctx: Context<ConfirmRefund>, request_id: [u8; 32]) -> Result<()> {
+    // 1. Yield lock: block refund mint in same slot as yield distribution
+    check_yield_lock(&ctx.accounts.config)?;
+
+    // 2. Read pending refund data
+    let pending = &ctx.accounts.pending_refund;
+    let recipient = pending.recipient;
+    let amount = pending.amount;
+
+    // 3. Check supply cap and minter allowance
+    let current_supply = ctx.accounts.oku_money_mint.supply;
+    let max_supply = ctx.accounts.config.max_supply;
+    let minter_allowance = ctx.accounts.config.minter_allowance;
+    require!(
+        current_supply
+            .checked_add(amount)
+            .ok_or(OkuError::Overflow)?
+            <= max_supply,
+        OkuError::MaxSupplyExceeded
+    );
+    require!(amount <= minter_allowance, OkuError::AllowanceExceeded);
+
+    // 4. Mint tokens back to sender
+    let config_bump = ctx.accounts.config.bump;
+    let seeds = &[PsmConfig::SEED, &[config_bump]];
+    let signer = &[&seeds[..]];
+
+    token_interface::mint_to(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_2022_program.key(),
+            token_interface::MintTo {
+                mint: ctx.accounts.oku_money_mint.to_account_info(),
+                to: ctx.accounts.sender_oku_money_ata.to_account_info(),
+                authority: ctx.accounts.config.to_account_info(),
+            },
+            signer,
+        ),
+        amount,
+    )?;
+
+    // 5. Decrement minter allowance
+    let config = &mut ctx.accounts.config;
+    config.minter_allowance = minter_allowance
+        .checked_sub(amount)
+        .ok_or(OkuError::Overflow)?;
+
+    // 6. Record refund in RefundedRequest PDA
+    let clock = Clock::get()?;
+    let refunded = &mut ctx.accounts.refunded_request;
+    refunded.bump = ctx.bumps.refunded_request;
+    refunded.request_id = request_id;
+    refunded.refunded_at = clock.unix_timestamp;
+    refunded.recipient = recipient;
+    refunded.amount = amount;
+
+    // 7. PendingRefund is automatically closed via `close = refund_confirmer` constraint
+
+    emit!(RefundConfirmedEvent {
+        request_id,
+        recipient,
+        amount,
+    });
+
+    Ok(())
+}
+
+/// Cancel a pending refund
+/// Can be called by either refund_initiator or refund_confirmer to abort a pending refund
+///
+/// Matches EVM OkuBridge.cancelRefund() pattern.
+pub fn cancel_refund(ctx: Context<CancelRefund>, request_id: [u8; 32]) -> Result<()> {
+    // PendingRefund is automatically closed via `close = canceller` constraint
+
+    emit!(RefundCancelledEvent {
+        request_id,
+        canceller: ctx.accounts.canceller.key(),
     });
 
     Ok(())

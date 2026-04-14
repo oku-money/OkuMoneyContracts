@@ -22,7 +22,10 @@ pub fn initialize_bridge(ctx: Context<InitializeBridge>, source_chain_id: u16) -
     config.chain_manager = ctx.accounts.chain_manager.key();
     config.fee_manager = ctx.accounts.fee_manager.key();
     config.nonce_admin = ctx.accounts.nonce_admin.key();
-    config.refund_admin = ctx.accounts.bridge_admin.key(); // defaults to bridge_admin
+    // Two-step refund: initiator and confirmer must be different keys
+    // Default both to bridge_admin; operator should update before production use
+    config.refund_initiator = ctx.accounts.bridge_admin.key();
+    config.refund_confirmer = ctx.accounts.bridge_admin.key();
     config.signer_manager = ctx.accounts.signer_manager.key();
     config.limits_manager = ctx.accounts.limits_manager.key();
 
@@ -74,9 +77,13 @@ pub fn update_bridge_fee(ctx: Context<BridgeFeeManager>, new_fee_bps: u16) -> Re
     require!(new_fee_bps <= 10000, OkuError::InvalidFeeBps);
 
     let config = &mut ctx.accounts.bridge_config;
+    let old_fee_bps = config.bridge_fee_bps;
     config.bridge_fee_bps = new_fee_bps;
 
-    emit!(BridgeFeeUpdatedEvent { new_fee_bps });
+    emit!(BridgeFeeUpdatedEvent {
+        old_fee_bps,
+        new_fee_bps,
+    });
 
     Ok(())
 }
@@ -91,9 +98,13 @@ pub fn update_fee_recipient(ctx: Context<BridgeFeeManager>, new_recipient: Pubke
     );
 
     let config = &mut ctx.accounts.bridge_config;
+    let old_recipient = config.fee_recipient;
     config.fee_recipient = new_recipient;
 
-    emit!(FeeRecipientUpdatedEvent { new_recipient });
+    emit!(FeeRecipientUpdatedEvent {
+        old_recipient,
+        new_recipient,
+    });
 
     Ok(())
 }
@@ -176,9 +187,11 @@ pub fn update_bridge_deadline(ctx: Context<BridgeLimitsManager>, new_deadline: i
     require!(new_deadline > 0, OkuError::InvalidDeadline);
 
     let config = &mut ctx.accounts.bridge_config;
+    let old_deadline_secs = config.bridge_deadline_secs;
     config.bridge_deadline_secs = new_deadline;
 
     emit!(BridgeDeadlineUpdatedEvent {
+        old_deadline_secs,
         new_deadline_secs: new_deadline,
     });
 
@@ -195,9 +208,13 @@ pub fn update_orchestrator_signer(
     require!(new_signer != Pubkey::default(), OkuError::InvalidRecipient);
 
     let config = &mut ctx.accounts.bridge_config;
+    let old_signer = config.orchestrator_signer;
     config.orchestrator_signer = new_signer;
 
-    emit!(OrchestratorSignerUpdatedEvent { new_signer });
+    emit!(OrchestratorSignerUpdatedEvent {
+        old_signer,
+        new_signer,
+    });
 
     Ok(())
 }
@@ -257,9 +274,14 @@ pub fn set_bridge_authority(
             config.nonce_admin = new_authority;
             old
         }
-        BridgeAuthorityRole::RefundAdmin => {
-            let old = config.refund_admin;
-            config.refund_admin = new_authority;
+        BridgeAuthorityRole::RefundInitiator => {
+            let old = config.refund_initiator;
+            config.refund_initiator = new_authority;
+            old
+        }
+        BridgeAuthorityRole::RefundConfirmer => {
+            let old = config.refund_confirmer;
+            config.refund_confirmer = new_authority;
             old
         }
         BridgeAuthorityRole::SignerManager => {

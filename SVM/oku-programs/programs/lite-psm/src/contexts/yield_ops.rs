@@ -21,6 +21,16 @@ pub struct SetOkuMPrice<'info> {
         bump = config.bump
     )]
     pub config: Account<'info, PsmConfig>,
+
+    /// OkuMoney mint - needed to read total supply for event
+    #[account(
+        address = config.oku_money_mint,
+        mint::token_program = token_2022_program
+    )]
+    pub oku_money_mint: InterfaceAccount<'info, MintInterface>,
+
+    /// Token-2022 program
+    pub token_2022_program: Program<'info, Token2022>,
 }
 
 /// Context for distributing yield across all OkuMoney holders

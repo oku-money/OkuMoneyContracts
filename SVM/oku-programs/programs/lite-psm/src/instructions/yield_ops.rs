@@ -31,9 +31,13 @@ pub fn set_oku_m_price(ctx: Context<SetOkuMPrice>, new_multiplier: u64) -> Resul
 
     emit!(YieldDistributionSlotSet { slot: clock.slot });
 
+    // Get total supply for event
+    let total_supply = ctx.accounts.oku_money_mint.supply;
+
     emit!(OkuMPriceUpdated {
         old_multiplier: current_multiplier,
         new_multiplier,
+        total_supply,
         timestamp: clock.unix_timestamp,
     });
 

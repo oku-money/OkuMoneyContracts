@@ -1,6 +1,9 @@
-/// Precision for multiplier calculations (1e9 = $1.00)
-/// Using 1e9 since OkuMoney has 6 decimals (matching USDC)
-pub const PRECISION: u64 = 1_000_000_000;
+//! Scaled UI Amount helper module
+//!
+//! This module re-exports PRECISION from constants.rs for backwards compatibility.
+
+// Re-export PRECISION from constants for backwards compatibility
+pub use super::constants::PRECISION;
 
 #[cfg(test)]
 mod tests {

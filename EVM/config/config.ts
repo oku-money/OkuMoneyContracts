@@ -113,22 +113,23 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
     // No whales — testnet; MockUSDC is deployed and used instead via address book
   },
 
-  // Localhost (fork) - defaults to Optimism for consistency with tests
+  // Eth Sepolia (testnet)
+  sepolia: {
+    tokens: {
+      usdc: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Circle's official Sepolia USDC
+      weth: "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9", // Sepolia WETH
+    },
+    // No whales — testnet; use MockUSDC for testing
+  },
+
+  // Localhost (fork) - defaults to Sepolia fork
+  // Uses Sepolia addresses since we fork Sepolia by default
   localhost: {
     tokens: {
-      usdc: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", // Optimism USDC
-      weth: "0x4200000000000000000000000000000000000006", // Optimism WETH
-      dai: "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1", // Optimism DAI
+      usdc: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238", // Sepolia USDC (Circle)
+      weth: "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9", // Sepolia WETH
     },
-    whales: {
-      usdc: "0xf89d7b9c864f589bbF53a82105107622B35EaA40", // Optimism whale
-      weth: "0x85149247691df622eaF1a8Bd0CaFd40BC45154a9",
-    },
-    protocols: {
-      uniswapV3Factory: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
-      uniswapV3Router: "0xE592427A0AEce92De3Edee1F18E0157C05861564",
-      aaveV3Pool: "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
-    },
+    // No whales on Sepolia fork — deploy MockUSDC for testing
   },
 };
 
@@ -210,11 +211,18 @@ export const CHAIN_METADATA: Record<string, ChainMetadata> = {
     explorer: "https://sepolia-optimistic.etherscan.io",
   },
 
+  sepolia: {
+    name: "Eth Sepolia",
+    chainId: 11155111,
+    rpcUrl: process.env.SEPOLIA_RPC_URL || "https://rpc.sepolia.org",
+    explorer: "https://sepolia.etherscan.io",
+  },
+
   localhost: {
-    name: "Localhost (Fork)",
-    chainId: 31337,
+    name: "Localhost (Sepolia Fork)",
+    chainId: 11155111, // Matches forked Sepolia chain ID
     rpcUrl: "http://127.0.0.1:8545",
-    explorer: "N/A",
+    explorer: "https://sepolia.etherscan.io", // Use Sepolia explorer for reference
   },
 };
 

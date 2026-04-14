@@ -2,9 +2,26 @@
  * Network-specific configuration
  */
 
+import 'dotenv/config';
 import { PublicKey } from '@solana/web3.js';
 
 export type NetworkName = 'localnet' | 'devnet' | 'devnet-fork' | 'mainnet-beta' | 'mainnet-fork';
+
+// Alchemy API key from .env (for more reliable RPC)
+const ALCHEMY_API_KEY = process.env.API_KEY || '';
+
+/**
+ * Build Alchemy Solana RPC URL
+ */
+function alchemyUrl(network: 'devnet' | 'mainnet'): string {
+  if (!ALCHEMY_API_KEY) {
+    // Fallback to public RPC
+    return network === 'devnet' 
+      ? 'https://api.devnet.solana.com'
+      : 'https://api.mainnet-beta.solana.com';
+  }
+  return `https://solana-${network}.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
+}
 
 export interface NetworkConfig {
   name: NetworkName;
@@ -36,7 +53,7 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
 
   devnet: {
     name: 'devnet',
-    cluster: 'https://api.devnet.solana.com',
+    cluster: alchemyUrl('devnet'), // Use Alchemy if API_KEY is set, else public RPC
     usdc: {
       mint: PublicKey.default, // Created during deployment (mock USDC, deployer as mint authority)
       isNative: true,
@@ -76,7 +93,7 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
 
   'mainnet-beta': {
     name: 'mainnet-beta',
-    cluster: 'https://api.mainnet-beta.solana.com',
+    cluster: alchemyUrl('mainnet'), // Use Alchemy if API_KEY is set, else public RPC
     usdc: {
       // Mainnet USDC from Circle
       mint: new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'),

@@ -1,9 +1,9 @@
 {
   "network": "devnet-fork",
-  "timestamp": "2026-04-10T18:04:51.692Z",
+  "timestamp": "2026-04-14T20:22:55.291Z",
   "tokens": {
-    "usdc": "EmXws3XbCBPkGfQZ8nS7rYNu3tVPMarir2oean2XvtyD",
-    "okusd": "8RB8jGZacyAs8Jq3AKHhLcp3fFwecJog3ahiTTf1JwX1",
+    "usdc": "8kSkRjp98L7RXrraZGo4ymcuz18ExnjvCHN4t3kuDsWY",
+    "okusd": "GHoaS3Es3mUEcuoobCV1VN4rNXL8yqdrEcMpqPKeAFSR",
     "usdOku": "9W8QfD7pPmbU7zdJV6ipTRjDuPAoYUauG9uuskBqTM69"
   },
   "programs": {

@@ -12,10 +12,13 @@ import { getChainMetadata, getTokenAddress } from "../../config/config";
 // ============================================================================
 
 /**
- * Address to impersonate when running on local forks
- * This is the address corresponding to PRIVATE_KEY in .env
+ * Dev wallet address for local fork testing
+ * This wallet is impersonated and funded with ETH when running on forks
  */
-export const FORK_IMPERSONATE_ADDRESS = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
+export const DEV_WALLET_ADDRESS = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
+
+// Re-export for backwards compatibility
+export const FORK_IMPERSONATE_ADDRESS = DEV_WALLET_ADDRESS;
 
 // ============================================================================
 // Cross-Chain Bridge Constants (OkuMoney Protocol-Internal IDs)
@@ -33,11 +36,63 @@ export const SOLANA_DEVNET_CHAIN_ID = 103;
 /**
  * EVM chain IDs follow EIP-155
  */
+export const SEPOLIA_CHAIN_ID = 11155111;
 export const OP_SEPOLIA_CHAIN_ID = 11155420;
 export const OPTIMISM_CHAIN_ID = 10;
 export const ARBITRUM_CHAIN_ID = 42161;
 export const BASE_CHAIN_ID = 8453;
 export const ETHEREUM_CHAIN_ID = 1;
+
+// Default fork chain ID (Eth Sepolia)
+export const DEFAULT_FORK_CHAIN_ID = SEPOLIA_CHAIN_ID;
+
+/**
+ * Bridge Chain ID Mapping (EIP-155 -> Protocol-Internal u16)
+ * 
+ * The SVM bridge uses u16 for chain IDs (max 65535).
+ * Some EVM chain IDs exceed this, so we map them to smaller internal IDs.
+ * Both EVM and SVM sides must agree on these mappings.
+ */
+export const BRIDGE_CHAIN_ID_MAP: Record<number, number> = {
+  // Mainnet chains (fit in u16, no mapping needed)
+  [ETHEREUM_CHAIN_ID]: 1,
+  [OPTIMISM_CHAIN_ID]: 10,
+  [ARBITRUM_CHAIN_ID]: 421, // 42161 -> 421
+  [BASE_CHAIN_ID]: 845, // 8453 -> 845
+  
+  // Testnet chains (need mapping, exceed u16)
+  [SEPOLIA_CHAIN_ID]: 111, // 11155111 -> 111
+  [OP_SEPOLIA_CHAIN_ID]: 420, // 11155420 -> 420
+};
+
+/**
+ * Reverse mapping: Protocol-Internal u16 -> EIP-155 chain ID
+ */
+export const BRIDGE_CHAIN_ID_REVERSE_MAP: Record<number, number> = Object.fromEntries(
+  Object.entries(BRIDGE_CHAIN_ID_MAP).map(([k, v]) => [v, Number(k)])
+);
+
+/**
+ * Get the bridge-internal chain ID for a given EIP-155 chain ID
+ */
+export function getBridgeChainId(evmChainId: number): number {
+  const bridgeId = BRIDGE_CHAIN_ID_MAP[evmChainId];
+  if (bridgeId === undefined) {
+    throw new Error(`No bridge chain ID mapping for EVM chain ID: ${evmChainId}`);
+  }
+  return bridgeId;
+}
+
+/**
+ * Get the EIP-155 chain ID from a bridge-internal chain ID
+ */
+export function getEvmChainIdFromBridge(bridgeChainId: number): number {
+  const evmId = BRIDGE_CHAIN_ID_REVERSE_MAP[bridgeChainId];
+  if (evmId === undefined) {
+    throw new Error(`No EVM chain ID mapping for bridge chain ID: ${bridgeChainId}`);
+  }
+  return evmId;
+}
 
 export interface ChainConfig {
   name: string;
@@ -63,8 +118,17 @@ export function getChainConfig(network: string): ChainConfig {
 }
 
 /**
- * Get network name from environment or default to localhost
+ * Get network name from Hardhat's network.name or environment
+ * Import and use: import { network } from "hardhat"; then pass network.name
+ * Or use NETWORK env var as fallback
  */
 export function getNetworkName(): string {
-  return process.env.NETWORK || "localhost";
+  // Try to get from Hardhat's network object via require
+  // This is a workaround since we can't import "hardhat" in a config file
+  try {
+    const hre = require("hardhat");
+    return hre.network.name;
+  } catch {
+    return process.env.NETWORK || "localhost";
+  }
 }

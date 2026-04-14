@@ -5,11 +5,11 @@
  * Works for both local fork testing (via hardhat network) and live testnet.
  *
  * Usage:
- *   # Local fork (auto-forks OP Sepolia via hardhat.config.ts)
- *   npx hardhat run scripts/deploy/index.ts --network hardhat
+ *   # Local fork (auto-forks Eth Sepolia via hardhat.config.ts)
+ *   npx hardhat run scripts/deploy/index.ts --network localhost
  *
  *   # Live testnet
- *   npx hardhat run scripts/deploy/index.ts --network opSepolia
+ *   npx hardhat run scripts/deploy/index.ts --network sepolia
  *
  * Options (via env vars):
  *   SKIP_MOCK_USDC=true   - Skip MockUSDC deployment (use existing USDC)
@@ -17,12 +17,20 @@
  *   VERIFY=true           - Verify contracts on Etherscan after deployment
  */
 
-import { ethers, network, upgrades } from "hardhat";
+import { ethers, network, upgrades, run } from "hardhat";
 import { Contract, Signer } from "ethers";
 import { saveAddress, loadAddressBook, saveAddressBook } from "../utils/addressBook";
 import { getNetworkName, getChainConfig, SOLANA_DEVNET_CHAIN_ID } from "../config/chains";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
+
+// Networks that support Etherscan verification
+const VERIFIABLE_NETWORKS = ["sepolia", "opSepolia", "mainnet", "optimism", "arbitrum", "base"];
+
+// Check if current network is a live network (not local fork)
+function isLiveNetwork(networkName: string): boolean {
+  return !["localhost", "hardhat"].includes(networkName);
+}
 
 // Dev wallet address for impersonation on local fork
 const DEV_WALLET = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
@@ -87,6 +95,89 @@ async function deployTransparentProxy(
   const address = await proxy.getAddress();
   saveAddress(networkName, contractName, address);
   return proxy;
+}
+
+// ============================================================================
+// Etherscan Verification
+// ============================================================================
+
+async function verifyContract(address: string, constructorArgs: any[] = []): Promise<boolean> {
+  try {
+    await run("verify:verify", {
+      address,
+      constructorArguments: constructorArgs,
+    });
+    logger.success(`    Verified: ${address}`);
+    return true;
+  } catch (error: any) {
+    if (error.message.includes("Already Verified") || error.message.includes("already verified")) {
+      logger.info(`    Already verified: ${address}`);
+      return true;
+    }
+    logger.warning(`    Verification failed: ${error.message}`);
+    return false;
+  }
+}
+
+async function verifyProxy(proxyAddress: string, contractName: string): Promise<void> {
+  try {
+    // Get implementation address
+    const implAddress = await upgrades.erc1967.getImplementationAddress(proxyAddress);
+    logger.info(`    Implementation: ${implAddress}`);
+    
+    // Verify implementation contract
+    await verifyContract(implAddress);
+    
+    // Also try to verify the proxy itself (links proxy to implementation on Etherscan)
+    // This uses hardhat-upgrades' built-in proxy verification
+    try {
+      await run("verify:verify", {
+        address: proxyAddress,
+      });
+    } catch (proxyError: any) {
+      // Proxy verification often fails with "already verified" which is fine
+      if (!proxyError.message.includes("Already Verified") && !proxyError.message.includes("already verified")) {
+        logger.info(`    Proxy verification note: ${proxyError.message}`);
+      }
+    }
+  } catch (error: any) {
+    logger.warning(`    Could not verify ${contractName}: ${error.message}`);
+  }
+}
+
+async function verifyAllContracts(networkName: string): Promise<void> {
+  if (!VERIFIABLE_NETWORKS.includes(networkName)) {
+    logger.info("Skipping verification (not a verifiable network)");
+    return;
+  }
+
+  if (!process.env.ETHERSCAN_API_KEY) {
+    logger.warning("Skipping verification (ETHERSCAN_API_KEY not set)");
+    return;
+  }
+
+  logger.step(8, "Verifying Contracts on Etherscan");
+  logger.info("  Waiting 30s for Etherscan to index contracts...");
+  await new Promise(resolve => setTimeout(resolve, 30000));
+
+  const addresses = loadAddressBook()[networkName] || {};
+  
+  // Proxy contracts need special handling
+  const proxyContracts = ["OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM", "OkuBridge", "OkuBridgeRouter"];
+  
+  for (const contractName of Object.keys(addresses)) {
+    const address = addresses[contractName];
+    logger.info(`  Verifying ${contractName} at ${address}...`);
+
+    if (proxyContracts.includes(contractName)) {
+      await verifyProxy(address, contractName);
+    } else {
+      // Non-proxy contracts (like MockUSDC)
+      await verifyContract(address);
+    }
+  }
+
+  logger.success("Verification complete");
 }
 
 // ============================================================================
@@ -350,7 +441,7 @@ async function main() {
   
   if (isLocalNetwork) {
     // Impersonate dev wallet for local fork testing
-    // The wallet will have whatever balance it has on the forked network (OP Sepolia)
+    // Uses actual on-chain balance from forked network (no artificial funding)
     logger.info(`Impersonating dev wallet: ${DEV_WALLET}`);
     await network.provider.request({
       method: "hardhat_impersonateAccount",
@@ -381,11 +472,16 @@ async function main() {
     logger.success("Fork reset complete");
   }
 
-  // Clear existing addresses for this network (fresh deployment)
-  const book = loadAddressBook();
-  book[networkName] = {};
-  saveAddressBook(book);
-  logger.info("Cleared existing address book entries");
+  // Clear existing addresses for local networks only
+  // Live network deployments are preserved for reference
+  if (!isLiveNetwork(networkName)) {
+    const book = loadAddressBook();
+    book[networkName] = {};
+    saveAddressBook(book);
+    logger.info("Cleared existing address book entries (local network)");
+  } else {
+    logger.info("Live network: addresses will be appended to address book");
+  }
 
   console.log(); // spacing
 
@@ -437,7 +533,7 @@ async function main() {
   // Step 6: Configure bridge
   await configureBridge(okuBridge, config);
 
-  // Step 7: Verify deployment
+  // Step 7: Verify deployment state
   await verifyDeployment(
     networkName,
     okuMoney,
@@ -446,6 +542,11 @@ async function main() {
     okuBridge,
     bridgeRouter
   );
+
+  // Step 8: Etherscan verification (live networks only)
+  if (isLiveNetwork(networkName)) {
+    await verifyAllContracts(networkName);
+  }
 
   // Summary
   logger.header("Deployment Complete");

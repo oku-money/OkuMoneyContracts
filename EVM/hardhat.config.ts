@@ -36,8 +36,12 @@ function alchemyUrl(network: string): string {
   return `https://${network}.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
 }
 
-// Impersonation address for local fork testing
-const FORK_IMPERSONATE_ADDRESS = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
+// Dev wallet address for local fork testing (impersonated with funded ETH)
+const DEV_WALLET_ADDRESS = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
+
+// Default fork configuration - Eth Sepolia
+const DEFAULT_FORK_URL = alchemyUrl("eth-sepolia");
+const DEFAULT_FORK_CHAIN_ID = 11155111; // Eth Sepolia
 
 const config: HardhatUserConfig = {
   solidity: {
@@ -62,19 +66,18 @@ const config: HardhatUserConfig = {
 
   networks: {
     hardhat: {
-      // Use 420 (protocol-internal OP Sepolia ID) for SVM bridge compatibility
-      // This allows SVM bridge_burn with destChainId=420 to be relayed to this fork
-      chainId: process.env.HARDHAT_CHAIN_ID ? parseInt(process.env.HARDHAT_CHAIN_ID) : 31337,
-      // Fork OP Sepolia for testnet simulation, or Optimism for mainnet simulation
+      // Fork Eth Sepolia by default for local testing
+      // Override with FORK_URL env var if needed
+      chainId: process.env.HARDHAT_CHAIN_ID ? parseInt(process.env.HARDHAT_CHAIN_ID) : DEFAULT_FORK_CHAIN_ID,
       forking: {
-        url: process.env.FORK_URL || alchemyUrl("opt-sepolia"),
+        url: process.env.FORK_URL || DEFAULT_FORK_URL,
         blockNumber: process.env.FORK_BLOCK_NUMBER ? parseInt(process.env.FORK_BLOCK_NUMBER) : undefined,
         enabled: true,
       },
       allowUnlimitedContractSize: false,
       gas: "auto",
       gasPrice: "auto",
-      // Impersonate your wallet for local testing
+      // Fund the dev wallet with ETH for testing
       accounts: {
         mnemonic: "test test test test test test test test test test test junk",
         count: 20,
@@ -82,21 +85,17 @@ const config: HardhatUserConfig = {
       },
     },
 
+    // localhost connects to running `npx hardhat node` (which forks Sepolia)
+    // Chain ID matches the fork source (Sepolia = 11155111)
     localhost: {
       url: "http://127.0.0.1:8545",
-      chainId: 31337,
-    },
-
-    // Local testing with protocol-internal chain ID (for SVM bridge compatibility)
-    // Use this when testing SVM <-> EVM bridge flow locally
-    "localhost-420": {
-      url: "http://127.0.0.1:8545",
-      chainId: 420, // Protocol-internal ID for OP Sepolia (fits in u16)
+      chainId: DEFAULT_FORK_CHAIN_ID,
     },
 
     // Testnets
     sepolia: {
-      url: process.env.SEPOLIA_RPC_URL || alchemyUrl("eth-sepolia"),
+      // Prefer Alchemy if API key is set (more reliable than public RPC)
+      url: ALCHEMY_API_KEY ? alchemyUrl("eth-sepolia") : (process.env.SEPOLIA_RPC_URL || "https://rpc.sepolia.org"),
       chainId: 11155111,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -202,16 +201,10 @@ const config: HardhatUserConfig = {
     coinmarketcap: process.env.COINMARKETCAP_API_KEY || undefined,
   },
 
-  // Etherscan verification
+  // Etherscan verification (V2 API - single key for all Etherscan networks)
+  // For non-Etherscan explorers (Arbiscan, Basescan, etc.), use customChains
   etherscan: {
-    apiKey: {
-      mainnet: process.env.ETHERSCAN_API_KEY || "",
-      sepolia: process.env.ETHERSCAN_API_KEY || "",
-      arbitrumOne: process.env.ARBISCAN_API_KEY || "",
-      base: process.env.BASESCAN_API_KEY || "",
-      optimisticEthereum: process.env.OPTIMISTIC_ETHERSCAN_API_KEY || "",
-      optimismSepolia: process.env.OPTIMISTIC_ETHERSCAN_API_KEY || "",
-    },
+    apiKey: process.env.ETHERSCAN_API_KEY || "",
   },
 
   // Mocha test configuration
@@ -220,7 +213,7 @@ const config: HardhatUserConfig = {
   },
 };
 
-// Export impersonation address for scripts to use
-export { FORK_IMPERSONATE_ADDRESS };
+// Export dev wallet address for scripts to use
+export { DEV_WALLET_ADDRESS, DEFAULT_FORK_CHAIN_ID };
 
 export default config;

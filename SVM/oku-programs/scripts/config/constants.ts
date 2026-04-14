@@ -35,15 +35,16 @@ export const SOLANA_CHAIN_ID = SOLANA_DEVNET_CHAIN_ID;
  * The Solana program uses u16 for chain IDs, so we map EVM chains to smaller IDs.
  * These are internal bridge identifiers, NOT the actual EVM chain IDs.
  */
+export const SEPOLIA_CHAIN_ID = 111; // Mapped from real EIP-155 ID 11155111 (too large for u16)
 export const OP_SEPOLIA_CHAIN_ID = 420; // Mapped from real EIP-155 ID 11155420
 export const OPTIMISM_CHAIN_ID = 10;
 export const ARBITRUM_CHAIN_ID = 421; // Mapped from real EIP-155 ID 42161
 export const BASE_CHAIN_ID = 845; // Mapped from real EIP-155 ID 8453
 export const ETHEREUM_CHAIN_ID = 1;
 
-// Local testing chain IDs (Hardhat defaults)
-// Hardhat uses 31337 which fits in u16 (max 65535)
-export const HARDHAT_CHAIN_ID = 31337; // Hardhat localhost actual chain ID
+// Local testing: Hardhat fork of Sepolia
+// We use 111 (SEPOLIA_CHAIN_ID) since that's the network we're forking
+export const HARDHAT_CHAIN_ID = SEPOLIA_CHAIN_ID;
 
 // Supported destination chains (EVM chain IDs)
 // Production chains
@@ -56,6 +57,7 @@ export const SUPPORTED_CHAINS_MAINNET = [
 
 // Testnet chains (for devnet deployment)
 export const SUPPORTED_CHAINS_TESTNET = [
+  SEPOLIA_CHAIN_ID, // Eth Sepolia (default for local fork testing)
   OP_SEPOLIA_CHAIN_ID, // OP Sepolia
 ];
 

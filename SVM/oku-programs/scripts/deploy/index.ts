@@ -28,9 +28,12 @@ import {
   getAssociatedTokenAddressSync,
 } from '@solana/spl-token';
 
-import { detectNetwork, createProvider, getNetworkConfig, isForkNetwork } from '../utils/network';
+import { detectNetwork, createProvider, getNetworkConfig, isForkNetwork, getParentNetwork } from '../utils/network';
 import { logger } from '../utils/logger';
-import { clearDeployment, saveDeployment, DeploymentAddresses } from '../utils/addressBook';
+import { clearDeployment, saveDeployment, hasDeployment, DeploymentAddresses } from '../utils/addressBook';
+import { LAMPORTS_PER_SOL, Connection } from '@solana/web3.js';
+import * as readline from 'readline';
+import { NETWORK_CONFIGS } from '../config/networks';
 import { loadAuthorities } from '../config/authorities';
 import { createSPLTokenMint, createToken2022Mint } from '../utils/tokenHelpers';
 import {
@@ -100,6 +103,44 @@ function getProgramIdFromKeypair(keypairPath: string): PublicKey {
 
 function loadIdlWithAddress(idl: any, programId: PublicKey): any {
   return { ...idl, address: programId.toBase58() };
+}
+
+/**
+ * Format SOL balance for display
+ */
+function formatSol(lamports: number): string {
+  return (lamports / LAMPORTS_PER_SOL).toFixed(6);
+}
+
+/**
+ * Check if this is a live network (not a fork or localnet)
+ */
+function isLiveNetwork(network: string): boolean {
+  return network === 'devnet' || network === 'mainnet-beta';
+}
+
+/**
+ * Prompt user for confirmation before overwriting live deployment
+ */
+async function confirmLiveDeployment(network: string): Promise<boolean> {
+  // Check if --yes flag was passed to skip confirmation
+  if (process.argv.includes('--yes') || process.argv.includes('-y')) {
+    return true;
+  }
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    logger.warning(`\nExisting deployment found for ${network}.`);
+    logger.warning('This will OVERWRITE the existing deployment addresses.');
+    rl.question('\nProceed with deployment? (y/N): ', (answer) => {
+      rl.close();
+      resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes');
+    });
+  });
 }
 
 // ============================================================================
@@ -563,18 +604,45 @@ async function main() {
   logger.info(`Mode: ${isFork ? 'Fork (fresh deploy)' : 'Live'}`);
   logger.log('');
 
-  // For fork networks, always clear previous deployment
-  if (isFork) {
-    logger.info('Clearing previous deployment...');
-    clearDeployment(network);
-  }
-
-  // Create provider
+  // Create provider first to get wallet info
   const provider = createProvider(network);
   const authorities = loadAuthorities(network, provider.wallet.publicKey);
 
-  logger.info(`Deployer: ${provider.wallet.publicKey.toBase58()}`);
+  // Display deployer info and balance
+  const deployerPubkey = provider.wallet.publicKey;
+  const balance = await provider.connection.getBalance(deployerPubkey);
+  logger.info(`Deployer: ${deployerPubkey.toBase58()}`);
+  logger.info(`Balance: ${formatSol(balance)} SOL`);
+  
+  // For fork networks, also show the real balance on the parent network
+  if (isFork) {
+    const parentNetwork = getParentNetwork(network);
+    const parentConfig = NETWORK_CONFIGS[parentNetwork];
+    const parentConnection = new Connection(parentConfig.cluster, 'confirmed');
+    try {
+      const realBalance = await parentConnection.getBalance(deployerPubkey);
+      logger.info(`Balance on ${parentNetwork}: ${formatSol(realBalance)} SOL (real)`);
+    } catch (e) {
+      logger.warning(`Could not fetch ${parentNetwork} balance`);
+    }
+  }
   logger.log('');
+
+  // For live networks, check for existing deployment and confirm overwrite
+  if (isLiveNetwork(network) && hasDeployment(network)) {
+    const confirmed = await confirmLiveDeployment(network);
+    if (!confirmed) {
+      logger.info('Deployment cancelled.');
+      process.exit(0);
+    }
+    logger.log('');
+  }
+
+  // For fork networks, always clear previous deployment (no confirmation needed)
+  if (isFork) {
+    logger.info('Clearing previous fork deployment...');
+    clearDeployment(network);
+  }
 
   // Step 1: Build programs (keeps fork keypairs in place for deployment)
   const { originalKeypairs } = await buildPrograms(isFork);

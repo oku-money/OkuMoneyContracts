@@ -891,8 +891,10 @@ describe("oku-dollar", () => {
           reserveManager: reserveManager.publicKey,
           config: vaultConfigPda,
           okuMoneyMint: okuMoneyMint,
+          usdOkuMint: usdOkuMint,
           sourceAta: reserveManagerOkuMoneyAta,
           reserveVault: reserveVault,
+          psmConfig: psmConfigPda,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([reserveManager])
@@ -910,8 +912,10 @@ describe("oku-dollar", () => {
             reserveManager: user1.publicKey, // Not authorized
             config: vaultConfigPda,
             okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             sourceAta: user1OkuMoneyAta,
             reserveVault: reserveVault,
+            psmConfig: psmConfigPda,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([user1])

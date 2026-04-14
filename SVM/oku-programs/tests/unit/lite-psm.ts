@@ -818,6 +818,8 @@ describe("lite-psm", () => {
           .accountsPartial({
             rebaser: orchestrator.publicKey,
             config: configPda,
+            okuMoneyMint: okuMoneyMint,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([orchestrator])
           .rpc();
@@ -834,6 +836,8 @@ describe("lite-psm", () => {
             .accountsPartial({
               rebaser: warmMultisig.publicKey, // Wrong role
               config: configPda,
+              okuMoneyMint: okuMoneyMint,
+              token2022Program: TOKEN_2022_PROGRAM_ID,
             })
             .signers([warmMultisig])
             .rpc();
@@ -862,6 +866,8 @@ describe("lite-psm", () => {
         .accountsPartial({
           rebaser: orchestrator.publicKey,
           config: configPda,
+          okuMoneyMint: okuMoneyMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([orchestrator])
         .rpc();
@@ -880,6 +886,8 @@ describe("lite-psm", () => {
           .accountsPartial({
             rebaser: warmMultisig.publicKey, // Wrong role
             config: configPda,
+            okuMoneyMint: okuMoneyMint,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([warmMultisig])
           .rpc();

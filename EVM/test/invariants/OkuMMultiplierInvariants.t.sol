@@ -54,7 +54,11 @@ contract OkuMPriceInvariantsTest is BaseTest {
     function invariant_OkuMPriceNeverDecreases() public view {
         uint256 current = okuMoney.okuMMultiplier();
         assertGe(current, PRECISION, "okuMMultiplier below initial value");
-        assertGe(current, handler.ghostLastOkuMMultiplier(), "okuMMultiplier decreased from previous value");
+        assertGe(
+            current,
+            handler.ghostLastOkuMMultiplier(),
+            "okuMMultiplier decreased from previous value"
+        );
     }
 
     /**

@@ -18,11 +18,14 @@
  */
 
 import { ethers, network, upgrades } from "hardhat";
-import { Contract } from "ethers";
+import { Contract, Signer } from "ethers";
 import { saveAddress, loadAddressBook, saveAddressBook } from "../utils/addressBook";
 import { getNetworkName, getChainConfig, SOLANA_DEVNET_CHAIN_ID } from "../config/chains";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
+
+// Dev wallet address for impersonation on local fork
+const DEV_WALLET = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
 
 // ============================================================================
 // Configuration
@@ -61,9 +64,10 @@ async function waitForTx(tx: any, description: string): Promise<void> {
 async function deployUUPSProxy(
   contractName: string,
   initArgs: any[],
-  networkName: string
+  networkName: string,
+  deployer: Signer
 ): Promise<Contract> {
-  const Factory = await ethers.getContractFactory(contractName);
+  const Factory = await ethers.getContractFactory(contractName, deployer);
   const proxy = await upgrades.deployProxy(Factory, initArgs, { kind: "uups" });
   await proxy.waitForDeployment();
   const address = await proxy.getAddress();
@@ -74,9 +78,10 @@ async function deployUUPSProxy(
 async function deployTransparentProxy(
   contractName: string,
   initArgs: any[],
-  networkName: string
+  networkName: string,
+  deployer: Signer
 ): Promise<Contract> {
-  const Factory = await ethers.getContractFactory(contractName);
+  const Factory = await ethers.getContractFactory(contractName, deployer);
   const proxy = await upgrades.deployProxy(Factory, initArgs, { kind: "transparent" });
   await proxy.waitForDeployment();
   const address = await proxy.getAddress();
@@ -88,10 +93,10 @@ async function deployTransparentProxy(
 // Deployment Steps
 // ============================================================================
 
-async function deployMockUSDC(deployer: any, networkName: string): Promise<string> {
+async function deployMockUSDC(networkName: string, deployer: Signer): Promise<string> {
   logger.step(1, "Deploying MockUSDC");
 
-  const MockUSDC = await ethers.getContractFactory("MockUSDC");
+  const MockUSDC = await ethers.getContractFactory("MockUSDC", deployer);
   const mockUsdc = await MockUSDC.deploy();
   await mockUsdc.waitForDeployment();
 
@@ -103,7 +108,8 @@ async function deployMockUSDC(deployer: any, networkName: string): Promise<strin
 }
 
 async function deployCoreContracts(
-  deployer: any,
+  deployer: Signer,
+  deployerAddress: string,
   networkName: string,
   config: DeploymentConfig
 ): Promise<{ okuMoney: Contract; okuDollar: Contract; redemptionQueue: Contract }> {
@@ -113,8 +119,9 @@ async function deployCoreContracts(
   logger.info("  Deploying OkuMoney...");
   const okuMoney = await deployUUPSProxy(
     "OkuMoney",
-    ["Oku Money", "OkuM", deployer.address, config.maxSupply],
-    networkName
+    ["Oku Money", "OkuM", deployerAddress, config.maxSupply],
+    networkName,
+    deployer
   );
   logger.success(`  OkuMoney: ${await okuMoney.getAddress()}`);
 
@@ -123,8 +130,9 @@ async function deployCoreContracts(
   const minCollateralRatio = ethers.parseUnits("1", 18); // 100% (1e18 = 100%)
   const okuDollar = await deployUUPSProxy(
     "OkuDollar",
-    [await okuMoney.getAddress(), "Oku Dollar", "usdOku", deployer.address, minCollateralRatio],
-    networkName
+    [await okuMoney.getAddress(), "Oku Dollar", "usdOku", deployerAddress, minCollateralRatio],
+    networkName,
+    deployer
   );
   logger.success(`  OkuDollar: ${await okuDollar.getAddress()}`);
 
@@ -132,8 +140,9 @@ async function deployCoreContracts(
   logger.info("  Deploying RedemptionQueue...");
   const redemptionQueue = await deployUUPSProxy(
     "RedemptionQueue",
-    [await okuMoney.getAddress(), deployer.address],
-    networkName
+    [await okuMoney.getAddress(), deployerAddress],
+    networkName,
+    deployer
   );
   logger.success(`  RedemptionQueue: ${await redemptionQueue.getAddress()}`);
 
@@ -141,7 +150,8 @@ async function deployCoreContracts(
 }
 
 async function deployPSM(
-  deployer: any,
+  deployer: Signer,
+  deployerAddress: string,
   networkName: string,
   okuMoneyAddress: string,
   okuDollarAddress: string,
@@ -158,9 +168,10 @@ async function deployPSM(
       okuDollarAddress,         // _usdOku
       usdcAddress,              // _usdc
       redemptionQueueAddress,   // _redemptionQueue
-      deployer.address,         // admin
+      deployerAddress,          // admin
     ],
-    networkName
+    networkName,
+    deployer
   );
   logger.success(`  LitePSM: ${await litePSM.getAddress()}`);
 
@@ -168,7 +179,8 @@ async function deployPSM(
 }
 
 async function deployBridge(
-  deployer: any,
+  deployer: Signer,
+  deployerAddress: string,
   networkName: string,
   okuMoneyAddress: string,
   okuDollarAddress: string
@@ -181,12 +193,13 @@ async function deployBridge(
     "OkuBridge",
     [
       okuMoneyAddress,
-      deployer.address, // orchestrator signer (deployer for testnet)
-      deployer.address, // fee recipient
-      deployer.address, // admin
+      deployerAddress, // orchestrator signer (deployer for testnet)
+      deployerAddress, // fee recipient
+      deployerAddress, // admin
       [BigInt(SOLANA_DEVNET_CHAIN_ID)], // supported chains
     ],
-    networkName
+    networkName,
+    deployer
   );
   logger.success(`  OkuBridge: ${await okuBridge.getAddress()}`);
 
@@ -198,9 +211,10 @@ async function deployBridge(
       okuDollarAddress,
       okuMoneyAddress,
       await okuBridge.getAddress(),
-      deployer.address,
+      deployerAddress,
     ],
-    networkName
+    networkName,
+    deployer
   );
   logger.success(`  OkuBridgeRouter: ${await bridgeRouter.getAddress()}`);
 
@@ -208,7 +222,7 @@ async function deployBridge(
 }
 
 async function configureRoles(
-  deployer: any,
+  deployerAddress: string,
   okuMoney: Contract,
   okuDollar: Contract,
   redemptionQueue: Contract,
@@ -231,8 +245,8 @@ async function configureRoles(
   await waitForTx(await okuMoney.grantRole(ROLES.OKUM_MINTER, bridgeRouterAddress), "Grant OKUM_MINTER to OkuBridgeRouter");
 
   // OkuMoney admin roles (testnet only)
-  await waitForTx(await okuMoney.grantRole(ROLES.OKUM_REBASER, deployer.address), "Grant OKUM_REBASER to Admin");
-  await waitForTx(await okuMoney.grantRole(ROLES.OKUM_ALLOWANCE_MANAGER, deployer.address), "Grant OKUM_ALLOWANCE_MANAGER to Admin");
+  await waitForTx(await okuMoney.grantRole(ROLES.OKUM_REBASER, deployerAddress), "Grant OKUM_REBASER to Admin");
+  await waitForTx(await okuMoney.grantRole(ROLES.OKUM_ALLOWANCE_MANAGER, deployerAddress), "Grant OKUM_ALLOWANCE_MANAGER to Admin");
 
   // Minter allowances
   await waitForTx(await okuMoney.configureMinterAllowance(litePSMAddress, config.minterAllowance), "Set LitePSM minter allowance");
@@ -241,13 +255,13 @@ async function configureRoles(
   await waitForTx(await okuMoney.configureMinterAllowance(bridgeRouterAddress, config.minterAllowance), "Set OkuBridgeRouter minter allowance");
 
   // OkuDollar roles
-  await waitForTx(await okuDollar.grantRole(ROLES.VAULT_REBASER, deployer.address), "Grant VAULT_REBASER to Admin");
+  await waitForTx(await okuDollar.grantRole(ROLES.VAULT_REBASER, deployerAddress), "Grant VAULT_REBASER to Admin");
 
   // RedemptionQueue roles
   await waitForTx(await redemptionQueue.grantRole(ROLES.QUEUE_PSM, litePSMAddress), "Grant QUEUE_PSM to LitePSM");
 
   // LitePSM roles
-  await waitForTx(await litePSM.grantRole(ROLES.PSM_BUFFER_DEPOSITOR, deployer.address), "Grant PSM_BUFFER_DEPOSITOR to Admin");
+  await waitForTx(await litePSM.grantRole(ROLES.PSM_BUFFER_DEPOSITOR, deployerAddress), "Grant PSM_BUFFER_DEPOSITOR to Admin");
 }
 
 async function configureBridge(
@@ -276,7 +290,6 @@ async function configureBridge(
 
 async function verifyDeployment(
   networkName: string,
-  deployer: any,
   okuMoney: Contract,
   okuDollar: Contract,
   litePSM: Contract,
@@ -331,9 +344,28 @@ async function main() {
   logger.header(`OkuMoney Deployment to ${chainConfig.name}`);
   logger.info(`Network: ${networkName} (chainId: ${chainConfig.chainId})`);
 
-  const [deployer] = await ethers.getSigners();
-  logger.info(`Deployer: ${deployer.address}`);
-  logger.info(`Balance: ${ethers.formatEther(await ethers.provider.getBalance(deployer.address))} ETH`);
+  // Get deployer - use impersonation for localhost (fork), real signer for live networks
+  let deployer: Signer;
+  const isLocalNetwork = networkName === "localhost" || networkName === "hardhat";
+  
+  if (isLocalNetwork) {
+    // Impersonate dev wallet for local fork testing
+    // The wallet will have whatever balance it has on the forked network (OP Sepolia)
+    logger.info(`Impersonating dev wallet: ${DEV_WALLET}`);
+    await network.provider.request({
+      method: "hardhat_impersonateAccount",
+      params: [DEV_WALLET],
+    });
+    deployer = await ethers.getSigner(DEV_WALLET);
+  } else {
+    // Use real signer from private key for live networks
+    const signers = await ethers.getSigners();
+    deployer = signers[0];
+  }
+
+  const deployerAddress = await deployer.getAddress();
+  logger.info(`Deployer: ${deployerAddress}`);
+  logger.info(`Balance: ${ethers.formatEther(await ethers.provider.getBalance(deployerAddress))} ETH`);
 
   // Check if we should reset fork (hardhat network only)
   if (networkName === "hardhat" && process.env.RESET_FORK === "true") {
@@ -364,15 +396,16 @@ async function main() {
     usdcAddress = chainConfig.usdc;
     logger.info(`  USDC: ${usdcAddress}`);
   } else {
-    usdcAddress = await deployMockUSDC(deployer, networkName);
+    usdcAddress = await deployMockUSDC(networkName, deployer);
   }
 
   // Step 2: Deploy core contracts
-  const { okuMoney, okuDollar, redemptionQueue } = await deployCoreContracts(deployer, networkName, config);
+  const { okuMoney, okuDollar, redemptionQueue } = await deployCoreContracts(deployer, deployerAddress, networkName, config);
 
   // Step 3: Deploy PSM
   const litePSM = await deployPSM(
     deployer,
+    deployerAddress,
     networkName,
     await okuMoney.getAddress(),
     await okuDollar.getAddress(),
@@ -383,6 +416,7 @@ async function main() {
   // Step 4: Deploy bridge contracts
   const { okuBridge, bridgeRouter } = await deployBridge(
     deployer,
+    deployerAddress,
     networkName,
     await okuMoney.getAddress(),
     await okuDollar.getAddress()
@@ -390,7 +424,7 @@ async function main() {
 
   // Step 5: Configure roles
   await configureRoles(
-    deployer,
+    deployerAddress,
     okuMoney,
     okuDollar,
     redemptionQueue,
@@ -406,7 +440,6 @@ async function main() {
   // Step 7: Verify deployment
   await verifyDeployment(
     networkName,
-    deployer,
     okuMoney,
     okuDollar,
     litePSM,

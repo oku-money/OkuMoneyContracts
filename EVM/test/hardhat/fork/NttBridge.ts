@@ -73,7 +73,7 @@ describe("NTT Bridge Scenarios", () => {
         // The PSM slippage check can fail due to integer division rounding.
         // At elevated prices, we need to round up the USDC input to the nearest
         // amount that divides evenly by the price to avoid 1 wei rounding loss.
-        const currentPrice = await okuMoney.okuMPrice()
+        const currentPrice = await okuMoney.okuMMultiplier()
         const DECIMAL_MULT = 10n ** 12n // 6 to 18 decimal conversion
         
         // Calculate the minimum unit that divides evenly
@@ -404,9 +404,9 @@ describe("NTT Bridge Scenarios", () => {
             const recordedAmount = transfer.amount
 
             // NotePrice +10% AFTER bridge message recorded
-            const priceBefore = await okuMoney.okuMPrice()
+            const priceBefore = await okuMoney.okuMMultiplier()
             const newPrice = priceBefore * 110n / 100n
-            await okuMoney.connect(Frank).setOkuMPrice(newPrice)
+            await okuMoney.connect(Frank).setOkuMMultiplier(newPrice)
 
             // Complete the bridge
             const charlieBalanceBefore = await okuMoney.balanceOf(charlieAddr)

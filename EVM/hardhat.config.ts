@@ -62,7 +62,9 @@ const config: HardhatUserConfig = {
 
   networks: {
     hardhat: {
-      chainId: 31337,
+      // Use 420 (protocol-internal OP Sepolia ID) for SVM bridge compatibility
+      // This allows SVM bridge_burn with destChainId=420 to be relayed to this fork
+      chainId: process.env.HARDHAT_CHAIN_ID ? parseInt(process.env.HARDHAT_CHAIN_ID) : 31337,
       // Fork OP Sepolia for testnet simulation, or Optimism for mainnet simulation
       forking: {
         url: process.env.FORK_URL || alchemyUrl("opt-sepolia"),
@@ -83,6 +85,13 @@ const config: HardhatUserConfig = {
     localhost: {
       url: "http://127.0.0.1:8545",
       chainId: 31337,
+    },
+
+    // Local testing with protocol-internal chain ID (for SVM bridge compatibility)
+    // Use this when testing SVM <-> EVM bridge flow locally
+    "localhost-420": {
+      url: "http://127.0.0.1:8545",
+      chainId: 420, // Protocol-internal ID for OP Sepolia (fits in u16)
     },
 
     // Testnets

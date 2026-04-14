@@ -528,14 +528,14 @@ contract OkuBridgeTest is BaseTest {
 
         _approveBridgeBurn(user1, OPTIMISM_CHAIN_ID, user2, amount);
 
-        // Step 2: Increase notePrice by 50%
-        // OkuMoney is non-rebasing: notePrice tracks price appreciation but does NOT
+        // Step 2: Increase okuMMultiplier by 50%
+        // OkuMoney is non-rebasing: okuMMultiplier tracks multiplier appreciation but does NOT
         // change balanceOf(). Bridge amounts are unaffected.
-        uint256 oldPrice = okuMoney.okuMPrice();
+        uint256 oldPrice = okuMoney.okuMMultiplier();
         uint256 newPrice = (oldPrice * 150) / 100;
 
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        okuMoney.setOkuMMultiplier(newPrice);
 
         // Step 3: Create request and sign (encodes netAmount)
         OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({
@@ -553,7 +553,7 @@ contract OkuBridgeTest is BaseTest {
         // Step 4: Mint on destination
         okuBridge.bridgeMint(request, signature);
 
-        // Verify user2 received exact netAmount (notePrice change has no effect
+        // Verify user2 received exact netAmount (okuMMultiplier change has no effect
         // on balanceOf — OkuMoney is non-rebasing)
         assertEq(okuMoney.balanceOf(user2), netAmount);
     }
@@ -926,7 +926,8 @@ contract OkuBridgeTest is BaseTest {
 
     function test_BridgeBurn_EmitsEvent() public {
         uint256 amount = 100e18;
-        uint256 netAmount = amount - (amount * 10) / 10_000;
+        uint256 feeAmount = (amount * 10) / 10_000;
+        uint256 netAmount = amount - feeAmount;
         _mintOkuMoney(user1, amount);
 
         uint256 nonce = okuBridge.outboundNonce(OPTIMISM_CHAIN_ID);
@@ -953,7 +954,9 @@ contract OkuBridgeTest is BaseTest {
             bytes32(uint256(uint160(user2))),
             block.chainid,
             OPTIMISM_CHAIN_ID,
-            netAmount,
+            amount, // grossAmount
+            netAmount, // netAmount
+            feeAmount, // feeAmount
             nonce,
             block.timestamp + okuBridge.bridgeDeadline()
         );
@@ -1207,8 +1210,8 @@ contract OkuBridgeTest is BaseTest {
 
         // Step 1: initiate — emits RefundInitiated
         vm.prank(refundInitiator);
-        vm.expectEmit(true, true, false, false);
-        emit OkuBridge.RefundInitiated(requestId, refundInitiator);
+        vm.expectEmit(true, true, false, true);
+        emit OkuBridge.RefundInitiated(requestId, refundInitiator, request.sender, request.amount);
         okuBridge.initiateRefund(request);
 
         // Step 2: confirm — emits RefundConfirmed
@@ -1260,7 +1263,7 @@ contract OkuBridgeTest is BaseTest {
 
         vm.expectEmit(true, true, false, true);
         emit OkuBridge.BridgeMint(
-            requestId, bytes32(uint256(uint160(user2))), OPTIMISM_CHAIN_ID, amount
+            requestId, bytes32(uint256(uint160(user2))), OPTIMISM_CHAIN_ID, block.chainid, amount
         );
 
         okuBridge.bridgeMint(request, signature);

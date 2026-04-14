@@ -95,9 +95,16 @@ contract OkuBridgeRouter is
     // ============ Events ============
 
     /// @notice Emitted when a bridge is initiated via the adapter path
+    /// @param user Address initiating the bridge
+    /// @param adapter Bridge adapter used
+    /// @param sourceToken Token that was burned (OkuMoney address)
+    /// @param amount OkuMoney burned (18 decimals)
+    /// @param destinationChain Target chain ID
+    /// @param recipient Address on destination chain
     event BridgeInitiated(
         address indexed user,
         address indexed adapter,
+        address sourceToken,
         uint256 amount,
         uint256 destinationChain,
         address recipient
@@ -327,7 +334,9 @@ contract OkuBridgeRouter is
             address($.okuMoney), okuMAmount, destinationChain, recipient
         );
 
-        emit BridgeInitiated(msg.sender, adapter, okuMAmount, destinationChain, recipient);
+        emit BridgeInitiated(
+            msg.sender, adapter, address($.okuMoney), okuMAmount, destinationChain, recipient
+        );
     }
 
     /**
@@ -360,7 +369,9 @@ contract OkuBridgeRouter is
             address($.okuMoney), okuMAmount, destinationChain, recipient
         );
 
-        emit BridgeInitiated(msg.sender, adapter, okuMAmount, destinationChain, recipient);
+        emit BridgeInitiated(
+            msg.sender, adapter, address($.okuMoney), okuMAmount, destinationChain, recipient
+        );
     }
 
     // ============ Admin Functions ============

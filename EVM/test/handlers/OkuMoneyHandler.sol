@@ -40,8 +40,8 @@ contract OkuMoneyHandler is Test {
     uint256 public ghostResetCallCount;
     uint256 public ghostResetRevertCount;
 
-    // Monotonic okuMPrice tracking
-    uint256 public ghostLastOkuMPrice;
+    // Monotonic okuMMultiplier tracking
+    uint256 public ghostLastOkuMMultiplier;
 
     constructor(OkuMoney _okuMoney, address _minter, address _rebaser, address _allowanceManager) {
         okuMoney = _okuMoney;
@@ -55,7 +55,7 @@ contract OkuMoneyHandler is Test {
         _addActor(makeAddr("actor3"));
 
         lastAllowance[minter] = okuMoney.minterAllowance(minter);
-        ghostLastOkuMPrice = okuMoney.okuMPrice();
+        ghostLastOkuMMultiplier = okuMoney.okuMMultiplier();
     }
 
     function _addActor(address actor) internal {
@@ -142,7 +142,7 @@ contract OkuMoneyHandler is Test {
     /// @notice Update OkuM price (rebase)
     function rebase(uint256 priceIncrease) external {
         ghostRebaseCallCount++;
-        uint256 currentPrice = okuMoney.okuMPrice();
+        uint256 currentPrice = okuMoney.okuMMultiplier();
 
         // Cap maximum price at 1e24 (1 million x starting value)
         uint256 maxPrice = 1e24;
@@ -164,9 +164,9 @@ contract OkuMoneyHandler is Test {
         }
 
         vm.prank(rebaser);
-        try okuMoney.setOkuMPrice(newPrice) {
+        try okuMoney.setOkuMMultiplier(newPrice) {
             ghostLastWasRebase = true;
-            ghostLastOkuMPrice = newPrice;
+            ghostLastOkuMMultiplier = newPrice;
         } catch {
             ghostRebaseRevertCount++;
         }

@@ -6,9 +6,9 @@ import {OkuMoney} from "../../src/token/OkuMoney.sol";
 
 /**
  * @title OkuMoneyFuzzTest
- * @notice Fuzz tests for OkuMoney (non-rebasing ERC-20 with separate notePrice tracking)
+ * @notice Fuzz tests for OkuMoney (non-rebasing ERC-20 with separate okuMMultiplier tracking)
  * @dev OkuMoney is a standard ERC-20: balanceOf() returns raw token count, unaffected by
- *      okuMPrice(). Price appreciation is tracked separately for PSM/vault use.
+ *      okuMMultiplier(). Price appreciation is tracked separately for PSM/vault use.
  */
 contract OkuMoneyFuzzTest is BaseTest {
     // ============ Mint/Burn Consistency Tests ============
@@ -120,12 +120,12 @@ contract OkuMoneyFuzzTest is BaseTest {
         );
     }
 
-    // ============ notePrice Independence Tests ============
+    // ============ okuMMultiplier Independence Tests ============
 
-    /// @notice notePrice change does NOT affect any user balances
+    /// @notice okuMMultiplier change does NOT affect any user balances
     function testFuzz_NotePriceDoesNotAffectBalances(uint256 mintAmount, uint256 newPrice) public {
         mintAmount = bound(mintAmount, 1e18, MAX_SUPPLY / 10);
-        newPrice = _boundOkuMPrice(newPrice);
+        newPrice = _boundOkuMMultiplier(newPrice);
 
         _mintOkuMoney(user1, mintAmount);
 
@@ -133,20 +133,22 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 totalSupplyBefore = okuMoney.totalSupply();
 
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        okuMoney.setOkuMMultiplier(newPrice);
 
         // Balances must be completely unaffected
         assertEq(
-            okuMoney.balanceOf(user1), balanceBefore, "balanceOf unchanged after notePrice update"
+            okuMoney.balanceOf(user1),
+            balanceBefore,
+            "balanceOf unchanged after okuMMultiplier update"
         );
         assertEq(
             okuMoney.totalSupply(),
             totalSupplyBefore,
-            "totalSupply unchanged after notePrice update"
+            "totalSupply unchanged after okuMMultiplier update"
         );
     }
 
-    /// @notice notePrice change does NOT affect multiple users' balances
+    /// @notice okuMMultiplier change does NOT affect multiple users' balances
     function testFuzz_NotePriceDoesNotAffectMultipleUsers(
         uint256 amount1,
         uint256 amount2,
@@ -156,7 +158,7 @@ contract OkuMoneyFuzzTest is BaseTest {
     {
         amount1 = bound(amount1, 1e18, MAX_SUPPLY / 4);
         amount2 = bound(amount2, 1e18, MAX_SUPPLY / 4);
-        newPrice = _boundOkuMPrice(newPrice);
+        newPrice = _boundOkuMMultiplier(newPrice);
 
         _mintOkuMoney(user1, amount1);
         _mintOkuMoney(user2, amount2);
@@ -165,13 +167,13 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 balance2Before = okuMoney.balanceOf(user2);
 
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        okuMoney.setOkuMMultiplier(newPrice);
 
         assertEq(okuMoney.balanceOf(user1), balance1Before, "User1 balance unchanged");
         assertEq(okuMoney.balanceOf(user2), balance2Before, "User2 balance unchanged");
     }
 
-    /// @notice Balance ratios unchanged after notePrice update
+    /// @notice Balance ratios unchanged after okuMMultiplier update
     function testFuzz_BalanceRatiosUnchangedAfterPriceUpdate(
         uint256 amount1,
         uint256 amount2,
@@ -181,7 +183,7 @@ contract OkuMoneyFuzzTest is BaseTest {
     {
         amount1 = bound(amount1, 1e18, MAX_SUPPLY / 4);
         amount2 = bound(amount2, 1e18, MAX_SUPPLY / 4);
-        newPrice = _boundOkuMPrice(newPrice);
+        newPrice = _boundOkuMMultiplier(newPrice);
 
         _mintOkuMoney(user1, amount1);
         _mintOkuMoney(user2, amount2);
@@ -190,7 +192,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 ratio2Before = (okuMoney.balanceOf(user2) * PRECISION) / okuMoney.totalSupply();
 
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        okuMoney.setOkuMMultiplier(newPrice);
 
         uint256 ratio1After = (okuMoney.balanceOf(user1) * PRECISION) / okuMoney.totalSupply();
         uint256 ratio2After = (okuMoney.balanceOf(user2) * PRECISION) / okuMoney.totalSupply();
@@ -200,59 +202,59 @@ contract OkuMoneyFuzzTest is BaseTest {
         assertEq(ratio2After, ratio2Before, "User2 ratio exactly preserved");
     }
 
-    // ============ notePrice Monotonicity Tests ============
+    // ============ okuMMultiplier Monotonicity Tests ============
 
-    /// @notice notePrice can only increase via setOkuMPrice
+    /// @notice okuMMultiplier can only increase via setOkuMMultiplier
     function testFuzz_NotePriceNeverDecreases(uint256 newPrice) public {
-        uint256 currentPrice = okuMoney.okuMPrice();
-        newPrice = _boundOkuMPrice(newPrice);
+        uint256 currentPrice = okuMoney.okuMMultiplier();
+        newPrice = _boundOkuMMultiplier(newPrice);
 
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        okuMoney.setOkuMMultiplier(newPrice);
 
-        assertGe(okuMoney.okuMPrice(), currentPrice, "notePrice must never decrease");
+        assertGe(okuMoney.okuMMultiplier(), currentPrice, "okuMMultiplier must never decrease");
     }
 
-    /// @notice Sequential notePrice updates accumulate correctly
+    /// @notice Sequential okuMMultiplier updates accumulate correctly
     function testFuzz_SequentialNotePriceUpdates(uint256 increase1, uint256 increase2) public {
-        increase1 = _boundOkuMPriceIncrease(increase1);
-        increase2 = _boundOkuMPriceIncrease(increase2);
+        increase1 = _boundOkuMMultiplierIncrease(increase1);
+        increase2 = _boundOkuMMultiplierIncrease(increase2);
 
-        uint256 priceBefore = okuMoney.okuMPrice();
+        uint256 priceBefore = okuMoney.okuMMultiplier();
 
         // First price update
         uint256 price1 = priceBefore + increase1;
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(price1);
+        okuMoney.setOkuMMultiplier(price1);
 
-        assertEq(okuMoney.okuMPrice(), price1, "Price after first update");
+        assertEq(okuMoney.okuMMultiplier(), price1, "Price after first update");
 
         // Second price update
         uint256 price2 = price1 + increase2;
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(price2);
+        okuMoney.setOkuMMultiplier(price2);
 
-        assertEq(okuMoney.okuMPrice(), price2, "Price after second update");
-        assertGt(okuMoney.okuMPrice(), priceBefore, "Final price greater than initial");
+        assertEq(okuMoney.okuMMultiplier(), price2, "Price after second update");
+        assertGt(okuMoney.okuMMultiplier(), priceBefore, "Final price greater than initial");
     }
 
-    /// @notice notePrice reverts if new price is less than current
-    function testFuzz_NotePriceCannotDecrease(uint256 increase, uint256 decrease) public {
-        increase = _boundOkuMPriceIncrease(increase);
+    /// @notice okuMMultiplier reverts if new price is less than current
+    function testFuzz_NoteMultiplierCannotDecrease(uint256 increase, uint256 decrease) public {
+        increase = _boundOkuMMultiplierIncrease(increase);
 
-        uint256 currentPrice = okuMoney.okuMPrice();
+        uint256 currentPrice = okuMoney.okuMMultiplier();
         uint256 higherPrice = currentPrice + increase;
 
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(higherPrice);
+        okuMoney.setOkuMMultiplier(higherPrice);
 
         // Try to set a lower price (any amount below current)
         decrease = bound(decrease, 1, higherPrice);
         uint256 lowerPrice = higherPrice - decrease;
 
         vm.prank(rebaser);
-        vm.expectRevert(OkuMoney.PriceCannotDecrease.selector);
-        okuMoney.setOkuMPrice(lowerPrice);
+        vm.expectRevert(OkuMoney.MultiplierCannotDecrease.selector);
+        okuMoney.setOkuMMultiplier(lowerPrice);
     }
 
     // ============ distributeYield Fuzz Tests ============
@@ -264,12 +266,12 @@ contract OkuMoneyFuzzTest is BaseTest {
 
         _mintOkuMoney(user1, supply);
 
-        uint256 priceBefore = okuMoney.okuMPrice();
+        uint256 priceBefore = okuMoney.okuMMultiplier();
 
         vm.prank(rebaser);
         okuMoney.distributeYield(yieldAmount);
 
-        uint256 priceAfter = okuMoney.okuMPrice();
+        uint256 priceAfter = okuMoney.okuMMultiplier();
         assertGe(priceAfter, priceBefore, "price must not decrease after distributeYield");
 
         // Verify math: newPrice = oldPrice + yieldAmount * PRECISION / supply
@@ -375,13 +377,13 @@ contract OkuMoneyFuzzTest is BaseTest {
         public
     {
         mintAmount = bound(mintAmount, 10e18, MAX_SUPPLY / 2);
-        newPrice = _boundOkuMPrice(newPrice);
+        newPrice = _boundOkuMMultiplier(newPrice);
 
         _mintOkuMoney(user1, mintAmount);
 
-        // Update notePrice (should not affect balances)
+        // Update okuMMultiplier (should not affect balances)
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        okuMoney.setOkuMMultiplier(newPrice);
 
         // Transfer some tokens
         transfer1 = bound(transfer1, 1, mintAmount / 2);
@@ -409,18 +411,18 @@ contract OkuMoneyFuzzTest is BaseTest {
         okuMoney.mint(user2, extraAmount);
     }
 
-    /// @notice notePrice update does NOT affect supply cap enforcement
+    /// @notice okuMMultiplier update does NOT affect supply cap enforcement
     function testFuzz_NotePriceDoesNotAffectSupplyCap(uint256 newPrice) public {
-        newPrice = _boundOkuMPrice(newPrice);
+        newPrice = _boundOkuMMultiplier(newPrice);
 
         // Mint half the supply
         _mintOkuMoney(user1, MAX_SUPPLY / 2);
 
-        // Update notePrice
+        // Update okuMMultiplier
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        okuMoney.setOkuMMultiplier(newPrice);
 
-        // Should still be able to mint up to the cap (totalSupply is unaffected by notePrice)
+        // Should still be able to mint up to the cap (totalSupply is unaffected by okuMMultiplier)
         uint256 remaining = MAX_SUPPLY - okuMoney.totalSupply();
         _mintOkuMoney(user2, remaining);
 
@@ -432,9 +434,9 @@ contract OkuMoneyFuzzTest is BaseTest {
         okuMoney.mint(user3, 1);
     }
 
-    // ============ Mint After notePrice Change Tests ============
+    // ============ Mint After okuMMultiplier Change Tests ============
 
-    /// @notice Minting after notePrice change gives exact token amount (no share conversion)
+    /// @notice Minting after okuMMultiplier change gives exact token amount (no share conversion)
     function testFuzz_MintAfterNotePriceChange(
         uint256 firstMint,
         uint256 newPrice,
@@ -443,22 +445,22 @@ contract OkuMoneyFuzzTest is BaseTest {
         public
     {
         firstMint = bound(firstMint, 1e18, MAX_SUPPLY / 4);
-        newPrice = _boundOkuMPrice(newPrice);
+        newPrice = _boundOkuMMultiplier(newPrice);
         secondMint = bound(secondMint, 1e18, MAX_SUPPLY / 4);
 
         // First mint
         _mintOkuMoney(user1, firstMint);
         assertEq(okuMoney.balanceOf(user1), firstMint, "User1 gets exact first mint");
 
-        // Update notePrice
+        // Update okuMMultiplier
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        okuMoney.setOkuMMultiplier(newPrice);
 
         // Second mint at new price — user still gets exact token amount
         _mintOkuMoney(user2, secondMint);
         assertEq(okuMoney.balanceOf(user2), secondMint, "User2 gets exact second mint");
 
-        // User1 balance unaffected by notePrice change
+        // User1 balance unaffected by okuMMultiplier change
         assertEq(okuMoney.balanceOf(user1), firstMint, "User1 balance unchanged by price update");
 
         // Total supply is exact sum
@@ -484,20 +486,20 @@ contract OkuMoneyFuzzTest is BaseTest {
         }
     }
 
-    /// @notice Operations after notePrice update maintain exact precision
+    /// @notice Operations after okuMMultiplier update maintain exact precision
     function testFuzz_PrecisionAfterNotePriceUpdate(uint256 mintAmount, uint256 newPrice) public {
         mintAmount = bound(mintAmount, 1e18, 1e24); // 1 to 1M tokens
-        newPrice = _boundOkuMPrice(newPrice);
+        newPrice = _boundOkuMMultiplier(newPrice);
 
         _mintOkuMoney(user1, mintAmount);
 
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        okuMoney.setOkuMMultiplier(newPrice);
 
         // Balance unchanged (standard ERC-20)
-        assertEq(okuMoney.balanceOf(user1), mintAmount, "Balance exact after notePrice update");
+        assertEq(okuMoney.balanceOf(user1), mintAmount, "Balance exact after okuMMultiplier update");
 
-        // Transfer at any notePrice
+        // Transfer at any okuMMultiplier
         uint256 transferAmount = mintAmount / 2;
         vm.prank(user1);
         assertTrue(okuMoney.transfer(user2, transferAmount));

@@ -16,7 +16,8 @@ import {MockAggregatorV3} from "./mocks/MockAggregatorV3.sol";
  * @title BaseTest
  * @notice Base test contract with deployment helpers, actors, and utility functions
  * @dev Updated for OkuMoney non-rebasing redesign. OkuMoney is a standard ERC-20 with
- *      okuMPrice() tracking price appreciation separately from balanceOf().
+ *      okuMMultiplier() tracking the dollar value per token separately from balanceOf().
+ *      See Constants.sol for terminology legend.
  */
 abstract contract BaseTest is Test {
     // ============ Constants ============
@@ -204,7 +205,7 @@ abstract contract BaseTest is Test {
         okuMoney.mint(to, amount);
     }
 
-    /// @notice Mint OkuDollar tokens to a user via wrap flow (price-aware)
+    /// @notice Mint OkuDollar tokens to a user via wrap flow (multiplier-aware)
     function _mintUsdOku(address to, uint256 okuMAmount) internal {
         // Mint OkuMoney to the to address first
         _mintOkuMoney(to, okuMAmount);
@@ -250,15 +251,15 @@ abstract contract BaseTest is Test {
         return bound(amount, 1, remaining > 0 ? remaining : 1);
     }
 
-    /// @notice Bound fuzz input to reasonable okuMPrice (current to 10x)
-    function _boundOkuMPrice(uint256 price) internal view returns (uint256) {
-        uint256 current = okuMoney.okuMPrice();
-        return bound(price, current, current * 10);
+    /// @notice Bound fuzz input to reasonable okuMMultiplier (current to 10x)
+    function _boundOkuMMultiplier(uint256 mult) internal view returns (uint256) {
+        uint256 current = okuMoney.okuMMultiplier();
+        return bound(mult, current, current * 10);
     }
 
-    /// @notice Bound fuzz input to reasonable okuMPrice increase (0.01% to 100%)
-    function _boundOkuMPriceIncrease(uint256 increase) internal view returns (uint256) {
-        uint256 current = okuMoney.okuMPrice();
+    /// @notice Bound fuzz input to reasonable okuMMultiplier increase (0.01% to 100%)
+    function _boundOkuMMultiplierIncrease(uint256 increase) internal view returns (uint256) {
+        uint256 current = okuMoney.okuMMultiplier();
         return bound(increase, current / 10_000, current);
     }
 
@@ -272,12 +273,12 @@ abstract contract BaseTest is Test {
         return a > b ? a : b;
     }
 
-    /// @notice Set OkuMoney price and roll to next block to avoid yield distribution lock
-    /// @dev Use this helper when testing price-aware operations that would be blocked
-    ///      in the same block as a price change (sandwich attack prevention).
-    function _setOkuMPriceAndRoll(uint256 newPrice) internal {
+    /// @notice Set OkuMoney multiplier and roll to next block to avoid yield distribution lock
+    /// @dev Use this helper when testing multiplier-aware operations that would be blocked
+    ///      in the same block as a multiplier change (sandwich attack prevention).
+    function _setOkuMMultiplierAndRoll(uint256 newMultiplier) internal {
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        okuMoney.setOkuMMultiplier(newMultiplier);
         vm.roll(block.number + 1);
     }
 }

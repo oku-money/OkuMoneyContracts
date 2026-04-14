@@ -30,8 +30,10 @@ import {MathLib} from "../lib/MathLib.sol";
  *      Holds OkuMoney as reserves. Independent yield rate enables revenue extraction
  *      (OkuM rate > USD rate) or forward-facing yield (USD rate > OkuM rate).
  *
- *      Wrap/unwrap are price-aware: they use okuMPrice() and usdMultiplier() to convert
+ *      Wrap/unwrap are multiplier-aware: they use okuMMultiplier() and usdMultiplier() to convert
  *      between OkuMoney token amounts and OkuDollar amounts at their respective dollar values.
+ *
+ *      See Constants.sol for terminology legend.
  *
  *      Storage: Uses ERC-7201 namespaced storage pattern for upgrade safety.
  */
@@ -92,14 +94,77 @@ contract OkuDollar is
     event TransferValue(
         address indexed from, address indexed to, uint256 shares, uint256 dollarValue
     );
-    event UsdRebaseEvent(uint256 oldMultiplier, uint256 newMultiplier);
+
+    /// @notice Emitted when OkuMoney is wrapped into OkuDollar
+    /// @param user Address wrapping tokens
+    /// @param okuMAmount OkuMoney deposited (18 decimals)
+    /// @param usdMinted OkuDollar minted (18 decimals)
+    /// @param okuMMultiplier OkuMoney multiplier at time of wrap
+    /// @param usdMultiplier OkuDollar multiplier at time of wrap
+    event Wrapped(
+        address indexed user,
+        address indexed receiver,
+        uint256 okuMAmount,
+        uint256 usdMinted,
+        uint256 okuMMultiplier,
+        uint256 usdMultiplier
+    );
+
+    /// @notice Emitted when OkuDollar is unwrapped back to OkuMoney
+    /// @param user Address unwrapping tokens
+    /// @param usdAmount OkuDollar redeemed (18 decimals)
+    /// @param okuMReturned OkuMoney returned (18 decimals)
+    /// @param okuMMultiplier OkuMoney multiplier at time of unwrap
+    /// @param usdMultiplier OkuDollar multiplier at time of unwrap
+    event Unwrapped(
+        address indexed user,
+        address indexed receiver,
+        uint256 usdAmount,
+        uint256 okuMReturned,
+        uint256 okuMMultiplier,
+        uint256 usdMultiplier
+    );
+
+    /// @notice Emitted when the USD multiplier is updated
+    /// @param oldMultiplier Previous multiplier value
+    /// @param newMultiplier New multiplier value
+    /// @param totalSupply Total OkuDollar supply at time of update
+    event UsdRebaseEvent(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply);
+
+    /// @notice Emitted when yield rate is updated
+    /// @param oldRatePerSecond Previous rate per second
+    /// @param newRatePerSecond New rate per second
+    /// @param endTimestamp When the rate expires (0 = never)
+    /// @param snapshotMultiplier Multiplier snapshot at time of update
     event UsdYieldRateUpdated(
-        uint256 newRatePerSecond, uint256 endTimestamp, uint256 snapshotMultiplier
+        uint256 oldRatePerSecond,
+        uint256 newRatePerSecond,
+        uint256 endTimestamp,
+        uint256 snapshotMultiplier
     );
     event NextUsdYieldRateSet(uint256 newRatePerSecond, uint256 activatesAt);
     event MinCollateralRatioUpdated(uint256 oldRatio, uint256 newRatio);
-    event ReservesDeposited(address indexed depositor, uint256 okuMAmount);
-    event SurplusWithdrawn(address indexed to, uint256 okuMAmount);
+
+    /// @notice Emitted when reserves are deposited without minting shares
+    /// @param depositor Address depositing
+    /// @param okuMAmount OkuMoney deposited (18 decimals)
+    /// @param dollarValue Dollar value of deposit at current okuMMultiplier
+    /// @param collateralizationRatio Ratio after deposit
+    event ReservesDeposited(
+        address indexed depositor,
+        uint256 okuMAmount,
+        uint256 dollarValue,
+        uint256 collateralizationRatio
+    );
+
+    /// @notice Emitted when surplus reserves are withdrawn
+    /// @param to Recipient address
+    /// @param okuMAmount OkuMoney withdrawn (18 decimals)
+    /// @param dollarValue Dollar value of withdrawal at current okuMMultiplier
+    /// @param collateralizationRatio Ratio after withdrawal
+    event SurplusWithdrawn(
+        address indexed to, uint256 okuMAmount, uint256 dollarValue, uint256 collateralizationRatio
+    );
 
     // ============ Custom Errors ============
 
@@ -201,7 +266,7 @@ contract OkuDollar is
 
     /**
      * @notice Computed USD multiplier with continuous yield accrual
-     * @dev Same MathLib.rpow pattern as OkuMoney.okuMPrice()
+     * @dev Same MathLib.rpow pattern as OkuMoney.okuMMultiplier()
      */
     function usdMultiplier() public view returns (uint256) {
         OkuDollarStorage storage $ = _getOkuDollarStorage();
@@ -313,9 +378,9 @@ contract OkuDollar is
     // ============ Wrap / Unwrap (Price-Aware) ============
 
     /**
-     * @notice Wrap OkuMoney into OkuDollar (price-aware)
-     * @dev usdMinted = okuMAmount × okuMPrice() / usdMultiplier()
-     *      100 OkuM tokens at okuMPrice=$1.05, usdMultiplier=1.0 → 105 usdOku.
+     * @notice Wrap OkuMoney into OkuDollar (multiplier-aware)
+     * @dev usdMinted = okuMAmount × okuMMultiplier() / usdMultiplier()
+     *      100 OkuM tokens at okuMMultiplier=$1.05, usdMultiplier=1.0 → 105 usdOku.
      *      The OkuM dollar value is converted to OkuDollar at the current usdMultiplier.
      * @param okuMAmount Amount of OkuMoney tokens to wrap
      * @param receiver Address to receive OkuDollar
@@ -343,15 +408,15 @@ contract OkuDollar is
         IERC20(address($.okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
         uint256 actualReceived = IERC20(address($.okuMoney)).balanceOf(address(this)) - balBefore;
 
-        // Price-aware: convert OkuM token value to OkuDollar shares
-        // shares = actualReceived × okuMPrice / usdMultiplier
-        uint256 price = $.okuMoney.okuMPrice();
-        uint256 mult = usdMultiplier();
-        uint256 sharesToMint = (actualReceived * price) / mult;
+        // Multiplier-aware: convert OkuM token value to OkuDollar shares
+        // shares = actualReceived × okuMMultiplier / usdMultiplier
+        uint256 okuMMult = $.okuMoney.okuMMultiplier();
+        uint256 usdMult = usdMultiplier();
+        uint256 sharesToMint = (actualReceived * okuMMult) / usdMult;
         if (sharesToMint == 0) revert AmountTooSmall();
 
         // Calculate dollar value for event (from shares × multiplier)
-        usdMinted = (sharesToMint * mult) / PRECISION;
+        usdMinted = (sharesToMint * usdMult) / PRECISION;
 
         // Slippage protection
         if (usdMinted < minAmountOut) {
@@ -363,12 +428,13 @@ contract OkuDollar is
 
         emit Transfer(address(0), receiver, usdMinted);
         emit TransferValue(address(0), receiver, sharesToMint, usdMinted);
+        emit Wrapped(msg.sender, receiver, actualReceived, usdMinted, okuMMult, usdMult);
     }
 
     /**
-     * @notice Unwrap OkuDollar back to OkuMoney (price-aware)
-     * @dev okuMReturned = usdAmount × PRECISION / okuMPrice()
-     *      105 usdOku at okuMPrice=$1.05 → 100 OkuM tokens (regardless of usdMultiplier).
+     * @notice Unwrap OkuDollar back to OkuMoney (multiplier-aware)
+     * @dev okuMReturned = usdAmount × PRECISION / okuMMultiplier()
+     *      105 usdOku at okuMMultiplier=$1.05 → 100 OkuM tokens (regardless of usdMultiplier).
      *      The usdMultiplier converts shares ↔ dollars, not dollars ↔ OkuMoney.
      *      Reverts if vault holds insufficient OkuMoney.
      * @param usdAmount Amount of OkuDollar to unwrap (in dollar terms)
@@ -390,17 +456,17 @@ contract OkuDollar is
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
 
-        // Price-aware: convert OkuDollar amount to OkuM token count
+        // Multiplier-aware: convert OkuDollar amount to OkuM token count
         // usdAmount is in dollar terms. To convert dollars to OkuMoney:
-        // okuMReturned = usdAmount × PRECISION / okuMPrice
-        // Note: multiplier converts shares ↔ dollars, NOT dollars ↔ OkuMoney
-        uint256 mult = usdMultiplier();
-        uint256 price = $.okuMoney.okuMPrice();
-        okuMReturned = (usdAmount * PRECISION) / price;
+        // okuMReturned = usdAmount × PRECISION / okuMMultiplier
+        // Note: usdMultiplier converts shares ↔ dollars, NOT dollars ↔ OkuMoney
+        uint256 usdMult = usdMultiplier();
+        uint256 okuMMult = $.okuMoney.okuMMultiplier();
+        okuMReturned = (usdAmount * PRECISION) / okuMMult;
 
         // Calculate shares to burn (round UP to favor vault)
         // Ceiling division: (a + b - 1) / b
-        uint256 sharesToBurn = ((usdAmount * PRECISION) + mult - 1) / mult;
+        uint256 sharesToBurn = ((usdAmount * PRECISION) + usdMult - 1) / usdMult;
         if ($.usdShares[msg.sender] < sharesToBurn) revert InsufficientCollateral();
 
         // Check vault has enough OkuMoney
@@ -416,6 +482,7 @@ contract OkuDollar is
 
         emit Transfer(msg.sender, address(0), usdAmount);
         emit TransferValue(msg.sender, address(0), sharesToBurn, usdAmount);
+        emit Unwrapped(msg.sender, receiver, usdAmount, okuMReturned, okuMMult, usdMult);
     }
 
     // ============ Reserve Management ============
@@ -424,7 +491,7 @@ contract OkuDollar is
      * @notice Deposit OkuMoney without minting OkuDollar shares (top up reserves)
      * @dev Used when USD rate > OkuM rate (vault undercollateralized).
      *      Since OkuMoney is non-rebasing, OkuM tokens are NOT dollar-denominated —
-     *      their value depends on okuMPrice().
+     *      their value depends on okuMMultiplier().
      * @param okuMAmount Amount of OkuMoney tokens to deposit
      */
     function depositReserves(uint256 okuMAmount) external onlyRole(VAULT_RESERVE_MANAGER) {
@@ -433,7 +500,9 @@ contract OkuDollar is
         uint256 balBefore = IERC20(address($.okuMoney)).balanceOf(address(this));
         IERC20(address($.okuMoney)).safeTransferFrom(msg.sender, address(this), okuMAmount);
         uint256 actualReceived = IERC20(address($.okuMoney)).balanceOf(address(this)) - balBefore;
-        emit ReservesDeposited(msg.sender, actualReceived);
+        uint256 okuMMult = $.okuMoney.okuMMultiplier();
+        uint256 dollarValue = (actualReceived * okuMMult) / PRECISION;
+        emit ReservesDeposited(msg.sender, actualReceived, dollarValue, collateralizationRatio());
     }
 
     /**
@@ -449,9 +518,12 @@ contract OkuDollar is
         IERC20(address($.okuMoney)).safeTransfer(msg.sender, okuMAmount);
 
         // Enforce collateralization floor AFTER withdrawal
-        if (collateralizationRatio() < $.minCollateralRatio) revert BelowMinimumCollateral();
+        uint256 ratio = collateralizationRatio();
+        if (ratio < $.minCollateralRatio) revert BelowMinimumCollateral();
 
-        emit SurplusWithdrawn(msg.sender, okuMAmount);
+        uint256 okuMMult = $.okuMoney.okuMMultiplier();
+        uint256 dollarValue = (okuMAmount * okuMMult) / PRECISION;
+        emit SurplusWithdrawn(msg.sender, okuMAmount, dollarValue, ratio);
     }
 
     // ============ Admin ============
@@ -482,32 +554,33 @@ contract OkuDollar is
     }
 
     /**
-     * @notice Price-aware collateralization ratio
-     * @dev collateralizationRatio = (okuMBalance × okuMPrice / PRECISION) × PRECISION / totalSupply
-     *      The numerator converts OkuM token count to dollar value via okuMPrice().
+     * @notice Multiplier-aware collateralization ratio
+     * @dev collateralizationRatio = (okuMBalance × okuMMultiplier / PRECISION) × PRECISION / totalSupply
+     *      The numerator converts OkuM token count to dollar value via okuMMultiplier().
      *      The denominator (totalSupply) is already in dollar terms (usdShares × usdMultiplier).
      */
     function collateralizationRatio() public view returns (uint256) {
         uint256 obligations = totalUsdObligations();
         if (obligations == 0) return type(uint256).max;
         OkuDollarStorage storage $ = _getOkuDollarStorage();
-        uint256 reservesDollarValue = (totalOkuMReserves() * $.okuMoney.okuMPrice()) / PRECISION;
+        uint256 reservesDollarValue =
+            (totalOkuMReserves() * $.okuMoney.okuMMultiplier()) / PRECISION;
         return (reservesDollarValue * PRECISION) / obligations;
     }
 
     /**
      * @notice Extractable surplus as OkuMoney tokens (0 if undercollateralized)
-     * @dev Calculates dollar surplus, then converts back to OkuM tokens via okuMPrice()
+     * @dev Calculates dollar surplus, then converts back to OkuM tokens via okuMMultiplier()
      */
     function surplus() public view returns (uint256) {
         OkuDollarStorage storage $ = _getOkuDollarStorage();
-        uint256 price = $.okuMoney.okuMPrice();
-        uint256 reservesDollarValue = (totalOkuMReserves() * price) / PRECISION;
+        uint256 okuMMult = $.okuMoney.okuMMultiplier();
+        uint256 reservesDollarValue = (totalOkuMReserves() * okuMMult) / PRECISION;
         uint256 obligations = totalUsdObligations();
         if (reservesDollarValue > obligations) {
             // Convert dollar surplus back to OkuM token count
             uint256 dollarSurplus = reservesDollarValue - obligations;
-            return (dollarSurplus * PRECISION) / price;
+            return (dollarSurplus * PRECISION) / okuMMult;
         }
         return 0;
     }
@@ -526,6 +599,7 @@ contract OkuDollar is
         if (endTimestamp != 0 && endTimestamp <= block.timestamp) revert EndTimestampInPast();
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
+        uint256 oldRate = $.usdRatePerSecond;
         $.usdBaseMultiplier = usdMultiplier();
         $.usdLastAccrualTime = block.timestamp;
 
@@ -533,7 +607,7 @@ contract OkuDollar is
         $.usdRateEnd = endTimestamp;
         $.usdPendingRatePerSecond = PRECISION;
 
-        emit UsdYieldRateUpdated(newRate, endTimestamp, $.usdBaseMultiplier);
+        emit UsdYieldRateUpdated(oldRate, newRate, endTimestamp, $.usdBaseMultiplier);
     }
 
     function setNextUsdYieldRate(uint256 newRate) external onlyRole(VAULT_REBASER) {
@@ -562,7 +636,7 @@ contract OkuDollar is
         $.usdPendingRatePerSecond = PRECISION;
         $.usdLastAccrualTime = block.timestamp;
 
-        emit UsdRebaseEvent(currentMultiplier, newMultiplier);
+        emit UsdRebaseEvent(currentMultiplier, newMultiplier, totalSupply());
     }
 
     // ============ Pause Management ============

@@ -62,7 +62,7 @@ describe("OkuDollar Vault Scenarios", () => {
         // The PSM slippage check can fail due to integer division rounding.
         // At elevated prices, we need to round up the USDC input to the nearest
         // amount that divides evenly by the price to avoid 1 wei rounding loss.
-        const currentPrice = await okuMoney.okuMPrice()
+        const currentPrice = await okuMoney.okuMMultiplier()
         const DECIMAL_MULT = 10n ** 12n // 6 to 18 decimal conversion
         
         // Calculate the minimum unit that divides evenly
@@ -223,9 +223,9 @@ describe("OkuDollar Vault Scenarios", () => {
             const initialReserves = await okuUsd.totalOkuMReserves()
 
             // Admin increases notePrice by 10% (non-rebasing: token counts don't change)
-            const priceBefore = await okuMoney.okuMPrice()
+            const priceBefore = await okuMoney.okuMMultiplier()
             const newPrice = priceBefore * 110n / 100n
-            await okuMoney.connect(Frank).setOkuMPrice(newPrice)
+            await okuMoney.connect(Frank).setOkuMMultiplier(newPrice)
 
             // Note reserves (raw token count) should be UNCHANGED
             const newReserves = await okuUsd.totalOkuMReserves()
@@ -304,9 +304,9 @@ describe("OkuDollar Vault Scenarios", () => {
             expect(charlieUsdGained).to.be.closeTo(aliceUsdGained * 3n, aliceUsdGained / 10n)
 
             // Admin increases notePrice by 10% — vault accumulates surplus
-            const priceBefore = await okuMoney.okuMPrice()
+            const priceBefore = await okuMoney.okuMMultiplier()
             const newPrice = priceBefore * 110n / 100n
-            await okuMoney.connect(Frank).setOkuMPrice(newPrice)
+            await okuMoney.connect(Frank).setOkuMMultiplier(newPrice)
 
             // Vault is now overcollateralized
             expect(await okuUsd.surplus()).to.be.gt(0)
@@ -315,7 +315,7 @@ describe("OkuDollar Vault Scenarios", () => {
             // Unwrap is price-aware: notesReturned = usdAmount × usdMultiplier / notePrice
             // After notePrice increase, each user gets FEWER notes back (each note worth more)
             const usdMult = await okuUsd.usdMultiplier()
-            const currentPrice = await okuMoney.okuMPrice()
+            const currentPrice = await okuMoney.okuMMultiplier()
 
             const charlieNotesBefore = await okuMoney.balanceOf(charlieAddr)
             await okuUsd.connect(Charlie).unwrap(charlieUsdGained, charlieAddr)

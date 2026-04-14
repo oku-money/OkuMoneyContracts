@@ -17,10 +17,10 @@ import {MathLib} from "../lib/MathLib.sol";
  * @title RedemptionQueue
  * @notice FIFO queue for OkuMoney redemptions when PSM buffer is depleted
  * @dev Stores OkuM token amounts (not shares — OkuMoney is non-rebasing).
- *      Queued OkuM tokens do not grow in balance, but appreciate in price via okuMPrice().
- *      When the queue processes, the user receives USDC based on okuMAmount × okuMPrice()
+ *      Queued OkuM tokens do not grow in balance, but appreciate via okuMMultiplier().
+ *      When the queue processes, the user receives USDC based on okuMAmount × okuMMultiplier()
  *      at processing time. The economic result is that users earn yield while queued
- *      through price appreciation rather than balance growth.
+ *      through multiplier appreciation rather than balance growth.
  *
  *      Tokens are transferred into the queue by the PSM before enqueue() is called;
  *      enqueue() is record-only and does not pull tokens from the user.
@@ -29,6 +29,8 @@ import {MathLib} from "../lib/MathLib.sol";
  *      the QUEUE_RESCUER role can call rescueQueueEntry() to return the OkuMoney to the
  *      original user or an alternate address and clear the slot. Operators should call
  *      rescueQueueEntry() on any stuck entries before running processQueue() on that range.
+ *
+ *      See Constants.sol for terminology legend.
  *
  *      Storage: Uses ERC-7201 namespaced storage pattern for upgrade safety.
  */
@@ -39,7 +41,7 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
     struct QueueEntry {
         address user;
-        uint256 okuMAmount; // Raw OkuM token amount (non-rebasing, appreciates via okuMPrice)
+        uint256 okuMAmount; // Raw OkuM token amount (non-rebasing, appreciates via okuMMultiplier)
         uint256 timestamp;
     }
 
@@ -75,18 +77,49 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
     // ============ Events ============
 
-    event RedemptionQueued(address indexed user, uint256 okuMAmount, uint256 position);
-    event RedemptionProcessed(address indexed user, uint256 okuMAmount, uint256 usdcAmount);
+    /// @notice Emitted when a redemption is added to the queue
+    /// @param user Address requesting redemption
+    /// @param okuMAmount OkuMoney queued (18 decimals)
+    /// @param dollarValue Dollar value at time of queuing (18 decimals)
+    /// @param position Queue position (index)
+    /// @param queueLength Total entries in queue after this addition
+    event RedemptionQueued(
+        address indexed user,
+        uint256 okuMAmount,
+        uint256 dollarValue,
+        uint256 position,
+        uint256 queueLength
+    );
+
+    /// @notice Emitted when a queued redemption is processed
+    /// @param user Address receiving USDC
+    /// @param okuMAmount OkuMoney burned (18 decimals)
+    /// @param dollarValue Dollar value at processing time (18 decimals)
+    /// @param usdcAmount USDC transferred (6 decimals)
+    /// @param waitTime Seconds between queuing and processing
+    event RedemptionProcessed(
+        address indexed user,
+        uint256 okuMAmount,
+        uint256 dollarValue,
+        uint256 usdcAmount,
+        uint256 waitTime
+    );
 
     /// @notice Emitted when processQueue skips a cleared/rescued entry
     event RedemptionSkipped(uint256 indexed index, RedemptionSkipReason reason);
 
     /// @notice Emitted when QUEUE_RESCUER returns OkuMoney for a stuck entry
+    /// @param index Queue position of rescued entry
+    /// @param originalUser Original requester
+    /// @param recipient Address receiving the OkuMoney
+    /// @param okuMAmount OkuMoney returned
+    /// @param dollarValue Dollar value at rescue time
     event RedemptionRescued(
         uint256 indexed index,
         address indexed originalUser,
         address indexed recipient,
-        uint256 okuMAmount
+        uint256 okuMAmount,
+        uint256 dollarValue
     );
 
     // ============ Enums ============
@@ -165,7 +198,9 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         $.queueTail = position + 1;
         $.totalQueuedOkuM += okuMTokenAmount;
 
-        emit RedemptionQueued(user, okuMTokenAmount, position);
+        uint256 dollarValue = MathLib.okuMToDollars(okuMTokenAmount, $.okuMoney.okuMMultiplier());
+        uint256 queueLength = $.queueTail - $.queueHead;
+        emit RedemptionQueued(user, okuMTokenAmount, dollarValue, position, queueLength);
     }
 
     /**
@@ -174,9 +209,9 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
      * @param endIndex Last queue index to process (exclusive)
      * @param usdcToken USDC token address
      * @param - OkuMoney token address (unused, kept for interface compat)
-     * @dev Price-aware: USDC output = okuMAmount × okuMPrice() / PRECISION (scaled to 6 decimals).
-     *      okuMPrice() is cached once before the loop — all entries in a batch are converted at
-     *      the same price, which is consistent within a single block and saves gas.
+     * @dev Multiplier-aware: USDC output = okuMAmount × okuMMultiplier() / PRECISION (scaled to 6 decimals).
+     *      okuMMultiplier() is cached once before the loop — all entries in a batch are converted at
+     *      the same multiplier, which is consistent within a single block and saves gas.
      *      Allows operator to skip blocked entries (e.g., USDC-blacklisted users) by calling
      *      rescueQueueEntry() first, then processing the cleared range.
      *      Entries are deleted after processing. queueHead advances past consecutive
@@ -198,8 +233,8 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         IERC20 usdcContract = IERC20(usdcToken);
         uint256 usdcBalance = usdcContract.balanceOf(msg.sender);
 
-        // Cache price once — consistent within a block, avoids repeated external calls
-        uint256 cachedPrice = $.okuMoney.okuMPrice();
+        // Cache multiplier once — consistent within a block, avoids repeated external calls
+        uint256 cachedMult = $.okuMoney.okuMMultiplier();
 
         for (uint256 i = startIndex; i < endIndex; i++) {
             QueueEntry memory entry = $.queue[i];
@@ -210,8 +245,8 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
                 continue;
             }
 
-            // Price-aware: dollarValue = okuMAmount × cachedPrice / PRECISION
-            uint256 dollarValue18 = MathLib.okuMToDollars(entry.okuMAmount, cachedPrice);
+            // Multiplier-aware: dollarValue = okuMAmount × cachedMult / PRECISION
+            uint256 dollarValue18 = MathLib.okuMToDollars(entry.okuMAmount, cachedMult);
 
             // Convert to USDC (6 decimals)
             uint256 usdcAmount = MathLib.dollarsToUsdc(dollarValue18);
@@ -224,12 +259,15 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
             // Burn OkuM tokens held by queue
             $.okuMoney.burn(entry.okuMAmount);
 
-            // Transfer USDC to user (price-aware value)
+            // Transfer USDC to user (multiplier-aware value)
             usdcContract.safeTransferFrom(msg.sender, entry.user, usdcAmount);
 
             $.totalQueuedOkuM -= entry.okuMAmount;
 
-            emit RedemptionProcessed(entry.user, entry.okuMAmount, usdcAmount);
+            uint256 waitTime = block.timestamp - entry.timestamp;
+            emit RedemptionProcessed(
+                entry.user, entry.okuMAmount, dollarValue18, usdcAmount, waitTime
+            );
 
             delete $.queue[i];
             usdcBalance -= usdcAmount;
@@ -271,7 +309,8 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
         $.totalQueuedOkuM -= entry.okuMAmount;
 
-        emit RedemptionRescued(index, entry.user, alternateRecipient, entry.okuMAmount);
+        uint256 dollarValue = MathLib.okuMToDollars(entry.okuMAmount, $.okuMoney.okuMMultiplier());
+        emit RedemptionRescued(index, entry.user, alternateRecipient, entry.okuMAmount, dollarValue);
 
         delete $.queue[index];
 
@@ -282,12 +321,13 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     }
 
     /**
-     * @notice Get total USDC owed across all pending queue entries (price-aware)
-     * @return O(1) calculation via running totalQueuedOkuM counter and okuMPrice()
+     * @notice Get total USDC owed across all pending queue entries (multiplier-aware)
+     * @return O(1) calculation via running totalQueuedOkuM counter and okuMMultiplier()
      */
     function totalQueuedUsdc() external view returns (uint256) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
-        uint256 dollarValue18 = MathLib.okuMToDollars($.totalQueuedOkuM, $.okuMoney.okuMPrice());
+        uint256 dollarValue18 =
+            MathLib.okuMToDollars($.totalQueuedOkuM, $.okuMoney.okuMMultiplier());
         return MathLib.dollarsToUsdc(dollarValue18);
     }
 
@@ -310,14 +350,14 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     }
 
     /**
-     * @notice Get current dollar value for a queue entry (price-aware)
+     * @notice Get current dollar value for a queue entry (multiplier-aware)
      * @param index Queue index
      * @return Current dollar value of the queued OkuM tokens (18 decimals)
      */
     function getQueueEntryValue(uint256 index) external view returns (uint256) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         if (index < $.queueHead || index >= $.queueTail) revert InvalidIndex();
-        return MathLib.okuMToDollars($.queue[index].okuMAmount, $.okuMoney.okuMPrice());
+        return MathLib.okuMToDollars($.queue[index].okuMAmount, $.okuMoney.okuMMultiplier());
     }
 
     // ============ Upgradeability ============

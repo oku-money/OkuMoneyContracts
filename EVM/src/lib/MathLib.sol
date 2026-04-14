@@ -6,6 +6,7 @@ import {Constants} from "./Constants.sol";
 /**
  * @title MathLib
  * @notice Shared math utilities for OkuMoney contracts
+ * @dev See Constants.sol for terminology legend.
  */
 library MathLib {
     /**
@@ -53,21 +54,35 @@ library MathLib {
     /**
      * @notice Convert OkuMoney token amount to dollar value
      * @param okuMAmount Amount of OkuMoney tokens
-     * @param okuMPrice Current OkuMoney price (scaled by PRECISION)
+     * @param okuMMultiplier Current OkuMoney multiplier (dollar value per token, scaled by PRECISION)
      * @return Dollar value in 18 decimals
      */
-    function okuMToDollars(uint256 okuMAmount, uint256 okuMPrice) internal pure returns (uint256) {
-        return (okuMAmount * okuMPrice) / Constants.PRECISION;
+    function okuMToDollars(
+        uint256 okuMAmount,
+        uint256 okuMMultiplier
+    )
+        internal
+        pure
+        returns (uint256)
+    {
+        return (okuMAmount * okuMMultiplier) / Constants.PRECISION;
     }
 
     /**
      * @notice Convert dollar value to OkuMoney token amount
      * @param dollarValue Dollar value in 18 decimals
-     * @param okuMPrice Current OkuMoney price (scaled by PRECISION)
+     * @param okuMMultiplier Current OkuMoney multiplier (dollar value per token, scaled by PRECISION)
      * @return Amount of OkuMoney tokens
      */
-    function dollarsToOkuM(uint256 dollarValue, uint256 okuMPrice) internal pure returns (uint256) {
-        return (dollarValue * Constants.PRECISION) / okuMPrice;
+    function dollarsToOkuM(
+        uint256 dollarValue,
+        uint256 okuMMultiplier
+    )
+        internal
+        pure
+        returns (uint256)
+    {
+        return (dollarValue * Constants.PRECISION) / okuMMultiplier;
     }
 
     /**

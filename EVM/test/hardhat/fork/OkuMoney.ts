@@ -69,7 +69,7 @@ describe("OkuNote Scenarios", () => {
         // Simpler approach: add enough buffer that even with 1 wei loss, check passes.
         // Since check is output >= input, and loss is at most (price-1) wei at 18 decimals,
         // we need input to be a multiple of price/1e18 (rounded up).
-        const currentPrice = await okuMoney.okuMPrice()
+        const currentPrice = await okuMoney.okuMMultiplier()
         const PRECISION = parseEther("1")
         const DECIMAL_MULT = 10n ** 12n // 6 to 18 decimal conversion
         
@@ -184,7 +184,7 @@ describe("OkuNote Scenarios", () => {
 
             // Alice transfers 5,000 OkuMoney to Bob (OkuNote is 18 decimals)
             const transferAmount = parseEther("5000")
-            const priceAtTransfer = await okuMoney.okuMPrice()
+            const priceAtTransfer = await okuMoney.okuMMultiplier()
             const PRECISION = parseEther("1")
             const expectedDollarValue = (transferAmount * priceAtTransfer) / PRECISION
             await expect(okuMoney.connect(Alice).transfer(bobAddr, transferAmount))
@@ -203,12 +203,12 @@ describe("OkuNote Scenarios", () => {
             const bobBeforeUpdate = await okuMoney.balanceOf(bobAddr)
 
             // Admin performs 10% notePrice increase (non-rebasing: balances do NOT change)
-            const priceBefore = await okuMoney.okuMPrice()
+            const priceBefore = await okuMoney.okuMMultiplier()
             const newPrice = priceBefore * 110n / 100n
-            await okuMoney.connect(Frank).setOkuMPrice(newPrice)
+            await okuMoney.connect(Frank).setOkuMMultiplier(newPrice)
 
             // Verify notePrice increased
-            expect(await okuMoney.okuMPrice()).to.equal(newPrice)
+            expect(await okuMoney.okuMMultiplier()).to.equal(newPrice)
 
             // Balances should be UNCHANGED (non-rebasing)
             const aliceAfterUpdate = await okuMoney.balanceOf(aliceAddr)
@@ -236,7 +236,7 @@ describe("OkuNote Scenarios", () => {
             const PRECISION = parseEther("1")
 
             // Get current notePrice (may be elevated from earlier tests)
-            const currentPrice = await okuMoney.okuMPrice()
+            const currentPrice = await okuMoney.okuMMultiplier()
 
             // Set PSM minter allowance to limited amount (50,000 OkuMoney in 18 decimals)
             const limitedAllowance = parseEther("50000")
@@ -402,7 +402,7 @@ describe("OkuNote Scenarios", () => {
 
             // Minting via PSM should fail when paused
             // Use price-aligned amount to pass slippage check, so we hit the pause check
-            const currentPrice = await okuMoney.okuMPrice()
+            const currentPrice = await okuMoney.okuMMultiplier()
             const DECIMAL_MULT = 10n ** 12n
             const unitSize = currentPrice / DECIMAL_MULT
             const alignedDeposit = ((depositAmount + unitSize - 1n) / unitSize) * unitSize

@@ -35,12 +35,14 @@ interface IAggregatorV3 {
 
 /**
  * @title LitePSM
- * @notice Price-aware Peg Stability Module for USDC <-> OkuMoney/OkuDollar swaps
- * @dev OkuMoney is non-rebasing — okuMPrice() tracks appreciation separately.
- *      PSM converts at dollar-value via okuMPrice(): depositing 100 USDC when
- *      okuMPrice=$1.05 gives ~95.24 OkuM. Redeeming those OkuM returns ~100 USDC.
+ * @notice Multiplier-aware Peg Stability Module for USDC <-> OkuMoney/OkuDollar swaps
+ * @dev OkuMoney is non-rebasing — okuMMultiplier() tracks appreciation separately.
+ *      PSM converts at dollar-value via okuMMultiplier(): depositing 100 USDC when
+ *      okuMMultiplier=$1.05 gives ~95.24 OkuM. Redeeming those OkuM returns ~100 USDC.
  *      Includes PoR oracle checks and redemption queue for when buffer is depleted.
  *      Provides convenience functions for OkuDollar mint/redeem via the vault.
+ *
+ *      See Constants.sol for terminology legend.
  *
  *      Storage: Uses ERC-7201 namespaced storage pattern for upgrade safety.
  */
@@ -94,14 +96,57 @@ contract LitePSM is
 
     // ============ Events ============
 
-    event MintNote(address indexed user, uint256 usdcAmount, uint256 okuMAmount);
-    event RedeemNote(address indexed user, uint256 okuMIn, uint256 usdcOut);
-    event MintUSD(address indexed user, uint256 usdcAmount, uint256 usdAmount);
-    event RedeemUSD(address indexed user, uint256 usdIn, uint256 usdcOut);
+    /// @notice Emitted when user mints OkuMoney by depositing USDC
+    /// @param user Address of the user
+    /// @param usdcAmount USDC deposited (6 decimals)
+    /// @param okuMAmount OkuMoney minted (18 decimals)
+    /// @param okuMMultiplier Multiplier at time of mint (allows rate reconstruction)
+    event MintNote(
+        address indexed user, uint256 usdcAmount, uint256 okuMAmount, uint256 okuMMultiplier
+    );
+
+    /// @notice Emitted when user redeems OkuMoney for USDC (instant or queued path emits different events)
+    /// @param user Address of the user
+    /// @param okuMIn OkuMoney redeemed (18 decimals)
+    /// @param usdcOut USDC received (6 decimals)
+    /// @param okuMMultiplier Multiplier at time of redemption
+    event RedeemNote(address indexed user, uint256 okuMIn, uint256 usdcOut, uint256 okuMMultiplier);
+
+    /// @notice Emitted when user mints OkuDollar by depositing USDC
+    /// @param user Address of the user
+    /// @param usdcAmount USDC deposited (6 decimals)
+    /// @param usdAmount OkuDollar minted (18 decimals)
+    /// @param okuMMultiplier OkuMoney multiplier at time of mint
+    event MintUSD(
+        address indexed user, uint256 usdcAmount, uint256 usdAmount, uint256 okuMMultiplier
+    );
+
+    /// @notice Emitted when user redeems OkuDollar for USDC
+    /// @param user Address of the user
+    /// @param usdIn OkuDollar redeemed (18 decimals)
+    /// @param usdcOut USDC received (6 decimals)
+    /// @param okuMMultiplier OkuMoney multiplier at time of redemption
+    event RedeemUSD(address indexed user, uint256 usdIn, uint256 usdcOut, uint256 okuMMultiplier);
+
     event OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled);
-    event BufferRefilled(uint256 amount);
-    event BufferDeposited(address indexed depositor, uint256 amount);
-    event BufferWithdrawn(address indexed to, uint256 amount);
+
+    /// @notice Emitted after queue processing completes
+    /// @param newBufferBalance Remaining USDC in buffer after processing
+    /// @param processedStart First index processed (inclusive)
+    /// @param processedEnd Last index processed (exclusive)
+    event BufferRefilled(uint256 newBufferBalance, uint256 processedStart, uint256 processedEnd);
+
+    /// @notice Emitted when admin deposits USDC to buffer
+    /// @param depositor Address that deposited
+    /// @param amount USDC deposited
+    /// @param newBufferBalance Total buffer balance after deposit
+    event BufferDeposited(address indexed depositor, uint256 amount, uint256 newBufferBalance);
+
+    /// @notice Emitted when admin withdraws USDC from buffer
+    /// @param to Recipient address
+    /// @param amount USDC withdrawn
+    /// @param newBufferBalance Total buffer balance after withdrawal
+    event BufferWithdrawn(address indexed to, uint256 amount, uint256 newBufferBalance);
 
     // ============ Custom Errors ============
 
@@ -202,12 +247,12 @@ contract LitePSM is
         _;
     }
 
-    // ============ OkuMoney Swap Functions (Price-Aware) ============
+    // ============ OkuMoney Swap Functions (Multiplier-Aware) ============
 
     /**
-     * @notice Mint OkuMoney by depositing USDC (price-aware)
-     * @dev okuMAmount = usdcValue × PRECISION / okuMPrice()
-     *      If okuMPrice=$1.05, depositing 100 USDC gives ~95.24 OkuM.
+     * @notice Mint OkuMoney by depositing USDC (multiplier-aware)
+     * @dev okuMAmount = usdcValue × PRECISION / okuMMultiplier()
+     *      If okuMMultiplier=$1.05, depositing 100 USDC gives ~95.24 OkuM.
      * @param usdcAmount Amount of USDC to deposit (6 decimals)
      */
     function mintOkuM(uint256 usdcAmount)
@@ -223,18 +268,18 @@ contract LitePSM is
         // Convert USDC (6 decimals) to 18-decimal dollar value
         uint256 usdcValue18 = MathLib.usdcToDollars(usdcAmount);
 
-        // Price-aware conversion: okuMAmount = dollarValue × PRECISION / okuMPrice
-        uint256 price = $.okuMoney.okuMPrice();
-        uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, price);
+        // Multiplier-aware conversion: okuMAmount = dollarValue × PRECISION / okuMMultiplier
+        uint256 okuMMult = $.okuMoney.okuMMultiplier();
+        uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, okuMMult);
         if (okuMAmount == 0) revert AmountTooSmall();
 
         // Slippage protection: verify output USDC value is within 1 unit of input
         // The dollarsToOkuM conversion truncates, losing up to 1 USDC unit of value.
         // This is always in the protocol's favor (user gets slightly fewer OkuMoney).
-        // We allow 1 unit tolerance to prevent reverts at non-even prices like $1.05.
-        uint256 outputUsdc = MathLib.dollarsToUsdc(MathLib.okuMToDollars(okuMAmount, price));
-        if (outputUsdc + 1 < usdcAmount) {
-            revert OutputBelowMinimum(outputUsdc, usdcAmount);
+        // We allow 1 unit tolerance to prevent reverts at non-even multipliers like $1.05.
+        uint256 roundTripUsdc = MathLib.dollarsToUsdc(MathLib.okuMToDollars(okuMAmount, okuMMult));
+        if (roundTripUsdc + 1 < usdcAmount) {
+            revert OutputBelowMinimum(roundTripUsdc, usdcAmount);
         }
 
         // Check PoR oracle if enabled
@@ -245,16 +290,16 @@ contract LitePSM is
         // Transfer USDC from user
         $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
 
-        // Mint OkuMoney to user (raw token amount, price-adjusted)
+        // Mint OkuMoney to user (raw token amount, multiplier-adjusted)
         $.okuMoney.mint(msg.sender, okuMAmount);
 
-        emit MintNote(msg.sender, usdcAmount, okuMAmount);
+        emit MintNote(msg.sender, usdcAmount, okuMAmount, okuMMult);
     }
 
     /**
-     * @notice Redeem OkuMoney for USDC (price-aware)
-     * @dev usdcAmount = okuMAmount × okuMPrice() / PRECISION (scaled to 6 decimals)
-     *      If okuMPrice=$1.05, redeeming 95.24 OkuM returns ~100 USDC.
+     * @notice Redeem OkuMoney for USDC (multiplier-aware)
+     * @dev usdcAmount = okuMAmount × okuMMultiplier() / PRECISION (scaled to 6 decimals)
+     *      If okuMMultiplier=$1.05, redeeming 95.24 OkuM returns ~100 USDC.
      * @param okuMAmount Amount of OkuMoney to redeem (18 decimals)
      */
     function redeemOkuM(uint256 okuMAmount)
@@ -297,9 +342,9 @@ contract LitePSM is
 
         LitePSMStorage storage $ = _getLitePSMStorage();
 
-        // Price-aware conversion: dollarValue = okuMAmount × okuMPrice / PRECISION
-        uint256 price = $.okuMoney.okuMPrice();
-        uint256 dollarValue18 = MathLib.okuMToDollars(okuMAmount, price);
+        // Multiplier-aware conversion: dollarValue = okuMAmount × okuMMultiplier / PRECISION
+        uint256 okuMMult = $.okuMoney.okuMMultiplier();
+        uint256 dollarValue18 = MathLib.okuMToDollars(okuMAmount, okuMMult);
 
         // Convert to USDC (6 decimals) — truncates sub-USDC dust
         uint256 usdcAmount = MathLib.dollarsToUsdc(dollarValue18);
@@ -307,7 +352,7 @@ contract LitePSM is
 
         // Slippage protection: truncate input to USDC-representable floor
         uint256 okuMFloor = (okuMAmount / DECIMAL_MULTIPLIER) * DECIMAL_MULTIPLIER;
-        uint256 minUsdcExpected = MathLib.dollarsToUsdc(MathLib.okuMToDollars(okuMFloor, price));
+        uint256 minUsdcExpected = MathLib.dollarsToUsdc(MathLib.okuMToDollars(okuMFloor, okuMMult));
         if (usdcAmount < minUsdcExpected) {
             revert OutputBelowMinimum(usdcAmount, minUsdcExpected);
         }
@@ -319,7 +364,7 @@ contract LitePSM is
             IERC20(address($.okuMoney)).safeTransferFrom(user, address(this), okuMAmount);
             $.okuMoney.burn(okuMAmount);
             $.usdc.safeTransfer(user, usdcAmount);
-            emit RedeemNote(user, okuMAmount, usdcAmount);
+            emit RedeemNote(user, okuMAmount, usdcAmount, okuMMult);
         } else {
             // Insufficient buffer - queue redemption
             // Pull OkuMoney from user to PSM
@@ -334,7 +379,7 @@ contract LitePSM is
 
     /**
      * @notice Mint OkuDollar by depositing USDC (USDC → mint OkuM → wrap → usdOku to user)
-     * @dev Price-aware: USDC converted to OkuM via okuMPrice(), then wrapped into vault.
+     * @dev Multiplier-aware: USDC converted to OkuM via okuMMultiplier(), then wrapped into vault.
      * @param usdcAmount Amount of USDC to deposit (6 decimals)
      */
     function mintUsdOku(uint256 usdcAmount)
@@ -350,9 +395,9 @@ contract LitePSM is
         // Convert USDC (6 decimals) to 18-decimal dollar value
         uint256 usdcValue18 = MathLib.usdcToDollars(usdcAmount);
 
-        // Price-aware conversion: okuMAmount = dollarValue × PRECISION / okuMPrice
-        uint256 price = $.okuMoney.okuMPrice();
-        uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, price);
+        // Multiplier-aware conversion: okuMAmount = dollarValue × PRECISION / okuMMultiplier
+        uint256 okuMMult = $.okuMoney.okuMMultiplier();
+        uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, okuMMult);
         if (okuMAmount == 0) revert AmountTooSmall();
 
         // Check PoR oracle if enabled
@@ -381,7 +426,7 @@ contract LitePSM is
             revert OutputBelowMinimum(usdMinted, usdcValue18);
         }
 
-        emit MintUSD(msg.sender, usdcAmount, usdMinted);
+        emit MintUSD(msg.sender, usdcAmount, usdMinted, okuMMult);
     }
 
     /**
@@ -389,7 +434,7 @@ contract LitePSM is
      * @param usdAmount Amount of OkuDollar to redeem (18 decimals)
      * @dev Reverts if vault is undercollateralized (unwrap fails).
      *      If USDC buffer insufficient, OkuM goes to queue (user earns yield while queued
-     *      via okuMPrice() appreciation).
+     *      via okuMMultiplier() appreciation).
      */
     function redeemUsdOku(uint256 usdAmount)
         external
@@ -434,32 +479,43 @@ contract LitePSM is
         // Pull OkuDollar from user
         IERC20(address($.usdOku)).safeTransferFrom(user, address(this), usdAmount);
 
-        // Unwrap OkuDollar → get OkuMoney back to PSM (price-aware)
+        // Unwrap OkuDollar → get OkuMoney back to PSM (multiplier-aware)
         // NOTE: Reverts if vault undercollateralized (distinct failure mode)
         uint256 okuMReturned = $.usdOku.unwrap(usdAmount, address(this));
 
         // Now redeem the OkuMoney for USDC (same path as redeemOkuM)
-        _redeemOkuMInternal(user, okuMReturned);
+        // _redeemOkuMInternal will calculate usdcOut and emit RedeemNote
+        uint256 usdcOut = _redeemOkuMInternal(user, okuMReturned);
+
+        // Emit RedeemUSD with the actual USDC output
+        emit RedeemUSD(user, usdAmount, usdcOut, $.okuMoney.okuMMultiplier());
     }
 
     /**
      * @dev Internal OkuMoney redemption (OkuM already held by PSM)
-     *      Price-aware: USDC output = okuMAmount × okuMPrice() / PRECISION (scaled to 6 decimals)
+     *      Multiplier-aware: USDC output = okuMAmount × okuMMultiplier() / PRECISION (scaled to 6 decimals)
+     * @return usdcAmount The USDC amount transferred (0 if queued)
      */
-    function _redeemOkuMInternal(address user, uint256 okuMAmount) internal {
+    function _redeemOkuMInternal(
+        address user,
+        uint256 okuMAmount
+    )
+        internal
+        returns (uint256 usdcAmount)
+    {
         LitePSMStorage storage $ = _getLitePSMStorage();
 
-        // Price-aware conversion: dollarValue = okuMAmount × okuMPrice / PRECISION
-        uint256 price = $.okuMoney.okuMPrice();
-        uint256 dollarValue18 = MathLib.okuMToDollars(okuMAmount, price);
+        // Multiplier-aware conversion: dollarValue = okuMAmount × okuMMultiplier / PRECISION
+        uint256 okuMMult = $.okuMoney.okuMMultiplier();
+        uint256 dollarValue18 = MathLib.okuMToDollars(okuMAmount, okuMMult);
 
         // Convert to USDC (6 decimals)
-        uint256 usdcAmount = MathLib.dollarsToUsdc(dollarValue18);
+        usdcAmount = MathLib.dollarsToUsdc(dollarValue18);
         if (usdcAmount == 0) revert AmountTooSmall();
 
         // Slippage protection: truncate input to USDC-representable floor
         uint256 okuMFloor = (okuMAmount / DECIMAL_MULTIPLIER) * DECIMAL_MULTIPLIER;
-        uint256 minUsdcExpected = MathLib.dollarsToUsdc(MathLib.okuMToDollars(okuMFloor, price));
+        uint256 minUsdcExpected = MathLib.dollarsToUsdc(MathLib.okuMToDollars(okuMFloor, okuMMult));
         if (usdcAmount < minUsdcExpected) {
             revert OutputBelowMinimum(usdcAmount, minUsdcExpected);
         }
@@ -470,12 +526,13 @@ contract LitePSM is
             // Sufficient buffer - burn OkuMoney, transfer USDC
             $.okuMoney.burn(okuMAmount);
             $.usdc.safeTransfer(user, usdcAmount);
-            emit RedeemNote(user, okuMAmount, usdcAmount);
+            emit RedeemNote(user, okuMAmount, usdcAmount, okuMMult);
         } else {
             // Insufficient buffer - queue redemption
             // Transfer OkuMoney from PSM to queue, then record
             IERC20(address($.okuMoney)).safeTransfer(address($.redemptionQueue), okuMAmount);
             $.redemptionQueue.enqueue(user, okuMAmount);
+            usdcAmount = 0; // Signal that redemption was queued, not instant
         }
     }
 
@@ -505,7 +562,7 @@ contract LitePSM is
         // Revoke approval for remaining USDC
         $.usdc.approve(address($.redemptionQueue), 0);
 
-        emit BufferRefilled($.usdc.balanceOf(address(this)));
+        emit BufferRefilled($.usdc.balanceOf(address(this)), startIndex, endIndex);
     }
 
     // ============ Oracle Management ============
@@ -563,7 +620,7 @@ contract LitePSM is
             revert WouldStrandQueue(remainingBalance, queueObligation);
         }
         $.usdc.safeTransfer(to, amount);
-        emit BufferWithdrawn(to, amount);
+        emit BufferWithdrawn(to, amount, remainingBalance);
     }
 
     /**
@@ -573,7 +630,7 @@ contract LitePSM is
     function depositBuffer(uint256 amount) external onlyRole(PSM_BUFFER_DEPOSITOR) {
         LitePSMStorage storage $ = _getLitePSMStorage();
         $.usdc.safeTransferFrom(msg.sender, address(this), amount);
-        emit BufferDeposited(msg.sender, amount);
+        emit BufferDeposited(msg.sender, amount, $.usdc.balanceOf(address(this)));
     }
 
     // ============ Upgradeability ============

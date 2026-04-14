@@ -134,19 +134,42 @@ contract OkuBridge is
 
     // ============ Events ============
 
+    /// @notice Emitted when tokens are burned to initiate a bridge transfer
+    /// @param requestId Unique identifier for this bridge request
+    /// @param sender Address that initiated the bridge
+    /// @param recipient Recipient address on destination (bytes32 for non-EVM compatibility)
+    /// @param sourceChainId Chain ID where burn occurred
+    /// @param destChainId Destination chain ID
+    /// @param grossAmount Total tokens sent by user (before fees)
+    /// @param netAmount Tokens that will be minted on destination (after fees)
+    /// @param feeAmount Fee deducted (grossAmount - netAmount)
+    /// @param nonce Sequential nonce for this destination
+    /// @param deadline Timestamp after which signature expires
     event BridgeBurn(
         bytes32 indexed requestId,
         address indexed sender,
         bytes32 recipient,
         uint256 sourceChainId,
         uint256 destChainId,
-        uint256 amount,
+        uint256 grossAmount,
+        uint256 netAmount,
+        uint256 feeAmount,
         uint256 nonce,
         uint256 deadline
     );
 
+    /// @notice Emitted when tokens are minted on destination chain
+    /// @param requestId Unique identifier for this bridge request
+    /// @param recipient Recipient address (bytes32 for consistency with BridgeBurn)
+    /// @param sourceChainId Chain where tokens were burned
+    /// @param destChainId Chain where tokens are being minted (current chain)
+    /// @param amount Tokens minted
     event BridgeMint(
-        bytes32 indexed requestId, bytes32 indexed recipient, uint256 sourceChainId, uint256 amount
+        bytes32 indexed requestId,
+        bytes32 indexed recipient,
+        uint256 sourceChainId,
+        uint256 destChainId,
+        uint256 amount
     );
 
     event SignerUpdated(address indexed oldSigner, address indexed newSigner);
@@ -154,11 +177,27 @@ contract OkuBridge is
     event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
     event ChainAdded(uint256 indexed chainId);
     event ChainRemoved(uint256 indexed chainId);
-    event LimitsUpdated(uint128 minAmount, uint128 maxAmount);
+
+    /// @notice Emitted when bridge limits are updated
+    /// @param oldMinAmount Previous minimum amount
+    /// @param oldMaxAmount Previous maximum amount
+    /// @param newMinAmount New minimum amount
+    /// @param newMaxAmount New maximum amount
+    event LimitsUpdated(
+        uint128 oldMinAmount, uint128 oldMaxAmount, uint128 newMinAmount, uint128 newMaxAmount
+    );
     event NonceSkipped(uint256 indexed destChainId, uint256 skippedNonce);
     event DustSwept(address indexed recipient, uint256 amount);
     event DeadlineUpdated(uint256 oldDeadline, uint256 newDeadline);
-    event RefundInitiated(bytes32 indexed requestId, address indexed initiator);
+
+    /// @notice Emitted when a refund is initiated (step 1 of 2)
+    /// @param requestId Bridge request being refunded
+    /// @param initiator Address that initiated the refund
+    /// @param sender Original sender from the bridge request
+    /// @param amount Amount that will be refunded if confirmed
+    event RefundInitiated(
+        bytes32 indexed requestId, address indexed initiator, address sender, uint256 amount
+    );
     event RefundConfirmed(bytes32 indexed requestId, address indexed sender, uint256 amount);
     event RefundCancelled(
         bytes32 indexed requestId, address indexed initiator, address indexed cancelledBy
@@ -390,7 +429,9 @@ contract OkuBridge is
             recipient,
             block.chainid,
             destChainId,
-            netAmount,
+            amount, // grossAmount (user sent)
+            netAmount, // netAmount (after fee)
+            feeAmount,
             nonce,
             request.deadline
         );
@@ -468,7 +509,9 @@ contract OkuBridge is
         $.okuMoney.mint(mintTo, request.amount);
 
         // Emit event
-        emit BridgeMint(requestId, request.recipient, request.sourceChainId, request.amount);
+        emit BridgeMint(
+            requestId, request.recipient, request.sourceChainId, request.destChainId, request.amount
+        );
     }
 
     // ============ Two-Step Refund Functions ============
@@ -504,7 +547,7 @@ contract OkuBridge is
         // Record the initiator — confirmRefund will verify msg.sender differs
         $.pendingRefundInitiator[requestId] = msg.sender;
 
-        emit RefundInitiated(requestId, msg.sender);
+        emit RefundInitiated(requestId, msg.sender, request.sender, request.amount);
     }
 
     /**
@@ -670,8 +713,9 @@ contract OkuBridge is
     function updateLimits(uint128 min, uint128 max) external onlyRole(BRIDGE_LIMITS_MANAGER) {
         if (min > max) revert InvalidLimits(min, max);
         OkuBridgeStorage storage $ = _getOkuBridgeStorage();
+        BridgeLimits memory oldLimits = $.limits;
         $.limits = BridgeLimits({min: min, max: max});
-        emit LimitsUpdated(min, max);
+        emit LimitsUpdated(oldLimits.min, oldLimits.max, min, max);
     }
 
     /**

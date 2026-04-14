@@ -210,14 +210,14 @@ describe("Happy Path Testing", () => {
         const daveBefore = await okuMoney.balanceOf(daveAddr)
 
         // Get current notePrice
-        const priceBefore = await okuMoney.okuMPrice()
+        const priceBefore = await okuMoney.okuMMultiplier()
 
         // Admin increases notePrice by 5% (simulating yield accrual)
         const newPrice = priceBefore * 105n / 100n
-        await okuMoney.connect(Frank).setOkuMPrice(newPrice)
+        await okuMoney.connect(Frank).setOkuMMultiplier(newPrice)
 
         // Verify notePrice increased
-        expect(await okuMoney.okuMPrice()).to.equal(newPrice)
+        expect(await okuMoney.okuMMultiplier()).to.equal(newPrice)
 
         // Balances should be UNCHANGED (non-rebasing)
         const aliceAfter = await okuMoney.balanceOf(aliceAddr)

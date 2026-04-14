@@ -11,25 +11,27 @@ import {LitePSM} from "../../src/psm/LitePSM.sol";
 /**
  * @title LitePSMTest
  * @notice Unit tests for LitePSM (Peg Stability Module)
- * @dev Tests verify price-aware conversion between USDC (6 decimals) and OkuMoney (18 decimals).
- *      OkuMoney is a standard non-rebasing ERC-20. okuMPrice() tracks price appreciation
+ * @dev Tests verify multiplier-aware conversion between USDC (6 decimals) and OkuMoney (18 decimals).
+ *      OkuMoney is a standard non-rebasing ERC-20. okuMMultiplier() tracks multiplier appreciation
  *      separately from balanceOf().
  *
- *      Mint:   okuMAmount = usdcValue18 × PRECISION / okuMPrice()
- *      Redeem: usdcAmount = okuMAmount × okuMPrice() / PRECISION  (scaled to 6 decimals)
+ *      Mint:   okuMAmount = usdcValue18 × PRECISION / okuMMultiplier()
+ *      Redeem: usdcAmount = okuMAmount × okuMMultiplier() / PRECISION  (scaled to 6 decimals)
  *
- *      At initial notePrice=1e18, behavior is identical to a 1:1 decimal-scaled swap.
+ *      At initial okuMMultiplier=1e18, behavior is identical to a 1:1 decimal-scaled swap.
  */
 contract LitePSMTest is BaseTest {
     // Decimal conversion constant
     uint256 private constant DECIMAL_MULTIPLIER = 10 ** 12;
     // ============ Events ============
 
-    event MintNote(address indexed user, uint256 usdcAmount, uint256 okuMAmount);
-    event RedeemNote(address indexed user, uint256 noteIn, uint256 usdcOut);
+    event MintNote(
+        address indexed user, uint256 usdcAmount, uint256 okuMAmount, uint256 okuMMultiplier
+    );
+    event RedeemNote(address indexed user, uint256 noteIn, uint256 usdcOut, uint256 okuMMultiplier);
     event OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled);
-    event BufferRefilled(uint256 amount);
-    event BufferDeposited(address indexed depositor, uint256 amount);
+    event BufferRefilled(uint256 newBufferBalance, uint256 processedStart, uint256 processedEnd);
+    event BufferDeposited(address indexed depositor, uint256 amount, uint256 newBufferBalance);
 
     // ============ Setup ============
 
@@ -41,27 +43,27 @@ contract LitePSMTest is BaseTest {
         _mintUsdc(address(litePsm), 5000e6); // Initial buffer
     }
 
-    // ============ Helpers for price-aware math ============
+    // ============ Helpers for multiplier-aware math ============
 
-    /// @notice Calculate expected note amount from USDC deposit at current notePrice
+    /// @notice Calculate expected note amount from USDC deposit at current okuMMultiplier
     function _expectedNotesFromUsdc(uint256 usdcAmount) internal view returns (uint256) {
         uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
-        uint256 price = okuMoney.okuMPrice();
+        uint256 price = okuMoney.okuMMultiplier();
         return (usdcValue18 * PRECISION) / price;
     }
 
-    /// @notice Calculate expected USDC output from note redemption at current notePrice
+    /// @notice Calculate expected USDC output from note redemption at current okuMMultiplier
     function _expectedUsdcFromNotes(uint256 okuMAmount) internal view returns (uint256) {
-        uint256 price = okuMoney.okuMPrice();
+        uint256 price = okuMoney.okuMMultiplier();
         uint256 dollarValue18 = (okuMAmount * price) / PRECISION;
         return dollarValue18 / DECIMAL_MULTIPLIER;
     }
 
-    /// @notice Raise notePrice to a specific value using updateNotePrice
+    /// @notice Raise okuMMultiplier to a specific value using updateNotePrice
     /// @dev Rolls to next block after setting price to avoid yield distribution lock
     function _setNotePrice(uint256 newPrice) internal {
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        okuMoney.setOkuMMultiplier(newPrice);
         vm.roll(block.number + 1); // Avoid yield distribution lock
     }
 
@@ -89,7 +91,7 @@ contract LitePSMTest is BaseTest {
         vm.prank(user1);
         litePsm.mintOkuM(usdcAmount);
 
-        // At base notePrice=1e18: okuMAmount = 100e18 * 1e18 / 1e18 = 100e18
+        // At base okuMMultiplier=1e18: okuMAmount = 100e18 * 1e18 / 1e18 = 100e18
         uint256 expectedOkuMoney = _expectedNotesFromUsdc(usdcAmount);
         assertEq(okuMoney.balanceOf(user1), expectedOkuMoney);
         assertEq(okuMoney.balanceOf(user1), 100e18); // Explicit check: 100 OkuMoney at base price
@@ -103,7 +105,7 @@ contract LitePSMTest is BaseTest {
         vm.prank(user1);
         litePsm.mintOkuM(usdcAmount);
 
-        // At base notePrice=1e18: 500 USDC → 500 OkuMoney (price-aware, same as 1:1)
+        // At base okuMMultiplier=1e18: 500 USDC → 500 OkuMoney (multiplier-aware, same as 1:1)
         assertEq(okuMoney.balanceOf(user1), _expectedNotesFromUsdc(usdcAmount));
         assertEq(okuMoney.balanceOf(user1), 500e18); // 500 OkuMoney
     }
@@ -128,11 +130,12 @@ contract LitePSMTest is BaseTest {
     function test_Mint_EmitsEvent() public {
         uint256 usdcAmount = 100e6;
         uint256 okuMAmount = _expectedNotesFromUsdc(usdcAmount);
+        uint256 okuMMult = okuMoney.okuMMultiplier();
 
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
         vm.expectEmit(true, false, false, true);
-        emit MintNote(user1, usdcAmount, okuMAmount);
+        emit MintNote(user1, usdcAmount, okuMAmount, okuMMult);
 
         vm.prank(user1);
         litePsm.mintOkuM(usdcAmount);
@@ -141,7 +144,7 @@ contract LitePSMTest is BaseTest {
     // ============ Price-Aware Mint Tests ============
 
     function test_Mint_PriceAware_ElevatedPrice() public {
-        // Set notePrice to 2e18 ($2.00)
+        // Set okuMMultiplier to 2e18 ($2.00)
         _setNotePrice(2e18);
 
         uint256 usdcAmount = 100e6; // 100 USDC
@@ -160,7 +163,7 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_Mint_PriceAware_HighPrice() public {
-        // Set notePrice to 2e18 ($2.00)
+        // Set okuMMultiplier to 2e18 ($2.00)
         _setNotePrice(2e18);
 
         uint256 usdcAmount = 100e6; // 100 USDC
@@ -179,7 +182,7 @@ contract LitePSMTest is BaseTest {
     ///      caused valid transactions to revert at prices that don't evenly divide.
     ///      The fix compares in USDC terms (6 decimals) to absorb the rounding.
     function test_Mint_PriceAware_NonEvenPrice() public {
-        // Set notePrice to 1.05e18 ($1.05) - a typical post-yield price
+        // Set okuMMultiplier to 1.05e18 ($1.05) - a typical post-yield price
         _setNotePrice(105e16);
 
         uint256 usdcAmount = 100e6; // 100 USDC
@@ -224,16 +227,17 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_Mint_PriceAware_EmitsCorrectAmounts() public {
-        // Set notePrice to 2e18 ($2.00)
+        // Set okuMMultiplier to 2e18 ($2.00)
         _setNotePrice(2e18);
 
         uint256 usdcAmount = 100e6;
         uint256 expectedNotes = _expectedNotesFromUsdc(usdcAmount);
+        uint256 okuMMult = okuMoney.okuMMultiplier();
 
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
         vm.expectEmit(true, false, false, true);
-        emit MintNote(user1, usdcAmount, expectedNotes);
+        emit MintNote(user1, usdcAmount, expectedNotes, okuMMult);
 
         vm.prank(user1);
         litePsm.mintOkuM(usdcAmount);
@@ -405,7 +409,7 @@ contract LitePSMTest is BaseTest {
         vm.prank(user1);
         litePsm.redeemOkuM(okuMAmount);
 
-        // At base notePrice=1e18: 500 OkuMoney → 500 USDC (price-aware, same as 1:1)
+        // At base okuMMultiplier=1e18: 500 OkuMoney → 500 USDC (multiplier-aware, same as 1:1)
         assertEq(usdc.balanceOf(user1), user1UsdcBefore + expectedUsdc);
     }
 
@@ -490,12 +494,13 @@ contract LitePSMTest is BaseTest {
     function test_Redeem_EmitsEvent() public {
         uint256 okuMAmount = 100e18;
         uint256 usdcAmount = _expectedUsdcFromNotes(okuMAmount); // 100e6 at base price
+        uint256 okuMMult = okuMoney.okuMMultiplier();
 
         _mintOkuMoney(user1, okuMAmount);
         _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.expectEmit(true, false, false, true);
-        emit RedeemNote(user1, okuMAmount, usdcAmount);
+        emit RedeemNote(user1, okuMAmount, usdcAmount, okuMMult);
 
         vm.prank(user1);
         litePsm.redeemOkuM(okuMAmount);
@@ -509,7 +514,7 @@ contract LitePSMTest is BaseTest {
 
         _mintOkuMoney(user1, okuMAmount);
 
-        // Raise notePrice to 1.05e18 ($1.05)
+        // Raise okuMMultiplier to 1.05e18 ($1.05)
         _setNotePrice(1.05e18);
 
         // Now each note is worth $1.05 → 100 notes = $105
@@ -536,7 +541,7 @@ contract LitePSMTest is BaseTest {
 
         _mintOkuMoney(user1, okuMAmount);
 
-        // Raise notePrice to 2e18 ($2.00)
+        // Raise okuMMultiplier to 2e18 ($2.00)
         _setNotePrice(2e18);
 
         // 50 notes at $2 = $100
@@ -562,13 +567,14 @@ contract LitePSMTest is BaseTest {
 
         _setNotePrice(1.05e18);
         uint256 expectedUsdc = _expectedUsdcFromNotes(okuMAmount); // 105e6
+        uint256 okuMMult = okuMoney.okuMMultiplier();
 
         _mintUsdc(address(litePsm), 1000e6);
 
         _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.expectEmit(true, false, false, true);
-        emit RedeemNote(user1, okuMAmount, expectedUsdc);
+        emit RedeemNote(user1, okuMAmount, expectedUsdc, okuMMult);
 
         vm.prank(user1);
         litePsm.redeemOkuM(okuMAmount);
@@ -771,7 +777,7 @@ contract LitePSMTest is BaseTest {
 
         assertEq(redemptionQueue.queueUpperBound(), 1);
 
-        // Raise notePrice to 1.05e18 — queued notes now worth more USDC
+        // Raise okuMMultiplier to 1.05e18 — queued notes now worth more USDC
         _setNotePrice(1.05e18);
 
         // Queue entry stores okuMAmount=6000e18. At $1.05: USDC = 6000 * 1.05 = 6300
@@ -792,11 +798,11 @@ contract LitePSMTest is BaseTest {
         litePsm.processQueue(head, tail, expectedUsdc);
 
         assertEq(redemptionQueue.queueUpperBound(), 0);
-        // User receives more USDC than at base price due to price appreciation
+        // User receives more USDC than at base price due to multiplier appreciation
         assertEq(
             usdc.balanceOf(user1),
             user1UsdcBefore + 6300e6,
-            "User earns yield via notePrice while queued"
+            "User earns yield via okuMMultiplier while queued"
         );
     }
 
@@ -910,10 +916,10 @@ contract LitePSMTest is BaseTest {
         vm.prank(user1);
         litePsm.mintOkuM(usdcAmount);
 
-        // At base notePrice=1e18: should mint exactly 1000 OkuMoney (18 decimals)
+        // At base okuMMultiplier=1e18: should mint exactly 1000 OkuMoney (18 decimals)
         assertEq(okuMoney.balanceOf(user1), 1000e18);
 
-        // Verify the price-aware conversion equals decimal multiplier at base price
+        // Verify the multiplier-aware conversion equals decimal multiplier at base price
         assertEq(okuMoney.balanceOf(user1), _expectedNotesFromUsdc(usdcAmount));
     }
 
@@ -928,10 +934,10 @@ contract LitePSMTest is BaseTest {
         vm.prank(user1);
         litePsm.redeemOkuM(okuMAmount);
 
-        // At base notePrice=1e18: should receive exactly 1000 USDC (6 decimals)
+        // At base okuMMultiplier=1e18: should receive exactly 1000 USDC (6 decimals)
         assertEq(usdc.balanceOf(user1) - usdcBefore, 1000e6);
 
-        // Verify via price-aware helper
+        // Verify via multiplier-aware helper
         assertEq(usdc.balanceOf(user1) - usdcBefore, _expectedUsdcFromNotes(okuMAmount));
     }
 
@@ -994,7 +1000,7 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_DecimalConversion_ExactConversionFactor() public {
-        // Verify at base notePrice the conversion factor is exactly 10^12
+        // Verify at base okuMMultiplier the conversion factor is exactly 10^12
         uint256 usdcAmount = 123e6; // Arbitrary amount
 
         _approveUsdc(user1, address(litePsm), usdcAmount);
@@ -1113,8 +1119,10 @@ contract LitePSMTest is BaseTest {
         _mintUsdc(bufferDepositor, amount);
         _approveUsdc(bufferDepositor, address(litePsm), amount);
 
+        uint256 expectedBalance = usdc.balanceOf(address(litePsm)) + amount;
+
         vm.expectEmit(true, false, false, true);
-        emit BufferDeposited(bufferDepositor, amount);
+        emit BufferDeposited(bufferDepositor, amount, expectedBalance);
 
         vm.prank(bufferDepositor);
         litePsm.depositBuffer(amount);
@@ -1276,10 +1284,10 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_MintOkuM_SucceedsInNextBlock() public {
-        // Use setOkuMPrice instead of distributeYield to avoid slippage issues
-        // (setOkuMPrice also sets lastYieldDistributionBlock)
+        // Use setOkuMMultiplier instead of distributeYield to avoid slippage issues
+        // (setOkuMMultiplier also sets lastYieldDistributionBlock)
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION); // No actual price change, just sets the block
+        okuMoney.setOkuMMultiplier(PRECISION); // No actual price change, just sets the block
 
         // Roll to next block
         vm.roll(block.number + 1);
@@ -1359,9 +1367,9 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_SetOkuMPrice_AlsoBlocksPSMOperations() public {
-        // setOkuMPrice also sets lastYieldDistributionBlock
+        // setOkuMMultiplier also sets lastYieldDistributionBlock
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         // Same block — mintOkuM should revert
         _approveUsdc(user1, address(litePsm), 100e6);

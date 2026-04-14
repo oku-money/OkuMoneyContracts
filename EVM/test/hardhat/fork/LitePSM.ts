@@ -430,9 +430,9 @@ describe("LitePSM Scenarios", () => {
             expect(await queue.queueUpperBound()).to.equal(2)
 
             // NotePrice increase: 10% while users are in queue
-            const priceBefore = await okuMoney.okuMPrice()
+            const priceBefore = await okuMoney.okuMMultiplier()
             const newPrice = priceBefore * 110n / 100n
-            await okuMoney.connect(Frank).setOkuMPrice(newPrice)
+            await okuMoney.connect(Frank).setOkuMMultiplier(newPrice)
 
             // Record USDC balances before processing
             const aliceUsdcBefore = await usdc.balanceOf(aliceAddr)

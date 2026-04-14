@@ -29,15 +29,15 @@ contract VaultInvariantsTest is BaseTest {
 
     /**
      * @notice OkuDollar vault is backed by OkuMoney reserves (within rounding tolerance)
-     * @dev Price-aware: reserves are valued at okuMPrice(). Each wrap can introduce
+     * @dev Price-aware: reserves are valued at okuMMultiplier(). Each wrap can introduce
      *      up to ~1 wei of rounding deficit in dollar terms.
-     *      reservesDollarValue = reserves × okuMPrice / PRECISION
+     *      reservesDollarValue = reserves × okuMMultiplier / PRECISION
      *      obligations = totalSupply (already in dollar terms)
      */
     function invariant_VaultBacked() public view {
         uint256 reserves = okuMoney.balanceOf(address(usdOku));
         uint256 obligations = usdOku.totalSupply();
-        uint256 price = okuMoney.okuMPrice();
+        uint256 price = okuMoney.okuMMultiplier();
         uint256 reservesDollarValue = (reserves * price) / 1e18;
         // Each wrap introduces up to 1 wei rounding in dollar terms
         uint256 tolerance = handler.ghostWrapCallCount() + 1;
@@ -57,7 +57,7 @@ contract VaultInvariantsTest is BaseTest {
         uint256 obligations = usdOku.totalSupply();
         if (obligations > 0) {
             uint256 reserves = okuMoney.balanceOf(address(usdOku));
-            uint256 price = okuMoney.okuMPrice();
+            uint256 price = okuMoney.okuMMultiplier();
             uint256 reservesDollarValue = (reserves * price) / 1e18;
             uint256 tolerance = handler.ghostWrapCallCount() + 1;
             assertGe(

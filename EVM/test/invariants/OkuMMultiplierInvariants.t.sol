@@ -6,10 +6,10 @@ import {OkuMoneyHandler} from "../handlers/OkuMoneyHandler.sol";
 
 /**
  * @title OkuMPriceInvariantsTest
- * @notice Invariant tests for OkuMoney okuMPrice() monotonicity and balance consistency
+ * @notice Invariant tests for OkuMoney okuMMultiplier() monotonicity and balance consistency
  * @dev Updated for non-rebasing OkuMoney redesign. Replaces old ShareConversionInvariants.
  *      OkuMoney is a standard ERC-20: balanceOf() returns raw token amounts.
- *      okuMPrice() tracks price appreciation separately and must never decrease.
+ *      okuMMultiplier() tracks multiplier appreciation separately and must never decrease.
  */
 contract OkuMPriceInvariantsTest is BaseTest {
     OkuMoneyHandler public handler;
@@ -49,25 +49,25 @@ contract OkuMPriceInvariantsTest is BaseTest {
     }
 
     /**
-     * @notice okuMPrice() never decreases
+     * @notice okuMMultiplier() never decreases
      */
     function invariant_OkuMPriceNeverDecreases() public view {
-        uint256 current = okuMoney.okuMPrice();
-        assertGe(current, PRECISION, "okuMPrice below initial value");
-        assertGe(current, handler.ghostLastOkuMPrice(), "okuMPrice decreased from previous value");
+        uint256 current = okuMoney.okuMMultiplier();
+        assertGe(current, PRECISION, "okuMMultiplier below initial value");
+        assertGe(current, handler.ghostLastOkuMMultiplier(), "okuMMultiplier decreased from previous value");
     }
 
     /**
-     * @notice okuMPrice() does not affect totalSupply (non-rebasing)
+     * @notice okuMMultiplier() does not affect totalSupply (non-rebasing)
      * @dev After a price update, totalSupply should remain unchanged.
      */
     function invariant_OkuMPriceDoesNotAffectSupply() public view {
-        // totalSupply is always minted - burned, regardless of okuMPrice
+        // totalSupply is always minted - burned, regardless of okuMMultiplier
         uint256 expectedSupply = handler.ghostMintedTotal() - handler.ghostBurnedTotal();
         assertEq(
             okuMoney.totalSupply(),
             expectedSupply,
-            "totalSupply should equal minted - burned regardless of okuMPrice"
+            "totalSupply should equal minted - burned regardless of okuMMultiplier"
         );
     }
 }

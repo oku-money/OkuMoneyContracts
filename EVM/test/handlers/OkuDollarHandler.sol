@@ -122,12 +122,12 @@ contract OkuDollarHandler is Test {
     /// @notice Trigger OkuM price update (rebase)
     function rebase(uint256 priceIncrease) external {
         ghostRebaseCallCount++;
-        uint256 currentPrice = okuMoney.okuMPrice();
+        uint256 currentPrice = okuMoney.okuMMultiplier();
         uint256 increase = bound(priceIncrease, currentPrice / 10_000, currentPrice / 10);
         uint256 newPrice = currentPrice + increase;
 
         vm.prank(rebaser);
-        try okuMoney.setOkuMPrice(newPrice) {
+        try okuMoney.setOkuMMultiplier(newPrice) {
             ghostRebaseCount++;
         } catch {
             ghostRebaseRevertCount++;

@@ -21,12 +21,14 @@ import {Constants} from "../lib/Constants.sol";
 /**
  * @title OkuMoney
  * @notice Non-rebasing base token backed by US T-Bills with rear-facing yield
- * @dev Standard ERC-20 balances (static). Yield is expressed through price appreciation
- *      tracked by a stored `okuMPrice` written discretely by an orchestrator via
- *      `setOkuMPrice()` or `distributeYield()`.
+ * @dev Standard ERC-20 balances (static). Yield is expressed through multiplier appreciation
+ *      tracked by a stored `okuMMultiplier` written discretely by an orchestrator via
+ *      `setOkuMMultiplier()` or `distributeYield()`.
  *
  *      Key distinction: balanceOf() returns raw token count (standard ERC-20).
- *      okuMPrice() is a separate view function for pricing — used by PSM and vault.
+ *      okuMMultiplier() is a separate view function for pricing — used by PSM and vault.
+ *
+ *      See Constants.sol for terminology legend.
  *
  *      Storage: Uses ERC-7201 namespaced storage pattern for upgrade safety.
  */
@@ -42,8 +44,8 @@ contract OkuMoney is
 
     /// @custom:storage-location erc7201:okumoney.storage.OkuMoney
     struct OkuMoneyStorage {
-        // Stored price ratio (starts at 1e18 = $1.00, written by OKUM_REBASER)
-        uint256 okuMPrice;
+        // Dollar value per token multiplier (starts at 1e18 = $1.00, written by OKUM_REBASER)
+        uint256 okuMMultiplier;
         // Minter allowance system (Circle pattern)
         mapping(address => uint256) minterAllowance;
         // Supply cap in token units
@@ -82,8 +84,20 @@ contract OkuMoney is
 
     // ============ Events ============
 
-    event OkuMPriceUpdated(uint256 oldPrice, uint256 newPrice);
-    event YieldDistributed(uint256 yieldAmount, uint256 oldPrice, uint256 newPrice);
+    /// @notice Emitted when multiplier is updated directly via setOkuMMultiplier
+    /// @param oldMultiplier Previous multiplier value
+    /// @param newMultiplier New multiplier value
+    /// @param totalSupply Token supply at time of update (for dollar value calculations)
+    event OkuMMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply);
+
+    /// @notice Emitted when yield is distributed via distributeYield
+    /// @param yieldAmount Dollar yield distributed (18 decimals)
+    /// @param oldMultiplier Previous multiplier value
+    /// @param newMultiplier New multiplier value
+    /// @param totalSupply Token supply at time of distribution
+    event YieldDistributed(
+        uint256 yieldAmount, uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply
+    );
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
     );
@@ -91,16 +105,15 @@ contract OkuMoney is
     event Blacklisted(address indexed account);
     event Unblacklisted(address indexed account);
     /// @notice Emitted alongside the standard ERC-20 Transfer with the dollar-denominated value
-    /// @dev dollarValue = amount × okuMPrice / PRECISION
+    /// @dev dollarValue = amount × okuMMultiplier / PRECISION
     event TransferValue(
         address indexed from, address indexed to, uint256 amount, uint256 dollarValue
     );
-    event YieldDistributionBlockSet(uint256 blockNumber);
 
     // ============ Custom Errors ============
 
     error ZeroAddress();
-    error PriceCannotDecrease();
+    error MultiplierCannotDecrease();
     error ZeroSupply();
     error ExceedsSupplyCap();
     error BelowCurrentSupply();
@@ -132,7 +145,7 @@ contract OkuMoney is
         __Pausable_init();
 
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        $.okuMPrice = PRECISION;
+        $.okuMMultiplier = PRECISION;
         $.maxSupply = initialMaxSupply;
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
@@ -163,38 +176,37 @@ contract OkuMoney is
         return _getOkuMoneyStorage().lastYieldDistributionBlock;
     }
 
-    // ============ Price Logic ============
+    // ============ Multiplier Logic ============
 
     /**
-     * @notice Stored OkuM price ratio
-     * @dev Starts at 1e18 ($1.00). Written discretely by OKUM_REBASER via setOkuMPrice
+     * @notice Stored OkuM multiplier (dollar value per token)
+     * @dev Starts at 1e18 ($1.00). Written discretely by OKUM_REBASER via setOkuMMultiplier
      *      or distributeYield. Never decreases.
      *
-     *      Key: balanceOf() is NOT affected by okuMPrice(). Price appreciation is
+     *      Key: balanceOf() is NOT affected by okuMMultiplier(). Multiplier appreciation is
      *      tracked separately for use by the PSM and vault.
      */
-    function okuMPrice() public view returns (uint256) {
-        return _getOkuMoneyStorage().okuMPrice;
+    function okuMMultiplier() public view returns (uint256) {
+        return _getOkuMoneyStorage().okuMMultiplier;
     }
 
     /**
-     * @notice Directly override the stored price ratio
-     * @param newPrice New price value (must be >= current price)
+     * @notice Directly override the stored multiplier
+     * @param newMultiplier New multiplier value (must be >= current multiplier)
      * @dev Records block.number to prevent sandwich attacks via PSM/vault operations
      */
-    function setOkuMPrice(uint256 newPrice) external onlyRole(OKUM_REBASER) {
+    function setOkuMMultiplier(uint256 newMultiplier) external onlyRole(OKUM_REBASER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        uint256 currentPrice = $.okuMPrice;
-        if (newPrice < currentPrice) revert PriceCannotDecrease();
+        uint256 currentMultiplier = $.okuMMultiplier;
+        if (newMultiplier < currentMultiplier) revert MultiplierCannotDecrease();
         $.lastYieldDistributionBlock = block.number;
-        $.okuMPrice = newPrice;
-        emit YieldDistributionBlockSet(block.number);
-        emit OkuMPriceUpdated(currentPrice, newPrice);
+        $.okuMMultiplier = newMultiplier;
+        emit OkuMMultiplierUpdated(currentMultiplier, newMultiplier, totalSupply());
     }
 
     /**
      * @notice Distribute realized dollar yield across all token holders
-     * @dev Increases okuMPrice by yieldAmount / totalSupply.
+     * @dev Increases okuMMultiplier by yieldAmount / totalSupply.
      *      yieldAmount is dollar-denominated (18 decimals).
      *      E.g., $1000 yield on 10000 tokens → +$0.10/token.
      *      Records block.number to prevent sandwich attacks via PSM/vault operations.
@@ -205,11 +217,10 @@ contract OkuMoney is
         if (supply == 0) revert ZeroSupply();
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         $.lastYieldDistributionBlock = block.number;
-        uint256 oldPrice = $.okuMPrice;
-        uint256 newPrice = oldPrice + (yieldAmount * PRECISION / supply);
-        $.okuMPrice = newPrice;
-        emit YieldDistributionBlockSet(block.number);
-        emit YieldDistributed(yieldAmount, oldPrice, newPrice);
+        uint256 oldMultiplier = $.okuMMultiplier;
+        uint256 newMultiplier = oldMultiplier + (yieldAmount * PRECISION / supply);
+        $.okuMMultiplier = newMultiplier;
+        emit YieldDistributed(yieldAmount, oldMultiplier, newMultiplier, supply);
     }
 
     // ============ ERC20Permit Override (Blacklist Check) ============
@@ -265,7 +276,7 @@ contract OkuMoney is
 
         super._update(from, to, amount);
 
-        uint256 dollarValue = (amount * $.okuMPrice) / PRECISION;
+        uint256 dollarValue = (amount * $.okuMMultiplier) / PRECISION;
         emit TransferValue(from, to, amount, dollarValue);
     }
 
@@ -273,8 +284,8 @@ contract OkuMoney is
 
     /**
      * @notice Mint raw tokens to an address
-     * @dev Creates raw tokens; minting 100 tokens when okuMPrice = $1.05 creates $105 of value.
-     *      The PSM handles USDC <-> OkuM conversion using okuMPrice().
+     * @dev Creates raw tokens; minting 100 tokens when okuMMultiplier = $1.05 creates $105 of value.
+     *      The PSM handles USDC <-> OkuM conversion using okuMMultiplier().
      */
     function mint(address to, uint256 amount) external onlyRole(OKUM_MINTER) whenNotPaused {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();

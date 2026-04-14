@@ -8,7 +8,7 @@ import {OkuMoneyHandler} from "../handlers/OkuMoneyHandler.sol";
  * @title SupplyInvariantsTest
  * @notice Invariant tests for OkuMoney supply cap enforcement
  * @dev Updated for non-rebasing OkuMoney redesign. totalSupply() is standard ERC-20;
- *      okuMPrice() tracks price appreciation separately.
+ *      okuMMultiplier() tracks multiplier appreciation separately.
  */
 contract SupplyInvariantsTest is BaseTest {
     OkuMoneyHandler public handler;
@@ -30,7 +30,7 @@ contract SupplyInvariantsTest is BaseTest {
     /**
      * @notice Supply cap never exceeded
      * @dev OkuMoney is non-rebasing: totalSupply() is raw token count,
-     *      okuMPrice() updates do not change totalSupply().
+     *      okuMMultiplier() updates do not change totalSupply().
      */
     function invariant_SupplyCapRespected() public view {
         assertLe(okuMoney.totalSupply(), okuMoney.maxSupply(), "Supply exceeds maxSupply");

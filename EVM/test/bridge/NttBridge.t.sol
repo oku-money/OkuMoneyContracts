@@ -14,7 +14,7 @@ import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
  * @title NttBridgeTest
  * @notice Tests for Wormhole NTT bridge integration
  * @dev Tests the NttAdapter and MockNttManager for source chain flow.
- *      OkuMoney is a standard non-rebasing ERC-20. okuMPrice() is a view for
+ *      OkuMoney is a standard non-rebasing ERC-20. okuMMultiplier() is a view for
  *      pricing only — it does NOT affect balanceOf(). Bridge operates on raw
  *      token amounts (no share conversions).
  *
@@ -305,7 +305,7 @@ contract NttBridgeTest is BaseTest {
         uint256 okuMAmount = 1000e18;
         _mintUsdOku(user1, okuMAmount);
 
-        // At notePrice=1e18, usdMultiplier=1e18: wrapping 1000 notes gives 1000 OkuDollar
+        // At okuMMultiplier=1e18, usdMultiplier=1e18: wrapping 1000 notes gives 1000 OkuDollar
         uint256 usdBalance = usdOku.balanceOf(user1);
 
         vm.startPrank(user1);
@@ -348,10 +348,10 @@ contract NttBridgeTest is BaseTest {
         // Step 1: Mint OkuMoney
         _mintOkuMoney(user1, initialAmount);
 
-        // Step 2: Increase notePrice (does NOT change balanceOf — OkuMoney is non-rebasing)
+        // Step 2: Increase okuMMultiplier (does NOT change balanceOf — OkuMoney is non-rebasing)
         uint256 newPrice = PRECISION * 12 / 10; // 20% price increase
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        okuMoney.setOkuMMultiplier(newPrice);
 
         // balanceOf is unchanged — OkuMoney is a standard ERC-20
         uint256 noteBalanceAfterPriceChange = okuMoney.balanceOf(user1);
@@ -471,14 +471,14 @@ contract NttBridgeTest is BaseTest {
         public
     {
         depositAmount = bound(depositAmount, 1e18, 100_000_000e18);
-        priceIncrease = _boundOkuMPriceIncrease(priceIncrease);
+        priceIncrease = _boundOkuMMultiplierIncrease(priceIncrease);
 
-        // Mint OkuDollar (wraps notes into vault at current notePrice)
+        // Mint OkuDollar (wraps notes into vault at current okuMMultiplier)
         _mintUsdOku(user1, depositAmount);
 
-        // Increase notePrice (does NOT change OkuMoney balances — non-rebasing)
-        uint256 newPrice = okuMoney.okuMPrice() + priceIncrease;
-        _setOkuMPriceAndRoll(newPrice);
+        // Increase okuMMultiplier (does NOT change OkuMoney balances — non-rebasing)
+        uint256 newPrice = okuMoney.okuMMultiplier() + priceIncrease;
+        _setOkuMMultiplierAndRoll(newPrice);
 
         // OkuDollar balance is independent of note price change (vault token with its own multiplier)
         uint256 usdBalance = usdOku.balanceOf(user1);
@@ -489,7 +489,7 @@ contract NttBridgeTest is BaseTest {
         bridgeRouter.bridgeWrappedVia(usdBalance, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
-        // Verify bridged amount is the note amount from unwrapping (price-aware)
+        // Verify bridged amount is the note amount from unwrapping (multiplier-aware)
         MockNttManager.PendingTransfer memory pending = mockNtt.getLastTransfer();
         assertGt(pending.amount, 0);
     }
@@ -501,15 +501,15 @@ contract NttBridgeTest is BaseTest {
         public
     {
         initialAmount = bound(initialAmount, 1e18, 100_000_000e18);
-        priceIncrease = _boundOkuMPriceIncrease(priceIncrease);
+        priceIncrease = _boundOkuMMultiplierIncrease(priceIncrease);
 
         // Step 1: Mint OkuMoney
         _mintOkuMoney(user1, initialAmount);
 
-        // Step 2: Increase notePrice (balanceOf unchanged — non-rebasing)
-        uint256 newPrice = okuMoney.okuMPrice() + priceIncrease;
+        // Step 2: Increase okuMMultiplier (balanceOf unchanged — non-rebasing)
+        uint256 newPrice = okuMoney.okuMMultiplier() + priceIncrease;
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        okuMoney.setOkuMMultiplier(newPrice);
 
         // balanceOf is unchanged for a non-rebasing token
         uint256 balanceBeforeBridge = okuMoney.balanceOf(user1);

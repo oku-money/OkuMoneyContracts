@@ -19,7 +19,7 @@ import {
  *   NATIVE PATH  — bridge_usdOku / bridge_OkuM -> OkuBridge.bridgeBurn()
  *   ADAPTER PATH — bridgeWrappedVia / bridgeVia -> IBridgeAdapter.bridge()
  *
- * @dev OkuMoney is non-rebasing. okuMPrice() tracks price appreciation separately
+ * @dev OkuMoney is non-rebasing. okuMMultiplier() tracks multiplier appreciation separately
  *      from balanceOf(). Token amounts are passed directly to the bridge — no share
  *      conversion is needed.
  */
@@ -52,7 +52,9 @@ contract OkuBridgeRouterTest is BaseTest {
         bytes32 recipient,
         uint256 sourceChainId,
         uint256 destChainId,
-        uint256 amount,
+        uint256 grossAmount,
+        uint256 netAmount,
+        uint256 feeAmount,
         uint256 nonce,
         uint256 deadline
     );
@@ -61,6 +63,7 @@ contract OkuBridgeRouterTest is BaseTest {
     event BridgeInitiated(
         address indexed user,
         address indexed adapter,
+        address sourceToken,
         uint256 amount,
         uint256 destinationChain,
         address recipient
@@ -286,16 +289,19 @@ contract OkuBridgeRouterTest is BaseTest {
         okuMoney.approve(address(bridgeRouter), okuMAmount);
 
         // Expect BridgeBurn from OkuBridge (the canonical native path event)
+        // Only check indexed sender field, skip other values
         vm.expectEmit(false, true, false, false, address(okuBridgeContract));
         emit BridgeBurn(
-            bytes32(0),
-            address(bridgeRouter),
-            bytes32(uint256(uint160(user2))),
-            0,
-            ARBITRUM_CHAIN_ID,
-            0,
-            0,
-            0
+            bytes32(0), // requestId
+            address(bridgeRouter), // sender (indexed)
+            bytes32(uint256(uint160(user2))), // recipient
+            0, // sourceChainId
+            ARBITRUM_CHAIN_ID, // destChainId
+            0, // grossAmount
+            0, // netAmount
+            0, // feeAmount
+            0, // nonce
+            0 // deadline
         );
 
         bytes32 requestId = bridgeRouter.bridgeOkuM(
@@ -388,15 +394,15 @@ contract OkuBridgeRouterTest is BaseTest {
     }
 
     function test_BridgeOkuMoney_TokenAmountsPreservedAcrossNotePrice() public {
-        // OkuMoney is non-rebasing: notePrice changes do NOT affect balanceOf().
+        // OkuMoney is non-rebasing: okuMMultiplier changes do NOT affect balanceOf().
         // The exact token amount is passed through to the bridge.
         uint256 okuMAmount = 1000e18;
         _mintOkuMoney(user1, okuMAmount);
 
-        // Increase notePrice by 20% — user's balance is unchanged
-        uint256 newPrice = okuMoney.okuMPrice() * 12 / 10;
+        // Increase okuMMultiplier by 20% — user's balance is unchanged
+        uint256 newPrice = okuMoney.okuMMultiplier() * 12 / 10;
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(newPrice);
+        okuMoney.setOkuMMultiplier(newPrice);
 
         // User's balance is unchanged (non-rebasing)
         uint256 userBalance = okuMoney.balanceOf(user1);
@@ -427,14 +433,16 @@ contract OkuBridgeRouterTest is BaseTest {
 
         vm.expectEmit(false, true, false, false, address(okuBridgeContract));
         emit BridgeBurn(
-            bytes32(0),
-            address(bridgeRouter),
-            bytes32(uint256(uint160(user2))),
-            0,
-            ARBITRUM_CHAIN_ID,
-            0,
-            0,
-            0
+            bytes32(0), // requestId
+            address(bridgeRouter), // sender (indexed)
+            bytes32(uint256(uint160(user2))), // recipient
+            0, // sourceChainId
+            ARBITRUM_CHAIN_ID, // destChainId
+            0, // grossAmount
+            0, // netAmount
+            0, // feeAmount
+            0, // nonce
+            0 // deadline
         );
 
         bytes32 requestId = bridgeRouter.bridgeUsdOku(
@@ -458,8 +466,8 @@ contract OkuBridgeRouterTest is BaseTest {
         _mintUsdOku(user1, okuMAmount);
         uint256 usdBalance = usdOku.balanceOf(user1);
 
-        // At initial notePrice=1e18 and usdMultiplier=1e18, unwrap is 1:1
-        // okuMFromUnwrap = usdBalance * usdMultiplier / okuMPrice = usdBalance
+        // At initial okuMMultiplier=1e18 and usdMultiplier=1e18, unwrap is 1:1
+        // okuMFromUnwrap = usdBalance * usdMultiplier / okuMMultiplier = usdBalance
         uint256 okuMFromUnwrap = usdBalance; // 1:1 at base prices
         uint256 feeBps = okuBridgeContract.bridgeFee();
         uint256 feeAmount = (okuMFromUnwrap * feeBps) / 10_000;
@@ -512,7 +520,7 @@ contract OkuBridgeRouterTest is BaseTest {
     }
 
     function test_BridgeOkuDollar_UnwrapsToNotesAndBridges() public {
-        // Verify the full flow: OkuDollar -> unwrap to notes (price-aware) -> bridge notes via OkuBridge
+        // Verify the full flow: OkuDollar -> unwrap to notes (multiplier-aware) -> bridge notes via OkuBridge
         uint256 okuMAmount = 1000e18;
         _mintUsdOku(user1, okuMAmount);
         uint256 usdBalance = usdOku.balanceOf(user1);
@@ -534,15 +542,15 @@ contract OkuBridgeRouterTest is BaseTest {
     }
 
     function test_BridgeOkuDollar_AfterNotePriceIncrease() public {
-        // notePrice increase does NOT change OkuMoney balances (non-rebasing).
-        // OkuDollar unwrap is price-aware: same OkuDollar amount yields fewer notes
-        // when notePrice is higher (each note is worth more).
+        // okuMMultiplier increase does NOT change OkuMoney balances (non-rebasing).
+        // OkuDollar unwrap is multiplier-aware: same OkuDollar amount yields fewer notes
+        // when okuMMultiplier is higher (each note is worth more).
         uint256 okuMAmount = 1000e18;
         _mintUsdOku(user1, okuMAmount);
 
-        // Increase notePrice by 10% and roll to avoid yield distribution lock
-        uint256 newPrice = okuMoney.okuMPrice() * 11 / 10;
-        _setOkuMPriceAndRoll(newPrice);
+        // Increase okuMMultiplier by 10% and roll to avoid yield distribution lock
+        uint256 newPrice = okuMoney.okuMMultiplier() * 11 / 10;
+        _setOkuMMultiplierAndRoll(newPrice);
 
         uint256 usdBalance = usdOku.balanceOf(user1);
 
@@ -585,7 +593,9 @@ contract OkuBridgeRouterTest is BaseTest {
         okuMoney.approve(address(bridgeRouter), okuMAmount);
 
         vm.expectEmit(true, true, false, true);
-        emit BridgeInitiated(user1, address(mockAdapter), okuMAmount, ARBITRUM_CHAIN_ID, user2);
+        emit BridgeInitiated(
+            user1, address(mockAdapter), address(okuMoney), okuMAmount, ARBITRUM_CHAIN_ID, user2
+        );
 
         bridgeRouter.bridgeVia(okuMAmount, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
@@ -648,15 +658,17 @@ contract OkuBridgeRouterTest is BaseTest {
         _mintUsdOku(user1, okuMAmount);
         uint256 usdBalance = usdOku.balanceOf(user1);
 
-        // At initial notePrice=1e18, unwrapping usdBalance returns okuMAmount notes
-        uint256 expectedNotes = (usdBalance * usdOku.usdMultiplier()) / okuMoney.okuMPrice();
+        // At initial okuMMultiplier=1e18, unwrapping usdBalance returns okuMAmount notes
+        uint256 expectedNotes = (usdBalance * usdOku.usdMultiplier()) / okuMoney.okuMMultiplier();
 
         vm.startPrank(user1);
         usdOku.approve(address(bridgeRouter), usdBalance);
 
-        // The router unwraps OkuDollar to notes (price-aware), then burns the notes
+        // The router unwraps OkuDollar to notes (multiplier-aware), then burns the notes
         vm.expectEmit(true, true, false, true);
-        emit BridgeInitiated(user1, address(mockAdapter), expectedNotes, ARBITRUM_CHAIN_ID, user2);
+        emit BridgeInitiated(
+            user1, address(mockAdapter), address(okuMoney), expectedNotes, ARBITRUM_CHAIN_ID, user2
+        );
 
         bridgeRouter.bridgeWrappedVia(usdBalance, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
@@ -719,20 +731,20 @@ contract OkuBridgeRouterTest is BaseTest {
     }
 
     function test_BridgeWrappedVia_FewerNotesAfterNotePriceIncrease() public {
-        // After notePrice increases, unwrapping the same OkuDollar amount gives fewer notes
+        // After okuMMultiplier increases, unwrapping the same OkuDollar amount gives fewer notes
         // because each note is worth more.
         uint256 okuMAmount = 1000e18;
         _mintUsdOku(user1, okuMAmount);
 
-        // Increase notePrice by 10% and roll to avoid yield distribution lock
-        uint256 newPrice = okuMoney.okuMPrice() + (okuMoney.okuMPrice() / 10);
-        _setOkuMPriceAndRoll(newPrice);
+        // Increase okuMMultiplier by 10% and roll to avoid yield distribution lock
+        uint256 newPrice = okuMoney.okuMMultiplier() + (okuMoney.okuMMultiplier() / 10);
+        _setOkuMMultiplierAndRoll(newPrice);
 
         uint256 usdBalance = usdOku.balanceOf(user1);
 
-        // Calculate expected notes from price-aware unwrap:
-        // okuMReturned = usdAmount × usdMultiplier / notePrice
-        uint256 expectedNotes = (usdBalance * usdOku.usdMultiplier()) / okuMoney.okuMPrice();
+        // Calculate expected notes from multiplier-aware unwrap:
+        // okuMReturned = usdAmount × usdMultiplier / okuMMultiplier
+        uint256 expectedNotes = (usdBalance * usdOku.usdMultiplier()) / okuMoney.okuMMultiplier();
 
         vm.startPrank(user1);
         usdOku.approve(address(bridgeRouter), usdBalance);
@@ -740,7 +752,7 @@ contract OkuBridgeRouterTest is BaseTest {
         vm.stopPrank();
 
         MockOkuBridge.PendingBridge memory pending = mockAdapter.getLastBridge();
-        // Fewer notes returned because notePrice increased
+        // Fewer notes returned because okuMMultiplier increased
         assertLt(pending.amount, okuMAmount);
         assertEq(pending.amount, expectedNotes);
     }
@@ -892,15 +904,15 @@ contract OkuBridgeRouterTest is BaseTest {
         _mintUsdOku(user1, okuMAmount);
         uint256 usdBalance = usdOku.balanceOf(user1);
 
-        // At initial notePrice=1e18 and usdMultiplier=1e18, unwrap is 1:1
-        uint256 expectedNotes = (usdBalance * usdOku.usdMultiplier()) / okuMoney.okuMPrice();
+        // At initial okuMMultiplier=1e18 and usdMultiplier=1e18, unwrap is 1:1
+        uint256 expectedNotes = (usdBalance * usdOku.usdMultiplier()) / okuMoney.okuMMultiplier();
 
         vm.startPrank(user1);
         usdOku.approve(address(bridgeRouter), usdBalance);
         bridgeRouter.bridgeWrappedVia(usdBalance, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
-        // Adapter received the price-aware unwrapped note amount
+        // Adapter received the multiplier-aware unwrapped note amount
         MockOkuBridge.PendingBridge memory pending = mockAdapter.getLastBridge();
         assertEq(pending.amount, expectedNotes);
     }
@@ -912,18 +924,18 @@ contract OkuBridgeRouterTest is BaseTest {
         public
     {
         depositAmount = bound(depositAmount, 1e18, 100_000_000e18);
-        priceIncrease = _boundOkuMPriceIncrease(priceIncrease);
+        priceIncrease = _boundOkuMMultiplierIncrease(priceIncrease);
 
         _mintUsdOku(user1, depositAmount);
 
-        // Update notePrice (makes vault overcollateralized — each note worth more)
-        uint256 newPrice = okuMoney.okuMPrice() + priceIncrease;
-        _setOkuMPriceAndRoll(newPrice);
+        // Update okuMMultiplier (makes vault overcollateralized — each note worth more)
+        uint256 newPrice = okuMoney.okuMMultiplier() + priceIncrease;
+        _setOkuMMultiplierAndRoll(newPrice);
 
         uint256 usdBalance = usdOku.balanceOf(user1);
 
-        // Price-aware unwrap: okuMReturned = usdAmount × usdMultiplier / notePrice
-        uint256 expectedNotes = (usdBalance * usdOku.usdMultiplier()) / okuMoney.okuMPrice();
+        // Price-aware unwrap: okuMReturned = usdAmount × usdMultiplier / okuMMultiplier
+        uint256 expectedNotes = (usdBalance * usdOku.usdMultiplier()) / okuMoney.okuMMultiplier();
 
         vm.startPrank(user1);
         usdOku.approve(address(bridgeRouter), usdBalance);
@@ -931,7 +943,7 @@ contract OkuBridgeRouterTest is BaseTest {
         vm.stopPrank();
 
         MockOkuBridge.PendingBridge memory pending = mockAdapter.getLastBridge();
-        // Fewer notes than depositAmount because notePrice increased
+        // Fewer notes than depositAmount because okuMMultiplier increased
         assertLe(pending.amount, depositAmount);
         assertEq(pending.amount, expectedNotes);
     }

@@ -4,8 +4,9 @@ pragma solidity ^0.8.28;
 /**
  * @title IOkuMoney
  * @notice Shared interface for OkuMoney used by LitePSM, RedemptionQueue, OkuBridge, and OkuBridgeRouter
- * @dev OkuMoney is a non-rebasing standard ERC-20. okuMPrice() tracks price appreciation
- *      separately from balanceOf(). No share conversion functions exist.
+ * @dev OkuMoney is a non-rebasing standard ERC-20. okuMMultiplier() tracks the dollar value
+ *      per token separately from balanceOf(). No share conversion functions exist.
+ *      See Constants.sol for terminology legend.
  */
 interface IOkuMoney {
     function mint(address to, uint256 amount) external;
@@ -13,8 +14,8 @@ interface IOkuMoney {
     function transfer(address to, uint256 amount) external returns (bool);
     function balanceOf(address account) external view returns (uint256);
     function totalSupply() external view returns (uint256);
-    function okuMPrice() external view returns (uint256);
-    function setOkuMPrice(uint256 newPrice) external;
+    function okuMMultiplier() external view returns (uint256);
+    function setOkuMMultiplier(uint256 newMultiplier) external;
     function distributeYield(uint256 yieldAmount) external;
     /// @notice Block number of last yield distribution (for sandwich attack prevention)
     function lastYieldDistributionBlock() external view returns (uint256);

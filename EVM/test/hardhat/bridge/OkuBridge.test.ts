@@ -409,9 +409,9 @@ describe("OkuBridge E2E", function () {
       const REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"));
       await okuMoney.connect(admin).grantRole(REBASER, admin.address);
 
-      const oldPrice = await okuMoney.okuMPrice();
+      const oldPrice = await okuMoney.okuMMultiplier();
       const newPrice = (oldPrice * 150n) / 100n;
-      await okuMoney.connect(admin).setOkuMPrice(newPrice);
+      await okuMoney.connect(admin).setOkuMMultiplier(newPrice);
 
       // Mint on destination with netAmount (fee already deducted on source)
       const chainId = (await ethers.provider.getNetwork()).chainId;

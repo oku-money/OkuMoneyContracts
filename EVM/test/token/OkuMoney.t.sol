@@ -18,8 +18,10 @@ contract OkuMoneyTest is BaseTest {
     // ============ Events ============
 
     event Transfer(address indexed from, address indexed to, uint256 value);
-    event OkuMPriceUpdated(uint256 oldPrice, uint256 newPrice);
-    event YieldDistributed(uint256 yieldAmount, uint256 oldPrice, uint256 newPrice);
+    event OkuMMultiplierUpdated(uint256 oldPrice, uint256 newPrice, uint256 totalSupply);
+    event YieldDistributed(
+        uint256 yieldAmount, uint256 oldPrice, uint256 newPrice, uint256 totalSupply
+    );
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
     );
@@ -50,7 +52,7 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_Initialize_SetsInitialNotePrice() public view {
-        assertEq(okuMoney.okuMPrice(), PRECISION);
+        assertEq(okuMoney.okuMMultiplier(), PRECISION);
     }
 
     function test_Initialize_CannotReinitialize() public {
@@ -77,14 +79,14 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_Mint_BalanceUnaffectedByNotePrice() public {
-        // Set notePrice to 2x before minting
+        // Set okuMMultiplier to 2x before minting
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         uint256 amount = 100e18;
         _mintOkuMoney(user1, amount);
 
-        // balanceOf returns raw amount, NOT divided by notePrice
+        // balanceOf returns raw amount, NOT divided by okuMMultiplier
         assertEq(okuMoney.balanceOf(user1), amount);
     }
 
@@ -95,14 +97,14 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_Mint_TotalSupplyIsRawAmount() public {
-        // Set notePrice to 2x before minting
+        // Set okuMMultiplier to 2x before minting
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         uint256 amount = 100e18;
         _mintOkuMoney(user1, amount);
 
-        // totalSupply returns raw token count, NOT multiplied by notePrice
+        // totalSupply returns raw token count, NOT multiplied by okuMMultiplier
         assertEq(okuMoney.totalSupply(), amount);
     }
 
@@ -180,16 +182,16 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_Burn_RemovesExactAmount() public {
-        // Set notePrice to 2x, then mint and burn
+        // Set okuMMultiplier to 2x, then mint and burn
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         _mintOkuMoney(minter, 100e18);
 
         vm.prank(minter);
         okuMoney.burn(40e18);
 
-        // burn(40e18) removes exactly 40e18 from balanceOf regardless of notePrice
+        // burn(40e18) removes exactly 40e18 from balanceOf regardless of okuMMultiplier
         assertEq(okuMoney.balanceOf(minter), 60e18);
     }
 
@@ -272,16 +274,16 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_Transfer_MovesExactAmount() public {
-        // Set notePrice to 2x, then mint and transfer
+        // Set okuMMultiplier to 2x, then mint and transfer
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         _mintOkuMoney(user1, 100e18);
 
         vm.prank(user1);
         assertTrue(okuMoney.transfer(user2, 50e18));
 
-        // transfer(50e18) moves exactly 50e18 in balanceOf regardless of notePrice
+        // transfer(50e18) moves exactly 50e18 in balanceOf regardless of okuMMultiplier
         assertEq(okuMoney.balanceOf(user1), 50e18);
         assertEq(okuMoney.balanceOf(user2), 50e18);
     }
@@ -410,7 +412,7 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.transferFrom(user1, user3, 30e18);
     }
 
-    // ============ setOkuMPrice Tests ============
+    // ============ setOkuMMultiplier Tests ============
 
     function test_SetOkuMPrice_OnlyRebaser() public {
         vm.prank(user1);
@@ -419,13 +421,13 @@ contract OkuMoneyTest is BaseTest {
                 IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_REBASER
             )
         );
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
     }
 
     function test_SetOkuMPrice_CannotDecrease() public {
         vm.prank(rebaser);
-        vm.expectRevert(OkuMoney.PriceCannotDecrease.selector);
-        okuMoney.setOkuMPrice(PRECISION - 1);
+        vm.expectRevert(OkuMoney.MultiplierCannotDecrease.selector);
+        okuMoney.setOkuMMultiplier(PRECISION - 1);
     }
 
     function test_SetOkuMPrice_DoesNotAffectBalances() public {
@@ -434,9 +436,9 @@ contract OkuMoneyTest is BaseTest {
 
         // Double the note price
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
 
-        // balanceOf does NOT change with notePrice — standard ERC-20
+        // balanceOf does NOT change with okuMMultiplier — standard ERC-20
         uint256 balanceAfter = okuMoney.balanceOf(user1);
         assertEq(balanceAfter, balanceBefore);
     }
@@ -446,34 +448,34 @@ contract OkuMoneyTest is BaseTest {
         uint256 supplyBefore = okuMoney.totalSupply();
 
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
 
-        // totalSupply does NOT change with notePrice — standard ERC-20
+        // totalSupply does NOT change with okuMMultiplier — standard ERC-20
         assertEq(okuMoney.totalSupply(), supplyBefore);
     }
 
     function test_SetOkuMPrice_UpdatesPrice() public {
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
 
-        assertEq(okuMoney.okuMPrice(), PRECISION * 2);
+        assertEq(okuMoney.okuMMultiplier(), PRECISION * 2);
     }
 
     function test_SetOkuMPrice_EmitsEvent() public {
         vm.expectEmit(false, false, false, true);
-        emit OkuMPriceUpdated(PRECISION, PRECISION * 2);
+        emit OkuMMultiplierUpdated(PRECISION, PRECISION * 2, okuMoney.totalSupply());
 
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
     }
 
     function test_SetOkuMPrice_SamePrice() public {
-        uint256 currentPrice = okuMoney.okuMPrice();
+        uint256 currentPrice = okuMoney.okuMMultiplier();
 
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(currentPrice);
+        okuMoney.setOkuMMultiplier(currentPrice);
 
-        assertEq(okuMoney.okuMPrice(), currentPrice);
+        assertEq(okuMoney.okuMMultiplier(), currentPrice);
     }
 
     // ============ distributeYield Tests ============
@@ -495,12 +497,12 @@ contract OkuMoneyTest is BaseTest {
         uint256 supply = 10_000e18;
         _mintOkuMoney(user1, supply);
 
-        uint256 priceBefore = okuMoney.okuMPrice();
+        uint256 priceBefore = okuMoney.okuMMultiplier();
 
         vm.prank(rebaser);
         okuMoney.distributeYield(1000e18);
 
-        uint256 priceAfter = okuMoney.okuMPrice();
+        uint256 priceAfter = okuMoney.okuMMultiplier();
         assertEq(priceAfter, priceBefore + 0.1e18);
     }
 
@@ -520,7 +522,7 @@ contract OkuMoneyTest is BaseTest {
         uint256 expectedNewPrice = PRECISION + 0.1e18;
 
         vm.expectEmit(false, false, false, true);
-        emit YieldDistributed(yieldAmount, expectedOldPrice, expectedNewPrice);
+        emit YieldDistributed(yieldAmount, expectedOldPrice, expectedNewPrice, supply);
 
         vm.prank(rebaser);
         okuMoney.distributeYield(yieldAmount);
@@ -529,16 +531,16 @@ contract OkuMoneyTest is BaseTest {
     function test_DistributeYield_MonotonicallyIncreases() public {
         _mintOkuMoney(user1, 10_000e18);
 
-        uint256 price0 = okuMoney.okuMPrice();
+        uint256 price0 = okuMoney.okuMMultiplier();
 
         vm.prank(rebaser);
         okuMoney.distributeYield(100e18);
-        uint256 price1 = okuMoney.okuMPrice();
+        uint256 price1 = okuMoney.okuMMultiplier();
         assertGt(price1, price0);
 
         vm.prank(rebaser);
         okuMoney.distributeYield(200e18);
-        uint256 price2 = okuMoney.okuMPrice();
+        uint256 price2 = okuMoney.okuMMultiplier();
         assertGt(price2, price1);
     }
 
@@ -556,37 +558,35 @@ contract OkuMoneyTest is BaseTest {
         assertEq(okuMoney.totalSupply(), totalSupplyBefore, "totalSupply unchanged after yield");
     }
 
-    // ============ okuMPrice Storage Tests ============
+    // ============ okuMMultiplier Storage Tests ============
 
     function test_OkuMPrice_ReturnsStoredValue() public {
         // No time dependency — price is a stored value
-        assertEq(okuMoney.okuMPrice(), PRECISION);
+        assertEq(okuMoney.okuMMultiplier(), PRECISION);
 
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 3);
+        okuMoney.setOkuMMultiplier(PRECISION * 3);
 
-        assertEq(okuMoney.okuMPrice(), PRECISION * 3);
+        assertEq(okuMoney.okuMMultiplier(), PRECISION * 3);
     }
 
     function test_PriceConstantBetweenUpdates() public {
         // Price does not change without an explicit call
-        uint256 price0 = okuMoney.okuMPrice();
+        uint256 price0 = okuMoney.okuMMultiplier();
 
         // No calls — price stays the same
-        assertEq(okuMoney.okuMPrice(), price0);
+        assertEq(okuMoney.okuMMultiplier(), price0);
 
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
-        uint256 price1 = okuMoney.okuMPrice();
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
+        uint256 price1 = okuMoney.okuMMultiplier();
         assertEq(price1, PRECISION * 2);
 
         // Still no automatic change
-        assertEq(okuMoney.okuMPrice(), price1);
+        assertEq(okuMoney.okuMMultiplier(), price1);
     }
 
     // ============ Yield Distribution Block Tests (Sandwich Attack Prevention) ============
-
-    event YieldDistributionBlockSet(uint256 blockNumber);
 
     function test_LastYieldDistributionBlock_InitiallyZero() public view {
         assertEq(okuMoney.lastYieldDistributionBlock(), 0);
@@ -604,28 +604,32 @@ contract OkuMoneyTest is BaseTest {
 
     function test_SetOkuMPrice_SetsLastYieldDistributionBlock() public {
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
     }
 
-    function test_DistributeYield_EmitsYieldDistributionBlockSet() public {
+    function test_DistributeYield_UpdatesLastYieldDistributionBlock() public {
         uint256 supply = 10_000e18;
         _mintOkuMoney(user1, supply);
 
-        vm.expectEmit(true, true, true, true);
-        emit YieldDistributionBlockSet(block.number);
+        uint256 blockBefore = okuMoney.lastYieldDistributionBlock();
+        assertEq(blockBefore, 0);
 
         vm.prank(rebaser);
         okuMoney.distributeYield(1000e18);
+
+        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
     }
 
-    function test_SetOkuMPrice_EmitsYieldDistributionBlockSet() public {
-        vm.expectEmit(true, true, true, true);
-        emit YieldDistributionBlockSet(block.number);
+    function test_SetOkuMPrice_UpdatesLastYieldDistributionBlock() public {
+        uint256 blockBefore = okuMoney.lastYieldDistributionBlock();
+        assertEq(blockBefore, 0);
 
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
+
+        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
     }
 
     function test_LastYieldDistributionBlock_UpdatesOnEachDistribution() public {
@@ -909,18 +913,18 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.setMaxSupply(MAX_SUPPLY * 2);
     }
 
-    // ============ okuMPrice Computation Tests ============
+    // ============ okuMMultiplier Computation Tests ============
 
     function test_NotePrice_AtInitialPrice() public view {
-        uint256 price = okuMoney.okuMPrice();
+        uint256 price = okuMoney.okuMMultiplier();
         assertEq(price, PRECISION); // Starts at 1e18 ($1.00)
     }
 
     function test_NotePrice_AfterUpdate() public {
         vm.prank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
 
-        assertEq(okuMoney.okuMPrice(), PRECISION * 2);
+        assertEq(okuMoney.okuMMultiplier(), PRECISION * 2);
     }
 
     // ============ Edge Case Tests ============
@@ -953,12 +957,12 @@ contract OkuMoneyTest is BaseTest {
         _mintOkuMoney(user1, 100e18);
 
         vm.startPrank(rebaser);
-        okuMoney.setOkuMPrice(PRECISION * 2);
-        okuMoney.setOkuMPrice(PRECISION * 3);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
+        okuMoney.setOkuMMultiplier(PRECISION * 3);
         vm.stopPrank();
 
-        // notePrice should be updated to 3x
-        assertEq(okuMoney.okuMPrice(), PRECISION * 3);
+        // okuMMultiplier should be updated to 3x
+        assertEq(okuMoney.okuMMultiplier(), PRECISION * 3);
         // balanceOf should NOT change — standard ERC-20
         assertEq(okuMoney.balanceOf(user1), 100e18);
     }
@@ -1124,7 +1128,7 @@ contract OkuMoneyTest is BaseTest {
 
         // State preserved
         assertEq(okuMoney.name(), "OkuMoney");
-        assertEq(okuMoney.okuMPrice(), PRECISION);
+        assertEq(okuMoney.okuMMultiplier(), PRECISION);
         assertEq(okuMoney.maxSupply(), MAX_SUPPLY);
     }
 

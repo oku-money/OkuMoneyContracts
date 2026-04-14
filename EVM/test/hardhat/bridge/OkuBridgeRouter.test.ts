@@ -364,7 +364,14 @@ describe("OkuBridgeRouter", function () {
           .bridgeWrappedVia(okuUsdBalance, await mockAdapter.getAddress(), ARBITRUM_CHAIN_ID, user2.address)
       )
         .to.emit(bridgeRouter, "BridgeInitiated")
-        .withArgs(user1.address, await mockAdapter.getAddress(), noteAmount, ARBITRUM_CHAIN_ID, user2.address);
+        .withArgs(
+          user1.address,
+          await mockAdapter.getAddress(),
+          await okuMoney.getAddress(),
+          noteAmount,
+          ARBITRUM_CHAIN_ID,
+          user2.address
+        );
     });
 
     it("should revert for unsupported adapter", async function () {

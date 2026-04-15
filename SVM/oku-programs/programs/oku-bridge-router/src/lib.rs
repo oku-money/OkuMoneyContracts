@@ -10,7 +10,7 @@ pub mod state;
 use contexts::*;
 use roles::*;
 
-declare_id!("7DtqfP4fyShjAoM35QC9m3a9Ukh4tqcVgzTNLuyTkgE");
+declare_id!("JDa1YZH8VNjXiVxuBQfhU58fGvXRPuiTAt2t4hA5HAFS");
 
 #[program]
 pub mod oku_bridge_router {

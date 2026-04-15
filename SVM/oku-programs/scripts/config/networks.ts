@@ -7,20 +7,32 @@ import { PublicKey } from '@solana/web3.js';
 
 export type NetworkName = 'localnet' | 'devnet' | 'devnet-fork' | 'mainnet-beta' | 'mainnet-fork';
 
-// Alchemy API key from .env (for more reliable RPC)
-const ALCHEMY_API_KEY = process.env.API_KEY || '';
+// RPC URLs from .env
+const HELIUS_RPC = process.env.HELIUS_RPC || '';
+const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || '';
 
 /**
- * Build Alchemy Solana RPC URL
+ * Get RPC URL for network
+ * Priority: SOLANA_RPC_URL > HELIUS_RPC > public RPC
+ * 
+ * Helius has better rate limits than public RPC and is recommended
+ * for program deployments which require many transactions.
  */
-function alchemyUrl(network: 'devnet' | 'mainnet'): string {
-  if (!ALCHEMY_API_KEY) {
-    // Fallback to public RPC
-    return network === 'devnet' 
-      ? 'https://api.devnet.solana.com'
-      : 'https://api.mainnet-beta.solana.com';
+function getRpcUrl(network: 'devnet' | 'mainnet'): string {
+  // Explicit override takes priority
+  if (SOLANA_RPC_URL) {
+    return SOLANA_RPC_URL;
   }
-  return `https://solana-${network}.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
+  
+  // Use Helius if available (better rate limits for deployments)
+  if (HELIUS_RPC) {
+    return HELIUS_RPC;
+  }
+  
+  // Fallback to public RPC
+  return network === 'devnet' 
+    ? 'https://api.devnet.solana.com'
+    : 'https://api.mainnet-beta.solana.com';
 }
 
 export interface NetworkConfig {
@@ -53,7 +65,7 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
 
   devnet: {
     name: 'devnet',
-    cluster: alchemyUrl('devnet'), // Use Alchemy if API_KEY is set, else public RPC
+    cluster: getRpcUrl('devnet'), // Public RPC by default (more reliable for deployments)
     usdc: {
       mint: PublicKey.default, // Created during deployment (mock USDC, deployer as mint authority)
       isNative: true,
@@ -93,7 +105,7 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
 
   'mainnet-beta': {
     name: 'mainnet-beta',
-    cluster: alchemyUrl('mainnet'), // Use Alchemy if API_KEY is set, else public RPC
+    cluster: getRpcUrl('mainnet'), // Public RPC by default (more reliable for deployments)
     usdc: {
       // Mainnet USDC from Circle
       mint: new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'),

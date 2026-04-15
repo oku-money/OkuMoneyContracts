@@ -255,20 +255,59 @@ async function deployPrograms(
   const keypairDir = isFork ? 'target/deploy-fork' : 'target/deploy';
   const cluster = provider.connection.rpcEndpoint;
 
-  // For fork networks, use anchor deploy with the fork keypairs already in target/deploy
-  // (they were copied during build step)
-  logger.info(`Using anchor deploy to ${cluster}...`);
+  // Deploy programs one at a time using solana CLI with priority fees
+  // Order: smallest to largest to fail fast if there's an issue
+  const programs = ['oku_bridge_router', 'oku_dollar', 'lite_psm'];
+  const maxRetries = 3;
+  const delayBetweenPrograms = 10000; // 10 seconds between programs
+  const delayBetweenRetries = 60000; // 60 seconds before retry (let blockhash refresh)
+  const priorityFee = 50000; // micro-lamports per compute unit (helps with congestion)
   
-  try {
-    execSync(`anchor deploy --provider.cluster ${cluster}`, {
-      stdio: 'inherit',
-      timeout: 300000, // 5 minute timeout for all programs
-    });
-  } catch (error: any) {
-    if (error.killed) {
-      throw new Error('Deployment timed out. Try restarting Surfpool.');
+  for (const program of programs) {
+    let deployed = false;
+    const programSoPath = join(process.cwd(), 'target/deploy', `${program}.so`);
+    const keypairPath = join(process.cwd(), keypairDir, `${program}-keypair.json`);
+    
+    for (let attempt = 1; attempt <= maxRetries && !deployed; attempt++) {
+      if (attempt > 1) {
+        logger.warning(`Retry ${attempt}/${maxRetries} for ${program} in ${delayBetweenRetries / 1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, delayBetweenRetries));
+      }
+      
+      logger.info(`Deploying ${program} to ${cluster}... (attempt ${attempt}/${maxRetries})`);
+      
+      try {
+        // Use solana program deploy with priority fees for better landing rate
+        execSync(
+          `solana program deploy ${programSoPath} \
+            --program-id ${keypairPath} \
+            --url "${cluster}" \
+            --with-compute-unit-price ${priorityFee} \
+            --max-sign-attempts 100 \
+            --use-rpc`,
+          {
+            stdio: 'inherit',
+            timeout: 900000, // 15 minute timeout per program
+          }
+        );
+        logger.success(`${program} deployed successfully`);
+        deployed = true;
+      } catch (error: any) {
+        if (attempt === maxRetries) {
+          if (error.killed) {
+            throw new Error(`Deployment of ${program} timed out after ${maxRetries} attempts.`);
+          }
+          throw new Error(`Failed to deploy ${program} after ${maxRetries} attempts: ${error.message || error}`);
+        }
+        logger.warning(`Attempt ${attempt} failed for ${program}`);
+      }
     }
-    throw new Error(`anchor deploy failed: ${error.message || error}`);
+    
+    // Delay between programs to let the network settle
+    if (program !== programs[programs.length - 1]) {
+      logger.info(`Waiting ${delayBetweenPrograms / 1000}s before next program...`);
+      await new Promise(resolve => setTimeout(resolve, delayBetweenPrograms));
+    }
   }
 
   // Read deployed program IDs from keypair files

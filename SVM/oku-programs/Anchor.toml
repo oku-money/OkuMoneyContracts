@@ -12,9 +12,9 @@ oku_bridge_router = "7DtqfP4fyShjAoM35QC9m3a9Ukh4tqcVgzTNLuyTkgE"
 oku_dollar = "BjjK75Vxj6zsC49qYfcVYFPLqyXXkcaFzacTXwohmfVC"
 
 [programs.localnet]
-lite_psm = "AhKZ4TT5W4mnvR3CsX1t9ymQmZx4535AN9SsrThu6C1T"
-oku_bridge_router = "7DtqfP4fyShjAoM35QC9m3a9Ukh4tqcVgzTNLuyTkgE"
-oku_dollar = "EhYumXw6rb4C6M3p6uwozbXwAFALRHTp4RW9YoEudH6d"
+lite_psm = "3pi3vBj7dn98C4QbrrKD1LEFacpXBtmCzY17YR6j7wNa"
+oku_bridge_router = "JDa1YZH8VNjXiVxuBQfhU58fGvXRPuiTAt2t4hA5HAFS"
+oku_dollar = "AWwByFuQfnoiCEZAMdSc4WixepppzXXStXkQijPoKNi5"
 
 [provider]
 cluster = "localnet"

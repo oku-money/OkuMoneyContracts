@@ -11,7 +11,7 @@ pub mod state;
 use contexts::*;
 use roles::*;
 
-declare_id!("AhKZ4TT5W4mnvR3CsX1t9ymQmZx4535AN9SsrThu6C1T");
+declare_id!("3pi3vBj7dn98C4QbrrKD1LEFacpXBtmCzY17YR6j7wNa");
 
 #[program]
 pub mod lite_psm {

@@ -1,0 +1,28 @@
+{
+  "network": "devnet",
+  "timestamp": "2026-04-15T18:38:15.165Z",
+  "tokens": {
+    "usdc": "AFo4goJXvoHWkzGhZeGnewdnKVRaDwrY9xVGdXKqXQXc",
+    "okusd": "5AwLddkTWsBcHBoU2cmffmYmbANqLbpoaRn9zYAF8yEm",
+    "usdOku": "4z2CUa8t3jU5X6NCkp9BoCBWGxAXNfxz78XxJgYWKb6z"
+  },
+  "programs": {
+    "litePsm": "3pi3vBj7dn98C4QbrrKD1LEFacpXBtmCzY17YR6j7wNa",
+    "wokusdVault": "AWwByFuQfnoiCEZAMdSc4WixepppzXXStXkQijPoKNi5",
+    "okuBridgeRouter": "JDa1YZH8VNjXiVxuBQfhU58fGvXRPuiTAt2t4hA5HAFS"
+  },
+  "pdas": {
+    "psmConfig": "EiDhNRw1P7qj2BsrBa4s1CNsVwSYvUrYhetWmJaHAzFy",
+    "redemptionQueue": "yfsbAUVaz1zXs76TkQ68W3MTbhqpqTmgLNJtgNqHTwq",
+    "bridgeConfig": "5bEDDf1HeuEXLovkBXyMS3hJBM46duobyg7RH35Va5Rj",
+    "vaultConfig": "3veLR5r5PKqjtGgpbE9anM7zjqPAePsZdKNE4yCqEYTT",
+    "routerConfig": "AGy87u6EqRp19CYuCTVUPRZRHH6Xi5HQFuk6i3iaz5i5"
+  },
+  "nonces": {},
+  "authorities": {
+    "coldMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
+    "warmMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
+    "orchestrator": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
+    "feeRecipient": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
+  }
+}

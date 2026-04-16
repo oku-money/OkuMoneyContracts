@@ -117,14 +117,16 @@ pub struct BridgeBurn<'info> {
     )]
     pub user_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// Fee recipient's OkuMoney account
+    /// Fee recipient's OkuMoney account (optional - skip if user == fee_recipient)
+    /// When user is the fee recipient, pass None to avoid duplicate mutable account error.
+    /// The instruction will skip fee minting in that case (user already "paid" the fee by burning).
     #[account(
         mut,
         token::mint = oku_money_mint,
         token::authority = bridge_config.fee_recipient,
         token::token_program = token_2022_program,
     )]
-    pub fee_recipient_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub fee_recipient_ata: Option<Box<InterfaceAccount<'info, TokenAccountInterface>>>,
 
     pub token_2022_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,

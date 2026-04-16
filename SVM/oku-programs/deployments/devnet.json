@@ -1,6 +1,6 @@
 {
   "network": "devnet",
-  "timestamp": "2026-04-16T16:29:33.828Z",
+  "timestamp": "2026-04-16T18:48:01.989Z",
   "tokens": {
     "usdc": "AFo4goJXvoHWkzGhZeGnewdnKVRaDwrY9xVGdXKqXQXc",
     "okusd": "5AwLddkTWsBcHBoU2cmffmYmbANqLbpoaRn9zYAF8yEm",
@@ -24,6 +24,6 @@
     "coldMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
     "warmMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
     "orchestrator": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
-    "feeRecipient": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
+    "feeRecipient": "Af3mbzKknRGau4oZRrUNB1zvPxnkdNe2YXHnnSXv8q1d"
   }
 }

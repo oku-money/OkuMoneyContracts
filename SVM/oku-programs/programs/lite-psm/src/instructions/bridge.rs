@@ -215,25 +215,32 @@ pub fn bridge_burn(
         amount,
     )?;
 
-    // 6. Mint fee to fee_recipient (if fee > 0)
+    // 6. Mint fee to fee_recipient (if fee > 0 AND fee_recipient_ata is provided)
     // Note: This fee mint intentionally bypasses minter_allowance because the
     // bridge_burn is a net-supply-decreasing operation (burn > fee re-mint).
+    // When user == fee_recipient, the client should pass None for fee_recipient_ata
+    // to avoid duplicate mutable account error. The fee is effectively "waived"
+    // since the user already burned the full amount.
     if fee_amount > 0 {
-        let seeds = &[PsmConfig::SEED, &[config_bump]];
-        let signer = &[&seeds[..]];
+        if let Some(fee_recipient_ata) = &ctx.accounts.fee_recipient_ata {
+            let seeds = &[PsmConfig::SEED, &[config_bump]];
+            let signer = &[&seeds[..]];
 
-        token_interface::mint_to(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_2022_program.key(),
-                token_interface::MintTo {
-                    mint: ctx.accounts.oku_money_mint.to_account_info(),
-                    to: ctx.accounts.fee_recipient_ata.to_account_info(),
-                    authority: ctx.accounts.config.to_account_info(),
-                },
-                signer,
-            ),
-            fee_amount,
-        )?;
+            token_interface::mint_to(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_2022_program.key(),
+                    token_interface::MintTo {
+                        mint: ctx.accounts.oku_money_mint.to_account_info(),
+                        to: fee_recipient_ata.to_account_info(),
+                        authority: ctx.accounts.config.to_account_info(),
+                    },
+                    signer,
+                ),
+                fee_amount,
+            )?;
+        }
+        // If fee_recipient_ata is None (user == fee_recipient), fee is not minted back.
+        // This is intentional - the user effectively paid the fee by burning the full amount.
     }
 
     // 7. Initialize BridgeNonce if needed and get/increment nonce

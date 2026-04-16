@@ -140,10 +140,18 @@ async function main() {
   // Get fee recipient ATA
   const bridgeConfigAccount = await program.account.bridgeConfig.fetch(bridgeConfig);
   const feeRecipient = bridgeConfigAccount.feeRecipient;
+  
+  // Check if user is the fee recipient (causes duplicate mutable account error on devnet)
+  const userIsFeeRecipient = feeRecipient.equals(wallet.publicKey);
+  if (userIsFeeRecipient) {
+    logger.warning('User wallet is the fee recipient - this may fail with duplicate mutable account error');
+    logger.warning('This is a devnet configuration issue where deployer == feeRecipient');
+  }
+  
   const feeRecipientAta = getAssociatedTokenAddressSync(
     okuMoneyMint,
     feeRecipient,
-    false,
+    true, // allowOwnerOffCurve - fee recipient may be a PDA
     TOKEN_2022_PROGRAM_ID
   );
 
@@ -178,6 +186,7 @@ async function main() {
   logger.info(`Recipient: ${EVM_RECIPIENT}`);
 
   // Call bridge_burn
+  // If user == feeRecipient, pass null for feeRecipientAta to avoid duplicate mutable account error
   const tx = await program.methods
     .bridgeBurn(
       BRIDGE_AMOUNT,
@@ -191,7 +200,7 @@ async function main() {
       bridgeNonce: bridgeNonce,
       okuMoneyMint: okuMoneyMint,
       userOkuMoneyAta: userOkuMoneyAta,
-      feeRecipientAta: feeRecipientAta,
+      feeRecipientAta: userIsFeeRecipient ? null : feeRecipientAta,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })

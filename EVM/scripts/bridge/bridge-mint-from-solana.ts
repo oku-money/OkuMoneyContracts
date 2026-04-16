@@ -170,9 +170,12 @@ async function main() {
   logger.success(`Recipient balance after: ${ethers.formatUnits(balanceAfter, 18)} OkuM`);
   logger.success(`Balance increase: ${ethers.formatUnits(balanceIncrease, 18)} OkuM`);
 
-  if (balanceIncrease !== evmAmount) {
+  // Compare as strings to avoid BigInt comparison issues
+  if (balanceIncrease.toString() !== evmAmount.toString()) {
     logger.warning(`Expected increase: ${ethers.formatUnits(evmAmount, 18)} OkuM`);
     logger.warning(`Actual increase: ${ethers.formatUnits(balanceIncrease, 18)} OkuM`);
+  } else {
+    logger.success("Bridge transfer completed successfully!");
   }
 }
 

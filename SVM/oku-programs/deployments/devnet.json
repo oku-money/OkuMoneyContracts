@@ -1,6 +1,6 @@
 {
   "network": "devnet",
-  "timestamp": "2026-04-15T18:38:15.165Z",
+  "timestamp": "2026-04-16T16:29:33.828Z",
   "tokens": {
     "usdc": "AFo4goJXvoHWkzGhZeGnewdnKVRaDwrY9xVGdXKqXQXc",
     "okusd": "5AwLddkTWsBcHBoU2cmffmYmbANqLbpoaRn9zYAF8yEm",
@@ -16,7 +16,8 @@
     "redemptionQueue": "yfsbAUVaz1zXs76TkQ68W3MTbhqpqTmgLNJtgNqHTwq",
     "bridgeConfig": "5bEDDf1HeuEXLovkBXyMS3hJBM46duobyg7RH35Va5Rj",
     "vaultConfig": "3veLR5r5PKqjtGgpbE9anM7zjqPAePsZdKNE4yCqEYTT",
-    "routerConfig": "AGy87u6EqRp19CYuCTVUPRZRHH6Xi5HQFuk6i3iaz5i5"
+    "routerConfig": "AGy87u6EqRp19CYuCTVUPRZRHH6Xi5HQFuk6i3iaz5i5",
+    "vaultOkuMoney": "BFpJUSpAyLkjFjjQPJ3a4ie7hCQu8voegGNw3txXFZ8K"
   },
   "nonces": {},
   "authorities": {

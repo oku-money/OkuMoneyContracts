@@ -90,11 +90,11 @@ async function main() {
     "Approve USDC"
   );
 
-  // Deposit USDC and mint OkuMoney
-  logger.step(2, "Depositing USDC for OkuMoney");
+  // Mint OkuMoney from USDC via LitePSM
+  logger.step(2, "Minting OkuMoney from USDC");
   await waitForTx(
-    await litePSM.deposit(usdcAmount, user.address),
-    "Deposit USDC"
+    await litePSM.mintOkuM(usdcAmount),
+    "Mint OkuMoney"
   );
 
   // Check OkuMoney balance after minting

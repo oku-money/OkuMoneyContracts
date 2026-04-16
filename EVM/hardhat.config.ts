@@ -87,8 +87,11 @@ const config: HardhatUserConfig = {
 
     // localhost connects to running `npx hardhat node` (which forks Sepolia)
     // Chain ID matches the fork source (Sepolia = 11155111)
+    // Fixed gas settings to avoid stale baseFee issues on forks
     localhost: {
       url: "http://127.0.0.1:8545",
+      gas: "auto",
+      gasPrice: 20000000000, // 20 gwei - fixed to avoid stale fork baseFee issues
       chainId: DEFAULT_FORK_CHAIN_ID,
     },
 

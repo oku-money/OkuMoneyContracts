@@ -29,6 +29,9 @@
     "wallet:check": "tsx -e \"import { createProvider } from './scripts/utils/network'; const p = createProvider('devnet'); console.log('Wallet:', p.wallet.publicKey.toBase58()); p.connection.getBalance(p.wallet.publicKey).then(b => console.log('Balance on devnet:', b / 1e9, 'SOL'));\"",
     "simulate:full": "tsx scripts/simulate/full-flow.ts",
     "simulate:verify": "tsx scripts/simulate/verify-state.ts",
+    "test:flow:fork": "NETWORK=devnet-fork tsx scripts/devnet/test-devnet.ts",
+    "test:flow:devnet": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts",
+    "test:devnet": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts",
     "devnet:test": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts",
     "devnet:test:state": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts --step=state",
     "devnet:test:mint": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts --step=mint",
@@ -45,6 +48,9 @@
     "localnet:start": "solana-test-validator --reset",
     "localnet:deploy:fresh": "rm -f deployments/localnet.json && npm run deploy:localnet",
     "localnet:full": "npm run deploy:localnet && npm run simulate:full",
+    "fix:escrow": "NETWORK=devnet npx tsx scripts/deploy/fix-oku-money-escrow.ts",
+    "fix:escrow:yes": "NETWORK=devnet npx tsx scripts/deploy/fix-oku-money-escrow.ts --yes",
+    "fix:escrow:fork": "NETWORK=devnet-fork npx tsx scripts/deploy/fix-oku-money-escrow.ts",
     "clean": "anchor clean && rm -rf deployments/"
   },
   "dependencies": {

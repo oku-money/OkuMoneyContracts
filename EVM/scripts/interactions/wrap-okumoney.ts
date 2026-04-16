@@ -53,10 +53,10 @@ async function main() {
     "Approve OkuMoney"
   );
 
-  // Wrap OkuMoney to OkuDollar
+  // Wrap OkuMoney to OkuDollar (with 0 minAmountOut for testing)
   logger.step(2, "Wrapping OkuMoney to OkuDollar");
   await waitForTx(
-    await okuDollar.wrap(okuMoneyAmount, user.address),
+    await okuDollar.wrap(okuMoneyAmount, user.address, 0n),
     "Wrap OkuMoney"
   );
 
@@ -69,10 +69,10 @@ async function main() {
   logger.success(`Wrapped ${amountStr} OkuM to ${ethers.formatUnits(wrapped, 18)} usdOku`);
 
   // Show conversion rate
-  const totalAssets = await okuDollar.totalAssets();
+  const totalReserves = await okuDollar.totalOkuMReserves();
   const totalSupply = await okuDollar.totalSupply();
   if (totalSupply > 0n) {
-    const rate = (Number(totalAssets) / Number(totalSupply)).toFixed(6);
+    const rate = (Number(totalReserves) / Number(totalSupply)).toFixed(6);
     logger.info(`Current conversion rate: 1 usdOku = ${rate} OkuM`);
   }
 }

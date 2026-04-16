@@ -118,17 +118,25 @@ export function getChainConfig(network: string): ChainConfig {
 }
 
 /**
- * Get network name from Hardhat's network.name or environment
- * Import and use: import { network } from "hardhat"; then pass network.name
- * Or use NETWORK env var as fallback
+ * Get network name from environment or Hardhat's network.name
+ * 
+ * Priority:
+ * 1. NETWORK env var (allows overriding for forks, e.g., NETWORK=sepolia on localhost fork)
+ * 2. Hardhat's network.name
+ * 3. "localhost" as fallback
  */
 export function getNetworkName(): string {
-  // Try to get from Hardhat's network object via require
-  // This is a workaround since we can't import "hardhat" in a config file
+  // NETWORK env var takes priority - essential for fork testing
+  // e.g., when running on localhost but forking sepolia, use NETWORK=sepolia
+  if (process.env.NETWORK) {
+    return process.env.NETWORK;
+  }
+  
+  // Try to get from Hardhat's network object
   try {
     const hre = require("hardhat");
     return hre.network.name;
   } catch {
-    return process.env.NETWORK || "localhost";
+    return "localhost";
   }
 }

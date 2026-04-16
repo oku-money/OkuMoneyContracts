@@ -335,7 +335,7 @@ async function initializePsm(
   okuMoneyMint: PublicKey,
   authorities: ReturnType<typeof loadAuthorities>,
   config: DeploymentConfig
-): Promise<{ psmConfig: PublicKey; redemptionQueue: PublicKey; bridgeConfig: PublicKey }> {
+): Promise<{ psmConfig: PublicKey; redemptionQueue: PublicKey; bridgeConfig: PublicKey; vaultOkuMoney: PublicKey }> {
   logger.nextStep('Initializing PSM');
 
   const idl = loadIdlWithAddress(litePsmIdl, programId);
@@ -463,7 +463,32 @@ async function initializePsm(
     }
   }
 
-  return { psmConfig, redemptionQueue, bridgeConfig };
+  // Setup OkuMoney escrow vault (for queued redemptions)
+  const vaultOkuMoney = getAssociatedTokenAddressSync(okuMoneyMint, psmConfig, true, TOKEN_2022_PROGRAM_ID);
+  logger.info('Setting up OkuMoney escrow vault...');
+  try {
+    await program.methods
+      .setupOkuMoneyEscrow()
+      .accountsPartial({
+        roleAdmin: provider.wallet.publicKey,
+        config: psmConfig,
+        okuMoneyMint: okuMoneyMint,
+        vaultOkuMoney: vaultOkuMoney,
+        token2022Program: TOKEN_2022_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+    logger.success('OkuMoney escrow vault initialized');
+  } catch (error: any) {
+    if (error.message?.includes('already in use') || error.message?.includes('EscrowAlreadyInitialized')) {
+      logger.warning('OkuMoney escrow vault already initialized');
+    } else {
+      throw error;
+    }
+  }
+
+  return { psmConfig, redemptionQueue, bridgeConfig, vaultOkuMoney };
 }
 
 // ============================================================================
@@ -707,7 +732,7 @@ async function main() {
   logger.log('');
 
   // Step 4: Initialize PSM
-  const { psmConfig, redemptionQueue, bridgeConfig } = await initializePsm(
+  const { psmConfig, redemptionQueue, bridgeConfig, vaultOkuMoney } = await initializePsm(
     provider,
     programIds.litePsm,
     usdcMint,
@@ -758,6 +783,7 @@ async function main() {
       bridgeConfig: bridgeConfig.toBase58(),
       vaultConfig: vaultConfig.toBase58(),
       routerConfig: routerConfig.toBase58(),
+      vaultOkuMoney: vaultOkuMoney.toBase58(),
     },
     authorities: {
       coldMultisig: authorities.psm.roleAdmin.toBase58(),

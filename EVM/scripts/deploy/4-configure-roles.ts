@@ -9,6 +9,12 @@
  * - LitePSM: Buffer roles to deployer
  * - OkuBridge: Already configured during initialization
  * - OkuBridgeRouter: Already configured during initialization
+ *
+ * This script is idempotent - it can be run multiple times safely.
+ * It skips roles that are already granted and allowances that are already set.
+ *
+ * Usage:
+ *   NETWORK=sepolia npx hardhat run scripts/deploy/4-configure-roles.ts --network sepolia
  */
 
 import { ethers } from "hardhat";
@@ -17,6 +23,31 @@ import { loadAddress } from "../utils/addressBook";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
 import { waitForTx, getDeployedContract } from "../utils/deploy";
+
+// Helper to grant role only if not already granted
+async function grantRoleIfNeeded(contract: any, role: string, account: string, description: string) {
+  const hasRole = await contract.hasRole(role, account);
+  if (hasRole) {
+    logger.info(`${description} - already granted`);
+    return;
+  }
+  await waitForTx(await contract.grantRole(role, account), description);
+}
+
+// Helper to configure minter allowance only if not set
+async function configureMinterAllowanceIfNeeded(
+  okuMoney: any,
+  minter: string,
+  allowance: bigint,
+  description: string
+) {
+  const currentAllowance = await okuMoney.minterAllowance(minter);
+  if (currentAllowance >= allowance) {
+    logger.info(`${description} - already set (${ethers.formatUnits(currentAllowance, 18)})`);
+    return;
+  }
+  await waitForTx(await okuMoney.configureMinterAllowance(minter, allowance), description);
+}
 
 async function main() {
   const network = getNetworkName();
@@ -44,95 +75,56 @@ async function main() {
   // Configure OkuMoney roles
   logger.section("Configuring OkuMoney Roles");
 
-  logger.step(1, "Granting OKUM_MINTER to LitePSM");
-  await waitForTx(
-    await okuMoney.grantRole(ROLES.OKUM_MINTER, litePSMAddress),
-    "Grant OKUM_MINTER to LitePSM"
-  );
+  logger.step(1, "OKUM_MINTER to LitePSM");
+  await grantRoleIfNeeded(okuMoney, ROLES.OKUM_MINTER, litePSMAddress, "Grant OKUM_MINTER to LitePSM");
 
-  logger.step(2, "Granting OKUM_MINTER to RedemptionQueue");
-  await waitForTx(
-    await okuMoney.grantRole(ROLES.OKUM_MINTER, redemptionQueueAddress),
-    "Grant OKUM_MINTER to RedemptionQueue"
-  );
+  logger.step(2, "OKUM_MINTER to RedemptionQueue");
+  await grantRoleIfNeeded(okuMoney, ROLES.OKUM_MINTER, redemptionQueueAddress, "Grant OKUM_MINTER to RedemptionQueue");
 
-  logger.step(3, "Granting OKUM_MINTER to OkuBridge");
-  await waitForTx(
-    await okuMoney.grantRole(ROLES.OKUM_MINTER, okuBridgeAddress),
-    "Grant OKUM_MINTER to OkuBridge"
-  );
+  logger.step(3, "OKUM_MINTER to OkuBridge");
+  await grantRoleIfNeeded(okuMoney, ROLES.OKUM_MINTER, okuBridgeAddress, "Grant OKUM_MINTER to OkuBridge");
 
-  logger.step(4, "Granting OKUM_MINTER to OkuBridgeRouter");
-  await waitForTx(
-    await okuMoney.grantRole(ROLES.OKUM_MINTER, bridgeRouterAddress),
-    "Grant OKUM_MINTER to OkuBridgeRouter"
-  );
+  logger.step(4, "OKUM_MINTER to OkuBridgeRouter");
+  await grantRoleIfNeeded(okuMoney, ROLES.OKUM_MINTER, bridgeRouterAddress, "Grant OKUM_MINTER to OkuBridgeRouter");
 
-  logger.step(5, "Granting OKUM_REBASER to Admin (testnet)");
-  await waitForTx(
-    await okuMoney.grantRole(ROLES.OKUM_REBASER, deployer.address),
-    "Grant OKUM_REBASER to Admin"
-  );
+  logger.step(5, "OKUM_REBASER to Admin (testnet)");
+  await grantRoleIfNeeded(okuMoney, ROLES.OKUM_REBASER, deployer.address, "Grant OKUM_REBASER to Admin");
 
-  logger.step(6, "Granting OKUM_ALLOWANCE_MANAGER to Admin");
-  await waitForTx(
-    await okuMoney.grantRole(ROLES.OKUM_ALLOWANCE_MANAGER, deployer.address),
-    "Grant OKUM_ALLOWANCE_MANAGER to Admin"
-  );
+  logger.step(6, "OKUM_ALLOWANCE_MANAGER to Admin");
+  await grantRoleIfNeeded(okuMoney, ROLES.OKUM_ALLOWANCE_MANAGER, deployer.address, "Grant OKUM_ALLOWANCE_MANAGER to Admin");
 
   // Configure minter allowances (1 billion tokens)
   const minterAllowance = ethers.parseUnits("1000000000", 18);
 
-  logger.step(7, "Configuring minter allowance for LitePSM");
-  await waitForTx(
-    await okuMoney.configureMinterAllowance(litePSMAddress, minterAllowance),
-    "Configure LitePSM minter allowance"
-  );
+  logger.step(7, "LitePSM minter allowance");
+  await configureMinterAllowanceIfNeeded(okuMoney, litePSMAddress, minterAllowance, "Configure LitePSM minter allowance");
 
-  logger.step(8, "Configuring minter allowance for RedemptionQueue");
-  await waitForTx(
-    await okuMoney.configureMinterAllowance(redemptionQueueAddress, minterAllowance),
-    "Configure RedemptionQueue minter allowance"
-  );
+  logger.step(8, "RedemptionQueue minter allowance");
+  await configureMinterAllowanceIfNeeded(okuMoney, redemptionQueueAddress, minterAllowance, "Configure RedemptionQueue minter allowance");
 
-  logger.step(9, "Configuring minter allowance for OkuBridge");
-  await waitForTx(
-    await okuMoney.configureMinterAllowance(okuBridgeAddress, minterAllowance),
-    "Configure OkuBridge minter allowance"
-  );
+  logger.step(9, "OkuBridge minter allowance");
+  await configureMinterAllowanceIfNeeded(okuMoney, okuBridgeAddress, minterAllowance, "Configure OkuBridge minter allowance");
 
-  logger.step(10, "Configuring minter allowance for OkuBridgeRouter");
-  await waitForTx(
-    await okuMoney.configureMinterAllowance(bridgeRouterAddress, minterAllowance),
-    "Configure OkuBridgeRouter minter allowance"
-  );
+  logger.step(10, "OkuBridgeRouter minter allowance");
+  await configureMinterAllowanceIfNeeded(okuMoney, bridgeRouterAddress, minterAllowance, "Configure OkuBridgeRouter minter allowance");
 
   // Configure OkuDollar roles
   logger.section("Configuring OkuDollar Roles");
 
-  logger.step(11, "Granting VAULT_REBASER to Admin (testnet)");
-  await waitForTx(
-    await okuDollar.grantRole(ROLES.VAULT_REBASER, deployer.address),
-    "Grant VAULT_REBASER to Admin"
-  );
+  logger.step(11, "VAULT_REBASER to Admin (testnet)");
+  await grantRoleIfNeeded(okuDollar, ROLES.VAULT_REBASER, deployer.address, "Grant VAULT_REBASER to Admin");
 
   // Configure RedemptionQueue roles
   logger.section("Configuring RedemptionQueue Roles");
 
-  logger.step(12, "Granting QUEUE_PSM to LitePSM");
-  await waitForTx(
-    await redemptionQueue.grantRole(ROLES.QUEUE_PSM, litePSMAddress),
-    "Grant QUEUE_PSM to LitePSM"
-  );
+  logger.step(12, "QUEUE_PSM to LitePSM");
+  await grantRoleIfNeeded(redemptionQueue, ROLES.QUEUE_PSM, litePSMAddress, "Grant QUEUE_PSM to LitePSM");
 
   // Configure LitePSM roles
   logger.section("Configuring LitePSM Roles");
 
-  logger.step(13, "Granting PSM_BUFFER_DEPOSITOR to Admin");
-  await waitForTx(
-    await litePSM.grantRole(ROLES.PSM_BUFFER_DEPOSITOR, deployer.address),
-    "Grant PSM_BUFFER_DEPOSITOR to Admin"
-  );
+  logger.step(13, "PSM_BUFFER_DEPOSITOR to Admin");
+  await grantRoleIfNeeded(litePSM, ROLES.PSM_BUFFER_DEPOSITOR, deployer.address, "Grant PSM_BUFFER_DEPOSITOR to Admin");
 
   // PSM_QUEUE_PROCESSOR is already granted to admin in initialize
   logger.info("PSM_QUEUE_PROCESSOR already granted to Admin during initialization");

@@ -40,7 +40,7 @@ import { LitePsm } from '../../target/types/lite_psm';
 import { createProvider, detectNetwork, loadKeypair } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
-import { SOLANA_CHAIN_ID } from '../config/constants';
+import { SOLANA_CHAIN_ID, eip155ToInternalChainId } from '../config/constants';
 import { logSurfpoolStatus } from '../utils/surfpool';
 
 // Bridge request from EVM (post-burn event data)
@@ -182,17 +182,28 @@ async function main() {
 
   logger.nextStep('Constructing bridge message');
 
+  // Convert EIP-155 chain IDs to internal u16 protocol IDs
+  // EVM emits EIP-155 IDs (e.g., 11155111 for Sepolia) but SVM uses u16 internal IDs (e.g., 111)
+  const sourceChainInternal = eip155ToInternalChainId(evmRequest.sourceChainId);
+  logger.info(`Source chain: ${evmRequest.sourceChainId} (EIP-155) -> ${sourceChainInternal} (internal)`);
+  
+  // destChainId should already be internal (103 for Solana Devnet) but validate it fits in u16
+  const destChainInternal = evmRequest.destChainId;
+  if (destChainInternal > 65535) {
+    throw new Error(`Destination chain ID ${destChainInternal} exceeds u16 max`);
+  }
+
   // Construct 80-byte message (matching SVM BridgeRequest format)
   // Format: source_chain(2) + dest_chain(2) + sender(20) + recipient(32) + amount(8) + nonce(8) + deadline(8) = 80 bytes
   const messageBuffer = Buffer.alloc(80);
   let offset = 0;
 
-  // source_chain_id (u16 LE)
-  messageBuffer.writeUInt16LE(evmRequest.sourceChainId, offset);
+  // source_chain_id (u16 LE) - use internal ID
+  messageBuffer.writeUInt16LE(sourceChainInternal, offset);
   offset += 2;
 
   // destination_chain_id (u16 LE)
-  messageBuffer.writeUInt16LE(evmRequest.destChainId, offset);
+  messageBuffer.writeUInt16LE(destChainInternal, offset);
   offset += 2;
 
   // sender (20 bytes - EVM address)
@@ -228,15 +239,17 @@ async function main() {
 
   logger.nextStep('Building transaction');
 
-  // ProcessedRequest PDA
+  // ProcessedRequest PDA - seed is "bridge_request" (see state.rs ProcessedRequest::SEED)
   const [processedRequest] = PublicKey.findProgramAddressSync(
-    [Buffer.from('processed_request'), requestId],
+    [Buffer.from('bridge_request'), requestId],
     programId
   );
+  logger.info(`ProcessedRequest PDA: ${processedRequest.toBase58()}`);
 
   // Build Ed25519 signature verification instruction
+  // Uses the full 64-byte secret key (32-byte seed + 32-byte public key)
   const ed25519Instruction = Ed25519Program.createInstructionWithPrivateKey({
-    privateKey: walletKeypair.secretKey.slice(0, 32),
+    privateKey: walletKeypair.secretKey,
     message: messageBuffer,
   });
 

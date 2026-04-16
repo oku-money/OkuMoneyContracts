@@ -18,7 +18,7 @@
 import { ethers } from "hardhat";
 import * as fs from "fs";
 import * as path from "path";
-import { getNetworkName } from "../config/chains";
+import { getNetworkName, getEvmChainIdFromBridge } from "../config/chains";
 import { loadAddress } from "../utils/addressBook";
 import { logger } from "../utils/logger";
 import { getDeployedContract } from "../utils/deploy";
@@ -96,6 +96,12 @@ async function main() {
 
   logger.section("Constructing EIP-712 Signature");
 
+  // Convert internal protocol chain IDs to EIP-155 chain IDs
+  // SVM uses u16 internal IDs (e.g., 111 for Sepolia), EVM uses EIP-155 IDs (e.g., 11155111)
+  // The EVM contract validates destChainId == block.chainid, so we must use EIP-155 IDs
+  const evmDestChainId = getEvmChainIdFromBridge(requestData.destChainId);
+  logger.info(`Converting destChainId: ${requestData.destChainId} (internal) -> ${evmDestChainId} (EIP-155)`);
+
   // Construct the BridgeRequest struct
   // Note: sender is padded to bytes32 on Solana side, we need address for EVM
   // For SVM->EVM, sender is Solana pubkey (32 bytes) stored as bytes32
@@ -103,8 +109,8 @@ async function main() {
   const senderAddress = ethers.getAddress("0x" + requestData.sender.slice(-40));
 
   const bridgeRequest = {
-    sourceChainId: requestData.sourceChainId,
-    destChainId: requestData.destChainId,
+    sourceChainId: requestData.sourceChainId, // Keep internal ID for source (Solana = 103)
+    destChainId: evmDestChainId, // Use EIP-155 ID for destination (block.chainid validation)
     sender: senderAddress,
     recipient: recipientBytes32,
     amount: evmAmount,

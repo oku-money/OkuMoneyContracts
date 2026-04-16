@@ -31,15 +31,16 @@ import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import {
   SOLANA_CHAIN_ID,
+  SEPOLIA_CHAIN_ID,
   OP_SEPOLIA_CHAIN_ID,
   HARDHAT_CHAIN_ID,
 } from '../config/constants';
 
 // Destination chain ID - can be overridden via EVM_DEST_CHAIN_ID env var
-// Use HARDHAT_CHAIN_ID (31337) for localhost testing
+// Default to SEPOLIA_CHAIN_ID (111) since that's where EVM contracts are deployed
 const DEST_CHAIN_ID = process.env.EVM_DEST_CHAIN_ID 
   ? parseInt(process.env.EVM_DEST_CHAIN_ID)
-  : OP_SEPOLIA_CHAIN_ID;
+  : SEPOLIA_CHAIN_ID;
 import { logSurfpoolStatus } from '../utils/surfpool';
 
 // Bridge request output interface (for EVM relay script)
@@ -305,11 +306,15 @@ async function main() {
   fs.writeFileSync(outputPath, JSON.stringify(bridgeRequest, null, 2));
   logger.success(`Bridge request written to: ${outputPath}`);
 
+  // Also copy to EVM directory for convenience
+  const evmOutputPath = path.join(__dirname, '..', '..', '..', '..', 'EVM', 'bridge-request.json');
+  fs.writeFileSync(evmOutputPath, JSON.stringify(bridgeRequest, null, 2));
+  logger.success(`Bridge request also copied to: ${evmOutputPath}`);
+
   logger.header('Bridge Burn Complete');
   logger.log('');
-  logger.info('Next steps:');
-  logger.info('1. Copy bridge-request.json to EVM/');
-  logger.info('2. Run relay-from-solana.ts on OP Sepolia to complete the bridge');
+  logger.info('Next step:');
+  logger.info('  cd ../../EVM && npm run bridge:mint:sepolia');
   logger.log('');
   logger.info('Decimal conversion note:');
   logger.info(`  SVM amount (6 decimals): ${netAmount}`);

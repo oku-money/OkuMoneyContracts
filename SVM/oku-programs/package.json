@@ -51,6 +51,9 @@
     "fix:escrow": "NETWORK=devnet npx tsx scripts/deploy/fix-oku-money-escrow.ts",
     "fix:escrow:yes": "NETWORK=devnet npx tsx scripts/deploy/fix-oku-money-escrow.ts --yes",
     "fix:escrow:fork": "NETWORK=devnet-fork npx tsx scripts/deploy/fix-oku-money-escrow.ts",
+    "bridge:state:devnet": "NETWORK=devnet tsx scripts/bridge/check-bridge-state.ts",
+    "bridge:burn:devnet": "NETWORK=devnet tsx scripts/bridge/bridge-burn-to-evm.ts",
+    "bridge:mint:devnet": "NETWORK=devnet tsx scripts/bridge/bridge-mint-from-evm.ts",
     "clean": "anchor clean && rm -rf deployments/"
   },
   "dependencies": {

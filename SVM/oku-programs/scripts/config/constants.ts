@@ -46,6 +46,54 @@ export const ETHEREUM_CHAIN_ID = 1;
 // We use 111 (SEPOLIA_CHAIN_ID) since that's the network we're forking
 export const HARDHAT_CHAIN_ID = SEPOLIA_CHAIN_ID;
 
+// EIP-155 chain IDs (actual on-chain values)
+export const EIP155_SEPOLIA = 11155111;
+export const EIP155_OP_SEPOLIA = 11155420;
+export const EIP155_OPTIMISM = 10;
+export const EIP155_ARBITRUM = 42161;
+export const EIP155_BASE = 8453;
+export const EIP155_ETHEREUM = 1;
+
+/**
+ * Map EIP-155 chain ID to internal protocol u16 ID
+ * Used when receiving bridge requests from EVM (which emits EIP-155 IDs)
+ */
+export function eip155ToInternalChainId(eip155ChainId: number): number {
+  const mapping: Record<number, number> = {
+    [EIP155_ETHEREUM]: ETHEREUM_CHAIN_ID,
+    [EIP155_OPTIMISM]: OPTIMISM_CHAIN_ID,
+    [EIP155_ARBITRUM]: ARBITRUM_CHAIN_ID,
+    [EIP155_BASE]: BASE_CHAIN_ID,
+    [EIP155_SEPOLIA]: SEPOLIA_CHAIN_ID,
+    [EIP155_OP_SEPOLIA]: OP_SEPOLIA_CHAIN_ID,
+  };
+  const internalId = mapping[eip155ChainId];
+  if (internalId === undefined) {
+    throw new Error(`Unknown EIP-155 chain ID: ${eip155ChainId}`);
+  }
+  return internalId;
+}
+
+/**
+ * Map internal protocol u16 ID to EIP-155 chain ID
+ * Used when sending bridge requests to EVM
+ */
+export function internalToEip155ChainId(internalChainId: number): number {
+  const mapping: Record<number, number> = {
+    [ETHEREUM_CHAIN_ID]: EIP155_ETHEREUM,
+    [OPTIMISM_CHAIN_ID]: EIP155_OPTIMISM,
+    [ARBITRUM_CHAIN_ID]: EIP155_ARBITRUM,
+    [BASE_CHAIN_ID]: EIP155_BASE,
+    [SEPOLIA_CHAIN_ID]: EIP155_SEPOLIA,
+    [OP_SEPOLIA_CHAIN_ID]: EIP155_OP_SEPOLIA,
+  };
+  const eip155Id = mapping[internalChainId];
+  if (eip155Id === undefined) {
+    throw new Error(`Unknown internal chain ID: ${internalChainId}`);
+  }
+  return eip155Id;
+}
+
 // Supported destination chains (EVM chain IDs)
 // Production chains
 export const SUPPORTED_CHAINS_MAINNET = [

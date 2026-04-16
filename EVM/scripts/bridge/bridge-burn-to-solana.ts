@@ -15,6 +15,7 @@
 import { ethers } from "hardhat";
 import * as fs from "fs";
 import * as path from "path";
+import bs58 from "bs58";
 import { getNetworkName, SOLANA_DEVNET_CHAIN_ID } from "../config/chains";
 import { loadAddress } from "../utils/addressBook";
 import { logger } from "../utils/logger";
@@ -63,15 +64,17 @@ async function main() {
   const BRIDGE_AMOUNT = ethers.parseUnits("10", 18); // 10 OkuMoney (18 decimals)
   const USDC_AMOUNT = ethers.parseUnits("10", 6); // 10 USDC (6 decimals)
 
-  // Solana recipient - this should be a valid Solana wallet pubkey
-  // For testing, use a placeholder or your actual Solana devnet wallet
-  // Format: left-padded to 32 bytes
+  // Solana recipient - this should be a valid Solana wallet pubkey (base58)
+  // For testing, defaults to the deployer wallet on devnet
   const SOLANA_RECIPIENT_PUBKEY = process.env.SOLANA_RECIPIENT || 
-    "11111111111111111111111111111111"; // Placeholder - replace with actual pubkey
-  const recipientBytes32 = ethers.zeroPadValue(
-    ethers.getBytes("0x" + Buffer.from(SOLANA_RECIPIENT_PUBKEY).toString("hex").slice(0, 64)),
-    32
-  );
+    "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"; // Default: devnet deployer wallet
+  
+  // Decode base58 Solana pubkey to 32 raw bytes, then convert to hex for EVM
+  const recipientBytes = bs58.decode(SOLANA_RECIPIENT_PUBKEY);
+  if (recipientBytes.length !== 32) {
+    throw new Error(`Invalid Solana pubkey: expected 32 bytes, got ${recipientBytes.length}`);
+  }
+  const recipientBytes32 = "0x" + Buffer.from(recipientBytes).toString("hex");
 
   logger.section("Step 1: Mint MockUSDC");
   
@@ -145,7 +148,7 @@ async function main() {
     throw new Error("Failed to parse BridgeBurn event");
   }
 
-  const { requestId, sender, recipient, sourceChainId, destChainId, amount, nonce, deadline } = parsedEvent.args;
+  const { requestId, sender, recipient, sourceChainId, destChainId, grossAmount, netAmount, feeAmount, nonce, deadline } = parsedEvent.args;
 
   logger.success("BridgeBurn Event:");
   logger.info(`  Request ID: ${requestId}`);
@@ -153,19 +156,22 @@ async function main() {
   logger.info(`  Recipient: ${recipient}`);
   logger.info(`  Source Chain: ${sourceChainId}`);
   logger.info(`  Dest Chain: ${destChainId}`);
-  logger.info(`  Amount: ${ethers.formatUnits(amount, 18)} OkuM (post-fee)`);
+  logger.info(`  Gross Amount: ${ethers.formatUnits(grossAmount, 18)} OkuM`);
+  logger.info(`  Net Amount: ${ethers.formatUnits(netAmount, 18)} OkuM (after fee)`);
+  logger.info(`  Fee: ${ethers.formatUnits(feeAmount, 18)} OkuM`);
   logger.info(`  Nonce: ${nonce}`);
   logger.info(`  Deadline: ${deadline} (${new Date(Number(deadline) * 1000).toISOString()})`);
 
   logger.section("Step 5: Write Bridge Request File");
 
+  // Use netAmount (post-fee) for the bridge request - this is what will be minted on destination
   const bridgeRequest: BridgeRequestOutput = {
     requestId: requestId,
     sourceChainId: Number(sourceChainId),
     destChainId: Number(destChainId),
     sender: sender,
     recipient: recipient,
-    amount: amount.toString(),
+    amount: netAmount.toString(), // Post-fee amount
     nonce: Number(nonce),
     deadline: Number(deadline),
     timestamp: Math.floor(Date.now() / 1000),
@@ -176,15 +182,19 @@ async function main() {
   fs.writeFileSync(outputPath, JSON.stringify(bridgeRequest, null, 2));
   logger.success(`Bridge request written to: ${outputPath}`);
 
+  // Also copy to SVM directory for convenience
+  const svmOutputPath = path.join(__dirname, "..", "..", "..", "SVM", "oku-programs", "bridge-request.json");
+  fs.writeFileSync(svmOutputPath, JSON.stringify(bridgeRequest, null, 2));
+  logger.success(`Bridge request also copied to: ${svmOutputPath}`);
+
   logger.section("Bridge Burn Complete");
   logger.info("");
-  logger.info("Next steps:");
-  logger.info("1. Copy bridge-request.json to SVM/oku-programs/");
-  logger.info("2. Run relay-from-evm.ts on Solana Devnet to complete the bridge");
+  logger.info("Next step:");
+  logger.info("  cd ../SVM/oku-programs && npm run bridge:mint:devnet");
   logger.info("");
   logger.info("Decimal conversion note:");
-  logger.info(`  EVM amount (18 decimals): ${amount.toString()}`);
-  logger.info(`  SVM amount (6 decimals):  ${(BigInt(amount) / BigInt(1e12)).toString()}`);
+  logger.info(`  EVM amount (18 decimals): ${netAmount.toString()}`);
+  logger.info(`  SVM amount (6 decimals):  ${(BigInt(netAmount) / BigInt(1e12)).toString()}`);
 }
 
 main()

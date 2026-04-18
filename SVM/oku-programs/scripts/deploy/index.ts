@@ -33,7 +33,7 @@ import { logger } from '../utils/logger';
 import { clearDeployment, saveDeployment, hasDeployment, DeploymentAddresses } from '../utils/addressBook';
 import { LAMPORTS_PER_SOL, Connection } from '@solana/web3.js';
 import * as readline from 'readline';
-import { NETWORK_CONFIGS } from '../config/networks';
+import { NETWORK_CONFIGS, getActiveRpcInfo, DEPLOYMENT_CONFIG } from '../config/networks';
 import { loadAuthorities } from '../config/authorities';
 import { createSPLTokenMint, createToken2022Mint } from '../utils/tokenHelpers';
 import {
@@ -258,10 +258,9 @@ async function deployPrograms(
   // Deploy programs one at a time using solana CLI with priority fees
   // Order: smallest to largest to fail fast if there's an issue
   const programs = ['oku_bridge_router', 'oku_dollar', 'lite_psm'];
-  const maxRetries = 3;
-  const delayBetweenPrograms = 10000; // 10 seconds between programs
-  const delayBetweenRetries = 60000; // 60 seconds before retry (let blockhash refresh)
-  const priorityFee = 50000; // micro-lamports per compute unit (helps with congestion)
+  const { maxRetries, retryDelayMs, programDelayMs, priorityFee, deployTimeoutMs } = DEPLOYMENT_CONFIG;
+  
+  logger.info(`Deployment config: priorityFee=${priorityFee}, maxRetries=${maxRetries}, retryDelay=${retryDelayMs/1000}s`);
   
   for (const program of programs) {
     let deployed = false;
@@ -270,8 +269,8 @@ async function deployPrograms(
     
     for (let attempt = 1; attempt <= maxRetries && !deployed; attempt++) {
       if (attempt > 1) {
-        logger.warning(`Retry ${attempt}/${maxRetries} for ${program} in ${delayBetweenRetries / 1000}s...`);
-        await new Promise(resolve => setTimeout(resolve, delayBetweenRetries));
+        logger.warning(`Retry ${attempt}/${maxRetries} for ${program} in ${retryDelayMs / 1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
       }
       
       logger.info(`Deploying ${program} to ${cluster}... (attempt ${attempt}/${maxRetries})`);
@@ -287,7 +286,7 @@ async function deployPrograms(
             --use-rpc`,
           {
             stdio: 'inherit',
-            timeout: 900000, // 15 minute timeout per program
+            timeout: deployTimeoutMs,
           }
         );
         logger.success(`${program} deployed successfully`);
@@ -305,8 +304,8 @@ async function deployPrograms(
     
     // Delay between programs to let the network settle
     if (program !== programs[programs.length - 1]) {
-      logger.info(`Waiting ${delayBetweenPrograms / 1000}s before next program...`);
-      await new Promise(resolve => setTimeout(resolve, delayBetweenPrograms));
+      logger.info(`Waiting ${programDelayMs / 1000}s before next program...`);
+      await new Promise(resolve => setTimeout(resolve, programDelayMs));
     }
   }
 
@@ -666,6 +665,12 @@ async function main() {
   logger.info(`Network: ${network}`);
   logger.info(`Cluster: ${networkConfig.cluster}`);
   logger.info(`Mode: ${isFork ? 'Fork (fresh deploy)' : 'Live'}`);
+  
+  // Log RPC source for live networks
+  if (!isFork && (network === 'devnet' || network === 'mainnet-beta')) {
+    const rpcInfo = getActiveRpcInfo(network === 'devnet' ? 'devnet' : 'mainnet');
+    logger.info(`RPC source: ${rpcInfo.source}`);
+  }
   logger.log('');
 
   // Create provider first to get wallet info

@@ -15,7 +15,8 @@
     "test:all": "forge test && hardhat test",
     "test:gas": "REPORT_GAS=true hardhat test",
     "node": "hardhat node",
-    "node:fork": "hardhat node --fork $MAINNET_RPC_URL",
+    "node:sepolia": "hardhat node",
+    "node:mainnet": "FORK_URL=$MAINNET_RPC_URL HARDHAT_CHAIN_ID=1 hardhat node",
     "deploy": "hardhat run scripts/deploy/index.ts --network localhost",
     "deploy:local": "hardhat run scripts/deploy/index.ts --network localhost",
     "deploy:testnet": "hardhat run scripts/deploy/index.ts --network opSepolia",
@@ -30,7 +31,7 @@
     "bridge:relay": "hardhat run scripts/bridge/relay-from-solana.ts --network localhost",
     "test:flow:fork": "NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network localhost",
     "test:flow:sepolia": "NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network sepolia",
-    "fork:sepolia": "npx hardhat node"
+    "fork:sepolia": "hardhat node"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",

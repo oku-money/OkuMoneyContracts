@@ -35,6 +35,44 @@ function getRpcUrl(network: 'devnet' | 'mainnet'): string {
     : 'https://api.mainnet-beta.solana.com';
 }
 
+/**
+ * Get the active RPC URL and source for logging
+ */
+export function getActiveRpcInfo(network: 'devnet' | 'mainnet'): { url: string; source: string } {
+  if (SOLANA_RPC_URL) {
+    return { url: SOLANA_RPC_URL, source: 'SOLANA_RPC_URL env' };
+  }
+  if (HELIUS_RPC) {
+    return { url: HELIUS_RPC, source: 'HELIUS_RPC env' };
+  }
+  const publicUrl = network === 'devnet' 
+    ? 'https://api.devnet.solana.com'
+    : 'https://api.mainnet-beta.solana.com';
+  return { url: publicUrl, source: 'public RPC (consider setting HELIUS_RPC for better reliability)' };
+}
+
+/**
+ * Deployment configuration - tunable via environment variables
+ */
+export const DEPLOYMENT_CONFIG = {
+  // Priority fee in micro-lamports per compute unit
+  // Higher = better chance of landing during congestion, but costs more
+  // 200,000 = ~$0.01 per transaction at current prices
+  priorityFee: parseInt(process.env.PRIORITY_FEE || '200000'),
+  
+  // Max retries per program deployment
+  maxRetries: parseInt(process.env.MAX_RETRIES || '5'),
+  
+  // Delay between retry attempts (ms) - should be < blockhash expiry (~60s)
+  retryDelayMs: parseInt(process.env.RETRY_DELAY_MS || '30000'),
+  
+  // Delay between deploying different programs (ms)
+  programDelayMs: parseInt(process.env.PROGRAM_DELAY_MS || '5000'),
+  
+  // Timeout per program deployment attempt (ms)
+  deployTimeoutMs: parseInt(process.env.DEPLOY_TIMEOUT_MS || '600000'), // 10 minutes
+};
+
 export interface NetworkConfig {
   name: NetworkName;
   cluster: string;

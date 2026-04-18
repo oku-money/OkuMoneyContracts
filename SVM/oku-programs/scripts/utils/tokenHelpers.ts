@@ -9,6 +9,7 @@ import {
   SystemProgram,
   Transaction,
   sendAndConfirmTransaction,
+  TransactionSignature,
 } from '@solana/web3.js';
 import {
   TOKEN_PROGRAM_ID,
@@ -22,6 +23,40 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
 import { logger } from './logger';
+
+/**
+ * Send transaction with retry logic
+ */
+async function sendWithRetry(
+  connection: Connection,
+  transaction: Transaction,
+  signers: Keypair[],
+  maxRetries: number = 3,
+  delayMs: number = 5000
+): Promise<TransactionSignature> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      // Get fresh blockhash for each attempt
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+      transaction.recentBlockhash = blockhash;
+      transaction.lastValidBlockHeight = lastValidBlockHeight;
+      
+      return await sendAndConfirmTransaction(connection, transaction, signers, {
+        commitment: 'confirmed',
+      });
+    } catch (error: any) {
+      lastError = error;
+      if (attempt < maxRetries) {
+        logger.warning(`Transaction failed (attempt ${attempt}/${maxRetries}), retrying in ${delayMs/1000}s...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  
+  throw lastError || new Error('Transaction failed after retries');
+}
 
 export interface CreateToken2022Params {
   connection: Connection;
@@ -85,7 +120,7 @@ export async function createToken2022Mint(
     )
   );
 
-  await sendAndConfirmTransaction(connection, transaction, [payer, mintKeypair]);
+  await sendWithRetry(connection, transaction, [payer, mintKeypair]);
 
   logger.success(`Created Token-2022 mint: ${mint.toBase58()}`);
   logger.info(`Decimals: ${decimals}`);
@@ -131,7 +166,7 @@ export async function createSPLTokenMint(
     )
   );
 
-  await sendAndConfirmTransaction(connection, transaction, [payer, mintKeypair]);
+  await sendWithRetry(connection, transaction, [payer, mintKeypair]);
 
   logger.success(`Created SPL Token mint: ${mint.toBase58()}`);
   logger.info(`Decimals: ${decimals}`);
@@ -169,7 +204,7 @@ export async function getOrCreateATA(
       )
     );
 
-    await sendAndConfirmTransaction(connection, transaction, [payer]);
+    await sendWithRetry(connection, transaction, [payer]);
 
     logger.success(`Created ATA: ${ata.toBase58()}`);
   }

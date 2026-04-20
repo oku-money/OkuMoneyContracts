@@ -5,7 +5,7 @@
 
 import { ethers } from "hardhat";
 import { loadAddress } from "../utils/addressBook";
-import { getNetworkName } from "../config/chains";
+import { getNetworkName, DEV_WALLET_ADDRESS } from "../config/chains";
 
 async function main() {
   const network = getNetworkName();
@@ -27,7 +27,7 @@ async function main() {
   
   // Impersonate the admin (current authorized signer who has BRIDGE_SIGNER_ADMIN role)
   // On localhost, the deployer has all roles
-  const adminAddress = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
+  const adminAddress = DEV_WALLET_ADDRESS;
   await ethers.provider.send("hardhat_impersonateAccount", [adminAddress]);
   const admin = await ethers.getSigner(adminAddress);
   

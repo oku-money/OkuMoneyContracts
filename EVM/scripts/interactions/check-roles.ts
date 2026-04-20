@@ -2,12 +2,13 @@
  * Check OkuMoney roles on the forked network
  */
 import { ethers } from "hardhat";
-import { getNetworkName } from "../config/chains";
+import { getNetworkName, DEV_WALLET_ADDRESS } from "../config/chains";
 import { loadAddress } from "../utils/addressBook";
 import { logger } from "../utils/logger";
 import { getDeployedContract } from "../utils/deploy";
 
-const DEPLOYER = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
+// Use centralized deployer address
+const DEPLOYER = DEV_WALLET_ADDRESS;
 
 async function main() {
   const network = getNetworkName();

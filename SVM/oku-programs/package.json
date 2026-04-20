@@ -1,4 +1,5 @@
 {
+  "name": "okumoney-svm-programs",
   "license": "ISC",
   "scripts": {
     "build": "anchor build",
@@ -17,7 +18,6 @@
     "test": "anchor test --validator legacy",
     "test:devnet": "NETWORK=devnet tsx scripts/devnet/test-devnet.ts",
     "test:devnet-fork": "NETWORK=devnet-fork tsx scripts/devnet/test-devnet.ts",
-    "test:fork": "tsx scripts/test-fork-devnet.ts",
 
     "bridge:state": "NETWORK=devnet tsx scripts/bridge/check-bridge-state.ts",
     "bridge:burn": "NETWORK=devnet tsx scripts/bridge/bridge-burn-to-evm.ts",
@@ -25,6 +25,7 @@
 
     "surfpool:devnet": "surfpool start --network devnet --airdrop-keypair-path /dev/null",
     "surfpool:mainnet": "surfpool start --network mainnet --airdrop-keypair-path /dev/null",
+    
     "wallet:check": "tsx scripts/utils/check-wallet.ts",
     "cost": "tsx scripts/utils/calculateDeploymentCost.ts",
 

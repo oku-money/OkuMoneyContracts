@@ -16,13 +16,13 @@
  *   NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network sepolia
  */
 import { ethers, network } from "hardhat";
-import { getNetworkName } from "../config/chains";
+import { getNetworkName, DEV_WALLET_ADDRESS } from "../config/chains";
 import { loadAddress, hasAddress } from "../utils/addressBook";
 import { logger } from "../utils/logger";
 import { getDeployedContract, waitForTx } from "../utils/deploy";
 
-// Deployer address from Sepolia (for impersonation on forks)
-const DEPLOYER = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
+// Use centralized deployer address from chains config
+const DEPLOYER = DEV_WALLET_ADDRESS;
 
 interface TestContext {
   user: any;

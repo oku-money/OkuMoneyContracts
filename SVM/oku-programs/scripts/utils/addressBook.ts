@@ -27,6 +27,7 @@ export interface DeploymentAddresses {
     psmOkusdEscrow?: string;
     vaultConfig?: string;
     vaultOkusd?: string;
+    vaultOkuMoney?: string;
     bridgeConfig?: string;
     routerConfig?: string;
   };

@@ -1,5 +1,5 @@
 /**
- * Update reward multiplier (rebase) on OkuUSD
+ * Update reward multiplier (rebase) on OkuDollar
  * Usage: NETWORK=localhost MULTIPLIER=1.05 npx hardhat run scripts/interactions/rebalance.ts --network localhost
  */
 
@@ -33,13 +33,13 @@ async function main() {
   logger.info(`Setting new reward multiplier to ${multiplierStr} (${(multiplierFloat - 1) * 100}% yield)`);
 
   // Load deployed contract addresses
-  const okuUSDAddress = loadAddress(network, "OkuUSD");
+  const okuDollarAddress = loadAddress(network, "OkuDollar");
 
   // Get contract instance
-  const okuUSD = await getDeployedContract("OkuUSD", okuUSDAddress);
+  const okuDollar = await getDeployedContract("OkuDollar", okuDollarAddress);
 
   // Check current multiplier
-  const currentMultiplier = await okuUSD.rewardMultiplier();
+  const currentMultiplier = await okuDollar.rewardMultiplier();
   logger.info(`Current multiplier: ${ethers.formatUnits(currentMultiplier, 18)}`);
 
   if (newMultiplier <= currentMultiplier) {
@@ -51,14 +51,14 @@ async function main() {
   logger.step(1, "Updating reward multiplier");
   try {
     await waitForTx(
-      await okuUSD.updateRewardMultiplier(newMultiplier),
+      await okuDollar.updateRewardMultiplier(newMultiplier),
       "Update reward multiplier"
     );
   } catch (error: any) {
     if (error.message.includes("InvalidMultiplier")) {
       logger.error("New multiplier must be strictly greater than current multiplier");
     } else if (error.message.includes("AccessControl")) {
-      logger.error("Caller does not have REBASER");
+      logger.error("Caller does not have REBASER role");
     } else {
       throw error;
     }
@@ -66,14 +66,14 @@ async function main() {
   }
 
   // Check updated multiplier
-  const updatedMultiplier = await okuUSD.rewardMultiplier();
+  const updatedMultiplier = await okuDollar.rewardMultiplier();
   logger.info(`Updated multiplier: ${ethers.formatUnits(updatedMultiplier, 18)}`);
 
   logger.section("Rebalance Summary");
   logger.success(`Multiplier updated from ${ethers.formatUnits(currentMultiplier, 18)} to ${ethers.formatUnits(updatedMultiplier, 18)}`);
 
   const yieldPercent = ((Number(updatedMultiplier) / Number(currentMultiplier) - 1) * 100).toFixed(2);
-  logger.success(`All OkuUSD balances increased by ${yieldPercent}%`);
+  logger.success(`All OkuDollar balances increased by ${yieldPercent}%`);
 }
 
 main()

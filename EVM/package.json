@@ -1,7 +1,7 @@
 {
-  "name": "okumoney-contracts",
+  "name": "okumoney-evm-contracts",
   "version": "1.0.0",
-  "description": "OkuUSD smart contracts - Yield-bearing stablecoin backed by US T-Bills",
+  "description": "OkuMoney EVM smart contracts - Yield-bearing stablecoin",
   "author": "OkuMoney",
   "license": "MIT",
   "engines": {
@@ -9,29 +9,30 @@
   },
   "scripts": {
     "compile": "hardhat compile",
-    "test": "hardhat test",
-    "test:forge": "forge test",
-    "test:hardhat": "hardhat test",
-    "test:all": "forge test && hardhat test",
-    "test:gas": "REPORT_GAS=true hardhat test",
-    "node": "hardhat node",
-    "node:sepolia": "hardhat node",
-    "node:mainnet": "FORK_URL=$MAINNET_RPC_URL HARDHAT_CHAIN_ID=1 hardhat node",
-    "deploy": "hardhat run scripts/deploy/index.ts --network localhost",
-    "deploy:local": "hardhat run scripts/deploy/index.ts --network localhost",
-    "deploy:testnet": "hardhat run scripts/deploy/index.ts --network opSepolia",
     "clean": "hardhat clean && forge clean && rm -rf cache_hardhat typechain-types",
     "typechain": "hardhat typechain",
-    "verify-setup": "ts-node scripts/verify-setup.ts",
-    "bridge:state": "hardhat run scripts/bridge/check-bridge-state.ts --network localhost",
-    "bridge:state:sepolia": "NETWORK=sepolia npx hardhat run scripts/bridge/check-bridge-state.ts --network sepolia",
-    "bridge:burn": "hardhat run scripts/bridge/bridge-burn-to-solana.ts --network localhost",
-    "bridge:burn:sepolia": "NETWORK=sepolia npx hardhat run scripts/bridge/bridge-burn-to-solana.ts --network sepolia",
-    "bridge:mint:sepolia": "NETWORK=sepolia npx hardhat run scripts/bridge/bridge-mint-from-solana.ts --network sepolia",
-    "bridge:relay": "hardhat run scripts/bridge/relay-from-solana.ts --network localhost",
-    "test:flow:fork": "NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network localhost",
-    "test:flow:sepolia": "NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network sepolia",
-    "fork:sepolia": "hardhat node"
+
+    "test": "hardhat test",
+    "test:forge": "forge test",
+    "test:all": "forge test && hardhat test",
+    "test:gas": "REPORT_GAS=true hardhat test",
+
+    "node": "hardhat node",
+    "node:sepolia": "hardhat node --fork $(grep SEPOLIA_RPC_URL .env | cut -d '=' -f2)",
+    "node:mainnet": "hardhat node --fork $(grep MAINNET_RPC_URL .env | cut -d '=' -f2)",
+
+    "deploy": "hardhat run scripts/deploy/index.ts --network localhost",
+    "deploy:sepolia": "hardhat run scripts/deploy/index.ts --network sepolia",
+    "deploy:testnet": "hardhat run scripts/deploy/index.ts --network opSepolia",
+
+    "test:flow": "NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network localhost",
+    "test:flow:live": "NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network sepolia",
+
+    "bridge:state": "NETWORK=sepolia npx hardhat run scripts/bridge/check-bridge-state.ts --network localhost",
+    "bridge:state:live": "NETWORK=sepolia npx hardhat run scripts/bridge/check-bridge-state.ts --network sepolia",
+    "bridge:burn": "NETWORK=sepolia npx hardhat run scripts/bridge/bridge-burn-to-solana.ts --network localhost",
+    "bridge:burn:live": "NETWORK=sepolia npx hardhat run scripts/bridge/bridge-burn-to-solana.ts --network sepolia",
+    "bridge:mint": "NETWORK=sepolia npx hardhat run scripts/bridge/bridge-mint-from-solana.ts --network localhost"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",

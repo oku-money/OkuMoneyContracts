@@ -66,3 +66,24 @@ edr-cache/
 
 # Rust build artifacts
 target/
+
+# Solana test validator data
+test-ledger/
+
+# Surfpool simulation logs
+.surfpool/
+
+# Random binaries
+*.deb
+
+# Development documentation (keep only READMEs)
+BridgeReport.md
+BridgeTest.md
+TESTNET_DEPLOYMENT.md
+EVM/scripts/TEST_RESULTS.md
+EVM/scripts/QUICKSTART.md
+EVM/bridge/FILES.md
+EVM/bridge/README.md
+EVM/config/README.md
+EVM/scripts/README.md
+SVM/oku-programs/runbooks/

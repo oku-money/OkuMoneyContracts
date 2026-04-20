@@ -20,7 +20,7 @@
 import { ethers, network, upgrades, run } from "hardhat";
 import { Contract, Signer } from "ethers";
 import { saveAddress, loadAddressBook, saveAddressBook } from "../utils/addressBook";
-import { getNetworkName, getChainConfig, SOLANA_DEVNET_CHAIN_ID } from "../config/chains";
+import { getNetworkName, getChainConfig, SOLANA_DEVNET_CHAIN_ID, DEV_WALLET_ADDRESS } from "../config/chains";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
 
@@ -32,8 +32,8 @@ function isLiveNetwork(networkName: string): boolean {
   return !["localhost", "hardhat"].includes(networkName);
 }
 
-// Dev wallet address for impersonation on local fork
-const DEV_WALLET = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
+// Dev wallet address for impersonation on local fork (centralized in chains.ts)
+const DEV_WALLET = DEV_WALLET_ADDRESS;
 
 // ============================================================================
 // Configuration

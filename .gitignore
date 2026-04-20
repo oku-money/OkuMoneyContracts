@@ -69,12 +69,19 @@ target/
 
 # Solana test validator data
 test-ledger/
+**/test-ledger/
+**/validator*.log
 
 # Surfpool simulation logs
 .surfpool/
+**/.surfpool/
 
 # Random binaries
 *.deb
+
+# Large log files
+*.log
+!*.changelog
 
 # Development documentation (keep only READMEs)
 BridgeReport.md

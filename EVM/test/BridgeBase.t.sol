@@ -4,8 +4,8 @@ pragma solidity ^0.8.28;
 import {BaseTest} from "./Base.t.sol";
 import {OkuBridge} from "../src/bridge/OkuBridge.sol";
 import {OkuBridgeRouter} from "../src/bridge/OkuBridgeRouter.sol";
-import {MockOkuBridge} from "./mocks/MockOkuBridge.sol";
-import {MockNttManager} from "./mocks/MockNttManager.sol";
+import {MockBridgeAdapter} from "../src/mocks/MockBridgeAdapter.sol";
+import {MockNttManager} from "../src/mocks/MockNttManager.sol";
 import {Deploy} from "./shared/Deploy.sol";
 import {TestConstants} from "./shared/Constants.sol";
 
@@ -25,7 +25,7 @@ abstract contract BridgeBaseTest is BaseTest {
 
     // ============ Mock Adapters ============
 
-    MockOkuBridge public mockAdapter;
+    MockBridgeAdapter public mockAdapter;
     MockNttManager public mockNttManager;
 
     // ============ Chain IDs ============
@@ -62,9 +62,10 @@ abstract contract BridgeBaseTest is BaseTest {
             address(usdOku), address(okuMoney), address(okuBridge), admin
         );
 
-        // Deploy mock adapters
-        mockAdapter = new MockOkuBridge(okuMoney, minter);
-        mockNttManager = new MockNttManager(address(okuMoney), minter);
+        // Deploy mock adapters — the mocks themselves call okuMoney.mint(), so they need
+        // MINTER role + allowance granted below in _setupBridgeRoles.
+        mockAdapter = new MockBridgeAdapter(address(okuMoney));
+        mockNttManager = new MockNttManager(address(okuMoney));
     }
 
     function _setupBridgeRoles() internal {
@@ -76,6 +77,11 @@ abstract contract BridgeBaseTest is BaseTest {
         // Grant OkuBridgeRouter MINTER role on OkuMoney (for adapter path burns)
         okuMoney.grantRole(OKUM_MINTER, address(bridgeRouter));
 
+        // Grant MINTER role to mock adapters so their completeBridge() helpers can mint
+        // on the simulated destination chain.
+        okuMoney.grantRole(OKUM_MINTER, address(mockAdapter));
+        okuMoney.grantRole(OKUM_MINTER, address(mockNttManager));
+
         // Grant two-step refund roles
         okuBridge.grantRole(BRIDGE_REFUND_INITIATOR, refundInitiator);
         okuBridge.grantRole(BRIDGE_REFUND_CONFIRMER, refundConfirmer);
@@ -85,10 +91,12 @@ abstract contract BridgeBaseTest is BaseTest {
 
         vm.stopPrank();
 
-        // Grant minter allowances for bridge contracts
+        // Grant minter allowances for bridge contracts + mocks
         vm.startPrank(allowanceManager);
         okuMoney.configureMinterAllowance(address(okuBridge), MAX_SUPPLY);
         okuMoney.configureMinterAllowance(address(bridgeRouter), MAX_SUPPLY);
+        okuMoney.configureMinterAllowance(address(mockAdapter), MAX_SUPPLY);
+        okuMoney.configureMinterAllowance(address(mockNttManager), MAX_SUPPLY);
         vm.stopPrank();
     }
 
@@ -153,7 +161,7 @@ abstract contract BridgeBaseTest is BaseTest {
 
         // Construct expected request (amount = netAmount, what destination will mint)
         uint256 nonce = okuBridge.outboundNonce(destChainId) - 1;
-        uint256 netAmount = amount - (amount * okuBridge.bridgeFee()) / 10_000;
+        uint256 netAmount = amount - (amount * okuBridge.bridgeFee()) / BASIS_POINTS;
         request = OkuBridge.BridgeRequest({
             sourceChainId: block.chainid,
             destChainId: destChainId,

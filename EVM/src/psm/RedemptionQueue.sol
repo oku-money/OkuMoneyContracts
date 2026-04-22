@@ -10,7 +10,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {Roles} from "../lib/Roles.sol";
-import {Constants} from "../lib/Constants.sol";
 import {MathLib} from "../lib/MathLib.sol";
 
 /**
@@ -56,18 +55,13 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.RedemptionQueue")) - 1)) & ~bytes32(uint256(0xff))
     bytes32 private constant REDEMPTIONQUEUE_STORAGE_LOCATION =
-        0x4e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e00;
+        0xa62273ae8f4f9b4de76a6f11e9bbf5ca0a9c42e1f4bbbcb4369e173f90b6e000;
 
     function _getRedemptionQueueStorage() private pure returns (RedemptionQueueStorage storage $) {
         assembly {
             $.slot := REDEMPTIONQUEUE_STORAGE_LOCATION
         }
     }
-
-    // ============ Constants (from shared library) ============
-
-    uint256 private constant DECIMAL_MULTIPLIER = Constants.DECIMAL_MULTIPLIER;
-    uint256 private constant PRECISION = Constants.PRECISION;
 
     // ============ Role Constants (from shared library) ============
 
@@ -151,12 +145,14 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         $.okuMoney = IOkuMoney(_okuMoney);
 
+        // Grant the upgrader / rescuer roles to admin (see OkuMoney.initialize for the
+        // unified policy). QUEUE_PSM is intentionally NOT granted here — it must be
+        // granted post-deployment to the LitePSM proxy address to avoid a circular
+        // deployment dependency. Granting it to admin would let admin bypass the PSM
+        // entirely and call enqueue/processQueue directly.
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(QUEUE_UPGRADER, admin);
         _grantRole(QUEUE_RESCUER, admin);
-        // NOTE: QUEUE_PSM role is NOT granted here — must be granted post-deployment to the
-        // LitePSM proxy address. This is intentional to avoid a circular dependency
-        // at deployment time.
     }
 
     // ============ Storage Accessor Views ============
@@ -208,7 +204,6 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
      * @param startIndex First queue index to process (inclusive)
      * @param endIndex Last queue index to process (exclusive)
      * @param usdcToken USDC token address
-     * @param - OkuMoney token address (unused, kept for interface compat)
      * @dev Multiplier-aware: USDC output = okuMAmount × okuMMultiplier() / PRECISION (scaled to 6 decimals).
      *      okuMMultiplier() is cached once before the loop — all entries in a batch are converted at
      *      the same multiplier, which is consistent within a single block and saves gas.
@@ -220,8 +215,7 @@ contract RedemptionQueue is Initializable, AccessControlUpgradeable, UUPSUpgrade
     function processQueue(
         uint256 startIndex,
         uint256 endIndex,
-        address usdcToken,
-        address /* okuMoneyToken */
+        address usdcToken
     )
         external
         onlyRole(QUEUE_PSM)

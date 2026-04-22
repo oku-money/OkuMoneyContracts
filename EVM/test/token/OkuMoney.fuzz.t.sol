@@ -259,21 +259,19 @@ contract OkuMoneyFuzzTest is BaseTest {
 
     // ============ distributeYield Fuzz Tests ============
 
-    /// @notice distributeYield increases price monotonically
-    /// @dev Caps yieldAmount to ensure the resulting multiplier stays below MAX_RATE.
-    ///      MAX_RATE is ~3700% APY safety cap (1e18 + 1e11), so max yield per call
-    ///      is bounded to prevent unrealistic price jumps.
+    /// @notice distributeYield increases the multiplier monotonically and matches the
+    ///         exact arithmetic formula across a realistic range of yield sizes.
+    /// @dev distributeYield itself has no rate cap (only setOkuMMultiplier does).
+    ///      Bound the yield to up to 10x the existing supply (1000% jump per call) —
+    ///      a wildly aggressive but mathematically valid distribution that still
+    ///      exercises the truncation/dust branches near MAX_SUPPLY without overflowing.
     function testFuzz_DistributeYield(uint256 supply, uint256 yieldAmount) public {
-        supply = bound(supply, 1e18, MAX_SUPPLY / 2);
+        // Keep room for `supply * 10` in the bounded yieldAmount without overflowing
+        // (MAX_SUPPLY = 1e27, so supply * 10 stays well below 2^256).
+        supply = bound(supply, 1e18, MAX_SUPPLY / 100);
 
-        // Cap yieldAmount so the price increase stays realistic:
-        // maxIncrease = MAX_RATE - PRECISION = 1e11 (per the safety cap)
-        // yieldAmount * PRECISION / supply <= 1e11
-        // yieldAmount <= supply * 1e11 / PRECISION = supply / 1e7
-        // Use a slightly lower bound to avoid edge cases
-        uint256 maxYield = supply / 1e6; // ~0.0001% of supply per call (conservative)
-        if (maxYield == 0) maxYield = 1;
-        yieldAmount = bound(yieldAmount, 1, maxYield);
+        // Realistic upper bound: 10x current supply per single distribution.
+        yieldAmount = bound(yieldAmount, 1, supply * 10);
 
         _mintOkuMoney(user1, supply);
 
@@ -283,11 +281,14 @@ contract OkuMoneyFuzzTest is BaseTest {
         okuMoney.distributeYield(yieldAmount);
 
         uint256 priceAfter = okuMoney.okuMMultiplier();
-        assertGe(priceAfter, priceBefore, "price must not decrease after distributeYield");
-
-        // Verify math: newPrice = oldPrice + yieldAmount * PRECISION / supply
+        // Exact arithmetic check. Note that for very small yieldAmount relative to
+        // supply the integer division can produce 0, so the multiplier is unchanged.
         uint256 expectedIncrease = (yieldAmount * PRECISION) / supply;
         assertEq(priceAfter, priceBefore + expectedIncrease, "price increase equals yield/supply");
+        assertGe(priceAfter, priceBefore, "multiplier must never decrease");
+
+        // lastYieldDistributionBlock advanced.
+        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
     }
 
     // ============ Minter Allowance Tests ============

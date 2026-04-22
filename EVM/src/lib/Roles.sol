@@ -59,4 +59,8 @@ library Roles {
     bytes32 public constant ROUTER_UNPAUSER = keccak256("ROUTER_UNPAUSER");
     bytes32 public constant ROUTER_ADAPTER_MANAGER = keccak256("ROUTER_ADAPTER_MANAGER");
     bytes32 public constant ROUTER_BRIDGE_MANAGER = keccak256("ROUTER_BRIDGE_MANAGER");
+
+    // ============ NttAdapter Roles ============
+    bytes32 public constant NTT_CONFIGURATOR = keccak256("NTT_CONFIGURATOR");
+    bytes32 public constant NTT_RESCUER = keccak256("NTT_RESCUER");
 }

@@ -6,7 +6,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {OkuBridge} from "../../src/bridge/OkuBridge.sol";
 import {OkuBridgeRouter} from "../../src/bridge/OkuBridgeRouter.sol";
-import {MockOkuBridge} from "../mocks/MockOkuBridge.sol";
+import {MockBridgeAdapter} from "../../src/mocks/MockBridgeAdapter.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {
     PausableUpgradeable
@@ -398,7 +398,9 @@ contract OkuBridgeRouterTest is BridgeBaseTest {
         assertEq(usdOku.balanceOf(user1), 0);
         // Router holds no OkuDollar or OkuMoney
         assertEq(usdOku.balanceOf(address(bridgeRouter)), 0);
-        assertLe(okuMoney.balanceOf(address(bridgeRouter)), 1);
+        assertEq(
+            okuMoney.balanceOf(address(bridgeRouter)), 0, "router holds no OkuMoney after bridge"
+        );
         // requestId is non-zero
         assertNotEq(requestId, bytes32(0));
         // Nonce incremented on OkuBridge
@@ -505,7 +507,9 @@ contract OkuBridgeRouterTest is BridgeBaseTest {
 
         assertEq(okuBridgeContract.outboundNonce(ARBITRUM_CHAIN_ID), 1);
         assertEq(usdOku.balanceOf(address(bridgeRouter)), 0);
-        assertLe(okuMoney.balanceOf(address(bridgeRouter)), 1);
+        assertEq(
+            okuMoney.balanceOf(address(bridgeRouter)), 0, "router holds no OkuMoney after bridge"
+        );
     }
 
     function test_BridgeOkuDollar_FeeCollected() public {
@@ -549,7 +553,7 @@ contract OkuBridgeRouterTest is BridgeBaseTest {
         // Router holds no OkuMoney (burned before adapter call)
         assertEq(okuMoney.balanceOf(address(bridgeRouter)), 0);
         // Adapter received the call with OkuMoney token address
-        MockOkuBridge.PendingBridge memory pending = mockAdapter.getLastBridge();
+        MockBridgeAdapter.PendingBridge memory pending = mockAdapter.getLastBridge();
         assertEq(pending.token, address(okuMoney));
         assertEq(pending.amount, okuMAmount);
         assertEq(pending.destinationChain, ARBITRUM_CHAIN_ID);
@@ -623,7 +627,7 @@ contract OkuBridgeRouterTest is BridgeBaseTest {
         assertEq(okuMoney.balanceOf(address(bridgeRouter)), 0);
         assertEq(usdOku.balanceOf(address(bridgeRouter)), 0);
         // Adapter received the call with OkuMoney token address
-        MockOkuBridge.PendingBridge memory pending = mockAdapter.getLastBridge();
+        MockBridgeAdapter.PendingBridge memory pending = mockAdapter.getLastBridge();
         assertEq(pending.token, address(okuMoney));
         assertEq(pending.amount, expectedNotes);
         assertEq(pending.destinationChain, ARBITRUM_CHAIN_ID);
@@ -695,7 +699,7 @@ contract OkuBridgeRouterTest is BridgeBaseTest {
         bridgeRouter.bridgeWrappedVia(usdBalance, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
-        MockOkuBridge.PendingBridge memory pending = mockAdapter.getLastBridge();
+        MockBridgeAdapter.PendingBridge memory pending = mockAdapter.getLastBridge();
         // Fewer notes returned because okuMMultiplier increased
         assertLt(pending.amount, okuMAmount);
         assertEq(pending.amount, expectedNotes);
@@ -822,7 +826,9 @@ contract OkuBridgeRouterTest is BridgeBaseTest {
 
         assertEq(usdOku.balanceOf(user1), 0);
         assertEq(usdOku.balanceOf(address(bridgeRouter)), 0);
-        assertLe(okuMoney.balanceOf(address(bridgeRouter)), 1);
+        assertEq(
+            okuMoney.balanceOf(address(bridgeRouter)), 0, "router holds no OkuMoney after bridge"
+        );
         assertNotEq(requestId, bytes32(0));
     }
 
@@ -839,7 +845,7 @@ contract OkuBridgeRouterTest is BridgeBaseTest {
 
         // Exact amount burned
         assertEq(okuMoney.totalSupply(), supplyBefore - okuMAmount);
-        MockOkuBridge.PendingBridge memory pending = mockAdapter.getLastBridge();
+        MockBridgeAdapter.PendingBridge memory pending = mockAdapter.getLastBridge();
         assertEq(pending.amount, okuMAmount);
     }
 
@@ -857,7 +863,7 @@ contract OkuBridgeRouterTest is BridgeBaseTest {
         vm.stopPrank();
 
         // Adapter received the multiplier-aware unwrapped note amount
-        MockOkuBridge.PendingBridge memory pending = mockAdapter.getLastBridge();
+        MockBridgeAdapter.PendingBridge memory pending = mockAdapter.getLastBridge();
         assertEq(pending.amount, expectedNotes);
     }
 
@@ -886,7 +892,7 @@ contract OkuBridgeRouterTest is BridgeBaseTest {
         bridgeRouter.bridgeWrappedVia(usdBalance, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
-        MockOkuBridge.PendingBridge memory pending = mockAdapter.getLastBridge();
+        MockBridgeAdapter.PendingBridge memory pending = mockAdapter.getLastBridge();
         // Fewer notes than depositAmount because okuMMultiplier increased
         assertLe(pending.amount, depositAmount);
         assertEq(pending.amount, expectedNotes);
@@ -935,5 +941,72 @@ contract OkuBridgeRouterTest is BridgeBaseTest {
             )
         );
         bridgeRouter.upgradeToAndCall(address(newImpl), "");
+    }
+
+    // ============ sweep() Tests ============
+
+    function test_Sweep_ThirdPartyToken_Success() public {
+        // USDC is "third-party" from the router's perspective — it isn't OkuMoney or OkuDollar.
+        uint256 stuckAmount = 12_345e6;
+        usdc.mint(address(bridgeRouter), stuckAmount);
+        assertEq(usdc.balanceOf(address(bridgeRouter)), stuckAmount);
+
+        vm.prank(admin);
+        bridgeRouter.sweep(address(usdc), treasury, stuckAmount);
+
+        assertEq(usdc.balanceOf(treasury), stuckAmount);
+        assertEq(usdc.balanceOf(address(bridgeRouter)), 0);
+    }
+
+    function test_Sweep_RevertOkuMoney() public {
+        _mintOkuMoney(address(bridgeRouter), 1e18);
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OkuBridgeRouter.CannotSweepOperationalToken.selector, address(okuMoney)
+            )
+        );
+        bridgeRouter.sweep(address(okuMoney), treasury, 1e18);
+    }
+
+    function test_Sweep_RevertOkuDollar() public {
+        _mintUsdOku(address(bridgeRouter), 1e18);
+
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                OkuBridgeRouter.CannotSweepOperationalToken.selector, address(usdOku)
+            )
+        );
+        bridgeRouter.sweep(address(usdOku), treasury, 1e18);
+    }
+
+    function test_Sweep_RevertZeroRecipient() public {
+        usdc.mint(address(bridgeRouter), 1e6);
+
+        vm.prank(admin);
+        vm.expectRevert(OkuBridgeRouter.ZeroAddress.selector);
+        bridgeRouter.sweep(address(usdc), address(0), 1e6);
+    }
+
+    function test_Sweep_RevertInsufficientBalance() public {
+        usdc.mint(address(bridgeRouter), 100e6);
+
+        vm.prank(admin);
+        vm.expectRevert(OkuBridgeRouter.InsufficientBalance.selector);
+        bridgeRouter.sweep(address(usdc), treasury, 101e6);
+    }
+
+    function test_Sweep_RevertNotAdmin() public {
+        usdc.mint(address(bridgeRouter), 100e6);
+
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, DEFAULT_ADMIN_ROLE
+            )
+        );
+        bridgeRouter.sweep(address(usdc), treasury, 100e6);
     }
 }

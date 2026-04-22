@@ -144,39 +144,37 @@ contract OkuMoneyHandler is Test {
         }
     }
 
-    /// @notice Update OkuM price (rebase)
-    /// @dev Tightened bounds: cap at 5x (MAX_FUZZ_PRICE) instead of 1e24.
-    ///      Always vm.roll after rebase to avoid yield distribution lock.
+    /// @notice Update OkuM price (rebase). Per-call cap raised from 2% to 10% so
+    ///         invariant runs reach the 5x global price cap quickly enough to stress
+    ///         the truncation/dust branches.
     function rebase(uint256 priceIncrease) external {
         ghostRebaseCallCount++;
         uint256 currentPrice = okuMoney.okuMMultiplier();
+        if (currentPrice >= MAX_FUZZ_PRICE) return;
 
-        // Cap maximum price at PRECISION * 5 (5x, ~500% total yield - still very generous)
-        if (currentPrice >= MAX_FUZZ_PRICE) {
-            return; // Already at maximum, skip further rebases
-        }
-
-        // Increase by 0.01% to 2% per rebase (was 5%, tightened for realism)
         uint256 minIncrease = currentPrice / 10_000; // 0.01%
-        uint256 maxIncrease = currentPrice / 50; // 2%
+        uint256 maxIncrease = currentPrice / 10; // 10%
         uint256 increase = bound(priceIncrease, minIncrease, maxIncrease);
 
         uint256 newPrice = currentPrice + increase;
-
-        // Ensure we don't exceed the cap
-        if (newPrice > MAX_FUZZ_PRICE) {
-            newPrice = MAX_FUZZ_PRICE;
-        }
+        if (newPrice > MAX_FUZZ_PRICE) newPrice = MAX_FUZZ_PRICE;
 
         vm.prank(rebaser);
         try okuMoney.setOkuMMultiplier(newPrice) {
             ghostLastWasRebase = true;
             ghostLastOkuMMultiplier = newPrice;
-            // Roll to next block to avoid yield distribution lock
             vm.roll(block.number + 1);
         } catch {
             ghostRebaseRevertCount++;
         }
+    }
+
+    /// @notice Observe okuMMultiplier from outside the handler (e.g. from
+    ///         OkuMMultiplierInvariants.afterInvariant) so the ghost gets updated
+    ///         even if every handler call in the run reverted.
+    function recordMultiplierObservation() external {
+        uint256 cur = okuMoney.okuMMultiplier();
+        if (cur > ghostLastOkuMMultiplier) ghostLastOkuMMultiplier = cur;
     }
 
     /// @notice Reset minter allowance (simulates allowance manager action)

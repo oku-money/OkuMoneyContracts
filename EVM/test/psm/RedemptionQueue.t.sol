@@ -156,7 +156,7 @@ contract RedemptionQueueTest is BaseTest {
                 IAccessControl.AccessControlUnauthorizedAccount.selector, user1, QUEUE_PSM
             )
         );
-        redemptionQueue.processQueue(0, 10, address(usdc), address(okuMoney));
+        redemptionQueue.processQueue(0, 10, address(usdc));
     }
 
     function test_ProcessQueue_BurnsOkuMoney() public {
@@ -177,10 +177,7 @@ contract RedemptionQueueTest is BaseTest {
         _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
 
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueTail(),
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc)
         );
 
         assertEq(okuMoney.balanceOf(address(redemptionQueue)), queueBalanceBefore - amount);
@@ -203,10 +200,7 @@ contract RedemptionQueueTest is BaseTest {
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
 
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueTail(),
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc)
         );
 
         // User should receive USDC (6 decimals), not OkuMoney amount (18 decimals)
@@ -230,10 +224,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Process only 1 entry
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueHead() + 1,
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueHead() + 1, address(usdc)
         );
 
         // Queue head should advance, length decreases
@@ -260,10 +251,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Process only 2 entries
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueHead() + 2,
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueHead() + 2, address(usdc)
         );
 
         // Should have 1 entry left
@@ -284,10 +272,7 @@ contract RedemptionQueueTest is BaseTest {
         _approveUsdc(address(this), address(redemptionQueue), 100e6);
 
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueTail(),
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc)
         );
 
         // Should have processed only 1
@@ -312,10 +297,7 @@ contract RedemptionQueueTest is BaseTest {
         // Skip exact event check since waitTime depends on block.timestamp
         // Just verify the processing works
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueTail(),
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc)
         );
 
         // Verify user received USDC
@@ -343,10 +325,7 @@ contract RedemptionQueueTest is BaseTest {
         uint256 user2UsdcBefore = usdc.balanceOf(user2);
 
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueTail(),
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc)
         );
 
         // Only user1 (first in queue) should receive 100 USDC (6 decimals)
@@ -370,10 +349,7 @@ contract RedemptionQueueTest is BaseTest {
         _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
         _approveUsdc(address(this), address(redemptionQueue), 100e6);
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueHead() + 1,
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueHead() + 1, address(usdc)
         );
 
         assertEq(redemptionQueue.queueUpperBound(), 1);
@@ -426,10 +402,7 @@ contract RedemptionQueueTest is BaseTest {
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
 
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueTail(),
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc)
         );
 
         // User should receive 200 USDC (6 decimals) - earned 100% yield via multiplier appreciation
@@ -466,10 +439,7 @@ contract RedemptionQueueTest is BaseTest {
         uint256 user2UsdcBefore = usdc.balanceOf(user2);
 
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueTail(),
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc)
         );
 
         // Both users receive 150 USDC (6 decimals)
@@ -576,10 +546,7 @@ contract RedemptionQueueTest is BaseTest {
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
 
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueTail(),
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc)
         );
 
         // User should receive exact expected payout (in USDC - 6 decimals)
@@ -673,10 +640,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Process all
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueTail(),
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc)
         );
 
         // Verify all processed in order (each received their amount in USDC)
@@ -735,10 +699,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Process only numToProcess
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueHead() + numToProcess,
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueHead() + numToProcess, address(usdc)
         );
 
         // Verify: first numToProcess users got paid, rest didn't
@@ -819,10 +780,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Process all
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueTail(),
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc)
         );
 
         // Verify each user got their price-adjusted amount in FIFO order
@@ -877,10 +835,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Try to process all - will stop after numToPay
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueTail(),
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc)
         );
 
         // Verify: first numToPay users got paid, rest didn't (FIFO)
@@ -951,10 +906,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Process
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueTail(),
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc)
         );
 
         uint256 processed = queueLengthBefore - redemptionQueue.queueUpperBound();
@@ -1179,14 +1131,101 @@ contract RedemptionQueueTest is BaseTest {
         uint256 user3UsdcBefore = usdc.balanceOf(user3);
 
         redemptionQueue.processQueue(
-            redemptionQueue.queueHead(),
-            redemptionQueue.queueTail(),
-            address(usdc),
-            address(okuMoney)
+            redemptionQueue.queueHead(), redemptionQueue.queueTail(), address(usdc)
         );
 
         // Both remaining users should receive USDC
         assertGt(usdc.balanceOf(user2), user2UsdcBefore, "User2 should receive USDC");
         assertGt(usdc.balanceOf(user3), user3UsdcBefore, "User3 should receive USDC");
+    }
+
+    // ============ UUPS Upgradeability ============
+
+    function test_UUPS_UpgradeRedemptionQueue() public {
+        RedemptionQueue newImpl = new RedemptionQueue();
+
+        vm.prank(admin);
+        redemptionQueue.upgradeToAndCall(address(newImpl), "");
+
+        // State preserved across upgrade
+        assertEq(address(redemptionQueue.okuMoney()), address(okuMoney));
+    }
+
+    function test_UUPS_UpgradeRedemptionQueue_RevertNotUpgrader() public {
+        RedemptionQueue newImpl = new RedemptionQueue();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, QUEUE_UPGRADER
+            )
+        );
+        vm.prank(user1);
+        redemptionQueue.upgradeToAndCall(address(newImpl), "");
+    }
+
+    // ============ ProcessQueue Range Validation ============
+
+    function test_ProcessQueue_RevertStartBelowHead() public {
+        // Process one entry to advance head past index 0, then try to re-process from 0.
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        // OKUM_MINTER on redemptionQueue is granted in BaseTest._setupRoles.
+        uint256 usdcAmount = amount / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), usdcAmount);
+        _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
+        redemptionQueue.processQueue(0, 1, address(usdc));
+        assertEq(redemptionQueue.queueHead(), 1);
+
+        vm.expectRevert(RedemptionQueue.StartBelowHead.selector);
+        redemptionQueue.processQueue(0, 1, address(usdc));
+    }
+
+    function test_ProcessQueue_RevertEndAboveTail() public {
+        // Empty queue — tail == 0, asking for endIndex > 0 must revert.
+        vm.expectRevert(RedemptionQueue.EndAboveTail.selector);
+        redemptionQueue.processQueue(0, 5, address(usdc));
+    }
+
+    function test_RescueQueueEntry_AdvancesHeadPastChainOfRescued() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount * 4);
+
+        // Enqueue four entries.
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user1, amount);
+        assertEq(redemptionQueue.queueHead(), 0);
+        assertEq(redemptionQueue.queueTail(), 4);
+
+        // Rescue indices 0, 1, 2 in order. After each rescue the head should advance
+        // past every contiguous cleared entry. Final state: head == 3, tail == 4.
+        vm.startPrank(queueRescuer);
+        redemptionQueue.rescueQueueEntry(0, user2);
+        assertEq(redemptionQueue.queueHead(), 1);
+
+        redemptionQueue.rescueQueueEntry(1, user2);
+        assertEq(redemptionQueue.queueHead(), 2);
+
+        redemptionQueue.rescueQueueEntry(2, user2);
+        assertEq(redemptionQueue.queueHead(), 3);
+        vm.stopPrank();
+
+        assertEq(redemptionQueue.queueTail(), 4);
+    }
+
+    function test_TotalQueuedUsdc_AfterMultiplierChange() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        // At PRECISION, totalQueuedUsdc == amount / DECIMAL_MULTIPLIER (= 100e6).
+        assertEq(redemptionQueue.totalQueuedUsdc(), amount / DECIMAL_MULTIPLIER);
+
+        // Bump multiplier 2x — totalQueuedUsdc must reflect the new dollar value.
+        _setOkuMMultiplierAndRoll(PRECISION * 2);
+        assertEq(redemptionQueue.totalQueuedUsdc(), 2 * amount / DECIMAL_MULTIPLIER);
     }
 }

@@ -12,7 +12,9 @@ library MathLib {
     /**
      * @notice Raise x to the power of n, modulo base b (exponentiation by squaring)
      * @dev Copied from MakerDAO's jug.sol / pot.sol — battle-tested since 2017
-     *      Used for continuous yield accrual in OkuMoney and OkuDollar.
+     *      Used by OkuDollar for continuous yield accrual via usdMultiplier().
+     *      OkuMoney updates its multiplier discretely (setOkuMMultiplier /
+     *      distributeYield) and does NOT use rpow.
      * @param x Base value (typically ratePerSecond, scaled by PRECISION)
      * @param n Exponent (typically elapsed seconds)
      * @param b Precision base (typically 1e18)

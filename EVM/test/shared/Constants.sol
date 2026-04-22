@@ -73,4 +73,16 @@ library TestConstants {
 
     /// @notice Maximum fuzz amount for token operations
     uint256 public constant MAX_FUZZ_AMOUNT = 100_000_000e18;
+
+    // ============ Token Names / Symbols ============
+
+    string public constant OKUMONEY_NAME = "OkuMoney";
+    string public constant OKUMONEY_SYMBOL = "OkuM";
+    string public constant OKUDOLLAR_NAME = "OkuDollar";
+    string public constant OKUDOLLAR_SYMBOL = "usdOku";
+
+    // ============ Default PSM Configuration ============
+
+    /// @notice Default USDC buffer seeded into LitePSM during setup (5,000 USDC, 6 decimals).
+    uint256 public constant DEFAULT_PSM_BUFFER = 5000e6;
 }

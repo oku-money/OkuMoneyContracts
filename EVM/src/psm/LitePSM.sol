@@ -16,22 +16,11 @@ import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC2
 import {RedemptionQueue} from "./RedemptionQueue.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
+import {IAggregatorV3} from "../interfaces/IAggregatorV3.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
 import {MathLib} from "../lib/MathLib.sol";
-
-interface IAggregatorV3 {
-    function latestRoundData()
-        external
-        view
-        returns (
-            uint80 roundId,
-            int256 answer,
-            uint256 startedAt,
-            uint256 updatedAt,
-            uint80 answeredInRound
-        );
-}
+import {YieldSandwichGuard} from "../lib/YieldSandwichGuard.sol";
 
 /**
  * @title LitePSM
@@ -51,6 +40,7 @@ contract LitePSM is
     AccessControlUpgradeable,
     PausableUpgradeable,
     ReentrancyGuardUpgradeable,
+    YieldSandwichGuard,
     UUPSUpgradeable
 {
     using SafeERC20 for IERC20;
@@ -71,7 +61,7 @@ contract LitePSM is
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.LitePSM")) - 1)) & ~bytes32(uint256(0xff))
     bytes32 private constant LITEPSM_STORAGE_LOCATION =
-        0x3d9e0f1a4b5c6d7e8a9f0e1d2c3b4a5e6f7d8c9b0a1e2f3d4c5b6a7e8f9d0c00;
+        0x3513f3377f3ae2495699e5bd066d9c7b1ec04346bbec81953fcd75e4450d9100;
 
     function _getLitePSMStorage() private pure returns (LitePSMStorage storage $) {
         assembly {
@@ -101,32 +91,40 @@ contract LitePSM is
     /// @param usdcAmount USDC deposited (6 decimals)
     /// @param okuMAmount OkuMoney minted (18 decimals)
     /// @param okuMMultiplier Multiplier at time of mint (allows rate reconstruction)
-    event MintNote(
+    event OkuMMinted(
         address indexed user, uint256 usdcAmount, uint256 okuMAmount, uint256 okuMMultiplier
     );
 
-    /// @notice Emitted when user redeems OkuMoney for USDC (instant or queued path emits different events)
+    /// @notice Emitted when OkuMoney is redeemed for USDC from the PSM buffer.
+    /// @dev Not emitted on queued redemptions — the `RedemptionQueued` event in
+    ///      `RedemptionQueue` carries that information.
     /// @param user Address of the user
     /// @param okuMIn OkuMoney redeemed (18 decimals)
     /// @param usdcOut USDC received (6 decimals)
     /// @param okuMMultiplier Multiplier at time of redemption
-    event RedeemNote(address indexed user, uint256 okuMIn, uint256 usdcOut, uint256 okuMMultiplier);
+    event OkuMRedeemed(
+        address indexed user, uint256 okuMIn, uint256 usdcOut, uint256 okuMMultiplier
+    );
 
     /// @notice Emitted when user mints OkuDollar by depositing USDC
     /// @param user Address of the user
     /// @param usdcAmount USDC deposited (6 decimals)
     /// @param usdAmount OkuDollar minted (18 decimals)
     /// @param okuMMultiplier OkuMoney multiplier at time of mint
-    event MintUSD(
+    event UsdOkuMinted(
         address indexed user, uint256 usdcAmount, uint256 usdAmount, uint256 okuMMultiplier
     );
 
-    /// @notice Emitted when user redeems OkuDollar for USDC
+    /// @notice Emitted when user redeems OkuDollar for USDC.
+    /// @dev This is the sole event emitted for OkuDollar redemptions; no underlying
+    ///      `OkuMRedeemed` is emitted for the internal unwrap+redeem path.
     /// @param user Address of the user
     /// @param usdIn OkuDollar redeemed (18 decimals)
     /// @param usdcOut USDC received (6 decimals)
     /// @param okuMMultiplier OkuMoney multiplier at time of redemption
-    event RedeemUSD(address indexed user, uint256 usdIn, uint256 usdcOut, uint256 okuMMultiplier);
+    event UsdOkuRedeemed(
+        address indexed user, uint256 usdIn, uint256 usdcOut, uint256 okuMMultiplier
+    );
 
     event OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled);
 
@@ -161,7 +159,14 @@ contract LitePSM is
     error ExceedsReserves(uint256 newSupply, uint256 reserves);
     error InsufficientBuffer(uint256 available, uint256 required);
     error WouldStrandQueue(uint256 remainingBalance, uint256 queueObligation);
-    error YieldDistributionInProgress();
+    // YieldDistributionInProgress is inherited from YieldSandwichGuard.
+    error InvalidStaleness(uint256 provided, uint256 minAllowed, uint256 maxAllowed);
+
+    /// @dev Lower / upper bounds for `stalenessThreshold`. 60 seconds is below any realistic
+    ///      oracle update interval; 7 days catches operator misconfiguration where the
+    ///      oracle would effectively never be considered stale.
+    uint256 public constant ORACLE_MIN_STALENESS = 60;
+    uint256 public constant ORACLE_MAX_STALENESS = 7 days;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -195,10 +200,15 @@ contract LitePSM is
         $.redemptionQueue = RedemptionQueue(_redemptionQueue);
         $.stalenessThreshold = 1 hours;
 
+        // Grant the full role set to admin at deployment (see OkuMoney.initialize).
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(PSM_UPGRADER, admin);
         _grantRole(PSM_PAUSER, admin);
+        _grantRole(PSM_UNPAUSER, admin);
         _grantRole(PSM_QUEUE_PROCESSOR, admin);
+        _grantRole(PSM_BUFFER_DEPOSITOR, admin);
+        _grantRole(PSM_BUFFER_WITHDRAWER, admin);
+        _grantRole(PSM_ORACLE_MANAGER, admin);
     }
 
     // ============ Storage Accessor Views ============
@@ -233,18 +243,9 @@ contract LitePSM is
 
     // ============ Yield Distribution Lock ============
 
-    /**
-     * @notice Modifier to prevent sandwich attacks during yield distribution
-     * @dev Blocks PSM operations in the same block as yield distribution.
-     *      This prevents arbitrageurs from frontrunning distributeYield() with mintOkuM()
-     *      and backrunning with redeemOkuM() to capture unearned yield.
-     */
-    modifier whenYieldNotDistributing() {
-        LitePSMStorage storage $ = _getLitePSMStorage();
-        if (block.number == $.okuMoney.lastYieldDistributionBlock()) {
-            revert YieldDistributionInProgress();
-        }
-        _;
+    /// @inheritdoc YieldSandwichGuard
+    function _yieldSandwichOkuMoney() internal view override returns (IOkuMoney) {
+        return _getLitePSMStorage().okuMoney;
     }
 
     // ============ OkuMoney Swap Functions (Multiplier-Aware) ============
@@ -293,7 +294,7 @@ contract LitePSM is
         // Mint OkuMoney to user (raw token amount, multiplier-adjusted)
         $.okuMoney.mint(msg.sender, okuMAmount);
 
-        emit MintNote(msg.sender, usdcAmount, okuMAmount, okuMMult);
+        emit OkuMMinted(msg.sender, usdcAmount, okuMAmount, okuMMult);
     }
 
     /**
@@ -364,7 +365,7 @@ contract LitePSM is
             IERC20(address($.okuMoney)).safeTransferFrom(user, address(this), okuMAmount);
             $.okuMoney.burn(okuMAmount);
             $.usdc.safeTransfer(user, usdcAmount);
-            emit RedeemNote(user, okuMAmount, usdcAmount, okuMMult);
+            emit OkuMRedeemed(user, okuMAmount, usdcAmount, okuMMult);
         } else {
             // Insufficient buffer - queue redemption
             // Pull OkuMoney from user to PSM
@@ -426,7 +427,7 @@ contract LitePSM is
             revert OutputBelowMinimum(usdMinted, usdcValue18);
         }
 
-        emit MintUSD(msg.sender, usdcAmount, usdMinted, okuMMult);
+        emit UsdOkuMinted(msg.sender, usdcAmount, usdMinted, okuMMult);
     }
 
     /**
@@ -483,20 +484,22 @@ contract LitePSM is
         // NOTE: Reverts if vault undercollateralized (distinct failure mode)
         uint256 okuMReturned = $.usdOku.unwrap(usdAmount, address(this));
 
-        // Now redeem the OkuMoney for USDC (same path as redeemOkuM)
-        // _redeemOkuMInternal will calculate usdcOut and emit RedeemNote
-        uint256 usdcOut = _redeemOkuMInternal(user, okuMReturned);
+        // Redeem the OkuMoney for USDC without emitting OkuMRedeemed —
+        // UsdOkuRedeemed is the sole event for this public path.
+        uint256 usdcOut = _redeemOkuMFromPsm(user, okuMReturned);
 
-        // Emit RedeemUSD with the actual USDC output
-        emit RedeemUSD(user, usdAmount, usdcOut, $.okuMoney.okuMMultiplier());
+        emit UsdOkuRedeemed(user, usdAmount, usdcOut, $.okuMoney.okuMMultiplier());
     }
 
     /**
-     * @dev Internal OkuMoney redemption (OkuM already held by PSM)
-     *      Multiplier-aware: USDC output = okuMAmount × okuMMultiplier() / PRECISION (scaled to 6 decimals)
-     * @return usdcAmount The USDC amount transferred (0 if queued)
+     * @dev Internal OkuMoney redemption when the OkuM is already held by the PSM
+     *      (used by the usdOku unwrap path). Does NOT emit `OkuMRedeemed`; the
+     *      caller is responsible for emitting the appropriate user-facing event.
+     *      Multiplier-aware: USDC output = okuMAmount × okuMMultiplier() / PRECISION
+     *      (scaled to 6 decimals).
+     * @return usdcAmount USDC transferred (0 if queued).
      */
-    function _redeemOkuMInternal(
+    function _redeemOkuMFromPsm(
         address user,
         uint256 okuMAmount
     )
@@ -523,13 +526,11 @@ contract LitePSM is
         uint256 usdcBalance = $.usdc.balanceOf(address(this));
 
         if (usdcBalance >= usdcAmount) {
-            // Sufficient buffer - burn OkuMoney, transfer USDC
+            // Sufficient buffer - burn OkuMoney, transfer USDC (no OkuMRedeemed here)
             $.okuMoney.burn(okuMAmount);
             $.usdc.safeTransfer(user, usdcAmount);
-            emit RedeemNote(user, okuMAmount, usdcAmount, okuMMult);
         } else {
             // Insufficient buffer - queue redemption
-            // Transfer OkuMoney from PSM to queue, then record
             IERC20(address($.okuMoney)).safeTransfer(address($.redemptionQueue), okuMAmount);
             $.redemptionQueue.enqueue(user, okuMAmount);
             usdcAmount = 0; // Signal that redemption was queued, not instant
@@ -548,6 +549,7 @@ contract LitePSM is
         uint256 approveAmount
     )
         external
+        whenNotPaused
         onlyRole(PSM_QUEUE_PROCESSOR)
         nonReentrant
     {
@@ -557,7 +559,7 @@ contract LitePSM is
         $.usdc.approve(address($.redemptionQueue), approveAmount);
 
         // Process queue
-        $.redemptionQueue.processQueue(startIndex, endIndex, address($.usdc), address($.okuMoney));
+        $.redemptionQueue.processQueue(startIndex, endIndex, address($.usdc));
 
         // Revoke approval for remaining USDC
         $.usdc.approve(address($.redemptionQueue), 0);
@@ -575,6 +577,18 @@ contract LitePSM is
         external
         onlyRole(PSM_ORACLE_MANAGER)
     {
+        // If enabling the oracle, the address must be set; configuring an "enabled"
+        // oracle at address(0) silently bypasses reserve checks (the runtime guard
+        // skips when porOracle == 0), which is a footgun.
+        if (_enabled && _oracle == address(0)) revert ZeroAddress();
+        // Bound the staleness threshold to a sensible range. Outside this range either
+        // every oracle read reverts (too low) or stale data is silently accepted (too high).
+        if (
+            _stalenessThreshold < ORACLE_MIN_STALENESS || _stalenessThreshold > ORACLE_MAX_STALENESS
+        ) {
+            revert InvalidStaleness(_stalenessThreshold, ORACLE_MIN_STALENESS, ORACLE_MAX_STALENESS);
+        }
+
         LitePSMStorage storage $ = _getLitePSMStorage();
         $.porOracle = IAggregatorV3(_oracle);
         $.stalenessThreshold = _stalenessThreshold;
@@ -611,6 +625,7 @@ contract LitePSM is
     }
 
     function withdrawUsdc(address to, uint256 amount) external onlyRole(PSM_BUFFER_WITHDRAWER) {
+        if (to == address(0)) revert ZeroAddress();
         LitePSMStorage storage $ = _getLitePSMStorage();
         uint256 balance = $.usdc.balanceOf(address(this));
         if (balance < amount) revert InsufficientBuffer(balance, amount);

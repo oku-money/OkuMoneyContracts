@@ -24,12 +24,4 @@ interface IBridgeAdapter {
     )
         external
         payable;
-
-    /**
-     * @notice Receive bridged tokens from another chain
-     * @param token Token address to receive
-     * @param amount Amount to receive
-     * @param recipient Recipient address
-     */
-    function receiveBridge(address token, uint256 amount, address recipient) external;
 }

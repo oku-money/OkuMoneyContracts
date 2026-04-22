@@ -49,7 +49,9 @@ contract OkuMPriceInvariantsTest is BaseTest {
     }
 
     /**
-     * @notice okuMMultiplier() never decreases
+     * @notice okuMMultiplier() never decreases between observations.
+     * @dev `ghostLastOkuMMultiplier` is updated in `afterInvariant` so the
+     *      observation happens regardless of whether the handler call reverted.
      */
     function invariant_OkuMPriceNeverDecreases() public view {
         uint256 current = okuMoney.okuMMultiplier();
@@ -57,8 +59,12 @@ contract OkuMPriceInvariantsTest is BaseTest {
         assertGe(
             current,
             handler.ghostLastOkuMMultiplier(),
-            "okuMMultiplier decreased from previous value"
+            "okuMMultiplier decreased between observations"
         );
+    }
+
+    function afterInvariant() public {
+        handler.recordMultiplierObservation();
     }
 
     /**

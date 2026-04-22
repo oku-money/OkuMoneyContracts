@@ -5,37 +5,38 @@ import {INttManager} from "./INttManager.sol";
 import {IBridgeAdapter} from "./IBridgeAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {Roles} from "../../lib/Roles.sol";
 
 /**
  * @title NttAdapter
- * @notice Adapter to integrate Wormhole NTT with OkuBridgeRouter
- * @dev Converts IBridgeAdapter interface to INttManager interface
+ * @notice Adapter integrating Wormhole NTT with OkuBridgeRouter.
+ * @dev Translates the IBridgeAdapter calling convention to INttManager. The router
+ *      pre-burns OkuMoney before invoking this adapter, so this contract only
+ *      handles cross-chain message delivery — no token movement.
  *
- * Flow:
- * 1. OkuBridgeRouter burns OkuMoney (via MINTER)
- * 2. Router calls this adapter's bridge() to send cross-chain message
- * 3. This adapter forwards to NttManager.transfer() for Wormhole messaging
- * 4. On destination, NttManager receives VAA and mints OkuMoney
+ *      Roles:
+ *      - DEFAULT_ADMIN_ROLE   — can grant/revoke other roles
+ *      - NTT_CONFIGURATOR     — manage chain-id mappings
+ *      - NTT_RESCUER          — withdraw stuck ETH/tokens
  *
- * Key conversions:
- * - uint256 destinationChain → uint16 (Wormhole chain ID)
- * - address recipient → bytes32 (left-padded)
- *
- * Note: Tokens are already burned before this adapter is called.
- * This adapter only handles the cross-chain message, not token movement.
+ *      Conversions:
+ *      - uint256 destinationChain → uint16 (Wormhole chain id)
+ *      - address recipient        → bytes32 (left-padded)
  */
-contract NttAdapter is IBridgeAdapter, Ownable {
+contract NttAdapter is IBridgeAdapter, AccessControl {
     using SafeERC20 for IERC20;
 
     INttManager public immutable NTT_MANAGER;
     address public immutable TOKEN;
     address public immutable ROUTER;
 
-    // Mapping from EVM chain ID to Wormhole chain ID
+    bytes32 public constant NTT_CONFIGURATOR = Roles.NTT_CONFIGURATOR;
+    bytes32 public constant NTT_RESCUER = Roles.NTT_RESCUER;
+
+    /// @notice EVM chain id → Wormhole chain id mapping. Zero means "unsupported".
     mapping(uint256 => uint16) public wormholeChainId;
 
-    // Events
     event BridgeInitiated(
         uint256 amount, uint16 wormholeChainId, bytes32 recipient, uint64 sequence
     );
@@ -47,21 +48,19 @@ contract NttAdapter is IBridgeAdapter, Ownable {
     error InvalidToken(address provided, address expected);
     error UnauthorizedCaller();
     error EthTransferFailed();
-    error NttNativeReceiveOnly();
+    error ZeroAddress();
 
-    constructor(
-        address _nttManager,
-        address _token,
-        address _router,
-        address _owner
-    )
-        Ownable(_owner)
-    {
-        ROUTER = _router;
+    constructor(address _nttManager, address _token, address _router, address _admin) {
+        if (_nttManager == address(0)) revert ZeroAddress();
+        if (_token == address(0)) revert ZeroAddress();
+        if (_router == address(0)) revert ZeroAddress();
+        if (_admin == address(0)) revert ZeroAddress();
+
         NTT_MANAGER = INttManager(_nttManager);
         TOKEN = _token;
+        ROUTER = _router;
 
-        // Pre-configure common chain mappings
+        // Pre-configure common chain mappings.
         // See: https://docs.wormhole.com/wormhole/reference/constants
         wormholeChainId[1] = 2; // Ethereum
         wormholeChainId[42_161] = 23; // Arbitrum
@@ -69,16 +68,18 @@ contract NttAdapter is IBridgeAdapter, Ownable {
         wormholeChainId[137] = 5; // Polygon
         wormholeChainId[8453] = 30; // Base
         wormholeChainId[43_114] = 6; // Avalanche
+
+        // Grant the full role set to admin (matches the unified role policy across the
+        // rest of the codebase). Admin redistributes operational roles post-deploy.
+        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+        _grantRole(NTT_CONFIGURATOR, _admin);
+        _grantRole(NTT_RESCUER, _admin);
     }
 
     /**
-     * @notice Send cross-chain message via Wormhole NTT
-     * @dev Called by OkuBridgeRouter AFTER it has burned the tokens.
-     *      This function only sends the cross-chain message - no token movement.
-     * @param _token Token address (for validation, already burned)
-     * @param amount Amount that was burned
-     * @param destinationChain EVM chain ID (will be converted to Wormhole ID)
-     * @param recipient Recipient address on destination chain
+     * @notice Send a cross-chain message via Wormhole NTT.
+     * @dev Called by the router after it has burned the user's tokens. Tokens are
+     *      not pulled here — this contract only emits the cross-chain message.
      */
     function bridge(
         address _token,
@@ -98,48 +99,44 @@ contract NttAdapter is IBridgeAdapter, Ownable {
         uint16 wormholeDestChain = wormholeChainId[destinationChain];
         if (wormholeDestChain == 0) revert UnsupportedChain(destinationChain);
 
-        // Convert address to bytes32 (left-pad with zeros for EVM addresses)
         bytes32 recipientBytes32 = bytes32(uint256(uint160(recipient)));
 
-        // Call NTT transfer to send cross-chain message
-        // Note: Tokens already burned by router - this is message-only
-        // Forwards any ETH for Wormhole message fees
         uint64 sequence =
             NTT_MANAGER.transfer{value: msg.value}(amount, wormholeDestChain, recipientBytes32);
 
         emit BridgeInitiated(amount, wormholeDestChain, recipientBytes32, sequence);
     }
 
-    /**
-     * @notice Configure Wormhole chain ID mapping
-     * @param evmChainId EVM chain ID
-     * @param _wormholeChainId Wormhole chain ID
-     */
-    function configureChainId(uint256 evmChainId, uint16 _wormholeChainId) external onlyOwner {
+    /// @notice Configure or override an EVM chain id → Wormhole chain id mapping.
+    function configureChainId(
+        uint256 evmChainId,
+        uint16 _wormholeChainId
+    )
+        external
+        onlyRole(NTT_CONFIGURATOR)
+    {
         wormholeChainId[evmChainId] = _wormholeChainId;
         emit ChainIdConfigured(evmChainId, _wormholeChainId);
     }
 
-    /**
-     * @notice Withdraw stuck ETH (from failed bridge attempts)
-     */
-    function withdrawEth(address payable to) external onlyOwner {
+    /// @notice Withdraw stuck ETH (e.g. fee refunds from the NTT manager).
+    function withdrawEth(address payable to) external onlyRole(NTT_RESCUER) {
+        if (to == address(0)) revert ZeroAddress();
         (bool success,) = to.call{value: address(this).balance}("");
         if (!success) revert EthTransferFailed();
     }
 
-    /**
-     * @notice Withdraw stuck tokens
-     */
-    function withdrawTokens(address _token, address to, uint256 amount) external onlyOwner {
+    /// @notice Withdraw stuck tokens.
+    function withdrawTokens(
+        address _token,
+        address to,
+        uint256 amount
+    )
+        external
+        onlyRole(NTT_RESCUER)
+    {
+        if (to == address(0)) revert ZeroAddress();
         IERC20(_token).safeTransfer(to, amount);
-    }
-
-    /**
-     * @notice Not implemented — NTT handles destination minting natively via VAA
-     */
-    function receiveBridge(address, uint256, address) external pure {
-        revert NttNativeReceiveOnly();
     }
 
     receive() external payable {}

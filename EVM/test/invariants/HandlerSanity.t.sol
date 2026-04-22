@@ -15,11 +15,18 @@ contract HandlerSanityTest is BaseTest {
     OkuMoneyHandler public okuMoneyHandler;
     OkuDollarHandler public okuDollarHandler;
 
-    /// @notice Minimum acceptable success rate (30%)
-    uint256 public constant MIN_SUCCESS_RATE = 30;
+    /// @notice Minimum acceptable handler success rate (40%).
+    /// @dev Tighter than the original 30% but loose enough to accommodate the
+    ///      expanded admin surface (setNextUsdYieldRate before setUsdYieldRate;
+    ///      withdrawSurplus when there is no surplus; setMinCollateralRatio with
+    ///      out-of-range values; etc). A real handler bug shows up as a success
+    ///      rate well below this floor.
+    uint256 public constant MIN_SUCCESS_RATE = 40;
 
-    /// @notice Minimum calls before checking success rate
-    uint256 public constant MIN_CALLS_THRESHOLD = 10;
+    /// @notice Minimum calls before checking success rate. Increased from 10 to
+    ///         100 so the rate isn't dominated by a handful of early reverts in
+    ///         a tiny sample.
+    uint256 public constant MIN_CALLS_THRESHOLD = 100;
 
     function setUp() public override {
         super.setUp();

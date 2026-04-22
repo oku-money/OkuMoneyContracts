@@ -22,6 +22,7 @@ import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
 import {MathLib} from "../lib/MathLib.sol";
+import {YieldSandwichGuard} from "../lib/YieldSandwichGuard.sol";
 
 /**
  * @title OkuDollar
@@ -44,6 +45,7 @@ contract OkuDollar is
     AccessControlUpgradeable,
     PausableUpgradeable,
     ReentrancyGuardUpgradeable,
+    YieldSandwichGuard,
     UUPSUpgradeable
 {
     using SafeERC20 for IERC20;
@@ -67,7 +69,7 @@ contract OkuDollar is
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuDollar")) - 1)) & ~bytes32(uint256(0xff))
     bytes32 private constant OKUDOLLAR_STORAGE_LOCATION =
-        0x2c8d9f0a3e4b5c6d7a8f9e0d1c2b3a4e5f6d7c8b9a0e1f2d3c4b5a6e7f8d9c00;
+        0x47ad802b8b69e1fb26602029cb9d680d20222bfb119aa501ef9624c481132900;
 
     function _getOkuDollarStorage() private pure returns (OkuDollarStorage storage $) {
         assembly {
@@ -125,11 +127,11 @@ contract OkuDollar is
         uint256 usdMultiplier
     );
 
-    /// @notice Emitted when the USD multiplier is updated
+    /// @notice Emitted when the USD multiplier is directly overridden (emergency path)
     /// @param oldMultiplier Previous multiplier value
     /// @param newMultiplier New multiplier value
     /// @param totalSupply Total OkuDollar supply at time of update
-    event UsdRebaseEvent(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply);
+    event UsdMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply);
 
     /// @notice Emitted when yield rate is updated
     /// @param oldRatePerSecond Previous rate per second
@@ -175,14 +177,19 @@ contract OkuDollar is
     error AmountTooSmall();
     error OutputBelowMinimum(uint256 actual, uint256 minimum);
     error InsufficientReserves();
+    /// @dev Share balance is below the amount being moved/burned (unrelated to vault collateral).
+    error InsufficientBalance();
+    /// @dev Vault OkuMoney reserves are below the amount required to cover user obligations on unwrap.
     error InsufficientCollateral();
     error BelowMinimumCollateral();
     error InvalidRate();
     error RateTooHigh();
     error EndTimestampInPast();
+    error RateAlreadyExpired();
     error NoRateEndSet();
     error MultiplierCannotDecrease();
-    error YieldDistributionInProgress();
+
+    // YieldDistributionInProgress is inherited from YieldSandwichGuard.
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -218,8 +225,11 @@ contract OkuDollar is
         $.usdLastAccrualTime = block.timestamp;
         $.usdPendingRatePerSecond = PRECISION;
 
+        // Grant the full role set to admin at deployment (see OkuMoney.initialize).
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(VAULT_UPGRADER, admin);
+        _grantRole(VAULT_REBASER, admin);
+        _grantRole(VAULT_RESERVE_MANAGER, admin);
         _grantRole(VAULT_PAUSER, admin);
         _grantRole(VAULT_UNPAUSER, admin);
     }
@@ -266,7 +276,9 @@ contract OkuDollar is
 
     /**
      * @notice Computed USD multiplier with continuous yield accrual
-     * @dev Same MathLib.rpow pattern as OkuMoney.okuMMultiplier()
+     * @dev Uses MathLib.rpow for continuous exponential accrual. Unlike OkuMoney
+     *      (which has a discrete setter), OkuDollar's multiplier is a function of
+     *      the per-second rate and elapsed time since the last rate update.
      */
     function usdMultiplier() public view returns (uint256) {
         OkuDollarStorage storage $ = _getOkuDollarStorage();
@@ -349,7 +361,7 @@ contract OkuDollar is
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
         uint256 fromBalance = $.usdShares[from];
-        if (fromBalance < shares) revert InsufficientCollateral();
+        if (fromBalance < shares) revert InsufficientBalance();
 
         $.usdShares[from] = fromBalance - shares;
         $.usdShares[to] += shares;
@@ -361,18 +373,9 @@ contract OkuDollar is
 
     // ============ Yield Distribution Lock ============
 
-    /**
-     * @notice Modifier to prevent sandwich attacks during yield distribution
-     * @dev Blocks wrap/unwrap operations in the same block as yield distribution.
-     *      This prevents arbitrageurs from frontrunning distributeYield() with wrap()
-     *      and backrunning with unwrap() to capture unearned yield.
-     */
-    modifier whenYieldNotDistributing() {
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
-        if (block.number == $.okuMoney.lastYieldDistributionBlock()) {
-            revert YieldDistributionInProgress();
-        }
-        _;
+    /// @inheritdoc YieldSandwichGuard
+    function _yieldSandwichOkuMoney() internal view override returns (IOkuMoney) {
+        return _getOkuDollarStorage().okuMoney;
     }
 
     // ============ Wrap / Unwrap (Price-Aware) ============
@@ -467,7 +470,7 @@ contract OkuDollar is
         // Calculate shares to burn (round UP to favor vault)
         // Ceiling division: (a + b - 1) / b
         uint256 sharesToBurn = ((usdAmount * PRECISION) + usdMult - 1) / usdMult;
-        if ($.usdShares[msg.sender] < sharesToBurn) revert InsufficientCollateral();
+        if ($.usdShares[msg.sender] < sharesToBurn) revert InsufficientBalance();
 
         // Check vault has enough OkuMoney
         uint256 reserves = IERC20(address($.okuMoney)).balanceOf(address(this));
@@ -494,7 +497,11 @@ contract OkuDollar is
      *      their value depends on okuMMultiplier().
      * @param okuMAmount Amount of OkuMoney tokens to deposit
      */
-    function depositReserves(uint256 okuMAmount) external onlyRole(VAULT_RESERVE_MANAGER) {
+    function depositReserves(uint256 okuMAmount)
+        external
+        whenNotPaused
+        onlyRole(VAULT_RESERVE_MANAGER)
+    {
         if (okuMAmount == 0) revert ZeroAmount();
         OkuDollarStorage storage $ = _getOkuDollarStorage();
         uint256 balBefore = IERC20(address($.okuMoney)).balanceOf(address(this));
@@ -511,7 +518,11 @@ contract OkuDollar is
      *      Enforces collateralizationRatio() >= minCollateralRatio AFTER withdrawal.
      * @param okuMAmount Amount of OkuMoney tokens to withdraw
      */
-    function withdrawSurplus(uint256 okuMAmount) external onlyRole(VAULT_RESERVE_MANAGER) {
+    function withdrawSurplus(uint256 okuMAmount)
+        external
+        whenNotPaused
+        onlyRole(VAULT_RESERVE_MANAGER)
+    {
         if (okuMAmount == 0) revert ZeroAmount();
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
@@ -616,6 +627,12 @@ contract OkuDollar is
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
         if ($.usdRateEnd == 0) revert NoRateEndSet();
+        // Staging a pending rate after the current rate has already expired would let
+        // the pending rate accrue from the (past) usdRateEnd timestamp the moment it
+        // activates, snapshotting an arbitrary amount of unearned yield at that
+        // boundary. Force the operator to call setUsdYieldRate() with a fresh end
+        // timestamp instead.
+        if (block.timestamp >= $.usdRateEnd) revert RateAlreadyExpired();
 
         $.usdPendingRatePerSecond = newRate;
 
@@ -636,7 +653,7 @@ contract OkuDollar is
         $.usdPendingRatePerSecond = PRECISION;
         $.usdLastAccrualTime = block.timestamp;
 
-        emit UsdRebaseEvent(currentMultiplier, newMultiplier, totalSupply());
+        emit UsdMultiplierUpdated(currentMultiplier, newMultiplier, totalSupply());
     }
 
     // ============ Pause Management ============

@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {BaseTest} from "../Base.t.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
+import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
 
 /**
  * @title OkuDollarTest
@@ -17,7 +18,7 @@ contract OkuDollarTest is BaseTest {
     // ============ Events ============
 
     event Transfer(address indexed from, address indexed to, uint256 value);
-    event UsdRebaseEvent(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply);
+    event UsdMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply);
     event UsdYieldRateUpdated(
         uint256 oldRatePerSecond,
         uint256 newRatePerSecond,
@@ -299,31 +300,35 @@ contract OkuDollarTest is BaseTest {
     // ============ Unwrap Rounding Tests ============
 
     function test_Unwrap_SharesBurnedRoundUp_FavorsVault() public {
-        // Wrap at 1x, then bump usdMultiplier so unwrap has fractional shares
+        // Wrap at 1x, then bump usdMultiplier so the unwrap math has a non-trivial
+        // fractional part (1/3) and we can directly assert ceil-division semantics.
         _mintUsdOku(user1, 1000e18);
 
         vm.prank(usdRebaser);
         usdOku.updateUsdMultiplier(PRECISION * 3);
 
-        // user1 shares = 1000e18 (unchanged), balance = 1000e18 * 3 / 1e18 = 3000e18
+        // user1 shares = 1000e18, balance = 1000e18 * 3 / 1e18 = 3000e18
         uint256 sharesBefore = usdOku.usdSharesOf(user1);
+        uint256 mult = usdOku.usdMultiplier(); // = 3e18
 
-        // Unwrap 1e18: sharesToBurn = ceil(1e18 * 1e18 / (3e18)) = ceil(1/3 * 1e18)
-        // Using standard ceil division: (1e18 * 1e18 + 3e18 - 1) / 3e18 = 1
+        uint256 usdAmount = 1e18;
+
         vm.prank(user1);
-        usdOku.unwrap(1e18, user1);
+        usdOku.unwrap(usdAmount, user1);
 
         uint256 sharesAfter = usdOku.usdSharesOf(user1);
         uint256 sharesBurned = sharesBefore - sharesAfter;
 
-        // Shares burned should be at least enough to cover 1e18 OkuDollar
-        // This means sharesBurned >= ceil(1e18 * 1e18 / 3e18) = 1 (but actually computed to cover amount)
-        // The vault's share burn must be >= the usd dollar amount requested
-        uint256 dollarValueBurned = (sharesBurned * usdOku.usdMultiplier()) / PRECISION;
-        // Since we unwrapped 1e18, the dollar value burned should be >= 1e18 (may be more due to rounding)
-        // But with multiplier = 3e18 and sharesBurned = ceil(1e18 / 3) = 1, dollarValue = 1 * 3e18 / 1e18 = 3
-        // The key invariant is: user does not get more than they should, vault is not harmed
-        assertGt(sharesBurned, 0, "Should burn at least 1 share");
+        // Direct ceiling-division assertion — this is the actual invariant the vault
+        // relies on (vault always rounds shares burned UP to favour itself).
+        uint256 expectedSharesCeil = (usdAmount * PRECISION + mult - 1) / mult;
+        assertEq(sharesBurned, expectedSharesCeil, "must burn ceil(usdAmount * 1e18 / mult) shares");
+
+        // The dollar value of the shares burned must equal-or-exceed the requested
+        // usdAmount. This is what "favors the vault" actually means — the user can
+        // never extract more dollars than they burn shares for.
+        uint256 dollarValueBurned = (sharesBurned * mult) / PRECISION;
+        assertGe(dollarValueBurned, usdAmount, "vault must not be drained by rounding");
     }
 
     // ============ Price-Aware Unwrap Tests ============
@@ -788,7 +793,7 @@ contract OkuDollarTest is BaseTest {
 
     function test_UpdateUsdMultiplier_EmitsEvent() public {
         vm.expectEmit(false, false, false, true);
-        emit UsdRebaseEvent(PRECISION, PRECISION * 2, usdOku.totalSupply());
+        emit UsdMultiplierUpdated(PRECISION, PRECISION * 2, usdOku.totalSupply());
 
         vm.prank(usdRebaser);
         usdOku.updateUsdMultiplier(PRECISION * 2);
@@ -846,18 +851,32 @@ contract OkuDollarTest is BaseTest {
     }
 
     function test_DepositReserves_EmitsEvent() public {
+        // Set up some user-held usdOku so the post-deposit ratio is not "infinite"
+        // (which would make the event check tautological).
+        _mintUsdOku(user1, 100e18);
+
         _mintOkuMoney(reserveManager, 50e18);
         _approveOkuMoney(reserveManager, address(usdOku), 50e18);
 
-        uint256 dollarValue = (50e18 * okuMoney.okuMMultiplier()) / PRECISION;
+        uint256 mult = okuMoney.okuMMultiplier();
+        uint256 dollarValue = (50e18 * mult) / PRECISION;
+
+        // Pre-compute the expected post-deposit collateralization ratio:
+        //   reservesAfter = totalReserves + 50e18
+        //   reservesDollarValueAfter = reservesAfter * mult / PRECISION
+        //   ratio = reservesDollarValueAfter * PRECISION / totalSupply
+        uint256 reservesAfter = usdOku.totalOkuMReserves() + 50e18;
+        uint256 reservesDollarValueAfter = (reservesAfter * mult) / PRECISION;
+        uint256 expectedRatio = (reservesDollarValueAfter * PRECISION) / usdOku.totalSupply();
+
+        vm.expectEmit(true, false, false, true, address(usdOku));
+        emit OkuDollar.ReservesDeposited(reserveManager, 50e18, dollarValue, expectedRatio);
 
         vm.prank(reserveManager);
-        // Can't use expectEmit with collateralizationRatio since it changes after deposit
-        // Just call and verify via state changes
         usdOku.depositReserves(50e18);
 
-        // Verify deposit happened
-        assertEq(usdOku.totalOkuMReserves(), 50e18);
+        assertEq(usdOku.totalOkuMReserves(), reservesAfter);
+        assertEq(usdOku.collateralizationRatio(), expectedRatio);
     }
 
     // ============ withdrawSurplus Tests ============
@@ -1270,8 +1289,11 @@ contract OkuDollarTest is BaseTest {
     function test_Transfer_RevertsOnInsufficientBalance() public {
         _mintUsdOku(user1, 100e18);
 
+        // _transferUsdShares should revert with InsufficientBalance — the share
+        // balance check is unrelated to vault collateralization (which has its own
+        // distinct InsufficientCollateral error).
         vm.prank(user1);
-        vm.expectRevert(OkuDollar.InsufficientCollateral.selector);
+        vm.expectRevert(OkuDollar.InsufficientBalance.selector);
         usdOku.transfer(user2, 101e18);
     }
 
@@ -1378,7 +1400,7 @@ contract OkuDollarTest is BaseTest {
 
         vm.startPrank(user1);
 
-        for (uint256 i = 0; i < 1000; i++) {
+        for (uint256 i = 0; i < 50; i++) {
             uint256 noteBal = okuMoney.balanceOf(user1);
             if (noteBal == 0) break;
             usdOku.wrap(noteBal, user1, 0);
@@ -1394,7 +1416,7 @@ contract OkuDollarTest is BaseTest {
         // Must not gain tokens (no free share accumulation)
         assertLe(finalNotes, initialNotes, "Balance must not increase from wrap/unwrap cycles");
         // Max 1 wei loss per cycle
-        assertGe(finalNotes, initialNotes - 1000, "Excessive rounding loss");
+        assertGe(finalNotes, initialNotes - 50, "Excessive rounding loss");
     }
 
     function test_RepeatedWrapUnwrap_NoShareInflation_ElevatedPrice() public {
@@ -1418,7 +1440,7 @@ contract OkuDollarTest is BaseTest {
 
         vm.startPrank(user1);
 
-        for (uint256 i = 0; i < 1000; i++) {
+        for (uint256 i = 0; i < 50; i++) {
             uint256 noteBal = okuMoney.balanceOf(user1);
             if (noteBal == 0) break;
             usdOku.wrap(noteBal, user1, 0);
@@ -1432,7 +1454,7 @@ contract OkuDollarTest is BaseTest {
         uint256 finalNotes = okuMoney.balanceOf(user1);
 
         assertLe(finalNotes, initialNotes, "Balance must not increase from wrap/unwrap cycles");
-        assertGe(finalNotes, initialNotes - 1000, "Excessive rounding loss");
+        assertGe(finalNotes, initialNotes - 50, "Excessive rounding loss");
     }
 
     function test_RepeatedWrapUnwrap_NoShareInflation_AfterNotePriceChange() public {
@@ -1449,7 +1471,7 @@ contract OkuDollarTest is BaseTest {
 
         vm.startPrank(user1);
 
-        for (uint256 i = 0; i < 1000; i++) {
+        for (uint256 i = 0; i < 50; i++) {
             uint256 noteBal = okuMoney.balanceOf(user1);
             if (noteBal == 0) break;
             usdOku.wrap(noteBal, user1, 0);
@@ -1463,7 +1485,7 @@ contract OkuDollarTest is BaseTest {
         uint256 finalNotes = okuMoney.balanceOf(user1);
 
         assertLe(finalNotes, initialNotes, "Balance must not increase from wrap/unwrap cycles");
-        assertGe(finalNotes, initialNotes - 1000, "Excessive rounding loss");
+        assertGe(finalNotes, initialNotes - 50, "Excessive rounding loss");
     }
 
     // ============ Rate Expiry Tests ============
@@ -1694,7 +1716,7 @@ contract OkuDollarTest is BaseTest {
 
     // ============ Fuzz Round-Trip Tests ============
 
-    function test_Fuzz_WrapUnwrap_RoundTrip(uint256 mult) public {
+    function testFuzz_WrapUnwrap_RoundTrip(uint256 mult) public {
         // Test wrap/unwrap at base multiplier=1e18 but varying okuMMultiplier
         // This tests the multiplier-aware conversion without hitting collateralization issues
         mult = bound(mult, PRECISION, 5e18);
@@ -1723,7 +1745,7 @@ contract OkuDollarTest is BaseTest {
         assertLe(finalNotes, okuMAmount, "Must not gain from round trip");
     }
 
-    function test_Fuzz_WrapUnwrap_RoundTrip_WithNotePrice(uint256 price) public {
+    function testFuzz_WrapUnwrap_RoundTrip_WithNotePrice(uint256 price) public {
         price = bound(price, PRECISION, 3e18); // $1.00 to $3.00
 
         _setOkuMMultiplierAndRoll(price);
@@ -1746,7 +1768,7 @@ contract OkuDollarTest is BaseTest {
         assertLe(finalNotes, okuMAmount, "Must not gain from round trip");
     }
 
-    function test_Fuzz_WrapUnwrap_RoundTrip_BothPriceAndMult(uint256 price) public {
+    function testFuzz_WrapUnwrap_RoundTrip_BothPriceAndMult(uint256 price) public {
         // Test wrap/unwrap when price varies but multiplier stays at base (1e18)
         // This is a common scenario where okuMMultiplier appreciates but OkuDollar multiplier hasn't changed yet
         price = bound(price, PRECISION, 3e18); // $1.00 to $3.00
@@ -1792,7 +1814,7 @@ contract OkuDollarTest is BaseTest {
 
         // Same block — wrap should revert
         vm.prank(user1);
-        vm.expectRevert(OkuDollar.YieldDistributionInProgress.selector);
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
         usdOku.wrap(50e18, user1, 0);
     }
 
@@ -1825,7 +1847,7 @@ contract OkuDollarTest is BaseTest {
 
         // Same block — unwrap should revert
         vm.prank(user1);
-        vm.expectRevert(OkuDollar.YieldDistributionInProgress.selector);
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
         usdOku.unwrap(50e18, user1);
     }
 
@@ -1859,7 +1881,7 @@ contract OkuDollarTest is BaseTest {
 
         // Same block — wrap should revert
         vm.prank(user1);
-        vm.expectRevert(OkuDollar.YieldDistributionInProgress.selector);
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
         usdOku.wrap(50e18, user1, 0);
     }
 

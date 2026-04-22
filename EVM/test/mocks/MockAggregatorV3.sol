@@ -24,10 +24,6 @@ contract MockAggregatorV3 {
         _answeredInRound = _roundId; // complete round
     }
 
-    function setAnswerWithoutTimestamp(int256 answer) external {
-        _answer = answer;
-    }
-
     function setTimestamp(uint256 timestamp) external {
         _timestamp = timestamp;
     }

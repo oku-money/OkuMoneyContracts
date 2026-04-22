@@ -2,12 +2,14 @@
 pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
+import {TestKeys} from "./Keys.sol";
 
 /**
  * @title Actors
  * @notice Named test actors with deterministic addresses
  * @dev Use this contract as a base to get consistent actor addresses across all tests.
  *      Each actor has a descriptive name matching their role in the system.
+ *      Private keys are sourced from TestKeys to prevent collision.
  */
 abstract contract Actors is Test {
     // ============ Admin / Governance ============
@@ -72,12 +74,18 @@ abstract contract Actors is Test {
     address public feeRecipient = makeAddr("feeRecipient");
     address public treasury = makeAddr("treasury");
 
-    // ============ Orchestrator (for bridge signing) ============
+    // ============ Signing keys (for EIP-712 / EIP-2612 tests) ============
 
-    uint256 public orchestratorPk = 0xA11CE;
+    uint256 public constant orchestratorPk = TestKeys.ORCHESTRATOR_PK;
+    uint256 public constant user1Pk = TestKeys.USER1_PK;
+    uint256 public constant user2Pk = TestKeys.USER2_PK;
+    uint256 public constant wrongPk = TestKeys.WRONG_PK;
+
     address public orchestratorSigner;
 
-    /// @notice Initialize orchestrator signer from private key
+    /// @notice Initialize orchestrator signer address from its private key.
+    /// @dev Called from BridgeBaseTest.setUp(). Other tests that need signed payloads
+    ///      should call this themselves and reuse the existing key constants.
     function _initOrchestrator() internal {
         orchestratorSigner = vm.addr(orchestratorPk);
     }

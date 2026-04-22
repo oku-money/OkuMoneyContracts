@@ -9,10 +9,12 @@ import {TestConstants} from "../shared/Constants.sol";
 
 /**
  * @title OkuDollarHandler
- * @notice Handler contract for OkuDollar vault invariant testing
- * @dev Updated with realistic fuzz bounds:
- *      - Price increase capped at current * 2 (2x per step)
- *      - vm.roll(block.number + 1) after rebase to avoid yield distribution lock
+ * @notice Stateful handler for OkuDollar invariant testing — exercises wrap, unwrap,
+ *         transfer, rebase (OkuMoney multiplier), depositReserves, withdrawSurplus,
+ *         setUsdYieldRate, setNextUsdYieldRate, updateUsdMultiplier, setMinCollateralRatio.
+ *
+ *         The handler must be granted VAULT_REBASER, VAULT_RESERVE_MANAGER and
+ *         DEFAULT_ADMIN_ROLE on the OkuDollar instance — see VaultInvariants.setUp.
  */
 contract OkuDollarHandler is Test {
     OkuMoney public okuMoney;
@@ -26,23 +28,37 @@ contract OkuDollarHandler is Test {
     uint256 public constant MAX_SUPPLY = TestConstants.MAX_SUPPLY;
     uint256 public constant PRECISION = TestConstants.PRECISION;
     uint256 public constant MAX_FUZZ_PRICE = TestConstants.MAX_FUZZ_PRICE;
+    uint256 public constant MIN_COLLATERAL_RATIO_FLOOR = 9e17; // matches OkuDollar contract
 
     // Ghost variables
     uint256 public ghostTotalWrapped;
     uint256 public ghostTotalUnwrapped;
-    uint256 public ghostRebaseCount;
+    uint256 public ghostTotalDepositedReserves;
+    uint256 public ghostTotalWithdrawnSurplus;
 
-    // Ghost call/revert counters
-    uint256 public ghostMintOkuMCallCount;
-    uint256 public ghostMintOkuMRevertCount;
-    uint256 public ghostWrapCallCount;
-    uint256 public ghostWrapRevertCount;
-    uint256 public ghostUnwrapCallCount;
-    uint256 public ghostUnwrapRevertCount;
-    uint256 public ghostRebaseCallCount;
-    uint256 public ghostRebaseRevertCount;
-    uint256 public ghostTransferCallCount;
-    uint256 public ghostTransferRevertCount;
+    // Call/revert counters
+    uint256 public ghostMintOkuMCalls;
+    uint256 public ghostMintOkuMReverts;
+    uint256 public ghostWrapCalls;
+    uint256 public ghostWrapReverts;
+    uint256 public ghostUnwrapCalls;
+    uint256 public ghostUnwrapReverts;
+    uint256 public ghostRebaseCalls;
+    uint256 public ghostRebaseReverts;
+    uint256 public ghostTransferCalls;
+    uint256 public ghostTransferReverts;
+    uint256 public ghostDepositReservesCalls;
+    uint256 public ghostDepositReservesReverts;
+    uint256 public ghostWithdrawSurplusCalls;
+    uint256 public ghostWithdrawSurplusReverts;
+    uint256 public ghostSetYieldRateCalls;
+    uint256 public ghostSetYieldRateReverts;
+    uint256 public ghostSetNextYieldRateCalls;
+    uint256 public ghostSetNextYieldRateReverts;
+    uint256 public ghostUpdateMultiplierCalls;
+    uint256 public ghostUpdateMultiplierReverts;
+    uint256 public ghostSetMinCollatRatioCalls;
+    uint256 public ghostSetMinCollatRatioReverts;
 
     constructor(OkuMoney _okuMoney, OkuDollar _usdOku, address _minter, address _rebaser) {
         okuMoney = _okuMoney;
@@ -62,39 +78,34 @@ contract OkuDollarHandler is Test {
         }
     }
 
-    /// @notice Override bound() to suppress "Bound result" console logs
     function bound(uint256 x, uint256 min, uint256 max) internal pure override returns (uint256) {
         return _bound(x, min, max);
     }
 
-    // ============ Handler Functions ============
+    // ============ User Operations ============
 
-    /// @notice Mint OkuMoney to actors (so they have tokens to wrap)
     function mintOkuM(uint256 actorSeed, uint256 amount) external {
-        ghostMintOkuMCallCount++;
+        ghostMintOkuMCalls++;
         address actor = actors[actorSeed % actors.length];
         amount = bound(amount, 1e18, 1_000_000e18);
 
         uint256 allowance = okuMoney.minterAllowance(minter);
         uint256 remaining = okuMoney.maxSupply() - okuMoney.totalSupply();
         amount = bound(amount, 0, _min(allowance, remaining));
-
         if (amount == 0) return;
 
         vm.prank(minter);
         try okuMoney.mint(actor, amount) {}
         catch {
-            ghostMintOkuMRevertCount++;
+            ghostMintOkuMReverts++;
         }
     }
 
-    /// @notice Wrap OkuMoney into OkuDollar vault
     function wrap(uint256 actorSeed, uint256 amount) external {
-        ghostWrapCallCount++;
+        ghostWrapCalls++;
         address actor = actors[actorSeed % actors.length];
         uint256 balance = okuMoney.balanceOf(actor);
         amount = bound(amount, 0, balance);
-
         if (amount == 0) return;
 
         vm.startPrank(actor);
@@ -102,79 +113,149 @@ contract OkuDollarHandler is Test {
         try usdOku.wrap(amount, actor, 0) {
             ghostTotalWrapped += amount;
         } catch {
-            ghostWrapRevertCount++;
+            ghostWrapReverts++;
         }
         vm.stopPrank();
     }
 
-    /// @notice Unwrap OkuDollar to get OkuMoney back
     function unwrap(uint256 actorSeed, uint256 amount) external {
-        ghostUnwrapCallCount++;
+        ghostUnwrapCalls++;
         address actor = actors[actorSeed % actors.length];
         uint256 balance = usdOku.balanceOf(actor);
         amount = bound(amount, 0, balance);
-
         if (amount == 0) return;
 
         vm.prank(actor);
         try usdOku.unwrap(amount, actor) returns (uint256 okuMReturned) {
             ghostTotalUnwrapped += okuMReturned;
         } catch {
-            ghostUnwrapRevertCount++;
+            ghostUnwrapReverts++;
         }
     }
 
-    /// @notice Trigger OkuM price update (rebase)
-    /// @dev Tightened bounds: cap at 2% increase per step (was 10%).
-    ///      Always vm.roll after rebase to avoid yield distribution lock.
-    function rebase(uint256 priceIncrease) external {
-        ghostRebaseCallCount++;
-        uint256 currentPrice = okuMoney.okuMMultiplier();
-
-        // Cap at MAX_FUZZ_PRICE
-        if (currentPrice >= MAX_FUZZ_PRICE) {
-            return;
-        }
-
-        // Increase by 0.01% to 2% per rebase (was 0.01% to 10%)
-        uint256 minIncrease = currentPrice / 10_000; // 0.01%
-        uint256 maxIncrease = currentPrice / 50; // 2%
-        uint256 increase = bound(priceIncrease, minIncrease, maxIncrease);
-        uint256 newPrice = currentPrice + increase;
-
-        // Ensure we don't exceed the cap
-        if (newPrice > MAX_FUZZ_PRICE) {
-            newPrice = MAX_FUZZ_PRICE;
-        }
-
-        vm.prank(rebaser);
-        try okuMoney.setOkuMMultiplier(newPrice) {
-            ghostRebaseCount++;
-            // Roll to next block to avoid yield distribution lock
-            vm.roll(block.number + 1);
-        } catch {
-            ghostRebaseRevertCount++;
-        }
-    }
-
-    /// @notice Transfer OkuDollar between actors
     function transfer(uint256 fromSeed, uint256 toSeed, uint256 amount) external {
-        ghostTransferCallCount++;
+        ghostTransferCalls++;
         address from = actors[fromSeed % actors.length];
         address to = actors[toSeed % actors.length];
         uint256 balance = usdOku.balanceOf(from);
         amount = bound(amount, 0, balance);
-
         if (amount == 0 || from == to) return;
 
         vm.prank(from);
         try usdOku.transfer(to, amount) {}
         catch {
-            ghostTransferRevertCount++;
+            ghostTransferReverts++;
         }
     }
 
-    // ============ View Functions ============
+    /// @notice OkuMoney multiplier rebase. Per-call cap raised to 10% to stress
+    ///         truncation/dust branches at non-trivial multipliers.
+    function rebase(uint256 priceIncrease) external {
+        ghostRebaseCalls++;
+        uint256 currentPrice = okuMoney.okuMMultiplier();
+        if (currentPrice >= MAX_FUZZ_PRICE) return;
+
+        uint256 minIncrease = currentPrice / 10_000;
+        uint256 maxIncrease = currentPrice / 10; // 10% per call (raised from 2%)
+        uint256 increase = bound(priceIncrease, minIncrease, maxIncrease);
+        uint256 newPrice = currentPrice + increase;
+        if (newPrice > MAX_FUZZ_PRICE) newPrice = MAX_FUZZ_PRICE;
+
+        vm.prank(rebaser);
+        try okuMoney.setOkuMMultiplier(newPrice) {
+            vm.roll(block.number + 1);
+        } catch {
+            ghostRebaseReverts++;
+        }
+    }
+
+    // ============ Reserve Management ============
+
+    function depositReserves(uint256 amount) external {
+        ghostDepositReservesCalls++;
+        amount = bound(amount, 1e18, 1_000_000e18);
+
+        // Bail out cleanly if minting would exceed allowance/cap.
+        uint256 allowance = okuMoney.minterAllowance(minter);
+        uint256 remaining = okuMoney.maxSupply() - okuMoney.totalSupply();
+        if (amount > allowance || amount > remaining) return;
+
+        vm.prank(minter);
+        okuMoney.mint(address(this), amount);
+        IERC20(address(okuMoney)).approve(address(usdOku), amount);
+
+        try usdOku.depositReserves(amount) {
+            ghostTotalDepositedReserves += amount;
+        } catch {
+            ghostDepositReservesReverts++;
+        }
+    }
+
+    function withdrawSurplus(uint256 amount) external {
+        ghostWithdrawSurplusCalls++;
+        uint256 surplusVal = usdOku.surplus();
+        if (surplusVal == 0) return;
+        // Use a conservative cap that avoids the floor-rounding revert path.
+        uint256 cap = surplusVal > 1e6 ? surplusVal - 1e6 : surplusVal / 2;
+        if (cap == 0) return;
+        amount = bound(amount, 1, cap);
+
+        try usdOku.withdrawSurplus(amount) {
+            ghostTotalWithdrawnSurplus += amount;
+        } catch {
+            ghostWithdrawSurplusReverts++;
+        }
+    }
+
+    // ============ Yield-rate management ============
+
+    function setUsdYieldRate(uint256 rate, uint256 endOffset) external {
+        ghostSetYieldRateCalls++;
+        // Stay above PRECISION (no negative yield) and below MAX_RATE.
+        rate = bound(rate, PRECISION, usdOku.MAX_RATE());
+        endOffset = bound(endOffset, 1 hours, 365 days);
+
+        try usdOku.setUsdYieldRate(rate, block.timestamp + endOffset) {}
+        catch {
+            ghostSetYieldRateReverts++;
+        }
+    }
+
+    function setNextUsdYieldRate(uint256 rate) external {
+        ghostSetNextYieldRateCalls++;
+        rate = bound(rate, PRECISION, usdOku.MAX_RATE());
+
+        // Pre-check: contract requires usdRateEnd != 0 AND not yet expired.
+        uint256 endTs = usdOku.usdRateEnd();
+        if (endTs == 0 || block.timestamp >= endTs) return;
+
+        try usdOku.setNextUsdYieldRate(rate) {}
+        catch {
+            ghostSetNextYieldRateReverts++;
+        }
+    }
+
+    /// @notice Intentionally NOT exposed via this handler: `updateUsdMultiplier` is an
+    ///         admin emergency override that the contract permits to bump the multiplier
+    ///         arbitrarily far above the available reserve value. Including it here
+    ///         would make the "vault always backed" invariant unfalsifiable in
+    ///         meaningful ways. Direct unit tests cover the function instead.
+    function updateUsdMultiplier(uint256) external pure {
+        // no-op for invariant runs
+    }
+
+    function setMinCollateralRatio(uint256 newRatio) external {
+        ghostSetMinCollatRatioCalls++;
+        // Bound between the contract's hard floor and PRECISION.
+        newRatio = bound(newRatio, MIN_COLLATERAL_RATIO_FLOOR, PRECISION);
+
+        try usdOku.setMinCollateralRatio(newRatio) {}
+        catch {
+            ghostSetMinCollatRatioReverts++;
+        }
+    }
+
+    // ============ Aggregates ============
 
     function getActors() external view returns (address[] memory) {
         return actors;
@@ -185,18 +266,25 @@ contract OkuDollarHandler is Test {
     }
 
     function ghostTotalCalls() external view returns (uint256) {
-        return ghostMintOkuMCallCount + ghostWrapCallCount + ghostUnwrapCallCount
-            + ghostRebaseCallCount + ghostTransferCallCount;
+        return ghostMintOkuMCalls + ghostWrapCalls + ghostUnwrapCalls + ghostRebaseCalls
+            + ghostTransferCalls + ghostDepositReservesCalls + ghostWithdrawSurplusCalls
+            + ghostSetYieldRateCalls + ghostSetNextYieldRateCalls + ghostUpdateMultiplierCalls
+            + ghostSetMinCollatRatioCalls;
     }
 
     function ghostTotalReverts() external view returns (uint256) {
-        return ghostMintOkuMRevertCount + ghostWrapRevertCount + ghostUnwrapRevertCount
-            + ghostRebaseRevertCount + ghostTransferRevertCount;
+        return ghostMintOkuMReverts + ghostWrapReverts + ghostUnwrapReverts + ghostRebaseReverts
+            + ghostTransferReverts + ghostDepositReservesReverts + ghostWithdrawSurplusReverts
+            + ghostSetYieldRateReverts + ghostSetNextYieldRateReverts + ghostUpdateMultiplierReverts
+            + ghostSetMinCollatRatioReverts;
     }
-
-    // ============ Helper Functions ============
 
     function _min(uint256 a, uint256 b) internal pure returns (uint256) {
         return a < b ? a : b;
+    }
+
+    /// @notice Wrap-call counter retained for backward-compat with VaultInvariants.
+    function ghostWrapCallCount() external view returns (uint256) {
+        return ghostWrapCalls;
     }
 }

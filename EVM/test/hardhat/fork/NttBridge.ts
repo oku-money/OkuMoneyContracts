@@ -40,7 +40,7 @@ describe("NTT Bridge Scenarios", () => {
     let okuMoney: OkuMoney
     let okuUsd: OkuDollar
     let nttAdapter: NttAdapter
-    let mockNttManager: any  // MockNttManagerHH (dynamic import)
+    let mockNttManager: any  // MockNttManager (dynamic import)
 
     let usdc: ReturnType<typeof IERC20__factory.connect>
 
@@ -165,21 +165,19 @@ describe("NTT Bridge Scenarios", () => {
         ) as unknown as LitePSM
         await psm.waitForDeployment()
 
-        // Deploy MockNttManagerHH
-        const MockNttManagerHH = await ethers.getContractFactory("MockNttManagerHH", Frank)
-        mockNttManager = await MockNttManagerHH.deploy(
-            await okuMoney.getAddress(),
-            await okuMoney.getAddress()
-        )
+        // Deploy MockNttManager (single consolidated mock shared by both Foundry and Hardhat)
+        const MockNttManager = await ethers.getContractFactory("MockNttManager", Frank)
+        mockNttManager = await MockNttManager.deploy(await okuMoney.getAddress())
         await mockNttManager.waitForDeployment()
 
-        // Deploy NttAdapter (frankAddr is both ROUTER and owner for testing)
-        // In production, ROUTER would be the OkuBridgeRouter address
+        // Deploy NttAdapter (frankAddr is both ROUTER and admin for testing).
+        // In production, ROUTER would be the OkuBridgeRouter address. Admin holds
+        // DEFAULT_ADMIN_ROLE / NTT_CONFIGURATOR / NTT_RESCUER per the unified policy.
         nttAdapter = await new NttAdapter__factory(Frank).deploy(
             await mockNttManager.getAddress(),
             await okuMoney.getAddress(),
             frankAddr,  // ROUTER — only this address can call bridge()
-            frankAddr   // owner
+            frankAddr   // admin
         )
         await nttAdapter.waitForDeployment()
 
@@ -253,15 +251,17 @@ describe("NTT Bridge Scenarios", () => {
                 bobAddr
             )
 
-            // Get the last transfer
             const lastTransfer = await mockNttManager.getLastTransfer()
 
-            // Verify bytes32 conversion
-            const expectedBytes32 = await mockNttManager.addressToRecipient(bobAddr)
+            // Verify bytes32 conversion (left-padded 20-byte EVM address).
+            // The MockNttManager no longer ships its own helper — compute locally.
+            const expectedBytes32 = ethers.zeroPadValue(bobAddr, 32)
             expect(lastTransfer.recipient).to.equal(expectedBytes32)
 
-            // Verify round-trip conversion
-            const recoveredAddr = await mockNttManager.recipientToAddress(lastTransfer.recipient)
+            // Round-trip back to address (extract low 20 bytes).
+            const recoveredAddr = ethers.getAddress(
+                "0x" + lastTransfer.recipient.slice(26)
+            )
             expect(recoveredAddr.toLowerCase()).to.equal(bobAddr.toLowerCase())
         })
 
@@ -483,17 +483,17 @@ describe("NTT Bridge Scenarios", () => {
             expect(await okuMoney.balanceOf(await nttAdapter.getAddress())).to.be.lte(1)
         })
 
-        it("Non-owner cannot withdraw", async () => {
-            // Send ETH to adapter
+        it("Non-rescuer cannot withdraw", async () => {
+            // NttAdapter migrated from Ownable to AccessControl in Phase 4 — verify
+            // the access-control revert path uses the new role error.
             await Frank.sendTransaction({
                 to: await nttAdapter.getAddress(),
                 value: parseEther("0.1")
             })
 
-            // Alice tries to withdraw
             await expect(
                 nttAdapter.connect(Alice).withdrawEth(await Alice.getAddress())
-            ).to.be.revertedWithCustomError(nttAdapter, "OwnableUnauthorizedAccount")
+            ).to.be.revertedWithCustomError(nttAdapter, "AccessControlUnauthorizedAccount")
         })
     })
 })

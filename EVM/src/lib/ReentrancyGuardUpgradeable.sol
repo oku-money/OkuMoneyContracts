@@ -50,22 +50,10 @@ abstract contract ReentrancyGuardUpgradeable is Initializable {
         _nonReentrantAfter();
     }
 
-    /**
-     * @dev A `view` only version of {nonReentrant}.
-     */
-    modifier nonReentrantView() {
-        _nonReentrantBeforeView();
-        _;
-    }
-
-    function _nonReentrantBeforeView() private view {
+    function _nonReentrantBefore() private {
         if (_reentrancyGuardEntered()) {
             revert ReentrancyGuardReentrantCall();
         }
-    }
-
-    function _nonReentrantBefore() private {
-        _nonReentrantBeforeView();
         _reentrancyGuardStorageSlot().getUint256Slot().value = ENTERED;
     }
 

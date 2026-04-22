@@ -2,217 +2,110 @@
 pragma solidity ^0.8.28;
 
 import {BridgeBaseTest} from "../BridgeBase.t.sol";
-import {OkuBridge} from "../../src/bridge/OkuBridge.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import {Vm} from "forge-std/Vm.sol";
+import {OkuBridgeHandler} from "../handlers/OkuBridgeHandler.sol";
+import {IOkuMoney} from "../../src/interfaces/IOkuMoney.sol";
 
 /**
  * @title BridgeInvariantsTest
- * @notice Stateless invariant tests for OkuBridge integrity
- * @dev Tests core bridge invariants without a full handler (signatures are complex).
- *      Uses targeted fuzzing to verify:
- *      1. Nonces are strictly increasing
- *      2. Fee calculation is always correct
- *      3. Processed requests are immutable
- *      4. Refunded requests prevent double-mint
+ * @notice Stateful invariant tests for OkuBridge driven by OkuBridgeHandler.
+ * @dev Models a single chain that simultaneously acts as source (via bridgeBurn to
+ *      OPTIMISM_CHAIN_ID) and destination (via bridgeMint with sourceChainId =
+ *      OPTIMISM_CHAIN_ID). The handler tracks ghost variables sufficient to verify:
+ *
+ *      1. Bridge contract never holds OkuMoney (burn is atomic).
+ *      2. Outbound nonce equals the number of successful bridgeBurn calls.
+ *      3. processed and refunded request sets are disjoint (no double-finalisation).
+ *      4. Sum of fees collected matches per-burn arithmetic.
+ *      5. Net minted ≤ net burned + net refunded (no value creation).
  */
 contract BridgeInvariantsTest is BridgeBaseTest {
-    // ============ State for invariant tracking ============
-
-    uint256 public DEST_CHAIN; // Set to ARBITRUM_CHAIN_ID in setUp
-    uint256 public bridgeOperationCount;
-    bytes32[] public allRequestIds;
-    uint256 public lastNonce;
+    OkuBridgeHandler public handler;
 
     function setUp() public override {
         super.setUp();
 
-        DEST_CHAIN = ARBITRUM_CHAIN_ID;
+        handler = new OkuBridgeHandler(
+            okuBridge,
+            IOkuMoney(address(okuMoney)),
+            feeRecipient,
+            refundInitiator,
+            refundConfirmer,
+            admin,
+            OPTIMISM_CHAIN_ID
+        );
 
-        // Seed user with OkuMoney for bridging
-        _mintOkuMoney(user1, 100_000_000e18);
-        vm.prank(user1);
-        okuMoney.approve(address(okuBridge), type(uint256).max);
+        targetContract(address(handler));
 
-        lastNonce = okuBridge.outboundNonce(DEST_CHAIN);
+        excludeContract(address(okuMoney));
+        excludeContract(address(usdOku));
+        excludeContract(address(litePsm));
+        excludeContract(address(redemptionQueue));
+        excludeContract(address(usdc));
+        excludeContract(address(oracle));
+        excludeContract(address(okuBridge));
+        excludeContract(address(bridgeRouter));
+        excludeContract(address(mockAdapter));
+        excludeContract(address(mockNttManager));
     }
 
-    // ============ Fuzz Tests as Invariant Checks ============
-
-    /**
-     * @notice Bridge fee is always calculated correctly
-     * @dev Fee should be exactly (amount * bridgeFee) / BASIS_POINTS
-     */
-    function testFuzz_FeeCalculationCorrect(uint256 amount) public {
-        // Bound to valid bridge amounts
-        uint128 minAmount = okuBridge.minBridgeAmount();
-        uint128 maxAmount = okuBridge.maxBridgeAmount();
-        amount = bound(amount, minAmount, maxAmount);
-
-        uint256 balanceBefore = okuMoney.balanceOf(address(feeRecipient));
-
-        vm.prank(user1);
-        okuBridge.bridgeBurn(DEST_CHAIN, bytes32(uint256(uint160(user2))), amount);
-
-        uint256 balanceAfter = okuMoney.balanceOf(address(feeRecipient));
-        uint256 actualFee = balanceAfter - balanceBefore;
-
-        uint256 expectedFee = (amount * okuBridge.bridgeFee()) / okuBridge.BASIS_POINTS();
-
-        assertEq(actualFee, expectedFee, "Fee calculation incorrect");
-    }
-
-    /**
-     * @notice Nonce increments exactly once per bridge operation
-     */
-    function testFuzz_NonceIncrementsOnce(uint256 amount) public {
-        uint128 minAmount = okuBridge.minBridgeAmount();
-        uint128 maxAmount = okuBridge.maxBridgeAmount();
-        amount = bound(amount, minAmount, maxAmount);
-
-        uint256 nonceBefore = okuBridge.outboundNonce(DEST_CHAIN);
-
-        vm.prank(user1);
-        okuBridge.bridgeBurn(DEST_CHAIN, bytes32(uint256(uint160(user2))), amount);
-
-        uint256 nonceAfter = okuBridge.outboundNonce(DEST_CHAIN);
-
-        assertEq(nonceAfter, nonceBefore + 1, "Nonce should increment by exactly 1");
-    }
-
-    /**
-     * @notice Bridge correctly burns tokens (total supply decreases)
-     */
-    function testFuzz_BridgeBurnsTokens(uint256 amount) public {
-        uint128 minAmount = okuBridge.minBridgeAmount();
-        uint128 maxAmount = okuBridge.maxBridgeAmount();
-        amount = bound(amount, minAmount, maxAmount);
-
-        uint256 supplyBefore = okuMoney.totalSupply();
-
-        vm.prank(user1);
-        okuBridge.bridgeBurn(DEST_CHAIN, bytes32(uint256(uint160(user2))), amount);
-
-        uint256 supplyAfter = okuMoney.totalSupply();
-
-        // Supply should decrease by (amount - fee) because fee is re-minted
-        uint256 fee = (amount * okuBridge.bridgeFee()) / okuBridge.BASIS_POINTS();
-        uint256 expectedDecrease = amount - fee;
-
+    /// @notice The bridge contract never holds OkuMoney — every bridgeBurn is atomic
+    ///         (transferFrom + self-burn) and every fee is minted directly to feeRecipient.
+    function invariant_BridgeHoldsNoOkuMoney() public view {
         assertEq(
-            supplyBefore - supplyAfter, expectedDecrease, "Supply should decrease by net amount"
+            okuMoney.balanceOf(address(okuBridge)),
+            0,
+            "OkuBridge must never hold OkuMoney across calls"
         );
     }
 
-    /**
-     * @notice Multiple sequential bridges maintain nonce ordering
-     */
-    function testFuzz_SequentialBridgesNoncesOrdered(uint8 count) public {
-        count = uint8(bound(count, 1, 10));
-
-        uint256 startNonce = okuBridge.outboundNonce(DEST_CHAIN);
-        uint256 amountPerBridge = okuBridge.minBridgeAmount();
-
-        for (uint8 i = 0; i < count; i++) {
-            vm.prank(user1);
-            okuBridge.bridgeBurn(DEST_CHAIN, bytes32(uint256(uint160(user2))), amountPerBridge);
-        }
-
-        uint256 endNonce = okuBridge.outboundNonce(DEST_CHAIN);
-
-        assertEq(endNonce, startNonce + count, "Nonces should increment sequentially");
+    /// @notice The bridge's outbound nonce equals the number of successful bridgeBurn calls.
+    function invariant_OutboundNonceEqualsBurnCount() public view {
+        assertEq(
+            okuBridge.outboundNonce(handler.remoteChain()),
+            handler.ghostBurnCount(),
+            "outboundNonce[remote] must equal ghostBurnCount"
+        );
     }
 
-    /**
-     * @notice Request IDs are unique (no collisions)
-     * @dev Request ID is keccak256 of the full request struct, which includes nonce
-     */
-    function test_RequestIdsUniqueViaReturnValue() public {
-        uint256 amountPerBridge = okuBridge.minBridgeAmount();
-        bytes32 recipient = bytes32(uint256(uint160(user2)));
-
-        // Store request IDs from return values
-        vm.prank(user1);
-        bytes32 requestId1 = okuBridge.bridgeBurn(DEST_CHAIN, recipient, amountPerBridge);
-
-        vm.prank(user1);
-        bytes32 requestId2 = okuBridge.bridgeBurn(DEST_CHAIN, recipient, amountPerBridge);
-
-        vm.prank(user1);
-        bytes32 requestId3 = okuBridge.bridgeBurn(DEST_CHAIN, recipient, amountPerBridge);
-
-        // Verify all request IDs are different (due to different nonces)
-        assertTrue(requestId1 != requestId2, "Request IDs 1 and 2 should differ");
-        assertTrue(requestId2 != requestId3, "Request IDs 2 and 3 should differ");
-        assertTrue(requestId1 != requestId3, "Request IDs 1 and 3 should differ");
-    }
-
-    /**
-     * @notice Bridge does not hold OkuMoney (burns everything, mints fee separately)
-     */
-    function testFuzz_BridgeDoesNotHoldTokens(uint256 amount) public {
-        uint128 minAmount = okuBridge.minBridgeAmount();
-        uint128 maxAmount = okuBridge.maxBridgeAmount();
-        amount = bound(amount, minAmount, maxAmount);
-
-        vm.prank(user1);
-        okuBridge.bridgeBurn(DEST_CHAIN, bytes32(uint256(uint160(user2))), amount);
-
-        uint256 bridgeBalance = okuMoney.balanceOf(address(okuBridge));
-        assertEq(bridgeBalance, 0, "Bridge should not hold any tokens after burn");
-    }
-
-    /**
-     * @notice Limits are enforced correctly
-     */
-    function testFuzz_LimitsEnforced(uint256 amount) public {
-        uint128 minAmount = okuBridge.minBridgeAmount();
-        uint128 maxAmount = okuBridge.maxBridgeAmount();
-
-        // Try below minimum
-        if (amount < minAmount && amount > 0) {
-            vm.prank(user1);
-            vm.expectRevert(
-                abi.encodeWithSelector(OkuBridge.AmountBelowMinimum.selector, amount, minAmount)
-            );
-            okuBridge.bridgeBurn(DEST_CHAIN, bytes32(uint256(uint160(user2))), amount);
-        }
-
-        // Try above maximum
-        if (amount > maxAmount) {
-            vm.prank(user1);
-            vm.expectRevert(
-                abi.encodeWithSelector(OkuBridge.AmountAboveMaximum.selector, amount, maxAmount)
-            );
-            okuBridge.bridgeBurn(DEST_CHAIN, bytes32(uint256(uint160(user2))), amount);
+    /// @notice processed and refunded request sets are disjoint — every requestId we
+    ///         see was either minted on the destination OR refunded on the source,
+    ///         never both. We sample by scanning every requestId the handler ever burned.
+    function invariant_NoProcessedAndRefunded() public view {
+        uint256 n = handler.ghostBurnRequestCount();
+        for (uint256 i = 0; i < n; i++) {
+            bytes32 srcRequestId = handler.allBurnRequestIds(i);
+            // For mint-on-destination the requestId hashes the (remote→local) request,
+            // not the source-chain (local→remote) request. We can still check that the
+            // *source-chain* requestId is never both refunded (on source) and "minted"
+            // (per the handler's own bookkeeping for the mirrored request).
+            bool refunded = okuBridge.refundedRequests(srcRequestId);
+            bool minted = handler.ghostMintedLocally(srcRequestId);
+            assertFalse(refunded && minted, "request was both refunded and minted");
         }
     }
 
-    /**
-     * @notice Cannot bridge to unsupported chain
-     */
-    function testFuzz_UnsupportedChainReverts(uint256 chainId) public {
-        // Exclude supported chains and self-chain
-        vm.assume(chainId != DEST_CHAIN);
-        vm.assume(chainId != block.chainid);
-        vm.assume(!okuBridge.supportedChains(chainId));
-
-        uint256 amount = okuBridge.minBridgeAmount();
-
-        vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(OkuBridge.UnsupportedChain.selector, chainId));
-        okuBridge.bridgeBurn(chainId, bytes32(uint256(uint160(user2))), amount);
+    /// @notice The fee accounting equation: feeRecipient holds exactly the cumulative
+    ///         fee minted by every successful bridgeBurn.
+    /// @dev `okuMoney.balanceOf(feeRecipient)` may have started non-zero only if other
+    ///      tests seeded it; this test deploys feeRecipient fresh so the equality is exact.
+    function invariant_FeeRecipientReceivesExactFees() public view {
+        assertEq(
+            okuMoney.balanceOf(feeRecipient),
+            handler.ghostFeesCollected(),
+            "feeRecipient balance must equal ghostFeesCollected"
+        );
     }
 
-    /**
-     * @notice Cannot bridge to self (same chain)
-     */
-    function test_CannotBridgeToSelf() public {
-        uint256 amount = okuBridge.minBridgeAmount();
-
-        vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(OkuBridge.UnsupportedChain.selector, block.chainid));
-        okuBridge.bridgeBurn(block.chainid, bytes32(uint256(uint160(user2))), amount);
+    /// @notice Net minted on this chain via bridgeMint cannot exceed net burned + net refunded.
+    /// @dev On a real two-chain system mints would be on chain B and burns on chain A;
+    ///      this is the value-conservation invariant. In our single-chain model the
+    ///      inequality is the strongest correct statement.
+    function invariant_MintedAtMostBurnedPlusRefunded() public view {
+        uint256 minted = handler.ghostNetMinted();
+        uint256 burned = handler.ghostNetBurned();
+        uint256 refunded = handler.ghostNetRefunded();
+        assertLe(
+            minted, burned + refunded, "minted on dest cannot exceed burned + refunded on source"
+        );
     }
 }

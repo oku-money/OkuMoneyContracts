@@ -8,6 +8,7 @@ import {
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
 
 /**
@@ -18,7 +19,7 @@ contract OkuMoneyTest is BaseTest {
     // ============ Events ============
 
     event Transfer(address indexed from, address indexed to, uint256 value);
-    event OkuMMultiplierUpdated(uint256 oldPrice, uint256 newPrice, uint256 totalSupply);
+    event OkuMMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply);
     event YieldDistributed(
         uint256 yieldAmount, uint256 oldPrice, uint256 newPrice, uint256 totalSupply
     );
@@ -57,7 +58,7 @@ contract OkuMoneyTest is BaseTest {
 
     function test_Initialize_CannotReinitialize() public {
         vm.expectRevert(Initializable.InvalidInitialization.selector);
-        okuMoney.initialize("OkuMoney2", "OKUNOTE2", admin, MAX_SUPPLY);
+        okuMoney.initialize("OkuMoney2", "OkuM2", admin, MAX_SUPPLY);
     }
 
     // ============ Minting Tests ============
@@ -414,7 +415,7 @@ contract OkuMoneyTest is BaseTest {
 
     // ============ setOkuMMultiplier Tests ============
 
-    function test_SetOkuMPrice_OnlyRebaser() public {
+    function test_SetOkuMMultiplier_OnlyRebaser() public {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -424,13 +425,13 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.setOkuMMultiplier(PRECISION * 2);
     }
 
-    function test_SetOkuMPrice_CannotDecrease() public {
+    function test_SetOkuMMultiplier_CannotDecrease() public {
         vm.prank(rebaser);
         vm.expectRevert(OkuMoney.MultiplierCannotDecrease.selector);
         okuMoney.setOkuMMultiplier(PRECISION - 1);
     }
 
-    function test_SetOkuMPrice_DoesNotAffectBalances() public {
+    function test_SetOkuMMultiplier_DoesNotAffectBalances() public {
         _mintOkuMoney(user1, 100e18);
         uint256 balanceBefore = okuMoney.balanceOf(user1);
 
@@ -443,7 +444,7 @@ contract OkuMoneyTest is BaseTest {
         assertEq(balanceAfter, balanceBefore);
     }
 
-    function test_SetOkuMPrice_DoesNotAffectTotalSupply() public {
+    function test_SetOkuMMultiplier_DoesNotAffectTotalSupply() public {
         _mintOkuMoney(user1, 100e18);
         uint256 supplyBefore = okuMoney.totalSupply();
 
@@ -454,14 +455,14 @@ contract OkuMoneyTest is BaseTest {
         assertEq(okuMoney.totalSupply(), supplyBefore);
     }
 
-    function test_SetOkuMPrice_UpdatesPrice() public {
+    function test_SetOkuMMultiplier_UpdatesPrice() public {
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
 
         assertEq(okuMoney.okuMMultiplier(), PRECISION * 2);
     }
 
-    function test_SetOkuMPrice_EmitsEvent() public {
+    function test_SetOkuMMultiplier_EmitsEvent() public {
         vm.expectEmit(false, false, false, true);
         emit OkuMMultiplierUpdated(PRECISION, PRECISION * 2, okuMoney.totalSupply());
 
@@ -469,13 +470,20 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.setOkuMMultiplier(PRECISION * 2);
     }
 
-    function test_SetOkuMPrice_SamePrice() public {
+    function test_SetOkuMMultiplier_SameValueStillEmitsEvent() public {
+        // Setting the multiplier to its current value is a no-op for the multiplier
+        // but should still emit OkuMMultiplierUpdated so off-chain observers see the
+        // operator action (and lastYieldDistributionBlock advances).
         uint256 currentPrice = okuMoney.okuMMultiplier();
+
+        vm.expectEmit(false, false, false, true, address(okuMoney));
+        emit OkuMMultiplierUpdated(currentPrice, currentPrice, okuMoney.totalSupply());
 
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(currentPrice);
 
         assertEq(okuMoney.okuMMultiplier(), currentPrice);
+        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
     }
 
     // ============ distributeYield Tests ============
@@ -570,7 +578,7 @@ contract OkuMoneyTest is BaseTest {
         assertEq(okuMoney.okuMMultiplier(), PRECISION * 3);
     }
 
-    function test_PriceConstantBetweenUpdates() public {
+    function test_OkuMMultiplierConstantBetweenUpdates() public {
         // Price does not change without an explicit call
         uint256 price0 = okuMoney.okuMMultiplier();
 
@@ -602,7 +610,7 @@ contract OkuMoneyTest is BaseTest {
         assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
     }
 
-    function test_SetOkuMPrice_SetsLastYieldDistributionBlock() public {
+    function test_SetOkuMMultiplier_SetsLastYieldDistributionBlock() public {
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
 
@@ -622,7 +630,7 @@ contract OkuMoneyTest is BaseTest {
         assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
     }
 
-    function test_SetOkuMPrice_UpdatesLastYieldDistributionBlock() public {
+    function test_SetOkuMMultiplier_UpdatesLastYieldDistributionBlock() public {
         uint256 blockBefore = okuMoney.lastYieldDistributionBlock();
         assertEq(blockBefore, 0);
 
@@ -915,12 +923,12 @@ contract OkuMoneyTest is BaseTest {
 
     // ============ okuMMultiplier Computation Tests ============
 
-    function test_NotePrice_AtInitialPrice() public view {
+    function test_OkuMMultiplier_AtInitialPrice() public view {
         uint256 price = okuMoney.okuMMultiplier();
         assertEq(price, PRECISION); // Starts at 1e18 ($1.00)
     }
 
-    function test_NotePrice_AfterUpdate() public {
+    function test_OkuMMultiplier_AfterUpdate() public {
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
 
@@ -930,11 +938,19 @@ contract OkuMoneyTest is BaseTest {
     // ============ Edge Case Tests ============
 
     function test_Mint_ZeroAmount_Succeeds() public {
-        // L-5: amount > 0 check removed - let users waste gas if they want
+        // The amount > 0 guard was intentionally removed — callers may waste gas if
+        // they want. Validate the *observable* behaviour: a Transfer(0, user, 0) event
+        // is emitted and minter allowance is not decremented.
         uint256 balanceBefore = okuMoney.balanceOf(user1);
+        uint256 allowanceBefore = okuMoney.minterAllowance(minter);
+
+        vm.expectEmit(true, true, false, true, address(okuMoney));
+        emit IERC20.Transfer(address(0), user1, 0);
         vm.prank(minter);
         okuMoney.mint(user1, 0);
+
         assertEq(okuMoney.balanceOf(user1), balanceBefore);
+        assertEq(okuMoney.minterAllowance(minter), allowanceBefore);
     }
 
     function test_Transfer_ZeroAmount() public {
@@ -953,7 +969,7 @@ contract OkuMoneyTest is BaseTest {
         assertEq(okuMoney.totalSupply(), MAX_SUPPLY);
     }
 
-    function test_MultipleNotePriceUpdates_SameBlock() public {
+    function test_MultipleOkuMMultiplierUpdates_SameBlock() public {
         _mintOkuMoney(user1, 100e18);
 
         vm.startPrank(rebaser);
@@ -970,7 +986,7 @@ contract OkuMoneyTest is BaseTest {
     // ============ EIP-2612 Permit Tests ============
 
     function test_Permit_SetsAllowance() public {
-        uint256 userPk = 0xBEEF;
+        uint256 userPk = user2Pk; // inherited from Actors / TestKeys
         address user = vm.addr(userPk);
 
         uint256 amount = 100e18;
@@ -1000,7 +1016,7 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_Permit_RevertsExpired() public {
-        uint256 userPk = 0xBEEF;
+        uint256 userPk = user2Pk; // inherited from Actors / TestKeys
         address user = vm.addr(userPk);
 
         uint256 amount = 100e18;
@@ -1027,7 +1043,7 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_Permit_RevertsInvalidSignature() public {
-        uint256 userPk = 0xBEEF;
+        uint256 userPk = user2Pk; // inherited from Actors / TestKeys
         address user = vm.addr(userPk);
         uint256 wrongPk = 0xDEAD;
 
@@ -1055,7 +1071,7 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_Permit_NonceIncrementsOnSecondUse() public {
-        uint256 userPk = 0xBEEF;
+        uint256 userPk = user2Pk; // inherited from Actors / TestKeys
         address user = vm.addr(userPk);
 
         // First permit
@@ -1069,7 +1085,7 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_Permit_ReplayReverts() public {
-        uint256 userPk = 0xBEEF;
+        uint256 userPk = user2Pk; // inherited from Actors / TestKeys
         address user = vm.addr(userPk);
 
         uint256 amount = 100e18;
@@ -1101,7 +1117,7 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_Permit_AllowsTransferFrom() public {
-        uint256 userPk = 0xBEEF;
+        uint256 userPk = user2Pk; // inherited from Actors / TestKeys
         address user = vm.addr(userPk);
 
         uint256 amount = 100e18;

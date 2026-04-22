@@ -17,6 +17,7 @@ import {
 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
+import {MathLib} from "../lib/MathLib.sol";
 
 /**
  * @title OkuMoney
@@ -58,7 +59,7 @@ contract OkuMoney is
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuMoney")) - 1)) & ~bytes32(uint256(0xff))
     bytes32 private constant OKUMONEY_STORAGE_LOCATION =
-        0x7b4f5e3a1c8d9f0a2b3e4c5d6a7f8e9d0c1b2a3e4f5d6c7b8a9e0f1d2c3b4a00;
+        0xa46c29efb747c5ba816fcb25c64c7053e640ad72653ff106cdc2a03e8238d100;
 
     function _getOkuMoneyStorage() private pure returns (OkuMoneyStorage storage $) {
         assembly {
@@ -148,9 +149,20 @@ contract OkuMoney is
         $.okuMMultiplier = PRECISION;
         $.maxSupply = initialMaxSupply;
 
+        // Grant the full role set to admin at deployment. Admin is expected to
+        // redistribute operational roles to other parties (multisigs, hot wallets,
+        // bridge contracts) post-deploy. Doing so consistently across every contract
+        // means deployment scripts never need contract-specific role plumbing.
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(OKUM_UPGRADER, admin);
         _grantRole(OKUM_PAUSER, admin);
+        _grantRole(OKUM_UNPAUSER, admin);
+        _grantRole(OKUM_MINTER, admin);
+        _grantRole(OKUM_REBASER, admin);
+        _grantRole(OKUM_BLACKLISTER, admin);
+        _grantRole(OKUM_UNBLACKLISTER, admin);
+        _grantRole(OKUM_CAP_MANAGER, admin);
+        _grantRole(OKUM_ALLOWANCE_MANAGER, admin);
     }
 
     // ============ Storage Accessor Views ============
@@ -276,7 +288,7 @@ contract OkuMoney is
 
         super._update(from, to, amount);
 
-        uint256 dollarValue = (amount * $.okuMMultiplier) / PRECISION;
+        uint256 dollarValue = MathLib.okuMToDollars(amount, $.okuMMultiplier);
         emit TransferValue(from, to, amount, dollarValue);
     }
 

@@ -80,7 +80,7 @@ contract OkuBridge is
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuBridge")) - 1)) & ~bytes32(uint256(0xff))
     bytes32 private constant OKUBRIDGE_STORAGE_LOCATION =
-        0x5f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f00;
+        0x16d568c6a143129546d6ac053036120b950e13328eeec5c3350b809aaf072c00;
 
     function _getOkuBridgeStorage() private pure returns (OkuBridgeStorage storage $) {
         assembly {
@@ -215,6 +215,8 @@ contract OkuBridge is
     error WrongSourceChain(uint256 expected, uint256 actual);
     error AlreadyProcessed(bytes32 requestId);
     error ZeroAddress();
+    error ZeroAmount();
+    error InvalidRecipient();
     error InvalidFee(uint256 fee);
     error InvalidLimits(uint128 min, uint128 max);
     error AlreadyRefunded(bytes32 requestId);
@@ -372,7 +374,7 @@ contract OkuBridge is
         if (recipient == bytes32(0)) revert ZeroAddress();
 
         // Prevent bridging to the same chain (belt-and-suspenders with addSupportedChain guard)
-        if (destChainId == block.chainid) revert UnsupportedChain(destChainId);
+        if (destChainId == block.chainid) revert CannotBridgeToSelf();
 
         OkuBridgeStorage storage $ = _getOkuBridgeStorage();
 
@@ -460,6 +462,15 @@ contract OkuBridge is
             revert CannotBridgeToSelf();
         }
 
+        // A signed zero-amount mint is a no-op that still permanently marks the
+        // requestId as processed — refuse to record it.
+        if (request.amount == 0) revert ZeroAmount();
+
+        // For EVM destinations the recipient must fit in 20 bytes — reject any
+        // bytes32 that has non-zero high bytes to avoid silent address truncation
+        // from an orchestrator bug.
+        if (uint256(request.recipient) >> 160 != 0) revert InvalidRecipient();
+
         OkuBridgeStorage storage $ = _getOkuBridgeStorage();
 
         // Validate that the source chain is a known supported chain
@@ -524,6 +535,7 @@ contract OkuBridge is
      */
     function initiateRefund(BridgeRequest calldata request)
         external
+        whenNotPaused
         onlyRole(BRIDGE_REFUND_INITIATOR)
     {
         // Refund must be initiated on the source chain (where tokens were burned)
@@ -564,6 +576,8 @@ contract OkuBridge is
      */
     function confirmRefund(BridgeRequest calldata request)
         external
+        whenNotPaused
+        nonReentrant
         onlyRole(BRIDGE_REFUND_CONFIRMER)
     {
         // Refund must be confirmed on the source chain (where tokens were burned)
@@ -610,7 +624,7 @@ contract OkuBridge is
      *      Only pending proposals can be cancelled; already-confirmed refunds are immutable.
      * @param request Original bridge request whose pending proposal should be cancelled
      */
-    function cancelRefund(BridgeRequest calldata request) external {
+    function cancelRefund(BridgeRequest calldata request) external whenNotPaused {
         bytes32 requestId = keccak256(abi.encode(request));
 
         OkuBridgeStorage storage $ = _getOkuBridgeStorage();
@@ -685,7 +699,7 @@ contract OkuBridge is
      */
     function addSupportedChain(uint256 chainId) external onlyRole(BRIDGE_CHAIN_MANAGER) {
         // Prevent adding the current chain as a destination (no same-chain bridges)
-        if (chainId == block.chainid) revert UnsupportedChain(chainId);
+        if (chainId == block.chainid) revert CannotBridgeToSelf();
         OkuBridgeStorage storage $ = _getOkuBridgeStorage();
         // Only emit if chain wasn't already supported
         if ($.supportedChains[chainId]) revert ChainAlreadySupported();

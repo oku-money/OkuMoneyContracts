@@ -8,7 +8,7 @@ import {OkuMoney} from "../src/token/OkuMoney.sol";
 import {OkuDollar} from "../src/token/OkuDollar.sol";
 import {LitePSM} from "../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../src/psm/RedemptionQueue.sol";
-import {MockUSDC} from "./mocks/MockUSDC.sol";
+import {MockUSDC} from "../src/mocks/MockUSDC.sol";
 import {MockAggregatorV3} from "./mocks/MockAggregatorV3.sol";
 
 import {TestConstants} from "./shared/Constants.sol";

@@ -7,6 +7,7 @@ import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
+import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
 
 /**
  * @title LitePSMTest
@@ -24,10 +25,12 @@ contract LitePSMTest is BaseTest {
     // Note: DECIMAL_MULTIPLIER is inherited from BaseTest
     // ============ Events ============
 
-    event MintNote(
+    event OkuMMinted(
         address indexed user, uint256 usdcAmount, uint256 okuMAmount, uint256 okuMMultiplier
     );
-    event RedeemNote(address indexed user, uint256 noteIn, uint256 usdcOut, uint256 okuMMultiplier);
+    event OkuMRedeemed(
+        address indexed user, uint256 noteIn, uint256 usdcOut, uint256 okuMMultiplier
+    );
     event OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled);
     event BufferRefilled(uint256 newBufferBalance, uint256 processedStart, uint256 processedEnd);
     event BufferDeposited(address indexed depositor, uint256 amount, uint256 newBufferBalance);
@@ -58,12 +61,10 @@ contract LitePSMTest is BaseTest {
         return dollarValue18 / DECIMAL_MULTIPLIER;
     }
 
-    /// @notice Raise okuMMultiplier to a specific value using updateNotePrice
-    /// @dev Rolls to next block after setting price to avoid yield distribution lock
+    // _setOkuMMultiplierAndRoll is inherited from BaseTest. The local _setNotePrice
+    // helper that previously lived here was removed — use the shared helper instead.
     function _setNotePrice(uint256 newPrice) internal {
-        vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(newPrice);
-        vm.roll(block.number + 1); // Avoid yield distribution lock
+        _setOkuMMultiplierAndRoll(newPrice);
     }
 
     // ============ Mint Tests ============
@@ -134,7 +135,7 @@ contract LitePSMTest is BaseTest {
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
         vm.expectEmit(true, false, false, true);
-        emit MintNote(user1, usdcAmount, okuMAmount, okuMMult);
+        emit OkuMMinted(user1, usdcAmount, okuMAmount, okuMMult);
 
         vm.prank(user1);
         litePsm.mintOkuM(usdcAmount);
@@ -211,7 +212,6 @@ contract LitePSMTest is BaseTest {
         uint256 usdcAmount = 100e6;
 
         for (uint256 i = 0; i < prices.length; i++) {
-            // Reset user balance
             deal(address(okuMoney), user1, 0);
 
             _setNotePrice(prices[i]);
@@ -221,7 +221,10 @@ contract LitePSMTest is BaseTest {
             litePsm.mintOkuM(usdcAmount);
 
             uint256 balance = okuMoney.balanceOf(user1);
-            assertGt(balance, 0, "Should mint at any valid price");
+            // Verify the exact multiplier-aware amount, not just "non-zero".
+            // expected = usdcValue18 × PRECISION / okuMMultiplier
+            uint256 expected = (usdcAmount * DECIMAL_MULTIPLIER * PRECISION) / prices[i];
+            assertEq(balance, expected, "minted OkuM must match the multiplier formula");
         }
     }
 
@@ -236,7 +239,7 @@ contract LitePSMTest is BaseTest {
         _approveUsdc(user1, address(litePsm), usdcAmount);
 
         vm.expectEmit(true, false, false, true);
-        emit MintNote(user1, usdcAmount, expectedNotes, okuMMult);
+        emit OkuMMinted(user1, usdcAmount, expectedNotes, okuMMult);
 
         vm.prank(user1);
         litePsm.mintOkuM(usdcAmount);
@@ -359,6 +362,18 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(oracleManager);
         litePsm.configureOracle(address(oracle), 2 hours, true);
+    }
+
+    function test_Mint_RevertsOnNegativeOracleAnswer() public {
+        vm.prank(oracleManager);
+        litePsm.configureOracle(address(oracle), 1 hours, true);
+        oracle.setAnswer(-1);
+
+        _approveUsdc(user1, address(litePsm), 100e6);
+
+        vm.prank(user1);
+        vm.expectRevert(LitePSM.InvalidOracleResponse.selector);
+        litePsm.mintOkuM(100e6);
     }
 
     // ============ Redeem Tests ============
@@ -499,7 +514,7 @@ contract LitePSMTest is BaseTest {
         _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.expectEmit(true, false, false, true);
-        emit RedeemNote(user1, okuMAmount, usdcAmount, okuMMult);
+        emit OkuMRedeemed(user1, okuMAmount, usdcAmount, okuMMult);
 
         vm.prank(user1);
         litePsm.redeemOkuM(okuMAmount);
@@ -573,7 +588,7 @@ contract LitePSMTest is BaseTest {
         _approveOkuMoney(user1, address(litePsm), okuMAmount);
 
         vm.expectEmit(true, false, false, true);
-        emit RedeemNote(user1, okuMAmount, expectedUsdc, okuMMult);
+        emit OkuMRedeemed(user1, okuMAmount, expectedUsdc, okuMMult);
 
         vm.prank(user1);
         litePsm.redeemOkuM(okuMAmount);
@@ -1060,29 +1075,45 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_Redeem_PriceAware_TruncationDustAtElevatedPrice() public {
-        // At elevated price, dust calculation changes
         _setNotePrice(1.05e18);
 
         // 100 notes at $1.05: dollarValue18 = 100e18 * 1.05e18 / 1e18 = 105e18
-        // usdcAmount = 105e18 / 1e12 = 105e6 (clean, no dust)
-        // Add sub-USDC dust in dollar-value terms
-        // dollarValue18 = okuMAmount * 1.05e18 / 1e18
-        // For dust to appear: we need dollarValue18 to have sub-1e12 residue
-        // okuMAmount = 100e18 + 1 → dollarValue18 = (100e18 + 1) * 1.05e18 / 1e18
-        //            = 105e18 + 1.05 (truncated to 105e18 + 1)
-        // usdcAmount = (105e18 + 1) / 1e12 = 105e6 (same, dust lost in USDC truncation)
-        uint256 okuMAmount = 100e18;
+        //                     usdcAmount    = 105e18 / 1e12           = 105e6 (clean)
+        //
+        // 100 notes + 1 wei OkuMoney at $1.05:
+        //   dollarValue18 = (100e18 + 1) * 1.05e18 / 1e18 = 105e18 + 1
+        //   usdcAmount    = (105e18 + 1) / 1e12           = 105e6  (sub-USDC dust dropped)
+        //
+        // Verify the user actually receives the expected USDC for both inputs and
+        // that the truncation favours the protocol (user's OkuM is fully consumed).
+        uint256 cleanOkuM = 100e18;
+        uint256 dustyOkuM = 100e18 + 1;
 
-        _mintOkuMoney(user1, okuMAmount);
+        _mintOkuMoney(user1, cleanOkuM);
+        _mintOkuMoney(user2, dustyOkuM);
         _mintUsdc(address(litePsm), 1000e6);
 
-        _approveOkuMoney(user1, address(litePsm), okuMAmount);
+        _approveOkuMoney(user1, address(litePsm), cleanOkuM);
+        _approveOkuMoney(user2, address(litePsm), dustyOkuM);
+
+        uint256 user1UsdcBefore = usdc.balanceOf(user1);
+        uint256 user2UsdcBefore = usdc.balanceOf(user2);
 
         vm.prank(user1);
-        litePsm.redeemOkuM(okuMAmount);
+        litePsm.redeemOkuM(cleanOkuM);
+        vm.prank(user2);
+        litePsm.redeemOkuM(dustyOkuM);
 
-        uint256 expectedUsdc = _expectedUsdcFromNotes(okuMAmount);
-        assertEq(expectedUsdc, 105e6, "100 notes at $1.05 = 105 USDC");
+        uint256 cleanReceived = usdc.balanceOf(user1) - user1UsdcBefore;
+        uint256 dustyReceived = usdc.balanceOf(user2) - user2UsdcBefore;
+
+        // Both users receive identical USDC despite the 1-wei OkuM input difference.
+        assertEq(cleanReceived, 105e6, "100 OkuM @ $1.05 -> 105 USDC");
+        assertEq(dustyReceived, 105e6, "100 OkuM + 1 wei @ $1.05 -> 105 USDC (dust dropped)");
+
+        // OkuM is fully consumed in both cases (truncation favours the protocol).
+        assertEq(okuMoney.balanceOf(user1), 0);
+        assertEq(okuMoney.balanceOf(user2), 0);
     }
 
     // ============ DepositBuffer Tests ============
@@ -1140,17 +1171,20 @@ contract LitePSMTest is BaseTest {
         litePsm.withdrawUsdc(user1, balance + 1);
     }
 
+    function test_WithdrawUSDC_RevertZeroAddress() public {
+        vm.prank(bufferWithdrawer);
+        vm.expectRevert(LitePSM.ZeroAddress.selector);
+        litePsm.withdrawUsdc(address(0), 1);
+    }
+
     // ============ RedeemWithPermit Tests ============
 
     function test_RedeemWithPermit_Success() public {
         uint256 amount = 100e18;
-        _mintOkuMoney(user1, amount);
 
-        // Generate permit signature
-        uint256 user1Pk = 0xA11CE; // Private key for signing
+        // The permit signer is derived from user1Pk — mint OkuMoney to that derived
+        // address (NOT to the named `user1` actor, whose key is unrelated).
         address user1Addr = vm.addr(user1Pk);
-
-        // Mint to the permit user instead
         _mintOkuMoney(user1Addr, amount);
 
         uint256 deadline = block.timestamp + 1 hours;
@@ -1183,7 +1217,6 @@ contract LitePSMTest is BaseTest {
 
     function test_RedeemWithPermit_RevertsExpiredDeadline() public {
         uint256 amount = 100e18;
-        uint256 user1Pk = 0xA11CE;
         address user1Addr = vm.addr(user1Pk);
         _mintOkuMoney(user1Addr, amount);
 
@@ -1212,7 +1245,6 @@ contract LitePSMTest is BaseTest {
     // ============ RedeemUsdOkuWithPermit Tests ============
 
     function test_RedeemUsdOkuWithPermit_Success() public {
-        uint256 user1Pk = 0xB0B1E;
         address user1Addr = vm.addr(user1Pk);
 
         uint256 usdcAmount = 100e6;
@@ -1255,7 +1287,6 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_RedeemUsdOkuWithPermit_RevertsExpiredDeadline() public {
-        uint256 user1Pk = 0xB0B1E;
         address user1Addr = vm.addr(user1Pk);
 
         uint256 usdcAmount = 100e6;
@@ -1289,6 +1320,28 @@ contract LitePSMTest is BaseTest {
         vm.prank(user1Addr);
         vm.expectRevert(); // ERC2612ExpiredSignature
         litePsm.redeemUsdOkuWithPermit(usdOkuBalance, deadline, v, r, s);
+    }
+
+    // ============ RedeemUsdOku Failure Modes ============
+
+    function test_RedeemUsdOku_RevertsWhenVaultUndercollateralized() public {
+        // Set up: user1 wraps OkuM into usdOku at base prices.
+        uint256 okuMAmount = 1000e18;
+        _mintUsdOku(user1, okuMAmount);
+        uint256 usdBalance = usdOku.balanceOf(user1);
+
+        // Now drain the vault's OkuMoney reserves so unwrap() will revert with
+        // InsufficientReserves. Use a low-level transfer impersonating the vault.
+        // (In production the vault should never lose reserves; this test exercises
+        //  the revert path that would surface if it ever did.)
+        vm.prank(address(usdOku));
+        okuMoney.transfer(address(0xDEAD), okuMAmount);
+
+        _approveUsdOku(user1, address(litePsm), usdBalance);
+
+        vm.prank(user1);
+        vm.expectRevert(); // OkuDollar.InsufficientReserves bubbles up through unwrap
+        litePsm.redeemUsdOku(usdBalance);
     }
 
     // ============ UUPS Upgrade (Finding 24) ============
@@ -1349,19 +1402,43 @@ contract LitePSMTest is BaseTest {
 
     // ============ Oracle Edge Case Tests ============
 
-    function test_Mint_SkipsOracleWhenEnabledButAddressZero() public {
-        // Oracle enabled but address is zero — both conditions must hold for check
+    function test_ConfigureOracle_RevertsWhenEnabledButAddressZero() public {
+        // Enabling the oracle with address(0) used to silently bypass reserve checks.
+        // The new guard reverts so operators cannot create that misconfiguration.
         vm.prank(oracleManager);
+        vm.expectRevert(LitePSM.ZeroAddress.selector);
         litePsm.configureOracle(address(0), 1 hours, true);
+    }
 
-        _approveUsdc(user1, address(litePsm), 100e6);
+    function test_ConfigureOracle_AllowsZeroAddressWhenDisabled() public {
+        // Disabled oracle accepts a zero address — represents an unconfigured oracle slot.
+        vm.prank(oracleManager);
+        litePsm.configureOracle(address(0), 1 hours, false);
+        assertEq(address(litePsm.porOracle()), address(0));
+        assertFalse(litePsm.oracleEnabled());
+    }
 
-        // Should succeed because oracle address is zero
-        vm.prank(user1);
-        litePsm.mintOkuM(100e6);
+    function test_ConfigureOracle_RevertsOnStalenessBelowFloor() public {
+        // Cache the constants BEFORE the prank — view calls consume vm.prank.
+        uint256 minStale = litePsm.ORACLE_MIN_STALENESS();
+        uint256 maxStale = litePsm.ORACLE_MAX_STALENESS();
 
-        uint256 expectedOkuMoney = _expectedNotesFromUsdc(100e6);
-        assertEq(okuMoney.balanceOf(user1), expectedOkuMoney);
+        vm.prank(oracleManager);
+        vm.expectRevert(
+            abi.encodeWithSelector(LitePSM.InvalidStaleness.selector, 30, minStale, maxStale)
+        );
+        litePsm.configureOracle(address(oracle), 30, true);
+    }
+
+    function test_ConfigureOracle_RevertsOnStalenessAboveCeiling() public {
+        uint256 minStale = litePsm.ORACLE_MIN_STALENESS();
+        uint256 maxStale = litePsm.ORACLE_MAX_STALENESS();
+
+        vm.prank(oracleManager);
+        vm.expectRevert(
+            abi.encodeWithSelector(LitePSM.InvalidStaleness.selector, 8 days, minStale, maxStale)
+        );
+        litePsm.configureOracle(address(oracle), 8 days, true);
     }
 
     // ============ Yield Distribution Lock Tests (Sandwich Attack Prevention) ============
@@ -1375,7 +1452,7 @@ contract LitePSMTest is BaseTest {
         // Same block — mintOkuM should revert
         _approveUsdc(user1, address(litePsm), 100e6);
         vm.prank(user1);
-        vm.expectRevert(LitePSM.YieldDistributionInProgress.selector);
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
         litePsm.mintOkuM(100e6);
     }
 
@@ -1408,7 +1485,7 @@ contract LitePSMTest is BaseTest {
 
         // Same block — redeemOkuM should revert
         vm.prank(user1);
-        vm.expectRevert(LitePSM.YieldDistributionInProgress.selector);
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
         litePsm.redeemOkuM(50e18);
     }
 
@@ -1442,7 +1519,7 @@ contract LitePSMTest is BaseTest {
         // Same block — mintUsdOku should revert
         _approveUsdc(user1, address(litePsm), 100e6);
         vm.prank(user1);
-        vm.expectRevert(LitePSM.YieldDistributionInProgress.selector);
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
         litePsm.mintUsdOku(100e6);
     }
 
@@ -1458,7 +1535,7 @@ contract LitePSMTest is BaseTest {
 
         // Same block — redeemUsdOku should revert
         vm.prank(user1);
-        vm.expectRevert(LitePSM.YieldDistributionInProgress.selector);
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
         litePsm.redeemUsdOku(50e18);
     }
 
@@ -1470,7 +1547,7 @@ contract LitePSMTest is BaseTest {
         // Same block — mintOkuM should revert
         _approveUsdc(user1, address(litePsm), 100e6);
         vm.prank(user1);
-        vm.expectRevert(LitePSM.YieldDistributionInProgress.selector);
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
         litePsm.mintOkuM(100e6);
     }
 

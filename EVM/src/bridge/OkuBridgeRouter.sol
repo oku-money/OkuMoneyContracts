@@ -15,19 +15,9 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
 import {IOkuBridgeNative} from "../interfaces/IOkuBridgeNative.sol";
+import {IBridgeAdapter} from "./adapters/IBridgeAdapter.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
-
-interface IBridgeAdapter {
-    function bridge(
-        address token,
-        uint256 amount,
-        uint256 destinationChain,
-        address recipient
-    )
-        external
-        payable;
-}
 
 /**
  * @title OkuBridgeRouter
@@ -72,7 +62,7 @@ contract OkuBridgeRouter is
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuBridgeRouter")) - 1)) & ~bytes32(uint256(0xff))
     bytes32 private constant OKUBRIDGEROUTER_STORAGE_LOCATION =
-        0x6a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a00;
+        0x4f590e9f7334aab7dee655e65a71a07de1bfe97ca02ea9a7eef6211d166e8300;
 
     function _getOkuBridgeRouterStorage() private pure returns (OkuBridgeRouterStorage storage $) {
         assembly {

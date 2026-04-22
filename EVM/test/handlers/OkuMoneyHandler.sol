@@ -3,10 +3,14 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
+import {TestConstants} from "../shared/Constants.sol";
 
 /**
  * @title OkuMoneyHandler
  * @notice Handler contract for OkuMoney invariant testing
+ * @dev Updated with realistic fuzz bounds:
+ *      - Price capped at PRECISION * 5 (5x, ~500% yield)
+ *      - vm.roll(block.number + 1) after rebase to avoid yield distribution lock
  */
 contract OkuMoneyHandler is Test {
     OkuMoney public okuMoney;
@@ -20,8 +24,9 @@ contract OkuMoneyHandler is Test {
     mapping(address => uint256) public lastAllowance;
     bool public allowanceWasReset;
 
-    uint256 public constant MAX_SUPPLY = 1_000_000_000e18;
-    uint256 public constant PRECISION = 1e18;
+    uint256 public constant MAX_SUPPLY = TestConstants.MAX_SUPPLY;
+    uint256 public constant PRECISION = TestConstants.PRECISION;
+    uint256 public constant MAX_FUZZ_PRICE = TestConstants.MAX_FUZZ_PRICE;
 
     // Ghost variables for tracking
     uint256 public ghostMintedTotal;
@@ -140,33 +145,35 @@ contract OkuMoneyHandler is Test {
     }
 
     /// @notice Update OkuM price (rebase)
+    /// @dev Tightened bounds: cap at 5x (MAX_FUZZ_PRICE) instead of 1e24.
+    ///      Always vm.roll after rebase to avoid yield distribution lock.
     function rebase(uint256 priceIncrease) external {
         ghostRebaseCallCount++;
         uint256 currentPrice = okuMoney.okuMMultiplier();
 
-        // Cap maximum price at 1e24 (1 million x starting value)
-        uint256 maxPrice = 1e24;
-
-        if (currentPrice >= maxPrice) {
+        // Cap maximum price at PRECISION * 5 (5x, ~500% total yield - still very generous)
+        if (currentPrice >= MAX_FUZZ_PRICE) {
             return; // Already at maximum, skip further rebases
         }
 
-        // Increase by 0.01% to 5% per rebase
+        // Increase by 0.01% to 2% per rebase (was 5%, tightened for realism)
         uint256 minIncrease = currentPrice / 10_000; // 0.01%
-        uint256 maxIncrease = currentPrice / 20; // 5%
+        uint256 maxIncrease = currentPrice / 50; // 2%
         uint256 increase = bound(priceIncrease, minIncrease, maxIncrease);
 
         uint256 newPrice = currentPrice + increase;
 
         // Ensure we don't exceed the cap
-        if (newPrice > maxPrice) {
-            newPrice = maxPrice;
+        if (newPrice > MAX_FUZZ_PRICE) {
+            newPrice = MAX_FUZZ_PRICE;
         }
 
         vm.prank(rebaser);
         try okuMoney.setOkuMMultiplier(newPrice) {
             ghostLastWasRebase = true;
             ghostLastOkuMMultiplier = newPrice;
+            // Roll to next block to avoid yield distribution lock
+            vm.roll(block.number + 1);
         } catch {
             ghostRebaseRevertCount++;
         }

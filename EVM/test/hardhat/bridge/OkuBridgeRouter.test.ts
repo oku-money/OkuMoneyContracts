@@ -87,7 +87,7 @@ describe("OkuBridgeRouter", function () {
     mockAdapter = await new MockBridgeAdapterHH__factory(admin).deploy();
     await mockAdapter.waitForDeployment();
 
-    // Setup roles on OkuNote
+    // Setup roles on OkuMoney
     await okuMoney.connect(admin).grantRole(OKUM_ALLOWANCE_MANAGER, admin.address);
     await okuMoney.connect(admin).grantRole(OKUM_MINTER, admin.address);
 
@@ -182,7 +182,7 @@ describe("OkuBridgeRouter", function () {
     it("should bridge OkuDollar via native OkuBridge path", async function () {
       const noteAmount = ethers.parseEther("1000");
 
-      // Mint OkuMoney, wrap into OkuUSD
+      // Mint OkuMoney, wrap into OkuDollar
       await setupWrapped(noteAmount);
 
       const okuUsdBalance = await okuUsd.balanceOf(user1.address);
@@ -199,7 +199,7 @@ describe("OkuBridgeRouter", function () {
       // Router holds at most dust (1-2 wei from integer division in fee-adjusted share calc)
       expect(await okuMoney.balanceOf(await bridgeRouter.getAddress())).to.be.lessThanOrEqual(2n);
 
-      // User has no OkuUSD
+      // User has no OkuDollar
       expect(await okuUsd.balanceOf(user1.address)).to.equal(0n);
     });
 
@@ -264,7 +264,7 @@ describe("OkuBridgeRouter", function () {
     });
   });
 
-  // ============ Native Path: bridge_OkuNote ============
+  // ============ Native Path: bridgeOkuM ============
 
   describe("Native Path: bridgeOkuM()", function () {
     it("should bridge OkuMoney directly via native OkuBridge path", async function () {
@@ -344,7 +344,7 @@ describe("OkuBridgeRouter", function () {
       // OkuBridge nonce NOT incremented (adapter path, not native path)
       expect(await okuBridge.outboundNonce(ARBITRUM_CHAIN_ID)).to.equal(0n);
 
-      // Router holds no OkuNote
+      // Router holds no OkuMoney
       expect(await okuMoney.balanceOf(await bridgeRouter.getAddress())).to.equal(0n);
     });
 
@@ -473,7 +473,7 @@ describe("OkuBridgeRouter", function () {
     it("native path increments OkuBridge nonce; adapter path does not", async function () {
       const noteAmount = ethers.parseEther("500");
 
-      // Native path: bridge_OkuNote
+      // Native path: bridgeOkuM
       await okuMoney.connect(admin).mint(user1.address, noteAmount);
       await okuMoney.connect(user1).approve(await bridgeRouter.getAddress(), noteAmount);
       await bridgeRouter.connect(user1).bridgeOkuM(noteAmount, ARBITRUM_CHAIN_ID, addressToBytes32(user2.address));

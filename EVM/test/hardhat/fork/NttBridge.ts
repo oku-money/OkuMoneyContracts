@@ -14,7 +14,7 @@ import {
 import { Signer, parseEther, parseUnits, ContractFactory } from "ethers"
 import { ethers, network, upgrades } from "hardhat"
 import { expect } from "chai"
-import { getTokenAddress, getWhaleAddress, getChainMetadata, getWormholeChainId } from "../../../config/config"
+import { getTokenAddress, getWhaleAddress, getChainMetadata, getWormholeChainId } from "../../../scripts/config/chains"
 
 const USDC_MAINNET = getTokenAddress("mainnet", "usdc")
 const USDC_WHALE = getWhaleAddress("mainnet", "usdc")!
@@ -37,8 +37,8 @@ describe("NTT Bridge Scenarios", () => {
 
     let psm: LitePSM
     let queue: RedemptionQueue
-    let okuMoney: OkuNote
-    let okuUsd: OkuUSD
+    let okuMoney: OkuMoney
+    let okuUsd: OkuDollar
     let nttAdapter: NttAdapter
     let mockNttManager: any  // MockNttManagerHH (dynamic import)
 
@@ -69,7 +69,7 @@ describe("NTT Bridge Scenarios", () => {
         })
     }
 
-    async function getOkuNote(user: Signer, usdcAmount: bigint) {
+    async function getOkuMoney(user: Signer, usdcAmount: bigint) {
         // The PSM slippage check can fail due to integer division rounding.
         // At elevated prices, we need to round up the USDC input to the nearest
         // amount that divides evenly by the price to avoid 1 wei rounding loss.
@@ -133,12 +133,12 @@ describe("NTT Bridge Scenarios", () => {
         const frankAddr = await Frank.getAddress()
         const MAX_SUPPLY = parseEther("1000000000")
 
-        // Deploy OkuNote
+        // Deploy OkuMoney
         okuMoney = await upgrades.deployProxy(
             new OkuMoney__factory(Frank),
             ["OkuMoney", "OkuM", frankAddr, MAX_SUPPLY],
             { kind: "uups" }
-        ) as unknown as OkuNote
+        ) as unknown as OkuMoney
         await okuMoney.waitForDeployment()
 
         // Deploy OkuDollar vault
@@ -146,7 +146,7 @@ describe("NTT Bridge Scenarios", () => {
             new OkuDollar__factory(Frank),
             [await okuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr, parseEther("0.95")],
             { kind: "uups", unsafeAllow: ["constructor"] }
-        ) as unknown as OkuUSD
+        ) as unknown as OkuDollar
         await okuUsd.waitForDeployment()
 
         // Deploy RedemptionQueue
@@ -378,7 +378,7 @@ describe("NTT Bridge Scenarios", () => {
             const pendingCount = await mockNttManager.pendingTransfersCount()
             await mockNttManager.completeBridge(pendingCount - 1n)
 
-            // Bob should have received OkuNote
+            // Bob should have received OkuMoney
             const bobBalanceAfter = await okuMoney.balanceOf(bobAddr)
             expect(bobBalanceAfter - bobBalanceBefore).to.equal(bridgeAmount)
         })
@@ -458,7 +458,7 @@ describe("NTT Bridge Scenarios", () => {
             const depositAmount = parseUnits("1000", 6)
 
             // Get OkuMoney and accidentally send to adapter
-            await getOkuNote(Frank, depositAmount)
+            await getOkuMoney(Frank, depositAmount)
             const okuMoneyBalance = await okuMoney.balanceOf(frankAddr)
 
             // Transfer directly to adapter (accident)

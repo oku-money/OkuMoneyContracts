@@ -21,8 +21,7 @@ import {LitePSM} from "../../src/psm/LitePSM.sol";
  *      At initial okuMMultiplier=1e18, behavior is identical to a 1:1 decimal-scaled swap.
  */
 contract LitePSMTest is BaseTest {
-    // Decimal conversion constant
-    uint256 private constant DECIMAL_MULTIPLIER = 10 ** 12;
+    // Note: DECIMAL_MULTIPLIER is inherited from BaseTest
     // ============ Events ============
 
     event MintNote(
@@ -1210,6 +1209,88 @@ contract LitePSMTest is BaseTest {
         litePsm.redeemOkuMWithPermit(amount, deadline, v, r, s);
     }
 
+    // ============ RedeemUsdOkuWithPermit Tests ============
+
+    function test_RedeemUsdOkuWithPermit_Success() public {
+        uint256 user1Pk = 0xB0B1E;
+        address user1Addr = vm.addr(user1Pk);
+
+        uint256 usdcAmount = 100e6;
+
+        // First mint UsdOku for this user via PSM
+        _mintUsdc(user1Addr, usdcAmount);
+        vm.startPrank(user1Addr);
+        usdc.approve(address(litePsm), usdcAmount);
+        litePsm.mintUsdOku(usdcAmount);
+        vm.stopPrank();
+
+        uint256 usdOkuBalance = usdOku.balanceOf(user1Addr);
+        assertGt(usdOkuBalance, 0, "User should have UsdOku");
+
+        // Now redeem with permit
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes32 domainSeparator = _getUsdOkuDomainSeparator();
+        bytes32 permitHash = keccak256(
+            abi.encode(
+                keccak256(
+                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+                ),
+                user1Addr,
+                address(litePsm),
+                usdOkuBalance,
+                usdOku.nonces(user1Addr),
+                deadline
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, permitHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(user1Pk, digest);
+
+        uint256 usdcBefore = usdc.balanceOf(user1Addr);
+
+        vm.prank(user1Addr);
+        litePsm.redeemUsdOkuWithPermit(usdOkuBalance, deadline, v, r, s);
+
+        assertGt(usdc.balanceOf(user1Addr), usdcBefore, "User should receive USDC");
+        assertEq(usdOku.balanceOf(user1Addr), 0, "User should have no UsdOku left");
+    }
+
+    function test_RedeemUsdOkuWithPermit_RevertsExpiredDeadline() public {
+        uint256 user1Pk = 0xB0B1E;
+        address user1Addr = vm.addr(user1Pk);
+
+        uint256 usdcAmount = 100e6;
+
+        // Mint UsdOku
+        _mintUsdc(user1Addr, usdcAmount);
+        vm.startPrank(user1Addr);
+        usdc.approve(address(litePsm), usdcAmount);
+        litePsm.mintUsdOku(usdcAmount);
+        vm.stopPrank();
+
+        uint256 usdOkuBalance = usdOku.balanceOf(user1Addr);
+
+        uint256 deadline = block.timestamp - 1; // Already expired
+        bytes32 domainSeparator = _getUsdOkuDomainSeparator();
+        bytes32 permitHash = keccak256(
+            abi.encode(
+                keccak256(
+                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+                ),
+                user1Addr,
+                address(litePsm),
+                usdOkuBalance,
+                usdOku.nonces(user1Addr),
+                deadline
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, permitHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(user1Pk, digest);
+
+        vm.prank(user1Addr);
+        vm.expectRevert(); // ERC2612ExpiredSignature
+        litePsm.redeemUsdOkuWithPermit(usdOkuBalance, deadline, v, r, s);
+    }
+
     // ============ UUPS Upgrade (Finding 24) ============
 
     function test_UUPS_UpgradePSM() public {
@@ -1247,6 +1328,21 @@ contract LitePSMTest is BaseTest {
                 keccak256(bytes("1")),
                 block.chainid,
                 address(okuMoney)
+            )
+        );
+    }
+
+    function _getUsdOkuDomainSeparator() internal view returns (bytes32) {
+        // EIP-712 domain separator for OkuDollar
+        return keccak256(
+            abi.encode(
+                keccak256(
+                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                ),
+                keccak256(bytes("OkuDollar")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(usdOku)
             )
         );
     }

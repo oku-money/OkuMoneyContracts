@@ -2,7 +2,6 @@
 pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {OkuMoney} from "../src/token/OkuMoney.sol";
@@ -12,18 +11,88 @@ import {RedemptionQueue} from "../src/psm/RedemptionQueue.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {MockAggregatorV3} from "./mocks/MockAggregatorV3.sol";
 
+import {TestConstants} from "./shared/Constants.sol";
+import {TestRoles} from "./shared/Roles.sol";
+import {Actors} from "./shared/Actors.sol";
+import {Deploy} from "./shared/Deploy.sol";
+
 /**
  * @title BaseTest
  * @notice Base test contract with deployment helpers, actors, and utility functions
  * @dev Updated for OkuMoney non-rebasing redesign. OkuMoney is a standard ERC-20 with
  *      okuMMultiplier() tracking the dollar value per token separately from balanceOf().
  *      See Constants.sol for terminology legend.
+ *
+ *      Uses shared scaffolding:
+ *      - TestConstants: All numeric constants (re-exported from src + test-only)
+ *      - TestRoles: All role keccaks (re-exported from src + DEFAULT_ADMIN_ROLE)
+ *      - Actors: Named test actors with deterministic addresses
+ *      - Deploy: Proxy deployment helpers
  */
-abstract contract BaseTest is Test {
-    // ============ Constants ============
+abstract contract BaseTest is Test, Actors {
+    // ============ Re-exported Constants ============
 
-    uint256 public constant PRECISION = 1e18;
-    uint256 public constant MAX_SUPPLY = 1_000_000_000e18; // 1B tokens
+    uint256 public constant PRECISION = TestConstants.PRECISION;
+    uint256 public constant MAX_SUPPLY = TestConstants.MAX_SUPPLY;
+    uint256 public constant DECIMAL_MULTIPLIER = TestConstants.DECIMAL_MULTIPLIER;
+    uint256 public constant MAX_RATE = TestConstants.MAX_RATE;
+    uint256 public constant BASIS_POINTS = TestConstants.BASIS_POINTS;
+
+    // ============ Re-exported Roles ============
+
+    bytes32 public constant DEFAULT_ADMIN_ROLE = TestRoles.DEFAULT_ADMIN_ROLE;
+
+    // OkuMoney roles (OKUM_ prefix)
+    bytes32 public constant OKUM_UPGRADER = TestRoles.OKUM_UPGRADER;
+    bytes32 public constant OKUM_PAUSER = TestRoles.OKUM_PAUSER;
+    bytes32 public constant OKUM_UNPAUSER = TestRoles.OKUM_UNPAUSER;
+    bytes32 public constant OKUM_MINTER = TestRoles.OKUM_MINTER;
+    bytes32 public constant OKUM_REBASER = TestRoles.OKUM_REBASER;
+    bytes32 public constant OKUM_BLACKLISTER = TestRoles.OKUM_BLACKLISTER;
+    bytes32 public constant OKUM_UNBLACKLISTER = TestRoles.OKUM_UNBLACKLISTER;
+    bytes32 public constant OKUM_CAP_MANAGER = TestRoles.OKUM_CAP_MANAGER;
+    bytes32 public constant OKUM_ALLOWANCE_MANAGER = TestRoles.OKUM_ALLOWANCE_MANAGER;
+
+    // OkuDollar vault roles (VAULT_ prefix)
+    bytes32 public constant VAULT_UPGRADER = TestRoles.VAULT_UPGRADER;
+    bytes32 public constant VAULT_REBASER = TestRoles.VAULT_REBASER;
+    bytes32 public constant VAULT_RESERVE_MANAGER = TestRoles.VAULT_RESERVE_MANAGER;
+    bytes32 public constant VAULT_PAUSER = TestRoles.VAULT_PAUSER;
+    bytes32 public constant VAULT_UNPAUSER = TestRoles.VAULT_UNPAUSER;
+
+    // LitePSM roles (PSM_ prefix)
+    bytes32 public constant PSM_UPGRADER = TestRoles.PSM_UPGRADER;
+    bytes32 public constant PSM_PAUSER = TestRoles.PSM_PAUSER;
+    bytes32 public constant PSM_UNPAUSER = TestRoles.PSM_UNPAUSER;
+    bytes32 public constant PSM_QUEUE_PROCESSOR = TestRoles.PSM_QUEUE_PROCESSOR;
+    bytes32 public constant PSM_BUFFER_DEPOSITOR = TestRoles.PSM_BUFFER_DEPOSITOR;
+    bytes32 public constant PSM_BUFFER_WITHDRAWER = TestRoles.PSM_BUFFER_WITHDRAWER;
+    bytes32 public constant PSM_ORACLE_MANAGER = TestRoles.PSM_ORACLE_MANAGER;
+
+    // RedemptionQueue roles (QUEUE_ prefix)
+    bytes32 public constant QUEUE_PSM = TestRoles.QUEUE_PSM;
+    bytes32 public constant QUEUE_UPGRADER = TestRoles.QUEUE_UPGRADER;
+    bytes32 public constant QUEUE_RESCUER = TestRoles.QUEUE_RESCUER;
+
+    // OkuBridge roles (BRIDGE_ prefix)
+    bytes32 public constant BRIDGE_UPGRADER = TestRoles.BRIDGE_UPGRADER;
+    bytes32 public constant BRIDGE_DUST_SWEEPER = TestRoles.BRIDGE_DUST_SWEEPER;
+    bytes32 public constant BRIDGE_SIGNER_MANAGER = TestRoles.BRIDGE_SIGNER_MANAGER;
+    bytes32 public constant BRIDGE_PAUSER = TestRoles.BRIDGE_PAUSER;
+    bytes32 public constant BRIDGE_UNPAUSER = TestRoles.BRIDGE_UNPAUSER;
+    bytes32 public constant BRIDGE_FEE_MANAGER = TestRoles.BRIDGE_FEE_MANAGER;
+    bytes32 public constant BRIDGE_NONCE_ADMIN = TestRoles.BRIDGE_NONCE_ADMIN;
+    bytes32 public constant BRIDGE_CHAIN_MANAGER = TestRoles.BRIDGE_CHAIN_MANAGER;
+    bytes32 public constant BRIDGE_LIMITS_MANAGER = TestRoles.BRIDGE_LIMITS_MANAGER;
+    bytes32 public constant BRIDGE_REFUND_INITIATOR = TestRoles.BRIDGE_REFUND_INITIATOR;
+    bytes32 public constant BRIDGE_REFUND_CONFIRMER = TestRoles.BRIDGE_REFUND_CONFIRMER;
+
+    // OkuBridgeRouter roles (ROUTER_ prefix)
+    bytes32 public constant ROUTER_UPGRADER = TestRoles.ROUTER_UPGRADER;
+    bytes32 public constant ROUTER_PAUSER = TestRoles.ROUTER_PAUSER;
+    bytes32 public constant ROUTER_UNPAUSER = TestRoles.ROUTER_UNPAUSER;
+    bytes32 public constant ROUTER_ADAPTER_MANAGER = TestRoles.ROUTER_ADAPTER_MANAGER;
+    bytes32 public constant ROUTER_BRIDGE_MANAGER = TestRoles.ROUTER_BRIDGE_MANAGER;
 
     // ============ Contracts ============
 
@@ -38,76 +107,6 @@ abstract contract BaseTest is Test {
     MockUSDC public usdc;
     MockAggregatorV3 public oracle;
 
-    // ============ Actors ============
-
-    address public admin = makeAddr("admin");
-    address public pauser = makeAddr("pauser");
-    address public unpauser = makeAddr("unpauser");
-    address public minter = makeAddr("minter");
-    address public rebaser = makeAddr("rebaser");
-    address public usdRebaser = makeAddr("usdRebaser");
-    address public reserveManager = makeAddr("reserveManager");
-    address public blacklister = makeAddr("blacklister");
-    address public unblacklister = makeAddr("unblacklister");
-    address public capManager = makeAddr("capManager");
-    address public allowanceManager = makeAddr("allowanceManager");
-    address public queueProcessor = makeAddr("queueProcessor");
-    address public bufferDepositor = makeAddr("bufferDepositor");
-    address public bufferWithdrawer = makeAddr("bufferWithdrawer");
-    address public oracleManager = makeAddr("oracleManager");
-    address public adapterManager = makeAddr("adapterManager");
-    address public vaultPauser = makeAddr("vaultPauser");
-    address public vaultUnpauser = makeAddr("vaultUnpauser");
-    address public user1 = makeAddr("user1");
-    address public user2 = makeAddr("user2");
-    address public user3 = makeAddr("user3");
-
-    // ============ Role Constants ============
-
-    bytes32 public constant DEFAULT_ADMIN_ROLE = 0x00;
-
-    // OkuMoney roles (OKUM_ prefix)
-    bytes32 public constant OKUM_UPGRADER = keccak256("OKUM_UPGRADER");
-    bytes32 public constant OKUM_PAUSER = keccak256("OKUM_PAUSER");
-    bytes32 public constant OKUM_UNPAUSER = keccak256("OKUM_UNPAUSER");
-    bytes32 public constant OKUM_MINTER = keccak256("OKUM_MINTER");
-    bytes32 public constant OKUM_REBASER = keccak256("OKUM_REBASER");
-    bytes32 public constant OKUM_BLACKLISTER = keccak256("OKUM_BLACKLISTER");
-    bytes32 public constant OKUM_UNBLACKLISTER = keccak256("OKUM_UNBLACKLISTER");
-    bytes32 public constant OKUM_CAP_MANAGER = keccak256("OKUM_CAP_MANAGER");
-    bytes32 public constant OKUM_ALLOWANCE_MANAGER = keccak256("OKUM_ALLOWANCE_MANAGER");
-
-    // OkuDollar vault roles (VAULT_ prefix)
-    bytes32 public constant VAULT_UPGRADER = keccak256("VAULT_UPGRADER");
-    bytes32 public constant VAULT_REBASER = keccak256("VAULT_REBASER");
-    bytes32 public constant VAULT_RESERVE_MANAGER = keccak256("VAULT_RESERVE_MANAGER");
-    bytes32 public constant VAULT_PAUSER = keccak256("VAULT_PAUSER");
-    bytes32 public constant VAULT_UNPAUSER = keccak256("VAULT_UNPAUSER");
-
-    // LitePSM roles (PSM_ prefix)
-    bytes32 public constant PSM_UPGRADER = keccak256("PSM_UPGRADER");
-    bytes32 public constant PSM_PAUSER = keccak256("PSM_PAUSER");
-    bytes32 public constant PSM_UNPAUSER = keccak256("PSM_UNPAUSER");
-    bytes32 public constant PSM_QUEUE_PROCESSOR = keccak256("PSM_QUEUE_PROCESSOR");
-    bytes32 public constant PSM_BUFFER_DEPOSITOR = keccak256("PSM_BUFFER_DEPOSITOR");
-    bytes32 public constant PSM_BUFFER_WITHDRAWER = keccak256("PSM_BUFFER_WITHDRAWER");
-    bytes32 public constant PSM_ORACLE_MANAGER = keccak256("PSM_ORACLE_MANAGER");
-
-    // RedemptionQueue roles (QUEUE_ prefix)
-    bytes32 public constant QUEUE_PSM = keccak256("QUEUE_PSM");
-    bytes32 public constant QUEUE_UPGRADER = keccak256("QUEUE_UPGRADER");
-
-    // OkuBridge roles (BRIDGE_ prefix)
-    bytes32 public constant BRIDGE_UPGRADER = keccak256("BRIDGE_UPGRADER");
-    bytes32 public constant BRIDGE_DUST_SWEEPER = keccak256("BRIDGE_DUST_SWEEPER");
-
-    // OkuBridgeRouter roles (ROUTER_ prefix)
-    bytes32 public constant ROUTER_UPGRADER = keccak256("ROUTER_UPGRADER");
-    bytes32 public constant ROUTER_PAUSER = keccak256("ROUTER_PAUSER");
-    bytes32 public constant ROUTER_UNPAUSER = keccak256("ROUTER_UNPAUSER");
-    bytes32 public constant ROUTER_ADAPTER_MANAGER = keccak256("ROUTER_ADAPTER_MANAGER");
-    bytes32 public constant ROUTER_BRIDGE_MANAGER = keccak256("ROUTER_BRIDGE_MANAGER");
-
     // ============ Setup ============
 
     function setUp() public virtual {
@@ -121,34 +120,20 @@ abstract contract BaseTest is Test {
         usdc = new MockUSDC();
         oracle = new MockAggregatorV3();
 
-        // Deploy OkuMoney implementation and proxy
-        okuMoneyImpl = new OkuMoney();
-        bytes memory moneyInitData =
-            abi.encodeCall(OkuMoney.initialize, ("OkuMoney", "OkuM", admin, MAX_SUPPLY));
-        okuMoney = OkuMoney(address(new ERC1967Proxy(address(okuMoneyImpl), moneyInitData)));
+        // Deploy OkuMoney
+        (okuMoney, okuMoneyImpl) = Deploy.deployOkuMoney(admin);
 
-        // Deploy OkuDollar vault implementation and proxy
-        usdOkuImpl = new OkuDollar();
-        bytes memory usdInitData = abi.encodeCall(
-            OkuDollar.initialize,
-            (address(okuMoney), "OkuDollar", "usdOku", admin, 95e16) // 95% min collateral ratio
+        // Deploy OkuDollar vault
+        (usdOku, usdOkuImpl) = Deploy.deployOkuDollar(address(okuMoney), admin);
+
+        // Deploy RedemptionQueue
+        (redemptionQueue, redemptionQueueImpl) =
+            Deploy.deployRedemptionQueue(address(okuMoney), admin);
+
+        // Deploy LitePSM
+        (litePsm, litePsmImpl) = Deploy.deployLitePSM(
+            address(okuMoney), address(usdOku), address(usdc), address(redemptionQueue), admin
         );
-        usdOku = OkuDollar(address(new ERC1967Proxy(address(usdOkuImpl), usdInitData)));
-
-        // Deploy RedemptionQueue implementation and proxy
-        redemptionQueueImpl = new RedemptionQueue();
-        bytes memory queueInitData =
-            abi.encodeCall(RedemptionQueue.initialize, (address(okuMoney), admin));
-        redemptionQueue =
-            RedemptionQueue(address(new ERC1967Proxy(address(redemptionQueueImpl), queueInitData)));
-
-        // Deploy LitePSM implementation and proxy
-        litePsmImpl = new LitePSM();
-        bytes memory psmInitData = abi.encodeCall(
-            LitePSM.initialize,
-            (address(okuMoney), address(usdOku), address(usdc), address(redemptionQueue), admin)
-        );
-        litePsm = LitePSM(address(new ERC1967Proxy(address(litePsmImpl), psmInitData)));
     }
 
     function _setupRoles() internal {
@@ -181,6 +166,7 @@ abstract contract BaseTest is Test {
 
         // RedemptionQueue roles (QUEUE_ prefix)
         redemptionQueue.grantRole(QUEUE_PSM, address(litePsm));
+        redemptionQueue.grantRole(QUEUE_RESCUER, queueRescuer);
 
         // Grant RedemptionQueue MINTER role on OkuMoney (needed for self-burn in processQueue)
         okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
@@ -251,16 +237,22 @@ abstract contract BaseTest is Test {
         return bound(amount, 1, remaining > 0 ? remaining : 1);
     }
 
-    /// @notice Bound fuzz input to reasonable okuMMultiplier (current to 10x)
+    /// @notice Bound fuzz input to reasonable okuMMultiplier (current to 2x)
+    /// @dev Tightened from 10x to 2x for more realistic scenarios
     function _boundOkuMMultiplier(uint256 mult) internal view returns (uint256) {
         uint256 current = okuMoney.okuMMultiplier();
-        return bound(mult, current, current * 10);
+        return bound(mult, current, current * TestConstants.MAX_MULTIPLIER_FACTOR);
     }
 
     /// @notice Bound fuzz input to reasonable okuMMultiplier increase (0.01% to 100%)
     function _boundOkuMMultiplierIncrease(uint256 increase) internal view returns (uint256) {
         uint256 current = okuMoney.okuMMultiplier();
         return bound(increase, current / 10_000, current);
+    }
+
+    /// @notice Bound price to realistic fuzz range (capped at MAX_FUZZ_PRICE)
+    function _boundPrice(uint256 price) internal pure returns (uint256) {
+        return bound(price, PRECISION, TestConstants.MAX_FUZZ_PRICE);
     }
 
     /// @notice Get minimum of two values

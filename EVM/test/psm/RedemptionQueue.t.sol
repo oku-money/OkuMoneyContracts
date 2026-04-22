@@ -14,8 +14,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
  *      Tests simulate this by calling _mintOkuMoney(address(redemptionQueue), amount) first.
  */
 contract RedemptionQueueTest is BaseTest {
-    // Decimal conversion constant
-    uint256 private constant DECIMAL_MULTIPLIER = 10 ** 12; // OkuMoney (18) - USDC (6) = 12
+    // Note: DECIMAL_MULTIPLIER is inherited from BaseTest
 
     // ============ Events ============
 
@@ -988,5 +987,206 @@ contract RedemptionQueueTest is BaseTest {
         }
 
         assertEq(processed, expectedProcessed, "Processed count should match expected");
+    }
+
+    // ============ Rescue Queue Entry Tests ============
+
+    function test_RescueQueueEntry_ReturnsOkuMoney() public {
+        uint256 amount = 1000e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        uint256 user1BalanceBefore = okuMoney.balanceOf(user1);
+        uint256 queueBalanceBefore = okuMoney.balanceOf(address(redemptionQueue));
+
+        vm.prank(queueRescuer);
+        redemptionQueue.rescueQueueEntry(0, user1);
+
+        assertEq(
+            okuMoney.balanceOf(user1),
+            user1BalanceBefore + amount,
+            "User should receive OkuMoney back"
+        );
+        assertEq(
+            okuMoney.balanceOf(address(redemptionQueue)),
+            queueBalanceBefore - amount,
+            "Queue balance should decrease"
+        );
+    }
+
+    function test_RescueQueueEntry_ToAlternateRecipient() public {
+        uint256 amount = 1000e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        uint256 user1BalanceBefore = okuMoney.balanceOf(user1);
+        uint256 user2BalanceBefore = okuMoney.balanceOf(user2);
+
+        // Rescue to alternate recipient (user2) instead of original user (user1)
+        vm.prank(queueRescuer);
+        redemptionQueue.rescueQueueEntry(0, user2);
+
+        assertEq(
+            okuMoney.balanceOf(user2),
+            user2BalanceBefore + amount,
+            "Alternate recipient should receive OkuMoney"
+        );
+        assertEq(
+            okuMoney.balanceOf(user1),
+            user1BalanceBefore,
+            "Original user balance should be unchanged"
+        );
+    }
+
+    function test_RescueQueueEntry_DecreasesTotalQueued() public {
+        uint256 amount = 1000e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        uint256 totalBefore = redemptionQueue.totalQueuedOkuM();
+        assertEq(totalBefore, amount);
+
+        vm.prank(queueRescuer);
+        redemptionQueue.rescueQueueEntry(0, user1);
+
+        assertEq(redemptionQueue.totalQueuedOkuM(), 0, "Total queued should be zero after rescue");
+    }
+
+    function test_RescueQueueEntry_EmitsEvent() public {
+        uint256 amount = 1000e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        uint256 okuMMult = okuMoney.okuMMultiplier();
+        uint256 dollarValue = (amount * okuMMult) / 1e18;
+
+        vm.prank(queueRescuer);
+        vm.expectEmit(true, true, true, true);
+        emit RedemptionQueue.RedemptionRescued(0, user1, user2, amount, dollarValue);
+        redemptionQueue.rescueQueueEntry(0, user2);
+    }
+
+    function test_RescueQueueEntry_RevertNotAuthorized() public {
+        uint256 amount = 1000e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, QUEUE_RESCUER
+            )
+        );
+        redemptionQueue.rescueQueueEntry(0, user1);
+    }
+
+    function test_RescueQueueEntry_RevertInvalidIndex() public {
+        vm.prank(queueRescuer);
+        vm.expectRevert(RedemptionQueue.InvalidIndex.selector);
+        redemptionQueue.rescueQueueEntry(0, user1);
+    }
+
+    function test_RescueQueueEntry_RevertZeroAddress() public {
+        uint256 amount = 1000e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        vm.prank(queueRescuer);
+        vm.expectRevert(RedemptionQueue.ZeroAddress.selector);
+        redemptionQueue.rescueQueueEntry(0, address(0));
+    }
+
+    function test_RescueQueueEntry_RevertAlreadyCleared() public {
+        uint256 amount = 1000e18;
+
+        // Enqueue 2 entries so rescuing index 1 won't advance head past it
+        _mintOkuMoney(address(redemptionQueue), amount * 2);
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user2, amount);
+
+        // Rescue the middle entry (index 1) so head doesn't advance
+        vm.prank(queueRescuer);
+        redemptionQueue.rescueQueueEntry(1, user2);
+
+        // Try to rescue same index again — should revert EntryAlreadyCleared
+        vm.prank(queueRescuer);
+        vm.expectRevert(RedemptionQueue.EntryAlreadyCleared.selector);
+        redemptionQueue.rescueQueueEntry(1, user2);
+    }
+
+    function test_RescueQueueEntry_AdvancesHeadWhenFirst() public {
+        uint256 amount = 500e18;
+
+        // Enqueue 3 entries
+        _mintOkuMoney(address(redemptionQueue), amount * 3);
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user2, amount);
+        redemptionQueue.enqueue(user3, amount);
+
+        assertEq(redemptionQueue.queueHead(), 0);
+        assertEq(redemptionQueue.queueTail(), 3);
+
+        // Rescue the first entry — head should advance
+        vm.prank(queueRescuer);
+        redemptionQueue.rescueQueueEntry(0, user1);
+
+        assertEq(redemptionQueue.queueHead(), 1, "Head should advance after rescuing first entry");
+    }
+
+    function test_RescueQueueEntry_DoesNotAdvanceHeadWhenMiddle() public {
+        uint256 amount = 500e18;
+
+        // Enqueue 3 entries
+        _mintOkuMoney(address(redemptionQueue), amount * 3);
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user2, amount);
+        redemptionQueue.enqueue(user3, amount);
+
+        assertEq(redemptionQueue.queueHead(), 0);
+
+        // Rescue the middle entry — head should NOT advance
+        vm.prank(queueRescuer);
+        redemptionQueue.rescueQueueEntry(1, user2);
+
+        assertEq(
+            redemptionQueue.queueHead(), 0, "Head should not advance when rescuing middle entry"
+        );
+    }
+
+    function test_RescueQueueEntry_ProcessQueueAfterRescue() public {
+        uint256 amount = 500e18;
+
+        // Enqueue 3 entries
+        _mintOkuMoney(address(redemptionQueue), amount * 3);
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user2, amount);
+        redemptionQueue.enqueue(user3, amount);
+
+        // Grant queue the ability to burn
+        vm.prank(admin);
+        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+
+        // Rescue the first entry (stuck)
+        vm.prank(queueRescuer);
+        redemptionQueue.rescueQueueEntry(0, user1);
+
+        // Now process remaining entries
+        uint256 usdcNeeded = (amount * 2) / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), usdcNeeded);
+        _approveUsdc(address(this), address(redemptionQueue), usdcNeeded);
+
+        uint256 user2UsdcBefore = usdc.balanceOf(user2);
+        uint256 user3UsdcBefore = usdc.balanceOf(user3);
+
+        redemptionQueue.processQueue(
+            redemptionQueue.queueHead(),
+            redemptionQueue.queueTail(),
+            address(usdc),
+            address(okuMoney)
+        );
+
+        // Both remaining users should receive USDC
+        assertGt(usdc.balanceOf(user2), user2UsdcBefore, "User2 should receive USDC");
+        assertGt(usdc.balanceOf(user3), user3UsdcBefore, "User3 should receive USDC");
     }
 }

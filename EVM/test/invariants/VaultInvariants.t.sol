@@ -88,16 +88,5 @@ contract VaultInvariantsTest is BaseTest {
         );
     }
 
-    /**
-     * @notice Handler should have a reasonable success rate
-     */
-    function invariant_ReasonableSuccessRate() public view {
-        uint256 totalCalls = handler.ghostTotalCalls();
-        uint256 totalReverts = handler.ghostTotalReverts();
-        if (totalCalls > 10) {
-            assertGe(
-                ((totalCalls - totalReverts) * 100) / totalCalls, 30, "Handler success rate too low"
-            );
-        }
-    }
+    // NOTE: Handler success rate check moved to HandlerSanity.t.sol
 }

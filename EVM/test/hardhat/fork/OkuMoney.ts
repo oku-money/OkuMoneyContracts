@@ -14,12 +14,12 @@ import {
 import { Signer, parseEther, parseUnits } from "ethers"
 import { ethers, network, upgrades } from "hardhat"
 import { expect } from "chai"
-import { getTokenAddress, getWhaleAddress } from "../../../config/config"
+import { getTokenAddress, getWhaleAddress } from "../../../scripts/config/chains"
 
 const USDC_MAINNET = getTokenAddress("mainnet", "usdc")
 const USDC_WHALE = getWhaleAddress("mainnet", "usdc")!
 
-describe("OkuNote Scenarios", () => {
+describe("OkuMoney Scenarios", () => {
     let Frank: Signer
     let Bob: Signer
     let Alice: Signer
@@ -28,8 +28,8 @@ describe("OkuNote Scenarios", () => {
     let okuBridgeRouter: OkuBridgeRouter
     let psm: LitePSM
     let queue: RedemptionQueue
-    let okuMoney: OkuNote
-    let okuUsd: OkuUSD
+    let okuMoney: OkuMoney
+    let okuUsd: OkuDollar
 
     let usdc: ReturnType<typeof IERC20__factory.connect>
 
@@ -58,7 +58,7 @@ describe("OkuNote Scenarios", () => {
         })
     }
 
-    async function getOkuNote(user: Signer, usdcAmount: bigint) {
+    async function getOkuMoney(user: Signer, usdcAmount: bigint) {
         // The PSM slippage check can fail due to integer division rounding.
         // At elevated prices, we need to round up the USDC input to the nearest
         // amount that divides evenly by the price to avoid 1 wei rounding loss.
@@ -118,14 +118,14 @@ describe("OkuNote Scenarios", () => {
             new OkuMoney__factory(Frank),
             ["OkuMoney", "OkuM", frankAddr, MAX_SUPPLY],
             { kind: "uups" }
-        ) as unknown as OkuNote
+        ) as unknown as OkuMoney
         await okuMoney.waitForDeployment()
 
         okuUsd = await upgrades.deployProxy(
             new OkuDollar__factory(Frank),
             [await okuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr, parseEther("0.95")],
             { kind: "uups", unsafeAllow: ["constructor"] }
-        ) as unknown as OkuUSD
+        ) as unknown as OkuDollar
         await okuUsd.waitForDeployment()
 
         queue = await upgrades.deployProxy(
@@ -179,10 +179,10 @@ describe("OkuNote Scenarios", () => {
             const depositAmount = parseUnits("10000", 6)
 
             // Alice gets OkuMoney via PSM
-            await getOkuNote(Alice, depositAmount)
+            await getOkuMoney(Alice, depositAmount)
             const aliceInitialBalance = await okuMoney.balanceOf(aliceAddr)
 
-            // Alice transfers 5,000 OkuMoney to Bob (OkuNote is 18 decimals)
+            // Alice transfers 5,000 OkuMoney to Bob (OkuMoney is 18 decimals)
             const transferAmount = parseEther("5000")
             const priceAtTransfer = await okuMoney.okuMMultiplier()
             const PRECISION = parseEther("1")
@@ -294,70 +294,70 @@ describe("OkuNote Scenarios", () => {
             // Deploy fresh contracts with LOW maxSupply (100,000 OkuMoney in 18 decimals)
             const lowMaxSupply = parseEther("100000")
 
-            const freshOkuNote = await upgrades.deployProxy(
+            const freshOkuMoney = await upgrades.deployProxy(
                 new OkuMoney__factory(Frank),
-                ["OkuNote-Low", "OKUNOTE-L", frankAddr, lowMaxSupply],
+                ["OkuMoney-Low", "OKUM-L", frankAddr, lowMaxSupply],
                 { kind: "uups" }
-            ) as unknown as OkuNote
-            await freshOkuNote.waitForDeployment()
+            ) as unknown as OkuMoney
+            await freshOkuMoney.waitForDeployment()
 
             const freshOkuUsd = await upgrades.deployProxy(
                 new OkuDollar__factory(Frank),
-                [await freshOkuNote.getAddress(), "OkuDollar", "usdOku", frankAddr, parseEther("0.95")],
+                [await freshOkuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr, parseEther("0.95")],
                 { kind: "uups", unsafeAllow: ["constructor"] }
-            ) as unknown as OkuUSD
+            ) as unknown as OkuDollar
             await freshOkuUsd.waitForDeployment()
 
             const freshQueue = await upgrades.deployProxy(
                 new RedemptionQueue__factory(Frank),
-                [await freshOkuNote.getAddress(), frankAddr],
+                [await freshOkuMoney.getAddress(), frankAddr],
                 { kind: "uups" }
             ) as unknown as RedemptionQueue
             await freshQueue.waitForDeployment()
 
             const freshPSM = await upgrades.deployProxy(
                 new LitePSM__factory(Frank),
-                [await freshOkuNote.getAddress(), await freshOkuUsd.getAddress(), USDC_MAINNET, await freshQueue.getAddress(), frankAddr],
+                [await freshOkuMoney.getAddress(), await freshOkuUsd.getAddress(), USDC_MAINNET, await freshQueue.getAddress(), frankAddr],
                 { kind: "uups", unsafeAllow: ["constructor"] }
             ) as unknown as LitePSM
             await freshPSM.waitForDeployment()
 
             // Grant PSM minter role with HIGH allowance (1B in 18 decimals)
-            await freshOkuNote.connect(Frank).grantRole(OKUM_MINTER, await freshPSM.getAddress())
+            await freshOkuMoney.connect(Frank).grantRole(OKUM_MINTER, await freshPSM.getAddress())
 
             // Grant RBAC roles to Frank for fresh contracts
-            await freshOkuNote.connect(Frank).grantRole(OKUM_ALLOWANCE_MANAGER, frankAddr)
-            await freshOkuNote.connect(Frank).grantRole(OKUM_CAP_MANAGER, frankAddr)
+            await freshOkuMoney.connect(Frank).grantRole(OKUM_ALLOWANCE_MANAGER, frankAddr)
+            await freshOkuMoney.connect(Frank).grantRole(OKUM_CAP_MANAGER, frankAddr)
 
-            await freshOkuNote.connect(Frank).configureMinterAllowance(
+            await freshOkuMoney.connect(Frank).configureMinterAllowance(
                 await freshPSM.getAddress(),
                 parseEther("1000000000")
             )
             await freshQueue.connect(Frank).grantRole(QUEUE_PSM, await freshPSM.getAddress())
 
-            // Alice swaps 80,000 USDC (should succeed - under 100k cap, receives 80,000 OkuNote)
+            // Alice swaps 80,000 USDC (should succeed - under 100k cap, receives 80,000 OkuMoney)
             const firstSwap = parseUnits("80000", 6) // USDC amount
             await fundWithUSDC(Alice, firstSwap)
             await usdc.connect(Alice).approve(await freshPSM.getAddress(), firstSwap)
             await freshPSM.connect(Alice).mintOkuM(firstSwap)
 
-            expect(await freshOkuNote.balanceOf(aliceAddr)).to.be.closeTo(parseEther("80000"), parseEther("1"))
+            expect(await freshOkuMoney.balanceOf(aliceAddr)).to.be.closeTo(parseEther("80000"), parseEther("1"))
 
             // Alice tries to swap 30,000 more USDC (should fail - would exceed 100k OkuMoney cap)
             const secondSwap = parseUnits("30000", 6) // USDC amount
             await fundWithUSDC(Alice, secondSwap)
             await usdc.connect(Alice).approve(await freshPSM.getAddress(), secondSwap)
-            await expect(freshPSM.connect(Alice).mintOkuM(secondSwap)).to.be.revertedWithCustomError(freshOkuNote, "ExceedsSupplyCap")
+            await expect(freshPSM.connect(Alice).mintOkuM(secondSwap)).to.be.revertedWithCustomError(freshOkuMoney, "ExceedsSupplyCap")
 
             // Admin increases maxSupply
             const newMaxSupply = parseEther("200000")
-            await freshOkuNote.connect(Frank).setMaxSupply(newMaxSupply)
+            await freshOkuMoney.connect(Frank).setMaxSupply(newMaxSupply)
 
             // Now swap should succeed
             await freshPSM.connect(Alice).mintOkuM(secondSwap)
 
             // Alice should have ~110,000 OkuMoney (in 18 decimals)
-            const aliceBalance = await freshOkuNote.balanceOf(aliceAddr)
+            const aliceBalance = await freshOkuMoney.balanceOf(aliceAddr)
             expect(aliceBalance).to.be.closeTo(parseEther("110000"), parseEther("1"))
         })
     })
@@ -377,7 +377,7 @@ describe("OkuNote Scenarios", () => {
             const depositAmount = parseUnits("10000", 6)
 
             // Alice gets OkuMoney via PSM
-            await getOkuNote(Alice, depositAmount)
+            await getOkuMoney(Alice, depositAmount)
             const aliceBalance = await okuMoney.balanceOf(aliceAddr)
             expect(aliceBalance).to.be.gt(0)
 
@@ -426,10 +426,10 @@ describe("OkuNote Scenarios", () => {
             const charlieAddr = await Charlie.getAddress()
             const depositAmount = parseUnits("10000", 6)
 
-            // All users get OkuNote
-            await getOkuNote(Alice, depositAmount)
-            await getOkuNote(Bob, depositAmount)
-            await getOkuNote(Charlie, depositAmount)
+            // All users get OkuMoney
+            await getOkuMoney(Alice, depositAmount)
+            await getOkuMoney(Bob, depositAmount)
+            await getOkuMoney(Charlie, depositAmount)
 
             const transferAmount = parseEther("1000")
 
@@ -472,8 +472,8 @@ describe("OkuNote Scenarios", () => {
             const bobAddr = await Bob.getAddress()
             const depositAmount = parseUnits("10000", 6)
 
-            // Setup: Alice gets OkuNote
-            await getOkuNote(Alice, depositAmount)
+            // Setup: Alice gets OkuMoney
+            await getOkuMoney(Alice, depositAmount)
             const aliceBalance = await okuMoney.balanceOf(aliceAddr)
 
             // STEP 1: Pause the contract (freeze all transfers)
@@ -497,7 +497,7 @@ describe("OkuNote Scenarios", () => {
             ).to.be.revertedWithCustomError(okuMoney, "SenderBlacklisted")
 
             // Alice still cannot receive
-            await getOkuNote(Bob, depositAmount)
+            await getOkuMoney(Bob, depositAmount)
             await expect(
                 okuMoney.connect(Bob).transfer(aliceAddr, parseEther("100"))
             ).to.be.revertedWithCustomError(okuMoney, "RecipientBlacklisted")

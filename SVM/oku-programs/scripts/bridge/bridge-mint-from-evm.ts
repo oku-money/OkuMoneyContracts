@@ -103,11 +103,11 @@ async function main() {
     logger.warning(`The transaction will fail unless you are the orchestrator`);
   }
 
-  // Load bridge request
+  // Load bridge request from scripts/bridge/ directory
   const requestArg = process.argv.find(arg => arg.startsWith('--request='));
   const requestFile = requestArg
     ? requestArg.split('=')[1]
-    : path.join(__dirname, '..', '..', 'bridge-request.json');
+    : path.join(__dirname, 'bridge-request.json');
 
   if (!fs.existsSync(requestFile)) {
     throw new Error(`Bridge request file not found: ${requestFile}`);

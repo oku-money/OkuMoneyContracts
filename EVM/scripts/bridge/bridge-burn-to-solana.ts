@@ -178,12 +178,13 @@ async function main() {
     txHash: receipt.hash,
   };
 
-  const outputPath = path.join(__dirname, "..", "..", "bridge-request.json");
+  // Write to scripts/bridge/ directory (gitignored)
+  const outputPath = path.join(__dirname, "bridge-request.json");
   fs.writeFileSync(outputPath, JSON.stringify(bridgeRequest, null, 2));
   logger.success(`Bridge request written to: ${outputPath}`);
 
-  // Also copy to SVM directory for convenience
-  const svmOutputPath = path.join(__dirname, "..", "..", "..", "SVM", "oku-programs", "bridge-request.json");
+  // Also copy to SVM directory for the mint script
+  const svmOutputPath = path.join(__dirname, "..", "..", "..", "SVM", "oku-programs", "scripts", "bridge", "bridge-request.json");
   fs.writeFileSync(svmOutputPath, JSON.stringify(bridgeRequest, null, 2));
   logger.success(`Bridge request also copied to: ${svmOutputPath}`);
 

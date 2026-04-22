@@ -14,7 +14,7 @@ import {
 import { Signer, parseEther, parseUnits } from "ethers"
 import { ethers, network, upgrades } from "hardhat"
 import { expect } from "chai"
-import { getTokenAddress, getWhaleAddress } from "../../../config/config"
+import { getTokenAddress, getWhaleAddress } from "../../../scripts/config/chains"
 
 const USDC_MAINNET = getTokenAddress("mainnet", "usdc")
 const USDC_WHALE = getWhaleAddress("mainnet", "usdc")!
@@ -28,8 +28,8 @@ describe("OkuDollar Vault Scenarios", () => {
     let okuBridgeRouter: OkuBridgeRouter
     let psm: LitePSM
     let queue: RedemptionQueue
-    let okuMoney: OkuNote
-    let okuUsd: OkuUSD
+    let okuMoney: OkuMoney
+    let okuUsd: OkuDollar
 
     let usdc: ReturnType<typeof IERC20__factory.connect>
 
@@ -58,7 +58,7 @@ describe("OkuDollar Vault Scenarios", () => {
         })
     }
 
-    async function getOkuNote(user: Signer, usdcAmount: bigint) {
+    async function getOkuMoney(user: Signer, usdcAmount: bigint) {
         // The PSM slippage check can fail due to integer division rounding.
         // At elevated prices, we need to round up the USDC input to the nearest
         // amount that divides evenly by the price to avoid 1 wei rounding loss.
@@ -109,14 +109,14 @@ describe("OkuDollar Vault Scenarios", () => {
             new OkuMoney__factory(Frank),
             ["OkuMoney", "OkuM", frankAddr, MAX_SUPPLY],
             { kind: "uups" }
-        ) as unknown as OkuNote
+        ) as unknown as OkuMoney
         await okuMoney.waitForDeployment()
 
         okuUsd = await upgrades.deployProxy(
             new OkuDollar__factory(Frank),
             [await okuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr, parseEther("0.95")],
             { kind: "uups", unsafeAllow: ["constructor"] }
-        ) as unknown as OkuUSD
+        ) as unknown as OkuDollar
         await okuUsd.waitForDeployment()
 
         queue = await upgrades.deployProxy(
@@ -170,7 +170,7 @@ describe("OkuDollar Vault Scenarios", () => {
             const depositAmount = parseUnits("10000", 6)
 
             // Get OkuMoney via PSM
-            await getOkuNote(Alice, depositAmount)
+            await getOkuMoney(Alice, depositAmount)
 
             const noteBalance = await okuMoney.balanceOf(aliceAddr)
             expect(noteBalance).to.be.gt(0)
@@ -210,7 +210,7 @@ describe("OkuDollar Vault Scenarios", () => {
             const depositAmount = parseUnits("10000", 6)
 
             // Get OkuMoney via PSM
-            await getOkuNote(Alice, depositAmount)
+            await getOkuMoney(Alice, depositAmount)
             const noteBalance = await okuMoney.balanceOf(aliceAddr)
 
             // Wrap into vault
@@ -272,9 +272,9 @@ describe("OkuDollar Vault Scenarios", () => {
             const charlieNotesPreMint = await okuMoney.balanceOf(charlieAddr)
 
             // All users get OkuMoney (price-aware: amount depends on current notePrice)
-            await getOkuNote(Alice, aliceDeposit)
-            await getOkuNote(Bob, bobDeposit)
-            await getOkuNote(Charlie, charlieDeposit)
+            await getOkuMoney(Alice, aliceDeposit)
+            await getOkuMoney(Bob, bobDeposit)
+            await getOkuMoney(Charlie, charlieDeposit)
 
             // Use actual minted amounts (price-aware, not hardcoded)
             const aliceNotes = (await okuMoney.balanceOf(aliceAddr)) - aliceNotesPreMint

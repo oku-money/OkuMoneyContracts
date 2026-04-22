@@ -260,9 +260,20 @@ contract OkuMoneyFuzzTest is BaseTest {
     // ============ distributeYield Fuzz Tests ============
 
     /// @notice distributeYield increases price monotonically
+    /// @dev Caps yieldAmount to ensure the resulting multiplier stays below MAX_RATE.
+    ///      MAX_RATE is ~3700% APY safety cap (1e18 + 1e11), so max yield per call
+    ///      is bounded to prevent unrealistic price jumps.
     function testFuzz_DistributeYield(uint256 supply, uint256 yieldAmount) public {
         supply = bound(supply, 1e18, MAX_SUPPLY / 2);
-        yieldAmount = bound(yieldAmount, 1, 1e30);
+
+        // Cap yieldAmount so the price increase stays realistic:
+        // maxIncrease = MAX_RATE - PRECISION = 1e11 (per the safety cap)
+        // yieldAmount * PRECISION / supply <= 1e11
+        // yieldAmount <= supply * 1e11 / PRECISION = supply / 1e7
+        // Use a slightly lower bound to avoid edge cases
+        uint256 maxYield = supply / 1e6; // ~0.0001% of supply per call (conservative)
+        if (maxYield == 0) maxYield = 1;
+        yieldAmount = bound(yieldAmount, 1, maxYield);
 
         _mintOkuMoney(user1, supply);
 

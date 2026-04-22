@@ -311,12 +311,13 @@ async function main() {
     txSignature: tx,
   };
 
-  const outputPath = path.join(__dirname, '..', '..', 'bridge-request.json');
+  // Write to scripts/bridge/ directory (gitignored)
+  const outputPath = path.join(__dirname, 'bridge-request.json');
   fs.writeFileSync(outputPath, JSON.stringify(bridgeRequest, null, 2));
   logger.success(`Bridge request written to: ${outputPath}`);
 
-  // Also copy to EVM directory for convenience
-  const evmOutputPath = path.join(__dirname, '..', '..', '..', '..', 'EVM', 'bridge-request.json');
+  // Also copy to EVM scripts/bridge/ directory for the mint script
+  const evmOutputPath = path.join(__dirname, '..', '..', '..', '..', 'EVM', 'scripts', 'bridge', 'bridge-request.json');
   fs.writeFileSync(evmOutputPath, JSON.stringify(bridgeRequest, null, 2));
   logger.success(`Bridge request also copied to: ${evmOutputPath}`);
 

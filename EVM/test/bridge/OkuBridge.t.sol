@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {BaseTest} from "../Base.t.sol";
+import {BridgeBaseTest} from "../BridgeBase.t.sol";
 import {OkuBridge} from "../../src/bridge/OkuBridge.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
@@ -14,157 +14,16 @@ import {
  * @notice Comprehensive test suite for OkuBridge contract
  * @dev Updated for OkuMoney non-rebasing redesign. Bridge operates on raw token
  *      amounts — no share conversion. Round-trip amounts are exact (no rounding).
+ *
+ *      Inherits from BridgeBaseTest which provides:
+ *      - All role constants (BRIDGE_*, OKUM_*, etc.)
+ *      - Chain ID constants (OPTIMISM_CHAIN_ID, ARBITRUM_CHAIN_ID, etc.)
+ *      - okuBridge deployment and setup
+ *      - Helper functions (_signBridgeRequest, _approveBridgeBurn, etc.)
  */
-contract OkuBridgeTest is BaseTest {
-    OkuBridge public okuBridge;
-    OkuBridge public okuBridgeImpl;
-
-    address public orchestratorSigner;
-    uint256 public orchestratorPk;
-    address public feeRecipient;
-
-    // Two-step refund: initiator and confirmer must be different addresses
-    address public refundInitiator;
-    address public refundConfirmer;
-
-    // Bridge roles
-    bytes32 public constant BRIDGE_SIGNER_MANAGER = keccak256("BRIDGE_SIGNER_MANAGER");
-    bytes32 public constant BRIDGE_PAUSER = keccak256("BRIDGE_PAUSER");
-    bytes32 public constant BRIDGE_UNPAUSER = keccak256("BRIDGE_UNPAUSER");
-    bytes32 public constant BRIDGE_FEE_MANAGER = keccak256("BRIDGE_FEE_MANAGER");
-    bytes32 public constant BRIDGE_NONCE_ADMIN = keccak256("BRIDGE_NONCE_ADMIN");
-    bytes32 public constant BRIDGE_CHAIN_MANAGER = keccak256("BRIDGE_CHAIN_MANAGER");
-    bytes32 public constant BRIDGE_LIMITS_MANAGER = keccak256("BRIDGE_LIMITS_MANAGER");
-    bytes32 public constant BRIDGE_REFUND_INITIATOR = keccak256("BRIDGE_REFUND_INITIATOR");
-    bytes32 public constant BRIDGE_REFUND_CONFIRMER = keccak256("BRIDGE_REFUND_CONFIRMER");
-
-    // Chain IDs for testing
-    uint256 constant OPTIMISM_CHAIN_ID = 10;
-    uint256 constant ARBITRUM_CHAIN_ID = 42_161;
-    uint256 constant BASE_CHAIN_ID = 8453;
-    uint256 constant UNSUPPORTED_CHAIN_ID = 999;
-
-    // EIP-712 typehash (uses "amount" — OkuMoney is non-rebasing)
-    bytes32 public constant BRIDGE_REQUEST_TYPEHASH = keccak256(
-        "BridgeRequest(uint256 sourceChainId,uint256 destChainId,address sender,bytes32 recipient,uint256 amount,uint256 nonce,uint256 deadline)"
-    );
-
-    function setUp() public override {
-        super.setUp();
-
-        // Create orchestrator signer
-        orchestratorPk = 0xA11CE;
-        orchestratorSigner = vm.addr(orchestratorPk);
-        feeRecipient = makeAddr("feeRecipient");
-        refundInitiator = makeAddr("refundInitiator");
-        refundConfirmer = makeAddr("refundConfirmer");
-
-        // Deploy OkuBridge
-        _deployBridge();
-
-        // Grant bridge contract minter role for OkuMoney
-        vm.startPrank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(okuBridge));
-        // Grant two-step refund roles to separate addresses
-        okuBridge.grantRole(BRIDGE_REFUND_INITIATOR, refundInitiator);
-        okuBridge.grantRole(BRIDGE_REFUND_CONFIRMER, refundConfirmer);
-        vm.stopPrank();
-        vm.startPrank(allowanceManager);
-        okuMoney.configureMinterAllowance(address(okuBridge), MAX_SUPPLY);
-        vm.stopPrank();
-    }
-
-    function _deployBridge() internal {
-        okuBridgeImpl = new OkuBridge();
-        uint256[] memory initialChains = new uint256[](3);
-        initialChains[0] = OPTIMISM_CHAIN_ID;
-        initialChains[1] = ARBITRUM_CHAIN_ID;
-        initialChains[2] = BASE_CHAIN_ID;
-        bytes memory initData = abi.encodeCall(
-            OkuBridge.initialize,
-            (address(okuMoney), orchestratorSigner, feeRecipient, admin, initialChains)
-        );
-        okuBridge = OkuBridge(address(new ERC1967Proxy(address(okuBridgeImpl), initData)));
-    }
-
-    // ============ Helper Functions ============
-
-    /// @notice Approve bridge and call bridgeBurn (user must hold tokens)
-    function _approveBridgeBurn(
-        address user,
-        uint256 destChainId,
-        address recipient,
-        uint256 amount
-    )
-        internal
-        returns (bytes32 requestId)
-    {
-        vm.startPrank(user);
-        okuMoney.approve(address(okuBridge), amount);
-        requestId = okuBridge.bridgeBurn(destChainId, bytes32(uint256(uint160(recipient))), amount);
-        vm.stopPrank();
-    }
-
-    function _signBridgeRequest(OkuBridge.BridgeRequest memory request)
-        internal
-        view
-        returns (bytes memory)
-    {
-        bytes32 structHash = keccak256(
-            abi.encode(
-                BRIDGE_REQUEST_TYPEHASH,
-                request.sourceChainId,
-                request.destChainId,
-                request.sender,
-                request.recipient,
-                request.amount,
-                request.nonce,
-                request.deadline
-            )
-        );
-
-        bytes32 digest = okuBridge.hashTypedDataV4(structHash);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(orchestratorPk, digest);
-        return abi.encodePacked(r, s, v);
-    }
-
-    function _mintAndBridge(
-        address user,
-        uint256 amount,
-        uint256 destChainId,
-        address recipient
-    )
-        internal
-        returns (bytes32 requestId, OkuBridge.BridgeRequest memory request)
-    {
-        _mintOkuMoney(user, amount);
-
-        vm.startPrank(user);
-        okuMoney.approve(address(okuBridge), amount);
-        requestId = okuBridge.bridgeBurn(destChainId, bytes32(uint256(uint160(recipient))), amount);
-        vm.stopPrank();
-
-        // Construct expected request (amount = netAmount, what destination will mint)
-        uint256 nonce = okuBridge.outboundNonce(destChainId) - 1;
-        uint256 netAmount = amount - (amount * okuBridge.bridgeFee()) / 10_000;
-        request = OkuBridge.BridgeRequest({
-            sourceChainId: block.chainid,
-            destChainId: destChainId,
-            sender: user,
-            recipient: bytes32(uint256(uint160(recipient))),
-            amount: netAmount,
-            nonce: nonce,
-            deadline: block.timestamp + okuBridge.bridgeDeadline()
-        });
-    }
-
-    /// @notice Execute both steps of the two-step refund flow using the dedicated role addresses
-    function _twoStepRefund(OkuBridge.BridgeRequest memory request) internal {
-        vm.prank(refundInitiator);
-        okuBridge.initiateRefund(request);
-        vm.prank(refundConfirmer);
-        okuBridge.confirmRefund(request);
-    }
+contract OkuBridgeTest is BridgeBaseTest {
+    // Note: okuBridge, okuBridgeImpl, orchestratorSigner, orchestratorPk, feeRecipient,
+    // refundInitiator, refundConfirmer, and all role/chain constants are inherited from BridgeBaseTest
 
     // ============ Unit Tests - bridgeBurn() ============
 
@@ -1449,5 +1308,361 @@ contract OkuBridgeTest is BaseTest {
         vm.prank(refundConfirmer);
         vm.expectRevert(abi.encodeWithSelector(OkuBridge.RefundNotInitiated.selector, requestId));
         okuBridge.confirmRefund(request);
+    }
+
+    // ============ Cancel Refund Tests ============
+
+    function test_CancelRefund_ByInitiator() public {
+        uint256 amount = 100e18;
+
+        (, OkuBridge.BridgeRequest memory request) =
+            _mintAndBridge(user1, amount, OPTIMISM_CHAIN_ID, user2);
+
+        vm.warp(request.deadline + 1);
+
+        // Initiate refund
+        vm.prank(refundInitiator);
+        okuBridge.initiateRefund(request);
+
+        bytes32 requestId = keccak256(abi.encode(request));
+
+        // Verify pending
+        assertEq(okuBridge.pendingRefundInitiator(requestId), refundInitiator);
+
+        // Cancel by initiator
+        vm.prank(refundInitiator);
+        vm.expectEmit(true, true, true, false);
+        emit OkuBridge.RefundCancelled(requestId, refundInitiator, refundInitiator);
+        okuBridge.cancelRefund(request);
+
+        // Verify cancelled
+        assertEq(okuBridge.pendingRefundInitiator(requestId), address(0));
+    }
+
+    function test_CancelRefund_ByAdmin() public {
+        uint256 amount = 100e18;
+
+        (, OkuBridge.BridgeRequest memory request) =
+            _mintAndBridge(user1, amount, OPTIMISM_CHAIN_ID, user2);
+
+        vm.warp(request.deadline + 1);
+
+        // Initiate refund
+        vm.prank(refundInitiator);
+        okuBridge.initiateRefund(request);
+
+        bytes32 requestId = keccak256(abi.encode(request));
+
+        // Cancel by admin
+        vm.prank(admin);
+        vm.expectEmit(true, true, true, false);
+        emit OkuBridge.RefundCancelled(requestId, refundInitiator, admin);
+        okuBridge.cancelRefund(request);
+
+        // Verify cancelled
+        assertEq(okuBridge.pendingRefundInitiator(requestId), address(0));
+    }
+
+    function test_CancelRefund_RevertNotInitiated() public {
+        uint256 amount = 100e18;
+
+        (, OkuBridge.BridgeRequest memory request) =
+            _mintAndBridge(user1, amount, OPTIMISM_CHAIN_ID, user2);
+
+        bytes32 requestId = keccak256(abi.encode(request));
+
+        // Try to cancel without initiating
+        vm.prank(refundInitiator);
+        vm.expectRevert(abi.encodeWithSelector(OkuBridge.RefundNotInitiated.selector, requestId));
+        okuBridge.cancelRefund(request);
+    }
+
+    function test_CancelRefund_RevertNotInitiatorOrAdmin() public {
+        uint256 amount = 100e18;
+
+        (, OkuBridge.BridgeRequest memory request) =
+            _mintAndBridge(user1, amount, OPTIMISM_CHAIN_ID, user2);
+
+        vm.warp(request.deadline + 1);
+
+        // Initiate refund
+        vm.prank(refundInitiator);
+        okuBridge.initiateRefund(request);
+
+        // Try to cancel as unauthorized user
+        vm.prank(user1);
+        vm.expectRevert(OkuBridge.NotInitiatorOrAdmin.selector);
+        okuBridge.cancelRefund(request);
+    }
+
+    function test_CancelRefund_CanReinitiateAfterCancel() public {
+        uint256 amount = 100e18;
+
+        (, OkuBridge.BridgeRequest memory request) =
+            _mintAndBridge(user1, amount, OPTIMISM_CHAIN_ID, user2);
+
+        vm.warp(request.deadline + 1);
+
+        // Initiate and cancel
+        vm.prank(refundInitiator);
+        okuBridge.initiateRefund(request);
+        vm.prank(refundInitiator);
+        okuBridge.cancelRefund(request);
+
+        bytes32 requestId = keccak256(abi.encode(request));
+        assertEq(okuBridge.pendingRefundInitiator(requestId), address(0));
+
+        // Can re-initiate
+        vm.prank(refundInitiator);
+        okuBridge.initiateRefund(request);
+
+        assertEq(okuBridge.pendingRefundInitiator(requestId), refundInitiator);
+    }
+
+    function test_CancelRefund_CannotCancelAfterConfirm() public {
+        uint256 amount = 100e18;
+
+        (, OkuBridge.BridgeRequest memory request) =
+            _mintAndBridge(user1, amount, OPTIMISM_CHAIN_ID, user2);
+
+        vm.warp(request.deadline + 1);
+
+        // Complete two-step refund
+        _twoStepRefund(request);
+
+        bytes32 requestId = keccak256(abi.encode(request));
+
+        // Try to cancel after confirm — should revert (no longer pending)
+        vm.prank(refundInitiator);
+        vm.expectRevert(abi.encodeWithSelector(OkuBridge.RefundNotInitiated.selector, requestId));
+        okuBridge.cancelRefund(request);
+    }
+
+    // ============ Solana Destination Tests ============
+
+    function test_SolanaBridge_AddChainSupport() public {
+        // Initially Solana should not be supported
+        assertFalse(okuBridge.supportedChains(SOLANA_MAINNET_CHAIN_ID));
+
+        // Add Solana chain support
+        _enableSolanaChain(true);
+
+        assertTrue(okuBridge.supportedChains(SOLANA_MAINNET_CHAIN_ID));
+    }
+
+    function test_SolanaBridge_BurnToSolanaRecipient() public {
+        // Enable Solana
+        _enableSolanaChain(true);
+
+        uint256 amount = 100e18;
+        _mintOkuMoney(user1, amount);
+
+        // Create a Solana recipient (32-byte pubkey)
+        bytes32 solanaRecipient = _createSolanaRecipient(42);
+        // Verify it's a full 32-byte value (not just 20 bytes)
+        assertTrue(
+            uint256(solanaRecipient) > type(uint160).max,
+            "Solana recipient should use full 32 bytes"
+        );
+
+        uint256 supplyBefore = okuMoney.totalSupply();
+        uint256 nonceBefore = okuBridge.outboundNonce(SOLANA_MAINNET_CHAIN_ID);
+
+        vm.startPrank(user1);
+        okuMoney.approve(address(okuBridge), amount);
+        bytes32 requestId = okuBridge.bridgeBurn(SOLANA_MAINNET_CHAIN_ID, solanaRecipient, amount);
+        vm.stopPrank();
+
+        // Verify bridge worked
+        assertTrue(requestId != bytes32(0), "Request ID should be non-zero");
+        assertEq(
+            okuBridge.outboundNonce(SOLANA_MAINNET_CHAIN_ID),
+            nonceBefore + 1,
+            "Nonce should increment"
+        );
+
+        // Verify tokens burned (minus fee)
+        uint256 fee = (amount * okuBridge.bridgeFee()) / okuBridge.BASIS_POINTS();
+        assertEq(
+            okuMoney.totalSupply(),
+            supplyBefore - amount + fee,
+            "Supply should decrease by net amount"
+        );
+    }
+
+    function test_SolanaBridge_SequentialNoncesForSolana() public {
+        _enableSolanaChain(true);
+
+        uint256 amount = okuBridge.minBridgeAmount();
+        _mintOkuMoney(user1, amount * 3);
+
+        vm.startPrank(user1);
+        okuMoney.approve(address(okuBridge), amount * 3);
+
+        bytes32 solanaRecipient = _createSolanaRecipient(1);
+
+        // Bridge 3 times
+        okuBridge.bridgeBurn(SOLANA_MAINNET_CHAIN_ID, solanaRecipient, amount);
+        okuBridge.bridgeBurn(SOLANA_MAINNET_CHAIN_ID, solanaRecipient, amount);
+        okuBridge.bridgeBurn(SOLANA_MAINNET_CHAIN_ID, solanaRecipient, amount);
+
+        vm.stopPrank();
+
+        // Verify nonces incremented correctly
+        assertEq(
+            okuBridge.outboundNonce(SOLANA_MAINNET_CHAIN_ID),
+            3,
+            "Should have 3 outbound nonces for Solana"
+        );
+    }
+
+    function test_SolanaBridge_DevnetChain() public {
+        // Enable Solana devnet
+        _enableSolanaChain(false); // false = devnet
+
+        assertTrue(okuBridge.supportedChains(SOLANA_DEVNET_CHAIN_ID));
+        assertFalse(okuBridge.supportedChains(SOLANA_MAINNET_CHAIN_ID));
+
+        uint256 amount = 100e18;
+        _mintOkuMoney(user1, amount);
+
+        bytes32 solanaRecipient = _createSolanaRecipient(123);
+
+        vm.startPrank(user1);
+        okuMoney.approve(address(okuBridge), amount);
+        bytes32 requestId = okuBridge.bridgeBurn(SOLANA_DEVNET_CHAIN_ID, solanaRecipient, amount);
+        vm.stopPrank();
+
+        assertTrue(requestId != bytes32(0));
+    }
+
+    function test_SolanaBridge_RevertUnsupportedSolanaChain() public {
+        // Don't enable Solana
+        assertFalse(okuBridge.supportedChains(SOLANA_MAINNET_CHAIN_ID));
+
+        uint256 amount = 100e18;
+        _mintOkuMoney(user1, amount);
+
+        bytes32 solanaRecipient = _createSolanaRecipient(1);
+
+        vm.startPrank(user1);
+        okuMoney.approve(address(okuBridge), amount);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(OkuBridge.UnsupportedChain.selector, SOLANA_MAINNET_CHAIN_ID)
+        );
+        okuBridge.bridgeBurn(SOLANA_MAINNET_CHAIN_ID, solanaRecipient, amount);
+
+        vm.stopPrank();
+    }
+
+    function test_SolanaBridge_SeparateNoncePerChain() public {
+        _enableSolanaChain(true);
+
+        uint256 amount = okuBridge.minBridgeAmount();
+        _mintOkuMoney(user1, amount * 4);
+
+        vm.startPrank(user1);
+        okuMoney.approve(address(okuBridge), amount * 4);
+
+        bytes32 evmRecipient = bytes32(uint256(uint160(user2)));
+        bytes32 solanaRecipient = _createSolanaRecipient(1);
+
+        // Bridge to Optimism
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, evmRecipient, amount);
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, evmRecipient, amount);
+
+        // Bridge to Solana
+        okuBridge.bridgeBurn(SOLANA_MAINNET_CHAIN_ID, solanaRecipient, amount);
+
+        vm.stopPrank();
+
+        // Verify separate nonces
+        assertEq(okuBridge.outboundNonce(OPTIMISM_CHAIN_ID), 2, "Optimism should have 2 nonces");
+        assertEq(okuBridge.outboundNonce(SOLANA_MAINNET_CHAIN_ID), 1, "Solana should have 1 nonce");
+    }
+
+    function testFuzz_SolanaBridge_VariableAmounts(uint256 amount) public {
+        _enableSolanaChain(true);
+
+        // Bound to valid bridge amounts
+        uint128 minAmount = okuBridge.minBridgeAmount();
+        uint128 maxAmount = okuBridge.maxBridgeAmount();
+        amount = bound(amount, minAmount, maxAmount);
+
+        _mintOkuMoney(user1, amount);
+
+        bytes32 solanaRecipient = _createSolanaRecipient(amount);
+
+        uint256 balanceBefore = okuMoney.balanceOf(user1);
+
+        vm.startPrank(user1);
+        okuMoney.approve(address(okuBridge), amount);
+        okuBridge.bridgeBurn(SOLANA_MAINNET_CHAIN_ID, solanaRecipient, amount);
+        vm.stopPrank();
+
+        // User balance should decrease by full amount
+        assertEq(okuMoney.balanceOf(user1), balanceBefore - amount);
+    }
+
+    function test_SolanaBridge_EmitsBridgeBurnEvent() public {
+        _enableSolanaChain(true);
+
+        uint256 amount = 100e18;
+        _mintOkuMoney(user1, amount);
+
+        bytes32 solanaRecipient = _createSolanaRecipient(1);
+        uint256 fee = (amount * okuBridge.bridgeFee()) / okuBridge.BASIS_POINTS();
+        uint256 netAmount = amount - fee;
+        uint256 nonce = okuBridge.outboundNonce(SOLANA_MAINNET_CHAIN_ID);
+        uint256 deadline = block.timestamp + okuBridge.bridgeDeadline();
+
+        vm.startPrank(user1);
+        okuMoney.approve(address(okuBridge), amount);
+
+        // Expect the BridgeBurn event with Solana chain ID and 32-byte recipient
+        vm.expectEmit(false, true, false, false); // Only check indexed sender
+        emit OkuBridge.BridgeBurn(
+            bytes32(0), // requestId calculated, don't check
+            user1,
+            solanaRecipient,
+            block.chainid,
+            SOLANA_MAINNET_CHAIN_ID,
+            amount,
+            netAmount,
+            fee,
+            nonce,
+            deadline
+        );
+
+        okuBridge.bridgeBurn(SOLANA_MAINNET_CHAIN_ID, solanaRecipient, amount);
+        vm.stopPrank();
+    }
+
+    function test_SolanaBridge_RequestIdIncludesSolanaChain() public {
+        _enableSolanaChain(true);
+
+        uint256 amount = okuBridge.minBridgeAmount();
+        _mintOkuMoney(user1, amount * 2);
+
+        vm.startPrank(user1);
+        okuMoney.approve(address(okuBridge), amount * 2);
+
+        bytes32 solanaRecipient = _createSolanaRecipient(1);
+        bytes32 evmRecipient = bytes32(uint256(uint160(user2)));
+
+        // Bridge to Solana
+        bytes32 solanaRequestId =
+            okuBridge.bridgeBurn(SOLANA_MAINNET_CHAIN_ID, solanaRecipient, amount);
+
+        // Bridge same amount to Optimism with equivalent recipient bytes
+        bytes32 optimismRequestId = okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, evmRecipient, amount);
+
+        vm.stopPrank();
+
+        // Request IDs should be different due to different dest chains
+        assertTrue(
+            solanaRequestId != optimismRequestId, "Request IDs should differ for different chains"
+        );
     }
 }

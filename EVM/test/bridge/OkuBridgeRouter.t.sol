@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {BaseTest} from "../Base.t.sol";
+import {BridgeBaseTest} from "../BridgeBase.t.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {OkuBridge} from "../../src/bridge/OkuBridge.sol";
@@ -22,28 +22,15 @@ import {
  * @dev OkuMoney is non-rebasing. okuMMultiplier() tracks multiplier appreciation separately
  *      from balanceOf(). Token amounts are passed directly to the bridge — no share
  *      conversion is needed.
+ *
+ *      Inherits from BridgeBaseTest which provides:
+ *      - All role constants (BRIDGE_*, ROUTER_*, OKUM_*, etc.)
+ *      - Chain ID constants (OPTIMISM_CHAIN_ID, ARBITRUM_CHAIN_ID, etc.)
+ *      - okuBridge, bridgeRouter, mockAdapter deployments
  */
-contract OkuBridgeRouterTest is BaseTest {
-    OkuBridgeRouter public bridgeRouter;
-    OkuBridgeRouter public bridgeRouterImpl;
-
-    // Native OkuBridge instance (used by native path)
+contract OkuBridgeRouterTest is BridgeBaseTest {
+    // Use okuBridge from BridgeBaseTest as okuBridgeContract for clarity in existing tests
     OkuBridge public okuBridgeContract;
-    OkuBridge public okuBridgeImpl;
-
-    // Mock adapter (used by adapter path)
-    MockOkuBridge public mockAdapter;
-
-    address public orchestratorSigner;
-    uint256 public orchestratorPk;
-    address public feeRecipient;
-
-    uint256 public constant ARBITRUM_CHAIN_ID = 42_161;
-    uint256 public constant OPTIMISM_CHAIN_ID = 10;
-
-    // Bridge roles (for OkuBridge)
-    bytes32 public constant BRIDGE_SIGNER_MANAGER = keccak256("BRIDGE_SIGNER_MANAGER");
-    bytes32 public constant BRIDGE_FEE_MANAGER = keccak256("BRIDGE_FEE_MANAGER");
 
     // Events from OkuBridge
     event BridgeBurn(
@@ -83,54 +70,11 @@ contract OkuBridgeRouterTest is BaseTest {
     function setUp() public override {
         super.setUp();
 
-        orchestratorPk = 0xA11CE;
-        orchestratorSigner = vm.addr(orchestratorPk);
-        feeRecipient = makeAddr("feeRecipient");
+        // Alias okuBridge from BridgeBaseTest to okuBridgeContract for existing test compatibility
+        okuBridgeContract = okuBridge;
 
-        // Deploy OkuBridge (native bridge) — operates on OkuMoney
-        okuBridgeImpl = new OkuBridge();
-        uint256[] memory initialChains = new uint256[](2);
-        initialChains[0] = ARBITRUM_CHAIN_ID;
-        initialChains[1] = OPTIMISM_CHAIN_ID;
-        bytes memory bridgeInitData = abi.encodeCall(
-            OkuBridge.initialize,
-            (address(okuMoney), orchestratorSigner, feeRecipient, admin, initialChains)
-        );
-        okuBridgeContract =
-            OkuBridge(address(new ERC1967Proxy(address(okuBridgeImpl), bridgeInitData)));
-
-        // Deploy OkuBridgeRouter — references OkuDollar vault and OkuMoney base token
-        bridgeRouterImpl = new OkuBridgeRouter();
-        bytes memory routerInitData = abi.encodeCall(
-            OkuBridgeRouter.initialize,
-            (address(usdOku), address(okuMoney), address(okuBridgeContract), admin)
-        );
-        bridgeRouter =
-            OkuBridgeRouter(address(new ERC1967Proxy(address(bridgeRouterImpl), routerInitData)));
-
-        // Deploy mock adapter (for adapter path tests) — operates on OkuMoney
-        mockAdapter = new MockOkuBridge(okuMoney, minter);
-
-        vm.startPrank(admin);
-
-        // Grant OkuBridge MINTER role on OkuMoney — it burns from router (native path) and mints fees
-        okuMoney.grantRole(OKUM_MINTER, address(okuBridgeContract));
-
-        // Grant router MINTER role on OkuMoney — it burns OkuMoney directly (adapter path)
-        okuMoney.grantRole(OKUM_MINTER, address(bridgeRouter));
-
-        // Register mock adapter for adapter path tests
-        bridgeRouter.configureAdapter(address(mockAdapter), true);
-
-        vm.stopPrank();
-
-        // Grant OkuBridge minter allowance on OkuMoney for fee minting
-        vm.prank(allowanceManager);
-        okuMoney.configureMinterAllowance(address(okuBridgeContract), MAX_SUPPLY);
-
-        // Grant router minter allowance on OkuMoney (needed for adapter path burn)
-        vm.prank(allowanceManager);
-        okuMoney.configureMinterAllowance(address(bridgeRouter), MAX_SUPPLY);
+        // All bridge setup (MINTER roles, allowances, mock adapter registration) is done
+        // in BridgeBaseTest.setUp() -> _deployBridgeContracts() and _setupBridgeRoles()
     }
 
     // ============ Initialization Tests ============

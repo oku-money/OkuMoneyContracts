@@ -53,9 +53,9 @@ async function main() {
   const okuBridge = await getDeployedContract("OkuBridge", okuBridgeAddress);
   const okuMoney = await getDeployedContract("OkuMoney", okuMoneyAddress);
 
-  // Load bridge request
+  // Load bridge request from scripts/bridge/ directory
   const requestFile = process.env.REQUEST_FILE || 
-    path.join(__dirname, "..", "..", "bridge-request.json");
+    path.join(__dirname, "bridge-request.json");
   
   if (!fs.existsSync(requestFile)) {
     throw new Error(`Bridge request file not found: ${requestFile}`);

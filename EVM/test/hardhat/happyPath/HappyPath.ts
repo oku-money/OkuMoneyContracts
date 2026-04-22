@@ -14,7 +14,7 @@ import {
 import { Signer, parseEther, parseUnits } from "ethers"
 import { ethers, network, upgrades } from "hardhat"
 import { expect } from "chai"
-import { getTokenAddress, getWhaleAddress } from "../../../config/config"
+import { getTokenAddress, getWhaleAddress } from "../../../scripts/config/chains"
 
 const USDC_MAINNET = getTokenAddress("mainnet", "usdc")
 const USDC_WHALE = getWhaleAddress("mainnet", "usdc")!
@@ -31,8 +31,8 @@ describe("Happy Path Testing", () => {
     let okuBridgeRouter: OkuBridgeRouter
     let psm: LitePSM
     let queue: RedemptionQueue
-    let okuMoney: OkuNote
-    let okuUsd: OkuUSD
+    let okuMoney: OkuMoney
+    let okuUsd: OkuDollar
 
     // USDC contract
     let usdc: ReturnType<typeof IERC20__factory.connect>
@@ -78,7 +78,7 @@ describe("Happy Path Testing", () => {
             new OkuMoney__factory(Frank),
             ["OkuMoney", "OkuM", frankAddr, MAX_SUPPLY],
             { kind: "uups" }
-        ) as unknown as OkuNote
+        ) as unknown as OkuMoney
         await okuMoney.waitForDeployment()
 
         // Deploy OkuDollar vault (needs OkuMoney address)
@@ -86,7 +86,7 @@ describe("Happy Path Testing", () => {
             new OkuDollar__factory(Frank),
             [await okuMoney.getAddress(), "OkuDollar", "usdOku", frankAddr, parseEther("0.95")],
             { kind: "uups", unsafeAllow: ["constructor"] }
-        ) as unknown as OkuUSD
+        ) as unknown as OkuDollar
         await okuUsd.waitForDeployment()
 
         // Deploy RedemptionQueue
@@ -113,7 +113,7 @@ describe("Happy Path Testing", () => {
         ) as unknown as OkuBridgeRouter
         await okuBridgeRouter.waitForDeployment()
 
-        // Grant MINTER to PSM so it can mint OkuNote
+        // Grant MINTER to PSM so it can mint OkuMoney
         await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await psm.getAddress())
 
         // Grant RBAC roles to Frank (admin) for testing
@@ -175,23 +175,23 @@ describe("Happy Path Testing", () => {
         await usdc.connect(Bob).approve(psmAddr, DEPOSIT_AMOUNT)
         await usdc.connect(Dave).approve(psmAddr, DEPOSIT_AMOUNT)
 
-        // All users deposit USDC via PSM.mint() and receive OkuUSD
+        // All users deposit USDC via PSM.mintOkuM() and receive OkuMoney
         await psm.connect(Alice).mintOkuM(DEPOSIT_AMOUNT)
         await psm.connect(Charlie).mintOkuM(DEPOSIT_AMOUNT)
         await psm.connect(Bob).mintOkuM(DEPOSIT_AMOUNT)
         await psm.connect(Dave).mintOkuM(DEPOSIT_AMOUNT)
 
-        // Verify all users received OkuDollar (converted from 6 to 18 decimals)
-        const aliceOkuUSD = await okuMoney.balanceOf(aliceAddr)
-        const charlieOkuUSD = await okuMoney.balanceOf(charlieAddr)
-        const bobOkuUSD = await okuMoney.balanceOf(bobAddr)
-        const daveOkuUSD = await okuMoney.balanceOf(daveAddr)
+        // Verify all users received OkuMoney (converted from 6 to 18 decimals)
+        const aliceOkuM = await okuMoney.balanceOf(aliceAddr)
+        const charlieOkuM = await okuMoney.balanceOf(charlieAddr)
+        const bobOkuM = await okuMoney.balanceOf(bobAddr)
+        const daveOkuM = await okuMoney.balanceOf(daveAddr)
 
-        const expectedOkuUSD = DEPOSIT_AMOUNT * DECIMAL_MULTIPLIER
-        expect(aliceOkuUSD).to.equal(expectedOkuUSD)
-        expect(charlieOkuUSD).to.equal(expectedOkuUSD)
-        expect(bobOkuUSD).to.equal(expectedOkuUSD)
-        expect(daveOkuUSD).to.equal(expectedOkuUSD)
+        const expectedOkuM = DEPOSIT_AMOUNT * DECIMAL_MULTIPLIER
+        expect(aliceOkuM).to.equal(expectedOkuM)
+        expect(charlieOkuM).to.equal(expectedOkuM)
+        expect(bobOkuM).to.equal(expectedOkuM)
+        expect(daveOkuM).to.equal(expectedOkuM)
 
         // Verify PSM received all the USDC
         const psmUsdc = await usdc.balanceOf(psmAddr)
@@ -256,7 +256,7 @@ describe("Happy Path Testing", () => {
         const bobRedeemAmount = bobBalance / 2n
         const daveRedeemAmount = daveBalance / 2n
 
-        // All users approve PSM to handle their OkuUSD
+        // All users approve PSM to handle their OkuMoney
         // PSM handles the transfer to queue internally — no queue approval needed
         await okuMoney.connect(Alice).approve(psmAddr, aliceRedeemAmount)
         await okuMoney.connect(Charlie).approve(psmAddr, charlieRedeemAmount)
@@ -459,11 +459,11 @@ describe("Happy Path Testing", () => {
             params: [USDC_WHALE]
         })
 
-        // Get all users' remaining OkuUSD
-        const aliceOkuUSD = await okuMoney.balanceOf(aliceAddr)
-        const charlieOkuUSD = await okuMoney.balanceOf(charlieAddr)
-        const bobOkuUSD = await okuMoney.balanceOf(bobAddr)
-        const daveOkuUSD = await okuMoney.balanceOf(daveAddr)
+        // Get all users' remaining OkuMoney
+        const aliceOkuM = await okuMoney.balanceOf(aliceAddr)
+        const charlieOkuM = await okuMoney.balanceOf(charlieAddr)
+        const bobOkuM = await okuMoney.balanceOf(bobAddr)
+        const daveOkuM = await okuMoney.balanceOf(daveAddr)
 
         // Get all users' USDC before
         const aliceUsdcBefore = await usdc.balanceOf(aliceAddr)
@@ -471,19 +471,19 @@ describe("Happy Path Testing", () => {
         const bobUsdcBefore = await usdc.balanceOf(bobAddr)
         const daveUsdcBefore = await usdc.balanceOf(daveAddr)
 
-        // All users approve PSM to spend their remaining OkuUSD
-        await okuMoney.connect(Alice).approve(psmAddr, aliceOkuUSD)
-        await okuMoney.connect(Charlie).approve(psmAddr, charlieOkuUSD)
-        await okuMoney.connect(Bob).approve(psmAddr, bobOkuUSD)
-        await okuMoney.connect(Dave).approve(psmAddr, daveOkuUSD)
+        // All users approve PSM to spend their remaining OkuMoney
+        await okuMoney.connect(Alice).approve(psmAddr, aliceOkuM)
+        await okuMoney.connect(Charlie).approve(psmAddr, charlieOkuM)
+        await okuMoney.connect(Bob).approve(psmAddr, bobOkuM)
+        await okuMoney.connect(Dave).approve(psmAddr, daveOkuM)
 
-        // All users redeem remaining OkuDollar for USDC
-        await psm.connect(Alice).redeemOkuM(aliceOkuUSD)
-        await psm.connect(Charlie).redeemOkuM(charlieOkuUSD)
-        await psm.connect(Bob).redeemOkuM(bobOkuUSD)
-        await psm.connect(Dave).redeemOkuM(daveOkuUSD)
+        // All users redeem remaining OkuMoney for USDC
+        await psm.connect(Alice).redeemOkuM(aliceOkuM)
+        await psm.connect(Charlie).redeemOkuM(charlieOkuM)
+        await psm.connect(Bob).redeemOkuM(bobOkuM)
+        await psm.connect(Dave).redeemOkuM(daveOkuM)
 
-        // Verify all users' OkuDollar is now 0
+        // Verify all users' OkuMoney is now 0
         expect(await okuMoney.balanceOf(aliceAddr)).to.equal(0)
         expect(await okuMoney.balanceOf(charlieAddr)).to.equal(0)
         expect(await okuMoney.balanceOf(bobAddr)).to.equal(0)

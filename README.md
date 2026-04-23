@@ -128,7 +128,7 @@ One role per action. No role performs more than one function.
 
 | Aspect | EVM | SVM |
 |--------|-----|-----|
-| Language | Solidity 0.8.28 | Rust (Anchor 0.31.x) |
+| Language | Solidity 0.8.28 | Rust (Anchor 1.0.0) |
 | OkuMoney price | Stored `uint256`, 18 decimals | Stored `u64`, 9-decimal precision (6-decimal token) |
 | OkuDollar multiplier | Continuous `_rpow` streaming | Discrete orchestrator-driven updates |
 | Yield lock | `block.number` comparison | `Clock::slot` comparison |

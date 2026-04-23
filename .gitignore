@@ -86,6 +86,9 @@ test-ledger/
 # Random binaries
 *.deb
 
+# Vestigial root-level lib/ (submodules are registered under EVM/lib/ only)
+/lib/
+
 # Large log files
 *.log
 !*.changelog

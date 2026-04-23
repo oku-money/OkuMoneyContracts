@@ -21,7 +21,8 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "npx mocha --require tsx --timeout 1000000 --grep Fork --invert 'tests/**/*.ts'"
+# Run unit tests only (no fork tests — those require surfpool, use `npm run test:fork`)
+test = "npx mocha --require tsx --timeout 1000000 'tests/unit/**/*.ts'"
 
 [hooks]
 

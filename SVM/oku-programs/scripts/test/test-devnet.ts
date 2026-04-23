@@ -1,14 +1,16 @@
 #!/usr/bin/env tsx
 /**
- * scripts/devnet/test-devnet.ts
+ * scripts/test/test-devnet.ts
  *
- * Real on-chain interaction tests (works on both localnet and devnet).
+ * Real on-chain interaction tests (works on localnet, devnet, and devnet-fork).
  * Each step sends actual transactions and verifies results.
  *
  * Usage:
- *   NETWORK=localnet tsx scripts/devnet/test-devnet.ts              # Localnet (fast iteration)
- *   NETWORK=devnet   tsx scripts/devnet/test-devnet.ts              # Devnet (real chain)
- *   NETWORK=devnet   tsx scripts/devnet/test-devnet.ts --step=mint  # Single step
+ *   NETWORK=localnet tsx scripts/test/test-devnet.ts              # Localnet (fast iteration)
+ *   NETWORK=devnet   tsx scripts/test/test-devnet.ts              # Devnet (real chain)
+ *   NETWORK=devnet   tsx scripts/test/test-devnet.ts --step=mint  # Single step
+ *
+ * Or via npm: `npm run test:onchain` / `npm run test:onchain:fork`
  */
 
 import {

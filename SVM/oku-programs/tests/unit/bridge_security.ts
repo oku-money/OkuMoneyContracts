@@ -281,6 +281,73 @@ describe("Bridge Security Tests", () => {
     }
   }
 
+  /**
+   * Submit a transaction with skipPreflight and assert a program-level error.
+   *
+   * Required for Ed25519-wrapped bridge_mint negative tests: Anchor 1.0's
+   * preflight simulation rejects the Ed25519 precompile ("This program may
+   * not be used for executing instructions"), so we must skipPreflight. But
+   * provider.sendAndConfirm with skipPreflight: true wraps on-chain failures
+   * in a plain Error("Raw transaction <sig> failed") without logs.
+   *
+   * This helper sends the raw signed transaction, waits for confirmation
+   * (regardless of success/failure), then fetches the transaction to extract
+   * the real on-chain logs and meta.err. The expectedCode must appear in
+   * either the logs or the serialized err object.
+   *
+   * This is NOT a mock or simulation — it's the same tx the validator
+   * processes, with skipPreflight:true being the only tweak to bypass the
+   * Anchor-1.0/Ed25519-precompile incompatibility during preflight.
+   */
+  async function expectBridgeMintProgramError(
+    tx: Transaction,
+    signers: Keypair[],
+    expectedCode: string
+  ): Promise<void> {
+    const { blockhash, lastValidBlockHeight } =
+      await provider.connection.getLatestBlockhash("confirmed");
+    tx.recentBlockhash = blockhash;
+    tx.feePayer = signers[0].publicKey;
+    tx.sign(...signers);
+
+    const rawTx = tx.serialize();
+    const signature = await provider.connection.sendRawTransaction(rawTx, {
+      skipPreflight: true,
+      preflightCommitment: "confirmed",
+    });
+
+    // confirmTransaction returns {value: {err}} for both success and failure;
+    // it only throws on blockhash expiration / network errors.
+    await provider.connection.confirmTransaction(
+      { signature, blockhash, lastValidBlockHeight },
+      "confirmed"
+    );
+
+    const txInfo = await provider.connection.getTransaction(signature, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+
+    const onChainErr = txInfo?.meta?.err ?? null;
+    const logs = txInfo?.meta?.logMessages ?? [];
+
+    if (!onChainErr) {
+      throw new Error(
+        `Expected on-chain failure matching "${expectedCode}" but transaction succeeded.\n` +
+          `Logs:\n  ${logs.join("\n  ")}`
+      );
+    }
+
+    const haystack = [JSON.stringify(onChainErr), ...logs].join(" ");
+    if (!haystack.includes(expectedCode)) {
+      throw new Error(
+        `Expected on-chain error to match "${expectedCode}" but got:\n` +
+          `  meta.err: ${JSON.stringify(onChainErr)}\n` +
+          `  logs:\n    ${logs.join("\n    ")}`
+      );
+    }
+  }
+
   // ============================================================================
   // Setup & Initialization
   // ============================================================================
@@ -826,12 +893,7 @@ describe("Bridge Security Tests", () => {
       );
     });
 
-    // TODO: This test needs a different design. With skipPreflight:true (required for Ed25519
-    // precompile), on-chain failures return a plain Error("Raw transaction <bytes>") — not a
-    // SendTransactionError — so program logs are not available for error-code matching.
-    // Fix: use sendRawTransaction + getTransaction to fetch logs manually, or restructure to
-    // call bridge_mint without the Ed25519 wrapper and test the deadline check in isolation.
-    it.skip("rejects expired signature (past deadline)", async () => {
+    it("rejects expired signature (past deadline)", async () => {
       const expiredDeadline = BigInt(Math.floor(Date.now() / 1000) - 100); // 100s ago
 
       const message = serializeBridgeMessage({
@@ -857,10 +919,7 @@ describe("Bridge Security Tests", () => {
         requestId,
       });
 
-      await expectError(
-        () => provider.sendAndConfirm(tx, [payer], { skipPreflight: true }),
-        "SignatureExpired"
-      );
+      await expectBridgeMintProgramError(tx, [payer], "SignatureExpired");
     });
 
     it("rejects tampered message (wrong request_id)", async () => {
@@ -904,11 +963,7 @@ describe("Bridge Security Tests", () => {
       validDeadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
     });
 
-    // TODO: Same skipPreflight / on-chain error-log limitation as the expired-deadline test above.
-    // The Anchor `init` constraint on ProcessedRequest PDA returns a Solana system error ("account
-    // already in use") without program logs when the transaction is rejected on-chain with
-    // skipPreflight:true. Needs sendRawTransaction + manual log fetch or an Anchor simulate call.
-    it.skip("prevents duplicate request_id on second mint", async () => {
+    it("prevents duplicate request_id on second mint", async () => {
       const amount = BigInt(5_000_000);
       const nonce = 10n;
 
@@ -936,9 +991,29 @@ describe("Bridge Security Tests", () => {
       });
 
       // First mint succeeds
-      await provider.sendAndConfirm(tx1, [payer], { skipPreflight: true });
+      const tx1Sig = await provider.sendAndConfirm(tx1, [payer], { skipPreflight: true });
 
-      // Second mint with same request_id fails (PDA already exists)
+      // Sanity check: the ProcessedRequest PDA must exist on-chain after tx1
+      const [processedRequestPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_request"), Buffer.from(requestId)],
+        program.programId
+      );
+      const pdaInfo = await provider.connection.getAccountInfo(processedRequestPda);
+      expect(pdaInfo, "ProcessedRequest PDA must exist after first mint").to.not.be.null;
+
+      // Second mint with same request_id must fail — the ProcessedRequest PDA
+      // already exists from tx1, so Anchor's `init` constraint trips. The
+      // System Program's CreateAccount returns "already in use" in tx logs.
+      //
+      // IMPORTANT: tx2 must serialize to different bytes than tx1, otherwise
+      // the validator dedupes and returns tx1's already-confirmed signature.
+      // We wait for a new blockhash before building tx2.
+      let newBlockhash = (await provider.connection.getLatestBlockhash("confirmed")).blockhash;
+      while (newBlockhash === tx1.recentBlockhash) {
+        await new Promise((r) => setTimeout(r, 50));
+        newBlockhash = (await provider.connection.getLatestBlockhash("confirmed")).blockhash;
+      }
+
       const tx2 = await createBridgeMintTx({
         program,
         message,
@@ -949,10 +1024,7 @@ describe("Bridge Security Tests", () => {
         requestId,
       });
 
-      await expectError(
-        () => provider.sendAndConfirm(tx2, [payer], { skipPreflight: true }),
-        "already in use" // Anchor init constraint error
-      );
+      await expectBridgeMintProgramError(tx2, [payer], "already in use");
     });
 
     it("allows different request_ids for different messages", async () => {
@@ -1774,11 +1846,7 @@ describe("Bridge Security Tests", () => {
       );
     });
 
-    // TODO: Same skipPreflight / on-chain error-log limitation. BridgePaused is a program error
-    // returned in the instruction body, but the error comes back as Error("Raw transaction ...")
-    // without logs when skipPreflight:true. The bridge_burn pause test (above, using .rpc()) works
-    // correctly; only the Ed25519-wrapped bridge_mint path is affected.
-    it.skip("paused bridge blocks bridge_mint", async () => {
+    it("paused bridge blocks bridge_mint", async () => {
       // Pause the bridge first
       await program.methods
         .pauseBridge()
@@ -1817,10 +1885,7 @@ describe("Bridge Security Tests", () => {
         requestId,
       });
 
-      await expectError(
-        () => provider.sendAndConfirm(tx, [payer], { skipPreflight: true }),
-        "BridgePaused"
-      );
+      await expectBridgeMintProgramError(tx, [payer], "BridgePaused");
     });
 
     it("bridge_unpauser can unpause bridge", async () => {

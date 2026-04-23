@@ -5,6 +5,8 @@
     "build": "anchor build",
     "clean": "anchor clean && rm -f deployments/localnet.json",
 
+    "export-idls": "tsx scripts/utils/exportIdls.ts",
+
     "deploy:programs": "NETWORK=devnet tsx scripts/deploy/deploy-programs.ts",
     "deploy:programs:devnet-fork": "NETWORK=devnet-fork tsx scripts/deploy/deploy-programs.ts",
     "deploy:programs:mainnet": "NETWORK=mainnet-beta tsx scripts/deploy/deploy-programs.ts",

@@ -1,7 +1,10 @@
 # Compiler files
 cache/
 out/
-artifacts/
+# Hardhat build output lives under EVM/artifacts/. The repo-root /artifacts/
+# directory holds a curated set of ABIs and IDLs for downstream consumers
+# (backend, SDKs, frontend) and IS tracked — see /artifacts/README.md.
+/EVM/artifacts/
 
 # Ignores development broadcast logs
 !/broadcast

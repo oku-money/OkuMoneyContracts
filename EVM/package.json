@@ -12,6 +12,8 @@
     "clean": "hardhat clean && forge clean && rm -rf cache_hardhat typechain-types",
     "typechain": "hardhat typechain",
 
+    "export-abis": "ts-node scripts/utils/exportAbis.ts",
+
     "test": "hardhat test",
     "test:forge": "forge test",
     "test:all": "forge test && hardhat test",

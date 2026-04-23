@@ -1,0 +1,6383 @@
+{
+  "address": "3pi3vBj7dn98C4QbrrKD1LEFacpXBtmCzY17YR6j7wNa",
+  "metadata": {
+    "name": "lite_psm",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "LitePSM - USDC to OkuUSD peg stability module"
+  },
+  "instructions": [
+    {
+      "name": "add_supported_chain",
+      "discriminator": [
+        60,
+        144,
+        188,
+        237,
+        143,
+        56,
+        39,
+        112
+      ],
+      "accounts": [
+        {
+          "name": "chain_manager",
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "chain_id",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "bridge_burn",
+      "discriminator": [
+        158,
+        215,
+        142,
+        128,
+        223,
+        121,
+        29,
+        74
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "docs": [
+            "Bridge configuration"
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "docs": [
+            "PSM configuration"
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "bridge_nonce",
+          "docs": [
+            "Bridge nonce tracker for destination chain"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  110,
+                  111,
+                  110,
+                  99,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "destination_chain_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_oku_money_ata",
+          "docs": [
+            "User's OkuMoney account"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "oku_money_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "fee_recipient_ata",
+          "docs": [
+            "Fee recipient's OkuMoney account (optional - skip if user == fee_recipient)",
+            "When user is the fee recipient, pass None to avoid duplicate mutable account error.",
+            "The instruction will skip fee minting in that case (user already \"paid\" the fee by burning)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "recipient",
+          "type": {
+            "array": [
+              "u8",
+              20
+            ]
+          }
+        },
+        {
+          "name": "destination_chain_id",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "bridge_mint",
+      "discriminator": [
+        71,
+        115,
+        241,
+        7,
+        103,
+        250,
+        26,
+        84
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": [
+            "Payer for ProcessedRequest PDA creation"
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "docs": [
+            "Bridge configuration"
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "docs": [
+            "PSM configuration"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "processed_request",
+          "docs": [
+            "ProcessedRequest PDA (prevents replay attacks)",
+            "Seeds are derived from keccak256(message_bytes), passed as request_id"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  114,
+                  101,
+                  113,
+                  117,
+                  101,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "request_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "recipient_oku_money_ata",
+          "docs": [
+            "Recipient's OkuMoney account (will validate owner in function body)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "instruction_sysvar",
+          "docs": [
+            "Instruction sysvar for Ed25519 signature verification"
+          ],
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "message_bytes",
+          "type": "bytes"
+        },
+        {
+          "name": "signature",
+          "type": "bytes"
+        },
+        {
+          "name": "request_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "cancel_refund",
+      "docs": [
+        "Cancel a pending refund",
+        "Can be called by either refund_initiator or refund_confirmer"
+      ],
+      "discriminator": [
+        192,
+        62,
+        158,
+        203,
+        193,
+        97,
+        26,
+        15
+      ],
+      "accounts": [
+        {
+          "name": "canceller",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pending_refund",
+          "docs": [
+            "PendingRefund PDA - will be closed"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  110,
+                  100,
+                  105,
+                  110,
+                  103,
+                  95,
+                  114,
+                  101,
+                  102,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "request_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "request_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "confirm_refund",
+      "docs": [
+        "Confirm a refund (step 2 of two-step refund pattern)",
+        "Must be called by refund_confirmer (different key than initiator)"
+      ],
+      "discriminator": [
+        0,
+        242,
+        219,
+        133,
+        105,
+        39,
+        74,
+        20
+      ],
+      "accounts": [
+        {
+          "name": "refund_confirmer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pending_refund",
+          "docs": [
+            "PendingRefund PDA - must exist"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  110,
+                  100,
+                  105,
+                  110,
+                  103,
+                  95,
+                  114,
+                  101,
+                  102,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "request_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "refunded_request",
+          "docs": [
+            "RefundedRequest PDA - will be created"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  114,
+                  101,
+                  102,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "request_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "sender_oku_money_ata",
+          "docs": [
+            "Sender's OkuMoney ATA - owner is validated against pending_refund.recipient"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_2022_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "request_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "deposit_buffer",
+      "discriminator": [
+        192,
+        124,
+        202,
+        236,
+        253,
+        171,
+        69,
+        217
+      ],
+      "accounts": [
+        {
+          "name": "buffer_depositor",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "buffer_depositor_usdc_ata",
+          "docs": [
+            "Buffer depositor's USDC account"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "buffer_depositor"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault_usdc",
+          "docs": [
+            "PSM's USDC vault"
+          ],
+          "writable": true
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "distribute_yield",
+      "docs": [
+        "Distribute yield across all OkuMoney holders (REBASER only)",
+        "new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)"
+      ],
+      "discriminator": [
+        233,
+        92,
+        186,
+        157,
+        235,
+        238,
+        212,
+        114
+      ],
+      "accounts": [
+        {
+          "name": "rebaser",
+          "docs": [
+            "Rebaser role - authorized to distribute yield"
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "PSM config - stores oku_m_price and last_yield_distribution_slot"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint - needed to read total supply for yield distribution calculation"
+          ]
+        },
+        {
+          "name": "token_2022_program",
+          "docs": [
+            "Token-2022 program"
+          ],
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "yield_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "freeze_account",
+      "discriminator": [
+        253,
+        75,
+        82,
+        133,
+        167,
+        238,
+        43,
+        130
+      ],
+      "accounts": [
+        {
+          "name": "freezer",
+          "docs": [
+            "Blacklister authority - can freeze even when PSM is paused"
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022)"
+          ]
+        },
+        {
+          "name": "target_oku_money_ata",
+          "docs": [
+            "Target account to freeze"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initialize",
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "role_admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint",
+          "docs": [
+            "USDC mint (standard SPL)"
+          ]
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)",
+            "PSM config PDA must be mint authority"
+          ]
+        },
+        {
+          "name": "vault_usdc",
+          "docs": [
+            "PSM's USDC vault"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "config"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "max_supply",
+          "type": "u64"
+        },
+        {
+          "name": "minter_allowance",
+          "type": "u64"
+        },
+        {
+          "name": "pauser",
+          "type": "pubkey"
+        },
+        {
+          "name": "unpauser",
+          "type": "pubkey"
+        },
+        {
+          "name": "freezer",
+          "type": "pubkey"
+        },
+        {
+          "name": "unfreezer",
+          "type": "pubkey"
+        },
+        {
+          "name": "queue_processor",
+          "type": "pubkey"
+        },
+        {
+          "name": "buffer_depositor",
+          "type": "pubkey"
+        },
+        {
+          "name": "buffer_withdrawer",
+          "type": "pubkey"
+        },
+        {
+          "name": "oracle_manager",
+          "type": "pubkey"
+        },
+        {
+          "name": "cap_manager",
+          "type": "pubkey"
+        },
+        {
+          "name": "allowance_manager",
+          "type": "pubkey"
+        },
+        {
+          "name": "rebaser",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "initialize_blacklist_exempt",
+      "docs": [
+        "Initialize blacklist exemption for bridge and router (one-time, ROLE_ADMIN only)"
+      ],
+      "discriminator": [
+        184,
+        212,
+        138,
+        218,
+        87,
+        96,
+        176,
+        148
+      ],
+      "accounts": [
+        {
+          "name": "role_admin",
+          "docs": [
+            "Role admin - only role_admin can set blacklist exemptions"
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "PSM config"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "bridge",
+          "type": "pubkey"
+        },
+        {
+          "name": "router",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "initialize_bridge",
+      "discriminator": [
+        6,
+        173,
+        152,
+        229,
+        35,
+        112,
+        127,
+        151
+      ],
+      "accounts": [
+        {
+          "name": "bridge_admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "bridge_pauser"
+        },
+        {
+          "name": "bridge_unpauser"
+        },
+        {
+          "name": "orchestrator_signer"
+        },
+        {
+          "name": "fee_recipient"
+        },
+        {
+          "name": "chain_manager"
+        },
+        {
+          "name": "fee_manager"
+        },
+        {
+          "name": "nonce_admin"
+        },
+        {
+          "name": "signer_manager"
+        },
+        {
+          "name": "limits_manager"
+        },
+        {
+          "name": "bridge_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "source_chain_id",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "initiate_refund",
+      "docs": [
+        "Initiate a refund (step 1 of two-step refund pattern)",
+        "Creates a PendingRefund PDA that must be confirmed by refund_confirmer"
+      ],
+      "discriminator": [
+        98,
+        61,
+        179,
+        65,
+        151,
+        150,
+        94,
+        1
+      ],
+      "accounts": [
+        {
+          "name": "refund_initiator",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "pending_refund",
+          "docs": [
+            "PendingRefund PDA - will be created"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  101,
+                  110,
+                  100,
+                  105,
+                  110,
+                  103,
+                  95,
+                  114,
+                  101,
+                  102,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "request_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "processed_request",
+          "docs": [
+            "ProcessedRequest PDA - must NOT exist (checked via constraint)",
+            "This prevents refunding a request that was already successfully minted"
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  114,
+                  101,
+                  113,
+                  117,
+                  101,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "request_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "refunded_request",
+          "docs": [
+            "RefundedRequest PDA - must NOT exist (checked via constraint)",
+            "This prevents double-refunding a request"
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  114,
+                  101,
+                  102,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "request_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "message_bytes",
+          "type": "bytes"
+        },
+        {
+          "name": "request_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "mint_oku_m",
+      "docs": [
+        "Mint OkuMoney with USDC (price-aware)",
+        "oku_m_amount = usdc_amount * PRECISION / oku_m_price"
+      ],
+      "discriminator": [
+        200,
+        181,
+        20,
+        123,
+        23,
+        72,
+        39,
+        105
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint",
+          "docs": [
+            "USDC mint"
+          ]
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_usdc_ata",
+          "docs": [
+            "User's USDC account"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "user_oku_money_ata",
+          "docs": [
+            "User's OkuMoney account"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "oku_money_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault_usdc",
+          "docs": [
+            "PSM's USDC vault"
+          ],
+          "writable": true
+        },
+        {
+          "name": "price_update",
+          "docs": [
+            "Pyth price account (optional - only required if oracle is configured)"
+          ],
+          "optional": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "usdc_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "pause",
+      "discriminator": [
+        211,
+        22,
+        221,
+        251,
+        74,
+        121,
+        193,
+        47
+      ],
+      "accounts": [
+        {
+          "name": "pauser",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "pause_bridge",
+      "discriminator": [
+        162,
+        103,
+        59,
+        230,
+        104,
+        233,
+        25,
+        246
+      ],
+      "accounts": [
+        {
+          "name": "bridge_pauser",
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "process_queue",
+      "discriminator": [
+        178,
+        215,
+        43,
+        144,
+        239,
+        34,
+        170,
+        155
+      ],
+      "accounts": [
+        {
+          "name": "queue_processor",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "redemption_queue",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  100,
+                  101,
+                  109,
+                  112,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  113,
+                  117,
+                  101,
+                  117,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022) - needed for burn CPI and price reads"
+          ],
+          "writable": true
+        },
+        {
+          "name": "vault_usdc",
+          "docs": [
+            "PSM's USDC vault"
+          ],
+          "writable": true
+        },
+        {
+          "name": "vault_oku_money",
+          "docs": [
+            "PSM's OkuMoney escrow vault - holds queued redemptions"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "max_entries",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "redeem_oku_m",
+      "docs": [
+        "Redeem OkuMoney for USDC (price-aware)",
+        "usdc_amount = oku_m_amount * oku_m_price / PRECISION"
+      ],
+      "discriminator": [
+        85,
+        74,
+        214,
+        82,
+        206,
+        164,
+        90,
+        70
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "redemption_queue",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  100,
+                  101,
+                  109,
+                  112,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  113,
+                  117,
+                  101,
+                  117,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint",
+          "docs": [
+            "USDC mint"
+          ]
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_usdc_ata",
+          "docs": [
+            "User's USDC account"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "user_oku_money_ata",
+          "docs": [
+            "User's OkuMoney account"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "oku_money_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "vault_usdc",
+          "docs": [
+            "PSM's USDC vault"
+          ],
+          "writable": true
+        },
+        {
+          "name": "vault_oku_money",
+          "docs": [
+            "PSM's OkuMoney escrow vault (for queued redemptions)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "oku_m_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "refund_bridge_request",
+      "docs": [
+        "Legacy single-step refund (deprecated)",
+        "Use initiate_refund + confirm_refund for new integrations"
+      ],
+      "discriminator": [
+        87,
+        7,
+        9,
+        200,
+        30,
+        164,
+        134,
+        77
+      ],
+      "accounts": [
+        {
+          "name": "refund_admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "refunded_request",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  114,
+                  101,
+                  102,
+                  117,
+                  110,
+                  100
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "request_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "processed_request",
+          "docs": [
+            "ProcessedRequest PDA - must NOT exist (checked via constraint)",
+            "This prevents refunding a request that was already successfully minted"
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  114,
+                  101,
+                  113,
+                  117,
+                  101,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "request_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "sender_oku_money_ata",
+          "docs": [
+            "Sender's OkuMoney ATA - owner is validated in instruction body"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_2022_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "message_bytes",
+          "type": "bytes"
+        },
+        {
+          "name": "request_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "remove_supported_chain",
+      "discriminator": [
+        0,
+        48,
+        119,
+        114,
+        52,
+        213,
+        242,
+        33
+      ],
+      "accounts": [
+        {
+          "name": "chain_manager",
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "chain_id",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "rescue_queue_entry",
+      "docs": [
+        "Rescue a stuck queue entry — returns escrowed OkuMoney to recipient",
+        "Only queue_processor can call (matches EVM's rescueQueueEntry)"
+      ],
+      "discriminator": [
+        128,
+        16,
+        159,
+        60,
+        109,
+        35,
+        157,
+        229
+      ],
+      "accounts": [
+        {
+          "name": "queue_processor",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "redemption_queue",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  100,
+                  101,
+                  109,
+                  112,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  113,
+                  117,
+                  101,
+                  117,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022)"
+          ]
+        },
+        {
+          "name": "vault_oku_money",
+          "docs": [
+            "PSM's OkuMoney escrow vault — holds queued redemptions"
+          ],
+          "writable": true
+        },
+        {
+          "name": "recipient_oku_money_ata",
+          "docs": [
+            "Recipient's OkuMoney account (can be original user or alternate)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "queue_index",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "set_authority",
+      "discriminator": [
+        133,
+        250,
+        37,
+        21,
+        110,
+        163,
+        26,
+        121
+      ],
+      "accounts": [
+        {
+          "name": "role_admin",
+          "docs": [
+            "Role admin - only role_admin can update authorities"
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "PSM config"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "role",
+          "type": {
+            "defined": {
+              "name": "AuthorityRole"
+            }
+          }
+        },
+        {
+          "name": "new_authority",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_bridge_authority",
+      "discriminator": [
+        158,
+        241,
+        140,
+        64,
+        226,
+        16,
+        99,
+        251
+      ],
+      "accounts": [
+        {
+          "name": "bridge_admin",
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "role",
+          "type": {
+            "defined": {
+              "name": "BridgeAuthorityRole"
+            }
+          }
+        },
+        {
+          "name": "new_authority",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_max_supply",
+      "discriminator": [
+        16,
+        207,
+        140,
+        77,
+        107,
+        20,
+        202,
+        158
+      ],
+      "accounts": [
+        {
+          "name": "cap_manager",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_max_supply",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_minter_allowance",
+      "discriminator": [
+        50,
+        245,
+        41,
+        45,
+        12,
+        190,
+        111,
+        75
+      ],
+      "accounts": [
+        {
+          "name": "allowance_manager",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_oku_m_price",
+      "docs": [
+        "Set OkuMoney price directly (REBASER only)",
+        "Sets last_yield_distribution_slot for sandwich prevention"
+      ],
+      "discriminator": [
+        204,
+        17,
+        196,
+        98,
+        3,
+        56,
+        160,
+        65
+      ],
+      "accounts": [
+        {
+          "name": "rebaser",
+          "docs": [
+            "Rebaser role - authorized to update OkuMoney price"
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "PSM config - stores oku_m_price and last_yield_distribution_slot"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint - needed to read total supply for event"
+          ]
+        },
+        {
+          "name": "token_2022_program",
+          "docs": [
+            "Token-2022 program"
+          ],
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_multiplier",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_oracle",
+      "discriminator": [
+        186,
+        128,
+        81,
+        104,
+        74,
+        79,
+        18,
+        224
+      ],
+      "accounts": [
+        {
+          "name": "oracle_manager",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "oracle",
+          "type": "pubkey"
+        },
+        {
+          "name": "staleness_threshold",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "setup_oku_money_escrow",
+      "discriminator": [
+        244,
+        190,
+        167,
+        147,
+        230,
+        204,
+        23,
+        96
+      ],
+      "accounts": [
+        {
+          "name": "role_admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)",
+            "Must match the mint stored in config during initialize"
+          ]
+        },
+        {
+          "name": "vault_oku_money",
+          "docs": [
+            "PSM's OkuMoney escrow vault for queued redemptions",
+            "Holds OkuMoney while users are in queue (yield comes from price appreciation)"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "config"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "oku_money_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "setup_redemption_queue",
+      "discriminator": [
+        235,
+        136,
+        242,
+        154,
+        153,
+        136,
+        246,
+        48
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "PSM config must exist (initialize was called)"
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "redemption_queue",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  100,
+                  101,
+                  109,
+                  112,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  113,
+                  117,
+                  101,
+                  117,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "skip_nonce",
+      "discriminator": [
+        118,
+        164,
+        229,
+        14,
+        80,
+        41,
+        153,
+        97
+      ],
+      "accounts": [
+        {
+          "name": "nonce_admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "bridge_nonce",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  110,
+                  111,
+                  110,
+                  99,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "destination_chain_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "destination_chain_id",
+          "type": "u16"
+        },
+        {
+          "name": "new_nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "thaw_account",
+      "discriminator": [
+        115,
+        152,
+        79,
+        213,
+        213,
+        169,
+        184,
+        35
+      ],
+      "accounts": [
+        {
+          "name": "unfreezer",
+          "docs": [
+            "Unblacklister authority - can thaw even when PSM is paused (requires deliberate review)"
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022)"
+          ]
+        },
+        {
+          "name": "target_oku_money_ata",
+          "docs": [
+            "Target account to thaw"
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "unpause",
+      "discriminator": [
+        169,
+        144,
+        4,
+        38,
+        10,
+        141,
+        188,
+        255
+      ],
+      "accounts": [
+        {
+          "name": "unpauser",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "unpause_bridge",
+      "discriminator": [
+        38,
+        76,
+        229,
+        108,
+        125,
+        173,
+        75,
+        116
+      ],
+      "accounts": [
+        {
+          "name": "bridge_unpauser",
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "update_bridge_deadline",
+      "discriminator": [
+        107,
+        125,
+        202,
+        52,
+        71,
+        136,
+        173,
+        94
+      ],
+      "accounts": [
+        {
+          "name": "limits_manager",
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_deadline",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "update_bridge_fee",
+      "discriminator": [
+        179,
+        226,
+        77,
+        242,
+        24,
+        214,
+        150,
+        167
+      ],
+      "accounts": [
+        {
+          "name": "fee_manager",
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_fee_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "update_bridge_limits",
+      "discriminator": [
+        227,
+        239,
+        135,
+        205,
+        142,
+        223,
+        185,
+        11
+      ],
+      "accounts": [
+        {
+          "name": "limits_manager",
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "min_amount",
+          "type": "u64"
+        },
+        {
+          "name": "max_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "update_fee_recipient",
+      "discriminator": [
+        249,
+        0,
+        198,
+        35,
+        183,
+        123,
+        57,
+        188
+      ],
+      "accounts": [
+        {
+          "name": "fee_manager",
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_recipient",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "update_orchestrator_signer",
+      "discriminator": [
+        94,
+        183,
+        245,
+        63,
+        245,
+        85,
+        114,
+        89
+      ],
+      "accounts": [
+        {
+          "name": "signer_manager",
+          "signer": true
+        },
+        {
+          "name": "bridge_config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  114,
+                  105,
+                  100,
+                  103,
+                  101,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_signer",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "withdraw_buffer",
+      "discriminator": [
+        90,
+        131,
+        164,
+        164,
+        84,
+        162,
+        127,
+        172
+      ],
+      "accounts": [
+        {
+          "name": "buffer_withdrawer",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "redemption_queue",
+          "docs": [
+            "Redemption queue (read-only) - used to calculate reserved USDC for pending entries"
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  100,
+                  101,
+                  109,
+                  112,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  113,
+                  117,
+                  101,
+                  117,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint - needed to read current price for reserve calculation"
+          ]
+        },
+        {
+          "name": "withdrawer_usdc_ata",
+          "docs": [
+            "Buffer withdrawer's USDC account (destination)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "vault_usdc",
+          "docs": [
+            "PSM's USDC vault (source)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "BridgeConfig",
+      "discriminator": [
+        40,
+        206,
+        51,
+        233,
+        246,
+        40,
+        178,
+        85
+      ]
+    },
+    {
+      "name": "BridgeNonce",
+      "discriminator": [
+        194,
+        75,
+        5,
+        181,
+        240,
+        118,
+        188,
+        64
+      ]
+    },
+    {
+      "name": "PendingRefund",
+      "discriminator": [
+        21,
+        143,
+        71,
+        34,
+        213,
+        21,
+        173,
+        155
+      ]
+    },
+    {
+      "name": "ProcessedRequest",
+      "discriminator": [
+        20,
+        124,
+        158,
+        247,
+        78,
+        104,
+        105,
+        189
+      ]
+    },
+    {
+      "name": "PsmConfig",
+      "discriminator": [
+        145,
+        221,
+        200,
+        51,
+        233,
+        201,
+        86,
+        180
+      ]
+    },
+    {
+      "name": "RedemptionQueue",
+      "discriminator": [
+        57,
+        164,
+        202,
+        114,
+        174,
+        102,
+        214,
+        153
+      ]
+    },
+    {
+      "name": "RefundedRequest",
+      "discriminator": [
+        38,
+        30,
+        25,
+        79,
+        168,
+        201,
+        85,
+        186
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AuthorityUpdatedEvent",
+      "discriminator": [
+        44,
+        40,
+        20,
+        115,
+        145,
+        198,
+        95,
+        200
+      ]
+    },
+    {
+      "name": "BlacklistExemptInitialized",
+      "discriminator": [
+        44,
+        220,
+        97,
+        197,
+        106,
+        233,
+        9,
+        153
+      ]
+    },
+    {
+      "name": "BridgeAuthorityUpdatedEvent",
+      "discriminator": [
+        87,
+        122,
+        164,
+        124,
+        61,
+        208,
+        91,
+        2
+      ]
+    },
+    {
+      "name": "BridgeBurnEvent",
+      "discriminator": [
+        128,
+        121,
+        253,
+        157,
+        83,
+        33,
+        183,
+        101
+      ]
+    },
+    {
+      "name": "BridgeDeadlineUpdatedEvent",
+      "discriminator": [
+        151,
+        197,
+        105,
+        59,
+        35,
+        46,
+        58,
+        47
+      ]
+    },
+    {
+      "name": "BridgeFeeUpdatedEvent",
+      "discriminator": [
+        7,
+        154,
+        58,
+        230,
+        218,
+        111,
+        15,
+        249
+      ]
+    },
+    {
+      "name": "BridgeInitializedEvent",
+      "discriminator": [
+        199,
+        12,
+        201,
+        11,
+        202,
+        197,
+        132,
+        44
+      ]
+    },
+    {
+      "name": "BridgeLimitsUpdatedEvent",
+      "discriminator": [
+        171,
+        137,
+        71,
+        238,
+        10,
+        208,
+        151,
+        32
+      ]
+    },
+    {
+      "name": "BridgeMintEvent",
+      "discriminator": [
+        229,
+        205,
+        217,
+        227,
+        148,
+        198,
+        188,
+        13
+      ]
+    },
+    {
+      "name": "BridgePauseEvent",
+      "discriminator": [
+        55,
+        175,
+        126,
+        61,
+        103,
+        112,
+        65,
+        26
+      ]
+    },
+    {
+      "name": "BridgeUnpauseEvent",
+      "discriminator": [
+        27,
+        175,
+        113,
+        210,
+        99,
+        137,
+        42,
+        179
+      ]
+    },
+    {
+      "name": "BufferDepositEvent",
+      "discriminator": [
+        156,
+        31,
+        246,
+        123,
+        26,
+        115,
+        108,
+        116
+      ]
+    },
+    {
+      "name": "BufferWithdrawEvent",
+      "discriminator": [
+        145,
+        134,
+        103,
+        70,
+        150,
+        133,
+        86,
+        24
+      ]
+    },
+    {
+      "name": "ChainAddedEvent",
+      "discriminator": [
+        177,
+        189,
+        86,
+        73,
+        165,
+        227,
+        146,
+        72
+      ]
+    },
+    {
+      "name": "ChainRemovedEvent",
+      "discriminator": [
+        210,
+        214,
+        162,
+        178,
+        104,
+        100,
+        137,
+        206
+      ]
+    },
+    {
+      "name": "FeeRecipientUpdatedEvent",
+      "discriminator": [
+        253,
+        5,
+        188,
+        179,
+        215,
+        147,
+        124,
+        145
+      ]
+    },
+    {
+      "name": "FreezeEvent",
+      "discriminator": [
+        71,
+        23,
+        242,
+        12,
+        63,
+        34,
+        225,
+        159
+      ]
+    },
+    {
+      "name": "InitializeEvent",
+      "discriminator": [
+        206,
+        175,
+        169,
+        208,
+        241,
+        210,
+        35,
+        221
+      ]
+    },
+    {
+      "name": "MaxSupplyUpdatedEvent",
+      "discriminator": [
+        89,
+        10,
+        254,
+        214,
+        76,
+        12,
+        93,
+        206
+      ]
+    },
+    {
+      "name": "MintEvent",
+      "discriminator": [
+        197,
+        144,
+        146,
+        149,
+        66,
+        164,
+        95,
+        16
+      ]
+    },
+    {
+      "name": "MinterAllowanceUpdatedEvent",
+      "discriminator": [
+        29,
+        62,
+        74,
+        207,
+        203,
+        148,
+        100,
+        29
+      ]
+    },
+    {
+      "name": "NonceSkippedEvent",
+      "discriminator": [
+        7,
+        199,
+        145,
+        226,
+        131,
+        104,
+        179,
+        85
+      ]
+    },
+    {
+      "name": "OkuMPriceUpdated",
+      "discriminator": [
+        244,
+        181,
+        144,
+        109,
+        164,
+        114,
+        188,
+        130
+      ]
+    },
+    {
+      "name": "OracleUpdatedEvent",
+      "discriminator": [
+        243,
+        170,
+        206,
+        180,
+        16,
+        29,
+        202,
+        190
+      ]
+    },
+    {
+      "name": "OrchestratorSignerUpdatedEvent",
+      "discriminator": [
+        88,
+        10,
+        48,
+        247,
+        124,
+        180,
+        219,
+        192
+      ]
+    },
+    {
+      "name": "PauseEvent",
+      "discriminator": [
+        32,
+        51,
+        61,
+        169,
+        156,
+        104,
+        130,
+        43
+      ]
+    },
+    {
+      "name": "RedeemEvent",
+      "discriminator": [
+        90,
+        114,
+        83,
+        146,
+        212,
+        26,
+        217,
+        59
+      ]
+    },
+    {
+      "name": "RedemptionProcessedEvent",
+      "discriminator": [
+        122,
+        56,
+        178,
+        198,
+        53,
+        37,
+        147,
+        49
+      ]
+    },
+    {
+      "name": "RedemptionQueuedEvent",
+      "discriminator": [
+        43,
+        134,
+        42,
+        57,
+        119,
+        120,
+        120,
+        55
+      ]
+    },
+    {
+      "name": "RedemptionRescuedEvent",
+      "discriminator": [
+        72,
+        88,
+        47,
+        53,
+        229,
+        167,
+        169,
+        73
+      ]
+    },
+    {
+      "name": "RefundCancelledEvent",
+      "discriminator": [
+        147,
+        232,
+        142,
+        161,
+        3,
+        199,
+        24,
+        90
+      ]
+    },
+    {
+      "name": "RefundConfirmedEvent",
+      "discriminator": [
+        66,
+        24,
+        114,
+        135,
+        3,
+        249,
+        86,
+        20
+      ]
+    },
+    {
+      "name": "RefundInitiatedEvent",
+      "discriminator": [
+        32,
+        79,
+        118,
+        100,
+        204,
+        76,
+        120,
+        66
+      ]
+    },
+    {
+      "name": "RefundProcessedEvent",
+      "discriminator": [
+        8,
+        240,
+        44,
+        110,
+        236,
+        151,
+        171,
+        223
+      ]
+    },
+    {
+      "name": "ThawEvent",
+      "discriminator": [
+        250,
+        225,
+        121,
+        219,
+        125,
+        92,
+        56,
+        166
+      ]
+    },
+    {
+      "name": "UnpauseEvent",
+      "discriminator": [
+        134,
+        156,
+        8,
+        215,
+        185,
+        128,
+        192,
+        217
+      ]
+    },
+    {
+      "name": "YieldDistributed",
+      "discriminator": [
+        107,
+        100,
+        4,
+        71,
+        95,
+        176,
+        248,
+        94
+      ]
+    },
+    {
+      "name": "YieldDistributionSlotSet",
+      "discriminator": [
+        197,
+        154,
+        102,
+        178,
+        122,
+        97,
+        252,
+        144
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Caller not authorized"
+    },
+    {
+      "code": 6001,
+      "name": "Paused",
+      "msg": "Program is paused"
+    },
+    {
+      "code": 6002,
+      "name": "MaxSupplyExceeded",
+      "msg": "Mint would exceed max supply"
+    },
+    {
+      "code": 6003,
+      "name": "AllowanceExceeded",
+      "msg": "Mint would exceed minter allowance"
+    },
+    {
+      "code": 6004,
+      "name": "StaleOracle",
+      "msg": "Oracle data is stale"
+    },
+    {
+      "code": 6005,
+      "name": "InsufficientReserves",
+      "msg": "Insufficient reserves per oracle"
+    },
+    {
+      "code": 6006,
+      "name": "InsufficientBuffer",
+      "msg": "Insufficient buffer for redemption"
+    },
+    {
+      "code": 6007,
+      "name": "AccountFrozen",
+      "msg": "Account is frozen"
+    },
+    {
+      "code": 6008,
+      "name": "QueueEmpty",
+      "msg": "Queue is empty"
+    },
+    {
+      "code": 6009,
+      "name": "QueueFull",
+      "msg": "Queue is full"
+    },
+    {
+      "code": 6010,
+      "name": "InvalidQueueIndex",
+      "msg": "Invalid queue index"
+    },
+    {
+      "code": 6011,
+      "name": "EntryAlreadyCleared",
+      "msg": "Queue entry already cleared"
+    },
+    {
+      "code": 6012,
+      "name": "Overflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6013,
+      "name": "ZeroAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6014,
+      "name": "InsufficientAccounts",
+      "msg": "Not enough accounts provided for queue entries"
+    },
+    {
+      "code": 6015,
+      "name": "RecipientMismatch",
+      "msg": "Recipient account does not match queue entry user"
+    },
+    {
+      "code": 6016,
+      "name": "OracleAccountMissing",
+      "msg": "Oracle account not provided but oracle is configured"
+    },
+    {
+      "code": 6017,
+      "name": "InvalidOracleResponse",
+      "msg": "Invalid oracle response"
+    },
+    {
+      "code": 6018,
+      "name": "YieldDistributionInProgress",
+      "msg": "Cannot perform operation in same slot as yield distribution"
+    },
+    {
+      "code": 6019,
+      "name": "PriceCannotDecrease",
+      "msg": "New price must be >= current price"
+    },
+    {
+      "code": 6020,
+      "name": "YieldTooSmall",
+      "msg": "Yield amount too small to affect price (truncates to zero)"
+    },
+    {
+      "code": 6021,
+      "name": "InvalidMintExtension",
+      "msg": "Invalid mint extension configuration"
+    },
+    {
+      "code": 6022,
+      "name": "InvalidPsmConfig",
+      "msg": "Invalid PSM config account"
+    },
+    {
+      "code": 6023,
+      "name": "BlacklistExempt",
+      "msg": "Account is blacklist exempt and cannot be frozen"
+    },
+    {
+      "code": 6024,
+      "name": "BlacklistExemptAlreadyInitialized",
+      "msg": "Blacklist exemption already initialized"
+    },
+    {
+      "code": 6025,
+      "name": "BridgePaused",
+      "msg": "Bridge is paused"
+    },
+    {
+      "code": 6026,
+      "name": "SignatureExpired",
+      "msg": "Signature has expired"
+    },
+    {
+      "code": 6027,
+      "name": "InvalidSignature",
+      "msg": "Invalid Ed25519 signature"
+    },
+    {
+      "code": 6028,
+      "name": "InvalidRecipient",
+      "msg": "Recipient account does not match parameter"
+    },
+    {
+      "code": 6029,
+      "name": "InvalidRequestId",
+      "msg": "Request ID mismatch"
+    },
+    {
+      "code": 6030,
+      "name": "InvalidMessageLength",
+      "msg": "Invalid message length (expected 80 bytes)"
+    },
+    {
+      "code": 6031,
+      "name": "WrongDestinationChain",
+      "msg": "Wrong destination chain"
+    },
+    {
+      "code": 6032,
+      "name": "UnsupportedChain",
+      "msg": "Chain not supported"
+    },
+    {
+      "code": 6033,
+      "name": "RequestAlreadyProcessed",
+      "msg": "Request already processed"
+    },
+    {
+      "code": 6034,
+      "name": "BelowMinimum",
+      "msg": "Amount below minimum"
+    },
+    {
+      "code": 6035,
+      "name": "AboveMaximum",
+      "msg": "Amount above maximum"
+    },
+    {
+      "code": 6036,
+      "name": "ChainAlreadySupported",
+      "msg": "Chain already supported"
+    },
+    {
+      "code": 6037,
+      "name": "ChainListFull",
+      "msg": "Chain list is full (max 32)"
+    },
+    {
+      "code": 6038,
+      "name": "ChainNotFound",
+      "msg": "Chain not found in supported list"
+    },
+    {
+      "code": 6039,
+      "name": "MintWindowStillOpen",
+      "msg": "Mint window still open, cannot refund yet"
+    },
+    {
+      "code": 6040,
+      "name": "WrongSourceChain",
+      "msg": "Request source chain does not match this chain"
+    },
+    {
+      "code": 6041,
+      "name": "RequestAlreadyMinted",
+      "msg": "Request was already minted, cannot refund"
+    },
+    {
+      "code": 6042,
+      "name": "EscrowAlreadyInitialized",
+      "msg": "Escrow vault already initialized"
+    },
+    {
+      "code": 6043,
+      "name": "InvalidFeeBps",
+      "msg": "Invalid fee basis points (must be <= 10000)"
+    },
+    {
+      "code": 6044,
+      "name": "InvalidDeadline",
+      "msg": "Invalid deadline value"
+    },
+    {
+      "code": 6045,
+      "name": "RefundAlreadyPending",
+      "msg": "Refund already pending for this request"
+    },
+    {
+      "code": 6046,
+      "name": "NoPendingRefund",
+      "msg": "No pending refund found for this request"
+    },
+    {
+      "code": 6047,
+      "name": "RequestAlreadyRefunded",
+      "msg": "Request was already refunded"
+    }
+  ],
+  "types": [
+    {
+      "name": "AuthorityRole",
+      "docs": [
+        "Authority roles that can be updated via set_authority.",
+        "",
+        "These roles govern PSM-specific operations separate from bridge roles."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "RoleAdmin"
+          },
+          {
+            "name": "Pauser"
+          },
+          {
+            "name": "Unpauser"
+          },
+          {
+            "name": "Freezer"
+          },
+          {
+            "name": "Unfreezer"
+          },
+          {
+            "name": "QueueProcessor"
+          },
+          {
+            "name": "BufferDepositor"
+          },
+          {
+            "name": "BufferWithdrawer"
+          },
+          {
+            "name": "OracleManager"
+          },
+          {
+            "name": "CapManager"
+          },
+          {
+            "name": "AllowanceManager"
+          },
+          {
+            "name": "Rebaser"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AuthorityUpdatedEvent",
+      "docs": [
+        "Emitted when a PSM authority role is updated."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role",
+            "type": {
+              "defined": {
+                "name": "AuthorityRole"
+              }
+            }
+          },
+          {
+            "name": "old_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_authority",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BlacklistExemptInitialized",
+      "docs": [
+        "Emitted when blacklist exemption is initialized."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bridge",
+            "type": "pubkey"
+          },
+          {
+            "name": "router",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BridgeAuthorityRole",
+      "docs": [
+        "Bridge authority roles that can be updated via set_bridge_authority.",
+        "",
+        "These roles are separate from PSM roles and govern bridge-specific operations.",
+        "The two-step refund pattern uses `RefundInitiator` and `RefundConfirmer` to",
+        "prevent single-key double-mint attacks."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "BridgeAdmin"
+          },
+          {
+            "name": "BridgePauser"
+          },
+          {
+            "name": "BridgeUnpauser"
+          },
+          {
+            "name": "OrchestratorSigner"
+          },
+          {
+            "name": "FeeRecipient"
+          },
+          {
+            "name": "ChainManager"
+          },
+          {
+            "name": "FeeManager"
+          },
+          {
+            "name": "NonceAdmin"
+          },
+          {
+            "name": "RefundInitiator"
+          },
+          {
+            "name": "RefundConfirmer"
+          },
+          {
+            "name": "SignerManager"
+          },
+          {
+            "name": "LimitsManager"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BridgeAuthorityUpdatedEvent",
+      "docs": [
+        "Emitted when a bridge authority role is updated."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role",
+            "type": {
+              "defined": {
+                "name": "BridgeAuthorityRole"
+              }
+            }
+          },
+          {
+            "name": "old_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_authority",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BridgeBurnEvent",
+      "docs": [
+        "Emitted when tokens are burned for bridging to another chain.",
+        "EVM equivalent: `BridgeBurn(bytes32 indexed requestId, address indexed user, bytes32 recipient, uint256 destChainId, uint256 amount, uint256 nonce, uint256 deadline)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "request_id",
+            "docs": [
+              "Unique request identifier (keccak256 hash)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "user",
+            "docs": [
+              "User who burned tokens"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "recipient",
+            "docs": [
+              "Recipient on destination chain (EVM address, 20 bytes)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          },
+          {
+            "name": "source_chain_id",
+            "docs": [
+              "Source chain ID (Solana)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "destination_chain",
+            "docs": [
+              "Destination chain ID"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Amount burned excluding fee (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "nonce",
+            "docs": [
+              "Sequential nonce for ordering"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "deadline",
+            "docs": [
+              "Request expiration timestamp"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value of burned amount"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "fee_amount",
+            "docs": [
+              "Fee amount deducted (6 decimals)"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BridgeConfig",
+      "docs": [
+        "Bridge configuration PDA",
+        "Seeds: [\"bridge_config\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "bridge_admin",
+            "docs": [
+              "Bridge admin - manages bridge roles (meta-role)",
+              "EVM: DEFAULT_ADMIN_ROLE"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bridge_pauser",
+            "docs": [
+              "Bridge pauser - emergency pause",
+              "EVM: BRIDGE_PAUSER"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bridge_unpauser",
+            "docs": [
+              "Bridge unpauser - unpause",
+              "EVM: BRIDGE_UNPAUSER"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "orchestrator_signer",
+            "docs": [
+              "Orchestrator signer - Ed25519 public key for signature verification"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_recipient",
+            "docs": [
+              "Fee recipient - receives bridge fees"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "chain_manager",
+            "docs": [
+              "Chain manager - add/remove supported chains",
+              "EVM: BRIDGE_CHAIN_MANAGER"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_manager",
+            "docs": [
+              "Fee manager - update fee configuration and fee recipient",
+              "EVM: BRIDGE_FEE_MANAGER"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce_admin",
+            "docs": [
+              "Nonce admin - emergency nonce management",
+              "EVM: BRIDGE_NONCE_ADMIN"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "refund_initiator",
+            "docs": [
+              "Refund initiator - initiate refunds (step 1 of two-step refund)",
+              "EVM: BRIDGE_REFUND_INITIATOR"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "refund_confirmer",
+            "docs": [
+              "Refund confirmer - confirm refunds (step 2 of two-step refund)",
+              "Must be different key than refund_initiator to prevent single-key double-mint",
+              "EVM: BRIDGE_REFUND_CONFIRMER"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "signer_manager",
+            "docs": [
+              "Signer manager - update orchestrator signer (Cold Multisig)",
+              "EVM: BRIDGE_SIGNER_MANAGER"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "limits_manager",
+            "docs": [
+              "Limits manager - update bridge limits and deadline (Cold Multisig)",
+              "EVM: BRIDGE_LIMITS_MANAGER"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "bridge_fee_bps",
+            "docs": [
+              "Bridge fee in basis points (10 = 0.1%)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "min_bridge_amount",
+            "docs": [
+              "Minimum bridge amount"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "max_bridge_amount",
+            "docs": [
+              "Maximum bridge amount"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "is_paused",
+            "docs": [
+              "Whether bridge is paused"
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "bridge_deadline_secs",
+            "docs": [
+              "Configurable bridge deadline in seconds (default 3600 = 1 hour)"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "source_chain_id",
+            "docs": [
+              "This chain's ID (e.g., Solana), set during initialize_bridge"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "supported_chains",
+            "docs": [
+              "Supported destination chain IDs (fixed array, max 32 chains)"
+            ],
+            "type": {
+              "array": [
+                "u16",
+                32
+              ]
+            }
+          },
+          {
+            "name": "supported_chains_count",
+            "docs": [
+              "Number of active chains in the array"
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BridgeDeadlineUpdatedEvent",
+      "docs": [
+        "Emitted when bridge deadline is updated.",
+        "EVM equivalent: `DeadlineUpdated(uint256 oldDeadline, uint256 newDeadline)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_deadline_secs",
+            "type": "i64"
+          },
+          {
+            "name": "new_deadline_secs",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BridgeFeeUpdatedEvent",
+      "docs": [
+        "Emitted when bridge fee is updated.",
+        "EVM equivalent: `FeeUpdated(uint256 oldFee, uint256 newFee)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "new_fee_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BridgeInitializedEvent",
+      "docs": [
+        "Emitted when bridge is initialized."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bridge_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "orchestrator_signer",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BridgeLimitsUpdatedEvent",
+      "docs": [
+        "Emitted when bridge limits are updated.",
+        "EVM equivalent: `LimitsUpdated(uint256 minAmount, uint256 maxAmount)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "min_amount",
+            "type": "u64"
+          },
+          {
+            "name": "max_amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BridgeMintEvent",
+      "docs": [
+        "Emitted when tokens are bridged from another chain (mint).",
+        "EVM equivalent: `BridgeMint(bytes32 indexed requestId, uint256 sourceChainId, address recipient, uint256 amount, uint256 nonce)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "request_id",
+            "docs": [
+              "Unique request identifier (keccak256 hash)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "source_chain_id",
+            "docs": [
+              "Source chain ID (e.g., Ethereum = 1)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "recipient",
+            "docs": [
+              "Recipient on Solana"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Amount minted (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "nonce",
+            "docs": [
+              "Sequential nonce for ordering"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value of minted amount"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BridgeNonce",
+      "docs": [
+        "Bridge nonce tracking PDA (one per destination chain)",
+        "Seeds: [\"bridge_nonce\", destination_chain_id.to_le_bytes()]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "is_initialized",
+            "docs": [
+              "Whether this nonce account has been initialized (avoids ambiguity with chain_id == 0)"
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "destination_chain",
+            "docs": [
+              "Destination chain ID"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "next_nonce",
+            "docs": [
+              "Next sequential nonce for this destination"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BridgePauseEvent",
+      "docs": [
+        "Emitted when bridge is paused."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pauser",
+            "type": "pubkey"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BridgeUnpauseEvent",
+      "docs": [
+        "Emitted when bridge is unpaused."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "unpauser",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BufferDepositEvent",
+      "docs": [
+        "Emitted when USDC is deposited into buffer.",
+        "EVM equivalent: `BufferDeposited(address indexed depositor, uint256 amount, uint256 newBufferBalance)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "orchestrator",
+            "docs": [
+              "Depositor (orchestrator)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Amount deposited (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "new_buffer_balance",
+            "docs": [
+              "New buffer balance after deposit"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BufferWithdrawEvent",
+      "docs": [
+        "Emitted when USDC is withdrawn from buffer.",
+        "EVM equivalent: `BufferWithdrawn(address indexed to, uint256 amount, uint256 newBufferBalance)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role_admin",
+            "docs": [
+              "Withdrawer (buffer_withdrawer role)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Amount withdrawn (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "new_buffer_balance",
+            "docs": [
+              "New buffer balance after withdrawal"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ChainAddedEvent",
+      "docs": [
+        "Emitted when a chain is added to supported list.",
+        "EVM equivalent: `ChainAdded(uint256 indexed chainId)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "chain_id",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ChainRemovedEvent",
+      "docs": [
+        "Emitted when a chain is removed from supported list.",
+        "EVM equivalent: `ChainRemoved(uint256 indexed chainId)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "chain_id",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FeeRecipientUpdatedEvent",
+      "docs": [
+        "Emitted when fee recipient is updated.",
+        "EVM equivalent: `FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_recipient",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FreezeEvent",
+      "docs": [
+        "Emitted when an account is frozen.",
+        "EVM equivalent: `Blacklisted(address indexed account)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "account",
+            "type": "pubkey"
+          },
+          {
+            "name": "target_owner",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "InitializeEvent",
+      "docs": [
+        "Emitted when PSM is initialized.",
+        "EVM equivalent: Initialize event in LitePSM constructor"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_money_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_supply",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MaxSupplyUpdatedEvent",
+      "docs": [
+        "Emitted when max supply is updated.",
+        "EVM equivalent: `MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_max_supply",
+            "type": "u64"
+          },
+          {
+            "name": "new_max_supply",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MintEvent",
+      "docs": [
+        "Emitted when OkuMoney is minted via PSM.",
+        "EVM equivalent: `MintNote(address indexed user, uint256 usdcAmount, uint256 okuMAmount, uint256 okuMMultiplier)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "docs": [
+              "User who minted"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_amount",
+            "docs": [
+              "USDC deposited (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oku_m_amount",
+            "docs": [
+              "OkuMoney minted (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value of the minted amount (oku_m_amount * oku_m_price / PRECISION)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oku_m_price",
+            "docs": [
+              "OkuMoney price multiplier at time of mint (1e9 = $1.00)",
+              "EVM equivalent: okuMMultiplier"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MinterAllowanceUpdatedEvent",
+      "docs": [
+        "Emitted when minter allowance is updated.",
+        "EVM equivalent: `MinterAllowanceUpdated(address indexed minter, uint256 oldAllowance, uint256 newAllowance)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_allowance",
+            "type": "u64"
+          },
+          {
+            "name": "new_allowance",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "NonceSkippedEvent",
+      "docs": [
+        "Emitted when a nonce is skipped (emergency recovery).",
+        "EVM equivalent: `NonceSkipped(uint256 indexed destChainId, uint256 skippedNonce)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "destination_chain_id",
+            "type": "u16"
+          },
+          {
+            "name": "old_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "new_nonce",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OkuMPriceUpdated",
+      "docs": [
+        "Emitted when OkuMoney price is updated directly.",
+        "EVM equivalent: `OkuMMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_multiplier",
+            "type": "u64"
+          },
+          {
+            "name": "new_multiplier",
+            "type": "u64"
+          },
+          {
+            "name": "total_supply",
+            "docs": [
+              "Total OkuMoney supply at time of update"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OracleUpdatedEvent",
+      "docs": [
+        "Emitted when oracle configuration changes.",
+        "EVM equivalent: `OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle",
+            "type": "pubkey"
+          },
+          {
+            "name": "staleness_threshold",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OrchestratorSignerUpdatedEvent",
+      "docs": [
+        "Emitted when orchestrator signer is updated.",
+        "EVM equivalent: `SignerUpdated(address indexed oldSigner, address indexed newSigner)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_signer",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_signer",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PauseEvent",
+      "docs": [
+        "Emitted when PSM is paused.",
+        "EVM equivalent: `Paused(address account)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pauser",
+            "type": "pubkey"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PendingRefund",
+      "docs": [
+        "Pending refund PDA (two-step refund pattern)",
+        "Seeds: [\"pending_refund\", request_id]",
+        "",
+        "This implements the EVM OkuBridge two-step refund pattern:",
+        "1. RefundInitiator calls initiate_refund() to create this PDA",
+        "2. RefundConfirmer (different key) calls confirm_refund() to complete",
+        "3. Either party can call cancel_refund() to abort",
+        "",
+        "This prevents a single compromised key from completing refunds unilaterally."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "request_id",
+            "docs": [
+              "Request ID (keccak256 hash of original request data)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "recipient",
+            "docs": [
+              "Original sender who will receive the refund"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Amount to be refunded"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "initiated_at",
+            "docs": [
+              "Timestamp when refund was initiated"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "initiator",
+            "docs": [
+              "Who initiated the refund (for audit trail)"
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProcessedRequest",
+      "docs": [
+        "Processed bridge request PDA (prevents replay attacks)",
+        "Seeds: [\"bridge_request\", request_id]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "request_id",
+            "docs": [
+              "Request ID (keccak256 hash of request data)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "processed_at",
+            "docs": [
+              "Timestamp when processed"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "recipient",
+            "docs": [
+              "Recipient who received tokens"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Amount minted"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PsmConfig",
+      "docs": [
+        "PSM configuration PDA",
+        "Seeds: [\"psm_config\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "role_admin",
+            "docs": [
+              "Meta role: grant/revoke roles (cold multisig)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pauser",
+            "docs": [
+              "Warm Multisig - pause only"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "unpauser",
+            "docs": [
+              "Cold Multisig - unpause only"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "freezer",
+            "docs": [
+              "Warm Multisig - freeze accounts"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "unfreezer",
+            "docs": [
+              "Cold Multisig - thaw accounts (requires deliberate review)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "queue_processor",
+            "docs": [
+              "Orchestrator - process redemption queue"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer_depositor",
+            "docs": [
+              "Orchestrator - deposit USDC buffer"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer_withdrawer",
+            "docs": [
+              "Cold Multisig - withdraw buffer"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle_manager",
+            "docs": [
+              "Cold Multisig - configure oracle"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "cap_manager",
+            "docs": [
+              "Cold Multisig - set max supply"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "allowance_manager",
+            "docs": [
+              "Cold Multisig - reset minter allowance"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "rebaser",
+            "docs": [
+              "Orchestrator - update interest rate"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_mint",
+            "docs": [
+              "USDC mint address"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_money_mint",
+            "docs": [
+              "OkuMoney mint address (Token-2022 with Scaled UI Amount extension)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "vault_usdc",
+            "docs": [
+              "PSM's USDC buffer vault (ATA)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "vault_oku_money",
+            "docs": [
+              "PSM's OkuMoney escrow vault for queued redemptions (ATA)",
+              "Holds OkuMoney while users are in queue (yield comes from price appreciation)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "max_supply",
+            "docs": [
+              "Maximum OkuUSD supply cap"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "minter_allowance",
+            "docs": [
+              "Bridge mint allowance remaining"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "is_paused",
+            "docs": [
+              "Whether the PSM is paused"
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "oracle",
+            "docs": [
+              "Pyth oracle feed (or Pubkey::default() if disabled)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "staleness_threshold",
+            "docs": [
+              "Maximum oracle staleness in seconds"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "last_yield_distribution_slot",
+            "docs": [
+              "Solana slot of last yield distribution (sandwich prevention)",
+              "Operations like mint/redeem are blocked in the same slot as yield distribution"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oku_m_price",
+            "docs": [
+              "Current OkuMoney price multiplier (1e9 = $1.00)",
+              "Updated by set_oku_m_price() or distribute_yield()",
+              "Matches EVM's okuMPrice() storage pattern"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "blacklist_exempt_bridge",
+            "docs": [
+              "Blacklist-exempt bridge address (cannot be frozen)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "blacklist_exempt_router",
+            "docs": [
+              "Blacklist-exempt router address (cannot be frozen)"
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "QueueEntry",
+      "docs": [
+        "A single entry in the redemption queue"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "docs": [
+              "User who is owed redemption"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_m_amount",
+            "docs": [
+              "OkuMoney amount held in escrow",
+              "The actual USDC payout will be calculated at process_queue time",
+              "using the current oku_m_price multiplier"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "docs": [
+              "Timestamp when queued (kept for audit trail)"
+            ],
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedeemEvent",
+      "docs": [
+        "Emitted when OkuMoney is redeemed for USDC (instant redemption).",
+        "EVM equivalent: `RedeemNote(address indexed user, uint256 okuMIn, uint256 usdcOut, uint256 okuMMultiplier)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "docs": [
+              "User who redeemed"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_m_amount",
+            "docs": [
+              "OkuMoney burned (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "usdc_amount",
+            "docs": [
+              "USDC received (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value of the redeemed amount"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oku_m_price",
+            "docs": [
+              "OkuMoney price multiplier at time of redeem (1e9 = $1.00)",
+              "EVM equivalent: okuMMultiplier"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedemptionProcessedEvent",
+      "docs": [
+        "Emitted when a queued redemption is processed.",
+        "EVM equivalent: `RedemptionProcessed(address indexed user, uint256 okuMAmount, uint256 dollarValue, uint256 usdcAmount, uint256 waitTime)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "docs": [
+              "User who received redemption"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_m_amount",
+            "docs": [
+              "OkuMoney amount that was escrowed (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value at time of processing"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "usdc_amount",
+            "docs": [
+              "USDC received (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "wait_time",
+            "docs": [
+              "Time spent in queue (seconds)"
+            ],
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedemptionQueue",
+      "docs": [
+        "Redemption queue PDA",
+        "Seeds: [\"redemption_queue\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "head",
+            "docs": [
+              "Index of next entry to process (head of queue)"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "tail",
+            "docs": [
+              "Index of next slot to write (tail of queue)"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "total_queued_oku_m",
+            "docs": [
+              "Running total of OkuMoney held in escrow (updated on enqueue/process/rescue)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "entries",
+            "docs": [
+              "Queue entries (fixed array for predictable sizing)",
+              "Size must match MAX_ENTRIES constant below"
+            ],
+            "type": {
+              "array": [
+                {
+                  "defined": {
+                    "name": "QueueEntry"
+                  }
+                },
+                10
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedemptionQueuedEvent",
+      "docs": [
+        "Emitted when a redemption is queued (insufficient buffer).",
+        "EVM equivalent: `RedemptionQueued(address indexed user, uint256 okuMAmount, uint256 dollarValue, uint256 position, uint256 queueLength)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "docs": [
+              "User who is owed redemption"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_m_amount",
+            "docs": [
+              "OkuMoney amount held in escrow (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value at time of queueing"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "queue_position",
+            "docs": [
+              "Position in queue (0-indexed)"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "queue_length",
+            "docs": [
+              "Total queue length after this entry"
+            ],
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedemptionRescuedEvent",
+      "docs": [
+        "Emitted when a stuck queue entry is rescued.",
+        "EVM equivalent: `RedemptionRescued(uint256 indexed index, address originalUser, address recipient, uint256 okuMAmount, uint256 dollarValue)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "queue_index",
+            "docs": [
+              "Index of the rescued entry"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "original_user",
+            "docs": [
+              "Original user who was owed redemption"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "recipient",
+            "docs": [
+              "Recipient who received the OkuMoney"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_m_amount",
+            "docs": [
+              "OkuMoney amount returned (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value at time of rescue"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RefundCancelledEvent",
+      "docs": [
+        "Emitted when a pending refund is cancelled.",
+        "EVM equivalent: `RefundCancelled(bytes32 indexed requestId, address indexed canceller, string reason)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "request_id",
+            "docs": [
+              "Unique request identifier"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "canceller",
+            "docs": [
+              "Who cancelled the refund"
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RefundConfirmedEvent",
+      "docs": [
+        "Emitted when a refund is confirmed (step 2 of 2).",
+        "EVM equivalent: `RefundConfirmed(bytes32 indexed requestId, address indexed sender, uint256 amount)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "request_id",
+            "docs": [
+              "Unique request identifier"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "recipient",
+            "docs": [
+              "Recipient who received the refund"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Amount refunded"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RefundInitiatedEvent",
+      "docs": [
+        "Emitted when a refund is initiated (step 1 of 2).",
+        "EVM equivalent: `RefundInitiated(bytes32 indexed requestId, address indexed sender, uint256 amount)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "request_id",
+            "docs": [
+              "Unique request identifier"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "recipient",
+            "docs": [
+              "Original sender who will receive the refund"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Amount to be refunded"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "initiator",
+            "docs": [
+              "Who initiated the refund"
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RefundProcessedEvent",
+      "docs": [
+        "Emitted when a refund is processed (legacy single-step).",
+        "Deprecated: Use RefundInitiatedEvent + RefundConfirmedEvent for new integrations."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "request_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RefundedRequest",
+      "docs": [
+        "Refunded bridge request PDA (prevents double-refund)",
+        "Seeds: [\"bridge_refund\", request_id]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "request_id",
+            "docs": [
+              "Request ID (keccak256 hash of request data)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "refunded_at",
+            "docs": [
+              "Timestamp when refunded"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "recipient",
+            "docs": [
+              "Original sender who received refund"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "Amount refunded"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ThawEvent",
+      "docs": [
+        "Emitted when an account is unfrozen.",
+        "EVM equivalent: `Unblacklisted(address indexed account)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "account",
+            "type": "pubkey"
+          },
+          {
+            "name": "target_owner",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UnpauseEvent",
+      "docs": [
+        "Emitted when PSM is unpaused.",
+        "EVM equivalent: `Unpaused(address account)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "unpauser",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "YieldDistributed",
+      "docs": [
+        "Emitted when yield is distributed across all OkuMoney holders.",
+        "EVM equivalent: `YieldDistributed(uint256 yieldAmount, uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "yield_amount",
+            "docs": [
+              "Dollar yield distributed (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "old_multiplier",
+            "type": "u64"
+          },
+          {
+            "name": "new_multiplier",
+            "type": "u64"
+          },
+          {
+            "name": "total_supply",
+            "docs": [
+              "Total OkuMoney supply at time of distribution"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "YieldDistributionSlotSet",
+      "docs": [
+        "Emitted when yield distribution slot is set (for sandwich prevention)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "slot",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}

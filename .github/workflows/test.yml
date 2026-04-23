@@ -39,3 +39,27 @@ jobs:
 
       - name: Run Forge tests
         run: forge test -vvv
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Compile with Hardhat
+        run: npx hardhat compile
+
+      - name: Export ABIs
+        run: npm run export-abis
+
+      - name: Check exported artifacts are up to date
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ -n "$(git status --porcelain artifacts/evm/)" ]; then
+            echo "::error::artifacts/evm/ is out of date. Run \`cd EVM && npx hardhat compile && npm run export-abis\` and commit the result."
+            git status --porcelain artifacts/evm/
+            git diff artifacts/evm/ | head -200
+            exit 1
+          fi

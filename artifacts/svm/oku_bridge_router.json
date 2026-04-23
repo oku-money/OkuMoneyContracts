@@ -1,0 +1,1311 @@
+{
+  "address": "JDa1YZH8VNjXiVxuBQfhU58fGvXRPuiTAt2t4hA5HAFS",
+  "metadata": {
+    "name": "oku_bridge_router",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "OkuBridgeRouter - Convenience wrapper for bridging usdOku cross-chain"
+  },
+  "instructions": [
+    {
+      "name": "bridge_oku_m",
+      "docs": [
+        "Bridge OkuMoney directly cross-chain",
+        "Calls PSM bridge_burn directly — no vault unwrap needed"
+      ],
+      "discriminator": [
+        21,
+        71,
+        72,
+        138,
+        170,
+        91,
+        251,
+        50
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  116,
+                  101,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022) - validated against stored config"
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_oku_money_ata",
+          "docs": [
+            "User's OkuMoney account - validated to belong to user (defense-in-depth)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "bridge_config"
+        },
+        {
+          "name": "psm_config"
+        },
+        {
+          "name": "bridge_nonce",
+          "writable": true
+        },
+        {
+          "name": "fee_recipient_ata",
+          "writable": true
+        },
+        {
+          "name": "psm_program",
+          "address": "3pi3vBj7dn98C4QbrrKD1LEFacpXBtmCzY17YR6j7wNa"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "oku_m_amount",
+          "type": "u64"
+        },
+        {
+          "name": "recipient",
+          "type": {
+            "array": [
+              "u8",
+              20
+            ]
+          }
+        },
+        {
+          "name": "destination_chain",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "bridge_usd_oku",
+      "docs": [
+        "Bridge usdOku cross-chain in one transaction",
+        "1. Unwraps usdOku -> OkuMoney via oku-dollar vault",
+        "2. Burns OkuMoney via PSM bridge_burn"
+      ],
+      "discriminator": [
+        37,
+        214,
+        146,
+        6,
+        82,
+        70,
+        89,
+        52
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  116,
+                  101,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault_config",
+          "writable": true
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022) - validated against stored config"
+          ],
+          "writable": true
+        },
+        {
+          "name": "usd_oku_mint",
+          "docs": [
+            "usdOku mint (Token-2022) - validated against stored config"
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_oku_money_ata",
+          "docs": [
+            "User's OkuMoney account - validated to belong to user (defense-in-depth)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_usd_oku_ata",
+          "docs": [
+            "User's usdOku account - validated to belong to user (defense-in-depth)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "reserve_vault",
+          "docs": [
+            "Vault's OkuMoney reserve account"
+          ],
+          "writable": true
+        },
+        {
+          "name": "bridge_config"
+        },
+        {
+          "name": "psm_config",
+          "docs": [
+            "Single account passed to both CPIs to avoid duplication"
+          ]
+        },
+        {
+          "name": "bridge_nonce",
+          "writable": true
+        },
+        {
+          "name": "fee_recipient_ata",
+          "writable": true
+        },
+        {
+          "name": "vault_program",
+          "address": "AWwByFuQfnoiCEZAMdSc4WixepppzXXStXkQijPoKNi5"
+        },
+        {
+          "name": "psm_program",
+          "address": "3pi3vBj7dn98C4QbrrKD1LEFacpXBtmCzY17YR6j7wNa"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "usd_oku_shares",
+          "type": "u64"
+        },
+        {
+          "name": "recipient",
+          "type": {
+            "array": [
+              "u8",
+              20
+            ]
+          }
+        },
+        {
+          "name": "destination_chain",
+          "type": "u16"
+        },
+        {
+          "name": "min_oku_money_out",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize",
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "role_admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  116,
+                  101,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022) - stored in config for validation"
+          ]
+        },
+        {
+          "name": "usd_oku_mint",
+          "docs": [
+            "usdOku mint (Token-2022) - stored in config for validation"
+          ]
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "pauser",
+          "type": "pubkey"
+        },
+        {
+          "name": "unpauser",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "mint_usd_oku",
+      "docs": [
+        "Mint usdOku from USDC in one transaction",
+        "1. PSM mint_oku_m: USDC -> OkuMoney",
+        "2. Vault wrap: OkuMoney -> usdOku"
+      ],
+      "discriminator": [
+        38,
+        160,
+        103,
+        161,
+        231,
+        182,
+        183,
+        212
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  116,
+                  101,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "psm_config",
+          "writable": true
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022) - validated against stored config"
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_usdc_ata",
+          "writable": true
+        },
+        {
+          "name": "user_oku_money_ata",
+          "docs": [
+            "User's OkuMoney account - validated to belong to user (defense-in-depth)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "vault_usdc",
+          "writable": true
+        },
+        {
+          "name": "price_update",
+          "optional": true
+        },
+        {
+          "name": "vault_config",
+          "writable": true
+        },
+        {
+          "name": "usd_oku_mint",
+          "docs": [
+            "usdOku mint (Token-2022) - validated against stored config"
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_usd_oku_ata",
+          "docs": [
+            "User's usdOku account - validated to belong to user (defense-in-depth)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "reserve_vault",
+          "docs": [
+            "Vault's OkuMoney reserve account"
+          ],
+          "writable": true
+        },
+        {
+          "name": "dead_shares_ata",
+          "docs": [
+            "Dead shares ATA (optional, only needed on first vault deposit)"
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "vault_program",
+          "address": "AWwByFuQfnoiCEZAMdSc4WixepppzXXStXkQijPoKNi5"
+        },
+        {
+          "name": "psm_program",
+          "address": "3pi3vBj7dn98C4QbrrKD1LEFacpXBtmCzY17YR6j7wNa"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "usdc_amount",
+          "type": "u64"
+        },
+        {
+          "name": "min_shares_out",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "pause",
+      "discriminator": [
+        211,
+        22,
+        221,
+        251,
+        74,
+        121,
+        193,
+        47
+      ],
+      "accounts": [
+        {
+          "name": "pauser",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  116,
+                  101,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "redeem_usd_oku",
+      "docs": [
+        "Redeem usdOku to USDC in one transaction",
+        "1. Vault unwrap: usdOku -> OkuMoney",
+        "2. PSM redeem_oku_m: OkuMoney -> USDC (instant or queued)"
+      ],
+      "discriminator": [
+        147,
+        236,
+        154,
+        13,
+        208,
+        15,
+        104,
+        64
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  116,
+                  101,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault_config",
+          "writable": true
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022) - validated against stored config"
+          ],
+          "writable": true
+        },
+        {
+          "name": "usd_oku_mint",
+          "docs": [
+            "usdOku mint (Token-2022) - validated against stored config"
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_oku_money_ata",
+          "docs": [
+            "User's OkuMoney account - validated to belong to user (defense-in-depth)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_usd_oku_ata",
+          "docs": [
+            "User's usdOku account - validated to belong to user (defense-in-depth)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "reserve_vault",
+          "docs": [
+            "Vault's OkuMoney reserve account"
+          ],
+          "writable": true
+        },
+        {
+          "name": "psm_config",
+          "writable": true
+        },
+        {
+          "name": "redemption_queue",
+          "writable": true
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "user_usdc_ata",
+          "writable": true
+        },
+        {
+          "name": "vault_usdc",
+          "writable": true
+        },
+        {
+          "name": "vault_oku_money",
+          "writable": true
+        },
+        {
+          "name": "vault_program",
+          "address": "AWwByFuQfnoiCEZAMdSc4WixepppzXXStXkQijPoKNi5"
+        },
+        {
+          "name": "psm_program",
+          "address": "3pi3vBj7dn98C4QbrrKD1LEFacpXBtmCzY17YR6j7wNa"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "usd_oku_shares",
+          "type": "u64"
+        },
+        {
+          "name": "min_oku_money_out",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_authority",
+      "discriminator": [
+        133,
+        250,
+        37,
+        21,
+        110,
+        163,
+        26,
+        121
+      ],
+      "accounts": [
+        {
+          "name": "role_admin",
+          "docs": [
+            "Role admin - only role_admin can update authorities"
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "Router config"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  116,
+                  101,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "role",
+          "type": {
+            "defined": {
+              "name": "RouterAuthorityRole"
+            }
+          }
+        },
+        {
+          "name": "new_authority",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "unpause",
+      "discriminator": [
+        169,
+        144,
+        4,
+        38,
+        10,
+        141,
+        188,
+        255
+      ],
+      "accounts": [
+        {
+          "name": "unpauser",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  117,
+                  116,
+                  101,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "RouterConfig",
+      "discriminator": [
+        147,
+        20,
+        81,
+        135,
+        46,
+        251,
+        46,
+        139
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AuthorityUpdatedEvent",
+      "discriminator": [
+        44,
+        40,
+        20,
+        115,
+        145,
+        198,
+        95,
+        200
+      ]
+    },
+    {
+      "name": "BridgeOkuMEvent",
+      "discriminator": [
+        54,
+        227,
+        159,
+        118,
+        63,
+        202,
+        137,
+        235
+      ]
+    },
+    {
+      "name": "BridgeUsdOkuEvent",
+      "discriminator": [
+        80,
+        24,
+        178,
+        208,
+        134,
+        169,
+        32,
+        72
+      ]
+    },
+    {
+      "name": "InitializeEvent",
+      "discriminator": [
+        206,
+        175,
+        169,
+        208,
+        241,
+        210,
+        35,
+        221
+      ]
+    },
+    {
+      "name": "MintUsdOkuEvent",
+      "discriminator": [
+        85,
+        32,
+        243,
+        191,
+        184,
+        210,
+        185,
+        47
+      ]
+    },
+    {
+      "name": "PauseEvent",
+      "discriminator": [
+        32,
+        51,
+        61,
+        169,
+        156,
+        104,
+        130,
+        43
+      ]
+    },
+    {
+      "name": "RedeemUsdOkuEvent",
+      "discriminator": [
+        243,
+        17,
+        254,
+        196,
+        10,
+        230,
+        68,
+        137
+      ]
+    },
+    {
+      "name": "UnpauseEvent",
+      "discriminator": [
+        134,
+        156,
+        8,
+        215,
+        185,
+        128,
+        192,
+        217
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Caller not authorized"
+    },
+    {
+      "code": 6001,
+      "name": "Paused",
+      "msg": "Router is paused"
+    },
+    {
+      "code": 6002,
+      "name": "ZeroAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6003,
+      "name": "MathError",
+      "msg": "Unexpected balance decrease"
+    },
+    {
+      "code": 6004,
+      "name": "SlippageExceeded",
+      "msg": "Slippage tolerance exceeded"
+    },
+    {
+      "code": 6005,
+      "name": "InvalidRecipient",
+      "msg": "Invalid recipient (zero address)"
+    },
+    {
+      "code": 6006,
+      "name": "InvalidDestinationChain",
+      "msg": "Invalid destination chain"
+    },
+    {
+      "code": 6007,
+      "name": "InvalidAuthority",
+      "msg": "Invalid authority address (zero address)"
+    },
+    {
+      "code": 6008,
+      "name": "AlreadyPaused",
+      "msg": "Router is already paused"
+    },
+    {
+      "code": 6009,
+      "name": "NotPaused",
+      "msg": "Router is not paused"
+    }
+  ],
+  "types": [
+    {
+      "name": "AuthorityUpdatedEvent",
+      "docs": [
+        "Emitted when a router authority role is updated."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role",
+            "type": {
+              "defined": {
+                "name": "RouterAuthorityRole"
+              }
+            }
+          },
+          {
+            "name": "old_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_authority",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BridgeOkuMEvent",
+      "docs": [
+        "Emitted when OkuMoney is bridged directly cross-chain.",
+        "For authoritative bridge data (nonce, fee, dollar_value), check PSM's BridgeBurnEvent."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "docs": [
+              "User who initiated the bridge"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_money_amount",
+            "docs": [
+              "OkuMoney amount burned"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "destination_chain",
+            "docs": [
+              "Destination chain ID"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "recipient",
+            "docs": [
+              "Recipient on destination chain (EVM address)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "BridgeUsdOkuEvent",
+      "docs": [
+        "Emitted when usdOku is bridged cross-chain (unwrap + burn).",
+        "For authoritative bridge data (nonce, fee, dollar_value), check PSM's BridgeBurnEvent."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "docs": [
+              "User who initiated the bridge"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "usd_oku_shares",
+            "docs": [
+              "OkuDollar shares unwrapped"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oku_money_amount",
+            "docs": [
+              "OkuMoney amount after unwrap (burned for bridge)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "destination_chain",
+            "docs": [
+              "Destination chain ID"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "recipient",
+            "docs": [
+              "Recipient on destination chain (EVM address)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "InitializeEvent",
+      "docs": [
+        "Emitted when router is initialized."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_money_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "usd_oku_mint",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MintUsdOkuEvent",
+      "docs": [
+        "Emitted when usdOku is minted from USDC (PSM mint + vault wrap).",
+        "For authoritative mint data (dollar_value), check PSM's MintEvent and Vault's WrapEvent."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "docs": [
+              "User who minted"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_amount",
+            "docs": [
+              "USDC deposited (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oku_money_intermediate",
+            "docs": [
+              "Intermediate OkuMoney amount"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "usd_oku_shares",
+            "docs": [
+              "OkuDollar shares minted"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PauseEvent",
+      "docs": [
+        "Emitted when router is paused."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pauser",
+            "type": "pubkey"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedeemUsdOkuEvent",
+      "docs": [
+        "Emitted when usdOku is redeemed for USDC (vault unwrap + PSM redeem).",
+        "",
+        "NOTE: The final USDC amount and queue status are determined by the PSM,",
+        "not the router. Check PSM's RedeemEvent or RedemptionQueuedEvent for details."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "docs": [
+              "User who redeemed"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "usd_oku_shares",
+            "docs": [
+              "OkuDollar shares burned"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oku_money_intermediate",
+            "docs": [
+              "Intermediate OkuMoney amount"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RouterAuthorityRole",
+      "docs": [
+        "Authority roles that can be updated via set_authority.",
+        "",
+        "These roles govern OkuBridgeRouter operations."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "RoleAdmin"
+          },
+          {
+            "name": "Pauser"
+          },
+          {
+            "name": "Unpauser"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RouterConfig",
+      "docs": [
+        "Router configuration PDA",
+        "Stores role authorities and token mint references for validation"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "role_admin",
+            "docs": [
+              "Meta role: grant/revoke roles (cold multisig)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pauser",
+            "docs": [
+              "Warm Multisig - pause only"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "unpauser",
+            "docs": [
+              "Cold Multisig - unpause only"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "is_paused",
+            "docs": [
+              "Whether the router is paused"
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "oku_money_mint",
+            "docs": [
+              "OkuMoney mint address (Token-2022)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "usd_oku_mint",
+            "docs": [
+              "usdOku mint address (Token-2022)"
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UnpauseEvent",
+      "docs": [
+        "Emitted when router is unpaused."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "unpauser",
+            "type": "pubkey"
+          }
+        ]
+      }
+    }
+  ]
+}

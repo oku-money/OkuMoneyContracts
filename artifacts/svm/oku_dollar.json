@@ -1,0 +1,2186 @@
+{
+  "address": "AWwByFuQfnoiCEZAMdSc4WixepppzXXStXkQijPoKNi5",
+  "metadata": {
+    "name": "oku_dollar",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "OkuDollar vault - rebasing $1-pegged stablecoin backed by OkuMoney"
+  },
+  "instructions": [
+    {
+      "name": "deposit_reserves",
+      "docs": [
+        "Deposit OkuMoney reserves",
+        "Called by reserve_manager to add collateral"
+      ],
+      "discriminator": [
+        63,
+        188,
+        174,
+        171,
+        4,
+        201,
+        34,
+        44
+      ],
+      "accounts": [
+        {
+          "name": "reserve_manager",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  107,
+                  117,
+                  95,
+                  100,
+                  111,
+                  108,
+                  108,
+                  97,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022)"
+          ]
+        },
+        {
+          "name": "usd_oku_mint",
+          "docs": [
+            "usdOku mint (for reading total supply for collateralization calculation)"
+          ]
+        },
+        {
+          "name": "source_ata",
+          "docs": [
+            "Reserve manager's OkuMoney source account"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "reserve_manager"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "oku_money_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "reserve_vault",
+          "docs": [
+            "Vault's OkuMoney reserve account"
+          ],
+          "writable": true
+        },
+        {
+          "name": "psm_config",
+          "docs": [
+            "PSM config account (for reading oku_m_price)"
+          ]
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize",
+      "docs": [
+        "Initialize the OkuDollar vault",
+        "Creates config PDA, usdOku mint, and reserve vault"
+      ],
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "role_admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  107,
+                  117,
+                  95,
+                  100,
+                  111,
+                  108,
+                  108,
+                  97,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022)"
+          ]
+        },
+        {
+          "name": "usd_oku_mint",
+          "docs": [
+            "usdOku mint (Token-2022)",
+            "Mint authority must be the config PDA"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  100,
+                  95,
+                  111,
+                  107,
+                  117,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "reserve_vault",
+          "docs": [
+            "Vault's OkuMoney reserve account"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "config"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "oku_money_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "psm_config",
+          "docs": [
+            "PSM config account (for reading oku_m_price)"
+          ]
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "pauser",
+          "type": "pubkey"
+        },
+        {
+          "name": "unpauser",
+          "type": "pubkey"
+        },
+        {
+          "name": "usd_rebaser",
+          "type": "pubkey"
+        },
+        {
+          "name": "reserve_manager",
+          "type": "pubkey"
+        },
+        {
+          "name": "min_collateral_ratio",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "pause",
+      "docs": [
+        "Pause the vault (emergency)"
+      ],
+      "discriminator": [
+        211,
+        22,
+        221,
+        251,
+        74,
+        121,
+        193,
+        47
+      ],
+      "accounts": [
+        {
+          "name": "pauser",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  107,
+                  117,
+                  95,
+                  100,
+                  111,
+                  108,
+                  108,
+                  97,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "set_authority",
+      "docs": [
+        "Update an authority role"
+      ],
+      "discriminator": [
+        133,
+        250,
+        37,
+        21,
+        110,
+        163,
+        26,
+        121
+      ],
+      "accounts": [
+        {
+          "name": "role_admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  107,
+                  117,
+                  95,
+                  100,
+                  111,
+                  108,
+                  108,
+                  97,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "role",
+          "type": {
+            "defined": {
+              "name": "AuthorityRole"
+            }
+          }
+        },
+        {
+          "name": "new_authority",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_min_collateral_ratio",
+      "docs": [
+        "Set the minimum collateral ratio"
+      ],
+      "discriminator": [
+        131,
+        238,
+        78,
+        17,
+        90,
+        208,
+        173,
+        88
+      ],
+      "accounts": [
+        {
+          "name": "role_admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  107,
+                  117,
+                  95,
+                  100,
+                  111,
+                  108,
+                  108,
+                  97,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_min_collateral_ratio",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "unpause",
+      "docs": [
+        "Unpause the vault"
+      ],
+      "discriminator": [
+        169,
+        144,
+        4,
+        38,
+        10,
+        141,
+        188,
+        255
+      ],
+      "accounts": [
+        {
+          "name": "unpauser",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  107,
+                  117,
+                  95,
+                  100,
+                  111,
+                  108,
+                  108,
+                  97,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "unwrap",
+      "docs": [
+        "Unwrap usdOku -> OkuMoney",
+        "Burns usdOku shares and returns OkuMoney"
+      ],
+      "discriminator": [
+        126,
+        175,
+        198,
+        14,
+        212,
+        69,
+        50,
+        44
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  107,
+                  117,
+                  95,
+                  100,
+                  111,
+                  108,
+                  108,
+                  97,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022)"
+          ]
+        },
+        {
+          "name": "usd_oku_mint",
+          "docs": [
+            "usdOku mint (Token-2022)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_oku_money_ata",
+          "docs": [
+            "User's OkuMoney token account (init_if_needed)"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "oku_money_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "user_usd_oku_ata",
+          "docs": [
+            "User's usdOku token account"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "usd_oku_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "reserve_vault",
+          "docs": [
+            "Vault's OkuMoney reserve account"
+          ],
+          "writable": true
+        },
+        {
+          "name": "psm_config",
+          "docs": [
+            "PSM config account (for reading oku_m_price)"
+          ]
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "shares",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "update_usd_multiplier",
+      "docs": [
+        "Update the USD multiplier (rebasing)",
+        "Called by usd_rebaser (orchestrator) to distribute yield"
+      ],
+      "discriminator": [
+        249,
+        116,
+        186,
+        51,
+        161,
+        253,
+        31,
+        14
+      ],
+      "accounts": [
+        {
+          "name": "usd_rebaser",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  107,
+                  117,
+                  95,
+                  100,
+                  111,
+                  108,
+                  108,
+                  97,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "reserve_vault",
+          "docs": [
+            "Reserve vault to check collateralization"
+          ]
+        },
+        {
+          "name": "usd_oku_mint",
+          "docs": [
+            "usdOku mint to check total supply"
+          ]
+        },
+        {
+          "name": "psm_config",
+          "docs": [
+            "PSM config account (for reading oku_m_price for collateral check)"
+          ]
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_usd_multiplier",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "withdraw_reserves",
+      "docs": [
+        "Withdraw OkuMoney reserves",
+        "Called by reserve_manager to remove excess collateral"
+      ],
+      "discriminator": [
+        93,
+        101,
+        132,
+        31,
+        64,
+        18,
+        132,
+        209
+      ],
+      "accounts": [
+        {
+          "name": "reserve_manager",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  107,
+                  117,
+                  95,
+                  100,
+                  111,
+                  108,
+                  108,
+                  97,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022)"
+          ]
+        },
+        {
+          "name": "destination_ata",
+          "docs": [
+            "Reserve manager's OkuMoney destination account"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "reserve_manager"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "oku_money_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "reserve_vault",
+          "docs": [
+            "Vault's OkuMoney reserve account"
+          ],
+          "writable": true
+        },
+        {
+          "name": "usd_oku_mint",
+          "docs": [
+            "usdOku mint to check total supply for collateral ratio"
+          ]
+        },
+        {
+          "name": "psm_config",
+          "docs": [
+            "PSM config account (for reading oku_m_price for collateral check)"
+          ]
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "wrap",
+      "docs": [
+        "Wrap OkuMoney -> usdOku",
+        "Deposits OkuMoney and mints usdOku shares"
+      ],
+      "discriminator": [
+        178,
+        40,
+        10,
+        189,
+        228,
+        129,
+        186,
+        140
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  107,
+                  117,
+                  95,
+                  100,
+                  111,
+                  108,
+                  108,
+                  97,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022)"
+          ]
+        },
+        {
+          "name": "usd_oku_mint",
+          "docs": [
+            "usdOku mint (Token-2022)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_oku_money_ata",
+          "docs": [
+            "User's OkuMoney token account"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "oku_money_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "user_usd_oku_ata",
+          "docs": [
+            "User's usdOku token account (init_if_needed)"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "usd_oku_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "reserve_vault",
+          "docs": [
+            "Vault's OkuMoney reserve account"
+          ],
+          "writable": true
+        },
+        {
+          "name": "psm_config",
+          "docs": [
+            "PSM config account (for reading oku_m_price)"
+          ]
+        },
+        {
+          "name": "dead_shares_ata",
+          "docs": [
+            "Dead shares ATA — only required on the first deposit (total_shares == 0).",
+            "This is a usdOku ATA owned by a known dead address (System Program)",
+            "where MINIMUM_LIQUIDITY shares are permanently locked."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "oku_m_amount",
+          "type": "u64"
+        },
+        {
+          "name": "min_shares_out",
+          "type": "u64"
+        }
+      ],
+      "returns": "u64"
+    }
+  ],
+  "accounts": [
+    {
+      "name": "OkuDollarConfig",
+      "discriminator": [
+        51,
+        182,
+        96,
+        141,
+        223,
+        94,
+        179,
+        131
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AuthorityUpdatedEvent",
+      "discriminator": [
+        44,
+        40,
+        20,
+        115,
+        145,
+        198,
+        95,
+        200
+      ]
+    },
+    {
+      "name": "InitializeEvent",
+      "discriminator": [
+        206,
+        175,
+        169,
+        208,
+        241,
+        210,
+        35,
+        221
+      ]
+    },
+    {
+      "name": "MinCollateralRatioUpdatedEvent",
+      "discriminator": [
+        190,
+        161,
+        213,
+        135,
+        149,
+        117,
+        21,
+        244
+      ]
+    },
+    {
+      "name": "PauseEvent",
+      "discriminator": [
+        32,
+        51,
+        61,
+        169,
+        156,
+        104,
+        130,
+        43
+      ]
+    },
+    {
+      "name": "ReservesDepositedEvent",
+      "discriminator": [
+        246,
+        58,
+        16,
+        28,
+        146,
+        61,
+        247,
+        67
+      ]
+    },
+    {
+      "name": "ReservesWithdrawnEvent",
+      "discriminator": [
+        42,
+        61,
+        198,
+        51,
+        190,
+        215,
+        192,
+        127
+      ]
+    },
+    {
+      "name": "UnpauseEvent",
+      "discriminator": [
+        134,
+        156,
+        8,
+        215,
+        185,
+        128,
+        192,
+        217
+      ]
+    },
+    {
+      "name": "UnwrapEvent",
+      "discriminator": [
+        73,
+        129,
+        203,
+        215,
+        50,
+        111,
+        179,
+        20
+      ]
+    },
+    {
+      "name": "UsdMultiplierUpdatedEvent",
+      "discriminator": [
+        106,
+        228,
+        113,
+        80,
+        231,
+        215,
+        91,
+        162
+      ]
+    },
+    {
+      "name": "WrapEvent",
+      "discriminator": [
+        148,
+        134,
+        198,
+        142,
+        20,
+        51,
+        173,
+        180
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Caller not authorized"
+    },
+    {
+      "code": 6001,
+      "name": "InvalidAuthority",
+      "msg": "Invalid authority address"
+    },
+    {
+      "code": 6002,
+      "name": "VaultPaused",
+      "msg": "Vault is paused"
+    },
+    {
+      "code": 6003,
+      "name": "AlreadyPaused",
+      "msg": "Vault is already paused"
+    },
+    {
+      "code": 6004,
+      "name": "NotPaused",
+      "msg": "Vault is not paused"
+    },
+    {
+      "code": 6005,
+      "name": "Overflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6006,
+      "name": "InsufficientShares",
+      "msg": "Insufficient shares to unwrap"
+    },
+    {
+      "code": 6007,
+      "name": "ZeroAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6008,
+      "name": "MinimumLiquidity",
+      "msg": "First deposit must exceed minimum liquidity threshold"
+    },
+    {
+      "code": 6009,
+      "name": "InsufficientReserves",
+      "msg": "Insufficient reserves for unwrap"
+    },
+    {
+      "code": 6010,
+      "name": "InvalidPsmConfig",
+      "msg": "Invalid PSM config account"
+    },
+    {
+      "code": 6011,
+      "name": "InsufficientCollateral",
+      "msg": "Operation would breach minimum collateral ratio"
+    },
+    {
+      "code": 6012,
+      "name": "InvalidCollateralRatio",
+      "msg": "Invalid collateral ratio (below minimum floor)"
+    },
+    {
+      "code": 6013,
+      "name": "MultiplierCannotDecrease",
+      "msg": "USD multiplier can only increase"
+    },
+    {
+      "code": 6014,
+      "name": "InvalidMultiplier",
+      "msg": "Invalid USD multiplier"
+    },
+    {
+      "code": 6015,
+      "name": "InvalidPrice",
+      "msg": "Invalid OkuMoney price"
+    },
+    {
+      "code": 6016,
+      "name": "InvalidMintExtension",
+      "msg": "Invalid mint extension"
+    },
+    {
+      "code": 6017,
+      "name": "SlippageExceeded",
+      "msg": "Output below minimum (slippage exceeded)"
+    }
+  ],
+  "types": [
+    {
+      "name": "AuthorityRole",
+      "docs": [
+        "Authority roles that can be updated via set_authority.",
+        "",
+        "These roles govern OkuDollar vault operations."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "RoleAdmin"
+          },
+          {
+            "name": "Pauser"
+          },
+          {
+            "name": "Unpauser"
+          },
+          {
+            "name": "UsdRebaser"
+          },
+          {
+            "name": "ReserveManager"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AuthorityUpdatedEvent",
+      "docs": [
+        "Emitted when a vault authority role is updated."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role",
+            "type": {
+              "defined": {
+                "name": "AuthorityRole"
+              }
+            }
+          },
+          {
+            "name": "old_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_authority",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "InitializeEvent",
+      "docs": [
+        "Emitted when OkuDollar vault is initialized."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_money_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "usd_oku_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "reserve_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "psm_config",
+            "type": "pubkey"
+          },
+          {
+            "name": "usd_multiplier",
+            "type": "u64"
+          },
+          {
+            "name": "min_collateral_ratio",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MinCollateralRatioUpdatedEvent",
+      "docs": [
+        "Emitted when minimum collateral ratio is updated.",
+        "EVM equivalent: `MinCollateralRatioUpdated(uint256 oldRatio, uint256 newRatio)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_ratio",
+            "type": "u64"
+          },
+          {
+            "name": "new_ratio",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OkuDollarConfig",
+      "docs": [
+        "OkuDollar vault configuration PDA",
+        "Seeds: [\"oku_dollar_config\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "role_admin",
+            "docs": [
+              "Meta role: grant/revoke roles (cold multisig)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pauser",
+            "docs": [
+              "Warm Multisig - pause only"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "unpauser",
+            "docs": [
+              "Cold Multisig - unpause only"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "usd_rebaser",
+            "docs": [
+              "Orchestrator - update USD multiplier"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "reserve_manager",
+            "docs": [
+              "Cold Multisig - deposit/withdraw reserves"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_money_mint",
+            "docs": [
+              "OkuMoney mint (Token-2022)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "usd_oku_mint",
+            "docs": [
+              "usdOku mint (Token-2022) - rebasing via stored multiplier"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "reserve_vault",
+            "docs": [
+              "Vault's OkuMoney reserve (ATA)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "psm_config",
+            "docs": [
+              "Reference to PSM config (for reading oku_m_price and yield lock)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "usd_multiplier",
+            "docs": [
+              "Current USD multiplier (1e9 = $1.00)",
+              "Updated discretely by USD_REBASER via update_usd_multiplier"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "usd_last_update_time",
+            "docs": [
+              "Timestamp of last USD multiplier update (for audit/monitoring)"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "min_collateral_ratio",
+            "docs": [
+              "Minimum collateralization ratio (scaled by 1e9)",
+              "e.g., 950_000_000 = 95%"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "is_paused",
+            "docs": [
+              "Whether the vault is paused"
+            ],
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PauseEvent",
+      "docs": [
+        "Emitted when vault is paused."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pauser",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PsmConfig",
+      "docs": [
+        "PSM configuration PDA",
+        "Seeds: [\"psm_config\"]"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "role_admin",
+            "docs": [
+              "Meta role: grant/revoke roles (cold multisig)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pauser",
+            "docs": [
+              "Warm Multisig - pause only"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "unpauser",
+            "docs": [
+              "Cold Multisig - unpause only"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "freezer",
+            "docs": [
+              "Warm Multisig - freeze accounts"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "unfreezer",
+            "docs": [
+              "Cold Multisig - thaw accounts (requires deliberate review)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "queue_processor",
+            "docs": [
+              "Orchestrator - process redemption queue"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer_depositor",
+            "docs": [
+              "Orchestrator - deposit USDC buffer"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer_withdrawer",
+            "docs": [
+              "Cold Multisig - withdraw buffer"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle_manager",
+            "docs": [
+              "Cold Multisig - configure oracle"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "cap_manager",
+            "docs": [
+              "Cold Multisig - set max supply"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "allowance_manager",
+            "docs": [
+              "Cold Multisig - reset minter allowance"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "rebaser",
+            "docs": [
+              "Orchestrator - update interest rate"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_mint",
+            "docs": [
+              "USDC mint address"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_money_mint",
+            "docs": [
+              "OkuMoney mint address (Token-2022 with Scaled UI Amount extension)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "vault_usdc",
+            "docs": [
+              "PSM's USDC buffer vault (ATA)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "vault_oku_money",
+            "docs": [
+              "PSM's OkuMoney escrow vault for queued redemptions (ATA)",
+              "Holds OkuMoney while users are in queue (yield comes from price appreciation)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "max_supply",
+            "docs": [
+              "Maximum OkuUSD supply cap"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "minter_allowance",
+            "docs": [
+              "Bridge mint allowance remaining"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "is_paused",
+            "docs": [
+              "Whether the PSM is paused"
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "oracle",
+            "docs": [
+              "Pyth oracle feed (or Pubkey::default() if disabled)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "staleness_threshold",
+            "docs": [
+              "Maximum oracle staleness in seconds"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "last_yield_distribution_slot",
+            "docs": [
+              "Solana slot of last yield distribution (sandwich prevention)",
+              "Operations like mint/redeem are blocked in the same slot as yield distribution"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oku_m_price",
+            "docs": [
+              "Current OkuMoney price multiplier (1e9 = $1.00)",
+              "Updated by set_oku_m_price() or distribute_yield()",
+              "Matches EVM's okuMPrice() storage pattern"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "blacklist_exempt_bridge",
+            "docs": [
+              "Blacklist-exempt bridge address (cannot be frozen)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "blacklist_exempt_router",
+            "docs": [
+              "Blacklist-exempt router address (cannot be frozen)"
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReservesDepositedEvent",
+      "docs": [
+        "Emitted when reserves are deposited without minting shares.",
+        "EVM equivalent: `ReservesDeposited(address indexed depositor, uint256 okuMAmount, uint256 dollarValue, uint256 collateralizationRatio)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "reserve_manager",
+            "docs": [
+              "Reserve manager who deposited"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "OkuMoney deposited (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value of deposit at current oku_m_price"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "collateralization_ratio",
+            "docs": [
+              "Collateralization ratio after deposit (scaled by PRECISION, 1e9 = 100%)"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReservesWithdrawnEvent",
+      "docs": [
+        "Emitted when surplus reserves are withdrawn.",
+        "EVM equivalent: `SurplusWithdrawn(address indexed to, uint256 okuMAmount, uint256 dollarValue, uint256 collateralizationRatio)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "reserve_manager",
+            "docs": [
+              "Reserve manager who withdrew"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "docs": [
+              "OkuMoney withdrawn (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value of withdrawal at current oku_m_price"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "collateralization_ratio",
+            "docs": [
+              "Collateralization ratio after withdrawal (scaled by PRECISION, 1e9 = 100%)"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UnpauseEvent",
+      "docs": [
+        "Emitted when vault is unpaused."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "unpauser",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UnwrapEvent",
+      "docs": [
+        "Emitted when OkuDollar is unwrapped back to OkuMoney.",
+        "EVM equivalent: `Unwrapped(address indexed user, address indexed receiver, uint256 usdAmount, uint256 okuMReturned, uint256 okuMMultiplier, uint256 usdMultiplier)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "docs": [
+              "User who initiated the unwrap"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "receiver",
+            "docs": [
+              "Receiver of the OkuMoney (may differ from user)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "shares_burned",
+            "docs": [
+              "OkuDollar shares burned (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oku_m_amount",
+            "docs": [
+              "OkuMoney returned (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "usd_multiplier",
+            "docs": [
+              "USD multiplier at time of unwrap (1e9 = $1.00)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oku_m_price",
+            "docs": [
+              "OkuMoney price at time of unwrap (1e9 = $1.00)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value of the unwrapped amount"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UsdMultiplierUpdatedEvent",
+      "docs": [
+        "Emitted when USD multiplier is updated.",
+        "EVM equivalent: `UsdRebaseEvent(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_multiplier",
+            "type": "u64"
+          },
+          {
+            "name": "new_multiplier",
+            "type": "u64"
+          },
+          {
+            "name": "total_supply",
+            "docs": [
+              "Total OkuDollar supply at time of update"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "WrapEvent",
+      "docs": [
+        "Emitted when OkuMoney is wrapped into OkuDollar.",
+        "EVM equivalent: `Wrapped(address indexed user, address indexed receiver, uint256 okuMAmount, uint256 usdMinted, uint256 okuMMultiplier, uint256 usdMultiplier)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "docs": [
+              "User who initiated the wrap"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "receiver",
+            "docs": [
+              "Receiver of the OkuDollar shares (may differ from user)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_m_amount",
+            "docs": [
+              "OkuMoney deposited (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "shares_minted",
+            "docs": [
+              "OkuDollar shares minted (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "usd_multiplier",
+            "docs": [
+              "USD multiplier at time of wrap (1e9 = $1.00)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oku_m_price",
+            "docs": [
+              "OkuMoney price at time of wrap (1e9 = $1.00)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value of the wrapped amount"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}

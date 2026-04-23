@@ -143,7 +143,7 @@ One role per action. No role performs more than one function.
 
 ```
 contracts/
-  EVM/                  # Solidity contracts (Foundry)
+  EVM/                  # Solidity contracts (Foundry + Hardhat)
     src/
       token/            # OkuMoney.sol, OkuDollar.sol
       psm/              # LitePSM.sol, RedemptionQueue.sol
@@ -151,7 +151,7 @@ contracts/
       interfaces/       # IOkuMoney.sol, IOkuDollar.sol
       lib/              # Roles.sol, Constants.sol, MathLib.sol
     test/
-    script/
+    scripts/
 
   SVM/                  # Anchor programs (Rust)
     oku-programs/
@@ -161,6 +161,14 @@ contracts/
         oku-bridge-router/ # Convenience bridging + usdOku flows
       tests/
       scripts/
+      deployments/      # Per-network deployment records (devnet.json, etc.)
+
+  artifacts/            # Curated ABIs + IDLs for backend / SDK / frontend use
+    evm/                # Slim Hardhat artifacts (abi + bytecode) per contract
+    svm/                # Anchor IDL JSON per program
+    README.md           # Consumption docs for downstream services
+
+  testnet-addresses.json  # Canonical live deployment registry (auto-generated)
 ```
 
-See `EVM/README.md` and `SVM/README.md` for chain-specific documentation.
+See `EVM/README.md` and `SVM/README.md` for chain-specific documentation, and `artifacts/README.md` for downstream-consumption docs.

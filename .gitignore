@@ -58,9 +58,6 @@ SVM/oku-programs/deployments/localnet.json
 .env.local
 .env.*.local
 
-# Deployment addresses (auto-generated)
-EVM/scripts/config/addresses.json
-
 # Bridge relay logs and request files (auto-generated)
 EVM/scripts/logs/*.jsonl
 **/bridge-request.json

@@ -18,6 +18,7 @@ import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { detectNetwork, createProvider, getNetworkConfig } from '../utils/network';
 import { logger } from '../utils/logger';
 import { loadDeployment, saveDeployment, DeploymentAddresses } from '../utils/addressBook';
+import { syncSvmRegistry } from '../utils/testnetRegistry';
 import { loadAuthorities } from '../config/authorities';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
 
@@ -156,6 +157,15 @@ async function main() {
   };
 
   saveDeployment(network, deployment);
+
+  // Mirror into the repo-root testnet-addresses.json registry (non-localnet only)
+  if (network !== 'localnet') {
+    try {
+      syncSvmRegistry(deployment);
+    } catch (err: any) {
+      logger.warning(`Registry sync failed (non-fatal): ${err.message}`);
+    }
+  }
 
   // Verify
   await verifyDeployment(provider, deployment);

@@ -20,7 +20,15 @@
 import { ethers, network, upgrades, run } from "hardhat";
 import { Contract, Signer } from "ethers";
 import { saveAddress, loadAddressBook, saveAddressBook } from "../utils/addressBook";
-import { getNetworkName, getChainConfig, SOLANA_DEVNET_CHAIN_ID, DEV_WALLET_ADDRESS } from "../config/chains";
+import { syncEvmRegistry } from "../utils/testnetRegistry";
+import {
+  getNetworkName,
+  getChainConfig,
+  getChainMetadata,
+  getBridgeChainId,
+  SOLANA_DEVNET_CHAIN_ID,
+  DEV_WALLET_ADDRESS,
+} from "../config/chains";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
 
@@ -560,9 +568,40 @@ async function main() {
   }
   console.log();
 
+  // Mirror into the repo-root testnet-addresses.json registry (live networks only)
+  if (isLiveNetwork(networkName)) {
+    try {
+      const metadata = getChainMetadata(networkName);
+      let bridgeChainId: number | undefined;
+      try {
+        bridgeChainId = getBridgeChainId(metadata.chainId);
+      } catch {
+        // Not all chains have a bridge mapping (e.g., certain mainnets pre-support)
+      }
+      syncEvmRegistry(networkName, {
+        chainId: metadata.chainId,
+        bridgeChainId,
+        rpcUrl: metadata.rpcUrl,
+        explorer: metadata.explorer,
+        contracts: {
+          okuMoney: addresses.OkuMoney,
+          okuDollar: addresses.OkuDollar,
+          litePSM: addresses.LitePSM,
+          redemptionQueue: addresses.RedemptionQueue,
+          okuBridge: addresses.OkuBridge,
+          okuBridgeRouter: addresses.OkuBridgeRouter,
+          mockUSDC: addresses.MockUSDC,
+        },
+        deployer: deployerAddress,
+      });
+    } catch (err: any) {
+      logger.warning(`Registry sync failed (non-fatal): ${err.message}`);
+    }
+  }
+
   logger.info("Next steps:");
-  logger.info("1. Update testnet-addresses.json with deployed addresses");
-  logger.info("2. Deploy SVM contracts: cd SVM/oku-programs && NETWORK=devnet npm run deploy");
+  logger.info("1. Check the updated testnet-addresses.json at the repo root");
+  logger.info("2. Deploy SVM: cd ../SVM/oku-programs && NETWORK=devnet npm run deploy:programs && npm run deploy:init");
   logger.info("3. Test bridge: npx hardhat run scripts/bridge/bridge-burn-to-solana.ts --network " + networkName);
 }
 

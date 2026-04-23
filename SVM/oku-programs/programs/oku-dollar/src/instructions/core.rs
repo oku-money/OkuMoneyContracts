@@ -1,3 +1,12 @@
+//! OkuDollar core instructions.
+//!
+//! Anchor-version note: `CpiContext::new(program_id, accounts)` and
+//! `CpiContext::new_with_signer(program_id, accounts, signer_seeds)` take the
+//! program_id as a `Pubkey` in Anchor ≥1.0 (the older `<0.31` API took an
+//! `AccountInfo<'info>`). All CPI sites in this file use `<program>.key()` to
+//! produce the `Pubkey`, which is the correct Anchor 1.x form. Reviewers
+//! upgrading from older Anchor docs should not flag this as a bug.
+
 use crate::contexts::{
     DepositReserves, Initialize, Unwrap, UpdateUsdMultiplier, WithdrawReserves, Wrap,
 };

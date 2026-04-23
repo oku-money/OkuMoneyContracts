@@ -1,3 +1,10 @@
+//! LitePSM bridge instructions (burn/mint/refund).
+//!
+//! Anchor-version note: `CpiContext::new[_with_signer](program_id, accounts[, seeds])`
+//! takes `program_id` as a `Pubkey` in Anchor ≥1.0. All CPI sites in this file
+//! pass `<program>.key()` (which returns `Pubkey`), which is correct. The
+//! pre-0.31 API took an `AccountInfo<'info>` here.
+
 use crate::contexts::{
     BridgeBurn, BridgeMint, CancelRefund, ConfirmRefund, InitiateRefund, RefundBridgeRequest,
 };

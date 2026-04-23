@@ -1,3 +1,9 @@
+//! LitePSM admin instructions (pause, freeze, thaw, role admin, etc.).
+//!
+//! Anchor-version note: `CpiContext::new_with_signer(program_id, accounts, seeds)`
+//! takes `program_id` as a `Pubkey` in Anchor ≥1.0. CPI sites in this file pass
+//! `<program>.key()` (returns `Pubkey`), which is correct.
+
 use crate::contexts::{
     AllowanceManager, CapManager, FreezeAccount, InitializeBlacklistExempt, OracleManager, Pause,
     SetAuthority, ThawAccount, Unpause,

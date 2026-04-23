@@ -1,51 +1,41 @@
 /**
  * PDA derivation helpers
+ *
+ * All PDA seeds must be kept in sync with the corresponding Rust `SEED` constants
+ * in programs/lite-psm/src/state.rs, programs/oku-dollar/src/state.rs, and
+ * programs/oku-bridge-router/src/state.rs.
  */
 
-import { PublicKey } from '@solana/web3.js';
+import { PublicKey } from "@solana/web3.js";
 
-/**
- * Derive PSM config PDA
- */
+/** Derive PSM config PDA. Seeds: ["psm_config"] */
 export function derivePsmConfigPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from('psm_config')], programId);
+  return PublicKey.findProgramAddressSync([Buffer.from("psm_config")], programId);
 }
 
-/**
- * Derive redemption queue PDA
- */
+/** Derive redemption queue PDA. Seeds: ["redemption_queue"] */
 export function deriveRedemptionQueuePDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from('redemption_queue')],
-    programId
-  );
+  return PublicKey.findProgramAddressSync([Buffer.from("redemption_queue")], programId);
 }
 
-/**
- * Derive vault config PDA
- * Seeds: ["oku_dollar_config"]
- */
+/** Derive OkuDollar vault config PDA. Seeds: ["oku_dollar_config"] */
 export function deriveVaultConfigPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from('oku_dollar_config')], programId);
+  return PublicKey.findProgramAddressSync([Buffer.from("oku_dollar_config")], programId);
 }
 
-/**
- * Derive usdOku mint PDA
- * Seeds: ["usd_oku_mint"]
- */
+/** Derive usdOku mint PDA. Seeds: ["usd_oku_mint"] */
 export function deriveUsdOkuMintPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from('usd_oku_mint')], programId);
+  return PublicKey.findProgramAddressSync([Buffer.from("usd_oku_mint")], programId);
 }
 
-/**
- * Derive bridge config PDA
- */
+/** Derive bridge config PDA. Seeds: ["bridge_config"] */
 export function deriveBridgeConfigPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from('bridge_config')], programId);
+  return PublicKey.findProgramAddressSync([Buffer.from("bridge_config")], programId);
 }
 
 /**
- * Derive bridge nonce PDA for a specific chain
+ * Derive bridge nonce PDA for a specific destination chain.
+ * Seeds: ["bridge_nonce", chain_id_u16_le]
  */
 export function deriveBridgeNoncePDA(
   programId: PublicKey,
@@ -53,76 +43,46 @@ export function deriveBridgeNoncePDA(
 ): [PublicKey, number] {
   const chainIdBuffer = Buffer.allocUnsafe(2);
   chainIdBuffer.writeUInt16LE(chainId);
-
   return PublicKey.findProgramAddressSync(
-    [Buffer.from('bridge_nonce'), chainIdBuffer],
+    [Buffer.from("bridge_nonce"), chainIdBuffer],
     programId
   );
 }
 
-/**
- * Derive router config PDA
- */
+/** Derive router config PDA. Seeds: ["router_config"] */
 export function deriveRouterConfigPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from('router_config')], programId);
+  return PublicKey.findProgramAddressSync([Buffer.from("router_config")], programId);
 }
 
 /**
- * Derive processed request PDA
+ * Derive processed request PDA (replay-prevention marker).
+ * Seeds: ["bridge_request", request_id_bytes32]
  */
 export function deriveProcessedRequestPDA(
   programId: PublicKey,
   requestId: Buffer
 ): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
-    [Buffer.from('bridge_request'), requestId],
+    [Buffer.from("bridge_request"), requestId],
     programId
   );
 }
 
 /**
- * Get all standard PDAs for deployment
+ * Derive bridge fee treasury PDA.
+ * Seeds: ["bridge_fee_treasury"]
+ *
+ * Used by the fee-recipient fix script (scripts/deploy/fixes/fix-bridge-fee-recipient.ts)
+ * as a safe devnet fee sink.
+ *
+ * TODO: Fix the root cause in scripts/config/authorities.ts so that non-mainnet
+ * deployments derive a distinct fee-recipient PDA instead of collapsing all 23
+ * roles to the deployer wallet. Once that is done, this helper and the fix script
+ * will be obsolete. Tracked in keys/README.md "Known issue" section.
  */
-export interface DeploymentPDAs {
-  psm: {
-    config: PublicKey;
-    redemptionQueue: PublicKey;
-  };
-  vault: {
-    config: PublicKey;
-  };
-  bridge: {
-    config: PublicKey;
-  };
-  router: {
-    config: PublicKey;
-  };
-}
-
-export function deriveAllPDAs(programIds: {
-  litePsm: PublicKey;
-  wokusdVault: PublicKey;
-  okuBridgeRouter: PublicKey;
-}): DeploymentPDAs {
-  const [psmConfig] = derivePsmConfigPDA(programIds.litePsm);
-  const [redemptionQueue] = deriveRedemptionQueuePDA(programIds.litePsm);
-  const [vaultConfig] = deriveVaultConfigPDA(programIds.wokusdVault);
-  const [bridgeConfig] = deriveBridgeConfigPDA(programIds.litePsm);
-  const [routerConfig] = deriveRouterConfigPDA(programIds.okuBridgeRouter);
-
-  return {
-    psm: {
-      config: psmConfig,
-      redemptionQueue,
-    },
-    vault: {
-      config: vaultConfig,
-    },
-    bridge: {
-      config: bridgeConfig,
-    },
-    router: {
-      config: routerConfig,
-    },
-  };
+export function deriveBridgeFeeTreasuryPDA(programId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("bridge_fee_treasury")],
+    programId
+  );
 }

@@ -127,36 +127,4 @@ export function loadKeypair(filepath: string): Keypair {
   return Keypair.fromSecretKey(new Uint8Array(secretKey));
 }
 
-/**
- * Get the wallet keypair from default location or WALLET_PATH env var
- */
-export function getWalletKeypair(): Keypair {
-  const walletPath =
-    process.env.WALLET_PATH || path.join(process.env.HOME!, '.config/solana/id.json');
-  return loadKeypair(walletPath);
-}
 
-/**
- * Confirm mainnet deployment
- */
-export async function confirmMainnetDeployment(): Promise<boolean> {
-  const args = process.argv.slice(2);
-  if (!args.includes('--confirm-mainnet')) {
-    logger.error('Mainnet deployment requires --confirm-mainnet flag', false);
-    logger.warning('Add --confirm-mainnet to proceed', false);
-    return false;
-  }
-
-  logger.warning('========================================', false);
-  logger.warning('  MAINNET DEPLOYMENT WARNING', false);
-  logger.warning('========================================', false);
-  logger.warning('This will deploy to MAINNET-BETA', false);
-  logger.warning('Ensure all configurations are correct', false);
-  logger.warning('Upgrade authorities will be transferred', false);
-  logger.warning('========================================', false);
-
-  // In production, you might want to add an interactive confirmation here
-  // For now, presence of --confirm-mainnet flag is sufficient
-
-  return true;
-}

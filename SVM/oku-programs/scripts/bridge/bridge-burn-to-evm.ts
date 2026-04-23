@@ -33,15 +33,15 @@ import {
   SOLANA_CHAIN_ID,
   SEPOLIA_CHAIN_ID,
   OP_SEPOLIA_CHAIN_ID,
-  HARDHAT_CHAIN_ID,
 } from '../config/constants';
+import { logSurfpoolStatus } from '../utils/surfpool';
+import { derivePsmConfigPDA, deriveBridgeConfigPDA, deriveBridgeNoncePDA } from '../utils/pdaHelpers';
 
 // Destination chain ID - can be overridden via EVM_DEST_CHAIN_ID env var
 // Default to SEPOLIA_CHAIN_ID (111) since that's where EVM contracts are deployed
-const DEST_CHAIN_ID = process.env.EVM_DEST_CHAIN_ID 
+const DEST_CHAIN_ID = process.env.EVM_DEST_CHAIN_ID
   ? parseInt(process.env.EVM_DEST_CHAIN_ID)
   : SEPOLIA_CHAIN_ID;
-import { logSurfpoolStatus } from '../utils/surfpool';
 
 // Bridge request output interface (for EVM relay script)
 interface BridgeRequestOutput {
@@ -90,14 +90,8 @@ async function main() {
   logger.info(`OkuMoney Mint: ${okuMoneyMint.toBase58()}`);
 
   // PDAs
-  const [psmConfig] = PublicKey.findProgramAddressSync(
-    [Buffer.from('psm_config')],
-    programId
-  );
-  const [bridgeConfig] = PublicKey.findProgramAddressSync(
-    [Buffer.from('bridge_config')],
-    programId
-  );
+  const [psmConfig] = derivePsmConfigPDA(programId);
+  const [bridgeConfig] = deriveBridgeConfigPDA(programId);
 
   // Configuration
   const BRIDGE_AMOUNT = new BN(10_000_000); // 10 OkuMoney (6 decimals)
@@ -175,10 +169,7 @@ async function main() {
   }
 
   // BridgeNonce PDA
-  const [bridgeNonce] = PublicKey.findProgramAddressSync(
-    [Buffer.from('bridge_nonce'), Buffer.from(new Uint16Array([DEST_CHAIN_ID]).buffer)],
-    programId
-  );
+  const [bridgeNonce] = deriveBridgeNoncePDA(programId, DEST_CHAIN_ID);
 
   logger.nextStep('Executing bridge_burn');
   logger.info(`Amount: ${BRIDGE_AMOUNT.toNumber() / 1_000_000} OkuM`);

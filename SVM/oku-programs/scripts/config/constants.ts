@@ -2,8 +2,6 @@
  * Shared constants across all deployments
  */
 
-import { PublicKey } from '@solana/web3.js';
-
 // Supply limits
 export const MAX_SUPPLY = 1_000_000_000 * 1_000_000; // 1B OkuUSD (6 decimals)
 export const MINTER_ALLOWANCE = 100_000_000 * 1_000_000; // 100M initial allowance
@@ -23,7 +21,7 @@ export const MAX_BRIDGE_AMOUNT = 10_000_000 * 1_000_000; // 10M OkuMoney
  * BridgeConfig state, and supportedChains mappings.
  */
 export const SOLANA_MAINNET_CHAIN_ID = 101;
-export const SOLANA_TESTNET_CHAIN_ID = 102; // Not used by OkuMoney
+
 export const SOLANA_DEVNET_CHAIN_ID = 103;
 
 // Default chain ID for current environment (use devnet for testnet deployments)
@@ -122,21 +120,7 @@ export const OKUSD_DECIMALS = 6;
 // Initial interest rate (0% - can be updated by orchestrator)
 export const INITIAL_INTEREST_RATE_BPS = 0;
 
-// Program IDs (from target/deploy keypair files - run `anchor keys list` to verify)
-const LITE_PSM_ID = new PublicKey('AhKZ4TT5W4mnvR3CsX1t9ymQmZx4535AN9SsrThu6C1T');
-const WOKUSD_VAULT_ID = new PublicKey('BjjK75Vxj6zsC49qYfcVYFPLqyXXkcaFzacTXwohmfVC');
-const OKU_BRIDGE_ROUTER_ID = new PublicKey('7DtqfP4fyShjAoM35QC9m3a9Ukh4tqcVgzTNLuyTkgE');
-
-// Fork program IDs (from target/deploy-fork keypair files)
-// These are separate from devnet/mainnet to avoid PDA collisions with forked state
-const FORK_LITE_PSM_ID = new PublicKey('GtjZJFmhrAxYDrK2JqK7H3My6u5m7qmkzXqd9p6NLWgS');
-const FORK_OKU_DOLLAR_ID = new PublicKey('9CRADsxW3dN4xnmwLH7DHRfo4BM86B5NNXE7ku2pYGy9'); // aka wokusdVault
-const FORK_OKU_BRIDGE_ROUTER_ID = new PublicKey('GEs9yWYSAJDwjibhQZc5eY8Wex7M9hFscThnL4RGafJu');
-
-export const PROGRAM_IDS = {
-  localnet: { litePsm: LITE_PSM_ID, wokusdVault: WOKUSD_VAULT_ID, okuBridgeRouter: OKU_BRIDGE_ROUTER_ID },
-  devnet: { litePsm: LITE_PSM_ID, wokusdVault: WOKUSD_VAULT_ID, okuBridgeRouter: OKU_BRIDGE_ROUTER_ID },
-  'devnet-fork': { litePsm: FORK_LITE_PSM_ID, wokusdVault: FORK_OKU_DOLLAR_ID, okuBridgeRouter: FORK_OKU_BRIDGE_ROUTER_ID },
-  'mainnet-beta': { litePsm: LITE_PSM_ID, wokusdVault: WOKUSD_VAULT_ID, okuBridgeRouter: OKU_BRIDGE_ROUTER_ID },
-  'mainnet-fork': { litePsm: FORK_LITE_PSM_ID, wokusdVault: FORK_OKU_DOLLAR_ID, okuBridgeRouter: FORK_OKU_BRIDGE_ROUTER_ID },
-};
+// NOTE: Program IDs are NOT stored here. They are read at runtime from
+// deployments/{network}.json via scripts/utils/addressBook.ts::loadDeployment().
+// This is the single source of truth. Run `anchor keys list` or inspect
+// target/deploy/*.json to find the canonical program IDs for each keypair.

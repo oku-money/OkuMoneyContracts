@@ -30,24 +30,10 @@ import {
   ARBITRUM_CHAIN_ID,
   BASE_CHAIN_ID,
   ETHEREUM_CHAIN_ID,
-  PROGRAM_IDS,
 } from '../config/constants';
 import { logSurfpoolStatus } from '../utils/surfpool';
+import { derivePsmConfigPDA, deriveBridgeConfigPDA, deriveBridgeNoncePDA } from '../utils/pdaHelpers';
 import litePsmIdlRaw from '../../target/idl/lite_psm.json';
-
-/**
- * Load IDL with correct program ID for the current network.
- */
-function loadIdlForNetwork(idl: any, network: string, programKey: keyof typeof PROGRAM_IDS['localnet']): any {
-  const programId = PROGRAM_IDS[network as keyof typeof PROGRAM_IDS]?.[programKey];
-  if (!programId) {
-    throw new Error(`No program ID found for ${programKey} on ${network}`);
-  }
-  return {
-    ...idl,
-    address: programId.toBase58(),
-  };
-}
 
 async function main() {
   const network = detectNetwork();
@@ -67,9 +53,9 @@ async function main() {
     throw new Error(`No addresses found for network: ${network}. Run deploy scripts first.`);
   }
 
-  // Load program with correct program ID for the network
+  // Load program — ID comes from the deployment file, not a hard-coded constant
   const programId = new PublicKey(addresses.programs.litePsm);
-  const litePsmIdl = loadIdlForNetwork(litePsmIdlRaw, network, 'litePsm');
+  const litePsmIdl = { ...litePsmIdlRaw, address: programId.toBase58() };
   const program = new Program(litePsmIdl as any, provider) as Program<LitePsm>;
 
   logger.info(`Program ID: ${programId.toBase58()}`);
@@ -79,14 +65,8 @@ async function main() {
   logger.info(`OkuMoney Mint: ${okuMoneyMint.toBase58()}`);
 
   // PDAs
-  const [psmConfig] = PublicKey.findProgramAddressSync(
-    [Buffer.from('psm_config')],
-    programId
-  );
-  const [bridgeConfig] = PublicKey.findProgramAddressSync(
-    [Buffer.from('bridge_config')],
-    programId
-  );
+  const [psmConfig] = derivePsmConfigPDA(programId);
+  const [bridgeConfig] = deriveBridgeConfigPDA(programId);
 
   // ============ PSM Config ============
   logger.nextStep('PSM Configuration');
@@ -159,10 +139,7 @@ async function main() {
   ];
 
   for (const chain of chainsToCheck) {
-    const [bridgeNonce] = PublicKey.findProgramAddressSync(
-      [Buffer.from('bridge_nonce'), Buffer.from(new Uint16Array([chain.id]).buffer)],
-      programId
-    );
+    const [bridgeNonce] = deriveBridgeNoncePDA(programId, chain.id);
 
     try {
       const nonceAccount = await program.account.bridgeNonce.fetch(bridgeNonce);

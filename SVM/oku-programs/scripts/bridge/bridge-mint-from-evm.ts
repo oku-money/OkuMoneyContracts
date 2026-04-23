@@ -37,11 +37,12 @@ import * as path from 'path';
 import { keccak_256 } from '@noble/hashes/sha3';
 import * as nacl from 'tweetnacl';
 import { LitePsm } from '../../target/types/lite_psm';
-import { createProvider, detectNetwork, loadKeypair } from '../utils/network';
+import { createProvider, detectNetwork } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { SOLANA_CHAIN_ID, eip155ToInternalChainId } from '../config/constants';
 import { logSurfpoolStatus } from '../utils/surfpool';
+import { derivePsmConfigPDA, deriveBridgeConfigPDA, deriveProcessedRequestPDA } from '../utils/pdaHelpers';
 
 // Bridge request from EVM (post-burn event data)
 interface EVMBridgeRequest {
@@ -85,14 +86,8 @@ async function main() {
   const okuMoneyMint = new PublicKey(addresses.tokens.okusd);
 
   // PDAs
-  const [psmConfig] = PublicKey.findProgramAddressSync(
-    [Buffer.from('psm_config')],
-    programId
-  );
-  const [bridgeConfig] = PublicKey.findProgramAddressSync(
-    [Buffer.from('bridge_config')],
-    programId
-  );
+  const [psmConfig] = derivePsmConfigPDA(programId);
+  const [bridgeConfig] = deriveBridgeConfigPDA(programId);
 
   // Verify orchestrator is the authorized signer
   const bridgeConfigAccount = await program.account.bridgeConfig.fetch(bridgeConfig);
@@ -239,11 +234,8 @@ async function main() {
 
   logger.nextStep('Building transaction');
 
-  // ProcessedRequest PDA - seed is "bridge_request" (see state.rs ProcessedRequest::SEED)
-  const [processedRequest] = PublicKey.findProgramAddressSync(
-    [Buffer.from('bridge_request'), requestId],
-    programId
-  );
+  // ProcessedRequest PDA — replay prevention marker
+  const [processedRequest] = deriveProcessedRequestPDA(programId, Buffer.from(requestId));
   logger.info(`ProcessedRequest PDA: ${processedRequest.toBase58()}`);
 
   // Build Ed25519 signature verification instruction

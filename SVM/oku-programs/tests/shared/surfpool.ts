@@ -462,69 +462,6 @@ export async function isSurfpoolAvailable(connection: Connection): Promise<boole
   }
 }
 
-/**
- * Skip test if not running on Surfpool.
- * Use in test files that require Surfpool-specific features.
- *
- * @example
- * ```typescript
- * describe("Time Travel Tests", function() {
- *   before(async function() {
- *     await skipIfNotSurfpool(this, connection);
- *   });
- *
- *   it("should time travel", async () => {
- *     // This test only runs on Surfpool
- *   });
- * });
- * ```
- */
-export async function skipIfNotSurfpool(
-  context: Mocha.Context,
-  connection: Connection
-): Promise<void> {
-  const available = await isSurfpoolAvailable(connection);
-  if (!available) {
-    context.skip();
-  }
-}
-
-// ============================================================================
-// Profiling Helpers
-// ============================================================================
-
-/**
- * Execute an RPC call and profile it in one step.
- * Returns both the transaction result and the profile.
- *
- * @example
- * ```typescript
- * const { signature, profile } = await profiledRpc(
- *   surfpool,
- *   program.methods.mintOkuM(amount).accounts({...}),
- *   "mint-baseline"
- * );
- *
- * expect(profile.computeUnits.computeUnitsConsumed).to.be.lessThan(100_000);
- * ```
- */
-export async function profiledRpc(
-  surfpool: SurfpoolClient,
-  method: any,
-  tag: string
-): Promise<{ signature: string; profile: ProfileResult }> {
-  // Get the transaction but don't send yet
-  const tx = await method.transaction();
-
-  // Profile it
-  const profile = await surfpool.profileTransaction(tx, tag);
-
-  // Now actually execute
-  const signature = await method.rpc();
-
-  return { signature, profile };
-}
-
 // ============================================================================
 // Constants for Mainnet Fork
 // ============================================================================
@@ -559,63 +496,12 @@ export const ALCHEMY_RPC = {
 };
 
 /**
- * Default RPC endpoints for mainnet forking.
- * Priority: MAINNET_RPC_URL env var > Alchemy API_KEY > public endpoints
- */
-export const MAINNET_RPC_ENDPOINTS = {
-  // Primary: explicit MAINNET_RPC_URL if set
-  primary: process.env.MAINNET_RPC_URL,
-  // Secondary: Alchemy with API_KEY
-  alchemy: process.env.API_KEY ? ALCHEMY_RPC.mainnet : undefined,
-  // Fallbacks: public endpoints (rate limited)
-  fallbacks: [
-    "https://api.mainnet-beta.solana.com",
-    "https://solana-mainnet.g.alchemy.com/v2/demo",
-  ],
-};
-
-/**
- * Default RPC endpoints for devnet forking.
- */
-export const DEVNET_RPC_ENDPOINTS = {
-  primary: process.env.DEVNET_RPC_URL,
-  alchemy: process.env.API_KEY ? ALCHEMY_RPC.devnet : undefined,
-  fallbacks: [
-    "https://api.devnet.solana.com",
-  ],
-};
-
-/**
  * Get the best available mainnet RPC endpoint.
- * Uses Alchemy API_KEY if available.
+ * Priority: MAINNET_RPC_URL env var > Alchemy API_KEY > public fallback.
  */
 export function getMainnetRpcEndpoint(): string {
-  if (MAINNET_RPC_ENDPOINTS.primary) {
-    return MAINNET_RPC_ENDPOINTS.primary;
-  }
-  if (MAINNET_RPC_ENDPOINTS.alchemy) {
-    return MAINNET_RPC_ENDPOINTS.alchemy;
-  }
+  if (process.env.MAINNET_RPC_URL) return process.env.MAINNET_RPC_URL;
+  if (process.env.API_KEY) return ALCHEMY_RPC.mainnet;
   console.warn("No API_KEY or MAINNET_RPC_URL set, using public endpoint (rate limited)");
-  return MAINNET_RPC_ENDPOINTS.fallbacks[0];
-}
-
-/**
- * Get the best available devnet RPC endpoint.
- */
-export function getDevnetRpcEndpoint(): string {
-  if (DEVNET_RPC_ENDPOINTS.primary) {
-    return DEVNET_RPC_ENDPOINTS.primary;
-  }
-  if (DEVNET_RPC_ENDPOINTS.alchemy) {
-    return DEVNET_RPC_ENDPOINTS.alchemy;
-  }
-  return DEVNET_RPC_ENDPOINTS.fallbacks[0];
-}
-
-/**
- * Get RPC endpoint for specified network.
- */
-export function getRpcEndpoint(network: "mainnet" | "devnet" = "mainnet"): string {
-  return network === "mainnet" ? getMainnetRpcEndpoint() : getDevnetRpcEndpoint();
+  return "https://api.mainnet-beta.solana.com";
 }

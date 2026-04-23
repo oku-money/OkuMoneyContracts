@@ -29,7 +29,6 @@ import {
 import {
   SurfpoolClient,
   createSurfpoolClient,
-  skipIfNotSurfpool,
   isSurfpoolAvailable,
   MAINNET_ADDRESSES,
   getMainnetRpcEndpoint,

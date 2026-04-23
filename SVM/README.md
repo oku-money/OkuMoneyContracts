@@ -6,11 +6,13 @@ Solana implementation of OkuMoney — institutional-grade yield infrastructure b
 
 ## Stack
 
-- **Language**: Rust
-- **Framework**: Anchor 0.31.x
+- **Language**: Rust 1.85.0 (pinned in `rust-toolchain.toml`)
+- **Framework**: Anchor 1.0.0 (`anchor_version` in `Anchor.toml`; `anchor-lang = "1.0.0"` in all `Cargo.toml`s)
+- **Solana crates**: 3.x series (`solana_version = "3.1.10"` in `Anchor.toml`)
 - **Token Standard**: Token-2022 (both OkuMoney and usdOku)
 - **Oracle**: Pyth (manual account parsing, no SDK dependency)
 - **Multisig**: Squads Protocol
+- **JavaScript bindings**: `@anchor-lang/core ^1.0.0`
 
 ## Programs
 
@@ -98,12 +100,45 @@ programs/
       contexts.rs           # All account contexts
 
 tests/
-  lite-psm.ts              # PSM + bridge + yield ops tests
-  oku-dollar.ts            # Vault wrap/unwrap/collateral tests
-  oku-bridge-router.ts     # Router CPI integration tests
-  bridge_security.ts       # Ed25519, replay, nonce security tests
+  unit/
+    lite-psm.ts            # PSM + bridge + yield ops tests
+    oku-dollar.ts          # Vault wrap/unwrap/collateral tests
+    oku-bridge-router.ts   # Router CPI integration tests
+    bridge_security.ts     # Ed25519, replay, nonce security tests
+  fork/
+    pyth-oracle.ts         # Mainnet-fork Pyth integration (requires Surfpool)
   shared/
-    setup.ts               # Test helpers, keypairs, initialization
+    setup.ts               # Shared keypairs, airdrop helpers, PSM init
+    surfpool.ts            # Surfpool cheatcode client + mainnet addresses
+    assertions.ts          # expectError helper
+    fixtures.ts            # fundUser, expireDeadline, freeze/thaw helpers
+
+scripts/
+  deploy/
+    deploy-programs.ts     # Phase 1: build + deploy .so files, save program IDs
+    deploy-init.ts         # Phase 2: create tokens + initialize PSM/Vault/Router
+    lib/                   # Worker modules used by both entry points
+    fixes/
+      fix-bridge-fee-recipient.ts  # Devnet patch (deployer == feeRecipient)
+  bridge/
+    bridge-burn-to-evm.ts  # Call bridgeBurn, write bridge-request.json
+    bridge-mint-from-evm.ts # Sign + submit bridgeMint from bridge-request.json
+    check-bridge-state.ts  # Read-only diagnostics
+  test/
+    test-devnet.ts         # 8-step on-chain smoke tests (devnet/fork)
+  config/
+    constants.ts           # Chain IDs, supply limits, oracle config
+    networks.ts            # RPC endpoints, network type, per-network USDC/Pyth
+    authorities.ts         # Role→pubkey mapping (deployer on testnet, multisigs on mainnet)
+  utils/
+    network.ts             # detectNetwork, createProvider, loadKeypair, isForkNetwork
+    logger.ts              # Colored console logger
+    addressBook.ts         # Load/save deployments/*.json
+    pdaHelpers.ts          # Canonical PDA derivation functions
+    tokenHelpers.ts        # createToken2022Mint, createSPLTokenMint
+    surfpool.ts            # logSurfpoolStatus (script-layer only)
+    check-wallet.ts        # CLI: print SOL balance
+    calculateDeploymentCost.ts  # CLI: estimate .so rent cost
 ```
 
 ## State Accounts
@@ -267,30 +302,6 @@ PSM initialization is three steps (to avoid BPF stack overflow with large accoun
 OkuDollar vault initialization:
 1. `initialize` — creates OkuDollarConfig, usdOku mint (authority = config PDA), reserve vault
 
-## Deployment
-
-```bash
-# 1. Create OkuMoney mint (Token-2022 with Freeze extension)
-spl-token create-token --program-id TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb \
-  --enable-freeze
-
-# 2. Build and deploy programs
-anchor build
-anchor deploy
-
-# 3. Transfer mint/freeze authorities to PSM PDA
-spl-token authorize <OKU_MONEY_MINT> mint <PSM_CONFIG_PDA>
-spl-token authorize <OKU_MONEY_MINT> freeze <PSM_CONFIG_PDA>
-
-# 4. Initialize programs
-# (PSM, redemption queue, escrow, bridge, vault — see scripts/)
-
-# 5. Set program upgrade authorities to cold multisig
-solana program set-upgrade-authority <LITE_PSM_PROGRAM> --new-upgrade-authority <SQUADS_COLD_VAULT>
-solana program set-upgrade-authority <OKU_DOLLAR_PROGRAM> --new-upgrade-authority <SQUADS_COLD_VAULT>
-solana program set-upgrade-authority <OKU_BRIDGE_ROUTER_PROGRAM> --new-upgrade-authority <SQUADS_COLD_VAULT>
-```
-
 ## EVM vs SVM Differences
 
 | Aspect | EVM | SVM |
@@ -320,11 +331,43 @@ Full list in `programs/lite-psm/src/errors.rs`, `programs/oku-dollar/src/errors.
 ## Testing
 
 ```bash
-# All tests
+# Unit tests (boots solana-test-validator, no external deps)
 anchor test
+# or equivalently:
+npx mocha --require tsx --timeout 1000000 'tests/unit/**/*.ts'
 
-# Specific test files
-npx mocha --require tsx --timeout 1000000 'tests/lite-psm.ts'
-npx mocha --require tsx --timeout 1000000 'tests/oku-dollar.ts'
-npx mocha --require tsx --timeout 1000000 'tests/bridge_security.ts'
+# Individual unit test files
+npx mocha --require tsx --timeout 1000000 'tests/unit/lite-psm.ts'
+npx mocha --require tsx --timeout 1000000 'tests/unit/oku-dollar.ts'
+npx mocha --require tsx --timeout 1000000 'tests/unit/bridge_security.ts'
+
+# Fork tests (requires Surfpool running with mainnet fork)
+#   1. Start Surfpool: npm run surfpool:mainnet
+#   2. Run fork tests: npm run test:fork
+npm run test:fork
+```
+
+## Deployment
+
+```bash
+# 1. Create OkuMoney mint (Token-2022 with Freeze extension)
+spl-token create-token --program-id TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb \
+  --enable-freeze
+
+# 2. Build and deploy programs (Phase 1)
+npm run deploy:programs            # devnet
+npm run deploy:programs:mainnet    # mainnet-beta
+
+# 3. Transfer mint/freeze authorities to PSM PDA
+spl-token authorize <OKU_MONEY_MINT> mint <PSM_CONFIG_PDA>
+spl-token authorize <OKU_MONEY_MINT> freeze <PSM_CONFIG_PDA>
+
+# 4. Initialize programs (Phase 2)
+npm run deploy:init                # devnet
+npm run deploy:init:mainnet        # mainnet-beta
+
+# 5. Set program upgrade authorities to cold multisig
+solana program set-upgrade-authority <LITE_PSM_PROGRAM> --new-upgrade-authority <SQUADS_COLD_VAULT>
+solana program set-upgrade-authority <OKU_DOLLAR_PROGRAM> --new-upgrade-authority <SQUADS_COLD_VAULT>
+solana program set-upgrade-authority <OKU_BRIDGE_ROUTER_PROGRAM> --new-upgrade-authority <SQUADS_COLD_VAULT>
 ```

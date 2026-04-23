@@ -78,7 +78,11 @@ async function main() {
 
   // Create provider
   const provider = createProvider(network);
-  const authorities = loadAuthorities(network, provider.wallet.publicKey);
+  const authorities = loadAuthorities(
+    network,
+    provider.wallet.publicKey,
+    programIds.litePsm
+  );
 
   const deployerPubkey = provider.wallet.publicKey;
   const balance = await provider.connection.getBalance(deployerPubkey);

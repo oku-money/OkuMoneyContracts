@@ -27,9 +27,6 @@
     "wallet:check": "tsx scripts/utils/check-wallet.ts",
     "cost": "tsx scripts/utils/calculateDeploymentCost.ts",
 
-    "fix:fee-recipient": "NETWORK=devnet tsx scripts/deploy/fixes/fix-bridge-fee-recipient.ts",
-    "fix:fee-recipient:yes": "NETWORK=devnet tsx scripts/deploy/fixes/fix-bridge-fee-recipient.ts --yes",
-
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w"
   },

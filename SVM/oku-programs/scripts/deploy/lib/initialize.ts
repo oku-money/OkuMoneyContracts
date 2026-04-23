@@ -2,13 +2,14 @@
  * Program initialization utilities
  */
 
-import { PublicKey, SystemProgram } from '@solana/web3.js';
+import { PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import { Program, AnchorProvider } from '@anchor-lang/core';
 import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountIdempotentInstruction,
 } from '@solana/spl-token';
 import { logger } from '../../utils/logger';
 import { loadAuthorities } from '../../config/authorities';
@@ -149,6 +150,32 @@ export async function initializePsm(
     } else {
       throw error;
     }
+  }
+
+  // Create the fee-recipient ATA (owned by the configured fee_recipient, which
+  // may be a PDA on testnet). bridgeBurn references this ATA via a regular
+  // (non-init_if_needed) constraint, so it must exist ahead of time.
+  const feeRecipientAta = getAssociatedTokenAddressSync(
+    okuMoneyMint,
+    authorities.bridge.feeRecipient,
+    true /* allowOwnerOffCurve — fee_recipient can be a PDA on testnet */,
+    TOKEN_2022_PROGRAM_ID
+  );
+  logger.info(`Fee recipient ATA: ${feeRecipientAta.toBase58()}`);
+  try {
+    const ix = createAssociatedTokenAccountIdempotentInstruction(
+      provider.wallet.publicKey,
+      feeRecipientAta,
+      authorities.bridge.feeRecipient,
+      okuMoneyMint,
+      TOKEN_2022_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+    const tx = new Transaction().add(ix);
+    await provider.sendAndConfirm(tx);
+    logger.success('Fee recipient ATA ready');
+  } catch (error: any) {
+    logger.warning(`Fee recipient ATA setup: ${error.message}`);
   }
 
   // Add supported chains

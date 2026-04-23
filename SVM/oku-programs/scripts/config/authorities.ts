@@ -8,6 +8,7 @@
 import { Keypair, PublicKey } from '@solana/web3.js';
 import * as fs from 'fs';
 import { NetworkName } from './networks';
+import { deriveBridgeFeeTreasuryPDA } from '../utils/pdaHelpers';
 
 export interface AuthorityConfig {
   // PSM authorities (12 roles)
@@ -51,9 +52,20 @@ export interface AuthorityConfig {
 }
 
 /**
- * Build an AuthorityConfig where all 23 roles point to a single pubkey
+ * Build an AuthorityConfig where all 22 signer-bearing roles point to the deployer,
+ * while `bridge.feeRecipient` is a PDA (the bridge fee treasury) so that fees
+ * accumulate in a distinct account from the bridge-burn caller. This avoids the
+ * "duplicate mutable account" error that otherwise occurs when the deployer
+ * (used as user in smoke tests / `bridge:burn`) is also the fee recipient.
+ *
+ * For mainnet deployments, `feeRecipient` is a real wallet controlled by
+ * treasury operations (see `MAINNET_FEE_RECIPIENT`).
  */
-function allRolesToSingleKey(deployer: PublicKey): AuthorityConfig {
+function allRolesToSingleKey(
+  deployer: PublicKey,
+  litePsmProgramId: PublicKey
+): AuthorityConfig {
+  const [feeTreasury] = deriveBridgeFeeTreasuryPDA(litePsmProgramId);
   return {
     psm: {
       roleAdmin: deployer,
@@ -74,7 +86,7 @@ function allRolesToSingleKey(deployer: PublicKey): AuthorityConfig {
       bridgePauser: deployer,
       bridgeUnpauser: deployer,
       orchestratorSigner: deployer,
-      feeRecipient: deployer,
+      feeRecipient: feeTreasury,
       chainManager: deployer,
       feeManager: deployer,
       nonceAdmin: deployer,
@@ -106,14 +118,25 @@ function isTestnetOrFork(network: NetworkName): boolean {
 /**
  * Load authorities based on network
  *
- * - localnet/devnet/devnet-fork/mainnet-fork: all roles use deployer wallet (for simplicity)
- * - mainnet-beta: loads separate pubkeys from MAINNET_* env vars
+ * - localnet/devnet/devnet-fork/mainnet-fork: all signer roles use the deployer
+ *   wallet; `bridge.feeRecipient` is the bridge fee treasury PDA derived from
+ *   `litePsmProgramId` (avoids the bridge-burn "duplicate mutable account" case).
+ * - mainnet-beta: loads separate pubkeys from MAINNET_* env vars.
  */
-export function loadAuthorities(network: NetworkName, deployerPubkey?: PublicKey): AuthorityConfig {
+export function loadAuthorities(
+  network: NetworkName,
+  deployerPubkey?: PublicKey,
+  litePsmProgramId?: PublicKey
+): AuthorityConfig {
   // For testnet and fork networks, use deployer wallet for all authorities
   if (isTestnetOrFork(network)) {
     const deployer = deployerPubkey || PublicKey.default;
-    return allRolesToSingleKey(deployer);
+    if (!litePsmProgramId) {
+      throw new Error(
+        'litePsmProgramId is required for testnet/fork deployments (used to derive the bridge fee treasury PDA).'
+      );
+    }
+    return allRolesToSingleKey(deployer, litePsmProgramId);
   }
 
   // For mainnet-beta only, load separate authority pubkeys from environment

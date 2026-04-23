@@ -72,13 +72,11 @@ export function deriveProcessedRequestPDA(
  * Derive bridge fee treasury PDA.
  * Seeds: ["bridge_fee_treasury"]
  *
- * Used by the fee-recipient fix script (scripts/deploy/fixes/fix-bridge-fee-recipient.ts)
- * as a safe devnet fee sink.
- *
- * TODO: Fix the root cause in scripts/config/authorities.ts so that non-mainnet
- * deployments derive a distinct fee-recipient PDA instead of collapsing all 23
- * roles to the deployer wallet. Once that is done, this helper and the fix script
- * will be obsolete. Tracked in keys/README.md "Known issue" section.
+ * Used as the bridge fee recipient on non-mainnet deployments (see
+ * `scripts/config/authorities.ts::allRolesToSingleKey`) so bridge fees
+ * accumulate in a distinct account from the deployer wallet. The PDA owns an
+ * OkuMoney (Token-2022) ATA created during `deploy:init`. Mainnet uses a real
+ * wallet pubkey from `MAINNET_FEE_RECIPIENT` instead.
  */
 export function deriveBridgeFeeTreasuryPDA(programId: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(

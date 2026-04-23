@@ -13,7 +13,6 @@ docs/
 
 # Dotenv file
 .env
-.env.example
 
 # Dependencies
 node_modules/
@@ -47,6 +46,13 @@ dist/
 # Deployments (keep sepolia for reference)
 deployments/*
 !deployments/sepolia
+
+# SVM deployment records — keep shared network records, ignore per-developer localnet
+!SVM/oku-programs/deployments/
+!SVM/oku-programs/deployments/devnet.json
+!SVM/oku-programs/deployments/devnet-fork.json
+!SVM/oku-programs/deployments/devnet-fork-verification.json
+SVM/oku-programs/deployments/localnet.json
 
 # Environment files
 .env.local
@@ -94,4 +100,9 @@ EVM/bridge/FILES.md
 EVM/bridge/README.md
 EVM/config/README.md
 EVM/scripts/README.md
-SVM/oku-programs/runbooks/
+# Solana signing keypairs (never commit private keys)
+**/keys/*.json
+*.keypair.json
+
+# Claude Code local settings (machine-specific)
+**/.claude/

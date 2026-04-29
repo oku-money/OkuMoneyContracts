@@ -7,6 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {Roles} from "../../lib/Roles.sol";
+import {NttAdapterEvents} from "../../lib/events/NttAdapterEvents.sol";
 
 /**
  * @title NttAdapter
@@ -21,26 +22,23 @@ import {Roles} from "../../lib/Roles.sol";
  *      - NTT_RESCUER          — withdraw stuck ETH/tokens
  *
  *      Conversions:
- *      - uint256 destinationChain → uint16 (Wormhole chain id)
- *      - address recipient        → bytes32 (left-padded)
+ *      - uint256 destinationChain -> uint16 (Wormhole chain id)
+ *      - address recipient        -> bytes32 (left-padded)
+ *
+ *      Chain-id mappings are supplied via the constructor so the adapter can be
+ *      deployed against any combination of supported networks. Additional mappings
+ *      may be added or overridden at runtime via `configureChainId`.
+ *      Taken from https://docs.wormhole.com/wormhole/reference/constants
  */
-contract NttAdapter is IBridgeAdapter, AccessControl {
+contract NttAdapter is IBridgeAdapter, AccessControl, NttAdapterEvents {
     using SafeERC20 for IERC20;
 
     INttManager public immutable NTT_MANAGER;
     address public immutable TOKEN;
     address public immutable ROUTER;
 
-    bytes32 public constant NTT_CONFIGURATOR = Roles.NTT_CONFIGURATOR;
-    bytes32 public constant NTT_RESCUER = Roles.NTT_RESCUER;
-
-    /// @notice EVM chain id → Wormhole chain id mapping. Zero means "unsupported".
+    /// @notice EVM chain id -> Wormhole chain id mapping. Zero means "unsupported".
     mapping(uint256 => uint16) public wormholeChainId;
-
-    event BridgeInitiated(
-        uint256 amount, uint16 wormholeChainId, bytes32 recipient, uint64 sequence
-    );
-    event ChainIdConfigured(uint256 evmChainId, uint16 wormholeChainId);
 
     error UnsupportedChain(uint256 chainId);
     error InvalidRecipient();
@@ -49,31 +47,49 @@ contract NttAdapter is IBridgeAdapter, AccessControl {
     error UnauthorizedCaller();
     error EthTransferFailed();
     error ZeroAddress();
+    /// @dev Constructor / configureChainId received mismatched array lengths.
+    error ChainIdLengthMismatch(uint256 evmIds, uint256 wormholeIds);
 
-    constructor(address _nttManager, address _token, address _router, address _admin) {
+    /**
+     * @param _nttManager Wormhole NTT Manager address
+     * @param _token OkuMoney token address
+     * @param _router OkuBridgeRouter address (sole authorized caller of `bridge`)
+     * @param _admin Admin address (receives configurator + rescuer roles)
+     * @param _evmChainIds EVM chain ids to pre-configure
+     * @param _wormholeChainIds Corresponding Wormhole chain ids; same length as _evmChainIds
+     */
+    constructor(
+        address _nttManager,
+        address _token,
+        address _router,
+        address _admin,
+        uint256[] memory _evmChainIds,
+        uint16[] memory _wormholeChainIds
+    ) {
         if (_nttManager == address(0)) revert ZeroAddress();
         if (_token == address(0)) revert ZeroAddress();
         if (_router == address(0)) revert ZeroAddress();
         if (_admin == address(0)) revert ZeroAddress();
+        if (_evmChainIds.length != _wormholeChainIds.length) {
+            revert ChainIdLengthMismatch(_evmChainIds.length, _wormholeChainIds.length);
+        }
 
         NTT_MANAGER = INttManager(_nttManager);
         TOKEN = _token;
         ROUTER = _router;
 
-        // Pre-configure common chain mappings.
-        // See: https://docs.wormhole.com/wormhole/reference/constants
-        wormholeChainId[1] = 2; // Ethereum
-        wormholeChainId[42_161] = 23; // Arbitrum
-        wormholeChainId[10] = 24; // Optimism
-        wormholeChainId[137] = 5; // Polygon
-        wormholeChainId[8453] = 30; // Base
-        wormholeChainId[43_114] = 6; // Avalanche
+        // Apply caller-supplied chain mappings. The deployer is responsible for
+        // sourcing the correct Wormhole chain ids from the Wormhole reference docs.
+        for (uint256 i = 0; i < _evmChainIds.length; i++) {
+            wormholeChainId[_evmChainIds[i]] = _wormholeChainIds[i];
+            emit ChainIdConfigured(_evmChainIds[i], _wormholeChainIds[i]);
+        }
 
         // Grant the full role set to admin (matches the unified role policy across the
         // rest of the codebase). Admin redistributes operational roles post-deploy.
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
-        _grantRole(NTT_CONFIGURATOR, _admin);
-        _grantRole(NTT_RESCUER, _admin);
+        _grantRole(Roles.NTT_CONFIGURATOR, _admin);
+        _grantRole(Roles.NTT_RESCUER, _admin);
     }
 
     /**
@@ -107,20 +123,20 @@ contract NttAdapter is IBridgeAdapter, AccessControl {
         emit BridgeInitiated(amount, wormholeDestChain, recipientBytes32, sequence);
     }
 
-    /// @notice Configure or override an EVM chain id → Wormhole chain id mapping.
+    /// @notice Configure or override an EVM chain id -> Wormhole chain id mapping.
     function configureChainId(
         uint256 evmChainId,
         uint16 _wormholeChainId
     )
         external
-        onlyRole(NTT_CONFIGURATOR)
+        onlyRole(Roles.NTT_CONFIGURATOR)
     {
         wormholeChainId[evmChainId] = _wormholeChainId;
         emit ChainIdConfigured(evmChainId, _wormholeChainId);
     }
 
     /// @notice Withdraw stuck ETH (e.g. fee refunds from the NTT manager).
-    function withdrawEth(address payable to) external onlyRole(NTT_RESCUER) {
+    function withdrawEth(address payable to) external onlyRole(Roles.NTT_RESCUER) {
         if (to == address(0)) revert ZeroAddress();
         (bool success,) = to.call{value: address(this).balance}("");
         if (!success) revert EthTransferFailed();
@@ -133,7 +149,7 @@ contract NttAdapter is IBridgeAdapter, AccessControl {
         uint256 amount
     )
         external
-        onlyRole(NTT_RESCUER)
+        onlyRole(Roles.NTT_RESCUER)
     {
         if (to == address(0)) revert ZeroAddress();
         IERC20(_token).safeTransfer(to, amount);

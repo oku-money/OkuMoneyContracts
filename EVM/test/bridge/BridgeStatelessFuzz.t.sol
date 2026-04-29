@@ -55,7 +55,7 @@ contract BridgeStatelessFuzzTest is BridgeBaseTest {
         uint256 balanceAfter = okuMoney.balanceOf(address(feeRecipient));
         uint256 actualFee = balanceAfter - balanceBefore;
 
-        uint256 expectedFee = (amount * okuBridge.bridgeFee()) / okuBridge.BASIS_POINTS();
+        uint256 expectedFee = (amount * okuBridge.bridgeFee()) / BASIS_POINTS;
 
         assertEq(actualFee, expectedFee, "Fee calculation incorrect");
     }
@@ -94,7 +94,7 @@ contract BridgeStatelessFuzzTest is BridgeBaseTest {
         uint256 supplyAfter = okuMoney.totalSupply();
 
         // Supply should decrease by (amount - fee) because fee is re-minted
-        uint256 fee = (amount * okuBridge.bridgeFee()) / okuBridge.BASIS_POINTS();
+        uint256 fee = (amount * okuBridge.bridgeFee()) / BASIS_POINTS;
         uint256 expectedDecrease = amount - fee;
 
         assertEq(

@@ -76,18 +76,21 @@ library Deploy {
 
     /// @notice Deploy RedemptionQueue with UUPS proxy
     /// @param okuMoney_ OkuMoney token address
+    /// @param usdc_ USDC token address (used for decimal multiplier resolution)
     /// @param admin_ Admin address
     /// @return proxy The deployed proxy contract
     /// @return impl The implementation contract
     function deployRedemptionQueue(
         address okuMoney_,
+        address usdc_,
         address admin_
     )
         internal
         returns (RedemptionQueue proxy, RedemptionQueue impl)
     {
         impl = new RedemptionQueue();
-        bytes memory initData = abi.encodeCall(RedemptionQueue.initialize, (okuMoney_, admin_));
+        bytes memory initData =
+            abi.encodeCall(RedemptionQueue.initialize, (okuMoney_, usdc_, admin_));
         proxy = RedemptionQueue(address(new ERC1967Proxy(address(impl), initData)));
     }
 
@@ -97,8 +100,29 @@ library Deploy {
     /// @param usdc_ USDC token address
     /// @param redemptionQueue_ RedemptionQueue address
     /// @param admin_ Admin address
+    /// @param stalenessThreshold_ PoR oracle staleness threshold (seconds)
     /// @return proxy The deployed proxy contract
     /// @return impl The implementation contract
+    function deployLitePSM(
+        address okuMoney_,
+        address usdOku_,
+        address usdc_,
+        address redemptionQueue_,
+        address admin_,
+        uint256 stalenessThreshold_
+    )
+        internal
+        returns (LitePSM proxy, LitePSM impl)
+    {
+        impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (okuMoney_, usdOku_, usdc_, redemptionQueue_, admin_, stalenessThreshold_)
+        );
+        proxy = LitePSM(address(new ERC1967Proxy(address(impl), initData)));
+    }
+
+    /// @notice Deploy LitePSM with default staleness threshold (1 hour)
     function deployLitePSM(
         address okuMoney_,
         address usdOku_,
@@ -109,11 +133,24 @@ library Deploy {
         internal
         returns (LitePSM proxy, LitePSM impl)
     {
-        impl = new LitePSM();
-        bytes memory initData = abi.encodeCall(
-            LitePSM.initialize, (okuMoney_, usdOku_, usdc_, redemptionQueue_, admin_)
+        return deployLitePSM(
+            okuMoney_,
+            usdOku_,
+            usdc_,
+            redemptionQueue_,
+            admin_,
+            TestConstants.DEFAULT_STALENESS_THRESHOLD
         );
-        proxy = LitePSM(address(new ERC1967Proxy(address(impl), initData)));
+    }
+
+    /// @notice Build the default OkuBridge.InitConfig used by tests.
+    function defaultBridgeConfig() internal pure returns (OkuBridge.InitConfig memory) {
+        return OkuBridge.InitConfig({
+            minBridgeAmount: TestConstants.DEFAULT_MIN_BRIDGE_AMOUNT,
+            maxBridgeAmount: TestConstants.DEFAULT_MAX_BRIDGE_AMOUNT,
+            feeBps: TestConstants.DEFAULT_BRIDGE_FEE,
+            bridgeDeadline: TestConstants.DEFAULT_BRIDGE_DEADLINE
+        });
     }
 
     /// @notice Deploy OkuBridge with UUPS proxy
@@ -122,8 +159,29 @@ library Deploy {
     /// @param feeRecipient_ Fee recipient address
     /// @param admin_ Admin address
     /// @param initialChains_ Array of supported chain IDs
+    /// @param config_ Initial limits / fee / deadline parameters
     /// @return proxy The deployed proxy contract
     /// @return impl The implementation contract
+    function deployOkuBridge(
+        address okuMoney_,
+        address authorizedSigner_,
+        address feeRecipient_,
+        address admin_,
+        uint256[] memory initialChains_,
+        OkuBridge.InitConfig memory config_
+    )
+        internal
+        returns (OkuBridge proxy, OkuBridge impl)
+    {
+        impl = new OkuBridge();
+        bytes memory initData = abi.encodeCall(
+            OkuBridge.initialize,
+            (okuMoney_, authorizedSigner_, feeRecipient_, admin_, initialChains_, config_)
+        );
+        proxy = OkuBridge(address(new ERC1967Proxy(address(impl), initData)));
+    }
+
+    /// @notice Deploy OkuBridge with default config
     function deployOkuBridge(
         address okuMoney_,
         address authorizedSigner_,
@@ -134,15 +192,17 @@ library Deploy {
         internal
         returns (OkuBridge proxy, OkuBridge impl)
     {
-        impl = new OkuBridge();
-        bytes memory initData = abi.encodeCall(
-            OkuBridge.initialize,
-            (okuMoney_, authorizedSigner_, feeRecipient_, admin_, initialChains_)
+        return deployOkuBridge(
+            okuMoney_,
+            authorizedSigner_,
+            feeRecipient_,
+            admin_,
+            initialChains_,
+            defaultBridgeConfig()
         );
-        proxy = OkuBridge(address(new ERC1967Proxy(address(impl), initData)));
     }
 
-    /// @notice Deploy OkuBridge with default EVM chains
+    /// @notice Deploy OkuBridge with default EVM chains and default config
     function deployOkuBridge(
         address okuMoney_,
         address authorizedSigner_,
@@ -160,12 +220,6 @@ library Deploy {
     }
 
     /// @notice Deploy OkuBridgeRouter with UUPS proxy
-    /// @param usdOku_ OkuDollar vault address
-    /// @param okuMoney_ OkuMoney token address
-    /// @param okuBridge_ OkuBridge address
-    /// @param admin_ Admin address
-    /// @return proxy The deployed proxy contract
-    /// @return impl The implementation contract
     function deployOkuBridgeRouter(
         address usdOku_,
         address okuMoney_,

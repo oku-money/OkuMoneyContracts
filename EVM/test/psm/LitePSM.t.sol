@@ -8,6 +8,7 @@ import {
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
 import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
+import {Constants} from "../../src/lib/Constants.sol";
 
 /**
  * @title LitePSMTest
@@ -1419,9 +1420,10 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_ConfigureOracle_RevertsOnStalenessBelowFloor() public {
-        // Cache the constants BEFORE the prank — view calls consume vm.prank.
-        uint256 minStale = litePsm.ORACLE_MIN_STALENESS();
-        uint256 maxStale = litePsm.ORACLE_MAX_STALENESS();
+        // ORACLE_MIN_STALENESS / ORACLE_MAX_STALENESS now live in src/lib/Constants.sol
+        // rather than as redundant public constants on LitePSM.
+        uint256 minStale = Constants.ORACLE_MIN_STALENESS;
+        uint256 maxStale = Constants.ORACLE_MAX_STALENESS;
 
         vm.prank(oracleManager);
         vm.expectRevert(
@@ -1431,8 +1433,8 @@ contract LitePSMTest is BaseTest {
     }
 
     function test_ConfigureOracle_RevertsOnStalenessAboveCeiling() public {
-        uint256 minStale = litePsm.ORACLE_MIN_STALENESS();
-        uint256 maxStale = litePsm.ORACLE_MAX_STALENESS();
+        uint256 minStale = Constants.ORACLE_MIN_STALENESS;
+        uint256 maxStale = Constants.ORACLE_MAX_STALENESS;
 
         vm.prank(oracleManager);
         vm.expectRevert(

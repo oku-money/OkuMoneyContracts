@@ -87,7 +87,14 @@ describe("Bridge — gas regression", function () {
         )) as unknown as OkuDollar
         await okuUsd.waitForDeployment()
 
-        // OkuBridge
+        // OkuBridge — initializer now takes a 6th `InitConfig` tuple param so chain-specific
+        // limits / fee / deadline can be set at deploy time without a separate update tx.
+        const bridgeConfig = {
+            minBridgeAmount: ethers.parseEther("1"),
+            maxBridgeAmount: ethers.parseEther("1000000"),
+            feeBps: 10n,                     // 0.1%
+            bridgeDeadline: 3600n,           // 1 hour
+        }
         okuBridge = (await upgrades.deployProxy(
             new OkuBridge__factory(admin),
             [
@@ -96,6 +103,7 @@ describe("Bridge — gas regression", function () {
                 feeRecipient.address,
                 admin.address,
                 [OPTIMISM_CHAIN_ID, ARBITRUM_CHAIN_ID],
+                bridgeConfig,
             ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         )) as unknown as OkuBridge

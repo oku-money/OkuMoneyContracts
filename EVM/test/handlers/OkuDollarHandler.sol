@@ -212,7 +212,7 @@ contract OkuDollarHandler is Test {
     function setUsdYieldRate(uint256 rate, uint256 endOffset) external {
         ghostSetYieldRateCalls++;
         // Stay above PRECISION (no negative yield) and below MAX_RATE.
-        rate = bound(rate, PRECISION, usdOku.MAX_RATE());
+        rate = bound(rate, PRECISION, TestConstants.MAX_RATE);
         endOffset = bound(endOffset, 1 hours, 365 days);
 
         try usdOku.setUsdYieldRate(rate, block.timestamp + endOffset) {}
@@ -223,7 +223,7 @@ contract OkuDollarHandler is Test {
 
     function setNextUsdYieldRate(uint256 rate) external {
         ghostSetNextYieldRateCalls++;
-        rate = bound(rate, PRECISION, usdOku.MAX_RATE());
+        rate = bound(rate, PRECISION, TestConstants.MAX_RATE);
 
         // Pre-check: contract requires usdRateEnd != 0 AND not yet expired.
         uint256 endTs = usdOku.usdRateEnd();

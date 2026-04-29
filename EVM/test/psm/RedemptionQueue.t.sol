@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
+import {RedemptionQueueEvents} from "../../src/lib/events/RedemptionQueueEvents.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 /**
@@ -1014,7 +1015,7 @@ contract RedemptionQueueTest is BaseTest {
 
         vm.prank(queueRescuer);
         vm.expectEmit(true, true, true, true);
-        emit RedemptionQueue.RedemptionRescued(0, user1, user2, amount, dollarValue);
+        emit RedemptionQueueEvents.RedemptionRescued(0, user1, user2, amount, dollarValue);
         redemptionQueue.rescueQueueEntry(0, user2);
     }
 

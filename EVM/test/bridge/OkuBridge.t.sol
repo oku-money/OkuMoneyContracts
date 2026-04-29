@@ -3,7 +3,9 @@ pragma solidity ^0.8.28;
 
 import {BridgeBaseTest} from "../BridgeBase.t.sol";
 import {OkuBridge} from "../../src/bridge/OkuBridge.sol";
+import {OkuBridgeEvents} from "../../src/lib/events/OkuBridgeEvents.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {Deploy} from "../shared/Deploy.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {
     PausableUpgradeable
@@ -481,7 +483,9 @@ contract OkuBridgeTest is BridgeBaseTest {
 
     function test_UpdateAuthorizedSigner_RevertNotAuthorized() public {
         address newSigner = makeAddr("newSigner");
-        bytes32 role = okuBridge.BRIDGE_SIGNER_MANAGER();
+        // Role aliases were removed from the contracts in favour of the shared Roles
+        // library; tests reference TestRoles directly.
+        bytes32 role = BRIDGE_SIGNER_MANAGER;
 
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -649,7 +653,7 @@ contract OkuBridgeTest is BridgeBaseTest {
     }
 
     function test_SkipNonce_RevertNotAuthorized() public {
-        bytes32 role = okuBridge.BRIDGE_NONCE_ADMIN();
+        bytes32 role = BRIDGE_NONCE_ADMIN;
 
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -859,7 +863,7 @@ contract OkuBridgeTest is BridgeBaseTest {
         okuMoney.approve(address(okuBridge), okuMoney.balanceOf(user1));
 
         vm.expectEmit(true, true, false, true);
-        emit OkuBridge.BridgeBurn(
+        emit OkuBridgeEvents.BridgeBurn(
             expectedRequestId,
             user1,
             bytes32(uint256(uint160(user2))),
@@ -941,7 +945,7 @@ contract OkuBridgeTest is BridgeBaseTest {
 
         vm.prank(admin);
         vm.expectEmit(false, false, false, true);
-        emit OkuBridge.DeadlineUpdated(1 hours, newDeadline);
+        emit OkuBridgeEvents.DeadlineUpdated(1 hours, newDeadline);
         okuBridge.updateDeadline(newDeadline);
 
         assertEq(okuBridge.bridgeDeadline(), newDeadline);
@@ -970,7 +974,7 @@ contract OkuBridgeTest is BridgeBaseTest {
 
         vm.prank(admin);
         vm.expectEmit(true, true, false, false);
-        emit OkuBridge.FeeRecipientUpdated(feeRecipient, newRecipient);
+        emit OkuBridgeEvents.FeeRecipientUpdated(feeRecipient, newRecipient);
         okuBridge.updateFeeRecipient(newRecipient);
 
         assertEq(okuBridge.feeRecipient(), newRecipient);
@@ -995,8 +999,10 @@ contract OkuBridgeTest is BridgeBaseTest {
     function test_Initialize_RevertZeroOkuUsd() public {
         OkuBridge impl = new OkuBridge();
         uint256[] memory emptyChains = new uint256[](0);
+        OkuBridge.InitConfig memory cfg = Deploy.defaultBridgeConfig();
         bytes memory initData = abi.encodeCall(
-            OkuBridge.initialize, (address(0), orchestratorSigner, feeRecipient, admin, emptyChains)
+            OkuBridge.initialize,
+            (address(0), orchestratorSigner, feeRecipient, admin, emptyChains, cfg)
         );
         vm.expectRevert(OkuBridge.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -1005,8 +1011,10 @@ contract OkuBridgeTest is BridgeBaseTest {
     function test_Initialize_RevertZeroSigner() public {
         OkuBridge impl = new OkuBridge();
         uint256[] memory emptyChains = new uint256[](0);
+        OkuBridge.InitConfig memory cfg = Deploy.defaultBridgeConfig();
         bytes memory initData = abi.encodeCall(
-            OkuBridge.initialize, (address(okuMoney), address(0), feeRecipient, admin, emptyChains)
+            OkuBridge.initialize,
+            (address(okuMoney), address(0), feeRecipient, admin, emptyChains, cfg)
         );
         vm.expectRevert(OkuBridge.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -1015,9 +1023,10 @@ contract OkuBridgeTest is BridgeBaseTest {
     function test_Initialize_RevertZeroFeeRecipient() public {
         OkuBridge impl = new OkuBridge();
         uint256[] memory emptyChains = new uint256[](0);
+        OkuBridge.InitConfig memory cfg = Deploy.defaultBridgeConfig();
         bytes memory initData = abi.encodeCall(
             OkuBridge.initialize,
-            (address(okuMoney), orchestratorSigner, address(0), admin, emptyChains)
+            (address(okuMoney), orchestratorSigner, address(0), admin, emptyChains, cfg)
         );
         vm.expectRevert(OkuBridge.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -1026,9 +1035,10 @@ contract OkuBridgeTest is BridgeBaseTest {
     function test_Initialize_RevertZeroAdmin() public {
         OkuBridge impl = new OkuBridge();
         uint256[] memory emptyChains = new uint256[](0);
+        OkuBridge.InitConfig memory cfg = Deploy.defaultBridgeConfig();
         bytes memory initData = abi.encodeCall(
             OkuBridge.initialize,
-            (address(okuMoney), orchestratorSigner, feeRecipient, address(0), emptyChains)
+            (address(okuMoney), orchestratorSigner, feeRecipient, address(0), emptyChains, cfg)
         );
         vm.expectRevert(OkuBridge.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
@@ -1104,7 +1114,7 @@ contract OkuBridgeTest is BridgeBaseTest {
 
         vm.prank(admin);
         vm.expectEmit(true, false, false, true);
-        emit OkuBridge.NonceSkipped(OPTIMISM_CHAIN_ID, nonce);
+        emit OkuBridgeEvents.NonceSkipped(OPTIMISM_CHAIN_ID, nonce);
         okuBridge.skipNonce(OPTIMISM_CHAIN_ID);
     }
 
@@ -1122,13 +1132,15 @@ contract OkuBridgeTest is BridgeBaseTest {
         // Step 1: initiate — emits RefundInitiated
         vm.prank(refundInitiator);
         vm.expectEmit(true, true, false, true);
-        emit OkuBridge.RefundInitiated(requestId, refundInitiator, request.sender, request.amount);
+        emit OkuBridgeEvents.RefundInitiated(
+            requestId, refundInitiator, request.sender, request.amount
+        );
         okuBridge.initiateRefund(request);
 
         // Step 2: confirm — emits RefundConfirmed
         vm.prank(refundConfirmer);
         vm.expectEmit(true, true, false, true);
-        emit OkuBridge.RefundConfirmed(requestId, user1, request.amount);
+        emit OkuBridgeEvents.RefundConfirmed(requestId, user1, request.amount);
         okuBridge.confirmRefund(request);
     }
 
@@ -1173,7 +1185,7 @@ contract OkuBridgeTest is BridgeBaseTest {
         bytes32 requestId = keccak256(abi.encode(request));
 
         vm.expectEmit(true, true, false, true);
-        emit OkuBridge.BridgeMint(
+        emit OkuBridgeEvents.BridgeMint(
             requestId, bytes32(uint256(uint160(user2))), OPTIMISM_CHAIN_ID, block.chainid, amount
         );
 
@@ -1258,7 +1270,7 @@ contract OkuBridgeTest is BridgeBaseTest {
 
         vm.prank(admin);
         vm.expectEmit(true, false, false, true);
-        emit OkuBridge.DustSwept(feeRecipient, dustBalance);
+        emit OkuBridgeEvents.DustSwept(feeRecipient, dustBalance);
         okuBridge.sweepDust();
     }
 
@@ -1271,7 +1283,7 @@ contract OkuBridgeTest is BridgeBaseTest {
     }
 
     function test_SweepDust_RevertNotAuthorized() public {
-        bytes32 role = okuBridge.BRIDGE_DUST_SWEEPER();
+        bytes32 role = BRIDGE_DUST_SWEEPER;
 
         vm.prank(user1);
         vm.expectRevert(
@@ -1385,7 +1397,7 @@ contract OkuBridgeTest is BridgeBaseTest {
         // Cancel by initiator
         vm.prank(refundInitiator);
         vm.expectEmit(true, true, true, false);
-        emit OkuBridge.RefundCancelled(requestId, refundInitiator, refundInitiator);
+        emit OkuBridgeEvents.RefundCancelled(requestId, refundInitiator, refundInitiator);
         okuBridge.cancelRefund(request);
 
         // Verify cancelled
@@ -1409,7 +1421,7 @@ contract OkuBridgeTest is BridgeBaseTest {
         // Cancel by admin
         vm.prank(admin);
         vm.expectEmit(true, true, true, false);
-        emit OkuBridge.RefundCancelled(requestId, refundInitiator, admin);
+        emit OkuBridgeEvents.RefundCancelled(requestId, refundInitiator, admin);
         okuBridge.cancelRefund(request);
 
         // Verify cancelled
@@ -1535,7 +1547,7 @@ contract OkuBridgeTest is BridgeBaseTest {
         );
 
         // Verify tokens burned (minus fee)
-        uint256 fee = (amount * okuBridge.bridgeFee()) / okuBridge.BASIS_POINTS();
+        uint256 fee = (amount * okuBridge.bridgeFee()) / BASIS_POINTS;
         assertEq(
             okuMoney.totalSupply(),
             supplyBefore - amount + fee,
@@ -1665,7 +1677,7 @@ contract OkuBridgeTest is BridgeBaseTest {
         _mintOkuMoney(user1, amount);
 
         bytes32 solanaRecipient = _createSolanaRecipient(1);
-        uint256 fee = (amount * okuBridge.bridgeFee()) / okuBridge.BASIS_POINTS();
+        uint256 fee = (amount * okuBridge.bridgeFee()) / BASIS_POINTS;
         uint256 netAmount = amount - fee;
         uint256 nonce = okuBridge.outboundNonce(SOLANA_MAINNET_CHAIN_ID);
         uint256 deadline = block.timestamp + okuBridge.bridgeDeadline();
@@ -1675,7 +1687,7 @@ contract OkuBridgeTest is BridgeBaseTest {
 
         // Expect the BridgeBurn event with Solana chain ID and 32-byte recipient
         vm.expectEmit(false, true, false, false); // Only check indexed sender
-        emit OkuBridge.BridgeBurn(
+        emit OkuBridgeEvents.BridgeBurn(
             bytes32(0), // requestId calculated, don't check
             user1,
             solanaRecipient,

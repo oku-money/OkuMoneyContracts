@@ -139,7 +139,7 @@ contract OkuBridgeHandler is Test {
 
         uint256 nonceBefore = bridge.outboundNonce(remoteChain);
         uint256 feeBps = bridge.bridgeFee();
-        uint256 feeAmount = (amount * feeBps) / bridge.BASIS_POINTS();
+        uint256 feeAmount = (amount * feeBps) / TestConstants.BASIS_POINTS;
         uint256 netAmount = amount - feeAmount;
 
         bytes32 recipient = bytes32(uint256(uint160(actor))); // mint back to actor on dest

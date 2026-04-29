@@ -54,6 +54,9 @@ interface DeploymentConfig {
   minBridgeAmount: bigint;
   maxBridgeAmount: bigint;
   bridgeDeadline: bigint;
+  // PSM oracle staleness threshold (seconds). Bounded by Constants.ORACLE_MIN/MAX_STALENESS
+  // (60 .. 7 days). Operators can re-tune via configureOracle post-deploy.
+  psmStalenessThreshold: bigint;
 }
 
 function getDeploymentConfig(): DeploymentConfig {
@@ -64,6 +67,7 @@ function getDeploymentConfig(): DeploymentConfig {
     minBridgeAmount: ethers.parseUnits("1", 18), // 1 OkuM
     maxBridgeAmount: ethers.parseUnits("100000", 18), // 100,000 OkuM
     bridgeDeadline: 3600n, // 1 hour
+    psmStalenessThreshold: 3600n, // 1 hour
   };
 }
 
@@ -211,7 +215,7 @@ async function deployCoreContracts(
   deployerAddress: string,
   networkName: string,
   config: DeploymentConfig
-): Promise<{ okuMoney: Contract; okuDollar: Contract; redemptionQueue: Contract }> {
+): Promise<{ okuMoney: Contract; okuDollar: Contract }> {
   logger.step(2, "Deploying Core Contracts");
 
   // OkuMoney
@@ -235,17 +239,27 @@ async function deployCoreContracts(
   );
   logger.success(`  OkuDollar: ${await okuDollar.getAddress()}`);
 
-  // RedemptionQueue
+  return { okuMoney, okuDollar };
+}
+
+async function deployRedemptionQueue(
+  deployer: Signer,
+  deployerAddress: string,
+  networkName: string,
+  okuMoneyAddress: string,
+  usdcAddress: string
+): Promise<Contract> {
   logger.info("  Deploying RedemptionQueue...");
+  // RedemptionQueue.initialize now takes (_okuMoney, _usdc, admin) so the queue can
+  // resolve the USDC decimal multiplier from IERC20Metadata at init time.
   const redemptionQueue = await deployUUPSProxy(
     "RedemptionQueue",
-    [await okuMoney.getAddress(), deployerAddress],
+    [okuMoneyAddress, usdcAddress, deployerAddress],
     networkName,
     deployer
   );
   logger.success(`  RedemptionQueue: ${await redemptionQueue.getAddress()}`);
-
-  return { okuMoney, okuDollar, redemptionQueue };
+  return redemptionQueue;
 }
 
 async function deployPSM(
@@ -255,19 +269,21 @@ async function deployPSM(
   okuMoneyAddress: string,
   okuDollarAddress: string,
   redemptionQueueAddress: string,
-  usdcAddress: string
+  usdcAddress: string,
+  config: DeploymentConfig
 ): Promise<Contract> {
   logger.step(3, "Deploying LitePSM");
 
-  // LitePSM.initialize(okuMoney, usdOku, usdc, redemptionQueue, admin)
+  // LitePSM.initialize(okuMoney, usdOku, usdc, redemptionQueue, admin, stalenessThreshold)
   const litePSM = await deployUUPSProxy(
     "LitePSM",
     [
-      okuMoneyAddress,          // _okuMoney
-      okuDollarAddress,         // _usdOku
-      usdcAddress,              // _usdc
-      redemptionQueueAddress,   // _redemptionQueue
-      deployerAddress,          // admin
+      okuMoneyAddress,                  // _okuMoney
+      okuDollarAddress,                 // _usdOku
+      usdcAddress,                      // _usdc
+      redemptionQueueAddress,           // _redemptionQueue
+      deployerAddress,                  // admin
+      config.psmStalenessThreshold,     // _stalenessThreshold (PoR oracle bound)
     ],
     networkName,
     deployer
@@ -282,11 +298,23 @@ async function deployBridge(
   deployerAddress: string,
   networkName: string,
   okuMoneyAddress: string,
-  okuDollarAddress: string
+  okuDollarAddress: string,
+  config: DeploymentConfig
 ): Promise<{ okuBridge: Contract; bridgeRouter: Contract }> {
   logger.step(4, "Deploying Bridge Contracts");
 
-  // OkuBridge (Transparent Proxy)
+  // OkuBridge (Transparent Proxy). Initializer now takes a 6th `InitConfig` tuple so
+  // limits / fee / deadline come in at deploy time instead of being hardcoded constants.
+  // Subsequent updateLimits / updateFee / updateDeadline calls in configureBridge become
+  // no-ops in the common case but are kept as a safety net for redeployments that need
+  // to override the init values.
+  const bridgeInitConfig = {
+    minBridgeAmount: config.minBridgeAmount,
+    maxBridgeAmount: config.maxBridgeAmount,
+    feeBps: config.bridgeFee,
+    bridgeDeadline: config.bridgeDeadline,
+  };
+
   logger.info("  Deploying OkuBridge...");
   const okuBridge = await deployTransparentProxy(
     "OkuBridge",
@@ -296,6 +324,7 @@ async function deployBridge(
       deployerAddress, // fee recipient
       deployerAddress, // admin
       [BigInt(SOLANA_DEVNET_CHAIN_ID)], // supported chains
+      bridgeInitConfig,
     ],
     networkName,
     deployer
@@ -503,8 +532,16 @@ async function main() {
     usdcAddress = await deployMockUSDC(networkName, deployer);
   }
 
-  // Step 2: Deploy core contracts
-  const { okuMoney, okuDollar, redemptionQueue } = await deployCoreContracts(deployer, deployerAddress, networkName, config);
+  // Step 2: Deploy core contracts (RedemptionQueue is deployed separately because it now
+  // requires the USDC address for decimal-multiplier resolution at init time).
+  const { okuMoney, okuDollar } = await deployCoreContracts(deployer, deployerAddress, networkName, config);
+  const redemptionQueue = await deployRedemptionQueue(
+    deployer,
+    deployerAddress,
+    networkName,
+    await okuMoney.getAddress(),
+    usdcAddress
+  );
 
   // Step 3: Deploy PSM
   const litePSM = await deployPSM(
@@ -514,7 +551,8 @@ async function main() {
     await okuMoney.getAddress(),
     await okuDollar.getAddress(),
     await redemptionQueue.getAddress(),
-    usdcAddress
+    usdcAddress,
+    config
   );
 
   // Step 4: Deploy bridge contracts
@@ -523,7 +561,8 @@ async function main() {
     deployerAddress,
     networkName,
     await okuMoney.getAddress(),
-    await okuDollar.getAddress()
+    await okuDollar.getAddress(),
+    config
   );
 
   // Step 5: Configure roles

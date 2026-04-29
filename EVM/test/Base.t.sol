@@ -128,7 +128,7 @@ abstract contract BaseTest is Test, Actors {
 
         // Deploy RedemptionQueue
         (redemptionQueue, redemptionQueueImpl) =
-            Deploy.deployRedemptionQueue(address(okuMoney), admin);
+            Deploy.deployRedemptionQueue(address(okuMoney), address(usdc), admin);
 
         // Deploy LitePSM
         (litePsm, litePsmImpl) = Deploy.deployLitePSM(

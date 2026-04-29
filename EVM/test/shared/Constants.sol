@@ -15,14 +15,25 @@ library TestConstants {
     /// @notice Standard precision for price and multiplier calculations (1e18 = $1.00)
     uint256 public constant PRECISION = SrcConstants.PRECISION;
 
-    /// @notice Decimal conversion multiplier (USDC 6 decimals -> OkuMoney 18 decimals)
-    uint256 public constant DECIMAL_MULTIPLIER = SrcConstants.DECIMAL_MULTIPLIER;
+    /// @notice Default decimal conversion multiplier for Circle USDC (6 decimals -> 18).
+    /// @dev The PSM / Queue resolve their own multipliers at init time. Tests use
+    ///      the canonical 1e12 since MockUSDC reports 6 decimals.
+    uint256 public constant DECIMAL_MULTIPLIER = SrcConstants.DEFAULT_USDC_DECIMAL_MULTIPLIER;
 
     /// @notice Maximum yield rate: ~3700% APY safety cap
     uint256 public constant MAX_RATE = SrcConstants.MAX_RATE;
 
     /// @notice Basis points denominator (10000 = 100%)
     uint256 public constant BASIS_POINTS = SrcConstants.BASIS_POINTS;
+
+    /// @notice Minimum allowed PoR oracle staleness (re-exported for tests)
+    uint256 public constant ORACLE_MIN_STALENESS = SrcConstants.ORACLE_MIN_STALENESS;
+
+    /// @notice Maximum allowed PoR oracle staleness (re-exported for tests)
+    uint256 public constant ORACLE_MAX_STALENESS = SrcConstants.ORACLE_MAX_STALENESS;
+
+    /// @notice OkuDollar minimum collateral ratio floor (re-exported for tests)
+    uint256 public constant MIN_COLLATERAL_RATIO_FLOOR = SrcConstants.MIN_COLLATERAL_RATIO_FLOOR;
 
     // ============ Test-Only Constants ============
 
@@ -39,10 +50,13 @@ library TestConstants {
     uint256 public constant DEFAULT_BRIDGE_DEADLINE = 1 hours;
 
     /// @notice Default min bridge amount
-    uint256 public constant DEFAULT_MIN_BRIDGE_AMOUNT = 1e18;
+    uint128 public constant DEFAULT_MIN_BRIDGE_AMOUNT = 1e18;
 
     /// @notice Default max bridge amount
-    uint256 public constant DEFAULT_MAX_BRIDGE_AMOUNT = 10_000_000e18;
+    uint128 public constant DEFAULT_MAX_BRIDGE_AMOUNT = 1_000_000e18;
+
+    /// @notice Default PSM oracle staleness threshold for tests (1 hour)
+    uint256 public constant DEFAULT_STALENESS_THRESHOLD = 1 hours;
 
     // ============ Chain IDs for Testing ============
 

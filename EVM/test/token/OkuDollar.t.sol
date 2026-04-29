@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {BaseTest} from "../Base.t.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
+import {OkuDollarEvents} from "../../src/lib/events/OkuDollarEvents.sol";
 import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
 
 /**
@@ -870,7 +871,7 @@ contract OkuDollarTest is BaseTest {
         uint256 expectedRatio = (reservesDollarValueAfter * PRECISION) / usdOku.totalSupply();
 
         vm.expectEmit(true, false, false, true, address(usdOku));
-        emit OkuDollar.ReservesDeposited(reserveManager, 50e18, dollarValue, expectedRatio);
+        emit OkuDollarEvents.ReservesDeposited(reserveManager, 50e18, dollarValue, expectedRatio);
 
         vm.prank(reserveManager);
         usdOku.depositReserves(50e18);

@@ -121,14 +121,21 @@ describe("OkuDollar Vault Scenarios", () => {
 
         queue = await upgrades.deployProxy(
             new RedemptionQueue__factory(Frank),
-            [await okuMoney.getAddress(), frankAddr],
+            [await okuMoney.getAddress(), USDC_MAINNET, frankAddr],
             { kind: "uups" }
         ) as unknown as RedemptionQueue
         await queue.waitForDeployment()
 
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            [await okuMoney.getAddress(), await okuUsd.getAddress(), USDC_MAINNET, await queue.getAddress(), frankAddr],
+            [
+                await okuMoney.getAddress(),
+                await okuUsd.getAddress(),
+                USDC_MAINNET,
+                await queue.getAddress(),
+                frankAddr,
+                3600
+            ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()

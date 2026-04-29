@@ -89,18 +89,25 @@ describe("Happy Path Testing", () => {
         ) as unknown as OkuDollar
         await okuUsd.waitForDeployment()
 
-        // Deploy RedemptionQueue
+        // Deploy RedemptionQueue (now requires _usdc for decimal multiplier resolution)
         queue = await upgrades.deployProxy(
             new RedemptionQueue__factory(Frank),
-            [await okuMoney.getAddress(), frankAddr],
+            [await okuMoney.getAddress(), USDC_MAINNET, frankAddr],
             { kind: "uups" }
         ) as unknown as RedemptionQueue
         await queue.waitForDeployment()
 
-        // Deploy LitePSM (needs OkuMoney, OkuDollar, USDC, Queue)
+        // Deploy LitePSM (needs OkuMoney, OkuDollar, USDC, Queue, admin, stalenessThreshold)
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            [await okuMoney.getAddress(), await okuUsd.getAddress(), USDC_MAINNET, await queue.getAddress(), frankAddr],
+            [
+                await okuMoney.getAddress(),
+                await okuUsd.getAddress(),
+                USDC_MAINNET,
+                await queue.getAddress(),
+                frankAddr,
+                3600
+            ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()

@@ -9,6 +9,7 @@ import { getNetworkName, DEV_WALLET_ADDRESS } from "../config/chains";
 import { loadAddress } from "../utils/addressBook";
 import { logger } from "../utils/logger";
 import { getDeployedContract, waitForTx } from "../utils/deploy";
+import { ROLES } from "../config/roles";
 
 // Use centralized deployer address
 const DEPLOYER = DEV_WALLET_ADDRESS;
@@ -54,8 +55,9 @@ async function main() {
     return;
   }
 
-  // Grant ALLOWANCE_MANAGER role to deployer first (using admin role)
-  const ALLOWANCE_MANAGER_ROLE = await okuMoney.OKUM_ALLOWANCE_MANAGER();
+  // Grant ALLOWANCE_MANAGER role to deployer first (using admin role).
+  // Role aliases were removed from the contracts in favour of the shared `Roles` library.
+  const ALLOWANCE_MANAGER_ROLE = ROLES.OKUM_ALLOWANCE_MANAGER;
   const hasAllowanceManager = await okuMoney.hasRole(ALLOWANCE_MANAGER_ROLE, DEPLOYER);
   
   if (!hasAllowanceManager) {

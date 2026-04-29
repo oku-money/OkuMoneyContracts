@@ -152,15 +152,22 @@ describe("NTT Bridge Scenarios", () => {
         // Deploy RedemptionQueue
         queue = await upgrades.deployProxy(
             new RedemptionQueue__factory(Frank),
-            [await okuMoney.getAddress(), frankAddr],
+            [await okuMoney.getAddress(), USDC_MAINNET, frankAddr],
             { kind: "uups" }
         ) as unknown as RedemptionQueue
         await queue.waitForDeployment()
 
-        // Deploy LitePSM
+        // Deploy LitePSM (now takes _stalenessThreshold as the 6th initializer arg)
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            [await okuMoney.getAddress(), await okuUsd.getAddress(), USDC_MAINNET, await queue.getAddress(), frankAddr],
+            [
+                await okuMoney.getAddress(),
+                await okuUsd.getAddress(),
+                USDC_MAINNET,
+                await queue.getAddress(),
+                frankAddr,
+                3600
+            ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()
@@ -170,14 +177,18 @@ describe("NTT Bridge Scenarios", () => {
         mockNttManager = await MockNttManager.deploy(await okuMoney.getAddress())
         await mockNttManager.waitForDeployment()
 
-        // Deploy NttAdapter (frankAddr is both ROUTER and admin for testing).
-        // In production, ROUTER would be the OkuBridgeRouter address. Admin holds
-        // DEFAULT_ADMIN_ROLE / NTT_CONFIGURATOR / NTT_RESCUER per the unified policy.
+        // Deploy NttAdapter. Chain-id mappings are now caller-supplied at deploy time
+        // (the previous hardcoded constructor was removed for portability). Pre-populate
+        // the same mainnet/L2 set that the constructor used to bake in.
+        const evmChainIds = [1n, 42_161n, 10n, 137n, 8453n, 43_114n]
+        const wormholeChainIds = [2, 23, 24, 5, 30, 6]
         nttAdapter = await new NttAdapter__factory(Frank).deploy(
             await mockNttManager.getAddress(),
             await okuMoney.getAddress(),
             frankAddr,  // ROUTER — only this address can call bridge()
-            frankAddr   // admin
+            frankAddr,  // admin
+            evmChainIds,
+            wormholeChainIds
         )
         await nttAdapter.waitForDeployment()
 

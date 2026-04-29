@@ -4,6 +4,9 @@ pragma solidity ^0.8.28;
 /**
  * @title INttManager
  * @notice Interface for Wormhole Native Token Transfer (NTT) Manager
+ * @dev Minimal subset of the upstream Wormhole NTT Manager interface — only the
+ *      methods used by NttAdapter are declared here.
+ *      Taken from https://github.com/wormhole-foundation/native-token-transfers/blob/main/evm/src/interfaces/INttManager.sol
  */
 interface INttManager {
     /**

@@ -5,6 +5,7 @@ import {BridgeBaseTest} from "../BridgeBase.t.sol";
 import {NttAdapter} from "../../src/bridge/adapters/NttAdapter.sol";
 import {MockNttManager} from "../../src/mocks/MockNttManager.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {Roles} from "../../src/lib/Roles.sol";
 
 /**
  * @title NttBridgeTest
@@ -56,8 +57,32 @@ contract NttBridgeTest is BridgeBaseTest {
         // inherited bridgeRouter from BridgeBaseTest (it is real, not a placeholder).
         nttManager = new MockNttManager(address(okuMoney));
 
-        nttAdapter =
-            new NttAdapter(address(nttManager), address(okuMoney), address(bridgeRouter), admin);
+        // Pre-populate the same EVM <-> Wormhole chain id mappings the previous
+        // hardcoded constructor provided. Adapters are now fully chain-agnostic;
+        // the deployer supplies whatever set of mappings it cares about.
+        uint256[] memory evmChainIds = new uint256[](6);
+        uint16[] memory wormholeChainIds = new uint16[](6);
+        evmChainIds[0] = 1; // Ethereum
+        wormholeChainIds[0] = 2;
+        evmChainIds[1] = ARBITRUM_CHAIN_ID; // 42161
+        wormholeChainIds[1] = WORMHOLE_ARBITRUM;
+        evmChainIds[2] = OPTIMISM_CHAIN_ID; // 10
+        wormholeChainIds[2] = WORMHOLE_OPTIMISM;
+        evmChainIds[3] = 137; // Polygon
+        wormholeChainIds[3] = 5;
+        evmChainIds[4] = BASE_CHAIN_ID; // 8453
+        wormholeChainIds[4] = WORMHOLE_BASE;
+        evmChainIds[5] = 43_114; // Avalanche
+        wormholeChainIds[5] = 6;
+
+        nttAdapter = new NttAdapter(
+            address(nttManager),
+            address(okuMoney),
+            address(bridgeRouter),
+            admin,
+            evmChainIds,
+            wormholeChainIds
+        );
 
         // Grant MINTER + allowance to the NTT manager mock so completeBridge* can mint.
         vm.prank(admin);
@@ -89,8 +114,8 @@ contract NttBridgeTest is BridgeBaseTest {
         // NttAdapter now uses AccessControl rather than Ownable — verify admin holds
         // every defined role.
         assertTrue(nttAdapter.hasRole(nttAdapter.DEFAULT_ADMIN_ROLE(), admin));
-        assertTrue(nttAdapter.hasRole(nttAdapter.NTT_CONFIGURATOR(), admin));
-        assertTrue(nttAdapter.hasRole(nttAdapter.NTT_RESCUER(), admin));
+        assertTrue(nttAdapter.hasRole(Roles.NTT_CONFIGURATOR, admin));
+        assertTrue(nttAdapter.hasRole(Roles.NTT_RESCUER, admin));
     }
 
     function test_NttAdapter_ChainIdMappings() public view {
@@ -110,7 +135,7 @@ contract NttBridgeTest is BridgeBaseTest {
     }
 
     function test_NttAdapter_ConfigureChainId_RevertIfNotConfigurator() public {
-        bytes32 role = nttAdapter.NTT_CONFIGURATOR();
+        bytes32 role = Roles.NTT_CONFIGURATOR;
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -236,7 +261,7 @@ contract NttBridgeTest is BridgeBaseTest {
     function test_NttAdapter_WithdrawTokens_RevertIfNotRescuer() public {
         _mintOkuMoney(address(nttAdapter), 1000e18);
 
-        bytes32 role = nttAdapter.NTT_RESCUER();
+        bytes32 role = Roles.NTT_RESCUER;
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -249,7 +274,7 @@ contract NttBridgeTest is BridgeBaseTest {
     function test_NttAdapter_WithdrawEth_RevertIfNotRescuer() public {
         vm.deal(address(nttAdapter), 1 ether);
 
-        bytes32 role = nttAdapter.NTT_RESCUER();
+        bytes32 role = Roles.NTT_RESCUER;
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(

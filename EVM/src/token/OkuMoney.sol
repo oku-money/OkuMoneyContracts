@@ -18,6 +18,7 @@ import {
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
 import {MathLib} from "../lib/MathLib.sol";
+import {OkuMoneyEvents} from "../lib/events/OkuMoneyEvents.sol";
 
 /**
  * @title OkuMoney
@@ -29,9 +30,14 @@ import {MathLib} from "../lib/MathLib.sol";
  *      Key distinction: balanceOf() returns raw token count (standard ERC-20).
  *      okuMMultiplier() is a separate view function for pricing — used by PSM and vault.
  *
+ *      The minter-allowance design (per-minter cap in `minterAllowance`, decremented on
+ *      `mint`) is modeled on Circle's FiatToken minter-controller pattern.
+ *      Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v2/FiatTokenV2.sol
+ *
  *      See Constants.sol for terminology legend.
  *
  *      Storage: Uses ERC-7201 namespaced storage pattern for upgrade safety.
+ *      Taken from https://eips.ethereum.org/EIPS/eip-7201
  */
 contract OkuMoney is
     Initializable,
@@ -39,7 +45,8 @@ contract OkuMoney is
     ERC20PermitUpgradeable,
     AccessControlUpgradeable,
     PausableUpgradeable,
-    UUPSUpgradeable
+    UUPSUpgradeable,
+    OkuMoneyEvents
 {
     // ============ ERC-7201 Namespaced Storage ============
 
@@ -47,7 +54,7 @@ contract OkuMoney is
     struct OkuMoneyStorage {
         // Dollar value per token multiplier (starts at 1e18 = $1.00, written by OKUM_REBASER)
         uint256 okuMMultiplier;
-        // Minter allowance system (Circle pattern)
+        // Minter allowance system (Circle pattern, see contract NatSpec for source)
         mapping(address => uint256) minterAllowance;
         // Supply cap in token units
         uint256 maxSupply;
@@ -57,6 +64,7 @@ contract OkuMoney is
         uint256 lastYieldDistributionBlock;
     }
 
+    // ERC-7201 storage slot — Taken from https://eips.ethereum.org/EIPS/eip-7201
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuMoney")) - 1)) & ~bytes32(uint256(0xff))
     bytes32 private constant OKUMONEY_STORAGE_LOCATION =
         0xa46c29efb747c5ba816fcb25c64c7053e640ad72653ff106cdc2a03e8238d100;
@@ -66,50 +74,6 @@ contract OkuMoney is
             $.slot := OKUMONEY_STORAGE_LOCATION
         }
     }
-
-    // ============ Role Constants (from shared library) ============
-
-    bytes32 public constant OKUM_UPGRADER = Roles.OKUM_UPGRADER;
-    bytes32 public constant OKUM_PAUSER = Roles.OKUM_PAUSER;
-    bytes32 public constant OKUM_UNPAUSER = Roles.OKUM_UNPAUSER;
-    bytes32 public constant OKUM_MINTER = Roles.OKUM_MINTER;
-    bytes32 public constant OKUM_REBASER = Roles.OKUM_REBASER;
-    bytes32 public constant OKUM_BLACKLISTER = Roles.OKUM_BLACKLISTER;
-    bytes32 public constant OKUM_UNBLACKLISTER = Roles.OKUM_UNBLACKLISTER;
-    bytes32 public constant OKUM_CAP_MANAGER = Roles.OKUM_CAP_MANAGER;
-    bytes32 public constant OKUM_ALLOWANCE_MANAGER = Roles.OKUM_ALLOWANCE_MANAGER;
-
-    // ============ Constants (from shared library) ============
-
-    uint256 public constant PRECISION = Constants.PRECISION;
-
-    // ============ Events ============
-
-    /// @notice Emitted when multiplier is updated directly via setOkuMMultiplier
-    /// @param oldMultiplier Previous multiplier value
-    /// @param newMultiplier New multiplier value
-    /// @param totalSupply Token supply at time of update (for dollar value calculations)
-    event OkuMMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply);
-
-    /// @notice Emitted when yield is distributed via distributeYield
-    /// @param yieldAmount Dollar yield distributed (18 decimals)
-    /// @param oldMultiplier Previous multiplier value
-    /// @param newMultiplier New multiplier value
-    /// @param totalSupply Token supply at time of distribution
-    event YieldDistributed(
-        uint256 yieldAmount, uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply
-    );
-    event MinterAllowanceUpdated(
-        address indexed minter, uint256 oldAllowance, uint256 newAllowance
-    );
-    event MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply);
-    event Blacklisted(address indexed account);
-    event Unblacklisted(address indexed account);
-    /// @notice Emitted alongside the standard ERC-20 Transfer with the dollar-denominated value
-    /// @dev dollarValue = amount × okuMMultiplier / PRECISION
-    event TransferValue(
-        address indexed from, address indexed to, uint256 amount, uint256 dollarValue
-    );
 
     // ============ Custom Errors ============
 
@@ -146,7 +110,7 @@ contract OkuMoney is
         __Pausable_init();
 
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        $.okuMMultiplier = PRECISION;
+        $.okuMMultiplier = Constants.PRECISION;
         $.maxSupply = initialMaxSupply;
 
         // Grant the full role set to admin at deployment. Admin is expected to
@@ -154,15 +118,15 @@ contract OkuMoney is
         // bridge contracts) post-deploy. Doing so consistently across every contract
         // means deployment scripts never need contract-specific role plumbing.
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(OKUM_UPGRADER, admin);
-        _grantRole(OKUM_PAUSER, admin);
-        _grantRole(OKUM_UNPAUSER, admin);
-        _grantRole(OKUM_MINTER, admin);
-        _grantRole(OKUM_REBASER, admin);
-        _grantRole(OKUM_BLACKLISTER, admin);
-        _grantRole(OKUM_UNBLACKLISTER, admin);
-        _grantRole(OKUM_CAP_MANAGER, admin);
-        _grantRole(OKUM_ALLOWANCE_MANAGER, admin);
+        _grantRole(Roles.OKUM_UPGRADER, admin);
+        _grantRole(Roles.OKUM_PAUSER, admin);
+        _grantRole(Roles.OKUM_UNPAUSER, admin);
+        _grantRole(Roles.OKUM_MINTER, admin);
+        _grantRole(Roles.OKUM_REBASER, admin);
+        _grantRole(Roles.OKUM_BLACKLISTER, admin);
+        _grantRole(Roles.OKUM_UNBLACKLISTER, admin);
+        _grantRole(Roles.OKUM_CAP_MANAGER, admin);
+        _grantRole(Roles.OKUM_ALLOWANCE_MANAGER, admin);
     }
 
     // ============ Storage Accessor Views ============
@@ -207,7 +171,7 @@ contract OkuMoney is
      * @param newMultiplier New multiplier value (must be >= current multiplier)
      * @dev Records block.number to prevent sandwich attacks via PSM/vault operations
      */
-    function setOkuMMultiplier(uint256 newMultiplier) external onlyRole(OKUM_REBASER) {
+    function setOkuMMultiplier(uint256 newMultiplier) external onlyRole(Roles.OKUM_REBASER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 currentMultiplier = $.okuMMultiplier;
         if (newMultiplier < currentMultiplier) revert MultiplierCannotDecrease();
@@ -220,17 +184,17 @@ contract OkuMoney is
      * @notice Distribute realized dollar yield across all token holders
      * @dev Increases okuMMultiplier by yieldAmount / totalSupply.
      *      yieldAmount is dollar-denominated (18 decimals).
-     *      E.g., $1000 yield on 10000 tokens → +$0.10/token.
+     *      E.g., $1000 yield on 10000 tokens -> +$0.10/token.
      *      Records block.number to prevent sandwich attacks via PSM/vault operations.
      * @param yieldAmount Dollar yield to distribute (18 decimals)
      */
-    function distributeYield(uint256 yieldAmount) external onlyRole(OKUM_REBASER) {
+    function distributeYield(uint256 yieldAmount) external onlyRole(Roles.OKUM_REBASER) {
         uint256 supply = totalSupply();
         if (supply == 0) revert ZeroSupply();
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         $.lastYieldDistributionBlock = block.number;
         uint256 oldMultiplier = $.okuMMultiplier;
-        uint256 newMultiplier = oldMultiplier + (yieldAmount * PRECISION / supply);
+        uint256 newMultiplier = oldMultiplier + (yieldAmount * Constants.PRECISION / supply);
         $.okuMMultiplier = newMultiplier;
         emit YieldDistributed(yieldAmount, oldMultiplier, newMultiplier, supply);
     }
@@ -298,8 +262,13 @@ contract OkuMoney is
      * @notice Mint raw tokens to an address
      * @dev Creates raw tokens; minting 100 tokens when okuMMultiplier = $1.05 creates $105 of value.
      *      The PSM handles USDC <-> OkuM conversion using okuMMultiplier().
+     *
+     *      Minter-allowance accounting is modeled on Circle's FiatToken pattern — each
+     *      authorized minter is allotted a per-address allowance that is decremented on
+     *      every successful mint.
+     *      Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v2/FiatTokenV2.sol
      */
-    function mint(address to, uint256 amount) external onlyRole(OKUM_MINTER) whenNotPaused {
+    function mint(address to, uint256 amount) external onlyRole(Roles.OKUM_MINTER) whenNotPaused {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
 
         if ($.isBlacklisted[to]) revert RecipientBlacklisted();
@@ -317,7 +286,7 @@ contract OkuMoney is
      * @notice Burn raw tokens from caller
      * @dev No whenNotPaused — burn works while paused.
      */
-    function burn(uint256 amount) external onlyRole(OKUM_MINTER) {
+    function burn(uint256 amount) external onlyRole(Roles.OKUM_MINTER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         if ($.isBlacklisted[msg.sender]) revert SenderBlacklisted();
         _burn(msg.sender, amount);
@@ -330,7 +299,7 @@ contract OkuMoney is
         uint256 allowance
     )
         external
-        onlyRole(OKUM_ALLOWANCE_MANAGER)
+        onlyRole(Roles.OKUM_ALLOWANCE_MANAGER)
     {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 oldAllowance = $.minterAllowance[minter_];
@@ -340,7 +309,7 @@ contract OkuMoney is
 
     // ============ Supply Cap Management ============
 
-    function setMaxSupply(uint256 newMaxSupply) external onlyRole(OKUM_CAP_MANAGER) {
+    function setMaxSupply(uint256 newMaxSupply) external onlyRole(Roles.OKUM_CAP_MANAGER) {
         if (newMaxSupply < totalSupply()) revert BelowCurrentSupply();
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 oldMaxSupply = $.maxSupply;
@@ -350,14 +319,14 @@ contract OkuMoney is
 
     // ============ Blacklist (Works While Paused) ============
 
-    function blacklist(address account) external onlyRole(OKUM_BLACKLISTER) {
+    function blacklist(address account) external onlyRole(Roles.OKUM_BLACKLISTER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         if ($.isBlacklisted[account]) revert AlreadyBlacklisted();
         $.isBlacklisted[account] = true;
         emit Blacklisted(account);
     }
 
-    function unblacklist(address account) external onlyRole(OKUM_UNBLACKLISTER) {
+    function unblacklist(address account) external onlyRole(Roles.OKUM_UNBLACKLISTER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         if (!$.isBlacklisted[account]) revert NotBlacklisted();
         $.isBlacklisted[account] = false;
@@ -366,11 +335,11 @@ contract OkuMoney is
 
     // ============ Pause Management ============
 
-    function pause() external onlyRole(OKUM_PAUSER) {
+    function pause() external onlyRole(Roles.OKUM_PAUSER) {
         _pause();
     }
 
-    function unpause() external onlyRole(OKUM_UNPAUSER) {
+    function unpause() external onlyRole(Roles.OKUM_UNPAUSER) {
         _unpause();
     }
 
@@ -379,6 +348,6 @@ contract OkuMoney is
     function _authorizeUpgrade(address newImplementation)
         internal
         override
-        onlyRole(OKUM_UPGRADER)
+        onlyRole(Roles.OKUM_UPGRADER)
     {}
 }

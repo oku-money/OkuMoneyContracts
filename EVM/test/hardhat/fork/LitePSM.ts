@@ -136,14 +136,24 @@ describe("LitePSM Scenarios", () => {
 
         queue = await upgrades.deployProxy(
             new RedemptionQueue__factory(Frank),
-            [await okuMoney.getAddress(), frankAddr],
+            // initialize(_okuMoney, _usdc, admin) — _usdc added so the queue can resolve
+            // its decimal multiplier from IERC20Metadata.decimals() at init time.
+            [await okuMoney.getAddress(), USDC_MAINNET, frankAddr],
             { kind: "uups" }
         ) as unknown as RedemptionQueue
         await queue.waitForDeployment()
 
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            [await okuMoney.getAddress(), await okuUsd.getAddress(), USDC_MAINNET, await queue.getAddress(), frankAddr],
+            // initialize(_okuMoney, _usdOku, _usdc, _redemptionQueue, admin, _stalenessThreshold)
+            [
+                await okuMoney.getAddress(),
+                await okuUsd.getAddress(),
+                USDC_MAINNET,
+                await queue.getAddress(),
+                frankAddr,
+                3600 // 1 hour staleness threshold
+            ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()

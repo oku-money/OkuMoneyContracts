@@ -11,7 +11,8 @@ import {Constants} from "./Constants.sol";
 library MathLib {
     /**
      * @notice Raise x to the power of n, modulo base b (exponentiation by squaring)
-     * @dev Copied from MakerDAO's jug.sol / pot.sol — battle-tested since 2017
+     * @dev Adapted verbatim from MakerDAO's `rpow` — battle-tested since 2017.
+     *      Taken from https://github.com/makerdao/dss/blob/master/src/pot.sol
      *      Used by OkuDollar for continuous yield accrual via usdMultiplier().
      *      OkuMoney updates its multiplier discretely (setOkuMMultiplier /
      *      distributeYield) and does NOT use rpow.
@@ -88,20 +89,38 @@ library MathLib {
     }
 
     /**
-     * @notice Convert 18-decimal dollar value to 6-decimal USDC amount
+     * @notice Convert 18-decimal dollar value to USDC's native decimal representation
      * @param dollarValue18 Dollar value in 18 decimals
-     * @return USDC amount in 6 decimals
+     * @param decimalMultiplier 10**(18 - usdcDecimals); supplied by the caller from
+     *        an immutable / storage value resolved at init time via
+     *        IERC20Metadata(usdc).decimals(). For Circle USDC this is 1e12.
+     * @return USDC amount in its native decimals
      */
-    function dollarsToUsdc(uint256 dollarValue18) internal pure returns (uint256) {
-        return dollarValue18 / Constants.DECIMAL_MULTIPLIER;
+    function dollarsToUsdc(
+        uint256 dollarValue18,
+        uint256 decimalMultiplier
+    )
+        internal
+        pure
+        returns (uint256)
+    {
+        return dollarValue18 / decimalMultiplier;
     }
 
     /**
-     * @notice Convert 6-decimal USDC amount to 18-decimal dollar value
-     * @param usdcAmount USDC amount in 6 decimals
+     * @notice Convert USDC amount (native decimals) to 18-decimal dollar value
+     * @param usdcAmount USDC amount in its native decimals
+     * @param decimalMultiplier 10**(18 - usdcDecimals); see {dollarsToUsdc} for sourcing.
      * @return Dollar value in 18 decimals
      */
-    function usdcToDollars(uint256 usdcAmount) internal pure returns (uint256) {
-        return usdcAmount * Constants.DECIMAL_MULTIPLIER;
+    function usdcToDollars(
+        uint256 usdcAmount,
+        uint256 decimalMultiplier
+    )
+        internal
+        pure
+        returns (uint256)
+    {
+        return usdcAmount * decimalMultiplier;
     }
 }

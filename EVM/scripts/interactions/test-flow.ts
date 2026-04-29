@@ -20,6 +20,7 @@ import { getNetworkName, DEV_WALLET_ADDRESS } from "../config/chains";
 import { loadAddress, hasAddress } from "../utils/addressBook";
 import { logger } from "../utils/logger";
 import { getDeployedContract, waitForTx } from "../utils/deploy";
+import { ROLES } from "../config/roles";
 
 // Use centralized deployer address from chains config
 const DEPLOYER = DEV_WALLET_ADDRESS;
@@ -72,8 +73,9 @@ async function setupForkIfNeeded(ctx: TestContext): Promise<boolean> {
   const deployer = await ethers.getSigner(DEPLOYER);
   const okuMoney = ctx.okuMoney.connect(deployer);
   
-  // Grant ALLOWANCE_MANAGER role if needed
-  const ALLOWANCE_MANAGER_ROLE = await okuMoney.OKUM_ALLOWANCE_MANAGER();
+  // Grant ALLOWANCE_MANAGER role if needed. Role aliases were removed from the contracts
+  // in favour of the shared `Roles` library; scripts reference the centralized ROLES map.
+  const ALLOWANCE_MANAGER_ROLE = ROLES.OKUM_ALLOWANCE_MANAGER;
   const hasAllowanceManager = await okuMoney.hasRole(ALLOWANCE_MANAGER_ROLE, DEPLOYER);
   
   if (!hasAllowanceManager) {

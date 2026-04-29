@@ -130,14 +130,23 @@ describe("OkuMoney Scenarios", () => {
 
         queue = await upgrades.deployProxy(
             new RedemptionQueue__factory(Frank),
-            [await okuMoney.getAddress(), frankAddr],
+            // initialize(_okuMoney, _usdc, admin) — see fork/LitePSM.ts for context.
+            [await okuMoney.getAddress(), USDC_MAINNET, frankAddr],
             { kind: "uups" }
         ) as unknown as RedemptionQueue
         await queue.waitForDeployment()
 
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            [await okuMoney.getAddress(), await okuUsd.getAddress(), USDC_MAINNET, await queue.getAddress(), frankAddr],
+            // initialize(_okuMoney, _usdOku, _usdc, _redemptionQueue, admin, _stalenessThreshold)
+            [
+                await okuMoney.getAddress(),
+                await okuUsd.getAddress(),
+                USDC_MAINNET,
+                await queue.getAddress(),
+                frankAddr,
+                3600
+            ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()
@@ -310,14 +319,21 @@ describe("OkuMoney Scenarios", () => {
 
             const freshQueue = await upgrades.deployProxy(
                 new RedemptionQueue__factory(Frank),
-                [await freshOkuMoney.getAddress(), frankAddr],
+                [await freshOkuMoney.getAddress(), USDC_MAINNET, frankAddr],
                 { kind: "uups" }
             ) as unknown as RedemptionQueue
             await freshQueue.waitForDeployment()
 
             const freshPSM = await upgrades.deployProxy(
                 new LitePSM__factory(Frank),
-                [await freshOkuMoney.getAddress(), await freshOkuUsd.getAddress(), USDC_MAINNET, await freshQueue.getAddress(), frankAddr],
+                [
+                    await freshOkuMoney.getAddress(),
+                    await freshOkuUsd.getAddress(),
+                    USDC_MAINNET,
+                    await freshQueue.getAddress(),
+                    frankAddr,
+                    3600
+                ],
                 { kind: "uups", unsafeAllow: ["constructor"] }
             ) as unknown as LitePSM
             await freshPSM.waitForDeployment()

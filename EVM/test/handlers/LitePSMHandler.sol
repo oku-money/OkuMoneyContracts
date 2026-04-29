@@ -326,9 +326,11 @@ contract LitePSMHandler is Test {
     function configureOracle(uint256 stalenessSeed, bool enabled) external {
         ghostConfigureOracleCalls++;
 
-        // Bound staleness to the contract-allowed window.
-        uint256 minStale = psm.ORACLE_MIN_STALENESS();
-        uint256 maxStale = psm.ORACLE_MAX_STALENESS();
+        // Bound staleness to the contract-allowed window. ORACLE_MIN/MAX_STALENESS now
+        // live in the shared src/lib/Constants.sol; the redundant public constants on
+        // LitePSM were removed during the role/constants cleanup.
+        uint256 minStale = TestConstants.ORACLE_MIN_STALENESS;
+        uint256 maxStale = TestConstants.ORACLE_MAX_STALENESS;
         uint256 staleness = bound(stalenessSeed, minStale, maxStale);
 
         // We can't configure with a real oracle here (no oracle addr in handler);

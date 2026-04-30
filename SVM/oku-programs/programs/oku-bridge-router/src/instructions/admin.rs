@@ -1,3 +1,11 @@
+//! OkuBridgeRouter admin instructions.
+//!
+//! Pause / unpause symmetry mirrors OpenZeppelin `Pausable`.
+//! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/Pausable.sol
+//!
+//! Role rotation via `set_authority` mirrors OpenZeppelin `AccessControl`.
+//! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol
+
 use crate::contexts::{Pause, SetAuthority, Unpause};
 use crate::errors::RouterError;
 use crate::events::*;

@@ -1,3 +1,4 @@
+use crate::constants::{BASIS_POINTS, BRIDGE_DEADLINE_MAX_SECS, BRIDGE_DEADLINE_MIN_SECS};
 use crate::contexts::{
     BridgeAdmin, BridgeChainManager, BridgeFeeManager, BridgeLimitsManager, BridgeNonceAdmin,
     BridgePause, BridgeSignerManager, BridgeUnpause, InitializeBridge,
@@ -7,14 +8,87 @@ use crate::events::*;
 use crate::roles::BridgeAuthorityRole;
 use anchor_lang::prelude::*;
 
+/// Bridge initialization parameters.
+///
+/// Bundled into a single Borsh struct so `initialize_bridge` stays under
+/// Anchor's instruction-arg limits and so the deploy-time defaults are
+/// caller-supplied (not hardcoded inside the handler). Mirrors EVM's
+/// `OkuBridge.InitConfig` struct.
+///
+/// Two-step refund roles (`refund_initiator`, `refund_confirmer`) are required
+/// init args and validated to differ from each other AND from `bridge_admin`.
+/// This enforces key separation at deploy time so a single compromised key
+/// cannot complete the full refund flow unilaterally.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+pub struct BridgeInitConfig {
+    /// Source chain identifier (e.g. SOLANA_DEVNET_CHAIN_ID = 103).
+    pub source_chain_id: u16,
+    /// Bridge fee in basis points. Must be <= `BASIS_POINTS` (10_000).
+    pub bridge_fee_bps: u16,
+    /// Minimum allowed bridge amount.
+    pub min_bridge_amount: u64,
+    /// Maximum allowed bridge amount. Must be >= `min_bridge_amount`.
+    pub max_bridge_amount: u64,
+    /// Bridge request deadline in seconds. Bounded by
+    /// `BRIDGE_DEADLINE_MIN_SECS` / `BRIDGE_DEADLINE_MAX_SECS`.
+    pub bridge_deadline_secs: i64,
+    /// Refund initiator. Must differ from `refund_confirmer` and `bridge_admin`.
+    pub refund_initiator: Pubkey,
+    /// Refund confirmer. Must differ from `refund_initiator` and `bridge_admin`.
+    pub refund_confirmer: Pubkey,
+}
+
 /// Initialize the bridge configuration
-/// Sets up all bridge authorities and default configuration
-pub fn initialize_bridge(ctx: Context<InitializeBridge>, source_chain_id: u16) -> Result<()> {
+/// Sets up all bridge authorities and caller-supplied defaults.
+pub fn initialize_bridge(
+    ctx: Context<InitializeBridge>,
+    config_args: BridgeInitConfig,
+) -> Result<()> {
+    let bridge_admin_key = ctx.accounts.bridge_admin.key();
+
+    // ===== Validate caller-supplied defaults =====
+    require!(
+        config_args.bridge_fee_bps as u64 <= BASIS_POINTS,
+        OkuError::InvalidFeeBps
+    );
+    require!(
+        config_args.min_bridge_amount <= config_args.max_bridge_amount,
+        OkuError::BelowMinimum
+    );
+    require!(
+        config_args.bridge_deadline_secs >= BRIDGE_DEADLINE_MIN_SECS
+            && config_args.bridge_deadline_secs <= BRIDGE_DEADLINE_MAX_SECS,
+        OkuError::InvalidDeadline
+    );
+
+    // Refund roles: must be distinct from each other AND from bridge_admin.
+    // Forces key separation at deploy time (mirrors EVM OkuBridge initialize).
+    require!(
+        config_args.refund_initiator != Pubkey::default(),
+        OkuError::InvalidRecipient
+    );
+    require!(
+        config_args.refund_confirmer != Pubkey::default(),
+        OkuError::InvalidRecipient
+    );
+    require!(
+        config_args.refund_initiator != config_args.refund_confirmer,
+        OkuError::RefundRolesNotSeparated
+    );
+    require!(
+        config_args.refund_initiator != bridge_admin_key,
+        OkuError::RefundRolesNotSeparated
+    );
+    require!(
+        config_args.refund_confirmer != bridge_admin_key,
+        OkuError::RefundRolesNotSeparated
+    );
+
     let config = &mut ctx.accounts.bridge_config;
     config.bump = ctx.bumps.bridge_config;
 
-    // Set all bridge authorities
-    config.bridge_admin = ctx.accounts.bridge_admin.key();
+    // ===== Set all bridge authorities =====
+    config.bridge_admin = bridge_admin_key;
     config.bridge_pauser = ctx.accounts.bridge_pauser.key();
     config.bridge_unpauser = ctx.accounts.bridge_unpauser.key();
     config.orchestrator_signer = ctx.accounts.orchestrator_signer.key();
@@ -22,22 +96,20 @@ pub fn initialize_bridge(ctx: Context<InitializeBridge>, source_chain_id: u16) -
     config.chain_manager = ctx.accounts.chain_manager.key();
     config.fee_manager = ctx.accounts.fee_manager.key();
     config.nonce_admin = ctx.accounts.nonce_admin.key();
-    // Two-step refund: initiator and confirmer must be different keys
-    // Default both to bridge_admin; operator should update before production use
-    config.refund_initiator = ctx.accounts.bridge_admin.key();
-    config.refund_confirmer = ctx.accounts.bridge_admin.key();
+    config.refund_initiator = config_args.refund_initiator;
+    config.refund_confirmer = config_args.refund_confirmer;
     config.signer_manager = ctx.accounts.signer_manager.key();
     config.limits_manager = ctx.accounts.limits_manager.key();
 
-    // Set default configuration
-    config.bridge_fee_bps = 10; // 0.1% default fee
-    config.min_bridge_amount = 1_000_000; // 1 token (assuming 6 decimals)
-    config.max_bridge_amount = 1_000_000_000_000; // 1,000,000 tokens
+    // ===== Caller-supplied configuration =====
+    config.bridge_fee_bps = config_args.bridge_fee_bps;
+    config.min_bridge_amount = config_args.min_bridge_amount;
+    config.max_bridge_amount = config_args.max_bridge_amount;
     config.is_paused = false;
-    config.bridge_deadline_secs = 3600; // default 1 hour
+    config.bridge_deadline_secs = config_args.bridge_deadline_secs;
 
     // Set source chain identity
-    config.source_chain_id = source_chain_id;
+    config.source_chain_id = config_args.source_chain_id;
 
     // Initialize empty chain whitelist
     config.supported_chains = [0u16; 32];
@@ -74,7 +146,10 @@ pub fn remove_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -
 
 /// Update bridge fee (in basis points, max 10000 = 100%)
 pub fn update_bridge_fee(ctx: Context<BridgeFeeManager>, new_fee_bps: u16) -> Result<()> {
-    require!(new_fee_bps <= 10000, OkuError::InvalidFeeBps);
+    require!(
+        new_fee_bps as u64 <= BASIS_POINTS,
+        OkuError::InvalidFeeBps
+    );
 
     let config = &mut ctx.accounts.bridge_config;
     let old_fee_bps = config.bridge_fee_bps;
@@ -184,7 +259,10 @@ pub fn skip_nonce(
 
 /// Update the bridge deadline for new requests
 pub fn update_bridge_deadline(ctx: Context<BridgeLimitsManager>, new_deadline: i64) -> Result<()> {
-    require!(new_deadline > 0, OkuError::InvalidDeadline);
+    require!(
+        new_deadline >= BRIDGE_DEADLINE_MIN_SECS && new_deadline <= BRIDGE_DEADLINE_MAX_SECS,
+        OkuError::InvalidDeadline
+    );
 
     let config = &mut ctx.accounts.bridge_config;
     let old_deadline_secs = config.bridge_deadline_secs;

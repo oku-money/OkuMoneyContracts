@@ -1,11 +1,22 @@
-use crate::errors::OkuError;
-use anchor_lang::prelude::*;
-use solana_pubkey::pubkey;
+//! Pyth V2 PriceAccount manual parser.
+//!
+//! Anchor pulls in heavyweight transitive deps from `pyth-sdk-solana`, so we
+//! manually parse the bytes we need. The byte offsets (208 = `agg.price`,
+//! 232 = `timestamp`) and the program-owner-id whitelist are documented in
+//! Pyth's own SDK.
+//!
+//! Taken from https://github.com/pyth-network/pyth-sdk-solana/blob/main/pyth-sdk-solana/src/state.rs
+//! Taken from https://docs.pyth.network/price-feeds/contract-addresses/solana
+//!
+//! NOTE: This is the *legacy* Pyth V2 layout. The modern Pyth Solana Receiver
+//! (`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`) uses a different account
+//! layout (`PriceUpdateV2`) and a different staleness model. Programs that
+//! want to consume modern Pyth feeds should pass that program ID via
+//! `set_pyth_program_owner` and add a parallel parser.
 
-/// Pyth Oracle Program IDs (mainnet and devnet)
-/// These are the only valid owners for Pyth price accounts
-pub const PYTH_MAINNET_PROGRAM_ID: Pubkey = pubkey!("FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH");
-pub const PYTH_DEVNET_PROGRAM_ID: Pubkey = pubkey!("gSbePebfvPy7tRqimPoVecS2UsBvYv46ynrzWocc92s");
+use crate::errors::OkuError;
+use crate::state::PsmConfig;
+use anchor_lang::prelude::*;
 
 /// Check oracle reserves before minting
 /// Returns Ok if reserves are sufficient, error otherwise
@@ -17,15 +28,21 @@ pub const PYTH_DEVNET_PROGRAM_ID: Pubkey = pubkey!("gSbePebfvPy7tRqimPoVecS2UsBv
 /// Example: If OkuUSD uses 6 decimals and reserves are $10M,
 /// oracle should report 10_000_000_000_000 (10M * 10^6).
 ///
-/// SECURITY: Validates that the oracle account is owned by the Pyth program
-/// to prevent attackers from providing arbitrary data as oracle responses.
+/// SECURITY: Validates that the oracle account is owned by the configured
+/// Pyth program (PsmConfig::pyth_program_owner) to prevent attackers from
+/// providing arbitrary data as oracle responses. The owner is set at init
+/// time and rotatable via `set_pyth_program_owner` so the protocol can
+/// migrate between Pyth versions without redeploy.
 pub fn check_oracle_reserves<'info>(
     price_account_info: &Option<UncheckedAccount<'info>>,
-    oracle_feed: Pubkey,
-    staleness_threshold: i64,
+    config: &PsmConfig,
     current_supply: u64,
     mint_amount: u64,
 ) -> Result<()> {
+    let oracle_feed = config.oracle;
+    let staleness_threshold = config.staleness_threshold;
+    let pyth_program_owner = config.pyth_program_owner;
+
     // If oracle is configured, price_update account must be provided
     let price_account = price_account_info
         .as_ref()
@@ -37,22 +54,26 @@ pub fn check_oracle_reserves<'info>(
         OkuError::InvalidOracleResponse
     );
 
-    // SECURITY: Verify the oracle account is owned by the Pyth program
-    // This prevents attackers from crafting fake oracle data
+    // SECURITY: Verify the oracle account is owned by the configured Pyth program.
+    // Set at init via `initialize(pyth_program_owner: Pubkey)` and rotatable via
+    // `set_pyth_program_owner` (oracle_manager-gated). A single owner is enforced —
+    // operators must redeploy the proxy or rotate before switching Pyth programs.
     let owner = price_account.owner;
     require!(
-        *owner == PYTH_MAINNET_PROGRAM_ID || *owner == PYTH_DEVNET_PROGRAM_ID,
+        *owner == pyth_program_owner,
         OkuError::InvalidOracleResponse
     );
 
     let clock = Clock::get()?;
     let data = price_account.try_borrow_data()?;
 
-    // Minimum data length check — code reads up to offset 240 (timestamp at 232 + 8 bytes)
+    // Minimum data length check — code reads up to offset 240 (timestamp at 232 + 8 bytes).
+    // Layout taken from
+    //   https://github.com/pyth-network/pyth-sdk-solana/blob/main/pyth-sdk-solana/src/state.rs
     require!(data.len() >= 240, OkuError::InvalidOracleResponse);
 
     // Read price at offset 208 (Pyth V2 price account agg.price offset)
-    // and timestamp at offset 232
+    // and timestamp at offset 232.
     let price_offset = 208usize;
     let timestamp_offset = 232usize;
 

@@ -1,6 +1,12 @@
 //! # OkuMoney Lite-PSM Roles
 //!
-//! Authority role definitions for the Lite-PSM program.
+//! Authority role definitions for the Lite-PSM program. Modeled on
+//! OpenZeppelin's `AccessControl` (one role per capability, single meta-role
+//! for granting / revoking) but encoded as Rust enum variants since SVM's
+//! authorization story stores authority pubkeys directly on the config PDA
+//! rather than in a hash-keyed mapping.
+//! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol
+//!
 //! Aligned with EVM contract roles from `Roles.sol`.
 //!
 //! ## EVM Role Mapping

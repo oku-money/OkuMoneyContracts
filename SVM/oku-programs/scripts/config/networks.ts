@@ -83,9 +83,29 @@ export interface NetworkConfig {
   oracle: {
     enabled: boolean;
     feed?: PublicKey; // Pyth USDC/USD feed
+    /**
+     * Pyth program owner pubkey accepted by the on-chain `check_oracle_reserves`.
+     * Was previously hardcoded in `programs/lite-psm/src/helpers/oracle.rs`;
+     * now caller-supplied via `initialize` so deployments can target any Pyth
+     * program (legacy V2, Pyth Solana Receiver, etc.).
+     *
+     * Defaults: legacy Pyth V2 mainnet/devnet program IDs (per
+     * https://docs.pyth.network/price-feeds/contract-addresses/solana).
+     * For localnet, we still provide a placeholder since the oracle is disabled.
+     */
+    pythProgramOwner: PublicKey;
   };
   confirmationCommitment: 'processed' | 'confirmed' | 'finalized';
 }
+
+/// Legacy Pyth V2 program IDs (kept here for reference; previously hardcoded
+/// in `programs/lite-psm/src/helpers/oracle.rs`).
+const PYTH_V2_MAINNET_PROGRAM_ID = new PublicKey(
+  'FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH'
+);
+const PYTH_V2_DEVNET_PROGRAM_ID = new PublicKey(
+  'gSbePebfvPy7tRqimPoVecS2UsBvYv46ynrzWocc92s'
+);
 
 export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
   localnet: {
@@ -97,6 +117,9 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
     },
     oracle: {
       enabled: false, // No Pyth on localnet
+      // Placeholder — oracle is disabled, but the program init still requires
+      // a non-zero pyth_program_owner. Use the legacy mainnet ID.
+      pythProgramOwner: PYTH_V2_MAINNET_PROGRAM_ID,
     },
     confirmationCommitment: 'confirmed',
   },
@@ -112,6 +135,7 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
       enabled: true,
       // Pyth devnet USDC/USD feed
       feed: new PublicKey('5SSkXsEKQepHHAewytPVwdej4epN1nxgLVM84L4KXgy7'),
+      pythProgramOwner: PYTH_V2_DEVNET_PROGRAM_ID,
     },
     confirmationCommitment: 'confirmed',
   },
@@ -137,6 +161,7 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
       enabled: true,
       // Pyth devnet USDC/USD feed (forked from devnet)
       feed: new PublicKey('5SSkXsEKQepHHAewytPVwdej4epN1nxgLVM84L4KXgy7'),
+      pythProgramOwner: PYTH_V2_DEVNET_PROGRAM_ID,
     },
     confirmationCommitment: 'confirmed',
   },
@@ -153,6 +178,7 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
       enabled: true,
       // Pyth mainnet USDC/USD feed
       feed: new PublicKey('Gnt27xtC473ZT2Mw5u8wZ68Z3gULkSTb5DuxJy7eJotD'),
+      pythProgramOwner: PYTH_V2_MAINNET_PROGRAM_ID,
     },
     confirmationCommitment: 'finalized',
   },
@@ -176,6 +202,7 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
       enabled: true,
       // Pyth mainnet USDC/USD feed (forked from mainnet)
       feed: new PublicKey('Gnt27xtC473ZT2Mw5u8wZ68Z3gULkSTb5DuxJy7eJotD'),
+      pythProgramOwner: PYTH_V2_MAINNET_PROGRAM_ID,
     },
     confirmationCommitment: 'confirmed',
   },

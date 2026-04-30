@@ -1,3 +1,17 @@
+//! Ed25519 signature verification via instruction introspection.
+//!
+//! The instruction-data format encoded in `build_ed25519_instruction_data` is
+//! the wire format expected by Solana's Ed25519 precompile, mirroring
+//! `solana-sdk`'s `ed25519_instruction.rs` and the TypeScript SDK's
+//! `Ed25519Program.createInstructionWithPublicKey`. We reconstruct the
+//! expected bytes and compare them against the actual instruction at the
+//! introspected index instead of parsing — same trick used by Wormhole / Mayan
+//! / Pyth-receiver bridges to verify off-chain signers without trusting
+//! a parser.
+//!
+//! Taken from https://github.com/anza-xyz/agave/blob/master/sdk/src/ed25519_instruction.rs
+//! Taken from https://docs.solana.com/developing/runtime-facilities/programs#ed25519-program
+
 use crate::errors::OkuError;
 use anchor_lang::prelude::*;
 use solana_instructions_sysvar::load_instruction_at_checked;

@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 
+pub mod constants;
 pub mod contexts;
 pub mod errors;
 pub mod events;
@@ -12,6 +13,18 @@ use contexts::*;
 use roles::*;
 
 declare_id!("3pi3vBj7dn98C4QbrrKD1LEFacpXBtmCzY17YR6j7wNa");
+
+// `auditors` and `acknowledgements` are intentionally omitted until an audit
+// is complete; populate them in a follow-up commit.
+#[cfg(not(feature = "no-entrypoint"))]
+solana_security_txt::security_txt! {
+    name: "OkuMoney Lite-PSM",
+    project_url: "https://github.com/anomalyco/okuMoney",
+    contacts: "email:security@okumoney.example",
+    policy: "https://github.com/anomalyco/okuMoney/blob/main/SECURITY.md",
+    preferred_languages: "en",
+    source_code: "https://github.com/anomalyco/okuMoney"
+}
 
 #[program]
 pub mod lite_psm {
@@ -34,6 +47,7 @@ pub mod lite_psm {
         cap_manager: Pubkey,
         allowance_manager: Pubkey,
         rebaser: Pubkey,
+        pyth_program_owner: Pubkey,
     ) -> Result<()> {
         instructions::init::initialize(
             ctx,
@@ -50,6 +64,7 @@ pub mod lite_psm {
             cap_manager,
             allowance_manager,
             rebaser,
+            pyth_program_owner,
         )
     }
 
@@ -120,6 +135,17 @@ pub mod lite_psm {
         staleness_threshold: i64,
     ) -> Result<()> {
         instructions::psm_admin::set_oracle(ctx, oracle, staleness_threshold)
+    }
+
+    /// Rotate the accepted Pyth program owner pubkey.
+    /// Use this to migrate from legacy Pyth V2 to a different Pyth deployment
+    /// (e.g. the Pyth Solana Receiver) without redeploying the proxy.
+    /// Oracle_manager-gated.
+    pub fn set_pyth_program_owner(
+        ctx: Context<OracleManager>,
+        new_pyth_program_owner: Pubkey,
+    ) -> Result<()> {
+        instructions::psm_admin::set_pyth_program_owner(ctx, new_pyth_program_owner)
     }
 
     pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
@@ -217,8 +243,11 @@ pub mod lite_psm {
 
     // ===== Bridge Admin =====
 
-    pub fn initialize_bridge(ctx: Context<InitializeBridge>, source_chain_id: u16) -> Result<()> {
-        instructions::bridge_admin::initialize_bridge(ctx, source_chain_id)
+    pub fn initialize_bridge(
+        ctx: Context<InitializeBridge>,
+        config_args: instructions::bridge_admin::BridgeInitConfig,
+    ) -> Result<()> {
+        instructions::bridge_admin::initialize_bridge(ctx, config_args)
     }
 
     pub fn add_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -> Result<()> {

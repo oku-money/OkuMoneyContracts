@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 
+pub mod constants;
 pub mod contexts;
 pub mod errors;
 pub mod events;
@@ -12,6 +13,18 @@ use contexts::*;
 use roles::*;
 
 declare_id!("AWwByFuQfnoiCEZAMdSc4WixepppzXXStXkQijPoKNi5");
+
+// `auditors` and `acknowledgements` are intentionally omitted until an audit
+// is complete; populate them in a follow-up commit.
+#[cfg(not(feature = "no-entrypoint"))]
+solana_security_txt::security_txt! {
+    name: "OkuMoney OkuDollar Vault",
+    project_url: "https://github.com/anomalyco/okuMoney",
+    contacts: "email:security@okumoney.example",
+    policy: "https://github.com/anomalyco/okuMoney/blob/main/SECURITY.md",
+    preferred_languages: "en",
+    source_code: "https://github.com/anomalyco/okuMoney"
+}
 
 #[program]
 pub mod oku_dollar {

@@ -1,5 +1,14 @@
 //! LitePSM admin instructions (pause, freeze, thaw, role admin, etc.).
 //!
+//! Pause / unpause and the role-rotation match arms mirror OpenZeppelin's
+//! `Pausable` and `AccessControl` patterns.
+//! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/Pausable.sol
+//! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol
+//!
+//! Freeze / thaw against a blacklist-exempt list (bridge + router PDAs cannot
+//! be frozen) mirrors Circle FiatToken's blacklister/exempted-address pattern.
+//! Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v1/Blacklistable.sol
+//!
 //! Anchor-version note: `CpiContext::new_with_signer(program_id, accounts, seeds)`
 //! takes `program_id` as a `Pubkey` in Anchor ≥1.0. CPI sites in this file pass
 //! `<program>.key()` (returns `Pubkey`), which is correct.
@@ -84,6 +93,33 @@ pub fn set_oracle(
         role_admin: ctx.accounts.oracle_manager.key(),
         oracle,
         staleness_threshold,
+    });
+
+    Ok(())
+}
+
+/// Rotate the accepted Pyth program owner pubkey (oracle_manager only).
+///
+/// Lets the protocol migrate between Pyth deployments (e.g. legacy Pyth V2 →
+/// Pyth Solana Receiver) without redeploying the program. Rejects the zero
+/// pubkey since `Pubkey::default()` would silently disable the owner check.
+pub fn set_pyth_program_owner(
+    ctx: Context<OracleManager>,
+    new_pyth_program_owner: Pubkey,
+) -> Result<()> {
+    require!(
+        new_pyth_program_owner != Pubkey::default(),
+        OkuError::InvalidPythProgramOwner
+    );
+
+    let config = &mut ctx.accounts.config;
+    let old_pyth_program_owner = config.pyth_program_owner;
+    config.pyth_program_owner = new_pyth_program_owner;
+
+    emit!(PythProgramOwnerUpdatedEvent {
+        role_admin: ctx.accounts.oracle_manager.key(),
+        old_pyth_program_owner,
+        new_pyth_program_owner,
     });
 
     Ok(())

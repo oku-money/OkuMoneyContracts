@@ -1,18 +1,16 @@
+//! OkuDollar vault math helpers.
+//!
+//! Numeric constants live in `crate::constants`; this module defines the
+//! pure-math conversion / collateralization helpers. The price-aware
+//! wrap/unwrap math mirrors the EVM-side `OkuDollar.sol` ratios.
+//! Taken from https://github.com/anomalyco/okuMoney/blob/main/contracts/EVM/src/token/OkuDollar.sol
+
+use crate::constants::PRECISION;
 use crate::errors::OkuDollarError;
 use anchor_lang::prelude::*;
 
-/// Precision for multipliers (1e9 = $1.00)
-/// Matches EVM's PRECISION constant
-pub const PRECISION: u64 = 1_000_000_000;
-
-/// Dead shares permanently locked in an ATA owned by the System Program.
-/// Nobody holds the System Program's private key, so the tokens are unrecoverable.
-/// This prevents the first-depositor inflation attack on vault shares.
-pub const MINIMUM_LIQUIDITY: u64 = 1_000_000; // 10^6 = 1 usdOku (6 decimals)
-
-/// Minimum collateral ratio floor (90% = 900_000_000)
-/// Protocol cannot set min_collateral_ratio below this value
-pub const MIN_COLLATERAL_RATIO_FLOOR: u64 = 900_000_000;
+// Re-exports preserved for backwards compatibility with existing call sites.
+pub use crate::constants::{MIN_COLLATERAL_RATIO_FLOOR, MINIMUM_LIQUIDITY};
 
 /// Convert OkuMoney amount to USD value using oku_m_price
 ///

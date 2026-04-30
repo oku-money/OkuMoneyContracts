@@ -1,5 +1,10 @@
 //! LitePSM user-facing instructions (mint/redeem/queue).
 //!
+//! The buffer-backed mint + redemption-queue lifecycle here mirrors MakerDAO's
+//! `DssLitePsm`: deposit USDC → mint at peg, redeem from buffer when liquid,
+//! enqueue when buffer is depleted, drain queue from a separate USDC top-up.
+//! Taken from https://github.com/makerdao/dss-lite-psm/blob/master/src/DssLitePsm.sol
+//!
 //! Anchor-version note: `CpiContext::new[_with_signer](program_id, accounts[, seeds])`
 //! takes `program_id` as a `Pubkey` in Anchor ≥1.0. All CPI sites in this file
 //! pass `<program>.key()` (which returns `Pubkey`), which is correct.
@@ -10,7 +15,8 @@ use crate::contexts::{
 };
 use crate::errors::OkuError;
 use crate::events::*;
-use crate::helpers::{check_oracle_reserves, check_yield_lock, PRECISION};
+use crate::constants::PRECISION;
+use crate::helpers::{check_oracle_reserves, check_yield_lock};
 use crate::state::{PsmConfig, QueueEntry, RedemptionQueue};
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
@@ -35,7 +41,6 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     let bump = ctx.accounts.config.bump;
     let current_supply = ctx.accounts.oku_money_mint.supply;
     let oracle = ctx.accounts.config.oracle;
-    let staleness_threshold = ctx.accounts.config.staleness_threshold;
 
     require!(!is_paused, OkuError::Paused);
     require!(usdc_amount > 0, OkuError::ZeroAmount);
@@ -66,12 +71,14 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
         OkuError::AllowanceExceeded
     );
 
-    // Oracle check if configured (oracle != Pubkey::default())
+    // Oracle check if configured (oracle != Pubkey::default()).
+    // `check_oracle_reserves` reads the configured Pyth program owner, the
+    // oracle feed pubkey, and the staleness threshold directly from PsmConfig
+    // — refactored from the previously hardcoded Pyth program-owner constants.
     if oracle != Pubkey::default() {
         check_oracle_reserves(
             &ctx.accounts.price_update,
-            oracle,
-            staleness_threshold,
+            &ctx.accounts.config,
             current_supply,
             oku_m_amount,
         )?;

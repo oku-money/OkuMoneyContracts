@@ -33,7 +33,7 @@ Convenience program providing single-transaction flows: `bridge_oku_m` (direct b
 
 **Single-slot yield distribution lock.** Both `set_oku_m_price()` and `distribute_yield()` set `last_yield_distribution_slot = Clock::get().slot`. PSM and vault operations check `current_slot != last_yield_distribution_slot` before executing. This prevents sandwich attacks around discrete price updates, matching the EVM's `lastYieldDistributionBlock` pattern.
 
-**No Pyth SDK dependency.** The oracle check manually parses Pyth V2 price account bytes (price at offset 208, publish_time at offset 232) to avoid transitive dependency conflicts.
+**No Pyth SDK dependency.** The oracle check manually parses Pyth V2 price account bytes (price at offset 208, publish_time at offset 232) to avoid transitive dependency conflicts. The accepted Pyth program owner pubkey is **per-deployment** (`PsmConfig::pyth_program_owner`, set at `initialize` and rotatable via `set_pyth_program_owner`), so deployments can target the legacy Pyth program (mainnet `FsJ3...`, devnet `gSbe...`) or any future Pyth deployment without recompilation. Source attribution and offsets are documented in `programs/lite-psm/src/helpers/oracle.rs`.
 
 **Ed25519 introspection, not native verification.** `bridge_mint` requires an `Ed25519Program` instruction at transaction index 0 and compares its data byte-for-byte against the expected instruction. This is the canonical Solana pattern for signature verification.
 
@@ -50,18 +50,19 @@ programs/
       errors.rs             # Error codes
       events.rs             # Event definitions
       roles.rs              # AuthorityRole, BridgeAuthorityRole enums
+      constants.rs          # PRECISION, BASIS_POINTS, oku_m <-> dollars math, BRIDGE_DEADLINE bounds
       helpers/
         yield_lock.rs       # check_yield_lock() — sandwich prevention
         oracle.rs           # check_oracle_reserves() — Pyth V2 manual parsing
         ed25519.rs          # verify_ed25519_signature() — instruction introspection
         mod.rs
       instructions/
-        init.rs             # initialize, setup_redemption_queue, setup_oku_money_escrow
+        init.rs             # initialize (now takes pyth_program_owner), setup_redemption_queue, setup_oku_money_escrow
         psm.rs              # mint_oku_m, redeem_oku_m, process_queue, rescue_queue_entry, buffer ops
-        psm_admin.rs        # pause, freeze/thaw, set_authority, blacklist_exempt, set_oracle
+        psm_admin.rs        # pause, freeze/thaw, set_authority, blacklist_exempt, set_oracle, set_pyth_program_owner
         yield_ops.rs        # set_oku_m_price, distribute_yield
         bridge.rs           # bridge_mint, bridge_burn, refund_bridge_request
-        bridge_admin.rs     # initialize_bridge, chain mgmt, fee mgmt, nonce admin
+        bridge_admin.rs     # initialize_bridge (BridgeInitConfig), chain mgmt, fee mgmt, nonce admin
         mod.rs
       contexts/
         init.rs             # Initialize, SetupRedemptionQueue, SetupOkuMoneyEscrow
@@ -75,6 +76,7 @@ programs/
   oku-dollar/
     src/
       lib.rs                # Instruction entry points
+      constants.rs          # PRECISION, MINIMUM_LIQUIDITY, MIN_COLLATERAL_RATIO_FLOOR
       state.rs              # OkuDollarConfig
       errors.rs
       events.rs
@@ -294,10 +296,16 @@ Key separation: `rebaser` (rear-facing, factual — updates OkuMoney price) ≠ 
 ## Initialization
 
 PSM initialization is three steps (to avoid BPF stack overflow with large account contexts):
-1. `initialize` — creates PsmConfig and USDC vault
+1. `initialize(... pyth_program_owner)` — creates PsmConfig and USDC vault. The
+   Pyth program-owner pubkey accepted by the on-chain oracle check is supplied
+   here (rotatable post-deploy via `set_pyth_program_owner`).
 2. `setup_redemption_queue` — creates the RedemptionQueue PDA
 3. `setup_oku_money_escrow` — creates the OkuMoney escrow vault for queued redemptions
-4. `initialize_bridge` — creates BridgeConfig (separate step)
+4. `initialize_bridge(BridgeInitConfig { source_chain_id, fee_bps, min/max
+   amounts, deadline_secs, refund_initiator, refund_confirmer })` — creates
+   BridgeConfig. All chain-specific defaults are caller-supplied; refund roles
+   are validated to differ from each other and from `bridge_admin` (key
+   separation enforced at init).
 
 OkuDollar vault initialization:
 1. `initialize` — creates OkuDollarConfig, usdOku mint (authority = config PDA), reserve vault
@@ -312,7 +320,7 @@ OkuDollar vault initialization:
 | Signature scheme | ECDSA (EIP-712) | Ed25519 (instruction introspection) |
 | Token decimals | 18 | 6 |
 | Convenience functions | On LitePSM | On OkuBridgeRouter (CPI) |
-| Bridge refund | Two-step (initiator + confirmer) | Single-step (refund admin, after deadline) |
+| Bridge refund | Two-step (initiator + confirmer) | Two-step (initiator + confirmer); legacy single-step kept for backward compat |
 | Wallet price display | Frontends read `okuMPrice()` view | Frontends read PsmConfig PDA |
 | Third-party bridge adapters | NttAdapter, future CCIP | Not implemented (native bridge only) |
 

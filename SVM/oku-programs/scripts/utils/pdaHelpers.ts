@@ -84,3 +84,36 @@ export function deriveBridgeFeeTreasuryPDA(programId: PublicKey): [PublicKey, nu
     programId
   );
 }
+
+/**
+ * Derive default refund-initiator pubkey for testnet/fork deployments.
+ * Seeds: ["refund_initiator_default"]
+ *
+ * The on-chain `initialize_bridge` now requires `refund_initiator` and
+ * `refund_confirmer` to be distinct keys AND distinct from `bridge_admin`.
+ * For testnet/fork (where all roles default to the deployer), we use two
+ * deterministic PDAs as placeholders. They cannot sign `initiate_refund`
+ * directly (PDAs only sign via CPI from their owning program), so testnet
+ * operators wanting to exercise the two-step refund flow should rotate them
+ * to real keypairs via `set_bridge_authority` post-deploy. Mainnet supplies
+ * separate pubkeys via env (see `MAINNET_REFUND_INITIATOR` /
+ * `MAINNET_REFUND_CONFIRMER` in `scripts/config/authorities.ts`).
+ */
+export function deriveRefundInitiatorDefaultPDA(programId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("refund_initiator_default")],
+    programId
+  );
+}
+
+/**
+ * Derive default refund-confirmer pubkey for testnet/fork deployments.
+ * Seeds: ["refund_confirmer_default"]
+ * See `deriveRefundInitiatorDefaultPDA` for the rationale.
+ */
+export function deriveRefundConfirmerDefaultPDA(programId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("refund_confirmer_default")],
+    programId
+  );
+}

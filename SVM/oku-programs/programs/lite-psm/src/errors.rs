@@ -234,4 +234,15 @@ pub enum OkuError {
     /// Request was already refunded
     #[msg("Request was already refunded")]
     RequestAlreadyRefunded,
+
+    /// Refund initiator and confirmer must be distinct keys, and neither may
+    /// equal `bridge_admin`. Mirrors EVM OkuBridge's two-step refund key-separation
+    /// requirement enforced at init time.
+    #[msg("Refund initiator/confirmer must be distinct keys (and != bridge_admin)")]
+    RefundRolesNotSeparated,
+
+    // ===== Initialization Errors =====
+    /// Pyth program owner pubkey supplied to `initialize` was the default (zero) pubkey.
+    #[msg("Pyth program owner pubkey is required (cannot be the zero pubkey)")]
+    InvalidPythProgramOwner,
 }

@@ -229,6 +229,16 @@ pub struct OracleUpdatedEvent {
     pub staleness_threshold: i64,
 }
 
+/// Emitted when the accepted Pyth program owner pubkey is rotated.
+/// SVM-only — no direct EVM equivalent (EVM oracle owner is implicit in the
+/// AggregatorV3 interface address).
+#[event]
+pub struct PythProgramOwnerUpdatedEvent {
+    pub role_admin: Pubkey,
+    pub old_pyth_program_owner: Pubkey,
+    pub new_pyth_program_owner: Pubkey,
+}
+
 /// Emitted when OkuMoney price is updated directly.
 /// EVM equivalent: `OkuMMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`
 #[event]

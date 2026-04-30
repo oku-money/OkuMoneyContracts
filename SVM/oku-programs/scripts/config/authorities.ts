@@ -8,7 +8,11 @@
 import { Keypair, PublicKey } from '@solana/web3.js';
 import * as fs from 'fs';
 import { NetworkName } from './networks';
-import { deriveBridgeFeeTreasuryPDA } from '../utils/pdaHelpers';
+import {
+  deriveBridgeFeeTreasuryPDA,
+  deriveRefundConfirmerDefaultPDA,
+  deriveRefundInitiatorDefaultPDA,
+} from '../utils/pdaHelpers';
 
 export interface AuthorityConfig {
   // PSM authorities (12 roles)
@@ -27,7 +31,7 @@ export interface AuthorityConfig {
     rebaser: PublicKey;
   };
 
-  // Bridge authorities (10 roles)
+  // Bridge authorities (12 roles)
   bridge: {
     bridgeAdmin: PublicKey;
     bridgePauser: PublicKey;
@@ -39,6 +43,13 @@ export interface AuthorityConfig {
     nonceAdmin: PublicKey;
     signerManager: PublicKey;
     limitsManager: PublicKey;
+    /**
+     * Two-step refund initiator. Required by `initialize_bridge` to be distinct
+     * from `bridgeAdmin` and `refundConfirmer` (mirrors EVM key-separation).
+     */
+    refundInitiator: PublicKey;
+    /** Two-step refund confirmer. Required to differ from `refundInitiator` and `bridgeAdmin`. */
+    refundConfirmer: PublicKey;
   };
 
   // Vault authorities (5 roles)
@@ -66,6 +77,13 @@ function allRolesToSingleKey(
   litePsmProgramId: PublicKey
 ): AuthorityConfig {
   const [feeTreasury] = deriveBridgeFeeTreasuryPDA(litePsmProgramId);
+  // The on-chain `initialize_bridge` requires refund_initiator / refund_confirmer
+  // to be distinct from `bridge_admin` and from each other. For testnet we use
+  // deterministic PDAs as placeholders; testnet operators must rotate them via
+  // `set_bridge_authority` to real keypairs before exercising the two-step
+  // refund flow (PDAs cannot sign top-level instructions).
+  const [refundInitiatorDefault] = deriveRefundInitiatorDefaultPDA(litePsmProgramId);
+  const [refundConfirmerDefault] = deriveRefundConfirmerDefaultPDA(litePsmProgramId);
   return {
     psm: {
       roleAdmin: deployer,
@@ -92,6 +110,8 @@ function allRolesToSingleKey(
       nonceAdmin: deployer,
       signerManager: deployer,
       limitsManager: deployer,
+      refundInitiator: refundInitiatorDefault,
+      refundConfirmer: refundConfirmerDefault,
     },
     vault: {
       roleAdmin: deployer,
@@ -145,6 +165,10 @@ export function loadAuthorities(
   const orchestrator = getEnvPubkey('MAINNET_ORCHESTRATOR', true);
   const bridgeOrchestrator = getEnvPubkey('MAINNET_BRIDGE_ORCHESTRATOR', true);
   const feeRecipient = getEnvPubkey('MAINNET_FEE_RECIPIENT', true);
+  // Two-step refund roles must be distinct from `bridgeAdmin` (= coldMultisig)
+  // and from each other. The on-chain init now enforces this.
+  const refundInitiator = getEnvPubkey('MAINNET_REFUND_INITIATOR', true);
+  const refundConfirmer = getEnvPubkey('MAINNET_REFUND_CONFIRMER', true);
 
   return {
     psm: {
@@ -172,6 +196,8 @@ export function loadAuthorities(
       nonceAdmin: coldMultisig,
       signerManager: coldMultisig,
       limitsManager: coldMultisig,
+      refundInitiator,
+      refundConfirmer,
     },
     vault: {
       roleAdmin: coldMultisig,

@@ -1,5 +1,18 @@
 //! LitePSM bridge instructions (burn/mint/refund).
 //!
+//! Custom orchestrator-signed bridge protocol (NOT Wormhole NTT — there is no
+//! Guardian quorum, no VAA parsing, no NTT manager). The on-chain semantics
+//! mirror the EVM-side `OkuBridge.sol`:
+//!  - burn on source → emit deterministic 80-byte BridgeRequest message
+//!  - signed off-chain by a single trusted orchestrator (Ed25519)
+//!  - mint on destination after replay-checked PDA init + signature verify
+//!  - two-step refund (initiate / confirm) gated by separate keys
+//! Taken from https://github.com/anomalyco/okuMoney/blob/main/contracts/EVM/src/bridge/OkuBridge.sol
+//!
+//! Replay prevention uses Anchor's `init` constraint as a one-shot nonce —
+//! the `ProcessedRequest` PDA cannot be created twice for the same request_id.
+//! Taken from https://www.anchor-lang.com/docs/account-constraints
+//!
 //! Anchor-version note: `CpiContext::new[_with_signer](program_id, accounts[, seeds])`
 //! takes `program_id` as a `Pubkey` in Anchor ≥1.0. All CPI sites in this file
 //! pass `<program>.key()` (which returns `Pubkey`), which is correct. The
@@ -10,7 +23,8 @@ use crate::contexts::{
 };
 use crate::errors::OkuError;
 use crate::events::*;
-use crate::helpers::{check_yield_lock, verify_ed25519_signature, PRECISION};
+use crate::constants::{BASIS_POINTS, PRECISION};
+use crate::helpers::{check_yield_lock, verify_ed25519_signature};
 use crate::state::{BridgeRequest, PsmConfig};
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
@@ -203,7 +217,7 @@ pub fn bridge_burn(
     let fee_amount = (amount as u128)
         .checked_mul(bridge_config.bridge_fee_bps as u128)
         .ok_or(OkuError::Overflow)?
-        .checked_div(10000)
+        .checked_div(BASIS_POINTS as u128)
         .ok_or(OkuError::Overflow)? as u64;
 
     let net_amount = amount.checked_sub(fee_amount).ok_or(OkuError::Overflow)?;

@@ -14,6 +14,7 @@ import {
 import { logger } from '../../utils/logger';
 import { loadAuthorities } from '../../config/authorities';
 import { SOLANA_CHAIN_ID } from '../../config/constants';
+import { NetworkConfig } from '../../config/networks';
 import {
   derivePsmConfigPDA,
   deriveRedemptionQueuePDA,
@@ -46,7 +47,8 @@ export async function initializePsm(
   usdcMint: PublicKey,
   okuMoneyMint: PublicKey,
   authorities: ReturnType<typeof loadAuthorities>,
-  config: DeploymentConfig
+  config: DeploymentConfig,
+  networkConfig: NetworkConfig
 ): Promise<PsmInitResult> {
   logger.nextStep('Initializing PSM');
 
@@ -62,7 +64,8 @@ export async function initializePsm(
 
   logger.info(`PSM Config PDA: ${psmConfig.toBase58()}`);
 
-  // Initialize PSM
+  // Initialize PSM. The Pyth program-owner check is now configurable per-network
+  // (was previously hardcoded in `programs/lite-psm/src/helpers/oracle.rs`).
   logger.info('Calling initialize()...');
   try {
     await program.methods
@@ -79,7 +82,8 @@ export async function initializePsm(
         authorities.psm.oracleManager,
         authorities.psm.capManager,
         authorities.psm.allowanceManager,
-        authorities.psm.rebaser
+        authorities.psm.rebaser,
+        networkConfig.oracle.pythProgramOwner
       )
       .accountsPartial({
         roleAdmin: provider.wallet.publicKey,
@@ -123,11 +127,25 @@ export async function initializePsm(
     }
   }
 
-  // Initialize bridge config
+  // Initialize bridge config.
+  //
+  // `initialize_bridge` now takes a `BridgeInitConfig` struct so all the
+  // chain-specific defaults (fee, limits, deadline, refund roles) are
+  // caller-supplied at deploy time rather than hardcoded in the handler.
+  // The on-chain init validates that refund_initiator and refund_confirmer
+  // differ from each other AND from bridge_admin (key separation enforced).
   logger.info('Initializing bridge config...');
   try {
     await program.methods
-      .initializeBridge(SOLANA_CHAIN_ID)
+      .initializeBridge({
+        sourceChainId: SOLANA_CHAIN_ID,
+        bridgeFeeBps: config.bridgeFeeBps,
+        minBridgeAmount: config.minBridgeAmount,
+        maxBridgeAmount: config.maxBridgeAmount,
+        bridgeDeadlineSecs: config.bridgeDeadlineSecs,
+        refundInitiator: authorities.bridge.refundInitiator,
+        refundConfirmer: authorities.bridge.refundConfirmer,
+      })
       .accountsPartial({
         bridgeAdmin: authorities.bridge.bridgeAdmin,
         bridgePauser: authorities.bridge.bridgePauser,

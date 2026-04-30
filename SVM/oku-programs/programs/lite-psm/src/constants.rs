@@ -1,7 +1,8 @@
-//! # OkuMoney SVM Constants
+//! # OkuMoney SVM Constants (Lite-PSM)
 //!
-//! Shared constants for all OkuMoney SVM programs.
-//! Equivalent to EVM's `Constants.sol` and `MathLib.sol`.
+//! Shared numeric constants and pure-math helpers for the Lite-PSM program.
+//! Top-level module (mirrors the EVM-side `src/lib/Constants.sol`) so importers
+//! can reference these via `crate::constants::*` without going through `helpers`.
 //!
 //! ## Terminology Legend
 //!
@@ -64,16 +65,16 @@ pub const PRECISION: u64 = 1_000_000_000;
 /// Used for fee calculations (e.g., 10 bps = 0.1%).
 pub const BASIS_POINTS: u64 = 10_000;
 
-/// Maximum yield rate safety cap.
-/// ~3700% APY, well beyond any T-Bill rate.
-/// Matches EVM: PRECISION + 1e11 scaled to SVM precision.
-pub const MAX_RATE: u64 = PRECISION + 100_000; // 1e9 + 1e5 (scaled from EVM's 1e18 + 1e11)
+/// Lower bound for the bridge deadline (in seconds). Anything below this is
+/// rejected by `initialize_bridge` / `update_bridge_deadline` because deadlines
+/// shorter than ~1 minute would routinely expire before the orchestrator has
+/// finished signing.
+pub const BRIDGE_DEADLINE_MIN_SECS: i64 = 60;
 
-/// Default bridge deadline in seconds (1 hour).
-pub const DEFAULT_BRIDGE_DEADLINE_SECS: i64 = 3600;
-
-/// Maximum supported destination chains.
-pub const MAX_SUPPORTED_CHAINS: usize = 32;
+/// Upper bound for the bridge deadline (in seconds). Catches operator
+/// misconfiguration that would silently allow signatures to be replayed weeks
+/// after burn. Set to 7 days; mirrors `Constants.ORACLE_MAX_STALENESS` on EVM.
+pub const BRIDGE_DEADLINE_MAX_SECS: i64 = 7 * 24 * 60 * 60;
 
 // ============================================================================
 // Math Utilities

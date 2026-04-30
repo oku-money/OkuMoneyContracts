@@ -1,3 +1,17 @@
+//! Account state definitions for the Lite-PSM program.
+//!
+//! Storage patterns adapted from a few upstream sources:
+//! - The minter-allowance + blacklist-exempt fields on `PsmConfig` mirror
+//!   Circle's FiatToken minter / blacklist controller pattern.
+//!   Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v2/FiatTokenV2_2.sol
+//!   Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v1/Blacklistable.sol
+//! - `ProcessedRequest` / `RefundedRequest` use Anchor's `init` constraint as a
+//!   one-shot replay nonce (PDA exists ⇒ already processed).
+//!   Taken from https://www.anchor-lang.com/docs/account-constraints
+//! - `BridgeRequest` 80-byte packed message + keccak request_id is the SVM
+//!   port of the EVM-side `OkuBridge.sol` orchestrator-signed bridge protocol.
+//!   See `contracts/EVM/src/bridge/OkuBridge.sol` for the source-chain side.
+
 use crate::errors::OkuError;
 use anchor_lang::prelude::*;
 
@@ -72,19 +86,32 @@ pub struct PsmConfig {
     pub blacklist_exempt_bridge: Pubkey,
     /// Blacklist-exempt router address (cannot be frozen)
     pub blacklist_exempt_router: Pubkey,
+
+    /// Pyth program owner pubkey accepted by `check_oracle_reserves`.
+    /// Replaces the previously hard-coded mainnet/devnet Pyth-V2 program IDs.
+    /// Set at init via `initialize(pyth_program_owner)` and rotatable via
+    /// `set_pyth_program_owner` (oracle_manager-gated). A deployer can point
+    /// this at the legacy Pyth program (mainnet `FsJ3...`, devnet `gSbe...`)
+    /// or, after parser support is added, at the Pyth Solana Receiver
+    /// (`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`).
+    pub pyth_program_owner: Pubkey,
 }
 
 impl PsmConfig {
     pub const SEED: &'static [u8] = b"psm_config";
 
     /// Space needed for PsmConfig account
-    /// 8 (discriminator) + 1 (bump) + 32*12 (authority pubkeys) + 32*4 (token pubkeys) + 8*2 (u64s) + 1 (bool) + 32 (oracle) + 8 (i64 staleness) + 8 (u64 last_yield_slot) + 8 (u64 oku_m_price) + 32*2 (blacklist_exempt pubkeys)
-    /// = 8 + 1 + 384 + 128 + 16 + 1 + 32 + 8 + 8 + 8 + 64 = 658 bytes
-    pub const LEN: usize = 8 + 1 + 32 * 12 + 32 * 4 + 8 * 2 + 1 + 32 + 8 + 8 + 8 + 32 * 2;
+    /// 8 (discriminator) + 1 (bump) + 32*12 (authority pubkeys) + 32*4 (token pubkeys)
+    ///   + 8*2 (u64s) + 1 (bool) + 32 (oracle) + 8 (i64 staleness) + 8 (u64 last_yield_slot)
+    ///   + 8 (u64 oku_m_price) + 32*2 (blacklist_exempt pubkeys) + 32 (pyth_program_owner)
+    /// = 8 + 1 + 384 + 128 + 16 + 1 + 32 + 8 + 8 + 8 + 64 + 32 = 690 bytes
+    pub const LEN: usize =
+        8 + 1 + 32 * 12 + 32 * 4 + 8 * 2 + 1 + 32 + 8 + 8 + 8 + 32 * 2 + 32;
 }
 
-// Compile-time assertion: if PsmConfig layout changes, this will fail to compile
-const _: () = assert!(PsmConfig::LEN == 658);
+// Compile-time assertion: if PsmConfig layout changes, this will fail to compile.
+// Updated during the Phase-4 cleanup when `pyth_program_owner` (32 bytes) was added.
+const _: () = assert!(PsmConfig::LEN == 690);
 
 /// Redemption queue PDA
 /// Seeds: ["redemption_queue"]

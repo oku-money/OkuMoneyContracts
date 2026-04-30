@@ -7,6 +7,7 @@
 //! produce the `Pubkey`, which is the correct Anchor 1.x form. Reviewers
 //! upgrading from older Anchor docs should not flag this as a bug.
 
+use crate::constants::{MIN_COLLATERAL_RATIO_FLOOR, MINIMUM_LIQUIDITY, PRECISION};
 use crate::contexts::{
     DepositReserves, Initialize, Unwrap, UpdateUsdMultiplier, WithdrawReserves, Wrap,
 };
@@ -14,7 +15,7 @@ use crate::errors::OkuDollarError;
 use crate::events::*;
 use crate::helpers::{
     calculate_collateral_ratio, is_sufficiently_collateralized, oku_money_to_shares,
-    oku_money_to_usd, shares_to_oku_money, MINIMUM_LIQUIDITY, PRECISION,
+    oku_money_to_usd, shares_to_oku_money,
 };
 use crate::state::OkuDollarConfig;
 use anchor_lang::prelude::*;
@@ -60,7 +61,7 @@ pub fn initialize(
 
     // Set minimum collateral ratio (must be >= floor)
     require!(
-        min_collateral_ratio >= crate::helpers::MIN_COLLATERAL_RATIO_FLOOR,
+        min_collateral_ratio >= MIN_COLLATERAL_RATIO_FLOOR,
         OkuDollarError::InvalidCollateralRatio
     );
     config.min_collateral_ratio = min_collateral_ratio;

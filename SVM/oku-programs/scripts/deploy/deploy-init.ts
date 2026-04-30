@@ -105,7 +105,8 @@ async function main() {
     usdcMint,
     okuMoneyMint,
     authorities,
-    config
+    config,
+    networkConfig
   );
   logger.log('');
 

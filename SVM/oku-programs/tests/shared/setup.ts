@@ -297,7 +297,15 @@ export async function initializePSMIfNeeded(
     10 * anchor.web3.LAMPORTS_PER_SOL
   );
 
-  // Initialize PSM with granular authorities (authority pubkeys passed as instruction args)
+  // Initialize PSM with granular authorities (authority pubkeys passed as instruction args).
+  //
+  // pythProgramOwner is now an init arg (the on-chain Pyth program-owner check
+  // used to be hardcoded). For unit tests we don't actually exercise the oracle
+  // path, so we use the legacy mainnet Pyth ID as a placeholder. Tests that
+  // need the oracle path should rotate via `setPythProgramOwner` afterwards.
+  const PYTH_LEGACY_MAINNET = new PublicKey(
+    "FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH"
+  );
   await program.methods
     .initialize(
       MAX_SUPPLY,
@@ -313,6 +321,7 @@ export async function initializePSMIfNeeded(
       coldMultisig.publicKey,       // capManager
       coldMultisig.publicKey,       // allowanceManager
       psmOrchestrator.publicKey,    // rebaser
+      PYTH_LEGACY_MAINNET,          // pythProgramOwner
     )
     .accountsPartial({
       roleAdmin: payer.publicKey,

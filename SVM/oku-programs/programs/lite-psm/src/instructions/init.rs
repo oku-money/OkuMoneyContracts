@@ -1,3 +1,4 @@
+use crate::constants::PRECISION;
 use crate::contexts::{Initialize, SetupOkuMoneyEscrow, SetupRedemptionQueue};
 use crate::errors::OkuError;
 use crate::events::InitializeEvent;
@@ -6,7 +7,12 @@ use anchor_lang::prelude::*;
 /// Initialize the PSM - Step 1
 /// Creates config PDA and USDC vault
 /// Call setup_redemption_queue and setup_okusd_escrow afterwards to complete initialization
-/// Authority pubkeys passed as args to reduce stack usage (avoids BPF stack overflow)
+/// Authority pubkeys passed as args to reduce stack usage (avoids BPF stack overflow).
+///
+/// `pyth_program_owner` is the program-owner pubkey accepted by the on-chain
+/// Pyth oracle check. The deployer chooses this per-cluster (legacy Pyth on
+/// mainnet/devnet, or any future Pyth deployment). Rotate post-deploy via
+/// `set_pyth_program_owner`.
 pub fn initialize(
     ctx: Context<Initialize>,
     max_supply: u64,
@@ -22,7 +28,13 @@ pub fn initialize(
     cap_manager: Pubkey,
     allowance_manager: Pubkey,
     rebaser: Pubkey,
+    pyth_program_owner: Pubkey,
 ) -> Result<()> {
+    require!(
+        pyth_program_owner != Pubkey::default(),
+        OkuError::InvalidPythProgramOwner
+    );
+
     let config = &mut ctx.accounts.config;
     config.bump = ctx.bumps.config;
 
@@ -54,12 +66,13 @@ pub fn initialize(
     // Set oracle config
     config.oracle = Pubkey::default(); // Oracle disabled initially
     config.staleness_threshold = 0;
+    config.pyth_program_owner = pyth_program_owner;
 
     // Yield distribution lock - starts at 0 (no lock)
     config.last_yield_distribution_slot = 0;
 
     // OkuMoney price - starts at PRECISION (1e9 = $1.00)
-    config.oku_m_price = 1_000_000_000; // PRECISION
+    config.oku_m_price = PRECISION;
 
     // Blacklist exemptions - set via initialize_blacklist_exempt
     config.blacklist_exempt_bridge = Pubkey::default();

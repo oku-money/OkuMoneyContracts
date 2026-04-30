@@ -580,8 +580,23 @@ describe("Bridge Security Tests", () => {
     vaultOkuMoneyAta = psmSetup.vaultOkuMoneyAta;
 
     // Initialize bridge config
+    //
+    // Initializer now takes a `BridgeInitConfig` struct with caller-supplied
+    // defaults instead of hardcoded values. Refund initiator and confirmer
+    // must be distinct from each other AND from bridge_admin (mirrors EVM's
+    // OkuBridge two-step refund key-separation requirement). We reuse
+    // `nonceAdmin` and `signerManager` here since both already exist as
+    // separate keypairs in this test fixture.
     await program.methods
-      .initializeBridge(SOLANA_CHAIN_ID)
+      .initializeBridge({
+        sourceChainId: SOLANA_CHAIN_ID,
+        bridgeFeeBps: 10,                                   // 0.1%
+        minBridgeAmount: new BN(1_000_000),                 // 1 token
+        maxBridgeAmount: new BN(1_000_000_000_000),         // 1M tokens
+        bridgeDeadlineSecs: new BN(3600),                   // 1 hour
+        refundInitiator: nonceAdmin.publicKey,
+        refundConfirmer: signerManager.publicKey,
+      })
       .accountsPartial({
         bridgeAdmin: bridgeAdmin.publicKey,
         bridgePauser: bridgePauser.publicKey,

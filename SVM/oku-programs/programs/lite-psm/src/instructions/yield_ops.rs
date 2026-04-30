@@ -1,7 +1,14 @@
+//! Yield distribution / multiplier-update instructions.
+//!
+//! Discrete (per-call) multiplier accrual modelled on MakerDAO's `chi` / `_rpow`
+//! pattern from sDAI. SVM uses a discrete bump per orchestrator call rather than
+//! continuous on-read accrual to avoid recomputing on every PSM mint/redeem.
+//! Taken from https://github.com/makerdao/sdai/blob/master/src/SavingsDai.sol
+
+use crate::constants::PRECISION;
 use crate::contexts::{DistributeYield, SetOkuMPrice};
 use crate::errors::OkuError;
 use crate::events::*;
-use crate::helpers::PRECISION;
 use anchor_lang::prelude::*;
 
 /// Set OkuMoney price directly

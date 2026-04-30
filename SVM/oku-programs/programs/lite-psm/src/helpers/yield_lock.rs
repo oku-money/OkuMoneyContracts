@@ -1,3 +1,10 @@
+//! Sandwich-attack guard for yield distribution.
+//!
+//! Same-slot lock (Solana analogue of EVM's `block.number` lock) used by both
+//! lite-psm and oku-dollar to block user operations in the same slot as a
+//! yield distribution. SVM port of the EVM-side `YieldSandwichGuard`
+//! (`EVM/src/lib/YieldSandwichGuard.sol`).
+
 use crate::errors::OkuError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;

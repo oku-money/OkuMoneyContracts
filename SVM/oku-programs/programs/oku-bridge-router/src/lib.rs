@@ -12,6 +12,18 @@ use roles::*;
 
 declare_id!("JDa1YZH8VNjXiVxuBQfhU58fGvXRPuiTAt2t4hA5HAFS");
 
+// `auditors` and `acknowledgements` are intentionally omitted until an audit
+// is complete; populate them in a follow-up commit.
+#[cfg(not(feature = "no-entrypoint"))]
+solana_security_txt::security_txt! {
+    name: "OkuMoney OkuBridgeRouter",
+    project_url: "https://github.com/anomalyco/okuMoney",
+    contacts: "email:security@okumoney.example",
+    policy: "https://github.com/anomalyco/okuMoney/blob/main/SECURITY.md",
+    preferred_languages: "en",
+    source_code: "https://github.com/anomalyco/okuMoney"
+}
+
 #[program]
 pub mod oku_bridge_router {
     use super::*;

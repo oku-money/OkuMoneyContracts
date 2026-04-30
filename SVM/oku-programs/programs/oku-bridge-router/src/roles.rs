@@ -11,6 +11,11 @@
 //! | `Pauser` | `ROUTER_PAUSER` | Warm Multisig - pause router |
 //! | `Unpauser` | `ROUTER_UNPAUSER` | Cold Multisig - unpause router |
 
+//! Authority role definitions for the OkuBridgeRouter.
+//!
+//! Same OpenZeppelin AccessControl pattern as the other programs.
+//! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol
+
 use anchor_lang::prelude::*;
 
 /// Authority roles that can be updated via set_authority.

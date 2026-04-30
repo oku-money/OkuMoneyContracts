@@ -1,7 +1,16 @@
+//! OkuDollar vault admin instructions.
+//!
+//! Pause / unpause semantics mirror OpenZeppelin's `Pausable` (already-paused
+//! and not-paused checks symmetric on both ends).
+//! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/Pausable.sol
+//!
+//! Role-rotation via `set_authority` mirrors OpenZeppelin's `AccessControl`.
+//! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol
+
+use crate::constants::MIN_COLLATERAL_RATIO_FLOOR;
 use crate::contexts::{Pause, SetAuthority, SetMinCollateralRatio, Unpause};
 use crate::errors::OkuDollarError;
 use crate::events::*;
-use crate::helpers::MIN_COLLATERAL_RATIO_FLOOR;
 use crate::roles::AuthorityRole;
 use anchor_lang::prelude::*;
 

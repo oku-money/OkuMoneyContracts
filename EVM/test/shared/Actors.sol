@@ -51,7 +51,6 @@ abstract contract Actors is Test {
     address public bridgeFeeManager = makeAddr("bridgeFeeManager");
     address public refundInitiator = makeAddr("refundInitiator");
     address public refundConfirmer = makeAddr("refundConfirmer");
-    address public dustSweeper = makeAddr("dustSweeper");
     address public nonceAdmin = makeAddr("nonceAdmin");
     address public chainManager = makeAddr("chainManager");
     address public limitsManager = makeAddr("limitsManager");

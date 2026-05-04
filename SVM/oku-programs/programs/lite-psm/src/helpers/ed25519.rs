@@ -12,7 +12,7 @@
 //! Taken from https://github.com/anza-xyz/agave/blob/master/sdk/src/ed25519_instruction.rs
 //! Taken from https://docs.solana.com/developing/runtime-facilities/programs#ed25519-program
 
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use anchor_lang::prelude::*;
 use solana_instructions_sysvar::load_instruction_at_checked;
 
@@ -66,7 +66,7 @@ pub fn verify_ed25519_signature<'info>(
         }
     }
 
-    require!(found_valid_signature, OkuError::InvalidSignature);
+    require!(found_valid_signature, LitePsmError::InvalidSignature);
 
     Ok(())
 }

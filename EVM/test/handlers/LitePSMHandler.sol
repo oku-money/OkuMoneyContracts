@@ -23,7 +23,7 @@ import {TestConstants} from "../shared/Constants.sol";
 contract LitePSMHandler is Test {
     LitePSM public psm;
     IOkuMoney public okuMoney;
-    IOkuDollar public usdOku;
+    IOkuDollar public okuDollar;
     IERC20 public usdc;
     RedemptionQueue public queue;
     address public rebaser;
@@ -44,7 +44,7 @@ contract LitePSMHandler is Test {
     uint256 public ghostOkuMMinted;
     uint256 public ghostOkuMBurned;
     uint256 public ghostUsdOkuMinted;
-    uint256 public ghostUsdOkuBurned;
+    uint256 public ghostOkuDollarBurned;
     uint256 public ghostQueuedCount;
     uint256 public ghostProcessedCount;
     uint256 public ghostRescuedCount;
@@ -54,10 +54,10 @@ contract LitePSMHandler is Test {
     uint256 public ghostMintOkuMReverts;
     uint256 public ghostRedeemOkuMCalls;
     uint256 public ghostRedeemOkuMReverts;
-    uint256 public ghostMintUsdOkuCalls;
-    uint256 public ghostMintUsdOkuReverts;
-    uint256 public ghostRedeemUsdOkuCalls;
-    uint256 public ghostRedeemUsdOkuReverts;
+    uint256 public ghostMintOkuDollarCalls;
+    uint256 public ghostMintOkuDollarReverts;
+    uint256 public ghostRedeemOkuDollarCalls;
+    uint256 public ghostRedeemOkuDollarReverts;
     uint256 public ghostRebaseCalls;
     uint256 public ghostDepositBufferCalls;
     uint256 public ghostDepositBufferReverts;
@@ -80,7 +80,7 @@ contract LitePSMHandler is Test {
     constructor(
         LitePSM _psm,
         IOkuMoney _okuMoney,
-        IOkuDollar _usdOku,
+        IOkuDollar _okuDollar,
         IERC20 _usdc,
         RedemptionQueue _queue,
         address _rebaser,
@@ -88,7 +88,7 @@ contract LitePSMHandler is Test {
     ) {
         psm = _psm;
         okuMoney = _okuMoney;
-        usdOku = _usdOku;
+        okuDollar = _okuDollar;
         usdc = _usdc;
         queue = _queue;
         rebaser = _rebaser;
@@ -171,7 +171,7 @@ contract LitePSMHandler is Test {
     }
 
     function mintUsdOku(uint256 actorSeed, uint256 usdcAmount) external {
-        ghostMintUsdOkuCalls++;
+        ghostMintOkuDollarCalls++;
         address actor = actors[actorSeed % actors.length];
         usdcAmount = bound(usdcAmount, 1e6, 100_000e6);
 
@@ -184,31 +184,28 @@ contract LitePSMHandler is Test {
             ghostUsdcDeposited += usdcAmount;
             ghostUsdOkuMinted += usdcAmount * DECIMAL_MULTIPLIER;
         } catch {
-            ghostMintUsdOkuReverts++;
+            ghostMintOkuDollarReverts++;
         }
     }
 
     function redeemUsdOku(uint256 actorSeed, uint256 usdAmount) external {
-        ghostRedeemUsdOkuCalls++;
+        ghostRedeemOkuDollarCalls++;
         address actor = actors[actorSeed % actors.length];
 
-        uint256 actorBalance = usdOku.balanceOf(actor);
+        uint256 actorBalance = okuDollar.balanceOf(actor);
         if (actorBalance == 0) return;
         usdAmount = bound(usdAmount, 1e18, actorBalance);
 
         vm.prank(actor);
-        IERC20(address(usdOku)).approve(address(psm), usdAmount);
+        IERC20(address(okuDollar)).approve(address(psm), usdAmount);
 
-        // Compute the USDC the PSM will pay out so we can update ghostUsdcWithdrawn
-        // accurately on the instant-redemption path.
-        uint256 okuMMult = okuMoney.okuMMultiplier();
-        // dollarValue ≈ usdAmount (mult on usdOku side is independent), redeem maps
-        // to OkuM via 1/okuMMult, then back to USDC. Use PSM-reported value.
+        // Compare PSM USDC balance pre/post to update ghostUsdcWithdrawn on the
+        // instant-redemption path; if balance unchanged the redemption was queued.
         uint256 psmUsdcBefore = usdc.balanceOf(address(psm));
 
         vm.prank(actor);
         try psm.redeemUsdOku(usdAmount) {
-            ghostUsdOkuBurned += usdAmount;
+            ghostOkuDollarBurned += usdAmount;
             uint256 psmUsdcAfter = usdc.balanceOf(address(psm));
             if (psmUsdcAfter < psmUsdcBefore) {
                 ghostUsdcWithdrawn += (psmUsdcBefore - psmUsdcAfter);
@@ -216,10 +213,8 @@ contract LitePSMHandler is Test {
                 ghostQueuedCount++;
             }
         } catch {
-            ghostRedeemUsdOkuReverts++;
+            ghostRedeemOkuDollarReverts++;
         }
-        // silence unused-variable warning for okuMMult while keeping it visible
-        okuMMult;
     }
 
     /// @notice Trigger a multiplier change. Allowed range raised to allow occasional
@@ -354,15 +349,15 @@ contract LitePSMHandler is Test {
     }
 
     function ghostTotalCalls() external view returns (uint256) {
-        return ghostMintOkuMCalls + ghostRedeemOkuMCalls + ghostMintUsdOkuCalls
-            + ghostRedeemUsdOkuCalls + ghostRebaseCalls + ghostDepositBufferCalls
+        return ghostMintOkuMCalls + ghostRedeemOkuMCalls + ghostMintOkuDollarCalls
+            + ghostRedeemOkuDollarCalls + ghostRebaseCalls + ghostDepositBufferCalls
             + ghostWithdrawUsdcCalls + ghostProcessQueueCalls + ghostRescueCalls
             + ghostConfigureOracleCalls;
     }
 
     function ghostTotalReverts() external view returns (uint256) {
-        return ghostMintOkuMReverts + ghostRedeemOkuMReverts + ghostMintUsdOkuReverts
-            + ghostRedeemUsdOkuReverts + ghostDepositBufferReverts + ghostWithdrawUsdcReverts
+        return ghostMintOkuMReverts + ghostRedeemOkuMReverts + ghostMintOkuDollarReverts
+            + ghostRedeemOkuDollarReverts + ghostDepositBufferReverts + ghostWithdrawUsdcReverts
             + ghostProcessQueueReverts + ghostRescueReverts + ghostConfigureOracleReverts;
     }
 }

@@ -138,7 +138,7 @@ describe("OkuMoney Scenarios", () => {
 
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            // initialize(_okuMoney, _usdOku, _usdc, _redemptionQueue, admin, _stalenessThreshold)
+            // initialize(_okuMoney, _okuDollar, _usdc, _redemptionQueue, admin, _stalenessThreshold)
             [
                 await okuMoney.getAddress(),
                 await okuUsd.getAddress(),

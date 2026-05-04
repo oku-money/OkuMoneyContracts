@@ -9,9 +9,6 @@ use crate::constants::PRECISION;
 use crate::errors::OkuDollarError;
 use anchor_lang::prelude::*;
 
-// Re-exports preserved for backwards compatibility with existing call sites.
-pub use crate::constants::{MIN_COLLATERAL_RATIO_FLOOR, MINIMUM_LIQUIDITY};
-
 /// Convert OkuMoney amount to USD value using oku_m_price
 ///
 /// Formula: usd_value = (oku_m_amount * oku_m_price) / PRECISION

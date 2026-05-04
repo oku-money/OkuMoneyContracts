@@ -12,7 +12,7 @@
 //!   port of the EVM-side `OkuBridge.sol` orchestrator-signed bridge protocol.
 //!   See `contracts/EVM/src/bridge/OkuBridge.sol` for the source-chain side.
 
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use anchor_lang::prelude::*;
 
 /// PSM configuration PDA
@@ -60,7 +60,7 @@ pub struct PsmConfig {
     pub vault_oku_money: Pubkey,
 
     // ===== Limits =====
-    /// Maximum OkuUSD supply cap
+    /// Maximum OkuMoney supply cap
     pub max_supply: u64,
     /// Bridge mint allowance remaining
     pub minter_allowance: u64,
@@ -110,7 +110,6 @@ impl PsmConfig {
 }
 
 // Compile-time assertion: if PsmConfig layout changes, this will fail to compile.
-// Updated during the Phase-4 cleanup when `pyth_program_owner` (32 bytes) was added.
 const _: () = assert!(PsmConfig::LEN == 690);
 
 /// Redemption queue PDA
@@ -261,33 +260,34 @@ impl BridgeConfig {
 
     /// Add a supported chain (returns error if full or already exists)
     pub fn add_chain(&mut self, chain_id: u16) -> Result<()> {
-        require!(chain_id != 0, OkuError::UnsupportedChain);
+        require!(chain_id != 0, LitePsmError::UnsupportedChain);
         require!(
             !self.is_chain_supported(chain_id),
-            OkuError::ChainAlreadySupported
+            LitePsmError::ChainAlreadySupported
         );
-        require!(self.supported_chains_count < 32, OkuError::ChainListFull);
+        require!(self.supported_chains_count < 32, LitePsmError::ChainListFull);
 
         self.supported_chains[self.supported_chains_count as usize] = chain_id;
         self.supported_chains_count += 1;
         Ok(())
     }
 
-    /// Remove a supported chain
+    /// Remove a supported chain.
+    ///
+    /// Uses a swap-remove (move the last element into the removed slot) since the
+    /// supported-chains list is unordered — O(1) instead of an O(n) shift.
     pub fn remove_chain(&mut self, chain_id: u16) -> Result<()> {
         let count = self.supported_chains_count as usize;
         for i in 0..count {
             if self.supported_chains[i] == chain_id {
-                // Shift remaining elements left
-                for j in i..count - 1 {
-                    self.supported_chains[j] = self.supported_chains[j + 1];
-                }
-                self.supported_chains[count - 1] = 0;
+                let last = count - 1;
+                self.supported_chains[i] = self.supported_chains[last];
+                self.supported_chains[last] = 0;
                 self.supported_chains_count -= 1;
                 return Ok(());
             }
         }
-        Err(error!(OkuError::ChainNotFound))
+        Err(error!(LitePsmError::ChainNotFound))
     }
 }
 

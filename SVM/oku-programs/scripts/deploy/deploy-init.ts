@@ -67,7 +67,7 @@ async function main() {
 
   const programIds = {
     litePsm: new PublicKey(existingDeployment.programs.litePsm),
-    okuDollar: new PublicKey(existingDeployment.programs.wokusdVault),
+    okuDollar: new PublicKey(existingDeployment.programs.okuDollarProgram),
     okuBridgeRouter: new PublicKey(existingDeployment.programs.okuBridgeRouter),
   };
 
@@ -137,7 +137,7 @@ async function main() {
     timestamp: new Date().toISOString(),
     tokens: {
       usdc: usdcMint.toBase58(),
-      okusd: okuMoneyMint.toBase58(),
+      okuMoney: okuMoneyMint.toBase58(),
       usdOku: usdOkuMint.toBase58(),
     },
     programs: existingDeployment.programs,
@@ -147,7 +147,7 @@ async function main() {
       bridgeConfig: bridgeConfig.toBase58(),
       vaultConfig: vaultConfig.toBase58(),
       routerConfig: routerConfig.toBase58(),
-      psmOkusdEscrow: vaultOkuMoney.toBase58(),
+      psmOkuMoneyEscrow: vaultOkuMoney.toBase58(),
     },
     authorities: {
       coldMultisig: authorities.psm.roleAdmin.toBase58(),

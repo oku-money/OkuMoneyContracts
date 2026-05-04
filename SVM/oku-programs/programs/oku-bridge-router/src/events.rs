@@ -34,7 +34,7 @@ pub struct BridgeUsdOkuEvent {
     /// OkuDollar shares unwrapped
     pub usd_oku_shares: u64,
     /// OkuMoney amount after unwrap (burned for bridge)
-    pub oku_money_amount: u64,
+    pub oku_m_amount: u64,
     /// Destination chain ID
     pub destination_chain: u16,
     /// Recipient on destination chain (EVM address)
@@ -48,7 +48,7 @@ pub struct BridgeOkuMEvent {
     /// User who initiated the bridge
     pub user: Pubkey,
     /// OkuMoney amount burned
-    pub oku_money_amount: u64,
+    pub oku_m_amount: u64,
     /// Destination chain ID
     pub destination_chain: u16,
     /// Recipient on destination chain (EVM address)
@@ -64,7 +64,7 @@ pub struct MintUsdOkuEvent {
     /// USDC deposited (6 decimals)
     pub usdc_amount: u64,
     /// Intermediate OkuMoney amount
-    pub oku_money_intermediate: u64,
+    pub oku_m_intermediate: u64,
     /// OkuDollar shares minted
     pub usd_oku_shares: u64,
 }
@@ -80,14 +80,13 @@ pub struct RedeemUsdOkuEvent {
     /// OkuDollar shares burned
     pub usd_oku_shares: u64,
     /// Intermediate OkuMoney amount
-    pub oku_money_intermediate: u64,
+    pub oku_m_intermediate: u64,
 }
 
 /// Emitted when router is paused.
 #[event]
 pub struct PauseEvent {
     pub pauser: Pubkey,
-    pub paused: bool,
 }
 
 /// Emitted when router is unpaused.

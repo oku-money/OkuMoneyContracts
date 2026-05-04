@@ -1,7 +1,8 @@
 //! # OkuBridgeRouter Roles
 //!
-//! Authority role definitions for the OkuBridgeRouter program.
-//! Aligned with EVM contract roles from `Roles.sol`.
+//! Authority role definitions for the OkuBridgeRouter program. Same OpenZeppelin
+//! AccessControl pattern as the other programs.
+//! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol
 //!
 //! ## EVM Role Mapping
 //!
@@ -10,11 +11,6 @@
 //! | `RoleAdmin` | `DEFAULT_ADMIN_ROLE` | Meta role: grant/revoke all roles |
 //! | `Pauser` | `ROUTER_PAUSER` | Warm Multisig - pause router |
 //! | `Unpauser` | `ROUTER_UNPAUSER` | Cold Multisig - unpause router |
-
-//! Authority role definitions for the OkuBridgeRouter.
-//!
-//! Same OpenZeppelin AccessControl pattern as the other programs.
-//! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol
 
 use anchor_lang::prelude::*;
 

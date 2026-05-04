@@ -11,14 +11,14 @@ import {TestConstants} from "../shared/Constants.sol";
  * @title OkuDollarHandler
  * @notice Stateful handler for OkuDollar invariant testing — exercises wrap, unwrap,
  *         transfer, rebase (OkuMoney multiplier), depositReserves, withdrawSurplus,
- *         setUsdYieldRate, setNextUsdYieldRate, updateUsdMultiplier, setMinCollateralRatio.
+ *         setUsdYieldRate, setNextUsdYieldRate, setMinCollateralRatio.
  *
  *         The handler must be granted VAULT_REBASER, VAULT_RESERVE_MANAGER and
  *         DEFAULT_ADMIN_ROLE on the OkuDollar instance — see VaultInvariants.setUp.
  */
 contract OkuDollarHandler is Test {
     OkuMoney public okuMoney;
-    OkuDollar public usdOku;
+    OkuDollar public okuDollar;
     address public minter;
     address public rebaser;
 
@@ -55,14 +55,12 @@ contract OkuDollarHandler is Test {
     uint256 public ghostSetYieldRateReverts;
     uint256 public ghostSetNextYieldRateCalls;
     uint256 public ghostSetNextYieldRateReverts;
-    uint256 public ghostUpdateMultiplierCalls;
-    uint256 public ghostUpdateMultiplierReverts;
     uint256 public ghostSetMinCollatRatioCalls;
     uint256 public ghostSetMinCollatRatioReverts;
 
-    constructor(OkuMoney _okuMoney, OkuDollar _usdOku, address _minter, address _rebaser) {
+    constructor(OkuMoney _okuMoney, OkuDollar _okuDollar, address _minter, address _rebaser) {
         okuMoney = _okuMoney;
-        usdOku = _usdOku;
+        okuDollar = _okuDollar;
         minter = _minter;
         rebaser = _rebaser;
 
@@ -109,8 +107,8 @@ contract OkuDollarHandler is Test {
         if (amount == 0) return;
 
         vm.startPrank(actor);
-        IERC20(address(okuMoney)).approve(address(usdOku), amount);
-        try usdOku.wrap(amount, actor, 0) {
+        IERC20(address(okuMoney)).approve(address(okuDollar), amount);
+        try okuDollar.wrap(amount, actor, 0) {
             ghostTotalWrapped += amount;
         } catch {
             ghostWrapReverts++;
@@ -121,12 +119,12 @@ contract OkuDollarHandler is Test {
     function unwrap(uint256 actorSeed, uint256 amount) external {
         ghostUnwrapCalls++;
         address actor = actors[actorSeed % actors.length];
-        uint256 balance = usdOku.balanceOf(actor);
+        uint256 balance = okuDollar.balanceOf(actor);
         amount = bound(amount, 0, balance);
         if (amount == 0) return;
 
         vm.prank(actor);
-        try usdOku.unwrap(amount, actor) returns (uint256 okuMReturned) {
+        try okuDollar.unwrap(amount, actor) returns (uint256 okuMReturned) {
             ghostTotalUnwrapped += okuMReturned;
         } catch {
             ghostUnwrapReverts++;
@@ -137,12 +135,12 @@ contract OkuDollarHandler is Test {
         ghostTransferCalls++;
         address from = actors[fromSeed % actors.length];
         address to = actors[toSeed % actors.length];
-        uint256 balance = usdOku.balanceOf(from);
+        uint256 balance = okuDollar.balanceOf(from);
         amount = bound(amount, 0, balance);
         if (amount == 0 || from == to) return;
 
         vm.prank(from);
-        try usdOku.transfer(to, amount) {}
+        try okuDollar.transfer(to, amount) {}
         catch {
             ghostTransferReverts++;
         }
@@ -182,9 +180,9 @@ contract OkuDollarHandler is Test {
 
         vm.prank(minter);
         okuMoney.mint(address(this), amount);
-        IERC20(address(okuMoney)).approve(address(usdOku), amount);
+        IERC20(address(okuMoney)).approve(address(okuDollar), amount);
 
-        try usdOku.depositReserves(amount) {
+        try okuDollar.depositReserves(amount) {
             ghostTotalDepositedReserves += amount;
         } catch {
             ghostDepositReservesReverts++;
@@ -193,14 +191,14 @@ contract OkuDollarHandler is Test {
 
     function withdrawSurplus(uint256 amount) external {
         ghostWithdrawSurplusCalls++;
-        uint256 surplusVal = usdOku.surplus();
+        uint256 surplusVal = okuDollar.surplus();
         if (surplusVal == 0) return;
         // Use a conservative cap that avoids the floor-rounding revert path.
         uint256 cap = surplusVal > 1e6 ? surplusVal - 1e6 : surplusVal / 2;
         if (cap == 0) return;
         amount = bound(amount, 1, cap);
 
-        try usdOku.withdrawSurplus(amount) {
+        try okuDollar.withdrawSurplus(amount) {
             ghostTotalWithdrawnSurplus += amount;
         } catch {
             ghostWithdrawSurplusReverts++;
@@ -215,7 +213,7 @@ contract OkuDollarHandler is Test {
         rate = bound(rate, PRECISION, TestConstants.MAX_RATE);
         endOffset = bound(endOffset, 1 hours, 365 days);
 
-        try usdOku.setUsdYieldRate(rate, block.timestamp + endOffset) {}
+        try okuDollar.setUsdYieldRate(rate, block.timestamp + endOffset) {}
         catch {
             ghostSetYieldRateReverts++;
         }
@@ -226,22 +224,13 @@ contract OkuDollarHandler is Test {
         rate = bound(rate, PRECISION, TestConstants.MAX_RATE);
 
         // Pre-check: contract requires usdRateEnd != 0 AND not yet expired.
-        uint256 endTs = usdOku.usdRateEnd();
+        uint256 endTs = okuDollar.usdRateEnd();
         if (endTs == 0 || block.timestamp >= endTs) return;
 
-        try usdOku.setNextUsdYieldRate(rate) {}
+        try okuDollar.setNextUsdYieldRate(rate) {}
         catch {
             ghostSetNextYieldRateReverts++;
         }
-    }
-
-    /// @notice Intentionally NOT exposed via this handler: `updateUsdMultiplier` is an
-    ///         admin emergency override that the contract permits to bump the multiplier
-    ///         arbitrarily far above the available reserve value. Including it here
-    ///         would make the "vault always backed" invariant unfalsifiable in
-    ///         meaningful ways. Direct unit tests cover the function instead.
-    function updateUsdMultiplier(uint256) external pure {
-        // no-op for invariant runs
     }
 
     function setMinCollateralRatio(uint256 newRatio) external {
@@ -249,7 +238,7 @@ contract OkuDollarHandler is Test {
         // Bound between the contract's hard floor and PRECISION.
         newRatio = bound(newRatio, MIN_COLLATERAL_RATIO_FLOOR, PRECISION);
 
-        try usdOku.setMinCollateralRatio(newRatio) {}
+        try okuDollar.setMinCollateralRatio(newRatio) {}
         catch {
             ghostSetMinCollatRatioReverts++;
         }
@@ -268,14 +257,13 @@ contract OkuDollarHandler is Test {
     function ghostTotalCalls() external view returns (uint256) {
         return ghostMintOkuMCalls + ghostWrapCalls + ghostUnwrapCalls + ghostRebaseCalls
             + ghostTransferCalls + ghostDepositReservesCalls + ghostWithdrawSurplusCalls
-            + ghostSetYieldRateCalls + ghostSetNextYieldRateCalls + ghostUpdateMultiplierCalls
-            + ghostSetMinCollatRatioCalls;
+            + ghostSetYieldRateCalls + ghostSetNextYieldRateCalls + ghostSetMinCollatRatioCalls;
     }
 
     function ghostTotalReverts() external view returns (uint256) {
         return ghostMintOkuMReverts + ghostWrapReverts + ghostUnwrapReverts + ghostRebaseReverts
             + ghostTransferReverts + ghostDepositReservesReverts + ghostWithdrawSurplusReverts
-            + ghostSetYieldRateReverts + ghostSetNextYieldRateReverts + ghostUpdateMultiplierReverts
+            + ghostSetYieldRateReverts + ghostSetNextYieldRateReverts
             + ghostSetMinCollatRatioReverts;
     }
 

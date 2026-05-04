@@ -57,11 +57,11 @@ function calculateCosts(): DeploymentCost {
 
   // Token account costs
   const tokens = [
-    { name: 'OkuUSD Mint (Token-2022)', cost: 0.0023 },
-    { name: 'wOkuUSD Mint (SPL Token)', cost: 0.0014 },
+    { name: 'OkuMoney Mint (Token-2022)', cost: 0.0023 },
+    { name: 'usdOku Mint (SPL Token)', cost: 0.0014 },
     { name: 'PSM USDC Vault ATA', cost: 0.002 },
-    { name: 'PSM OkuUSD Escrow ATA', cost: 0.002 },
-    { name: 'Vault OkuUSD ATA', cost: 0.002 },
+    { name: 'PSM OkuMoney Escrow ATA', cost: 0.002 },
+    { name: 'Vault OkuMoney ATA', cost: 0.002 },
   ];
 
   // Transaction costs

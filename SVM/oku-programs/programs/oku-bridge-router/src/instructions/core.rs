@@ -1,9 +1,4 @@
 //! OkuBridgeRouter core instructions.
-//!
-//! Anchor-version note: `CpiContext::new[_with_signer](program_id, accounts[, seeds])`
-//! takes `program_id` as a `Pubkey` in Anchor ≥1.0. All CPI sites in this file
-//! pass `<program>.key()` (which returns `Pubkey`), which is correct. The
-//! pre-0.31 API took an `AccountInfo<'info>` here.
 
 use crate::contexts::{BridgeOkuM, BridgeUsdOku, Initialize, MintUsdOku, RedeemUsdOku};
 use crate::errors::RouterError;
@@ -125,7 +120,7 @@ pub fn bridge_usd_oku(
     emit!(BridgeUsdOkuEvent {
         user: ctx.accounts.user.key(),
         usd_oku_shares,
-        oku_money_amount: oku_money_received,
+        oku_m_amount: oku_money_received,
         destination_chain,
         recipient,
     });
@@ -173,7 +168,7 @@ pub fn bridge_oku_m(
 
     emit!(BridgeOkuMEvent {
         user: ctx.accounts.user.key(),
-        oku_money_amount: oku_m_amount,
+        oku_m_amount: oku_m_amount,
         destination_chain,
         recipient,
     });
@@ -273,7 +268,7 @@ pub fn mint_usd_oku(ctx: Context<MintUsdOku>, usdc_amount: u64, min_shares_out: 
     emit!(MintUsdOkuEvent {
         user: ctx.accounts.user.key(),
         usdc_amount,
-        oku_money_intermediate: oku_money_received,
+        oku_m_intermediate: oku_money_received,
         usd_oku_shares: usd_oku_received,
     });
 
@@ -363,7 +358,7 @@ pub fn redeem_usd_oku(
     emit!(RedeemUsdOkuEvent {
         user: ctx.accounts.user.key(),
         usd_oku_shares,
-        oku_money_intermediate: oku_money_received,
+        oku_m_intermediate: oku_money_received,
     });
 
     Ok(())

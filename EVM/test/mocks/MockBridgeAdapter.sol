@@ -1,22 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {IBridgeAdapter} from "../bridge/adapters/IBridgeAdapter.sol";
+import {IBridgeAdapter} from "../../src/bridge/adapters/IBridgeAdapter.sol";
+import {IOkuMoney} from "../../src/interfaces/IOkuMoney.sol";
 
-interface IOkuMoneyMintable {
-    function mint(address to, uint256 amount) external;
-}
-
-/**
- * @title MockBridgeAdapter
- * @notice Mock IBridgeAdapter used by both Foundry and Hardhat tests.
- * @dev Records bridge requests and exposes `completeBridge()` to simulate destination
- *      chain mints. The mock must be granted OKUM_MINTER on OkuMoney by the test setup
- *      (and have minter allowance configured) for `completeBridge*` to succeed.
- *
- *      This mock contains no cheatcodes (no forge-std dependency) so it compiles under
- *      Hardhat and Foundry alike.
- */
+/// @title MockBridgeAdapter
+/// @notice Test-only IBridgeAdapter mock. NOT FOR PRODUCTION DEPLOYMENT.
+/// @dev Records bridge requests and exposes `completeBridge*` to simulate
+///      destination-chain mints. Must be granted OKUM_MINTER on OkuMoney
+///      (with minter allowance configured) for `completeBridge*` to succeed.
+///
+///      No cheatcodes (no forge-std dependency) so it compiles under Hardhat
+///      and Foundry alike.
 contract MockBridgeAdapter is IBridgeAdapter {
     struct PendingBridge {
         address token;
@@ -27,7 +22,7 @@ contract MockBridgeAdapter is IBridgeAdapter {
     }
 
     PendingBridge[] public pendingBridges;
-    IOkuMoneyMintable public okuMoney;
+    IOkuMoney public okuMoney;
 
     event BridgeCalled(
         address indexed caller,
@@ -42,7 +37,7 @@ contract MockBridgeAdapter is IBridgeAdapter {
     error NoPendingBridges();
 
     constructor(address _okuMoney) {
-        okuMoney = IOkuMoneyMintable(_okuMoney);
+        okuMoney = IOkuMoney(_okuMoney);
     }
 
     function bridge(
@@ -67,7 +62,7 @@ contract MockBridgeAdapter is IBridgeAdapter {
         emit BridgeCalled(msg.sender, token, amount, destinationChain, recipient);
     }
 
-    /// @notice Simulate destination chain mint. This mock must have OKUM_MINTER role.
+    /// @notice Simulate destination-chain mint. Mock must hold OKUM_MINTER role.
     function completeBridge(uint256 index) external {
         if (index >= pendingBridges.length) revert InvalidBridgeIndex();
         PendingBridge memory p = pendingBridges[index];
@@ -75,7 +70,7 @@ contract MockBridgeAdapter is IBridgeAdapter {
         emit BridgeCompleted(index, p.recipient, p.amount);
     }
 
-    /// @notice Simulate destination chain mint to an alternate recipient.
+    /// @notice Simulate destination-chain mint to an alternate recipient.
     function completeBridgeTo(uint256 index, address to) external {
         if (index >= pendingBridges.length) revert InvalidBridgeIndex();
         PendingBridge memory p = pendingBridges[index];

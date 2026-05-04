@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
+import {Errors} from "../../src/lib/Errors.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
 
 /**
@@ -253,7 +254,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         uint256 lowerPrice = higherPrice - decrease;
 
         vm.prank(rebaser);
-        vm.expectRevert(OkuMoney.MultiplierCannotDecrease.selector);
+        vm.expectRevert(Errors.MultiplierCannotDecrease.selector);
         okuMoney.setOkuMMultiplier(lowerPrice);
     }
 

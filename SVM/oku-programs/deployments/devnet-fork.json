@@ -3,12 +3,12 @@
   "timestamp": "2026-04-14T22:33:55.537Z",
   "tokens": {
     "usdc": "L4tTzgz2JwBwTfGXx99p4bYsnQpUszo9MqDvJgihhTG",
-    "okusd": "C7hfPXS8ZguYgvSn9dTReHUpEXVrgeQwoyGfQpyQqShQ",
+    "okuMoney": "C7hfPXS8ZguYgvSn9dTReHUpEXVrgeQwoyGfQpyQqShQ",
     "usdOku": "9W8QfD7pPmbU7zdJV6ipTRjDuPAoYUauG9uuskBqTM69"
   },
   "programs": {
     "litePsm": "GtjZJFmhrAxYDrK2JqK7H3My6u5m7qmkzXqd9p6NLWgS",
-    "wokusdVault": "9CRADsxW3dN4xnmwLH7DHRfo4BM86B5NNXE7ku2pYGy9",
+    "okuDollarProgram": "9CRADsxW3dN4xnmwLH7DHRfo4BM86B5NNXE7ku2pYGy9",
     "okuBridgeRouter": "GEs9yWYSAJDwjibhQZc5eY8Wex7M9hFscThnL4RGafJu"
   },
   "pdas": {

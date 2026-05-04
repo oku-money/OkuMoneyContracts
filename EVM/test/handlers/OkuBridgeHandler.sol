@@ -5,7 +5,6 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {OkuBridge} from "../../src/bridge/OkuBridge.sol";
 import {IOkuMoney} from "../../src/interfaces/IOkuMoney.sol";
-import {TestConstants} from "../shared/Constants.sol";
 import {TestKeys} from "../shared/Keys.sol";
 
 /**
@@ -138,9 +137,7 @@ contract OkuBridgeHandler is Test {
         IERC20(address(okuMoney)).approve(address(bridge), amount);
 
         uint256 nonceBefore = bridge.outboundNonce(remoteChain);
-        uint256 feeBps = bridge.bridgeFee();
-        uint256 feeAmount = (amount * feeBps) / TestConstants.BASIS_POINTS;
-        uint256 netAmount = amount - feeAmount;
+        (uint256 feeAmount, uint256 netAmount) = bridge.quoteFee(amount);
 
         bytes32 recipient = bytes32(uint256(uint160(actor))); // mint back to actor on dest
 

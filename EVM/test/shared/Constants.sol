@@ -15,10 +15,10 @@ library TestConstants {
     /// @notice Standard precision for price and multiplier calculations (1e18 = $1.00)
     uint256 public constant PRECISION = SrcConstants.PRECISION;
 
-    /// @notice Default decimal conversion multiplier for Circle USDC (6 decimals -> 18).
-    /// @dev The PSM / Queue resolve their own multipliers at init time. Tests use
-    ///      the canonical 1e12 since MockUSDC reports 6 decimals.
-    uint256 public constant DECIMAL_MULTIPLIER = SrcConstants.DEFAULT_USDC_DECIMAL_MULTIPLIER;
+    /// @notice Decimal conversion multiplier for Circle-style USDC (6 decimals -> 18).
+    /// @dev The PSM / Queue resolve their own multipliers at init time from
+    ///      `IERC20Metadata.decimals()`. Tests pin to 1e12 because MockUSDC reports 6 decimals.
+    uint256 public constant DECIMAL_MULTIPLIER = 1e12;
 
     /// @notice Maximum yield rate: ~3700% APY safety cap
     uint256 public constant MAX_RATE = SrcConstants.MAX_RATE;

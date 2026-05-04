@@ -28,7 +28,8 @@ use anchor_lang::prelude::*;
 // ============================================================================
 
 /// Emitted when PSM is initialized.
-/// EVM equivalent: Initialize event in LitePSM constructor
+/// EVM equivalent: the `Initialized(uint64 version)` event from OZ's `Initializable`
+/// (LitePSM is upgradeable; there is no Solidity constructor event).
 #[event]
 pub struct InitializeEvent {
     pub role_admin: Pubkey,
@@ -136,7 +137,7 @@ pub struct BufferDepositEvent {
 #[event]
 pub struct BufferWithdrawEvent {
     /// Withdrawer (buffer_withdrawer role)
-    pub role_admin: Pubkey,
+    pub actor: Pubkey,
     /// Amount withdrawn (6 decimals)
     pub amount: u64,
     /// New buffer balance after withdrawal
@@ -192,7 +193,6 @@ pub struct BridgeBurnEvent {
 #[event]
 pub struct PauseEvent {
     pub pauser: Pubkey,
-    pub paused: bool,
 }
 
 /// Emitted when PSM is unpaused.
@@ -206,7 +206,8 @@ pub struct UnpauseEvent {
 /// EVM equivalent: `MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply)`
 #[event]
 pub struct MaxSupplyUpdatedEvent {
-    pub role_admin: Pubkey,
+    /// Caller of the update (`cap_manager` authority).
+    pub actor: Pubkey,
     pub old_max_supply: u64,
     pub new_max_supply: u64,
 }
@@ -215,7 +216,8 @@ pub struct MaxSupplyUpdatedEvent {
 /// EVM equivalent: `MinterAllowanceUpdated(address indexed minter, uint256 oldAllowance, uint256 newAllowance)`
 #[event]
 pub struct MinterAllowanceUpdatedEvent {
-    pub role_admin: Pubkey,
+    /// Caller of the update (`allowance_manager` authority).
+    pub actor: Pubkey,
     pub old_allowance: u64,
     pub new_allowance: u64,
 }
@@ -224,7 +226,8 @@ pub struct MinterAllowanceUpdatedEvent {
 /// EVM equivalent: `OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled)`
 #[event]
 pub struct OracleUpdatedEvent {
-    pub role_admin: Pubkey,
+    /// Caller of the update (`oracle_manager` authority).
+    pub actor: Pubkey,
     pub oracle: Pubkey,
     pub staleness_threshold: i64,
 }
@@ -234,7 +237,8 @@ pub struct OracleUpdatedEvent {
 /// AggregatorV3 interface address).
 #[event]
 pub struct PythProgramOwnerUpdatedEvent {
-    pub role_admin: Pubkey,
+    /// Caller of the update (`oracle_manager` authority).
+    pub actor: Pubkey,
     pub old_pyth_program_owner: Pubkey,
     pub new_pyth_program_owner: Pubkey,
 }
@@ -354,7 +358,6 @@ pub struct BridgeLimitsUpdatedEvent {
 #[event]
 pub struct BridgePauseEvent {
     pub pauser: Pubkey,
-    pub paused: bool,
 }
 
 /// Emitted when bridge is unpaused.
@@ -436,12 +439,4 @@ pub struct RefundCancelledEvent {
     pub canceller: Pubkey,
 }
 
-// Legacy event for backwards compatibility during migration
-/// Emitted when a refund is processed (legacy single-step).
-/// Deprecated: Use RefundInitiatedEvent + RefundConfirmedEvent for new integrations.
-#[event]
-pub struct RefundProcessedEvent {
-    pub request_id: [u8; 32],
-    pub recipient: Pubkey,
-    pub amount: u64,
-}
+

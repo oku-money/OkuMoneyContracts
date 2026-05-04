@@ -3,7 +3,7 @@ use crate::contexts::{
     BridgeAdmin, BridgeChainManager, BridgeFeeManager, BridgeLimitsManager, BridgeNonceAdmin,
     BridgePause, BridgeSignerManager, BridgeUnpause, InitializeBridge,
 };
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use crate::events::*;
 use crate::roles::BridgeAuthorityRole;
 use anchor_lang::prelude::*;
@@ -49,39 +49,39 @@ pub fn initialize_bridge(
     // ===== Validate caller-supplied defaults =====
     require!(
         config_args.bridge_fee_bps as u64 <= BASIS_POINTS,
-        OkuError::InvalidFeeBps
+        LitePsmError::InvalidFeeBps
     );
     require!(
         config_args.min_bridge_amount <= config_args.max_bridge_amount,
-        OkuError::BelowMinimum
+        LitePsmError::InvalidLimits
     );
     require!(
         config_args.bridge_deadline_secs >= BRIDGE_DEADLINE_MIN_SECS
             && config_args.bridge_deadline_secs <= BRIDGE_DEADLINE_MAX_SECS,
-        OkuError::InvalidDeadline
+        LitePsmError::InvalidDeadline
     );
 
     // Refund roles: must be distinct from each other AND from bridge_admin.
     // Forces key separation at deploy time (mirrors EVM OkuBridge initialize).
     require!(
         config_args.refund_initiator != Pubkey::default(),
-        OkuError::InvalidRecipient
+        LitePsmError::InvalidAuthority
     );
     require!(
         config_args.refund_confirmer != Pubkey::default(),
-        OkuError::InvalidRecipient
+        LitePsmError::InvalidAuthority
     );
     require!(
         config_args.refund_initiator != config_args.refund_confirmer,
-        OkuError::RefundRolesNotSeparated
+        LitePsmError::RefundRolesNotSeparated
     );
     require!(
         config_args.refund_initiator != bridge_admin_key,
-        OkuError::RefundRolesNotSeparated
+        LitePsmError::RefundRolesNotSeparated
     );
     require!(
         config_args.refund_confirmer != bridge_admin_key,
-        OkuError::RefundRolesNotSeparated
+        LitePsmError::RefundRolesNotSeparated
     );
 
     let config = &mut ctx.accounts.bridge_config;
@@ -148,7 +148,7 @@ pub fn remove_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -
 pub fn update_bridge_fee(ctx: Context<BridgeFeeManager>, new_fee_bps: u16) -> Result<()> {
     require!(
         new_fee_bps as u64 <= BASIS_POINTS,
-        OkuError::InvalidFeeBps
+        LitePsmError::InvalidFeeBps
     );
 
     let config = &mut ctx.accounts.bridge_config;
@@ -169,7 +169,7 @@ pub fn update_fee_recipient(ctx: Context<BridgeFeeManager>, new_recipient: Pubke
     // Reject zero address to prevent accidental lockout (matches EVM)
     require!(
         new_recipient != Pubkey::default(),
-        OkuError::InvalidRecipient
+        LitePsmError::InvalidRecipient
     );
 
     let config = &mut ctx.accounts.bridge_config;
@@ -190,7 +190,7 @@ pub fn update_bridge_limits(
     min_amount: u64,
     max_amount: u64,
 ) -> Result<()> {
-    require!(min_amount <= max_amount, OkuError::BelowMinimum);
+    require!(min_amount <= max_amount, LitePsmError::InvalidLimits);
 
     let config = &mut ctx.accounts.bridge_config;
     config.min_bridge_amount = min_amount;
@@ -207,11 +207,11 @@ pub fn update_bridge_limits(
 /// Pause bridge operations (emergency)
 pub fn pause_bridge(ctx: Context<BridgePause>) -> Result<()> {
     let config = &mut ctx.accounts.bridge_config;
+    require!(!config.is_paused, LitePsmError::AlreadyPaused);
     config.is_paused = true;
 
     emit!(BridgePauseEvent {
         pauser: ctx.accounts.bridge_pauser.key(),
-        paused: true,
     });
 
     Ok(())
@@ -220,6 +220,7 @@ pub fn pause_bridge(ctx: Context<BridgePause>) -> Result<()> {
 /// Unpause bridge operations
 pub fn unpause_bridge(ctx: Context<BridgeUnpause>) -> Result<()> {
     let config = &mut ctx.accounts.bridge_config;
+    require!(config.is_paused, LitePsmError::NotPaused);
     config.is_paused = false;
 
     emit!(BridgeUnpauseEvent {
@@ -245,7 +246,7 @@ pub fn skip_nonce(
     }
 
     let old_nonce = bridge_nonce.next_nonce;
-    require!(new_nonce > old_nonce, OkuError::BelowMinimum);
+    require!(new_nonce > old_nonce, LitePsmError::NonceNotMonotonic);
     bridge_nonce.next_nonce = new_nonce;
 
     emit!(NonceSkippedEvent {
@@ -261,7 +262,7 @@ pub fn skip_nonce(
 pub fn update_bridge_deadline(ctx: Context<BridgeLimitsManager>, new_deadline: i64) -> Result<()> {
     require!(
         new_deadline >= BRIDGE_DEADLINE_MIN_SECS && new_deadline <= BRIDGE_DEADLINE_MAX_SECS,
-        OkuError::InvalidDeadline
+        LitePsmError::InvalidDeadline
     );
 
     let config = &mut ctx.accounts.bridge_config;
@@ -283,7 +284,7 @@ pub fn update_orchestrator_signer(
     new_signer: Pubkey,
 ) -> Result<()> {
     // Reject zero address to prevent accidental lockout (matches EVM)
-    require!(new_signer != Pubkey::default(), OkuError::InvalidRecipient);
+    require!(new_signer != Pubkey::default(), LitePsmError::InvalidAuthority);
 
     let config = &mut ctx.accounts.bridge_config;
     let old_signer = config.orchestrator_signer;
@@ -307,7 +308,7 @@ pub fn set_bridge_authority(
     // Reject zero address to prevent accidental lockout
     require!(
         new_authority != Pubkey::default(),
-        OkuError::InvalidRecipient
+        LitePsmError::InvalidAuthority
     );
 
     let config = &mut ctx.accounts.bridge_config;

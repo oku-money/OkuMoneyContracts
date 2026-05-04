@@ -83,7 +83,7 @@ async function main() {
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
 
   // Load token mints
-  const okuMoneyMint = new PublicKey(addresses.tokens.okusd);
+  const okuMoneyMint = new PublicKey(addresses.tokens.okuMoney);
 
   // PDAs
   const [psmConfig] = derivePsmConfigPDA(programId);

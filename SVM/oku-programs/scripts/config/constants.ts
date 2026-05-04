@@ -3,7 +3,7 @@
  */
 
 // Supply limits
-export const MAX_SUPPLY = 1_000_000_000 * 1_000_000; // 1B OkuUSD (6 decimals)
+export const MAX_SUPPLY = 1_000_000_000 * 1_000_000; // 1B OkuMoney (6 decimals)
 export const MINTER_ALLOWANCE = 100_000_000 * 1_000_000; // 100M initial allowance
 
 // Bridge configuration

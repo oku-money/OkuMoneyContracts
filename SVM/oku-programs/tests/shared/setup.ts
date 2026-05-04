@@ -221,7 +221,7 @@ export interface PSMSetupResult {
  * - Checks if PSM is already initialized on-chain
  * - If not, initializes PSM with shared authorities
  * - Airdrops SOL to shared authorities
- * - Sets up OkuUSD escrow vault
+ * - Sets up OkuMoney escrow vault
  *
  * On subsequent calls:
  * - Returns cached PDAs immediately (no on-chain calls)
@@ -230,7 +230,7 @@ export interface PSMSetupResult {
  * @param provider - Anchor provider instance
  * @param payer - Keypair that pays for initialization
  * @param usdcMint - USDC mint address
- * @param okusdMint - OkuUSD mint address
+ * @param okuMoneyMint - OkuMoney mint address
  * @returns PSM setup result with all PDAs
  */
 export async function initializePSMIfNeeded(

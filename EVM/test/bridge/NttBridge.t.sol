@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {BridgeBaseTest} from "../BridgeBase.t.sol";
 import {NttAdapter} from "../../src/bridge/adapters/NttAdapter.sol";
-import {MockNttManager} from "../../src/mocks/MockNttManager.sol";
+import {MockNttManager} from "../mocks/MockNttManager.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {Roles} from "../../src/lib/Roles.sol";
 
@@ -37,7 +37,7 @@ contract NttBridgeTest is BridgeBaseTest {
     uint16 public constant WORMHOLE_BASE = 30;
 
     // Events
-    event BridgeInitiated(
+    event NttBridgeInitiated(
         uint256 amount, uint16 wormholeChainId, bytes32 recipient, uint64 sequence
     );
     event TransferInitiated(
@@ -163,7 +163,7 @@ contract NttBridgeTest is BridgeBaseTest {
 
         vm.prank(address(bridgeRouter));
         vm.expectEmit(false, false, false, true, address(nttAdapter));
-        emit BridgeInitiated(amount, WORMHOLE_ARBITRUM, _addressToBytes32(user2), 0);
+        emit NttBridgeInitiated(amount, WORMHOLE_ARBITRUM, _addressToBytes32(user2), 0);
         nttAdapter.bridge(address(okuMoney), amount, ARBITRUM_CHAIN_ID, user2);
 
         MockNttManager.PendingTransfer memory pending = nttManager.getLastTransfer();
@@ -396,14 +396,14 @@ contract NttBridgeTest is BridgeBaseTest {
         uint256 okuMAmount = 1000e18;
         _mintUsdOku(user1, okuMAmount);
 
-        uint256 usdBalance = usdOku.balanceOf(user1);
+        uint256 usdBalance = okuDollar.balanceOf(user1);
 
         vm.startPrank(user1);
-        usdOku.approve(address(bridgeRouter), usdBalance);
+        okuDollar.approve(address(bridgeRouter), usdBalance);
         bridgeRouter.bridgeWrappedVia(usdBalance, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
-        assertEq(usdOku.balanceOf(user1), 0);
+        assertEq(okuDollar.balanceOf(user1), 0);
 
         MockNttManager.PendingTransfer memory pending = nttManager.getLastTransfer();
         assertEq(pending.amount, okuMAmount);
@@ -413,9 +413,9 @@ contract NttBridgeTest is BridgeBaseTest {
         uint256 initialAmount = 1000e18;
         _mintUsdOku(user1, initialAmount);
 
-        uint256 usdBalance = usdOku.balanceOf(user1);
+        uint256 usdBalance = okuDollar.balanceOf(user1);
         vm.startPrank(user1);
-        usdOku.approve(address(bridgeRouter), usdBalance);
+        okuDollar.approve(address(bridgeRouter), usdBalance);
         bridgeRouter.bridgeWrappedVia(usdBalance, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 
@@ -514,10 +514,10 @@ contract NttBridgeTest is BridgeBaseTest {
         uint256 newPrice = okuMoney.okuMMultiplier() + priceIncrease;
         _setOkuMMultiplierAndRoll(newPrice);
 
-        uint256 usdBalance = usdOku.balanceOf(user1);
+        uint256 usdBalance = okuDollar.balanceOf(user1);
 
         vm.startPrank(user1);
-        usdOku.approve(address(bridgeRouter), usdBalance);
+        okuDollar.approve(address(bridgeRouter), usdBalance);
         bridgeRouter.bridgeWrappedVia(usdBalance, address(nttAdapter), ARBITRUM_CHAIN_ID, user2);
         vm.stopPrank();
 

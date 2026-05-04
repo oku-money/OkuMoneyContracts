@@ -42,7 +42,6 @@ abstract contract OkuBridgeEvents {
     );
 
     event NonceSkipped(uint256 indexed destChainId, uint256 skippedNonce);
-    event DustSwept(address indexed recipient, uint256 amount);
     event DeadlineUpdated(uint256 oldDeadline, uint256 newDeadline);
 
     /// @notice Emitted when a refund is initiated (step 1 of 2)

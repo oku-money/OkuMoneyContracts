@@ -24,7 +24,6 @@ pub fn pause(ctx: Context<Pause>) -> Result<()> {
 
     emit!(PauseEvent {
         pauser: ctx.accounts.pauser.key(),
-        paused: true,
     });
 
     Ok(())

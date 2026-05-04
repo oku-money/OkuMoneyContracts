@@ -98,7 +98,7 @@ async function main() {
   saveDeployment(network, {
     programs: {
       litePsm: programIds.litePsm.toBase58(),
-      wokusdVault: programIds.okuDollar.toBase58(),
+      okuDollarProgram: programIds.okuDollar.toBase58(),
       okuBridgeRouter: programIds.okuBridgeRouter.toBase58(),
     },
   });

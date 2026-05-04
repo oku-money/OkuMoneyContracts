@@ -3,36 +3,32 @@ pragma solidity ^0.8.28;
 
 /**
  * @title Constants
- * @notice Shared constants for all OkuMoney contracts
+ * @notice Shared constants for all OkuMoney contracts.
  *
  * ============ TERMINOLOGY LEGEND ============
  *
+ * NAMING:
+ *   - OkuMoney  / OkuM   : Non-rebasing base token (program/contract name + ticker)
+ *   - OkuDollar / UsdOku : Rebasing $1-pegged stablecoin (program/contract name + ticker)
+ *
  * MULTIPLIERS (Dollar Value Per Token):
- *   - okuMMultiplier: Dollar value of 1 OkuMoney token (starts at 1e18 = $1.00, grows with yield)
- *   - usdMultiplier:  Dollar value of 1 OkuDollar share (starts at 1e18 = $1.00, grows with yield)
+ *   - okuMMultiplier: Dollar value of 1 OkuM (starts at 1e18 = $1.00, grows with yield)
+ *   - usdMultiplier:  Dollar value of 1 UsdOku share (starts at 1e18 = $1.00, grows with yield)
  *
  * TOKEN AMOUNTS:
- *   - okuMAmount:   Raw OkuMoney token count (18 decimals, non-rebasing)
- *   - usdAmount:    OkuDollar amount in dollar terms (18 decimals, rebasing via usdMultiplier)
- *   - usdcAmount:   USDC amount (typically 6 decimals, but per-deployment via IERC20Metadata.decimals())
+ *   - okuMAmount: Raw OkuM token count (18 decimals, non-rebasing)
+ *   - usdAmount:  UsdOku amount in dollar terms (18 decimals, rebasing via usdMultiplier)
+ *   - usdcAmount: USDC amount in its native decimals (per-deployment via IERC20Metadata.decimals())
  *
  * INTERNAL ACCOUNTING:
- *   - shares:       Internal accounting units for rebasing tokens (OkuDollar uses usdShares)
- *   - dollars:      18-decimal dollar-denominated value (intermediate calculation unit)
- *
- * CONVERSION CONSTANTS:
- *   - PRECISION (1e18):                 Base unit for multiplier math (1e18 = $1.00)
- *   - DEFAULT_USDC_DECIMAL_MULTIPLIER:  10**(18 - 6) = 1e12. Default for Circle USDC (6 dec).
- *                                       LitePSM / RedemptionQueue compute the actual multiplier
- *                                       at init time from IERC20Metadata(usdc).decimals(); this
- *                                       constant is kept only for documentation and as the
- *                                       canonical default for chains running stock Circle USDC.
+ *   - shares:  Internal accounting units for the rebasing OkuDollar (usdShares)
+ *   - dollars: 18-decimal dollar-denominated value (intermediate calculation unit)
  *
  * KEY FORMULAS:
- *   USDC -> OkuMoney:  okuMAmount = (usdcAmount * decimalMultiplier) * PRECISION / okuMMultiplier
- *   OkuMoney -> USDC:  usdcAmount = (okuMAmount * okuMMultiplier / PRECISION) / decimalMultiplier
- *   OkuMoney -> OkuDollar shares: shares = okuMAmount * okuMMultiplier / usdMultiplier
- *   OkuDollar -> OkuMoney: okuMAmount = usdAmount * PRECISION / okuMMultiplier
+ *   USDC -> OkuM:           okuMAmount = (usdcAmount * decimalMultiplier) * PRECISION / okuMMultiplier
+ *   OkuM -> USDC:           usdcAmount = (okuMAmount * okuMMultiplier / PRECISION) / decimalMultiplier
+ *   OkuM -> UsdOku shares:  shares     = okuMAmount * okuMMultiplier / usdMultiplier
+ *   UsdOku -> OkuM:         okuMAmount = usdAmount * PRECISION / okuMMultiplier
  *
  * ============================================
  */
@@ -40,15 +36,9 @@ library Constants {
     /// @notice Standard precision for price and multiplier calculations (1e18 = $1.00)
     uint256 public constant PRECISION = 1e18;
 
-    /// @notice Default decimal conversion multiplier for the canonical Circle USDC layout
-    ///         (USDC 6 decimals -> OkuMoney 18 decimals).
-    /// @dev Per-contract decimal multipliers are stored on LitePSM / RedemptionQueue at
-    ///      init time via IERC20Metadata.decimals() so the protocol can run on chains
-    ///      that ship a non-6-decimal USDC variant. This value remains the documented
-    ///      default for Circle-issued USDC across major EVM chains.
-    uint256 public constant DEFAULT_USDC_DECIMAL_MULTIPLIER = 1e12;
-
-    /// @notice Maximum yield rate: ~3700% APY safety cap (well beyond any T-Bill rate)
+    /// @notice Maximum yield rate: PRECISION + 1e11 ≈ 3700% APY safety cap.
+    /// @dev Far above any plausible T-Bill rate; bounds the per-second compounding
+    ///      input to {MathLib.rpow} away from overflow regions.
     uint256 public constant MAX_RATE = PRECISION + 1e11;
 
     /// @notice Basis points denominator (10000 = 100%)

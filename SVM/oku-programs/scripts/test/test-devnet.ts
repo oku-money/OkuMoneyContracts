@@ -61,19 +61,19 @@ interface TestContext {
   vault: Program;
   // Mints
   usdcMint: PublicKey;
-  okusdMint: PublicKey;
-  wokusdMint: PublicKey;
+  okuMoneyMint: PublicKey;
+  usdOkuMint: PublicKey;
   // PDAs
   psmConfig: PublicKey;
   redemptionQueue: PublicKey;
   vaultConfig: PublicKey;
   bridgeConfig: PublicKey;
   psmVaultUsdc: PublicKey;
-  psmOkusdEscrow: PublicKey;
+  psmOkuMoneyEscrow: PublicKey;
   vaultOkusd: PublicKey;
   // Program IDs
   litePsmId: PublicKey;
-  wokusdVaultId: PublicKey;
+  okuDollarProgramId: PublicKey;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,38 +188,38 @@ async function buildContext(): Promise<TestContext> {
   const vaultIdl = JSON.parse(fs.readFileSync(vaultIdlPath, 'utf-8'));
 
   const litePsmId = new PublicKey(deployment.programs.litePsm!);
-  const wokusdVaultId = new PublicKey(deployment.programs.wokusdVault!);
+  const okuDollarProgramId = new PublicKey(deployment.programs.okuDollarProgram!);
 
   // Set the address in the IDL for 2-arg Program constructor (Anchor 1.0 compatibility)
   psmIdl.address = litePsmId.toBase58();
-  vaultIdl.address = wokusdVaultId.toBase58();
+  vaultIdl.address = okuDollarProgramId.toBase58();
 
   const psm = new Program(psmIdl, provider);
   const vault = new Program(vaultIdl, provider);
 
   // Mints
   const usdcMint = new PublicKey(deployment.tokens.usdc!);
-  const okusdMint = new PublicKey(deployment.tokens.okusd!);
-  // usdOku is the wrapped token (also known as wokusd)
-  const wokusdMint = new PublicKey(deployment.tokens.usdOku || deployment.tokens.wokusd!);
+  const okuMoneyMint = new PublicKey(deployment.tokens.okuMoney!);
+  // usdOku is the wrapped token (also known as usdOku)
+  const usdOkuMint = new PublicKey(deployment.tokens.usdOku || deployment.tokens.usdOku!);
 
   // PDAs
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
   const [redemptionQueue] = deriveRedemptionQueuePDA(litePsmId);
-  const [vaultConfig] = deriveVaultConfigPDA(wokusdVaultId);
+  const [vaultConfig] = deriveVaultConfigPDA(okuDollarProgramId);
   const [bridgeConfig] = deriveBridgeConfigPDA(litePsmId);
 
   const psmVaultUsdc = deployment.pdas.psmVaultUsdc
     ? new PublicKey(deployment.pdas.psmVaultUsdc)
     : getAssociatedTokenAddressSync(usdcMint, psmConfig, true, TOKEN_PROGRAM_ID);
 
-  const psmOkusdEscrow = deployment.pdas.psmOkusdEscrow
-    ? new PublicKey(deployment.pdas.psmOkusdEscrow)
-    : getAssociatedTokenAddressSync(okusdMint, psmConfig, true, TOKEN_2022_PROGRAM_ID);
+  const psmOkuMoneyEscrow = deployment.pdas.psmOkuMoneyEscrow
+    ? new PublicKey(deployment.pdas.psmOkuMoneyEscrow)
+    : getAssociatedTokenAddressSync(okuMoneyMint, psmConfig, true, TOKEN_2022_PROGRAM_ID);
 
   const vaultOkusd = deployment.pdas.vaultOkusd
     ? new PublicKey(deployment.pdas.vaultOkusd)
-    : getAssociatedTokenAddressSync(okusdMint, vaultConfig, true, TOKEN_2022_PROGRAM_ID);
+    : getAssociatedTokenAddressSync(okuMoneyMint, vaultConfig, true, TOKEN_2022_PROGRAM_ID);
 
   return {
     network,
@@ -229,17 +229,17 @@ async function buildContext(): Promise<TestContext> {
     psm,
     vault,
     usdcMint,
-    okusdMint,
-    wokusdMint,
+    okuMoneyMint,
+    usdOkuMint,
     psmConfig,
     redemptionQueue,
     vaultConfig,
     bridgeConfig,
     psmVaultUsdc,
-    psmOkusdEscrow,
+    psmOkuMoneyEscrow,
     vaultOkusd,
     litePsmId,
-    wokusdVaultId,
+    okuDollarProgramId,
   };
 }
 
@@ -368,23 +368,23 @@ async function readState(ctx: TestContext) {
   logger.log('');
   logger.info('Deployer token balances:');
   const usdcBal = await getTokenBalance(ctx, ctx.usdcMint, ctx.deployer.publicKey, TOKEN_PROGRAM_ID);
-  const okusdBal = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  // usdOku (wokusd) is also Token-2022
-  const wokusdBal = await getTokenBalance(ctx, ctx.wokusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const okuMoneyBal = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  // usdOku (usdOku) is also Token-2022
+  const usdOkuBal = await getTokenBalance(ctx, ctx.usdOkuMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
   const solBal = await ctx.provider.connection.getBalance(ctx.deployer.publicKey);
   logger.table({
     'SOL': (solBal / LAMPORTS_PER_SOL).toFixed(4),
     'USDC': fmtAmount(usdcBal),
-    'OkuMoney': fmtAmount(okusdBal),
-    'usdOku': fmtAmount(wokusdBal),
+    'OkuMoney': fmtAmount(okuMoneyBal),
+    'usdOku': fmtAmount(usdOkuBal),
   });
 }
 
 /**
- * Mint USDC -> OkuUSD via PSM
+ * Mint USDC -> OkuMoney via PSM
  */
 async function testMint(ctx: TestContext) {
-  logger.section('Test: Mint OkuUSD');
+  logger.section('Test: Mint OkuMoney');
 
   const amount = 100_000_000; // 100 USDC
 
@@ -410,12 +410,12 @@ async function testMint(ctx: TestContext) {
 
   // 3. Get balances before
   const usdcBefore = await getTokenBalance(ctx, ctx.usdcMint, ctx.deployer.publicKey, TOKEN_PROGRAM_ID);
-  const okusdBefore = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`Before - USDC: ${fmtAmount(usdcBefore)}, OkuUSD: ${fmtAmount(okusdBefore)}`);
+  const okuMoneyBefore = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`Before - USDC: ${fmtAmount(usdcBefore)}, OkuMoney: ${fmtAmount(okuMoneyBefore)}`);
 
-  // 4. Ensure ATAs exist (pre-create OkuUSD ATA to avoid init_if_needed CPI corruption)
+  // 4. Ensure ATAs exist (pre-create OkuMoney ATA to avoid init_if_needed CPI corruption)
   const userUsdcAta = getAssociatedTokenAddressSync(ctx.usdcMint, ctx.deployer.publicKey, false, TOKEN_PROGRAM_ID);
-  const userOkusdAta = await getOrCreateAta(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const userOkuMoneyAta = await getOrCreateAta(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
 
   // 5. Call PSM mintOkuM (mint_oku_m in the IDL)
   logger.info(`Calling psm.mintOkuM(${amount / 1_000_000} USDC)...`);
@@ -425,9 +425,9 @@ async function testMint(ctx: TestContext) {
       user: ctx.deployer.publicKey,
       config: ctx.psmConfig,
       usdcMint: ctx.usdcMint,
-      okuMoneyMint: ctx.okusdMint,
+      okuMoneyMint: ctx.okuMoneyMint,
       userUsdcAta,
-      userOkuMoneyAta: userOkusdAta,
+      userOkuMoneyAta: userOkuMoneyAta,
       vaultUsdc: ctx.psmVaultUsdc,
       priceUpdate: null,
       tokenProgram: TOKEN_PROGRAM_ID,
@@ -441,18 +441,18 @@ async function testMint(ctx: TestContext) {
 
   // 6. Verify
   const usdcAfter = await getTokenBalance(ctx, ctx.usdcMint, ctx.deployer.publicKey, TOKEN_PROGRAM_ID);
-  const okusdAfter = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`After - USDC: ${fmtAmount(usdcAfter)}, OkuUSD: ${fmtAmount(okusdAfter)}`);
-  logger.success(`Minted ${fmtAmount(okusdAfter - okusdBefore)} OkuUSD`);
+  const okuMoneyAfter = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`After - USDC: ${fmtAmount(usdcAfter)}, OkuMoney: ${fmtAmount(okuMoneyAfter)}`);
+  logger.success(`Minted ${fmtAmount(okuMoneyAfter - okuMoneyBefore)} OkuMoney`);
 }
 
 /**
- * Transfer OkuUSD to a new recipient
+ * Transfer OkuMoney to a new recipient
  */
 async function testTransfer(ctx: TestContext) {
-  logger.section('Test: Transfer OkuUSD');
+  logger.section('Test: Transfer OkuMoney');
 
-  const transferAmount = 10_000_000; // 10 OkuUSD
+  const transferAmount = 10_000_000; // 10 OkuMoney
 
   // 1. Generate recipient
   const recipient = Keypair.generate();
@@ -479,18 +479,18 @@ async function testTransfer(ctx: TestContext) {
     await sendAndConfirmTransaction(ctx.provider.connection, tx, [ctx.deployer]);
   }
 
-  // 3. Create recipient OkuUSD ATA (deployer pays)
-  const recipientAta = await getOrCreateAta(ctx, ctx.okusdMint, recipient.publicKey, TOKEN_2022_PROGRAM_ID);
+  // 3. Create recipient OkuMoney ATA (deployer pays)
+  const recipientAta = await getOrCreateAta(ctx, ctx.okuMoneyMint, recipient.publicKey, TOKEN_2022_PROGRAM_ID);
 
   // 4. Transfer via Token-2022
   const senderAta = getAssociatedTokenAddressSync(
-    ctx.okusdMint,
+    ctx.okuMoneyMint,
     ctx.deployer.publicKey,
     true,
     TOKEN_2022_PROGRAM_ID
   );
 
-  logger.info(`Transferring ${transferAmount / 1_000_000} OkuUSD...`);
+  logger.info(`Transferring ${transferAmount / 1_000_000} OkuMoney...`);
   const tx = new Transaction().add(
     createTransferInstruction(
       senderAta,
@@ -506,10 +506,10 @@ async function testTransfer(ctx: TestContext) {
   logger.success(`Transfer tx: ${explorerLink(ctx.network, sig)}`);
 
   // 5. Verify
-  const senderBal = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  const recipientBal = await getTokenBalance(ctx, ctx.okusdMint, recipient.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`Sender OkuUSD: ${fmtAmount(senderBal)}`);
-  logger.info(`Recipient OkuUSD: ${fmtAmount(recipientBal)}`);
+  const senderBal = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const recipientBal = await getTokenBalance(ctx, ctx.okuMoneyMint, recipient.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`Sender OkuMoney: ${fmtAmount(senderBal)}`);
+  logger.info(`Recipient OkuMoney: ${fmtAmount(recipientBal)}`);
   logger.success('Transfer verified');
 }
 
@@ -528,8 +528,8 @@ async function testRebase(ctx: TestContext) {
   // 2. First, deposit reserves to ensure we have enough collateral
   // The vault needs OkuMoney reserves to back the usdOku supply when rebasing
   // Check if we have enough OkuMoney to deposit
-  const userOkusdAta = await getOrCreateAta(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  const userBalance = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const userOkuMoneyAta = await getOrCreateAta(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const userBalance = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
   
   // Use 10% of available balance for reserves, minimum 1 OkuMoney
   const minReserve = 1_000_000; // 1 OkuMoney minimum
@@ -543,9 +543,9 @@ async function testRebase(ctx: TestContext) {
         .accountsPartial({
           reserveManager: ctx.deployer.publicKey,
           config: ctx.vaultConfig,
-          okuMoneyMint: ctx.okusdMint,
-          usdOkuMint: ctx.wokusdMint,
-          sourceAta: userOkusdAta,
+          okuMoneyMint: ctx.okuMoneyMint,
+          usdOkuMint: ctx.usdOkuMint,
+          sourceAta: userOkuMoneyAta,
           reserveVault: ctx.vaultOkusd,
           psmConfig: ctx.psmConfig,
           token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -571,7 +571,7 @@ async function testRebase(ctx: TestContext) {
       usdRebaser: ctx.deployer.publicKey,
       config: ctx.vaultConfig,
       reserveVault: ctx.vaultOkusd,
-      usdOkuMint: ctx.wokusdMint,
+      usdOkuMint: ctx.usdOkuMint,
       psmConfig: ctx.psmConfig,
       token2022Program: TOKEN_2022_PROGRAM_ID,
     })
@@ -592,27 +592,27 @@ async function testWrap(ctx: TestContext) {
   logger.section('Test: Wrap OkuMoney -> usdOku');
 
   // 1. Ensure ATAs exist (both OkuMoney and usdOku are Token-2022)
-  const userOkusdAta = await getOrCreateAta(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  const userWokusdAta = await getOrCreateAta(ctx, ctx.wokusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const userOkuMoneyAta = await getOrCreateAta(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const userUsdOkuAta = await getOrCreateAta(ctx, ctx.usdOkuMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
 
   // 2. Get balances before
-  const okusdBefore = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  const wokusdBefore = await getTokenBalance(ctx, ctx.wokusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`Before - OkuUSD: ${fmtAmount(okusdBefore)}, wOkuUSD: ${fmtAmount(wokusdBefore)}`);
+  const okuMoneyBefore = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const usdOkuBefore = await getTokenBalance(ctx, ctx.usdOkuMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`Before - OkuMoney: ${fmtAmount(okuMoneyBefore)}, usdOku: ${fmtAmount(usdOkuBefore)}`);
 
   // Use 25% of available balance, minimum 1 OkuMoney
   const minWrap = 1_000_000; // 1 OkuMoney minimum
-  const wrapAmount = Math.max(minWrap, Math.floor(Number(okusdBefore) / 4));
+  const wrapAmount = Math.max(minWrap, Math.floor(Number(okuMoneyBefore) / 4));
   
-  if (okusdBefore < BigInt(minWrap)) {
-    logger.error(`Insufficient OkuMoney balance (${fmtAmount(okusdBefore)} < ${fmtAmount(minWrap)}). Run mint first.`);
+  if (okuMoneyBefore < BigInt(minWrap)) {
+    logger.error(`Insufficient OkuMoney balance (${fmtAmount(okuMoneyBefore)} < ${fmtAmount(minWrap)}). Run mint first.`);
     return;
   }
 
   // 3. Call vault.wrap
   // We need to derive the dead_shares_ata for first deposit (uses System Program as "dead" owner)
   const deadSharesAta = getAssociatedTokenAddressSync(
-    ctx.wokusdMint,
+    ctx.usdOkuMint,
     SystemProgram.programId, // Dead address
     true,
     TOKEN_2022_PROGRAM_ID
@@ -627,7 +627,7 @@ async function testWrap(ctx: TestContext) {
         ctx.deployer.publicKey, // payer
         deadSharesAta,
         SystemProgram.programId, // owner (dead address)
-        ctx.wokusdMint,
+        ctx.usdOkuMint,
         TOKEN_2022_PROGRAM_ID,
         ASSOCIATED_TOKEN_PROGRAM_ID
       )
@@ -644,10 +644,10 @@ async function testWrap(ctx: TestContext) {
     .accountsPartial({
       user: ctx.deployer.publicKey,
       config: ctx.vaultConfig,
-      okuMoneyMint: ctx.okusdMint,
-      usdOkuMint: ctx.wokusdMint,
-      userOkuMoneyAta: userOkusdAta,
-      userUsdOkuAta: userWokusdAta,
+      okuMoneyMint: ctx.okuMoneyMint,
+      usdOkuMint: ctx.usdOkuMint,
+      userOkuMoneyAta: userOkuMoneyAta,
+      userUsdOkuAta: userUsdOkuAta,
       reserveVault: ctx.vaultOkusd,
       psmConfig: ctx.psmConfig,
       deadSharesAta: deadSharesAta,
@@ -660,10 +660,10 @@ async function testWrap(ctx: TestContext) {
   logger.success(`Wrap tx: ${explorerLink(ctx.network, sig)}`);
 
   // 4. Verify
-  const okusdAfter = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  const wokusdAfter = await getTokenBalance(ctx, ctx.wokusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`After - OkuMoney: ${fmtAmount(okusdAfter)}, usdOku: ${fmtAmount(wokusdAfter)}`);
-  logger.success(`Wrapped ${fmtAmount(okusdBefore - okusdAfter)} OkuMoney -> ${fmtAmount(wokusdAfter - wokusdBefore)} usdOku`);
+  const okuMoneyAfter = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const usdOkuAfter = await getTokenBalance(ctx, ctx.usdOkuMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`After - OkuMoney: ${fmtAmount(okuMoneyAfter)}, usdOku: ${fmtAmount(usdOkuAfter)}`);
+  logger.success(`Wrapped ${fmtAmount(okuMoneyBefore - okuMoneyAfter)} OkuMoney -> ${fmtAmount(usdOkuAfter - usdOkuBefore)} usdOku`);
 }
 
 /**
@@ -673,20 +673,20 @@ async function testUnwrap(ctx: TestContext) {
   logger.section('Test: Unwrap usdOku -> OkuMoney');
 
   // 1. Ensure ATAs exist (both are Token-2022)
-  const userOkusdAta = await getOrCreateAta(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  const userWokusdAta = await getOrCreateAta(ctx, ctx.wokusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const userOkuMoneyAta = await getOrCreateAta(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const userUsdOkuAta = await getOrCreateAta(ctx, ctx.usdOkuMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
 
   // 2. Get balances before
-  const okusdBefore = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  const wokusdBefore = await getTokenBalance(ctx, ctx.wokusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`Before - OkuMoney: ${fmtAmount(okusdBefore)}, usdOku: ${fmtAmount(wokusdBefore)}`);
+  const okuMoneyBefore = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const usdOkuBefore = await getTokenBalance(ctx, ctx.usdOkuMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`Before - OkuMoney: ${fmtAmount(okuMoneyBefore)}, usdOku: ${fmtAmount(usdOkuBefore)}`);
 
   // Use 50% of available usdOku balance, minimum 1 usdOku
   const minUnwrap = 1_000_000; // 1 usdOku minimum
-  const unwrapShares = Math.max(minUnwrap, Math.floor(Number(wokusdBefore) / 2));
+  const unwrapShares = Math.max(minUnwrap, Math.floor(Number(usdOkuBefore) / 2));
   
-  if (wokusdBefore < BigInt(minUnwrap)) {
-    logger.error(`Insufficient usdOku balance (${fmtAmount(wokusdBefore)} < ${fmtAmount(minUnwrap)}). Run wrap first.`);
+  if (usdOkuBefore < BigInt(minUnwrap)) {
+    logger.error(`Insufficient usdOku balance (${fmtAmount(usdOkuBefore)} < ${fmtAmount(minUnwrap)}). Run wrap first.`);
     return;
   }
 
@@ -697,10 +697,10 @@ async function testUnwrap(ctx: TestContext) {
     .accountsPartial({
       user: ctx.deployer.publicKey,
       config: ctx.vaultConfig,
-      okuMoneyMint: ctx.okusdMint,
-      usdOkuMint: ctx.wokusdMint,
-      userOkuMoneyAta: userOkusdAta,
-      userUsdOkuAta: userWokusdAta,
+      okuMoneyMint: ctx.okuMoneyMint,
+      usdOkuMint: ctx.usdOkuMint,
+      userOkuMoneyAta: userOkuMoneyAta,
+      userUsdOkuAta: userUsdOkuAta,
       reserveVault: ctx.vaultOkusd,
       psmConfig: ctx.psmConfig,
       token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -712,19 +712,19 @@ async function testUnwrap(ctx: TestContext) {
   logger.success(`Unwrap tx: ${explorerLink(ctx.network, sig)}`);
 
   // 4. Verify
-  const okusdAfter = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  const wokusdAfter = await getTokenBalance(ctx, ctx.wokusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`After - OkuMoney: ${fmtAmount(okusdAfter)}, usdOku: ${fmtAmount(wokusdAfter)}`);
-  logger.success(`Unwrapped ${fmtAmount(wokusdBefore - wokusdAfter)} usdOku -> ${fmtAmount(okusdAfter - okusdBefore)} OkuMoney`);
+  const okuMoneyAfter = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const usdOkuAfter = await getTokenBalance(ctx, ctx.usdOkuMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`After - OkuMoney: ${fmtAmount(okuMoneyAfter)}, usdOku: ${fmtAmount(usdOkuAfter)}`);
+  logger.success(`Unwrapped ${fmtAmount(usdOkuBefore - usdOkuAfter)} usdOku -> ${fmtAmount(okuMoneyAfter - okuMoneyBefore)} OkuMoney`);
 }
 
 /**
- * Redeem OkuUSD -> USDC (deposit buffer first, then redeem)
+ * Redeem OkuMoney -> USDC (deposit buffer first, then redeem)
  */
 async function testRedeem(ctx: TestContext) {
-  logger.section('Test: Redeem OkuUSD -> USDC');
+  logger.section('Test: Redeem OkuMoney -> USDC');
 
-  const redeemAmount = 10_000_000; // 10 OkuUSD
+  const redeemAmount = 10_000_000; // 10 OkuMoney
   const bufferAmount = 20_000_000; // 20 USDC buffer (extra to ensure instant redemption)
 
   // 1. Deposit USDC buffer so instant redemption works
@@ -756,20 +756,20 @@ async function testRedeem(ctx: TestContext) {
 
   // 2. Get balances before
   const usdcBefore = await getTokenBalance(ctx, ctx.usdcMint, ctx.deployer.publicKey, TOKEN_PROGRAM_ID);
-  const okusdBefore = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`Before - USDC: ${fmtAmount(usdcBefore)}, OkuUSD: ${fmtAmount(okusdBefore)}`);
+  const okuMoneyBefore = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`Before - USDC: ${fmtAmount(usdcBefore)}, OkuMoney: ${fmtAmount(okuMoneyBefore)}`);
 
-  if (okusdBefore < BigInt(redeemAmount)) {
-    logger.error(`Insufficient OkuUSD balance (${fmtAmount(okusdBefore)} < ${fmtAmount(redeemAmount)}). Run mint first.`);
+  if (okuMoneyBefore < BigInt(redeemAmount)) {
+    logger.error(`Insufficient OkuMoney balance (${fmtAmount(okuMoneyBefore)} < ${fmtAmount(redeemAmount)}). Run mint first.`);
     return;
   }
 
   // 3. Ensure ATAs
   const userUsdcAta = getAssociatedTokenAddressSync(ctx.usdcMint, ctx.deployer.publicKey, true, TOKEN_PROGRAM_ID);
-  const userOkusdAta = getAssociatedTokenAddressSync(ctx.okusdMint, ctx.deployer.publicKey, true, TOKEN_2022_PROGRAM_ID);
+  const userOkuMoneyAta = getAssociatedTokenAddressSync(ctx.okuMoneyMint, ctx.deployer.publicKey, true, TOKEN_2022_PROGRAM_ID);
 
   // Ensure vault OkuMoney ATA exists (for queued redemptions escrow)
-  await getOrCreateAta(ctx, ctx.okusdMint, ctx.psmConfig, TOKEN_2022_PROGRAM_ID);
+  await getOrCreateAta(ctx, ctx.okuMoneyMint, ctx.psmConfig, TOKEN_2022_PROGRAM_ID);
 
   // 4. Call PSM redeemOkuM (redeem_oku_m in the IDL)
   // Note: On forks, the Token-2022 interest-bearing extension can cause overflow errors
@@ -785,11 +785,11 @@ async function testRedeem(ctx: TestContext) {
         config: ctx.psmConfig,
         redemptionQueue: ctx.redemptionQueue,
         usdcMint: ctx.usdcMint,
-        okuMoneyMint: ctx.okusdMint,
+        okuMoneyMint: ctx.okuMoneyMint,
         userUsdcAta,
-        userOkuMoneyAta: userOkusdAta,
+        userOkuMoneyAta: userOkuMoneyAta,
         vaultUsdc: ctx.psmVaultUsdc,
-        vaultOkuMoney: ctx.psmOkusdEscrow,
+        vaultOkuMoney: ctx.psmOkuMoneyEscrow,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -801,9 +801,9 @@ async function testRedeem(ctx: TestContext) {
 
     // 5. Verify
     const usdcAfter = await getTokenBalance(ctx, ctx.usdcMint, ctx.deployer.publicKey, TOKEN_PROGRAM_ID);
-    const okusdAfter = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-    logger.info(`After - USDC: ${fmtAmount(usdcAfter)}, OkuUSD: ${fmtAmount(okusdAfter)}`);
-    logger.success(`Redeemed ${fmtAmount(okusdBefore - okusdAfter)} OkuUSD -> ${fmtAmount(usdcAfter - usdcBefore)} USDC`);
+    const okuMoneyAfter = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+    logger.info(`After - USDC: ${fmtAmount(usdcAfter)}, OkuMoney: ${fmtAmount(okuMoneyAfter)}`);
+    logger.success(`Redeemed ${fmtAmount(okuMoneyBefore - okuMoneyAfter)} OkuMoney -> ${fmtAmount(usdcAfter - usdcBefore)} USDC`);
   } catch (e: any) {
     // Check for Token-2022 interest overflow error (common on forks)
     if (e.message?.includes('Operation overflowed') || e.logs?.some((l: string) => l.includes('Operation overflowed'))) {
@@ -819,12 +819,12 @@ async function testRedeem(ctx: TestContext) {
 }
 
 /**
- * Bridge burn OkuUSD (Solana -> EVM)
+ * Bridge burn OkuMoney (Solana -> EVM)
  */
 async function testBridgeBurn(ctx: TestContext) {
   logger.section('Test: Bridge Burn (Solana -> EVM)');
 
-  const burnAmount = 5_000_000; // 5 OkuUSD
+  const burnAmount = 5_000_000; // 5 OkuMoney
   const destinationChainId = 1; // Ethereum mainnet
   const evmRecipient = Buffer.alloc(20);
   evmRecipient.write('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', 'hex');
@@ -833,11 +833,11 @@ async function testBridgeBurn(ctx: TestContext) {
   const [bridgeNonce] = deriveBridgeNoncePDA(ctx.litePsmId, destinationChainId);
 
   // 2. Get balances before
-  const okusdBefore = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`Before - OkuUSD: ${fmtAmount(okusdBefore)}`);
+  const okuMoneyBefore = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`Before - OkuMoney: ${fmtAmount(okuMoneyBefore)}`);
 
-  if (okusdBefore < BigInt(burnAmount)) {
-    logger.error(`Insufficient OkuUSD balance (${fmtAmount(okusdBefore)} < ${fmtAmount(burnAmount)}). Run mint first.`);
+  if (okuMoneyBefore < BigInt(burnAmount)) {
+    logger.error(`Insufficient OkuMoney balance (${fmtAmount(okuMoneyBefore)} < ${fmtAmount(burnAmount)}). Run mint first.`);
     return;
   }
 
@@ -846,13 +846,13 @@ async function testBridgeBurn(ctx: TestContext) {
   const feeRecipient = bridgeConfigData.feeRecipient as PublicKey;
   
   // 4. Ensure ATAs exist
-  const userOkusdAta = await getOrCreateAta(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const userOkuMoneyAta = await getOrCreateAta(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
   
   // Fee recipient ATA - if same as user, Anchor will reject duplicate mutable accounts
   // In that case, fee goes to the user's ATA anyway
   const feeRecipientAta = feeRecipient.equals(ctx.deployer.publicKey)
-    ? userOkusdAta // Same account, but Anchor might still reject this
-    : await getOrCreateAta(ctx, ctx.okusdMint, feeRecipient, TOKEN_2022_PROGRAM_ID);
+    ? userOkuMoneyAta // Same account, but Anchor might still reject this
+    : await getOrCreateAta(ctx, ctx.okuMoneyMint, feeRecipient, TOKEN_2022_PROGRAM_ID);
 
   // If fee recipient is the user, we cannot bridge (duplicate mutable account constraint)
   if (feeRecipient.equals(ctx.deployer.publicKey)) {
@@ -874,8 +874,8 @@ async function testBridgeBurn(ctx: TestContext) {
       bridgeConfig: ctx.bridgeConfig,
       config: ctx.psmConfig,
       bridgeNonce,
-      okuMoneyMint: ctx.okusdMint,
-      userOkuMoneyAta: userOkusdAta,
+      okuMoneyMint: ctx.okuMoneyMint,
+      userOkuMoneyAta: userOkuMoneyAta,
       feeRecipientAta,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
@@ -885,9 +885,9 @@ async function testBridgeBurn(ctx: TestContext) {
   logger.success(`Bridge burn tx: ${explorerLink(ctx.network, sig)}`);
 
   // 6. Verify
-  const okusdAfter = await getTokenBalance(ctx, ctx.okusdMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`After - OkuUSD: ${fmtAmount(okusdAfter)}`);
-  logger.success(`Burned ${fmtAmount(okusdBefore - okusdAfter)} OkuUSD for bridge to chain ${destinationChainId}`);
+  const okuMoneyAfter = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`After - OkuMoney: ${fmtAmount(okuMoneyAfter)}`);
+  logger.success(`Burned ${fmtAmount(okuMoneyBefore - okuMoneyAfter)} OkuMoney for bridge to chain ${destinationChainId}`);
 
   // 7. Read updated nonce
   try {
@@ -933,7 +933,7 @@ async function main() {
 
   logger.success(`Deployer: ${ctx.deployer.publicKey.toBase58()}`, false);
   logger.success(`PSM Program: ${ctx.litePsmId.toBase58()}`, false);
-  logger.success(`Vault Program: ${ctx.wokusdVaultId.toBase58()}`, false);
+  logger.success(`Vault Program: ${ctx.okuDollarProgramId.toBase58()}`, false);
   logger.log('');
 
   if (stepName) {

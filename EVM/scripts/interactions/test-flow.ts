@@ -146,16 +146,16 @@ async function testWrap(ctx: TestContext, amount: bigint): Promise<bigint> {
   logger.section("Step 2: Wrap OkuMoney to OkuDollar");
   
   const okuDollarAddr = await ctx.okuDollar.getAddress();
-  const usdOkuBefore = await ctx.okuDollar.balanceOf(ctx.user.address);
+  const okuDollarBefore = await ctx.okuDollar.balanceOf(ctx.user.address);
   
   logger.info(`Wrapping ${ethers.formatUnits(amount, 18)} OkuM...`);
   
   await waitForTx(await ctx.okuMoney.approve(okuDollarAddr, amount), "Approve OkuM");
   await waitForTx(await ctx.okuDollar.wrap(amount, ctx.user.address, 0n), "Wrap");
   
-  const usdOkuAfter = await ctx.okuDollar.balanceOf(ctx.user.address);
-  const wrapped = usdOkuAfter - usdOkuBefore;
-  logger.success(`Received ${ethers.formatUnits(wrapped, 18)} usdOku`);
+  const okuDollarAfter = await ctx.okuDollar.balanceOf(ctx.user.address);
+  const wrapped = okuDollarAfter - okuDollarBefore;
+  logger.success(`Received ${ethers.formatUnits(wrapped, 18)} okuDollar`);
   
   return wrapped;
 }
@@ -165,7 +165,7 @@ async function testUnwrap(ctx: TestContext, shares: bigint): Promise<bigint> {
   
   const okuMBefore = await ctx.okuMoney.balanceOf(ctx.user.address);
   
-  logger.info(`Unwrapping ${ethers.formatUnits(shares, 18)} usdOku...`);
+  logger.info(`Unwrapping ${ethers.formatUnits(shares, 18)} okuDollar...`);
   
   await waitForTx(await ctx.okuDollar.unwrap(shares, ctx.user.address), "Unwrap");
   
@@ -233,13 +233,13 @@ async function showFinalBalances(ctx: TestContext) {
   
   const usdc = await ctx.usdc.balanceOf(ctx.user.address);
   const okuM = await ctx.okuMoney.balanceOf(ctx.user.address);
-  const usdOku = await ctx.okuDollar.balanceOf(ctx.user.address);
+  const okuDollar = await ctx.okuDollar.balanceOf(ctx.user.address);
   const eth = await ctx.user.provider.getBalance(ctx.user.address);
   
   logger.info(`ETH: ${ethers.formatEther(eth)}`);
   logger.info(`USDC: ${ethers.formatUnits(usdc, 6)}`);
   logger.info(`OkuMoney: ${ethers.formatUnits(okuM, 18)}`);
-  logger.info(`OkuDollar: ${ethers.formatUnits(usdOku, 18)}`);
+  logger.info(`OkuDollar: ${ethers.formatUnits(okuDollar, 18)}`);
 }
 
 async function main() {

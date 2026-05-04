@@ -44,9 +44,6 @@ abstract contract OkuDollarEvents {
         uint256 usdMultiplier
     );
 
-    /// @notice Emitted when the USD multiplier is directly overridden (emergency path)
-    event UsdMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply);
-
     /// @notice Emitted when yield rate is updated
     event UsdYieldRateUpdated(
         uint256 oldRatePerSecond,

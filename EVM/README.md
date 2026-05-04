@@ -72,7 +72,9 @@ src/
     MathLib.sol             # Multiplier math + rpow
     ReentrancyGuardUpgradeable.sol  # OZ-5.x-compatible upgradeable reentrancy guard
     YieldSandwichGuard.sol  # Shared whenYieldNotDistributing modifier (OkuDollar + LitePSM)
-  mocks/                    # Test / testnet-deploy mocks (not deployed to mainnet)
+
+test/
+  mocks/                    # Test-only mocks (live under test/, never compiled into production artifacts)
     MockUSDC.sol            # 6-decimal ERC-20; used on testnets + in tests
     MockBridgeAdapter.sol   # Test double for IBridgeAdapter (used by both Foundry and Hardhat)
     MockNttManager.sol      # Test double for INttManager
@@ -197,7 +199,7 @@ interface IOkuMoney {
 
 ### Blacklist Exemption
 
-Bridge and router addresses can be marked exempt from blacklisting via `initializeBlacklistExempt(bridge, router)` (one-time, `DEFAULT_ADMIN_ROLE`). Prevents accidental blacklisting of infrastructure contracts. `blacklist()` deliberately does NOT use `whenNotPaused` — critical for the pause-to-blacklist protocol.
+`blacklist()` deliberately does NOT use `whenNotPaused` — critical for the pause-to-blacklist protocol so operators can act during a paused incident.
 
 ### Role Constants
 
@@ -247,7 +249,7 @@ usdMultiplier() = usdBaseMultiplier × _rpow(usdRatePerSecond, elapsed, PRECISIO
 
 Unlike OkuMoney (stored discrete multiplier), OkuDollar uses continuous `_rpow` accrual. `balanceOf(user)` returns `usdShares[user] × usdMultiplier() / PRECISION` — this value changes every second without any transaction.
 
-**Rate scheduling**: Head-to-tail chaining via `setUsdYieldRate(rate, endTimestamp)`, `setNextUsdYieldRate(rate)` (rejects if the current `usdRateEnd` has already elapsed — `RateAlreadyExpired`), and `updateUsdMultiplier(newMultiplier)` (emergency override that snapshots and resets).
+**Rate scheduling**: Head-to-tail chaining via `setUsdYieldRate(rate, endTimestamp)` and `setNextUsdYieldRate(rate)` (rejects if the current `usdRateEnd` has already elapsed — `RateAlreadyExpired`).
 
 ### Wrap / Unwrap (Multiplier-Aware)
 
@@ -290,7 +292,7 @@ Pause is a **full freeze**. The following are gated behind `whenNotPaused`:
 - OkuBridge: `bridgeBurn`, `bridgeMint`, `initiateRefund`, `confirmRefund`, `cancelRefund`.
 - OkuBridgeRouter: `bridgeUsdOku`, `bridgeOkuM`, `bridgeWrappedVia`, `bridgeVia`.
 
-**Intentionally NOT pause-gated**: the vault's yield-rate setters (`setUsdYieldRate`, `setNextUsdYieldRate`, `updateUsdMultiplier`) and `setMinCollateralRatio` — these are admin emergency levers that must remain callable during a pause.
+**Intentionally NOT pause-gated**: the vault's yield-rate setters (`setUsdYieldRate`, `setNextUsdYieldRate`) and `setMinCollateralRatio` — these are admin emergency levers that must remain callable during a pause.
 
 ### Events
 
@@ -300,7 +302,6 @@ Pause is a **full freeze**. The following are gated behind `whenNotPaused`:
 | `TransferValue(from, to, shares, dollarValue)` | Emitted alongside `Transfer`, exposing the share-level accounting. |
 | `Wrapped(user, receiver, okuMAmount, usdMinted, okuMMultiplier, usdMultiplier)` | Both multipliers snapshotted for rate reconstruction. |
 | `Unwrapped(user, receiver, usdAmount, okuMReturned, okuMMultiplier, usdMultiplier)` | Both multipliers snapshotted. |
-| `UsdMultiplierUpdated(oldMultiplier, newMultiplier, totalSupply)` | Emitted by `updateUsdMultiplier` (emergency override). |
 | `UsdYieldRateUpdated(oldRatePerSecond, newRatePerSecond, endTimestamp, snapshotMultiplier)` | Rate change with snapshot for off-chain reconstruction. |
 | `NextUsdYieldRateSet(newRatePerSecond, activatesAt)` | Pending rate staged. |
 | `MinCollateralRatioUpdated(oldRatio, newRatio)` | Collateralization floor changed. |
@@ -378,7 +379,7 @@ function pause() / unpause() external;                                     // PS
 
 Stores raw OkuMoney token amounts. Since OkuMoney is non-rebasing, queued tokens don't grow in balance — but they appreciate in dollar value via `okuMMultiplier()`. At processing time, `usdcAmount = okuMAmount × okuMMultiplier() / PRECISION` (scaled to 6 decimals). The multiplier is cached once per batch for gas efficiency and cross-entry consistency.
 
-`enqueue(user, okuMTokenAmount)` is record-only — the PSM transfers OkuMoney into the queue before calling. `processQueue(startIndex, endIndex, usdcToken)` (called by the PSM via `QUEUE_PSM`) burns OkuMoney, pulls USDC from the PSM, and pays users. `rescueQueueEntry(index, alternateRecipient)` returns OkuMoney to a stuck entry (e.g., USDC-blacklisted recipient) — called by `QUEUE_RESCUER`.
+`enqueue(user, okuMTokenAmount)` is record-only — the PSM transfers OkuMoney into the queue before calling. `processQueue(startIndex, endIndex)` (called by the PSM via `QUEUE_PSM`) burns OkuMoney, pulls USDC from the PSM, and pays users. `rescueQueueEntry(index, alternateRecipient)` returns OkuMoney to a stuck entry (e.g., USDC-blacklisted recipient) — called by `QUEUE_RESCUER`.
 
 ### Events
 
@@ -438,7 +439,6 @@ Validates in order:
 | `ChainAdded(chainId)` / `ChainRemoved(chainId)` | Supported-chain set changes. |
 | `LimitsUpdated(oldMin, oldMax, newMin, newMax)` | Bridge amount limits. |
 | `NonceSkipped(destChainId, skippedNonce)` | Admin forcibly advanced a stuck nonce. |
-| `DustSwept(recipient, amount)` | Admin swept rounding dust out of the bridge. |
 | `DeadlineUpdated(oldDeadline, newDeadline)` | Signature-window TTL. |
 | `RefundInitiated(requestId, initiator, sender, amount)` | Step 1 of refund flow. |
 | `RefundConfirmed(requestId, sender, amount)` | Step 2 — tokens returned. |
@@ -473,7 +473,7 @@ bytes32 public constant NTT_RESCUER      = keccak256("NTT_RESCUER");      // wit
 
 | Event | Parameters |
 |---|---|
-| `BridgeInitiated(amount, wormholeChainId, recipient, sequence)` | NTT `transfer` call from the router. |
+| `NttBridgeInitiated(amount, wormholeChainId, recipient, sequence)` | NTT `transfer` call from the router. |
 | `ChainIdConfigured(evmChainId, wormholeChainId)` | EVM → Wormhole chain-id mapping added/updated. |
 
 `IOFTAdapter.sol` was removed in Phase 1 (unused). Only `IBridgeAdapter` + `NttAdapter` + `INttManager` remain in `src/bridge/adapters/`.

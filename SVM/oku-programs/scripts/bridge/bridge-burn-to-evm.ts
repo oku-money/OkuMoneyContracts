@@ -83,10 +83,10 @@ async function main() {
   logger.info(`Program ID: ${programId.toBase58()}`);
 
   // Load token mint
-  if (!deployment.tokens?.okusd) {
+  if (!deployment.tokens?.okuMoney) {
     throw new Error('OkuMoney mint not found in deployment');
   }
-  const okuMoneyMint = new PublicKey(deployment.tokens.okusd);
+  const okuMoneyMint = new PublicKey(deployment.tokens.okuMoney);
   logger.info(`OkuMoney Mint: ${okuMoneyMint.toBase58()}`);
 
   // PDAs

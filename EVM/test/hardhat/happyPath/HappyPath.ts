@@ -277,7 +277,7 @@ describe("Happy Path Testing", () => {
         await psm.connect(Dave).redeemOkuM(daveRedeemAmount)
 
         // Verify all 4 users are in the queue
-        expect(await queue.queueUpperBound()).to.equal(4)
+        expect(await queue.queueLength()).to.equal(4)
 
         // Each user still has half their OkuDollar (the other half is locked in queue)
         expect(await okuMoney.balanceOf(aliceAddr)).to.equal(aliceBalance - aliceRedeemAmount)
@@ -320,7 +320,7 @@ describe("Happy Path Testing", () => {
         await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("50000", 6))
 
         // Verify queue is now empty
-        expect(await queue.queueUpperBound()).to.equal(0)
+        expect(await queue.queueLength()).to.equal(0)
 
         // Verify all users received USDC
         const aliceUsdcAfter = await usdc.balanceOf(aliceAddr)
@@ -401,14 +401,14 @@ describe("Happy Path Testing", () => {
         const charlieUsdcAfterInstant = await usdc.balanceOf(charlieAddr)
         expect(aliceUsdcAfterInstant - aliceUsdcBefore).to.be.gt(0)
         expect(charlieUsdcAfterInstant - charlieUsdcBefore).to.be.gt(0)
-        expect(await queue.queueUpperBound()).to.equal(0)
+        expect(await queue.queueLength()).to.equal(0)
 
         // Bob and Dave redeem — buffer is now depleted, these should be queued
         await psm.connect(Bob).redeemOkuM(bobRedeem)
         await psm.connect(Dave).redeemOkuM(daveRedeem)
 
         // Verify Bob and Dave are queued
-        expect(await queue.queueUpperBound()).to.equal(2)
+        expect(await queue.queueLength()).to.equal(2)
 
         // Bob and Dave should NOT have received any USDC
         expect(await usdc.balanceOf(bobAddr)).to.equal(bobUsdcBefore)
@@ -429,7 +429,7 @@ describe("Happy Path Testing", () => {
         await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("10000", 6))
 
         // Queue should now be empty
-        expect(await queue.queueUpperBound()).to.equal(0)
+        expect(await queue.queueLength()).to.equal(0)
 
         // Bob and Dave should have received USDC from queue processing
         const bobUsdcAfter = await usdc.balanceOf(bobAddr)

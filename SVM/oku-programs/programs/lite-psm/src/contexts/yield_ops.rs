@@ -1,4 +1,4 @@
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_2022::Token2022;
@@ -10,7 +10,7 @@ use anchor_spl::token_interface::Mint as MintInterface;
 pub struct SetOkuMPrice<'info> {
     /// Rebaser role - authorized to update OkuMoney price
     #[account(
-        constraint = rebaser.key() == config.rebaser @ OkuError::Unauthorized
+        constraint = rebaser.key() == config.rebaser @ LitePsmError::Unauthorized
     )]
     pub rebaser: Signer<'info>,
 
@@ -39,7 +39,7 @@ pub struct SetOkuMPrice<'info> {
 pub struct DistributeYield<'info> {
     /// Rebaser role - authorized to distribute yield
     #[account(
-        constraint = rebaser.key() == config.rebaser @ OkuError::Unauthorized
+        constraint = rebaser.key() == config.rebaser @ LitePsmError::Unauthorized
     )]
     pub rebaser: Signer<'info>,
 

@@ -1,4 +1,4 @@
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use crate::state::{
     BridgeConfig, BridgeNonce, PendingRefund, ProcessedRequest, PsmConfig, RefundedRequest,
 };
@@ -147,7 +147,7 @@ pub struct InitiateRefund<'info> {
     #[account(
         seeds = [BridgeConfig::SEED],
         bump = bridge_config.bump,
-        constraint = refund_initiator.key() == bridge_config.refund_initiator @ OkuError::Unauthorized
+        constraint = refund_initiator.key() == bridge_config.refund_initiator @ LitePsmError::Unauthorized
     )]
     pub bridge_config: Box<Account<'info, BridgeConfig>>,
 
@@ -173,7 +173,7 @@ pub struct InitiateRefund<'info> {
     #[account(
         seeds = [ProcessedRequest::SEED, &request_id],
         bump,
-        constraint = processed_request.data_is_empty() @ OkuError::RequestAlreadyMinted
+        constraint = processed_request.data_is_empty() @ LitePsmError::RequestAlreadyMinted
     )]
     pub processed_request: UncheckedAccount<'info>,
 
@@ -183,7 +183,7 @@ pub struct InitiateRefund<'info> {
     #[account(
         seeds = [RefundedRequest::SEED, &request_id],
         bump,
-        constraint = refunded_request.data_is_empty() @ OkuError::RequestAlreadyRefunded
+        constraint = refunded_request.data_is_empty() @ LitePsmError::RequestAlreadyRefunded
     )]
     pub refunded_request: UncheckedAccount<'info>,
 
@@ -201,7 +201,7 @@ pub struct ConfirmRefund<'info> {
     #[account(
         seeds = [BridgeConfig::SEED],
         bump = bridge_config.bump,
-        constraint = refund_confirmer.key() == bridge_config.refund_confirmer @ OkuError::Unauthorized
+        constraint = refund_confirmer.key() == bridge_config.refund_confirmer @ LitePsmError::Unauthorized
     )]
     pub bridge_config: Box<Account<'info, BridgeConfig>>,
 
@@ -241,7 +241,7 @@ pub struct ConfirmRefund<'info> {
     /// Sender's OkuMoney ATA - owner is validated against pending_refund.recipient
     #[account(
         mut,
-        constraint = sender_oku_money_ata.owner == pending_refund.recipient @ OkuError::InvalidRecipient
+        constraint = sender_oku_money_ata.owner == pending_refund.recipient @ LitePsmError::InvalidRecipient
     )]
     pub sender_oku_money_ata: Box<InterfaceAccount<'info, token_interface::TokenAccount>>,
 
@@ -263,7 +263,7 @@ pub struct CancelRefund<'info> {
         constraint = (
             canceller.key() == bridge_config.refund_initiator ||
             canceller.key() == bridge_config.refund_confirmer
-        ) @ OkuError::Unauthorized
+        ) @ LitePsmError::Unauthorized
     )]
     pub bridge_config: Box<Account<'info, BridgeConfig>>,
 
@@ -279,63 +279,4 @@ pub struct CancelRefund<'info> {
     pub system_program: Program<'info, System>,
 }
 
-// ============================================================================
-// Legacy Single-Step Refund (deprecated, kept for migration)
-// ============================================================================
 
-/// Legacy single-step refund context
-/// Deprecated: Use InitiateRefund + ConfirmRefund for new integrations
-#[derive(Accounts)]
-#[instruction(message_bytes: Vec<u8>, request_id: [u8; 32])]
-pub struct RefundBridgeRequest<'info> {
-    #[account(mut)]
-    pub refund_admin: Signer<'info>,
-
-    #[account(
-        seeds = [BridgeConfig::SEED],
-        bump = bridge_config.bump,
-        // Legacy: check against refund_initiator (the old refund_admin field was renamed)
-        constraint = refund_admin.key() == bridge_config.refund_initiator @ OkuError::Unauthorized
-    )]
-    pub bridge_config: Box<Account<'info, BridgeConfig>>,
-
-    #[account(
-        mut,
-        seeds = [PsmConfig::SEED],
-        bump = config.bump
-    )]
-    pub config: Box<Account<'info, PsmConfig>>,
-
-    #[account(
-        init,
-        payer = refund_admin,
-        space = RefundedRequest::LEN,
-        seeds = [RefundedRequest::SEED, &request_id],
-        bump
-    )]
-    pub refunded_request: Box<Account<'info, RefundedRequest>>,
-
-    /// ProcessedRequest PDA - must NOT exist (checked via constraint)
-    /// This prevents refunding a request that was already successfully minted
-    /// CHECK: We verify this account does NOT exist by checking its data length is 0
-    #[account(
-        seeds = [ProcessedRequest::SEED, &request_id],
-        bump,
-        constraint = processed_request.data_is_empty() @ OkuError::RequestAlreadyMinted
-    )]
-    pub processed_request: UncheckedAccount<'info>,
-
-    /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
-    #[account(
-        mut,
-        constraint = oku_money_mint.key() == config.oku_money_mint
-    )]
-    pub oku_money_mint: Box<InterfaceAccount<'info, token_interface::Mint>>,
-
-    /// Sender's OkuMoney ATA - owner is validated in instruction body
-    #[account(mut)]
-    pub sender_oku_money_ata: Box<InterfaceAccount<'info, token_interface::TokenAccount>>,
-
-    pub token_2022_program: Interface<'info, token_interface::TokenInterface>,
-    pub system_program: Program<'info, System>,
-}

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
+import {Errors} from "../../src/lib/Errors.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {
     PausableUpgradeable
@@ -124,7 +125,7 @@ contract LitePSMTest is BaseTest {
 
     function test_Mint_RevertsZeroAmount() public {
         vm.prank(user1);
-        vm.expectRevert(LitePSM.ZeroAmount.selector);
+        vm.expectRevert(Errors.ZeroAmount.selector);
         litePsm.mintOkuM(0);
     }
 
@@ -443,7 +444,7 @@ contract LitePSMTest is BaseTest {
         // Should be queued, not immediate redemption (buffer insufficient)
         // User still has their OkuMoney (transferred to queue contract)
         // Check queue has entry
-        assertEq(redemptionQueue.queueUpperBound(), 1);
+        assertEq(redemptionQueue.queueLength(), 1);
     }
 
     function test_Redeem_QueuesWithOnlyPSMApproval() public {
@@ -458,7 +459,7 @@ contract LitePSMTest is BaseTest {
         vm.prank(user1);
         litePsm.redeemOkuM(okuMAmount); // Must succeed with only PSM approval
 
-        assertEq(redemptionQueue.queueUpperBound(), 1);
+        assertEq(redemptionQueue.queueLength(), 1);
         // OkuMoney is now held by the queue contract
         assertEq(okuMoney.balanceOf(address(redemptionQueue)), okuMAmount);
     }
@@ -488,7 +489,7 @@ contract LitePSMTest is BaseTest {
 
     function test_Redeem_RevertsZeroAmount() public {
         vm.prank(user1);
-        vm.expectRevert(LitePSM.ZeroAmount.selector);
+        vm.expectRevert(Errors.ZeroAmount.selector);
         litePsm.redeemOkuM(0);
     }
 
@@ -682,7 +683,7 @@ contract LitePSMTest is BaseTest {
         vm.prank(user2);
         litePsm.redeemOkuM(okuMAmount); // Also queued
 
-        assertEq(redemptionQueue.queueUpperBound(), 2);
+        assertEq(redemptionQueue.queueLength(), 2);
 
         // Refill buffer
         _mintUsdc(address(litePsm), 15_000e6);
@@ -698,7 +699,7 @@ contract LitePSMTest is BaseTest {
         litePsm.processQueue(head, tail, 12_000e6); // 6000 USDC * 2 entries
 
         // Queue should be processed
-        assertEq(redemptionQueue.queueUpperBound(), 0);
+        assertEq(redemptionQueue.queueLength(), 0);
     }
 
     function test_ProcessQueue_ApprovesAndRevokesAllowance() public {
@@ -713,7 +714,7 @@ contract LitePSMTest is BaseTest {
         vm.prank(user1);
         litePsm.redeemOkuM(okuMAmount); // Queued (buffer only 5000 USDC)
 
-        assertEq(redemptionQueue.queueUpperBound(), 1);
+        assertEq(redemptionQueue.queueLength(), 1);
 
         // Refill buffer
         _mintUsdc(address(litePsm), 10_000e6);
@@ -735,7 +736,7 @@ contract LitePSMTest is BaseTest {
         assertEq(usdc.allowance(address(litePsm), address(redemptionQueue)), 0);
 
         // Queue should be processed
-        assertEq(redemptionQueue.queueUpperBound(), 0);
+        assertEq(redemptionQueue.queueLength(), 0);
 
         // User should have received USDC (original balance + 6000e6 from queue at base price)
         assertEq(usdc.balanceOf(user1), user1UsdcBefore + 6000e6);
@@ -757,7 +758,7 @@ contract LitePSMTest is BaseTest {
         vm.prank(user2);
         litePsm.redeemOkuM(okuMAmount);
 
-        assertEq(redemptionQueue.queueUpperBound(), 2);
+        assertEq(redemptionQueue.queueLength(), 2);
 
         // Refill buffer with only enough for one redemption
         _mintUsdc(address(litePsm), 7000e6);
@@ -775,7 +776,7 @@ contract LitePSMTest is BaseTest {
         assertEq(usdc.allowance(address(litePsm), address(redemptionQueue)), 0);
 
         // Only 1 entry processed
-        assertEq(redemptionQueue.queueUpperBound(), 1);
+        assertEq(redemptionQueue.queueLength(), 1);
     }
 
     // ============ Price-Aware Queue Tests ============
@@ -790,7 +791,7 @@ contract LitePSMTest is BaseTest {
         vm.prank(user1);
         litePsm.redeemOkuM(okuMAmount); // Queued at base price (buffer only 5000 USDC)
 
-        assertEq(redemptionQueue.queueUpperBound(), 1);
+        assertEq(redemptionQueue.queueLength(), 1);
 
         // Raise okuMMultiplier to 1.05e18 — queued notes now worth more USDC
         _setNotePrice(1.05e18);
@@ -812,7 +813,7 @@ contract LitePSMTest is BaseTest {
         vm.prank(queueProcessor);
         litePsm.processQueue(head, tail, expectedUsdc);
 
-        assertEq(redemptionQueue.queueUpperBound(), 0);
+        assertEq(redemptionQueue.queueLength(), 0);
         // User receives more USDC than at base price due to multiplier appreciation
         assertEq(
             usdc.balanceOf(user1),
@@ -839,7 +840,7 @@ contract LitePSMTest is BaseTest {
         litePsm.redeemOkuM(okuMAmount);
 
         // Should be queued because USDC needed (5145) exceeds buffer (5000)
-        assertEq(redemptionQueue.queueUpperBound(), 1, "Should be queued");
+        assertEq(redemptionQueue.queueLength(), 1, "Should be queued");
         assertEq(okuMoney.balanceOf(address(redemptionQueue)), okuMAmount, "Notes held by queue");
     }
 
@@ -1174,7 +1175,7 @@ contract LitePSMTest is BaseTest {
 
     function test_WithdrawUSDC_RevertZeroAddress() public {
         vm.prank(bufferWithdrawer);
-        vm.expectRevert(LitePSM.ZeroAddress.selector);
+        vm.expectRevert(Errors.ZeroAddress.selector);
         litePsm.withdrawUsdc(address(0), 1);
     }
 
@@ -1243,26 +1244,26 @@ contract LitePSMTest is BaseTest {
         litePsm.redeemOkuMWithPermit(amount, deadline, v, r, s);
     }
 
-    // ============ RedeemUsdOkuWithPermit Tests ============
+    // ============ RedeemOkuDollarWithPermit Tests ============
 
-    function test_RedeemUsdOkuWithPermit_Success() public {
+    function test_RedeemOkuDollarWithPermit_Success() public {
         address user1Addr = vm.addr(user1Pk);
 
         uint256 usdcAmount = 100e6;
 
-        // First mint UsdOku for this user via PSM
+        // First mint OkuDollar for this user via PSM
         _mintUsdc(user1Addr, usdcAmount);
         vm.startPrank(user1Addr);
         usdc.approve(address(litePsm), usdcAmount);
         litePsm.mintUsdOku(usdcAmount);
         vm.stopPrank();
 
-        uint256 usdOkuBalance = usdOku.balanceOf(user1Addr);
-        assertGt(usdOkuBalance, 0, "User should have UsdOku");
+        uint256 okuDollarBalance = okuDollar.balanceOf(user1Addr);
+        assertGt(okuDollarBalance, 0, "User should have OkuDollar");
 
         // Now redeem with permit
         uint256 deadline = block.timestamp + 1 hours;
-        bytes32 domainSeparator = _getUsdOkuDomainSeparator();
+        bytes32 domainSeparator = _getOkuDollarDomainSeparator();
         bytes32 permitHash = keccak256(
             abi.encode(
                 keccak256(
@@ -1270,8 +1271,8 @@ contract LitePSMTest is BaseTest {
                 ),
                 user1Addr,
                 address(litePsm),
-                usdOkuBalance,
-                usdOku.nonces(user1Addr),
+                okuDollarBalance,
+                okuDollar.nonces(user1Addr),
                 deadline
             )
         );
@@ -1281,28 +1282,28 @@ contract LitePSMTest is BaseTest {
         uint256 usdcBefore = usdc.balanceOf(user1Addr);
 
         vm.prank(user1Addr);
-        litePsm.redeemUsdOkuWithPermit(usdOkuBalance, deadline, v, r, s);
+        litePsm.redeemUsdOkuWithPermit(okuDollarBalance, deadline, v, r, s);
 
         assertGt(usdc.balanceOf(user1Addr), usdcBefore, "User should receive USDC");
-        assertEq(usdOku.balanceOf(user1Addr), 0, "User should have no UsdOku left");
+        assertEq(okuDollar.balanceOf(user1Addr), 0, "User should have no OkuDollar left");
     }
 
-    function test_RedeemUsdOkuWithPermit_RevertsExpiredDeadline() public {
+    function test_RedeemOkuDollarWithPermit_RevertsExpiredDeadline() public {
         address user1Addr = vm.addr(user1Pk);
 
         uint256 usdcAmount = 100e6;
 
-        // Mint UsdOku
+        // Mint OkuDollar
         _mintUsdc(user1Addr, usdcAmount);
         vm.startPrank(user1Addr);
         usdc.approve(address(litePsm), usdcAmount);
         litePsm.mintUsdOku(usdcAmount);
         vm.stopPrank();
 
-        uint256 usdOkuBalance = usdOku.balanceOf(user1Addr);
+        uint256 okuDollarBalance = okuDollar.balanceOf(user1Addr);
 
         uint256 deadline = block.timestamp - 1; // Already expired
-        bytes32 domainSeparator = _getUsdOkuDomainSeparator();
+        bytes32 domainSeparator = _getOkuDollarDomainSeparator();
         bytes32 permitHash = keccak256(
             abi.encode(
                 keccak256(
@@ -1310,8 +1311,8 @@ contract LitePSMTest is BaseTest {
                 ),
                 user1Addr,
                 address(litePsm),
-                usdOkuBalance,
-                usdOku.nonces(user1Addr),
+                okuDollarBalance,
+                okuDollar.nonces(user1Addr),
                 deadline
             )
         );
@@ -1320,25 +1321,25 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(user1Addr);
         vm.expectRevert(); // ERC2612ExpiredSignature
-        litePsm.redeemUsdOkuWithPermit(usdOkuBalance, deadline, v, r, s);
+        litePsm.redeemUsdOkuWithPermit(okuDollarBalance, deadline, v, r, s);
     }
 
-    // ============ RedeemUsdOku Failure Modes ============
+    // ============ RedeemOkuDollar Failure Modes ============
 
-    function test_RedeemUsdOku_RevertsWhenVaultUndercollateralized() public {
-        // Set up: user1 wraps OkuM into usdOku at base prices.
+    function test_RedeemOkuDollar_RevertsWhenVaultUndercollateralized() public {
+        // Set up: user1 wraps OkuM into okuDollar at base prices.
         uint256 okuMAmount = 1000e18;
         _mintUsdOku(user1, okuMAmount);
-        uint256 usdBalance = usdOku.balanceOf(user1);
+        uint256 usdBalance = okuDollar.balanceOf(user1);
 
         // Now drain the vault's OkuMoney reserves so unwrap() will revert with
         // InsufficientReserves. Use a low-level transfer impersonating the vault.
         // (In production the vault should never lose reserves; this test exercises
         //  the revert path that would surface if it ever did.)
-        vm.prank(address(usdOku));
+        vm.prank(address(okuDollar));
         okuMoney.transfer(address(0xDEAD), okuMAmount);
 
-        _approveUsdOku(user1, address(litePsm), usdBalance);
+        _approveOkuDollar(user1, address(litePsm), usdBalance);
 
         vm.prank(user1);
         vm.expectRevert(); // OkuDollar.InsufficientReserves bubbles up through unwrap
@@ -1386,7 +1387,7 @@ contract LitePSMTest is BaseTest {
         );
     }
 
-    function _getUsdOkuDomainSeparator() internal view returns (bytes32) {
+    function _getOkuDollarDomainSeparator() internal view returns (bytes32) {
         // EIP-712 domain separator for OkuDollar
         return keccak256(
             abi.encode(
@@ -1396,7 +1397,7 @@ contract LitePSMTest is BaseTest {
                 keccak256(bytes("OkuDollar")),
                 keccak256(bytes("1")),
                 block.chainid,
-                address(usdOku)
+                address(okuDollar)
             )
         );
     }
@@ -1407,7 +1408,7 @@ contract LitePSMTest is BaseTest {
         // Enabling the oracle with address(0) used to silently bypass reserve checks.
         // The new guard reverts so operators cannot create that misconfiguration.
         vm.prank(oracleManager);
-        vm.expectRevert(LitePSM.ZeroAddress.selector);
+        vm.expectRevert(Errors.ZeroAddress.selector);
         litePsm.configureOracle(address(0), 1 hours, true);
     }
 
@@ -1512,7 +1513,7 @@ contract LitePSMTest is BaseTest {
         assertGt(usdc.balanceOf(user1), usdcBefore);
     }
 
-    function test_MintUsdOku_RevertsInYieldDistributionBlock() public {
+    function test_MintOkuDollar_RevertsInYieldDistributionBlock() public {
         // Distribute yield
         _mintOkuMoney(user2, 10_000e18);
         vm.prank(rebaser);
@@ -1525,11 +1526,11 @@ contract LitePSMTest is BaseTest {
         litePsm.mintUsdOku(100e6);
     }
 
-    function test_RedeemUsdOku_RevertsInYieldDistributionBlock() public {
-        // Setup: user1 has usdOku
+    function test_RedeemOkuDollar_RevertsInYieldDistributionBlock() public {
+        // Setup: user1 has okuDollar
         _mintUsdOku(user1, 100e18);
         vm.prank(user1);
-        usdOku.approve(address(litePsm), 100e18);
+        okuDollar.approve(address(litePsm), 100e18);
 
         // Distribute yield
         vm.prank(rebaser);

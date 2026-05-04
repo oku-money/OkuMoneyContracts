@@ -14,7 +14,7 @@
 //! want to consume modern Pyth feeds should pass that program ID via
 //! `set_pyth_program_owner` and add a parallel parser.
 
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 
@@ -23,9 +23,9 @@ use anchor_lang::prelude::*;
 /// Manually parses Pyth price account to avoid SDK dependency conflicts
 ///
 /// IMPORTANT: Oracle must report total reserves in raw token base units
-/// matching OkuUSD's supply denomination. No Pyth exponent adjustment
-/// is applied -- the raw i64 price value IS the reserves figure.
-/// Example: If OkuUSD uses 6 decimals and reserves are $10M,
+/// matching OkuMoney's supply denomination. No Pyth exponent adjustment
+/// is applied — the raw i64 price value IS the reserves figure.
+/// Example: If OkuMoney uses 6 decimals and reserves are $10M,
 /// oracle should report 10_000_000_000_000 (10M * 10^6).
 ///
 /// SECURITY: Validates that the oracle account is owned by the configured
@@ -46,12 +46,12 @@ pub fn check_oracle_reserves<'info>(
     // If oracle is configured, price_update account must be provided
     let price_account = price_account_info
         .as_ref()
-        .ok_or(OkuError::OracleAccountMissing)?;
+        .ok_or(LitePsmError::OracleAccountMissing)?;
 
     // Verify the account key matches the expected oracle feed
     require!(
         price_account.key() == oracle_feed,
-        OkuError::InvalidOracleResponse
+        LitePsmError::InvalidOracleResponse
     );
 
     // SECURITY: Verify the oracle account is owned by the configured Pyth program.
@@ -61,7 +61,7 @@ pub fn check_oracle_reserves<'info>(
     let owner = price_account.owner;
     require!(
         *owner == pyth_program_owner,
-        OkuError::InvalidOracleResponse
+        LitePsmError::InvalidOracleResponse
     );
 
     let clock = Clock::get()?;
@@ -70,7 +70,7 @@ pub fn check_oracle_reserves<'info>(
     // Minimum data length check — code reads up to offset 240 (timestamp at 232 + 8 bytes).
     // Layout taken from
     //   https://github.com/pyth-network/pyth-sdk-solana/blob/main/pyth-sdk-solana/src/state.rs
-    require!(data.len() >= 240, OkuError::InvalidOracleResponse);
+    require!(data.len() >= 240, LitePsmError::InvalidOracleResponse);
 
     // Read price at offset 208 (Pyth V2 price account agg.price offset)
     // and timestamp at offset 232.
@@ -80,30 +80,30 @@ pub fn check_oracle_reserves<'info>(
     let price = i64::from_le_bytes(
         data[price_offset..price_offset + 8]
             .try_into()
-            .map_err(|_| OkuError::InvalidOracleResponse)?,
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
     );
 
     let publish_time = i64::from_le_bytes(
         data[timestamp_offset..timestamp_offset + 8]
             .try_into()
-            .map_err(|_| OkuError::InvalidOracleResponse)?,
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
     );
 
     // Check staleness
     let current_time = clock.unix_timestamp;
     let age = current_time.saturating_sub(publish_time);
-    require!(age <= staleness_threshold, OkuError::StaleOracle);
+    require!(age <= staleness_threshold, LitePsmError::StaleOracle);
 
     // Price represents total reserves (e.g., T-Bill NAV backing in base units)
     // Ensure reserves >= current_supply + mint_amount
-    require!(price >= 0, OkuError::InvalidOracleResponse);
+    require!(price >= 0, LitePsmError::InvalidOracleResponse);
 
     let reserves = price as u64;
     let new_supply = current_supply
         .checked_add(mint_amount)
-        .ok_or(OkuError::Overflow)?;
+        .ok_or(LitePsmError::Overflow)?;
 
-    require!(reserves >= new_supply, OkuError::InsufficientReserves);
+    require!(reserves >= new_supply, LitePsmError::InsufficientReserves);
 
     Ok(())
 }

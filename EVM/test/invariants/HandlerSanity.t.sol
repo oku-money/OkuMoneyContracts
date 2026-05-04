@@ -32,7 +32,7 @@ contract HandlerSanityTest is BaseTest {
         super.setUp();
 
         okuMoneyHandler = new OkuMoneyHandler(okuMoney, minter, rebaser, allowanceManager);
-        okuDollarHandler = new OkuDollarHandler(okuMoney, usdOku, minter, rebaser);
+        okuDollarHandler = new OkuDollarHandler(okuMoney, okuDollar, minter, rebaser);
 
         // Target both handlers
         targetContract(address(okuMoneyHandler));
@@ -40,7 +40,7 @@ contract HandlerSanityTest is BaseTest {
 
         // Exclude all non-handler contracts
         excludeContract(address(okuMoney));
-        excludeContract(address(usdOku));
+        excludeContract(address(okuDollar));
         excludeContract(address(litePsm));
         excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));

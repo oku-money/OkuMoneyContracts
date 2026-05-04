@@ -1,7 +1,8 @@
 //! # OkuDollar Roles
 //!
-//! Authority role definitions for the OkuDollar vault program.
-//! Aligned with EVM contract roles from `Roles.sol`.
+//! Authority role definitions for the OkuDollar vault. Same OpenZeppelin AccessControl
+//! pattern as lite-psm — see `lite-psm/src/roles.rs` for the design rationale.
+//! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol
 //!
 //! ## EVM Role Mapping
 //!
@@ -12,12 +13,6 @@
 //! | `Unpauser` | `VAULT_UNPAUSER` | Cold Multisig - unpause vault |
 //! | `UsdRebaser` | `VAULT_REBASER` | Orchestrator - update USD multiplier |
 //! | `ReserveManager` | `VAULT_RESERVE_MANAGER` | Cold Multisig - deposit/withdraw reserves |
-
-//! Authority role definitions for the OkuDollar vault.
-//!
-//! Same OpenZeppelin AccessControl pattern as lite-psm — see
-//! `lite-psm/src/roles.rs` for the design rationale.
-//! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol
 
 use anchor_lang::prelude::*;
 

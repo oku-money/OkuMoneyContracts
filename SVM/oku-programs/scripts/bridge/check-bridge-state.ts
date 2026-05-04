@@ -61,7 +61,7 @@ async function main() {
   logger.info(`Program ID: ${programId.toBase58()}`);
 
   // Load token mint
-  const okuMoneyMint = new PublicKey(addresses.tokens.okusd);
+  const okuMoneyMint = new PublicKey(addresses.tokens.okuMoney);
   logger.info(`OkuMoney Mint: ${okuMoneyMint.toBase58()}`);
 
   // PDAs

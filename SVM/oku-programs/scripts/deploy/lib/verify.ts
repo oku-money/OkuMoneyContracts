@@ -18,7 +18,7 @@ export async function verifyDeployment(
 
   const accountsToCheck = [
     { name: 'USDC Mint', address: addresses.tokens?.usdc },
-    { name: 'OkuMoney Mint', address: addresses.tokens?.okusd },
+    { name: 'OkuMoney Mint', address: addresses.tokens?.okuMoney },
     { name: 'PSM Config', address: addresses.pdas?.psmConfig },
     { name: 'Redemption Queue', address: addresses.pdas?.redemptionQueue },
     { name: 'Bridge Config', address: addresses.pdas?.bridgeConfig },

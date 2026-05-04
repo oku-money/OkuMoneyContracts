@@ -81,7 +81,7 @@ describe("LitePSM Scenarios", () => {
 
     // Helper to clear any pending queue entries
     async function clearQueue() {
-        const queueLen = await queue.queueUpperBound()
+        const queueLen = await queue.queueLength()
         if (queueLen > 0n) {
             await fundPSM(parseUnits("1000000", 6))
             // approveAmount: generous amount to cover all queued entries
@@ -145,7 +145,7 @@ describe("LitePSM Scenarios", () => {
 
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            // initialize(_okuMoney, _usdOku, _usdc, _redemptionQueue, admin, _stalenessThreshold)
+            // initialize(_okuMoney, _okuDollar, _usdc, _redemptionQueue, admin, _stalenessThreshold)
             [
                 await okuMoney.getAddress(),
                 await okuUsd.getAddress(),
@@ -209,7 +209,7 @@ describe("LitePSM Scenarios", () => {
 
             const expectedAliceUsdc = aliceRedeemAmount / BigInt(1e12)
             expect((await usdc.balanceOf(aliceAddr)) - aliceUsdcBefore).to.be.closeTo(expectedAliceUsdc, parseUnits("1", 6))
-            expect(await queue.queueUpperBound()).to.equal(0)
+            expect(await queue.queueLength()).to.equal(0)
 
             // Bob redeems half - should also be instant
             const bobOkuM = await okuMoney.balanceOf(bobAddr)
@@ -221,7 +221,7 @@ describe("LitePSM Scenarios", () => {
 
             const expectedBobUsdc = bobRedeemAmount / BigInt(1e12)
             expect((await usdc.balanceOf(bobAddr)) - bobUsdcBefore).to.be.closeTo(expectedBobUsdc, parseUnits("1", 6))
-            expect(await queue.queueUpperBound()).to.equal(0)
+            expect(await queue.queueLength()).to.equal(0)
         })
     })
 
@@ -280,7 +280,7 @@ describe("LitePSM Scenarios", () => {
             await psm.connect(Dave).redeemOkuM(redeemAmount)
 
             // All 4 should be queued (5000 each = 20000 total)
-            expect(await queue.queueUpperBound()).to.equal(4)
+            expect(await queue.queueLength()).to.equal(4)
 
             // Record USDC balances before processing
             const aliceUsdcBefore = await usdc.balanceOf(aliceAddr)
@@ -295,7 +295,7 @@ describe("LitePSM Scenarios", () => {
             await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("20000", 6))
 
             // Should have processed Alice + Bob, leaving Charlie + Dave
-            expect(await queue.queueUpperBound()).to.equal(2)
+            expect(await queue.queueLength()).to.equal(2)
 
             // Alice and Bob received ~5,000 USDC each
             const expectedUsdc = parseUnits("5000", 6)
@@ -309,7 +309,7 @@ describe("LitePSM Scenarios", () => {
             // Cleanup: process remaining
             await fundPSM(parseUnits("20000", 6))
             await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("20000", 6))
-            expect(await queue.queueUpperBound()).to.equal(0)
+            expect(await queue.queueLength()).to.equal(0)
         })
     })
 
@@ -366,14 +366,14 @@ describe("LitePSM Scenarios", () => {
             await okuMoney.connect(Alice).approve(psmAddr, redeemOkuM)
             await psm.connect(Alice).redeemOkuM(redeemOkuM)
 
-            expect(await queue.queueUpperBound()).to.equal(0)
+            expect(await queue.queueLength()).to.equal(0)
             expect(await usdc.balanceOf(aliceAddr)).to.be.gt(aliceUsdcBefore)
 
             // Bob redeems 5,000 OkuMoney - INSTANT (buffer: 5,000 -> 0)
             await okuMoney.connect(Bob).approve(psmAddr, redeemOkuM)
             await psm.connect(Bob).redeemOkuM(redeemOkuM)
 
-            expect(await queue.queueUpperBound()).to.equal(0)
+            expect(await queue.queueLength()).to.equal(0)
             expect(await usdc.balanceOf(bobAddr)).to.be.gt(bobUsdcBefore)
 
             // Charlie redeems 5,000 OkuMoney - QUEUED (buffer: 0)
@@ -381,7 +381,7 @@ describe("LitePSM Scenarios", () => {
             await okuMoney.connect(Charlie).approve(queueAddr, redeemOkuM)
             await psm.connect(Charlie).redeemOkuM(redeemOkuM)
 
-            expect(await queue.queueUpperBound()).to.equal(1)
+            expect(await queue.queueLength()).to.equal(1)
             expect(await usdc.balanceOf(charlieAddr)).to.equal(charlieUsdcBefore)
 
             // Dave redeems 5,000 OkuMoney - QUEUED
@@ -389,13 +389,13 @@ describe("LitePSM Scenarios", () => {
             await okuMoney.connect(Dave).approve(queueAddr, redeemOkuM)
             await psm.connect(Dave).redeemOkuM(redeemOkuM)
 
-            expect(await queue.queueUpperBound()).to.equal(2)
+            expect(await queue.queueLength()).to.equal(2)
             expect(await usdc.balanceOf(daveAddr)).to.equal(daveUsdcBefore)
 
             // Cleanup
             await fundPSM(parseUnits("20000", 6))
             await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("20000", 6))
-            expect(await queue.queueUpperBound()).to.equal(0)
+            expect(await queue.queueLength()).to.equal(0)
         })
     })
 
@@ -437,7 +437,7 @@ describe("LitePSM Scenarios", () => {
             await okuMoney.connect(Bob).approve(queueAddr, bobOkuM)
             await psm.connect(Bob).redeemOkuM(bobOkuM)
 
-            expect(await queue.queueUpperBound()).to.equal(2)
+            expect(await queue.queueLength()).to.equal(2)
 
             // NotePrice increase: 10% while users are in queue
             const priceBefore = await okuMoney.okuMMultiplier()
@@ -452,7 +452,7 @@ describe("LitePSM Scenarios", () => {
             await fundPSM(parseUnits("50000", 6))
             await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("50000", 6))
 
-            expect(await queue.queueUpperBound()).to.equal(0)
+            expect(await queue.queueLength()).to.equal(0)
 
             // Calculate received amounts (in USDC, 6 decimals)
             const aliceReceived = (await usdc.balanceOf(aliceAddr)) - aliceUsdcBefore

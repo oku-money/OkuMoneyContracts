@@ -5,7 +5,7 @@
 //! yield distribution. SVM port of the EVM-side `YieldSandwichGuard`
 //! (`EVM/src/lib/YieldSandwichGuard.sol`).
 
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 
@@ -22,12 +22,9 @@ pub fn check_yield_lock(config: &PsmConfig) -> Result<()> {
     let clock = Clock::get()?;
     require!(
         clock.slot != config.last_yield_distribution_slot,
-        OkuError::YieldDistributionInProgress
+        LitePsmError::YieldDistributionInProgress
     );
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    // Tests would require mocking Solana runtime
-}
+

@@ -39,7 +39,7 @@ pub struct Initialize<'info> {
         mint::decimals = oku_money_mint.decimals,
         mint::authority = config,
         mint::token_program = token_2022_program,
-        seeds = [b"usd_oku_mint"],
+        seeds = [OkuDollarConfig::USD_OKU_MINT_SEED],
         bump
     )]
     pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
@@ -54,9 +54,15 @@ pub struct Initialize<'info> {
     )]
     pub reserve_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// PSM config account (for reading oku_m_price)
-    /// CHECK: Validated by address in handler - must match lite_psm's PsmConfig PDA
-    pub psm_config: UncheckedAccount<'info>,
+    /// PSM config account (for reading oku_m_price). The deserialized type pins this
+    /// to lite-psm's `PsmConfig`, and the seeds constraint pins it to the canonical
+    /// `psm_config` PDA — so the deployer cannot point the vault at an arbitrary account.
+    #[account(
+        seeds = [PsmConfig::SEED],
+        bump = psm_config.bump,
+        seeds::program = lite_psm::ID
+    )]
+    pub psm_config: Box<Account<'info, PsmConfig>>,
 
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,

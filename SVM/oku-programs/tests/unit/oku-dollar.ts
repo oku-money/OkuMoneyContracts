@@ -8,7 +8,7 @@
  * - usdOku shares appreciate via usd_multiplier updates
  * - Shares represent a claim on the OkuMoney reserve
  *
- * Key differences from old wOkuUSD vault:
+ * Key differences from old usdOku vault:
  * - Both tokens are Token-2022 (no SPL Token mixing)
  * - Discrete multiplier updates instead of InterestBearing extension
  * - Unwrap is BLOCKED when paused (matches EVM behavior)

@@ -1,24 +1,18 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {INttManager} from "../bridge/adapters/INttManager.sol";
+import {INttManager} from "../../src/bridge/adapters/INttManager.sol";
+import {IOkuMoney} from "../../src/interfaces/IOkuMoney.sol";
 
-interface IOkuMoneyMintable {
-    function mint(address to, uint256 amount) external;
-}
-
-/**
- * @title MockNttManager
- * @notice Mock Wormhole NTT Manager used by both Foundry and Hardhat tests.
- * @dev Records transfers and exposes `completeBridge()` to simulate destination chain
- *      mints. Must be granted OKUM_MINTER on OkuMoney (with minter allowance configured)
- *      for `completeBridge*` to succeed.
- *
- *      Real NTT burns tokens inside `transfer()`. In the OkuMoney architecture, the
- *      router burns tokens BEFORE calling the adapter, so this mock never pulls tokens.
- *
- *      No cheatcodes / forge-std dependencies — compiles under Hardhat and Foundry alike.
- */
+/// @title MockNttManager
+/// @notice Test-only Wormhole NTT Manager mock. NOT FOR PRODUCTION DEPLOYMENT.
+/// @dev Records transfers and exposes `completeBridge*` to simulate destination-chain
+///      mints. Must be granted OKUM_MINTER on OkuMoney (with minter allowance configured)
+///      for `completeBridge*` to succeed.
+///
+///      Real NTT burns tokens inside `transfer`. In OkuMoney's architecture the router
+///      pre-burns, so this mock never pulls tokens. No cheatcodes / forge-std deps —
+///      compiles under Hardhat and Foundry alike.
 contract MockNttManager is INttManager {
     struct PendingTransfer {
         address sender;
@@ -33,9 +27,9 @@ contract MockNttManager is INttManager {
     PendingTransfer[] public pendingTransfers;
     uint64 private nextSequence;
 
-    IOkuMoneyMintable public okuMoney;
+    IOkuMoney public okuMoney;
 
-    /// @notice Fee required for `transfer()` (defaults to 0). Settable via `setMessageFee`.
+    /// @notice Fee required for `transfer` (defaults to 0). Settable via `setMessageFee`.
     uint256 public messageFee;
 
     event TransferInitiated(
@@ -54,7 +48,7 @@ contract MockNttManager is INttManager {
     error CannotForgeGuardianSignatures();
 
     constructor(address _okuMoney) {
-        okuMoney = IOkuMoneyMintable(_okuMoney);
+        okuMoney = IOkuMoney(_okuMoney);
     }
 
     function transfer(
@@ -64,7 +58,6 @@ contract MockNttManager is INttManager {
     )
         external
         payable
-        override
         returns (uint64 messageSequence)
     {
         if (msg.value < messageFee) revert InsufficientFee(messageFee, msg.value);
@@ -84,9 +77,9 @@ contract MockNttManager is INttManager {
         emit TransferInitiated(msg.sender, amount, recipientChain, recipient, messageSequence);
     }
 
-    /// @notice Real NTT validates guardian signatures here. Tests can't forge those, so
-    ///         this always reverts. Use `completeBridge()` to simulate a mint.
-    function receiveMessage(bytes memory vaa) external override {
+    /// @dev Real NTT validates guardian signatures here — tests can't forge those, so
+    ///      this always reverts. Use `completeBridge` to simulate a mint.
+    function receiveMessage(bytes memory vaa) external {
         emit MessageReceived(vaa);
         revert CannotForgeGuardianSignatures();
     }

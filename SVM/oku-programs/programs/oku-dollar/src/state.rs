@@ -48,6 +48,9 @@ pub struct OkuDollarConfig {
 impl OkuDollarConfig {
     pub const SEED: &'static [u8] = b"oku_dollar_config";
 
+    /// PDA seed for the usdOku mint (rebasing share token controlled by this vault).
+    pub const USD_OKU_MINT_SEED: &'static [u8] = b"usd_oku_mint";
+
     /// Space needed for OkuDollarConfig account
     /// 8 (discriminator) + 1 (bump) + 32*5 (authorities) + 32*4 (token refs) + 8*2 (multiplier fields) + 8 (min_collateral_ratio) + 1 (is_paused)
     /// = 8 + 1 + 160 + 128 + 16 + 8 + 1 = 322 bytes

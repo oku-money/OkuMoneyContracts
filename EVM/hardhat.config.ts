@@ -1,14 +1,28 @@
-import { HardhatUserConfig } from "hardhat/config";
+import { HardhatUserConfig, subtask } from "hardhat/config";
+import { TASK_COMPILE_SOLIDITY_GET_SOURCE_PATHS } from "hardhat/builtin-tasks/task-names";
 import "@nomicfoundation/hardhat-toolbox";
 import "@openzeppelin/hardhat-upgrades";
 import { silenceWarnings } from "@openzeppelin/upgrades-core";
 import "hardhat-deploy";
 import "hardhat-deploy-ethers";
 import "@typechain/hardhat";
+import * as path from "path";
+import { sync as globSync } from "glob";
 
 // Load environment variables
 import * as dotenv from "dotenv";
 dotenv.config();
+
+// Extend hardhat compilation to include test-only mocks under ./test/mocks.
+// Mocks live outside `paths.sources` so they don't ship in production artifacts,
+// but hardhat tests still reference them by name via getContractFactory().
+subtask(TASK_COMPILE_SOLIDITY_GET_SOURCE_PATHS).setAction(
+  async (_, __, runSuper) => {
+    const paths: string[] = await runSuper();
+    const mockPaths = globSync(path.resolve(__dirname, "test/mocks/*.sol"));
+    return [...paths, ...mockPaths];
+  }
+);
 
 // Suppress "Potentially unsafe deployment" warnings for unsafeAllow options
 silenceWarnings();

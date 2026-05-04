@@ -37,7 +37,7 @@ contract BridgeInvariantsTest is BridgeBaseTest {
         targetContract(address(handler));
 
         excludeContract(address(okuMoney));
-        excludeContract(address(usdOku));
+        excludeContract(address(okuDollar));
         excludeContract(address(litePsm));
         excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));

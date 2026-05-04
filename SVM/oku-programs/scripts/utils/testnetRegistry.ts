@@ -87,12 +87,12 @@ export function syncSvmRegistry(deployment: DeploymentAddresses): void {
     rpcUrl: SVM_CLUSTER_RPC[deployment.network],
     programs: {
       litePsm: deployment.programs?.litePsm,
-      okuDollar: deployment.programs?.wokusdVault,
+      okuDollar: deployment.programs?.okuDollarProgram,
       okuBridgeRouter: deployment.programs?.okuBridgeRouter,
     },
     mints: {
       usdc: deployment.tokens?.usdc,
-      okuMoney: deployment.tokens?.okusd,
+      okuMoney: deployment.tokens?.okuMoney,
       usdOku: deployment.tokens?.usdOku,
     },
     pdas: {
@@ -101,7 +101,7 @@ export function syncSvmRegistry(deployment: DeploymentAddresses): void {
       bridgeConfig: deployment.pdas?.bridgeConfig,
       vaultConfig: deployment.pdas?.vaultConfig,
       routerConfig: deployment.pdas?.routerConfig,
-      psmOkusdEscrow: deployment.pdas?.psmOkusdEscrow,
+      psmOkuMoneyEscrow: deployment.pdas?.psmOkuMoneyEscrow,
     },
     authorities: deployment.authorities,
   };

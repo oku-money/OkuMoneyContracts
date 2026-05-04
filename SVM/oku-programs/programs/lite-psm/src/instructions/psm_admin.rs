@@ -8,16 +8,12 @@
 //! Freeze / thaw against a blacklist-exempt list (bridge + router PDAs cannot
 //! be frozen) mirrors Circle FiatToken's blacklister/exempted-address pattern.
 //! Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v1/Blacklistable.sol
-//!
-//! Anchor-version note: `CpiContext::new_with_signer(program_id, accounts, seeds)`
-//! takes `program_id` as a `Pubkey` in Anchor ≥1.0. CPI sites in this file pass
-//! `<program>.key()` (returns `Pubkey`), which is correct.
 
 use crate::contexts::{
     AllowanceManager, CapManager, FreezeAccount, InitializeBlacklistExempt, OracleManager, Pause,
     SetAuthority, ThawAccount, Unpause,
 };
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use crate::events::*;
 use crate::roles::AuthorityRole;
 use crate::state::PsmConfig;
@@ -27,11 +23,11 @@ use anchor_spl::token_interface;
 /// Pause the PSM (emergency response)
 pub fn pause(ctx: Context<Pause>) -> Result<()> {
     let config = &mut ctx.accounts.config;
+    require!(!config.is_paused, LitePsmError::AlreadyPaused);
     config.is_paused = true;
 
     emit!(PauseEvent {
         pauser: ctx.accounts.pauser.key(),
-        paused: true,
     });
 
     Ok(())
@@ -40,6 +36,7 @@ pub fn pause(ctx: Context<Pause>) -> Result<()> {
 /// Unpause the PSM (deliberate review required)
 pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
     let config = &mut ctx.accounts.config;
+    require!(config.is_paused, LitePsmError::NotPaused);
     config.is_paused = false;
 
     emit!(UnpauseEvent {
@@ -56,7 +53,7 @@ pub fn set_max_supply(ctx: Context<CapManager>, new_max_supply: u64) -> Result<(
     config.max_supply = new_max_supply;
 
     emit!(MaxSupplyUpdatedEvent {
-        role_admin: ctx.accounts.cap_manager.key(),
+        actor: ctx.accounts.cap_manager.key(),
         old_max_supply,
         new_max_supply,
     });
@@ -71,7 +68,7 @@ pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Resu
     config.minter_allowance = amount;
 
     emit!(MinterAllowanceUpdatedEvent {
-        role_admin: ctx.accounts.allowance_manager.key(),
+        actor: ctx.accounts.allowance_manager.key(),
         old_allowance,
         new_allowance: amount,
     });
@@ -90,7 +87,7 @@ pub fn set_oracle(
     config.staleness_threshold = staleness_threshold;
 
     emit!(OracleUpdatedEvent {
-        role_admin: ctx.accounts.oracle_manager.key(),
+        actor: ctx.accounts.oracle_manager.key(),
         oracle,
         staleness_threshold,
     });
@@ -109,7 +106,7 @@ pub fn set_pyth_program_owner(
 ) -> Result<()> {
     require!(
         new_pyth_program_owner != Pubkey::default(),
-        OkuError::InvalidPythProgramOwner
+        LitePsmError::InvalidPythProgramOwner
     );
 
     let config = &mut ctx.accounts.config;
@@ -117,7 +114,7 @@ pub fn set_pyth_program_owner(
     config.pyth_program_owner = new_pyth_program_owner;
 
     emit!(PythProgramOwnerUpdatedEvent {
-        role_admin: ctx.accounts.oracle_manager.key(),
+        actor: ctx.accounts.oracle_manager.key(),
         old_pyth_program_owner,
         new_pyth_program_owner,
     });
@@ -137,7 +134,7 @@ pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
     require!(
         target_owner != config.blacklist_exempt_bridge
             && target_owner != config.blacklist_exempt_router,
-        OkuError::BlacklistExempt
+        LitePsmError::BlacklistExempt
     );
 
     let bump = config.bump;
@@ -203,7 +200,7 @@ pub fn initialize_blacklist_exempt(
     require!(
         config.blacklist_exempt_bridge == Pubkey::default()
             && config.blacklist_exempt_router == Pubkey::default(),
-        OkuError::BlacklistExemptAlreadyInitialized
+        LitePsmError::BlacklistExemptAlreadyInitialized
     );
 
     config.blacklist_exempt_bridge = bridge;
@@ -224,7 +221,7 @@ pub fn set_authority(
     // Reject zero address to prevent accidental lockout
     require!(
         new_authority != Pubkey::default(),
-        OkuError::InvalidRecipient
+        LitePsmError::InvalidAuthority
     );
 
     let config = &mut ctx.accounts.config;

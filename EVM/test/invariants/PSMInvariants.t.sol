@@ -27,7 +27,7 @@ contract PSMInvariantsTest is BaseTest {
         handler = new LitePSMHandler(
             litePsm,
             IOkuMoney(address(okuMoney)),
-            IOkuDollar(address(usdOku)),
+            IOkuDollar(address(okuDollar)),
             usdc,
             redemptionQueue,
             rebaser,
@@ -46,7 +46,7 @@ contract PSMInvariantsTest is BaseTest {
         targetContract(address(handler));
 
         excludeContract(address(okuMoney));
-        excludeContract(address(usdOku));
+        excludeContract(address(okuDollar));
         excludeContract(address(litePsm));
         excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));

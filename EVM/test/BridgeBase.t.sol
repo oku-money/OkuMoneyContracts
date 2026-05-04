@@ -4,8 +4,8 @@ pragma solidity ^0.8.28;
 import {BaseTest} from "./Base.t.sol";
 import {OkuBridge} from "../src/bridge/OkuBridge.sol";
 import {OkuBridgeRouter} from "../src/bridge/OkuBridgeRouter.sol";
-import {MockBridgeAdapter} from "../src/mocks/MockBridgeAdapter.sol";
-import {MockNttManager} from "../src/mocks/MockNttManager.sol";
+import {MockBridgeAdapter} from "./mocks/MockBridgeAdapter.sol";
+import {MockNttManager} from "./mocks/MockNttManager.sol";
 import {Deploy} from "./shared/Deploy.sol";
 import {TestConstants} from "./shared/Constants.sol";
 
@@ -59,7 +59,7 @@ abstract contract BridgeBaseTest is BaseTest {
 
         // Deploy OkuBridgeRouter
         (bridgeRouter, bridgeRouterImpl) = Deploy.deployOkuBridgeRouter(
-            address(usdOku), address(okuMoney), address(okuBridge), admin
+            address(okuDollar), address(okuMoney), address(okuBridge), admin
         );
 
         // Deploy mock adapters — the mocks themselves call okuMoney.mint(), so they need
@@ -161,7 +161,7 @@ abstract contract BridgeBaseTest is BaseTest {
 
         // Construct expected request (amount = netAmount, what destination will mint)
         uint256 nonce = okuBridge.outboundNonce(destChainId) - 1;
-        uint256 netAmount = amount - (amount * okuBridge.bridgeFee()) / BASIS_POINTS;
+        (, uint256 netAmount) = okuBridge.quoteFee(amount);
         request = OkuBridge.BridgeRequest({
             sourceChainId: block.chainid,
             destChainId: destChainId,

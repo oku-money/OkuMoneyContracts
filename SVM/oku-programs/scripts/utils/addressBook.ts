@@ -12,19 +12,19 @@ export interface DeploymentAddresses {
   timestamp: string;
   tokens: {
     usdc?: string;
-    okusd?: string;
+    okuMoney?: string;
     usdOku?: string;
   };
   programs: {
     litePsm?: string;
-    wokusdVault?: string;
+    okuDollarProgram?: string;
     okuBridgeRouter?: string;
   };
   pdas: {
     psmConfig?: string;
     redemptionQueue?: string;
     psmVaultUsdc?: string;
-    psmOkusdEscrow?: string;
+    psmOkuMoneyEscrow?: string;
     vaultConfig?: string;
     vaultOkusd?: string;
     vaultOkuMoney?: string;

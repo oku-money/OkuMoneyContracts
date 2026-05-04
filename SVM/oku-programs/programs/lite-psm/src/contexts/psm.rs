@@ -1,4 +1,4 @@
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use crate::state::{PsmConfig, RedemptionQueue};
 use anchor_lang::prelude::*;
 use anchor_spl::{
@@ -142,7 +142,7 @@ pub struct RedeemOkuM<'info> {
 #[derive(Accounts)]
 pub struct ProcessQueue<'info> {
     #[account(
-        constraint = queue_processor.key() == config.queue_processor @ OkuError::Unauthorized
+        constraint = queue_processor.key() == config.queue_processor @ LitePsmError::Unauthorized
     )]
     pub queue_processor: Signer<'info>,
 
@@ -191,7 +191,7 @@ pub struct ProcessQueue<'info> {
 #[derive(Accounts)]
 pub struct DepositBuffer<'info> {
     #[account(
-        constraint = buffer_depositor.key() == config.buffer_depositor @ OkuError::Unauthorized
+        constraint = buffer_depositor.key() == config.buffer_depositor @ LitePsmError::Unauthorized
     )]
     pub buffer_depositor: Signer<'info>,
 
@@ -226,7 +226,7 @@ pub struct DepositBuffer<'info> {
 #[derive(Accounts)]
 pub struct WithdrawBuffer<'info> {
     #[account(
-        constraint = buffer_withdrawer.key() == config.buffer_withdrawer @ OkuError::Unauthorized
+        constraint = buffer_withdrawer.key() == config.buffer_withdrawer @ LitePsmError::Unauthorized
     )]
     pub buffer_withdrawer: Signer<'info>,
 
@@ -272,12 +272,14 @@ pub struct WithdrawBuffer<'info> {
     pub token_2022_program: Program<'info, Token2022>,
 }
 
-/// Rescue a stuck queue entry — return escrowed OkuMoney to an alternate recipient
-/// Only queue_processor can call this (matches EVM's QUEUE_RESCUER role)
+/// Rescue a stuck queue entry — return escrowed OkuMoney to an alternate recipient.
+///
+/// Only `queue_processor` can call. On EVM this is a separate `QUEUE_RESCUER` role;
+/// the SVM side collapses both into the `queue_processor` authority for simplicity.
 #[derive(Accounts)]
 pub struct RescueQueueEntry<'info> {
     #[account(
-        constraint = queue_processor.key() == config.queue_processor @ OkuError::Unauthorized
+        constraint = queue_processor.key() == config.queue_processor @ LitePsmError::Unauthorized
     )]
     pub queue_processor: Signer<'info>,
 

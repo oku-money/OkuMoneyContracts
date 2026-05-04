@@ -32,9 +32,6 @@ pub enum OkuDollarError {
     #[msg("Insufficient reserves for unwrap")]
     InsufficientReserves,
 
-    #[msg("Invalid PSM config account")]
-    InvalidPsmConfig,
-
     #[msg("Operation would breach minimum collateral ratio")]
     InsufficientCollateral,
 
@@ -49,9 +46,6 @@ pub enum OkuDollarError {
 
     #[msg("Invalid OkuMoney price")]
     InvalidPrice,
-
-    #[msg("Invalid mint extension")]
-    InvalidMintExtension,
 
     #[msg("Output below minimum (slippage exceeded)")]
     SlippageExceeded,

@@ -17,12 +17,13 @@ import {
 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
+import {Errors} from "../lib/Errors.sol";
 import {MathLib} from "../lib/MathLib.sol";
 import {OkuMoneyEvents} from "../lib/events/OkuMoneyEvents.sol";
 
 /**
  * @title OkuMoney
- * @notice Non-rebasing base token backed by US T-Bills with rear-facing yield
+ * @notice Non-rebasing base token (ticker `OkuM`) backed by US T-Bills with rear-facing yield
  * @dev Standard ERC-20 balances (static). Yield is expressed through multiplier appreciation
  *      tracked by a stored `okuMMultiplier` written discretely by an orchestrator via
  *      `setOkuMMultiplier()` or `distributeYield()`.
@@ -36,8 +37,8 @@ import {OkuMoneyEvents} from "../lib/events/OkuMoneyEvents.sol";
  *
  *      See Constants.sol for terminology legend.
  *
- *      Storage: Uses ERC-7201 namespaced storage pattern for upgrade safety.
- *      Taken from https://eips.ethereum.org/EIPS/eip-7201
+ *      Storage uses the ERC-7201 namespaced storage pattern for upgrade safety.
+ *      See https://eips.ethereum.org/EIPS/eip-7201
  */
 contract OkuMoney is
     Initializable,
@@ -54,17 +55,18 @@ contract OkuMoney is
     struct OkuMoneyStorage {
         // Dollar value per token multiplier (starts at 1e18 = $1.00, written by OKUM_REBASER)
         uint256 okuMMultiplier;
-        // Minter allowance system (Circle pattern, see contract NatSpec for source)
+        // Minter allowance system (Circle FiatToken pattern; see contract NatSpec for source)
         mapping(address => uint256) minterAllowance;
         // Supply cap in token units
         uint256 maxSupply;
         // Blacklist
         mapping(address => bool) isBlacklisted;
-        // Block number of last yield distribution (for sandwich attack prevention)
+        // Block number of last yield distribution. Used by YieldSandwichGuard consumers
+        // (OkuDollar, LitePSM) to block PSM/vault operations in the same block as a
+        // distribution and prevent sandwich attacks on the multiplier write.
         uint256 lastYieldDistributionBlock;
     }
 
-    // ERC-7201 storage slot — Taken from https://eips.ethereum.org/EIPS/eip-7201
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuMoney")) - 1)) & ~bytes32(uint256(0xff))
     bytes32 private constant OKUMONEY_STORAGE_LOCATION =
         0xa46c29efb747c5ba816fcb25c64c7053e640ad72653ff106cdc2a03e8238d100;
@@ -77,8 +79,7 @@ contract OkuMoney is
 
     // ============ Custom Errors ============
 
-    error ZeroAddress();
-    error MultiplierCannotDecrease();
+    // Common errors (ZeroAddress, MultiplierCannotDecrease) live in lib/Errors.sol.
     error ZeroSupply();
     error ExceedsSupplyCap();
     error BelowCurrentSupply();
@@ -93,16 +94,25 @@ contract OkuMoney is
         _disableInitializers();
     }
 
+    /// @notice Initialize the proxy.
+    /// @param name ERC-20 name
+    /// @param symbol ERC-20 symbol (canonical ticker is `OkuM`)
+    /// @param _admin Admin address (receives the full role set; see role-grant policy below)
+    /// @param initialMaxSupply Initial supply cap
+    /// @dev Admin is granted every role at deployment. Operators are expected to
+    ///      redistribute operational roles to multisigs, hot wallets, and bridge
+    ///      contracts post-deploy. The other contracts in the suite follow the same
+    ///      policy and link back here for the canonical description.
     function initialize(
         string memory name,
         string memory symbol,
-        address admin,
+        address _admin,
         uint256 initialMaxSupply
     )
         public
         initializer
     {
-        if (admin == address(0)) revert ZeroAddress();
+        if (_admin == address(0)) revert Errors.ZeroAddress();
 
         __ERC20_init(name, symbol);
         __ERC20Permit_init(name);
@@ -113,20 +123,16 @@ contract OkuMoney is
         $.okuMMultiplier = Constants.PRECISION;
         $.maxSupply = initialMaxSupply;
 
-        // Grant the full role set to admin at deployment. Admin is expected to
-        // redistribute operational roles to other parties (multisigs, hot wallets,
-        // bridge contracts) post-deploy. Doing so consistently across every contract
-        // means deployment scripts never need contract-specific role plumbing.
-        _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(Roles.OKUM_UPGRADER, admin);
-        _grantRole(Roles.OKUM_PAUSER, admin);
-        _grantRole(Roles.OKUM_UNPAUSER, admin);
-        _grantRole(Roles.OKUM_MINTER, admin);
-        _grantRole(Roles.OKUM_REBASER, admin);
-        _grantRole(Roles.OKUM_BLACKLISTER, admin);
-        _grantRole(Roles.OKUM_UNBLACKLISTER, admin);
-        _grantRole(Roles.OKUM_CAP_MANAGER, admin);
-        _grantRole(Roles.OKUM_ALLOWANCE_MANAGER, admin);
+        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+        _grantRole(Roles.OKUM_UPGRADER, _admin);
+        _grantRole(Roles.OKUM_PAUSER, _admin);
+        _grantRole(Roles.OKUM_UNPAUSER, _admin);
+        _grantRole(Roles.OKUM_MINTER, _admin);
+        _grantRole(Roles.OKUM_REBASER, _admin);
+        _grantRole(Roles.OKUM_BLACKLISTER, _admin);
+        _grantRole(Roles.OKUM_UNBLACKLISTER, _admin);
+        _grantRole(Roles.OKUM_CAP_MANAGER, _admin);
+        _grantRole(Roles.OKUM_ALLOWANCE_MANAGER, _admin);
     }
 
     // ============ Storage Accessor Views ============
@@ -143,51 +149,36 @@ contract OkuMoney is
         return _getOkuMoneyStorage().isBlacklisted[account];
     }
 
-    /**
-     * @notice Block number when yield was last distributed
-     * @dev Used by PSM and OkuDollar to prevent sandwich attacks during yield distribution.
-     *      Operations in the same block as yield distribution are blocked.
-     */
     function lastYieldDistributionBlock() public view returns (uint256) {
         return _getOkuMoneyStorage().lastYieldDistributionBlock;
     }
 
     // ============ Multiplier Logic ============
 
-    /**
-     * @notice Stored OkuM multiplier (dollar value per token)
-     * @dev Starts at 1e18 ($1.00). Written discretely by OKUM_REBASER via setOkuMMultiplier
-     *      or distributeYield. Never decreases.
-     *
-     *      Key: balanceOf() is NOT affected by okuMMultiplier(). Multiplier appreciation is
-     *      tracked separately for use by the PSM and vault.
-     */
+    /// @notice Stored OkuM multiplier (dollar value per token, 1e18 = $1.00)
+    /// @dev Written by OKUM_REBASER via {setOkuMMultiplier} or {distributeYield}.
+    ///      Never decreases. balanceOf() is unaffected; the multiplier is consumed by
+    ///      the PSM and vault for pricing.
     function okuMMultiplier() public view returns (uint256) {
         return _getOkuMoneyStorage().okuMMultiplier;
     }
 
-    /**
-     * @notice Directly override the stored multiplier
-     * @param newMultiplier New multiplier value (must be >= current multiplier)
-     * @dev Records block.number to prevent sandwich attacks via PSM/vault operations
-     */
+    /// @notice Directly override the stored multiplier
+    /// @param newMultiplier New multiplier value (must be >= current)
     function setOkuMMultiplier(uint256 newMultiplier) external onlyRole(Roles.OKUM_REBASER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 currentMultiplier = $.okuMMultiplier;
-        if (newMultiplier < currentMultiplier) revert MultiplierCannotDecrease();
+        if (newMultiplier < currentMultiplier) revert Errors.MultiplierCannotDecrease();
         $.lastYieldDistributionBlock = block.number;
         $.okuMMultiplier = newMultiplier;
         emit OkuMMultiplierUpdated(currentMultiplier, newMultiplier, totalSupply());
     }
 
-    /**
-     * @notice Distribute realized dollar yield across all token holders
-     * @dev Increases okuMMultiplier by yieldAmount / totalSupply.
-     *      yieldAmount is dollar-denominated (18 decimals).
-     *      E.g., $1000 yield on 10000 tokens -> +$0.10/token.
-     *      Records block.number to prevent sandwich attacks via PSM/vault operations.
-     * @param yieldAmount Dollar yield to distribute (18 decimals)
-     */
+    /// @notice Distribute realized dollar yield across all token holders
+    /// @dev Increases okuMMultiplier by yieldAmount / totalSupply.
+    ///      yieldAmount is dollar-denominated (18 decimals).
+    ///      E.g., $1000 yield on 10000 tokens -> +$0.10/token.
+    /// @param yieldAmount Dollar yield to distribute (18 decimals)
     function distributeYield(uint256 yieldAmount) external onlyRole(Roles.OKUM_REBASER) {
         uint256 supply = totalSupply();
         if (supply == 0) revert ZeroSupply();
@@ -201,11 +192,8 @@ contract OkuMoney is
 
     // ============ ERC20Permit Override (Blacklist Check) ============
 
-    /**
-     * @dev Override permit to check blacklist status of owner and spender
-     *      Prevents blacklisted users from pre-signing permits before being blacklisted
-     *      Note: Intentionally does NOT check pause state — approvals are allowed while paused
-     */
+    /// @dev Blocks blacklisted owners or spenders from using a pre-signed permit.
+    ///      Intentionally not pause-gated — approvals are allowed while paused.
     function permit(
         address owner,
         address spender,
@@ -227,25 +215,14 @@ contract OkuMoney is
 
     // ============ ERC20 Transfer Hook (Blacklist + Pause) ============
 
-    /**
-     * @dev Override _update to enforce blacklist and pause checks on all transfers.
-     *      Mint (from == address(0)): blacklist checked on recipient only.
-     *      Burn (to == address(0)): no pause check — burn works while paused.
-     *      Transfer: blocked when paused, blocked if either party is blacklisted.
-     */
+    /// @dev Pause blocks peer-to-peer transfers; mint has its own whenNotPaused;
+    ///      burn always proceeds. Blacklist applies to the non-zero side(s).
     function _update(address from, address to, uint256 amount) internal override {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
 
-        // Blacklist checks (skip for mint/burn zero-address side)
-        if (from != address(0)) {
-            if ($.isBlacklisted[from]) revert SenderBlacklisted();
-        }
-        if (to != address(0)) {
-            if ($.isBlacklisted[to]) revert RecipientBlacklisted();
-        }
+        if (from != address(0) && $.isBlacklisted[from]) revert SenderBlacklisted();
+        if (to != address(0) && $.isBlacklisted[to]) revert RecipientBlacklisted();
 
-        // Pause check: block peer-to-peer transfers when paused.
-        // Mint has its own whenNotPaused modifier. Burn is always allowed.
         if (from != address(0) && to != address(0)) {
             _requireNotPaused();
         }
@@ -258,16 +235,10 @@ contract OkuMoney is
 
     // ============ Minting & Burning ============
 
-    /**
-     * @notice Mint raw tokens to an address
-     * @dev Creates raw tokens; minting 100 tokens when okuMMultiplier = $1.05 creates $105 of value.
-     *      The PSM handles USDC <-> OkuM conversion using okuMMultiplier().
-     *
-     *      Minter-allowance accounting is modeled on Circle's FiatToken pattern — each
-     *      authorized minter is allotted a per-address allowance that is decremented on
-     *      every successful mint.
-     *      Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v2/FiatTokenV2.sol
-     */
+    /// @notice Mint raw tokens to an address
+    /// @dev Creates raw tokens; minting 100 tokens at okuMMultiplier=$1.05 creates $105 of value.
+    ///      The PSM handles USDC <-> OkuM conversion using okuMMultiplier(). See contract
+    ///      NatSpec for the Circle FiatToken minter-allowance source reference.
     function mint(address to, uint256 amount) external onlyRole(Roles.OKUM_MINTER) whenNotPaused {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
 
@@ -282,10 +253,7 @@ contract OkuMoney is
         _mint(to, amount);
     }
 
-    /**
-     * @notice Burn raw tokens from caller
-     * @dev No whenNotPaused — burn works while paused.
-     */
+    /// @notice Burn raw tokens from caller. Allowed while paused.
     function burn(uint256 amount) external onlyRole(Roles.OKUM_MINTER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         if ($.isBlacklisted[msg.sender]) revert SenderBlacklisted();

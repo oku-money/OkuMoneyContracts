@@ -18,13 +18,13 @@ contract VaultInvariantsTest is BaseTest {
 
     function setUp() public override {
         super.setUp();
-        handler = new OkuDollarHandler(okuMoney, usdOku, minter, rebaser);
+        handler = new OkuDollarHandler(okuMoney, okuDollar, minter, rebaser);
 
         // Grant roles required by the expanded handler surface.
         vm.startPrank(admin);
-        usdOku.grantRole(VAULT_REBASER, address(handler));
-        usdOku.grantRole(VAULT_RESERVE_MANAGER, address(handler));
-        usdOku.grantRole(DEFAULT_ADMIN_ROLE, address(handler));
+        okuDollar.grantRole(VAULT_REBASER, address(handler));
+        okuDollar.grantRole(VAULT_RESERVE_MANAGER, address(handler));
+        okuDollar.grantRole(DEFAULT_ADMIN_ROLE, address(handler));
         vm.stopPrank();
 
         // Handler also needs to be able to mint OkuMoney via `vm.prank(minter)`. The
@@ -33,7 +33,7 @@ contract VaultInvariantsTest is BaseTest {
         targetContract(address(handler));
 
         excludeContract(address(okuMoney));
-        excludeContract(address(usdOku));
+        excludeContract(address(okuDollar));
         excludeContract(address(litePsm));
         excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));
@@ -43,8 +43,8 @@ contract VaultInvariantsTest is BaseTest {
     /// @notice OkuDollar vault is collateralized by OkuMoney reserves (within a fixed
     ///         small rounding tolerance, NOT a tolerance that grows with call count).
     function invariant_VaultBacked() public view {
-        uint256 reserves = okuMoney.balanceOf(address(usdOku));
-        uint256 obligations = usdOku.totalSupply();
+        uint256 reserves = okuMoney.balanceOf(address(okuDollar));
+        uint256 obligations = okuDollar.totalSupply();
         uint256 price = okuMoney.okuMMultiplier();
         uint256 reservesDollarValue = (reserves * price) / 1e18;
 
@@ -57,10 +57,10 @@ contract VaultInvariantsTest is BaseTest {
 
     /// @notice Collateralization ratio stays at-or-above 100% (within rounding).
     function invariant_CollateralizationRatio() public view {
-        uint256 obligations = usdOku.totalSupply();
+        uint256 obligations = okuDollar.totalSupply();
         if (obligations == 0) return;
 
-        uint256 reserves = okuMoney.balanceOf(address(usdOku));
+        uint256 reserves = okuMoney.balanceOf(address(okuDollar));
         uint256 price = okuMoney.okuMMultiplier();
         uint256 reservesDollarValue = (reserves * price) / 1e18;
         assertGe(
@@ -76,9 +76,9 @@ contract VaultInvariantsTest is BaseTest {
         address[] memory actors = handler.getActors();
         uint256 sumOfBalances = 0;
         for (uint256 i = 0; i < actors.length; i++) {
-            sumOfBalances += usdOku.balanceOf(actors[i]);
+            sumOfBalances += okuDollar.balanceOf(actors[i]);
         }
-        uint256 totalSupply = usdOku.totalSupply();
+        uint256 totalSupply = okuDollar.totalSupply();
         assertLe(
             sumOfBalances,
             totalSupply + actors.length, // up to 1 wei rounding per actor

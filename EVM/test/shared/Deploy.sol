@@ -96,7 +96,7 @@ library Deploy {
 
     /// @notice Deploy LitePSM with UUPS proxy
     /// @param okuMoney_ OkuMoney token address
-    /// @param usdOku_ OkuDollar vault address
+    /// @param okuDollar_ OkuDollar vault address
     /// @param usdc_ USDC token address
     /// @param redemptionQueue_ RedemptionQueue address
     /// @param admin_ Admin address
@@ -105,7 +105,7 @@ library Deploy {
     /// @return impl The implementation contract
     function deployLitePSM(
         address okuMoney_,
-        address usdOku_,
+        address okuDollar_,
         address usdc_,
         address redemptionQueue_,
         address admin_,
@@ -117,7 +117,7 @@ library Deploy {
         impl = new LitePSM();
         bytes memory initData = abi.encodeCall(
             LitePSM.initialize,
-            (okuMoney_, usdOku_, usdc_, redemptionQueue_, admin_, stalenessThreshold_)
+            (okuMoney_, okuDollar_, usdc_, redemptionQueue_, admin_, stalenessThreshold_)
         );
         proxy = LitePSM(address(new ERC1967Proxy(address(impl), initData)));
     }
@@ -125,7 +125,7 @@ library Deploy {
     /// @notice Deploy LitePSM with default staleness threshold (1 hour)
     function deployLitePSM(
         address okuMoney_,
-        address usdOku_,
+        address okuDollar_,
         address usdc_,
         address redemptionQueue_,
         address admin_
@@ -135,7 +135,7 @@ library Deploy {
     {
         return deployLitePSM(
             okuMoney_,
-            usdOku_,
+            okuDollar_,
             usdc_,
             redemptionQueue_,
             admin_,
@@ -221,7 +221,7 @@ library Deploy {
 
     /// @notice Deploy OkuBridgeRouter with UUPS proxy
     function deployOkuBridgeRouter(
-        address usdOku_,
+        address okuDollar_,
         address okuMoney_,
         address okuBridge_,
         address admin_
@@ -231,7 +231,7 @@ library Deploy {
     {
         impl = new OkuBridgeRouter();
         bytes memory initData =
-            abi.encodeCall(OkuBridgeRouter.initialize, (usdOku_, okuMoney_, okuBridge_, admin_));
+            abi.encodeCall(OkuBridgeRouter.initialize, (okuDollar_, okuMoney_, okuBridge_, admin_));
         proxy = OkuBridgeRouter(address(new ERC1967Proxy(address(impl), initData)));
     }
 }

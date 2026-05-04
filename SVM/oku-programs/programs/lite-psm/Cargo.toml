@@ -1,7 +1,7 @@
 [package]
 name = "lite-psm"
 version = "0.1.0"
-description = "LitePSM - USDC to OkuUSD peg stability module"
+description = "LitePSM - USDC to OkuMoney peg stability module"
 edition = "2021"
 
 [lib]

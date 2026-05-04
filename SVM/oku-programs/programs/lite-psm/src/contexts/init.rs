@@ -1,4 +1,4 @@
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use crate::state::{PsmConfig, RedemptionQueue};
 use anchor_lang::prelude::*;
 use anchor_spl::{
@@ -84,7 +84,7 @@ pub struct SetupOkuMoneyEscrow<'info> {
         mut,
         seeds = [PsmConfig::SEED],
         bump = config.bump,
-        has_one = role_admin @ OkuError::Unauthorized
+        has_one = role_admin @ LitePsmError::Unauthorized
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 

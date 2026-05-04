@@ -3,7 +3,10 @@ pragma solidity ^0.8.28;
 
 /**
  * @title IOkuBridgeNative
- * @notice Interface for the native OkuBridge contract
+ * @notice Interface for the native OkuBridge contract used by OkuBridgeRouter.
+ * @dev Exposes only the methods the router needs: `bridgeBurn` and `quoteFee`.
+ *      `quoteFee` is the single source of truth for fee accounting on auxiliary
+ *      router events; OkuBridge.bridgeBurn uses it internally too.
  */
 interface IOkuBridgeNative {
     function bridgeBurn(
@@ -14,6 +17,6 @@ interface IOkuBridgeNative {
         external
         returns (bytes32 requestId);
 
-    /// @notice Bridge fee in basis points (e.g. 10 = 0.1%)
-    function bridgeFee() external view returns (uint256);
+    /// @notice Quote the fee + net amount for a bridge of `amount` tokens.
+    function quoteFee(uint256 amount) external view returns (uint256 fee, uint256 net);
 }

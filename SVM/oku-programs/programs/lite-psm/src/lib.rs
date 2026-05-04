@@ -207,16 +207,6 @@ pub mod lite_psm {
         instructions::bridge::bridge_burn(ctx, amount, recipient, destination_chain_id)
     }
 
-    /// Legacy single-step refund (deprecated)
-    /// Use initiate_refund + confirm_refund for new integrations
-    pub fn refund_bridge_request(
-        ctx: Context<RefundBridgeRequest>,
-        message_bytes: Vec<u8>,
-        request_id: [u8; 32],
-    ) -> Result<()> {
-        instructions::bridge::refund_bridge_request(ctx, message_bytes, request_id)
-    }
-
     // ===== Two-Step Refund (matching EVM OkuBridge) =====
 
     /// Initiate a refund (step 1 of two-step refund pattern)

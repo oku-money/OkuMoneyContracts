@@ -8,7 +8,7 @@ import {OkuMoney} from "../src/token/OkuMoney.sol";
 import {OkuDollar} from "../src/token/OkuDollar.sol";
 import {LitePSM} from "../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../src/psm/RedemptionQueue.sol";
-import {MockUSDC} from "../src/mocks/MockUSDC.sol";
+import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {MockAggregatorV3} from "./mocks/MockAggregatorV3.sol";
 
 import {TestConstants} from "./shared/Constants.sol";
@@ -76,7 +76,6 @@ abstract contract BaseTest is Test, Actors {
 
     // OkuBridge roles (BRIDGE_ prefix)
     bytes32 public constant BRIDGE_UPGRADER = TestRoles.BRIDGE_UPGRADER;
-    bytes32 public constant BRIDGE_DUST_SWEEPER = TestRoles.BRIDGE_DUST_SWEEPER;
     bytes32 public constant BRIDGE_SIGNER_MANAGER = TestRoles.BRIDGE_SIGNER_MANAGER;
     bytes32 public constant BRIDGE_PAUSER = TestRoles.BRIDGE_PAUSER;
     bytes32 public constant BRIDGE_UNPAUSER = TestRoles.BRIDGE_UNPAUSER;
@@ -98,8 +97,8 @@ abstract contract BaseTest is Test, Actors {
 
     OkuMoney public okuMoney;
     OkuMoney public okuMoneyImpl;
-    OkuDollar public usdOku;
-    OkuDollar public usdOkuImpl;
+    OkuDollar public okuDollar;
+    OkuDollar public okuDollarImpl;
     LitePSM public litePsm;
     LitePSM public litePsmImpl;
     RedemptionQueue public redemptionQueue;
@@ -124,7 +123,7 @@ abstract contract BaseTest is Test, Actors {
         (okuMoney, okuMoneyImpl) = Deploy.deployOkuMoney(admin);
 
         // Deploy OkuDollar vault
-        (usdOku, usdOkuImpl) = Deploy.deployOkuDollar(address(okuMoney), admin);
+        (okuDollar, okuDollarImpl) = Deploy.deployOkuDollar(address(okuMoney), admin);
 
         // Deploy RedemptionQueue
         (redemptionQueue, redemptionQueueImpl) =
@@ -132,7 +131,7 @@ abstract contract BaseTest is Test, Actors {
 
         // Deploy LitePSM
         (litePsm, litePsmImpl) = Deploy.deployLitePSM(
-            address(okuMoney), address(usdOku), address(usdc), address(redemptionQueue), admin
+            address(okuMoney), address(okuDollar), address(usdc), address(redemptionQueue), admin
         );
     }
 
@@ -151,10 +150,10 @@ abstract contract BaseTest is Test, Actors {
         okuMoney.grantRole(OKUM_ALLOWANCE_MANAGER, allowanceManager);
 
         // OkuDollar vault roles (VAULT_ prefix)
-        usdOku.grantRole(VAULT_REBASER, usdRebaser);
-        usdOku.grantRole(VAULT_RESERVE_MANAGER, reserveManager);
-        usdOku.grantRole(VAULT_PAUSER, vaultPauser);
-        usdOku.grantRole(VAULT_UNPAUSER, vaultUnpauser);
+        okuDollar.grantRole(VAULT_REBASER, usdRebaser);
+        okuDollar.grantRole(VAULT_RESERVE_MANAGER, reserveManager);
+        okuDollar.grantRole(VAULT_PAUSER, vaultPauser);
+        okuDollar.grantRole(VAULT_UNPAUSER, vaultUnpauser);
 
         // LitePSM roles - Granular RBAC (PSM_ prefix)
         litePsm.grantRole(PSM_PAUSER, pauser);
@@ -197,9 +196,9 @@ abstract contract BaseTest is Test, Actors {
         _mintOkuMoney(to, okuMAmount);
         // Approve vault to pull OkuMoney
         vm.startPrank(to);
-        IERC20(address(okuMoney)).approve(address(usdOku), okuMAmount);
+        IERC20(address(okuMoney)).approve(address(okuDollar), okuMAmount);
         // Wrap OkuMoney into OkuDollar (0 minAmountOut for test helpers)
-        usdOku.wrap(okuMAmount, to, 0);
+        okuDollar.wrap(okuMAmount, to, 0);
         vm.stopPrank();
     }
 
@@ -215,9 +214,9 @@ abstract contract BaseTest is Test, Actors {
     }
 
     /// @notice Approve OkuDollar spending
-    function _approveUsdOku(address owner, address spender, uint256 amount) internal {
+    function _approveOkuDollar(address owner, address spender, uint256 amount) internal {
         vm.prank(owner);
-        usdOku.approve(spender, amount);
+        okuDollar.approve(spender, amount);
     }
 
     /// @notice Approve USDC spending
@@ -272,5 +271,34 @@ abstract contract BaseTest is Test, Actors {
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(newMultiplier);
         vm.roll(block.number + 1);
+    }
+
+    /// @notice Elevate OkuDollar's `usdMultiplier()` to (approximately) `targetMultiplier`.
+    /// @dev Drives the multiplier via `setUsdYieldRate` + `vm.warp` rather than a direct
+    ///      override; this mirrors the only production path for moving the multiplier.
+    ///      The achieved value is the smallest multiplier >= target reachable by warping
+    ///      forward at MAX_RATE.
+    function _elevateUsdMultiplier(uint256 targetMultiplier) internal {
+        require(targetMultiplier >= PRECISION, "target below floor");
+        uint256 current = okuDollar.usdMultiplier();
+        if (targetMultiplier <= current) return;
+
+        // Set the active rate to MAX_RATE with no end timestamp (open-ended) so the
+        // multiplier compounds continuously. Then warp forward enough seconds to clear
+        // the target. We loop in case rounding leaves us short on the first warp.
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(MAX_RATE, 0);
+
+        uint256 elapsed = 1;
+        while (okuDollar.usdMultiplier() < targetMultiplier) {
+            vm.warp(block.timestamp + elapsed);
+            elapsed *= 2;
+            // Safety: bound the loop in case targetMultiplier is unreachable.
+            require(elapsed < 365 days * 4, "target unreachable");
+        }
+
+        // Snapshot the achieved multiplier and stop accrual so subsequent reads stay stable.
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(PRECISION, 0);
     }
 }

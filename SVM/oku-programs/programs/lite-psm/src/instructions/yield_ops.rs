@@ -7,7 +7,7 @@
 
 use crate::constants::PRECISION;
 use crate::contexts::{DistributeYield, SetOkuMPrice};
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use crate::events::*;
 use anchor_lang::prelude::*;
 
@@ -26,7 +26,7 @@ pub fn set_oku_m_price(ctx: Context<SetOkuMPrice>, new_multiplier: u64) -> Resul
     // Price can only increase (or stay the same)
     require!(
         new_multiplier >= current_multiplier,
-        OkuError::PriceCannotDecrease
+        LitePsmError::PriceCannotDecrease
     );
 
     // Set yield distribution slot FIRST (before price update for atomicity)
@@ -59,10 +59,10 @@ pub fn set_oku_m_price(ctx: Context<SetOkuMPrice>, new_multiplier: u64) -> Resul
 ///
 /// This is the SVM equivalent of EVM's `distributeYield(uint256 yieldAmount)`.
 pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Result<()> {
-    require!(yield_amount > 0, OkuError::ZeroAmount);
+    require!(yield_amount > 0, LitePsmError::ZeroAmount);
 
     let total_supply = ctx.accounts.oku_money_mint.supply;
-    require!(total_supply > 0, OkuError::ZeroAmount);
+    require!(total_supply > 0, LitePsmError::ZeroAmount);
 
     let config = &mut ctx.accounts.config;
 
@@ -74,17 +74,17 @@ pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Res
     // This distributes the yield proportionally across all holders
     let yield_per_token = (yield_amount as u128)
         .checked_mul(PRECISION as u128)
-        .ok_or(OkuError::Overflow)?
+        .ok_or(LitePsmError::Overflow)?
         .checked_div(total_supply as u128)
-        .ok_or(OkuError::Overflow)? as u64;
+        .ok_or(LitePsmError::Overflow)? as u64;
 
     // Prevent no-op distributions that waste the yield lock slot
     // This can happen when yield_amount is tiny relative to total_supply
-    require!(yield_per_token > 0, OkuError::YieldTooSmall);
+    require!(yield_per_token > 0, LitePsmError::YieldTooSmall);
 
     let new_multiplier = current_multiplier
         .checked_add(yield_per_token)
-        .ok_or(OkuError::Overflow)?;
+        .ok_or(LitePsmError::Overflow)?;
 
     // Set yield distribution slot FIRST
     let clock = Clock::get()?;

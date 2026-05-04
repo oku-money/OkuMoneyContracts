@@ -60,7 +60,6 @@ library TestRoles {
     bytes32 public constant BRIDGE_CHAIN_MANAGER = SrcRoles.BRIDGE_CHAIN_MANAGER;
     bytes32 public constant BRIDGE_LIMITS_MANAGER = SrcRoles.BRIDGE_LIMITS_MANAGER;
     bytes32 public constant BRIDGE_UPGRADER = SrcRoles.BRIDGE_UPGRADER;
-    bytes32 public constant BRIDGE_DUST_SWEEPER = SrcRoles.BRIDGE_DUST_SWEEPER;
     bytes32 public constant BRIDGE_REFUND_INITIATOR = SrcRoles.BRIDGE_REFUND_INITIATOR;
     bytes32 public constant BRIDGE_REFUND_CONFIRMER = SrcRoles.BRIDGE_REFUND_CONFIRMER;
 

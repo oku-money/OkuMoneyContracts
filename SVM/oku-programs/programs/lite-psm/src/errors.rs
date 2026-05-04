@@ -19,7 +19,7 @@
 use anchor_lang::prelude::*;
 
 #[error_code]
-pub enum OkuError {
+pub enum LitePsmError {
     // ===== Authorization Errors =====
     /// Caller not authorized for this operation
     #[msg("Caller not authorized")]
@@ -30,6 +30,14 @@ pub enum OkuError {
     /// EVM: Pausable revert
     #[msg("Program is paused")]
     Paused,
+
+    /// Program is already paused
+    #[msg("Program is already paused")]
+    AlreadyPaused,
+
+    /// Program is not paused
+    #[msg("Program is not paused")]
+    NotPaused,
 
     // ===== Supply/Allowance Errors =====
     /// Mint would exceed max supply
@@ -123,15 +131,6 @@ pub enum OkuError {
     #[msg("Yield amount too small to affect price (truncates to zero)")]
     YieldTooSmall,
 
-    // ===== Token Errors =====
-    /// Invalid mint extension configuration
-    #[msg("Invalid mint extension configuration")]
-    InvalidMintExtension,
-
-    /// Invalid PSM config account
-    #[msg("Invalid PSM config account")]
-    InvalidPsmConfig,
-
     // ===== Blacklist Errors =====
     /// Account is blacklist exempt and cannot be frozen
     #[msg("Account is blacklist exempt and cannot be frozen")]
@@ -157,6 +156,10 @@ pub enum OkuError {
     /// Recipient account does not match parameter
     #[msg("Recipient account does not match parameter")]
     InvalidRecipient,
+
+    /// Authority pubkey is the zero pubkey or otherwise invalid
+    #[msg("Authority pubkey is invalid (e.g. zero pubkey)")]
+    InvalidAuthority,
 
     /// Request ID mismatch
     #[msg("Request ID mismatch")]
@@ -185,6 +188,14 @@ pub enum OkuError {
     /// Amount above maximum
     #[msg("Amount above maximum")]
     AboveMaximum,
+
+    /// Limits configuration invalid (e.g., min > max)
+    #[msg("Limits configuration invalid (min > max)")]
+    InvalidLimits,
+
+    /// Nonce skip request did not strictly advance the nonce
+    #[msg("Nonce must strictly advance (new_nonce > current)")]
+    NonceNotMonotonic,
 
     /// Chain already supported
     #[msg("Chain already supported")]

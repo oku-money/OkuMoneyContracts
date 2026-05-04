@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
+import {Errors} from "../../src/lib/Errors.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {
     PausableUpgradeable
@@ -427,7 +428,7 @@ contract OkuMoneyTest is BaseTest {
 
     function test_SetOkuMMultiplier_CannotDecrease() public {
         vm.prank(rebaser);
-        vm.expectRevert(OkuMoney.MultiplierCannotDecrease.selector);
+        vm.expectRevert(Errors.MultiplierCannotDecrease.selector);
         okuMoney.setOkuMMultiplier(PRECISION - 1);
     }
 

@@ -1,4 +1,4 @@
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::{
@@ -15,7 +15,7 @@ pub struct Pause<'info> {
         mut,
         seeds = [PsmConfig::SEED],
         bump = config.bump,
-        has_one = pauser @ OkuError::Unauthorized
+        has_one = pauser @ LitePsmError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
 }
@@ -29,22 +29,7 @@ pub struct Unpause<'info> {
         mut,
         seeds = [PsmConfig::SEED],
         bump = config.bump,
-        has_one = unpauser @ OkuError::Unauthorized
-    )]
-    pub config: Account<'info, PsmConfig>,
-}
-
-#[derive(Accounts)]
-pub struct AdminOnly<'info> {
-    #[account(
-        constraint = role_admin.key() == config.role_admin @ OkuError::Unauthorized
-    )]
-    pub role_admin: Signer<'info>,
-
-    #[account(
-        mut,
-        seeds = [PsmConfig::SEED],
-        bump = config.bump
+        has_one = unpauser @ LitePsmError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
 }
@@ -58,7 +43,7 @@ pub struct CapManager<'info> {
         mut,
         seeds = [PsmConfig::SEED],
         bump = config.bump,
-        has_one = cap_manager @ OkuError::Unauthorized
+        has_one = cap_manager @ LitePsmError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
 }
@@ -72,7 +57,7 @@ pub struct AllowanceManager<'info> {
         mut,
         seeds = [PsmConfig::SEED],
         bump = config.bump,
-        has_one = allowance_manager @ OkuError::Unauthorized
+        has_one = allowance_manager @ LitePsmError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
 }
@@ -86,7 +71,7 @@ pub struct OracleManager<'info> {
         mut,
         seeds = [PsmConfig::SEED],
         bump = config.bump,
-        has_one = oracle_manager @ OkuError::Unauthorized
+        has_one = oracle_manager @ LitePsmError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
 }
@@ -95,7 +80,7 @@ pub struct OracleManager<'info> {
 pub struct FreezeAccount<'info> {
     /// Blacklister authority - can freeze even when PSM is paused
     #[account(
-        constraint = freezer.key() == config.freezer @ OkuError::Unauthorized
+        constraint = freezer.key() == config.freezer @ LitePsmError::Unauthorized
     )]
     pub freezer: Signer<'info>,
 
@@ -127,7 +112,7 @@ pub struct FreezeAccount<'info> {
 pub struct ThawAccount<'info> {
     /// Unblacklister authority - can thaw even when PSM is paused (requires deliberate review)
     #[account(
-        constraint = unfreezer.key() == config.unfreezer @ OkuError::Unauthorized
+        constraint = unfreezer.key() == config.unfreezer @ LitePsmError::Unauthorized
     )]
     pub unfreezer: Signer<'info>,
 
@@ -159,7 +144,7 @@ pub struct ThawAccount<'info> {
 pub struct InitializeBlacklistExempt<'info> {
     /// Role admin - only role_admin can set blacklist exemptions
     #[account(
-        constraint = role_admin.key() == config.role_admin @ OkuError::Unauthorized
+        constraint = role_admin.key() == config.role_admin @ LitePsmError::Unauthorized
     )]
     pub role_admin: Signer<'info>,
 
@@ -176,7 +161,7 @@ pub struct InitializeBlacklistExempt<'info> {
 pub struct SetAuthority<'info> {
     /// Role admin - only role_admin can update authorities
     #[account(
-        constraint = role_admin.key() == config.role_admin @ OkuError::Unauthorized
+        constraint = role_admin.key() == config.role_admin @ LitePsmError::Unauthorized
     )]
     pub role_admin: Signer<'info>,
 

@@ -4,19 +4,13 @@
 //! `DssLitePsm`: deposit USDC → mint at peg, redeem from buffer when liquid,
 //! enqueue when buffer is depleted, drain queue from a separate USDC top-up.
 //! Taken from https://github.com/makerdao/dss-lite-psm/blob/master/src/DssLitePsm.sol
-//!
-//! Anchor-version note: `CpiContext::new[_with_signer](program_id, accounts[, seeds])`
-//! takes `program_id` as a `Pubkey` in Anchor ≥1.0. All CPI sites in this file
-//! pass `<program>.key()` (which returns `Pubkey`), which is correct.
-//! The pre-0.31 API took an `AccountInfo<'info>` here — do not flag this as a bug.
 
 use crate::contexts::{
     DepositBuffer, MintOkuM, ProcessQueue, RedeemOkuM, RescueQueueEntry, WithdrawBuffer,
 };
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::constants::PRECISION;
-use crate::helpers::{check_oracle_reserves, check_yield_lock};
+use crate::helpers::{check_oracle_reserves, check_yield_lock, dollars_to_oku_m, oku_m_to_dollars};
 use crate::state::{PsmConfig, QueueEntry, RedemptionQueue};
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
@@ -42,33 +36,28 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     let current_supply = ctx.accounts.oku_money_mint.supply;
     let oracle = ctx.accounts.config.oracle;
 
-    require!(!is_paused, OkuError::Paused);
-    require!(usdc_amount > 0, OkuError::ZeroAmount);
+    require!(!is_paused, LitePsmError::Paused);
+    require!(usdc_amount > 0, LitePsmError::ZeroAmount);
 
     // Read current price from config
     let oku_m_price = ctx.accounts.config.oku_m_price;
 
-    // Calculate OkuMoney amount (price-aware)
-    // oku_m_amount = usdc_amount * PRECISION / oku_m_price
-    let oku_m_amount = (usdc_amount as u128)
-        .checked_mul(PRECISION as u128)
-        .ok_or(OkuError::Overflow)?
-        .checked_div(oku_m_price as u128)
-        .ok_or(OkuError::Overflow)? as u64;
+    // Calculate OkuMoney amount (price-aware): treat usdc_amount as a dollar value.
+    let oku_m_amount = dollars_to_oku_m(usdc_amount, oku_m_price)?;
 
     // Check max supply
     require!(
         current_supply
             .checked_add(oku_m_amount)
-            .ok_or(OkuError::Overflow)?
+            .ok_or(LitePsmError::Overflow)?
             <= max_supply,
-        OkuError::MaxSupplyExceeded
+        LitePsmError::MaxSupplyExceeded
     );
 
     // Check minter allowance
     require!(
         oku_m_amount <= minter_allowance,
-        OkuError::AllowanceExceeded
+        LitePsmError::AllowanceExceeded
     );
 
     // Oracle check if configured (oracle != Pubkey::default()).
@@ -121,14 +110,10 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     let config = &mut ctx.accounts.config;
     config.minter_allowance = minter_allowance
         .checked_sub(oku_m_amount)
-        .ok_or(OkuError::Overflow)?;
+        .ok_or(LitePsmError::Overflow)?;
 
     // Calculate dollar value for event
-    let dollar_value = (oku_m_amount as u128)
-        .checked_mul(oku_m_price as u128)
-        .ok_or(OkuError::Overflow)?
-        .checked_div(PRECISION as u128)
-        .ok_or(OkuError::Overflow)? as u64;
+    let dollar_value = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
 
     emit!(MintEvent {
         user: user_key,
@@ -158,19 +143,14 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
     let oku_money_decimals = ctx.accounts.oku_money_mint.decimals;
     let vault_usdc_balance = ctx.accounts.vault_usdc.amount;
 
-    require!(!is_paused, OkuError::Paused);
-    require!(oku_m_amount > 0, OkuError::ZeroAmount);
+    require!(!is_paused, LitePsmError::Paused);
+    require!(oku_m_amount > 0, LitePsmError::ZeroAmount);
 
     // Read current price from config
     let oku_m_price = ctx.accounts.config.oku_m_price;
 
-    // Calculate USDC amount (price-aware)
-    // usdc_amount = oku_m_amount * oku_m_price / PRECISION
-    let usdc_amount = (oku_m_amount as u128)
-        .checked_mul(oku_m_price as u128)
-        .ok_or(OkuError::Overflow)?
-        .checked_div(PRECISION as u128)
-        .ok_or(OkuError::Overflow)? as u64;
+    // Calculate USDC amount (price-aware): treat dollar value as USDC.
+    let usdc_amount = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
 
     // Check if buffer is sufficient for instant redemption
     if vault_usdc_balance >= usdc_amount {
@@ -219,7 +199,7 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
         // 2. Record entry in queue
 
         let queue = &mut ctx.accounts.redemption_queue;
-        require!(!queue.is_full(), OkuError::QueueFull);
+        require!(!queue.is_full(), LitePsmError::QueueFull);
 
         // Transfer OkuMoney from user to escrow vault
         token_interface::transfer_checked(
@@ -252,14 +232,10 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
         queue.total_queued_oku_m = queue
             .total_queued_oku_m
             .checked_add(oku_m_amount)
-            .ok_or(OkuError::Overflow)?;
+            .ok_or(LitePsmError::Overflow)?;
 
         // Calculate dollar value at time of queueing
-        let dollar_value = (oku_m_amount as u128)
-            .checked_mul(oku_m_price as u128)
-            .ok_or(OkuError::Overflow)?
-            .checked_div(PRECISION as u128)
-            .ok_or(OkuError::Overflow)? as u64;
+        let dollar_value = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
 
         emit!(RedemptionQueuedEvent {
             user: ctx.accounts.user.key(),
@@ -286,7 +262,7 @@ pub fn process_queue<'info>(
     let queue = &mut ctx.accounts.redemption_queue;
     let bump = ctx.accounts.config.bump;
 
-    require!(!queue.is_empty(), OkuError::QueueEmpty);
+    require!(!queue.is_empty(), LitePsmError::QueueEmpty);
 
     let seeds = &[PsmConfig::SEED, &[bump]];
     let signer = &[&seeds[..]];
@@ -311,13 +287,8 @@ pub fn process_queue<'info>(
 
         let entry = &queue.entries[head_idx];
 
-        // Calculate USDC payout using current price
-        // usdc_amount = oku_m_amount * oku_m_price / PRECISION
-        let usdc_amount = (entry.oku_m_amount as u128)
-            .checked_mul(oku_m_price as u128)
-            .ok_or(OkuError::Overflow)?
-            .checked_div(PRECISION as u128)
-            .ok_or(OkuError::Overflow)? as u64;
+        // Calculate USDC payout using current price.
+        let usdc_amount = oku_m_to_dollars(entry.oku_m_amount, oku_m_price)?;
 
         // Check if we have enough USDC
         if remaining_usdc_balance < usdc_amount {
@@ -328,7 +299,7 @@ pub fn process_queue<'info>(
         let recipient_account_idx = processed as usize;
         require!(
             recipient_account_idx < ctx.remaining_accounts.len(),
-            OkuError::InsufficientAccounts
+            LitePsmError::InsufficientAccounts
         );
 
         let recipient_usdc_ata = &ctx.remaining_accounts[recipient_account_idx];
@@ -336,12 +307,12 @@ pub fn process_queue<'info>(
         // Verify the account belongs to the queued user
         let account_data = recipient_usdc_ata.try_borrow_data()?;
         let parsed =
-            SplTokenAccount::unpack(&account_data).map_err(|_| OkuError::RecipientMismatch)?;
+            SplTokenAccount::unpack(&account_data).map_err(|_| LitePsmError::RecipientMismatch)?;
         let token_account_owner = parsed.owner;
 
         require!(
             token_account_owner == entry.user,
-            OkuError::RecipientMismatch
+            LitePsmError::RecipientMismatch
         );
 
         let user = entry.user;
@@ -381,7 +352,7 @@ pub fn process_queue<'info>(
 
         remaining_usdc_balance = remaining_usdc_balance
             .checked_sub(usdc_amount)
-            .ok_or(OkuError::Overflow)?;
+            .ok_or(LitePsmError::Overflow)?;
 
         queue.head = queue.head.wrapping_add(1);
         processed += 1;
@@ -391,14 +362,10 @@ pub fn process_queue<'info>(
         queue.total_queued_oku_m = queue
             .total_queued_oku_m
             .checked_sub(oku_m_amount)
-            .ok_or(OkuError::Overflow)?;
+            .ok_or(LitePsmError::Overflow)?;
 
         // Calculate dollar value at time of processing
-        let dollar_value = (oku_m_amount as u128)
-            .checked_mul(oku_m_price as u128)
-            .ok_or(OkuError::Overflow)?
-            .checked_div(PRECISION as u128)
-            .ok_or(OkuError::Overflow)? as u64;
+        let dollar_value = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
 
         // Calculate wait time
         let clock = Clock::get()?;
@@ -418,7 +385,7 @@ pub fn process_queue<'info>(
 
 /// Deposit USDC buffer (buffer_depositor role)
 pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
-    require!(amount > 0, OkuError::ZeroAmount);
+    require!(amount > 0, LitePsmError::ZeroAmount);
 
     anchor_spl::token::transfer(
         CpiContext::new(
@@ -450,7 +417,7 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
 /// Used to reclaim excess buffer after redemptions processed.
 /// Protects queued redemptions: cannot withdraw if it would strand queued entries.
 pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> {
-    require!(amount > 0, OkuError::ZeroAmount);
+    require!(amount > 0, LitePsmError::ZeroAmount);
 
     // Protect queued redemptions: sum pending entries' price-adjusted amounts as reserved USDC
     let queue = &ctx.accounts.redemption_queue;
@@ -459,19 +426,15 @@ pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> 
     let oku_m_price = ctx.accounts.config.oku_m_price;
 
     // Calculate reserved USDC from running counter (O(1) instead of iterating)
-    let reserved = (queue.total_queued_oku_m as u128)
-        .checked_mul(oku_m_price as u128)
-        .ok_or(OkuError::Overflow)?
-        .checked_div(PRECISION as u128)
-        .ok_or(OkuError::Overflow)? as u64;
+    let reserved = oku_m_to_dollars(queue.total_queued_oku_m, oku_m_price)?;
 
     let vault_balance = ctx.accounts.vault_usdc.amount;
     require!(
         vault_balance
             .checked_sub(amount)
-            .ok_or(OkuError::Overflow)?
+            .ok_or(LitePsmError::Overflow)?
             >= reserved,
-        OkuError::InsufficientBuffer
+        LitePsmError::InsufficientBuffer
     );
 
     let bump = ctx.accounts.config.bump;
@@ -496,7 +459,7 @@ pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> 
     let new_buffer_balance = ctx.accounts.vault_usdc.amount;
 
     emit!(BufferWithdrawEvent {
-        role_admin: ctx.accounts.buffer_withdrawer.key(),
+        actor: ctx.accounts.buffer_withdrawer.key(),
         amount,
         new_buffer_balance,
     });
@@ -519,7 +482,7 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u32) -> R
     // Validate index is within pending range
     require!(
         queue_index >= queue.head && queue_index < queue.tail,
-        OkuError::InvalidQueueIndex
+        LitePsmError::InvalidQueueIndex
     );
 
     let position = (queue_index % RedemptionQueue::MAX_ENTRIES as u32) as usize;
@@ -528,7 +491,7 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u32) -> R
     // Check entry hasn't already been cleared
     require!(
         entry.user != Pubkey::default(),
-        OkuError::EntryAlreadyCleared
+        LitePsmError::EntryAlreadyCleared
     );
 
     let original_user = entry.user;
@@ -563,7 +526,7 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u32) -> R
     queue.total_queued_oku_m = queue
         .total_queued_oku_m
         .checked_sub(oku_m_amount)
-        .ok_or(OkuError::Overflow)?;
+        .ok_or(LitePsmError::Overflow)?;
 
     // Advance head past contiguous cleared entries (matches EVM behavior)
     while queue.head < queue.tail {
@@ -577,11 +540,7 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u32) -> R
 
     // Calculate dollar value at time of rescue
     let oku_m_price = ctx.accounts.config.oku_m_price;
-    let dollar_value = (oku_m_amount as u128)
-        .checked_mul(oku_m_price as u128)
-        .ok_or(OkuError::Overflow)?
-        .checked_div(PRECISION as u128)
-        .ok_or(OkuError::Overflow)? as u64;
+    let dollar_value = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
 
     emit!(RedemptionRescuedEvent {
         queue_index,

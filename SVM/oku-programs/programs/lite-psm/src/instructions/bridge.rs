@@ -12,19 +12,15 @@
 //! Replay prevention uses Anchor's `init` constraint as a one-shot nonce —
 //! the `ProcessedRequest` PDA cannot be created twice for the same request_id.
 //! Taken from https://www.anchor-lang.com/docs/account-constraints
-//!
-//! Anchor-version note: `CpiContext::new[_with_signer](program_id, accounts[, seeds])`
-//! takes `program_id` as a `Pubkey` in Anchor ≥1.0. All CPI sites in this file
-//! pass `<program>.key()` (which returns `Pubkey`), which is correct. The
-//! pre-0.31 API took an `AccountInfo<'info>` here.
 
 use crate::contexts::{
-    BridgeBurn, BridgeMint, CancelRefund, ConfirmRefund, InitiateRefund, RefundBridgeRequest,
+    BridgeBurn, BridgeMint, CancelRefund, ConfirmRefund, InitiateRefund,
 };
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::constants::{BASIS_POINTS, PRECISION};
-use crate::helpers::{check_yield_lock, verify_ed25519_signature};
+use crate::helpers::{
+    calculate_fee, check_yield_lock, oku_m_to_dollars, verify_ed25519_signature,
+};
 use crate::state::{BridgeRequest, PsmConfig};
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
@@ -39,9 +35,9 @@ pub fn bridge_mint(
     signature: Vec<u8>,     // Ed25519 signature (64 bytes)
     request_id: [u8; 32],   // keccak256(message_bytes) — used for PDA derivation
 ) -> Result<()> {
-    // 1. Validate lengths
-    require!(message_bytes.len() == 80, OkuError::InvalidMessageLength);
-    require!(signature.len() == 64, OkuError::InvalidSignature);
+    // Validate lengths
+    require!(message_bytes.len() == 80, LitePsmError::InvalidMessageLength);
+    require!(signature.len() == 64, LitePsmError::InvalidSignature);
 
     // Read state
     let bridge_config = &ctx.accounts.bridge_config;
@@ -52,21 +48,21 @@ pub fn bridge_mint(
     let config_bump = ctx.accounts.config.bump;
     let current_supply = ctx.accounts.oku_money_mint.supply;
 
-    // 2. Check bridge and PSM not paused
-    require!(!is_bridge_paused, OkuError::BridgePaused);
-    require!(!is_psm_paused, OkuError::Paused);
+    // Check bridge and PSM not paused
+    require!(!is_bridge_paused, LitePsmError::BridgePaused);
+    require!(!is_psm_paused, LitePsmError::Paused);
 
     // 2b. Yield lock: block mint in same slot as yield distribution (prevents sandwich attacks)
     // Matches EVM PSM's whenYieldNotDistributing modifier on mintOkuM
     check_yield_lock(&ctx.accounts.config)?;
 
-    // 3. Convert signature Vec to fixed array for verification
+    // Convert signature Vec to fixed array for verification
     let signature_array: [u8; 64] = signature
         .as_slice()
         .try_into()
-        .map_err(|_| OkuError::InvalidSignature)?;
+        .map_err(|_| LitePsmError::InvalidSignature)?;
 
-    // 4. Verify Ed25519 signature over raw bytes (BEFORE parsing)
+    // Verify Ed25519 signature over raw bytes (BEFORE parsing)
     verify_ed25519_signature(
         &ctx.accounts.instruction_sysvar,
         &bridge_config.orchestrator_signer.to_bytes(),
@@ -74,63 +70,63 @@ pub fn bridge_mint(
         &signature_array,
     )?;
 
-    // 5. Parse message AFTER signature verified
+    // Parse message AFTER signature verified
     let request = BridgeRequest::try_from_slice(&message_bytes)?;
 
     // 5b. Validate destination chain matches this chain
     require!(
         request.destination_chain_id == bridge_config.source_chain_id,
-        OkuError::WrongDestinationChain
+        LitePsmError::WrongDestinationChain
     );
 
-    // 6. Validate deadline
+    // Validate deadline
     let clock = Clock::get()?;
     require!(
         clock.unix_timestamp <= request.deadline,
-        OkuError::SignatureExpired
+        LitePsmError::SignatureExpired
     );
 
-    // 7. Validate amount (limits enforced at bridge_burn time only; not on mint
+    // Validate amount (limits enforced at bridge_burn time only; not on mint
     // to prevent stranding funds when limits change between burn and mint)
-    require!(request.amount > 0, OkuError::ZeroAmount);
+    require!(request.amount > 0, LitePsmError::ZeroAmount);
 
-    // 8. Convert recipient bytes to Pubkey
+    // Convert recipient bytes to Pubkey
     let recipient_pubkey = Pubkey::new_from_array(request.recipient);
 
-    // 9. Validate recipient matches ATA owner (wallet address, not derived ATA)
+    // Validate recipient matches ATA owner (wallet address, not derived ATA)
     require!(
         recipient_pubkey == ctx.accounts.recipient_oku_money_ata.owner,
-        OkuError::InvalidRecipient
+        LitePsmError::InvalidRecipient
     );
 
-    // 10. Verify request_id matches keccak256(message_bytes)
+    // Verify request_id matches keccak256(message_bytes)
     let computed_request_id = keccak_hash(&message_bytes).to_bytes();
     require!(
         request_id == computed_request_id,
-        OkuError::InvalidRequestId
+        LitePsmError::InvalidRequestId
     );
 
-    // 11. Verify request not already processed (replay prevention)
+    // Verify request not already processed (replay prevention)
     // The init constraint on processed_request will fail if request_id already exists
 
-    // 12. Check PSM allowance and max supply
+    // Check PSM allowance and max supply
     require!(
         request.amount <= minter_allowance,
-        OkuError::AllowanceExceeded
+        LitePsmError::AllowanceExceeded
     );
     require!(
         current_supply
             .checked_add(request.amount)
-            .ok_or(OkuError::Overflow)?
+            .ok_or(LitePsmError::Overflow)?
             <= max_supply,
-        OkuError::MaxSupplyExceeded
+        LitePsmError::MaxSupplyExceeded
     );
 
-    // 12. Mint OkuMoney to recipient
+    // Mint OkuMoney to recipient
     let seeds = &[PsmConfig::SEED, &[config_bump]];
     let signer = &[&seeds[..]];
 
-    // 13. Mint tokens to recipient
+    // Mint tokens to recipient
     token_interface::mint_to(
         CpiContext::new_with_signer(
             ctx.accounts.token_2022_program.key(),
@@ -144,13 +140,13 @@ pub fn bridge_mint(
         request.amount,
     )?;
 
-    // 14. Decrement minter allowance
+    // Decrement minter allowance
     let config = &mut ctx.accounts.config;
     config.minter_allowance = minter_allowance
         .checked_sub(request.amount)
-        .ok_or(OkuError::Overflow)?;
+        .ok_or(LitePsmError::Overflow)?;
 
-    // 15. Create ProcessedRequest PDA
+    // Create ProcessedRequest PDA
     let processed_request = &mut ctx.accounts.processed_request;
     processed_request.bump = ctx.bumps.processed_request;
     processed_request.request_id = request_id;
@@ -158,15 +154,11 @@ pub fn bridge_mint(
     processed_request.recipient = ctx.accounts.recipient_oku_money_ata.key();
     processed_request.amount = request.amount;
 
-    // 16. Calculate dollar value for event
+    // Calculate dollar value for event
     let oku_m_price = ctx.accounts.config.oku_m_price;
-    let dollar_value = (request.amount as u128)
-        .checked_mul(oku_m_price as u128)
-        .ok_or(OkuError::Overflow)?
-        .checked_div(PRECISION as u128)
-        .ok_or(OkuError::Overflow)? as u64;
+    let dollar_value = oku_m_to_dollars(request.amount, oku_m_price)?;
 
-    // 17. Emit event
+    // Emit event
     emit!(BridgeMintEvent {
         request_id,
         source_chain_id: request.source_chain_id,
@@ -192,38 +184,33 @@ pub fn bridge_burn(
     let is_psm_paused = ctx.accounts.config.is_paused;
     let config_bump = ctx.accounts.config.bump;
 
-    // 1. Check bridge and PSM not paused
-    require!(!is_bridge_paused, OkuError::BridgePaused);
-    require!(!is_psm_paused, OkuError::Paused);
-    require!(amount > 0, OkuError::ZeroAmount);
+    // Check bridge and PSM not paused
+    require!(!is_bridge_paused, LitePsmError::BridgePaused);
+    require!(!is_psm_paused, LitePsmError::Paused);
+    require!(amount > 0, LitePsmError::ZeroAmount);
 
-    // 2. Verify destination chain is supported
+    // Verify destination chain is supported
     require!(
         bridge_config.is_chain_supported(destination_chain_id),
-        OkuError::UnsupportedChain
+        LitePsmError::UnsupportedChain
     );
 
-    // 3. Validate amount within limits
+    // Validate amount within limits
     require!(
         amount >= bridge_config.min_bridge_amount,
-        OkuError::BelowMinimum
+        LitePsmError::BelowMinimum
     );
     require!(
         amount <= bridge_config.max_bridge_amount,
-        OkuError::AboveMaximum
+        LitePsmError::AboveMaximum
     );
 
-    // 4. Calculate fee
-    let fee_amount = (amount as u128)
-        .checked_mul(bridge_config.bridge_fee_bps as u128)
-        .ok_or(OkuError::Overflow)?
-        .checked_div(BASIS_POINTS as u128)
-        .ok_or(OkuError::Overflow)? as u64;
+    // Calculate fee using the canonical helper.
+    let fee_amount = calculate_fee(amount, bridge_config.bridge_fee_bps)?;
+    let net_amount = amount.checked_sub(fee_amount).ok_or(LitePsmError::Overflow)?;
+    require!(net_amount > 0, LitePsmError::ZeroAmount);
 
-    let net_amount = amount.checked_sub(fee_amount).ok_or(OkuError::Overflow)?;
-    require!(net_amount > 0, OkuError::ZeroAmount);
-
-    // 5. Burn exact amount from user (fee deducted from bridged value)
+    // Burn exact amount from user (fee deducted from bridged value)
     token_interface::burn(
         CpiContext::new(
             ctx.accounts.token_2022_program.key(),
@@ -236,7 +223,7 @@ pub fn bridge_burn(
         amount,
     )?;
 
-    // 6. Mint fee to fee_recipient (if fee > 0 AND fee_recipient_ata is provided)
+    // Mint fee to fee_recipient (if fee > 0 AND fee_recipient_ata is provided)
     // Note: This fee mint intentionally bypasses minter_allowance because the
     // bridge_burn is a net-supply-decreasing operation (burn > fee re-mint).
     // When user == fee_recipient, the client should pass None for fee_recipient_ata
@@ -264,7 +251,7 @@ pub fn bridge_burn(
         // This is intentional - the user effectively paid the fee by burning the full amount.
     }
 
-    // 7. Initialize BridgeNonce if needed and get/increment nonce
+    // Initialize BridgeNonce if needed and get/increment nonce
     let bridge_nonce = &mut ctx.accounts.bridge_nonce;
 
     // Initialize if this is a new nonce account
@@ -276,14 +263,14 @@ pub fn bridge_burn(
     }
 
     let nonce = bridge_nonce.next_nonce;
-    bridge_nonce.next_nonce = nonce.checked_add(1).ok_or(OkuError::Overflow)?;
+    bridge_nonce.next_nonce = nonce.checked_add(1).ok_or(LitePsmError::Overflow)?;
 
-    // 8. Calculate request_id for orchestrator tracking
+    // Calculate request_id for orchestrator tracking
     let clock = Clock::get()?;
     let deadline = clock
         .unix_timestamp
         .checked_add(bridge_config.bridge_deadline_secs)
-        .ok_or(OkuError::Overflow)?;
+        .ok_or(LitePsmError::Overflow)?;
 
     let source_chain_id = ctx.accounts.bridge_config.source_chain_id;
 
@@ -299,15 +286,11 @@ pub fn bridge_burn(
 
     let request_id = keccak_hash(&message).to_bytes();
 
-    // 9. Calculate dollar value for event
+    // Calculate dollar value for event
     let oku_m_price = ctx.accounts.config.oku_m_price;
-    let dollar_value = (net_amount as u128)
-        .checked_mul(oku_m_price as u128)
-        .ok_or(OkuError::Overflow)?
-        .checked_div(PRECISION as u128)
-        .ok_or(OkuError::Overflow)? as u64;
+    let dollar_value = oku_m_to_dollars(net_amount, oku_m_price)?;
 
-    // 10. Emit event with full metadata
+    // Emit event with full metadata
     emit!(BridgeBurnEvent {
         request_id,
         user: ctx.accounts.user.key(),
@@ -319,115 +302,6 @@ pub fn bridge_burn(
         deadline,
         dollar_value,
         fee_amount,
-    });
-
-    Ok(())
-}
-
-/// Refund a failed bridge request (refund_admin only)
-/// Mints tokens back to the original sender on the source chain
-/// Only callable after the mint deadline has passed (on-chain safety)
-///
-/// NOTE: Deliberately does NOT check pause state (matches EVM OkuBridge.confirmRefund).
-/// Refunds must work during emergencies to allow users to recover funds.
-/// However, yield lock IS checked to prevent sandwich attacks.
-pub fn refund_bridge_request(
-    ctx: Context<RefundBridgeRequest>,
-    message_bytes: Vec<u8>,
-    request_id: [u8; 32],
-) -> Result<()> {
-    // 1. Validate message length
-    require!(message_bytes.len() == 80, OkuError::InvalidMessageLength);
-
-    // 1b. Yield lock: block refund mint in same slot as yield distribution
-    // Prevents sandwich attacks while still allowing refunds during pause
-    check_yield_lock(&ctx.accounts.config)?;
-
-    // 2. Verify request_id matches keccak256(message_bytes)
-    let computed_request_id = keccak_hash(&message_bytes).to_bytes();
-    require!(
-        request_id == computed_request_id,
-        OkuError::InvalidRequestId
-    );
-
-    // 3. Parse message bytes manually for SVM→EVM burn refunds
-    // Message format (80 bytes): source_chain(2) + dest_chain(2) + sender(32) + recipient(20) + amount(8) + nonce(8) + deadline(8)
-    // Note: BridgeRequest struct uses 20-byte sender for EVM→SVM direction, so we parse manually here
-    let source_chain_id = u16::from_le_bytes(message_bytes[0..2].try_into().unwrap());
-    let sender_bytes: [u8; 32] = message_bytes[4..36].try_into().unwrap();
-    let amount = u64::from_le_bytes(message_bytes[56..64].try_into().unwrap());
-    let deadline = i64::from_le_bytes(message_bytes[72..80].try_into().unwrap());
-
-    // 4. Validate this chain is the source chain
-    require!(
-        source_chain_id == ctx.accounts.bridge_config.source_chain_id,
-        OkuError::WrongSourceChain
-    );
-
-    // 5. Deadline check: refund only after mint window has closed
-    let clock = Clock::get()?;
-    require!(
-        clock.unix_timestamp > deadline,
-        OkuError::MintWindowStillOpen
-    );
-
-    // 6. Validate sender_oku_money_ata owner matches the sender from the signed message
-    // This prevents refund_admin from redirecting funds to an arbitrary address
-    let sender_pubkey = Pubkey::new_from_array(sender_bytes);
-    require!(
-        ctx.accounts.sender_oku_money_ata.owner == sender_pubkey,
-        OkuError::InvalidRecipient
-    );
-
-    // 7. Check supply cap and minter allowance (parity with EVM refundFailedRequest)
-    let current_supply = ctx.accounts.oku_money_mint.supply;
-    let max_supply = ctx.accounts.config.max_supply;
-    let minter_allowance = ctx.accounts.config.minter_allowance;
-    require!(
-        current_supply
-            .checked_add(amount)
-            .ok_or(OkuError::Overflow)?
-            <= max_supply,
-        OkuError::MaxSupplyExceeded
-    );
-    require!(amount <= minter_allowance, OkuError::AllowanceExceeded);
-
-    // 8. Mint tokens back to sender
-    let config_bump = ctx.accounts.config.bump;
-    let seeds = &[PsmConfig::SEED, &[config_bump]];
-    let signer = &[&seeds[..]];
-
-    token_interface::mint_to(
-        CpiContext::new_with_signer(
-            ctx.accounts.token_2022_program.key(),
-            token_interface::MintTo {
-                mint: ctx.accounts.oku_money_mint.to_account_info(),
-                to: ctx.accounts.sender_oku_money_ata.to_account_info(),
-                authority: ctx.accounts.config.to_account_info(),
-            },
-            signer,
-        ),
-        amount,
-    )?;
-
-    // 9. Decrement minter allowance (one-way: burns do NOT restore)
-    let config = &mut ctx.accounts.config;
-    config.minter_allowance = minter_allowance
-        .checked_sub(amount)
-        .ok_or(OkuError::Overflow)?;
-
-    // 10. Record refund in PDA (init constraint prevents double-refund)
-    let refunded = &mut ctx.accounts.refunded_request;
-    refunded.bump = ctx.bumps.refunded_request;
-    refunded.request_id = request_id;
-    refunded.refunded_at = clock.unix_timestamp;
-    refunded.recipient = sender_pubkey;
-    refunded.amount = amount;
-
-    emit!(RefundProcessedEvent {
-        request_id,
-        recipient: sender_pubkey,
-        amount,
     });
 
     Ok(())
@@ -450,36 +324,36 @@ pub fn initiate_refund(
     message_bytes: Vec<u8>,
     request_id: [u8; 32],
 ) -> Result<()> {
-    // 1. Validate message length
-    require!(message_bytes.len() == 80, OkuError::InvalidMessageLength);
+    // Validate message length
+    require!(message_bytes.len() == 80, LitePsmError::InvalidMessageLength);
 
-    // 2. Verify request_id matches keccak256(message_bytes)
+    // Verify request_id matches keccak256(message_bytes)
     let computed_request_id = keccak_hash(&message_bytes).to_bytes();
     require!(
         request_id == computed_request_id,
-        OkuError::InvalidRequestId
+        LitePsmError::InvalidRequestId
     );
 
-    // 3. Parse message bytes for SVM→EVM burn refunds
+    // Parse message bytes for SVM→EVM burn refunds
     let source_chain_id = u16::from_le_bytes(message_bytes[0..2].try_into().unwrap());
     let sender_bytes: [u8; 32] = message_bytes[4..36].try_into().unwrap();
     let amount = u64::from_le_bytes(message_bytes[56..64].try_into().unwrap());
     let deadline = i64::from_le_bytes(message_bytes[72..80].try_into().unwrap());
 
-    // 4. Validate this chain is the source chain
+    // Validate this chain is the source chain
     require!(
         source_chain_id == ctx.accounts.bridge_config.source_chain_id,
-        OkuError::WrongSourceChain
+        LitePsmError::WrongSourceChain
     );
 
-    // 5. Deadline check: refund only after mint window has closed
+    // Deadline check: refund only after mint window has closed
     let clock = Clock::get()?;
     require!(
         clock.unix_timestamp > deadline,
-        OkuError::MintWindowStillOpen
+        LitePsmError::MintWindowStillOpen
     );
 
-    // 6. Create PendingRefund PDA
+    // Create PendingRefund PDA
     let pending = &mut ctx.accounts.pending_refund;
     pending.bump = ctx.bumps.pending_refund;
     pending.request_id = request_id;
@@ -509,28 +383,28 @@ pub fn initiate_refund(
 /// NOTE: Deliberately does NOT check pause state - refunds must work during emergencies.
 /// However, yield lock IS checked to prevent sandwich attacks on the mint.
 pub fn confirm_refund(ctx: Context<ConfirmRefund>, request_id: [u8; 32]) -> Result<()> {
-    // 1. Yield lock: block refund mint in same slot as yield distribution
+    // Yield lock: block refund mint in same slot as yield distribution
     check_yield_lock(&ctx.accounts.config)?;
 
-    // 2. Read pending refund data
+    // Read pending refund data
     let pending = &ctx.accounts.pending_refund;
     let recipient = pending.recipient;
     let amount = pending.amount;
 
-    // 3. Check supply cap and minter allowance
+    // Check supply cap and minter allowance
     let current_supply = ctx.accounts.oku_money_mint.supply;
     let max_supply = ctx.accounts.config.max_supply;
     let minter_allowance = ctx.accounts.config.minter_allowance;
     require!(
         current_supply
             .checked_add(amount)
-            .ok_or(OkuError::Overflow)?
+            .ok_or(LitePsmError::Overflow)?
             <= max_supply,
-        OkuError::MaxSupplyExceeded
+        LitePsmError::MaxSupplyExceeded
     );
-    require!(amount <= minter_allowance, OkuError::AllowanceExceeded);
+    require!(amount <= minter_allowance, LitePsmError::AllowanceExceeded);
 
-    // 4. Mint tokens back to sender
+    // Mint tokens back to sender
     let config_bump = ctx.accounts.config.bump;
     let seeds = &[PsmConfig::SEED, &[config_bump]];
     let signer = &[&seeds[..]];
@@ -548,13 +422,13 @@ pub fn confirm_refund(ctx: Context<ConfirmRefund>, request_id: [u8; 32]) -> Resu
         amount,
     )?;
 
-    // 5. Decrement minter allowance
+    // Decrement minter allowance
     let config = &mut ctx.accounts.config;
     config.minter_allowance = minter_allowance
         .checked_sub(amount)
-        .ok_or(OkuError::Overflow)?;
+        .ok_or(LitePsmError::Overflow)?;
 
-    // 6. Record refund in RefundedRequest PDA
+    // Record refund in RefundedRequest PDA
     let clock = Clock::get()?;
     let refunded = &mut ctx.accounts.refunded_request;
     refunded.bump = ctx.bumps.refunded_request;
@@ -563,7 +437,7 @@ pub fn confirm_refund(ctx: Context<ConfirmRefund>, request_id: [u8; 32]) -> Resu
     refunded.recipient = recipient;
     refunded.amount = amount;
 
-    // 7. PendingRefund is automatically closed via `close = refund_confirmer` constraint
+    // PendingRefund is automatically closed via `close = refund_confirmer` constraint
 
     emit!(RefundConfirmedEvent {
         request_id,

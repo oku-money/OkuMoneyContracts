@@ -274,12 +274,12 @@ async function deployPSM(
 ): Promise<Contract> {
   logger.step(3, "Deploying LitePSM");
 
-  // LitePSM.initialize(okuMoney, usdOku, usdc, redemptionQueue, admin, stalenessThreshold)
+  // LitePSM.initialize(okuMoney, okuDollar, usdc, redemptionQueue, admin, stalenessThreshold)
   const litePSM = await deployUUPSProxy(
     "LitePSM",
     [
       okuMoneyAddress,                  // _okuMoney
-      okuDollarAddress,                 // _usdOku
+      okuDollarAddress,                 // _okuDollar
       usdcAddress,                      // _usdc
       redemptionQueueAddress,           // _redemptionQueue
       deployerAddress,                  // admin

@@ -1,12 +1,12 @@
 use crate::constants::PRECISION;
 use crate::contexts::{Initialize, SetupOkuMoneyEscrow, SetupRedemptionQueue};
-use crate::errors::OkuError;
+use crate::errors::LitePsmError;
 use crate::events::InitializeEvent;
 use anchor_lang::prelude::*;
 
 /// Initialize the PSM - Step 1
-/// Creates config PDA and USDC vault
-/// Call setup_redemption_queue and setup_okusd_escrow afterwards to complete initialization
+/// Creates config PDA and USDC vault.
+/// Call `setup_redemption_queue` and `setup_oku_money_escrow` afterwards to complete initialization.
 /// Authority pubkeys passed as args to reduce stack usage (avoids BPF stack overflow).
 ///
 /// `pyth_program_owner` is the program-owner pubkey accepted by the on-chain
@@ -32,7 +32,7 @@ pub fn initialize(
 ) -> Result<()> {
     require!(
         pyth_program_owner != Pubkey::default(),
-        OkuError::InvalidPythProgramOwner
+        LitePsmError::InvalidPythProgramOwner
     );
 
     let config = &mut ctx.accounts.config;
@@ -110,7 +110,7 @@ pub fn setup_oku_money_escrow(ctx: Context<SetupOkuMoneyEscrow>) -> Result<()> {
     // Ensure escrow hasn't already been set
     require!(
         config.vault_oku_money == Pubkey::default(),
-        OkuError::EscrowAlreadyInitialized
+        LitePsmError::EscrowAlreadyInitialized
     );
 
     config.vault_oku_money = ctx.accounts.vault_oku_money.key();

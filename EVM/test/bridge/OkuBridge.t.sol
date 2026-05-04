@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {BridgeBaseTest} from "../BridgeBase.t.sol";
+import {Errors} from "../../src/lib/Errors.sol";
 import {OkuBridge} from "../../src/bridge/OkuBridge.sol";
 import {OkuBridgeEvents} from "../../src/lib/events/OkuBridgeEvents.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -596,7 +597,7 @@ contract OkuBridgeTest is BridgeBaseTest {
         });
         bytes memory signature = _signBridgeRequest(request);
 
-        vm.expectRevert(OkuBridge.ZeroAmount.selector);
+        vm.expectRevert(Errors.ZeroAmount.selector);
         okuBridge.bridgeMint(request, signature);
     }
 
@@ -935,7 +936,7 @@ contract OkuBridgeTest is BridgeBaseTest {
 
         vm.startPrank(user1);
         okuMoney.approve(address(okuBridge), okuMoney.balanceOf(user1));
-        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        vm.expectRevert(Errors.ZeroAddress.selector);
         okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(0), amount);
         vm.stopPrank();
     }
@@ -982,7 +983,7 @@ contract OkuBridgeTest is BridgeBaseTest {
 
     function test_UpdateFeeRecipient_RevertZeroAddress() public {
         vm.prank(admin);
-        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        vm.expectRevert(Errors.ZeroAddress.selector);
         okuBridge.updateFeeRecipient(address(0));
     }
 
@@ -1004,7 +1005,7 @@ contract OkuBridgeTest is BridgeBaseTest {
             OkuBridge.initialize,
             (address(0), orchestratorSigner, feeRecipient, admin, emptyChains, cfg)
         );
-        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -1016,7 +1017,7 @@ contract OkuBridgeTest is BridgeBaseTest {
             OkuBridge.initialize,
             (address(okuMoney), address(0), feeRecipient, admin, emptyChains, cfg)
         );
-        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -1028,7 +1029,7 @@ contract OkuBridgeTest is BridgeBaseTest {
             OkuBridge.initialize,
             (address(okuMoney), orchestratorSigner, address(0), admin, emptyChains, cfg)
         );
-        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -1040,7 +1041,7 @@ contract OkuBridgeTest is BridgeBaseTest {
             OkuBridge.initialize,
             (address(okuMoney), orchestratorSigner, feeRecipient, address(0), emptyChains, cfg)
         );
-        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(address(impl), initData);
     }
 
@@ -1234,64 +1235,8 @@ contract OkuBridgeTest is BridgeBaseTest {
 
         bytes memory signature = _signBridgeRequest(request);
 
-        vm.expectRevert(OkuBridge.ZeroAddress.selector);
+        vm.expectRevert(Errors.ZeroAddress.selector);
         okuBridge.bridgeMint(request, signature);
-    }
-
-    // ============ Dust Sweep Tests ============
-
-    function test_SweepDust_RecoverAccumulatedDust() public {
-        // With non-rebasing OkuMoney there should be no rounding dust from
-        // share conversion, but the sweepDust mechanism still exists for
-        // any tokens that end up in the bridge contract.
-        // Force some dust by minting directly to bridge.
-        _mintOkuMoney(address(okuBridge), 1);
-
-        uint256 dustBalance = okuMoney.balanceOf(address(okuBridge));
-        assertGt(dustBalance, 0);
-
-        // Sweep dust to feeRecipient
-        uint256 feeRecipientBefore = okuMoney.balanceOf(feeRecipient);
-
-        vm.prank(admin);
-        okuBridge.sweepDust();
-
-        // Bridge balance is now zero
-        assertEq(okuMoney.balanceOf(address(okuBridge)), 0);
-        // Fee recipient received the dust
-        assertEq(okuMoney.balanceOf(feeRecipient), feeRecipientBefore + dustBalance);
-    }
-
-    function test_SweepDust_EmitsEvent() public {
-        // Force some dust by minting directly to bridge
-        _mintOkuMoney(address(okuBridge), 1);
-        uint256 dustBalance = okuMoney.balanceOf(address(okuBridge));
-        assertGt(dustBalance, 0);
-
-        vm.prank(admin);
-        vm.expectEmit(true, false, false, true);
-        emit OkuBridgeEvents.DustSwept(feeRecipient, dustBalance);
-        okuBridge.sweepDust();
-    }
-
-    function test_SweepDust_NoOpWhenZeroBalance() public {
-        // Bridge has zero balance — sweepDust should be a no-op (no revert)
-        assertEq(okuMoney.balanceOf(address(okuBridge)), 0);
-
-        vm.prank(admin);
-        okuBridge.sweepDust(); // should not revert
-    }
-
-    function test_SweepDust_RevertNotAuthorized() public {
-        bytes32 role = BRIDGE_DUST_SWEEPER;
-
-        vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, role
-            )
-        );
-        okuBridge.sweepDust();
     }
 
     // ============ Refund Deadline Enforcement Tests ============
@@ -1454,9 +1399,15 @@ contract OkuBridgeTest is BridgeBaseTest {
         vm.prank(refundInitiator);
         okuBridge.initiateRefund(request);
 
-        // Try to cancel as unauthorized user
+        // Try to cancel as unauthorized user (uses AccessControl: must be initiator or admin)
         vm.prank(user1);
-        vm.expectRevert(OkuBridge.NotInitiatorOrAdmin.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                bytes32(0) // DEFAULT_ADMIN_ROLE
+            )
+        );
         okuBridge.cancelRefund(request);
     }
 

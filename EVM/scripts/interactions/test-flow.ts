@@ -16,11 +16,12 @@
  *   NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network sepolia
  */
 import { ethers, network } from "hardhat";
-import { getNetworkName, DEV_WALLET_ADDRESS } from "../config/chains";
+import { DEV_WALLET_ADDRESS } from "../config/chains";
 import { loadAddress, hasAddress } from "../utils/addressBook";
 import { logger } from "../utils/logger";
 import { getDeployedContract, waitForTx } from "../utils/deploy";
 import { ROLES } from "../config/roles";
+import { resolveNetworkContext } from "../utils/networkContext";
 
 // Use centralized deployer address from chains config
 const DEPLOYER = DEV_WALLET_ADDRESS;
@@ -31,13 +32,9 @@ interface TestContext {
   okuMoney: any;
   okuDollar: any;
   litePSM: any;
-  networkName: string;
+  networkName: string; // chain target (e.g. "base", "sepolia") — for logging only
+  bookKey: string;     // address book key ("fork:base" / "base") — used for all read/write
   isForked: boolean;
-}
-
-function isHardhatFork(): boolean {
-  // If we're on localhost but NETWORK env is set to something else, we're forking
-  return network.name === "localhost" || network.name === "hardhat";
 }
 
 async function setupForkIfNeeded(ctx: TestContext): Promise<boolean> {
@@ -90,8 +87,8 @@ async function setupForkIfNeeded(ctx: TestContext): Promise<boolean> {
   const contracts = ["LitePSM", "RedemptionQueue", "OkuBridge", "OkuBridgeRouter"];
   
   for (const name of contracts) {
-    if (hasAddress(ctx.networkName, name)) {
-      const addr = loadAddress(ctx.networkName, name);
+    if (hasAddress(ctx.bookKey, name)) {
+      const addr = loadAddress(ctx.bookKey, name);
       await waitForTx(
         await okuMoney.configureMinterAllowance(addr, minterAllowance),
         `Configure ${name} allowance`
@@ -117,7 +114,7 @@ async function testMint(ctx: TestContext, amount: string): Promise<bigint> {
   // Check USDC balance, mint if needed (only works with MockUSDC)
   let usdcBalance = await ctx.usdc.balanceOf(ctx.user.address);
   if (usdcBalance < usdcAmount) {
-    if (hasAddress(ctx.networkName, "MockUSDC")) {
+    if (hasAddress(ctx.bookKey, "MockUSDC")) {
       logger.info("Minting MockUSDC...");
       await waitForTx(await ctx.usdc.mint(ctx.user.address, usdcAmount), "Mint USDC");
       usdcBalance = await ctx.usdc.balanceOf(ctx.user.address);
@@ -243,28 +240,41 @@ async function showFinalBalances(ctx: TestContext) {
 }
 
 async function main() {
-  const networkName = getNetworkName();
-  const isForked = isHardhatFork();
-  
+  const { networkName, bookKey, isFork: isForked } = await resolveNetworkContext();
+
   logger.header(`EVM Protocol Test (${networkName}${isForked ? " fork" : ""})`);
-  
+
   const [user] = await ethers.getSigners();
   logger.info(`User: ${user.address}`);
   logger.info(`Mode: ${isForked ? "Fork (impersonation available)" : "Live network"}`);
-  
-  // Load contracts
-  const usdcAddr = hasAddress(networkName, "MockUSDC")
-    ? loadAddress(networkName, "MockUSDC")
-    : loadAddress(networkName, "USDC");
-  const okuMoneyAddr = loadAddress(networkName, "OkuMoney");
-  const okuDollarAddr = loadAddress(networkName, "OkuDollar");
-  const litePSMAddr = loadAddress(networkName, "LitePSM");
-  
+  logger.info(`Address book key: ${bookKey}`);
+
+  // Load contracts from the resolved bookKey ("<chain>" or "fork:<chain>").
+  // If running on a fork that hasn't had its own deploy yet (i.e. no entries
+  // under "fork:<chain>"), fail early with a useful message rather than the
+  // confusing "no address found for OkuMoney on network fork:base".
+  if (!hasAddress(bookKey, "OkuMoney")) {
+    throw new Error(
+      `No deployment found under address book key "${bookKey}".\n` +
+      (isForked
+        ? `  This is a fork run; you need to deploy on the fork first:\n` +
+          `    npx hardhat run scripts/deploy/index.ts --network localhost`
+        : `  No live deployment recorded for "${networkName}".`)
+    );
+  }
+
+  const usdcAddr = hasAddress(bookKey, "MockUSDC")
+    ? loadAddress(bookKey, "MockUSDC")
+    : loadAddress(bookKey, "USDC");
+  const okuMoneyAddr = loadAddress(bookKey, "OkuMoney");
+  const okuDollarAddr = loadAddress(bookKey, "OkuDollar");
+  const litePSMAddr = loadAddress(bookKey, "LitePSM");
+
   logger.info(`USDC: ${usdcAddr}`);
   logger.info(`OkuMoney: ${okuMoneyAddr}`);
   logger.info(`OkuDollar: ${okuDollarAddr}`);
   logger.info(`LitePSM: ${litePSMAddr}`);
-  
+
   const usdc = await ethers.getContractAt(
     ["function balanceOf(address) view returns (uint256)", "function approve(address,uint256)", "function mint(address,uint256)"],
     usdcAddr
@@ -272,7 +282,7 @@ async function main() {
   const okuMoney = await getDeployedContract("OkuMoney", okuMoneyAddr);
   const okuDollar = await getDeployedContract("OkuDollar", okuDollarAddr);
   const litePSM = await getDeployedContract("LitePSM", litePSMAddr);
-  
+
   const ctx: TestContext = {
     user,
     usdc,
@@ -280,6 +290,7 @@ async function main() {
     okuDollar,
     litePSM,
     networkName,
+    bookKey,
     isForked,
   };
   

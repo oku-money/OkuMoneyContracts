@@ -26,7 +26,7 @@ import {
   ensureAta,
   safeAirdropAll,
   safeMintTo,
-  mintOkusdViaProgram,
+  mintOkuMoneyViaProgram,
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
   DECIMALS,
@@ -493,6 +493,17 @@ describe("lite-psm", () => {
       });
 
       it("cold multisig can unpause", async () => {
+        // Pause first (beforeEach resets to unpaused, and unpause now reverts with
+        // NotPaused if the PSM isn't actually paused).
+        await program.methods
+          .pause()
+          .accountsPartial({
+            pauser: warmMultisig.publicKey,
+            config: configPda,
+          })
+          .signers([warmMultisig])
+          .rpc();
+
         await program.methods
           .unpause()
           .accountsPartial({
@@ -1050,7 +1061,7 @@ describe("lite-psm", () => {
     before(async () => {
       // Ensure user has OkuMoney ATA and mint OkuMoney
       await ensureAta(provider.connection, payer, userOkuMoneyAta, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
-      await mintOkusdViaProgram(program, user, MINT_AMOUNT, configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
+      await mintOkuMoneyViaProgram(program, user, MINT_AMOUNT, configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
 
       // Ensure buffer has enough USDC for instant redemption
       await program.methods
@@ -1223,8 +1234,8 @@ describe("lite-psm", () => {
       // Ensure user has OkuMoney
       await ensureAta(provider.connection, payer, userOkuMoneyAta, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
       await ensureAta(provider.connection, payer, user2OkuMoneyAta, user2.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
-      await mintOkusdViaProgram(program, user, MINT_AMOUNT, configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
-      await mintOkusdViaProgram(program, user2, MINT_AMOUNT, configPda, usdcMint, okuMoneyMint, user2UsdcAta, user2OkuMoneyAta, vaultUsdcAta);
+      await mintOkuMoneyViaProgram(program, user, MINT_AMOUNT, configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
+      await mintOkuMoneyViaProgram(program, user2, MINT_AMOUNT, configPda, usdcMint, okuMoneyMint, user2UsdcAta, user2OkuMoneyAta, vaultUsdcAta);
 
       // Drain the USDC buffer so redemptions go to queue
       const vaultUsdc = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
@@ -1344,7 +1355,7 @@ describe("lite-psm", () => {
       const queueBefore = await program.account.redemptionQueue.fetch(redemptionQueuePda);
       if (queueBefore.head >= queueBefore.tail) {
         // Queue is empty, create an entry first
-        await mintOkusdViaProgram(program, user, new BN(2_000_000), configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
+        await mintOkuMoneyViaProgram(program, user, new BN(2_000_000), configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
         // Drain buffer to force queuing
         const vaultUsdc = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
         const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
@@ -1497,8 +1508,8 @@ describe("lite-psm", () => {
       }
 
       // Mint and queue for user1 and user2
-      await mintOkusdViaProgram(program, user, new BN(5_000_000), configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
-      await mintOkusdViaProgram(program, user2, new BN(5_000_000), configPda, usdcMint, okuMoneyMint, user2UsdcAta, user2OkuMoneyAta, vaultUsdcAta);
+      await mintOkuMoneyViaProgram(program, user, new BN(5_000_000), configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
+      await mintOkuMoneyViaProgram(program, user2, new BN(5_000_000), configPda, usdcMint, okuMoneyMint, user2UsdcAta, user2OkuMoneyAta, vaultUsdcAta);
 
       // Drain buffer again (mint deposits USDC into vault)
       const vaultUsdc2 = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
@@ -1715,7 +1726,7 @@ describe("lite-psm", () => {
     before(async () => {
       // Ensure user has enough OkuMoney for all cycles
       const mintAmount = new BN(REDEEM_AMOUNT.toNumber() * TOTAL_CYCLES * 2);
-      await mintOkusdViaProgram(program, user, mintAmount, configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
+      await mintOkuMoneyViaProgram(program, user, mintAmount, configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
     });
 
     it("queues and processes 12 cycles without panicking", async () => {
@@ -1837,7 +1848,7 @@ describe("lite-psm", () => {
   // ==========================================================================
   describe("freeze/thaw", () => {
     const freezeTarget = Keypair.generate();
-    let freezeTargetOkusdAta: PublicKey;
+    let freezeTargetOkuMoneyAta: PublicKey;
 
     before(async () => {
       // Create target user, fund, get OkuMoney
@@ -1846,7 +1857,7 @@ describe("lite-psm", () => {
       const freezeTargetUsdcAta = getAssociatedTokenAddressSync(
         usdcMint, freezeTarget.publicKey, false, TOKEN_PROGRAM_ID
       );
-      freezeTargetOkusdAta = getAssociatedTokenAddressSync(
+      freezeTargetOkuMoneyAta = getAssociatedTokenAddressSync(
         okuMoneyMint, freezeTarget.publicKey, false, TOKEN_2022_PROGRAM_ID
       );
 
@@ -1861,8 +1872,8 @@ describe("lite-psm", () => {
         10_000_000, TOKEN_PROGRAM_ID);
 
       // Mint OkuMoney via PSM
-      await ensureAta(provider.connection, payer, freezeTargetOkusdAta, freezeTarget.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
-      await mintOkusdViaProgram(program, freezeTarget, new BN(5_000_000), configPda, usdcMint, okuMoneyMint, freezeTargetUsdcAta, freezeTargetOkusdAta, vaultUsdcAta);
+      await ensureAta(provider.connection, payer, freezeTargetOkuMoneyAta, freezeTarget.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+      await mintOkuMoneyViaProgram(program, freezeTarget, new BN(5_000_000), configPda, usdcMint, okuMoneyMint, freezeTargetUsdcAta, freezeTargetOkuMoneyAta, vaultUsdcAta);
     });
 
     it("freezer can freeze a user's OkuMoney account", async () => {
@@ -1872,13 +1883,13 @@ describe("lite-psm", () => {
           freezer: warmMultisig.publicKey,
           config: configPda,
           okuMoneyMint,
-          targetOkuMoneyAta: freezeTargetOkusdAta,
+          targetOkuMoneyAta: freezeTargetOkuMoneyAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([warmMultisig])
         .rpc();
 
-      const acct = await getAccount(provider.connection, freezeTargetOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const acct = await getAccount(provider.connection, freezeTargetOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
       expect(acct.isFrozen).to.be.true;
     });
 
@@ -1889,13 +1900,13 @@ describe("lite-psm", () => {
           unfreezer: coldMultisig.publicKey,
           config: configPda,
           okuMoneyMint,
-          targetOkuMoneyAta: freezeTargetOkusdAta,
+          targetOkuMoneyAta: freezeTargetOkuMoneyAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([coldMultisig])
         .rpc();
 
-      const acct = await getAccount(provider.connection, freezeTargetOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const acct = await getAccount(provider.connection, freezeTargetOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
       expect(acct.isFrozen).to.be.false;
     });
 
@@ -1907,7 +1918,7 @@ describe("lite-psm", () => {
             freezer: coldMultisig.publicKey, // Wrong authority
             config: configPda,
             okuMoneyMint,
-            targetOkuMoneyAta: freezeTargetOkusdAta,
+            targetOkuMoneyAta: freezeTargetOkuMoneyAta,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([coldMultisig])
@@ -1926,7 +1937,7 @@ describe("lite-psm", () => {
           freezer: warmMultisig.publicKey,
           config: configPda,
           okuMoneyMint,
-          targetOkuMoneyAta: freezeTargetOkusdAta,
+          targetOkuMoneyAta: freezeTargetOkuMoneyAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([warmMultisig])
@@ -1939,7 +1950,7 @@ describe("lite-psm", () => {
             unfreezer: warmMultisig.publicKey, // Wrong authority
             config: configPda,
             okuMoneyMint,
-            targetOkuMoneyAta: freezeTargetOkusdAta,
+            targetOkuMoneyAta: freezeTargetOkuMoneyAta,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([warmMultisig])
@@ -1956,7 +1967,7 @@ describe("lite-psm", () => {
           unfreezer: coldMultisig.publicKey,
           config: configPda,
           okuMoneyMint,
-          targetOkuMoneyAta: freezeTargetOkusdAta,
+          targetOkuMoneyAta: freezeTargetOkuMoneyAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([coldMultisig])
@@ -1978,13 +1989,13 @@ describe("lite-psm", () => {
           freezer: warmMultisig.publicKey,
           config: configPda,
           okuMoneyMint,
-          targetOkuMoneyAta: freezeTargetOkusdAta,
+          targetOkuMoneyAta: freezeTargetOkuMoneyAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([warmMultisig])
         .rpc();
 
-      const acct = await getAccount(provider.connection, freezeTargetOkusdAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const acct = await getAccount(provider.connection, freezeTargetOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
       expect(acct.isFrozen).to.be.true;
 
       // Cleanup
@@ -1999,7 +2010,7 @@ describe("lite-psm", () => {
           unfreezer: coldMultisig.publicKey,
           config: configPda,
           okuMoneyMint,
-          targetOkuMoneyAta: freezeTargetOkusdAta,
+          targetOkuMoneyAta: freezeTargetOkuMoneyAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([coldMultisig])

@@ -97,7 +97,7 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
   // Base
   base: {
     tokens: {
-      usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // Native USDC
+      usdc: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // Native USDC (6 decimals)
       weth: "0x4200000000000000000000000000000000000006",
       dai: "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb",
     },
@@ -109,6 +109,28 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
       uniswapV3Factory: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
       uniswapV3Router: "0x2626664c2603336E57B271c5C0b26F421741e481",
       aaveV3Pool: "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
+    },
+  },
+
+  // BNB Smart Chain (BSC) Mainnet
+  // NOTE: deploy script uses MockUSDC by default. The native Binance-Peg USDC
+  // listed below has 18 decimals (NOT 6 like Ethereum/Base USDC). If we ever
+  // flip SKIP_MOCK_USDC=true on BSC, LitePSM/RedemptionQueue decimal handling
+  // must be verified — IERC20Metadata.decimals() will return 18 here, which
+  // changes the multiplier resolved in RedemptionQueue.initialize().
+  bsc: {
+    tokens: {
+      usdc: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", // Binance-Peg USDC (18 decimals)
+      weth: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", // WBNB
+    },
+    whales: {
+      usdc: "0xF977814e90dA44bFA03b6295A0616a897441aceC", // Binance hot wallet
+    },
+    protocols: {
+      // PancakeSwap V3 (used in lieu of Uniswap V3 on BSC)
+      uniswapV3Factory: "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
+      uniswapV3Router: "0x13f4EA83D0bd40E75C8222255bc855a974568Dd4",
+      aaveV3Pool: "0x6807dc923806fE8Fd134338EABCA509979a7e0cB",
     },
   },
 
@@ -213,6 +235,12 @@ export const CHAIN_METADATA: Record<string, ChainMetadata> = {
     rpcUrl: process.env.BASE_RPC_URL || "https://mainnet.base.org",
     explorer: "https://basescan.org",
   },
+  bsc: {
+    name: "BNB Smart Chain",
+    chainId: 56,
+    rpcUrl: process.env.BSC_RPC_URL || "https://bsc-dataseed.binance.org",
+    explorer: "https://bscscan.com",
+  },
   opSepolia: {
     name: "OP Sepolia",
     chainId: 11155420,
@@ -244,6 +272,24 @@ export function getChainMetadata(network: string): ChainMetadata {
     );
   }
   return metadata;
+}
+
+/**
+ * Reverse-lookup: find the canonical network name for a given chainId.
+ *
+ * Skips the "localhost" entry (which is itself just an alias for Sepolia fork)
+ * so callers always resolve to the real chain (sepolia, base, bsc, etc.).
+ * Returns undefined if no match.
+ *
+ * Used by deploy/test scripts to auto-detect the targeted chain from a running
+ * `hh node` when NETWORK= env var isn't explicitly set.
+ */
+export function getNetworkNameByChainId(chainId: number): string | undefined {
+  for (const [name, metadata] of Object.entries(CHAIN_METADATA)) {
+    if (name === "localhost") continue;
+    if (metadata.chainId === chainId) return name;
+  }
+  return undefined;
 }
 
 // ============================================================================
@@ -303,7 +349,14 @@ export const OP_SEPOLIA_CHAIN_ID = 11155420;
 export const OPTIMISM_CHAIN_ID = 10;
 export const ARBITRUM_CHAIN_ID = 42161;
 export const BASE_CHAIN_ID = 8453;
+export const BSC_CHAIN_ID = 56;
 export const ETHEREUM_CHAIN_ID = 1;
+
+/**
+ * EVM testnet chain IDs (used to choose Solana Devnet vs Mainnet
+ * as the bridge counterpart at deploy time).
+ */
+export const EVM_TESTNET_CHAIN_IDS: number[] = [SEPOLIA_CHAIN_ID, OP_SEPOLIA_CHAIN_ID];
 
 // Default fork chain ID (Eth Sepolia)
 export const DEFAULT_FORK_CHAIN_ID = SEPOLIA_CHAIN_ID;
@@ -319,9 +372,10 @@ export const BRIDGE_CHAIN_ID_MAP: Record<number, number> = {
   // Mainnet chains (fit in u16, no mapping needed)
   [ETHEREUM_CHAIN_ID]: 1,
   [OPTIMISM_CHAIN_ID]: 10,
+  [BSC_CHAIN_ID]: 56, // 56 fits in u16 directly
   [ARBITRUM_CHAIN_ID]: 421, // 42161 -> 421
   [BASE_CHAIN_ID]: 845, // 8453 -> 845
-  
+
   // Testnet chains (need mapping, exceed u16)
   [SEPOLIA_CHAIN_ID]: 111, // 11155111 -> 111
   [OP_SEPOLIA_CHAIN_ID]: 420, // 11155420 -> 420
@@ -346,7 +400,7 @@ export function getBridgeChainId(evmChainId: number): number {
 }
 
 /**
- * Get the EIP-155 chain ID from a bridge-internal chain ID
+ * Get the EVM chain ID from a bridge-internal chain ID
  */
 export function getEvmChainIdFromBridge(bridgeChainId: number): number {
   const evmId = BRIDGE_CHAIN_ID_REVERSE_MAP[bridgeChainId];
@@ -354,6 +408,19 @@ export function getEvmChainIdFromBridge(bridgeChainId: number): number {
     throw new Error(`No EVM chain ID mapping for bridge chain ID: ${bridgeChainId}`);
   }
   return evmId;
+}
+
+/**
+ * Pick the Solana bridge counterpart (Devnet vs Mainnet) for a given EVM chain.
+ *
+ * Testnets (Sepolia, OP Sepolia) bridge to Solana Devnet; everything else
+ * (Base, BSC, Optimism, Arbitrum, Ethereum mainnets) bridges to Solana Mainnet.
+ * The deploy script reads this to seed `OkuBridge.supportedChains` at init time.
+ */
+export function getSolanaCounterpartChainId(evmChainId: number): number {
+  return EVM_TESTNET_CHAIN_IDS.includes(evmChainId)
+    ? SOLANA_DEVNET_CHAIN_ID
+    : SOLANA_MAINNET_CHAIN_ID;
 }
 
 // ============================================================================

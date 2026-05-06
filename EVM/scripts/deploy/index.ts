@@ -19,26 +19,23 @@
 
 import { ethers, network, upgrades, run } from "hardhat";
 import { Contract, Signer } from "ethers";
-import { saveAddress, loadAddressBook, saveAddressBook } from "../utils/addressBook";
+import { saveAddress, loadAddressBook, saveAddressBook, hasAddress, loadAddress } from "../utils/addressBook";
 import { syncEvmRegistry } from "../utils/testnetRegistry";
 import {
-  getNetworkName,
-  getChainConfig,
   getChainMetadata,
   getBridgeChainId,
-  SOLANA_DEVNET_CHAIN_ID,
+  getSolanaCounterpartChainId,
   DEV_WALLET_ADDRESS,
 } from "../config/chains";
+import { resolveNetworkContext } from "../utils/networkContext";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
 
-// Networks that support Etherscan verification
-const VERIFIABLE_NETWORKS = ["sepolia", "opSepolia", "mainnet", "optimism", "arbitrum", "base"];
-
-// Check if current network is a live network (not local fork)
-function isLiveNetwork(networkName: string): boolean {
-  return !["localhost", "hardhat"].includes(networkName);
-}
+// Networks that support Etherscan-family verification.
+// Etherscan V2 (single ETHERSCAN_API_KEY) covers Ethereum, Optimism, Arbitrum,
+// Base, and BSC. Per-chain explorer keys (BSCSCAN_API_KEY, etc.) still work
+// as fallbacks via the per-network `verify.etherscan` blocks in hardhat.config.ts.
+const VERIFIABLE_NETWORKS = ["sepolia", "opSepolia", "mainnet", "optimism", "arbitrum", "base", "bsc"];
 
 // Dev wallet address for impersonation on local fork (centralized in chains.ts)
 const DEV_WALLET = DEV_WALLET_ADDRESS;
@@ -75,38 +72,160 @@ function getDeploymentConfig(): DeploymentConfig {
 // Helper Functions
 // ============================================================================
 
-async function waitForTx(tx: any, description: string): Promise<void> {
-  logger.info(`  ${description}...`);
-  const receipt = await tx.wait();
-  logger.success(`  ${description} - block ${receipt.blockNumber}`);
+// ============================================================================
+// Transient-error Retry Helpers
+// ============================================================================
+//
+// Live deploys regularly hit RPC-level races that aren't real failures:
+//
+//   - "nonce too low" / "nonce too high": ethers' per-tx getTransactionCount
+//     returned a stale value (chain advanced between getNonce and sendTx).
+//   - "replacement transaction underpriced": OZ/ethers internally retried a
+//     tx without bumping fee enough to satisfy the sequencer's 10% rule.
+//   - "already known": same tx was submitted twice via different paths.
+//   - "could not coalesce error" / network timeouts.
+//
+// All of these are recoverable by waiting briefly and retrying — re-running
+// the operation re-fetches a fresh nonce and re-broadcasts. Without retry,
+// any one of ~25 sequential txs in a full deploy can torpedo the whole run.
+
+const TRANSIENT_PATTERNS = [
+  /nonce too low/i,
+  /nonce too high/i,
+  /replacement transaction underpriced/i,
+  /already known/i,
+  /transaction underpriced/i,
+  /could not coalesce error/i,
+  /timeout/i,
+  /ETIMEDOUT/i,
+  /ECONNRESET/i,
+  /ENOTFOUND/i,
+  // BSC pending-tx response quirk (`to: ""` instead of `to: null`). Our
+  // rpcCompat shim should normally prevent this from ever surfacing, but if
+  // a path slips through, the same response a few seconds later (after the
+  // tx mines) will have `to: null` correctly, so retry resolves it.
+  /invalid value for value\.to/i,
+  /invalid address.*value=""/i,
+  /BAD_DATA/i,
+];
+
+function isTransientError(err: any): boolean {
+  const msg = (err?.message || String(err)).toString();
+  return TRANSIENT_PATTERNS.some((re) => re.test(msg));
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Run an async operation, retrying on transient RPC errors with exponential backoff.
+ * Real (non-transient) errors are rethrown immediately.
+ */
+async function withRetry<T>(
+  description: string,
+  fn: () => Promise<T>,
+  opts: { retries?: number; baseDelayMs?: number } = {}
+): Promise<T> {
+  const retries = opts.retries ?? 5;
+  const baseDelayMs = opts.baseDelayMs ?? 2000;
+  let lastErr: any;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      if (!isTransientError(err) || attempt === retries) throw err;
+      const delay = baseDelayMs * Math.pow(2, attempt); // 2s, 4s, 8s, 16s, 32s
+      const snippet = (err.message || String(err)).slice(0, 100);
+      logger.warning(
+        `  ${description}: transient error "${snippet}..." — retrying in ${delay}ms ` +
+        `(attempt ${attempt + 1}/${retries})`
+      );
+      await sleep(delay);
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * Send a state-changing tx and wait for confirmation, with transient-error retry.
+ * Use this in place of the `await waitForTx(await c.method(args), "desc")` pattern.
+ */
+async function sendAndWait(
+  description: string,
+  sendFn: () => Promise<any>
+): Promise<void> {
+  await withRetry(description, async () => {
+    const tx = await sendFn();
+    logger.info(`  ${description}...`);
+    const receipt = await tx.wait();
+    logger.success(`  ${description} - block ${receipt.blockNumber}`);
+  });
+}
+
+/**
+ * Reuse an existing deployment if the address book has the contract AND there's
+ * bytecode at that address on the current chain. Otherwise return null and let
+ * the caller deploy fresh.
+ *
+ * Critical for live-network resumability: a partial-deploy failure (e.g. flaky
+ * RPC mid-run) shouldn't force redeploying — and orphaning — every contract
+ * that already made it on-chain in the failed run.
+ */
+async function tryAttach(
+  contractName: string,
+  bookKey: string,
+  deployer: Signer
+): Promise<Contract | null> {
+  if (!hasAddress(bookKey, contractName)) return null;
+  const addr = loadAddress(bookKey, contractName);
+  const code = await ethers.provider.getCode(addr);
+  if (!code || code === "0x") {
+    logger.warning(`  ${contractName}: address book has ${addr} but no bytecode on-chain; will redeploy`);
+    return null;
+  }
+  logger.success(`  ${contractName}: reusing existing deployment at ${addr}`);
+  const Factory = await ethers.getContractFactory(contractName, deployer);
+  return Factory.attach(addr) as unknown as Contract;
 }
 
 async function deployUUPSProxy(
   contractName: string,
   initArgs: any[],
-  networkName: string,
+  bookKey: string,
   deployer: Signer
 ): Promise<Contract> {
-  const Factory = await ethers.getContractFactory(contractName, deployer);
-  const proxy = await upgrades.deployProxy(Factory, initArgs, { kind: "uups" });
-  await proxy.waitForDeployment();
-  const address = await proxy.getAddress();
-  saveAddress(networkName, contractName, address);
-  return proxy;
+  const existing = await tryAttach(contractName, bookKey, deployer);
+  if (existing) return existing;
+
+  return await withRetry(`deploy ${contractName} (UUPS)`, async () => {
+    const Factory = await ethers.getContractFactory(contractName, deployer);
+    const proxy = await upgrades.deployProxy(Factory, initArgs, { kind: "uups" });
+    await proxy.waitForDeployment();
+    const address = await proxy.getAddress();
+    saveAddress(bookKey, contractName, address);
+    return proxy;
+  });
 }
 
 async function deployTransparentProxy(
   contractName: string,
   initArgs: any[],
-  networkName: string,
+  bookKey: string,
   deployer: Signer
 ): Promise<Contract> {
-  const Factory = await ethers.getContractFactory(contractName, deployer);
-  const proxy = await upgrades.deployProxy(Factory, initArgs, { kind: "transparent" });
-  await proxy.waitForDeployment();
-  const address = await proxy.getAddress();
-  saveAddress(networkName, contractName, address);
-  return proxy;
+  const existing = await tryAttach(contractName, bookKey, deployer);
+  if (existing) return existing;
+
+  return await withRetry(`deploy ${contractName} (Transparent)`, async () => {
+    const Factory = await ethers.getContractFactory(contractName, deployer);
+    const proxy = await upgrades.deployProxy(Factory, initArgs, { kind: "transparent" });
+    await proxy.waitForDeployment();
+    const address = await proxy.getAddress();
+    saveAddress(bookKey, contractName, address);
+    return proxy;
+  });
 }
 
 // ============================================================================
@@ -196,24 +315,30 @@ async function verifyAllContracts(networkName: string): Promise<void> {
 // Deployment Steps
 // ============================================================================
 
-async function deployMockUSDC(networkName: string, deployer: Signer): Promise<string> {
+async function deployMockUSDC(bookKey: string, deployer: Signer): Promise<string> {
   logger.step(1, "Deploying MockUSDC");
 
-  const MockUSDC = await ethers.getContractFactory("MockUSDC", deployer);
-  const mockUsdc = await MockUSDC.deploy();
-  await mockUsdc.waitForDeployment();
+  const existing = await tryAttach("MockUSDC", bookKey, deployer);
+  if (existing) {
+    return await existing.getAddress();
+  }
 
-  const address = await mockUsdc.getAddress();
-  saveAddress(networkName, "MockUSDC", address);
-  logger.success(`  MockUSDC: ${address}`);
+  return await withRetry("deploy MockUSDC", async () => {
+    const MockUSDC = await ethers.getContractFactory("MockUSDC", deployer);
+    const mockUsdc = await MockUSDC.deploy();
+    await mockUsdc.waitForDeployment();
 
-  return address;
+    const address = await mockUsdc.getAddress();
+    saveAddress(bookKey, "MockUSDC", address);
+    logger.success(`  MockUSDC: ${address}`);
+    return address;
+  });
 }
 
 async function deployCoreContracts(
   deployer: Signer,
   deployerAddress: string,
-  networkName: string,
+  bookKey: string,
   config: DeploymentConfig
 ): Promise<{ okuMoney: Contract; okuDollar: Contract }> {
   logger.step(2, "Deploying Core Contracts");
@@ -223,7 +348,7 @@ async function deployCoreContracts(
   const okuMoney = await deployUUPSProxy(
     "OkuMoney",
     ["Oku Money", "OkuM", deployerAddress, config.maxSupply],
-    networkName,
+    bookKey,
     deployer
   );
   logger.success(`  OkuMoney: ${await okuMoney.getAddress()}`);
@@ -234,7 +359,7 @@ async function deployCoreContracts(
   const okuDollar = await deployUUPSProxy(
     "OkuDollar",
     [await okuMoney.getAddress(), "Oku Dollar", "usdOku", deployerAddress, minCollateralRatio],
-    networkName,
+    bookKey,
     deployer
   );
   logger.success(`  OkuDollar: ${await okuDollar.getAddress()}`);
@@ -245,7 +370,7 @@ async function deployCoreContracts(
 async function deployRedemptionQueue(
   deployer: Signer,
   deployerAddress: string,
-  networkName: string,
+  bookKey: string,
   okuMoneyAddress: string,
   usdcAddress: string
 ): Promise<Contract> {
@@ -255,7 +380,7 @@ async function deployRedemptionQueue(
   const redemptionQueue = await deployUUPSProxy(
     "RedemptionQueue",
     [okuMoneyAddress, usdcAddress, deployerAddress],
-    networkName,
+    bookKey,
     deployer
   );
   logger.success(`  RedemptionQueue: ${await redemptionQueue.getAddress()}`);
@@ -265,7 +390,7 @@ async function deployRedemptionQueue(
 async function deployPSM(
   deployer: Signer,
   deployerAddress: string,
-  networkName: string,
+  bookKey: string,
   okuMoneyAddress: string,
   okuDollarAddress: string,
   redemptionQueueAddress: string,
@@ -285,7 +410,7 @@ async function deployPSM(
       deployerAddress,                  // admin
       config.psmStalenessThreshold,     // _stalenessThreshold (PoR oracle bound)
     ],
-    networkName,
+    bookKey,
     deployer
   );
   logger.success(`  LitePSM: ${await litePSM.getAddress()}`);
@@ -296,12 +421,19 @@ async function deployPSM(
 async function deployBridge(
   deployer: Signer,
   deployerAddress: string,
-  networkName: string,
+  bookKey: string,
   okuMoneyAddress: string,
   okuDollarAddress: string,
+  evmChainId: number,
   config: DeploymentConfig
 ): Promise<{ okuBridge: Contract; bridgeRouter: Contract }> {
   logger.step(4, "Deploying Bridge Contracts");
+
+  // Pick Solana Devnet (for EVM testnets) or Solana Mainnet (for EVM mainnets)
+  // as the bridge counterpart. This used to be hardcoded to Solana Devnet, which
+  // was wrong for Base/BSC/etc. mainnet deploys.
+  const solanaCounterpartId = getSolanaCounterpartChainId(evmChainId);
+  logger.info(`  Bridge counterpart Solana chain id: ${solanaCounterpartId} (${solanaCounterpartId === 103 ? "Devnet" : "Mainnet"})`);
 
   // OkuBridge (Transparent Proxy). Initializer now takes a 6th `InitConfig` tuple so
   // limits / fee / deadline come in at deploy time instead of being hardcoded constants.
@@ -323,10 +455,10 @@ async function deployBridge(
       deployerAddress, // orchestrator signer (deployer for testnet)
       deployerAddress, // fee recipient
       deployerAddress, // admin
-      [BigInt(SOLANA_DEVNET_CHAIN_ID)], // supported chains
+      [BigInt(solanaCounterpartId)], // supported chains
       bridgeInitConfig,
     ],
-    networkName,
+    bookKey,
     deployer
   );
   logger.success(`  OkuBridge: ${await okuBridge.getAddress()}`);
@@ -341,7 +473,7 @@ async function deployBridge(
       await okuBridge.getAddress(),
       deployerAddress,
     ],
-    networkName,
+    bookKey,
     deployer
   );
   logger.success(`  OkuBridgeRouter: ${await bridgeRouter.getAddress()}`);
@@ -367,57 +499,61 @@ async function configureRoles(
   const bridgeRouterAddress = await bridgeRouter.getAddress();
 
   // OkuMoney minter roles
-  await waitForTx(await okuMoney.grantRole(ROLES.OKUM_MINTER, litePSMAddress), "Grant OKUM_MINTER to LitePSM");
-  await waitForTx(await okuMoney.grantRole(ROLES.OKUM_MINTER, redemptionQueueAddress), "Grant OKUM_MINTER to RedemptionQueue");
-  await waitForTx(await okuMoney.grantRole(ROLES.OKUM_MINTER, okuBridgeAddress), "Grant OKUM_MINTER to OkuBridge");
-  await waitForTx(await okuMoney.grantRole(ROLES.OKUM_MINTER, bridgeRouterAddress), "Grant OKUM_MINTER to OkuBridgeRouter");
+  await sendAndWait("Grant OKUM_MINTER to LitePSM", () => okuMoney.grantRole(ROLES.OKUM_MINTER, litePSMAddress));
+  await sendAndWait("Grant OKUM_MINTER to RedemptionQueue", () => okuMoney.grantRole(ROLES.OKUM_MINTER, redemptionQueueAddress));
+  await sendAndWait("Grant OKUM_MINTER to OkuBridge", () => okuMoney.grantRole(ROLES.OKUM_MINTER, okuBridgeAddress));
+  await sendAndWait("Grant OKUM_MINTER to OkuBridgeRouter", () => okuMoney.grantRole(ROLES.OKUM_MINTER, bridgeRouterAddress));
 
   // OkuMoney admin roles (testnet only)
-  await waitForTx(await okuMoney.grantRole(ROLES.OKUM_REBASER, deployerAddress), "Grant OKUM_REBASER to Admin");
-  await waitForTx(await okuMoney.grantRole(ROLES.OKUM_ALLOWANCE_MANAGER, deployerAddress), "Grant OKUM_ALLOWANCE_MANAGER to Admin");
+  await sendAndWait("Grant OKUM_REBASER to Admin", () => okuMoney.grantRole(ROLES.OKUM_REBASER, deployerAddress));
+  await sendAndWait("Grant OKUM_ALLOWANCE_MANAGER to Admin", () => okuMoney.grantRole(ROLES.OKUM_ALLOWANCE_MANAGER, deployerAddress));
 
   // Minter allowances
-  await waitForTx(await okuMoney.configureMinterAllowance(litePSMAddress, config.minterAllowance), "Set LitePSM minter allowance");
-  await waitForTx(await okuMoney.configureMinterAllowance(redemptionQueueAddress, config.minterAllowance), "Set RedemptionQueue minter allowance");
-  await waitForTx(await okuMoney.configureMinterAllowance(okuBridgeAddress, config.minterAllowance), "Set OkuBridge minter allowance");
-  await waitForTx(await okuMoney.configureMinterAllowance(bridgeRouterAddress, config.minterAllowance), "Set OkuBridgeRouter minter allowance");
+  await sendAndWait("Set LitePSM minter allowance", () => okuMoney.configureMinterAllowance(litePSMAddress, config.minterAllowance));
+  await sendAndWait("Set RedemptionQueue minter allowance", () => okuMoney.configureMinterAllowance(redemptionQueueAddress, config.minterAllowance));
+  await sendAndWait("Set OkuBridge minter allowance", () => okuMoney.configureMinterAllowance(okuBridgeAddress, config.minterAllowance));
+  await sendAndWait("Set OkuBridgeRouter minter allowance", () => okuMoney.configureMinterAllowance(bridgeRouterAddress, config.minterAllowance));
 
   // OkuDollar roles
-  await waitForTx(await okuDollar.grantRole(ROLES.VAULT_REBASER, deployerAddress), "Grant VAULT_REBASER to Admin");
+  await sendAndWait("Grant VAULT_REBASER to Admin", () => okuDollar.grantRole(ROLES.VAULT_REBASER, deployerAddress));
 
   // RedemptionQueue roles
-  await waitForTx(await redemptionQueue.grantRole(ROLES.QUEUE_PSM, litePSMAddress), "Grant QUEUE_PSM to LitePSM");
+  await sendAndWait("Grant QUEUE_PSM to LitePSM", () => redemptionQueue.grantRole(ROLES.QUEUE_PSM, litePSMAddress));
 
   // LitePSM roles
-  await waitForTx(await litePSM.grantRole(ROLES.PSM_BUFFER_DEPOSITOR, deployerAddress), "Grant PSM_BUFFER_DEPOSITOR to Admin");
+  await sendAndWait("Grant PSM_BUFFER_DEPOSITOR to Admin", () => litePSM.grantRole(ROLES.PSM_BUFFER_DEPOSITOR, deployerAddress));
 }
 
 async function configureBridge(
   okuBridge: Contract,
+  evmChainId: number,
   config: DeploymentConfig
 ): Promise<void> {
   logger.step(6, "Configuring Bridge (Testnet Settings)");
 
-  await waitForTx(await okuBridge.updateFee(config.bridgeFee), `Set bridge fee to ${config.bridgeFee} bps`);
-  
+  await sendAndWait(`Set bridge fee to ${config.bridgeFee} bps`, () => okuBridge.updateFee(config.bridgeFee));
+
   // Note: updateLimits takes uint128 values
   const minAmount = BigInt(config.minBridgeAmount.toString());
   const maxAmount = BigInt(config.maxBridgeAmount.toString());
-  await waitForTx(await okuBridge.updateLimits(minAmount, maxAmount), "Set bridge limits");
-  
-  await waitForTx(await okuBridge.updateDeadline(config.bridgeDeadline), `Set bridge deadline to ${config.bridgeDeadline}s`);
+  await sendAndWait("Set bridge limits", () => okuBridge.updateLimits(minAmount, maxAmount));
 
-  // Verify Solana Devnet is supported
-  const isSolanaSupported = await okuBridge.supportedChains(SOLANA_DEVNET_CHAIN_ID);
+  await sendAndWait(`Set bridge deadline to ${config.bridgeDeadline}s`, () => okuBridge.updateDeadline(config.bridgeDeadline));
+
+  // Verify the correct Solana counterpart (Devnet for EVM testnets, Mainnet otherwise) is supported
+  const solanaCounterpartId = getSolanaCounterpartChainId(evmChainId);
+  const counterpartName = solanaCounterpartId === 103 ? "Devnet" : "Mainnet";
+  const isSolanaSupported = await okuBridge.supportedChains(solanaCounterpartId);
   if (!isSolanaSupported) {
-    await waitForTx(await okuBridge.addSupportedChain(SOLANA_DEVNET_CHAIN_ID), "Add Solana Devnet as supported chain");
+    await sendAndWait(`Add Solana ${counterpartName} as supported chain`, () => okuBridge.addSupportedChain(solanaCounterpartId));
   } else {
-    logger.success(`  Solana Devnet (${SOLANA_DEVNET_CHAIN_ID}) already supported`);
+    logger.success(`  Solana ${counterpartName} (${solanaCounterpartId}) already supported`);
   }
 }
 
 async function verifyDeployment(
-  networkName: string,
+  bookKey: string,
+  evmChainId: number,
   okuMoney: Contract,
   okuDollar: Contract,
   litePSM: Contract,
@@ -437,19 +573,21 @@ async function verifyDeployment(
   const bridgeFee = await okuBridge.bridgeFee();
   const authorizedSigner = await okuBridge.authorizedSigner();
   const isPaused = await okuBridge.paused();
-  const isSolanaSupported = await okuBridge.supportedChains(SOLANA_DEVNET_CHAIN_ID);
+  const solanaCounterpartId = getSolanaCounterpartChainId(evmChainId);
+  const counterpartName = solanaCounterpartId === 103 ? "Devnet" : "Mainnet";
+  const isSolanaSupported = await okuBridge.supportedChains(solanaCounterpartId);
   const bridgeLimits = await okuBridge.limits();
 
   logger.info(`  Bridge fee: ${bridgeFee} bps`);
   logger.info(`  Authorized signer: ${authorizedSigner}`);
   logger.info(`  Bridge paused: ${isPaused}`);
-  logger.info(`  Solana Devnet supported: ${isSolanaSupported}`);
+  logger.info(`  Solana ${counterpartName} (${solanaCounterpartId}) supported: ${isSolanaSupported}`);
   logger.info(`  Min bridge: ${ethers.formatUnits(bridgeLimits.min, 18)} OkuM`);
   logger.info(`  Max bridge: ${ethers.formatUnits(bridgeLimits.max, 18)} OkuM`);
 
   // Verify all addresses saved
   const book = loadAddressBook();
-  const contracts = book[networkName] || {};
+  const contracts = book[bookKey] || {};
   const expectedContracts = ["MockUSDC", "OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM", "OkuBridge", "OkuBridgeRouter"];
 
   const missing = expectedContracts.filter(c => !contracts[c]);
@@ -465,20 +603,22 @@ async function verifyDeployment(
 // ============================================================================
 
 async function main() {
-  const networkName = getNetworkName();
-  const chainConfig = getChainConfig(networkName);
+  // Single source of truth for "what chain are we on / where do we read+write addresses".
+  // Returns: { networkName, bookKey, isFork, chainConfig }.
+  const ctx = await resolveNetworkContext();
+  const { networkName, bookKey, isFork, chainConfig } = ctx;
   const config = getDeploymentConfig();
 
-  logger.header(`OkuMoney Deployment to ${chainConfig.name}`);
+  logger.header(`OkuMoney Deployment to ${chainConfig.name}${isFork ? " (LOCAL FORK)" : ""}`);
   logger.info(`Network: ${networkName} (chainId: ${chainConfig.chainId})`);
+  logger.info(`Address book key: ${bookKey}`);
 
-  // Get deployer - use impersonation for localhost (fork), real signer for live networks
+  // Get deployer - use impersonation for localhost (fork), real signer for live networks.
   let deployer: Signer;
-  const isLocalNetwork = networkName === "localhost" || networkName === "hardhat";
-  
-  if (isLocalNetwork) {
-    // Impersonate dev wallet for local fork testing
-    // Uses actual on-chain balance from forked network (no artificial funding)
+
+  if (isFork) {
+    // Impersonate dev wallet for local fork testing.
+    // Uses actual on-chain balance from forked network (no artificial funding).
     logger.info(`Impersonating dev wallet: ${DEV_WALLET}`);
     await network.provider.request({
       method: "hardhat_impersonateAccount",
@@ -495,8 +635,8 @@ async function main() {
   logger.info(`Deployer: ${deployerAddress}`);
   logger.info(`Balance: ${ethers.formatEther(await ethers.provider.getBalance(deployerAddress))} ETH`);
 
-  // Check if we should reset fork (hardhat network only)
-  if (networkName === "hardhat" && process.env.RESET_FORK === "true") {
+  // Check if we should reset fork (hardhat in-process network only)
+  if (network.name === "hardhat" && process.env.RESET_FORK === "true") {
     logger.info("Resetting hardhat fork...");
     await network.provider.request({
       method: "hardhat_reset",
@@ -509,15 +649,22 @@ async function main() {
     logger.success("Fork reset complete");
   }
 
-  // Clear existing addresses for local networks only
-  // Live network deployments are preserved for reference
-  if (!isLiveNetwork(networkName)) {
+  // Address-book write strategy:
+  //
+  //   - Fork runs (bookKey = "fork:<chain>"): we DO clear book[bookKey] so each
+  //     fork run starts fresh. The live "<chain>" key is untouched, so a flaky
+  //     fork test never destroys real-deployment state.
+  //
+  //   - Live runs (bookKey = "<chain>"): we DO NOT clear. tryAttach() handles
+  //     resumption — if a previous live run partially succeeded, we reuse
+  //     anything that's still on-chain and only redeploy what's missing.
+  if (isFork) {
     const book = loadAddressBook();
-    book[networkName] = {};
+    book[bookKey] = {};
     saveAddressBook(book);
-    logger.info("Cleared existing address book entries (local network)");
+    logger.info(`Cleared address book entries for "${bookKey}" (local fork run)`);
   } else {
-    logger.info("Live network: addresses will be appended to address book");
+    logger.info(`Live network: addresses will be merged into address book under "${bookKey}" (existing entries reused if still on-chain)`);
   }
 
   console.log(); // spacing
@@ -529,16 +676,16 @@ async function main() {
     usdcAddress = chainConfig.usdc;
     logger.info(`  USDC: ${usdcAddress}`);
   } else {
-    usdcAddress = await deployMockUSDC(networkName, deployer);
+    usdcAddress = await deployMockUSDC(bookKey, deployer);
   }
 
   // Step 2: Deploy core contracts (RedemptionQueue is deployed separately because it now
   // requires the USDC address for decimal-multiplier resolution at init time).
-  const { okuMoney, okuDollar } = await deployCoreContracts(deployer, deployerAddress, networkName, config);
+  const { okuMoney, okuDollar } = await deployCoreContracts(deployer, deployerAddress, bookKey, config);
   const redemptionQueue = await deployRedemptionQueue(
     deployer,
     deployerAddress,
-    networkName,
+    bookKey,
     await okuMoney.getAddress(),
     usdcAddress
   );
@@ -547,7 +694,7 @@ async function main() {
   const litePSM = await deployPSM(
     deployer,
     deployerAddress,
-    networkName,
+    bookKey,
     await okuMoney.getAddress(),
     await okuDollar.getAddress(),
     await redemptionQueue.getAddress(),
@@ -559,9 +706,10 @@ async function main() {
   const { okuBridge, bridgeRouter } = await deployBridge(
     deployer,
     deployerAddress,
-    networkName,
+    bookKey,
     await okuMoney.getAddress(),
     await okuDollar.getAddress(),
+    chainConfig.chainId,
     config
   );
 
@@ -578,11 +726,12 @@ async function main() {
   );
 
   // Step 6: Configure bridge
-  await configureBridge(okuBridge, config);
+  await configureBridge(okuBridge, chainConfig.chainId, config);
 
   // Step 7: Verify deployment state
   await verifyDeployment(
-    networkName,
+    bookKey,
+    chainConfig.chainId,
     okuMoney,
     okuDollar,
     litePSM,
@@ -590,17 +739,17 @@ async function main() {
     bridgeRouter
   );
 
-  // Step 8: Etherscan verification (live networks only)
-  if (isLiveNetwork(networkName)) {
+  // Step 8: Etherscan verification (live networks only — never on a fork)
+  if (!isFork) {
     await verifyAllContracts(networkName);
   }
 
   // Summary
   logger.header("Deployment Complete");
 
-  const addresses = loadAddressBook()[networkName];
+  const addresses = loadAddressBook()[bookKey];
   console.log();
-  console.log("Deployed Contracts:");
+  console.log(`Deployed Contracts (book key: ${bookKey}):`);
   console.log("-------------------");
   for (const [name, address] of Object.entries(addresses)) {
     console.log(`  ${name}: ${address}`);
@@ -608,7 +757,7 @@ async function main() {
   console.log();
 
   // Mirror into the repo-root testnet-addresses.json registry (live networks only)
-  if (isLiveNetwork(networkName)) {
+  if (!isFork) {
     try {
       const metadata = getChainMetadata(networkName);
       let bridgeChainId: number | undefined;
@@ -645,9 +794,21 @@ async function main() {
 }
 
 main()
-  .then(() => process.exit(0))
+  .then(() => {
+    // Diagnostic: confirm RPC compat shim engaged (helpful when debugging
+    // BSC pending-tx issues — set DEBUG_RPC_PATCH=1 for per-call logs).
+    try {
+      const { rpcCompatStats } = require("../utils/rpcCompat");
+      logger.info(`RPC compat: ${rpcCompatStats.sendCalls} send / ${rpcCompatStats.requestCalls} request calls intercepted; ${rpcCompatStats.fixedCount} responses fixed`);
+    } catch {}
+    process.exit(0);
+  })
   .catch((error) => {
     logger.error(`Deployment failed: ${error.message}`);
+    try {
+      const { rpcCompatStats } = require("../utils/rpcCompat");
+      logger.error(`RPC compat at failure: ${rpcCompatStats.sendCalls} send / ${rpcCompatStats.requestCalls} request calls intercepted; ${rpcCompatStats.fixedCount} responses fixed (zero send calls = patch was bypassed; non-zero with no fixes = no BSC bug responses came through this path)`);
+    } catch {}
     console.error(error);
     process.exit(1);
   });

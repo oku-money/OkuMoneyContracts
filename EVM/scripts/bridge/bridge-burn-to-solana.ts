@@ -16,10 +16,11 @@ import { ethers } from "hardhat";
 import * as fs from "fs";
 import * as path from "path";
 import bs58 from "bs58";
-import { getNetworkName, SOLANA_DEVNET_CHAIN_ID } from "../config/chains";
+import { getSolanaCounterpartChainId } from "../config/chains";
 import { loadAddress } from "../utils/addressBook";
 import { logger } from "../utils/logger";
 import { getDeployedContract } from "../utils/deploy";
+import { resolveNetworkContext } from "../utils/networkContext";
 
 // Bridge request output interface (for relay script)
 interface BridgeRequestOutput {
@@ -36,18 +37,20 @@ interface BridgeRequestOutput {
 }
 
 async function main() {
-  const network = getNetworkName();
-  
-  logger.section("Bridge OkuMoney: EVM -> Solana");
+  const ctx = await resolveNetworkContext();
+  const { networkName, bookKey, chainConfig } = ctx;
+
+  logger.section(`Bridge OkuMoney: EVM (${networkName}) -> Solana`);
 
   const [deployer] = await ethers.getSigners();
   logger.info(`Sender address: ${deployer.address}`);
+  logger.info(`Address book key: ${bookKey}`);
 
-  // Load contract addresses
-  const okuMoneyAddress = loadAddress(network, "OkuMoney");
-  const litePSMAddress = loadAddress(network, "LitePSM");
-  const bridgeRouterAddress = loadAddress(network, "OkuBridgeRouter");
-  const mockUSDCAddress = loadAddress(network, "MockUSDC");
+  // Load contract addresses from the resolved book key
+  const okuMoneyAddress = loadAddress(bookKey, "OkuMoney");
+  const litePSMAddress = loadAddress(bookKey, "LitePSM");
+  const bridgeRouterAddress = loadAddress(bookKey, "OkuBridgeRouter");
+  const mockUSDCAddress = loadAddress(bookKey, "MockUSDC");
 
   logger.info(`OkuMoney: ${okuMoneyAddress}`);
   logger.info(`LitePSM: ${litePSMAddress}`);
@@ -111,13 +114,17 @@ async function main() {
   const approveTx2 = await okuMoney.approve(bridgeRouterAddress, BRIDGE_AMOUNT);
   await approveTx2.wait();
 
+  // Pick Solana counterpart based on whether the EVM source chain is testnet vs mainnet.
+  const solanaTargetChainId = getSolanaCounterpartChainId(chainConfig.chainId);
+  const solanaTargetName = solanaTargetChainId === 103 ? "Devnet" : "Mainnet";
+
   // Bridge via router
-  logger.info(`Bridging ${ethers.formatUnits(BRIDGE_AMOUNT, 18)} OkuM to Solana Devnet (chain ${SOLANA_DEVNET_CHAIN_ID})...`);
+  logger.info(`Bridging ${ethers.formatUnits(BRIDGE_AMOUNT, 18)} OkuM to Solana ${solanaTargetName} (chain ${solanaTargetChainId})...`);
   logger.info(`Recipient (bytes32): ${recipientBytes32}`);
-  
+
   const bridgeTx = await bridgeRouter.bridgeOkuM(
     BRIDGE_AMOUNT,
-    SOLANA_DEVNET_CHAIN_ID,
+    solanaTargetChainId,
     recipientBytes32
   );
   const receipt = await bridgeTx.wait();
@@ -125,7 +132,7 @@ async function main() {
   logger.section("Step 4: Parse BridgeBurn Event");
 
   // Find BridgeBurn event from OkuBridge
-  const okuBridgeAddress = loadAddress(network, "OkuBridge");
+  const okuBridgeAddress = loadAddress(bookKey, "OkuBridge");
   const okuBridge = await getDeployedContract("OkuBridge", okuBridgeAddress);
   
   // Parse logs

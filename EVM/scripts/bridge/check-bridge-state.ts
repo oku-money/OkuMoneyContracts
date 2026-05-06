@@ -13,24 +13,33 @@
  */
 
 import { ethers } from "hardhat";
-import { getNetworkName, SOLANA_DEVNET_CHAIN_ID, OPTIMISM_CHAIN_ID, ARBITRUM_CHAIN_ID, BASE_CHAIN_ID, ETHEREUM_CHAIN_ID } from "../config/chains";
+import {
+  SOLANA_DEVNET_CHAIN_ID,
+  SOLANA_MAINNET_CHAIN_ID,
+  OPTIMISM_CHAIN_ID,
+  ARBITRUM_CHAIN_ID,
+  BASE_CHAIN_ID,
+  BSC_CHAIN_ID,
+  ETHEREUM_CHAIN_ID,
+} from "../config/chains";
 import { loadAddress, hasAddress } from "../utils/addressBook";
 import { logger } from "../utils/logger";
 import { getDeployedContract } from "../utils/deploy";
+import { resolveNetworkContext } from "../utils/networkContext";
 
 async function main() {
-  const network = getNetworkName();
-  
+  const { networkName, bookKey } = await resolveNetworkContext();
+
   logger.section("OkuBridge State Check");
-  logger.info(`Network: ${network}`);
+  logger.info(`Network: ${networkName} (book key: ${bookKey})`);
 
   // Load contract addresses
-  if (!hasAddress(network, "OkuBridge")) {
-    throw new Error(`OkuBridge not deployed on ${network}. Run deploy scripts first.`);
+  if (!hasAddress(bookKey, "OkuBridge")) {
+    throw new Error(`OkuBridge not deployed under "${bookKey}". Run deploy scripts first.`);
   }
 
-  const okuBridgeAddress = loadAddress(network, "OkuBridge");
-  const okuMoneyAddress = loadAddress(network, "OkuMoney");
+  const okuBridgeAddress = loadAddress(bookKey, "OkuBridge");
+  const okuMoneyAddress = loadAddress(bookKey, "OkuMoney");
   
   logger.info(`OkuBridge: ${okuBridgeAddress}`);
   logger.info(`OkuMoney: ${okuMoneyAddress}`);
@@ -61,10 +70,12 @@ async function main() {
 
   const chainsToCheck = [
     { id: SOLANA_DEVNET_CHAIN_ID, name: "Solana Devnet" },
+    { id: SOLANA_MAINNET_CHAIN_ID, name: "Solana Mainnet" },
     { id: ETHEREUM_CHAIN_ID, name: "Ethereum Mainnet" },
     { id: OPTIMISM_CHAIN_ID, name: "Optimism" },
     { id: ARBITRUM_CHAIN_ID, name: "Arbitrum One" },
     { id: BASE_CHAIN_ID, name: "Base" },
+    { id: BSC_CHAIN_ID, name: "BNB Smart Chain" },
   ];
 
   for (const chain of chainsToCheck) {
@@ -111,10 +122,10 @@ async function main() {
   }
 
   // ============ OkuBridgeRouter ============
-  if (hasAddress(network, "OkuBridgeRouter")) {
+  if (hasAddress(bookKey, "OkuBridgeRouter")) {
     logger.section("OkuBridgeRouter State");
-    
-    const routerAddress = loadAddress(network, "OkuBridgeRouter");
+
+    const routerAddress = loadAddress(bookKey, "OkuBridgeRouter");
     const router = await getDeployedContract("OkuBridgeRouter", routerAddress);
     
     logger.info(`OkuBridgeRouter: ${routerAddress}`);
@@ -135,8 +146,8 @@ async function main() {
   const bridgeBalance = await okuMoney.balanceOf(okuBridgeAddress);
   logger.info(`OkuBridge OkuMoney balance: ${ethers.formatUnits(bridgeBalance, 18)} OkuM`);
 
-  if (hasAddress(network, "OkuBridgeRouter")) {
-    const routerAddress = loadAddress(network, "OkuBridgeRouter");
+  if (hasAddress(bookKey, "OkuBridgeRouter")) {
+    const routerAddress = loadAddress(bookKey, "OkuBridgeRouter");
     const routerBalance = await okuMoney.balanceOf(routerAddress);
     logger.info(`OkuBridgeRouter OkuMoney balance: ${ethers.formatUnits(routerBalance, 18)} OkuM`);
   }

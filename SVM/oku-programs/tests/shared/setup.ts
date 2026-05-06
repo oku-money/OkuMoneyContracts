@@ -413,9 +413,6 @@ export async function mintOkuMoneyViaProgram(
     .rpc();
 }
 
-// Backwards compatibility alias
-export const mintOkusdViaProgram = mintOkuMoneyViaProgram;
-
 /**
  * Ensure PSM is unpaused before tests.
  *

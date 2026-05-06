@@ -15,7 +15,7 @@
     "deploy:init:mainnet": "NETWORK=mainnet-beta tsx scripts/deploy/deploy-init.ts",
 
     "test": "anchor test --validator legacy",
-    "test:fork": "npx mocha --require tsx --timeout 1000000 'tests/fork/**/*.ts'",
+    "test:fork": "npx mocha --require tsx --timeout 180000 'tests/fork/**/*.ts'",
     "test:onchain": "NETWORK=devnet tsx scripts/test/test-devnet.ts",
     "test:onchain:fork": "NETWORK=devnet-fork tsx scripts/test/test-devnet.ts",
 

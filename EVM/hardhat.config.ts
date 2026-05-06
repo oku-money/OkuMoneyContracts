@@ -44,6 +44,7 @@ function alchemyUrl(network: string): string {
       "opt-sepolia": "https://sepolia.optimism.io",
       "arb-mainnet": "https://arb1.arbitrum.io/rpc",
       "base-mainnet": "https://mainnet.base.org",
+      "bnb-mainnet": "https://bsc-dataseed.binance.org",
     };
     return publicRpcs[network] || "";
   }
@@ -53,9 +54,49 @@ function alchemyUrl(network: string): string {
 // Dev wallet address for local fork testing (impersonated with funded ETH)
 const DEV_WALLET_ADDRESS = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
 
-// Default fork configuration - Eth Sepolia
-const DEFAULT_FORK_URL = alchemyUrl("eth-sepolia");
-const DEFAULT_FORK_CHAIN_ID = 11155111; // Eth Sepolia
+// ============================================================================
+// Local Fork Network Selection
+// ============================================================================
+// `hh node` and the in-process `hardhat` network fork from one chain at a time.
+// Pick which one via FORK_NETWORK (default: sepolia). Both `hardhat` and
+// `localhost` derive their chainId from the same source so the chainId on the
+// running node matches what the localhost client expects (mismatch = signer
+// errors from hardhat-ethers).
+//
+// Examples:
+//   FORK_NETWORK=sepolia hh node      # default; same as today
+//   FORK_NETWORK=base hh node         # fork Base mainnet
+//   FORK_NETWORK=bsc hh node          # fork BSC mainnet
+//   FORK_URL=https://... hh node      # full override (FORK_NETWORK ignored)
+//
+// Then in another terminal:
+//   NETWORK=base npx hardhat run scripts/deploy/index.ts --network localhost
+
+interface ForkTarget {
+  alchemySubdomain: string;
+  chainId: number;
+}
+
+const FORK_TARGETS: Record<string, ForkTarget> = {
+  sepolia:    { alchemySubdomain: "eth-sepolia",  chainId: 11155111 },
+  mainnet:    { alchemySubdomain: "eth-mainnet",  chainId: 1 },
+  optimism:   { alchemySubdomain: "opt-mainnet",  chainId: 10 },
+  opSepolia:  { alchemySubdomain: "opt-sepolia",  chainId: 11155420 },
+  arbitrum:   { alchemySubdomain: "arb-mainnet",  chainId: 42161 },
+  base:       { alchemySubdomain: "base-mainnet", chainId: 8453 },
+  bsc:        { alchemySubdomain: "bnb-mainnet",  chainId: 56 },
+};
+
+const FORK_NETWORK = (process.env.FORK_NETWORK || "sepolia").trim();
+const _forkTarget: ForkTarget = FORK_TARGETS[FORK_NETWORK] ?? FORK_TARGETS.sepolia;
+if (!FORK_TARGETS[FORK_NETWORK]) {
+  console.warn(`[hardhat.config] Unknown FORK_NETWORK="${FORK_NETWORK}", falling back to sepolia. Known: ${Object.keys(FORK_TARGETS).join(", ")}`);
+}
+
+const DEFAULT_FORK_URL = process.env.FORK_URL || alchemyUrl(_forkTarget.alchemySubdomain);
+const DEFAULT_FORK_CHAIN_ID = process.env.HARDHAT_CHAIN_ID
+  ? parseInt(process.env.HARDHAT_CHAIN_ID)
+  : _forkTarget.chainId;
 
 const config: HardhatUserConfig = {
   solidity: {
@@ -80,18 +121,19 @@ const config: HardhatUserConfig = {
 
   networks: {
     hardhat: {
-      // Fork Eth Sepolia by default for local testing
-      // Override with FORK_URL env var if needed
-      chainId: process.env.HARDHAT_CHAIN_ID ? parseInt(process.env.HARDHAT_CHAIN_ID) : DEFAULT_FORK_CHAIN_ID,
+      // Fork target controlled by FORK_NETWORK env var (see top of file).
+      // Defaults to Eth Sepolia. Override with FORK_URL for an arbitrary RPC.
+      chainId: DEFAULT_FORK_CHAIN_ID,
       forking: {
-        url: process.env.FORK_URL || DEFAULT_FORK_URL,
+        url: DEFAULT_FORK_URL,
         blockNumber: process.env.FORK_BLOCK_NUMBER ? parseInt(process.env.FORK_BLOCK_NUMBER) : undefined,
         enabled: true,
       },
       allowUnlimitedContractSize: false,
       gas: "auto",
       gasPrice: "auto",
-      // Fund the dev wallet with ETH for testing
+      // Fund the test mnemonic accounts (NOT the dev wallet — that is impersonated
+      // separately by deploy scripts and uses its real on-chain balance from the fork).
       accounts: {
         mnemonic: "test test test test test test test test test test test junk",
         count: 20,
@@ -99,14 +141,21 @@ const config: HardhatUserConfig = {
       },
     },
 
-    // localhost connects to running `npx hardhat node` (which forks Sepolia)
-    // Chain ID matches the fork source (Sepolia = 11155111)
-    // Fixed gas settings to avoid stale baseFee issues on forks
+    // localhost connects to a running `npx hardhat node`. We deliberately do
+    // NOT pin a `chainId` here: that would force the deploy terminal to
+    // re-export FORK_NETWORK to match whatever the `hh node` terminal used,
+    // and any drift trips Hardhat's HH101 chain-id mismatch check.
+    //
+    // Instead the running node is the source of truth for chainId. Scripts
+    // that care (e.g. scripts/deploy/index.ts) cross-check the live node's
+    // chainId against the `NETWORK`-targeted chain at runtime, so a wrong
+    // fork still fails fast — just with a clearer error than HH101.
+    //
+    // No hardcoded gasPrice either: we want the fork to use the real chain's
+    // baseFee (EIP-1559) so gas-cost estimates faithfully reflect a live deploy.
     localhost: {
       url: "http://127.0.0.1:8545",
       gas: "auto",
-      gasPrice: 20000000000, // 20 gwei - fixed to avoid stale fork baseFee issues
-      chainId: DEFAULT_FORK_CHAIN_ID,
     },
 
     // Testnets
@@ -168,6 +217,18 @@ const config: HardhatUserConfig = {
         etherscan: {
           apiUrl: "https://api.basescan.org",
           apiKey: process.env.BASESCAN_API_KEY || "",
+        },
+      },
+    },
+
+    bsc: {
+      url: process.env.BSC_RPC_URL || alchemyUrl("bnb-mainnet"),
+      chainId: 56,
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      verify: {
+        etherscan: {
+          apiUrl: "https://api.bscscan.com",
+          apiKey: process.env.BSCSCAN_API_KEY || process.env.ETHERSCAN_API_KEY || "",
         },
       },
     },

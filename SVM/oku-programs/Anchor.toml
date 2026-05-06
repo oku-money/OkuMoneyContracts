@@ -22,7 +22,7 @@ wallet = "~/.config/solana/id.json"
 
 [scripts]
 # Run unit tests only (no fork tests — those require surfpool, use `npm run test:fork`)
-test = "npx mocha --require tsx --timeout 1000000 'tests/unit/**/*.ts'"
+test = "npx mocha --require tsx --timeout 180000 'tests/unit/**/*.ts'"
 
 [hooks]
 

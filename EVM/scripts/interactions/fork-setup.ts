@@ -5,25 +5,29 @@
  * On Sepolia, the deployer is 0x3CB68a6762041aA05E762814A8791CA9d98E79A0
  */
 import { ethers, network } from "hardhat";
-import { getNetworkName, DEV_WALLET_ADDRESS } from "../config/chains";
+import { DEV_WALLET_ADDRESS } from "../config/chains";
 import { loadAddress } from "../utils/addressBook";
 import { logger } from "../utils/logger";
 import { getDeployedContract, waitForTx } from "../utils/deploy";
 import { ROLES } from "../config/roles";
+import { resolveNetworkContext } from "../utils/networkContext";
 
 // Use centralized deployer address
 const DEPLOYER = DEV_WALLET_ADDRESS;
 
 async function main() {
-  const networkName = getNetworkName();
-  logger.section(`Fork Setup for ${networkName}`);
+  const { networkName, bookKey, isFork } = await resolveNetworkContext();
+  if (!isFork) {
+    throw new Error(`fork-setup.ts is only useful on a local fork; current network "${network.name}" is live.`);
+  }
+  logger.section(`Fork Setup for ${networkName} (book key: ${bookKey})`);
 
-  // Get contracts
-  const okuMoneyAddr = loadAddress(networkName, "OkuMoney");
-  const litePSMAddr = loadAddress(networkName, "LitePSM");
-  const redemptionQueueAddr = loadAddress(networkName, "RedemptionQueue");
-  const okuBridgeAddr = loadAddress(networkName, "OkuBridge");
-  const bridgeRouterAddr = loadAddress(networkName, "OkuBridgeRouter");
+  // Get contracts from the resolved book key
+  const okuMoneyAddr = loadAddress(bookKey, "OkuMoney");
+  const litePSMAddr = loadAddress(bookKey, "LitePSM");
+  const redemptionQueueAddr = loadAddress(bookKey, "RedemptionQueue");
+  const okuBridgeAddr = loadAddress(bookKey, "OkuBridge");
+  const bridgeRouterAddr = loadAddress(bookKey, "OkuBridgeRouter");
 
   // Impersonate deployer
   logger.info(`Impersonating deployer: ${DEPLOYER}`);

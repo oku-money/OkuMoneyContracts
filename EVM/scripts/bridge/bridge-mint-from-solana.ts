@@ -18,10 +18,11 @@
 import { ethers } from "hardhat";
 import * as fs from "fs";
 import * as path from "path";
-import { getNetworkName, getEvmChainIdFromBridge } from "../config/chains";
+import { getEvmChainIdFromBridge } from "../config/chains";
 import { loadAddress } from "../utils/addressBook";
 import { logger } from "../utils/logger";
 import { getDeployedContract } from "../utils/deploy";
+import { resolveNetworkContext } from "../utils/networkContext";
 
 // Bridge request input interface (from SVM burn event)
 interface BridgeRequestInput {
@@ -35,16 +36,17 @@ interface BridgeRequestInput {
 }
 
 async function main() {
-  const network = getNetworkName();
-  
-  logger.section("Bridge Mint: Solana -> EVM");
+  const { networkName, bookKey } = await resolveNetworkContext();
+
+  logger.section(`Bridge Mint: Solana -> EVM (${networkName})`);
 
   const [deployer] = await ethers.getSigners();
   logger.info(`Orchestrator (signer): ${deployer.address}`);
+  logger.info(`Address book key: ${bookKey}`);
 
   // Load contract addresses
-  const okuBridgeAddress = loadAddress(network, "OkuBridge");
-  const okuMoneyAddress = loadAddress(network, "OkuMoney");
+  const okuBridgeAddress = loadAddress(bookKey, "OkuBridge");
+  const okuMoneyAddress = loadAddress(bookKey, "OkuMoney");
 
   logger.info(`OkuBridge: ${okuBridgeAddress}`);
   logger.info(`OkuMoney: ${okuMoneyAddress}`);

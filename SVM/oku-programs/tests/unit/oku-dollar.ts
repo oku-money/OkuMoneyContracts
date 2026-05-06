@@ -315,16 +315,16 @@ describe("oku-dollar", () => {
     await mintTo(provider.connection, payer, usdcMint, reserveManagerUsdcAta, payer, OKU_MONEY_PER_USER, [], undefined, TOKEN_PROGRAM_ID);
 
     // Mint OkuMoney via PSM
-    const { mintOkusdViaProgram } = await import("../shared/setup");
-    await mintOkusdViaProgram(
+    const { mintOkuMoneyViaProgram } = await import("../shared/setup");
+    await mintOkuMoneyViaProgram(
       psmProgram as any, user1, new BN(OKU_MONEY_PER_USER), psmConfigPda,
       usdcMint, okuMoneyMint, user1UsdcAta, user1OkuMoneyAta, psmConfig.vaultUsdc
     );
-    await mintOkusdViaProgram(
+    await mintOkuMoneyViaProgram(
       psmProgram as any, user2, new BN(OKU_MONEY_PER_USER), psmConfigPda,
       usdcMint, okuMoneyMint, user2UsdcAta, user2OkuMoneyAta, psmConfig.vaultUsdc
     );
-    await mintOkusdViaProgram(
+    await mintOkuMoneyViaProgram(
       psmProgram as any, reserveManager, new BN(OKU_MONEY_PER_USER), psmConfigPda,
       usdcMint, okuMoneyMint, reserveManagerUsdcAta, reserveManagerOkuMoneyAta, psmConfig.vaultUsdc
     );

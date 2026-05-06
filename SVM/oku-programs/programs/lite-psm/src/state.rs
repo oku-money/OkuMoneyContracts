@@ -51,7 +51,9 @@ pub struct PsmConfig {
     // ===== Token References =====
     /// USDC mint address
     pub usdc_mint: Pubkey,
-    /// OkuMoney mint address (Token-2022 with Scaled UI Amount extension)
+    /// OkuMoney mint address (Token-2022 with InterestBearingConfig extension).
+    /// The extension is informational only — economic price comes from
+    /// `oku_m_price` on this account, not from the mint's interest accrual.
     pub oku_money_mint: Pubkey,
     /// PSM's USDC buffer vault (ATA)
     pub vault_usdc: Pubkey,

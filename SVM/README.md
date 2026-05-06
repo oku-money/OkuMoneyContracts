@@ -50,16 +50,17 @@ programs/
       errors.rs             # Error codes
       events.rs             # Event definitions
       roles.rs              # AuthorityRole, BridgeAuthorityRole enums
-      constants.rs          # PRECISION, BASIS_POINTS, oku_m <-> dollars math, BRIDGE_DEADLINE bounds
+      constants.rs          # PRECISION, BASIS_POINTS, BRIDGE_DEADLINE bounds
       helpers/
         yield_lock.rs       # check_yield_lock() — sandwich prevention
         oracle.rs           # check_oracle_reserves() — Pyth V2 manual parsing
         ed25519.rs          # verify_ed25519_signature() — instruction introspection
+        math.rs             # oku_m <-> dollars conversion helpers
         mod.rs
       instructions/
         init.rs             # initialize (now takes pyth_program_owner), setup_redemption_queue, setup_oku_money_escrow
         psm.rs              # mint_oku_m, redeem_oku_m, process_queue, rescue_queue_entry, buffer ops
-        psm_admin.rs        # pause, freeze/thaw, set_authority, blacklist_exempt, set_oracle, set_pyth_program_owner
+        psm_admin.rs        # pause, freeze/thaw, set_authority, initialize_blacklist_exempt, set_oracle, set_pyth_program_owner, set_max_supply, set_minter_allowance
         yield_ops.rs        # set_oku_m_price, distribute_yield
         bridge.rs           # bridge_mint, bridge_burn, refund_bridge_request
         bridge_admin.rs     # initialize_bridge (BridgeInitConfig), chain mgmt, fee mgmt, nonce admin
@@ -119,9 +120,7 @@ scripts/
   deploy/
     deploy-programs.ts     # Phase 1: build + deploy .so files, save program IDs
     deploy-init.ts         # Phase 2: create tokens + initialize PSM/Vault/Router
-    lib/                   # Worker modules used by both entry points
-    fixes/
-      fix-bridge-fee-recipient.ts  # Devnet patch (deployer == feeRecipient)
+    lib/                   # Worker modules (build, config, programs, tokens, initialize, verify)
   bridge/
     bridge-burn-to-evm.ts  # Call bridgeBurn, write bridge-request.json
     bridge-mint-from-evm.ts # Sign + submit bridgeMint from bridge-request.json
@@ -139,6 +138,8 @@ scripts/
     pdaHelpers.ts          # Canonical PDA derivation functions
     tokenHelpers.ts        # createToken2022Mint, createSPLTokenMint
     surfpool.ts            # logSurfpoolStatus (script-layer only)
+    testnetRegistry.ts     # syncSvmRegistry — mirror deployments into repo-root testnet-addresses.json
+    exportIdls.ts          # Copy generated Anchor IDLs into the off-chain SDK
     check-wallet.ts        # CLI: print SOL balance
     calculateDeploymentCost.ts  # CLI: estimate .so rent cost
 ```
@@ -180,10 +181,16 @@ Fixed-size circular buffer (10 entries max). Each entry: `{ user: Pubkey, oku_m_
 
 ### Bridge State
 
-- `BridgeConfig` PDA — 11 bridge authorities, fee config, chain whitelist `[u16; 32]`
+- `BridgeConfig` PDA — 12 bridge authorities (`bridge_admin`, `bridge_pauser`,
+  `bridge_unpauser`, `orchestrator_signer`, `fee_recipient`, `chain_manager`,
+  `fee_manager`, `nonce_admin`, `refund_initiator`, `refund_confirmer`,
+  `signer_manager`, `limits_manager`), fee config, configurable deadline,
+  source chain ID, chain whitelist `[u16; 32]`
 - `BridgeNonce` PDA per destination chain — sequential nonce tracking
 - `ProcessedRequest` PDA per request ID — replay prevention via init constraint
-- `RefundedRequest` PDA per refunded request ID
+- `RefundedRequest` PDA per refunded request ID — prevents double-refund
+- `PendingRefund` PDA per request ID — two-step refund handoff between
+  `refund_initiator` and `refund_confirmer`
 
 ## Core Operations
 
@@ -248,10 +255,13 @@ pub fn bridge_mint(message_bytes: Vec<u8>, signature: Vec<u8>, request_id: [u8; 
 // Subtractive fee: net_amount = amount - fee, fee re-minted to fee_recipient
 pub fn bridge_burn(amount: u64, recipient: [u8; 20], destination_chain_id: u16)
 
-pub fn refund_bridge_request(message_bytes: Vec<u8>, request_id: [u8; 32])
+// Two-step refund (matching EVM OkuBridge). No single key can complete a refund.
+pub fn initiate_refund(message_bytes: Vec<u8>, request_id: [u8; 32]) // refund_initiator
+pub fn confirm_refund(request_id: [u8; 32])                          // refund_confirmer
+pub fn cancel_refund(request_id: [u8; 32])                           // either party
 ```
 
-80-byte message format (cross-chain consistent): `source_chain_id(2) + dest_chain_id(2) + sender(20/32) + recipient(20/32) + amount(8) + nonce(8) + deadline(8)`. Request ID = `keccak256(message_bytes)`.
+80-byte message format (cross-chain consistent): `source_chain_id(2) + dest_chain_id(2) + sender(32) + recipient(20) + amount(8) + nonce(8) + deadline(8)` for SVM→EVM (burn), and `source_chain_id(2) + dest_chain_id(2) + sender(20) + recipient(32) + amount(8) + nonce(8) + deadline(8)` for EVM→SVM (mint). Total layout is always 80 bytes; the 32-byte slot holds the Solana pubkey and the 20-byte slot holds the EVM address. Request ID = `keccak256(message_bytes)`.
 
 ### Router (CPI Convenience)
 
@@ -295,20 +305,36 @@ Key separation: `rebaser` (rear-facing, factual — updates OkuMoney price) ≠ 
 
 ## Initialization
 
-PSM initialization is three steps (to avoid BPF stack overflow with large account contexts):
-1. `initialize(... pyth_program_owner)` — creates PsmConfig and USDC vault. The
-   Pyth program-owner pubkey accepted by the on-chain oracle check is supplied
-   here (rotatable post-deploy via `set_pyth_program_owner`).
-2. `setup_redemption_queue` — creates the RedemptionQueue PDA
-3. `setup_oku_money_escrow` — creates the OkuMoney escrow vault for queued redemptions
-4. `initialize_bridge(BridgeInitConfig { source_chain_id, fee_bps, min/max
-   amounts, deadline_secs, refund_initiator, refund_confirmer })` — creates
-   BridgeConfig. All chain-specific defaults are caller-supplied; refund roles
-   are validated to differ from each other and from `bridge_admin` (key
-   separation enforced at init).
+PSM initialization is split into three instructions to avoid BPF stack overflow
+on the large account contexts:
 
-OkuDollar vault initialization:
-1. `initialize` — creates OkuDollarConfig, usdOku mint (authority = config PDA), reserve vault
+1. `initialize(... pyth_program_owner)` — creates `PsmConfig` and the USDC
+   vault. The Pyth program-owner pubkey accepted by the on-chain oracle check
+   is supplied here (rotatable post-deploy via `set_pyth_program_owner`).
+2. `setup_redemption_queue` — creates the `RedemptionQueue` PDA.
+3. `setup_oku_money_escrow` — creates the OkuMoney escrow vault for queued
+   redemptions.
+
+The bridge subsystem is initialized separately by:
+
+- `initialize_bridge(BridgeInitConfig { source_chain_id, fee_bps, min/max
+  amounts, deadline_secs, refund_initiator, refund_confirmer })` — creates
+  `BridgeConfig`. All chain-specific defaults are caller-supplied; refund
+  roles are validated to differ from each other and from `bridge_admin` (key
+  separation enforced at init).
+
+After init, the freeze-blacklist is locked in via:
+
+- `initialize_blacklist_exempt(bridge, router)` — one-shot writer for the two
+  pubkeys that `freeze_account` must refuse to freeze (the bridge PDA and the
+  router PDA). Re-call is rejected once both fields are non-default.
+
+OkuDollar vault initialization is a single call:
+
+- `initialize` — creates `OkuDollarConfig`, the usdOku mint (authority = config
+  PDA), and the OkuMoney reserve vault.
+
+The router initializes with `oku_bridge_router::initialize(pauser, unpauser)`.
 
 ## EVM vs SVM Differences
 
@@ -320,7 +346,7 @@ OkuDollar vault initialization:
 | Signature scheme | ECDSA (EIP-712) | Ed25519 (instruction introspection) |
 | Token decimals | 18 | 6 |
 | Convenience functions | On LitePSM | On OkuBridgeRouter (CPI) |
-| Bridge refund | Two-step (initiator + confirmer) | Two-step (initiator + confirmer); legacy single-step kept for backward compat |
+| Bridge refund | Two-step (initiator + confirmer) | Two-step (initiator + confirmer) |
 | Wallet price display | Frontends read `okuMPrice()` view | Frontends read PsmConfig PDA |
 | Third-party bridge adapters | NttAdapter, future CCIP | Not implemented (native bridge only) |
 
@@ -375,8 +401,8 @@ web3.js's legacy confirmation strategy, not a defect in the program code or
 the test logic.
 
 **These 9 tests are skipped by default** (reported as `pending` in mocha output)
-to keep `anchor test` runtime under 2 minutes on any local machine. The skipped
-test names all live under the `Bridge Security Tests` describe block:
+to keep `anchor test` runtime around ~10–15 seconds on any local machine. The
+skipped test names all live under the `Bridge Security Tests` describe block:
 
 - Ed25519 Signature Verification → 4 cases (`accepts valid orchestrator signature`,
   `rejects invalid signature`, `rejects expired signature`, `rejects tampered message`)
@@ -406,25 +432,27 @@ not blocking review of the program code.
 
 ## Deployment
 
-```bash
-# 1. Create OkuMoney mint (Token-2022 with Freeze extension)
-spl-token create-token --program-id TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb \
-  --enable-freeze
+Deployment is two phases. Phase 1 builds and deploys the program `.so` files;
+Phase 2 creates the token mints (Token-2022 with `InterestBearingConfig`
+extension for OkuMoney, standard SPL for mock USDC on devnet) and initializes
+all program state. The PSM `config` PDA is set as both mint and freeze
+authority on the OkuMoney mint at creation time — no manual `spl-token
+authorize` step is needed.
 
-# 2. Build and deploy programs (Phase 1)
+```bash
+# 1. Build and deploy programs (Phase 1)
 npm run deploy:programs            # devnet
 npm run deploy:programs:mainnet    # mainnet-beta
 
-# 3. Transfer mint/freeze authorities to PSM PDA
-spl-token authorize <OKU_MONEY_MINT> mint <PSM_CONFIG_PDA>
-spl-token authorize <OKU_MONEY_MINT> freeze <PSM_CONFIG_PDA>
-
-# 4. Initialize programs (Phase 2)
+# 2. Create tokens + initialize PSM / Vault / Router (Phase 2)
 npm run deploy:init                # devnet
 npm run deploy:init:mainnet        # mainnet-beta
 
-# 5. Set program upgrade authorities to cold multisig
+# 3. Set program upgrade authorities to the cold multisig (mainnet only)
 solana program set-upgrade-authority <LITE_PSM_PROGRAM> --new-upgrade-authority <SQUADS_COLD_VAULT>
 solana program set-upgrade-authority <OKU_DOLLAR_PROGRAM> --new-upgrade-authority <SQUADS_COLD_VAULT>
 solana program set-upgrade-authority <OKU_BRIDGE_ROUTER_PROGRAM> --new-upgrade-authority <SQUADS_COLD_VAULT>
 ```
+
+On mainnet, `OkuMoney` is created with mint authority = PSM config PDA. There
+is no path for an EOA to mint OkuMoney post-deployment.

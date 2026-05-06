@@ -37,7 +37,7 @@ Two tokens with independent economics, deployed on every chain:
 | **OkuMoney (OkuM)** | Non-rebasing | Rear-facing (realized T-Bill returns) | DeFi, bridging, protocol integrations |
 | **OkuDollar (usdOku)** | Rebasing ($1 peg) | Forward-facing (policy rate set by Oku) | Retail UX, "balance grows" experience |
 
-**OkuMoney** is the solvency anchor — it only distributes yield that has already been earned. `balanceOf()` returns a static raw token count. Price appreciation is tracked separately via `okuMPrice()`, a stored value updated discretely by the orchestrator.
+**OkuMoney** is the solvency anchor — it only distributes yield that has already been earned. `balanceOf()` returns a static raw token count. Price appreciation is tracked separately via `okuMMultiplier()` (EVM) / `okum_multiplier()` (SVM), a stored value updated discretely by the orchestrator.
 
 **OkuDollar** is a policy lever — Oku sets the yield rate independently. `balanceOf()` grows every second on EVM (continuous `_rpow` streaming) or updates discretely on SVM. OkuDollar holds OkuMoney as reserves. The spread between the two rates determines collateralization and protocol revenue.
 
@@ -53,11 +53,11 @@ usdOku rate < OkuM rate  →  Vault overcollateralized  → Oku extracts revenue
 ┌─────────────────────────────────────────────────────────────────┐
 │                        On-Chain Contracts                        │
 │                                                                  │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐        │
-│  │  OkuMoney    │◄──┤  OkuDollar   │   │   LitePSM    │        │
-│  │  (Non-Rebase)│   │  (Rebasing)  │   │  (USDC ↔ OkuM│        │
-│  │  okuMPrice() │   │  Vault       │   │  price-aware) │        │
-│  └──────┬───────┘   └──────────────┘   └──────────────┘        │
+│  ┌────────────────┐ ┌──────────────┐   ┌──────────────┐        │
+│  │  OkuMoney      │◄┤  OkuDollar   │   │   LitePSM    │        │
+│  │  (Non-Rebase)  │ │  (Rebasing)  │   │  (USDC ↔ OkuM│        │
+│  │ okuMMultiplier │ │  Vault       │   │  price-aware) │        │
+│  └──────┬─────────┘ └──────────────┘   └──────────────┘        │
 │         │                                                        │
 │  ┌──────▼──────────────────────────────────────────┐            │
 │  │               OkuBridge + Router                 │            │
@@ -68,7 +68,7 @@ usdOku rate < OkuM rate  →  Vault overcollateralized  → Oku extracts revenue
 
 | Component | Function |
 |-----------|----------|
-| **OkuMoney** | Non-rebasing base token — static balance, price appreciates via stored `okuMPrice` |
+| **OkuMoney** | Non-rebasing base token — static balance, price appreciates via stored `okuMMultiplier` |
 | **OkuDollar** | Rebasing $1-pegged stablecoin — balance grows, backed by OkuMoney reserves |
 | **LitePSM** | Peg Stability Module — price-aware USDC ↔ OkuM, convenience usdOku functions |
 | **RedemptionQueue** | FIFO queue when PSM buffer is insufficient |
@@ -77,10 +77,10 @@ usdOku rate < OkuM rate  →  Vault overcollateralized  → Oku extracts revenue
 
 ## Yield Distribution & Sandwich Prevention
 
-OkuMoney price is updated discretely by the orchestrator via `distributeYield()` or `setOkuMPrice()`. To prevent sandwich attacks around these discrete price updates, a single-block lock is enforced:
+OkuMoney's multiplier is updated discretely by the orchestrator via `distributeYield()` or `setOkuMMultiplier()`. To prevent sandwich attacks around these discrete updates, a single-block lock is enforced:
 
 - Both write functions set `lastYieldDistributionBlock` (EVM) / `last_yield_distribution_slot` (SVM)
-- PSM and vault operations revert if executed in the same block/slot as a price update
+- PSM and vault operations revert if executed in the same block/slot as a multiplier update
 - The lock auto-releases in subsequent blocks/slots
 - No backend changes needed — protection is automatic
 
@@ -89,8 +89,8 @@ OkuMoney price is updated discretely by the orchestrator via `distributeYield()`
 Price-aware USDC ↔ OkuMoney swaps:
 
 ```
-mintOkuM:      okuMAmount = usdcValue × PRECISION / okuMPrice()
-redeemOkuM:    usdcAmount = okuMAmount × okuMPrice() / PRECISION
+mintOkuM:      okuMAmount = usdcValue × PRECISION / okuMMultiplier()
+redeemOkuM:    usdcAmount = okuMAmount × okuMMultiplier() / PRECISION
 ```
 
 Convenience functions route through the vault for single-transaction usdOku ↔ USDC:
@@ -129,7 +129,7 @@ One role per action. No role performs more than one function.
 | Aspect | EVM | SVM |
 |--------|-----|-----|
 | Language | Solidity 0.8.28 | Rust (Anchor 1.0.0) |
-| OkuMoney price | Stored `uint256`, 18 decimals | Stored `u64`, 9-decimal precision (6-decimal token) |
+| OkuMoney multiplier | Stored `uint256`, 18 decimals (`okuMMultiplier`) | Stored `u64`, 9-decimal precision (`okum_multiplier`, 6-decimal token) |
 | OkuDollar multiplier | Continuous `_rpow` streaming | Discrete orchestrator-driven updates |
 | Yield lock | `block.number` comparison | `Clock::slot` comparison |
 | Signature scheme | ECDSA (EIP-712) | Ed25519 (instruction introspection) |

@@ -44,6 +44,106 @@ npx hardhat test                              # Fork + gas-regression tests
 npx hardhat test test/hardhat/gas/            # Gas-regression only
 ```
 
+## Deployment & Address Book
+
+The unified deploy script (`scripts/deploy/index.ts`) provisions every contract
+for a given chain in one run, captures addresses to a working address book, and
+on live networks also mirrors them into the canonical repo-root registry.
+
+### Where deployed addresses live
+
+| File | Role | Touched by |
+|------|------|------------|
+| [`scripts/config/addresses.json`](scripts/config/addresses.json) | Working per-network address book consumed by deploy / test / bridge scripts. Keyed `<chain>` for live deploys; `fork:<chain>` for local-fork runs (so fork tests never overwrite live entries). | Every script run. |
+| [`../testnet-addresses.json`](../testnet-addresses.json) | Canonical, auto-synced multi-chain registry consumed by the SDK / backend / orchestrator. Includes `chainId`, `bridgeChainId`, `rpcUrl`, `explorer`, `contracts{}`, `deployer`. | Live deploys only — fork runs never write here. |
+| `.openzeppelin/<network>.json` | OZ upgrades plugin's per-chain proxy/impl manifest. Required for `upgradeProxy` to work. | OZ upgrades plugin. |
+
+### Configured networks
+
+Defined in [`hardhat.config.ts`](hardhat.config.ts) and [`scripts/config/chains.ts`](scripts/config/chains.ts):
+
+| Network key | Chain ID | Bridge ID (u16) | Status |
+|---|---|---|---|
+| `sepolia` | 11155111 | 111 | Eth Sepolia testnet |
+| `opSepolia` | 11155420 | 420 | OP Sepolia testnet |
+| `mainnet` | 1 | 1 | Ethereum mainnet |
+| `optimism` | 10 | 10 | Optimism mainnet |
+| `arbitrum` | 42161 | 421 | Arbitrum One |
+| `base` | 8453 | 845 | Base mainnet |
+| `bsc` | 56 | 56 | BNB Smart Chain mainnet |
+
+The `bridgeChainId` column lists the protocol-internal `u16` ID embedded in
+bridge messages (some EVM chain IDs exceed `u16` and need mapping). Solana
+counterpart is auto-selected per-chain by `getSolanaCounterpartChainId()`:
+testnet EVM → Solana Devnet (103), mainnet EVM → Solana Mainnet (101).
+
+### Local-fork pre-flight (recommended before any live deploy)
+
+Forks against real chain state to validate the deploy will succeed (sufficient
+ETH/BNB, RPC behaves as expected) without spending real funds:
+
+```bash
+# Terminal 1: start a forked node. FORK_NETWORK selects which chain to fork.
+FORK_NETWORK=base hh node            # =sepolia, =bsc, =arbitrum, =mainnet, ...
+
+# Terminal 2: deploy + run integration test against the running fork.
+hh run scripts/deploy/index.ts --network localhost     # auto-detects target chain from fork's chainId
+hh run scripts/interactions/test-flow.ts --network localhost
+```
+
+The deploy script auto-detects the target chain from the running node's
+`eth_chainId`, so you don't need to keep `FORK_NETWORK` and `NETWORK=` in sync
+across terminals. Fork-deployed addresses land under `addresses.json["fork:<chain>"]`
+so they never collide with live `<chain>` entries.
+
+### Live deploy
+
+```bash
+# .env: PRIVATE_KEY, ALCHEMY_API_KEY, ETHERSCAN_API_KEY (one Etherscan V2 key
+# covers Ethereum, Optimism, Arbitrum, Base, BSC verification).
+hh run scripts/deploy/index.ts --network base
+hh run scripts/deploy/index.ts --network bsc
+hh run scripts/deploy/index.ts --network sepolia
+```
+
+The script is **idempotent and resumable**:
+
+- `tryAttach` reuses any contract already in `addresses.json["<chain>"]` whose
+  address still has bytecode on chain — partial-deploy failures (RPC blip,
+  mid-run timeout, etc.) can just be re-run; nothing redeploys unnecessarily.
+- Transient RPC errors (`nonce too low`, `replacement transaction underpriced`,
+  BSC's `BAD_DATA: invalid address (value="")` pending-tx quirk, network
+  timeouts) are caught and retried with exponential backoff (2s → 32s, up to
+  5 attempts) inside `withRetry`.
+- A separate provider shim (`scripts/utils/rpcCompat.ts`) preventatively
+  normalises BSC's pending-tx response shape before ethers' strict formatter
+  ever sees it.
+
+### npm scripts
+
+| Script | Effect |
+|---|---|
+| `npm run compile` | `hardhat compile` (regenerates typechain) |
+| `npm run typechain` | Typechain bindings only |
+| `npm run test:forge` | Foundry unit + invariant suite |
+| `npm run test` | Hardhat fork + gas suite |
+| `npm run test:all` | Both |
+| `npm run node` | Start `hardhat node` (default forks Sepolia; override via `FORK_NETWORK`) |
+| `npm run deploy:sepolia` | Live deploy to Eth Sepolia |
+| `npm run deploy:testnet` | Live deploy to OP Sepolia |
+| `npm run test:flow` / `:live` | `test-flow.ts` against a running localhost fork (or live Sepolia) |
+| `npm run bridge:state` / `:live` | OkuBridge read-only state dump |
+| `npm run bridge:burn` / `:live` | Burn-to-Solana flow |
+| `npm run bridge:mint` | Mint-from-Solana flow |
+
+For chains without a pre-baked npm alias (`base`, `bsc`, `arbitrum`, `optimism`,
+`mainnet`):
+
+```bash
+hh run scripts/deploy/index.ts --network <chain>
+NETWORK=<chain> hh run scripts/interactions/test-flow.ts --network <chain>
+```
+
 ## Contract Structure
 
 ```
@@ -565,7 +665,7 @@ netMinted <= netBurned + netRefunded                            // Value conserv
 ## Testing
 
 ```bash
-forge test                                         # All unit + invariant tests (~610 total)
+forge test                                         # All unit + invariant tests
 forge test --match-path "test/invariants/*"        # Invariant suite (256 runs × 500 depth by default)
 forge test --match-contract OkuMoneyTest -vv       # OkuMoney unit tests
 forge test --match-contract VaultInvariants        # OkuDollar backing invariants
@@ -577,7 +677,7 @@ npx hardhat test                                   # Fork tests (mainnet/Sepolia
 npx hardhat test test/hardhat/gas/                 # Gas-regression only
 ```
 
-The Foundry suite is the authoritative functional coverage (~610 tests). The Hardhat suite (33 tests) exists for two specific purposes only:
+The Foundry suite is the authoritative functional coverage (~580 tests across 19 test files). The Hardhat suite (~37 tests across 6 test files) exists for two specific purposes only:
 1. **Fork tests** (`test/hardhat/fork/`, `test/hardhat/happyPath/`): exercise the protocol against real mainnet/Sepolia state that Foundry can't easily reach in CI.
 2. **Gas regression** (`test/hardhat/gas/`): assert that real-deployment gas costs (under the `@openzeppelin/hardhat-upgrades` plugin and full proxy machinery) stay within published targets.
 

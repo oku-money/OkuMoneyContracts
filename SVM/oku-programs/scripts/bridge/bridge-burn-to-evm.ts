@@ -36,6 +36,7 @@ import {
 } from '../config/constants';
 import { logSurfpoolStatus } from '../utils/surfpool';
 import { derivePsmConfigPDA, deriveBridgeConfigPDA, deriveBridgeNoncePDA } from '../utils/pdaHelpers';
+import { fetchBridgeBurnEvent, serializeBurnMessage, computeRequestId } from '../lib/bridge';
 
 // Destination chain ID - can be overridden via EVM_DEST_CHAIN_ID env var
 // Default to SEPOLIA_CHAIN_ID (111) since that's where EVM contracts are deployed
@@ -122,12 +123,14 @@ async function main() {
     
     if (ataInfo.amount < BigInt(BRIDGE_AMOUNT.toString())) {
       logger.warning(`Insufficient balance. Need ${BRIDGE_AMOUNT.toNumber() / 1_000_000} OkuM`);
-      logger.info('Please mint OkuMoney via PSM first: tsx scripts/simulate/mint-okum.ts');
+      logger.info('Mint OkuMoney via PSM first by running the smoke tests:');
+      logger.info('  npm run test:onchain -- --step=mint');
       process.exit(1);
     }
   } catch (e) {
     logger.error('OkuMoney ATA does not exist or has no balance');
-    logger.info('Please mint OkuMoney via PSM first: tsx scripts/simulate/mint-okum.ts');
+    logger.info('Mint OkuMoney via PSM first by running the smoke tests:');
+    logger.info('  npm run test:onchain -- --step=mint');
     process.exit(1);
   }
 
@@ -199,105 +202,67 @@ async function main() {
 
   logger.success(`Transaction: ${tx}`);
 
-  logger.nextStep('Parsing BridgeBurnEvent');
+  logger.nextStep('Parsing BridgeBurnEvent from transaction logs');
 
-  // Wait for confirmation and get transaction details
-  const connection = provider.connection;
-  await connection.confirmTransaction(tx, 'confirmed');
-  
-  const txDetails = await connection.getTransaction(tx, {
-    commitment: 'confirmed',
-    maxSupportedTransactionVersion: 0,
+  // Pull the canonical values from the on-chain emitted event. Recomputing
+  // them locally (Date.now() for deadline, nextNonce-1 for nonce) was racy
+  // on devnet and produced request_ids the chain never emitted.
+  const burnEvent = await fetchBridgeBurnEvent(
+    provider.connection,
+    tx,
+    program.idl as any
+  );
+
+  // Sanity-check the locally-computed request_id matches the one the program
+  // emitted (i.e. our message-encoding helper agrees with the on-chain
+  // serializer byte-for-byte).
+  const messageBuffer = serializeBurnMessage({
+    sourceChainId: burnEvent.sourceChainId,
+    destChainId: burnEvent.destinationChain,
+    sender: wallet.publicKey,
+    recipient: recipientBytes,
+    amount: burnEvent.amount,
+    nonce: burnEvent.nonce,
+    deadline: burnEvent.deadline,
   });
-
-  if (!txDetails || !txDetails.meta) {
-    throw new Error('Failed to get transaction details');
+  const computedRequestId = computeRequestId(messageBuffer);
+  const onChainRequestId = Buffer.from(burnEvent.requestId);
+  if (!computedRequestId.equals(onChainRequestId)) {
+    throw new Error(
+      `request_id mismatch — local helper disagrees with on-chain BridgeBurnEvent. ` +
+        `local=0x${computedRequestId.toString('hex')} chain=0x${onChainRequestId.toString('hex')}`
+    );
   }
 
-  // Parse logs for BridgeBurnEvent
-  // The event data is emitted via anchor events
-  // For now, we'll construct the request from known values
-  // In production, you'd parse the actual event data from logs
-
-  // Read updated nonce
-  const bridgeNonceAccount = await program.account.bridgeNonce.fetch(bridgeNonce);
-  const nonce = bridgeNonceAccount.nextNonce.toNumber() - 1; // The nonce used in this tx
-
-  // Calculate fee
-  const feeBps = bridgeConfigAccount.bridgeFeeBps;
-  const feeAmount = Math.floor((BRIDGE_AMOUNT.toNumber() * feeBps) / 10000);
-  const netAmount = BRIDGE_AMOUNT.toNumber() - feeAmount;
-
-  // Calculate deadline
-  // Note: On Surfpool, blockTime may be simulated and not match real-world time
-  // For testing purposes, use actual unix time
-  const now = Math.floor(Date.now() / 1000);
-  const deadline = now + bridgeConfigAccount.bridgeDeadlineSecs.toNumber();
-
-  // Calculate request_id
-  // Message format: source_chain(2) + dest_chain(2) + sender(32) + recipient(20) + amount(8) + nonce(8) + deadline(8)
-  const messageBuffer = Buffer.alloc(80);
-  let offset = 0;
-  
-  // source_chain_id (u16 LE)
-  messageBuffer.writeUInt16LE(SOLANA_CHAIN_ID, offset);
-  offset += 2;
-  
-  // dest_chain_id (u16 LE)
-  messageBuffer.writeUInt16LE(DEST_CHAIN_ID, offset);
-  offset += 2;
-  
-  // sender (32 bytes)
-  wallet.publicKey.toBuffer().copy(messageBuffer, offset);
-  offset += 32;
-  
-  // recipient (20 bytes)
-  recipientBytes.copy(messageBuffer, offset);
-  offset += 20;
-  
-  // amount (u64 LE)
-  messageBuffer.writeBigUInt64LE(BigInt(netAmount), offset);
-  offset += 8;
-  
-  // nonce (u64 LE)
-  messageBuffer.writeBigUInt64LE(BigInt(nonce), offset);
-  offset += 8;
-  
-  // deadline (i64 LE)
-  messageBuffer.writeBigInt64LE(BigInt(deadline), offset);
-
-  // Compute keccak256 hash
-  const keccak = await import('@noble/hashes/sha3');
-  const requestId = '0x' + Buffer.from(keccak.keccak_256(messageBuffer)).toString('hex');
-
-  // Convert sender to bytes32 hex (left-padded)
+  const requestId = '0x' + onChainRequestId.toString('hex');
   const senderHex = '0x' + wallet.publicKey.toBuffer().toString('hex');
-  
-  // Convert recipient to bytes32 hex (left-padded with zeros)
+  // EVM-side ABI expects bytes32 left-padded with 12 zero bytes.
   const recipientBytes32 = '0x' + '00'.repeat(12) + cleanAddress;
+  const netAmount = Number(burnEvent.amount);
+  const feeAmount = Number(burnEvent.feeAmount);
 
   logger.success('BridgeBurn Event:');
   logger.info(`  Request ID: ${requestId}`);
   logger.info(`  Sender: ${wallet.publicKey.toBase58()}`);
   logger.info(`  Recipient: ${EVM_RECIPIENT}`);
-  logger.info(`  Source Chain: ${SOLANA_CHAIN_ID}`);
-  logger.info(`  Dest Chain: ${DEST_CHAIN_ID}`);
+  logger.info(`  Source Chain: ${burnEvent.sourceChainId}`);
+  logger.info(`  Dest Chain: ${burnEvent.destinationChain}`);
   logger.info(`  Amount: ${netAmount / 1_000_000} OkuM (post-fee)`);
   logger.info(`  Fee: ${feeAmount / 1_000_000} OkuM`);
-  logger.info(`  Nonce: ${nonce}`);
-  logger.info(`  Deadline: ${deadline}`);
+  logger.info(`  Nonce: ${burnEvent.nonce}`);
+  logger.info(`  Deadline: ${burnEvent.deadline}`);
 
   logger.nextStep('Writing bridge request file');
 
   const bridgeRequest: BridgeRequestOutput = {
     requestId: requestId,
-    sourceChainId: SOLANA_CHAIN_ID,
-    destChainId: DEST_CHAIN_ID,
+    sourceChainId: burnEvent.sourceChainId,
+    destChainId: burnEvent.destinationChain,
     sender: senderHex,
     recipient: recipientBytes32,
     amount: netAmount.toString(),
-    nonce: nonce,
-    deadline: deadline,
+    nonce: Number(burnEvent.nonce),
+    deadline: Number(burnEvent.deadline),
     timestamp: Math.floor(Date.now() / 1000),
     txSignature: tx,
   };
@@ -307,10 +272,19 @@ async function main() {
   fs.writeFileSync(outputPath, JSON.stringify(bridgeRequest, null, 2));
   logger.success(`Bridge request written to: ${outputPath}`);
 
-  // Also copy to EVM scripts/bridge/ directory for the mint script
-  const evmOutputPath = path.join(__dirname, '..', '..', '..', '..', 'EVM', 'scripts', 'bridge', 'bridge-request.json');
-  fs.writeFileSync(evmOutputPath, JSON.stringify(bridgeRequest, null, 2));
-  logger.success(`Bridge request also copied to: ${evmOutputPath}`);
+  // Also copy to EVM/scripts/bridge/ for the corresponding mint script.
+  // Resolve relative to the repo root (../../../../ from this file) and verify
+  // the destination directory exists before writing — silently writing into a
+  // missing directory or into the wrong tree (if SVM is symlinked elsewhere)
+  // is a recurring footgun.
+  const evmOutputDir = path.resolve(__dirname, '..', '..', '..', '..', 'EVM', 'scripts', 'bridge');
+  if (!fs.existsSync(evmOutputDir)) {
+    logger.warning(`EVM bridge scripts dir not found at ${evmOutputDir}; skipping copy`);
+  } else {
+    const evmOutputPath = path.join(evmOutputDir, 'bridge-request.json');
+    fs.writeFileSync(evmOutputPath, JSON.stringify(bridgeRequest, null, 2));
+    logger.success(`Bridge request also copied to: ${evmOutputPath}`);
+  }
 
   logger.header('Bridge Burn Complete');
   logger.log('');

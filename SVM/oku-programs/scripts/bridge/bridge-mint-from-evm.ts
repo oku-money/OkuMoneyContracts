@@ -15,7 +15,7 @@
  */
 
 import * as anchor from '@anchor-lang/core';
-import { Program, BN } from '@anchor-lang/core';
+import { Program } from '@anchor-lang/core';
 import {
   PublicKey,
   Keypair,
@@ -23,18 +23,16 @@ import {
   Transaction,
   Ed25519Program,
   SYSVAR_INSTRUCTIONS_PUBKEY,
-  TransactionInstruction,
 } from '@solana/web3.js';
 import {
   TOKEN_2022_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountInstruction,
   getAccount,
 } from '@solana/spl-token';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
-import { keccak_256 } from '@noble/hashes/sha3';
 import * as nacl from 'tweetnacl';
 import { LitePsm } from '../../target/types/lite_psm';
 import { createProvider, detectNetwork } from '../utils/network';
@@ -43,6 +41,7 @@ import { logger } from '../utils/logger';
 import { SOLANA_CHAIN_ID, eip155ToInternalChainId } from '../config/constants';
 import { logSurfpoolStatus } from '../utils/surfpool';
 import { derivePsmConfigPDA, deriveBridgeConfigPDA, deriveProcessedRequestPDA } from '../utils/pdaHelpers';
+import { serializeMintMessage, computeRequestId } from '../lib/bridge';
 
 // Bridge request from EVM (post-burn event data)
 interface EVMBridgeRequest {
@@ -89,13 +88,35 @@ async function main() {
   const [psmConfig] = derivePsmConfigPDA(programId);
   const [bridgeConfig] = deriveBridgeConfigPDA(programId);
 
-  // Verify orchestrator is the authorized signer
+  // Resolve the orchestrator keypair. In dev/devnet the wallet typically IS
+  // the orchestrator; in mainnet it must be a separate KMS-backed key. We
+  // honour ORCHESTRATOR_KEYPAIR_PATH if set; otherwise fall back to the
+  // wallet keypair, but ALWAYS verify against the on-chain orchestrator
+  // pubkey before continuing — signing with the wrong key just wastes SOL on
+  // a guaranteed-to-fail tx.
   const bridgeConfigAccount = await program.account.bridgeConfig.fetch(bridgeConfig);
-  if (!bridgeConfigAccount.orchestratorSigner.equals(wallet.publicKey)) {
-    logger.warning(`Warning: Wallet is not the orchestrator signer`);
-    logger.warning(`Orchestrator: ${bridgeConfigAccount.orchestratorSigner.toBase58()}`);
-    logger.warning(`Wallet: ${wallet.publicKey.toBase58()}`);
-    logger.warning(`The transaction will fail unless you are the orchestrator`);
+  const orchestratorKeypairPath = process.env.ORCHESTRATOR_KEYPAIR_PATH;
+  let orchestratorKeypair: Keypair;
+  if (orchestratorKeypairPath) {
+    const expanded = orchestratorKeypairPath.startsWith('~')
+      ? path.join(os.homedir(), orchestratorKeypairPath.slice(1))
+      : orchestratorKeypairPath;
+    if (!fs.existsSync(expanded)) {
+      throw new Error(`ORCHESTRATOR_KEYPAIR_PATH does not exist: ${expanded}`);
+    }
+    const secret = JSON.parse(fs.readFileSync(expanded, 'utf-8'));
+    orchestratorKeypair = Keypair.fromSecretKey(Uint8Array.from(secret));
+    logger.info(`Orchestrator keypair: ${orchestratorKeypair.publicKey.toBase58()} (from ${expanded})`);
+  } else {
+    orchestratorKeypair = wallet.payer;
+    logger.info(`Orchestrator keypair: wallet (set ORCHESTRATOR_KEYPAIR_PATH to override)`);
+  }
+  if (!bridgeConfigAccount.orchestratorSigner.equals(orchestratorKeypair.publicKey)) {
+    throw new Error(
+      `Orchestrator-signer mismatch — supplied key ${orchestratorKeypair.publicKey.toBase58()} ` +
+        `does not match on-chain orchestratorSigner ${bridgeConfigAccount.orchestratorSigner.toBase58()}. ` +
+        `The Ed25519 instruction would be rejected; aborting.`
+    );
   }
 
   // Load bridge request from scripts/bridge/ directory
@@ -125,21 +146,31 @@ async function main() {
   logger.info(`Nonce: ${evmRequest.nonce}`);
   logger.info(`Deadline: ${evmRequest.deadline}`);
 
-  // Check deadline
-  const now = Math.floor(Date.now() / 1000);
-  if (now > evmRequest.deadline) {
-    throw new Error(`Bridge request has expired. Deadline: ${evmRequest.deadline}, Now: ${now}`);
-  }
-  logger.info(`Time until deadline: ${evmRequest.deadline - now} seconds`);
+  // Note: the on-chain handler checks the deadline against `Clock::sysvar`
+  // which can drift from wall-clock time on devnet/Surfpool. We deliberately
+  // omit a wall-clock pre-flight here — let the program decide. If the
+  // request has truly expired, `bridge_mint` returns `SignatureExpired` and
+  // the only cost is RPC bandwidth.
 
-  // Parse recipient Solana pubkey from bytes32
-  // EVM packs EVM address in last 20 bytes, but for SVM->EVM, we have full pubkey in first 32 bytes
-  // For EVM->SVM, recipient is Solana pubkey stored as bytes32
+  // Parse recipient Solana pubkey from bytes32.
+  //
+  // For EVM-burn → SVM-mint, the EVM side encodes the recipient as a
+  // bytes32 holding the FULL 32-byte Solana pubkey. (Contrast with
+  // SVM-burn → EVM-mint, where the recipient is a 20-byte EVM address
+  // left-padded to bytes32.) We require exactly 32 bytes here and refuse to
+  // truncate or pad — anything else means the EVM side serialized the wrong
+  // half of the address.
   const recipientHex = evmRequest.recipient.startsWith('0x')
     ? evmRequest.recipient.slice(2)
     : evmRequest.recipient;
   const recipientBytes = Buffer.from(recipientHex, 'hex');
-  const recipientPubkey = new PublicKey(recipientBytes.slice(0, 32));
+  if (recipientBytes.length !== 32) {
+    throw new Error(
+      `recipient must be a 32-byte Solana pubkey (got ${recipientBytes.length} bytes). ` +
+        `For EVM->SVM bridges the EVM relayer must pack the full 32-byte pubkey, not a 20-byte EVM address.`
+    );
+  }
+  const recipientPubkey = new PublicKey(recipientBytes);
   logger.info(`Recipient Solana address: ${recipientPubkey.toBase58()}`);
 
   // Parse sender EVM address
@@ -182,66 +213,55 @@ async function main() {
   const sourceChainInternal = eip155ToInternalChainId(evmRequest.sourceChainId);
   logger.info(`Source chain: ${evmRequest.sourceChainId} (EIP-155) -> ${sourceChainInternal} (internal)`);
   
-  // destChainId should already be internal (103 for Solana Devnet) but validate it fits in u16
+  // destChainId should already be internal (103 for Solana Devnet); validate
+  // against the on-chain config so we fail fast instead of paying for an
+  // Ed25519-precompile-passes-but-bridge_mint-rejects round trip.
   const destChainInternal = evmRequest.destChainId;
   if (destChainInternal > 65535) {
     throw new Error(`Destination chain ID ${destChainInternal} exceeds u16 max`);
   }
+  const expectedDest = bridgeConfigAccount.sourceChainId;
+  if (destChainInternal !== expectedDest) {
+    throw new Error(
+      `destChainId mismatch — request says ${destChainInternal} but this bridge's ` +
+        `source_chain_id is ${expectedDest}. The on-chain handler would reject ` +
+        `this with WrongDestinationChain.`
+    );
+  }
 
-  // Construct 80-byte message (matching SVM BridgeRequest format)
-  // Format: source_chain(2) + dest_chain(2) + sender(20) + recipient(32) + amount(8) + nonce(8) + deadline(8) = 80 bytes
-  const messageBuffer = Buffer.alloc(80);
-  let offset = 0;
-
-  // source_chain_id (u16 LE) - use internal ID
-  messageBuffer.writeUInt16LE(sourceChainInternal, offset);
-  offset += 2;
-
-  // destination_chain_id (u16 LE)
-  messageBuffer.writeUInt16LE(destChainInternal, offset);
-  offset += 2;
-
-  // sender (20 bytes - EVM address)
-  senderBytes.copy(messageBuffer, offset);
-  offset += 20;
-
-  // recipient (32 bytes - Solana pubkey)
-  recipientPubkey.toBuffer().copy(messageBuffer, offset);
-  offset += 32;
-
-  // amount (u64 LE - 6 decimals)
-  messageBuffer.writeBigUInt64LE(svmAmount, offset);
-  offset += 8;
-
-  // nonce (u64 LE)
-  messageBuffer.writeBigUInt64LE(BigInt(evmRequest.nonce), offset);
-  offset += 8;
-
-  // deadline (i64 LE)
-  messageBuffer.writeBigInt64LE(BigInt(evmRequest.deadline), offset);
+  // Construct 80-byte message via the canonical encoder. This is the only
+  // place TS code should ever build a bridge message — see scripts/lib/bridge/.
+  const messageBuffer = serializeMintMessage({
+    sourceChainId: sourceChainInternal,
+    destChainId: destChainInternal,
+    sender: senderBytes,
+    recipient: recipientPubkey,
+    amount: svmAmount,
+    nonce: evmRequest.nonce,
+    deadline: evmRequest.deadline,
+  });
 
   // Compute request_id = keccak256(message)
-  const requestId = keccak_256(messageBuffer);
-  logger.info(`Computed request_id: 0x${Buffer.from(requestId).toString('hex')}`);
+  const requestId = computeRequestId(messageBuffer);
+  logger.info(`Computed request_id: 0x${requestId.toString('hex')}`);
 
   logger.nextStep('Signing message with Ed25519');
 
-  // Sign the message using the wallet's keypair
-  // Note: In production, this would be the orchestrator's dedicated keypair
-  const walletKeypair = wallet.payer;
-  const signature = nacl.sign.detached(messageBuffer, walletKeypair.secretKey);
+  const signature = nacl.sign.detached(messageBuffer, orchestratorKeypair.secretKey);
   logger.success(`Signature generated (${signature.length} bytes)`);
 
   logger.nextStep('Building transaction');
 
   // ProcessedRequest PDA — replay prevention marker
-  const [processedRequest] = deriveProcessedRequestPDA(programId, Buffer.from(requestId));
+  const [processedRequest] = deriveProcessedRequestPDA(programId, requestId);
   logger.info(`ProcessedRequest PDA: ${processedRequest.toBase58()}`);
 
-  // Build Ed25519 signature verification instruction
-  // Uses the full 64-byte secret key (32-byte seed + 32-byte public key)
+  // Build Ed25519 signature verification instruction.
+  // `createInstructionWithPrivateKey` expects the full 64-byte expanded
+  // secret key (32-byte seed + 32-byte public key) — exactly what
+  // `Keypair.secretKey` returns.
   const ed25519Instruction = Ed25519Program.createInstructionWithPrivateKey({
-    privateKey: walletKeypair.secretKey,
+    privateKey: orchestratorKeypair.secretKey,
     message: messageBuffer,
   });
 

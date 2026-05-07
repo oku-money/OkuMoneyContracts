@@ -96,31 +96,25 @@ async function main() {
     logger.info(`Orchestrator: ${bridgeConfigAccount.orchestratorSigner.toBase58()}`);
     logger.info(`Fee Recipient: ${bridgeConfigAccount.feeRecipient.toBase58()}`);
 
-    // Supported chains
+    // Supported chains.
+    // `supportedChains` is a `[u16; 32]` *array of chain IDs* — not a sparse
+    // boolean map. Iterate up to `supportedChainsCount` and treat the value
+    // at each slot as the chain ID itself.
     logger.log('');
     logger.info('Supported Chains:');
-    const supportedChains = bridgeConfigAccount.supportedChains;
-    for (let i = 0; i < supportedChains.length; i++) {
-      if (supportedChains[i]) {
-        let chainName = `Unknown (${i})`;
-        switch (i) {
-          case ETHEREUM_CHAIN_ID: chainName = 'Ethereum Mainnet'; break;
-          case OPTIMISM_CHAIN_ID: chainName = 'Optimism'; break;
-          case ARBITRUM_CHAIN_ID: chainName = 'Arbitrum One'; break;
-          case BASE_CHAIN_ID: chainName = 'Base'; break;
-          case OP_SEPOLIA_CHAIN_ID: chainName = 'OP Sepolia'; break;
-        }
-        // Check for lower chain IDs
-        if (i < 1000) {
-          switch (i) {
-            case 1: chainName = 'Ethereum Mainnet'; break;
-            case 10: chainName = 'Optimism'; break;
-            case 56: chainName = 'BSC'; break;
-            case 137: chainName = 'Polygon'; break;
-          }
-        }
-        logger.info(`  Chain ${i}: ${chainName} - SUPPORTED`);
+    const supportedChains = bridgeConfigAccount.supportedChains as number[];
+    const supportedChainsCount = bridgeConfigAccount.supportedChainsCount as number;
+    for (let i = 0; i < supportedChainsCount; i++) {
+      const chainId = supportedChains[i];
+      let chainName = `Unknown chain ${chainId}`;
+      switch (chainId) {
+        case ETHEREUM_CHAIN_ID: chainName = 'Ethereum Mainnet'; break;
+        case OPTIMISM_CHAIN_ID: chainName = 'Optimism'; break;
+        case ARBITRUM_CHAIN_ID: chainName = 'Arbitrum One'; break;
+        case BASE_CHAIN_ID: chainName = 'Base'; break;
+        case OP_SEPOLIA_CHAIN_ID: chainName = 'OP Sepolia'; break;
       }
+      logger.info(`  [slot ${i}] chain ${chainId}: ${chainName}`);
     }
   } catch (e) {
     logger.error(`Bridge Config not found. Run initialize scripts.`);

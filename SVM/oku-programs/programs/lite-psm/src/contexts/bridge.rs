@@ -252,8 +252,15 @@ pub struct ConfirmRefund<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Cancel a pending refund
-/// Can be called by either refund_initiator or refund_confirmer
+/// Cancel a pending refund.
+///
+/// The canceller must be either:
+/// - the *original* `pending_refund.initiator` (NOT just any current
+///   `refund_initiator` role-holder — guards against a rotated initiator key
+///   nuking refunds it didn't propose), OR
+/// - the `bridge_admin` (escape hatch for emergencies).
+///
+/// Mirrors EVM `OkuBridge.cancelRefund`'s tighter access pattern.
 #[derive(Accounts)]
 #[instruction(request_id: [u8; 32])]
 pub struct CancelRefund<'info> {
@@ -263,19 +270,22 @@ pub struct CancelRefund<'info> {
     #[account(
         seeds = [BridgeConfig::SEED],
         bump = bridge_config.bump,
-        constraint = (
-            canceller.key() == bridge_config.refund_initiator ||
-            canceller.key() == bridge_config.refund_confirmer
-        ) @ LitePsmError::Unauthorized
     )]
     pub bridge_config: Box<Account<'info, BridgeConfig>>,
 
-    /// PendingRefund PDA - will be closed
+    /// PendingRefund PDA — will be closed.
+    /// Authorization is checked here against the pending_refund's recorded
+    /// initiator to prevent a rotated key from cancelling someone else's
+    /// pending refund.
     #[account(
         mut,
         close = canceller,
         seeds = [PendingRefund::SEED, &request_id],
-        bump = pending_refund.bump
+        bump = pending_refund.bump,
+        constraint = (
+            canceller.key() == pending_refund.initiator
+            || canceller.key() == bridge_config.bridge_admin
+        ) @ LitePsmError::Unauthorized
     )]
     pub pending_refund: Box<Account<'info, PendingRefund>>,
 

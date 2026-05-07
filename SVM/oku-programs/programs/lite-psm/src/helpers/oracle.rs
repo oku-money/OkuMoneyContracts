@@ -18,15 +18,54 @@ use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 
-/// Check oracle reserves before minting
-/// Returns Ok if reserves are sufficient, error otherwise
-/// Manually parses Pyth price account to avoid SDK dependency conflicts
+// ---- Pyth V2 PriceAccount byte offsets ----
+// Layout source:
+//   https://github.com/pyth-network/pyth-sdk-solana/blob/main/pyth-sdk-solana/src/state.rs
+// Field offsets (relative to account-data start, post-discriminator since
+// Pyth accounts have no Anchor discriminator):
+//
+//   0..4    magic                u32
+//   4..8    ver                  u32
+//   8..12   atype                u32
+//   12..16  size                 u32
+//   16..20  ptype                u32
+//   20..24  expo                 i32   <-- price scaling exponent
+//   ...
+//   208..216 agg.price            i64
+//   216..224 agg.conf             u64
+//   224..228 agg.status           u32   <-- 1 = Trading
+//   228..232 agg.corp_act         u32
+//   232..240 agg.publish_time     i64
+
+/// Offset of `expo: i32` in the Pyth V2 price account.
+const PYTH_EXPO_OFFSET: usize = 20;
+/// Offset of `agg.price: i64` (the integer price, scaled by 10^expo).
+const PYTH_PRICE_OFFSET: usize = 208;
+/// Offset of `agg.status: u32` (1 = Trading, anything else = stale/halted).
+const PYTH_STATUS_OFFSET: usize = 224;
+/// Offset of `agg.publish_time: i64` (unix-second timestamp of the latest agg).
+const PYTH_TIMESTAMP_OFFSET: usize = 232;
+/// Minimum byte length we read from the price account.
+/// timestamp ends at offset 240, so we need at least that many bytes.
+const PYTH_MIN_DATA_LEN: usize = 240;
+
+/// `agg.status == Trading` value per the Pyth V2 PriceStatus enum.
+const PYTH_STATUS_TRADING: u32 = 1;
+
+/// Check oracle reserves before minting.
+/// Returns `Ok` if reserves are sufficient, error otherwise. Manually parses
+/// the Pyth V2 price account to avoid SDK dependency conflicts.
 ///
-/// IMPORTANT: Oracle must report total reserves in raw token base units
-/// matching OkuMoney's supply denomination. No Pyth exponent adjustment
-/// is applied — the raw i64 price value IS the reserves figure.
-/// Example: If OkuMoney uses 6 decimals and reserves are $10M,
-/// oracle should report 10_000_000_000_000 (10M * 10^6).
+/// IMPORTANT: the oracle feed must:
+///   1. Be owned by `PsmConfig::pyth_program_owner` (set at init, rotatable).
+///   2. Have `agg.status == Trading` (1) — halted feeds are rejected.
+///   3. Have `expo == 0` — the price is interpreted directly as a raw token
+///      count of reserves with no scaling. A custom feed publishing reserves
+///      in OkuMoney base units (decimals = 6) is the expected configuration.
+///   4. Be fresh per the configured `staleness_threshold`.
+///
+/// Example: If OkuMoney uses 6 decimals and reserves are $10M, the oracle
+/// should report `10_000_000_000_000` (10M * 10^6) with `expo = 0`.
 ///
 /// SECURITY: Validates that the oracle account is owned by the configured
 /// Pyth program (PsmConfig::pyth_program_owner) to prevent attackers from
@@ -67,27 +106,42 @@ pub fn check_oracle_reserves<'info>(
     let clock = Clock::get()?;
     let data = price_account.try_borrow_data()?;
 
-    // Minimum data length check — code reads up to offset 240 (timestamp at 232 + 8 bytes).
-    // Layout taken from
-    //   https://github.com/pyth-network/pyth-sdk-solana/blob/main/pyth-sdk-solana/src/state.rs
-    require!(data.len() >= 240, LitePsmError::InvalidOracleResponse);
+    // Minimum data length: timestamp ends at offset 240.
+    require!(data.len() >= PYTH_MIN_DATA_LEN, LitePsmError::InvalidOracleResponse);
 
-    // Read price at offset 208 (Pyth V2 price account agg.price offset)
-    // and timestamp at offset 232.
-    let price_offset = 208usize;
-    let timestamp_offset = 232usize;
-
+    // Read expo, price, status, timestamp.
+    let expo = i32::from_le_bytes(
+        data[PYTH_EXPO_OFFSET..PYTH_EXPO_OFFSET + 4]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
+    );
     let price = i64::from_le_bytes(
-        data[price_offset..price_offset + 8]
+        data[PYTH_PRICE_OFFSET..PYTH_PRICE_OFFSET + 8]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
+    );
+    let status = u32::from_le_bytes(
+        data[PYTH_STATUS_OFFSET..PYTH_STATUS_OFFSET + 4]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
+    );
+    let publish_time = i64::from_le_bytes(
+        data[PYTH_TIMESTAMP_OFFSET..PYTH_TIMESTAMP_OFFSET + 8]
             .try_into()
             .map_err(|_| LitePsmError::InvalidOracleResponse)?,
     );
 
-    let publish_time = i64::from_le_bytes(
-        data[timestamp_offset..timestamp_offset + 8]
-            .try_into()
-            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
-    );
+    // Reject non-trading feeds (halted, unknown). Without this, a paused
+    // Pyth feed would still pass age and price checks since publish_time
+    // continues to advance even when the feed is not actively trading.
+    require!(status == PYTH_STATUS_TRADING, LitePsmError::InvalidOracleResponse);
+
+    // Reject feeds that don't report price as raw token base units. The
+    // helper interprets `price` directly as a token-count of reserves; any
+    // non-zero exponent would silently scale the comparison incorrectly.
+    // Operators must publish a custom feed with `expo == 0` (or extend this
+    // parser to apply the scaling).
+    require!(expo == 0, LitePsmError::InvalidOracleResponse);
 
     // Check staleness
     let current_time = clock.unix_timestamp;

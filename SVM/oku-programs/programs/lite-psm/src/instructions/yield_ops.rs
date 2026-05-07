@@ -5,7 +5,7 @@
 //! continuous on-read accrual to avoid recomputing on every PSM mint/redeem.
 //! Taken from https://github.com/makerdao/sdai/blob/master/src/SavingsDai.sol
 
-use crate::constants::PRECISION;
+use crate::constants::{MAX_OKU_M_PRICE, PRECISION};
 use crate::contexts::{DistributeYield, SetOkuMPrice};
 use crate::errors::LitePsmError;
 use crate::events::*;
@@ -27,6 +27,13 @@ pub fn set_oku_m_price(ctx: Context<SetOkuMPrice>, new_multiplier: u64) -> Resul
     require!(
         new_multiplier >= current_multiplier,
         LitePsmError::PriceCannotDecrease
+    );
+
+    // Sanity ceiling — bounds the math even if the rebaser key is compromised.
+    // See `MAX_OKU_M_PRICE` in `constants.rs`.
+    require!(
+        new_multiplier <= MAX_OKU_M_PRICE,
+        LitePsmError::PriceAboveMax
     );
 
     // Set yield distribution slot FIRST (before price update for atomicity)
@@ -85,6 +92,12 @@ pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Res
     let new_multiplier = current_multiplier
         .checked_add(yield_per_token)
         .ok_or(LitePsmError::Overflow)?;
+
+    // Sanity ceiling — see `set_oku_m_price` for rationale.
+    require!(
+        new_multiplier <= MAX_OKU_M_PRICE,
+        LitePsmError::PriceAboveMax
+    );
 
     // Set yield distribution slot FIRST
     let clock = Clock::get()?;

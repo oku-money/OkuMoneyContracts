@@ -13,6 +13,7 @@
 //! the `ProcessedRequest` PDA cannot be created twice for the same request_id.
 //! Taken from https://www.anchor-lang.com/docs/account-constraints
 
+use crate::constants::{BRIDGE_MESSAGE_LEN, ED25519_SIGNATURE_LEN};
 use crate::contexts::{
     BridgeBurn, BridgeMint, CancelRefund, ConfirmRefund, InitiateRefund,
 };
@@ -36,8 +37,14 @@ pub fn bridge_mint(
     request_id: [u8; 32],   // keccak256(message_bytes) — used for PDA derivation
 ) -> Result<()> {
     // Validate lengths
-    require!(message_bytes.len() == 80, LitePsmError::InvalidMessageLength);
-    require!(signature.len() == 64, LitePsmError::InvalidSignature);
+    require!(
+        message_bytes.len() == BRIDGE_MESSAGE_LEN,
+        LitePsmError::InvalidMessageLength
+    );
+    require!(
+        signature.len() == ED25519_SIGNATURE_LEN,
+        LitePsmError::InvalidSignature
+    );
 
     // Read state
     let bridge_config = &ctx.accounts.bridge_config;
@@ -274,8 +281,16 @@ pub fn bridge_burn(
 
     let source_chain_id = ctx.accounts.bridge_config.source_chain_id;
 
+    // Build the SVM-burn → EVM-mint message (80 bytes total).
+    // Layout: source_chain_id(2) + destination_chain_id(2) + sender(32, Solana pubkey)
+    //       + recipient(20, EVM address) + amount(8) + nonce(8) + deadline(8).
+    // NOTE: this layout intentionally differs from
+    // `state::BridgeRequest::to_message_bytes` (used for the EVM-burn → SVM-mint
+    // direction, which has a 20-byte sender and 32-byte recipient). Both layouts
+    // are 80 bytes, but the sender/recipient widths swap by direction. The
+    // canonical TS encoder lives in `scripts/lib/bridge/message.ts`.
     let sender_bytes = ctx.accounts.user.key().to_bytes();
-    let mut message = Vec::with_capacity(2 + 2 + 32 + 20 + 8 + 8 + 8);
+    let mut message = Vec::with_capacity(BRIDGE_MESSAGE_LEN);
     message.extend_from_slice(&source_chain_id.to_le_bytes());
     message.extend_from_slice(&destination_chain_id.to_le_bytes());
     message.extend_from_slice(&sender_bytes);
@@ -283,6 +298,7 @@ pub fn bridge_burn(
     message.extend_from_slice(&net_amount.to_le_bytes());
     message.extend_from_slice(&nonce.to_le_bytes());
     message.extend_from_slice(&deadline.to_le_bytes());
+    debug_assert_eq!(message.len(), BRIDGE_MESSAGE_LEN);
 
     let request_id = keccak_hash(&message).to_bytes();
 
@@ -325,7 +341,10 @@ pub fn initiate_refund(
     request_id: [u8; 32],
 ) -> Result<()> {
     // Validate message length
-    require!(message_bytes.len() == 80, LitePsmError::InvalidMessageLength);
+    require!(
+        message_bytes.len() == BRIDGE_MESSAGE_LEN,
+        LitePsmError::InvalidMessageLength
+    );
 
     // Verify request_id matches keccak256(message_bytes)
     let computed_request_id = keccak_hash(&message_bytes).to_bytes();
@@ -390,6 +409,17 @@ pub fn confirm_refund(ctx: Context<ConfirmRefund>, request_id: [u8; 32]) -> Resu
     let pending = &ctx.accounts.pending_refund;
     let recipient = pending.recipient;
     let amount = pending.amount;
+
+    // Two-step refund safety: confirmer must be a different physical key
+    // from the initiator that created this `PendingRefund`. The role-level
+    // separation is enforced at `initialize_bridge` and `set_bridge_authority`,
+    // but a careless rotation that leaves both roles holding the same key
+    // would silently degrade the two-step flow into a single-step one.
+    // EVM analogue: `OkuBridge.confirmRefund`'s `InitiatorCannotConfirm`.
+    require!(
+        ctx.accounts.refund_confirmer.key() != pending.initiator,
+        LitePsmError::InitiatorCannotConfirm
+    );
 
     // Check supply cap and minter allowance
     let current_supply = ctx.accounts.oku_money_mint.supply;

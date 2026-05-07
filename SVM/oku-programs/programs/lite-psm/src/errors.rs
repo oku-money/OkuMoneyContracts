@@ -135,6 +135,12 @@ pub enum LitePsmError {
     #[msg("Yield amount too small to affect price (truncates to zero)")]
     YieldTooSmall,
 
+    /// Proposed `oku_m_price` exceeds the configured ceiling.
+    /// Defense-in-depth: even with the rebaser key compromised, the price
+    /// cannot be pushed past `MAX_OKU_M_PRICE`.
+    #[msg("Proposed oku_m_price exceeds MAX_OKU_M_PRICE ceiling")]
+    PriceAboveMax,
+
     // ===== Blacklist Errors =====
     /// Account is blacklist exempt and cannot be frozen
     #[msg("Account is blacklist exempt and cannot be frozen")]
@@ -255,6 +261,13 @@ pub enum LitePsmError {
     /// requirement enforced at init time.
     #[msg("Refund initiator/confirmer must be distinct keys (and != bridge_admin)")]
     RefundRolesNotSeparated,
+
+    /// `confirm_refund` rejects calls signed by the same physical key that
+    /// initiated the refund. The role-level separation is configurable, but
+    /// the per-call check is unconditional.
+    /// Mirrors EVM `OkuBridge.confirmRefund`'s `InitiatorCannotConfirm` revert.
+    #[msg("Confirmer must be a different key than the initiator that proposed this refund")]
+    InitiatorCannotConfirm,
 
     // ===== Initialization Errors =====
     /// Pyth program owner pubkey supplied to `initialize` was the default (zero) pubkey.

@@ -12,6 +12,7 @@
 //! Taken from https://github.com/anza-xyz/agave/blob/master/sdk/src/ed25519_instruction.rs
 //! Taken from https://docs.solana.com/developing/runtime-facilities/programs#ed25519-program
 
+use crate::constants::ED25519_INSTRUCTION_SCAN_LIMIT;
 use crate::errors::LitePsmError;
 use anchor_lang::prelude::*;
 use solana_instructions_sysvar::load_instruction_at_checked;
@@ -38,13 +39,13 @@ pub fn verify_ed25519_signature<'info>(
     let expected_data =
         build_ed25519_instruction_data(expected_pubkey, expected_message, signature);
 
-    // Search through instructions to find the Ed25519 program instruction
-    // We check indices 0-15 which covers all reasonable transaction layouts
-    // (compute budget + priority fee + ed25519 + our instruction + versioned lookups + extras)
-    // Extended from 0-7 to handle edge cases with many preceding instructions
+    // Search through instructions to find the Ed25519 program instruction.
+    // We check indices 0..ED25519_INSTRUCTION_SCAN_LIMIT which covers all
+    // reasonable transaction layouts (compute budget + priority fee +
+    // ed25519 + our instruction + versioned lookups + extras).
     let mut found_valid_signature = false;
 
-    for ix_index in 0..16i16 {
+    for ix_index in 0..(ED25519_INSTRUCTION_SCAN_LIMIT as i16) {
         // Try to load instruction at this index
         // Use get_instruction_relative with offset from current instruction
         let ix_result = load_instruction_at_checked(ix_index as usize, instructions_sysvar);

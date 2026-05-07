@@ -375,6 +375,19 @@ pub fn set_bridge_authority(
         }
     };
 
+    // Enforce the cross-role invariant: refund_initiator, refund_confirmer,
+    // and bridge_admin must remain three distinct keys after any rotation.
+    // `initialize_bridge` already validates this at init time; this re-check
+    // is for `set_bridge_authority`. Without it a careless rotation of
+    // RefundInitiator → current RefundConfirmer would silently degrade the
+    // two-step refund flow into a single-step one.
+    require!(
+        config.refund_initiator != config.refund_confirmer
+            && config.refund_initiator != config.bridge_admin
+            && config.refund_confirmer != config.bridge_admin,
+        LitePsmError::RefundRolesNotSeparated
+    );
+
     emit!(BridgeAuthorityUpdatedEvent {
         role,
         old_authority,

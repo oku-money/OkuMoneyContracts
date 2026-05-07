@@ -9,6 +9,7 @@
 //! be frozen) mirrors Circle FiatToken's blacklister/exempted-address pattern.
 //! Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v1/Blacklistable.sol
 
+use crate::constants::{ORACLE_MAX_STALENESS_SECS, ORACLE_MIN_STALENESS_SECS};
 use crate::contexts::{
     AllowanceManager, CapManager, FreezeAccount, InitializeBlacklistExempt, OracleManager, Pause,
     SetAuthority, ThawAccount, Unpause,
@@ -76,12 +77,26 @@ pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Resu
     Ok(())
 }
 
-/// Update oracle config (oracle_manager only)
+/// Update oracle config (oracle_manager only).
+///
+/// `oracle == Pubkey::default()` is allowed and disables oracle checks
+/// entirely (matches the existing `oracle != default` branch in `mint_oku_m`).
+/// `staleness_threshold` must lie in `[ORACLE_MIN_STALENESS_SECS,
+/// ORACLE_MAX_STALENESS_SECS]` whenever an oracle is configured. Mirrors EVM
+/// `LitePSM.setOracle` bounds.
 pub fn set_oracle(
     ctx: Context<OracleManager>,
     oracle: Pubkey,
     staleness_threshold: i64,
 ) -> Result<()> {
+    if oracle != Pubkey::default() {
+        require!(
+            staleness_threshold >= ORACLE_MIN_STALENESS_SECS
+                && staleness_threshold <= ORACLE_MAX_STALENESS_SECS,
+            LitePsmError::InvalidStaleness
+        );
+    }
+
     let config = &mut ctx.accounts.config;
     config.oracle = oracle;
     config.staleness_threshold = staleness_threshold;
@@ -187,13 +202,26 @@ pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
     Ok(())
 }
 
-/// Initialize blacklist exemption for bridge and router addresses
-/// One-time admin call - cannot be changed after set
+/// Initialize blacklist exemption for bridge and router addresses.
+/// One-time admin call — cannot be changed after set.
+///
+/// Both pubkeys must be non-default. Allowing `Pubkey::default()` would lock
+/// the exemption slot into uselessness (no real account can ever match) yet
+/// the one-shot guard would still fire on a re-call.
 pub fn initialize_blacklist_exempt(
     ctx: Context<InitializeBlacklistExempt>,
     bridge: Pubkey,
     router: Pubkey,
 ) -> Result<()> {
+    require!(
+        bridge != Pubkey::default(),
+        LitePsmError::InvalidAuthority
+    );
+    require!(
+        router != Pubkey::default(),
+        LitePsmError::InvalidAuthority
+    );
+
     let config = &mut ctx.accounts.config;
 
     // Ensure not already initialized

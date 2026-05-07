@@ -415,10 +415,14 @@ pub fn update_usd_multiplier(
     Ok(())
 }
 
-/// Deposit OkuMoney reserves (reserve manager)
-/// Allows reserve manager to add OkuMoney to the vault without minting usdOku.
-/// This increases the collateralization ratio.
+/// Deposit OkuMoney reserves (reserve manager).
+///
+/// Allows reserve manager to add OkuMoney to the vault without minting usdOku;
+/// this increases the collateralization ratio. Mirrors EVM
+/// `OkuDollar.depositReserves`, which is gated by `whenNotPaused` — the SVM
+/// previously omitted the pause check, deviating from EVM. Now restored.
 pub fn deposit_reserves(ctx: Context<DepositReserves>, amount: u64) -> Result<()> {
+    require!(!ctx.accounts.config.is_paused, OkuDollarError::VaultPaused);
     require!(amount > 0, OkuDollarError::ZeroAmount);
 
     let decimals = ctx.accounts.oku_money_mint.decimals;
@@ -465,10 +469,14 @@ pub fn deposit_reserves(ctx: Context<DepositReserves>, amount: u64) -> Result<()
     Ok(())
 }
 
-/// Withdraw OkuMoney reserves (reserve manager)
-/// Allows reserve manager to remove excess OkuMoney from the vault.
-/// Must maintain minimum collateralization ratio after withdrawal.
+/// Withdraw OkuMoney reserves (reserve manager).
+///
+/// Allows reserve manager to remove excess OkuMoney from the vault. Must
+/// maintain minimum collateralization ratio after withdrawal. Mirrors EVM
+/// `OkuDollar.withdrawSurplus`, which is gated by `whenNotPaused` — the SVM
+/// previously omitted the pause check, deviating from EVM. Now restored.
 pub fn withdraw_reserves(ctx: Context<WithdrawReserves>, amount: u64) -> Result<()> {
+    require!(!ctx.accounts.config.is_paused, OkuDollarError::VaultPaused);
     require!(amount > 0, OkuDollarError::ZeroAmount);
 
     let bump = ctx.accounts.config.bump;
@@ -523,9 +531,13 @@ pub fn withdraw_reserves(ctx: Context<WithdrawReserves>, amount: u64) -> Result<
     // Calculate dollar value
     let dollar_value = oku_money_to_usd(amount, oku_m_price)?;
 
-    // Calculate collateralization ratio after withdrawal
+    // Reload reserve vault balance and recompute the collateral ratio from
+    // ground truth. Defends against a future Token-2022 transfer-hook moving
+    // a fee out-of-band, which would make the pre-CPI snapshot stale.
+    ctx.accounts.reserve_vault.reload()?;
+    let actual_post_balance = ctx.accounts.reserve_vault.amount;
     let collateralization_ratio = calculate_collateral_ratio(
-        new_reserve_balance,
+        actual_post_balance,
         total_supply,
         usd_multiplier,
         oku_m_price,

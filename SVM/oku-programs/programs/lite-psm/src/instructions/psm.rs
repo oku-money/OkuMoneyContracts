@@ -32,7 +32,6 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     let is_paused = ctx.accounts.config.is_paused;
     let max_supply = ctx.accounts.config.max_supply;
     let minter_allowance = ctx.accounts.config.minter_allowance;
-    let bump = ctx.accounts.config.bump;
     let current_supply = ctx.accounts.oku_money_mint.supply;
     let oracle = ctx.accounts.config.oracle;
 
@@ -44,6 +43,11 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
 
     // Calculate OkuMoney amount (price-aware): treat usdc_amount as a dollar value.
     let oku_m_amount = dollars_to_oku_m(usdc_amount, oku_m_price)?;
+
+    // Reject zero-output mints — at high `oku_m_price`, the division can
+    // truncate to zero, which would silently donate USDC to the buffer with
+    // no OkuMoney minted in return. Matches EVM `LitePSM` `AmountTooSmall`.
+    require!(oku_m_amount > 0, LitePsmError::AmountTooSmall);
 
     // Check max supply
     require!(
@@ -73,6 +77,18 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
         )?;
     }
 
+    // Effects-checks-interactions: decrement minter allowance BEFORE the mint
+    // CPI so a future Token-2022 transfer-hook on OkuMoney cannot re-enter and
+    // double-spend the same allowance window. Matches the same pattern used
+    // throughout the bridge handlers.
+    let bump = {
+        let config = &mut ctx.accounts.config;
+        config.minter_allowance = minter_allowance
+            .checked_sub(oku_m_amount)
+            .ok_or(LitePsmError::Overflow)?;
+        config.bump
+    };
+
     // Transfer USDC from user to vault (standard SPL)
     anchor_spl::token::transfer(
         CpiContext::new(
@@ -90,7 +106,7 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     let seeds = &[PsmConfig::SEED, &[bump]];
     let signer = &[&seeds[..]];
 
-    // Capture user key before mutable borrow
+    // Capture user key before borrows
     let user_key = ctx.accounts.user.key();
 
     token_interface::mint_to(
@@ -105,12 +121,6 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
         ),
         oku_m_amount,
     )?;
-
-    // Decrement minter allowance (one-way: burns do NOT restore)
-    let config = &mut ctx.accounts.config;
-    config.minter_allowance = minter_allowance
-        .checked_sub(oku_m_amount)
-        .ok_or(LitePsmError::Overflow)?;
 
     // Calculate dollar value for event
     let dollar_value = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
@@ -150,7 +160,19 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
     let oku_m_price = ctx.accounts.config.oku_m_price;
 
     // Calculate USDC amount (price-aware): treat dollar value as USDC.
+    //
+    // NOTE: SVM uses 6-decimal USDC and 6-decimal OkuMoney. Unlike EVM (which
+    // truncates the 18-decimal `okuMAmount` down to USDC's 6-decimal grid via
+    // `usdcDecimalMultiplier`), the SVM math is already 1:1 in decimals. The
+    // only zero-output path is `oku_m_amount * oku_m_price < PRECISION`, which
+    // we explicitly reject below. See `EVM_VS_SVM.md` for the full divergence
+    // table.
     let usdc_amount = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
+
+    // Reject zero-output redeems — at low `oku_m_amount` and unit price the
+    // division can truncate to zero, which would burn OkuMoney for no USDC.
+    // Mirrors the EVM `OutputBelowMinimum` revert.
+    require!(usdc_amount > 0, LitePsmError::OutputBelowMinimum);
 
     // Check if buffer is sufficient for instant redemption
     if vault_usdc_balance >= usdc_amount {
@@ -271,6 +293,7 @@ pub fn process_queue<'info>(
     let oku_m_price = ctx.accounts.config.oku_m_price;
 
     let mut processed = 0u32;
+    let mut payouts = 0u32; // Counts only non-skipped entries that consumed a remaining_account
     let vault_usdc_balance = ctx.accounts.vault_usdc.amount;
     let mut remaining_usdc_balance = vault_usdc_balance;
 
@@ -282,10 +305,30 @@ pub fn process_queue<'info>(
     let token_2022_program_key = ctx.accounts.token_2022_program.key();
     let oku_money_mint_info = ctx.accounts.oku_money_mint.to_account_info();
 
+    // Hoist `Clock::get()` out of the loop — slot/timestamp are constant across
+    // the batch and the syscall is non-trivial.
+    let clock = Clock::get()?;
+
     while processed < max_entries && !queue.is_empty() {
         let head_idx = (queue.head % RedemptionQueue::MAX_ENTRIES as u32) as usize;
 
         let entry = &queue.entries[head_idx];
+
+        // Skip entries that were cleared by `rescue_queue_entry`. Without this,
+        // a non-head hole produced by rescue would pin the loop on a zero-amount
+        // entry whose `user == Pubkey::default()`, and the recipient-owner check
+        // below would then revert the entire batch (DoS).
+        //
+        // Mirrors EVM `RedemptionQueue.processQueue` which `continue`s past
+        // `entry.user == address(0)` and emits `RedemptionSkipped`.
+        if entry.user == Pubkey::default() {
+            emit!(RedemptionSkippedEvent {
+                queue_index: queue.head,
+            });
+            queue.head = queue.head.wrapping_add(1);
+            processed += 1;
+            continue;
+        }
 
         // Calculate USDC payout using current price.
         let usdc_amount = oku_m_to_dollars(entry.oku_m_amount, oku_m_price)?;
@@ -296,7 +339,9 @@ pub fn process_queue<'info>(
         }
 
         // Get recipient's USDC ATA from remaining_accounts
-        let recipient_account_idx = processed as usize;
+        // remaining_accounts is indexed by *payouts* (skipped entries do not
+        // consume a remaining_account slot).
+        let recipient_account_idx = payouts as usize;
         require!(
             recipient_account_idx < ctx.remaining_accounts.len(),
             LitePsmError::InsufficientAccounts
@@ -304,14 +349,19 @@ pub fn process_queue<'info>(
 
         let recipient_usdc_ata = &ctx.remaining_accounts[recipient_account_idx];
 
-        // Verify the account belongs to the queued user
+        // Verify the account belongs to the queued user AND holds the configured USDC mint
         let account_data = recipient_usdc_ata.try_borrow_data()?;
         let parsed =
             SplTokenAccount::unpack(&account_data).map_err(|_| LitePsmError::RecipientMismatch)?;
         let token_account_owner = parsed.owner;
+        let token_account_mint = parsed.mint;
 
         require!(
             token_account_owner == entry.user,
+            LitePsmError::RecipientMismatch
+        );
+        require!(
+            token_account_mint == ctx.accounts.config.usdc_mint,
             LitePsmError::RecipientMismatch
         );
 
@@ -356,6 +406,7 @@ pub fn process_queue<'info>(
 
         queue.head = queue.head.wrapping_add(1);
         processed += 1;
+        payouts += 1;
 
         // Update running counter
         // Use checked_sub to catch any accounting bugs early rather than silently clamping
@@ -368,7 +419,6 @@ pub fn process_queue<'info>(
         let dollar_value = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
 
         // Calculate wait time
-        let clock = Clock::get()?;
         let wait_time = clock.unix_timestamp.saturating_sub(entry_timestamp);
 
         emit!(RedemptionProcessedEvent {

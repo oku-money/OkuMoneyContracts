@@ -260,9 +260,21 @@ impl BridgeConfig {
         self.supported_chains[..self.supported_chains_count as usize].contains(&chain_id)
     }
 
-    /// Add a supported chain (returns error if full or already exists)
+    /// Add a supported chain (returns error if full or already exists).
+    ///
+    /// Rejects:
+    /// - `chain_id == 0` (reserved sentinel)
+    /// - `chain_id == self.source_chain_id` (would allow self-bridging — mirrors
+    ///   EVM `OkuBridge.bridgeBurn`'s `if (destChainId == block.chainid)` guard,
+    ///   moved to admin-time so the runtime path doesn't need to re-check it)
+    /// - duplicates
+    /// - capacity overflow
     pub fn add_chain(&mut self, chain_id: u16) -> Result<()> {
-        require!(chain_id != 0, LitePsmError::UnsupportedChain);
+        require!(chain_id != 0, LitePsmError::InvalidChainId);
+        require!(
+            chain_id != self.source_chain_id,
+            LitePsmError::InvalidChainId
+        );
         require!(
             !self.is_chain_supported(chain_id),
             LitePsmError::ChainAlreadySupported

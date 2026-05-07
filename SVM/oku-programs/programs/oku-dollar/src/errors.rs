@@ -38,6 +38,11 @@ pub enum OkuDollarError {
     #[msg("Invalid collateral ratio (below minimum floor)")]
     InvalidCollateralRatio,
 
+    /// Collateral ratio cannot exceed 100% (PRECISION).
+    /// EVM: RatioExceedsMax()
+    #[msg("Collateral ratio exceeds maximum (100%)")]
+    RatioExceedsMax,
+
     #[msg("USD multiplier can only increase")]
     MultiplierCannotDecrease,
 
@@ -49,4 +54,28 @@ pub enum OkuDollarError {
 
     #[msg("Output below minimum (slippage exceeded)")]
     SlippageExceeded,
+
+    // ===== Dead-shares / Inflation Defense Errors =====
+    /// First deposit must include the optional `dead_shares_ata` account.
+    #[msg("Dead-shares ATA missing (required on first deposit)")]
+    MissingDeadSharesAccount,
+
+    /// Dead-shares ATA does not belong to the usdOku mint.
+    #[msg("Dead-shares ATA mint does not match usdOku")]
+    InvalidDeadSharesMint,
+
+    /// Dead-shares ATA owner is not the System Program.
+    #[msg("Dead-shares ATA owner must be the System Program")]
+    InvalidDeadSharesOwner,
+
+    /// Dead-shares ATA must be the canonical associated address derived from
+    /// (usdOku mint, System Program owner). Prevents off-canonical placements
+    /// that would split the dead supply across multiple accounts.
+    #[msg("Dead-shares ATA must be the canonical associated address")]
+    InvalidDeadSharesAddress,
+
+    // ===== Initialization Errors =====
+    /// Authority pubkey supplied to `initialize` was the default (zero) pubkey.
+    #[msg("Authority pubkey cannot be the zero pubkey")]
+    ZeroAuthority,
 }

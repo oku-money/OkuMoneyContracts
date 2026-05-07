@@ -3,6 +3,10 @@
 use crate::contexts::{BridgeOkuM, BridgeUsdOku, Initialize, MintUsdOku, RedeemUsdOku};
 use crate::errors::RouterError;
 use crate::events::*;
+use crate::validation::{
+    verify_psm_and_bridge_not_paused, verify_psm_and_vault_not_paused, verify_psm_config,
+    verify_vault_config,
+};
 use anchor_lang::prelude::*;
 
 /// Initialize the bridge router config
@@ -51,6 +55,18 @@ pub fn bridge_usd_oku(
     require!(recipient != [0u8; 20], RouterError::InvalidRecipient);
     // Validate destination chain is non-zero
     require!(destination_chain != 0, RouterError::InvalidDestinationChain);
+
+    // Defense-in-depth cross-program PDA + pause checks. Fails fast with a
+    // clean RouterError instead of surfacing a deep CPI error.
+    let (_psm_cfg, _bridge_cfg) = verify_psm_and_bridge_not_paused(
+        &ctx.accounts.psm_config.to_account_info(),
+        &ctx.accounts.bridge_config.to_account_info(),
+    )?;
+    let _vault_cfg = verify_vault_config(
+        &ctx.accounts.vault_config.to_account_info(),
+        &ctx.accounts.psm_config.key(),
+    )?;
+    require!(!_vault_cfg.is_paused, RouterError::VaultPaused);
 
     // Extract AccountInfo from boxed accounts BEFORE any CPI.
     // After a CPI, the BPF runtime may invalidate heap pointers inside
@@ -145,6 +161,12 @@ pub fn bridge_oku_m(
     // Validate destination chain is non-zero
     require!(destination_chain != 0, RouterError::InvalidDestinationChain);
 
+    // Defense-in-depth cross-program PDA + pause checks.
+    verify_psm_and_bridge_not_paused(
+        &ctx.accounts.psm_config.to_account_info(),
+        &ctx.accounts.bridge_config.to_account_info(),
+    )?;
+
     let bridge_burn_cpi_ctx = CpiContext::new(
         ctx.accounts.psm_program.key(),
         lite_psm::cpi::accounts::BridgeBurn {
@@ -183,6 +205,12 @@ pub fn mint_usd_oku(ctx: Context<MintUsdOku>, usdc_amount: u64, min_shares_out: 
     let is_paused = ctx.accounts.config.is_paused;
     require!(!is_paused, RouterError::Paused);
     require!(usdc_amount > 0, RouterError::ZeroAmount);
+
+    // Defense-in-depth cross-program PDA + pause checks.
+    verify_psm_and_vault_not_paused(
+        &ctx.accounts.psm_config.to_account_info(),
+        &ctx.accounts.vault_config.to_account_info(),
+    )?;
 
     // Extract AccountInfo from boxed accounts BEFORE any CPI
     let oku_money_mint_info = ctx.accounts.oku_money_mint.to_account_info();
@@ -286,6 +314,15 @@ pub fn redeem_usd_oku(
     let is_paused = ctx.accounts.config.is_paused;
     require!(!is_paused, RouterError::Paused);
     require!(usd_oku_shares > 0, RouterError::ZeroAmount);
+
+    // Defense-in-depth cross-program PDA + pause checks. Note: PSM allows
+    // `redeem_oku_m` while the bridge is paused but blocks it while the PSM
+    // itself is paused, so we check PSM only here.
+    verify_psm_config(&ctx.accounts.psm_config.to_account_info())?;
+    verify_vault_config(
+        &ctx.accounts.vault_config.to_account_info(),
+        &ctx.accounts.psm_config.key(),
+    )?;
 
     // Extract AccountInfo from boxed accounts BEFORE any CPI
     let oku_money_mint_info = ctx.accounts.oku_money_mint.to_account_info();

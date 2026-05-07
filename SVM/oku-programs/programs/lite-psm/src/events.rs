@@ -11,6 +11,7 @@
 //! | `RedeemEvent` | `RedeemNote` |
 //! | `RedemptionQueuedEvent` | `RedemptionQueued` |
 //! | `RedemptionProcessedEvent` | `RedemptionProcessed` |
+//! | `RedemptionSkippedEvent` | `RedemptionSkipped` |
 //! | `RedemptionRescuedEvent` | `RedemptionRescued` |
 //! | `BufferDepositEvent` | `BufferDeposited` |
 //! | `BufferWithdrawEvent` | `BufferWithdrawn` |
@@ -102,6 +103,14 @@ pub struct RedemptionProcessedEvent {
     pub usdc_amount: u64,
     /// Time spent in queue (seconds)
     pub wait_time: i64,
+}
+
+/// Emitted when `process_queue` skips a previously-rescued entry.
+/// EVM equivalent: `RedemptionSkipped(uint256 indexed index)`.
+#[event]
+pub struct RedemptionSkippedEvent {
+    /// Absolute queue index that was skipped (already cleared by rescue).
+    pub queue_index: u32,
 }
 
 /// Emitted when a stuck queue entry is rescued.

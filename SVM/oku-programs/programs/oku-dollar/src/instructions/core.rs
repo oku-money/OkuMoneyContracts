@@ -32,6 +32,17 @@ pub fn initialize(
     reserve_manager: Pubkey,
     min_collateral_ratio: u64,
 ) -> Result<()> {
+    // Reject zero-pubkey authorities — they would silently lock the role out
+    // of any future use without offering a recovery path. Mirrors the
+    // analogous guards in `lite-psm::initialize_bridge`.
+    require!(pauser != Pubkey::default(), OkuDollarError::ZeroAuthority);
+    require!(unpauser != Pubkey::default(), OkuDollarError::ZeroAuthority);
+    require!(usd_rebaser != Pubkey::default(), OkuDollarError::ZeroAuthority);
+    require!(
+        reserve_manager != Pubkey::default(),
+        OkuDollarError::ZeroAuthority
+    );
+
     let config = &mut ctx.accounts.config;
     config.bump = ctx.bumps.config;
 
@@ -52,10 +63,16 @@ pub fn initialize(
     config.usd_multiplier = PRECISION;
     config.usd_last_update_time = Clock::get()?.unix_timestamp;
 
-    // Set minimum collateral ratio (must be >= floor)
+    // Set minimum collateral ratio (must lie in [floor, PRECISION]).
+    // The upper bound matches the runtime `set_min_collateral_ratio` check;
+    // mirrors EVM `OkuDollar.RatioExceedsMax` guard.
     require!(
         min_collateral_ratio >= MIN_COLLATERAL_RATIO_FLOOR,
         OkuDollarError::InvalidCollateralRatio
+    );
+    require!(
+        min_collateral_ratio <= PRECISION,
+        OkuDollarError::RatioExceedsMax
     );
     config.min_collateral_ratio = min_collateral_ratio;
 
@@ -136,18 +153,32 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
             .accounts
             .dead_shares_ata
             .as_ref()
-            .ok_or(OkuDollarError::MinimumLiquidity)?;
+            .ok_or(OkuDollarError::MissingDeadSharesAccount)?;
 
         // Verify the dead ATA is for the correct mint (usdOku)
         require!(
             dead_ata.mint == ctx.accounts.usd_oku_mint.key(),
-            OkuDollarError::MinimumLiquidity
+            OkuDollarError::InvalidDeadSharesMint
         );
 
         // Verify the dead ATA is owned by the System Program (truly unrecoverable)
         require!(
             dead_ata.owner == anchor_lang::system_program::ID,
-            OkuDollarError::MinimumLiquidity
+            OkuDollarError::InvalidDeadSharesOwner
+        );
+
+        // Verify the dead ATA is the canonical Associated Token Account derived
+        // from (System-Program owner, usdOku mint, Token-2022 program). Without
+        // this check a first depositor could split the dead supply across
+        // multiple SP-owned accounts, complicating audit trails.
+        let expected_dead_ata = anchor_spl::associated_token::get_associated_token_address_with_program_id(
+            &anchor_lang::system_program::ID,
+            &ctx.accounts.usd_oku_mint.key(),
+            &ctx.accounts.token_2022_program.key(),
+        );
+        require!(
+            dead_ata.key() == expected_dead_ata,
+            OkuDollarError::InvalidDeadSharesAddress
         );
 
         // Mint user shares (Token-2022)

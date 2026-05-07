@@ -7,7 +7,7 @@
 //! Role-rotation via `set_authority` mirrors OpenZeppelin's `AccessControl`.
 //! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol
 
-use crate::constants::MIN_COLLATERAL_RATIO_FLOOR;
+use crate::constants::{MIN_COLLATERAL_RATIO_FLOOR, PRECISION};
 use crate::contexts::{Pause, SetAuthority, SetMinCollateralRatio, Unpause};
 use crate::errors::OkuDollarError;
 use crate::events::*;
@@ -97,7 +97,9 @@ pub fn set_authority(
 
 /// Set the minimum collateral ratio
 /// Only role_admin can call this function.
-/// The ratio must be at least MIN_COLLATERAL_RATIO_FLOOR (90%).
+/// The ratio must lie in `[MIN_COLLATERAL_RATIO_FLOOR (90%), PRECISION (100%)]`.
+/// Mirrors EVM `OkuDollar.setMinCollateralRatio`'s `RatioExceedsMax()` upper
+/// bound which the SVM previously omitted.
 pub fn set_min_collateral_ratio(
     ctx: Context<SetMinCollateralRatio>,
     new_min_collateral_ratio: u64,
@@ -105,6 +107,10 @@ pub fn set_min_collateral_ratio(
     require!(
         new_min_collateral_ratio >= MIN_COLLATERAL_RATIO_FLOOR,
         OkuDollarError::InvalidCollateralRatio
+    );
+    require!(
+        new_min_collateral_ratio <= PRECISION,
+        OkuDollarError::RatioExceedsMax
     );
 
     let config = &mut ctx.accounts.config;

@@ -22,13 +22,28 @@ pub struct Initialize<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// USDC mint (standard SPL)
+    /// USDC mint (standard SPL).
+    ///
+    /// Must have exactly 6 decimals on Solana — this matches the
+    /// `OkuMoney`/`usdOku` decimal model. EVM resolves a runtime
+    /// `usdcDecimalMultiplier` from `IERC20Metadata.decimals()`; SVM hardcodes
+    /// 6 decimals and asserts at init. See `EVM_VS_SVM.md`.
+    #[account(
+        constraint = usdc_mint.decimals == 6 @ LitePsmError::InvalidUsdcDecimals
+    )]
     pub usdc_mint: Box<Account<'info, Mint>>,
 
-    /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
-    /// PSM config PDA must be mint authority
+    /// OkuMoney mint (Token-2022).
+    ///
+    /// At init we lock down both authorities to the PSM config PDA so that
+    /// no EOA can mint or freeze OkuMoney post-deployment. Without these
+    /// constraints, a misconfigured deploy could initialize PSM against a
+    /// mint whose authority is a different program / multisig, silently
+    /// breaking supply accounting.
     #[account(
-        mint::token_program = token_2022_program
+        mint::token_program = token_2022_program,
+        mint::authority = config,
+        mint::freeze_authority = config,
     )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
@@ -88,11 +103,14 @@ pub struct SetupOkuMoneyEscrow<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
-    /// Must match the mint stored in config during initialize
+    /// OkuMoney mint (Token-2022).
+    /// Must match the mint stored in config during initialize, and must have
+    /// the PSM config PDA as both mint and freeze authority.
     #[account(
         address = config.oku_money_mint,
-        mint::token_program = token_2022_program
+        mint::token_program = token_2022_program,
+        mint::authority = config,
+        mint::freeze_authority = config,
     )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 

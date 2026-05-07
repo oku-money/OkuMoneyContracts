@@ -45,7 +45,8 @@ pub struct BridgeMint<'info> {
     )]
     pub processed_request: Account<'info, ProcessedRequest>,
 
-    /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
+    /// OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy
+    /// script chooses which extensions (if any) are configured at mint creation.
     #[account(
         mut,
         address = config.oku_money_mint,
@@ -100,7 +101,8 @@ pub struct BridgeBurn<'info> {
     )]
     pub bridge_nonce: Account<'info, BridgeNonce>,
 
-    /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
+    /// OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy
+    /// script chooses which extensions (if any) are configured at mint creation.
     #[account(
         mut,
         address = config.oku_money_mint,
@@ -231,7 +233,8 @@ pub struct ConfirmRefund<'info> {
     )]
     pub refunded_request: Box<Account<'info, RefundedRequest>>,
 
-    /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
+    /// OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy
+    /// script chooses which extensions (if any) are configured at mint creation.
     #[account(
         mut,
         constraint = oku_money_mint.key() == config.oku_money_mint

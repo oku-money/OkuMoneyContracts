@@ -14,7 +14,11 @@
 //! | `InsufficientBuffer` | `InsufficientBuffer()` |
 //! | `PriceCannotDecrease` | `MultiplierCannotDecrease()` |
 //! | `YieldDistributionInProgress` | `YieldDistributionInProgress()` |
-//! | `SlippageExceeded` | `OutputBelowMinimum(uint256 actual, uint256 minimum)` |
+//! | `OutputBelowMinimum` | `OutputBelowMinimum(uint256 actual, uint256 minimum)` |
+//! | `AmountTooSmall` | `AmountTooSmall()` |
+//! | `InvalidUsdcDecimals` | (initialize-time decimals check) |
+//! | `InvalidStaleness` | `StalenessOutOfBounds(uint256 staleness)` |
+//! | `InvalidChainId` | `InvalidChainId(uint16 chainId)` |
 
 use anchor_lang::prelude::*;
 
@@ -256,4 +260,31 @@ pub enum LitePsmError {
     /// Pyth program owner pubkey supplied to `initialize` was the default (zero) pubkey.
     #[msg("Pyth program owner pubkey is required (cannot be the zero pubkey)")]
     InvalidPythProgramOwner,
+
+    /// USDC mint must have exactly 6 decimals on Solana.
+    /// EVM uses a runtime-resolved `usdcDecimalMultiplier`; SVM hardcodes 6.
+    #[msg("USDC mint must have exactly 6 decimals")]
+    InvalidUsdcDecimals,
+
+    // ===== PSM Math / Slippage Errors =====
+    /// Mint output rounded down to zero (oku_m_price too high relative to input).
+    /// EVM: AmountTooSmall()
+    #[msg("Output amount too small (rounds to zero)")]
+    AmountTooSmall,
+
+    /// Redeem output below user-specified minimum (slippage exceeded).
+    /// EVM: OutputBelowMinimum(uint256 actual, uint256 minimum)
+    #[msg("Output below minimum (slippage exceeded)")]
+    OutputBelowMinimum,
+
+    // ===== Oracle Validation Errors =====
+    /// Staleness threshold is outside accepted range [60s, 7 days]
+    #[msg("Staleness threshold out of range (must be 60s..=7 days)")]
+    InvalidStaleness,
+
+    // ===== Bridge Configuration Errors =====
+    /// Chain ID is invalid (zero, or equal to source_chain_id which would
+    /// allow self-bridging).
+    #[msg("Invalid chain ID (zero or equal to source chain)")]
+    InvalidChainId,
 }

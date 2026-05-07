@@ -6,6 +6,7 @@ pub mod events;
 pub mod instructions;
 pub mod roles;
 pub mod state;
+pub mod validation;
 
 use contexts::*;
 use roles::*;

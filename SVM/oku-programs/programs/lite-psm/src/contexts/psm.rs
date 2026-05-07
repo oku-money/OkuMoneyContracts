@@ -24,7 +24,8 @@ pub struct MintOkuM<'info> {
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Account<'info, Mint>,
 
-    /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
+    /// OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy
+    /// script chooses which extensions (if any) are configured at mint creation.
     #[account(
         mut,
         address = config.oku_money_mint,
@@ -90,7 +91,8 @@ pub struct RedeemOkuM<'info> {
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Box<Account<'info, Mint>>,
 
-    /// OkuMoney mint (Token-2022 with Scaled UI Amount extension)
+    /// OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy
+    /// script chooses which extensions (if any) are configured at mint creation.
     #[account(
         mut,
         address = config.oku_money_mint,
@@ -310,8 +312,16 @@ pub struct RescueQueueEntry<'info> {
     )]
     pub vault_oku_money: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// Recipient's OkuMoney account (can be original user or alternate)
-    #[account(mut)]
+    /// Recipient's OkuMoney account (can be original user or alternate).
+    /// Must hold the configured OkuMoney mint and live under the Token-2022
+    /// program — without these constraints a `queue_processor` could be
+    /// tricked into transferring the escrowed OkuMoney into an account on the
+    /// wrong mint, surfacing only as an opaque SPL-layer error.
+    #[account(
+        mut,
+        token::mint = oku_money_mint,
+        token::token_program = token_2022_program,
+    )]
     pub recipient_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,

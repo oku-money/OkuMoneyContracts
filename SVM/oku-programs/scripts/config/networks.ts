@@ -2,7 +2,7 @@
  * Network-specific configuration
  */
 
-import 'dotenv/config';
+import '../utils/env';
 import { PublicKey } from '@solana/web3.js';
 
 export type NetworkName = 'localnet' | 'devnet' | 'devnet-fork' | 'mainnet-beta' | 'mainnet-fork';

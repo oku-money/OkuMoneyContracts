@@ -19,9 +19,14 @@
     "test:onchain": "NETWORK=devnet tsx scripts/test/test-devnet.ts",
     "test:onchain:fork": "NETWORK=devnet-fork tsx scripts/test/test-devnet.ts",
 
-    "bridge:state": "NETWORK=devnet tsx scripts/bridge/check-bridge-state.ts",
-    "bridge:burn": "NETWORK=devnet tsx scripts/bridge/bridge-burn-to-evm.ts",
-    "bridge:mint": "NETWORK=devnet tsx scripts/bridge/bridge-mint-from-evm.ts",
+    "bridge:state": "tsx scripts/bridge/check-bridge-state.ts",
+    "bridge:burn": "tsx scripts/bridge/bridge-burn-to-evm.ts",
+    "bridge:mint": "tsx scripts/bridge/bridge-mint-from-evm.ts",
+
+    "admin:blacklist-exempt": "tsx scripts/admin/initialize-blacklist-exempt.ts",
+    "admin:rotate-orchestrator": "tsx scripts/admin/rotate-orchestrator.ts",
+    "admin:set-oracle": "tsx scripts/admin/set-oracle.ts",
+    "admin:set-pyth-program-owner": "tsx scripts/admin/set-pyth-program-owner.ts",
 
     "surfpool:devnet": "surfpool start --network devnet --airdrop-keypair-path /dev/null",
     "surfpool:mainnet": "surfpool start --network mainnet --airdrop-keypair-path /dev/null",

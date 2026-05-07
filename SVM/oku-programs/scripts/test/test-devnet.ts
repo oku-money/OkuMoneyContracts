@@ -349,6 +349,14 @@ async function readState(ctx: TestContext) {
   logger.info('Fetching Vault Config...');
   try {
     const vc = await ctx.vault.account.okuDollarConfig.fetch(ctx.vaultConfig);
+    // usdOku total supply lives on the mint, not on OkuDollarConfig (the
+    // previous `vc.totalShares` field never existed and was rendering as NaN).
+    const usdOkuMintInfo = await getMint(
+      ctx.provider.connection,
+      ctx.usdOkuMint,
+      undefined,
+      TOKEN_2022_PROGRAM_ID
+    );
     logger.success('Vault Config:');
     logger.table({
       'Role Admin': (vc.roleAdmin as PublicKey).toBase58(),
@@ -357,7 +365,7 @@ async function readState(ctx: TestContext) {
       'OkuMoney Mint': (vc.okuMoneyMint as PublicKey).toBase58(),
       'usdOku Mint': (vc.usdOkuMint as PublicKey).toBase58(),
       'Reserve Vault': (vc.reserveVault as PublicKey).toBase58(),
-      'Total Shares': fmtAmount(Number(vc.totalShares)),
+      'usdOku Total Supply': fmtAmount(Number(usdOkuMintInfo.supply)),
       'Is Paused': String(vc.isPaused),
     });
   } catch (e: any) {
@@ -793,7 +801,7 @@ async function testRedeem(ctx: TestContext) {
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        systemProgram: PublicKey.default,
+        systemProgram: SystemProgram.programId,
       })
       .rpc();
     await confirmTx(ctx, sig);

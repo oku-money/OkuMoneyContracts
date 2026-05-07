@@ -41,7 +41,10 @@ export function deriveBridgeNoncePDA(
   programId: PublicKey,
   chainId: number
 ): [PublicKey, number] {
-  const chainIdBuffer = Buffer.allocUnsafe(2);
+  // `Buffer.alloc` zero-initialises; `allocUnsafe` does not. Although
+  // `writeUInt16LE` writes both bytes today, defensively zeroing makes any
+  // future width change deterministic. PDA derivation MUST be deterministic.
+  const chainIdBuffer = Buffer.alloc(2);
   chainIdBuffer.writeUInt16LE(chainId);
   return PublicKey.findProgramAddressSync(
     [Buffer.from("bridge_nonce"), chainIdBuffer],

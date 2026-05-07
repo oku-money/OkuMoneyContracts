@@ -94,8 +94,13 @@ async function main() {
   // Derive PSM config PDA (needed for mint authority)
   const [psmConfigPDA] = derivePsmConfigPDA(programIds.litePsm);
 
-  // Deploy tokens
-  const { usdcMint, okuMoneyMint } = await deployTokens(provider, psmConfigPDA, authorities);
+  // Deploy tokens (idempotent — reuses any mints already in the deployment file)
+  const { usdcMint, okuMoneyMint } = await deployTokens(
+    provider,
+    psmConfigPDA,
+    authorities,
+    network
+  );
   logger.log('');
 
   // Initialize PSM

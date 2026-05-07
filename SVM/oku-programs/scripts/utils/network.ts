@@ -2,13 +2,22 @@
  * Network detection and configuration loading
  */
 
-import 'dotenv/config';
+import './env';
 import { Connection, Keypair } from '@solana/web3.js';
 import { AnchorProvider, Wallet } from '@anchor-lang/core';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { NETWORK_CONFIGS, NetworkConfig, NetworkName } from '../config/networks';
 import { logger } from './logger';
+
+/** Resolve a path that may begin with `~` to an absolute filesystem path. */
+function expandHome(p: string): string {
+  if (p.startsWith('~')) {
+    return path.join(os.homedir(), p.slice(1));
+  }
+  return p;
+}
 
 /**
  * Detect network from CLI args, environment, or Anchor.toml
@@ -22,7 +31,7 @@ export function detectNetwork(): NetworkName {
       return network;
     }
     throw new Error(
-      `Invalid network: ${network}. Valid options: localnet, devnet, mainnet-beta`
+      `Invalid network: ${network}. Valid options: localnet, devnet, devnet-fork, mainnet-beta, mainnet-fork`
     );
   }
 
@@ -93,9 +102,10 @@ export function getNetworkConfig(network?: NetworkName): NetworkConfig {
 export function createProvider(network?: NetworkName): AnchorProvider {
   const config = getNetworkConfig(network);
 
-  // Load wallet
-  const walletPath =
-    process.env.WALLET_PATH || path.join(process.env.HOME!, '.config/solana/id.json');
+  // Load wallet — accept ~ in WALLET_PATH and fall back to ~/.config/solana/id.json.
+  const walletPath = expandHome(
+    process.env.WALLET_PATH || path.join(os.homedir(), '.config/solana/id.json')
+  );
 
   if (!fs.existsSync(walletPath)) {
     throw new Error(`Wallet not found at ${walletPath}`);
@@ -116,14 +126,15 @@ export function createProvider(network?: NetworkName): AnchorProvider {
 }
 
 /**
- * Load keypair from file path
+ * Load keypair from file path. Accepts paths with `~` prefix.
  */
 export function loadKeypair(filepath: string): Keypair {
-  if (!fs.existsSync(filepath)) {
-    throw new Error(`Keypair file not found: ${filepath}`);
+  const expanded = expandHome(filepath);
+  if (!fs.existsSync(expanded)) {
+    throw new Error(`Keypair file not found: ${expanded}`);
   }
 
-  const secretKey = JSON.parse(fs.readFileSync(filepath, 'utf-8'));
+  const secretKey = JSON.parse(fs.readFileSync(expanded, 'utf-8'));
   return Keypair.fromSecretKey(new Uint8Array(secretKey));
 }
 

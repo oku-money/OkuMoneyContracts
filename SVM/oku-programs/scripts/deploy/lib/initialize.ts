@@ -31,6 +31,45 @@ import litePsmIdl from '../../../target/idl/lite_psm.json';
 import okuDollarIdl from '../../../target/idl/oku_dollar.json';
 import okuBridgeRouterIdl from '../../../target/idl/oku_bridge_router.json';
 
+/**
+ * Returns true if `error` indicates that the target account is already
+ * initialized — i.e. this initialize call is a no-op rather than a real failure.
+ *
+ * Anchor 1.0 surfaces this in multiple ways depending on the construction
+ * path: the legacy 'already in use' string, AnchorError with code
+ * `AccountAlreadyInitialized` (= 0), the program-level
+ * `EscrowAlreadyInitialized` from lite-psm's `setup_oku_money_escrow`, or
+ * `BlacklistExemptAlreadyInitialized` from `initialize_blacklist_exempt`.
+ * We check all of them; brittle string-only matching has bitten us across
+ * Anchor minor-version bumps.
+ */
+function isAlreadyInitialized(error: any): boolean {
+  if (!error) return false;
+  // Anchor 1.0 structured errors — try first
+  const code = error?.error?.errorCode?.code ?? error?.errorCode?.code;
+  const number = error?.error?.errorCode?.number ?? error?.errorCode?.number;
+  if (
+    code === 'AccountAlreadyInitialized' ||
+    code === 'EscrowAlreadyInitialized' ||
+    code === 'BlacklistExemptAlreadyInitialized'
+  ) {
+    return true;
+  }
+  // Anchor's `AccountAlreadyInitialized` is canonically error code 0.
+  if (number === 0 && typeof code === 'string' && code.length > 0) {
+    return true;
+  }
+  // Legacy / fallback: log strings still matter because the validator returns
+  // 'already in use' before Anchor wraps it.
+  const msg = String(error?.message ?? error);
+  return (
+    msg.includes('already in use') ||
+    msg.includes('AccountAlreadyInitialized') ||
+    msg.includes('EscrowAlreadyInitialized') ||
+    msg.includes('BlacklistExemptAlreadyInitialized')
+  );
+}
+
 export interface PsmInitResult {
   psmConfig: PublicKey;
   redemptionQueue: PublicKey;
@@ -99,7 +138,7 @@ export async function initializePsm(
       .rpc();
     logger.success('PSM initialized');
   } catch (error: any) {
-    if (error.message?.includes('already in use')) {
+    if (isAlreadyInitialized(error)) {
       logger.warning('PSM already initialized');
     } else {
       throw error;
@@ -112,7 +151,7 @@ export async function initializePsm(
     await program.methods
       .setupRedemptionQueue()
       .accountsPartial({
-        deployer: provider.wallet.publicKey,
+        payer: provider.wallet.publicKey,
         config: psmConfig,
         redemptionQueue: redemptionQueue,
         systemProgram: SystemProgram.programId,
@@ -120,7 +159,7 @@ export async function initializePsm(
       .rpc();
     logger.success('Redemption queue initialized');
   } catch (error: any) {
-    if (error.message?.includes('already in use')) {
+    if (isAlreadyInitialized(error)) {
       logger.warning('Redemption queue already exists');
     } else {
       throw error;
@@ -163,7 +202,7 @@ export async function initializePsm(
       .rpc();
     logger.success('Bridge config initialized');
   } catch (error: any) {
-    if (error.message?.includes('already in use')) {
+    if (isAlreadyInitialized(error)) {
       logger.warning('Bridge config already initialized');
     } else {
       throw error;
@@ -235,7 +274,7 @@ export async function initializePsm(
       .rpc();
     logger.success('OkuMoney escrow vault initialized');
   } catch (error: any) {
-    if (error.message?.includes('already in use') || error.message?.includes('EscrowAlreadyInitialized')) {
+    if (isAlreadyInitialized(error)) {
       logger.warning('OkuMoney escrow vault already initialized');
     } else {
       throw error;
@@ -300,7 +339,7 @@ export async function initializeVault(
       .rpc();
     logger.success('Vault initialized');
   } catch (error: any) {
-    if (error.message?.includes('already in use')) {
+    if (isAlreadyInitialized(error)) {
       logger.warning('Vault already initialized');
     } else {
       throw error;
@@ -349,7 +388,7 @@ export async function initializeRouter(
       .rpc();
     logger.success('Router initialized');
   } catch (error: any) {
-    if (error.message?.includes('already in use')) {
+    if (isAlreadyInitialized(error)) {
       logger.warning('Router already initialized');
     } else {
       throw error;

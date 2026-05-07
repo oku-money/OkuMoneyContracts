@@ -78,4 +78,10 @@ pub enum OkuDollarError {
     /// Authority pubkey supplied to `initialize` was the default (zero) pubkey.
     #[msg("Authority pubkey cannot be the zero pubkey")]
     ZeroAuthority,
+
+    // ===== Yield-distribution sandwich guard =====
+    /// Operation rejected because it lands in the same slot as
+    /// `update_usd_multiplier`. Mirrors EVM `YieldSandwichGuard`.
+    #[msg("Cannot perform operation in same slot as USD multiplier update")]
+    YieldDistributionInProgress,
 }

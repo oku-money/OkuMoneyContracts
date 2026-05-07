@@ -7,7 +7,30 @@
 
 use crate::constants::PRECISION;
 use crate::errors::OkuDollarError;
+use crate::state::OkuDollarConfig;
 use anchor_lang::prelude::*;
+
+/// Vault-side yield-distribution sandwich guard.
+///
+/// `update_usd_multiplier` stamps `last_yield_distribution_slot = Clock::slot`,
+/// and `wrap` / `unwrap` reject when `Clock::slot == last_yield_distribution_slot`.
+/// This prevents the orchestrator (or anyone observing the orchestrator's
+/// landed update) from sandwiching the multiplier bump within a single slot
+/// to harvest the yield.
+///
+/// Mirrors `lite_psm::helpers::yield_lock::check_yield_lock` for the PSM, and
+/// EVM `YieldSandwichGuard` for the vault. Cross-program: the existing PSM
+/// yield lock check is still required because PSM `set_oku_m_price` /
+/// `distribute_yield` also count as yield-affecting events for the vault math
+/// (which reads `oku_m_price`).
+pub fn check_vault_yield_lock(config: &OkuDollarConfig) -> Result<()> {
+    let current_slot = Clock::get()?.slot;
+    require!(
+        current_slot != config.last_yield_distribution_slot,
+        OkuDollarError::YieldDistributionInProgress
+    );
+    Ok(())
+}
 
 /// Convert OkuMoney amount to USD value using oku_m_price
 ///

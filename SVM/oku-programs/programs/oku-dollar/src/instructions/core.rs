@@ -7,8 +7,8 @@ use crate::contexts::{
 use crate::errors::OkuDollarError;
 use crate::events::*;
 use crate::helpers::{
-    calculate_collateral_ratio, is_sufficiently_collateralized, oku_money_to_shares,
-    oku_money_to_usd, shares_to_oku_money,
+    calculate_collateral_ratio, check_vault_yield_lock, is_sufficiently_collateralized,
+    oku_money_to_shares, oku_money_to_usd, shares_to_oku_money,
 };
 use crate::state::OkuDollarConfig;
 use anchor_lang::prelude::*;
@@ -61,7 +61,11 @@ pub fn initialize(
 
     // Initialize USD multiplier at 1:1 (PRECISION)
     config.usd_multiplier = PRECISION;
-    config.usd_last_update_time = Clock::get()?.unix_timestamp;
+    let clock = Clock::get()?;
+    config.usd_last_update_time = clock.unix_timestamp;
+    // No yield event has occurred yet; setting to 0 means no slot is fenced.
+    // (Slot 0 is the genesis slot, which is never re-encountered post-genesis.)
+    config.last_yield_distribution_slot = 0;
 
     // Set minimum collateral ratio (must lie in [floor, PRECISION]).
     // The upper bound matches the runtime `set_min_collateral_ratio` check;
@@ -101,8 +105,12 @@ pub fn initialize(
 /// inflation attacks. `dead_shares_ata` (optional account) must be provided
 /// on the first deposit — it receives the permanently-locked dead shares.
 pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Result<u64> {
-    // Yield lock: block wrap in same slot as yield distribution (prevents sandwich attacks)
+    // Yield lock: block wrap in same slot as either a PSM-side yield event
+    // (`set_oku_m_price` / `distribute_yield`) OR a vault-side yield event
+    // (`update_usd_multiplier`). Both are read by the wrap math, so both
+    // must be fenced.
     check_yield_lock(&ctx.accounts.psm_config)?;
+    check_vault_yield_lock(&ctx.accounts.config)?;
 
     // Read state
     let total_supply = ctx.accounts.usd_oku_mint.supply;
@@ -270,8 +278,10 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
 /// NOTE: Unwrap is blocked when paused (matches EVM behavior).
 /// Users must wait for unpause to exit.
 pub fn unwrap(ctx: Context<Unwrap>, shares: u64) -> Result<()> {
-    // Yield lock: block unwrap in same slot as yield distribution (prevents sandwich attacks)
+    // Yield lock: block unwrap in same slot as either a PSM-side yield event
+    // OR a vault-side yield event. See `wrap` above for the rationale.
     check_yield_lock(&ctx.accounts.psm_config)?;
+    check_vault_yield_lock(&ctx.accounts.config)?;
 
     // Read state
     let bump = ctx.accounts.config.bump;
@@ -387,10 +397,13 @@ pub fn update_usd_multiplier(
         OkuDollarError::InsufficientCollateral
     );
 
-    // Update the multiplier
+    // Update the multiplier and stamp the yield-lock slot. Subsequent wraps
+    // and unwraps in the SAME slot will be rejected by `check_vault_yield_lock`.
+    let clock = Clock::get()?;
     let config = &mut ctx.accounts.config;
     config.usd_multiplier = new_usd_multiplier;
-    config.usd_last_update_time = Clock::get()?.unix_timestamp;
+    config.usd_last_update_time = clock.unix_timestamp;
+    config.last_yield_distribution_slot = clock.slot;
 
     emit!(UsdMultiplierUpdatedEvent {
         old_multiplier,

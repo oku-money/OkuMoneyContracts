@@ -36,6 +36,14 @@ pub struct OkuDollarConfig {
     /// Timestamp of last USD multiplier update (for audit/monitoring)
     pub usd_last_update_time: i64,
 
+    /// Slot of the most recent yield-affecting update (currently
+    /// `update_usd_multiplier`). `wrap`/`unwrap` reject when
+    /// `current_slot == last_yield_distribution_slot` to prevent the
+    /// orchestrator (or anyone observing the orchestrator's tx) from
+    /// sandwiching the multiplier bump. Mirrors the analogous field on
+    /// `lite_psm::PsmConfig` and EVM's `YieldSandwichGuard` modifier.
+    pub last_yield_distribution_slot: u64,
+
     // ===== Collateralization =====
     /// Minimum collateralization ratio (scaled by 1e9)
     /// e.g., 950_000_000 = 95%
@@ -51,11 +59,14 @@ impl OkuDollarConfig {
     /// PDA seed for the usdOku mint (rebasing share token controlled by this vault).
     pub const USD_OKU_MINT_SEED: &'static [u8] = b"usd_oku_mint";
 
-    /// Space needed for OkuDollarConfig account
-    /// 8 (discriminator) + 1 (bump) + 32*5 (authorities) + 32*4 (token refs) + 8*2 (multiplier fields) + 8 (min_collateral_ratio) + 1 (is_paused)
-    /// = 8 + 1 + 160 + 128 + 16 + 8 + 1 = 322 bytes
-    pub const LEN: usize = 8 + 1 + 32 * 5 + 32 * 4 + 8 * 2 + 8 + 1;
+    /// Space needed for OkuDollarConfig account.
+    ///
+    /// 8 (discriminator) + 1 (bump) + 32*5 (authorities) + 32*4 (token refs)
+    /// + 8 (usd_multiplier) + 8 (usd_last_update_time)
+    /// + 8 (last_yield_distribution_slot) + 8 (min_collateral_ratio)
+    /// + 1 (is_paused) = 330 bytes.
+    pub const LEN: usize = 8 + 1 + 32 * 5 + 32 * 4 + 8 + 8 + 8 + 8 + 1;
 }
 
 // Compile-time assertion: if OkuDollarConfig layout changes, this will fail to compile
-const _: () = assert!(OkuDollarConfig::LEN == 322);
+const _: () = assert!(OkuDollarConfig::LEN == 330);

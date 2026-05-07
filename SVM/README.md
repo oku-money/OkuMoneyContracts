@@ -338,17 +338,25 @@ The router initializes with `oku_bridge_router::initialize(pauser, unpauser)`.
 
 ## EVM vs SVM Differences
 
+For the full divergence table — including bridge wire format, oracle parser,
+pause-bypass policy, and dead-shares semantics — see
+[`EVM_VS_SVM.md`](./EVM_VS_SVM.md). Quick summary:
+
 | Aspect | EVM | SVM |
 |--------|-----|-----|
 | OkuMoney price | Stored `uint256`, 18 decimals | Stored `u64`, 1e9 precision |
 | OkuDollar multiplier | Continuous `_rpow` streaming | Discrete orchestrator updates |
-| Yield lock | `block.number` | `Clock::slot` |
+| Yield lock | `block.number` | `Clock::slot` (PSM **and** vault) |
 | Signature scheme | ECDSA (EIP-712) | Ed25519 (instruction introspection) |
 | Token decimals | 18 | 6 |
+| Bridge wire format | EIP-712 struct hash | Two distinct 80-byte LE layouts (see `EVM_VS_SVM.md`) |
+| Oracle | Chainlink AggregatorV3 | Pyth V2 (status, expo, staleness all checked) |
+| Inflation defense | `AmountTooSmall` on zero shares | Same + Uniswap-V2-style dead shares |
 | Convenience functions | On LitePSM | On OkuBridgeRouter (CPI) |
-| Bridge refund | Two-step (initiator + confirmer) | Two-step (initiator + confirmer) |
+| Bridge refund | Two-step (initiator + confirmer) | Two-step (with per-call `InitiatorCannotConfirm`) |
 | Wallet price display | Frontends read `okuMPrice()` view | Frontends read PsmConfig PDA |
 | Third-party bridge adapters | NttAdapter, future CCIP | Not implemented (native bridge only) |
+| Queue size | Unbounded (mapping) | Fixed `[QueueEntry; 10]` (prototype limitation) |
 
 ## Error Codes
 
@@ -383,52 +391,42 @@ npm run test:fork
 
 ### Test runtime notes
 
-`tests/unit/bridge_security.ts` contains 9 tests that exercise the full
-`bridge_mint` instruction (Ed25519 sigverify precompile + instruction-sysvar
-introspection + keccak256 + PDA `init` + Token-2022 mint CPI in a single
-transaction). This is the heaviest path in the program, and on a freshly-spawned
-local `solana-test-validator` with a cold BPF cache these transactions
-routinely exceed `@solana/web3.js@1.x`'s hard-coded 30s confirmation polling
-window, surfacing as:
+`tests/unit/bridge_security.ts` contains a number of end-to-end `bridge_mint`
+tests that exercise the heaviest path in the program (Ed25519 sigverify
+precompile + instruction-sysvar introspection + keccak256 + PDA `init` +
+Token-2022 mint CPI in a single transaction). On a freshly-spawned
+`solana-test-validator` with a cold BPF cache, some of these transactions
+exceed `@solana/web3.js@1.x`'s hard-coded 30s confirmation polling window:
 
 ```
 TransactionExpiredTimeoutError: Transaction was not confirmed in 30.00 seconds.
 ```
 
-The transactions themselves are valid and ultimately accepted by the validator;
-the client gives up before confirmation arrives. This is a known limitation of
-web3.js's legacy confirmation strategy, not a defect in the program code or
-the test logic.
-
-**These 9 tests are skipped by default** (reported as `pending` in mocha output)
-to keep `anchor test` runtime around ~10–15 seconds on any local machine. The
-skipped test names all live under the `Bridge Security Tests` describe block:
-
-- Ed25519 Signature Verification → 4 cases (`accepts valid orchestrator signature`,
-  `rejects invalid signature`, `rejects expired signature`, `rejects tampered message`)
-- Replay Attack Prevention → 2 cases
-- Bridge Pause/Unpause → 1 case (`paused bridge blocks bridge_mint`)
-- End-to-End Bridge Flow → 1 case
-- Bridge Mint Without Amount Limits → 1 case
-
-To run them locally (e.g., before a release, on a fast machine, or in CI):
+The transactions are valid; the client gives up before confirmation arrives.
+The heaviest sub-set is gated behind `RUN_HEAVY_BRIDGE_TESTS=1` so default
+`anchor test` runs stay around ~10-15 seconds:
 
 ```bash
 RUN_HEAVY_BRIDGE_TESTS=1 npx mocha --require tsx --timeout 300000 \
     'tests/unit/bridge_security.ts'
 ```
 
-Other bridge-mint paths in the file that don't time out (admin paths, config
-manipulation, etc.) continue to run in the default suite — only the 9
-single-tx end-to-end mint flows are gated.
+Note: of the four `Ed25519 Signature Verification` tests behind that flag,
+three actually fail at the Ed25519 precompile (rejecting the bad sig before
+ever reaching `bridge_mint`) and don't need the heavy path; only the
+"accepts valid orchestrator signature" case truly requires it. The flag is
+applied at the describe-block level, not per-test.
 
-**Status:** the OkuMoney programs and tests are correct as written. This is
-purely a test-runner / client-RPC ergonomics issue inherited from
-`solana-test-validator` and `@solana/web3.js@1.x`. A future migration to
-`solana-bankrun` or `litesvm` (once their Anchor 1.0 helper packages catch up
-to `@anchor-lang/core@1.0.x`) would eliminate this category of flake by
-avoiding the validator confirmation loop entirely. Tracked as a follow-up;
-not blocking review of the program code.
+**Tracked migration to `anchor-bankrun`.** Surfpool already runs on
+`litesvm` in this repo (visible in `.surfpool/logs/*.log`), so the
+groundwork for an in-process test runner is present. Migrating
+`bridge_security.ts` to `anchor-bankrun` would:
+
+- eliminate the 30s confirmation window entirely (`processTransaction` is sync)
+- drop the `RUN_HEAVY_BRIDGE_TESTS` gate
+- replace `setTimeout(500)` clock waits with `client.warpToTimestamp(...)`
+
+Status: scoped as a Phase 4b follow-up. Not blocking review of the program code.
 
 ## Deployment
 

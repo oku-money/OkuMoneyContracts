@@ -1,3 +1,12 @@
+//! # OkuDollar (rebasing usdOku vault)
+//!
+//! SVM port of the EVM-side `OkuDollar.sol`. usdOku shares appreciate via a
+//! discrete `usd_multiplier` bumped by the orchestrator (`update_usd_multiplier`),
+//! NOT a continuous `_rpow`-style accrual as on EVM. See
+//! [`SVM/EVM_VS_SVM.md`](../../../EVM_VS_SVM.md) for the full divergence list,
+//! including the dual-side yield-distribution slot fence (PSM + vault) and
+//! the Uniswap-V2 dead-shares first-deposit defense (SVM-only addition).
+
 use anchor_lang::prelude::*;
 
 pub mod constants;

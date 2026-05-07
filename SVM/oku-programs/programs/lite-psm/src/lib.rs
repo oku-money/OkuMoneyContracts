@@ -1,3 +1,14 @@
+//! # OkuMoney Lite-PSM
+//!
+//! SVM port of the EVM-side `LitePSM.sol` + `OkuBridge.sol`. The structure
+//! mirrors `EVM/src/psm/` and `EVM/src/bridge/` module-for-module; deliberate
+//! divergences (token decimals, yield-distribution model, bridge wire
+//! format, oracle parser, queue size) are documented in the top-level
+//! [`SVM/EVM_VS_SVM.md`](../../../EVM_VS_SVM.md) reference.
+//!
+//! Inline `// see EVM_VS_SVM.md` comments throughout this crate point to
+//! specific divergence rows in that document.
+
 use anchor_lang::prelude::*;
 
 pub mod constants;

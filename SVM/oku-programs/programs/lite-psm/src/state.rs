@@ -408,8 +408,28 @@ impl PendingRefund {
     pub const LEN: usize = 8 + 1 + 32 + 32 + 8 + 8 + 32;
 }
 
-/// Bridge request message format (80 bytes)
-/// Used for signature verification and replay prevention
+/// EVM-burn → SVM-mint bridge request (80 bytes on the wire).
+///
+/// Used for signature verification and replay prevention by `bridge_mint`.
+///
+/// **CRITICAL — dual 80-byte layouts.** The bridge has two distinct on-wire
+/// formats sharing the same total length, distinguished by direction:
+///
+/// ```text
+///   SVM-burn → EVM-mint (built by `bridge_burn`):
+///     2  source_chain_id  | 2  dest_chain_id
+///    32  sender (Solana)  | 20 recipient (EVM)
+///     8  amount           | 8  nonce          | 8 deadline
+///
+///   EVM-burn → SVM-mint (this struct, built by `to_message_bytes`):
+///     2  source_chain_id  | 2  dest_chain_id
+///    20  sender (EVM)     | 32 recipient (Solana)
+///     8  amount           | 8  nonce          | 8 deadline
+/// ```
+///
+/// `request_id = keccak256(message_bytes)`. The TS canonical encoder lives in
+/// `scripts/lib/bridge/message.ts`. See `SVM/EVM_VS_SVM.md` for the full
+/// bridge-format reference.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct BridgeRequest {
     /// Source chain ID (EVM chain)

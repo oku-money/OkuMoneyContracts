@@ -1,3 +1,18 @@
+//! # OkuBridgeRouter
+//!
+//! Convenience CPI wrapper that lets a user mint usdOku from USDC, redeem
+//! usdOku to USDC, or bridge usdOku cross-chain in a single transaction.
+//! Mirrors the user-facing surface of EVM `OkuBridgeRouter.sol`, except the
+//! third-party adapter paths (NTT / CCIP) which are not implemented on SVM.
+//!
+//! Defense-in-depth: each entry point deserializes the target program PDAs
+//! (PsmConfig / BridgeConfig / OkuDollarConfig) via `crate::validation` and
+//! asserts cross-program invariants (vault.psm_config link, no underlying
+//! pause) before issuing CPIs, so failures surface as clean RouterErrors.
+//!
+//! See [`SVM/EVM_VS_SVM.md`](../../../EVM_VS_SVM.md) for the full divergence
+//! list, including the lack of a `sweep` admin (router holds no escrow on SVM).
+
 use anchor_lang::prelude::*;
 
 pub mod contexts;

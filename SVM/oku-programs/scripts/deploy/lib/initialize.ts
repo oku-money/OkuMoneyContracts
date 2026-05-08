@@ -13,7 +13,7 @@ import {
 } from '@solana/spl-token';
 import { logger } from '../../utils/logger';
 import { loadAuthorities } from '../../config/authorities';
-import { SOLANA_CHAIN_ID } from '../../config/constants';
+import { sourceChainIdForNetwork } from '../../config/constants';
 import { NetworkConfig } from '../../config/networks';
 import {
   derivePsmConfigPDA,
@@ -177,7 +177,11 @@ export async function initializePsm(
   try {
     await program.methods
       .initializeBridge({
-        sourceChainId: SOLANA_CHAIN_ID,
+        // CRITICAL: source_chain_id MUST match the cluster the program is
+        // being deployed to. Hardcoding devnet's 103 here would silently
+        // misconfigure a mainnet bridge — see the comment on
+        // `sourceChainIdForNetwork` in scripts/config/constants.ts.
+        sourceChainId: sourceChainIdForNetwork(networkConfig.name),
         bridgeFeeBps: config.bridgeFeeBps,
         minBridgeAmount: config.minBridgeAmount,
         maxBridgeAmount: config.maxBridgeAmount,

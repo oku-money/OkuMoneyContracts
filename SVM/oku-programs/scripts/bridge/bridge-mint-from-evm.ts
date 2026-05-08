@@ -38,7 +38,7 @@ import { LitePsm } from '../../target/types/lite_psm';
 import { createProvider, detectNetwork } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
-import { SOLANA_CHAIN_ID, eip155ToInternalChainId } from '../config/constants';
+import { eip155ToInternalChainId } from '../config/constants';
 import { logSurfpoolStatus } from '../utils/surfpool';
 import { derivePsmConfigPDA, deriveBridgeConfigPDA, deriveProcessedRequestPDA } from '../utils/pdaHelpers';
 import { serializeMintMessage, computeRequestId } from '../lib/bridge';

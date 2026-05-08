@@ -14,6 +14,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { DeploymentAddresses } from './addressBook';
+import { sourceChainIdForNetwork } from '../config/constants';
+import type { NetworkName } from '../config/networks';
 
 const REGISTRY_PATH = path.resolve(__dirname, '../../../../testnet-addresses.json');
 
@@ -55,17 +57,11 @@ function writeRegistry(registry: TestnetRegistry): void {
   fs.writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2) + '\n', 'utf8');
 }
 
-/**
- * Chain IDs for SVM clusters (Ankr convention, used in OkuMoney bridge messages).
- */
-const SVM_CLUSTER_CHAIN_IDS: Record<string, number> = {
-  'mainnet-beta': 101,
-  devnet: 103,
-  'devnet-fork': 103,
-  'mainnet-fork': 101,
-  localnet: 0,
-};
-
+// Chain IDs for SVM clusters live in `scripts/config/constants.ts` —
+// `sourceChainIdForNetwork` is the single source of truth so the registry
+// can never drift from the value the on-chain `BridgeConfig.source_chain_id`
+// is initialized to. RPC URLs are kept here because they're a registry-only
+// concern and not part of the on-chain config.
 const SVM_CLUSTER_RPC: Record<string, string> = {
   'mainnet-beta': 'https://api.mainnet-beta.solana.com',
   devnet: 'https://api.devnet.solana.com',
@@ -83,7 +79,7 @@ export function syncSvmRegistry(deployment: DeploymentAddresses): void {
   registry.svm = registry.svm || {};
 
   const entry: SvmNetworkEntry = {
-    chainId: SVM_CLUSTER_CHAIN_IDS[deployment.network],
+    chainId: sourceChainIdForNetwork(deployment.network as NetworkName),
     rpcUrl: SVM_CLUSTER_RPC[deployment.network],
     programs: {
       litePsm: deployment.programs?.litePsm,

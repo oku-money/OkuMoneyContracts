@@ -30,7 +30,6 @@ import { createProvider, detectNetwork } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import {
-  SOLANA_CHAIN_ID,
   SEPOLIA_CHAIN_ID,
   OP_SEPOLIA_CHAIN_ID,
 } from '../config/constants';

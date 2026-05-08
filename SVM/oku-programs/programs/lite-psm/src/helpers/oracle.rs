@@ -1,56 +1,97 @@
 //! Pyth V2 PriceAccount manual parser.
 //!
 //! Anchor pulls in heavyweight transitive deps from `pyth-sdk-solana`, so we
-//! manually parse the bytes we need. The byte offsets (208 = `agg.price`,
-//! 232 = `timestamp`) and the program-owner-id whitelist are documented in
-//! Pyth's own SDK.
+//! manually parse the bytes we need. Field offsets and widths are derived
+//! from the canonical Pyth SDK struct layout.
 //!
-//! Taken from https://github.com/pyth-network/pyth-sdk-solana/blob/main/pyth-sdk-solana/src/state.rs
+//! Taken from https://github.com/pyth-network/pyth-sdk-rs/blob/main/pyth-sdk-solana/src/state.rs
 //! Taken from https://docs.pyth.network/price-feeds/contract-addresses/solana
 //!
-//! NOTE: This is the *legacy* Pyth V2 layout. The modern Pyth Solana Receiver
-//! (`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`) uses a different account
-//! layout (`PriceUpdateV2`) and a different staleness model. Programs that
-//! want to consume modern Pyth feeds should pass that program ID via
-//! `set_pyth_program_owner` and add a parallel parser.
+//! NOTE: This is the *legacy* Pyth V2 layout (`SolanaPriceAccount`). The
+//! modern Pyth Solana Receiver (`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`)
+//! uses a different account layout (`PriceUpdateV2`) and a different staleness
+//! model. Programs that want to consume modern Pyth feeds should pass that
+//! program ID via `set_pyth_program_owner` and add a parallel parser.
 
 use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 
-// ---- Pyth V2 PriceAccount byte offsets ----
-// Layout source:
-//   https://github.com/pyth-network/pyth-sdk-solana/blob/main/pyth-sdk-solana/src/state.rs
-// Field offsets (relative to account-data start, post-discriminator since
-// Pyth accounts have no Anchor discriminator):
+// ---- Pyth V2 PriceAccount byte offsets (`SolanaPriceAccount = GenericPriceAccount<32, ()>`) ----
 //
-//   0..4    magic                u32
-//   4..8    ver                  u32
-//   8..12   atype                u32
-//   12..16  size                 u32
-//   16..20  ptype                u32
-//   20..24  expo                 i32   <-- price scaling exponent
-//   ...
-//   208..216 agg.price            i64
-//   216..224 agg.conf             u64
-//   224..228 agg.status           u32   <-- 1 = Trading
-//   228..232 agg.corp_act         u32
-//   232..240 agg.publish_time     i64
+// Layout source (verified against https://github.com/pyth-network/pyth-sdk-rs):
+//
+//   #[repr(C)] struct GenericPriceAccount {
+//      magic: u32,                  //   0..  4
+//      ver: u32,                    //   4..  8
+//      atype: u32,                  //   8.. 12
+//      size: u32,                   //  12.. 16
+//      ptype: PriceType (u8),       //  16.. 17  (1 byte + 3 bytes pad)
+//      expo: i32,                   //  20.. 24
+//      num: u32,                    //  24.. 28
+//      num_qt: u32,                 //  28.. 32
+//      last_slot: u64,              //  32.. 40
+//      valid_slot: u64,             //  40.. 48
+//      ema_price: Rational,         //  48.. 72  (3 * i64)
+//      ema_conf: Rational,          //  72.. 96
+//      timestamp: i64,              //  96..104  <-- aggregate publish UNIX time
+//      min_pub: u8,                 // 104..105
+//      drv2: u8,                    // 105..106
+//      drv3: u16,                   // 106..108
+//      drv4: u32,                   // 108..112
+//      prod: Pubkey,                // 112..144
+//      next: Pubkey,                // 144..176
+//      prev_slot: u64,              // 176..184
+//      prev_price: i64,             // 184..192
+//      prev_conf: u64,              // 192..200
+//      prev_timestamp: i64,         // 200..208
+//      agg: PriceInfo {             // 208..240
+//          price: i64,              // 208..216
+//          conf: u64,               // 216..224
+//          status: PriceStatus(u8), // 224..225  <-- 1 = Trading
+//          corp_act: u8,            // 225..226
+//          // 6 bytes pad to align pub_slot
+//          pub_slot: u64,           // 232..240  <-- SLOT, not timestamp
+//      },
+//      comp: [PriceComp; 32],       // 240.. (...)
+//      ...
+//   }
+//
+// IMPORTANT: a previous revision of this parser used offset 232 as the
+// `publish_time` field. That offset actually holds `agg.pub_slot` (a Solana
+// slot number, ~3.3e8 on mainnet). Subtracting it from the unix timestamp
+// produced age values around 1.4e9 seconds, which always exceeded any sane
+// staleness threshold and silently broke every oracle-enabled mint. The
+// canonical aggregate-publish unix timestamp lives at offset 96.
 
-/// Offset of `expo: i32` in the Pyth V2 price account.
+/// Pyth `magic` constant.
+const PYTH_MAGIC: u32 = 0xa1b2c3d4;
+/// Expected Pyth account version.
+const PYTH_VERSION_2: u32 = 2;
+/// `AccountType::Price` discriminant. Pyth defines `Unknown=0, Mapping=1, Product=2, Price=3`.
+const PYTH_ATYPE_PRICE: u32 = 3;
+
+/// Offset of `magic: u32`.
+const PYTH_MAGIC_OFFSET: usize = 0;
+/// Offset of `ver: u32`.
+const PYTH_VERSION_OFFSET: usize = 4;
+/// Offset of `atype: u32`.
+const PYTH_ATYPE_OFFSET: usize = 8;
+/// Offset of `expo: i32`.
 const PYTH_EXPO_OFFSET: usize = 20;
+/// Offset of the aggregate publish-timestamp `timestamp: i64` (unix seconds).
+const PYTH_TIMESTAMP_OFFSET: usize = 96;
 /// Offset of `agg.price: i64` (the integer price, scaled by 10^expo).
 const PYTH_PRICE_OFFSET: usize = 208;
-/// Offset of `agg.status: u32` (1 = Trading, anything else = stale/halted).
+/// Offset of `agg.status: u8` (1 = Trading; anything else = stale/halted).
 const PYTH_STATUS_OFFSET: usize = 224;
-/// Offset of `agg.publish_time: i64` (unix-second timestamp of the latest agg).
-const PYTH_TIMESTAMP_OFFSET: usize = 232;
 /// Minimum byte length we read from the price account.
-/// timestamp ends at offset 240, so we need at least that many bytes.
+/// We touch bytes through `agg.pub_slot` end (offset 240); keeping the bound
+/// here also serves as a sanity guard against truncated inputs.
 const PYTH_MIN_DATA_LEN: usize = 240;
 
 /// `agg.status == Trading` value per the Pyth V2 PriceStatus enum.
-const PYTH_STATUS_TRADING: u32 = 1;
+const PYTH_STATUS_TRADING: u8 = 1;
 
 /// Check oracle reserves before minting.
 /// Returns `Ok` if reserves are sufficient, error otherwise. Manually parses
@@ -58,11 +99,13 @@ const PYTH_STATUS_TRADING: u32 = 1;
 ///
 /// IMPORTANT: the oracle feed must:
 ///   1. Be owned by `PsmConfig::pyth_program_owner` (set at init, rotatable).
-///   2. Have `agg.status == Trading` (1) — halted feeds are rejected.
-///   3. Have `expo == 0` — the price is interpreted directly as a raw token
+///   2. Have the canonical Pyth header (`magic`, `ver=2`, `atype=Price`).
+///   3. Have `agg.status == Trading` (1) — halted/auction/unknown feeds rejected.
+///   4. Have `expo == 0` — the price is interpreted directly as a raw token
 ///      count of reserves with no scaling. A custom feed publishing reserves
 ///      in OkuMoney base units (decimals = 6) is the expected configuration.
-///   4. Be fresh per the configured `staleness_threshold`.
+///   5. Be fresh per the configured `staleness_threshold` (compared against
+///      `GenericPriceAccount::timestamp`, the aggregate publish unix time).
 ///
 /// Example: If OkuMoney uses 6 decimals and reserves are $10M, the oracle
 /// should report `10_000_000_000_000` (10M * 10^6) with `expo = 0`.
@@ -106,10 +149,32 @@ pub fn check_oracle_reserves<'info>(
     let clock = Clock::get()?;
     let data = price_account.try_borrow_data()?;
 
-    // Minimum data length: timestamp ends at offset 240.
+    // Minimum data length: we read through `agg.pub_slot` end at offset 240.
     require!(data.len() >= PYTH_MIN_DATA_LEN, LitePsmError::InvalidOracleResponse);
 
-    // Read expo, price, status, timestamp.
+    // Header sanity: refuse anything that isn't a Pyth V2 Price account.
+    let magic = u32::from_le_bytes(
+        data[PYTH_MAGIC_OFFSET..PYTH_MAGIC_OFFSET + 4]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
+    );
+    require!(magic == PYTH_MAGIC, LitePsmError::InvalidOracleResponse);
+
+    let version = u32::from_le_bytes(
+        data[PYTH_VERSION_OFFSET..PYTH_VERSION_OFFSET + 4]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
+    );
+    require!(version == PYTH_VERSION_2, LitePsmError::InvalidOracleResponse);
+
+    let atype = u32::from_le_bytes(
+        data[PYTH_ATYPE_OFFSET..PYTH_ATYPE_OFFSET + 4]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
+    );
+    require!(atype == PYTH_ATYPE_PRICE, LitePsmError::InvalidOracleResponse);
+
+    // Read expo, price, status (single byte!), publish timestamp.
     let expo = i32::from_le_bytes(
         data[PYTH_EXPO_OFFSET..PYTH_EXPO_OFFSET + 4]
             .try_into()
@@ -120,20 +185,20 @@ pub fn check_oracle_reserves<'info>(
             .try_into()
             .map_err(|_| LitePsmError::InvalidOracleResponse)?,
     );
-    let status = u32::from_le_bytes(
-        data[PYTH_STATUS_OFFSET..PYTH_STATUS_OFFSET + 4]
-            .try_into()
-            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
-    );
+    // `agg.status` is a `#[repr(u8)]` enum — read as a single byte. A previous
+    // revision read this as `u32`, which silently included `corp_act` and two
+    // padding bytes; the comparison happened to pass for `Trading=1` only by
+    // accident of layout/padding initialization.
+    let status = data[PYTH_STATUS_OFFSET];
     let publish_time = i64::from_le_bytes(
         data[PYTH_TIMESTAMP_OFFSET..PYTH_TIMESTAMP_OFFSET + 8]
             .try_into()
             .map_err(|_| LitePsmError::InvalidOracleResponse)?,
     );
 
-    // Reject non-trading feeds (halted, unknown). Without this, a paused
-    // Pyth feed would still pass age and price checks since publish_time
-    // continues to advance even when the feed is not actively trading.
+    // Reject non-trading feeds (halted, unknown, auction). Without this, a
+    // paused Pyth feed would still pass age and price checks since
+    // `publish_time` continues to advance even when the feed isn't trading.
     require!(status == PYTH_STATUS_TRADING, LitePsmError::InvalidOracleResponse);
 
     // Reject feeds that don't report price as raw token base units. The
@@ -143,7 +208,7 @@ pub fn check_oracle_reserves<'info>(
     // parser to apply the scaling).
     require!(expo == 0, LitePsmError::InvalidOracleResponse);
 
-    // Check staleness
+    // Check staleness against the aggregate publish UNIX timestamp.
     let current_time = clock.unix_timestamp;
     let age = current_time.saturating_sub(publish_time);
     require!(age <= staleness_threshold, LitePsmError::StaleOracle);

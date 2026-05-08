@@ -21,11 +21,44 @@ export const MAX_BRIDGE_AMOUNT = 10_000_000 * 1_000_000; // 10M OkuMoney
  * BridgeConfig state, and supportedChains mappings.
  */
 export const SOLANA_MAINNET_CHAIN_ID = 101;
-
+export const SOLANA_TESTNET_CHAIN_ID = 102;
 export const SOLANA_DEVNET_CHAIN_ID = 103;
+// Localnet doesn't have an official Ankr ID; we reserve 199 for local clusters
+// so a stray cross-chain message addressed to localnet can never collide with
+// devnet/testnet/mainnet by accident.
+export const SOLANA_LOCALNET_CHAIN_ID = 199;
 
-// Default chain ID for current environment (use devnet for testnet deployments)
-export const SOLANA_CHAIN_ID = SOLANA_DEVNET_CHAIN_ID;
+/**
+ * Resolve the protocol-internal Solana chain ID for a given runtime network.
+ *
+ * This is the value baked into `BridgeConfig.source_chain_id` at deploy time
+ * via `initialize_bridge`. **It MUST match the cluster the program is being
+ * deployed to**: the EVM side packs its `destChainId` against this value, so
+ * a deploy that hardcodes the wrong ID silently breaks every cross-chain
+ * mint targeting the program. (Phase 8 hotfix: a previous revision exported
+ * a hardcoded `SOLANA_CHAIN_ID = SOLANA_DEVNET_CHAIN_ID` alias and a mainnet
+ * deploy that used it would have set source_chain_id = 103 on the live
+ * program. The alias has been removed; callers must use this resolver.)
+ */
+export type SolanaNetworkName =
+  | 'localnet'
+  | 'devnet'
+  | 'devnet-fork'
+  | 'mainnet-beta'
+  | 'mainnet-fork';
+
+export function sourceChainIdForNetwork(network: SolanaNetworkName): number {
+  switch (network) {
+    case 'mainnet-beta':
+    case 'mainnet-fork':
+      return SOLANA_MAINNET_CHAIN_ID;
+    case 'devnet':
+    case 'devnet-fork':
+      return SOLANA_DEVNET_CHAIN_ID;
+    case 'localnet':
+      return SOLANA_LOCALNET_CHAIN_ID;
+  }
+}
 
 /**
  * EVM chain IDs (OkuMoney protocol-internal u16 identifiers)

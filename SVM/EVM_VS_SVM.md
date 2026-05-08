@@ -52,10 +52,18 @@ SVM mirrors this with two slot stamps:
 
 - `lite_psm::PsmConfig::last_yield_distribution_slot` — set by
   `set_oku_m_price` and `distribute_yield`. Read by `mint_oku_m`,
-  `redeem_oku_m`, `bridge_mint`, `bridge_burn`, `confirm_refund`,
-  `wrap`, `unwrap`.
+  `redeem_oku_m`, `bridge_mint`, `confirm_refund`. (Also indirectly
+  consulted by `wrap`/`unwrap` because the vault reads `oku_m_price`
+  from the PSM config; both consumers re-check the slot via
+  `helpers::yield_lock::check_yield_lock`.)
 - `oku_dollar::OkuDollarConfig::last_yield_distribution_slot` — set by
-  `update_usd_multiplier`. Read by `wrap` and `unwrap`.
+  `update_usd_multiplier`. Read by `wrap` and `unwrap` via
+  `helpers::check_vault_yield_lock`.
+
+Note: `bridge_burn` does NOT yield-lock on either side. It mirrors EVM
+`OkuBridge.bridgeBurn` which has no `whenYieldNotDistributing` modifier
+(the burn doesn't consume the price; only the destination mint does, and
+that's already locked).
 
 `Clock::slot` is ~400ms vs Ethereum's 12s blocks, so the SVM lock window is
 much tighter — but the orchestrator only needs to land its update into one
@@ -180,20 +188,238 @@ placements that would split the dead supply.)
 
 | Aspect | EVM | SVM |
 |---|---|---|
-| Convenience flows | Live on `LitePSM` (`mintUsdOku`, `redeemUsdOku`, `redeemOkuMWithPermit`) | Live on `OkuBridgeRouter` (CPI-based) |
-| Permit / single-tx UX | EIP-2612 permit | Durable nonces / Lookup Tables (not yet wired) |
+| Convenience flows | EVM splits between `LitePSM` (`mintUsdOku`, `redeemUsdOku`, `redeemOkuMWithPermit`) and `OkuBridgeRouter` (`bridgeWrappedVia`/`bridgeVia`) | SVM consolidates both kinds on `oku_bridge_router` (`mint_usd_oku`, `redeem_usd_oku`, `bridge_oku_m`, `bridge_usd_oku`) |
+| Permit / one-tx UX | EIP-2612 permit | No analog. Solana doesn't have a directly-equivalent off-chain-signed-message + execute pattern. Future deployments may use durable nonces + a sponsored fee-payer relayer; the design is deferred. |
 | Third-party adapters | `NttAdapter`, future CCIP | None (native bridge only) |
 | Bridge refund | Two-step (initiator + confirmer) | Two-step (matches; Phase 3 added per-call `InitiatorCannotConfirm` check) |
 | Wallet price display | Frontends call `okuMPrice()` view | Frontends read `PsmConfig` PDA |
+| Router slippage params | None on `bridgeUsdOku`/`mintUsdOku` (atomic intra-block execution) | SVM router `bridge_usd_oku`, `redeem_usd_oku`, `mint_usd_oku` accept `min_*_out` slippage parameters because the discrete `usd_multiplier` creates a slippage window between sign and land. |
+| Router transaction size | Single 1-tx convenience always fits | `mint_usd_oku` / `redeem_usd_oku` carry 16-17 accounts and need an Address Lookup Table (Phase 8.6 ships `scripts/admin/setup-router-alt.ts`). SDK consumers must include the ALT in every router CPI tx. |
+| `OkuBridgeRouter.sweep` | Admin escape hatch for stuck tokens | Not implemented (router never holds escrow on SVM) |
 
 ## Queue model
 
 EVM `RedemptionQueue` is mapping-backed and effectively unbounded. SVM's
 current implementation uses a fixed `[QueueEntry; 10]` ring buffer
 (see `state::RedemptionQueue::MAX_ENTRIES`). This is an internal-prototype
-limitation; a follow-up will replace it with per-user PDAs to lift the cap.
-Until then, operators must keep the buffer topped up to ensure
-`redeem_oku_m` falls into the instant path.
+limitation; a follow-up (TRACKER Phase 4c) will replace it with per-user
+PDAs to lift the cap. Until then, operators must keep the buffer topped
+up to ensure `redeem_oku_m` falls into the instant path.
+
+EVM `processQueue(startIndex, endIndex, approveAmount)` takes a USDC
+approval and an index range; SVM `process_queue(max_entries)` takes only a
+batch size and uses CPI signer-based authority (no approval). Phase 8.1
+also added a `BufferRefilledEvent` emitted at the end of the SVM batch for
+indexer-friendly batch summary, mirroring EVM `BufferRefilled`.
+
+## Vault rebasing model (OkuDollar)
+
+Already covered for OkuMoney above; the same divergence applies to the
+`usd_multiplier` (per-share USD value):
+
+| Aspect | EVM | SVM |
+|---|---|---|
+| Accrual | Continuous via `_rpow(rate, dt)` | Discrete `update_usd_multiplier(absolute)` per orchestrator call |
+| Rate-staging | `setUsdYieldRate(rate, endTimestamp)` and `setNextUsdYieldRate(pendingRate)` allow scheduled rate transitions | No rate concept — staging requires N+1 explicit `update_usd_multiplier` calls |
+| Per-call ceiling | `MAX_RATE = PRECISION + 1e11` (≈3700% APY) bounds the rate | `MAX_USD_MULTIPLIER = 1e15` (Phase 8.1) bounds the absolute multiplier |
+| `unwrap` parameterization | `unwrap(usdAmount)` — caller specifies dollar amount; ceiling-divides shares to favor the vault | `unwrap(shares)` — caller specifies share amount; floor-divides OkuMoney out |
+
+Economic equivalence between calls is identical; the API shape and
+intermediate rounding direction differ.
+
+## Surplus accounting
+
+EVM `OkuDollar.surplus()` is a public view that returns the OkuMoney
+reserves above the minimum collateral ratio. SVM exposes the same formula
+as a pure helper `oku_dollar::helpers::calculate_surplus` but does NOT
+have an instruction-level view (Solana has no view fns). Clients
+reconstruct off-chain from `OkuDollarConfig`, `reserve_vault.amount`,
+`usd_oku_mint.supply`, and the configured `min_collateral_ratio`.
+
+Similarly, EVM `OkuDollar.getStatus()` (snapshot view returning all
+rate/share state) has no SVM analog; clients fetch the full
+`OkuDollarConfig` PDA in one RPC call.
+
+EVM `RedemptionQueue` has `queueLength() / queueAt() / getQueueEntry() /
+getQueueEntryValue() / totalQueuedUsdc()` views; SVM clients read the
+fields directly off the `RedemptionQueue` PDA.
+
+## OkuMoney admin parity
+
+| Aspect | EVM | SVM |
+|---|---|---|
+| `minterAllowance` shape | Per-minter `mapping(address => uint256)` (Circle FiatToken pattern) | Single global `u64` (Phase 8 confirmed: there's only one minter, the PSM PDA, so a mapping is moot) |
+| `setMaxSupply` lower bound | `BelowCurrentSupply` revert | `BelowCurrentSupply` revert (Phase 8.1 added — was previously silent) |
+| `okuMMultiplier()` getter | View on `OkuMoney` itself | Read `PsmConfig.oku_m_price` from the PDA |
+| `TransferValue` per-transfer event | Emitted via `_update` override | Not emitted — SVM cannot intercept Token-2022 transfers without a transfer-hook program (intentionally not deployed). Indexers on the SVM side must derive transfer values from balance deltas. |
+| `permit()` blacklist gating | EVM overrides `permit()` to revert on blacklisted owner/spender | N/A on SVM (no permit equivalent) |
+| Per-call `setOkuMMultiplier` ceiling | None; only `>= current` | `MAX_OKU_M_PRICE = 1e15` ceiling (Phase 8.1 already covered above) |
+| Same-chain bridge_mint reject | `CannotBridgeToSelf` | `WrongSourceChain` (Phase 8.1 added) when `request.source == bridge_config.source_chain_id` |
+| `skipNonce` semantics | Increments by exactly 1 | Accepts arbitrary delta (more flexible) but bounded by `MAX_NONCE_SKIP = 10_000` (Phase 8.1) |
+
+## Blacklist semantics asymmetry
+
+EVM `OkuMoney._update` blocks BOTH inbound and outbound transfers for
+blacklisted addresses (the `from` and `to` are checked).
+
+SVM uses Token-2022's `freeze_account`/`thaw_account` which gate **debits
+only**: a frozen ATA cannot send, but it can still receive. There is no
+"don't transfer to address X" check on the credit side because Token-2022
+freezes target ATAs (not owners).
+
+Operational consequence: an SVM operator who wants EVM-equivalent
+"blacklisted address gets no inbound transfers" must additionally freeze
+every potential sender's ATA — typically not feasible in practice. This
+is a documented limitation.
+
+The blacklist also doesn't gate `mint_oku_m`/`bridge_mint`/`confirm_refund`
+based on the destination wallet's blacklist status — SVM only knows the
+destination ATA, and only that ATA's frozen state is checked. EVM minted
+to a blacklisted owner reverts; SVM minted to a blacklisted owner's ATA
+will succeed (the ATA itself isn't frozen unless explicitly done).
+
+## Approval model
+
+EVM uses `approve` + `transferFrom` for delegated transfers. The PSM and
+Vault both rely on this for pulling USDC/OkuMoney from users.
+
+SVM uses direct user-signed transfer authority (no separate approve
+step). The user signs the entire tx and the PSM/Vault CPIs execute
+transfers under the user's signature. More efficient (one tx, not two)
+but precludes meta-tx / sponsor-pays-fees patterns where a relayer pulls
+pre-approved tokens from a user who didn't sign the on-chain tx.
+
+To approximate the EVM relayer pattern on SVM, clients would need
+durable nonces + an off-chain signed message + a fee-payer relay tx
+(deferred work; see "Bridge UX deltas" → permit row).
+
+## Round-trip drift
+
+EVM `LitePSM.mintOkuM` enforces a `RoundTripDriftTooLarge` revert: after
+computing `okuMAmount`, EVM round-trips through `okuMToDollars` then
+`dollarsToUsdc` and reverts if the round-trip USDC differs from the input
+by more than 1 unit. This catches >1-wei dust loss when EVM USDC has
+fewer decimals than OkuMoney (6 vs 18).
+
+SVM omits the check because both sides are 6-decimal — the only drift
+comes from `oku_m_price` truncation in `dollars_to_oku_m`, bounded to ≤1
+atomic unit of OkuMoney (the `PRECISION` divisor). Phase 8 confirmed
+this remains within the EVM tolerance.
+
+Similarly, EVM `redeemOkuM` enforces an `OutputBelowMinimum` slippage
+floor computed via `dollarsToUsdc(okuMToDollars(okuMFloor, mult))`. SVM
+only requires `usdc_amount > 0` (Phase 8.1) because the matching-decimals
+case can only truncate to zero, not to a meaningfully different non-zero.
+For caller-controlled slippage on SVM, use the router's `min_*_out`
+slippage parameters.
+
+## set_bridge_authority privilege boundary
+
+EVM `OkuBridge` exposes `setRoleAdmin` / `grantRole` / `revokeRole` for
+all roles via `AccessControlUpgradeable`. SVM `set_bridge_authority`
+covers the role-style fields (`bridge_admin`, `bridge_pauser`,
+`refund_initiator`, etc.) but **rejects** the `OrchestratorSigner` and
+`FeeRecipient` arms (Phase 8.1) because those config pubkeys must go
+through the dedicated `update_orchestrator_signer` (signer_manager-gated)
+and `update_fee_recipient` (fee_manager-gated) instructions. Routing
+them through `bridge_admin` would let `bridge_admin` bypass the
+per-config-pubkey gate.
+
+EVM has the same logical boundary but expresses it via separate
+`AccessControl` roles (`SIGNER_MANAGER_ROLE`, `FEE_MANAGER_ROLE`); SVM
+encodes the boundary directly in `set_bridge_authority`'s match-arm
+runtime check + a new `UseDedicatedRotation` error.
+
+## Validator chain ID
+
+The internal protocol u16 `BridgeConfig.source_chain_id` is set at deploy
+time via `initialize_bridge`. Phase 8.0 added a network resolver
+(`scripts/config/constants.ts::sourceChainIdForNetwork`) so a
+`mainnet-beta` deploy automatically uses 101 (Solana Mainnet) rather
+than 103 (Solana Devnet). A previous revision aliased
+`SOLANA_CHAIN_ID = SOLANA_DEVNET_CHAIN_ID` and would have silently
+misconfigured a mainnet bridge — fixed in P8.0.
+
+EVM uses `block.chainid` directly (uint256), no manual resolution
+required. The 32-byte EIP-712 chain-id encoding is a separate concern
+covered by the bridge wire-format section above.
+
+## Cross-chain rounding direction (18 ↔ 6 decimals)
+
+The EVM-side bridge encoder lives outside this repo; when scaling an
+18-decimal `OkuMoney.amount` down to the 6-decimal SVM `amount` field
+embedded in a signed BridgeRequest, the encoder MUST round DOWN (favor
+the protocol). The SVM side accepts the already-6-decimal value verbatim
+and does no further scaling.
+
+This rounding direction is not currently asserted on either side; verify
+in any future EVM relayer audit and add a TS unit test in
+`scripts/lib/bridge/` that exercises the rounding edge cases.
+
+## Approval / one-tx UX deferred
+
+EIP-2612 permit and the related EVM convenience functions
+(`redeemOkuMWithPermit`, `redeemUsdOkuWithPermit`) have no SVM analog and
+no concrete spec for a Solana-equivalent. Options for future work:
+
+1. **Durable nonces + sponsored fee-payer relayer.** A user signs an
+   off-chain message that a relayer wraps in a Solana tx (the user
+   pays nothing on chain). Requires a relayer service and durable-nonce
+   discipline.
+2. **Squads-style multi-sig instructions.** The Squads program supports
+   signed off-chain proposals that any party can execute on-chain.
+3. **Wait for Solana protocol-level "signed message + execute" support.**
+   No timeline.
+
+Until one is wired, SVM's one-tx UX is provided by the router (which
+batches PSM mint + vault wrap into one CPI tx but still requires the
+user's full signature).
+
+## Reentrancy guards
+
+EVM uses `nonReentrant` modifiers everywhere. SVM relies on:
+
+1. Anchor's deserialize-once-per-tx semantics (storage deltas commit
+   atomically at end-of-instruction).
+2. Effects-checks-interactions ordering enforced manually in code (e.g.
+   `mint_oku_m` decrements `minter_allowance` BEFORE the mint CPI; same
+   in `bridge_mint` and `confirm_refund`).
+3. The **invariant that the OkuMoney mint has no Token-2022
+   `TransferHook` extension**. This invariant is currently
+   operational (deploy script doesn't add the hook) rather than
+   on-chain-asserted. A future hardening is to assert at PSM init that
+   the OkuMoney mint's extension list does not include `TransferHook`.
+
+## Cross-chain operational requirements
+
+The bridge orchestrator must hold TWO distinct signing keys (or sign
+through two distinct schemes):
+
+- **secp256k1** for EIP-712 signatures over EVM-bound mint requests
+- **Ed25519** for raw 80-byte payload signatures over SVM-bound mint
+  requests (verified via the Solana Ed25519 precompile + instruction
+  introspection — see `lite_psm::helpers::ed25519`)
+
+Key material MUST NOT be reused: secp256k1 and Ed25519 use different
+elliptic curves and produce different addresses; even if both could be
+derived from the same 256-bit seed, conflating them would weaken the
+bridge's separation-of-concerns model.
+
+The dual-key requirement is documented operationally in the deploy
+runbook (`SVM/README.md` Runbook section).
+
+## Chain ID width
+
+EVM `BridgeRequest.{source,destination}ChainId` are `uint256`. SVM is
+`u16`. Real EVM chain IDs (Ethereum=1, Polygon=137, Base=8453,
+Avalanche=43114) all fit in u16, but this is a real ceiling — Linea
+(59144), Arbitrum One (42161) overflow. The SVM `BridgeConfig` stores
+*protocol-internal* u16 IDs (via `eip155ToInternalChainId` in
+`scripts/config/constants.ts`), not raw EIP-155 values.
+
+Cross-chain index implication: any indexer storing `chain_id` from both
+chains must use INT64 or wider, and apply the EIP-155↔internal mapping
+when joining.
 
 ## Events
 
@@ -202,21 +428,49 @@ SVM events generally include richer context (`actor` fields on admin events,
 parsing both chains must accept the superset and tolerate missing fields on
 the EVM side.
 
-The `RedemptionSkippedEvent` (Phase 1) has no EVM analog because EVM never
-needed to skip — its mapping-backed queue can always read the next non-zero
-entry.
+Phase-8 event-shape deltas:
+
+| Event | EVM fields | SVM fields | Notes |
+|---|---|---|---|
+| `BridgeMint` | `(requestId, recipient, sourceChainId, destChainId, amount)` | `(request_id, source_chain_id, recipient, amount, nonce, dollar_value)` | SVM omits `dest_chain_id` (current chain is implicit). SVM `recipient` is the wallet pubkey (Phase 8.1) — was previously the destination ATA. |
+| `BridgeBurn` | `(requestId, sender, recipient, sourceChainId, destChainId, grossAmount, netAmount, feeAmount, nonce, deadline)` | `(request_id, user, recipient, source_chain_id, destination_chain, gross_amount, amount, nonce, deadline, dollar_value, fee_amount)` | Phase 8.1 added `gross_amount` for cross-chain reconciliation. SVM additionally emits `dollar_value`. |
+| `RefundCancelled` | `(requestId, initiator, cancelledBy)` | `(request_id, initiator, canceller)` | Phase 8.1 added `initiator` so SVM event captures the full proposal-to-cancel audit trail. |
+| `RefundConfirmed` | `(requestId, sender, amount)` | `(request_id, recipient, amount)` | EVM names the field `sender` (the original sender of the bridge tx); SVM names it `recipient` (since the refund mints back to the recipient ATA whose owner equals the original sender). Same value, different field name. |
+| `RedemptionSkipped` | `(uint256 indexed index)` | `(queue_index: u32)` | Phase 1 added; EVM has the same shape. |
+| `BufferRefilled` | `(newBufferBalance, processedCount, skippedCount)` | `(new_buffer_balance, processed_count, skipped_count)` | Phase 8.1 added; mirrors EVM. |
+| `RedemptionRescued` | `(index, originalUser, recipient, okuMAmount, dollarValue)` | `(queue_index, original_user, recipient, oku_m_amount, dollar_value)` | `recipient` is the wallet (Phase 1), not the ATA. |
 
 ## Programs that exist on one side only
 
-- EVM `OkuBridgeRouter.sweep` — unimplemented on SVM (the router never holds
+EVM-only:
+- `OkuBridgeRouter.sweep` — unimplemented on SVM (the router never holds
   escrow because all CPI calls use the user as authority).
-- EVM `OkuBridgeRouter.bridgeWrappedVia` / `bridgeVia` (NTT/CCIP adapters) —
+- `OkuBridgeRouter.bridgeWrappedVia` / `bridgeVia` (NTT/CCIP adapters) —
   unimplemented on SVM.
-- SVM `set_pyth_program_owner` — has no EVM analog (Chainlink address is
-  set once at init).
-- SVM `initialize_blacklist_exempt` — has no EVM analog (EVM uses an
-  `AccessControl` role-based exempt-list rather than a one-shot
-  pubkey-pair).
+- `OkuDollar.surplus()` view, `OkuDollar.getStatus()` snapshot view —
+  Solana has no view fns; clients reconstruct from the
+  `OkuDollarConfig` PDA + a tiny off-chain helper.
+- `OkuDollar.setUsdYieldRate` / `setNextUsdYieldRate` rate-staging
+  instructions — SVM uses discrete `update_usd_multiplier` only.
+- `LitePSM.redeemOkuMWithPermit` / `redeemUsdOkuWithPermit` — no permit
+  on SVM.
+- `OkuBridge.domainSeparator()` / `hashTypedDataV4()` views — N/A on
+  SVM (raw 80-byte payload, no domain separator).
+
+SVM-only:
+- `set_pyth_program_owner` — Chainlink uses a fixed address at init on
+  EVM; SVM allows rotating between Pyth deployments.
+- `initialize_blacklist_exempt` — EVM uses `AccessControl` role-based
+  exempt-list rather than a one-shot pubkey-pair.
+- `BufferRefilledEvent` — Phase 8.1 batch-summary event for
+  `process_queue` (also exists on EVM `OkuBridge` but as `BufferRefilled`).
+- ALT setup script — no EVM equivalent (EVM has no transaction-size
+  limit comparable to Solana's 1232-byte cap).
+- `MAX_OKU_M_PRICE` / `MAX_USD_MULTIPLIER` ceilings — EVM has only
+  `>= current` checks. SVM Phase 3+ added absolute ceilings as
+  defense-in-depth against rebaser-key compromise.
+- `MAX_NONCE_SKIP` — EVM `skipNonce` increments by 1 unconditionally;
+  SVM allows arbitrary delta but bounds it.
 
 ## Where this is enforced in code
 
@@ -225,5 +479,23 @@ entry.
 - `lite_psm::helpers::yield_lock::check_yield_lock` — PSM-side slot fence
 - `oku_dollar::helpers::check_vault_yield_lock` — vault-side slot fence
 - `lite_psm::helpers::oracle::check_oracle_reserves` — Pyth V2 parser
-- `oku_bridge_router::validation::*` — cross-program PDA assertions
+  (Phase 8.0 corrected the `agg.status` width and `publish_time` offset
+  — see file-level comments for the canonical layout)
+- `lite_psm::instructions::psm_admin::set_max_supply` —
+  `BelowCurrentSupply` guard
+- `lite_psm::instructions::bridge::bridge_mint` — same-chain reject
+  (`request.source_chain_id != self.source_chain_id`)
+- `lite_psm::instructions::bridge_admin::set_bridge_authority` —
+  rejects `OrchestratorSigner` / `FeeRecipient` arms
+- `lite_psm::instructions::bridge_admin::skip_nonce` — `MAX_NONCE_SKIP`
+  cap
+- `oku_dollar::instructions::core::initialize` — cross-link assertion
+  `psm_config.oku_money_mint == oku_money_mint`
+- `oku_dollar::instructions::core::update_usd_multiplier` —
+  `MAX_USD_MULTIPLIER` ceiling
+- `oku_bridge_router::validation::*` — cross-program PDA + pause checks
+- `scripts/config/constants.ts::sourceChainIdForNetwork` — network →
+  protocol-internal Solana chain ID resolver
 - `scripts/lib/bridge/message.ts` — TS canonical bridge encoder
+- `scripts/lib/bridge/event.ts` — TS BridgeBurnEvent parser
+- `scripts/admin/setup-router-alt.ts` — Address Lookup Table setup

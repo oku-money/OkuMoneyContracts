@@ -1,4 +1,6 @@
-use crate::constants::{BASIS_POINTS, BRIDGE_DEADLINE_MAX_SECS, BRIDGE_DEADLINE_MIN_SECS};
+use crate::constants::{
+    BASIS_POINTS, BRIDGE_DEADLINE_MAX_SECS, BRIDGE_DEADLINE_MIN_SECS, MAX_NONCE_SKIP,
+};
 use crate::contexts::{
     BridgeAdmin, BridgeChainManager, BridgeFeeManager, BridgeLimitsManager, BridgeNonceAdmin,
     BridgePause, BridgeSignerManager, BridgeUnpause, InitializeBridge,
@@ -247,6 +249,12 @@ pub fn skip_nonce(
 
     let old_nonce = bridge_nonce.next_nonce;
     require!(new_nonce > old_nonce, LitePsmError::NonceNotMonotonic);
+    // Cap the per-call delta so a fat-finger can't push next_nonce near
+    // u64::MAX (which would risk overflow in bridge_burn's nonce++).
+    require!(
+        new_nonce.saturating_sub(old_nonce) <= MAX_NONCE_SKIP,
+        LitePsmError::NonceSkipTooLarge
+    );
     bridge_nonce.next_nonce = new_nonce;
 
     emit!(NonceSkippedEvent {
@@ -298,8 +306,16 @@ pub fn update_orchestrator_signer(
     Ok(())
 }
 
-/// Update a specific bridge authority role
-/// Only bridge_admin can call this function
+/// Update a specific bridge authority role.
+///
+/// Only `bridge_admin` can call this. The `OrchestratorSigner` and
+/// `FeeRecipient` arms are deliberately rejected here because they
+/// represent config pubkeys (not authorization gates) and have dedicated
+/// rotation instructions (`update_orchestrator_signer`, gated by
+/// `signer_manager`; `update_fee_recipient`, gated by `fee_manager`).
+/// Routing those rotations through this function would let `bridge_admin`
+/// bypass the per-config-pubkey gate, which is a privilege-escalation
+/// vector.
 pub fn set_bridge_authority(
     ctx: Context<BridgeAdmin>,
     role: BridgeAuthorityRole,
@@ -309,6 +325,15 @@ pub fn set_bridge_authority(
     require!(
         new_authority != Pubkey::default(),
         LitePsmError::InvalidAuthority
+    );
+
+    // Refuse the privilege-escalation arms — see fn-level doc.
+    require!(
+        !matches!(
+            role,
+            BridgeAuthorityRole::OrchestratorSigner | BridgeAuthorityRole::FeeRecipient
+        ),
+        LitePsmError::UseDedicatedRotation
     );
 
     let config = &mut ctx.accounts.bridge_config;
@@ -328,15 +353,10 @@ pub fn set_bridge_authority(
             config.bridge_unpauser = new_authority;
             old
         }
-        BridgeAuthorityRole::OrchestratorSigner => {
-            let old = config.orchestrator_signer;
-            config.orchestrator_signer = new_authority;
-            old
-        }
-        BridgeAuthorityRole::FeeRecipient => {
-            let old = config.fee_recipient;
-            config.fee_recipient = new_authority;
-            old
+        // The two arms below are unreachable because the require! above
+        // rejects them, but Rust's exhaustiveness check requires them.
+        BridgeAuthorityRole::OrchestratorSigner | BridgeAuthorityRole::FeeRecipient => {
+            return Err(LitePsmError::UseDedicatedRotation.into());
         }
         BridgeAuthorityRole::ChainManager => {
             let old = config.chain_manager;

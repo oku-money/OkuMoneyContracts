@@ -46,6 +46,17 @@ pub struct CapManager<'info> {
         has_one = cap_manager @ LitePsmError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
+
+    /// OkuMoney mint — read so `set_max_supply` can refuse a new cap below
+    /// the current circulating supply (would silently brick all future
+    /// mints, including bridge mints). EVM `OkuMoney.setMaxSupply` parity.
+    #[account(
+        address = config.oku_money_mint,
+        mint::token_program = token_2022_program,
+    )]
+    pub oku_money_mint: InterfaceAccount<'info, MintInterface>,
+
+    pub token_2022_program: Program<'info, Token2022>,
 }
 
 #[derive(Accounts)]

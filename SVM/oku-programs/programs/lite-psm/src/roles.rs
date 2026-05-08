@@ -68,10 +68,24 @@ pub enum BridgeAuthorityRole {
 
     /// Ed25519 public key for signature verification.
     /// Not a role in EVM (stored as state variable).
+    ///
+    /// DEPRECATED: this variant is no longer accepted by `set_bridge_authority`
+    /// because routing the orchestrator-signer rotation through `bridge_admin`
+    /// would bypass the dedicated `signer_manager` gate that
+    /// `update_orchestrator_signer` enforces. Always use the dedicated
+    /// `update_orchestrator_signer` instruction. The variant is kept in the
+    /// enum to preserve IDL ABI for off-chain clients.
     OrchestratorSigner,
 
     /// Receives bridge fees.
     /// Not a role in EVM (stored as state variable).
+    ///
+    /// DEPRECATED: this variant is no longer accepted by `set_bridge_authority`
+    /// because routing the fee-recipient rotation through `bridge_admin` would
+    /// bypass the dedicated `fee_manager` gate that `update_fee_recipient`
+    /// enforces. Always use the dedicated `update_fee_recipient` instruction.
+    /// The variant is kept in the enum to preserve IDL ABI for off-chain
+    /// clients.
     FeeRecipient,
 
     /// Add/remove supported chains.

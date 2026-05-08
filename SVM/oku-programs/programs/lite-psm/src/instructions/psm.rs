@@ -81,13 +81,10 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     // CPI so a future Token-2022 transfer-hook on OkuMoney cannot re-enter and
     // double-spend the same allowance window. Matches the same pattern used
     // throughout the bridge handlers.
-    let bump = {
-        let config = &mut ctx.accounts.config;
-        config.minter_allowance = minter_allowance
-            .checked_sub(oku_m_amount)
-            .ok_or(LitePsmError::Overflow)?;
-        config.bump
-    };
+    let bump = ctx.accounts.config.bump;
+    ctx.accounts.config.minter_allowance = minter_allowance
+        .checked_sub(oku_m_amount)
+        .ok_or(LitePsmError::Overflow)?;
 
     // Transfer USDC from user to vault (standard SPL)
     anchor_spl::token::transfer(
@@ -333,6 +330,12 @@ pub fn process_queue<'info>(
         // Calculate USDC payout using current price.
         let usdc_amount = oku_m_to_dollars(entry.oku_m_amount, oku_m_price)?;
 
+        // Reject zero-output payouts. `redeem_oku_m` rejects zero-output
+        // at enqueue time, but a price drop between enqueue and process
+        // could push a small entry under the truncation threshold; without
+        // this check the queued OkuMoney would be burned for 0 USDC.
+        require!(usdc_amount > 0, LitePsmError::OutputBelowMinimum);
+
         // Check if we have enough USDC
         if remaining_usdc_balance < usdc_amount {
             break; // Stop processing, not enough buffer
@@ -429,6 +432,15 @@ pub fn process_queue<'info>(
             wait_time,
         });
     }
+
+    // Emit a batch-level summary so indexers can reconcile buffer state
+    // without summing per-entry events. EVM `BufferRefilled` parity.
+    let skipped_count = processed.saturating_sub(payouts);
+    emit!(BufferRefilledEvent {
+        new_buffer_balance: remaining_usdc_balance,
+        processed_count: payouts,
+        skipped_count,
+    });
 
     Ok(())
 }

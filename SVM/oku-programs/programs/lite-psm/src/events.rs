@@ -12,6 +12,7 @@
 //! | `RedemptionQueuedEvent` | `RedemptionQueued` |
 //! | `RedemptionProcessedEvent` | `RedemptionProcessed` |
 //! | `RedemptionSkippedEvent` | `RedemptionSkipped` |
+//! | `BufferRefilledEvent` | `BufferRefilled` |
 //! | `RedemptionRescuedEvent` | `RedemptionRescued` |
 //! | `BufferDepositEvent` | `BufferDeposited` |
 //! | `BufferWithdrawEvent` | `BufferWithdrawn` |
@@ -113,6 +114,22 @@ pub struct RedemptionSkippedEvent {
     pub queue_index: u32,
 }
 
+/// Emitted at the end of `process_queue` with batch-level summary.
+///
+/// EVM equivalent: `BufferRefilled(uint256 newBufferBalance,
+///   uint256 processedCount, uint256 skippedCount)`. Indexers can use this
+/// to reconcile buffer state after a queue drain without summing per-entry
+/// `RedemptionProcessed`/`Skipped` events.
+#[event]
+pub struct BufferRefilledEvent {
+    /// USDC vault balance after the batch completed (6 decimals).
+    pub new_buffer_balance: u64,
+    /// Number of entries that received a USDC payout in this batch.
+    pub processed_count: u32,
+    /// Number of cleared (rescued) entries skipped during traversal.
+    pub skipped_count: u32,
+}
+
 /// Emitted when a stuck queue entry is rescued.
 /// EVM equivalent: `RedemptionRescued(uint256 indexed index, address originalUser, address recipient, uint256 okuMAmount, uint256 dollarValue)`
 #[event]
@@ -172,28 +189,35 @@ pub struct BridgeMintEvent {
 }
 
 /// Emitted when tokens are burned for bridging to another chain.
-/// EVM equivalent: `BridgeBurn(bytes32 indexed requestId, address indexed user, bytes32 recipient, uint256 destChainId, uint256 amount, uint256 nonce, uint256 deadline)`
+/// EVM equivalent: `BridgeBurn(bytes32 indexed requestId, address indexed sender,
+///   bytes32 recipient, uint256 sourceChainId, uint256 destChainId,
+///   uint256 grossAmount, uint256 netAmount, uint256 feeAmount, uint256 nonce,
+///   uint256 deadline)`.
 #[event]
 pub struct BridgeBurnEvent {
-    /// Unique request identifier (keccak256 hash)
+    /// Unique request identifier (keccak256 hash).
     pub request_id: [u8; 32],
-    /// User who burned tokens
+    /// User who burned tokens.
     pub user: Pubkey,
-    /// Recipient on destination chain (EVM address, 20 bytes)
+    /// Recipient on destination chain (EVM address, 20 bytes).
     pub recipient: [u8; 20],
-    /// Source chain ID (Solana)
+    /// Source chain ID (Solana).
     pub source_chain_id: u16,
-    /// Destination chain ID
+    /// Destination chain ID.
     pub destination_chain: u16,
-    /// Amount burned excluding fee (6 decimals)
+    /// Gross amount the user submitted (pre-fee, 6 decimals). Restored for
+    /// cross-chain reconciliation parity with EVM `BridgeBurn.grossAmount`.
+    pub gross_amount: u64,
+    /// Net amount bridged (post-fee, 6 decimals). This is the `amount` field
+    /// embedded in the signed BridgeRequest message.
     pub amount: u64,
-    /// Sequential nonce for ordering
+    /// Sequential nonce for ordering.
     pub nonce: u64,
-    /// Request expiration timestamp
+    /// Request expiration timestamp.
     pub deadline: i64,
-    /// Dollar value of burned amount
+    /// Dollar value of net amount bridged.
     pub dollar_value: u64,
-    /// Fee amount deducted (6 decimals)
+    /// Fee amount deducted (6 decimals).
     pub fee_amount: u64,
 }
 
@@ -439,12 +463,18 @@ pub struct RefundConfirmedEvent {
 }
 
 /// Emitted when a pending refund is cancelled.
-/// EVM equivalent: `RefundCancelled(bytes32 indexed requestId, address indexed canceller, string reason)`
+///
+/// EVM equivalent: `RefundCancelled(bytes32 indexed requestId, address indexed
+/// initiator, address cancelledBy)` — both the original initiator (so the
+/// audit trail captures the full proposal-to-cancel lifecycle) and the
+/// canceller are reported.
 #[event]
 pub struct RefundCancelledEvent {
-    /// Unique request identifier
+    /// Unique request identifier.
     pub request_id: [u8; 32],
-    /// Who cancelled the refund
+    /// Original initiator (the proposer recorded in `PendingRefund.initiator`).
+    pub initiator: Pubkey,
+    /// Who cancelled the refund.
     pub canceller: Pubkey,
 }
 

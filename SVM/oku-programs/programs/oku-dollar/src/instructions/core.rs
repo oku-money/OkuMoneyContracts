@@ -1,6 +1,6 @@
 //! OkuDollar core instructions.
 
-use crate::constants::{MIN_COLLATERAL_RATIO_FLOOR, MINIMUM_LIQUIDITY, PRECISION};
+use crate::constants::{MAX_USD_MULTIPLIER, MIN_COLLATERAL_RATIO_FLOOR, MINIMUM_LIQUIDITY, PRECISION};
 use crate::contexts::{
     DepositReserves, Initialize, Unwrap, UpdateUsdMultiplier, WithdrawReserves, Wrap,
 };
@@ -41,6 +41,19 @@ pub fn initialize(
     require!(
         reserve_manager != Pubkey::default(),
         OkuDollarError::ZeroAuthority
+    );
+
+    // Cross-program invariant: the vault's OkuMoney mint MUST match the
+    // PSM's OkuMoney mint. Without this, a deployer could initialise the
+    // vault pointing at the right `psm_config` PDA but a different
+    // OkuMoney mint, which would store an inconsistent reference and
+    // silently break wrap/unwrap math. The router's
+    // `validation::verify_vault_config` checks the psm_config link but
+    // not the mint link, so this assertion is the single point that
+    // catches the case.
+    require!(
+        ctx.accounts.psm_config.oku_money_mint == ctx.accounts.oku_money_mint.key(),
+        OkuDollarError::OkuMoneyMintMismatch
     );
 
     let config = &mut ctx.accounts.config;
@@ -378,6 +391,14 @@ pub fn update_usd_multiplier(
     require!(
         new_usd_multiplier >= old_multiplier,
         OkuDollarError::MultiplierCannotDecrease
+    );
+
+    // Sanity ceiling — bounds the math even if the rebaser key is compromised.
+    // See `MAX_USD_MULTIPLIER` in `constants.rs`. Mirrors lite-psm's
+    // `MAX_OKU_M_PRICE` ceiling on `set_oku_m_price` / `distribute_yield`.
+    require!(
+        new_usd_multiplier <= MAX_USD_MULTIPLIER,
+        OkuDollarError::MultiplierAboveMax
     );
 
     // Check collateralization after the update

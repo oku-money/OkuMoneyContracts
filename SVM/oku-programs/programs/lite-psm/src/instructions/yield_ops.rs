@@ -36,11 +36,11 @@ pub fn set_oku_m_price(ctx: Context<SetOkuMPrice>, new_multiplier: u64) -> Resul
         LitePsmError::PriceAboveMax
     );
 
-    // Set yield distribution slot FIRST (before price update for atomicity)
+    // Stamp the yield-distribution slot and update the price. Both writes
+    // commit atomically at the end of the instruction (Anchor's storage
+    // deltas are flushed together), so ordering here is purely stylistic.
     let clock = Clock::get()?;
     config.last_yield_distribution_slot = clock.slot;
-
-    // Update the stored price
     config.oku_m_price = new_multiplier;
 
     emit!(YieldDistributionSlotSet { slot: clock.slot });
@@ -99,11 +99,10 @@ pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Res
         LitePsmError::PriceAboveMax
     );
 
-    // Set yield distribution slot FIRST
+    // Stamp the yield-distribution slot and update the price; ordering is
+    // stylistic — both commit atomically at the end of the instruction.
     let clock = Clock::get()?;
     config.last_yield_distribution_slot = clock.slot;
-
-    // Update the stored price
     config.oku_m_price = new_multiplier;
 
     emit!(YieldDistributionSlotSet { slot: clock.slot });

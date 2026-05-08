@@ -49,6 +49,12 @@ pub enum LitePsmError {
     #[msg("Mint would exceed max supply")]
     MaxSupplyExceeded,
 
+    /// Proposed `max_supply` is below the current circulating supply.
+    /// Setting it would silently brick all future mints. EVM
+    /// `OkuMoney.setMaxSupply` parity.
+    #[msg("New max_supply must be >= current circulating supply")]
+    BelowCurrentSupply,
+
     /// Mint would exceed minter allowance
     /// EVM: ExceedsAllowance()
     #[msg("Mint would exceed minter allowance")]
@@ -150,6 +156,13 @@ pub enum LitePsmError {
     #[msg("Blacklist exemption already initialized")]
     BlacklistExemptAlreadyInitialized,
 
+    /// One of the supplied blacklist-exempt pubkeys is invalid (e.g. the
+    /// zero pubkey). Distinct from `InvalidAuthority` — those pubkeys are
+    /// not authorities, they're addresses that `freeze_account` must
+    /// refuse to freeze.
+    #[msg("Blacklist-exempt pubkey is invalid (e.g. zero pubkey)")]
+    InvalidBlacklistExemptAddress,
+
     // ===== Bridge-Specific Errors =====
     /// Bridge is paused
     #[msg("Bridge is paused")]
@@ -187,7 +200,13 @@ pub enum LitePsmError {
     #[msg("Chain not supported")]
     UnsupportedChain,
 
-    /// Request already processed
+    /// Request already processed.
+    ///
+    /// Reserved — replay protection is currently enforced via the `init`
+    /// constraint on the `ProcessedRequest` PDA, which surfaces an Anchor
+    /// `AccountAlreadyInitialized` error rather than this variant. Kept in
+    /// the enum so the error-code numbering remains stable for indexers
+    /// that decode by number.
     #[msg("Request already processed")]
     RequestAlreadyProcessed,
 
@@ -206,6 +225,11 @@ pub enum LitePsmError {
     /// Nonce skip request did not strictly advance the nonce
     #[msg("Nonce must strictly advance (new_nonce > current)")]
     NonceNotMonotonic,
+
+    /// Nonce skip delta exceeds `MAX_NONCE_SKIP`. Defense in depth: bounds
+    /// the per-call jump so a fat-finger can't push next_nonce near u64::MAX.
+    #[msg("Nonce skip delta exceeds MAX_NONCE_SKIP")]
+    NonceSkipTooLarge,
 
     /// Chain already supported
     #[msg("Chain already supported")]
@@ -244,11 +268,19 @@ pub enum LitePsmError {
     InvalidDeadline,
 
     // ===== Two-Step Refund Errors =====
-    /// Refund already pending for this request
+    /// Refund already pending for this request.
+    ///
+    /// Reserved — enforced by the `init` constraint on the `PendingRefund`
+    /// PDA which surfaces `AccountAlreadyInitialized`. Kept for error-code
+    /// numbering stability.
     #[msg("Refund already pending for this request")]
     RefundAlreadyPending,
 
-    /// No pending refund found for this request
+    /// No pending refund found for this request.
+    ///
+    /// Reserved — enforced by the `mut` constraint on the `PendingRefund`
+    /// PDA which surfaces `AccountNotInitialized`. Kept for error-code
+    /// numbering stability.
     #[msg("No pending refund found for this request")]
     NoPendingRefund,
 
@@ -268,6 +300,13 @@ pub enum LitePsmError {
     /// Mirrors EVM `OkuBridge.confirmRefund`'s `InitiatorCannotConfirm` revert.
     #[msg("Confirmer must be a different key than the initiator that proposed this refund")]
     InitiatorCannotConfirm,
+
+    /// `set_bridge_authority` refused to rotate `OrchestratorSigner` or
+    /// `FeeRecipient` because those config pubkeys have dedicated rotation
+    /// paths gated by different roles (`signer_manager` and `fee_manager`).
+    /// Routing them through `bridge_admin` would be privilege escalation.
+    #[msg("Use the dedicated rotation instruction (update_orchestrator_signer / update_fee_recipient)")]
+    UseDedicatedRotation,
 
     // ===== Initialization Errors =====
     /// Pyth program owner pubkey supplied to `initialize` was the default (zero) pubkey.

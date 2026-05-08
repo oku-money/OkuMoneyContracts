@@ -586,6 +586,8 @@ describe("lite-psm", () => {
           .accountsPartial({
             capManager: coldMultisig.publicKey,
             config: configPda,
+            okuMoneyMint: okuMoneyMint,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([coldMultisig])
           .rpc();
@@ -599,6 +601,8 @@ describe("lite-psm", () => {
           .accountsPartial({
             capManager: coldMultisig.publicKey,
             config: configPda,
+            okuMoneyMint: okuMoneyMint,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([coldMultisig])
           .rpc();
@@ -607,10 +611,12 @@ describe("lite-psm", () => {
       it("non-cap_manager CANNOT set max supply", async () => {
         try {
           await program.methods
-            .setMaxSupply(new BN(1))
+            .setMaxSupply(new BN(2_000_000_000_000))
             .accountsPartial({
               capManager: warmMultisig.publicKey, // Wrong role
               config: configPda,
+              okuMoneyMint: okuMoneyMint,
+              token2022Program: TOKEN_2022_PROGRAM_ID,
             })
             .signers([warmMultisig])
             .rpc();
@@ -1060,12 +1066,23 @@ describe("lite-psm", () => {
     });
 
     it("fails to mint when max supply exceeded", async () => {
-      // Set max supply very low
+      // Phase 8: set_max_supply now refuses to drop below current supply,
+      // so squeeze the cap down to *exactly* the current supply — any
+      // subsequent mint must fail with MaxSupplyExceeded.
+      const currentMint = await getMint(
+        provider.connection,
+        okuMoneyMint,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      const tightCap = new BN(currentMint.supply.toString());
       await program.methods
-        .setMaxSupply(new BN(1))
+        .setMaxSupply(tightCap)
         .accountsPartial({
           capManager: coldMultisig.publicKey,
           config: configPda,
+          okuMoneyMint: okuMoneyMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([coldMultisig])
         .rpc();
@@ -1101,6 +1118,8 @@ describe("lite-psm", () => {
         .accountsPartial({
           capManager: coldMultisig.publicKey,
           config: configPda,
+          okuMoneyMint: okuMoneyMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([coldMultisig])
         .rpc();

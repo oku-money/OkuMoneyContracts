@@ -86,6 +86,17 @@ pub fn bridge_mint(
         LitePsmError::WrongDestinationChain
     );
 
+    // 5c. Reject same-chain bridges (source == destination). The orchestrator
+    // should never sign such a message, but a compromised orchestrator key
+    // would otherwise be able to mint an arbitrary same-chain "request" on
+    // a destination that's also the source — creating a misleading
+    // ProcessedRequest record. Mirrors EVM `OkuBridge.bridgeMint`'s
+    // `CannotBridgeToSelf` guard.
+    require!(
+        request.source_chain_id != bridge_config.source_chain_id,
+        LitePsmError::WrongSourceChain
+    );
+
     // Validate deadline
     let clock = Clock::get()?;
     require!(
@@ -165,11 +176,14 @@ pub fn bridge_mint(
     let oku_m_price = ctx.accounts.config.oku_m_price;
     let dollar_value = oku_m_to_dollars(request.amount, oku_m_price)?;
 
-    // Emit event
+    // Emit event. `recipient` is the wallet pubkey parsed from the signed
+    // BridgeRequest (NOT the destination ATA address) so SVM and EVM
+    // indexers see the same logical recipient. The ATA is recoverable
+    // from (recipient, oku_money_mint, Token-2022) at index time.
     emit!(BridgeMintEvent {
         request_id,
         source_chain_id: request.source_chain_id,
-        recipient: ctx.accounts.recipient_oku_money_ata.key(),
+        recipient: recipient_pubkey,
         amount: request.amount,
         nonce: request.nonce,
         dollar_value,
@@ -306,13 +320,17 @@ pub fn bridge_burn(
     let oku_m_price = ctx.accounts.config.oku_m_price;
     let dollar_value = oku_m_to_dollars(net_amount, oku_m_price)?;
 
-    // Emit event with full metadata
+    // Emit event with full metadata. Both gross_amount (pre-fee, what the
+    // user submitted) and amount (post-fee, what's actually bridged and
+    // appears in the signed BridgeRequest) are emitted for cross-chain
+    // reconciliation parity with EVM `BridgeBurn`.
     emit!(BridgeBurnEvent {
         request_id,
         user: ctx.accounts.user.key(),
         recipient,
         source_chain_id,
         destination_chain: destination_chain_id,
+        gross_amount: amount,
         amount: net_amount,
         nonce,
         deadline,
@@ -478,15 +496,23 @@ pub fn confirm_refund(ctx: Context<ConfirmRefund>, request_id: [u8; 32]) -> Resu
     Ok(())
 }
 
-/// Cancel a pending refund
-/// Can be called by either refund_initiator or refund_confirmer to abort a pending refund
+/// Cancel a pending refund.
 ///
-/// Matches EVM OkuBridge.cancelRefund() pattern.
+/// Authorization is enforced in the context constraint: caller must be the
+/// `pending_refund.initiator` (the original proposer) OR `bridge_admin`.
+/// Matches EVM `OkuBridge.cancelRefund` pattern.
+///
+/// Reads `pending_refund.initiator` BEFORE the close-on-cancel completes so
+/// the emitted event captures the full proposal-to-cancel audit trail
+/// (mirrors EVM `RefundCancelled(requestId, initiator, cancelledBy)`).
 pub fn cancel_refund(ctx: Context<CancelRefund>, request_id: [u8; 32]) -> Result<()> {
+    let initiator = ctx.accounts.pending_refund.initiator;
     // PendingRefund is automatically closed via `close = canceller` constraint
+    // at the end of this instruction.
 
     emit!(RefundCancelledEvent {
         request_id,
+        initiator,
         canceller: ctx.accounts.canceller.key(),
     });
 

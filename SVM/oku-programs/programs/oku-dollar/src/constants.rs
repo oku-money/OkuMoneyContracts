@@ -22,3 +22,11 @@ pub const MINIMUM_LIQUIDITY: u64 = 1_000_000; // 10^6 = 1 usdOku (6 decimals)
 /// Protocol cannot set min_collateral_ratio below this value. Mirrors EVM's
 /// `MIN_COLLATERAL_RATIO_FLOOR` constant on `OkuDollar`.
 pub const MIN_COLLATERAL_RATIO_FLOOR: u64 = 900_000_000;
+
+/// Absolute maximum allowed `usd_multiplier`. Even with the `usd_rebaser`
+/// key compromised, the multiplier cannot be pushed beyond this value, which
+/// keeps subsequent multiplications inside the `u128` intermediate space and
+/// avoids permanent DoS via overflow. Set to 1e15 = $1,000,000.00 per share,
+/// far above any realistic yield trajectory. Mirrors `MAX_OKU_M_PRICE`
+/// on the lite-psm side.
+pub const MAX_USD_MULTIPLIER: u64 = 1_000_000_000_000_000;

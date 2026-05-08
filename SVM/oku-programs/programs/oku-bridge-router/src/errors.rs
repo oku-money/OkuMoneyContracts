@@ -8,7 +8,11 @@ pub enum RouterError {
     Paused,
     #[msg("Amount must be greater than zero")]
     ZeroAmount,
-    #[msg("Unexpected balance decrease")]
+    /// Despite the legacy variant name, this error fires when a post-CPI
+    /// balance read is unexpectedly less than the pre-CPI snapshot — i.e.
+    /// some other tx moved tokens out from under us. Kept named `MathError`
+    /// for IDL ABI stability; treat as `UnexpectedBalanceDecrease`.
+    #[msg("Unexpected balance decrease (post-CPI balance < pre-CPI snapshot)")]
     MathError,
     #[msg("Slippage tolerance exceeded")]
     SlippageExceeded,

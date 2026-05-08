@@ -78,6 +78,13 @@ pub const ED25519_INSTRUCTION_SCAN_LIMIT: usize = 16;
 /// Backing array is `[u16; 32]`.
 pub const MAX_SUPPORTED_CHAINS: u8 = 32;
 
+/// Maximum number of nonces `skip_nonce` may skip in a single call.
+/// Defends against an admin foot-gun that would jump `next_nonce` near
+/// `u64::MAX`, which would risk eventual overflow in `bridge_burn`'s
+/// `next_nonce.checked_add(1)`. EVM `OkuBridge.skipNonce` increments by
+/// exactly 1; SVM allows arbitrary delta but caps it here.
+pub const MAX_NONCE_SKIP: u64 = 10_000;
+
 // ===== Oracle staleness bounds =====
 
 /// Lower bound on the configurable oracle staleness threshold. Below this,

@@ -46,6 +46,12 @@ pub enum OkuDollarError {
     #[msg("USD multiplier can only increase")]
     MultiplierCannotDecrease,
 
+    /// Proposed `usd_multiplier` exceeds `MAX_USD_MULTIPLIER`. Defense in
+    /// depth — even with the rebaser key compromised, the multiplier cannot
+    /// be pushed past the ceiling. Mirrors lite-psm `PriceAboveMax`.
+    #[msg("Proposed usd_multiplier exceeds MAX_USD_MULTIPLIER ceiling")]
+    MultiplierAboveMax,
+
     #[msg("Invalid USD multiplier")]
     InvalidMultiplier,
 
@@ -84,4 +90,10 @@ pub enum OkuDollarError {
     /// `update_usd_multiplier`. Mirrors EVM `YieldSandwichGuard`.
     #[msg("Cannot perform operation in same slot as USD multiplier update")]
     YieldDistributionInProgress,
+
+    /// Vault's `oku_money_mint` doesn't match the PSM's `oku_money_mint`
+    /// at init time. Caught early instead of silently storing inconsistent
+    /// references that break wrap/unwrap math.
+    #[msg("Vault oku_money_mint must match PSM oku_money_mint")]
+    OkuMoneyMintMismatch,
 }

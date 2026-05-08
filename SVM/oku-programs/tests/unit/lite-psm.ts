@@ -701,6 +701,103 @@ describe("lite-psm", () => {
           expect(err.error.errorCode.code).to.equal("Unauthorized");
         }
       });
+
+      it("set_oracle rejects staleness below ORACLE_MIN_STALENESS_SECS (60s)", async () => {
+        // Phase 3 added bounds: when an oracle is configured, staleness must
+        // lie in [60s, 7 days].
+        try {
+          await program.methods
+            .setOracle(Keypair.generate().publicKey, new BN(30)) // < 60
+            .accountsPartial({
+              oracleManager: coldMultisig.publicKey,
+              config: configPda,
+            })
+            .signers([coldMultisig])
+            .rpc();
+          expect.fail("Should have rejected staleness < 60s");
+        } catch (err: any) {
+          expect(err.error.errorCode.code).to.equal("InvalidStaleness");
+        }
+      });
+
+      it("set_oracle rejects staleness above ORACLE_MAX_STALENESS_SECS (7d)", async () => {
+        const eightDays = 8 * 24 * 60 * 60;
+        try {
+          await program.methods
+            .setOracle(Keypair.generate().publicKey, new BN(eightDays))
+            .accountsPartial({
+              oracleManager: coldMultisig.publicKey,
+              config: configPda,
+            })
+            .signers([coldMultisig])
+            .rpc();
+          expect.fail("Should have rejected staleness > 7d");
+        } catch (err: any) {
+          expect(err.error.errorCode.code).to.equal("InvalidStaleness");
+        }
+      });
+
+      it("oracle_manager can rotate Pyth program owner", async () => {
+        const newOwner = Keypair.generate().publicKey;
+        const before = await program.account.psmConfig.fetch(configPda);
+        const originalOwner = before.pythProgramOwner as PublicKey;
+
+        await program.methods
+          .setPythProgramOwner(newOwner)
+          .accountsPartial({
+            oracleManager: coldMultisig.publicKey,
+            config: configPda,
+          })
+          .signers([coldMultisig])
+          .rpc();
+
+        const after = await program.account.psmConfig.fetch(configPda);
+        expect((after.pythProgramOwner as PublicKey).toString()).to.equal(
+          newOwner.toString()
+        );
+
+        // Restore so subsequent oracle tests still match the original owner.
+        await program.methods
+          .setPythProgramOwner(originalOwner)
+          .accountsPartial({
+            oracleManager: coldMultisig.publicKey,
+            config: configPda,
+          })
+          .signers([coldMultisig])
+          .rpc();
+      });
+
+      it("set_pyth_program_owner rejects zero pubkey", async () => {
+        try {
+          await program.methods
+            .setPythProgramOwner(PublicKey.default)
+            .accountsPartial({
+              oracleManager: coldMultisig.publicKey,
+              config: configPda,
+            })
+            .signers([coldMultisig])
+            .rpc();
+          expect.fail("Should have rejected zero pubkey");
+        } catch (err: any) {
+          expect(err.error.errorCode.code).to.equal("InvalidPythProgramOwner");
+        }
+      });
+
+      it("non-oracle_manager CANNOT rotate Pyth program owner", async () => {
+        try {
+          await program.methods
+            .setPythProgramOwner(Keypair.generate().publicKey)
+            .accountsPartial({
+              oracleManager: warmMultisig.publicKey, // wrong role
+              config: configPda,
+            })
+            .signers([warmMultisig])
+            .rpc();
+          expect.fail("Should have rejected non-oracle_manager");
+        } catch (err: any) {
+          expect(err.error.errorCode.code).to.equal("Unauthorized");
+        }
+      });
     });
 
     describe("orchestrator role separation", () => {

@@ -26,6 +26,7 @@ import {
 } from "@solana/spl-token";
 import { keccak_256 } from "@noble/hashes/sha3";
 import * as nacl from "tweetnacl";
+import { fetchBridgeBurnEvent, serializeBurnMessage, computeRequestId } from "../../scripts/lib/bridge";
 import {
   coldMultisig,
   warmMultisig,
@@ -2654,6 +2655,269 @@ describe("Bridge Security Tests", () => {
             .signers([limitsManager])
             .rpc(),
         "InvalidDeadline"
+      );
+    });
+
+    it("rejects update_bridge_deadline from non-limits_manager", async () => {
+      await expectError(
+        () =>
+          program.methods
+            .updateBridgeDeadline(new BN(120))
+            .accountsPartial({
+              limitsManager: unauthorizedUser.publicKey,
+              bridgeConfig: bridgeConfigPda,
+            })
+            .signers([unauthorizedUser])
+            .rpc(),
+        "Unauthorized"
+      );
+    });
+
+    it("rejects update_bridge_limits from non-limits_manager", async () => {
+      await expectError(
+        () =>
+          program.methods
+            .updateBridgeLimits(new BN(1), new BN(2))
+            .accountsPartial({
+              limitsManager: unauthorizedUser.publicKey,
+              bridgeConfig: bridgeConfigPda,
+            })
+            .signers([unauthorizedUser])
+            .rpc(),
+        "Unauthorized"
+      );
+    });
+
+    it("rejects update_fee_recipient from non-fee_manager", async () => {
+      await expectError(
+        () =>
+          program.methods
+            .updateFeeRecipient(Keypair.generate().publicKey)
+            .accountsPartial({
+              feeManager: unauthorizedUser.publicKey,
+              bridgeConfig: bridgeConfigPda,
+            })
+            .signers([unauthorizedUser])
+            .rpc(),
+        "Unauthorized"
+      );
+    });
+  });
+
+  // ==========================================================================
+  // Phase 8.3 — set_bridge_authority privilege-escalation defense
+  // ==========================================================================
+  describe("set_bridge_authority dedicated-rotation gate", () => {
+    it("rejects rotation of OrchestratorSigner via set_bridge_authority", async () => {
+      // Phase 8.1 closed the privilege-escalation vector: OrchestratorSigner
+      // must be rotated through update_orchestrator_signer (signer_manager-
+      // gated), NOT through set_bridge_authority (bridge_admin-gated).
+      await expectError(
+        () =>
+          program.methods
+            .setBridgeAuthority(
+              { orchestratorSigner: {} } as any,
+              Keypair.generate().publicKey
+            )
+            .accountsPartial({
+              bridgeAdmin: bridgeAdmin.publicKey,
+              bridgeConfig: bridgeConfigPda,
+            })
+            .signers([bridgeAdmin])
+            .rpc(),
+        "UseDedicatedRotation"
+      );
+    });
+
+    it("rejects rotation of FeeRecipient via set_bridge_authority", async () => {
+      await expectError(
+        () =>
+          program.methods
+            .setBridgeAuthority(
+              { feeRecipient: {} } as any,
+              Keypair.generate().publicKey
+            )
+            .accountsPartial({
+              bridgeAdmin: bridgeAdmin.publicKey,
+              bridgeConfig: bridgeConfigPda,
+            })
+            .signers([bridgeAdmin])
+            .rpc(),
+        "UseDedicatedRotation"
+      );
+    });
+  });
+
+  // ==========================================================================
+  // Phase 8.3 — Refund flow (initiate_refund deadline checks)
+  //
+  // Full happy-path refund tests (initiate -> confirm) need the cluster clock
+  // advanced past the bridge deadline. solana-test-validator's wall clock
+  // would force us to literally sleep `bridge_deadline_secs` seconds; that
+  // doesn't fit in a unit-test budget. Those tests are deferred to the
+  // tests/bankrun/ migration where `warpBy()` makes them trivial.
+  //
+  // Below we cover the deadline-not-elapsed reject case (which DOESN'T
+  // need clock manipulation — a fresh burn always has a future deadline).
+  // ==========================================================================
+  describe("Refund flow (deadline-not-elapsed)", () => {
+    itHeavy("initiate_refund rejects with MintWindowStillOpen when deadline not yet elapsed", async () => {
+      const burnAmount = BigInt(2_000_000); // 2 tokens
+      const destChain = ETH_CHAIN_ID;
+      const evmRecipient = randomEvmAddress();
+
+      // Make sure user has balance to burn.
+      const userBalance = await getAccount(
+        provider.connection,
+        userOkuMoneyAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      if (Number(userBalance.amount) < Number(burnAmount) * 2) {
+        await program.methods
+          .mintOkuM(new BN(20_000_000))
+          .accountsPartial({
+            user: user.publicKey,
+            config: configPda,
+            usdcMint,
+            okuMoneyMint,
+            userUsdcAta,
+            userOkuMoneyAta,
+            vaultUsdc: vaultUsdcAta,
+            priceUpdate: null,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([user])
+          .rpc();
+      }
+
+      // Burn — produces a BridgeBurnEvent whose deadline is now+1h (the
+      // current bridge_deadline_secs default).
+      const [noncePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_nonce"), Buffer.from([destChain, 0])],
+        program.programId
+      );
+      const txSig = await program.methods
+        .bridgeBurn(
+          new BN(burnAmount.toString()),
+          Array.from(evmRecipient),
+          destChain
+        )
+        .accountsPartial({
+          user: user.publicKey,
+          bridgeConfig: bridgeConfigPda,
+          config: configPda,
+          bridgeNonce: noncePda,
+          okuMoneyMint: okuMoneyMint,
+          userOkuMoneyAta: userOkuMoneyAta,
+          feeRecipientAta: feeRecipientAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      // Read the actual emitted BridgeBurnEvent (the canonical source of
+      // request_id, nonce, and deadline). Avoids the fragile recomputation
+      // that previously bit Phase 5's bridge-burn script.
+      const burnEvent = await fetchBridgeBurnEvent(
+        provider.connection,
+        txSig,
+        program.idl as any
+      );
+      const messageBytes = serializeBurnMessage({
+        sourceChainId: burnEvent.sourceChainId,
+        destChainId: burnEvent.destinationChain,
+        sender: user.publicKey,
+        recipient: evmRecipient,
+        amount: burnEvent.amount,
+        nonce: burnEvent.nonce,
+        deadline: burnEvent.deadline,
+      });
+      const requestId = computeRequestId(messageBytes);
+      // Sanity: locally-encoded request_id must match the on-chain emit.
+      expect(Buffer.from(burnEvent.requestId).equals(requestId)).to.equal(true);
+
+      const [pendingPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pending_refund"), requestId],
+        program.programId
+      );
+      const [processedPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_request"), requestId],
+        program.programId
+      );
+      const [refundedPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("refunded_request"), requestId],
+        program.programId
+      );
+
+      // The burn just landed; deadline = now + bridge_deadline_secs is in
+      // the future. initiate_refund must reject with MintWindowStillOpen.
+      await expectError(
+        () =>
+          program.methods
+            .initiateRefund(messageBytes, Array.from(requestId) as number[])
+            .accountsPartial({
+              refundInitiator: nonceAdmin.publicKey,
+              bridgeConfig: bridgeConfigPda,
+              config: configPda,
+              pendingRefund: pendingPda,
+              processedRequest: processedPda,
+              refundedRequest: refundedPda,
+              systemProgram: SystemProgram.programId,
+            })
+            .signers([nonceAdmin])
+            .rpc(),
+        "MintWindowStillOpen"
+      );
+    });
+
+    it("initiate_refund rejects when caller is not refund_initiator", async () => {
+      // Build a synthetic message; the request_id check fails first which
+      // is a different rejection, so we use a never-burned message but
+      // call from a wrong signer to verify the role gate fires.
+      const messageBytes = serializeBurnMessage({
+        sourceChainId: SOLANA_CHAIN_ID,
+        destChainId: ETH_CHAIN_ID,
+        sender: user.publicKey,
+        recipient: randomEvmAddress(),
+        amount: 1_000_000n,
+        nonce: 0n,
+        deadline: BigInt(Math.floor(Date.now() / 1000) - 10), // already past
+      });
+      const requestId = computeRequestId(messageBytes);
+      const [pendingPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pending_refund"), requestId],
+        program.programId
+      );
+      const [processedPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_request"), requestId],
+        program.programId
+      );
+      const [refundedPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("refunded_request"), requestId],
+        program.programId
+      );
+
+      await expectError(
+        () =>
+          program.methods
+            .initiateRefund(messageBytes, Array.from(requestId) as number[])
+            .accountsPartial({
+              refundInitiator: unauthorizedUser.publicKey, // wrong signer
+              bridgeConfig: bridgeConfigPda,
+              config: configPda,
+              pendingRefund: pendingPda,
+              processedRequest: processedPda,
+              refundedRequest: refundedPda,
+              systemProgram: SystemProgram.programId,
+            })
+            .signers([unauthorizedUser])
+            .rpc(),
+        "Unauthorized"
       );
     });
   });

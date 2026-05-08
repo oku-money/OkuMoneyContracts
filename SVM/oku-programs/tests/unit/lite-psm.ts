@@ -7,6 +7,7 @@ import {
   createMint,
   mintTo,
   getAccount,
+  getMint,
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountInstruction,
   ExtensionType,
@@ -907,6 +908,112 @@ describe("lite-psm", () => {
         expect(err.error.errorCode.code).to.equal("Unauthorized");
       }
     });
+
+    // ------------------------------------------------------------------
+    // distribute_yield: dollar-denominated yield → proportional price bump
+    // ------------------------------------------------------------------
+
+    it("distribute_yield: rebaser bumps oku_m_price proportional to yield/supply", async () => {
+      // Need OkuMoney supply > 0 so that yield_per_token computes non-zero.
+      const mintInfo = await getMint(
+        provider.connection,
+        okuMoneyMint,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      if (Number(mintInfo.supply) === 0) {
+        // Bail out cleanly — earlier tests should have minted; if not, skip.
+        // Don't fail; this test runs after `mint` describe blocks.
+        return;
+      }
+
+      const cfgBefore = await program.account.psmConfig.fetch(configPda);
+      const supply = BigInt(mintInfo.supply.toString());
+      const PRECISION_BI = 1_000_000_000n;
+
+      // Distribute $0.001 worth of yield (1000 base units of dollars).
+      // Picked deliberately small so yield_per_token > 0 even at high supply
+      // but doesn't push price near MAX_OKU_M_PRICE.
+      const yieldAmount = 1_000n;
+      const expectedBump = (yieldAmount * PRECISION_BI) / supply;
+      // If expected bump truncates to 0 (e.g. tiny yield vs huge supply), the
+      // program returns YieldTooSmall — exercise both branches.
+      if (expectedBump === 0n) {
+        try {
+          await program.methods
+            .distributeYield(new BN(yieldAmount.toString()))
+            .accountsPartial({
+              rebaser: orchestrator.publicKey,
+              config: configPda,
+              okuMoneyMint: okuMoneyMint,
+              token2022Program: TOKEN_2022_PROGRAM_ID,
+            })
+            .signers([orchestrator])
+            .rpc();
+          expect.fail("Should have rejected with YieldTooSmall");
+        } catch (err: any) {
+          expect(err?.error?.errorCode?.code).to.equal("YieldTooSmall");
+        }
+        return;
+      }
+
+      const oldPrice = BigInt(cfgBefore.okuMPrice.toString());
+      const expectedNew = oldPrice + expectedBump;
+
+      await program.methods
+        .distributeYield(new BN(yieldAmount.toString()))
+        .accountsPartial({
+          rebaser: orchestrator.publicKey,
+          config: configPda,
+          okuMoneyMint: okuMoneyMint,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      const cfgAfter = await program.account.psmConfig.fetch(configPda);
+      expect(cfgAfter.okuMPrice.toString()).to.equal(expectedNew.toString());
+      // Yield-distribution slot must advance
+      expect(Number(cfgAfter.lastYieldDistributionSlot)).to.be.greaterThan(
+        Number(cfgBefore.lastYieldDistributionSlot)
+      );
+    });
+
+    it("distribute_yield: zero yield_amount rejected", async () => {
+      try {
+        await program.methods
+          .distributeYield(new BN(0))
+          .accountsPartial({
+            rebaser: orchestrator.publicKey,
+            config: configPda,
+            okuMoneyMint: okuMoneyMint,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([orchestrator])
+          .rpc();
+        expect.fail("Should have rejected zero yield");
+      } catch (err: any) {
+        expect(err?.error?.errorCode?.code).to.equal("ZeroAmount");
+      }
+    });
+
+    it("distribute_yield: non-rebaser is rejected with Unauthorized", async () => {
+      try {
+        await program.methods
+          .distributeYield(new BN(1_000))
+          .accountsPartial({
+            rebaser: warmMultisig.publicKey, // wrong role
+            config: configPda,
+            okuMoneyMint: okuMoneyMint,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([warmMultisig])
+          .rpc();
+        expect.fail("Should have rejected non-rebaser");
+      } catch (err: any) {
+        expect(err?.error?.errorCode?.code).to.equal("Unauthorized");
+      }
+    });
   });
 
   // ==========================================================================
@@ -1218,8 +1325,17 @@ describe("lite-psm", () => {
           .rpc();
         expect.fail("Should have failed");
       } catch (err: any) {
-        // Token-2022 burn failure or custom error
-        expect(err).to.exist;
+        // The Token-2022 burn CPI rejects with `InsufficientFunds` (program
+        // error 0x1) when the user lacks the requested OkuMoney balance.
+        // Earlier this just asserted `err` exists, which would silently
+        // swallow OOM, signature, or RPC errors.
+        const code = err?.error?.errorCode?.code;
+        const msg = String(err?.message ?? err);
+        const isInsufficient =
+          code === "InsufficientFunds" ||
+          msg.includes("custom program error: 0x1") ||
+          msg.includes("insufficient funds");
+        expect(isInsufficient, `unexpected error: ${msg}`).to.equal(true);
       }
     });
   });
@@ -1705,10 +1821,285 @@ describe("lite-psm", () => {
           .rpc();
         expect.fail("Should have failed");
       } catch (err: any) {
+        // Tightened: previously fell through to `c.includes("Error")`,
+        // which matches any thrown JS Error including OOM / RPC failures.
         const errorCode = err?.error?.errorCode?.code || err?.message || "";
         expect(errorCode).to.satisfy((c: string) =>
-          c === "Unauthorized" || c.includes("Unauthorized") || c.includes("Error")
+          c === "Unauthorized" || c.includes("Unauthorized")
         );
+      }
+    });
+  });
+
+  // ==========================================================================
+  // NEW COVERAGE: rescue_queue_entry
+  // ==========================================================================
+  describe("rescue_queue_entry", () => {
+    const REDEEM_AMOUNT = new BN(500_000); // 0.5 OkuMoney
+
+    /** Drain whatever USDC is sitting in the PSM buffer so subsequent
+     * `redeem_oku_m` calls fall into the queued path. */
+    async function drainBuffer() {
+      const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint,
+        coldMultisig.publicKey,
+        false,
+        TOKEN_PROGRAM_ID
+      );
+      await ensureAta(
+        provider.connection,
+        payer,
+        bufferWithdrawerUsdcAta,
+        coldMultisig.publicKey,
+        usdcMint,
+        TOKEN_PROGRAM_ID
+      );
+      const vaultUsdc = await getAccount(
+        provider.connection,
+        vaultUsdcAta,
+        undefined,
+        TOKEN_PROGRAM_ID
+      );
+      if (Number(vaultUsdc.amount) > 0) {
+        await program.methods
+          .withdrawBuffer(new BN(Number(vaultUsdc.amount)))
+          .accountsPartial({
+            bufferWithdrawer: coldMultisig.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okuMoneyMint: okuMoneyMint,
+            withdrawerUsdcAta: bufferWithdrawerUsdcAta,
+            vaultUsdc: vaultUsdcAta,
+            usdcMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([coldMultisig])
+          .rpc();
+      }
+    }
+
+    before(async () => {
+      // Make sure the user has OkuMoney to queue.
+      await mintOkuMoneyViaProgram(
+        program,
+        user,
+        REDEEM_AMOUNT.muln(4),
+        configPda,
+        usdcMint,
+        okuMoneyMint,
+        userUsdcAta,
+        userOkuMoneyAta,
+        vaultUsdcAta
+      );
+      await drainBuffer();
+    });
+
+    // Reset the queue / buffer to a clean (empty + drained) state before
+    // returning control to the rest of the suite. Without this, the
+    // subsequent ring-buffer-wraparound test sees lingering state and
+    // its `withdrawBuffer(all)` call trips InsufficientBuffer.
+    after(async () => {
+      await drainBuffer();
+    });
+
+    it("returns escrowed OkuMoney to a recipient and clears the slot", async () => {
+      // Queue a redemption.
+      await program.methods
+        .redeemOkuM(REDEEM_AMOUNT)
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          usdcMint,
+          okuMoneyMint,
+          userUsdcAta,
+          userOkuMoneyAta,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      const rescueIndex = queue.tail - 1;
+      const slot = rescueIndex % 10;
+      const entry = queue.entries[slot];
+      const rescuedAmount = Number(entry.okuMAmount);
+      expect(entry.user.toString()).to.equal(user.publicKey.toString());
+
+      const userOkuBefore = await getAccount(
+        provider.connection,
+        userOkuMoneyAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      // Rescue back to the same user (could equally be an alternate ATA).
+      await program.methods
+        .rescueQueueEntry(rescueIndex)
+        .accountsPartial({
+          queueProcessor: psmOrchestrator.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          okuMoneyMint,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          recipientOkuMoneyAta: userOkuMoneyAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([psmOrchestrator])
+        .rpc();
+
+      const queueAfter = await program.account.redemptionQueue.fetch(
+        redemptionQueuePda
+      );
+      // Slot must be cleared (Pubkey::default + zero amount).
+      const cleared = queueAfter.entries[slot];
+      expect(cleared.user.toString()).to.equal(PublicKey.default.toString());
+      expect(Number(cleared.okuMAmount)).to.equal(0);
+
+      // OkuMoney must have been transferred back to the user.
+      const userOkuAfter = await getAccount(
+        provider.connection,
+        userOkuMoneyAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      expect(
+        Number(userOkuAfter.amount) - Number(userOkuBefore.amount)
+      ).to.equal(rescuedAmount);
+    });
+
+    it("non-queue_processor cannot rescue", async () => {
+      // Queue a fresh entry.
+      await program.methods
+        .redeemOkuM(REDEEM_AMOUNT)
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          usdcMint,
+          okuMoneyMint,
+          userUsdcAta,
+          userOkuMoneyAta,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      const rescueIndex = queue.tail - 1;
+
+      try {
+        await program.methods
+          .rescueQueueEntry(rescueIndex)
+          .accountsPartial({
+            queueProcessor: warmMultisig.publicKey, // wrong role
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okuMoneyMint,
+            vaultOkuMoney: vaultOkuMoneyAta,
+            recipientOkuMoneyAta: userOkuMoneyAta,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([warmMultisig])
+          .rpc();
+        expect.fail("Should have failed Unauthorized");
+      } catch (err: any) {
+        expect(err?.error?.errorCode?.code).to.equal("Unauthorized");
+      }
+
+      // Cleanup: rescue with the correct authority so the queue doesn't
+      // carry a leftover entry into subsequent describe blocks.
+      await program.methods
+        .rescueQueueEntry(rescueIndex)
+        .accountsPartial({
+          queueProcessor: psmOrchestrator.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          okuMoneyMint,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          recipientOkuMoneyAta: userOkuMoneyAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([psmOrchestrator])
+        .rpc();
+    });
+
+    it("rescuing the same slot twice fails with EntryAlreadyCleared", async () => {
+      // Queue and rescue once.
+      await program.methods
+        .redeemOkuM(REDEEM_AMOUNT)
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          usdcMint,
+          okuMoneyMint,
+          userUsdcAta,
+          userOkuMoneyAta,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      const rescueIndex = queue.tail - 1;
+
+      await program.methods
+        .rescueQueueEntry(rescueIndex)
+        .accountsPartial({
+          queueProcessor: psmOrchestrator.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          okuMoneyMint,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          recipientOkuMoneyAta: userOkuMoneyAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([psmOrchestrator])
+        .rpc();
+
+      try {
+        // After the rescue at the *tail*, the head loop in the program
+        // advances past the cleared slot — so the index is now strictly
+        // less than `head`. Either error is acceptable: InvalidQueueIndex
+        // (index < head) or EntryAlreadyCleared (if we somehow re-pin
+        // the same slot in a non-tail position).
+        await program.methods
+          .rescueQueueEntry(rescueIndex)
+          .accountsPartial({
+            queueProcessor: psmOrchestrator.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okuMoneyMint,
+            vaultOkuMoney: vaultOkuMoneyAta,
+            recipientOkuMoneyAta: userOkuMoneyAta,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([psmOrchestrator])
+          .rpc();
+        expect.fail("Should have rejected double-rescue");
+      } catch (err: any) {
+        const code = err?.error?.errorCode?.code;
+        expect(
+          code === "EntryAlreadyCleared" || code === "InvalidQueueIndex",
+          `unexpected error: ${code}`
+        ).to.equal(true);
       }
     });
   });

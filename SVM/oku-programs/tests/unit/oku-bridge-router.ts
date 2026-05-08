@@ -520,8 +520,15 @@ describe("oku-bridge-router", () => {
           .rpc();
         expect.fail("Should have failed with slippage");
       } catch (err: any) {
-        // Slippage error from vault program
-        expect(err.toString()).to.include("Error");
+        // Slippage error — surfaces as either OkuDollarError::SlippageExceeded
+        // (from the vault wrap) or RouterError::SlippageExceeded (from the
+        // router's post-wrap delta check). Tightened from the previous
+        // `err.toString().includes('Error')` which matched any JS Error.
+        const code = err?.error?.errorCode?.code;
+        const msg = String(err?.message ?? err);
+        const isSlippage =
+          code === "SlippageExceeded" || msg.includes("SlippageExceeded");
+        expect(isSlippage, `unexpected error: ${msg}`).to.equal(true);
       }
     });
 

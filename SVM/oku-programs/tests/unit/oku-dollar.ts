@@ -1172,7 +1172,19 @@ describe("oku-dollar", () => {
       const expectedReturn = sharesReceived.mul(configAfter.usdMultiplier).div(psmConfigAfter.okuMPrice);
       
       const actualReturn = Number(user1OkuMoneyFinal.amount) - (Number(user1OkuMoneyInitial.amount) - wrapAmount.toNumber());
-      expect(actualReturn).to.be.closeTo(expectedReturn.toNumber(), 1);
+      // One-sided invariant: the vault must NEVER pay out more OkuMoney than
+      // the user's shares are entitled to (vault favours protocol on rounding).
+      // We accept up to 1 unit short due to integer truncation in
+      // `shares_to_oku_money`, but reject any over-payment.
+      const expected = expectedReturn.toNumber();
+      expect(actualReturn).to.be.lessThanOrEqual(
+        expected,
+        `vault overpaid: actual=${actualReturn} > expected=${expected}`
+      );
+      expect(actualReturn).to.be.greaterThanOrEqual(
+        expected - 1,
+        `vault underpaid by more than 1 unit: actual=${actualReturn} expected=${expected}`
+      );
     });
   });
 

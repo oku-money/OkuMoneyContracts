@@ -4,36 +4,29 @@
   "scripts": {
     "build": "anchor build",
     "clean": "anchor clean && rm -f deployments/localnet.json",
-
     "export-idls": "tsx scripts/utils/exportIdls.ts",
-
     "deploy:programs": "NETWORK=devnet tsx scripts/deploy/deploy-programs.ts",
     "deploy:programs:devnet-fork": "NETWORK=devnet-fork tsx scripts/deploy/deploy-programs.ts",
     "deploy:programs:mainnet": "NETWORK=mainnet-beta tsx scripts/deploy/deploy-programs.ts",
     "deploy:init": "NETWORK=devnet tsx scripts/deploy/deploy-init.ts",
     "deploy:init:devnet-fork": "NETWORK=devnet-fork tsx scripts/deploy/deploy-init.ts",
     "deploy:init:mainnet": "NETWORK=mainnet-beta tsx scripts/deploy/deploy-init.ts",
-
     "test": "anchor test --validator legacy",
+    "test:bankrun": "npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'",
     "test:fork": "npx mocha --require tsx --timeout 180000 'tests/fork/**/*.ts'",
     "test:onchain": "NETWORK=devnet tsx scripts/test/test-devnet.ts",
     "test:onchain:fork": "NETWORK=devnet-fork tsx scripts/test/test-devnet.ts",
-
     "bridge:state": "tsx scripts/bridge/check-bridge-state.ts",
     "bridge:burn": "tsx scripts/bridge/bridge-burn-to-evm.ts",
     "bridge:mint": "tsx scripts/bridge/bridge-mint-from-evm.ts",
-
     "admin:blacklist-exempt": "tsx scripts/admin/initialize-blacklist-exempt.ts",
     "admin:rotate-orchestrator": "tsx scripts/admin/rotate-orchestrator.ts",
     "admin:set-oracle": "tsx scripts/admin/set-oracle.ts",
     "admin:set-pyth-program-owner": "tsx scripts/admin/set-pyth-program-owner.ts",
-
     "surfpool:devnet": "surfpool start --network devnet --airdrop-keypair-path /dev/null",
     "surfpool:mainnet": "surfpool start --network mainnet --airdrop-keypair-path /dev/null",
-
     "wallet:check": "tsx scripts/utils/check-wallet.ts",
     "cost": "tsx scripts/utils/calculateDeploymentCost.ts",
-
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w"
   },
@@ -50,9 +43,12 @@
     "@types/chai": "^4.3.4",
     "@types/mocha": "^10.0.0",
     "@types/node": "^20.0.0",
+    "anchor-bankrun": "^0.5.0",
     "chai": "^4.3.4",
     "mocha": "^9.0.3",
+    "patch-package": "^8.0.1",
     "prettier": "^2.6.2",
+    "solana-bankrun": "^0.4.0",
     "ts-mocha": "^11.1.0",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",

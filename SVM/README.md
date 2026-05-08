@@ -454,3 +454,187 @@ solana program set-upgrade-authority <OKU_BRIDGE_ROUTER_PROGRAM> --new-upgrade-a
 
 On mainnet, `OkuMoney` is created with mint authority = PSM config PDA. There
 is no path for an EOA to mint OkuMoney post-deployment.
+
+## Runbook
+
+This section captures operational requirements and one-time setup steps
+that aren't enforced by code. Treat this as a checklist for any
+external-facing deployment.
+
+### Pre-mainnet checklist
+
+- [ ] Real `security@` email in all three programs' `security_txt!`
+      blocks. The current values
+      (`programs/{lite-psm,oku-dollar,oku-bridge-router}/src/lib.rs`) are
+      placeholders (`security@okumoney.example`); replace before mainnet
+      deploy.
+- [ ] `sourceChainIdForNetwork(network)` returns 101 for `mainnet-beta`.
+      Verified by Phase 8.0; do not re-introduce a hardcoded
+      `SOLANA_CHAIN_ID` alias.
+- [ ] `ORCHESTRATOR_KEYPAIR_PATH` env var points at a KMS-backed signer,
+      NOT the deployer wallet. The bridge-mint script will refuse to run
+      if the loaded keypair doesn't match the on-chain
+      `bridge_config.orchestrator_signer`.
+- [ ] `scripts/admin/set-bridge-authority.ts` has been used to rotate
+      `refund_initiator` and `refund_confirmer` away from the testnet
+      PDA placeholders (which cannot sign top-level instructions).
+      Rotation must produce two DISTINCT keys, both DISTINCT from
+      `bridge_admin` — the on-chain handler enforces this.
+- [ ] `scripts/admin/initialize-blacklist-exempt.ts` has been run.
+      Verifies idempotency before submitting (no-op on a second run).
+- [ ] BPF loader upgrade authority transferred to the cold multisig:
+      ```bash
+      solana program set-upgrade-authority <LITE_PSM_PROGRAM>           --new-upgrade-authority <SQUADS_COLD_VAULT>
+      solana program set-upgrade-authority <OKU_DOLLAR_PROGRAM>         --new-upgrade-authority <SQUADS_COLD_VAULT>
+      solana program set-upgrade-authority <OKU_BRIDGE_ROUTER_PROGRAM>  --new-upgrade-authority <SQUADS_COLD_VAULT>
+      ```
+- [ ] Pyth feed configured (`scripts/admin/set-oracle.ts --oracle=<feed>
+      --staleness=300`). The feed MUST publish reserves in OkuMoney base
+      units (6 decimals) with `expo == 0` and `agg.status == Trading`.
+      Phase 8.0 corrected the parser; the modern Pyth Solana Receiver
+      layout is NOT supported.
+- [ ] Address Lookup Table created (`scripts/admin/setup-router-alt.ts`)
+      and the resulting pubkey is recorded in
+      `deployments/<network>.json` under `addressLookupTables.router`.
+      SDK consumers MUST include this ALT in every router CPI tx — the
+      raw `mint_usd_oku` / `redeem_usd_oku` account list is at the
+      v0-tx-size ceiling.
+
+### Orchestrator dual-key requirement
+
+The bridge orchestrator must hold TWO distinct signing keys:
+
+- **secp256k1** (EIP-712) for SVM-bound mint requests. Signs the EIP-712
+  struct hash defined on the EVM side.
+- **Ed25519** (raw 80-byte payload) for EVM-bound mint requests. Verified
+  on-chain by `lite_psm::helpers::ed25519` via Solana's Ed25519
+  precompile + instruction introspection.
+
+Key material MUST NOT be reused across schemes. Different elliptic
+curves, different addresses; even if both could be derived from the
+same 256-bit seed, conflating them weakens the bridge's
+separation-of-concerns model.
+
+Both keys should be KMS-backed (or AWS KMS / GCP KMS-equivalent on
+hardware). Rotation:
+
+- secp256k1: through the EVM-side `update_signer` admin tx.
+- Ed25519: `npm run admin:rotate-orchestrator -- --new=<pubkey>`. After
+  rotation, any in-flight signed messages from the old key are
+  invalidated automatically (the on-chain `bridge_mint` reads
+  `bridge_config.orchestrator_signer` at execution time, not signing
+  time).
+
+### Queue capacity SLA
+
+The current `RedemptionQueue` is a fixed 10-entry ring buffer. Operations
+discipline:
+
+- Keep `vault_usdc.amount` topped up so `redeem_oku_m` falls into the
+  instant path (buffer >= queued obligations + new redemption).
+- If the queue ever fills (10 simultaneously-pending redemptions), the
+  11th `redeem_oku_m` reverts with `QueueFull`. Run
+  `npm run admin:distribute-yield` is unrelated; the actual fix is to
+  call `process_queue` from a `queue_processor`-keyed orchestrator.
+- Cron template (orchestrator side):
+  ```bash
+  while true; do
+      tsx scripts/test/process-queue.ts --max=10
+      sleep 60
+  done
+  ```
+  (If `process-queue.ts` doesn't exist yet, follow the pattern in
+  `scripts/admin/distribute-yield.ts` — pulls the queue head/tail from
+  the on-chain `RedemptionQueue` PDA, derives recipient ATAs, batches
+  them as remaining accounts, and calls `process_queue(N)`.)
+
+A future redesign (TRACKER Phase 4c) replaces the fixed-array queue
+with per-user PDAs to lift the cap. Until then, the 10-entry SLA is the
+operational reality.
+
+### Pyth feed requirements
+
+The on-chain oracle parser at `lite_psm::helpers::oracle::check_oracle_reserves`
+expects the legacy Pyth V2 `SolanaPriceAccount` layout. The feed must:
+
+1. Be owned by `PsmConfig::pyth_program_owner` (set at init via
+   `initialize`, rotatable via
+   `npm run admin:set-pyth-program-owner -- --new=<pubkey>`).
+2. Have the canonical Pyth header: `magic == 0xa1b2c3d4`, `ver == 2`,
+   `atype == 3` (Price). The parser rejects non-canonical headers.
+3. Have `agg.status == Trading` (1). Halted, Auction, Unknown, and
+   Ignored states are rejected. The byte-width is u8 (Phase 8.0 fixed
+   a regression that read it as u32).
+4. Have `expo == 0`. The price is interpreted directly as a raw
+   token-count of reserves with no scaling. A custom feed publishing
+   reserves in OkuMoney base units (6 decimals) is the expected
+   configuration.
+5. Be fresh per `staleness_threshold` (set via
+   `npm run admin:set-oracle -- --oracle=<feed> --staleness=<secs>`,
+   bounded to `[60s, 7 days]`).
+
+The modern Pyth Solana Receiver (`PriceUpdateV2`) uses a different
+layout and is NOT supported until a parallel parser is added.
+
+### Refund flow operational steps
+
+The two-step refund covers a bridge-burn whose corresponding
+destination-chain mint never landed (e.g., orchestrator outage).
+
+1. **Verify the request was burned but never minted.** Read the
+   destination-chain `ProcessedRequest` PDA — if it's empty, the mint
+   never happened. Wait until `bridge_config.bridge_deadline_secs`
+   seconds past burn time.
+2. **Initiate** (signed by `refund_initiator`):
+   ```bash
+   npm run bridge:refund-initiate -- --request=./scripts/bridge/bridge-request.json
+   ```
+   The script reads the canonical message from `bridge-request.json`
+   (produced by `bridge:burn`) and asserts `request_id` matches.
+3. **Confirm** (signed by `refund_confirmer`, MUST be a different
+   physical key than the initiator):
+   ```bash
+   npm run bridge:refund-confirm -- --request-id=0x<hex>
+   ```
+   The on-chain `InitiatorCannotConfirm` check enforces the
+   distinct-keys invariant.
+4. **Cancel** (any time before confirm; signed by the original
+   initiator OR `bridge_admin`):
+   ```bash
+   npm run bridge:refund-cancel -- --request-id=0x<hex>
+   ```
+
+### Admin scripts
+
+All admin scripts live under `scripts/admin/`. Each:
+
+- prints a human-readable summary block before any state change
+- honors `--dry-run` (build the tx, simulate, don't submit)
+- on `mainnet-beta` / `mainnet-fork`, requires
+  `--yes-i-mean-it-on-mainnet` OR an interactive `yes` prompt
+
+| Script | Wraps | Role gate |
+|---|---|---|
+| `admin:set-authority` | `set_authority` | `role_admin` |
+| `admin:set-bridge-authority` | `set_bridge_authority` | `bridge_admin` |
+| `admin:pause-psm` / `admin:unpause-psm` | `pause` / `unpause` | `pauser` / `unpauser` |
+| `admin:pause-bridge` / `admin:unpause-bridge` | `pause_bridge` / `unpause_bridge` | `bridge_pauser` / `bridge_unpauser` |
+| `admin:rotate-orchestrator` | `update_orchestrator_signer` | `signer_manager` |
+| `admin:set-oracle` | `set_oracle` | `oracle_manager` |
+| `admin:set-pyth-program-owner` | `set_pyth_program_owner` | `oracle_manager` |
+| `admin:distribute-yield` | `distribute_yield` | `rebaser` |
+| `admin:blacklist-exempt` | `initialize_blacklist_exempt` | `role_admin` (one-shot) |
+| `admin:setup-router-alt` | (creates an Address Lookup Table) | deployer (initially) |
+
+Refund operator scripts under `scripts/bridge/`:
+
+| Script | Wraps | Role gate |
+|---|---|---|
+| `bridge:refund-initiate` | `initiate_refund` | `refund_initiator` |
+| `bridge:refund-confirm` | `confirm_refund` | `refund_confirmer` |
+| `bridge:refund-cancel` | `cancel_refund` | original initiator OR `bridge_admin` |
+
+### Smaller follow-ups
+
+See [`SVM/TRACKER.md`](./TRACKER.md) for items deferred from the Phase 7
+and Phase 8 review passes.

@@ -41,11 +41,14 @@ export function detectNetwork(): NetworkName {
     return networkEnv;
   }
 
-  // 3. Check Anchor.toml
+  // 3. Check Anchor.toml. Match `cluster = "<value>"` where value can be
+  // a known cluster name (`localnet`, `devnet`, `mainnet`/`mainnet-beta`)
+  // or a custom RPC URL (e.g. `cluster = "https://api.devnet.solana.com"`).
+  // The previous `\w+` pattern silently ignored URL-form clusters.
   const anchorTomlPath = path.join(process.cwd(), 'Anchor.toml');
   if (fs.existsSync(anchorTomlPath)) {
     const tomlContent = fs.readFileSync(anchorTomlPath, 'utf-8');
-    const clusterMatch = tomlContent.match(/cluster\s*=\s*"(\w+)"/);
+    const clusterMatch = tomlContent.match(/cluster\s*=\s*"([^"]+)"/);
     if (clusterMatch) {
       const cluster = clusterMatch[1].toLowerCase();
       if (cluster === 'localnet' || cluster === 'devnet') {

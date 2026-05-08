@@ -62,11 +62,13 @@ const RUN_HEAVY_BRIDGE_TESTS = process.env.RUN_HEAVY_BRIDGE_TESTS === "1";
 const itHeavy: Mocha.TestFunction = (RUN_HEAVY_BRIDGE_TESTS ? it : it.skip) as Mocha.TestFunction;
 
 describe("Bridge Security Tests", () => {
-  // Constants - Chain IDs use OkuMoney protocol-internal identifiers (Ankr convention for Solana)
-  const SOLANA_CHAIN_ID = 103; // Solana Devnet
+  // Chain IDs are OkuMoney protocol-internal u16 identifiers (NOT EIP-155
+  // values). The values appear in `BridgeRequest.{source,destination}_chain_id`
+  // and `BridgeConfig.supported_chains`. See SVM/EVM_VS_SVM.md for the
+  // mapping and the look-alike-EIP-155 caveat noted in TRACKER.md.
+  const SOLANA_CHAIN_ID = 103; // Solana Devnet protocol ID
   const ETH_CHAIN_ID = 1;
   const BSC_CHAIN_ID = 56;
-  const OP_SEPOLIA_CHAIN_ID = 11155420;
   const ONE_TOKEN = 1_000_000; // 6 decimals
   const TEN_TOKENS = 10_000_000;
   const ONE_MILLION_TOKENS = 1_000_000_000_000;

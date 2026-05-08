@@ -252,7 +252,16 @@ export async function initializePsm(
         .rpc();
       logger.success(`Chain ${chainId} added`);
     } catch (error: any) {
-      if (error.message?.includes('already supported') || error.message?.includes('AlreadySupported')) {
+      // Use Anchor's structured error code rather than substring matching;
+      // the actual variant is `LitePsmError::ChainAlreadySupported`.
+      const code =
+        error?.error?.errorCode?.code ?? error?.errorCode?.code;
+      const msg = String(error?.message ?? error);
+      if (
+        code === 'ChainAlreadySupported' ||
+        msg.includes('ChainAlreadySupported') ||
+        msg.includes('already supported')
+      ) {
         logger.warning(`Chain ${chainId} already supported`);
       } else {
         throw error;

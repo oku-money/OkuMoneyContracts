@@ -12,10 +12,21 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-const IDL_NAMES = ['lite_psm', 'oku_dollar', 'oku_bridge_router'];
-
 const SVM_IDL_DIR = path.resolve(__dirname, '../../target/idl');
 const OUT_DIR = path.resolve(__dirname, '../../../../artifacts/svm');
+
+/**
+ * Reads the Anchor IDL directory dynamically. Phase 8.5 dropped the
+ * hardcoded program-name list — adding a 4th program to Cargo.toml no
+ * longer requires touching this file.
+ */
+function discoverIdlNames(idlDir: string): string[] {
+  return fs
+    .readdirSync(idlDir)
+    .filter((f) => f.endsWith('.json'))
+    .map((f) => f.replace(/\.json$/, ''))
+    .sort();
+}
 
 function main(): void {
   if (!fs.existsSync(SVM_IDL_DIR)) {
@@ -25,29 +36,26 @@ function main(): void {
     process.exit(1);
   }
 
+  const idlNames = discoverIdlNames(SVM_IDL_DIR);
+  if (idlNames.length === 0) {
+    console.error(`No IDLs found at ${SVM_IDL_DIR}.`);
+    process.exit(1);
+  }
+
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
   let exported = 0;
-  let skipped = 0;
 
-  for (const name of IDL_NAMES) {
+  for (const name of idlNames) {
     const src = path.join(SVM_IDL_DIR, `${name}.json`);
-    if (!fs.existsSync(src)) {
-      console.warn(`  ! ${name}: missing IDL at ${src}`);
-      skipped++;
-      continue;
-    }
     fs.copyFileSync(src, path.join(OUT_DIR, `${name}.json`));
     console.log(`  ✓ ${name}`);
     exported++;
   }
 
   console.log(
-    `\nExported ${exported} IDL(s) to ${path.relative(process.cwd(), OUT_DIR)}${
-      skipped > 0 ? ` (skipped ${skipped})` : ''
-    }.`
+    `\nExported ${exported} IDL(s) to ${path.relative(process.cwd(), OUT_DIR)}.`
   );
-  if (skipped > 0) process.exit(1);
 }
 
 main();

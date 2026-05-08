@@ -33,6 +33,7 @@
     "admin:pause-bridge": "tsx scripts/admin/pause-bridge.ts",
     "admin:unpause-bridge": "tsx scripts/admin/unpause-bridge.ts",
     "admin:distribute-yield": "tsx scripts/admin/distribute-yield.ts",
+    "admin:setup-router-alt": "tsx scripts/admin/setup-router-alt.ts",
     "surfpool:devnet": "surfpool start --network devnet --airdrop-keypair-path /dev/null",
     "surfpool:mainnet": "surfpool start --network mainnet --airdrop-keypair-path /dev/null",
     "wallet:check": "tsx scripts/utils/check-wallet.ts",

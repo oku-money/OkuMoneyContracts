@@ -39,6 +39,16 @@ export interface DeploymentAddresses {
     bridgeOrchestrator?: string;
     feeRecipient?: string;
   };
+  /**
+   * Address Lookup Tables (Phase 8.6). The router ALT collapses ~10
+   * common pubkeys into 1-byte indices so `mint_usd_oku`/`redeem_usd_oku`
+   * fit under the v0 tx-size ceiling. Created by
+   * `scripts/admin/setup-router-alt.ts`. SDK consumers must include the
+   * router ALT in every router CPI tx.
+   */
+  addressLookupTables?: {
+    router?: string;
+  };
 }
 
 const DEPLOYMENTS_DIR = path.join(process.cwd(), 'deployments');
@@ -109,6 +119,10 @@ export function saveDeployment(
     pdas: { ...existing.pdas, ...addresses.pdas },
     nonces: { ...existing.nonces, ...addresses.nonces },
     authorities: { ...existing.authorities, ...addresses.authorities },
+    addressLookupTables: {
+      ...existing.addressLookupTables,
+      ...addresses.addressLookupTables,
+    },
   };
 
   fs.writeFileSync(filepath, JSON.stringify(updated, null, 2));

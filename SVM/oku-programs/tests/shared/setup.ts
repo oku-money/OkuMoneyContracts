@@ -6,10 +6,18 @@
  * - PSM initialization logic (executes once per test run)
  * - Helper functions for common test setup tasks
  *
+ * Phase 9: this module is now runner-agnostic. Anything that previously
+ * called `provider.connection.requestAirdrop` now takes an injected
+ * `Funder` callback (see `tests/shared/bankrun.ts::fundKeypairs` for the
+ * bankrun implementation). Each test file passes the appropriate
+ * funder. The legacy validator path is kept available via
+ * `validatorFunder(connection)` below for the deprecated
+ * `npm run test:validator` escape hatch.
+ *
  * WHY THIS EXISTS:
- * The PSM config PDA can only be initialized once. Multiple test files need
- * to interact with the same PSM instance using the same authority keypairs.
- * This module ensures:
+ * The PSM config PDA can only be initialized once per cluster boot.
+ * Multiple describe blocks share the same bankrun harness — this module
+ * ensures:
  * 1. PSM is initialized exactly once
  * 2. All test files use the same authority keypairs
  * 3. No duplicate initialization attempts
@@ -23,9 +31,40 @@ import {
   TOKEN_2022_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
-  getAccount,
   createAssociatedTokenAccountInstruction,
 } from "@solana/spl-token";
+
+/**
+ * Funder callback: deposits `lamports` into each of `kps`. The
+ * implementation differs per runner — bankrun uses `setAccount`, the
+ * validator uses `requestAirdrop`. Tests pass the appropriate one.
+ */
+export type Funder = (kps: Keypair[], lamports: number) => Promise<void>;
+
+/**
+ * Build a `Funder` backed by a real `Connection.requestAirdrop` loop.
+ * Only used by the deprecated `npm run test:validator` path.
+ */
+export function validatorFunder(connection: anchor.web3.Connection): Funder {
+  return async (kps, lamports) => {
+    for (let i = 0; i < kps.length; i += 5) {
+      const batch = kps.slice(i, i + 5);
+      const latestBlockhash = await connection.getLatestBlockhash();
+      const sigs = await Promise.all(
+        batch.map((kp) => connection.requestAirdrop(kp.publicKey, lamports))
+      );
+      await Promise.all(
+        sigs.map((sig) =>
+          connection.confirmTransaction({
+            signature: sig,
+            blockhash: latestBlockhash.blockhash,
+            lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+          })
+        )
+      );
+    }
+  };
+}
 
 // ============================================================================
 // Shared Constants
@@ -36,12 +75,16 @@ export const MINTER_ALLOWANCE = new BN(100_000_000_000); // 100k with 6 decimals
 export const DECIMALS = 6;
 
 // ============================================================================
-// Airdrop Helpers
+// LEGACY validator-mode helpers (kept until tests/unit/* are fully on
+// bankrun and tests/fork/pyth-oracle.ts is split per Phase 9 plan).
+//
+// Bankrun tests use the equivalents in `tests/shared/bankrun.ts`
+// (`fundKeypairs`, `mintToViaBankrun`, `ensureAtaViaBankrun`,
+// `createMintViaBankrun`, `createOkuMoneyMintViaBankrun`).
 // ============================================================================
 
 /**
- * Request an airdrop and wait for confirmation.
- * Uses confirmTransaction instead of setTimeout for reliability.
+ * Request an airdrop and wait for confirmation. Validator-only.
  */
 export async function safeAirdrop(
   connection: anchor.web3.Connection,
@@ -58,14 +101,13 @@ export async function safeAirdrop(
 }
 
 /**
- * Airdrop SOL to multiple accounts and wait for all confirmations.
+ * Airdrop SOL to multiple accounts. Validator-only.
  */
 export async function safeAirdropAll(
   connection: anchor.web3.Connection,
   accounts: Keypair[],
   lamports: number
 ): Promise<void> {
-  // Send airdrops in batches of 5 to avoid overwhelming the validator
   for (let i = 0; i < accounts.length; i += 5) {
     const batch = accounts.slice(i, i + 5);
     const latestBlockhash = await connection.getLatestBlockhash();
@@ -84,13 +126,8 @@ export async function safeAirdropAll(
   }
 }
 
-// ============================================================================
-// Token Helpers
-// ============================================================================
-
 /**
- * Safe wrapper around mintTo that handles blockhash properly for Surfpool.
- * Uses sendAndConfirm with explicit blockhash fetching.
+ * Validator-only mintTo helper.
  */
 export async function safeMintTo(
   connection: anchor.web3.Connection,
@@ -101,8 +138,7 @@ export async function safeMintTo(
   amount: number | bigint,
   tokenProgramId: PublicKey = TOKEN_PROGRAM_ID
 ): Promise<void> {
-  const { createMintToInstruction } = await import("@solana/spl-token");
-  
+  const { createMintToInstruction } = await import('@solana/spl-token');
   const tx = new anchor.web3.Transaction().add(
     createMintToInstruction(
       mint,
@@ -113,12 +149,10 @@ export async function safeMintTo(
       tokenProgramId
     )
   );
-  
   const latestBlockhash = await connection.getLatestBlockhash();
   tx.recentBlockhash = latestBlockhash.blockhash;
   tx.feePayer = payer.publicKey;
   tx.sign(payer, authority);
-  
   const sig = await connection.sendRawTransaction(tx.serialize());
   await connection.confirmTransaction({
     signature: sig,
@@ -127,13 +161,8 @@ export async function safeMintTo(
   });
 }
 
-// ============================================================================
-// ATA Helpers
-// ============================================================================
-
 /**
- * Ensure an Associated Token Account exists, creating it if needed.
- * Handles "already exists" errors gracefully.
+ * Validator-only ensure-ATA helper.
  */
 export async function ensureAta(
   connection: anchor.web3.Connection,
@@ -143,6 +172,7 @@ export async function ensureAta(
   mint: PublicKey,
   tokenProgramId: PublicKey = TOKEN_PROGRAM_ID
 ): Promise<void> {
+  const { getAccount } = await import('@solana/spl-token');
   try {
     await getAccount(connection, ata, undefined, tokenProgramId);
   } catch {
@@ -155,7 +185,10 @@ export async function ensureAta(
         tokenProgramId
       )
     );
-    await new anchor.AnchorProvider(connection, new anchor.Wallet(payer), {}).sendAndConfirm(tx, [payer]);
+    await new anchor.AnchorProvider(connection, new anchor.Wallet(payer), {}).sendAndConfirm(
+      tx,
+      [payer]
+    );
   }
 }
 
@@ -201,6 +234,22 @@ let vaultUsdcAta: PublicKey | null = null;
 let vaultOkuMoneyAta: PublicKey | null = null;
 let psmInitialized = false;
 
+/**
+ * Reset the in-module PSM-initialised singleton. Required when multiple
+ * bankrun-flavoured test files run sequentially within a single mocha
+ * process: each file boots its own bankrun cluster, so the cached PDA
+ * addresses from a prior file would point at the previous cluster's
+ * PSM account. Call this at the top of every `before()` that itself
+ * calls `startBankrun()`.
+ */
+export function resetPsmSingleton(): void {
+  psmConfigPda = null;
+  redemptionQueuePda = null;
+  vaultUsdcAta = null;
+  vaultOkuMoneyAta = null;
+  psmInitialized = false;
+}
+
 export interface PSMSetupResult {
   configPda: PublicKey;
   redemptionQueuePda: PublicKey;
@@ -220,25 +269,27 @@ export interface PSMSetupResult {
  * - Derives PSM PDAs
  * - Checks if PSM is already initialized on-chain
  * - If not, initializes PSM with shared authorities
- * - Airdrops SOL to shared authorities
+ * - Funds shared authorities via the injected `funder` callback
  * - Sets up OkuMoney escrow vault
  *
  * On subsequent calls:
  * - Returns cached PDAs immediately (no on-chain calls)
  *
  * @param program - Anchor program instance
- * @param provider - Anchor provider instance
  * @param payer - Keypair that pays for initialization
  * @param usdcMint - USDC mint address
  * @param okuMoneyMint - OkuMoney mint address
+ * @param funder - Runner-specific funder; pass `fundKeypairs(h, ..., ...)`
+ *                 (bankrun) or `validatorFunder(connection)` (legacy
+ *                 validator path).
  * @returns PSM setup result with all PDAs
  */
 export async function initializePSMIfNeeded(
   program: Program,
-  provider: anchor.AnchorProvider,
   payer: Keypair,
   usdcMint: PublicKey,
-  okuMoneyMint: PublicKey
+  okuMoneyMint: PublicKey,
+  funder: Funder
 ): Promise<PSMSetupResult> {
   // Return cached if already initialized
   if (psmInitialized && psmConfigPda && redemptionQueuePda && vaultUsdcAta && vaultOkuMoneyAta) {
@@ -290,9 +341,8 @@ export async function initializePSMIfNeeded(
     // Not initialized yet, proceed with initialization
   }
 
-  // Airdrop SOL to shared authorities with proper confirmation
-  await safeAirdropAll(
-    provider.connection,
+  // Fund shared authorities via the runner-supplied funder callback.
+  await funder(
     [coldMultisig, warmMultisig, psmOrchestrator],
     10 * anchor.web3.LAMPORTS_PER_SOL
   );

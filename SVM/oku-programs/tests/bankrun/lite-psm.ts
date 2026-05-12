@@ -4,17 +4,10 @@ import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
-  createMint,
-  mintTo,
   getAccount,
   getMint,
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountInstruction,
-  ExtensionType,
-  getMintLen,
-  createInitializeMintInstruction,
-  createInitializeInterestBearingMintInstruction,
-  getAssociatedTokenAddress,
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { LitePsm } from "../../target/types/lite_psm";
@@ -24,14 +17,22 @@ import {
   psmOrchestrator,
   initializePSMIfNeeded,
   ensurePSMUnpaused,
-  ensureAta,
-  safeAirdropAll,
-  safeMintTo,
   mintOkuMoneyViaProgram,
+  resetPsmSingleton,
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
   DECIMALS,
 } from "../shared/setup";
+import {
+  BankrunHarness,
+  startBankrun,
+  fundKeypairs,
+  createMintViaBankrun,
+  createOkuMoneyMintViaBankrun,
+  mintToViaBankrun,
+  ensureAtaViaBankrun,
+  warpSlots,
+} from "../shared/bankrun";
 
 // Use anchor's web3 to avoid version conflicts
 const { Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, PublicKey } = anchor.web3;
@@ -40,6 +41,7 @@ type Keypair = anchor.web3.Keypair;
 
 describe("lite-psm", () => {
   // Delay initialization until tests run
+  let h: BankrunHarness;
   let provider: anchor.AnchorProvider;
   let program: Program<LitePsm>;
   let payer: Keypair;
@@ -79,10 +81,12 @@ describe("lite-psm", () => {
   // MAX_SUPPLY, MINTER_ALLOWANCE, DECIMALS imported from shared setup
 
   before(async () => {
-    provider = anchor.AnchorProvider.env();
-    anchor.setProvider(provider);
-    program = anchor.workspace.LitePsm as Program<LitePsm>;
-    payer = (provider.wallet as anchor.Wallet).payer;
+    // Reset the cross-file PSM singleton (see explanation in bridge_security.ts).
+    resetPsmSingleton();
+    h = await startBankrun();
+    provider = h.provider as unknown as anchor.AnchorProvider;
+    program = h.program;
+    payer = h.payer;
     admin = payer;
 
     // Derive PDAs first (needed to check if config exists)
@@ -109,61 +113,31 @@ describe("lite-psm", () => {
     }
 
     if (!psmExists) {
-      // Create USDC mint (standard SPL token)
-      usdcMint = await createMint(
-        provider.connection,
-        payer,
+      // Create USDC mint (standard SPL token) via the bankrun helper.
+      usdcMint = await createMintViaBankrun(
+        h,
         payer.publicKey,
         null,
         DECIMALS,
         usdcMintKeypair,
-        undefined,
         TOKEN_PROGRAM_ID
       );
 
       // Create OkuMoney mint (Token-2022 with Interest-Bearing extension)
-      const mintLen = getMintLen([ExtensionType.InterestBearingConfig]);
-      const lamports = await provider.connection.getMinimumBalanceForRentExemption(mintLen);
-
-      const createAccountIx = SystemProgram.createAccount({
-        fromPubkey: payer.publicKey,
-        newAccountPubkey: okuMoneyMintKeypair.publicKey,
-        space: mintLen,
-        lamports,
-        programId: TOKEN_2022_PROGRAM_ID,
-      });
-
-      const initInterestBearingIx = createInitializeInterestBearingMintInstruction(
-        okuMoneyMintKeypair.publicKey,
-        orchestrator.publicKey, // rate authority (rebaser)
-        0, // initial rate (0 bps)
-        TOKEN_2022_PROGRAM_ID
-      );
-
-      const initMintIx = createInitializeMintInstruction(
-        okuMoneyMintKeypair.publicKey,
+      // with mint/freeze authority set to the PSM config PDA.
+      okuMoneyMint = await createOkuMoneyMintViaBankrun(
+        h,
+        configPda,
+        configPda,
         DECIMALS,
-        configPda, // mint authority = PSM config PDA
-        configPda, // freeze authority = PSM config PDA (for freeze/thaw instructions)
-        TOKEN_2022_PROGRAM_ID
+        orchestrator.publicKey, // rate authority (rebaser)
+        0,
+        okuMoneyMintKeypair
       );
-
-      const tx = new anchor.web3.Transaction().add(
-        createAccountIx,
-        initInterestBearingIx,
-        initMintIx
-      );
-
-      await provider.sendAndConfirm(tx, [payer, okuMoneyMintKeypair]);
-      okuMoneyMint = okuMoneyMintKeypair.publicKey;
     }
 
-    // Airdrop SOL to test accounts with proper confirmation
-    await safeAirdropAll(
-      provider.connection,
-      [user, user2],
-      10 * anchor.web3.LAMPORTS_PER_SOL
-    );
+    // Fund test accounts via bankrun's setAccount lamports injection.
+    await fundKeypairs(h, [user, user2], 10 * anchor.web3.LAMPORTS_PER_SOL);
 
     // Create user token accounts
     userUsdcAta = getAssociatedTokenAddressSync(
@@ -201,58 +175,16 @@ describe("lite-psm", () => {
       TOKEN_PROGRAM_ID
     );
 
-    // Create user USDC accounts and mint some USDC
-    const createUserUsdcAtaTx = new anchor.web3.Transaction().add(
-      createAssociatedTokenAccountInstruction(
-        payer.publicKey,
-        userUsdcAta,
-        user.publicKey,
-        usdcMint,
-        TOKEN_PROGRAM_ID
-      )
-    );
-    await provider.sendAndConfirm(createUserUsdcAtaTx, [payer]);
-
-    const createUser2UsdcAtaTx = new anchor.web3.Transaction().add(
-      createAssociatedTokenAccountInstruction(
-        payer.publicKey,
-        user2UsdcAta,
-        user2.publicKey,
-        usdcMint,
-        TOKEN_PROGRAM_ID
-      )
-    );
-    await provider.sendAndConfirm(createUser2UsdcAtaTx, [payer]);
-
-    // Create orchestrator USDC ATA only if it doesn't exist
-    await ensureAta(provider.connection, payer, orchestratorUsdcAta, orchestrator.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+    // Create user USDC ATAs
+    await ensureAtaViaBankrun(h, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, user2.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+    // Create orchestrator USDC ATA (idempotent)
+    await ensureAtaViaBankrun(h, orchestrator.publicKey, usdcMint, TOKEN_PROGRAM_ID);
 
     // Mint USDC to users
-    await mintTo(
-      provider.connection,
-      payer,
-      usdcMint,
-      userUsdcAta,
-      payer,
-      1_000_000_000_000, // 1M USDC
-      [],
-      undefined,
-      TOKEN_PROGRAM_ID
-    );
-
-    await mintTo(
-      provider.connection,
-      payer,
-      usdcMint,
-      user2UsdcAta,
-      payer,
-      1_000_000_000_000, // 1M USDC
-      [],
-      undefined,
-      TOKEN_PROGRAM_ID
-    );
-
-    // Check if orchestrator already has USDC (from bridge_security tests)
+    await mintToViaBankrun(h, usdcMint, userUsdcAta, payer, 1_000_000_000_000, TOKEN_PROGRAM_ID);
+    await mintToViaBankrun(h, usdcMint, user2UsdcAta, payer, 1_000_000_000_000, TOKEN_PROGRAM_ID);
+    // Top up orchestrator USDC if low (other describe blocks may consume).
     try {
       const orchestratorAccount = await getAccount(
         provider.connection,
@@ -261,16 +193,12 @@ describe("lite-psm", () => {
         TOKEN_PROGRAM_ID
       );
       if (Number(orchestratorAccount.amount) < 1_000_000_000_000) {
-        // Mint more if needed
-        await mintTo(
-          provider.connection,
-          payer,
+        await mintToViaBankrun(
+          h,
           usdcMint,
           orchestratorUsdcAta,
           payer,
           1_000_000_000_000 - Number(orchestratorAccount.amount),
-          [],
-          undefined,
           TOKEN_PROGRAM_ID
         );
       }
@@ -278,13 +206,13 @@ describe("lite-psm", () => {
       // Orchestrator USDC ATA doesn't exist, skip minting
     }
 
-    // Initialize PSM using shared setup module
+    // Initialize PSM using shared setup module (bankrun funder).
     const psmSetup = await initializePSMIfNeeded(
       program,
-      provider,
       payer,
       usdcMint,
-      okuMoneyMint
+      okuMoneyMint,
+      (kps, lamports) => fundKeypairs(h, kps, lamports)
     );
 
     // Update PDAs with initialized values
@@ -295,6 +223,14 @@ describe("lite-psm", () => {
   });
 
   beforeEach(async () => {
+    // Bump bankrun's slot by 1 between tests. Validator-mode tests get
+    // free slot advancement from wall-clock ticking (~400 ms / slot);
+    // bankrun's slot is stuck until explicitly warped. Without this
+    // bump, any test running after `distribute_yield` in the same
+    // describe block hits `YieldDistributionInProgress` because
+    // `last_yield_distribution_slot == current_slot`.
+    const cur = await h.context.banksClient.getSlot();
+    h.context.warpToSlot(cur + 1n);
     // Ensure PSM is unpaused before each test using shared helper
     await ensurePSMUnpaused(program, configPda);
   });
@@ -335,7 +271,7 @@ describe("lite-psm", () => {
       const mintAmount = new BN(1_000_000); // 1 USDC/OkuMoney
 
       // Pre-create OkuMoney ATA
-      await ensureAta(provider.connection, payer, userOkuMoneyAta, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
 
       // Get balances before
       const userUsdcBefore = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
@@ -378,7 +314,7 @@ describe("lite-psm", () => {
       const freshUser = Keypair.generate();
       const mintAmount = new BN(1_000_000); // 1 USDC/OkuMoney
 
-      await safeAirdropAll(provider.connection, [freshUser], 10 * anchor.web3.LAMPORTS_PER_SOL);
+      await fundKeypairs(h, [freshUser], 10 * anchor.web3.LAMPORTS_PER_SOL);
 
       // Create and fund USDC ATA
       const freshUserUsdcAta = getAssociatedTokenAddressSync(
@@ -394,8 +330,7 @@ describe("lite-psm", () => {
         )
       );
       await provider.sendAndConfirm(createAtaTx, [payer]);
-      await mintTo(provider.connection, payer, usdcMint, freshUserUsdcAta, payer,
-        10_000_000, [], undefined, TOKEN_PROGRAM_ID);
+      await mintToViaBankrun(h, usdcMint, freshUserUsdcAta, payer, 10_000_000, TOKEN_PROGRAM_ID);
 
       // DO NOT pre-create OkuMoney ATA — let init_if_needed handle it
       await program.methods
@@ -812,10 +747,10 @@ describe("lite-psm", () => {
           TOKEN_PROGRAM_ID
         );
 
-        await ensureAta(provider.connection, payer, bufferWithdrawerUsdcAta, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+        await ensureAtaViaBankrun(h, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
 
         // Ensure vault_usdc ATA exists (should have been created during initialize)
-        await ensureAta(provider.connection, payer, vaultUsdcAta, configPda, usdcMint, TOKEN_PROGRAM_ID);
+        await ensureAtaViaBankrun(h, configPda, usdcMint, TOKEN_PROGRAM_ID);
 
         // Ensure vault has balance
         await program.methods
@@ -1125,13 +1060,13 @@ describe("lite-psm", () => {
   describe("mint edge cases", () => {
     before(async () => {
       // Ensure user has OkuMoney ATA
-      await ensureAta(provider.connection, payer, userOkuMoneyAta, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
     });
 
     it("fails to mint zero amount", async () => {
-      // Wait for a new slot to avoid sandwich prevention from yield operations
-      await new Promise(r => setTimeout(r, 500));
-      
+      // On bankrun, slot advancement happens naturally between txs; we
+      // accept either ZeroAmount (if we got a fresh slot) or
+      // YieldDistributionInProgress (if still in the yield slot).
       try {
         await program.methods
           .mintOkuM(new BN(0))
@@ -1283,7 +1218,7 @@ describe("lite-psm", () => {
 
     before(async () => {
       // Ensure user has OkuMoney ATA and mint OkuMoney
-      await ensureAta(provider.connection, payer, userOkuMoneyAta, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
       await mintOkuMoneyViaProgram(program, user, MINT_AMOUNT, configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
 
       // Ensure buffer has enough USDC for instant redemption
@@ -1464,8 +1399,8 @@ describe("lite-psm", () => {
 
     before(async () => {
       // Ensure user has OkuMoney
-      await ensureAta(provider.connection, payer, userOkuMoneyAta, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
-      await ensureAta(provider.connection, payer, user2OkuMoneyAta, user2.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, user2.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
       await mintOkuMoneyViaProgram(program, user, MINT_AMOUNT, configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
       await mintOkuMoneyViaProgram(program, user2, MINT_AMOUNT, configPda, usdcMint, okuMoneyMint, user2UsdcAta, user2OkuMoneyAta, vaultUsdcAta);
 
@@ -1475,7 +1410,7 @@ describe("lite-psm", () => {
         const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
           usdcMint, coldMultisig.publicKey, false, TOKEN_PROGRAM_ID
         );
-        await ensureAta(provider.connection, payer, bufferWithdrawerUsdcAta, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+        await ensureAtaViaBankrun(h, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
         await program.methods
           .withdrawBuffer(new BN(Number(vaultUsdc.amount)))
           .accountsPartial({
@@ -1593,7 +1528,7 @@ describe("lite-psm", () => {
         const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
           usdcMint, coldMultisig.publicKey, false, TOKEN_PROGRAM_ID
         );
-        await ensureAta(provider.connection, payer, bufferWithdrawerUsdcAta, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+        await ensureAtaViaBankrun(h, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
         if (Number(vaultUsdc.amount) > 0) {
           await program.methods
             .withdrawBuffer(new BN(Number(vaultUsdc.amount)))
@@ -1651,7 +1586,7 @@ describe("lite-psm", () => {
       const recipientUsdcAta = getAssociatedTokenAddressSync(
         usdcMint, entry.user, false, TOKEN_PROGRAM_ID
       );
-      await ensureAta(provider.connection, payer, recipientUsdcAta, entry.user, usdcMint, TOKEN_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, entry.user, usdcMint, TOKEN_PROGRAM_ID);
 
       const recipientUsdcBefore = await getAccount(provider.connection, recipientUsdcAta, undefined, TOKEN_PROGRAM_ID);
 
@@ -1694,7 +1629,7 @@ describe("lite-psm", () => {
           const entryUsdcAta = getAssociatedTokenAddressSync(
             usdcMint, entryUser, false, TOKEN_PROGRAM_ID
           );
-          await ensureAta(provider.connection, payer, entryUsdcAta, entryUser, usdcMint, TOKEN_PROGRAM_ID);
+          await ensureAtaViaBankrun(h, entryUser, usdcMint, TOKEN_PROGRAM_ID);
           remainingAccts.push({ pubkey: entryUsdcAta, isSigner: false, isWritable: true });
         }
         await program.methods
@@ -1720,7 +1655,7 @@ describe("lite-psm", () => {
       const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
         usdcMint, coldMultisig.publicKey, false, TOKEN_PROGRAM_ID
       );
-      await ensureAta(provider.connection, payer, bufferWithdrawerUsdcAta, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
       if (Number(vaultUsdc.amount) > 0) {
         await program.methods
           .withdrawBuffer(new BN(Number(vaultUsdc.amount)))
@@ -1825,8 +1760,8 @@ describe("lite-psm", () => {
       const entry2 = queueBefore.entries[(headBefore + 1) % 10];
       const ata1 = getAssociatedTokenAddressSync(usdcMint, entry1.user, false, TOKEN_PROGRAM_ID);
       const ata2 = getAssociatedTokenAddressSync(usdcMint, entry2.user, false, TOKEN_PROGRAM_ID);
-      await ensureAta(provider.connection, payer, ata1, entry1.user, usdcMint, TOKEN_PROGRAM_ID);
-      await ensureAta(provider.connection, payer, ata2, entry2.user, usdcMint, TOKEN_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, entry1.user, usdcMint, TOKEN_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, entry2.user, usdcMint, TOKEN_PROGRAM_ID);
 
       await program.methods
         .processQueue(2)
@@ -1861,7 +1796,7 @@ describe("lite-psm", () => {
         for (let i = queue.head; i < queue.tail; i++) {
           const entry = queue.entries[i % 10];
           const ata = getAssociatedTokenAddressSync(usdcMint, entry.user, false, TOKEN_PROGRAM_ID);
-          await ensureAta(provider.connection, payer, ata, entry.user, usdcMint, TOKEN_PROGRAM_ID);
+          await ensureAtaViaBankrun(h, entry.user, usdcMint, TOKEN_PROGRAM_ID);
           accounts.push({ pubkey: ata, isSigner: false, isWritable: true });
         }
         // Ensure enough buffer
@@ -1945,6 +1880,156 @@ describe("lite-psm", () => {
         );
       }
     });
+
+    // Phase 10: process_queue with a frozen recipient ATA. The on-chain
+    // CPI burn-of-escrowed-OkuMoney + USDC transfer to the recipient
+    // must fail because the recipient's USDC ATA isn't frozen (USDC is
+    // standard SPL Token, not Token-2022). To exercise the analogous
+    // case where the *escrowed* token side reverts, we freeze the
+    // recipient's OkuMoney ATA — but `process_queue` only writes USDC
+    // out and doesn't touch the recipient's OkuMoney ATA, so freezing
+    // that has no effect on the payout path. The interesting case is
+    // when the recipient's USDC ATA cannot receive (e.g. account
+    // doesn't exist). We assert the program reverts with
+    // `RecipientMismatch` when we omit the recipient ATA from
+    // `remainingAccounts`.
+    it("process_queue rejects when recipient ATA missing from remaining_accounts", async () => {
+      // Queue a fresh entry.
+      await mintOkuMoneyViaProgram(
+        program,
+        user,
+        new BN(1_000_000),
+        configPda,
+        usdcMint,
+        okuMoneyMint,
+        userUsdcAta,
+        userOkuMoneyAta,
+        vaultUsdcAta
+      );
+      // Drain buffer so the next redeem hits the queue.
+      const vaultUsdc = await getAccount(
+        provider.connection,
+        vaultUsdcAta,
+        undefined,
+        TOKEN_PROGRAM_ID
+      );
+      const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint,
+        coldMultisig.publicKey,
+        false,
+        TOKEN_PROGRAM_ID
+      );
+      await ensureAtaViaBankrun(h, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+      if (Number(vaultUsdc.amount) > 0) {
+        await program.methods
+          .withdrawBuffer(new BN(Number(vaultUsdc.amount)))
+          .accountsPartial({
+            bufferWithdrawer: coldMultisig.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okuMoneyMint: okuMoneyMint,
+            withdrawerUsdcAta: bufferWithdrawerUsdcAta,
+            vaultUsdc: vaultUsdcAta,
+            usdcMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([coldMultisig])
+          .rpc();
+      }
+      await program.methods
+        .redeemOkuM(new BN(500_000))
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          usdcMint,
+          okuMoneyMint,
+          userUsdcAta,
+          userOkuMoneyAta,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      // Re-deposit enough buffer for processing.
+      await program.methods
+        .depositBuffer(new BN(2_000_000))
+        .accountsPartial({
+          bufferDepositor: orchestrator.publicKey,
+          config: configPda,
+          bufferDepositorUsdcAta: orchestratorUsdcAta,
+          vaultUsdc: vaultUsdcAta,
+          usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      // Call process_queue with an empty remaining_accounts array — the
+      // program loops counting non-skipped entries against
+      // `remaining_accounts.len()`, so any non-skipped entry should trigger
+      // `InsufficientAccounts`.
+      try {
+        await program.methods
+          .processQueue(1)
+          .accountsPartial({
+            queueProcessor: orchestrator.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okuMoneyMint,
+            vaultUsdc: vaultUsdcAta,
+            vaultOkuMoney: vaultOkuMoneyAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .remainingAccounts([])
+          .signers([orchestrator])
+          .rpc();
+        expect.fail("Should have rejected with InsufficientAccounts");
+      } catch (err: any) {
+        const haystack = [
+          String(err?.error?.errorCode?.code ?? ""),
+          String(err?.message ?? ""),
+          ...(err?.logs ?? []),
+        ].join(" ");
+        expect(haystack).to.include("InsufficientAccounts");
+      }
+
+      // Cleanup: process the queue with the proper ATA so we leave the
+      // queue empty for downstream describes.
+      const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      const headEntry = queue.entries[queue.head % 10];
+      const recipientUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint,
+        headEntry.user,
+        false,
+        TOKEN_PROGRAM_ID
+      );
+      await ensureAtaViaBankrun(h, headEntry.user, usdcMint, TOKEN_PROGRAM_ID);
+      await program.methods
+        .processQueue(1)
+        .accountsPartial({
+          queueProcessor: orchestrator.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          okuMoneyMint,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .remainingAccounts([
+          { pubkey: recipientUsdcAta, isSigner: false, isWritable: true },
+        ])
+        .signers([orchestrator])
+        .rpc();
+    });
   });
 
   // ==========================================================================
@@ -1962,14 +2047,7 @@ describe("lite-psm", () => {
         false,
         TOKEN_PROGRAM_ID
       );
-      await ensureAta(
-        provider.connection,
-        payer,
-        bufferWithdrawerUsdcAta,
-        coldMultisig.publicKey,
-        usdcMint,
-        TOKEN_PROGRAM_ID
-      );
+      await ensureAtaViaBankrun(h, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
       const vaultUsdc = await getAccount(
         provider.connection,
         vaultUsdcAta,
@@ -2190,6 +2268,13 @@ describe("lite-psm", () => {
         .signers([psmOrchestrator])
         .rpc();
 
+      // Bump slot to dodge bankrun's same-blockhash-tx dedupe. Without this,
+      // the second rescue (which builds an identical instruction) hashes to
+      // the same signature as the first and bankrun replays the cached
+      // success result instead of executing. Slot advance forces a fresh
+      // blockhash on the next provider.sendAndConfirm.
+      await warpSlots(h, 1n);
+
       try {
         // After the rescue at the *tail*, the head loop in the program
         // advances past the cleared slot — so the index is now strictly
@@ -2211,12 +2296,110 @@ describe("lite-psm", () => {
           .rpc();
         expect.fail("Should have rejected double-rescue");
       } catch (err: any) {
-        const code = err?.error?.errorCode?.code;
+        // Bankrun wraps program failures in SendTransactionError; the parsed
+        // `errorCode.code` is populated for normal Anchor errors but can be
+        // undefined when the precompile or low-level CPI shape differs. Look
+        // across the full surface (code, message, logs) to make the check
+        // robust to either wrapping style.
+        const haystack = [
+          String(err?.error?.errorCode?.code ?? ""),
+          String(err?.error?.errorMessage ?? ""),
+          String(err?.message ?? ""),
+          ...(err?.logs ?? []),
+        ].join(" ");
         expect(
-          code === "EntryAlreadyCleared" || code === "InvalidQueueIndex",
-          `unexpected error: ${code}`
+          haystack.includes("EntryAlreadyCleared") ||
+            haystack.includes("InvalidQueueIndex"),
+          `unexpected error haystack: ${haystack.slice(0, 300)}`
         ).to.equal(true);
       }
+    });
+
+    // Phase 10: rescue to a different recipient's ATA. The program does
+    // NOT enforce that `recipient == original_user` — operationally this
+    // lets the queue_processor route a rescued entry to a fresh wallet
+    // (e.g. when the original user's ATA was frozen for compliance).
+    // Matches EVM `RedemptionQueue.rescueQueueEntry`'s permissive
+    // recipient gate. The test asserts the OkuMoney is credited to
+    // `user2`, not `user`, when `user` was the original queue depositor.
+    it("rescue can deliver escrowed OkuMoney to a non-original recipient", async () => {
+      // 1. user enqueues a redemption.
+      await mintOkuMoneyViaProgram(
+        program,
+        user,
+        REDEEM_AMOUNT.muln(2),
+        configPda,
+        usdcMint,
+        okuMoneyMint,
+        userUsdcAta,
+        userOkuMoneyAta,
+        vaultUsdcAta
+      );
+      await drainBuffer();
+      await program.methods
+        .redeemOkuM(REDEEM_AMOUNT)
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          usdcMint,
+          okuMoneyMint,
+          userUsdcAta,
+          userOkuMoneyAta,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+      const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      const rescueIndex = queue.tail - 1;
+      const slot = rescueIndex % 10;
+      const rescuedAmount = Number(queue.entries[slot].okuMAmount);
+      expect(queue.entries[slot].user.toString()).to.equal(user.publicKey.toString());
+
+      // 2. Ensure user2 has an OkuMoney ATA to receive the rescue.
+      await ensureAtaViaBankrun(h, user2.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+      const user2OkuMoneyAtaLocal = getAssociatedTokenAddressSync(
+        okuMoneyMint,
+        user2.publicKey,
+        false,
+        TOKEN_2022_PROGRAM_ID
+      );
+      const user2OkuMoneyBefore = await getAccount(
+        provider.connection,
+        user2OkuMoneyAtaLocal,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      // 3. Rescue to user2 (NOT the original depositor).
+      await program.methods
+        .rescueQueueEntry(rescueIndex)
+        .accountsPartial({
+          queueProcessor: psmOrchestrator.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          okuMoneyMint,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          recipientOkuMoneyAta: user2OkuMoneyAtaLocal,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([psmOrchestrator])
+        .rpc();
+
+      // 4. user2's balance must have grown by exactly the rescued amount.
+      const user2OkuMoneyAfter = await getAccount(
+        provider.connection,
+        user2OkuMoneyAtaLocal,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      const delta = Number(user2OkuMoneyAfter.amount) - Number(user2OkuMoneyBefore.amount);
+      expect(delta).to.equal(rescuedAmount);
     });
   });
 
@@ -2244,7 +2427,7 @@ describe("lite-psm", () => {
       const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
         usdcMint, coldMultisig.publicKey, false, TOKEN_PROGRAM_ID
       );
-      await ensureAta(provider.connection, payer, bufferWithdrawerUsdcAta, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
 
       for (let cycle = 0; cycle < TOTAL_CYCLES; cycle++) {
         // Drain buffer so redemption goes to queue
@@ -2315,7 +2498,7 @@ describe("lite-psm", () => {
         const recipientUsdcAta = getAssociatedTokenAddressSync(
           usdcMint, user.publicKey, false, TOKEN_PROGRAM_ID
         );
-        await ensureAta(provider.connection, payer, recipientUsdcAta, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+        await ensureAtaViaBankrun(h, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
 
         await program.methods
           .processQueue(1)
@@ -2359,7 +2542,7 @@ describe("lite-psm", () => {
 
     before(async () => {
       // Create target user, fund, get OkuMoney
-      await safeAirdropAll(provider.connection, [freezeTarget], 10 * anchor.web3.LAMPORTS_PER_SOL);
+      await fundKeypairs(h, [freezeTarget], 10 * anchor.web3.LAMPORTS_PER_SOL);
 
       const freezeTargetUsdcAta = getAssociatedTokenAddressSync(
         usdcMint, freezeTarget.publicKey, false, TOKEN_PROGRAM_ID
@@ -2375,11 +2558,10 @@ describe("lite-psm", () => {
         )
       );
       await provider.sendAndConfirm(createAtaTx, [payer]);
-      await safeMintTo(provider.connection, payer, usdcMint, freezeTargetUsdcAta, payer,
-        10_000_000, TOKEN_PROGRAM_ID);
+      await mintToViaBankrun(h, usdcMint, freezeTargetUsdcAta, payer, 10_000_000, TOKEN_PROGRAM_ID);
 
       // Mint OkuMoney via PSM
-      await ensureAta(provider.connection, payer, freezeTargetOkuMoneyAta, freezeTarget.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, freezeTarget.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
       await mintOkuMoneyViaProgram(program, freezeTarget, new BN(5_000_000), configPda, usdcMint, okuMoneyMint, freezeTargetUsdcAta, freezeTargetOkuMoneyAta, vaultUsdcAta);
     });
 
@@ -2555,7 +2737,7 @@ describe("lite-psm", () => {
 
     it("role_admin can transfer admin role and transfer back", async () => {
       const tempAdmin = Keypair.generate();
-      await safeAirdropAll(provider.connection, [tempAdmin], 5 * anchor.web3.LAMPORTS_PER_SOL);
+      await fundKeypairs(h, [tempAdmin], 5 * anchor.web3.LAMPORTS_PER_SOL);
 
       // Transfer admin to tempAdmin
       await program.methods
@@ -2629,7 +2811,7 @@ describe("lite-psm", () => {
       const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
         usdcMint, coldMultisig.publicKey, false, TOKEN_PROGRAM_ID
       );
-      await ensureAta(provider.connection, payer, bufferWithdrawerUsdcAta, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
 
       try {
         await program.methods

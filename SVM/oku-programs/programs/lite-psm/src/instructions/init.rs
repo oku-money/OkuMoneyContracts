@@ -3,6 +3,10 @@ use crate::contexts::{Initialize, SetupOkuMoneyEscrow, SetupRedemptionQueue};
 use crate::errors::LitePsmError;
 use crate::events::InitializeEvent;
 use anchor_lang::prelude::*;
+use anchor_spl::token_2022::spl_token_2022::extension::{
+    BaseStateWithExtensions, ExtensionType, StateWithExtensions,
+};
+use anchor_spl::token_2022::spl_token_2022::state::Mint as MintRaw;
 
 /// Initialize the PSM - Step 1
 /// Creates config PDA and USDC vault.
@@ -34,6 +38,34 @@ pub fn initialize(
         pyth_program_owner != Pubkey::default(),
         LitePsmError::InvalidPythProgramOwner
     );
+
+    // Phase 10: enforce the no-TransferHook invariant on the OkuMoney mint.
+    //
+    // The PSM's effects-checks-interactions ordering and `check_yield_lock`
+    // sandwich guard both assume Token-2022 transfers/burns do NOT re-enter
+    // the PSM. The `TransferHook` extension would invalidate that assumption
+    // because the hook program runs mid-transfer with access to the caller's
+    // accounts. Refusing it at init makes the operational discipline
+    // codified into the program, removing the entire class of "deployment
+    // mistakenly attached a hook" risk.
+    //
+    // The `mint::token_program = token_2022_program` constraint already
+    // guarantees the account is a well-formed Token-2022 mint, so any
+    // unpack/`get_extension_types` failure here can only be a corrupt mint
+    // (which we treat as a hard reject via the same error code).
+    {
+        let mint_account_info = ctx.accounts.oku_money_mint.to_account_info();
+        let mint_data = mint_account_info.try_borrow_data()?;
+        let unpacked = StateWithExtensions::<MintRaw>::unpack(&mint_data)
+            .map_err(|_| error!(LitePsmError::TransferHookNotAllowed))?;
+        let extensions = unpacked
+            .get_extension_types()
+            .map_err(|_| error!(LitePsmError::TransferHookNotAllowed))?;
+        require!(
+            !extensions.iter().any(|e| matches!(e, ExtensionType::TransferHook)),
+            LitePsmError::TransferHookNotAllowed
+        );
+    }
 
     let config = &mut ctx.accounts.config;
     config.bump = ctx.bumps.config;

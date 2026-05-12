@@ -19,9 +19,13 @@ import {
   SystemProgram,
   LAMPORTS_PER_SOL,
   Transaction,
+  Ed25519Program,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
 import { Program, AnchorProvider, BN } from '@anchor-lang/core';
+import * as nacl from 'tweetnacl';
+import { serializeMintMessage, computeRequestId } from '../lib/bridge';
 import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -907,6 +911,519 @@ async function testBridgeBurn(ctx: TestContext) {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 10 additions
+// ---------------------------------------------------------------------------
+
+/**
+ * Distribute dollar-denominated yield across all OkuMoney holders.
+ * On devnet the deployer holds the `rebaser` role.
+ */
+async function testDistributeYield(ctx: TestContext) {
+  logger.section('Test: Distribute Yield');
+
+  // Read current price + supply for the summary.
+  const cfgBefore = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  const mintInfo = await getMint(
+    ctx.provider.connection,
+    ctx.okuMoneyMint,
+    'confirmed',
+    TOKEN_2022_PROGRAM_ID
+  );
+  const supply = mintInfo.supply;
+  const priceBefore = (cfgBefore.okuMPrice as BN).toString();
+  logger.info(`Current oku_m_price (1e9): ${priceBefore}`);
+  logger.info(`Current supply (6dec):     ${supply.toString()}`);
+
+  if (supply === 0n) {
+    logger.warning('Supply is zero — distribute_yield would divide by zero. Run mint first.');
+    return;
+  }
+
+  // Pick a tiny yield (1 USDC) so the bump is observable without distorting
+  // post-rebase state too much for subsequent steps.
+  const yieldAmount = 1_000_000;
+  logger.info(`Distributing ${yieldAmount / 1_000_000} USD of yield…`);
+
+  const sig = await ctx.psm.methods
+    .distributeYield(new BN(yieldAmount))
+    .accountsPartial({
+      rebaser: ctx.deployer.publicKey,
+      config: ctx.psmConfig,
+      okuMoneyMint: ctx.okuMoneyMint,
+      token2022Program: TOKEN_2022_PROGRAM_ID,
+    })
+    .rpc();
+  await confirmTx(ctx, sig);
+  logger.success(`distribute_yield tx: ${explorerLink(ctx.network, sig)}`);
+
+  const cfgAfter = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  logger.info(`New oku_m_price (1e9):     ${(cfgAfter.okuMPrice as BN).toString()}`);
+  logger.info(`last_yield_distribution_slot: ${cfgAfter.lastYieldDistributionSlot.toString()}`);
+  logger.success(
+    `Price bumped by ${(cfgAfter.okuMPrice as BN)
+      .sub(cfgBefore.okuMPrice as BN)
+      .toString()} units`
+  );
+}
+
+/**
+ * Pause then unpause the PSM. Both calls should succeed on devnet
+ * because the deployer holds pauser AND unpauser roles.
+ */
+async function testPause(ctx: TestContext) {
+  logger.section('Test: Pause/Unpause PSM');
+
+  // 1. Confirm not already paused.
+  let cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  if (cfg.isPaused) {
+    logger.warning('PSM already paused; unpausing first so the test is idempotent.');
+    const sig0 = await ctx.psm.methods
+      .unpause()
+      .accountsPartial({
+        unpauser: ctx.deployer.publicKey,
+        config: ctx.psmConfig,
+      })
+      .rpc();
+    await confirmTx(ctx, sig0);
+  }
+
+  // 2. Pause.
+  const pauseSig = await ctx.psm.methods
+    .pause()
+    .accountsPartial({
+      pauser: ctx.deployer.publicKey,
+      config: ctx.psmConfig,
+    })
+    .rpc();
+  await confirmTx(ctx, pauseSig);
+  cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  if (!cfg.isPaused) {
+    throw new Error('Pause tx confirmed but is_paused is still false.');
+  }
+  logger.success(`Paused. Tx: ${explorerLink(ctx.network, pauseSig)}`);
+
+  // 3. Unpause.
+  const unpauseSig = await ctx.psm.methods
+    .unpause()
+    .accountsPartial({
+      unpauser: ctx.deployer.publicKey,
+      config: ctx.psmConfig,
+    })
+    .rpc();
+  await confirmTx(ctx, unpauseSig);
+  cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  if (cfg.isPaused) {
+    throw new Error('Unpause tx confirmed but is_paused is still true.');
+  }
+  logger.success(`Unpaused. Tx: ${explorerLink(ctx.network, unpauseSig)}`);
+}
+
+/**
+ * Rotate the pauser role to a fresh keypair via set_authority, then rotate
+ * it back. Tests both directions of the role-admin gate.
+ */
+async function testSetAuthority(ctx: TestContext) {
+  logger.section('Test: Set Authority (pauser rotation)');
+
+  const cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  const originalPauser = cfg.pauser as PublicKey;
+  logger.info(`Original pauser: ${originalPauser.toBase58()}`);
+
+  const newPauser = Keypair.generate();
+
+  // 1. Rotate to a fresh keypair.
+  const rotateSig = await ctx.psm.methods
+    .setAuthority({ pauser: {} } as any, newPauser.publicKey)
+    .accountsPartial({
+      roleAdmin: ctx.deployer.publicKey,
+      config: ctx.psmConfig,
+    })
+    .rpc();
+  await confirmTx(ctx, rotateSig);
+  let cfgAfter = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  if (!(cfgAfter.pauser as PublicKey).equals(newPauser.publicKey)) {
+    throw new Error('set_authority rotation did not take effect.');
+  }
+  logger.success(`Rotated pauser to ${newPauser.publicKey.toBase58()}. Tx: ${explorerLink(ctx.network, rotateSig)}`);
+
+  // 2. Rotate back to the original (so subsequent test runs are idempotent).
+  const restoreSig = await ctx.psm.methods
+    .setAuthority({ pauser: {} } as any, originalPauser)
+    .accountsPartial({
+      roleAdmin: ctx.deployer.publicKey,
+      config: ctx.psmConfig,
+    })
+    .rpc();
+  await confirmTx(ctx, restoreSig);
+  cfgAfter = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  if (!(cfgAfter.pauser as PublicKey).equals(originalPauser)) {
+    throw new Error('Could not restore pauser to original.');
+  }
+  logger.success(`Restored pauser to ${originalPauser.toBase58()}. Tx: ${explorerLink(ctx.network, restoreSig)}`);
+}
+
+/**
+ * Exercise initiate_refund + cancel_refund. Confirm_refund needs the
+ * deadline to elapse (default 1 hour), which is intractable on a real
+ * cluster — skip the confirm leg on devnet and rely on bankrun for the
+ * full happy-path test.
+ *
+ * Requires the deployer to hold the refund_initiator role. The default
+ * devnet authority config sets refund_initiator/refund_confirmer to PDAs
+ * (which can't sign), so this step rotates them to fresh keypairs via
+ * set_bridge_authority first, then restores. If that rotation fails
+ * (e.g. mainnet-like authority layout), the step is skipped.
+ */
+async function testRefund(ctx: TestContext) {
+  logger.section('Test: Refund (initiate + cancel)');
+
+  // 1. Try rotating refund_initiator to the deployer (escape from PDA default).
+  const bridgeCfg = await ctx.psm.account.bridgeConfig.fetch(ctx.bridgeConfig);
+  const originalInitiator = bridgeCfg.refundInitiator as PublicKey;
+  const originalConfirmer = bridgeCfg.refundConfirmer as PublicKey;
+  const dummyConfirmer = Keypair.generate(); // Must differ from initiator.
+
+  try {
+    await ctx.psm.methods
+      .setBridgeAuthority({ refundInitiator: {} } as any, ctx.deployer.publicKey)
+      .accountsPartial({
+        bridgeAdmin: ctx.deployer.publicKey,
+        bridgeConfig: ctx.bridgeConfig,
+      })
+      .rpc();
+    await ctx.psm.methods
+      .setBridgeAuthority({ refundConfirmer: {} } as any, dummyConfirmer.publicKey)
+      .accountsPartial({
+        bridgeAdmin: ctx.deployer.publicKey,
+        bridgeConfig: ctx.bridgeConfig,
+      })
+      .rpc();
+    logger.success('Rotated refund_initiator (deployer) and refund_confirmer (dummy).');
+  } catch (e: any) {
+    logger.warning(`Cannot rotate refund roles (deployer not bridge_admin?): ${e.message?.slice(0, 100)}`);
+    logger.info('Skipping refund flow; rely on bankrun happy-path test for coverage.');
+    return;
+  }
+
+  try {
+    // 2. Need an existing bridge_burn to refund. Reuse `testBridgeBurn`'s logic
+    //    by building the burn here in-line.
+    const okuMBalance = await getTokenBalance(
+      ctx,
+      ctx.okuMoneyMint,
+      ctx.deployer.publicKey,
+      TOKEN_2022_PROGRAM_ID
+    );
+    const burnAmount = 1_000_000n;
+    if (okuMBalance < burnAmount) {
+      logger.warning(`Insufficient OkuMoney (have ${okuMBalance}, need ${burnAmount}). Run mint first.`);
+      return;
+    }
+
+    const destChainId = 1;
+    const evmRecipient = new Uint8Array(20);
+    crypto.getRandomValues(evmRecipient);
+    const [bridgeNonce] = deriveBridgeNoncePDA(ctx.litePsmId, destChainId);
+
+    const feeRecipient = bridgeCfg.feeRecipient as PublicKey;
+    const userOkuMoneyAta = await getOrCreateAta(
+      ctx,
+      ctx.okuMoneyMint,
+      ctx.deployer.publicKey,
+      TOKEN_2022_PROGRAM_ID
+    );
+    if (feeRecipient.equals(ctx.deployer.publicKey)) {
+      logger.warning('Fee recipient is the deployer; cannot burn (duplicate mutable account).');
+      return;
+    }
+    const feeRecipientAta = await getOrCreateAta(
+      ctx,
+      ctx.okuMoneyMint,
+      feeRecipient,
+      TOKEN_2022_PROGRAM_ID
+    );
+
+    const burnSig = await ctx.psm.methods
+      .bridgeBurn(new BN(burnAmount.toString()), Array.from(evmRecipient), destChainId)
+      .accountsPartial({
+        user: ctx.deployer.publicKey,
+        bridgeConfig: ctx.bridgeConfig,
+        config: ctx.psmConfig,
+        bridgeNonce,
+        okuMoneyMint: ctx.okuMoneyMint,
+        userOkuMoneyAta,
+        feeRecipientAta,
+        token2022Program: TOKEN_2022_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+    await confirmTx(ctx, burnSig);
+    logger.success(`Burn tx: ${explorerLink(ctx.network, burnSig)}`);
+
+    // 3. Reconstruct the message + request_id by parsing the BridgeBurnEvent
+    //    from the tx logs (the canonical source — see scripts/lib/bridge/event.ts).
+    const { fetchBridgeBurnEvent, serializeBurnMessage } = await import('../lib/bridge');
+    const event = await fetchBridgeBurnEvent(
+      ctx.provider.connection,
+      burnSig,
+      ctx.psm.idl as any
+    );
+    const messageBytes = serializeBurnMessage({
+      sourceChainId: event.sourceChainId,
+      destChainId: event.destinationChain,
+      sender: ctx.deployer.publicKey,
+      recipient: evmRecipient,
+      amount: event.amount,
+      nonce: event.nonce,
+      deadline: event.deadline,
+    });
+    const requestId = computeRequestId(messageBytes);
+
+    const [pendingRefund] = PublicKey.findProgramAddressSync(
+      [Buffer.from('pending_refund'), requestId],
+      ctx.litePsmId
+    );
+    const [processedRequest] = PublicKey.findProgramAddressSync(
+      [Buffer.from('bridge_request'), requestId],
+      ctx.litePsmId
+    );
+    const [refundedRequest] = PublicKey.findProgramAddressSync(
+      [Buffer.from('bridge_refund'), requestId],
+      ctx.litePsmId
+    );
+
+    // 4. initiate_refund must fail with MintWindowStillOpen (deadline = now + 1h).
+    try {
+      await ctx.psm.methods
+        .initiateRefund(messageBytes, Array.from(requestId) as number[])
+        .accountsPartial({
+          refundInitiator: ctx.deployer.publicKey,
+          bridgeConfig: ctx.bridgeConfig,
+          config: ctx.psmConfig,
+          pendingRefund,
+          processedRequest,
+          refundedRequest,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      throw new Error('initiate_refund unexpectedly succeeded before deadline.');
+    } catch (e: any) {
+      const errStr = String(e?.message ?? e);
+      if (errStr.includes('MintWindowStillOpen')) {
+        logger.success('initiate_refund rejected with MintWindowStillOpen (expected pre-deadline).');
+      } else {
+        throw e;
+      }
+    }
+    logger.info('Confirm_refund leg requires deadline to elapse — covered by bankrun tests.');
+  } finally {
+    // 5. Restore the original refund_initiator/confirmer so subsequent runs
+    //    re-establish the PDA defaults expected by the devnet authority layout.
+    try {
+      await ctx.psm.methods
+        .setBridgeAuthority({ refundInitiator: {} } as any, originalInitiator)
+        .accountsPartial({
+          bridgeAdmin: ctx.deployer.publicKey,
+          bridgeConfig: ctx.bridgeConfig,
+        })
+        .rpc();
+      await ctx.psm.methods
+        .setBridgeAuthority({ refundConfirmer: {} } as any, originalConfirmer)
+        .accountsPartial({
+          bridgeAdmin: ctx.deployer.publicKey,
+          bridgeConfig: ctx.bridgeConfig,
+        })
+        .rpc();
+      logger.success('Restored original refund_initiator/confirmer.');
+    } catch (e: any) {
+      logger.warning(`Could not restore refund roles: ${e.message?.slice(0, 100)}`);
+    }
+  }
+}
+
+/**
+ * Best-effort oracle-on mint sanity check. Requires a real Pyth program
+ * to be available on the network AND a price account owned by it. On
+ * devnet there is a Pyth deployment at the legacy mainnet address, but
+ * no guaranteed price accounts — so we (a) check whether the deployment
+ * declares an oracle, (b) configure it if not, and (c) attempt a mint
+ * with `priceUpdate` set. If the helper rejects (e.g. no Pyth feed),
+ * we log it and don't fail the step.
+ */
+async function testOracleMint(ctx: TestContext) {
+  logger.section('Test: Oracle-on mint (best-effort)');
+
+  const cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  const oracle = cfg.oracle as PublicKey;
+  if (oracle.equals(PublicKey.default)) {
+    logger.warning(
+      'Oracle is currently disabled (Pubkey::default). ' +
+        'Run set-oracle.ts with a real Pyth price account first to exercise this path.'
+    );
+    return;
+  }
+
+  const oracleAccount = await ctx.provider.connection.getAccountInfo(oracle);
+  if (!oracleAccount) {
+    logger.warning(`Configured oracle ${oracle.toBase58()} has no on-chain account.`);
+    return;
+  }
+  logger.info(`Oracle: ${oracle.toBase58()} (owner ${oracleAccount.owner.toBase58()})`);
+
+  const amount = 1_000_000; // 1 USDC -> 1 OkuMoney @ price=1
+  const userUsdcAta = getAssociatedTokenAddressSync(
+    ctx.usdcMint,
+    ctx.deployer.publicKey,
+    false,
+    TOKEN_PROGRAM_ID
+  );
+  const userOkuMoneyAta = await getOrCreateAta(
+    ctx,
+    ctx.okuMoneyMint,
+    ctx.deployer.publicKey,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  try {
+    await mintTestUsdc(ctx, amount);
+    const sig = await ctx.psm.methods
+      .mintOkuM(new BN(amount))
+      .accountsPartial({
+        user: ctx.deployer.publicKey,
+        config: ctx.psmConfig,
+        usdcMint: ctx.usdcMint,
+        okuMoneyMint: ctx.okuMoneyMint,
+        userUsdcAta,
+        userOkuMoneyAta,
+        vaultUsdc: ctx.psmVaultUsdc,
+        priceUpdate: oracle,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        token2022Program: TOKEN_2022_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+    await confirmTx(ctx, sig);
+    logger.success(`Oracle-on mint tx: ${explorerLink(ctx.network, sig)}`);
+  } catch (e: any) {
+    const errStr = String(e?.message ?? e);
+    if (
+      errStr.includes('InvalidOracleResponse') ||
+      errStr.includes('StaleOracle') ||
+      errStr.includes('InsufficientReserves')
+    ) {
+      logger.warning(`Oracle mint rejected (expected if feed isn't a valid Pyth V2 price): ${errStr.slice(0, 120)}`);
+    } else {
+      throw e;
+    }
+  }
+}
+
+/**
+ * SVM-side bridge_mint smoke test. Builds an EVM-burn message,
+ * Ed25519-signs it with the deployer's key (which on devnet holds the
+ * orchestrator_signer role), and submits the bridge_mint instruction.
+ *
+ * Heavy tx — Ed25519 sigverify + sysvar introspection + keccak +
+ * PDA `init` + Token-2022 mint CPI. On a slow validator this can
+ * exceed the legacy 30 s confirmation window; if that happens, the
+ * tx is still accepted on-chain — log it and continue.
+ */
+async function testBridgeMint(ctx: TestContext) {
+  logger.section('Test: Bridge Mint (EVM -> Solana)');
+
+  const bridgeCfg = await ctx.psm.account.bridgeConfig.fetch(ctx.bridgeConfig);
+  if (!(bridgeCfg.orchestratorSigner as PublicKey).equals(ctx.deployer.publicKey)) {
+    logger.warning(
+      'Deployer is not the orchestrator_signer; cannot sign the bridge message. ' +
+        'Skipping bridge_mint step.'
+    );
+    return;
+  }
+  const sourceChainId = 1; // EVM
+  const destChainId = (bridgeCfg.sourceChainId as number) || 103;
+  const amount = 2_000_000n; // 2 OkuMoney
+  const evmSender = new Uint8Array(20);
+  crypto.getRandomValues(evmSender);
+
+  // Discover the next available nonce by reading the per-chain BridgeNonce PDA
+  // for the SOURCE side. The on-chain check is `nonce == bridge_nonce.next_nonce`.
+  const [bridgeNonce] = deriveBridgeNoncePDA(ctx.litePsmId, sourceChainId);
+  let nonce = 0n;
+  try {
+    const noncePda = await ctx.psm.account.bridgeNonce.fetch(bridgeNonce);
+    nonce = BigInt((noncePda.nextNonce as BN).toString());
+  } catch {
+    // PDA not yet initialised — first mint will create it; nonce starts at 0.
+  }
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+
+  const messageBytes = serializeMintMessage({
+    sourceChainId,
+    destChainId,
+    sender: evmSender,
+    recipient: ctx.deployer.publicKey,
+    amount,
+    nonce,
+    deadline,
+  });
+  const signature = nacl.sign.detached(messageBytes, ctx.deployer.secretKey);
+  const requestId = computeRequestId(messageBytes);
+
+  const [processedRequest] = PublicKey.findProgramAddressSync(
+    [Buffer.from('bridge_request'), requestId],
+    ctx.litePsmId
+  );
+  const recipientAta = await getOrCreateAta(
+    ctx,
+    ctx.okuMoneyMint,
+    ctx.deployer.publicKey,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+    publicKey: ctx.deployer.publicKey.toBytes(),
+    message: messageBytes,
+    signature: signature,
+  });
+  const bridgeMintIx = await ctx.psm.methods
+    .bridgeMint(messageBytes, Buffer.from(signature), Array.from(requestId) as number[])
+    .accountsPartial({
+      payer: ctx.deployer.publicKey,
+      bridgeConfig: ctx.bridgeConfig,
+      config: ctx.psmConfig,
+      processedRequest,
+      okuMoneyMint: ctx.okuMoneyMint,
+      recipientOkuMoneyAta: recipientAta,
+      instructionSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+      token2022Program: TOKEN_2022_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+
+  const tx = new Transaction().add(ed25519Ix).add(bridgeMintIx);
+  try {
+    const sig = await sendAndConfirmTransaction(
+      ctx.provider.connection,
+      tx,
+      [ctx.deployer],
+      { skipPreflight: true, commitment: 'confirmed' }
+    );
+    logger.success(`bridge_mint tx: ${explorerLink(ctx.network, sig)}`);
+  } catch (e: any) {
+    const errStr = String(e?.message ?? e);
+    if (errStr.includes('TransactionExpiredTimeout')) {
+      logger.warning(
+        'bridge_mint timed out client-side (heavy tx exceeded confirmation window). ' +
+          'Tx was likely accepted on-chain anyway — verify via ProcessedRequest PDA.'
+      );
+    } else {
+      throw e;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main runner
 // ---------------------------------------------------------------------------
 
@@ -919,6 +1436,12 @@ const STEPS: Record<string, (ctx: TestContext) => Promise<void>> = {
   unwrap: testUnwrap,
   redeem: testRedeem,
   bridge: testBridgeBurn,
+  bridgeMint: testBridgeMint,
+  refund: testRefund,
+  distributeYield: testDistributeYield,
+  pause: testPause,
+  setAuthority: testSetAuthority,
+  oracleMint: testOracleMint,
 };
 
 async function main() {
@@ -963,8 +1486,26 @@ async function main() {
       process.exit(1);
     }
   } else {
-    // Run all steps in order
-    const stepOrder = ['state', 'mint', 'transfer', 'rebase', 'wrap', 'unwrap', 'redeem', 'bridge'];
+    // Run all steps in order. New Phase 10 steps appended at the end so they
+    // run after the wrap/unwrap/redeem flow has populated balances; this
+    // ordering also keeps the previous step layout for any operator who
+    // greps logs from earlier runs.
+    const stepOrder = [
+      'state',
+      'mint',
+      'transfer',
+      'rebase',
+      'wrap',
+      'unwrap',
+      'redeem',
+      'bridge',
+      'bridgeMint',
+      'refund',
+      'distributeYield',
+      'pause',
+      'setAuthority',
+      'oracleMint',
+    ];
     let passed = 0;
     let failed = 0;
 

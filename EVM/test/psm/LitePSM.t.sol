@@ -10,6 +10,7 @@ import {
 import {LitePSM} from "../../src/psm/LitePSM.sol";
 import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
 import {Constants} from "../../src/lib/Constants.sol";
+import {MathLib} from "../../src/lib/MathLib.sol";
 
 /**
  * @title LitePSMTest
@@ -32,6 +33,9 @@ contract LitePSMTest is BaseTest {
     );
     event OkuMRedeemed(
         address indexed user, uint256 noteIn, uint256 usdcOut, uint256 okuMMultiplier
+    );
+    event UsdOkuMinted(
+        address indexed user, uint256 usdcAmount, uint256 usdAmount, uint256 okuMMultiplier
     );
     event OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled);
     event BufferRefilled(uint256 newBufferBalance, uint256 processedStart, uint256 processedEnd);
@@ -245,6 +249,155 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(user1);
         litePsm.mintOkuM(usdcAmount);
+    }
+
+    // ============ Price-Aware mintUsdOku Tests ============
+    //
+    // mintUsdOku flows USDC -> mint OkuM -> wrap -> UsdOku. The slippage floor passed
+    // to `wrap` is computed via MathLib.okuMToWrappedUsd so non-even multipliers no
+    // longer trigger spurious OutputBelowMinimum reverts. Tests below pin that
+    // behavior at the multipliers most likely to expose rounding.
+
+    /// @dev Helper: expected UsdOku minted for a given USDC deposit at current multipliers.
+    function _expectedUsdMintedFromUsdc(uint256 usdcAmount) internal view returns (uint256) {
+        uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
+        uint256 okuMMult = okuMoney.okuMMultiplier();
+        uint256 usdMult = okuDollar.usdMultiplier();
+        uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, okuMMult);
+        return MathLib.okuMToWrappedUsd(okuMAmount, okuMMult, usdMult);
+    }
+
+    /// @notice Regression: the on-chain failure that motivated this fix.
+    ///         okuMMultiplier ≈ 8/7 ($1.142857...), 1 USDC -> OutputBelowMinimum
+    ///         (999999999999999999, 1000000000000000000) before the fix.
+    function test_MintUsdOku_PriceAware_UserReportedCase() public {
+        // 8e18 / 7 ≈ 1.142857142857142857e18, which truncates okuMAmount so the
+        // wrap output falls 1 wei short of usdcValue18.
+        uint256 mult = (8 * PRECISION) / 7;
+        _setNotePrice(mult);
+
+        uint256 usdcAmount = 1e6; // 1 USDC — the exact case from the revert
+        _approveUsdc(user1, address(litePsm), usdcAmount);
+
+        uint256 expectedUsd = _expectedUsdMintedFromUsdc(usdcAmount);
+
+        vm.prank(user1);
+        litePsm.mintUsdOku(usdcAmount); // must not revert
+
+        // Balance reads via the rebasing share->dollar conversion can drift 1 wei
+        // versus the wrap return value; assert within 1 wei of the expected mint.
+        uint256 bal = okuDollar.balanceOf(user1);
+        assertApproxEqAbs(bal, expectedUsd, 1, "balance within 1 wei of expected UsdOku");
+        // And the protocol never overmints above the deposited USDC's dollar value.
+        assertLe(bal, usdcAmount * DECIMAL_MULTIPLIER, "Cannot exceed deposited dollar value");
+    }
+
+    /// @notice CRITICAL: mintUsdOku must not revert at non-even okuMMultiplier values.
+    ///         Mirrors `test_Mint_PriceAware_NonEvenPrice` but for the wrap path.
+    function test_MintUsdOku_PriceAware_NonEvenPrice() public {
+        _setNotePrice(105e16); // $1.05
+
+        uint256 usdcAmount = 100e6; // 100 USDC
+        _approveUsdc(user1, address(litePsm), usdcAmount);
+
+        uint256 expectedUsd = _expectedUsdMintedFromUsdc(usdcAmount);
+
+        vm.prank(user1);
+        litePsm.mintUsdOku(usdcAmount);
+
+        uint256 bal = okuDollar.balanceOf(user1);
+        assertApproxEqAbs(bal, expectedUsd, 1, "UsdOku minted matches helper math");
+        // 100 USDC at $1.05 OkuM and 1.0 UsdOku ≈ 100 UsdOku minus rounding.
+        assertLe(bal, 100e18, "Cannot exceed deposited dollar value");
+        assertGe(bal, 100e18 - 2, "Within 2 wei of 100 UsdOku");
+    }
+
+    /// @notice mintUsdOku at the realistic post-yield price set used by mintOkuM tests.
+    function test_MintUsdOku_PriceAware_VariousPrices() public {
+        uint256[] memory prices = new uint256[](5);
+        prices[0] = 1_000_375e12; // $1.000375 (tiny yield)
+        prices[1] = 10_025e14; // $1.0025 (small yield)
+        prices[2] = 1015e15; // $1.015 (moderate yield)
+        prices[3] = 105e16; // $1.05 (5% yield)
+        prices[4] = 11e17; // $1.10 (10% yield)
+
+        uint256 usdcAmount = 100e6;
+
+        for (uint256 i = 0; i < prices.length; i++) {
+            // Reset user OkuDollar balance between iterations by burning via transfer-out.
+            // The vault doesn't expose a force-clear, so use a fresh recipient per case.
+            address recipient =
+                address(uint160(uint256(keccak256(abi.encode("usdoku-mint-recipient", i)))));
+            _mintUsdc(recipient, usdcAmount);
+
+            _setNotePrice(prices[i]);
+            _approveUsdc(recipient, address(litePsm), usdcAmount);
+
+            uint256 expectedUsd = _expectedUsdMintedFromUsdcFor(usdcAmount, prices[i]);
+
+            vm.prank(recipient);
+            litePsm.mintUsdOku(usdcAmount);
+
+            uint256 bal = okuDollar.balanceOf(recipient);
+            assertApproxEqAbs(bal, expectedUsd, 1, "UsdOku minted must match helper math");
+            assertLe(bal, usdcAmount * DECIMAL_MULTIPLIER, "Cannot exceed deposited dollar value");
+        }
+    }
+
+    /// @dev Variant of {_expectedUsdMintedFromUsdc} that lets the test pin the
+    ///      okuMMultiplier explicitly (the storage helper has already set it, but
+    ///      reading it back is fine — keeping the parameter makes intent clear).
+    function _expectedUsdMintedFromUsdcFor(
+        uint256 usdcAmount,
+        uint256 okuMMult
+    )
+        internal
+        view
+        returns (uint256)
+    {
+        uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
+        uint256 usdMult = okuDollar.usdMultiplier();
+        uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, okuMMult);
+        return MathLib.okuMToWrappedUsd(okuMAmount, okuMMult, usdMult);
+    }
+
+    /// @notice Exercise the dual-multiplier rounding path: both okuMMultiplier
+    ///         and usdMultiplier elevated simultaneously.
+    function test_MintUsdOku_PriceAware_AtElevatedUsdMultiplier() public {
+        // Elevate UsdOku multiplier first (rolls block internally), then move
+        // okuMMultiplier (also rolls a block), so neither yield-sandwich guard
+        // is tripped by the subsequent mint.
+        _elevateUsdMultiplier(11e17); // ~$1.10 per share, capped by compounded reachability
+        _setNotePrice(105e16); // $1.05 per OkuM
+
+        uint256 usdcAmount = 250e6; // 250 USDC
+        _approveUsdc(user1, address(litePsm), usdcAmount);
+
+        uint256 expectedUsd = _expectedUsdMintedFromUsdc(usdcAmount);
+
+        vm.prank(user1);
+        litePsm.mintUsdOku(usdcAmount);
+
+        uint256 bal = okuDollar.balanceOf(user1);
+        assertApproxEqAbs(bal, expectedUsd, 1, "UsdOku balance matches helper math");
+        assertLe(bal, usdcAmount * DECIMAL_MULTIPLIER, "Cannot exceed deposited dollar value");
+    }
+
+    /// @notice mintUsdOku emits UsdOkuMinted carrying the helper-computed dollar amount.
+    function test_MintUsdOku_PriceAware_EmitsCorrectAmounts() public {
+        _setNotePrice(105e16); // $1.05
+
+        uint256 usdcAmount = 100e6;
+        uint256 expectedUsd = _expectedUsdMintedFromUsdc(usdcAmount);
+        uint256 okuMMult = okuMoney.okuMMultiplier();
+
+        _approveUsdc(user1, address(litePsm), usdcAmount);
+
+        vm.expectEmit(true, false, false, true);
+        emit UsdOkuMinted(user1, usdcAmount, expectedUsd, okuMMult);
+
+        vm.prank(user1);
+        litePsm.mintUsdOku(usdcAmount);
     }
 
     // ============ Oracle Tests ============

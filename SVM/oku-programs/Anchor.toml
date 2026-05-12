@@ -21,8 +21,11 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-# Run unit tests only (no fork tests — those require surfpool, use `npm run test:fork`)
-test = "npx mocha --require tsx --timeout 180000 'tests/unit/**/*.ts'"
+# Phase 9: bankrun is the default test runner. `anchor test` is synonymous
+# with `npm test`. Fork tests need surfpool (`npm run test:fork`); the
+# legacy validator-flavoured runner survives as `npm run test:validator`
+# (an escape hatch — see SVM/README.md).
+test = "npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'"
 
 [hooks]
 

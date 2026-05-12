@@ -339,4 +339,13 @@ pub enum LitePsmError {
     /// allow self-bridging).
     #[msg("Invalid chain ID (zero or equal to source chain)")]
     InvalidChainId,
+
+    // ===== Phase 10: mint extension invariants =====
+    /// The OkuMoney mint has the Token-2022 `TransferHook` extension
+    /// enabled. The SVM port assumes no transfer hook is installed (the
+    /// hook could re-enter the PSM mid-transfer and break the
+    /// effects-checks-interactions ordering that defends against
+    /// re-entrancy). Rebuild the mint without `TransferHook` and re-init.
+    #[msg("OkuMoney mint must not have the TransferHook Token-2022 extension")]
+    TransferHookNotAllowed,
 }

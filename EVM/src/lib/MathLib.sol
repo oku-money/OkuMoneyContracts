@@ -123,4 +123,51 @@ library MathLib {
     {
         return usdcAmount * decimalMultiplier;
     }
+
+    /**
+     * @notice Compute the OkuDollar share count produced by wrapping `okuMAmount`.
+     * @dev Single source of truth for `OkuDollar.wrap`'s share formula.
+     *      shares = okuMAmount * okuMMultiplier / usdMultiplier (floor)
+     * @param okuMAmount OkuMoney token amount being wrapped
+     * @param okuMMult Current okuMMultiplier
+     * @param usdMult Current usdMultiplier (must be non-zero)
+     * @return shares Internal OkuDollar share count credited to the receiver
+     */
+    function wrappedSharesFromOkuM(
+        uint256 okuMAmount,
+        uint256 okuMMult,
+        uint256 usdMult
+    )
+        internal
+        pure
+        returns (uint256 shares)
+    {
+        return (okuMAmount * okuMMult) / usdMult;
+    }
+
+    /**
+     * @notice Compute the dollar-denominated UsdOku amount minted when wrapping `okuMAmount`.
+     * @dev Replicates `OkuDollar.wrap`'s two-step truncation exactly:
+     *        shares    = okuMAmount * okuMMultiplier / usdMultiplier   (floor)
+     *        usdMinted = shares     * usdMultiplier  / PRECISION        (floor)
+     *      Used by both `OkuDollar.wrap` and `LitePSM.mintUsdOku` so the slippage
+     *      floor passed to `wrap` matches what `wrap` actually produces — eliminating
+     *      reverts driven solely by integer-division rounding at non-even multipliers.
+     * @param okuMAmount OkuMoney token amount being wrapped
+     * @param okuMMult Current okuMMultiplier
+     * @param usdMult Current usdMultiplier (must be non-zero)
+     * @return usdMinted Dollar value (18 decimals) the wrap would credit
+     */
+    function okuMToWrappedUsd(
+        uint256 okuMAmount,
+        uint256 okuMMult,
+        uint256 usdMult
+    )
+        internal
+        pure
+        returns (uint256 usdMinted)
+    {
+        uint256 shares = (okuMAmount * okuMMult) / usdMult;
+        return (shares * usdMult) / Constants.PRECISION;
+    }
 }

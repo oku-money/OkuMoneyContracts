@@ -349,12 +349,15 @@ contract OkuDollar is
         uint256 actualReceived = IERC20(address($.okuMoney)).balanceOf(address(this)) - balBefore;
 
         // shares = actualReceived * okuMMultiplier / usdMultiplier
+        // usdMinted = shares * usdMultiplier / PRECISION
+        // Both steps are sourced from MathLib so LitePSM.mintUsdOku can replicate
+        // wrap's exact rounding when computing its slippage floor.
         uint256 okuMMult = $.okuMoney.okuMMultiplier();
         uint256 usdMult = usdMultiplier();
-        uint256 sharesToMint = (actualReceived * okuMMult) / usdMult;
+        uint256 sharesToMint = MathLib.wrappedSharesFromOkuM(actualReceived, okuMMult, usdMult);
         if (sharesToMint == 0) revert AmountTooSmall();
 
-        usdMinted = (sharesToMint * usdMult) / Constants.PRECISION;
+        usdMinted = MathLib.okuMToWrappedUsd(actualReceived, okuMMult, usdMult);
         if (usdMinted < minAmountOut) revert OutputBelowMinimum(usdMinted, minAmountOut);
 
         $.totalUsdShares += sharesToMint;

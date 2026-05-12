@@ -361,7 +361,12 @@ contract LitePSM is
     // ============ OkuDollar Convenience Functions ============
 
     /// @notice Mint OkuDollar by depositing USDC (USDC -> mint OkuM -> wrap -> OkuDollar to user).
-    /// @dev Multiplier-aware. Slippage enforced via `wrap`'s `minAmountOut`.
+    /// @dev Multiplier-aware. The slippage floor passed to `wrap` is computed by
+    ///      replicating `wrap`'s exact two-step floor math via {MathLib.okuMToWrappedUsd}.
+    ///      Passing `usdcValue18` directly would revert at non-even multipliers because
+    ///      `dollarsToOkuM` truncates okuMAmount in the protocol's favor and `wrap`'s
+    ///      output is bounded above by `usdcValue18`, so the naive floor is unreachable.
+    ///      A symmetric 1-USDC-unit round-trip drift check mirrors {mintOkuM}.
     function mintUsdOku(uint256 usdcAmount)
         external
         whenNotPaused
@@ -378,6 +383,22 @@ contract LitePSM is
         uint256 okuMAmount = MathLib.dollarsToOkuM(usdcValue18, okuMMult);
         if (okuMAmount == 0) revert AmountTooSmall();
 
+        // Expected wrap output computed with the same truncation `wrap` performs.
+        // This is the tightest possible slippage floor: it can only diverge if the
+        // vault's multipliers move between this call and the wrap (impossible — we
+        // hold the reentrancy guard and the yield-distribution guard) or if OkuM
+        // becomes fee-on-transfer (handled by `wrap`'s own balance-delta check).
+        uint256 usdMult = $.okuDollar.usdMultiplier();
+        uint256 expectedUsdMinted = MathLib.okuMToWrappedUsd(okuMAmount, okuMMult, usdMult);
+
+        // Round-trip drift check: usdcAmount -> usdMinted -> usdcAmount must be within
+        // 1 USDC unit. Mirrors the pattern in {mintOkuM}; truncation favors the
+        // protocol but the 1-unit tolerance prevents reverts at non-even multipliers.
+        uint256 roundTripUsdc = MathLib.dollarsToUsdc(expectedUsdMinted, decimalMultiplier);
+        if (roundTripUsdc + 1 < usdcAmount) {
+            revert RoundTripDriftTooLarge(roundTripUsdc, usdcAmount);
+        }
+
         if ($.oracleEnabled && address($.porOracle) != address(0)) {
             _checkReserves(okuMAmount);
         }
@@ -388,8 +409,7 @@ contract LitePSM is
         // One-shot allowance to the vault: wrap will pull okuMAmount; we revoke after.
         IERC20 okuMoneyToken = IERC20(address($.okuMoney));
         okuMoneyToken.setExactAllowance(address($.okuDollar), okuMAmount);
-        // Pass usdcValue18 as the slippage floor; vault reverts if usdMinted is below it.
-        uint256 usdMinted = $.okuDollar.wrap(okuMAmount, msg.sender, usdcValue18);
+        uint256 usdMinted = $.okuDollar.wrap(okuMAmount, msg.sender, expectedUsdMinted);
         okuMoneyToken.revokeAllowance(address($.okuDollar));
 
         emit UsdOkuMinted(msg.sender, usdcAmount, usdMinted, okuMMult);

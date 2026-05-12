@@ -143,14 +143,12 @@ pub struct RedeemOkuM<'info> {
 
 #[derive(Accounts)]
 pub struct ProcessQueue<'info> {
-    #[account(
-        constraint = queue_processor.key() == config.queue_processor @ LitePsmError::Unauthorized
-    )]
     pub queue_processor: Signer<'info>,
 
     #[account(
         seeds = [PsmConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        has_one = queue_processor @ LitePsmError::Unauthorized
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
@@ -192,14 +190,12 @@ pub struct ProcessQueue<'info> {
 
 #[derive(Accounts)]
 pub struct DepositBuffer<'info> {
-    #[account(
-        constraint = buffer_depositor.key() == config.buffer_depositor @ LitePsmError::Unauthorized
-    )]
     pub buffer_depositor: Signer<'info>,
 
     #[account(
         seeds = [PsmConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        has_one = buffer_depositor @ LitePsmError::Unauthorized
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
@@ -227,14 +223,12 @@ pub struct DepositBuffer<'info> {
 
 #[derive(Accounts)]
 pub struct WithdrawBuffer<'info> {
-    #[account(
-        constraint = buffer_withdrawer.key() == config.buffer_withdrawer @ LitePsmError::Unauthorized
-    )]
     pub buffer_withdrawer: Signer<'info>,
 
     #[account(
         seeds = [PsmConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        has_one = buffer_withdrawer @ LitePsmError::Unauthorized
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
@@ -280,14 +274,12 @@ pub struct WithdrawBuffer<'info> {
 /// the SVM side collapses both into the `queue_processor` authority for simplicity.
 #[derive(Accounts)]
 pub struct RescueQueueEntry<'info> {
-    #[account(
-        constraint = queue_processor.key() == config.queue_processor @ LitePsmError::Unauthorized
-    )]
     pub queue_processor: Signer<'info>,
 
     #[account(
         seeds = [PsmConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        has_one = queue_processor @ LitePsmError::Unauthorized
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 

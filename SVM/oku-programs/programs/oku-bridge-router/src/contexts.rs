@@ -353,30 +353,26 @@ pub struct RedeemUsdOku<'info> {
 
 #[derive(Accounts)]
 pub struct Pause<'info> {
-    #[account(
-        constraint = pauser.key() == config.pauser @ RouterError::Unauthorized
-    )]
     pub pauser: Signer<'info>,
 
     #[account(
         mut,
         seeds = [RouterConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        has_one = pauser @ RouterError::Unauthorized
     )]
     pub config: Account<'info, RouterConfig>,
 }
 
 #[derive(Accounts)]
 pub struct Unpause<'info> {
-    #[account(
-        constraint = unpauser.key() == config.unpauser @ RouterError::Unauthorized
-    )]
     pub unpauser: Signer<'info>,
 
     #[account(
         mut,
         seeds = [RouterConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        has_one = unpauser @ RouterError::Unauthorized
     )]
     pub config: Account<'info, RouterConfig>,
 }
@@ -384,16 +380,14 @@ pub struct Unpause<'info> {
 #[derive(Accounts)]
 pub struct SetAuthority<'info> {
     /// Role admin - only role_admin can update authorities
-    #[account(
-        constraint = role_admin.key() == config.role_admin @ RouterError::Unauthorized
-    )]
     pub role_admin: Signer<'info>,
 
     /// Router config
     #[account(
         mut,
         seeds = [RouterConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        has_one = role_admin @ RouterError::Unauthorized
     )]
     pub config: Account<'info, RouterConfig>,
 }

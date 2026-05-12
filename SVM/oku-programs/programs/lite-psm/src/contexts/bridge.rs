@@ -149,7 +149,7 @@ pub struct InitiateRefund<'info> {
     #[account(
         seeds = [BridgeConfig::SEED],
         bump = bridge_config.bump,
-        constraint = refund_initiator.key() == bridge_config.refund_initiator @ LitePsmError::Unauthorized
+        has_one = refund_initiator @ LitePsmError::Unauthorized
     )]
     pub bridge_config: Box<Account<'info, BridgeConfig>>,
 
@@ -203,7 +203,7 @@ pub struct ConfirmRefund<'info> {
     #[account(
         seeds = [BridgeConfig::SEED],
         bump = bridge_config.bump,
-        constraint = refund_confirmer.key() == bridge_config.refund_confirmer @ LitePsmError::Unauthorized
+        has_one = refund_confirmer @ LitePsmError::Unauthorized
     )]
     pub bridge_config: Box<Account<'info, BridgeConfig>>,
 

@@ -1,0 +1,111 @@
+/**
+ * Freeze a user's OkuMoney token account.
+ *
+ * Wraps `lite_psm::freeze_account` (freezer-gated). Works even when PSM
+ * is paused. The handler refuses to freeze the blacklist-exempt bridge
+ * and router addresses (`BlacklistExempt`).
+ *
+ * Usage:
+ *   NETWORK=devnet tsx scripts/admin/freeze-account.ts --owner=<user-pubkey>
+ *   NETWORK=mainnet-beta tsx scripts/admin/freeze-account.ts \
+ *       --owner=<user-pubkey> --yes-i-mean-it-on-mainnet
+ *   --dry-run     do not submit
+ *
+ * The script derives the user's OkuMoney ATA from their wallet pubkey.
+ * Pass `--ata=<ata-pubkey>` directly if you need to freeze a non-ATA
+ * account (rare).
+ */
+
+import * as anchor from '@anchor-lang/core';
+import { Program } from '@anchor-lang/core';
+import { PublicKey } from '@solana/web3.js';
+import {
+  TOKEN_2022_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from '@solana/spl-token';
+import { LitePsm } from '../../target/types/lite_psm';
+import { createProvider, detectNetwork } from '../utils/network';
+import { loadDeployment } from '../utils/addressBook';
+import { logger } from '../utils/logger';
+import { derivePsmConfigPDA } from '../utils/pdaHelpers';
+import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
+
+function parseArg(name: string): string | undefined {
+  const a = process.argv.find((x) => x.startsWith(`--${name}=`));
+  return a ? a.split('=')[1] : undefined;
+}
+
+async function main() {
+  const network = detectNetwork();
+  logger.header(`freeze_account (${network})`);
+
+  const ownerArg = parseArg('owner');
+  const ataArg = parseArg('ata');
+  if (!ownerArg && !ataArg) {
+    throw new Error('Required: --owner=<user-pubkey> (or --ata=<ata-pubkey>)');
+  }
+
+  const provider = createProvider(network);
+  anchor.setProvider(provider);
+  const deployment = loadDeployment(network);
+  if (!deployment?.programs?.litePsm || !deployment.tokens?.okuMoney) {
+    throw new Error(`No deployment for ${network}.`);
+  }
+
+  const litePsmId = new PublicKey(deployment.programs.litePsm);
+  const okuMoneyMint = new PublicKey(deployment.tokens.okuMoney);
+  const program = anchor.workspace.LitePsm as Program<LitePsm>;
+  const [psmConfig] = derivePsmConfigPDA(litePsmId);
+
+  let targetAta: PublicKey;
+  let ownerLabel: string;
+  if (ataArg) {
+    targetAta = new PublicKey(ataArg);
+    ownerLabel = '(passed via --ata)';
+  } else {
+    const owner = new PublicKey(ownerArg!);
+    targetAta = getAssociatedTokenAddressSync(
+      okuMoneyMint,
+      owner,
+      false,
+      TOKEN_2022_PROGRAM_ID
+    );
+    ownerLabel = owner.toBase58();
+  }
+
+  logger.info(
+    summaryBlock('freeze_account()', {
+      'config PDA': psmConfig.toBase58(),
+      'target owner': ownerLabel,
+      'target ATA': targetAta.toBase58(),
+      'okuMoney mint': okuMoneyMint.toBase58(),
+      'signer (freezer)': provider.wallet.publicKey.toBase58(),
+    })
+  );
+
+  if (isDryRun()) return logger.success('--dry-run set; not submitting.');
+  await confirmIfMainnet(
+    network,
+    `freeze_account(${targetAta.toBase58()}) on mainnet — compliance action`
+  );
+
+  const sig = await program.methods
+    .freezeAccount()
+    .accountsPartial({
+      freezer: provider.wallet.publicKey,
+      config: psmConfig,
+      okuMoneyMint,
+      targetOkuMoneyAta: targetAta,
+      token2022Program: TOKEN_2022_PROGRAM_ID,
+    })
+    .rpc();
+  logger.success(`tx: ${sig}`);
+}
+
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    logger.error(`Failed: ${err.message ?? String(err)}`);
+    console.error(err);
+    process.exit(1);
+  });

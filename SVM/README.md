@@ -39,6 +39,8 @@ Convenience program providing single-transaction flows: `bridge_oku_m` (direct b
 
 **6-decimal tokens.** Both OkuMoney and usdOku use 6 decimals, matching USDC on Solana. EVM uses 18 decimals. The bridge layer handles decimal conversion.
 
+**No-TransferHook invariant on OkuMoney.** The PSM's effects-checks-interactions ordering and `check_yield_lock` sandwich guard both assume Token-2022 transfers/burns do NOT re-enter the PSM. A `TransferHook` extension would invalidate that assumption (the hook program runs mid-transfer with access to the caller's accounts). `initialize` parses the OkuMoney mint's Token-2022 extension list at init time and refuses any mint that has `ExtensionType::TransferHook` enabled (Phase 10; previously held only by operational discipline).
+
 ## Program Structure
 
 ```
@@ -373,60 +375,60 @@ Full list in `programs/lite-psm/src/errors.rs`, `programs/oku-dollar/src/errors.
 ## Testing
 
 ```bash
-# Unit tests (boots solana-test-validator, no external deps)
-anchor test
+# Unit suite — bankrun in-process runner, ~5 seconds.
+npm test
 # or equivalently:
-npx mocha --require tsx --timeout 180000 'tests/unit/**/*.ts'
+anchor test
+# or directly:
+npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'
 
-# Individual unit test files
-npx mocha --require tsx --timeout 180000 'tests/unit/lite-psm.ts'
-npx mocha --require tsx --timeout 180000 'tests/unit/oku-dollar.ts'
-npx mocha --require tsx --timeout 180000 'tests/unit/bridge_security.ts'
+# Individual bankrun test files
+npx mocha --require tsx --timeout 60000 'tests/bankrun/lite-psm.ts'
+npx mocha --require tsx --timeout 60000 'tests/bankrun/bridge_security.ts'
+npx mocha --require tsx --timeout 60000 'tests/bankrun/oku-bridge-router.ts'
+npx mocha --require tsx --timeout 60000 'tests/bankrun/oku-dollar.ts'
+npx mocha --require tsx --timeout 60000 'tests/bankrun/pyth-oracle.ts'
 
-# Fork tests (requires Surfpool running with mainnet fork)
+# Fork tests — exercises real mainnet Pyth state via Surfpool.
 #   1. Start Surfpool: npm run surfpool:mainnet
 #   2. Run fork tests: npm run test:fork
-npm run test:fork
+
+# Validator escape hatch — solana-test-validator via `anchor test`.
+# Kept around for the rare case where bankrun's in-process runtime
+# diverges from a real cluster (e.g. testing leader rotation).
+# CI does NOT run this path; treat as a debugging tool only.
+npm run test:validator
 ```
 
-### Test runtime notes
+### Runner notes
 
-`tests/unit/bridge_security.ts` contains a number of end-to-end `bridge_mint`
-tests that exercise the heaviest path in the program (Ed25519 sigverify
-precompile + instruction-sysvar introspection + keccak256 + PDA `init` +
-Token-2022 mint CPI in a single transaction). On a freshly-spawned
-`solana-test-validator` with a cold BPF cache, some of these transactions
-exceed `@solana/web3.js@1.x`'s hard-coded 30s confirmation polling window:
+Phase 9 migrated the entire unit suite to
+[`solana-bankrun`](https://github.com/kevinheavey/solana-bankrun) (via the
+thin `anchor-bankrun` adapter). Bankrun runs the BPF programs in-process
+on `litesvm`, eliminating:
 
-```
-TransactionExpiredTimeoutError: Transaction was not confirmed in 30.00 seconds.
-```
+- the 30 s confirmation-polling window in `@solana/web3.js@1.x` (no validator → no RPC → no polling)
+- wall-clock waits for slot rollover (`warpSlots(h, 1n)` in `beforeEach`)
+- wall-clock waits for deadline elapse (`warpBy(h, 3601)` in the refund test)
 
-The transactions are valid; the client gives up before confirmation arrives.
-The heaviest sub-set is gated behind `RUN_HEAVY_BRIDGE_TESTS=1` so default
-`anchor test` runs stay around ~10-15 seconds:
+Two known bankrun limitations are explicitly skipped or worked around:
 
-```bash
-RUN_HEAVY_BRIDGE_TESTS=1 npx mocha --require tsx --timeout 300000 \
-    'tests/unit/bridge_security.ts'
-```
+- **Ed25519 precompile** is not enforced by litesvm. The
+  "rejects invalid signature" test in
+  `tests/bankrun/bridge_security.ts` is skipped (`it.skip`) with a
+  comment. The behavior is verified on real validators by
+  `scripts/test/test-devnet.ts` and on Surfpool by
+  `tests/fork/pyth-oracle.ts`.
+- **Slot does not auto-advance** between transactions. Each `before` /
+  `beforeEach` that comes after a yield-distribution op bumps the slot
+  via `h.context.warpToSlot(cur + 1n)` to avoid the
+  `YieldDistributionInProgress` sandwich guard. See `tests/shared/bankrun.ts`.
 
-Note: of the four `Ed25519 Signature Verification` tests behind that flag,
-three actually fail at the Ed25519 precompile (rejecting the bad sig before
-ever reaching `bridge_mint`) and don't need the heavy path; only the
-"accepts valid orchestrator signature" case truly requires it. The flag is
-applied at the describe-block level, not per-test.
-
-**Tracked migration to `anchor-bankrun`.** Surfpool already runs on
-`litesvm` in this repo (visible in `.surfpool/logs/*.log`), so the
-groundwork for an in-process test runner is present. Migrating
-`bridge_security.ts` to `anchor-bankrun` would:
-
-- eliminate the 30s confirmation window entirely (`processTransaction` is sync)
-- drop the `RUN_HEAVY_BRIDGE_TESTS` gate
-- replace `setTimeout(500)` clock waits with `client.warpToTimestamp(...)`
-
-Status: scoped as a Phase 4b follow-up. Not blocking review of the program code.
+The legacy `solana-test-validator` path remains available via `npm run
+test:validator`. The shared setup module (`tests/shared/setup.ts`) takes
+a `Funder` callback parameter so it can drive either runner; pass
+`fundKeypairs(h, ...)` for bankrun or `validatorFunder(connection)` for
+the validator.
 
 ## Deployment
 
@@ -622,9 +624,20 @@ All admin scripts live under `scripts/admin/`. Each:
 | `admin:rotate-orchestrator` | `update_orchestrator_signer` | `signer_manager` |
 | `admin:set-oracle` | `set_oracle` | `oracle_manager` |
 | `admin:set-pyth-program-owner` | `set_pyth_program_owner` | `oracle_manager` |
+| `admin:set-max-supply` | `set_max_supply` | `cap_manager` |
+| `admin:set-minter-allowance` | `set_minter_allowance` | `allowance_manager` |
+| `admin:set-oku-m-price` | `set_oku_m_price` | `rebaser` (stamps yield-distribution slot) |
 | `admin:distribute-yield` | `distribute_yield` | `rebaser` |
+| `admin:freeze-account` / `admin:thaw-account` | `freeze_account` / `thaw_account` | `freezer` / `unfreezer` |
+| `admin:update-bridge-fee` | `update_bridge_fee` | `fee_manager` |
+| `admin:update-fee-recipient` | `update_fee_recipient` | `fee_manager` |
+| `admin:update-bridge-limits` | `update_bridge_limits` | `limits_manager` |
+| `admin:update-bridge-deadline` | `update_bridge_deadline` | `limits_manager` |
+| `admin:add-supported-chain` / `admin:remove-supported-chain` | `add_supported_chain` / `remove_supported_chain` | `chain_manager` |
+| `admin:skip-nonce` | `skip_nonce` (bounded by `MAX_NONCE_SKIP`) | `nonce_admin` |
 | `admin:blacklist-exempt` | `initialize_blacklist_exempt` | `role_admin` (one-shot) |
 | `admin:setup-router-alt` | (creates an Address Lookup Table) | deployer (initially) |
+| `test:process-queue` | `process_queue` (orchestrator drain) | `queue_processor` |
 
 Refund operator scripts under `scripts/bridge/`:
 

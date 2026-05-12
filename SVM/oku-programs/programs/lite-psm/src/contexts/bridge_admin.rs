@@ -40,105 +40,91 @@ pub struct InitializeBridge<'info> {
 
 #[derive(Accounts)]
 pub struct BridgeChainManager<'info> {
-    #[account(
-        constraint = chain_manager.key() == bridge_config.chain_manager @ LitePsmError::Unauthorized
-    )]
     pub chain_manager: Signer<'info>,
 
     #[account(
         mut,
         seeds = [BridgeConfig::SEED],
-        bump = bridge_config.bump
+        bump = bridge_config.bump,
+        has_one = chain_manager @ LitePsmError::Unauthorized
     )]
     pub bridge_config: Account<'info, BridgeConfig>,
 }
 
 #[derive(Accounts)]
 pub struct BridgeFeeManager<'info> {
-    #[account(
-        constraint = fee_manager.key() == bridge_config.fee_manager @ LitePsmError::Unauthorized
-    )]
     pub fee_manager: Signer<'info>,
 
     #[account(
         mut,
         seeds = [BridgeConfig::SEED],
-        bump = bridge_config.bump
+        bump = bridge_config.bump,
+        has_one = fee_manager @ LitePsmError::Unauthorized
     )]
     pub bridge_config: Account<'info, BridgeConfig>,
 }
 
 #[derive(Accounts)]
 pub struct BridgeSignerManager<'info> {
-    #[account(
-        constraint = signer_manager.key() == bridge_config.signer_manager @ LitePsmError::Unauthorized
-    )]
     pub signer_manager: Signer<'info>,
 
     #[account(
         mut,
         seeds = [BridgeConfig::SEED],
-        bump = bridge_config.bump
+        bump = bridge_config.bump,
+        has_one = signer_manager @ LitePsmError::Unauthorized
     )]
     pub bridge_config: Account<'info, BridgeConfig>,
 }
 
 #[derive(Accounts)]
 pub struct BridgeLimitsManager<'info> {
-    #[account(
-        constraint = limits_manager.key() == bridge_config.limits_manager @ LitePsmError::Unauthorized
-    )]
     pub limits_manager: Signer<'info>,
 
     #[account(
         mut,
         seeds = [BridgeConfig::SEED],
-        bump = bridge_config.bump
+        bump = bridge_config.bump,
+        has_one = limits_manager @ LitePsmError::Unauthorized
     )]
     pub bridge_config: Account<'info, BridgeConfig>,
 }
 
 #[derive(Accounts)]
 pub struct BridgeAdmin<'info> {
-    #[account(
-        constraint = bridge_admin.key() == bridge_config.bridge_admin @ LitePsmError::Unauthorized
-    )]
     pub bridge_admin: Signer<'info>,
 
     #[account(
         mut,
         seeds = [BridgeConfig::SEED],
-        bump = bridge_config.bump
+        bump = bridge_config.bump,
+        has_one = bridge_admin @ LitePsmError::Unauthorized
     )]
     pub bridge_config: Account<'info, BridgeConfig>,
 }
 
 #[derive(Accounts)]
 pub struct BridgePause<'info> {
-    #[account(
-        constraint = bridge_pauser.key() == bridge_config.bridge_pauser @ LitePsmError::Unauthorized
-    )]
     pub bridge_pauser: Signer<'info>,
 
     #[account(
         mut,
         seeds = [BridgeConfig::SEED],
-        bump = bridge_config.bump
+        bump = bridge_config.bump,
+        has_one = bridge_pauser @ LitePsmError::Unauthorized
     )]
     pub bridge_config: Account<'info, BridgeConfig>,
 }
 
 #[derive(Accounts)]
 pub struct BridgeUnpause<'info> {
-    #[account(
-        constraint = bridge_unpauser.key() == bridge_config.bridge_unpauser @ LitePsmError::Unauthorized
-    )]
     pub bridge_unpauser: Signer<'info>,
 
     #[account(
         mut,
         seeds = [BridgeConfig::SEED],
-        bump = bridge_config.bump
+        bump = bridge_config.bump,
+        has_one = bridge_unpauser @ LitePsmError::Unauthorized
     )]
     pub bridge_config: Account<'info, BridgeConfig>,
 }
@@ -152,7 +138,7 @@ pub struct BridgeNonceAdmin<'info> {
     #[account(
         seeds = [BridgeConfig::SEED],
         bump = bridge_config.bump,
-        constraint = nonce_admin.key() == bridge_config.nonce_admin @ LitePsmError::Unauthorized
+        has_one = nonce_admin @ LitePsmError::Unauthorized
     )]
     pub bridge_config: Account<'info, BridgeConfig>,
 

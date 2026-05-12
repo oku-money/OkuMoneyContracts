@@ -2,28 +2,68 @@
 
 Items deferred from earlier review passes. Items here are scoped, not lost.
 
-**Status legend:** ✅ landed in Phase 8, 🟡 in progress / partially landed,
+**Status legend:** ✅ landed, 🟡 partially landed / in progress,
 ⏳ deferred to a future pass.
 
-## ✅ Phase 4b — Test runner migration (litesvm/bankrun)
+---
 
-**Status:** Phase 8.2 landed an `anchor-bankrun` harness
-(`tests/shared/bankrun.ts`) and a smoke suite (`tests/bankrun/smoke.ts`)
-running via `npm run test:bankrun`. The peer-dep concern from the
-original tracker turned out not to be a real blocker —
-`anchor-bankrun`'s `BankrunProvider` is structurally compatible with
-`@anchor-lang/core`'s `Provider` (both packages share the same shape;
-only the package name differs). A single `as unknown as Provider` cast
-at provider-registration time is the entire integration cost.
+## ✅ Phase 4b — Test runner migration (`solana-bankrun`)
 
-**Deferred:** migrating `tests/unit/bridge_security.ts` (the file gated
-by `RUN_HEAVY_BRIDGE_TESTS=1`) onto bankrun. The harness is ready and
-the migration is mechanical; folded into the next test-coverage pass.
-Once migrated, the `RUN_HEAVY_BRIDGE_TESTS=1` gate can be lifted, the
-`provider.sendAndConfirm` monkey-patch (`bridge_security.ts:407-468`)
-removed, and the `setTimeout(500)` clock waits at `lite-psm.ts:923`,
-`bridge_security.ts:1136-1139`, and `bridge_security.ts:2631` replaced
-with `warpBy()` / `warpSlots()` from `tests/shared/bankrun.ts`.
+**Status (Phase 9):** complete. The entire unit suite now runs on
+`solana-bankrun` via the `anchor-bankrun` adapter. `npm test` (and
+`anchor test`) execute `tests/bankrun/**/*.ts` in ~5 seconds; the
+legacy `solana-test-validator` path survives only as `npm run
+test:validator` for ad-hoc debugging.
+
+What landed in Phase 9:
+
+- `tests/shared/bankrun.ts` — full harness: `startBankrun`, `fundKeypairs`,
+  `createMintViaBankrun`, `createOkuMoneyMintViaBankrun`, `mintToViaBankrun`,
+  `ensureAtaViaBankrun`, `warpBy`, `warpTo`, `warpSlots`, `setLamports`,
+  `getProgram`, `loadProgramFromIdl`, `expectBankrunError`, `tryProcess`.
+  Loads programs directly from `target/idl/*.json` so the `anchor.workspace`
+  proxy cache cannot leak provider bindings across sequential files.
+- `tests/shared/setup.ts` — runner-agnostic `Funder` callback shape;
+  `validatorFunder(connection)` for the legacy path, `fundKeypairs(h, ...)`
+  for bankrun. `resetPsmSingleton()` clears the cached PDA bookkeeping
+  between files.
+- `tests/bankrun/bridge_security.ts` — cut-over migrated from
+  `tests/unit/bridge_security.ts`. Dropped: `RUN_HEAVY_BRIDGE_TESTS` env
+  gate, the 60-line `sendAndConfirm` monkey-patch (old lines 407–468),
+  the `setTimeout(50)` blockhash busy-loop, the `setTimeout(500)`
+  event-listener wait. Replaced `addEventListener` with synchronous log
+  decoding via `findBridgeBurnEventInLogs`. Added: full happy-path
+  refund test (burn → `warpBy(3601)` → initiate → confirm → assert
+  re-minted balance).
+- `tests/bankrun/lite-psm.ts` — full port of `tests/unit/lite-psm.ts`.
+  Slot-bump in `beforeEach` resolves `YieldDistributionInProgress`
+  cross-talk between describes.
+- `tests/bankrun/oku-bridge-router.ts` — includes router CPI
+  happy paths (`mint_usd_oku`, `redeem_usd_oku`, `bridge_oku_m`,
+  `bridge_usd_oku`).
+- `tests/bankrun/oku-dollar.ts` — full vault coverage.
+- `tests/bankrun/pyth-oracle.ts` — 4 tests, hand-built Pyth V2 fixture
+  injected via `setAccount`. Mirrors `tests/fork/pyth-oracle.ts`; runs
+  on every CI invocation.
+- `tests/bankrun/init-invariants.ts` — Phase 10 addition. Verifies the
+  new TransferHook-reject invariant.
+- `scripts/lib/bridge/event.ts` — added `findBridgeBurnEventInLogs`
+  (sync, log-only — no `Connection.getTransaction` round-trip) for
+  bankrun's `tryProcessTransaction` flow.
+- `package.json`:
+  - `npm test` → bankrun
+  - `npm run test:validator` → the validator escape hatch
+  - `npm run test:fork` → surfpool, unchanged
+  - removed devDeps: `ts-mocha`, `ts-node`, `patch-package`
+- `Anchor.toml`: `[scripts] test` points at the bankrun command so
+  `anchor test` and `npm test` are synonymous.
+
+Results: **158 passing / 1 pending / 0 failing** across the whole
+bankrun suite (Phase 10 final tally). The single pending test is the
+Ed25519-invalid-sig case which litesvm cannot enforce (precompile is a
+no-op); the fork test continues to cover that path.
+
+---
 
 ## ⏳ Phase 4c — Per-user PDA queue redesign
 
@@ -47,12 +87,13 @@ the hardcoded `% 10` magic in tests.
   has a hard cap, but each entry costs ~rent for its PDA so the
   orchestrator should still drain promptly.
 
-The Phase 8 README runbook documents the 10-entry SLA in the meantime.
+The README runbook documents the 10-entry SLA in the meantime.
 
-## 🟡 Test coverage gaps
+---
 
-**Phase 8.3 added** (across `tests/unit/lite-psm.ts` and
-`tests/unit/bridge_security.ts`):
+## ✅ Test coverage gaps — Phase 10 closure
+
+**Phase 8.3 + Phase 9 + Phase 10 landed**:
 
 - ✅ `set_pyth_program_owner` happy/sad/role-gate tests
 - ✅ `set_oracle` staleness-bound tests (Phase 3 bounds)
@@ -60,62 +101,97 @@ The Phase 8 README runbook documents the 10-entry SLA in the meantime.
   (`UseDedicatedRotation` for OrchestratorSigner / FeeRecipient arms)
 - ✅ `update_bridge_deadline` / `update_bridge_limits` /
   `update_fee_recipient` negative-path tests
-- ✅ `initiate_refund` deadline-not-elapsed reject (gated heavy)
-- ✅ `initiate_refund` non-role-holder reject
+- ✅ `initiate_refund` deadline-not-elapsed reject (Phase 8.3)
+- ✅ `initiate_refund` non-role-holder reject (Phase 8.3)
+- ✅ Full happy-path refund (Phase 9 — uses `warpBy`)
+- ✅ Router CPI happy paths: `mint_usd_oku`, `redeem_usd_oku`,
+  `bridge_oku_m`, `bridge_usd_oku` (Phase 9 / Phase 10)
+- ✅ Oracle-on `mint_oku_m` happy + sad paths with hand-built Pyth
+  fixture (Phase 9)
+- ✅ Oracle-on staleness / status-not-Trading /
+  InsufficientReserves rejects (Phase 9)
+- ✅ `bridge_burn` fee==0 and fee>0 edge cases (Phase 10)
+- ✅ Wrong-direction bridge format reject (Phase 10 — SVM-burn-shape
+  message submitted to `bridge_mint` is caught by
+  `WrongDestinationChain`).
+- ✅ Orchestrator-rotation invalidation: a message signed by the OLD
+  orchestrator is rejected with `InvalidSignature` after rotation
+  (Phase 10).
+- ✅ `process_queue` rejects with `InsufficientAccounts` when the
+  recipient ATA is missing from `remaining_accounts` (Phase 10).
+- ✅ `rescue_queue_entry` to a non-original recipient succeeds
+  (Phase 10 — confirms the program does NOT enforce
+  `recipient == original_user`, matching EVM).
+- ✅ Init-time TransferHook rejection (Phase 10).
 
-**Still deferred:**
-- Full happy-path refund flow (`initiate -> confirm -> assert mint`).
-  Needs cluster-clock advancement past `bridge_deadline_secs`. Trivial
-  on bankrun via `warpBy()`; folded into the bankrun migration above.
-- Router CPI happy-path tests (`bridge_usd_oku`, `bridge_oku_m`,
-  `mint_usd_oku`, `redeem_usd_oku`). Currently zero coverage.
-- Oracle-on `mint_oku_m` happy path. Needs a stub Pyth PriceUpdateV2
-  account (use Surfpool `surfnet_setAccount` or hand-construct the
-  240-byte buffer per the layout in `oracle.rs`).
-- `process_queue` with a frozen recipient ATA.
-- `rescue_queue_entry` with a non-original-user recipient.
-- `bridge_burn` fee==0 vs fee>0 edge cases.
-- Negative tests for the wrong-direction bridge format (SVM-burn 80 bytes
-  submitted to `bridge_mint`, vice versa).
-- `bridge_mint` with a valid signed message followed by orchestrator
-  rotation: the original signed message now fails (proves
-  `bridge_config.orchestrator_signer` is read at execution time).
-- `mint_usd_oku` / `redeem_usd_oku` happy paths AND the new router
-  cross-program PDA-mismatch reject (`PsmVaultMismatch`).
+**Still deferred** (low priority):
 
-## 🟡 Operational tooling
+- The single skipped Ed25519-invalid-sig test stays skipped on bankrun;
+  fork-test coverage on Surfpool catches it.
 
-**Phase 8.4 added**:
+---
 
-- ✅ `admin:set-authority` (PSM RBAC role rotation, 12 roles)
-- ✅ `admin:set-bridge-authority` (10 bridge roles; refuses
-  OrchestratorSigner / FeeRecipient per Phase 8.1)
-- ✅ `admin:pause-psm` / `admin:unpause-psm`
-- ✅ `admin:pause-bridge` / `admin:unpause-bridge`
+## ✅ Operational tooling — Phase 10 closure
+
+**Phase 8.4 + 8.6 + Phase 10 landed**:
+
+- ✅ `admin:set-authority` / `admin:set-bridge-authority`
+- ✅ `admin:pause-psm` / `unpause-psm` / `pause-bridge` / `unpause-bridge`
 - ✅ `admin:distribute-yield`
-- ✅ `bridge:refund-initiate` / `bridge:refund-confirm` / `bridge:refund-cancel`
+- ✅ `bridge:refund-initiate` / `refund-confirm` / `refund-cancel`
+- ✅ `admin:setup-router-alt`
+- ✅ `admin:set-max-supply` (Phase 10, cap_manager-gated)
+- ✅ `admin:set-minter-allowance` (Phase 10, allowance_manager-gated)
+- ✅ `admin:set-oku-m-price` (Phase 10, rebaser-gated; stamps
+  `last_yield_distribution_slot`)
+- ✅ `admin:update-bridge-fee` (Phase 10)
+- ✅ `admin:update-bridge-limits` (Phase 10)
+- ✅ `admin:update-bridge-deadline` (Phase 10)
+- ✅ `admin:update-fee-recipient` (Phase 10)
+- ✅ `admin:freeze-account` / `admin:thaw-account` (Phase 10)
+- ✅ `admin:add-supported-chain` / `admin:remove-supported-chain`
+  (Phase 10)
+- ✅ `admin:skip-nonce` (Phase 10, bounded by `MAX_NONCE_SKIP`)
+- ✅ `test:process-queue` (Phase 10, orchestrator drain script)
+- ✅ `scripts/test/test-devnet.ts` smoke-step gaps closed (Phase 10):
+  `bridgeMint`, `refund`, `distributeYield`, `pause`, `setAuthority`,
+  `oracleMint` steps added.
 
-**Phase 8.6 added**:
+Every admin script honours `--dry-run` and `--yes-i-mean-it-on-mainnet`
+via `scripts/admin/_lib/confirm.ts`.
 
-- ✅ `admin:setup-router-alt` (Address Lookup Table for v0 router txs)
+---
 
-**Still deferred** (mechanical to add following the existing pattern):
+## ✅ Phase 10 — Init-time invariants
 
-- `admin:set-max-supply` — wraps `set_max_supply`; cap_manager-gated.
-- `admin:set-minter-allowance` — wraps `set_minter_allowance`;
-  allowance_manager-gated.
-- `admin:set-oku-m-price` — wraps `set_oku_m_price`; rebaser-gated.
-- `admin:update-bridge-fee` / `admin:update-bridge-limits` /
-  `admin:update-bridge-deadline` / `admin:update-fee-recipient`.
-- `admin:freeze-account` / `admin:thaw-account`.
-- `admin:add-supported-chain` / `admin:remove-supported-chain`.
-- `admin:skip-nonce` (now bounded by `MAX_NONCE_SKIP` per Phase 8.1).
-- `test:process-queue` orchestrator drain script (mentioned in the
-  README runbook; pattern is in `scripts/admin/distribute-yield.ts`).
-- `scripts/test/test-devnet.ts` smoke-step gaps: `bridgeMint`, `refund`,
-  `distributeYield`, `pause`, `setAuthority`, `oracleMint`. The
-  remaining hardcoded amounts and the `vc.totalShares` typo were fixed
-  in earlier phases.
+- ✅ TransferHook reject: `initialize` now refuses any OkuMoney mint
+  that has the Token-2022 `TransferHook` extension. The mint's
+  extension list is parsed via `spl_token_2022::extension::
+  StateWithExtensions::<MintRaw>::unpack` and checked against
+  `ExtensionType::TransferHook`. Closes the "deployment forgot to omit
+  the hook" failure mode that was previously held only by operational
+  discipline. Test coverage in
+  `tests/bankrun/init-invariants.ts`.
+
+---
+
+## ✅ Phase 10 — has_one refactor
+
+- ✅ All 23 `constraint = X.key() == config.X @ Unauthorized` sites
+  converted to `has_one = X @ Unauthorized` on the config account.
+  Files touched:
+  - `programs/lite-psm/src/contexts/psm_admin.rs` (4 sites)
+  - `programs/lite-psm/src/contexts/psm.rs` (4 sites)
+  - `programs/lite-psm/src/contexts/yield_ops.rs` (2 sites)
+  - `programs/lite-psm/src/contexts/bridge_admin.rs` (8 sites)
+  - `programs/lite-psm/src/contexts/bridge.rs` (2 sites — refund flow)
+  - `programs/oku-bridge-router/src/contexts.rs` (3 sites)
+
+Result: ~40 LOC reduction; the on-chain semantics are identical
+(both forms compile to the same constraint check). All 158 tests
+remain green.
+
+---
 
 ## ⏳ Smaller follow-ups still open
 
@@ -126,45 +202,27 @@ The Phase 8 README runbook documents the 10-entry SLA in the meantime.
 - **Chain-ID renumbering**: per Phase 8 instructions the look-alike
   values (420 / 421 / 845) remain. The improved doc comments in
   `scripts/config/constants.ts` and `EVM_VS_SVM.md` clarify the
-  protocol-internal-vs-EIP-155 distinction. Renumbering would require
-  a coordinated EVM-side change.
-- **`process_queue` indirect yield-lock**: `process_queue` itself has
-  no yield-lock check (deliberate per a // NOTE comment that has since
-  been removed; behavior matches EVM `processQueue`'s lack of
-  `whenYieldNotDistributing`). Re-add an explicit comment or document
-  in `EVM_VS_SVM.md`.
-- **TransferHook invariant assertion**: the SVM port assumes the
-  OkuMoney mint has no Token-2022 `TransferHook` extension (otherwise
-  the ECI ordering doesn't fully defend against re-entrancy). Currently
-  operational discipline; consider adding an on-chain assertion at
-  init that the mint extension list does not include `TransferHook`.
+  protocol-internal-vs-EIP-155 distinction.
+- **`Program<LitePsm>` vs `Program<Idl>` typecheck noise** in
+  `tests/shared/setup.ts` helpers (e.g. `initializePSMIfNeeded(program:
+  Program, ...)`). Pre-existing; `tsx` ignores it but `tsc --noEmit`
+  flags ~20 sites.
+- **`set_authority` / `set_bridge_authority` 12-arm match macros** —
+  cosmetic; would collapse the per-arm 3-line pattern with a
+  `macro_rules!`. Low priority.
+- **`#[derive(InitSpace)]` migration** — replace hand-computed `LEN`
+  constants with `8 + T::INIT_SPACE`. Compile-time asserts are working
+  fine; not blocking anything.
 
-## 🟡 Refactor / simplify
-
-**Phase 8.6 landed**:
-
-- ✅ `oku_bridge_router::validation` CU optimisation: dropped
-  per-call `find_program_address` (~30 K CU saved per
-  `bridge_usd_oku`). Switched to `try_deserialize_unchecked` for
-  forward-compat with future state-struct realloc migrations.
-
-**Still open** (cosmetic; low priority):
-
-- `has_one` migration — replace ~20 sites of
-  `constraint = X.key() == config.X @ Unauthorized` with
-  `has_one = X @ Unauthorized` for ~40 LOC reduction.
-- `set_authority` / `set_bridge_authority` 12-arm match macros — would
-  collapse the per-arm 3-line pattern.
-- `#[derive(InitSpace)]` migration — replace hand-computed `LEN`
-  constants with `8 + T::INIT_SPACE`. Lower priority; the compile-time
-  asserts are working fine.
+---
 
 ## 📚 References
 
 - `SVM/EVM_VS_SVM.md` — full divergence catalogue, refreshed in P8.7.
-- `SVM/README.md` — Runbook section added in P8.8 with the
-  pre-mainnet checklist, dual-key orchestrator requirement, queue
-  capacity SLA, Pyth feed requirements, and refund flow steps.
-- `tests/shared/bankrun.ts` — bankrun harness for the next test pass.
+- `SVM/README.md` — Runbook section (P8.8) + refreshed Testing section
+  (P9.6).
+- `tests/shared/bankrun.ts` — bankrun harness (single source of truth
+  for the in-process test runner).
+- `tests/shared/setup.ts` — runner-agnostic PSM bootstrap.
 - `scripts/lib/account-sizes.ts` — single source of truth for the
   TS-side mirror of Rust `state.rs::T::LEN` constants.

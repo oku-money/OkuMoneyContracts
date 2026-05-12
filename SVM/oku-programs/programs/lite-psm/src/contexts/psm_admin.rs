@@ -90,14 +90,12 @@ pub struct OracleManager<'info> {
 #[derive(Accounts)]
 pub struct FreezeAccount<'info> {
     /// Blacklister authority - can freeze even when PSM is paused
-    #[account(
-        constraint = freezer.key() == config.freezer @ LitePsmError::Unauthorized
-    )]
     pub freezer: Signer<'info>,
 
     #[account(
         seeds = [PsmConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        has_one = freezer @ LitePsmError::Unauthorized
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
@@ -122,14 +120,12 @@ pub struct FreezeAccount<'info> {
 #[derive(Accounts)]
 pub struct ThawAccount<'info> {
     /// Unblacklister authority - can thaw even when PSM is paused (requires deliberate review)
-    #[account(
-        constraint = unfreezer.key() == config.unfreezer @ LitePsmError::Unauthorized
-    )]
     pub unfreezer: Signer<'info>,
 
     #[account(
         seeds = [PsmConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        has_one = unfreezer @ LitePsmError::Unauthorized
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
@@ -154,16 +150,14 @@ pub struct ThawAccount<'info> {
 #[derive(Accounts)]
 pub struct InitializeBlacklistExempt<'info> {
     /// Role admin - only role_admin can set blacklist exemptions
-    #[account(
-        constraint = role_admin.key() == config.role_admin @ LitePsmError::Unauthorized
-    )]
     pub role_admin: Signer<'info>,
 
     /// PSM config
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        has_one = role_admin @ LitePsmError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
 }
@@ -171,16 +165,14 @@ pub struct InitializeBlacklistExempt<'info> {
 #[derive(Accounts)]
 pub struct SetAuthority<'info> {
     /// Role admin - only role_admin can update authorities
-    #[account(
-        constraint = role_admin.key() == config.role_admin @ LitePsmError::Unauthorized
-    )]
     pub role_admin: Signer<'info>,
 
     /// PSM config
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        has_one = role_admin @ LitePsmError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
 }

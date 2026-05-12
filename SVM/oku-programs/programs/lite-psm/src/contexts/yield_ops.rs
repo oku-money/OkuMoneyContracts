@@ -9,16 +9,14 @@ use anchor_spl::token_interface::Mint as MintInterface;
 #[derive(Accounts)]
 pub struct SetOkuMPrice<'info> {
     /// Rebaser role - authorized to update OkuMoney price
-    #[account(
-        constraint = rebaser.key() == config.rebaser @ LitePsmError::Unauthorized
-    )]
     pub rebaser: Signer<'info>,
 
     /// PSM config - stores oku_m_price and last_yield_distribution_slot
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        has_one = rebaser @ LitePsmError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
 
@@ -38,16 +36,14 @@ pub struct SetOkuMPrice<'info> {
 #[derive(Accounts)]
 pub struct DistributeYield<'info> {
     /// Rebaser role - authorized to distribute yield
-    #[account(
-        constraint = rebaser.key() == config.rebaser @ LitePsmError::Unauthorized
-    )]
     pub rebaser: Signer<'info>,
 
     /// PSM config - stores oku_m_price and last_yield_distribution_slot
     #[account(
         mut,
         seeds = [PsmConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        has_one = rebaser @ LitePsmError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
 

@@ -16,12 +16,6 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
   getAccount,
-  createMint,
-  mintTo,
-  getMintLen,
-  createInitializeMintInstruction,
-  ExtensionType,
-  createInitializeInterestBearingMintInstruction,
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { OkuBridgeRouter } from "../../target/types/oku_bridge_router";
@@ -31,18 +25,27 @@ import {
   coldMultisig,
   warmMultisig,
   psmOrchestrator,
-  bridgeOrchestrator,
-  safeAirdropAll,
-  ensureAta,
   initializePSMIfNeeded,
+  resetPsmSingleton,
   DECIMALS,
 } from "../shared/setup";
+import {
+  BankrunHarness,
+  startBankrun,
+  fundKeypairs,
+  createMintViaBankrun,
+  createOkuMoneyMintViaBankrun,
+  mintToViaBankrun,
+  ensureAtaViaBankrun,
+  getProgram,
+} from "../shared/bankrun";
 
 const { Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, PublicKey } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;
 type Keypair = anchor.web3.Keypair;
 
 describe("oku-bridge-router", () => {
+  let h: BankrunHarness;
   let provider: anchor.AnchorProvider;
   let routerProgram: Program<OkuBridgeRouter>;
   let vaultProgram: Program<OkuDollar>;
@@ -78,13 +81,16 @@ describe("oku-bridge-router", () => {
   let vaultInitialized = false;
 
   before(async () => {
-    provider = anchor.AnchorProvider.env();
-    anchor.setProvider(provider);
+    resetPsmSingleton();
+    h = await startBankrun();
+    provider = h.provider as unknown as anchor.AnchorProvider;
+    payer = h.payer;
 
-    routerProgram = anchor.workspace.OkuBridgeRouter as Program<OkuBridgeRouter>;
-    vaultProgram = anchor.workspace.OkuDollar as Program<OkuDollar>;
-    psmProgram = anchor.workspace.LitePsm as Program<LitePsm>;
-    payer = (provider.wallet as anchor.Wallet).payer;
+    // Each program loaded via the harness rather than anchor.workspace
+    // (which caches programs across files and would mis-bind provider).
+    psmProgram = h.program;
+    routerProgram = getProgram<OkuBridgeRouter>(h, 'oku_bridge_router');
+    vaultProgram = getProgram<OkuDollar>(h, 'oku_dollar');
 
     // Derive PDAs
     [routerConfigPda] = PublicKey.findProgramAddressSync(
@@ -107,9 +113,8 @@ describe("oku-bridge-router", () => {
       psmProgram.programId
     );
 
-    // Airdrop SOL to test accounts
-    await safeAirdropAll(
-      provider.connection,
+    await fundKeypairs(
+      h,
       [user, routerAdmin, routerPauser, routerUnpauser],
       10 * anchor.web3.LAMPORTS_PER_SOL
     );
@@ -126,62 +131,35 @@ describe("oku-bridge-router", () => {
     }
 
     if (!psmExists) {
-      // Create USDC mint
+      // Create mints via bankrun helpers.
       const usdcMintKeypair = Keypair.generate();
-      usdcMint = await createMint(
-        provider.connection,
-        payer,
+      usdcMint = await createMintViaBankrun(
+        h,
         payer.publicKey,
         null,
         DECIMALS,
         usdcMintKeypair,
-        undefined,
         TOKEN_PROGRAM_ID
       );
 
-      // Create OkuMoney mint (Token-2022)
       const okuMoneyMintKeypair = Keypair.generate();
-      const mintLen = getMintLen([ExtensionType.InterestBearingConfig]);
-      const lamports = await provider.connection.getMinimumBalanceForRentExemption(mintLen);
-
-      const createAccountIx = SystemProgram.createAccount({
-        fromPubkey: payer.publicKey,
-        newAccountPubkey: okuMoneyMintKeypair.publicKey,
-        space: mintLen,
-        lamports,
-        programId: TOKEN_2022_PROGRAM_ID,
-      });
-
-      const initInterestBearingIx = createInitializeInterestBearingMintInstruction(
-        okuMoneyMintKeypair.publicKey,
+      okuMoneyMint = await createOkuMoneyMintViaBankrun(
+        h,
+        psmConfigPda,
+        psmConfigPda,
+        DECIMALS,
         psmOrchestrator.publicKey,
         0,
-        TOKEN_2022_PROGRAM_ID
+        okuMoneyMintKeypair
       );
 
-      const initMintIx = createInitializeMintInstruction(
-        okuMoneyMintKeypair.publicKey,
-        DECIMALS,
-        psmConfigPda,
-        psmConfigPda,
-        TOKEN_2022_PROGRAM_ID
-      );
-
-      const tx = new anchor.web3.Transaction().add(
-        createAccountIx,
-        initInterestBearingIx,
-        initMintIx
-      );
-      await provider.sendAndConfirm(tx, [payer, okuMoneyMintKeypair]);
-      okuMoneyMint = okuMoneyMintKeypair.publicKey;
-
-      // Initialize PSM
+      // Initialize PSM (bankrun funder).
       await initializePSMIfNeeded(
         psmProgram as any,
-        provider,
         payer,
         usdcMint,
-        okuMoneyMint
+        okuMoneyMint,
+        (kps, lamports) => fundKeypairs(h, kps, lamports)
       );
     }
 
@@ -212,11 +190,11 @@ describe("oku-bridge-router", () => {
     userUsdcAta = getAssociatedTokenAddressSync(usdcMint, user.publicKey, false, TOKEN_PROGRAM_ID);
     userOkuMoneyAta = getAssociatedTokenAddressSync(okuMoneyMint, user.publicKey, false, TOKEN_2022_PROGRAM_ID);
 
-    await ensureAta(provider.connection, payer, userUsdcAta, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
-    await ensureAta(provider.connection, payer, userOkuMoneyAta, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
 
     // Fund user with USDC
-    await mintTo(provider.connection, payer, usdcMint, userUsdcAta, payer, 10_000_000_000, [], undefined, TOKEN_PROGRAM_ID);
+    await mintToViaBankrun(h, usdcMint, userUsdcAta, payer, 10_000_000_000, TOKEN_PROGRAM_ID);
 
     // Mint OkuMoney via PSM
     await psmProgram.methods
@@ -267,11 +245,11 @@ describe("oku-bridge-router", () => {
 
     // Create usdOku ATA for user
     userUsdOkuAta = getAssociatedTokenAddressSync(usdOkuMint, user.publicKey, false, TOKEN_2022_PROGRAM_ID);
-    await ensureAta(provider.connection, payer, userUsdOkuAta, user.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, user.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
 
     // Create dead shares ATA for first deposit
     const deadSharesAta = getAssociatedTokenAddressSync(usdOkuMint, SystemProgram.programId, true, TOKEN_2022_PROGRAM_ID);
-    await ensureAta(provider.connection, payer, deadSharesAta, SystemProgram.programId, usdOkuMint, TOKEN_2022_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, SystemProgram.programId, usdOkuMint, TOKEN_2022_PROGRAM_ID);
 
     // Wrap some OkuMoney to get usdOku
     await vaultProgram.methods
@@ -718,6 +696,237 @@ describe("oku-bridge-router", () => {
     });
   });
 
-  // Note: bridge_usd_oku tests require bridge to be initialized
-  // which is a more complex setup. These are tested in bridge_security.ts
+  // Phase 10: bridge CPI happy paths.
+  //
+  // The router's `bridge_oku_m` / `bridge_usd_oku` instructions wrap a CPI
+  // into lite-psm::bridge_burn. They require the PSM's bridge_config PDA
+  // to be initialised — `before()` above does not do that, so this nested
+  // describe brings up a bridge in its own setup hook.
+  describe("bridge CPI happy paths", () => {
+    // Bridge authorities — must be a mutually-distinct set per
+    // `initialize_bridge`'s refund-initiator/confirmer separation rules.
+    const bridgeAdmin = Keypair.generate();
+    const bridgePauser = Keypair.generate();
+    const bridgeUnpauser = Keypair.generate();
+    const orchestratorSigner = Keypair.generate();
+    const bridgeFeeRecipient = Keypair.generate();
+    const chainManager = Keypair.generate();
+    const feeManager = Keypair.generate();
+    const nonceAdmin = Keypair.generate(); // = refundInitiator
+    const signerManager = Keypair.generate(); // = refundConfirmer
+    const limitsManager = Keypair.generate();
+    const ETH_CHAIN_ID = 1;
+    const SOLANA_CHAIN_ID = 103;
+
+    let bridgeFeeRecipientAta: PublicKey;
+    let bridgeNoncePda: PublicKey;
+
+    before(async () => {
+      // Fund all the new role keypairs.
+      await fundKeypairs(
+        h,
+        [
+          bridgeAdmin,
+          bridgePauser,
+          bridgeUnpauser,
+          orchestratorSigner,
+          bridgeFeeRecipient,
+          chainManager,
+          feeManager,
+          nonceAdmin,
+          signerManager,
+          limitsManager,
+        ],
+        2 * anchor.web3.LAMPORTS_PER_SOL
+      );
+
+      // Initialise the bridge if not already done. (Bankrun's per-file
+      // cluster means it never is — but checking lets the block be
+      // idempotent if a future test runs the suite multiple times.)
+      try {
+        await psmProgram.account.bridgeConfig.fetch(bridgeConfigPda);
+      } catch {
+        await psmProgram.methods
+          .initializeBridge({
+            sourceChainId: SOLANA_CHAIN_ID,
+            bridgeFeeBps: 10,
+            minBridgeAmount: new BN(1_000_000),
+            maxBridgeAmount: new BN(1_000_000_000_000),
+            bridgeDeadlineSecs: new BN(3600),
+            refundInitiator: nonceAdmin.publicKey,
+            refundConfirmer: signerManager.publicKey,
+          })
+          .accountsPartial({
+            bridgeAdmin: bridgeAdmin.publicKey,
+            bridgePauser: bridgePauser.publicKey,
+            bridgeUnpauser: bridgeUnpauser.publicKey,
+            orchestratorSigner: orchestratorSigner.publicKey,
+            feeRecipient: bridgeFeeRecipient.publicKey,
+            chainManager: chainManager.publicKey,
+            feeManager: feeManager.publicKey,
+            nonceAdmin: nonceAdmin.publicKey,
+            signerManager: signerManager.publicKey,
+            limitsManager: limitsManager.publicKey,
+            bridgeConfig: bridgeConfigPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([bridgeAdmin])
+          .rpc();
+      }
+
+      // Whitelist Ethereum (chain_id = 1) as a destination.
+      try {
+        await psmProgram.methods
+          .addSupportedChain(ETH_CHAIN_ID)
+          .accountsPartial({
+            chainManager: chainManager.publicKey,
+            bridgeConfig: bridgeConfigPda,
+          })
+          .signers([chainManager])
+          .rpc();
+      } catch {
+        // Already added by a prior pass; safe to ignore.
+      }
+
+      // Derive PDAs the router CPI flow needs.
+      bridgeFeeRecipientAta = await ensureAtaViaBankrun(
+        h,
+        bridgeFeeRecipient.publicKey,
+        okuMoneyMint,
+        TOKEN_2022_PROGRAM_ID
+      );
+      [bridgeNoncePda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("bridge_nonce"), Buffer.from([ETH_CHAIN_ID & 0xff, (ETH_CHAIN_ID >> 8) & 0xff])],
+        psmProgram.programId
+      );
+    });
+
+    it("bridge_oku_m burns OkuMoney and emits BridgeOkuMEvent", async () => {
+      // The shared `before()` already minted ~5_000_000 OkuMoney to the
+      // user; some has been wrapped to usdOku. Confirm we still hold
+      // enough to burn at the configured min_bridge_amount (1 OkuMoney).
+      const balanceBefore = await getAccount(
+        provider.connection,
+        userOkuMoneyAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      const burnAmount = new BN(1_500_000); // 1.5 OkuMoney
+      expect(Number(balanceBefore.amount)).to.be.greaterThanOrEqual(
+        burnAmount.toNumber()
+      );
+
+      const evmRecipient = new Array(20).fill(0).map((_, i) => (i + 1) & 0xff);
+
+      await routerProgram.methods
+        .bridgeOkuM(burnAmount, evmRecipient, ETH_CHAIN_ID)
+        .accountsPartial({
+          user: user.publicKey,
+          config: routerConfigPda,
+          okuMoneyMint,
+          userOkuMoneyAta,
+          bridgeConfig: bridgeConfigPda,
+          psmConfig: psmConfigPda,
+          bridgeNonce: bridgeNoncePda,
+          feeRecipientAta: bridgeFeeRecipientAta,
+          psmProgram: psmProgram.programId,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      const balanceAfter = await getAccount(
+        provider.connection,
+        userOkuMoneyAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      const delta = BigInt(balanceBefore.amount) - BigInt(balanceAfter.amount);
+      // The router's bridge_oku_m CPI burns the full input amount from the user's
+      // ATA; the 10 bps fee is split off via a SEPARATE Token-2022 transfer to
+      // `fee_recipient_ata`, NOT subtracted from the user. So the user's balance
+      // must drop by exactly `burnAmount`.
+      expect(delta.toString()).to.equal(burnAmount.toString());
+
+      // Fee recipient must have received the 10 bps fee.
+      const feeAta = await getAccount(
+        provider.connection,
+        bridgeFeeRecipientAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      const expectedFee = burnAmount.muln(10).divn(10_000);
+      expect(feeAta.amount.toString()).to.equal(expectedFee.toString());
+    });
+
+    it("bridge_usd_oku unwraps usdOku, burns OkuMoney, emits BridgeUsdOkuEvent", async () => {
+      // Need usdOku to bridge — confirm we still have some from the shared
+      // `before()` wrap.
+      const usdOkuBefore = await getAccount(
+        provider.connection,
+        userUsdOkuAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      const burnUsdOku = new BN(2_000_000); // 2 usdOku
+      expect(Number(usdOkuBefore.amount)).to.be.greaterThanOrEqual(
+        burnUsdOku.toNumber()
+      );
+
+      const feeBefore = await getAccount(
+        provider.connection,
+        bridgeFeeRecipientAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      const evmRecipient = new Array(20).fill(0).map((_, i) => (i + 42) & 0xff);
+
+      await routerProgram.methods
+        .bridgeUsdOku(burnUsdOku, evmRecipient, ETH_CHAIN_ID, new BN(0))
+        .accountsPartial({
+          user: user.publicKey,
+          config: routerConfigPda,
+          vaultConfig: vaultConfigPda,
+          okuMoneyMint,
+          usdOkuMint,
+          userOkuMoneyAta,
+          userUsdOkuAta,
+          reserveVault: vaultReserve,
+          bridgeConfig: bridgeConfigPda,
+          psmConfig: psmConfigPda,
+          bridgeNonce: bridgeNoncePda,
+          feeRecipientAta: bridgeFeeRecipientAta,
+          vaultProgram: vaultProgram.programId,
+          psmProgram: psmProgram.programId,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      // usdOku must have decreased by exactly the burn amount.
+      const usdOkuAfter = await getAccount(
+        provider.connection,
+        userUsdOkuAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      const usdOkuDelta = BigInt(usdOkuBefore.amount) - BigInt(usdOkuAfter.amount);
+      expect(usdOkuDelta.toString()).to.equal(burnUsdOku.toString());
+
+      // Fee recipient must have received an additional 10 bps fee on the
+      // unwrap-derived OkuMoney amount. We don't compute the exact delta
+      // (depends on the live oku_m_price), but the balance MUST have grown.
+      const feeAfter = await getAccount(
+        provider.connection,
+        bridgeFeeRecipientAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      expect(Number(feeAfter.amount)).to.be.greaterThan(Number(feeBefore.amount));
+    });
+  });
 });

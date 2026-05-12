@@ -1,14 +1,15 @@
 /**
  * Bankrun harness smoke test.
  *
- * Exercises the full `program.methods.<ix>().rpc()` round-trip on bankrun to
- * confirm `@anchor-lang/core`'s instruction-builder talks to bankrun's
- * BanksClient correctly. If this test passes, the rest of the unit suite
- * can be migrated to bankrun in subsequent commits without further plumbing.
+ * Bare-minimum integration check that the bankrun cluster boots, the
+ * `BankrunProvider` registers correctly with `@anchor-lang/core`, the
+ * lite-psm `Program` instance is loadable from the local IDL, and the
+ * `BankrunConnectionProxy` answers the few `Connection` methods Anchor
+ * actually calls (`getAccountInfo`, `getMinimumBalanceForRentExemption`).
  *
- * This file lives outside `tests/unit/` so the legacy `anchor test` command
- * (which boots solana-test-validator) doesn't pick it up; it's run by the
- * dedicated `npm run test:bankrun` script.
+ * Phase 9: this file is no longer the canary it was during the migration —
+ * `npm test` runs the full bankrun suite. Kept around as the simplest
+ * smoke test to flag a busted harness build (e.g. a stale `target/idl/*.json`).
  */
 
 import { startBankrun } from '../shared/bankrun';

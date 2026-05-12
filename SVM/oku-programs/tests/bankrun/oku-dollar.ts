@@ -18,13 +18,11 @@
 import * as anchor from "@anchor-lang/core";
 import { Program, BN } from "@anchor-lang/core";
 import {
+  TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
   getAccount,
-  getMintLen,
-  createInitializeMintInstruction,
-  mintTo,
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { OkuDollar } from "../../target/types/oku_dollar";
@@ -33,10 +31,18 @@ import {
   psmOrchestrator,
   coldMultisig as psmColdMultisig,
   initializePSMIfNeeded,
-  safeAirdropAll,
-  ensureAta,
+  resetPsmSingleton,
   DECIMALS,
 } from "../shared/setup";
+import {
+  BankrunHarness,
+  startBankrun,
+  fundKeypairs,
+  createMintViaBankrun,
+  mintToViaBankrun,
+  ensureAtaViaBankrun,
+  getProgram,
+} from "../shared/bankrun";
 
 const { Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, PublicKey } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;
@@ -105,6 +111,7 @@ function calculateCollateralRatio(
 // ============================================================================
 
 describe("oku-dollar", () => {
+  let h: BankrunHarness;
   let provider: anchor.AnchorProvider;
   let program: Program<OkuDollar>;
   let psmProgram: Program<LitePsm>;
@@ -145,12 +152,13 @@ describe("oku-dollar", () => {
   let vaultInitialized = false;
 
   before(async () => {
-    provider = anchor.AnchorProvider.env();
-    anchor.setProvider(provider);
-    program = anchor.workspace.OkuDollar as Program<OkuDollar>;
-    psmProgram = anchor.workspace.LitePsm as Program<LitePsm>;
-    payer = (provider.wallet as anchor.Wallet).payer;
+    resetPsmSingleton();
+    h = await startBankrun();
+    provider = h.provider as unknown as anchor.AnchorProvider;
+    payer = h.payer;
     roleAdmin = payer;
+    psmProgram = h.program;
+    program = getProgram<OkuDollar>(h, 'oku_dollar');
 
     // Derive PSM config PDA
     [psmConfigPda] = PublicKey.findProgramAddressSync(
@@ -169,81 +177,51 @@ describe("oku-dollar", () => {
     }
 
     if (!psmExists) {
-      // Create OkuMoney mint (Token-2022)
-      // PSM config PDA will be mint authority (matches production)
-      const mintLen = getMintLen([]);
-      const lamports = await provider.connection.getMinimumBalanceForRentExemption(mintLen);
-
-      const createAccountIx = SystemProgram.createAccount({
-        fromPubkey: payer.publicKey,
-        newAccountPubkey: okuMoneyMintKeypair.publicKey,
-        space: mintLen,
-        lamports,
-        programId: TOKEN_2022_PROGRAM_ID,
-      });
-
-      const initMintIx = createInitializeMintInstruction(
-        okuMoneyMintKeypair.publicKey,
+      // Create OkuMoney mint (plain Token-2022; oku-dollar doesn't need
+      // the InterestBearing extension that lite-psm tests configure).
+      // PSM config PDA is the mint authority (matches production).
+      okuMoneyMint = await createMintViaBankrun(
+        h,
+        psmConfigPda,
+        psmConfigPda,
         DECIMALS,
-        psmConfigPda, // mint authority = PSM config PDA
-        psmConfigPda, // freeze authority = PSM config PDA
+        okuMoneyMintKeypair,
         TOKEN_2022_PROGRAM_ID
       );
 
-      const tx = new anchor.web3.Transaction().add(createAccountIx, initMintIx);
-      await provider.sendAndConfirm(tx, [payer, okuMoneyMintKeypair]);
-      okuMoneyMint = okuMoneyMintKeypair.publicKey;
-
-      // Also need a USDC mint for PSM initialization
-      // Create a mock USDC mint
+      // Create a standard-SPL-Token USDC mint for PSM initialization.
       const usdcMintKeypair = Keypair.generate();
-      const usdcMintLen = getMintLen([]);
-      const usdcLamports = await provider.connection.getMinimumBalanceForRentExemption(usdcMintLen);
-
-      // Use standard SPL Token for USDC (production behavior)
-      const { TOKEN_PROGRAM_ID } = await import("@solana/spl-token");
-      const usdcCreateIx = SystemProgram.createAccount({
-        fromPubkey: payer.publicKey,
-        newAccountPubkey: usdcMintKeypair.publicKey,
-        space: usdcMintLen,
-        lamports: usdcLamports,
-        programId: TOKEN_PROGRAM_ID,
-      });
-
-      const { createInitializeMintInstruction: createInitMint } = await import("@solana/spl-token");
-      const usdcInitIx = createInitMint(
-        usdcMintKeypair.publicKey,
+      const usdcMint = await createMintViaBankrun(
+        h,
+        payer.publicKey,
+        payer.publicKey,
         DECIMALS,
-        payer.publicKey,
-        payer.publicKey,
+        usdcMintKeypair,
         TOKEN_PROGRAM_ID
       );
 
-      const usdcTx = new anchor.web3.Transaction().add(usdcCreateIx, usdcInitIx);
-      await provider.sendAndConfirm(usdcTx, [payer, usdcMintKeypair]);
-
-      // Initialize PSM
+      // Initialize PSM (bankrun funder).
       await initializePSMIfNeeded(
         psmProgram as any,
-        provider,
         payer,
-        usdcMintKeypair.publicKey,
-        okuMoneyMint
+        usdcMint,
+        okuMoneyMint,
+        (kps, lamports) => fundKeypairs(h, kps, lamports)
       );
     } else {
       // PSM already exists, ensure it's properly set up
       await initializePSMIfNeeded(
         psmProgram as any,
-        provider,
         payer,
         (await psmProgram.account.psmConfig.fetch(psmConfigPda)).usdcMint,
-        okuMoneyMint
+        okuMoneyMint,
+        (kps, lamports) => fundKeypairs(h, kps, lamports)
       );
     }
 
-    // Airdrop SOL to test accounts
-    await safeAirdropAll(
-      provider.connection,
+    // Fund test authorities via bankrun lamport injection.
+    await fundKeypairs(
+      h,
       [user1, user2, vaultPauser, vaultUnpauser, usdRebaser, reserveManager],
       10 * anchor.web3.LAMPORTS_PER_SOL
     );
@@ -288,31 +266,27 @@ describe("oku-dollar", () => {
       TOKEN_2022_PROGRAM_ID
     );
 
-    await ensureAta(provider.connection, payer, user1OkuMoneyAta, user1.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
-    await ensureAta(provider.connection, payer, user2OkuMoneyAta, user2.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
-    await ensureAta(provider.connection, payer, reserveManagerOkuMoneyAta, reserveManager.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, user1.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, user2.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, reserveManager.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
 
-    // Mint OkuMoney to users via PSM (we need to use PSM's mint authority)
-    // For testing, we'll mint directly since PSM config is mint authority
+    // Mint OkuMoney to users via PSM (USDC -> OkuMoney).
     const OKU_MONEY_PER_USER = 10_000_000_000; // 10,000 OkuMoney each
 
-    // Mint via PSM using the mint instruction (USDC -> OkuMoney)
-    // First fund users with USDC
     const psmConfig = await psmProgram.account.psmConfig.fetch(psmConfigPda);
     const usdcMint = psmConfig.usdcMint;
-    const { TOKEN_PROGRAM_ID } = await import("@solana/spl-token");
 
     const user1UsdcAta = getAssociatedTokenAddressSync(usdcMint, user1.publicKey, false, TOKEN_PROGRAM_ID);
     const user2UsdcAta = getAssociatedTokenAddressSync(usdcMint, user2.publicKey, false, TOKEN_PROGRAM_ID);
     const reserveManagerUsdcAta = getAssociatedTokenAddressSync(usdcMint, reserveManager.publicKey, false, TOKEN_PROGRAM_ID);
 
-    await ensureAta(provider.connection, payer, user1UsdcAta, user1.publicKey, usdcMint, TOKEN_PROGRAM_ID);
-    await ensureAta(provider.connection, payer, user2UsdcAta, user2.publicKey, usdcMint, TOKEN_PROGRAM_ID);
-    await ensureAta(provider.connection, payer, reserveManagerUsdcAta, reserveManager.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, user1.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, user2.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, reserveManager.publicKey, usdcMint, TOKEN_PROGRAM_ID);
 
-    await mintTo(provider.connection, payer, usdcMint, user1UsdcAta, payer, OKU_MONEY_PER_USER, [], undefined, TOKEN_PROGRAM_ID);
-    await mintTo(provider.connection, payer, usdcMint, user2UsdcAta, payer, OKU_MONEY_PER_USER, [], undefined, TOKEN_PROGRAM_ID);
-    await mintTo(provider.connection, payer, usdcMint, reserveManagerUsdcAta, payer, OKU_MONEY_PER_USER, [], undefined, TOKEN_PROGRAM_ID);
+    await mintToViaBankrun(h, usdcMint, user1UsdcAta, payer, OKU_MONEY_PER_USER, TOKEN_PROGRAM_ID);
+    await mintToViaBankrun(h, usdcMint, user2UsdcAta, payer, OKU_MONEY_PER_USER, TOKEN_PROGRAM_ID);
+    await mintToViaBankrun(h, usdcMint, reserveManagerUsdcAta, payer, OKU_MONEY_PER_USER, TOKEN_PROGRAM_ID);
 
     // Mint OkuMoney via PSM
     const { mintOkuMoneyViaProgram } = await import("../shared/setup");
@@ -328,6 +302,14 @@ describe("oku-dollar", () => {
       psmProgram as any, reserveManager, new BN(OKU_MONEY_PER_USER), psmConfigPda,
       usdcMint, okuMoneyMint, reserveManagerUsdcAta, reserveManagerOkuMoneyAta, psmConfig.vaultUsdc
     );
+  });
+
+  beforeEach(async () => {
+    // Bump bankrun's slot by 1 between tests. Without this, any test that
+    // runs after `update_usd_multiplier` (or any other yield op) hits
+    // `YieldDistributionInProgress` because bankrun's slot is sticky.
+    const cur = await h.context.banksClient.getSlot();
+    h.context.warpToSlot(cur + 1n);
   });
 
   // ============================================================================
@@ -464,7 +446,7 @@ describe("oku-dollar", () => {
         true,
         TOKEN_2022_PROGRAM_ID
       );
-      await ensureAta(provider.connection, payer, deadSharesAta, DEAD_ADDRESS, usdOkuMint, TOKEN_2022_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, DEAD_ADDRESS, usdOkuMint, TOKEN_2022_PROGRAM_ID);
     });
 
     it("wraps OkuMoney -> usdOku (first deposit with dead shares)", async () => {

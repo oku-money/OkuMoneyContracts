@@ -66,6 +66,8 @@ Defined in [`hardhat.config.ts`](hardhat.config.ts) and [`scripts/config/chains.
 |---|---|---|---|
 | `sepolia` | 11155111 | 111 | Eth Sepolia testnet |
 | `opSepolia` | 11155420 | 420 | OP Sepolia testnet |
+| `baseSepolia` | 84532 | 846 | Base Sepolia testnet |
+| `bscTestnet` | 97 | 97 | BNB Smart Chain testnet (Chapel) |
 | `mainnet` | 1 | 1 | Ethereum mainnet |
 | `optimism` | 10 | 10 | Optimism mainnet |
 | `arbitrum` | 42161 | 421 | Arbitrum One |
@@ -76,6 +78,9 @@ The `bridgeChainId` column lists the protocol-internal `u16` ID embedded in
 bridge messages (some EVM chain IDs exceed `u16` and need mapping). Solana
 counterpart is auto-selected per-chain by `getSolanaCounterpartChainId()`:
 testnet EVM → Solana Devnet (103), mainnet EVM → Solana Mainnet (101).
+
+Note `baseSepolia` uses bridge ID `846` (one off from Base mainnet's `845`)
+so cross-chain handlers can never confuse testnet for mainnet messages.
 
 ### Local-fork pre-flight (recommended before any live deploy)
 
@@ -119,6 +124,56 @@ The script is **idempotent and resumable**:
   normalises BSC's pending-tx response shape before ethers' strict formatter
   ever sees it.
 
+### Upgrading deployed proxies
+
+`scripts/upgrade/index.ts` is a generic UUPS-proxy upgrade dispatcher. It
+re-uses the deploy script's network resolution, signer wiring (impersonates
+the dev wallet on a fork), and retry helpers, and adds:
+
+- **Permission check** — verifies the signer holds the contract-specific
+  `*_UPGRADER` role before broadcasting (auto-grants from the impersonated
+  DEFAULT_ADMIN on a fork; aborts on live with a clear error).
+- **Storage-layout safety** — runs OZ's `prepareUpgrade` so any layout-breaking
+  change aborts the run before any upgrade tx is broadcast.
+- **Pre/post state diff** — snapshots invariant fields per target (see
+  `scripts/upgrade/preState.ts`) and fails the run if anything diverges.
+- **Audit trail** — appends each upgrade to `addresses.json -> upgrades.<bookKey>`
+  with old/new impl, tx hash, signer, and ISO timestamp.
+
+Always rehearse against a fork before touching a live deployment:
+
+```bash
+# Terminal 1: fork the target chain
+FORK_NETWORK=sepolia hh node
+
+# Terminal 2: rehearse — uses the live address book key (e.g. "sepolia"),
+# upgrades the same proxies the live deploy would touch, against the fork's
+# state. The deploy script's fork:<chain> namespace is intentionally skipped
+# here because there are no fork-only proxies to upgrade.
+TARGETS=LitePSM,OkuDollar npm run upgrade
+
+# When the diff is clean, run for real:
+TARGETS=LitePSM,OkuDollar npm run upgrade:sepolia
+```
+
+Supported targets (v1): `LitePSM`, `OkuDollar`. Extend by adding a row to
+`UPGRADE_TARGETS` in `scripts/upgrade/index.ts` and a state reader in
+`scripts/upgrade/preState.ts`.
+
+Env vars:
+
+| Var | Purpose |
+|---|---|
+| `TARGETS` | Comma-separated contract names to upgrade (required). |
+| `NETWORK` | Override chain for live runs; auto-detected on a fork from the running node's chainId. |
+| `PROXY_<Name>` | Per-target proxy address override; defaults to `addresses.json` lookup. |
+| `SKIP_VERIFY` | Skip Etherscan verification of the new implementation. |
+
+The dev wallet (`0x3CB68a6762041aA05E762814A8791CA9d98E79A0`, the deployer on
+every live chain) already holds every `*_UPGRADER` role per `initialize()`'s
+role-grant policy, so no out-of-band role grants are required for the
+shipped deployments.
+
 ### npm scripts
 
 | Script | Effect |
@@ -129,8 +184,11 @@ The script is **idempotent and resumable**:
 | `npm run test` | Hardhat fork + gas suite |
 | `npm run test:all` | Both |
 | `npm run node` | Start `hardhat node` (default forks Sepolia; override via `FORK_NETWORK`) |
-| `npm run deploy:sepolia` | Live deploy to Eth Sepolia |
-| `npm run deploy:testnet` | Live deploy to OP Sepolia |
+| `npm run deploy:sepolia` / `:opSepolia` / `:baseSepolia` / `:bscTestnet` | Live deploy to the named testnet |
+| `npm run deploy:base` / `:bsc` | Live deploy to the named mainnet |
+| `npm run upgrade` | Upgrade proxies on a running localhost fork (auto-detects target chain) |
+| `npm run upgrade:sepolia` / `:opSepolia` / `:baseSepolia` / `:bscTestnet` | Live upgrade on the named testnet |
+| `npm run upgrade:base` / `:bsc` | Live upgrade on the named mainnet |
 | `npm run test:flow` / `:live` | `test-flow.ts` against a running localhost fork (or live Sepolia) |
 | `npm run bridge:state` / `:live` | OkuBridge read-only state dump |
 | `npm run bridge:burn` / `:live` | Burn-to-Solana flow |

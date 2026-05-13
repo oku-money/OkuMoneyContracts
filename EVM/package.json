@@ -25,7 +25,19 @@
 
     "deploy": "hardhat run scripts/deploy/index.ts --network localhost",
     "deploy:sepolia": "hardhat run scripts/deploy/index.ts --network sepolia",
-    "deploy:testnet": "hardhat run scripts/deploy/index.ts --network opSepolia",
+    "deploy:opSepolia": "hardhat run scripts/deploy/index.ts --network opSepolia",
+    "deploy:baseSepolia": "hardhat run scripts/deploy/index.ts --network baseSepolia",
+    "deploy:bscTestnet": "hardhat run scripts/deploy/index.ts --network bscTestnet",
+    "deploy:base": "hardhat run scripts/deploy/index.ts --network base",
+    "deploy:bsc": "hardhat run scripts/deploy/index.ts --network bsc",
+
+    "upgrade": "hardhat run scripts/upgrade/index.ts --network localhost",
+    "upgrade:sepolia": "NETWORK=sepolia hardhat run scripts/upgrade/index.ts --network sepolia",
+    "upgrade:opSepolia": "NETWORK=opSepolia hardhat run scripts/upgrade/index.ts --network opSepolia",
+    "upgrade:baseSepolia": "NETWORK=baseSepolia hardhat run scripts/upgrade/index.ts --network baseSepolia",
+    "upgrade:bscTestnet": "NETWORK=bscTestnet hardhat run scripts/upgrade/index.ts --network bscTestnet",
+    "upgrade:base": "NETWORK=base hardhat run scripts/upgrade/index.ts --network base",
+    "upgrade:bsc": "NETWORK=bsc hardhat run scripts/upgrade/index.ts --network bsc",
 
     "test:flow": "NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network localhost",
     "test:flow:live": "NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network sepolia",

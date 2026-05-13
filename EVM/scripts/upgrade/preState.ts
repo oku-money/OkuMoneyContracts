@@ -1,0 +1,152 @@
+/**
+ * Per-contract state readers for the generic upgrade script.
+ *
+ * Each reader returns a flat `Record<string, string>` of human-readable values
+ * for fields whose post-upgrade values should be **identical** to their pre-upgrade
+ * values (storage layout / configuration invariants). The upgrade script captures
+ * a snapshot before calling upgradeProxy and compares against a fresh snapshot
+ * after; any mismatch aborts the script with a non-zero exit code.
+ *
+ * Adding a new target:
+ *   1. Add an entry to the UPGRADE_TARGETS table in ./index.ts.
+ *   2. Add a `read<Name>State(contract)` function below.
+ *   3. Re-export the function in the STATE_READERS map at the bottom.
+ *
+ * The readers are intentionally lightweight — only `view` calls, no state writes.
+ * They never reach into private storage; all data comes from public getters that
+ * already exist on the production contracts.
+ */
+
+import { Contract } from "ethers";
+
+/** A flat dict of stringified field values, suitable for table printing & diffing. */
+export type StateSnapshot = Record<string, string>;
+
+// ============================================================================
+// LitePSM
+// ============================================================================
+//
+// Invariants exercised on upgrade:
+//   - Wired addresses (okuMoney, okuDollar, usdc, redemptionQueue) preserved.
+//   - Oracle config (porOracle, stalenessThreshold, oracleEnabled) preserved.
+//   - usdcDecimalMultiplier preserved (resolved once at init from IERC20Metadata).
+//   - Pause state preserved.
+
+export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
+  const [
+    okuMoney,
+    okuDollar,
+    usdc,
+    redemptionQueue,
+    porOracle,
+    stalenessThreshold,
+    oracleEnabled,
+    usdcDecimalMultiplier,
+    paused,
+  ] = await Promise.all([
+    c.okuMoney(),
+    c.okuDollar(),
+    c.usdc(),
+    c.redemptionQueue(),
+    c.porOracle(),
+    c.stalenessThreshold(),
+    c.oracleEnabled(),
+    c.usdcDecimalMultiplier(),
+    c.paused(),
+  ]);
+
+  return {
+    okuMoney: String(okuMoney),
+    okuDollar: String(okuDollar),
+    usdc: String(usdc),
+    redemptionQueue: String(redemptionQueue),
+    porOracle: String(porOracle),
+    stalenessThreshold: stalenessThreshold.toString(),
+    oracleEnabled: String(oracleEnabled),
+    usdcDecimalMultiplier: usdcDecimalMultiplier.toString(),
+    paused: String(paused),
+  };
+}
+
+// ============================================================================
+// OkuDollar (vault)
+// ============================================================================
+//
+// Invariants exercised on upgrade:
+//   - Wired okuMoney preserved.
+//   - Rate-and-share storage (usdBaseMultiplier, usdRatePerSecond, usdLastAccrualTime,
+//     usdRateEnd, usdPendingRatePerSecond, totalUsdShares, minCollateralRatio) preserved.
+//   - Pause state preserved.
+//
+// We deliberately *do not* snapshot `usdMultiplier()` because it is computed from
+// (base, rate, elapsed) at read time — if rate > PRECISION it will drift between
+// the pre- and post-snapshot reads even with zero storage change. The underlying
+// storage fields above are the right things to pin.
+
+export async function readOkuDollarState(c: Contract): Promise<StateSnapshot> {
+  const [
+    okuMoney,
+    usdBaseMultiplier,
+    usdRatePerSecond,
+    usdLastAccrualTime,
+    usdRateEnd,
+    usdPendingRatePerSecond,
+    totalUsdShares,
+    minCollateralRatio,
+    paused,
+  ] = await Promise.all([
+    c.okuMoney(),
+    c.usdBaseMultiplier(),
+    c.usdRatePerSecond(),
+    c.usdLastAccrualTime(),
+    c.usdRateEnd(),
+    c.usdPendingRatePerSecond(),
+    c.totalUsdShares(),
+    c.minCollateralRatio(),
+    c.paused(),
+  ]);
+
+  return {
+    okuMoney: String(okuMoney),
+    usdBaseMultiplier: usdBaseMultiplier.toString(),
+    usdRatePerSecond: usdRatePerSecond.toString(),
+    usdLastAccrualTime: usdLastAccrualTime.toString(),
+    usdRateEnd: usdRateEnd.toString(),
+    usdPendingRatePerSecond: usdPendingRatePerSecond.toString(),
+    totalUsdShares: totalUsdShares.toString(),
+    minCollateralRatio: minCollateralRatio.toString(),
+    paused: String(paused),
+  };
+}
+
+// ============================================================================
+// Registry
+// ============================================================================
+
+/**
+ * Map of contract name -> state reader. The upgrade script dispatches through
+ * this table; missing entries raise a clear "no smoke check registered" error
+ * rather than silently skipping the diff.
+ */
+export const STATE_READERS: Record<string, (c: Contract) => Promise<StateSnapshot>> = {
+  LitePSM: readLitePSMState,
+  OkuDollar: readOkuDollarState,
+};
+
+/**
+ * Compute the field-by-field diff between two snapshots.
+ * Returns an array of `{ field, before, after }` for every key whose values differ.
+ */
+export function diffSnapshots(
+  before: StateSnapshot,
+  after: StateSnapshot
+): Array<{ field: string; before: string; after: string }> {
+  const fields = new Set([...Object.keys(before), ...Object.keys(after)]);
+  const diffs: Array<{ field: string; before: string; after: string }> = [];
+  for (const field of fields) {
+    const b = before[field] ?? "<missing>";
+    const a = after[field] ?? "<missing>";
+    if (b !== a) diffs.push({ field, before: b, after: a });
+  }
+  return diffs;
+}

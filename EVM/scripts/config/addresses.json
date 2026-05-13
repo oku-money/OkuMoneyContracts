@@ -35,5 +35,45 @@
     "LitePSM": "0x1B361B7cEce8920Bb5C3606B322EEC08FA85EB12",
     "OkuBridge": "0xE9EB187c7Cd8c384a7617A7DF0939c43Ff82117F",
     "OkuBridgeRouter": "0xFB64AD6D878bDc8Ce12E680aaF72B97115cC799b"
+  },
+  "upgrades": {
+    "base": [
+      {
+        "contract": "LitePSM",
+        "proxy": "0xc8389fc7189aa73e766052fB18B5b8Ed933c62BF",
+        "oldImpl": "0xB43A3617f60A77440Ad84656bd20FB8a461079A5",
+        "newImpl": "0xB43A3617f60A77440Ad84656bd20FB8a461079A5",
+        "txHash": "<already-upgraded>",
+        "timestamp": "2026-05-12T17:52:35.562Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuDollar",
+        "proxy": "0xc7fA7bf4D841FfBCD37D4f85D251efA815C30aCB",
+        "oldImpl": "0x8Cc2e9e558232b5Ff59d89700E9E716D0cCE3549",
+        "newImpl": "0x795bD849972c73416E3D4f43120D715A89e210dB",
+        "txHash": "0x5ac4c18b81ee3b14d24c4497be9674dd6073a973686509c954f6bbf4b7ae3f2c",
+        "timestamp": "2026-05-12T17:53:46.993Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      }
+    ]
+  },
+  "bscTestnet": {
+    "MockUSDC": "0xA89A26c4d81A2cca4d0670F77f0FC88362b72248",
+    "OkuMoney": "0xe548f960EbB46f9DC504e4107A552309796c863b",
+    "OkuDollar": "0xffC8C49C5B38BC9BaFD0bB0F5F189EEcD35e35E2",
+    "RedemptionQueue": "0x25cf2128F603754179379351B805B4F8C0B8dCA4",
+    "LitePSM": "0x31750D38d8d1f69Af94407002b9322f5765D869A",
+    "OkuBridge": "0x2d690F74815203FdE6298897470050daEB49aC02",
+    "OkuBridgeRouter": "0x27EB7e560000812C25ae668f49987cb963e5827c"
+  },
+  "baseSepolia": {
+    "MockUSDC": "0xA89A26c4d81A2cca4d0670F77f0FC88362b72248",
+    "OkuMoney": "0xe548f960EbB46f9DC504e4107A552309796c863b",
+    "OkuDollar": "0xffC8C49C5B38BC9BaFD0bB0F5F189EEcD35e35E2",
+    "RedemptionQueue": "0x25cf2128F603754179379351B805B4F8C0B8dCA4",
+    "LitePSM": "0x31750D38d8d1f69Af94407002b9322f5765D869A",
+    "OkuBridge": "0x2d690F74815203FdE6298897470050daEB49aC02",
+    "OkuBridgeRouter": "0x27EB7e560000812C25ae668f49987cb963e5827c"
   }
 }

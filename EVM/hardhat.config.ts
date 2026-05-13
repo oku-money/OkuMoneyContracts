@@ -38,13 +38,15 @@ function alchemyUrl(network: string): string {
   if (!ALCHEMY_API_KEY) {
     // Fallback to public RPCs if no Alchemy key
     const publicRpcs: Record<string, string> = {
-      "eth-mainnet": "https://eth.llamarpc.com",
-      "eth-sepolia": "https://rpc.sepolia.org",
-      "opt-mainnet": "https://mainnet.optimism.io",
-      "opt-sepolia": "https://sepolia.optimism.io",
-      "arb-mainnet": "https://arb1.arbitrum.io/rpc",
+      "eth-mainnet":  "https://eth.llamarpc.com",
+      "eth-sepolia":  "https://rpc.sepolia.org",
+      "opt-mainnet":  "https://mainnet.optimism.io",
+      "opt-sepolia":  "https://sepolia.optimism.io",
+      "arb-mainnet":  "https://arb1.arbitrum.io/rpc",
       "base-mainnet": "https://mainnet.base.org",
-      "bnb-mainnet": "https://bsc-dataseed.binance.org",
+      "base-sepolia": "https://sepolia.base.org",
+      "bnb-mainnet":  "https://bsc-dataseed.binance.org",
+      "bnb-testnet":  "https://bsc-testnet-rpc.publicnode.com",
     };
     return publicRpcs[network] || "";
   }
@@ -78,13 +80,15 @@ interface ForkTarget {
 }
 
 const FORK_TARGETS: Record<string, ForkTarget> = {
-  sepolia:    { alchemySubdomain: "eth-sepolia",  chainId: 11155111 },
-  mainnet:    { alchemySubdomain: "eth-mainnet",  chainId: 1 },
-  optimism:   { alchemySubdomain: "opt-mainnet",  chainId: 10 },
-  opSepolia:  { alchemySubdomain: "opt-sepolia",  chainId: 11155420 },
-  arbitrum:   { alchemySubdomain: "arb-mainnet",  chainId: 42161 },
-  base:       { alchemySubdomain: "base-mainnet", chainId: 8453 },
-  bsc:        { alchemySubdomain: "bnb-mainnet",  chainId: 56 },
+  sepolia:     { alchemySubdomain: "eth-sepolia",   chainId: 11155111 },
+  mainnet:     { alchemySubdomain: "eth-mainnet",   chainId: 1 },
+  optimism:    { alchemySubdomain: "opt-mainnet",   chainId: 10 },
+  opSepolia:   { alchemySubdomain: "opt-sepolia",   chainId: 11155420 },
+  arbitrum:    { alchemySubdomain: "arb-mainnet",   chainId: 42161 },
+  base:        { alchemySubdomain: "base-mainnet",  chainId: 8453 },
+  baseSepolia: { alchemySubdomain: "base-sepolia",  chainId: 84532 },
+  bsc:         { alchemySubdomain: "bnb-mainnet",   chainId: 56 },
+  bscTestnet:  { alchemySubdomain: "bnb-testnet",   chainId: 97 },
 };
 
 const FORK_NETWORK = (process.env.FORK_NETWORK || "sepolia").trim();
@@ -180,6 +184,30 @@ const config: HardhatUserConfig = {
         etherscan: {
           apiUrl: "https://api-sepolia-optimistic.etherscan.io",
           apiKey: process.env.OPTIMISTIC_ETHERSCAN_API_KEY || "",
+        },
+      },
+    },
+
+    baseSepolia: {
+      url: process.env.BASE_SEPOLIA_RPC_URL || alchemyUrl("base-sepolia"),
+      chainId: 84532,
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      verify: {
+        etherscan: {
+          apiUrl: "https://api-sepolia.basescan.org",
+          apiKey: process.env.BASESCAN_API_KEY || process.env.ETHERSCAN_API_KEY || "",
+        },
+      },
+    },
+
+    bscTestnet: {
+      url: process.env.BSC_TESTNET_RPC_URL || alchemyUrl("bnb-testnet"),
+      chainId: 97,
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      verify: {
+        etherscan: {
+          apiUrl: "https://api-testnet.bscscan.com",
+          apiKey: process.env.BSCSCAN_API_KEY || process.env.ETHERSCAN_API_KEY || "",
         },
       },
     },

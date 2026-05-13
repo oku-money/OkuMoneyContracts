@@ -152,6 +152,27 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
     // No whales — testnet; use MockUSDC for testing
   },
 
+  // Base Sepolia (testnet)
+  baseSepolia: {
+    tokens: {
+      usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", // Circle's official Base Sepolia USDC (6 decimals)
+      weth: "0x4200000000000000000000000000000000000006", // Canonical Base Sepolia WETH (mirrors mainnet predeploy)
+    },
+    // No whales — testnet; deploy script defaults to MockUSDC.
+  },
+
+  // BNB Smart Chain Testnet (Chapel)
+  // NOTE: like mainnet BSC, the canonical Binance-Peg USDC carries 18 decimals (NOT 6).
+  // Live deploys here default to MockUSDC; if SKIP_MOCK_USDC=true is ever flipped, the
+  // 18-decimal path through LitePSM/RedemptionQueue must be re-verified.
+  bscTestnet: {
+    tokens: {
+      usdc: "0x64544969ed7EBf5f083679233325356EbE738930", // Binance-Peg USDC (testnet, 18 decimals)
+      weth: "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd", // WBNB testnet
+    },
+    // No whales — testnet; deploy script defaults to MockUSDC.
+  },
+
   // Localhost (fork) - defaults to Sepolia fork
   // Uses Sepolia addresses since we fork Sepolia by default
   localhost: {
@@ -164,10 +185,15 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
 };
 
 /**
- * Get addresses for a specific chain
+ * Get addresses for a specific chain.
+ *
+ * Lookup is case-sensitive because the CHAIN_ADDRESSES keys (and the parallel
+ * CHAIN_METADATA keys) use camelCase for multi-word chains (`opSepolia`,
+ * `baseSepolia`, `bscTestnet`) to match Hardhat's `network.name`. Callers must
+ * pass the canonical name; we don't lower-case the input or the map keys.
  */
 export function getChainAddresses(network: string): ChainAddresses {
-  const addresses = CHAIN_ADDRESSES[network.toLowerCase()];
+  const addresses = CHAIN_ADDRESSES[network];
   if (!addresses) {
     throw new Error(
       `No addresses found for network: ${network}. Supported networks: ${Object.keys(CHAIN_ADDRESSES).join(", ")}`
@@ -253,6 +279,18 @@ export const CHAIN_METADATA: Record<string, ChainMetadata> = {
     rpcUrl: process.env.SEPOLIA_RPC_URL || "https://rpc.sepolia.org",
     explorer: "https://sepolia.etherscan.io",
   },
+  baseSepolia: {
+    name: "Base Sepolia",
+    chainId: 84532,
+    rpcUrl: process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org",
+    explorer: "https://sepolia.basescan.org",
+  },
+  bscTestnet: {
+    name: "BNB Smart Chain Testnet",
+    chainId: 97,
+    rpcUrl: process.env.BSC_TESTNET_RPC_URL || "https://bsc-testnet-rpc.publicnode.com",
+    explorer: "https://testnet.bscscan.com",
+  },
   localhost: {
     name: "Localhost (Sepolia Fork)",
     chainId: 11155111, // Matches forked Sepolia chain ID
@@ -262,10 +300,12 @@ export const CHAIN_METADATA: Record<string, ChainMetadata> = {
 };
 
 /**
- * Get chain metadata by network name
+ * Get chain metadata by network name.
+ *
+ * Case-sensitive — same rationale as {@link getChainAddresses}.
  */
 export function getChainMetadata(network: string): ChainMetadata {
-  const metadata = CHAIN_METADATA[network.toLowerCase()];
+  const metadata = CHAIN_METADATA[network];
   if (!metadata) {
     throw new Error(
       `No metadata found for network: ${network}. Supported networks: ${Object.keys(CHAIN_METADATA).join(", ")}`
@@ -346,6 +386,8 @@ export const SOLANA_DEVNET_CHAIN_ID = 103;
  */
 export const SEPOLIA_CHAIN_ID = 11155111;
 export const OP_SEPOLIA_CHAIN_ID = 11155420;
+export const BASE_SEPOLIA_CHAIN_ID = 84532;
+export const BSC_TESTNET_CHAIN_ID = 97;
 export const OPTIMISM_CHAIN_ID = 10;
 export const ARBITRUM_CHAIN_ID = 42161;
 export const BASE_CHAIN_ID = 8453;
@@ -356,7 +398,12 @@ export const ETHEREUM_CHAIN_ID = 1;
  * EVM testnet chain IDs (used to choose Solana Devnet vs Mainnet
  * as the bridge counterpart at deploy time).
  */
-export const EVM_TESTNET_CHAIN_IDS: number[] = [SEPOLIA_CHAIN_ID, OP_SEPOLIA_CHAIN_ID];
+export const EVM_TESTNET_CHAIN_IDS: number[] = [
+  SEPOLIA_CHAIN_ID,
+  OP_SEPOLIA_CHAIN_ID,
+  BASE_SEPOLIA_CHAIN_ID,
+  BSC_TESTNET_CHAIN_ID,
+];
 
 // Default fork chain ID (Eth Sepolia)
 export const DEFAULT_FORK_CHAIN_ID = SEPOLIA_CHAIN_ID;
@@ -376,9 +423,14 @@ export const BRIDGE_CHAIN_ID_MAP: Record<number, number> = {
   [ARBITRUM_CHAIN_ID]: 421, // 42161 -> 421
   [BASE_CHAIN_ID]: 845, // 8453 -> 845
 
-  // Testnet chains (need mapping, exceed u16)
-  [SEPOLIA_CHAIN_ID]: 111, // 11155111 -> 111
-  [OP_SEPOLIA_CHAIN_ID]: 420, // 11155420 -> 420
+  // Testnet chains. Some EIP-155 IDs already fit in u16 (BSC testnet = 97); the
+  // rest are folded into a 3-digit prefix that stays unique against every other
+  // entry in this map. Keeping them distinct from their mainnet counterparts
+  // (e.g. 845 vs 846) prevents bridge-side handlers from cross-routing.
+  [SEPOLIA_CHAIN_ID]: 111,       // 11155111 -> 111
+  [OP_SEPOLIA_CHAIN_ID]: 420,    // 11155420 -> 420
+  [BASE_SEPOLIA_CHAIN_ID]: 846,  // 84532    -> 846 (Base mainnet uses 845)
+  [BSC_TESTNET_CHAIN_ID]: 97,    // 97       -> 97  (already fits in u16)
 };
 
 /**

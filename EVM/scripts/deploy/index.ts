@@ -35,7 +35,17 @@ import { logger } from "../utils/logger";
 // Etherscan V2 (single ETHERSCAN_API_KEY) covers Ethereum, Optimism, Arbitrum,
 // Base, and BSC. Per-chain explorer keys (BSCSCAN_API_KEY, etc.) still work
 // as fallbacks via the per-network `verify.etherscan` blocks in hardhat.config.ts.
-const VERIFIABLE_NETWORKS = ["sepolia", "opSepolia", "mainnet", "optimism", "arbitrum", "base", "bsc"];
+const VERIFIABLE_NETWORKS = [
+  "sepolia",
+  "opSepolia",
+  "baseSepolia",
+  "bscTestnet",
+  "mainnet",
+  "optimism",
+  "arbitrum",
+  "base",
+  "bsc",
+];
 
 // Dev wallet address for impersonation on local fork (centralized in chains.ts)
 const DEV_WALLET = DEV_WALLET_ADDRESS;

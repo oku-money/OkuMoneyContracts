@@ -10,7 +10,17 @@ import { loadAddressBook } from "../utils/addressBook";
 import { getNetworkName } from "../config/chains";
 import { logger } from "../utils/logger";
 
-const VERIFIABLE_NETWORKS = ["sepolia", "opSepolia", "mainnet", "optimism", "arbitrum", "base"];
+const VERIFIABLE_NETWORKS = [
+  "sepolia",
+  "opSepolia",
+  "baseSepolia",
+  "bscTestnet",
+  "mainnet",
+  "optimism",
+  "arbitrum",
+  "base",
+  "bsc",
+];
 
 async function verifyImplementation(proxyAddress: string, contractName: string): Promise<void> {
   try {

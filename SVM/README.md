@@ -33,7 +33,7 @@ Convenience program providing single-transaction flows: `bridge_oku_m` (direct b
 
 **Single-slot yield distribution lock.** Both `set_oku_m_price()` and `distribute_yield()` set `last_yield_distribution_slot = Clock::get().slot`. PSM and vault operations check `current_slot != last_yield_distribution_slot` before executing. This prevents sandwich attacks around discrete price updates, matching the EVM's `lastYieldDistributionBlock` pattern.
 
-**No Pyth SDK dependency.** The oracle check manually parses Pyth V2 price account bytes (price at offset 208, publish_time at offset 232) to avoid transitive dependency conflicts. The accepted Pyth program owner pubkey is **per-deployment** (`PsmConfig::pyth_program_owner`, set at `initialize` and rotatable via `set_pyth_program_owner`), so deployments can target the legacy Pyth program (mainnet `FsJ3...`, devnet `gSbe...`) or any future Pyth deployment without recompilation. Source attribution and offsets are documented in `programs/lite-psm/src/helpers/oracle.rs`.
+**No Pyth SDK dependency.** The oracle check manually parses Pyth V2 price account bytes (aggregate `price` at offset 208, `status` u8 at offset 224, aggregate-publish `timestamp` i64 at offset 96) to avoid transitive dependency conflicts. The accepted Pyth program owner pubkey is **per-deployment** (`PsmConfig::pyth_program_owner`, set at `initialize` and rotatable via `set_pyth_program_owner`), so deployments can target the legacy Pyth program (mainnet `FsJ3...`, devnet `gSbe...`) or any future Pyth deployment without recompilation. Source attribution and offsets are documented in `programs/lite-psm/src/helpers/oracle.rs` (note: offset 232 is `agg.pub_slot`, a Solana slot — NOT the publish timestamp; a previous revision used it by accident, see the `IMPORTANT` block at the top of `oracle.rs`).
 
 **Ed25519 introspection, not native verification.** `bridge_mint` requires an `Ed25519Program` instruction at transaction index 0 and compares its data byte-for-byte against the expected instruction. This is the canonical Solana pattern for signature verification.
 
@@ -44,50 +44,71 @@ Convenience program providing single-transaction flows: `bridge_oku_m` (direct b
 ## Program Structure
 
 ```
+crates/
+  oku-shared/              # Pure-Rust workspace lib (no solana-*, no anchor-lang)
+    src/
+      lib.rs               # Re-exports
+      constants.rs         # PRECISION, BASIS_POINTS, MAX_MULTIPLIER,
+                           # MIN_COLLATERAL_RATIO_FLOOR, ORACLE_{MIN,MAX}_STALENESS_SECS
+      math.rs              # mul_div_floor, oku_m_to_dollars, dollars_to_oku_m,
+                           # calculate_fee — overflow-safe primitives returning Option<u64>
+
 programs/
   lite-psm/
     src/
       lib.rs                # Instruction entry points
-      state.rs              # PsmConfig, RedemptionQueue, BridgeConfig, BridgeNonce, etc.
+      state.rs              # PsmConfig, RedemptionQueue (zero-copy, MAX_ENTRIES=200),
+                            # BridgeConfig, BridgeNonce, ProcessedRequest,
+                            # RefundedRequest, PendingRefund, etc.
       errors.rs             # Error codes
       events.rs             # Event definitions
       roles.rs              # AuthorityRole, BridgeAuthorityRole enums
-      constants.rs          # PRECISION, BASIS_POINTS, BRIDGE_DEADLINE bounds
+      constants.rs          # Re-exports oku_shared::* + bridge-specific bounds
       helpers/
         yield_lock.rs       # check_yield_lock() — sandwich prevention
         oracle.rs           # check_oracle_reserves() — Pyth V2 manual parsing
         ed25519.rs          # verify_ed25519_signature() — instruction introspection
-        math.rs             # oku_m <-> dollars conversion helpers
+        math.rs             # Anchor-error-flavoured wrappers over oku_shared::math
         mod.rs
       instructions/
-        init.rs             # initialize (now takes pyth_program_owner), setup_redemption_queue, setup_oku_money_escrow
-        psm.rs              # mint_oku_m, redeem_oku_m, process_queue, rescue_queue_entry, buffer ops
-        psm_admin.rs        # pause, freeze/thaw, set_authority, initialize_blacklist_exempt, set_oracle, set_pyth_program_owner, set_max_supply, set_minter_allowance
+        init.rs             # initialize (takes pyth_program_owner; rejects TransferHook mints),
+                            # setup_redemption_queue, setup_oku_money_escrow
+        psm.rs              # mint_oku_m, redeem_oku_m, process_queue, rescue_queue_entry,
+                            # deposit_buffer, withdraw_buffer
+        psm_admin.rs        # pause/unpause, freeze/thaw, set_authority (macro-driven),
+                            # initialize_blacklist_exempt, set_oracle,
+                            # set_pyth_program_owner, set_max_supply, set_minter_allowance
         yield_ops.rs        # set_oku_m_price, distribute_yield
-        bridge.rs           # bridge_mint, bridge_burn, refund_bridge_request
-        bridge_admin.rs     # initialize_bridge (BridgeInitConfig), chain mgmt, fee mgmt, nonce admin
+        bridge.rs           # bridge_mint, bridge_burn, initiate_refund, confirm_refund,
+                            # cancel_refund
+        bridge_admin.rs     # initialize_bridge (BridgeInitConfig), add/remove_supported_chain,
+                            # update_bridge_fee/limits/deadline, pause/unpause_bridge,
+                            # skip_nonce, update_orchestrator_signer, update_fee_recipient,
+                            # set_bridge_authority (macro-driven)
         mod.rs
       contexts/
         init.rs             # Initialize, SetupRedemptionQueue, SetupOkuMoneyEscrow
         psm.rs              # MintOkuM, RedeemOkuM, ProcessQueue, RescueQueueEntry, Buffer
-        psm_admin.rs        # Pause, Unpause, FreezeAccount, ThawAccount, SetAuthority
+        psm_admin.rs        # Pause, Unpause, FreezeAccount, ThawAccount, SetAuthority, ...
         yield_ops.rs        # SetOkuMPrice, DistributeYield
-        bridge.rs           # BridgeMint, BridgeBurn, RefundBridgeRequest
+        bridge.rs           # BridgeMint, BridgeBurn, InitiateRefund, ConfirmRefund, ...
         bridge_admin.rs     # BridgeAdmin contexts
         mod.rs
 
   oku-dollar/
     src/
       lib.rs                # Instruction entry points
-      constants.rs          # PRECISION, MINIMUM_LIQUIDITY, MIN_COLLATERAL_RATIO_FLOOR
+      constants.rs          # Re-exports oku_shared::* + vault-specific MINIMUM_LIQUIDITY
       state.rs              # OkuDollarConfig
       errors.rs
       events.rs
       roles.rs              # AuthorityRole enum
-      helpers.rs            # Price math, collateralization, share conversion
+      helpers.rs            # Vault math: collateral ratio, surplus, share conversions,
+                            # vault yield-lock guard. Single-multiplier helpers delegate to
+                            # oku_shared::math.
       instructions/
         core.rs             # initialize, wrap, unwrap, update_usd_multiplier, reserves
-        admin.rs            # pause, unpause, set_authority, set_min_collateral_ratio
+        admin.rs            # pause/unpause, set_authority, set_min_collateral_ratio
         mod.rs
       contexts.rs           # All account contexts
 
@@ -98,25 +119,32 @@ programs/
       errors.rs
       events.rs
       roles.rs
+      validation.rs         # Defence-in-depth cross-program PDA checks
       instructions/
-        core.rs             # All CPI-based instruction handlers
+        core.rs             # CPI-based instruction handlers
         admin.rs
         mod.rs
       contexts.rs           # All account contexts
 
 tests/
-  unit/
-    lite-psm.ts            # PSM + bridge + yield ops tests
-    oku-dollar.ts          # Vault wrap/unwrap/collateral tests
-    oku-bridge-router.ts   # Router CPI integration tests
-    bridge_security.ts     # Ed25519, replay, nonce security tests
-  fork/
-    pyth-oracle.ts         # Mainnet-fork Pyth integration (requires Surfpool)
+  bankrun/                  # Default in-process suite (npm test, ~5s)
+    smoke.ts
+    lite-psm.ts
+    bridge_security.ts
+    oku-bridge-router.ts
+    oku-dollar.ts
+    pyth-oracle.ts          # Hand-built Pyth V2 fixture
+    init-invariants.ts      # TransferHook reject
+  fork/                     # surfpool-based, ad-hoc (npm run test:fork)
+    pyth-oracle.ts          # Mainnet-fork live Pyth
+    _shared/
+      surfpool.ts
+      assertions.ts
+      legacy-funder.ts
   shared/
-    setup.ts               # Shared keypairs, airdrop helpers, PSM init
-    surfpool.ts            # Surfpool cheatcode client + mainnet addresses
-    assertions.ts          # expectError helper
-    fixtures.ts            # fundUser, expireDeadline, freeze/thaw helpers
+    setup.ts                # Shared authority keypairs + initializePsm
+    bankrun.ts              # Harness, helpers, autoBumpSlot wrapper
+    bridge-helpers.ts       # Bridge-test helpers (Ed25519 + mint tx construction)
 
 scripts/
   deploy/
@@ -179,7 +207,13 @@ pub struct OkuDollarConfig {
 
 ### RedemptionQueue PDA (`b"redemption_queue"`)
 
-Fixed-size circular buffer (10 entries max). Each entry: `{ user: Pubkey, oku_m_amount: u64, timestamp: i64 }`.
+Zero-copy ring buffer (200 entries max — `MAX_ENTRIES`). Each entry:
+`{ user: Pubkey, oku_m_amount: u64, timestamp: i64 }` = 48 bytes.
+Total account size 9 640 bytes; rent ~0.067 SOL one-time at deploy.
+Cap of 200 (vs the EVM spec target of 500) is bounded by Solana's
+10 KB single-CPI allocation budget — see `EVM_VS_SVM.md` and
+Phase 13b in `TRACKER.md`. Strict FIFO is preserved via the
+`head`/`tail` `u64` absolute indices.
 
 ### Bridge State
 
@@ -218,8 +252,8 @@ pub fn mint_oku_m(usdc_amount: u64)
 // usdc_amount = oku_m_amount * oku_m_price / PRECISION
 pub fn redeem_oku_m(oku_m_amount: u64)  // instant or queued
 
-pub fn process_queue(max_entries: u32)   // price cached once per batch
-pub fn rescue_queue_entry(queue_index: u32)  // return OkuM for stuck entries
+pub fn process_queue(max_entries: u32)   // price cached once per batch; hard-capped at MAX_BATCH_ENTRIES=50
+pub fn rescue_queue_entry(queue_index: u64)  // return OkuM for stuck entries (u64 since Phase 13b)
 ```
 
 All protected by yield distribution lock.
@@ -358,7 +392,7 @@ pause-bypass policy, and dead-shares semantics — see
 | Bridge refund | Two-step (initiator + confirmer) | Two-step (with per-call `InitiatorCannotConfirm`) |
 | Wallet price display | Frontends read `okuMPrice()` view | Frontends read PsmConfig PDA |
 | Third-party bridge adapters | NttAdapter, future CCIP | Not implemented (native bridge only) |
-| Queue size | Unbounded (mapping) | Fixed `[QueueEntry; 10]` (prototype limitation) |
+| Queue size | Unbounded (mapping) | Fixed `[QueueEntry; 200]` zero-copy ring (Phase 13b; capped by Solana's 10 KB single-CPI alloc budget) |
 
 ## Error Codes
 
@@ -392,43 +426,81 @@ npx mocha --require tsx --timeout 60000 'tests/bankrun/pyth-oracle.ts'
 # Fork tests — exercises real mainnet Pyth state via Surfpool.
 #   1. Start Surfpool: npm run surfpool:mainnet
 #   2. Run fork tests: npm run test:fork
-
-# Validator escape hatch — solana-test-validator via `anchor test`.
-# Kept around for the rare case where bankrun's in-process runtime
-# diverges from a real cluster (e.g. testing leader rotation).
-# CI does NOT run this path; treat as a debugging tool only.
-npm run test:validator
 ```
 
 ### Runner notes
 
-Phase 9 migrated the entire unit suite to
-[`solana-bankrun`](https://github.com/kevinheavey/solana-bankrun) (via the
-thin `anchor-bankrun` adapter). Bankrun runs the BPF programs in-process
-on `litesvm`, eliminating:
+The entire unit suite runs on
+[`solana-bankrun`](https://github.com/kevinheavey/solana-bankrun) via the
+thin `anchor-bankrun` adapter. Bankrun executes the BPF programs
+in-process on `litesvm`, eliminating:
 
-- the 30 s confirmation-polling window in `@solana/web3.js@1.x` (no validator → no RPC → no polling)
-- wall-clock waits for slot rollover (`warpSlots(h, 1n)` in `beforeEach`)
-- wall-clock waits for deadline elapse (`warpBy(h, 3601)` in the refund test)
+- the 30 s confirmation-polling window in `@solana/web3.js@1.x` (no validator → no RPC → no polling);
+- wall-clock waits for slot rollover (handled by the harness's `autoBumpSlot` option);
+- wall-clock waits for deadline elapse (`warpBy(h, 3601)` in the refund test).
 
-Two known bankrun limitations are explicitly skipped or worked around:
+**`autoBumpSlot` (default on).** `startBankrun()` wraps
+`provider.sendAndConfirm` so every transaction advances the bankrun
+slot by 1 before submission. This handles two unrelated annoyances at
+once:
 
-- **Ed25519 precompile** is not enforced by litesvm. The
-  "rejects invalid signature" test in
-  `tests/bankrun/bridge_security.ts` is skipped (`it.skip`) with a
-  comment. The behavior is verified on real validators by
-  `scripts/test/test-devnet.ts` and on Surfpool by
-  `tests/fork/pyth-oracle.ts`.
-- **Slot does not auto-advance** between transactions. Each `before` /
-  `beforeEach` that comes after a yield-distribution op bumps the slot
-  via `h.context.warpToSlot(cur + 1n)` to avoid the
-  `YieldDistributionInProgress` sandwich guard. See `tests/shared/bankrun.ts`.
+- `check_yield_lock` rejects any op in the same slot as the last
+  `distribute_yield` / `set_oku_m_price`. Without auto-bump, any test
+  ordering that follows a yield op hits `YieldDistributionInProgress`.
+- Bankrun caches identical-byte transactions and replays the prior
+  result ("This transaction has already been processed"). Auto-bump
+  forces a fresh blockhash on every submission.
 
-The legacy `solana-test-validator` path remains available via `npm run
-test:validator`. The shared setup module (`tests/shared/setup.ts`) takes
-a `Funder` callback parameter so it can drive either runner; pass
-`fundKeypairs(h, ...)` for bankrun or `validatorFunder(connection)` for
-the validator.
+Tests that need strict slot semantics can pass
+`startBankrun({ autoBumpSlot: false })` and call `warpSlots(h, n)`
+explicitly.
+
+**Known in-process-SVM limitation: Ed25519 precompile not enforced.**
+`litesvm@1.0.0` ships a `with_precompiles` toggle that's OFF by
+default and not exposed by `solana-bankrun@0.4.0` (or by Surfpool 1.1.2,
+which uses the same backend). When that toggle is off the Ed25519
+precompile is a no-op: a transaction containing an invalid signature
+in its precompile instruction is silently accepted at the harness
+level, and our `bridge_mint`'s sysvar-introspection check then accepts
+the (consistent, invalid-but-byte-matching) ix data and proceeds to
+mint.
+
+This is the canonical Solana pattern: the program trusts the precompile
+to have validated the curve25519 math (re-implementing it in BPF
+costs ~200K CU per call). On a real validator the precompile rejects
+before our program runs.
+
+Affected coverage:
+
+- `tests/bankrun/bridge_security.ts` — the "rejects invalid signature"
+  test is `it.skip` with a comment.
+- `scripts/test/test-devnet.ts` includes a `bridgeMintInvalidSig` step
+  that runs against real devnet / localnet's `solana-test-validator`,
+  where the precompile DOES execute. This is the canonical coverage
+  for the path; run via `npm run test:onchain -- --step=bridgeMintInvalidSig`
+  before any mainnet deploy.
+
+What's still caught in bankrun:
+
+- Wrong orchestrator pubkey in the precompile ix (our program rejects
+  with `InvalidSignature` because `verify_ed25519_signature` byte-
+  compares against `bridge_config.orchestrator_signer`).
+- Tampered message bytes (the on-chain message hash check trips
+  `InvalidRequestId`).
+- Expired signature (deadline elapsed at submission time).
+- Post-rotation: an old-orchestrator-signed message after
+  `update_orchestrator_signer` (the byte-compare fails on pubkey).
+
+What's NOT caught in bankrun (and therefore covered by
+`bridgeMintInvalidSig`): the pure case of a signature whose
+curve25519 math fails but whose bytes are otherwise well-formed.
+
+**No validator escape hatch.** The legacy `solana-test-validator` path
+was retired in Phase 11; `tests/shared/setup.ts` is now bankrun-only.
+The surfpool fork tests have their own local copy of
+`safeAirdrop` in `tests/fork/_shared/legacy-funder.ts`. If you ever
+need to debug against a real cluster, run `npm run test:onchain`
+(devnet) or `npm run test:fork` (surfpool).
 
 ## Deployment
 
@@ -482,8 +554,12 @@ external-facing deployment.
       PDA placeholders (which cannot sign top-level instructions).
       Rotation must produce two DISTINCT keys, both DISTINCT from
       `bridge_admin` — the on-chain handler enforces this.
-- [ ] `scripts/admin/initialize-blacklist-exempt.ts` has been run.
-      Verifies idempotency before submitting (no-op on a second run).
+- [ ] **Verify** `initialize_blacklist_exempt` succeeded during
+      `deploy:init` — Phase 13c wired this in as an idempotent
+      final step. `PsmConfig.blacklist_exempt_bridge` and
+      `blacklist_exempt_router` should be non-default. Re-run with
+      `npm run admin:blacklist-exempt` if the wired step printed a
+      `non-fatal` warning.
 - [ ] BPF loader upgrade authority transferred to the cold multisig:
       ```bash
       solana program set-upgrade-authority <LITE_PSM_PROGRAM>           --new-upgrade-authority <SQUADS_COLD_VAULT>
@@ -495,12 +571,18 @@ external-facing deployment.
       units (6 decimals) with `expo == 0` and `agg.status == Trading`.
       Phase 8.0 corrected the parser; the modern Pyth Solana Receiver
       layout is NOT supported.
-- [ ] Address Lookup Table created (`scripts/admin/setup-router-alt.ts`)
-      and the resulting pubkey is recorded in
-      `deployments/<network>.json` under `addressLookupTables.router`.
-      SDK consumers MUST include this ALT in every router CPI tx — the
-      raw `mint_usd_oku` / `redeem_usd_oku` account list is at the
-      v0-tx-size ceiling.
+- [ ] **Verify** router ALT exists in `deployments/<network>.json` under
+      `addressLookupTables.router` — Phase 13c wired the create step
+      into `deploy:init`. SDK consumers MUST include this ALT in every
+      router CPI tx — the raw `mint_usd_oku` / `redeem_usd_oku`
+      account list is at the v0-tx-size ceiling. Re-run with
+      `npm run admin:setup-router-alt` if the wired step printed a
+      `non-fatal` warning. For mainnet, also rotate the ALT authority
+      from the deployer to a multisig.
+- [ ] Anchor.toml `[programs.<network>]` matches the freshly-deployed
+      keypair IDs (printed at the end of `deploy:programs`). Devnet
+      and localnet sections are kept SEPARATE on purpose — preserves
+      the option to rotate one cluster without touching the other.
 
 ### Orchestrator dual-key requirement
 
@@ -529,30 +611,33 @@ hardware). Rotation:
 
 ### Queue capacity SLA
 
-The current `RedemptionQueue` is a fixed 10-entry ring buffer. Operations
-discipline:
+The `RedemptionQueue` is a fixed 200-entry zero-copy ring buffer
+(Phase 13b raised the cap from 10 → 200). Operations discipline:
 
 - Keep `vault_usdc.amount` topped up so `redeem_oku_m` falls into the
   instant path (buffer >= queued obligations + new redemption).
-- If the queue ever fills (10 simultaneously-pending redemptions), the
-  11th `redeem_oku_m` reverts with `QueueFull`. Run
-  `npm run admin:distribute-yield` is unrelated; the actual fix is to
-  call `process_queue` from a `queue_processor`-keyed orchestrator.
+- If the queue ever fills (200 simultaneously-pending redemptions), the
+  201st `redeem_oku_m` reverts with `QueueFull`. The fix is to call
+  `process_queue` from a `queue_processor`-keyed orchestrator.
+- `process_queue` is hard-capped at `MAX_BATCH_ENTRIES = 50` per tx (CU
+  budget). To drain 200 entries you need at least 4 `process_queue`
+  calls. The orchestrator is responsible for batching.
 - Cron template (orchestrator side):
   ```bash
   while true; do
-      tsx scripts/test/process-queue.ts --max=10
+      npm run admin:process-queue   # auto-loops until empty, batching at MAX_BATCH_ENTRIES=50
       sleep 60
   done
   ```
-  (If `process-queue.ts` doesn't exist yet, follow the pattern in
-  `scripts/admin/distribute-yield.ts` — pulls the queue head/tail from
-  the on-chain `RedemptionQueue` PDA, derives recipient ATAs, batches
-  them as remaining accounts, and calls `process_queue(N)`.)
+  `scripts/admin/process-queue.ts` auto-batches across multiple txs in a
+  single invocation, so the cron is a thin "kick it periodically"
+  wrapper. Pass `--max=<N>` to cap how many entries a single invocation
+  drains (defaults to drain-to-empty).
 
-A future redesign (TRACKER Phase 4c) replaces the fixed-array queue
-with per-user PDAs to lift the cap. Until then, the 10-entry SLA is the
-operational reality.
+A future redesign (deferred Phase 13b followup) could lift the cap from
+200 → 500 via a multi-step `init + 2× realloc` deploy flow OR migrate
+the ring to per-user PDAs. Telemetry-gated: defer until the 200-entry
+SLA is shown to be a real production constraint.
 
 ### Pyth feed requirements
 
@@ -635,9 +720,10 @@ All admin scripts live under `scripts/admin/`. Each:
 | `admin:update-bridge-deadline` | `update_bridge_deadline` | `limits_manager` |
 | `admin:add-supported-chain` / `admin:remove-supported-chain` | `add_supported_chain` / `remove_supported_chain` | `chain_manager` |
 | `admin:skip-nonce` | `skip_nonce` (bounded by `MAX_NONCE_SKIP`) | `nonce_admin` |
-| `admin:blacklist-exempt` | `initialize_blacklist_exempt` | `role_admin` (one-shot) |
-| `admin:setup-router-alt` | (creates an Address Lookup Table) | deployer (initially) |
-| `test:process-queue` | `process_queue` (orchestrator drain) | `queue_processor` |
+| `admin:blacklist-exempt` | `initialize_blacklist_exempt` (auto-run by `deploy:init` since Phase 13c; re-runs are idempotent no-ops) | `role_admin` (one-shot) |
+| `admin:setup-router-alt` | creates an Address Lookup Table (auto-run by `deploy:init` since Phase 13c; re-runs skip if the ALT pubkey in `deployments/<network>.json::addressLookupTables.router` is alive on chain) | deployer (initially) |
+| `admin:process-queue` | `process_queue` (orchestrator drain; auto-batches to drain-to-empty) | `queue_processor` |
+| `admin:close-programs` | `solana program close` (BPF loader) — recover rent from stale program deployments. Default targets are `deployments/<network>.json::programs.*`; pass `--ids=A,B,C` for explicit IDs. Refuses to close IDs currently in `Anchor.toml [programs.<network>]` unless `--allow-anchor-toml-ids`. | BPF upgrade authority (deployer wallet) |
 
 Refund operator scripts under `scripts/bridge/`:
 

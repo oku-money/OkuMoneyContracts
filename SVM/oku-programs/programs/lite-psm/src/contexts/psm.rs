@@ -80,12 +80,18 @@ pub struct RedeemOkuM<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
+    /// Redemption queue (zero-copy ring buffer). Use `load_mut()` to enqueue,
+    /// `load()` for read-only inspection. The handler is responsible for
+    /// dropping the borrow before any CPI that re-borrows the account info.
+    /// The `bump = redemption_queue.load()?.bump` constraint pattern is
+    /// awkward in Anchor's derive; we instead use the canonical
+    /// `bump` lookup (Anchor will recompute it from seeds).
     #[account(
         mut,
         seeds = [RedemptionQueue::SEED],
-        bump = redemption_queue.bump
+        bump
     )]
-    pub redemption_queue: Box<Account<'info, RedemptionQueue>>,
+    pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
 
     /// USDC mint
     #[account(address = config.usdc_mint)]
@@ -152,12 +158,15 @@ pub struct ProcessQueue<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
+    /// Redemption queue (zero-copy). `process_queue` uses `load()`+`load_mut()`
+    /// interleaved with CPIs to advance the head ring. See `bump` note on
+    /// `RedeemOkuM::redemption_queue`.
     #[account(
         mut,
         seeds = [RedemptionQueue::SEED],
-        bump = redemption_queue.bump
+        bump
     )]
-    pub redemption_queue: Box<Account<'info, RedemptionQueue>>,
+    pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
 
     /// OkuMoney mint (Token-2022) - needed for burn CPI and price reads
     #[account(
@@ -232,12 +241,13 @@ pub struct WithdrawBuffer<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// Redemption queue (read-only) - used to calculate reserved USDC for pending entries
+    /// Redemption queue (read-only) — used to calculate reserved USDC for
+    /// pending entries. `load()` only.
     #[account(
         seeds = [RedemptionQueue::SEED],
-        bump = redemption_queue.bump
+        bump
     )]
-    pub redemption_queue: Box<Account<'info, RedemptionQueue>>,
+    pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
 
     /// OkuMoney mint - needed to read current price for reserve calculation
     #[account(
@@ -283,12 +293,14 @@ pub struct RescueQueueEntry<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
+    /// Redemption queue (zero-copy). `rescue_queue_entry` uses `load_mut()`
+    /// after the CPI to clear the entry and advance the head ring.
     #[account(
         mut,
         seeds = [RedemptionQueue::SEED],
-        bump = redemption_queue.bump
+        bump
     )]
-    pub redemption_queue: Box<Account<'info, RedemptionQueue>>,
+    pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
 
     /// OkuMoney mint (Token-2022)
     #[account(

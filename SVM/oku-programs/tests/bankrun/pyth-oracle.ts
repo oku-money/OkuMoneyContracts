@@ -33,8 +33,7 @@ import { LitePsm } from "../../target/types/lite_psm";
 import {
   coldMultisig,
   psmOrchestrator,
-  initializePSMIfNeeded,
-  resetPsmSingleton,
+  initializePsm,
   DECIMALS,
 } from "../shared/setup";
 import {
@@ -200,7 +199,6 @@ describe("Pyth oracle (bankrun)", () => {
   }
 
   before(async () => {
-    resetPsmSingleton();
     h = await startBankrun();
     provider = h.provider as unknown as anchor.AnchorProvider;
     program = h.program;
@@ -232,13 +230,7 @@ describe("Pyth oracle (bankrun)", () => {
 
     await fundKeypairs(h, [user], 10 * anchor.web3.LAMPORTS_PER_SOL);
 
-    await initializePSMIfNeeded(
-      program,
-      payer,
-      usdcMint,
-      okuMoneyMint,
-      (kps, lamports) => fundKeypairs(h, kps, lamports)
-    );
+    await initializePsm(h, program, payer, usdcMint, okuMoneyMint);
 
     vaultUsdcAta = getAssociatedTokenAddressSync(
       usdcMint,

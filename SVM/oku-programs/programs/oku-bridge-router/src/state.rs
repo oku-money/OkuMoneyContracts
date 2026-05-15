@@ -3,6 +3,7 @@ use anchor_lang::prelude::*;
 /// Router configuration PDA
 /// Stores role authorities and token mint references for validation
 #[account]
+#[derive(InitSpace)]
 pub struct RouterConfig {
     /// PDA bump seed
     pub bump: u8,
@@ -24,9 +25,9 @@ pub struct RouterConfig {
 
 impl RouterConfig {
     pub const SEED: &'static [u8] = b"router_config";
-    /// Space: 8 (discriminator) + 1 (bump) + 32*3 (authorities) + 1 (bool) + 32*2 (mints)
-    /// = 8 + 1 + 96 + 1 + 64 = 170 bytes
-    pub const LEN: usize = 8 + 1 + 32 * 3 + 1 + 32 * 2;
+    /// Space: 8 byte discriminator + `InitSpace`-derived field sum.
+    /// Pinned at 170 bytes by the assertion below.
+    pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
 
 // Compile-time assertion: if RouterConfig layout changes, this will fail to compile

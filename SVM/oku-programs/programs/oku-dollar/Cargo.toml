@@ -24,3 +24,5 @@ anchor-lang = { version = "1.0.0", features = ["init-if-needed"] }
 anchor-spl = "1.0.0"
 lite-psm = { path = "../lite-psm", features = ["cpi"] }
 solana-security-txt = "1.1"
+# Protocol-wide constants + pure-math primitives. See `crates/oku-shared`.
+oku-shared = { path = "../../crates/oku-shared" }

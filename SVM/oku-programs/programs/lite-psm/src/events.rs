@@ -84,10 +84,12 @@ pub struct RedemptionQueuedEvent {
     pub oku_m_amount: u64,
     /// Dollar value at time of queueing
     pub dollar_value: u64,
-    /// Position in queue (0-indexed)
-    pub queue_position: u32,
-    /// Total queue length after this entry
-    pub queue_length: u32,
+    /// Position in queue (0-indexed; absolute tail index, not ring slot).
+    /// Widened from u32 to u64 in Phase 13b alongside the
+    /// `RedemptionQueue::{head,tail}` widening.
+    pub queue_position: u64,
+    /// Total queue length after this entry. Widened to u64 in Phase 13b.
+    pub queue_length: u64,
 }
 
 /// Emitted when a queued redemption is processed.
@@ -111,7 +113,8 @@ pub struct RedemptionProcessedEvent {
 #[event]
 pub struct RedemptionSkippedEvent {
     /// Absolute queue index that was skipped (already cleared by rescue).
-    pub queue_index: u32,
+    /// Widened from u32 to u64 in Phase 13b.
+    pub queue_index: u64,
 }
 
 /// Emitted at the end of `process_queue` with batch-level summary.
@@ -125,17 +128,22 @@ pub struct BufferRefilledEvent {
     /// USDC vault balance after the batch completed (6 decimals).
     pub new_buffer_balance: u64,
     /// Number of entries that received a USDC payout in this batch.
-    pub processed_count: u32,
+    /// Widened to u64 in Phase 13b (bounded by `process_queue`'s
+    /// `MAX_BATCH_ENTRIES = 50` in practice, but the type now matches the
+    /// queue's u64 indices).
+    pub processed_count: u64,
     /// Number of cleared (rescued) entries skipped during traversal.
-    pub skipped_count: u32,
+    /// Widened to u64 in Phase 13b.
+    pub skipped_count: u64,
 }
 
 /// Emitted when a stuck queue entry is rescued.
 /// EVM equivalent: `RedemptionRescued(uint256 indexed index, address originalUser, address recipient, uint256 okuMAmount, uint256 dollarValue)`
 #[event]
 pub struct RedemptionRescuedEvent {
-    /// Index of the rescued entry
-    pub queue_index: u32,
+    /// Absolute index of the rescued entry. Widened from u32 to u64 in
+    /// Phase 13b.
+    pub queue_index: u64,
     /// Original user who was owed redemption
     pub original_user: Pubkey,
     /// Recipient who received the OkuMoney

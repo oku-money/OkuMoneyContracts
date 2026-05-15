@@ -14,12 +14,17 @@
  */
 
 // lite_psm — programs/lite-psm/src/state.rs
-export const PSM_CONFIG_LEN = 690;          // const _: () = assert!(PsmConfig::LEN == 690);
-export const REDEMPTION_QUEUE_LEN = 505;     // const _: () = assert!(RedemptionQueue::LEN == 505);
-export const BRIDGE_CONFIG_LEN = 487;        // const _: () = assert!(BridgeConfig::LEN == 487);
-export const BRIDGE_NONCE_LEN = 12;          // 8 disc + 1 bump + 1 is_init + 2 chain_id (impl LEN; NB: u64 next_nonce is 8) — 8+1+1+2+8=20
-// note: actual LEN above includes 8 disc + 1 bump + 1 is_init + 2 chain_id + 8 next_nonce = 20.
-// Re-check on next review of state.rs::BridgeNonce::LEN.
+export const PSM_CONFIG_LEN = 690;            // const _: () = assert!(PsmConfig::LEN == 690);
+export const REDEMPTION_QUEUE_LEN = 9_640;    // const _: () = assert!(RedemptionQueue::LEN == 9_640);
+                                              // Zero-copy ring at MAX_ENTRIES=200 (Phase 13b).
+                                              // Was 505 at the old MAX_ENTRIES=10 + u32 head/tail.
+                                              // Capped at 200 (not the spec target of 500) by Solana's
+                                              // MAX_PERMITTED_DATA_INCREASE = 10_240 single-CPI alloc
+                                              // budget; a 500-entry queue (~24 KB) would need a
+                                              // multi-step init+realloc deploy flow.
+export const BRIDGE_CONFIG_LEN = 487;         // const _: () = assert!(BridgeConfig::LEN == 487);
+export const BRIDGE_NONCE_LEN = 20;           // const _: () = assert!(BridgeNonce::LEN == 20);
+                                              //   8 disc + 1 bump + 1 is_init + 2 chain_id + 8 next_nonce = 20
 
 // oku_dollar — programs/oku-dollar/src/state.rs
 export const OKU_DOLLAR_CONFIG_LEN = 330;    // const _: () = assert!(OkuDollarConfig::LEN == 330);

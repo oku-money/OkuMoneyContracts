@@ -30,6 +30,8 @@ import {
   initializeVault,
   initializeRouter,
   verifyDeployment,
+  initializeBlacklistExemptIfNeeded,
+  setupRouterAltIfMissing,
 } from './lib';
 
 // ============================================================================
@@ -104,7 +106,13 @@ async function main() {
   logger.log('');
 
   // Initialize PSM
-  const { psmConfig, redemptionQueue, bridgeConfig, vaultOkuMoney } = await initializePsm(
+  const {
+    psmConfig,
+    redemptionQueue,
+    bridgeConfig,
+    vaultUsdc: psmVaultUsdc,
+    vaultOkuMoney: psmOkuMoneyEscrow,
+  } = await initializePsm(
     provider,
     programIds.litePsm,
     usdcMint,
@@ -116,7 +124,7 @@ async function main() {
   logger.log('');
 
   // Initialize Vault
-  const { vaultConfig, usdOkuMint } = await initializeVault(
+  const { vaultConfig, usdOkuMint, reserveVault: vaultOkuMoney } = await initializeVault(
     provider,
     programIds.okuDollar,
     programIds.litePsm,
@@ -152,7 +160,17 @@ async function main() {
       bridgeConfig: bridgeConfig.toBase58(),
       vaultConfig: vaultConfig.toBase58(),
       routerConfig: routerConfig.toBase58(),
-      psmOkuMoneyEscrow: vaultOkuMoney.toBase58(),
+      // PSM-owned ATAs (created by `initialize()` / `setup_oku_money_escrow()`).
+      // Both are referenced by `admin:setup-router-alt` and admin/bridge
+      // scripts; persist them rather than re-deriving from mint+config at
+      // every call site.
+      psmVaultUsdc: psmVaultUsdc.toBase58(),
+      psmOkuMoneyEscrow: psmOkuMoneyEscrow.toBase58(),
+      // Vault-owned OkuMoney reserve ATA, returned by `initializeVault`
+      // as `reserveVault`. Distinct from `psmOkuMoneyEscrow` above:
+      //   - `psmOkuMoneyEscrow` holds queued-redemption escrow on the PSM.
+      //   - `vaultOkuMoney` holds the OkuDollar vault's reserves backing usdOku.
+      vaultOkuMoney: vaultOkuMoney.toBase58(),
     },
     authorities: {
       coldMultisig: authorities.psm.roleAdmin.toBase58(),
@@ -164,17 +182,58 @@ async function main() {
 
   saveDeployment(network, deployment);
 
+  // -----------------------------------------------------------------
+  // Post-init lockdown (idempotent — safe to re-run, no-ops on second
+  // pass). Previously documented as "run these admin scripts after
+  // deploy:init", which was easy to miss. Wiring them here removes the
+  // human-error surface.
+  // -----------------------------------------------------------------
+
+  // Step 1: lock down `PsmConfig.blacklist_exempt_{bridge,router}` so
+  // `freeze_account` cannot brick the bridge or router PDAs. One-shot
+  // on-chain; the helper skips if already initialised.
+  try {
+    await initializeBlacklistExemptIfNeeded(
+      provider,
+      programIds.litePsm,
+      programIds.okuBridgeRouter
+    );
+  } catch (err: any) {
+    logger.warning(
+      `Blacklist-exempt initialization failed (non-fatal): ${err.message}. ` +
+        `Re-run manually with: npm run admin:blacklist-exempt`
+    );
+  }
+  logger.log('');
+
+  // Step 2: create the router Address Lookup Table so `mint_usd_oku`
+  // and `redeem_usd_oku` fit under the v0 tx-size ceiling. The helper
+  // skips if the ALT is already recorded in the deployment file AND
+  // alive on chain.
+  try {
+    await setupRouterAltIfMissing(provider, network);
+  } catch (err: any) {
+    logger.warning(
+      `Router ALT setup failed (non-fatal): ${err.message}. ` +
+        `Re-run manually with: npm run admin:setup-router-alt`
+    );
+  }
+  logger.log('');
+
   // Mirror into the repo-root testnet-addresses.json registry (non-localnet only)
+  // — runs AFTER post-init so the registry captures the ALT too.
   if (network !== 'localnet') {
     try {
-      syncSvmRegistry(deployment);
+      const finalDeployment = loadDeployment(network)!;
+      syncSvmRegistry(finalDeployment);
     } catch (err: any) {
       logger.warning(`Registry sync failed (non-fatal): ${err.message}`);
     }
   }
 
-  // Verify
-  await verifyDeployment(provider, deployment);
+  // Verify — reads the latest persisted deployment file (post-ALT).
+  const finalDeployment = loadDeployment(network)!;
+  await verifyDeployment(provider, finalDeployment);
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
   logger.log('');

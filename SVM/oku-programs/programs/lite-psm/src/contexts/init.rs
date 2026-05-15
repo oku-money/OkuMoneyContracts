@@ -83,7 +83,7 @@ pub struct SetupRedemptionQueue<'info> {
         seeds = [RedemptionQueue::SEED],
         bump
     )]
-    pub redemption_queue: Box<Account<'info, RedemptionQueue>>,
+    pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
 
     pub system_program: Program<'info, System>,
 }

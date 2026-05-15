@@ -1,8 +1,14 @@
-//! # OkuMoney SVM Constants (Lite-PSM)
+//! # Lite-PSM constants
 //!
-//! Numeric constants for the Lite-PSM program. Math helpers live in
-//! `crate::helpers::math` so this module stays purely declarative
-//! (mirrors `oku-dollar/src/constants.rs`).
+//! Protocol-wide constants (`PRECISION`, `BASIS_POINTS`, `MAX_OKU_M_PRICE`,
+//! oracle staleness bounds) live in the workspace crate `oku-shared` and
+//! are re-exported here for ergonomics — call sites continue to write
+//! `use crate::constants::*` without caring where the constant is
+//! authored.
+//!
+//! Bridge-specific constants (deadline bounds, wire-format lengths, the
+//! `skip_nonce` cap) stay in this module because they have no
+//! `oku-dollar` counterpart.
 //!
 //! ## Terminology Legend
 //!
@@ -40,13 +46,18 @@
 //! | OkuDollar | 18 | 6 |
 //! | Multipliers | 18 (1e18 = $1) | 9 (1e9 = $1) |
 
-/// Standard precision for price and multiplier calculations.
-/// 1e9 = $1.00 on SVM (equivalent to 1e18 on EVM).
-pub const PRECISION: u64 = 1_000_000_000;
+// ---------------------------------------------------------------------------
+// Re-exports from the shared workspace crate
+// ---------------------------------------------------------------------------
 
-/// Basis points denominator (10000 = 100%).
-/// Used for fee calculations (e.g., 10 bps = 0.1%).
-pub const BASIS_POINTS: u64 = 10_000;
+pub use oku_shared::{
+    BASIS_POINTS, MAX_OKU_M_PRICE, ORACLE_MAX_STALENESS_SECS, ORACLE_MIN_STALENESS_SECS,
+    PRECISION,
+};
+
+// ---------------------------------------------------------------------------
+// Bridge-specific constants (no oku-dollar counterpart)
+// ---------------------------------------------------------------------------
 
 /// Lower bound for the bridge deadline (in seconds). Anything below this is
 /// rejected by `initialize_bridge` / `update_bridge_deadline` because deadlines
@@ -84,25 +95,3 @@ pub const MAX_SUPPORTED_CHAINS: u8 = 32;
 /// `next_nonce.checked_add(1)`. EVM `OkuBridge.skipNonce` increments by
 /// exactly 1; SVM allows arbitrary delta but caps it here.
 pub const MAX_NONCE_SKIP: u64 = 10_000;
-
-// ===== Oracle staleness bounds =====
-
-/// Lower bound on the configurable oracle staleness threshold. Below this,
-/// freshness is so tight that benign network jitter will force `mint_oku_m`
-/// to fall through into a hard-fail oracle path. Mirrors EVM
-/// `Constants.ORACLE_MIN_STALENESS`.
-pub const ORACLE_MIN_STALENESS_SECS: i64 = 60;
-
-/// Upper bound on the configurable oracle staleness threshold. Above this,
-/// the oracle is essentially always "fresh" and provides no protection.
-/// Mirrors EVM `Constants.ORACLE_MAX_STALENESS` (7 days).
-pub const ORACLE_MAX_STALENESS_SECS: i64 = 7 * 24 * 60 * 60;
-
-// ===== Yield-rebaser sanity bounds =====
-
-/// Maximum allowed `oku_m_price` ceiling. Even with the rebaser key
-/// compromised, the rebaser cannot push the price beyond this value, which
-/// keeps subsequent multiplications inside the `u128` intermediate space and
-/// avoids permanent DoS via overflow. Set to 1e15 = $1,000,000.00 per
-/// OkuMoney token, which is far above any realistic yield trajectory.
-pub const MAX_OKU_M_PRICE: u64 = 1_000_000_000_000_000;

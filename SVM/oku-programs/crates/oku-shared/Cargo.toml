@@ -1,0 +1,18 @@
+[package]
+name = "oku-shared"
+version = "0.1.0"
+description = "OkuMoney SVM — protocol-wide constants and pure-math primitives shared by lite-psm and oku-dollar."
+edition = "2021"
+
+[lib]
+name = "oku_shared"
+# Pure-Rust library, no on-chain entrypoint. Mirrors the role of
+# `EVM/src/lib/Constants.sol` + `EVM/src/lib/MathLib.sol` on the
+# Solidity side: one source of truth for protocol-wide invariants
+# and overflow-safe arithmetic, no program logic.
+
+[dependencies]
+# Intentionally zero dependencies. Keeping this crate dep-free means a
+# `cargo check` on it costs ~0.1s, builds with any Rust toolchain that
+# can compile our programs, and never drags in conflicting versions of
+# `solana-*` / `anchor-lang` into the workspace graph.

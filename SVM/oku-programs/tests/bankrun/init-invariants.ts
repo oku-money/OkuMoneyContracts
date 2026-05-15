@@ -25,7 +25,7 @@ import { Keypair, PublicKey, SystemProgram, Transaction, SYSVAR_RENT_PUBKEY } fr
 import { expect } from "chai";
 import { LitePsm } from "../../target/types/lite_psm";
 import { startBankrun, BankrunHarness, createMintViaBankrun } from "../shared/bankrun";
-import { resetPsmSingleton } from "../shared/setup";
+
 
 describe("init invariants (TransferHook reject)", () => {
   let h: BankrunHarness;
@@ -33,7 +33,6 @@ describe("init invariants (TransferHook reject)", () => {
   let payer: Keypair;
 
   before(async () => {
-    resetPsmSingleton();
     h = await startBankrun();
     program = h.program;
     payer = h.payer;

@@ -116,9 +116,13 @@ pub mod lite_psm {
         instructions::psm::withdraw_buffer(ctx, amount)
     }
 
-    /// Rescue a stuck queue entry — returns escrowed OkuMoney to recipient
-    /// Only queue_processor can call (matches EVM's rescueQueueEntry)
-    pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u32) -> Result<()> {
+    /// Rescue a stuck queue entry — returns escrowed OkuMoney to recipient.
+    /// Only queue_processor can call (matches EVM's rescueQueueEntry).
+    ///
+    /// `queue_index` widened from u32 → u64 in Phase 13b alongside the
+    /// `RedemptionQueue::{head,tail}` widening. Indexer / orchestrator code
+    /// must pass the index as a `BN`/bigint on the TS side.
+    pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u64) -> Result<()> {
         instructions::psm::rescue_queue_entry(ctx, queue_index)
     }
 

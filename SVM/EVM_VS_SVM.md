@@ -10,6 +10,30 @@ Solana's runtime, account model, and Token-2022 layout force a number of
 deliberate departures. None of the items below are bugs; they are documented
 trade-offs.
 
+## Workspace layout (where the EVM libs went)
+
+EVM groups protocol-wide invariants into `EVM/src/lib/`:
+
+| EVM file | SVM equivalent |
+|---|---|
+| `lib/Constants.sol` | `crates/oku-shared/src/constants.rs` |
+| `lib/MathLib.sol` | `crates/oku-shared/src/math.rs` |
+| `lib/YieldSandwichGuard.sol` | `programs/lite-psm/src/helpers/yield_lock.rs` (PSM-side) + `programs/oku-dollar/src/helpers.rs::check_vault_yield_lock` (vault-side) |
+| `lib/Roles.sol` | `programs/lite-psm/src/roles.rs`, `programs/oku-dollar/src/roles.rs`, `programs/oku-bridge-router/src/roles.rs` (split because each program owns its own RBAC enum) |
+| `lib/Errors.sol` | `programs/{lite-psm,oku-dollar,oku-bridge-router}/src/errors.rs` (split because Anchor expects per-program `#[error_code]` enums) |
+| `lib/events/*.sol` | `programs/*/src/events.rs` (split; same reason as errors) |
+| `lib/SafeApprove.sol` | not ported — SPL Token-2022 doesn't have the EIP-20 allowance-zeroing footgun |
+| `lib/ReentrancyGuardUpgradeable.sol` | not ported — Solana's account-lock model + no fallback fns means reentrancy isn't reachable the same way; the no-`TransferHook` init invariant closes the one residual path |
+
+`oku-shared` is a pure-Rust workspace crate with **zero dependencies**
+(no `solana-*`, no `anchor-lang`). It lives in `crates/` rather than
+`programs/` because `anchor build` walks `programs/*` and requires every
+member to declare an `idl-build` feature; `crates/*` is for ordinary
+workspace libs. Both `lite-psm` and `oku-dollar` re-export the relevant
+shared constants from their own `constants.rs` modules so call sites
+still write `use crate::constants::*` without caring where the value is
+authored.
+
 ## Token model and precision
 
 | Aspect | EVM | SVM |
@@ -200,17 +224,46 @@ placements that would split the dead supply.)
 ## Queue model
 
 EVM `RedemptionQueue` is mapping-backed and effectively unbounded. SVM's
-current implementation uses a fixed `[QueueEntry; 10]` ring buffer
-(see `state::RedemptionQueue::MAX_ENTRIES`). This is an internal-prototype
-limitation; a follow-up (TRACKER Phase 4c) will replace it with per-user
-PDAs to lift the cap. Until then, operators must keep the buffer topped
-up to ensure `redeem_oku_m` falls into the instant path.
+implementation uses a fixed `[QueueEntry; 200]` zero-copy ring buffer
+(see `state::RedemptionQueue::MAX_ENTRIES`).
 
-EVM `processQueue(startIndex, endIndex, approveAmount)` takes a USDC
-approval and an index range; SVM `process_queue(max_entries)` takes only a
-batch size and uses CPI signer-based authority (no approval). Phase 8.1
-also added a `BufferRefilledEvent` emitted at the end of the SVM batch for
-indexer-friendly batch summary, mirroring EVM `BufferRefilled`.
+**Sizing constraint.** The 200-entry cap is bounded by Solana's
+`MAX_PERMITTED_DATA_INCREASE = 10_240` byte cap on CPI-driven account
+allocations, which Anchor's `init` constraint goes through via the
+System Program. A 200-entry queue is 9 640 bytes total — fits in one
+shot. The original spec target was 500 (~24 KB); reaching that would
+require either a multi-step `init + 2×realloc` deploy flow or
+migrating to per-user PDAs. Both deferred — 200 closes the
+operationally-urgent gap (the pre-Phase-13b cap was 10) and is bounded
+by a documented Solana runtime constant, not by a code limitation we
+can fix from the program side.
+
+**Why zero-copy.** A naive `Account<RedemptionQueue>` at the
+200-entry size would Borsh-deserialize ~9.6 KB into a BPF stack frame
+on every handler entry and immediately overflow Solana's 4 KB stack.
+`#[account(zero_copy)]` keeps the data in the account buffer and
+byte-indexes into it via `AccountLoader::{load, load_mut, load_init}`.
+The whole struct never lives on the stack. This is the standard
+Anchor pattern for accounts > ~3-4 KB.
+
+**Approximate-FIFO acceptable.** The on-chain ring buffer preserves
+strict FIFO ordering by absolute `head` / `tail` indices (now `u64`,
+widened from `u32` in Phase 13b). The user-visible "approximate FIFO"
+caveat from the deferred-Phase-4c outline does not apply here — strict
+on-chain FIFO survived the migration intact.
+
+**Instruction signature differences.** EVM `processQueue(startIndex,
+endIndex, approveAmount)` takes a USDC approval and an index range;
+SVM `process_queue(max_entries)` takes only a batch size and uses CPI
+signer-based authority. Phase 13b adds a hard `MAX_BATCH_ENTRIES = 50`
+cap on the SVM side to keep CU usage predictable across the new
+larger ring (200 entries × ~4 K CU per entry on burn+transfer would
+otherwise let a misconfigured orchestrator tx OOM the budget).
+
+Phase 8.1's `BufferRefilledEvent` (emitted at end of batch for indexer
+reconciliation) still applies; its `processed_count` / `skipped_count`
+fields were widened to `u64` in Phase 13b alongside the head/tail
+widening.
 
 ## Vault rebasing model (OkuDollar)
 

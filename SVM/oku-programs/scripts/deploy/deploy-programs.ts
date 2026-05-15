@@ -110,6 +110,29 @@ async function main() {
   logger.log('');
   logger.info('Program IDs saved to: deployments/' + network + '.json');
   logger.info('');
+
+  // Anchor.toml hygiene: post-deploy, the operator should update the
+  // network-specific section to the freshly-deployed IDs. We deliberately
+  // keep [programs.devnet] and [programs.localnet] as SEPARATE sections
+  // (even when they currently coincide) — this preserves the option to
+  // rotate one cluster's keypairs without forcing the other to follow.
+  if (network === 'devnet' || network === 'mainnet-beta') {
+    const tomlSection =
+      network === 'mainnet-beta' ? 'mainnet' : network;
+    logger.warning('Update Anchor.toml manually:');
+    logger.log('');
+    logger.log(`[programs.${tomlSection}]`);
+    logger.log(`lite_psm          = "${programIds.litePsm.toBase58()}"`);
+    logger.log(`oku_dollar        = "${programIds.okuDollar.toBase58()}"`);
+    logger.log(`oku_bridge_router = "${programIds.okuBridgeRouter.toBase58()}"`);
+    logger.log('');
+    logger.info(
+      'Until Anchor.toml matches, the [addressBook] mismatch warning will'
+    );
+    logger.info('fire on every admin/bridge script invocation.');
+    logger.log('');
+  }
+
   logger.info('Next step: Run initialization');
   logger.info(`  npm run deploy:init`);
 }

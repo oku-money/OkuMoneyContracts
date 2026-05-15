@@ -18,6 +18,7 @@ use anchor_lang::prelude::*;
 /// PSM configuration PDA
 /// Seeds: ["psm_config"]
 #[account]
+#[derive(InitSpace)]
 pub struct PsmConfig {
     /// PDA bump seed
     pub bump: u8,
@@ -102,52 +103,116 @@ pub struct PsmConfig {
 impl PsmConfig {
     pub const SEED: &'static [u8] = b"psm_config";
 
-    /// Space needed for PsmConfig account
-    /// 8 (discriminator) + 1 (bump) + 32*12 (authority pubkeys) + 32*4 (token pubkeys)
-    ///   + 8*2 (u64s) + 1 (bool) + 32 (oracle) + 8 (i64 staleness) + 8 (u64 last_yield_slot)
-    ///   + 8 (u64 oku_m_price) + 32*2 (blacklist_exempt pubkeys) + 32 (pyth_program_owner)
-    /// = 8 + 1 + 384 + 128 + 16 + 1 + 32 + 8 + 8 + 8 + 64 + 32 = 690 bytes
-    pub const LEN: usize =
-        8 + 1 + 32 * 12 + 32 * 4 + 8 * 2 + 1 + 32 + 8 + 8 + 8 + 32 * 2 + 32;
+    /// Space needed for PsmConfig account: 8 byte discriminator +
+    /// `InitSpace`-derived field sum. Pinned to 690 bytes by the
+    /// compile-time assertion below; if a reviewer changes a field's
+    /// width the assertion fires.
+    pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
 
 // Compile-time assertion: if PsmConfig layout changes, this will fail to compile.
+// (690 = 8 disc + 32*12 authorities + 32*4 token refs + 8*2 limits + 1 paused
+//      + 32 oracle + 8 staleness + 8 last_yield_slot + 8 oku_m_price
+//      + 32*2 blacklist_exempt + 32 pyth_program_owner + 1 bump.)
 const _: () = assert!(PsmConfig::LEN == 690);
 
-/// Redemption queue PDA
-/// Seeds: ["redemption_queue"]
-#[account]
+/// Redemption queue PDA — zero-copy ring buffer.
+///
+/// Phase 13b: moved from `#[account]` (Borsh-deserialized into a stack frame
+/// on every handler entry) to `#[account(zero_copy)]` (byte-indexed directly
+/// out of account data, no stack pressure). This is what unblocks the
+/// `MAX_ENTRIES` bump from 10 to 200; the previous cap was a BPF stack
+/// constraint, not an account-size constraint.
+///
+/// **Why 200 and not 500.** The original Phase 13b plan targeted 500
+/// entries. Solana's runtime caps CPI-driven account allocations at
+/// `MAX_PERMITTED_DATA_INCREASE = 10_240` bytes per call — and Anchor's
+/// `init` constraint goes through a `system_program::create_account` CPI
+/// for the allocation. A 500-entry queue would be ~24 KB and require a
+/// multi-step `init + realloc + realloc` deploy flow. 200 entries fits
+/// into the 10 KB single-CPI budget with 600 bytes of headroom, keeps
+/// the single-step `setup_redemption_queue` flow, and is still a 20×
+/// improvement over the pre-Phase-13b cap of 10. See
+/// `SVM/EVM_VS_SVM.md` for the divergence note.
+///
+/// Wire layout (`#[repr(C)]`, packed to native alignment):
+///
+/// ```text
+///   8   Anchor discriminator
+///   1   bump
+///   7   _pad0  (align head to 8)
+///   8   head
+///   8   tail
+///   8   total_queued_oku_m
+///  48 * 200   entries
+/// ```
+///
+/// Total: 8 + 1 + 7 + 8 + 8 + 8 + 9_600 = **9 640** bytes. See the
+/// compile-time `assert!` below.
+///
+/// Field-access rules:
+/// - Use `AccountLoader<RedemptionQueue>` in contexts, never
+///   `Account<RedemptionQueue>` — the latter would attempt to Borsh-deserialize
+///   the whole struct into a stack frame and overflow.
+/// - `load()` for read-only, `load_mut()` for read-write. Drop the borrow
+///   before any CPI that re-borrows the account info (the borrow is a
+///   runtime `RefCell` borrow under the hood).
+/// - `load_init()` only at the one `init`-constraint site
+///   (`setup_redemption_queue`).
+///
+/// Seeds: `["redemption_queue"]`.
+#[account(zero_copy)]
+#[repr(C)]
 pub struct RedemptionQueue {
     /// PDA bump seed
     pub bump: u8,
-    /// Index of next entry to process (head of queue)
-    pub head: u32,
-    /// Index of next slot to write (tail of queue)
-    pub tail: u32,
-    /// Running total of OkuMoney held in escrow (updated on enqueue/process/rescue)
+    /// Padding so `head` lands on an 8-byte boundary. Reserved; do not use.
+    pub _pad0: [u8; 7],
+    /// Index of next entry to process (head of queue).
+    ///
+    /// Widened from `u32` (Phase 13a) to `u64` (Phase 13b). At 500 entries
+    /// the previous u32 head/tail would wrap after ~4.3B enqueues — fine
+    /// in practice but uncomfortably finite. `u64` is effectively unbounded
+    /// (~5.8e10 years at 100 enqueues/sec).
+    pub head: u64,
+    /// Index of next slot to write (tail of queue). See `head` for the u64
+    /// rationale.
+    pub tail: u64,
+    /// Running total of OkuMoney held in escrow (updated on
+    /// enqueue/process/rescue).
     pub total_queued_oku_m: u64,
-    /// Queue entries (fixed array for predictable sizing)
-    /// Size must match MAX_ENTRIES constant below
-    pub entries: [QueueEntry; 10],
+    /// Ring-buffer entries. Index into via
+    /// `entries[(head_or_tail % MAX_ENTRIES) as usize]`.
+    pub entries: [QueueEntry; RedemptionQueue::MAX_ENTRIES],
 }
 
 impl RedemptionQueue {
     pub const SEED: &'static [u8] = b"redemption_queue";
-    /// Maximum queue entries: 10 (limited by Solana BPF 4KB stack constraints)
-    /// Note: Spec calls for 500, but Solana's 4KB BPF stack limit with complex account
-    /// contexts (Initialize has 15+ accounts) constrains us to ~10 entries practically.
-    /// 10 entries = 497 bytes for array, well within limits.
-    /// Queue is a safety valve; if filled, operational intervention is needed (per spec).
-    pub const MAX_ENTRIES: usize = 10;
 
-    /// Space needed for RedemptionQueue account
-    /// 8 (discriminator) + 1 (bump) + 4*2 (head/tail) + 8 (total_queued_oku_m) + 48 * MAX_ENTRIES (fixed array)
-    /// = 8 + 1 + 8 + 8 + 48*10 = 505 bytes
-    pub const LEN: usize = 8 + 1 + 4 * 2 + 8 + QueueEntry::LEN * Self::MAX_ENTRIES;
+    /// Maximum queue entries: 200 (Phase 13b).
+    ///
+    /// Before Phase 13b this was 10 (BPF stack limit on the old
+    /// `Account<RedemptionQueue>` deserialization path). The zero-copy
+    /// migration eliminated the stack constraint; 200 is the largest
+    /// value that fits in a single-CPI `system_program::create_account`
+    /// allocation, given Solana's `MAX_PERMITTED_DATA_INCREASE = 10_240`
+    /// cap on CPI-driven allocations / reallocs.
+    ///
+    /// 200 entries × 48 bytes = 9 600 bytes of array. Account rent at
+    /// this size is ~0.067 SOL, paid once at `setup_redemption_queue`
+    /// time by the deployer keypair.
+    pub const MAX_ENTRIES: usize = 200;
+
+    /// Account size (8-byte Anchor discriminator + struct size).
+    ///
+    /// The `assert!` below pins the value at the Rust-tracked figure 24_040
+    /// and will hard-fail to compile if a field-type change drifts the
+    /// layout. The TS-side mirror lives in `scripts/lib/account-sizes.ts`.
+    pub const LEN: usize = 8 + core::mem::size_of::<Self>();
 
     /// Check if the queue is full
     pub fn is_full(&self) -> bool {
-        self.pending_count() >= Self::MAX_ENTRIES as u32
+        self.pending_count() >= Self::MAX_ENTRIES as u64
     }
 
     /// Check if the queue is empty
@@ -155,33 +220,52 @@ impl RedemptionQueue {
         self.head == self.tail
     }
 
-    /// Get number of pending entries (wrapping subtraction handles u32 overflow)
-    pub fn pending_count(&self) -> u32 {
+    /// Get number of pending entries (wrapping subtraction handles u64 overflow).
+    pub fn pending_count(&self) -> u64 {
         self.tail.wrapping_sub(self.head)
     }
 }
 
-/// A single entry in the redemption queue
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Default)]
+/// A single entry in the redemption queue.
+///
+/// `#[zero_copy]` (no `unsafe`) is Anchor's marker for inner types embedded
+/// in `#[account(zero_copy)]` accounts. It derives the bytemuck `Pod` +
+/// `Zeroable` impls and registers the type with Anchor's IDL build so the
+/// generated TS client can decode it. `#[repr(C)]` is required and has no
+/// implicit padding here (`Pubkey` is align-1, `u64`/`i64` align-8; natural
+/// C layout aligns correctly to 48 bytes — pinned by the assert below).
+#[zero_copy]
+#[derive(Default)]
+#[repr(C)]
 pub struct QueueEntry {
     /// User who is owed redemption
     pub user: Pubkey,
-    /// OkuMoney amount held in escrow
-    /// The actual USDC payout will be calculated at process_queue time
-    /// using the current oku_m_price multiplier
+    /// OkuMoney amount held in escrow.
+    /// The actual USDC payout is calculated at `process_queue` time using
+    /// the current `oku_m_price` multiplier.
     pub oku_m_amount: u64,
     /// Timestamp when queued (kept for audit trail)
     pub timestamp: i64,
 }
 
 impl QueueEntry {
-    /// Space for a single queue entry: 32 + 8 + 8 = 48 bytes
-    pub const LEN: usize = 32 + 8 + 8;
+    /// Space for a single queue entry (no account discriminator — inner
+    /// type only): `32 user + 8 oku_m_amount + 8 timestamp = 48 bytes`.
+    pub const LEN: usize = core::mem::size_of::<Self>();
 }
+
+// Compile-time assertions: lock the on-chain layout for the queue family.
+// Any field-type drift will fail to compile here with a clear pointer back.
+const _: () = assert!(QueueEntry::LEN == 48);
+const _: () = assert!(core::mem::size_of::<RedemptionQueue>() == 9_632);
+const _: () = assert!(RedemptionQueue::LEN == 9_640);
+// 9_640 is comfortably under Solana's `MAX_PERMITTED_DATA_INCREASE = 10_240`
+// CPI-allocation cap, so `setup_redemption_queue` can allocate in one shot.
 
 /// Bridge configuration PDA
 /// Seeds: ["bridge_config"]
 #[account]
+#[derive(InitSpace)]
 pub struct BridgeConfig {
     /// PDA bump seed
     pub bump: u8,
@@ -250,10 +334,10 @@ pub struct BridgeConfig {
 impl BridgeConfig {
     pub const SEED: &'static [u8] = b"bridge_config";
 
-    /// Space needed for BridgeConfig account
-    /// 8 (discriminator) + 1 (bump) + 32*12 (authority pubkeys) + 2 (fee_bps) + 8*2 (min/max amounts) + 1 (is_paused) + 8 (bridge_deadline_secs) + 2 (source_chain_id) + 2*32 (chain array) + 1 (chain count)
-    /// = 8 + 1 + 384 + 2 + 16 + 1 + 8 + 2 + 64 + 1 = 487 bytes
-    pub const LEN: usize = 8 + 1 + 32 * 12 + 2 + 8 * 2 + 1 + 8 + 2 + 2 * 32 + 1;
+    /// Space needed for BridgeConfig account: 8 byte discriminator +
+    /// `InitSpace`-derived field sum. Pinned at 487 bytes by the
+    /// assertion below.
+    pub const LEN: usize = 8 + Self::INIT_SPACE;
 
     /// Check if a chain is supported
     pub fn is_chain_supported(&self, chain_id: u16) -> bool {
@@ -308,6 +392,7 @@ impl BridgeConfig {
 /// Bridge nonce tracking PDA (one per destination chain)
 /// Seeds: ["bridge_nonce", destination_chain_id.to_le_bytes()]
 #[account]
+#[derive(InitSpace)]
 pub struct BridgeNonce {
     /// PDA bump seed
     pub bump: u8,
@@ -322,14 +407,15 @@ pub struct BridgeNonce {
 impl BridgeNonce {
     pub const SEED: &'static [u8] = b"bridge_nonce";
 
-    /// Space needed for BridgeNonce account
-    /// 8 (discriminator) + 1 (bump) + 1 (is_initialized) + 2 (chain_id) + 8 (nonce) = 20 bytes
-    pub const LEN: usize = 8 + 1 + 1 + 2 + 8;
+    /// Space needed for BridgeNonce account: 8 byte discriminator +
+    /// `InitSpace`-derived field sum. Pinned at 20 bytes.
+    pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
 
 /// Processed bridge request PDA (prevents replay attacks)
 /// Seeds: ["bridge_request", request_id]
 #[account]
+#[derive(InitSpace)]
 pub struct ProcessedRequest {
     /// PDA bump seed
     pub bump: u8,
@@ -346,14 +432,15 @@ pub struct ProcessedRequest {
 impl ProcessedRequest {
     pub const SEED: &'static [u8] = b"bridge_request";
 
-    /// Space needed for ProcessedRequest account
-    /// 8 (discriminator) + 1 (bump) + 32 (request_id) + 8 (timestamp) + 32 (recipient) + 8 (amount) = 89 bytes
-    pub const LEN: usize = 8 + 1 + 32 + 8 + 32 + 8;
+    /// Space needed for ProcessedRequest account: 8 byte discriminator +
+    /// `InitSpace`-derived field sum. Pinned at 89 bytes.
+    pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
 
 /// Refunded bridge request PDA (prevents double-refund)
 /// Seeds: ["bridge_refund", request_id]
 #[account]
+#[derive(InitSpace)]
 pub struct RefundedRequest {
     /// PDA bump seed
     pub bump: u8,
@@ -370,9 +457,9 @@ pub struct RefundedRequest {
 impl RefundedRequest {
     pub const SEED: &'static [u8] = b"bridge_refund";
 
-    /// Space needed for RefundedRequest account
-    /// 8 (discriminator) + 1 (bump) + 32 (request_id) + 8 (timestamp) + 32 (recipient) + 8 (amount) = 89 bytes
-    pub const LEN: usize = 8 + 1 + 32 + 8 + 32 + 8;
+    /// Space needed for RefundedRequest account: 8 byte discriminator +
+    /// `InitSpace`-derived field sum. Pinned at 89 bytes.
+    pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
 
 /// Pending refund PDA (two-step refund pattern)
@@ -385,6 +472,7 @@ impl RefundedRequest {
 ///
 /// This prevents a single compromised key from completing refunds unilaterally.
 #[account]
+#[derive(InitSpace)]
 pub struct PendingRefund {
     /// PDA bump seed
     pub bump: u8,
@@ -403,10 +491,19 @@ pub struct PendingRefund {
 impl PendingRefund {
     pub const SEED: &'static [u8] = b"pending_refund";
 
-    /// Space needed for PendingRefund account
-    /// 8 (discriminator) + 1 (bump) + 32 (request_id) + 32 (recipient) + 8 (amount) + 8 (timestamp) + 32 (initiator) = 121 bytes
-    pub const LEN: usize = 8 + 1 + 32 + 32 + 8 + 8 + 32;
+    /// Space needed for PendingRefund account: 8 byte discriminator +
+    /// `InitSpace`-derived field sum. Pinned at 121 bytes.
+    pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
+
+// Compile-time assertions: bridge family on-chain layout pins.
+const _: () = assert!(BridgeConfig::LEN == 487);
+const _: () = assert!(BridgeNonce::LEN == 20);
+const _: () = assert!(ProcessedRequest::LEN == 89);
+const _: () = assert!(RefundedRequest::LEN == 89);
+const _: () = assert!(PendingRefund::LEN == 121);
+
+
 
 /// EVM-burn → SVM-mint bridge request (80 bytes on the wire).
 ///

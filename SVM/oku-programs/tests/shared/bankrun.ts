@@ -84,10 +84,22 @@ export interface StartBankrunOptions {
   extraAccounts?: AddedAccount[];
   /** Override compute budget if a single tx needs more than the default. */
   computeMaxUnits?: bigint;
+  /**
+   * Auto-advance the bankrun slot by 1 before every
+   * `provider.sendAndConfirm`. Defaults to `true`.
+   *
+   * Why this exists: a real validator advances slots ~2.5x per second on
+   * its own; bankrun's slot is sticky until something explicitly warps
+   * it. Several program-side checks (e.g. `check_yield_lock` rejects
+   * any op in the same slot as the last `distribute_yield`) become
+   * impossible to satisfy without manual slot bumps between tests.
+   * Tests that need full control over slot timing can pass
+   * `{ autoBumpSlot: false }` and call `warpSlots(h, ...)` explicitly.
+   */
+  autoBumpSlot?: boolean;
 }
 
-/** Funder callback shape used by `tests/shared/setup.ts::initializePSMIfNeeded`. */
-export type Funder = (kps: Keypair[], lamports: number) => Promise<void>;
+
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -111,6 +123,20 @@ export async function startBankrun(
     opts.computeMaxUnits
   );
   const provider = new BankrunProvider(context);
+
+  // Auto-bump slot wrapper. Replaces `provider.sendAndConfirm` with a
+  // version that advances the bankrun slot by 1 before delegating.
+  // Default-on; tests that need to inspect slot semantics directly can
+  // opt out with `autoBumpSlot: false`.
+  if (opts.autoBumpSlot !== false) {
+    const original = provider.sendAndConfirm!.bind(provider);
+    provider.sendAndConfirm = async (tx, signers, confirmOpts) => {
+      const cur = await context.banksClient.getSlot();
+      context.warpToSlot(cur + 1n);
+      return original(tx, signers, confirmOpts);
+    };
+  }
+
   // BankrunProvider implements `Provider` from @coral-xyz/anchor; that
   // interface is structurally identical to @anchor-lang/core's `Provider`.
   // The cast is the only place where the package-name divergence surfaces.
@@ -258,11 +284,9 @@ export async function setLamports(
   h.context.setAccount(address, next);
 }
 
-/**
- * Bulk-fund a list of keypairs. This is the bankrun replacement for
- * `safeAirdropAll(...)` from `tests/shared/setup.ts` and is the canonical
- * funder callback to pass into `initializePSMIfNeeded`.
- */
+/** Bulk-fund a list of keypairs via `setLamports` (bankrun has no
+ *  `requestAirdrop`). Used by every test `before()` hook and by
+ *  `initializePsm` to credit the shared authority keypairs. */
 export async function fundKeypairs(
   h: BankrunHarness,
   kps: Keypair[],

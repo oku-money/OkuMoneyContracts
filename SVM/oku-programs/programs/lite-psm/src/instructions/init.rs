@@ -121,14 +121,23 @@ pub fn initialize(
 }
 
 /// Initialize the PSM - Step 2
-/// Creates redemption queue PDA
-/// Must be called after initialize()
+/// Creates redemption queue PDA (zero-copy ring buffer, ~9.4 KB / 9 640 bytes).
+///
+/// Uses `load_init()` because Anchor's `init` constraint allocates and
+/// zero-fills the account data; `load_init()` is the zero-copy companion
+/// that validates the discriminator wasn't set yet and returns a mutable
+/// `RefMut` over the freshly-zeroed bytes. The 200-entry array
+/// (Phase 13b cap, capped by Solana's 10 KB single-CPI allocation budget)
+/// is already zeroed; we only need to set the header.
+///
+/// Must be called after `initialize()`.
 pub fn setup_redemption_queue(ctx: Context<SetupRedemptionQueue>) -> Result<()> {
-    let queue = &mut ctx.accounts.redemption_queue;
+    let mut queue = ctx.accounts.redemption_queue.load_init()?;
     queue.bump = ctx.bumps.redemption_queue;
     queue.head = 0;
     queue.tail = 0;
-    // entries array is automatically zero-initialized by Anchor
+    queue.total_queued_oku_m = 0;
+    // entries array was already zero-filled by Anchor's `init` allocation.
 
     Ok(())
 }

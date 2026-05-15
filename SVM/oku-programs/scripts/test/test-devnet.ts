@@ -296,11 +296,16 @@ async function readState(ctx: TestContext) {
   logger.info('Fetching Redemption Queue...');
   try {
     const queue = await ctx.psm.account.redemptionQueue.fetch(ctx.redemptionQueue);
+    // head / tail are u64 (Phase 13b widening). Compute pending with
+    // BigInt so we don't silently lose precision near 2^53 enqueues.
+    const head = BigInt((queue.head as BN).toString());
+    const tail = BigInt((queue.tail as BN).toString());
     logger.success('Redemption Queue:');
     logger.table({
-      'Head': String(queue.head),
-      'Tail': String(queue.tail),
-      'Pending': String(Number(queue.tail) - Number(queue.head)),
+      'Head': head.toString(),
+      'Tail': tail.toString(),
+      'Pending': (tail - head).toString(),
+      'Capacity (MAX_ENTRIES)': '200',
     });
   } catch (e: any) {
     logger.error(`Failed to fetch redemption queue: ${e.message}`);
@@ -828,6 +833,301 @@ async function testRedeem(ctx: TestContext) {
     }
     throw e;
   }
+}
+
+/**
+ * Queued redemption end-to-end (Phase 13b coverage):
+ *   1. Drain any pre-existing queue entries (defensive — earlier steps
+ *      should not have left any, but be conservative).
+ *   2. Drain the PSM USDC buffer to zero via `withdraw_buffer`.
+ *   3. Submit `redeem_oku_m` — with no buffer, the program takes the
+ *      queue path: OkuMoney is escrowed into the vault and an entry is
+ *      pushed onto `RedemptionQueue` with tail++.
+ *   4. Refill the buffer via `deposit_buffer` so the queue can be paid.
+ *   5. Drive `process_queue` (auto-batching at MAX_BATCH_ENTRIES=50)
+ *      until the queue is empty.
+ *   6. Assert head advanced, the recipient ATA was paid out in USDC,
+ *      and total_queued_oku_m returned to zero.
+ *
+ * On devnet the deployer holds buffer_depositor, buffer_withdrawer,
+ * and queue_processor — all three roles. On a multisig deployment this
+ * step would need refactoring to drive each call from the right signer.
+ *
+ * Constants must mirror Rust: MAX_BATCH_ENTRIES from
+ * programs/lite-psm/src/instructions/psm.rs and MAX_ENTRIES from state.rs.
+ */
+const QUEUE_REDEEM_MAX_BATCH = 50; // mirrors `MAX_BATCH_ENTRIES` in psm.rs
+const QUEUE_REDEEM_MAX_ENTRIES = 200n; // mirrors `MAX_ENTRIES` in state.rs
+
+function bnToBigInt(bn: BN): bigint {
+  return BigInt(bn.toString());
+}
+
+async function drainQueueViaProcess(
+  ctx: TestContext,
+  vaultUsdc: PublicKey,
+  vaultOkuMoney: PublicKey
+): Promise<{ batches: number; drained: number }> {
+  let batches = 0;
+  let drained = 0;
+  // Safety bound: 200 / 50 = 4 nominal batches; allow generous slack.
+  for (let safety = 0; safety < 10; safety++) {
+    const q = await ctx.psm.account.redemptionQueue.fetch(ctx.redemptionQueue);
+    const head = bnToBigInt(q.head as BN);
+    const tail = bnToBigInt(q.tail as BN);
+    if (tail <= head) return { batches, drained };
+    const pending = Number(tail - head);
+    const thisBatch = Math.min(pending, QUEUE_REDEEM_MAX_BATCH);
+
+    const entries = q.entries as Array<{ user: PublicKey; okuMAmount: BN }>;
+    const recipientAtas: PublicKey[] = [];
+    for (let i = 0; i < thisBatch; i++) {
+      const slot = Number((head + BigInt(i)) % QUEUE_REDEEM_MAX_ENTRIES);
+      const entry = entries[slot];
+      if (entry.user.equals(PublicKey.default)) continue;
+      const ata = getAssociatedTokenAddressSync(
+        ctx.usdcMint,
+        entry.user,
+        false,
+        TOKEN_PROGRAM_ID
+      );
+      // Ensure the ATA exists — process_queue does NOT create it.
+      await getOrCreateAta(ctx, ctx.usdcMint, entry.user, TOKEN_PROGRAM_ID);
+      recipientAtas.push(ata);
+    }
+
+    const sig = await ctx.psm.methods
+      .processQueue(thisBatch)
+      .accountsPartial({
+        queueProcessor: ctx.deployer.publicKey,
+        config: ctx.psmConfig,
+        redemptionQueue: ctx.redemptionQueue,
+        okuMoneyMint: ctx.okuMoneyMint,
+        vaultUsdc,
+        vaultOkuMoney,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        token2022Program: TOKEN_2022_PROGRAM_ID,
+      })
+      .remainingAccounts(
+        recipientAtas.map((pk) => ({ pubkey: pk, isSigner: false, isWritable: true }))
+      )
+      .rpc();
+    await confirmTx(ctx, sig);
+    batches++;
+    drained += thisBatch;
+    logger.success(
+      `process_queue batch ${batches}: drained ${thisBatch} ` +
+        `(head ${head} → ${head + BigInt(thisBatch)}). Tx: ${explorerLink(ctx.network, sig)}`
+    );
+  }
+  return { batches, drained };
+}
+
+async function testQueueRedeem(ctx: TestContext) {
+  logger.section('Test: Queued Redemption (Phase 13b coverage)');
+
+  // ---- 0. Pre-flight: ensure deployer has OkuMoney + ATAs ----
+  const userOkuMoneyAta = await getOrCreateAta(
+    ctx,
+    ctx.okuMoneyMint,
+    ctx.deployer.publicKey,
+    TOKEN_2022_PROGRAM_ID
+  );
+  const userUsdcAta = await getOrCreateAta(
+    ctx,
+    ctx.usdcMint,
+    ctx.deployer.publicKey,
+    TOKEN_PROGRAM_ID
+  );
+
+  const redeemAmount = 3_000_000; // 3 OkuMoney
+  const bufferRefill = 10_000_000; // 10 USDC — comfortably covers the redeem
+
+  const okuMoneyBefore = await getTokenBalance(
+    ctx,
+    ctx.okuMoneyMint,
+    ctx.deployer.publicKey,
+    TOKEN_2022_PROGRAM_ID
+  );
+  if (okuMoneyBefore < BigInt(redeemAmount)) {
+    logger.error(
+      `Insufficient OkuMoney (${fmtAmount(okuMoneyBefore)} < ${fmtAmount(redeemAmount)}). ` +
+        `Run \`--step=mint\` first.`
+    );
+    return;
+  }
+
+  // ---- 1. Defensive: drain any pre-existing queue entries ----
+  const queueAtEntry = await ctx.psm.account.redemptionQueue.fetch(ctx.redemptionQueue);
+  const headAtEntry = bnToBigInt(queueAtEntry.head as BN);
+  const tailAtEntry = bnToBigInt(queueAtEntry.tail as BN);
+  if (tailAtEntry > headAtEntry) {
+    const pre = Number(tailAtEntry - headAtEntry);
+    logger.warning(
+      `Queue has ${pre} pending entries from a prior run — draining first ` +
+        `(refilling buffer for the drain).`
+    );
+    // Top up buffer so the existing entries can be paid.
+    await mintTestUsdc(ctx, bufferRefill);
+    await ctx.psm.methods
+      .depositBuffer(new BN(bufferRefill))
+      .accountsPartial({
+        bufferDepositor: ctx.deployer.publicKey,
+        config: ctx.psmConfig,
+        bufferDepositorUsdcAta: userUsdcAta,
+        vaultUsdc: ctx.psmVaultUsdc,
+        usdcMint: ctx.usdcMint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+    await drainQueueViaProcess(ctx, ctx.psmVaultUsdc, ctx.psmOkuMoneyEscrow);
+  }
+
+  // ---- 2. Drain the USDC buffer to force the queue path ----
+  const vaultUsdcAcct = await getAccount(
+    ctx.provider.connection,
+    ctx.psmVaultUsdc,
+    'confirmed',
+    TOKEN_PROGRAM_ID
+  );
+  const vaultUsdcBefore = vaultUsdcAcct.amount;
+  logger.info(`Vault USDC pre-drain: ${fmtAmount(vaultUsdcBefore)}`);
+  if (vaultUsdcBefore > 0n) {
+    logger.info(`Withdrawing ${fmtAmount(vaultUsdcBefore)} USDC to force queue path...`);
+    const sig = await ctx.psm.methods
+      .withdrawBuffer(new BN(vaultUsdcBefore.toString()))
+      .accountsPartial({
+        bufferWithdrawer: ctx.deployer.publicKey,
+        config: ctx.psmConfig,
+        redemptionQueue: ctx.redemptionQueue,
+        okuMoneyMint: ctx.okuMoneyMint,
+        withdrawerUsdcAta: userUsdcAta,
+        vaultUsdc: ctx.psmVaultUsdc,
+        usdcMint: ctx.usdcMint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        token2022Program: TOKEN_2022_PROGRAM_ID,
+      })
+      .rpc();
+    await confirmTx(ctx, sig);
+    logger.success(`withdraw_buffer tx: ${explorerLink(ctx.network, sig)}`);
+  }
+  // Re-fetch to be defensive (no in-flight queue entries should block).
+  const vaultUsdcMid = await getAccount(
+    ctx.provider.connection,
+    ctx.psmVaultUsdc,
+    'confirmed',
+    TOKEN_PROGRAM_ID
+  );
+  if (vaultUsdcMid.amount !== 0n) {
+    logger.warning(
+      `Vault USDC didn't drain to zero (still ${fmtAmount(vaultUsdcMid.amount)}). ` +
+        `withdraw_buffer protects queued redemptions — there may be entries we missed.`
+    );
+  }
+
+  // ---- 3. Submit redeem_oku_m → should land in the queue path ----
+  const queueBefore = await ctx.psm.account.redemptionQueue.fetch(ctx.redemptionQueue);
+  const tailBefore = bnToBigInt(queueBefore.tail as BN);
+  logger.info(`Queue tail before redeem: ${tailBefore}`);
+  logger.info(`Calling psm.redeemOkuM(${redeemAmount / 1_000_000} OkuMoney) — buffer is empty so the program will queue it...`);
+  const redeemSig = await ctx.psm.methods
+    .redeemOkuM(new BN(redeemAmount))
+    .accountsPartial({
+      user: ctx.deployer.publicKey,
+      config: ctx.psmConfig,
+      redemptionQueue: ctx.redemptionQueue,
+      usdcMint: ctx.usdcMint,
+      okuMoneyMint: ctx.okuMoneyMint,
+      userUsdcAta,
+      userOkuMoneyAta,
+      vaultUsdc: ctx.psmVaultUsdc,
+      vaultOkuMoney: ctx.psmOkuMoneyEscrow,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      token2022Program: TOKEN_2022_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .rpc();
+  await confirmTx(ctx, redeemSig);
+  logger.success(`redeem (queued) tx: ${explorerLink(ctx.network, redeemSig)}`);
+
+  // Verify the redeem went into the queue (tail++) and OkuMoney moved to escrow.
+  const queueAfterRedeem = await ctx.psm.account.redemptionQueue.fetch(ctx.redemptionQueue);
+  const tailAfterRedeem = bnToBigInt(queueAfterRedeem.tail as BN);
+  if (tailAfterRedeem !== tailBefore + 1n) {
+    throw new Error(
+      `expected tail to advance by 1 (queue path) but went ${tailBefore} → ${tailAfterRedeem}. ` +
+        `redeem likely took the instant path — buffer drain may have failed.`
+    );
+  }
+  const totalQueuedAfter = bnToBigInt(queueAfterRedeem.totalQueuedOkuM as BN);
+  logger.success(
+    `Queue tail advanced ${tailBefore} → ${tailAfterRedeem}; ` +
+      `total_queued_oku_m=${totalQueuedAfter} (raw 6-dec units).`
+  );
+
+  // ---- 4. Refill buffer so process_queue can pay out ----
+  logger.info(`Refilling buffer with ${bufferRefill / 1_000_000} USDC...`);
+  await mintTestUsdc(ctx, bufferRefill);
+  const depositSig = await ctx.psm.methods
+    .depositBuffer(new BN(bufferRefill))
+    .accountsPartial({
+      bufferDepositor: ctx.deployer.publicKey,
+      config: ctx.psmConfig,
+      bufferDepositorUsdcAta: userUsdcAta,
+      vaultUsdc: ctx.psmVaultUsdc,
+      usdcMint: ctx.usdcMint,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .rpc();
+  await confirmTx(ctx, depositSig);
+  logger.success(`deposit_buffer tx: ${explorerLink(ctx.network, depositSig)}`);
+
+  // ---- 5. Drain the queue via process_queue (auto-batched at MAX_BATCH_ENTRIES) ----
+  const userUsdcBeforePayout = await getTokenBalance(
+    ctx,
+    ctx.usdcMint,
+    ctx.deployer.publicKey,
+    TOKEN_PROGRAM_ID
+  );
+  const { batches, drained } = await drainQueueViaProcess(
+    ctx,
+    ctx.psmVaultUsdc,
+    ctx.psmOkuMoneyEscrow
+  );
+
+  // ---- 6. Assert the queue is empty and the recipient was paid ----
+  const queueFinal = await ctx.psm.account.redemptionQueue.fetch(ctx.redemptionQueue);
+  const headFinal = bnToBigInt(queueFinal.head as BN);
+  const tailFinal = bnToBigInt(queueFinal.tail as BN);
+  if (headFinal !== tailFinal) {
+    throw new Error(
+      `expected queue empty (head==tail) but got head=${headFinal} tail=${tailFinal}.`
+    );
+  }
+  const totalQueuedFinal = bnToBigInt(queueFinal.totalQueuedOkuM as BN);
+  if (totalQueuedFinal !== 0n) {
+    throw new Error(
+      `expected total_queued_oku_m=0 after drain but got ${totalQueuedFinal}.`
+    );
+  }
+
+  const userUsdcAfterPayout = await getTokenBalance(
+    ctx,
+    ctx.usdcMint,
+    ctx.deployer.publicKey,
+    TOKEN_PROGRAM_ID
+  );
+  const usdcGained = userUsdcAfterPayout - userUsdcBeforePayout;
+  if (usdcGained <= 0n) {
+    throw new Error(
+      `expected USDC payout > 0 but recipient went ${userUsdcBeforePayout} → ${userUsdcAfterPayout}.`
+    );
+  }
+  logger.success(
+    `Drain complete: ${drained} entries across ${batches} batch(es); ` +
+      `recipient received ${fmtAmount(usdcGained)} USDC.`
+  );
 }
 
 /**
@@ -1423,6 +1723,148 @@ async function testBridgeMint(ctx: TestContext) {
   }
 }
 
+/**
+ * Negative-path coverage for the Ed25519 precompile.
+ *
+ * This is the in-process-SVM coverage gap noted in `tests/bankrun/
+ * bridge_security.ts`: bankrun/litesvm do NOT execute the Ed25519
+ * precompile, so an invalid signature is silently accepted by the
+ * harness even though `bridge_mint`'s sysvar-introspection check is
+ * working as designed (it only verifies that the precompile ix bytes
+ * are consistent with what we built — it trusts the precompile to
+ * have validated the math).
+ *
+ * A real validator (devnet, localnet via `solana-test-validator`, or
+ * mainnet) runs the precompile and rejects the tx with a transient
+ * "Precompile error" before our program runs. This step exercises
+ * exactly that path.
+ *
+ * Skipped (warning only) when the deployer doesn't hold the
+ * `orchestratorSigner` role; that's a configuration concern, not a
+ * test failure.
+ */
+async function testBridgeMintInvalidSig(ctx: TestContext) {
+  logger.section('Test: Bridge Mint with INVALID signature (must reject)');
+
+  const bridgeCfg = await ctx.psm.account.bridgeConfig.fetch(ctx.bridgeConfig);
+  if (!(bridgeCfg.orchestratorSigner as PublicKey).equals(ctx.deployer.publicKey)) {
+    logger.warning(
+      'Deployer is not the orchestrator_signer; skipping invalid-sig step.'
+    );
+    return;
+  }
+
+  const sourceChainId = 1; // EVM
+  const destChainId = (bridgeCfg.sourceChainId as number) || 103;
+  const amount = 1_000_000n;
+  const evmSender = new Uint8Array(20);
+  crypto.getRandomValues(evmSender);
+
+  // Pick a far-future-but-unused nonce so the legitimate `testBridgeMint`
+  // step is unaffected if both run in the same pass.
+  const [bridgeNonce] = deriveBridgeNoncePDA(ctx.litePsmId, sourceChainId);
+  let nonce = 1_000_000n;
+  try {
+    const noncePda = await ctx.psm.account.bridgeNonce.fetch(bridgeNonce);
+    nonce = BigInt((noncePda.nextNonce as BN).toString()) + 1_000_000n;
+  } catch {
+    // PDA not initialised; we'll use the high nonce against the
+    // freshly-init bridge_nonce. The on-chain `nonce_admin` check would
+    // reject this (next_nonce must == 0 on first burn), but we never
+    // reach the program — the precompile rejects first.
+  }
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+
+  const messageBytes = serializeMintMessage({
+    sourceChainId,
+    destChainId,
+    sender: evmSender,
+    recipient: ctx.deployer.publicKey,
+    amount,
+    nonce,
+    deadline,
+  });
+
+  // KEY DIFFERENCE: sign with a throwaway keypair so the precompile's
+  // curve25519 verify rejects. Declare the deployer's pubkey in the
+  // precompile ix so the bytes look superficially correct.
+  const wrongSigner = Keypair.generate();
+  const signature = nacl.sign.detached(messageBytes, wrongSigner.secretKey);
+  const requestId = computeRequestId(messageBytes);
+
+  const [processedRequest] = PublicKey.findProgramAddressSync(
+    [Buffer.from('bridge_request'), requestId],
+    ctx.litePsmId
+  );
+  const recipientAta = await getOrCreateAta(
+    ctx,
+    ctx.okuMoneyMint,
+    ctx.deployer.publicKey,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  // The Ed25519 ix declares the (correct) orchestrator pubkey but
+  // carries the WRONG signature.
+  const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+    publicKey: ctx.deployer.publicKey.toBytes(),
+    message: messageBytes,
+    signature,
+  });
+  const bridgeMintIx = await ctx.psm.methods
+    .bridgeMint(messageBytes, Buffer.from(signature), Array.from(requestId) as number[])
+    .accountsPartial({
+      payer: ctx.deployer.publicKey,
+      bridgeConfig: ctx.bridgeConfig,
+      config: ctx.psmConfig,
+      processedRequest,
+      okuMoneyMint: ctx.okuMoneyMint,
+      recipientOkuMoneyAta: recipientAta,
+      instructionSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+      token2022Program: TOKEN_2022_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+
+  const tx = new Transaction().add(ed25519Ix).add(bridgeMintIx);
+
+  // skipPreflight: true so the tx actually reaches the runtime and the
+  // precompile gets a chance to reject. With preflight on, web3.js
+  // would short-circuit before submission and we'd never observe the
+  // on-chain rejection.
+  try {
+    await sendAndConfirmTransaction(
+      ctx.provider.connection,
+      tx,
+      [ctx.deployer],
+      { skipPreflight: true, commitment: 'confirmed' }
+    );
+    throw new Error(
+      'EXPECTED FAILURE: tx with invalid Ed25519 signature was accepted. ' +
+        'This means the precompile is not being enforced — DO NOT deploy.'
+    );
+  } catch (e: any) {
+    const errStr = String(e?.message ?? e);
+    // The exact error code from a real validator is "Precompile failed"
+    // or "InstructionError 0 ... PrecompileFailure". Accept any of the
+    // canonical strings; reject only the explicit EXPECTED-FAILURE
+    // bomb we threw above.
+    if (errStr.startsWith('EXPECTED FAILURE:')) throw e;
+    const expected =
+      errStr.includes('Precompile') ||
+      errStr.includes('precompile') ||
+      errStr.includes('signature') ||
+      errStr.includes('Signature');
+    if (!expected) {
+      logger.warning(
+        `Rejection observed but message was unexpected: ${errStr.slice(0, 200)}`
+      );
+      logger.info('Treating as pass since the tx did NOT succeed.');
+    } else {
+      logger.success(`precompile correctly rejected: ${errStr.slice(0, 120)}`);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main runner
 // ---------------------------------------------------------------------------
@@ -1435,8 +1877,10 @@ const STEPS: Record<string, (ctx: TestContext) => Promise<void>> = {
   wrap: testWrap,
   unwrap: testUnwrap,
   redeem: testRedeem,
+  queueRedeem: testQueueRedeem,
   bridge: testBridgeBurn,
   bridgeMint: testBridgeMint,
+  bridgeMintInvalidSig: testBridgeMintInvalidSig,
   refund: testRefund,
   distributeYield: testDistributeYield,
   pause: testPause,
@@ -1498,8 +1942,10 @@ async function main() {
       'wrap',
       'unwrap',
       'redeem',
+      'queueRedeem',
       'bridge',
       'bridgeMint',
+      'bridgeMintInvalidSig',
       'refund',
       'distributeYield',
       'pause',

@@ -24,8 +24,8 @@ import { LitePsm } from "../../target/types/lite_psm";
 import {
   psmOrchestrator,
   coldMultisig,
-  safeAirdrop,
 } from "../shared/setup";
+import { safeAirdrop } from "./_shared/legacy-funder";
 import {
   SurfpoolClient,
   createSurfpoolClient,
@@ -33,8 +33,8 @@ import {
   MAINNET_ADDRESSES,
   getMainnetRpcEndpoint,
   ALCHEMY_RPC,
-} from "../shared/surfpool";
-import { expectError } from "../shared/assertions";
+} from "./_shared/surfpool";
+import { expectError } from "./_shared/assertions";
 
 // Pyth price feed addresses on mainnet
 const PYTH_ADDRESSES = {

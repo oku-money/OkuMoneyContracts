@@ -1,8 +1,14 @@
 [workspace]
 members = [
-    "programs/*"
+    "programs/*",
+    "crates/*"
 ]
 resolver = "2"
+
+# `programs/*` are the Anchor on-chain programs (`cdylib` + `lib`).
+# `crates/*` are pure-Rust workspace libraries used by those programs.
+# Splitting them keeps `anchor build` (which walks `programs/*` and
+# requires the `idl-build` feature on every member) honest.
 
 [profile.release]
 overflow-checks = true

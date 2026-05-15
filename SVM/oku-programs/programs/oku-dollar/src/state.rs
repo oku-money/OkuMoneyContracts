@@ -3,6 +3,7 @@ use anchor_lang::prelude::*;
 /// OkuDollar vault configuration PDA
 /// Seeds: ["oku_dollar_config"]
 #[account]
+#[derive(InitSpace)]
 pub struct OkuDollarConfig {
     /// PDA bump seed
     pub bump: u8,
@@ -59,13 +60,10 @@ impl OkuDollarConfig {
     /// PDA seed for the usdOku mint (rebasing share token controlled by this vault).
     pub const USD_OKU_MINT_SEED: &'static [u8] = b"usd_oku_mint";
 
-    /// Space needed for OkuDollarConfig account.
-    ///
-    /// 8 (discriminator) + 1 (bump) + 32*5 (authorities) + 32*4 (token refs)
-    /// + 8 (usd_multiplier) + 8 (usd_last_update_time)
-    /// + 8 (last_yield_distribution_slot) + 8 (min_collateral_ratio)
-    /// + 1 (is_paused) = 330 bytes.
-    pub const LEN: usize = 8 + 1 + 32 * 5 + 32 * 4 + 8 + 8 + 8 + 8 + 1;
+    /// Space needed for OkuDollarConfig account: 8 byte discriminator +
+    /// `InitSpace`-derived field sum. Pinned at 330 bytes by the
+    /// assertion below.
+    pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
 
 // Compile-time assertion: if OkuDollarConfig layout changes, this will fail to compile

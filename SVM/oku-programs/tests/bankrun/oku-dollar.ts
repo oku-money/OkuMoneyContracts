@@ -30,8 +30,7 @@ import { LitePsm } from "../../target/types/lite_psm";
 import {
   psmOrchestrator,
   coldMultisig as psmColdMultisig,
-  initializePSMIfNeeded,
-  resetPsmSingleton,
+  initializePsm,
   DECIMALS,
 } from "../shared/setup";
 import {
@@ -152,7 +151,6 @@ describe("oku-dollar", () => {
   let vaultInitialized = false;
 
   before(async () => {
-    resetPsmSingleton();
     h = await startBankrun();
     provider = h.provider as unknown as anchor.AnchorProvider;
     payer = h.payer;
@@ -160,64 +158,36 @@ describe("oku-dollar", () => {
     psmProgram = h.program;
     program = getProgram<OkuDollar>(h, 'oku_dollar');
 
-    // Derive PSM config PDA
+    // Derive PSM config PDA up front.
     [psmConfigPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("psm_config")],
       psmProgram.programId
     );
 
-    // Check if PSM already initialized - get OkuMoney mint from it
-    let psmExists = false;
-    try {
-      const existingPsmConfig = await psmProgram.account.psmConfig.fetch(psmConfigPda);
-      psmExists = true;
-      okuMoneyMint = existingPsmConfig.okuMoneyMint;
-    } catch {
-      // PSM not initialized - we need to create OkuMoney mint
-    }
+    // Bankrun gives us a fresh cluster every time, so all of the
+    // mint-creation + PSM init runs unconditionally.
 
-    if (!psmExists) {
-      // Create OkuMoney mint (plain Token-2022; oku-dollar doesn't need
-      // the InterestBearing extension that lite-psm tests configure).
-      // PSM config PDA is the mint authority (matches production).
-      okuMoneyMint = await createMintViaBankrun(
-        h,
-        psmConfigPda,
-        psmConfigPda,
-        DECIMALS,
-        okuMoneyMintKeypair,
-        TOKEN_2022_PROGRAM_ID
-      );
-
-      // Create a standard-SPL-Token USDC mint for PSM initialization.
-      const usdcMintKeypair = Keypair.generate();
-      const usdcMint = await createMintViaBankrun(
-        h,
-        payer.publicKey,
-        payer.publicKey,
-        DECIMALS,
-        usdcMintKeypair,
-        TOKEN_PROGRAM_ID
-      );
-
-      // Initialize PSM (bankrun funder).
-      await initializePSMIfNeeded(
-        psmProgram as any,
-        payer,
-        usdcMint,
-        okuMoneyMint,
-        (kps, lamports) => fundKeypairs(h, kps, lamports)
-      );
-    } else {
-      // PSM already exists, ensure it's properly set up
-      await initializePSMIfNeeded(
-        psmProgram as any,
-        payer,
-        (await psmProgram.account.psmConfig.fetch(psmConfigPda)).usdcMint,
-        okuMoneyMint,
-        (kps, lamports) => fundKeypairs(h, kps, lamports)
-      );
-    }
+    // OkuMoney mint — plain Token-2022 (oku-dollar doesn't depend on
+    // the InterestBearing extension that lite-psm tests configure).
+    okuMoneyMint = await createMintViaBankrun(
+      h,
+      psmConfigPda,
+      psmConfigPda,
+      DECIMALS,
+      okuMoneyMintKeypair,
+      TOKEN_2022_PROGRAM_ID
+    );
+    // USDC mint — standard SPL Token.
+    const usdcMintKeypair = Keypair.generate();
+    const usdcMint = await createMintViaBankrun(
+      h,
+      payer.publicKey,
+      payer.publicKey,
+      DECIMALS,
+      usdcMintKeypair,
+      TOKEN_PROGRAM_ID
+    );
+    await initializePsm(h, psmProgram, payer, usdcMint, okuMoneyMint);
 
     // Fund test authorities via bankrun lamport injection.
     await fundKeypairs(
@@ -270,11 +240,12 @@ describe("oku-dollar", () => {
     await ensureAtaViaBankrun(h, user2.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
     await ensureAtaViaBankrun(h, reserveManager.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
 
-    // Mint OkuMoney to users via PSM (USDC -> OkuMoney).
+    // Mint OkuMoney to users via PSM (USDC -> OkuMoney). `usdcMint` is
+    // already declared in the outer scope; just read the vault pubkey
+    // off the on-chain PsmConfig.
     const OKU_MONEY_PER_USER = 10_000_000_000; // 10,000 OkuMoney each
 
     const psmConfig = await psmProgram.account.psmConfig.fetch(psmConfigPda);
-    const usdcMint = psmConfig.usdcMint;
 
     const user1UsdcAta = getAssociatedTokenAddressSync(usdcMint, user1.publicKey, false, TOKEN_PROGRAM_ID);
     const user2UsdcAta = getAssociatedTokenAddressSync(usdcMint, user2.publicKey, false, TOKEN_PROGRAM_ID);
@@ -304,13 +275,8 @@ describe("oku-dollar", () => {
     );
   });
 
-  beforeEach(async () => {
-    // Bump bankrun's slot by 1 between tests. Without this, any test that
-    // runs after `update_usd_multiplier` (or any other yield op) hits
-    // `YieldDistributionInProgress` because bankrun's slot is sticky.
-    const cur = await h.context.banksClient.getSlot();
-    h.context.warpToSlot(cur + 1n);
-  });
+  // Slot auto-bump is handled by `startBankrun({ autoBumpSlot: true })`
+  // (the default). No beforeEach slot-bump needed.
 
   // ============================================================================
   // Initialization Tests

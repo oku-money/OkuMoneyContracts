@@ -21,11 +21,17 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-# Phase 9: bankrun is the default test runner. `anchor test` is synonymous
-# with `npm test`. Fork tests need surfpool (`npm run test:fork`); the
-# legacy validator-flavoured runner survives as `npm run test:validator`
-# (an escape hatch — see SVM/README.md).
-test = "npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'"
+# `anchor test` is kept synonymous with `npm test`: runs the Rust unit
+# tests (oku-shared math + per-program helpers) first, then the bankrun
+# in-process suite. Fork tests need surfpool (`npm run test:fork`). The
+# legacy `solana-test-validator` path was retired in Phase 11.
+#
+# `RUST_LOG=` silences the verbose `solana_program_test` /
+# `solana_runtime::message_processor::stable_log` lines that bankrun's
+# native binding pipes to stderr by default. Programs' on-failure logs
+# still surface via Anchor's error pipeline; this only mutes the
+# always-on `invoke`/`success` tracing.
+test = "cargo test --workspace --quiet && RUST_LOG= npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'"
 
 [hooks]
 

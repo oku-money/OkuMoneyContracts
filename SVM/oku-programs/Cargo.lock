@@ -751,6 +751,8 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
+ "bytemuck",
+ "oku-shared",
  "solana-instructions-sysvar",
  "solana-keccak-hasher",
  "solana-pubkey 3.0.0",
@@ -850,8 +852,13 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "lite-psm",
+ "oku-shared",
  "solana-security-txt",
 ]
+
+[[package]]
+name = "oku-shared"
+version = "0.1.0"
 
 [[package]]
 name = "once_cell"

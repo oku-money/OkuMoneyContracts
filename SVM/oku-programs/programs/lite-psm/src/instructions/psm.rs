@@ -214,13 +214,20 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
         });
     } else {
         // Queue redemption path:
-        // 1. Transfer OkuMoney to escrow
-        // 2. Record entry in queue
+        // 1. Check capacity (zero-copy read borrow, scoped)
+        // 2. Transfer OkuMoney to escrow (CPI; no queue borrow held)
+        // 3. Record entry in queue (zero-copy write borrow, scoped)
 
-        let queue = &mut ctx.accounts.redemption_queue;
-        require!(!queue.is_full(), LitePsmError::QueueFull);
+        // Capacity check up-front so we don't transfer-then-revert.
+        {
+            let queue = ctx.accounts.redemption_queue.load()?;
+            require!(!queue.is_full(), LitePsmError::QueueFull);
+        }
 
-        // Transfer OkuMoney from user to escrow vault
+        // Transfer OkuMoney from user to escrow vault.
+        // No `load_mut` held across this CPI — the AccountLoader is a runtime
+        // RefCell borrow; the CPI re-borrows the same account info and would
+        // panic if we still held the load.
         token_interface::transfer_checked(
             CpiContext::new(
                 ctx.accounts.token_2022_program.key(),
@@ -236,32 +243,41 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
         )?;
 
         let clock = Clock::get()?;
-        let entry = QueueEntry {
-            user: ctx.accounts.user.key(),
-            oku_m_amount,
-            timestamp: clock.unix_timestamp,
+        let user_key = ctx.accounts.user.key();
+
+        // Now mutate the queue. Scoped block so the borrow drops before
+        // the `emit!` (which re-reads `pending_count`).
+        let (queue_position, queue_length) = {
+            let mut queue = ctx.accounts.redemption_queue.load_mut()?;
+            let entry = QueueEntry {
+                user: user_key,
+                oku_m_amount,
+                timestamp: clock.unix_timestamp,
+            };
+
+            // Insert at tail position (ring buffer: modulo into fixed array)
+            let position = queue.tail % RedemptionQueue::MAX_ENTRIES as u64;
+            queue.entries[position as usize] = entry;
+            queue.tail = queue.tail.wrapping_add(1);
+
+            // Update running counter
+            queue.total_queued_oku_m = queue
+                .total_queued_oku_m
+                .checked_add(oku_m_amount)
+                .ok_or(LitePsmError::Overflow)?;
+
+            (position, queue.pending_count())
         };
-
-        // Insert at tail position (ring buffer: modulo into fixed array)
-        let position = queue.tail % RedemptionQueue::MAX_ENTRIES as u32;
-        queue.entries[position as usize] = entry;
-        queue.tail = queue.tail.wrapping_add(1);
-
-        // Update running counter
-        queue.total_queued_oku_m = queue
-            .total_queued_oku_m
-            .checked_add(oku_m_amount)
-            .ok_or(LitePsmError::Overflow)?;
 
         // Calculate dollar value at time of queueing
         let dollar_value = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
 
         emit!(RedemptionQueuedEvent {
-            user: ctx.accounts.user.key(),
+            user: user_key,
             oku_m_amount,
             dollar_value,
-            queue_position: position,
-            queue_length: queue.pending_count(),
+            queue_position,
+            queue_length,
         });
     }
 
@@ -273,21 +289,66 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
 /// Uses current oku_m_price for all entries in the batch (cached once).
 /// Recipient USDC ATAs must be passed in remaining_accounts in queue order.
 ///
-/// NOTE: Deliberately allowed during pause - users must be able to receive queued redemptions.
+/// NOTE: Deliberately allowed during pause — users must be able to receive
+/// queued redemptions even when the PSM is paused for everyone else.
+///
+/// NOTE (Phase 10): Deliberately does NOT call `check_yield_lock`. This
+/// matches EVM `RedemptionQueue.processQueue`'s lack of the
+/// `whenYieldNotDistributing` modifier. The reasoning:
+///
+/// - Queued entries store the raw `oku_m_amount` (token count), not the
+///   USDC payout amount. Conversion uses the CURRENT `oku_m_price` at
+///   process time (cached on line 299 for batch consistency).
+/// - `oku_m_price` is monotonically non-decreasing
+///   (`PriceCannotDecrease` is enforced in `set_oku_m_price`).
+/// - A same-slot `distribute_yield` / `set_oku_m_price` therefore makes
+///   queued users MORE USDC, not less. Users can only benefit from a
+///   yield op landing in the same slot as `process_queue`; they cannot
+///   be sandwiched out of their fair share.
+///
+/// The yield lock is still required for `mint_oku_m` and `redeem_oku_m`
+/// (where a same-slot price bump would let the attacker mint cheaply
+/// then redeem dear), but `process_queue` is paying out previously-
+/// committed queue entries and has no such asymmetry.
+/// Maximum entries `process_queue` will walk in a single tx.
+///
+/// At Phase 13b's 200-entry queue cap (limited by Solana's 10 KB
+/// `MAX_PERMITTED_DATA_INCREASE` CPI-allocation budget), an orchestrator
+/// could in principle request `max_entries = 200` — but a single-tx walk
+/// of 200 entries with per-entry burn + transfer CPIs would massively
+/// exceed the default 200 K CU budget and likely the 1.4 M raised cap.
+/// Empirically ~10 entries fit in 200 K CU, ~70 fit in 1.4 M CU.
+///
+/// We hard-cap at 50 here (Phase 13b decision) — comfortably under the
+/// raised-budget ceiling, leaves headroom for transfer-hook overhead on
+/// Token-2022, and means a malicious or buggy orchestrator can't write a
+/// tx that always reverts mid-batch and burns CU for no reason.
+///
+/// **Revisit when:** real workload telemetry shows we're consistently
+/// hitting this cap, or we add CU-aware batching to the orchestrator.
+pub const MAX_BATCH_ENTRIES: u32 = 50;
+
 pub fn process_queue<'info>(
     ctx: Context<'info, ProcessQueue<'info>>,
     max_entries: u32,
 ) -> Result<()> {
-    let queue = &mut ctx.accounts.redemption_queue;
     let bump = ctx.accounts.config.bump;
 
-    require!(!queue.is_empty(), LitePsmError::QueueEmpty);
+    // Hard-cap the batch size. See `MAX_BATCH_ENTRIES` above for rationale.
+    let effective_max = max_entries.min(MAX_BATCH_ENTRIES);
+
+    // Initial empty check (scoped borrow).
+    {
+        let queue = ctx.accounts.redemption_queue.load()?;
+        require!(!queue.is_empty(), LitePsmError::QueueEmpty);
+    }
 
     let seeds = &[PsmConfig::SEED, &[bump]];
     let signer = &[&seeds[..]];
 
     // Cache price once for batch consistency (matches EVM behavior)
     let oku_m_price = ctx.accounts.config.oku_m_price;
+    let configured_usdc_mint = ctx.accounts.config.usdc_mint;
 
     let mut processed = 0u32;
     let mut payouts = 0u32; // Counts only non-skipped entries that consumed a remaining_account
@@ -306,76 +367,79 @@ pub fn process_queue<'info>(
     // the batch and the syscall is non-trivial.
     let clock = Clock::get()?;
 
-    while processed < max_entries && !queue.is_empty() {
-        let head_idx = (queue.head % RedemptionQueue::MAX_ENTRIES as u32) as usize;
+    'batch: while processed < effective_max {
+        // Per-iteration: read head + entry under a scoped read borrow,
+        // then drop the borrow before any CPI. This is the load-bearing
+        // discipline that makes zero-copy + CPI loops work — the
+        // `AccountLoader` borrow is a runtime `RefCell` borrow, and any
+        // CPI that re-borrows the same account info panics if we still
+        // hold it.
+        let (head_now, entry_user, entry_oku_m, entry_ts) = {
+            let queue = ctx.accounts.redemption_queue.load()?;
+            if queue.is_empty() {
+                break 'batch;
+            }
+            let head_idx = (queue.head % RedemptionQueue::MAX_ENTRIES as u64) as usize;
+            let entry = &queue.entries[head_idx];
+            (queue.head, entry.user, entry.oku_m_amount, entry.timestamp)
+        };
 
-        let entry = &queue.entries[head_idx];
-
-        // Skip entries that were cleared by `rescue_queue_entry`. Without this,
-        // a non-head hole produced by rescue would pin the loop on a zero-amount
-        // entry whose `user == Pubkey::default()`, and the recipient-owner check
-        // below would then revert the entire batch (DoS).
+        // Skip entries cleared by `rescue_queue_entry`. Without this, a
+        // non-head hole produced by rescue would pin the loop on a
+        // zero-amount entry whose `user == Pubkey::default()`, and the
+        // recipient-owner check below would revert the entire batch (DoS).
         //
-        // Mirrors EVM `RedemptionQueue.processQueue` which `continue`s past
-        // `entry.user == address(0)` and emits `RedemptionSkipped`.
-        if entry.user == Pubkey::default() {
+        // Mirrors EVM `RedemptionQueue.processQueue` which `continue`s
+        // past `entry.user == address(0)` and emits `RedemptionSkipped`.
+        if entry_user == Pubkey::default() {
+            {
+                let mut queue = ctx.accounts.redemption_queue.load_mut()?;
+                queue.head = queue.head.wrapping_add(1);
+            }
             emit!(RedemptionSkippedEvent {
-                queue_index: queue.head,
+                queue_index: head_now,
             });
-            queue.head = queue.head.wrapping_add(1);
             processed += 1;
             continue;
         }
 
         // Calculate USDC payout using current price.
-        let usdc_amount = oku_m_to_dollars(entry.oku_m_amount, oku_m_price)?;
+        let usdc_amount = oku_m_to_dollars(entry_oku_m, oku_m_price)?;
 
-        // Reject zero-output payouts. `redeem_oku_m` rejects zero-output
-        // at enqueue time, but a price drop between enqueue and process
-        // could push a small entry under the truncation threshold; without
-        // this check the queued OkuMoney would be burned for 0 USDC.
+        // Reject zero-output payouts. `redeem_oku_m` rejects zero-output at
+        // enqueue time, but a price drop between enqueue and process could
+        // push a small entry under the truncation threshold; without this
+        // check the queued OkuMoney would be burned for 0 USDC.
         require!(usdc_amount > 0, LitePsmError::OutputBelowMinimum);
 
-        // Check if we have enough USDC
+        // Check buffer; stop the batch if insufficient.
         if remaining_usdc_balance < usdc_amount {
-            break; // Stop processing, not enough buffer
+            break 'batch;
         }
 
-        // Get recipient's USDC ATA from remaining_accounts
-        // remaining_accounts is indexed by *payouts* (skipped entries do not
-        // consume a remaining_account slot).
+        // Get recipient's USDC ATA from remaining_accounts. remaining_accounts
+        // is indexed by *payouts* (skipped entries don't consume a slot).
         let recipient_account_idx = payouts as usize;
         require!(
             recipient_account_idx < ctx.remaining_accounts.len(),
             LitePsmError::InsufficientAccounts
         );
-
         let recipient_usdc_ata = &ctx.remaining_accounts[recipient_account_idx];
 
-        // Verify the account belongs to the queued user AND holds the configured USDC mint
-        let account_data = recipient_usdc_ata.try_borrow_data()?;
-        let parsed =
-            SplTokenAccount::unpack(&account_data).map_err(|_| LitePsmError::RecipientMismatch)?;
-        let token_account_owner = parsed.owner;
-        let token_account_mint = parsed.mint;
+        // Verify the account belongs to the queued user AND holds the
+        // configured USDC mint. SPL Token account data unpack is read-only.
+        {
+            let account_data = recipient_usdc_ata.try_borrow_data()?;
+            let parsed = SplTokenAccount::unpack(&account_data)
+                .map_err(|_| LitePsmError::RecipientMismatch)?;
+            require!(parsed.owner == entry_user, LitePsmError::RecipientMismatch);
+            require!(
+                parsed.mint == configured_usdc_mint,
+                LitePsmError::RecipientMismatch
+            );
+        }
 
-        require!(
-            token_account_owner == entry.user,
-            LitePsmError::RecipientMismatch
-        );
-        require!(
-            token_account_mint == ctx.accounts.config.usdc_mint,
-            LitePsmError::RecipientMismatch
-        );
-
-        let user = entry.user;
-        let oku_m_amount = entry.oku_m_amount;
-        let entry_timestamp = entry.timestamp;
-
-        // Drop the borrow before CPI
-        drop(account_data);
-
-        // Burn OkuMoney from escrow vault
+        // Burn OkuMoney from escrow vault. No queue borrow held.
         token_interface::burn(
             CpiContext::new_with_signer(
                 token_2022_program_key,
@@ -386,10 +450,10 @@ pub fn process_queue<'info>(
                 },
                 signer,
             ),
-            oku_m_amount,
+            entry_oku_m,
         )?;
 
-        // Transfer USDC to recipient
+        // Transfer USDC to recipient. No queue borrow held.
         anchor_spl::token::transfer(
             CpiContext::new_with_signer(
                 token_program_key,
@@ -407,39 +471,42 @@ pub fn process_queue<'info>(
             .checked_sub(usdc_amount)
             .ok_or(LitePsmError::Overflow)?;
 
-        queue.head = queue.head.wrapping_add(1);
+        // Advance head + decrement counter under a scoped write borrow.
+        {
+            let mut queue = ctx.accounts.redemption_queue.load_mut()?;
+            queue.head = queue.head.wrapping_add(1);
+            // checked_sub catches accounting bugs early rather than silently clamping.
+            queue.total_queued_oku_m = queue
+                .total_queued_oku_m
+                .checked_sub(entry_oku_m)
+                .ok_or(LitePsmError::Overflow)?;
+        }
+
         processed += 1;
         payouts += 1;
 
-        // Update running counter
-        // Use checked_sub to catch any accounting bugs early rather than silently clamping
-        queue.total_queued_oku_m = queue
-            .total_queued_oku_m
-            .checked_sub(oku_m_amount)
-            .ok_or(LitePsmError::Overflow)?;
-
         // Calculate dollar value at time of processing
-        let dollar_value = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
+        let dollar_value = oku_m_to_dollars(entry_oku_m, oku_m_price)?;
 
         // Calculate wait time
-        let wait_time = clock.unix_timestamp.saturating_sub(entry_timestamp);
+        let wait_time = clock.unix_timestamp.saturating_sub(entry_ts);
 
         emit!(RedemptionProcessedEvent {
-            user,
-            oku_m_amount,
+            user: entry_user,
+            oku_m_amount: entry_oku_m,
             dollar_value,
             usdc_amount,
             wait_time,
         });
     }
 
-    // Emit a batch-level summary so indexers can reconcile buffer state
-    // without summing per-entry events. EVM `BufferRefilled` parity.
+    // Batch-level summary so indexers can reconcile buffer state without
+    // summing per-entry events. EVM `BufferRefilled` parity.
     let skipped_count = processed.saturating_sub(payouts);
     emit!(BufferRefilledEvent {
         new_buffer_balance: remaining_usdc_balance,
-        processed_count: payouts,
-        skipped_count,
+        processed_count: payouts as u64,
+        skipped_count: skipped_count as u64,
     });
 
     Ok(())
@@ -481,14 +548,18 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
 pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> {
     require!(amount > 0, LitePsmError::ZeroAmount);
 
-    // Protect queued redemptions: sum pending entries' price-adjusted amounts as reserved USDC
-    let queue = &ctx.accounts.redemption_queue;
+    // Protect queued redemptions: sum pending entries' price-adjusted amounts
+    // as reserved USDC. Zero-copy: scope the `load()` borrow to just the read.
+    let total_queued_oku_m = {
+        let queue = ctx.accounts.redemption_queue.load()?;
+        queue.total_queued_oku_m
+    };
 
     // Read current price from config to calculate reserved USDC
     let oku_m_price = ctx.accounts.config.oku_m_price;
 
     // Calculate reserved USDC from running counter (O(1) instead of iterating)
-    let reserved = oku_m_to_dollars(queue.total_queued_oku_m, oku_m_price)?;
+    let reserved = oku_m_to_dollars(total_queued_oku_m, oku_m_price)?;
 
     let vault_balance = ctx.accounts.vault_usdc.amount;
     require!(
@@ -537,30 +608,29 @@ pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> 
 ///
 /// # Arguments
 /// * `queue_index` - Absolute index of the entry to rescue (must be between head and tail)
-pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u32) -> Result<()> {
-    let queue = &mut ctx.accounts.redemption_queue;
+pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u64) -> Result<()> {
     let bump = ctx.accounts.config.bump;
 
-    // Validate index is within pending range
-    require!(
-        queue_index >= queue.head && queue_index < queue.tail,
-        LitePsmError::InvalidQueueIndex
-    );
+    // Read + validate entry (scoped read borrow).
+    let (original_user, oku_m_amount, position) = {
+        let queue = ctx.accounts.redemption_queue.load()?;
+        require!(
+            queue_index >= queue.head && queue_index < queue.tail,
+            LitePsmError::InvalidQueueIndex
+        );
+        let position = (queue_index % RedemptionQueue::MAX_ENTRIES as u64) as usize;
+        let entry = &queue.entries[position];
+        require!(
+            entry.user != Pubkey::default(),
+            LitePsmError::EntryAlreadyCleared
+        );
+        (entry.user, entry.oku_m_amount, position)
+    };
 
-    let position = (queue_index % RedemptionQueue::MAX_ENTRIES as u32) as usize;
-    let entry = &queue.entries[position];
-
-    // Check entry hasn't already been cleared
-    require!(
-        entry.user != Pubkey::default(),
-        LitePsmError::EntryAlreadyCleared
-    );
-
-    let original_user = entry.user;
-    let oku_m_amount = entry.oku_m_amount;
     let oku_money_decimals = ctx.accounts.oku_money_mint.decimals;
 
-    // Transfer OkuMoney from escrow back to recipient (not burning — user reclaims tokens)
+    // Transfer OkuMoney from escrow back to recipient (not burning — user
+    // reclaims tokens). No queue borrow held across the CPI.
     let seeds = &[PsmConfig::SEED, &[bump]];
     let signer = &[&seeds[..]];
 
@@ -579,24 +649,26 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u32) -> R
         oku_money_decimals,
     )?;
 
-    // Clear the entry
-    let queue = &mut ctx.accounts.redemption_queue;
-    queue.entries[position] = QueueEntry::default();
+    // Mutate: clear entry, decrement counter, advance head past contiguous
+    // cleared entries. All purely in-account; no CPI inside the borrow.
+    {
+        let mut queue = ctx.accounts.redemption_queue.load_mut()?;
+        queue.entries[position] = QueueEntry::default();
 
-    // Update running counter
-    // Use checked_sub to catch any accounting bugs early rather than silently clamping
-    queue.total_queued_oku_m = queue
-        .total_queued_oku_m
-        .checked_sub(oku_m_amount)
-        .ok_or(LitePsmError::Overflow)?;
+        // Use checked_sub to catch accounting bugs early rather than silently clamping.
+        queue.total_queued_oku_m = queue
+            .total_queued_oku_m
+            .checked_sub(oku_m_amount)
+            .ok_or(LitePsmError::Overflow)?;
 
-    // Advance head past contiguous cleared entries (matches EVM behavior)
-    while queue.head < queue.tail {
-        let head_pos = (queue.head % RedemptionQueue::MAX_ENTRIES as u32) as usize;
-        if queue.entries[head_pos].user == Pubkey::default() {
-            queue.head = queue.head.wrapping_add(1);
-        } else {
-            break;
+        // Advance head past contiguous cleared entries (matches EVM behavior).
+        while queue.head < queue.tail {
+            let head_pos = (queue.head % RedemptionQueue::MAX_ENTRIES as u64) as usize;
+            if queue.entries[head_pos].user == Pubkey::default() {
+                queue.head = queue.head.wrapping_add(1);
+            } else {
+                break;
+            }
         }
     }
 

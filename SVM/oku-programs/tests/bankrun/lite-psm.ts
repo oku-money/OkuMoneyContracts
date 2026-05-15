@@ -15,10 +15,9 @@ import {
   coldMultisig,
   warmMultisig,
   psmOrchestrator,
-  initializePSMIfNeeded,
+  initializePsm,
   ensurePSMUnpaused,
   mintOkuMoneyViaProgram,
-  resetPsmSingleton,
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
   DECIMALS,
@@ -31,13 +30,41 @@ import {
   createOkuMoneyMintViaBankrun,
   mintToViaBankrun,
   ensureAtaViaBankrun,
-  warpSlots,
 } from "../shared/bankrun";
 
 // Use anchor's web3 to avoid version conflicts
 const { Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, PublicKey } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;
 type Keypair = anchor.web3.Keypair;
+
+// =============================================================================
+// Queue helpers (Phase 13b: u64 head/tail decode as BN, MAX_ENTRIES = 200)
+// =============================================================================
+
+/**
+ * Ring-buffer capacity (mirrors `RedemptionQueue::MAX_ENTRIES` in
+ * `programs/lite-psm/src/state.rs`). Used by tests that index into
+ * `queue.entries[absolute_index % MAX_ENTRIES]`.
+ *
+ * 200 entries × 48 bytes = 9 600 bytes — fits under Solana's 10 KB
+ * single-CPI allocation cap so `setup_redemption_queue` works one-shot.
+ */
+const QUEUE_MAX_ENTRIES = 200;
+
+/**
+ * Reduce an absolute queue index to its ring-buffer slot (0..MAX_ENTRIES).
+ * Accepts BN or number (Anchor decodes u64 fields as BN).
+ */
+function ringSlot(absIndex: BN | number): number {
+  const bn = typeof absIndex === "number" ? new BN(absIndex) : absIndex;
+  return bn.umod(new BN(QUEUE_MAX_ENTRIES)).toNumber();
+}
+
+/** Convenience: convert a queue head/tail/index to a JS number (safe for
+ *  small values, which is all bankrun tests ever produce). */
+function n(x: BN | number): number {
+  return typeof x === "number" ? x : x.toNumber();
+}
 
 describe("lite-psm", () => {
   // Delay initialization until tests run
@@ -81,157 +108,70 @@ describe("lite-psm", () => {
   // MAX_SUPPLY, MINTER_ALLOWANCE, DECIMALS imported from shared setup
 
   before(async () => {
-    // Reset the cross-file PSM singleton (see explanation in bridge_security.ts).
-    resetPsmSingleton();
     h = await startBankrun();
     provider = h.provider as unknown as anchor.AnchorProvider;
     program = h.program;
     payer = h.payer;
     admin = payer;
 
-    // Derive PDAs first (needed to check if config exists)
+    // Pre-derive the PSM config PDA so the OkuMoney mint can be created
+    // with it as the mint/freeze authority before `initializePsm` runs.
     [configPda, configBump] = PublicKey.findProgramAddressSync(
       [Buffer.from("psm_config")],
       program.programId
     );
 
-    [redemptionQueuePda, redemptionQueueBump] = PublicKey.findProgramAddressSync(
-      [Buffer.from("redemption_queue")],
-      program.programId
+    // Create the mints. Bankrun gives us a fresh cluster every time, so
+    // these always run unconditionally.
+    usdcMint = await createMintViaBankrun(
+      h,
+      payer.publicKey,
+      null,
+      DECIMALS,
+      usdcMintKeypair,
+      TOKEN_PROGRAM_ID
     );
-
-    // Check if PSM config already exists (initialized by bridge_security tests)
-    let psmExists = false;
-    try {
-      const existingConfig = await program.account.psmConfig.fetch(configPda);
-      psmExists = true;
-      // Use existing mints from config
-      usdcMint = existingConfig.usdcMint;
-      okuMoneyMint = existingConfig.okuMoneyMint;
-    } catch {
-      psmExists = false;
-    }
-
-    if (!psmExists) {
-      // Create USDC mint (standard SPL token) via the bankrun helper.
-      usdcMint = await createMintViaBankrun(
-        h,
-        payer.publicKey,
-        null,
-        DECIMALS,
-        usdcMintKeypair,
-        TOKEN_PROGRAM_ID
-      );
-
-      // Create OkuMoney mint (Token-2022 with Interest-Bearing extension)
-      // with mint/freeze authority set to the PSM config PDA.
-      okuMoneyMint = await createOkuMoneyMintViaBankrun(
-        h,
-        configPda,
-        configPda,
-        DECIMALS,
-        orchestrator.publicKey, // rate authority (rebaser)
-        0,
-        okuMoneyMintKeypair
-      );
-    }
+    okuMoneyMint = await createOkuMoneyMintViaBankrun(
+      h,
+      configPda,
+      configPda,
+      DECIMALS,
+      orchestrator.publicKey, // rate authority (rebaser)
+      0,
+      okuMoneyMintKeypair
+    );
 
     // Fund test accounts via bankrun's setAccount lamports injection.
     await fundKeypairs(h, [user, user2], 10 * anchor.web3.LAMPORTS_PER_SOL);
 
-    // Create user token accounts
-    userUsdcAta = getAssociatedTokenAddressSync(
-      usdcMint,
-      user.publicKey,
-      false,
-      TOKEN_PROGRAM_ID
-    );
+    // Derive user/orchestrator ATA addresses + create them.
+    userUsdcAta = getAssociatedTokenAddressSync(usdcMint, user.publicKey, false, TOKEN_PROGRAM_ID);
+    userOkuMoneyAta = getAssociatedTokenAddressSync(okuMoneyMint, user.publicKey, false, TOKEN_2022_PROGRAM_ID);
+    user2UsdcAta = getAssociatedTokenAddressSync(usdcMint, user2.publicKey, false, TOKEN_PROGRAM_ID);
+    user2OkuMoneyAta = getAssociatedTokenAddressSync(okuMoneyMint, user2.publicKey, false, TOKEN_2022_PROGRAM_ID);
+    orchestratorUsdcAta = getAssociatedTokenAddressSync(usdcMint, orchestrator.publicKey, false, TOKEN_PROGRAM_ID);
 
-    userOkuMoneyAta = getAssociatedTokenAddressSync(
-      okuMoneyMint,
-      user.publicKey,
-      false,
-      TOKEN_2022_PROGRAM_ID
-    );
-
-    user2UsdcAta = getAssociatedTokenAddressSync(
-      usdcMint,
-      user2.publicKey,
-      false,
-      TOKEN_PROGRAM_ID
-    );
-
-    user2OkuMoneyAta = getAssociatedTokenAddressSync(
-      okuMoneyMint,
-      user2.publicKey,
-      false,
-      TOKEN_2022_PROGRAM_ID
-    );
-
-    orchestratorUsdcAta = getAssociatedTokenAddressSync(
-      usdcMint,
-      orchestrator.publicKey,
-      false,
-      TOKEN_PROGRAM_ID
-    );
-
-    // Create user USDC ATAs
     await ensureAtaViaBankrun(h, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
     await ensureAtaViaBankrun(h, user2.publicKey, usdcMint, TOKEN_PROGRAM_ID);
-    // Create orchestrator USDC ATA (idempotent)
     await ensureAtaViaBankrun(h, orchestrator.publicKey, usdcMint, TOKEN_PROGRAM_ID);
 
-    // Mint USDC to users
+    // Mint USDC to users + orchestrator.
     await mintToViaBankrun(h, usdcMint, userUsdcAta, payer, 1_000_000_000_000, TOKEN_PROGRAM_ID);
     await mintToViaBankrun(h, usdcMint, user2UsdcAta, payer, 1_000_000_000_000, TOKEN_PROGRAM_ID);
-    // Top up orchestrator USDC if low (other describe blocks may consume).
-    try {
-      const orchestratorAccount = await getAccount(
-        provider.connection,
-        orchestratorUsdcAta,
-        undefined,
-        TOKEN_PROGRAM_ID
-      );
-      if (Number(orchestratorAccount.amount) < 1_000_000_000_000) {
-        await mintToViaBankrun(
-          h,
-          usdcMint,
-          orchestratorUsdcAta,
-          payer,
-          1_000_000_000_000 - Number(orchestratorAccount.amount),
-          TOKEN_PROGRAM_ID
-        );
-      }
-    } catch {
-      // Orchestrator USDC ATA doesn't exist, skip minting
-    }
+    await mintToViaBankrun(h, usdcMint, orchestratorUsdcAta, payer, 1_000_000_000_000, TOKEN_PROGRAM_ID);
 
-    // Initialize PSM using shared setup module (bankrun funder).
-    const psmSetup = await initializePSMIfNeeded(
-      program,
-      payer,
-      usdcMint,
-      okuMoneyMint,
-      (kps, lamports) => fundKeypairs(h, kps, lamports)
-    );
-
-    // Update PDAs with initialized values
-    configPda = psmSetup.configPda;
+    // Initialize PSM (always — bankrun starts each describe with a fresh cluster).
+    const psmSetup = await initializePsm(h, program, payer, usdcMint, okuMoneyMint);
     redemptionQueuePda = psmSetup.redemptionQueuePda;
     vaultUsdcAta = psmSetup.vaultUsdcAta;
     vaultOkuMoneyAta = psmSetup.vaultOkuMoneyAta;
   });
 
   beforeEach(async () => {
-    // Bump bankrun's slot by 1 between tests. Validator-mode tests get
-    // free slot advancement from wall-clock ticking (~400 ms / slot);
-    // bankrun's slot is stuck until explicitly warped. Without this
-    // bump, any test running after `distribute_yield` in the same
-    // describe block hits `YieldDistributionInProgress` because
-    // `last_yield_distribution_slot == current_slot`.
-    const cur = await h.context.banksClient.getSlot();
-    h.context.warpToSlot(cur + 1n);
-    // Ensure PSM is unpaused before each test using shared helper
+    // Slot auto-bump is handled by `startBankrun({ autoBumpSlot: true })`
+    // (the default) — every `provider.sendAndConfirm` advances the bankrun
+    // slot by 1 before submitting. So `check_yield_lock` is never
+    // poisoned by a stuck slot from a prior test.
     await ensurePSMUnpaused(program, configPda);
   });
 
@@ -262,7 +202,8 @@ describe("lite-psm", () => {
 
       // Verify redemption queue exists (may have entries from previous tests)
       const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      expect(queue.tail).to.be.at.least(queue.head);
+      // head/tail are u64 → BN; compare as BN
+      expect(n(queue.tail)).to.be.at.least(n(queue.head));
     });
   });
 
@@ -1457,12 +1398,12 @@ describe("lite-psm", () => {
       const queueAfter = await program.account.redemptionQueue.fetch(redemptionQueuePda);
       const escrowAfter = await getAccount(provider.connection, vaultOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
 
-      // Tail should advance
-      expect(queueAfter.tail).to.equal(queueBefore.tail + 1);
+      // Tail should advance (BN math)
+      expect(n(queueAfter.tail)).to.equal(n(queueBefore.tail) + 1);
       // OkuMoney transferred to escrow
       expect(Number(escrowAfter.amount) - Number(escrowBefore.amount)).to.equal(redeemAmount.toNumber());
       // Queue entry has correct user
-      const entry = queueAfter.entries[queueBefore.tail % 10];
+      const entry = queueAfter.entries[ringSlot(queueBefore.tail)];
       expect(entry.user.toString()).to.equal(user.publicKey.toString());
       expect(Number(entry.okuMAmount)).to.equal(redeemAmount.toNumber());
     });
@@ -1492,8 +1433,8 @@ describe("lite-psm", () => {
         .rpc();
 
       const queueAfter = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      expect(queueAfter.tail).to.equal(queueBefore.tail + 1);
-      const entry = queueAfter.entries[queueBefore.tail % 10];
+      expect(n(queueAfter.tail)).to.equal(n(queueBefore.tail) + 1);
+      const entry = queueAfter.entries[ringSlot(queueBefore.tail)];
       expect(entry.user.toString()).to.equal(user2.publicKey.toString());
     });
   });
@@ -1520,7 +1461,7 @@ describe("lite-psm", () => {
 
     it("processes single queue entry", async () => {
       const queueBefore = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      if (queueBefore.head >= queueBefore.tail) {
+      if (n(queueBefore.head) >= n(queueBefore.tail)) {
         // Queue is empty, create an entry first
         await mintOkuMoneyViaProgram(program, user, new BN(2_000_000), configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
         // Drain buffer to force queuing
@@ -1582,7 +1523,7 @@ describe("lite-psm", () => {
 
       const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
       const headBefore = queue.head;
-      const entry = queue.entries[headBefore % 10];
+      const entry = queue.entries[ringSlot(headBefore)];
       const recipientUsdcAta = getAssociatedTokenAddressSync(
         usdcMint, entry.user, false, TOKEN_PROGRAM_ID
       );
@@ -1609,7 +1550,7 @@ describe("lite-psm", () => {
         .rpc();
 
       const queueAfter = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      expect(queueAfter.head).to.equal(headBefore + 1);
+      expect(n(queueAfter.head)).to.equal(n(headBefore) + 1);
 
       const recipientUsdcAfter = await getAccount(provider.connection, recipientUsdcAta, undefined, TOKEN_PROGRAM_ID);
       expect(Number(recipientUsdcAfter.amount)).to.be.greaterThan(Number(recipientUsdcBefore.amount));
@@ -1619,12 +1560,12 @@ describe("lite-psm", () => {
       // Process any leftover queue entries from prior tests (Fix 10: withdrawBuffer
       // now protects queued redemptions, so we must clear the queue before draining)
       const queuePre = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      if (queuePre.head < queuePre.tail) {
-        const pendingCount = queuePre.tail - queuePre.head;
+      if (n(queuePre.head) < n(queuePre.tail)) {
+        const pendingCount = n(queuePre.tail) - n(queuePre.head);
         // Collect remaining accounts for each pending entry
         const remainingAccts = [];
         for (let i = 0; i < pendingCount; i++) {
-          const idx = (queuePre.head + i) % 10;
+          const idx = ringSlot(n(queuePre.head) + i);
           const entryUser = queuePre.entries[idx].user;
           const entryUsdcAta = getAssociatedTokenAddressSync(
             usdcMint, entryUser, false, TOKEN_PROGRAM_ID
@@ -1756,8 +1697,8 @@ describe("lite-psm", () => {
       const headBefore = queueBefore.head;
 
       // Build remaining_accounts in FIFO order
-      const entry1 = queueBefore.entries[headBefore % 10];
-      const entry2 = queueBefore.entries[(headBefore + 1) % 10];
+      const entry1 = queueBefore.entries[ringSlot(headBefore)];
+      const entry2 = queueBefore.entries[ringSlot(n(headBefore) + 1)];
       const ata1 = getAssociatedTokenAddressSync(usdcMint, entry1.user, false, TOKEN_PROGRAM_ID);
       const ata2 = getAssociatedTokenAddressSync(usdcMint, entry2.user, false, TOKEN_PROGRAM_ID);
       await ensureAtaViaBankrun(h, entry1.user, usdcMint, TOKEN_PROGRAM_ID);
@@ -1783,18 +1724,18 @@ describe("lite-psm", () => {
         .rpc();
 
       const queueAfter = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      expect(queueAfter.head).to.equal(headBefore + 2);
+      expect(n(queueAfter.head)).to.equal(n(headBefore) + 2);
     });
 
     it("fails with QueueEmpty when no entries", async () => {
       // Ensure queue is empty (head == tail)
       const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      if (queue.head < queue.tail) {
+      if (n(queue.head) < n(queue.tail)) {
         // Process remaining entries first
-        const remaining = queue.tail - queue.head;
+        const remaining = n(queue.tail) - n(queue.head);
         const accounts = [];
-        for (let i = queue.head; i < queue.tail; i++) {
-          const entry = queue.entries[i % 10];
+        for (let i = n(queue.head); i < n(queue.tail); i++) {
+          const entry = queue.entries[ringSlot(i)];
           const ata = getAssociatedTokenAddressSync(usdcMint, entry.user, false, TOKEN_PROGRAM_ID);
           await ensureAtaViaBankrun(h, entry.user, usdcMint, TOKEN_PROGRAM_ID);
           accounts.push({ pubkey: ata, isSigner: false, isWritable: true });
@@ -2004,7 +1945,7 @@ describe("lite-psm", () => {
       // Cleanup: process the queue with the proper ATA so we leave the
       // queue empty for downstream describes.
       const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      const headEntry = queue.entries[queue.head % 10];
+      const headEntry = queue.entries[ringSlot(queue.head)];
       const recipientUsdcAta = getAssociatedTokenAddressSync(
         usdcMint,
         headEntry.user,
@@ -2120,8 +2061,9 @@ describe("lite-psm", () => {
         .rpc();
 
       const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      const rescueIndex = queue.tail - 1;
-      const slot = rescueIndex % 10;
+      // u64 → BN; arithmetic must stay in BN.
+      const rescueIndex = (queue.tail as BN).sub(new BN(1));
+      const slot = ringSlot(rescueIndex);
       const entry = queue.entries[slot];
       const rescuedAmount = Number(entry.okuMAmount);
       expect(entry.user.toString()).to.equal(user.publicKey.toString());
@@ -2191,7 +2133,7 @@ describe("lite-psm", () => {
         .rpc();
 
       const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      const rescueIndex = queue.tail - 1;
+      const rescueIndex = (queue.tail as BN).sub(new BN(1));
 
       try {
         await program.methods
@@ -2252,7 +2194,7 @@ describe("lite-psm", () => {
         .rpc();
 
       const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      const rescueIndex = queue.tail - 1;
+      const rescueIndex = (queue.tail as BN).sub(new BN(1));
 
       await program.methods
         .rescueQueueEntry(rescueIndex)
@@ -2268,13 +2210,9 @@ describe("lite-psm", () => {
         .signers([psmOrchestrator])
         .rpc();
 
-      // Bump slot to dodge bankrun's same-blockhash-tx dedupe. Without this,
-      // the second rescue (which builds an identical instruction) hashes to
-      // the same signature as the first and bankrun replays the cached
-      // success result instead of executing. Slot advance forces a fresh
-      // blockhash on the next provider.sendAndConfirm.
-      await warpSlots(h, 1n);
-
+      // Auto-bump-slot forces a fresh blockhash on the next
+      // `provider.sendAndConfirm`, so the otherwise-identical second
+      // rescue tx is no longer rejected as "already processed".
       try {
         // After the rescue at the *tail*, the head loop in the program
         // advances past the cleared slot — so the index is now strictly
@@ -2356,8 +2294,8 @@ describe("lite-psm", () => {
         .signers([user])
         .rpc();
       const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      const rescueIndex = queue.tail - 1;
-      const slot = rescueIndex % 10;
+      const rescueIndex = (queue.tail as BN).sub(new BN(1));
+      const slot = ringSlot(rescueIndex);
       const rescuedAmount = Number(queue.entries[slot].okuMAmount);
       expect(queue.entries[slot].user.toString()).to.equal(user.publicKey.toString());
 
@@ -2407,60 +2345,240 @@ describe("lite-psm", () => {
   // NEW COVERAGE: ring buffer wraparound
   // ==========================================================================
   describe("queue ring buffer wraparound", () => {
-    // This test exercises the ring buffer by cycling through 12 queue/process
-    // iterations, forcing tail past MAX_ENTRIES (10) and verifying modulo
-    // indexing wraps correctly back to entries[0].
-    const TOTAL_CYCLES = 12;
-    const REDEEM_AMOUNT = new BN(500_000); // 0.5 OkuMoney per cycle
+    // Phase 13b: with MAX_ENTRIES bumped to 200, iterating through 200+
+    // queue/process cycles in a test would be slow. Instead we seed the
+    // queue's `head` and `tail` directly via `banksClient.setAccount` so
+    // the next enqueue lands at slot `(MAX_ENTRIES - 1)` and the one after
+    // that lands at slot `0` — demonstrating the modulo wraparound with
+    // just two cycles.
+    //
+    // Layout (matches `programs/lite-psm/src/state.rs::RedemptionQueue`):
+    //   offset 0..8   : Anchor discriminator
+    //   offset 8      : bump (u8)
+    //   offset 9..16  : _pad0
+    //   offset 16..24 : head (u64 LE)        ← we seed this
+    //   offset 24..32 : tail (u64 LE)        ← we seed this
+    //   offset 32..40 : total_queued_oku_m   ← leave intact
+    //   offset 40..   : entries
+    const REDEEM_AMOUNT = new BN(500_000);
+    const HEAD_TAIL_SEED = QUEUE_MAX_ENTRIES - 1; // 199 — next enqueue → slot 199, then wraps to 0
 
     before(async () => {
-      // Ensure user has enough OkuMoney for all cycles
-      const mintAmount = new BN(REDEEM_AMOUNT.toNumber() * TOTAL_CYCLES * 2);
-      await mintOkuMoneyViaProgram(program, user, mintAmount, configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
+      // Mint enough OkuMoney to enqueue twice and the leftover for any
+      // downstream cleanup.
+      await mintOkuMoneyViaProgram(
+        program, user, REDEEM_AMOUNT.muln(4),
+        configPda, usdcMint, okuMoneyMint,
+        userUsdcAta, userOkuMoneyAta, vaultUsdcAta,
+      );
     });
 
-    it("queues and processes 12 cycles without panicking", async () => {
-      const queueStart = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      const startTail = queueStart.tail;
-      const startHead = queueStart.head;
+    it("wraps tail from MAX_ENTRIES-1 back to slot 0", async () => {
+      // ----- Pre-state: read existing queue account -----
+      const queuePre = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      // Sanity: queue must be empty at start of this test (head == tail).
+      // Earlier describes are responsible for draining; if this trips, look
+      // upstream rather than fixing it here.
+      expect(n(queuePre.head)).to.equal(
+        n(queuePre.tail),
+        "queue must be empty at start of wraparound test"
+      );
 
+      // ----- Seed head and tail directly via banksClient.setAccount -----
+      const existing = await h.context.banksClient.getAccount(redemptionQueuePda);
+      if (!existing) throw new Error("redemption_queue account missing");
+      const data = new Uint8Array(existing.data); // copy
+      // Write head and tail = HEAD_TAIL_SEED at offsets 16, 24 (little-endian u64).
+      const seedBuf = Buffer.alloc(16);
+      seedBuf.writeBigUInt64LE(BigInt(HEAD_TAIL_SEED), 0);
+      seedBuf.writeBigUInt64LE(BigInt(HEAD_TAIL_SEED), 8);
+      data.set(seedBuf, 16);
+      h.context.setAccount(redemptionQueuePda, { ...existing, data });
+
+      const queueSeeded = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      expect(n(queueSeeded.head)).to.equal(HEAD_TAIL_SEED);
+      expect(n(queueSeeded.tail)).to.equal(HEAD_TAIL_SEED);
+
+      // ----- Cycle 1: enqueue → entry lands at slot (MAX_ENTRIES - 1) -----
       const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
         usdcMint, coldMultisig.publicKey, false, TOKEN_PROGRAM_ID
       );
       await ensureAtaViaBankrun(h, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
 
-      for (let cycle = 0; cycle < TOTAL_CYCLES; cycle++) {
-        // Drain buffer so redemption goes to queue
-        const vaultUsdc = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
-        if (Number(vaultUsdc.amount) > 0) {
-          await program.methods
-            .withdrawBuffer(new BN(Number(vaultUsdc.amount)))
-            .accountsPartial({
-              bufferWithdrawer: coldMultisig.publicKey,
-              config: configPda,
-              redemptionQueue: redemptionQueuePda,
-              okuMoneyMint: okuMoneyMint,
-              withdrawerUsdcAta: bufferWithdrawerUsdcAta,
-              vaultUsdc: vaultUsdcAta,
-              usdcMint,
-              tokenProgram: TOKEN_PROGRAM_ID,
-              token2022Program: TOKEN_2022_PROGRAM_ID,
-            })
-            .signers([coldMultisig])
-            .rpc();
-        }
-
-        // Queue a redemption
+      // Drain buffer so the redeem hits the queued path.
+      const vault1 = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
+      if (Number(vault1.amount) > 0) {
         await program.methods
-          .redeemOkuM(REDEEM_AMOUNT)
+          .withdrawBuffer(new BN(Number(vault1.amount)))
+          .accountsPartial({
+            bufferWithdrawer: coldMultisig.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okuMoneyMint,
+            withdrawerUsdcAta: bufferWithdrawerUsdcAta,
+            vaultUsdc: vaultUsdcAta,
+            usdcMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([coldMultisig])
+          .rpc();
+      }
+
+      await program.methods
+        .redeemOkuM(REDEEM_AMOUNT)
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          usdcMint, okuMoneyMint,
+          userUsdcAta, userOkuMoneyAta,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      let q = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      expect(n(q.tail)).to.equal(HEAD_TAIL_SEED + 1);
+      // Entry must be at slot (MAX_ENTRIES - 1).
+      const lastSlot = QUEUE_MAX_ENTRIES - 1;
+      expect(q.entries[lastSlot].user.toString()).to.equal(user.publicKey.toString());
+      expect(Number(q.entries[lastSlot].okuMAmount)).to.equal(REDEEM_AMOUNT.toNumber());
+
+      // ----- Cycle 2: enqueue again → entry must wrap to slot 0 -----
+      // (head stays at HEAD_TAIL_SEED; we only enqueue, don't process.)
+      await program.methods
+        .redeemOkuM(REDEEM_AMOUNT)
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          usdcMint, okuMoneyMint,
+          userUsdcAta, userOkuMoneyAta,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+
+      q = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      expect(n(q.tail)).to.equal(HEAD_TAIL_SEED + 2);
+      // The wrap: tail = HEAD_TAIL_SEED + 1 = MAX_ENTRIES → slot 0.
+      expect(q.entries[0].user.toString()).to.equal(user.publicKey.toString());
+      expect(Number(q.entries[0].okuMAmount)).to.equal(REDEEM_AMOUNT.toNumber());
+
+      // ----- Cleanup: process both queued entries so downstream tests
+      // see an empty queue. -----
+      await program.methods
+        .depositBuffer(new BN(REDEEM_AMOUNT.toNumber() * 4))
+        .accountsPartial({
+          bufferDepositor: orchestrator.publicKey,
+          config: configPda,
+          bufferDepositorUsdcAta: orchestratorUsdcAta,
+          vaultUsdc: vaultUsdcAta,
+          usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
+
+      const recipientUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint, user.publicKey, false, TOKEN_PROGRAM_ID,
+      );
+      await ensureAtaViaBankrun(h, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+
+      await program.methods
+        .processQueue(2)
+        .accountsPartial({
+          queueProcessor: orchestrator.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          okuMoneyMint,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .remainingAccounts([
+          { pubkey: recipientUsdcAta, isSigner: false, isWritable: true },
+          { pubkey: recipientUsdcAta, isSigner: false, isWritable: true },
+        ])
+        .signers([orchestrator])
+        .rpc();
+
+      const qFinal = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      expect(n(qFinal.head)).to.equal(n(qFinal.tail), "queue must be empty after cleanup");
+    });
+  });
+
+  // ==========================================================================
+  // Phase 13b: capacity smoke — confirms MAX_ENTRIES > 50 (old hard cap was 10)
+  // ==========================================================================
+  describe("queue capacity (Phase 13b)", () => {
+    it("accepts at least 50 queued entries without QueueFull", async () => {
+      // We seed head+tail directly to a known empty state so this test
+      // doesn't depend on earlier-describe leakage. Then we enqueue 50
+      // entries and confirm each lands without QueueFull.
+      const existing = await h.context.banksClient.getAccount(redemptionQueuePda);
+      if (!existing) throw new Error("redemption_queue account missing");
+      const data = new Uint8Array(existing.data);
+      // Zero out head (16..24), tail (24..32), total_queued_oku_m (32..40).
+      data.set(new Uint8Array(24), 16);
+      h.context.setAccount(redemptionQueuePda, { ...existing, data });
+
+      // Fund the user with enough OkuMoney for 50 enqueues.
+      const PER_ENTRY = new BN(100_000); // 0.1 OkuMoney per entry
+      const ENTRIES = 50;
+      await mintOkuMoneyViaProgram(
+        program, user, PER_ENTRY.muln(ENTRIES + 2),
+        configPda, usdcMint, okuMoneyMint,
+        userUsdcAta, userOkuMoneyAta, vaultUsdcAta,
+      );
+
+      // Drain the buffer so every redeem hits the queue.
+      const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint, coldMultisig.publicKey, false, TOKEN_PROGRAM_ID
+      );
+      await ensureAtaViaBankrun(h, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+      const vault = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
+      if (Number(vault.amount) > 0) {
+        await program.methods
+          .withdrawBuffer(new BN(Number(vault.amount)))
+          .accountsPartial({
+            bufferWithdrawer: coldMultisig.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okuMoneyMint,
+            withdrawerUsdcAta: bufferWithdrawerUsdcAta,
+            vaultUsdc: vaultUsdcAta,
+            usdcMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([coldMultisig])
+          .rpc();
+      }
+
+      // Enqueue 50 times. None should hit QueueFull (which would happen at
+      // 10 entries on the pre-Phase-13b cap).
+      for (let i = 0; i < ENTRIES; i++) {
+        await program.methods
+          .redeemOkuM(PER_ENTRY)
           .accountsPartial({
             user: user.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            usdcMint,
-            okuMoneyMint,
-            userUsdcAta,
-            userOkuMoneyAta,
+            usdcMint, okuMoneyMint,
+            userUsdcAta, userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
             vaultOkuMoney: vaultOkuMoneyAta,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -2470,38 +2588,42 @@ describe("lite-psm", () => {
           })
           .signers([user])
           .rpc();
+      }
 
-        // Verify tail advanced
-        const queueAfterRedeem = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-        expect(queueAfterRedeem.tail).to.equal(startTail + cycle + 1);
+      const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      expect(n(queue.tail) - n(queue.head)).to.equal(ENTRIES);
 
-        // Verify entry written at correct ring buffer slot
-        const expectedSlot = (startTail + cycle) % 10;
-        const entry = queueAfterRedeem.entries[expectedSlot];
-        expect(entry.user.toString()).to.equal(user.publicKey.toString());
-        expect(Number(entry.okuMAmount)).to.equal(REDEEM_AMOUNT.toNumber());
+      // Cleanup: process the batch (one process_queue tx is capped at
+      // MAX_BATCH_ENTRIES=50 so a single call drains all 50).
+      await program.methods
+        .depositBuffer(new BN(PER_ENTRY.toNumber() * (ENTRIES + 2)))
+        .accountsPartial({
+          bufferDepositor: orchestrator.publicKey,
+          config: configPda,
+          bufferDepositorUsdcAta: orchestratorUsdcAta,
+          vaultUsdc: vaultUsdcAta,
+          usdcMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([orchestrator])
+        .rpc();
 
-        // Deposit buffer and process the single entry
+      const recipientUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint, user.publicKey, false, TOKEN_PROGRAM_ID,
+      );
+      await ensureAtaViaBankrun(h, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+
+      // Drain in small batches — burn+transfer per entry is ~4K CU, so
+      // ~50 entries blows the 200K default budget. Use 10 per call.
+      const BATCH = 10;
+      const recipients = Array.from({ length: BATCH }, () => ({
+        pubkey: recipientUsdcAta,
+        isSigner: false,
+        isWritable: true,
+      }));
+      for (let drained = 0; drained < ENTRIES; drained += BATCH) {
         await program.methods
-          .depositBuffer(new BN(2_000_000))
-          .accountsPartial({
-            bufferDepositor: orchestrator.publicKey,
-            config: configPda,
-            bufferDepositorUsdcAta: orchestratorUsdcAta,
-            vaultUsdc: vaultUsdcAta,
-            usdcMint,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .signers([orchestrator])
-          .rpc();
-
-        const recipientUsdcAta = getAssociatedTokenAddressSync(
-          usdcMint, user.publicKey, false, TOKEN_PROGRAM_ID
-        );
-        await ensureAtaViaBankrun(h, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
-
-        await program.methods
-          .processQueue(1)
+          .processQueue(BATCH)
           .accountsPartial({
             queueProcessor: orchestrator.publicKey,
             config: configPda,
@@ -2512,24 +2634,13 @@ describe("lite-psm", () => {
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
-          .remainingAccounts([
-            { pubkey: recipientUsdcAta, isSigner: false, isWritable: true },
-          ])
+          .remainingAccounts(recipients)
           .signers([orchestrator])
           .rpc();
-
-        // Verify head advanced
-        const queueAfterProcess = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-        expect(queueAfterProcess.head).to.equal(startHead + cycle + 1);
-        // Queue should now be empty
-        expect(queueAfterProcess.head).to.equal(queueAfterProcess.tail);
       }
 
-      // Final verification: tail went well past MAX_ENTRIES
-      const queueFinal = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      expect(queueFinal.tail).to.equal(startTail + TOTAL_CYCLES);
-      expect(queueFinal.tail).to.be.greaterThan(10, "tail should have wrapped past MAX_ENTRIES");
-      expect(queueFinal.head).to.equal(queueFinal.tail, "queue should be empty after all cycles");
+      const qFinal = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      expect(n(qFinal.head)).to.equal(n(qFinal.tail), "queue drained after cleanup");
     });
   });
 

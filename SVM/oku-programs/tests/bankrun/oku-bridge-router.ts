@@ -25,8 +25,7 @@ import {
   coldMultisig,
   warmMultisig,
   psmOrchestrator,
-  initializePSMIfNeeded,
-  resetPsmSingleton,
+  initializePsm,
   DECIMALS,
 } from "../shared/setup";
 import {
@@ -81,7 +80,6 @@ describe("oku-bridge-router", () => {
   let vaultInitialized = false;
 
   before(async () => {
-    resetPsmSingleton();
     h = await startBankrun();
     provider = h.provider as unknown as anchor.AnchorProvider;
     payer = h.payer;
@@ -92,22 +90,19 @@ describe("oku-bridge-router", () => {
     routerProgram = getProgram<OkuBridgeRouter>(h, 'oku_bridge_router');
     vaultProgram = getProgram<OkuDollar>(h, 'oku_dollar');
 
-    // Derive PDAs
+    // Derive PDAs up front.
     [routerConfigPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("router_config")],
       routerProgram.programId
     );
-
     [vaultConfigPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("oku_dollar_config")],
       vaultProgram.programId
     );
-
     [psmConfigPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("psm_config")],
       psmProgram.programId
     );
-
     [bridgeConfigPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("bridge_config")],
       psmProgram.programId
@@ -119,51 +114,29 @@ describe("oku-bridge-router", () => {
       10 * anchor.web3.LAMPORTS_PER_SOL
     );
 
-    // Check if PSM already initialized
-    let psmExists = false;
-    try {
-      const existingConfig = await psmProgram.account.psmConfig.fetch(psmConfigPda);
-      psmExists = true;
-      usdcMint = existingConfig.usdcMint;
-      okuMoneyMint = existingConfig.okuMoneyMint;
-    } catch {
-      // PSM not initialized
-    }
+    // Bankrun gives a fresh cluster every time, so the mints + PSM init
+    // always run unconditionally.
+    const usdcMintKeypair = Keypair.generate();
+    usdcMint = await createMintViaBankrun(
+      h,
+      payer.publicKey,
+      null,
+      DECIMALS,
+      usdcMintKeypair,
+      TOKEN_PROGRAM_ID
+    );
+    const okuMoneyMintKeypair = Keypair.generate();
+    okuMoneyMint = await createOkuMoneyMintViaBankrun(
+      h,
+      psmConfigPda,
+      psmConfigPda,
+      DECIMALS,
+      psmOrchestrator.publicKey,
+      0,
+      okuMoneyMintKeypair
+    );
+    await initializePsm(h, psmProgram, payer, usdcMint, okuMoneyMint);
 
-    if (!psmExists) {
-      // Create mints via bankrun helpers.
-      const usdcMintKeypair = Keypair.generate();
-      usdcMint = await createMintViaBankrun(
-        h,
-        payer.publicKey,
-        null,
-        DECIMALS,
-        usdcMintKeypair,
-        TOKEN_PROGRAM_ID
-      );
-
-      const okuMoneyMintKeypair = Keypair.generate();
-      okuMoneyMint = await createOkuMoneyMintViaBankrun(
-        h,
-        psmConfigPda,
-        psmConfigPda,
-        DECIMALS,
-        psmOrchestrator.publicKey,
-        0,
-        okuMoneyMintKeypair
-      );
-
-      // Initialize PSM (bankrun funder).
-      await initializePSMIfNeeded(
-        psmProgram as any,
-        payer,
-        usdcMint,
-        okuMoneyMint,
-        (kps, lamports) => fundKeypairs(h, kps, lamports)
-      );
-    }
-
-    // Get vault info
     vaultUsdcAta = getAssociatedTokenAddressSync(usdcMint, psmConfigPda, true, TOKEN_PROGRAM_ID);
 
     // Check if vault already initialized

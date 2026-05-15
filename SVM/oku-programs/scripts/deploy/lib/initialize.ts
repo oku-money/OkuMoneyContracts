@@ -74,6 +74,17 @@ export interface PsmInitResult {
   psmConfig: PublicKey;
   redemptionQueue: PublicKey;
   bridgeConfig: PublicKey;
+  /**
+   * USDC vault ATA, owned by `psmConfig`. Created by `initialize()`.
+   * Persisted into the deployment file as `pdas.psmVaultUsdc` for
+   * downstream scripts (notably `admin:setup-router-alt`) that need it
+   * without re-deriving from mint + config.
+   */
+  vaultUsdc: PublicKey;
+  /**
+   * OkuMoney escrow ATA, owned by `psmConfig`. Created by
+   * `setup_oku_money_escrow()`. Persisted as `pdas.psmOkuMoneyEscrow`.
+   */
   vaultOkuMoney: PublicKey;
 }
 
@@ -294,7 +305,13 @@ export async function initializePsm(
     }
   }
 
-  return { psmConfig, redemptionQueue, bridgeConfig, vaultOkuMoney };
+  return {
+    psmConfig,
+    redemptionQueue,
+    bridgeConfig,
+    vaultUsdc,
+    vaultOkuMoney,
+  };
 }
 
 export interface VaultInitResult {

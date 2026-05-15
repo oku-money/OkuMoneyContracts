@@ -337,62 +337,41 @@ pub fn set_bridge_authority(
     );
 
     let config = &mut ctx.accounts.bridge_config;
-    let old_authority = match role {
-        BridgeAuthorityRole::BridgeAdmin => {
-            let old = config.bridge_admin;
-            config.bridge_admin = new_authority;
-            old
-        }
-        BridgeAuthorityRole::BridgePauser => {
-            let old = config.bridge_pauser;
-            config.bridge_pauser = new_authority;
-            old
-        }
-        BridgeAuthorityRole::BridgeUnpauser => {
-            let old = config.bridge_unpauser;
-            config.bridge_unpauser = new_authority;
-            old
-        }
-        // The two arms below are unreachable because the require! above
-        // rejects them, but Rust's exhaustiveness check requires them.
-        BridgeAuthorityRole::OrchestratorSigner | BridgeAuthorityRole::FeeRecipient => {
-            return Err(LitePsmError::UseDedicatedRotation.into());
-        }
-        BridgeAuthorityRole::ChainManager => {
-            let old = config.chain_manager;
-            config.chain_manager = new_authority;
-            old
-        }
-        BridgeAuthorityRole::FeeManager => {
-            let old = config.fee_manager;
-            config.fee_manager = new_authority;
-            old
-        }
-        BridgeAuthorityRole::NonceAdmin => {
-            let old = config.nonce_admin;
-            config.nonce_admin = new_authority;
-            old
-        }
-        BridgeAuthorityRole::RefundInitiator => {
-            let old = config.refund_initiator;
-            config.refund_initiator = new_authority;
-            old
-        }
-        BridgeAuthorityRole::RefundConfirmer => {
-            let old = config.refund_confirmer;
-            config.refund_confirmer = new_authority;
-            old
-        }
-        BridgeAuthorityRole::SignerManager => {
-            let old = config.signer_manager;
-            config.signer_manager = new_authority;
-            old
-        }
-        BridgeAuthorityRole::LimitsManager => {
-            let old = config.limits_manager;
-            config.limits_manager = new_authority;
-            old
-        }
+
+    // Dispatch on the role enum via the same one-line pattern used by
+    // `set_authority` in `psm_admin.rs`. The `OrchestratorSigner |
+    // FeeRecipient` arm is already rejected by the `require!` above;
+    // the explicit `unreachable!` arm exists only for Rust's
+    // exhaustiveness check and would only fire if someone removed the
+    // privilege-escalation guard.
+    macro_rules! rotate_role {
+        ( $( $variant:ident => $field:ident ),+ $(,)? ) => {
+            match role {
+                $(
+                    BridgeAuthorityRole::$variant => {
+                        let old = config.$field;
+                        config.$field = new_authority;
+                        old
+                    }
+                ),+
+                BridgeAuthorityRole::OrchestratorSigner
+                | BridgeAuthorityRole::FeeRecipient => {
+                    unreachable!("rejected above by the UseDedicatedRotation guard");
+                }
+            }
+        };
+    }
+    let old_authority = rotate_role! {
+        BridgeAdmin       => bridge_admin,
+        BridgePauser      => bridge_pauser,
+        BridgeUnpauser    => bridge_unpauser,
+        ChainManager      => chain_manager,
+        FeeManager        => fee_manager,
+        NonceAdmin        => nonce_admin,
+        RefundInitiator   => refund_initiator,
+        RefundConfirmer   => refund_confirmer,
+        SignerManager     => signer_manager,
+        LimitsManager     => limits_manager,
     };
 
     // Enforce the cross-role invariant: refund_initiator, refund_confirmer,

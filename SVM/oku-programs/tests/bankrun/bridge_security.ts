@@ -18,8 +18,6 @@ import {
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountInstruction,
 } from "@solana/spl-token";
-import { keccak_256 } from "@noble/hashes/sha3";
-import * as nacl from "tweetnacl";
 import {
   findBridgeBurnEventInLogs,
   serializeBurnMessage,
@@ -30,10 +28,9 @@ import {
   warmMultisig,
   psmOrchestrator,
   bridgeOrchestrator,
-  initializePSMIfNeeded,
+  initializePsm,
   ensurePSMUnpaused,
   mintOkuMoneyViaProgram,
-  resetPsmSingleton,
 } from "../shared/setup";
 import {
   BankrunHarness,
@@ -43,8 +40,18 @@ import {
   createOkuMoneyMintViaBankrun,
   mintToViaBankrun,
   warpBy,
-  warpSlots,
 } from "../shared/bankrun";
+import {
+  BridgeTestContext,
+  bridgeBurnAndGetLogs as bridgeBurnAndGetLogsFn,
+  calculateRequestId,
+  createBridgeMintTx as createBridgeMintTxFn,
+  expectBridgeMintProgramError as expectBridgeMintProgramErrorFn,
+  expectError,
+  randomEvmAddress,
+  serializeBridgeMintMessage as serializeBridgeMessage,
+  signMessage,
+} from "../shared/bridge-helpers";
 
 // Use anchor's web3 types
 const { SYSVAR_RENT_PUBKEY } = anchor.web3;
@@ -128,264 +135,52 @@ describe("Bridge Security Tests", () => {
   const DECIMALS = 6;
 
   // ============================================================================
-  // Utility Functions
+  // Local wrappers around tests/shared/bridge-helpers.ts
   // ============================================================================
+  //
+  // The pure helpers (`signMessage`, `calculateRequestId`, `randomEvmAddress`,
+  // `serializeBridgeMessage`) and the assertion helpers (`expectError`,
+  // `expectBridgeMintProgramError`) are imported directly above.
+  //
+  // The context-bearing helpers below bind `bridgeCtx` so call sites
+  // stay terse. `bridgeCtx` is populated inside `before()` once the
+  // PSM/bridge PDAs are known.
+  let bridgeCtx: BridgeTestContext;
 
-  /**
-   * Serialize bridge message (must match Rust exactly)
-   * CRITICAL: recipient must be the OkuMoney ATA address, not the user's pubkey
-   */
-  function serializeBridgeMessage(params: {
-    sourceChainId: number;
-    destinationChainId: number;
-    sender: Uint8Array; // 20 bytes (EVM) or 32 bytes (Solana)
-    recipientWallet: PublicKey; // 32 bytes - recipient's wallet pubkey (not ATA)
-    amount: bigint;
-    nonce: bigint;
-    deadline: bigint;
-  }): Buffer {
-    const message = Buffer.alloc(80);
-    let offset = 0;
-
-    // u16 little-endian (2 bytes each)
-    offset = message.writeUInt16LE(params.sourceChainId, offset);
-    offset = message.writeUInt16LE(params.destinationChainId, offset);
-
-    // sender (EXACTLY 20 bytes for EVM)
-    const sender = params.sender.slice(0, 20);
-    if (sender.length !== 20) {
-      throw new Error(`Sender must be 20 bytes, got ${sender.length}`);
-    }
-    message.set(sender, offset);
-    offset += 20;
-
-    // recipient wallet pubkey (EXACTLY 32 bytes)
-    const recipientBytes = params.recipientWallet.toBytes();
-    if (recipientBytes.length !== 32) {
-      throw new Error(`Recipient must be 32 bytes, got ${recipientBytes.length}`);
-    }
-    message.set(recipientBytes, offset);
-    offset += 32;
-
-    // u64/i64 little-endian (8 bytes each)
-    offset = message.writeBigUInt64LE(params.amount, offset);
-    offset = message.writeBigUInt64LE(params.nonce, offset);
-    message.writeBigInt64LE(params.deadline, offset);
-
-    // Final validation
-    if (message.length !== 80) {
-      throw new Error(`Message should be 80 bytes, got ${message.length}`);
-    }
-
-    return message;
-  }
-
-  /**
-   * Calculate request ID (keccak256 hash)
-   */
-  function calculateRequestId(message: Buffer): Uint8Array {
-    return keccak_256(message);
-  }
-
-
-  /**
-   * Sign message with Ed25519
-   */
-  function signMessage(message: Buffer, keypair: Keypair): Uint8Array {
-    return nacl.sign.detached(message, keypair.secretKey);
-  }
-
-  /**
-   * Create bridge mint transaction with Ed25519 verification
-   * CRITICAL: recipientWallet is the wallet pubkey (Fix 3: matches ATA owner, not ATA address)
-   */
   async function createBridgeMintTx(params: {
     program: Program<LitePsm>;
     message: Buffer;
     signature: Uint8Array;
     orchestrator: Keypair;
-    recipientWallet: PublicKey; // Wallet pubkey — ATA is derived from this
+    recipientWallet: PublicKey;
     payer: Keypair;
     requestId: Uint8Array;
   }): Promise<Transaction> {
-    // Ed25519Program instruction MUST come first
-    const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
-      publicKey: params.orchestrator.publicKey.toBytes(),
-      message: new Uint8Array(params.message),  // Convert Buffer to Uint8Array
-      signature: params.signature,
-    });
-
-    // Derive ProcessedRequest PDA - must match Rust's derivation exactly
-    // seeds = [b"bridge_request", &request_id] where request_id is [u8; 32]
-    const [processedRequestPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("bridge_request"), Buffer.from(params.requestId)],
-      params.program.programId
-    );
-
-    // Derive recipient's OkuMoney ATA from wallet pubkey
-    const recipientAta = getAssociatedTokenAddressSync(
-      okuMoneyMint, params.recipientWallet, true, TOKEN_2022_PROGRAM_ID
-    );
-
-    // Verify the recipient ATA exists
-    try {
-      await getAccount(provider.connection, recipientAta, undefined, TOKEN_2022_PROGRAM_ID);
-    } catch {
-      throw new Error(`Recipient ATA ${recipientAta.toString()} does not exist. Create it in the test setup.`);
-    }
-
-    // Bridge mint instruction - pass message_bytes, signature, and request_id
-    const bridgeMintIx = await params.program.methods
-      .bridgeMint(
-        params.message,    // Buffer (bytes type in IDL)
-        Buffer.from(params.signature),   // Buffer (bytes type in IDL)
-        Array.from(params.requestId)     // [u8; 32] as number array
-      )
-      .accountsPartial({
-        payer: params.payer.publicKey,
-        bridgeConfig: bridgeConfigPda,
-        config: configPda,
-        processedRequest: processedRequestPda,
-        okuMoneyMint: okuMoneyMint,
-        recipientOkuMoneyAta: recipientAta,
-        instructionSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .instruction();
-
-    const tx = new Transaction();
-    tx.add(ed25519Ix); // MUST come first
-    tx.add(bridgeMintIx); // MUST come second
-    return tx;
+    return createBridgeMintTxFn(bridgeCtx, params);
   }
 
-  /**
-   * Random EVM address generator
-   */
-  function randomEvmAddress(): Uint8Array {
-    const addr = new Uint8Array(20);
-    crypto.getRandomValues(addr);
-    return addr;
-  }
-
-  /**
-   * Send a bridge_burn instruction via banksClient.processTransaction so
-   * we can capture the tx meta (logMessages) directly. Bankrun discards
-   * meta when txs flow through `BankrunProvider.sendAndConfirm`, so any
-   * test that needs event introspection has to take this longer route.
-   */
   async function bridgeBurnAndGetLogs(
     burnAmount: BN,
     evmRecipient: Uint8Array,
     destChain: number
   ): Promise<string[]> {
-    const [noncePda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("bridge_nonce"), Buffer.from([destChain, 0])],
-      program.programId
-    );
-    const ix = await program.methods
-      .bridgeBurn(burnAmount, Array.from(evmRecipient), destChain)
-      .accountsPartial({
-        user: user.publicKey,
-        bridgeConfig: bridgeConfigPda,
-        config: configPda,
-        bridgeNonce: noncePda,
-        okuMoneyMint,
-        userOkuMoneyAta,
-        feeRecipientAta,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .instruction();
-    const tx = new Transaction().add(ix);
-    const blockhashRes = await h.context.banksClient.getLatestBlockhash();
-    if (!blockhashRes) throw new Error("bankrun returned null blockhash");
-    tx.recentBlockhash = blockhashRes[0];
-    tx.feePayer = payer.publicKey;
-    tx.sign(payer, user);
-    const meta = await h.context.banksClient.processTransaction(tx);
-    return meta.logMessages;
+    return bridgeBurnAndGetLogsFn(bridgeCtx, {
+      user,
+      payer,
+      userOkuMoneyAta,
+      feeRecipientAta,
+      burnAmount,
+      evmRecipient,
+      destChain,
+    });
   }
 
-  /**
-   * Helper to expect error
-   *
-   * Handles both Anchor structured errors and SendTransactionError (the latter
-   * occurs when skipPreflight: true is set — program logs must be fetched
-   * separately via err.getLogs(connection)).
-   */
-  async function expectError(
-    fn: () => Promise<any>,
-    expectedCode: string
-  ): Promise<void> {
-    try {
-      await fn();
-      throw new Error("Expected error but transaction succeeded");
-    } catch (err: any) {
-      if (err.message === "Expected error but transaction succeeded") {
-        throw err;
-      }
-
-      // Collect all error text, including on-chain logs when available
-      const parts: string[] = [];
-      if (err.error?.errorCode?.code) parts.push(err.error.errorCode.code);
-      if (err.error?.errorMessage) parts.push(err.error.errorMessage);
-      parts.push(err.toString());
-
-      // SendTransactionError (from skipPreflight: true) — fetch on-chain logs
-      if (typeof err.getLogs === "function") {
-        try {
-          const logs: string[] = await err.getLogs(provider.connection);
-          if (logs?.length) parts.push(logs.join(" "));
-        } catch { /* log-fetch failure is non-fatal */ }
-      }
-
-      const haystack = parts.join(" ");
-      expect(haystack).to.include(expectedCode);
-    }
-  }
-
-  /**
-   * Submit a (typically Ed25519-wrapped) `Transaction` and assert that the
-   * program rejects with `expectedCode`. Bankrun-native: routes through
-   * `banksClient.tryProcessTransaction`, which returns the result object
-   * alongside the logs instead of throwing.
-   *
-   * Bankrun does not run preflight simulation, so the `skipPreflight`
-   * workaround the validator path needed for the Anchor-1.0/Ed25519
-   * incompatibility is now moot.
-   */
   async function expectBridgeMintProgramError(
     tx: Transaction,
     signers: Keypair[],
     expectedCode: string
   ): Promise<void> {
-    const blockhashRes = await h.context.banksClient.getLatestBlockhash();
-    if (!blockhashRes) throw new Error("bankrun returned null blockhash");
-    tx.recentBlockhash = blockhashRes[0];
-    tx.feePayer = signers[0].publicKey;
-    tx.sign(...signers);
-
-    const res = await h.context.banksClient.tryProcessTransaction(tx);
-    const errStr = res.result;
-    const logs = res.meta?.logMessages ?? [];
-
-    if (!errStr) {
-      throw new Error(
-        `Expected on-chain failure matching "${expectedCode}" but transaction succeeded.\n` +
-          `Logs:\n  ${logs.join("\n  ")}`
-      );
-    }
-
-    const haystack = [errStr, ...logs].join(" ");
-    if (!haystack.includes(expectedCode)) {
-      throw new Error(
-        `Expected on-chain error to match "${expectedCode}" but got:\n` +
-          `  result: ${errStr}\n` +
-          `  logs:\n    ${logs.join("\n    ")}`
-      );
-    }
+    return expectBridgeMintProgramErrorFn(bridgeCtx, tx, signers, expectedCode);
   }
 
   // ============================================================================
@@ -393,12 +188,8 @@ describe("Bridge Security Tests", () => {
   // ============================================================================
 
   before(async () => {
-    // Reset the cross-file PSM singleton — each bankrun cluster boots fresh,
-    // so any cached "psm already initialised" flag from a prior describe
-    // file would short-circuit the on-chain init for this cluster.
-    resetPsmSingleton();
     // Boot bankrun and pull the typed harness pieces we need. The harness's
-    // `program` is `anchor.workspace.LitePsm` — already provider-bound.
+    // `program` is loaded directly from the IDL and bound to bankrun's provider.
     h = await startBankrun();
     provider = h.provider as unknown as anchor.AnchorProvider;
     program = h.program;
@@ -574,19 +365,23 @@ describe("Bridge Security Tests", () => {
       TOKEN_PROGRAM_ID
     );
 
-    // Initialize PSM using shared setup module (bankrun funder)
-    const psmSetup = await initializePSMIfNeeded(
-      program,
-      payer,
-      usdcMint,
-      okuMoneyMint,
-      (kps, lamports) => fundKeypairs(h, kps, lamports)
-    );
-
+    // Initialize PSM.
+    const psmSetup = await initializePsm(h, program, payer, usdcMint, okuMoneyMint);
     configPda = psmSetup.configPda;
     redemptionQueuePda = psmSetup.redemptionQueuePda;
     vaultUsdcAta = psmSetup.vaultUsdcAta;
     vaultOkuMoneyAta = psmSetup.vaultOkuMoneyAta;
+
+    // Bind the shared bridge-helpers context now that the PDA pubkeys
+    // are known. All the in-file `createBridgeMintTx` / `bridgeBurn...`
+    // wrappers below resolve through this context.
+    bridgeCtx = {
+      h,
+      program,
+      configPda,
+      bridgeConfigPda,
+      okuMoneyMint,
+    };
 
     // Initialize bridge config
     //
@@ -876,13 +671,26 @@ describe("Bridge Security Tests", () => {
       expect(processedRequest.amount.toNumber()).to.equal(Number(amount));
     });
 
-    // NOTE (Phase 9): solana-bankrun's litesvm backend does NOT execute the
-    // Ed25519 precompile's signature-verification logic — it treats the
-    // precompile call as a no-op and returns success. On a real validator
-    // (and on Surfpool) the precompile rejects bad signatures before our
-    // program runs. Coverage for that path remains in `tests/fork/`
-    // (surfpool) and `scripts/test/test-devnet.ts` (real devnet).
-    it.skip("rejects invalid signature (bankrun lacks Ed25519 precompile enforcement)", async () => {
+    // NOTE: this test cannot run in any in-process Solana SVM available to us
+    // today. Bankrun, Surfpool, and direct litesvm 1.x all share the same
+    // backend, and litesvm's `LiteSVM::with_precompiles` toggle (added in
+    // 0.4.0) is OFF by default and not exposed by `solana-bankrun@0.4.0`
+    // or surfpool 1.1.2. The precompile is therefore a no-op, the curve25519
+    // sig math is never checked, and our program's `verify_ed25519_signature`
+    // — which only byte-compares the precompile ix data against the bytes
+    // we built — accepts the (bad-but-consistent) bytes and proceeds to
+    // mint.
+    //
+    // This is the canonical Solana pattern: programs trust the precompile
+    // to have validated the math (re-implementing curve25519 in BPF would
+    // burn ~200K CU per call). On a real validator the precompile rejects
+    // before our program runs.
+    //
+    // Coverage: `scripts/test/test-devnet.ts` has the
+    // `bridgeMintInvalidSig` step which runs against real devnet (or
+    // localnet's `solana-test-validator`) where the precompile DOES
+    // execute. See `SVM/TRACKER.md` § "Bankrun coverage gaps".
+    it.skip("rejects invalid signature (in-process SVM lacks precompile enforcement)", async () => {
       const message = serializeBridgeMessage({
         sourceChainId: ETH_CHAIN_ID,
         destinationChainId: SOLANA_CHAIN_ID,
@@ -1024,11 +832,8 @@ describe("Bridge Security Tests", () => {
       // Second mint with same request_id must fail — the ProcessedRequest PDA
       // already exists from tx1, so Anchor's `init` constraint trips. The
       // System Program's CreateAccount returns "already in use" in tx logs.
-      //
-      // Bankrun has no blockhash-dedup behavior the way the validator does,
-      // so we don't need a busy-loop waiting for a fresh blockhash. We just
-      // bump the slot once to be defensive against any in-process caching.
-      await warpSlots(h, 1n);
+      // Auto-bump-slot in the harness guarantees the next tx gets a fresh
+      // blockhash, so no manual `warpSlots` dance is required.
 
       const tx2 = await createBridgeMintTx({
         program,
@@ -3079,9 +2884,7 @@ describe("Bridge Security Tests", () => {
       const evmRecipient = randomEvmAddress();
 
       // Top up user's OkuMoney balance via the lightweight PSM mint path.
-      // (mint_oku_m is gated by `check_yield_lock`; bump a slot in case the
-      // previous test ran a yield op.)
-      await warpSlots(h, 1n);
+      // (auto-bump-slot handles the `check_yield_lock` sandwich check.)
       await program.methods
         .mintOkuM(new BN(20_000_000))
         .accountsPartial({
@@ -3164,9 +2967,6 @@ describe("Bridge Security Tests", () => {
       // PendingRefund PDA must now exist.
       const pendingInfo = await h.context.banksClient.getAccount(pendingPda);
       expect(pendingInfo, "PendingRefund PDA must exist after initiate").to.not.be.null;
-
-      // Bump slot to avoid same-slot yield lock on confirm_refund's mint.
-      await warpSlots(h, 1n);
 
       // confirm_refund — must be called by refund_confirmer
       // (signerManager per the bridge init), and MUST be a different key

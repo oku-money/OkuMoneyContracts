@@ -265,67 +265,38 @@ pub fn set_authority(
     );
 
     let config = &mut ctx.accounts.config;
-    let old_authority = match role {
-        AuthorityRole::RoleAdmin => {
-            let old = config.role_admin;
-            config.role_admin = new_authority;
-            old
-        }
-        AuthorityRole::Pauser => {
-            let old = config.pauser;
-            config.pauser = new_authority;
-            old
-        }
-        AuthorityRole::Unpauser => {
-            let old = config.unpauser;
-            config.unpauser = new_authority;
-            old
-        }
-        AuthorityRole::Freezer => {
-            let old = config.freezer;
-            config.freezer = new_authority;
-            old
-        }
-        AuthorityRole::Unfreezer => {
-            let old = config.unfreezer;
-            config.unfreezer = new_authority;
-            old
-        }
-        AuthorityRole::QueueProcessor => {
-            let old = config.queue_processor;
-            config.queue_processor = new_authority;
-            old
-        }
-        AuthorityRole::BufferDepositor => {
-            let old = config.buffer_depositor;
-            config.buffer_depositor = new_authority;
-            old
-        }
-        AuthorityRole::BufferWithdrawer => {
-            let old = config.buffer_withdrawer;
-            config.buffer_withdrawer = new_authority;
-            old
-        }
-        AuthorityRole::OracleManager => {
-            let old = config.oracle_manager;
-            config.oracle_manager = new_authority;
-            old
-        }
-        AuthorityRole::CapManager => {
-            let old = config.cap_manager;
-            config.cap_manager = new_authority;
-            old
-        }
-        AuthorityRole::AllowanceManager => {
-            let old = config.allowance_manager;
-            config.allowance_manager = new_authority;
-            old
-        }
-        AuthorityRole::Rebaser => {
-            let old = config.rebaser;
-            config.rebaser = new_authority;
-            old
-        }
+
+    // Swap-in the new authority and return the old value. Each arm is
+    // structurally identical (`let old = config.X; config.X = new;
+    // old`), so we use a one-line macro to dispatch on the role enum
+    // and collapse the 12-arm match. Behavior is byte-for-byte
+    // identical to the previous open-coded version.
+    macro_rules! rotate_role {
+        ( $( $variant:ident => $field:ident ),+ $(,)? ) => {
+            match role {
+                $(
+                    AuthorityRole::$variant => {
+                        let old = config.$field;
+                        config.$field = new_authority;
+                        old
+                    }
+                ),+
+            }
+        };
+    }
+    let old_authority = rotate_role! {
+        RoleAdmin         => role_admin,
+        Pauser            => pauser,
+        Unpauser          => unpauser,
+        Freezer           => freezer,
+        Unfreezer         => unfreezer,
+        QueueProcessor    => queue_processor,
+        BufferDepositor   => buffer_depositor,
+        BufferWithdrawer  => buffer_withdrawer,
+        OracleManager     => oracle_manager,
+        CapManager        => cap_manager,
+        AllowanceManager  => allowance_manager,
+        Rebaser           => rebaser,
     };
 
     emit!(AuthorityUpdatedEvent {

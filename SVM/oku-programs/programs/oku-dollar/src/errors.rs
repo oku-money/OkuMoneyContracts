@@ -96,4 +96,13 @@ pub enum OkuDollarError {
     /// references that break wrap/unwrap math.
     #[msg("Vault oku_money_mint must match PSM oku_money_mint")]
     OkuMoneyMintMismatch,
+
+    /// `accept_role_admin` was called but no proposal is in flight
+    /// (`pending_role_admin == Pubkey::default()`).
+    #[msg("No pending role-admin transfer to accept")]
+    NoPendingRoleAdmin,
+
+    /// `accept_role_admin` caller is not the proposed `pending_role_admin`.
+    #[msg("Caller is not the pending role admin")]
+    NotPendingRoleAdmin,
 }

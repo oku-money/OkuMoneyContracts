@@ -83,6 +83,10 @@ const PYTH_EXPO_OFFSET: usize = 20;
 const PYTH_TIMESTAMP_OFFSET: usize = 96;
 /// Offset of `agg.price: i64` (the integer price, scaled by 10^expo).
 const PYTH_PRICE_OFFSET: usize = 208;
+/// Offset of `agg.conf: u64` — the publisher-supplied confidence interval
+/// around `agg.price`. A wide confidence interval indicates a thin /
+/// illiquid market and should be rejected as untrustworthy.
+const PYTH_CONF_OFFSET: usize = 216;
 /// Offset of `agg.status: u8` (1 = Trading; anything else = stale/halted).
 const PYTH_STATUS_OFFSET: usize = 224;
 /// Minimum byte length we read from the price account.
@@ -92,6 +96,14 @@ const PYTH_MIN_DATA_LEN: usize = 240;
 
 /// `agg.status == Trading` value per the Pyth V2 PriceStatus enum.
 const PYTH_STATUS_TRADING: u8 = 1;
+
+/// Maximum confidence-interval ratio expressed in basis points of price.
+/// `conf / price > MAX_CONF_RATIO_BPS / 10_000` is rejected. 200 bps = 2%
+/// is the standard band used by Marinade, Kamino, and Pyth's own
+/// `get_price_no_older_than` example. Tighter than this rejects routine
+/// publisher churn; looser leaves the protocol exposed to thin-market
+/// price prints.
+const MAX_CONF_RATIO_BPS: u64 = 200;
 
 /// Check oracle reserves before minting.
 /// Returns `Ok` if reserves are sufficient, error otherwise. Manually parses
@@ -185,6 +197,11 @@ pub fn check_oracle_reserves<'info>(
             .try_into()
             .map_err(|_| LitePsmError::InvalidOracleResponse)?,
     );
+    let conf = u64::from_le_bytes(
+        data[PYTH_CONF_OFFSET..PYTH_CONF_OFFSET + 8]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
+    );
     // `agg.status` is a `#[repr(u8)]` enum — read as a single byte. A previous
     // revision read this as `u32`, which silently included `corp_act` and two
     // padding bytes; the comparison happened to pass for `Trading=1` only by
@@ -217,12 +234,100 @@ pub fn check_oracle_reserves<'info>(
     // Ensure reserves >= current_supply + mint_amount
     require!(price >= 0, LitePsmError::InvalidOracleResponse);
 
-    let reserves = price as u64;
+    // Use `u64::try_from` rather than `as u64` so a pathological `i64::MAX`
+    // (or any value where the high bit is set in a misbehaving feed) is
+    // rejected cleanly instead of producing a misleadingly-large reserve.
+    let reserves = u64::try_from(price).map_err(|_| LitePsmError::InvalidOracleResponse)?;
     let new_supply = current_supply
         .checked_add(mint_amount)
         .ok_or(LitePsmError::Overflow)?;
 
+    // Confidence-interval guard: reject feeds whose publisher uncertainty
+    // is wider than `MAX_CONF_RATIO_BPS` of the price. A wide confidence
+    // band is Pyth's standard signal for thin or stressed markets, and we
+    // would rather pause minting than back the supply against an
+    // unreliable print. The check is skipped when `reserves == 0` (the
+    // outer `reserves >= new_supply` would catch this anyway).
+    if reserves > 0 {
+        let conf_bps = (conf as u128)
+            .checked_mul(10_000u128)
+            .ok_or(LitePsmError::Overflow)?
+            .checked_div(reserves as u128)
+            .ok_or(LitePsmError::Overflow)?;
+        require!(
+            conf_bps <= MAX_CONF_RATIO_BPS as u128,
+            LitePsmError::OracleConfidenceTooWide
+        );
+    }
+
     require!(reserves >= new_supply, LitePsmError::InsufficientReserves);
+
+    Ok(())
+}
+
+/// Pre-flight validation used by `set_oracle` to reject mis-configured
+/// feeds at admin time rather than at every subsequent `mint_oku_m` call.
+///
+/// Asserts the header invariants (`magic`, `ver == 2`, `atype == Price`),
+/// the program owner, and `expo == 0`. Does NOT assert staleness or
+/// confidence because the feed is typically a fresh deploy with no
+/// publishers attached yet; runtime checks still apply at mint time.
+///
+/// `oracle_pubkey` is the address the admin is trying to commit to config;
+/// `oracle_account` must be that exact account.
+pub fn validate_oracle_feed(
+    oracle_account: &AccountInfo,
+    oracle_pubkey: Pubkey,
+    pyth_program_owner: Pubkey,
+) -> Result<()> {
+    require!(
+        oracle_account.key() == oracle_pubkey,
+        LitePsmError::InvalidOracleResponse
+    );
+    require!(
+        *oracle_account.owner == pyth_program_owner,
+        LitePsmError::InvalidOracleResponse
+    );
+
+    let data = oracle_account.try_borrow_data()?;
+    require!(
+        data.len() >= PYTH_MIN_DATA_LEN,
+        LitePsmError::InvalidOracleResponse
+    );
+
+    let magic = u32::from_le_bytes(
+        data[PYTH_MAGIC_OFFSET..PYTH_MAGIC_OFFSET + 4]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
+    );
+    require!(magic == PYTH_MAGIC, LitePsmError::InvalidOracleResponse);
+
+    let version = u32::from_le_bytes(
+        data[PYTH_VERSION_OFFSET..PYTH_VERSION_OFFSET + 4]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
+    );
+    require!(
+        version == PYTH_VERSION_2,
+        LitePsmError::InvalidOracleResponse
+    );
+
+    let atype = u32::from_le_bytes(
+        data[PYTH_ATYPE_OFFSET..PYTH_ATYPE_OFFSET + 4]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
+    );
+    require!(
+        atype == PYTH_ATYPE_PRICE,
+        LitePsmError::InvalidOracleResponse
+    );
+
+    let expo = i32::from_le_bytes(
+        data[PYTH_EXPO_OFFSET..PYTH_EXPO_OFFSET + 4]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
+    );
+    require!(expo == 0, LitePsmError::InvalidOracleResponse);
 
     Ok(())
 }

@@ -338,11 +338,41 @@ pub struct ThawEvent {
 }
 
 /// Emitted when a PSM authority role is updated.
+///
+/// For `RoleAdmin` rotations this fires twice: once at proposal time
+/// (`new_authority` = the *pending* admin, surfaced via
+/// `RoleAdminTransferProposed` for indexers that want to distinguish the
+/// two phases) and a second time on acceptance (`old_authority` = previous
+/// admin, `new_authority` = newly accepted admin).
 #[event]
 pub struct AuthorityUpdatedEvent {
     pub role: AuthorityRole,
     pub old_authority: Pubkey,
     pub new_authority: Pubkey,
+}
+
+/// Emitted when `set_authority(RoleAdmin, ...)` proposes a two-step
+/// transfer of the meta-role. The rotation has NOT taken effect — the new
+/// admin must still sign `accept_role_admin` to commit it.
+#[event]
+pub struct RoleAdminTransferProposedEvent {
+    pub current_admin: Pubkey,
+    pub pending_admin: Pubkey,
+}
+
+/// Emitted when `accept_role_admin` completes a previously-proposed
+/// two-step transfer.
+#[event]
+pub struct RoleAdminTransferAcceptedEvent {
+    pub previous_admin: Pubkey,
+    pub new_admin: Pubkey,
+}
+
+/// Emitted when `cancel_role_admin_transfer` clears an in-flight proposal.
+#[event]
+pub struct RoleAdminTransferCancelledEvent {
+    pub current_admin: Pubkey,
+    pub cancelled_pending: Pubkey,
 }
 
 // ============================================================================

@@ -12,6 +12,31 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {Vm} from "forge-std/Vm.sol";
+import {IOkuMoney} from "../../src/interfaces/IOkuMoney.sol";
+
+/// @dev Helper for the ETH-refund failure-path test. Has no payable
+///      receive/fallback, so any `call{value: X}` to it from the router
+///      will fail and trigger `OkuBridgeRouter.EthRefundFailed`. The
+///      contract delegates the bridge call so the EOA-less origin is
+///      legitimate, then expects the revert via the inner pattern.
+contract RefundRejector {
+    function approveAndBridge(
+        IOkuMoney okuMoney,
+        OkuBridgeRouter router,
+        uint256 okuMAmount,
+        address adapter,
+        uint256 destChain,
+        address recipient
+    )
+        external
+        payable
+    {
+        IERC20(address(okuMoney)).approve(address(router), okuMAmount);
+        router.bridgeVia{value: msg.value}(okuMAmount, adapter, destChain, recipient);
+    }
+    // Deliberately NO `receive` or `fallback`. ETH refund must revert.
+}
 
 /**
  * @title OkuBridgeRouterTest
@@ -705,6 +730,168 @@ contract OkuBridgeRouterTest is BridgeBaseTest {
         // Fewer notes returned because okuMMultiplier increased
         assertLt(pending.amount, okuMAmount);
         assertEq(pending.amount, expectedNotes);
+    }
+
+    // ============ Adapter Path: msg.value handling & ETH-balance invariant ============
+    //
+    // Router invariant: the router is NOT designed to hold native ETH between
+    // transactions. `msg.value` forwarded by the caller flows straight to the
+    // adapter (which keeps it as its relay fee). After the adapter returns,
+    // any ETH still sitting on the router — whether from a refund the adapter
+    // chose to send back, or from a misrouted tx that landed on the router
+    // before this call — is swept to `msg.sender` so the post-call balance
+    // returns to zero.
+    //
+    // The mock adapter in this test suite does NOT refund any of its
+    // `msg.value` (matches the most common adapter behaviour: pre-quoted
+    // exact fee, no surplus to return). To exercise the refund path we
+    // pre-seed the router with stray ETH via the `vm.deal` cheatcode and
+    // verify the next bridge call sweeps it.
+
+    event EthRefunded(address indexed to, uint256 amount);
+
+    /// @dev Scan recorded logs for an EthRefunded(address,uint256) event from
+    ///      the router and assert it carries the expected refund value.
+    function _assertRefundEvent(
+        Vm.Log[] memory logs,
+        address to,
+        uint256 expectedAmount
+    )
+        internal
+        view
+    {
+        bytes32 refundTopic = keccak256("EthRefunded(address,uint256)");
+        bytes32 toTopic = bytes32(uint256(uint160(to)));
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (
+                logs[i].emitter == address(bridgeRouter) && logs[i].topics.length == 2
+                    && logs[i].topics[0] == refundTopic && logs[i].topics[1] == toTopic
+            ) {
+                uint256 amount = abi.decode(logs[i].data, (uint256));
+                assertEq(amount, expectedAmount, "EthRefunded amount mismatch");
+                return;
+            }
+        }
+        revert("EthRefunded event for caller not found");
+    }
+
+    function test_BridgeVia_RouterHoldsNoEthAfterCall() public {
+        // Baseline: with the mock adapter retaining the entire forwarded
+        // `msg.value`, the router has nothing left to refund and ends the
+        // call with a zero ETH balance.
+        uint256 okuMAmount = 1000e18;
+        uint256 sent = 0.3 ether;
+        _mintOkuMoney(user1, okuMAmount);
+        vm.deal(user1, 1 ether);
+
+        vm.startPrank(user1);
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
+        bridgeRouter.bridgeVia{value: sent}(
+            okuMAmount, address(mockAdapter), ARBITRUM_CHAIN_ID, user2
+        );
+        vm.stopPrank();
+
+        // Router holds no ETH; adapter retained the relay fee.
+        assertEq(address(bridgeRouter).balance, 0, "router must hold no ETH after call");
+        assertEq(address(mockAdapter).balance, sent, "adapter should retain its relay fee");
+    }
+
+    function test_BridgeVia_NoRefundEventWhenZeroLeftover() public {
+        // Gas optimisation: when the router's post-adapter balance is zero
+        // (the common case), we skip the external `call{value:}` entirely
+        // and emit no `EthRefunded` event.
+        uint256 okuMAmount = 1000e18;
+        _mintOkuMoney(user1, okuMAmount);
+
+        vm.recordLogs();
+        vm.startPrank(user1);
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
+        bridgeRouter.bridgeVia(okuMAmount, address(mockAdapter), ARBITRUM_CHAIN_ID, user2);
+        vm.stopPrank();
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 refundTopic = keccak256("EthRefunded(address,uint256)");
+        for (uint256 i = 0; i < logs.length; i++) {
+            assertTrue(
+                logs[i].topics.length == 0 || logs[i].topics[0] != refundTopic,
+                "EthRefunded must not fire when balance is 0"
+            );
+        }
+    }
+
+    function test_BridgeVia_SweepsStrayEthIntoRefund() public {
+        // Pre-condition: someone has accidentally sent ETH directly to the
+        // router (e.g. forced via selfdestruct, a misrouted tx, or an
+        // adapter that refunded surplus on a prior call). The next bridge
+        // call must sweep it to the caller, restoring the
+        // "router holds no ETH between transactions" invariant.
+        uint256 okuMAmount = 1000e18;
+        uint256 strayEth = 0.1 ether;
+        uint256 sent = 0.05 ether;
+        _mintOkuMoney(user1, okuMAmount);
+        vm.deal(user1, 1 ether);
+
+        // Forcibly seed the router with stray ETH via the test cheatcode.
+        vm.deal(address(bridgeRouter), strayEth);
+
+        uint256 user1EthBefore = user1.balance;
+
+        vm.recordLogs();
+        vm.startPrank(user1);
+        okuMoney.approve(address(bridgeRouter), okuMAmount);
+        bridgeRouter.bridgeVia{value: sent}(
+            okuMAmount, address(mockAdapter), ARBITRUM_CHAIN_ID, user2
+        );
+        vm.stopPrank();
+
+        // Adapter retained `sent`; router refunded only the pre-existing
+        // `strayEth` (the only ETH it actually held at refund time).
+        _assertRefundEvent(vm.getRecordedLogs(), user1, strayEth);
+
+        // user1 paid `sent` to the adapter and got back `strayEth`.
+        // Net: user1.balance changed by (strayEth - sent).
+        assertEq(
+            user1.balance,
+            user1EthBefore - sent + strayEth,
+            "user1 should have received stray ETH after paying adapter fee"
+        );
+        assertEq(address(bridgeRouter).balance, 0, "router must hold no ETH after call");
+        assertEq(address(mockAdapter).balance, sent, "adapter should retain its relay fee");
+    }
+
+    function test_BridgeVia_RevertsWhenRefundReceiverRejectsEth() public {
+        // If the caller is a contract without a payable receive/fallback,
+        // the refund `call{value:}` fails and we surface a typed
+        // `EthRefundFailed` error rather than silently retaining the user's
+        // ETH inside the router. The entire bridgeVia tx rolls back, so
+        // OkuMoney isn't burned either — the call is atomic.
+        //
+        // We exercise the refund path by pre-seeding the router with stray
+        // ETH (the mock adapter keeps any forwarded msg.value, so the only
+        // source of "leftover" is stray ETH that the router was already
+        // holding). When the router attempts to forward this to the
+        // non-payable contract caller, the refund call returns false.
+        RefundRejector rejector = new RefundRejector();
+        uint256 okuMAmount = 1000e18;
+        uint256 sent = 0;
+        uint256 strayEth = 0.01 ether;
+        _mintOkuMoney(address(rejector), okuMAmount);
+        vm.deal(address(bridgeRouter), strayEth);
+
+        vm.expectRevert(OkuBridgeRouter.EthRefundFailed.selector);
+        rejector.approveAndBridge{value: sent}(
+            IOkuMoney(address(okuMoney)),
+            bridgeRouter,
+            okuMAmount,
+            address(mockAdapter),
+            ARBITRUM_CHAIN_ID,
+            user2
+        );
+
+        // Atomicity: tokens not burned, router still holds the stray ETH
+        // (the entire call rolled back).
+        assertEq(okuMoney.balanceOf(address(rejector)), okuMAmount);
+        assertEq(address(bridgeRouter).balance, strayEth);
     }
 
     // ============ Full Round-Trip Tests (Native Path) ============

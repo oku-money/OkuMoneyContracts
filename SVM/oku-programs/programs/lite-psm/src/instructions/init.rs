@@ -110,6 +110,10 @@ pub fn initialize(
     config.blacklist_exempt_bridge = Pubkey::default();
     config.blacklist_exempt_router = Pubkey::default();
 
+    // Two-step `role_admin` transfer slot — empty until
+    // `set_authority(RoleAdmin, ...)` proposes a rotation.
+    config.pending_role_admin = Pubkey::default();
+
     emit!(InitializeEvent {
         role_admin: config.role_admin,
         usdc_mint: config.usdc_mint,

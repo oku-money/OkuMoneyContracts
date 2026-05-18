@@ -9,14 +9,50 @@ use crate::validation::{
 };
 use anchor_lang::prelude::*;
 
-/// Initialize the bridge router config
-/// Takes pauser and unpauser as args; signer becomes role_admin
-/// Stores mint addresses for validation (matches EVM pattern of storing downstream refs)
-/// Validates zero addresses (matches EVM OkuBridgeRouter.initialize())
+/// Initialize the bridge router config.
+///
+/// Takes pauser and unpauser as args; signer becomes role_admin. Stores
+/// mint addresses for validation (matches EVM pattern of storing downstream
+/// refs) and validates zero addresses (matches EVM
+/// `OkuBridgeRouter.initialize()`).
+///
+/// Cross-program canonical-mint check: the router stores `oku_money_mint`
+/// and `usd_oku_mint` once at init and pins every subsequent CPI against
+/// those stored values. If init silently accepted the wrong mint, every
+/// downstream `bridge_usd_oku` / `mint_usd_oku` call would fail with an
+/// opaque token-program error rather than a clean router-side rejection.
+/// We therefore require the canonical PSM and vault configs at init and
+/// assert the supplied mints match the configs' stored mint pubkeys.
 pub fn initialize(ctx: Context<Initialize>, pauser: Pubkey, unpauser: Pubkey) -> Result<()> {
     // Validate zero addresses (matches EVM pattern)
     require!(pauser != Pubkey::default(), RouterError::InvalidAuthority);
     require!(unpauser != Pubkey::default(), RouterError::InvalidAuthority);
+
+    // Cross-program canonical-mint validation: load PSM + vault configs and
+    // verify the mints supplied here match the ones the underlying programs
+    // already committed to at their own initialize time. `verify_vault_config`
+    // also asserts the vault points back at this same `psm_config`.
+    let psm_cfg = verify_psm_config(&ctx.accounts.psm_config.to_account_info())?;
+    let vault_cfg = verify_vault_config(
+        &ctx.accounts.vault_config.to_account_info(),
+        &ctx.accounts.psm_config.key(),
+    )?;
+
+    let oku_money_mint = ctx.accounts.oku_money_mint.key();
+    let usd_oku_mint = ctx.accounts.usd_oku_mint.key();
+
+    require!(
+        psm_cfg.oku_money_mint == oku_money_mint,
+        RouterError::MintMismatch
+    );
+    require!(
+        vault_cfg.oku_money_mint == oku_money_mint,
+        RouterError::MintMismatch
+    );
+    require!(
+        vault_cfg.usd_oku_mint == usd_oku_mint,
+        RouterError::MintMismatch
+    );
 
     let config = &mut ctx.accounts.config;
     config.bump = ctx.bumps.config;
@@ -26,8 +62,11 @@ pub fn initialize(ctx: Context<Initialize>, pauser: Pubkey, unpauser: Pubkey) ->
     config.is_paused = false;
 
     // Store mint addresses for validation in subsequent calls
-    config.oku_money_mint = ctx.accounts.oku_money_mint.key();
-    config.usd_oku_mint = ctx.accounts.usd_oku_mint.key();
+    config.oku_money_mint = oku_money_mint;
+    config.usd_oku_mint = usd_oku_mint;
+
+    // Two-step `role_admin` transfer slot — empty until proposed.
+    config.pending_role_admin = Pubkey::default();
 
     emit!(InitializeEvent {
         role_admin: config.role_admin,
@@ -315,13 +354,17 @@ pub fn redeem_usd_oku(
     require!(!is_paused, RouterError::Paused);
     require!(usd_oku_shares > 0, RouterError::ZeroAmount);
 
-    // Defense-in-depth cross-program PDA + pause checks. Note: PSM allows
-    // `redeem_oku_m` while the bridge is paused but blocks it while the PSM
-    // itself is paused, so we check PSM only here.
-    verify_psm_config(&ctx.accounts.psm_config.to_account_info())?;
-    verify_vault_config(
+    // Defense-in-depth cross-program PDA + pause checks. Both the PSM and
+    // the vault must be unpaused — the vault `unwrap` CPI happens first,
+    // followed by PSM `redeem_oku_m`. Surfacing `PsmPaused`/`VaultPaused`
+    // here is the explicit fast-fail design used by `bridge_usd_oku` and
+    // `mint_usd_oku`; without these explicit checks the underlying CPI
+    // would still revert but with an opaque downstream error rather than
+    // a clean router-side code. (Note: PSM allows `redeem_oku_m` while the
+    // bridge is paused; only the PSM-level pause matters here.)
+    verify_psm_and_vault_not_paused(
+        &ctx.accounts.psm_config.to_account_info(),
         &ctx.accounts.vault_config.to_account_info(),
-        &ctx.accounts.psm_config.key(),
     )?;
 
     // Extract AccountInfo from boxed accounts BEFORE any CPI

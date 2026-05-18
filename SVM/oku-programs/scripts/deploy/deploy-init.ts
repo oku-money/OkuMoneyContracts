@@ -134,10 +134,14 @@ async function main() {
   );
   logger.log('');
 
-  // Initialize Router
+  // Initialize Router. Pass the PSM + OkuDollar program IDs so the router
+  // can cross-check the supplied mints against the canonical mints stored
+  // in the PSM/vault configs (see `initializeRouter` doc).
   const { routerConfig } = await initializeRouter(
     provider,
     programIds.okuBridgeRouter,
+    programIds.litePsm,
+    programIds.okuDollar,
     okuMoneyMint,
     usdOkuMint,
     authorities

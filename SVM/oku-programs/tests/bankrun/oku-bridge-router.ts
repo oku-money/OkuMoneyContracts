@@ -260,6 +260,11 @@ describe("oku-bridge-router", () => {
           config: routerConfigPda,
           okuMoneyMint,
           usdOkuMint,
+          // Pass underlying PSM + vault configs so the router can
+          // cross-check the supplied mints (defence against init-time
+          // mint-pubkey drift).
+          psmConfig: psmConfigPda,
+          vaultConfig: vaultConfigPda,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })

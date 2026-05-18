@@ -85,6 +85,18 @@ pub struct OracleManager<'info> {
         has_one = oracle_manager @ LitePsmError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
+
+    /// Optional pre-flight account for `set_oracle`. When `oracle !=
+    /// Pubkey::default()` and this account is supplied, the handler parses
+    /// the Pyth header and asserts the runtime invariants (`expo == 0`,
+    /// header magic / version / atype) before persisting the new oracle
+    /// pubkey. Without the pre-flight check, an admin could silently
+    /// configure an exponentially-scaled feed that would only error at
+    /// every subsequent `mint_oku_m` call. Other instructions on this
+    /// context (e.g. `set_pyth_program_owner`) ignore the account.
+    /// CHECK: parsed defensively by `validate_oracle_feed`; only required
+    /// for the `set_oracle` path with a non-default oracle pubkey.
+    pub oracle_account: Option<UncheckedAccount<'info>>,
 }
 
 #[derive(Accounts)]
@@ -173,6 +185,25 @@ pub struct SetAuthority<'info> {
         seeds = [PsmConfig::SEED],
         bump = config.bump,
         has_one = role_admin @ LitePsmError::Unauthorized
+    )]
+    pub config: Account<'info, PsmConfig>,
+}
+
+/// Step 2 of the two-step `role_admin` transfer.
+///
+/// Signed by the proposed `pending_role_admin` (NOT the current
+/// `role_admin`). Anchor cannot express "signer matches a field that may
+/// be the zero pubkey" cleanly via `has_one`, so the runtime check lives
+/// in the handler (`accept_role_admin`).
+#[derive(Accounts)]
+pub struct AcceptRoleAdmin<'info> {
+    /// The proposed new role admin — must match `config.pending_role_admin`.
+    pub new_role_admin: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [PsmConfig::SEED],
+        bump = config.bump,
     )]
     pub config: Account<'info, PsmConfig>,
 }

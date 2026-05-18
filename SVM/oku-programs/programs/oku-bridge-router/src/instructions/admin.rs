@@ -6,7 +6,7 @@
 //! Role rotation via `set_authority` mirrors OpenZeppelin `AccessControl`.
 //! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol
 
-use crate::contexts::{Pause, SetAuthority, Unpause};
+use crate::contexts::{AcceptRoleAdmin, Pause, SetAuthority, Unpause};
 use crate::errors::RouterError;
 use crate::events::*;
 use crate::roles::RouterAuthorityRole;
@@ -46,8 +46,10 @@ pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
     Ok(())
 }
 
-/// Update a specific authority role
-/// Only role_admin can call this function
+/// Update a specific authority role.
+///
+/// Only `role_admin` can call this. Non-meta roles commit immediately;
+/// `RoleAdmin` is two-step (propose + accept) — see `accept_role_admin`.
 pub fn set_authority(
     ctx: Context<SetAuthority>,
     role: RouterAuthorityRole,
@@ -60,12 +62,19 @@ pub fn set_authority(
     );
 
     let config = &mut ctx.accounts.config;
+
+    if matches!(role, RouterAuthorityRole::RoleAdmin) {
+        let current_admin = config.role_admin;
+        config.pending_role_admin = new_authority;
+
+        emit!(RoleAdminTransferProposedEvent {
+            current_admin,
+            pending_admin: new_authority,
+        });
+        return Ok(());
+    }
+
     let old_authority = match role {
-        RouterAuthorityRole::RoleAdmin => {
-            let old = config.role_admin;
-            config.role_admin = new_authority;
-            old
-        }
         RouterAuthorityRole::Pauser => {
             let old = config.pauser;
             config.pauser = new_authority;
@@ -76,12 +85,65 @@ pub fn set_authority(
             config.unpauser = new_authority;
             old
         }
+        RouterAuthorityRole::RoleAdmin => unreachable!("handled above"),
     };
 
     emit!(AuthorityUpdatedEvent {
         role,
         old_authority,
         new_authority,
+    });
+
+    Ok(())
+}
+
+/// Step 2 of the two-step `RoleAdmin` transfer.
+pub fn accept_role_admin(ctx: Context<AcceptRoleAdmin>) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+
+    require!(
+        config.pending_role_admin != Pubkey::default(),
+        RouterError::NoPendingRoleAdmin
+    );
+    require!(
+        ctx.accounts.new_role_admin.key() == config.pending_role_admin,
+        RouterError::NotPendingRoleAdmin
+    );
+
+    let previous_admin = config.role_admin;
+    let new_admin = config.pending_role_admin;
+
+    config.role_admin = new_admin;
+    config.pending_role_admin = Pubkey::default();
+
+    emit!(RoleAdminTransferAcceptedEvent {
+        previous_admin,
+        new_admin,
+    });
+    emit!(AuthorityUpdatedEvent {
+        role: RouterAuthorityRole::RoleAdmin,
+        old_authority: previous_admin,
+        new_authority: new_admin,
+    });
+
+    Ok(())
+}
+
+/// Withdraw an in-flight `RoleAdmin` two-step proposal (current admin only).
+pub fn cancel_role_admin_transfer(ctx: Context<SetAuthority>) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+
+    require!(
+        config.pending_role_admin != Pubkey::default(),
+        RouterError::NoPendingRoleAdmin
+    );
+
+    let cancelled_pending = config.pending_role_admin;
+    config.pending_role_admin = Pubkey::default();
+
+    emit!(RoleAdminTransferCancelledEvent {
+        current_admin: config.role_admin,
+        cancelled_pending,
     });
 
     Ok(())

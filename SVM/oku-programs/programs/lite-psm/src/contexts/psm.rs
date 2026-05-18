@@ -132,9 +132,15 @@ pub struct RedeemOkuM<'info> {
     )]
     pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
-    /// PSM's OkuMoney escrow vault (for queued redemptions)
+    /// PSM's OkuMoney escrow vault (for queued redemptions).
+    /// Pinned to `config.vault_oku_money` so a caller cannot substitute an
+    /// alternate config-owned OkuMoney ATA — without the explicit address
+    /// pin, any Token-2022 OkuMoney account whose authority is the config
+    /// PDA would satisfy the constraints and the user's escrowed tokens
+    /// would be silently routed away from the canonical escrow.
     #[account(
         mut,
+        address = config.vault_oku_money,
         token::mint = oku_money_mint,
         token::authority = config,
         token::token_program = token_2022_program,
@@ -183,9 +189,11 @@ pub struct ProcessQueue<'info> {
     )]
     pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
-    /// PSM's OkuMoney escrow vault - holds queued redemptions
+    /// PSM's OkuMoney escrow vault - holds queued redemptions.
+    /// Pinned to `config.vault_oku_money` (see rationale on `RedeemOkuM`).
     #[account(
         mut,
+        address = config.vault_oku_money,
         token::mint = oku_money_mint,
         token::authority = config,
         token::token_program = token_2022_program,

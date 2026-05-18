@@ -88,6 +88,13 @@ contract OkuMoney is
     error RecipientBlacklisted();
     error AlreadyBlacklisted();
     error NotBlacklisted();
+    /// @dev Multiplier ceiling defense-in-depth — caps the dollar-value-per-token
+    ///      at `Constants.MAX_MULTIPLIER` (= $1,000,000) so a compromised
+    ///      `OKUM_REBASER` key cannot push the multiplier into a region where
+    ///      downstream multiplications (PSM mint/redeem, OkuDollar wrap/unwrap)
+    ///      lose precision or overflow. Mirrors the explicit `MAX_OKU_M_PRICE`
+    ///      guard on the SVM side.
+    error MultiplierTooHigh();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -164,11 +171,16 @@ contract OkuMoney is
     }
 
     /// @notice Directly override the stored multiplier
-    /// @param newMultiplier New multiplier value (must be >= current)
+    /// @param newMultiplier New multiplier value (must be >= current and <= MAX_MULTIPLIER)
+    /// @dev The `<= Constants.MAX_MULTIPLIER` ceiling is defense-in-depth: even
+    ///      with a compromised `OKUM_REBASER` key, the multiplier cannot be
+    ///      pushed into a region that would distort the PSM and vault math.
+    ///      Mirrors the explicit `MAX_OKU_M_PRICE` guard on the SVM side.
     function setOkuMMultiplier(uint256 newMultiplier) external onlyRole(Roles.OKUM_REBASER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 currentMultiplier = $.okuMMultiplier;
         if (newMultiplier < currentMultiplier) revert Errors.MultiplierCannotDecrease();
+        if (newMultiplier > Constants.MAX_MULTIPLIER) revert MultiplierTooHigh();
         $.lastYieldDistributionBlock = block.number;
         $.okuMMultiplier = newMultiplier;
         emit OkuMMultiplierUpdated(currentMultiplier, newMultiplier, totalSupply());
@@ -178,6 +190,10 @@ contract OkuMoney is
     /// @dev Increases okuMMultiplier by yieldAmount / totalSupply.
     ///      yieldAmount is dollar-denominated (18 decimals).
     ///      E.g., $1000 yield on 10000 tokens -> +$0.10/token.
+    ///
+    ///      Enforces the same `MAX_MULTIPLIER` ceiling as `setOkuMMultiplier`.
+    ///      The check runs against the freshly-computed `newMultiplier`, so a
+    ///      single huge `yieldAmount` cannot bypass it.
     /// @param yieldAmount Dollar yield to distribute (18 decimals)
     function distributeYield(uint256 yieldAmount) external onlyRole(Roles.OKUM_REBASER) {
         uint256 supply = totalSupply();
@@ -186,6 +202,7 @@ contract OkuMoney is
         $.lastYieldDistributionBlock = block.number;
         uint256 oldMultiplier = $.okuMMultiplier;
         uint256 newMultiplier = oldMultiplier + (yieldAmount * Constants.PRECISION / supply);
+        if (newMultiplier > Constants.MAX_MULTIPLIER) revert MultiplierTooHigh();
         $.okuMMultiplier = newMultiplier;
         emit YieldDistributed(yieldAmount, oldMultiplier, newMultiplier, supply);
     }

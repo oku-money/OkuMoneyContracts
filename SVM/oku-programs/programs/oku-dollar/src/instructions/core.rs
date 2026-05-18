@@ -95,6 +95,10 @@ pub fn initialize(
 
     config.is_paused = false;
 
+    // Two-step `role_admin` transfer slot — empty until
+    // `set_authority(RoleAdmin, ...)` proposes a rotation.
+    config.pending_role_admin = Pubkey::default();
+
     emit!(InitializeEvent {
         role_admin: config.role_admin,
         oku_money_mint: config.oku_money_mint,
@@ -383,6 +387,17 @@ pub fn update_usd_multiplier(
     ctx: Context<UpdateUsdMultiplier>,
     new_usd_multiplier: u64,
 ) -> Result<()> {
+    // Cross-program yield-lock fence. The collateral check below reads
+    // `oku_m_price` from PSM config; if the orchestrator just bumped that
+    // price in the same slot (`set_oku_m_price` / `distribute_yield`),
+    // running the multiplier update in that same slot would let the
+    // collateral check use the freshly-updated price. Refusing same-slot
+    // operation keeps the price snapshot consistent across both legs and
+    // mirrors the `check_yield_lock` discipline already enforced on
+    // `wrap` / `unwrap`. The orchestrator should batch its PSM price
+    // update and vault multiplier update across adjacent slots.
+    check_yield_lock(&ctx.accounts.psm_config)?;
+
     let config = &ctx.accounts.config;
     let old_multiplier = config.usd_multiplier;
     let min_collateral_ratio = config.min_collateral_ratio;
@@ -440,10 +455,12 @@ pub fn update_usd_multiplier(
 ///
 /// Allows reserve manager to add OkuMoney to the vault without minting usdOku;
 /// this increases the collateralization ratio. Mirrors EVM
-/// `OkuDollar.depositReserves`, which is gated by `whenNotPaused` — the SVM
-/// previously omitted the pause check, deviating from EVM. Now restored.
+/// `OkuDollar.depositReserves`, which is gated by `whenNotPaused`.
+///
+/// The pause check now lives on the `DepositReserves` context as
+/// `constraint = !config.is_paused`, matching the `Wrap`/`Unwrap` pattern
+/// so the guard cannot be silently bypassed by a future handler refactor.
 pub fn deposit_reserves(ctx: Context<DepositReserves>, amount: u64) -> Result<()> {
-    require!(!ctx.accounts.config.is_paused, OkuDollarError::VaultPaused);
     require!(amount > 0, OkuDollarError::ZeroAmount);
 
     let decimals = ctx.accounts.oku_money_mint.decimals;
@@ -494,10 +511,11 @@ pub fn deposit_reserves(ctx: Context<DepositReserves>, amount: u64) -> Result<()
 ///
 /// Allows reserve manager to remove excess OkuMoney from the vault. Must
 /// maintain minimum collateralization ratio after withdrawal. Mirrors EVM
-/// `OkuDollar.withdrawSurplus`, which is gated by `whenNotPaused` — the SVM
-/// previously omitted the pause check, deviating from EVM. Now restored.
+/// `OkuDollar.withdrawSurplus`, which is gated by `whenNotPaused`.
+///
+/// The pause check lives on the `WithdrawReserves` context as
+/// `constraint = !config.is_paused`, matching the `Wrap`/`Unwrap` pattern.
 pub fn withdraw_reserves(ctx: Context<WithdrawReserves>, amount: u64) -> Result<()> {
-    require!(!ctx.accounts.config.is_paused, OkuDollarError::VaultPaused);
     require!(amount > 0, OkuDollarError::ZeroAmount);
 
     let bump = ctx.accounts.config.bump;

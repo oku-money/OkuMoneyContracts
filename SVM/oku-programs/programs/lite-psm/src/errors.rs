@@ -126,6 +126,12 @@ pub enum LitePsmError {
     #[msg("Invalid oracle response")]
     InvalidOracleResponse,
 
+    /// Pyth confidence interval is wider than the protocol's tolerance
+    /// (`MAX_CONF_RATIO_BPS`). Indicates a thin / illiquid market and is
+    /// rejected to avoid backing supply against an unreliable price print.
+    #[msg("Oracle confidence interval too wide")]
+    OracleConfidenceTooWide,
+
     // ===== Yield Distribution Errors =====
     /// Cannot perform operation in same slot as yield distribution
     /// EVM: YieldDistributionInProgress()
@@ -183,6 +189,15 @@ pub enum LitePsmError {
     /// Authority pubkey is the zero pubkey or otherwise invalid
     #[msg("Authority pubkey is invalid (e.g. zero pubkey)")]
     InvalidAuthority,
+
+    /// `accept_role_admin` was called but no proposal is in flight
+    /// (`pending_role_admin == Pubkey::default()`).
+    #[msg("No pending role-admin transfer to accept")]
+    NoPendingRoleAdmin,
+
+    /// `accept_role_admin` caller is not the proposed `pending_role_admin`.
+    #[msg("Caller is not the pending role admin")]
+    NotPendingRoleAdmin,
 
     /// Request ID mismatch
     #[msg("Request ID mismatch")]
@@ -317,6 +332,13 @@ pub enum LitePsmError {
     /// EVM uses a runtime-resolved `usdcDecimalMultiplier`; SVM hardcodes 6.
     #[msg("USDC mint must have exactly 6 decimals")]
     InvalidUsdcDecimals,
+
+    /// OkuMoney mint must have exactly 6 decimals on Solana.
+    /// All PSM math (oku_m_price, distribute_yield, oku_m_to_dollars)
+    /// assumes 6-decimal raw token amounts; a mismatched decimal count
+    /// would silently break every accounting path.
+    #[msg("OkuMoney mint must have exactly 6 decimals")]
+    InvalidOkuMoneyDecimals,
 
     // ===== PSM Math / Slippage Errors =====
     /// Mint output rounded down to zero (oku_m_price too high relative to input).

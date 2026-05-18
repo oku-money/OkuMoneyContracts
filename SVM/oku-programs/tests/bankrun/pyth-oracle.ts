@@ -250,22 +250,42 @@ describe("Pyth oracle (bankrun)", () => {
     await mintToViaBankrun(h, usdcMint, userUsdcAta, payer, 100_000_000, TOKEN_PROGRAM_ID);
 
     // Rotate the PSM's accepted pyth_program_owner to the test keypair.
+    // `oracleAccount: null` skips the optional pre-flight (only the
+    // `set_oracle` path uses it).
     await program.methods
       .setPythProgramOwner(pythProgramOwner.publicKey)
       .accountsPartial({
         oracleManager: coldMultisig.publicKey,
         config: configPda,
+        oracleAccount: null,
       })
       .signers([coldMultisig])
       .rpc();
 
+    // Seed a valid Pyth fixture BEFORE calling `set_oracle` so the new
+    // admin-time pre-flight header check has something to read. Without
+    // this seed the price account simply doesn't exist at `set_oracle`
+    // time and the pre-flight would fail.
+    const setupClock = await h.context.banksClient.getClock();
+    setPythAccount(
+      buildPythFixture({
+        unixTimestamp: setupClock.unixTimestamp,
+        priceRawBaseUnits: 100_000_000_000_000n,
+        status: PythStatus.Trading,
+      })
+    );
+
     // Configure the PSM's `oracle` pubkey + a permissive staleness threshold
     // (300 s — well within `ORACLE_MIN_STALENESS_SECS..ORACLE_MAX_STALENESS_SECS`).
+    // Pass the Pyth account itself so the program's pre-flight header check
+    // runs against the fixture (validates magic / version / atype / expo /
+    // owner).
     await program.methods
       .setOracle(pythPriceAccountKey, new BN(300))
       .accountsPartial({
         oracleManager: coldMultisig.publicKey,
         config: configPda,
+        oracleAccount: pythPriceAccountKey,
       })
       .signers([coldMultisig])
       .rpc();

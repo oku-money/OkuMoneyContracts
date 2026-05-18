@@ -154,6 +154,7 @@ contract OkuDollar is
         _grantRole(Roles.VAULT_RESERVE_MANAGER, _admin);
         _grantRole(Roles.VAULT_PAUSER, _admin);
         _grantRole(Roles.VAULT_UNPAUSER, _admin);
+        _grantRole(Roles.VAULT_ADMIN, _admin);
     }
 
     // ============ Storage Accessor Views ============
@@ -438,28 +439,69 @@ contract OkuDollar is
     }
 
     /// @notice Withdraw surplus OkuMoney without burning OkuDollar shares.
-    /// @dev Enforces collateralizationRatio() >= minCollateralRatio AFTER withdrawal.
+    /// @dev Enforces `collateralizationRatio() >= minCollateralRatio` BEFORE the
+    ///      token transfer (correct CEI ordering). `nonReentrant` is applied as
+    ///      defense-in-depth — OkuMoney today is a standard ERC-20 with no
+    ///      transfer callbacks, but if a future upgrade ever introduces hooks
+    ///      (ERC-777 / ERC-4337 callouts) a reentrant call back into
+    ///      `wrap`/`unwrap` between the transfer and a post-check would
+    ///      observe a temporarily-inflated reserve balance.
     function withdrawSurplus(uint256 okuMAmount)
         external
         whenNotPaused
+        nonReentrant
         onlyRole(Roles.VAULT_RESERVE_MANAGER)
     {
         if (okuMAmount == 0) revert Errors.ZeroAmount();
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
+
+        // Compute the post-withdrawal collateralization ratio against the
+        // reserve balance the vault WILL HAVE after `safeTransfer` completes,
+        // and revert before moving any tokens if that ratio breaches the floor.
+        uint256 currentReserves = totalOkuMReserves();
+        if (currentReserves < okuMAmount) revert InsufficientReserves();
+        uint256 postReserves;
+        unchecked {
+            // Safe: just bounds-checked above.
+            postReserves = currentReserves - okuMAmount;
+        }
+
+        uint256 obligations = totalUsdObligations();
+        uint256 postRatio;
+        if (obligations == 0) {
+            postRatio = type(uint256).max;
+        } else {
+            uint256 postReservesDollarValue =
+                MathLib.okuMToDollars(postReserves, $.okuMoney.okuMMultiplier());
+            postRatio = (postReservesDollarValue * Constants.PRECISION) / obligations;
+        }
+        if (postRatio < $.minCollateralRatio) revert BelowMinimumCollateral();
+
         IERC20(address($.okuMoney)).safeTransfer(msg.sender, okuMAmount);
 
-        uint256 ratio = collateralizationRatio();
-        if (ratio < $.minCollateralRatio) revert BelowMinimumCollateral();
-
-        emit SurplusWithdrawn(msg.sender, okuMAmount, _okuMToDollarValue(okuMAmount), ratio);
+        emit SurplusWithdrawn(msg.sender, okuMAmount, _okuMToDollarValue(okuMAmount), postRatio);
     }
 
     // ============ Admin ============
 
-    function setMinCollateralRatio(uint256 newRatio) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice Update the minimum collateral ratio enforced by `withdrawSurplus`.
+    /// @dev Gated on `VAULT_ADMIN` rather than `DEFAULT_ADMIN_ROLE` so the
+    ///      vault-config key can be rotated independently of the AccessControl
+    ///      meta-role holder. Mirrors the granular-role posture used by every
+    ///      other admin function on this contract.
+    ///
+    ///      Live-health gate: any new floor that the vault doesn't already meet
+    ///      is rejected. Without this check, raising the floor above the live
+    ///      ratio would silently brick `withdrawSurplus` (and any future
+    ///      collateralization-checked operation) until the reserve manager
+    ///      deposited additional OkuMoney. Operational expectation: call
+    ///      `depositReserves` first to lift the live ratio above the new bar,
+    ///      then call this in the same operational batch.
+    function setMinCollateralRatio(uint256 newRatio) external onlyRole(Roles.VAULT_ADMIN) {
         if (newRatio > Constants.PRECISION) revert RatioExceedsMax();
         if (newRatio < Constants.MIN_COLLATERAL_RATIO_FLOOR) revert RatioBelowFloor();
+        if (collateralizationRatio() < newRatio) revert BelowMinimumCollateral();
         OkuDollarStorage storage $ = _getOkuDollarStorage();
         uint256 oldRatio = $.minCollateralRatio;
         $.minCollateralRatio = newRatio;

@@ -179,6 +179,20 @@ pub mod lite_psm {
         instructions::psm_admin::set_authority(ctx, role, new_authority)
     }
 
+    /// Step 2 of the two-step `RoleAdmin` rotation. Must be signed by the
+    /// `pending_role_admin` previously proposed via `set_authority(RoleAdmin,
+    /// new_admin)`. See `instructions::psm_admin::accept_role_admin`.
+    pub fn accept_role_admin(ctx: Context<AcceptRoleAdmin>) -> Result<()> {
+        instructions::psm_admin::accept_role_admin(ctx)
+    }
+
+    /// Withdraw an in-flight `RoleAdmin` two-step proposal (current
+    /// `role_admin` only). Useful for typo recovery before the new admin
+    /// accepts.
+    pub fn cancel_role_admin_transfer(ctx: Context<SetAuthority>) -> Result<()> {
+        instructions::psm_admin::cancel_role_admin_transfer(ctx)
+    }
+
     /// Initialize blacklist exemption for bridge and router (one-time, ROLE_ADMIN only)
     pub fn initialize_blacklist_exempt(
         ctx: Context<InitializeBlacklistExempt>,

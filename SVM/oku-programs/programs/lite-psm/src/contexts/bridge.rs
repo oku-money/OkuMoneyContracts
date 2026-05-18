@@ -233,17 +233,25 @@ pub struct ConfirmRefund<'info> {
     )]
     pub refunded_request: Box<Account<'info, RefundedRequest>>,
 
-    /// OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy
-    /// script chooses which extensions (if any) are configured at mint creation.
+    /// OkuMoney mint (Token-2022). Pinned to `config.oku_money_mint` and the
+    /// Token-2022 program so the refund-mint CPI cannot be routed through a
+    /// different token program (matches `BridgeMint`).
     #[account(
         mut,
-        constraint = oku_money_mint.key() == config.oku_money_mint
+        address = config.oku_money_mint,
+        mint::token_program = token_2022_program,
     )]
     pub oku_money_mint: Box<InterfaceAccount<'info, token_interface::Mint>>,
 
-    /// Sender's OkuMoney ATA - owner is validated against pending_refund.recipient
+    /// Sender's OkuMoney ATA — owner is pinned to `pending_refund.recipient`
+    /// (the wallet that originally burned). Also pinned to the canonical
+    /// OkuMoney mint and Token-2022 program so a caller cannot pass a
+    /// different-mint Token-2022 account that would surface only as an
+    /// opaque SPL-layer error.
     #[account(
         mut,
+        token::mint = oku_money_mint,
+        token::token_program = token_2022_program,
         constraint = sender_oku_money_ata.owner == pending_refund.recipient @ LitePsmError::InvalidRecipient
     )]
     pub sender_oku_money_ata: Box<InterfaceAccount<'info, token_interface::TokenAccount>>,

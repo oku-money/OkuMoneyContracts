@@ -23,11 +23,14 @@ export const ROLES = {
   OKUM_ALLOWANCE_MANAGER: keccak256(toUtf8Bytes("OKUM_ALLOWANCE_MANAGER")),
 
   // ============ OkuDollar (Vault) Roles ============
-  VAULT_UPGRADER: keccak256(toUtf8Bytes("VAULT_UPGRADER")),
-  VAULT_REBASER: keccak256(toUtf8Bytes("VAULT_REBASER")),
-  VAULT_RESERVE_MANAGER: keccak256(toUtf8Bytes("VAULT_RESERVE_MANAGER")),
-  VAULT_PAUSER: keccak256(toUtf8Bytes("VAULT_PAUSER")),
-  VAULT_UNPAUSER: keccak256(toUtf8Bytes("VAULT_UNPAUSER")),
+  VAULT_UPGRADER:         keccak256(toUtf8Bytes("VAULT_UPGRADER")),
+  VAULT_REBASER:          keccak256(toUtf8Bytes("VAULT_REBASER")),
+  VAULT_RESERVE_MANAGER:  keccak256(toUtf8Bytes("VAULT_RESERVE_MANAGER")),
+  VAULT_PAUSER:           keccak256(toUtf8Bytes("VAULT_PAUSER")),
+  VAULT_UNPAUSER:         keccak256(toUtf8Bytes("VAULT_UNPAUSER")),
+  /// Dedicated vault-admin role for parameter updates (e.g. min collateral ratio)
+  /// — see Roles.sol for the rationale on carving this out from DEFAULT_ADMIN_ROLE.
+  VAULT_ADMIN:            keccak256(toUtf8Bytes("VAULT_ADMIN")),
 
   // ============ LitePSM Roles ============
   PSM_UPGRADER: keccak256(toUtf8Bytes("PSM_UPGRADER")),

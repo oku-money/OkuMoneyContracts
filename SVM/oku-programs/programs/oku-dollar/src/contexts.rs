@@ -265,9 +265,14 @@ pub struct DepositReserves<'info> {
     )]
     pub reserve_manager: Signer<'info>,
 
+    /// Vault config — pause check enforced at the constraint level
+    /// (instead of inside the handler body) so any future refactor that
+    /// reorders the handler's prelude cannot accidentally skip it. The
+    /// `Wrap` / `Unwrap` contexts use the same pattern.
     #[account(
         seeds = [OkuDollarConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        constraint = !config.is_paused @ OkuDollarError::VaultPaused,
     )]
     pub config: Box<Account<'info, OkuDollarConfig>>,
 
@@ -312,9 +317,12 @@ pub struct DepositReserves<'info> {
 
 /// Withdraw reserves (reserve manager)
 ///
-/// NOTE: No pause check - matches EVM OkuDollar.withdrawReserves()
-/// Reserve withdrawals must remain available during emergencies to move
-/// collateral (e.g., to respond to protocol migration or critical fixes)
+/// Pause-gated: the handler used to do the pause check inline. We've moved
+/// the check into the Anchor `constraint =` attribute so it cannot be
+/// silently skipped by a future refactor. (The stale comment above
+/// claiming "No pause check" referred to a pre-Phase-13 design — the
+/// current behaviour matches EVM `OkuDollar.withdrawSurplus` which is
+/// `whenNotPaused`.)
 #[derive(Accounts)]
 pub struct WithdrawReserves<'info> {
     #[account(
@@ -324,7 +332,8 @@ pub struct WithdrawReserves<'info> {
 
     #[account(
         seeds = [OkuDollarConfig::SEED],
-        bump = config.bump
+        bump = config.bump,
+        constraint = !config.is_paused @ OkuDollarError::VaultPaused,
     )]
     pub config: Box<Account<'info, OkuDollarConfig>>,
 
@@ -415,7 +424,33 @@ pub struct SetAuthority<'info> {
     pub config: Box<Account<'info, OkuDollarConfig>>,
 }
 
-/// Set minimum collateral ratio (role_admin only)
+/// Step 2 of the two-step `RoleAdmin` transfer (Ownable2Step-style).
+///
+/// Signed by the proposed `pending_role_admin` rather than the current
+/// `role_admin`. The pending-pubkey match is asserted in the handler so we
+/// can return a descriptive `NotPendingRoleAdmin` error.
+#[derive(Accounts)]
+pub struct AcceptRoleAdmin<'info> {
+    /// Proposed new role admin — must match `config.pending_role_admin`.
+    pub new_role_admin: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [OkuDollarConfig::SEED],
+        bump = config.bump,
+    )]
+    pub config: Box<Account<'info, OkuDollarConfig>>,
+}
+
+/// Set minimum collateral ratio (role_admin only).
+///
+/// Carries the live reserve / supply / PSM-price accounts so the handler
+/// can assert that *the current vault still satisfies the new ratio*
+/// before persisting it. Without this check, raising the floor above the
+/// live ratio would silently brick `update_usd_multiplier` and
+/// `withdraw_reserves` until the operator deposited additional reserves.
+/// Operational expectation: if you need to raise the floor and the vault
+/// is currently below the proposed value, call `deposit_reserves` first.
 #[derive(Accounts)]
 pub struct SetMinCollateralRatio<'info> {
     #[account(
@@ -429,4 +464,23 @@ pub struct SetMinCollateralRatio<'info> {
         bump = config.bump
     )]
     pub config: Box<Account<'info, OkuDollarConfig>>,
+
+    /// usdOku mint — read for `supply` (the obligations leg of the ratio).
+    #[account(
+        address = config.usd_oku_mint,
+        mint::token_program = token_2022_program
+    )]
+    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    /// Vault's OkuMoney reserve account — read for `amount` (the assets
+    /// leg of the ratio).
+    #[account(address = config.reserve_vault)]
+    pub reserve_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    /// PSM config — read for `oku_m_price` (translates reserve OkuMoney
+    /// into dollar terms for the ratio computation).
+    #[account(address = config.psm_config)]
+    pub psm_config: Box<Account<'info, PsmConfig>>,
+
+    pub token_2022_program: Program<'info, Token2022>,
 }

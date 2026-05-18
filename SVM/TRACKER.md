@@ -703,6 +703,25 @@ remain green.
   constants with `8 + T::INIT_SPACE`. Compile-time asserts are working
   fine; not blocking anything. Defer post-mainnet.
 
+## ⏳ Mainnet hardening (post-MVP)
+
+- **Timelock on high-impact instructions.** The protocol currently has
+  no on-chain delay between proposing and executing a destructive admin
+  action (e.g. `set_authority`, `set_oracle`, `set_pyth_program_owner`,
+  `set_max_supply`, future program upgrades). A `TimelockController`-
+  style PDA (queue + minimum delay + execute window) is the standard
+  mainnet hardening for stablecoin protocols; consider before mainnet
+  launch. Pairs naturally with the `Ownable2Step` two-step `RoleAdmin`
+  transfer that already landed (see `accept_role_admin`).
+- **NOT pursuing: on-chain "no key overlap" checks.** Industry
+  convention is to enforce role separation **operationally** (multisig
+  hardware separation, runbook discipline) rather than via on-chain
+  constraints, because contracts cannot distinguish "same EOA holds
+  multiple keys" from "multiple EOAs are operated by the same human"
+  — only addresses are visible. MakerDAO, Aave, Circle USDC, and OZ
+  `AccessControl` all permit overlap and rely on procedural controls.
+  We adopt the same posture.
+
 ---
 
 ## 📚 References

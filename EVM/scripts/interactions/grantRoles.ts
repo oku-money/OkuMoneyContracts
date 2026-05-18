@@ -99,6 +99,7 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
     "VAULT_RESERVE_MANAGER",
     "VAULT_PAUSER",
     "VAULT_UNPAUSER",
+    "VAULT_ADMIN",
   ],
   LitePSM: [
     "DEFAULT_ADMIN_ROLE",
@@ -123,7 +124,15 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
     "BRIDGE_LIMITS_MANAGER",
     "BRIDGE_UPGRADER",
     "BRIDGE_REFUND_INITIATOR",
-    "BRIDGE_REFUND_CONFIRMER",
+    // BRIDGE_REFUND_CONFIRMER: intentionally NOT granted in bulk.
+    //
+    // OkuBridge.confirmRefund() reverts when initiator == confirmer
+    // (`InitiatorCannotConfirm`), so granting both refund roles to the same
+    // master EOA would silently break the refund flow. The confirmer role
+    // should be held by a SEPARATE key — assigned to the deployer EOA by the
+    // deployment script and rotated to its production custodian before the
+    // bridge serves real traffic. Keep this comment in sync with the deploy
+    // script and the contract-level NatSpec.
   ],
   OkuBridgeRouter: [
     "DEFAULT_ADMIN_ROLE",

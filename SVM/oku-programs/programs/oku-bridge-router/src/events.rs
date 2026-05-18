@@ -95,10 +95,33 @@ pub struct UnpauseEvent {
     pub unpauser: Pubkey,
 }
 
-/// Emitted when a router authority role is updated.
+/// Emitted when a router authority role is updated. For two-step
+/// `RoleAdmin` transfers this fires only on acceptance (not on proposal).
 #[event]
 pub struct AuthorityUpdatedEvent {
     pub role: RouterAuthorityRole,
     pub old_authority: Pubkey,
     pub new_authority: Pubkey,
+}
+
+/// Emitted when `set_authority(RoleAdmin, ...)` proposes a two-step
+/// transfer of the meta-role. Rotation is NOT yet effective.
+#[event]
+pub struct RoleAdminTransferProposedEvent {
+    pub current_admin: Pubkey,
+    pub pending_admin: Pubkey,
+}
+
+/// Emitted when `accept_role_admin` commits a previously-proposed transfer.
+#[event]
+pub struct RoleAdminTransferAcceptedEvent {
+    pub previous_admin: Pubkey,
+    pub new_admin: Pubkey,
+}
+
+/// Emitted when `cancel_role_admin_transfer` clears an in-flight proposal.
+#[event]
+pub struct RoleAdminTransferCancelledEvent {
+    pub current_admin: Pubkey,
+    pub cancelled_pending: Pubkey,
 }

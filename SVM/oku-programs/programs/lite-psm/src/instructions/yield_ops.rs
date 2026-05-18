@@ -78,12 +78,21 @@ pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Res
 
     // Calculate new multiplier
     // new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)
-    // This distributes the yield proportionally across all holders
-    let yield_per_token = (yield_amount as u128)
+    // This distributes the yield proportionally across all holders.
+    //
+    // Use `u64::try_from` (NOT `as u64`) on the final widening cast so that
+    // any value exceeding `u64::MAX` is surfaced as `Overflow` rather than
+    // silently truncated. With `PRECISION = 1e9` and a pathologically small
+    // `total_supply`, the quotient can exceed `u64::MAX`; the subsequent
+    // `MAX_OKU_M_PRICE` ceiling would only catch the final multiplier, not
+    // the corrupted per-token value.
+    let yield_per_token_u128 = (yield_amount as u128)
         .checked_mul(PRECISION as u128)
         .ok_or(LitePsmError::Overflow)?
         .checked_div(total_supply as u128)
-        .ok_or(LitePsmError::Overflow)? as u64;
+        .ok_or(LitePsmError::Overflow)?;
+    let yield_per_token =
+        u64::try_from(yield_per_token_u128).map_err(|_| LitePsmError::Overflow)?;
 
     // Prevent no-op distributions that waste the yield lock slot
     // This can happen when yield_amount is tiny relative to total_supply

@@ -102,13 +102,24 @@ pub mod oku_dollar {
         instructions::admin::unpause(ctx)
     }
 
-    /// Update an authority role
+    /// Update an authority role. `RoleAdmin` is two-step (propose +
+    /// accept, via `set_authority(RoleAdmin, ...)` + `accept_role_admin`).
     pub fn set_authority(
         ctx: Context<SetAuthority>,
         role: AuthorityRole,
         new_authority: Pubkey,
     ) -> Result<()> {
         instructions::admin::set_authority(ctx, role, new_authority)
+    }
+
+    /// Step 2 of the two-step `RoleAdmin` rotation.
+    pub fn accept_role_admin(ctx: Context<AcceptRoleAdmin>) -> Result<()> {
+        instructions::admin::accept_role_admin(ctx)
+    }
+
+    /// Withdraw an in-flight `RoleAdmin` two-step proposal.
+    pub fn cancel_role_admin_transfer(ctx: Context<SetAuthority>) -> Result<()> {
+        instructions::admin::cancel_role_admin_transfer(ctx)
     }
 
     /// Set the minimum collateral ratio

@@ -40,10 +40,16 @@ pub struct Initialize<'info> {
     /// constraints, a misconfigured deploy could initialize PSM against a
     /// mint whose authority is a different program / multisig, silently
     /// breaking supply accounting.
+    ///
+    /// Decimals are pinned at 6 — all PSM math (`oku_m_price`,
+    /// `oku_m_to_dollars`, yield distribution) assumes 6-decimal raw
+    /// amounts. EVM resolves this at runtime from `IERC20Metadata`; SVM
+    /// hardcodes the assumption and asserts it at init.
     #[account(
         mint::token_program = token_2022_program,
         mint::authority = config,
         mint::freeze_authority = config,
+        constraint = oku_money_mint.decimals == 6 @ LitePsmError::InvalidOkuMoneyDecimals,
     )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
@@ -66,19 +72,26 @@ pub struct Initialize<'info> {
 
 #[derive(Accounts)]
 pub struct SetupRedemptionQueue<'info> {
+    /// `role_admin` is the only authority permitted to create the queue PDA.
+    /// Without this gate, any signer could front-run the deployer and create
+    /// the canonical-seeded `RedemptionQueue` PDA, forcing the legitimate
+    /// `initialize` flow to fail with `AccountAlreadyInitialized` until the
+    /// griefer's account is closed. Matches the authority model used by
+    /// `SetupOkuMoneyEscrow` below.
     #[account(mut)]
-    pub payer: Signer<'info>,
+    pub role_admin: Signer<'info>,
 
-    /// PSM config must exist (initialize was called)
+    /// PSM config must exist (initialize was called).
     #[account(
         seeds = [PsmConfig::SEED],
         bump = config.bump,
+        has_one = role_admin @ LitePsmError::Unauthorized
     )]
     pub config: Account<'info, PsmConfig>,
 
     #[account(
         init,
-        payer = payer,
+        payer = role_admin,
         space = RedemptionQueue::LEN,
         seeds = [RedemptionQueue::SEED],
         bump

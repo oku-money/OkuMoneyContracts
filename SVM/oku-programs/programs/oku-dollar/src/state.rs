@@ -52,6 +52,12 @@ pub struct OkuDollarConfig {
 
     /// Whether the vault is paused
     pub is_paused: bool,
+
+    /// Pending `role_admin` rotation target — two-step admin-transfer slot
+    /// (OpenZeppelin `Ownable2Step` pattern). Written by
+    /// `set_authority(RoleAdmin, ...)`; consumed by `accept_role_admin`.
+    /// `Pubkey::default()` means "no rotation in flight".
+    pub pending_role_admin: Pubkey,
 }
 
 impl OkuDollarConfig {
@@ -61,10 +67,10 @@ impl OkuDollarConfig {
     pub const USD_OKU_MINT_SEED: &'static [u8] = b"usd_oku_mint";
 
     /// Space needed for OkuDollarConfig account: 8 byte discriminator +
-    /// `InitSpace`-derived field sum. Pinned at 330 bytes by the
-    /// assertion below.
+    /// `InitSpace`-derived field sum. Pinned at 362 bytes by the
+    /// assertion below (330 + 32 for `pending_role_admin`).
     pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
 
 // Compile-time assertion: if OkuDollarConfig layout changes, this will fail to compile
-const _: () = assert!(OkuDollarConfig::LEN == 330);
+const _: () = assert!(OkuDollarConfig::LEN == 362);

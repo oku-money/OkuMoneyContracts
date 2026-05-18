@@ -535,6 +535,11 @@ describe("lite-psm", () => {
       });
 
       it("oracle_manager can set oracle", async () => {
+        // NOTE: `oracleAccount: null` here means the program's
+        // `validate_oracle_feed` pre-flight is skipped (this test uses a
+        // random pubkey as a placeholder oracle and only validates that
+        // the config field is written). The Pyth fixture path is
+        // exercised in `tests/bankrun/pyth-oracle.ts`.
         const oracleKey = Keypair.generate().publicKey;
         const stalenessThreshold = new BN(3600);
 
@@ -543,6 +548,7 @@ describe("lite-psm", () => {
           .accountsPartial({
             oracleManager: coldMultisig.publicKey,
             config: configPda,
+            oracleAccount: null,
           })
           .signers([coldMultisig])
           .rpc();
@@ -557,6 +563,7 @@ describe("lite-psm", () => {
           .accountsPartial({
             oracleManager: coldMultisig.publicKey,
             config: configPda,
+            oracleAccount: null,
           })
           .signers([coldMultisig])
           .rpc();
@@ -569,6 +576,7 @@ describe("lite-psm", () => {
             .accountsPartial({
               oracleManager: warmMultisig.publicKey, // Wrong role
               config: configPda,
+              oracleAccount: null,
             })
             .signers([warmMultisig])
             .rpc();
@@ -587,6 +595,7 @@ describe("lite-psm", () => {
             .accountsPartial({
               oracleManager: coldMultisig.publicKey,
               config: configPda,
+              oracleAccount: null,
             })
             .signers([coldMultisig])
             .rpc();
@@ -604,6 +613,7 @@ describe("lite-psm", () => {
             .accountsPartial({
               oracleManager: coldMultisig.publicKey,
               config: configPda,
+              oracleAccount: null,
             })
             .signers([coldMultisig])
             .rpc();
@@ -623,6 +633,7 @@ describe("lite-psm", () => {
           .accountsPartial({
             oracleManager: coldMultisig.publicKey,
             config: configPda,
+            oracleAccount: null,
           })
           .signers([coldMultisig])
           .rpc();
@@ -638,6 +649,7 @@ describe("lite-psm", () => {
           .accountsPartial({
             oracleManager: coldMultisig.publicKey,
             config: configPda,
+            oracleAccount: null,
           })
           .signers([coldMultisig])
           .rpc();
@@ -650,6 +662,7 @@ describe("lite-psm", () => {
             .accountsPartial({
               oracleManager: coldMultisig.publicKey,
               config: configPda,
+              oracleAccount: null,
             })
             .signers([coldMultisig])
             .rpc();
@@ -666,6 +679,7 @@ describe("lite-psm", () => {
             .accountsPartial({
               oracleManager: warmMultisig.publicKey, // wrong role
               config: configPda,
+              oracleAccount: null,
             })
             .signers([warmMultisig])
             .rpc();
@@ -1101,12 +1115,16 @@ describe("lite-psm", () => {
     it("fails when oracle configured but no price account passed", async () => {
       const oracleKey = Keypair.generate().publicKey;
 
-      // Set oracle
+      // Set oracle. We skip the new `set_oracle` pre-flight by passing
+      // `oracleAccount: null` — this test only checks that *mint* fails
+      // when the runtime `price_update` account is omitted while an
+      // oracle pubkey is configured.
       await program.methods
         .setOracle(oracleKey, new BN(3600))
         .accountsPartial({
           oracleManager: coldMultisig.publicKey,
           config: configPda,
+          oracleAccount: null,
         })
         .signers([coldMultisig])
         .rpc();
@@ -1144,6 +1162,7 @@ describe("lite-psm", () => {
         .accountsPartial({
           oracleManager: coldMultisig.publicKey,
           config: configPda,
+          oracleAccount: null,
         })
         .signers([coldMultisig])
         .rpc();
@@ -2846,11 +2865,13 @@ describe("lite-psm", () => {
         .rpc();
     });
 
-    it("role_admin can transfer admin role and transfer back", async () => {
+    it("role_admin can transfer admin role and transfer back (two-step Ownable2Step)", async () => {
       const tempAdmin = Keypair.generate();
       await fundKeypairs(h, [tempAdmin], 5 * anchor.web3.LAMPORTS_PER_SOL);
 
-      // Transfer admin to tempAdmin
+      // ---- Step 1: current admin proposes tempAdmin as the next role_admin.
+      // The rotation does NOT take effect yet — only `pending_role_admin`
+      // is written.
       await program.methods
         .setAuthority({ roleAdmin: {} }, tempAdmin.publicKey)
         .accountsPartial({
@@ -2860,9 +2881,43 @@ describe("lite-psm", () => {
         .rpc();
 
       let config = await program.account.psmConfig.fetch(configPda);
-      expect(config.roleAdmin.toString()).to.equal(tempAdmin.publicKey.toString());
+      // Live admin unchanged after step 1.
+      expect(config.roleAdmin.toString()).to.equal(admin.publicKey.toString());
+      // Pending slot now points at tempAdmin.
+      expect(config.pendingRoleAdmin.toString()).to.equal(tempAdmin.publicKey.toString());
 
-      // Transfer back
+      // A wrong signer cannot accept the rotation.
+      try {
+        await program.methods
+          .acceptRoleAdmin()
+          .accountsPartial({
+            newRoleAdmin: warmMultisig.publicKey, // not the pending admin
+            config: configPda,
+          })
+          .signers([warmMultisig])
+          .rpc();
+        expect.fail("non-pending admin should not be able to accept");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("NotPendingRoleAdmin");
+      }
+
+      // ---- Step 2: tempAdmin accepts; admin role flips and pending slot
+      // clears.
+      await program.methods
+        .acceptRoleAdmin()
+        .accountsPartial({
+          newRoleAdmin: tempAdmin.publicKey,
+          config: configPda,
+        })
+        .signers([tempAdmin])
+        .rpc();
+
+      config = await program.account.psmConfig.fetch(configPda);
+      expect(config.roleAdmin.toString()).to.equal(tempAdmin.publicKey.toString());
+      expect(config.pendingRoleAdmin.toString()).to.equal(PublicKey.default.toString());
+
+      // ---- Transfer back: same two-step dance, signed by tempAdmin
+      // proposing the original admin.
       await program.methods
         .setAuthority({ roleAdmin: {} }, admin.publicKey)
         .accountsPartial({
@@ -2872,8 +2927,63 @@ describe("lite-psm", () => {
         .signers([tempAdmin])
         .rpc();
 
+      await program.methods
+        .acceptRoleAdmin()
+        .accountsPartial({
+          newRoleAdmin: admin.publicKey,
+          config: configPda,
+        })
+        .signers([admin])
+        .rpc();
+
       config = await program.account.psmConfig.fetch(configPda);
       expect(config.roleAdmin.toString()).to.equal(admin.publicKey.toString());
+      expect(config.pendingRoleAdmin.toString()).to.equal(PublicKey.default.toString());
+    });
+
+    it("cancel_role_admin_transfer clears an in-flight proposal", async () => {
+      const tempAdmin = Keypair.generate();
+
+      // Propose a rotation.
+      await program.methods
+        .setAuthority({ roleAdmin: {} }, tempAdmin.publicKey)
+        .accountsPartial({
+          roleAdmin: admin.publicKey,
+          config: configPda,
+        })
+        .rpc();
+
+      let config = await program.account.psmConfig.fetch(configPda);
+      expect(config.pendingRoleAdmin.toString()).to.equal(tempAdmin.publicKey.toString());
+
+      // Current admin can cancel.
+      await program.methods
+        .cancelRoleAdminTransfer()
+        .accountsPartial({
+          roleAdmin: admin.publicKey,
+          config: configPda,
+        })
+        .rpc();
+
+      config = await program.account.psmConfig.fetch(configPda);
+      expect(config.pendingRoleAdmin.toString()).to.equal(PublicKey.default.toString());
+      // Live admin unchanged throughout.
+      expect(config.roleAdmin.toString()).to.equal(admin.publicKey.toString());
+
+      // Acceptance after cancellation rejects with NoPendingRoleAdmin.
+      try {
+        await program.methods
+          .acceptRoleAdmin()
+          .accountsPartial({
+            newRoleAdmin: tempAdmin.publicKey,
+            config: configPda,
+          })
+          .signers([tempAdmin])
+          .rpc();
+        expect.fail("accept after cancel should fail");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("NoPendingRoleAdmin");
+      }
     });
 
     it("non-role_admin rejected", async () => {

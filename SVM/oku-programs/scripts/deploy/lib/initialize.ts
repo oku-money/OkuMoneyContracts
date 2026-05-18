@@ -162,7 +162,7 @@ export async function initializePsm(
     await program.methods
       .setupRedemptionQueue()
       .accountsPartial({
-        payer: provider.wallet.publicKey,
+        roleAdmin: provider.wallet.publicKey,
         config: psmConfig,
         redemptionQueue: redemptionQueue,
         systemProgram: SystemProgram.programId,
@@ -384,11 +384,20 @@ export interface RouterInitResult {
 }
 
 /**
- * Initialize the Bridge Router program
+ * Initialize the Bridge Router program.
+ *
+ * `psmProgramId` / `okuDollarProgramId` are required so the router can
+ * cross-check the supplied `okuMoneyMint` / `usdOkuMint` against the
+ * canonical mints already stored in the PSM and vault configs at their
+ * own initialize time. If the router were allowed to silently accept the
+ * wrong mints here, every subsequent CPI would fail with an opaque
+ * token-program error instead of a clean router-side rejection.
  */
 export async function initializeRouter(
   provider: AnchorProvider,
   programId: PublicKey,
+  psmProgramId: PublicKey,
+  okuDollarProgramId: PublicKey,
   okuMoneyMint: PublicKey,
   usdOkuMint: PublicKey,
   authorities: ReturnType<typeof loadAuthorities>
@@ -399,6 +408,8 @@ export async function initializeRouter(
   const program = new Program(idl as any, provider);
 
   const [routerConfig] = deriveRouterConfigPDA(programId);
+  const [psmConfig] = derivePsmConfigPDA(psmProgramId);
+  const [vaultConfig] = deriveVaultConfigPDA(okuDollarProgramId);
 
   logger.info(`Router Config PDA: ${routerConfig.toBase58()}`);
 
@@ -412,6 +423,8 @@ export async function initializeRouter(
         config: routerConfig,
         okuMoneyMint: okuMoneyMint,
         usdOkuMint: usdOkuMint,
+        psmConfig,
+        vaultConfig,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })

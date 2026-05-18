@@ -11,11 +11,12 @@
 
 use crate::constants::{ORACLE_MAX_STALENESS_SECS, ORACLE_MIN_STALENESS_SECS};
 use crate::contexts::{
-    AllowanceManager, CapManager, FreezeAccount, InitializeBlacklistExempt, OracleManager, Pause,
-    SetAuthority, ThawAccount, Unpause,
+    AcceptRoleAdmin, AllowanceManager, CapManager, FreezeAccount, InitializeBlacklistExempt,
+    OracleManager, Pause, SetAuthority, ThawAccount, Unpause,
 };
 use crate::errors::LitePsmError;
 use crate::events::*;
+use crate::helpers::validate_oracle_feed;
 use crate::roles::AuthorityRole;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
@@ -96,6 +97,16 @@ pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Resu
 /// `staleness_threshold` must lie in `[ORACLE_MIN_STALENESS_SECS,
 /// ORACLE_MAX_STALENESS_SECS]` whenever an oracle is configured. Mirrors EVM
 /// `LitePSM.setOracle` bounds.
+///
+/// Pre-flight check: when `oracle != Pubkey::default()` AND the caller
+/// supplies an `oracle_account` matching the oracle pubkey, the handler
+/// parses the Pyth header and asserts the runtime invariants (`magic`,
+/// `version == 2`, `atype == Price`, owner, `expo == 0`) before persisting
+/// the new oracle pubkey. Operators are strongly encouraged to always pass
+/// the account so misconfiguration is caught at config time rather than
+/// silently breaking every subsequent `mint_oku_m` call. The account is
+/// optional only to keep upgrade-time admin flows that just want to clear
+/// staleness from being forced through a Pyth read.
 pub fn set_oracle(
     ctx: Context<OracleManager>,
     oracle: Pubkey,
@@ -107,6 +118,18 @@ pub fn set_oracle(
                 && staleness_threshold <= ORACLE_MAX_STALENESS_SECS,
             LitePsmError::InvalidStaleness
         );
+
+        // If the caller supplied the oracle account, pre-flight its header.
+        // The account is optional to preserve the existing admin flow that
+        // sets oracle metadata without performing a Pyth read; operational
+        // scripts should always pass it (see `scripts/admin/set-oracle.ts`).
+        if let Some(oracle_ai) = ctx.accounts.oracle_account.as_ref() {
+            validate_oracle_feed(
+                &oracle_ai.to_account_info(),
+                oracle,
+                ctx.accounts.config.pyth_program_owner,
+            )?;
+        }
     }
 
     let config = &mut ctx.accounts.config;
@@ -251,8 +274,21 @@ pub fn initialize_blacklist_exempt(
     Ok(())
 }
 
-/// Update a specific authority role
-/// Only role_admin can call this function
+/// Update a specific authority role.
+///
+/// Only `role_admin` can call this. All non-meta roles commit immediately;
+/// `RoleAdmin` is special-cased into a two-step (propose + accept) flow
+/// modelled on OpenZeppelin's `Ownable2Step`:
+///
+/// 1. The current `role_admin` calls `set_authority(RoleAdmin, new_admin)`.
+///    This writes `new_admin` to `pending_role_admin`. The live
+///    `role_admin` is unchanged.
+/// 2. `new_admin` calls `accept_role_admin`, which moves the value into
+///    `role_admin` and clears the slot.
+///
+/// Step 1 can be repeated or cleared via `cancel_role_admin_transfer`. A
+/// typo or stale-key proposal therefore does not lock the protocol out
+/// of its meta-role.
 pub fn set_authority(
     ctx: Context<SetAuthority>,
     role: AuthorityRole,
@@ -266,11 +302,28 @@ pub fn set_authority(
 
     let config = &mut ctx.accounts.config;
 
+    // RoleAdmin uses a two-step transfer; every other role commits
+    // immediately. See doc comment above for rationale.
+    if matches!(role, AuthorityRole::RoleAdmin) {
+        let current_admin = config.role_admin;
+        config.pending_role_admin = new_authority;
+
+        emit!(RoleAdminTransferProposedEvent {
+            current_admin,
+            pending_admin: new_authority,
+        });
+        // Do NOT emit `AuthorityUpdatedEvent` here — the rotation has not
+        // taken effect yet. `accept_role_admin` emits the canonical
+        // `AuthorityUpdatedEvent` once the transfer commits.
+        return Ok(());
+    }
+
     // Swap-in the new authority and return the old value. Each arm is
     // structurally identical (`let old = config.X; config.X = new;
     // old`), so we use a one-line macro to dispatch on the role enum
     // and collapse the 12-arm match. Behavior is byte-for-byte
-    // identical to the previous open-coded version.
+    // identical to the previous open-coded version. `RoleAdmin` is
+    // intentionally absent — it's handled by the two-step branch above.
     macro_rules! rotate_role {
         ( $( $variant:ident => $field:ident ),+ $(,)? ) => {
             match role {
@@ -281,11 +334,11 @@ pub fn set_authority(
                         old
                     }
                 ),+
+                AuthorityRole::RoleAdmin => unreachable!("handled above"),
             }
         };
     }
     let old_authority = rotate_role! {
-        RoleAdmin         => role_admin,
         Pauser            => pauser,
         Unpauser          => unpauser,
         Freezer           => freezer,
@@ -303,6 +356,68 @@ pub fn set_authority(
         role,
         old_authority,
         new_authority,
+    });
+
+    Ok(())
+}
+
+/// Step 2 of the two-step `role_admin` transfer.
+///
+/// Must be signed by the `pending_role_admin` previously proposed by the
+/// outgoing admin via `set_authority(RoleAdmin, ...)`. Moves the value
+/// into `role_admin` and clears the pending slot. Emits the canonical
+/// `AuthorityUpdatedEvent` so downstream indexers do not need to special-
+/// case the two-step path.
+pub fn accept_role_admin(ctx: Context<AcceptRoleAdmin>) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+
+    require!(
+        config.pending_role_admin != Pubkey::default(),
+        LitePsmError::NoPendingRoleAdmin
+    );
+    require!(
+        ctx.accounts.new_role_admin.key() == config.pending_role_admin,
+        LitePsmError::NotPendingRoleAdmin
+    );
+
+    let previous_admin = config.role_admin;
+    let new_admin = config.pending_role_admin;
+
+    config.role_admin = new_admin;
+    config.pending_role_admin = Pubkey::default();
+
+    emit!(RoleAdminTransferAcceptedEvent {
+        previous_admin,
+        new_admin,
+    });
+    emit!(AuthorityUpdatedEvent {
+        role: AuthorityRole::RoleAdmin,
+        old_authority: previous_admin,
+        new_authority: new_admin,
+    });
+
+    Ok(())
+}
+
+/// Withdraw an in-flight two-step `role_admin` proposal.
+///
+/// Only the *current* `role_admin` may cancel. The pending slot is reset
+/// to `Pubkey::default()`. Useful if the outgoing admin discovers a typo
+/// in the proposed pubkey before the new admin has accepted.
+pub fn cancel_role_admin_transfer(ctx: Context<SetAuthority>) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+
+    require!(
+        config.pending_role_admin != Pubkey::default(),
+        LitePsmError::NoPendingRoleAdmin
+    );
+
+    let cancelled_pending = config.pending_role_admin;
+    config.pending_role_admin = Pubkey::default();
+
+    emit!(RoleAdminTransferCancelledEvent {
+        current_admin: config.role_admin,
+        cancelled_pending,
     });
 
     Ok(())

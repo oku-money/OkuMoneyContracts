@@ -79,6 +79,16 @@ contract OkuBridgeRouter is
     error UnsupportedAdapter(address adapter);
     error InvalidRecipient();
     error CannotSweepOperationalToken(address token);
+    /// @dev Refund of excess `msg.value` to the caller failed (caller has no
+    ///      payable receive / fallback). Surfaced as a typed error so the
+    ///      caller can resimulate with an exact fee amount.
+    error EthRefundFailed();
+
+    // ============ Events ============
+
+    /// @notice Emitted when leftover ETH is refunded to the caller after an
+    ///         adapter call. `amount` is the post-adapter balance returned.
+    event EthRefunded(address indexed to, uint256 amount);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -273,6 +283,16 @@ contract OkuBridgeRouter is
 
     /// @dev Shared core for the adapter path. Caller must have already deposited
     ///      `okuMAmount` OkuMoney into this contract. Burns and forwards to adapter.
+    ///
+    ///      ETH handling: the router itself is NOT designed to hold native ETH —
+    ///      `msg.value` exists only to pay third-party adapter fees (e.g. the
+    ///      Wormhole NTT manager's relay quote). After the adapter call returns
+    ///      we refund the contract's *entire remaining ETH balance* to
+    ///      `msg.sender`. This both handles user overpayment AND sweeps any
+    ///      stray ETH accidentally sent to the router into the same refund,
+    ///      preserving the "router holds no ETH between transactions" invariant.
+    ///      `nonReentrant` (applied at the entry points) makes the refund safe
+    ///      even though it's a `call{value:}` to an arbitrary address.
     function _bridgeAdapter(
         OkuBridgeRouterStorage storage $,
         address adapter,
@@ -290,6 +310,16 @@ contract OkuBridgeRouter is
         emit BridgeInitiated(
             msg.sender, adapter, address($.okuMoney), okuMAmount, destinationChain, recipient
         );
+
+        // Refund any leftover ETH (overpayment + any stray balance) to the
+        // caller. Skip the external call when the balance is zero to save gas
+        // on the common exact-fee path.
+        uint256 leftover = address(this).balance;
+        if (leftover > 0) {
+            (bool ok,) = payable(msg.sender).call{value: leftover}("");
+            if (!ok) revert EthRefundFailed();
+            emit EthRefunded(msg.sender, leftover);
+        }
     }
 
     // ============ Admin Functions ============

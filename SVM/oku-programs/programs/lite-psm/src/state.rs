@@ -98,23 +98,35 @@ pub struct PsmConfig {
     /// or, after parser support is added, at the Pyth Solana Receiver
     /// (`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`).
     pub pyth_program_owner: Pubkey,
+
+    /// Pending `role_admin` rotation target — the two-step admin-transfer
+    /// model (OpenZeppelin `Ownable2Step` pattern). `set_authority(RoleAdmin,
+    /// new_admin)` writes to this slot only; the rotation does NOT take
+    /// effect until `new_admin` signs `accept_role_admin`, which moves the
+    /// value into `role_admin` and clears the slot. This protects the
+    /// protocol from a typo or stale key on the proposing side silently
+    /// locking out the meta-role.
+    ///
+    /// `Pubkey::default()` means "no pending rotation".
+    pub pending_role_admin: Pubkey,
 }
 
 impl PsmConfig {
     pub const SEED: &'static [u8] = b"psm_config";
 
     /// Space needed for PsmConfig account: 8 byte discriminator +
-    /// `InitSpace`-derived field sum. Pinned to 690 bytes by the
+    /// `InitSpace`-derived field sum. Pinned to 722 bytes by the
     /// compile-time assertion below; if a reviewer changes a field's
     /// width the assertion fires.
     pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
 
 // Compile-time assertion: if PsmConfig layout changes, this will fail to compile.
-// (690 = 8 disc + 32*12 authorities + 32*4 token refs + 8*2 limits + 1 paused
+// (722 = 8 disc + 32*12 authorities + 32*4 token refs + 8*2 limits + 1 paused
 //      + 32 oracle + 8 staleness + 8 last_yield_slot + 8 oku_m_price
-//      + 32*2 blacklist_exempt + 32 pyth_program_owner + 1 bump.)
-const _: () = assert!(PsmConfig::LEN == 690);
+//      + 32*2 blacklist_exempt + 32 pyth_program_owner + 32 pending_role_admin
+//      + 1 bump.)
+const _: () = assert!(PsmConfig::LEN == 722);
 
 /// Redemption queue PDA — zero-copy ring buffer.
 ///

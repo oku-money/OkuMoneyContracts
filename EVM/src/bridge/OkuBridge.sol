@@ -16,6 +16,7 @@ import {
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
@@ -190,7 +191,14 @@ contract OkuBridge is
 
         __AccessControl_init();
         __Pausable_init();
-        __EIP712_init("OkuBridge", "1");
+        // Chain-namespaced EIP-712 domain name. The domain separator already
+        // includes `block.chainid`, so cross-chain signature replay is not
+        // possible regardless of the name, but namespacing the human-readable
+        // domain (e.g. "OkuBridge_Sepolia", "OkuBridge_Base", or
+        // "OkuBridge_<chainid>" for chains without a friendly name) prevents
+        // wallet UIs from rendering the same prompt on different chains and
+        // gives auditors an unambiguous label.
+        __EIP712_init(_eip712Name(), "1");
         __ReentrancyGuard_init();
 
         OkuBridgeStorage storage $ = _getOkuBridgeStorage();
@@ -600,5 +608,31 @@ contract OkuBridge is
     ///      is a desire to reduce the public surface.
     function hashTypedDataV4(bytes32 structHash) external view returns (bytes32) {
         return _hashTypedDataV4(structHash);
+    }
+
+    /// @dev Build the chain-namespaced EIP-712 domain name at init time.
+    ///      Returns `OkuBridge_<friendly-name>` for chains in the canonical
+    ///      protocol set, or `OkuBridge_<chainid>` for any other chain. The
+    ///      result is baked into the EIP-712 domain separator and never
+    ///      changes for the life of the proxy.
+    ///
+    ///      Keep this list in sync with `scripts/config/chains.ts`. Adding a
+    ///      new chain here is forward-compatible: existing deployments keep
+    ///      their old domain (frozen by `__EIP712_init`); only fresh deploys
+    ///      pick up the new label.
+    function _eip712Name() private view returns (string memory) {
+        uint256 cid = block.chainid;
+        if (cid == 1) return "OkuBridge_Mainnet";
+        if (cid == 11_155_111) return "OkuBridge_Sepolia";
+        if (cid == 10) return "OkuBridge_Optimism";
+        if (cid == 11_155_420) return "OkuBridge_OpSepolia";
+        if (cid == 42_161) return "OkuBridge_Arbitrum";
+        if (cid == 8453) return "OkuBridge_Base";
+        if (cid == 84_532) return "OkuBridge_BaseSepolia";
+        if (cid == 56) return "OkuBridge_Bsc";
+        if (cid == 97) return "OkuBridge_BscTestnet";
+        // Unrecognised chain — fall back to the raw chain id so the domain
+        // remains unique and human-readable without a code change.
+        return string.concat("OkuBridge_", Strings.toString(cid));
     }
 }

@@ -63,11 +63,15 @@ async function main() {
   logger.info(`oracle:    ${isDisable ? '(disabled)' : oracle.toBase58()}`);
   logger.info(`staleness: ${staleness}s`);
 
+  // `oracle_account` is required when configuring a non-default oracle so
+  // the program can pre-flight the Pyth header (magic / version / expo)
+  // before persisting the new pubkey. Pass `null` when disabling.
   const sig = await program.methods
     .setOracle(oracle, new BN(staleness))
     .accountsPartial({
       oracleManager: provider.wallet.publicKey,
       config: psmConfig,
+      oracleAccount: isDisable ? null : oracle,
     })
     .rpc();
 

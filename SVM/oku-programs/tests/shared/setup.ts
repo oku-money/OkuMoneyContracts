@@ -181,7 +181,7 @@ export async function initializePsm(
   await program.methods
     .setupRedemptionQueue()
     .accountsPartial({
-      payer: payer.publicKey,
+      roleAdmin: payer.publicKey,
       config: configPda,
       redemptionQueue: redemptionQueuePda,
       systemProgram: SystemProgram.programId,

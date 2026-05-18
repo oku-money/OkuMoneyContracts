@@ -59,6 +59,7 @@ abstract contract BaseTest is Test, Actors {
     bytes32 public constant VAULT_RESERVE_MANAGER = TestRoles.VAULT_RESERVE_MANAGER;
     bytes32 public constant VAULT_PAUSER = TestRoles.VAULT_PAUSER;
     bytes32 public constant VAULT_UNPAUSER = TestRoles.VAULT_UNPAUSER;
+    bytes32 public constant VAULT_ADMIN = TestRoles.VAULT_ADMIN;
 
     // LitePSM roles (PSM_ prefix)
     bytes32 public constant PSM_UPGRADER = TestRoles.PSM_UPGRADER;

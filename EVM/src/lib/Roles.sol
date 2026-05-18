@@ -25,6 +25,12 @@ library Roles {
     bytes32 public constant VAULT_RESERVE_MANAGER = keccak256("VAULT_RESERVE_MANAGER");
     bytes32 public constant VAULT_PAUSER = keccak256("VAULT_PAUSER");
     bytes32 public constant VAULT_UNPAUSER = keccak256("VAULT_UNPAUSER");
+    /// @dev Dedicated vault-admin role for parameter updates (e.g. min collateral
+    ///      ratio) that previously gated on `DEFAULT_ADMIN_ROLE`. Carving it out
+    ///      keeps the AccessControl super-admin role focused on role-management
+    ///      duties and lets the operational vault-config key be rotated
+    ///      independently of the meta-role holder.
+    bytes32 public constant VAULT_ADMIN = keccak256("VAULT_ADMIN");
 
     // ============ LitePSM Roles ============
     bytes32 public constant PSM_UPGRADER = keccak256("PSM_UPGRADER");

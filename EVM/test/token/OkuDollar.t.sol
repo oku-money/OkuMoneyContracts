@@ -919,11 +919,14 @@ contract OkuDollarTest is BaseTest {
 
     // ============ setMinCollateralRatio Tests ============
 
-    function test_SetMinCollateralRatio_OnlyAdmin() public {
+    function test_SetMinCollateralRatio_OnlyVaultAdmin() public {
+        // setMinCollateralRatio is now gated on VAULT_ADMIN (carved out from
+        // DEFAULT_ADMIN_ROLE so the operational vault-config key can be
+        // rotated independently of the AccessControl meta-role).
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, DEFAULT_ADMIN_ROLE
+                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, VAULT_ADMIN
             )
         );
         okuDollar.setMinCollateralRatio(90e16);
@@ -1326,13 +1329,16 @@ contract OkuDollarTest is BaseTest {
         okuDollar.withdrawSurplus(1e18);
     }
 
-    function test_RoleEnforcement_NonAdminCannotSetCollateralRatio() public {
+    function test_RoleEnforcement_NonVaultAdminCannotSetCollateralRatio() public {
+        // setMinCollateralRatio is gated on VAULT_ADMIN, not the generic
+        // DEFAULT_ADMIN_ROLE. The reserveManager holds VAULT_RESERVE_MANAGER
+        // but not VAULT_ADMIN, so this call must revert.
         vm.prank(reserveManager);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector,
                 reserveManager,
-                DEFAULT_ADMIN_ROLE
+                VAULT_ADMIN
             )
         );
         okuDollar.setMinCollateralRatio(90e16);

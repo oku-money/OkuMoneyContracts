@@ -56,4 +56,20 @@ pub enum RouterError {
     /// Underlying vault is paused — fail-fast on the router side.
     #[msg("Underlying vault is paused")]
     VaultPaused,
+
+    /// Router `initialize` was passed a mint that does not match the
+    /// canonical mint stored in the underlying PSM / vault config. Without
+    /// this guard the router would silently store the wrong mint address
+    /// and every subsequent CPI would fail with an opaque token-program
+    /// error.
+    #[msg("Mint does not match the canonical mint in the underlying PSM/vault")]
+    MintMismatch,
+
+    /// `accept_role_admin` called with `pending_role_admin == default`.
+    #[msg("No pending role-admin transfer to accept")]
+    NoPendingRoleAdmin,
+
+    /// `accept_role_admin` caller is not the proposed pending admin.
+    #[msg("Caller is not the pending role admin")]
+    NotPendingRoleAdmin,
 }

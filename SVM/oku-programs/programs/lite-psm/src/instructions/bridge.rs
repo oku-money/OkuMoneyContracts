@@ -140,11 +140,22 @@ pub fn bridge_mint(
         LitePsmError::MaxSupplyExceeded
     );
 
+    // Effects-checks-interactions: decrement minter allowance BEFORE the
+    // mint CPI so a re-entry through any future Token-2022 extension (e.g.,
+    // a TransferHook, which is rejected at `initialize` today but defence-
+    // in-depth is cheap) cannot observe a stale allowance. Mirrors the
+    // pattern used by `mint_oku_m` in `psm.rs`.
+    {
+        let config = &mut ctx.accounts.config;
+        config.minter_allowance = minter_allowance
+            .checked_sub(request.amount)
+            .ok_or(LitePsmError::Overflow)?;
+    }
+
     // Mint OkuMoney to recipient
     let seeds = &[PsmConfig::SEED, &[config_bump]];
     let signer = &[&seeds[..]];
 
-    // Mint tokens to recipient
     token_interface::mint_to(
         CpiContext::new_with_signer(
             ctx.accounts.token_2022_program.key(),
@@ -158,18 +169,19 @@ pub fn bridge_mint(
         request.amount,
     )?;
 
-    // Decrement minter allowance
-    let config = &mut ctx.accounts.config;
-    config.minter_allowance = minter_allowance
-        .checked_sub(request.amount)
-        .ok_or(LitePsmError::Overflow)?;
-
-    // Create ProcessedRequest PDA
+    // Create ProcessedRequest PDA.
+    //
+    // `recipient` stores the *wallet* pubkey parsed from the signed
+    // BridgeRequest (matching the emitted event and the cross-chain
+    // semantics on EVM where `recipient` is the wallet address). Storing
+    // the ATA address here would diverge from the event and confuse
+    // indexers that read the on-chain record. The ATA is always
+    // recoverable from (recipient_pubkey, oku_money_mint, Token-2022).
     let processed_request = &mut ctx.accounts.processed_request;
     processed_request.bump = ctx.bumps.processed_request;
     processed_request.request_id = request_id;
     processed_request.processed_at = clock.unix_timestamp;
-    processed_request.recipient = ctx.accounts.recipient_oku_money_ata.key();
+    processed_request.recipient = recipient_pubkey;
     processed_request.amount = request.amount;
 
     // Calculate dollar value for event
@@ -244,12 +256,23 @@ pub fn bridge_burn(
         amount,
     )?;
 
-    // Mint fee to fee_recipient (if fee > 0 AND fee_recipient_ata is provided)
-    // Note: This fee mint intentionally bypasses minter_allowance because the
-    // bridge_burn is a net-supply-decreasing operation (burn > fee re-mint).
-    // When user == fee_recipient, the client should pass None for fee_recipient_ata
-    // to avoid duplicate mutable account error. The fee is effectively "waived"
-    // since the user already burned the full amount.
+    // Mint fee to fee_recipient (if fee > 0 AND fee_recipient_ata is provided).
+    //
+    // The fee mint intentionally bypasses BOTH `minter_allowance` AND
+    // `max_supply`: `bridge_burn` is a net-supply-decreasing operation
+    // (burn `amount`, re-mint at most `fee_amount <= amount`), so the
+    // post-instruction supply is always `<=` the pre-instruction supply.
+    // Honouring `max_supply` here would create a pathological case where
+    // a user at exactly `max_supply` could not bridge at all because the
+    // intermediate re-mint would briefly require an allowance slot the
+    // accounting model never reserves. The 100%-fee edge case
+    // (`net_amount == 0`) is rejected explicitly above so the supply
+    // change is always strictly negative or zero.
+    //
+    // When user == fee_recipient, the client should pass None for
+    // fee_recipient_ata to avoid duplicate mutable account error. The fee
+    // is effectively "waived" since the user already burned the full
+    // amount.
     if fee_amount > 0 {
         if let Some(fee_recipient_ata) = &ctx.accounts.fee_recipient_ata {
             let seeds = &[PsmConfig::SEED, &[config_bump]];
@@ -371,11 +394,31 @@ pub fn initiate_refund(
         LitePsmError::InvalidRequestId
     );
 
-    // Parse message bytes for SVM→EVM burn refunds
-    let source_chain_id = u16::from_le_bytes(message_bytes[0..2].try_into().unwrap());
-    let sender_bytes: [u8; 32] = message_bytes[4..36].try_into().unwrap();
-    let amount = u64::from_le_bytes(message_bytes[56..64].try_into().unwrap());
-    let deadline = i64::from_le_bytes(message_bytes[72..80].try_into().unwrap());
+    // Parse message bytes for SVM→EVM burn refunds.
+    //
+    // The length pre-check on line above guarantees each fixed-width slice
+    // is in-bounds, but we still use `try_into().map_err(...)?` rather than
+    // `unwrap()` so any future refactor that reorders the length guard
+    // surfaces as a clean Anchor error instead of a BPF panic (which
+    // returns an opaque program error with no error-code mapping).
+    let source_chain_id = u16::from_le_bytes(
+        message_bytes[0..2]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidMessageLength)?,
+    );
+    let sender_bytes: [u8; 32] = message_bytes[4..36]
+        .try_into()
+        .map_err(|_| LitePsmError::InvalidMessageLength)?;
+    let amount = u64::from_le_bytes(
+        message_bytes[56..64]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidMessageLength)?,
+    );
+    let deadline = i64::from_le_bytes(
+        message_bytes[72..80]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidMessageLength)?,
+    );
 
     // Validate this chain is the source chain
     require!(

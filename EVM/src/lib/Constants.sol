@@ -38,8 +38,21 @@ library Constants {
 
     /// @notice Maximum yield rate: PRECISION + 1e11 ≈ 3700% APY safety cap.
     /// @dev Far above any plausible T-Bill rate; bounds the per-second compounding
-    ///      input to {MathLib.rpow} away from overflow regions.
+    ///      input to {MathLib.rpow} away from overflow regions. NOTE: this caps
+    ///      the *per-second compounding rate*, NOT the cumulative multiplier
+    ///      value reached after many seconds of compounding — use
+    ///      `MAX_MULTIPLIER` for that.
     uint256 public constant MAX_RATE = PRECISION + 1e11;
+
+    /// @notice Absolute ceiling for any cumulative multiplier (OkuMoney's
+    ///         `okuMMultiplier` and OkuDollar's `usdMultiplier`).
+    /// @dev `1e24` = $1,000,000 of dollar value per token (since
+    ///      `PRECISION = 1e18` represents $1.00). Far above any realistic
+    ///      yield trajectory and keeps downstream `uint256 * uint256`
+    ///      multiplications away from the overflow region. Mirrors the SVM
+    ///      `MAX_OKU_M_PRICE` / `MAX_USD_MULTIPLIER` guard — defense-in-depth
+    ///      against a compromised rebaser key.
+    uint256 public constant MAX_MULTIPLIER = 1e24;
 
     /// @notice Basis points denominator (10000 = 100%)
     uint256 public constant BASIS_POINTS = 10_000;

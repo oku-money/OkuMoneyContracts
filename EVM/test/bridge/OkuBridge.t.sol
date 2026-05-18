@@ -694,11 +694,15 @@ contract OkuBridgeTest is BridgeBaseTest {
     function test_EIP712_DomainSeparator() public view {
         bytes32 domainSeparator = okuBridge.domainSeparator();
 
-        // Verify domain separator is deterministic
+        // Verify domain separator is deterministic and uses the chain-namespaced
+        // domain name (`OkuBridge_<network>` or `OkuBridge_<chainid>` for
+        // unrecognised chains). Foundry's default chainid is 31337, which falls
+        // through to the `_eip712Name()` fallback branch.
         bytes32 typeHash = keccak256(
             "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
         );
-        bytes32 nameHash = keccak256("OkuBridge");
+        string memory expectedName = _expectedEip712Name(block.chainid);
+        bytes32 nameHash = keccak256(bytes(expectedName));
         bytes32 versionHash = keccak256("1");
 
         bytes32 expected = keccak256(
@@ -706,6 +710,21 @@ contract OkuBridgeTest is BridgeBaseTest {
         );
 
         assertEq(domainSeparator, expected);
+    }
+
+    /// @dev Mirrors `OkuBridge._eip712Name()` so tests can predict the domain
+    ///      name for any chainid. Keep this list in sync with the contract.
+    function _expectedEip712Name(uint256 cid) internal view returns (string memory) {
+        if (cid == 1) return "OkuBridge_Mainnet";
+        if (cid == 11_155_111) return "OkuBridge_Sepolia";
+        if (cid == 10) return "OkuBridge_Optimism";
+        if (cid == 11_155_420) return "OkuBridge_OpSepolia";
+        if (cid == 42_161) return "OkuBridge_Arbitrum";
+        if (cid == 8453) return "OkuBridge_Base";
+        if (cid == 84_532) return "OkuBridge_BaseSepolia";
+        if (cid == 56) return "OkuBridge_Bsc";
+        if (cid == 97) return "OkuBridge_BscTestnet";
+        return string.concat("OkuBridge_", vm.toString(cid));
     }
 
     function test_EIP712_TypedDataHash() public view {

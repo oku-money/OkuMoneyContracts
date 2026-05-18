@@ -22,13 +22,30 @@ pub struct Initialize<'info> {
     )]
     pub config: Account<'info, RouterConfig>,
 
-    /// OkuMoney mint (Token-2022) - stored in config for validation
+    /// OkuMoney mint (Token-2022) - stored in config for validation.
+    /// Cross-checked against `psm_config.oku_money_mint` and
+    /// `vault_config.oku_money_mint` in the handler so the router cannot
+    /// be initialized pointing at a non-canonical mint.
     #[account(mint::token_program = token_2022_program)]
     pub oku_money_mint: InterfaceAccount<'info, MintInterface>,
 
-    /// usdOku mint (Token-2022) - stored in config for validation
+    /// usdOku mint (Token-2022) - stored in config for validation.
+    /// Cross-checked against `vault_config.usd_oku_mint` in the handler.
     #[account(mint::token_program = token_2022_program)]
     pub usd_oku_mint: InterfaceAccount<'info, MintInterface>,
+
+    /// Underlying PSM config PDA (owned by lite_psm). Validated in the
+    /// handler via the router's `verify_psm_config` helper. Not deserialized
+    /// in the Anchor context because Anchor cannot natively decode
+    /// cross-program PDAs.
+    /// CHECK: deserialized + ownership-checked in the handler.
+    pub psm_config: UncheckedAccount<'info>,
+
+    /// Underlying vault config PDA (owned by oku_dollar). Validated in the
+    /// handler via the router's `verify_vault_config` helper, which also
+    /// asserts the vault points back at this same `psm_config`.
+    /// CHECK: deserialized + ownership-checked in the handler.
+    pub vault_config: UncheckedAccount<'info>,
 
     pub token_2022_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,
@@ -388,6 +405,23 @@ pub struct SetAuthority<'info> {
         seeds = [RouterConfig::SEED],
         bump = config.bump,
         has_one = role_admin @ RouterError::Unauthorized
+    )]
+    pub config: Account<'info, RouterConfig>,
+}
+
+/// Step 2 of the two-step `RoleAdmin` transfer (Ownable2Step pattern).
+///
+/// Signed by the proposed `pending_role_admin`, not the current
+/// `role_admin`. The pending-pubkey match is asserted in the handler.
+#[derive(Accounts)]
+pub struct AcceptRoleAdmin<'info> {
+    /// Proposed new role admin — must match `config.pending_role_admin`.
+    pub new_role_admin: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [RouterConfig::SEED],
+        bump = config.bump,
     )]
     pub config: Account<'info, RouterConfig>,
 }

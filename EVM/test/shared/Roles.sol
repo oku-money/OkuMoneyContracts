@@ -33,6 +33,7 @@ library TestRoles {
     bytes32 public constant VAULT_RESERVE_MANAGER = SrcRoles.VAULT_RESERVE_MANAGER;
     bytes32 public constant VAULT_PAUSER = SrcRoles.VAULT_PAUSER;
     bytes32 public constant VAULT_UNPAUSER = SrcRoles.VAULT_UNPAUSER;
+    bytes32 public constant VAULT_ADMIN = SrcRoles.VAULT_ADMIN;
 
     // ============ LitePSM Roles (PSM_ prefix) ============
 

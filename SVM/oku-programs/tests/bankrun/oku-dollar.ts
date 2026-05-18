@@ -1157,15 +1157,25 @@ describe("oku-dollar", () => {
   });
 
   describe("set_min_collateral_ratio", () => {
+    // The handler now requires the live `usd_oku_mint` / `reserve_vault` /
+    // `psm_config` so it can verify the vault still meets the proposed
+    // floor before persisting it. The accounts below are pre-set in the
+    // test suite's `before` block.
+    const liveHealthAccounts = () => ({
+      roleAdmin: roleAdmin.publicKey,
+      config: vaultConfigPda,
+      usdOkuMint: usdOkuMint,
+      reserveVault: reserveVault,
+      psmConfig: psmConfigPda,
+      token2022Program: TOKEN_2022_PROGRAM_ID,
+    });
+
     it("role_admin can update minimum collateral ratio", async () => {
-      const newRatio = new BN(960_000_000); // 96%
+      const newRatio = new BN(910_000_000); // 91% — still safely below the live ratio
 
       await program.methods
         .setMinCollateralRatio(newRatio)
-        .accountsPartial({
-          roleAdmin: roleAdmin.publicKey,
-          config: vaultConfigPda,
-        })
+        .accountsPartial(liveHealthAccounts())
         .rpc();
 
       const config = await program.account.okuDollarConfig.fetch(vaultConfigPda);
@@ -1174,10 +1184,7 @@ describe("oku-dollar", () => {
       // Restore original
       await program.methods
         .setMinCollateralRatio(DEFAULT_MIN_COLLATERAL_RATIO)
-        .accountsPartial({
-          roleAdmin: roleAdmin.publicKey,
-          config: vaultConfigPda,
-        })
+        .accountsPartial(liveHealthAccounts())
         .rpc();
     });
 
@@ -1187,15 +1194,69 @@ describe("oku-dollar", () => {
       try {
         await program.methods
           .setMinCollateralRatio(belowFloor)
-          .accountsPartial({
-            roleAdmin: roleAdmin.publicKey,
-            config: vaultConfigPda,
-          })
+          .accountsPartial(liveHealthAccounts())
           .rpc();
         expect.fail("Should have failed - below floor");
       } catch (err: any) {
         expect(err.error.errorCode.code).to.equal("InvalidCollateralRatio");
       }
+    });
+
+    it("rejects raising floor above the live vault health (must deposit_reserves first)", async () => {
+      // Read the live ratio so we can pick a value that's *just above* it.
+      // The handler refuses to persist any new floor that the current
+      // vault doesn't already clear; the operational expectation is that
+      // an admin who wants to raise the floor first runs
+      // `deposit_reserves` to lift the live ratio above the new bar in
+      // the same operational batch.
+      const config = await program.account.okuDollarConfig.fetch(vaultConfigPda);
+      const psmConfig = await psmProgram.account.psmConfig.fetch(psmConfigPda);
+      const reserve = await getAccount(provider.connection, reserveVault, undefined, TOKEN_2022_PROGRAM_ID);
+      const mintAccount = await provider.connection.getAccountInfo(usdOkuMint);
+      const { unpackMint } = await import("@solana/spl-token");
+      const mintInfo = unpackMint(usdOkuMint, mintAccount!, TOKEN_2022_PROGRAM_ID);
+
+      const PRECISION = 1_000_000_000n;
+      const reserveBalance = BigInt(reserve.amount.toString());
+      const totalSupply = BigInt(mintInfo.supply.toString());
+      const usdMultiplier = BigInt(config.usdMultiplier.toString());
+      const okuMPrice = BigInt(psmConfig.okuMPrice.toString());
+
+      // Mirror `calculate_collateral_ratio`:
+      //   ratio = reserve * oku_m_price * PRECISION / (total_supply * usd_multiplier)
+      const numerator = reserveBalance * okuMPrice * PRECISION;
+      const denominator = totalSupply * usdMultiplier;
+      // Chai's `.greaterThan(0n)` doesn't recognise BigInt natively; compare
+      // with a plain BigInt literal and assert via `.to.equal(true)`.
+      expect(denominator > 0n, "test prerequisite: vault must have supply").to.equal(true);
+      const liveRatio = numerator / denominator;
+
+      // Pick a floor 1 bp above the live ratio. Use `min(liveRatio + 1, PRECISION)`
+      // and reject the rare degenerate case where the live ratio is already
+      // pinned at 100%.
+      const PRECISION_BN = new BN(PRECISION.toString());
+      let proposed = new BN((liveRatio + 1n).toString());
+      if (proposed.gt(PRECISION_BN)) {
+        // Skip rather than fail — vault is at exactly 100%, the gate
+        // can't be exercised without a withdraw first.
+        return;
+      }
+
+      try {
+        await program.methods
+          .setMinCollateralRatio(proposed)
+          .accountsPartial(liveHealthAccounts())
+          .rpc();
+        expect.fail("Should have rejected — live ratio is below proposed floor");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("InsufficientCollateral");
+      }
+
+      // Confirm config is unchanged.
+      const after = await program.account.okuDollarConfig.fetch(vaultConfigPda);
+      expect(after.minCollateralRatio.toString()).to.equal(
+        DEFAULT_MIN_COLLATERAL_RATIO.toString()
+      );
     });
   });
 });

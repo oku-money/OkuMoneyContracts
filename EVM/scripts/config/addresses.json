@@ -55,6 +55,69 @@
         "txHash": "0x5ac4c18b81ee3b14d24c4497be9674dd6073a973686509c954f6bbf4b7ae3f2c",
         "timestamp": "2026-05-12T17:53:46.993Z",
         "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuMoney",
+        "proxy": "0x3632eEAa7B998Df46fEDE8F2FDcfAb68d59AF1A0",
+        "oldImpl": "0xB06fBBD92F7882B357F06E9c337f93Ad0c187463",
+        "newImpl": "0xd46c59f37b97b801868A674b74e460EBef7775d7",
+        "txHash": "0x73b22a43146c9e8e59bf73bdbce5b26e120840b7471fac16c8bf1f7850ae86fc",
+        "timestamp": "2026-05-26T19:39:48.389Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuDollar",
+        "proxy": "0xc7fA7bf4D841FfBCD37D4f85D251efA815C30aCB",
+        "oldImpl": "0x795bD849972c73416E3D4f43120D715A89e210dB",
+        "newImpl": "0xAc5D8Aa8A47fEf4e86c1BF6C23ba6c927c1f2744",
+        "txHash": "0x8b6443aef775fa9f82d2e0d8e82fa74e6d0d849634e199fb48a4963a76e05eb1",
+        "timestamp": "2026-05-26T19:40:18.283Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "RedemptionQueue",
+        "proxy": "0xa3068E8CE3DCcb9BCD9142DeA2FE81428A0de9C0",
+        "oldImpl": "0xF4633d2712f87Bf34B4ec2a162c1D01c922deCd7",
+        "newImpl": "0xF4633d2712f87Bf34B4ec2a162c1D01c922deCd7",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:40:51.928Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0xc8389fc7189aa73e766052fB18B5b8Ed933c62BF",
+        "oldImpl": "0xB43A3617f60A77440Ad84656bd20FB8a461079A5",
+        "newImpl": "0xB43A3617f60A77440Ad84656bd20FB8a461079A5",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:41:30.630Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuBridge",
+        "proxy": "0x7836ee239928E8bF1D6e1b8CF15205383b3108b2",
+        "oldImpl": "0x9698D3D16E3Dcbc162E2d000bD383884a6B2b1Cd",
+        "newImpl": "0x9698D3D16E3Dcbc162E2d000bD383884a6B2b1Cd",
+        "txHash": "<no-upgrade-event-found>",
+        "timestamp": "2026-05-26T19:42:03.116Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuBridgeRouter",
+        "proxy": "0x48F5A9C720424aaeC4C0dB7f90ED3ba8b8b4Fc36",
+        "oldImpl": "0x9d9f014C4e688aA2429b6E341bF4963494ebA81f",
+        "newImpl": "0xf569A31Ffc178dB1c3925aC47e1ab27C7b0f7869",
+        "txHash": "0x0db4c00bdbdc419130e6784deec37506af649c765995d7ba21a5c065cf15ee44",
+        "timestamp": "2026-05-26T19:42:19.800Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuBridge",
+        "proxy": "0x7836ee239928E8bF1D6e1b8CF15205383b3108b2",
+        "oldImpl": "0x526Cb05684Aa143086416255b12993C17Bed40a6",
+        "newImpl": "0x526Cb05684Aa143086416255b12993C17Bed40a6",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:42:51.237Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
       }
     ],
     "sepolia": [
@@ -165,6 +228,60 @@
         "txHash": "0xc8eb1cc2e226ef021ee9e359560d032718c8ea0fe13062cc6c2f02be1d6f833e",
         "timestamp": "2026-05-20T19:14:33.061Z",
         "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuMoney",
+        "proxy": "0x7F30D1a29ea18e1915f68b637e235E346FEC2291",
+        "oldImpl": "0xB43A3617f60A77440Ad84656bd20FB8a461079A5",
+        "newImpl": "0xB43A3617f60A77440Ad84656bd20FB8a461079A5",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:36:21.832Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuDollar",
+        "proxy": "0x9BA4096be5fa5152AfF349C53bC7c5D64980F1AD",
+        "oldImpl": "0x795bD849972c73416E3D4f43120D715A89e210dB",
+        "newImpl": "0x795bD849972c73416E3D4f43120D715A89e210dB",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:36:22.393Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "RedemptionQueue",
+        "proxy": "0x3632eEAa7B998Df46fEDE8F2FDcfAb68d59AF1A0",
+        "oldImpl": "0xB06fBBD92F7882B357F06E9c337f93Ad0c187463",
+        "newImpl": "0xB06fBBD92F7882B357F06E9c337f93Ad0c187463",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:36:22.815Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0xc7fA7bf4D841FfBCD37D4f85D251efA815C30aCB",
+        "oldImpl": "0xc6Efb4589DF9BD37519a1a1C95b69C4a92cB0fca",
+        "newImpl": "0xc6Efb4589DF9BD37519a1a1C95b69C4a92cB0fca",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:36:26.752Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuBridge",
+        "proxy": "0xa3068E8CE3DCcb9BCD9142DeA2FE81428A0de9C0",
+        "oldImpl": "0x1BC7630A91b8CC304d388CE7eAa409F3Bc3eE1C9",
+        "newImpl": "0x1BC7630A91b8CC304d388CE7eAa409F3Bc3eE1C9",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:36:27.120Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuBridgeRouter",
+        "proxy": "0xc8389fc7189aa73e766052fB18B5b8Ed933c62BF",
+        "oldImpl": "0x3dFf22866c6b3d10Aa4039986332E4Cf936AFEad",
+        "newImpl": "0x3dFf22866c6b3d10Aa4039986332E4Cf936AFEad",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:36:27.393Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
       }
     ],
     "baseSepolia": [
@@ -220,6 +337,190 @@
         "newImpl": "0x8089C2Ce231362fD5ba63d19F12D1e3D92A5125f",
         "txHash": "0x654736f5e0709f5b0db9d8467c2fa0a3e09371914d6f71682c94897453b25574",
         "timestamp": "2026-05-20T19:30:11.320Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuMoney",
+        "proxy": "0xe548f960EbB46f9DC504e4107A552309796c863b",
+        "oldImpl": "0x984B948317e49eA608e778417Ee6dd4fcc182412",
+        "newImpl": "0x984B948317e49eA608e778417Ee6dd4fcc182412",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:36:38.733Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuDollar",
+        "proxy": "0xffC8C49C5B38BC9BaFD0bB0F5F189EEcD35e35E2",
+        "oldImpl": "0x2668c2A5Ae2F971538ABc0A031253333DEfFa68E",
+        "newImpl": "0x2668c2A5Ae2F971538ABc0A031253333DEfFa68E",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:36:39.245Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "RedemptionQueue",
+        "proxy": "0x25cf2128F603754179379351B805B4F8C0B8dCA4",
+        "oldImpl": "0x57d0E13F353d630ab5218aC841C88985AB31A066",
+        "newImpl": "0x57d0E13F353d630ab5218aC841C88985AB31A066",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:36:39.581Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0x31750D38d8d1f69Af94407002b9322f5765D869A",
+        "oldImpl": "0x179F83A887279F89D4C05693819AF4444EABF551",
+        "newImpl": "0x179F83A887279F89D4C05693819AF4444EABF551",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:36:39.921Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuBridge",
+        "proxy": "0x2d690F74815203FdE6298897470050daEB49aC02",
+        "oldImpl": "0x73F758dC58127a0B5497fCCAD344bFaB306774D3",
+        "newImpl": "0x73F758dC58127a0B5497fCCAD344bFaB306774D3",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:36:40.267Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuBridgeRouter",
+        "proxy": "0x27EB7e560000812C25ae668f49987cb963e5827c",
+        "oldImpl": "0x8089C2Ce231362fD5ba63d19F12D1e3D92A5125f",
+        "newImpl": "0x8089C2Ce231362fD5ba63d19F12D1e3D92A5125f",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:36:40.538Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      }
+    ],
+    "bscTestnet": [
+      {
+        "contract": "OkuMoney",
+        "proxy": "0xe548f960EbB46f9DC504e4107A552309796c863b",
+        "oldImpl": "0xd0402c184da6a60B3A49d3495d31b2239Ba3E2FE",
+        "newImpl": "0x984B948317e49eA608e778417Ee6dd4fcc182412",
+        "txHash": "0x66e4532d5327f0da58ee874a80c40e595a0d9fe705b48503e30f6eb75087dc62",
+        "timestamp": "2026-05-26T19:37:58.187Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuDollar",
+        "proxy": "0xffC8C49C5B38BC9BaFD0bB0F5F189EEcD35e35E2",
+        "oldImpl": "0xbF8fF6D27A48451051015928CC8f4f70B3F0a29f",
+        "newImpl": "0x2668c2A5Ae2F971538ABc0A031253333DEfFa68E",
+        "txHash": "0xfbb5fc59837665816c6ca9ff3322b0111e9396141ce73a01dc978a3001f52f00",
+        "timestamp": "2026-05-26T19:38:06.146Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "RedemptionQueue",
+        "proxy": "0x25cf2128F603754179379351B805B4F8C0B8dCA4",
+        "oldImpl": "0x57d0E13F353d630ab5218aC841C88985AB31A066",
+        "newImpl": "0x57d0E13F353d630ab5218aC841C88985AB31A066",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:38:06.504Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0x31750D38d8d1f69Af94407002b9322f5765D869A",
+        "oldImpl": "0x179F83A887279F89D4C05693819AF4444EABF551",
+        "newImpl": "0x179F83A887279F89D4C05693819AF4444EABF551",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:38:06.845Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuBridge",
+        "proxy": "0x2d690F74815203FdE6298897470050daEB49aC02",
+        "oldImpl": "0x73F758dC58127a0B5497fCCAD344bFaB306774D3",
+        "newImpl": "0x73F758dC58127a0B5497fCCAD344bFaB306774D3",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:39:01.670Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuBridgeRouter",
+        "proxy": "0x27EB7e560000812C25ae668f49987cb963e5827c",
+        "oldImpl": "0x6b69262CC84f17e87cF92A6e33b576f89e80F242",
+        "newImpl": "0x8089C2Ce231362fD5ba63d19F12D1e3D92A5125f",
+        "txHash": "0x904953dcaebf8b5ab8f5bc08cdef41213b05d5cc229f68cde98512938c8d48d1",
+        "timestamp": "2026-05-26T19:39:12.167Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      }
+    ],
+    "bsc": [
+      {
+        "contract": "OkuMoney",
+        "proxy": "0xbdF0238716960c143Ee727E52Dd2D53a4E8c7f64",
+        "oldImpl": "0x0704945A4d617587362cff0CF739209d652Ab115",
+        "newImpl": "0x5beB213C51fc6B7A12ECA3CA2D0D01BF5D31553c",
+        "txHash": "0xebedd9e71f0643512212f08ebc42fb6ff6bfd60e1a38236d773648fd749160e2",
+        "timestamp": "2026-05-26T19:43:24.657Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuMoney",
+        "proxy": "0xbdF0238716960c143Ee727E52Dd2D53a4E8c7f64",
+        "oldImpl": "0x5beB213C51fc6B7A12ECA3CA2D0D01BF5D31553c",
+        "newImpl": "0x5beB213C51fc6B7A12ECA3CA2D0D01BF5D31553c",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:44:49.236Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuDollar",
+        "proxy": "0x394ceDbd3e50696415cccF6f2a2F45419370F4cE",
+        "oldImpl": "0x4bbDe05D5620576EbA42eba6447A3E16bDC52Ad5",
+        "newImpl": "0x4bbDe05D5620576EbA42eba6447A3E16bDC52Ad5",
+        "txHash": "<already-upgraded>",
+        "timestamp": "2026-05-26T19:44:51.509Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "RedemptionQueue",
+        "proxy": "0x704eb5C0DB80C99FcDA7398c87dFAbf498533CC6",
+        "oldImpl": "0xdd5C6163f8aC3218B0aeFD9ECe235199E0DDDe8a",
+        "newImpl": "0xdd5C6163f8aC3218B0aeFD9ECe235199E0DDDe8a",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:44:51.885Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0x651a6586b7731316E93726CFbf0083062c835B40",
+        "oldImpl": "0x0E4d4719e8226AFd05D774eC0774a1D36bA1A029",
+        "newImpl": "0x0E4d4719e8226AFd05D774eC0774a1D36bA1A029",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:44:52.215Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuBridge",
+        "proxy": "0x726ef137B1d6C13491bB9B995A86c255e53D57e4",
+        "oldImpl": "0xFad0433eb2eF8517D79AE2f3922fF4edf46D871a",
+        "newImpl": "0xFad0433eb2eF8517D79AE2f3922fF4edf46D871a",
+        "txHash": "<no-upgrade-event-found>",
+        "timestamp": "2026-05-26T19:44:59.625Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuBridgeRouter",
+        "proxy": "0xD798Eee0E5E50913CbC509D4aBCC7EC13392C6e3",
+        "oldImpl": "0x1E43688709d07696cF2b0A93b350b111C39EdF90",
+        "newImpl": "0x7Cd2FE23feF1b98543b77d9683f3A91674499EF4",
+        "txHash": "0x527ba68181570efa57c8df95fda3d24a456e83a18a298615f17056fa1d7884da",
+        "timestamp": "2026-05-26T19:45:08.024Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuBridge",
+        "proxy": "0x726ef137B1d6C13491bB9B995A86c255e53D57e4",
+        "oldImpl": "0xc6Efb4589DF9BD37519a1a1C95b69C4a92cB0fca",
+        "newImpl": "0xc6Efb4589DF9BD37519a1a1C95b69C4a92cB0fca",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-05-26T19:45:19.750Z",
         "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
       }
     ]

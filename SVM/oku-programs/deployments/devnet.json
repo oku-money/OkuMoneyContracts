@@ -53,5 +53,51 @@
     "orchestrator": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
     "feeRecipient": "6ymMXChb81a4GZsq8janSyqUiSJDwGpvKeFUEdrs6TyF"
   },
-  "nonces": {}
+  "nonces": {},
+  "upgrades": [
+    {
+      "program": "OkuBridgeRouter",
+      "programId": "GAjPAbq7sqFNzfnyhEAxBD9ofTPSTk4EtjFpq45BjRWb",
+      "oldElfSize": 410072,
+      "newElfSize": 410072,
+      "oldElfSha256": "f7ebe96fa66bbd6b1c1d67b8d37fe7eaeece5393a562acc5daa2a530be484d64",
+      "newElfSha256": "f7ebe96fa66bbd6b1c1d67b8d37fe7eaeece5393a562acc5daa2a530be484d64",
+      "txSignature": "<bytecode-unchanged>",
+      "timestamp": "2026-05-26T22:49:08.862Z",
+      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
+    },
+    {
+      "program": "LitePsm",
+      "programId": "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N",
+      "oldElfSize": 795656,
+      "newElfSize": 795656,
+      "oldElfSha256": "4f791b412a6a8e08366b71446ae5cbf068f10e0644cf5966ebd4ee8aa22b2588",
+      "newElfSha256": "4f791b412a6a8e08366b71446ae5cbf068f10e0644cf5966ebd4ee8aa22b2588",
+      "txSignature": "<bytecode-unchanged>",
+      "timestamp": "2026-05-26T22:49:15.716Z",
+      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
+    },
+    {
+      "program": "OkuDollar",
+      "programId": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy",
+      "oldElfSize": 422032,
+      "newElfSize": 422032,
+      "oldElfSha256": "3f058b682bbcbe125894635f4a639ba9b692c188a532c8228b3ae70bcc931770",
+      "newElfSha256": "3f058b682bbcbe125894635f4a639ba9b692c188a532c8228b3ae70bcc931770",
+      "txSignature": "<bytecode-unchanged>",
+      "timestamp": "2026-05-26T22:49:16.122Z",
+      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
+    },
+    {
+      "program": "OkuBridgeRouter",
+      "programId": "GAjPAbq7sqFNzfnyhEAxBD9ofTPSTk4EtjFpq45BjRWb",
+      "oldElfSize": 410072,
+      "newElfSize": 410072,
+      "oldElfSha256": "f7ebe96fa66bbd6b1c1d67b8d37fe7eaeece5393a562acc5daa2a530be484d64",
+      "newElfSha256": "f7ebe96fa66bbd6b1c1d67b8d37fe7eaeece5393a562acc5daa2a530be484d64",
+      "txSignature": "<bytecode-unchanged>",
+      "timestamp": "2026-05-26T22:49:16.489Z",
+      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
+    }
+  ]
 }

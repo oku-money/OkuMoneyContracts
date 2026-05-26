@@ -38,6 +38,53 @@ import * as path from 'path';
 import { PublicKey } from '@solana/web3.js';
 import { NetworkName } from '../config/networks';
 
+/**
+ * Per-upgrade audit record appended to `deployments/<network>.json::upgrades`.
+ * Mirrors the EVM `UpgradeRecord` shape (addresses.json → upgrades.<chain>).
+ *
+ * The `idlSnapshot.accountTypes` field stores account-struct field definitions
+ * extracted from `target/idl/<program>.json` at upgrade time. On the next
+ * upgrade the script compares the current IDL against this snapshot to detect
+ * potential storage-layout breaks.
+ */
+export interface UpgradeRecord {
+  /** Human-readable program name, e.g. "LitePsm". */
+  program: string;
+  /** On-chain program ID (base58). */
+  programId: string;
+  /** ELF size of the old on-chain program, in bytes. */
+  oldElfSize: number;
+  /** ELF size of the newly deployed program, in bytes. */
+  newElfSize: number;
+  /** SHA-256 hex digest of the old on-chain ELF. */
+  oldElfSha256: string;
+  /** SHA-256 hex digest of the new local ELF (= on-chain after successful upgrade). */
+  newElfSha256: string;
+  /**
+   * Upgrade transaction signature (base58), or one of these sentinels:
+   *   "<bytecode-unchanged>"  — local ELF matched on-chain; no broadcast
+   *   "<unknown-signature>"   — deploy succeeded but sig retrieval failed
+   */
+  txSignature: string;
+  timestamp: string;
+  /** Deployer wallet pubkey (base58). */
+  deployer: string;
+  /**
+   * Snapshot of account-type fields at upgrade time, for future IDL diff.
+   * Key = Rust struct name (e.g. "PsmConfig"); value = array of field descriptors.
+   * Only populated on real upgrades (not "<bytecode-unchanged>" skips).
+   */
+  idlSnapshot?: {
+    /** SHA-256 of the entire IDL JSON file (for quick-change detection). */
+    sha256: string;
+    /**
+     * Account-struct field arrays keyed by type name.
+     * Compact subset of `types[].type.fields` in the IDL.
+     */
+    accountTypes: Record<string, Array<{ name: string; type: unknown }>>;
+  };
+}
+
 export interface DeploymentAddresses {
   network: NetworkName;
   timestamp: string;
@@ -80,6 +127,12 @@ export interface DeploymentAddresses {
   addressLookupTables?: {
     router?: string;
   };
+  /**
+   * Per-upgrade audit trail appended by `scripts/upgrade/index.ts`.
+   * Records every run (including bytecode-unchanged skips) so the operator
+   * can see at a glance what changed when and what the on-chain state was.
+   */
+  upgrades?: UpgradeRecord[];
 }
 
 const DEPLOYMENTS_DIR = path.join(process.cwd(), 'deployments');
@@ -378,4 +431,69 @@ export function loadDeploymentForFork(network: NetworkName): DeploymentAddresses
     return loadDeployment('mainnet-beta');
   }
   return loadDeployment(network);
+}
+
+// ============================================================================
+// Upgrade audit trail helpers
+// ============================================================================
+
+/**
+ * Append a single upgrade record to `deployments/<network>.json::upgrades`.
+ * Creates the upgrades array if it doesn't exist. Writes the file immediately
+ * so a subsequent target failure doesn't lose this record.
+ */
+export function appendUpgradeRecord(
+  network: NetworkName,
+  record: UpgradeRecord
+): void {
+  ensureDeploymentsDir();
+  const filepath = getDeploymentPath(network);
+
+  // Use the raw readFile path to avoid Anchor.toml mismatch warnings during
+  // upgrade runs (the upgrade script intentionally keeps the same program IDs).
+  let existing: DeploymentAddresses;
+  if (fs.existsSync(filepath)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(filepath, 'utf-8'));
+    } catch {
+      existing = { network, timestamp: new Date().toISOString(), tokens: {}, programs: {}, pdas: {} };
+    }
+  } else {
+    existing = { network, timestamp: new Date().toISOString(), tokens: {}, programs: {}, pdas: {} };
+  }
+
+  const upgrades = existing.upgrades ?? [];
+  upgrades.push(record);
+
+  const updated: DeploymentAddresses = { ...existing, upgrades };
+  fs.writeFileSync(filepath, JSON.stringify(updated, null, 2));
+}
+
+/**
+ * Return all upgrade records for a network, or an empty array if none.
+ * Does NOT check Anchor.toml alignment — upgrade records are historical and
+ * don't need to match the current keypair state.
+ */
+export function getUpgradeRecords(network: NetworkName): UpgradeRecord[] {
+  const filepath = getDeploymentPath(network);
+  if (!fs.existsSync(filepath)) return [];
+  try {
+    const data: DeploymentAddresses = JSON.parse(fs.readFileSync(filepath, 'utf-8'));
+    return data.upgrades ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Find the most recent UpgradeRecord for the given program name.
+ * Returns undefined if no prior upgrade exists.
+ */
+export function getLastUpgradeRecord(
+  network: NetworkName,
+  programName: string
+): UpgradeRecord | undefined {
+  const all = getUpgradeRecords(network);
+  // Records are appended chronologically; find last matching entry.
+  return [...all].reverse().find((r) => r.program === programName);
 }

@@ -134,6 +134,21 @@ const TRANSIENT_PATTERNS = [
   /ETIMEDOUT/i,
   /ECONNRESET/i,
   /ENOTFOUND/i,
+  // BSC + flaky-RPC tier: the upstream node is overloaded / rate-limiting.
+  // bscTestnet's Alchemy endpoint surfaces this as "Unable to complete request
+  // at this time" (HTTP 503 wrapped in Hardhat's ProviderError). Retrying
+  // a few seconds later almost always succeeds. Confirmed empirically during
+  // the May 2026 upgrade rollout on bscTestnet.
+  /Unable to complete request at this time/i,
+  /service unavailable/i,
+  /503/i,
+  /502/i,
+  /504/i,
+  // Quicknode / public-RPC throttling — usually clears within a couple of
+  // seconds. The exponential backoff in `withRetry` keeps the retry rate
+  // gentle even under sustained throttling.
+  /rate limit/i,
+  /too many requests/i,
 ];
 
 function isTransientError(err: any): boolean {
@@ -367,17 +382,46 @@ async function recoverTransparentUpgradeReceipt(
   const safeFrom = Math.max(0, fromBlock - 1);
   const latest = await ethers.provider.getBlockNumber();
 
-  const logs = await ethers.provider.getLogs({
-    address: proxyAddress,
-    topics: [UPGRADED_TOPIC_HEX],
-    fromBlock: safeFrom,
-    toBlock: latest,
-  });
+  // Cap the scan window. The upgrade tx is normally mined within a handful
+  // of blocks of `fromBlock`; in the worst case (heavy congestion + slow
+  // confirmation) it's still within a few minutes' worth of blocks. We cap
+  // to 10 blocks because some hosted-RPC tiers (notably Alchemy's free
+  // tier on BSC / BSC testnet) reject `eth_getLogs` with ranges wider than
+  // 10 blocks. If we're within that window, one call suffices; if we're
+  // not, we widen in 10-block steps. Worst-case 100 blocks (~5 min on most
+  // chains) before giving up — by then the recovery is almost certainly
+  // futile because the proxy never moved.
+  const MAX_STEPS = 10;
+  const STEP = 10;
+  let logs: any[] = [];
+  let scanFrom = safeFrom;
+  for (let step = 0; step < MAX_STEPS; step++) {
+    const scanTo = Math.min(scanFrom + STEP - 1, latest);
+    try {
+      logs = await ethers.provider.getLogs({
+        address: proxyAddress,
+        topics: [UPGRADED_TOPIC_HEX],
+        fromBlock: scanFrom,
+        toBlock: scanTo,
+      });
+    } catch (err: any) {
+      // Surface a clear message rather than the cryptic Alchemy "Upgrade
+      // to PAYG" wording. If the RPC rejects even a 10-block window,
+      // something is off (network down, wrong endpoint) — propagate.
+      throw new Error(
+        `Transparent recovery getLogs failed on blocks ${scanFrom}..${scanTo}: ` +
+          `${err?.message ?? err}. Cannot recover upgrade tx hash.`
+      );
+    }
+    if (logs.length > 0) break;
+    if (scanTo >= latest) break;
+    scanFrom = scanTo + 1;
+  }
 
   if (logs.length === 0) {
     logger.warning(
       `  upgradeProxy returned a handle with no deploymentTransaction AND ` +
-        `no Upgraded(address) event found between blocks ${safeFrom}..${latest} — ` +
+        `no Upgraded(address) event found between blocks ${safeFrom}..${Math.min(safeFrom + MAX_STEPS * STEP, latest)} — ` +
         `treating as no-op (slot may not have moved).`
     );
     return {
@@ -716,9 +760,55 @@ async function upgradeOne(
   let newImpl: string = "";
   let receipt: any;
 
+  // Helper: if OZ's manifest is missing an entry for this proxy or its
+  // current impl (which happens when a previous deploy was done on a
+  // different machine / via a non-OZ tool), the first `prepareUpgrade` or
+  // `upgradeProxy` call fails with "Deployment at address ... is not
+  // registered". We can recover by registering the existing proxy + impl
+  // into our local manifest via `upgrades.forceImport`, then retrying.
+  //
+  // Safety: forceImport reads the proxy's current impl, the storage layout
+  // of the new factory we'd be deploying, and writes them into
+  // `.openzeppelin/<chain>.json`. It does NOT broadcast any tx and does
+  // NOT modify on-chain state — purely metadata bookkeeping. Repeated
+  // calls are no-ops, so this is safe to invoke speculatively in a
+  // recovery path.
+  async function forceImportIfMissing(): Promise<boolean> {
+    try {
+      logger.warning(
+        `  ${name}: OZ manifest is missing an entry for this proxy/impl. ` +
+          `Attempting forceImport to register it...`
+      );
+      await upgrades.forceImport(proxyAddress, Factory, { kind: proxyKind });
+      logger.success(`  forceImport succeeded; manifest now contains ${proxyAddress}.`);
+      return true;
+    } catch (err: any) {
+      logger.error(
+        `  forceImport failed for ${name}: ${err.message ?? err}. ` +
+          `Manual remediation: run \`npx hardhat run scripts/utils/forceImport.ts --network <chain>\` ` +
+          `(if present) or replicate the .openzeppelin/<chain>.json from a machine that has it.`
+      );
+      return false;
+    }
+  }
+
+  function isNotRegisteredError(err: any): boolean {
+    const msg = (err?.message ?? String(err)).toString();
+    return /is not registered/i.test(msg) && /forceImport/i.test(msg);
+  }
+
   if (proxyKind === "uups") {
     await withRetry(`prepareUpgrade(${name})`, async () => {
-      const prepared = await upgrades.prepareUpgrade(proxyAddress, Factory);
+      let prepared;
+      try {
+        prepared = await upgrades.prepareUpgrade(proxyAddress, Factory);
+      } catch (err: any) {
+        if (isNotRegisteredError(err) && (await forceImportIfMissing())) {
+          prepared = await upgrades.prepareUpgrade(proxyAddress, Factory);
+        } else {
+          throw err;
+        }
+      }
       // prepareUpgrade returns either an address string (new impl deployed) or a
       // ContractTransactionResponse (deploying). We tolerate both shapes — the
       // address is what we want for upgradeToAndCall regardless.
@@ -787,9 +877,20 @@ async function upgradeOne(
       // the manifest's recorded kind. The fix: tell OZ explicitly that we
       // know it's transparent, matching the manifest. The _authorizeUpgrade
       // method in the impl is dead code for Transparent proxies and harmless.
-      const upgraded = await upgrades.upgradeProxy(proxyAddress, Factory, {
-        kind: "transparent",
-      });
+      let upgraded;
+      try {
+        upgraded = await upgrades.upgradeProxy(proxyAddress, Factory, {
+          kind: "transparent",
+        });
+      } catch (err: any) {
+        if (isNotRegisteredError(err) && (await forceImportIfMissing())) {
+          upgraded = await upgrades.upgradeProxy(proxyAddress, Factory, {
+            kind: "transparent",
+          });
+        } else {
+          throw err;
+        }
+      }
       // ethers v6: deploymentTransaction() returns the tx that "deployed" the
       // returned Contract instance. For Transparent proxies this is OFTEN
       // null even when the ProxyAdmin tx really was broadcast — the helper

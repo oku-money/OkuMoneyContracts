@@ -1,0 +1,30 @@
+{
+  "network": "devnet",
+  "timestamp": "2026-05-26T17:35:07.967Z",
+  "tokens": {
+    "usdc": "AFo4goJXvoHWkzGhZeGnewdnKVRaDwrY9xVGdXKqXQXc",
+    "okuMoney": "5AwLddkTWsBcHBoU2cmffmYmbANqLbpoaRn9zYAF8yEm",
+    "usdOku": "4z2CUa8t3jU5X6NCkp9BoCBWGxAXNfxz78XxJgYWKb6z"
+  },
+  "programs": {
+    "litePsm": "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N",
+    "okuDollarProgram": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy",
+    "okuBridgeRouter": "GAjPAbq7sqFNzfnyhEAxBD9ofTPSTk4EtjFpq45BjRWb"
+  },
+  "pdas": {
+    "psmConfig": "EiDhNRw1P7qj2BsrBa4s1CNsVwSYvUrYhetWmJaHAzFy",
+    "redemptionQueue": "yfsbAUVaz1zXs76TkQ68W3MTbhqpqTmgLNJtgNqHTwq",
+    "bridgeConfig": "5bEDDf1HeuEXLovkBXyMS3hJBM46duobyg7RH35Va5Rj",
+    "vaultConfig": "3veLR5r5PKqjtGgpbE9anM7zjqPAePsZdKNE4yCqEYTT",
+    "routerConfig": "AGy87u6EqRp19CYuCTVUPRZRHH6Xi5HQFuk6i3iaz5i5",
+    "vaultOkuMoney": "BFpJUSpAyLkjFjjQPJ3a4ie7hCQu8voegGNw3txXFZ8K"
+  },
+  "nonces": {},
+  "authorities": {
+    "coldMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
+    "warmMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
+    "orchestrator": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
+    "feeRecipient": "Af3mbzKknRGau4oZRrUNB1zvPxnkdNe2YXHnnSXv8q1d"
+  },
+  "addressLookupTables": {}
+}

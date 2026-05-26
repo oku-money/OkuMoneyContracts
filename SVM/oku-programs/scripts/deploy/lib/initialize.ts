@@ -280,28 +280,54 @@ export async function initializePsm(
     }
   }
 
-  // Setup OkuMoney escrow vault (for queued redemptions)
+  // Setup OkuMoney escrow vault (for queued redemptions).
+  //
+  // Idempotency note: `setupOkuMoneyEscrow()` creates an Associated Token
+  // Account at the derived address. On a second deploy:init run, the ATA
+  // already exists, and the ATA program returns `Provided owner is not
+  // allowed` (NOT one of Anchor's standard already-initialized codes)
+  // because its `create` path checks the existing account's owner against
+  // a fresh-account expectation. The error isn't matched by
+  // `isAlreadyInitialized()`, which is why this step blew up before this
+  // short-circuit was added.
+  //
+  // Cleanest fix: pre-check whether the ATA exists at the derived address
+  // with the expected Token-2022 program as owner and the expected mint.
+  // If so, skip the on-chain call entirely. This is safer than catching
+  // the post-failure error string (which can drift across Solana
+  // versions).
   const vaultOkuMoney = getAssociatedTokenAddressSync(okuMoneyMint, psmConfig, true, TOKEN_2022_PROGRAM_ID);
   logger.info('Setting up OkuMoney escrow vault...');
-  try {
-    await program.methods
-      .setupOkuMoneyEscrow()
-      .accountsPartial({
-        roleAdmin: provider.wallet.publicKey,
-        config: psmConfig,
-        okuMoneyMint: okuMoneyMint,
-        vaultOkuMoney: vaultOkuMoney,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
-    logger.success('OkuMoney escrow vault initialized');
-  } catch (error: any) {
-    if (isAlreadyInitialized(error)) {
-      logger.warning('OkuMoney escrow vault already initialized');
-    } else {
-      throw error;
+
+  const existingAtaInfo = await provider.connection.getAccountInfo(
+    vaultOkuMoney,
+    'confirmed'
+  );
+  if (existingAtaInfo && existingAtaInfo.owner.equals(TOKEN_2022_PROGRAM_ID)) {
+    logger.warning(
+      `OkuMoney escrow vault ATA ${vaultOkuMoney.toBase58()} already exists (Token-2022 program). Skipping setup.`
+    );
+  } else {
+    try {
+      await program.methods
+        .setupOkuMoneyEscrow()
+        .accountsPartial({
+          roleAdmin: provider.wallet.publicKey,
+          config: psmConfig,
+          okuMoneyMint: okuMoneyMint,
+          vaultOkuMoney: vaultOkuMoney,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      logger.success('OkuMoney escrow vault initialized');
+    } catch (error: any) {
+      if (isAlreadyInitialized(error)) {
+        logger.warning('OkuMoney escrow vault already initialized');
+      } else {
+        throw error;
+      }
     }
   }
 

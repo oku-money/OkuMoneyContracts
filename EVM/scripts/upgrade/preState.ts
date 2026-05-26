@@ -120,6 +120,156 @@ export async function readOkuDollarState(c: Contract): Promise<StateSnapshot> {
 }
 
 // ============================================================================
+// OkuMoney
+// ============================================================================
+//
+// Invariants exercised on upgrade:
+//   - ERC20 identity (name, symbol, decimals) preserved.
+//   - Supply cap (maxSupply) and current totalSupply preserved.
+//   - okuMMultiplier — this is rebase-style derived state. Like
+//     OkuDollar.usdMultiplier(), it CAN drift between two reads when a non-zero
+//     rate is being applied. We deliberately do NOT snapshot it; the underlying
+//     storage fields are pinned indirectly via totalSupply + maxSupply.
+//   - Pause state preserved.
+//
+// We do not snapshot DEFAULT_ADMIN_ROLE / OKUM_MINTER role grants here because
+// OZ AccessControl's `hasRole` requires a target address — there's no
+// "list all role holders" call. The deploy script's role configuration is
+// orthogonal to an impl-only upgrade and would not be touched by it.
+
+export async function readOkuMoneyState(c: Contract): Promise<StateSnapshot> {
+  const [name, symbol, decimals, maxSupply, totalSupply, paused] = await Promise.all([
+    c.name(),
+    c.symbol(),
+    c.decimals(),
+    c.maxSupply(),
+    c.totalSupply(),
+    c.paused(),
+  ]);
+
+  return {
+    name: String(name),
+    symbol: String(symbol),
+    decimals: decimals.toString(),
+    maxSupply: maxSupply.toString(),
+    totalSupply: totalSupply.toString(),
+    paused: String(paused),
+  };
+}
+
+// ============================================================================
+// RedemptionQueue
+// ============================================================================
+//
+// Invariants exercised on upgrade:
+//   - Wired addresses (okuMoney, usdc) preserved.
+//   - usdcDecimalMultiplier preserved (resolved once at init from IERC20Metadata).
+//   - Queue head/tail counters and totalQueuedOkuM preserved (an impl upgrade
+//     must not advance or reset the queue cursor).
+//
+// RedemptionQueue does NOT inherit PausableUpgradeable — confirmed against
+// src/psm/RedemptionQueue.sol. No paused() field is snapshotted.
+
+export async function readRedemptionQueueState(c: Contract): Promise<StateSnapshot> {
+  const [okuMoney, usdc, usdcDecimalMultiplier, queueHead, queueTail, totalQueuedOkuM] =
+    await Promise.all([
+      c.okuMoney(),
+      c.usdc(),
+      c.usdcDecimalMultiplier(),
+      c.queueHead(),
+      c.queueTail(),
+      c.totalQueuedOkuM(),
+    ]);
+
+  return {
+    okuMoney: String(okuMoney),
+    usdc: String(usdc),
+    usdcDecimalMultiplier: usdcDecimalMultiplier.toString(),
+    queueHead: queueHead.toString(),
+    queueTail: queueTail.toString(),
+    totalQueuedOkuM: totalQueuedOkuM.toString(),
+  };
+}
+
+// ============================================================================
+// OkuBridge
+// ============================================================================
+//
+// Invariants exercised on upgrade:
+//   - Wired okuMoney preserved.
+//   - Orchestrator config (authorizedSigner, feeRecipient) preserved.
+//   - Fee + limits + deadline preserved (bridgeFee, limits.{min,max}, bridgeDeadline).
+//   - Pause state preserved.
+//
+// We deliberately do NOT snapshot the full supportedChains mapping or the
+// outboundNonce map — those have unbounded key spaces. Per-chain support /
+// nonce state is queried by other tooling; for the upgrade invariant check
+// we just confirm the configuration scalars round-trip.
+
+export async function readOkuBridgeState(c: Contract): Promise<StateSnapshot> {
+  const [
+    okuMoney,
+    authorizedSigner,
+    feeRecipient,
+    bridgeFee,
+    limits,
+    bridgeDeadline,
+    paused,
+  ] = await Promise.all([
+    c.okuMoney(),
+    c.authorizedSigner(),
+    c.feeRecipient(),
+    c.bridgeFee(),
+    c.limits(),
+    c.bridgeDeadline(),
+    c.paused(),
+  ]);
+
+  // `limits` is a struct (min, max) returned as an indexed tuple; explicitly
+  // stringify both fields to avoid relying on ethers' Result formatter
+  // (which can produce different representations between versions).
+  return {
+    okuMoney: String(okuMoney),
+    authorizedSigner: String(authorizedSigner),
+    feeRecipient: String(feeRecipient),
+    bridgeFee: bridgeFee.toString(),
+    limitsMin: limits.min?.toString() ?? limits[0]?.toString() ?? "<missing>",
+    limitsMax: limits.max?.toString() ?? limits[1]?.toString() ?? "<missing>",
+    bridgeDeadline: bridgeDeadline.toString(),
+    paused: String(paused),
+  };
+}
+
+// ============================================================================
+// OkuBridgeRouter
+// ============================================================================
+//
+// Invariants exercised on upgrade:
+//   - Wired token + bridge references (okuDollar, okuMoney, okuBridge) preserved.
+//   - Pause state preserved.
+//
+// `supportedAdapters` is a mapping per adapter address; same rationale as
+// OkuBridge.supportedChains — we don't snapshot unbounded maps here. The
+// router's adapter set is configured post-deploy via configureAdapter and is
+// not mutated by an impl upgrade.
+
+export async function readOkuBridgeRouterState(c: Contract): Promise<StateSnapshot> {
+  const [okuDollar, okuMoney, okuBridge, paused] = await Promise.all([
+    c.okuDollar(),
+    c.okuMoney(),
+    c.okuBridge(),
+    c.paused(),
+  ]);
+
+  return {
+    okuDollar: String(okuDollar),
+    okuMoney: String(okuMoney),
+    okuBridge: String(okuBridge),
+    paused: String(paused),
+  };
+}
+
+// ============================================================================
 // Registry
 // ============================================================================
 
@@ -129,8 +279,12 @@ export async function readOkuDollarState(c: Contract): Promise<StateSnapshot> {
  * rather than silently skipping the diff.
  */
 export const STATE_READERS: Record<string, (c: Contract) => Promise<StateSnapshot>> = {
-  LitePSM: readLitePSMState,
+  OkuMoney: readOkuMoneyState,
   OkuDollar: readOkuDollarState,
+  RedemptionQueue: readRedemptionQueueState,
+  LitePSM: readLitePSMState,
+  OkuBridge: readOkuBridgeState,
+  OkuBridgeRouter: readOkuBridgeRouterState,
 };
 
 /**

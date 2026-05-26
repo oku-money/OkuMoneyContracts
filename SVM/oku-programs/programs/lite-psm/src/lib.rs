@@ -23,7 +23,7 @@ pub mod state;
 use contexts::*;
 use roles::*;
 
-declare_id!("3pi3vBj7dn98C4QbrrKD1LEFacpXBtmCzY17YR6j7wNa");
+declare_id!("3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N");
 
 // `auditors` and `acknowledgements` are intentionally omitted until an audit
 // is complete; populate them in a follow-up commit.

@@ -1137,9 +1137,25 @@ async function testBridgeBurn(ctx: TestContext) {
   logger.section('Test: Bridge Burn (Solana -> EVM)');
 
   const burnAmount = 5_000_000; // 5 OkuMoney
-  const destinationChainId = 1; // Ethereum mainnet
   const evmRecipient = Buffer.alloc(20);
   evmRecipient.write('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', 'hex');
+
+  // Fetch bridge config first so we can pick a destination chain that's
+  // actually supported on the deployed config. Previously this was hardcoded
+  // to chain=1 (Ethereum mainnet), which fails on any testnet deployment
+  // that only registers SUPPORTED_CHAINS_TESTNET ([111, 420]). Reading from
+  // chain keeps the test working across mainnet AND testnet without
+  // needing per-network branching.
+  const bridgeConfigData = await ctx.psm.account.bridgeConfig.fetch(ctx.bridgeConfig);
+  const feeRecipient = bridgeConfigData.feeRecipient as PublicKey;
+  const supportedChains: number[] = (bridgeConfigData.supportedChains as any[])
+    .map((c: any) => Number(c));
+  if (supportedChains.length === 0) {
+    logger.error('Bridge config has no supported chains; cannot run bridge burn test.');
+    return;
+  }
+  const destinationChainId = supportedChains[0];
+  logger.info(`Using destinationChainId=${destinationChainId} (first entry of bridgeConfig.supportedChains = ${JSON.stringify(supportedChains)})`);
 
   // 1. Derive bridge nonce PDA for destination chain
   const [bridgeNonce] = deriveBridgeNoncePDA(ctx.litePsmId, destinationChainId);
@@ -1152,10 +1168,6 @@ async function testBridgeBurn(ctx: TestContext) {
     logger.error(`Insufficient OkuMoney balance (${fmtAmount(okuMoneyBefore)} < ${fmtAmount(burnAmount)}). Run mint first.`);
     return;
   }
-
-  // 3. Get fee recipient from bridge config
-  const bridgeConfigData = await ctx.psm.account.bridgeConfig.fetch(ctx.bridgeConfig);
-  const feeRecipient = bridgeConfigData.feeRecipient as PublicKey;
   
   // 4. Ensure ATAs exist
   const userOkuMoneyAta = await getOrCreateAta(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);

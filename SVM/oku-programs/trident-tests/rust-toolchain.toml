@@ -1,0 +1,5 @@
+[toolchain]
+# Trident 0.12.0 requires Rust >= 1.88 for some dependencies.
+# This is separate from the main project's 1.85.0 pin -- trident-tests
+# run in their own workspace and don't affect the on-chain build.
+channel = "stable"

@@ -1,0 +1,8 @@
+[fuzz.metrics]
+enabled = true
+
+
+[[fuzz.programs]]
+address = "AhKZ4TT5W4mnvR3CsX1t9ymQmZx4535AN9SsrThu6C1T"
+program = "../target/deploy/lite_psm.so"
+ 

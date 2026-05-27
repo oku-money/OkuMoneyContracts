@@ -1,0 +1,39 @@
+[package]
+name = "oku-shared-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+oku-shared = { path = ".." }
+
+# Disable overflow-checks for the fuzz crate itself so that
+# cargo-fuzz's sanitizers (ASAN, UBSan) can catch overflows
+# rather than Rust's built-in panic, which would mask the bug.
+[[bin]]
+name = "mul_div_floor"
+path = "fuzz_targets/mul_div_floor.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "oku_m_to_dollars"
+path = "fuzz_targets/oku_m_to_dollars.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "dollars_to_oku_m"
+path = "fuzz_targets/dollars_to_oku_m.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "calculate_fee"
+path = "fuzz_targets/calculate_fee.rs"
+test = false
+doc = false

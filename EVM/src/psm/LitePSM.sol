@@ -225,9 +225,9 @@ contract LitePSM is
     /// @param usdcAmount Amount of USDC to deposit (USDC native decimals)
     function mintOkuM(uint256 usdcAmount)
         external
+        nonReentrant
         whenNotPaused
         whenYieldNotDistributing
-        nonReentrant
     {
         if (usdcAmount == 0) revert Errors.ZeroAmount();
 
@@ -264,9 +264,9 @@ contract LitePSM is
     /// @param okuMAmount Amount of OkuMoney to redeem (18 decimals)
     function redeemOkuM(uint256 okuMAmount)
         external
+        nonReentrant
         whenNotPaused
         whenYieldNotDistributing
-        nonReentrant
     {
         _redeemOkuMShared(msg.sender, okuMAmount, false);
     }
@@ -280,9 +280,9 @@ contract LitePSM is
         bytes32 s
     )
         external
+        nonReentrant
         whenNotPaused
         whenYieldNotDistributing
-        nonReentrant
     {
         LitePSMStorage storage $ = _getLitePSMStorage();
         IERC20Permit(address($.okuMoney))
@@ -327,6 +327,8 @@ contract LitePSM is
 
         // Slippage protection: truncate input to USDC-representable floor and require
         // the converted USDC matches that floor. Sub-USDC dust is dropped favorably.
+        // The divide-before-multiply below is intentional USDC-precision flooring, not a
+        // rounding vulnerability. Slither's divide-before-multiply detector will flag it.
         uint256 okuMFloor = (okuMAmount / decimalMultiplier) * decimalMultiplier;
         uint256 minUsdcExpected =
             MathLib.dollarsToUsdc(MathLib.okuMToDollars(okuMFloor, okuMMult), decimalMultiplier);
@@ -369,9 +371,9 @@ contract LitePSM is
     ///      A symmetric 1-USDC-unit round-trip drift check mirrors {mintOkuM}.
     function mintUsdOku(uint256 usdcAmount)
         external
+        nonReentrant
         whenNotPaused
         whenYieldNotDistributing
-        nonReentrant
     {
         if (usdcAmount == 0) revert Errors.ZeroAmount();
 
@@ -421,9 +423,9 @@ contract LitePSM is
     ///      queued via okuMMultiplier appreciation).
     function redeemUsdOku(uint256 usdAmount)
         external
+        nonReentrant
         whenNotPaused
         whenYieldNotDistributing
-        nonReentrant
     {
         _redeemUsdOku(msg.sender, usdAmount);
     }
@@ -437,9 +439,9 @@ contract LitePSM is
         bytes32 s
     )
         external
+        nonReentrant
         whenNotPaused
         whenYieldNotDistributing
-        nonReentrant
     {
         LitePSMStorage storage $ = _getLitePSMStorage();
         IERC20Permit(address($.okuDollar))
@@ -465,18 +467,15 @@ contract LitePSM is
     /// @param startIndex First queue index to process (inclusive)
     /// @param endIndex Last queue index to process (exclusive)
     /// @param approveAmount USDC amount to approve for processing (sum of entries by backend)
-    /// @dev TODO: re-evaluate `whenYieldNotDistributing` omission. Queue settlement is currently
-    ///      always callable so admins can drain obligations during yield events; revisit when
-    ///      the off-chain orchestrator has explicit yield-window awareness.
     function processQueue(
         uint256 startIndex,
         uint256 endIndex,
         uint256 approveAmount
     )
         external
+        nonReentrant
         whenNotPaused
         onlyRole(Roles.PSM_QUEUE_PROCESSOR)
-        nonReentrant
     {
         LitePSMStorage storage $ = _getLitePSMStorage();
 
@@ -544,9 +543,6 @@ contract LitePSM is
         _unpause();
     }
 
-    /// @dev TODO: revisit yield-distribution guard policy. Currently buffer ops are always
-    ///      callable to keep withdrawals/refills available during yield events. Confirm with
-    ///      orchestrator design before relying on this in production.
     function withdrawUsdc(
         address to,
         uint256 amount

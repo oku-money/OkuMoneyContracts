@@ -20,6 +20,7 @@ import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
 import {MathLib} from "../lib/MathLib.sol";
 import {OkuMoneyEvents} from "../lib/events/OkuMoneyEvents.sol";
+import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 
 /**
  * @title OkuMoney
@@ -47,7 +48,8 @@ contract OkuMoney is
     AccessControlUpgradeable,
     PausableUpgradeable,
     UUPSUpgradeable,
-    OkuMoneyEvents
+    OkuMoneyEvents,
+    IOkuMoney
 {
     // ============ ERC-7201 Namespaced Storage ============
 
@@ -140,6 +142,31 @@ contract OkuMoney is
         _grantRole(Roles.OKUM_UNBLACKLISTER, _admin);
         _grantRole(Roles.OKUM_CAP_MANAGER, _admin);
         _grantRole(Roles.OKUM_ALLOWANCE_MANAGER, _admin);
+    }
+
+    // ============ ERC20 + IOkuMoney Overrides ============
+    // ERC20Upgradeable and IOkuMoney both declare these functions; explicit override
+    // specifiers satisfy the Solidity compiler's diamond-inheritance requirement.
+
+    function balanceOf(address account)
+        public
+        view
+        override(ERC20Upgradeable, IOkuMoney)
+        returns (uint256)
+    {
+        return super.balanceOf(account);
+    }
+
+    function totalSupply() public view override(ERC20Upgradeable, IOkuMoney) returns (uint256) {
+        return super.totalSupply();
+    }
+
+    function transfer(address to, uint256 amount)
+        public
+        override(ERC20Upgradeable, IOkuMoney)
+        returns (bool)
+    {
+        return super.transfer(to, amount);
     }
 
     // ============ Storage Accessor Views ============

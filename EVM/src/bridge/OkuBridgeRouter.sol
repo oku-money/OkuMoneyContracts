@@ -158,8 +158,8 @@ contract OkuBridgeRouter is
         bytes32 recipient
     )
         external
-        whenNotPaused
         nonReentrant
+        whenNotPaused
         returns (bytes32 requestId)
     {
         if (recipient == bytes32(0)) revert InvalidRecipient();
@@ -181,8 +181,8 @@ contract OkuBridgeRouter is
         bytes32 recipient
     )
         external
-        whenNotPaused
         nonReentrant
+        whenNotPaused
         returns (bytes32 requestId)
     {
         if (recipient == bytes32(0)) revert InvalidRecipient();
@@ -245,8 +245,8 @@ contract OkuBridgeRouter is
     )
         external
         payable
-        whenNotPaused
         nonReentrant
+        whenNotPaused
     {
         OkuBridgeRouterStorage storage $ = _getOkuBridgeRouterStorage();
         if (!$.supportedAdapters[adapter]) revert UnsupportedAdapter(adapter);
@@ -269,8 +269,8 @@ contract OkuBridgeRouter is
     )
         external
         payable
-        whenNotPaused
         nonReentrant
+        whenNotPaused
     {
         OkuBridgeRouterStorage storage $ = _getOkuBridgeRouterStorage();
         if (!$.supportedAdapters[adapter]) revert UnsupportedAdapter(adapter);

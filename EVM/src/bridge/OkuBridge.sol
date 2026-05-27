@@ -22,6 +22,7 @@ import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
 import {OkuBridgeEvents} from "../lib/events/OkuBridgeEvents.sol";
+import {IOkuBridgeNative} from "../interfaces/IOkuBridgeNative.sol";
 
 /**
  * @title OkuBridge
@@ -61,7 +62,8 @@ contract OkuBridge is
     EIP712Upgradeable,
     ReentrancyGuardUpgradeable,
     UUPSUpgradeable,
-    OkuBridgeEvents
+    OkuBridgeEvents,
+    IOkuBridgeNative
 {
     using SafeERC20 for IERC20;
 
@@ -310,8 +312,8 @@ contract OkuBridge is
         uint256 amount
     )
         external
-        whenNotPaused
         nonReentrant
+        whenNotPaused
         returns (bytes32 requestId)
     {
         if (recipient == bytes32(0)) revert Errors.ZeroAddress();
@@ -372,8 +374,8 @@ contract OkuBridge is
         bytes calldata signature
     )
         external
-        whenNotPaused
         nonReentrant
+        whenNotPaused
     {
         if (request.destChainId != block.chainid) {
             revert WrongChain(request.destChainId, block.chainid);
@@ -460,8 +462,8 @@ contract OkuBridge is
     ///      4. key separation     — confirmer != initiator address
     function confirmRefund(BridgeRequest calldata request)
         external
-        whenNotPaused
         nonReentrant
+        whenNotPaused
         onlyRole(Roles.BRIDGE_REFUND_CONFIRMER)
     {
         if (request.sourceChainId != block.chainid) {

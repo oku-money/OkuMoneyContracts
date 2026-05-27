@@ -25,6 +25,7 @@ import {Errors} from "../lib/Errors.sol";
 import {MathLib} from "../lib/MathLib.sol";
 import {YieldSandwichGuard} from "../lib/YieldSandwichGuard.sol";
 import {OkuDollarEvents} from "../lib/events/OkuDollarEvents.sol";
+import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
 
 /**
  * @title OkuDollar
@@ -51,7 +52,8 @@ contract OkuDollar is
     ReentrancyGuardUpgradeable,
     YieldSandwichGuard,
     UUPSUpgradeable,
-    OkuDollarEvents
+    OkuDollarEvents,
+    IOkuDollar
 {
     using SafeERC20 for IERC20;
 
@@ -105,8 +107,6 @@ contract OkuDollar is
     error AmountTooSmall();
     error OutputBelowMinimum(uint256 actual, uint256 minimum);
     error InsufficientReserves();
-    /// @dev Vault OkuMoney reserves are below the amount required to cover user obligations on unwrap.
-    error InsufficientCollateral();
     error BelowMinimumCollateral();
     error InvalidRate();
     error RateTooHigh();
@@ -263,11 +263,11 @@ contract OkuDollar is
 
     // ============ ERC20 Overrides (USD Share-based) ============
 
-    function totalSupply() public view override returns (uint256) {
+    function totalSupply() public view override(ERC20Upgradeable, IOkuDollar) returns (uint256) {
         return (_getOkuDollarStorage().totalUsdShares * usdMultiplier()) / Constants.PRECISION;
     }
 
-    function balanceOf(address account) public view override returns (uint256) {
+    function balanceOf(address account) public view override(ERC20Upgradeable, IOkuDollar) returns (uint256) {
         return (_getOkuDollarStorage().usdShares[account] * usdMultiplier()) / Constants.PRECISION;
     }
 
@@ -334,9 +334,9 @@ contract OkuDollar is
         uint256 minAmountOut
     )
         external
+        nonReentrant
         whenNotPaused
         whenYieldNotDistributing
-        nonReentrant
         returns (uint256 usdMinted)
     {
         if (okuMAmount == 0) revert Errors.ZeroAmount();
@@ -382,9 +382,9 @@ contract OkuDollar is
         address receiver
     )
         external
+        nonReentrant
         whenNotPaused
         whenYieldNotDistributing
-        nonReentrant
         returns (uint256 okuMReturned)
     {
         if (usdAmount == 0) revert Errors.ZeroAmount();
@@ -448,8 +448,8 @@ contract OkuDollar is
     ///      observe a temporarily-inflated reserve balance.
     function withdrawSurplus(uint256 okuMAmount)
         external
-        whenNotPaused
         nonReentrant
+        whenNotPaused
         onlyRole(Roles.VAULT_RESERVE_MANAGER)
     {
         if (okuMAmount == 0) revert Errors.ZeroAmount();

@@ -159,11 +159,15 @@ describe("Bridge — gas regression", function () {
             .connect(admin)
             .configureAdapter(await mockAdapter.getAddress(), true)
 
-        // EIP-712 domain for OkuBridge
+        // EIP-712 domain for OkuBridge.
+        // The contract builds a chain-namespaced domain name via _eip712Name()
+        // (e.g. "OkuBridge_Sepolia" for chainId 11155111). Read it back from
+        // the deployed contract so the test stays correct if the chain changes.
         const chainId = (await ethers.provider.getNetwork()).chainId
+        const eip712Domain = await okuBridge.eip712Domain()
         domain = {
-            name: "OkuBridge",
-            version: "1",
+            name: eip712Domain.name,
+            version: eip712Domain.version,
             chainId,
             verifyingContract: await okuBridge.getAddress(),
         }

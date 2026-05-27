@@ -15,6 +15,7 @@ import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
 import {MathLib} from "../lib/MathLib.sol";
 import {RedemptionQueueEvents} from "../lib/events/RedemptionQueueEvents.sol";
+import {ReentrancyGuardUpgradeable} from "../lib/ReentrancyGuardUpgradeable.sol";
 
 /**
  * @title RedemptionQueue
@@ -42,6 +43,7 @@ import {RedemptionQueueEvents} from "../lib/events/RedemptionQueueEvents.sol";
 contract RedemptionQueue is
     Initializable,
     AccessControlUpgradeable,
+    ReentrancyGuardUpgradeable,
     UUPSUpgradeable,
     RedemptionQueueEvents
 {
@@ -104,6 +106,7 @@ contract RedemptionQueue is
         if (_admin == address(0)) revert Errors.ZeroAddress();
 
         __AccessControl_init();
+        __ReentrancyGuard_init();
 
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         $.okuMoney = IOkuMoney(_okuMoney);
@@ -165,8 +168,8 @@ contract RedemptionQueue is
         $.totalQueuedOkuM += okuMTokenAmount;
 
         uint256 dollarValue = MathLib.okuMToDollars(okuMTokenAmount, $.okuMoney.okuMMultiplier());
-        uint256 queueLength = $.queueTail - $.queueHead;
-        emit RedemptionQueued(user, okuMTokenAmount, dollarValue, position, queueLength);
+        uint256 currentQueueLength = $.queueTail - $.queueHead;
+        emit RedemptionQueued(user, okuMTokenAmount, dollarValue, position, currentQueueLength);
     }
 
     /// @notice Process queued redemptions within an index range.
@@ -177,7 +180,11 @@ contract RedemptionQueue is
     ///      the same rate (consistent within a single block; saves gas).
     ///      Stuck entries (e.g., USDC-blacklisted users) should be cleared with
     ///      `rescueQueueEntry` before processing the surrounding range.
-    function processQueue(uint256 startIndex, uint256 endIndex) external onlyRole(Roles.QUEUE_PSM) {
+    function processQueue(uint256 startIndex, uint256 endIndex)
+        external
+        nonReentrant
+        onlyRole(Roles.QUEUE_PSM)
+    {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         if (startIndex < $.queueHead) revert StartBelowHead();
         if (endIndex > $.queueTail) revert EndAboveTail();
@@ -186,6 +193,9 @@ contract RedemptionQueue is
         uint256 usdcBalance = usdcContract.balanceOf(msg.sender);
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
         uint256 cachedMult = $.okuMoney.okuMMultiplier();
+        // Accumulate decrements in memory; write once after the loop (saves ~2100 gas per
+        // additional processed entry vs. an SSTORE on every iteration).
+        uint256 totalOkuMDecrement = 0;
 
         for (uint256 i = startIndex; i < endIndex; i++) {
             QueueEntry memory entry = $.queue[i];
@@ -206,7 +216,7 @@ contract RedemptionQueue is
 
             $.okuMoney.burn(entry.okuMAmount);
             usdcContract.safeTransferFrom(msg.sender, entry.user, usdcAmount);
-            $.totalQueuedOkuM -= entry.okuMAmount;
+            totalOkuMDecrement += entry.okuMAmount;
 
             uint256 waitTime = block.timestamp - entry.timestamp;
             emit RedemptionProcessed(
@@ -217,6 +227,7 @@ contract RedemptionQueue is
             usdcBalance -= usdcAmount;
         }
 
+        $.totalQueuedOkuM -= totalOkuMDecrement;
         _advanceHead($);
     }
 
@@ -230,6 +241,7 @@ contract RedemptionQueue is
         address alternateRecipient
     )
         external
+        nonReentrant
         onlyRole(Roles.QUEUE_RESCUER)
     {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
@@ -239,14 +251,15 @@ contract RedemptionQueue is
         QueueEntry memory entry = $.queue[index];
         if (entry.user == address(0)) revert EntryAlreadyCleared();
 
-        // Transfer OkuMoney back without burning — the user is reclaiming their tokens.
-        IERC20(address($.okuMoney)).safeTransfer(alternateRecipient, entry.okuMAmount);
+        // CEI: update all state before the external transfer.
         $.totalQueuedOkuM -= entry.okuMAmount;
+        delete $.queue[index];
 
         uint256 dollarValue = MathLib.okuMToDollars(entry.okuMAmount, $.okuMoney.okuMMultiplier());
         emit RedemptionRescued(index, entry.user, alternateRecipient, entry.okuMAmount, dollarValue);
 
-        delete $.queue[index];
+        // Transfer OkuMoney back without burning — the user is reclaiming their tokens.
+        IERC20(address($.okuMoney)).safeTransfer(alternateRecipient, entry.okuMAmount);
         _advanceHead($);
     }
 

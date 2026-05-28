@@ -9,6 +9,11 @@
 //! be frozen) mirrors Circle FiatToken's blacklister/exempted-address pattern.
 //! Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v1/Blacklistable.sol
 
+// F-02: CPI targets (freeze_account, thaw_account) use Anchor's typed
+// `Interface<'info, TokenInterface>` account which validates program ID at
+// deserialization. The `arbitrary_cpi` warning is a false positive here.
+#![allow(unknown_lints, clippy::arbitrary_cpi)]
+
 use crate::constants::{ORACLE_MAX_STALENESS_SECS, ORACLE_MIN_STALENESS_SECS};
 use crate::contexts::{
     AcceptRoleAdmin, AllowanceManager, CapManager, FreezeAccount, InitializeBlacklistExempt,
@@ -114,8 +119,7 @@ pub fn set_oracle(
 ) -> Result<()> {
     if oracle != Pubkey::default() {
         require!(
-            staleness_threshold >= ORACLE_MIN_STALENESS_SECS
-                && staleness_threshold <= ORACLE_MAX_STALENESS_SECS,
+            (ORACLE_MIN_STALENESS_SECS..=ORACLE_MAX_STALENESS_SECS).contains(&staleness_threshold),
             LitePsmError::InvalidStaleness
         );
 

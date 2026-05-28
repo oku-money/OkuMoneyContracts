@@ -269,7 +269,7 @@ pub fn skip_nonce(
 /// Update the bridge deadline for new requests
 pub fn update_bridge_deadline(ctx: Context<BridgeLimitsManager>, new_deadline: i64) -> Result<()> {
     require!(
-        new_deadline >= BRIDGE_DEADLINE_MIN_SECS && new_deadline <= BRIDGE_DEADLINE_MAX_SECS,
+        (BRIDGE_DEADLINE_MIN_SECS..=BRIDGE_DEADLINE_MAX_SECS).contains(&new_deadline),
         LitePsmError::InvalidDeadline
     );
 

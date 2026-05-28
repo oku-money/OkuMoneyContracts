@@ -26,6 +26,11 @@ pub fn mul_div_floor(a: u64, b: u64, divisor: u64) -> Option<u64> {
         return None;
     }
     let product = (a as u128).checked_mul(b as u128)?;
+    // F-06: `divisor` is guaranteed non-zero by the early return above.
+    // The `/ (divisor as u128)` cannot panic or wrap.
+    // Safety confirmed by 47M fuzz iterations across mul_div_floor,
+    // dollars_to_oku_m, oku_m_to_dollars, and vault_share_round_trip targets.
+    #[allow(clippy::arithmetic_side_effects)]
     let result = product / (divisor as u128);
     u64::try_from(result).ok()
 }

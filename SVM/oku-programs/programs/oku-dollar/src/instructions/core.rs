@@ -1,5 +1,10 @@
 //! OkuDollar core instructions.
 
+// F-02: All CPI targets in this module are constrained by Anchor's typed
+// `Program<'info, Token2022>` accounts which validate program ID at
+// deserialization. The `arbitrary_cpi` warning is a false positive here.
+#![allow(unknown_lints, clippy::arbitrary_cpi)]
+
 use crate::constants::{
     MAX_USD_MULTIPLIER, MINIMUM_LIQUIDITY, MIN_COLLATERAL_RATIO_FLOOR, PRECISION,
 };

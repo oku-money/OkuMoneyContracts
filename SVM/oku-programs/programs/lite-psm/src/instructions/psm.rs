@@ -5,6 +5,11 @@
 //! enqueue when buffer is depleted, drain queue from a separate USDC top-up.
 //! Taken from https://github.com/makerdao/dss-lite-psm/blob/master/src/DssLitePsm.sol
 
+// F-02: All CPI targets in this module are constrained by Anchor's typed
+// `Program<'info, T>` accounts (Token, Token2022) which validate program ID at
+// deserialization. The `arbitrary_cpi` warning is a false positive here.
+#![allow(unknown_lints, clippy::arbitrary_cpi)]
+
 use crate::contexts::{
     DepositBuffer, MintOkuM, ProcessQueue, RedeemOkuM, RescueQueueEntry, WithdrawBuffer,
 };
@@ -255,7 +260,9 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
                 timestamp: clock.unix_timestamp,
             };
 
-            // Insert at tail position (ring buffer: modulo into fixed array)
+            // Insert at tail position (ring buffer: modulo into fixed array).
+            // F-11: modulo of two u64 values is always safe (no overflow, no panic).
+            #[allow(clippy::arithmetic_side_effects)]
             let position = queue.tail % RedemptionQueue::MAX_ENTRIES as u64;
             queue.entries[position as usize] = entry;
             queue.tail = queue.tail.wrapping_add(1);
@@ -379,6 +386,8 @@ pub fn process_queue<'info>(
             if queue.is_empty() {
                 break 'batch;
             }
+            // F-11: modulo of two u64 values is always safe (no overflow, no panic).
+            #[allow(clippy::arithmetic_side_effects)]
             let head_idx = (queue.head % RedemptionQueue::MAX_ENTRIES as u64) as usize;
             let entry = &queue.entries[head_idx];
             (queue.head, entry.user, entry.oku_m_amount, entry.timestamp)
@@ -399,7 +408,11 @@ pub fn process_queue<'info>(
             emit!(RedemptionSkippedEvent {
                 queue_index: head_now,
             });
-            processed += 1;
+            // F-11: counter bounded by MAX_ENTRIES (200) per batch — fits in u64.
+            #[allow(clippy::arithmetic_side_effects)]
+            {
+                processed += 1;
+            }
             continue;
         }
 
@@ -482,8 +495,12 @@ pub fn process_queue<'info>(
                 .ok_or(LitePsmError::Overflow)?;
         }
 
-        processed += 1;
-        payouts += 1;
+        // F-11: counters bounded by MAX_ENTRIES (200) per batch — fits in u64.
+        #[allow(clippy::arithmetic_side_effects)]
+        {
+            processed += 1;
+            payouts += 1;
+        }
 
         // Calculate dollar value at time of processing
         let dollar_value = oku_m_to_dollars(entry_oku_m, oku_m_price)?;
@@ -628,6 +645,8 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u64) -> R
             queue_index >= queue.head && queue_index < queue.tail,
             LitePsmError::InvalidQueueIndex
         );
+        // F-11: modulo of two u64 values is always safe (no overflow, no panic).
+        #[allow(clippy::arithmetic_side_effects)]
         let position = (queue_index % RedemptionQueue::MAX_ENTRIES as u64) as usize;
         let entry = &queue.entries[position];
         require!(
@@ -673,6 +692,8 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u64) -> R
 
         // Advance head past contiguous cleared entries (matches EVM behavior).
         while queue.head < queue.tail {
+            // F-11: modulo of two u64 values is always safe (no overflow, no panic).
+            #[allow(clippy::arithmetic_side_effects)]
             let head_pos = (queue.head % RedemptionQueue::MAX_ENTRIES as u64) as usize;
             if queue.entries[head_pos].user == Pubkey::default() {
                 queue.head = queue.head.wrapping_add(1);

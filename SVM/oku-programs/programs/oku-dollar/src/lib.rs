@@ -7,19 +7,16 @@
 //! including the dual-side yield-distribution slot fence (PSM + vault) and
 //! the Uniswap-V2 dead-shares first-deposit defense (SVM-only addition).
 
-// F-02 (audit finding): The solana-lints `arbitrary_cpi` lint flags all 8
-// CPI call sites in this crate because program ID is obtained at runtime from
-// the context's typed account fields rather than a hardcoded literal.
+// F-02 (audit finding): The solana-lints `arbitrary_cpi` lint flags CPI call
+// sites in this crate because program ID is obtained at runtime from typed
+// account fields rather than a hardcoded literal.
 //
 // After review (self-audit 2026-05-27), every CPI target is constrained by
-// Anchor's typed `Program<'info, T>` account system, which validates
-// `account.key == T::id()` at deserialization time before the instruction
-// handler executes. No `token_2022_program` field in any context struct is
-// left unconstrained.
-//
-// These are confirmed false positives. Suppressed at crate level to keep
-// `cargo dylint` output clean.
-#[allow(clippy::arbitrary_cpi)]
+// Anchor's typed `Program<'info, T>` account system. Targeted `#![allow]`
+// annotations are also present in each instruction module that contains CPIs.
+// Confirmed false positives — suppressed here for `cargo dylint` cleanliness.
+#![allow(unknown_lints, clippy::arbitrary_cpi)]
+
 use anchor_lang::prelude::*;
 
 pub mod constants;

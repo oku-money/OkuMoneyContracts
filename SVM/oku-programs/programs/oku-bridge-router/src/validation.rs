@@ -61,6 +61,7 @@ use lite_psm::state::{BridgeConfig, PsmConfig};
 use oku_dollar::state::OkuDollarConfig;
 
 /// Verify a `PsmConfig` AccountInfo is the canonical PSM PDA owned by lite_psm.
+#[allow(unknown_lints, clippy::missing_signer_check)] // F-03: PDA — cannot sign; owner+discriminator pins identity
 pub fn verify_psm_config(psm_config_ai: &AccountInfo) -> Result<PsmConfig> {
     require!(
         psm_config_ai.owner == &lite_psm::ID,
@@ -73,6 +74,7 @@ pub fn verify_psm_config(psm_config_ai: &AccountInfo) -> Result<PsmConfig> {
 }
 
 /// Verify a `BridgeConfig` AccountInfo is the canonical Bridge PDA owned by lite_psm.
+#[allow(unknown_lints, clippy::missing_signer_check)] // F-03: PDA — cannot sign; owner+discriminator pins identity
 pub fn verify_bridge_config(bridge_config_ai: &AccountInfo) -> Result<BridgeConfig> {
     require!(
         bridge_config_ai.owner == &lite_psm::ID,
@@ -86,6 +88,7 @@ pub fn verify_bridge_config(bridge_config_ai: &AccountInfo) -> Result<BridgeConf
 
 /// Verify an `OkuDollarConfig` AccountInfo is the canonical vault PDA AND
 /// that it points at the supplied PSM config (cross-program link check).
+#[allow(unknown_lints, clippy::missing_signer_check)] // F-03: PDA — cannot sign; owner+discriminator pins identity
 pub fn verify_vault_config(
     vault_config_ai: &AccountInfo,
     expected_psm_config: &Pubkey,
@@ -106,6 +109,7 @@ pub fn verify_vault_config(
 
 /// Combined assertion: read PsmConfig + BridgeConfig and verify neither is
 /// paused. Returns the deserialized configs for downstream use.
+#[allow(unknown_lints, clippy::missing_signer_check)] // F-03: delegates to verify_psm_config / verify_bridge_config above
 pub fn verify_psm_and_bridge_not_paused(
     psm_config_ai: &AccountInfo,
     bridge_config_ai: &AccountInfo,
@@ -118,6 +122,7 @@ pub fn verify_psm_and_bridge_not_paused(
 }
 
 /// Verify PSM and Vault configs without bridge involvement (used by mint/redeem).
+#[allow(unknown_lints, clippy::missing_signer_check)] // F-03: delegates to verify_psm_config / verify_vault_config above
 pub fn verify_psm_and_vault_not_paused(
     psm_config_ai: &AccountInfo,
     vault_config_ai: &AccountInfo,

@@ -42,6 +42,7 @@ pub const ED25519_PROGRAM_ID: Pubkey =
 /// the same transaction. The calling context (`BridgeMint`) does enforce a
 /// `Signer<'info>` on `payer` and restricts `orchestrator_signer` to the value
 /// stored in `BridgeConfig`, so authorization is fully handled upstream.
+#[allow(unknown_lints, clippy::missing_signer_check)]
 pub fn verify_ed25519_signature<'info>(
     instructions_sysvar: &AccountInfo<'info>,
     expected_pubkey: &[u8; 32],
@@ -58,9 +59,12 @@ pub fn verify_ed25519_signature<'info>(
     // ed25519 + our instruction + versioned lookups + extras).
     let mut found_valid_signature = false;
 
-    for ix_index in 0..(ED25519_INSTRUCTION_SCAN_LIMIT as i16) {
-        // Try to load instruction at this index
-        // Use get_instruction_relative with offset from current instruction
+    // F-10: Use u16 for the loop variable — matches Solana's instruction index
+    // type and eliminates the usize→i16 (truncation/wrap) and i16→usize
+    // (sign-loss) casts that the previous i16 form required.
+    // ED25519_INSTRUCTION_SCAN_LIMIT is 16, well within u16::MAX (65535).
+    for ix_index in 0u16..(ED25519_INSTRUCTION_SCAN_LIMIT as u16) {
+        // u16→usize is a safe widening cast on all Solana target platforms.
         let ix_result = load_instruction_at_checked(ix_index as usize, instructions_sysvar);
 
         let actual_ix = match ix_result {
@@ -98,6 +102,14 @@ pub fn build_ed25519_instruction_data(
     let pubkey_offset: u16 = 16;
     let signature_offset: u16 = 16 + 32;
     let message_offset: u16 = 16 + 32 + 64;
+    // F-10: Guard the usize→u16 cast — bridge messages are bounded to 80 bytes
+    // by BRIDGE_MESSAGE_LEN so this can never truncate in practice, but we
+    // assert it explicitly so the invariant is visible to the auditor.
+    debug_assert!(
+        message.len() <= u16::MAX as usize,
+        "message too long for u16 size field"
+    );
+    #[allow(clippy::cast_possible_truncation)]
     let message_size: u16 = message.len() as u16;
 
     let mut data = Vec::with_capacity(112 + message.len());

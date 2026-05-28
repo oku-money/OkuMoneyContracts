@@ -17,6 +17,10 @@ use anchor_spl::token_2022::spl_token_2022::state::Mint as MintRaw;
 /// Pyth oracle check. The deployer chooses this per-cluster (legacy Pyth on
 /// mainnet/devnet, or any future Pyth deployment). Rotate post-deploy via
 /// `set_pyth_program_owner`.
+// F-13: 15 arguments is intentional — each maps to an independent on-chain
+// authority role. Grouping into a struct would change the Anchor IDL wire
+// format and break all existing callers. Suppressed.
+#[allow(clippy::too_many_arguments)]
 pub fn initialize(
     ctx: Context<Initialize>,
     max_supply: u64,

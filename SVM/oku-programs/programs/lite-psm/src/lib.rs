@@ -9,19 +9,22 @@
 //! Inline `// see EVM_VS_SVM.md` comments throughout this crate point to
 //! specific divergence rows in that document.
 
-// F-02 (audit finding): The solana-lints `arbitrary_cpi` lint flags all 16
-// CPI call sites in this crate because program ID is obtained at runtime from
-// the context's typed account fields rather than a hardcoded literal.
+// F-13: The Anchor #[program] macro generates a dispatch wrapper for
+// initialize() that inherits its 15-argument signature. Clippy fires on the
+// macro-expansion site, which cannot be suppressed externally. Suppressed
+// crate-wide — this is the only 15-arg function and it is intentional.
+#![allow(clippy::too_many_arguments)]
+// F-02 (audit finding): The solana-lints `arbitrary_cpi` lint flags CPI call
+// sites in this crate because program ID is obtained at runtime from typed
+// account fields rather than a hardcoded literal.
 //
 // After review (self-audit 2026-05-27), every CPI target is constrained by
 // Anchor's typed `Program<'info, T>` account system, which validates
-// `account.key == T::id()` at deserialization time before the instruction
-// handler executes. No `token_program`, `token_2022_program`, or
-// `system_program` field in any context struct is left unconstrained.
-//
-// These are confirmed false positives. Suppressed at crate level to keep
-// `cargo dylint` output clean.
-#[allow(clippy::arbitrary_cpi)]
+// `account.key == T::id()` at deserialization time. Targeted `#![allow]`
+// annotations are also present in each instruction module that contains CPIs.
+// Confirmed false positives — suppressed here for `cargo dylint` cleanliness.
+#![allow(unknown_lints, clippy::arbitrary_cpi)]
+
 use anchor_lang::prelude::*;
 
 pub mod constants;
@@ -56,6 +59,9 @@ pub mod lite_psm {
 
     // ===== Initialization (3-step) =====
 
+    // F-13: 15 args maps one-to-one to independent on-chain authority roles.
+    // Grouping into a struct would change the Anchor IDL wire format.
+    #[allow(clippy::too_many_arguments)]
     pub fn initialize(
         ctx: Context<Initialize>,
         max_supply: u64,

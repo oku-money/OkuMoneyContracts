@@ -381,7 +381,12 @@ impl BridgeConfig {
         );
 
         self.supported_chains[self.supported_chains_count as usize] = chain_id;
-        self.supported_chains_count += 1;
+        // F-11: checked_add for defense-in-depth even though the require! above
+        // already guards count < 32 (which is well below u8::MAX = 255).
+        self.supported_chains_count = self
+            .supported_chains_count
+            .checked_add(1)
+            .ok_or(LitePsmError::ChainListFull)?;
         Ok(())
     }
 
@@ -393,10 +398,16 @@ impl BridgeConfig {
         let count = self.supported_chains_count as usize;
         for i in 0..count {
             if self.supported_chains[i] == chain_id {
-                let last = count - 1;
+                // F-11: checked_sub for both the index and the counter.
+                // count >= 1 here (loop body only reached when chain found and
+                // count > 0), but use checked_* to make the invariant explicit.
+                let last = count.checked_sub(1).ok_or(LitePsmError::ChainNotFound)?;
                 self.supported_chains[i] = self.supported_chains[last];
                 self.supported_chains[last] = 0;
-                self.supported_chains_count -= 1;
+                self.supported_chains_count = self
+                    .supported_chains_count
+                    .checked_sub(1)
+                    .ok_or(LitePsmError::ChainNotFound)?;
                 return Ok(());
             }
         }

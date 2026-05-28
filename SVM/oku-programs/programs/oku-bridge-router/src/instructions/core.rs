@@ -1,5 +1,11 @@
 //! OkuBridgeRouter core instructions.
 
+// F-02: All CPI targets in this module are constrained by Anchor's typed
+// `Program<'info, T>` accounts (Token, Token2022, System) or by explicit
+// `#[account(address = ...)]` constraints on `psm_program`/`vault_program`.
+// The `arbitrary_cpi` warning is a false positive here.
+#![allow(unknown_lints, clippy::arbitrary_cpi)]
+
 use crate::contexts::{BridgeOkuM, BridgeUsdOku, Initialize, MintUsdOku, RedeemUsdOku};
 use crate::errors::RouterError;
 use crate::events::*;

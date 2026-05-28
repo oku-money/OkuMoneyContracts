@@ -295,6 +295,7 @@ pub fn check_oracle_reserves<'info>(
 /// transactions. Authorization (who may call `set_oracle`) is enforced by the
 /// calling `OracleManager` context, which requires `oracle_manager: Signer<'info>`
 /// with `has_one = oracle_manager` pinned to `PsmConfig.oracle_manager`.
+#[allow(unknown_lints, clippy::missing_signer_check)]
 pub fn validate_oracle_feed(
     oracle_account: &AccountInfo,
     oracle_pubkey: Pubkey,

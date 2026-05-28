@@ -33,7 +33,7 @@ import {
 } from "../shared/bankrun";
 
 // Use anchor's web3 to avoid version conflicts
-const { Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, PublicKey } = anchor.web3;
+const { Keypair, SystemProgram, PublicKey } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;
 type Keypair = anchor.web3.Keypair;
 

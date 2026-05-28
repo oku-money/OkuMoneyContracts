@@ -67,7 +67,9 @@ pub struct Initialize<'info> {
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
-    pub rent: Sysvar<'info, Rent>,
+    // F-04: Rent::get() is called internally by Anchor's `init` and
+    // `associated_token::*` constraints — passing the sysvar account is
+    // unnecessary since Solana v1.8. Removed to save a transaction account slot.
 }
 
 #[derive(Accounts)]

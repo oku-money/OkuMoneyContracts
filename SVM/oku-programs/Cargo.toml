@@ -14,6 +14,15 @@ resolver = "2"
 # Splitting them keeps `anchor build` (which walks `programs/*` and
 # requires the `idl-build` feature on every member) honest.
 
+# ============================================================
+# Centralized dependency versions (F-01 remediation)
+# anchor-lang 1.0.2 fixes CVE-2026-45137 / RUSTSEC-2026-0144:
+#   Program<System> validation bypass in anchor-lang 1.0.0
+# ============================================================
+[workspace.dependencies]
+anchor-lang = "1.0.2"
+anchor-spl = "1.0.2"
+
 [profile.release]
 overflow-checks = true
 lto = "fat"

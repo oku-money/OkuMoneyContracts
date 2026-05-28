@@ -51,8 +51,7 @@
 // ---------------------------------------------------------------------------
 
 pub use oku_shared::{
-    BASIS_POINTS, MAX_OKU_M_PRICE, ORACLE_MAX_STALENESS_SECS, ORACLE_MIN_STALENESS_SECS,
-    PRECISION,
+    BASIS_POINTS, MAX_OKU_M_PRICE, ORACLE_MAX_STALENESS_SECS, ORACLE_MIN_STALENESS_SECS, PRECISION,
 };
 
 // ---------------------------------------------------------------------------

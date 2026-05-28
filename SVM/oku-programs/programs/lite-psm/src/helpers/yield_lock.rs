@@ -26,5 +26,3 @@ pub fn check_yield_lock(config: &PsmConfig) -> Result<()> {
     );
     Ok(())
 }
-
-

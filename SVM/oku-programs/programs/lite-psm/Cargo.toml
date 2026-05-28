@@ -20,8 +20,8 @@ custom-panic = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]
-anchor-lang = { version = "1.0.0", features = ["init-if-needed"] }
-anchor-spl = "1.0.0"
+anchor-lang = { workspace = true, features = ["init-if-needed"] }
+anchor-spl = { workspace = true }
 bytemuck = { version = "1.17", features = ["derive", "min_const_generics"] }
 solana-keccak-hasher = "3.1"
 solana-instructions-sysvar = "3.0"

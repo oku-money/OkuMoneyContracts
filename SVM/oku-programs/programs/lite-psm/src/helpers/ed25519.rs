@@ -21,14 +21,27 @@ use solana_instructions_sysvar::load_instruction_at_checked;
 pub const ED25519_PROGRAM_ID: Pubkey =
     solana_pubkey::pubkey!("Ed25519SigVerify111111111111111111111111111");
 
-/// Verify Ed25519 signature via instruction introspection
-/// Solana's Ed25519Program must be called in the same transaction with signature data
-/// This function verifies that signature check was performed correctly
-/// Production pattern: Don't parse - construct expected instruction and compare
+/// Verify Ed25519 signature via instruction introspection.
+///
+/// Solana's Ed25519Program must be called in the same transaction with signature
+/// data. This function verifies that the signature check was performed correctly.
+///
+/// Production pattern: don't parse — construct expected instruction bytes and
+/// compare them against the actual precompile instruction in the sysvar.
 ///
 /// SECURITY: This function searches through all instructions in the transaction
 /// to find the Ed25519 program instruction, rather than hardcoding an index.
 /// This handles variable transaction layouts (e.g., compute budget instructions).
+///
+/// F-03 (audit finding / `missing_signer_check`): No `.is_signer` check is
+/// needed here because this function authenticates via **cryptographic signature
+/// verification**, not transaction-signer semantics. The Solana runtime verifies
+/// the Ed25519 signature in the precompile instruction before our BPF instruction
+/// executes; this function merely confirms that the expected precompile instruction
+/// (with the correct orchestrator pubkey, message, and signature) was included in
+/// the same transaction. The calling context (`BridgeMint`) does enforce a
+/// `Signer<'info>` on `payer` and restricts `orchestrator_signer` to the value
+/// stored in `BridgeConfig`, so authorization is fully handled upstream.
 pub fn verify_ed25519_signature<'info>(
     instructions_sysvar: &AccountInfo<'info>,
     expected_pubkey: &[u8; 32],

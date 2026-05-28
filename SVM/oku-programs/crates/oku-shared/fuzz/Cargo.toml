@@ -37,3 +37,11 @@ name = "calculate_fee"
 path = "fuzz_targets/calculate_fee.rs"
 test = false
 doc = false
+
+# F-05: fuzz coverage for the two-multiplier vault share round-trip
+# (oku_money_to_shares → shares_to_oku_money in oku-dollar).
+[[bin]]
+name = "vault_share_round_trip"
+path = "fuzz_targets/vault_share_round_trip.rs"
+test = false
+doc = false

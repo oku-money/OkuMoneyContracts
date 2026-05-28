@@ -515,5 +515,3 @@ pub struct RefundCancelledEvent {
     /// Who cancelled the refund.
     pub canceller: Pubkey,
 }
-
-

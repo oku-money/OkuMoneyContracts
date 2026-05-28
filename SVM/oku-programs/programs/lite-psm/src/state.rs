@@ -375,7 +375,10 @@ impl BridgeConfig {
             !self.is_chain_supported(chain_id),
             LitePsmError::ChainAlreadySupported
         );
-        require!(self.supported_chains_count < 32, LitePsmError::ChainListFull);
+        require!(
+            self.supported_chains_count < 32,
+            LitePsmError::ChainListFull
+        );
 
         self.supported_chains[self.supported_chains_count as usize] = chain_id;
         self.supported_chains_count += 1;
@@ -514,8 +517,6 @@ const _: () = assert!(BridgeNonce::LEN == 20);
 const _: () = assert!(ProcessedRequest::LEN == 89);
 const _: () = assert!(RefundedRequest::LEN == 89);
 const _: () = assert!(PendingRefund::LEN == 121);
-
-
 
 /// EVM-burn → SVM-mint bridge request (80 bytes on the wire).
 ///

@@ -57,7 +57,10 @@ mod tests {
         // primitive returns `None` on division-by-zero and we surface
         // it as a specific error rather than the generic Overflow.
         let msg = err.to_string();
-        assert!(msg.contains("Amount must be greater than zero"), "got: {msg}");
+        assert!(
+            msg.contains("Amount must be greater than zero"),
+            "got: {msg}"
+        );
     }
 
     #[test]

@@ -14,14 +14,10 @@
 //! Taken from https://www.anchor-lang.com/docs/account-constraints
 
 use crate::constants::{BRIDGE_MESSAGE_LEN, ED25519_SIGNATURE_LEN};
-use crate::contexts::{
-    BridgeBurn, BridgeMint, CancelRefund, ConfirmRefund, InitiateRefund,
-};
+use crate::contexts::{BridgeBurn, BridgeMint, CancelRefund, ConfirmRefund, InitiateRefund};
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::{
-    calculate_fee, check_yield_lock, oku_m_to_dollars, verify_ed25519_signature,
-};
+use crate::helpers::{calculate_fee, check_yield_lock, oku_m_to_dollars, verify_ed25519_signature};
 use crate::state::{BridgeRequest, PsmConfig};
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
@@ -240,7 +236,9 @@ pub fn bridge_burn(
 
     // Calculate fee using the canonical helper.
     let fee_amount = calculate_fee(amount, bridge_config.bridge_fee_bps)?;
-    let net_amount = amount.checked_sub(fee_amount).ok_or(LitePsmError::Overflow)?;
+    let net_amount = amount
+        .checked_sub(fee_amount)
+        .ok_or(LitePsmError::Overflow)?;
     require!(net_amount > 0, LitePsmError::ZeroAmount);
 
     // Burn exact amount from user (fee deducted from bridged value)

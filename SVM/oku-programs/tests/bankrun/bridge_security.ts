@@ -54,7 +54,6 @@ import {
 } from "../shared/bridge-helpers";
 
 // Use anchor's web3 types
-const { SYSVAR_RENT_PUBKEY } = anchor.web3;
 
 /**
  * Phase 9: this file used to be `tests/unit/bridge_security.ts` and ran

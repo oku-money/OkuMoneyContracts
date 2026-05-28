@@ -162,7 +162,10 @@ pub fn check_oracle_reserves<'info>(
     let data = price_account.try_borrow_data()?;
 
     // Minimum data length: we read through `agg.pub_slot` end at offset 240.
-    require!(data.len() >= PYTH_MIN_DATA_LEN, LitePsmError::InvalidOracleResponse);
+    require!(
+        data.len() >= PYTH_MIN_DATA_LEN,
+        LitePsmError::InvalidOracleResponse
+    );
 
     // Header sanity: refuse anything that isn't a Pyth V2 Price account.
     let magic = u32::from_le_bytes(
@@ -177,14 +180,20 @@ pub fn check_oracle_reserves<'info>(
             .try_into()
             .map_err(|_| LitePsmError::InvalidOracleResponse)?,
     );
-    require!(version == PYTH_VERSION_2, LitePsmError::InvalidOracleResponse);
+    require!(
+        version == PYTH_VERSION_2,
+        LitePsmError::InvalidOracleResponse
+    );
 
     let atype = u32::from_le_bytes(
         data[PYTH_ATYPE_OFFSET..PYTH_ATYPE_OFFSET + 4]
             .try_into()
             .map_err(|_| LitePsmError::InvalidOracleResponse)?,
     );
-    require!(atype == PYTH_ATYPE_PRICE, LitePsmError::InvalidOracleResponse);
+    require!(
+        atype == PYTH_ATYPE_PRICE,
+        LitePsmError::InvalidOracleResponse
+    );
 
     // Read expo, price, status (single byte!), publish timestamp.
     let expo = i32::from_le_bytes(
@@ -216,7 +225,10 @@ pub fn check_oracle_reserves<'info>(
     // Reject non-trading feeds (halted, unknown, auction). Without this, a
     // paused Pyth feed would still pass age and price checks since
     // `publish_time` continues to advance even when the feed isn't trading.
-    require!(status == PYTH_STATUS_TRADING, LitePsmError::InvalidOracleResponse);
+    require!(
+        status == PYTH_STATUS_TRADING,
+        LitePsmError::InvalidOracleResponse
+    );
 
     // Reject feeds that don't report price as raw token base units. The
     // helper interprets `price` directly as a token-count of reserves; any
@@ -275,6 +287,14 @@ pub fn check_oracle_reserves<'info>(
 ///
 /// `oracle_pubkey` is the address the admin is trying to commit to config;
 /// `oracle_account` must be that exact account.
+///
+/// F-03 (audit finding / `missing_signer_check`): No `.is_signer` check is
+/// needed here because this function validates the **content** of a Pyth price
+/// feed account, not the identity of a transaction signer. The oracle account
+/// is a data account owned by the Pyth program — it neither can nor should sign
+/// transactions. Authorization (who may call `set_oracle`) is enforced by the
+/// calling `OracleManager` context, which requires `oracle_manager: Signer<'info>`
+/// with `has_one = oracle_manager` pinned to `PsmConfig.oracle_manager`.
 pub fn validate_oracle_feed(
     oracle_account: &AccountInfo,
     oracle_pubkey: Pubkey,

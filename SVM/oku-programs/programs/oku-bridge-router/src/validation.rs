@@ -10,6 +10,31 @@
 //! at this PSM"). When the assertion fails we surface a clean `RouterError`
 //! instead of a deep CPI error from inside `lite_psm`/`oku_dollar`.
 //!
+//! ## F-03 note (audit finding / `missing_signer_check`)
+//!
+//! The solana-lints `missing_signer_check` lint flags all five helpers in this
+//! module because they accept `&AccountInfo` parameters without calling
+//! `.is_signer`. **This is architecturally correct** for the following reasons:
+//!
+//! 1. **PDAs cannot sign.** `PsmConfig`, `BridgeConfig`, and `OkuDollarConfig`
+//!    are program-derived accounts (PDAs) derived with deterministic seeds. They
+//!    are never transaction signers; requiring `.is_signer` would always fail.
+//!
+//! 2. **Owner + discriminator pins identity.** These helpers verify:
+//!    - `account.owner == lite_psm::ID` (or `oku_dollar::ID`)
+//!    - The 8-byte Anchor discriminator via `try_deserialize_unchecked`
+//!    Since the seed is a constant (`b"psm_config"`, `b"bridge_config"`,
+//!    `b"oku_dollar_config"`), a correctly-owned + discriminator-passing account
+//!    is necessarily the canonical PDA. See the module-level design notes below.
+//!
+//! 3. **Downstream CPIs re-validate.** Every CPI into `lite_psm`/`oku_dollar`
+//!    re-validates the same PDAs via Anchor `seeds` constraints. The router
+//!    checks are a fast-fail UX layer, not the sole security boundary.
+//!
+//! 4. **Caller contexts enforce transaction-signer requirements.** Every calling
+//!    instruction context requires `user: Signer<'info>` or `role_admin:
+//!    Signer<'info>` on the appropriate authority account.
+//!
 //! ## Design notes (Phase 8.6)
 //!
 //! - **No `find_program_address`.** A previous revision called

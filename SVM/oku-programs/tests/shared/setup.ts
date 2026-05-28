@@ -30,7 +30,6 @@ import {
   PublicKey,
   Keypair,
   SystemProgram,
-  SYSVAR_RENT_PUBKEY,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
@@ -174,7 +173,7 @@ export async function initializePsm(
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
-      rent: SYSVAR_RENT_PUBKEY,
+      // F-04: rent sysvar removed from Initialize context (Anchor uses Rent::get() internally)
     })
     .rpc();
 

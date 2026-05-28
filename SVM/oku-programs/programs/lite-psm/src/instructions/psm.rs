@@ -558,7 +558,17 @@ pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> 
     // Read current price from config to calculate reserved USDC
     let oku_m_price = ctx.accounts.config.oku_m_price;
 
-    // Calculate reserved USDC from running counter (O(1) instead of iterating)
+    // Calculate reserved USDC from running counter (O(1) instead of iterating).
+    //
+    // F-05 (rounding note): This computes floor(total_queued_oku_m * price / PRECISION).
+    // When `process_queue` later pays each entry individually, it also floors each
+    // per-entry calculation. Since floor(a+b) <= floor(a) + floor(b), the sum of
+    // individual payouts can be at most `queue_depth` lamports *more* than this single
+    // floor calculation. In practice the queue holds at most 200 entries, so the
+    // worst-case underestimation of reserved USDC is 200 lamports ($0.000200).
+    // This is economically negligible and accepted as a design trade-off. If the
+    // vault ever has a marginal balance, the last queue entries will be processed
+    // at the then-current price which may have risen to cover any gap.
     let reserved = oku_m_to_dollars(total_queued_oku_m, oku_m_price)?;
 
     let vault_balance = ctx.accounts.vault_usdc.amount;

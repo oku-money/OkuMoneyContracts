@@ -62,7 +62,9 @@ pub fn initialize(
             .get_extension_types()
             .map_err(|_| error!(LitePsmError::TransferHookNotAllowed))?;
         require!(
-            !extensions.iter().any(|e| matches!(e, ExtensionType::TransferHook)),
+            !extensions
+                .iter()
+                .any(|e| matches!(e, ExtensionType::TransferHook)),
             LitePsmError::TransferHookNotAllowed
         );
     }

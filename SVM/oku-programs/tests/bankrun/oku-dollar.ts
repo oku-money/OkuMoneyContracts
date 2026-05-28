@@ -43,7 +43,7 @@ import {
   getProgram,
 } from "../shared/bankrun";
 
-const { Keypair, SystemProgram, SYSVAR_RENT_PUBKEY, PublicKey } = anchor.web3;
+const { Keypair, SystemProgram, PublicKey } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;
 type Keypair = anchor.web3.Keypair;
 
@@ -351,7 +351,7 @@ describe("oku-dollar", () => {
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
+          // F-04: rent sysvar removed from Initialize context (Anchor uses Rent::get() internally)
         })
         .rpc();
 

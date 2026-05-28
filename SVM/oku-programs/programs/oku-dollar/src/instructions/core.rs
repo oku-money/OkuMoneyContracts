@@ -1,6 +1,8 @@
 //! OkuDollar core instructions.
 
-use crate::constants::{MAX_USD_MULTIPLIER, MIN_COLLATERAL_RATIO_FLOOR, MINIMUM_LIQUIDITY, PRECISION};
+use crate::constants::{
+    MAX_USD_MULTIPLIER, MINIMUM_LIQUIDITY, MIN_COLLATERAL_RATIO_FLOOR, PRECISION,
+};
 use crate::contexts::{
     DepositReserves, Initialize, Unwrap, UpdateUsdMultiplier, WithdrawReserves, Wrap,
 };
@@ -37,7 +39,10 @@ pub fn initialize(
     // analogous guards in `lite-psm::initialize_bridge`.
     require!(pauser != Pubkey::default(), OkuDollarError::ZeroAuthority);
     require!(unpauser != Pubkey::default(), OkuDollarError::ZeroAuthority);
-    require!(usd_rebaser != Pubkey::default(), OkuDollarError::ZeroAuthority);
+    require!(
+        usd_rebaser != Pubkey::default(),
+        OkuDollarError::ZeroAuthority
+    );
     require!(
         reserve_manager != Pubkey::default(),
         OkuDollarError::ZeroAuthority
@@ -196,11 +201,12 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
         // from (System-Program owner, usdOku mint, Token-2022 program). Without
         // this check a first depositor could split the dead supply across
         // multiple SP-owned accounts, complicating audit trails.
-        let expected_dead_ata = anchor_spl::associated_token::get_associated_token_address_with_program_id(
-            &anchor_lang::system_program::ID,
-            &ctx.accounts.usd_oku_mint.key(),
-            &ctx.accounts.token_2022_program.key(),
-        );
+        let expected_dead_ata =
+            anchor_spl::associated_token::get_associated_token_address_with_program_id(
+                &anchor_lang::system_program::ID,
+                &ctx.accounts.usd_oku_mint.key(),
+                &ctx.accounts.token_2022_program.key(),
+            );
         require!(
             dead_ata.key() == expected_dead_ata,
             OkuDollarError::InvalidDeadSharesAddress

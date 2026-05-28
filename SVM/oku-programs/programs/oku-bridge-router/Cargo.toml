@@ -20,8 +20,8 @@ custom-panic = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]
-anchor-lang = "1.0.0"
-anchor-spl = "1.0.0"
+anchor-lang = { workspace = true }
+anchor-spl = { workspace = true }
 oku-dollar = { path = "../oku-dollar", features = ["cpi"] }
 lite-psm = { path = "../lite-psm", features = ["cpi"] }
 solana-security-txt = "1.1"

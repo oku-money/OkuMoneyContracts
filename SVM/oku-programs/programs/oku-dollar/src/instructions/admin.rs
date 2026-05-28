@@ -8,9 +8,7 @@
 //! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol
 
 use crate::constants::{MIN_COLLATERAL_RATIO_FLOOR, PRECISION};
-use crate::contexts::{
-    AcceptRoleAdmin, Pause, SetAuthority, SetMinCollateralRatio, Unpause,
-};
+use crate::contexts::{AcceptRoleAdmin, Pause, SetAuthority, SetMinCollateralRatio, Unpause};
 use crate::errors::OkuDollarError;
 use crate::events::*;
 use crate::helpers::is_sufficiently_collateralized;

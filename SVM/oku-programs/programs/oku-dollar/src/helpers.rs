@@ -60,8 +60,7 @@ pub fn oku_money_to_usd(oku_m_amount: u64, oku_m_price: u64) -> Result<u64> {
 /// pure overflow propagates as `Overflow`.
 pub fn usd_to_oku_money(usd_value: u64, oku_m_price: u64) -> Result<u64> {
     require!(oku_m_price > 0, OkuDollarError::InvalidPrice);
-    shared::dollars_to_oku_m(usd_value, oku_m_price)
-        .ok_or_else(|| error!(OkuDollarError::Overflow))
+    shared::dollars_to_oku_m(usd_value, oku_m_price).ok_or_else(|| error!(OkuDollarError::Overflow))
 }
 
 // ---------------------------------------------------------------------------
@@ -70,8 +69,22 @@ pub fn usd_to_oku_money(usd_value: u64, oku_m_price: u64) -> Result<u64> {
 
 /// Convert usdOku shares → OkuMoney amount (price-aware).
 ///
-/// Formula: `oku_m_amount = (usd_oku_shares * usd_multiplier) / oku_m_price`.
+/// Formula: `oku_m_amount = floor(usd_oku_shares * usd_multiplier / oku_m_price)`.
 /// Equivalent to EVM: `okuMReturned = (usdAmount * PRECISION) / okuMPrice`.
+///
+/// ## Rounding (F-05)
+///
+/// Uses **floor** rounding (via `mul_div_floor`). This is protocol-favorable:
+/// the user always receives ≤ their mathematically-exact entitlement.
+/// A zero result is rejected by the caller (`require!(oku_m_out > 0)`).
+///
+/// **Round-trip precision bound:** A `wrap` followed by `unwrap` at unchanged
+/// prices loses at most `ceil(usd_multiplier / oku_m_price) + 1` lamports due
+/// to two sequential floor divisions. At the current `oku_m_price = PRECISION`
+/// ($1.00), this is at most 2 lamports per round-trip. At `MAX_MULTIPLIER`
+/// ($1,000,000 / token), the worst-case is ~1e6 lamports ($1.00) per round-trip
+/// — but the protocol only operates in the $1.00–$2.00 price range, limiting
+/// practical loss to single-digit lamports.
 pub fn shares_to_oku_money(
     usd_oku_shares: u64,
     usd_multiplier: u64,
@@ -84,8 +97,16 @@ pub fn shares_to_oku_money(
 
 /// Convert OkuMoney amount → usdOku shares (price-aware).
 ///
-/// Formula: `usd_oku_shares = (oku_m_amount * oku_m_price) / usd_multiplier`.
+/// Formula: `usd_oku_shares = floor(oku_m_amount * oku_m_price / usd_multiplier)`.
 /// Matches EVM: `sharesToMint = (actualReceived * okuMPrice) / usdMultiplier`.
+///
+/// ## Rounding (F-05)
+///
+/// Uses **floor** rounding (via `mul_div_floor`). This is protocol-favorable:
+/// the user receives ≤ their mathematically-exact share entitlement, meaning
+/// the vault is always at least as well-collateralized after the deposit as
+/// the math implies. A zero result is rejected by the caller
+/// (`require!(shares > 0)`).
 pub fn oku_money_to_shares(
     oku_m_amount: u64,
     usd_multiplier: u64,
@@ -257,6 +278,56 @@ mod tests {
         );
     }
 
+    /// F-05: Verify wrap→unwrap round-trip precision bound.
+    ///
+    /// Properties:
+    /// 1. `oku_m_out <= oku_m_in` (monotonicity — floor rounding never overpays).
+    /// 2. Loss bounded by `ceil(usd_multiplier / oku_m_price) + 1`.
+    #[test]
+    fn test_share_round_trip_precision_bound() {
+        // At $1.00 price, $1.00 multiplier — loss should be 0 for round amounts.
+        let oku_m_in = 1_000_000u64; // 1 OkuMoney
+        let oku_m_price = PRECISION;
+        let usd_multiplier = PRECISION;
+        let shares = oku_money_to_shares(oku_m_in, usd_multiplier, oku_m_price).unwrap();
+        let oku_m_out = shares_to_oku_money(shares, usd_multiplier, oku_m_price).unwrap();
+        assert!(oku_m_out <= oku_m_in, "round-trip must not overpay");
+        let max_loss = (usd_multiplier / oku_m_price) + 2;
+        assert!(
+            oku_m_in.saturating_sub(oku_m_out) <= max_loss,
+            "round-trip loss exceeds bound"
+        );
+
+        // At $1.05 price, $1.00 multiplier — loss should remain small.
+        let oku_m_price_105 = 1_050_000_000u64;
+        let shares2 = oku_money_to_shares(oku_m_in, usd_multiplier, oku_m_price_105).unwrap();
+        let oku_m_out2 = shares_to_oku_money(shares2, usd_multiplier, oku_m_price_105).unwrap();
+        assert!(
+            oku_m_out2 <= oku_m_in,
+            "round-trip at $1.05 must not overpay"
+        );
+        let max_loss2 = (usd_multiplier / oku_m_price_105) + 2;
+        assert!(
+            oku_m_in.saturating_sub(oku_m_out2) <= max_loss2,
+            "round-trip loss at $1.05 exceeds bound"
+        );
+
+        // At $1.10 price, $1.05 multiplier — test divergence case.
+        let oku_m_price_110 = 1_100_000_000u64;
+        let usd_multiplier_105 = 1_050_000_000u64;
+        let shares3 = oku_money_to_shares(oku_m_in, usd_multiplier_105, oku_m_price_110).unwrap();
+        let oku_m_out3 = shares_to_oku_money(shares3, usd_multiplier_105, oku_m_price_110).unwrap();
+        assert!(
+            oku_m_out3 <= oku_m_in,
+            "round-trip at diverged prices must not overpay"
+        );
+        let max_loss3 = (usd_multiplier_105 / oku_m_price_110) + 2;
+        assert!(
+            oku_m_in.saturating_sub(oku_m_out3) <= max_loss3,
+            "round-trip loss at diverged prices exceeds bound"
+        );
+    }
+
     #[test]
     fn test_calculate_collateral_ratio() {
         // 100% at 1:1 multiplier, price $1.00.
@@ -276,8 +347,7 @@ mod tests {
         );
         // Price-aware: reserve = 100 OkuM at $1.05 → ratio = 105%.
         assert_eq!(
-            calculate_collateral_ratio(100_000_000, 100_000_000, PRECISION, 1_050_000_000)
-                .unwrap(),
+            calculate_collateral_ratio(100_000_000, 100_000_000, PRECISION, 1_050_000_000).unwrap(),
             1_050_000_000
         );
     }

@@ -292,7 +292,10 @@ pub fn update_orchestrator_signer(
     new_signer: Pubkey,
 ) -> Result<()> {
     // Reject zero address to prevent accidental lockout (matches EVM)
-    require!(new_signer != Pubkey::default(), LitePsmError::InvalidAuthority);
+    require!(
+        new_signer != Pubkey::default(),
+        LitePsmError::InvalidAuthority
+    );
 
     let config = &mut ctx.accounts.bridge_config;
     let old_signer = config.orchestrator_signer;

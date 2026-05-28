@@ -82,7 +82,9 @@ pub const ED25519_SIGNATURE_LEN: usize = 64;
 /// when looking for a matching sigverify ix. Set high enough that real
 /// transactions (compute-budget + ATA create + bridge_mint + ...) fit, low
 /// enough that a griefer cannot inflate scan cost to OOM.
-pub const ED25519_INSTRUCTION_SCAN_LIMIT: usize = 16;
+// F-10: declared as u16 (matches Solana's instruction index type) to avoid
+// the usize→u16 truncation cast at the loop site in ed25519.rs.
+pub const ED25519_INSTRUCTION_SCAN_LIMIT: u16 = 16;
 
 /// Maximum number of supported destination chains stored on `BridgeConfig`.
 /// Backing array is `[u16; 32]`.

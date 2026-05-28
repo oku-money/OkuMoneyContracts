@@ -7,6 +7,8 @@
 //! including the dual-side yield-distribution slot fence (PSM + vault) and
 //! the Uniswap-V2 dead-shares first-deposit defense (SVM-only addition).
 
+// F-17: Zero unsafe code in this crate (confirmed by cargo-geiger).
+#![forbid(unsafe_code)]
 // F-02 (audit finding): The solana-lints `arbitrary_cpi` lint flags CPI call
 // sites in this crate because program ID is obtained at runtime from typed
 // account fields rather than a hardcoded literal.

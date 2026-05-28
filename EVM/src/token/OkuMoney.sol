@@ -97,6 +97,10 @@ contract OkuMoney is
     ///      lose precision or overflow. Mirrors the explicit `MAX_OKU_M_PRICE`
     ///      guard on the SVM side.
     error MultiplierTooHigh();
+    /// @dev Mirrors SVM `LitePsmError::YieldTooSmall`. Prevents a tiny yieldAmount
+    ///      that truncates to zero per-token from stamping `lastYieldDistributionBlock`
+    ///      without actually moving the multiplier (wasting the sandwich-lock window).
+    error YieldTooSmall();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -226,10 +230,15 @@ contract OkuMoney is
         uint256 supply = totalSupply();
         if (supply == 0) revert ZeroSupply();
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
-        $.lastYieldDistributionBlock = block.number;
         uint256 oldMultiplier = $.okuMMultiplier;
-        uint256 newMultiplier = oldMultiplier + (yieldAmount * Constants.PRECISION / supply);
+        uint256 yieldPerToken = yieldAmount * Constants.PRECISION / supply;
+        // Reject yields that truncate to zero per token. A zero increment would stamp
+        // `lastYieldDistributionBlock` without moving the multiplier, wasting the
+        // sandwich-lock slot. Mirrors SVM `LitePsmError::YieldTooSmall`.
+        if (yieldPerToken == 0) revert YieldTooSmall();
+        uint256 newMultiplier = oldMultiplier + yieldPerToken;
         if (newMultiplier > Constants.MAX_MULTIPLIER) revert MultiplierTooHigh();
+        $.lastYieldDistributionBlock = block.number;
         $.okuMMultiplier = newMultiplier;
         emit YieldDistributed(yieldAmount, oldMultiplier, newMultiplier, supply);
     }

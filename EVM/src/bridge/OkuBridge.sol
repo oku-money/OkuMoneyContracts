@@ -21,6 +21,7 @@ import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
+import {YieldSandwichGuard} from "../lib/YieldSandwichGuard.sol";
 import {OkuBridgeEvents} from "../lib/events/OkuBridgeEvents.sol";
 import {IOkuBridgeNative} from "../interfaces/IOkuBridgeNative.sol";
 
@@ -61,6 +62,7 @@ contract OkuBridge is
     PausableUpgradeable,
     EIP712Upgradeable,
     ReentrancyGuardUpgradeable,
+    YieldSandwichGuard,
     UUPSUpgradeable,
     OkuBridgeEvents,
     IOkuBridgeNative
@@ -299,6 +301,13 @@ contract OkuBridge is
         net = amount - fee;
     }
 
+    // ============ YieldSandwichGuard Hook ============
+
+    /// @inheritdoc YieldSandwichGuard
+    function _yieldSandwichOkuMoney() internal view override returns (IOkuMoney) {
+        return _getOkuBridgeStorage().okuMoney;
+    }
+
     // ============ Core Bridge Functions ============
 
     /// @notice Burn tokens on source chain to initiate bridge transfer.
@@ -369,6 +378,10 @@ contract OkuBridge is
     }
 
     /// @notice Mint tokens on destination chain with valid orchestrator signature.
+    /// @dev `whenYieldNotDistributing` mirrors SVM `bridge_mint`'s `check_yield_lock` call.
+    ///      Prevents a mint from landing in the same block as a multiplier update, closing
+    ///      a narrow window where an orchestrator race between price distribution and bridge
+    ///      mint settlement could be exploited.
     function bridgeMint(
         BridgeRequest calldata request,
         bytes calldata signature
@@ -376,6 +389,7 @@ contract OkuBridge is
         external
         nonReentrant
         whenNotPaused
+        whenYieldNotDistributing
     {
         if (request.destChainId != block.chainid) {
             revert WrongChain(request.destChainId, block.chainid);

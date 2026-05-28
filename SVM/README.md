@@ -320,6 +320,49 @@ const PRECISION: u64 = 1_000_000_000; // 1e9
 // Rounding favors protocol/vault (round DOWN throughout)
 ```
 
+## Hardcoded Constants
+
+Constants are split across two locations: shared protocol constants live in [`crates/oku-shared/src/constants.rs`](oku-programs/crates/oku-shared/src/constants.rs); program-specific constants live in each program's own `constants.rs`. None can be changed without a program upgrade.
+
+### Shared (`oku-shared`)
+
+| Constant | Value | Rationale |
+|---|---|---|
+| `PRECISION` | `1_000_000_000` (1e9) | Fixed-point base for all multiplier math. SVM tokens are 6 decimal; 1e9 gives 3 fractional digits of price precision above the token unit. Mirrors EVM's 1e18 at a scale appropriate for `u64`. Not arbitrary — changing it rewrites all math. |
+| `BASIS_POINTS` | `10_000` | Universal basis-points denominator. Industry convention. |
+| `MIN_COLLATERAL_RATIO_FLOOR` | `900_000_000` (90% of PRECISION) | Hard floor below which `min_collateral_ratio` can never be configured. **The 90% value is a round-number convention** — see EVM README for full rationale. Mirrors EVM `Constants.MIN_COLLATERAL_RATIO_FLOOR`. Only gates `withdraw_reserves`; does not automatically halt other operations if the live ratio drifts below it. |
+| `MAX_MULTIPLIER` / `MAX_OKU_M_PRICE` / `MAX_USD_MULTIPLIER` | `1_000_000_000_000_000` (1e15, = $1,000,000/token) | Overflow guard on both `oku_m_price` and `usd_multiplier`. Chosen as a round number far above realistic yield trajectories. Arbitrary — any large value that keeps `u64 * u64 -> u128` away from overflow would work. Defense-in-depth against a compromised rebaser key. |
+| `ORACLE_MIN_STALENESS_SECS` | `60` seconds | Lower bound on the configurable Pyth staleness threshold. Prevents a window so tight that benign jitter causes every mint to fail. Value is arbitrary within the constraint of "below any realistic Pyth update interval." Mirrors EVM `ORACLE_MIN_STALENESS`. |
+| `ORACLE_MAX_STALENESS_SECS` | `604_800` (7 days) | Upper bound on the configurable staleness threshold. Prevents a misconfiguration that makes the oracle check a no-op. 7 days is a conventional sentinel; any value of hours-to-days would serve the same purpose. Mirrors EVM `ORACLE_MAX_STALENESS`. |
+| `TOKEN_DECIMALS` | `6` | Both OkuMoney and OkuDollar use 6 decimals on SVM, matching USDC on Solana. Not arbitrary — hardcoded to prevent misconfiguration and asserted at `initialize`. |
+
+### Lite-PSM (`programs/lite-psm/src/constants.rs`)
+
+| Constant | Value | Rationale |
+|---|---|---|
+| `BRIDGE_DEADLINE_MIN_SECS` | `60` seconds | Lower bound on the bridge signature deadline. Deadlines shorter than ~1 minute would routinely expire before the orchestrator finishes signing. Arbitrary within the constraint of "enough time for an orchestrator round-trip." |
+| `BRIDGE_DEADLINE_MAX_SECS` | `604_800` (7 days) | Upper bound on the bridge deadline. Prevents a misconfiguration that would allow signatures to be replayed weeks after a burn. Arbitrary sentinel; any value of hours-to-days would serve the same purpose. |
+| `BRIDGE_MESSAGE_LEN` | `80` bytes | Canonical wire-format length for a `BridgeRequest` message in both directions. Derived from the fixed field layout (`2+2+32+20+8+8+8` or `2+2+20+32+8+8+8`); not arbitrary. |
+| `ED25519_SIGNATURE_LEN` | `64` bytes | Ed25519 detached signature length. Not arbitrary — fixed by the Ed25519 spec. |
+| `ED25519_INSTRUCTION_SCAN_LIMIT` | `16` | Maximum number of leading instructions the `verify_ed25519_signature` helper will scan looking for a matching sigverify ix. Chosen to comfortably fit real transaction shapes (compute-budget + ATA create + bridge_mint + ...) while bounding worst-case scan cost. Arbitrary in the sense that 8 or 32 would also work; 16 is a conservative round number. |
+| `MAX_SUPPORTED_CHAINS` | `32` | Maximum number of destination chains in `BridgeConfig`'s whitelist array (`[u16; 32]`). Arbitrary — sized to cover foreseeable chain expansion without bloating the account. Increasing it requires a `BridgeConfig` realloc. |
+| `MAX_NONCE_SKIP` | `10_000` | Maximum nonces `skip_nonce` may advance in a single call. Guards against an admin accidentally jumping `next_nonce` near `u64::MAX`, which would cause `bridge_burn`'s `checked_add(1)` to overflow. The EVM equivalent skips exactly 1; SVM allows a delta but caps it here. Value is arbitrary within "large enough to recover any realistic stuck-nonce scenario." |
+
+### OkuDollar (`programs/oku-dollar/src/constants.rs`)
+
+| Constant | Value | Rationale |
+|---|---|---|
+| `MINIMUM_LIQUIDITY` | `1_000_000` (1 usdOku at 6 decimals) | Dead shares permanently locked in a System Program ATA on first deposit, preventing the first-depositor share-inflation attack. Pattern from Uniswap V2 `MINIMUM_LIQUIDITY`. The value of 1 full token (10^6) is a conventional choice — large enough to make inflation attacks economically infeasible, small enough to not meaningfully dilute early depositors. Arbitrary above a minimum threshold. |
+
+### Queue / Batch Limits (embedded in `state.rs` / `instructions/`)
+
+| Constant | Value | Location | Rationale |
+|---|---|---|---|
+| `MAX_ENTRIES` | `200` | `lite-psm/src/state.rs` | Maximum entries in the `RedemptionQueue` zero-copy ring buffer. Bounded by Solana's ~10 KB single-CPI allocation budget (200 × 48 bytes = 9 600 bytes + header). The exact value is a practical ceiling given the allocation constraint, not a free choice. Increasing it requires a multi-step `realloc` upgrade. |
+| `MAX_BATCH_ENTRIES` | `50` | `lite-psm/src/instructions/psm.rs` | Maximum queue entries processed in a single `process_queue` call. Bounded by the BPF compute-unit budget per transaction. 50 is a conservative round number; the exact limit depends on per-entry CU cost and may be tightened or loosened without a program upgrade if the instruction is refactored. |
+
+---
+
 ## Authority Model
 
 Granular per-action roles — no single admin key:

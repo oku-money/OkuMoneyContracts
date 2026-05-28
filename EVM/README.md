@@ -271,6 +271,23 @@ See [`src/lib/Constants.sol`](src/lib/Constants.sol) for the canonical version.
 
 ---
 
+## Hardcoded Constants
+
+All of the following are compile-time constants in [`src/lib/Constants.sol`](src/lib/Constants.sol). They cannot be changed without a contract upgrade. Where a constant is a round number or a conventional choice rather than a derived value, the rationale is noted.
+
+| Constant | Value | Rationale |
+|---|---|---|
+| `PRECISION` | `1e18` | Standard 18-decimal fixed-point base. Matches ERC-20 18-decimal convention; $1.00 = 1e18. Not arbitrary — changing it would require rewriting all multiplier math. |
+| `MAX_RATE` | `PRECISION + 1e11` (~3700% APY per-second) | Safety cap on `usdRatePerSecond` passed to `rpow`. The value is arbitrary in the sense that any number far above realistic T-Bill yields would serve the same purpose. It is calibrated to stay well below `rpow` overflow regions while being comfortably above any plausible real-world rate. |
+| `MAX_MULTIPLIER` | `1e24` ($1,000,000 per token) | Overflow guard on both `okuMMultiplier` and `usdMultiplier`. Chosen as a round number six orders of magnitude above the starting value of 1e18. Arbitrary — any ceiling far above realistic yield trajectories would work. Prevents a compromised rebaser key from bricking downstream multiplier math via overflow. |
+| `BASIS_POINTS` | `10_000` | Universal basis-points denominator (100% = 10 000). Industry convention; not arbitrary. |
+| `MIN_COLLATERAL_RATIO_FLOOR` | `9e17` (90%) | Hard floor below which `minCollateralRatio` can never be configured, regardless of the `VAULT_ADMIN` key. **The 90% value is a round-number convention** — no specific analysis of T-Bill liquidity or yield-spread dynamics was used to derive it. For a product backed by short-duration T-Bills (extremely low volatility), a tighter floor (e.g. 95–98%) would also be defensible. The floor only gates `withdrawSurplus`; it does not halt minting or unwrapping if the live ratio drifts below it. |
+| `ORACLE_MIN_STALENESS` | `60` seconds | Lower bound on the configurable Chainlink PoR staleness threshold. Prevents an operator from setting a window so tight that routine block-time jitter causes every mint to revert. 60 s is below any realistic Chainlink update interval; the exact value is arbitrary within that constraint. |
+| `ORACLE_MAX_STALENESS` | `7 days` | Upper bound on the configurable staleness threshold. Prevents operator misconfiguration that would make the oracle check a no-op. 7 days is a conventional "obviously too stale" sentinel; any value of hours-to-weeks would serve the same purpose. |
+| `MAX_USDC_DECIMALS` | `18` | Cap on `IERC20Metadata.decimals()` accepted at PSM init. USDC uses 6 decimals on all EVM chains; 18 is the ERC-20 max. Prevents misconfiguration with nonsensical decimal counts. Not arbitrary per se — it is the ERC-20 upper bound — but the choice to cap rather than hardcode 6 is intentional forward-compat. |
+
+---
+
 ## Dual-Token Split-Economy Model
 
 OkuMoney and OkuDollar have **independent yield rates** controlled by separate roles:

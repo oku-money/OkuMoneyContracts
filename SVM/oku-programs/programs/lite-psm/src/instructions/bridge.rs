@@ -260,7 +260,7 @@ pub fn bridge_burn(
         amount,
     )?;
 
-    // Mint fee to fee_recipient (if fee > 0 AND fee_recipient_ata is provided).
+    // Mint fee to fee_recipient (if fee > 0).
     //
     // The fee mint intentionally bypasses BOTH `minter_allowance` AND
     // `max_supply`: `bridge_burn` is a net-supply-decreasing operation
@@ -273,30 +273,35 @@ pub fn bridge_burn(
     // (`net_amount == 0`) is rejected explicitly above so the supply
     // change is always strictly negative or zero.
     //
-    // When user == fee_recipient, the client should pass None for
-    // fee_recipient_ata to avoid duplicate mutable account error. The fee
-    // is effectively "waived" since the user already burned the full
-    // amount.
+    // fee_recipient_ata MUST always be provided when fee_amount > 0,
+    // including when user == fee_recipient. Callers must use separate,
+    // writable ATAs for user_oku_money_ata and fee_recipient_ata even
+    // when both belong to the same wallet — pass the wallet's ATA in both
+    // slots. This matches EVM OkuBridge.bridgeBurn which unconditionally
+    // mints the fee back to feeRecipient regardless of whether feeRecipient
+    // == msg.sender. Skipping the re-mint would burn more supply than EVM.
     if fee_amount > 0 {
-        if let Some(fee_recipient_ata) = &ctx.accounts.fee_recipient_ata {
-            let seeds = &[PsmConfig::SEED, &[config_bump]];
-            let signer = &[&seeds[..]];
+        let fee_recipient_ata = ctx
+            .accounts
+            .fee_recipient_ata
+            .as_ref()
+            .ok_or(LitePsmError::MissingFeeRecipientAta)?;
 
-            token_interface::mint_to(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_2022_program.key(),
-                    token_interface::MintTo {
-                        mint: ctx.accounts.oku_money_mint.to_account_info(),
-                        to: fee_recipient_ata.to_account_info(),
-                        authority: ctx.accounts.config.to_account_info(),
-                    },
-                    signer,
-                ),
-                fee_amount,
-            )?;
-        }
-        // If fee_recipient_ata is None (user == fee_recipient), fee is not minted back.
-        // This is intentional - the user effectively paid the fee by burning the full amount.
+        let seeds = &[PsmConfig::SEED, &[config_bump]];
+        let signer = &[&seeds[..]];
+
+        token_interface::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_2022_program.key(),
+                token_interface::MintTo {
+                    mint: ctx.accounts.oku_money_mint.to_account_info(),
+                    to: fee_recipient_ata.to_account_info(),
+                    authority: ctx.accounts.config.to_account_info(),
+                },
+                signer,
+            ),
+            fee_amount,
+        )?;
     }
 
     // Initialize BridgeNonce if needed and get/increment nonce

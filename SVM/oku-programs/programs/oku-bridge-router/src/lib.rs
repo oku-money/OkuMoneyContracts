@@ -13,6 +13,8 @@
 //! See [`SVM/EVM_VS_SVM.md`](../../../EVM_VS_SVM.md) for the full divergence
 //! list, including the lack of a `sweep` admin (router holds no escrow on SVM).
 
+// F-17: Zero unsafe code in this crate (confirmed by cargo-geiger).
+#![forbid(unsafe_code)]
 // F-02 (audit finding): The solana-lints `arbitrary_cpi` lint flags CPI call
 // sites in this crate because program ID is obtained at runtime from typed
 // account fields rather than a hardcoded literal.

@@ -271,8 +271,13 @@ contract OkuMoneyFuzzTest is BaseTest {
         // (MAX_SUPPLY = 1e27, so supply * 10 stays well below 2^256).
         supply = bound(supply, 1e18, MAX_SUPPLY / 100);
 
+        // Lower bound: yieldAmount must produce a non-zero per-token increment
+        // (yieldAmount * PRECISION / supply >= 1), so yieldAmount >= ceil(supply / PRECISION).
+        // Since PRECISION = 1e18 and supply <= MAX_SUPPLY / 100 = 1e25, the min yieldAmount
+        // is at most 1e7 — never more than the supply itself.
+        uint256 minYield = supply / PRECISION + 1;
         // Realistic upper bound: 10x current supply per single distribution.
-        yieldAmount = bound(yieldAmount, 1, supply * 10);
+        yieldAmount = bound(yieldAmount, minYield, supply * 10);
 
         _mintOkuMoney(user1, supply);
 
@@ -282,14 +287,30 @@ contract OkuMoneyFuzzTest is BaseTest {
         okuMoney.distributeYield(yieldAmount);
 
         uint256 priceAfter = okuMoney.okuMMultiplier();
-        // Exact arithmetic check. Note that for very small yieldAmount relative to
-        // supply the integer division can produce 0, so the multiplier is unchanged.
         uint256 expectedIncrease = (yieldAmount * PRECISION) / supply;
         assertEq(priceAfter, priceBefore + expectedIncrease, "price increase equals yield/supply");
         assertGe(priceAfter, priceBefore, "multiplier must never decrease");
 
         // lastYieldDistributionBlock advanced.
         assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
+    }
+
+    /// @notice Confirm that distributeYield reverts with YieldTooSmall when the yield
+    ///         amount would truncate to zero per token (yieldAmount * PRECISION / supply == 0).
+    function testFuzz_DistributeYield_RevertWhenYieldTooSmall(uint256 supply) public {
+        // Need supply > PRECISION so that there exist yieldAmounts < supply/PRECISION that
+        // still truncate to zero. E.g. supply=2e18, tinyYield=1 -> 1*1e18/2e18 = 0.
+        supply = bound(supply, PRECISION * 2, MAX_SUPPLY / 100);
+        _mintOkuMoney(user1, supply);
+
+        // Choose a yieldAmount that definitely truncates: anything strictly less than
+        // ceil(supply / PRECISION) = supply / PRECISION + 1.  Use 1 as the simplest case:
+        // 1 * PRECISION / supply = 0 whenever supply > PRECISION.
+        uint256 tinyYield = 1;
+
+        vm.prank(rebaser);
+        vm.expectRevert(OkuMoney.YieldTooSmall.selector);
+        okuMoney.distributeYield(tinyYield);
     }
 
     // ============ Minter Allowance Tests ============

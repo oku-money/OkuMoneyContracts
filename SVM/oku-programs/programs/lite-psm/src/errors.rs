@@ -362,6 +362,13 @@ pub enum LitePsmError {
     #[msg("Invalid chain ID (zero or equal to source chain)")]
     InvalidChainId,
 
+    /// `bridge_burn` was called with a non-zero fee but `fee_recipient_ata` was not
+    /// provided. The fee re-mint must always be executed (even when user == fee_recipient)
+    /// to match EVM OkuBridge.bridgeBurn which unconditionally mints the fee back.
+    /// Pass the fee recipient's ATA in this field for every bridge burn where fee > 0.
+    #[msg("fee_recipient_ata must be provided when bridge fee > 0")]
+    MissingFeeRecipientAta,
+
     // ===== Phase 10: mint extension invariants =====
     /// The OkuMoney mint has the Token-2022 `TransferHook` extension
     /// enabled. The SVM port assumes no transfer hook is installed (the

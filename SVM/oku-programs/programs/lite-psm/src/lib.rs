@@ -9,6 +9,9 @@
 //! Inline `// see EVM_VS_SVM.md` comments throughout this crate point to
 //! specific divergence rows in that document.
 
+// F-17: Zero unsafe code in this crate (confirmed by cargo-geiger). Forbid
+// future accidental introduction.
+#![forbid(unsafe_code)]
 // F-13: The Anchor #[program] macro generates a dispatch wrapper for
 // initialize() that inherits its 15-argument signature. Clippy fires on the
 // macro-expansion site, which cannot be suppressed externally. Suppressed

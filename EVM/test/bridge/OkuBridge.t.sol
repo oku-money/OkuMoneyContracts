@@ -5,6 +5,7 @@ import {BridgeBaseTest} from "../BridgeBase.t.sol";
 import {Errors} from "../../src/lib/Errors.sol";
 import {OkuBridge} from "../../src/bridge/OkuBridge.sol";
 import {OkuBridgeEvents} from "../../src/lib/events/OkuBridgeEvents.sol";
+import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Deploy} from "../shared/Deploy.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
@@ -397,6 +398,10 @@ contract OkuBridgeTest is BridgeBaseTest {
 
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(newPrice);
+
+        // Advance one block so bridgeMint is not in the same block as the multiplier update.
+        // (bridgeMint now carries whenYieldNotDistributing to match SVM bridge_mint.)
+        vm.roll(block.number + 1);
 
         // Step 3: Create request and sign (encodes netAmount)
         OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({
@@ -1671,6 +1676,155 @@ contract OkuBridgeTest is BridgeBaseTest {
         );
 
         okuBridge.bridgeBurn(SOLANA_MAINNET_CHAIN_ID, solanaRecipient, amount);
+        vm.stopPrank();
+    }
+
+    // ============ Fee Re-Mint Tests ============
+
+    /// @notice When feeRecipient == msg.sender, the fee is still re-minted back to them.
+    ///         Net supply decreases by exactly netAmount (not grossAmount).
+    function test_BridgeBurn_FeeRemintedWhenUserIsFeeRecipient() public {
+        // Make the bridge fee non-zero
+        assertGt(okuBridge.bridgeFee(), 0);
+
+        // Point feeRecipient to user1 (the bridge caller)
+        vm.prank(admin);
+        okuBridge.updateFeeRecipient(user1);
+
+        uint256 amount = 100e18;
+        (uint256 feeAmount, uint256 netAmount) = okuBridge.quoteFee(amount);
+
+        _mintOkuMoney(user1, amount);
+
+        uint256 supplyBefore = okuMoney.totalSupply();
+        uint256 user1BalanceBefore = okuMoney.balanceOf(user1);
+
+        // user1 is both the caller and the feeRecipient
+        vm.startPrank(user1);
+        okuMoney.approve(address(okuBridge), amount);
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user2))), amount);
+        vm.stopPrank();
+
+        // Fee re-minted to user1 (who is feeRecipient) — net balance decreases by netAmount
+        assertEq(okuMoney.balanceOf(user1), user1BalanceBefore - netAmount);
+        // Total supply decreases by exactly netAmount, not grossAmount
+        assertEq(okuMoney.totalSupply(), supplyBefore - netAmount);
+        // Verify fee is credited (balanceOf already captures this since user1 == feeRecipient)
+        assertEq(okuMoney.balanceOf(user1), user1BalanceBefore - amount + feeAmount);
+    }
+
+    /// @notice When fee is zero, no re-mint occurs and supply decreases by full amount.
+    function test_BridgeBurn_ZeroFee_FullBurnNoRemint() public {
+        vm.prank(admin);
+        okuBridge.updateFee(0);
+
+        uint256 amount = 100e18;
+        _mintOkuMoney(user1, amount);
+
+        uint256 supplyBefore = okuMoney.totalSupply();
+
+        _approveBridgeBurn(user1, OPTIMISM_CHAIN_ID, user2, amount);
+
+        // No fee, full amount burned
+        assertEq(okuMoney.totalSupply(), supplyBefore - amount);
+        assertEq(okuMoney.balanceOf(feeRecipient), 0);
+    }
+
+    // ============ Yield Lock Tests (bridgeMint) ============
+
+    /// @notice bridgeMint reverts in the same block as a yield distribution.
+    function test_BridgeMint_RevertWhenYieldDistributingInSameBlock() public {
+        uint256 amount = 100e18;
+
+        OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({
+            sourceChainId: OPTIMISM_CHAIN_ID,
+            destChainId: block.chainid,
+            sender: user1,
+            recipient: bytes32(uint256(uint160(user2))),
+            amount: amount,
+            nonce: 0,
+            deadline: block.timestamp + okuBridge.bridgeDeadline()
+        });
+
+        bytes memory signature = _signBridgeRequest(request);
+
+        // Distribute yield in the same block
+        _mintOkuMoney(user1, 1000e18); // ensure supply > 0 for distributeYield
+        vm.prank(rebaser);
+        okuMoney.distributeYield(1e18);
+
+        // bridgeMint in the same block must revert
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        okuBridge.bridgeMint(request, signature);
+    }
+
+    /// @notice bridgeMint succeeds in the block after yield distribution.
+    function test_BridgeMint_SucceedsInBlockAfterYieldDistribution() public {
+        uint256 amount = 100e18;
+
+        OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({
+            sourceChainId: OPTIMISM_CHAIN_ID,
+            destChainId: block.chainid,
+            sender: user1,
+            recipient: bytes32(uint256(uint160(user2))),
+            amount: amount,
+            nonce: 0,
+            deadline: block.timestamp + okuBridge.bridgeDeadline()
+        });
+
+        bytes memory signature = _signBridgeRequest(request);
+
+        // Distribute yield then advance one block
+        _mintOkuMoney(user1, 1000e18);
+        vm.prank(rebaser);
+        okuMoney.distributeYield(1e18);
+
+        vm.roll(block.number + 1);
+
+        uint256 user2Before = okuMoney.balanceOf(user2);
+        okuBridge.bridgeMint(request, signature);
+        assertEq(okuMoney.balanceOf(user2), user2Before + amount);
+    }
+
+    /// @notice bridgeMint reverts when setOkuMMultiplier is called in the same block.
+    function test_BridgeMint_RevertWhenMultiplierSetInSameBlock() public {
+        uint256 amount = 100e18;
+
+        OkuBridge.BridgeRequest memory request = OkuBridge.BridgeRequest({
+            sourceChainId: OPTIMISM_CHAIN_ID,
+            destChainId: block.chainid,
+            sender: user1,
+            recipient: bytes32(uint256(uint160(user2))),
+            amount: amount,
+            nonce: 0,
+            deadline: block.timestamp + okuBridge.bridgeDeadline()
+        });
+
+        bytes memory signature = _signBridgeRequest(request);
+
+        // Set multiplier (also stamps lastYieldDistributionBlock). Read the current
+        // multiplier before the prank so the staticcall doesn't consume it.
+        uint256 currentMultiplier = okuMoney.okuMMultiplier();
+        vm.prank(rebaser);
+        okuMoney.setOkuMMultiplier(currentMultiplier + 1);
+
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        okuBridge.bridgeMint(request, signature);
+    }
+
+    /// @notice bridgeBurn is NOT yield-locked (matches SVM bridge_burn behaviour).
+    function test_BridgeBurn_NotYieldLocked() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(user1, amount + 1000e18);
+
+        // Distribute yield in the same block
+        vm.prank(rebaser);
+        okuMoney.distributeYield(1e18);
+
+        // bridgeBurn should still succeed
+        vm.startPrank(user1);
+        okuMoney.approve(address(okuBridge), amount);
+        okuBridge.bridgeBurn(OPTIMISM_CHAIN_ID, bytes32(uint256(uint160(user2))), amount);
         vm.stopPrank();
     }
 

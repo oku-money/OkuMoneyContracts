@@ -59,12 +59,9 @@ pub fn verify_ed25519_signature<'info>(
     // ed25519 + our instruction + versioned lookups + extras).
     let mut found_valid_signature = false;
 
-    // F-10: Use u16 for the loop variable — matches Solana's instruction index
-    // type and eliminates the usize→i16 (truncation/wrap) and i16→usize
-    // (sign-loss) casts that the previous i16 form required.
-    // ED25519_INSTRUCTION_SCAN_LIMIT is 16, well within u16::MAX (65535).
-    for ix_index in 0u16..(ED25519_INSTRUCTION_SCAN_LIMIT as u16) {
-        // u16→usize is a safe widening cast on all Solana target platforms.
+    // F-10: ED25519_INSTRUCTION_SCAN_LIMIT is declared as u16, so no cast
+    // is needed here. u16→usize below is a safe widening cast on all platforms.
+    for ix_index in 0u16..ED25519_INSTRUCTION_SCAN_LIMIT {
         let ix_result = load_instruction_at_checked(ix_index as usize, instructions_sysvar);
 
         let actual_ix = match ix_result {
@@ -102,15 +99,16 @@ pub fn build_ed25519_instruction_data(
     let pubkey_offset: u16 = 16;
     let signature_offset: u16 = 16 + 32;
     let message_offset: u16 = 16 + 32 + 64;
-    // F-10: Guard the usize→u16 cast — bridge messages are bounded to 80 bytes
-    // by BRIDGE_MESSAGE_LEN so this can never truncate in practice, but we
-    // assert it explicitly so the invariant is visible to the auditor.
-    debug_assert!(
-        message.len() <= u16::MAX as usize,
-        "message too long for u16 size field"
-    );
-    #[allow(clippy::cast_possible_truncation)]
-    let message_size: u16 = message.len() as u16;
+    // F-10/F-20: Use u16::try_from (clippy::checked_conversions) to convert
+    // message.len() to u16. In practice bridge messages are bounded to
+    // BRIDGE_MESSAGE_LEN (80 bytes) so this is always Some(_), but the
+    // explicit unwrap_or_else documents the invariant and fires in release
+    // builds if it is ever violated.
+    let message_size: u16 = u16::try_from(message.len()).unwrap_or_else(|_| {
+        // This path is unreachable for any valid bridge message — message
+        // slices passed here are always exactly BRIDGE_MESSAGE_LEN (80) bytes.
+        panic!("ed25519 message exceeds u16::MAX — invariant violated")
+    });
 
     let mut data = Vec::with_capacity(112 + message.len());
 

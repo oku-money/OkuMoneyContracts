@@ -89,10 +89,44 @@ Note: `bridge_burn` does NOT yield-lock on either side. It mirrors EVM
 (the burn doesn't consume the price; only the destination mint does, and
 that's already locked).
 
+Note: `bridge_mint` IS yield-locked on both sides. EVM `OkuBridge.bridgeMint`
+carries `whenYieldNotDistributing` (added alongside the SVM `check_yield_lock`
+in `bridge_mint`) — the orchestrator must not submit a bridge mint in the same
+block/slot as a price update.
+
 `Clock::slot` is ~400ms vs Ethereum's 12s blocks, so the SVM lock window is
 much tighter — but the orchestrator only needs to land its update into one
 slot, then any wraps/unwraps that target that exact slot are rejected. Net
 sandwich-protection equivalence holds.
+
+## `distributeYield` zero-yield guard
+
+Both EVM and SVM now reject a `yieldAmount` (EVM) / `yield_amount` (SVM) that
+truncates to zero per token (`yieldAmount * PRECISION / supply == 0`). Without
+this guard, a sub-threshold yield call would stamp `lastYieldDistributionBlock`
+/ `last_yield_distribution_slot` without actually moving the multiplier,
+wasting the sandwich-lock window for the entire block/slot.
+
+- EVM: `OkuMoney.distributeYield` reverts `YieldTooSmall()`.
+- SVM: `distribute_yield` reverts `LitePsmError::YieldTooSmall`.
+
+Additionally, on EVM `lastYieldDistributionBlock` is now only stamped **after**
+the `YieldTooSmall` check, so a reverting call never consumes the sandwich-lock
+slot.
+
+## Bridge fee re-mint — always executed
+
+`bridge_burn` on both EVM and SVM unconditionally mints the fee back to
+`feeRecipient` whenever `fee > 0`, regardless of whether the caller is the same
+address as the fee recipient.
+
+- EVM: always calls `okuMoney.mint($.feeRecipient, feeAmount)`.
+- SVM: `fee_recipient_ata` must always be provided when `fee_amount > 0`,
+  including when `user == fee_recipient`. Pass `None` only when the fee is zero.
+  A missing ATA with a non-zero fee reverts `LitePsmError::MissingFeeRecipientAta`.
+
+Skipping the re-mint when `user == fee_recipient` would cause SVM to burn more
+supply than EVM for the same operation, creating cross-chain supply divergence.
 
 ## Bridge wire format (CRITICAL: dual 80-byte layouts)
 

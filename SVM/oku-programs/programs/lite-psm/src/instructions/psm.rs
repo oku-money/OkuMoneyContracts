@@ -262,10 +262,14 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
             };
 
             // Insert at tail position (ring buffer: modulo into fixed array).
-            // F-11: modulo of two u64 values is always safe (no overflow, no panic).
+            // F-11: modulo safe (u64 % u64). The u64→usize cast is safe on BPF
+            // (64-bit) because the result is always < MAX_ENTRIES (200).
             #[allow(clippy::arithmetic_side_effects)]
-            let position = queue.tail % RedemptionQueue::MAX_ENTRIES as u64;
-            queue.entries[position as usize] = entry;
+            let position: u64 = queue.tail % RedemptionQueue::MAX_ENTRIES as u64;
+            // F-11: u64→usize safe on BPF (64-bit); result < MAX_ENTRIES (200)
+            #[allow(clippy::cast_possible_truncation)]
+            let pos_idx = position as usize;
+            queue.entries[pos_idx] = entry;
             queue.tail = queue.tail.wrapping_add(1);
 
             // Update running counter
@@ -405,8 +409,8 @@ pub fn process_queue<'info>(
             if queue.is_empty() {
                 break 'batch;
             }
-            // F-11: modulo of two u64 values is always safe (no overflow, no panic).
-            #[allow(clippy::arithmetic_side_effects)]
+            // F-11: modulo safe; result < MAX_ENTRIES (200) so u64→usize is safe on BPF.
+            #[allow(clippy::arithmetic_side_effects, clippy::cast_possible_truncation)]
             let head_idx = (queue.head % RedemptionQueue::MAX_ENTRIES as u64) as usize;
             let entry = &queue.entries[head_idx];
             (queue.head, entry.user, entry.oku_m_amount, entry.timestamp)
@@ -437,12 +441,6 @@ pub fn process_queue<'info>(
 
         // Calculate USDC payout using current price.
         let usdc_amount = oku_m_to_dollars(entry_oku_m, oku_m_price)?;
-
-        // Reject zero-output payouts. `redeem_oku_m` rejects zero-output at
-        // enqueue time, but a price drop between enqueue and process could
-        // push a small entry under the truncation threshold; without this
-        // check the queued OkuMoney would be burned for 0 USDC.
-        require!(usdc_amount > 0, LitePsmError::OutputBelowMinimum);
 
         // Check buffer; stop the batch if insufficient.
         if remaining_usdc_balance < usdc_amount {
@@ -664,8 +662,8 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u64) -> R
             queue_index >= queue.head && queue_index < queue.tail,
             LitePsmError::InvalidQueueIndex
         );
-        // F-11: modulo of two u64 values is always safe (no overflow, no panic).
-        #[allow(clippy::arithmetic_side_effects)]
+        // F-11: modulo safe; result < MAX_ENTRIES (200) so u64→usize is safe on BPF.
+        #[allow(clippy::arithmetic_side_effects, clippy::cast_possible_truncation)]
         let position = (queue_index % RedemptionQueue::MAX_ENTRIES as u64) as usize;
         let entry = &queue.entries[position];
         require!(
@@ -711,8 +709,8 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u64) -> R
 
         // Advance head past contiguous cleared entries (matches EVM behavior).
         while queue.head < queue.tail {
-            // F-11: modulo of two u64 values is always safe (no overflow, no panic).
-            #[allow(clippy::arithmetic_side_effects)]
+            // F-11: modulo safe; result < MAX_ENTRIES (200) so u64→usize is safe on BPF.
+            #[allow(clippy::arithmetic_side_effects, clippy::cast_possible_truncation)]
             let head_pos = (queue.head % RedemptionQueue::MAX_ENTRIES as u64) as usize;
             if queue.entries[head_pos].user == Pubkey::default() {
                 queue.head = queue.head.wrapping_add(1);

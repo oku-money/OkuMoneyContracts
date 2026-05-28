@@ -119,9 +119,13 @@ pub struct BridgeBurn<'info> {
     )]
     pub user_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// Fee recipient's OkuMoney account (optional - skip if user == fee_recipient)
-    /// When user is the fee recipient, pass None to avoid duplicate mutable account error.
-    /// The instruction will skip fee minting in that case (user already "paid" the fee by burning).
+    /// Fee recipient's OkuMoney ATA. Required whenever the bridge fee is > 0; pass None
+    /// only when the fee is zero (bridgeFee == 0 bps), in which case the field is ignored.
+    ///
+    /// When user == fee_recipient, callers MUST still provide this field (pointing to the
+    /// wallet's own ATA). This matches EVM OkuBridge.bridgeBurn which always mints the fee
+    /// to feeRecipient regardless of whether feeRecipient == msg.sender — omitting the
+    /// re-mint would silently burn more supply than EVM and diverge cross-chain accounting.
     #[account(
         mut,
         token::mint = oku_money_mint,

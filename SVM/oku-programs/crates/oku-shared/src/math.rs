@@ -126,20 +126,26 @@ mod verification {
     }
 
     /// Proof: when a*b overflows u128, result is None.
-    /// Tight bounds to keep CBMC tractable.
+    ///
+    /// u128 overflow of a*b requires both a and b to be large enough that
+    /// a * b > u128::MAX. The minimum such values are a = b = 2^64 = u64::MAX + 1,
+    /// but since a and b are u64, the maximum is u64::MAX = 2^64 - 1.
+    /// (u64::MAX)^2 = 2^128 - 2^65 + 1 which IS < u128::MAX = 2^128 - 1,
+    /// so u64::MAX * u64::MAX fits in u128.
+    ///
+    /// Therefore: two u64 values can never overflow u128. The checked_mul in
+    /// mul_div_floor returns None only when the RESULT (after dividing) exceeds u64::MAX,
+    /// not from the multiplication. This proof verifies that property instead.
     #[kani::proof]
-    fn proof_mul_div_floor_overflow_returns_none() {
+    fn proof_mul_div_floor_no_u128_overflow() {
+        // Prove: (a as u128).checked_mul(b as u128) is ALWAYS Some for u64 inputs.
+        // This is because u64::MAX * u64::MAX = (2^64-1)^2 = 2^128 - 2*2^64 + 1 < 2^128 - 1.
         let a: u64 = kani::any();
         let b: u64 = kani::any();
-        let divisor: u64 = kani::any();
-        kani::assume(divisor > 0);
-        // Bound a and b near u64::MAX to focus on the overflow case specifically
-        kani::assume(a > u64::MAX / 2);
-        kani::assume(b > u64::MAX / 2);
 
-        let result = mul_div_floor(a, b, divisor);
-        // For a, b > u64::MAX/2, a*b overflows u128, so result must be None
-        assert!(result.is_none());
+        // This must never panic or return None for any pair of u64 values
+        let product = (a as u128).checked_mul(b as u128);
+        assert!(product.is_some(), "u64*u64 must always fit in u128");
     }
 
     // -----------------------------------------------------------------------

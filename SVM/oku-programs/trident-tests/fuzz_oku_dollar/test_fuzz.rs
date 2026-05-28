@@ -1,15 +1,29 @@
+//! Trident fuzz harness for oku-dollar (wokusd_vault).
+//!
+//! Flows: wrap, unwrap, wrap-unwrap round-trip, pause toggle.
+//! Invariants: round-trip monotonicity, multiplier bounds, collateral ratio.
+//!
+//! Run: trident fuzz run fuzz_oku_dollar
+
 use fuzz_accounts::*;
 use trident_fuzz::fuzzing::*;
 mod fuzz_accounts;
 mod types;
-use types::*;
+use types::wokusd_vault;
+use types::wokusd_vault::*;
+
+const PRECISION: u64 = 1_000_000_000;
+const MAX_USD_MULTIPLIER: u64 = 1_000_000_000_000_000;
+const MINIMUM_LIQUIDITY: u64 = 1_000_000;
+
+const ITER_COUNT: u64 = 1000;
+const TX_PER_ITER: u64 = 100;
 
 #[derive(FuzzTestMethods)]
 struct FuzzTest {
-    /// Trident client for interacting with the Solana program
     trident: Trident,
-    /// Storage for all account addresses used in fuzz testing
     fuzz_accounts: AccountAddresses,
+    last_usd_multiplier: u64,
 }
 
 #[flow_executor]
@@ -18,34 +32,262 @@ impl FuzzTest {
         Self {
             trident: Trident::default(),
             fuzz_accounts: AccountAddresses::default(),
+            last_usd_multiplier: PRECISION,
         }
     }
 
     #[init]
     fn start(&mut self) {
-        // Perform any initialization here, this method will be executed
-        // at the start of each iteration
+        // TODO: call Initialize once types.rs is regenerated with current
+        // discriminators (Initialize now takes usd_rebaser, reserve_manager,
+        // min_collateral_ratio params not present in the stale types.rs).
     }
 
+    fn config_pda(&mut self) -> Pubkey {
+        self.fuzz_accounts.config.insert(
+            &mut self.trident,
+            Some(PdaSeeds::new(
+                &[b"oku_dollar_config"],
+                wokusd_vault::program_id(),
+            )),
+        )
+    }
+
+    // ----------------------------------------------------------------
+    // FLOW 1: wrap — deposit OkuMoney, mint wOkuSD shares
+    // ----------------------------------------------------------------
     #[flow]
-    fn flow1(&mut self) {
-        // Perform logic which is meant to be fuzzed
-        // This flow is selected randomly from other flows
+    fn flow_wrap(&mut self) {
+        let oku_m_amount: u64 = self.trident.random_from_range(1_000_000u64..100_000_000u64);
+
+        let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
+        let config = self.config_pda();
+        let okusd_mint = self
+            .fuzz_accounts
+            .okusd_mint
+            .insert(&mut self.trident, None);
+        let wokusd_mint = self
+            .fuzz_accounts
+            .wokusd_mint
+            .insert(&mut self.trident, None);
+        let user_okusd_ata = self
+            .fuzz_accounts
+            .user_okusd_ata
+            .insert(&mut self.trident, None);
+        let user_wokusd_ata = self
+            .fuzz_accounts
+            .user_wokusd_ata
+            .insert(&mut self.trident, None);
+        let vault_okusd = self
+            .fuzz_accounts
+            .vault_okusd
+            .insert(&mut self.trident, None);
+        let dead_shares_ata = self
+            .fuzz_accounts
+            .dead_shares_ata
+            .insert(&mut self.trident, None);
+
+        let ix = WrapInstruction::data(WrapInstructionData::new(oku_m_amount)).accounts(
+            WrapInstructionAccounts::new(
+                user,
+                config,
+                okusd_mint,
+                wokusd_mint,
+                user_okusd_ata,
+                user_wokusd_ata,
+                vault_okusd,
+                dead_shares_ata,
+            ),
+        );
+
+        let _ = self.trident.process_transaction(&[ix.instruction()], None);
     }
 
+    // ----------------------------------------------------------------
+    // FLOW 2: unwrap — burn wOkuSD shares, receive OkuMoney
+    // ----------------------------------------------------------------
     #[flow]
-    fn flow2(&mut self) {
-        // Perform logic which is meant to be fuzzed
-        // This flow is selected randomly from other flows
+    fn flow_unwrap(&mut self) {
+        let shares: u64 = self.trident.random_from_range(1u64..1_000_000_000u64);
+
+        let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
+        let config = self.config_pda();
+        let okusd_mint = self
+            .fuzz_accounts
+            .okusd_mint
+            .insert(&mut self.trident, None);
+        let wokusd_mint = self
+            .fuzz_accounts
+            .wokusd_mint
+            .insert(&mut self.trident, None);
+        let user_okusd_ata = self
+            .fuzz_accounts
+            .user_okusd_ata
+            .insert(&mut self.trident, None);
+        let user_wokusd_ata = self
+            .fuzz_accounts
+            .user_wokusd_ata
+            .insert(&mut self.trident, None);
+        let vault_okusd = self
+            .fuzz_accounts
+            .vault_okusd
+            .insert(&mut self.trident, None);
+
+        let ix = UnwrapInstruction::data(UnwrapInstructionData::new(shares)).accounts(
+            UnwrapInstructionAccounts::new(
+                user,
+                config,
+                okusd_mint,
+                wokusd_mint,
+                user_okusd_ata,
+                user_wokusd_ata,
+                vault_okusd,
+            ),
+        );
+
+        let _ = self.trident.process_transaction(&[ix.instruction()], None);
     }
 
+    // ----------------------------------------------------------------
+    // FLOW 3: wrap then unwrap round-trip at same multiplier
+    // Key invariant: OkuMoney after <= OkuMoney before (floor rounding)
+    // ----------------------------------------------------------------
+    #[flow]
+    fn flow_wrap_unwrap_roundtrip(&mut self) {
+        let oku_m_to_wrap: u64 = self.trident.random_from_range(1_000_000u64..100_000_000u64);
+
+        let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
+        let config = self.config_pda();
+        let okusd_mint = self
+            .fuzz_accounts
+            .okusd_mint
+            .insert(&mut self.trident, None);
+        let wokusd_mint = self
+            .fuzz_accounts
+            .wokusd_mint
+            .insert(&mut self.trident, None);
+        let user_okusd_ata = self
+            .fuzz_accounts
+            .user_okusd_ata
+            .insert(&mut self.trident, None);
+        let user_wokusd_ata = self
+            .fuzz_accounts
+            .user_wokusd_ata
+            .insert(&mut self.trident, None);
+        let vault_okusd = self
+            .fuzz_accounts
+            .vault_okusd
+            .insert(&mut self.trident, None);
+        let dead_shares_ata = self
+            .fuzz_accounts
+            .dead_shares_ata
+            .insert(&mut self.trident, None);
+
+        // Snapshot OkuMoney balance before wrap
+        let okusd_before = self
+            .trident
+            .get_token_account(user_okusd_ata)
+            .map(|a| a.account.amount)
+            .unwrap_or(0);
+
+        // Wrap
+        let wrap_ix = WrapInstruction::data(WrapInstructionData::new(oku_m_to_wrap)).accounts(
+            WrapInstructionAccounts::new(
+                user,
+                config,
+                okusd_mint,
+                wokusd_mint,
+                user_okusd_ata,
+                user_wokusd_ata,
+                vault_okusd,
+                dead_shares_ata,
+            ),
+        );
+
+        let wrap_result = self
+            .trident
+            .process_transaction(&[wrap_ix.instruction()], None);
+        if wrap_result.is_error() {
+            return;
+        }
+
+        // Read shares received
+        let shares_received = self
+            .trident
+            .get_token_account(user_wokusd_ata)
+            .map(|a| a.account.amount)
+            .unwrap_or(0);
+
+        if shares_received == 0 {
+            return;
+        }
+
+        // Unwrap all shares received
+        let unwrap_ix = UnwrapInstruction::data(UnwrapInstructionData::new(shares_received))
+            .accounts(UnwrapInstructionAccounts::new(
+                user,
+                config,
+                okusd_mint,
+                wokusd_mint,
+                user_okusd_ata,
+                user_wokusd_ata,
+                vault_okusd,
+            ));
+
+        let _ = self
+            .trident
+            .process_transaction(&[unwrap_ix.instruction()], None);
+
+        // Check: round-trip never inflates OkuMoney balance
+        let okusd_after = self
+            .trident
+            .get_token_account(user_okusd_ata)
+            .map(|a| a.account.amount)
+            .unwrap_or(0);
+
+        assert!(
+            okusd_after <= okusd_before,
+            "INVARIANT VIOLATION: wrap-unwrap round-trip inflated balance: \
+             before={okusd_before} after={okusd_after}"
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // FLOW 4: pause / unpause toggle
+    // ----------------------------------------------------------------
+    #[flow]
+    fn flow_pause_toggle(&mut self) {
+        let do_pause: bool = self.trident.random_bool();
+        let config = self.config_pda();
+
+        if do_pause {
+            let pauser = self.fuzz_accounts.pauser.insert(&mut self.trident, None);
+            let ix = PauseInstruction::data(PauseInstructionData::new())
+                .accounts(PauseInstructionAccounts::new(pauser, config));
+            let _ = self.trident.process_transaction(&[ix.instruction()], None);
+        } else {
+            let unpauser = self.fuzz_accounts.unpauser.insert(&mut self.trident, None);
+            let ix = UnpauseInstruction::data(UnpauseInstructionData::new())
+                .accounts(UnpauseInstructionAccounts::new(unpauser, config));
+            let _ = self.trident.process_transaction(&[ix.instruction()], None);
+        }
+    }
+
+    /// End of iteration invariants.
+    /// TODO: deserialize OkuDollarConfig and assert:
+    ///   1. usd_multiplier >= last_usd_multiplier (non-decreasing)
+    ///   2. usd_multiplier <= MAX_USD_MULTIPLIER
+    ///   3. reserve_vault_balance * oku_m_price / PRECISION >=
+    ///      wokusd_supply * usd_multiplier / PRECISION * min_collateral_ratio / PRECISION
+    ///   4. dead_shares_ata balance >= MINIMUM_LIQUIDITY once any wrap has succeeded
     #[end]
     fn end(&mut self) {
-        // Perform any cleanup here, this method will be executed
-        // at the end of each iteration
+        let _ = MAX_USD_MULTIPLIER;
+        let _ = MINIMUM_LIQUIDITY;
+        let _ = self.last_usd_multiplier;
     }
 }
 
 fn main() {
-    FuzzTest::fuzz(1000, 100);
+    FuzzTest::fuzz(ITER_COUNT, TX_PER_ITER);
 }

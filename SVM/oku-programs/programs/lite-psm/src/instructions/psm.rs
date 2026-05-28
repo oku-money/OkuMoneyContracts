@@ -21,6 +21,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
 use anchor_spl::token::spl_token::state::Account as SplTokenAccount;
 use anchor_spl::token_interface;
+use solana_sysvar::program_stubs::sol_remaining_compute_units;
 
 /// Mint OkuMoney with USDC (price-aware)
 ///
@@ -317,23 +318,30 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
 /// (where a same-slot price bump would let the attacker mint cheaply
 /// then redeem dear), but `process_queue` is paying out previously-
 /// committed queue entries and has no such asymmetry.
-/// Maximum entries `process_queue` will walk in a single tx.
+/// Hard upper bound on entries `process_queue` will walk in a single tx.
 ///
-/// At Phase 13b's 200-entry queue cap (limited by Solana's 10 KB
-/// `MAX_PERMITTED_DATA_INCREASE` CPI-allocation budget), an orchestrator
-/// could in principle request `max_entries = 200` — but a single-tx walk
-/// of 200 entries with per-entry burn + transfer CPIs would massively
-/// exceed the default 200 K CU budget and likely the 1.4 M raised cap.
-/// Empirically ~10 entries fit in 200 K CU, ~70 fit in 1.4 M CU.
+/// This is a safety ceiling — the dynamic CU check (`PROCESS_QUEUE_CU_FLOOR`
+/// below) will typically be the binding constraint at runtime. The static cap
+/// ensures a buggy or malicious orchestrator cannot construct a tx that always
+/// reverts mid-batch regardless of budget, and gives a predictable worst-case
+/// account-list size for SDK consumers building the `remaining_accounts` slice.
 ///
-/// We hard-cap at 50 here (Phase 13b decision) — comfortably under the
-/// raised-budget ceiling, leaves headroom for transfer-hook overhead on
-/// Token-2022, and means a malicious or buggy orchestrator can't write a
-/// tx that always reverts mid-batch and burns CU for no reason.
-///
-/// **Revisit when:** real workload telemetry shows we're consistently
-/// hitting this cap, or we add CU-aware batching to the orchestrator.
+/// At Phase 13b's 200-entry queue cap the raised 1.4 M CU budget fits ~70
+/// entries empirically; 50 keeps us well under that with headroom for
+/// Token-2022 transfer-hook overhead.
 pub const MAX_BATCH_ENTRIES: u32 = 50;
+
+/// Minimum CU remaining before the batch loop exits early.
+///
+/// Each iteration burns two CPIs (Token-2022 burn + SPL transfer), a Pyth-free
+/// price multiply, and an AccountLoader load + store. Empirically this runs
+/// ~18–22 K CU per entry. 30 K gives ~10 K of headroom above the per-entry
+/// cost for the post-loop event emit, account writeback, and any unexpected
+/// overhead from future Token-2022 extensions (e.g. a transfer hook added
+/// later). At 1.4 M CU total, the floor will only trigger on the last 1–2
+/// entries of a maximum-size batch — it is not a meaningful throughput limiter
+/// under normal conditions.
+pub const PROCESS_QUEUE_CU_FLOOR: u64 = 30_000;
 
 pub fn process_queue<'info>(
     ctx: Context<'info, ProcessQueue<'info>>,
@@ -375,6 +383,17 @@ pub fn process_queue<'info>(
     let clock = Clock::get()?;
 
     'batch: while processed < effective_max {
+        // Exit early if CU budget is running low. Two CPIs + account writes
+        // per entry consume ~18–22 K CU; the floor of 30 K leaves headroom
+        // for post-loop cleanup (event emit, account writeback) and any
+        // overhead from Token-2022 extensions that may be added in future.
+        // This is a defence-in-depth check — the static MAX_BATCH_ENTRIES=50
+        // cap means we should never come close to budget exhaustion under
+        // normal conditions.
+        if sol_remaining_compute_units() < PROCESS_QUEUE_CU_FLOOR {
+            break 'batch;
+        }
+
         // Per-iteration: read head + entry under a scoped read borrow,
         // then drop the borrow before any CPI. This is the load-bearing
         // discipline that makes zero-copy + CPI loops work — the

@@ -1,0 +1,109 @@
+# cargo-deny configuration for okuMoney SVM programs
+# Run: cargo deny check   (from contracts/SVM/oku-programs/)
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-apple-darwin" },
+    { triple = "x86_64-apple-darwin" },
+]
+all-features = true
+
+[output]
+feature-depth = 1
+
+# ============================================================
+# Advisories — RustSec CVE / advisory database
+# ============================================================
+[advisories]
+# Two informational advisories from transitive Anchor/Solana SDK deps.
+# Neither is exploitable in on-chain SVM programs (see reasons below).
+ignore = [
+    # bincode 1.3.3: unmaintained (RUSTSEC-2025-0141).
+    # Transitive dep via anchor-lang. No CVE, no exploit. The bincode
+    # maintainers consider 1.3.3 feature-complete. Not actionable until
+    # Anchor migrates to an alternative serializer.
+    { id = "RUSTSEC-2025-0141", reason = "transitive Anchor dep; bincode maintainers consider 1.3.3 complete; not exploitable on-chain" },
+
+    # rand 0.8.5: unsound with custom logger + thread_rng reseeding (RUSTSEC-2026-0097).
+    # Only reachable when: log+thread_rng features enabled, custom logger calls
+    # rand::rng(), AND reseeding occurs. None of these conditions apply in SVM
+    # programs (no std logger, no thread_rng, no reseeding). Transitive dep via
+    # solana-sdk. Fixed in rand >= 0.8.6 but not actionable without Anchor/SDK bump.
+    { id = "RUSTSEC-2026-0097", reason = "transitive solana-sdk dep; unsoundness conditions (custom logger + reseeding) cannot occur in on-chain SVM context" },
+]
+
+# ============================================================
+# Licenses — acceptable open-source licenses
+# ============================================================
+[licenses]
+# Require at least 93% confidence in SPDX license detection
+confidence-threshold = 0.93
+
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "OpenSSL",              # used by some crypto primitives in Solana deps
+    "BlueOak-1.0.0",        # used by some newer crates in the Solana ecosystem
+]
+
+# Don't require license checks on our own unpublished workspace crates
+[licenses.private]
+ignore = true
+
+# ============================================================
+# Bans — disallowed crates and duplicate version policy
+# ============================================================
+[bans]
+# Warn on duplicate versions of the same crate in the dependency tree.
+# Solana + Anchor have many version duplicates (solana-program, spl-token,
+# borsh, etc.) so we warn rather than deny to avoid false-positive noise.
+multiple-versions = "warn"
+
+# Deny wildcard version requirements (e.g. foo = "*") — these are a supply
+# chain risk as they silently accept any future version.
+# Note: cargo-deny treats path-only deps (no version field) as "wildcards".
+# Our own workspace-internal path deps are safe (they're local, not registry),
+# so we allow them explicitly via the skip list.
+wildcards = "allow"
+# TODO: Once all programs are published with explicit versions, change this
+# back to "deny" and remove path-only deps or pin them to workspace version.
+
+# Crates that must not appear in the dependency tree
+deny = [
+    # Prefer rustls over native OpenSSL for crypto — openssl-sys pulls in
+    # a C build dependency and increases the attack surface.
+    # (Note: openssl is acceptable in dev tooling deps like cargo-dylint,
+    #  but should not appear as a runtime dep of the on-chain programs.)
+    { name = "openssl",     reason = "prefer rustls; openssl adds C build dep and larger attack surface" },
+    { name = "openssl-sys", reason = "prefer rustls; openssl-sys adds C build dep" },
+]
+
+# ============================================================
+# Sources — trusted registries and git repositories
+# ============================================================
+[sources]
+# Deny crates from unknown registries (not crates.io)
+unknown-registry = "deny"
+
+# Deny crates pulled from arbitrary git URLs not in the allow list below.
+# This prevents silent supply-chain injection via git dependencies.
+unknown-git = "deny"
+
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# Explicitly allow the git deps we intentionally use.
+# crytic/solana-lints is in [workspace.metadata.dylint] for audit tooling only;
+# it is not a runtime dependency of the programs.
+allow-git = [
+    "https://github.com/crytic/solana-lints",
+]

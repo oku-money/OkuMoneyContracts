@@ -3,6 +3,7 @@ name = "lite-psm"
 version = "0.1.0"
 description = "LitePSM - USDC to OkuMoney peg stability module"
 edition = "2021"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -26,6 +27,7 @@ bytemuck = { version = "1.17", features = ["derive", "min_const_generics"] }
 solana-keccak-hasher = "3.1"
 solana-instructions-sysvar = "3.0"
 solana-pubkey = "3.0"
+solana-sysvar = "3.1"
 solana-security-txt = "1.1"
 # Protocol-wide constants + pure-math primitives. See `crates/oku-shared`.
 oku-shared = { path = "../../crates/oku-shared" }

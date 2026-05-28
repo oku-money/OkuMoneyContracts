@@ -1,8 +1,20 @@
 [fuzz.metrics]
 enabled = true
 
+# ============================================================
+# Programs loaded into the Trident SVM environment.
+# Addresses match the declare_id! in each program's lib.rs.
+# .so paths are relative to this file's directory (trident-tests/).
+# ============================================================
 
 [[fuzz.programs]]
-address = "AhKZ4TT5W4mnvR3CsX1t9ymQmZx4535AN9SsrThu6C1T"
+address = "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N"
 program = "../target/deploy/lite_psm.so"
- 
+
+[[fuzz.programs]]
+address = "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy"
+program = "../target/deploy/wokusd_vault.so"
+
+[[fuzz.programs]]
+address = "GAjPAbq7sqFNzfnyhEAxBD9ofTPSTk4EtjFpq45BjRWb"
+program = "../target/deploy/oku_bridge_router.so"

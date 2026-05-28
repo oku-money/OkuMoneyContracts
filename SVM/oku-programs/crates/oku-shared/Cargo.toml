@@ -3,6 +3,7 @@ name = "oku-shared"
 version = "0.1.0"
 description = "OkuMoney SVM — protocol-wide constants and pure-math primitives shared by lite-psm and oku-dollar."
 edition = "2021"
+license = "MIT"
 
 [lib]
 name = "oku_shared"
@@ -10,6 +11,12 @@ name = "oku_shared"
 # `EVM/src/lib/Constants.sol` + `EVM/src/lib/MathLib.sol` on the
 # Solidity side: one source of truth for protocol-wide invariants
 # and overflow-safe arithmetic, no program logic.
+
+[lints.rust]
+# Declare cfg(kani) as an expected configuration key so that the
+# #[cfg(kani)] gates on the formal verification module don't trigger
+# an `unexpected_cfg` warning when building without Kani.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
 [dependencies]
 # Intentionally zero dependencies. Keeping this crate dep-free means a

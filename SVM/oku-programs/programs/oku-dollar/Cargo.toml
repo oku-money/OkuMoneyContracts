@@ -3,6 +3,7 @@ name = "oku-dollar"
 version = "0.1.0"
 description = "OkuDollar vault - rebasing $1-pegged stablecoin backed by OkuMoney"
 edition = "2021"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib", "lib"]

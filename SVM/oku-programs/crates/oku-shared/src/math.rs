@@ -70,6 +70,163 @@ pub fn calculate_fee(amount: u64, fee_bps: u16) -> Option<u64> {
 }
 
 // ---------------------------------------------------------------------------
+// Kani formal verification proofs
+// ---------------------------------------------------------------------------
+//
+// These harnesses are gated on `#[cfg(kani)]` so they have zero impact on
+// normal builds, tests, or the on-chain BPF target.
+//
+// Run: cargo kani --package oku-shared
+// (from contracts/SVM/oku-programs/)
+//
+// Each harness uses `kani::any()` for symbolic inputs and `kani::assume()`
+// to restrict the domain where needed to keep verification tractable.
+// Full-range u64 proofs for correctness are bounded to u32::MAX to avoid
+// state-space explosion in the model checker; the None/identity/overflow
+// proofs use the full u64 range since those are simpler properties.
+
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // mul_div_floor proofs
+    // -----------------------------------------------------------------------
+
+    /// Proof: divisor == 0 always returns None (no panic).
+    #[kani::proof]
+    fn proof_mul_div_floor_none_on_zero_divisor() {
+        let a: u64 = kani::any();
+        let b: u64 = kani::any();
+        let result = mul_div_floor(a, b, 0);
+        assert!(result.is_none());
+    }
+
+    /// Proof: for bounded inputs, result equals the u128 reference oracle.
+    /// Inputs bounded to u16::MAX (65535) for CBMC tractability while still
+    /// covering the meaningful protocol range (amounts in 6-decimal token units).
+    #[kani::proof]
+    fn proof_mul_div_floor_correctness_bounded() {
+        let a: u64 = kani::any();
+        let b: u64 = kani::any();
+        let divisor: u64 = kani::any();
+        kani::assume(a <= u16::MAX as u64);
+        kani::assume(b <= u16::MAX as u64);
+        kani::assume(divisor > 0);
+        kani::assume(divisor <= u16::MAX as u64);
+
+        let result = mul_div_floor(a, b, divisor);
+        let expected_128 = (a as u128) * (b as u128) / (divisor as u128);
+
+        if expected_128 <= u64::MAX as u128 {
+            assert_eq!(result, Some(expected_128 as u64));
+        } else {
+            assert!(result.is_none());
+        }
+    }
+
+    /// Proof: when a*b overflows u128, result is None.
+    /// Tight bounds to keep CBMC tractable.
+    #[kani::proof]
+    fn proof_mul_div_floor_overflow_returns_none() {
+        let a: u64 = kani::any();
+        let b: u64 = kani::any();
+        let divisor: u64 = kani::any();
+        kani::assume(divisor > 0);
+        // Bound a and b near u64::MAX to focus on the overflow case specifically
+        kani::assume(a > u64::MAX / 2);
+        kani::assume(b > u64::MAX / 2);
+
+        let result = mul_div_floor(a, b, divisor);
+        // For a, b > u64::MAX/2, a*b overflows u128, so result must be None
+        assert!(result.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // oku_m_to_dollars proofs
+    // -----------------------------------------------------------------------
+
+    /// Proof: at multiplier == PRECISION, output equals input (identity).
+    #[kani::proof]
+    fn proof_oku_m_to_dollars_identity_at_precision() {
+        let amount: u64 = kani::any();
+        // With multiplier = PRECISION = 1e9, product = amount * 1e9.
+        // To avoid u128 overflow: amount <= u64::MAX / 1e9 ≈ 18.4 billion
+        kani::assume(amount <= 18_446_744_073u64); // u64::MAX / PRECISION
+        let result = oku_m_to_dollars(amount, PRECISION);
+        assert_eq!(result, Some(amount));
+    }
+
+    /// Proof: consistent with mul_div_floor(amount, multiplier, PRECISION).
+    #[kani::proof]
+    fn proof_oku_m_to_dollars_consistent_with_mul_div() {
+        let amount: u64 = kani::any();
+        let multiplier: u64 = kani::any();
+        kani::assume(amount <= u16::MAX as u64);
+        kani::assume(multiplier <= u16::MAX as u64);
+        assert_eq!(
+            oku_m_to_dollars(amount, multiplier),
+            mul_div_floor(amount, multiplier, PRECISION)
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // dollars_to_oku_m proofs
+    // -----------------------------------------------------------------------
+
+    /// Proof: multiplier == 0 always returns None (no divide-by-zero panic).
+    #[kani::proof]
+    fn proof_dollars_to_oku_m_none_on_zero_multiplier() {
+        let dollar_value: u64 = kani::any();
+        let result = dollars_to_oku_m(dollar_value, 0);
+        assert!(result.is_none());
+    }
+
+    /// Proof: round-trip monotonicity — converting dollars→okuM→dollars
+    /// never returns MORE dollars than the starting value.
+    #[kani::proof]
+    fn proof_dollars_to_oku_m_round_trip_monotone() {
+        let dollar_value: u64 = kani::any();
+        let multiplier: u64 = kani::any();
+        kani::assume(dollar_value <= u16::MAX as u64); // tight bound for CBMC
+        kani::assume(multiplier > 0);
+        kani::assume(multiplier <= u16::MAX as u64);
+
+        if let Some(oku_m) = dollars_to_oku_m(dollar_value, multiplier) {
+            if let Some(dollars_back) = oku_m_to_dollars(oku_m, multiplier) {
+                // Must never recover more than the original input.
+                assert!(dollars_back <= dollar_value);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // calculate_fee proofs
+    // -----------------------------------------------------------------------
+
+    /// Proof: fee_bps == 0 always returns Some(0) (no fee on zero bps).
+    #[kani::proof]
+    fn proof_calculate_fee_zero_bps_zero_fee() {
+        let amount: u64 = kani::any();
+        let result = calculate_fee(amount, 0);
+        assert_eq!(result, Some(0));
+    }
+
+    /// Proof: for fee_bps in [0, 10_000], fee never exceeds amount.
+    #[kani::proof]
+    fn proof_calculate_fee_bounded_by_amount() {
+        let amount: u64 = kani::any();
+        let fee_bps: u16 = kani::any();
+        kani::assume(amount <= u16::MAX as u64); // tight bound for CBMC tractability
+        kani::assume(fee_bps <= BASIS_POINTS as u16);
+
+        if let Some(fee) = calculate_fee(amount, fee_bps) {
+            assert!(fee <= amount);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

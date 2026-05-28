@@ -6,6 +6,9 @@ out/
 # (backend, SDKs, frontend) and IS tracked — see /artifacts/README.md.
 /EVM/artifacts/
 
+# Slither / Echidna / Crytic compilation exports
+EVM/crytic-export/
+
 # Ignores development broadcast logs
 !/broadcast
 /broadcast/*/31337/
@@ -68,6 +71,9 @@ EVM/scripts/logs/*.jsonl
 # Anchor (Solana test artifacts)
 .anchor/
 
+# Cargo-fuzz corpus (auto-generated binary test inputs, reproducible by re-running fuzzer)
+**/fuzz/corpus/
+
 # Hardhat EDR cache
 edr-cache/
 
@@ -105,6 +111,7 @@ EVM/config/README.md
 EVM/scripts/README.md
 # Solana signing keypairs (never commit private keys)
 **/keys/*.json
+**/keys/**/*.json
 *.keypair.json
 
 # Claude Code local settings (machine-specific)

@@ -1154,23 +1154,23 @@
             "label": "bytes32",
             "numberOfBytes": "32"
           },
-          "t_contract(IAggregatorV3)3155": {
+          "t_contract(IAggregatorV3)4035": {
             "label": "contract IAggregatorV3",
             "numberOfBytes": "20"
           },
-          "t_contract(IERC20)1178": {
+          "t_contract(IERC20)1290": {
             "label": "contract IERC20",
             "numberOfBytes": "20"
           },
-          "t_contract(IOkuDollar)3227": {
+          "t_contract(IOkuDollar)4130": {
             "label": "contract IOkuDollar",
             "numberOfBytes": "20"
           },
-          "t_contract(IOkuMoney)3283": {
+          "t_contract(IOkuMoney)4186": {
             "label": "contract IOkuMoney",
             "numberOfBytes": "20"
           },
-          "t_contract(RedemptionQueue)4270": {
+          "t_contract(RedemptionQueue)5234": {
             "label": "contract RedemptionQueue",
             "numberOfBytes": "20"
           },
@@ -1212,36 +1212,36 @@
             ],
             "numberOfBytes": "32"
           },
-          "t_struct(LitePSMStorage)3855_storage": {
+          "t_struct(LitePSMStorage)4819_storage": {
             "label": "struct LitePSM.LitePSMStorage",
             "members": [
               {
                 "label": "okuMoney",
-                "type": "t_contract(IOkuMoney)3283",
+                "type": "t_contract(IOkuMoney)4186",
                 "offset": 0,
                 "slot": "0"
               },
               {
                 "label": "okuDollar",
-                "type": "t_contract(IOkuDollar)3227",
+                "type": "t_contract(IOkuDollar)4130",
                 "offset": 0,
                 "slot": "1"
               },
               {
                 "label": "usdc",
-                "type": "t_contract(IERC20)1178",
+                "type": "t_contract(IERC20)1290",
                 "offset": 0,
                 "slot": "2"
               },
               {
                 "label": "redemptionQueue",
-                "type": "t_contract(RedemptionQueue)4270",
+                "type": "t_contract(RedemptionQueue)5234",
                 "offset": 0,
                 "slot": "3"
               },
               {
                 "label": "porOracle",
-                "type": "t_contract(IAggregatorV3)3155",
+                "type": "t_contract(IAggregatorV3)4035",
                 "offset": 0,
                 "slot": "4"
               },
@@ -1310,7 +1310,7 @@
             {
               "contract": "LitePSM",
               "label": "okuMoney",
-              "type": "t_contract(IOkuMoney)3283",
+              "type": "t_contract(IOkuMoney)4186",
               "src": "src/psm/LitePSM.sol:67",
               "offset": 0,
               "slot": "0"
@@ -1318,7 +1318,7 @@
             {
               "contract": "LitePSM",
               "label": "okuDollar",
-              "type": "t_contract(IOkuDollar)3227",
+              "type": "t_contract(IOkuDollar)4130",
               "src": "src/psm/LitePSM.sol:68",
               "offset": 0,
               "slot": "1"
@@ -1326,7 +1326,7 @@
             {
               "contract": "LitePSM",
               "label": "usdc",
-              "type": "t_contract(IERC20)1178",
+              "type": "t_contract(IERC20)1290",
               "src": "src/psm/LitePSM.sol:69",
               "offset": 0,
               "slot": "2"
@@ -1334,7 +1334,7 @@
             {
               "contract": "LitePSM",
               "label": "redemptionQueue",
-              "type": "t_contract(RedemptionQueue)4270",
+              "type": "t_contract(RedemptionQueue)5234",
               "src": "src/psm/LitePSM.sol:70",
               "offset": 0,
               "slot": "3"
@@ -1342,7 +1342,7 @@
             {
               "contract": "LitePSM",
               "label": "porOracle",
-              "type": "t_contract(IAggregatorV3)3155",
+              "type": "t_contract(IAggregatorV3)4035",
               "src": "src/psm/LitePSM.sol:72",
               "offset": 0,
               "slot": "4"
@@ -3454,6 +3454,284 @@
               "src": "src/bridge/OkuBridgeRouter.sol:63",
               "offset": 0,
               "slot": "3"
+            }
+          ],
+          "erc7201:openzeppelin.storage.Pausable": [
+            {
+              "contract": "PausableUpgradeable",
+              "label": "_paused",
+              "type": "t_bool",
+              "src": "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol:21",
+              "offset": 0,
+              "slot": "0"
+            }
+          ],
+          "erc7201:openzeppelin.storage.AccessControl": [
+            {
+              "contract": "AccessControlUpgradeable",
+              "label": "_roles",
+              "type": "t_mapping(t_bytes32,t_struct(RoleData)26_storage)",
+              "src": "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol:62",
+              "offset": 0,
+              "slot": "0"
+            }
+          ],
+          "erc7201:openzeppelin.storage.Initializable": [
+            {
+              "contract": "Initializable",
+              "label": "_initialized",
+              "type": "t_uint64",
+              "src": "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol:69",
+              "offset": 0,
+              "slot": "0"
+            },
+            {
+              "contract": "Initializable",
+              "label": "_initializing",
+              "type": "t_bool",
+              "src": "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol:73",
+              "offset": 8,
+              "slot": "0"
+            }
+          ]
+        }
+      }
+    },
+    "162d8c03b1a812d977e5d5a8d8529900cccbe6429a6e74f8663801b4ccd0f520": {
+      "address": "0xf034e1C4639c34732C9B14b5466ED16d4e8927E1",
+      "txHash": "0xac83750a1a065dfee607f659862d111b9544655557310b1336a981db4b2f75fa",
+      "layout": {
+        "solcVersion": "0.8.28",
+        "storage": [],
+        "types": {
+          "t_address": {
+            "label": "address",
+            "numberOfBytes": "20"
+          },
+          "t_bool": {
+            "label": "bool",
+            "numberOfBytes": "1"
+          },
+          "t_bytes32": {
+            "label": "bytes32",
+            "numberOfBytes": "32"
+          },
+          "t_contract(IAggregatorV3)3801": {
+            "label": "contract IAggregatorV3",
+            "numberOfBytes": "20"
+          },
+          "t_contract(IERC20)1178": {
+            "label": "contract IERC20",
+            "numberOfBytes": "20"
+          },
+          "t_contract(IOkuDollar)3896": {
+            "label": "contract IOkuDollar",
+            "numberOfBytes": "20"
+          },
+          "t_contract(IOkuMoney)3952": {
+            "label": "contract IOkuMoney",
+            "numberOfBytes": "20"
+          },
+          "t_contract(RedemptionQueue)4993": {
+            "label": "contract RedemptionQueue",
+            "numberOfBytes": "20"
+          },
+          "t_mapping(t_address,t_bool)": {
+            "label": "mapping(address => bool)",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_bytes32,t_struct(RoleData)26_storage)": {
+            "label": "mapping(bytes32 => struct AccessControlUpgradeable.RoleData)",
+            "numberOfBytes": "32"
+          },
+          "t_struct(AccessControlStorage)36_storage": {
+            "label": "struct AccessControlUpgradeable.AccessControlStorage",
+            "members": [
+              {
+                "label": "_roles",
+                "type": "t_mapping(t_bytes32,t_struct(RoleData)26_storage)",
+                "offset": 0,
+                "slot": "0"
+              }
+            ],
+            "numberOfBytes": "32"
+          },
+          "t_struct(InitializableStorage)147_storage": {
+            "label": "struct Initializable.InitializableStorage",
+            "members": [
+              {
+                "label": "_initialized",
+                "type": "t_uint64",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "label": "_initializing",
+                "type": "t_bool",
+                "offset": 8,
+                "slot": "0"
+              }
+            ],
+            "numberOfBytes": "32"
+          },
+          "t_struct(LitePSMStorage)4574_storage": {
+            "label": "struct LitePSM.LitePSMStorage",
+            "members": [
+              {
+                "label": "okuMoney",
+                "type": "t_contract(IOkuMoney)3952",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "label": "okuDollar",
+                "type": "t_contract(IOkuDollar)3896",
+                "offset": 0,
+                "slot": "1"
+              },
+              {
+                "label": "usdc",
+                "type": "t_contract(IERC20)1178",
+                "offset": 0,
+                "slot": "2"
+              },
+              {
+                "label": "redemptionQueue",
+                "type": "t_contract(RedemptionQueue)4993",
+                "offset": 0,
+                "slot": "3"
+              },
+              {
+                "label": "porOracle",
+                "type": "t_contract(IAggregatorV3)3801",
+                "offset": 0,
+                "slot": "4"
+              },
+              {
+                "label": "stalenessThreshold",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "5"
+              },
+              {
+                "label": "oracleEnabled",
+                "type": "t_bool",
+                "offset": 0,
+                "slot": "6"
+              },
+              {
+                "label": "usdcDecimalMultiplier",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "7"
+              }
+            ],
+            "numberOfBytes": "256"
+          },
+          "t_struct(PausableStorage)621_storage": {
+            "label": "struct PausableUpgradeable.PausableStorage",
+            "members": [
+              {
+                "label": "_paused",
+                "type": "t_bool",
+                "offset": 0,
+                "slot": "0"
+              }
+            ],
+            "numberOfBytes": "32"
+          },
+          "t_struct(RoleData)26_storage": {
+            "label": "struct AccessControlUpgradeable.RoleData",
+            "members": [
+              {
+                "label": "hasRole",
+                "type": "t_mapping(t_address,t_bool)",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "label": "adminRole",
+                "type": "t_bytes32",
+                "offset": 0,
+                "slot": "1"
+              }
+            ],
+            "numberOfBytes": "64"
+          },
+          "t_uint256": {
+            "label": "uint256",
+            "numberOfBytes": "32"
+          },
+          "t_uint64": {
+            "label": "uint64",
+            "numberOfBytes": "8"
+          }
+        },
+        "namespaces": {
+          "erc7201:okumoney.storage.LitePSM": [
+            {
+              "contract": "LitePSM",
+              "label": "okuMoney",
+              "type": "t_contract(IOkuMoney)3952",
+              "src": "src/psm/LitePSM.sol:67",
+              "offset": 0,
+              "slot": "0"
+            },
+            {
+              "contract": "LitePSM",
+              "label": "okuDollar",
+              "type": "t_contract(IOkuDollar)3896",
+              "src": "src/psm/LitePSM.sol:68",
+              "offset": 0,
+              "slot": "1"
+            },
+            {
+              "contract": "LitePSM",
+              "label": "usdc",
+              "type": "t_contract(IERC20)1178",
+              "src": "src/psm/LitePSM.sol:69",
+              "offset": 0,
+              "slot": "2"
+            },
+            {
+              "contract": "LitePSM",
+              "label": "redemptionQueue",
+              "type": "t_contract(RedemptionQueue)4993",
+              "src": "src/psm/LitePSM.sol:70",
+              "offset": 0,
+              "slot": "3"
+            },
+            {
+              "contract": "LitePSM",
+              "label": "porOracle",
+              "type": "t_contract(IAggregatorV3)3801",
+              "src": "src/psm/LitePSM.sol:72",
+              "offset": 0,
+              "slot": "4"
+            },
+            {
+              "contract": "LitePSM",
+              "label": "stalenessThreshold",
+              "type": "t_uint256",
+              "src": "src/psm/LitePSM.sol:73",
+              "offset": 0,
+              "slot": "5"
+            },
+            {
+              "contract": "LitePSM",
+              "label": "oracleEnabled",
+              "type": "t_bool",
+              "src": "src/psm/LitePSM.sol:74",
+              "offset": 0,
+              "slot": "6"
+            },
+            {
+              "contract": "LitePSM",
+              "label": "usdcDecimalMultiplier",
+              "type": "t_uint256",
+              "src": "src/psm/LitePSM.sol:77",
+              "offset": 0,
+              "slot": "7"
             }
           ],
           "erc7201:openzeppelin.storage.Pausable": [

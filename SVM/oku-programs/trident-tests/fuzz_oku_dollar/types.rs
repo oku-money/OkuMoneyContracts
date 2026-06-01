@@ -26,7 +26,7 @@ pub mod wokusd_vault {
 
     /// Returns the program ID for wokusd_vault
     pub fn program_id() -> Pubkey {
-        pubkey!("BjjK75Vxj6zsC49qYfcVYFPLqyXXkcaFzacTXwohmfVC")
+        pubkey!("3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy")
     }
 
     // ------------------------------------------------------------------------

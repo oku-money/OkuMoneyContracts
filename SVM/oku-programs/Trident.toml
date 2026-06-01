@@ -13,7 +13,7 @@ program = "../target/deploy/lite_psm.so"
 
 [[fuzz.programs]]
 address = "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy"
-program = "../target/deploy/wokusd_vault.so"
+program = "../target/deploy/oku_dollar.so"
 
 [[fuzz.programs]]
 address = "GAjPAbq7sqFNzfnyhEAxBD9ofTPSTk4EtjFpq45BjRWb"

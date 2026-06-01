@@ -26,7 +26,7 @@ pub mod oku_bridge_router {
 
     /// Returns the program ID for oku_bridge_router
     pub fn program_id() -> Pubkey {
-        pubkey!("7DtqfP4fyShjAoM35QC9m3a9Ukh4tqcVgzTNLuyTkgE")
+        pubkey!("GAjPAbq7sqFNzfnyhEAxBD9ofTPSTk4EtjFpq45BjRWb")
     }
 
     // ------------------------------------------------------------------------
@@ -240,12 +240,12 @@ pub mod oku_bridge_router {
             self.accounts.fee_recipient_ata = AccountMeta::new(accounts.fee_recipient_ata, false);
 
             self.accounts.vault_program = AccountMeta::new_readonly(
-                pubkey!("BjjK75Vxj6zsC49qYfcVYFPLqyXXkcaFzacTXwohmfVC"),
+                pubkey!("3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy"),
                 false,
             );
 
             self.accounts.psm_program = AccountMeta::new_readonly(
-                pubkey!("AhKZ4TT5W4mnvR3CsX1t9ymQmZx4535AN9SsrThu6C1T"),
+                pubkey!("3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N"),
                 false,
             );
 

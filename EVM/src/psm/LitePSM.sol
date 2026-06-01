@@ -454,13 +454,26 @@ contract LitePSM is
 
         LitePSMStorage storage $ = _getLitePSMStorage();
 
+        // Measure actual UsdOku received: OkuDollar is share-based with a continuously
+        // compounding usdMultiplier. `transferFrom(amount)` floors the share conversion
+        // (OkuDollar.transferFrom), while `unwrap(amount)` ceils the share burn
+        // (OkuDollar.unwrap). When `usdMultiplier > 1e18`, the two diverge by up to 1
+        // share and `unwrap(usdAmount)` would revert with InsufficientBalance because
+        // the PSM holds 1 share less than `unwrap` demands. Reading the post-transfer
+        // balance delta and passing that to `unwrap` guarantees the share counts align.
+        // Same balance-delta pattern as OkuDollar.wrap (handles share-based / fee-on-
+        // transfer tokens generally).
+        uint256 balBefore = IERC20(address($.okuDollar)).balanceOf(address(this));
         IERC20(address($.okuDollar)).safeTransferFrom(user, address(this), usdAmount);
+        uint256 received = IERC20(address($.okuDollar)).balanceOf(address(this)) - balBefore;
+        if (received == 0) revert AmountTooSmall();
+
         // Reverts if vault undercollateralized (distinct failure mode).
-        uint256 okuMReturned = $.okuDollar.unwrap(usdAmount, address(this));
+        uint256 okuMReturned = $.okuDollar.unwrap(received, address(this));
         // UsdOkuRedeemed is the sole event for this path (no underlying OkuMRedeemed).
         uint256 usdcOut = _redeemOkuMFromSelf(user, okuMReturned);
 
-        emit UsdOkuRedeemed(user, usdAmount, usdcOut, $.okuMoney.okuMMultiplier());
+        emit UsdOkuRedeemed(user, received, usdcOut, $.okuMoney.okuMMultiplier());
     }
 
     /// @notice Process queued redemptions (called by operator when buffer refilled).

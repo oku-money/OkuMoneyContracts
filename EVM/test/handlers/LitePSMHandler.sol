@@ -7,6 +7,7 @@ import {LitePSM} from "../../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 import {IOkuMoney} from "../../src/interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../../src/interfaces/IOkuDollar.sol";
+import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {TestConstants} from "../shared/Constants.sol";
 
 /**
@@ -28,6 +29,9 @@ contract LitePSMHandler is Test {
     RedemptionQueue public queue;
     address public rebaser;
     address public minter;
+    /// @notice Address holding VAULT_REBASER on the OkuDollar instance. Allowed to be
+    ///         address(0); in that case `setUsdYieldRate` becomes a no-op handler.
+    address public usdRebaser;
 
     address[] public actors;
     mapping(address => bool) public isActor;
@@ -35,6 +39,7 @@ contract LitePSMHandler is Test {
     uint256 public constant PRECISION = TestConstants.PRECISION;
     uint256 public constant MAX_FUZZ_PRICE = TestConstants.MAX_FUZZ_PRICE;
     uint256 public constant DECIMAL_MULTIPLIER = TestConstants.DECIMAL_MULTIPLIER;
+    uint256 public constant MAX_RATE = TestConstants.MAX_RATE;
 
     // ============ USDC flow ghost state ============
     uint256 public ghostUsdcDeposited;
@@ -93,12 +98,21 @@ contract LitePSMHandler is Test {
         queue = _queue;
         rebaser = _rebaser;
         minter = _minter;
+        // usdRebaser defaults to zero; PSMInvariants sets it via setUsdRebaser
+        // after granting VAULT_REBASER so this handler can exercise the USD-yield
+        // path. Zero means the `setUsdYieldRate` handler is a no-op.
 
         _addActor(makeAddr("psmActor1"));
         _addActor(makeAddr("psmActor2"));
         _addActor(makeAddr("psmActor3"));
 
         ghostLastSeenMultiplier = okuMoney.okuMMultiplier();
+    }
+
+    /// @notice Set the USD rebaser address. Used by PSMInvariants after it grants
+    ///         VAULT_REBASER on OkuDollar so this handler can drive USD yield rates.
+    function setUsdRebaser(address _usdRebaser) external {
+        usdRebaser = _usdRebaser;
     }
 
     function _addActor(address actor) internal {
@@ -338,6 +352,43 @@ contract LitePSMHandler is Test {
         }
     }
 
+    // ============ USD Yield Rate (drives usdMultiplier compounding) ============
+
+    uint256 public ghostSetUsdYieldRateCalls;
+    uint256 public ghostSetUsdYieldRateReverts;
+
+    /// @notice Drive `usdRatePerSecond` so that subsequent `warpTime` calls compound
+    ///         `usdMultiplier()` above PRECISION. No-op if PSMInvariants did not
+    ///         configure a usdRebaser address.
+    function setUsdYieldRate(uint256 rate) external {
+        if (usdRebaser == address(0)) return;
+        ghostSetUsdYieldRateCalls++;
+        rate = bound(rate, PRECISION, MAX_RATE);
+        vm.prank(usdRebaser);
+        try OkuDollar(address(okuDollar)).setUsdYieldRate(rate, 0) {}
+        catch {
+            ghostSetUsdYieldRateReverts++;
+        }
+    }
+
+    // ============ Time Progression ============
+    //
+    // Required so that any active `usdRatePerSecond` actually compounds
+    // `usdMultiplier()` during invariant runs. Without this, the multiplier stays
+    // pinned at PRECISION and rounding-asymmetry bugs in PSM redeem paths
+    // (historical: `_redeemUsdOku` InsufficientBalance) cannot be caught.
+
+    uint256 public ghostWarpCalls;
+    uint256 public ghostTotalElapsed;
+
+    function warpTime(uint256 elapsed) external {
+        ghostWarpCalls++;
+        elapsed = bound(elapsed, 1, 30 days);
+        ghostTotalElapsed += elapsed;
+        vm.warp(block.timestamp + elapsed);
+        vm.roll(block.number + 1);
+    }
+
     // ============ View helpers ============
 
     function getActors() external view returns (address[] memory) {
@@ -352,7 +403,7 @@ contract LitePSMHandler is Test {
         return ghostMintOkuMCalls + ghostRedeemOkuMCalls + ghostMintOkuDollarCalls
             + ghostRedeemOkuDollarCalls + ghostRebaseCalls + ghostDepositBufferCalls
             + ghostWithdrawUsdcCalls + ghostProcessQueueCalls + ghostRescueCalls
-            + ghostConfigureOracleCalls;
+            + ghostConfigureOracleCalls + ghostWarpCalls;
     }
 
     function ghostTotalReverts() external view returns (uint256) {

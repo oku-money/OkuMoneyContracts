@@ -244,6 +244,60 @@ contract OkuDollarHandler is Test {
         }
     }
 
+    // ============ Time Progression ============
+    //
+    // Without time advancement, `usdMultiplier()` stays at PRECISION no matter what
+    // rate is set, because `rpow(rate, 0, PRECISION) == PRECISION`. This masked the
+    // LitePSM `_redeemUsdOku` rounding-asymmetry bug from all invariant runs.
+    // Advancing the clock here lets the multiplier actually compound, exercising the
+    // full state space the production contracts experience.
+    //
+    // After each warp we auto-rebalance reserves to model the operational contract:
+    // the orchestrator must keep reserves topped up to match accrued obligations
+    // when `usdRatePerSecond > PRECISION`. This isolates the rounding-asymmetry
+    // and share-conversion invariants from the orthogonal collateral-drift
+    // failure mode (which is its own operational concern, not a code bug).
+
+    uint256 public ghostWarpCalls;
+    uint256 public ghostTotalElapsed;
+
+    function warpTime(uint256 elapsed) external {
+        ghostWarpCalls++;
+        elapsed = bound(elapsed, 1, 30 days);
+        ghostTotalElapsed += elapsed;
+        vm.warp(block.timestamp + elapsed);
+        // Roll a block too so any same-block guards (e.g. yield-sandwich) stay clean.
+        vm.roll(block.number + 1);
+        // Rebalance reserves to keep `invariant_VaultBacked` meaningful under a
+        // live yield rate. This mirrors the operational pattern: a topped-up vault.
+        _rebalanceReservesIfNeeded();
+    }
+
+    /// @notice If obligations exceed reserves (after a multiplier-compounding warp),
+    ///         mint and deposit just enough OkuMoney to fully back the vault.
+    function _rebalanceReservesIfNeeded() internal {
+        uint256 obligationsUsd = okuDollar.totalSupply();
+        uint256 okuMMult = okuMoney.okuMMultiplier();
+        if (okuMMult == 0) return;
+        // Required OkuM = ceil(obligations / okuMMult)
+        uint256 required = (obligationsUsd * PRECISION + okuMMult - 1) / okuMMult;
+        uint256 currentReserves = okuMoney.balanceOf(address(okuDollar));
+        if (currentReserves >= required) return;
+        uint256 deficit = required - currentReserves;
+        // Add a tiny safety buffer (10 wei) for downstream rounding.
+        uint256 topUp = deficit + 10;
+        // Respect MaxSupply ceiling.
+        uint256 mintable = okuMoney.maxSupply() - okuMoney.totalSupply();
+        if (topUp > mintable) topUp = mintable;
+        if (topUp == 0) return;
+
+        vm.prank(minter);
+        try okuMoney.mint(address(this), topUp) {
+            IERC20(address(okuMoney)).approve(address(okuDollar), topUp);
+            try okuDollar.depositReserves(topUp) {} catch {}
+        } catch {}
+    }
+
     // ============ Aggregates ============
 
     function getActors() external view returns (address[] memory) {
@@ -257,7 +311,8 @@ contract OkuDollarHandler is Test {
     function ghostTotalCalls() external view returns (uint256) {
         return ghostMintOkuMCalls + ghostWrapCalls + ghostUnwrapCalls + ghostRebaseCalls
             + ghostTransferCalls + ghostDepositReservesCalls + ghostWithdrawSurplusCalls
-            + ghostSetYieldRateCalls + ghostSetNextYieldRateCalls + ghostSetMinCollatRatioCalls;
+            + ghostSetYieldRateCalls + ghostSetNextYieldRateCalls + ghostSetMinCollatRatioCalls
+            + ghostWarpCalls;
     }
 
     function ghostTotalReverts() external view returns (uint256) {

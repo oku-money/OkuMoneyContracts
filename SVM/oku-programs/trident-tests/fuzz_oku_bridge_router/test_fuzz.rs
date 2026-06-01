@@ -137,7 +137,7 @@ impl FuzzTest {
             fee_recipient_ata,
         ));
 
-        let result = self.trident.process_transaction(&[ix.instruction()], None);
+        let result = self.trident.process_transaction(&[ix.instruction()], Some("BridgeWrapped"));
 
         if result.is_success() {
             // Invariant: no OkuMoney stranded after successful bridge_wrapped
@@ -168,12 +168,12 @@ impl FuzzTest {
             let pauser = self.fuzz_accounts.pauser.insert(&mut self.trident, None);
             let ix = PauseInstruction::data(PauseInstructionData::new())
                 .accounts(PauseInstructionAccounts::new(pauser, config));
-            let _ = self.trident.process_transaction(&[ix.instruction()], None);
+            let _ = self.trident.process_transaction(&[ix.instruction()], Some("Pause"));
         } else {
             let unpauser = self.fuzz_accounts.unpauser.insert(&mut self.trident, None);
             let ix = UnpauseInstruction::data(UnpauseInstructionData::new())
                 .accounts(UnpauseInstructionAccounts::new(unpauser, config));
-            let _ = self.trident.process_transaction(&[ix.instruction()], None);
+            let _ = self.trident.process_transaction(&[ix.instruction()], Some("Unpause"));
         }
     }
 
@@ -255,7 +255,7 @@ impl FuzzTest {
         // Substitute a random fake program for vault_program
         ix.accounts.vault_program = AccountMeta::new_readonly(self.trident.random_pubkey(), false);
 
-        let result = self.trident.process_transaction(&[ix.instruction()], None);
+        let result = self.trident.process_transaction(&[ix.instruction()], Some("BridgeWrapped"));
 
         // This MUST fail — if it succeeds, the address constraint on vault_program is broken
         assert!(

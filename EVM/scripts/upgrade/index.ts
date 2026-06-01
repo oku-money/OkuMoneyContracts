@@ -705,17 +705,24 @@ async function upgradeOne(
       newImpl: oldImpl,
       txHash: "<bytecode-unchanged>",
     };
-    const skipRecord: UpgradeRecord = {
-      contract: name,
-      proxy: skipOutcome.proxy,
-      oldImpl: skipOutcome.oldImpl,
-      newImpl: skipOutcome.newImpl,
-      txHash: skipOutcome.txHash,
-      timestamp: new Date().toISOString(),
-      deployer: signerAddress,
-    };
-    appendUpgradeRecord(bookKey, skipRecord);
-    logger.info(`  Recorded skip in addresses.json under upgrades.${bookKey}`);
+    if (isFork) {
+      logger.info(
+        `  Fork rehearsal: not appending audit record to addresses.json ` +
+          `(local-only run; live key "${bookKey}" left untouched).`
+      );
+    } else {
+      const skipRecord: UpgradeRecord = {
+        contract: name,
+        proxy: skipOutcome.proxy,
+        oldImpl: skipOutcome.oldImpl,
+        newImpl: skipOutcome.newImpl,
+        txHash: skipOutcome.txHash,
+        timestamp: new Date().toISOString(),
+        deployer: signerAddress,
+      };
+      appendUpgradeRecord(bookKey, skipRecord);
+      logger.info(`  Recorded skip in addresses.json under upgrades.${bookKey}`);
+    }
     return skipOutcome;
   }
   if (skipBytecodeCheck) {
@@ -1055,18 +1062,28 @@ async function upgradeOne(
   };
 
   // 10. Append audit-trail record (before returning so a later target failure
-  //     doesn't lose this one's history).
-  const record: UpgradeRecord = {
-    contract: name,
-    proxy: outcome.proxy,
-    oldImpl: outcome.oldImpl,
-    newImpl: outcome.newImpl,
-    txHash: outcome.txHash,
-    timestamp: new Date().toISOString(),
-    deployer: signerAddress,
-  };
-  appendUpgradeRecord(bookKey, record);
-  logger.success(`  Recorded upgrade in addresses.json under upgrades.${bookKey}`);
+  //     doesn't lose this one's history). Suppressed on local forks: fork
+  //     rehearsals share the live network's bookKey (see main()) but their
+  //     impl/tx hashes are throwaway local-node values — writing them into
+  //     addresses.json would pollute the live audit trail.
+  if (isFork) {
+    logger.info(
+      `  Fork rehearsal: not appending audit record to addresses.json ` +
+        `(local-only run; live key "${bookKey}" left untouched).`
+    );
+  } else {
+    const record: UpgradeRecord = {
+      contract: name,
+      proxy: outcome.proxy,
+      oldImpl: outcome.oldImpl,
+      newImpl: outcome.newImpl,
+      txHash: outcome.txHash,
+      timestamp: new Date().toISOString(),
+      deployer: signerAddress,
+    };
+    appendUpgradeRecord(bookKey, record);
+    logger.success(`  Recorded upgrade in addresses.json under upgrades.${bookKey}`);
+  }
 
   return outcome;
 }

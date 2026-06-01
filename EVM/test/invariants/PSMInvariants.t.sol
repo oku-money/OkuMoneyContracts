@@ -41,7 +41,14 @@ contract PSMInvariantsTest is BaseTest {
         litePsm.grantRole(PSM_QUEUE_PROCESSOR, address(handler));
         litePsm.grantRole(PSM_ORACLE_MANAGER, address(handler));
         redemptionQueue.grantRole(QUEUE_RESCUER, address(handler));
+        // VAULT_REBASER lets the handler drive `usdRatePerSecond`, which combined
+        // with the handler's `warpTime` makes `usdMultiplier()` actually compound
+        // during invariant runs. This is the systemic coverage gap that allowed
+        // the LitePSM `_redeemUsdOku` rounding-asymmetry bug to ship.
+        okuDollar.grantRole(VAULT_REBASER, address(handler));
         vm.stopPrank();
+        // Tell the handler which address holds VAULT_REBASER so it can prank itself.
+        handler.setUsdRebaser(address(handler));
 
         targetContract(address(handler));
 

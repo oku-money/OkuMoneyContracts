@@ -26,7 +26,7 @@ pub mod lite_psm {
 
     /// Returns the program ID for lite_psm
     pub fn program_id() -> Pubkey {
-        pubkey!("AhKZ4TT5W4mnvR3CsX1t9ymQmZx4535AN9SsrThu6C1T")
+        pubkey!("3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N")
     }
 
     // ------------------------------------------------------------------------

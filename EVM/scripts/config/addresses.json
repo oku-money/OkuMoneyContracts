@@ -118,6 +118,15 @@
         "txHash": "<bytecode-unchanged>",
         "timestamp": "2026-05-26T19:42:51.237Z",
         "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0xc8389fc7189aa73e766052fB18B5b8Ed933c62BF",
+        "oldImpl": "0xB43A3617f60A77440Ad84656bd20FB8a461079A5",
+        "newImpl": "0x4651d9C39786fd9e1e0801B5B4a7F4713B410177",
+        "txHash": "0xbe929b092b01c7070fc0e3cf3e858585e1d1827c0bddaa802e3f17ad3aa1d0cd",
+        "timestamp": "2026-06-01T17:39:13.979Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
       }
     ],
     "sepolia": [
@@ -282,6 +291,15 @@
         "txHash": "<bytecode-unchanged>",
         "timestamp": "2026-05-26T19:36:27.393Z",
         "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0xc7fA7bf4D841FfBCD37D4f85D251efA815C30aCB",
+        "oldImpl": "0xc6Efb4589DF9BD37519a1a1C95b69C4a92cB0fca",
+        "newImpl": "0x09419c3539d0D79B6f0590d72DAD63ac91D0a8C2",
+        "txHash": "0xdccf4255dd3d8b159937078e67b78332e0ef024ac58c22de6cfd31cbcc3d2b83",
+        "timestamp": "2026-06-01T17:30:47.290Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
       }
     ],
     "baseSepolia": [
@@ -392,6 +410,24 @@
         "txHash": "<bytecode-unchanged>",
         "timestamp": "2026-05-26T19:36:40.538Z",
         "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0x31750D38d8d1f69Af94407002b9322f5765D869A",
+        "oldImpl": "0x179F83A887279F89D4C05693819AF4444EABF551",
+        "newImpl": "0xf034e1C4639c34732C9B14b5466ED16d4e8927E1",
+        "txHash": "0xf417c97e8c0caccf3269010c79dd3ab04cfca4dd4bf4ada49008bcb85bbeefcb",
+        "timestamp": "2026-06-01T17:32:00.867Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0x31750D38d8d1f69Af94407002b9322f5765D869A",
+        "oldImpl": "0xf034e1C4639c34732C9B14b5466ED16d4e8927E1",
+        "newImpl": "0xf034e1C4639c34732C9B14b5466ED16d4e8927E1",
+        "txHash": "<bytecode-unchanged>",
+        "timestamp": "2026-06-01T17:36:40.849Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
       }
     ],
     "bscTestnet": [
@@ -447,6 +483,15 @@
         "newImpl": "0x8089C2Ce231362fD5ba63d19F12D1e3D92A5125f",
         "txHash": "0x904953dcaebf8b5ab8f5bc08cdef41213b05d5cc229f68cde98512938c8d48d1",
         "timestamp": "2026-05-26T19:39:12.167Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0x31750D38d8d1f69Af94407002b9322f5765D869A",
+        "oldImpl": "0x179F83A887279F89D4C05693819AF4444EABF551",
+        "newImpl": "0xf034e1C4639c34732C9B14b5466ED16d4e8927E1",
+        "txHash": "0x73c9ab858d4f914699f89030598b13e49fc57d2516fff0de8fdb17799684bcb7",
+        "timestamp": "2026-06-01T17:37:45.717Z",
         "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
       }
     ],

@@ -100,7 +100,7 @@ impl FuzzTest {
             ),
         );
 
-        let _ = self.trident.process_transaction(&[ix.instruction()], None);
+        let _ = self.trident.process_transaction(&[ix.instruction()], Some("Wrap"));
     }
 
     // ----------------------------------------------------------------
@@ -145,7 +145,7 @@ impl FuzzTest {
             ),
         );
 
-        let _ = self.trident.process_transaction(&[ix.instruction()], None);
+        let _ = self.trident.process_transaction(&[ix.instruction()], Some("Unwrap"));
     }
 
     // ----------------------------------------------------------------
@@ -206,7 +206,7 @@ impl FuzzTest {
 
         let wrap_result = self
             .trident
-            .process_transaction(&[wrap_ix.instruction()], None);
+            .process_transaction(&[wrap_ix.instruction()], Some("Wrap"));
         if wrap_result.is_error() {
             return;
         }
@@ -236,7 +236,7 @@ impl FuzzTest {
 
         let _ = self
             .trident
-            .process_transaction(&[unwrap_ix.instruction()], None);
+            .process_transaction(&[unwrap_ix.instruction()], Some("Unwrap"));
 
         // Check: round-trip never inflates OkuMoney balance
         let okusd_after = self
@@ -264,12 +264,12 @@ impl FuzzTest {
             let pauser = self.fuzz_accounts.pauser.insert(&mut self.trident, None);
             let ix = PauseInstruction::data(PauseInstructionData::new())
                 .accounts(PauseInstructionAccounts::new(pauser, config));
-            let _ = self.trident.process_transaction(&[ix.instruction()], None);
+            let _ = self.trident.process_transaction(&[ix.instruction()], Some("Pause"));
         } else {
             let unpauser = self.fuzz_accounts.unpauser.insert(&mut self.trident, None);
             let ix = UnpauseInstruction::data(UnpauseInstructionData::new())
                 .accounts(UnpauseInstructionAccounts::new(unpauser, config));
-            let _ = self.trident.process_transaction(&[ix.instruction()], None);
+            let _ = self.trident.process_transaction(&[ix.instruction()], Some("Unpause"));
         }
     }
 

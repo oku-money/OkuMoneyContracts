@@ -113,7 +113,7 @@ impl FuzzTest {
             ),
         );
 
-        let _ = self.trident.process_transaction(&[ix.instruction()], None);
+        let _ = self.trident.process_transaction(&[ix.instruction()], Some("Mint"));
     }
 
     // ----------------------------------------------------------------
@@ -169,7 +169,7 @@ impl FuzzTest {
             ),
         );
 
-        let _ = self.trident.process_transaction(&[ix.instruction()], None);
+        let _ = self.trident.process_transaction(&[ix.instruction()], Some("Redeem"));
     }
 
     // ----------------------------------------------------------------
@@ -214,7 +214,7 @@ impl FuzzTest {
                 vault_okusd,
             ));
 
-        let _ = self.trident.process_transaction(&[ix.instruction()], None);
+        let _ = self.trident.process_transaction(&[ix.instruction()], Some("ProcessQueue"));
     }
 
     // ----------------------------------------------------------------
@@ -233,12 +233,12 @@ impl FuzzTest {
             let pauser = self.fuzz_accounts.pauser.insert(&mut self.trident, None);
             let ix = PauseInstruction::data(PauseInstructionData::new())
                 .accounts(PauseInstructionAccounts::new(pauser, config));
-            let _ = self.trident.process_transaction(&[ix.instruction()], None);
+            let _ = self.trident.process_transaction(&[ix.instruction()], Some("Pause"));
         } else {
             let unpauser = self.fuzz_accounts.unpauser.insert(&mut self.trident, None);
             let ix = UnpauseInstruction::data(UnpauseInstructionData::new())
                 .accounts(UnpauseInstructionAccounts::new(unpauser, config));
-            let _ = self.trident.process_transaction(&[ix.instruction()], None);
+            let _ = self.trident.process_transaction(&[ix.instruction()], Some("Unpause"));
         }
     }
 
@@ -299,7 +299,7 @@ impl FuzzTest {
             bridge_nonce,
         ));
 
-        let _ = self.trident.process_transaction(&[ix.instruction()], None);
+        let _ = self.trident.process_transaction(&[ix.instruction()], Some("BridgeBurn"));
     }
 
     // ----------------------------------------------------------------
@@ -337,7 +337,7 @@ impl FuzzTest {
                     buffer_depositor_usdc_ata,
                     vault_usdc,
                 ));
-            let _ = self.trident.process_transaction(&[ix.instruction()], None);
+            let _ = self.trident.process_transaction(&[ix.instruction()], Some("DepositBuffer"));
         } else {
             let buffer_withdrawer = self
                 .fuzz_accounts
@@ -360,7 +360,7 @@ impl FuzzTest {
                     vault_usdc,
                     redemption_queue,
                 ));
-            let _ = self.trident.process_transaction(&[ix.instruction()], None);
+            let _ = self.trident.process_transaction(&[ix.instruction()], Some("WithdrawBuffer"));
         }
     }
 
@@ -394,7 +394,7 @@ impl FuzzTest {
                     target_okusd_ata,
                 ),
             );
-            let _ = self.trident.process_transaction(&[ix.instruction()], None);
+            let _ = self.trident.process_transaction(&[ix.instruction()], Some("FreezeAccount"));
         } else {
             let unfreezer = self.fuzz_accounts.unfreezer.insert(&mut self.trident, None);
             let ix = ThawAccountInstruction::data(ThawAccountInstructionData::new()).accounts(
@@ -405,7 +405,7 @@ impl FuzzTest {
                     target_okusd_ata,
                 ),
             );
-            let _ = self.trident.process_transaction(&[ix.instruction()], None);
+            let _ = self.trident.process_transaction(&[ix.instruction()], Some("ThawAccount"));
         }
     }
 

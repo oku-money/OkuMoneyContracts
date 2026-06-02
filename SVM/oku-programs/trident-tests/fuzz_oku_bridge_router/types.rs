@@ -716,6 +716,346 @@ pub mod oku_bridge_router {
         }
     }
 
+    // ....................................................................
+    // Instruction: RedeemUsdOku
+    //
+    // NOTE: Manually added to extend coverage of the router's redeem path
+    // (parity with the EVM `LitePSMRebasingRedeem.fuzz.t.sol` post-fix
+    // fuzz suite). The surrounding generator stubs in this file are stale
+    // (`BridgeWrapped` predates the rename to `BridgeUsdOku`, lacks
+    // `MintUsdOku`/`RedeemUsdOku` entirely, uses legacy `okusd`/`wokusd`
+    // naming, and is missing `usd_oku_ata` accounts in many contexts).
+    // If you regenerate this file with current Trident, audit the
+    // discriminator + account ordering against
+    // `programs/oku-bridge-router/src/contexts.rs::RedeemUsdOku`.
+    // ....................................................................
+
+    /// Main instruction struct for RedeemUsdOku
+    pub struct RedeemUsdOkuInstruction {
+        pub accounts: RedeemUsdOkuInstructionAccountMetas,
+        pub data: RedeemUsdOkuInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for RedeemUsdOku instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct RedeemUsdOkuInstructionAccountMetas {
+        pub user: AccountMeta,
+        pub config: AccountMeta,
+        pub vault_config: AccountMeta,
+        pub oku_money_mint: AccountMeta,
+        pub usd_oku_mint: AccountMeta,
+        pub user_oku_money_ata: AccountMeta,
+        pub user_usd_oku_ata: AccountMeta,
+        pub reserve_vault: AccountMeta,
+        pub psm_config: AccountMeta,
+        pub redemption_queue: AccountMeta,
+        pub usdc_mint: AccountMeta,
+        pub user_usdc_ata: AccountMeta,
+        pub vault_usdc: AccountMeta,
+        pub vault_oku_money: AccountMeta,
+        pub vault_program: AccountMeta,
+        pub psm_program: AccountMeta,
+        pub token_program: AccountMeta,
+        pub token_2022_program: AccountMeta,
+        pub associated_token_program: AccountMeta,
+        pub system_program: AccountMeta,
+    }
+
+    /// Account pubkeys for RedeemUsdOku instruction
+    #[derive(Debug, Clone)]
+    pub struct RedeemUsdOkuInstructionAccounts {
+        pub user: Pubkey,
+        pub config: Pubkey,
+        pub vault_config: Pubkey,
+        pub oku_money_mint: Pubkey,
+        pub usd_oku_mint: Pubkey,
+        pub user_oku_money_ata: Pubkey,
+        pub user_usd_oku_ata: Pubkey,
+        pub reserve_vault: Pubkey,
+        pub psm_config: Pubkey,
+        pub redemption_queue: Pubkey,
+        pub usdc_mint: Pubkey,
+        pub user_usdc_ata: Pubkey,
+        pub vault_usdc: Pubkey,
+        pub vault_oku_money: Pubkey,
+    }
+
+    impl RedeemUsdOkuInstructionAccounts {
+        pub fn new(
+            user: Pubkey,
+            config: Pubkey,
+            vault_config: Pubkey,
+            oku_money_mint: Pubkey,
+            usd_oku_mint: Pubkey,
+            user_oku_money_ata: Pubkey,
+            user_usd_oku_ata: Pubkey,
+            reserve_vault: Pubkey,
+            psm_config: Pubkey,
+            redemption_queue: Pubkey,
+            usdc_mint: Pubkey,
+            user_usdc_ata: Pubkey,
+            vault_usdc: Pubkey,
+            vault_oku_money: Pubkey,
+        ) -> Self {
+            Self {
+                user,
+                config,
+                vault_config,
+                oku_money_mint,
+                usd_oku_mint,
+                user_oku_money_ata,
+                user_usd_oku_ata,
+                reserve_vault,
+                psm_config,
+                redemption_queue,
+                usdc_mint,
+                user_usdc_ata,
+                vault_usdc,
+                vault_oku_money,
+            }
+        }
+    }
+
+    /// Instruction data for RedeemUsdOku
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct RedeemUsdOkuInstructionData {
+        pub usd_oku_shares: u64,
+        pub min_oku_money_out: u64,
+    }
+
+    impl RedeemUsdOkuInstructionData {
+        pub fn new(usd_oku_shares: u64, min_oku_money_out: u64) -> Self {
+            Self {
+                usd_oku_shares,
+                min_oku_money_out,
+            }
+        }
+    }
+
+    /// Implementation for RedeemUsdOkuInstruction
+    impl RedeemUsdOkuInstruction {
+        /// Anchor discriminator: sha256("global:redeem_usd_oku")[..8]
+        fn discriminator() -> [u8; 8] {
+            [147u8, 236u8, 154u8, 13u8, 208u8, 15u8, 104u8, 64u8]
+        }
+
+        pub fn data(data: RedeemUsdOkuInstructionData) -> Self {
+            Self {
+                accounts: RedeemUsdOkuInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: RedeemUsdOkuInstructionAccounts) -> Self {
+            self.accounts.user = AccountMeta::new(accounts.user, true);
+            self.accounts.config = AccountMeta::new_readonly(accounts.config, false);
+            self.accounts.vault_config = AccountMeta::new(accounts.vault_config, false);
+            self.accounts.oku_money_mint = AccountMeta::new(accounts.oku_money_mint, false);
+            self.accounts.usd_oku_mint = AccountMeta::new(accounts.usd_oku_mint, false);
+            self.accounts.user_oku_money_ata =
+                AccountMeta::new(accounts.user_oku_money_ata, false);
+            self.accounts.user_usd_oku_ata =
+                AccountMeta::new(accounts.user_usd_oku_ata, false);
+            self.accounts.reserve_vault = AccountMeta::new(accounts.reserve_vault, false);
+            self.accounts.psm_config = AccountMeta::new(accounts.psm_config, false);
+            self.accounts.redemption_queue = AccountMeta::new(accounts.redemption_queue, false);
+            self.accounts.usdc_mint = AccountMeta::new_readonly(accounts.usdc_mint, false);
+            self.accounts.user_usdc_ata = AccountMeta::new(accounts.user_usdc_ata, false);
+            self.accounts.vault_usdc = AccountMeta::new(accounts.vault_usdc, false);
+            self.accounts.vault_oku_money = AccountMeta::new(accounts.vault_oku_money, false);
+            // Hardcoded program IDs (address-constrained in the router context).
+            self.accounts.vault_program = AccountMeta::new_readonly(
+                pubkey!("3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy"),
+                false,
+            );
+            self.accounts.psm_program = AccountMeta::new_readonly(
+                pubkey!("3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N"),
+                false,
+            );
+            self.accounts.token_program = AccountMeta::new_readonly(
+                pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+                false,
+            );
+            self.accounts.token_2022_program = AccountMeta::new_readonly(
+                pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+                false,
+            );
+            self.accounts.associated_token_program = AccountMeta::new_readonly(
+                pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
+                false,
+            );
+            self.accounts.system_program =
+                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+            metas.push(self.accounts.user.clone());
+            metas.push(self.accounts.config.clone());
+            metas.push(self.accounts.vault_config.clone());
+            metas.push(self.accounts.oku_money_mint.clone());
+            metas.push(self.accounts.usd_oku_mint.clone());
+            metas.push(self.accounts.user_oku_money_ata.clone());
+            metas.push(self.accounts.user_usd_oku_ata.clone());
+            metas.push(self.accounts.reserve_vault.clone());
+            metas.push(self.accounts.psm_config.clone());
+            metas.push(self.accounts.redemption_queue.clone());
+            metas.push(self.accounts.usdc_mint.clone());
+            metas.push(self.accounts.user_usdc_ata.clone());
+            metas.push(self.accounts.vault_usdc.clone());
+            metas.push(self.accounts.vault_oku_money.clone());
+            metas.push(self.accounts.vault_program.clone());
+            metas.push(self.accounts.psm_program.clone());
+            metas.push(self.accounts.token_program.clone());
+            metas.push(self.accounts.token_2022_program.clone());
+            metas.push(self.accounts.associated_token_program.clone());
+            metas.push(self.accounts.system_program.clone());
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+            buffer.extend_from_slice(&Self::discriminator());
+            self.data.serialize(&mut buffer).unwrap();
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: UpdateUsdMultiplier (oku_dollar — exposed here for
+    // convenience so the router-fuzz iteration can drift `usd_multiplier`
+    // off PRECISION without bouncing through a second crate. Targets the
+    // oku_dollar program ID, not the router ID.)
+    // ....................................................................
+
+    /// Oku-dollar program ID — the rebasing vault. Hardcoded so the
+    /// `UpdateUsdMultiplier` ix builds the right cross-program target.
+    pub fn oku_dollar_program_id() -> Pubkey {
+        pubkey!("3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy")
+    }
+
+    pub struct UpdateUsdMultiplierInstruction {
+        pub accounts: UpdateUsdMultiplierInstructionAccountMetas,
+        pub data: UpdateUsdMultiplierInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    pub struct UpdateUsdMultiplierInstructionAccountMetas {
+        pub usd_rebaser: AccountMeta,
+        pub config: AccountMeta,
+        pub reserve_vault: AccountMeta,
+        pub usd_oku_mint: AccountMeta,
+        pub psm_config: AccountMeta,
+        pub token_2022_program: AccountMeta,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct UpdateUsdMultiplierInstructionAccounts {
+        pub usd_rebaser: Pubkey,
+        pub config: Pubkey,
+        pub reserve_vault: Pubkey,
+        pub usd_oku_mint: Pubkey,
+        pub psm_config: Pubkey,
+    }
+
+    impl UpdateUsdMultiplierInstructionAccounts {
+        pub fn new(
+            usd_rebaser: Pubkey,
+            config: Pubkey,
+            reserve_vault: Pubkey,
+            usd_oku_mint: Pubkey,
+            psm_config: Pubkey,
+        ) -> Self {
+            Self {
+                usd_rebaser,
+                config,
+                reserve_vault,
+                usd_oku_mint,
+                psm_config,
+            }
+        }
+    }
+
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct UpdateUsdMultiplierInstructionData {
+        pub new_usd_multiplier: u64,
+    }
+
+    impl UpdateUsdMultiplierInstructionData {
+        pub fn new(new_usd_multiplier: u64) -> Self {
+            Self { new_usd_multiplier }
+        }
+    }
+
+    impl UpdateUsdMultiplierInstruction {
+        /// Anchor discriminator: sha256("global:update_usd_multiplier")[..8]
+        fn discriminator() -> [u8; 8] {
+            [249u8, 116u8, 186u8, 51u8, 161u8, 253u8, 31u8, 14u8]
+        }
+
+        pub fn data(data: UpdateUsdMultiplierInstructionData) -> Self {
+            Self {
+                accounts: UpdateUsdMultiplierInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: UpdateUsdMultiplierInstructionAccounts) -> Self {
+            self.accounts.usd_rebaser = AccountMeta::new_readonly(accounts.usd_rebaser, true);
+            self.accounts.config = AccountMeta::new(accounts.config, false);
+            self.accounts.reserve_vault =
+                AccountMeta::new_readonly(accounts.reserve_vault, false);
+            self.accounts.usd_oku_mint =
+                AccountMeta::new_readonly(accounts.usd_oku_mint, false);
+            self.accounts.psm_config = AccountMeta::new_readonly(accounts.psm_config, false);
+            self.accounts.token_2022_program = AccountMeta::new_readonly(
+                pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+                false,
+            );
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+            metas.push(self.accounts.usd_rebaser.clone());
+            metas.push(self.accounts.config.clone());
+            metas.push(self.accounts.reserve_vault.clone());
+            metas.push(self.accounts.usd_oku_mint.clone());
+            metas.push(self.accounts.psm_config.clone());
+            metas.push(self.accounts.token_2022_program.clone());
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+            buffer.extend_from_slice(&Self::discriminator());
+            self.data.serialize(&mut buffer).unwrap();
+            // IMPORTANT: targets the oku_dollar program ID, not the router.
+            Instruction::new_with_bytes(
+                oku_dollar_program_id(),
+                &buffer,
+                self.to_account_metas(),
+            )
+        }
+    }
+
     // ------------------------------------------------------------------------
     // Composite Accounts
     // ------------------------------------------------------------------------

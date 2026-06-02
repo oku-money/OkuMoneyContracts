@@ -380,4 +380,98 @@ mod tests {
             50_000_000
         );
     }
+
+    /// Pin the rounding direction of `shares_to_oku_money` at FLOOR.
+    ///
+    /// This is the unit-level analog of the EVM-side `LitePSMRebasingRedeem`
+    /// fuzz tests added in commit a8b82a9 — those pin-assert that
+    /// `InsufficientBalance()` (the selector that surfaced when EVM
+    /// `OkuDollar.unwrap` used ceiling division) can never appear post-fix.
+    ///
+    /// On SVM there is no analogous revert selector to pin (the EVM bug
+    /// stemmed from a transfer-vs-unwrap asymmetry that does not exist on
+    /// SVM), but the equivalent regression surface IS the rounding
+    /// direction of `shares_to_oku_money`. If anyone flips floor → ceil
+    /// (the EVM-style mutation), this test fails on the very first
+    /// assertion — the share-conversion overpays by one unit.
+    ///
+    /// Inputs chosen so that `shares * usd_multiplier` has a non-zero
+    /// remainder modulo `oku_m_price`, which is exactly where ceil and
+    /// floor diverge by one unit.
+    #[test]
+    fn test_shares_to_oku_money_uses_floor_rounding() {
+        // Case 1: shares=7, usd_multiplier=PRECISION, oku_m_price=3*PRECISION.
+        //   floor(7 * 1e9 / 3e9) = floor(2.333...) = 2
+        //   ceil(.)              = 3
+        // The protocol must round DOWN (favours the vault). A ceil flip
+        // would return 3 here and overpay the user by 1 OkuMoney unit.
+        let out = shares_to_oku_money(7, PRECISION, 3 * PRECISION).unwrap();
+        assert_eq!(
+            out, 2,
+            "shares_to_oku_money must floor — got {out}, ceil would return 3"
+        );
+
+        // Case 2: realistic Sepolia-flavoured numbers. usd_multiplier just
+        // barely above PRECISION (the regime where the EVM bug surfaced).
+        // Use a shares count that produces a non-zero remainder under
+        // floor — `shares = 999` * usd_multiplier needs a non-zero mod
+        // against 1e9. We pick 999 because 999 * 1_000_119_588 has a
+        // remainder of 880_413_588 mod 1e9 — solidly non-zero, so floor
+        // and ceil diverge by exactly 1 unit, matching the 1-share
+        // mismatch that produced the EVM `InsufficientBalance()` revert.
+        //
+        //   shares * usd_multiplier = 999 * 1_000_119_588 = 999_119_468_412
+        //   floor(.. / 1e9)         = 999
+        //   ceil  (.. / 1e9)        = 1000  <-- the EVM-style mutation
+        let sepolia_mult: u64 = 1_000_119_588u64;
+        let shares: u64 = 999;
+        let out2 = shares_to_oku_money(shares, sepolia_mult, PRECISION).unwrap();
+        assert_eq!(
+            out2, 999,
+            "Sepolia-flavoured shares_to_oku_money must floor (ceil would return 1000)"
+        );
+    }
+
+    /// Round-trip invariant that is SENSITIVE to a floor->ceil mutation.
+    ///
+    /// The existing `test_share_round_trip_precision_bound` test uses inputs
+    /// whose product divides evenly under the test prices, so it silently
+    /// passes even if `shares_to_oku_money` is mutated to use ceiling
+    /// division. This test sweeps a range of (shares, multiplier, price)
+    /// triples chosen so that floor and ceil ALWAYS differ by exactly 1
+    /// unit; a ceil mutation makes every triple fail.
+    ///
+    /// Mirrors EVM `LitePSMRebasingRedeem.t.sol::test_RedeemUsdOku_Property_USDCOutLessThanOrEqualToUsdOkuIn`.
+    #[test]
+    fn test_share_round_trip_is_sensitive_to_ceil_mutation() {
+        // Each tuple = (shares, usd_multiplier, oku_m_price, expected floor).
+        // For every triple, prod = shares*mult is NOT divisible by price,
+        // so floor < ceil by exactly 1 unit. The expected value is the
+        // floor; the ceil mutation would return floor+1.
+        let cases: &[(u64, u64, u64, u64)] = &[
+            // shares=7, mult=1e9, price=3e9: prod=7e9, /3e9 = 2.333... → floor=2.
+            (7, PRECISION, 3 * PRECISION, 2),
+            // The Sepolia-flavoured slightly-elevated multiplier regime.
+            // shares=999, mult=1_000_119_588, price=1e9: prod=999_119_468_412
+            //   → floor=999, ceil=1000.
+            (999, 1_000_119_588, PRECISION, 999),
+            // Larger multiplier (yield trajectory): mult=1.5e9.
+            // shares=11, mult=1.5e9, price=4e9: prod=16.5e9, /4e9 = 4.125 → floor=4.
+            (11, 1_500_000_000, 4 * PRECISION, 4),
+            // Dust shares at high multiplier — most sensitive to ceil overpay.
+            // shares=1, mult=1_500_000_001, price=1e9: prod=1_500_000_001
+            //   → floor=1, ceil=2 (overpay = 100%).
+            (1, 1_500_000_001, PRECISION, 1),
+        ];
+
+        for &(shares, mult, price, expected_floor) in cases {
+            let actual = shares_to_oku_money(shares, mult, price).unwrap();
+            assert_eq!(
+                actual, expected_floor,
+                "shares_to_oku_money({shares}, {mult}, {price}) must floor — got {actual}, \
+                 expected {expected_floor} (a ceil mutation would return {})",
+                expected_floor + 1
+            );
+        }
+    }
 }

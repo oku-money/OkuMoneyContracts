@@ -904,6 +904,132 @@ pub mod wokusd_vault {
         }
     }
 
+    // ....................................................................
+    // Instruction: UpdateUsdMultiplier
+    //
+    // NOTE: Manually added to extend coverage of the rebasing path
+    // (parity with the EVM `LitePSMRebasingRedeem` test suite). The
+    // surrounding generator stubs in this file are stale (they still use
+    // the legacy `okusd` / `wokusd` naming and predate the addition of
+    // `reserve_vault` / `psm_config` to several contexts), so this
+    // section is hand-rolled. If you regenerate this file with current
+    // Trident, audit the discriminator + account ordering against
+    // `programs/oku-dollar/src/contexts.rs::UpdateUsdMultiplier`.
+    // ....................................................................
+
+    /// Main instruction struct for UpdateUsdMultiplier
+    pub struct UpdateUsdMultiplierInstruction {
+        pub accounts: UpdateUsdMultiplierInstructionAccountMetas,
+        pub data: UpdateUsdMultiplierInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for UpdateUsdMultiplier instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct UpdateUsdMultiplierInstructionAccountMetas {
+        pub usd_rebaser: AccountMeta,
+        pub config: AccountMeta,
+        pub reserve_vault: AccountMeta,
+        pub usd_oku_mint: AccountMeta,
+        pub psm_config: AccountMeta,
+        pub token_2022_program: AccountMeta,
+    }
+
+    /// Account pubkeys for UpdateUsdMultiplier instruction
+    #[derive(Debug, Clone)]
+    pub struct UpdateUsdMultiplierInstructionAccounts {
+        pub usd_rebaser: Pubkey,
+        pub config: Pubkey,
+        pub reserve_vault: Pubkey,
+        pub usd_oku_mint: Pubkey,
+        pub psm_config: Pubkey,
+    }
+
+    impl UpdateUsdMultiplierInstructionAccounts {
+        pub fn new(
+            usd_rebaser: Pubkey,
+            config: Pubkey,
+            reserve_vault: Pubkey,
+            usd_oku_mint: Pubkey,
+            psm_config: Pubkey,
+        ) -> Self {
+            Self {
+                usd_rebaser,
+                config,
+                reserve_vault,
+                usd_oku_mint,
+                psm_config,
+            }
+        }
+    }
+
+    /// Instruction data for UpdateUsdMultiplier
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct UpdateUsdMultiplierInstructionData {
+        pub new_usd_multiplier: u64,
+    }
+
+    impl UpdateUsdMultiplierInstructionData {
+        pub fn new(new_usd_multiplier: u64) -> Self {
+            Self { new_usd_multiplier }
+        }
+    }
+
+    /// Implementation for UpdateUsdMultiplierInstruction
+    impl UpdateUsdMultiplierInstruction {
+        /// Anchor discriminator: sha256("global:update_usd_multiplier")[..8]
+        fn discriminator() -> [u8; 8] {
+            [249u8, 116u8, 186u8, 51u8, 161u8, 253u8, 31u8, 14u8]
+        }
+
+        pub fn data(data: UpdateUsdMultiplierInstructionData) -> Self {
+            Self {
+                accounts: UpdateUsdMultiplierInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: UpdateUsdMultiplierInstructionAccounts) -> Self {
+            self.accounts.usd_rebaser = AccountMeta::new_readonly(accounts.usd_rebaser, true);
+            self.accounts.config = AccountMeta::new(accounts.config, false);
+            self.accounts.reserve_vault =
+                AccountMeta::new_readonly(accounts.reserve_vault, false);
+            self.accounts.usd_oku_mint =
+                AccountMeta::new_readonly(accounts.usd_oku_mint, false);
+            self.accounts.psm_config = AccountMeta::new_readonly(accounts.psm_config, false);
+            self.accounts.token_2022_program = AccountMeta::new_readonly(
+                pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+                false,
+            );
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+            metas.push(self.accounts.usd_rebaser.clone());
+            metas.push(self.accounts.config.clone());
+            metas.push(self.accounts.reserve_vault.clone());
+            metas.push(self.accounts.usd_oku_mint.clone());
+            metas.push(self.accounts.psm_config.clone());
+            metas.push(self.accounts.token_2022_program.clone());
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+            buffer.extend_from_slice(&Self::discriminator());
+            self.data.serialize(&mut buffer).unwrap();
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
     // ------------------------------------------------------------------------
     // Composite Accounts
     // ------------------------------------------------------------------------

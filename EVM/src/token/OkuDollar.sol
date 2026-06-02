@@ -267,7 +267,12 @@ contract OkuDollar is
         return (_getOkuDollarStorage().totalUsdShares * usdMultiplier()) / Constants.PRECISION;
     }
 
-    function balanceOf(address account) public view override(ERC20Upgradeable, IOkuDollar) returns (uint256) {
+    function balanceOf(address account)
+        public
+        view
+        override(ERC20Upgradeable, IOkuDollar)
+        returns (uint256)
+    {
         return (_getOkuDollarStorage().usdShares[account] * usdMultiplier()) / Constants.PRECISION;
     }
 

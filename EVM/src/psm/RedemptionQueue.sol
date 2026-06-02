@@ -180,7 +180,10 @@ contract RedemptionQueue is
     ///      the same rate (consistent within a single block; saves gas).
     ///      Stuck entries (e.g., USDC-blacklisted users) should be cleared with
     ///      `rescueQueueEntry` before processing the surrounding range.
-    function processQueue(uint256 startIndex, uint256 endIndex)
+    function processQueue(
+        uint256 startIndex,
+        uint256 endIndex
+    )
         external
         nonReentrant
         onlyRole(Roles.QUEUE_PSM)

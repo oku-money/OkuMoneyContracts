@@ -119,8 +119,12 @@ pub fn bridge_usd_oku(
     let oku_money_mint_info = ctx.accounts.oku_money_mint.to_account_info();
     let user_oku_money_ata_info = ctx.accounts.user_oku_money_ata.to_account_info();
 
-    // Snapshot user's OkuMoney balance BEFORE unwrap to compute delta
+    // Snapshot user's OkuMoney AND usdOku balances BEFORE unwrap so the
+    // event emits the actually-observed deltas (EVM parity with
+    // LitePSM._redeemUsdOku post-fix). The usdOku delta also gives the
+    // canonical "shares burned" value to log instead of the nominal arg.
     let balance_before = ctx.accounts.user_oku_money_ata.amount;
+    let usd_oku_balance_before = ctx.accounts.user_usd_oku_ata.amount;
 
     // Step 1: Unwrap usdOku -> OkuMoney via oku-dollar vault CPI
     // Note: psm_config is used for both vault (reads oku_m_price) and PSM (as config)
@@ -144,11 +148,15 @@ pub fn bridge_usd_oku(
 
     // Step 2: Bridge burn only the OkuMoney received from unwrap (not total balance)
     ctx.accounts.user_oku_money_ata.reload()?;
+    ctx.accounts.user_usd_oku_ata.reload()?;
     let oku_money_received = ctx
         .accounts
         .user_oku_money_ata
         .amount
         .checked_sub(balance_before)
+        .ok_or(RouterError::MathError)?;
+    let usd_oku_burned = usd_oku_balance_before
+        .checked_sub(ctx.accounts.user_usd_oku_ata.amount)
         .ok_or(RouterError::MathError)?;
 
     // Slippage protection
@@ -178,9 +186,13 @@ pub fn bridge_usd_oku(
         destination_chain,
     )?;
 
+    // EVM parity: emit the ACTUAL shares burned (post-snapshot delta) rather
+    // than the nominal `usd_oku_shares` argument, so the log reflects on-chain
+    // truth if rounding ever consumes a tail unit. Matches the EVM
+    // `_redeemUsdOku` fix that emits `received` instead of the request.
     emit!(BridgeUsdOkuEvent {
         user: ctx.accounts.user.key(),
-        usd_oku_shares,
+        usd_oku_shares: usd_oku_burned,
         oku_m_amount: oku_money_received,
         destination_chain,
         recipient,
@@ -380,8 +392,15 @@ pub fn redeem_usd_oku(
     let user_usd_oku_ata_info = ctx.accounts.user_usd_oku_ata.to_account_info();
     let reserve_vault_info = ctx.accounts.reserve_vault.to_account_info();
 
-    // Snapshot user's OkuMoney balance BEFORE unwrap
+    // Snapshot user balances BEFORE unwrap so we can emit the ACTUAL amounts
+    // delivered/burned rather than the nominal CPI arguments. Matches the
+    // EVM `_redeemUsdOku` post-fix pattern from LitePSM.sol:452 which emits
+    // `received` (the post-`transferFrom` delta) instead of the requested
+    // `usdAmount`. On SVM the `unwrap` CPI takes a literal share count so
+    // there is no rounding asymmetry to defend against, but emitting the
+    // measured deltas is the correct event-design discipline regardless.
     let oku_money_balance_before = ctx.accounts.user_oku_money_ata.amount;
+    let usd_oku_balance_before = ctx.accounts.user_usd_oku_ata.amount;
 
     // Step 1: CPI to vault unwrap — usdOku -> OkuMoney
     let unwrap_cpi_ctx = CpiContext::new(
@@ -402,13 +421,17 @@ pub fn redeem_usd_oku(
     );
     oku_dollar::cpi::unwrap(unwrap_cpi_ctx, usd_oku_shares)?;
 
-    // Reload to get actual OkuMoney received
+    // Reload to get actual amounts: OkuMoney credited and usdOku burned.
     ctx.accounts.user_oku_money_ata.reload()?;
+    ctx.accounts.user_usd_oku_ata.reload()?;
     let oku_money_received = ctx
         .accounts
         .user_oku_money_ata
         .amount
         .checked_sub(oku_money_balance_before)
+        .ok_or(RouterError::MathError)?;
+    let usd_oku_burned = usd_oku_balance_before
+        .checked_sub(ctx.accounts.user_usd_oku_ata.amount)
         .ok_or(RouterError::MathError)?;
 
     // Slippage protection on unwrap output
@@ -441,9 +464,15 @@ pub fn redeem_usd_oku(
     // Note: The final USDC amount and queue status are determined by the PSM.
     // The router only emits what it can accurately determine. Check PSM events
     // (RedeemEvent or RedemptionQueuedEvent) for the final redemption details.
+    //
+    // EVM parity: emit the ACTUAL shares burned (post-snapshot delta) and the
+    // ACTUAL OkuMoney intermediate (post-snapshot delta), not the nominal
+    // `usd_oku_shares` arg. See LitePSM._redeemUsdOku post-fix at
+    // EVM/src/psm/LitePSM.sol:452 which emits `received` rather than the
+    // requested `usdAmount`.
     emit!(RedeemUsdOkuEvent {
         user: ctx.accounts.user.key(),
-        usd_oku_shares,
+        usd_oku_shares: usd_oku_burned,
         oku_m_intermediate: oku_money_received,
     });
 

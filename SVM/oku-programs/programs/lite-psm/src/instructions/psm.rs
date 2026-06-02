@@ -21,7 +21,24 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
 use anchor_spl::token::spl_token::state::Account as SplTokenAccount;
 use anchor_spl::token_interface;
-use solana_sysvar::program_stubs::sol_remaining_compute_units;
+// NOTE: We deliberately do NOT import `sol_remaining_compute_units` here.
+//
+// Earlier versions of this crate used it inside `process_queue` as a
+// defence-in-depth early-exit when the CU budget was running low. That
+// syscall is gated behind the `enable_remaining_compute_units_syscall`
+// feature, which is currently INACTIVE on devnet (feature id
+// 5TuppMutoyzhUSfuYdhgzD47F92GL1g89KpCZQKqedxP). The CLI's pre-deploy
+// ELF validator rejects any program that imports it on a cluster where
+// the feature isn't activated, with:
+//   "ELF error: Unresolved symbol (sol_remaining_compute_units) ..."
+//
+// The static `MAX_BATCH_ENTRIES` cap below already bounds worst-case CU
+// consumption: 50 entries × ~22 K CU/entry = ~1.1 M CU, well within the
+// 1.4 M raised cap. The dynamic check was strictly belt-and-suspenders,
+// so removing it preserves all real safety guarantees and unblocks
+// devnet upgrades. If/when the feature gate activates on devnet+mainnet
+// the dynamic check can be reintroduced via
+// `solana_program::compute_units::sol_remaining_compute_units`.
 
 /// Mint OkuMoney with USDC (price-aware)
 ///
@@ -324,28 +341,21 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
 /// committed queue entries and has no such asymmetry.
 /// Hard upper bound on entries `process_queue` will walk in a single tx.
 ///
-/// This is a safety ceiling — the dynamic CU check (`PROCESS_QUEUE_CU_FLOOR`
-/// below) will typically be the binding constraint at runtime. The static cap
-/// ensures a buggy or malicious orchestrator cannot construct a tx that always
-/// reverts mid-batch regardless of budget, and gives a predictable worst-case
-/// account-list size for SDK consumers building the `remaining_accounts` slice.
+/// This is the SOLE CU-budget safety: each iteration burns two CPIs
+/// (Token-2022 burn + SPL transfer), a price multiply, and an AccountLoader
+/// load + store, empirically ~18–22 K CU/entry. 50 entries × 22 K = 1.1 M CU,
+/// well under the 1.4 M raised cap orchestrators set on this instruction.
 ///
-/// At Phase 13b's 200-entry queue cap the raised 1.4 M CU budget fits ~70
-/// entries empirically; 50 keeps us well under that with headroom for
-/// Token-2022 transfer-hook overhead.
+/// At Phase 13b's 200-entry queue cap, this static ceiling also bounds the
+/// `remaining_accounts` slice SDK consumers must build, giving a predictable
+/// worst-case account-list size.
+///
+/// A dynamic `sol_remaining_compute_units()` early-exit was removed because
+/// the syscall is gated behind a feature (`enable_remaining_compute_units_
+/// syscall`) that is currently inactive on devnet — see the comment at the
+/// top of this file. The static cap alone is sufficient for the CU-bound
+/// safety property; the dynamic check was strict belt-and-suspenders.
 pub const MAX_BATCH_ENTRIES: u32 = 50;
-
-/// Minimum CU remaining before the batch loop exits early.
-///
-/// Each iteration burns two CPIs (Token-2022 burn + SPL transfer), a Pyth-free
-/// price multiply, and an AccountLoader load + store. Empirically this runs
-/// ~18–22 K CU per entry. 30 K gives ~10 K of headroom above the per-entry
-/// cost for the post-loop event emit, account writeback, and any unexpected
-/// overhead from future Token-2022 extensions (e.g. a transfer hook added
-/// later). At 1.4 M CU total, the floor will only trigger on the last 1–2
-/// entries of a maximum-size batch — it is not a meaningful throughput limiter
-/// under normal conditions.
-pub const PROCESS_QUEUE_CU_FLOOR: u64 = 30_000;
 
 pub fn process_queue<'info>(
     ctx: Context<'info, ProcessQueue<'info>>,
@@ -387,16 +397,11 @@ pub fn process_queue<'info>(
     let clock = Clock::get()?;
 
     'batch: while processed < effective_max {
-        // Exit early if CU budget is running low. Two CPIs + account writes
-        // per entry consume ~18–22 K CU; the floor of 30 K leaves headroom
-        // for post-loop cleanup (event emit, account writeback) and any
-        // overhead from Token-2022 extensions that may be added in future.
-        // This is a defence-in-depth check — the static MAX_BATCH_ENTRIES=50
-        // cap means we should never come close to budget exhaustion under
-        // normal conditions.
-        if sol_remaining_compute_units() < PROCESS_QUEUE_CU_FLOOR {
-            break 'batch;
-        }
+        // CU-budget safety is enforced exclusively by the static
+        // `MAX_BATCH_ENTRIES` cap. See the syscall comment near the top of
+        // this file for why we no longer call `sol_remaining_compute_units`.
+        // 50 entries × ~22 K CU/entry ≈ 1.1 M CU, within the 1.4 M raised
+        // budget that orchestrators set on this instruction.
 
         // Per-iteration: read head + entry under a scoped read borrow,
         // then drop the borrow before any CPI. This is the load-bearing

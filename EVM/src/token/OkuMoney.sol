@@ -165,7 +165,10 @@ contract OkuMoney is
         return super.totalSupply();
     }
 
-    function transfer(address to, uint256 amount)
+    function transfer(
+        address to,
+        uint256 amount
+    )
         public
         override(ERC20Upgradeable, IOkuMoney)
         returns (bool)

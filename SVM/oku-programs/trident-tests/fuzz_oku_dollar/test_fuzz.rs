@@ -253,6 +253,86 @@ impl FuzzTest {
     }
 
     // ----------------------------------------------------------------
+    // FLOW: update_usd_multiplier — exercise the rebasing path so the
+    // existing wrap/unwrap round-trip invariant (flow_wrap_unwrap_roundtrip)
+    // is no longer always evaluated at `usd_multiplier == PRECISION`.
+    //
+    // Closes the gap noted in the end-of-iteration TODO below: without
+    // this flow the multiplier never drifts off PRECISION, so any
+    // rounding-asymmetry regression analogous to the EVM
+    // `InsufficientBalance()` redeem bug (LitePSM.sol:452 pre-fix) would
+    // be invisible to the fuzzer.
+    //
+    // The bump pattern is intentionally diverse (single-bps perturbations
+    // up through multi-percent moves) so short-term and long-term yield
+    // trajectories are both represented within a single iteration. The
+    // call frequently reverts with `InsufficientCollateral` until reserves
+    // are topped up — that is expected; we ignore the error.
+    // ----------------------------------------------------------------
+    #[flow]
+    fn flow_update_usd_multiplier(&mut self) {
+        // Bias toward small moves (the regime where the EVM bug surfaced
+        // — Sepolia was at `1_000_000_001_546_176_000`, barely above
+        // PRECISION) but include occasional larger moves for breadth.
+        let bps_bucket = self.trident.random_from_range(0u64..100u64);
+        let bps_inc: u64 = match bps_bucket {
+            0..=39 => self.trident.random_from_range(1u64..10u64), // ~40% single-digit bps
+            40..=74 => self.trident.random_from_range(10u64..100u64), // ~35% double-digit bps
+            75..=94 => self.trident.random_from_range(100u64..1000u64), // ~20% 1%-10%
+            _ => self.trident.random_from_range(1000u64..5000u64),     // ~5% large moves
+        };
+        // target = last * (10_000 + bps) / 10_000
+        let target = self
+            .last_usd_multiplier
+            .saturating_mul(10_000 + bps_inc)
+            / 10_000;
+        // Never decrease (the program rejects this with MultiplierCannotDecrease)
+        // and never exceed the program's MAX_USD_MULTIPLIER bound.
+        let target = target.min(MAX_USD_MULTIPLIER).max(self.last_usd_multiplier);
+
+        let usd_rebaser = self
+            .fuzz_accounts
+            .usd_rebaser
+            .insert(&mut self.trident, None);
+        let config = self.config_pda();
+        let reserve_vault = self
+            .fuzz_accounts
+            .reserve_vault
+            .insert(&mut self.trident, None);
+        let usd_oku_mint = self
+            .fuzz_accounts
+            .wokusd_mint
+            .insert(&mut self.trident, None);
+        let psm_config = self
+            .fuzz_accounts
+            .psm_config
+            .insert(&mut self.trident, None);
+
+        let ix = UpdateUsdMultiplierInstruction::data(UpdateUsdMultiplierInstructionData::new(
+            target,
+        ))
+        .accounts(UpdateUsdMultiplierInstructionAccounts::new(
+            usd_rebaser,
+            config,
+            reserve_vault,
+            usd_oku_mint,
+            psm_config,
+        ));
+
+        let result = self
+            .trident
+            .process_transaction(&[ix.instruction()], Some("UpdateUsdMultiplier"));
+
+        // On success, advance the local mirror of the multiplier so the
+        // end-of-iteration monotonicity check (TODO below) can rely on it.
+        // On failure (the common case, e.g. `InsufficientCollateral`), leave
+        // it unchanged.
+        if result.is_success() {
+            self.last_usd_multiplier = target;
+        }
+    }
+
+    // ----------------------------------------------------------------
     // FLOW 4: pause / unpause toggle
     // ----------------------------------------------------------------
     #[flow]
@@ -274,11 +354,20 @@ impl FuzzTest {
     }
 
     /// End of iteration invariants.
+    ///
+    /// `flow_update_usd_multiplier` now drifts `usd_multiplier` off PRECISION
+    /// across an iteration, so the wrap/unwrap round-trip invariant in
+    /// `flow_wrap_unwrap_roundtrip` is exercised at elevated multipliers
+    /// (closing the gap that hid the EVM `InsufficientBalance()` redeem
+    /// regression — see LitePSM.sol:452 pre-fix). `last_usd_multiplier`
+    /// tracks the highest successfully-applied target so future state-aware
+    /// invariants can reference it.
+    ///
     /// TODO: deserialize OkuDollarConfig and assert:
     ///   1. usd_multiplier >= last_usd_multiplier (non-decreasing)
     ///   2. usd_multiplier <= MAX_USD_MULTIPLIER
     ///   3. reserve_vault_balance * oku_m_price / PRECISION >=
-    ///      wokusd_supply * usd_multiplier / PRECISION * min_collateral_ratio / PRECISION
+    ///      usd_oku_supply * usd_multiplier / PRECISION * min_collateral_ratio / PRECISION
     ///   4. dead_shares_ata balance >= MINIMUM_LIQUIDITY once any wrap has succeeded
     #[end]
     fn end(&mut self) {

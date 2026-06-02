@@ -27,13 +27,19 @@ pub struct InitializeEvent {
 
 /// Emitted when usdOku is bridged cross-chain (unwrap + burn).
 /// For authoritative bridge data (nonce, fee, dollar_value), check PSM's BridgeBurnEvent.
+///
+/// Parity with the EVM `UsdOkuRedeemed` post-fix shape: the fields reflect
+/// the values ACTUALLY observed on-chain after rounding (the share count
+/// burned by the vault and the OkuMoney delta credited to the user) rather
+/// than the nominal request arguments. This guarantees event truth even if
+/// upstream rounding policy changes.
 #[event]
 pub struct BridgeUsdOkuEvent {
     /// User who initiated the bridge
     pub user: Pubkey,
-    /// OkuDollar shares unwrapped
+    /// OkuDollar shares actually unwrapped (burned from user's usdOku ATA)
     pub usd_oku_shares: u64,
-    /// OkuMoney amount after unwrap (burned for bridge)
+    /// OkuMoney amount actually received from unwrap (burned for bridge)
     pub oku_m_amount: u64,
     /// Destination chain ID
     pub destination_chain: u16,
@@ -57,19 +63,32 @@ pub struct BridgeOkuMEvent {
 
 /// Emitted when usdOku is minted from USDC (PSM mint + vault wrap).
 /// For authoritative mint data (dollar_value), check PSM's MintEvent and Vault's WrapEvent.
+///
+/// Parity with the EVM `UsdOkuMinted` post-fix shape: `oku_m_intermediate`
+/// and `usd_oku_shares` reflect the post-snapshot deltas measured on the
+/// user's ATAs (the actual amounts credited after rounding), not the
+/// nominal CPI arguments.
 #[event]
 pub struct MintUsdOkuEvent {
     /// User who minted
     pub user: Pubkey,
-    /// USDC deposited (6 decimals)
+    /// USDC deposited (6 decimals) — nominal input
     pub usdc_amount: u64,
-    /// Intermediate OkuMoney amount
+    /// Intermediate OkuMoney amount actually received from PSM mint
     pub oku_m_intermediate: u64,
-    /// OkuDollar shares minted
+    /// OkuDollar shares actually credited to the user (post-snapshot delta)
     pub usd_oku_shares: u64,
 }
 
 /// Emitted when usdOku is redeemed for USDC (vault unwrap + PSM redeem).
+///
+/// Parity with the EVM `UsdOkuRedeemed` post-fix shape: `usd_oku_shares` is
+/// the share count ACTUALLY burned from the user's usdOku ATA (measured as
+/// the pre/post-unwrap balance delta), and `oku_m_intermediate` is the
+/// OkuMoney delta ACTUALLY credited from the unwrap CPI. This mirrors the
+/// EVM contract emitting `received` rather than the requested `usdAmount`
+/// — the on-chain truth matches the log even if rounding consumes a tail
+/// unit somewhere in the call stack.
 ///
 /// NOTE: The final USDC amount and queue status are determined by the PSM,
 /// not the router. Check PSM's RedeemEvent or RedemptionQueuedEvent for details.
@@ -77,9 +96,9 @@ pub struct MintUsdOkuEvent {
 pub struct RedeemUsdOkuEvent {
     /// User who redeemed
     pub user: Pubkey,
-    /// OkuDollar shares burned
+    /// OkuDollar shares actually burned (post-snapshot delta on user_usd_oku_ata)
     pub usd_oku_shares: u64,
-    /// Intermediate OkuMoney amount
+    /// Intermediate OkuMoney amount actually received from unwrap
     pub oku_m_intermediate: u64,
 }
 

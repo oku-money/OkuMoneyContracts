@@ -49,4 +49,31 @@ pub struct AccountAddresses {
     pub pauser: AddressStorage,
 
     pub unpauser: AddressStorage,
+
+    // -----------------------------------------------------------------------
+    // Added for the elevated-multiplier redeem coverage flows
+    // (`flow_redeem_usd_oku`, `flow_update_usd_multiplier`) — parity with
+    // the EVM `LitePSMRebasingRedeem` post-fix fuzz suite.
+    // -----------------------------------------------------------------------
+    /// usdOku rebaser signer used by `flow_update_usd_multiplier`.
+    pub usd_rebaser: AddressStorage,
+
+    /// USDC mint — read by `redeem_usd_oku` (the PSM uses it for payout).
+    pub usdc_mint: AddressStorage,
+
+    /// User's USDC account — destination of the redeem payout.
+    pub user_usdc_ata: AddressStorage,
+
+    /// Reserve vault token account.
+    pub reserve_vault: AddressStorage,
+
+    /// PSM redemption queue PDA — required when the redeem path falls
+    /// into the queued branch (vault USDC buffer insufficient).
+    pub redemption_queue: AddressStorage,
+
+    /// PSM USDC vault.
+    pub vault_usdc: AddressStorage,
+
+    /// PSM OkuMoney escrow.
+    pub vault_oku_money: AddressStorage,
 }

@@ -15,7 +15,7 @@
  *      upgrade record. Any diff → warn and require confirmation (or auto-proceed
  *      when stdin is not a TTY, e.g. CI).
  *   6. SOL balance check: warn if the wallet may run out of funds mid-upload.
- *   7. Deploy (skipped in DRY_RUN mode).
+ *   7. Deploy (skipped when `--dry-run` is set).
  *   8. Post-upgrade ELF verification: re-read ProgramData and assert SHA-256.
  *   9. Post-upgrade state snapshot + invariant diff.
  *  10. Append UpgradeRecord to `deployments/<network>.json::upgrades`.
@@ -29,16 +29,16 @@
  * Usage:
  *
  *   # Upgrade all three programs on devnet
- *   TARGETS=LitePsm,OkuDollar,OkuBridgeRouter npm run upgrade -- --network=devnet
+ *   TARGETS=LitePsm,OkuDollar,OkuBridgeRouter npm run upgrade:devnet
  *
  *   # Single target
- *   TARGETS=OkuBridgeRouter npm run upgrade -- --network=devnet
+ *   TARGETS=OkuBridgeRouter npm run upgrade:devnet
  *
  *   # Dry run — shows plan + IDL diff without broadcasting
- *   TARGETS=LitePsm,OkuDollar DRY_RUN=true npm run upgrade -- --network=devnet
+ *   TARGETS=LitePsm,OkuDollar npm run upgrade:devnet -- --dry-run
  *
  *   # Force deploy even if ELF hasn't changed (useful for CI smoke-test)
- *   TARGETS=LitePsm SKIP_BYTECODE_CHECK=true npm run upgrade -- --network=devnet
+ *   TARGETS=LitePsm SKIP_BYTECODE_CHECK=true npm run upgrade:devnet
  *
  * Audit trail:
  *   Each run appends an UpgradeRecord to `deployments/<network>.json::upgrades`
@@ -367,19 +367,26 @@ async function upgradeOne(
       const postState = await reader(programs, programId);
       printStateTable(preState, postState);
 
-      const skipRecord: UpgradeRecord = {
-        program:      name,
-        programId:    programId.toBase58(),
-        oldElfSize:   onChain.size,
-        newElfSize:   onChain.size,
-        oldElfSha256: onChain.sha256,
-        newElfSha256: onChain.sha256,
-        txSignature:  '<bytecode-unchanged>',
-        timestamp:    new Date().toISOString(),
-        deployer:     walletPubkey.toBase58(),
-      };
-      appendUpgradeRecord(networkName, skipRecord);
-      logger.info(`  Recorded skip in deployments/${networkName}.json`);
+      // Only persist a skip record when running for real — dry-runs must not
+      // mutate the on-disk audit log (otherwise repeated dry-runs accumulate
+      // noise records that future IDL-diff comparisons would have to walk).
+      if (!isDryRun()) {
+        const skipRecord: UpgradeRecord = {
+          program:      name,
+          programId:    programId.toBase58(),
+          oldElfSize:   onChain.size,
+          newElfSize:   onChain.size,
+          oldElfSha256: onChain.sha256,
+          newElfSha256: onChain.sha256,
+          txSignature:  '<bytecode-unchanged>',
+          timestamp:    new Date().toISOString(),
+          deployer:     walletPubkey.toBase58(),
+        };
+        appendUpgradeRecord(networkName, skipRecord);
+        logger.info(`  Recorded skip in deployments/${networkName}.json`);
+      } else {
+        logger.info(`  --dry-run set — not recording skip in deployments/${networkName}.json`);
+      }
 
       return {
         name,
@@ -451,7 +458,7 @@ async function upgradeOne(
   // ── 8. Dry-run exit ───────────────────────────────────────────────────────
   if (isDryRun()) {
     logger.info(
-      `  DRY_RUN=true — would deploy ${localElf.size} bytes (sha256: ${localElf.sha256.slice(0, 16)}…)`
+      `  --dry-run set — would deploy ${localElf.size} bytes (sha256: ${localElf.sha256.slice(0, 16)}…)`
     );
     return {
       name,
@@ -496,10 +503,16 @@ async function upgradeOne(
   });
 
   // ── 11. Post-upgrade ELF verification ────────────────────────────────────
+  //
+  // Pass `expectedSize = localElf.size` so the on-chain hash is computed
+  // over exactly the prefix the new ELF occupies. BPFLoaderUpgradeable does
+  // NOT shrink the ProgramData account when a smaller ELF replaces a larger
+  // one — without the truncation the trailing (zeroed) bytes of the old
+  // ELF would contaminate the hash and produce a false-positive mismatch.
   logger.info(`  Verifying on-chain ELF after upgrade...`);
   let verifiedSha256 = localElf.sha256;
   try {
-    const postElf = await readOnChainElf(connection, programId);
+    const postElf = await readOnChainElf(connection, programId, localElf.size);
     if (postElf.sha256 !== localElf.sha256) {
       throw new Error(
         `Post-upgrade ELF mismatch: on-chain sha256 ${postElf.sha256} ` +
@@ -648,7 +661,7 @@ async function main() {
 
   const targets = parseTargets();
   logger.info(`Targets: ${targets.join(', ')}`);
-  if (isDryRun()) logger.warning(`DRY_RUN=true — no transactions will be broadcast.`);
+  if (isDryRun()) logger.warning(`--dry-run set — no transactions will be broadcast.`);
 
   // Resolve provider + signer.
   const provider = createProvider(network);

@@ -98,6 +98,149 @@
       "txSignature": "<bytecode-unchanged>",
       "timestamp": "2026-05-26T22:49:16.489Z",
       "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
+    },
+    {
+      "program": "LitePsm",
+      "programId": "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N",
+      "oldElfSize": 795600,
+      "newElfSize": 795600,
+      "oldElfSha256": "3cb7e6bbe2fea08aa538868168b8351139fa007bad8f939e8442cac204c95732",
+      "newElfSha256": "3cb7e6bbe2fea08aa538868168b8351139fa007bad8f939e8442cac204c95732",
+      "txSignature": "<bytecode-unchanged>",
+      "timestamp": "2026-06-02T16:49:21.124Z",
+      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
+    },
+    {
+      "program": "OkuDollar",
+      "programId": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy",
+      "oldElfSize": 422032,
+      "newElfSize": 421688,
+      "oldElfSha256": "3f058b682bbcbe125894635f4a639ba9b692c188a532c8228b3ae70bcc931770",
+      "newElfSha256": "fcb663f93edebe4fc8875a8653558423ce1befb8122b23cb0c369ab42695bfc9",
+      "txSignature": "4eDGhXBfzeSNf8r3LFBWD5ztwdbxn3GXGtSVyQ8cnc1Yo8RmaGjK1yxd1Hr2h5P1VrR66jqYVfCHVFkDsMNSoPqu",
+      "timestamp": "2026-06-02T17:12:30.495Z",
+      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
+      "idlSnapshot": {
+        "sha256": "4496574e01b88381d188acdab7f3627eef3b631ff929d2a4964e0a5519c4af41",
+        "accountTypes": {
+          "OkuDollarConfig": [
+            {
+              "name": "bump",
+              "type": "u8"
+            },
+            {
+              "name": "role_admin",
+              "type": "pubkey"
+            },
+            {
+              "name": "pauser",
+              "type": "pubkey"
+            },
+            {
+              "name": "unpauser",
+              "type": "pubkey"
+            },
+            {
+              "name": "usd_rebaser",
+              "type": "pubkey"
+            },
+            {
+              "name": "reserve_manager",
+              "type": "pubkey"
+            },
+            {
+              "name": "oku_money_mint",
+              "type": "pubkey"
+            },
+            {
+              "name": "usd_oku_mint",
+              "type": "pubkey"
+            },
+            {
+              "name": "reserve_vault",
+              "type": "pubkey"
+            },
+            {
+              "name": "psm_config",
+              "type": "pubkey"
+            },
+            {
+              "name": "usd_multiplier",
+              "type": "u64"
+            },
+            {
+              "name": "usd_last_update_time",
+              "type": "i64"
+            },
+            {
+              "name": "last_yield_distribution_slot",
+              "type": "u64"
+            },
+            {
+              "name": "min_collateral_ratio",
+              "type": "u64"
+            },
+            {
+              "name": "is_paused",
+              "type": "bool"
+            },
+            {
+              "name": "pending_role_admin",
+              "type": "pubkey"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "program": "OkuBridgeRouter",
+      "programId": "GAjPAbq7sqFNzfnyhEAxBD9ofTPSTk4EtjFpq45BjRWb",
+      "oldElfSize": 410072,
+      "newElfSize": 410408,
+      "oldElfSha256": "f7ebe96fa66bbd6b1c1d67b8d37fe7eaeece5393a562acc5daa2a530be484d64",
+      "newElfSha256": "8451017131ecfc589ff89341c730cb00744a1a44ea147e553e2ddc86cc6e7c14",
+      "txSignature": "ki6h6JDmKGaMuggTjQXWV49w3xvwfPfJY2f5Wn3Q4Cu9Ppnyvanwq2YJDKYfNzXM19KnVPBgwKVmLJHHbKuY67g",
+      "timestamp": "2026-06-02T17:36:41.256Z",
+      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
+      "idlSnapshot": {
+        "sha256": "6f5d569ec1d4f32a10c34a3628ff6fde5ccb9f0df627ce2b060782fcc4fe879f",
+        "accountTypes": {
+          "RouterConfig": [
+            {
+              "name": "bump",
+              "type": "u8"
+            },
+            {
+              "name": "role_admin",
+              "type": "pubkey"
+            },
+            {
+              "name": "pauser",
+              "type": "pubkey"
+            },
+            {
+              "name": "unpauser",
+              "type": "pubkey"
+            },
+            {
+              "name": "is_paused",
+              "type": "bool"
+            },
+            {
+              "name": "oku_money_mint",
+              "type": "pubkey"
+            },
+            {
+              "name": "usd_oku_mint",
+              "type": "pubkey"
+            },
+            {
+              "name": "pending_role_admin",
+              "type": "pubkey"
+            }
+          ]
+        }
+      }
     }
   ]
 }

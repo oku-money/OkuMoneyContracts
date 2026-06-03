@@ -99,7 +99,6 @@ async function main() {
     programs: {
       litePsm: programIds.litePsm.toBase58(),
       okuDollarProgram: programIds.okuDollar.toBase58(),
-      okuBridgeRouter: programIds.okuBridgeRouter.toBase58(),
     },
   });
 
@@ -122,14 +121,13 @@ async function main() {
     logger.warning('Update Anchor.toml manually:');
     logger.log('');
     logger.log(`[programs.${tomlSection}]`);
-    logger.log(`lite_psm          = "${programIds.litePsm.toBase58()}"`);
-    logger.log(`oku_dollar        = "${programIds.okuDollar.toBase58()}"`);
-    logger.log(`oku_bridge_router = "${programIds.okuBridgeRouter.toBase58()}"`);
+    logger.log(`lite_psm   = "${programIds.litePsm.toBase58()}"`);
+    logger.log(`oku_dollar = "${programIds.okuDollar.toBase58()}"`);
     logger.log('');
     logger.info(
       'Until Anchor.toml matches, the [addressBook] mismatch warning will'
     );
-    logger.info('fire on every admin/bridge script invocation.');
+    logger.info('fire on every admin script invocation.');
     logger.log('');
   }
 

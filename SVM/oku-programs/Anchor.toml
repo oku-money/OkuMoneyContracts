@@ -8,12 +8,10 @@ skip-lint = false
 
 [programs.devnet]
 lite_psm = "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N"
-oku_bridge_router = "GAjPAbq7sqFNzfnyhEAxBD9ofTPSTk4EtjFpq45BjRWb"
 oku_dollar = "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy"
 
 [programs.localnet]
 lite_psm = "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N"
-oku_bridge_router = "GAjPAbq7sqFNzfnyhEAxBD9ofTPSTk4EtjFpq45BjRWb"
 oku_dollar = "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy"
 
 [provider]

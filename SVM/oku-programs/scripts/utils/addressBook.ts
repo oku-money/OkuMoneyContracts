@@ -96,7 +96,6 @@ export interface DeploymentAddresses {
   programs: {
     litePsm?: string;
     okuDollarProgram?: string;
-    okuBridgeRouter?: string;
   };
   pdas: {
     psmConfig?: string;
@@ -107,7 +106,6 @@ export interface DeploymentAddresses {
     vaultOkusd?: string;
     vaultOkuMoney?: string;
     bridgeConfig?: string;
-    routerConfig?: string;
   };
   nonces?: Record<number, string>; // chain_id -> nonce PDA
   authorities?: {
@@ -116,16 +114,6 @@ export interface DeploymentAddresses {
     orchestrator?: string;
     bridgeOrchestrator?: string;
     feeRecipient?: string;
-  };
-  /**
-   * Address Lookup Tables (Phase 8.6). The router ALT collapses ~10
-   * common pubkeys into 1-byte indices so `mint_usd_oku`/`redeem_usd_oku`
-   * fit under the v0 tx-size ceiling. Created by
-   * `scripts/admin/setup-router-alt.ts`. SDK consumers must include the
-   * router ALT in every router CPI tx.
-   */
-  addressLookupTables?: {
-    router?: string;
   };
   /**
    * Per-upgrade audit trail appended by `scripts/upgrade/index.ts`.
@@ -204,9 +192,8 @@ function anchorSectionFor(network: NetworkName): 'devnet' | 'localnet' | 'mainne
  *
  * Snake-case → camelCase mapping between Anchor.toml's keys and the
  * `deployments/*.json` `programs` keys:
- *   lite_psm           ↔  litePsm
- *   oku_dollar         ↔  okuDollarProgram
- *   oku_bridge_router  ↔  okuBridgeRouter
+ *   lite_psm    ↔  litePsm
+ *   oku_dollar  ↔  okuDollarProgram
  */
 export function diffDeploymentProgramIds(
   network: NetworkName,
@@ -217,7 +204,6 @@ export function diffDeploymentProgramIds(
   const map: Array<[string, keyof DeploymentAddresses['programs']]> = [
     ['lite_psm', 'litePsm'],
     ['oku_dollar', 'okuDollarProgram'],
-    ['oku_bridge_router', 'okuBridgeRouter'],
   ];
   const diffs: { key: string; fromFile: string; fromAnchorToml: string }[] = [];
   for (const [tomlKey, fileKey] of map) {
@@ -345,10 +331,6 @@ export function saveDeployment(
     pdas: { ...existing.pdas, ...addresses.pdas },
     nonces: { ...existing.nonces, ...addresses.nonces },
     authorities: { ...existing.authorities, ...addresses.authorities },
-    addressLookupTables: {
-      ...existing.addressLookupTables,
-      ...addresses.addressLookupTables,
-    },
   };
 
   fs.writeFileSync(filepath, JSON.stringify(updated, null, 2));

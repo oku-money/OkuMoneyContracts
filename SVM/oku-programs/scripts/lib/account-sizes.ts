@@ -29,10 +29,6 @@ export const BRIDGE_NONCE_LEN = 20;           // const _: () = assert!(BridgeNon
 // oku_dollar — programs/oku-dollar/src/state.rs
 export const OKU_DOLLAR_CONFIG_LEN = 330;    // const _: () = assert!(OkuDollarConfig::LEN == 330);
 
-// oku_bridge_router — programs/oku-bridge-router/src/state.rs
-// (Verify against the compile-time assert at the bottom of that file.)
-export const ROUTER_CONFIG_LEN = 170;
-
 // PDA replay markers (lite_psm)
 export const PROCESSED_REQUEST_LEN = 89;     // 8 + 1 + 32 + 8 + 8 + 32 = 89
 export const PENDING_REFUND_LEN = 121;       // 8 + 1 + 32 + 32 + 8 + 8 + 32 = 121

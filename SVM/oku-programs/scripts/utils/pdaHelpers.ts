@@ -2,8 +2,7 @@
  * PDA derivation helpers
  *
  * All PDA seeds must be kept in sync with the corresponding Rust `SEED` constants
- * in programs/lite-psm/src/state.rs, programs/oku-dollar/src/state.rs, and
- * programs/oku-bridge-router/src/state.rs.
+ * in programs/lite-psm/src/state.rs and programs/oku-dollar/src/state.rs.
  */
 
 import { PublicKey } from "@solana/web3.js";
@@ -50,11 +49,6 @@ export function deriveBridgeNoncePDA(
     [Buffer.from("bridge_nonce"), chainIdBuffer],
     programId
   );
-}
-
-/** Derive router config PDA. Seeds: ["router_config"] */
-export function deriveRouterConfigPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("router_config")], programId);
 }
 
 /**

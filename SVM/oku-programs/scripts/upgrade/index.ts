@@ -28,11 +28,11 @@
  *
  * Usage:
  *
- *   # Upgrade all three programs on devnet
- *   TARGETS=LitePsm,OkuDollar,OkuBridgeRouter npm run upgrade:devnet
+ *   # Upgrade both programs on devnet
+ *   TARGETS=LitePsm,OkuDollar npm run upgrade:devnet
  *
  *   # Single target
- *   TARGETS=OkuBridgeRouter npm run upgrade:devnet
+ *   TARGETS=LitePsm npm run upgrade:devnet
  *
  *   # Dry run — shows plan + IDL diff without broadcasting
  *   TARGETS=LitePsm,OkuDollar npm run upgrade:devnet -- --dry-run
@@ -88,7 +88,7 @@ interface UpgradeTarget {
   /** Filesystem key (matches target/deploy/<programKey>.so and *-keypair.json). */
   programKey: string;
   /** Key in deployments/<network>.json::programs. */
-  bookKey: 'litePsm' | 'okuDollarProgram' | 'okuBridgeRouter';
+  bookKey: 'litePsm' | 'okuDollarProgram';
   /** Key in STATE_READERS. */
   stateKey: string;
   /** Human-readable display name. */
@@ -107,12 +107,6 @@ const UPGRADE_TARGETS: Record<string, UpgradeTarget> = {
     bookKey:    'okuDollarProgram',
     stateKey:   'OkuDollar',
     idlFile:    'oku_dollar.json',
-  },
-  OkuBridgeRouter: {
-    programKey: 'oku_bridge_router',
-    bookKey:    'okuBridgeRouter',
-    stateKey:   'OkuBridgeRouter',
-    idlFile:    'oku_bridge_router.json',
   },
 };
 
@@ -588,7 +582,7 @@ function parseTargets(): string[] {
   if (!raw) {
     throw new Error(
       `TARGETS env var is not set. Specify one or more programs to upgrade, e.g.\n` +
-        `  TARGETS=LitePsm,OkuDollar,OkuBridgeRouter npm run upgrade -- --network=devnet\n` +
+        `  TARGETS=LitePsm,OkuDollar npm run upgrade -- --network=devnet\n` +
         `Known targets: ${Object.keys(UPGRADE_TARGETS).join(', ')}.`
     );
   }
@@ -634,9 +628,8 @@ function loadPrograms(
   }
 
   return {
-    psm:    loadProgram('lite_psm.json',          deployment.programs.litePsm),
-    vault:  loadProgram('oku_dollar.json',         deployment.programs.okuDollarProgram),
-    router: loadProgram('oku_bridge_router.json',  deployment.programs.okuBridgeRouter),
+    psm:    loadProgram('lite_psm.json',   deployment.programs.litePsm),
+    vault:  loadProgram('oku_dollar.json', deployment.programs.okuDollarProgram),
   };
 }
 

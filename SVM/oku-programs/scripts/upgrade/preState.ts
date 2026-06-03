@@ -24,7 +24,6 @@ import {
   deriveRedemptionQueuePDA,
   deriveBridgeConfigPDA,
   deriveVaultConfigPDA,
-  deriveRouterConfigPDA,
 } from '../utils/pdaHelpers';
 
 // ============================================================================
@@ -33,11 +32,10 @@ import {
 
 export type StateSnapshot = Record<string, string>;
 
-/** All three Anchor program handles needed for state reading. */
+/** Anchor program handles needed for state reading. */
 export interface ProgramSet {
   psm: Program;
   vault: Program;
-  router: Program;
 }
 
 export interface FieldDiff {
@@ -173,34 +171,6 @@ export async function readOkuDollarState(
   return snap;
 }
 
-/**
- * Snapshot OkuBridgeRouter's invariant on-chain state.
- *
- * Reads the RouterConfig PDA.
- */
-export async function readOkuBridgeRouterState(
-  router: Program,
-  programId: PublicKey
-): Promise<StateSnapshot> {
-  const [routerConfigPDA] = deriveRouterConfigPDA(programId);
-  const snap: StateSnapshot = {};
-
-  try {
-    const rc: any = await router.account['routerConfig'].fetch(routerConfigPDA);
-    snap['router.isPaused']      = str(rc.isPaused);
-    snap['router.roleAdmin']     = str(rc.roleAdmin);
-    snap['router.pauser']        = str(rc.pauser);
-    snap['router.unpauser']      = str(rc.unpauser);
-    snap['router.okuMoneyMint']  = str(rc.okuMoneyMint);
-    snap['router.usdOkuMint']    = str(rc.usdOkuMint);
-    snap['router.pendingRoleAdmin'] = str(rc.pendingRoleAdmin);
-  } catch (e: any) {
-    snap['router.fetchError'] = (e.message ?? String(e)).slice(0, 120);
-  }
-
-  return snap;
-}
-
 // ============================================================================
 // Reader registry
 // ============================================================================
@@ -211,9 +181,8 @@ export type StateReader = (
 ) => Promise<StateSnapshot>;
 
 export const STATE_READERS: Record<string, StateReader> = {
-  LitePsm:         (ps, id) => readLitePsmState(ps.psm, id),
-  OkuDollar:       (ps, id) => readOkuDollarState(ps.vault, id),
-  OkuBridgeRouter: (ps, id) => readOkuBridgeRouterState(ps.router, id),
+  LitePsm:   (ps, id) => readLitePsmState(ps.psm, id),
+  OkuDollar: (ps, id) => readOkuDollarState(ps.vault, id),
 };
 
 // ============================================================================

@@ -21,7 +21,6 @@ import {
   deriveBridgeConfigPDA,
   deriveVaultConfigPDA,
   deriveUsdOkuMintPDA,
-  deriveRouterConfigPDA,
 } from '../../utils/pdaHelpers';
 import { loadIdlWithAddress } from './programs';
 import { DeploymentConfig } from './config';
@@ -29,7 +28,6 @@ import { DeploymentConfig } from './config';
 // Import IDLs
 import litePsmIdl from '../../../target/idl/lite_psm.json';
 import okuDollarIdl from '../../../target/idl/oku_dollar.json';
-import okuBridgeRouterIdl from '../../../target/idl/oku_bridge_router.json';
 
 /**
  * Returns true if `error` indicates that the target account is already
@@ -77,8 +75,8 @@ export interface PsmInitResult {
   /**
    * USDC vault ATA, owned by `psmConfig`. Created by `initialize()`.
    * Persisted into the deployment file as `pdas.psmVaultUsdc` for
-   * downstream scripts (notably `admin:setup-router-alt`) that need it
-   * without re-deriving from mint + config.
+   * downstream scripts that need it without re-deriving from mint +
+   * config.
    */
   vaultUsdc: PublicKey;
   /**
@@ -405,64 +403,4 @@ export async function initializeVault(
   return { vaultConfig, usdOkuMint, reserveVault };
 }
 
-export interface RouterInitResult {
-  routerConfig: PublicKey;
-}
 
-/**
- * Initialize the Bridge Router program.
- *
- * `psmProgramId` / `okuDollarProgramId` are required so the router can
- * cross-check the supplied `okuMoneyMint` / `usdOkuMint` against the
- * canonical mints already stored in the PSM and vault configs at their
- * own initialize time. If the router were allowed to silently accept the
- * wrong mints here, every subsequent CPI would fail with an opaque
- * token-program error instead of a clean router-side rejection.
- */
-export async function initializeRouter(
-  provider: AnchorProvider,
-  programId: PublicKey,
-  psmProgramId: PublicKey,
-  okuDollarProgramId: PublicKey,
-  okuMoneyMint: PublicKey,
-  usdOkuMint: PublicKey,
-  authorities: ReturnType<typeof loadAuthorities>
-): Promise<RouterInitResult> {
-  logger.nextStep('Initializing Router');
-
-  const idl = loadIdlWithAddress(okuBridgeRouterIdl, programId);
-  const program = new Program(idl as any, provider);
-
-  const [routerConfig] = deriveRouterConfigPDA(programId);
-  const [psmConfig] = derivePsmConfigPDA(psmProgramId);
-  const [vaultConfig] = deriveVaultConfigPDA(okuDollarProgramId);
-
-  logger.info(`Router Config PDA: ${routerConfig.toBase58()}`);
-
-  // Initialize router
-  logger.info('Calling initialize()...');
-  try {
-    await program.methods
-      .initialize(authorities.psm.pauser, authorities.psm.unpauser)
-      .accountsPartial({
-        roleAdmin: provider.wallet.publicKey,
-        config: routerConfig,
-        okuMoneyMint: okuMoneyMint,
-        usdOkuMint: usdOkuMint,
-        psmConfig,
-        vaultConfig,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
-    logger.success('Router initialized');
-  } catch (error: any) {
-    if (isAlreadyInitialized(error)) {
-      logger.warning('Router already initialized');
-    } else {
-      throw error;
-    }
-  }
-
-  return { routerConfig };
-}

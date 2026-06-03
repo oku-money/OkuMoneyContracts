@@ -84,7 +84,6 @@ export function syncSvmRegistry(deployment: DeploymentAddresses): void {
     programs: {
       litePsm: deployment.programs?.litePsm,
       okuDollar: deployment.programs?.okuDollarProgram,
-      okuBridgeRouter: deployment.programs?.okuBridgeRouter,
     },
     mints: {
       usdc: deployment.tokens?.usdc,
@@ -96,7 +95,6 @@ export function syncSvmRegistry(deployment: DeploymentAddresses): void {
       redemptionQueue: deployment.pdas?.redemptionQueue,
       bridgeConfig: deployment.pdas?.bridgeConfig,
       vaultConfig: deployment.pdas?.vaultConfig,
-      routerConfig: deployment.pdas?.routerConfig,
       psmOkuMoneyEscrow: deployment.pdas?.psmOkuMoneyEscrow,
     },
     authorities: deployment.authorities,

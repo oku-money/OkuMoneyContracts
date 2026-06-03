@@ -28,7 +28,6 @@ import {
   PSM_CONFIG_LEN,
   REDEMPTION_QUEUE_LEN,
   REFUNDED_REQUEST_LEN,
-  ROUTER_CONFIG_LEN,
 } from '../lib/account-sizes';
 
 interface SizedItem {
@@ -92,7 +91,6 @@ async function main() {
     { name: 'BridgeConfig', size: BRIDGE_CONFIG_LEN },
     { name: 'BridgeNonce (per chain)', size: BRIDGE_NONCE_LEN },
     { name: 'OkuDollarConfig', size: OKU_DOLLAR_CONFIG_LEN },
-    { name: 'RouterConfig', size: ROUTER_CONFIG_LEN },
     { name: 'ProcessedRequest (per request)', size: PROCESSED_REQUEST_LEN },
     { name: 'PendingRefund (per request)', size: PENDING_REFUND_LEN },
     { name: 'RefundedRequest (per request)', size: REFUNDED_REQUEST_LEN },

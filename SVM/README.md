@@ -106,6 +106,8 @@ tests/
     oku-dollar.ts
     pyth-oracle.ts          # Hand-built Pyth V2 fixture
     init-invariants.ts      # TransferHook reject
+    rate-over-time.ts       # Explicit slot/time warps + multi-tick rate accrual
+    crossChainBridging.ts   # Orchestrator-mediated PSM mint/burn (noBridge v1)
   fork/                     # surfpool-based, ad-hoc (npm run test:fork)
     pyth-oracle.ts          # Mainnet-fork live Pyth
     _shared/
@@ -378,6 +380,8 @@ npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'
 npx mocha --require tsx --timeout 60000 'tests/bankrun/lite-psm.ts'
 npx mocha --require tsx --timeout 60000 'tests/bankrun/oku-dollar.ts'
 npx mocha --require tsx --timeout 60000 'tests/bankrun/pyth-oracle.ts'
+npx mocha --require tsx --timeout 60000 'tests/bankrun/rate-over-time.ts'
+npx mocha --require tsx --timeout 60000 'tests/bankrun/crossChainBridging.ts'
 
 # Fork tests — exercises real mainnet Pyth state via Surfpool.
 #   1. Start Surfpool: npm run surfpool:mainnet

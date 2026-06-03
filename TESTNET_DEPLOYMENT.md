@@ -106,11 +106,13 @@ cd EVM
 
 # Per-network shortcuts (defined in package.json):
 npm run deploy:sepolia        # Eth Sepolia
-npm run deploy:testnet        # OP Sepolia
+npm run deploy:opSepolia      # OP Sepolia
+npm run deploy:baseSepolia    # Base Sepolia
+npm run deploy:bscTestnet     # BNB Smart Chain testnet (Chapel)
+npm run deploy:base           # Base mainnet
+npm run deploy:bsc            # BNB Smart Chain mainnet
 
-# All other configured chains (no shortcut):
-hh run scripts/deploy/index.ts --network base
-hh run scripts/deploy/index.ts --network bsc
+# Chains without a pre-baked alias:
 hh run scripts/deploy/index.ts --network arbitrum
 hh run scripts/deploy/index.ts --network optimism
 hh run scripts/deploy/index.ts --network mainnet

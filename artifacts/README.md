@@ -90,11 +90,14 @@ const addr = "0xe548f960EbB46f9DC504e4107A552309796c863b";
 const okuMoney = new Contract(addr, OkuMoney.abi, provider);
 ```
 
-### TypeScript (@coral-xyz/anchor) — SVM
+### TypeScript (@anchor-lang/core) — SVM
 
 ```ts
 import idl from "okumoney-contracts/artifacts/svm/lite_psm.json";
-import { Program, AnchorProvider } from "@coral-xyz/anchor";
+import { Program } from "@anchor-lang/core";
 
+// `provider` is an AnchorProvider bound to a Solana connection + wallet.
+// The IDL's `address` field is rewritten to the deployed program ID;
+// see SVM/oku-programs/scripts/deploy/lib/programs.ts::loadIdlWithAddress.
 const program = new Program(idl as any, provider);
 ```

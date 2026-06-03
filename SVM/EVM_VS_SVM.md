@@ -76,7 +76,7 @@ exactly like reading EVM's `usdMultiplier()` at an arbitrary block.
 
 EVM uses the `whenYieldNotDistributing` modifier to fence:
 
-- `LitePSM.{mint,redeem,processQueue,...}` against `setOkuMPrice` /
+- `LitePSM.{mint,redeem,processQueue,...}` against `setOkuMMultiplier` /
   `distributeYield`
 - `OkuDollar.{wrap,unwrap}` against the multiplier-update path
 
@@ -178,7 +178,7 @@ and treat it as withdrawable to the `reserve_manager` while preserving
 | EVM (`OkuMoney.sol`) | SVM (`lite_psm` admin) |
 |---|---|
 | `setMaxSupply(uint256)` | `set_max_supply(u64)` |
-| `setMinterAllowance(address, uint256)` | `set_minter_allowance(u64)` (single minter = PSM) |
+| `configureMinterAllowance(address, uint256)` | `set_minter_allowance(u64)` (single minter = PSM) |
 | `pause()` / `unpause()` | `pause` / `unpause` |
 | `blacklist(address)` / `unblacklist(address)` | `freeze_account` / `thaw_account` (Token-2022 freeze authority) |
 | `setOkuMMultiplier(uint256)` | `set_oku_m_price(u64)` |
@@ -206,9 +206,10 @@ table.
 PSM mint/redeem rounding direction is identical on both sides (round
 down, favouring the protocol). End-to-end USDC→OkuM→USDC round-trips
 lose at most 1 wei (EVM) / 1 micro-USDC (SVM) of dust per round-trip
-from integer-division truncation; tested in
-`EVM/test/scenarios/RoundTrip.t.sol` and
-`SVM/tests/bankrun/oku-dollar.ts::round-trip accuracy`.
+from integer-division truncation; tested by the round-trip cases in
+`EVM/test/psm/LitePSM.t.sol` and `EVM/test/token/OkuDollar.t.sol`
+on the EVM side, and `SVM/tests/bankrun/oku-dollar.ts::round-trip accuracy`
+on the SVM side.
 
 ## Cross-chain operational requirements (v1 noBridge)
 

@@ -349,7 +349,7 @@ Quick summary:
 | Oracle | Chainlink AggregatorV3 | Pyth V2 (status, expo, staleness all checked) |
 | Inflation defense | `AmountTooSmall` on zero shares | Same + Uniswap-V2-style dead shares |
 | Convenience functions | On LitePSM | Composed off-chain by the SDK (no router program) |
-| Wallet price display | Frontends read `okuMPrice()` view | Frontends read PsmConfig PDA |
+| Wallet price display | Frontends read `okuMMultiplier()` view | Frontends read `PsmConfig.oku_m_price` from the config PDA |
 | Cross-chain transfers (v1) | Off-chain orchestrator + PSM mint/burn | Off-chain orchestrator + PSM mint/burn |
 | Queue size | Unbounded (mapping) | Fixed `[QueueEntry; 200]` zero-copy ring (Phase 13b; capped by Solana's 10 KB single-CPI alloc budget) |
 

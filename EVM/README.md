@@ -37,8 +37,7 @@ forge test --match-path "test/invariants/*"   # Invariant suite only (256 runs, 
 forge test --match-contract OkuMoneyTest -vv  # Targeted
 
 npx hardhat compile                           # Required before fork tests
-npx hardhat test                              # Fork + gas-regression tests
-npx hardhat test test/hardhat/gas/            # Gas-regression only
+npx hardhat test                              # Fork + happyPath + crossChain tests
 ```
 
 ## Deployment & Address Book
@@ -253,7 +252,9 @@ Every contract's NatSpec references `src/lib/Constants.sol` for the authoritativ
 
 **Conversion constants**
 - `PRECISION = 1e18` — base unit for multiplier math
-- `DECIMAL_MULTIPLIER = 1e12` — converts USDC (6 dec) ↔ dollars (18 dec)
+- `usdcDecimalMultiplier` — per-PSM stored value (`= 10 ** (18 - usdcDecimals)`),
+  computed at `LitePSM.initialize` from the deployed USDC mint's `decimals()`.
+  On every chain we currently target this is `1e12` (USDC has 6 decimals).
 - `MAX_RATE = PRECISION + 1e11` — safety cap on vault `usdRatePerSecond`
 - `BASIS_POINTS = 10_000` — fee denominator
 
@@ -669,14 +670,11 @@ redemptionQueue.totalQueuedOkuM == okuMoney.balanceOf(queue)    // Queue backed 
 psmUsdcOutflow <= seededBuffer + trackedDeposits + tolerance    // USDC outflow bounded by inflow
 ```
 
-**Bridge (stateful)**
-```
-okuMoney.balanceOf(okuBridge) == 0                              // Bridge never holds OkuMoney
-outboundNonce[chain] == sum(bridgeBurn calls to chain)          // Nonce monotonic, exact count
-processedRequests ∩ refundedRequests == ∅                       // No double-finalisation
-okuMoney.balanceOf(feeRecipient) == ghostFeesCollected          // Exact fee accounting
-netMinted <= netBurned + netRefunded                            // Value conservation
-```
+> Bridge invariants (nonce monotonicity, processed/refunded set disjointness,
+> fee-accounting equality, value conservation) were verified by the Foundry
+> invariant suite while `OkuBridge` was deployed; they were removed in the
+> noBridge refactor. They will return alongside the future OkuBridge / NTT
+> / CCIP work.
 
 ---
 
@@ -690,12 +688,13 @@ forge test --match-contract VaultInvariants        # OkuDollar backing invariant
 forge test --match-contract HandlerSanityTest      # Handler success-rate sanity checks
 
 npx hardhat compile                                # Regenerates typechain before fork tests
-npx hardhat test                                   # Fork tests (mainnet/Sepolia) + gas regression
-npx hardhat test test/hardhat/gas/                 # Gas-regression only
+npx hardhat test                                   # Fork + happyPath + crossChain tests
+npx hardhat test test/hardhat/crossChain/OrchestratorPsmBridging.ts  # Single file
 ```
 
-The Foundry suite is the authoritative functional coverage (~580 tests across 19 test files). The Hardhat suite (~37 tests across 6 test files) exists for two specific purposes only:
-1. **Fork tests** (`test/hardhat/fork/`, `test/hardhat/happyPath/`): exercise the protocol against real mainnet/Sepolia state that Foundry can't easily reach in CI.
-2. **Gas regression** (`test/hardhat/gas/`): assert that real-deployment gas costs (under the `@openzeppelin/hardhat-upgrades` plugin and full proxy machinery) stay within published targets.
+The Foundry suite is the authoritative functional coverage (447 tests across 15 test suites). The Hardhat suite (24 tests across 5 test files) exists for three specific purposes only:
+1. **Fork tests** (`test/hardhat/fork/`): exercise the protocol against real mainnet / Sepolia state that Foundry can't easily reach in CI.
+2. **Happy-path integration** (`test/hardhat/happyPath/`): full deposit/yield/withdraw walk-through against the OZ upgrades plugin's real proxy machinery.
+3. **Cross-chain accounting** (`test/hardhat/crossChain/OrchestratorPsmBridging.ts`): two-PSM noBridge orchestrator-mediated transfer (added in the noBridge refactor).
 
 Any non-fork functional test should be added to the Foundry suite.

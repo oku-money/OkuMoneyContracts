@@ -75,24 +75,9 @@ abstract contract BaseTest is Test, Actors {
     bytes32 public constant QUEUE_UPGRADER = TestRoles.QUEUE_UPGRADER;
     bytes32 public constant QUEUE_RESCUER = TestRoles.QUEUE_RESCUER;
 
-    // OkuBridge roles (BRIDGE_ prefix)
-    bytes32 public constant BRIDGE_UPGRADER = TestRoles.BRIDGE_UPGRADER;
-    bytes32 public constant BRIDGE_SIGNER_MANAGER = TestRoles.BRIDGE_SIGNER_MANAGER;
-    bytes32 public constant BRIDGE_PAUSER = TestRoles.BRIDGE_PAUSER;
-    bytes32 public constant BRIDGE_UNPAUSER = TestRoles.BRIDGE_UNPAUSER;
-    bytes32 public constant BRIDGE_FEE_MANAGER = TestRoles.BRIDGE_FEE_MANAGER;
-    bytes32 public constant BRIDGE_NONCE_ADMIN = TestRoles.BRIDGE_NONCE_ADMIN;
-    bytes32 public constant BRIDGE_CHAIN_MANAGER = TestRoles.BRIDGE_CHAIN_MANAGER;
-    bytes32 public constant BRIDGE_LIMITS_MANAGER = TestRoles.BRIDGE_LIMITS_MANAGER;
-    bytes32 public constant BRIDGE_REFUND_INITIATOR = TestRoles.BRIDGE_REFUND_INITIATOR;
-    bytes32 public constant BRIDGE_REFUND_CONFIRMER = TestRoles.BRIDGE_REFUND_CONFIRMER;
-
-    // OkuBridgeRouter roles (ROUTER_ prefix)
-    bytes32 public constant ROUTER_UPGRADER = TestRoles.ROUTER_UPGRADER;
-    bytes32 public constant ROUTER_PAUSER = TestRoles.ROUTER_PAUSER;
-    bytes32 public constant ROUTER_UNPAUSER = TestRoles.ROUTER_UNPAUSER;
-    bytes32 public constant ROUTER_ADAPTER_MANAGER = TestRoles.ROUTER_ADAPTER_MANAGER;
-    bytes32 public constant ROUTER_BRIDGE_MANAGER = TestRoles.ROUTER_BRIDGE_MANAGER;
+    // OkuBridge / OkuBridgeRouter role aliases were removed in the noBridge
+    // refactor. The underlying constants still live in TestRoles for forward
+    // compatibility and can be re-aliased here when those contracts return.
 
     // ============ Contracts ============
 

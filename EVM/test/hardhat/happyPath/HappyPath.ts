@@ -1,8 +1,6 @@
 import {
     LitePSM,
     LitePSM__factory,
-    OkuBridgeRouter,
-    OkuBridgeRouter__factory,
     OkuMoney,
     OkuMoney__factory,
     OkuDollar,
@@ -28,7 +26,6 @@ describe("Happy Path Testing", () => {
     let Dave: Signer
 
     //contracts
-    let okuBridgeRouter: OkuBridgeRouter
     let psm: LitePSM
     let queue: RedemptionQueue
     let okuMoney: OkuMoney
@@ -112,13 +109,8 @@ describe("Happy Path Testing", () => {
         ) as unknown as LitePSM
         await psm.waitForDeployment()
 
-        // Deploy OkuBridgeRouter
-        okuBridgeRouter = await upgrades.deployProxy(
-            new OkuBridgeRouter__factory(Frank),
-            [await okuUsd.getAddress(), await okuMoney.getAddress(), frankAddr, frankAddr],
-            { kind: "uups", unsafeAllow: ["constructor"] }
-        ) as unknown as OkuBridgeRouter
-        await okuBridgeRouter.waitForDeployment()
+        // OkuBridgeRouter was removed in the noBridge refactor; previously deployed here
+        // but never exercised in this scenario suite.
 
         // Grant MINTER to PSM so it can mint OkuMoney
         await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await psm.getAddress())

@@ -83,19 +83,15 @@ interface UpgradeTarget {
   stateKey?: string;
 }
 
+// OkuBridge / OkuBridgeRouter targets were removed in the noBridge refactor.
+// Live deployments from prior to the refactor may still have those proxies
+// on-chain; they can be upgraded by re-adding entries here when needed.
 const UPGRADE_TARGETS: Record<string, UpgradeTarget> = {
   // UUPS proxies — upgrade gated by the contract's own _authorizeUpgrade role.
   OkuMoney:        { factory: "OkuMoney",        upgraderRole: ROLES.OKUM_UPGRADER },
   OkuDollar:       { factory: "OkuDollar",       upgraderRole: ROLES.VAULT_UPGRADER },
   RedemptionQueue: { factory: "RedemptionQueue", upgraderRole: ROLES.QUEUE_UPGRADER },
   LitePSM:         { factory: "LitePSM",         upgraderRole: ROLES.PSM_UPGRADER },
-  OkuBridgeRouter: { factory: "OkuBridgeRouter", upgraderRole: ROLES.ROUTER_UPGRADER },
-
-  // Transparent proxy — upgrade goes through ProxyAdmin.upgrade(), not the
-  // contract's UPGRADER role. We still set `upgraderRole` to BRIDGE_UPGRADER so
-  // the ensure-role helper has something coherent to check; the actual
-  // permissioning that matters for Transparent is "signer == ProxyAdmin.owner()".
-  OkuBridge:       { factory: "OkuBridge",       upgraderRole: ROLES.BRIDGE_UPGRADER, proxyKind: "transparent" },
 };
 
 // Networks where Etherscan-family verification is supported.
@@ -877,13 +873,14 @@ async function upgradeOne(
 
     await withRetry(`upgradeProxy(${name})`, async () => {
       // Pass `kind: "transparent"` explicitly. Without it, OZ infers the kind
-      // from the implementation contract's source — and our OkuBridge impl
-      // inherits UUPSUpgradeable (it carries an _authorizeUpgrade hook even
-      // though the deployed proxy is actually Transparent). OZ then asserts
-      // "Requested an upgrade of kind uups but proxy is transparent" against
-      // the manifest's recorded kind. The fix: tell OZ explicitly that we
-      // know it's transparent, matching the manifest. The _authorizeUpgrade
-      // method in the impl is dead code for Transparent proxies and harmless.
+      // from the implementation contract's source — and any impl that inherits
+      // UUPSUpgradeable carries an _authorizeUpgrade hook even when the deployed
+      // proxy is actually Transparent. OZ then asserts "Requested an upgrade of
+      // kind uups but proxy is transparent" against the manifest's recorded kind.
+      // The fix: tell OZ explicitly that we know it's transparent, matching the
+      // manifest. The _authorizeUpgrade method in the impl is dead code for
+      // Transparent proxies and harmless. (Historical note: this branch existed
+      // primarily for OkuBridge, removed in the noBridge refactor.)
       let upgraded;
       try {
         upgraded = await upgrades.upgradeProxy(proxyAddress, Factory, {

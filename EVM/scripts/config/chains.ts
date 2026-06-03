@@ -1,12 +1,15 @@
 /**
- * Centralized configuration for all chain addresses, metadata, and bridge mappings
+ * Centralized configuration for all chain addresses and metadata
  *
  * This is the single source of truth for:
  * - External contract addresses (USDC, WETH, etc.) across all chains
  * - Whale addresses for fork testing
  * - Protocol addresses (Uniswap, Aave)
  * - Chain metadata (chain IDs, names, RPC URLs, explorers)
- * - Bridge chain ID mappings
+ *
+ * NOTE: Bridge chain ID mappings (BRIDGE_CHAIN_ID_MAP, getBridgeChainId,
+ * getSolanaCounterpartChainId, Wormhole helpers) were removed in the noBridge
+ * refactor. They will be re-introduced alongside OkuBridge / NTT / CCIP.
  */
 
 // ============================================================================
@@ -333,29 +336,6 @@ export function getNetworkNameByChainId(chainId: number): string | undefined {
 }
 
 // ============================================================================
-// Wormhole Chain IDs (for NTT bridge)
-// ============================================================================
-
-export const WORMHOLE_CHAIN_IDS: Record<number, number> = {
-  1: 2,      // Ethereum -> Wormhole 2
-  10: 24,    // Optimism -> Wormhole 24
-  42161: 23, // Arbitrum -> Wormhole 23
-  8453: 30,  // Base -> Wormhole 30
-  56: 4,     // BSC -> Wormhole 4
-};
-
-/**
- * Get Wormhole chain ID from EVM chain ID
- */
-export function getWormholeChainId(evmChainId: number): number {
-  const wormholeId = WORMHOLE_CHAIN_IDS[evmChainId];
-  if (!wormholeId) {
-    throw new Error(`No Wormhole chain ID mapping for EVM chain ID: ${evmChainId}`);
-  }
-  return wormholeId;
-}
-
-// ============================================================================
 // Fork Testing Configuration
 // ============================================================================
 
@@ -369,21 +349,14 @@ export const DEV_WALLET_ADDRESS = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
 export const FORK_IMPERSONATE_ADDRESS = DEV_WALLET_ADDRESS;
 
 // ============================================================================
-// Cross-Chain Bridge Constants (OkuMoney Protocol-Internal IDs)
+// Chain ID Constants (EIP-155)
 // ============================================================================
+//
+// Bridge-specific chain ID mapping (BRIDGE_CHAIN_ID_MAP), Wormhole helpers,
+// and the Solana counterpart selector were removed in the noBridge refactor.
+// The plain EIP-155 constants below remain because tests, scripts, and config
+// modules still use them as canonical identifiers.
 
-/**
- * Solana chain IDs (Ankr convention - OkuMoney protocol-internal identifiers)
- * These are NOT universal standards; they appear in bridge messages,
- * BridgeConfig state, and supportedChains mappings.
- */
-export const SOLANA_MAINNET_CHAIN_ID = 101;
-export const SOLANA_TESTNET_CHAIN_ID = 102; // Not used by OkuMoney
-export const SOLANA_DEVNET_CHAIN_ID = 103;
-
-/**
- * EVM chain IDs follow EIP-155
- */
 export const SEPOLIA_CHAIN_ID = 11155111;
 export const OP_SEPOLIA_CHAIN_ID = 11155420;
 export const BASE_SEPOLIA_CHAIN_ID = 84532;
@@ -394,86 +367,8 @@ export const BASE_CHAIN_ID = 8453;
 export const BSC_CHAIN_ID = 56;
 export const ETHEREUM_CHAIN_ID = 1;
 
-/**
- * EVM testnet chain IDs (used to choose Solana Devnet vs Mainnet
- * as the bridge counterpart at deploy time).
- */
-export const EVM_TESTNET_CHAIN_IDS: number[] = [
-  SEPOLIA_CHAIN_ID,
-  OP_SEPOLIA_CHAIN_ID,
-  BASE_SEPOLIA_CHAIN_ID,
-  BSC_TESTNET_CHAIN_ID,
-];
-
 // Default fork chain ID (Eth Sepolia)
 export const DEFAULT_FORK_CHAIN_ID = SEPOLIA_CHAIN_ID;
-
-/**
- * Bridge Chain ID Mapping (EIP-155 -> Protocol-Internal u16)
- * 
- * The SVM bridge uses u16 for chain IDs (max 65535).
- * Some EVM chain IDs exceed this, so we map them to smaller internal IDs.
- * Both EVM and SVM sides must agree on these mappings.
- */
-export const BRIDGE_CHAIN_ID_MAP: Record<number, number> = {
-  // Mainnet chains (fit in u16, no mapping needed)
-  [ETHEREUM_CHAIN_ID]: 1,
-  [OPTIMISM_CHAIN_ID]: 10,
-  [BSC_CHAIN_ID]: 56, // 56 fits in u16 directly
-  [ARBITRUM_CHAIN_ID]: 421, // 42161 -> 421
-  [BASE_CHAIN_ID]: 845, // 8453 -> 845
-
-  // Testnet chains. Some EIP-155 IDs already fit in u16 (BSC testnet = 97); the
-  // rest are folded into a 3-digit prefix that stays unique against every other
-  // entry in this map. Keeping them distinct from their mainnet counterparts
-  // (e.g. 845 vs 846) prevents bridge-side handlers from cross-routing.
-  [SEPOLIA_CHAIN_ID]: 111,       // 11155111 -> 111
-  [OP_SEPOLIA_CHAIN_ID]: 420,    // 11155420 -> 420
-  [BASE_SEPOLIA_CHAIN_ID]: 846,  // 84532    -> 846 (Base mainnet uses 845)
-  [BSC_TESTNET_CHAIN_ID]: 97,    // 97       -> 97  (already fits in u16)
-};
-
-/**
- * Reverse mapping: Protocol-Internal u16 -> EIP-155 chain ID
- */
-export const BRIDGE_CHAIN_ID_REVERSE_MAP: Record<number, number> = Object.fromEntries(
-  Object.entries(BRIDGE_CHAIN_ID_MAP).map(([k, v]) => [v, Number(k)])
-);
-
-/**
- * Get the bridge-internal chain ID for a given EIP-155 chain ID
- */
-export function getBridgeChainId(evmChainId: number): number {
-  const bridgeId = BRIDGE_CHAIN_ID_MAP[evmChainId];
-  if (bridgeId === undefined) {
-    throw new Error(`No bridge chain ID mapping for EVM chain ID: ${evmChainId}`);
-  }
-  return bridgeId;
-}
-
-/**
- * Get the EVM chain ID from a bridge-internal chain ID
- */
-export function getEvmChainIdFromBridge(bridgeChainId: number): number {
-  const evmId = BRIDGE_CHAIN_ID_REVERSE_MAP[bridgeChainId];
-  if (evmId === undefined) {
-    throw new Error(`No EVM chain ID mapping for bridge chain ID: ${bridgeChainId}`);
-  }
-  return evmId;
-}
-
-/**
- * Pick the Solana bridge counterpart (Devnet vs Mainnet) for a given EVM chain.
- *
- * Testnets (Sepolia, OP Sepolia) bridge to Solana Devnet; everything else
- * (Base, BSC, Optimism, Arbitrum, Ethereum mainnets) bridges to Solana Mainnet.
- * The deploy script reads this to seed `OkuBridge.supportedChains` at init time.
- */
-export function getSolanaCounterpartChainId(evmChainId: number): number {
-  return EVM_TESTNET_CHAIN_IDS.includes(evmChainId)
-    ? SOLANA_DEVNET_CHAIN_ID
-    : SOLANA_MAINNET_CHAIN_ID;
-}
 
 // ============================================================================
 // Backward Compatibility

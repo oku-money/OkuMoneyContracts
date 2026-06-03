@@ -18,7 +18,6 @@ const REGISTRY_PATH = path.resolve(__dirname, "../../../testnet-addresses.json")
 
 export interface EvmNetworkEntry {
   chainId: number;
-  bridgeChainId?: number;
   rpcUrl: string;
   explorer?: string;
   contracts: {
@@ -26,9 +25,9 @@ export interface EvmNetworkEntry {
     okuDollar?: string;
     litePSM?: string;
     redemptionQueue?: string;
-    okuBridge?: string;
-    okuBridgeRouter?: string;
     mockUSDC?: string;
+    // okuBridge / okuBridgeRouter were removed in the noBridge refactor; the
+    // open-ended index keeps historical entries readable without re-typing them.
     [key: string]: string | undefined;
   };
   orchestrator?: string;

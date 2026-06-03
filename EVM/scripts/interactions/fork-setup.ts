@@ -22,12 +22,11 @@ async function main() {
   }
   logger.section(`Fork Setup for ${networkName} (book key: ${bookKey})`);
 
-  // Get contracts from the resolved book key
+  // Get contracts from the resolved book key. OkuBridge / OkuBridgeRouter were
+  // removed in the noBridge refactor.
   const okuMoneyAddr = loadAddress(bookKey, "OkuMoney");
   const litePSMAddr = loadAddress(bookKey, "LitePSM");
   const redemptionQueueAddr = loadAddress(bookKey, "RedemptionQueue");
-  const okuBridgeAddr = loadAddress(bookKey, "OkuBridge");
-  const bridgeRouterAddr = loadAddress(bookKey, "OkuBridgeRouter");
 
   // Impersonate deployer
   logger.info(`Impersonating deployer: ${DEPLOYER}`);
@@ -85,18 +84,6 @@ async function main() {
   await waitForTx(
     await okuMoney.configureMinterAllowance(redemptionQueueAddr, minterAllowance),
     "Configure RedemptionQueue allowance"
-  );
-
-  logger.step(3, "Configuring OkuBridge minter allowance");
-  await waitForTx(
-    await okuMoney.configureMinterAllowance(okuBridgeAddr, minterAllowance),
-    "Configure OkuBridge allowance"
-  );
-
-  logger.step(4, "Configuring OkuBridgeRouter minter allowance");
-  await waitForTx(
-    await okuMoney.configureMinterAllowance(bridgeRouterAddr, minterAllowance),
-    "Configure OkuBridgeRouter allowance"
   );
 
   // Verify

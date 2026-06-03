@@ -82,7 +82,9 @@ async function main() {
   console.log();
 
   // Proxy contracts
-  const proxyContracts = ["OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM", "OkuBridge", "OkuBridgeRouter"];
+  // OkuBridge / OkuBridgeRouter removed in the noBridge refactor; PSM is the
+  // sole user-facing mint/burn surface.
+  const proxyContracts = ["OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM"];
   
   for (const contractName of proxyContracts) {
     const address = addresses[contractName];

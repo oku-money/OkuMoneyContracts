@@ -51,7 +51,10 @@ library TestRoles {
     bytes32 public constant QUEUE_PSM = SrcRoles.QUEUE_PSM;
     bytes32 public constant QUEUE_RESCUER = SrcRoles.QUEUE_RESCUER;
 
-    // ============ OkuBridge Roles (BRIDGE_ prefix) ============
+    // ============ OkuBridge Roles (BRIDGE_ prefix, RESERVED) ============
+    // The OkuBridge contract was removed in the noBridge refactor; these
+    // re-exports remain so future bridge tests can pick them up without
+    // re-deriving the keccaks.
 
     bytes32 public constant BRIDGE_SIGNER_MANAGER = SrcRoles.BRIDGE_SIGNER_MANAGER;
     bytes32 public constant BRIDGE_PAUSER = SrcRoles.BRIDGE_PAUSER;
@@ -64,7 +67,8 @@ library TestRoles {
     bytes32 public constant BRIDGE_REFUND_INITIATOR = SrcRoles.BRIDGE_REFUND_INITIATOR;
     bytes32 public constant BRIDGE_REFUND_CONFIRMER = SrcRoles.BRIDGE_REFUND_CONFIRMER;
 
-    // ============ OkuBridgeRouter Roles (ROUTER_ prefix) ============
+    // ============ OkuBridgeRouter Roles (ROUTER_ prefix, RESERVED) ============
+    // See OkuBridge note above.
 
     bytes32 public constant ROUTER_UPGRADER = SrcRoles.ROUTER_UPGRADER;
     bytes32 public constant ROUTER_PAUSER = SrcRoles.ROUTER_PAUSER;

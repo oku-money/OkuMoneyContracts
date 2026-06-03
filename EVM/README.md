@@ -9,7 +9,7 @@ Solidity smart contracts for OkuMoney — institutional-grade yield infrastructu
 - **Language**: Solidity 0.8.28 / EVM Cancun
 - **Framework**: Foundry (Forge, Cast, Anvil) for unit + invariant tests; Hardhat for fork + gas-regression tests
 - **Dependencies**: OpenZeppelin Contracts v5 (Upgradeable)
-- **Proxy pattern**: UUPS (all upgradeable contracts: `OkuMoney`, `OkuDollar`, `LitePSM`, `RedemptionQueue`, `OkuBridge`, `OkuBridgeRouter`)
+- **Proxy pattern**: UUPS (all upgradeable contracts: `OkuMoney`, `OkuDollar`, `LitePSM`, `RedemptionQueue`)
 - **Oracle**: Chainlink `AggregatorV3` (subset interface at `src/interfaces/IAggregatorV3.sol`)
 - **Storage**: ERC-7201 namespaced storage across every upgradeable contract (canonical slots — see any `*_STORAGE_LOCATION` literal)
 
@@ -21,9 +21,6 @@ Solidity smart contracts for OkuMoney — institutional-grade yield infrastructu
 | `src/token/OkuDollar.sol` | Rebasing $1-pegged stablecoin (usdOku) — growing balance via continuous `_rpow` USD multiplier |
 | `src/psm/LitePSM.sol` | Peg Stability Module — multiplier-aware USDC ↔ OkuM + usdOku convenience functions |
 | `src/psm/RedemptionQueue.sol` | FIFO queue for OkuMoney redemptions when the PSM buffer is depleted |
-| `src/bridge/OkuBridge.sol` | Native cross-chain bridge (burn/mint with EIP-712 orchestrator signatures) |
-| `src/bridge/OkuBridgeRouter.sol` | User entry point for bridging OkuMoney and OkuDollar across chains |
-| `src/bridge/adapters/NttAdapter.sol` | Wormhole NTT adapter (third-party adapter path) — AccessControl-gated |
 | `src/lib/YieldSandwichGuard.sol` | Shared abstract enforcing per-block sandwich protection around yield distribution |
 | `src/lib/MathLib.sol` | Multiplier conversion helpers (`okuMToDollars`, `dollarsToOkuM`, `usdcToDollars`, `dollarsToUsdc`, `rpow`) |
 | `src/lib/Constants.sol` | Shared constants + canonical terminology legend |
@@ -190,9 +187,9 @@ shipped deployments.
 | `npm run upgrade:sepolia` / `:opSepolia` / `:baseSepolia` / `:bscTestnet` | Live upgrade on the named testnet |
 | `npm run upgrade:base` / `:bsc` | Live upgrade on the named mainnet |
 | `npm run test:flow` / `:live` | `test-flow.ts` against a running localhost fork (or live Sepolia) |
-| `npm run bridge:state` / `:live` | OkuBridge read-only state dump |
-| `npm run bridge:burn` / `:live` | Burn-to-Solana flow |
-| `npm run bridge:mint` | Mint-from-Solana flow |
+
+> The `npm run bridge:*` scripts were removed in the noBridge refactor.
+> Cross-chain transfers are now PSM-mediated mint/burn coordinated off-chain.
 
 For chains without a pre-baked npm alias (`base`, `bsc`, `arbitrum`, `optimism`,
 `mainnet`):
@@ -213,16 +210,13 @@ src/
     LitePSM.sol             # USDC ↔ OkuM (multiplier-aware) + usdOku convenience functions
     RedemptionQueue.sol     # Queue for when PSM USDC buffer is insufficient
   bridge/
-    OkuBridge.sol           # Native cross-chain bridge (full burn/mint protocol)
-    OkuBridgeRouter.sol     # Entry point: token normalization + bridge path selection
     adapters/
-      IBridgeAdapter.sol    # Canonical interface for third-party message-only adapters
-      INttManager.sol       # Wormhole NTT manager interface
-      NttAdapter.sol        # Wormhole NTT adapter (AccessControl-gated)
+      IBridgeAdapter.sol    # RESERVED: canonical interface for third-party adapters
+                            # (NTT / CCIP). No implementation in v1; see noBridge notes.
   interfaces/
-    IOkuMoney.sol           # OkuMoney interface (used by PSM, vault, bridge)
+    IOkuMoney.sol           # OkuMoney interface (used by PSM, vault, mocks)
     IOkuDollar.sol          # OkuDollar vault interface
-    IOkuBridgeNative.sol    # OkuBridge subset surface used by the router
+    IOkuBridgeNative.sol    # RESERVED: OkuBridge subset surface; no consumer in v1.
     IAggregatorV3.sol       # Chainlink PoR oracle subset used by LitePSM
   lib/
     Roles.sol               # Shared RBAC role constants (prefix-namespaced)
@@ -234,9 +228,17 @@ src/
 test/
   mocks/                    # Test-only mocks (live under test/, never compiled into production artifacts)
     MockUSDC.sol            # 6-decimal ERC-20; used on testnets + in tests
-    MockBridgeAdapter.sol   # Test double for IBridgeAdapter (used by both Foundry and Hardhat)
-    MockNttManager.sol      # Test double for INttManager
 ```
+
+> **noBridge refactor**: `src/bridge/OkuBridge.sol`, `OkuBridgeRouter.sol`,
+> `adapters/NttAdapter.sol` + `INttManager.sol`, and the corresponding event
+> files were removed. v1 cross-chain transfers are PSM-mediated mint/burn,
+> orchestrated off-chain (the orchestrator custodies USDC and calls
+> `LitePSM.mintOkuM` / `LitePSM.redeemOkuM` on the source/destination chains).
+> The retained `IBridgeAdapter` and `IOkuBridgeNative` interfaces plus the
+> `BRIDGE_*` / `ROUTER_*` / `NTT_*` constants in `Roles.sol` are reserved seams
+> for future re-introduction of OkuBridge / NTT / CCIP; those will arrive as
+> contract additions, not modifications to the existing suite.
 
 ---
 
@@ -464,8 +466,6 @@ Pause is a **full freeze**. The following are gated behind `whenNotPaused`:
 - OkuMoney: peer-to-peer `transfer` / `transferFrom` (mint also; burn is NOT gated — self-burn works while paused to support the pause-to-blacklist protocol).
 - OkuDollar: `transfer` / `transferFrom`, `wrap`, `unwrap`, `depositReserves`, `withdrawSurplus`.
 - LitePSM: `mintOkuM`, `redeemOkuM`, `mintUsdOku`, `redeemUsdOku`, `redeemOkuMWithPermit`, `redeemUsdOkuWithPermit`, `processQueue`.
-- OkuBridge: `bridgeBurn`, `bridgeMint`, `initiateRefund`, `confirmRefund`, `cancelRefund`.
-- OkuBridgeRouter: `bridgeUsdOku`, `bridgeOkuM`, `bridgeWrappedVia`, `bridgeVia`.
 
 **Intentionally NOT pause-gated**: the vault's yield-rate setters (`setUsdYieldRate`, `setNextUsdYieldRate`) and `setMinCollateralRatio` — these are admin emergency levers that must remain callable during a pause.
 
@@ -567,91 +567,38 @@ Stores raw OkuMoney token amounts. Since OkuMoney is non-rebasing, queued tokens
 
 ---
 
-## Bridge Architecture
+## Cross-Chain Transfers (v1: noBridge / PSM-Mediated)
 
-Three-tier hierarchy:
+The EVM side ships without on-chain bridging in v1. Cross-chain transfers are
+PSM-mediated mint/burn coordinated by the off-chain orchestrator:
 
 ```
-OkuBridgeRouter          ← single user entry point; token normalization + path selection
-  ├── native path        → OkuBridge.bridgeBurn() (bridge owns burn lifecycle)
-  └── adapter path       → router pre-burns OkuMoney → IBridgeAdapter.bridge() (message-only shim)
-
-OkuBridge                ← full native protocol (source burn + destination mint)
-  bridgeBurn()           ← burns from caller, subtractive fee, EIP-712 BridgeBurn event
-  bridgeMint()           ← validates orchestrator EIP-712 sig, mints on destination
-
-IBridgeAdapter shims     ← third-party protocol adapters (NTT today, CCIP / OFT future)
+chain A                                       chain B
+LitePSM.redeemOkuM(user, n) ─► orchestrator ─► LitePSM.mintOkuM (USDC custody)
+                                              ─► OkuM credited to user on B
 ```
 
-Bridge operates on raw OkuMoney token amounts — no share conversion. MINTER on OkuMoney is granted to LitePSM, OkuBridge, and OkuBridgeRouter (the router holds MINTER so its adapter-path burns succeed).
+- LitePSM holds `OKUM_MINTER` on every chain — sole user-facing mint/burn surface.
+- The orchestrator custodies USDC and rebalances PSM buffers operationally.
+- No on-chain signature verification, EIP-712 BridgeRequest, or refund flow in v1.
 
-### Refund Flow (two-step, keyed dual-control)
+### Reserved seams (for future OkuBridge / NTT / CCIP)
 
-`BRIDGE_REFUND_INITIATOR` calls `initiateRefund(request)` → `BRIDGE_REFUND_CONFIRMER` calls `confirmRefund(request)`. The confirmer MUST be a different address than the initiator (`InitiatorCannotConfirm`). `cancelRefund(request)` can be called by the original initiator or an admin to drop a pending proposal. All three are `whenNotPaused`.
+Deleted in the noBridge refactor: `OkuBridge.sol`, `OkuBridgeRouter.sol`,
+`NttAdapter.sol`, `INttManager.sol`, the bridge event files, the bridge test
+suite, and the `scripts/bridge/` flow. The master branch retains the full
+implementation if it ever needs to be restored.
 
-### `bridgeMint` Validation
+Retained as forward-compatibility scaffolding:
 
-Validates in order:
-1. `destChainId == block.chainid` (`WrongChain`).
-2. `sourceChainId != block.chainid` (`CannotBridgeToSelf`).
-3. `request.amount > 0` (`ZeroAmount`) — a signed zero-amount mint would permanently mark the `requestId` as processed while being a no-op.
-4. `uint256(recipient) >> 160 == 0` (`InvalidRecipient`) — for EVM destinations, reject any `bytes32` with non-zero high bytes (guards against a Solana-style 32-byte pubkey being silently truncated into an EVM address).
-5. `supportedChains[sourceChainId]` (`UnsupportedChain`).
-6. `block.timestamp <= request.deadline` (`SignatureExpired`).
-7. `!processedRequests[requestId]` (`AlreadyProcessed`).
-8. EIP-712 signature verified against `authorizedSigner` (`InvalidSignature`).
-9. Extracted low-20-byte recipient != `address(0)` (`ZeroAddress`).
+- `src/interfaces/IOkuBridgeNative.sol` — OkuBridge subset surface.
+- `src/bridge/adapters/IBridgeAdapter.sol` — third-party adapter interface.
+- `BRIDGE_*`, `ROUTER_*`, `NTT_*` constants in `src/lib/Roles.sol`.
 
-### OkuBridge Events
-
-| Event | Parameters |
-|---|---|
-| `BridgeBurn(requestId, sender, recipient, sourceChainId, destChainId, grossAmount, netAmount, feeAmount, nonce, deadline)` | Source-chain burn. |
-| `BridgeMint(requestId, recipient, sourceChainId, destChainId, amount)` | Destination-chain mint. |
-| `SignerUpdated(oldSigner, newSigner)` | Orchestrator key rotation. |
-| `FeeUpdated(oldFee, newFee)` | Basis-point fee change. |
-| `FeeRecipientUpdated(oldRecipient, newRecipient)` | Fee recipient change. |
-| `ChainAdded(chainId)` / `ChainRemoved(chainId)` | Supported-chain set changes. |
-| `LimitsUpdated(oldMin, oldMax, newMin, newMax)` | Bridge amount limits. |
-| `NonceSkipped(destChainId, skippedNonce)` | Admin forcibly advanced a stuck nonce. |
-| `DeadlineUpdated(oldDeadline, newDeadline)` | Signature-window TTL. |
-| `RefundInitiated(requestId, initiator, sender, amount)` | Step 1 of refund flow. |
-| `RefundConfirmed(requestId, sender, amount)` | Step 2 — tokens returned. |
-| `RefundCancelled(requestId, initiator, cancelledBy)` | Pending proposal dropped. |
-
-### OkuBridgeRouter Events
-
-| Event | Parameters |
-|---|---|
-| `NativeBridgeInitiated(user, requestId, inputAmount, bridgedAmount, feeAmount, destinationChain, recipient)` | Native path — `bridgeUsdOku` / `bridgeOkuM`. `inputAmount` is in the input token's units (usdOku or OkuM). |
-| `BridgeInitiated(user, adapter, sourceToken, amount, destinationChain, recipient)` | Adapter path — `bridgeWrappedVia` / `bridgeVia`. |
-| `AdapterConfigured(adapter, supported)` | Registered/unregistered an adapter. |
-| `OkuBridgeUpdated(oldBridge, newBridge)` | Router re-pointed at a different OkuBridge (e.g. after upgrade). |
-| `Swept(token, to, amount)` | Admin pulled a stuck third-party ERC-20 out of the router (`sweep` — blocks OkuMoney + OkuDollar). |
-
----
-
-## NttAdapter.sol
-
-**Inherits**: `AccessControl` (migrated from `Ownable` in Phase 4 for consistency with the rest of the protocol).
-
-Adapter integrating Wormhole NTT with `OkuBridgeRouter`. The router pre-burns OkuMoney before calling this adapter, so the adapter only handles cross-chain message delivery. Conversions: `uint256 destinationChain → uint16 wormholeChainId`, `address recipient → bytes32` (left-padded for EVM destinations).
-
-Roles (Anchor-equivalent `DEFAULT_ADMIN_ROLE` / `NTT_CONFIGURATOR` / `NTT_RESCUER`):
-
-```solidity
-bytes32 public constant NTT_CONFIGURATOR = keccak256("NTT_CONFIGURATOR"); // configureChainId
-bytes32 public constant NTT_RESCUER      = keccak256("NTT_RESCUER");      // withdrawEth / withdrawTokens
-```
-
-### Events
-
-| Event | Parameters |
-|---|---|
-| `NttBridgeInitiated(amount, wormholeChainId, recipient, sequence)` | NTT `transfer` call from the router. |
-| `ChainIdConfigured(evmChainId, wormholeChainId)` | EVM → Wormhole chain-id mapping added/updated. |
-
-`IOFTAdapter.sol` was removed in Phase 1 (unused). Only `IBridgeAdapter` + `NttAdapter` + `INttManager` remain in `src/bridge/adapters/`.
+When OkuBridge / NTT / CCIP return, the upgrade is additive: deploy the new
+proxy, grant it `OKUM_MINTER`, configure its minter allowance. No changes to
+the existing `OkuMoney` / `OkuDollar` / `LitePSM` / `RedemptionQueue`
+contracts are required.
 
 ---
 
@@ -744,7 +691,6 @@ forge test                                         # All unit + invariant tests
 forge test --match-path "test/invariants/*"        # Invariant suite (256 runs × 500 depth by default)
 forge test --match-contract OkuMoneyTest -vv       # OkuMoney unit tests
 forge test --match-contract VaultInvariants        # OkuDollar backing invariants
-forge test --match-contract BridgeInvariants       # Stateful bridge invariants (requires OkuBridgeHandler)
 forge test --match-contract HandlerSanityTest      # Handler success-rate sanity checks
 
 npx hardhat compile                                # Regenerates typechain before fork tests

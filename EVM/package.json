@@ -40,13 +40,7 @@
     "upgrade:bsc": "NETWORK=bsc hardhat run scripts/upgrade/index.ts --network bsc",
 
     "test:flow": "NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network localhost",
-    "test:flow:live": "NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network sepolia",
-
-    "bridge:state": "NETWORK=sepolia npx hardhat run scripts/bridge/check-bridge-state.ts --network localhost",
-    "bridge:state:live": "NETWORK=sepolia npx hardhat run scripts/bridge/check-bridge-state.ts --network sepolia",
-    "bridge:burn": "NETWORK=sepolia npx hardhat run scripts/bridge/bridge-burn-to-solana.ts --network localhost",
-    "bridge:burn:live": "NETWORK=sepolia npx hardhat run scripts/bridge/bridge-burn-to-solana.ts --network sepolia",
-    "bridge:mint": "NETWORK=sepolia npx hardhat run scripts/bridge/bridge-mint-from-solana.ts --network localhost"
+    "test:flow:live": "NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network sepolia"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",

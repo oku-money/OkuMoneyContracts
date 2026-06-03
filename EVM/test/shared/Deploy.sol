@@ -8,8 +8,6 @@ import {OkuMoney} from "../../src/token/OkuMoney.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
-import {OkuBridge} from "../../src/bridge/OkuBridge.sol";
-import {OkuBridgeRouter} from "../../src/bridge/OkuBridgeRouter.sol";
 
 import {TestConstants} from "./Constants.sol";
 
@@ -143,95 +141,8 @@ library Deploy {
         );
     }
 
-    /// @notice Build the default OkuBridge.InitConfig used by tests.
-    function defaultBridgeConfig() internal pure returns (OkuBridge.InitConfig memory) {
-        return OkuBridge.InitConfig({
-            minBridgeAmount: TestConstants.DEFAULT_MIN_BRIDGE_AMOUNT,
-            maxBridgeAmount: TestConstants.DEFAULT_MAX_BRIDGE_AMOUNT,
-            feeBps: TestConstants.DEFAULT_BRIDGE_FEE,
-            bridgeDeadline: TestConstants.DEFAULT_BRIDGE_DEADLINE
-        });
-    }
-
-    /// @notice Deploy OkuBridge with UUPS proxy
-    /// @param okuMoney_ OkuMoney token address
-    /// @param authorizedSigner_ Orchestrator signer address
-    /// @param feeRecipient_ Fee recipient address
-    /// @param admin_ Admin address
-    /// @param initialChains_ Array of supported chain IDs
-    /// @param config_ Initial limits / fee / deadline parameters
-    /// @return proxy The deployed proxy contract
-    /// @return impl The implementation contract
-    function deployOkuBridge(
-        address okuMoney_,
-        address authorizedSigner_,
-        address feeRecipient_,
-        address admin_,
-        uint256[] memory initialChains_,
-        OkuBridge.InitConfig memory config_
-    )
-        internal
-        returns (OkuBridge proxy, OkuBridge impl)
-    {
-        impl = new OkuBridge();
-        bytes memory initData = abi.encodeCall(
-            OkuBridge.initialize,
-            (okuMoney_, authorizedSigner_, feeRecipient_, admin_, initialChains_, config_)
-        );
-        proxy = OkuBridge(address(new ERC1967Proxy(address(impl), initData)));
-    }
-
-    /// @notice Deploy OkuBridge with default config
-    function deployOkuBridge(
-        address okuMoney_,
-        address authorizedSigner_,
-        address feeRecipient_,
-        address admin_,
-        uint256[] memory initialChains_
-    )
-        internal
-        returns (OkuBridge proxy, OkuBridge impl)
-    {
-        return deployOkuBridge(
-            okuMoney_,
-            authorizedSigner_,
-            feeRecipient_,
-            admin_,
-            initialChains_,
-            defaultBridgeConfig()
-        );
-    }
-
-    /// @notice Deploy OkuBridge with default EVM chains and default config
-    function deployOkuBridge(
-        address okuMoney_,
-        address authorizedSigner_,
-        address feeRecipient_,
-        address admin_
-    )
-        internal
-        returns (OkuBridge proxy, OkuBridge impl)
-    {
-        uint256[] memory chains = new uint256[](3);
-        chains[0] = TestConstants.OPTIMISM_CHAIN_ID;
-        chains[1] = TestConstants.ARBITRUM_CHAIN_ID;
-        chains[2] = TestConstants.BASE_CHAIN_ID;
-        return deployOkuBridge(okuMoney_, authorizedSigner_, feeRecipient_, admin_, chains);
-    }
-
-    /// @notice Deploy OkuBridgeRouter with UUPS proxy
-    function deployOkuBridgeRouter(
-        address okuDollar_,
-        address okuMoney_,
-        address okuBridge_,
-        address admin_
-    )
-        internal
-        returns (OkuBridgeRouter proxy, OkuBridgeRouter impl)
-    {
-        impl = new OkuBridgeRouter();
-        bytes memory initData =
-            abi.encodeCall(OkuBridgeRouter.initialize, (okuDollar_, okuMoney_, okuBridge_, admin_));
-        proxy = OkuBridgeRouter(address(new ERC1967Proxy(address(impl), initData)));
-    }
+    // OkuBridge / OkuBridgeRouter deploy helpers were removed in the noBridge
+    // refactor. They lived here purely to support test/bridge/ — which is also
+    // deleted. If those contracts return, restore the helpers from the master
+    // branch.
 }

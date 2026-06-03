@@ -192,82 +192,13 @@ export async function readRedemptionQueueState(c: Contract): Promise<StateSnapsh
 }
 
 // ============================================================================
-// OkuBridge
+// OkuBridge / OkuBridgeRouter
 // ============================================================================
 //
-// Invariants exercised on upgrade:
-//   - Wired okuMoney preserved.
-//   - Orchestrator config (authorizedSigner, feeRecipient) preserved.
-//   - Fee + limits + deadline preserved (bridgeFee, limits.{min,max}, bridgeDeadline).
-//   - Pause state preserved.
-//
-// We deliberately do NOT snapshot the full supportedChains mapping or the
-// outboundNonce map — those have unbounded key spaces. Per-chain support /
-// nonce state is queried by other tooling; for the upgrade invariant check
-// we just confirm the configuration scalars round-trip.
-
-export async function readOkuBridgeState(c: Contract): Promise<StateSnapshot> {
-  const [
-    okuMoney,
-    authorizedSigner,
-    feeRecipient,
-    bridgeFee,
-    limits,
-    bridgeDeadline,
-    paused,
-  ] = await Promise.all([
-    c.okuMoney(),
-    c.authorizedSigner(),
-    c.feeRecipient(),
-    c.bridgeFee(),
-    c.limits(),
-    c.bridgeDeadline(),
-    c.paused(),
-  ]);
-
-  // `limits` is a struct (min, max) returned as an indexed tuple; explicitly
-  // stringify both fields to avoid relying on ethers' Result formatter
-  // (which can produce different representations between versions).
-  return {
-    okuMoney: String(okuMoney),
-    authorizedSigner: String(authorizedSigner),
-    feeRecipient: String(feeRecipient),
-    bridgeFee: bridgeFee.toString(),
-    limitsMin: limits.min?.toString() ?? limits[0]?.toString() ?? "<missing>",
-    limitsMax: limits.max?.toString() ?? limits[1]?.toString() ?? "<missing>",
-    bridgeDeadline: bridgeDeadline.toString(),
-    paused: String(paused),
-  };
-}
-
-// ============================================================================
-// OkuBridgeRouter
-// ============================================================================
-//
-// Invariants exercised on upgrade:
-//   - Wired token + bridge references (okuDollar, okuMoney, okuBridge) preserved.
-//   - Pause state preserved.
-//
-// `supportedAdapters` is a mapping per adapter address; same rationale as
-// OkuBridge.supportedChains — we don't snapshot unbounded maps here. The
-// router's adapter set is configured post-deploy via configureAdapter and is
-// not mutated by an impl upgrade.
-
-export async function readOkuBridgeRouterState(c: Contract): Promise<StateSnapshot> {
-  const [okuDollar, okuMoney, okuBridge, paused] = await Promise.all([
-    c.okuDollar(),
-    c.okuMoney(),
-    c.okuBridge(),
-    c.paused(),
-  ]);
-
-  return {
-    okuDollar: String(okuDollar),
-    okuMoney: String(okuMoney),
-    okuBridge: String(okuBridge),
-    paused: String(paused),
-  };
-}
+// State readers for OkuBridge and OkuBridgeRouter were removed in the noBridge
+// refactor. If a live deployment still has those proxies on-chain and an
+// upgrade is required, re-add the readers (and the corresponding STATE_READERS
+// entries) referencing the master-branch implementations.
 
 // ============================================================================
 // Registry
@@ -283,8 +214,6 @@ export const STATE_READERS: Record<string, (c: Contract) => Promise<StateSnapsho
   OkuDollar: readOkuDollarState,
   RedemptionQueue: readRedemptionQueueState,
   LitePSM: readLitePSMState,
-  OkuBridge: readOkuBridgeState,
-  OkuBridgeRouter: readOkuBridgeRouterState,
 };
 
 /**

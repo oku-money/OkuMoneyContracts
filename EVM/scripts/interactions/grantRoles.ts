@@ -9,13 +9,10 @@
  * Decisions baked in:
  *   - QUEUE_PSM is intentionally NOT granted to an EOA (must remain on the
  *     LitePSM proxy, otherwise an EOA could bypass LitePSM accounting).
- *   - Both BRIDGE_REFUND_INITIATOR and BRIDGE_REFUND_CONFIRMER are granted.
- *     Note: OkuBridge.confirmRefund() still reverts when initiator == confirmer
- *     (OkuBridge.sol:471), so a single EOA cannot complete a refund. That's a
- *     contract-layer guarantee we don't try to defeat here.
- *   - authorizedSigner is not modified — at deploy time it is already set to
- *     the dev wallet (scripts/deploy/index.ts:455).
- *   - NttAdapter (NTT_*) roles are out of scope for this script.
+ *   - OkuBridge / OkuBridgeRouter / NttAdapter contracts were removed in the
+ *     noBridge refactor, so the BRIDGE_*, ROUTER_*, NTT_* role constants are
+ *     not granted here. They remain reserved in lib/Roles.sol for the future
+ *     re-introduction of OkuBridge / NTT / CCIP.
  *
  * The signer used to send the grants must hold DEFAULT_ADMIN_ROLE on every
  * contract being touched. On testnet deployments that is the deployer / dev
@@ -113,35 +110,11 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
   ],
   // NOTE: QUEUE_PSM intentionally excluded — must stay on the LitePSM proxy.
   RedemptionQueue: ["DEFAULT_ADMIN_ROLE", "QUEUE_UPGRADER", "QUEUE_RESCUER"],
-  OkuBridge: [
-    "DEFAULT_ADMIN_ROLE",
-    "BRIDGE_SIGNER_MANAGER",
-    "BRIDGE_PAUSER",
-    "BRIDGE_UNPAUSER",
-    "BRIDGE_FEE_MANAGER",
-    "BRIDGE_NONCE_ADMIN",
-    "BRIDGE_CHAIN_MANAGER",
-    "BRIDGE_LIMITS_MANAGER",
-    "BRIDGE_UPGRADER",
-    "BRIDGE_REFUND_INITIATOR",
-    // BRIDGE_REFUND_CONFIRMER: intentionally NOT granted in bulk.
-    //
-    // OkuBridge.confirmRefund() reverts when initiator == confirmer
-    // (`InitiatorCannotConfirm`), so granting both refund roles to the same
-    // master EOA would silently break the refund flow. The confirmer role
-    // should be held by a SEPARATE key — assigned to the deployer EOA by the
-    // deployment script and rotated to its production custodian before the
-    // bridge serves real traffic. Keep this comment in sync with the deploy
-    // script and the contract-level NatSpec.
-  ],
-  OkuBridgeRouter: [
-    "DEFAULT_ADMIN_ROLE",
-    "ROUTER_UPGRADER",
-    "ROUTER_PAUSER",
-    "ROUTER_UNPAUSER",
-    "ROUTER_ADAPTER_MANAGER",
-    "ROUTER_BRIDGE_MANAGER",
-  ],
+  // OkuBridge / OkuBridgeRouter entries removed in the noBridge refactor.
+  // Note: live deployments from prior to the refactor may still have these
+  // proxies on-chain. The address-book lookup loop below silently skips any
+  // contract name not in ROLE_MAP, so those live proxies are simply not
+  // touched by this script until they are formally retired.
 };
 
 // ============================================================================

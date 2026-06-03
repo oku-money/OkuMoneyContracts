@@ -45,20 +45,9 @@ abstract contract Actors is Test {
 
     address public queueRescuer = makeAddr("queueRescuer");
 
-    // ============ OkuBridge Roles ============
-
-    address public bridgeSigner = makeAddr("bridgeSigner");
-    address public bridgeFeeManager = makeAddr("bridgeFeeManager");
-    address public refundInitiator = makeAddr("refundInitiator");
-    address public refundConfirmer = makeAddr("refundConfirmer");
-    address public nonceAdmin = makeAddr("nonceAdmin");
-    address public chainManager = makeAddr("chainManager");
-    address public limitsManager = makeAddr("limitsManager");
-
-    // ============ OkuBridgeRouter Roles ============
-
-    address public adapterManager = makeAddr("adapterManager");
-    address public bridgeManager = makeAddr("bridgeManager");
+    // OkuBridge / OkuBridgeRouter actor aliases were removed in the noBridge
+    // refactor. If those contracts return, restore the named actors from the
+    // master branch.
 
     // ============ Generic Test Users ============
 
@@ -83,8 +72,9 @@ abstract contract Actors is Test {
     address public orchestratorSigner;
 
     /// @notice Initialize orchestrator signer address from its private key.
-    /// @dev Called from BridgeBaseTest.setUp(). Other tests that need signed payloads
-    ///      should call this themselves and reuse the existing key constants.
+    /// @dev The bridge tests that consumed this helper were removed in the
+    ///      noBridge refactor. Retained because EIP-2612 permit tests still
+    ///      reuse the orchestrator key.
     function _initOrchestrator() internal {
         orchestratorSigner = vm.addr(orchestratorPk);
     }

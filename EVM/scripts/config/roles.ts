@@ -46,7 +46,9 @@ export const ROLES = {
   QUEUE_PSM: keccak256(toUtf8Bytes("QUEUE_PSM")),
   QUEUE_RESCUER: keccak256(toUtf8Bytes("QUEUE_RESCUER")),
 
-  // ============ OkuBridge Roles ============
+  // ============ OkuBridge Roles (RESERVED) ============
+  // OkuBridge contract was removed in the noBridge refactor; the role constants
+  // remain so a future re-introduction is a pure deploy + grant operation.
   BRIDGE_SIGNER_MANAGER: keccak256(toUtf8Bytes("BRIDGE_SIGNER_MANAGER")),
   BRIDGE_PAUSER: keccak256(toUtf8Bytes("BRIDGE_PAUSER")),
   BRIDGE_UNPAUSER: keccak256(toUtf8Bytes("BRIDGE_UNPAUSER")),
@@ -58,7 +60,9 @@ export const ROLES = {
   BRIDGE_REFUND_INITIATOR: keccak256(toUtf8Bytes("BRIDGE_REFUND_INITIATOR")),
   BRIDGE_REFUND_CONFIRMER: keccak256(toUtf8Bytes("BRIDGE_REFUND_CONFIRMER")),
 
-  // ============ OkuBridgeRouter Roles ============
+  // ============ OkuBridgeRouter Roles (RESERVED) ============
+  // OkuBridgeRouter was removed in the noBridge refactor; constants kept for
+  // forward compatibility (see OkuBridge note above).
   ROUTER_UPGRADER: keccak256(toUtf8Bytes("ROUTER_UPGRADER")),
   ROUTER_PAUSER: keccak256(toUtf8Bytes("ROUTER_PAUSER")),
   ROUTER_UNPAUSER: keccak256(toUtf8Bytes("ROUTER_UNPAUSER")),

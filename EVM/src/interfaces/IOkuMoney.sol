@@ -3,8 +3,8 @@ pragma solidity ^0.8.28;
 
 /**
  * @title IOkuMoney
- * @notice Shared interface for OkuMoney used by LitePSM, RedemptionQueue, OkuBridge,
- *         OkuBridgeRouter, OkuDollar, and the test mocks/handlers.
+ * @notice Shared interface for OkuMoney used by LitePSM, RedemptionQueue, OkuDollar,
+ *         and the test mocks/handlers.
  * @dev OkuMoney is a non-rebasing standard ERC-20; `okuMMultiplier()` tracks the dollar
  *      value per token separately from `balanceOf()`. The full surface (mint/burn,
  *      ERC-20 reads, multiplier ops) is intentionally exposed so tests, mocks, and

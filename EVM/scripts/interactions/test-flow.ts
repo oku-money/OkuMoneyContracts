@@ -82,9 +82,12 @@ async function setupForkIfNeeded(ctx: TestContext): Promise<boolean> {
     );
   }
 
-  // Configure minter allowances for all minting contracts
+  // Configure minter allowances for all minting contracts.
+  // OkuBridge / OkuBridgeRouter were removed in the noBridge refactor; this
+  // loop silently skips any name not present in the address book (older books
+  // may still list them — they just won't be reconfigured).
   const minterAllowance = ethers.parseUnits("1000000000", 18);
-  const contracts = ["LitePSM", "RedemptionQueue", "OkuBridge", "OkuBridgeRouter"];
+  const contracts = ["LitePSM", "RedemptionQueue"];
   
   for (const name of contracts) {
     if (hasAddress(ctx.bookKey, name)) {

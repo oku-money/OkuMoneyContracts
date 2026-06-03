@@ -57,12 +57,10 @@ usdOku rate < OkuM rate  →  Vault overcollateralized  → Oku extracts revenue
 │  │  OkuMoney      │◄┤  OkuDollar   │   │   LitePSM    │        │
 │  │  (Non-Rebase)  │ │  (Rebasing)  │   │  (USDC ↔ OkuM│        │
 │  │ okuMMultiplier │ │  Vault       │   │  price-aware) │        │
-│  └──────┬─────────┘ └──────────────┘   └──────────────┘        │
-│         │                                                        │
-│  ┌──────▼──────────────────────────────────────────┐            │
-│  │               OkuBridge + Router                 │            │
-│  │  (Burn/mint across chains, raw OkuM amounts)     │            │
-│  └──────────────────────────────────────────────────┘            │
+│  └────────────────┘ └──────────────┘   └──────────────┘        │
+│                                                                  │
+│  (Cross-chain transfers are orchestrator-mediated via PSM        │
+│   mint/burn on each chain — no on-chain bridge in v1.)           │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -70,10 +68,8 @@ usdOku rate < OkuM rate  →  Vault overcollateralized  → Oku extracts revenue
 |-----------|----------|
 | **OkuMoney** | Non-rebasing base token — static balance, price appreciates via stored `okuMMultiplier` |
 | **OkuDollar** | Rebasing $1-pegged stablecoin — balance grows, backed by OkuMoney reserves |
-| **LitePSM** | Peg Stability Module — price-aware USDC ↔ OkuM, convenience usdOku functions |
+| **LitePSM** | Peg Stability Module — price-aware USDC ↔ OkuM, convenience usdOku functions. Sole user-facing mint/burn surface. |
 | **RedemptionQueue** | FIFO queue when PSM buffer is insufficient |
-| **OkuBridge** | Cross-chain bridge — orchestrator-signed burn/mint (raw OkuMoney amounts) |
-| **OkuBridgeRouter** | User entry point for bridging OkuMoney and OkuDollar |
 
 ## Yield Distribution & Sandwich Prevention
 
@@ -100,16 +96,26 @@ mintUsdOku:    USDC → PSM mints OkuM → wraps into vault → usdOku to user
 redeemUsdOku:  usdOku → unwrap to OkuM → redeem for USDC (or queue if buffer empty)
 ```
 
-## Cross-Chain Bridging
+## Cross-Chain Transfers (v1: PSM-Mediated, Off-Chain Orchestrated)
 
-OkuBridge is a proprietary orchestrator-signed bridge. No third-party bridge dependencies for core protocol.
+The EVM side ships without an on-chain bridge. Cross-chain transfers are
+orchestrated off-chain through PSM mint/burn:
 
-- Bridge transports raw OkuMoney amounts — no share conversion needed
-- Subtractive fee model: fee deducted from bridged amount, collected on source chain
-- EVM: ECDSA via EIP-712 | SVM: Ed25519 via instruction introspection
-- Sequential nonces per destination, replay prevention via request ID tracking
+1. User redeems OkuM for USDC on chain A via `LitePSM.redeemOkuM` (or sends
+   USDC to the orchestrator's off-chain rail directly).
+2. Orchestrator observes the burn / off-chain instruction, waits for finality,
+   then performs an equivalent USDC-funded `LitePSM.mintOkuM` on chain B
+   crediting the recipient.
+3. PSM USDC buffers on each chain are rebalanced operationally by treasury.
 
-The OkuBridgeRouter normalizes tokens: `bridgeUsdOku` unwraps to OkuMoney before bridging.
+LitePSM holds `OKUM_MINTER` on every chain — it is the sole user-facing
+mint/burn surface in v1.
+
+OkuBridge (proprietary burn-and-mint) and third-party rails (NTT, CCIP) are
+planned post-launch and will be introduced as contract additions. The relevant
+role constants (`BRIDGE_*`, `ROUTER_*`, `NTT_*`) and integration interfaces
+(`IOkuBridgeNative`, `IBridgeAdapter`) are retained in the tree as reserved
+seams so re-introduction does not require modifying existing contracts.
 
 ## RBAC (Role-Based Access Control)
 
@@ -117,12 +123,15 @@ One role per action. No role performs more than one function.
 
 | Entity | Roles |
 |--------|-------|
-| Cold Multisig | ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER, ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER, ORACLE_MANAGER, RESERVE_MANAGER, bridge admin roles |
-| Warm Multisig | all PAUSER, all BLACKLISTER, BRIDGE_PAUSER |
-| Orchestrator | OKUM_REBASER, VAULT_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR, BRIDGE_FEE_MANAGER |
-| OkuBridge | OKUM_MINTER (bridge contract on each chain) |
+| Cold Multisig | ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER, ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER, ORACLE_MANAGER, RESERVE_MANAGER |
+| Warm Multisig | all PAUSER, all BLACKLISTER |
+| Orchestrator | OKUM_REBASER, VAULT_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR |
 | LitePSM | OKUM_MINTER |
-| OkuBridgeRouter | OKUM_MINTER (adapter path only, EVM) |
+| RedemptionQueue | OKUM_MINTER |
+
+The `BRIDGE_*`, `ROUTER_*`, and `NTT_*` roles defined in `Roles.sol` are
+reserved for the future re-introduction of OkuBridge / NTT / CCIP. They are
+not granted by the v1 deploy scripts.
 
 ## EVM vs SVM Implementation Differences
 
@@ -147,8 +156,8 @@ contracts/
     src/
       token/            # OkuMoney.sol, OkuDollar.sol
       psm/              # LitePSM.sol, RedemptionQueue.sol
-      bridge/           # OkuBridge.sol, OkuBridgeRouter.sol, adapters/
-      interfaces/       # IOkuMoney.sol, IOkuDollar.sol
+      bridge/adapters/  # IBridgeAdapter.sol (reserved interface only)
+      interfaces/       # IOkuMoney.sol, IOkuDollar.sol, IOkuBridgeNative.sol (reserved)
       lib/              # Roles.sol, Constants.sol, MathLib.sol
     test/
     scripts/

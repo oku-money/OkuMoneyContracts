@@ -23,8 +23,6 @@ import { saveAddress, loadAddressBook, saveAddressBook, hasAddress, loadAddress 
 import { syncEvmRegistry } from "../utils/testnetRegistry";
 import {
   getChainMetadata,
-  getBridgeChainId,
-  getSolanaCounterpartChainId,
   DEV_WALLET_ADDRESS,
 } from "../config/chains";
 import { resolveNetworkContext } from "../utils/networkContext";
@@ -57,10 +55,6 @@ const DEV_WALLET = DEV_WALLET_ADDRESS;
 interface DeploymentConfig {
   maxSupply: bigint;
   minterAllowance: bigint;
-  bridgeFee: bigint;
-  minBridgeAmount: bigint;
-  maxBridgeAmount: bigint;
-  bridgeDeadline: bigint;
   // PSM oracle staleness threshold (seconds). Bounded by Constants.ORACLE_MIN/MAX_STALENESS
   // (60 .. 7 days). Operators can re-tune via configureOracle post-deploy.
   psmStalenessThreshold: bigint;
@@ -70,10 +64,6 @@ function getDeploymentConfig(): DeploymentConfig {
   return {
     maxSupply: ethers.parseUnits("1000000000", 18), // 1 billion
     minterAllowance: ethers.parseUnits("1000000000", 18), // 1 billion
-    bridgeFee: 10n, // 0.1% (10 bps)
-    minBridgeAmount: ethers.parseUnits("1", 18), // 1 OkuM
-    maxBridgeAmount: ethers.parseUnits("100000", 18), // 100,000 OkuM
-    bridgeDeadline: 3600n, // 1 hour
     psmStalenessThreshold: 3600n, // 1 hour
   };
 }
@@ -219,25 +209,6 @@ async function deployUUPSProxy(
   });
 }
 
-async function deployTransparentProxy(
-  contractName: string,
-  initArgs: any[],
-  bookKey: string,
-  deployer: Signer
-): Promise<Contract> {
-  const existing = await tryAttach(contractName, bookKey, deployer);
-  if (existing) return existing;
-
-  return await withRetry(`deploy ${contractName} (Transparent)`, async () => {
-    const Factory = await ethers.getContractFactory(contractName, deployer);
-    const proxy = await upgrades.deployProxy(Factory, initArgs, { kind: "transparent" });
-    await proxy.waitForDeployment();
-    const address = await proxy.getAddress();
-    saveAddress(bookKey, contractName, address);
-    return proxy;
-  });
-}
-
 // ============================================================================
 // Etherscan Verification
 // ============================================================================
@@ -297,14 +268,16 @@ async function verifyAllContracts(networkName: string): Promise<void> {
     return;
   }
 
-  logger.step(8, "Verifying Contracts on Etherscan");
+  logger.step(7, "Verifying Contracts on Etherscan");
   logger.info("  Waiting 30s for Etherscan to index contracts...");
   await new Promise(resolve => setTimeout(resolve, 30000));
 
   const addresses = loadAddressBook()[networkName] || {};
-  
-  // Proxy contracts need special handling
-  const proxyContracts = ["OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM", "OkuBridge", "OkuBridgeRouter"];
+
+  // Proxy contracts need special handling. OkuBridge/OkuBridgeRouter were removed
+  // in the noBridge refactor; v1 cross-chain transfers are PSM-mediated mint/burn
+  // orchestrated off-chain.
+  const proxyContracts = ["OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM"];
   
   for (const contractName of Object.keys(addresses)) {
     const address = addresses[contractName];
@@ -428,68 +401,13 @@ async function deployPSM(
   return litePSM;
 }
 
-async function deployBridge(
-  deployer: Signer,
-  deployerAddress: string,
-  bookKey: string,
-  okuMoneyAddress: string,
-  okuDollarAddress: string,
-  evmChainId: number,
-  config: DeploymentConfig
-): Promise<{ okuBridge: Contract; bridgeRouter: Contract }> {
-  logger.step(4, "Deploying Bridge Contracts");
-
-  // Pick Solana Devnet (for EVM testnets) or Solana Mainnet (for EVM mainnets)
-  // as the bridge counterpart. This used to be hardcoded to Solana Devnet, which
-  // was wrong for Base/BSC/etc. mainnet deploys.
-  const solanaCounterpartId = getSolanaCounterpartChainId(evmChainId);
-  logger.info(`  Bridge counterpart Solana chain id: ${solanaCounterpartId} (${solanaCounterpartId === 103 ? "Devnet" : "Mainnet"})`);
-
-  // OkuBridge (Transparent Proxy). Initializer now takes a 6th `InitConfig` tuple so
-  // limits / fee / deadline come in at deploy time instead of being hardcoded constants.
-  // Subsequent updateLimits / updateFee / updateDeadline calls in configureBridge become
-  // no-ops in the common case but are kept as a safety net for redeployments that need
-  // to override the init values.
-  const bridgeInitConfig = {
-    minBridgeAmount: config.minBridgeAmount,
-    maxBridgeAmount: config.maxBridgeAmount,
-    feeBps: config.bridgeFee,
-    bridgeDeadline: config.bridgeDeadline,
-  };
-
-  logger.info("  Deploying OkuBridge...");
-  const okuBridge = await deployTransparentProxy(
-    "OkuBridge",
-    [
-      okuMoneyAddress,
-      deployerAddress, // orchestrator signer (deployer for testnet)
-      deployerAddress, // fee recipient
-      deployerAddress, // admin
-      [BigInt(solanaCounterpartId)], // supported chains
-      bridgeInitConfig,
-    ],
-    bookKey,
-    deployer
-  );
-  logger.success(`  OkuBridge: ${await okuBridge.getAddress()}`);
-
-  // OkuBridgeRouter (UUPS Proxy)
-  logger.info("  Deploying OkuBridgeRouter...");
-  const bridgeRouter = await deployUUPSProxy(
-    "OkuBridgeRouter",
-    [
-      okuDollarAddress,
-      okuMoneyAddress,
-      await okuBridge.getAddress(),
-      deployerAddress,
-    ],
-    bookKey,
-    deployer
-  );
-  logger.success(`  OkuBridgeRouter: ${await bridgeRouter.getAddress()}`);
-
-  return { okuBridge, bridgeRouter };
-}
+// NOTE: OkuBridge / OkuBridgeRouter / NTT adapter deployment was removed in the
+// noBridge refactor. v1 cross-chain transfers are PSM-mediated mint/burn driven
+// by the off-chain orchestrator (LitePSM holds OKUM_MINTER on every chain).
+// When OkuBridge / NTT / CCIP are re-introduced, deployments are additive: deploy
+// the new proxy, grant OKUM_MINTER, set minter allowance. No changes to existing
+// contracts required. The BRIDGE_* / ROUTER_* / NTT_* role constants remain
+// reserved in lib/Roles.sol for that future work.
 
 async function configureRoles(
   deployerAddress: string,
@@ -497,22 +415,18 @@ async function configureRoles(
   okuDollar: Contract,
   redemptionQueue: Contract,
   litePSM: Contract,
-  okuBridge: Contract,
-  bridgeRouter: Contract,
   config: DeploymentConfig
 ): Promise<void> {
-  logger.step(5, "Configuring Roles");
+  logger.step(4, "Configuring Roles");
 
   const litePSMAddress = await litePSM.getAddress();
   const redemptionQueueAddress = await redemptionQueue.getAddress();
-  const okuBridgeAddress = await okuBridge.getAddress();
-  const bridgeRouterAddress = await bridgeRouter.getAddress();
 
-  // OkuMoney minter roles
+  // OkuMoney minter roles. LitePSM is the sole user-facing OKUM_MINTER in the
+  // noBridge model; RedemptionQueue mints rebase deltas; off-chain cross-chain
+  // mint/burn flows route through LitePSM via the orchestrator's USDC custody.
   await sendAndWait("Grant OKUM_MINTER to LitePSM", () => okuMoney.grantRole(ROLES.OKUM_MINTER, litePSMAddress));
   await sendAndWait("Grant OKUM_MINTER to RedemptionQueue", () => okuMoney.grantRole(ROLES.OKUM_MINTER, redemptionQueueAddress));
-  await sendAndWait("Grant OKUM_MINTER to OkuBridge", () => okuMoney.grantRole(ROLES.OKUM_MINTER, okuBridgeAddress));
-  await sendAndWait("Grant OKUM_MINTER to OkuBridgeRouter", () => okuMoney.grantRole(ROLES.OKUM_MINTER, bridgeRouterAddress));
 
   // OkuMoney admin roles (testnet only)
   await sendAndWait("Grant OKUM_REBASER to Admin", () => okuMoney.grantRole(ROLES.OKUM_REBASER, deployerAddress));
@@ -521,8 +435,6 @@ async function configureRoles(
   // Minter allowances
   await sendAndWait("Set LitePSM minter allowance", () => okuMoney.configureMinterAllowance(litePSMAddress, config.minterAllowance));
   await sendAndWait("Set RedemptionQueue minter allowance", () => okuMoney.configureMinterAllowance(redemptionQueueAddress, config.minterAllowance));
-  await sendAndWait("Set OkuBridge minter allowance", () => okuMoney.configureMinterAllowance(okuBridgeAddress, config.minterAllowance));
-  await sendAndWait("Set OkuBridgeRouter minter allowance", () => okuMoney.configureMinterAllowance(bridgeRouterAddress, config.minterAllowance));
 
   // OkuDollar roles
   await sendAndWait("Grant VAULT_REBASER to Admin", () => okuDollar.grantRole(ROLES.VAULT_REBASER, deployerAddress));
@@ -534,71 +446,25 @@ async function configureRoles(
   await sendAndWait("Grant PSM_BUFFER_DEPOSITOR to Admin", () => litePSM.grantRole(ROLES.PSM_BUFFER_DEPOSITOR, deployerAddress));
 }
 
-async function configureBridge(
-  okuBridge: Contract,
-  evmChainId: number,
-  config: DeploymentConfig
-): Promise<void> {
-  logger.step(6, "Configuring Bridge (Testnet Settings)");
-
-  await sendAndWait(`Set bridge fee to ${config.bridgeFee} bps`, () => okuBridge.updateFee(config.bridgeFee));
-
-  // Note: updateLimits takes uint128 values
-  const minAmount = BigInt(config.minBridgeAmount.toString());
-  const maxAmount = BigInt(config.maxBridgeAmount.toString());
-  await sendAndWait("Set bridge limits", () => okuBridge.updateLimits(minAmount, maxAmount));
-
-  await sendAndWait(`Set bridge deadline to ${config.bridgeDeadline}s`, () => okuBridge.updateDeadline(config.bridgeDeadline));
-
-  // Verify the correct Solana counterpart (Devnet for EVM testnets, Mainnet otherwise) is supported
-  const solanaCounterpartId = getSolanaCounterpartChainId(evmChainId);
-  const counterpartName = solanaCounterpartId === 103 ? "Devnet" : "Mainnet";
-  const isSolanaSupported = await okuBridge.supportedChains(solanaCounterpartId);
-  if (!isSolanaSupported) {
-    await sendAndWait(`Add Solana ${counterpartName} as supported chain`, () => okuBridge.addSupportedChain(solanaCounterpartId));
-  } else {
-    logger.success(`  Solana ${counterpartName} (${solanaCounterpartId}) already supported`);
-  }
-}
-
 async function verifyDeployment(
   bookKey: string,
-  evmChainId: number,
   okuMoney: Contract,
-  okuDollar: Contract,
   litePSM: Contract,
-  okuBridge: Contract,
-  bridgeRouter: Contract
+  redemptionQueue: Contract
 ): Promise<void> {
-  logger.step(7, "Verifying Deployment");
+  logger.step(6, "Verifying Deployment");
 
   // Check roles
   const hasLitePSMMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, await litePSM.getAddress());
-  const hasBridgeMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, await okuBridge.getAddress());
+  const hasQueueMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, await redemptionQueue.getAddress());
 
   logger.info(`  LitePSM has OKUM_MINTER: ${hasLitePSMMinter}`);
-  logger.info(`  OkuBridge has OKUM_MINTER: ${hasBridgeMinter}`);
-
-  // Check bridge config
-  const bridgeFee = await okuBridge.bridgeFee();
-  const authorizedSigner = await okuBridge.authorizedSigner();
-  const isPaused = await okuBridge.paused();
-  const solanaCounterpartId = getSolanaCounterpartChainId(evmChainId);
-  const counterpartName = solanaCounterpartId === 103 ? "Devnet" : "Mainnet";
-  const isSolanaSupported = await okuBridge.supportedChains(solanaCounterpartId);
-  const bridgeLimits = await okuBridge.limits();
-
-  logger.info(`  Bridge fee: ${bridgeFee} bps`);
-  logger.info(`  Authorized signer: ${authorizedSigner}`);
-  logger.info(`  Bridge paused: ${isPaused}`);
-  logger.info(`  Solana ${counterpartName} (${solanaCounterpartId}) supported: ${isSolanaSupported}`);
-  logger.info(`  Min bridge: ${ethers.formatUnits(bridgeLimits.min, 18)} OkuM`);
-  logger.info(`  Max bridge: ${ethers.formatUnits(bridgeLimits.max, 18)} OkuM`);
+  logger.info(`  RedemptionQueue has OKUM_MINTER: ${hasQueueMinter}`);
 
   // Verify all addresses saved
   const book = loadAddressBook();
   const contracts = book[bookKey] || {};
-  const expectedContracts = ["MockUSDC", "OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM", "OkuBridge", "OkuBridgeRouter"];
+  const expectedContracts = ["MockUSDC", "OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM"];
 
   const missing = expectedContracts.filter(c => !contracts[c]);
   if (missing.length > 0) {
@@ -712,44 +578,27 @@ async function main() {
     config
   );
 
-  // Step 4: Deploy bridge contracts
-  const { okuBridge, bridgeRouter } = await deployBridge(
-    deployer,
-    deployerAddress,
-    bookKey,
-    await okuMoney.getAddress(),
-    await okuDollar.getAddress(),
-    chainConfig.chainId,
-    config
-  );
-
-  // Step 5: Configure roles
+  // Step 4: Configure roles
   await configureRoles(
     deployerAddress,
     okuMoney,
     okuDollar,
     redemptionQueue,
     litePSM,
-    okuBridge,
-    bridgeRouter,
     config
   );
 
-  // Step 6: Configure bridge
-  await configureBridge(okuBridge, chainConfig.chainId, config);
+  // Step 5: (was bridge configuration — removed in noBridge refactor)
 
-  // Step 7: Verify deployment state
+  // Step 6: Verify deployment state
   await verifyDeployment(
     bookKey,
-    chainConfig.chainId,
     okuMoney,
-    okuDollar,
     litePSM,
-    okuBridge,
-    bridgeRouter
+    redemptionQueue
   );
 
-  // Step 8: Etherscan verification (live networks only — never on a fork)
+  // Step 7: Etherscan verification (live networks only — never on a fork)
   if (!isFork) {
     await verifyAllContracts(networkName);
   }
@@ -770,15 +619,8 @@ async function main() {
   if (!isFork) {
     try {
       const metadata = getChainMetadata(networkName);
-      let bridgeChainId: number | undefined;
-      try {
-        bridgeChainId = getBridgeChainId(metadata.chainId);
-      } catch {
-        // Not all chains have a bridge mapping (e.g., certain mainnets pre-support)
-      }
       syncEvmRegistry(networkName, {
         chainId: metadata.chainId,
-        bridgeChainId,
         rpcUrl: metadata.rpcUrl,
         explorer: metadata.explorer,
         contracts: {
@@ -786,8 +628,6 @@ async function main() {
           okuDollar: addresses.OkuDollar,
           litePSM: addresses.LitePSM,
           redemptionQueue: addresses.RedemptionQueue,
-          okuBridge: addresses.OkuBridge,
-          okuBridgeRouter: addresses.OkuBridgeRouter,
           mockUSDC: addresses.MockUSDC,
         },
         deployer: deployerAddress,
@@ -800,7 +640,7 @@ async function main() {
   logger.info("Next steps:");
   logger.info("1. Check the updated testnet-addresses.json at the repo root");
   logger.info("2. Deploy SVM: cd ../SVM/oku-programs && NETWORK=devnet npm run deploy:programs && npm run deploy:init");
-  logger.info("3. Test bridge: npx hardhat run scripts/bridge/bridge-burn-to-solana.ts --network " + networkName);
+  logger.info("3. Test PSM flow: npx hardhat run scripts/interactions/test-flow.ts --network " + networkName);
 }
 
 main()

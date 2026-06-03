@@ -46,7 +46,10 @@ library Roles {
     bytes32 public constant QUEUE_PSM = keccak256("QUEUE_PSM");
     bytes32 public constant QUEUE_RESCUER = keccak256("QUEUE_RESCUER");
 
-    // ============ OkuBridge Roles ============
+    // ============ OkuBridge Roles (RESERVED) ============
+    // OkuBridge was removed in the noBridge refactor. Constants are retained so a
+    // future re-introduction (OkuBridge / NTT / CCIP) is a pure deploy + grant
+    // operation against the existing OkuMoney / OkuDollar / LitePSM contracts.
     bytes32 public constant BRIDGE_SIGNER_MANAGER = keccak256("BRIDGE_SIGNER_MANAGER");
     bytes32 public constant BRIDGE_PAUSER = keccak256("BRIDGE_PAUSER");
     bytes32 public constant BRIDGE_UNPAUSER = keccak256("BRIDGE_UNPAUSER");
@@ -58,14 +61,16 @@ library Roles {
     bytes32 public constant BRIDGE_REFUND_INITIATOR = keccak256("BRIDGE_REFUND_INITIATOR");
     bytes32 public constant BRIDGE_REFUND_CONFIRMER = keccak256("BRIDGE_REFUND_CONFIRMER");
 
-    // ============ OkuBridgeRouter Roles ============
+    // ============ OkuBridgeRouter Roles (RESERVED) ============
+    // See OkuBridge note above.
     bytes32 public constant ROUTER_UPGRADER = keccak256("ROUTER_UPGRADER");
     bytes32 public constant ROUTER_PAUSER = keccak256("ROUTER_PAUSER");
     bytes32 public constant ROUTER_UNPAUSER = keccak256("ROUTER_UNPAUSER");
     bytes32 public constant ROUTER_ADAPTER_MANAGER = keccak256("ROUTER_ADAPTER_MANAGER");
     bytes32 public constant ROUTER_BRIDGE_MANAGER = keccak256("ROUTER_BRIDGE_MANAGER");
 
-    // ============ NttAdapter Roles ============
+    // ============ NttAdapter Roles (RESERVED) ============
+    // See OkuBridge note above.
     bytes32 public constant NTT_CONFIGURATOR = keccak256("NTT_CONFIGURATOR");
     bytes32 public constant NTT_RESCUER = keccak256("NTT_RESCUER");
 }

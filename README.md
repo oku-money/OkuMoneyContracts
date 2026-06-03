@@ -141,12 +141,11 @@ not granted by the v1 deploy scripts.
 | OkuMoney multiplier | Stored `uint256`, 18 decimals (`okuMMultiplier`) | Stored `u64`, 9-decimal precision (`okum_multiplier`, 6-decimal token) |
 | OkuDollar multiplier | Continuous `_rpow` streaming | Discrete orchestrator-driven updates |
 | Yield lock | `block.number` comparison | `Clock::slot` comparison |
-| Signature scheme | ECDSA (EIP-712) | Ed25519 (instruction introspection) |
 | Token standard | ERC-20 (custom rebasing for OkuDollar) | Token-2022 (both tokens) |
 | Decimals | 18 | 6 |
 | Proxy pattern | TransparentUpgradeable / UUPS | Solana program upgrades (Squads authority) |
-| Convenience functions | On LitePSM contract | On OkuBridgeRouter program (CPI coordination) |
-| Bridge refund | Two-step (initiator + confirmer) | Single-step (refund admin, after deadline) |
+| Convenience functions | On LitePSM contract | Composed off-chain by the SDK from raw PSM / vault instructions |
+| Cross-chain transfers (v1 noBridge) | Off-chain orchestrator + LitePSM mint/burn | Off-chain orchestrator + lite-psm mint/burn |
 
 ## Directory Structure
 
@@ -165,9 +164,8 @@ contracts/
   SVM/                  # Anchor programs (Rust)
     oku-programs/
       programs/
-        lite-psm/       # PSM + bridge + queue + yield ops
+        lite-psm/       # PSM + queue + yield ops
         oku-dollar/     # Rebasing vault
-        oku-bridge-router/ # Convenience bridging + usdOku flows
       tests/
       scripts/
       deployments/      # Per-network deployment records (devnet.json, etc.)

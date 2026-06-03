@@ -1,4 +1,5 @@
 {
+  "_note": "Historical snapshot from a pre-noBridge deployment. Bridge / router fields retained as deploy-history; they no longer correspond to any on-chain program after the noBridge refactor.",
   "network": "devnet-fork",
   "timestamp": "2026-04-09T20:35:43.765Z",
   "verification": {

@@ -3,11 +3,7 @@
   "timestamp": "2026-05-26T18:52:45.042Z",
   "programs": {
     "litePsm": "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N",
-    "okuDollarProgram": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy",
-    "okuBridgeRouter": "GAjPAbq7sqFNzfnyhEAxBD9ofTPSTk4EtjFpq45BjRWb"
-  },
-  "addressLookupTables": {
-    "router": "JBdWQVZqNdS1mcFgrWEpJRjqz5QNr2yZwD6G67d6Vt4z"
+    "okuDollarProgram": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy"
   },
   "_archived": {
     "archivedAt": "2026-05-26T17:38:45.798Z",
@@ -40,9 +36,7 @@
   "pdas": {
     "psmConfig": "EkCYunihwmNasBEnNXoJx8sb3CdZnDYKLpPvLyY6Hm3u",
     "redemptionQueue": "5FWTuuF67sUNca3w8cqHta4Q5xF6jAiFhGYunuFrSUBz",
-    "bridgeConfig": "HqqGG7V9sq9LguE8Et7YE7tdtH6vefanJm7udr9st1je",
     "vaultConfig": "93tqPwYQfFtmuU5SxL4xuzi3PMbjZWKmuiHt2FBe8qaK",
-    "routerConfig": "FebQb6um1r11pXxSrtFDreDC9RGcbJVhtAmikzx1yP8S",
     "psmVaultUsdc": "HrnfYJM4a3QprfmUCpzXg2L94CF2ym8GooqquqSsmVT2",
     "psmOkuMoneyEscrow": "7HrzaCMWzjQ3HGa5fhQP2NFTaxsaTJGeKvLWd46HURxP",
     "vaultOkuMoney": "4e9a8SNTc1sWke5F4r2AkRWtq1miV52KanGxncJYLk6i"
@@ -50,10 +44,8 @@
   "authorities": {
     "coldMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
     "warmMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
-    "orchestrator": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
-    "feeRecipient": "6ymMXChb81a4GZsq8janSyqUiSJDwGpvKeFUEdrs6TyF"
+    "orchestrator": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
   },
-  "nonces": {},
   "upgrades": [
     {
       "program": "OkuBridgeRouter",

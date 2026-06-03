@@ -8,21 +8,16 @@
   },
   "programs": {
     "litePsm": "GtjZJFmhrAxYDrK2JqK7H3My6u5m7qmkzXqd9p6NLWgS",
-    "okuDollarProgram": "9CRADsxW3dN4xnmwLH7DHRfo4BM86B5NNXE7ku2pYGy9",
-    "okuBridgeRouter": "GEs9yWYSAJDwjibhQZc5eY8Wex7M9hFscThnL4RGafJu"
+    "okuDollarProgram": "9CRADsxW3dN4xnmwLH7DHRfo4BM86B5NNXE7ku2pYGy9"
   },
   "pdas": {
     "psmConfig": "2FC6FvAjGjK8othNzDjJqmKurwFD2EoS6nobhmyZsxk3",
     "redemptionQueue": "FXN1JKEeDaePr7cNmZsNBGxzhiRabmpUZ8sokdbPphFB",
-    "bridgeConfig": "7k5MxycaYeH6s3o1qNz7st2jwR92yHjttG3h3qc2Uwtu",
-    "vaultConfig": "54K3SqXvnZkHtD19ii6VHxcNxEdk6zfvVVRDScobNX5h",
-    "routerConfig": "Bb7fT9brJRKT1F88vhty5BRBG1pSgd7Dj9qLgnrjN9b"
+    "vaultConfig": "54K3SqXvnZkHtD19ii6VHxcNxEdk6zfvVVRDScobNX5h"
   },
-  "nonces": {},
   "authorities": {
     "coldMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
     "warmMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
-    "orchestrator": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
-    "feeRecipient": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
+    "orchestrator": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
   }
 }

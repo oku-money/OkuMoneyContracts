@@ -220,15 +220,6 @@ pub mod lite_psm {
         instructions::psm_admin::cancel_role_admin_transfer(ctx)
     }
 
-    /// Initialize blacklist exemption for bridge and router (one-time, ROLE_ADMIN only)
-    pub fn initialize_blacklist_exempt(
-        ctx: Context<InitializeBlacklistExempt>,
-        bridge: Pubkey,
-        router: Pubkey,
-    ) -> Result<()> {
-        instructions::psm_admin::initialize_blacklist_exempt(ctx, bridge, router)
-    }
-
     // ===== Yield Operations =====
 
     /// Set OkuMoney price directly (REBASER only)

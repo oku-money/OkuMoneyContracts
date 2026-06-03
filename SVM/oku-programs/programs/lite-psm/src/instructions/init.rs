@@ -112,10 +112,6 @@ pub fn initialize(
     // OkuMoney price - starts at PRECISION (1e9 = $1.00)
     config.oku_m_price = PRECISION;
 
-    // Blacklist exemptions - set via initialize_blacklist_exempt
-    config.blacklist_exempt_bridge = Pubkey::default();
-    config.blacklist_exempt_router = Pubkey::default();
-
     // Two-step `role_admin` transfer slot — empty until
     // `set_authority(RoleAdmin, ...)` proposes a rotation.
     config.pending_role_admin = Pubkey::default();

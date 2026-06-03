@@ -160,21 +160,6 @@ pub struct ThawAccount<'info> {
 }
 
 #[derive(Accounts)]
-pub struct InitializeBlacklistExempt<'info> {
-    /// Role admin - only role_admin can set blacklist exemptions
-    pub role_admin: Signer<'info>,
-
-    /// PSM config
-    #[account(
-        mut,
-        seeds = [PsmConfig::SEED],
-        bump = config.bump,
-        has_one = role_admin @ LitePsmError::Unauthorized
-    )]
-    pub config: Account<'info, PsmConfig>,
-}
-
-#[derive(Accounts)]
 pub struct SetAuthority<'info> {
     /// Role admin - only role_admin can update authorities
     pub role_admin: Signer<'info>,

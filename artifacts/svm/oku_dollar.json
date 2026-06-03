@@ -2222,26 +2222,6 @@
             "type": "u64"
           },
           {
-            "name": "blacklist_exempt_bridge",
-            "docs": [
-              "Blacklist-exempt bridge address (cannot be frozen).",
-              "",
-              "NOTE (noBridge phase B): on v1 there is no on-chain bridge, so this",
-              "slot is unused. Retained for storage compatibility until phase C",
-              "removes it together with `blacklist_exempt_router`."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "blacklist_exempt_router",
-            "docs": [
-              "Blacklist-exempt router address (cannot be frozen).",
-              "",
-              "NOTE (noBridge phase B): unused in v1; see `blacklist_exempt_bridge`."
-            ],
-            "type": "pubkey"
-          },
-          {
             "name": "pyth_program_owner",
             "docs": [
               "Pyth program owner pubkey accepted by `check_oracle_reserves`.",

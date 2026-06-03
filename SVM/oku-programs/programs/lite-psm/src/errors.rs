@@ -152,28 +152,6 @@ pub enum LitePsmError {
     #[msg("Proposed oku_m_price exceeds MAX_OKU_M_PRICE ceiling")]
     PriceAboveMax,
 
-    // ===== Blacklist Errors =====
-    //
-    // NOTE (noBridge phase B): the blacklist-exempt mechanism is unused in
-    // v1 (no on-chain bridge / router PDA to exempt). The error variants
-    // remain so freeze_account's exemption check can still report a
-    // useful error when the exempt slots are non-default. Phase C removes
-    // them together with the underlying state fields.
-    /// Account is blacklist exempt and cannot be frozen
-    #[msg("Account is blacklist exempt and cannot be frozen")]
-    BlacklistExempt,
-
-    /// Blacklist exemption already initialized
-    #[msg("Blacklist exemption already initialized")]
-    BlacklistExemptAlreadyInitialized,
-
-    /// One of the supplied blacklist-exempt pubkeys is invalid (e.g. the
-    /// zero pubkey). Distinct from `InvalidAuthority` — those pubkeys are
-    /// not authorities, they're addresses that `freeze_account` must
-    /// refuse to freeze.
-    #[msg("Blacklist-exempt pubkey is invalid (e.g. zero pubkey)")]
-    InvalidBlacklistExemptAddress,
-
     // ===== Authority validation =====
     /// Authority pubkey is the zero pubkey or otherwise invalid
     #[msg("Authority pubkey is invalid (e.g. zero pubkey)")]

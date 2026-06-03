@@ -584,70 +584,6 @@
       ]
     },
     {
-      "name": "initialize_blacklist_exempt",
-      "docs": [
-        "Initialize blacklist exemption for bridge and router (one-time, ROLE_ADMIN only)"
-      ],
-      "discriminator": [
-        184,
-        212,
-        138,
-        218,
-        87,
-        96,
-        176,
-        148
-      ],
-      "accounts": [
-        {
-          "name": "role_admin",
-          "docs": [
-            "Role admin - only role_admin can set blacklist exemptions"
-          ],
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "docs": [
-            "PSM config"
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "bridge",
-          "type": "pubkey"
-        },
-        {
-          "name": "router",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
       "name": "mint_oku_m",
       "docs": [
         "Mint OkuMoney with USDC (price-aware)",
@@ -2288,19 +2224,6 @@
       ]
     },
     {
-      "name": "BlacklistExemptInitialized",
-      "discriminator": [
-        44,
-        220,
-        97,
-        197,
-        106,
-        233,
-        9,
-        153
-      ]
-    },
-    {
       "name": "BufferDepositEvent",
       "discriminator": [
         156,
@@ -2746,71 +2669,56 @@
     },
     {
       "code": 6026,
-      "name": "BlacklistExempt",
-      "msg": "Account is blacklist exempt and cannot be frozen"
-    },
-    {
-      "code": 6027,
-      "name": "BlacklistExemptAlreadyInitialized",
-      "msg": "Blacklist exemption already initialized"
-    },
-    {
-      "code": 6028,
-      "name": "InvalidBlacklistExemptAddress",
-      "msg": "Blacklist-exempt pubkey is invalid (e.g. zero pubkey)"
-    },
-    {
-      "code": 6029,
       "name": "InvalidAuthority",
       "msg": "Authority pubkey is invalid (e.g. zero pubkey)"
     },
     {
-      "code": 6030,
+      "code": 6027,
       "name": "NoPendingRoleAdmin",
       "msg": "No pending role-admin transfer to accept"
     },
     {
-      "code": 6031,
+      "code": 6028,
       "name": "NotPendingRoleAdmin",
       "msg": "Caller is not the pending role admin"
     },
     {
-      "code": 6032,
+      "code": 6029,
       "name": "EscrowAlreadyInitialized",
       "msg": "Escrow vault already initialized"
     },
     {
-      "code": 6033,
+      "code": 6030,
       "name": "InvalidPythProgramOwner",
       "msg": "Pyth program owner pubkey is required (cannot be the zero pubkey)"
     },
     {
-      "code": 6034,
+      "code": 6031,
       "name": "InvalidUsdcDecimals",
       "msg": "USDC mint must have exactly 6 decimals"
     },
     {
-      "code": 6035,
+      "code": 6032,
       "name": "InvalidOkuMoneyDecimals",
       "msg": "OkuMoney mint must have exactly 6 decimals"
     },
     {
-      "code": 6036,
+      "code": 6033,
       "name": "AmountTooSmall",
       "msg": "Output amount too small (rounds to zero)"
     },
     {
-      "code": 6037,
+      "code": 6034,
       "name": "OutputBelowMinimum",
       "msg": "Output below minimum (slippage exceeded)"
     },
     {
-      "code": 6038,
+      "code": 6035,
       "name": "InvalidStaleness",
       "msg": "Staleness threshold out of range (must be 60s..=7 days)"
     },
     {
-      "code": 6039,
+      "code": 6036,
       "name": "TransferHookNotAllowed",
       "msg": "OkuMoney mint must not have the TransferHook Token-2022 extension"
     }
@@ -2893,28 +2801,6 @@
           },
           {
             "name": "new_authority",
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "BlacklistExemptInitialized",
-      "docs": [
-        "Emitted when blacklist exemption is initialized.",
-        "",
-        "NOTE (noBridge phase B): kept for storage compatibility; phase C",
-        "removes both the instruction and this event."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "bridge",
-            "type": "pubkey"
-          },
-          {
-            "name": "router",
             "type": "pubkey"
           }
         ]
@@ -3435,26 +3321,6 @@
               "Matches EVM's okuMPrice() storage pattern"
             ],
             "type": "u64"
-          },
-          {
-            "name": "blacklist_exempt_bridge",
-            "docs": [
-              "Blacklist-exempt bridge address (cannot be frozen).",
-              "",
-              "NOTE (noBridge phase B): on v1 there is no on-chain bridge, so this",
-              "slot is unused. Retained for storage compatibility until phase C",
-              "removes it together with `blacklist_exempt_router`."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "blacklist_exempt_router",
-            "docs": [
-              "Blacklist-exempt router address (cannot be frozen).",
-              "",
-              "NOTE (noBridge phase B): unused in v1; see `blacklist_exempt_bridge`."
-            ],
-            "type": "pubkey"
           },
           {
             "name": "pyth_program_owner",

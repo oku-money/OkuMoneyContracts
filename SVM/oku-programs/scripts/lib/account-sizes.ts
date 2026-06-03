@@ -14,9 +14,10 @@
  */
 
 // lite_psm — programs/lite-psm/src/state.rs
-export const PSM_CONFIG_LEN = 722;            // const _: () = assert!(PsmConfig::LEN == 722);
-                                              // Phase C will drop blacklist_exempt_{bridge,router}
-                                              // and shrink this to 658.
+export const PSM_CONFIG_LEN = 658;            // const _: () = assert!(PsmConfig::LEN == 658);
+                                              // Was 722 before noBridge phase C (which removed
+                                              // the two `blacklist_exempt_*` Pubkey slots,
+                                              // -64 bytes).
 export const REDEMPTION_QUEUE_LEN = 9_640;    // const _: () = assert!(RedemptionQueue::LEN == 9_640);
                                               // Zero-copy ring at MAX_ENTRIES=200 (Phase 13b).
                                               // Capped at 200 (not the spec target of 500) by Solana's

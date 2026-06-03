@@ -263,16 +263,6 @@ pub struct YieldDistributionSlotSet {
     pub slot: u64,
 }
 
-/// Emitted when blacklist exemption is initialized.
-///
-/// NOTE (noBridge phase B): kept for storage compatibility; phase C
-/// removes both the instruction and this event.
-#[event]
-pub struct BlacklistExemptInitialized {
-    pub bridge: Pubkey,
-    pub router: Pubkey,
-}
-
 /// Emitted when an account is frozen.
 /// EVM equivalent: `Blacklisted(address indexed account)`
 #[event]

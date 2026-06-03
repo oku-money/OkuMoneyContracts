@@ -5,8 +5,9 @@
 //! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/Pausable.sol
 //! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol
 //!
-//! Freeze / thaw against a blacklist-exempt list (bridge + router PDAs cannot
-//! be frozen) mirrors Circle FiatToken's blacklister/exempted-address pattern.
+//! Freeze / thaw mirrors Circle FiatToken's blacklister pattern. The
+//! blacklist-exempt mechanism (bridge/router PDA exemption) was removed
+//! in the noBridge refactor — no on-chain infrastructure PDAs remain.
 //! Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v1/Blacklistable.sol
 
 // F-02: CPI targets (freeze_account, thaw_account) use Anchor's typed
@@ -16,8 +17,8 @@
 
 use crate::constants::{ORACLE_MAX_STALENESS_SECS, ORACLE_MIN_STALENESS_SECS};
 use crate::contexts::{
-    AcceptRoleAdmin, AllowanceManager, CapManager, FreezeAccount, InitializeBlacklistExempt,
-    OracleManager, Pause, SetAuthority, ThawAccount, Unpause,
+    AcceptRoleAdmin, AllowanceManager, CapManager, FreezeAccount, OracleManager, Pause,
+    SetAuthority, ThawAccount, Unpause,
 };
 use crate::errors::LitePsmError;
 use crate::events::*;
@@ -176,20 +177,12 @@ pub fn set_pyth_program_owner(
     Ok(())
 }
 
-/// Freeze an OkuMoney token account (compliance/blacklist)
-/// Uses Token-2022 freeze authority CPI
-/// MUST work even when PSM is paused (no pause check)
-/// Cannot freeze blacklist-exempt addresses (bridge, router)
+/// Freeze an OkuMoney token account (compliance/blacklist).
+/// Uses Token-2022 freeze authority CPI.
+/// MUST work even when PSM is paused (no pause check).
 pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
     let config = &ctx.accounts.config;
     let target_owner = ctx.accounts.target_oku_money_ata.owner;
-
-    // Check blacklist exemption
-    require!(
-        target_owner != config.blacklist_exempt_bridge
-            && target_owner != config.blacklist_exempt_router,
-        LitePsmError::BlacklistExempt
-    );
 
     let bump = config.bump;
     let seeds = &[PsmConfig::SEED, &[bump]];
@@ -237,43 +230,6 @@ pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
         account: ctx.accounts.target_oku_money_ata.key(),
         target_owner: ctx.accounts.target_oku_money_ata.owner,
     });
-
-    Ok(())
-}
-
-/// Initialize blacklist exemption for bridge and router addresses.
-/// One-time admin call — cannot be changed after set.
-///
-/// Both pubkeys must be non-default. Allowing `Pubkey::default()` would lock
-/// the exemption slot into uselessness (no real account can ever match) yet
-/// the one-shot guard would still fire on a re-call.
-pub fn initialize_blacklist_exempt(
-    ctx: Context<InitializeBlacklistExempt>,
-    bridge: Pubkey,
-    router: Pubkey,
-) -> Result<()> {
-    require!(
-        bridge != Pubkey::default(),
-        LitePsmError::InvalidBlacklistExemptAddress
-    );
-    require!(
-        router != Pubkey::default(),
-        LitePsmError::InvalidBlacklistExemptAddress
-    );
-
-    let config = &mut ctx.accounts.config;
-
-    // Ensure not already initialized
-    require!(
-        config.blacklist_exempt_bridge == Pubkey::default()
-            && config.blacklist_exempt_router == Pubkey::default(),
-        LitePsmError::BlacklistExemptAlreadyInitialized
-    );
-
-    config.blacklist_exempt_bridge = bridge;
-    config.blacklist_exempt_router = router;
-
-    emit!(BlacklistExemptInitialized { bridge, router });
 
     Ok(())
 }

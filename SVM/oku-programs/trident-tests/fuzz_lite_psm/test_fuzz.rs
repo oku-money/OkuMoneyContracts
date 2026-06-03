@@ -5,9 +5,11 @@
 //!   flow_redeem      — redeem_oku_m: queue OkuMoney for USDC redemption
 //!   flow_process     — process_queue: execute pending redemptions
 //!   flow_pause       — pause / unpause toggle
-//!   flow_bridge_burn — bridge_burn: burn OkuMoney for cross-chain transfer
 //!   flow_deposit_buf — deposit_buffer / withdraw_buffer
 //!   flow_freeze      — freeze_account / thaw_account
+//!
+//! (flow_bridge_burn was removed in the noBridge refactor — v1 has no
+//! on-chain bridge.)
 //!
 //! Invariants checked in #[end]:
 //!   1. OkuMoney supply never exceeds max_supply
@@ -60,8 +62,7 @@ impl FuzzTest {
     /// with current discriminators from anchor build:
     ///   1. Initialize (config + roles)
     ///   2. SetupRedemptionQueue
-    ///   3. SetupOkusdEscrow
-    ///   4. InitializeBridge
+    ///   3. SetupOkuMoneyEscrow
     #[init]
     fn start(&mut self) {}
 
@@ -243,67 +244,7 @@ impl FuzzTest {
     }
 
     // ----------------------------------------------------------------
-    // FLOW 5: bridge_burn
-    // Invariant: OkuMoney supply decreases; bridge nonce increments
-    // ----------------------------------------------------------------
-    #[flow]
-    fn flow_bridge_burn(&mut self) {
-        let amount: u64 = self.trident.random_from_range(1u64..100_000_000u64);
-        let destination_chain_id: u16 = 1;
-        let recipient: [u8; 20] = {
-            let mut r = [0u8; 20];
-            self.trident.random_bytes(&mut r);
-            // Ensure non-zero (zero address is rejected)
-            r[0] = r[0].max(1);
-            r
-        };
-
-        let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
-        let config = self.fuzz_accounts.config.insert(
-            &mut self.trident,
-            Some(PdaSeeds::new(&[b"psm_config"], lite_psm::program_id())),
-        );
-        let bridge_config = self.fuzz_accounts.bridge_config.insert(
-            &mut self.trident,
-            Some(PdaSeeds::new(&[b"bridge_config"], lite_psm::program_id())),
-        );
-        let okusd_mint = self
-            .fuzz_accounts
-            .okusd_mint
-            .insert(&mut self.trident, None);
-        let user_okusd_ata = self
-            .fuzz_accounts
-            .user_okusd_ata
-            .insert(&mut self.trident, None);
-        let fee_recipient_ata = self
-            .fuzz_accounts
-            .fee_recipient_ata
-            .insert(&mut self.trident, None);
-        let bridge_nonce = self
-            .fuzz_accounts
-            .bridge_nonce
-            .insert(&mut self.trident, None);
-
-        let ix = BridgeBurnInstruction::data(BridgeBurnInstructionData::new(
-            amount,
-            recipient,
-            destination_chain_id,
-        ))
-        .accounts(BridgeBurnInstructionAccounts::new(
-            user,
-            config,
-            bridge_config,
-            okusd_mint,
-            user_okusd_ata,
-            fee_recipient_ata,
-            bridge_nonce,
-        ));
-
-        let _ = self.trident.process_transaction(&[ix.instruction()], Some("BridgeBurn"));
-    }
-
-    // ----------------------------------------------------------------
-    // FLOW 6: deposit_buffer / withdraw_buffer
+    // FLOW 5: deposit_buffer / withdraw_buffer
     // Invariant: withdraw never leaves vault unable to cover queue
     // ----------------------------------------------------------------
     #[flow]

@@ -1,11 +1,10 @@
 /**
  * Shared PSM test setup — bankrun-only.
  *
- * Module-level keypairs (`coldMultisig`, `warmMultisig`, `psmOrchestrator`,
- * `bridgeOrchestrator`) are generated once at module load and reused
- * across the entire mocha process. They are deterministic per-process
- * but freshly generated per-process boot, so each test run starts with
- * pristine authorities.
+ * Module-level keypairs (`coldMultisig`, `warmMultisig`, `psmOrchestrator`)
+ * are generated once at module load and reused across the entire mocha
+ * process. They are deterministic per-process but freshly generated per-
+ * process boot, so each test run starts with pristine authorities.
  *
  * `initializePsm` runs the PSM `initialize` + `setup_redemption_queue` +
  * `setup_oku_money_escrow` instructions against the supplied program.
@@ -68,12 +67,10 @@ export const coldMultisig = Keypair.generate();
 export const warmMultisig = Keypair.generate();
 
 /** PSM orchestrator — automated operations. PSM roles: queueProcessor,
- *  bufferDepositor, rebaser. */
+ *  bufferDepositor, rebaser. In v1 noBridge this same key also drives
+ *  cross-chain transfers off-chain by calling `mint_oku_m` /
+ *  `redeem_oku_m` on each side. */
 export const psmOrchestrator = Keypair.generate();
-
-/** Bridge orchestrator — Ed25519 signer for bridge_mint. Separate from
- *  psmOrchestrator to keep role separation explicit. */
-export const bridgeOrchestrator = Keypair.generate();
 
 // ---------------------------------------------------------------------------
 // PSM initialization

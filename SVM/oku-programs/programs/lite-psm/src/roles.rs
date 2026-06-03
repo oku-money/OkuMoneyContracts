@@ -28,99 +28,16 @@
 //! | `AllowanceManager` | `OKUM_ALLOWANCE_MANAGER` | Cold Multisig - reset minter allowance |
 //! | `Rebaser` | `OKUM_REBASER` | Orchestrator - update OkuMoney price |
 //!
-//! ### Bridge Roles (BridgeAuthorityRole)
-//!
-//! | SVM Role | EVM Equivalent | Description |
-//! |----------|----------------|-------------|
-//! | `BridgeAdmin` | `DEFAULT_ADMIN_ROLE` | Meta role: manage bridge roles |
-//! | `BridgePauser` | `BRIDGE_PAUSER` | Emergency pause |
-//! | `BridgeUnpauser` | `BRIDGE_UNPAUSER` | Unpause |
-//! | `OrchestratorSigner` | N/A (stored as address) | Ed25519 key for signature verification |
-//! | `FeeRecipient` | N/A (stored as address) | Receives bridge fees |
-//! | `ChainManager` | `BRIDGE_CHAIN_MANAGER` | Add/remove supported chains |
-//! | `FeeManager` | `BRIDGE_FEE_MANAGER` | Update fee configuration |
-//! | `NonceAdmin` | `BRIDGE_NONCE_ADMIN` | Emergency nonce management |
-//! | `RefundInitiator` | `BRIDGE_REFUND_INITIATOR` | Initiate refunds (step 1) |
-//! | `RefundConfirmer` | `BRIDGE_REFUND_CONFIRMER` | Confirm refunds (step 2) |
-//! | `SignerManager` | `BRIDGE_SIGNER_MANAGER` | Update orchestrator signer (Cold Multisig) |
-//! | `LimitsManager` | `BRIDGE_LIMITS_MANAGER` | Update limits and deadline (Cold Multisig) |
+//! Bridge roles (`BridgeAuthorityRole`) were removed in the noBridge
+//! refactor. v1 cross-chain transfers are mediated by the orchestrator
+//! holding the standard PSM roles above (`BufferDepositor` +
+//! `QueueProcessor` + `Rebaser`) — there is no separate bridge RBAC.
 
 use anchor_lang::prelude::*;
 
-/// Bridge authority roles that can be updated via set_bridge_authority.
-///
-/// These roles are separate from PSM roles and govern bridge-specific operations.
-/// The two-step refund pattern uses `RefundInitiator` and `RefundConfirmer` to
-/// prevent single-key double-mint attacks.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
-pub enum BridgeAuthorityRole {
-    /// Meta role: manage bridge roles.
-    /// EVM: DEFAULT_ADMIN_ROLE
-    BridgeAdmin,
-
-    /// Emergency pause.
-    /// EVM: BRIDGE_PAUSER
-    BridgePauser,
-
-    /// Unpause.
-    /// EVM: BRIDGE_UNPAUSER
-    BridgeUnpauser,
-
-    /// Ed25519 public key for signature verification.
-    /// Not a role in EVM (stored as state variable).
-    ///
-    /// DEPRECATED: this variant is no longer accepted by `set_bridge_authority`
-    /// because routing the orchestrator-signer rotation through `bridge_admin`
-    /// would bypass the dedicated `signer_manager` gate that
-    /// `update_orchestrator_signer` enforces. Always use the dedicated
-    /// `update_orchestrator_signer` instruction. The variant is kept in the
-    /// enum to preserve IDL ABI for off-chain clients.
-    OrchestratorSigner,
-
-    /// Receives bridge fees.
-    /// Not a role in EVM (stored as state variable).
-    ///
-    /// DEPRECATED: this variant is no longer accepted by `set_bridge_authority`
-    /// because routing the fee-recipient rotation through `bridge_admin` would
-    /// bypass the dedicated `fee_manager` gate that `update_fee_recipient`
-    /// enforces. Always use the dedicated `update_fee_recipient` instruction.
-    /// The variant is kept in the enum to preserve IDL ABI for off-chain
-    /// clients.
-    FeeRecipient,
-
-    /// Add/remove supported chains.
-    /// EVM: BRIDGE_CHAIN_MANAGER
-    ChainManager,
-
-    /// Update fee configuration.
-    /// EVM: BRIDGE_FEE_MANAGER
-    FeeManager,
-
-    /// Emergency nonce management.
-    /// EVM: BRIDGE_NONCE_ADMIN
-    NonceAdmin,
-
-    /// Initiate refunds (step 1 of two-step refund).
-    /// EVM: BRIDGE_REFUND_INITIATOR
-    RefundInitiator,
-
-    /// Confirm refunds (step 2 of two-step refund).
-    /// Must be different key than RefundInitiator.
-    /// EVM: BRIDGE_REFUND_CONFIRMER
-    RefundConfirmer,
-
-    /// Update orchestrator signer (Cold Multisig).
-    /// EVM: BRIDGE_SIGNER_MANAGER
-    SignerManager,
-
-    /// Update bridge limits and deadline (Cold Multisig).
-    /// EVM: BRIDGE_LIMITS_MANAGER
-    LimitsManager,
-}
-
 /// Authority roles that can be updated via set_authority.
 ///
-/// These roles govern PSM-specific operations separate from bridge roles.
+/// These roles govern PSM-specific operations.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AuthorityRole {
     /// Meta role: grant/revoke all roles (cold multisig).

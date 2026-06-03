@@ -193,7 +193,8 @@ describe("lite-psm", () => {
       expect(config.allowanceManager.toString()).to.equal(coldMultisig.publicKey.toString());
       expect(config.rebaser.toString()).to.equal(orchestrator.publicKey.toString());
       expect(config.maxSupply.toString()).to.equal(MAX_SUPPLY.toString());
-      // Minter allowance may be partially consumed by bridge_security tests
+      // Minter allowance may have been partially consumed by earlier tests
+      // sharing this bankrun harness.
       expect(Number(config.minterAllowance)).to.be.greaterThan(0);
       expect(Number(config.minterAllowance)).to.be.at.most(Number(MINTER_ALLOWANCE));
       expect(config.isPaused).to.be.false;
@@ -351,8 +352,6 @@ describe("lite-psm", () => {
     });
   });
 
-  // NOTE: RBAC tests are skipped because config is initialized by bridge_security tests
-  // with different keypairs. RBAC functionality is tested there instead.
   describe("RBAC Role Separation Tests", () => {
     describe("pause/unpause separation", () => {
       it("warm multisig can pause", async () => {

@@ -5,14 +5,7 @@
 //!   Circle's FiatToken minter / blacklist controller pattern.
 //!   Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v2/FiatTokenV2_2.sol
 //!   Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v1/Blacklistable.sol
-//! - `ProcessedRequest` / `RefundedRequest` use Anchor's `init` constraint as a
-//!   one-shot replay nonce (PDA exists ⇒ already processed).
-//!   Taken from https://www.anchor-lang.com/docs/account-constraints
-//! - `BridgeRequest` 80-byte packed message + keccak request_id is the SVM
-//!   port of the EVM-side `OkuBridge.sol` orchestrator-signed bridge protocol.
-//!   See `contracts/EVM/src/bridge/OkuBridge.sol` for the source-chain side.
 
-use crate::errors::LitePsmError;
 use anchor_lang::prelude::*;
 
 /// PSM configuration PDA
@@ -65,7 +58,8 @@ pub struct PsmConfig {
     // ===== Limits =====
     /// Maximum OkuMoney supply cap
     pub max_supply: u64,
-    /// Bridge mint allowance remaining
+    /// Mint allowance remaining (configurable cap on freshly minted OkuMoney
+    /// between admin resets, mirroring the EVM `minterAllowance` pattern).
     pub minter_allowance: u64,
     /// Whether the PSM is paused
     pub is_paused: bool,
@@ -85,9 +79,15 @@ pub struct PsmConfig {
     /// Matches EVM's okuMPrice() storage pattern
     pub oku_m_price: u64,
 
-    /// Blacklist-exempt bridge address (cannot be frozen)
+    /// Blacklist-exempt bridge address (cannot be frozen).
+    ///
+    /// NOTE (noBridge phase B): on v1 there is no on-chain bridge, so this
+    /// slot is unused. Retained for storage compatibility until phase C
+    /// removes it together with `blacklist_exempt_router`.
     pub blacklist_exempt_bridge: Pubkey,
-    /// Blacklist-exempt router address (cannot be frozen)
+    /// Blacklist-exempt router address (cannot be frozen).
+    ///
+    /// NOTE (noBridge phase B): unused in v1; see `blacklist_exempt_bridge`.
     pub blacklist_exempt_router: Pubkey,
 
     /// Pyth program owner pubkey accepted by `check_oracle_reserves`.
@@ -274,312 +274,10 @@ const _: () = assert!(RedemptionQueue::LEN == 9_640);
 // 9_640 is comfortably under Solana's `MAX_PERMITTED_DATA_INCREASE = 10_240`
 // CPI-allocation cap, so `setup_redemption_queue` can allocate in one shot.
 
-/// Bridge configuration PDA
-/// Seeds: ["bridge_config"]
-#[account]
-#[derive(InitSpace)]
-pub struct BridgeConfig {
-    /// PDA bump seed
-    pub bump: u8,
-
-    // ===== Bridge-Specific Authorities (12 roles, separate from PSM) =====
-    /// Bridge admin - manages bridge roles (meta-role)
-    /// EVM: DEFAULT_ADMIN_ROLE
-    pub bridge_admin: Pubkey,
-    /// Bridge pauser - emergency pause
-    /// EVM: BRIDGE_PAUSER
-    pub bridge_pauser: Pubkey,
-    /// Bridge unpauser - unpause
-    /// EVM: BRIDGE_UNPAUSER
-    pub bridge_unpauser: Pubkey,
-    /// Orchestrator signer - Ed25519 public key for signature verification
-    pub orchestrator_signer: Pubkey,
-    /// Fee recipient - receives bridge fees
-    pub fee_recipient: Pubkey,
-    /// Chain manager - add/remove supported chains
-    /// EVM: BRIDGE_CHAIN_MANAGER
-    pub chain_manager: Pubkey,
-    /// Fee manager - update fee configuration and fee recipient
-    /// EVM: BRIDGE_FEE_MANAGER
-    pub fee_manager: Pubkey,
-    /// Nonce admin - emergency nonce management
-    /// EVM: BRIDGE_NONCE_ADMIN
-    pub nonce_admin: Pubkey,
-    /// Refund initiator - initiate refunds (step 1 of two-step refund)
-    /// EVM: BRIDGE_REFUND_INITIATOR
-    pub refund_initiator: Pubkey,
-    /// Refund confirmer - confirm refunds (step 2 of two-step refund)
-    /// Must be different key than refund_initiator to prevent single-key double-mint
-    /// EVM: BRIDGE_REFUND_CONFIRMER
-    pub refund_confirmer: Pubkey,
-    /// Signer manager - update orchestrator signer (Cold Multisig)
-    /// EVM: BRIDGE_SIGNER_MANAGER
-    pub signer_manager: Pubkey,
-    /// Limits manager - update bridge limits and deadline (Cold Multisig)
-    /// EVM: BRIDGE_LIMITS_MANAGER
-    pub limits_manager: Pubkey,
-
-    // ===== Configuration =====
-    /// Bridge fee in basis points (10 = 0.1%)
-    pub bridge_fee_bps: u16,
-    /// Minimum bridge amount
-    pub min_bridge_amount: u64,
-    /// Maximum bridge amount
-    pub max_bridge_amount: u64,
-    /// Whether bridge is paused
-    pub is_paused: bool,
-
-    /// Configurable bridge deadline in seconds (default 3600 = 1 hour)
-    pub bridge_deadline_secs: i64,
-
-    // ===== Chain Identity =====
-    /// This chain's ID (e.g., Solana), set during initialize_bridge
-    pub source_chain_id: u16,
-
-    // ===== Chain Whitelist =====
-    /// Supported destination chain IDs (fixed array, max 32 chains)
-    pub supported_chains: [u16; 32],
-    /// Number of active chains in the array
-    pub supported_chains_count: u8,
-}
-
-impl BridgeConfig {
-    pub const SEED: &'static [u8] = b"bridge_config";
-
-    /// Space needed for BridgeConfig account: 8 byte discriminator +
-    /// `InitSpace`-derived field sum. Pinned at 487 bytes by the
-    /// assertion below.
-    pub const LEN: usize = 8 + Self::INIT_SPACE;
-
-    /// Check if a chain is supported
-    pub fn is_chain_supported(&self, chain_id: u16) -> bool {
-        self.supported_chains[..self.supported_chains_count as usize].contains(&chain_id)
-    }
-
-    /// Add a supported chain (returns error if full or already exists).
-    ///
-    /// Rejects:
-    /// - `chain_id == 0` (reserved sentinel)
-    /// - `chain_id == self.source_chain_id` (would allow self-bridging — mirrors
-    ///   EVM `OkuBridge.bridgeBurn`'s `if (destChainId == block.chainid)` guard,
-    ///   moved to admin-time so the runtime path doesn't need to re-check it)
-    /// - duplicates
-    /// - capacity overflow
-    pub fn add_chain(&mut self, chain_id: u16) -> Result<()> {
-        require!(chain_id != 0, LitePsmError::InvalidChainId);
-        require!(
-            chain_id != self.source_chain_id,
-            LitePsmError::InvalidChainId
-        );
-        require!(
-            !self.is_chain_supported(chain_id),
-            LitePsmError::ChainAlreadySupported
-        );
-        require!(
-            self.supported_chains_count < 32,
-            LitePsmError::ChainListFull
-        );
-
-        self.supported_chains[self.supported_chains_count as usize] = chain_id;
-        // F-11: checked_add for defense-in-depth even though the require! above
-        // already guards count < 32 (which is well below u8::MAX = 255).
-        self.supported_chains_count = self
-            .supported_chains_count
-            .checked_add(1)
-            .ok_or(LitePsmError::ChainListFull)?;
-        Ok(())
-    }
-
-    /// Remove a supported chain.
-    ///
-    /// Uses a swap-remove (move the last element into the removed slot) since the
-    /// supported-chains list is unordered — O(1) instead of an O(n) shift.
-    pub fn remove_chain(&mut self, chain_id: u16) -> Result<()> {
-        let count = self.supported_chains_count as usize;
-        for i in 0..count {
-            if self.supported_chains[i] == chain_id {
-                // F-11: checked_sub for both the index and the counter.
-                // count >= 1 here (loop body only reached when chain found and
-                // count > 0), but use checked_* to make the invariant explicit.
-                let last = count.checked_sub(1).ok_or(LitePsmError::ChainNotFound)?;
-                self.supported_chains[i] = self.supported_chains[last];
-                self.supported_chains[last] = 0;
-                self.supported_chains_count = self
-                    .supported_chains_count
-                    .checked_sub(1)
-                    .ok_or(LitePsmError::ChainNotFound)?;
-                return Ok(());
-            }
-        }
-        Err(error!(LitePsmError::ChainNotFound))
-    }
-}
-
-/// Bridge nonce tracking PDA (one per destination chain)
-/// Seeds: ["bridge_nonce", destination_chain_id.to_le_bytes()]
-#[account]
-#[derive(InitSpace)]
-pub struct BridgeNonce {
-    /// PDA bump seed
-    pub bump: u8,
-    /// Whether this nonce account has been initialized (avoids ambiguity with chain_id == 0)
-    pub is_initialized: bool,
-    /// Destination chain ID
-    pub destination_chain: u16,
-    /// Next sequential nonce for this destination
-    pub next_nonce: u64,
-}
-
-impl BridgeNonce {
-    pub const SEED: &'static [u8] = b"bridge_nonce";
-
-    /// Space needed for BridgeNonce account: 8 byte discriminator +
-    /// `InitSpace`-derived field sum. Pinned at 20 bytes.
-    pub const LEN: usize = 8 + Self::INIT_SPACE;
-}
-
-/// Processed bridge request PDA (prevents replay attacks)
-/// Seeds: ["bridge_request", request_id]
-#[account]
-#[derive(InitSpace)]
-pub struct ProcessedRequest {
-    /// PDA bump seed
-    pub bump: u8,
-    /// Request ID (keccak256 hash of request data)
-    pub request_id: [u8; 32],
-    /// Timestamp when processed
-    pub processed_at: i64,
-    /// Recipient who received tokens
-    pub recipient: Pubkey,
-    /// Amount minted
-    pub amount: u64,
-}
-
-impl ProcessedRequest {
-    pub const SEED: &'static [u8] = b"bridge_request";
-
-    /// Space needed for ProcessedRequest account: 8 byte discriminator +
-    /// `InitSpace`-derived field sum. Pinned at 89 bytes.
-    pub const LEN: usize = 8 + Self::INIT_SPACE;
-}
-
-/// Refunded bridge request PDA (prevents double-refund)
-/// Seeds: ["bridge_refund", request_id]
-#[account]
-#[derive(InitSpace)]
-pub struct RefundedRequest {
-    /// PDA bump seed
-    pub bump: u8,
-    /// Request ID (keccak256 hash of request data)
-    pub request_id: [u8; 32],
-    /// Timestamp when refunded
-    pub refunded_at: i64,
-    /// Original sender who received refund
-    pub recipient: Pubkey,
-    /// Amount refunded
-    pub amount: u64,
-}
-
-impl RefundedRequest {
-    pub const SEED: &'static [u8] = b"bridge_refund";
-
-    /// Space needed for RefundedRequest account: 8 byte discriminator +
-    /// `InitSpace`-derived field sum. Pinned at 89 bytes.
-    pub const LEN: usize = 8 + Self::INIT_SPACE;
-}
-
-/// Pending refund PDA (two-step refund pattern)
-/// Seeds: ["pending_refund", request_id]
-///
-/// This implements the EVM OkuBridge two-step refund pattern:
-/// 1. RefundInitiator calls initiate_refund() to create this PDA
-/// 2. RefundConfirmer (different key) calls confirm_refund() to complete
-/// 3. Either party can call cancel_refund() to abort
-///
-/// This prevents a single compromised key from completing refunds unilaterally.
-#[account]
-#[derive(InitSpace)]
-pub struct PendingRefund {
-    /// PDA bump seed
-    pub bump: u8,
-    /// Request ID (keccak256 hash of original request data)
-    pub request_id: [u8; 32],
-    /// Original sender who will receive the refund
-    pub recipient: Pubkey,
-    /// Amount to be refunded
-    pub amount: u64,
-    /// Timestamp when refund was initiated
-    pub initiated_at: i64,
-    /// Who initiated the refund (for audit trail)
-    pub initiator: Pubkey,
-}
-
-impl PendingRefund {
-    pub const SEED: &'static [u8] = b"pending_refund";
-
-    /// Space needed for PendingRefund account: 8 byte discriminator +
-    /// `InitSpace`-derived field sum. Pinned at 121 bytes.
-    pub const LEN: usize = 8 + Self::INIT_SPACE;
-}
-
-// Compile-time assertions: bridge family on-chain layout pins.
-const _: () = assert!(BridgeConfig::LEN == 487);
-const _: () = assert!(BridgeNonce::LEN == 20);
-const _: () = assert!(ProcessedRequest::LEN == 89);
-const _: () = assert!(RefundedRequest::LEN == 89);
-const _: () = assert!(PendingRefund::LEN == 121);
-
-/// EVM-burn → SVM-mint bridge request (80 bytes on the wire).
-///
-/// Used for signature verification and replay prevention by `bridge_mint`.
-///
-/// **CRITICAL — dual 80-byte layouts.** The bridge has two distinct on-wire
-/// formats sharing the same total length, distinguished by direction:
-///
-/// ```text
-///   SVM-burn → EVM-mint (built by `bridge_burn`):
-///     2  source_chain_id  | 2  dest_chain_id
-///    32  sender (Solana)  | 20 recipient (EVM)
-///     8  amount           | 8  nonce          | 8 deadline
-///
-///   EVM-burn → SVM-mint (this struct, built by `to_message_bytes`):
-///     2  source_chain_id  | 2  dest_chain_id
-///    20  sender (EVM)     | 32 recipient (Solana)
-///     8  amount           | 8  nonce          | 8 deadline
-/// ```
-///
-/// `request_id = keccak256(message_bytes)`. The TS canonical encoder lives in
-/// `scripts/lib/bridge/message.ts`. See `SVM/EVM_VS_SVM.md` for the full
-/// bridge-format reference.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
-pub struct BridgeRequest {
-    /// Source chain ID (EVM chain)
-    pub source_chain_id: u16,
-    /// Destination chain ID (Solana)
-    pub destination_chain_id: u16,
-    /// Sender address on source chain (20 bytes for EVM)
-    pub sender: [u8; 20],
-    /// Recipient address on destination chain (32 bytes for Solana)
-    pub recipient: [u8; 32],
-    /// Amount to mint (excluding fees)
-    pub amount: u64,
-    /// Sequential nonce for ordering
-    pub nonce: u64,
-    /// Request expiration timestamp
-    pub deadline: i64,
-}
-
-impl BridgeRequest {
-    /// Serialize to 80-byte message format for signature verification
-    pub fn to_message_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(80);
-        bytes.extend_from_slice(&self.source_chain_id.to_le_bytes());
-        bytes.extend_from_slice(&self.destination_chain_id.to_le_bytes());
-        bytes.extend_from_slice(&self.sender);
-        bytes.extend_from_slice(&self.recipient);
-        bytes.extend_from_slice(&self.amount.to_le_bytes());
-        bytes.extend_from_slice(&self.nonce.to_le_bytes());
-        bytes.extend_from_slice(&self.deadline.to_le_bytes());
-        bytes
-    }
-}
+// === Bridge state removed in noBridge refactor (phase B) ===
+//
+// `BridgeConfig`, `BridgeNonce`, `ProcessedRequest`, `RefundedRequest`,
+// `PendingRefund`, and the on-wire `BridgeRequest` packed message used to
+// live here. They have been deleted; v1 cross-chain transfers are handled
+// off-chain by an orchestrator calling `mint_oku_m` / `redeem_oku_m` on
+// each side. See the crate-level docs in `lib.rs` for the model.

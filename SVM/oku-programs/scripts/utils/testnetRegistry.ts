@@ -14,8 +14,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { DeploymentAddresses } from './addressBook';
-import { sourceChainIdForNetwork } from '../config/constants';
-import type { NetworkName } from '../config/networks';
 
 const REGISTRY_PATH = path.resolve(__dirname, '../../../../testnet-addresses.json');
 
@@ -57,11 +55,10 @@ function writeRegistry(registry: TestnetRegistry): void {
   fs.writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2) + '\n', 'utf8');
 }
 
-// Chain IDs for SVM clusters live in `scripts/config/constants.ts` —
-// `sourceChainIdForNetwork` is the single source of truth so the registry
-// can never drift from the value the on-chain `BridgeConfig.source_chain_id`
-// is initialized to. RPC URLs are kept here because they're a registry-only
-// concern and not part of the on-chain config.
+// RPC URLs are kept here because they're a registry-only concern and
+// not part of the on-chain config. Chain IDs were dropped in the
+// noBridge refactor — v1 has no on-chain chain-ID state to keep in
+// sync.
 const SVM_CLUSTER_RPC: Record<string, string> = {
   'mainnet-beta': 'https://api.mainnet-beta.solana.com',
   devnet: 'https://api.devnet.solana.com',
@@ -79,7 +76,6 @@ export function syncSvmRegistry(deployment: DeploymentAddresses): void {
   registry.svm = registry.svm || {};
 
   const entry: SvmNetworkEntry = {
-    chainId: sourceChainIdForNetwork(deployment.network as NetworkName),
     rpcUrl: SVM_CLUSTER_RPC[deployment.network],
     programs: {
       litePsm: deployment.programs?.litePsm,
@@ -93,7 +89,6 @@ export function syncSvmRegistry(deployment: DeploymentAddresses): void {
     pdas: {
       psmConfig: deployment.pdas?.psmConfig,
       redemptionQueue: deployment.pdas?.redemptionQueue,
-      bridgeConfig: deployment.pdas?.bridgeConfig,
       vaultConfig: deployment.pdas?.vaultConfig,
       psmOkuMoneyEscrow: deployment.pdas?.psmOkuMoneyEscrow,
     },

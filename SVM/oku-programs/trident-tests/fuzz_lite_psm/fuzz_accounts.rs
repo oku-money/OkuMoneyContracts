@@ -8,10 +8,6 @@ use trident_fuzz::fuzzing::*;
 /// Docs: https://ackee.xyz/trident/docs/latest/trident-api-macro/trident-types/fuzz-accounts/
 #[derive(Default)]
 pub struct AccountAddresses {
-    pub chain_manager: AddressStorage,
-
-    pub bridge_config: AddressStorage,
-
     pub rebaser: AddressStorage,
 
     pub config: AddressStorage,
@@ -22,21 +18,13 @@ pub struct AccountAddresses {
 
     pub user: AddressStorage,
 
-    pub bridge_nonce: AddressStorage,
-
     pub user_okusd_ata: AddressStorage,
-
-    pub fee_recipient_ata: AddressStorage,
 
     pub system_program: AddressStorage,
 
     pub payer: AddressStorage,
 
-    pub processed_request: AddressStorage,
-
     pub recipient_okusd_ata: AddressStorage,
-
-    pub instruction_sysvar: AddressStorage,
 
     pub buffer_depositor: AddressStorage,
 
@@ -58,24 +46,6 @@ pub struct AccountAddresses {
 
     pub rent: AddressStorage,
 
-    pub bridge_admin: AddressStorage,
-
-    pub bridge_pauser: AddressStorage,
-
-    pub bridge_unpauser: AddressStorage,
-
-    pub orchestrator_signer: AddressStorage,
-
-    pub fee_recipient: AddressStorage,
-
-    pub fee_manager: AddressStorage,
-
-    pub nonce_admin: AddressStorage,
-
-    pub signer_manager: AddressStorage,
-
-    pub limits_manager: AddressStorage,
-
     pub user_usdc_ata: AddressStorage,
 
     pub price_update: AddressStorage,
@@ -87,10 +57,6 @@ pub struct AccountAddresses {
     pub redemption_queue: AddressStorage,
 
     pub vault_okusd: AddressStorage,
-
-    pub refund_admin: AddressStorage,
-
-    pub refunded_request: AddressStorage,
 
     pub sender_okusd_ata: AddressStorage,
 

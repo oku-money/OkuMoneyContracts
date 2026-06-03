@@ -105,15 +105,11 @@ export interface DeploymentAddresses {
     vaultConfig?: string;
     vaultOkusd?: string;
     vaultOkuMoney?: string;
-    bridgeConfig?: string;
   };
-  nonces?: Record<number, string>; // chain_id -> nonce PDA
   authorities?: {
     coldMultisig?: string;
     warmMultisig?: string;
     orchestrator?: string;
-    bridgeOrchestrator?: string;
-    feeRecipient?: string;
   };
   /**
    * Per-upgrade audit trail appended by `scripts/upgrade/index.ts`.
@@ -316,7 +312,6 @@ export function saveDeployment(
     tokens: {},
     programs: {},
     pdas: {},
-    nonces: {},
     authorities: {},
   };
 
@@ -329,7 +324,6 @@ export function saveDeployment(
     tokens: { ...existing.tokens, ...addresses.tokens },
     programs: { ...existing.programs, ...addresses.programs },
     pdas: { ...existing.pdas, ...addresses.pdas },
-    nonces: { ...existing.nonces, ...addresses.nonces },
     authorities: { ...existing.authorities, ...addresses.authorities },
   };
 
@@ -350,7 +344,6 @@ export function updateDeployment(
     tokens: {},
     programs: {},
     pdas: {},
-    nonces: {},
     authorities: {},
   };
 

@@ -104,7 +104,6 @@ async function main() {
   const {
     psmConfig,
     redemptionQueue,
-    bridgeConfig,
     vaultUsdc: psmVaultUsdc,
     vaultOkuMoney: psmOkuMoneyEscrow,
   } = await initializePsm(
@@ -142,7 +141,6 @@ async function main() {
     pdas: {
       psmConfig: psmConfig.toBase58(),
       redemptionQueue: redemptionQueue.toBase58(),
-      bridgeConfig: bridgeConfig.toBase58(),
       vaultConfig: vaultConfig.toBase58(),
       // PSM-owned ATAs (created by `initialize()` / `setup_oku_money_escrow()`).
       // Persisted so admin/test scripts can read them without re-deriving
@@ -158,8 +156,7 @@ async function main() {
     authorities: {
       coldMultisig: authorities.psm.roleAdmin.toBase58(),
       warmMultisig: authorities.psm.pauser.toBase58(),
-      orchestrator: authorities.bridge.orchestratorSigner.toBase58(),
-      feeRecipient: authorities.bridge.feeRecipient.toBase58(),
+      orchestrator: authorities.psm.rebaser.toBase58(),
     },
   };
 

@@ -20,14 +20,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { detectNetwork, getNetworkConfig } from './network';
 import {
-  BRIDGE_CONFIG_LEN,
-  BRIDGE_NONCE_LEN,
   OKU_DOLLAR_CONFIG_LEN,
-  PENDING_REFUND_LEN,
-  PROCESSED_REQUEST_LEN,
   PSM_CONFIG_LEN,
   REDEMPTION_QUEUE_LEN,
-  REFUNDED_REQUEST_LEN,
 } from '../lib/account-sizes';
 
 interface SizedItem {
@@ -88,12 +83,7 @@ async function main() {
   const pdas: SizedItem[] = [
     { name: 'PsmConfig', size: PSM_CONFIG_LEN },
     { name: 'RedemptionQueue', size: REDEMPTION_QUEUE_LEN },
-    { name: 'BridgeConfig', size: BRIDGE_CONFIG_LEN },
-    { name: 'BridgeNonce (per chain)', size: BRIDGE_NONCE_LEN },
     { name: 'OkuDollarConfig', size: OKU_DOLLAR_CONFIG_LEN },
-    { name: 'ProcessedRequest (per request)', size: PROCESSED_REQUEST_LEN },
-    { name: 'PendingRefund (per request)', size: PENDING_REFUND_LEN },
-    { name: 'RefundedRequest (per request)', size: REFUNDED_REQUEST_LEN },
   ];
 
   console.log('PDAs (one-time + per-instance):\n');

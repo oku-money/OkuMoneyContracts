@@ -1,10 +1,15 @@
 //! # OkuMoney Lite-PSM
 //!
-//! SVM port of the EVM-side `LitePSM.sol` + `OkuBridge.sol`. The structure
-//! mirrors `EVM/src/psm/` and `EVM/src/bridge/` module-for-module; deliberate
-//! divergences (token decimals, yield-distribution model, bridge wire
-//! format, oracle parser, queue size) are documented in the top-level
-//! [`SVM/EVM_VS_SVM.md`](../../../EVM_VS_SVM.md) reference.
+//! SVM port of the EVM-side `LitePSM.sol`. The structure mirrors
+//! `EVM/src/psm/` module-for-module; deliberate divergences (token
+//! decimals, yield-distribution model, oracle parser, queue size) are
+//! documented in the top-level [`SVM/EVM_VS_SVM.md`](../../../EVM_VS_SVM.md)
+//! reference.
+//!
+//! v1 cross-chain transfers are handled off-chain by an orchestrator that
+//! holds the PSM operational roles (`buffer_depositor`, `queue_processor`,
+//! `rebaser`) and signs `mint_oku_m` / `redeem_oku_m` against its own
+//! ATAs on each chain. There is no on-chain bridge program.
 //!
 //! Inline `// see EVM_VS_SVM.md` comments throughout this crate point to
 //! specific divergence rows in that document.
@@ -236,123 +241,5 @@ pub mod lite_psm {
     /// new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)
     pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Result<()> {
         instructions::yield_ops::distribute_yield(ctx, yield_amount)
-    }
-
-    // ===== Bridge Operations =====
-
-    pub fn bridge_mint(
-        ctx: Context<BridgeMint>,
-        message_bytes: Vec<u8>,
-        signature: Vec<u8>,
-        request_id: [u8; 32],
-    ) -> Result<()> {
-        instructions::bridge::bridge_mint(ctx, message_bytes, signature, request_id)
-    }
-
-    pub fn bridge_burn(
-        ctx: Context<BridgeBurn>,
-        amount: u64,
-        recipient: [u8; 20],
-        destination_chain_id: u16,
-    ) -> Result<()> {
-        instructions::bridge::bridge_burn(ctx, amount, recipient, destination_chain_id)
-    }
-
-    // ===== Two-Step Refund (matching EVM OkuBridge) =====
-
-    /// Initiate a refund (step 1 of two-step refund pattern)
-    /// Creates a PendingRefund PDA that must be confirmed by refund_confirmer
-    pub fn initiate_refund(
-        ctx: Context<InitiateRefund>,
-        message_bytes: Vec<u8>,
-        request_id: [u8; 32],
-    ) -> Result<()> {
-        instructions::bridge::initiate_refund(ctx, message_bytes, request_id)
-    }
-
-    /// Confirm a refund (step 2 of two-step refund pattern)
-    /// Must be called by refund_confirmer (different key than initiator)
-    pub fn confirm_refund(ctx: Context<ConfirmRefund>, request_id: [u8; 32]) -> Result<()> {
-        instructions::bridge::confirm_refund(ctx, request_id)
-    }
-
-    /// Cancel a pending refund
-    /// Can be called by either refund_initiator or refund_confirmer
-    pub fn cancel_refund(ctx: Context<CancelRefund>, request_id: [u8; 32]) -> Result<()> {
-        instructions::bridge::cancel_refund(ctx, request_id)
-    }
-
-    // ===== Bridge Admin =====
-
-    pub fn initialize_bridge(
-        ctx: Context<InitializeBridge>,
-        config_args: instructions::bridge_admin::BridgeInitConfig,
-    ) -> Result<()> {
-        instructions::bridge_admin::initialize_bridge(ctx, config_args)
-    }
-
-    pub fn add_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -> Result<()> {
-        instructions::bridge_admin::add_supported_chain(ctx, chain_id)
-    }
-
-    pub fn remove_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -> Result<()> {
-        instructions::bridge_admin::remove_supported_chain(ctx, chain_id)
-    }
-
-    pub fn update_bridge_fee(ctx: Context<BridgeFeeManager>, new_fee_bps: u16) -> Result<()> {
-        instructions::bridge_admin::update_bridge_fee(ctx, new_fee_bps)
-    }
-
-    pub fn update_fee_recipient(
-        ctx: Context<BridgeFeeManager>,
-        new_recipient: Pubkey,
-    ) -> Result<()> {
-        instructions::bridge_admin::update_fee_recipient(ctx, new_recipient)
-    }
-
-    pub fn update_bridge_limits(
-        ctx: Context<BridgeLimitsManager>,
-        min_amount: u64,
-        max_amount: u64,
-    ) -> Result<()> {
-        instructions::bridge_admin::update_bridge_limits(ctx, min_amount, max_amount)
-    }
-
-    pub fn pause_bridge(ctx: Context<BridgePause>) -> Result<()> {
-        instructions::bridge_admin::pause_bridge(ctx)
-    }
-
-    pub fn unpause_bridge(ctx: Context<BridgeUnpause>) -> Result<()> {
-        instructions::bridge_admin::unpause_bridge(ctx)
-    }
-
-    pub fn skip_nonce(
-        ctx: Context<BridgeNonceAdmin>,
-        destination_chain_id: u16,
-        new_nonce: u64,
-    ) -> Result<()> {
-        instructions::bridge_admin::skip_nonce(ctx, destination_chain_id, new_nonce)
-    }
-
-    pub fn update_bridge_deadline(
-        ctx: Context<BridgeLimitsManager>,
-        new_deadline: i64,
-    ) -> Result<()> {
-        instructions::bridge_admin::update_bridge_deadline(ctx, new_deadline)
-    }
-
-    pub fn update_orchestrator_signer(
-        ctx: Context<BridgeSignerManager>,
-        new_signer: Pubkey,
-    ) -> Result<()> {
-        instructions::bridge_admin::update_orchestrator_signer(ctx, new_signer)
-    }
-
-    pub fn set_bridge_authority(
-        ctx: Context<BridgeAdmin>,
-        role: BridgeAuthorityRole,
-        new_authority: Pubkey,
-    ) -> Result<()> {
-        instructions::bridge_admin::set_bridge_authority(ctx, role, new_authority)
     }
 }

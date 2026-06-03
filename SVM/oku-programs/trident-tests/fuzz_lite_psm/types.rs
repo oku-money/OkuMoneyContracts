@@ -15,18 +15,18 @@ use trident_fuzz::fuzzing::*;
 // ============================================================================
 
 // ----------------------------------------------------------------------------
-// Program: lite_psm
+// Program: oku_dollar
 // ----------------------------------------------------------------------------
-pub mod lite_psm {
+pub mod oku_dollar {
     use super::*;
 
     // ------------------------------------------------------------------------
     // Program ID
     // ------------------------------------------------------------------------
 
-    /// Returns the program ID for lite_psm
+    /// Returns the program ID for oku_dollar
     pub fn program_id() -> Pubkey {
-        pubkey!("3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N")
+        pubkey!("3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy")
     }
 
     // ------------------------------------------------------------------------
@@ -34,72 +34,70 @@ pub mod lite_psm {
     // ------------------------------------------------------------------------
 
     // ....................................................................
-    // Instruction: AddSupportedChain
+    // Instruction: AcceptRoleAdmin
     // ....................................................................
 
-    /// Main instruction struct for AddSupportedChain
-    pub struct AddSupportedChainInstruction {
-        pub accounts: AddSupportedChainInstructionAccountMetas,
-        pub data: AddSupportedChainInstructionData,
+    /// Main instruction struct for AcceptRoleAdmin
+    pub struct AcceptRoleAdminInstruction {
+        pub accounts: AcceptRoleAdminInstructionAccountMetas,
+        pub data: AcceptRoleAdminInstructionData,
         pub remaining_accounts: Vec<AccountMeta>,
     }
 
-    /// Account metadata for AddSupportedChain instruction
+    /// Account metadata for AcceptRoleAdmin instruction
     #[derive(Debug, Clone, Default)]
-    pub struct AddSupportedChainInstructionAccountMetas {
-        pub chain_manager: AccountMeta,
+    pub struct AcceptRoleAdminInstructionAccountMetas {
+        pub new_role_admin: AccountMeta,
 
-        pub bridge_config: AccountMeta,
+        pub config: AccountMeta,
     }
 
-    /// Account pubkeys for AddSupportedChain instruction
+    /// Account pubkeys for AcceptRoleAdmin instruction
     #[derive(Debug, Clone)]
-    pub struct AddSupportedChainInstructionAccounts {
-        pub chain_manager: Pubkey,
+    pub struct AcceptRoleAdminInstructionAccounts {
+        pub new_role_admin: Pubkey,
 
-        pub bridge_config: Pubkey,
+        pub config: Pubkey,
     }
 
-    impl AddSupportedChainInstructionAccounts {
-        pub fn new(chain_manager: Pubkey, bridge_config: Pubkey) -> Self {
+    impl AcceptRoleAdminInstructionAccounts {
+        pub fn new(new_role_admin: Pubkey, config: Pubkey) -> Self {
             Self {
-                chain_manager,
+                new_role_admin,
 
-                bridge_config,
+                config,
             }
         }
     }
 
-    /// Instruction data for AddSupportedChain
+    /// Instruction data for AcceptRoleAdmin
     #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct AddSupportedChainInstructionData {
-        pub chain_id: u16,
-    }
+    pub struct AcceptRoleAdminInstructionData {}
 
-    impl AddSupportedChainInstructionData {
-        pub fn new(chain_id: u16) -> Self {
-            Self { chain_id }
+    impl AcceptRoleAdminInstructionData {
+        pub fn new() -> Self {
+            Self {}
         }
     }
 
-    /// Implementation for AddSupportedChainInstruction
-    impl AddSupportedChainInstruction {
+    /// Implementation for AcceptRoleAdminInstruction
+    impl AcceptRoleAdminInstruction {
         fn discriminator() -> [u8; 8] {
-            [60u8, 144u8, 188u8, 237u8, 143u8, 56u8, 39u8, 112u8]
+            [203u8, 100u8, 15u8, 101u8, 168u8, 236u8, 213u8, 218u8]
         }
 
-        pub fn data(data: AddSupportedChainInstructionData) -> Self {
+        pub fn data(data: AcceptRoleAdminInstructionData) -> Self {
             Self {
-                accounts: AddSupportedChainInstructionAccountMetas::default(),
+                accounts: AcceptRoleAdminInstructionAccountMetas::default(),
                 data,
                 remaining_accounts: Vec::new(),
             }
         }
 
-        pub fn accounts(mut self, accounts: AddSupportedChainInstructionAccounts) -> Self {
-            self.accounts.chain_manager = AccountMeta::new_readonly(accounts.chain_manager, true);
+        pub fn accounts(mut self, accounts: AcceptRoleAdminInstructionAccounts) -> Self {
+            self.accounts.new_role_admin = AccountMeta::new_readonly(accounts.new_role_admin, true);
 
-            self.accounts.bridge_config = AccountMeta::new(accounts.bridge_config, false);
+            self.accounts.config = AccountMeta::new(accounts.config, false);
 
             self
         }
@@ -112,9 +110,9 @@ pub mod lite_psm {
         fn to_account_metas(&self) -> Vec<AccountMeta> {
             let mut metas = Vec::new();
 
-            metas.push(self.accounts.chain_manager.clone());
+            metas.push(self.accounts.new_role_admin.clone());
 
-            metas.push(self.accounts.bridge_config.clone());
+            metas.push(self.accounts.config.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -132,80 +130,222 @@ pub mod lite_psm {
     }
 
     // ....................................................................
-    // Instruction: ApplyPendingRate
+    // Instruction: CancelRoleAdminTransfer
     // ....................................................................
 
-    /// Main instruction struct for ApplyPendingRate
-    pub struct ApplyPendingRateInstruction {
-        pub accounts: ApplyPendingRateInstructionAccountMetas,
-        pub data: ApplyPendingRateInstructionData,
+    /// Main instruction struct for CancelRoleAdminTransfer
+    pub struct CancelRoleAdminTransferInstruction {
+        pub accounts: CancelRoleAdminTransferInstructionAccountMetas,
+        pub data: CancelRoleAdminTransferInstructionData,
         pub remaining_accounts: Vec<AccountMeta>,
     }
 
-    /// Account metadata for ApplyPendingRate instruction
+    /// Account metadata for CancelRoleAdminTransfer instruction
     #[derive(Debug, Clone, Default)]
-    pub struct ApplyPendingRateInstructionAccountMetas {
-        pub rebaser: AccountMeta,
+    pub struct CancelRoleAdminTransferInstructionAccountMetas {
+        pub role_admin: AccountMeta,
 
         pub config: AccountMeta,
-
-        pub okusd_mint: AccountMeta,
-
-        pub token_2022_program: AccountMeta,
     }
 
-    /// Account pubkeys for ApplyPendingRate instruction
+    /// Account pubkeys for CancelRoleAdminTransfer instruction
     #[derive(Debug, Clone)]
-    pub struct ApplyPendingRateInstructionAccounts {
-        pub rebaser: Pubkey,
+    pub struct CancelRoleAdminTransferInstructionAccounts {
+        pub role_admin: Pubkey,
 
         pub config: Pubkey,
-
-        pub okusd_mint: Pubkey,
     }
 
-    impl ApplyPendingRateInstructionAccounts {
-        pub fn new(rebaser: Pubkey, config: Pubkey, okusd_mint: Pubkey) -> Self {
-            Self {
-                rebaser,
-
-                config,
-
-                okusd_mint,
-            }
+    impl CancelRoleAdminTransferInstructionAccounts {
+        pub fn new(role_admin: Pubkey, config: Pubkey) -> Self {
+            Self { role_admin, config }
         }
     }
 
-    /// Instruction data for ApplyPendingRate
+    /// Instruction data for CancelRoleAdminTransfer
     #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct ApplyPendingRateInstructionData {}
+    pub struct CancelRoleAdminTransferInstructionData {}
 
-    impl ApplyPendingRateInstructionData {
+    impl CancelRoleAdminTransferInstructionData {
         pub fn new() -> Self {
             Self {}
         }
     }
 
-    /// Implementation for ApplyPendingRateInstruction
-    impl ApplyPendingRateInstruction {
+    /// Implementation for CancelRoleAdminTransferInstruction
+    impl CancelRoleAdminTransferInstruction {
         fn discriminator() -> [u8; 8] {
-            [104u8, 177u8, 210u8, 125u8, 175u8, 28u8, 84u8, 5u8]
+            [155u8, 31u8, 41u8, 13u8, 107u8, 117u8, 20u8, 22u8]
         }
 
-        pub fn data(data: ApplyPendingRateInstructionData) -> Self {
+        pub fn data(data: CancelRoleAdminTransferInstructionData) -> Self {
             Self {
-                accounts: ApplyPendingRateInstructionAccountMetas::default(),
+                accounts: CancelRoleAdminTransferInstructionAccountMetas::default(),
                 data,
                 remaining_accounts: Vec::new(),
             }
         }
 
-        pub fn accounts(mut self, accounts: ApplyPendingRateInstructionAccounts) -> Self {
-            self.accounts.rebaser = AccountMeta::new_readonly(accounts.rebaser, true);
+        pub fn accounts(mut self, accounts: CancelRoleAdminTransferInstructionAccounts) -> Self {
+            self.accounts.role_admin = AccountMeta::new_readonly(accounts.role_admin, true);
 
             self.accounts.config = AccountMeta::new(accounts.config, false);
 
-            self.accounts.okusd_mint = AccountMeta::new(accounts.okusd_mint, false);
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.role_admin.clone());
+
+            metas.push(self.accounts.config.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: DepositReserves
+    // ....................................................................
+
+    /// Main instruction struct for DepositReserves
+    pub struct DepositReservesInstruction {
+        pub accounts: DepositReservesInstructionAccountMetas,
+        pub data: DepositReservesInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for DepositReserves instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct DepositReservesInstructionAccountMetas {
+        pub reserve_manager: AccountMeta,
+
+        pub config: AccountMeta,
+
+        pub oku_money_mint: AccountMeta,
+
+        pub usd_oku_mint: AccountMeta,
+
+        pub source_ata: AccountMeta,
+
+        pub reserve_vault: AccountMeta,
+
+        pub psm_config: AccountMeta,
+
+        pub token_2022_program: AccountMeta,
+    }
+
+    /// Account pubkeys for DepositReserves instruction
+    #[derive(Debug, Clone)]
+    pub struct DepositReservesInstructionAccounts {
+        pub reserve_manager: Pubkey,
+
+        pub config: Pubkey,
+
+        pub oku_money_mint: Pubkey,
+
+        pub usd_oku_mint: Pubkey,
+
+        pub source_ata: Pubkey,
+
+        pub reserve_vault: Pubkey,
+
+        pub psm_config: Pubkey,
+    }
+
+    impl DepositReservesInstructionAccounts {
+        pub fn new(
+            reserve_manager: Pubkey,
+
+            config: Pubkey,
+
+            oku_money_mint: Pubkey,
+
+            usd_oku_mint: Pubkey,
+
+            source_ata: Pubkey,
+
+            reserve_vault: Pubkey,
+
+            psm_config: Pubkey,
+        ) -> Self {
+            Self {
+                reserve_manager,
+
+                config,
+
+                oku_money_mint,
+
+                usd_oku_mint,
+
+                source_ata,
+
+                reserve_vault,
+
+                psm_config,
+            }
+        }
+    }
+
+    /// Instruction data for DepositReserves
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct DepositReservesInstructionData {
+        pub amount: u64,
+    }
+
+    impl DepositReservesInstructionData {
+        pub fn new(amount: u64) -> Self {
+            Self { amount }
+        }
+    }
+
+    /// Implementation for DepositReservesInstruction
+    impl DepositReservesInstruction {
+        fn discriminator() -> [u8; 8] {
+            [63u8, 188u8, 174u8, 171u8, 4u8, 201u8, 34u8, 44u8]
+        }
+
+        pub fn data(data: DepositReservesInstructionData) -> Self {
+            Self {
+                accounts: DepositReservesInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: DepositReservesInstructionAccounts) -> Self {
+            self.accounts.reserve_manager =
+                AccountMeta::new_readonly(accounts.reserve_manager, true);
+
+            self.accounts.config = AccountMeta::new_readonly(accounts.config, false);
+
+            self.accounts.oku_money_mint =
+                AccountMeta::new_readonly(accounts.oku_money_mint, false);
+
+            self.accounts.usd_oku_mint = AccountMeta::new_readonly(accounts.usd_oku_mint, false);
+
+            self.accounts.source_ata = AccountMeta::new(accounts.source_ata, false);
+
+            self.accounts.reserve_vault = AccountMeta::new(accounts.reserve_vault, false);
+
+            self.accounts.psm_config = AccountMeta::new_readonly(accounts.psm_config, false);
 
             self.accounts.token_2022_program = AccountMeta::new_readonly(
                 pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
@@ -223,11 +363,19 @@ pub mod lite_psm {
         fn to_account_metas(&self) -> Vec<AccountMeta> {
             let mut metas = Vec::new();
 
-            metas.push(self.accounts.rebaser.clone());
+            metas.push(self.accounts.reserve_manager.clone());
 
             metas.push(self.accounts.config.clone());
 
-            metas.push(self.accounts.okusd_mint.clone());
+            metas.push(self.accounts.oku_money_mint.clone());
+
+            metas.push(self.accounts.usd_oku_mint.clone());
+
+            metas.push(self.accounts.source_ata.clone());
+
+            metas.push(self.accounts.reserve_vault.clone());
+
+            metas.push(self.accounts.psm_config.clone());
 
             metas.push(self.accounts.token_2022_program.clone());
 
@@ -247,143 +395,788 @@ pub mod lite_psm {
     }
 
     // ....................................................................
-    // Instruction: BridgeBurn
+    // Instruction: Initialize
     // ....................................................................
 
-    /// Main instruction struct for BridgeBurn
-    pub struct BridgeBurnInstruction {
-        pub accounts: BridgeBurnInstructionAccountMetas,
-        pub data: BridgeBurnInstructionData,
+    /// Main instruction struct for Initialize
+    pub struct InitializeInstruction {
+        pub accounts: InitializeInstructionAccountMetas,
+        pub data: InitializeInstructionData,
         pub remaining_accounts: Vec<AccountMeta>,
     }
 
-    /// Account metadata for BridgeBurn instruction
+    /// Account metadata for Initialize instruction
     #[derive(Debug, Clone, Default)]
-    pub struct BridgeBurnInstructionAccountMetas {
-        pub user: AccountMeta,
-
-        pub bridge_config: AccountMeta,
+    pub struct InitializeInstructionAccountMetas {
+        pub role_admin: AccountMeta,
 
         pub config: AccountMeta,
 
-        pub bridge_nonce: AccountMeta,
+        pub oku_money_mint: AccountMeta,
 
-        pub okusd_mint: AccountMeta,
+        pub usd_oku_mint: AccountMeta,
 
-        pub user_okusd_ata: AccountMeta,
+        pub reserve_vault: AccountMeta,
 
-        pub fee_recipient_ata: AccountMeta,
+        pub psm_config: AccountMeta,
 
         pub token_2022_program: AccountMeta,
+
+        pub associated_token_program: AccountMeta,
 
         pub system_program: AccountMeta,
     }
 
-    /// Account pubkeys for BridgeBurn instruction
+    /// Account pubkeys for Initialize instruction
     #[derive(Debug, Clone)]
-    pub struct BridgeBurnInstructionAccounts {
-        pub user: Pubkey,
-
-        pub bridge_config: Pubkey,
+    pub struct InitializeInstructionAccounts {
+        pub role_admin: Pubkey,
 
         pub config: Pubkey,
 
-        pub bridge_nonce: Pubkey,
+        pub oku_money_mint: Pubkey,
 
-        pub okusd_mint: Pubkey,
+        pub usd_oku_mint: Pubkey,
 
-        pub user_okusd_ata: Pubkey,
+        pub reserve_vault: Pubkey,
 
-        pub fee_recipient_ata: Pubkey,
+        pub psm_config: Pubkey,
     }
 
-    impl BridgeBurnInstructionAccounts {
+    impl InitializeInstructionAccounts {
         pub fn new(
-            user: Pubkey,
-
-            bridge_config: Pubkey,
+            role_admin: Pubkey,
 
             config: Pubkey,
 
-            bridge_nonce: Pubkey,
+            oku_money_mint: Pubkey,
 
-            okusd_mint: Pubkey,
+            usd_oku_mint: Pubkey,
 
-            user_okusd_ata: Pubkey,
+            reserve_vault: Pubkey,
 
-            fee_recipient_ata: Pubkey,
+            psm_config: Pubkey,
         ) -> Self {
             Self {
-                user,
-
-                bridge_config,
+                role_admin,
 
                 config,
 
-                bridge_nonce,
+                oku_money_mint,
 
-                okusd_mint,
+                usd_oku_mint,
 
-                user_okusd_ata,
+                reserve_vault,
 
-                fee_recipient_ata,
+                psm_config,
             }
         }
     }
 
-    /// Instruction data for BridgeBurn
+    /// Instruction data for Initialize
     #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct BridgeBurnInstructionData {
-        pub amount: u64,
+    pub struct InitializeInstructionData {
+        pub pauser: Pubkey,
 
-        pub recipient: [u8; 20],
+        pub unpauser: Pubkey,
 
-        pub destination_chain_id: u16,
+        pub usd_rebaser: Pubkey,
+
+        pub reserve_manager: Pubkey,
+
+        pub min_collateral_ratio: u64,
     }
 
-    impl BridgeBurnInstructionData {
-        pub fn new(amount: u64, recipient: [u8; 20], destination_chain_id: u16) -> Self {
+    impl InitializeInstructionData {
+        pub fn new(
+            pauser: Pubkey,
+
+            unpauser: Pubkey,
+
+            usd_rebaser: Pubkey,
+
+            reserve_manager: Pubkey,
+
+            min_collateral_ratio: u64,
+        ) -> Self {
             Self {
-                amount,
+                pauser,
 
-                recipient,
+                unpauser,
 
-                destination_chain_id,
+                usd_rebaser,
+
+                reserve_manager,
+
+                min_collateral_ratio,
             }
         }
     }
 
-    /// Implementation for BridgeBurnInstruction
-    impl BridgeBurnInstruction {
+    /// Implementation for InitializeInstruction
+    impl InitializeInstruction {
         fn discriminator() -> [u8; 8] {
-            [158u8, 215u8, 142u8, 128u8, 223u8, 121u8, 29u8, 74u8]
+            [175u8, 175u8, 109u8, 31u8, 13u8, 152u8, 155u8, 237u8]
         }
 
-        pub fn data(data: BridgeBurnInstructionData) -> Self {
+        pub fn data(data: InitializeInstructionData) -> Self {
             Self {
-                accounts: BridgeBurnInstructionAccountMetas::default(),
+                accounts: InitializeInstructionAccountMetas::default(),
                 data,
                 remaining_accounts: Vec::new(),
             }
         }
 
-        pub fn accounts(mut self, accounts: BridgeBurnInstructionAccounts) -> Self {
-            self.accounts.user = AccountMeta::new(accounts.user, true);
+        pub fn accounts(mut self, accounts: InitializeInstructionAccounts) -> Self {
+            self.accounts.role_admin = AccountMeta::new(accounts.role_admin, true);
 
-            self.accounts.bridge_config = AccountMeta::new_readonly(accounts.bridge_config, false);
+            self.accounts.config = AccountMeta::new(accounts.config, false);
 
-            self.accounts.config = AccountMeta::new_readonly(accounts.config, false);
+            self.accounts.oku_money_mint =
+                AccountMeta::new_readonly(accounts.oku_money_mint, false);
 
-            self.accounts.bridge_nonce = AccountMeta::new(accounts.bridge_nonce, false);
+            self.accounts.usd_oku_mint = AccountMeta::new(accounts.usd_oku_mint, false);
 
-            self.accounts.okusd_mint = AccountMeta::new(accounts.okusd_mint, false);
+            self.accounts.reserve_vault = AccountMeta::new(accounts.reserve_vault, false);
 
-            self.accounts.user_okusd_ata = AccountMeta::new(accounts.user_okusd_ata, false);
-
-            self.accounts.fee_recipient_ata = AccountMeta::new(accounts.fee_recipient_ata, false);
+            self.accounts.psm_config = AccountMeta::new_readonly(accounts.psm_config, false);
 
             self.accounts.token_2022_program = AccountMeta::new_readonly(
                 pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+                false,
+            );
+
+            self.accounts.associated_token_program = AccountMeta::new_readonly(
+                pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
+                false,
+            );
+
+            self.accounts.system_program =
+                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.role_admin.clone());
+
+            metas.push(self.accounts.config.clone());
+
+            metas.push(self.accounts.oku_money_mint.clone());
+
+            metas.push(self.accounts.usd_oku_mint.clone());
+
+            metas.push(self.accounts.reserve_vault.clone());
+
+            metas.push(self.accounts.psm_config.clone());
+
+            metas.push(self.accounts.token_2022_program.clone());
+
+            metas.push(self.accounts.associated_token_program.clone());
+
+            metas.push(self.accounts.system_program.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: Pause
+    // ....................................................................
+
+    /// Main instruction struct for Pause
+    pub struct PauseInstruction {
+        pub accounts: PauseInstructionAccountMetas,
+        pub data: PauseInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for Pause instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct PauseInstructionAccountMetas {
+        pub pauser: AccountMeta,
+
+        pub config: AccountMeta,
+    }
+
+    /// Account pubkeys for Pause instruction
+    #[derive(Debug, Clone)]
+    pub struct PauseInstructionAccounts {
+        pub pauser: Pubkey,
+
+        pub config: Pubkey,
+    }
+
+    impl PauseInstructionAccounts {
+        pub fn new(pauser: Pubkey, config: Pubkey) -> Self {
+            Self { pauser, config }
+        }
+    }
+
+    /// Instruction data for Pause
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct PauseInstructionData {}
+
+    impl PauseInstructionData {
+        pub fn new() -> Self {
+            Self {}
+        }
+    }
+
+    /// Implementation for PauseInstruction
+    impl PauseInstruction {
+        fn discriminator() -> [u8; 8] {
+            [211u8, 22u8, 221u8, 251u8, 74u8, 121u8, 193u8, 47u8]
+        }
+
+        pub fn data(data: PauseInstructionData) -> Self {
+            Self {
+                accounts: PauseInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: PauseInstructionAccounts) -> Self {
+            self.accounts.pauser = AccountMeta::new_readonly(accounts.pauser, true);
+
+            self.accounts.config = AccountMeta::new(accounts.config, false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.pauser.clone());
+
+            metas.push(self.accounts.config.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: SetAuthority
+    // ....................................................................
+
+    /// Main instruction struct for SetAuthority
+    pub struct SetAuthorityInstruction {
+        pub accounts: SetAuthorityInstructionAccountMetas,
+        pub data: SetAuthorityInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for SetAuthority instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct SetAuthorityInstructionAccountMetas {
+        pub role_admin: AccountMeta,
+
+        pub config: AccountMeta,
+    }
+
+    /// Account pubkeys for SetAuthority instruction
+    #[derive(Debug, Clone)]
+    pub struct SetAuthorityInstructionAccounts {
+        pub role_admin: Pubkey,
+
+        pub config: Pubkey,
+    }
+
+    impl SetAuthorityInstructionAccounts {
+        pub fn new(role_admin: Pubkey, config: Pubkey) -> Self {
+            Self { role_admin, config }
+        }
+    }
+
+    /// Instruction data for SetAuthority
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct SetAuthorityInstructionData {
+        pub role: AuthorityRole,
+
+        pub new_authority: Pubkey,
+    }
+
+    impl SetAuthorityInstructionData {
+        pub fn new(role: AuthorityRole, new_authority: Pubkey) -> Self {
+            Self {
+                role,
+
+                new_authority,
+            }
+        }
+    }
+
+    /// Implementation for SetAuthorityInstruction
+    impl SetAuthorityInstruction {
+        fn discriminator() -> [u8; 8] {
+            [133u8, 250u8, 37u8, 21u8, 110u8, 163u8, 26u8, 121u8]
+        }
+
+        pub fn data(data: SetAuthorityInstructionData) -> Self {
+            Self {
+                accounts: SetAuthorityInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: SetAuthorityInstructionAccounts) -> Self {
+            self.accounts.role_admin = AccountMeta::new_readonly(accounts.role_admin, true);
+
+            self.accounts.config = AccountMeta::new(accounts.config, false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.role_admin.clone());
+
+            metas.push(self.accounts.config.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: SetMinCollateralRatio
+    // ....................................................................
+
+    /// Main instruction struct for SetMinCollateralRatio
+    pub struct SetMinCollateralRatioInstruction {
+        pub accounts: SetMinCollateralRatioInstructionAccountMetas,
+        pub data: SetMinCollateralRatioInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for SetMinCollateralRatio instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct SetMinCollateralRatioInstructionAccountMetas {
+        pub role_admin: AccountMeta,
+
+        pub config: AccountMeta,
+
+        pub usd_oku_mint: AccountMeta,
+
+        pub reserve_vault: AccountMeta,
+
+        pub psm_config: AccountMeta,
+
+        pub token_2022_program: AccountMeta,
+    }
+
+    /// Account pubkeys for SetMinCollateralRatio instruction
+    #[derive(Debug, Clone)]
+    pub struct SetMinCollateralRatioInstructionAccounts {
+        pub role_admin: Pubkey,
+
+        pub config: Pubkey,
+
+        pub usd_oku_mint: Pubkey,
+
+        pub reserve_vault: Pubkey,
+
+        pub psm_config: Pubkey,
+    }
+
+    impl SetMinCollateralRatioInstructionAccounts {
+        pub fn new(
+            role_admin: Pubkey,
+
+            config: Pubkey,
+
+            usd_oku_mint: Pubkey,
+
+            reserve_vault: Pubkey,
+
+            psm_config: Pubkey,
+        ) -> Self {
+            Self {
+                role_admin,
+
+                config,
+
+                usd_oku_mint,
+
+                reserve_vault,
+
+                psm_config,
+            }
+        }
+    }
+
+    /// Instruction data for SetMinCollateralRatio
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct SetMinCollateralRatioInstructionData {
+        pub new_min_collateral_ratio: u64,
+    }
+
+    impl SetMinCollateralRatioInstructionData {
+        pub fn new(new_min_collateral_ratio: u64) -> Self {
+            Self {
+                new_min_collateral_ratio,
+            }
+        }
+    }
+
+    /// Implementation for SetMinCollateralRatioInstruction
+    impl SetMinCollateralRatioInstruction {
+        fn discriminator() -> [u8; 8] {
+            [131u8, 238u8, 78u8, 17u8, 90u8, 208u8, 173u8, 88u8]
+        }
+
+        pub fn data(data: SetMinCollateralRatioInstructionData) -> Self {
+            Self {
+                accounts: SetMinCollateralRatioInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: SetMinCollateralRatioInstructionAccounts) -> Self {
+            self.accounts.role_admin = AccountMeta::new_readonly(accounts.role_admin, true);
+
+            self.accounts.config = AccountMeta::new(accounts.config, false);
+
+            self.accounts.usd_oku_mint = AccountMeta::new_readonly(accounts.usd_oku_mint, false);
+
+            self.accounts.reserve_vault = AccountMeta::new_readonly(accounts.reserve_vault, false);
+
+            self.accounts.psm_config = AccountMeta::new_readonly(accounts.psm_config, false);
+
+            self.accounts.token_2022_program = AccountMeta::new_readonly(
+                pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+                false,
+            );
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.role_admin.clone());
+
+            metas.push(self.accounts.config.clone());
+
+            metas.push(self.accounts.usd_oku_mint.clone());
+
+            metas.push(self.accounts.reserve_vault.clone());
+
+            metas.push(self.accounts.psm_config.clone());
+
+            metas.push(self.accounts.token_2022_program.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: Unpause
+    // ....................................................................
+
+    /// Main instruction struct for Unpause
+    pub struct UnpauseInstruction {
+        pub accounts: UnpauseInstructionAccountMetas,
+        pub data: UnpauseInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for Unpause instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct UnpauseInstructionAccountMetas {
+        pub unpauser: AccountMeta,
+
+        pub config: AccountMeta,
+    }
+
+    /// Account pubkeys for Unpause instruction
+    #[derive(Debug, Clone)]
+    pub struct UnpauseInstructionAccounts {
+        pub unpauser: Pubkey,
+
+        pub config: Pubkey,
+    }
+
+    impl UnpauseInstructionAccounts {
+        pub fn new(unpauser: Pubkey, config: Pubkey) -> Self {
+            Self { unpauser, config }
+        }
+    }
+
+    /// Instruction data for Unpause
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct UnpauseInstructionData {}
+
+    impl UnpauseInstructionData {
+        pub fn new() -> Self {
+            Self {}
+        }
+    }
+
+    /// Implementation for UnpauseInstruction
+    impl UnpauseInstruction {
+        fn discriminator() -> [u8; 8] {
+            [169u8, 144u8, 4u8, 38u8, 10u8, 141u8, 188u8, 255u8]
+        }
+
+        pub fn data(data: UnpauseInstructionData) -> Self {
+            Self {
+                accounts: UnpauseInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: UnpauseInstructionAccounts) -> Self {
+            self.accounts.unpauser = AccountMeta::new_readonly(accounts.unpauser, true);
+
+            self.accounts.config = AccountMeta::new(accounts.config, false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.unpauser.clone());
+
+            metas.push(self.accounts.config.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: Unwrap
+    // ....................................................................
+
+    /// Main instruction struct for Unwrap
+    pub struct UnwrapInstruction {
+        pub accounts: UnwrapInstructionAccountMetas,
+        pub data: UnwrapInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for Unwrap instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct UnwrapInstructionAccountMetas {
+        pub user: AccountMeta,
+
+        pub config: AccountMeta,
+
+        pub oku_money_mint: AccountMeta,
+
+        pub usd_oku_mint: AccountMeta,
+
+        pub user_oku_money_ata: AccountMeta,
+
+        pub user_usd_oku_ata: AccountMeta,
+
+        pub reserve_vault: AccountMeta,
+
+        pub psm_config: AccountMeta,
+
+        pub token_2022_program: AccountMeta,
+
+        pub associated_token_program: AccountMeta,
+
+        pub system_program: AccountMeta,
+    }
+
+    /// Account pubkeys for Unwrap instruction
+    #[derive(Debug, Clone)]
+    pub struct UnwrapInstructionAccounts {
+        pub user: Pubkey,
+
+        pub config: Pubkey,
+
+        pub oku_money_mint: Pubkey,
+
+        pub usd_oku_mint: Pubkey,
+
+        pub user_oku_money_ata: Pubkey,
+
+        pub user_usd_oku_ata: Pubkey,
+
+        pub reserve_vault: Pubkey,
+
+        pub psm_config: Pubkey,
+    }
+
+    impl UnwrapInstructionAccounts {
+        pub fn new(
+            user: Pubkey,
+
+            config: Pubkey,
+
+            oku_money_mint: Pubkey,
+
+            usd_oku_mint: Pubkey,
+
+            user_oku_money_ata: Pubkey,
+
+            user_usd_oku_ata: Pubkey,
+
+            reserve_vault: Pubkey,
+
+            psm_config: Pubkey,
+        ) -> Self {
+            Self {
+                user,
+
+                config,
+
+                oku_money_mint,
+
+                usd_oku_mint,
+
+                user_oku_money_ata,
+
+                user_usd_oku_ata,
+
+                reserve_vault,
+
+                psm_config,
+            }
+        }
+    }
+
+    /// Instruction data for Unwrap
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct UnwrapInstructionData {
+        pub shares: u64,
+    }
+
+    impl UnwrapInstructionData {
+        pub fn new(shares: u64) -> Self {
+            Self { shares }
+        }
+    }
+
+    /// Implementation for UnwrapInstruction
+    impl UnwrapInstruction {
+        fn discriminator() -> [u8; 8] {
+            [126u8, 175u8, 198u8, 14u8, 212u8, 69u8, 50u8, 44u8]
+        }
+
+        pub fn data(data: UnwrapInstructionData) -> Self {
+            Self {
+                accounts: UnwrapInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: UnwrapInstructionAccounts) -> Self {
+            self.accounts.user = AccountMeta::new(accounts.user, true);
+
+            self.accounts.config = AccountMeta::new_readonly(accounts.config, false);
+
+            self.accounts.oku_money_mint =
+                AccountMeta::new_readonly(accounts.oku_money_mint, false);
+
+            self.accounts.usd_oku_mint = AccountMeta::new(accounts.usd_oku_mint, false);
+
+            self.accounts.user_oku_money_ata = AccountMeta::new(accounts.user_oku_money_ata, false);
+
+            self.accounts.user_usd_oku_ata = AccountMeta::new(accounts.user_usd_oku_ata, false);
+
+            self.accounts.reserve_vault = AccountMeta::new(accounts.reserve_vault, false);
+
+            self.accounts.psm_config = AccountMeta::new_readonly(accounts.psm_config, false);
+
+            self.accounts.token_2022_program = AccountMeta::new_readonly(
+                pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+                false,
+            );
+
+            self.accounts.associated_token_program = AccountMeta::new_readonly(
+                pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
                 false,
             );
 
@@ -403,19 +1196,23 @@ pub mod lite_psm {
 
             metas.push(self.accounts.user.clone());
 
-            metas.push(self.accounts.bridge_config.clone());
-
             metas.push(self.accounts.config.clone());
 
-            metas.push(self.accounts.bridge_nonce.clone());
+            metas.push(self.accounts.oku_money_mint.clone());
 
-            metas.push(self.accounts.okusd_mint.clone());
+            metas.push(self.accounts.usd_oku_mint.clone());
 
-            metas.push(self.accounts.user_okusd_ata.clone());
+            metas.push(self.accounts.user_oku_money_ata.clone());
 
-            metas.push(self.accounts.fee_recipient_ata.clone());
+            metas.push(self.accounts.user_usd_oku_ata.clone());
+
+            metas.push(self.accounts.reserve_vault.clone());
+
+            metas.push(self.accounts.psm_config.clone());
 
             metas.push(self.accounts.token_2022_program.clone());
+
+            metas.push(self.accounts.associated_token_program.clone());
 
             metas.push(self.accounts.system_program.clone());
 
@@ -435,141 +1232,487 @@ pub mod lite_psm {
     }
 
     // ....................................................................
-    // Instruction: BridgeMint
+    // Instruction: UpdateUsdMultiplier
     // ....................................................................
 
-    /// Main instruction struct for BridgeMint
-    pub struct BridgeMintInstruction {
-        pub accounts: BridgeMintInstructionAccountMetas,
-        pub data: BridgeMintInstructionData,
+    /// Main instruction struct for UpdateUsdMultiplier
+    pub struct UpdateUsdMultiplierInstruction {
+        pub accounts: UpdateUsdMultiplierInstructionAccountMetas,
+        pub data: UpdateUsdMultiplierInstructionData,
         pub remaining_accounts: Vec<AccountMeta>,
     }
 
-    /// Account metadata for BridgeMint instruction
+    /// Account metadata for UpdateUsdMultiplier instruction
     #[derive(Debug, Clone, Default)]
-    pub struct BridgeMintInstructionAccountMetas {
-        pub payer: AccountMeta,
-
-        pub bridge_config: AccountMeta,
+    pub struct UpdateUsdMultiplierInstructionAccountMetas {
+        pub usd_rebaser: AccountMeta,
 
         pub config: AccountMeta,
 
-        pub processed_request: AccountMeta,
+        pub reserve_vault: AccountMeta,
 
-        pub okusd_mint: AccountMeta,
+        pub usd_oku_mint: AccountMeta,
 
-        pub recipient_okusd_ata: AccountMeta,
-
-        pub instruction_sysvar: AccountMeta,
+        pub psm_config: AccountMeta,
 
         pub token_2022_program: AccountMeta,
-
-        pub system_program: AccountMeta,
     }
 
-    /// Account pubkeys for BridgeMint instruction
+    /// Account pubkeys for UpdateUsdMultiplier instruction
     #[derive(Debug, Clone)]
-    pub struct BridgeMintInstructionAccounts {
-        pub payer: Pubkey,
-
-        pub bridge_config: Pubkey,
+    pub struct UpdateUsdMultiplierInstructionAccounts {
+        pub usd_rebaser: Pubkey,
 
         pub config: Pubkey,
 
-        pub processed_request: Pubkey,
+        pub reserve_vault: Pubkey,
 
-        pub okusd_mint: Pubkey,
+        pub usd_oku_mint: Pubkey,
 
-        pub recipient_okusd_ata: Pubkey,
+        pub psm_config: Pubkey,
     }
 
-    impl BridgeMintInstructionAccounts {
+    impl UpdateUsdMultiplierInstructionAccounts {
         pub fn new(
-            payer: Pubkey,
-
-            bridge_config: Pubkey,
+            usd_rebaser: Pubkey,
 
             config: Pubkey,
 
-            processed_request: Pubkey,
+            reserve_vault: Pubkey,
 
-            okusd_mint: Pubkey,
+            usd_oku_mint: Pubkey,
 
-            recipient_okusd_ata: Pubkey,
+            psm_config: Pubkey,
         ) -> Self {
             Self {
-                payer,
-
-                bridge_config,
+                usd_rebaser,
 
                 config,
 
-                processed_request,
+                reserve_vault,
 
-                okusd_mint,
+                usd_oku_mint,
 
-                recipient_okusd_ata,
+                psm_config,
             }
         }
     }
 
-    /// Instruction data for BridgeMint
+    /// Instruction data for UpdateUsdMultiplier
     #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct BridgeMintInstructionData {
-        pub message_bytes: Vec<u8>,
-
-        pub signature: Vec<u8>,
-
-        pub request_id: [u8; 32],
+    pub struct UpdateUsdMultiplierInstructionData {
+        pub new_usd_multiplier: u64,
     }
 
-    impl BridgeMintInstructionData {
-        pub fn new(message_bytes: Vec<u8>, signature: Vec<u8>, request_id: [u8; 32]) -> Self {
-            Self {
-                message_bytes,
-
-                signature,
-
-                request_id,
-            }
+    impl UpdateUsdMultiplierInstructionData {
+        pub fn new(new_usd_multiplier: u64) -> Self {
+            Self { new_usd_multiplier }
         }
     }
 
-    /// Implementation for BridgeMintInstruction
-    impl BridgeMintInstruction {
+    /// Implementation for UpdateUsdMultiplierInstruction
+    impl UpdateUsdMultiplierInstruction {
         fn discriminator() -> [u8; 8] {
-            [71u8, 115u8, 241u8, 7u8, 103u8, 250u8, 26u8, 84u8]
+            [249u8, 116u8, 186u8, 51u8, 161u8, 253u8, 31u8, 14u8]
         }
 
-        pub fn data(data: BridgeMintInstructionData) -> Self {
+        pub fn data(data: UpdateUsdMultiplierInstructionData) -> Self {
             Self {
-                accounts: BridgeMintInstructionAccountMetas::default(),
+                accounts: UpdateUsdMultiplierInstructionAccountMetas::default(),
                 data,
                 remaining_accounts: Vec::new(),
             }
         }
 
-        pub fn accounts(mut self, accounts: BridgeMintInstructionAccounts) -> Self {
-            self.accounts.payer = AccountMeta::new(accounts.payer, true);
-
-            self.accounts.bridge_config = AccountMeta::new_readonly(accounts.bridge_config, false);
+        pub fn accounts(mut self, accounts: UpdateUsdMultiplierInstructionAccounts) -> Self {
+            self.accounts.usd_rebaser = AccountMeta::new_readonly(accounts.usd_rebaser, true);
 
             self.accounts.config = AccountMeta::new(accounts.config, false);
 
-            self.accounts.processed_request = AccountMeta::new(accounts.processed_request, false);
+            self.accounts.reserve_vault = AccountMeta::new_readonly(accounts.reserve_vault, false);
 
-            self.accounts.okusd_mint = AccountMeta::new(accounts.okusd_mint, false);
+            self.accounts.usd_oku_mint = AccountMeta::new_readonly(accounts.usd_oku_mint, false);
 
-            self.accounts.recipient_okusd_ata =
-                AccountMeta::new(accounts.recipient_okusd_ata, false);
-
-            self.accounts.instruction_sysvar = AccountMeta::new_readonly(
-                pubkey!("Sysvar1nstructions1111111111111111111111111"),
-                false,
-            );
+            self.accounts.psm_config = AccountMeta::new_readonly(accounts.psm_config, false);
 
             self.accounts.token_2022_program = AccountMeta::new_readonly(
                 pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+                false,
+            );
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.usd_rebaser.clone());
+
+            metas.push(self.accounts.config.clone());
+
+            metas.push(self.accounts.reserve_vault.clone());
+
+            metas.push(self.accounts.usd_oku_mint.clone());
+
+            metas.push(self.accounts.psm_config.clone());
+
+            metas.push(self.accounts.token_2022_program.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: WithdrawReserves
+    // ....................................................................
+
+    /// Main instruction struct for WithdrawReserves
+    pub struct WithdrawReservesInstruction {
+        pub accounts: WithdrawReservesInstructionAccountMetas,
+        pub data: WithdrawReservesInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for WithdrawReserves instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct WithdrawReservesInstructionAccountMetas {
+        pub reserve_manager: AccountMeta,
+
+        pub config: AccountMeta,
+
+        pub oku_money_mint: AccountMeta,
+
+        pub destination_ata: AccountMeta,
+
+        pub reserve_vault: AccountMeta,
+
+        pub usd_oku_mint: AccountMeta,
+
+        pub psm_config: AccountMeta,
+
+        pub token_2022_program: AccountMeta,
+    }
+
+    /// Account pubkeys for WithdrawReserves instruction
+    #[derive(Debug, Clone)]
+    pub struct WithdrawReservesInstructionAccounts {
+        pub reserve_manager: Pubkey,
+
+        pub config: Pubkey,
+
+        pub oku_money_mint: Pubkey,
+
+        pub destination_ata: Pubkey,
+
+        pub reserve_vault: Pubkey,
+
+        pub usd_oku_mint: Pubkey,
+
+        pub psm_config: Pubkey,
+    }
+
+    impl WithdrawReservesInstructionAccounts {
+        pub fn new(
+            reserve_manager: Pubkey,
+
+            config: Pubkey,
+
+            oku_money_mint: Pubkey,
+
+            destination_ata: Pubkey,
+
+            reserve_vault: Pubkey,
+
+            usd_oku_mint: Pubkey,
+
+            psm_config: Pubkey,
+        ) -> Self {
+            Self {
+                reserve_manager,
+
+                config,
+
+                oku_money_mint,
+
+                destination_ata,
+
+                reserve_vault,
+
+                usd_oku_mint,
+
+                psm_config,
+            }
+        }
+    }
+
+    /// Instruction data for WithdrawReserves
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct WithdrawReservesInstructionData {
+        pub amount: u64,
+    }
+
+    impl WithdrawReservesInstructionData {
+        pub fn new(amount: u64) -> Self {
+            Self { amount }
+        }
+    }
+
+    /// Implementation for WithdrawReservesInstruction
+    impl WithdrawReservesInstruction {
+        fn discriminator() -> [u8; 8] {
+            [93u8, 101u8, 132u8, 31u8, 64u8, 18u8, 132u8, 209u8]
+        }
+
+        pub fn data(data: WithdrawReservesInstructionData) -> Self {
+            Self {
+                accounts: WithdrawReservesInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: WithdrawReservesInstructionAccounts) -> Self {
+            self.accounts.reserve_manager =
+                AccountMeta::new_readonly(accounts.reserve_manager, true);
+
+            self.accounts.config = AccountMeta::new_readonly(accounts.config, false);
+
+            self.accounts.oku_money_mint =
+                AccountMeta::new_readonly(accounts.oku_money_mint, false);
+
+            self.accounts.destination_ata = AccountMeta::new(accounts.destination_ata, false);
+
+            self.accounts.reserve_vault = AccountMeta::new(accounts.reserve_vault, false);
+
+            self.accounts.usd_oku_mint = AccountMeta::new_readonly(accounts.usd_oku_mint, false);
+
+            self.accounts.psm_config = AccountMeta::new_readonly(accounts.psm_config, false);
+
+            self.accounts.token_2022_program = AccountMeta::new_readonly(
+                pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+                false,
+            );
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.reserve_manager.clone());
+
+            metas.push(self.accounts.config.clone());
+
+            metas.push(self.accounts.oku_money_mint.clone());
+
+            metas.push(self.accounts.destination_ata.clone());
+
+            metas.push(self.accounts.reserve_vault.clone());
+
+            metas.push(self.accounts.usd_oku_mint.clone());
+
+            metas.push(self.accounts.psm_config.clone());
+
+            metas.push(self.accounts.token_2022_program.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: Wrap
+    // ....................................................................
+
+    /// Main instruction struct for Wrap
+    pub struct WrapInstruction {
+        pub accounts: WrapInstructionAccountMetas,
+        pub data: WrapInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for Wrap instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct WrapInstructionAccountMetas {
+        pub user: AccountMeta,
+
+        pub config: AccountMeta,
+
+        pub oku_money_mint: AccountMeta,
+
+        pub usd_oku_mint: AccountMeta,
+
+        pub user_oku_money_ata: AccountMeta,
+
+        pub user_usd_oku_ata: AccountMeta,
+
+        pub reserve_vault: AccountMeta,
+
+        pub psm_config: AccountMeta,
+
+        pub dead_shares_ata: AccountMeta,
+
+        pub token_2022_program: AccountMeta,
+
+        pub associated_token_program: AccountMeta,
+
+        pub system_program: AccountMeta,
+    }
+
+    /// Account pubkeys for Wrap instruction
+    #[derive(Debug, Clone)]
+    pub struct WrapInstructionAccounts {
+        pub user: Pubkey,
+
+        pub config: Pubkey,
+
+        pub oku_money_mint: Pubkey,
+
+        pub usd_oku_mint: Pubkey,
+
+        pub user_oku_money_ata: Pubkey,
+
+        pub user_usd_oku_ata: Pubkey,
+
+        pub reserve_vault: Pubkey,
+
+        pub psm_config: Pubkey,
+
+        pub dead_shares_ata: Pubkey,
+    }
+
+    impl WrapInstructionAccounts {
+        pub fn new(
+            user: Pubkey,
+
+            config: Pubkey,
+
+            oku_money_mint: Pubkey,
+
+            usd_oku_mint: Pubkey,
+
+            user_oku_money_ata: Pubkey,
+
+            user_usd_oku_ata: Pubkey,
+
+            reserve_vault: Pubkey,
+
+            psm_config: Pubkey,
+
+            dead_shares_ata: Pubkey,
+        ) -> Self {
+            Self {
+                user,
+
+                config,
+
+                oku_money_mint,
+
+                usd_oku_mint,
+
+                user_oku_money_ata,
+
+                user_usd_oku_ata,
+
+                reserve_vault,
+
+                psm_config,
+
+                dead_shares_ata,
+            }
+        }
+    }
+
+    /// Instruction data for Wrap
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct WrapInstructionData {
+        pub oku_m_amount: u64,
+
+        pub min_shares_out: u64,
+    }
+
+    impl WrapInstructionData {
+        pub fn new(oku_m_amount: u64, min_shares_out: u64) -> Self {
+            Self {
+                oku_m_amount,
+
+                min_shares_out,
+            }
+        }
+    }
+
+    /// Implementation for WrapInstruction
+    impl WrapInstruction {
+        fn discriminator() -> [u8; 8] {
+            [178u8, 40u8, 10u8, 189u8, 228u8, 129u8, 186u8, 140u8]
+        }
+
+        pub fn data(data: WrapInstructionData) -> Self {
+            Self {
+                accounts: WrapInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: WrapInstructionAccounts) -> Self {
+            self.accounts.user = AccountMeta::new(accounts.user, true);
+
+            self.accounts.config = AccountMeta::new_readonly(accounts.config, false);
+
+            self.accounts.oku_money_mint =
+                AccountMeta::new_readonly(accounts.oku_money_mint, false);
+
+            self.accounts.usd_oku_mint = AccountMeta::new(accounts.usd_oku_mint, false);
+
+            self.accounts.user_oku_money_ata = AccountMeta::new(accounts.user_oku_money_ata, false);
+
+            self.accounts.user_usd_oku_ata = AccountMeta::new(accounts.user_usd_oku_ata, false);
+
+            self.accounts.reserve_vault = AccountMeta::new(accounts.reserve_vault, false);
+
+            self.accounts.psm_config = AccountMeta::new_readonly(accounts.psm_config, false);
+
+            self.accounts.dead_shares_ata = AccountMeta::new(accounts.dead_shares_ata, false);
+
+            self.accounts.token_2022_program = AccountMeta::new_readonly(
+                pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+                false,
+            );
+
+            self.accounts.associated_token_program = AccountMeta::new_readonly(
+                pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
                 false,
             );
 
@@ -587,23 +1730,241 @@ pub mod lite_psm {
         fn to_account_metas(&self) -> Vec<AccountMeta> {
             let mut metas = Vec::new();
 
-            metas.push(self.accounts.payer.clone());
-
-            metas.push(self.accounts.bridge_config.clone());
+            metas.push(self.accounts.user.clone());
 
             metas.push(self.accounts.config.clone());
 
-            metas.push(self.accounts.processed_request.clone());
+            metas.push(self.accounts.oku_money_mint.clone());
 
-            metas.push(self.accounts.okusd_mint.clone());
+            metas.push(self.accounts.usd_oku_mint.clone());
 
-            metas.push(self.accounts.recipient_okusd_ata.clone());
+            metas.push(self.accounts.user_oku_money_ata.clone());
 
-            metas.push(self.accounts.instruction_sysvar.clone());
+            metas.push(self.accounts.user_usd_oku_ata.clone());
+
+            metas.push(self.accounts.reserve_vault.clone());
+
+            metas.push(self.accounts.psm_config.clone());
+
+            metas.push(self.accounts.dead_shares_ata.clone());
 
             metas.push(self.accounts.token_2022_program.clone());
 
+            metas.push(self.accounts.associated_token_program.clone());
+
             metas.push(self.accounts.system_program.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Composite Accounts
+    // ------------------------------------------------------------------------
+}
+
+// ----------------------------------------------------------------------------
+// Program: lite_psm
+// ----------------------------------------------------------------------------
+pub mod lite_psm {
+    use super::*;
+
+    // ------------------------------------------------------------------------
+    // Program ID
+    // ------------------------------------------------------------------------
+
+    /// Returns the program ID for lite_psm
+    pub fn program_id() -> Pubkey {
+        pubkey!("3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N")
+    }
+
+    // ------------------------------------------------------------------------
+    // Instructions
+    // ------------------------------------------------------------------------
+
+    // ....................................................................
+    // Instruction: AcceptRoleAdmin
+    // ....................................................................
+
+    /// Main instruction struct for AcceptRoleAdmin
+    pub struct AcceptRoleAdminInstruction {
+        pub accounts: AcceptRoleAdminInstructionAccountMetas,
+        pub data: AcceptRoleAdminInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for AcceptRoleAdmin instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct AcceptRoleAdminInstructionAccountMetas {
+        pub new_role_admin: AccountMeta,
+
+        pub config: AccountMeta,
+    }
+
+    /// Account pubkeys for AcceptRoleAdmin instruction
+    #[derive(Debug, Clone)]
+    pub struct AcceptRoleAdminInstructionAccounts {
+        pub new_role_admin: Pubkey,
+
+        pub config: Pubkey,
+    }
+
+    impl AcceptRoleAdminInstructionAccounts {
+        pub fn new(new_role_admin: Pubkey, config: Pubkey) -> Self {
+            Self {
+                new_role_admin,
+
+                config,
+            }
+        }
+    }
+
+    /// Instruction data for AcceptRoleAdmin
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct AcceptRoleAdminInstructionData {}
+
+    impl AcceptRoleAdminInstructionData {
+        pub fn new() -> Self {
+            Self {}
+        }
+    }
+
+    /// Implementation for AcceptRoleAdminInstruction
+    impl AcceptRoleAdminInstruction {
+        fn discriminator() -> [u8; 8] {
+            [203u8, 100u8, 15u8, 101u8, 168u8, 236u8, 213u8, 218u8]
+        }
+
+        pub fn data(data: AcceptRoleAdminInstructionData) -> Self {
+            Self {
+                accounts: AcceptRoleAdminInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: AcceptRoleAdminInstructionAccounts) -> Self {
+            self.accounts.new_role_admin = AccountMeta::new_readonly(accounts.new_role_admin, true);
+
+            self.accounts.config = AccountMeta::new(accounts.config, false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.new_role_admin.clone());
+
+            metas.push(self.accounts.config.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
+    // Instruction: CancelRoleAdminTransfer
+    // ....................................................................
+
+    /// Main instruction struct for CancelRoleAdminTransfer
+    pub struct CancelRoleAdminTransferInstruction {
+        pub accounts: CancelRoleAdminTransferInstructionAccountMetas,
+        pub data: CancelRoleAdminTransferInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for CancelRoleAdminTransfer instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct CancelRoleAdminTransferInstructionAccountMetas {
+        pub role_admin: AccountMeta,
+
+        pub config: AccountMeta,
+    }
+
+    /// Account pubkeys for CancelRoleAdminTransfer instruction
+    #[derive(Debug, Clone)]
+    pub struct CancelRoleAdminTransferInstructionAccounts {
+        pub role_admin: Pubkey,
+
+        pub config: Pubkey,
+    }
+
+    impl CancelRoleAdminTransferInstructionAccounts {
+        pub fn new(role_admin: Pubkey, config: Pubkey) -> Self {
+            Self { role_admin, config }
+        }
+    }
+
+    /// Instruction data for CancelRoleAdminTransfer
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct CancelRoleAdminTransferInstructionData {}
+
+    impl CancelRoleAdminTransferInstructionData {
+        pub fn new() -> Self {
+            Self {}
+        }
+    }
+
+    /// Implementation for CancelRoleAdminTransferInstruction
+    impl CancelRoleAdminTransferInstruction {
+        fn discriminator() -> [u8; 8] {
+            [155u8, 31u8, 41u8, 13u8, 107u8, 117u8, 20u8, 22u8]
+        }
+
+        pub fn data(data: CancelRoleAdminTransferInstructionData) -> Self {
+            Self {
+                accounts: CancelRoleAdminTransferInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: CancelRoleAdminTransferInstructionAccounts) -> Self {
+            self.accounts.role_admin = AccountMeta::new_readonly(accounts.role_admin, true);
+
+            self.accounts.config = AccountMeta::new(accounts.config, false);
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.role_admin.clone());
+
+            metas.push(self.accounts.config.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -770,6 +2131,124 @@ pub mod lite_psm {
     }
 
     // ....................................................................
+    // Instruction: DistributeYield
+    // ....................................................................
+
+    /// Main instruction struct for DistributeYield
+    pub struct DistributeYieldInstruction {
+        pub accounts: DistributeYieldInstructionAccountMetas,
+        pub data: DistributeYieldInstructionData,
+        pub remaining_accounts: Vec<AccountMeta>,
+    }
+
+    /// Account metadata for DistributeYield instruction
+    #[derive(Debug, Clone, Default)]
+    pub struct DistributeYieldInstructionAccountMetas {
+        pub rebaser: AccountMeta,
+
+        pub config: AccountMeta,
+
+        pub oku_money_mint: AccountMeta,
+
+        pub token_2022_program: AccountMeta,
+    }
+
+    /// Account pubkeys for DistributeYield instruction
+    #[derive(Debug, Clone)]
+    pub struct DistributeYieldInstructionAccounts {
+        pub rebaser: Pubkey,
+
+        pub config: Pubkey,
+
+        pub oku_money_mint: Pubkey,
+    }
+
+    impl DistributeYieldInstructionAccounts {
+        pub fn new(rebaser: Pubkey, config: Pubkey, oku_money_mint: Pubkey) -> Self {
+            Self {
+                rebaser,
+
+                config,
+
+                oku_money_mint,
+            }
+        }
+    }
+
+    /// Instruction data for DistributeYield
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct DistributeYieldInstructionData {
+        pub yield_amount: u64,
+    }
+
+    impl DistributeYieldInstructionData {
+        pub fn new(yield_amount: u64) -> Self {
+            Self { yield_amount }
+        }
+    }
+
+    /// Implementation for DistributeYieldInstruction
+    impl DistributeYieldInstruction {
+        fn discriminator() -> [u8; 8] {
+            [233u8, 92u8, 186u8, 157u8, 235u8, 238u8, 212u8, 114u8]
+        }
+
+        pub fn data(data: DistributeYieldInstructionData) -> Self {
+            Self {
+                accounts: DistributeYieldInstructionAccountMetas::default(),
+                data,
+                remaining_accounts: Vec::new(),
+            }
+        }
+
+        pub fn accounts(mut self, accounts: DistributeYieldInstructionAccounts) -> Self {
+            self.accounts.rebaser = AccountMeta::new_readonly(accounts.rebaser, true);
+
+            self.accounts.config = AccountMeta::new(accounts.config, false);
+
+            self.accounts.oku_money_mint =
+                AccountMeta::new_readonly(accounts.oku_money_mint, false);
+
+            self.accounts.token_2022_program = AccountMeta::new_readonly(
+                pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+                false,
+            );
+
+            self
+        }
+
+        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
+            self.remaining_accounts = accounts;
+            self
+        }
+
+        fn to_account_metas(&self) -> Vec<AccountMeta> {
+            let mut metas = Vec::new();
+
+            metas.push(self.accounts.rebaser.clone());
+
+            metas.push(self.accounts.config.clone());
+
+            metas.push(self.accounts.oku_money_mint.clone());
+
+            metas.push(self.accounts.token_2022_program.clone());
+
+            metas.extend(self.remaining_accounts.clone());
+            metas
+        }
+
+        pub fn instruction(&self) -> Instruction {
+            let mut buffer: Vec<u8> = Vec::new();
+
+            buffer.extend_from_slice(&Self::discriminator());
+
+            self.data.serialize(&mut buffer).unwrap();
+
+            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
+        }
+    }
+
+    // ....................................................................
     // Instruction: FreezeAccount
     // ....................................................................
 
@@ -787,9 +2266,9 @@ pub mod lite_psm {
 
         pub config: AccountMeta,
 
-        pub okusd_mint: AccountMeta,
+        pub oku_money_mint: AccountMeta,
 
-        pub target_okusd_ata: AccountMeta,
+        pub target_oku_money_ata: AccountMeta,
 
         pub token_2022_program: AccountMeta,
     }
@@ -801,9 +2280,9 @@ pub mod lite_psm {
 
         pub config: Pubkey,
 
-        pub okusd_mint: Pubkey,
+        pub oku_money_mint: Pubkey,
 
-        pub target_okusd_ata: Pubkey,
+        pub target_oku_money_ata: Pubkey,
     }
 
     impl FreezeAccountInstructionAccounts {
@@ -812,18 +2291,18 @@ pub mod lite_psm {
 
             config: Pubkey,
 
-            okusd_mint: Pubkey,
+            oku_money_mint: Pubkey,
 
-            target_okusd_ata: Pubkey,
+            target_oku_money_ata: Pubkey,
         ) -> Self {
             Self {
                 freezer,
 
                 config,
 
-                okusd_mint,
+                oku_money_mint,
 
-                target_okusd_ata,
+                target_oku_money_ata,
             }
         }
     }
@@ -857,9 +2336,11 @@ pub mod lite_psm {
 
             self.accounts.config = AccountMeta::new_readonly(accounts.config, false);
 
-            self.accounts.okusd_mint = AccountMeta::new_readonly(accounts.okusd_mint, false);
+            self.accounts.oku_money_mint =
+                AccountMeta::new_readonly(accounts.oku_money_mint, false);
 
-            self.accounts.target_okusd_ata = AccountMeta::new(accounts.target_okusd_ata, false);
+            self.accounts.target_oku_money_ata =
+                AccountMeta::new(accounts.target_oku_money_ata, false);
 
             self.accounts.token_2022_program = AccountMeta::new_readonly(
                 pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
@@ -881,9 +2362,9 @@ pub mod lite_psm {
 
             metas.push(self.accounts.config.clone());
 
-            metas.push(self.accounts.okusd_mint.clone());
+            metas.push(self.accounts.oku_money_mint.clone());
 
-            metas.push(self.accounts.target_okusd_ata.clone());
+            metas.push(self.accounts.target_oku_money_ata.clone());
 
             metas.push(self.accounts.token_2022_program.clone());
 
@@ -922,7 +2403,7 @@ pub mod lite_psm {
 
         pub usdc_mint: AccountMeta,
 
-        pub okusd_mint: AccountMeta,
+        pub oku_money_mint: AccountMeta,
 
         pub vault_usdc: AccountMeta,
 
@@ -933,8 +2414,6 @@ pub mod lite_psm {
         pub associated_token_program: AccountMeta,
 
         pub system_program: AccountMeta,
-
-        pub rent: AccountMeta,
     }
 
     /// Account pubkeys for Initialize instruction
@@ -946,7 +2425,7 @@ pub mod lite_psm {
 
         pub usdc_mint: Pubkey,
 
-        pub okusd_mint: Pubkey,
+        pub oku_money_mint: Pubkey,
 
         pub vault_usdc: Pubkey,
     }
@@ -959,7 +2438,7 @@ pub mod lite_psm {
 
             usdc_mint: Pubkey,
 
-            okusd_mint: Pubkey,
+            oku_money_mint: Pubkey,
 
             vault_usdc: Pubkey,
         ) -> Self {
@@ -970,7 +2449,7 @@ pub mod lite_psm {
 
                 usdc_mint,
 
-                okusd_mint,
+                oku_money_mint,
 
                 vault_usdc,
             }
@@ -1005,6 +2484,8 @@ pub mod lite_psm {
         pub allowance_manager: Pubkey,
 
         pub rebaser: Pubkey,
+
+        pub pyth_program_owner: Pubkey,
     }
 
     impl InitializeInstructionData {
@@ -1034,6 +2515,8 @@ pub mod lite_psm {
             allowance_manager: Pubkey,
 
             rebaser: Pubkey,
+
+            pyth_program_owner: Pubkey,
         ) -> Self {
             Self {
                 max_supply,
@@ -1061,6 +2544,8 @@ pub mod lite_psm {
                 allowance_manager,
 
                 rebaser,
+
+                pyth_program_owner,
             }
         }
     }
@@ -1086,7 +2571,8 @@ pub mod lite_psm {
 
             self.accounts.usdc_mint = AccountMeta::new_readonly(accounts.usdc_mint, false);
 
-            self.accounts.okusd_mint = AccountMeta::new_readonly(accounts.okusd_mint, false);
+            self.accounts.oku_money_mint =
+                AccountMeta::new_readonly(accounts.oku_money_mint, false);
 
             self.accounts.vault_usdc = AccountMeta::new(accounts.vault_usdc, false);
 
@@ -1108,11 +2594,6 @@ pub mod lite_psm {
             self.accounts.system_program =
                 AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
 
-            self.accounts.rent = AccountMeta::new_readonly(
-                pubkey!("SysvarRent111111111111111111111111111111111"),
-                false,
-            );
-
             self
         }
 
@@ -1130,7 +2611,7 @@ pub mod lite_psm {
 
             metas.push(self.accounts.usdc_mint.clone());
 
-            metas.push(self.accounts.okusd_mint.clone());
+            metas.push(self.accounts.oku_money_mint.clone());
 
             metas.push(self.accounts.vault_usdc.clone());
 
@@ -1141,8 +2622,6 @@ pub mod lite_psm {
             metas.push(self.accounts.associated_token_program.clone());
 
             metas.push(self.accounts.system_program.clone());
-
-            metas.push(self.accounts.rent.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -1160,175 +2639,70 @@ pub mod lite_psm {
     }
 
     // ....................................................................
-    // Instruction: InitializeBridge
+    // Instruction: InitializeBlacklistExempt
     // ....................................................................
 
-    /// Main instruction struct for InitializeBridge
-    pub struct InitializeBridgeInstruction {
-        pub accounts: InitializeBridgeInstructionAccountMetas,
-        pub data: InitializeBridgeInstructionData,
+    /// Main instruction struct for InitializeBlacklistExempt
+    pub struct InitializeBlacklistExemptInstruction {
+        pub accounts: InitializeBlacklistExemptInstructionAccountMetas,
+        pub data: InitializeBlacklistExemptInstructionData,
         pub remaining_accounts: Vec<AccountMeta>,
     }
 
-    /// Account metadata for InitializeBridge instruction
+    /// Account metadata for InitializeBlacklistExempt instruction
     #[derive(Debug, Clone, Default)]
-    pub struct InitializeBridgeInstructionAccountMetas {
-        pub bridge_admin: AccountMeta,
+    pub struct InitializeBlacklistExemptInstructionAccountMetas {
+        pub role_admin: AccountMeta,
 
-        pub bridge_pauser: AccountMeta,
-
-        pub bridge_unpauser: AccountMeta,
-
-        pub orchestrator_signer: AccountMeta,
-
-        pub fee_recipient: AccountMeta,
-
-        pub chain_manager: AccountMeta,
-
-        pub fee_manager: AccountMeta,
-
-        pub nonce_admin: AccountMeta,
-
-        pub signer_manager: AccountMeta,
-
-        pub limits_manager: AccountMeta,
-
-        pub bridge_config: AccountMeta,
-
-        pub system_program: AccountMeta,
+        pub config: AccountMeta,
     }
 
-    /// Account pubkeys for InitializeBridge instruction
+    /// Account pubkeys for InitializeBlacklistExempt instruction
     #[derive(Debug, Clone)]
-    pub struct InitializeBridgeInstructionAccounts {
-        pub bridge_admin: Pubkey,
+    pub struct InitializeBlacklistExemptInstructionAccounts {
+        pub role_admin: Pubkey,
 
-        pub bridge_pauser: Pubkey,
-
-        pub bridge_unpauser: Pubkey,
-
-        pub orchestrator_signer: Pubkey,
-
-        pub fee_recipient: Pubkey,
-
-        pub chain_manager: Pubkey,
-
-        pub fee_manager: Pubkey,
-
-        pub nonce_admin: Pubkey,
-
-        pub signer_manager: Pubkey,
-
-        pub limits_manager: Pubkey,
-
-        pub bridge_config: Pubkey,
+        pub config: Pubkey,
     }
 
-    impl InitializeBridgeInstructionAccounts {
-        pub fn new(
-            bridge_admin: Pubkey,
-
-            bridge_pauser: Pubkey,
-
-            bridge_unpauser: Pubkey,
-
-            orchestrator_signer: Pubkey,
-
-            fee_recipient: Pubkey,
-
-            chain_manager: Pubkey,
-
-            fee_manager: Pubkey,
-
-            nonce_admin: Pubkey,
-
-            signer_manager: Pubkey,
-
-            limits_manager: Pubkey,
-
-            bridge_config: Pubkey,
-        ) -> Self {
-            Self {
-                bridge_admin,
-
-                bridge_pauser,
-
-                bridge_unpauser,
-
-                orchestrator_signer,
-
-                fee_recipient,
-
-                chain_manager,
-
-                fee_manager,
-
-                nonce_admin,
-
-                signer_manager,
-
-                limits_manager,
-
-                bridge_config,
-            }
+    impl InitializeBlacklistExemptInstructionAccounts {
+        pub fn new(role_admin: Pubkey, config: Pubkey) -> Self {
+            Self { role_admin, config }
         }
     }
 
-    /// Instruction data for InitializeBridge
+    /// Instruction data for InitializeBlacklistExempt
     #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct InitializeBridgeInstructionData {
-        pub source_chain_id: u16,
+    pub struct InitializeBlacklistExemptInstructionData {
+        pub bridge: Pubkey,
+
+        pub router: Pubkey,
     }
 
-    impl InitializeBridgeInstructionData {
-        pub fn new(source_chain_id: u16) -> Self {
-            Self { source_chain_id }
+    impl InitializeBlacklistExemptInstructionData {
+        pub fn new(bridge: Pubkey, router: Pubkey) -> Self {
+            Self { bridge, router }
         }
     }
 
-    /// Implementation for InitializeBridgeInstruction
-    impl InitializeBridgeInstruction {
+    /// Implementation for InitializeBlacklistExemptInstruction
+    impl InitializeBlacklistExemptInstruction {
         fn discriminator() -> [u8; 8] {
-            [6u8, 173u8, 152u8, 229u8, 35u8, 112u8, 127u8, 151u8]
+            [184u8, 212u8, 138u8, 218u8, 87u8, 96u8, 176u8, 148u8]
         }
 
-        pub fn data(data: InitializeBridgeInstructionData) -> Self {
+        pub fn data(data: InitializeBlacklistExemptInstructionData) -> Self {
             Self {
-                accounts: InitializeBridgeInstructionAccountMetas::default(),
+                accounts: InitializeBlacklistExemptInstructionAccountMetas::default(),
                 data,
                 remaining_accounts: Vec::new(),
             }
         }
 
-        pub fn accounts(mut self, accounts: InitializeBridgeInstructionAccounts) -> Self {
-            self.accounts.bridge_admin = AccountMeta::new(accounts.bridge_admin, true);
+        pub fn accounts(mut self, accounts: InitializeBlacklistExemptInstructionAccounts) -> Self {
+            self.accounts.role_admin = AccountMeta::new_readonly(accounts.role_admin, true);
 
-            self.accounts.bridge_pauser = AccountMeta::new_readonly(accounts.bridge_pauser, false);
-
-            self.accounts.bridge_unpauser =
-                AccountMeta::new_readonly(accounts.bridge_unpauser, false);
-
-            self.accounts.orchestrator_signer =
-                AccountMeta::new_readonly(accounts.orchestrator_signer, false);
-
-            self.accounts.fee_recipient = AccountMeta::new_readonly(accounts.fee_recipient, false);
-
-            self.accounts.chain_manager = AccountMeta::new_readonly(accounts.chain_manager, false);
-
-            self.accounts.fee_manager = AccountMeta::new_readonly(accounts.fee_manager, false);
-
-            self.accounts.nonce_admin = AccountMeta::new_readonly(accounts.nonce_admin, false);
-
-            self.accounts.signer_manager =
-                AccountMeta::new_readonly(accounts.signer_manager, false);
-
-            self.accounts.limits_manager =
-                AccountMeta::new_readonly(accounts.limits_manager, false);
-
-            self.accounts.bridge_config = AccountMeta::new(accounts.bridge_config, false);
-
-            self.accounts.system_program =
-                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
+            self.accounts.config = AccountMeta::new(accounts.config, false);
 
             self
         }
@@ -1341,29 +2715,9 @@ pub mod lite_psm {
         fn to_account_metas(&self) -> Vec<AccountMeta> {
             let mut metas = Vec::new();
 
-            metas.push(self.accounts.bridge_admin.clone());
+            metas.push(self.accounts.role_admin.clone());
 
-            metas.push(self.accounts.bridge_pauser.clone());
-
-            metas.push(self.accounts.bridge_unpauser.clone());
-
-            metas.push(self.accounts.orchestrator_signer.clone());
-
-            metas.push(self.accounts.fee_recipient.clone());
-
-            metas.push(self.accounts.chain_manager.clone());
-
-            metas.push(self.accounts.fee_manager.clone());
-
-            metas.push(self.accounts.nonce_admin.clone());
-
-            metas.push(self.accounts.signer_manager.clone());
-
-            metas.push(self.accounts.limits_manager.clone());
-
-            metas.push(self.accounts.bridge_config.clone());
-
-            metas.push(self.accounts.system_program.clone());
+            metas.push(self.accounts.config.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -1381,30 +2735,30 @@ pub mod lite_psm {
     }
 
     // ....................................................................
-    // Instruction: Mint
+    // Instruction: MintOkuM
     // ....................................................................
 
-    /// Main instruction struct for Mint
-    pub struct MintInstruction {
-        pub accounts: MintInstructionAccountMetas,
-        pub data: MintInstructionData,
+    /// Main instruction struct for MintOkuM
+    pub struct MintOkuMInstruction {
+        pub accounts: MintOkuMInstructionAccountMetas,
+        pub data: MintOkuMInstructionData,
         pub remaining_accounts: Vec<AccountMeta>,
     }
 
-    /// Account metadata for Mint instruction
+    /// Account metadata for MintOkuM instruction
     #[derive(Debug, Clone, Default)]
-    pub struct MintInstructionAccountMetas {
+    pub struct MintOkuMInstructionAccountMetas {
         pub user: AccountMeta,
 
         pub config: AccountMeta,
 
         pub usdc_mint: AccountMeta,
 
-        pub okusd_mint: AccountMeta,
+        pub oku_money_mint: AccountMeta,
 
         pub user_usdc_ata: AccountMeta,
 
-        pub user_okusd_ata: AccountMeta,
+        pub user_oku_money_ata: AccountMeta,
 
         pub vault_usdc: AccountMeta,
 
@@ -1419,27 +2773,27 @@ pub mod lite_psm {
         pub system_program: AccountMeta,
     }
 
-    /// Account pubkeys for Mint instruction
+    /// Account pubkeys for MintOkuM instruction
     #[derive(Debug, Clone)]
-    pub struct MintInstructionAccounts {
+    pub struct MintOkuMInstructionAccounts {
         pub user: Pubkey,
 
         pub config: Pubkey,
 
         pub usdc_mint: Pubkey,
 
-        pub okusd_mint: Pubkey,
+        pub oku_money_mint: Pubkey,
 
         pub user_usdc_ata: Pubkey,
 
-        pub user_okusd_ata: Pubkey,
+        pub user_oku_money_ata: Pubkey,
 
         pub vault_usdc: Pubkey,
 
         pub price_update: Pubkey,
     }
 
-    impl MintInstructionAccounts {
+    impl MintOkuMInstructionAccounts {
         pub fn new(
             user: Pubkey,
 
@@ -1447,11 +2801,11 @@ pub mod lite_psm {
 
             usdc_mint: Pubkey,
 
-            okusd_mint: Pubkey,
+            oku_money_mint: Pubkey,
 
             user_usdc_ata: Pubkey,
 
-            user_okusd_ata: Pubkey,
+            user_oku_money_ata: Pubkey,
 
             vault_usdc: Pubkey,
 
@@ -1464,11 +2818,11 @@ pub mod lite_psm {
 
                 usdc_mint,
 
-                okusd_mint,
+                oku_money_mint,
 
                 user_usdc_ata,
 
-                user_okusd_ata,
+                user_oku_money_ata,
 
                 vault_usdc,
 
@@ -1477,44 +2831,44 @@ pub mod lite_psm {
         }
     }
 
-    /// Instruction data for Mint
+    /// Instruction data for MintOkuM
     #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct MintInstructionData {
+    pub struct MintOkuMInstructionData {
         pub usdc_amount: u64,
     }
 
-    impl MintInstructionData {
+    impl MintOkuMInstructionData {
         pub fn new(usdc_amount: u64) -> Self {
             Self { usdc_amount }
         }
     }
 
-    /// Implementation for MintInstruction
-    impl MintInstruction {
+    /// Implementation for MintOkuMInstruction
+    impl MintOkuMInstruction {
         fn discriminator() -> [u8; 8] {
-            [51u8, 57u8, 225u8, 47u8, 182u8, 146u8, 137u8, 166u8]
+            [200u8, 181u8, 20u8, 123u8, 23u8, 72u8, 39u8, 105u8]
         }
 
-        pub fn data(data: MintInstructionData) -> Self {
+        pub fn data(data: MintOkuMInstructionData) -> Self {
             Self {
-                accounts: MintInstructionAccountMetas::default(),
+                accounts: MintOkuMInstructionAccountMetas::default(),
                 data,
                 remaining_accounts: Vec::new(),
             }
         }
 
-        pub fn accounts(mut self, accounts: MintInstructionAccounts) -> Self {
+        pub fn accounts(mut self, accounts: MintOkuMInstructionAccounts) -> Self {
             self.accounts.user = AccountMeta::new(accounts.user, true);
 
             self.accounts.config = AccountMeta::new(accounts.config, false);
 
             self.accounts.usdc_mint = AccountMeta::new_readonly(accounts.usdc_mint, false);
 
-            self.accounts.okusd_mint = AccountMeta::new(accounts.okusd_mint, false);
+            self.accounts.oku_money_mint = AccountMeta::new(accounts.oku_money_mint, false);
 
             self.accounts.user_usdc_ata = AccountMeta::new(accounts.user_usdc_ata, false);
 
-            self.accounts.user_okusd_ata = AccountMeta::new(accounts.user_okusd_ata, false);
+            self.accounts.user_oku_money_ata = AccountMeta::new(accounts.user_oku_money_ata, false);
 
             self.accounts.vault_usdc = AccountMeta::new(accounts.vault_usdc, false);
 
@@ -1555,11 +2909,11 @@ pub mod lite_psm {
 
             metas.push(self.accounts.usdc_mint.clone());
 
-            metas.push(self.accounts.okusd_mint.clone());
+            metas.push(self.accounts.oku_money_mint.clone());
 
             metas.push(self.accounts.user_usdc_ata.clone());
 
-            metas.push(self.accounts.user_okusd_ata.clone());
+            metas.push(self.accounts.user_oku_money_ata.clone());
 
             metas.push(self.accounts.vault_usdc.clone());
 
@@ -1681,102 +3035,6 @@ pub mod lite_psm {
     }
 
     // ....................................................................
-    // Instruction: PauseBridge
-    // ....................................................................
-
-    /// Main instruction struct for PauseBridge
-    pub struct PauseBridgeInstruction {
-        pub accounts: PauseBridgeInstructionAccountMetas,
-        pub data: PauseBridgeInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for PauseBridge instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct PauseBridgeInstructionAccountMetas {
-        pub bridge_pauser: AccountMeta,
-
-        pub bridge_config: AccountMeta,
-    }
-
-    /// Account pubkeys for PauseBridge instruction
-    #[derive(Debug, Clone)]
-    pub struct PauseBridgeInstructionAccounts {
-        pub bridge_pauser: Pubkey,
-
-        pub bridge_config: Pubkey,
-    }
-
-    impl PauseBridgeInstructionAccounts {
-        pub fn new(bridge_pauser: Pubkey, bridge_config: Pubkey) -> Self {
-            Self {
-                bridge_pauser,
-
-                bridge_config,
-            }
-        }
-    }
-
-    /// Instruction data for PauseBridge
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct PauseBridgeInstructionData {}
-
-    impl PauseBridgeInstructionData {
-        pub fn new() -> Self {
-            Self {}
-        }
-    }
-
-    /// Implementation for PauseBridgeInstruction
-    impl PauseBridgeInstruction {
-        fn discriminator() -> [u8; 8] {
-            [162u8, 103u8, 59u8, 230u8, 104u8, 233u8, 25u8, 246u8]
-        }
-
-        pub fn data(data: PauseBridgeInstructionData) -> Self {
-            Self {
-                accounts: PauseBridgeInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: PauseBridgeInstructionAccounts) -> Self {
-            self.accounts.bridge_pauser = AccountMeta::new_readonly(accounts.bridge_pauser, true);
-
-            self.accounts.bridge_config = AccountMeta::new(accounts.bridge_config, false);
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.bridge_pauser.clone());
-
-            metas.push(self.accounts.bridge_config.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
     // Instruction: ProcessQueue
     // ....................................................................
 
@@ -1796,11 +3054,11 @@ pub mod lite_psm {
 
         pub redemption_queue: AccountMeta,
 
-        pub okusd_mint: AccountMeta,
+        pub oku_money_mint: AccountMeta,
 
         pub vault_usdc: AccountMeta,
 
-        pub vault_okusd: AccountMeta,
+        pub vault_oku_money: AccountMeta,
 
         pub token_program: AccountMeta,
 
@@ -1816,11 +3074,11 @@ pub mod lite_psm {
 
         pub redemption_queue: Pubkey,
 
-        pub okusd_mint: Pubkey,
+        pub oku_money_mint: Pubkey,
 
         pub vault_usdc: Pubkey,
 
-        pub vault_okusd: Pubkey,
+        pub vault_oku_money: Pubkey,
     }
 
     impl ProcessQueueInstructionAccounts {
@@ -1831,11 +3089,11 @@ pub mod lite_psm {
 
             redemption_queue: Pubkey,
 
-            okusd_mint: Pubkey,
+            oku_money_mint: Pubkey,
 
             vault_usdc: Pubkey,
 
-            vault_okusd: Pubkey,
+            vault_oku_money: Pubkey,
         ) -> Self {
             Self {
                 queue_processor,
@@ -1844,11 +3102,11 @@ pub mod lite_psm {
 
                 redemption_queue,
 
-                okusd_mint,
+                oku_money_mint,
 
                 vault_usdc,
 
-                vault_okusd,
+                vault_oku_money,
             }
         }
     }
@@ -1887,11 +3145,11 @@ pub mod lite_psm {
 
             self.accounts.redemption_queue = AccountMeta::new(accounts.redemption_queue, false);
 
-            self.accounts.okusd_mint = AccountMeta::new(accounts.okusd_mint, false);
+            self.accounts.oku_money_mint = AccountMeta::new(accounts.oku_money_mint, false);
 
             self.accounts.vault_usdc = AccountMeta::new(accounts.vault_usdc, false);
 
-            self.accounts.vault_okusd = AccountMeta::new(accounts.vault_okusd, false);
+            self.accounts.vault_oku_money = AccountMeta::new(accounts.vault_oku_money, false);
 
             self.accounts.token_program = AccountMeta::new_readonly(
                 pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
@@ -1920,11 +3178,11 @@ pub mod lite_psm {
 
             metas.push(self.accounts.redemption_queue.clone());
 
-            metas.push(self.accounts.okusd_mint.clone());
+            metas.push(self.accounts.oku_money_mint.clone());
 
             metas.push(self.accounts.vault_usdc.clone());
 
-            metas.push(self.accounts.vault_okusd.clone());
+            metas.push(self.accounts.vault_oku_money.clone());
 
             metas.push(self.accounts.token_program.clone());
 
@@ -1946,19 +3204,19 @@ pub mod lite_psm {
     }
 
     // ....................................................................
-    // Instruction: Redeem
+    // Instruction: RedeemOkuM
     // ....................................................................
 
-    /// Main instruction struct for Redeem
-    pub struct RedeemInstruction {
-        pub accounts: RedeemInstructionAccountMetas,
-        pub data: RedeemInstructionData,
+    /// Main instruction struct for RedeemOkuM
+    pub struct RedeemOkuMInstruction {
+        pub accounts: RedeemOkuMInstructionAccountMetas,
+        pub data: RedeemOkuMInstructionData,
         pub remaining_accounts: Vec<AccountMeta>,
     }
 
-    /// Account metadata for Redeem instruction
+    /// Account metadata for RedeemOkuM instruction
     #[derive(Debug, Clone, Default)]
-    pub struct RedeemInstructionAccountMetas {
+    pub struct RedeemOkuMInstructionAccountMetas {
         pub user: AccountMeta,
 
         pub config: AccountMeta,
@@ -1967,15 +3225,15 @@ pub mod lite_psm {
 
         pub usdc_mint: AccountMeta,
 
-        pub okusd_mint: AccountMeta,
+        pub oku_money_mint: AccountMeta,
 
         pub user_usdc_ata: AccountMeta,
 
-        pub user_okusd_ata: AccountMeta,
+        pub user_oku_money_ata: AccountMeta,
 
         pub vault_usdc: AccountMeta,
 
-        pub vault_okusd: AccountMeta,
+        pub vault_oku_money: AccountMeta,
 
         pub token_program: AccountMeta,
 
@@ -1986,9 +3244,9 @@ pub mod lite_psm {
         pub system_program: AccountMeta,
     }
 
-    /// Account pubkeys for Redeem instruction
+    /// Account pubkeys for RedeemOkuM instruction
     #[derive(Debug, Clone)]
-    pub struct RedeemInstructionAccounts {
+    pub struct RedeemOkuMInstructionAccounts {
         pub user: Pubkey,
 
         pub config: Pubkey,
@@ -1997,18 +3255,18 @@ pub mod lite_psm {
 
         pub usdc_mint: Pubkey,
 
-        pub okusd_mint: Pubkey,
+        pub oku_money_mint: Pubkey,
 
         pub user_usdc_ata: Pubkey,
 
-        pub user_okusd_ata: Pubkey,
+        pub user_oku_money_ata: Pubkey,
 
         pub vault_usdc: Pubkey,
 
-        pub vault_okusd: Pubkey,
+        pub vault_oku_money: Pubkey,
     }
 
-    impl RedeemInstructionAccounts {
+    impl RedeemOkuMInstructionAccounts {
         pub fn new(
             user: Pubkey,
 
@@ -2018,15 +3276,15 @@ pub mod lite_psm {
 
             usdc_mint: Pubkey,
 
-            okusd_mint: Pubkey,
+            oku_money_mint: Pubkey,
 
             user_usdc_ata: Pubkey,
 
-            user_okusd_ata: Pubkey,
+            user_oku_money_ata: Pubkey,
 
             vault_usdc: Pubkey,
 
-            vault_okusd: Pubkey,
+            vault_oku_money: Pubkey,
         ) -> Self {
             Self {
                 user,
@@ -2037,46 +3295,46 @@ pub mod lite_psm {
 
                 usdc_mint,
 
-                okusd_mint,
+                oku_money_mint,
 
                 user_usdc_ata,
 
-                user_okusd_ata,
+                user_oku_money_ata,
 
                 vault_usdc,
 
-                vault_okusd,
+                vault_oku_money,
             }
         }
     }
 
-    /// Instruction data for Redeem
+    /// Instruction data for RedeemOkuM
     #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct RedeemInstructionData {
-        pub okusd_amount: u64,
+    pub struct RedeemOkuMInstructionData {
+        pub oku_m_amount: u64,
     }
 
-    impl RedeemInstructionData {
-        pub fn new(okusd_amount: u64) -> Self {
-            Self { okusd_amount }
+    impl RedeemOkuMInstructionData {
+        pub fn new(oku_m_amount: u64) -> Self {
+            Self { oku_m_amount }
         }
     }
 
-    /// Implementation for RedeemInstruction
-    impl RedeemInstruction {
+    /// Implementation for RedeemOkuMInstruction
+    impl RedeemOkuMInstruction {
         fn discriminator() -> [u8; 8] {
-            [184u8, 12u8, 86u8, 149u8, 70u8, 196u8, 97u8, 225u8]
+            [85u8, 74u8, 214u8, 82u8, 206u8, 164u8, 90u8, 70u8]
         }
 
-        pub fn data(data: RedeemInstructionData) -> Self {
+        pub fn data(data: RedeemOkuMInstructionData) -> Self {
             Self {
-                accounts: RedeemInstructionAccountMetas::default(),
+                accounts: RedeemOkuMInstructionAccountMetas::default(),
                 data,
                 remaining_accounts: Vec::new(),
             }
         }
 
-        pub fn accounts(mut self, accounts: RedeemInstructionAccounts) -> Self {
+        pub fn accounts(mut self, accounts: RedeemOkuMInstructionAccounts) -> Self {
             self.accounts.user = AccountMeta::new(accounts.user, true);
 
             self.accounts.config = AccountMeta::new_readonly(accounts.config, false);
@@ -2085,15 +3343,15 @@ pub mod lite_psm {
 
             self.accounts.usdc_mint = AccountMeta::new_readonly(accounts.usdc_mint, false);
 
-            self.accounts.okusd_mint = AccountMeta::new(accounts.okusd_mint, false);
+            self.accounts.oku_money_mint = AccountMeta::new(accounts.oku_money_mint, false);
 
             self.accounts.user_usdc_ata = AccountMeta::new(accounts.user_usdc_ata, false);
 
-            self.accounts.user_okusd_ata = AccountMeta::new(accounts.user_okusd_ata, false);
+            self.accounts.user_oku_money_ata = AccountMeta::new(accounts.user_oku_money_ata, false);
 
             self.accounts.vault_usdc = AccountMeta::new(accounts.vault_usdc, false);
 
-            self.accounts.vault_okusd = AccountMeta::new(accounts.vault_okusd, false);
+            self.accounts.vault_oku_money = AccountMeta::new(accounts.vault_oku_money, false);
 
             self.accounts.token_program = AccountMeta::new_readonly(
                 pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
@@ -2132,15 +3390,15 @@ pub mod lite_psm {
 
             metas.push(self.accounts.usdc_mint.clone());
 
-            metas.push(self.accounts.okusd_mint.clone());
+            metas.push(self.accounts.oku_money_mint.clone());
 
             metas.push(self.accounts.user_usdc_ata.clone());
 
-            metas.push(self.accounts.user_okusd_ata.clone());
+            metas.push(self.accounts.user_oku_money_ata.clone());
 
             metas.push(self.accounts.vault_usdc.clone());
 
-            metas.push(self.accounts.vault_okusd.clone());
+            metas.push(self.accounts.vault_oku_money.clone());
 
             metas.push(self.accounts.token_program.clone());
 
@@ -2166,138 +3424,126 @@ pub mod lite_psm {
     }
 
     // ....................................................................
-    // Instruction: RefundBridgeRequest
+    // Instruction: RescueQueueEntry
     // ....................................................................
 
-    /// Main instruction struct for RefundBridgeRequest
-    pub struct RefundBridgeRequestInstruction {
-        pub accounts: RefundBridgeRequestInstructionAccountMetas,
-        pub data: RefundBridgeRequestInstructionData,
+    /// Main instruction struct for RescueQueueEntry
+    pub struct RescueQueueEntryInstruction {
+        pub accounts: RescueQueueEntryInstructionAccountMetas,
+        pub data: RescueQueueEntryInstructionData,
         pub remaining_accounts: Vec<AccountMeta>,
     }
 
-    /// Account metadata for RefundBridgeRequest instruction
+    /// Account metadata for RescueQueueEntry instruction
     #[derive(Debug, Clone, Default)]
-    pub struct RefundBridgeRequestInstructionAccountMetas {
-        pub refund_admin: AccountMeta,
-
-        pub bridge_config: AccountMeta,
+    pub struct RescueQueueEntryInstructionAccountMetas {
+        pub queue_processor: AccountMeta,
 
         pub config: AccountMeta,
 
-        pub refunded_request: AccountMeta,
+        pub redemption_queue: AccountMeta,
 
-        pub okusd_mint: AccountMeta,
+        pub oku_money_mint: AccountMeta,
 
-        pub sender_okusd_ata: AccountMeta,
+        pub vault_oku_money: AccountMeta,
+
+        pub recipient_oku_money_ata: AccountMeta,
 
         pub token_2022_program: AccountMeta,
-
-        pub system_program: AccountMeta,
     }
 
-    /// Account pubkeys for RefundBridgeRequest instruction
+    /// Account pubkeys for RescueQueueEntry instruction
     #[derive(Debug, Clone)]
-    pub struct RefundBridgeRequestInstructionAccounts {
-        pub refund_admin: Pubkey,
-
-        pub bridge_config: Pubkey,
+    pub struct RescueQueueEntryInstructionAccounts {
+        pub queue_processor: Pubkey,
 
         pub config: Pubkey,
 
-        pub refunded_request: Pubkey,
+        pub redemption_queue: Pubkey,
 
-        pub okusd_mint: Pubkey,
+        pub oku_money_mint: Pubkey,
 
-        pub sender_okusd_ata: Pubkey,
+        pub vault_oku_money: Pubkey,
 
-        pub token_2022_program: Pubkey,
+        pub recipient_oku_money_ata: Pubkey,
     }
 
-    impl RefundBridgeRequestInstructionAccounts {
+    impl RescueQueueEntryInstructionAccounts {
         pub fn new(
-            refund_admin: Pubkey,
-
-            bridge_config: Pubkey,
+            queue_processor: Pubkey,
 
             config: Pubkey,
 
-            refunded_request: Pubkey,
+            redemption_queue: Pubkey,
 
-            okusd_mint: Pubkey,
+            oku_money_mint: Pubkey,
 
-            sender_okusd_ata: Pubkey,
+            vault_oku_money: Pubkey,
 
-            token_2022_program: Pubkey,
+            recipient_oku_money_ata: Pubkey,
         ) -> Self {
             Self {
-                refund_admin,
-
-                bridge_config,
+                queue_processor,
 
                 config,
 
-                refunded_request,
+                redemption_queue,
 
-                okusd_mint,
+                oku_money_mint,
 
-                sender_okusd_ata,
+                vault_oku_money,
 
-                token_2022_program,
+                recipient_oku_money_ata,
             }
         }
     }
 
-    /// Instruction data for RefundBridgeRequest
+    /// Instruction data for RescueQueueEntry
     #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct RefundBridgeRequestInstructionData {
-        pub message_bytes: Vec<u8>,
-
-        pub request_id: [u8; 32],
+    pub struct RescueQueueEntryInstructionData {
+        pub queue_index: u64,
     }
 
-    impl RefundBridgeRequestInstructionData {
-        pub fn new(message_bytes: Vec<u8>, request_id: [u8; 32]) -> Self {
-            Self {
-                message_bytes,
-
-                request_id,
-            }
+    impl RescueQueueEntryInstructionData {
+        pub fn new(queue_index: u64) -> Self {
+            Self { queue_index }
         }
     }
 
-    /// Implementation for RefundBridgeRequestInstruction
-    impl RefundBridgeRequestInstruction {
+    /// Implementation for RescueQueueEntryInstruction
+    impl RescueQueueEntryInstruction {
         fn discriminator() -> [u8; 8] {
-            [87u8, 7u8, 9u8, 200u8, 30u8, 164u8, 134u8, 77u8]
+            [128u8, 16u8, 159u8, 60u8, 109u8, 35u8, 157u8, 229u8]
         }
 
-        pub fn data(data: RefundBridgeRequestInstructionData) -> Self {
+        pub fn data(data: RescueQueueEntryInstructionData) -> Self {
             Self {
-                accounts: RefundBridgeRequestInstructionAccountMetas::default(),
+                accounts: RescueQueueEntryInstructionAccountMetas::default(),
                 data,
                 remaining_accounts: Vec::new(),
             }
         }
 
-        pub fn accounts(mut self, accounts: RefundBridgeRequestInstructionAccounts) -> Self {
-            self.accounts.refund_admin = AccountMeta::new(accounts.refund_admin, true);
+        pub fn accounts(mut self, accounts: RescueQueueEntryInstructionAccounts) -> Self {
+            self.accounts.queue_processor =
+                AccountMeta::new_readonly(accounts.queue_processor, true);
 
-            self.accounts.bridge_config = AccountMeta::new_readonly(accounts.bridge_config, false);
+            self.accounts.config = AccountMeta::new_readonly(accounts.config, false);
 
-            self.accounts.config = AccountMeta::new(accounts.config, false);
+            self.accounts.redemption_queue = AccountMeta::new(accounts.redemption_queue, false);
 
-            self.accounts.refunded_request = AccountMeta::new(accounts.refunded_request, false);
+            self.accounts.oku_money_mint =
+                AccountMeta::new_readonly(accounts.oku_money_mint, false);
 
-            self.accounts.okusd_mint = AccountMeta::new(accounts.okusd_mint, false);
+            self.accounts.vault_oku_money = AccountMeta::new(accounts.vault_oku_money, false);
 
-            self.accounts.sender_okusd_ata = AccountMeta::new(accounts.sender_okusd_ata, false);
+            self.accounts.recipient_oku_money_ata =
+                AccountMeta::new(accounts.recipient_oku_money_ata, false);
 
-            self.accounts.token_2022_program =
-                AccountMeta::new_readonly(accounts.token_2022_program, false);
-
-            self.accounts.system_program =
-                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
+            self.accounts.token_2022_program = AccountMeta::new_readonly(
+                pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+                false,
+            );
 
             self
         }
@@ -2310,119 +3556,19 @@ pub mod lite_psm {
         fn to_account_metas(&self) -> Vec<AccountMeta> {
             let mut metas = Vec::new();
 
-            metas.push(self.accounts.refund_admin.clone());
-
-            metas.push(self.accounts.bridge_config.clone());
+            metas.push(self.accounts.queue_processor.clone());
 
             metas.push(self.accounts.config.clone());
 
-            metas.push(self.accounts.refunded_request.clone());
+            metas.push(self.accounts.redemption_queue.clone());
 
-            metas.push(self.accounts.okusd_mint.clone());
+            metas.push(self.accounts.oku_money_mint.clone());
 
-            metas.push(self.accounts.sender_okusd_ata.clone());
+            metas.push(self.accounts.vault_oku_money.clone());
+
+            metas.push(self.accounts.recipient_oku_money_ata.clone());
 
             metas.push(self.accounts.token_2022_program.clone());
-
-            metas.push(self.accounts.system_program.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
-    // Instruction: RemoveSupportedChain
-    // ....................................................................
-
-    /// Main instruction struct for RemoveSupportedChain
-    pub struct RemoveSupportedChainInstruction {
-        pub accounts: RemoveSupportedChainInstructionAccountMetas,
-        pub data: RemoveSupportedChainInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for RemoveSupportedChain instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct RemoveSupportedChainInstructionAccountMetas {
-        pub chain_manager: AccountMeta,
-
-        pub bridge_config: AccountMeta,
-    }
-
-    /// Account pubkeys for RemoveSupportedChain instruction
-    #[derive(Debug, Clone)]
-    pub struct RemoveSupportedChainInstructionAccounts {
-        pub chain_manager: Pubkey,
-
-        pub bridge_config: Pubkey,
-    }
-
-    impl RemoveSupportedChainInstructionAccounts {
-        pub fn new(chain_manager: Pubkey, bridge_config: Pubkey) -> Self {
-            Self {
-                chain_manager,
-
-                bridge_config,
-            }
-        }
-    }
-
-    /// Instruction data for RemoveSupportedChain
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct RemoveSupportedChainInstructionData {
-        pub chain_id: u16,
-    }
-
-    impl RemoveSupportedChainInstructionData {
-        pub fn new(chain_id: u16) -> Self {
-            Self { chain_id }
-        }
-    }
-
-    /// Implementation for RemoveSupportedChainInstruction
-    impl RemoveSupportedChainInstruction {
-        fn discriminator() -> [u8; 8] {
-            [0u8, 48u8, 119u8, 114u8, 52u8, 213u8, 242u8, 33u8]
-        }
-
-        pub fn data(data: RemoveSupportedChainInstructionData) -> Self {
-            Self {
-                accounts: RemoveSupportedChainInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: RemoveSupportedChainInstructionAccounts) -> Self {
-            self.accounts.chain_manager = AccountMeta::new_readonly(accounts.chain_manager, true);
-
-            self.accounts.bridge_config = AccountMeta::new(accounts.bridge_config, false);
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.chain_manager.clone());
-
-            metas.push(self.accounts.bridge_config.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -2540,110 +3686,6 @@ pub mod lite_psm {
     }
 
     // ....................................................................
-    // Instruction: SetBridgeAuthority
-    // ....................................................................
-
-    /// Main instruction struct for SetBridgeAuthority
-    pub struct SetBridgeAuthorityInstruction {
-        pub accounts: SetBridgeAuthorityInstructionAccountMetas,
-        pub data: SetBridgeAuthorityInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for SetBridgeAuthority instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct SetBridgeAuthorityInstructionAccountMetas {
-        pub bridge_admin: AccountMeta,
-
-        pub bridge_config: AccountMeta,
-    }
-
-    /// Account pubkeys for SetBridgeAuthority instruction
-    #[derive(Debug, Clone)]
-    pub struct SetBridgeAuthorityInstructionAccounts {
-        pub bridge_admin: Pubkey,
-
-        pub bridge_config: Pubkey,
-    }
-
-    impl SetBridgeAuthorityInstructionAccounts {
-        pub fn new(bridge_admin: Pubkey, bridge_config: Pubkey) -> Self {
-            Self {
-                bridge_admin,
-
-                bridge_config,
-            }
-        }
-    }
-
-    /// Instruction data for SetBridgeAuthority
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct SetBridgeAuthorityInstructionData {
-        pub role: BridgeAuthorityRole,
-
-        pub new_authority: Pubkey,
-    }
-
-    impl SetBridgeAuthorityInstructionData {
-        pub fn new(role: BridgeAuthorityRole, new_authority: Pubkey) -> Self {
-            Self {
-                role,
-
-                new_authority,
-            }
-        }
-    }
-
-    /// Implementation for SetBridgeAuthorityInstruction
-    impl SetBridgeAuthorityInstruction {
-        fn discriminator() -> [u8; 8] {
-            [158u8, 241u8, 140u8, 64u8, 226u8, 16u8, 99u8, 251u8]
-        }
-
-        pub fn data(data: SetBridgeAuthorityInstructionData) -> Self {
-            Self {
-                accounts: SetBridgeAuthorityInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: SetBridgeAuthorityInstructionAccounts) -> Self {
-            self.accounts.bridge_admin = AccountMeta::new_readonly(accounts.bridge_admin, true);
-
-            self.accounts.bridge_config = AccountMeta::new(accounts.bridge_config, false);
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.bridge_admin.clone());
-
-            metas.push(self.accounts.bridge_config.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
     // Instruction: SetMaxSupply
     // ....................................................................
 
@@ -2660,6 +3702,10 @@ pub mod lite_psm {
         pub cap_manager: AccountMeta,
 
         pub config: AccountMeta,
+
+        pub oku_money_mint: AccountMeta,
+
+        pub token_2022_program: AccountMeta,
     }
 
     /// Account pubkeys for SetMaxSupply instruction
@@ -2668,14 +3714,18 @@ pub mod lite_psm {
         pub cap_manager: Pubkey,
 
         pub config: Pubkey,
+
+        pub oku_money_mint: Pubkey,
     }
 
     impl SetMaxSupplyInstructionAccounts {
-        pub fn new(cap_manager: Pubkey, config: Pubkey) -> Self {
+        pub fn new(cap_manager: Pubkey, config: Pubkey, oku_money_mint: Pubkey) -> Self {
             Self {
                 cap_manager,
 
                 config,
+
+                oku_money_mint,
             }
         }
     }
@@ -2711,6 +3761,14 @@ pub mod lite_psm {
 
             self.accounts.config = AccountMeta::new(accounts.config, false);
 
+            self.accounts.oku_money_mint =
+                AccountMeta::new_readonly(accounts.oku_money_mint, false);
+
+            self.accounts.token_2022_program = AccountMeta::new_readonly(
+                pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+                false,
+            );
+
             self
         }
 
@@ -2725,6 +3783,10 @@ pub mod lite_psm {
             metas.push(self.accounts.cap_manager.clone());
 
             metas.push(self.accounts.config.clone());
+
+            metas.push(self.accounts.oku_money_mint.clone());
+
+            metas.push(self.accounts.token_2022_program.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -2840,68 +3902,88 @@ pub mod lite_psm {
     }
 
     // ....................................................................
-    // Instruction: SetNextYieldRate
+    // Instruction: SetOkuMPrice
     // ....................................................................
 
-    /// Main instruction struct for SetNextYieldRate
-    pub struct SetNextYieldRateInstruction {
-        pub accounts: SetNextYieldRateInstructionAccountMetas,
-        pub data: SetNextYieldRateInstructionData,
+    /// Main instruction struct for SetOkuMPrice
+    pub struct SetOkuMPriceInstruction {
+        pub accounts: SetOkuMPriceInstructionAccountMetas,
+        pub data: SetOkuMPriceInstructionData,
         pub remaining_accounts: Vec<AccountMeta>,
     }
 
-    /// Account metadata for SetNextYieldRate instruction
+    /// Account metadata for SetOkuMPrice instruction
     #[derive(Debug, Clone, Default)]
-    pub struct SetNextYieldRateInstructionAccountMetas {
+    pub struct SetOkuMPriceInstructionAccountMetas {
         pub rebaser: AccountMeta,
 
         pub config: AccountMeta,
+
+        pub oku_money_mint: AccountMeta,
+
+        pub token_2022_program: AccountMeta,
     }
 
-    /// Account pubkeys for SetNextYieldRate instruction
+    /// Account pubkeys for SetOkuMPrice instruction
     #[derive(Debug, Clone)]
-    pub struct SetNextYieldRateInstructionAccounts {
+    pub struct SetOkuMPriceInstructionAccounts {
         pub rebaser: Pubkey,
 
         pub config: Pubkey,
+
+        pub oku_money_mint: Pubkey,
     }
 
-    impl SetNextYieldRateInstructionAccounts {
-        pub fn new(rebaser: Pubkey, config: Pubkey) -> Self {
-            Self { rebaser, config }
-        }
-    }
-
-    /// Instruction data for SetNextYieldRate
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct SetNextYieldRateInstructionData {
-        pub new_rate: i16,
-    }
-
-    impl SetNextYieldRateInstructionData {
-        pub fn new(new_rate: i16) -> Self {
-            Self { new_rate }
-        }
-    }
-
-    /// Implementation for SetNextYieldRateInstruction
-    impl SetNextYieldRateInstruction {
-        fn discriminator() -> [u8; 8] {
-            [3u8, 106u8, 148u8, 69u8, 0u8, 180u8, 128u8, 194u8]
-        }
-
-        pub fn data(data: SetNextYieldRateInstructionData) -> Self {
+    impl SetOkuMPriceInstructionAccounts {
+        pub fn new(rebaser: Pubkey, config: Pubkey, oku_money_mint: Pubkey) -> Self {
             Self {
-                accounts: SetNextYieldRateInstructionAccountMetas::default(),
+                rebaser,
+
+                config,
+
+                oku_money_mint,
+            }
+        }
+    }
+
+    /// Instruction data for SetOkuMPrice
+    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+    pub struct SetOkuMPriceInstructionData {
+        pub new_multiplier: u64,
+    }
+
+    impl SetOkuMPriceInstructionData {
+        pub fn new(new_multiplier: u64) -> Self {
+            Self { new_multiplier }
+        }
+    }
+
+    /// Implementation for SetOkuMPriceInstruction
+    impl SetOkuMPriceInstruction {
+        fn discriminator() -> [u8; 8] {
+            [204u8, 17u8, 196u8, 98u8, 3u8, 56u8, 160u8, 65u8]
+        }
+
+        pub fn data(data: SetOkuMPriceInstructionData) -> Self {
+            Self {
+                accounts: SetOkuMPriceInstructionAccountMetas::default(),
                 data,
                 remaining_accounts: Vec::new(),
             }
         }
 
-        pub fn accounts(mut self, accounts: SetNextYieldRateInstructionAccounts) -> Self {
+        pub fn accounts(mut self, accounts: SetOkuMPriceInstructionAccounts) -> Self {
             self.accounts.rebaser = AccountMeta::new_readonly(accounts.rebaser, true);
 
             self.accounts.config = AccountMeta::new(accounts.config, false);
+
+            self.accounts.oku_money_mint =
+                AccountMeta::new_readonly(accounts.oku_money_mint, false);
+
+            self.accounts.token_2022_program = AccountMeta::new_readonly(
+                pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+                false,
+            );
 
             self
         }
@@ -2917,6 +3999,10 @@ pub mod lite_psm {
             metas.push(self.accounts.rebaser.clone());
 
             metas.push(self.accounts.config.clone());
+
+            metas.push(self.accounts.oku_money_mint.clone());
+
+            metas.push(self.accounts.token_2022_program.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -2950,6 +4036,8 @@ pub mod lite_psm {
         pub oracle_manager: AccountMeta,
 
         pub config: AccountMeta,
+
+        pub oracle_account: AccountMeta,
     }
 
     /// Account pubkeys for SetOracle instruction
@@ -2958,14 +4046,18 @@ pub mod lite_psm {
         pub oracle_manager: Pubkey,
 
         pub config: Pubkey,
+
+        pub oracle_account: Pubkey,
     }
 
     impl SetOracleInstructionAccounts {
-        pub fn new(oracle_manager: Pubkey, config: Pubkey) -> Self {
+        pub fn new(oracle_manager: Pubkey, config: Pubkey, oracle_account: Pubkey) -> Self {
             Self {
                 oracle_manager,
 
                 config,
+
+                oracle_account,
             }
         }
     }
@@ -3007,6 +4099,9 @@ pub mod lite_psm {
 
             self.accounts.config = AccountMeta::new(accounts.config, false);
 
+            self.accounts.oracle_account =
+                AccountMeta::new_readonly(accounts.oracle_account, false);
+
             self
         }
 
@@ -3022,6 +4117,8 @@ pub mod lite_psm {
 
             metas.push(self.accounts.config.clone());
 
+            metas.push(self.accounts.oracle_account.clone());
+
             metas.extend(self.remaining_accounts.clone());
             metas
         }
@@ -3038,93 +4135,83 @@ pub mod lite_psm {
     }
 
     // ....................................................................
-    // Instruction: SetYieldRate
+    // Instruction: SetPythProgramOwner
     // ....................................................................
 
-    /// Main instruction struct for SetYieldRate
-    pub struct SetYieldRateInstruction {
-        pub accounts: SetYieldRateInstructionAccountMetas,
-        pub data: SetYieldRateInstructionData,
+    /// Main instruction struct for SetPythProgramOwner
+    pub struct SetPythProgramOwnerInstruction {
+        pub accounts: SetPythProgramOwnerInstructionAccountMetas,
+        pub data: SetPythProgramOwnerInstructionData,
         pub remaining_accounts: Vec<AccountMeta>,
     }
 
-    /// Account metadata for SetYieldRate instruction
+    /// Account metadata for SetPythProgramOwner instruction
     #[derive(Debug, Clone, Default)]
-    pub struct SetYieldRateInstructionAccountMetas {
-        pub rebaser: AccountMeta,
+    pub struct SetPythProgramOwnerInstructionAccountMetas {
+        pub oracle_manager: AccountMeta,
 
         pub config: AccountMeta,
 
-        pub okusd_mint: AccountMeta,
-
-        pub token_2022_program: AccountMeta,
+        pub oracle_account: AccountMeta,
     }
 
-    /// Account pubkeys for SetYieldRate instruction
+    /// Account pubkeys for SetPythProgramOwner instruction
     #[derive(Debug, Clone)]
-    pub struct SetYieldRateInstructionAccounts {
-        pub rebaser: Pubkey,
+    pub struct SetPythProgramOwnerInstructionAccounts {
+        pub oracle_manager: Pubkey,
 
         pub config: Pubkey,
 
-        pub okusd_mint: Pubkey,
+        pub oracle_account: Pubkey,
     }
 
-    impl SetYieldRateInstructionAccounts {
-        pub fn new(rebaser: Pubkey, config: Pubkey, okusd_mint: Pubkey) -> Self {
+    impl SetPythProgramOwnerInstructionAccounts {
+        pub fn new(oracle_manager: Pubkey, config: Pubkey, oracle_account: Pubkey) -> Self {
             Self {
-                rebaser,
+                oracle_manager,
 
                 config,
 
-                okusd_mint,
+                oracle_account,
             }
         }
     }
 
-    /// Instruction data for SetYieldRate
+    /// Instruction data for SetPythProgramOwner
     #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct SetYieldRateInstructionData {
-        pub new_rate: i16,
-
-        pub end_timestamp: i64,
+    pub struct SetPythProgramOwnerInstructionData {
+        pub new_pyth_program_owner: Pubkey,
     }
 
-    impl SetYieldRateInstructionData {
-        pub fn new(new_rate: i16, end_timestamp: i64) -> Self {
+    impl SetPythProgramOwnerInstructionData {
+        pub fn new(new_pyth_program_owner: Pubkey) -> Self {
             Self {
-                new_rate,
-
-                end_timestamp,
+                new_pyth_program_owner,
             }
         }
     }
 
-    /// Implementation for SetYieldRateInstruction
-    impl SetYieldRateInstruction {
+    /// Implementation for SetPythProgramOwnerInstruction
+    impl SetPythProgramOwnerInstruction {
         fn discriminator() -> [u8; 8] {
-            [53u8, 60u8, 199u8, 150u8, 22u8, 36u8, 247u8, 247u8]
+            [18u8, 104u8, 228u8, 232u8, 143u8, 141u8, 83u8, 100u8]
         }
 
-        pub fn data(data: SetYieldRateInstructionData) -> Self {
+        pub fn data(data: SetPythProgramOwnerInstructionData) -> Self {
             Self {
-                accounts: SetYieldRateInstructionAccountMetas::default(),
+                accounts: SetPythProgramOwnerInstructionAccountMetas::default(),
                 data,
                 remaining_accounts: Vec::new(),
             }
         }
 
-        pub fn accounts(mut self, accounts: SetYieldRateInstructionAccounts) -> Self {
-            self.accounts.rebaser = AccountMeta::new_readonly(accounts.rebaser, true);
+        pub fn accounts(mut self, accounts: SetPythProgramOwnerInstructionAccounts) -> Self {
+            self.accounts.oracle_manager = AccountMeta::new(accounts.oracle_manager, true);
 
             self.accounts.config = AccountMeta::new(accounts.config, false);
 
-            self.accounts.okusd_mint = AccountMeta::new(accounts.okusd_mint, false);
-
-            self.accounts.token_2022_program = AccountMeta::new_readonly(
-                pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
-                false,
-            );
+            self.accounts.oracle_account =
+                AccountMeta::new_readonly(accounts.oracle_account, false);
 
             self
         }
@@ -3137,13 +4224,11 @@ pub mod lite_psm {
         fn to_account_metas(&self) -> Vec<AccountMeta> {
             let mut metas = Vec::new();
 
-            metas.push(self.accounts.rebaser.clone());
+            metas.push(self.accounts.oracle_manager.clone());
 
             metas.push(self.accounts.config.clone());
 
-            metas.push(self.accounts.okusd_mint.clone());
-
-            metas.push(self.accounts.token_2022_program.clone());
+            metas.push(self.accounts.oracle_account.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -3161,26 +4246,26 @@ pub mod lite_psm {
     }
 
     // ....................................................................
-    // Instruction: SetupOkusdEscrow
+    // Instruction: SetupOkuMoneyEscrow
     // ....................................................................
 
-    /// Main instruction struct for SetupOkusdEscrow
-    pub struct SetupOkusdEscrowInstruction {
-        pub accounts: SetupOkusdEscrowInstructionAccountMetas,
-        pub data: SetupOkusdEscrowInstructionData,
+    /// Main instruction struct for SetupOkuMoneyEscrow
+    pub struct SetupOkuMoneyEscrowInstruction {
+        pub accounts: SetupOkuMoneyEscrowInstructionAccountMetas,
+        pub data: SetupOkuMoneyEscrowInstructionData,
         pub remaining_accounts: Vec<AccountMeta>,
     }
 
-    /// Account metadata for SetupOkusdEscrow instruction
+    /// Account metadata for SetupOkuMoneyEscrow instruction
     #[derive(Debug, Clone, Default)]
-    pub struct SetupOkusdEscrowInstructionAccountMetas {
+    pub struct SetupOkuMoneyEscrowInstructionAccountMetas {
         pub role_admin: AccountMeta,
 
         pub config: AccountMeta,
 
-        pub okusd_mint: AccountMeta,
+        pub oku_money_mint: AccountMeta,
 
-        pub vault_okusd: AccountMeta,
+        pub vault_oku_money: AccountMeta,
 
         pub token_2022_program: AccountMeta,
 
@@ -3189,72 +4274,73 @@ pub mod lite_psm {
         pub system_program: AccountMeta,
     }
 
-    /// Account pubkeys for SetupOkusdEscrow instruction
+    /// Account pubkeys for SetupOkuMoneyEscrow instruction
     #[derive(Debug, Clone)]
-    pub struct SetupOkusdEscrowInstructionAccounts {
+    pub struct SetupOkuMoneyEscrowInstructionAccounts {
         pub role_admin: Pubkey,
 
         pub config: Pubkey,
 
-        pub okusd_mint: Pubkey,
+        pub oku_money_mint: Pubkey,
 
-        pub vault_okusd: Pubkey,
+        pub vault_oku_money: Pubkey,
     }
 
-    impl SetupOkusdEscrowInstructionAccounts {
+    impl SetupOkuMoneyEscrowInstructionAccounts {
         pub fn new(
             role_admin: Pubkey,
 
             config: Pubkey,
 
-            okusd_mint: Pubkey,
+            oku_money_mint: Pubkey,
 
-            vault_okusd: Pubkey,
+            vault_oku_money: Pubkey,
         ) -> Self {
             Self {
                 role_admin,
 
                 config,
 
-                okusd_mint,
+                oku_money_mint,
 
-                vault_okusd,
+                vault_oku_money,
             }
         }
     }
 
-    /// Instruction data for SetupOkusdEscrow
+    /// Instruction data for SetupOkuMoneyEscrow
     #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct SetupOkusdEscrowInstructionData {}
+    pub struct SetupOkuMoneyEscrowInstructionData {}
 
-    impl SetupOkusdEscrowInstructionData {
+    impl SetupOkuMoneyEscrowInstructionData {
         pub fn new() -> Self {
             Self {}
         }
     }
 
-    /// Implementation for SetupOkusdEscrowInstruction
-    impl SetupOkusdEscrowInstruction {
+    /// Implementation for SetupOkuMoneyEscrowInstruction
+    impl SetupOkuMoneyEscrowInstruction {
         fn discriminator() -> [u8; 8] {
-            [71u8, 176u8, 70u8, 236u8, 214u8, 65u8, 51u8, 96u8]
+            [244u8, 190u8, 167u8, 147u8, 230u8, 204u8, 23u8, 96u8]
         }
 
-        pub fn data(data: SetupOkusdEscrowInstructionData) -> Self {
+        pub fn data(data: SetupOkuMoneyEscrowInstructionData) -> Self {
             Self {
-                accounts: SetupOkusdEscrowInstructionAccountMetas::default(),
+                accounts: SetupOkuMoneyEscrowInstructionAccountMetas::default(),
                 data,
                 remaining_accounts: Vec::new(),
             }
         }
 
-        pub fn accounts(mut self, accounts: SetupOkusdEscrowInstructionAccounts) -> Self {
+        pub fn accounts(mut self, accounts: SetupOkuMoneyEscrowInstructionAccounts) -> Self {
             self.accounts.role_admin = AccountMeta::new(accounts.role_admin, true);
 
             self.accounts.config = AccountMeta::new(accounts.config, false);
 
-            self.accounts.okusd_mint = AccountMeta::new_readonly(accounts.okusd_mint, false);
+            self.accounts.oku_money_mint =
+                AccountMeta::new_readonly(accounts.oku_money_mint, false);
 
-            self.accounts.vault_okusd = AccountMeta::new(accounts.vault_okusd, false);
+            self.accounts.vault_oku_money = AccountMeta::new(accounts.vault_oku_money, false);
 
             self.accounts.token_2022_program = AccountMeta::new_readonly(
                 pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
@@ -3284,9 +4370,9 @@ pub mod lite_psm {
 
             metas.push(self.accounts.config.clone());
 
-            metas.push(self.accounts.okusd_mint.clone());
+            metas.push(self.accounts.oku_money_mint.clone());
 
-            metas.push(self.accounts.vault_okusd.clone());
+            metas.push(self.accounts.vault_oku_money.clone());
 
             metas.push(self.accounts.token_2022_program.clone());
 
@@ -3323,7 +4409,7 @@ pub mod lite_psm {
     /// Account metadata for SetupRedemptionQueue instruction
     #[derive(Debug, Clone, Default)]
     pub struct SetupRedemptionQueueInstructionAccountMetas {
-        pub payer: AccountMeta,
+        pub role_admin: AccountMeta,
 
         pub config: AccountMeta,
 
@@ -3335,7 +4421,7 @@ pub mod lite_psm {
     /// Account pubkeys for SetupRedemptionQueue instruction
     #[derive(Debug, Clone)]
     pub struct SetupRedemptionQueueInstructionAccounts {
-        pub payer: Pubkey,
+        pub role_admin: Pubkey,
 
         pub config: Pubkey,
 
@@ -3343,9 +4429,9 @@ pub mod lite_psm {
     }
 
     impl SetupRedemptionQueueInstructionAccounts {
-        pub fn new(payer: Pubkey, config: Pubkey, redemption_queue: Pubkey) -> Self {
+        pub fn new(role_admin: Pubkey, config: Pubkey, redemption_queue: Pubkey) -> Self {
             Self {
-                payer,
+                role_admin,
 
                 config,
 
@@ -3379,7 +4465,7 @@ pub mod lite_psm {
         }
 
         pub fn accounts(mut self, accounts: SetupRedemptionQueueInstructionAccounts) -> Self {
-            self.accounts.payer = AccountMeta::new(accounts.payer, true);
+            self.accounts.role_admin = AccountMeta::new(accounts.role_admin, true);
 
             self.accounts.config = AccountMeta::new_readonly(accounts.config, false);
 
@@ -3399,132 +4485,11 @@ pub mod lite_psm {
         fn to_account_metas(&self) -> Vec<AccountMeta> {
             let mut metas = Vec::new();
 
-            metas.push(self.accounts.payer.clone());
+            metas.push(self.accounts.role_admin.clone());
 
             metas.push(self.accounts.config.clone());
 
             metas.push(self.accounts.redemption_queue.clone());
-
-            metas.push(self.accounts.system_program.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
-    // Instruction: SkipNonce
-    // ....................................................................
-
-    /// Main instruction struct for SkipNonce
-    pub struct SkipNonceInstruction {
-        pub accounts: SkipNonceInstructionAccountMetas,
-        pub data: SkipNonceInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for SkipNonce instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct SkipNonceInstructionAccountMetas {
-        pub nonce_admin: AccountMeta,
-
-        pub bridge_config: AccountMeta,
-
-        pub bridge_nonce: AccountMeta,
-
-        pub system_program: AccountMeta,
-    }
-
-    /// Account pubkeys for SkipNonce instruction
-    #[derive(Debug, Clone)]
-    pub struct SkipNonceInstructionAccounts {
-        pub nonce_admin: Pubkey,
-
-        pub bridge_config: Pubkey,
-
-        pub bridge_nonce: Pubkey,
-    }
-
-    impl SkipNonceInstructionAccounts {
-        pub fn new(nonce_admin: Pubkey, bridge_config: Pubkey, bridge_nonce: Pubkey) -> Self {
-            Self {
-                nonce_admin,
-
-                bridge_config,
-
-                bridge_nonce,
-            }
-        }
-    }
-
-    /// Instruction data for SkipNonce
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct SkipNonceInstructionData {
-        pub destination_chain_id: u16,
-
-        pub new_nonce: u64,
-    }
-
-    impl SkipNonceInstructionData {
-        pub fn new(destination_chain_id: u16, new_nonce: u64) -> Self {
-            Self {
-                destination_chain_id,
-
-                new_nonce,
-            }
-        }
-    }
-
-    /// Implementation for SkipNonceInstruction
-    impl SkipNonceInstruction {
-        fn discriminator() -> [u8; 8] {
-            [118u8, 164u8, 229u8, 14u8, 80u8, 41u8, 153u8, 97u8]
-        }
-
-        pub fn data(data: SkipNonceInstructionData) -> Self {
-            Self {
-                accounts: SkipNonceInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: SkipNonceInstructionAccounts) -> Self {
-            self.accounts.nonce_admin = AccountMeta::new(accounts.nonce_admin, true);
-
-            self.accounts.bridge_config = AccountMeta::new_readonly(accounts.bridge_config, false);
-
-            self.accounts.bridge_nonce = AccountMeta::new(accounts.bridge_nonce, false);
-
-            self.accounts.system_program =
-                AccountMeta::new_readonly(pubkey!("11111111111111111111111111111111"), false);
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.nonce_admin.clone());
-
-            metas.push(self.accounts.bridge_config.clone());
-
-            metas.push(self.accounts.bridge_nonce.clone());
 
             metas.push(self.accounts.system_program.clone());
 
@@ -3561,9 +4526,9 @@ pub mod lite_psm {
 
         pub config: AccountMeta,
 
-        pub okusd_mint: AccountMeta,
+        pub oku_money_mint: AccountMeta,
 
-        pub target_okusd_ata: AccountMeta,
+        pub target_oku_money_ata: AccountMeta,
 
         pub token_2022_program: AccountMeta,
     }
@@ -3575,9 +4540,9 @@ pub mod lite_psm {
 
         pub config: Pubkey,
 
-        pub okusd_mint: Pubkey,
+        pub oku_money_mint: Pubkey,
 
-        pub target_okusd_ata: Pubkey,
+        pub target_oku_money_ata: Pubkey,
     }
 
     impl ThawAccountInstructionAccounts {
@@ -3586,18 +4551,18 @@ pub mod lite_psm {
 
             config: Pubkey,
 
-            okusd_mint: Pubkey,
+            oku_money_mint: Pubkey,
 
-            target_okusd_ata: Pubkey,
+            target_oku_money_ata: Pubkey,
         ) -> Self {
             Self {
                 unfreezer,
 
                 config,
 
-                okusd_mint,
+                oku_money_mint,
 
-                target_okusd_ata,
+                target_oku_money_ata,
             }
         }
     }
@@ -3631,9 +4596,11 @@ pub mod lite_psm {
 
             self.accounts.config = AccountMeta::new_readonly(accounts.config, false);
 
-            self.accounts.okusd_mint = AccountMeta::new_readonly(accounts.okusd_mint, false);
+            self.accounts.oku_money_mint =
+                AccountMeta::new_readonly(accounts.oku_money_mint, false);
 
-            self.accounts.target_okusd_ata = AccountMeta::new(accounts.target_okusd_ata, false);
+            self.accounts.target_oku_money_ata =
+                AccountMeta::new(accounts.target_oku_money_ata, false);
 
             self.accounts.token_2022_program = AccountMeta::new_readonly(
                 pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
@@ -3655,9 +4622,9 @@ pub mod lite_psm {
 
             metas.push(self.accounts.config.clone());
 
-            metas.push(self.accounts.okusd_mint.clone());
+            metas.push(self.accounts.oku_money_mint.clone());
 
-            metas.push(self.accounts.target_okusd_ata.clone());
+            metas.push(self.accounts.target_oku_money_ata.clone());
 
             metas.push(self.accounts.token_2022_program.clone());
 
@@ -3769,716 +4736,6 @@ pub mod lite_psm {
     }
 
     // ....................................................................
-    // Instruction: UnpauseBridge
-    // ....................................................................
-
-    /// Main instruction struct for UnpauseBridge
-    pub struct UnpauseBridgeInstruction {
-        pub accounts: UnpauseBridgeInstructionAccountMetas,
-        pub data: UnpauseBridgeInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for UnpauseBridge instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct UnpauseBridgeInstructionAccountMetas {
-        pub bridge_unpauser: AccountMeta,
-
-        pub bridge_config: AccountMeta,
-    }
-
-    /// Account pubkeys for UnpauseBridge instruction
-    #[derive(Debug, Clone)]
-    pub struct UnpauseBridgeInstructionAccounts {
-        pub bridge_unpauser: Pubkey,
-
-        pub bridge_config: Pubkey,
-    }
-
-    impl UnpauseBridgeInstructionAccounts {
-        pub fn new(bridge_unpauser: Pubkey, bridge_config: Pubkey) -> Self {
-            Self {
-                bridge_unpauser,
-
-                bridge_config,
-            }
-        }
-    }
-
-    /// Instruction data for UnpauseBridge
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct UnpauseBridgeInstructionData {}
-
-    impl UnpauseBridgeInstructionData {
-        pub fn new() -> Self {
-            Self {}
-        }
-    }
-
-    /// Implementation for UnpauseBridgeInstruction
-    impl UnpauseBridgeInstruction {
-        fn discriminator() -> [u8; 8] {
-            [38u8, 76u8, 229u8, 108u8, 125u8, 173u8, 75u8, 116u8]
-        }
-
-        pub fn data(data: UnpauseBridgeInstructionData) -> Self {
-            Self {
-                accounts: UnpauseBridgeInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: UnpauseBridgeInstructionAccounts) -> Self {
-            self.accounts.bridge_unpauser =
-                AccountMeta::new_readonly(accounts.bridge_unpauser, true);
-
-            self.accounts.bridge_config = AccountMeta::new(accounts.bridge_config, false);
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.bridge_unpauser.clone());
-
-            metas.push(self.accounts.bridge_config.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
-    // Instruction: UpdateBridgeDeadline
-    // ....................................................................
-
-    /// Main instruction struct for UpdateBridgeDeadline
-    pub struct UpdateBridgeDeadlineInstruction {
-        pub accounts: UpdateBridgeDeadlineInstructionAccountMetas,
-        pub data: UpdateBridgeDeadlineInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for UpdateBridgeDeadline instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct UpdateBridgeDeadlineInstructionAccountMetas {
-        pub limits_manager: AccountMeta,
-
-        pub bridge_config: AccountMeta,
-    }
-
-    /// Account pubkeys for UpdateBridgeDeadline instruction
-    #[derive(Debug, Clone)]
-    pub struct UpdateBridgeDeadlineInstructionAccounts {
-        pub limits_manager: Pubkey,
-
-        pub bridge_config: Pubkey,
-    }
-
-    impl UpdateBridgeDeadlineInstructionAccounts {
-        pub fn new(limits_manager: Pubkey, bridge_config: Pubkey) -> Self {
-            Self {
-                limits_manager,
-
-                bridge_config,
-            }
-        }
-    }
-
-    /// Instruction data for UpdateBridgeDeadline
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct UpdateBridgeDeadlineInstructionData {
-        pub new_deadline: i64,
-    }
-
-    impl UpdateBridgeDeadlineInstructionData {
-        pub fn new(new_deadline: i64) -> Self {
-            Self { new_deadline }
-        }
-    }
-
-    /// Implementation for UpdateBridgeDeadlineInstruction
-    impl UpdateBridgeDeadlineInstruction {
-        fn discriminator() -> [u8; 8] {
-            [107u8, 125u8, 202u8, 52u8, 71u8, 136u8, 173u8, 94u8]
-        }
-
-        pub fn data(data: UpdateBridgeDeadlineInstructionData) -> Self {
-            Self {
-                accounts: UpdateBridgeDeadlineInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: UpdateBridgeDeadlineInstructionAccounts) -> Self {
-            self.accounts.limits_manager = AccountMeta::new_readonly(accounts.limits_manager, true);
-
-            self.accounts.bridge_config = AccountMeta::new(accounts.bridge_config, false);
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.limits_manager.clone());
-
-            metas.push(self.accounts.bridge_config.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
-    // Instruction: UpdateBridgeFee
-    // ....................................................................
-
-    /// Main instruction struct for UpdateBridgeFee
-    pub struct UpdateBridgeFeeInstruction {
-        pub accounts: UpdateBridgeFeeInstructionAccountMetas,
-        pub data: UpdateBridgeFeeInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for UpdateBridgeFee instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct UpdateBridgeFeeInstructionAccountMetas {
-        pub fee_manager: AccountMeta,
-
-        pub bridge_config: AccountMeta,
-    }
-
-    /// Account pubkeys for UpdateBridgeFee instruction
-    #[derive(Debug, Clone)]
-    pub struct UpdateBridgeFeeInstructionAccounts {
-        pub fee_manager: Pubkey,
-
-        pub bridge_config: Pubkey,
-    }
-
-    impl UpdateBridgeFeeInstructionAccounts {
-        pub fn new(fee_manager: Pubkey, bridge_config: Pubkey) -> Self {
-            Self {
-                fee_manager,
-
-                bridge_config,
-            }
-        }
-    }
-
-    /// Instruction data for UpdateBridgeFee
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct UpdateBridgeFeeInstructionData {
-        pub new_fee_bps: u16,
-    }
-
-    impl UpdateBridgeFeeInstructionData {
-        pub fn new(new_fee_bps: u16) -> Self {
-            Self { new_fee_bps }
-        }
-    }
-
-    /// Implementation for UpdateBridgeFeeInstruction
-    impl UpdateBridgeFeeInstruction {
-        fn discriminator() -> [u8; 8] {
-            [179u8, 226u8, 77u8, 242u8, 24u8, 214u8, 150u8, 167u8]
-        }
-
-        pub fn data(data: UpdateBridgeFeeInstructionData) -> Self {
-            Self {
-                accounts: UpdateBridgeFeeInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: UpdateBridgeFeeInstructionAccounts) -> Self {
-            self.accounts.fee_manager = AccountMeta::new_readonly(accounts.fee_manager, true);
-
-            self.accounts.bridge_config = AccountMeta::new(accounts.bridge_config, false);
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.fee_manager.clone());
-
-            metas.push(self.accounts.bridge_config.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
-    // Instruction: UpdateBridgeLimits
-    // ....................................................................
-
-    /// Main instruction struct for UpdateBridgeLimits
-    pub struct UpdateBridgeLimitsInstruction {
-        pub accounts: UpdateBridgeLimitsInstructionAccountMetas,
-        pub data: UpdateBridgeLimitsInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for UpdateBridgeLimits instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct UpdateBridgeLimitsInstructionAccountMetas {
-        pub limits_manager: AccountMeta,
-
-        pub bridge_config: AccountMeta,
-    }
-
-    /// Account pubkeys for UpdateBridgeLimits instruction
-    #[derive(Debug, Clone)]
-    pub struct UpdateBridgeLimitsInstructionAccounts {
-        pub limits_manager: Pubkey,
-
-        pub bridge_config: Pubkey,
-    }
-
-    impl UpdateBridgeLimitsInstructionAccounts {
-        pub fn new(limits_manager: Pubkey, bridge_config: Pubkey) -> Self {
-            Self {
-                limits_manager,
-
-                bridge_config,
-            }
-        }
-    }
-
-    /// Instruction data for UpdateBridgeLimits
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct UpdateBridgeLimitsInstructionData {
-        pub min_amount: u64,
-
-        pub max_amount: u64,
-    }
-
-    impl UpdateBridgeLimitsInstructionData {
-        pub fn new(min_amount: u64, max_amount: u64) -> Self {
-            Self {
-                min_amount,
-
-                max_amount,
-            }
-        }
-    }
-
-    /// Implementation for UpdateBridgeLimitsInstruction
-    impl UpdateBridgeLimitsInstruction {
-        fn discriminator() -> [u8; 8] {
-            [227u8, 239u8, 135u8, 205u8, 142u8, 223u8, 185u8, 11u8]
-        }
-
-        pub fn data(data: UpdateBridgeLimitsInstructionData) -> Self {
-            Self {
-                accounts: UpdateBridgeLimitsInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: UpdateBridgeLimitsInstructionAccounts) -> Self {
-            self.accounts.limits_manager = AccountMeta::new_readonly(accounts.limits_manager, true);
-
-            self.accounts.bridge_config = AccountMeta::new(accounts.bridge_config, false);
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.limits_manager.clone());
-
-            metas.push(self.accounts.bridge_config.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
-    // Instruction: UpdateFeeRecipient
-    // ....................................................................
-
-    /// Main instruction struct for UpdateFeeRecipient
-    pub struct UpdateFeeRecipientInstruction {
-        pub accounts: UpdateFeeRecipientInstructionAccountMetas,
-        pub data: UpdateFeeRecipientInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for UpdateFeeRecipient instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct UpdateFeeRecipientInstructionAccountMetas {
-        pub fee_manager: AccountMeta,
-
-        pub bridge_config: AccountMeta,
-    }
-
-    /// Account pubkeys for UpdateFeeRecipient instruction
-    #[derive(Debug, Clone)]
-    pub struct UpdateFeeRecipientInstructionAccounts {
-        pub fee_manager: Pubkey,
-
-        pub bridge_config: Pubkey,
-    }
-
-    impl UpdateFeeRecipientInstructionAccounts {
-        pub fn new(fee_manager: Pubkey, bridge_config: Pubkey) -> Self {
-            Self {
-                fee_manager,
-
-                bridge_config,
-            }
-        }
-    }
-
-    /// Instruction data for UpdateFeeRecipient
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct UpdateFeeRecipientInstructionData {
-        pub new_recipient: Pubkey,
-    }
-
-    impl UpdateFeeRecipientInstructionData {
-        pub fn new(new_recipient: Pubkey) -> Self {
-            Self { new_recipient }
-        }
-    }
-
-    /// Implementation for UpdateFeeRecipientInstruction
-    impl UpdateFeeRecipientInstruction {
-        fn discriminator() -> [u8; 8] {
-            [249u8, 0u8, 198u8, 35u8, 183u8, 123u8, 57u8, 188u8]
-        }
-
-        pub fn data(data: UpdateFeeRecipientInstructionData) -> Self {
-            Self {
-                accounts: UpdateFeeRecipientInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: UpdateFeeRecipientInstructionAccounts) -> Self {
-            self.accounts.fee_manager = AccountMeta::new_readonly(accounts.fee_manager, true);
-
-            self.accounts.bridge_config = AccountMeta::new(accounts.bridge_config, false);
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.fee_manager.clone());
-
-            metas.push(self.accounts.bridge_config.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
-    // Instruction: UpdateInterestRate
-    // ....................................................................
-
-    /// Main instruction struct for UpdateInterestRate
-    pub struct UpdateInterestRateInstruction {
-        pub accounts: UpdateInterestRateInstructionAccountMetas,
-        pub data: UpdateInterestRateInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for UpdateInterestRate instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct UpdateInterestRateInstructionAccountMetas {
-        pub rebaser: AccountMeta,
-
-        pub config: AccountMeta,
-
-        pub okusd_mint: AccountMeta,
-
-        pub token_2022_program: AccountMeta,
-    }
-
-    /// Account pubkeys for UpdateInterestRate instruction
-    #[derive(Debug, Clone)]
-    pub struct UpdateInterestRateInstructionAccounts {
-        pub rebaser: Pubkey,
-
-        pub config: Pubkey,
-
-        pub okusd_mint: Pubkey,
-    }
-
-    impl UpdateInterestRateInstructionAccounts {
-        pub fn new(rebaser: Pubkey, config: Pubkey, okusd_mint: Pubkey) -> Self {
-            Self {
-                rebaser,
-
-                config,
-
-                okusd_mint,
-            }
-        }
-    }
-
-    /// Instruction data for UpdateInterestRate
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct UpdateInterestRateInstructionData {
-        pub new_rate: i16,
-    }
-
-    impl UpdateInterestRateInstructionData {
-        pub fn new(new_rate: i16) -> Self {
-            Self { new_rate }
-        }
-    }
-
-    /// Implementation for UpdateInterestRateInstruction
-    impl UpdateInterestRateInstruction {
-        fn discriminator() -> [u8; 8] {
-            [75u8, 8u8, 255u8, 41u8, 123u8, 59u8, 135u8, 238u8]
-        }
-
-        pub fn data(data: UpdateInterestRateInstructionData) -> Self {
-            Self {
-                accounts: UpdateInterestRateInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: UpdateInterestRateInstructionAccounts) -> Self {
-            self.accounts.rebaser = AccountMeta::new_readonly(accounts.rebaser, true);
-
-            self.accounts.config = AccountMeta::new(accounts.config, false);
-
-            self.accounts.okusd_mint = AccountMeta::new(accounts.okusd_mint, false);
-
-            self.accounts.token_2022_program = AccountMeta::new_readonly(
-                pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
-                false,
-            );
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.rebaser.clone());
-
-            metas.push(self.accounts.config.clone());
-
-            metas.push(self.accounts.okusd_mint.clone());
-
-            metas.push(self.accounts.token_2022_program.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
-    // Instruction: UpdateOrchestratorSigner
-    // ....................................................................
-
-    /// Main instruction struct for UpdateOrchestratorSigner
-    pub struct UpdateOrchestratorSignerInstruction {
-        pub accounts: UpdateOrchestratorSignerInstructionAccountMetas,
-        pub data: UpdateOrchestratorSignerInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for UpdateOrchestratorSigner instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct UpdateOrchestratorSignerInstructionAccountMetas {
-        pub signer_manager: AccountMeta,
-
-        pub bridge_config: AccountMeta,
-    }
-
-    /// Account pubkeys for UpdateOrchestratorSigner instruction
-    #[derive(Debug, Clone)]
-    pub struct UpdateOrchestratorSignerInstructionAccounts {
-        pub signer_manager: Pubkey,
-
-        pub bridge_config: Pubkey,
-    }
-
-    impl UpdateOrchestratorSignerInstructionAccounts {
-        pub fn new(signer_manager: Pubkey, bridge_config: Pubkey) -> Self {
-            Self {
-                signer_manager,
-
-                bridge_config,
-            }
-        }
-    }
-
-    /// Instruction data for UpdateOrchestratorSigner
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct UpdateOrchestratorSignerInstructionData {
-        pub new_signer: Pubkey,
-    }
-
-    impl UpdateOrchestratorSignerInstructionData {
-        pub fn new(new_signer: Pubkey) -> Self {
-            Self { new_signer }
-        }
-    }
-
-    /// Implementation for UpdateOrchestratorSignerInstruction
-    impl UpdateOrchestratorSignerInstruction {
-        fn discriminator() -> [u8; 8] {
-            [94u8, 183u8, 245u8, 63u8, 245u8, 85u8, 114u8, 89u8]
-        }
-
-        pub fn data(data: UpdateOrchestratorSignerInstructionData) -> Self {
-            Self {
-                accounts: UpdateOrchestratorSignerInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: UpdateOrchestratorSignerInstructionAccounts) -> Self {
-            self.accounts.signer_manager = AccountMeta::new_readonly(accounts.signer_manager, true);
-
-            self.accounts.bridge_config = AccountMeta::new(accounts.bridge_config, false);
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.signer_manager.clone());
-
-            metas.push(self.accounts.bridge_config.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
     // Instruction: WithdrawBuffer
     // ....................................................................
 
@@ -4498,6 +4755,8 @@ pub mod lite_psm {
 
         pub redemption_queue: AccountMeta,
 
+        pub oku_money_mint: AccountMeta,
+
         pub withdrawer_usdc_ata: AccountMeta,
 
         pub vault_usdc: AccountMeta,
@@ -4505,6 +4764,8 @@ pub mod lite_psm {
         pub usdc_mint: AccountMeta,
 
         pub token_program: AccountMeta,
+
+        pub token_2022_program: AccountMeta,
     }
 
     /// Account pubkeys for WithdrawBuffer instruction
@@ -4515,6 +4776,8 @@ pub mod lite_psm {
         pub config: Pubkey,
 
         pub redemption_queue: Pubkey,
+
+        pub oku_money_mint: Pubkey,
 
         pub withdrawer_usdc_ata: Pubkey,
 
@@ -4531,6 +4794,8 @@ pub mod lite_psm {
 
             redemption_queue: Pubkey,
 
+            oku_money_mint: Pubkey,
+
             withdrawer_usdc_ata: Pubkey,
 
             vault_usdc: Pubkey,
@@ -4543,6 +4808,8 @@ pub mod lite_psm {
                 config,
 
                 redemption_queue,
+
+                oku_money_mint,
 
                 withdrawer_usdc_ata,
 
@@ -4588,6 +4855,9 @@ pub mod lite_psm {
             self.accounts.redemption_queue =
                 AccountMeta::new_readonly(accounts.redemption_queue, false);
 
+            self.accounts.oku_money_mint =
+                AccountMeta::new_readonly(accounts.oku_money_mint, false);
+
             self.accounts.withdrawer_usdc_ata =
                 AccountMeta::new(accounts.withdrawer_usdc_ata, false);
 
@@ -4597,6 +4867,11 @@ pub mod lite_psm {
 
             self.accounts.token_program = AccountMeta::new_readonly(
                 pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+                false,
+            );
+
+            self.accounts.token_2022_program = AccountMeta::new_readonly(
+                pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
                 false,
             );
 
@@ -4617,6 +4892,8 @@ pub mod lite_psm {
 
             metas.push(self.accounts.redemption_queue.clone());
 
+            metas.push(self.accounts.oku_money_mint.clone());
+
             metas.push(self.accounts.withdrawer_usdc_ata.clone());
 
             metas.push(self.accounts.vault_usdc.clone());
@@ -4624,6 +4901,8 @@ pub mod lite_psm {
             metas.push(self.accounts.usdc_mint.clone());
 
             metas.push(self.accounts.token_program.clone());
+
+            metas.push(self.accounts.token_2022_program.clone());
 
             metas.extend(self.remaining_accounts.clone());
             metas
@@ -4648,6 +4927,680 @@ pub mod lite_psm {
 // ============================================================================
 // CUSTOM TYPES
 // ============================================================================
+
+/// Custom enum: AuthorityRole
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub enum AuthorityRole {
+    RoleAdmin,
+
+    Pauser,
+
+    Unpauser,
+
+    UsdRebaser,
+
+    ReserveManager,
+}
+
+/// Custom struct: AuthorityUpdatedEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct AuthorityUpdatedEvent {
+    pub role: AuthorityRole,
+
+    pub old_authority: Pubkey,
+
+    pub new_authority: Pubkey,
+}
+
+impl AuthorityUpdatedEvent {
+    pub fn new(role: AuthorityRole, old_authority: Pubkey, new_authority: Pubkey) -> Self {
+        Self {
+            role,
+
+            old_authority,
+
+            new_authority,
+        }
+    }
+}
+
+/// Custom struct: InitializeEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct InitializeEvent {
+    pub role_admin: Pubkey,
+
+    pub oku_money_mint: Pubkey,
+
+    pub usd_oku_mint: Pubkey,
+
+    pub reserve_vault: Pubkey,
+
+    pub psm_config: Pubkey,
+
+    pub usd_multiplier: u64,
+
+    pub min_collateral_ratio: u64,
+}
+
+impl InitializeEvent {
+    pub fn new(
+        role_admin: Pubkey,
+
+        oku_money_mint: Pubkey,
+
+        usd_oku_mint: Pubkey,
+
+        reserve_vault: Pubkey,
+
+        psm_config: Pubkey,
+
+        usd_multiplier: u64,
+
+        min_collateral_ratio: u64,
+    ) -> Self {
+        Self {
+            role_admin,
+
+            oku_money_mint,
+
+            usd_oku_mint,
+
+            reserve_vault,
+
+            psm_config,
+
+            usd_multiplier,
+
+            min_collateral_ratio,
+        }
+    }
+}
+
+/// Custom struct: MinCollateralRatioUpdatedEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct MinCollateralRatioUpdatedEvent {
+    pub old_ratio: u64,
+
+    pub new_ratio: u64,
+}
+
+impl MinCollateralRatioUpdatedEvent {
+    pub fn new(old_ratio: u64, new_ratio: u64) -> Self {
+        Self {
+            old_ratio,
+
+            new_ratio,
+        }
+    }
+}
+
+/// Custom struct: OkuDollarConfig
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct OkuDollarConfig {
+    pub bump: u8,
+
+    pub role_admin: Pubkey,
+
+    pub pauser: Pubkey,
+
+    pub unpauser: Pubkey,
+
+    pub usd_rebaser: Pubkey,
+
+    pub reserve_manager: Pubkey,
+
+    pub oku_money_mint: Pubkey,
+
+    pub usd_oku_mint: Pubkey,
+
+    pub reserve_vault: Pubkey,
+
+    pub psm_config: Pubkey,
+
+    pub usd_multiplier: u64,
+
+    pub usd_last_update_time: i64,
+
+    pub last_yield_distribution_slot: u64,
+
+    pub min_collateral_ratio: u64,
+
+    pub is_paused: bool,
+
+    pub pending_role_admin: Pubkey,
+}
+
+impl OkuDollarConfig {
+    pub fn new(
+        bump: u8,
+
+        role_admin: Pubkey,
+
+        pauser: Pubkey,
+
+        unpauser: Pubkey,
+
+        usd_rebaser: Pubkey,
+
+        reserve_manager: Pubkey,
+
+        oku_money_mint: Pubkey,
+
+        usd_oku_mint: Pubkey,
+
+        reserve_vault: Pubkey,
+
+        psm_config: Pubkey,
+
+        usd_multiplier: u64,
+
+        usd_last_update_time: i64,
+
+        last_yield_distribution_slot: u64,
+
+        min_collateral_ratio: u64,
+
+        is_paused: bool,
+
+        pending_role_admin: Pubkey,
+    ) -> Self {
+        Self {
+            bump,
+
+            role_admin,
+
+            pauser,
+
+            unpauser,
+
+            usd_rebaser,
+
+            reserve_manager,
+
+            oku_money_mint,
+
+            usd_oku_mint,
+
+            reserve_vault,
+
+            psm_config,
+
+            usd_multiplier,
+
+            usd_last_update_time,
+
+            last_yield_distribution_slot,
+
+            min_collateral_ratio,
+
+            is_paused,
+
+            pending_role_admin,
+        }
+    }
+}
+
+/// Custom struct: PauseEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct PauseEvent {
+    pub pauser: Pubkey,
+}
+
+impl PauseEvent {
+    pub fn new(pauser: Pubkey) -> Self {
+        Self { pauser }
+    }
+}
+
+/// Custom struct: PsmConfig
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct PsmConfig {
+    pub bump: u8,
+
+    pub role_admin: Pubkey,
+
+    pub pauser: Pubkey,
+
+    pub unpauser: Pubkey,
+
+    pub freezer: Pubkey,
+
+    pub unfreezer: Pubkey,
+
+    pub queue_processor: Pubkey,
+
+    pub buffer_depositor: Pubkey,
+
+    pub buffer_withdrawer: Pubkey,
+
+    pub oracle_manager: Pubkey,
+
+    pub cap_manager: Pubkey,
+
+    pub allowance_manager: Pubkey,
+
+    pub rebaser: Pubkey,
+
+    pub usdc_mint: Pubkey,
+
+    pub oku_money_mint: Pubkey,
+
+    pub vault_usdc: Pubkey,
+
+    pub vault_oku_money: Pubkey,
+
+    pub max_supply: u64,
+
+    pub minter_allowance: u64,
+
+    pub is_paused: bool,
+
+    pub oracle: Pubkey,
+
+    pub staleness_threshold: i64,
+
+    pub last_yield_distribution_slot: u64,
+
+    pub oku_m_price: u64,
+
+    pub blacklist_exempt_bridge: Pubkey,
+
+    pub blacklist_exempt_router: Pubkey,
+
+    pub pyth_program_owner: Pubkey,
+
+    pub pending_role_admin: Pubkey,
+}
+
+impl PsmConfig {
+    pub fn new(
+        bump: u8,
+
+        role_admin: Pubkey,
+
+        pauser: Pubkey,
+
+        unpauser: Pubkey,
+
+        freezer: Pubkey,
+
+        unfreezer: Pubkey,
+
+        queue_processor: Pubkey,
+
+        buffer_depositor: Pubkey,
+
+        buffer_withdrawer: Pubkey,
+
+        oracle_manager: Pubkey,
+
+        cap_manager: Pubkey,
+
+        allowance_manager: Pubkey,
+
+        rebaser: Pubkey,
+
+        usdc_mint: Pubkey,
+
+        oku_money_mint: Pubkey,
+
+        vault_usdc: Pubkey,
+
+        vault_oku_money: Pubkey,
+
+        max_supply: u64,
+
+        minter_allowance: u64,
+
+        is_paused: bool,
+
+        oracle: Pubkey,
+
+        staleness_threshold: i64,
+
+        last_yield_distribution_slot: u64,
+
+        oku_m_price: u64,
+
+        blacklist_exempt_bridge: Pubkey,
+
+        blacklist_exempt_router: Pubkey,
+
+        pyth_program_owner: Pubkey,
+
+        pending_role_admin: Pubkey,
+    ) -> Self {
+        Self {
+            bump,
+
+            role_admin,
+
+            pauser,
+
+            unpauser,
+
+            freezer,
+
+            unfreezer,
+
+            queue_processor,
+
+            buffer_depositor,
+
+            buffer_withdrawer,
+
+            oracle_manager,
+
+            cap_manager,
+
+            allowance_manager,
+
+            rebaser,
+
+            usdc_mint,
+
+            oku_money_mint,
+
+            vault_usdc,
+
+            vault_oku_money,
+
+            max_supply,
+
+            minter_allowance,
+
+            is_paused,
+
+            oracle,
+
+            staleness_threshold,
+
+            last_yield_distribution_slot,
+
+            oku_m_price,
+
+            blacklist_exempt_bridge,
+
+            blacklist_exempt_router,
+
+            pyth_program_owner,
+
+            pending_role_admin,
+        }
+    }
+}
+
+/// Custom struct: ReservesDepositedEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct ReservesDepositedEvent {
+    pub reserve_manager: Pubkey,
+
+    pub amount: u64,
+
+    pub dollar_value: u64,
+
+    pub collateralization_ratio: u64,
+}
+
+impl ReservesDepositedEvent {
+    pub fn new(
+        reserve_manager: Pubkey,
+
+        amount: u64,
+
+        dollar_value: u64,
+
+        collateralization_ratio: u64,
+    ) -> Self {
+        Self {
+            reserve_manager,
+
+            amount,
+
+            dollar_value,
+
+            collateralization_ratio,
+        }
+    }
+}
+
+/// Custom struct: ReservesWithdrawnEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct ReservesWithdrawnEvent {
+    pub reserve_manager: Pubkey,
+
+    pub amount: u64,
+
+    pub dollar_value: u64,
+
+    pub collateralization_ratio: u64,
+}
+
+impl ReservesWithdrawnEvent {
+    pub fn new(
+        reserve_manager: Pubkey,
+
+        amount: u64,
+
+        dollar_value: u64,
+
+        collateralization_ratio: u64,
+    ) -> Self {
+        Self {
+            reserve_manager,
+
+            amount,
+
+            dollar_value,
+
+            collateralization_ratio,
+        }
+    }
+}
+
+/// Custom struct: RoleAdminTransferAcceptedEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct RoleAdminTransferAcceptedEvent {
+    pub previous_admin: Pubkey,
+
+    pub new_admin: Pubkey,
+}
+
+impl RoleAdminTransferAcceptedEvent {
+    pub fn new(previous_admin: Pubkey, new_admin: Pubkey) -> Self {
+        Self {
+            previous_admin,
+
+            new_admin,
+        }
+    }
+}
+
+/// Custom struct: RoleAdminTransferCancelledEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct RoleAdminTransferCancelledEvent {
+    pub current_admin: Pubkey,
+
+    pub cancelled_pending: Pubkey,
+}
+
+impl RoleAdminTransferCancelledEvent {
+    pub fn new(current_admin: Pubkey, cancelled_pending: Pubkey) -> Self {
+        Self {
+            current_admin,
+
+            cancelled_pending,
+        }
+    }
+}
+
+/// Custom struct: RoleAdminTransferProposedEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct RoleAdminTransferProposedEvent {
+    pub current_admin: Pubkey,
+
+    pub pending_admin: Pubkey,
+}
+
+impl RoleAdminTransferProposedEvent {
+    pub fn new(current_admin: Pubkey, pending_admin: Pubkey) -> Self {
+        Self {
+            current_admin,
+
+            pending_admin,
+        }
+    }
+}
+
+/// Custom struct: UnpauseEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct UnpauseEvent {
+    pub unpauser: Pubkey,
+}
+
+impl UnpauseEvent {
+    pub fn new(unpauser: Pubkey) -> Self {
+        Self { unpauser }
+    }
+}
+
+/// Custom struct: UnwrapEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct UnwrapEvent {
+    pub user: Pubkey,
+
+    pub receiver: Pubkey,
+
+    pub shares_burned: u64,
+
+    pub oku_m_amount: u64,
+
+    pub usd_multiplier: u64,
+
+    pub oku_m_price: u64,
+
+    pub dollar_value: u64,
+}
+
+impl UnwrapEvent {
+    pub fn new(
+        user: Pubkey,
+
+        receiver: Pubkey,
+
+        shares_burned: u64,
+
+        oku_m_amount: u64,
+
+        usd_multiplier: u64,
+
+        oku_m_price: u64,
+
+        dollar_value: u64,
+    ) -> Self {
+        Self {
+            user,
+
+            receiver,
+
+            shares_burned,
+
+            oku_m_amount,
+
+            usd_multiplier,
+
+            oku_m_price,
+
+            dollar_value,
+        }
+    }
+}
+
+/// Custom struct: UsdMultiplierUpdatedEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct UsdMultiplierUpdatedEvent {
+    pub old_multiplier: u64,
+
+    pub new_multiplier: u64,
+
+    pub total_supply: u64,
+
+    pub timestamp: i64,
+}
+
+impl UsdMultiplierUpdatedEvent {
+    pub fn new(
+        old_multiplier: u64,
+
+        new_multiplier: u64,
+
+        total_supply: u64,
+
+        timestamp: i64,
+    ) -> Self {
+        Self {
+            old_multiplier,
+
+            new_multiplier,
+
+            total_supply,
+
+            timestamp,
+        }
+    }
+}
+
+/// Custom struct: WrapEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct WrapEvent {
+    pub user: Pubkey,
+
+    pub receiver: Pubkey,
+
+    pub oku_m_amount: u64,
+
+    pub shares_minted: u64,
+
+    pub usd_multiplier: u64,
+
+    pub oku_m_price: u64,
+
+    pub dollar_value: u64,
+}
+
+impl WrapEvent {
+    pub fn new(
+        user: Pubkey,
+
+        receiver: Pubkey,
+
+        oku_m_amount: u64,
+
+        shares_minted: u64,
+
+        usd_multiplier: u64,
+
+        oku_m_price: u64,
+
+        dollar_value: u64,
+    ) -> Self {
+        Self {
+            user,
+
+            receiver,
+
+            oku_m_amount,
+
+            shares_minted,
+
+            usd_multiplier,
+
+            oku_m_price,
+
+            dollar_value,
+        }
+    }
+}
 
 /// Custom enum: AuthorityRole
 #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
@@ -4699,395 +5652,17 @@ impl AuthorityUpdatedEvent {
     }
 }
 
-/// Custom enum: BridgeAuthorityRole
+/// Custom struct: BlacklistExemptInitialized
 #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub enum BridgeAuthorityRole {
-    BridgeAdmin,
+pub struct BlacklistExemptInitialized {
+    pub bridge: Pubkey,
 
-    BridgePauser,
-
-    BridgeUnpauser,
-
-    OrchestratorSigner,
-
-    FeeRecipient,
-
-    ChainManager,
-
-    FeeManager,
-
-    NonceAdmin,
-
-    RefundAdmin,
-
-    SignerManager,
-
-    LimitsManager,
+    pub router: Pubkey,
 }
 
-/// Custom struct: BridgeAuthorityUpdatedEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct BridgeAuthorityUpdatedEvent {
-    pub role: BridgeAuthorityRole,
-
-    pub old_authority: Pubkey,
-
-    pub new_authority: Pubkey,
-}
-
-impl BridgeAuthorityUpdatedEvent {
-    pub fn new(role: BridgeAuthorityRole, old_authority: Pubkey, new_authority: Pubkey) -> Self {
-        Self {
-            role,
-
-            old_authority,
-
-            new_authority,
-        }
-    }
-}
-
-/// Custom struct: BridgeBurnEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct BridgeBurnEvent {
-    pub request_id: [u8; 32],
-
-    pub user: Pubkey,
-
-    pub recipient: [u8; 20],
-
-    pub source_chain_id: u16,
-
-    pub destination_chain: u16,
-
-    pub amount: u64,
-
-    pub nonce: u64,
-
-    pub deadline: i64,
-}
-
-impl BridgeBurnEvent {
-    pub fn new(
-        request_id: [u8; 32],
-
-        user: Pubkey,
-
-        recipient: [u8; 20],
-
-        source_chain_id: u16,
-
-        destination_chain: u16,
-
-        amount: u64,
-
-        nonce: u64,
-
-        deadline: i64,
-    ) -> Self {
-        Self {
-            request_id,
-
-            user,
-
-            recipient,
-
-            source_chain_id,
-
-            destination_chain,
-
-            amount,
-
-            nonce,
-
-            deadline,
-        }
-    }
-}
-
-/// Custom struct: BridgeConfig
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct BridgeConfig {
-    pub bump: u8,
-
-    pub bridge_admin: Pubkey,
-
-    pub bridge_pauser: Pubkey,
-
-    pub bridge_unpauser: Pubkey,
-
-    pub orchestrator_signer: Pubkey,
-
-    pub fee_recipient: Pubkey,
-
-    pub chain_manager: Pubkey,
-
-    pub fee_manager: Pubkey,
-
-    pub nonce_admin: Pubkey,
-
-    pub refund_admin: Pubkey,
-
-    pub signer_manager: Pubkey,
-
-    pub limits_manager: Pubkey,
-
-    pub bridge_fee_bps: u16,
-
-    pub min_bridge_amount: u64,
-
-    pub max_bridge_amount: u64,
-
-    pub is_paused: bool,
-
-    pub bridge_deadline_secs: i64,
-
-    pub source_chain_id: u16,
-
-    pub supported_chains: [u16; 32],
-
-    pub supported_chains_count: u8,
-}
-
-impl BridgeConfig {
-    pub fn new(
-        bump: u8,
-
-        bridge_admin: Pubkey,
-
-        bridge_pauser: Pubkey,
-
-        bridge_unpauser: Pubkey,
-
-        orchestrator_signer: Pubkey,
-
-        fee_recipient: Pubkey,
-
-        chain_manager: Pubkey,
-
-        fee_manager: Pubkey,
-
-        nonce_admin: Pubkey,
-
-        refund_admin: Pubkey,
-
-        signer_manager: Pubkey,
-
-        limits_manager: Pubkey,
-
-        bridge_fee_bps: u16,
-
-        min_bridge_amount: u64,
-
-        max_bridge_amount: u64,
-
-        is_paused: bool,
-
-        bridge_deadline_secs: i64,
-
-        source_chain_id: u16,
-
-        supported_chains: [u16; 32],
-
-        supported_chains_count: u8,
-    ) -> Self {
-        Self {
-            bump,
-
-            bridge_admin,
-
-            bridge_pauser,
-
-            bridge_unpauser,
-
-            orchestrator_signer,
-
-            fee_recipient,
-
-            chain_manager,
-
-            fee_manager,
-
-            nonce_admin,
-
-            refund_admin,
-
-            signer_manager,
-
-            limits_manager,
-
-            bridge_fee_bps,
-
-            min_bridge_amount,
-
-            max_bridge_amount,
-
-            is_paused,
-
-            bridge_deadline_secs,
-
-            source_chain_id,
-
-            supported_chains,
-
-            supported_chains_count,
-        }
-    }
-}
-
-/// Custom struct: BridgeDeadlineUpdatedEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct BridgeDeadlineUpdatedEvent {
-    pub new_deadline_secs: i64,
-}
-
-impl BridgeDeadlineUpdatedEvent {
-    pub fn new(new_deadline_secs: i64) -> Self {
-        Self { new_deadline_secs }
-    }
-}
-
-/// Custom struct: BridgeFeeUpdatedEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct BridgeFeeUpdatedEvent {
-    pub new_fee_bps: u16,
-}
-
-impl BridgeFeeUpdatedEvent {
-    pub fn new(new_fee_bps: u16) -> Self {
-        Self { new_fee_bps }
-    }
-}
-
-/// Custom struct: BridgeInitializedEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct BridgeInitializedEvent {
-    pub bridge_admin: Pubkey,
-
-    pub orchestrator_signer: Pubkey,
-
-    pub fee_bps: u16,
-}
-
-impl BridgeInitializedEvent {
-    pub fn new(bridge_admin: Pubkey, orchestrator_signer: Pubkey, fee_bps: u16) -> Self {
-        Self {
-            bridge_admin,
-
-            orchestrator_signer,
-
-            fee_bps,
-        }
-    }
-}
-
-/// Custom struct: BridgeLimitsUpdatedEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct BridgeLimitsUpdatedEvent {
-    pub min_amount: u64,
-
-    pub max_amount: u64,
-}
-
-impl BridgeLimitsUpdatedEvent {
-    pub fn new(min_amount: u64, max_amount: u64) -> Self {
-        Self {
-            min_amount,
-
-            max_amount,
-        }
-    }
-}
-
-/// Custom struct: BridgeMintEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct BridgeMintEvent {
-    pub request_id: [u8; 32],
-
-    pub source_chain_id: u16,
-
-    pub recipient: Pubkey,
-
-    pub amount: u64,
-
-    pub nonce: u64,
-}
-
-impl BridgeMintEvent {
-    pub fn new(
-        request_id: [u8; 32],
-
-        source_chain_id: u16,
-
-        recipient: Pubkey,
-
-        amount: u64,
-
-        nonce: u64,
-    ) -> Self {
-        Self {
-            request_id,
-
-            source_chain_id,
-
-            recipient,
-
-            amount,
-
-            nonce,
-        }
-    }
-}
-
-/// Custom struct: BridgeNonce
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct BridgeNonce {
-    pub bump: u8,
-
-    pub is_initialized: bool,
-
-    pub destination_chain: u16,
-
-    pub next_nonce: u64,
-}
-
-impl BridgeNonce {
-    pub fn new(bump: u8, is_initialized: bool, destination_chain: u16, next_nonce: u64) -> Self {
-        Self {
-            bump,
-
-            is_initialized,
-
-            destination_chain,
-
-            next_nonce,
-        }
-    }
-}
-
-/// Custom struct: BridgePauseEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct BridgePauseEvent {
-    pub pauser: Pubkey,
-
-    pub paused: bool,
-}
-
-impl BridgePauseEvent {
-    pub fn new(pauser: Pubkey, paused: bool) -> Self {
-        Self { pauser, paused }
-    }
-}
-
-/// Custom struct: BridgeUnpauseEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct BridgeUnpauseEvent {
-    pub unpauser: Pubkey,
-}
-
-impl BridgeUnpauseEvent {
-    pub fn new(unpauser: Pubkey) -> Self {
-        Self { unpauser }
+impl BlacklistExemptInitialized {
+    pub fn new(bridge: Pubkey, router: Pubkey) -> Self {
+        Self { bridge, router }
     }
 }
 
@@ -5097,14 +5672,40 @@ pub struct BufferDepositEvent {
     pub orchestrator: Pubkey,
 
     pub amount: u64,
+
+    pub new_buffer_balance: u64,
 }
 
 impl BufferDepositEvent {
-    pub fn new(orchestrator: Pubkey, amount: u64) -> Self {
+    pub fn new(orchestrator: Pubkey, amount: u64, new_buffer_balance: u64) -> Self {
         Self {
             orchestrator,
 
             amount,
+
+            new_buffer_balance,
+        }
+    }
+}
+
+/// Custom struct: BufferRefilledEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct BufferRefilledEvent {
+    pub new_buffer_balance: u64,
+
+    pub processed_count: u64,
+
+    pub skipped_count: u64,
+}
+
+impl BufferRefilledEvent {
+    pub fn new(new_buffer_balance: u64, processed_count: u64, skipped_count: u64) -> Self {
+        Self {
+            new_buffer_balance,
+
+            processed_count,
+
+            skipped_count,
         }
     }
 }
@@ -5112,50 +5713,22 @@ impl BufferDepositEvent {
 /// Custom struct: BufferWithdrawEvent
 #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
 pub struct BufferWithdrawEvent {
-    pub role_admin: Pubkey,
+    pub actor: Pubkey,
 
     pub amount: u64,
+
+    pub new_buffer_balance: u64,
 }
 
 impl BufferWithdrawEvent {
-    pub fn new(role_admin: Pubkey, amount: u64) -> Self {
-        Self { role_admin, amount }
-    }
-}
+    pub fn new(actor: Pubkey, amount: u64, new_buffer_balance: u64) -> Self {
+        Self {
+            actor,
 
-/// Custom struct: ChainAddedEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct ChainAddedEvent {
-    pub chain_id: u16,
-}
+            amount,
 
-impl ChainAddedEvent {
-    pub fn new(chain_id: u16) -> Self {
-        Self { chain_id }
-    }
-}
-
-/// Custom struct: ChainRemovedEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct ChainRemovedEvent {
-    pub chain_id: u16,
-}
-
-impl ChainRemovedEvent {
-    pub fn new(chain_id: u16) -> Self {
-        Self { chain_id }
-    }
-}
-
-/// Custom struct: FeeRecipientUpdatedEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct FeeRecipientUpdatedEvent {
-    pub new_recipient: Pubkey,
-}
-
-impl FeeRecipientUpdatedEvent {
-    pub fn new(new_recipient: Pubkey) -> Self {
-        Self { new_recipient }
+            new_buffer_balance,
+        }
     }
 }
 
@@ -5184,39 +5757,29 @@ pub struct InitializeEvent {
 
     pub usdc_mint: Pubkey,
 
-    pub okusd_mint: Pubkey,
+    pub oku_money_mint: Pubkey,
 
     pub max_supply: u64,
 }
 
 impl InitializeEvent {
-    pub fn new(role_admin: Pubkey, usdc_mint: Pubkey, okusd_mint: Pubkey, max_supply: u64) -> Self {
+    pub fn new(
+        role_admin: Pubkey,
+
+        usdc_mint: Pubkey,
+
+        oku_money_mint: Pubkey,
+
+        max_supply: u64,
+    ) -> Self {
         Self {
             role_admin,
 
             usdc_mint,
 
-            okusd_mint,
+            oku_money_mint,
 
             max_supply,
-        }
-    }
-}
-
-/// Custom struct: InterestRateUpdatedEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct InterestRateUpdatedEvent {
-    pub rate_authority: Pubkey,
-
-    pub new_rate: i16,
-}
-
-impl InterestRateUpdatedEvent {
-    pub fn new(rate_authority: Pubkey, new_rate: i16) -> Self {
-        Self {
-            rate_authority,
-
-            new_rate,
         }
     }
 }
@@ -5224,15 +5787,19 @@ impl InterestRateUpdatedEvent {
 /// Custom struct: MaxSupplyUpdatedEvent
 #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
 pub struct MaxSupplyUpdatedEvent {
-    pub role_admin: Pubkey,
+    pub actor: Pubkey,
+
+    pub old_max_supply: u64,
 
     pub new_max_supply: u64,
 }
 
 impl MaxSupplyUpdatedEvent {
-    pub fn new(role_admin: Pubkey, new_max_supply: u64) -> Self {
+    pub fn new(actor: Pubkey, old_max_supply: u64, new_max_supply: u64) -> Self {
         Self {
-            role_admin,
+            actor,
+
+            old_max_supply,
 
             new_max_supply,
         }
@@ -5246,17 +5813,35 @@ pub struct MintEvent {
 
     pub usdc_amount: u64,
 
-    pub okusd_amount: u64,
+    pub oku_m_amount: u64,
+
+    pub dollar_value: u64,
+
+    pub oku_m_price: u64,
 }
 
 impl MintEvent {
-    pub fn new(user: Pubkey, usdc_amount: u64, okusd_amount: u64) -> Self {
+    pub fn new(
+        user: Pubkey,
+
+        usdc_amount: u64,
+
+        oku_m_amount: u64,
+
+        dollar_value: u64,
+
+        oku_m_price: u64,
+    ) -> Self {
         Self {
             user,
 
             usdc_amount,
 
-            okusd_amount,
+            oku_m_amount,
+
+            dollar_value,
+
+            oku_m_price,
         }
     }
 }
@@ -5264,61 +5849,55 @@ impl MintEvent {
 /// Custom struct: MinterAllowanceUpdatedEvent
 #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
 pub struct MinterAllowanceUpdatedEvent {
-    pub role_admin: Pubkey,
+    pub actor: Pubkey,
+
+    pub old_allowance: u64,
 
     pub new_allowance: u64,
 }
 
 impl MinterAllowanceUpdatedEvent {
-    pub fn new(role_admin: Pubkey, new_allowance: u64) -> Self {
+    pub fn new(actor: Pubkey, old_allowance: u64, new_allowance: u64) -> Self {
         Self {
-            role_admin,
+            actor,
+
+            old_allowance,
 
             new_allowance,
         }
     }
 }
 
-/// Custom struct: NextYieldRateSetEvent
+/// Custom struct: OkuMPriceUpdated
 #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct NextYieldRateSetEvent {
-    pub rate_authority: Pubkey,
+pub struct OkuMPriceUpdated {
+    pub old_multiplier: u64,
 
-    pub new_rate: i16,
+    pub new_multiplier: u64,
 
-    pub activates_at: i64,
+    pub total_supply: u64,
+
+    pub timestamp: i64,
 }
 
-impl NextYieldRateSetEvent {
-    pub fn new(rate_authority: Pubkey, new_rate: i16, activates_at: i64) -> Self {
+impl OkuMPriceUpdated {
+    pub fn new(
+        old_multiplier: u64,
+
+        new_multiplier: u64,
+
+        total_supply: u64,
+
+        timestamp: i64,
+    ) -> Self {
         Self {
-            rate_authority,
+            old_multiplier,
 
-            new_rate,
+            new_multiplier,
 
-            activates_at,
-        }
-    }
-}
+            total_supply,
 
-/// Custom struct: NonceSkippedEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct NonceSkippedEvent {
-    pub destination_chain_id: u16,
-
-    pub old_nonce: u64,
-
-    pub new_nonce: u64,
-}
-
-impl NonceSkippedEvent {
-    pub fn new(destination_chain_id: u16, old_nonce: u64, new_nonce: u64) -> Self {
-        Self {
-            destination_chain_id,
-
-            old_nonce,
-
-            new_nonce,
+            timestamp,
         }
     }
 }
@@ -5326,7 +5905,7 @@ impl NonceSkippedEvent {
 /// Custom struct: OracleUpdatedEvent
 #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
 pub struct OracleUpdatedEvent {
-    pub role_admin: Pubkey,
+    pub actor: Pubkey,
 
     pub oracle: Pubkey,
 
@@ -5334,9 +5913,9 @@ pub struct OracleUpdatedEvent {
 }
 
 impl OracleUpdatedEvent {
-    pub fn new(role_admin: Pubkey, oracle: Pubkey, staleness_threshold: i64) -> Self {
+    pub fn new(actor: Pubkey, oracle: Pubkey, staleness_threshold: i64) -> Self {
         Self {
-            role_admin,
+            actor,
 
             oracle,
 
@@ -5345,87 +5924,15 @@ impl OracleUpdatedEvent {
     }
 }
 
-/// Custom struct: OrchestratorSignerUpdatedEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct OrchestratorSignerUpdatedEvent {
-    pub new_signer: Pubkey,
-}
-
-impl OrchestratorSignerUpdatedEvent {
-    pub fn new(new_signer: Pubkey) -> Self {
-        Self { new_signer }
-    }
-}
-
 /// Custom struct: PauseEvent
 #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
 pub struct PauseEvent {
     pub pauser: Pubkey,
-
-    pub paused: bool,
 }
 
 impl PauseEvent {
-    pub fn new(pauser: Pubkey, paused: bool) -> Self {
-        Self { pauser, paused }
-    }
-}
-
-/// Custom struct: PendingRateAppliedEvent
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct PendingRateAppliedEvent {
-    pub rate_authority: Pubkey,
-
-    pub applied_rate: i16,
-}
-
-impl PendingRateAppliedEvent {
-    pub fn new(rate_authority: Pubkey, applied_rate: i16) -> Self {
-        Self {
-            rate_authority,
-
-            applied_rate,
-        }
-    }
-}
-
-/// Custom struct: ProcessedRequest
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct ProcessedRequest {
-    pub bump: u8,
-
-    pub request_id: [u8; 32],
-
-    pub processed_at: i64,
-
-    pub recipient: Pubkey,
-
-    pub amount: u64,
-}
-
-impl ProcessedRequest {
-    pub fn new(
-        bump: u8,
-
-        request_id: [u8; 32],
-
-        processed_at: i64,
-
-        recipient: Pubkey,
-
-        amount: u64,
-    ) -> Self {
-        Self {
-            bump,
-
-            request_id,
-
-            processed_at,
-
-            recipient,
-
-            amount,
-        }
+    pub fn new(pauser: Pubkey) -> Self {
+        Self { pauser }
     }
 }
 
@@ -5460,11 +5967,11 @@ pub struct PsmConfig {
 
     pub usdc_mint: Pubkey,
 
-    pub okusd_mint: Pubkey,
+    pub oku_money_mint: Pubkey,
 
     pub vault_usdc: Pubkey,
 
-    pub vault_okusd: Pubkey,
+    pub vault_oku_money: Pubkey,
 
     pub max_supply: u64,
 
@@ -5476,11 +5983,17 @@ pub struct PsmConfig {
 
     pub staleness_threshold: i64,
 
-    pub current_rate_bps: i16,
+    pub last_yield_distribution_slot: u64,
 
-    pub rate_end: i64,
+    pub oku_m_price: u64,
 
-    pub pending_rate_bps: i16,
+    pub blacklist_exempt_bridge: Pubkey,
+
+    pub blacklist_exempt_router: Pubkey,
+
+    pub pyth_program_owner: Pubkey,
+
+    pub pending_role_admin: Pubkey,
 }
 
 impl PsmConfig {
@@ -5513,11 +6026,11 @@ impl PsmConfig {
 
         usdc_mint: Pubkey,
 
-        okusd_mint: Pubkey,
+        oku_money_mint: Pubkey,
 
         vault_usdc: Pubkey,
 
-        vault_okusd: Pubkey,
+        vault_oku_money: Pubkey,
 
         max_supply: u64,
 
@@ -5529,11 +6042,17 @@ impl PsmConfig {
 
         staleness_threshold: i64,
 
-        current_rate_bps: i16,
+        last_yield_distribution_slot: u64,
 
-        rate_end: i64,
+        oku_m_price: u64,
 
-        pending_rate_bps: i16,
+        blacklist_exempt_bridge: Pubkey,
+
+        blacklist_exempt_router: Pubkey,
+
+        pyth_program_owner: Pubkey,
+
+        pending_role_admin: Pubkey,
     ) -> Self {
         Self {
             bump,
@@ -5564,11 +6083,11 @@ impl PsmConfig {
 
             usdc_mint,
 
-            okusd_mint,
+            oku_money_mint,
 
             vault_usdc,
 
-            vault_okusd,
+            vault_oku_money,
 
             max_supply,
 
@@ -5580,11 +6099,45 @@ impl PsmConfig {
 
             staleness_threshold,
 
-            current_rate_bps,
+            last_yield_distribution_slot,
 
-            rate_end,
+            oku_m_price,
 
-            pending_rate_bps,
+            blacklist_exempt_bridge,
+
+            blacklist_exempt_router,
+
+            pyth_program_owner,
+
+            pending_role_admin,
+        }
+    }
+}
+
+/// Custom struct: PythProgramOwnerUpdatedEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct PythProgramOwnerUpdatedEvent {
+    pub actor: Pubkey,
+
+    pub old_pyth_program_owner: Pubkey,
+
+    pub new_pyth_program_owner: Pubkey,
+}
+
+impl PythProgramOwnerUpdatedEvent {
+    pub fn new(
+        actor: Pubkey,
+
+        old_pyth_program_owner: Pubkey,
+
+        new_pyth_program_owner: Pubkey,
+    ) -> Self {
+        Self {
+            actor,
+
+            old_pyth_program_owner,
+
+            new_pyth_program_owner,
         }
     }
 }
@@ -5594,17 +6147,17 @@ impl PsmConfig {
 pub struct QueueEntry {
     pub user: Pubkey,
 
-    pub okusd_raw_amount: u64,
+    pub oku_m_amount: u64,
 
     pub timestamp: i64,
 }
 
 impl QueueEntry {
-    pub fn new(user: Pubkey, okusd_raw_amount: u64, timestamp: i64) -> Self {
+    pub fn new(user: Pubkey, oku_m_amount: u64, timestamp: i64) -> Self {
         Self {
             user,
 
-            okusd_raw_amount,
+            oku_m_amount,
 
             timestamp,
         }
@@ -5616,19 +6169,37 @@ impl QueueEntry {
 pub struct RedeemEvent {
     pub user: Pubkey,
 
-    pub okusd_amount: u64,
+    pub oku_m_amount: u64,
 
     pub usdc_amount: u64,
+
+    pub dollar_value: u64,
+
+    pub oku_m_price: u64,
 }
 
 impl RedeemEvent {
-    pub fn new(user: Pubkey, okusd_amount: u64, usdc_amount: u64) -> Self {
+    pub fn new(
+        user: Pubkey,
+
+        oku_m_amount: u64,
+
+        usdc_amount: u64,
+
+        dollar_value: u64,
+
+        oku_m_price: u64,
+    ) -> Self {
         Self {
             user,
 
-            okusd_amount,
+            oku_m_amount,
 
             usdc_amount,
+
+            dollar_value,
+
+            oku_m_price,
         }
     }
 }
@@ -5638,12 +6209,38 @@ impl RedeemEvent {
 pub struct RedemptionProcessedEvent {
     pub user: Pubkey,
 
+    pub oku_m_amount: u64,
+
+    pub dollar_value: u64,
+
     pub usdc_amount: u64,
+
+    pub wait_time: i64,
 }
 
 impl RedemptionProcessedEvent {
-    pub fn new(user: Pubkey, usdc_amount: u64) -> Self {
-        Self { user, usdc_amount }
+    pub fn new(
+        user: Pubkey,
+
+        oku_m_amount: u64,
+
+        dollar_value: u64,
+
+        usdc_amount: u64,
+
+        wait_time: i64,
+    ) -> Self {
+        Self {
+            user,
+
+            oku_m_amount,
+
+            dollar_value,
+
+            usdc_amount,
+
+            wait_time,
+        }
     }
 }
 
@@ -5652,21 +6249,41 @@ impl RedemptionProcessedEvent {
 pub struct RedemptionQueue {
     pub bump: u8,
 
-    pub head: u32,
+    pub _pad0: [u8; 7],
 
-    pub tail: u32,
+    pub head: u64,
 
-    pub entries: [QueueEntry; 10],
+    pub tail: u64,
+
+    pub total_queued_oku_m: u64,
+
+    pub entries: [QueueEntry; 200],
 }
 
 impl RedemptionQueue {
-    pub fn new(bump: u8, head: u32, tail: u32, entries: [QueueEntry; 10]) -> Self {
+    pub fn new(
+        bump: u8,
+
+        _pad0: [u8; 7],
+
+        head: u64,
+
+        tail: u64,
+
+        total_queued_oku_m: u64,
+
+        entries: [QueueEntry; 200],
+    ) -> Self {
         Self {
             bump,
+
+            _pad0,
 
             head,
 
             tail,
+
+            total_queued_oku_m,
 
             entries,
         }
@@ -5678,81 +6295,143 @@ impl RedemptionQueue {
 pub struct RedemptionQueuedEvent {
     pub user: Pubkey,
 
-    pub okusd_amount: u64,
+    pub oku_m_amount: u64,
 
-    pub queue_position: u32,
+    pub dollar_value: u64,
+
+    pub queue_position: u64,
+
+    pub queue_length: u64,
 }
 
 impl RedemptionQueuedEvent {
-    pub fn new(user: Pubkey, okusd_amount: u64, queue_position: u32) -> Self {
+    pub fn new(
+        user: Pubkey,
+
+        oku_m_amount: u64,
+
+        dollar_value: u64,
+
+        queue_position: u64,
+
+        queue_length: u64,
+    ) -> Self {
         Self {
             user,
 
-            okusd_amount,
+            oku_m_amount,
+
+            dollar_value,
 
             queue_position,
+
+            queue_length,
         }
     }
 }
 
-/// Custom struct: RefundProcessedEvent
+/// Custom struct: RedemptionRescuedEvent
 #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct RefundProcessedEvent {
-    pub request_id: [u8; 32],
+pub struct RedemptionRescuedEvent {
+    pub queue_index: u64,
+
+    pub original_user: Pubkey,
 
     pub recipient: Pubkey,
 
-    pub amount: u64,
+    pub oku_m_amount: u64,
+
+    pub dollar_value: u64,
 }
 
-impl RefundProcessedEvent {
-    pub fn new(request_id: [u8; 32], recipient: Pubkey, amount: u64) -> Self {
-        Self {
-            request_id,
-
-            recipient,
-
-            amount,
-        }
-    }
-}
-
-/// Custom struct: RefundedRequest
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct RefundedRequest {
-    pub bump: u8,
-
-    pub request_id: [u8; 32],
-
-    pub refunded_at: i64,
-
-    pub recipient: Pubkey,
-
-    pub amount: u64,
-}
-
-impl RefundedRequest {
+impl RedemptionRescuedEvent {
     pub fn new(
-        bump: u8,
+        queue_index: u64,
 
-        request_id: [u8; 32],
-
-        refunded_at: i64,
+        original_user: Pubkey,
 
         recipient: Pubkey,
 
-        amount: u64,
+        oku_m_amount: u64,
+
+        dollar_value: u64,
     ) -> Self {
         Self {
-            bump,
+            queue_index,
 
-            request_id,
-
-            refunded_at,
+            original_user,
 
             recipient,
 
-            amount,
+            oku_m_amount,
+
+            dollar_value,
+        }
+    }
+}
+
+/// Custom struct: RedemptionSkippedEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct RedemptionSkippedEvent {
+    pub queue_index: u64,
+}
+
+impl RedemptionSkippedEvent {
+    pub fn new(queue_index: u64) -> Self {
+        Self { queue_index }
+    }
+}
+
+/// Custom struct: RoleAdminTransferAcceptedEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct RoleAdminTransferAcceptedEvent {
+    pub previous_admin: Pubkey,
+
+    pub new_admin: Pubkey,
+}
+
+impl RoleAdminTransferAcceptedEvent {
+    pub fn new(previous_admin: Pubkey, new_admin: Pubkey) -> Self {
+        Self {
+            previous_admin,
+
+            new_admin,
+        }
+    }
+}
+
+/// Custom struct: RoleAdminTransferCancelledEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct RoleAdminTransferCancelledEvent {
+    pub current_admin: Pubkey,
+
+    pub cancelled_pending: Pubkey,
+}
+
+impl RoleAdminTransferCancelledEvent {
+    pub fn new(current_admin: Pubkey, cancelled_pending: Pubkey) -> Self {
+        Self {
+            current_admin,
+
+            cancelled_pending,
+        }
+    }
+}
+
+/// Custom struct: RoleAdminTransferProposedEvent
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct RoleAdminTransferProposedEvent {
+    pub current_admin: Pubkey,
+
+    pub pending_admin: Pubkey,
+}
+
+impl RoleAdminTransferProposedEvent {
+    pub fn new(current_admin: Pubkey, pending_admin: Pubkey) -> Self {
+        Self {
+            current_admin,
+
+            pending_admin,
         }
     }
 }
@@ -5787,25 +6466,55 @@ impl UnpauseEvent {
     }
 }
 
-/// Custom struct: YieldRateSetEvent
+/// Custom struct: YieldDistributed
 #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct YieldRateSetEvent {
-    pub rate_authority: Pubkey,
+pub struct YieldDistributed {
+    pub yield_amount: u64,
 
-    pub new_rate: i16,
+    pub old_multiplier: u64,
 
-    pub end_timestamp: i64,
+    pub new_multiplier: u64,
+
+    pub total_supply: u64,
+
+    pub timestamp: i64,
 }
 
-impl YieldRateSetEvent {
-    pub fn new(rate_authority: Pubkey, new_rate: i16, end_timestamp: i64) -> Self {
+impl YieldDistributed {
+    pub fn new(
+        yield_amount: u64,
+
+        old_multiplier: u64,
+
+        new_multiplier: u64,
+
+        total_supply: u64,
+
+        timestamp: i64,
+    ) -> Self {
         Self {
-            rate_authority,
+            yield_amount,
 
-            new_rate,
+            old_multiplier,
 
-            end_timestamp,
+            new_multiplier,
+
+            total_supply,
+
+            timestamp,
         }
+    }
+}
+
+/// Custom struct: YieldDistributionSlotSet
+#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
+pub struct YieldDistributionSlotSet {
+    pub slot: u64,
+}
+
+impl YieldDistributionSlotSet {
+    pub fn new(slot: u64) -> Self {
+        Self { slot }
     }
 }
 

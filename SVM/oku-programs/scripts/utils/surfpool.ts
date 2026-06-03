@@ -1,5 +1,5 @@
 /**
- * Surfpool utilities for deployment and bridge scripts.
+ * Surfpool utilities for deployment and admin scripts.
  *
  * Only the helpers actively consumed by scripts are kept here.
  * For the full Surfpool JSON-RPC cheatcode surface (timeTravel, writeProgram,

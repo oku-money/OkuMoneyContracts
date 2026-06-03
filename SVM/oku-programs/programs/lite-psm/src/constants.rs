@@ -6,10 +6,6 @@
 //! `use crate::constants::*` without caring where the constant is
 //! authored.
 //!
-//! Bridge-specific constants (deadline bounds, wire-format lengths, the
-//! `skip_nonce` cap) stay in this module because they have no
-//! `oku-dollar` counterpart.
-//!
 //! ## Terminology Legend
 //!
 //! ### Multipliers (Dollar Value Per Token)
@@ -54,45 +50,8 @@ pub use oku_shared::{
     BASIS_POINTS, MAX_OKU_M_PRICE, ORACLE_MAX_STALENESS_SECS, ORACLE_MIN_STALENESS_SECS, PRECISION,
 };
 
-// ---------------------------------------------------------------------------
-// Bridge-specific constants (no oku-dollar counterpart)
-// ---------------------------------------------------------------------------
-
-/// Lower bound for the bridge deadline (in seconds). Anything below this is
-/// rejected by `initialize_bridge` / `update_bridge_deadline` because deadlines
-/// shorter than ~1 minute would routinely expire before the orchestrator has
-/// finished signing.
-pub const BRIDGE_DEADLINE_MIN_SECS: i64 = 60;
-
-/// Upper bound for the bridge deadline (in seconds). Catches operator
-/// misconfiguration that would silently allow signatures to be replayed weeks
-/// after burn. Set to 7 days; mirrors `Constants.ORACLE_MAX_STALENESS` on EVM.
-pub const BRIDGE_DEADLINE_MAX_SECS: i64 = 7 * 24 * 60 * 60;
-
-// ===== Bridge wire-format constants =====
-
-/// Length of the canonical 80-byte BridgeRequest message (both directions).
-/// See `state::BridgeRequest::to_message_bytes` and the SVM-burn handler.
-pub const BRIDGE_MESSAGE_LEN: usize = 80;
-
-/// Length of an Ed25519 detached signature (libsodium format).
-pub const ED25519_SIGNATURE_LEN: usize = 64;
-
-/// Number of leading instructions scanned by the Ed25519 introspection helper
-/// when looking for a matching sigverify ix. Set high enough that real
-/// transactions (compute-budget + ATA create + bridge_mint + ...) fit, low
-/// enough that a griefer cannot inflate scan cost to OOM.
-// F-10: declared as u16 (matches Solana's instruction index type) to avoid
-// the usize→u16 truncation cast at the loop site in ed25519.rs.
-pub const ED25519_INSTRUCTION_SCAN_LIMIT: u16 = 16;
-
-/// Maximum number of supported destination chains stored on `BridgeConfig`.
-/// Backing array is `[u16; 32]`.
-pub const MAX_SUPPORTED_CHAINS: u8 = 32;
-
-/// Maximum number of nonces `skip_nonce` may skip in a single call.
-/// Defends against an admin foot-gun that would jump `next_nonce` near
-/// `u64::MAX`, which would risk eventual overflow in `bridge_burn`'s
-/// `next_nonce.checked_add(1)`. EVM `OkuBridge.skipNonce` increments by
-/// exactly 1; SVM allows arbitrary delta but caps it here.
-pub const MAX_NONCE_SKIP: u64 = 10_000;
+// Bridge-specific constants (BRIDGE_DEADLINE_*, BRIDGE_MESSAGE_LEN,
+// ED25519_*, MAX_SUPPORTED_CHAINS, MAX_NONCE_SKIP) were removed in the
+// noBridge refactor (phase B). v1 cross-chain transfers are handled
+// off-chain by an orchestrator; the on-chain bridge module that consumed
+// these constants no longer exists.

@@ -13,7 +13,6 @@
  *   is_paused         → isPaused
  *   role_admin        → roleAdmin
  *   oku_money_mint    → okuMoneyMint
- *   bridge_fee_bps    → bridgeFeeBps
  *   etc.
  */
 
@@ -22,7 +21,6 @@ import { Program, BN } from '@anchor-lang/core';
 import {
   derivePsmConfigPDA,
   deriveRedemptionQueuePDA,
-  deriveBridgeConfigPDA,
   deriveVaultConfigPDA,
 } from '../utils/pdaHelpers';
 
@@ -73,7 +71,7 @@ function str(v: unknown): string {
 /**
  * Snapshot LitePSM's invariant on-chain state.
  *
- * Three PDAs are read: PsmConfig, RedemptionQueue, BridgeConfig.
+ * Two PDAs are read: PsmConfig and RedemptionQueue.
  * Fields that legitimately change between admin ops (price, nonces, balances)
  * are omitted — we only capture structural/config fields that must stay
  * identical across an upgrade.
@@ -84,7 +82,6 @@ export async function readLitePsmState(
 ): Promise<StateSnapshot> {
   const [psmConfigPDA] = derivePsmConfigPDA(programId);
   const [redemptionQueuePDA] = deriveRedemptionQueuePDA(programId);
-  const [bridgeConfigPDA] = deriveBridgeConfigPDA(programId);
 
   const snap: StateSnapshot = {};
 
@@ -116,23 +113,6 @@ export async function readLitePsmState(
     snap['queue.tail'] = str(q.tail);
   } catch (e: any) {
     snap['queue.fetchError'] = (e.message ?? String(e)).slice(0, 120);
-  }
-
-  // BridgeConfig
-  try {
-    const bc: any = await psm.account['bridgeConfig'].fetch(bridgeConfigPDA);
-    snap['bridge.isPaused']          = str(bc.isPaused);
-    snap['bridge.bridgeAdmin']       = str(bc.bridgeAdmin);
-    snap['bridge.orchestratorSigner'] = str(bc.orchestratorSigner);
-    snap['bridge.feeRecipient']      = str(bc.feeRecipient);
-    snap['bridge.bridgeFeeBps']      = str(bc.bridgeFeeBps);
-    snap['bridge.minBridgeAmount']   = str(bc.minBridgeAmount);
-    snap['bridge.maxBridgeAmount']   = str(bc.maxBridgeAmount);
-    snap['bridge.bridgeDeadlineSecs'] = str(bc.bridgeDeadlineSecs);
-    snap['bridge.sourceChainId']     = str(bc.sourceChainId);
-    snap['bridge.supportedChainsCount'] = str(bc.supportedChainsCount);
-  } catch (e: any) {
-    snap['bridge.fetchError'] = (e.message ?? String(e)).slice(0, 120);
   }
 
   return snap;

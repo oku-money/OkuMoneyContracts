@@ -1,7 +1,7 @@
 //! # OkuMoney Lite-PSM Events
 //!
 //! Event definitions for the Lite-PSM program.
-//! Aligned with EVM contract events from `LitePSM.sol`, `RedemptionQueue.sol`, and `OkuBridge.sol`.
+//! Aligned with EVM contract events from `LitePSM.sol` and `RedemptionQueue.sol`.
 //!
 //! ## EVM Event Mapping
 //!
@@ -16,13 +16,13 @@
 //! | `RedemptionRescuedEvent` | `RedemptionRescued` |
 //! | `BufferDepositEvent` | `BufferDeposited` |
 //! | `BufferWithdrawEvent` | `BufferWithdrawn` |
-//! | `BridgeMintEvent` | `BridgeMint` |
-//! | `BridgeBurnEvent` | `BridgeBurn` |
-//! | `RefundInitiatedEvent` | `RefundInitiated` |
-//! | `RefundConfirmedEvent` | `RefundConfirmed` |
-//! | `RefundCancelledEvent` | `RefundCancelled` |
+//!
+//! Bridge events (BridgeMintEvent, BridgeBurnEvent, refund events, bridge
+//! admin events) were removed in the noBridge refactor. v1 cross-chain
+//! transfers are mediated off-chain and surface on-chain as ordinary
+//! `MintEvent` / `RedeemEvent` records.
 
-use crate::roles::{AuthorityRole, BridgeAuthorityRole};
+use crate::roles::AuthorityRole;
 use anchor_lang::prelude::*;
 
 // ============================================================================
@@ -178,57 +178,6 @@ pub struct BufferWithdrawEvent {
     pub new_buffer_balance: u64,
 }
 
-/// Emitted when tokens are bridged from another chain (mint).
-/// EVM equivalent: `BridgeMint(bytes32 indexed requestId, uint256 sourceChainId, address recipient, uint256 amount, uint256 nonce)`
-#[event]
-pub struct BridgeMintEvent {
-    /// Unique request identifier (keccak256 hash)
-    pub request_id: [u8; 32],
-    /// Source chain ID (e.g., Ethereum = 1)
-    pub source_chain_id: u16,
-    /// Recipient on Solana
-    pub recipient: Pubkey,
-    /// Amount minted (6 decimals)
-    pub amount: u64,
-    /// Sequential nonce for ordering
-    pub nonce: u64,
-    /// Dollar value of minted amount
-    pub dollar_value: u64,
-}
-
-/// Emitted when tokens are burned for bridging to another chain.
-/// EVM equivalent: `BridgeBurn(bytes32 indexed requestId, address indexed sender,
-///   bytes32 recipient, uint256 sourceChainId, uint256 destChainId,
-///   uint256 grossAmount, uint256 netAmount, uint256 feeAmount, uint256 nonce,
-///   uint256 deadline)`.
-#[event]
-pub struct BridgeBurnEvent {
-    /// Unique request identifier (keccak256 hash).
-    pub request_id: [u8; 32],
-    /// User who burned tokens.
-    pub user: Pubkey,
-    /// Recipient on destination chain (EVM address, 20 bytes).
-    pub recipient: [u8; 20],
-    /// Source chain ID (Solana).
-    pub source_chain_id: u16,
-    /// Destination chain ID.
-    pub destination_chain: u16,
-    /// Gross amount the user submitted (pre-fee, 6 decimals). Restored for
-    /// cross-chain reconciliation parity with EVM `BridgeBurn.grossAmount`.
-    pub gross_amount: u64,
-    /// Net amount bridged (post-fee, 6 decimals). This is the `amount` field
-    /// embedded in the signed BridgeRequest message.
-    pub amount: u64,
-    /// Sequential nonce for ordering.
-    pub nonce: u64,
-    /// Request expiration timestamp.
-    pub deadline: i64,
-    /// Dollar value of net amount bridged.
-    pub dollar_value: u64,
-    /// Fee amount deducted (6 decimals).
-    pub fee_amount: u64,
-}
-
 /// Emitted when PSM is paused.
 /// EVM equivalent: `Paused(address account)`
 #[event]
@@ -315,6 +264,9 @@ pub struct YieldDistributionSlotSet {
 }
 
 /// Emitted when blacklist exemption is initialized.
+///
+/// NOTE (noBridge phase B): kept for storage compatibility; phase C
+/// removes both the instruction and this event.
 #[event]
 pub struct BlacklistExemptInitialized {
     pub bridge: Pubkey,
@@ -373,145 +325,4 @@ pub struct RoleAdminTransferAcceptedEvent {
 pub struct RoleAdminTransferCancelledEvent {
     pub current_admin: Pubkey,
     pub cancelled_pending: Pubkey,
-}
-
-// ============================================================================
-// Bridge Events
-// ============================================================================
-
-/// Emitted when bridge is initialized.
-#[event]
-pub struct BridgeInitializedEvent {
-    pub bridge_admin: Pubkey,
-    pub orchestrator_signer: Pubkey,
-    pub fee_bps: u16,
-}
-
-/// Emitted when a chain is added to supported list.
-/// EVM equivalent: `ChainAdded(uint256 indexed chainId)`
-#[event]
-pub struct ChainAddedEvent {
-    pub chain_id: u16,
-}
-
-/// Emitted when a chain is removed from supported list.
-/// EVM equivalent: `ChainRemoved(uint256 indexed chainId)`
-#[event]
-pub struct ChainRemovedEvent {
-    pub chain_id: u16,
-}
-
-/// Emitted when bridge fee is updated.
-/// EVM equivalent: `FeeUpdated(uint256 oldFee, uint256 newFee)`
-#[event]
-pub struct BridgeFeeUpdatedEvent {
-    pub old_fee_bps: u16,
-    pub new_fee_bps: u16,
-}
-
-/// Emitted when fee recipient is updated.
-/// EVM equivalent: `FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient)`
-#[event]
-pub struct FeeRecipientUpdatedEvent {
-    pub old_recipient: Pubkey,
-    pub new_recipient: Pubkey,
-}
-
-/// Emitted when bridge limits are updated.
-/// EVM equivalent: `LimitsUpdated(uint256 minAmount, uint256 maxAmount)`
-#[event]
-pub struct BridgeLimitsUpdatedEvent {
-    pub min_amount: u64,
-    pub max_amount: u64,
-}
-
-/// Emitted when bridge is paused.
-#[event]
-pub struct BridgePauseEvent {
-    pub pauser: Pubkey,
-}
-
-/// Emitted when bridge is unpaused.
-#[event]
-pub struct BridgeUnpauseEvent {
-    pub unpauser: Pubkey,
-}
-
-/// Emitted when a nonce is skipped (emergency recovery).
-/// EVM equivalent: `NonceSkipped(uint256 indexed destChainId, uint256 skippedNonce)`
-#[event]
-pub struct NonceSkippedEvent {
-    pub destination_chain_id: u16,
-    pub old_nonce: u64,
-    pub new_nonce: u64,
-}
-
-/// Emitted when orchestrator signer is updated.
-/// EVM equivalent: `SignerUpdated(address indexed oldSigner, address indexed newSigner)`
-#[event]
-pub struct OrchestratorSignerUpdatedEvent {
-    pub old_signer: Pubkey,
-    pub new_signer: Pubkey,
-}
-
-/// Emitted when a bridge authority role is updated.
-#[event]
-pub struct BridgeAuthorityUpdatedEvent {
-    pub role: BridgeAuthorityRole,
-    pub old_authority: Pubkey,
-    pub new_authority: Pubkey,
-}
-
-/// Emitted when bridge deadline is updated.
-/// EVM equivalent: `DeadlineUpdated(uint256 oldDeadline, uint256 newDeadline)`
-#[event]
-pub struct BridgeDeadlineUpdatedEvent {
-    pub old_deadline_secs: i64,
-    pub new_deadline_secs: i64,
-}
-
-// ============================================================================
-// Two-Step Refund Events (matching EVM OkuBridge)
-// ============================================================================
-
-/// Emitted when a refund is initiated (step 1 of 2).
-/// EVM equivalent: `RefundInitiated(bytes32 indexed requestId, address indexed sender, uint256 amount)`
-#[event]
-pub struct RefundInitiatedEvent {
-    /// Unique request identifier
-    pub request_id: [u8; 32],
-    /// Original sender who will receive the refund
-    pub recipient: Pubkey,
-    /// Amount to be refunded
-    pub amount: u64,
-    /// Who initiated the refund
-    pub initiator: Pubkey,
-}
-
-/// Emitted when a refund is confirmed (step 2 of 2).
-/// EVM equivalent: `RefundConfirmed(bytes32 indexed requestId, address indexed sender, uint256 amount)`
-#[event]
-pub struct RefundConfirmedEvent {
-    /// Unique request identifier
-    pub request_id: [u8; 32],
-    /// Recipient who received the refund
-    pub recipient: Pubkey,
-    /// Amount refunded
-    pub amount: u64,
-}
-
-/// Emitted when a pending refund is cancelled.
-///
-/// EVM equivalent: `RefundCancelled(bytes32 indexed requestId, address indexed
-/// initiator, address cancelledBy)` — both the original initiator (so the
-/// audit trail captures the full proposal-to-cancel lifecycle) and the
-/// canceller are reported.
-#[event]
-pub struct RefundCancelledEvent {
-    /// Unique request identifier.
-    pub request_id: [u8; 32],
-    /// Original initiator (the proposer recorded in `PendingRefund.initiator`).
-    pub initiator: Pubkey,
-    /// Who cancelled the refund.
-    pub canceller: Pubkey,
 }

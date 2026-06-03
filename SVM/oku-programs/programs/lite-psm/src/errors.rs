@@ -18,7 +18,6 @@
 //! | `AmountTooSmall` | `AmountTooSmall()` |
 //! | `InvalidUsdcDecimals` | (initialize-time decimals check) |
 //! | `InvalidStaleness` | `StalenessOutOfBounds(uint256 staleness)` |
-//! | `InvalidChainId` | `InvalidChainId(uint16 chainId)` |
 
 use anchor_lang::prelude::*;
 
@@ -154,6 +153,12 @@ pub enum LitePsmError {
     PriceAboveMax,
 
     // ===== Blacklist Errors =====
+    //
+    // NOTE (noBridge phase B): the blacklist-exempt mechanism is unused in
+    // v1 (no on-chain bridge / router PDA to exempt). The error variants
+    // remain so freeze_account's exemption check can still report a
+    // useful error when the exempt slots are non-default. Phase C removes
+    // them together with the underlying state fields.
     /// Account is blacklist exempt and cannot be frozen
     #[msg("Account is blacklist exempt and cannot be frozen")]
     BlacklistExempt,
@@ -169,23 +174,7 @@ pub enum LitePsmError {
     #[msg("Blacklist-exempt pubkey is invalid (e.g. zero pubkey)")]
     InvalidBlacklistExemptAddress,
 
-    // ===== Bridge-Specific Errors =====
-    /// Bridge is paused
-    #[msg("Bridge is paused")]
-    BridgePaused,
-
-    /// Signature has expired
-    #[msg("Signature has expired")]
-    SignatureExpired,
-
-    /// Invalid Ed25519 signature
-    #[msg("Invalid Ed25519 signature")]
-    InvalidSignature,
-
-    /// Recipient account does not match parameter
-    #[msg("Recipient account does not match parameter")]
-    InvalidRecipient,
-
+    // ===== Authority validation =====
     /// Authority pubkey is the zero pubkey or otherwise invalid
     #[msg("Authority pubkey is invalid (e.g. zero pubkey)")]
     InvalidAuthority,
@@ -199,129 +188,9 @@ pub enum LitePsmError {
     #[msg("Caller is not the pending role admin")]
     NotPendingRoleAdmin,
 
-    /// Request ID mismatch
-    #[msg("Request ID mismatch")]
-    InvalidRequestId,
-
-    /// Invalid message length (expected 80 bytes)
-    #[msg("Invalid message length (expected 80 bytes)")]
-    InvalidMessageLength,
-
-    /// Wrong destination chain
-    #[msg("Wrong destination chain")]
-    WrongDestinationChain,
-
-    /// Chain not supported
-    #[msg("Chain not supported")]
-    UnsupportedChain,
-
-    /// Request already processed.
-    ///
-    /// Reserved — replay protection is currently enforced via the `init`
-    /// constraint on the `ProcessedRequest` PDA, which surfaces an Anchor
-    /// `AccountAlreadyInitialized` error rather than this variant. Kept in
-    /// the enum so the error-code numbering remains stable for indexers
-    /// that decode by number.
-    #[msg("Request already processed")]
-    RequestAlreadyProcessed,
-
-    /// Amount below minimum
-    #[msg("Amount below minimum")]
-    BelowMinimum,
-
-    /// Amount above maximum
-    #[msg("Amount above maximum")]
-    AboveMaximum,
-
-    /// Limits configuration invalid (e.g., min > max)
-    #[msg("Limits configuration invalid (min > max)")]
-    InvalidLimits,
-
-    /// Nonce skip request did not strictly advance the nonce
-    #[msg("Nonce must strictly advance (new_nonce > current)")]
-    NonceNotMonotonic,
-
-    /// Nonce skip delta exceeds `MAX_NONCE_SKIP`. Defense in depth: bounds
-    /// the per-call jump so a fat-finger can't push next_nonce near u64::MAX.
-    #[msg("Nonce skip delta exceeds MAX_NONCE_SKIP")]
-    NonceSkipTooLarge,
-
-    /// Chain already supported
-    #[msg("Chain already supported")]
-    ChainAlreadySupported,
-
-    /// Chain list is full (max 32)
-    #[msg("Chain list is full (max 32)")]
-    ChainListFull,
-
-    /// Chain not found in supported list
-    #[msg("Chain not found in supported list")]
-    ChainNotFound,
-
-    /// Mint window still open, cannot refund yet
-    #[msg("Mint window still open, cannot refund yet")]
-    MintWindowStillOpen,
-
-    /// Request source chain does not match this chain
-    #[msg("Request source chain does not match this chain")]
-    WrongSourceChain,
-
-    /// Request was already minted, cannot refund
-    #[msg("Request was already minted, cannot refund")]
-    RequestAlreadyMinted,
-
     /// Escrow vault already initialized
     #[msg("Escrow vault already initialized")]
     EscrowAlreadyInitialized,
-
-    /// Invalid fee basis points (must be <= 10000)
-    #[msg("Invalid fee basis points (must be <= 10000)")]
-    InvalidFeeBps,
-
-    /// Invalid deadline value
-    #[msg("Invalid deadline value")]
-    InvalidDeadline,
-
-    // ===== Two-Step Refund Errors =====
-    /// Refund already pending for this request.
-    ///
-    /// Reserved — enforced by the `init` constraint on the `PendingRefund`
-    /// PDA which surfaces `AccountAlreadyInitialized`. Kept for error-code
-    /// numbering stability.
-    #[msg("Refund already pending for this request")]
-    RefundAlreadyPending,
-
-    /// No pending refund found for this request.
-    ///
-    /// Reserved — enforced by the `mut` constraint on the `PendingRefund`
-    /// PDA which surfaces `AccountNotInitialized`. Kept for error-code
-    /// numbering stability.
-    #[msg("No pending refund found for this request")]
-    NoPendingRefund,
-
-    /// Request was already refunded
-    #[msg("Request was already refunded")]
-    RequestAlreadyRefunded,
-
-    /// Refund initiator and confirmer must be distinct keys, and neither may
-    /// equal `bridge_admin`. Mirrors EVM OkuBridge's two-step refund key-separation
-    /// requirement enforced at init time.
-    #[msg("Refund initiator/confirmer must be distinct keys (and != bridge_admin)")]
-    RefundRolesNotSeparated,
-
-    /// `confirm_refund` rejects calls signed by the same physical key that
-    /// initiated the refund. The role-level separation is configurable, but
-    /// the per-call check is unconditional.
-    /// Mirrors EVM `OkuBridge.confirmRefund`'s `InitiatorCannotConfirm` revert.
-    #[msg("Confirmer must be a different key than the initiator that proposed this refund")]
-    InitiatorCannotConfirm,
-
-    /// `set_bridge_authority` refused to rotate `OrchestratorSigner` or
-    /// `FeeRecipient` because those config pubkeys have dedicated rotation
-    /// paths gated by different roles (`signer_manager` and `fee_manager`).
-    /// Routing them through `bridge_admin` would be privilege escalation.
-    #[msg("Use the dedicated rotation instruction (update_orchestrator_signer / update_fee_recipient)")]
-    UseDedicatedRotation,
 
     // ===== Initialization Errors =====
     /// Pyth program owner pubkey supplied to `initialize` was the default (zero) pubkey.
@@ -355,19 +224,6 @@ pub enum LitePsmError {
     /// Staleness threshold is outside accepted range [60s, 7 days]
     #[msg("Staleness threshold out of range (must be 60s..=7 days)")]
     InvalidStaleness,
-
-    // ===== Bridge Configuration Errors =====
-    /// Chain ID is invalid (zero, or equal to source_chain_id which would
-    /// allow self-bridging).
-    #[msg("Invalid chain ID (zero or equal to source chain)")]
-    InvalidChainId,
-
-    /// `bridge_burn` was called with a non-zero fee but `fee_recipient_ata` was not
-    /// provided. The fee re-mint must always be executed (even when user == fee_recipient)
-    /// to match EVM OkuBridge.bridgeBurn which unconditionally mints the fee back.
-    /// Pass the fee recipient's ATA in this field for every bridge burn where fee > 0.
-    #[msg("fee_recipient_ata must be provided when bridge fee > 0")]
-    MissingFeeRecipientAta,
 
     // ===== Phase 10: mint extension invariants =====
     /// The OkuMoney mint has the Token-2022 `TransferHook` extension

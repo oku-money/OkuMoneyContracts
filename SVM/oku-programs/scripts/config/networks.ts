@@ -141,13 +141,12 @@ export const NETWORK_CONFIGS: Record<NetworkName, NetworkConfig> = {
   },
 
   /**
-   * Devnet fork via Surfpool - for local testing of bridge scripts
-   * before executing on live devnet. Uses Surfpool's forking capability
-   * to create a local replica of devnet state.
+   * Devnet fork via Surfpool — for local testing against forked devnet
+   * state (e.g. live Pyth feeds via `tests/fork/pyth-oracle.ts`).
    *
    * Usage:
    *   surfpool start --rpc-url https://api.devnet.solana.com
-   *   NETWORK=devnet-fork tsx scripts/bridge/bridge-burn-to-evm.ts
+   *   NETWORK=devnet-fork npm run test:fork
    */
   'devnet-fork': {
     name: 'devnet-fork',

@@ -537,9 +537,14 @@ contract LitePSM is
         (uint80 roundId, int256 answer,, uint256 updatedAt, uint80 answeredInRound) =
             $.porOracle.latestRoundData();
 
+        // `answeredInRound < roundId` is the legacy Chainlink staleness signal.
+        // On newer aggregators `answeredInRound` may not be populated, so we also
+        // require `updatedAt != 0` (unwritten rounds) and `answer > 0` (zero reserve
+        // is treated as invalid, not just negative).
         if (answeredInRound < roundId) revert IncompleteOracleRound();
+        if (updatedAt == 0) revert InvalidOracleResponse();
         if (block.timestamp - updatedAt >= $.stalenessThreshold) revert StaleOracleData();
-        if (answer < 0) revert InvalidOracleResponse();
+        if (answer <= 0) revert InvalidOracleResponse();
 
         uint256 newSupply = $.okuMoney.totalSupply() + mintAmount;
         uint256 reserves = SafeCast.toUint256(answer);

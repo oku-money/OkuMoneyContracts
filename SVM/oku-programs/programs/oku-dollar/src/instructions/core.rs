@@ -41,7 +41,7 @@ pub fn initialize(
 ) -> Result<()> {
     // Reject zero-pubkey authorities — they would silently lock the role out
     // of any future use without offering a recovery path. Mirrors the
-    // analogous guards in `lite-psm::initialize_bridge`.
+    // analogous guards in `lite-psm::initialize`.
     require!(pauser != Pubkey::default(), OkuDollarError::ZeroAuthority);
     require!(unpauser != Pubkey::default(), OkuDollarError::ZeroAuthority);
     require!(
@@ -57,10 +57,7 @@ pub fn initialize(
     // PSM's OkuMoney mint. Without this, a deployer could initialise the
     // vault pointing at the right `psm_config` PDA but a different
     // OkuMoney mint, which would store an inconsistent reference and
-    // silently break wrap/unwrap math. The router's
-    // `validation::verify_vault_config` checks the psm_config link but
-    // not the mint link, so this assertion is the single point that
-    // catches the case.
+    // silently break wrap/unwrap math.
     require!(
         ctx.accounts.psm_config.oku_money_mint == ctx.accounts.oku_money_mint.key(),
         OkuDollarError::OkuMoneyMintMismatch

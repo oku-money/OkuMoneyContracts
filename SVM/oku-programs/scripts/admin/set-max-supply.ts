@@ -3,7 +3,7 @@
  *
  * Wraps `lite_psm::set_max_supply` (cap_manager-gated). The handler
  * refuses any new cap below the current circulating supply — that would
- * silently brick every subsequent `mint_oku_m` and `bridge_mint`. EVM
+ * silently brick every subsequent `mint_oku_m`. EVM
  * `OkuMoney.setMaxSupply` parity.
  *
  * Usage:

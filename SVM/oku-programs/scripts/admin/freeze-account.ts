@@ -2,8 +2,7 @@
  * Freeze a user's OkuMoney token account.
  *
  * Wraps `lite_psm::freeze_account` (freezer-gated). Works even when PSM
- * is paused. The handler refuses to freeze the blacklist-exempt bridge
- * and router addresses (`BlacklistExempt`).
+ * is paused.
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/admin/freeze-account.ts --owner=<user-pubkey>

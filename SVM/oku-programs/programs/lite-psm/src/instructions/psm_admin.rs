@@ -57,9 +57,9 @@ pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
 /// Update max supply (cap_manager only).
 ///
 /// Refuses any new cap below the current circulating supply — that would
-/// silently brick every subsequent `mint_oku_m` and `bridge_mint` because
-/// both check `current_supply + amount <= max_supply` and `add(0) > cap`
-/// is true on a starting state of `current_supply > cap`. Mirrors EVM
+/// silently brick every subsequent `mint_oku_m` because the mint path
+/// checks `current_supply + amount <= max_supply` and `add(0) > cap` is
+/// true on a starting state of `current_supply > cap`. Mirrors EVM
 /// `OkuMoney.setMaxSupply`'s `BelowCurrentSupply` revert.
 pub fn set_max_supply(ctx: Context<CapManager>, new_max_supply: u64) -> Result<()> {
     let current_supply = ctx.accounts.oku_money_mint.supply;

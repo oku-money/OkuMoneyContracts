@@ -83,8 +83,8 @@ pub const ORACLE_MAX_STALENESS_SECS: i64 = 7 * 24 * 60 * 60;
 // ---------------------------------------------------------------------------
 
 /// Both OkuMoney and OkuDollar use 6 decimals on SVM (matching USDC's
-/// representation on Solana). EVM uses 18 decimals; the bridge layer
-/// handles the cross-chain scale conversion.
+/// representation on Solana). EVM uses 18 decimals; the off-chain
+/// orchestrator handles the cross-chain scale conversion in v1.
 ///
 /// Asserted at `lite-psm::initialize` for the USDC mint via the
 /// `usdc_mint.decimals == 6` constraint.

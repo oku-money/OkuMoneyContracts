@@ -2639,102 +2639,6 @@ pub mod lite_psm {
     }
 
     // ....................................................................
-    // Instruction: InitializeBlacklistExempt
-    // ....................................................................
-
-    /// Main instruction struct for InitializeBlacklistExempt
-    pub struct InitializeBlacklistExemptInstruction {
-        pub accounts: InitializeBlacklistExemptInstructionAccountMetas,
-        pub data: InitializeBlacklistExemptInstructionData,
-        pub remaining_accounts: Vec<AccountMeta>,
-    }
-
-    /// Account metadata for InitializeBlacklistExempt instruction
-    #[derive(Debug, Clone, Default)]
-    pub struct InitializeBlacklistExemptInstructionAccountMetas {
-        pub role_admin: AccountMeta,
-
-        pub config: AccountMeta,
-    }
-
-    /// Account pubkeys for InitializeBlacklistExempt instruction
-    #[derive(Debug, Clone)]
-    pub struct InitializeBlacklistExemptInstructionAccounts {
-        pub role_admin: Pubkey,
-
-        pub config: Pubkey,
-    }
-
-    impl InitializeBlacklistExemptInstructionAccounts {
-        pub fn new(role_admin: Pubkey, config: Pubkey) -> Self {
-            Self { role_admin, config }
-        }
-    }
-
-    /// Instruction data for InitializeBlacklistExempt
-    #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-    pub struct InitializeBlacklistExemptInstructionData {
-        pub bridge: Pubkey,
-
-        pub router: Pubkey,
-    }
-
-    impl InitializeBlacklistExemptInstructionData {
-        pub fn new(bridge: Pubkey, router: Pubkey) -> Self {
-            Self { bridge, router }
-        }
-    }
-
-    /// Implementation for InitializeBlacklistExemptInstruction
-    impl InitializeBlacklistExemptInstruction {
-        fn discriminator() -> [u8; 8] {
-            [184u8, 212u8, 138u8, 218u8, 87u8, 96u8, 176u8, 148u8]
-        }
-
-        pub fn data(data: InitializeBlacklistExemptInstructionData) -> Self {
-            Self {
-                accounts: InitializeBlacklistExemptInstructionAccountMetas::default(),
-                data,
-                remaining_accounts: Vec::new(),
-            }
-        }
-
-        pub fn accounts(mut self, accounts: InitializeBlacklistExemptInstructionAccounts) -> Self {
-            self.accounts.role_admin = AccountMeta::new_readonly(accounts.role_admin, true);
-
-            self.accounts.config = AccountMeta::new(accounts.config, false);
-
-            self
-        }
-
-        pub fn remaining_accounts(mut self, accounts: Vec<AccountMeta>) -> Self {
-            self.remaining_accounts = accounts;
-            self
-        }
-
-        fn to_account_metas(&self) -> Vec<AccountMeta> {
-            let mut metas = Vec::new();
-
-            metas.push(self.accounts.role_admin.clone());
-
-            metas.push(self.accounts.config.clone());
-
-            metas.extend(self.remaining_accounts.clone());
-            metas
-        }
-
-        pub fn instruction(&self) -> Instruction {
-            let mut buffer: Vec<u8> = Vec::new();
-
-            buffer.extend_from_slice(&Self::discriminator());
-
-            self.data.serialize(&mut buffer).unwrap();
-
-            Instruction::new_with_bytes(program_id(), &buffer, self.to_account_metas())
-        }
-    }
-
-    // ....................................................................
     // Instruction: MintOkuM
     // ....................................................................
 
@@ -5203,10 +5107,6 @@ pub struct PsmConfig {
 
     pub oku_m_price: u64,
 
-    pub blacklist_exempt_bridge: Pubkey,
-
-    pub blacklist_exempt_router: Pubkey,
-
     pub pyth_program_owner: Pubkey,
 
     pub pending_role_admin: Pubkey,
@@ -5262,10 +5162,6 @@ impl PsmConfig {
 
         oku_m_price: u64,
 
-        blacklist_exempt_bridge: Pubkey,
-
-        blacklist_exempt_router: Pubkey,
-
         pyth_program_owner: Pubkey,
 
         pending_role_admin: Pubkey,
@@ -5318,10 +5214,6 @@ impl PsmConfig {
             last_yield_distribution_slot,
 
             oku_m_price,
-
-            blacklist_exempt_bridge,
-
-            blacklist_exempt_router,
 
             pyth_program_owner,
 
@@ -5652,20 +5544,6 @@ impl AuthorityUpdatedEvent {
     }
 }
 
-/// Custom struct: BlacklistExemptInitialized
-#[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
-pub struct BlacklistExemptInitialized {
-    pub bridge: Pubkey,
-
-    pub router: Pubkey,
-}
-
-impl BlacklistExemptInitialized {
-    pub fn new(bridge: Pubkey, router: Pubkey) -> Self {
-        Self { bridge, router }
-    }
-}
-
 /// Custom struct: BufferDepositEvent
 #[derive(Debug, BorshDeserialize, BorshSerialize, Clone)]
 pub struct BufferDepositEvent {
@@ -5987,10 +5865,6 @@ pub struct PsmConfig {
 
     pub oku_m_price: u64,
 
-    pub blacklist_exempt_bridge: Pubkey,
-
-    pub blacklist_exempt_router: Pubkey,
-
     pub pyth_program_owner: Pubkey,
 
     pub pending_role_admin: Pubkey,
@@ -6046,10 +5920,6 @@ impl PsmConfig {
 
         oku_m_price: u64,
 
-        blacklist_exempt_bridge: Pubkey,
-
-        blacklist_exempt_router: Pubkey,
-
         pyth_program_owner: Pubkey,
 
         pending_role_admin: Pubkey,
@@ -6102,10 +5972,6 @@ impl PsmConfig {
             last_yield_distribution_slot,
 
             oku_m_price,
-
-            blacklist_exempt_bridge,
-
-            blacklist_exempt_router,
 
             pyth_program_owner,
 

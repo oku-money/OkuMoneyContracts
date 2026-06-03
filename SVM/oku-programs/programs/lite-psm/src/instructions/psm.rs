@@ -102,8 +102,7 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
 
     // Effects-checks-interactions: decrement minter allowance BEFORE the mint
     // CPI so a future Token-2022 transfer-hook on OkuMoney cannot re-enter and
-    // double-spend the same allowance window. Matches the same pattern used
-    // throughout the bridge handlers.
+    // double-spend the same allowance window.
     let bump = ctx.accounts.config.bump;
     ctx.accounts.config.minter_allowance = minter_allowance
         .checked_sub(oku_m_amount)

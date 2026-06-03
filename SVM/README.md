@@ -154,7 +154,8 @@ pub struct PsmConfig {
     // Limits: max_supply, minter_allowance, is_paused
     // Oracle: oracle (Pubkey), staleness_threshold (i64)
     // Yield: last_yield_distribution_slot (u64), oku_m_price (u64)
-    // Blacklist exemption: blacklist_exempt_bridge, blacklist_exempt_router
+    // Pyth: pyth_program_owner (Pubkey)
+    // RoleAdmin two-step: pending_role_admin (Pubkey)
 }
 ```
 

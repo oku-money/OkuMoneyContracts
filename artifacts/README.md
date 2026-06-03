@@ -53,13 +53,17 @@ npm run export-abis   # slim + copy into ../artifacts/evm/
 
 Raw Anchor IDLs copied from `SVM/oku-programs/target/idl/`.
 
-Exported programs (3):
+Exported programs (2):
 
 | File | Purpose |
 |------|---------|
-| `lite_psm.json` | PSM + bridge + redemption queue + yield ops + compliance |
+| `lite_psm.json` | PSM + redemption queue + yield ops + compliance (sole user-facing mint/burn surface in v1) |
 | `oku_dollar.json` | OkuDollar vault (wrap/unwrap OkuMoney → usdOku) |
-| `oku_bridge_router.json` | Convenience CPI coordinator for single-tx user flows |
+
+> `oku_bridge_router.json` was removed in the noBridge refactor along
+> with the EVM-side bridge artifacts (see note above). v1 cross-chain
+> transfers are PSM-mediated mint/burn orchestrated off-chain on both
+> sides.
 
 **Refresh:**
 

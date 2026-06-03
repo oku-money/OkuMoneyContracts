@@ -51,33 +51,29 @@ on live networks also mirrors them into the canonical repo-root registry.
 
 | File | Role | Touched by |
 |------|------|------------|
-| [`scripts/config/addresses.json`](scripts/config/addresses.json) | Working per-network address book consumed by deploy / test / bridge scripts. Keyed `<chain>` for live deploys; `fork:<chain>` for local-fork runs (so fork tests never overwrite live entries). | Every script run. |
-| [`../testnet-addresses.json`](../testnet-addresses.json) | Canonical, auto-synced multi-chain registry consumed by the SDK / backend / orchestrator. Includes `chainId`, `bridgeChainId`, `rpcUrl`, `explorer`, `contracts{}`, `deployer`. | Live deploys only — fork runs never write here. |
+| [`scripts/config/addresses.json`](scripts/config/addresses.json) | Working per-network address book consumed by deploy / test scripts. Keyed `<chain>` for live deploys; `fork:<chain>` for local-fork runs (so fork tests never overwrite live entries). | Every script run. |
+| [`../testnet-addresses.json`](../testnet-addresses.json) | Canonical, auto-synced multi-chain registry consumed by the SDK / backend / orchestrator. Includes `chainId`, `rpcUrl`, `explorer`, `contracts{}`, `deployer`. | Live deploys only — fork runs never write here. |
 | `.openzeppelin/<network>.json` | OZ upgrades plugin's per-chain proxy/impl manifest. Required for `upgradeProxy` to work. | OZ upgrades plugin. |
 
 ### Configured networks
 
 Defined in [`hardhat.config.ts`](hardhat.config.ts) and [`scripts/config/chains.ts`](scripts/config/chains.ts):
 
-| Network key | Chain ID | Bridge ID (u16) | Status |
-|---|---|---|---|
-| `sepolia` | 11155111 | 111 | Eth Sepolia testnet |
-| `opSepolia` | 11155420 | 420 | OP Sepolia testnet |
-| `baseSepolia` | 84532 | 846 | Base Sepolia testnet |
-| `bscTestnet` | 97 | 97 | BNB Smart Chain testnet (Chapel) |
-| `mainnet` | 1 | 1 | Ethereum mainnet |
-| `optimism` | 10 | 10 | Optimism mainnet |
-| `arbitrum` | 42161 | 421 | Arbitrum One |
-| `base` | 8453 | 845 | Base mainnet |
-| `bsc` | 56 | 56 | BNB Smart Chain mainnet |
+| Network key | Chain ID | Status |
+|---|---|---|
+| `sepolia` | 11155111 | Eth Sepolia testnet |
+| `opSepolia` | 11155420 | OP Sepolia testnet |
+| `baseSepolia` | 84532 | Base Sepolia testnet |
+| `bscTestnet` | 97 | BNB Smart Chain testnet (Chapel) |
+| `mainnet` | 1 | Ethereum mainnet |
+| `optimism` | 10 | Optimism mainnet |
+| `arbitrum` | 42161 | Arbitrum One |
+| `base` | 8453 | Base mainnet |
+| `bsc` | 56 | BNB Smart Chain mainnet |
 
-The `bridgeChainId` column lists the protocol-internal `u16` ID embedded in
-bridge messages (some EVM chain IDs exceed `u16` and need mapping). Solana
-counterpart is auto-selected per-chain by `getSolanaCounterpartChainId()`:
-testnet EVM → Solana Devnet (103), mainnet EVM → Solana Mainnet (101).
-
-Note `baseSepolia` uses bridge ID `846` (one off from Base mainnet's `845`)
-so cross-chain handlers can never confuse testnet for mainnet messages.
+The protocol-internal `u16` "bridge chain ID" mapping table and the
+`getSolanaCounterpartChainId()` helper were removed in the noBridge
+refactor — no on-chain message carries a chain identifier in v1.
 
 ### Local-fork pre-flight (recommended before any live deploy)
 

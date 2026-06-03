@@ -3,8 +3,8 @@
  *
  * Wraps `lite_psm::set_minter_allowance` (allowance_manager-gated). The
  * allowance caps how much OkuMoney can be minted (across all callers)
- * between resets; each `mint_oku_m` / `bridge_mint` decrements it by the
- * amount minted. Mirrors EVM `OkuMoney.setMinterAllowance` semantics.
+ * between resets; each `mint_oku_m` decrements it by the amount minted.
+ * Mirrors EVM `OkuMoney.setMinterAllowance` semantics.
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/admin/set-minter-allowance.ts --amount=<6dec>

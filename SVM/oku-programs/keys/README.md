@@ -14,21 +14,20 @@ deployment. They are gitignored and must be generated per-developer.
 
 | Filename | Purpose | Mainnet env var in `scripts/config/authorities.ts` |
 |---|---|---|
-| `orchestrator.json` | PSM rebaser / orchestrator (KMS-backed on mainnet) | `MAINNET_ORCHESTRATOR` |
-| `bridge-orchestrator.json` | Bridge mint authority (KMS-backed on mainnet) | `MAINNET_BRIDGE_ORCHESTRATOR` |
+| `orchestrator.json` | PSM rebaser + cross-chain orchestrator (KMS-backed on mainnet) | `MAINNET_ORCHESTRATOR` |
 | `cold-multisig.json` | Cold multisig proxy (Squads vault on mainnet) | `MAINNET_COLD_MULTISIG` |
 | `warm-multisig.json` | Warm multisig proxy (Squads vault on mainnet) | `MAINNET_WARM_MULTISIG` |
-| `fee-recipient.json` | Bridge fee recipient (mainnet only; testnet uses a PDA) | `MAINNET_FEE_RECIPIENT` |
 | `devnet-authority.json` | Devnet-only deployer / all-roles key | — |
 
 On **localnet / devnet / forks** all signer roles collapse to a single deployer
-wallet (see `scripts/config/authorities.ts::allRolesToSingleKey`), and the
-bridge fee recipient is set to a program-derived address
-(`deriveBridgeFeeTreasuryPDA`) so fees accumulate in a distinct account from the
-deployer. You only need one key with SOL to run devnet flows end-to-end.
+wallet (see `scripts/config/authorities.ts::allRolesToSingleKey`). You only
+need one key with SOL to run devnet flows end-to-end.
 
 On **mainnet**, each env var above must be set to the corresponding Squads
 vault or KMS public key; the private keys never touch this machine.
+
+In v1 noBridge there is no on-chain bridge program; the orchestrator key
+above signs both PSM ops and the off-chain cross-chain mint/burn flow.
 
 ---
 
@@ -40,10 +39,8 @@ solana-keygen new --outfile keys/devnet-authority.json
 
 # Separate role keys (mainnet only — mirror the production split)
 solana-keygen new --outfile keys/orchestrator.json
-solana-keygen new --outfile keys/bridge-orchestrator.json
 solana-keygen new --outfile keys/cold-multisig.json
 solana-keygen new --outfile keys/warm-multisig.json
-solana-keygen new --outfile keys/fee-recipient.json
 
 # Fund the deployer on devnet / localnet
 solana airdrop 10 $(solana-keygen pubkey keys/devnet-authority.json) --url devnet

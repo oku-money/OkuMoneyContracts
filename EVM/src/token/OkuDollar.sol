@@ -248,6 +248,9 @@ contract OkuDollar is
     }
 
     /// @dev Compound `base` by `rate^elapsed`. Identity when `elapsed == 0`.
+    ///      Caps the result at `Constants.MAX_MULTIPLIER` for symmetry with
+    ///      `OkuMoney.setOkuMMultiplier`. A long-running rate at `MAX_RATE`
+    ///      would otherwise push `usdMultiplier` beyond the overflow-safe region.
     function _compoundFor(
         uint256 base,
         uint256 rate,
@@ -258,7 +261,9 @@ contract OkuDollar is
         returns (uint256)
     {
         if (elapsed == 0) return base;
-        return (base * MathLib.rpow(rate, elapsed, Constants.PRECISION)) / Constants.PRECISION;
+        uint256 result =
+            (base * MathLib.rpow(rate, elapsed, Constants.PRECISION)) / Constants.PRECISION;
+        return result > Constants.MAX_MULTIPLIER ? Constants.MAX_MULTIPLIER : result;
     }
 
     // ============ ERC20 Overrides (USD Share-based) ============
@@ -315,6 +320,22 @@ contract OkuDollar is
         $.usdShares[to] += shares;
         uint256 dollarValue = (shares * usdMultiplier()) / Constants.PRECISION;
         emit TransferValue(from, to, shares, dollarValue);
+    }
+
+    // ============ Inherited ERC20 guard ============
+
+    /// @dev OkuDollar overrides `transfer`/`transferFrom` to use share-based accounting.
+    ///      The inherited ERC20 `_update` hook is therefore only reachable via the
+    ///      inherited `_mint` (from == address(0)) or `_burn` (to == address(0)) paths,
+    ///      which must never be called — all supply changes go through `wrap()`/`unwrap()`
+    ///      which manage `usdShares` directly.
+    ///      Peer-to-peer `_update` calls (both from and to non-zero) should also never
+    ///      occur since `transfer`/`transferFrom` bypass ERC20's internal path, but they
+    ///      are allowed to fall through to `super._update` harmlessly.
+    function _update(address from, address to, uint256 amount) internal override {
+        if (from == address(0)) revert("OkuDollar: use wrap()");
+        if (to == address(0)) revert("OkuDollar: use unwrap()");
+        super._update(from, to, amount);
     }
 
     // ============ Yield Distribution Lock ============
@@ -451,10 +472,16 @@ contract OkuDollar is
     ///      (ERC-777 / ERC-4337 callouts) a reentrant call back into
     ///      `wrap`/`unwrap` between the transfer and a post-check would
     ///      observe a temporarily-inflated reserve balance.
+    ///      `whenYieldNotDistributing` mirrors the guard on `wrap`/`unwrap` —
+    ///      a yield distribution in the same block changes `okuMMultiplier`, which
+    ///      is read inside `collateralizationRatio()` and `withdrawSurplus`'s own
+    ///      post-withdrawal ratio check. Without this guard a privileged operator
+    ///      could sandwich a yield distribution and a withdrawal in the same block.
     function withdrawSurplus(uint256 okuMAmount)
         external
         nonReentrant
         whenNotPaused
+        whenYieldNotDistributing
         onlyRole(Roles.VAULT_RESERVE_MANAGER)
     {
         if (okuMAmount == 0) revert Errors.ZeroAmount();

@@ -119,6 +119,42 @@
         "txHash": "0xbe929b092b01c7070fc0e3cf3e858585e1d1827c0bddaa802e3f17ad3aa1d0cd",
         "timestamp": "2026-06-01T17:39:13.979Z",
         "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuMoney",
+        "proxy": "0x3632eEAa7B998Df46fEDE8F2FDcfAb68d59AF1A0",
+        "oldImpl": "0xd46c59f37b97b801868A674b74e460EBef7775d7",
+        "newImpl": "0xb48B9779548B64142268480D980Da73E7F4d0B7e",
+        "txHash": "0xafd5059d0c8582607e86e5eb06690b27dbc2198a4d9461ff09f33013ff384ca7",
+        "timestamp": "2026-06-04T23:30:14.253Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuDollar",
+        "proxy": "0xc7fA7bf4D841FfBCD37D4f85D251efA815C30aCB",
+        "oldImpl": "0xAc5D8Aa8A47fEf4e86c1BF6C23ba6c927c1f2744",
+        "newImpl": "0x8F9EE327bD426aE98De21ea4A08CD86f6551Ab29",
+        "txHash": "0x47b8ee520afeba76a147f99cb2989ca47194638e315f0b2b33f2ab5181c44db5",
+        "timestamp": "2026-06-04T23:30:53.767Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "RedemptionQueue",
+        "proxy": "0xa3068E8CE3DCcb9BCD9142DeA2FE81428A0de9C0",
+        "oldImpl": "0xF4633d2712f87Bf34B4ec2a162c1D01c922deCd7",
+        "newImpl": "0x7d48bbcAf0bD29d67D2864458368Ec02B4B636a7",
+        "txHash": "0x241a78a8adb9d5838df10bfa24c2d6a83bc46823c6ed9728e96e72a9325a1057",
+        "timestamp": "2026-06-04T23:31:33.321Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0xc8389fc7189aa73e766052fB18B5b8Ed933c62BF",
+        "oldImpl": "0x4651d9C39786fd9e1e0801B5B4a7F4713B410177",
+        "newImpl": "0xD18170F0533b779520A3bDd2Fc9060311Dc7faB5",
+        "txHash": "0xd6f966cf99420e784264d32aed588a08aad5e997b310ab5ba5cc420037639f02",
+        "timestamp": "2026-06-04T23:32:10.272Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
       }
     ],
     "sepolia": [
@@ -292,6 +328,42 @@
         "txHash": "0xdccf4255dd3d8b159937078e67b78332e0ef024ac58c22de6cfd31cbcc3d2b83",
         "timestamp": "2026-06-01T17:30:47.290Z",
         "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuMoney",
+        "proxy": "0x7F30D1a29ea18e1915f68b637e235E346FEC2291",
+        "oldImpl": "0xB43A3617f60A77440Ad84656bd20FB8a461079A5",
+        "newImpl": "0x8bAd19F0486025b280a314bb796DD6a61fA63000",
+        "txHash": "0x1e89c3e3989d4e4b40a5cb7c7882923ababb03aeff491562a31a1e21a0da76de",
+        "timestamp": "2026-06-04T23:16:36.614Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuDollar",
+        "proxy": "0x9BA4096be5fa5152AfF349C53bC7c5D64980F1AD",
+        "oldImpl": "0x795bD849972c73416E3D4f43120D715A89e210dB",
+        "newImpl": "0xe35D166a37186D2c28766a5e0525efE1b905a7B8",
+        "txHash": "0xad65ca40ba70e07a329915374d267cf2bfcc4f9a8612c8531b891f6e19e07074",
+        "timestamp": "2026-06-04T23:17:02.014Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "RedemptionQueue",
+        "proxy": "0x3632eEAa7B998Df46fEDE8F2FDcfAb68d59AF1A0",
+        "oldImpl": "0xB06fBBD92F7882B357F06E9c337f93Ad0c187463",
+        "newImpl": "0x52C117fb1cF07F372b19baB227C002d8dEbb3543",
+        "txHash": "0x0953e63f27269811c37145ac0556bcd78c1e79833aefcb43ca2b51707e3bfdd7",
+        "timestamp": "2026-06-04T23:17:23.194Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0xc7fA7bf4D841FfBCD37D4f85D251efA815C30aCB",
+        "oldImpl": "0x09419c3539d0D79B6f0590d72DAD63ac91D0a8C2",
+        "newImpl": "0xA90845CFc60488cCB917169EeDCF3577092Df29f",
+        "txHash": "0xd3217334d818903ded4d82836634c29d0420507dbd26b59f4c6b52d61521ef6c",
+        "timestamp": "2026-06-04T23:17:48.432Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
       }
     ],
     "baseSepolia": [
@@ -420,6 +492,42 @@
         "txHash": "<bytecode-unchanged>",
         "timestamp": "2026-06-01T17:36:40.849Z",
         "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuMoney",
+        "proxy": "0xe548f960EbB46f9DC504e4107A552309796c863b",
+        "oldImpl": "0x984B948317e49eA608e778417Ee6dd4fcc182412",
+        "newImpl": "0x040D347fBF6BD9096e98c343117251f4fC8C43d1",
+        "txHash": "0x48304762473678c43b2bf1178f2d7d92aca63dc63528e70e5b90e9beeeddb717",
+        "timestamp": "2026-06-04T23:27:24.871Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuDollar",
+        "proxy": "0xffC8C49C5B38BC9BaFD0bB0F5F189EEcD35e35E2",
+        "oldImpl": "0x2668c2A5Ae2F971538ABc0A031253333DEfFa68E",
+        "newImpl": "0xbdF0238716960c143Ee727E52Dd2D53a4E8c7f64",
+        "txHash": "0x6b4c1e3849d29528795a6d6ff3c90e32c9511aa4470cfc12eee8e1e43a46a4a1",
+        "timestamp": "2026-06-04T23:27:33.878Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "RedemptionQueue",
+        "proxy": "0x25cf2128F603754179379351B805B4F8C0B8dCA4",
+        "oldImpl": "0x57d0E13F353d630ab5218aC841C88985AB31A066",
+        "newImpl": "0x394ceDbd3e50696415cccF6f2a2F45419370F4cE",
+        "txHash": "0xbb92e2c5076cd669253c1f426044dee3ad7ae13b97ebc4e0eddc8cca40eaa155",
+        "timestamp": "2026-06-04T23:27:42.652Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0x31750D38d8d1f69Af94407002b9322f5765D869A",
+        "oldImpl": "0xf034e1C4639c34732C9B14b5466ED16d4e8927E1",
+        "newImpl": "0x704eb5C0DB80C99FcDA7398c87dFAbf498533CC6",
+        "txHash": "0xe8f153efbda80526aead4f26c2175bfce0fa30d93c4650e2a64dd640af0b524e",
+        "timestamp": "2026-06-04T23:27:52.176Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
       }
     ],
     "bscTestnet": [
@@ -484,6 +592,42 @@
         "newImpl": "0xf034e1C4639c34732C9B14b5466ED16d4e8927E1",
         "txHash": "0x73c9ab858d4f914699f89030598b13e49fc57d2516fff0de8fdb17799684bcb7",
         "timestamp": "2026-06-01T17:37:45.717Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuMoney",
+        "proxy": "0xe548f960EbB46f9DC504e4107A552309796c863b",
+        "oldImpl": "0x984B948317e49eA608e778417Ee6dd4fcc182412",
+        "newImpl": "0x040D347fBF6BD9096e98c343117251f4fC8C43d1",
+        "txHash": "0x8112c9ee24e5ed3c65b932f4608456d26d0ff80e6904fdbebf65627fdb820433",
+        "timestamp": "2026-06-04T23:28:20.244Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuDollar",
+        "proxy": "0xffC8C49C5B38BC9BaFD0bB0F5F189EEcD35e35E2",
+        "oldImpl": "0x2668c2A5Ae2F971538ABc0A031253333DEfFa68E",
+        "newImpl": "0xbdF0238716960c143Ee727E52Dd2D53a4E8c7f64",
+        "txHash": "0xa43a2999ac848123e7d88619618e08e2466e190be7a057752f80ae3b37c24c32",
+        "timestamp": "2026-06-04T23:28:28.180Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "RedemptionQueue",
+        "proxy": "0x25cf2128F603754179379351B805B4F8C0B8dCA4",
+        "oldImpl": "0x57d0E13F353d630ab5218aC841C88985AB31A066",
+        "newImpl": "0x394ceDbd3e50696415cccF6f2a2F45419370F4cE",
+        "txHash": "0xb3f265c7fa690af223fb1b621ea818a22d7c32dc562306eed29d4f124d83283c",
+        "timestamp": "2026-06-04T23:28:39.229Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0x31750D38d8d1f69Af94407002b9322f5765D869A",
+        "oldImpl": "0xf034e1C4639c34732C9B14b5466ED16d4e8927E1",
+        "newImpl": "0x704eb5C0DB80C99FcDA7398c87dFAbf498533CC6",
+        "txHash": "0x95c930fd351a991c900e516071ba6311bbef7b0ec1dd89b276be19d0da095697",
+        "timestamp": "2026-06-04T23:28:49.688Z",
         "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
       }
     ],
@@ -558,6 +702,42 @@
         "newImpl": "0xc6Efb4589DF9BD37519a1a1C95b69C4a92cB0fca",
         "txHash": "<bytecode-unchanged>",
         "timestamp": "2026-05-26T19:45:19.750Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuMoney",
+        "proxy": "0xbdF0238716960c143Ee727E52Dd2D53a4E8c7f64",
+        "oldImpl": "0x5beB213C51fc6B7A12ECA3CA2D0D01BF5D31553c",
+        "newImpl": "0xB43A3617f60A77440Ad84656bd20FB8a461079A5",
+        "txHash": "0xedfa8a19c89a6ca894be5c834abd07c80bdb7f554eacf22148c91da20678f113",
+        "timestamp": "2026-06-04T23:32:44.912Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "OkuDollar",
+        "proxy": "0x394ceDbd3e50696415cccF6f2a2F45419370F4cE",
+        "oldImpl": "0x4bbDe05D5620576EbA42eba6447A3E16bDC52Ad5",
+        "newImpl": "0x795bD849972c73416E3D4f43120D715A89e210dB",
+        "txHash": "0x7c84bf13770b6214456335befb624f500463a819267601120da1b6c76ceb797c",
+        "timestamp": "2026-06-04T23:32:53.467Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "RedemptionQueue",
+        "proxy": "0x704eb5C0DB80C99FcDA7398c87dFAbf498533CC6",
+        "oldImpl": "0xdd5C6163f8aC3218B0aeFD9ECe235199E0DDDe8a",
+        "newImpl": "0x1BC7630A91b8CC304d388CE7eAa409F3Bc3eE1C9",
+        "txHash": "0x73bdf60f78d11bc37003dc7914475e4da367561cfcecd187644ababc807ffe69",
+        "timestamp": "2026-06-04T23:33:01.570Z",
+        "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
+      },
+      {
+        "contract": "LitePSM",
+        "proxy": "0x651a6586b7731316E93726CFbf0083062c835B40",
+        "oldImpl": "0x0E4d4719e8226AFd05D774eC0774a1D36bA1A029",
+        "newImpl": "0x0E4d4719e8226AFd05D774eC0774a1D36bA1A029",
+        "txHash": "<already-upgraded>",
+        "timestamp": "2026-06-04T23:33:04.617Z",
         "deployer": "0x3CB68a6762041aA05E762814A8791CA9d98E79A0"
       }
     ]

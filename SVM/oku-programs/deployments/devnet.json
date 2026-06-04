@@ -67,6 +67,7 @@
       "txSignature": "4eDGhXBfzeSNf8r3LFBWD5ztwdbxn3GXGtSVyQ8cnc1Yo8RmaGjK1yxd1Hr2h5P1VrR66jqYVfCHVFkDsMNSoPqu",
       "timestamp": "2026-06-02T17:12:30.495Z",
       "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
+      "note": "This was the last recorded OkuDollar upgrade. devnet-fork rehearsal on 2026-06-04 confirmed on-chain SHA matches local noBridge build (0e19cd51e40b43c4). No further OkuDollar upgrade needed.",
       "idlSnapshot": {
         "sha256": "4496574e01b88381d188acdab7f3627eef3b631ff929d2a4964e0a5519c4af41",
         "accountTypes": {
@@ -138,6 +139,30 @@
           ]
         }
       }
+    },
+    {
+      "program": "LitePsm",
+      "programId": "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N",
+      "oldElfSize": 795600,
+      "newElfSize": 527848,
+      "oldElfSha256": "3cb7e6bbe2fea08aa538868168b8351139fa007bad8f939e8442cac204c95732",
+      "newElfSha256": "1ec2dd4d284640868c64427a7f8ee13bc7556d7c3a0fb5bb2ed25151713a538f",
+      "txSignature": "<unrecorded-upgrade>",
+      "timestamp": "2026-06-04T00:00:00.000Z",
+      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
+      "note": "devnet-fork rehearsal on 2026-06-04 confirmed on-chain SHA already matches local noBridge build (1ec2dd4d). An upgrade must have been deployed out-of-band and not captured in this file. PsmConfig reads correctly (pythProgramOwner=HqqGG7V9sq9LguE8Et7YE7tdtH6vefanJm7udr9st1je, no corruption). No further LitePsm upgrade needed."
+    },
+    {
+      "program": "OkuDollar",
+      "programId": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy",
+      "oldElfSize": 421688,
+      "newElfSize": 415696,
+      "oldElfSha256": "fcb663f93edebe4fc8875a8653558423ce1befb8122b23cb0c369ab42695bfc9",
+      "newElfSha256": "0e19cd51e40b43c4688c0b9eacc128cd960d846fce37b09235ef2e44ccb31b3a",
+      "txSignature": "<bytecode-unchanged-on-devnet>",
+      "timestamp": "2026-06-04T00:00:00.000Z",
+      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
+      "note": "devnet-fork rehearsal confirmed on-chain OkuDollar SHA already matches local noBridge build (0e19cd51). No further OkuDollar upgrade needed."
     }
   ]
 }

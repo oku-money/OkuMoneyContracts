@@ -1137,7 +1137,7 @@ function parseTargets(): string[] {
 
 // ---- Mainnet safety gate (WS5.3) ----
 const UPGRADE_DRY_RUN = process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
-const UPGRADE_YES_MAINNET = process.argv.includes("--yes-mainnet");
+const UPGRADE_YES_MAINNET = process.argv.includes("--yes-mainnet") || process.env.YES_MAINNET === "true";
 const UPGRADE_MAINNET_NETWORKS = new Set(["base", "bsc", "mainnet", "ethereum"]);
 function assertNotMainnetUpgrade(networkName: string) {
   if (!UPGRADE_MAINNET_NETWORKS.has(networkName)) return;

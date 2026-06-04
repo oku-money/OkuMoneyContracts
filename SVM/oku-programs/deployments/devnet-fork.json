@@ -1,19 +1,22 @@
 {
   "network": "devnet-fork",
-  "timestamp": "2026-04-14T22:33:55.537Z",
-  "tokens": {
-    "usdc": "L4tTzgz2JwBwTfGXx99p4bYsnQpUszo9MqDvJgihhTG",
-    "okuMoney": "C7hfPXS8ZguYgvSn9dTReHUpEXVrgeQwoyGfQpyQqShQ",
-    "usdOku": "9W8QfD7pPmbU7zdJV6ipTRjDuPAoYUauG9uuskBqTM69"
-  },
+  "timestamp": "2026-06-04T00:00:00.000Z",
   "programs": {
-    "litePsm": "GtjZJFmhrAxYDrK2JqK7H3My6u5m7qmkzXqd9p6NLWgS",
-    "okuDollarProgram": "9CRADsxW3dN4xnmwLH7DHRfo4BM86B5NNXE7ku2pYGy9"
+    "litePsm": "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N",
+    "okuDollarProgram": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy"
+  },
+  "tokens": {
+    "usdc": "AGwA2n1bgTt969wSbhnoyjVsDENaCoyR1W46uEf7LFQA",
+    "okuMoney": "8F7oEy9dhanAyHDDCTcnoexiNGW8BH9AhiFJwU5DeEQY",
+    "usdOku": "C4D88J3d5pTtLcJeWEHkRb7pxngBsM9v8R48oRM2N1bF"
   },
   "pdas": {
-    "psmConfig": "2FC6FvAjGjK8othNzDjJqmKurwFD2EoS6nobhmyZsxk3",
-    "redemptionQueue": "FXN1JKEeDaePr7cNmZsNBGxzhiRabmpUZ8sokdbPphFB",
-    "vaultConfig": "54K3SqXvnZkHtD19ii6VHxcNxEdk6zfvVVRDScobNX5h"
+    "psmConfig": "EkCYunihwmNasBEnNXoJx8sb3CdZnDYKLpPvLyY6Hm3u",
+    "redemptionQueue": "5FWTuuF67sUNca3w8cqHta4Q5xF6jAiFhGYunuFrSUBz",
+    "vaultConfig": "93tqPwYQfFtmuU5SxL4xuzi3PMbjZWKmuiHt2FBe8qaK",
+    "psmVaultUsdc": "HrnfYJM4a3QprfmUCpzXg2L94CF2ym8GooqquqSsmVT2",
+    "psmOkuMoneyEscrow": "7HrzaCMWzjQ3HGa5fhQP2NFTaxsaTJGeKvLWd46HURxP",
+    "vaultOkuMoney": "4e9a8SNTc1sWke5F4r2AkRWtq1miV52KanGxncJYLk6i"
   },
   "authorities": {
     "coldMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",

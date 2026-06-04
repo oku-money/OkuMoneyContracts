@@ -194,8 +194,15 @@ contract RedemptionQueue is
     /// @dev Multiplier-aware: USDC output = okuMAmount * okuMMultiplier / PRECISION (USDC decimals).
     ///      okuMMultiplier is cached once before the loop so all entries in a batch convert at
     ///      the same rate (consistent within a single block; saves gas).
-    ///      Stuck entries (e.g., USDC-blacklisted users) should be cleared with
-    ///      `rescueQueueEntry` before processing the surrounding range.
+    ///
+    ///      Pause semantics: this function is only callable by `QUEUE_PSM` (the LitePSM proxy).
+    ///      LitePSM.processQueue is already guarded by `whenNotPaused`, so pausing LitePSM
+    ///      effectively halts queue drain. RedemptionQueue deliberately does not inherit
+    ///      PausableUpgradeable to keep its storage layout minimal; the pause gate lives at
+    ///      the LitePSM layer.
+    ///
+    ///      Stuck entries (USDC-blacklisted/frozen recipients) are soft-skipped with a
+    ///      RedemptionSkipped(TransferFailed) event. Use `rescueQueueEntry` to clear them.
     function processQueue(
         uint256 startIndex,
         uint256 endIndex

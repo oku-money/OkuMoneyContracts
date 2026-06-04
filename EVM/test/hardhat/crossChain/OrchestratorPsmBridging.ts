@@ -5,9 +5,13 @@
  *
  * Design under test:
  *   - There is no on-chain bridge contract.
- *   - The off-chain orchestrator holds the OKUM_MINTER role on every chain's
- *     LitePSM (granted at deploy time via OKUM_ALLOWANCE_MANAGER →
- *     configureMinterAllowance + DEFAULT_ADMIN_ROLE → grantRole).
+ *   - The off-chain orchestrator holds PSM operational roles on every chain
+ *     (PSM_QUEUE_PROCESSOR, PSM_BUFFER_DEPOSITOR, OKUM_REBASER) but does NOT
+ *     hold OKUM_MINTER. The PSM contract itself holds OKUM_MINTER; the
+ *     orchestrator uses the permissionless `mintOkuM` / `redeemOkuM` surface
+ *     against its own USDC custody. This is a load-bearing security property:
+ *     orchestrator key compromise grants no special mint privilege beyond
+ *     whatever USDC the orchestrator custodies.
  *   - To "bridge" OkuMoney from chain A to chain B, the orchestrator:
  *       1. Pulls the user's OkuMoney on chain A and redeems it for USDC via
  *          LitePSM.redeemOkuM(), so the OkuM is burned and the PSM buffer
@@ -633,5 +637,88 @@ describe("WS3.3: cross-chain reconciliation invariant (N random bridges)", () =>
         cumulativeUsdcOutA += usdcOut
         cumulativeUsdcInB += usdcIn
         assertUsdcConservation("multiplier bump + bridge")
+    })
+})
+
+// ---------------------------------------------------------------------------
+// WS8.6: Orchestrator-specific invariants
+// ---------------------------------------------------------------------------
+describe("WS8.6: Orchestrator invariants", () => {
+    let admin: Signer
+    let orchestrator: Signer
+    let alice: Signer
+    let bob: Signer
+    let chainA: Chain
+    let chainB: Chain
+
+    before(async () => {
+        ;[admin, orchestrator, alice, bob] = await ethers.getSigners()
+        chainA = await deployChain("Inv-A", admin)
+        chainB = await deployChain("Inv-B", admin)
+    })
+
+    it("orchestrator OkuM float is exactly zero between completed bridges", async () => {
+        const orchestratorAddr = await orchestrator.getAddress()
+        const aliceUsdc = parseUnits("500", 6)
+        await userMintsOkuMOnChain(chainA, alice, aliceUsdc)
+        const aliceOkuM = await chainA.okuMoney.balanceOf(await alice.getAddress())
+
+        // Before bridge: orchestrator holds 0 OkuM on both chains
+        expect(await chainA.okuMoney.balanceOf(orchestratorAddr)).to.equal(0n)
+        expect(await chainB.okuMoney.balanceOf(orchestratorAddr)).to.equal(0n)
+
+        await orchestratorBridgeOkuM({
+            src: chainA, dst: chainB,
+            orchestrator, user: alice, recipient: bob, okuMAmount: aliceOkuM
+        })
+
+        // After bridge: orchestrator holds 0 OkuM on both chains (float cleared)
+        expect(await chainA.okuMoney.balanceOf(orchestratorAddr)).to.equal(0n, "orch float on A after bridge")
+        expect(await chainB.okuMoney.balanceOf(orchestratorAddr)).to.equal(0n, "orch float on B after bridge")
+    })
+
+    it("two sequential orchestrator bridges yield additive USDC conservation (protocol idempotency)", async () => {
+        // Two independent orchestrators running sequentially. Each bridge is
+        // USDC-conservative. No on-chain mechanism prevents concurrent duplicate
+        // bridges; this test documents that the PROTOCOL (per-bridge conservation)
+        // holds regardless of how many orchestrator instances submit.
+        //
+        // In a production multi-region active-active scenario, the orchestrator
+        // MUST implement off-chain deduplication (e.g. nonces or event ID tracking)
+        // to avoid minting double OkuM on the destination chain.
+        const [, , , , orchestrator2] = await ethers.getSigners()
+
+        // Fund two independent users on chain A
+        const usdcEach = parseUnits("100", 6)
+        await userMintsOkuMOnChain(chainA, alice, usdcEach)
+        await userMintsOkuMOnChain(chainA, bob, usdcEach)
+        const aliceOkuM = await chainA.okuMoney.balanceOf(await alice.getAddress())
+        const bobOkuM = await chainA.okuMoney.balanceOf(await bob.getAddress())
+
+        const bufABefore = await chainA.usdc.balanceOf(await chainA.psm.getAddress())
+        const bufBBefore = await chainB.usdc.balanceOf(await chainB.psm.getAddress())
+
+        // Bridge 1: orchestrator1 bridges alice
+        const r1 = await orchestratorBridgeOkuM({
+            src: chainA, dst: chainB, orchestrator, user: alice, recipient: alice, okuMAmount: aliceOkuM
+        })
+        // Bridge 2: orchestrator2 bridges bob sequentially
+        await chainA.okuMoney.connect(admin).grantRole(OKUM_REBASER, await orchestrator2.getAddress())
+        const r2 = await orchestratorBridgeOkuM({
+            src: chainA, dst: chainB, orchestrator: orchestrator2, user: bob, recipient: bob, okuMAmount: bobOkuM
+        })
+
+        const totalUsdcOut = r1.usdcOutSrc + r2.usdcOutSrc
+        const totalUsdcIn = r1.usdcInDst + r2.usdcInDst
+        const totalDrift = totalUsdcOut > totalUsdcIn ? totalUsdcOut - totalUsdcIn : totalUsdcIn - totalUsdcOut
+
+        // Per-bridge conservation holds; cumulative drift ≤ 2 wei (1 per bridge)
+        expect(totalDrift, "cumulative USDC drift across 2 bridges").to.be.lte(2n)
+
+        // Both orchestrators end with zero OkuM float
+        expect(await chainA.okuMoney.balanceOf(await orchestrator.getAddress())).to.equal(0n)
+        expect(await chainA.okuMoney.balanceOf(await orchestrator2.getAddress())).to.equal(0n)
+        expect(await chainB.okuMoney.balanceOf(await orchestrator.getAddress())).to.equal(0n)
+        expect(await chainB.okuMoney.balanceOf(await orchestrator2.getAddress())).to.equal(0n)
     })
 })

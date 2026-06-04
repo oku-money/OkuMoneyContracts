@@ -85,7 +85,8 @@ See `/testnet-addresses.json` at the repo root for the addresses these ABIs / ID
 import OkuMoney from "okumoney-contracts/artifacts/evm/OkuMoney.json";
 import { Contract, JsonRpcProvider } from "ethers";
 
-const provider = new JsonRpcProvider("https://rpc.sepolia.org");
+// bscTestnet / baseSepolia OkuMoney (see testnet-addresses.json for all chains)
+const provider = new JsonRpcProvider("https://data-seed-prebsc-1-s1.binance.org:8545/");
 const addr = "0xe548f960EbB46f9DC504e4107A552309796c863b";
 const okuMoney = new Contract(addr, OkuMoney.abi, provider);
 ```

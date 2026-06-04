@@ -187,12 +187,30 @@ and treat it as withdrawable to the `reserve_manager` while preserving
 ## Blacklist semantics
 
 EVM uses an explicit `mapping(address ⇒ bool) _blacklisted` checked on
-every transfer/mint/burn. SVM uses Token-2022's `freeze_account` /
-`thaw_account` extension — the on-chain effect is identical (frozen
-accounts cannot send or receive), and the freeze authority is the PSM
-config PDA. The exemption list that previously prevented freezing the
-bridge / router PDAs has been removed (no infrastructure PDAs in v1
-noBridge).
+every transfer/mint/burn for **both** `OkuMoney` and `OkuDollar`. As of
+the WS1.1 review fix, `OkuDollar` shares the same `OKUM_BLACKLISTER` /
+`OKUM_UNBLACKLISTER` roles as `OkuMoney` — one role grant covers both tokens.
+`OkuDollar.blacklist` blocks the blacklisted address from `wrap`, `unwrap`,
+`transfer`, `transferFrom`, and `permit`.
+
+SVM uses Token-2022's `freeze_account` / `thaw_account` extension — the
+on-chain effect is identical (frozen accounts cannot send or receive), and
+the freeze authority is the PSM config PDA. The exemption list that previously
+prevented freezing the bridge / router PDAs has been removed (no infrastructure
+PDAs in v1 noBridge).
+
+## EIP-2612 `permit` semantics (OkuDollar)
+
+`OkuDollar.permit` is overridden (EVM WS1.2) to enforce blacklist checks on
+both `owner` and `spender`. The `value` parameter is in **dollar terms**
+(same unit as `balanceOf`), but internally `OkuDollar` stores balances as
+shares. `transferFrom(amount)` floors the share conversion while `unwrap(amount)`
+ceils it — meaning sequential `transferFrom` calls against a permit allowance
+may under-consume shares by ~1 share per call. Integrators planning batched
+`transferFrom` against a permit allowance should account for this 1-wei dust.
+
+SVM has no EIP-2612 analogue; approval semantics follow SPL Token account
+ownership (see §Approval model below).
 
 ## Approval model
 

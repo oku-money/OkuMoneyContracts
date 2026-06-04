@@ -338,6 +338,52 @@ refactor — they appear only in deployment registry metadata.
 
 ---
 
+## Initial Deploy Parameters
+
+The following parameters are baked into the deploy scripts for testnet. Production values will differ.
+
+### EVM (`EVM/scripts/deploy/index.ts`)
+
+| Parameter | Value | Notes |
+|---|---|---|
+| `maxSupply` | 1,000,000,000 OkuM (1e27 raw) | 1B token cap |
+| `minterAllowance` | 1,000,000,000 OkuM | Matches maxSupply (effectively uncapped on testnet) |
+| `psmStalenessThreshold` | 3,600 s | 1-hour Chainlink PoR staleness window |
+| `minCollateralRatio` | 100% (1e18) | Full backing required at deploy; can be lowered post-deploy |
+
+### SVM (`SVM/oku-programs/scripts/config/constants.ts`)
+
+| Parameter | Value | Notes |
+|---|---|---|
+| `MAX_SUPPLY` | 1,000,000,000 OkuM (6 decimals = 1e15 raw) | 1B token cap |
+| `MINTER_ALLOWANCE` | 1,000,000,000 OkuM | Matches EVM (aligned in WS5.7) |
+| `ORACLE_STALENESS_THRESHOLD` | 3,600 s | 1-hour Pyth staleness window (aligned in WS5.7) |
+| `minCollateralRatio` | 100% (1e9) | Full backing; can be lowered post-deploy |
+
+### Mainnet RBAC Ceremony (EVM)
+
+After live deploy, run `grantRolesMainnet.ts` to route roles to the correct keys (requires
+`MAINNET_COLD_MULTISIG`, `MAINNET_WARM_MULTISIG`, `MAINNET_ORCHESTRATOR` env vars):
+
+```bash
+MAINNET_COLD_MULTISIG=0x... MAINNET_WARM_MULTISIG=0x... MAINNET_ORCHESTRATOR=0x... \
+  npx hardhat run scripts/interactions/grantRolesMainnet.ts --network base --yes-mainnet
+```
+
+### SVM Upgrade Authority Transfer
+
+After deploying to mainnet, transfer program upgrade authority to a Squads multisig:
+
+```bash
+NETWORK=mainnet-beta tsx scripts/admin/set-upgrade-authority.ts \
+  --program=3CLDWj...YC7N --new-authority=<SQUADS_MULTISIG> \
+  --yes-i-mean-it-on-mainnet
+```
+
+See `SVM/oku-programs/scripts/admin/set-upgrade-authority.ts` for details.
+
+---
+
 ## Security Notes
 
 1. **Testnet uses deployer as orchestrator** for convenience. Production deployments MUST use a separate KMS-backed orchestrator key.

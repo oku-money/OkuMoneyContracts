@@ -216,9 +216,16 @@ src/
   lib/
     Roles.sol               # Shared RBAC role constants (prefix-namespaced)
     Constants.sol           # PRECISION, DECIMAL_MULTIPLIER, MAX_RATE, BASIS_POINTS + terminology legend
+    Errors.sol              # Shared error types (ZeroAddress, InsufficientBalance, MultiplierCannotDecrease)
+    SafeApprove.sol         # USDT-safe approve helpers (setExactAllowance, revokeAllowance)
     MathLib.sol             # Multiplier math + rpow
     ReentrancyGuardUpgradeable.sol  # OZ-5.x-compatible upgradeable reentrancy guard
     YieldSandwichGuard.sol  # Shared whenYieldNotDistributing modifier (OkuDollar + LitePSM)
+    events/
+      OkuMoneyEvents.sol    # Event declarations for OkuMoney
+      OkuDollarEvents.sol   # Event declarations for OkuDollar (incl. Blacklisted/Unblacklisted)
+      LitePSMEvents.sol     # Event declarations for LitePSM
+      RedemptionQueueEvents.sol  # Event declarations for RedemptionQueue (incl. TransferFailed skip)
 
 test/
   mocks/                    # Test-only mocks (live under test/, never compiled into production artifacts)

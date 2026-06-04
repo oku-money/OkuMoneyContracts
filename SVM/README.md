@@ -386,6 +386,13 @@ npx mocha --require tsx --timeout 60000 'tests/bankrun/crossChainBridging.ts'
 # Fork tests — exercises real mainnet Pyth state via Surfpool.
 #   1. Start Surfpool: npm run surfpool:mainnet
 #   2. Run fork tests: npm run test:fork
+
+# Trident property-based fuzz harnesses (WS4.1/4.2 — real #[end] invariants)
+# NOTE: types.rs must be regenerated from current IDL before running:
+#   trident fuzz add --skip-build  (from SVM/oku-programs/)
+# Then:
+trident fuzz run fuzz_lite_psm   # oku_m_price monotonicity + ceiling
+trident fuzz run fuzz_oku_dollar  # usd_multiplier monotonicity + ceiling
 ```
 
 ### Runner notes

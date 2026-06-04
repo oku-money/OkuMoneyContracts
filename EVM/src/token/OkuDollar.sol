@@ -72,6 +72,10 @@ contract OkuDollar is
         uint256 usdPendingRatePerSecond;
         // Collateralization
         uint256 minCollateralRatio;
+        // Blacklist — uses shared OKUM_BLACKLISTER / OKUM_UNBLACKLISTER roles so a single
+        // role grant covers both OkuMoney and OkuDollar. This mirrors regulatory requirements:
+        // a blacklisted address should not be able to hold or transfer UsdOku either.
+        mapping(address => bool) isBlacklisted;
     }
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuDollar")) - 1)) & ~bytes32(uint256(0xff))
@@ -102,6 +106,10 @@ contract OkuDollar is
 
     // Common errors (ZeroAddress, MultiplierCannotDecrease, ZeroAmount, InsufficientBalance)
     // live in lib/Errors.sol. YieldDistributionInProgress is inherited from YieldSandwichGuard.
+    error SenderBlacklisted();
+    error RecipientBlacklisted();
+    error AlreadyBlacklisted();
+    error NotBlacklisted();
     error RatioExceedsMax();
     error RatioBelowFloor();
     error AmountTooSmall();
@@ -155,6 +163,9 @@ contract OkuDollar is
         _grantRole(Roles.VAULT_PAUSER, _admin);
         _grantRole(Roles.VAULT_UNPAUSER, _admin);
         _grantRole(Roles.VAULT_ADMIN, _admin);
+        // Shared blacklist roles: a single grant covers both OkuMoney and OkuDollar.
+        _grantRole(Roles.OKUM_BLACKLISTER, _admin);
+        _grantRole(Roles.OKUM_UNBLACKLISTER, _admin);
     }
 
     // ============ Storage Accessor Views ============
@@ -193,6 +204,10 @@ contract OkuDollar is
 
     function usdBaseMultiplier() public view returns (uint256) {
         return _getOkuDollarStorage().usdBaseMultiplier;
+    }
+
+    function isBlacklisted(address account) public view returns (bool) {
+        return _getOkuDollarStorage().isBlacklisted[account];
     }
 
     /// @notice Snapshot of all rate-and-share state in one call.
@@ -313,6 +328,8 @@ contract OkuDollar is
         if (to == address(0)) revert Errors.ZeroAddress();
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
+        if ($.isBlacklisted[from]) revert SenderBlacklisted();
+        if ($.isBlacklisted[to]) revert RecipientBlacklisted();
         uint256 fromBalance = $.usdShares[from];
         if (fromBalance < shares) revert Errors.InsufficientBalance();
 
@@ -369,6 +386,8 @@ contract OkuDollar is
         if (receiver == address(0)) revert Errors.ZeroAddress();
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
+        if ($.isBlacklisted[msg.sender]) revert SenderBlacklisted();
+        if ($.isBlacklisted[receiver]) revert RecipientBlacklisted();
 
         // Measure actual tokens received (handles fee-on-transfer edge cases)
         uint256 balBefore = IERC20(address($.okuMoney)).balanceOf(address(this));
@@ -417,6 +436,7 @@ contract OkuDollar is
         if (receiver == address(0)) revert Errors.ZeroAddress();
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
+        if ($.isBlacklisted[msg.sender]) revert SenderBlacklisted();
 
         uint256 usdMult = usdMultiplier();
         uint256 okuMMult = $.okuMoney.okuMMultiplier();
@@ -612,6 +632,28 @@ contract OkuDollar is
         $.usdPendingRatePerSecond = newRate;
 
         emit NextUsdYieldRateSet(newRate, $.usdRateEnd);
+    }
+
+    // ============ Blacklist (Works While Paused) ============
+    // Uses shared OKUM_BLACKLISTER / OKUM_UNBLACKLISTER roles so a single role grant
+    // on OkuMoney also covers OkuDollar — regulatory enforcement is cross-token.
+
+    /// @notice Add `account` to the OkuDollar blacklist.
+    /// @dev Blacklisted accounts cannot send or receive UsdOku (wrap, unwrap, transfer, transferFrom).
+    ///      Uses OKUM_BLACKLISTER so a single grant covers both OkuMoney and OkuDollar.
+    function blacklist(address account) external onlyRole(Roles.OKUM_BLACKLISTER) {
+        OkuDollarStorage storage $ = _getOkuDollarStorage();
+        if ($.isBlacklisted[account]) revert AlreadyBlacklisted();
+        $.isBlacklisted[account] = true;
+        emit Blacklisted(account);
+    }
+
+    /// @notice Remove `account` from the OkuDollar blacklist.
+    function unblacklist(address account) external onlyRole(Roles.OKUM_UNBLACKLISTER) {
+        OkuDollarStorage storage $ = _getOkuDollarStorage();
+        if (!$.isBlacklisted[account]) revert NotBlacklisted();
+        $.isBlacklisted[account] = false;
+        emit Unblacklisted(account);
     }
 
     // ============ Pause Management ============

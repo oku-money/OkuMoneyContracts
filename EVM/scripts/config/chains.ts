@@ -343,7 +343,14 @@ export function getNetworkNameByChainId(chainId: number): string | undefined {
  * Dev wallet address for local fork testing
  * This wallet is impersonated and funded with ETH when running on forks
  */
-export const DEV_WALLET_ADDRESS = "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
+/**
+ * Dev wallet address — overridable via DEV_WALLET_ADDRESS env var.
+ * Hardcoded default is the original deployer address used for testnet.
+ * Mainnet RBAC is handled separately via grantRolesMainnet.ts using
+ * MAINNET_COLD_MULTISIG / MAINNET_WARM_MULTISIG / MAINNET_ORCHESTRATOR env vars.
+ */
+export const DEV_WALLET_ADDRESS =
+  process.env.DEV_WALLET_ADDRESS ?? "0x3CB68a6762041aA05E762814A8791CA9d98E79A0";
 
 // Re-export for backwards compatibility
 export const FORK_IMPERSONATE_ADDRESS = DEV_WALLET_ADDRESS;

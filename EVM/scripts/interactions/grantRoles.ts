@@ -45,8 +45,13 @@ import { DEV_WALLET_ADDRESS } from "../config/chains";
 // Configuration
 // ============================================================================
 
-/** EOA that will receive every role on every deployed contract. */
-const MASTER_EOA = "0x971A3e2b0031dE23715Fa1ce53843B5B045dae00";
+/**
+ * EOA that will receive every role on every deployed contract.
+ * Override via MASTER_EOA env var. Hardcoded default is the original testnet
+ * master EOA; on mainnet use grantRolesMainnet.ts with MAINNET_COLD_MULTISIG
+ * / MAINNET_WARM_MULTISIG / MAINNET_ORCHESTRATOR instead of this script.
+ */
+const MASTER_EOA = process.env.MASTER_EOA ?? "0x971A3e2b0031dE23715Fa1ce53843B5B045dae00";
 
 /** EOA that holds DEFAULT_ADMIN_ROLE today (the deployer / dev wallet). */
 const ADMIN_EOA = DEV_WALLET_ADDRESS;
@@ -67,6 +72,29 @@ const LIVE_CONFIRMATIONS = Number(process.env.CONFIRMATIONS ?? 2);
  * SETTLE_MS=0 to disable. No-op on forks.
  */
 const LIVE_SETTLE_MS = Number(process.env.SETTLE_MS ?? 1500);
+
+/** DRY_RUN=true prints planned grants without broadcasting. */
+const DRY_RUN = process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
+
+/**
+ * Mainnet safety gate — mirrors SVM's `confirmIfMainnet`.
+ * On known mainnet-beta chains, require `--yes-mainnet` or throw.
+ */
+const YES_MAINNET = process.argv.includes("--yes-mainnet");
+const MAINNET_NETWORKS = new Set(["base", "bsc", "mainnet", "ethereum"]);
+function assertNotMainnet(networkName: string) {
+  if (!MAINNET_NETWORKS.has(networkName)) return;
+  if (YES_MAINNET) {
+    logger.warning(`--yes-mainnet passed; proceeding on ${networkName}`);
+    return;
+  }
+  if (DRY_RUN) return; // dry-run is always safe
+  throw new Error(
+    `Refusing to broadcast on ${networkName}.\n` +
+    `  grantRoles.ts routes EVERYTHING to MASTER_EOA — use grantRolesMainnet.ts instead.\n` +
+    `  If you truly want to proceed with this script on ${networkName}, pass --yes-mainnet.`
+  );
+}
 
 type RoleName = keyof typeof ROLES;
 
@@ -306,6 +334,7 @@ function printSummary(results: GrantResult[], skippedContracts: string[]) {
 
 async function main() {
   const { networkName, bookKey, isFork } = await resolveNetworkContext();
+  assertNotMainnet(networkName);
 
   // On a fork run we read addresses from `fork:<chain>` first, but if the
   // user is forking a live chain WITHOUT having re-deployed onto the fork

@@ -1135,9 +1135,28 @@ function parseTargets(): string[] {
 // Main
 // ============================================================================
 
+// ---- Mainnet safety gate (WS5.3) ----
+const UPGRADE_DRY_RUN = process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
+const UPGRADE_YES_MAINNET = process.argv.includes("--yes-mainnet");
+const UPGRADE_MAINNET_NETWORKS = new Set(["base", "bsc", "mainnet", "ethereum"]);
+function assertNotMainnetUpgrade(networkName: string) {
+  if (!UPGRADE_MAINNET_NETWORKS.has(networkName)) return;
+  if (UPGRADE_YES_MAINNET) {
+    logger.warning(`--yes-mainnet passed; proceeding with upgrade on ${networkName}`);
+    return;
+  }
+  if (UPGRADE_DRY_RUN) return;
+  throw new Error(
+    `Refusing to broadcast upgrade on ${networkName} without --yes-mainnet flag.\n` +
+    `Re-run with: TARGETS=... npx hardhat run scripts/upgrade/index.ts --network ${networkName} --yes-mainnet`
+  );
+}
+// ---- end mainnet safety gate ----
+
 async function main() {
   const ctx = await resolveNetworkContext();
   const { networkName, isFork, chainConfig } = ctx;
+  if (!isFork) assertNotMainnetUpgrade(networkName);
 
   // Upgrade scripts always target the LIVE address-book key, even on a fork.
   // Rationale: a fork rehearsal upgrades the *real* deployed proxies (whose

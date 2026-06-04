@@ -8,7 +8,8 @@ import { MAX_SUPPLY, MINTER_ALLOWANCE } from '../../config/constants';
 export interface DeploymentConfig {
   maxSupply: BN;
   minterAllowance: BN;
-  oracleEnabled: boolean;
+  // oracleEnabled removed (WS5.7) — oracle is implied by whether pythProgramOwner is
+  // Pubkey::default(). Use initialize(pythProgramOwner) to enable oracle at init time.
   minCollateralRatio: BN;
 }
 
@@ -16,7 +17,6 @@ export function getDeploymentConfig(): DeploymentConfig {
   return {
     maxSupply: new BN(MAX_SUPPLY),
     minterAllowance: new BN(MINTER_ALLOWANCE),
-    oracleEnabled: false, // Disabled for fork testing (1:1 ratio)
     minCollateralRatio: new BN('1000000000'), // 100% in 9-decimal precision (1e9)
   };
 }

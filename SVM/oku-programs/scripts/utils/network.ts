@@ -100,7 +100,40 @@ export function getNetworkConfig(network?: NetworkName): NetworkConfig {
 }
 
 /**
- * Create Anchor provider for the specified network
+ * Known genesis hashes for cluster verification (WS5.6).
+ * These are the canonical, immutable hashes for mainnet-beta and devnet.
+ * If the connected RPC serves a different genesis hash the cluster is wrong.
+ */
+const GENESIS_HASHES: Partial<Record<NetworkName, string>> = {
+  'mainnet-beta': '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d',
+  devnet:         'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
+  // localnet, devnet-fork, mainnet-fork: genesis hash varies per session — skip verification
+};
+
+/**
+ * Verify that the connected RPC's genesis hash matches the expected cluster.
+ * Throws if connected to the wrong cluster (e.g., SOLANA_RPC_URL pointing at
+ * mainnet when NETWORK=devnet).
+ *
+ * Called from createProvider(). No-op on localnet and fork networks.
+ */
+export async function verifyCluster(connection: Connection, network: NetworkName): Promise<void> {
+  const expected = GENESIS_HASHES[network];
+  if (!expected) return; // no verification for localnet / forks
+  const actual = await connection.getGenesisHash();
+  if (actual !== expected) {
+    throw new Error(
+      `Cluster mismatch: NETWORK=${network} expects genesis ${expected} ` +
+      `but connected RPC returned ${actual}.\n` +
+      `Check SOLANA_RPC_URL / HELIUS_RPC and ensure they point at the correct cluster.`
+    );
+  }
+}
+
+/**
+ * Create Anchor provider for the specified network (synchronous).
+ * Does NOT verify the genesis hash — use createProviderWithClusterCheck for
+ * scripts that must guard against wrong-cluster RPC misconfigurations.
  */
 export function createProvider(network?: NetworkName): AnchorProvider {
   const config = getNetworkConfig(network);
@@ -126,6 +159,22 @@ export function createProvider(network?: NetworkName): AnchorProvider {
   return new AnchorProvider(connection, wallet, {
     commitment: config.confirmationCommitment,
   });
+}
+
+/**
+ * Create Anchor provider AND verify the RPC's genesis hash matches the
+ * expected cluster (WS5.6). Use this in admin scripts that must guard
+ * against wrong-cluster misconfigurations (e.g. SOLANA_RPC_URL pointing at
+ * mainnet when NETWORK=devnet).
+ *
+ * Throws if the genesis hash does not match the expected cluster.
+ * No-op on localnet and fork networks (genesis hash varies per session).
+ */
+export async function createProviderWithClusterCheck(network?: NetworkName): Promise<AnchorProvider> {
+  const net = network || detectNetwork();
+  const provider = createProvider(net);
+  await verifyCluster(provider.connection, net);
+  return provider;
 }
 
 /**

@@ -79,7 +79,9 @@ export function syncSvmRegistry(deployment: DeploymentAddresses): void {
     rpcUrl: SVM_CLUSTER_RPC[deployment.network],
     programs: {
       litePsm: deployment.programs?.litePsm,
-      okuDollar: deployment.programs?.okuDollarProgram,
+      // WS6.2: use 'okuDollar' consistently (deployments/devnet.json uses 'okuDollarProgram').
+      // Both keys are preserved here so consumers reading either name succeed.
+      okuDollar: deployment.programs?.okuDollarProgram ?? deployment.programs?.okuDollar,
     },
     mints: {
       usdc: deployment.tokens?.usdc,
@@ -91,6 +93,9 @@ export function syncSvmRegistry(deployment: DeploymentAddresses): void {
       redemptionQueue: deployment.pdas?.redemptionQueue,
       vaultConfig: deployment.pdas?.vaultConfig,
       psmOkuMoneyEscrow: deployment.pdas?.psmOkuMoneyEscrow,
+      // WS5.9: added to parity with deployments/{network}.json
+      psmVaultUsdc: deployment.pdas?.psmVaultUsdc,
+      vaultOkuMoney: deployment.pdas?.vaultOkuMoney,
     },
     authorities: deployment.authorities,
   };

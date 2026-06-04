@@ -4,10 +4,16 @@
 
 // Supply limits
 export const MAX_SUPPLY = 1_000_000_000 * 1_000_000; // 1B OkuMoney (6 decimals)
-export const MINTER_ALLOWANCE = 100_000_000 * 1_000_000; // 100M initial allowance
+// WS5.7: aligned up to EVM's MINTER_ALLOWANCE (1B) from the prior 100M.
+// EVM uses 1B to match max_supply; SVM was conservatively set to 100M.
+// Production: orchestrator can reset via set-minter-allowance after deploy.
+export const MINTER_ALLOWANCE = 1_000_000_000 * 1_000_000; // 1B (matches EVM)
 
 // Oracle configuration
-export const ORACLE_STALENESS_THRESHOLD = 60; // 60 seconds
+// WS5.7: aligned to EVM's ORACLE_MIN_STALENESS lower bound (60s is also EVM's min,
+// but EVM deploy default is 3600s — align SVM to 3600s so the systems behave
+// consistently on cross-chain deployments.
+export const ORACLE_STALENESS_THRESHOLD = 3600; // 3600 seconds (1 hour), matches EVM default
 
 // Token decimals
 export const USDC_DECIMALS = 6;

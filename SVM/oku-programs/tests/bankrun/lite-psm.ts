@@ -1335,16 +1335,17 @@ describe("lite-psm", () => {
           .rpc();
         expect.fail("Should have failed");
       } catch (err: any) {
-        // The Token-2022 burn CPI rejects with `InsufficientFunds` (program
-        // error 0x1) when the user lacks the requested OkuMoney balance.
-        // Earlier this just asserted `err` exists, which would silently
-        // swallow OOM, signature, or RPC errors.
+        // WS2.7 added a balance pre-check in redeem_oku_m that fires
+        // `InsufficientBuffer` before the Token-2022 burn CPI can reject
+        // with its own `InsufficientFunds` error. Either is acceptable.
         const code = err?.error?.errorCode?.code;
         const msg = String(err?.message ?? err);
         const isInsufficient =
           code === "InsufficientFunds" ||
+          code === "InsufficientBuffer" ||
           msg.includes("custom program error: 0x1") ||
-          msg.includes("insufficient funds");
+          msg.includes("insufficient funds") ||
+          msg.includes("InsufficientBuffer");
         expect(isInsufficient, `unexpected error: ${msg}`).to.equal(true);
       }
     });

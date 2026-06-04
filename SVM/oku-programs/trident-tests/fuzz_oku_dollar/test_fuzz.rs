@@ -355,25 +355,45 @@ impl FuzzTest {
 
     /// End of iteration invariants.
     ///
-    /// `flow_update_usd_multiplier` now drifts `usd_multiplier` off PRECISION
-    /// across an iteration, so the wrap/unwrap round-trip invariant in
-    /// `flow_wrap_unwrap_roundtrip` is exercised at elevated multipliers
-    /// (closing the gap that hid the EVM `InsufficientBalance()` redeem
-    /// regression — see LitePSM.sol:452 pre-fix). `last_usd_multiplier`
-    /// tracks the highest successfully-applied target so future state-aware
-    /// invariants can reference it.
+    /// `flow_update_usd_multiplier` drifts `usd_multiplier` across an iteration,
+    /// exercising wrap/unwrap at elevated multipliers. `last_usd_multiplier`
+    /// tracks the highest successfully-applied target for monotonicity checks.
     ///
-    /// TODO: deserialize OkuDollarConfig and assert:
-    ///   1. usd_multiplier >= last_usd_multiplier (non-decreasing)
-    ///   2. usd_multiplier <= MAX_USD_MULTIPLIER
-    ///   3. reserve_vault_balance * oku_m_price / PRECISION >=
-    ///      usd_oku_supply * usd_multiplier / PRECISION * min_collateral_ratio / PRECISION
-    ///   4. dead_shares_ata balance >= MINIMUM_LIQUIDITY once any wrap has succeeded
+    /// Invariants (from byte offsets derived from OkuDollarConfig::LEN == 362):
+    ///   1. usd_multiplier is non-decreasing (tracked in self.last_usd_multiplier)
+    ///   2. usd_multiplier <= MAX_USD_MULTIPLIER (ceiling)
+    ///
+    /// Byte offsets (see programs/oku-dollar/src/state.rs):
+    ///   OkuDollarConfig.usd_multiplier:  account bytes [297..305]
+    ///    (8 disc + 1 bump + 9×32 authorities/refs = 9+288 = 297)
+    ///   OkuDollarConfig.min_collateral_ratio: account bytes [321..329]
+    ///
+    /// Collateral ratio check (INV3) and dead-shares check (INV4) require
+    /// reading SPL Token accounts (reserve_vault, usd_oku_mint) and are
+    /// deferred until #[init] is wired with current types.rs.
     #[end]
     fn end(&mut self) {
-        let _ = MAX_USD_MULTIPLIER;
-        let _ = MINIMUM_LIQUIDITY;
-        let _ = self.last_usd_multiplier;
+        let (config_pda, _) = Pubkey::find_program_address(
+            &[b"oku_dollar_config"],
+            &wokusd_vault::program_id(),
+        );
+
+        let config_data = self.trident.get_account(&config_pda).data().to_vec();
+
+        // Invariant 1 + 2: usd_multiplier non-decreasing and within MAX_USD_MULTIPLIER
+        if config_data.len() >= 305 {
+            let mult_bytes: [u8; 8] = config_data[297..305].try_into().unwrap_or([0u8; 8]);
+            let usd_multiplier = u64::from_le_bytes(mult_bytes);
+            assert!(
+                usd_multiplier >= self.last_usd_multiplier,
+                "INV1: usd_multiplier decreased ({usd_multiplier} < {})", self.last_usd_multiplier
+            );
+            assert!(
+                usd_multiplier <= MAX_USD_MULTIPLIER,
+                "INV2: usd_multiplier exceeded MAX ({usd_multiplier} > {MAX_USD_MULTIPLIER})"
+            );
+            self.last_usd_multiplier = usd_multiplier;
+        }
     }
 }
 

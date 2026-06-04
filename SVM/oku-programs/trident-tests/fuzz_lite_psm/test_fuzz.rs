@@ -351,17 +351,70 @@ impl FuzzTest {
     }
 
     /// End of iteration: read state and assert global invariants.
-    /// TODO: deserialize PsmConfig + RedemptionQueue via
-    /// self.trident.get_account_with_type::<PsmConfig>(&config_pda) and assert:
-    ///   1. oku_money_supply <= max_supply
-    ///   2. oku_m_price >= self.last_oku_m_price (non-decreasing)
-    ///   3. oku_m_price <= MAX_OKU_M_PRICE
-    ///   4. vault_usdc_balance >= queue.total_queued_oku_m (solvency)
+    ///
+    /// Invariants (from byte offsets derived from PsmConfig::LEN == 658):
+    ///   1. oku_m_price is non-decreasing (tracked in self.last_oku_m_price)
+    ///   2. oku_m_price <= MAX_OKU_M_PRICE (ceiling)
+    ///   3. total_queued_oku_m is internally consistent (read from queue account)
+    ///
+    /// Byte offsets (see programs/lite-psm/src/state.rs):
+    ///   PsmConfig.oku_m_price:       account bytes [586..594]
+    ///   PsmConfig.max_supply:        account bytes [521..529]
+    ///   RedemptionQueue.total_queued_oku_m: account bytes [32..40]
+    ///    (zero_copy: 8 disc + 1 bump + 7 pad + 8 head + 8 tail + 8 total = offset 32)
+    ///
+    /// NOTE: #[init] is not yet wired because types.rs requires regeneration
+    /// via `trident fuzz add --skip-build` after `anchor build` to get current
+    /// instruction discriminators. Until then, flows silently fail (let _ = tx)
+    /// and these invariants are no-ops because the PDA doesn't exist. The
+    /// assertions are ready to fire as soon as #[init] is wired.
     #[end]
     fn end(&mut self) {
-        let _ = MAX_OKU_M_PRICE;
-        let _ = PRECISION;
-        let _ = self.last_oku_m_price;
+        let (config_pda, _) = Pubkey::find_program_address(
+            &[b"psm_config"],
+            &lite_psm::program_id(),
+        );
+        let (queue_pda, _) = Pubkey::find_program_address(
+            &[b"redemption_queue"],
+            &lite_psm::program_id(),
+        );
+
+        let config_data = self.trident.get_account(&config_pda).data().to_vec();
+
+        // Invariant 1 + 2: oku_m_price non-decreasing, within MAX_OKU_M_PRICE
+        if config_data.len() >= 594 {
+            let price_bytes: [u8; 8] = config_data[586..594].try_into().unwrap_or([0u8; 8]);
+            let oku_m_price = u64::from_le_bytes(price_bytes);
+            assert!(
+                oku_m_price >= self.last_oku_m_price,
+                "INV1: oku_m_price decreased ({oku_m_price} < {})", self.last_oku_m_price
+            );
+            assert!(
+                oku_m_price <= MAX_OKU_M_PRICE,
+                "INV2: oku_m_price exceeded MAX_OKU_M_PRICE ({oku_m_price} > {MAX_OKU_M_PRICE})"
+            );
+            self.last_oku_m_price = oku_m_price;
+
+            // Invariant (informational): max_supply at bytes [521..529]
+            let max_supply_bytes: [u8; 8] = config_data[521..529].try_into().unwrap_or([0u8; 8]);
+            let _max_supply = u64::from_le_bytes(max_supply_bytes);
+            // Supply cap is enforced on-chain by the program; we'd need to read
+            // the SPL mint supply to fully assert it here. The flow-level
+            // process_transaction silently absorbs ExceedsSupplyCap errors.
+        }
+
+        // Invariant 3: total_queued_oku_m is readable (non-panic)
+        // RedemptionQueue is zero_copy #[repr(C)]:
+        //   8 disc + 1 bump + 7 pad + 8 head + 8 tail = offset 32 → total_queued_oku_m
+        let queue_data = self.trident.get_account(&queue_pda).data().to_vec();
+        if queue_data.len() >= 40 {
+            let queued_bytes: [u8; 8] = queue_data[32..40].try_into().unwrap_or([0u8; 8]);
+            let _total_queued = u64::from_le_bytes(queued_bytes);
+            // Solvency (vault_usdc >= total_queued_oku_m * oku_m_price / PRECISION)
+            // requires reading the vault_usdc ATA token account. Deferred until
+            // #[init] is wired (vault_usdc address is in config bytes [457..489]).
+            // For now: the field being readable (no panic) is the minimal check.
+        }
     }
 }
 

@@ -459,3 +459,179 @@ describe("Cross-Chain Bridging via Orchestrator + PSM (noBridge)", () => {
         })
     })
 })
+
+// ===========================================================================
+// WS3.3 — Cross-chain reconciliation invariant
+//
+// The correct invariant for a yield-bearing token is NOT
+//   supply × multiplier == buffer
+// because multiplier appreciation (T-Bill yield) increases supply_dollars
+// without increasing the PSM buffer. Buffer tracks USDC deposits only.
+//
+// The correct accounting invariant for N bridges is:
+//   USDC_flow_conservation: Σ USDC_redeemed_on_sources == Σ USDC_deposited_to_dests
+//   Token_conservation:    Σ OkuM_burned_on_sources == Σ OkuM_minted_on_dests (per bridge)
+//
+// In the same-process simulation the orchestrator float is always 0
+// (both legs execute atomically), so these reduce to:
+//   For each bridge:  usdcOut_src == usdcIn_dst  (per-bridge dollar conservation)
+//   Globally:  Σ totalOkuM_bridgedOut_A + Σ totalOkuM_bridgedOut_B
+//               == Σ totalOkuM_bridgedIn_A + Σ totalOkuM_bridgedIn_B  (zero-sum)
+// ===========================================================================
+
+describe("WS3.3: cross-chain reconciliation invariant (N random bridges)", () => {
+    let admin: Signer
+    let alice: Signer
+    let bob: Signer
+    let orchestrator: Signer
+    let chainA: Chain
+    let chainB: Chain
+
+    // Running totals for USDC flow conservation
+    let cumulativeUsdcOutA = 0n  // USDC redeemed from A's buffer
+    let cumulativeUsdcInB = 0n   // USDC deposited into B's buffer
+    let cumulativeUsdcOutB = 0n
+    let cumulativeUsdcInA = 0n
+
+    const PRECISION = parseEther("1")
+
+    /** USDC in the PSM buffer (6 decimals) */
+    async function psmUsdcBalance(chain: Chain): Promise<bigint> {
+        return chain.usdc.balanceOf(await chain.psm.getAddress())
+    }
+
+    /** Assert USDC flow conservation: Σ out == Σ in across both chains */
+    function assertUsdcConservation(label: string) {
+        const totalOut = cumulativeUsdcOutA + cumulativeUsdcOutB
+        const totalIn = cumulativeUsdcInA + cumulativeUsdcInB
+        // Allow ±1 USDC unit per bridge (rounding in dollarsToUsdc floor)
+        const drift = totalOut > totalIn ? totalOut - totalIn : totalIn - totalOut
+        expect(drift).to.be.lte(
+            20n, // 1 unit per bridge × up to 20 bridges
+            `USDC flow diverged after ${label}: Σout=${totalOut} Σin=${totalIn}`
+        )
+    }
+
+    before(async () => {
+        ;[admin, alice, bob, orchestrator] = await ethers.getSigners()
+        chainA = await deployChain("A", admin)
+        chainB = await deployChain("B", admin)
+
+        const orchAddr = await orchestrator.getAddress()
+        for (const chain of [chainA, chainB]) {
+            await chain.okuMoney.connect(admin).grantRole(OKUM_MINTER, orchAddr)
+            await chain.okuMoney.connect(admin).configureMinterAllowance(orchAddr, MINTER_ALLOWANCE)
+            await chain.psm.connect(admin).grantRole(PSM_BUFFER_DEPOSITOR, orchAddr)
+        }
+    })
+
+    it("invariant holds at genesis (no bridges, zero flows)", () => {
+        assertUsdcConservation("genesis")
+    })
+
+    it("per-bridge USDC conservation holds after 10 A→B bridges", async () => {
+        await userMintsOkuMOnChain(chainA, alice, parseUnits("50000", 6))
+
+        const BRIDGE_AMOUNTS_OKUM = [
+            parseEther("100"), parseEther("250"), parseEther("500"),
+            parseEther("1000"), parseEther("50"), parseEther("750"),
+            parseEther("300"), parseEther("200"), parseEther("400"),
+            parseEther("1500"),
+        ]
+
+        const aliceAddr = await alice.getAddress()
+
+        for (const okuMAmount of BRIDGE_AMOUNTS_OKUM) {
+            const aliceBalance = await chainA.okuMoney.balanceOf(aliceAddr)
+            if (aliceBalance < okuMAmount) break
+
+            const bufABefore = await psmUsdcBalance(chainA)
+            const bufBBefore = await psmUsdcBalance(chainB)
+
+            await orchestratorBridgeOkuM({
+                src: chainA, dst: chainB,
+                orchestrator, user: alice, recipient: bob, okuMAmount
+            })
+
+            const bufAAfter = await psmUsdcBalance(chainA)
+            const bufBAfter = await psmUsdcBalance(chainB)
+
+            // USDC left A's buffer
+            const usdcOut = bufABefore - bufAAfter
+            // USDC entered B's buffer
+            const usdcIn = bufBAfter - bufBBefore
+
+            cumulativeUsdcOutA += usdcOut
+            cumulativeUsdcInB += usdcIn
+
+            // Per-bridge: out == in (modulo 1 wei rounding)
+            const drift = usdcOut > usdcIn ? usdcOut - usdcIn : usdcIn - usdcOut
+            expect(drift).to.be.lte(1n, `Bridge USDC drift: out=${usdcOut} in=${usdcIn}`)
+        }
+
+        assertUsdcConservation("10 A→B bridges")
+    })
+
+    it("per-bridge USDC conservation holds on B→A bridge (bidirectional)", async () => {
+        const bobAddr = await bob.getAddress()
+        const aliceAddr = await alice.getAddress()
+        const bobBalance = await chainB.okuMoney.balanceOf(bobAddr)
+
+        if (bobBalance >= parseEther("50")) {
+            const bufABefore = await psmUsdcBalance(chainA)
+            const bufBBefore = await psmUsdcBalance(chainB)
+
+            await orchestratorBridgeOkuM({
+                src: chainB, dst: chainA,
+                orchestrator, user: bob, recipient: alice, okuMAmount: parseEther("50")
+            })
+
+            const usdcOut = bufBBefore - (await psmUsdcBalance(chainB))
+            const usdcIn = (await psmUsdcBalance(chainA)) - bufABefore
+            cumulativeUsdcOutB += usdcOut
+            cumulativeUsdcInA += usdcIn
+
+            const drift = usdcOut > usdcIn ? usdcOut - usdcIn : usdcIn - usdcOut
+            expect(drift).to.be.lte(1n, `B→A bridge USDC drift: out=${usdcOut} in=${usdcIn}`)
+        }
+
+        assertUsdcConservation("B→A bridge")
+    })
+
+    it("USDC flow conservation holds after multiplier bump + bridge", async () => {
+        // OkuM token COUNTS are NOT conserved across a multiplier boundary — this is
+        // by design. A 100 OkuM token at 2× multiplier redeems for 200 USDC on source
+        // and the orchestrator mints 200 OkuM on the dest (at 1× multiplier), because
+        // what's conserved is DOLLAR VALUE (USDC), not token count.
+        //
+        // This test verifies that USDC flow conservation holds even after a multiplier
+        // bump: the USDC redeemed on source == the USDC deposited on destination.
+        await userMintsOkuMOnChain(chainA, alice, parseUnits("1000", 6))
+
+        const current = await chainA.okuMoney.okuMMultiplier()
+        await chainA.okuMoney.connect(admin).setOkuMMultiplier(current * 2n)
+
+        const aliceBalance = await chainA.okuMoney.balanceOf(await alice.getAddress())
+        const bridgeAmt = aliceBalance > parseEther("100") ? parseEther("100") : aliceBalance
+        if (bridgeAmt === 0n) return
+
+        const bufABefore = await psmUsdcBalance(chainA)
+        const bufBBefore = await psmUsdcBalance(chainB)
+
+        await orchestratorBridgeOkuM({
+            src: chainA, dst: chainB,
+            orchestrator, user: alice, recipient: bob, okuMAmount: bridgeAmt
+        })
+
+        const usdcOut = bufABefore - (await psmUsdcBalance(chainA))
+        const usdcIn = (await psmUsdcBalance(chainB)) - bufBBefore
+
+        // USDC flow conservation: redeemed on A == deposited on B (±1 USDC unit)
+        const drift = usdcOut > usdcIn ? usdcOut - usdcIn : usdcIn - usdcOut
+        expect(drift).to.be.lte(1n, `USDC flow drift after multiplier bump: out=${usdcOut} in=${usdcIn}`)
+
+        cumulativeUsdcOutA += usdcOut
+        cumulativeUsdcInB += usdcIn
+        assertUsdcConservation("multiplier bump + bridge")
+    })
+})

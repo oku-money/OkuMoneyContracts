@@ -339,6 +339,37 @@ contract OkuDollar is
         emit TransferValue(from, to, shares, dollarValue);
     }
 
+    // ============ ERC20Permit Override (Blacklist Check) ============
+
+    /// @notice EIP-2612 permit with blacklist enforcement.
+    /// @dev ALLOWANCE SEMANTICS NOTE: `value` is denominated in dollar terms (same units
+    ///      as `balanceOf` and `transferFrom`). Internally OkuDollar stores balances as
+    ///      shares; `transferFrom(amount)` floors the share conversion while `unwrap(amount)`
+    ///      ceils it. When `usdMultiplier > 1e18`, multiple sequential `transferFrom` calls
+    ///      against a single permit-approved allowance may under-consume shares by ~1 share
+    ///      per call due to this floor truncation. Integrators that plan batched `transferFrom`
+    ///      against a permit allowance should account for this 1-wei per-call dust.
+    ///
+    ///      Not pause-gated — approvals are allowed while paused (mirrors OkuMoney.permit).
+    function permit(
+        address owner,
+        address spender,
+        uint256 value,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    )
+        public
+        virtual
+        override
+    {
+        OkuDollarStorage storage $ = _getOkuDollarStorage();
+        if ($.isBlacklisted[owner]) revert SenderBlacklisted();
+        if ($.isBlacklisted[spender]) revert RecipientBlacklisted();
+        super.permit(owner, spender, value, deadline, v, r, s);
+    }
+
     // ============ Inherited ERC20 guard ============
 
     /// @dev OkuDollar overrides `transfer`/`transferFrom` to use share-based accounting.

@@ -10,7 +10,8 @@ abstract contract RedemptionQueueEvents {
     /// @notice Reasons why processQueue may skip an entry instead of processing it.
     enum RedemptionSkipReason {
         AlreadyCleared, // Entry was previously processed or rescued
-        InsufficientFunds // Not enough USDC to process this entry
+        InsufficientFunds, // Not enough USDC to process this entry
+        TransferFailed // USDC transfer to recipient reverted (e.g., blacklisted ATA); use rescueQueueEntry
     }
 
     /// @notice Emitted when a redemption is added to the queue

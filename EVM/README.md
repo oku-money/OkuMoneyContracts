@@ -637,7 +637,7 @@ OkuMoney records `lastYieldDistributionBlock = block.number` inside `setOkuMMult
 
 ## Role Grants Policy
 
-As of Phase 4, every contract's `initialize` grants its **full** role set to `admin`. Admin is expected to redistribute operational roles (minters, rebasers, reserve managers, refund confirmers, etc.) to other parties (multisigs, bots, bridge contracts) post-deployment. This removes contract-specific role plumbing from deployment scripts.
+Every contract's `initialize` grants its **full** role set to `admin`. Admin is expected to redistribute operational roles (minters, rebasers, reserve managers, etc.) to other parties (multisigs, bots) post-deployment via `grantRoles.ts` or `grantRolesMainnet.ts`. This removes contract-specific role plumbing from deployment scripts.
 
 One intentional exception:
 - `RedemptionQueue.QUEUE_PSM` is NOT granted at init — it is granted post-deploy to the `LitePSM` proxy address. This avoids a circular deployment dependency AND keeps admin from being able to call `enqueue` / `processQueue` directly (bypassing the PSM).
@@ -696,20 +696,24 @@ Tested by `test/hardhat/crossChain/OrchestratorPsmBridging.ts § WS3.3` and `§ 
 ## Testing
 
 ```bash
-forge test                                         # All unit + invariant tests
+forge test                                         # All unit + invariant tests (481 total)
 forge test --match-path "test/invariants/*"        # Invariant suite (256 runs × 500 depth by default)
 forge test --match-contract OkuMoneyTest -vv       # OkuMoney unit tests
 forge test --match-contract VaultInvariants        # OkuDollar backing invariants
 forge test --match-contract HandlerSanityTest      # Handler success-rate sanity checks
 
 npx hardhat compile                                # Regenerates typechain before fork tests
-npx hardhat test                                   # Fork + happyPath + crossChain tests
+npx hardhat test                                   # Fork + happyPath + crossChain + scenarios (39 total)
 npx hardhat test test/hardhat/crossChain/OrchestratorPsmBridging.ts  # Single file
+npx hardhat test test/hardhat/scenarios/RealWorldUsage.ts            # 365-day simulation + 8 edge cases
 ```
 
-The Foundry suite is the authoritative functional coverage (447 tests across 15 test suites). The Hardhat suite (24 tests across 5 test files) exists for three specific purposes only:
-1. **Fork tests** (`test/hardhat/fork/`): exercise the protocol against real mainnet / Sepolia state that Foundry can't easily reach in CI.
-2. **Happy-path integration** (`test/hardhat/happyPath/`): full deposit/yield/withdraw walk-through against the OZ upgrades plugin's real proxy machinery.
-3. **Cross-chain accounting** (`test/hardhat/crossChain/OrchestratorPsmBridging.ts`): two-PSM noBridge orchestrator-mediated transfer (added in the noBridge refactor).
+**Current counts (CI-verified):** Foundry **481** tests across 15 suites; Hardhat **39** tests across 6 files.
 
-Any non-fork functional test should be added to the Foundry suite.
+The Foundry suite is the authoritative functional coverage. The Hardhat suite exists for four specific purposes:
+1. **Fork tests** (`test/hardhat/fork/`): exercise the protocol against real mainnet / Sepolia state that Foundry can't reach in CI.
+2. **Happy-path integration** (`test/hardhat/happyPath/`): full deposit/yield/withdraw walk-through against the OZ upgrades plugin's real proxy machinery.
+3. **Cross-chain accounting** (`test/hardhat/crossChain/`): two-PSM noBridge orchestrator-mediated transfer, float-zero invariant, sequential bridge conservation.
+4. **Real-world scenario simulation** (`test/hardhat/scenarios/RealWorldUsage.ts`): 365-day stochastic simulation (seeded PRNG, 7 action categories, daily `evm_increaseTime` steps) plus 8 deterministic edge-case suites covering round-trips, queued redeems, multiplier divergence, blacklist/freeze mid-bridge, pause windows, oracle staleness, yield-lock, and cap exhaustion.
+
+Any new unit or invariant test should be added to the Foundry suite; Hardhat is reserved for fork-dependent or multi-contract scenario work.

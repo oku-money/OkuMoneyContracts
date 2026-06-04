@@ -41,7 +41,7 @@ declare_id!("3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy");
 solana_security_txt::security_txt! {
     name: "OkuMoney OkuDollar Vault",
     project_url: "https://github.com/anomalyco/okuMoney",
-    contacts: "email:security@okumoney.example",
+    contacts: "uri:https://github.com/anomalyco/okuMoney/security/advisories/new",
     policy: "https://github.com/anomalyco/okuMoney/blob/main/SECURITY.md",
     preferred_languages: "en",
     source_code: "https://github.com/anomalyco/okuMoney"

@@ -1,122 +1,161 @@
-# SVM follow-up tracker
+# Open issues tracker
 
-Items deferred from earlier review passes. Items here are scoped, not lost.
+Items that remain open after the WS1–8 pre-audit sweep (`noBridge-mvp-internal` tag).
+All WS1–8 findings have been resolved and removed. What remains is explicitly
+deferred, or blocked on external input.
 
-**Status legend:** ✅ landed, 🟡 partially landed / in progress,
-⏳ deferred to a future pass.
-
----
-
-## ⏳ Phase 4c — Closing the 200 → 500 gap (deferred follow-up to 13b)
-
-**Status:** scoped, not implemented. Phase 13b superseded the original
-Phase 4c goal: the `MAX_ENTRIES = 10` cap and the `% 10` magic are gone.
-The remaining 2.5× gap to the spec target of 500 entries is bounded by
-Solana's `MAX_PERMITTED_DATA_INCREASE = 10_240` byte cap on
-single-CPI allocations (a 500-entry queue is ~24 KB).
-
-**Options to close the gap when telemetry justifies it:**
-
-1. **Multi-step init + 2× realloc** on `setup_redemption_queue`. Initial
-   `init` allocates 10 KB, two follow-up reallocs grow the queue PDA in
-   place. Lowest disruption: keeps the existing zero-copy ring layout
-   intact, only the deploy script changes.
-2. **Per-user PDAs** (the original Phase 4c sketch). Replace the fixed
-   ring with one PDA per queued entry, seeds
-   `[b"queue_entry", &index.to_le_bytes()]`, plus a small state PDA
-   holding `head: u64, tail: u64, bump: u8`. Lifts the cap entirely;
-   each entry pays ~rent for its PDA so the orchestrator must still
-   drain promptly.
-
-**Defer until:** real workload telemetry shows operators repeatedly
-hitting the 200-entry `QueueFull` cliff. The README runbook documents
-the current 200-entry SLA + `MAX_BATCH_ENTRIES = 50` per-tx drain
-limit; the `admin:process-queue` script auto-batches across multiple
-txs so the orchestrator UX is "kick the cron, it does the rest".
+**Status legend:** 🔴 blocks mainnet · 🟡 should-fix before audit · ⚪ post-launch
 
 ---
 
-## ⏳ Smaller follow-ups still open
+## 🔴 Mainnet blockers
 
-- **Real `security@` email**: the placeholder `security@okumoney.example`
-  remains in both programs' `security_txt!` blocks. Must be replaced
-  before any external-facing deploy. Tracked in the README runbook checklist.
-- **noBridge v1 cross-chain runbook**: the off-chain orchestrator flow
-  is documented in `SVM/README.md` and `SVM/EVM_VS_SVM.md` at a high
-  level. A unified, repeatable runbook + retry/recovery script for the
-  orchestrator side is on the backlog; not blocking devnet.
+### Timelock on high-impact admin instructions
 
----
+`set_authority`, `set_oracle`, `set_pyth_program_owner`, `set_max_supply`, and
+program upgrades currently take effect immediately after a single multisig signature.
+Standard mainnet hardening for stablecoin protocols requires a `TimelockController`-
+style PDA: queue proposal → minimum delay window → execute.
 
-## ⏳ Mainnet hardening (post-MVP)
+The existing `accept_role_admin` two-step transfer is a good pattern to build on.
 
-- **Timelock on high-impact instructions.** The protocol currently has
-  no on-chain delay between proposing and executing a destructive admin
-  action (e.g. `set_authority`, `set_oracle`, `set_pyth_program_owner`,
-  `set_max_supply`, future program upgrades). A `TimelockController`-
-  style PDA (queue + minimum delay + execute window) is the standard
-  mainnet hardening for stablecoin protocols; consider before mainnet
-  launch. Pairs naturally with the `Ownable2Step` two-step `RoleAdmin`
-  transfer that already landed (see `accept_role_admin`).
-- **NOT pursuing: on-chain "no key overlap" checks.** Industry
-  convention is to enforce role separation **operationally** (multisig
-  hardware separation, runbook discipline) rather than via on-chain
-  constraints, because contracts cannot distinguish "same EOA holds
-  multiple keys" from "multiple EOAs are operated by the same human"
-  — only addresses are visible. MakerDAO, Aave, Circle USDC, and OZ
-  `AccessControl` all permit overlap and rely on procedural controls.
-  We adopt the same posture.
+**Effort:** ~1–2 weeks (design + impl + deploy ceremony + tests).
+**Not blocking internal testing or audit.** Blocking mainnet launch.
 
 ---
 
+## 🔴 Pre-external-deploy (needed before any non-internal devnet)
+
+### `security_txt!` contact — upgrade to dedicated email if available
+
+Both programs' `security_txt!` blocks currently point at:
+`uri:https://github.com/anomalyco/okuMoney/security/advisories/new`
+
+This is functional. If a dedicated `security@` email is set up before mainnet,
+replace the `contacts` field in both `programs/{lite-psm,oku-dollar}/src/lib.rs`,
+rebuild, and redeploy.
+
+**Effort:** 15 min + rebuild/redeploy. **Blocked on: team providing real email.**
+
 ---
 
-## ⏳ Post-MVP punch list (WS8.10 — items deferred from pre-audit sweep)
+## 🟡 Should-fix before external audit
 
-These are tracked here to ensure they're not forgotten post-launch.
+### `cargo clippy -D warnings`
 
-### CI / lint / fuzz
-- **`cargo fmt --check`** — not yet wired in CI (`.github/workflows/test.yml`).
-- **`cargo clippy -D warnings`** — not wired; likely some latent lint debt.
-- **`cargo deny check`** — `deny.toml` exists but CI step is missing.
-- **`cargo dylint`** (crytic/solana-lints) declared in `Cargo.toml` but no CI/Make target.
-- **Trident fuzz smoke run** — `trident fuzz run fuzz_lite_psm --max-iterations 100` should
-  run in CI once `#[init]` is wired (see `trident-tests/fuzz_lite_psm/test_fuzz.rs` TODO).
-  Blocked on completing the 3-step `#[init]` using Trident's mint helpers.
-- **`solhint`** or `forge lint` — no EVM Solidity linter enforced in CI.
-- **Coverage reports** (`forge coverage --report lcov`, `cargo llvm-cov`) — not produced or
-  uploaded (Codecov / Coveralls would surface uncovered paths).
+Not yet run systematically; likely latent lint debt across `programs/` and `crates/`.
+Once clean, add `cargo clippy -D warnings` to the `svm-cargo` CI job.
 
-### Ops scripts
-- **SVM `scripts/admin/mint-okum.ts` and `redeem-okum.ts`** — standalone operator CLIs for
-  the orchestrator's `mint_oku_m` / `redeem_oku_m` legs. Currently only available inside
-  `scripts/test/test-devnet.ts` step runner.
-- **SVM `scripts/admin/set-vault-authority.ts`** — OkuDollar role rotation (pauser, unpauser,
-  reserveManager, usdRebaser). Current `set-authority.ts` only handles PSM roles.
-- **EVM + SVM health-check scripts** — standalone monitors for oracle staleness, queue depth,
-  buffer solvency (`vault_usdc >= total_queued_oku_m × oku_m_price`), pause state, and
-  supply-vs-cap. Needed for day-1 operator dashboards.
-- **Deploy smoke test** — `deploy/index.ts` (EVM) and `deploy-init.ts` (SVM) should optionally
-  run a mint→redeem and assert balances when `SMOKE_TEST=true` or on fork networks.
+**Effort:** 1–3 days (first run + triage + fixes). Low risk — mostly style.
 
-### Test coverage
-- **Two-chain Foundry invariant harness** — a single Foundry session deploying both `chainA`
-  and `chainB` LitePSMs and randomly bridging between them (extending the existing handler-based
-  invariant suite to include a cross-chain dimension).
-- **Cross-process E2E** — forked EVM + bankrun SVM with an actual orchestrator process running
-  between them. Better suited as a nightly integration test than a unit test.
+### `cargo dylint` (crytic/solana-lints)
 
-### Documentation
-- Update EVM/README.md test table to reflect the new test counts after WS8 (481 forge → ~500+,
-  28 hardhat → 40+).
+Trail of Bits' Solana lint suite is declared in `Cargo.toml` but never invoked.
+May surface real security-relevant patterns (unchecked arithmetic, incorrect CPI
+authority handling, etc.).
+
+**Effort:** 1–2 days. **Worth running before audit.**
+
+### Trident `#[init]` wiring
+
+`trident-tests/fuzz_{lite_psm,oku_dollar}/test_fuzz.rs` have real `#[end]`
+invariants (oku_m_price monotonicity, usd_multiplier ceiling) but empty `#[init]`
+stubs. Until init populates state, the invariants are no-ops because the PDA never
+exists.
+
+Wire the 3-step init (`Initialize + setupRedemptionQueue + setupOkuMoneyEscrow`)
+using Trident's SPL mint helpers. Blocked on Trident 0.12.0's async mint-creation
+API — check `trident-fuzz::fuzzing::Trident` for `create_token_mint` / `set_account`
+patterns in the 0.12.0 release notes.
+
+**Effort:** 2–4 days. Once wired, add a CI smoke run:
+`trident fuzz run fuzz_lite_psm --max-iterations 1000`.
+
+### Health-check / monitoring scripts (both sides)
+
+Standalone scripts that exit non-zero on out-of-band conditions — needed for
+day-1 operator dashboards and alerting:
+- Oracle staleness (`updatedAt` vs `stalenessThreshold`)
+- Queue depth and age of oldest entry
+- Buffer solvency (`vault_usdc >= total_queued_oku_m × oku_m_price / 1e9`)
+- Pause state
+- Supply vs cap headroom
+- Minter allowance headroom
+
+Both EVM and SVM need this. Output JSON for Prometheus/alertmanager consumption.
+**Effort:** 2–4 days total.
+
+---
+
+## ⚪ Post-launch / low priority
+
+### SVM standalone orchestrator CLI scripts
+
+`scripts/admin/mint-okum.ts` and `scripts/admin/redeem-okum.ts` — standalone CLIs
+for the orchestrator's bridge legs. Currently only accessible inside the
+`test-devnet.ts` step runner. Mirror the EVM `scripts/interactions/mintOkuM.ts`
+pattern.
+
+`scripts/admin/set-vault-authority.ts` — OkuDollar (vault) role rotation. The
+existing `set-authority.ts` only handles PSM roles; vault roles (`pauser`,
+`unpauser`, `reserveManager`, `usdRebaser`) lack a CLI.
+
+**Effort:** 2–3 hours each.
+
+### `cargo fmt --check` / `cargo deny check` in CI
+
+Both exist in the repo but are not wired into `.github/workflows/test.yml`.
+`cargo fmt` needs one pass to clean up any drift; `deny.toml` already exists for
+`cargo deny`.
+
+**Effort:** 30 min each, after any lint cleanup.
+
+### Coverage reporting
+
+`forge coverage --report lcov` (upload to Codecov) and `cargo llvm-cov` — not
+produced or uploaded. Useful for surfacing uncovered branches before audit.
+
+**Effort:** 1 hour to wire.
+
+### Queue capacity: 200 → 500 entries
+
+The SVM redemption queue is capped at 200 entries by the Solana
+`MAX_PERMITTED_DATA_INCREASE = 10 240 bytes` single-CPI allocation limit. The
+spec target was 500. Two paths to close the gap:
+
+1. **Multi-step init + 2× realloc** — initial `setup_redemption_queue` allocates
+   10 KB, two follow-up `realloc` calls grow the PDA. Keeps the zero-copy ring
+   intact; only deploy script changes.
+2. **Per-user PDAs** — one PDA per queued entry; lifts the cap entirely.
+
+**Defer until:** telemetry shows operators repeatedly hitting `QueueFull`.
+The 200-entry ring + `MAX_BATCH_ENTRIES = 50` per-tx drain + auto-batching
+`process-queue.ts` script is sufficient for launch.
+
+### Two-chain Foundry invariant harness
+
+Extend the existing `LitePSMHandler` / `OkuDollarHandler` stateful-fuzz harness
+to model a second simultaneous `chainB` LitePSM and randomly bridge between them.
+Surfaces cross-chain accounting bugs that scripted scenarios miss. Expand warp
+range from the current 30-day cap to multi-year.
+
+**Effort:** 1–2 weeks. High property-coverage upside; better as a follow-on audit
+preparation than an internal testing requirement.
+
+### Cross-process E2E test
+
+Forked EVM (anvil) + bankrun SVM + actual orchestrator process running between them.
+Better suited as nightly CI than per-PR. High setup cost.
+
+**Effort:** 2–3 weeks. Post-launch.
+
+---
 
 ## 📚 References
 
-- `SVM/EVM_VS_SVM.md` — full divergence catalogue, refreshed in P8.7.
-- `SVM/README.md` — Runbook section (P8.8) + refreshed Testing section
-  (P9.6).
-- `tests/shared/bankrun.ts` — bankrun harness (single source of truth
-  for the in-process test runner).
+- `docs/orchestrator-runbook.md` — preflight checklist, failure recovery, minterAllowance rotation, monitoring SLAs.
+- `SVM/EVM_VS_SVM.md` — full EVM↔SVM divergence catalogue.
+- `SVM/README.md` — deployment runbook, testing guide, RBAC diagram.
+- `TESTNET_DEPLOYMENT.md` — initial parameters, mainnet RBAC ceremony, SVM upgrade-authority ceremony.
+- `tests/shared/bankrun.ts` — bankrun harness (single source of truth for in-process tests).
 - `tests/shared/setup.ts` — runner-agnostic PSM bootstrap.
-- `scripts/lib/account-sizes.ts` — single source of truth for the
-  TS-side mirror of Rust `state.rs::T::LEN` constants.

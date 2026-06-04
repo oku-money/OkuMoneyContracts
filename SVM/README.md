@@ -181,7 +181,7 @@ Zero-copy ring buffer (200 entries max — `MAX_ENTRIES`). Each entry:
 Total account size 9 640 bytes; rent ~0.067 SOL one-time at deploy.
 Cap of 200 (vs the EVM spec target of 500) is bounded by Solana's
 10 KB single-CPI allocation budget — see `EVM_VS_SVM.md` and
-Phase 13b in `TRACKER.md`. Strict FIFO is preserved via the
+the queue capacity section in `TRACKER.md`. Strict FIFO is preserved via the
 `head`/`tail` `u64` absolute indices.
 
 ## Core Operations
@@ -209,7 +209,7 @@ pub fn mint_oku_m(usdc_amount: u64)
 pub fn redeem_oku_m(oku_m_amount: u64)  // instant or queued
 
 pub fn process_queue(max_entries: u32)   // price cached once per batch; hard-capped at MAX_BATCH_ENTRIES=50
-pub fn rescue_queue_entry(queue_index: u64)  // return OkuM for stuck entries (u64 since Phase 13b)
+pub fn rescue_queue_entry(queue_index: u64)  // return OkuM for stuck entries; queue_index is absolute u64
 ```
 
 All protected by yield distribution lock.
@@ -370,7 +370,7 @@ Quick summary:
 | Convenience functions | On LitePSM | Composed off-chain by the SDK (no router program) |
 | Wallet price display | Frontends read `okuMMultiplier()` view | Frontends read `PsmConfig.oku_m_price` from the config PDA |
 | Cross-chain transfers (v1) | Off-chain orchestrator + PSM mint/burn | Off-chain orchestrator + PSM mint/burn |
-| Queue size | Unbounded (mapping) | Fixed `[QueueEntry; 200]` zero-copy ring (Phase 13b; capped by Solana's 10 KB single-CPI alloc budget) |
+| Queue size | Unbounded (mapping) | Fixed `[QueueEntry; 200]` zero-copy ring (capped by Solana's 10 KB single-CPI alloc budget; see TRACKER.md for 200→500 upgrade path) |
 
 ## Error Codes
 
@@ -386,10 +386,8 @@ Full list in `programs/lite-psm/src/errors.rs` and `programs/oku-dollar/src/erro
 ## Testing
 
 ```bash
-# Unit suite — bankrun in-process runner, ~5 seconds.
+# Full bankrun suite — 119 tests, ~14 seconds in-process.
 npm test
-# or equivalently:
-anchor test
 # or directly:
 npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'
 
@@ -399,6 +397,7 @@ npx mocha --require tsx --timeout 60000 'tests/bankrun/oku-dollar.ts'
 npx mocha --require tsx --timeout 60000 'tests/bankrun/pyth-oracle.ts'
 npx mocha --require tsx --timeout 60000 'tests/bankrun/rate-over-time.ts'
 npx mocha --require tsx --timeout 60000 'tests/bankrun/crossChainBridging.ts'
+npx mocha --require tsx --timeout 120000 'tests/bankrun/scenarios/realWorldUsage.ts'  # 60-day sim
 
 # Fork tests — exercises real mainnet Pyth state via Surfpool.
 #   1. Start Surfpool: npm run surfpool:mainnet
@@ -474,10 +473,10 @@ external-facing deployment.
 
 ### Pre-mainnet checklist
 
-- [ ] Real `security@` email in both programs' `security_txt!` blocks.
-      The current values (`programs/{lite-psm,oku-dollar}/src/lib.rs`)
-      are placeholders (`security@okumoney.example`); replace before
-      mainnet deploy.
+- [ ] Verify `security_txt!` contact in both programs. Currently points
+      at the GitHub security advisory URL; replace with a dedicated
+      `email:security@<domain>` if one exists before mainnet deploy.
+      (`programs/{lite-psm,oku-dollar}/src/lib.rs`)
 - [ ] `MAINNET_ORCHESTRATOR` env var (used by the v1 noBridge cross-chain
       flow) points at a KMS-backed signer, not the deployer wallet.
 - [ ] BPF loader upgrade authority transferred to the cold multisig:
@@ -488,8 +487,8 @@ external-facing deployment.
 - [ ] Pyth feed configured (`scripts/admin/set-oracle.ts --oracle=<feed>
       --staleness=300`). The feed MUST publish reserves in OkuMoney base
       units (6 decimals) with `expo == 0` and `agg.status == Trading`.
-      Phase 8.0 corrected the parser; the modern Pyth Solana Receiver
-      layout is NOT supported.
+      The legacy Pyth V2 `SolanaPriceAccount` layout is required; the
+      modern Pyth Solana Receiver (`PriceUpdateV2`) is NOT supported.
 - [ ] Anchor.toml `[programs.<network>]` matches the freshly-deployed
       keypair IDs (printed at the end of `deploy:programs`). Devnet
       and localnet sections are kept SEPARATE on purpose — preserves
@@ -508,8 +507,8 @@ separate signing scheme — kept out of the v1 deployment.
 
 ### Queue capacity SLA
 
-The `RedemptionQueue` is a fixed 200-entry zero-copy ring buffer
-(Phase 13b raised the cap from 10 → 200). Operations discipline:
+The `RedemptionQueue` is a fixed 200-entry zero-copy ring buffer.
+Operations discipline:
 
 - Keep `vault_usdc.amount` topped up so `redeem_oku_m` falls into the
   instant path (buffer >= queued obligations + new redemption).
@@ -531,10 +530,9 @@ The `RedemptionQueue` is a fixed 200-entry zero-copy ring buffer
   wrapper. Pass `--max=<N>` to cap how many entries a single invocation
   drains (defaults to drain-to-empty).
 
-A future redesign (deferred Phase 13b followup) could lift the cap from
-200 → 500 via a multi-step `init + 2× realloc` deploy flow OR migrate
-the ring to per-user PDAs. Telemetry-gated: defer until the 200-entry
-SLA is shown to be a real production constraint.
+A future redesign could lift the cap from 200 → 500 via a multi-step
+`init + 2× realloc` deploy flow OR per-user PDAs. See TRACKER.md.
+Defer until telemetry shows the 200-entry cap is a real production constraint.
 
 ### Pyth feed requirements
 
@@ -547,8 +545,7 @@ expects the legacy Pyth V2 `SolanaPriceAccount` layout. The feed must:
 2. Have the canonical Pyth header: `magic == 0xa1b2c3d4`, `ver == 2`,
    `atype == 3` (Price). The parser rejects non-canonical headers.
 3. Have `agg.status == Trading` (1). Halted, Auction, Unknown, and
-   Ignored states are rejected. The byte-width is u8 (Phase 8.0 fixed
-   a regression that read it as u32).
+   Ignored states are rejected. The byte-width is `u8`.
 4. Have `expo == 0`. The price is interpreted directly as a raw
    token-count of reserves with no scaling. A custom feed publishing
    reserves in OkuMoney base units (6 decimals) is the expected
@@ -594,5 +591,4 @@ All admin scripts live under `scripts/admin/`. Each:
 
 ### Smaller follow-ups
 
-See [`SVM/TRACKER.md`](./TRACKER.md) for items deferred from the Phase 7
-and Phase 8 review passes.
+See [`SVM/TRACKER.md`](./TRACKER.md) for all open and deferred items.

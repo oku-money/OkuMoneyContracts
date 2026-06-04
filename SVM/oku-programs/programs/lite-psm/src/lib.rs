@@ -55,7 +55,7 @@ declare_id!("3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N");
 solana_security_txt::security_txt! {
     name: "OkuMoney Lite-PSM",
     project_url: "https://github.com/anomalyco/okuMoney",
-    contacts: "email:security@okumoney.example",
+    contacts: "uri:https://github.com/anomalyco/okuMoney/security/advisories/new",
     policy: "https://github.com/anomalyco/okuMoney/blob/main/SECURITY.md",
     preferred_languages: "en",
     source_code: "https://github.com/anomalyco/okuMoney"

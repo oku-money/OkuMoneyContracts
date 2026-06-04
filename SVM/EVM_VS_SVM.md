@@ -152,7 +152,7 @@ deposit, à la Uniswap V2. The EVM side relies on the OZ ERC4626
 | Aspect | EVM | SVM |
 |---|---|---|
 | Storage | unbounded `mapping(uint256 → RedemptionEntry)` | fixed `[QueueEntry; 200]` zero-copy ring buffer |
-| Cap | none | 200 (raised from 10 in Phase 13b; capped by Solana's 10 KB single-CPI alloc budget) |
+| Cap | none | 200 (capped by Solana's 10 KB single-CPI alloc budget; see TRACKER.md for 200→500 upgrade path) |
 | Strict FIFO | yes (via `head`/`tail`) | yes (via `head`/`tail` u64 absolute indices) |
 | Batch limit | none | `MAX_BATCH_ENTRIES = 50` per `process_queue` tx (CU budget) |
 

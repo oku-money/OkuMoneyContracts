@@ -347,7 +347,7 @@ The following parameters are baked into the deploy scripts for testnet. Producti
 | Parameter | Value | Notes |
 |---|---|---|
 | `maxSupply` | 1,000,000,000 OkuM (1e27 raw) | 1B token cap |
-| `minterAllowance` | 1,000,000,000 OkuM | Matches maxSupply (effectively uncapped on testnet) |
+| `minterAllowance` | 1,000,000,000 OkuM | Matches maxSupply (effectively uncapped on testnet). **Production:** set well below maxSupply (e.g. 1% of weekly bridging volume); see `docs/orchestrator-runbook.md § Minter Allowance Rotation Policy`. |
 | `psmStalenessThreshold` | 3,600 s | 1-hour Chainlink PoR staleness window |
 | `minCollateralRatio` | 100% (1e18) | Full backing required at deploy; can be lowered post-deploy |
 
@@ -356,7 +356,7 @@ The following parameters are baked into the deploy scripts for testnet. Producti
 | Parameter | Value | Notes |
 |---|---|---|
 | `MAX_SUPPLY` | 1,000,000,000 OkuM (6 decimals = 1e15 raw) | 1B token cap |
-| `MINTER_ALLOWANCE` | 1,000,000,000 OkuM | Matches EVM (aligned in WS5.7) |
+| `MINTER_ALLOWANCE` | 1,000,000,000 OkuM | Matches EVM (aligned in WS5.7). **Production:** rotate weekly via `set-minter-allowance.ts`. |
 | `ORACLE_STALENESS_THRESHOLD` | 3,600 s | 1-hour Pyth staleness window (aligned in WS5.7) |
 | `minCollateralRatio` | 100% (1e9) | Full backing; can be lowered post-deploy |
 

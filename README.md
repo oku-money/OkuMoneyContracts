@@ -117,6 +117,24 @@ are orchestrated off-chain through PSM mint/burn on each chain:
 LitePSM (EVM) / lite-psm (SVM) holds the OkuMoney mint authority on every
 chain — it is the sole user-facing mint/burn surface in v1.
 
+**`mintOkuM` is permissionless.** Any address with USDC can call it; the
+orchestrator does NOT hold `OKUM_MINTER`. Orchestrator key compromise grants
+no special mint privilege beyond the orchestrator's USDC custody.
+
+**Cross-chain USDC flow conservation invariant:**
+
+```
+|USDC_redeemed_A - USDC_minted_B| ≤ 1 USDC-unit per bridge
+Cumulative drift across N bridges ≤ N USDC-units
+```
+
+Tested by `EVM/test/hardhat/crossChain/OrchestratorPsmBridging.ts § WS3.3` and
+`SVM/oku-programs/tests/bankrun/crossChainBridging.ts`.
+
+See [`docs/orchestrator-runbook.md`](docs/orchestrator-runbook.md) for
+operational procedures (preflight checklist, failure recovery, multiplier
+sequencing, minterAllowance rotation policy, and monitoring SLAs).
+
 OkuBridge (proprietary burn-and-mint) and third-party rails (NTT, CCIP)
 are planned post-launch and will be introduced as additive components:
 

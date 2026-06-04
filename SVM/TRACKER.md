@@ -69,6 +69,47 @@ txs so the orchestrator UX is "kick the cron, it does the rest".
 
 ---
 
+---
+
+## ⏳ Post-MVP punch list (WS8.10 — items deferred from pre-audit sweep)
+
+These are tracked here to ensure they're not forgotten post-launch.
+
+### CI / lint / fuzz
+- **`cargo fmt --check`** — not yet wired in CI (`.github/workflows/test.yml`).
+- **`cargo clippy -D warnings`** — not wired; likely some latent lint debt.
+- **`cargo deny check`** — `deny.toml` exists but CI step is missing.
+- **`cargo dylint`** (crytic/solana-lints) declared in `Cargo.toml` but no CI/Make target.
+- **Trident fuzz smoke run** — `trident fuzz run fuzz_lite_psm --max-iterations 100` should
+  run in CI once `#[init]` is wired (see `trident-tests/fuzz_lite_psm/test_fuzz.rs` TODO).
+  Blocked on completing the 3-step `#[init]` using Trident's mint helpers.
+- **`solhint`** or `forge lint` — no EVM Solidity linter enforced in CI.
+- **Coverage reports** (`forge coverage --report lcov`, `cargo llvm-cov`) — not produced or
+  uploaded (Codecov / Coveralls would surface uncovered paths).
+
+### Ops scripts
+- **SVM `scripts/admin/mint-okum.ts` and `redeem-okum.ts`** — standalone operator CLIs for
+  the orchestrator's `mint_oku_m` / `redeem_oku_m` legs. Currently only available inside
+  `scripts/test/test-devnet.ts` step runner.
+- **SVM `scripts/admin/set-vault-authority.ts`** — OkuDollar role rotation (pauser, unpauser,
+  reserveManager, usdRebaser). Current `set-authority.ts` only handles PSM roles.
+- **EVM + SVM health-check scripts** — standalone monitors for oracle staleness, queue depth,
+  buffer solvency (`vault_usdc >= total_queued_oku_m × oku_m_price`), pause state, and
+  supply-vs-cap. Needed for day-1 operator dashboards.
+- **Deploy smoke test** — `deploy/index.ts` (EVM) and `deploy-init.ts` (SVM) should optionally
+  run a mint→redeem and assert balances when `SMOKE_TEST=true` or on fork networks.
+
+### Test coverage
+- **Two-chain Foundry invariant harness** — a single Foundry session deploying both `chainA`
+  and `chainB` LitePSMs and randomly bridging between them (extending the existing handler-based
+  invariant suite to include a cross-chain dimension).
+- **Cross-process E2E** — forked EVM + bankrun SVM with an actual orchestrator process running
+  between them. Better suited as a nightly integration test than a unit test.
+
+### Documentation
+- Update EVM/README.md test table to reflect the new test counts after WS8 (481 forge → ~500+,
+  28 hardhat → 40+).
+
 ## 📚 References
 
 - `SVM/EVM_VS_SVM.md` — full divergence catalogue, refreshed in P8.7.

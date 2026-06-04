@@ -15,7 +15,7 @@ EVM/crytic-export/
 /broadcast/**/dry-run/
 
 # Docs
-docs/
+# docs/ intentionally tracked — runbooks and protocol documentation live here
 
 # Dotenv file
 .env

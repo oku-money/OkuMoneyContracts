@@ -677,6 +677,14 @@ redemptionQueue.totalQueuedOkuM == okuMoney.balanceOf(queue)    // Queue backed 
 psmUsdcOutflow <= seededBuffer + trackedDeposits + tolerance    // USDC outflow bounded by inflow
 ```
 
+**Cross-chain USDC flow conservation (noBridge)**
+```
+|USDC_redeemed_A - USDC_minted_B| ≤ 1 USDC-unit per bridge
+Σ USDC_out_source_chains == Σ USDC_in_dest_chains (within O(N) wei over N bridges)
+orchestratorOkuMFloat == 0 between completed bridge batches
+```
+Tested by `test/hardhat/crossChain/OrchestratorPsmBridging.ts § WS3.3` and `§ WS8.6`.
+
 > Bridge invariants (nonce monotonicity, processed/refunded set disjointness,
 > fee-accounting equality, value conservation) were verified by the Foundry
 > invariant suite while `OkuBridge` was deployed; they were removed in the

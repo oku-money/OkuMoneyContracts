@@ -246,6 +246,23 @@ off-chain. If a future on-chain bridge is needed (NTT, CCIP, native
 OkuBridge port), it ships as a *new* program that's granted `OKUM_MINTER`
 authority via PSM — additive, not a `lite-psm` upgrade.
 
+**`mint_oku_m` is fully permissionless.** Any USDC holder can call it; the
+orchestrator does NOT hold a privileged mint authority. The PSM config PDA
+is the OkuMoney mint authority and signs the inner `mint_to` CPI.
+Orchestrator key compromise does not grant mint privilege beyond the
+orchestrator's USDC custody. This property is load-bearing; the bankrun test
+`crossChainBridging.ts § 'a random key can call mint_oku_m'` asserts it.
+
+**Cross-chain USDC flow conservation invariant (per bridge):**
+
+```
+|usdc_out_A - usdc_in_B| ≤ 1 micro-USDC per bridge
+```
+
+See [`docs/orchestrator-runbook.md`](../docs/orchestrator-runbook.md) for
+operational procedures (preflight, failure recovery, multiplier sequencing,
+minterAllowance rotation, monitoring SLAs).
+
 ## Precision Model
 
 ```rust

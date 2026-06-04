@@ -26,9 +26,14 @@ pub struct MintOkuM<'info> {
 
     /// OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy
     /// script chooses which extensions (if any) are configured at mint creation.
+    /// `mint::authority = config` is defense-in-depth: even if someone attempted
+    /// an out-of-band mint-authority rotation (which requires a CPI signed by
+    /// the current authority = config PDA, so it cannot happen without the
+    /// program's consent), this constraint would catch it at deserialization.
     #[account(
         mut,
         address = config.oku_money_mint,
+        mint::authority = config,
         mint::token_program = token_2022_program
     )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
@@ -97,11 +102,12 @@ pub struct RedeemOkuM<'info> {
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Box<Account<'info, Mint>>,
 
-    /// OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy
-    /// script chooses which extensions (if any) are configured at mint creation.
+    /// OkuMoney mint (Token-2022). `mint::authority = config` is defense-in-depth
+    /// (see rationale on `MintOkuM::oku_money_mint`).
     #[account(
         mut,
         address = config.oku_money_mint,
+        mint::authority = config,
         mint::token_program = token_2022_program
     )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
@@ -174,10 +180,13 @@ pub struct ProcessQueue<'info> {
     )]
     pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
 
-    /// OkuMoney mint (Token-2022) - needed for burn CPI and price reads
+    /// OkuMoney mint (Token-2022) — needed for burn CPI and price reads.
+    /// `mint::authority = config` is defense-in-depth (see rationale on
+    /// `MintOkuM::oku_money_mint`).
     #[account(
         mut,
         address = config.oku_money_mint,
+        mint::authority = config,
         mint::token_program = token_2022_program
     )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,

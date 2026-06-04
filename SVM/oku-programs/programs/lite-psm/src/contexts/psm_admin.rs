@@ -49,7 +49,7 @@ pub struct CapManager<'info> {
 
     /// OkuMoney mint — read so `set_max_supply` can refuse a new cap below
     /// the current circulating supply (would silently brick all future
-    /// mints, including bridge mints). EVM `OkuMoney.setMaxSupply` parity.
+    /// mints). EVM `OkuMoney.setMaxSupply` parity.
     #[account(
         address = config.oku_money_mint,
         mint::token_program = token_2022_program,

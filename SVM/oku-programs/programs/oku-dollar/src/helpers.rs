@@ -58,6 +58,11 @@ pub fn oku_money_to_usd(oku_m_amount: u64, oku_m_price: u64) -> Result<u64> {
 /// Formula: `oku_m_amount = (usd_value * PRECISION) / oku_m_price`.
 /// Rejects `oku_m_price == 0` with `InvalidPrice` (vault-side semantic);
 /// pure overflow propagates as `Overflow`.
+///
+/// # MVP note
+/// Currently unused by any instruction handler — kept for parity with EVM
+/// `OkuDollar.dollarsToOkuM()` and for off-chain/test consumers that call
+/// it directly. Will be plumbed into a future `withdraw_surplus` instruction.
 pub fn usd_to_oku_money(usd_value: u64, oku_m_price: u64) -> Result<u64> {
     require!(oku_m_price > 0, OkuDollarError::InvalidPrice);
     shared::dollars_to_oku_m(usd_value, oku_m_price).ok_or_else(|| error!(OkuDollarError::Overflow))
@@ -168,6 +173,11 @@ pub fn calculate_collateral_ratio(
 ///
 /// Returns 0 if undercollateralized (no surplus). Mirrors EVM
 /// `OkuDollar.surplus()` and `getExtractableSurplus()`.
+///
+/// # MVP note
+/// Currently unused by any instruction handler — kept for parity with EVM
+/// `OkuDollar.surplus()`. Will be plumbed into a future `withdraw_surplus`
+/// instruction (not yet implemented on SVM).
 pub fn calculate_surplus(
     reserve_balance: u64,
     total_usd_oku_supply: u64,

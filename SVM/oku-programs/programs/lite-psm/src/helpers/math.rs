@@ -33,6 +33,12 @@ pub fn dollars_to_oku_m(dollar_value: u64, oku_m_price: u64) -> Result<u64> {
 /// Calculate a basis-points fee on `amount`.
 ///
 /// Formula: `fee = (amount * fee_bps) / BASIS_POINTS`.
+///
+/// # MVP note
+/// Currently unused by any instruction handler — LitePSM has no fee parameter
+/// in v1. Kept for parity with EVM `LitePSM.fee` seam and for future use when
+/// a PSM fee is introduced. Remove the `#[allow(dead_code)]` marker when wired.
+#[allow(dead_code)]
 pub fn calculate_fee(amount: u64, fee_bps: u16) -> Result<u64> {
     shared::calculate_fee(amount, fee_bps).ok_or_else(|| error!(LitePsmError::Overflow))
 }

@@ -19,7 +19,7 @@ use crate::helpers::{check_oracle_reserves, check_yield_lock, dollars_to_oku_m, 
 use crate::state::{PsmConfig, QueueEntry, RedemptionQueue};
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
-use anchor_spl::token::spl_token::state::Account as SplTokenAccount;
+use anchor_spl::token::spl_token::state::{Account as SplTokenAccount, AccountState};
 use anchor_spl::token_interface;
 // NOTE: We deliberately do NOT import `sol_remaining_compute_units` here.
 //
@@ -193,6 +193,16 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
     // Mirrors the EVM `OutputBelowMinimum` revert.
     require!(usdc_amount > 0, LitePsmError::OutputBelowMinimum);
 
+    // Pre-check user balance to surface a custom error instead of the
+    // opaque SPL insufficient-balance error. EVM parity: OkuMoney.burn's
+    // internal check emits ERC-20 InsufficientBalance; SVM wraps the
+    // equivalent as LitePsmError::InsufficientBuffer (the closest semantic
+    // equivalent for a redemption that cannot proceed).
+    {
+        let user_balance = ctx.accounts.user_oku_money_ata.amount;
+        require!(user_balance >= oku_m_amount, LitePsmError::InsufficientBuffer);
+    }
+
     // Check if buffer is sufficient for instant redemption
     if vault_usdc_balance >= usdc_amount {
         // Instant redemption path:
@@ -317,8 +327,11 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
 /// Uses current oku_m_price for all entries in the batch (cached once).
 /// Recipient USDC ATAs must be passed in remaining_accounts in queue order.
 ///
-/// NOTE: Deliberately allowed during pause — users must be able to receive
-/// queued redemptions even when the PSM is paused for everyone else.
+/// NOTE: Gated on `!is_paused` (mirrors EVM `LitePSM.processQueue`'s
+/// `whenNotPaused`). Pausing the PSM halts queue drain on both sides for
+/// symmetry with EVM. If in-flight obligations must be honored during a
+/// pause, the operator should use `rescue_queue_entry` to return OkuM to
+/// users and unpause before restarting the drain.
 ///
 /// NOTE (Phase 10): Deliberately does NOT call `check_yield_lock`. This
 /// matches EVM `RedemptionQueue.processQueue`'s lack of the
@@ -360,6 +373,9 @@ pub fn process_queue<'info>(
     ctx: Context<'info, ProcessQueue<'info>>,
     max_entries: u32,
 ) -> Result<()> {
+    // Pause gate — mirrors EVM `LitePSM.processQueue`'s `whenNotPaused`.
+    require!(!ctx.accounts.config.is_paused, LitePsmError::Paused);
+
     let bump = ctx.accounts.config.bump;
 
     // Hard-cap the batch size. See `MAX_BATCH_ENTRIES` above for rationale.
@@ -461,16 +477,40 @@ pub fn process_queue<'info>(
         let recipient_usdc_ata = &ctx.remaining_accounts[recipient_account_idx];
 
         // Verify the account belongs to the queued user AND holds the
-        // configured USDC mint. SPL Token account data unpack is read-only.
+        // configured USDC mint AND is not frozen. SPL Token account data
+        // unpack is read-only.
+        //
+        // If validation fails (wrong owner/mint OR frozen ATA), we soft-skip:
+        // emit RedemptionSkippedEvent and break (not revert). This prevents a
+        // single USDC-blacklisted/frozen recipient from reverting the whole
+        // batch. The entry stays at head — it will be skipped on every future
+        // process_queue call until an operator calls `rescue_queue_entry` to
+        // return OkuM to the user and clear the slot.
+        //
+        // SVM FIFO semantics: because the queue processes from head forward,
+        // a stuck head entry blocks all subsequent entries in the same batch.
+        // This differs from the EVM implementation which supports random-access
+        // [startIndex, endIndex] ranges. Use `rescue_queue_entry` before
+        // calling `process_queue` to unblock a frozen-ATA head entry.
         {
-            let account_data = recipient_usdc_ata.try_borrow_data()?;
-            let parsed = SplTokenAccount::unpack(&account_data)
-                .map_err(|_| LitePsmError::RecipientMismatch)?;
-            require!(parsed.owner == entry_user, LitePsmError::RecipientMismatch);
-            require!(
-                parsed.mint == configured_usdc_mint,
-                LitePsmError::RecipientMismatch
-            );
+            let ata_ok = match recipient_usdc_ata.try_borrow_data() {
+                Ok(account_data) => match SplTokenAccount::unpack(&account_data) {
+                    Ok(parsed) => {
+                        parsed.owner == entry_user
+                            && parsed.mint == configured_usdc_mint
+                            && parsed.state != AccountState::Frozen
+                    }
+                    Err(_) => false,
+                },
+                Err(_) => false,
+            };
+            if !ata_ok {
+                // Soft-skip: leave entry at head for rescue_queue_entry.
+                emit!(RedemptionSkippedEvent {
+                    queue_index: head_now,
+                });
+                break 'batch;
+            }
         }
 
         // Burn OkuMoney from escrow vault. No queue borrow held.
@@ -583,7 +623,13 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
 ///
 /// Used to reclaim excess buffer after redemptions processed.
 /// Protects queued redemptions: cannot withdraw if it would strand queued entries.
+/// Gated on the yield-distribution lock for symmetry with `wrap`/`unwrap` on the
+/// OkuDollar side and `withdrawSurplus` on the EVM side — a same-slot `distribute_yield`
+/// or `set_oku_m_price` changes `oku_m_price`, which is read inside the reserved-USDC
+/// calculation below. Defense-in-depth: the window is tiny and `buffer_withdrawer`
+/// is already permissioned, but the lock makes the invariant explicit.
 pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> {
+    check_yield_lock(&ctx.accounts.config)?;
     require!(amount > 0, LitePsmError::ZeroAmount);
 
     // Protect queued redemptions: sum pending entries' price-adjusted amounts

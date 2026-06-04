@@ -32,6 +32,18 @@ contract MockAggregatorV3 {
         _timestamp = block.timestamp - 2 hours;
     }
 
+    /// @notice Simulate an unwritten round (updatedAt == 0)
+    function setUpdatedAtZero() external {
+        _timestamp = 0;
+    }
+
+    /// @notice Simulate a zero answer (invalid — now caught by `answer <= 0`)
+    function setZeroAnswer() external {
+        _answer = 0;
+        _timestamp = block.timestamp;
+        _answeredInRound = _roundId;
+    }
+
     /// @notice Simulate an incomplete round (answeredInRound < roundId)
     function setRoundIncomplete() external {
         _roundId = 2;

@@ -517,6 +517,9 @@ contract OkuDollarFuzzTest is BaseTest {
         // okuMMultiplier increase → vault's reserve dollar value grows → surplus created
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(newNotePrice);
+        // Roll forward one block so the yield-distribution lock (WS1.3 whenYieldNotDistributing
+        // on withdrawSurplus) clears before we attempt the withdrawal.
+        vm.roll(block.number + 1);
 
         uint256 surplusVal = okuDollar.surplus();
         assertGt(surplusVal, 0, "Should have surplus after note price increase");

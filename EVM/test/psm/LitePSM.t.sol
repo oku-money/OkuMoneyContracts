@@ -4,10 +4,14 @@ pragma solidity ^0.8.28;
 import {BaseTest} from "../Base.t.sol";
 import {Errors} from "../../src/lib/Errors.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
+import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
+import {OkuMoney} from "../../src/token/OkuMoney.sol";
+import {Deploy} from "../shared/Deploy.sol";
 import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {MathLib} from "../../src/lib/MathLib.sol";
@@ -1717,5 +1721,260 @@ contract LitePSMTest is BaseTest {
         litePsm.mintOkuM(100e6);
 
         assertGt(okuMoney.balanceOf(user1), 0);
+    }
+
+    // ============ WS3 Additional Tests ============
+
+    // ---- WS3.1.b: revokeRole / renounceRole cycle tests ----
+
+    function test_RevokeRole_OkumMinterRevokesFromPsm() public {
+        assertTrue(okuMoney.hasRole(OKUM_MINTER, address(litePsm)));
+        vm.prank(admin);
+        okuMoney.revokeRole(OKUM_MINTER, address(litePsm));
+        assertFalse(okuMoney.hasRole(OKUM_MINTER, address(litePsm)));
+
+        // PSM can no longer mint
+        _mintUsdc(user1, 100e6);
+        _approveUsdc(user1, address(litePsm), 100e6);
+        vm.prank(user1);
+        vm.expectRevert();
+        litePsm.mintOkuM(100e6);
+    }
+
+    function test_RevokeRole_PsmQueueProcessorRevokesQueueDrain() public {
+        assertTrue(litePsm.hasRole(PSM_QUEUE_PROCESSOR, queueProcessor));
+        vm.prank(admin);
+        litePsm.revokeRole(PSM_QUEUE_PROCESSOR, queueProcessor);
+        assertFalse(litePsm.hasRole(PSM_QUEUE_PROCESSOR, queueProcessor));
+
+        // queueProcessor can no longer drain
+        vm.expectRevert();
+        vm.prank(queueProcessor);
+        litePsm.processQueue(0, 0, 0);
+    }
+
+    function test_RenounceRole_OkumMinterRenounced() public {
+        vm.prank(address(litePsm));
+        okuMoney.renounceRole(OKUM_MINTER, address(litePsm));
+        assertFalse(okuMoney.hasRole(OKUM_MINTER, address(litePsm)));
+    }
+
+    // ---- WS3.1.c: reinit guard on LitePSM and RedemptionQueue ----
+
+    function test_LitePSM_Initialize_CannotReinitialize() public {
+        vm.expectRevert();
+        litePsm.initialize(
+            address(okuMoney),
+            address(okuDollar),
+            address(usdc),
+            address(redemptionQueue),
+            admin,
+            1 hours
+        );
+    }
+
+    function test_RedemptionQueue_Initialize_CannotReinitialize() public {
+        vm.expectRevert();
+        redemptionQueue.initialize(address(okuMoney), address(usdc), admin);
+    }
+
+    // ---- WS3.1.e: pause-during-queue-drain ----
+
+    function test_Pause_BlocksProcessQueue() public {
+        // Drain buffer so a redeem will queue
+        vm.prank(bufferWithdrawer);
+        litePsm.withdrawUsdc(bufferWithdrawer, 5000e6);
+
+        _mintOkuMoney(user1, 100e18);
+        _approveOkuMoney(user1, address(litePsm), 100e18);
+        vm.prank(user1);
+        litePsm.redeemOkuM(100e18); // buffer is 0 → queues
+
+        // Refill buffer
+        _mintUsdc(bufferDepositor, 200e6);
+        vm.prank(bufferDepositor);
+        usdc.approve(address(litePsm), 200e6);
+        vm.prank(bufferDepositor);
+        litePsm.depositBuffer(200e6);
+
+        // Pause the PSM
+        vm.prank(pauser);
+        litePsm.pause();
+
+        // processQueue should revert while paused
+        vm.expectRevert();
+        vm.prank(queueProcessor);
+        litePsm.processQueue(0, 1, 200e6);
+    }
+
+    // ---- WS3.1.g: multi-decimal USDC mock ----
+
+    function test_MultiDecimal_8DecimalUsdcPsmInit() public {
+        // Deploy an 8-decimal "USDC" mock
+        MockUSDC8Dec usdc8 = new MockUSDC8Dec();
+
+        // Deploy a fresh PSM against it
+        (LitePSM psm8,) = Deploy.deployLitePSM(
+            address(okuMoney), address(okuDollar), address(usdc8), address(redemptionQueue), admin
+        );
+
+        // decimalMultiplier should be 10^(18-8) = 1e10
+        assertEq(psm8.usdcDecimalMultiplier(), 1e10);
+
+        // Mint/redeem round-trip
+        uint256 usdcAmount = 100e8; // 100 USDC at 8 decimals
+        usdc8.mint(user1, usdcAmount);
+        vm.prank(admin);
+        okuMoney.grantRole(OKUM_MINTER, address(psm8));
+        vm.prank(allowanceManager);
+        okuMoney.configureMinterAllowance(address(psm8), MAX_SUPPLY);
+        vm.prank(admin);
+        redemptionQueue.grantRole(QUEUE_PSM, address(psm8));
+
+        vm.prank(user1);
+        usdc8.approve(address(psm8), usdcAmount);
+        vm.prank(user1);
+        psm8.mintOkuM(usdcAmount);
+
+        assertGt(okuMoney.balanceOf(user1), 0);
+    }
+
+    function test_MultiDecimal_18DecimalUsdcPsmInit() public {
+        // Deploy an 18-decimal stable mock
+        MockUSDC18Dec usdc18 = new MockUSDC18Dec();
+
+        // Deploy a fresh PSM against it
+        (LitePSM psm18,) = Deploy.deployLitePSM(
+            address(okuMoney), address(okuDollar), address(usdc18), address(redemptionQueue), admin
+        );
+
+        // decimalMultiplier should be 10^(18-18) = 1
+        assertEq(psm18.usdcDecimalMultiplier(), 1);
+    }
+
+    // ---- WS3.1.h: oracle updatedAt == 0 / answeredInRound < roundId ----
+
+    function test_Mint_RevertsOnUpdatedAtZeroOracle() public {
+        vm.warp(1_000_000);
+        vm.prank(oracleManager);
+        litePsm.configureOracle(address(oracle), 1 hours, true);
+
+        // New WS1.4 check: updatedAt == 0 (unwritten round)
+        oracle.setUpdatedAtZero();
+
+        _approveUsdc(user1, address(litePsm), 100e6);
+        vm.prank(user1);
+        vm.expectRevert(LitePSM.InvalidOracleResponse.selector);
+        litePsm.mintOkuM(100e6);
+    }
+
+    function test_Mint_RevertsOnZeroAnswerOracle() public {
+        vm.warp(1_000_000);
+        vm.prank(oracleManager);
+        litePsm.configureOracle(address(oracle), 1 hours, true);
+
+        // New WS1.4 check: answer == 0 (answer <= 0)
+        oracle.setZeroAnswer();
+
+        _approveUsdc(user1, address(litePsm), 100e6);
+        vm.prank(user1);
+        vm.expectRevert(LitePSM.InvalidOracleResponse.selector);
+        litePsm.mintOkuM(100e6);
+    }
+
+    // ---- WS3.1.i: setMaxSupply edge case ----
+
+    function test_SetMaxSupply_AllowsDecreaseToCurrentSupply() public {
+        // Mint half the supply
+        _mintOkuMoney(user1, MAX_SUPPLY / 2);
+        // Decrease cap to exactly current supply — should succeed
+        uint256 newCap = MAX_SUPPLY / 2;
+        vm.prank(capManager);
+        okuMoney.setMaxSupply(newCap);
+        assertEq(okuMoney.maxSupply(), newCap);
+
+        // totalSupply == maxSupply: any new mint must revert with ExceedsSupplyCap
+        vm.prank(minter);
+        vm.expectRevert(OkuMoney.ExceedsSupplyCap.selector);
+        okuMoney.mint(user2, 1);
+    }
+
+    function test_SetMaxSupply_RevertsBelowCurrentTotalSupply() public {
+        _mintOkuMoney(user1, 1000e18);
+        // Try to set cap below current supply
+        vm.prank(capManager);
+        vm.expectRevert(OkuMoney.BelowCurrentSupply.selector);
+        okuMoney.setMaxSupply(999e18);
+    }
+
+    // ---- WS3.1.k: blacklisted-address holding queue entry ----
+
+    function test_Queue_DrainThenProcess() public {
+        // The PSM buffer starts with 5000e6 USDC (see setUp).
+        // Drain the buffer completely so redemptions will queue.
+        vm.prank(bufferWithdrawer);
+        litePsm.withdrawUsdc(bufferWithdrawer, 5000e6);
+        assertEq(usdc.balanceOf(address(litePsm)), 0);
+
+        // Queue a redemption
+        _mintOkuMoney(user1, 100e18);
+        _approveOkuMoney(user1, address(litePsm), 100e18);
+        vm.prank(user1);
+        litePsm.redeemOkuM(100e18); // buffer is 0 → queues
+
+        assertEq(redemptionQueue.queueLength(), 1);
+
+        // Refill the buffer
+        _mintUsdc(bufferDepositor, 200e6);
+        vm.prank(bufferDepositor);
+        usdc.approve(address(litePsm), 200e6);
+        vm.prank(bufferDepositor);
+        litePsm.depositBuffer(200e6);
+
+        // Approve the queue to pull from PSM and drain
+        vm.prank(queueProcessor);
+        litePsm.processQueue(0, 1, 200e6);
+
+        assertEq(redemptionQueue.queueLength(), 0);
+        assertGt(usdc.balanceOf(user1), 0);
+    }
+
+    function test_RedemptionQueue_AssertUsdcMatchSucceeds() public {
+        // assertUsdcMatch with the correct PSM USDC should not revert
+        redemptionQueue.assertUsdcMatch(address(usdc));
+    }
+
+    function test_RedemptionQueue_AssertUsdcMatchReverts() public {
+        // assertUsdcMatch with a wrong address should revert
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RedemptionQueue.UsdcMismatch.selector, address(usdc), address(oracle)
+            )
+        );
+        redemptionQueue.assertUsdcMatch(address(oracle));
+    }
+}
+
+// ---- Helper mock contracts (test-only, not for production) ----
+
+/// @notice 8-decimal stable mock for multi-decimal tests
+contract MockUSDC8Dec is ERC20("USD8", "USD8") {
+    function decimals() public pure override returns (uint8) {
+        return 8;
+    }
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+}
+
+/// @notice 18-decimal stable mock for multi-decimal tests
+contract MockUSDC18Dec is ERC20("USD18", "USD18") {
+    function decimals() public pure override returns (uint8) {
+        return 18;
+    }
+
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
     }
 }

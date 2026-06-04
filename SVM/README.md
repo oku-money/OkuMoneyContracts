@@ -387,10 +387,11 @@ npx mocha --require tsx --timeout 60000 'tests/bankrun/crossChainBridging.ts'
 #   1. Start Surfpool: npm run surfpool:mainnet
 #   2. Run fork tests: npm run test:fork
 
-# Trident property-based fuzz harnesses (WS4.1/4.2 — real #[end] invariants)
-# NOTE: types.rs must be regenerated from current IDL before running:
-#   trident fuzz add --skip-build  (from SVM/oku-programs/)
-# Then:
+# Trident property-based fuzz harnesses (WS4.1/4.2 / WS8.3)
+# types.rs has been regenerated and split (one per harness).
+# #[init] is not yet wired (PsmConfig/OkuDollarConfig won't be pre-initialised).
+# The #[end] invariants are guarded by data-length checks and are no-ops until
+# #[init] is wired. See TODO in each test_fuzz.rs for the init procedure.
 trident fuzz run fuzz_lite_psm   # oku_m_price monotonicity + ceiling
 trident fuzz run fuzz_oku_dollar  # usd_multiplier monotonicity + ceiling
 ```

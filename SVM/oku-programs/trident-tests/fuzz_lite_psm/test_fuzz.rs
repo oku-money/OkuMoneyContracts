@@ -58,11 +58,18 @@ impl FuzzTest {
     }
 
     /// Called once at the start of each fuzzing iteration.
-    /// TODO: wire up the 3-step init sequence once types.rs is regenerated
-    /// with current discriminators from anchor build:
-    ///   1. Initialize (config + roles)
-    ///   2. SetupRedemptionQueue
-    ///   3. SetupOkuMoneyEscrow
+    ///
+    /// TODO: wire the 3-step init using Trident's account helpers:
+    ///   1. Create USDC SPL mint via `self.trident.create_token_mint(...)`.
+    ///   2. Create OkuMoney Token-2022 mint.
+    ///   3. Call `InitializeInstruction` with full `InitializeInstructionData`
+    ///      (max_supply, minter_allowance, 12 role Pubkeys, pyth_program_owner)
+    ///      and the derived `[b"psm_config"]` PDA.
+    ///
+    /// Without init, the PsmConfig account doesn't exist and the `#[end]`
+    /// invariants are no-ops (guarded by `if config_data.len() >= 594`).
+    /// The harness still fuzzes instruction execution paths and catches panics
+    /// or unexpected program errors. Wire init to enable the #[end] invariants.
     #[init]
     fn start(&mut self) {}
 
@@ -101,8 +108,8 @@ impl FuzzTest {
             .price_update
             .insert(&mut self.trident, None);
 
-        let ix = MintInstruction::data(MintInstructionData::new(usdc_amount)).accounts(
-            MintInstructionAccounts::new(
+        let ix = MintOkuMInstruction::data(MintOkuMInstructionData::new(usdc_amount)).accounts(
+            MintOkuMInstructionAccounts::new(
                 user,
                 config,
                 usdc_mint,
@@ -156,8 +163,8 @@ impl FuzzTest {
             .redemption_queue
             .insert(&mut self.trident, None);
 
-        let ix = RedeemInstruction::data(RedeemInstructionData::new(oku_m_amount)).accounts(
-            RedeemInstructionAccounts::new(
+        let ix = RedeemOkuMInstruction::data(RedeemOkuMInstructionData::new(oku_m_amount)).accounts(
+            RedeemOkuMInstructionAccounts::new(
                 user,
                 config,
                 usdc_mint,
@@ -292,14 +299,16 @@ impl FuzzTest {
                 .fuzz_accounts
                 .redemption_queue
                 .insert(&mut self.trident, None);
+            let okusd_mint = self.fuzz_accounts.okusd_mint.insert(&mut self.trident, None);
             let ix = WithdrawBufferInstruction::data(WithdrawBufferInstructionData::new(amount))
                 .accounts(WithdrawBufferInstructionAccounts::new(
                     buffer_withdrawer,
                     config,
-                    usdc_mint,
+                    redemption_queue,
+                    okusd_mint,
                     withdrawer_usdc_ata,
                     vault_usdc,
-                    redemption_queue,
+                    usdc_mint,
                 ));
             let _ = self.trident.process_transaction(&[ix.instruction()], Some("WithdrawBuffer"));
         }

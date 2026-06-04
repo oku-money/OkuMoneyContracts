@@ -140,6 +140,9 @@ abstract contract BaseTest is Test, Actors {
         okuDollar.grantRole(VAULT_RESERVE_MANAGER, reserveManager);
         okuDollar.grantRole(VAULT_PAUSER, vaultPauser);
         okuDollar.grantRole(VAULT_UNPAUSER, vaultUnpauser);
+        // OkuDollar blacklist (shared OKUM_ roles — one grant covers both tokens)
+        okuDollar.grantRole(OKUM_BLACKLISTER, blacklister);
+        okuDollar.grantRole(OKUM_UNBLACKLISTER, unblacklister);
 
         // LitePSM roles - Granular RBAC (PSM_ prefix)
         litePsm.grantRole(PSM_PAUSER, pauser);

@@ -1869,4 +1869,221 @@ contract OkuDollarTest is BaseTest {
 
         assertGt(okuDollar.balanceOf(user2), 0);
     }
+
+    // ============ WS3 Additional Tests ============
+
+    // ---- WS3.1.a: zero-supply setUsdYieldRate ----
+
+    /// @notice setUsdYieldRate when totalUsdShares == 0 should succeed
+    ///         (unlike OkuMoney.distributeYield which rejects ZeroSupply).
+    ///         The rate is stored and will accrue when wrap() is called later.
+    function test_SetUsdYieldRate_WorksWithZeroSupply() public {
+        assertEq(okuDollar.totalSupply(), 0);
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(MAX_RATE, 0);
+        assertGt(okuDollar.usdRatePerSecond(), PRECISION);
+    }
+
+    /// @notice Verify that a non-zero rate accrues correctly after supply is added.
+    function test_SetUsdYieldRate_AccruesAfterSubsequentWrap() public {
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(MAX_RATE, 0);
+        vm.warp(block.timestamp + 1 days);
+
+        _mintOkuMoney(user1, 100e18);
+        _approveOkuMoney(user1, address(okuDollar), 100e18);
+        vm.prank(user1);
+        uint256 usdMinted = okuDollar.wrap(100e18, user1, 0);
+
+        // Rate accrued before wrap — usdMultiplier > 1e18
+        assertGt(okuDollar.usdMultiplier(), PRECISION);
+        // Dollar-adjusted balance > raw wrap amount
+        assertGt(okuDollar.balanceOf(user1), 0);
+        assertEq(usdMinted, okuDollar.balanceOf(user1));
+    }
+
+    // ---- WS3.1.c: reinit guard on OkuDollar ----
+
+    function test_Initialize_CannotReinitialize() public {
+        vm.expectRevert();
+        okuDollar.initialize(address(okuMoney), "OkuDollar", "usdOku", admin, 95e16);
+    }
+
+    // ---- WS3.1.d: OkuDollar UUPS upgrade authorization ----
+
+    function test_UUPS_Upgrade_RevertsForNonUpgrader() public {
+        OkuDollar newImpl = new OkuDollar();
+        vm.expectRevert();
+        vm.prank(user1);
+        okuDollar.upgradeToAndCall(address(newImpl), "");
+    }
+
+    function test_UUPS_Upgrade_SucceedsForUpgrader() public {
+        OkuDollar newImpl = new OkuDollar();
+        vm.prank(admin);
+        okuDollar.upgradeToAndCall(address(newImpl), "");
+        // State preserved through upgrade
+        assertEq(okuDollar.minCollateralRatio(), 95e16);
+    }
+
+    // ---- WS3.1.f: pause for depositReserves / withdrawSurplus ----
+
+    function test_Pause_BlocksDepositReserves() public {
+        vm.prank(vaultPauser);
+        okuDollar.pause();
+
+        _mintOkuMoney(reserveManager, 100e18);
+        _approveOkuMoney(reserveManager, address(okuDollar), 100e18);
+        vm.expectRevert();
+        vm.prank(reserveManager);
+        okuDollar.depositReserves(100e18);
+    }
+
+    function test_Pause_BlocksWithdrawSurplus() public {
+        // First create surplus
+        _mintOkuMoney(reserveManager, 200e18);
+        _approveOkuMoney(reserveManager, address(okuDollar), 200e18);
+        vm.prank(reserveManager);
+        okuDollar.depositReserves(200e18);
+
+        vm.prank(vaultPauser);
+        okuDollar.pause();
+
+        vm.expectRevert();
+        vm.prank(reserveManager);
+        okuDollar.withdrawSurplus(10e18);
+    }
+
+    function test_Unpause_AllowsDepositReservesAgain() public {
+        vm.prank(vaultPauser);
+        okuDollar.pause();
+        vm.prank(vaultUnpauser);
+        okuDollar.unpause();
+
+        _mintOkuMoney(reserveManager, 100e18);
+        _approveOkuMoney(reserveManager, address(okuDollar), 100e18);
+        vm.prank(reserveManager);
+        okuDollar.depositReserves(100e18); // should not revert
+    }
+
+    // ---- WS3.1.j: OkuDollar blacklist ----
+
+    function test_Blacklist_BlocksWrapSender() public {
+        _mintOkuMoney(user1, 100e18);
+        _approveOkuMoney(user1, address(okuDollar), 100e18);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+
+        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.prank(user1);
+        okuDollar.wrap(100e18, user1, 0);
+    }
+
+    function test_Blacklist_BlocksWrapReceiver() public {
+        _mintOkuMoney(user2, 100e18);
+        _approveOkuMoney(user2, address(okuDollar), 100e18);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1); // blacklist receiver, not sender
+
+        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        vm.prank(user2);
+        okuDollar.wrap(100e18, user1, 0); // receiver is blacklisted
+    }
+
+    function test_Blacklist_BlocksUnwrapSender() public {
+        _mintUsdOku(user1, 100e18);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+
+        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.prank(user1);
+        okuDollar.unwrap(50e18, user1);
+    }
+
+    function test_Blacklist_BlocksTransferSender() public {
+        _mintUsdOku(user1, 100e18);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+
+        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.prank(user1);
+        okuDollar.transfer(user2, 50e18);
+    }
+
+    function test_Blacklist_BlocksTransferReceiver() public {
+        _mintUsdOku(user1, 100e18);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user2);
+
+        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        vm.prank(user1);
+        okuDollar.transfer(user2, 50e18);
+    }
+
+    function test_Blacklist_PermitBlocksBlacklistedOwner() public {
+        _mintUsdOku(user1, 100e18);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+
+        // Permit with blacklisted owner should revert
+        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        okuDollar.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
+    }
+
+    function test_Blacklist_UnblacklistRestoresAccess() public {
+        _mintUsdOku(user1, 100e18);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+        vm.prank(unblacklister);
+        okuDollar.unblacklist(user1);
+
+        // Should work again after unblacklist
+        vm.prank(user1);
+        okuDollar.transfer(user2, 50e18);
+        assertGt(okuDollar.balanceOf(user2), 0);
+    }
+
+    function test_Blacklist_IsBlacklistedView() public {
+        assertFalse(okuDollar.isBlacklisted(user1));
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+        assertTrue(okuDollar.isBlacklisted(user1));
+        vm.prank(unblacklister);
+        okuDollar.unblacklist(user1);
+        assertFalse(okuDollar.isBlacklisted(user1));
+    }
+
+    function test_Blacklist_RevertAlreadyBlacklisted() public {
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+        vm.expectRevert(OkuDollar.AlreadyBlacklisted.selector);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+    }
+
+    function test_Blacklist_RevertNotBlacklisted() public {
+        vm.expectRevert(OkuDollar.NotBlacklisted.selector);
+        vm.prank(unblacklister);
+        okuDollar.unblacklist(user1);
+    }
+
+    // ---- WS3.1.j: withdrawSurplus yield-lock guard (new from WS1.3) ----
+
+    function test_WithdrawSurplus_BlockedDuringYieldDistribution() public {
+        // Setup surplus: deposit reserves without minting shares
+        _mintOkuMoney(reserveManager, 200e18);
+        _approveOkuMoney(reserveManager, address(okuDollar), 200e18);
+        vm.prank(reserveManager);
+        okuDollar.depositReserves(200e18);
+
+        // Distribute yield to stamp lastYieldDistributionBlock
+        _mintOkuMoney(user1, 100e18);
+        vm.prank(rebaser);
+        okuMoney.distributeYield(10e18);
+
+        // Same block: withdrawSurplus should be blocked by yield lock
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        vm.prank(reserveManager);
+        okuDollar.withdrawSurplus(10e18);
+    }
 }

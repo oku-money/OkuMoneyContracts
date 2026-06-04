@@ -313,21 +313,28 @@ shared constants from `oku-shared`; no program-specific values remain.
 
 ## Authority Model
 
-Granular per-action roles — no single admin key:
+Granular per-action roles — no single admin key. For the full centralized
+trust model and what each key tier can/cannot do see
+`README.md § Signer trust implications`. SVM-specific table:
 
-| Role | Program | Held By |
-|------|---------|---------|
-| role_admin | PSM + Vault | Cold Multisig (Squads) |
-| pauser | PSM + Vault | Warm Multisig |
-| unpauser | PSM + Vault | Cold Multisig |
-| freezer / unfreezer | PSM | Warm / Cold Multisig |
-| rebaser | PSM | Orchestrator (KMS-backed) |
-| usd_rebaser | Vault | Orchestrator (KMS-backed) |
-| reserve_manager | Vault | Cold Multisig |
-| queue_processor, buffer_depositor | PSM | Orchestrator |
-| buffer_withdrawer, oracle_manager, cap_manager, allowance_manager | PSM | Cold Multisig |
+| Role | Program | Held By | What it can do | What on-chain code prevents |
+|------|---------|---------|---|---|
+| `role_admin` | PSM + Vault | Cold Multisig (Squads) | Rotate any other role via `set_authority`; also triggers the two-step `accept_role_admin` handshake for its own transfer | Nothing — this is the meta-role. Quorum breach = full system compromise. SVM adds a propose/accept pattern for rotating `role_admin` itself (so accidental rotation to a typo'd address is recoverable) |
+| `pauser` | PSM + Vault | Warm Multisig | Set `is_paused = true`, halting mint/redeem/wrap/unwrap | Cannot unpause — that requires `unpauser` (cold multisig). Cannot access funds. |
+| `unpauser` | PSM + Vault | Cold Multisig | Clear `is_paused`. Deliberate-review path — should require quorum discussion before resuming a paused protocol | — |
+| `freezer` | PSM | Warm Multisig | CPI-freeze any OkuMoney ATA via Token-2022 freeze authority (PDA-signed). Blocks the ATA holder from all transfers | Cannot drain or redirect the frozen tokens |
+| `unfreezer` | PSM | Cold Multisig | CPI-thaw a frozen ATA | — |
+| `rebaser` | PSM | Orchestrator (KMS) | Update `oku_m_price` (non-decreasing OkuMoney multiplier) and call `distribute_yield` | Cannot decrease `oku_m_price`; hard-capped at `MAX_OKU_M_PRICE` (1e15). Cannot access funds or admin params. |
+| `usd_rebaser` | Vault | Orchestrator (KMS) | Update `usd_multiplier` (non-decreasing usdOku multiplier) | Cannot decrease `usd_multiplier`; hard-capped at `MAX_USD_MULTIPLIER`. Cannot push vault below `min_collateral_ratio`. |
+| `reserve_manager` | Vault | Cold Multisig | `deposit_reserves` (adds OkuM backing) and `withdraw_reserves` (extracts surplus) | Cannot withdraw below `min_collateral_ratio` floor (enforced post-withdrawal by on-chain check) |
+| `queue_processor` | PSM | Orchestrator | Run `process_queue` (pays out USDC to queued redemption entries) and `rescue_queue_entry` (redirects stuck OkuM to alternate recipient on a specific entry) | `process_queue` pays the entry's `user` field — cannot reroute. `rescue_queue_entry` can redirect OkuM but only per-entry, not in bulk; requires the specific queue index |
+| `buffer_depositor` | PSM | Orchestrator | Transfer USDC from caller's ATA into the PSM vault | Caller must hold USDC; no damage possible |
+| `buffer_withdrawer` | PSM | Cold Multisig | Drain USDC from the PSM vault | Cannot withdraw below the USDC reserved for pending queue entries |
+| `oracle_manager` | PSM | Cold Multisig | Set `config.oracle` and `staleness_threshold`; also `set_pyth_program_owner`. A swap to an attacker-controlled oracle could allow unbacked mints up to `max_supply` | Staleness bounded to `[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]`. `set_oracle` validates Pyth header magic + version before persisting |
+| `cap_manager` | PSM | Cold Multisig | Set `max_supply` | Cannot set below current circulating supply |
+| `allowance_manager` | PSM | Cold Multisig | Set `minter_allowance`. The PSM PDA is the OkuMoney mint authority — mints still flow through program logic even at high allowance | Bounded above by `max_supply`; mint authority lives on the config PDA, not on any EOA |
 
-Key separation: `rebaser` (rear-facing, factual — updates OkuMoney price) ≠ `usd_rebaser` (forward-facing, policy — updates usdOku multiplier).
+Key separation: `rebaser` (rear-facing, factual — updates OkuMoney price from realized T-Bill returns) ≠ `usd_rebaser` (forward-facing, policy — updates usdOku yield multiplier set by Oku).
 
 Cross-chain transfers (v1) re-use this same orchestrator: it holds
 `queue_processor` + `buffer_depositor` + `rebaser` and drives both

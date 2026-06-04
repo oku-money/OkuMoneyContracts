@@ -162,6 +162,83 @@ The `BRIDGE_*`, `ROUTER_*`, and `NTT_*` roles defined in `Roles.sol` are
 reserved for the future re-introduction of OkuBridge / NTT / CCIP. They are
 not granted by the v1 deploy scripts.
 
+### Signer trust implications
+
+okuMoney is a **centralized financial product**. Users trust Oku Money as an
+institution — the same way they trust Circle for USDC or Paxos for PYUSD.
+On-chain RBAC enforces *separation of duties within the company*, not
+protection *against* the company. What each key tier can and cannot do:
+
+#### Cold Multisig (Squads / Safe, hardware-backed quorum)
+
+**Can:**
+- Upgrade any contract (EVM: UUPS `_authorizeUpgrade`; SVM: BPF program
+  upgrade authority). A malicious or erroneous upgrade can replace all
+  contract logic — this is the highest-impact key in the system.
+- Set the oracle feed address and staleness parameters. A swap to an
+  attacker-controlled feed could allow unbacked mints up to `maxSupply`.
+- Configure `maxSupply` and `minterAllowance`. Raising the allowance to
+  the cap and then minting up to it is the worst-case mint-side outcome.
+- Drain the USDC buffer (`withdrawUsdc` / `withdraw_buffer`) down to the
+  amount needed to cover pending queue obligations.
+- Withdraw OkuMoney surplus from the vault (`withdrawSurplus` /
+  `withdraw_reserves`) down to the `minCollateralRatio` floor.
+- Grant any role to any address (DEFAULT_ADMIN_ROLE / role_admin on SVM).
+- Unblacklist addresses, unpause contracts, unfreeze ATAs.
+- Rotate operational authority pubkeys (oracle_manager, cap_manager, etc.)
+
+**Cannot (on-chain code prevents even if quorum reached):**
+- Mint above `maxSupply` or above the current `minterAllowance`.
+- Set `okuMMultiplier` / `oku_m_price` lower than its current value (non-decreasing invariant).
+- Set `usdMultiplier` / `usd_multiplier` lower than its current value.
+- Push the vault below `minCollateralRatio` via surplus withdrawal.
+- Set `maxSupply` below current `totalSupply`.
+- Set `stalenessThreshold` outside `[60s, 7 days]`.
+- Set `minCollateralRatio` below the hard floor (90%).
+
+#### Warm Multisig (lower-quorum, faster to sign)
+
+**Can:**
+- Pause all protocol contracts, halting minting, redemption, and bridging.
+- Blacklist any address on OkuMoney and OkuDollar, freezing their tokens.
+- On SVM: freeze any OkuMoney ATA via Token-2022 freeze authority.
+
+**Cannot:**
+- Unpause or unblacklist (cold multisig only). Pause is intentionally a
+  one-way door for the warm key — it cannot be used to lock the protocol
+  and then immediately lift the lock in the same session.
+- Access any funds or parameters.
+
+#### Orchestrator (KMS-backed, automated)
+
+**Can:**
+- Update `okuMMultiplier` / `oku_m_price` (non-decreasing, bounded by
+  `MAX_MULTIPLIER` / `MAX_OKU_M_PRICE`). A compromised rebaser key can
+  ratchet the multiplier toward the ceiling, inflating OkuM's dollar value
+  beyond the actual T-Bill backing rate.
+- Update `usdMultiplier` / `usd_multiplier` similarly (bounded by
+  `MAX_USD_MULTIPLIER`). An extreme bump would push the vault toward the
+  `minCollateralRatio` floor, requiring Oku to deposit more reserves.
+- Process the redemption queue (`processQueue` / `process_queue`).
+- Deposit USDC to the PSM buffer (`depositBuffer` / `deposit_buffer`).
+- Call `mintOkuM` / `redeemOkuM` as a normal user (these are
+  **permissionless** — anyone with USDC can call them; the orchestrator
+  holds no special mint authority, only USDC custody).
+
+**Cannot:**
+- Mint OkuM directly. `OKUM_MINTER` is held by the PSM and RedemptionQueue
+  contracts, not the orchestrator. Orchestrator compromise does not allow
+  minting beyond the orchestrator's USDC balance.
+- Access any admin parameters, role grants, or upgrades.
+- Drain the USDC buffer (that's the cold multisig via BUFFER_WITHDRAWER).
+
+#### Protocol contracts (LitePSM, RedemptionQueue)
+
+Hold `OKUM_MINTER` only. They mint via `OkuMoney.mint()` only during
+`mintOkuM` / `processQueue`, gated by the per-minter `minterAllowance`
+and the global `maxSupply` cap. The mint authority cannot be used outside
+these paths.
+
 ## EVM vs SVM Implementation Differences
 
 | Aspect | EVM | SVM |

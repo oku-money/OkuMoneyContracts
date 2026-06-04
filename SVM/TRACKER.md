@@ -4,23 +4,18 @@ Items that remain open after the WS1–8 pre-audit sweep (`noBridge-mvp-internal
 All WS1–8 findings have been resolved and removed. What remains is explicitly
 deferred, or blocked on external input.
 
-**Status legend:** 🔴 blocks mainnet · 🟡 should-fix before audit · ⚪ post-launch
+**Status legend:** 🔴 blocks external exposure · 🟡 should-fix before audit · ⚪ post-launch
 
----
-
-## 🔴 Mainnet blockers
-
-### Timelock on high-impact admin instructions
-
-`set_authority`, `set_oracle`, `set_pyth_program_owner`, `set_max_supply`, and
-program upgrades currently take effect immediately after a single multisig signature.
-Standard mainnet hardening for stablecoin protocols requires a `TimelockController`-
-style PDA: queue proposal → minimum delay window → execute.
-
-The existing `accept_role_admin` two-step transfer is a good pattern to build on.
-
-**Effort:** ~1–2 weeks (design + impl + deploy ceremony + tests).
-**Not blocking internal testing or audit.** Blocking mainnet launch.
+**On timelocks:** okuMoney is a centralized US-regulated financial product, not a
+decentralized protocol. Industry peers (USDC, USDT, USDP, PYUSD, FDUSD) do not use
+on-chain timelocks; they rely on operational, procedural, and regulatory controls.
+Trust in okuMoney is anchored in Oku Money as a legal entity, its MSB registration,
+and its internal control framework — not in on-chain delay mechanics. On-chain RBAC
+enforces *separation of duties within the company*; the cold multisig quorum
+requirement is itself the delay mechanism. Timelocks are **not pursued**.
+Trust implications for each signer role are documented in `README.md § Signer trust
+implications`, `EVM/README.md § Per-role trust and blast radius`, and
+`SVM/README.md § Authority Model`.
 
 ---
 
@@ -40,6 +35,27 @@ rebuild, and redeploy.
 ---
 
 ## 🟡 Should-fix before external audit
+
+### Key custody and change-management documentation
+
+Auditors of centralized stablecoin contracts evaluate operational controls, not
+on-chain delay mechanisms. What's expected and currently missing:
+
+- **Key custody procedures.** Where are the cold/warm multisig hardware devices
+  stored? What is the off-boarding process when a signer leaves the company? What
+  is the recovery process if a device is lost or a signer is unavailable?
+- **Change-management runbook per admin action class.** For each action the cold
+  multisig can take (`configureOracle`, `configureMinterAllowance`, `setMaxSupply`,
+  role grants, upgrade ceremonies): who proposes? Who reviews the proposed tx data?
+  Who signs? What is the dry-run / fork-test requirement before mainnet?
+- **Segregation of duties statement.** Which humans hold cold vs warm vs orchestrator
+  keys? Do any individuals hold keys in more than one tier? (The system allows overlap
+  on-chain; operational policy should prohibit it.)
+- **Incident response procedures.** Specific runbooks for: compromised orchestrator
+  key, compromised warm multisig, unexpected admin event detected by monitoring.
+
+**Effort:** 2–4 days (writing, not implementation). **This is what audit reports flag
+for centralized stablecoin projects, not missing timelocks.**
 
 ### `cargo clippy -D warnings`
 
@@ -154,8 +170,10 @@ Better suited as nightly CI than per-PR. High setup cost.
 ## 📚 References
 
 - `docs/orchestrator-runbook.md` — preflight checklist, failure recovery, minterAllowance rotation, monitoring SLAs.
+- `README.md § Signer trust implications` — what each key tier can and cannot do on-chain.
+- `EVM/README.md § Per-role trust and blast radius` — EVM-specific role table with bounded/unbounded characterization.
+- `SVM/README.md § Authority Model` — SVM-specific per-role table with blast radius.
 - `SVM/EVM_VS_SVM.md` — full EVM↔SVM divergence catalogue.
-- `SVM/README.md` — deployment runbook, testing guide, RBAC diagram.
 - `TESTNET_DEPLOYMENT.md` — initial parameters, mainnet RBAC ceremony, SVM upgrade-authority ceremony.
 - `tests/shared/bankrun.ts` — bankrun harness (single source of truth for in-process tests).
 - `tests/shared/setup.ts` — runner-agnostic PSM bootstrap.

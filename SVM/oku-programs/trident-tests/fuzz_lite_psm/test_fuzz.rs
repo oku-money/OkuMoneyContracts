@@ -64,7 +64,7 @@ impl FuzzTest {
     ///   2. Create OkuMoney Token-2022 mint.
     ///   3. Call `InitializeInstruction` with full `InitializeInstructionData`
     ///      (max_supply, minter_allowance, 12 role Pubkeys, pyth_program_owner)
-    ///      and the derived `[b"psm_config"]` PDA.
+    ///      and the derived `[b"psm_config_v2"]` PDA.
     ///
     /// Without init, the PsmConfig account doesn't exist and the `#[end]`
     /// invariants are no-ops (guarded by `if config_data.len() >= 594`).
@@ -84,7 +84,7 @@ impl FuzzTest {
         let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
         let config = self.fuzz_accounts.config.insert(
             &mut self.trident,
-            Some(PdaSeeds::new(&[b"psm_config"], lite_psm::program_id())),
+            Some(PdaSeeds::new(&[b"psm_config_v2"], lite_psm::program_id())),
         );
         let usdc_mint = self.fuzz_accounts.usdc_mint.insert(&mut self.trident, None);
         let okusd_mint = self
@@ -135,7 +135,7 @@ impl FuzzTest {
         let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
         let config = self.fuzz_accounts.config.insert(
             &mut self.trident,
-            Some(PdaSeeds::new(&[b"psm_config"], lite_psm::program_id())),
+            Some(PdaSeeds::new(&[b"psm_config_v2"], lite_psm::program_id())),
         );
         let usdc_mint = self.fuzz_accounts.usdc_mint.insert(&mut self.trident, None);
         let okusd_mint = self
@@ -193,7 +193,7 @@ impl FuzzTest {
             .insert(&mut self.trident, None);
         let config = self.fuzz_accounts.config.insert(
             &mut self.trident,
-            Some(PdaSeeds::new(&[b"psm_config"], lite_psm::program_id())),
+            Some(PdaSeeds::new(&[b"psm_config_v2"], lite_psm::program_id())),
         );
         let redemption_queue = self
             .fuzz_accounts
@@ -234,7 +234,7 @@ impl FuzzTest {
         let do_pause: bool = self.trident.random_bool();
         let config = self.fuzz_accounts.config.insert(
             &mut self.trident,
-            Some(PdaSeeds::new(&[b"psm_config"], lite_psm::program_id())),
+            Some(PdaSeeds::new(&[b"psm_config_v2"], lite_psm::program_id())),
         );
 
         if do_pause {
@@ -260,7 +260,7 @@ impl FuzzTest {
         let do_deposit: bool = self.trident.random_bool();
         let config = self.fuzz_accounts.config.insert(
             &mut self.trident,
-            Some(PdaSeeds::new(&[b"psm_config"], lite_psm::program_id())),
+            Some(PdaSeeds::new(&[b"psm_config_v2"], lite_psm::program_id())),
         );
         let usdc_mint = self.fuzz_accounts.usdc_mint.insert(&mut self.trident, None);
         let vault_usdc = self
@@ -323,7 +323,7 @@ impl FuzzTest {
         let do_freeze: bool = self.trident.random_bool();
         let config = self.fuzz_accounts.config.insert(
             &mut self.trident,
-            Some(PdaSeeds::new(&[b"psm_config"], lite_psm::program_id())),
+            Some(PdaSeeds::new(&[b"psm_config_v2"], lite_psm::program_id())),
         );
         let okusd_mint = self
             .fuzz_accounts
@@ -380,11 +380,11 @@ impl FuzzTest {
     #[end]
     fn end(&mut self) {
         let (config_pda, _) = Pubkey::find_program_address(
-            &[b"psm_config"],
+            &[b"psm_config_v2"],
             &lite_psm::program_id(),
         );
         let (queue_pda, _) = Pubkey::find_program_address(
-            &[b"redemption_queue"],
+            &[b"redemption_queue_v2"],
             &lite_psm::program_id(),
         );
 

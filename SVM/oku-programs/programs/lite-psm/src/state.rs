@@ -9,7 +9,14 @@
 use anchor_lang::prelude::*;
 
 /// PSM configuration PDA
-/// Seeds: ["psm_config"]
+/// Seeds: ["psm_config_v2"]
+///
+/// noBridge migration (2026-06-05): seed rotated from `b"psm_config"` to
+/// `b"psm_config_v2"` to force a fresh PDA layout (722 → 658 bytes) after
+/// the blacklist-exempt fields were removed. The orphaned old PDA at
+/// `EkCYunihwmNasBEnNXoJx8sb3CdZnDYKLpPvLyY6Hm3u` (devnet) holds ~0.006 SOL
+/// of rent that can be reclaimed once a `close_dead_psm_config` admin ix
+/// is added. Tracked in `SVM/oku-programs/deployments/DEPRECATED.md`.
 #[account]
 #[derive(InitSpace)]
 pub struct PsmConfig {
@@ -101,7 +108,7 @@ pub struct PsmConfig {
 }
 
 impl PsmConfig {
-    pub const SEED: &'static [u8] = b"psm_config";
+    pub const SEED: &'static [u8] = b"psm_config_v2";
 
     /// Space needed for PsmConfig account: 8 byte discriminator +
     /// `InitSpace`-derived field sum. Pinned to 658 bytes by the
@@ -163,7 +170,7 @@ const _: () = assert!(PsmConfig::LEN == 658);
 /// - `load_init()` only at the one `init`-constraint site
 ///   (`setup_redemption_queue`).
 ///
-/// Seeds: `["redemption_queue"]`.
+/// Seeds: `["redemption_queue_v2"]` (rotated in noBridge migration; see PsmConfig).
 #[account(zero_copy)]
 #[repr(C)]
 pub struct RedemptionQueue {
@@ -190,7 +197,7 @@ pub struct RedemptionQueue {
 }
 
 impl RedemptionQueue {
-    pub const SEED: &'static [u8] = b"redemption_queue";
+    pub const SEED: &'static [u8] = b"redemption_queue_v2";
 
     /// Maximum queue entries: 200 (Phase 13b).
     ///

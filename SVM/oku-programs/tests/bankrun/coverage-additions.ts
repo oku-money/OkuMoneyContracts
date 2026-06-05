@@ -78,7 +78,7 @@ describe("WS3.2 PSM coverage additions", () => {
     psm = h.program as unknown as Program<LitePsm>;
 
     [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config")], psm.programId
+      [Buffer.from("psm_config_v2")], psm.programId
     );
 
     usdcMint = await createMintViaBankrun(
@@ -220,7 +220,7 @@ describe("WS3.2.e: wrong-owner-ATA soft-skip in process_queue (WS2.1)", () => {
     psm = h.program as unknown as Program<LitePsm>;
 
     [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config")], psm.programId
+      [Buffer.from("psm_config_v2")], psm.programId
     );
 
     usdcMint = await createMintViaBankrun(
@@ -359,13 +359,13 @@ describe("WS3.2 vault coverage additions", () => {
     vault = getProgram<OkuDollar>(h, "oku_dollar") as Program<OkuDollar>;
 
     [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config")], psm.programId
+      [Buffer.from("psm_config_v2")], psm.programId
     );
     [vaultConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("oku_dollar_config")], vault.programId
+      [Buffer.from("oku_dollar_config_v2")], vault.programId
     );
     [usdOkuMint] = PublicKey.findProgramAddressSync(
-      [Buffer.from("usd_oku_mint")], vault.programId
+      [Buffer.from("usd_oku_mint_v2")], vault.programId
     );
 
     usdcMint = await createMintViaBankrun(

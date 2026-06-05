@@ -205,7 +205,7 @@ describe("Pyth oracle (bankrun)", () => {
     payer = h.payer;
 
     [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config")],
+      [Buffer.from("psm_config_v2")],
       program.programId
     );
 

@@ -128,7 +128,7 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
     vault = getProgram<OkuDollar>(h, "oku_dollar");
 
     [psmConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config")],
+      [Buffer.from("psm_config_v2")],
       psm.programId
     );
 
@@ -163,11 +163,11 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
 
     // Initialize vault (needed for the OkuDollar bridging test).
     [vaultConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("oku_dollar_config")],
+      [Buffer.from("oku_dollar_config_v2")],
       vault.programId
     );
     [usdOkuMint] = PublicKey.findProgramAddressSync(
-      [Buffer.from("usd_oku_mint")],
+      [Buffer.from("usd_oku_mint_v2")],
       vault.programId
     );
     reserveVault = getAssociatedTokenAddressSync(

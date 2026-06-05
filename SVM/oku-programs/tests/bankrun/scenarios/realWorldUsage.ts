@@ -147,7 +147,7 @@ async function buildCtx(): Promise<Ctx & {
   const vault = getProgram<OkuDollar>(h, "oku_dollar");
 
   const [configPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("psm_config")],
+    [Buffer.from("psm_config_v2")],
     psm.programId
   );
 
@@ -988,7 +988,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
       const payer = h.payer;
       anchor.setProvider(h.provider as unknown as anchor.AnchorProvider);
       const psm = h.program as unknown as Program<LitePsm>;
-      const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("psm_config")], psm.programId);
+      const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("psm_config_v2")], psm.programId);
       const usdcMintKp = Keypair.generate();
       const okuMoneyMintKp = Keypair.generate();
       const usdcMint = await createMintViaBankrun(h, payer.publicKey, null, DECIMALS, usdcMintKp, TOKEN_PROGRAM_ID);

@@ -51,7 +51,7 @@ impl FuzzTest {
         self.fuzz_accounts.config.insert(
             &mut self.trident,
             Some(PdaSeeds::new(
-                &[b"oku_dollar_config"],
+                &[b"oku_dollar_config_v2"],
                 oku_dollar::program_id(),
             )),
         )
@@ -395,7 +395,7 @@ impl FuzzTest {
     #[end]
     fn end(&mut self) {
         let (config_pda, _) = Pubkey::find_program_address(
-            &[b"oku_dollar_config"],
+            &[b"oku_dollar_config_v2"],
             &oku_dollar::program_id(),
         );
 

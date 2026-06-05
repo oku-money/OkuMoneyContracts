@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 /// OkuDollar vault configuration PDA
-/// Seeds: ["oku_dollar_config"]
+/// Seeds: ["oku_dollar_config_v2"]
 #[account]
 #[derive(InitSpace)]
 pub struct OkuDollarConfig {
@@ -61,10 +61,19 @@ pub struct OkuDollarConfig {
 }
 
 impl OkuDollarConfig {
-    pub const SEED: &'static [u8] = b"oku_dollar_config";
+    /// noBridge migration (2026-06-05): seed rotated from `b"oku_dollar_config"`
+    /// to `b"oku_dollar_config_v2"` to force a fresh PDA after the lite-psm
+    /// PsmConfig seed rotation. The OLD `OkuDollarConfig.psm_config` field
+    /// pointed at the OLD PsmConfig PDA, which no longer exists — re-init
+    /// at a new seed wires the vault to the new PsmConfig PDA. See
+    /// `SVM/oku-programs/deployments/DEPRECATED.md` for orphan-PDA cleanup.
+    pub const SEED: &'static [u8] = b"oku_dollar_config_v2";
 
     /// PDA seed for the usdOku mint (rebasing share token controlled by this vault).
-    pub const USD_OKU_MINT_SEED: &'static [u8] = b"usd_oku_mint";
+    /// Rotated to `_v2` in lock-step with `SEED` — the old usdOku mint at the
+    /// pre-rotation address is orphaned because its mint authority was the
+    /// old OkuDollarConfig PDA, which is no longer derived by the program.
+    pub const USD_OKU_MINT_SEED: &'static [u8] = b"usd_oku_mint_v2";
 
     /// Space needed for OkuDollarConfig account: 8 byte discriminator +
     /// `InitSpace`-derived field sum. Pinned at 362 bytes by the

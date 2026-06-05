@@ -3,28 +3,45 @@
  *
  * All PDA seeds must be kept in sync with the corresponding Rust `SEED` constants
  * in programs/lite-psm/src/state.rs and programs/oku-dollar/src/state.rs.
+ *
+ * noBridge migration (2026-06-05): all four seeds rotated to `_v2` to force
+ * fresh PDAs after the PsmConfig storage layout shrank from 722 → 658 bytes.
+ * The pre-rotation PDAs are orphaned on devnet; see
+ * `deployments/DEPRECATED.md` for the orphan-PDA tracking and future
+ * rent-recovery plan.
  */
 
 import { PublicKey } from "@solana/web3.js";
 
-/** Derive PSM config PDA. Seeds: ["psm_config"] */
+/**
+ * Centralized seed strings. Update both Rust state.rs constants and this
+ * map together — any drift will produce silent PDA-address mismatches.
+ */
+export const PDA_SEEDS = {
+  psmConfig: "psm_config_v2",
+  redemptionQueue: "redemption_queue_v2",
+  okuDollarConfig: "oku_dollar_config_v2",
+  usdOkuMint: "usd_oku_mint_v2",
+} as const;
+
+/** Derive PSM config PDA. */
 export function derivePsmConfigPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("psm_config")], programId);
+  return PublicKey.findProgramAddressSync([Buffer.from(PDA_SEEDS.psmConfig)], programId);
 }
 
-/** Derive redemption queue PDA. Seeds: ["redemption_queue"] */
+/** Derive redemption queue PDA. */
 export function deriveRedemptionQueuePDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("redemption_queue")], programId);
+  return PublicKey.findProgramAddressSync([Buffer.from(PDA_SEEDS.redemptionQueue)], programId);
 }
 
-/** Derive OkuDollar vault config PDA. Seeds: ["oku_dollar_config"] */
+/** Derive OkuDollar vault config PDA. */
 export function deriveVaultConfigPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("oku_dollar_config")], programId);
+  return PublicKey.findProgramAddressSync([Buffer.from(PDA_SEEDS.okuDollarConfig)], programId);
 }
 
-/** Derive usdOku mint PDA. Seeds: ["usd_oku_mint"] */
+/** Derive usdOku mint PDA. */
 export function deriveUsdOkuMintPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("usd_oku_mint")], programId);
+  return PublicKey.findProgramAddressSync([Buffer.from(PDA_SEEDS.usdOkuMint)], programId);
 }
 
 // Bridge / router PDA helpers (deriveBridgeConfigPDA, deriveBridgeNoncePDA,

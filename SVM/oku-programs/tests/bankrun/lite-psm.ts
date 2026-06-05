@@ -117,7 +117,7 @@ describe("lite-psm", () => {
     // Pre-derive the PSM config PDA so the OkuMoney mint can be created
     // with it as the mint/freeze authority before `initializePsm` runs.
     [configPda, configBump] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config")],
+      [Buffer.from("psm_config_v2")],
       program.programId
     );
 

@@ -112,7 +112,7 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
     vault = getProgram<OkuDollar>(h, "oku_dollar");
 
     [psmConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config")],
+      [Buffer.from("psm_config_v2")],
       psm.programId
     );
 
@@ -147,11 +147,11 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
 
     // Initialize the oku-dollar vault.
     [vaultConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("oku_dollar_config")],
+      [Buffer.from("oku_dollar_config_v2")],
       vault.programId
     );
     [usdOkuMint] = PublicKey.findProgramAddressSync(
-      [Buffer.from("usd_oku_mint")],
+      [Buffer.from("usd_oku_mint_v2")],
       vault.programId
     );
     reserveVault = getAssociatedTokenAddressSync(
@@ -728,7 +728,7 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
     psm = h.program;
 
     [psmConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config")],
+      [Buffer.from("psm_config_v2")],
       psm.programId
     );
 

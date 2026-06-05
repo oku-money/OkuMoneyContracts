@@ -109,11 +109,11 @@ export async function initializePsm(
   okuMoneyMint: PublicKey
 ): Promise<PsmSetupResult> {
   const [configPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("psm_config")],
+    [Buffer.from("psm_config_v2")],
     program.programId
   );
   const [redemptionQueuePda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("redemption_queue")],
+    [Buffer.from("redemption_queue_v2")],
     program.programId
   );
   const vaultUsdcAta = getAssociatedTokenAddressSync(

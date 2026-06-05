@@ -1,10 +1,31 @@
 # Open issues tracker
 
-Items that remain open after the WS1–8 pre-audit sweep (`noBridge-mvp-internal` tag).
-All WS1–8 findings have been resolved and removed. What remains is explicitly
-deferred, or blocked on external input.
+Items that remain open after the WS1–8 pre-audit sweep + the SVM noBridge
+deployment ceremony (`noBridge-mvp-deployed` tag). All WS1–8 findings have
+been resolved and the SVM programs are now live on devnet at the noBridge
+HEAD bytecode. What remains is explicitly deferred or blocked on external input.
 
 **Status legend:** 🔴 blocks external exposure · 🟡 should-fix before audit · ⚪ post-launch
+
+## 📋 Deployment status (2026-06-05)
+
+All chains running noBridge HEAD bytecode:
+
+| Chain | OkuMoney / lite_psm | OkuDollar | LitePSM (EVM) | RedemptionQueue |
+| --- | --- | --- | --- | --- |
+| sepolia | impl `0x8bAd19F0` | impl `0xe35D166a` | impl `0xA90845CF` | impl `0x52C117fb` |
+| baseSepolia | impl `0x040D347f` | impl `0xbdF02387` | impl `0x704eb5C0` | impl `0x394ceDbd` |
+| bscTestnet | impl `0x040D347f` | impl `0xbdF02387` | impl `0x704eb5C0` | impl `0x394ceDbd` |
+| base | impl `0xb48B9779` | impl `0x8F9EE327` | impl `0xD18170F0` | impl `0x7d48bbcA` |
+| bsc | impl `0xB43A3617` | impl `0x795bD849` | impl `0x0E4d4719` | impl `0x1BC7630A` |
+| svm-devnet | program `3CLDWjDT…YC7N` | program `3TeNwAqQ…PJgy` | (lite_psm above) | (PsmConfig PDA `2A8FojJF…zm1f`) |
+
+SVM seed rotation (2026-06-05): all four PDA seeds rotated to `*_v2` to force
+fresh storage layouts. Pre-rotation accounts orphaned — see
+`SVM/oku-programs/deployments/DEPRECATED.md` for the orphan-PDA table and
+post-launch rent-recovery plan.
+
+Tag location: `noBridge-mvp-deployed` → HEAD on `noBridge` branch.
 
 **On timelocks:** okuMoney is a centralized US-regulated financial product, not a
 decentralized protocol. Industry peers (USDC, USDT, USDP, PYUSD, FDUSD) do not use

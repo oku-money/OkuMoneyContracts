@@ -364,6 +364,7 @@ async function testMint(ctx: TestContext) {
       .accountsPartial({
         oracleManager: ctx.deployer.publicKey,
         config: ctx.psmConfig,
+        oracleAccount: null,
       })
       .rpc();
     await confirmTx(ctx, sig);
@@ -1391,6 +1392,7 @@ async function testOracleMint(ctx: TestContext) {
     .accountsPartial({
       oracleManager: ctx.deployer.publicKey,
       config: ctx.psmConfig,
+      oracleAccount: null,
     })
     .rpc();
   await confirmTx(ctx, disableSig);
@@ -1436,6 +1438,7 @@ async function testOracleMint(ctx: TestContext) {
     .accountsPartial({
       oracleManager: ctx.deployer.publicKey,
       config: ctx.psmConfig,
+      oracleAccount: null,
     })
     .rpc();
   await confirmTx(ctx, resetSig);

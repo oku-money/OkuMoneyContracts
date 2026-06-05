@@ -27,6 +27,32 @@ post-launch rent-recovery plan.
 
 Tag location: `noBridge-mvp-deployed` → HEAD on `noBridge` branch.
 
+### Post-deploy smoke test (2026-06-05)
+
+End-to-end smoke against live testnets. All flows verified.
+
+**SVM devnet (`npm run test:onchain`):** 12 / 12 steps passing — `state`,
+`mint`, `transfer`, `rebase`, `wrap`, `unwrap`, `redeem`, `queueRedeem`,
+`distributeYield`, `pause`, `setAuthority`, `oracleMint`. One fix shipped
+in this round: `test-devnet.ts` `setOracle(PublicKey.default, ...)` calls
+were missing the explicit `oracleAccount: null` field — added at three
+call sites (lines 367, 1395, 1441).
+
+**EVM orchestrator CLIs on baseSepolia (`scripts/interactions/*.ts`):**
+all 6 verified — `depositBuffer`, `mintOkuM`, `redeemOkuM`, `processQueue`,
+`withdrawBuffer`, `configureMinterAllowance`. Display logs show
+pre-tx balances instead of post-tx in two places (cosmetic, doesn't affect
+operation); on-chain state always reflects the correct final values.
+
+**Cross-chain bridge (baseSepolia → bscTestnet):**
+- Source leg: `redeemOkuM(5 OkuM)` on baseSepolia tx `0x2b1e8ef3…`
+- Off-chain transit: dev wallet minted 5 USDC on bscTestnet tx `0x5aaee7d8…`
+  (models orchestrator's USDC custody transfer across rails)
+- Destination leg: `mintOkuM(5 USDC)` on bscTestnet tx `0xa5ddf491…`
+- Recipient OkuM balance on bscTestnet: 5 (matches source-leg burn)
+- USDC conservation invariant verified — every USDC accounted for on
+  both sides of the bridge.
+
 **On timelocks:** okuMoney is a centralized US-regulated financial product, not a
 decentralized protocol. Industry peers (USDC, USDT, USDP, PYUSD, FDUSD) do not use
 on-chain timelocks; they rely on operational, procedural, and regulatory controls.

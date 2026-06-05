@@ -141,28 +141,17 @@
       }
     },
     {
-      "program": "LitePsm",
-      "programId": "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N",
-      "oldElfSize": 795600,
-      "newElfSize": 527848,
-      "oldElfSha256": "3cb7e6bbe2fea08aa538868168b8351139fa007bad8f939e8442cac204c95732",
-      "newElfSha256": "1ec2dd4d284640868c64427a7f8ee13bc7556d7c3a0fb5bb2ed25151713a538f",
-      "txSignature": "<unrecorded-upgrade>",
-      "timestamp": "2026-06-04T00:00:00.000Z",
-      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
-      "note": "devnet-fork rehearsal on 2026-06-04 confirmed on-chain SHA already matches local noBridge build (1ec2dd4d). An upgrade must have been deployed out-of-band and not captured in this file. PsmConfig reads correctly (pythProgramOwner=HqqGG7V9sq9LguE8Et7YE7tdtH6vefanJm7udr9st1je, no corruption). No further LitePsm upgrade needed."
-    },
-    {
       "program": "OkuDollar",
       "programId": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy",
-      "oldElfSize": 421688,
+      "oldElfSize": 422032,
       "newElfSize": 415696,
-      "oldElfSha256": "fcb663f93edebe4fc8875a8653558423ce1befb8122b23cb0c369ab42695bfc9",
+      "oldElfSha256": "4b2fa596f2fc144ba1a32d2d529839795e0f33dca52666a9ca6af851b0766e52",
       "newElfSha256": "0e19cd51e40b43c4688c0b9eacc128cd960d846fce37b09235ef2e44ccb31b3a",
-      "txSignature": "<bytecode-unchanged-on-devnet>",
-      "timestamp": "2026-06-04T00:00:00.000Z",
+      "txSignature": "hzoK7s5o8mfqNUh6XkZzRUHVbX6QDmt6oiFZL1uMw5AwP4NX4QnxTokBP58Uj1HB9kHa8grtmVoRiYMDNaqFDnQ",
+      "timestamp": "2026-06-05T14:55:00.000Z",
       "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
-      "note": "devnet-fork rehearsal confirmed on-chain OkuDollar SHA already matches local noBridge build (0e19cd51). No further OkuDollar upgrade needed."
+      "deployedInSlot": 467393427,
+      "note": "Phase 1 of noBridge SVM upgrade ceremony. In-place BPF upgrade — OkuDollarConfig layout unchanged (362 bytes) so no PDA reinit needed. Used direct `solana program deploy --use-rpc --max-sign-attempts 500` against api.devnet.solana.com after the wrapper script's Helius-routed buffer uploads kept producing corrupt ELFs (transient devnet congestion). Post-upgrade config read verified: all 5 authorities = deployer, usd_multiplier=1000003000, no pending role_admin transfer. Earlier devnet.json upgrade records for this program (txSig `4eDGhX...` on 2026-06-02, claiming sha256 `fcb663f9...`) appear stale — actual on-chain pre-upgrade SHA was `4b2fa596...` not `fcb663f9...`."
     }
   ]
 }

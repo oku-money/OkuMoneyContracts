@@ -1,37 +1,22 @@
 /**
- * UUPS proxy deployment utilities using OpenZeppelin Hardhat Upgrades plugin
+ * Contract-instance + tx-wait helpers used by every operator / test script.
+ *
+ * Proxy-deployment helpers (`deployUUPSProxy`, `deployTransparentProxy`) used
+ * to live here but were unused — `scripts/deploy/index.ts` ships its own
+ * retry-aware copies inline. They were removed in the post-MVP script
+ * overhaul. If you need to deploy a proxy outside the master deploy script,
+ * call `upgrades.deployProxy` directly.
  */
 
-import { ethers, upgrades } from "hardhat";
-import { Contract, ContractFactory } from "ethers";
+import { ethers } from "hardhat";
+import { Contract } from "ethers";
 import { logger } from "./logger";
-import { saveAddress } from "./addressBook";
 
 /**
- * Deploy a UUPS proxy with the specified contract factory and initialization arguments
- */
-export async function deployUUPSProxy(
-  contractName: string,
-  initArgs: any[],
-  network: string
-): Promise<Contract> {
-  logger.info(`Deploying ${contractName} with UUPS proxy...`);
-
-  const Factory = await ethers.getContractFactory(contractName);
-  const proxy = await upgrades.deployProxy(Factory, initArgs, { kind: "uups" });
-  await proxy.waitForDeployment();
-
-  const address = await proxy.getAddress();
-  logger.success(`${contractName} deployed at: ${address}`);
-
-  // Save address to address book
-  saveAddress(network, contractName, address);
-
-  return proxy;
-}
-
-/**
- * Get a deployed contract instance from the address book
+ * Get a deployed contract instance bound to the given address.
+ *
+ * Uses the locally-compiled artifact for `contractName`, so the ABI matches
+ * the source in `EVM/src/` even if the on-chain bytecode is an older impl.
  */
 export async function getDeployedContract(
   contractName: string,
@@ -42,30 +27,7 @@ export async function getDeployedContract(
 }
 
 /**
- * Deploy a Transparent proxy with the specified contract factory and initialization arguments
- */
-export async function deployTransparentProxy(
-  contractName: string,
-  initArgs: any[],
-  network: string
-): Promise<Contract> {
-  logger.info(`Deploying ${contractName} with Transparent proxy...`);
-
-  const Factory = await ethers.getContractFactory(contractName);
-  const proxy = await upgrades.deployProxy(Factory, initArgs, { kind: "transparent" });
-  await proxy.waitForDeployment();
-
-  const address = await proxy.getAddress();
-  logger.success(`${contractName} deployed at: ${address}`);
-
-  // Save address to address book
-  saveAddress(network, contractName, address);
-
-  return proxy;
-}
-
-/**
- * Wait for a transaction with logging
+ * Wait for a tx, log the confirmation block. Throws on revert (ethers default).
  */
 export async function waitForTx(tx: any, description: string): Promise<void> {
   logger.info(`${description}...`);

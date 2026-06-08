@@ -11,10 +11,10 @@
  *
  * Usage:
  *   # Mint 1000 USDC worth of OkuM (6-decimal units):
- *   NETWORK=base npx hardhat run scripts/interactions/mintOkuM.ts --network base \
+ *   NETWORK=base npx hardhat run scripts/operator/mintOkuM.ts --network base \
  *       --usdcAmount 1000000000
  *
- *   DRY_RUN=true NETWORK=base npx hardhat run scripts/interactions/mintOkuM.ts --network base \
+ *   DRY_RUN=true NETWORK=base npx hardhat run scripts/operator/mintOkuM.ts --network base \
  *       --usdcAmount 1000000000
  *
  * Environment:

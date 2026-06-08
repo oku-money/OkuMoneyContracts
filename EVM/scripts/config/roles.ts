@@ -1,8 +1,14 @@
 /**
- * Role constants for OkuMoney contracts
- * These are the keccak256 hashes of role names used in AccessControl
+ * Role constants for OkuMoney contracts.
+ * These are the keccak256 hashes of role names used in OpenZeppelin AccessControl.
  *
- * NOTE: These must match the roles defined in src/lib/Roles.sol
+ * NOTE: These must match the roles defined in `src/lib/Roles.sol`.
+ *
+ * Reserved-but-not-mirrored: `Roles.sol` keeps BRIDGE_* / ROUTER_* role
+ * constants as forward-compatibility seams for a future on-chain bridge.
+ * They are intentionally NOT mirrored here because no script grants or
+ * checks them; mirroring would create dead constants on the TS side. If
+ * the on-chain bridge is reintroduced, re-add the relevant hashes here.
  */
 
 import { keccak256, toUtf8Bytes } from "ethers";
@@ -45,29 +51,6 @@ export const ROLES = {
   QUEUE_UPGRADER: keccak256(toUtf8Bytes("QUEUE_UPGRADER")),
   QUEUE_PSM: keccak256(toUtf8Bytes("QUEUE_PSM")),
   QUEUE_RESCUER: keccak256(toUtf8Bytes("QUEUE_RESCUER")),
-
-  // ============ OkuBridge Roles (RESERVED) ============
-  // OkuBridge contract was removed in the noBridge refactor; the role constants
-  // remain so a future re-introduction is a pure deploy + grant operation.
-  BRIDGE_SIGNER_MANAGER: keccak256(toUtf8Bytes("BRIDGE_SIGNER_MANAGER")),
-  BRIDGE_PAUSER: keccak256(toUtf8Bytes("BRIDGE_PAUSER")),
-  BRIDGE_UNPAUSER: keccak256(toUtf8Bytes("BRIDGE_UNPAUSER")),
-  BRIDGE_FEE_MANAGER: keccak256(toUtf8Bytes("BRIDGE_FEE_MANAGER")),
-  BRIDGE_NONCE_ADMIN: keccak256(toUtf8Bytes("BRIDGE_NONCE_ADMIN")),
-  BRIDGE_CHAIN_MANAGER: keccak256(toUtf8Bytes("BRIDGE_CHAIN_MANAGER")),
-  BRIDGE_LIMITS_MANAGER: keccak256(toUtf8Bytes("BRIDGE_LIMITS_MANAGER")),
-  BRIDGE_UPGRADER: keccak256(toUtf8Bytes("BRIDGE_UPGRADER")),
-  BRIDGE_REFUND_INITIATOR: keccak256(toUtf8Bytes("BRIDGE_REFUND_INITIATOR")),
-  BRIDGE_REFUND_CONFIRMER: keccak256(toUtf8Bytes("BRIDGE_REFUND_CONFIRMER")),
-
-  // ============ OkuBridgeRouter Roles (RESERVED) ============
-  // OkuBridgeRouter was removed in the noBridge refactor; constants kept for
-  // forward compatibility (see OkuBridge note above).
-  ROUTER_UPGRADER: keccak256(toUtf8Bytes("ROUTER_UPGRADER")),
-  ROUTER_PAUSER: keccak256(toUtf8Bytes("ROUTER_PAUSER")),
-  ROUTER_UNPAUSER: keccak256(toUtf8Bytes("ROUTER_UNPAUSER")),
-  ROUTER_ADAPTER_MANAGER: keccak256(toUtf8Bytes("ROUTER_ADAPTER_MANAGER")),
-  ROUTER_BRIDGE_MANAGER: keccak256(toUtf8Bytes("ROUTER_BRIDGE_MANAGER")),
 };
 
 /**

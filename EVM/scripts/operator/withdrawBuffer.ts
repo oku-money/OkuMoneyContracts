@@ -7,9 +7,9 @@
  * would leave insufficient buffer.
  *
  * Usage:
- *   NETWORK=base npx hardhat run scripts/interactions/withdrawBuffer.ts --network base \
+ *   NETWORK=base npx hardhat run scripts/operator/withdrawBuffer.ts --network base \
  *       --amount 1000000000 --to 0xRecipientAddress
- *   DRY_RUN=true NETWORK=base npx hardhat run scripts/interactions/withdrawBuffer.ts --network base \
+ *   DRY_RUN=true NETWORK=base npx hardhat run scripts/operator/withdrawBuffer.ts --network base \
  *       --amount 1000000000 --to 0xRecipientAddress
  *
  * Environment:

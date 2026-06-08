@@ -669,7 +669,7 @@ async function main() {
   logger.info("Next steps:");
   logger.info("1. Check the updated testnet-addresses.json at the repo root");
   logger.info("2. Deploy SVM: cd ../SVM/oku-programs && NETWORK=devnet npm run deploy:programs && npm run deploy:init");
-  logger.info("3. Test PSM flow: npx hardhat run scripts/interactions/test-flow.ts --network " + networkName);
+  logger.info("3. Test PSM flow: npx hardhat run scripts/test/test-onchain.ts --network " + networkName);
 }
 
 main()

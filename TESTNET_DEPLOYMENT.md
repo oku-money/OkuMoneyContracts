@@ -63,7 +63,7 @@ FORK_NETWORK=base hh node           # =sepolia, =opSepolia, =mainnet, =optimism,
 
 # Terminal 2 — deploy + run integration test against the fork
 hh run scripts/deploy/index.ts --network localhost
-hh run scripts/interactions/test-flow.ts --network localhost
+hh run scripts/test/test-onchain.ts --network localhost
 ```
 
 What the deploy does in one run:
@@ -367,7 +367,7 @@ After live deploy, run `grantRolesMainnet.ts` to route roles to the correct keys
 
 ```bash
 MAINNET_COLD_MULTISIG=0x... MAINNET_WARM_MULTISIG=0x... MAINNET_ORCHESTRATOR=0x... \
-  npx hardhat run scripts/interactions/grantRolesMainnet.ts --network base --yes-mainnet
+  npx hardhat run scripts/operator/grantRolesMainnet.ts --network base --yes-mainnet
 ```
 
 ### SVM Upgrade Authority Transfer

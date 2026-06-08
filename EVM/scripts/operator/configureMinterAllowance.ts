@@ -8,9 +8,9 @@
  * See docs/orchestrator-runbook.md § Minter allowance rotation policy.
  *
  * Usage:
- *   NETWORK=base npx hardhat run scripts/interactions/configureMinterAllowance.ts --network base \
+ *   NETWORK=base npx hardhat run scripts/operator/configureMinterAllowance.ts --network base \
  *       --minter 0xPsmAddress --allowance 10000000000000000000000000   # 10M OkuM (18-dec)
- *   DRY_RUN=true NETWORK=base npx hardhat run scripts/interactions/configureMinterAllowance.ts \
+ *   DRY_RUN=true NETWORK=base npx hardhat run scripts/operator/configureMinterAllowance.ts \
  *       --network base --minter 0xPsmAddress --allowance 10000000000000000000000000
  *
  * Environment:

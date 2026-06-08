@@ -18,7 +18,8 @@ import type { DeploymentAddresses } from './addressBook';
 const REGISTRY_PATH = path.resolve(__dirname, '../../../../testnet-addresses.json');
 
 export interface SvmNetworkEntry {
-  chainId?: number;
+  // chainId was dropped in the noBridge refactor — SVM has no EIP-155-style
+  // chain ID and v1 carries no on-chain chain-ID state.
   rpcUrl?: string;
   explorer?: string;
   programs: Record<string, string | undefined>;

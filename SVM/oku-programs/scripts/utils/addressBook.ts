@@ -253,7 +253,7 @@ export function loadDeployment(network: NetworkName): DeploymentAddresses | null
         `[addressBook]   1. Run \`npm run deploy:init\` to overwrite with current IDs, or`,
         `[addressBook]   2. \`solana program close <OLD_ID> --recipient <YOU> --url ${network}\``,
         `[addressBook]      to recover rent from the old program(s), then delete the file.`,
-        `[addressBook] Continuing with file contents — admin/bridge txs will hit `,
+        `[addressBook] Continuing with file contents — admin txs will hit `,
         `[addressBook] the FILE-level program IDs, NOT the Anchor.toml IDs.`,
         '',
       ].join('\n')

@@ -81,15 +81,15 @@ the queue, then `processQueue`.
 
 ```bash
 # Step 1: Source chain — redeem OkuM (user must approve first)
-NETWORK=<src-chain> npx hardhat run scripts/interactions/redeemOkuM.ts \
+NETWORK=<src-chain> npx hardhat run scripts/operator/redeemOkuM.ts \
     --okuMAmount <18-dec-amount> --yes-mainnet
 
 # Step 2 (if queue path): wait for queue entry to be paid out
-NETWORK=<src-chain> npx hardhat run scripts/interactions/processQueue.ts \
+NETWORK=<src-chain> npx hardhat run scripts/operator/processQueue.ts \
     --yes-mainnet
 
 # Step 3: Destination chain — mint OkuM with received USDC
-NETWORK=<dst-chain> npx hardhat run scripts/interactions/mintOkuM.ts \
+NETWORK=<dst-chain> npx hardhat run scripts/operator/mintOkuM.ts \
     --usdcAmount <6-dec-amount> --yes-mainnet
 ```
 
@@ -201,11 +201,11 @@ Example rotation via EVM script:
 
 ```bash
 # Rotate to 10M OkuM (18-decimal)
-DRY_RUN=true NETWORK=base npx hardhat run scripts/interactions/configureMinterAllowance.ts \
+DRY_RUN=true NETWORK=base npx hardhat run scripts/operator/configureMinterAllowance.ts \
     --network base --minter <psm-address> --allowance 10000000000000000000000000 --yes-mainnet
 
 # Review output, then submit:
-NETWORK=base npx hardhat run scripts/interactions/configureMinterAllowance.ts \
+NETWORK=base npx hardhat run scripts/operator/configureMinterAllowance.ts \
     --network base --minter <psm-address> --allowance 10000000000000000000000000 --yes-mainnet
 ```
 

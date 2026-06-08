@@ -25,14 +25,17 @@
  *
  * Usage:
  *   MAINNET_COLD_MULTISIG=0x... MAINNET_WARM_MULTISIG=0x... MAINNET_ORCHESTRATOR=0x... \
- *     npx hardhat run scripts/interactions/grantRolesMainnet.ts --network base
+ *     npx hardhat run scripts/operator/grantRolesMainnet.ts --network base
  *
  *   # Dry-run (prints planned grants without broadcasting):
  *   DRY_RUN=true MAINNET_COLD_MULTISIG=0x... ... \
- *     npx hardhat run scripts/interactions/grantRolesMainnet.ts --network localhost
+ *     npx hardhat run scripts/operator/grantRolesMainnet.ts --network localhost
  *
- * Safety: requires interactive `yes` confirmation on mainnet-beta networks
- * (base, bsc). Pass `--yes-mainnet` to skip for CI.
+ * Safety: requires explicit opt-in on mainnet-beta networks (base, bsc).
+ * Set YES_MAINNET=1 in the environment to bypass the gate (preferred; works
+ * under `hardhat run`). The legacy --yes-mainnet CLI flag also works when the
+ * script is invoked directly via `ts-node`, but Hardhat v2 rejects unknown
+ * CLI flags so it can't be used with `hardhat run`.
  */
 
 import { ethers, network } from "hardhat";
@@ -61,7 +64,12 @@ function requireEnv(name: string): string {
 }
 
 const DRY_RUN = process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
-const YES_MAINNET = process.argv.includes("--yes-mainnet");
+// Mainnet opt-in: env var (preferred — works under `hardhat run`) or CLI flag
+// (only honored when invoked directly, since Hardhat v2 rejects unknown CLI flags).
+const YES_MAINNET =
+  process.argv.includes("--yes-mainnet") ||
+  process.env.YES_MAINNET === "1" ||
+  process.env.YES_MAINNET === "true";
 
 // ============================================================================
 // Mainnet RBAC topology (mirrors README.md §RBAC table)
@@ -130,7 +138,7 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
 async function confirmIfMainnet(networkName: string): Promise<void> {
   if (!MAINNET_NETWORKS.has(networkName)) return;
   if (YES_MAINNET) {
-    logger.warning(`--yes-mainnet passed; skipping confirmation for ${networkName}`);
+    logger.warning(`YES_MAINNET set; skipping confirmation for ${networkName}`);
     return;
   }
   if (DRY_RUN) {
@@ -138,10 +146,12 @@ async function confirmIfMainnet(networkName: string): Promise<void> {
     return;
   }
   // In a real CLI prompt we'd read stdin. For the CI-unfriendly interactive case,
-  // require the caller to pass --yes-mainnet explicitly.
+  // require the caller to set YES_MAINNET=1 explicitly. (The CLI flag
+  // `--yes-mainnet` is also honored when invoked directly, but Hardhat v2's
+  // `hardhat run` rejects unknown CLI flags before the script sees them.)
   throw new Error(
-    `Refusing to broadcast on ${networkName} without explicit --yes-mainnet flag.\n` +
-    `Re-run with: npx hardhat run ... --network ${networkName} --yes-mainnet`
+    `Refusing to broadcast on ${networkName} without explicit YES_MAINNET opt-in.\n` +
+    `Re-run with: YES_MAINNET=1 npx hardhat run ... --network ${networkName}`
   );
 }
 

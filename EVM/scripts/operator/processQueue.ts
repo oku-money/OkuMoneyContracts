@@ -6,10 +6,10 @@
  * reached. Reads queue state on-chain before each batch.
  *
  * Usage:
- *   NETWORK=base npx hardhat run scripts/interactions/processQueue.ts --network base
- *   NETWORK=base npx hardhat run scripts/interactions/processQueue.ts --network base \
+ *   NETWORK=base npx hardhat run scripts/operator/processQueue.ts --network base
+ *   NETWORK=base npx hardhat run scripts/operator/processQueue.ts --network base \
  *       --batch-size 25 --limit 3    # up to 3 batches of 25 entries
- *   DRY_RUN=true NETWORK=base npx hardhat run scripts/interactions/processQueue.ts --network base
+ *   DRY_RUN=true NETWORK=base npx hardhat run scripts/operator/processQueue.ts --network base
  *
  * Environment:
  *   DRY_RUN=true   Print intent without submitting

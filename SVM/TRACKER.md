@@ -38,7 +38,7 @@ in this round: `test-devnet.ts` `setOracle(PublicKey.default, ...)` calls
 were missing the explicit `oracleAccount: null` field — added at three
 call sites (lines 367, 1395, 1441).
 
-**EVM orchestrator CLIs on baseSepolia (`scripts/interactions/*.ts`):**
+**EVM orchestrator CLIs on baseSepolia (`scripts/operator/*.ts`):**
 all 6 verified — `depositBuffer`, `mintOkuM`, `redeemOkuM`, `processQueue`,
 `withdrawBuffer`, `configureMinterAllowance`. Display logs show
 pre-tx balances instead of post-tx in two places (cosmetic, doesn't affect
@@ -156,7 +156,7 @@ Both EVM and SVM need this. Output JSON for Prometheus/alertmanager consumption.
 
 `scripts/admin/mint-okum.ts` and `scripts/admin/redeem-okum.ts` — standalone CLIs
 for the orchestrator's bridge legs. Currently only accessible inside the
-`test-devnet.ts` step runner. Mirror the EVM `scripts/interactions/mintOkuM.ts`
+`test-devnet.ts` step runner. Mirror the EVM `scripts/operator/mintOkuM.ts`
 pattern.
 
 `scripts/admin/set-vault-authority.ts` — OkuDollar (vault) role rotation. The

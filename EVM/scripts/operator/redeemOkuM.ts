@@ -10,9 +10,9 @@
  * OkuM and receive USDC which it custodies for the destination-chain mint.
  *
  * Usage:
- *   NETWORK=base npx hardhat run scripts/interactions/redeemOkuM.ts --network base \
+ *   NETWORK=base npx hardhat run scripts/operator/redeemOkuM.ts --network base \
  *       --okuMAmount 1000000000000000000000  # 1000 OkuM (18 decimals)
- *   DRY_RUN=true NETWORK=base npx hardhat run scripts/interactions/redeemOkuM.ts --network base \
+ *   DRY_RUN=true NETWORK=base npx hardhat run scripts/operator/redeemOkuM.ts --network base \
  *       --okuMAmount 1000000000000000000000
  *
  * Environment:

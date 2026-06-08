@@ -20,6 +20,7 @@ import { createProvider, detectNetwork } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
+import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 
 function parseArg(name: string): string | undefined {
   const a = process.argv.find((x) => x.startsWith(`--${name}=`));
@@ -60,8 +61,20 @@ async function main() {
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
-  logger.info(`oracle:    ${isDisable ? '(disabled)' : oracle.toBase58()}`);
-  logger.info(`staleness: ${staleness}s`);
+  logger.info(
+    summaryBlock('set_oracle()', {
+      'config PDA': psmConfig.toBase58(),
+      'oracle': isDisable ? '(disabled)' : oracle.toBase58(),
+      'staleness (s)': String(staleness),
+      'signer (oracle_manager)': provider.wallet.publicKey.toBase58(),
+    })
+  );
+
+  if (isDryRun()) return logger.success('--dry-run set; not submitting.');
+  await confirmIfMainnet(
+    network,
+    `set_oracle(${isDisable ? 'disable' : oracle.toBase58()}, staleness=${staleness}s) on mainnet`
+  );
 
   // `oracle_account` is required when configuring a non-default oracle so
   // the program can pre-flight the Pyth header (magic / version / expo)

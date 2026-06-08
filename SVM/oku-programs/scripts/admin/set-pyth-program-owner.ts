@@ -18,6 +18,7 @@ import { createProvider, detectNetwork } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA } from '../utils/pdaHelpers';
+import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 
 function parseArg(name: string): string | undefined {
   const a = process.argv.find((x) => x.startsWith(`--${name}=`));
@@ -48,12 +49,24 @@ async function main() {
 
   const cfg = await program.account.psmConfig.fetch(psmConfig);
   const old = cfg.pythProgramOwner as PublicKey;
-  logger.info(`current Pyth owner: ${old.toBase58()}`);
-  logger.info(`new Pyth owner:     ${newOwner.toBase58()}`);
+  logger.info(
+    summaryBlock('set_pyth_program_owner()', {
+      'config PDA': psmConfig.toBase58(),
+      'current Pyth owner': old.toBase58(),
+      'new Pyth owner': newOwner.toBase58(),
+      'signer (oracle_manager)': provider.wallet.publicKey.toBase58(),
+    })
+  );
   if (old.equals(newOwner)) {
     logger.warning('Already set to that program — no-op.');
     return;
   }
+
+  if (isDryRun()) return logger.success('--dry-run set; not submitting.');
+  await confirmIfMainnet(
+    network,
+    `set_pyth_program_owner(${newOwner.toBase58()}) on mainnet — rotates accepted Pyth program ID`
+  );
 
   const sig = await program.methods
     .setPythProgramOwner(newOwner)

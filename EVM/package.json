@@ -31,6 +31,12 @@
     "deploy:base": "hardhat run scripts/deploy/index.ts --network base",
     "deploy:bsc": "hardhat run scripts/deploy/index.ts --network bsc",
 
+    "verify:sepolia": "hardhat run scripts/deploy/verify.ts --network sepolia",
+    "verify:baseSepolia": "hardhat run scripts/deploy/verify.ts --network baseSepolia",
+    "verify:bscTestnet": "hardhat run scripts/deploy/verify.ts --network bscTestnet",
+    "verify:base": "hardhat run scripts/deploy/verify.ts --network base",
+    "verify:bsc": "hardhat run scripts/deploy/verify.ts --network bsc",
+
     "upgrade": "hardhat run scripts/upgrade/index.ts --network localhost",
     "upgrade:sepolia": "NETWORK=sepolia hardhat run scripts/upgrade/index.ts --network sepolia",
     "upgrade:opSepolia": "NETWORK=opSepolia hardhat run scripts/upgrade/index.ts --network opSepolia",
@@ -39,8 +45,26 @@
     "upgrade:base": "NETWORK=base hardhat run scripts/upgrade/index.ts --network base",
     "upgrade:bsc": "NETWORK=bsc hardhat run scripts/upgrade/index.ts --network bsc",
 
-    "test:flow": "NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network localhost",
-    "test:flow:live": "NETWORK=sepolia npx hardhat run scripts/interactions/test-flow.ts --network sepolia"
+    "test:onchain": "NETWORK=sepolia hardhat run scripts/test/test-onchain.ts --network localhost",
+    "test:onchain:sepolia": "NETWORK=sepolia hardhat run scripts/test/test-onchain.ts --network sepolia",
+    "test:onchain:baseSepolia": "NETWORK=baseSepolia hardhat run scripts/test/test-onchain.ts --network baseSepolia",
+    "test:onchain:bscTestnet": "NETWORK=bscTestnet hardhat run scripts/test/test-onchain.ts --network bscTestnet",
+
+    "bridge:evm": "ts-node --transpile-only scripts/test/bridge-evm-evm.ts",
+
+    "operator:mint": "hardhat run scripts/operator/mintOkuM.ts",
+    "operator:redeem": "hardhat run scripts/operator/redeemOkuM.ts",
+    "operator:depositBuffer": "hardhat run scripts/operator/depositBuffer.ts",
+    "operator:withdrawBuffer": "hardhat run scripts/operator/withdrawBuffer.ts",
+    "operator:processQueue": "hardhat run scripts/operator/processQueue.ts",
+    "operator:configureMinterAllowance": "hardhat run scripts/operator/configureMinterAllowance.ts",
+    "operator:configureOracle": "hardhat run scripts/operator/configureOracle.ts",
+    "operator:distributeYield": "hardhat run scripts/operator/distributeYield.ts",
+    "operator:pause": "hardhat run scripts/operator/pause.ts",
+    "operator:unpause": "hardhat run scripts/operator/unpause.ts",
+    "operator:rescueQueueEntry": "hardhat run scripts/operator/rescueQueueEntry.ts",
+    "operator:grantRoles": "hardhat run scripts/operator/grantRoles.ts",
+    "operator:grantRolesMainnet": "hardhat run scripts/operator/grantRolesMainnet.ts"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",

@@ -19,17 +19,22 @@
  * wallet (DEV_WALLET_ADDRESS in scripts/config/chains.ts).
  *
  * Usage:
- *   npx hardhat run scripts/interactions/grantRoles.ts --network base
- *   npx hardhat run scripts/interactions/grantRoles.ts --network sepolia
- *   npx hardhat run scripts/interactions/grantRoles.ts --network bsc
+ *   npx hardhat run scripts/operator/grantRoles.ts --network sepolia
+ *   npx hardhat run scripts/operator/grantRoles.ts --network baseSepolia
+ *   npx hardhat run scripts/operator/grantRoles.ts --network bscTestnet
  *
  *   # Fork (auto-detects target chain from the running node, or pass NETWORK=…):
- *   NETWORK=base npx hardhat run scripts/interactions/grantRoles.ts --network localhost
+ *   NETWORK=base npx hardhat run scripts/operator/grantRoles.ts --network localhost
+ *
+ *   # Mainnet (requires explicit opt-in; prefer grantRolesMainnet.ts for production):
+ *   YES_MAINNET=1 NETWORK=base npx hardhat run scripts/operator/grantRoles.ts --network base
  *
  * Environment knobs (live networks only; forks are unaffected):
  *   CONFIRMATIONS=N   confirmations to wait per tx (default 2)
  *   SETTLE_MS=N       extra ms to sleep after each mined tx before the next
  *                     hasRole read (default 1500; set 0 to disable)
+ *   DRY_RUN=1         print planned grants without broadcasting (safe on any chain)
+ *   YES_MAINNET=1     bypass the mainnet safety gate (see notes above)
  */
 
 import { ethers, network } from "hardhat";
@@ -78,21 +83,32 @@ const DRY_RUN = process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
 
 /**
  * Mainnet safety gate — mirrors SVM's `confirmIfMainnet`.
- * On known mainnet-beta chains, require `--yes-mainnet` or throw.
+ * On known mainnet-beta chains, require explicit opt-in or throw.
+ *
+ * Opt-in mechanisms (any of):
+ *   - YES_MAINNET=1 / YES_MAINNET=true env var (preferred)
+ *   - --yes-mainnet CLI flag (only works when the script is invoked directly,
+ *     e.g. `npx ts-node scripts/operator/grantRoles.ts ...`; Hardhat v2's
+ *     `hardhat run` rejects unknown CLI flags before the script sees them, so
+ *     use the env var when running under `npx hardhat run`).
  */
-const YES_MAINNET = process.argv.includes("--yes-mainnet");
+const YES_MAINNET =
+  process.argv.includes("--yes-mainnet") ||
+  process.env.YES_MAINNET === "1" ||
+  process.env.YES_MAINNET === "true";
 const MAINNET_NETWORKS = new Set(["base", "bsc", "mainnet", "ethereum"]);
 function assertNotMainnet(networkName: string) {
   if (!MAINNET_NETWORKS.has(networkName)) return;
   if (YES_MAINNET) {
-    logger.warning(`--yes-mainnet passed; proceeding on ${networkName}`);
+    logger.warning(`YES_MAINNET set; proceeding on ${networkName}`);
     return;
   }
   if (DRY_RUN) return; // dry-run is always safe
   throw new Error(
     `Refusing to broadcast on ${networkName}.\n` +
     `  grantRoles.ts routes EVERYTHING to MASTER_EOA — use grantRolesMainnet.ts instead.\n` +
-    `  If you truly want to proceed with this script on ${networkName}, pass --yes-mainnet.`
+    `  If you truly want to proceed with this script on ${networkName}, set YES_MAINNET=1.\n` +
+    `  Example: YES_MAINNET=1 NETWORK=${networkName} npx hardhat run scripts/operator/grantRoles.ts --network ${networkName}`
   );
 }
 
@@ -103,6 +119,12 @@ type RoleName = keyof typeof ROLES;
  *
  * NOTE: every list begins with DEFAULT_ADMIN_ROLE so the master EOA can
  * subsequently grant/revoke any role itself.
+ *
+ * OkuDollar reuses the OKUM_BLACKLISTER / OKUM_UNBLACKLISTER role hashes
+ * (so a single role *name* spans both tokens for regulatory enforcement),
+ * but AccessControl mappings are per-contract — the role must be granted
+ * separately on OkuMoney AND OkuDollar. Mirrors deploy/index.ts and
+ * grantRolesMainnet.ts.
  */
 const ROLE_MAP: Record<string, readonly RoleName[]> = {
   OkuMoney: [
@@ -125,6 +147,11 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
     "VAULT_PAUSER",
     "VAULT_UNPAUSER",
     "VAULT_ADMIN",
+    // Per-contract grants of the shared OKUM_BLACKLISTER / OKUM_UNBLACKLISTER
+    // role hashes — required for OkuDollar.blacklist() / unblacklist() since
+    // AccessControl role mappings are per-contract even when the hash is shared.
+    "OKUM_BLACKLISTER",
+    "OKUM_UNBLACKLISTER",
   ],
   LitePSM: [
     "DEFAULT_ADMIN_ROLE",

@@ -666,12 +666,16 @@ contract OkuDollar is
     }
 
     // ============ Blacklist (Works While Paused) ============
-    // Uses shared OKUM_BLACKLISTER / OKUM_UNBLACKLISTER roles so a single role grant
-    // on OkuMoney also covers OkuDollar — regulatory enforcement is cross-token.
+    // Reuses the OKUM_BLACKLISTER / OKUM_UNBLACKLISTER role *hashes* so the same
+    // role name spans both OkuMoney and OkuDollar — regulatory enforcement is
+    // cross-token by design. Note that AccessControl mappings are per-contract,
+    // so the role must still be granted on OkuMoney AND OkuDollar separately
+    // (handled by initialize() below and by deploy/grantRoles scripts).
 
     /// @notice Add `account` to the OkuDollar blacklist.
     /// @dev Blacklisted accounts cannot send or receive UsdOku (wrap, unwrap, transfer, transferFrom).
-    ///      Uses OKUM_BLACKLISTER so a single grant covers both OkuMoney and OkuDollar.
+    ///      Reuses the OKUM_BLACKLISTER role hash so the role name spans both tokens;
+    ///      the grant itself is per-contract (see header comment above).
     function blacklist(address account) external onlyRole(Roles.OKUM_BLACKLISTER) {
         OkuDollarStorage storage $ = _getOkuDollarStorage();
         if ($.isBlacklisted[account]) revert AlreadyBlacklisted();

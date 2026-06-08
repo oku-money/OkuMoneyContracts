@@ -17,9 +17,11 @@
     "test:fork": "RUST_LOG= npx mocha --require tsx --timeout 180000 'tests/fork/**/*.ts'",
     "test:onchain": "NETWORK=devnet tsx scripts/test/test-devnet.ts",
     "test:onchain:fork": "NETWORK=devnet-fork tsx scripts/test/test-devnet.ts",
+    "bridge:svm-evm": "tsx scripts/test/bridge-svm-evm.ts",
     "admin:set-oracle": "tsx scripts/admin/set-oracle.ts",
     "admin:set-pyth-program-owner": "tsx scripts/admin/set-pyth-program-owner.ts",
     "admin:set-authority": "tsx scripts/admin/set-authority.ts",
+    "admin:set-upgrade-authority": "tsx scripts/admin/set-upgrade-authority.ts",
     "admin:pause-psm": "tsx scripts/admin/pause-psm.ts",
     "admin:unpause-psm": "tsx scripts/admin/unpause-psm.ts",
     "admin:distribute-yield": "tsx scripts/admin/distribute-yield.ts",
@@ -29,6 +31,9 @@
     "admin:freeze-account": "tsx scripts/admin/freeze-account.ts",
     "admin:thaw-account": "tsx scripts/admin/thaw-account.ts",
     "admin:process-queue": "tsx scripts/admin/process-queue.ts",
+    "admin:deposit-buffer": "tsx scripts/admin/deposit-buffer.ts",
+    "admin:withdraw-buffer": "tsx scripts/admin/withdraw-buffer.ts",
+    "admin:rescue-queue-entry": "tsx scripts/admin/rescue-queue-entry.ts",
     "admin:close-programs": "tsx scripts/admin/close-programs.ts",
     "upgrade": "tsx scripts/upgrade/index.ts",
     "upgrade:devnet": "NETWORK=devnet tsx scripts/upgrade/index.ts",
@@ -45,7 +50,8 @@
     "@solana/spl-token": "^0.4.6",
     "@solana/web3.js": "^1.95.0",
     "chalk": "^5.3.0",
-    "dotenv": "^16.4.0"
+    "dotenv": "^16.4.0",
+    "ethers": "^6.16.0"
   },
   "devDependencies": {
     "@types/chai": "^4.3.4",

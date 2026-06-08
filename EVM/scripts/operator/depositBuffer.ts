@@ -5,9 +5,9 @@
  * wallet into the PSM's reserve buffer so instant redemptions can proceed.
  *
  * Usage:
- *   NETWORK=base npx hardhat run scripts/interactions/depositBuffer.ts --network base \
+ *   NETWORK=base npx hardhat run scripts/operator/depositBuffer.ts --network base \
  *       --amount 1000000000    # 1000 USDC (6 decimals)
- *   DRY_RUN=true NETWORK=base npx hardhat run scripts/interactions/depositBuffer.ts --network base \
+ *   DRY_RUN=true NETWORK=base npx hardhat run scripts/operator/depositBuffer.ts --network base \
  *       --amount 1000000000
  *
  * Environment:

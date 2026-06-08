@@ -85,7 +85,7 @@ FORK_NETWORK=base hh node            # =sepolia, =bsc, =arbitrum, =mainnet, ...
 
 # Terminal 2: deploy + run integration test against the running fork.
 hh run scripts/deploy/index.ts --network localhost     # auto-detects target chain from fork's chainId
-hh run scripts/interactions/test-flow.ts --network localhost
+hh run scripts/test/test-onchain.ts --network localhost
 ```
 
 The deploy script auto-detects the target chain from the running node's
@@ -191,7 +191,7 @@ For chains without a pre-baked npm alias (`base`, `bsc`, `arbitrum`, `optimism`,
 
 ```bash
 hh run scripts/deploy/index.ts --network <chain>
-NETWORK=<chain> hh run scripts/interactions/test-flow.ts --network <chain>
+NETWORK=<chain> hh run scripts/test/test-onchain.ts --network <chain>
 ```
 
 ## Contract Structure

@@ -1198,4 +1198,234 @@ contract RedemptionQueueTest is BaseTest {
         _setOkuMMultiplierAndRoll(PRECISION * 2);
         assertEq(redemptionQueue.totalQueuedUsdc(), 2 * amount / DECIMAL_MULTIPLIER);
     }
+
+    // ============ TransferFailed Soft-Skip Tests ============
+    //
+    // Drives the mock-USDC blocked-address path through {RedemptionQueue.processQueue}
+    // so the low-level `.call` returns `ok = false` and the entry is soft-skipped via
+    // `RedemptionSkipped(i, TransferFailed)` instead of reverting the whole batch.
+    // The OkuM for the skipped entry stays in escrow and `totalQueuedOkuM` is NOT
+    // decremented; the operator clears it later via `rescueQueueEntry`.
+
+    /// @notice Blocked recipient on a single-entry queue: skip event emitted,
+    ///         no OkuM burned, totalQueuedOkuM unchanged, queueHead does NOT advance
+    ///         (entry slot still occupied).
+    function test_ProcessQueue_TransferFailed_SoftSkipEmitsEvent() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        // Approve USDC for the (would-be) transfer.
+        uint256 usdcAmount = amount * okuMoney.okuMMultiplier() / PRECISION / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), usdcAmount);
+        _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
+
+        // Block user1 so transferFrom returns false without reverting.
+        usdc.setBlocked(user1, true);
+
+        uint256 escrowBefore = okuMoney.balanceOf(address(redemptionQueue));
+        uint256 totalQueuedBefore = redemptionQueue.totalQueuedOkuM();
+
+        vm.expectEmit(true, false, false, true);
+        emit RedemptionQueueEvents.RedemptionSkipped(
+            0, RedemptionQueueEvents.RedemptionSkipReason.TransferFailed
+        );
+        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
+
+        // OkuM stays in escrow.
+        assertEq(okuMoney.balanceOf(address(redemptionQueue)), escrowBefore);
+        // Accumulator is NOT decremented.
+        assertEq(redemptionQueue.totalQueuedOkuM(), totalQueuedBefore);
+        // User got no USDC.
+        assertEq(usdc.balanceOf(user1), 0);
+        // Entry slot is still populated (not deleted).
+        RedemptionQueue.QueueEntry memory entry = redemptionQueue.getQueueEntry(0);
+        assertEq(entry.user, user1);
+        assertEq(entry.okuMAmount, amount);
+        // queueHead still 0: _advanceHead does not skip the failed entry because
+        // entry.user != address(0).
+        assertEq(redemptionQueue.queueHead(), 0);
+    }
+
+    /// @notice Interleave blocked + clean users: the blocked one is skipped, the
+    ///         clean one is processed in the same batch.
+    function test_ProcessQueue_TransferFailed_NextEntryStillProcesses() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount * 3);
+
+        // user1 blocked, user2 clean, user3 blocked.
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user2, amount);
+        redemptionQueue.enqueue(user3, amount);
+
+        usdc.setBlocked(user1, true);
+        usdc.setBlocked(user3, true);
+
+        uint256 perEntryUsdc = amount * okuMoney.okuMMultiplier() / PRECISION / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), perEntryUsdc * 3);
+        _approveUsdc(address(this), address(redemptionQueue), perEntryUsdc * 3);
+
+        uint256 escrowBefore = okuMoney.balanceOf(address(redemptionQueue));
+
+        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
+
+        // user2 processed: received USDC, OkuM burned.
+        assertEq(usdc.balanceOf(user2), perEntryUsdc);
+        // user1 + user3 skipped: no USDC, OkuM still in escrow.
+        assertEq(usdc.balanceOf(user1), 0);
+        assertEq(usdc.balanceOf(user3), 0);
+        // Only user2's OkuM was burned (1 entry of `amount`).
+        assertEq(okuMoney.balanceOf(address(redemptionQueue)), escrowBefore - amount);
+        // totalQueuedOkuM decremented only by user2's portion.
+        assertEq(redemptionQueue.totalQueuedOkuM(), amount * 2);
+        // queueHead still 0 (user1's slot blocks advancement).
+        assertEq(redemptionQueue.queueHead(), 0);
+        // user1 and user3 entries still live.
+        assertEq(redemptionQueue.getQueueEntry(0).user, user1);
+        assertEq(redemptionQueue.getQueueEntry(2).user, user3);
+        // user2's slot is deleted (zeroed but still in [head, tail) range).
+        RedemptionQueue.QueueEntry memory cleared = redemptionQueue.getQueueEntry(1);
+        assertEq(cleared.user, address(0));
+        assertEq(cleared.okuMAmount, 0);
+    }
+
+    /// @notice TransferFailed via the *return-false* shape (no revert).
+    ///         Hardening regression: before SafeERC20.trySafeTransferFrom was
+    ///         introduced here, `transferFrom` returning `false` was treated as
+    ///         success and the OkuM would have been burned while the user got
+    ///         no USDC. The fix decodes the return data — both this test and
+    ///         the revert-shape test above must now route into the same skip
+    ///         branch.
+    function test_ProcessQueue_TransferFailed_ReturnFalse_IsAlsoSoftSkipped() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        uint256 usdcAmount = amount * okuMoney.okuMMultiplier() / PRECISION / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), usdcAmount);
+        _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
+
+        // Configure MockUSDC to *return false* (no revert) for transfers
+        // involving user1. Mirrors a hypothetical non-standard USDC variant.
+        usdc.setReturnFalse(user1, true);
+
+        uint256 escrowBefore = okuMoney.balanceOf(address(redemptionQueue));
+        uint256 totalQueuedBefore = redemptionQueue.totalQueuedOkuM();
+
+        vm.expectEmit(true, false, false, true);
+        emit RedemptionQueueEvents.RedemptionSkipped(
+            0, RedemptionQueueEvents.RedemptionSkipReason.TransferFailed
+        );
+        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
+
+        // Same post-conditions as the revert-shape test: OkuM in escrow,
+        // accumulator unchanged, no USDC paid, slot still occupied.
+        assertEq(okuMoney.balanceOf(address(redemptionQueue)), escrowBefore);
+        assertEq(redemptionQueue.totalQueuedOkuM(), totalQueuedBefore);
+        assertEq(usdc.balanceOf(user1), 0);
+        RedemptionQueue.QueueEntry memory entry = redemptionQueue.getQueueEntry(0);
+        assertEq(entry.user, user1);
+        assertEq(entry.okuMAmount, amount);
+        assertEq(redemptionQueue.queueHead(), 0);
+    }
+
+    /// @notice After a TransferFailed skip, the queue can be cleared via
+    ///         rescueQueueEntry: OkuM is returned to the alternate recipient and
+    ///         the queue advances.
+    function test_ProcessQueue_TransferFailed_ThenRescueClearsIt() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        // First attempt: blocked -> soft-skip.
+        usdc.setBlocked(user1, true);
+        uint256 usdcAmount = amount * okuMoney.okuMMultiplier() / PRECISION / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), usdcAmount);
+        _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
+        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
+
+        // Operator rescues to an alternate recipient (user2).
+        uint256 user2OkuMBefore = okuMoney.balanceOf(user2);
+        vm.prank(queueRescuer);
+        redemptionQueue.rescueQueueEntry(0, user2);
+
+        assertEq(okuMoney.balanceOf(user2), user2OkuMBefore + amount);
+        assertEq(redemptionQueue.totalQueuedOkuM(), 0);
+        // Slot cleared; head advances past it.
+        assertEq(redemptionQueue.queueHead(), 1);
+        assertEq(redemptionQueue.queueLength(), 0);
+    }
+
+    /// @notice Drive the `RedemptionSkipped(AlreadyCleared)` branch.
+    ///         Path: enqueue three entries [u1, u2, u3], rescue the middle slot
+    ///         (index 1), then process the [0,3) range. Index 0 (user1) processes
+    ///         normally, index 1 fires AlreadyCleared, index 2 (user3) processes.
+    function test_ProcessQueue_AlreadyCleared_SoftSkipEmitsEvent() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount * 3);
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user2, amount);
+        redemptionQueue.enqueue(user3, amount);
+
+        // Rescue the middle slot — head stays at 0 because index 0 still live.
+        vm.prank(queueRescuer);
+        redemptionQueue.rescueQueueEntry(1, user2);
+        assertEq(redemptionQueue.queueHead(), 0);
+
+        uint256 perEntryUsdc = amount * okuMoney.okuMMultiplier() / PRECISION / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), perEntryUsdc * 2);
+        _approveUsdc(address(this), address(redemptionQueue), perEntryUsdc * 2);
+
+        vm.expectEmit(true, false, false, true);
+        emit RedemptionQueueEvents.RedemptionSkipped(
+            1, RedemptionQueueEvents.RedemptionSkipReason.AlreadyCleared
+        );
+        redemptionQueue.processQueue(0, 3);
+
+        // Both live entries processed; head advances past all three.
+        assertEq(usdc.balanceOf(user1), perEntryUsdc);
+        assertEq(usdc.balanceOf(user3), perEntryUsdc);
+        assertEq(redemptionQueue.queueHead(), 3);
+        assertEq(redemptionQueue.queueLength(), 0);
+    }
+
+    /// @notice Drive the `RedemptionSkipped(InsufficientFunds)` branch.
+    ///         Approve less USDC than the second entry requires; loop should
+    ///         break with InsufficientFunds and stop processing further entries.
+    function test_ProcessQueue_InsufficientFunds_EmitsEventAndBreaks() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount * 2);
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user2, amount);
+
+        uint256 perEntryUsdc = amount * okuMoney.okuMMultiplier() / PRECISION / DECIMAL_MULTIPLIER;
+        // Fund only the first entry.
+        _mintUsdc(address(this), perEntryUsdc);
+        _approveUsdc(address(this), address(redemptionQueue), perEntryUsdc);
+
+        vm.expectEmit(true, false, false, true);
+        emit RedemptionQueueEvents.RedemptionSkipped(
+            1, RedemptionQueueEvents.RedemptionSkipReason.InsufficientFunds
+        );
+        redemptionQueue.processQueue(0, 2);
+
+        // user1 paid; user2 still queued.
+        assertEq(usdc.balanceOf(user1), perEntryUsdc);
+        assertEq(usdc.balanceOf(user2), 0);
+        // queueHead advanced past user1 but stopped at user2.
+        assertEq(redemptionQueue.queueHead(), 1);
+        assertEq(redemptionQueue.queueLength(), 1);
+    }
+
+    // ============ View Getter Tests ============
+
+    function test_View_Usdc() public view {
+        assertEq(address(redemptionQueue.usdc()), address(usdc));
+    }
+
+    function test_View_UsdcDecimalMultiplier() public view {
+        // MockUSDC is 6 decimals; multiplier = 10**(18-6) = 1e12.
+        assertEq(redemptionQueue.usdcDecimalMultiplier(), 1e12);
+        assertEq(redemptionQueue.usdcDecimalMultiplier(), DECIMAL_MULTIPLIER);
+    }
 }

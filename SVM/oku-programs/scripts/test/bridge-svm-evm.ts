@@ -211,10 +211,36 @@ async function evmSendTx(
     logger.warning(`[EVM:${ctx.chainName}] DRY_RUN — would send ${label}`);
     return '<dry-run>';
   }
-  const tx = await contract[method](...args, overrides);
-  const rcpt = await tx.wait(1);
-  logger.success(`[EVM:${ctx.chainName}] ${label} -> ${rcpt.hash}`);
-  return rcpt.hash;
+  // Retry estimateGas/send on transient revert from RPC lag (post-approve
+  // state not yet visible to the estimate path on baseSepolia public RPC).
+  const maxRetries = 3;
+  let lastErr: any;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const tx = await contract[method](...args, overrides);
+      const rcpt = await tx.wait(1);
+      logger.success(`[EVM:${ctx.chainName}] ${label} -> ${rcpt.hash}`);
+      return rcpt.hash;
+    } catch (e: any) {
+      lastErr = e;
+      const msg = e?.shortMessage || e?.message || String(e);
+      if (
+        attempt < maxRetries - 1 &&
+        (msg.includes('execution reverted') ||
+          msg.includes('insufficient allowance') ||
+          msg.includes('replacement transaction underpriced'))
+      ) {
+        logger.warning(
+          `[EVM:${ctx.chainName}] ${label} estimateGas/send failed (attempt ${attempt + 1}/${maxRetries}); ` +
+            `waiting 3s for RPC to settle and retrying...`
+        );
+        await new Promise((r) => setTimeout(r, 3000));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
 }
 
 // ============================================================================
@@ -255,9 +281,17 @@ async function makeSvmCtx(network: NetworkName): Promise<SvmCtx> {
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
   const [redemptionQueue] = deriveRedemptionQueuePDA(litePsmId);
 
-  // anchor.workspace requires Anchor.toml plumbing — fetch the program via
-  // its IDL directly so this script works even outside `anchor test`.
-  const psm = anchor.workspace.LitePsm as Program<LitePsm>;
+  // Load the IDL from target/idl and bind to the deployed program id.
+  // `anchor.workspace.<Name>` only works under `anchor test`, not under tsx.
+  const psmIdlPath = path.resolve(__dirname, '../../target/idl/lite_psm.json');
+  if (!fs.existsSync(psmIdlPath)) {
+    throw new Error(
+      `IDL not found at ${psmIdlPath}. Run \`anchor build\` first.`
+    );
+  }
+  const psmIdl = JSON.parse(fs.readFileSync(psmIdlPath, 'utf-8'));
+  psmIdl.address = litePsmId.toBase58();
+  const psm = new Program(psmIdl, provider) as Program<LitePsm>;
 
   const cfg = await psm.account.psmConfig.fetch(psmConfig);
   const vaultUsdc = cfg.vaultUsdc as PublicKey;
@@ -494,6 +528,25 @@ async function snapEvm(c: EvmCtx): Promise<EvmSnap> {
   return { usdc, okuM, okuMSupply };
 }
 
+/**
+ * Poll `read()` every 1s for up to `maxMs` until the returned value differs
+ * from `baseline`. Public EVM RPCs lag a block before post-tx reads reflect
+ * on-chain state.
+ */
+async function pollEvmDelta(
+  read: () => Promise<bigint>,
+  baseline: bigint,
+  maxMs: number = 30_000
+): Promise<bigint> {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    const cur = await read();
+    if (cur !== baseline) return cur - baseline;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return (await read()) - baseline;
+}
+
 async function snapSvm(c: SvmCtx): Promise<SvmSnap> {
   const usdc = await svmTokenBalance(c, c.usdcMint, c.signer.publicKey, TOKEN_PROGRAM_ID);
   const okuM = await svmTokenBalance(c, c.okuMoneyMint, c.signer.publicKey, TOKEN_2022_PROGRAM_ID);
@@ -580,8 +633,10 @@ async function evmToSvm(
     [okuMAmountEvm],
     `litePSM.redeemOkuM(${ethers.formatUnits(okuMAmountEvm, 18)})`
   );
-  const usdcAfter: bigint = await evm.usdc.balanceOf(evm.wallet.address);
-  const released = usdcAfter - usdcBefore;
+  const released = await pollEvmDelta(
+    () => evm.usdc.balanceOf(evm.wallet.address) as Promise<bigint>,
+    usdcBefore
+  );
   if (released === 0n) throw new Error('[EVM] redeemOkuM released 0 USDC');
   logger.success(`[EVM:${evm.chainName}] released ${ethers.formatUnits(released, evm.usdcDecimals)} USDC`);
 
@@ -684,8 +739,10 @@ async function svmToEvm(
     [released],
     `litePSM.mintOkuM(${ethers.formatUnits(released, evm.usdcDecimals)})`
   );
-  const evmOkuMAfter: bigint = await evm.okuMoney.balanceOf(evm.wallet.address);
-  const minted = evmOkuMAfter - evmOkuMBefore;
+  const minted = await pollEvmDelta(
+    () => evm.okuMoney.balanceOf(evm.wallet.address) as Promise<bigint>,
+    evmOkuMBefore
+  );
   logger.success(`[EVM:${evm.chainName}] minted ${ethers.formatUnits(minted, 18)} OkuM`);
 
   // Post + invariants

@@ -2086,4 +2086,167 @@ contract OkuDollarTest is BaseTest {
         vm.prank(reserveManager);
         okuDollar.withdrawSurplus(10e18);
     }
+
+    // ============ withdrawSurplus Boundary / postRatio Math ============
+    //
+    // Companion to `test_WithdrawSurplus_SucceedsAtExactFloor` which pins the
+    // inclusive postRatio == minCollateralRatio success case. Below we drive:
+    //   * postRatio == minCollateralRatio - 1 wei -> revert (strict-less branch).
+    //   * obligations == 0 -> postRatio set to type(uint256).max (always passes).
+
+    /// @notice One wei past the exact-floor case must revert with
+    ///         BelowMinimumCollateral. Pairs with SucceedsAtExactFloor above.
+    function test_WithdrawSurplus_OneWeiBelowFloor_Reverts() public {
+        _mintUsdOku(user1, 100e18);
+
+        // Reserves = 110 notes, obligations = 100 OkuDollar (multiplier 1e18).
+        _mintOkuMoney(reserveManager, 10e18);
+        _approveOkuMoney(reserveManager, address(okuDollar), 10e18);
+        vm.prank(reserveManager);
+        okuDollar.depositReserves(10e18);
+
+        // 15e18 leaves 95e18 reserves -> exact 95% floor (passes).
+        // 15e18 + 1 leaves (95e18 - 1) wei reserves; postRatio falls below floor
+        // by exactly one PRECISION-scaled unit. Must revert.
+        vm.prank(reserveManager);
+        vm.expectRevert(OkuDollar.BelowMinimumCollateral.selector);
+        okuDollar.withdrawSurplus(15e18 + 1);
+    }
+
+    /// @notice obligations == 0 takes the `type(uint256).max` postRatio branch.
+    ///         With no UsdOku in circulation, withdrawSurplus must succeed
+    ///         regardless of reserves (no UsdOku holders to protect).
+    function test_WithdrawSurplus_ZeroObligations_UsesInfiniteRatio() public {
+        // Fund reserves but mint NO UsdOku.
+        _mintOkuMoney(reserveManager, 100e18);
+        _approveOkuMoney(reserveManager, address(okuDollar), 100e18);
+        vm.prank(reserveManager);
+        okuDollar.depositReserves(100e18);
+
+        assertEq(okuDollar.totalUsdObligations(), 0);
+        assertEq(okuDollar.collateralizationRatio(), type(uint256).max);
+
+        uint256 reservesBefore = okuDollar.totalOkuMReserves();
+        vm.prank(reserveManager);
+        okuDollar.withdrawSurplus(reservesBefore); // drain everything
+
+        assertEq(okuDollar.totalOkuMReserves(), 0);
+    }
+
+    /// @notice Companion: post-withdrawal ratio reflects the live
+    ///         `collateralizationRatio()` view exactly.
+    function test_WithdrawSurplus_EventPostRatioMatchesView() public {
+        // _mintUsdOku wraps 100 OkuM -> 100 reserves + 100 obligations.
+        _mintUsdOku(user1, 100e18);
+        // Add 50 reserves more: total 150 reserves, 100 obligations -> 150% ratio.
+        _mintOkuMoney(reserveManager, 50e18);
+        _approveOkuMoney(reserveManager, address(okuDollar), 50e18);
+        vm.prank(reserveManager);
+        okuDollar.depositReserves(50e18);
+        assertEq(okuDollar.collateralizationRatio(), 150e16);
+
+        vm.prank(reserveManager);
+        okuDollar.withdrawSurplus(20e18);
+
+        // Reserves: 150 -> 130; obligations: 100; ratio = 130%.
+        assertEq(okuDollar.collateralizationRatio(), 130e16);
+    }
+
+    // ============ setNextUsdYieldRate Boundary Tests ============
+
+    /// @notice `block.timestamp == usdRateEnd` must revert (closed inequality:
+    ///         the production check is `>= usdRateEnd`).
+    function test_SetNextUsdYieldRate_RevertAtExactEndBoundary() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(PRECISION + 1393e6, endTime);
+
+        // Warp to exactly endTime — the inequality is `>=`, so this reverts.
+        vm.warp(endTime);
+
+        vm.prank(usdRebaser);
+        vm.expectRevert(OkuDollar.RateAlreadyExpired.selector);
+        okuDollar.setNextUsdYieldRate(PRECISION + 2000e6);
+    }
+
+    /// @notice One second past `usdRateEnd` must revert.
+    function test_SetNextUsdYieldRate_RevertOneSecondPastEnd() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(PRECISION + 1393e6, endTime);
+
+        vm.warp(endTime + 1);
+
+        vm.prank(usdRebaser);
+        vm.expectRevert(OkuDollar.RateAlreadyExpired.selector);
+        okuDollar.setNextUsdYieldRate(PRECISION + 2000e6);
+    }
+
+    /// @notice One second before `usdRateEnd` must succeed (open boundary).
+    function test_SetNextUsdYieldRate_SucceedsOneSecondBeforeEnd() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(PRECISION + 1393e6, endTime);
+
+        vm.warp(endTime - 1);
+
+        uint256 nextRate = PRECISION + 2000e6;
+        vm.prank(usdRebaser);
+        okuDollar.setNextUsdYieldRate(nextRate);
+        assertEq(okuDollar.usdPendingRatePerSecond(), nextRate);
+    }
+
+    /// @notice `RateTooHigh` boundary for `setNextUsdYieldRate` (companion to
+    ///         the existing `setUsdYieldRate` RateTooHigh test).
+    function test_SetNextUsdYieldRate_RevertsOnRateTooHigh() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(PRECISION + 1393e6, endTime);
+
+        vm.prank(usdRebaser);
+        vm.expectRevert(OkuDollar.RateTooHigh.selector);
+        okuDollar.setNextUsdYieldRate(MAX_RATE + 1);
+    }
+
+    // ============ Permit Blacklist Spender Branch ============
+
+    function test_Permit_RevertBlacklistedSpender() public {
+        _mintUsdOku(user1, 100e18);
+        // user1 is the (clean) owner; blacklist the spender (user2).
+        vm.prank(blacklister);
+        okuDollar.blacklist(user2);
+
+        // Permit signature is bogus — call must revert before signature check.
+        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        okuDollar.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
+    }
+
+    // ============ View Getter Tests ============
+
+    function test_View_UsdLastAccrualTime() public {
+        // Calling setUsdYieldRate stamps usdLastAccrualTime = block.timestamp.
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(PRECISION + 1e9, 0);
+        assertEq(okuDollar.usdLastAccrualTime(), block.timestamp);
+    }
+
+    function test_View_GetStatus_ReflectsLiveState() public {
+        _mintUsdOku(user1, 100e18);
+
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(PRECISION + 1393e6, endTime);
+
+        OkuDollar.OkuDollarStatus memory status = okuDollar.getStatus();
+
+        assertEq(status.usdMultiplier, okuDollar.usdMultiplier());
+        assertEq(status.usdBaseMultiplier, okuDollar.usdBaseMultiplier());
+        assertEq(status.usdRatePerSecond, PRECISION + 1393e6);
+        assertEq(status.usdPendingRatePerSecond, PRECISION);
+        assertEq(status.usdLastAccrualTime, block.timestamp);
+        assertEq(status.usdRateEnd, endTime);
+        assertEq(status.totalUsdShares, okuDollar.totalUsdShares());
+        assertEq(status.minCollateralRatio, okuDollar.minCollateralRatio());
+        assertEq(status.collateralizationRatio, okuDollar.collateralizationRatio());
+    }
 }

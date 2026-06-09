@@ -27,10 +27,12 @@ export async function getDeployedContract(
 }
 
 /**
- * Wait for a tx, log the confirmation block. Throws on revert (ethers default).
+ * Wait for a tx, log the confirmation block + tx hash. Throws on revert (ethers default).
  */
 export async function waitForTx(tx: any, description: string): Promise<void> {
   logger.info(`${description}...`);
   const receipt = await tx.wait();
-  logger.success(`${description} - confirmed in block ${receipt.blockNumber}`);
+  logger.success(
+    `${description} - block ${receipt.blockNumber} - ${receipt.hash ?? tx.hash}`
+  );
 }

@@ -43,6 +43,35 @@ jobs:
       - name: Run Forge tests
         run: forge test -vvv
 
+      - name: Run Forge coverage (line threshold = 95%)
+        run: |
+          # Exclude test mocks / harnesses from the coverage run itself.
+          forge coverage --no-match-coverage 'test/|script/' --report summary | tee coverage.txt
+
+          # Gate: every src/ file must have >= 95% line coverage, and the
+          # overall Total line must be >= 95%. Parses the rendered summary
+          # table. Awk-only — no jq/python needed in CI.
+          awk -F'|' '
+            /^\| (src\/|Total)/ {
+              # Strip leading/trailing whitespace from each field.
+              for (i = 1; i <= NF; i++) {
+                gsub(/^[ \t]+|[ \t]+$/, "", $i)
+              }
+              file = $2
+              lines = $3
+              # Extract the percentage (e.g. "98.43% (188/191)" -> 98.43).
+              if (match(lines, /[0-9]+\.[0-9]+/)) {
+                pct = substr(lines, RSTART, RLENGTH) + 0
+                printf "  %-50s %s\n", file, lines
+                if (pct < 95.0) {
+                  printf "::error::%s line coverage %s is below 95%% threshold\n", file, lines
+                  failed = 1
+                }
+              }
+            }
+            END { exit failed }
+          ' coverage.txt
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:

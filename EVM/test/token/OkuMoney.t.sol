@@ -1203,4 +1203,44 @@ contract OkuMoneyTest is BaseTest {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPk, digest);
         okuMoney.permit(owner, spender, value, deadline, v, r, s);
     }
+
+    // ============ Permit Blacklist Guards ============
+    //
+    // OkuMoney.permit blocks blacklisted owners and spenders before delegating
+    // to OZ's ERC20Permit. Both branches are exercised below.
+
+    function test_Permit_RevertBlacklistedOwner() public {
+        vm.prank(blacklister);
+        okuMoney.blacklist(user1);
+
+        // Bogus signature is fine — call must revert before signature check.
+        vm.expectRevert(OkuMoney.SenderBlacklisted.selector);
+        okuMoney.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
+    }
+
+    function test_Permit_RevertBlacklistedSpender() public {
+        // Owner is clean; blacklist the spender.
+        vm.prank(blacklister);
+        okuMoney.blacklist(user2);
+
+        vm.expectRevert(OkuMoney.RecipientBlacklisted.selector);
+        okuMoney.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
+    }
+
+    // ============ AlreadyBlacklisted Guard ============
+
+    function test_Blacklist_RevertsOnDoubleBlacklist() public {
+        vm.prank(blacklister);
+        okuMoney.blacklist(user1);
+
+        vm.prank(blacklister);
+        vm.expectRevert(OkuMoney.AlreadyBlacklisted.selector);
+        okuMoney.blacklist(user1);
+    }
+
+    function test_Unblacklist_RevertsOnNotBlacklisted() public {
+        vm.prank(unblacklister);
+        vm.expectRevert(OkuMoney.NotBlacklisted.selector);
+        okuMoney.unblacklist(user1);
+    }
 }

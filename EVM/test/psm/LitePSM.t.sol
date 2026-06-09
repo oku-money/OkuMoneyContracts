@@ -2,9 +2,11 @@
 pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {Errors} from "../../src/lib/Errors.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
@@ -1952,6 +1954,204 @@ contract LitePSMTest is BaseTest {
             )
         );
         redemptionQueue.assertUsdcMatch(address(oracle));
+    }
+
+    // ============ Initialize Boundary Tests ============
+    //
+    // Drive the InvalidStaleness revert in {LitePSM.initialize}. A fresh proxy is
+    // required because re-initialization is blocked on the existing proxy. Both
+    // bounds (low and high) of `[ORACLE_MIN_STALENESS, ORACLE_MAX_STALENESS]` are
+    // exercised.
+
+    function test_Initialize_RevertOnStalenessBelowMin() public {
+        uint256 belowMin = Constants.ORACLE_MIN_STALENESS - 1;
+        // Deploy a fresh implementation first so expectRevert applies only to the
+        // proxy ERC1967 construction (which invokes `initialize` via delegatecall
+        // and surfaces the revert).
+        LitePSM impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (
+                address(okuMoney),
+                address(okuDollar),
+                address(usdc),
+                address(redemptionQueue),
+                admin,
+                belowMin
+            )
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                LitePSM.InvalidStaleness.selector,
+                belowMin,
+                Constants.ORACLE_MIN_STALENESS,
+                Constants.ORACLE_MAX_STALENESS
+            )
+        );
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    function test_Initialize_RevertOnStalenessAboveMax() public {
+        uint256 aboveMax = Constants.ORACLE_MAX_STALENESS + 1;
+        LitePSM impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize,
+            (
+                address(okuMoney),
+                address(okuDollar),
+                address(usdc),
+                address(redemptionQueue),
+                admin,
+                aboveMax
+            )
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                LitePSM.InvalidStaleness.selector,
+                aboveMax,
+                Constants.ORACLE_MIN_STALENESS,
+                Constants.ORACLE_MAX_STALENESS
+            )
+        );
+        new ERC1967Proxy(address(impl), initData);
+    }
+
+    function test_Initialize_AcceptsBoundaryStaleness() public {
+        // Inclusive bounds: MIN and MAX are both valid.
+        Deploy.deployLitePSM(
+            address(okuMoney),
+            address(okuDollar),
+            address(usdc),
+            address(redemptionQueue),
+            admin,
+            Constants.ORACLE_MIN_STALENESS
+        );
+        Deploy.deployLitePSM(
+            address(okuMoney),
+            address(okuDollar),
+            address(usdc),
+            address(redemptionQueue),
+            admin,
+            Constants.ORACLE_MAX_STALENESS
+        );
+    }
+
+    // ============ Unpause Success Test ============
+
+    function test_Unpause_Succeeds() public {
+        vm.prank(pauser);
+        litePsm.pause();
+        assertTrue(litePsm.paused());
+
+        vm.prank(unpauser);
+        litePsm.unpause();
+        assertFalse(litePsm.paused());
+    }
+
+    // ============ View Getter Tests ============
+    //
+    // The LitePSM storage-accessor views are the public read-API auditors and
+    // integrators rely on. Tests below pin each accessor against the value set
+    // by `initialize` in BaseTest.
+
+    function test_View_OkuMoney() public view {
+        assertEq(address(litePsm.okuMoney()), address(okuMoney));
+    }
+
+    function test_View_OkuDollar() public view {
+        assertEq(address(litePsm.okuDollar()), address(okuDollar));
+    }
+
+    function test_View_Usdc() public view {
+        assertEq(address(litePsm.usdc()), address(usdc));
+    }
+
+    function test_View_RedemptionQueue() public view {
+        assertEq(address(litePsm.redemptionQueue()), address(redemptionQueue));
+    }
+
+    function test_View_StalenessThreshold() public view {
+        // BaseTest deploys with DEFAULT_STALENESS_THRESHOLD.
+        assertEq(litePsm.stalenessThreshold(), 1 hours);
+    }
+
+    function test_View_UsdcDecimalMultiplier_Litepsm() public view {
+        assertEq(litePsm.usdcDecimalMultiplier(), DECIMAL_MULTIPLIER);
+    }
+
+    // ============ _redeemOkuMShared(okuMAtPsm=true) Branch Tests ============
+    //
+    // The `okuMAtPsm=true` branch of `_redeemOkuMShared` is reached only via
+    // `_redeemOkuMFromSelf`, which is called by `_redeemUsdOku`. The branch
+    // SUPPRESSES the `OkuMRedeemed` event (the user-facing event is
+    // `UsdOkuRedeemed`, emitted by the caller). It also skips the OkuM
+    // safeTransferFrom (the OkuM already sits in this contract after `unwrap`).
+    //
+    // Two paths must be covered:
+    //   1) Instant payout (buffer >= usdcAmount): OkuM burned, USDC sent, no OkuMRedeemed.
+    //   2) Queued (buffer < usdcAmount): OkuM transferred to RedemptionQueue, enqueued.
+
+    /// @notice okuMAtPsm=true instant path: redeemUsdOku with sufficient buffer
+    ///         must NOT emit OkuMRedeemed (only UsdOkuRedeemed). Asserted by
+    ///         using `recordLogs` and walking the log array.
+    function test_RedeemUsdOku_OkuMAtPsmInstant_NoOkuMRedeemedEvent() public {
+        // Setup: user1 holds UsdOku; PSM buffer covers the redemption.
+        _mintUsdOku(user1, 100e18);
+        _approveOkuDollar(user1, address(litePsm), 50e18);
+
+        // Buffer is 5000e6 from setUp — plenty to cover ~50 USDC.
+        bytes32 okuMRedeemedSig = keccak256("OkuMRedeemed(address,uint256,uint256,uint256)");
+        bytes32 usdOkuRedeemedSig = keccak256("UsdOkuRedeemed(address,uint256,uint256,uint256)");
+
+        vm.recordLogs();
+        vm.prank(user1);
+        litePsm.redeemUsdOku(50e18);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bool sawOkuMRedeemed = false;
+        bool sawUsdOkuRedeemed = false;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics.length == 0) continue;
+            if (logs[i].topics[0] == okuMRedeemedSig) sawOkuMRedeemed = true;
+            if (logs[i].topics[0] == usdOkuRedeemedSig) sawUsdOkuRedeemed = true;
+        }
+        assertFalse(sawOkuMRedeemed, "OkuMRedeemed must be suppressed under okuMAtPsm=true");
+        assertTrue(sawUsdOkuRedeemed, "UsdOkuRedeemed must fire on the wrapping caller");
+
+        // User received USDC.
+        assertGt(usdc.balanceOf(user1), 0);
+    }
+
+    /// @notice okuMAtPsm=true queued path: drained buffer routes OkuM to the
+    ///         queue. The OkuM that arrives at the queue originates from
+    ///         `_redeemOkuMShared`'s `safeTransfer(redemptionQueue, ...)` line
+    ///         (the okuMAtPsm=true queued branch — NOT the okuMAtPsm=false
+    ///         safeTransferFrom path).
+    function test_RedeemUsdOku_OkuMAtPsmQueued_OkuMRoutedToQueue() public {
+        // Drain the buffer.
+        vm.prank(bufferWithdrawer);
+        litePsm.withdrawUsdc(bufferWithdrawer, 5000e6);
+        assertEq(usdc.balanceOf(address(litePsm)), 0);
+
+        // user1 holds UsdOku; redemption will queue because buffer == 0.
+        _mintUsdOku(user1, 100e18);
+        _approveOkuDollar(user1, address(litePsm), 100e18);
+
+        uint256 queueOkuMBefore = okuMoney.balanceOf(address(redemptionQueue));
+        uint256 queueLenBefore = redemptionQueue.queueLength();
+        uint256 user1UsdcBefore = usdc.balanceOf(user1);
+
+        vm.prank(user1);
+        litePsm.redeemUsdOku(100e18);
+
+        // OkuM ended up at the queue (transferred from PSM, not from user1).
+        assertGt(okuMoney.balanceOf(address(redemptionQueue)), queueOkuMBefore);
+        // Queue length advanced by 1.
+        assertEq(redemptionQueue.queueLength(), queueLenBefore + 1);
+        // User USDC balance unchanged (queued, not paid).
+        assertEq(usdc.balanceOf(user1), user1UsdcBefore);
+        // User's UsdOku is gone (transferred to PSM, then unwrapped).
+        assertEq(okuDollar.balanceOf(user1), 0);
     }
 }
 

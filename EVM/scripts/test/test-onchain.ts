@@ -444,10 +444,36 @@ async function stepRedeem(ctx: TestCtx) {
     await ctx.litePSM.redeemOkuM(amt),
     `LitePSM.redeemOkuM(${ethers.formatUnits(amt, 18)} OkuM)`
   );
-  const usdcAfter: bigint = await ctx.usdc.balanceOf(ctx.user.address);
-  const received = usdcAfter - usdcBefore;
+  // Some public RPCs (e.g. baseSepolia) lag a block or two before tx state
+  // is visible to subsequent reads. Poll the USDC balance until it changes
+  // or a short timeout elapses; reverts here surface as 0-delta which the
+  // assertion below catches.
+  const received = await pollBalanceDelta(
+    () => ctx.usdc.balanceOf(ctx.user.address),
+    usdcBefore,
+    /* maxMs */ 30_000
+  );
   logger.success(`Received ${ethers.formatUnits(received, 6)} USDC`);
   if (received === 0n) throw new Error("redeem returned zero USDC (likely queued — buffer too low?)");
+}
+
+/**
+ * Poll `read()` every 1s for up to `maxMs` until the returned bigint differs
+ * from `baseline`. Returns the absolute delta (final - baseline). If the
+ * value never changes, returns 0 after the timeout.
+ */
+async function pollBalanceDelta(
+  read: () => Promise<bigint>,
+  baseline: bigint,
+  maxMs: number
+): Promise<bigint> {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    const cur = await read();
+    if (cur !== baseline) return cur - baseline;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return (await read()) - baseline;
 }
 
 async function stepQueueRedeem(ctx: TestCtx) {
@@ -459,8 +485,31 @@ async function stepQueueRedeem(ctx: TestCtx) {
 
   const psmAddr = await ctx.litePSM.getAddress();
 
-  // Drain the buffer so the next redeem queues instead of paying instantly.
-  let buf: bigint = await ctx.usdc.balanceOf(psmAddr);
+  // We need (a) some OkuM on the signer to redeem and (b) the PSM USDC
+  // buffer to be empty when we call `redeemOkuM`. Order of operations:
+  //   1. If signer holds < 1 OkuM, mint 1 OkuM first (this puts 1 USDC into
+  //      the buffer as a side effect).
+  //   2. Drain the entire buffer via `withdrawUsdc` so it sits at 0.
+  //   3. Call `redeemOkuM(1 OkuM)` — the buffer is empty so the program
+  //      escrows the OkuM and pushes a queue entry.
+  const queueRedeemAmt = ethers.parseUnits("1", 18);
+  let signerOkuM: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
+  if (signerOkuM < queueRedeemAmt) {
+    const seedUsdc = ethers.parseUnits("1", 6);
+    await ensureUsdc(ctx, seedUsdc);
+    await waitForTx(
+      await ctx.usdc.approve(psmAddr, seedUsdc),
+      "usdc.approve(LitePSM) [queue seed]"
+    );
+    await waitForTx(
+      await ctx.litePSM.mintOkuM(seedUsdc),
+      "LitePSM.mintOkuM (queue seed)"
+    );
+  }
+
+  // Drain the buffer to zero — must happen AFTER any seeding mint that
+  // would re-fill it.
+  const buf: bigint = await ctx.usdc.balanceOf(psmAddr);
   if (buf > 0n) {
     await waitForTx(
       await ctx.litePSM.withdrawUsdc(ctx.user.address, buf),
@@ -468,17 +517,15 @@ async function stepQueueRedeem(ctx: TestCtx) {
     );
   }
 
-  // Now mint a small notional and immediately redeem to land in the queue.
-  const usdcAmount = ethers.parseUnits("1", 6); // 1 USDC test notional
-  await ensureUsdc(ctx, usdcAmount);
-  const okuMBefore: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
-  await waitForTx(await ctx.usdc.approve(psmAddr, usdcAmount), "usdc.approve(LitePSM) [queue test]");
-  await waitForTx(await ctx.litePSM.mintOkuM(usdcAmount), "LitePSM.mintOkuM (queue test)");
-  const okuMAfter: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
-  const minted = okuMAfter - okuMBefore;
-
-  await waitForTx(await ctx.okuMoney.approve(psmAddr, minted), "okuMoney.approve(LitePSM) [queue]");
-  await waitForTx(await ctx.litePSM.redeemOkuM(minted), "LitePSM.redeemOkuM (queue path)");
+  // Redeem with empty buffer -> queue path.
+  await waitForTx(
+    await ctx.okuMoney.approve(psmAddr, queueRedeemAmt),
+    "okuMoney.approve(LitePSM) [queue]"
+  );
+  await waitForTx(
+    await ctx.litePSM.redeemOkuM(queueRedeemAmt),
+    "LitePSM.redeemOkuM (queue path)"
+  );
 
   const qTail: bigint = await ctx.queue.queueTail();
   const qHead: bigint = await ctx.queue.queueHead();
@@ -550,6 +597,24 @@ async function stepDistributeYield(ctx: TestCtx) {
   if (mAfter <= mBefore) throw new Error("distributeYield did not bump multiplier");
 }
 
+async function pollUntil<T>(
+  read: () => Promise<T>,
+  predicate: (v: T) => boolean,
+  maxMs: number,
+  label: string
+): Promise<T> {
+  const deadline = Date.now() + maxMs;
+  let last: T = await read();
+  while (!predicate(last) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1000));
+    last = await read();
+  }
+  if (!predicate(last)) {
+    throw new Error(`pollUntil(${label}) timed out; last value=${String(last)}`);
+  }
+  return last;
+}
+
 async function stepPause(ctx: TestCtx) {
   logger.section("Step 9: pause / unpause");
   await ensurePsmRole(ctx, ROLES.PSM_PAUSER, "PSM_PAUSER");
@@ -559,11 +624,22 @@ async function stepPause(ctx: TestCtx) {
   if (pausedBefore) {
     logger.warning("LitePSM already paused; will unpause then re-test.");
     await waitForTx(await ctx.litePSM.unpause(), "LitePSM.unpause (pre-test cleanup)");
+    await pollUntil<boolean>(
+      () => ctx.litePSM.paused(),
+      (v) => v === false,
+      30_000,
+      "pre-test unpause"
+    );
   }
 
   await waitForTx(await ctx.litePSM.pause(), "LitePSM.pause");
-  const pausedNow: boolean = await ctx.litePSM.paused();
-  if (!pausedNow) throw new Error("LitePSM.pause did not set paused=true");
+  await pollUntil<boolean>(
+    () => ctx.litePSM.paused(),
+    (v) => v === true,
+    30_000,
+    "pause"
+  );
+  logger.success("Confirmed paused=true on chain");
 
   // Verify mint reverts while paused.
   const usdcAmount = ethers.parseUnits("1", 6);
@@ -580,8 +656,12 @@ async function stepPause(ctx: TestCtx) {
   logger.success("Confirmed mintOkuM reverts while paused");
 
   await waitForTx(await ctx.litePSM.unpause(), "LitePSM.unpause");
-  const pausedFinal: boolean = await ctx.litePSM.paused();
-  if (pausedFinal) throw new Error("LitePSM.unpause did not clear paused");
+  await pollUntil<boolean>(
+    () => ctx.litePSM.paused(),
+    (v) => v === false,
+    30_000,
+    "unpause"
+  );
   logger.success("Confirmed LitePSM paused state cycles cleanly");
 }
 
@@ -601,14 +681,22 @@ async function stepConfigureMinterAllowance(ctx: TestCtx) {
     await ctx.okuMoney.configureMinterAllowance(psmAddr, halved),
     `configureMinterAllowance(LitePSM, ${ethers.formatUnits(halved, 18)})`
   );
-  const mid: bigint = await ctx.okuMoney.minterAllowance(psmAddr);
-  if (mid !== halved) throw new Error(`Allowance mid != expected (${mid} vs ${halved})`);
+  await pollUntil<bigint>(
+    () => ctx.okuMoney.minterAllowance(psmAddr),
+    (v) => v === halved,
+    30_000,
+    "allowance halved"
+  );
   await waitForTx(
     await ctx.okuMoney.configureMinterAllowance(psmAddr, before),
     `configureMinterAllowance(LitePSM, ${ethers.formatUnits(before, 18)}) [restore]`
   );
-  const restored: bigint = await ctx.okuMoney.minterAllowance(psmAddr);
-  if (restored !== before) throw new Error(`Allowance not restored (${restored} vs ${before})`);
+  await pollUntil<bigint>(
+    () => ctx.okuMoney.minterAllowance(psmAddr),
+    (v) => v === before,
+    30_000,
+    "allowance restored"
+  );
   logger.success("Allowance rotation cycle complete");
 }
 

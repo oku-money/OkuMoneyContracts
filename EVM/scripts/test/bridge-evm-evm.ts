@@ -45,6 +45,10 @@
  * (and even then, the orchestrator-tool scripts are the preferred surface).
  */
 
+// Load .env when run directly via ts-node / tsx (Hardhat scripts get this for
+// free via its own bootstrap). Idempotent if dotenv was already loaded.
+import "dotenv/config";
+
 import { ethers } from "ethers";
 import * as fs from "fs";
 import * as path from "path";
@@ -238,6 +242,26 @@ async function sendTx(
   return rcpt.hash;
 }
 
+/**
+ * Poll `read()` every 1s for up to `maxMs` until the returned value differs
+ * from `baseline`. Public RPCs (especially BSC testnet + Base Sepolia) lag a
+ * block or two before post-tx reads reflect on-chain state, so synchronous
+ * post-broadcast reads can otherwise return stale snapshots.
+ */
+async function pollDelta(
+  read: () => Promise<bigint>,
+  baseline: bigint,
+  maxMs: number = 30_000
+): Promise<bigint> {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    const cur = await read();
+    if (cur !== baseline) return cur - baseline;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return (await read()) - baseline;
+}
+
 // ============================================================================
 // Bridge legs
 // ============================================================================
@@ -315,8 +339,10 @@ async function bridgeSourceLeg(
     [okuMAmount],
     `LitePSM.redeemOkuM(${ethers.formatUnits(okuMAmount, 18)})`
   );
-  const usdcAfter: bigint = await c.usdc.balanceOf(c.wallet.address);
-  const released = usdcAfter - usdcBefore;
+  const released = await pollDelta(
+    () => c.usdc.balanceOf(c.wallet.address) as Promise<bigint>,
+    usdcBefore
+  );
   logger.success(
     `[${c.name}] released ${ethers.formatUnits(released, c.usdcDecimals)} USDC ` +
       `(from ${ethers.formatUnits(okuMAmount, 18)} OkuM)`
@@ -370,8 +396,10 @@ async function bridgeDestLeg(c: ChainClient, usdcAmount: bigint): Promise<bigint
     [usdcAmount],
     `LitePSM.mintOkuM(${ethers.formatUnits(usdcAmount, c.usdcDecimals)})`
   );
-  const okuMAfter: bigint = await c.okuMoney.balanceOf(c.wallet.address);
-  const minted = okuMAfter - okuMBefore;
+  const minted = await pollDelta(
+    () => c.okuMoney.balanceOf(c.wallet.address) as Promise<bigint>,
+    okuMBefore
+  );
   logger.success(
     `[${c.name}] minted ${ethers.formatUnits(minted, 18)} OkuM ` +
       `(from ${ethers.formatUnits(usdcAmount, c.usdcDecimals)} USDC)`

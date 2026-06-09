@@ -240,17 +240,22 @@ contract RedemptionQueue is
                 break;
             }
 
-            // Attempt the USDC transfer with a low-level call so a single
-            // blacklisted/frozen recipient does not revert the entire batch.
-            // On failure: emit a skip event and leave the entry intact for
-            // `rescueQueueEntry`. The OkuM is NOT burned; it stays in escrow.
-            // On success: burn the OkuM and advance accounting.
-            (bool ok,) = address(usdcContract)
-                .call(
-                    abi.encodeWithSelector(
-                        usdcContract.transferFrom.selector, msg.sender, entry.user, usdcAmount
-                    )
-                );
+            // Attempt the USDC transfer via SafeERC20's `trySafeTransferFrom`,
+            // which (a) swallows reverts (Circle USDC blacklist path), (b) decodes
+            // the boolean return value for tokens that signal failure by returning
+            // false instead of reverting, and (c) treats no-return-data + non-reverting
+            // call as success (matches OZ SafeERC20 semantics). All three failure
+            // shapes route into the soft-skip branch so a single uncooperative
+            // recipient cannot revert the whole batch — but the OkuM is NOT burned;
+            // it stays in escrow for `rescueQueueEntry` to recover later.
+            //
+            // Historical note: an earlier implementation used a raw `address.call`
+            // and only checked `ok`. That accepted a `false` return as success,
+            // which would silently drain queue entries against any non-standard
+            // ERC-20 whose `transferFrom` returns `false` on failure rather than
+            // reverting. Hardened here via SafeERC20 to be uniform across both
+            // failure shapes.
+            bool ok = usdcContract.trySafeTransferFrom(msg.sender, entry.user, usdcAmount);
             if (!ok) {
                 emit RedemptionSkipped(i, RedemptionSkipReason.TransferFailed);
                 continue;

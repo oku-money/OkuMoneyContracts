@@ -1,0 +1,19 @@
+Contract deployment sizes vs. 24,576-byte EIP-170 limit.
+Source: forge build --sizes, evm target = cancun, optimizer_runs = 200.
+
+| Contract        | Runtime Size (B) | Initcode Size (B) | Runtime Margin (B) | Initcode Margin (B) |
+|-----------------|------------------|-------------------|--------------------|---------------------|
+| LitePSM         | 13,137           | 13,386            | 11,439             | 35,766              |
+| OkuDollar       | 16,806           | 17,055            |  7,770             | 32,097              |
+| OkuMoney        | 11,741           | 11,990            | 12,835             | 37,162              |
+| OracleRelay     |  6,268           |  6,517            | 18,308             | 42,635              |
+| RedemptionQueue |  8,889           |  9,138            | 15,687             | 40,014              |
+
+All five production contracts are well below the 24,576-byte deployable runtime
+limit (24 KB / EIP-170). Smallest margin is `OkuDollar` at 7,770 B of headroom;
+the new `OracleRelay` has the largest margin at 18,308 B (it's a small, tight
+proxy with no token-heavy state).
+
+LitePSM dropped from 13,871 B (pre-OracleRelay) to 13,137 B because the
+SafeCast / IAggregatorV3 imports and `_checkReserves` body were removed when
+the peg check moved into the relay.

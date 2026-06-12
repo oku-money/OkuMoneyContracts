@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity 0.8.28;
 
 /**
  * @title LitePSMEvents
@@ -31,7 +31,9 @@ abstract contract LitePSMEvents {
         address indexed user, uint256 usdIn, uint256 usdcOut, uint256 okuMMultiplier
     );
 
-    event OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled);
+    /// @notice Emitted when the USDC peg circuit-breaker relay is rotated.
+    /// @dev Address(0) means the peg check is disabled (operational kill switch).
+    event OracleRelayUpdated(address indexed oldRelay, address indexed newRelay);
 
     /// @notice Emitted after queue processing completes
     event BufferRefilled(uint256 newBufferBalance, uint256 processedStart, uint256 processedEnd);

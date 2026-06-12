@@ -130,8 +130,7 @@ describe("OkuDollar Vault Scenarios", () => {
                 await okuUsd.getAddress(),
                 USDC_MAINNET,
                 await queue.getAddress(),
-                frankAddr,
-                3600
+                frankAddr
             ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM

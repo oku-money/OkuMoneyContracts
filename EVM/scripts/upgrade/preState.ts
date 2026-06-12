@@ -28,7 +28,8 @@ export type StateSnapshot = Record<string, string>;
 //
 // Invariants exercised on upgrade:
 //   - Wired addresses (okuMoney, okuDollar, usdc, redemptionQueue) preserved.
-//   - Oracle config (porOracle, stalenessThreshold, oracleEnabled) preserved.
+//   - OracleRelay wire (oracleRelay) preserved — the relay itself is a separate
+//     proxy with its own state; only the consumer's pointer is captured here.
 //   - usdcDecimalMultiplier preserved (resolved once at init from IERC20Metadata).
 //   - Pause state preserved.
 
@@ -38,9 +39,7 @@ export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
     okuDollar,
     usdc,
     redemptionQueue,
-    porOracle,
-    stalenessThreshold,
-    oracleEnabled,
+    oracleRelay,
     usdcDecimalMultiplier,
     paused,
   ] = await Promise.all([
@@ -48,9 +47,7 @@ export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
     c.okuDollar(),
     c.usdc(),
     c.redemptionQueue(),
-    c.porOracle(),
-    c.stalenessThreshold(),
-    c.oracleEnabled(),
+    c.oracleRelay(),
     c.usdcDecimalMultiplier(),
     c.paused(),
   ]);
@@ -60,9 +57,7 @@ export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
     okuDollar: String(okuDollar),
     usdc: String(usdc),
     redemptionQueue: String(redemptionQueue),
-    porOracle: String(porOracle),
-    stalenessThreshold: stalenessThreshold.toString(),
-    oracleEnabled: String(oracleEnabled),
+    oracleRelay: String(oracleRelay),
     usdcDecimalMultiplier: usdcDecimalMultiplier.toString(),
     paused: String(paused),
   };

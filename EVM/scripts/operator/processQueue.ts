@@ -5,6 +5,12 @@
  * configurable batch sizes, looping until the queue is empty or a --limit is
  * reached. Reads queue state on-chain before each batch.
  *
+ * After each `processQueue` call this script also calls
+ * `RedemptionQueue.advanceHead(maxSlots)` to drive `queueHead` forward past
+ * the now-cleared slots — `processQueue` no longer auto-advances the cursor,
+ * so the next iteration's pending-count check needs the explicit advance to
+ * see an accurate count.
+ *
  * Usage:
  *   NETWORK=base npx hardhat run scripts/operator/processQueue.ts --network base
  *   NETWORK=base npx hardhat run scripts/operator/processQueue.ts --network base \
@@ -82,6 +88,12 @@ async function main() {
     const tx = await (psm as any).processQueue(head, endIndex, psmUsdcBalance);
     const receipt = await tx.wait(1);
     logger.success(`Batch ${i + 1} tx: ${receipt.hash} (${thisBatch} entries)`);
+
+    // processQueue no longer auto-advances queueHead. Advance the cursor so the
+    // next iteration sees an accurate pending count (and the loop's `pending == 0`
+    // exit condition can actually fire).
+    const advTx = await (queue as any).advanceHead(thisBatch);
+    await advTx.wait(1);
 
     totalDrained += Number(thisBatch);
     batches++;

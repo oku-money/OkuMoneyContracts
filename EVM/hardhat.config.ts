@@ -136,6 +136,11 @@ const config: HardhatUserConfig = {
       allowUnlimitedContractSize: false,
       gas: "auto",
       gasPrice: "auto",
+      // Pin base fee to 0 in the local hardhat-network. Without this, Hardhat
+      // 2.20+ enforces EIP-1559 base-fee growth between blocks; fork tests that
+      // signed transactions with `gasPrice: auto` against an older base-fee
+      // snapshot will revert with "maxFeePerGas too low for next block".
+      initialBaseFeePerGas: 0,
       // Fund the test mnemonic accounts (NOT the dev wallet — that is impersonated
       // separately by deploy scripts and uses its real on-chain balance from the fork).
       accounts: {

@@ -3,12 +3,6 @@
  * These are the keccak256 hashes of role names used in OpenZeppelin AccessControl.
  *
  * NOTE: These must match the roles defined in `src/lib/Roles.sol`.
- *
- * Reserved-but-not-mirrored: `Roles.sol` keeps BRIDGE_* / ROUTER_* role
- * constants as forward-compatibility seams for a future on-chain bridge.
- * They are intentionally NOT mirrored here because no script grants or
- * checks them; mirroring would create dead constants on the TS side. If
- * the on-chain bridge is reintroduced, re-add the relevant hashes here.
  */
 
 import { keccak256, toUtf8Bytes } from "ethers";
@@ -51,6 +45,12 @@ export const ROLES = {
   QUEUE_UPGRADER: keccak256(toUtf8Bytes("QUEUE_UPGRADER")),
   QUEUE_PSM: keccak256(toUtf8Bytes("QUEUE_PSM")),
   QUEUE_RESCUER: keccak256(toUtf8Bytes("QUEUE_RESCUER")),
+  QUEUE_ORACLE_MANAGER: keccak256(toUtf8Bytes("QUEUE_ORACLE_MANAGER")),
+
+  // ============ OracleRelay Roles ============
+  RELAY_UPGRADER: keccak256(toUtf8Bytes("RELAY_UPGRADER")),
+  RELAY_FEED_MANAGER: keccak256(toUtf8Bytes("RELAY_FEED_MANAGER")),
+  RELAY_CONFIG_MANAGER: keccak256(toUtf8Bytes("RELAY_CONFIG_MANAGER")),
 };
 
 /**

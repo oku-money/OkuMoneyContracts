@@ -6,10 +6,6 @@
  * - Whale addresses for fork testing
  * - Protocol addresses (Uniswap, Aave)
  * - Chain metadata (chain IDs, names, RPC URLs, explorers)
- *
- * NOTE: Bridge chain ID mappings (BRIDGE_CHAIN_ID_MAP, getBridgeChainId,
- * getSolanaCounterpartChainId, Wormhole helpers) were removed in the noBridge
- * refactor. They will be re-introduced alongside OkuBridge / NTT / CCIP.
  */
 
 // ============================================================================
@@ -358,11 +354,6 @@ export const FORK_IMPERSONATE_ADDRESS = DEV_WALLET_ADDRESS;
 // ============================================================================
 // Chain ID Constants (EIP-155)
 // ============================================================================
-//
-// Bridge-specific chain ID mapping (BRIDGE_CHAIN_ID_MAP), Wormhole helpers,
-// and the Solana counterpart selector were removed in the noBridge refactor.
-// The plain EIP-155 constants below remain because tests, scripts, and config
-// modules still use them as canonical identifiers.
 
 export const SEPOLIA_CHAIN_ID = 11155111;
 export const OP_SEPOLIA_CHAIN_ID = 11155420;

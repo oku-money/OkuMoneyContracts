@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
 import {MathLib} from "../../src/lib/MathLib.sol";
 
@@ -47,7 +48,7 @@ contract LitePSMRebasingRedeemFuzzTest is BaseTest {
         // Required OkuM = obligations / okuMMult (ceiling). Over-provision generously
         // to absorb any rounding plus the small extra obligation accrual from any
         // remaining warps within this test.
-        uint256 required = (obligationsUsd * PRECISION) / okuMMult;
+        uint256 required = Math.mulDiv(obligationsUsd, PRECISION, okuMMult, Math.Rounding.Floor);
         uint256 currentReserves = okuMoney.balanceOf(address(okuDollar));
         if (currentReserves >= required) return;
         uint256 topUp = required - currentReserves + (required / 10) + 1e18; // +10% buffer

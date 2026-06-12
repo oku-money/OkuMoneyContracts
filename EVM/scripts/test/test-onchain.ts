@@ -294,9 +294,7 @@ async function stepState(ctx: TestCtx) {
 
   const psmUsdcBuf: bigint = await ctx.usdc.balanceOf(psmAddr);
   const psmPaused: boolean = await ctx.litePSM.paused();
-  const oracleEnabled: boolean = await ctx.litePSM.oracleEnabled();
-  const oracleAddr: string = await ctx.litePSM.porOracle();
-  const staleness: bigint = await ctx.litePSM.stalenessThreshold();
+  const oracleRelay: string = await ctx.litePSM.oracleRelay();
 
   const qHead: bigint = await ctx.queue.queueHead();
   const qTail: bigint = await ctx.queue.queueTail();
@@ -313,11 +311,9 @@ async function stepState(ctx: TestCtx) {
   logger.info(`  totalSupply: ${ethers.formatUnits(usdoSupply, 18)}`);
   logger.info(`  paused:      ${usdoPaused}`);
   logger.info(`LitePSM:`);
-  logger.info(`  USDC buffer: ${ethers.formatUnits(psmUsdcBuf, 6)}`);
-  logger.info(`  paused:      ${psmPaused}`);
-  logger.info(`  oracleEnabled: ${oracleEnabled}`);
-  logger.info(`  porOracle:   ${oracleAddr}`);
-  logger.info(`  staleness:   ${staleness}s`);
+  logger.info(`  USDC buffer:   ${ethers.formatUnits(psmUsdcBuf, 6)}`);
+  logger.info(`  paused:        ${psmPaused}`);
+  logger.info(`  oracleRelay:   ${oracleRelay}${oracleRelay === ethers.ZeroAddress ? " (peg check disabled)" : ""}`);
   logger.info(`RedemptionQueue:`);
   logger.info(`  head/tail/pending: ${qHead} / ${qTail} / ${qPending}`);
   logger.info(`  totalQueuedOkuM:   ${ethers.formatUnits(totalQueuedOkuM, 18)}`);

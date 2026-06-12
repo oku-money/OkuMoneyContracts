@@ -83,6 +83,36 @@ rebuild, and redeploy.
 
 ## 🟡 Should-fix before external audit
 
+### Oracle relay (USDC peg circuit-breaker) — SVM mirror
+
+The EVM side shipped an `OracleRelay` proxy contract (see
+`EVM/src/oracle/OracleRelay.sol` + `IOracleRelay.sol`) that wraps a Chainlink
+USDC/USD aggregator, validates round completeness / freshness / in-band price,
+and normalizes the answer to 1e18 precision. `LitePSM` and `RedemptionQueue` on
+EVM call `oracleRelay.checkUsdcPeg()` at the top of every mint, redeem, and
+`processQueue` path to circuit-break when USDC depegs.
+
+**SVM mirror required:** build a parallel `oracle-relay` Solana program (or a
+single PDA writer that ingests Pyth / Switchboard / Chainlink Solana data) that
+exposes a normalized `(price_e18, last_updated, in_band)` shape. `lite-psm`
+should consume the check inside `mint_oku_m`, `redeem_oku_m`, and
+`process_queue` instructions, with an operator-controlled enable/disable
+toggle paralleling EVM's `setOracleRelay(address(0))` kill switch.
+
+**Constants that must match EVM:**
+
+| Constant | EVM value | Notes |
+| --- | --- | --- |
+| `ORACLE_USDC_PRICE_FLOOR` | `0.95e18` | Hard floor for the peg band setter. |
+| `ORACLE_USDC_PRICE_CEILING` | `1.05e18` | Hard ceiling for the peg band setter. |
+| Default band | `[0.97e18, 1.03e18]` | ±3% — revisit per ops feedback. |
+| Default staleness | `3600s` (1 hour) | Bounded by `[60s, 7 days]`. |
+| `MAX_FEED_DECIMALS` | `18` | Reject feeds reporting more decimals than this. |
+
+**Status when starting:** EVM side is feature-complete with tests and is in
+the audit-ready pre-flight set. SVM side intentionally deferred to a separate
+work stream so this audit cycle focuses on EVM only.
+
 ### Key custody and change-management documentation
 
 Auditors of centralized stablecoin contracts evaluate operational controls, not
@@ -92,7 +122,7 @@ on-chain delay mechanisms. What's expected and currently missing:
   stored? What is the off-boarding process when a signer leaves the company? What
   is the recovery process if a device is lost or a signer is unavailable?
 - **Change-management runbook per admin action class.** For each action the cold
-  multisig can take (`configureOracle`, `configureMinterAllowance`, `setMaxSupply`,
+  multisig can take (`configureRelay`, `configureMinterAllowance`, `setMaxSupply`,
   role grants, upgrade ceremonies): who proposes? Who reviews the proposed tx data?
   Who signs? What is the dry-run / fork-test requirement before mainnet?
 - **Segregation of duties statement.** Which humans hold cold vs warm vs orchestrator

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity 0.8.28;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -10,6 +10,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
+import {IOracleRelay} from "../oracle/IOracleRelay.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
@@ -36,6 +37,11 @@ import {ReentrancyGuardUpgradeable} from "../lib/ReentrancyGuardUpgradeable.sol"
  *
  *      Decimal flexibility: like LitePSM, the USDC-side decimal multiplier is computed at
  *      init from `IERC20Metadata(usdc).decimals()` and stored on the proxy.
+ *
+ *      USDC peg circuit-breaker: `processQueue` calls `oracleRelay.checkUsdcPeg()` once
+ *      before the batch loop (when the relay is configured) so a depeg event suspends
+ *      queue drains the same way it suspends PSM mint/redeem. Operators set the relay
+ *      via {setOracleRelay} (gated on `QUEUE_ORACLE_MANAGER`).
  *
  *      See Constants.sol for terminology legend.
  *      See {OkuMoney.initialize} for the unified role-grant policy.
@@ -68,6 +74,8 @@ contract RedemptionQueue is
         // IERC20Metadata(usdc).decimals(). For Circle USDC (6 decimals) the multiplier is 1e12.
         IERC20 usdc;
         uint256 usdcDecimalMultiplier;
+        // USDC peg circuit-breaker. `address(0)` disables the check.
+        IOracleRelay oracleRelay;
     }
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.RedemptionQueue")) - 1)) & ~bytes32(uint256(0xff))
@@ -127,6 +135,7 @@ contract RedemptionQueue is
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(Roles.QUEUE_UPGRADER, _admin);
         _grantRole(Roles.QUEUE_RESCUER, _admin);
+        _grantRole(Roles.QUEUE_ORACLE_MANAGER, _admin);
     }
 
     // ============ Post-Init Wiring ============
@@ -144,28 +153,44 @@ contract RedemptionQueue is
 
     // ============ Storage Accessor Views ============
 
-    function okuMoney() public view returns (IOkuMoney) {
+    function okuMoney() external view returns (IOkuMoney) {
         return _getRedemptionQueueStorage().okuMoney;
     }
 
-    function usdc() public view returns (IERC20) {
+    function usdc() external view returns (IERC20) {
         return _getRedemptionQueueStorage().usdc;
     }
 
-    function usdcDecimalMultiplier() public view returns (uint256) {
+    function usdcDecimalMultiplier() external view returns (uint256) {
         return _getRedemptionQueueStorage().usdcDecimalMultiplier;
     }
 
-    function queueHead() public view returns (uint256) {
+    function queueHead() external view returns (uint256) {
         return _getRedemptionQueueStorage().queueHead;
     }
 
-    function queueTail() public view returns (uint256) {
+    function queueTail() external view returns (uint256) {
         return _getRedemptionQueueStorage().queueTail;
     }
 
-    function totalQueuedOkuM() public view returns (uint256) {
+    function totalQueuedOkuM() external view returns (uint256) {
         return _getRedemptionQueueStorage().totalQueuedOkuM;
+    }
+
+    function oracleRelay() external view returns (IOracleRelay) {
+        return _getRedemptionQueueStorage().oracleRelay;
+    }
+
+    // ============ Oracle Relay Management ============
+
+    /// @notice Wire (or unwire) the USDC peg circuit-breaker.
+    /// @dev `address(0)` disables the check. When set, `processQueue` calls
+    ///      `relay.checkUsdcPeg()` once before the batch loop and reverts on depeg.
+    function setOracleRelay(address newRelay) external onlyRole(Roles.QUEUE_ORACLE_MANAGER) {
+        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+        address oldRelay = address($.oracleRelay);
+        $.oracleRelay = IOracleRelay(newRelay);
+        emit OracleRelayUpdated(oldRelay, newRelay);
     }
 
     // ============ Queue Management ============
@@ -214,6 +239,14 @@ contract RedemptionQueue is
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         if (startIndex < $.queueHead) revert StartBelowHead();
         if (endIndex > $.queueTail) revert EndAboveTail();
+
+        // Single peg check per batch (not per entry): a depeg event during a partial
+        // batch is caught by the next operator call. Skipped when relay is unset
+        // (matches the bootstrap path).
+        IOracleRelay relay = $.oracleRelay;
+        if (address(relay) != address(0)) {
+            relay.checkUsdcPeg();
+        }
 
         IERC20 usdcContract = $.usdc;
         uint256 usdcBalance = usdcContract.balanceOf(msg.sender);
@@ -274,7 +307,10 @@ contract RedemptionQueue is
         }
 
         $.totalQueuedOkuM -= totalOkuMDecrement;
-        _advanceHead($);
+        // queueHead is NOT auto-advanced here. Operators (or anyone) may call
+        // `advanceHead(maxSlots)` after a batch to amortize the head walk into a
+        // separate, gas-bounded call. `queueLength()` is an upper bound until
+        // `advanceHead` runs; redemption correctness is unaffected.
     }
 
     /// @notice Return OkuMoney for a stuck queue entry without burning it.
@@ -305,23 +341,44 @@ contract RedemptionQueue is
         emit RedemptionRescued(index, entry.user, alternateRecipient, entry.okuMAmount, dollarValue);
 
         // Transfer OkuMoney back without burning — the user is reclaiming their tokens.
+        // queueHead is NOT auto-advanced here; see {advanceHead}.
         IERC20(address($.okuMoney)).safeTransfer(alternateRecipient, entry.okuMAmount);
-        _advanceHead($);
     }
 
-    /// @dev Advance `queueHead` past any contiguous cleared entries at the front.
-    function _advanceHead(RedemptionQueueStorage storage $) private {
-        while ($.queueHead < $.queueTail && $.queue[$.queueHead].user == address(0)) {
-            $.queueHead++;
+    /// @notice Advance `queueHead` past contiguous cleared entries at the front.
+    /// @dev Gas-bounded maintenance function. `processQueue` and `rescueQueueEntry`
+    ///      no longer auto-advance the head, so a long run of cleared slots can
+    ///      leave `queueHead` behind the live front. Anyone may call this — it
+    ///      can only move `queueHead` forward, and only past slots that are
+    ///      already cleared (`user == address(0)`). The effect on `queueLength()`
+    ///      is cosmetic; redemption correctness is independent of `queueHead`.
+    /// @param maxSlots Maximum number of cleared slots to skip in this call.
+    /// @return advanced Number of slots actually advanced.
+    function advanceHead(uint256 maxSlots) external returns (uint256 advanced) {
+        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+        uint256 head = $.queueHead;
+        uint256 tail = $.queueTail;
+        while (advanced < maxSlots && head < tail && $.queue[head].user == address(0)) {
+            unchecked {
+                head++;
+                advanced++;
+            }
+        }
+        if (advanced != 0) {
+            $.queueHead = head;
+            emit QueueHeadAdvanced(head, advanced);
         }
     }
 
     // ============ Views ============
 
-    /// @notice Number of live entries in the queue.
-    /// @dev Equal to `queueTail - queueHead`. Because both `processQueue` and
-    ///      `rescueQueueEntry` advance `queueHead` past contiguous cleared slots, the
-    ///      result is exact (not an upper bound).
+    /// @notice Number of slots between `queueHead` and `queueTail`.
+    /// @dev Equal to `queueTail - queueHead`. Since `processQueue` and
+    ///      `rescueQueueEntry` no longer auto-advance the head, this is an
+    ///      UPPER BOUND on live entries — cleared slots at the front of the
+    ///      window are counted until {advanceHead} is called. To get an exact
+    ///      live count off-chain, call {advanceHead}(N) first or iterate
+    ///      `getQueueEntry` over the range and filter `user == address(0)`.
     function queueLength() external view returns (uint256) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         return $.queueTail - $.queueHead;

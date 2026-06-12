@@ -471,20 +471,15 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.setOkuMMultiplier(PRECISION * 2);
     }
 
-    function test_SetOkuMMultiplier_SameValueStillEmitsEvent() public {
-        // Setting the multiplier to its current value is a no-op for the multiplier
-        // but should still emit OkuMMultiplierUpdated so off-chain observers see the
-        // operator action (and lastYieldDistributionBlock advances).
+    function test_SetOkuMMultiplier_RevertsOnEqualValue() public {
+        // Setting the multiplier to its current value is a no-op for the value but
+        // would otherwise stamp `lastYieldDistributionBlock` and burn a sandwich-lock
+        // slot for nothing. {setOkuMMultiplier} requires strict increase.
         uint256 currentPrice = okuMoney.okuMMultiplier();
 
-        vm.expectEmit(false, false, false, true, address(okuMoney));
-        emit OkuMMultiplierUpdated(currentPrice, currentPrice, okuMoney.totalSupply());
-
         vm.prank(rebaser);
+        vm.expectRevert(Errors.MultiplierCannotDecrease.selector);
         okuMoney.setOkuMMultiplier(currentPrice);
-
-        assertEq(okuMoney.okuMMultiplier(), currentPrice);
-        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
     }
 
     // ============ distributeYield Tests ============

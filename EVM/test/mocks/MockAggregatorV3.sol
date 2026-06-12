@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity 0.8.28;
 
 /**
  * @title MockAggregatorV3
@@ -7,6 +7,7 @@ pragma solidity ^0.8.28;
  */
 contract MockAggregatorV3 {
     int256 private _answer;
+    uint256 private _startedAt;
     uint256 private _timestamp;
     uint80 private _roundId;
     uint80 private _answeredInRound;
@@ -14,6 +15,7 @@ contract MockAggregatorV3 {
     constructor() {
         _answer = int256(1_000_000_000e18); // 1B reserves
         _timestamp = block.timestamp;
+        _startedAt = _timestamp; // startedAt <= updatedAt
         _roundId = 1;
         _answeredInRound = 1; // complete round by default
     }
@@ -21,15 +23,18 @@ contract MockAggregatorV3 {
     function setAnswer(int256 answer) external {
         _answer = answer;
         _timestamp = block.timestamp;
+        _startedAt = _timestamp;
         _answeredInRound = _roundId; // complete round
     }
 
     function setTimestamp(uint256 timestamp) external {
         _timestamp = timestamp;
+        if (_startedAt > timestamp) _startedAt = timestamp;
     }
 
     function setStale() external {
         _timestamp = block.timestamp - 2 hours;
+        _startedAt = _timestamp;
     }
 
     /// @notice Simulate an unwritten round (updatedAt == 0)
@@ -41,6 +46,7 @@ contract MockAggregatorV3 {
     function setZeroAnswer() external {
         _answer = 0;
         _timestamp = block.timestamp;
+        _startedAt = _timestamp;
         _answeredInRound = _roundId;
     }
 
@@ -48,6 +54,16 @@ contract MockAggregatorV3 {
     function setRoundIncomplete() external {
         _roundId = 2;
         _answeredInRound = 1; // answeredInRound < roundId
+    }
+
+    /// @notice Simulate malformed startedAt (zero — should be rejected by oracle check).
+    function setStartedAtZero() external {
+        _startedAt = 0;
+    }
+
+    /// @notice Simulate malformed startedAt > updatedAt (should be rejected).
+    function setStartedAtAfterUpdatedAt() external {
+        _startedAt = _timestamp + 1;
     }
 
     function latestRoundData()
@@ -61,6 +77,6 @@ contract MockAggregatorV3 {
             uint80 answeredInRound
         )
     {
-        return (_roundId, _answer, 0, _timestamp, _answeredInRound);
+        return (_roundId, _answer, _startedAt, _timestamp, _answeredInRound);
     }
 }

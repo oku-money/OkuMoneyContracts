@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
 
 /**
@@ -86,7 +87,7 @@ contract OkuDollarFuzzTest is BaseTest {
         uint256 notesBack = okuDollar.unwrap(usdBalance, user1);
         vm.stopPrank();
 
-        uint256 expectedNotes = (usdBalance * PRECISION) / price;
+        uint256 expectedNotes = Math.mulDiv(usdBalance, PRECISION, price, Math.Rounding.Floor);
 
         assertLe(notesBack, expectedNotes + 1, "Cannot gain more than expected");
         assertGe(
@@ -125,7 +126,8 @@ contract OkuDollarFuzzTest is BaseTest {
 
         assertLe(notesBack, okuMAmount, "Cannot gain on round trip");
         // Allow proportional tolerance for rounding at high prices
-        uint256 maxLoss = (okuMAmount * okuMMultiplier) / (PRECISION * PRECISION) + 2;
+        uint256 maxLoss =
+            Math.mulDiv(okuMAmount, okuMMultiplier, PRECISION * PRECISION, Math.Rounding.Floor) + 2;
         assertGe(
             notesBack,
             okuMAmount > maxLoss ? okuMAmount - maxLoss : 0,
@@ -146,15 +148,16 @@ contract OkuDollarFuzzTest is BaseTest {
         uint256 price = okuMoney.okuMMultiplier();
 
         // usdMinted = okuMAmount × okuMMultiplier / usdMultiplier (rounds down)
-        uint256 expectedUsd = (okuMAmount * price) / mult;
+        uint256 expectedUsd = Math.mulDiv(okuMAmount, price, mult, Math.Rounding.Floor);
         // sharesToMint = usdMinted × PRECISION / usdMultiplier (rounds down)
-        uint256 expectedShares = (expectedUsd * PRECISION) / mult;
+        uint256 expectedShares = Math.mulDiv(expectedUsd, PRECISION, mult, Math.Rounding.Floor);
 
         if (expectedShares == 0) return;
 
         // Verify: implied dollar value of shares <= note dollar value deposited
-        uint256 impliedDollarValue = (expectedShares * mult) / PRECISION;
-        uint256 notesDollarValue = (okuMAmount * price) / PRECISION;
+        uint256 impliedDollarValue =
+            Math.mulDiv(expectedShares, mult, PRECISION, Math.Rounding.Floor);
+        uint256 notesDollarValue = Math.mulDiv(okuMAmount, price, PRECISION, Math.Rounding.Floor);
         assertLe(impliedDollarValue, notesDollarValue, "Wrap rounding must favor vault");
 
         vm.prank(user1);
@@ -178,12 +181,13 @@ contract OkuDollarFuzzTest is BaseTest {
 
         // Contract logic: sharesToMint = okuMAmount × okuMMultiplier / usdMultiplier
         // (single division, NOT two sequential divisions)
-        uint256 expectedShares = (okuMAmount * price) / achievedMult;
+        uint256 expectedShares = Math.mulDiv(okuMAmount, price, achievedMult, Math.Rounding.Floor);
 
         if (expectedShares == 0) return;
 
-        uint256 impliedDollarValue = (expectedShares * achievedMult) / PRECISION;
-        uint256 notesDollarValue = (okuMAmount * price) / PRECISION;
+        uint256 impliedDollarValue =
+            Math.mulDiv(expectedShares, achievedMult, PRECISION, Math.Rounding.Floor);
+        uint256 notesDollarValue = Math.mulDiv(okuMAmount, price, PRECISION, Math.Rounding.Floor);
         assertLe(
             impliedDollarValue, notesDollarValue, "Wrap rounding must favor vault at any multiplier"
         );
@@ -211,14 +215,16 @@ contract OkuDollarFuzzTest is BaseTest {
         uint256 mult = okuDollar.usdMultiplier();
 
         // usdMinted = okuMAmount × okuMMultiplier / usdMultiplier
-        uint256 expectedUsd = (okuMAmount * okuMMultiplier) / mult;
+        uint256 expectedUsd = Math.mulDiv(okuMAmount, okuMMultiplier, mult, Math.Rounding.Floor);
         // sharesToMint = usdMinted × PRECISION / usdMultiplier
-        uint256 expectedShares = (expectedUsd * PRECISION) / mult;
+        uint256 expectedShares = Math.mulDiv(expectedUsd, PRECISION, mult, Math.Rounding.Floor);
 
         if (expectedShares == 0) return;
 
-        uint256 impliedDollarValue = (expectedShares * mult) / PRECISION;
-        uint256 notesDollarValue = (okuMAmount * okuMMultiplier) / PRECISION;
+        uint256 impliedDollarValue =
+            Math.mulDiv(expectedShares, mult, PRECISION, Math.Rounding.Floor);
+        uint256 notesDollarValue =
+            Math.mulDiv(okuMAmount, okuMMultiplier, PRECISION, Math.Rounding.Floor);
         assertLe(
             impliedDollarValue, notesDollarValue, "Wrap rounding must favor vault at any note price"
         );
@@ -248,7 +254,7 @@ contract OkuDollarFuzzTest is BaseTest {
         uint256 sharesBefore = okuDollar.usdSharesOf(user1);
 
         // Expected shares to burn (round UP)
-        uint256 expectedBurn = (usdBalance * PRECISION + mult - 1) / mult;
+        uint256 expectedBurn = Math.mulDiv(usdBalance, PRECISION, mult, Math.Rounding.Ceil);
 
         vm.prank(user1);
         okuDollar.unwrap(usdBalance, user1);
@@ -256,7 +262,11 @@ contract OkuDollarFuzzTest is BaseTest {
         uint256 sharesAfter = okuDollar.usdSharesOf(user1);
         uint256 actualBurn = sharesBefore - sharesAfter;
 
-        assertGe(actualBurn, (usdBalance * PRECISION) / mult, "Burn must be >= floor (round up)");
+        assertGe(
+            actualBurn,
+            Math.mulDiv(usdBalance, PRECISION, mult, Math.Rounding.Floor),
+            "Burn must be >= floor (round up)"
+        );
         assertEq(actualBurn, expectedBurn, "Burn matches ceil division");
     }
 
@@ -346,13 +356,14 @@ contract OkuDollarFuzzTest is BaseTest {
         assertEq(reserves, okuMoney.balanceOf(address(okuDollar)), "Reserves == note balance");
 
         // Dollar value of reserves
-        uint256 reservesDollarValue = (reserves * price) / PRECISION;
+        uint256 reservesDollarValue = Math.mulDiv(reserves, price, PRECISION, Math.Rounding.Floor);
 
         if (reservesDollarValue >= obligations) {
             assertGe(ratio, PRECISION, "Ratio >= 100% when overcollateralized");
             // Surplus is in note tokens: (dollarSurplus × PRECISION) / okuMMultiplier
             uint256 dollarSurplus = reservesDollarValue - obligations;
-            uint256 expectedSurplusNotes = (dollarSurplus * PRECISION) / price;
+            uint256 expectedSurplusNotes =
+                Math.mulDiv(dollarSurplus, PRECISION, price, Math.Rounding.Floor);
             assertEq(surplusVal, expectedSurplusNotes, "Surplus matches excess in note tokens");
         } else {
             assertLt(ratio, PRECISION, "Ratio < 100% when undercollateralized");
@@ -373,7 +384,8 @@ contract OkuDollarFuzzTest is BaseTest {
         okuDollar.wrap(okuMAmount, user1, 0);
 
         uint256 currentNotePrice = okuMoney.okuMMultiplier();
-        newNotePrice = bound(newNotePrice, currentNotePrice, currentNotePrice * 5);
+        // Strict increase required by setOkuMMultiplier.
+        newNotePrice = bound(newNotePrice, currentNotePrice + 1, currentNotePrice * 5);
 
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(newNotePrice);
@@ -387,9 +399,10 @@ contract OkuDollarFuzzTest is BaseTest {
         assertEq(reserves, okuMoney.balanceOf(address(okuDollar)), "Reserves == note balance");
 
         // Dollar value of reserves increased
-        uint256 reservesDollarValue = (reserves * price) / PRECISION;
+        uint256 reservesDollarValue = Math.mulDiv(reserves, price, PRECISION, Math.Rounding.Floor);
         if (obligations > 0) {
-            uint256 expectedRatio = (reservesDollarValue * PRECISION) / obligations;
+            uint256 expectedRatio =
+                Math.mulDiv(reservesDollarValue, PRECISION, obligations, Math.Rounding.Floor);
             assertEq(ratio, expectedRatio, "Ratio formula matches");
         }
     }
@@ -419,7 +432,8 @@ contract OkuDollarFuzzTest is BaseTest {
         uint256 minRatio = okuDollar.minCollateralRatio();
         // Compute a comfortably-safe withdraw amount (back off 1e6 wei from the
         // exact boundary to absorb integer rounding in collateralizationRatio()).
-        uint256 minReservesForFloor = ((supply * minRatio) / PRECISION) + 1e6;
+        uint256 minReservesForFloor =
+            Math.mulDiv(supply, minRatio, PRECISION, Math.Rounding.Floor) + 1e6;
         uint256 safeWithdraw = reserves - minReservesForFloor;
         assertGt(safeWithdraw, 0, "test setup must allow some withdrawal");
 
@@ -545,7 +559,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         uint256 shares = okuDollar.usdSharesOf(user1);
         uint256 mult = okuDollar.usdMultiplier();
-        uint256 expected = (shares * mult) / PRECISION;
+        uint256 expected = Math.mulDiv(shares, mult, PRECISION, Math.Rounding.Floor);
 
         assertEq(
             okuDollar.balanceOf(user1), expected, "balanceOf must equal shares * mult / PRECISION"
@@ -566,7 +580,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         uint256 shares = okuDollar.usdSharesOf(user1);
         uint256 mult = okuDollar.usdMultiplier();
-        uint256 expected = (shares * mult) / PRECISION;
+        uint256 expected = Math.mulDiv(shares, mult, PRECISION, Math.Rounding.Floor);
 
         assertEq(okuDollar.balanceOf(user1), expected, "Balance formula must hold after rebase");
     }
@@ -613,7 +627,7 @@ contract OkuDollarFuzzTest is BaseTest {
 
         uint256 totalShares = okuDollar.totalUsdShares();
         uint256 mult = okuDollar.usdMultiplier();
-        uint256 expected = (totalShares * mult) / PRECISION;
+        uint256 expected = Math.mulDiv(totalShares, mult, PRECISION, Math.Rounding.Floor);
 
         assertEq(
             okuDollar.totalSupply(),

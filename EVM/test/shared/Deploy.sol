@@ -8,6 +8,7 @@ import {OkuMoney} from "../../src/token/OkuMoney.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
+import {OracleRelay} from "../../src/oracle/OracleRelay.sol";
 
 import {TestConstants} from "./Constants.sol";
 
@@ -98,29 +99,8 @@ library Deploy {
     /// @param usdc_ USDC token address
     /// @param redemptionQueue_ RedemptionQueue address
     /// @param admin_ Admin address
-    /// @param stalenessThreshold_ PoR oracle staleness threshold (seconds)
     /// @return proxy The deployed proxy contract
     /// @return impl The implementation contract
-    function deployLitePSM(
-        address okuMoney_,
-        address okuDollar_,
-        address usdc_,
-        address redemptionQueue_,
-        address admin_,
-        uint256 stalenessThreshold_
-    )
-        internal
-        returns (LitePSM proxy, LitePSM impl)
-    {
-        impl = new LitePSM();
-        bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (okuMoney_, okuDollar_, usdc_, redemptionQueue_, admin_, stalenessThreshold_)
-        );
-        proxy = LitePSM(address(new ERC1967Proxy(address(impl), initData)));
-    }
-
-    /// @notice Deploy LitePSM with default staleness threshold (1 hour)
     function deployLitePSM(
         address okuMoney_,
         address okuDollar_,
@@ -131,18 +111,36 @@ library Deploy {
         internal
         returns (LitePSM proxy, LitePSM impl)
     {
-        return deployLitePSM(
-            okuMoney_,
-            okuDollar_,
-            usdc_,
-            redemptionQueue_,
-            admin_,
-            TestConstants.DEFAULT_STALENESS_THRESHOLD
+        impl = new LitePSM();
+        bytes memory initData = abi.encodeCall(
+            LitePSM.initialize, (okuMoney_, okuDollar_, usdc_, redemptionQueue_, admin_)
         );
+        proxy = LitePSM(address(new ERC1967Proxy(address(impl), initData)));
     }
 
-    // OkuBridge / OkuBridgeRouter deploy helpers were removed in the noBridge
-    // refactor. They lived here purely to support test/bridge/ — which is also
-    // deleted. If those contracts return, restore the helpers from the master
-    // branch.
+    /// @notice Deploy OracleRelay with UUPS proxy
+    /// @param priceFeed_ Chainlink USDC/USD aggregator address (or compatible)
+    /// @param stalenessThreshold_ Staleness threshold in seconds
+    /// @param minPriceE18_ Lower band edge (1e18-scaled)
+    /// @param maxPriceE18_ Upper band edge (1e18-scaled)
+    /// @param admin_ Admin address
+    /// @return proxy The deployed proxy contract
+    /// @return impl The implementation contract
+    function deployOracleRelay(
+        address priceFeed_,
+        uint256 stalenessThreshold_,
+        uint256 minPriceE18_,
+        uint256 maxPriceE18_,
+        address admin_
+    )
+        internal
+        returns (OracleRelay proxy, OracleRelay impl)
+    {
+        impl = new OracleRelay();
+        bytes memory initData = abi.encodeCall(
+            OracleRelay.initialize,
+            (priceFeed_, stalenessThreshold_, minPriceE18_, maxPriceE18_, admin_)
+        );
+        proxy = OracleRelay(address(new ERC1967Proxy(address(impl), initData)));
+    }
 }

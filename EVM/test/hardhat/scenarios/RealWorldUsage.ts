@@ -41,6 +41,8 @@ import {
     RedemptionQueue__factory,
     MockUSDC,
     MockUSDC__factory,
+    MockOracleRelay,
+    MockOracleRelay__factory,
 } from "../../../typechain-types"
 import { Signer, parseEther, parseUnits } from "ethers"
 import { ethers, upgrades, network } from "hardhat"
@@ -84,14 +86,13 @@ const QUEUE_PSM = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PSM"))
 
 const MAX_SUPPLY = parseEther("1000000000")
 const MINTER_ALLOWANCE = parseEther("1000000000")
-const STALENESS_THRESHOLD = 3600n
 const MIN_COLLATERAL_RATIO = parseEther("1")
 
 // 5% continuous APY = (1.05)^(1/31536000) per second ≈ 1_000_000_001_546_857_e3
 const FIVE_PCT_APY_RATE = 1_000_000_001_546_857_000n // per-second rate (1e18 precision)
 
 // ---------------------------------------------------------------------------
-// Chain deployment helper (same pattern as OrchestratorPsmBridging.ts)
+// Chain deployment helper
 // ---------------------------------------------------------------------------
 
 type Chain = {
@@ -100,6 +101,7 @@ type Chain = {
     okuDollar: OkuDollar
     queue: RedemptionQueue
     psm: LitePSM
+    oracleRelay: MockOracleRelay
     label: string
 }
 
@@ -144,7 +146,6 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
             await usdc.getAddress(),
             await queue.getAddress(),
             adminAddr,
-            STALENESS_THRESHOLD,
         ],
         { kind: "uups", unsafeAllow: ["constructor"] }
     )) as unknown as LitePSM
@@ -171,7 +172,13 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
     await okuDollar.connect(admin).grantRole(OKUM_BLACKLISTER, adminAddr)
     await okuDollar.connect(admin).grantRole(OKUM_UNBLACKLISTER, adminAddr)
 
-    return { usdc, okuMoney, okuDollar, queue, psm, label }
+    // Always-pass MockOracleRelay (returns price = 1e18 unless toggled off in tests).
+    const oracleRelay = (await new MockOracleRelay__factory(admin).deploy()) as MockOracleRelay
+    await oracleRelay.waitForDeployment()
+    await psm.connect(admin).setOracleRelay(await oracleRelay.getAddress())
+    await queue.connect(admin).setOracleRelay(await oracleRelay.getAddress())
+
+    return { usdc, okuMoney, okuDollar, queue, psm, oracleRelay, label }
 }
 
 async function warpDays(days: number) {
@@ -236,6 +243,9 @@ async function drainQueue(chain: Chain, admin: Signer) {
         // Approve the full vault USDC balance as the upper bound
         const psmBalance = await chain.usdc.balanceOf(await chain.psm.getAddress())
         await chain.psm.connect(admin).processQueue(head, batchEnd, psmBalance)
+        // processQueue no longer auto-advances queueHead. Drive it forward so
+        // the next iteration's [head, tail) range reflects unprocessed entries.
+        await chain.queue.advanceHead(batchEnd - head)
     }
 }
 
@@ -747,44 +757,34 @@ describe("RealWorldUsage edge cases", () => {
     })
 
     // -------------------------------------------------------------------------
-    // E6. Oracle staleness during simulation
+    // E6. USDC peg circuit-breaker (OracleRelay)
     // -------------------------------------------------------------------------
-    describe("E6: oracle staleness causes mint revert until refreshed", () => {
-        it("mint reverts when oracle is stale; resumes after oracle refreshes", async () => {
+    describe("E6: USDC depeg suspends mint until peg restored", () => {
+        it("mint reverts when relay reports depeg; resumes after relay re-passes", async () => {
             const { chainA } = await freshChains()
             const aliceAddr = await alice.getAddress()
 
-            // Deploy a mock oracle and configure it on chain A
-            const MockAggV3 = await ethers.getContractFactory("MockAggregatorV3")
-            const oracle = await MockAggV3.deploy()
-            await oracle.waitForDeployment()
-
-            await chainA.psm.connect(admin).configureOracle(await oracle.getAddress(), STALENESS_THRESHOLD, true)
-
-            // Fresh oracle → mint succeeds
+            // Fresh relay (always-pass by default) → mint succeeds
             await chainA.usdc.mint(aliceAddr, parseUnits("100", 6))
             await chainA.usdc.connect(alice).approve(await chainA.psm.getAddress(), parseUnits("100", 6))
             await chainA.psm.connect(alice).mintOkuM(parseUnits("100", 6))
 
-            // Make oracle stale (warp past staleness threshold)
-            await warpDays(2) // 2 days >> STALENESS_THRESHOLD (3600s)
+            // Toggle the relay to fail (simulated depeg)
+            await chainA.oracleRelay.setPass(false)
 
-            // Mint now reverts (stale oracle)
+            // Mint now reverts
             await chainA.usdc.mint(aliceAddr, parseUnits("100", 6))
             await chainA.usdc.connect(alice).approve(await chainA.psm.getAddress(), parseUnits("100", 6))
             await expect(
                 chainA.psm.connect(alice).mintOkuM(parseUnits("100", 6))
             ).to.be.reverted
 
-            // Oracle updates its timestamp (off-chain push model)
-            await oracle.setAnswer(1_000_000_000n * 10n ** 18n)
+            // Restore the peg
+            await chainA.oracleRelay.setPass(true)
 
-            // Mint now succeeds
+            // Mint succeeds again
             await chainA.psm.connect(alice).mintOkuM(parseUnits("100", 6))
-            expect(await chainA.okuMoney.balanceOf(aliceAddr)).to.be.gt(0n, "mint works after oracle refresh")
-
-            // Disable oracle so subsequent tests are not affected
-            await chainA.psm.connect(admin).configureOracle(ethers.ZeroAddress, STALENESS_THRESHOLD, false)
+            expect(await chainA.okuMoney.balanceOf(aliceAddr)).to.be.gt(0n, "mint works after peg restoration")
         })
     })
 

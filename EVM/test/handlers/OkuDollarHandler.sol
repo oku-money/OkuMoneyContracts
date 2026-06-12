@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {TestConstants} from "../shared/Constants.sol";
 
 /**
@@ -280,7 +281,7 @@ contract OkuDollarHandler is Test {
         uint256 okuMMult = okuMoney.okuMMultiplier();
         if (okuMMult == 0) return;
         // Required OkuM = ceil(obligations / okuMMult)
-        uint256 required = (obligationsUsd * PRECISION + okuMMult - 1) / okuMMult;
+        uint256 required = Math.mulDiv(obligationsUsd, PRECISION, okuMMult, Math.Rounding.Ceil);
         uint256 currentReserves = okuMoney.balanceOf(address(okuDollar));
         if (currentReserves >= required) return;
         uint256 deficit = required - currentReserves;

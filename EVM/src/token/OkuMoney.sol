@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity 0.8.28;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -15,6 +15,8 @@ import {
 import {
     ERC20PermitUpgradeable
 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
@@ -90,12 +92,13 @@ contract OkuMoney is
     error RecipientBlacklisted();
     error AlreadyBlacklisted();
     error NotBlacklisted();
-    /// @dev Multiplier ceiling defense-in-depth — caps the dollar-value-per-token
-    ///      at `Constants.MAX_MULTIPLIER` (= $1,000,000) so a compromised
-    ///      `OKUM_REBASER` key cannot push the multiplier into a region where
-    ///      downstream multiplications (PSM mint/redeem, OkuDollar wrap/unwrap)
-    ///      lose precision or overflow. Mirrors the explicit `MAX_OKU_M_PRICE`
-    ///      guard on the SVM side.
+    /// @dev Math-sanity ceiling — caps the dollar-value-per-token at
+    ///      `Constants.MAX_MULTIPLIER` (= $1,000,000) so downstream
+    ///      multiplications (PSM mint/redeem, OkuDollar wrap/unwrap) cannot
+    ///      lose precision or overflow. The cap is far above any realistic
+    ///      yield trajectory; its purpose is to keep the `uint256 * uint256`
+    ///      paths within the overflow-safe region, not to constrain a trusted
+    ///      operator. Mirrors the explicit `MAX_OKU_M_PRICE` guard on the SVM side.
     error MultiplierTooHigh();
     /// @dev Mirrors SVM `LitePsmError::YieldTooSmall`. Prevents a tiny yieldAmount
     ///      that truncates to zero per-token from stamping `lastYieldDistributionBlock`
@@ -108,8 +111,8 @@ contract OkuMoney is
     }
 
     /// @notice Initialize the proxy.
-    /// @param name ERC-20 name
-    /// @param symbol ERC-20 symbol (canonical ticker is `OkuM`)
+    /// @param name_ ERC-20 name
+    /// @param symbol_ ERC-20 symbol (canonical ticker is `OkuM`)
     /// @param _admin Admin address (receives the full role set; see role-grant policy below)
     /// @param initialMaxSupply Initial supply cap
     /// @dev Admin is granted every role at deployment. Operators are expected to
@@ -117,8 +120,8 @@ contract OkuMoney is
     ///      contracts post-deploy. The other contracts in the suite follow the same
     ///      policy and link back here for the canonical description.
     function initialize(
-        string memory name,
-        string memory symbol,
+        string memory name_,
+        string memory symbol_,
         address _admin,
         uint256 initialMaxSupply
     )
@@ -127,8 +130,8 @@ contract OkuMoney is
     {
         if (_admin == address(0)) revert Errors.ZeroAddress();
 
-        __ERC20_init(name, symbol);
-        __ERC20Permit_init(name);
+        __ERC20_init(name_, symbol_);
+        __ERC20Permit_init(name_);
         __AccessControl_init();
         __Pausable_init();
 
@@ -155,13 +158,13 @@ contract OkuMoney is
     function balanceOf(address account)
         public
         view
-        override(ERC20Upgradeable, IOkuMoney)
+        override(ERC20Upgradeable, IERC20)
         returns (uint256)
     {
         return super.balanceOf(account);
     }
 
-    function totalSupply() public view override(ERC20Upgradeable, IOkuMoney) returns (uint256) {
+    function totalSupply() public view override(ERC20Upgradeable, IERC20) returns (uint256) {
         return super.totalSupply();
     }
 
@@ -170,7 +173,7 @@ contract OkuMoney is
         uint256 amount
     )
         public
-        override(ERC20Upgradeable, IOkuMoney)
+        override(ERC20Upgradeable, IERC20)
         returns (bool)
     {
         return super.transfer(to, amount);
@@ -178,19 +181,19 @@ contract OkuMoney is
 
     // ============ Storage Accessor Views ============
 
-    function minterAllowance(address minter_) public view returns (uint256) {
+    function minterAllowance(address minter_) external view returns (uint256) {
         return _getOkuMoneyStorage().minterAllowance[minter_];
     }
 
-    function maxSupply() public view returns (uint256) {
+    function maxSupply() external view returns (uint256) {
         return _getOkuMoneyStorage().maxSupply;
     }
 
-    function isBlacklisted(address account) public view returns (bool) {
+    function isBlacklisted(address account) external view returns (bool) {
         return _getOkuMoneyStorage().isBlacklisted[account];
     }
 
-    function lastYieldDistributionBlock() public view returns (uint256) {
+    function lastYieldDistributionBlock() external view returns (uint256) {
         return _getOkuMoneyStorage().lastYieldDistributionBlock;
     }
 
@@ -200,20 +203,25 @@ contract OkuMoney is
     /// @dev Written by OKUM_REBASER via {setOkuMMultiplier} or {distributeYield}.
     ///      Never decreases. balanceOf() is unaffected; the multiplier is consumed by
     ///      the PSM and vault for pricing.
-    function okuMMultiplier() public view returns (uint256) {
+    function okuMMultiplier() external view returns (uint256) {
         return _getOkuMoneyStorage().okuMMultiplier;
     }
 
     /// @notice Directly override the stored multiplier
-    /// @param newMultiplier New multiplier value (must be >= current and <= MAX_MULTIPLIER)
-    /// @dev The `<= Constants.MAX_MULTIPLIER` ceiling is defense-in-depth: even
-    ///      with a compromised `OKUM_REBASER` key, the multiplier cannot be
-    ///      pushed into a region that would distort the PSM and vault math.
-    ///      Mirrors the explicit `MAX_OKU_M_PRICE` guard on the SVM side.
+    /// @param newMultiplier New multiplier value (must be > current and <= MAX_MULTIPLIER)
+    /// @dev The `<= Constants.MAX_MULTIPLIER` ceiling is a math sanity bound that
+    ///      keeps downstream `uint256` multiplications in the PSM and vault
+    ///      paths away from the overflow region. Mirrors the explicit
+    ///      `MAX_OKU_M_PRICE` guard on the SVM side.
+    ///
+    ///      Rejects `newMultiplier == currentMultiplier` so a no-op call cannot
+    ///      stamp `lastYieldDistributionBlock` without actually moving the
+    ///      multiplier (which would waste the sandwich-lock slot). Mirrors the
+    ///      `YieldTooSmall` guard on `distributeYield`.
     function setOkuMMultiplier(uint256 newMultiplier) external onlyRole(Roles.OKUM_REBASER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 currentMultiplier = $.okuMMultiplier;
-        if (newMultiplier < currentMultiplier) revert Errors.MultiplierCannotDecrease();
+        if (newMultiplier <= currentMultiplier) revert Errors.MultiplierCannotDecrease();
         if (newMultiplier > Constants.MAX_MULTIPLIER) revert MultiplierTooHigh();
         $.lastYieldDistributionBlock = block.number;
         $.okuMMultiplier = newMultiplier;
@@ -234,7 +242,8 @@ contract OkuMoney is
         if (supply == 0) revert ZeroSupply();
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 oldMultiplier = $.okuMMultiplier;
-        uint256 yieldPerToken = yieldAmount * Constants.PRECISION / supply;
+        uint256 yieldPerToken =
+            Math.mulDiv(yieldAmount, Constants.PRECISION, supply, Math.Rounding.Floor);
         // Reject yields that truncate to zero per token. A zero increment would stamp
         // `lastYieldDistributionBlock` without moving the multiplier, wasting the
         // sandwich-lock slot. Mirrors SVM `LitePsmError::YieldTooSmall`.
@@ -320,15 +329,15 @@ contract OkuMoney is
 
     function configureMinterAllowance(
         address minter_,
-        uint256 allowance
+        uint256 newAllowance
     )
         external
         onlyRole(Roles.OKUM_ALLOWANCE_MANAGER)
     {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 oldAllowance = $.minterAllowance[minter_];
-        $.minterAllowance[minter_] = allowance;
-        emit MinterAllowanceUpdated(minter_, oldAllowance, allowance);
+        $.minterAllowance[minter_] = newAllowance;
+        emit MinterAllowanceUpdated(minter_, oldAllowance, newAllowance);
     }
 
     // ============ Supply Cap Management ============

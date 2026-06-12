@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 import {IOkuMoney} from "../../src/interfaces/IOkuMoney.sol";
@@ -14,7 +15,7 @@ import {TestConstants} from "../shared/Constants.sol";
  * @title LitePSMHandler
  * @notice Stateful handler for LitePSM invariants. Exercises the full public surface
  *         (mintOkuM, redeemOkuM, mintUsdOku, redeemUsdOku, depositBuffer,
- *         withdrawUsdc, processQueue, rescueQueueEntry, configureOracle) and tracks
+ *         withdrawUsdc, processQueue, rescueQueueEntry, setOracleRelay) and tracks
  *         exact USDC flow + multiplier-observation ghost state.
  * @dev The PSM is granted the admin role at the test level; this handler invokes
  *      role-gated functions via `vm.prank(bridgeAdmin)` (where bridgeAdmin is the
@@ -72,8 +73,8 @@ contract LitePSMHandler is Test {
     uint256 public ghostProcessQueueReverts;
     uint256 public ghostRescueCalls;
     uint256 public ghostRescueReverts;
-    uint256 public ghostConfigureOracleCalls;
-    uint256 public ghostConfigureOracleReverts;
+    uint256 public ghostSetOracleRelayCalls;
+    uint256 public ghostSetOracleRelayReverts;
 
     // ============ Multiplier observation ============
 
@@ -145,7 +146,8 @@ contract LitePSMHandler is Test {
         usdc.approve(address(psm), usdcAmount);
 
         uint256 okuMMult = okuMoney.okuMMultiplier();
-        uint256 expectedOkuM = (usdcAmount * DECIMAL_MULTIPLIER * PRECISION) / okuMMult;
+        uint256 expectedOkuM =
+            Math.mulDiv(usdcAmount * DECIMAL_MULTIPLIER, PRECISION, okuMMult, Math.Rounding.Floor);
 
         vm.prank(actor);
         try psm.mintOkuM(usdcAmount) {
@@ -168,7 +170,8 @@ contract LitePSMHandler is Test {
         IERC20(address(okuMoney)).approve(address(psm), okuMAmount);
 
         uint256 okuMMult = okuMoney.okuMMultiplier();
-        uint256 expectedUsdc = (okuMAmount * okuMMult) / PRECISION / DECIMAL_MULTIPLIER;
+        uint256 expectedUsdc =
+            Math.mulDiv(okuMAmount, okuMMult, PRECISION, Math.Rounding.Floor) / DECIMAL_MULTIPLIER;
         uint256 psmUsdcBalance = usdc.balanceOf(address(psm));
 
         vm.prank(actor);
@@ -332,23 +335,16 @@ contract LitePSMHandler is Test {
         }
     }
 
-    function configureOracle(uint256 stalenessSeed, bool enabled) external {
-        ghostConfigureOracleCalls++;
-
-        // Bound staleness to the contract-allowed window. ORACLE_MIN/MAX_STALENESS now
-        // live in the shared src/lib/Constants.sol; the redundant public constants on
-        // LitePSM were removed during the role/constants cleanup.
-        uint256 minStale = TestConstants.ORACLE_MIN_STALENESS;
-        uint256 maxStale = TestConstants.ORACLE_MAX_STALENESS;
-        uint256 staleness = bound(stalenessSeed, minStale, maxStale);
-
-        // We can't configure with a real oracle here (no oracle addr in handler);
-        // instead try with address(this) as a sham oracle — when enabled this will
-        // revert later in mintOkuM if used, but the configure call itself proves
-        // the role-gated branch is exercised.
-        try psm.configureOracle(enabled ? address(this) : address(0), staleness, enabled) {}
+    /// @notice Drive the LitePSM.setOracleRelay branch by toggling between the wired
+    ///         relay and address(0) (kill-switch). The handler does not know the
+    ///         live relay address, so it always passes address(0) — exercising the
+    ///         "disable peg check" path. Re-enabling is handled by the invariant
+    ///         test harness in afterInvariant if it needs to.
+    function setOracleRelay() external {
+        ghostSetOracleRelayCalls++;
+        try psm.setOracleRelay(address(0)) {}
         catch {
-            ghostConfigureOracleReverts++;
+            ghostSetOracleRelayReverts++;
         }
     }
 
@@ -403,12 +399,12 @@ contract LitePSMHandler is Test {
         return ghostMintOkuMCalls + ghostRedeemOkuMCalls + ghostMintOkuDollarCalls
             + ghostRedeemOkuDollarCalls + ghostRebaseCalls + ghostDepositBufferCalls
             + ghostWithdrawUsdcCalls + ghostProcessQueueCalls + ghostRescueCalls
-            + ghostConfigureOracleCalls + ghostWarpCalls;
+            + ghostSetOracleRelayCalls + ghostWarpCalls;
     }
 
     function ghostTotalReverts() external view returns (uint256) {
         return ghostMintOkuMReverts + ghostRedeemOkuMReverts + ghostMintOkuDollarReverts
             + ghostRedeemOkuDollarReverts + ghostDepositBufferReverts + ghostWithdrawUsdcReverts
-            + ghostProcessQueueReverts + ghostRescueReverts + ghostConfigureOracleReverts;
+            + ghostProcessQueueReverts + ghostRescueReverts + ghostSetOracleRelayReverts;
     }
 }

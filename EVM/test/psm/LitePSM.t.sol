@@ -10,6 +10,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {
     PausableUpgradeable
 } from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
@@ -17,6 +18,8 @@ import {Deploy} from "../shared/Deploy.sol";
 import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {MathLib} from "../../src/lib/MathLib.sol";
+import {LitePSMEvents} from "../../src/lib/events/LitePSMEvents.sol";
+import {MockOracleRelay} from "../mocks/MockOracleRelay.sol";
 
 /**
  * @title LitePSMTest
@@ -43,7 +46,6 @@ contract LitePSMTest is BaseTest {
     event UsdOkuMinted(
         address indexed user, uint256 usdcAmount, uint256 usdAmount, uint256 okuMMultiplier
     );
-    event OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled);
     event BufferRefilled(uint256 newBufferBalance, uint256 processedStart, uint256 processedEnd);
     event BufferDeposited(address indexed depositor, uint256 amount, uint256 newBufferBalance);
 
@@ -63,13 +65,13 @@ contract LitePSMTest is BaseTest {
     function _expectedNotesFromUsdc(uint256 usdcAmount) internal view returns (uint256) {
         uint256 usdcValue18 = usdcAmount * DECIMAL_MULTIPLIER;
         uint256 price = okuMoney.okuMMultiplier();
-        return (usdcValue18 * PRECISION) / price;
+        return Math.mulDiv(usdcValue18, PRECISION, price, Math.Rounding.Floor);
     }
 
     /// @notice Calculate expected USDC output from note redemption at current okuMMultiplier
     function _expectedUsdcFromNotes(uint256 okuMAmount) internal view returns (uint256) {
         uint256 price = okuMoney.okuMMultiplier();
-        uint256 dollarValue18 = (okuMAmount * price) / PRECISION;
+        uint256 dollarValue18 = Math.mulDiv(okuMAmount, price, PRECISION, Math.Rounding.Floor);
         return dollarValue18 / DECIMAL_MULTIPLIER;
     }
 
@@ -206,7 +208,7 @@ contract LitePSMTest is BaseTest {
         litePsm.mintOkuM(usdcAmount);
 
         // okuMAmount = 100e18 * 1e18 / 1.05e18 ≈ 95.238e18
-        uint256 expectedNotes = (100e18 * PRECISION) / 105e16;
+        uint256 expectedNotes = Math.mulDiv(100e18, PRECISION, 105e16, Math.Rounding.Floor);
         assertEq(okuMoney.balanceOf(user1), expectedNotes, "Should mint at non-even price");
         assertLt(okuMoney.balanceOf(user1), 100e18, "Should receive fewer notes at $1.05");
         assertGt(okuMoney.balanceOf(user1), 95e18, "Should receive ~95.24 notes");
@@ -235,7 +237,9 @@ contract LitePSMTest is BaseTest {
             uint256 balance = okuMoney.balanceOf(user1);
             // Verify the exact multiplier-aware amount, not just "non-zero".
             // expected = usdcValue18 × PRECISION / okuMMultiplier
-            uint256 expected = (usdcAmount * DECIMAL_MULTIPLIER * PRECISION) / prices[i];
+            uint256 expected = Math.mulDiv(
+                usdcAmount * DECIMAL_MULTIPLIER, PRECISION, prices[i], Math.Rounding.Floor
+            );
             assertEq(balance, expected, "minted OkuM must match the multiplier formula");
         }
     }
@@ -406,135 +410,76 @@ contract LitePSMTest is BaseTest {
         litePsm.mintUsdOku(usdcAmount);
     }
 
-    // ============ Oracle Tests ============
+    // ============ Oracle Relay (USDC peg circuit-breaker) ============
+    //
+    // BaseTest wires an always-pass MockOracleRelay onto litePsm in setUp(). Tests
+    // here flip the toggle to drive the depeg branch. The previous PoR-style
+    // reserve-check tests have been retired alongside that feature.
 
-    function test_Mint_ChecksOracleWhenEnabled() public {
-        // Configure oracle
-        vm.prank(oracleManager);
-        litePsm.configureOracle(address(oracle), 1 hours, true);
-
-        // Set oracle to report sufficient reserves
-        oracle.setAnswer(int256(1_000_000_000e18));
-
-        uint256 usdcAmount = 100e6;
-        _approveUsdc(user1, address(litePsm), usdcAmount);
-
-        uint256 balanceBefore = okuMoney.balanceOf(user1);
-
-        // Should succeed
-        vm.prank(user1);
-        litePsm.mintOkuM(usdcAmount);
-
-        uint256 expectedOkuMoney = _expectedNotesFromUsdc(usdcAmount);
-        assertEq(
-            okuMoney.balanceOf(user1), balanceBefore + expectedOkuMoney, "OkuMoney should be minted"
-        );
-    }
-
-    function test_Mint_RevertsOnInsufficientReserves() public {
-        // Configure oracle
-        vm.prank(oracleManager);
-        litePsm.configureOracle(address(oracle), 1 hours, true);
-
-        // Set oracle to report LOW reserves
-        oracle.setAnswer(int256(1)); // Only 1 wei of reserves
-
+    function test_MintOkuM_RevertsOnDepeg() public {
+        oracleRelay.setPass(false);
         _approveUsdc(user1, address(litePsm), 100e6);
-
-        uint256 expectedOkuMAmount = _expectedNotesFromUsdc(100e6);
-        uint256 newSupply = okuMoney.totalSupply() + expectedOkuMAmount;
         vm.prank(user1);
-        vm.expectRevert(abi.encodeWithSelector(LitePSM.ExceedsReserves.selector, newSupply, 1));
+        vm.expectRevert(MockOracleRelay.MockOracleRelayDepeg.selector);
         litePsm.mintOkuM(100e6);
     }
 
-    function test_Mint_RevertsOnStaleOracle() public {
-        // Warp to a reasonable timestamp first
-        vm.warp(1_000_000);
-
-        // Configure oracle with short staleness
-        vm.prank(oracleManager);
-        litePsm.configureOracle(address(oracle), 1 hours, true);
-
-        // Make oracle stale by setting timestamp in the past
-        oracle.setTimestamp(block.timestamp - 2 hours);
-
+    function test_MintUsdOku_RevertsOnDepeg() public {
+        oracleRelay.setPass(false);
         _approveUsdc(user1, address(litePsm), 100e6);
-
         vm.prank(user1);
-        vm.expectRevert(LitePSM.StaleOracleData.selector);
-        litePsm.mintOkuM(100e6);
+        vm.expectRevert(MockOracleRelay.MockOracleRelayDepeg.selector);
+        litePsm.mintUsdOku(100e6);
     }
 
-    function test_Mint_RevertsOnIncompleteRound() public {
-        // Warp to a reasonable timestamp first
-        vm.warp(1_000_000);
+    function test_RedeemOkuM_RevertsOnDepeg() public {
+        _mintOkuMoney(user1, 100e18);
+        _approveOkuMoney(user1, address(litePsm), 100e18);
 
-        // Configure oracle
-        vm.prank(oracleManager);
-        litePsm.configureOracle(address(oracle), 1 hours, true);
-
-        // Simulate an incomplete round (answeredInRound < roundId)
-        oracle.setRoundIncomplete();
-
-        _approveUsdc(user1, address(litePsm), 100e6);
-
+        oracleRelay.setPass(false);
         vm.prank(user1);
-        vm.expectRevert(LitePSM.IncompleteOracleRound.selector);
-        litePsm.mintOkuM(100e6);
+        vm.expectRevert(MockOracleRelay.MockOracleRelayDepeg.selector);
+        litePsm.redeemOkuM(100e18);
     }
 
-    function test_Mint_SkipsOracleWhenDisabled() public {
-        // Warp to reasonable timestamp to allow setStale to work without underflow
-        vm.warp(1_000_000);
-
-        // Oracle configured but disabled
-        vm.prank(oracleManager);
-        litePsm.configureOracle(address(oracle), 1 hours, false);
-
-        // Set stale oracle data - should be ignored since oracle is disabled
-        oracle.setTimestamp(block.timestamp - 2 hours);
-
-        _approveUsdc(user1, address(litePsm), 100e6);
-
-        uint256 balanceBefore = okuMoney.balanceOf(user1);
-
-        // Should succeed because oracle is disabled
+    function test_RedeemUsdOku_RevertsOnDepeg() public {
+        _mintUsdOku(user1, 100e18);
         vm.prank(user1);
-        litePsm.mintOkuM(100e6);
+        okuDollar.approve(address(litePsm), 100e18);
 
-        uint256 expectedOkuMoney = _expectedNotesFromUsdc(100e6);
-        assertEq(okuMoney.balanceOf(user1), balanceBefore + expectedOkuMoney);
+        oracleRelay.setPass(false);
+        vm.prank(user1);
+        vm.expectRevert(MockOracleRelay.MockOracleRelayDepeg.selector);
+        litePsm.redeemUsdOku(50e18);
     }
 
-    function test_ConfigureOracle_OnlyOracleManager() public {
+    function test_SetOracleRelay_DisablesPegCheckWithZeroAddress() public {
+        oracleRelay.setPass(false); // the wired relay is failing
+        // Operator kill-switch: clear the relay pointer so mint/redeem stop calling it.
+        vm.prank(oracleManager);
+        litePsm.setOracleRelay(address(0));
+
+        _approveUsdc(user1, address(litePsm), 100e6);
+        vm.prank(user1);
+        litePsm.mintOkuM(100e6); // succeeds because relay is unset
+        assertGt(okuMoney.balanceOf(user1), 0);
+    }
+
+    function test_SetOracleRelay_RevertsForNonOracleManager() public {
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_ORACLE_MANAGER
             )
         );
-        litePsm.configureOracle(address(oracle), 1 hours, true);
+        litePsm.setOracleRelay(address(0xBEEF));
     }
 
-    function test_ConfigureOracle_EmitsEvent() public {
-        vm.expectEmit(true, false, false, true);
-        emit OracleConfigured(address(oracle), 2 hours, true);
-
+    function test_SetOracleRelay_EmitsEvent() public {
+        vm.expectEmit(true, true, false, false);
+        emit LitePSMEvents.OracleRelayUpdated(address(oracleRelay), address(0xBEEF));
         vm.prank(oracleManager);
-        litePsm.configureOracle(address(oracle), 2 hours, true);
-    }
-
-    function test_Mint_RevertsOnNegativeOracleAnswer() public {
-        vm.prank(oracleManager);
-        litePsm.configureOracle(address(oracle), 1 hours, true);
-        oracle.setAnswer(-1);
-
-        _approveUsdc(user1, address(litePsm), 100e6);
-
-        vm.prank(user1);
-        vm.expectRevert(LitePSM.InvalidOracleResponse.selector);
-        litePsm.mintOkuM(100e6);
+        litePsm.setOracleRelay(address(0xBEEF));
     }
 
     // ============ Redeem Tests ============
@@ -621,29 +566,6 @@ contract LitePSMTest is BaseTest {
         assertEq(redemptionQueue.queueLength(), 1);
         // OkuMoney is now held by the queue contract
         assertEq(okuMoney.balanceOf(address(redemptionQueue)), okuMAmount);
-    }
-
-    function test_Redeem_NoOracleCheck() public {
-        // Warp to reasonable timestamp first
-        vm.warp(1_000_000);
-
-        // Configure oracle
-        vm.prank(oracleManager);
-        litePsm.configureOracle(address(oracle), 1 hours, true);
-
-        // Set oracle to stale (now safe since we warped forward)
-        oracle.setTimestamp(block.timestamp - 2 hours);
-
-        uint256 okuMAmount = 100e18; // 100 OkuMoney
-
-        _mintOkuMoney(user1, okuMAmount);
-        _approveOkuMoney(user1, address(litePsm), okuMAmount);
-
-        // Redeem should NOT check oracle
-        vm.prank(user1);
-        litePsm.redeemOkuM(okuMAmount);
-
-        assertEq(usdc.balanceOf(user1), 10_100e6); // Initial 10000 + 100 redeemed
     }
 
     function test_Redeem_RevertsZeroAmount() public {
@@ -856,6 +778,8 @@ contract LitePSMTest is BaseTest {
         uint256 tail = redemptionQueue.queueTail();
         vm.prank(queueProcessor);
         litePsm.processQueue(head, tail, 12_000e6); // 6000 USDC * 2 entries
+        // processQueue does not auto-advance the head; drive it forward explicitly.
+        redemptionQueue.advanceHead(tail - head);
 
         // Queue should be processed
         assertEq(redemptionQueue.queueLength(), 0);
@@ -890,6 +814,7 @@ contract LitePSMTest is BaseTest {
         uint256 tail = redemptionQueue.queueTail();
         vm.prank(queueProcessor);
         litePsm.processQueue(head, tail, 6000e6);
+        redemptionQueue.advanceHead(tail - head);
 
         // Verify allowance is revoked back to 0 after processing
         assertEq(usdc.allowance(address(litePsm), address(redemptionQueue)), 0);
@@ -930,6 +855,7 @@ contract LitePSMTest is BaseTest {
         uint256 head = redemptionQueue.queueHead();
         vm.prank(queueProcessor);
         litePsm.processQueue(head, head + 1, 6000e6);
+        redemptionQueue.advanceHead(2);
 
         // Allowance should still be revoked even with partial processing
         assertEq(usdc.allowance(address(litePsm), address(redemptionQueue)), 0);
@@ -971,6 +897,7 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(queueProcessor);
         litePsm.processQueue(head, tail, expectedUsdc);
+        redemptionQueue.advanceHead(tail - head);
 
         assertEq(redemptionQueue.queueLength(), 0);
         // User receives more USDC than at base price due to multiplier appreciation
@@ -1561,48 +1488,6 @@ contract LitePSMTest is BaseTest {
         );
     }
 
-    // ============ Oracle Edge Case Tests ============
-
-    function test_ConfigureOracle_RevertsWhenEnabledButAddressZero() public {
-        // Enabling the oracle with address(0) used to silently bypass reserve checks.
-        // The new guard reverts so operators cannot create that misconfiguration.
-        vm.prank(oracleManager);
-        vm.expectRevert(Errors.ZeroAddress.selector);
-        litePsm.configureOracle(address(0), 1 hours, true);
-    }
-
-    function test_ConfigureOracle_AllowsZeroAddressWhenDisabled() public {
-        // Disabled oracle accepts a zero address — represents an unconfigured oracle slot.
-        vm.prank(oracleManager);
-        litePsm.configureOracle(address(0), 1 hours, false);
-        assertEq(address(litePsm.porOracle()), address(0));
-        assertFalse(litePsm.oracleEnabled());
-    }
-
-    function test_ConfigureOracle_RevertsOnStalenessBelowFloor() public {
-        // ORACLE_MIN_STALENESS / ORACLE_MAX_STALENESS now live in src/lib/Constants.sol
-        // rather than as redundant public constants on LitePSM.
-        uint256 minStale = Constants.ORACLE_MIN_STALENESS;
-        uint256 maxStale = Constants.ORACLE_MAX_STALENESS;
-
-        vm.prank(oracleManager);
-        vm.expectRevert(
-            abi.encodeWithSelector(LitePSM.InvalidStaleness.selector, 30, minStale, maxStale)
-        );
-        litePsm.configureOracle(address(oracle), 30, true);
-    }
-
-    function test_ConfigureOracle_RevertsOnStalenessAboveCeiling() public {
-        uint256 minStale = Constants.ORACLE_MIN_STALENESS;
-        uint256 maxStale = Constants.ORACLE_MAX_STALENESS;
-
-        vm.prank(oracleManager);
-        vm.expectRevert(
-            abi.encodeWithSelector(LitePSM.InvalidStaleness.selector, 8 days, minStale, maxStale)
-        );
-        litePsm.configureOracle(address(oracle), 8 days, true);
-    }
-
     // ============ Yield Distribution Lock Tests (Sandwich Attack Prevention) ============
 
     function test_MintOkuM_RevertsInYieldDistributionBlock() public {
@@ -1620,9 +1505,11 @@ contract LitePSMTest is BaseTest {
 
     function test_MintOkuM_SucceedsInNextBlock() public {
         // Use setOkuMMultiplier instead of distributeYield to avoid slippage issues
-        // (setOkuMMultiplier also sets lastYieldDistributionBlock)
+        // (setOkuMMultiplier also sets lastYieldDistributionBlock). A strict
+        // increase of 1 wei is sufficient to trip the sandwich-lock stamp without
+        // moving math materially.
         vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(PRECISION); // No actual price change, just sets the block
+        okuMoney.setOkuMMultiplier(PRECISION + 1);
 
         // Roll to next block
         vm.roll(block.number + 1);
@@ -1725,6 +1612,35 @@ contract LitePSMTest is BaseTest {
         assertGt(okuMoney.balanceOf(user1), 0);
     }
 
+    function test_WithdrawUSDC_RevertsInYieldDistributionBlock() public {
+        // Need positive OkuM supply so distributeYield doesn't revert with ZeroSupply.
+        _mintOkuMoney(user2, 10_000e18);
+
+        // Distribute yield to set lastYieldDistributionBlock to the current block.
+        vm.prank(rebaser);
+        okuMoney.distributeYield(100e18);
+
+        // Same-block withdrawUsdc must revert via the YieldSandwichGuard. This closes the
+        // historical NOTE in withdrawUsdc where queueObligation could be computed against
+        // a freshly-shifted okuMMultiplier.
+        vm.prank(bufferWithdrawer);
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        litePsm.withdrawUsdc(user1, 1e6);
+    }
+
+    function test_WithdrawUSDC_SucceedsInNextBlockAfterYield() public {
+        _mintOkuMoney(user2, 10_000e18);
+        vm.prank(rebaser);
+        okuMoney.distributeYield(100e18);
+
+        vm.roll(block.number + 1);
+
+        uint256 before = usdc.balanceOf(user1);
+        vm.prank(bufferWithdrawer);
+        litePsm.withdrawUsdc(user1, 100e6);
+        assertEq(usdc.balanceOf(user1), before + 100e6);
+    }
+
     // ============ WS3 Additional Tests ============
 
     // ---- WS3.1.b: revokeRole / renounceRole cycle tests ----
@@ -1766,12 +1682,7 @@ contract LitePSMTest is BaseTest {
     function test_LitePSM_Initialize_CannotReinitialize() public {
         vm.expectRevert();
         litePsm.initialize(
-            address(okuMoney),
-            address(okuDollar),
-            address(usdc),
-            address(redemptionQueue),
-            admin,
-            1 hours
+            address(okuMoney), address(okuDollar), address(usdc), address(redemptionQueue), admin
         );
     }
 
@@ -1854,35 +1765,10 @@ contract LitePSMTest is BaseTest {
         assertEq(psm18.usdcDecimalMultiplier(), 1);
     }
 
-    // ---- WS3.1.h: oracle updatedAt == 0 / answeredInRound < roundId ----
-
-    function test_Mint_RevertsOnUpdatedAtZeroOracle() public {
-        vm.warp(1_000_000);
-        vm.prank(oracleManager);
-        litePsm.configureOracle(address(oracle), 1 hours, true);
-
-        // New WS1.4 check: updatedAt == 0 (unwritten round)
-        oracle.setUpdatedAtZero();
-
-        _approveUsdc(user1, address(litePsm), 100e6);
-        vm.prank(user1);
-        vm.expectRevert(LitePSM.InvalidOracleResponse.selector);
-        litePsm.mintOkuM(100e6);
-    }
-
-    function test_Mint_RevertsOnZeroAnswerOracle() public {
-        vm.warp(1_000_000);
-        vm.prank(oracleManager);
-        litePsm.configureOracle(address(oracle), 1 hours, true);
-
-        // New WS1.4 check: answer == 0 (answer <= 0)
-        oracle.setZeroAnswer();
-
-        _approveUsdc(user1, address(litePsm), 100e6);
-        vm.prank(user1);
-        vm.expectRevert(LitePSM.InvalidOracleResponse.selector);
-        litePsm.mintOkuM(100e6);
-    }
+    // Note: the previous in-PSM Chainlink read-safety tests (updatedAt == 0,
+    // answer == 0, startedAt == 0, startedAt > updatedAt) have been moved to
+    // OracleRelay.t.sol now that the relay owns those checks. The PSM only
+    // delegates via `oracleRelay.checkUsdcPeg()`.
 
     // ---- WS3.1.i: setMaxSupply edge case ----
 
@@ -1936,6 +1822,7 @@ contract LitePSMTest is BaseTest {
         // Approve the queue to pull from PSM and drain
         vm.prank(queueProcessor);
         litePsm.processQueue(0, 1, 200e6);
+        redemptionQueue.advanceHead(1);
 
         assertEq(redemptionQueue.queueLength(), 0);
         assertGt(usdc.balanceOf(user1), 0);
@@ -1956,85 +1843,9 @@ contract LitePSMTest is BaseTest {
         redemptionQueue.assertUsdcMatch(address(oracle));
     }
 
-    // ============ Initialize Boundary Tests ============
-    //
-    // Drive the InvalidStaleness revert in {LitePSM.initialize}. A fresh proxy is
-    // required because re-initialization is blocked on the existing proxy. Both
-    // bounds (low and high) of `[ORACLE_MIN_STALENESS, ORACLE_MAX_STALENESS]` are
-    // exercised.
-
-    function test_Initialize_RevertOnStalenessBelowMin() public {
-        uint256 belowMin = Constants.ORACLE_MIN_STALENESS - 1;
-        // Deploy a fresh implementation first so expectRevert applies only to the
-        // proxy ERC1967 construction (which invokes `initialize` via delegatecall
-        // and surfaces the revert).
-        LitePSM impl = new LitePSM();
-        bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (
-                address(okuMoney),
-                address(okuDollar),
-                address(usdc),
-                address(redemptionQueue),
-                admin,
-                belowMin
-            )
-        );
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                LitePSM.InvalidStaleness.selector,
-                belowMin,
-                Constants.ORACLE_MIN_STALENESS,
-                Constants.ORACLE_MAX_STALENESS
-            )
-        );
-        new ERC1967Proxy(address(impl), initData);
-    }
-
-    function test_Initialize_RevertOnStalenessAboveMax() public {
-        uint256 aboveMax = Constants.ORACLE_MAX_STALENESS + 1;
-        LitePSM impl = new LitePSM();
-        bytes memory initData = abi.encodeCall(
-            LitePSM.initialize,
-            (
-                address(okuMoney),
-                address(okuDollar),
-                address(usdc),
-                address(redemptionQueue),
-                admin,
-                aboveMax
-            )
-        );
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                LitePSM.InvalidStaleness.selector,
-                aboveMax,
-                Constants.ORACLE_MIN_STALENESS,
-                Constants.ORACLE_MAX_STALENESS
-            )
-        );
-        new ERC1967Proxy(address(impl), initData);
-    }
-
-    function test_Initialize_AcceptsBoundaryStaleness() public {
-        // Inclusive bounds: MIN and MAX are both valid.
-        Deploy.deployLitePSM(
-            address(okuMoney),
-            address(okuDollar),
-            address(usdc),
-            address(redemptionQueue),
-            admin,
-            Constants.ORACLE_MIN_STALENESS
-        );
-        Deploy.deployLitePSM(
-            address(okuMoney),
-            address(okuDollar),
-            address(usdc),
-            address(redemptionQueue),
-            admin,
-            Constants.ORACLE_MAX_STALENESS
-        );
-    }
+    // Initialize staleness-bound tests for the prior PoR-era LitePSM init signature
+    // have been removed. The staleness window now belongs to OracleRelay.initialize
+    // and is exercised by OracleRelay.t.sol.
 
     // ============ Unpause Success Test ============
 
@@ -2070,9 +1881,9 @@ contract LitePSMTest is BaseTest {
         assertEq(address(litePsm.redemptionQueue()), address(redemptionQueue));
     }
 
-    function test_View_StalenessThreshold() public view {
-        // BaseTest deploys with DEFAULT_STALENESS_THRESHOLD.
-        assertEq(litePsm.stalenessThreshold(), 1 hours);
+    function test_View_OracleRelay() public view {
+        // BaseTest wires the MockOracleRelay during _setupRoles().
+        assertEq(address(litePsm.oracleRelay()), address(oracleRelay));
     }
 
     function test_View_UsdcDecimalMultiplier_Litepsm() public view {

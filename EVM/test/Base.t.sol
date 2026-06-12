@@ -10,6 +10,7 @@ import {LitePSM} from "../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../src/psm/RedemptionQueue.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {MockAggregatorV3} from "./mocks/MockAggregatorV3.sol";
+import {MockOracleRelay} from "./mocks/MockOracleRelay.sol";
 
 import {TestConstants} from "./shared/Constants.sol";
 import {TestRoles} from "./shared/Roles.sol";
@@ -74,10 +75,12 @@ abstract contract BaseTest is Test, Actors {
     bytes32 public constant QUEUE_PSM = TestRoles.QUEUE_PSM;
     bytes32 public constant QUEUE_UPGRADER = TestRoles.QUEUE_UPGRADER;
     bytes32 public constant QUEUE_RESCUER = TestRoles.QUEUE_RESCUER;
+    bytes32 public constant QUEUE_ORACLE_MANAGER = TestRoles.QUEUE_ORACLE_MANAGER;
 
-    // OkuBridge / OkuBridgeRouter role aliases were removed in the noBridge
-    // refactor. The underlying constants still live in TestRoles for forward
-    // compatibility and can be re-aliased here when those contracts return.
+    // OracleRelay roles (RELAY_ prefix)
+    bytes32 public constant RELAY_UPGRADER = TestRoles.RELAY_UPGRADER;
+    bytes32 public constant RELAY_FEED_MANAGER = TestRoles.RELAY_FEED_MANAGER;
+    bytes32 public constant RELAY_CONFIG_MANAGER = TestRoles.RELAY_CONFIG_MANAGER;
 
     // ============ Contracts ============
 
@@ -91,6 +94,7 @@ abstract contract BaseTest is Test, Actors {
     RedemptionQueue public redemptionQueueImpl;
     MockUSDC public usdc;
     MockAggregatorV3 public oracle;
+    MockOracleRelay public oracleRelay;
 
     // ============ Setup ============
 
@@ -104,6 +108,7 @@ abstract contract BaseTest is Test, Actors {
         // Deploy mocks
         usdc = new MockUSDC();
         oracle = new MockAggregatorV3();
+        oracleRelay = new MockOracleRelay(); // defaults to pass (price = 1e18)
 
         // Deploy OkuMoney
         (okuMoney, okuMoneyImpl) = Deploy.deployOkuMoney(admin);
@@ -158,6 +163,12 @@ abstract contract BaseTest is Test, Actors {
 
         // Grant RedemptionQueue MINTER role on OkuMoney (needed for self-burn in processQueue)
         okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+
+        // Wire the always-pass MockOracleRelay so mint/redeem/processQueue exercise the
+        // peg-check call site without tripping. Tests that want the depeg-revert branch
+        // call `oracleRelay.setPass(false)` ad hoc.
+        litePsm.setOracleRelay(address(oracleRelay));
+        redemptionQueue.setOracleRelay(address(oracleRelay));
 
         vm.stopPrank();
     }
@@ -225,11 +236,14 @@ abstract contract BaseTest is Test, Actors {
         return bound(amount, 1, remaining > 0 ? remaining : 1);
     }
 
-    /// @notice Bound fuzz input to reasonable okuMMultiplier (current to 2x)
-    /// @dev Tightened from 10x to 2x for more realistic scenarios
+    /// @notice Bound fuzz input to reasonable okuMMultiplier (strictly above current, up to 2x).
+    /// @dev Tightened from 10x to 2x for more realistic scenarios.
+    ///      `setOkuMMultiplier` requires strict increase, so the lower bound is
+    ///      `current + 1`. Tests that need the no-op semantics should call the
+    ///      contract directly and assert the revert.
     function _boundOkuMMultiplier(uint256 mult) internal view returns (uint256) {
         uint256 current = okuMoney.okuMMultiplier();
-        return bound(mult, current, current * TestConstants.MAX_MULTIPLIER_FACTOR);
+        return bound(mult, current + 1, current * TestConstants.MAX_MULTIPLIER_FACTOR);
     }
 
     /// @notice Bound fuzz input to reasonable okuMMultiplier increase (0.01% to 100%)

@@ -135,14 +135,13 @@ describe("OkuMoney Scenarios", () => {
 
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            // initialize(_okuMoney, _okuDollar, _usdc, _redemptionQueue, admin, _stalenessThreshold)
+            // initialize(_okuMoney, _okuDollar, _usdc, _redemptionQueue, admin)
             [
                 await okuMoney.getAddress(),
                 await okuUsd.getAddress(),
                 USDC_MAINNET,
                 await queue.getAddress(),
-                frankAddr,
-                3600
+                frankAddr
             ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
@@ -324,8 +323,7 @@ describe("OkuMoney Scenarios", () => {
                     await freshOkuUsd.getAddress(),
                     USDC_MAINNET,
                     await freshQueue.getAddress(),
-                    frankAddr,
-                    3600
+                    frankAddr
                 ],
                 { kind: "uups", unsafeAllow: ["constructor"] }
             ) as unknown as LitePSM

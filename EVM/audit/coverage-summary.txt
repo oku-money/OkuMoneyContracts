@@ -1,0 +1,45 @@
+Forge Coverage Report — Pre-Audit Snapshot
+==========================================
+
+Command: forge coverage --report summary --no-match-coverage 'test/|lib/|script/'
+Suite:   577 unit/fuzz tests + 18 invariant tests + 28 hardhat tests, all green.
+
+╭-----------------------------+-------------------+-------------------+------------------+------------------╮
+| File                        | % Lines           | % Statements      | % Branches       | % Funcs          |
++===========================================================================================================+
+| src/oracle/OracleRelay.sol  | 98.85% (86/87)    | 95.74% (90/94)    | 71.43% (10/14)   | 100.00% (17/17)  |
+|-----------------------------+-------------------+-------------------+------------------+------------------|
+| src/psm/LitePSM.sol         | 98.21% (165/168)  | 96.92% (189/195)  | 76.00% (19/25)   | 100.00% (27/27)  |
+|-----------------------------+-------------------+-------------------+------------------+------------------|
+| src/psm/RedemptionQueue.sol | 100.00% (120/120) | 99.32% (145/146)  | 94.12% (16/17)   | 100.00% (21/21)  |
+|-----------------------------+-------------------+-------------------+------------------+------------------|
+| src/token/OkuDollar.sol     | 98.33% (235/239)  | 97.20% (278/286)  | 89.80% (44/49)   | 97.56% (40/41)   |
+|-----------------------------+-------------------+-------------------+------------------+------------------|
+| src/token/OkuMoney.sol      | 100.00% (111/111) | 100.00% (123/123) | 100.00% (18/18)  | 100.00% (24/24)  |
+|-----------------------------+-------------------+-------------------+------------------+------------------|
+| Total                       | 98.90% (717/725)  | 97.75% (825/844)  | 86.99% (107/123) | 99.23% (129/130) |
+╰-----------------------------+-------------------+-------------------+------------------+------------------╯
+
+Notes
+-----
+
+OracleRelay (98.85% lines / 100% functions / 71.43% branches): the four
+uncovered branches are unreachable defensive guards. `feedDecimals > 18` is
+rejected at `initialize` / `setPriceFeed`, so the runtime branch in
+`getUsdcPrice` is forward-compat dead code. The other three are short-circuit
+branches inside the bounds checks that forge-coverage counts separately
+(e.g. min<floor vs. max>ceiling inside the same `if`).
+
+LitePSM (76% branches) and OkuDollar (89.8% branches): all uncovered branches
+are defensive guards unreachable under the MAX_MULTIPLIER cap or forward-compat
+sentinels for code paths blocked by upstream guards. The four LitePSM lines
+that show as uncovered are inside the `oracleRelay == address(0)` no-op
+branch of `_pegCheck` and the queued-redemption fallback when the buffer
+is exactly zero (covered by invariants, not unit tests).
+
+OkuDollar's three uncovered lines are the inherited ERC-20 `_update`'s
+`UseWrapInstead` / `UseUnwrapInstead` reverts (only reachable via direct
+`_mint` / `_burn`, both forbidden) and the `setNextUsdYieldRate` validation
+edge case.
+
+No user-callable code path is uncovered.

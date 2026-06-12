@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
 import {Errors} from "../../src/lib/Errors.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {OkuMoney} from "../../src/token/OkuMoney.sol";
 
 /**
@@ -287,7 +288,7 @@ contract OkuMoneyFuzzTest is BaseTest {
         okuMoney.distributeYield(yieldAmount);
 
         uint256 priceAfter = okuMoney.okuMMultiplier();
-        uint256 expectedIncrease = (yieldAmount * PRECISION) / supply;
+        uint256 expectedIncrease = Math.mulDiv(yieldAmount, PRECISION, supply, Math.Rounding.Floor);
         assertEq(priceAfter, priceBefore + expectedIncrease, "price increase equals yield/supply");
         assertGe(priceAfter, priceBefore, "multiplier must never decrease");
 

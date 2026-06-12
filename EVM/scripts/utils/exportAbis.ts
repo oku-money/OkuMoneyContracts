@@ -18,15 +18,13 @@ interface ContractSpec {
   name: string; // contract name (also the artifact filename)
 }
 
-// OkuBridge / OkuBridgeRouter / NttAdapter were removed in the noBridge refactor.
-// The IBridgeAdapter / IOkuBridgeNative interfaces remain in the tree as reserved
-// integration seams for future OkuBridge / NTT / CCIP work but are not exported.
 const PRODUCTION_CONTRACTS: ContractSpec[] = [
   { sol: "token/OkuMoney.sol", name: "OkuMoney" },
   { sol: "token/OkuDollar.sol", name: "OkuDollar" },
   { sol: "psm/LitePSM.sol", name: "LitePSM" },
   { sol: "psm/RedemptionQueue.sol", name: "RedemptionQueue" },
-  { sol: "mocks/MockUSDC.sol", name: "MockUSDC" },
+  { sol: "oracle/OracleRelay.sol", name: "OracleRelay" },
+  { sol: "oracle/IOracleRelay.sol", name: "IOracleRelay" },
 ];
 
 const HARDHAT_ARTIFACTS_DIR = path.resolve(__dirname, "../../artifacts/src");

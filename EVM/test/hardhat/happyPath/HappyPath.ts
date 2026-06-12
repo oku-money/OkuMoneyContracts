@@ -94,7 +94,7 @@ describe("Happy Path Testing", () => {
         ) as unknown as RedemptionQueue
         await queue.waitForDeployment()
 
-        // Deploy LitePSM (needs OkuMoney, OkuDollar, USDC, Queue, admin, stalenessThreshold)
+        // Deploy LitePSM (needs OkuMoney, OkuDollar, USDC, Queue, admin)
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
             [
@@ -102,8 +102,7 @@ describe("Happy Path Testing", () => {
                 await okuUsd.getAddress(),
                 USDC_MAINNET,
                 await queue.getAddress(),
-                frankAddr,
-                3600
+                frankAddr
             ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
@@ -309,7 +308,11 @@ describe("Happy Path Testing", () => {
         })
 
         // Admin processes the queue
-        await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("50000", 6))
+        const headBefore = await queue.queueHead()
+        const tailBefore = await queue.queueTail()
+        await psm.connect(Frank).processQueue(headBefore, tailBefore, parseUnits("50000", 6))
+        // processQueue no longer auto-advances the cursor; drive it forward.
+        await queue.advanceHead(tailBefore - headBefore)
 
         // Verify queue is now empty
         expect(await queue.queueLength()).to.equal(0)
@@ -418,7 +421,10 @@ describe("Happy Path Testing", () => {
             params: [USDC_WHALE]
         })
 
-        await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("10000", 6))
+        const headBefore2 = await queue.queueHead()
+        const tailBefore2 = await queue.queueTail()
+        await psm.connect(Frank).processQueue(headBefore2, tailBefore2, parseUnits("10000", 6))
+        await queue.advanceHead(tailBefore2 - headBefore2)
 
         // Queue should now be empty
         expect(await queue.queueLength()).to.equal(0)

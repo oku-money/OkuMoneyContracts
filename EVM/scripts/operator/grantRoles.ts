@@ -9,10 +9,6 @@
  * Decisions baked in:
  *   - QUEUE_PSM is intentionally NOT granted to an EOA (must remain on the
  *     LitePSM proxy, otherwise an EOA could bypass LitePSM accounting).
- *   - OkuBridge / OkuBridgeRouter / NttAdapter contracts were removed in the
- *     noBridge refactor, so the BRIDGE_*, ROUTER_*, NTT_* role constants are
- *     not granted here. They remain reserved in lib/Roles.sol for the future
- *     re-introduction of OkuBridge / NTT / CCIP.
  *
  * The signer used to send the grants must hold DEFAULT_ADMIN_ROLE on every
  * contract being touched. On testnet deployments that is the deployer / dev
@@ -164,7 +160,18 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
     "PSM_ORACLE_MANAGER",
   ],
   // NOTE: QUEUE_PSM intentionally excluded — must stay on the LitePSM proxy.
-  RedemptionQueue: ["DEFAULT_ADMIN_ROLE", "QUEUE_UPGRADER", "QUEUE_RESCUER"],
+  RedemptionQueue: [
+    "DEFAULT_ADMIN_ROLE",
+    "QUEUE_UPGRADER",
+    "QUEUE_RESCUER",
+    "QUEUE_ORACLE_MANAGER",
+  ],
+  OracleRelay: [
+    "DEFAULT_ADMIN_ROLE",
+    "RELAY_UPGRADER",
+    "RELAY_FEED_MANAGER",
+    "RELAY_CONFIG_MANAGER",
+  ],
   // OkuBridge / OkuBridgeRouter entries removed in the noBridge refactor.
   // Note: live deployments from prior to the refactor may still have these
   // proxies on-chain. The address-book lookup loop below silently skips any

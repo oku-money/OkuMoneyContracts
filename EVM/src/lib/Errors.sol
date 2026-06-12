@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity 0.8.28;
 
 /**
  * @title Errors
@@ -16,6 +16,9 @@ library Errors {
     error ZeroAmount();
     /// @notice The caller's balance is below the requested amount.
     error InsufficientBalance();
-    /// @notice A monotonic multiplier value moved backwards.
+    /// @notice A monotonic multiplier value did not strictly increase.
+    /// @dev Reverts on both backward moves and no-op (equal-value) updates so a
+    ///      no-op call cannot stamp the sandwich-lock block without moving the
+    ///      multiplier. See {OkuMoney.setOkuMMultiplier}.
     error MultiplierCannotDecrease();
 }

@@ -103,20 +103,30 @@ pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Resu
 ///
 /// `new_feed == Pubkey::default()` is the operator-side kill switch — it
 /// disables the peg check entirely (mirrors EVM `setOracleRelay(address(0))`).
-/// Otherwise, when the caller supplies the matching feed account, the
-/// handler pre-flights the Pyth header (`magic`, `version == 2`,
-/// `atype == Price`, owner, `|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before
-/// persisting the new pubkey. The account is optional only so the disable
-/// path doesn't require a junk-account read.
+/// Otherwise the caller MUST supply the matching feed account in
+/// `ctx.accounts.oracle_account`; the handler pre-flights the Pyth header
+/// (`magic`, `version == 2`, `atype == Price`, owner,
+/// `|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before persisting the new pubkey.
+/// The account is `Option` only so the disable path doesn't require a
+/// junk-account read.
+///
+/// Audit note: a prior revision made the pre-flight optional (silent
+/// pass-through when the account was omitted) — that was an admin-time
+/// validation bypass that let an operator stamp a malformed feed pubkey
+/// into config. The current code rejects with `OracleAccountMissing`
+/// when the account is absent and the new feed is non-default.
 pub fn set_oracle_relay_feed(ctx: Context<OracleManager>, new_feed: Pubkey) -> Result<()> {
     if new_feed != Pubkey::default() {
-        if let Some(feed_ai) = ctx.accounts.oracle_account.as_ref() {
-            validate_oracle_relay_feed(
-                &feed_ai.to_account_info(),
-                new_feed,
-                ctx.accounts.config.oracle_relay_pyth_program_owner,
-            )?;
-        }
+        let feed_ai = ctx
+            .accounts
+            .oracle_account
+            .as_ref()
+            .ok_or(LitePsmError::OracleAccountMissing)?;
+        validate_oracle_relay_feed(
+            &feed_ai.to_account_info(),
+            new_feed,
+            ctx.accounts.config.oracle_relay_pyth_program_owner,
+        )?;
     }
 
     let config = &mut ctx.accounts.config;

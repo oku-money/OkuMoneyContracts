@@ -40,7 +40,7 @@
 //! folded into the formula). `expo > 0` is allowed but unusual; `|expo|` is
 //! bounded by `MAX_FEED_EXPO_MAGNITUDE` to keep the scaling math finite.
 
-use crate::constants::{MAX_FEED_EXPO_MAGNITUDE, PRECISION};
+use crate::constants::MAX_FEED_EXPO_MAGNITUDE;
 use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
@@ -212,17 +212,32 @@ pub fn get_usdc_price<'info>(
         LitePsmError::FeedExpoTooLarge
     );
 
-    let precision_exp: i32 = 9; // log10(PRECISION = 1e9)
-    let shift = expo + precision_exp;
-    let raw = price as u128;
+    // `precision_exp = 9` (= log10(PRECISION = 1e9)). The shift cannot
+    // overflow because `|expo| <= 18` (clamped above) so
+    // `shift ∈ [-18 + 9, 18 + 9] = [-9, 27]`. Use `checked_add` anyway
+    // for the explicit arithmetic-safety audit trail.
+    const PRECISION_EXP: i32 = 9; // log10(PRECISION = 1e9)
+    let shift = expo
+        .checked_add(PRECISION_EXP)
+        .ok_or(LitePsmError::Overflow)?;
+    // `price > 0` was asserted above, so the i64 -> u128 cast is sign-safe.
+    let raw = u128::try_from(price).map_err(|_| LitePsmError::NonPositiveAnswer)?;
     let price_e9_u128 = if shift >= 0 {
+        // `shift` is non-negative here; `shift as u32` cannot lose sign.
+        // The upper bound is 27, well below `u32::MAX`.
         let factor = 10u128
-            .checked_pow(shift as u32)
+            .checked_pow(shift.unsigned_abs())
             .ok_or(LitePsmError::Overflow)?;
         raw.checked_mul(factor).ok_or(LitePsmError::Overflow)?
     } else {
+        // `shift < 0`; `unsigned_abs()` returns `|shift|` as u32 without
+        // an intermediate `(-shift) as u32` that clippy flags as a
+        // sign-cast on a potential `i32::MIN` overflow (the explicit
+        // `checked_add` above keeps `shift >= -18` so the panic case
+        // is mathematically unreachable, but `unsigned_abs` is the
+        // documented overflow-free idiom).
         let divisor = 10u128
-            .checked_pow((-shift) as u32)
+            .checked_pow(shift.unsigned_abs())
             .ok_or(LitePsmError::Overflow)?;
         // Floor on the divide is acceptable: at expo == -8 with 1e9
         // normalization the shift is 1, so divisor == 10 and the lost
@@ -240,10 +255,6 @@ pub fn get_usdc_price<'info>(
             && price_e9 <= config.oracle_relay_max_price_e9,
         LitePsmError::PriceOutOfBand
     );
-
-    // Silence unused-import warning when PRECISION is only referenced
-    // through the `precision_exp` literal above.
-    let _ = PRECISION;
 
     Ok(price_e9)
 }

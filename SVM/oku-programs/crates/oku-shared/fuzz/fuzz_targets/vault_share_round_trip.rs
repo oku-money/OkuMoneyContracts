@@ -67,12 +67,27 @@ fuzz_target!(|data: (u64, u64, u64)| {
          usd_multiplier={usd_multiplier}, shares={shares}, oku_m_out={oku_m_out}"
     );
 
-    // Property 5: precision bound
-    // The round-trip loss is bounded by ceil(usd_multiplier / oku_m_price) + 1.
-    // The +1 accounts for the floor in the oku_m->shares direction, and the
-    // ceil term accounts for the floor in the shares->oku_m direction whose
-    // unit is (usd_multiplier / oku_m_price) in oku_m units.
-    let max_loss = (usd_multiplier / oku_m_price) + 2; // generous bound (+1 slack)
+    // Property 5: precision bound.
+    //
+    // The round-trip loss is bounded by `ceil(usd_multiplier / oku_m_price) + 1`.
+    // The `+1` accounts for the floor in the oku_m->shares direction; the
+    // ceil term accounts for the floor in the shares->oku_m direction
+    // whose unit is `(usd_multiplier / oku_m_price)` in oku_m units.
+    //
+    // Cycle 3 (2026-06-15): cargo-fuzz turned up a libFuzzer crash on
+    // input `(oku_m=3_138_912_443, oku_m_price=1, usd_multiplier=u64::MAX)`
+    // because the harness's `(usd_multiplier / oku_m_price) + 2`
+    // computed `u64::MAX + 2` and overflowed under
+    // `overflow-checks = true`. The production math is correct on the
+    // same input (`mul_div_floor` returns Some(0) → round-trip oku_m_out
+    // is 0 → loss == oku_m_in is finite and well-defined). The harness
+    // bound is what was unsound, not the function under test. Fix:
+    // `saturating_add` so the bound itself can't overflow when
+    // `usd_multiplier >> oku_m_price` produces a near-`u64::MAX`
+    // tolerance. The property is still meaningfully checked: any
+    // round-trip loss that fits in u64 is compared against the
+    // (saturated) bound.
+    let max_loss = (usd_multiplier / oku_m_price).saturating_add(2);
     let actual_loss = oku_m_in.saturating_sub(oku_m_out);
     assert!(
         actual_loss <= max_loss,

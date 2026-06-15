@@ -65,21 +65,44 @@ The 200-entry cap with `MAX_BATCH_ENTRIES = 50` per `process_queue` tx
 is sufficient for launch SLA. Defer the 500 upgrade until telemetry
 shows operators repeatedly hitting `QueueFull`.
 
-## 5. `cargo dylint` (solana-lints) not re-run for this cycle
+## 5. `cargo dylint` (solana-lints) deferred — upstream incompatibility
 
 The Trail of Bits Solana lint suite is declared in `Cargo.toml` and
-was run during an earlier review pass — the F-02 (`arbitrary_cpi`)
-finding was triaged crate-wide via `#![allow]` annotations.
+was run during an earlier review pass. F-02 (`arbitrary_cpi`),
+F-03 (`type_cosplay`), and F-04 (`sysvar_get`) were triaged crate-wide
+via `#![allow]` annotations with documented rationale.
 
-The tool is not installed on the audit-prep workstation, so it was
-not re-run after the oracle-relay refactor. The only new helper
-(`helpers/oracle_relay.rs`) uses the same CPI patterns as the rest
-of the codebase, so the triage shouldn't change. Running the suite
-is on the to-do list (`SVM/TRACKER.md § 🟡`) but is not blocking the
-audit cycle.
+Cycle 3 (2026-06-15) re-probed upstream
+(`https://github.com/crytic/solana-lints`). The repository's
+`rust-toolchain` is still pinned to `nightly-2025-01-09`, the same
+pin from cycle 1. Recent commits (most recent 2025-05-15) are all
+dependabot bumps for ancillary deps (tempfile / toml / assert_cmd) —
+no `clippy_utils` or nightly-toolchain bumps in 2025-H2 or 2026-H1.
+Anchor 1.0.2's proc-macros use `extract_if` (stabilized in Rust
+1.87), which is unavailable on that nightly. Running `cargo dylint`
+against the current workspace fails at the proc-macro derive stage.
 
-`cargo clippy --workspace --all-targets -- -D warnings` runs clean
-(see `clippy-checklist.md`).
+Per the cycle-3 plan we deliberately did **not** vendor a fork of
+`crytic/solana-lints`. The audit Makefile's `solana-lints` target
+now stubs out with a deferred-status marker and writes a marker
+file under `reports/solana-lints/`. The original invocation is
+preserved in a commented-out block adjacent to the target for
+one-line re-enable when upstream bumps.
+
+The only post-cycle-1 surface change (`helpers/oracle_relay.rs` +
+the four `set_oracle_relay_*` admin ix from cycle 2) uses the same
+CPI / owner-check / Pyth-V2 parser patterns that the cycle-1 dylint
+pass already triaged. The triage doesn't change.
+
+**Tracking signal**: watch
+`https://github.com/crytic/solana-lints/blob/master/rust-toolchain`
+for a channel newer than `nightly-2025-04-xx` (the first nightly
+to ship `extract_if`-compatible `clippy_utils`). Re-enable is ~½
+day once that lands.
+
+`cargo clippy --workspace --all-targets -- -D warnings` and the
+strict variant (with `-W arithmetic_side_effects -W cast_sign_loss`)
+both exit 0 on Rust 1.90.0 (see `clippy-checklist.md`).
 
 ## 6. `cargo fmt --check` and `cargo deny check` not wired into CI
 

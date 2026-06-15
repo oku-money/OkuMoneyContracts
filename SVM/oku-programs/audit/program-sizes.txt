@@ -1,20 +1,2 @@
-SVM program .so deployment sizes (audit-prep snapshot).
-Source: `anchor build` (release profile, BPF target).
-
-| Program        | Runtime size (bytes) | Notes |
-|----------------|---------------------:|-------|
-| lite-psm.so    | 535,192              | PSM + redemption queue + yield-ops + USDC peg relay |
-| oku-dollar.so  | 414,920              | Vault (wrap / unwrap / reserves / multiplier) |
-
-Solana has no EIP-170-style fixed runtime-bytecode cap; both programs sit
-comfortably within the rent-affordable single-buffer BPF-loader budget.
-Buffer rent cost at these sizes is ~3.7 SOL for lite-psm and ~2.9 SOL for
-oku-dollar (computed at the rent-exempt minimum for the program data
-account, paid once at upgrade and reclaimed on close).
-
-Audit-prep cycle delta:
-- lite-psm grew by ~5KB (range estimate) — the PoR `check_oracle_reserves`
-  helper was deleted (~350 LOC) and the peg-check `oracle_relay` helper
-  added (~290 LOC) plus four new admin setters. Net BPF delta is small.
-- oku-dollar unchanged in surface; only the `withdraw_reserves`
-  yield-lock guard and the strict-increase multiplier check were added.
+target/deploy/lite_psm.so  535464 bytes
+target/deploy/oku_dollar.so  414912 bytes

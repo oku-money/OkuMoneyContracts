@@ -14,12 +14,17 @@ input.
 | Item | State |
 |---|---|
 | Production programs | 2 (`lite-psm`, `oku-dollar`) + 1 shared crate (`oku-shared`) |
-| Bankrun tests | 128 / 128 |
+| Bankrun tests | 129 / 129 |
 | Cargo unit tests | 20 / 20 |
 | Anchor build | clean |
-| `cargo clippy -D warnings` | clean |
-| `cargo dylint` | deferred (tool not installed locally; see audit/ACCEPTED_RISKS.md) |
+| `cargo clippy -D warnings` (lenient) | clean |
+| `cargo clippy -W arithmetic_side_effects -W cast_sign_loss …` (strict) | clean |
+| `cargo dylint` | deferred (upstream `crytic/solana-lints` still pinned to `nightly-2025-01-09`, incompatible with Anchor 1.0.2's `extract_if` — re-probed 2026-06-15, no upstream bump since cycle 1) |
 | Pyth USDC/USD peg circuit-breaker | embedded in `lite-psm` (audit-prep cycle) |
+| Trident `#[init]` invariants | wired (cycle 3); 0 panics across ~100 k random tx per program; `oku_m_price`/`usd_multiplier` invariants firing |
+| Kani formal proofs | 9 / 9 SUCCESSFUL (cycle 3 tightened the two SAT-hard harness domains) |
+| Rust toolchain pin | 1.90.0 across `programs/` + `trident-tests/` |
+| Anchor CLI / lib | 1.0.2 / 1.0.2 (no drift warning) |
 | EVM ↔ SVM constant parity | re-verified post-cycle |
 
 Full audit handoff package lives under `oku-programs/audit/`:
@@ -28,6 +33,10 @@ Full audit handoff package lives under `oku-programs/audit/`:
 - `audit/ACCEPTED_RISKS.md` — known trust-assumptions, deferrals.
 - `audit/clippy-checklist.md` — clippy disposition.
 - `audit/program-sizes.txt`, `audit/test-output-*.txt` — captured snapshots.
+
+The audit toolkit lives at `audit/SVM/` (separate from the in-program
+`oku-programs/audit/` package). Run `make doctor` to verify toolchain
+pins match installed binaries before kicking off `make all`.
 
 ## 📋 Deployment status (2026-06-05)
 
@@ -42,8 +51,17 @@ All chains running noBridge HEAD bytecode:
 | bsc | impl `0xB43A3617` | impl `0x795bD849` | impl `0x0E4d4719` | impl `0x1BC7630A` |
 | svm-devnet | program `3CLDWjDT…YC7N` | program `3TeNwAqQ…PJgy` | (lite_psm above) | (PsmConfig PDA `2A8FojJF…zm1f`) |
 
-SVM seed rotation (2026-06-05): all four PDA seeds rotated to `*_v2` to force
-fresh storage layouts. Pre-rotation accounts orphaned — see
+SVM seed rotations:
+- 2026-06-05 (noBridge migration) — all four PDA seeds rotated to `*_v2`
+  to force fresh storage layouts after the blacklist-exempt fields were
+  removed from `PsmConfig`.
+- 2026-06-12 (audit-prep cycle) — `psm_config` rotated `_v2 → _v3` to
+  force a fresh PDA after the PoR plumbing was replaced with the USDC
+  peg circuit-breaker. The three other PDA seeds (`redemption_queue_v2`,
+  `oku_dollar_config_v2`, `usd_oku_mint_v2`) were unaffected and remain
+  on `_v2`.
+
+Pre-rotation accounts orphaned — see
 `SVM/oku-programs/deployments/DEPRECATED.md` for the orphan-PDA table and
 post-launch rent-recovery plan.
 
@@ -171,34 +189,69 @@ rationale. `cargo clippy --workspace --all-targets -- -D warnings` exits 0.
 Once the CI job is wired (separate workstream), `-D warnings` should be the
 default flag.
 
-### `cargo dylint` (crytic/solana-lints)
+### `cargo dylint` (crytic/solana-lints) — DEFERRED
 
-Trail of Bits' Solana lint suite is declared in `Cargo.toml` but never invoked
-locally — `cargo-dylint` is not installed on the audit-prep workstation. The
-suite has been run historically as part of an earlier review pass and the F-02
-(`arbitrary_cpi`) finding was already triaged crate-wide via `#![allow]`. The
-remaining auditor-facing risk is "did anything land since that review that
-the suite would flag?" — answer: only the small `helpers/oracle_relay.rs`
-addition, which uses the same CPI pattern as the rest of the codebase and
-follows the same review reasoning.
+Trail of Bits' Solana lint suite is declared in `Cargo.toml` but cannot
+run against `anchor-lang 1.0.2`. The upstream pin
+(`crytic/solana-lints` → `rust-toolchain = nightly-2025-01-09`) predates
+the `extract_if` stabilization (Rust 1.87) that Anchor 1.0.2 relies on
+via its proc-macro derives. We re-probed upstream on 2026-06-15 and
+the pin is unchanged since cycle 1 — the most recent commits are
+dependabot bumps for ancillary deps (tempfile, toml, assert_cmd), and
+no `clippy_utils`/toolchain bumps have landed in 2025-H2 or 2026-H1.
 
-**Effort:** 1 day (install `cargo-dylint` + `dylint-link`, point at the
-crytic suite, triage). **Worth running before audit; not blocking this
-cycle.** Documented in `audit/ACCEPTED_RISKS.md`.
+Per the cycle-3 plan, we **did not vendor** the upstream repo. The
+audit Makefile's `solana-lints` target now stubs out with a
+deferred-status message and writes a marker file under
+`reports/solana-lints/`. The earlier review-pass findings (F-02
+`arbitrary_cpi`, F-03 manual byte parsing in oracle helpers, F-04
+sysvar usage) remain valid and have already been triaged via
+crate-wide `#![allow]` suppressions plus inline comments. The only
+new code since that review is `programs/lite-psm/src/helpers/oracle_relay.rs`
+and the four oracle-relay admin ix — all using the same CPI / owner-
+check / parser patterns already covered.
 
-### Trident `#[init]` wiring
+**Effort to re-enable:** ½ day once upstream bumps the `clippy_utils`
+pin to a nightly with `extract_if`. **Tracking signal**: watch
+`https://github.com/crytic/solana-lints/blob/master/rust-toolchain`
+for a channel newer than `nightly-2025-04-xx`.
 
-`trident-tests/fuzz_{lite_psm,oku_dollar}/test_fuzz.rs` have real `#[end]`
-invariants (oku_m_price monotonicity, usd_multiplier ceiling) but empty `#[init]`
-stubs. Until init populates state, the invariants are no-ops because the PDA never
-exists.
+### ~~Trident `#[init]` wiring~~ ✅ (2026-06-15)
 
-Wire the 3-step init (`Initialize + setupRedemptionQueue + setupOkuMoneyEscrow`)
-using Trident's SPL mint helpers. Blocked on Trident 0.12.0's async mint-creation
-API — check `trident-fuzz::fuzzing::Trident` for `create_token_mint` / `set_account`
-patterns in the 0.12.0 release notes.
+Wired in cycle 3. Both `fuzz_lite_psm` and `fuzz_oku_dollar` now have
+working `#[init]` bodies that bootstrap the canonical state via the
+program's own `Initialize` / `Setup*` ix flow. The 1-minute smoke
+runs archived under `audit/SVM/reports/trident/lite-psm_20260615_*.txt`
+and `…/oku-dollar_20260615_*.txt` show:
 
-**Effort:** 2–4 days. Once wired, add a CI smoke run:
+- `Initialize`, `SetupRedemptionQueue`, `SetupOkuMoneyEscrow`,
+  `LitePsmInitialize`, `OkuDollarInitialize`, `InitUsdcMint`,
+  `InitOkuMoneyMint` — all 984/984 invocations succeed.
+- Every other ix (Mint, Redeem, ProcessQueue, DepositBuffer,
+  WithdrawBuffer, Freeze, Thaw, Wrap, Unwrap, UpdateUsdMultiplier,
+  Pause/Unpause) — invoked thousands of times with random calldata,
+  all fail (expected: random user/ATA/mint addresses) with `0`
+  panics.
+
+The `#[end]` invariants on `oku_m_price` and `usd_multiplier` are now
+firing because the config PDAs exist with valid layouts. The
+dead-shares anti-inflation seed for `oku-dollar` was left unwired
+this cycle — the `wrap` flow reverts with `BelowMinimumLiquidity` on
+every call but the multiplier invariants are independent of reserve
+balance, so the invariant signal still lands.
+
+Key technical finding: Trident 0.12.0's SVM **doesn't crypto-verify
+signatures** (`trident-svm-0.2.0/src/methods/trident_svm_transactions.rs:39`
+calls `try_from_legacy_transaction(tx, &HashSet::new())`). This
+means signer-gated ix can be called with `payer.pubkey()` filling
+every `Signer<'info>` slot — no multi-keypair machinery required.
+This unblocks the same on-chain harness pattern used by `bankrun`
+without the bankrun TypeScript glue.
+
+**Follow-on (post-audit):** wire dead-shares pre-seed via
+`set_account_custom`, convert flows from `.insert()` to `.get()` so
+they reuse canonical mint/vault addresses for higher `Ix Success`
+rates. **Effort:** 1–2 days. Once wired, add a CI smoke run:
 `trident fuzz run fuzz_lite_psm --max-iterations 1000`.
 
 ### Health-check / monitoring scripts (both sides)
@@ -360,6 +413,35 @@ action needed. Listed here for symmetry.
 
 ## Recent decisions
 
+- 2026-06-15 — Cycle 3 (audit-prep round 3). Pure-cleanup tracks first:
+  Anchor CLI 1.0.0 → 1.0.2 (closes the build-time CLI/lib drift
+  warning), Rust toolchain 1.85.0 → 1.90.0 (collapsed against
+  `trident-tests/` which previously floated on `stable`), audit
+  Makefile housekeeping (added `vault_share_round_trip` to
+  `FUZZ_TARGETS`, stubbed `solana-lints` target, added `make doctor`
+  for drift checks).
+- 2026-06-15 — Kani harness domain tightening: 9/9 SUCCESSFUL on
+  the strict toolkit (cycle 2 had 7/9 with 2 SAT-hard timeouts).
+  `proof_mul_div_floor_correctness_bounded` domain tightened to
+  `u8::MAX` (3 vars), `proof_oku_m_to_dollars_identity_at_precision`
+  to `u16::MAX` (1 var × 30-bit constant). Both are sufficient
+  structural witnesses; complementary `cargo-fuzz` covers full u64
+  range.
+- 2026-06-15 — Trident `#[init]` wiring landed for both
+  `fuzz_lite_psm` and `fuzz_oku_dollar`. Both Init paths reach
+  984/984 success on the 1-minute smoke; 0 panics across ~100 k
+  random transactions per program; `#[end]` invariants on
+  `oku_m_price` / `usd_multiplier` are firing for the first time.
+  Trident 0.12.0's SVM doesn't crypto-verify signatures
+  (`try_from_legacy_transaction(tx, &HashSet::new())`), which lets a
+  single payer fill every `Signer<'info>` slot without multi-keypair
+  machinery.
+- 2026-06-15 — `cargo dylint` (crytic/solana-lints) probed upstream;
+  toolchain pin (`nightly-2025-01-09`) is unchanged since cycle 1.
+  Per the cycle-3 plan we did **not** vendor a fork. The audit
+  Makefile's `solana-lints` target now stubs out with a
+  deferred-status message. Re-enable when upstream bumps to a
+  nightly with `extract_if`.
 - 2026-06-12 — Removed PoR `check_oracle_reserves` plumbing from
   `lite-psm`; replaced with USDC peg circuit-breaker
   (`helpers::oracle_relay::check_usdc_peg`). Storage-incompatible

@@ -31,6 +31,11 @@ import {
   mintToViaBankrun,
   ensureAtaViaBankrun,
 } from "../shared/bankrun";
+import {
+  buildPythFixture,
+  ONE_DOLLAR_AT_EXPO_M8,
+  PythStatus,
+} from "../shared/pythFixture";
 
 // Use anchor's web3 to avoid version conflicts
 const { Keypair, SystemProgram, PublicKey } = anchor.web3;
@@ -538,7 +543,36 @@ describe("lite-psm", () => {
       // This block only exercises role-gating and bounds on the relay setters.
 
       it("oracle_manager can rotate the relay feed and clear it (kill switch)", async () => {
+        // Build a real Pyth fixture so the on-chain pre-flight passes.
+        // The relay's `set_oracle_relay_feed` now requires a valid feed
+        // account when `new_feed != default` — passing `oracleAccount: null`
+        // returns `OracleAccountMissing` (intentional admin-time gate).
         const fakeFeed = Keypair.generate().publicKey;
+        const fakePythProgramOwner = Keypair.generate().publicKey;
+        const setupClock = await h.context.banksClient.getClock();
+        h.context.setAccount(fakeFeed, {
+          lamports: 1_000_000_000,
+          data: buildPythFixture({
+            unixTimestamp: setupClock.unixTimestamp,
+            priceRaw: ONE_DOLLAR_AT_EXPO_M8,
+            status: PythStatus.Trading,
+          }),
+          owner: fakePythProgramOwner,
+          executable: false,
+          rentEpoch: 0,
+        });
+
+        // Point the relay at the fixture's owner so the pre-flight's
+        // owner check matches.
+        await program.methods
+          .setOracleRelayPythProgramOwner(fakePythProgramOwner)
+          .accountsPartial({
+            oracleManager: coldMultisig.publicKey,
+            config: configPda,
+            oracleAccount: null,
+          })
+          .signers([coldMultisig])
+          .rpc();
 
         // Set
         await program.methods
@@ -546,7 +580,7 @@ describe("lite-psm", () => {
           .accountsPartial({
             oracleManager: coldMultisig.publicKey,
             config: configPda,
-            oracleAccount: null, // skip the pre-flight (placeholder pubkey)
+            oracleAccount: fakeFeed,
           })
           .signers([coldMultisig])
           .rpc();
@@ -554,7 +588,7 @@ describe("lite-psm", () => {
         let config = await program.account.psmConfig.fetch(configPda);
         expect((config.oracleRelayFeed as PublicKey).toString()).to.equal(fakeFeed.toString());
 
-        // Kill switch
+        // Kill switch — `oracleAccount: null` is the documented disable path.
         await program.methods
           .setOracleRelayFeed(PublicKey.default)
           .accountsPartial({
@@ -569,6 +603,26 @@ describe("lite-psm", () => {
         expect((config.oracleRelayFeed as PublicKey).toString()).to.equal(
           PublicKey.default.toString()
         );
+      });
+
+      it("set_oracle_relay_feed rejects non-default new_feed when oracleAccount is missing", async () => {
+        // Audit-prep finding: the previous revision silently allowed an
+        // admin to stamp a non-default feed pubkey without supplying the
+        // pre-flight account. Confirm the closed gate.
+        try {
+          await program.methods
+            .setOracleRelayFeed(Keypair.generate().publicKey)
+            .accountsPartial({
+              oracleManager: coldMultisig.publicKey,
+              config: configPda,
+              oracleAccount: null,
+            })
+            .signers([coldMultisig])
+            .rpc();
+          expect.fail("Should have failed with OracleAccountMissing");
+        } catch (err: any) {
+          expect(err.error.errorCode.code).to.equal("OracleAccountMissing");
+        }
       });
 
       it("non-oracle_manager CANNOT call relay setters", async () => {
@@ -1130,18 +1184,39 @@ describe("lite-psm", () => {
     });
 
     it("fails when oracle relay is wired but no feed account is passed at mint", async () => {
-      const fakeFeed = Keypair.generate().publicKey;
-
-      // Wire the relay feed. Skip the pre-flight by passing
-      // `oracleAccount: null` — this test only checks that *mint* fails
-      // when the runtime feed account is omitted while a feed pubkey is
+      // Wire a valid Pyth fixture so the admin-time pre-flight passes.
+      // The runtime mint path is what we're testing here — it must fail
+      // when `oracleRelayFeed: null` is supplied but a feed pubkey is
       // configured.
+      const fakeFeed = Keypair.generate().publicKey;
+      const fakePythProgramOwner = Keypair.generate().publicKey;
+      const setupClock = await h.context.banksClient.getClock();
+      h.context.setAccount(fakeFeed, {
+        lamports: 1_000_000_000,
+        data: buildPythFixture({
+          unixTimestamp: setupClock.unixTimestamp,
+          priceRaw: ONE_DOLLAR_AT_EXPO_M8,
+          status: PythStatus.Trading,
+        }),
+        owner: fakePythProgramOwner,
+        executable: false,
+        rentEpoch: 0,
+      });
+      await program.methods
+        .setOracleRelayPythProgramOwner(fakePythProgramOwner)
+        .accountsPartial({
+          oracleManager: coldMultisig.publicKey,
+          config: configPda,
+          oracleAccount: null,
+        })
+        .signers([coldMultisig])
+        .rpc();
       await program.methods
         .setOracleRelayFeed(fakeFeed)
         .accountsPartial({
           oracleManager: coldMultisig.publicKey,
           config: configPda,
-          oracleAccount: null,
+          oracleAccount: fakeFeed,
         })
         .signers([coldMultisig])
         .rpc();

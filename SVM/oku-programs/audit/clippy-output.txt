@@ -1,0 +1,4 @@
+    Checking oku-shared v0.1.0 (/home/jbarber/gfx/okuMoney/contracts/SVM/oku-programs/crates/oku-shared)
+    Checking lite-psm v0.1.0 (/home/jbarber/gfx/okuMoney/contracts/SVM/oku-programs/programs/lite-psm)
+    Checking oku-dollar v0.1.0 (/home/jbarber/gfx/okuMoney/contracts/SVM/oku-programs/programs/oku-dollar)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.47s

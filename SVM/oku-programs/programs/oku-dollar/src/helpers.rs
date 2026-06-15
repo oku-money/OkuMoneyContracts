@@ -162,7 +162,12 @@ pub fn calculate_collateral_ratio(
         .checked_mul(PRECISION as u128)
         .ok_or(OkuDollarError::Overflow)?;
 
-    let result = numerator / denominator;
+    // `denominator > 0` is asserted above so the divide cannot trap;
+    // `checked_div` keeps clippy's `arithmetic_side_effects` lint happy
+    // and documents the safety boundary explicitly.
+    let result = numerator
+        .checked_div(denominator)
+        .ok_or(OkuDollarError::Overflow)?;
     Ok(u64::try_from(result).unwrap_or(u64::MAX))
 }
 

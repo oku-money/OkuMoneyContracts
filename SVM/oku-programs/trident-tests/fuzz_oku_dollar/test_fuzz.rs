@@ -11,9 +11,21 @@ mod fuzz_accounts;
 mod types;
 use types::oku_dollar;
 use types::oku_dollar::*;
+// `lite_psm` types are reachable through `types::lite_psm` because the
+// regenerated `types.rs` includes both programs' IDLs (oku-dollar's
+// `Initialize` ix requires the lite-psm `psm_config` PDA to already
+// exist, so the harness initializes lite-psm first).
+use types::lite_psm as lite_psm_types;
 
 const PRECISION: u64 = 1_000_000_000;
 const MAX_USD_MULTIPLIER: u64 = 1_000_000_000_000_000;
+/// Dead-shares anti-inflation floor on `usd_oku_mint` — referenced by
+/// `wrap` to refuse first-deposit unless reserves are pre-seeded. Kept
+/// here for parity with the source-of-truth in `oku-shared::constants`;
+/// the init currently doesn't pre-seed dead shares so flows that hit
+/// `wrap` revert with `BelowMinimumLiquidity`. See the `#[init]` doc
+/// comment for rationale.
+#[allow(dead_code)]
 const MINIMUM_LIQUIDITY: u64 = 1_000_000;
 
 const ITER_COUNT: u64 = 1000;
@@ -36,15 +48,200 @@ impl FuzzTest {
         }
     }
 
+    /// Six-step init wires both programs to their canonical state so the
+    /// `#[end]` invariants on `usd_multiplier` can fire:
+    ///
+    /// 1. Create USDC SPL mint.
+    /// 2. Create OkuMoney Token-2022 mint (authority = lite-psm config PDA).
+    /// 3. lite-psm `Initialize` (creates PsmConfig PDA + vault_usdc).
+    /// 4. lite-psm `SetupRedemptionQueue` (9 640-byte zero-copy alloc).
+    /// 5. lite-psm `SetupOkuMoneyEscrow` (vault_oku_money ATA).
+    /// 6. oku-dollar `Initialize` (creates OkuDollarConfig PDA, usdOku
+    ///    mint PDA, and reserve_vault ATA — Anchor handles all the
+    ///    creation via `init` constraints, including the usdOku mint
+    ///    which is itself a PDA at `[b"usd_oku_mint_v2"]`).
+    ///
+    /// Dead-shares anti-inflation seed: deferred. The OkuDollar
+    /// program's `wrap` handler refuses the first wrap unless the
+    /// reserve vault has at least `DEAD_SHARES = 1_000_000` units of
+    /// OkuMoney, which requires either (a) burning OkuMoney from a
+    /// faucet — but we have no mint authority because it's a PDA — or
+    /// (b) forging the reserve_vault token account state via
+    /// `set_account_custom`. (b) bypasses the dead-shares
+    /// initialization sequence the program is meant to test, so the
+    /// invariant-fuzzing value is low. For this cycle we leave the
+    /// seed unwired; `flow_wrap` will revert on `BelowMinimumLiquidity`
+    /// every call but the `#[end]` invariants on `usd_multiplier` still
+    /// fire (`update_usd_multiplier` doesn't depend on the reserve
+    /// balance).
+    ///
+    /// Trident's SVM doesn't crypto-verify signatures (see
+    /// `trident-svm/src/methods/trident_svm_transactions.rs:39`,
+    /// `try_from_legacy_transaction(tx, &HashSet::new())`), so we sign
+    /// every ix as the default payer regardless of which `Signer<'info>`
+    /// the program expects.
     #[init]
     fn start(&mut self) {
-        // TODO: wire full init using Trident account helpers:
-        //   1. Create OkuMoney Token-2022 mint.
-        //   2. Create usdOku Token-2022 mint.
-        //   3. Call `InitializeInstruction` with all role Pubkeys.
-        // Without init, OkuDollarConfig doesn't exist and #[end] invariants
-        // are no-ops (guarded by `if config_data.len() >= 362`). Wire to
-        // enable invariant coverage for the usd_multiplier properties.
+        let payer = self.trident.payer().pubkey();
+        self.trident.airdrop(&payer, 1000 * LAMPORTS_PER_SOL);
+
+        // -----------------------------------------------------------------
+        // PDAs (lite-psm + oku-dollar).
+        // -----------------------------------------------------------------
+        let (psm_config_pda, _) = Pubkey::find_program_address(
+            &[b"psm_config_v3"],
+            &lite_psm_types::program_id(),
+        );
+        let (queue_pda, _) = Pubkey::find_program_address(
+            &[b"redemption_queue_v2"],
+            &lite_psm_types::program_id(),
+        );
+        let (oku_dollar_config_pda, _) = Pubkey::find_program_address(
+            &[b"oku_dollar_config_v2"],
+            &oku_dollar::program_id(),
+        );
+        let (usd_oku_mint_pda, _) = Pubkey::find_program_address(
+            &[b"usd_oku_mint_v2"],
+            &oku_dollar::program_id(),
+        );
+
+        // -----------------------------------------------------------------
+        // 1. USDC SPL mint.
+        // -----------------------------------------------------------------
+        let usdc_mint = self.fuzz_accounts.usdc_mint.insert(&mut self.trident, None);
+        let usdc_init_ixs =
+            self.trident.initialize_mint(&payer, &usdc_mint, 6, &payer, None);
+        let _ = self
+            .trident
+            .process_transaction(&usdc_init_ixs, Some("InitUsdcMint"));
+
+        // -----------------------------------------------------------------
+        // 2. OkuMoney Token-2022 mint (authority = lite-psm config PDA).
+        // -----------------------------------------------------------------
+        let oku_money_mint = self
+            .fuzz_accounts
+            .okusd_mint
+            .insert(&mut self.trident, None);
+        let oku_init_ixs = self.trident.initialize_mint_2022(
+            &payer,
+            &oku_money_mint,
+            6,
+            &psm_config_pda,
+            Some(&psm_config_pda),
+            &[],
+        );
+        let _ = self
+            .trident
+            .process_transaction(&oku_init_ixs, Some("InitOkuMoneyMint"));
+
+        // -----------------------------------------------------------------
+        // 3. lite-psm `Initialize` — creates PsmConfig PDA + vault_usdc ATA.
+        // -----------------------------------------------------------------
+        self.fuzz_accounts
+            .psm_config
+            .insert_with_address(psm_config_pda);
+
+        let vault_usdc = spl_associated_token_account_ata(&usdc_mint, &psm_config_pda, false);
+        let init_psm_ix = lite_psm_types::InitializeInstruction::data(
+            lite_psm_types::InitializeInstructionData::new(
+                1_000_000_000_000_000_000u64, // max_supply
+                1_000_000_000_000_000_000u64, // minter_allowance
+                payer, payer, payer, payer, payer, payer, payer, payer, payer, payer, payer,
+                payer, // oracle_relay_pyth_program_owner (non-zero placeholder; relay disabled)
+            ),
+        )
+        .accounts(lite_psm_types::InitializeInstructionAccounts::new(
+            payer,           // role_admin
+            psm_config_pda,
+            usdc_mint,
+            oku_money_mint,
+            vault_usdc,
+        ));
+        let _ = self
+            .trident
+            .process_transaction(&[init_psm_ix.instruction()], Some("LitePsmInitialize"));
+
+        // -----------------------------------------------------------------
+        // 4. lite-psm `SetupRedemptionQueue`.
+        // -----------------------------------------------------------------
+        let setup_queue_ix = lite_psm_types::SetupRedemptionQueueInstruction::data(
+            lite_psm_types::SetupRedemptionQueueInstructionData::new(),
+        )
+        .accounts(
+            lite_psm_types::SetupRedemptionQueueInstructionAccounts::new(
+                payer,
+                psm_config_pda,
+                queue_pda,
+            ),
+        );
+        let _ = self
+            .trident
+            .process_transaction(&[setup_queue_ix.instruction()], Some("SetupRedemptionQueue"));
+
+        // -----------------------------------------------------------------
+        // 5. lite-psm `SetupOkuMoneyEscrow`.
+        // -----------------------------------------------------------------
+        let vault_oku_money_psm =
+            spl_associated_token_account_ata(&oku_money_mint, &psm_config_pda, true);
+        let setup_escrow_ix = lite_psm_types::SetupOkuMoneyEscrowInstruction::data(
+            lite_psm_types::SetupOkuMoneyEscrowInstructionData::new(),
+        )
+        .accounts(
+            lite_psm_types::SetupOkuMoneyEscrowInstructionAccounts::new(
+                payer,
+                psm_config_pda,
+                oku_money_mint,
+                vault_oku_money_psm,
+            ),
+        );
+        let _ = self
+            .trident
+            .process_transaction(&[setup_escrow_ix.instruction()], Some("SetupOkuMoneyEscrow"));
+
+        // -----------------------------------------------------------------
+        // 6. oku-dollar `Initialize` — creates OkuDollarConfig PDA,
+        //    usdOku mint PDA (via Anchor `init`), and reserve_vault ATA.
+        // -----------------------------------------------------------------
+        self.fuzz_accounts
+            .config
+            .insert_with_address(oku_dollar_config_pda);
+        self.fuzz_accounts
+            .wokusd_mint
+            .insert_with_address(usd_oku_mint_pda);
+
+        // Reserve vault: ATA(oku_money_mint, oku_dollar_config_pda) on Token-2022.
+        let reserve_vault =
+            spl_associated_token_account_ata(&oku_money_mint, &oku_dollar_config_pda, true);
+
+        let init_dollar_ix = InitializeInstruction::data(InitializeInstructionData::new(
+            payer,         // pauser
+            payer,         // unpauser
+            payer,         // usd_rebaser
+            payer,         // reserve_manager
+            950_000_000,   // min_collateral_ratio (95%)
+        ))
+        .accounts(InitializeInstructionAccounts::new(
+            payer,                  // role_admin
+            oku_dollar_config_pda,
+            oku_money_mint,
+            usd_oku_mint_pda,
+            reserve_vault,
+            psm_config_pda,
+        ));
+        let _ = self
+            .trident
+            .process_transaction(&[init_dollar_ix.instruction()], Some("OkuDollarInitialize"));
+
+        // Sanity check: confirm the OkuDollarConfig PDA reached the
+        // canonical 362-byte layout.
+        let cfg_data = self.trident.get_account(&oku_dollar_config_pda).data().to_vec();
+        if cfg_data.len() < 305 {
+            eprintln!(
+                "[trident-init] WARN: oku_dollar_config PDA has {} bytes (expected >= 305); \
+                 invariants will be skipped this iteration.",
+                cfg_data.len()
+            );
+        }
     }
 
     fn config_pda(&mut self) -> Pubkey {
@@ -420,4 +617,21 @@ impl FuzzTest {
 
 fn main() {
     FuzzTest::fuzz(ITER_COUNT, TX_PER_ITER);
+}
+
+/// ATA pubkey derivation helper. Mirror of the helper in
+/// `fuzz_lite_psm/test_fuzz.rs`. Seeds: `[wallet, token_program, mint]`
+/// hashed under ATA program `ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL`.
+fn spl_associated_token_account_ata(mint: &Pubkey, wallet: &Pubkey, is_token_2022: bool) -> Pubkey {
+    let ata_program: Pubkey = pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+    let token_program: Pubkey = if is_token_2022 {
+        pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb")
+    } else {
+        pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+    };
+    let (ata, _) = Pubkey::find_program_address(
+        &[wallet.as_ref(), token_program.as_ref(), mint.as_ref()],
+        &ata_program,
+    );
+    ata
 }

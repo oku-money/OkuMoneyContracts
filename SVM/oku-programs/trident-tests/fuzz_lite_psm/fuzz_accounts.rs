@@ -6,6 +6,14 @@ use trident_fuzz::fuzzing::*;
 /// enabling their reuse across different instruction flows and test scenarios.
 ///
 /// Docs: https://ackee.xyz/trident/docs/latest/trident-api-macro/trident-types/fuzz-accounts/
+///
+/// The struct enumerates the full account surface of the lite-psm program
+/// (mirroring the IDL accounts catalog) so each instruction can fetch a
+/// stable handle without scaffolding per-flow boilerplate. Many fields are
+/// unused by today's flow set (signer-gated admin paths aren't fuzzed yet —
+/// see `SVM/TRACKER.md § 🟡 Trident #[init] wiring`); the `dead_code`
+/// suppression is intentional and crate-local.
+#[allow(dead_code)]
 #[derive(Default)]
 pub struct AccountAddresses {
     pub rebaser: AddressStorage,

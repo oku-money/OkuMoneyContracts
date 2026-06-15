@@ -6,12 +6,26 @@ use trident_fuzz::fuzzing::*;
 /// enabling their reuse across different instruction flows and test scenarios.
 ///
 /// Docs: https://ackee.xyz/trident/docs/latest/trident-api-macro/trident-types/fuzz-accounts/
+///
+/// Many fields are unused by today's flow set (signer-gated admin paths
+/// aren't fuzzed yet); the `dead_code` suppression is intentional and
+/// crate-local. Mirrors the layout of `fuzz_lite_psm/fuzz_accounts.rs`.
+#[allow(dead_code)]
 #[derive(Default)]
 pub struct AccountAddresses {
     pub role_admin: AddressStorage,
 
     pub config: AddressStorage,
 
+    /// USDC SPL mint (legacy Token program, 6 decimals). Added in
+    /// cycle 3 — required by `#[init]` to bootstrap the lite-psm side
+    /// of the workspace (oku-dollar's `Initialize` ix has an `address =
+    /// psm_config.usdc_mint` constraint on the PSM config it reads).
+    pub usdc_mint: AddressStorage,
+
+    /// OkuMoney Token-2022 mint. Originally named `okusd_mint` in the
+    /// pre-rename scaffold; kept for backwards compatibility with the
+    /// existing flows.
     pub okusd_mint: AddressStorage,
 
     pub wokusd_mint: AddressStorage,

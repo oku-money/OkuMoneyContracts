@@ -15,14 +15,17 @@
 // deserialization. The `arbitrary_cpi` warning is a false positive here.
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
 
-use crate::constants::{ORACLE_MAX_STALENESS_SECS, ORACLE_MIN_STALENESS_SECS};
+use crate::constants::{
+    ORACLE_MAX_STALENESS_SECS, ORACLE_MIN_STALENESS_SECS, ORACLE_USDC_PRICE_CEILING,
+    ORACLE_USDC_PRICE_FLOOR,
+};
 use crate::contexts::{
     AcceptRoleAdmin, AllowanceManager, CapManager, FreezeAccount, OracleManager, Pause,
     SetAuthority, ThawAccount, Unpause,
 };
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::validate_oracle_feed;
+use crate::helpers::validate_oracle_relay_feed;
 use crate::roles::AuthorityRole;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
@@ -96,66 +99,109 @@ pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Resu
     Ok(())
 }
 
-/// Update oracle config (oracle_manager only).
+/// Rotate the oracle relay's Pyth USDC/USD feed (`oracle_manager` only).
 ///
-/// `oracle == Pubkey::default()` is allowed and disables oracle checks
-/// entirely (matches the existing `oracle != default` branch in `mint_oku_m`).
-/// `staleness_threshold` must lie in `[ORACLE_MIN_STALENESS_SECS,
-/// ORACLE_MAX_STALENESS_SECS]` whenever an oracle is configured. Mirrors EVM
-/// `LitePSM.setOracle` bounds.
-///
-/// Pre-flight check: when `oracle != Pubkey::default()` AND the caller
-/// supplies an `oracle_account` matching the oracle pubkey, the handler
-/// parses the Pyth header and asserts the runtime invariants (`magic`,
-/// `version == 2`, `atype == Price`, owner, `expo == 0`) before persisting
-/// the new oracle pubkey. Operators are strongly encouraged to always pass
-/// the account so misconfiguration is caught at config time rather than
-/// silently breaking every subsequent `mint_oku_m` call. The account is
-/// optional only to keep upgrade-time admin flows that just want to clear
-/// staleness from being forced through a Pyth read.
-pub fn set_oracle(
-    ctx: Context<OracleManager>,
-    oracle: Pubkey,
-    staleness_threshold: i64,
-) -> Result<()> {
-    if oracle != Pubkey::default() {
-        require!(
-            (ORACLE_MIN_STALENESS_SECS..=ORACLE_MAX_STALENESS_SECS).contains(&staleness_threshold),
-            LitePsmError::InvalidStaleness
-        );
-
-        // If the caller supplied the oracle account, pre-flight its header.
-        // The account is optional to preserve the existing admin flow that
-        // sets oracle metadata without performing a Pyth read; operational
-        // scripts should always pass it (see `scripts/admin/set-oracle.ts`).
-        if let Some(oracle_ai) = ctx.accounts.oracle_account.as_ref() {
-            validate_oracle_feed(
-                &oracle_ai.to_account_info(),
-                oracle,
-                ctx.accounts.config.pyth_program_owner,
+/// `new_feed == Pubkey::default()` is the operator-side kill switch — it
+/// disables the peg check entirely (mirrors EVM `setOracleRelay(address(0))`).
+/// Otherwise, when the caller supplies the matching feed account, the
+/// handler pre-flights the Pyth header (`magic`, `version == 2`,
+/// `atype == Price`, owner, `|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before
+/// persisting the new pubkey. The account is optional only so the disable
+/// path doesn't require a junk-account read.
+pub fn set_oracle_relay_feed(ctx: Context<OracleManager>, new_feed: Pubkey) -> Result<()> {
+    if new_feed != Pubkey::default() {
+        if let Some(feed_ai) = ctx.accounts.oracle_account.as_ref() {
+            validate_oracle_relay_feed(
+                &feed_ai.to_account_info(),
+                new_feed,
+                ctx.accounts.config.oracle_relay_pyth_program_owner,
             )?;
         }
     }
 
     let config = &mut ctx.accounts.config;
-    config.oracle = oracle;
-    config.staleness_threshold = staleness_threshold;
+    let old_feed = config.oracle_relay_feed;
+    config.oracle_relay_feed = new_feed;
 
-    emit!(OracleUpdatedEvent {
+    emit!(OracleRelayFeedUpdatedEvent {
         actor: ctx.accounts.oracle_manager.key(),
-        oracle,
-        staleness_threshold,
+        old_feed,
+        new_feed,
     });
 
     Ok(())
 }
 
-/// Rotate the accepted Pyth program owner pubkey (oracle_manager only).
+/// Rotate the oracle relay staleness threshold (`oracle_manager` only).
 ///
-/// Lets the protocol migrate between Pyth deployments (e.g. legacy Pyth V2 →
-/// Pyth Solana Receiver) without redeploying the program. Rejects the zero
-/// pubkey since `Pubkey::default()` would silently disable the owner check.
-pub fn set_pyth_program_owner(
+/// Must lie in `[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]`.
+/// Mirrors EVM `OracleRelay.setStalenessThreshold` bounds.
+pub fn set_oracle_relay_staleness(
+    ctx: Context<OracleManager>,
+    new_staleness: i64,
+) -> Result<()> {
+    require!(
+        (ORACLE_MIN_STALENESS_SECS..=ORACLE_MAX_STALENESS_SECS).contains(&new_staleness),
+        LitePsmError::InvalidStaleness
+    );
+
+    let config = &mut ctx.accounts.config;
+    let old_staleness = config.oracle_relay_staleness;
+    config.oracle_relay_staleness = new_staleness;
+
+    emit!(OracleRelayStalenessUpdatedEvent {
+        actor: ctx.accounts.oracle_manager.key(),
+        old_staleness,
+        new_staleness,
+    });
+
+    Ok(())
+}
+
+/// Rotate the in-band USDC peg window (`oracle_manager` only).
+///
+/// Both edges expressed in 1e9 precision. Rejects `min >= max`, `min`
+/// below `ORACLE_USDC_PRICE_FLOOR`, or `max` above
+/// `ORACLE_USDC_PRICE_CEILING`. These hard bounds defend against an
+/// operator silently widening the band into a region that accepts
+/// catastrophic depegs — same defense-in-depth posture EVM uses on
+/// `OracleRelay.setPriceBand`.
+pub fn set_oracle_relay_band(
+    ctx: Context<OracleManager>,
+    new_min_e9: u64,
+    new_max_e9: u64,
+) -> Result<()> {
+    require!(
+        new_min_e9 < new_max_e9
+            && new_min_e9 >= ORACLE_USDC_PRICE_FLOOR
+            && new_max_e9 <= ORACLE_USDC_PRICE_CEILING,
+        LitePsmError::InvalidPriceBand
+    );
+
+    let config = &mut ctx.accounts.config;
+    let old_min_e9 = config.oracle_relay_min_price_e9;
+    let old_max_e9 = config.oracle_relay_max_price_e9;
+    config.oracle_relay_min_price_e9 = new_min_e9;
+    config.oracle_relay_max_price_e9 = new_max_e9;
+
+    emit!(OracleRelayBandUpdatedEvent {
+        actor: ctx.accounts.oracle_manager.key(),
+        old_min_e9,
+        old_max_e9,
+        new_min_e9,
+        new_max_e9,
+    });
+
+    Ok(())
+}
+
+/// Rotate the accepted Pyth program owner pubkey (`oracle_manager` only).
+///
+/// Lets the protocol migrate between Pyth deployments (legacy Pyth V2 →
+/// Pyth Solana Receiver, etc.) without redeploying the program. Rejects
+/// the zero pubkey since `Pubkey::default()` would silently disable the
+/// runtime owner check.
+pub fn set_oracle_relay_pyth_program_owner(
     ctx: Context<OracleManager>,
     new_pyth_program_owner: Pubkey,
 ) -> Result<()> {
@@ -165,10 +211,10 @@ pub fn set_pyth_program_owner(
     );
 
     let config = &mut ctx.accounts.config;
-    let old_pyth_program_owner = config.pyth_program_owner;
-    config.pyth_program_owner = new_pyth_program_owner;
+    let old_pyth_program_owner = config.oracle_relay_pyth_program_owner;
+    config.oracle_relay_pyth_program_owner = new_pyth_program_owner;
 
-    emit!(PythProgramOwnerUpdatedEvent {
+    emit!(OracleRelayPythProgramOwnerUpdatedEvent {
         actor: ctx.accounts.oracle_manager.key(),
         old_pyth_program_owner,
         new_pyth_program_owner,

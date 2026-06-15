@@ -128,16 +128,38 @@ mapping table.
 | `unwrap` when paused | reverts (full freeze) | reverts (full freeze) |
 | `process_queue` when paused | proceeds — pause must not lock users in the queue | proceeds, same rationale |
 
-## Oracle
+## Oracle (USDC peg circuit-breaker)
 
-EVM uses Chainlink AggregatorV3 (`latestRoundData`, single staleness
-check). SVM uses Pyth V2 with three independent checks: aggregate status
-must equal `Trading`, `expo == 0`, and `now − aggregate.publish_timestamp
-≤ staleness_threshold`. The accepted Pyth program owner pubkey is
-stored on `PsmConfig::pyth_program_owner` and rotatable via
-`set_pyth_program_owner` (oracle_manager-gated). The modern Pyth Solana
-Receiver (`PriceUpdateV2`) layout is NOT supported until a parallel
-parser is added.
+Both sides ship a USDC peg circuit-breaker — not a Proof-of-Reserves
+attestation. The audit-prep cycle deleted the previous PoR plumbing on
+both sides (EVM `_checkReserves`, SVM `check_oracle_reserves`) because
+operator-side reserve fraud is not a threat the on-chain code can
+detect — it's managed via off-chain MSB controls. The remaining peg
+check defends against USDC depeg events, which the operator-trust
+model does NOT cover.
+
+| Aspect | EVM | SVM |
+|---|---|---|
+| Oracle source | Chainlink AggregatorV3 | Pyth V2 (`SolanaPriceAccount`) |
+| Where it lives | Separate UUPS proxy contract (`OracleRelay.sol`) | Embedded in `lite-psm` (`helpers/oracle_relay.rs`) |
+| Upgradeability | UUPS proxy (flagged for simplification in EVM tracker) | None — operator redeploys `lite-psm` for changes |
+| Hot-path check | `relay.checkUsdcPeg()` | `helpers::oracle_relay::check_usdc_peg(&config, &feed)` |
+| Read view | `relay.getUsdcPrice() -> uint256` (1e18) | `helpers::oracle_relay::get_usdc_price(&config, &feed) -> Result<u64>` (1e9) |
+| Round-validity checks | answeredInRound, updatedAt, startedAt, staleness, positive answer | `agg.status == Trading`, freshness, positive answer, owner, header magic+version+atype |
+| Decimal/expo normalization | `decimals` clamped to `MAX_FEED_DECIMALS = 18` | `|expo|` clamped to `MAX_FEED_EXPO_MAGNITUDE = 18` |
+| Hard floor / ceiling | `0.95e18` / `1.05e18` | `0.95e9` / `1.05e9` |
+| Default band | `[0.97e18, 1.03e18]` (±3%) | `[0.97e9, 1.03e9]` (±3%) |
+| Default staleness | `3600s` | `3600s` |
+| Kill switch | `setOracleRelay(address(0))` on PSM + RedemptionQueue | `set_oracle_relay_feed(Pubkey::default())` on PSM |
+| Operator role | `RELAY_FEED_MANAGER` / `RELAY_CONFIG_MANAGER` (EVM) | `oracle_manager` (SVM, reused — no new role) |
+| Pyth Receiver `PriceUpdateV2` support | n/a (EVM uses Chainlink) | NOT supported in v1; rotate via `set_oracle_relay_pyth_program_owner` when added |
+
+Where the peg-check is consumed:
+
+- EVM: `LitePSM.{mintOkuM,redeemOkuM,redeemOkuMWithPermit,mintUsdOku,redeemUsdOku,redeemUsdOkuWithPermit}` and `RedemptionQueue.processQueue`.
+- SVM: `lite_psm::{mint_oku_m, redeem_oku_m, process_queue}`. The vault
+  (`oku_dollar::{wrap, unwrap}`) is deliberately NOT gated — see
+  `audit/ACCEPTED_RISKS.md § 8` for the rationale.
 
 ## Inflation defense (vault first deposit)
 

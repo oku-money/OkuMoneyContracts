@@ -18,6 +18,13 @@
 // annotations are also present in each instruction module that contains CPIs.
 // Confirmed false positives — suppressed here for `cargo dylint` cleanliness.
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
+// Anchor's `#[program]` macro expands into dispatch glue with a pattern that
+// trips clippy's `diverging_sub_expression` lint. Suppressed crate-wide
+// because we can't annotate inside macro-expanded code.
+#![allow(clippy::diverging_sub_expression)]
+// `target_os = "solana"` is emitted by `solana-program-entrypoint`'s panic
+// handler macro. The check-cfg machinery doesn't know about the BPF target.
+#![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
 

@@ -15,7 +15,7 @@ use crate::contexts::{
 };
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::{check_oracle_reserves, check_yield_lock, dollars_to_oku_m, oku_m_to_dollars};
+use crate::helpers::{check_usdc_peg, check_yield_lock, dollars_to_oku_m, oku_m_to_dollars};
 use crate::state::{PsmConfig, QueueEntry, RedemptionQueue};
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
@@ -45,8 +45,10 @@ use anchor_spl::token_interface;
 /// oku_m_amount = usdc_amount * PRECISION / oku_m_price
 /// When oku_m_price > PRECISION, you get fewer OkuM tokens per USDC
 ///
-/// If oracle is configured, checks reserves before minting.
-/// Blocked during same slot as yield distribution (sandwich prevention).
+/// Blocked during the same slot as a yield distribution (sandwich
+/// prevention). When the oracle relay is wired
+/// (`config.oracle_relay_feed != Pubkey::default()`), reverts if the
+/// configured USDC/USD Pyth feed reports a price outside the peg band.
 pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     // Check yield distribution lock FIRST
     check_yield_lock(&ctx.accounts.config)?;
@@ -56,7 +58,7 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     let max_supply = ctx.accounts.config.max_supply;
     let minter_allowance = ctx.accounts.config.minter_allowance;
     let current_supply = ctx.accounts.oku_money_mint.supply;
-    let oracle = ctx.accounts.config.oracle;
+    let relay_feed = ctx.accounts.config.oracle_relay_feed;
 
     require!(!is_paused, LitePsmError::Paused);
     require!(usdc_amount > 0, LitePsmError::ZeroAmount);
@@ -87,17 +89,11 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
         LitePsmError::AllowanceExceeded
     );
 
-    // Oracle check if configured (oracle != Pubkey::default()).
-    // `check_oracle_reserves` reads the configured Pyth program owner, the
-    // oracle feed pubkey, and the staleness threshold directly from PsmConfig
-    // — refactored from the previously hardcoded Pyth program-owner constants.
-    if oracle != Pubkey::default() {
-        check_oracle_reserves(
-            &ctx.accounts.price_update,
-            &ctx.accounts.config,
-            current_supply,
-            oku_m_amount,
-        )?;
+    // USDC peg circuit-breaker. When the relay is unwired the call is a
+    // no-op (operator-side kill switch — mirrors EVM
+    // `setOracleRelay(address(0))`).
+    if relay_feed != Pubkey::default() {
+        check_usdc_peg(&ctx.accounts.config, &ctx.accounts.oracle_relay_feed)?;
     }
 
     // Effects-checks-interactions: decrement minter allowance BEFORE the mint
@@ -162,9 +158,17 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
 ///
 /// Instant if buffer sufficient, otherwise queued.
 /// Blocked during same slot as yield distribution (sandwich prevention).
+/// When the oracle relay is wired, reverts on USDC depeg before any
+/// state change — mirrors EVM's gating of both mint AND redeem paths.
 pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
     // Check yield distribution lock FIRST
     check_yield_lock(&ctx.accounts.config)?;
+
+    // USDC peg circuit-breaker. When the relay is unwired the call is a
+    // no-op; otherwise we revert here before any token movement.
+    if ctx.accounts.config.oracle_relay_feed != Pubkey::default() {
+        check_usdc_peg(&ctx.accounts.config, &ctx.accounts.oracle_relay_feed)?;
+    }
 
     // Read state
     let is_paused = ctx.accounts.config.is_paused;
@@ -385,6 +389,14 @@ pub fn process_queue<'info>(
     {
         let queue = ctx.accounts.redemption_queue.load()?;
         require!(!queue.is_empty(), LitePsmError::QueueEmpty);
+    }
+
+    // USDC peg circuit-breaker (single check per batch, not per entry —
+    // same caching pattern as `oku_m_price` below). When unwired this is
+    // a no-op. Mirrors EVM `RedemptionQueue.processQueue`'s once-per-batch
+    // `checkUsdcPeg()` call.
+    if ctx.accounts.config.oracle_relay_feed != Pubkey::default() {
+        check_usdc_peg(&ctx.accounts.config, &ctx.accounts.oracle_relay_feed)?;
     }
 
     let seeds = &[PsmConfig::SEED, &[bump]];

@@ -17,7 +17,11 @@
 //! | `OutputBelowMinimum` | `OutputBelowMinimum(uint256 actual, uint256 minimum)` |
 //! | `AmountTooSmall` | `AmountTooSmall()` |
 //! | `InvalidUsdcDecimals` | (initialize-time decimals check) |
-//! | `InvalidStaleness` | `StalenessOutOfBounds(uint256 staleness)` |
+//! | `InvalidStaleness` | `InvalidStaleness(uint256 provided, ...)` |
+//! | `PriceOutOfBand` | `PriceOutOfBand(uint256 priceE18, uint256 minE18, uint256 maxE18)` |
+//! | `NonPositiveAnswer` | `NonPositiveAnswer()` |
+//! | `InvalidPriceBand` | `InvalidPriceBand(uint256 minE18, uint256 maxE18)` |
+//! | `FeedExpoTooLarge` | `FeedDecimalsTooLarge(uint8 reported)` |
 
 use anchor_lang::prelude::*;
 
@@ -59,14 +63,34 @@ pub enum LitePsmError {
     #[msg("Mint would exceed minter allowance")]
     AllowanceExceeded,
 
-    // ===== Oracle Errors =====
+    // ===== Oracle Relay (USDC peg circuit-breaker) Errors =====
     /// Oracle data is stale
+    /// EVM: StaleOracleData()
     #[msg("Oracle data is stale")]
     StaleOracle,
 
-    /// Insufficient reserves per oracle
-    #[msg("Insufficient reserves per oracle")]
-    InsufficientReserves,
+    /// Normalized USDC price is outside the configured peg band
+    /// (`[oracle_relay_min_price_e9, oracle_relay_max_price_e9]`).
+    /// EVM: PriceOutOfBand(uint256 priceE18, uint256 minE18, uint256 maxE18)
+    #[msg("USDC price out of band — depeg circuit-breaker tripped")]
+    PriceOutOfBand,
+
+    /// Pyth aggregate price is zero or negative.
+    /// EVM: NonPositiveAnswer()
+    #[msg("Oracle returned a non-positive answer")]
+    NonPositiveAnswer,
+
+    /// Provided peg band is invalid (`min >= max`, or outside the hard
+    /// floor/ceiling defined by `ORACLE_USDC_PRICE_FLOOR`/`_CEILING`).
+    /// EVM: InvalidPriceBand(uint256 minE18, uint256 maxE18)
+    #[msg("Invalid peg band — must satisfy min < max within hard bounds")]
+    InvalidPriceBand,
+
+    /// Pyth `expo` magnitude exceeds `MAX_FEED_EXPO_MAGNITUDE`. The
+    /// normalization math caps at 1e18 of scaling either direction.
+    /// EVM: FeedDecimalsTooLarge(uint8 reported)
+    #[msg("Pyth feed expo magnitude exceeds MAX_FEED_EXPO_MAGNITUDE")]
+    FeedExpoTooLarge,
 
     // ===== Buffer Errors =====
     /// Insufficient buffer for redemption
@@ -116,20 +140,17 @@ pub enum LitePsmError {
     #[msg("Recipient account does not match queue entry user")]
     RecipientMismatch,
 
-    // ===== Oracle Validation Errors =====
-    /// Oracle account not provided but oracle is configured
-    #[msg("Oracle account not provided but oracle is configured")]
+    // ===== Oracle Relay Validation Errors =====
+    /// Relay is configured but the feed account was not supplied as a
+    /// remaining/optional account on the call.
+    #[msg("Oracle relay feed account not provided but relay is configured")]
     OracleAccountMissing,
 
-    /// Invalid oracle response
+    /// Generic invalid-oracle response (wrong account, owner mismatch,
+    /// malformed Pyth header, non-Trading status, etc.).
+    /// EVM: InvalidOracleResponse() / IncompleteOracleRound()
     #[msg("Invalid oracle response")]
     InvalidOracleResponse,
-
-    /// Pyth confidence interval is wider than the protocol's tolerance
-    /// (`MAX_CONF_RATIO_BPS`). Indicates a thin / illiquid market and is
-    /// rejected to avoid backing supply against an unreliable price print.
-    #[msg("Oracle confidence interval too wide")]
-    OracleConfidenceTooWide,
 
     // ===== Yield Distribution Errors =====
     /// Cannot perform operation in same slot as yield distribution
@@ -137,9 +158,11 @@ pub enum LitePsmError {
     #[msg("Cannot perform operation in same slot as yield distribution")]
     YieldDistributionInProgress,
 
-    /// New price must be >= current price
+    /// New price did not strictly increase. Reverts on both backward moves
+    /// and no-op (equal-value) updates so a no-op call cannot stamp the
+    /// sandwich-lock slot without moving the multiplier.
     /// EVM: MultiplierCannotDecrease()
-    #[msg("New price must be >= current price")]
+    #[msg("New price must strictly increase")]
     PriceCannotDecrease,
 
     /// Yield amount too small to affect price (truncates to zero)
@@ -147,8 +170,10 @@ pub enum LitePsmError {
     YieldTooSmall,
 
     /// Proposed `oku_m_price` exceeds the configured ceiling.
-    /// Defense-in-depth: even with the rebaser key compromised, the price
-    /// cannot be pushed past `MAX_OKU_M_PRICE`.
+    /// Math-sanity bound that keeps downstream `u64 * u64 -> u128`
+    /// multiplications inside the overflow-safe region. Not a guard
+    /// against operator compromise (out of scope per the centralized
+    /// trust model) but a math bound.
     #[msg("Proposed oku_m_price exceeds MAX_OKU_M_PRICE ceiling")]
     PriceAboveMax,
 
@@ -171,7 +196,9 @@ pub enum LitePsmError {
     EscrowAlreadyInitialized,
 
     // ===== Initialization Errors =====
-    /// Pyth program owner pubkey supplied to `initialize` was the default (zero) pubkey.
+    /// Oracle relay Pyth program-owner pubkey rotated to the default (zero)
+    /// pubkey. Rejected because the runtime peg-check requires a non-zero
+    /// owner to validate the feed account's ownership against.
     #[msg("Pyth program owner pubkey is required (cannot be the zero pubkey)")]
     InvalidPythProgramOwner,
 

@@ -422,7 +422,7 @@ async function svmMintOkuM(ctx: SvmCtx, usdcAmount: bigint): Promise<bigint> {
       userUsdcAta,
       userOkuMoneyAta,
       vaultUsdc: ctx.vaultUsdc,
-      priceUpdate: null,
+      oracleRelayFeed: null,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -482,6 +482,8 @@ async function svmRedeemOkuM(ctx: SvmCtx, okuMAmount: bigint): Promise<bigint> {
       userOkuMoneyAta,
       vaultUsdc: ctx.vaultUsdc,
       vaultOkuMoney: ctx.vaultOkuMoney,
+      oracleRelayFeed: null,
+
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,

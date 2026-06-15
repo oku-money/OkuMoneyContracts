@@ -9,14 +9,23 @@
 use anchor_lang::prelude::*;
 
 /// PSM configuration PDA
-/// Seeds: ["psm_config_v2"]
+/// Seeds: ["psm_config_v3"]
 ///
 /// noBridge migration (2026-06-05): seed rotated from `b"psm_config"` to
-/// `b"psm_config_v2"` to force a fresh PDA layout (722 → 658 bytes) after
-/// the blacklist-exempt fields were removed. The orphaned old PDA at
-/// `EkCYunihwmNasBEnNXoJx8sb3CdZnDYKLpPvLyY6Hm3u` (devnet) holds ~0.006 SOL
-/// of rent that can be reclaimed once a `close_dead_psm_config` admin ix
-/// is added. Tracked in `SVM/oku-programs/deployments/DEPRECATED.md`.
+/// `b"psm_config_v2"` to force a fresh PDA layout after the blacklist-exempt
+/// fields were removed.
+///
+/// Audit-prep migration (2026-06-12): seed rotated from `b"psm_config_v2"`
+/// to `b"psm_config_v3"` to force a fresh PDA after the Proof-of-Reserves
+/// fields (`oracle`, `staleness_threshold`, `pyth_program_owner`) were
+/// removed and replaced with the USDC peg circuit-breaker fields
+/// (`oracle_relay_*`). The trust model is centralized US-regulated MSB;
+/// PoR added no real protection on top of the operator's existing
+/// custody obligation, and reframing the oracle as a depeg circuit-
+/// breaker is the change the EVM side made first.
+///
+/// Both orphaned PDAs are tracked in
+/// `SVM/oku-programs/deployments/DEPRECATED.md`.
 #[account]
 #[derive(InitSpace)]
 pub struct PsmConfig {
@@ -71,11 +80,33 @@ pub struct PsmConfig {
     /// Whether the PSM is paused
     pub is_paused: bool,
 
-    // ===== Oracle =====
-    /// Pyth oracle feed (or Pubkey::default() if disabled)
-    pub oracle: Pubkey,
-    /// Maximum oracle staleness in seconds
-    pub staleness_threshold: i64,
+    // ===== Oracle Relay (USDC peg circuit-breaker) =====
+    //
+    // Replaces the previous Proof-of-Reserves plumbing. Every mint, redeem,
+    // and queue-process path calls `helpers::oracle_relay::check_usdc_peg`
+    // when the relay is configured (`oracle_relay_feed != Pubkey::default()`).
+    // Mirrors EVM `OracleRelay` (see `EVM/src/oracle/OracleRelay.sol`).
+
+    /// USDC/USD Pyth feed account (or `Pubkey::default()` to disable the
+    /// peg check — the operator-side kill switch, mirrors EVM
+    /// `setOracleRelay(address(0))`).
+    pub oracle_relay_feed: Pubkey,
+    /// Pyth program-owner pubkey accepted by the relay parser. Set at
+    /// init via `initialize` and rotatable via
+    /// `set_oracle_relay_pyth_program_owner` (oracle_manager-gated). The
+    /// migration hook for future Pyth Solana Receiver support.
+    pub oracle_relay_pyth_program_owner: Pubkey,
+    /// Maximum oracle staleness in seconds. Bounded by
+    /// `[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]` whenever
+    /// the relay is configured.
+    pub oracle_relay_staleness: i64,
+    /// Lower bound of the in-band USDC price (1e9 precision).
+    /// Constrained by `ORACLE_USDC_PRICE_FLOOR`.
+    pub oracle_relay_min_price_e9: u64,
+    /// Upper bound of the in-band USDC price (1e9 precision).
+    /// Constrained by `ORACLE_USDC_PRICE_CEILING`.
+    pub oracle_relay_max_price_e9: u64,
+
     /// Solana slot of last yield distribution (sandwich prevention)
     /// Operations like mint/redeem are blocked in the same slot as yield distribution
     pub last_yield_distribution_slot: u64,
@@ -85,15 +116,6 @@ pub struct PsmConfig {
     /// Updated by set_oku_m_price() or distribute_yield()
     /// Matches EVM's okuMPrice() storage pattern
     pub oku_m_price: u64,
-
-    /// Pyth program owner pubkey accepted by `check_oracle_reserves`.
-    /// Replaces the previously hard-coded mainnet/devnet Pyth-V2 program IDs.
-    /// Set at init via `initialize(pyth_program_owner)` and rotatable via
-    /// `set_pyth_program_owner` (oracle_manager-gated). A deployer can point
-    /// this at the legacy Pyth program (mainnet `FsJ3...`, devnet `gSbe...`)
-    /// or, after parser support is added, at the Pyth Solana Receiver
-    /// (`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`).
-    pub pyth_program_owner: Pubkey,
 
     /// Pending `role_admin` rotation target — the two-step admin-transfer
     /// model (OpenZeppelin `Ownable2Step` pattern). `set_authority(RoleAdmin,
@@ -108,23 +130,30 @@ pub struct PsmConfig {
 }
 
 impl PsmConfig {
-    pub const SEED: &'static [u8] = b"psm_config_v2";
+    pub const SEED: &'static [u8] = b"psm_config_v3";
 
     /// Space needed for PsmConfig account: 8 byte discriminator +
-    /// `InitSpace`-derived field sum. Pinned to 658 bytes by the
+    /// `InitSpace`-derived field sum. Pinned to 674 bytes by the
     /// compile-time assertion below; if a reviewer changes a field's
     /// width the assertion fires.
     ///
-    /// noBridge phase C: shrank from 722 → 658 after removing the two
-    /// `blacklist_exempt_*` Pubkey slots (−64 bytes).
+    /// Layout evolution:
+    /// - 722 → 658 (noBridge phase C, removed two `blacklist_exempt_*` slots)
+    /// - 658 → 674 (audit-prep, PoR `(oracle, staleness, pyth_program_owner)`
+    ///   = 32+8+32 = 72 bytes removed; relay `(feed, pyth_program_owner,
+    ///   staleness, min_e9, max_e9)` = 32+32+8+8+8 = 88 bytes added.
+    ///   Net delta = +16: 658 + 16 = 674).
     pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
 
 // Compile-time assertion: if PsmConfig layout changes, this will fail to compile.
-// (658 = 8 disc + 32*12 authorities + 32*4 token refs + 8*2 limits + 1 paused
-//      + 32 oracle + 8 staleness + 8 last_yield_slot + 8 oku_m_price
-//      + 32 pyth_program_owner + 32 pending_role_admin + 1 bump.)
-const _: () = assert!(PsmConfig::LEN == 658);
+// (674 = 8 disc + 1 bump + 32*12 authorities (384) + 32*4 token refs (128)
+//      + 8 max_supply + 8 minter_allowance + 1 is_paused
+//      + 32 oracle_relay_feed + 32 oracle_relay_pyth_program_owner
+//      + 8 oracle_relay_staleness + 8 oracle_relay_min_price_e9
+//      + 8 oracle_relay_max_price_e9 + 8 last_yield_distribution_slot
+//      + 8 oku_m_price + 32 pending_role_admin.)
+const _: () = assert!(PsmConfig::LEN == 674);
 
 /// Redemption queue PDA — zero-copy ring buffer.
 ///

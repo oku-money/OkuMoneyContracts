@@ -4,9 +4,16 @@
  * All PDA seeds must be kept in sync with the corresponding Rust `SEED` constants
  * in programs/lite-psm/src/state.rs and programs/oku-dollar/src/state.rs.
  *
- * noBridge migration (2026-06-05): all four seeds rotated to `_v2` to force
- * fresh PDAs after the PsmConfig storage layout shrank from 722 → 658 bytes.
- * The pre-rotation PDAs are orphaned on devnet; see
+ * Seed history:
+ * - noBridge migration (2026-06-05): all four seeds rotated to `_v2` after
+ *   the PsmConfig storage layout shrank from 722 → 658 bytes.
+ * - Audit-prep migration (2026-06-12): `psmConfig` rotated to `_v3` after
+ *   the Proof-of-Reserves fields were removed and replaced with the
+ *   USDC peg circuit-breaker fields (`oracle_relay_*`), changing the
+ *   `PsmConfig` layout to 674 bytes. The other three seeds were not
+ *   touched.
+ *
+ * All pre-rotation PDAs are orphaned on devnet; see
  * `deployments/DEPRECATED.md` for the orphan-PDA tracking and future
  * rent-recovery plan.
  */
@@ -18,7 +25,7 @@ import { PublicKey } from "@solana/web3.js";
  * map together — any drift will produce silent PDA-address mismatches.
  */
 export const PDA_SEEDS = {
-  psmConfig: "psm_config_v2",
+  psmConfig: "psm_config_v3",
   redemptionQueue: "redemption_queue_v2",
   okuDollarConfig: "oku_dollar_config_v2",
   usdOkuMint: "usd_oku_mint_v2",

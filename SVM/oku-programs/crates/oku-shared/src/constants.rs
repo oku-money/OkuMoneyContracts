@@ -43,12 +43,14 @@ pub const MIN_COLLATERAL_RATIO_FLOOR: u64 = 900_000_000;
 /// realistic yield trajectory and keeps subsequent `u64 * u64 -> u128`
 /// multiplications away from the overflow region.
 ///
-/// Defence-in-depth against a compromised `rebaser` / `usd_rebaser` key:
-/// even with the key, the multiplier cannot be pushed beyond this value,
-/// so the protocol cannot be bricked by a single rogue tx.
+/// Math-sanity bound that keeps the rpow / mul-div input space finite.
+/// Not a guard against a compromised rebaser key — operator-compromise
+/// is out of scope per the centralized trust model (see
+/// `SVM/README.md § Authority Model` and `SVM/TRACKER.md`).
 ///
-/// EVM enforces this implicitly via the math-overflow cap on
-/// `Constants.MAX_RATE`; SVM makes it an explicit per-set check.
+/// EVM mirror: `Constants.MAX_MULTIPLIER = 1e24`. EVM also relies on
+/// `Constants.MAX_RATE` for the per-second rate cap; SVM uses discrete
+/// multiplier writes and so only needs the cumulative bound.
 pub const MAX_MULTIPLIER: u64 = 1_000_000_000_000_000;
 
 /// Alias of `MAX_MULTIPLIER` used by lite-psm call-sites that refer to
@@ -60,12 +62,12 @@ pub const MAX_OKU_M_PRICE: u64 = MAX_MULTIPLIER;
 pub const MAX_USD_MULTIPLIER: u64 = MAX_MULTIPLIER;
 
 // ---------------------------------------------------------------------------
-// Oracle bounds
+// Oracle relay bounds (USDC peg circuit-breaker)
 // ---------------------------------------------------------------------------
 
 /// Lower bound on the configurable Pyth-oracle staleness threshold
 /// (seconds). Below this, freshness is so tight that benign network jitter
-/// will force `mint_oku_m` to fall through into a hard-fail oracle path.
+/// will force every peg check to revert.
 ///
 /// Mirrors EVM `Constants.ORACLE_MIN_STALENESS = 60`.
 pub const ORACLE_MIN_STALENESS_SECS: i64 = 60;
@@ -77,6 +79,30 @@ pub const ORACLE_MIN_STALENESS_SECS: i64 = 60;
 ///
 /// Mirrors EVM `Constants.ORACLE_MAX_STALENESS = 7 days`.
 pub const ORACLE_MAX_STALENESS_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// Hard floor for the USDC peg band enforced by `set_oracle_relay_band`.
+/// `0.95e9` = $0.95 (1e9 precision). Configuring a band below this would
+/// silently accept catastrophic depeg events. Defense-in-depth bound on
+/// operator setters; mirrors EVM `Constants.ORACLE_USDC_PRICE_FLOOR = 0.95e18`
+/// scaled to 1e9.
+pub const ORACLE_USDC_PRICE_FLOOR: u64 = 950_000_000;
+
+/// Hard ceiling for the USDC peg band enforced by `set_oracle_relay_band`.
+/// `1.05e9` = $1.05 (1e9 precision). Symmetric to `ORACLE_USDC_PRICE_FLOOR`;
+/// USDC trading above this band is almost certainly an oracle malfunction
+/// rather than a legitimate market price; reject either way. Mirrors EVM
+/// `Constants.ORACLE_USDC_PRICE_CEILING = 1.05e18` scaled to 1e9.
+pub const ORACLE_USDC_PRICE_CEILING: u64 = 1_050_000_000;
+
+/// Maximum absolute magnitude of the Pyth aggregator `expo` field accepted
+/// by the relay. Pyth feeds publish `(price: i64, expo: i32)` where the
+/// real value is `price * 10^expo`. USDC/USD feeds use `expo` around `-8`;
+/// the relay normalizes that to 1e9 precision. Anything with `|expo| > 18`
+/// would force pathological scaling math and is rejected at admin time.
+///
+/// EVM analogue: `MAX_FEED_DECIMALS = 18` (Chainlink reports `decimals()`
+/// rather than a signed exponent; conceptually identical clamp).
+pub const MAX_FEED_EXPO_MAGNITUDE: u32 = 18;
 
 // ---------------------------------------------------------------------------
 // Token decimals

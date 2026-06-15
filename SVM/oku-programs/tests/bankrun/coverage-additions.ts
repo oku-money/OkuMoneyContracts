@@ -78,7 +78,7 @@ describe("WS3.2 PSM coverage additions", () => {
     psm = h.program as unknown as Program<LitePsm>;
 
     [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v2")], psm.programId
+      [Buffer.from("psm_config_v3")], psm.programId
     );
 
     usdcMint = await createMintViaBankrun(
@@ -172,6 +172,7 @@ describe("WS3.2 PSM coverage additions", () => {
           okuMoneyMint,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
+          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
@@ -220,7 +221,7 @@ describe("WS3.2.e: wrong-owner-ATA soft-skip in process_queue (WS2.1)", () => {
     psm = h.program as unknown as Program<LitePsm>;
 
     [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v2")], psm.programId
+      [Buffer.from("psm_config_v3")], psm.programId
     );
 
     usdcMint = await createMintViaBankrun(
@@ -286,6 +287,8 @@ describe("WS3.2.e: wrong-owner-ATA soft-skip in process_queue (WS2.1)", () => {
         userOkuMoneyAta,
         vaultUsdc: vaultUsdcAta,
         vaultOkuMoney: vaultOkuMoneyAta,
+        oracleRelayFeed: null,
+
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -315,6 +318,8 @@ describe("WS3.2.e: wrong-owner-ATA soft-skip in process_queue (WS2.1)", () => {
         okuMoneyMint,
         vaultUsdc: vaultUsdcAta,
         vaultOkuMoney: vaultOkuMoneyAta,
+        oracleRelayFeed: null,
+
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
@@ -359,7 +364,7 @@ describe("WS3.2 vault coverage additions", () => {
     vault = getProgram<OkuDollar>(h, "oku_dollar") as Program<OkuDollar>;
 
     [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v2")], psm.programId
+      [Buffer.from("psm_config_v3")], psm.programId
     );
     [vaultConfigPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("oku_dollar_config_v2")], vault.programId
@@ -408,14 +413,42 @@ describe("WS3.2 vault coverage additions", () => {
     await ensureAtaViaBankrun(h, DEAD_ADDRESS, usdOkuMint, TOKEN_2022_PROGRAM_ID);
   });
 
-  it("WS3.2.a vault: update_usd_multiplier succeeds when usdOku supply == 0", async () => {
+  it("WS3.2.a vault: update_usd_multiplier rejects equal value (strict increase)", async () => {
+    // The vault enforces strict-increase on `usd_multiplier` (audit-prep
+    // cycle) so a no-op write cannot stamp the sandwich-lock slot without
+    // moving the multiplier. Mirrors EVM `setOkuMMultiplier`'s
+    // strict-increase fix and the lite-psm `set_oku_m_price` symmetric
+    // tighten.
     const config = await vault.account.okuDollarConfig.fetch(vaultConfigPda);
     const current = config.usdMultiplier as BN;
 
     await warpSlots(h, 1);
 
+    let threw = false;
+    try {
+      await vault.methods
+        .updateUsdMultiplier(current)
+        .accountsPartial({
+          usdRebaser: usdRebaser.publicKey,
+          config: vaultConfigPda,
+          psmConfig: configPda,
+          usdOkuMint,
+          reserveVault,
+        })
+        .signers([usdRebaser])
+        .rpc();
+    } catch (err: any) {
+      threw = true;
+      expect(String(err?.error?.errorCode?.code ?? "")).to.include(
+        "MultiplierCannotDecrease"
+      );
+    }
+    expect(threw, "expected equal-value update to revert").to.equal(true);
+
+    // A strict-increase write succeeds and bumps the lock slot.
+    const bumped = current.addn(1);
     await vault.methods
-      .updateUsdMultiplier(current)
+      .updateUsdMultiplier(bumped)
       .accountsPartial({
         usdRebaser: usdRebaser.publicKey,
         config: vaultConfigPda,
@@ -427,7 +460,7 @@ describe("WS3.2 vault coverage additions", () => {
       .rpc();
 
     const after = await vault.account.okuDollarConfig.fetch(vaultConfigPda);
-    expect((after.usdMultiplier as BN).toString()).to.equal(current.toString());
+    expect((after.usdMultiplier as BN).toString()).to.equal(bumped.toString());
   });
 
   it("WS3.2.b vault: oku-dollar initialize fails if vaultConfig PDA already exists", async () => {

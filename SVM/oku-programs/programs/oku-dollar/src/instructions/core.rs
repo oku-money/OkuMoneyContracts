@@ -255,7 +255,7 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
             dollar_value,
         });
 
-        return Ok(user_shares);
+        Ok(user_shares)
     } else {
         // Slippage protection
         require!(shares >= min_shares_out, OkuDollarError::SlippageExceeded);
@@ -288,7 +288,7 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
             dollar_value,
         });
 
-        return Ok(shares);
+        Ok(shares)
     }
 }
 
@@ -410,15 +410,21 @@ pub fn update_usd_multiplier(
     let old_multiplier = config.usd_multiplier;
     let min_collateral_ratio = config.min_collateral_ratio;
 
-    // Multiplier can only increase (yield distribution) or stay same
+    // Strict increase — a no-op multiplier write would stamp the
+    // sandwich-lock slot without moving any economic state, wasting the
+    // lock window for the entire slot. Mirrors the EVM fix landed in the
+    // oracle-relay cycle and the symmetric lite-psm
+    // `set_oku_m_price` strict-increase guard.
     require!(
-        new_usd_multiplier >= old_multiplier,
+        new_usd_multiplier > old_multiplier,
         OkuDollarError::MultiplierCannotDecrease
     );
 
-    // Sanity ceiling — bounds the math even if the rebaser key is compromised.
-    // See `MAX_USD_MULTIPLIER` in `constants.rs`. Mirrors lite-psm's
-    // `MAX_OKU_M_PRICE` ceiling on `set_oku_m_price` / `distribute_yield`.
+    // Math-sanity ceiling — keeps the downstream `u64 * u64 -> u128`
+    // multiplications inside the overflow-safe region. Not a guard
+    // against a malicious operator (out of scope per the centralized
+    // trust model) but a math bound. See `MAX_USD_MULTIPLIER` in
+    // `oku-shared/constants.rs`.
     require!(
         new_usd_multiplier <= MAX_USD_MULTIPLIER,
         OkuDollarError::MultiplierAboveMax
@@ -519,11 +525,24 @@ pub fn deposit_reserves(ctx: Context<DepositReserves>, amount: u64) -> Result<()
 ///
 /// Allows reserve manager to remove excess OkuMoney from the vault. Must
 /// maintain minimum collateralization ratio after withdrawal. Mirrors EVM
-/// `OkuDollar.withdrawSurplus`, which is gated by `whenNotPaused`.
+/// `OkuDollar.withdrawSurplus`, which is gated by `whenNotPaused` AND
+/// `whenYieldNotDistributing`.
 ///
 /// The pause check lives on the `WithdrawReserves` context as
 /// `constraint = !config.is_paused`, matching the `Wrap`/`Unwrap` pattern.
+///
+/// Yield-lock parity (EVM `withdrawSurplus`): the post-withdrawal
+/// collateralization check reads `oku_m_price` from `psm_config` AND
+/// `usd_multiplier` from this vault. A same-slot `set_oku_m_price` /
+/// `distribute_yield` (PSM) or `update_usd_multiplier` (vault) would shift
+/// the multipliers underneath that read. Even though `reserve_manager` is
+/// already a permissioned role, the lock makes the invariant explicit and
+/// matches the EVM defense-in-depth posture.
 pub fn withdraw_reserves(ctx: Context<WithdrawReserves>, amount: u64) -> Result<()> {
+    // Dual yield-lock fence (matches `wrap` / `unwrap`).
+    check_yield_lock(&ctx.accounts.psm_config)?;
+    check_vault_yield_lock(&ctx.accounts.config)?;
+
     require!(amount > 0, OkuDollarError::ZeroAmount);
 
     let bump = ctx.accounts.config.bump;

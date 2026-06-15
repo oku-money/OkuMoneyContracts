@@ -109,6 +109,25 @@ guard and is not worth the risk.
   every field is also exposed via an individual getter. Off-chain consumers
   use this to reduce RPC round-trips. No on-chain caller.
 
+### Upgradeability that may not be needed
+
+- `OracleRelay` as a UUPS proxy.
+  The relay holds 5 storage fields (feed, staleness, min/max band, cached
+  feed decimals) and a small read-only consumer surface. The only mutable
+  state is the operator-set config, which is rotated via the existing
+  `RELAY_FEED_MANAGER` / `RELAY_CONFIG_MANAGER` setters — not via a logic
+  upgrade. Operator-side kill-switch lives on the consumer (`setOracleRelay
+  (address(0))` on `LitePSM` and `RedemptionQueue`), so even bricking the
+  relay implementation is recoverable without a UUPS upgrade.
+
+  Recommendation: in a follow-up cycle, drop the UUPS scaffolding
+  (`UUPSUpgradeable` import, `_authorizeUpgrade`, `RELAY_UPGRADER` role,
+  `__disableInitializers` constructor pattern) and ship `OracleRelay` as a
+  plain stateful contract that operators redeploy on rotation. Saves
+  surface area for the auditor and matches the SVM mirror, which embeds
+  the peg-check directly inside `lite-psm` with no upgradeability of its
+  own.
+
 ## In-flight work
 
 (none — audit-prep cycle complete)
@@ -126,6 +145,10 @@ guard and is not worth the risk.
   sanity bounds rather than "defense against compromised rebaser key."
   Operator-compromise is out of scope; the cap exists to bound
   downstream `uint256 * uint256` paths away from overflow.
+- 2026-06-12 — Flagged `OracleRelay` UUPS upgradeability as removable in a
+  follow-up cycle (see "Upgradeability that may not be needed" above).
+  Matches the SVM mirror, which embeds the peg-check directly in
+  `lite-psm` with no relay-side upgradeability.
 
 ## Pointers
 

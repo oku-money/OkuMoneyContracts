@@ -43,12 +43,18 @@ pub enum OkuDollarError {
     #[msg("Collateral ratio exceeds maximum (100%)")]
     RatioExceedsMax,
 
-    #[msg("USD multiplier can only increase")]
+    /// New `usd_multiplier` did not strictly increase. Reverts on both
+    /// backward moves and no-op (equal-value) updates so a no-op call
+    /// cannot stamp the sandwich-lock slot without moving the multiplier.
+    /// EVM: MultiplierCannotDecrease() (post audit-prep tighten).
+    #[msg("USD multiplier must strictly increase")]
     MultiplierCannotDecrease,
 
-    /// Proposed `usd_multiplier` exceeds `MAX_USD_MULTIPLIER`. Defense in
-    /// depth — even with the rebaser key compromised, the multiplier cannot
-    /// be pushed past the ceiling. Mirrors lite-psm `PriceAboveMax`.
+    /// Proposed `usd_multiplier` exceeds `MAX_USD_MULTIPLIER`. Math-sanity
+    /// bound that keeps downstream `u64 * u64 -> u128` multiplications
+    /// inside the overflow-safe region. Not a guard against operator
+    /// compromise (out of scope per the centralized trust model) but a
+    /// math bound. Mirrors lite-psm `PriceAboveMax`.
     #[msg("Proposed usd_multiplier exceeds MAX_USD_MULTIPLIER ceiling")]
     MultiplierAboveMax,
 

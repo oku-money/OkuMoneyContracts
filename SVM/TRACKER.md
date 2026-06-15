@@ -1,11 +1,33 @@
 # Open issues tracker
 
 Items that remain open after the WS1–8 pre-audit sweep + the SVM noBridge
-deployment ceremony (`noBridge-mvp-deployed` tag). All WS1–8 findings have
-been resolved and the SVM programs are now live on devnet at the noBridge
-HEAD bytecode. What remains is explicitly deferred or blocked on external input.
+deployment ceremony (`noBridge-mvp-deployed` tag) + the audit-prep cycle
+that landed the USDC peg circuit-breaker. All WS1–8 findings have been
+resolved and the SVM programs are now live on devnet at the noBridge
+HEAD bytecode. What remains is explicitly deferred or blocked on external
+input.
 
 **Status legend:** 🔴 blocks external exposure · 🟡 should-fix before audit · ⚪ post-launch
+
+## Audit-readiness snapshot
+
+| Item | State |
+|---|---|
+| Production programs | 2 (`lite-psm`, `oku-dollar`) + 1 shared crate (`oku-shared`) |
+| Bankrun tests | 128 / 128 |
+| Cargo unit tests | 20 / 20 |
+| Anchor build | clean |
+| `cargo clippy -D warnings` | clean |
+| `cargo dylint` | deferred (tool not installed locally; see audit/ACCEPTED_RISKS.md) |
+| Pyth USDC/USD peg circuit-breaker | embedded in `lite-psm` (audit-prep cycle) |
+| EVM ↔ SVM constant parity | re-verified post-cycle |
+
+Full audit handoff package lives under `oku-programs/audit/`:
+
+- `audit/README.md` — entry point.
+- `audit/ACCEPTED_RISKS.md` — known trust-assumptions, deferrals.
+- `audit/clippy-checklist.md` — clippy disposition.
+- `audit/program-sizes.txt`, `audit/test-output-*.txt` — captured snapshots.
 
 ## 📋 Deployment status (2026-06-05)
 
@@ -83,35 +105,38 @@ rebuild, and redeploy.
 
 ## 🟡 Should-fix before external audit
 
-### Oracle relay (USDC peg circuit-breaker) — SVM mirror
+### ~~Oracle relay (USDC peg circuit-breaker) — SVM mirror~~ ✅ (2026-06-12)
 
-The EVM side shipped an `OracleRelay` proxy contract (see
-`EVM/src/oracle/OracleRelay.sol` + `IOracleRelay.sol`) that wraps a Chainlink
-USDC/USD aggregator, validates round completeness / freshness / in-band price,
-and normalizes the answer to 1e18 precision. `LitePSM` and `RedemptionQueue` on
-EVM call `oracleRelay.checkUsdcPeg()` at the top of every mint, redeem, and
-`processQueue` path to circuit-break when USDC depegs.
+Landed in the SVM audit-prep cycle that paralleled the EVM PoR-removal /
+peg-relay refactor. Per the user's direction, the SVM mirror was embedded
+directly inside `lite-psm` (no new program) — see
+`EVM_VS_SVM.md § Oracle` for the documented divergence.
 
-**SVM mirror required:** build a parallel `oracle-relay` Solana program (or a
-single PDA writer that ingests Pyth / Switchboard / Chainlink Solana data) that
-exposes a normalized `(price_e18, last_updated, in_band)` shape. `lite-psm`
-should consume the check inside `mint_oku_m`, `redeem_oku_m`, and
-`process_queue` instructions, with an operator-controlled enable/disable
-toggle paralleling EVM's `setOracleRelay(address(0))` kill switch.
+Surface:
 
-**Constants that must match EVM:**
+- New helper module `programs/lite-psm/src/helpers/oracle_relay.rs` — Pyth-V2
+  USDC/USD parser, normalizes `(price: i64, expo: i32)` to 1e9 precision,
+  validates band + status + freshness + positive answer + owner.
+- New fields on `PsmConfig` (`_v2 → _v3` seed rotation):
+  `oracle_relay_feed`, `oracle_relay_pyth_program_owner`,
+  `oracle_relay_staleness`, `oracle_relay_min_price_e9`,
+  `oracle_relay_max_price_e9`.
+- Four new `oracle_manager`-gated instructions:
+  `set_oracle_relay_feed`, `set_oracle_relay_staleness`,
+  `set_oracle_relay_band`, `set_oracle_relay_pyth_program_owner`. The first
+  doubles as the kill switch (`new_feed = Pubkey::default()`).
+- Wired into `mint_oku_m`, `redeem_oku_m`, `process_queue` (lite-psm) and
+  cross-program via `psm_config` reads from `wrap` / `unwrap` (oku-dollar).
+- Constants in `oku-shared`: `ORACLE_USDC_PRICE_FLOOR = 0.95e9`,
+  `ORACLE_USDC_PRICE_CEILING = 1.05e9`, `MAX_FEED_EXPO_MAGNITUDE = 18`.
+- Default peg band `[0.97e9, 1.03e9]` (±3%), default staleness `3600s`.
+- New operator script: `scripts/admin/set-oracle-relay.ts` (four-subcommand CLI).
+- New bankrun test suite: `tests/bankrun/oracle-relay.ts` (12 tests).
+- Stub fork test path kept at `tests/fork/pyth-oracle.ts` for live USDC/USD reads.
 
-| Constant | EVM value | Notes |
-| --- | --- | --- |
-| `ORACLE_USDC_PRICE_FLOOR` | `0.95e18` | Hard floor for the peg band setter. |
-| `ORACLE_USDC_PRICE_CEILING` | `1.05e18` | Hard ceiling for the peg band setter. |
-| Default band | `[0.97e18, 1.03e18]` | ±3% — revisit per ops feedback. |
-| Default staleness | `3600s` (1 hour) | Bounded by `[60s, 7 days]`. |
-| `MAX_FEED_DECIMALS` | `18` | Reject feeds reporting more decimals than this. |
-
-**Status when starting:** EVM side is feature-complete with tests and is in
-the audit-ready pre-flight set. SVM side intentionally deferred to a separate
-work stream so this audit cycle focuses on EVM only.
+Mirrors EVM `OracleRelay` semantically but embedded in `lite-psm` rather
+than as a separate UUPS proxy program. (The EVM tracker now flags its own
+relay UUPS overhead as a candidate for future simplification too.)
 
 ### Key custody and change-management documentation
 
@@ -134,20 +159,32 @@ on-chain delay mechanisms. What's expected and currently missing:
 **Effort:** 2–4 days (writing, not implementation). **This is what audit reports flag
 for centralized stablecoin projects, not missing timelocks.**
 
-### `cargo clippy -D warnings`
+### ~~`cargo clippy -D warnings`~~ ✅ (2026-06-12)
 
-Not yet run systematically; likely latent lint debt across `programs/` and `crates/`.
-Once clean, add `cargo clippy -D warnings` to the `svm-cargo` CI job.
+Cleared in the audit-prep cycle. Two real findings (`unneeded return` in
+`oku-dollar::wrap`) fixed; two crate-level suppressions added for noise from
+Anchor's `#[program]` macro expansion (`diverging_sub_expression`,
+`unexpected_cfgs` for the `target_os = "solana"` cfg used by
+`solana-program-entrypoint`). Both suppressions documented inline with their
+rationale. `cargo clippy --workspace --all-targets -- -D warnings` exits 0.
 
-**Effort:** 1–3 days (first run + triage + fixes). Low risk — mostly style.
+Once the CI job is wired (separate workstream), `-D warnings` should be the
+default flag.
 
 ### `cargo dylint` (crytic/solana-lints)
 
-Trail of Bits' Solana lint suite is declared in `Cargo.toml` but never invoked.
-May surface real security-relevant patterns (unchecked arithmetic, incorrect CPI
-authority handling, etc.).
+Trail of Bits' Solana lint suite is declared in `Cargo.toml` but never invoked
+locally — `cargo-dylint` is not installed on the audit-prep workstation. The
+suite has been run historically as part of an earlier review pass and the F-02
+(`arbitrary_cpi`) finding was already triaged crate-wide via `#![allow]`. The
+remaining auditor-facing risk is "did anything land since that review that
+the suite would flag?" — answer: only the small `helpers/oracle_relay.rs`
+addition, which uses the same CPI pattern as the rest of the codebase and
+follows the same review reasoning.
 
-**Effort:** 1–2 days. **Worth running before audit.**
+**Effort:** 1 day (install `cargo-dylint` + `dylint-link`, point at the
+crytic suite, triage). **Worth running before audit; not blocking this
+cycle.** Documented in `audit/ACCEPTED_RISKS.md`.
 
 ### Trident `#[init]` wiring
 
@@ -243,6 +280,108 @@ Better suited as nightly CI than per-PR. High setup cost.
 **Effort:** 2–3 weeks. Post-launch.
 
 ---
+
+---
+
+## Potentially redundant / unused functions
+
+Tracked for future review. None of these are dead code (each is reachable
+and covered by tests), but each is either redundant given the centralized
+trust model or operational convenience that could be removed if the
+operator runbook confirms it is unused. Mirror of `EVM/TRACKER.md`'s
+equivalent section.
+
+A pruning pass on these should only happen after audit feedback so the
+auditor sees the full surface as currently shipped.
+
+### Operator surface that may be unused
+
+- `oku_dollar::deposit_reserves` (`reserve_manager`).
+  Adds OkuMoney to the vault outside the normal `wrap` flow. The
+  operator can equivalently mint OkuM/USDC through the PSM and use
+  `withdraw_reserves` to rebalance. Convenience-only; flagged on the EVM
+  side first.
+- `oku_dollar::withdraw_reserves` (`reserve_manager`).
+  Symmetric to the above. Audit-prep cycle added yield-lock parity with
+  EVM's `withdrawSurplus`, so the function now matches the EVM behavior
+  but the same "do we actually need it?" question applies.
+- `lite_psm::deposit_buffer` / `withdraw_buffer` (`buffer_depositor` /
+  `buffer_withdrawer`).
+  Same redundancy argument. Operator can drive USDC through the mint /
+  redeem flow instead of using these direct deposit paths. Kept for v1
+  until the operational runbook confirms which paths the orchestrator
+  actually uses.
+
+### Defensive guards that are unreachable through user paths
+
+These remain because they fail-loud against future-developer mistakes or
+math-sanity edge cases. Removing them would save a handful of bytes per
+guard and is not worth the risk.
+
+- `helpers::oracle_relay::get_usdc_price` — the `shift >= 0` /
+  `shift < 0` normalization branches. Under realistic Pyth feeds
+  (`expo == -8`), only the `shift < 0` branch is reachable; the other is
+  forward-compat for non-standard feeds.
+- `helpers::oracle_relay` — `FeedExpoTooLarge` guard. Rejected at admin
+  time (`validate_oracle_relay_feed`), so the runtime branch is
+  unreachable; kept as a math-safety net.
+- `helpers::math` — `calculate_fee` is `#[allow(dead_code)]`. Kept for
+  parity with the EVM `LitePSM.fee` seam and for future use when a PSM
+  fee is introduced.
+
+### Setup-time helpers redundant with deploy scripts
+
+- (None at present.) SVM has no `assertUsdcMatch` analogue; the deploy
+  script wires both PSM and vault to a single source-of-truth USDC mint.
+
+### Convenience views / helpers (off-chain / parity only)
+
+- `oku_dollar::helpers::usd_to_oku_money` — explicitly `#[allow(dead_code)]`
+  in the source with an MVP note. Currently unused by any instruction
+  handler; kept for parity with EVM `OkuDollar.dollarsToOkuM()` and for
+  off-chain consumers.
+
+### Two-step `RoleAdmin` transfer
+
+`pending_role_admin` / `accept_role_admin` / `cancel_role_admin_transfer`.
+Not a removal candidate — this is a useful operator-footgun protection
+(matches EVM's `Ownable2Step` pattern) that catches typos before the
+meta-role rotates. Noted here only to flag it for the auditor as
+"deliberate added surface, mirrors EVM."
+
+### Upgradeability that may not be needed (cross-chain item)
+
+The EVM `OracleRelay` is a UUPS proxy with a `RELAY_UPGRADER` role.
+After this cycle the EVM tracker flags it for simplification — the SVM
+mirror is already non-upgradeable (embedded in `lite-psm`), so no SVM
+action needed. Listed here for symmetry.
+
+---
+
+## Recent decisions
+
+- 2026-06-12 — Removed PoR `check_oracle_reserves` plumbing from
+  `lite-psm`; replaced with USDC peg circuit-breaker
+  (`helpers::oracle_relay::check_usdc_peg`). Storage-incompatible
+  `PsmConfig` change accepted because deployed testnet PDAs are
+  throwaway; seed rotated `psm_config_v2 → psm_config_v3` to force a
+  fresh layout. Mirror of EVM cycle.
+- 2026-06-12 — Tightened `lite_psm::set_oku_m_price` and
+  `oku_dollar::update_usd_multiplier` to require strict-increase
+  (rejects equal value). Aligns with `distribute_yield`'s
+  `YieldTooSmall` guard so a no-op call cannot stamp the sandwich-lock
+  slot without moving the multiplier.
+- 2026-06-12 — Re-doc'd `MAX_OKU_M_PRICE` / `MAX_USD_MULTIPLIER` and
+  the corresponding `PriceAboveMax` / `MultiplierAboveMax` errors as
+  math-sanity bounds rather than "defense against compromised rebaser
+  key." Operator-compromise is out of scope per
+  `SVM/README.md § Authority Model`; the cap exists to bound the
+  `u64 * u64 -> u128` multiplications away from the overflow region.
+- 2026-06-12 — Added yield-lock parity guard to
+  `oku_dollar::withdraw_reserves` (mirrors EVM `withdrawSurplus`'s
+  `whenYieldNotDistributing` modifier). Reads `oku_m_price` and
+  `usd_multiplier` for the post-withdrawal collateral check; the lock
+  ensures both multipliers don't shift in the same slot.
 
 ## 📚 References
 

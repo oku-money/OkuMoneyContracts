@@ -95,9 +95,14 @@ export async function readLitePsmState(
     snap['psm.usdcMint']           = str(cfg.usdcMint);
     snap['psm.okuMoneyMint']       = str(cfg.okuMoneyMint);
     snap['psm.maxSupply']          = str(cfg.maxSupply);
-    snap['psm.oracleEnabled']      = str(cfg.oracleEnabled ?? cfg.oracle?.toBase58() !== PublicKey.default.toBase58());
-    snap['psm.stalenessThreshold'] = str(cfg.stalenessThreshold);
-    snap['psm.pythProgramOwner']   = str(cfg.pythProgramOwner);
+    snap['psm.oracleRelayEnabled'] = str(
+      cfg.oracleRelayFeed?.toBase58() !== PublicKey.default.toBase58()
+    );
+    snap['psm.oracleRelayFeed']    = str(cfg.oracleRelayFeed);
+    snap['psm.oracleRelayStaleness'] = str(cfg.oracleRelayStaleness);
+    snap['psm.oracleRelayMinE9']   = str(cfg.oracleRelayMinPriceE9);
+    snap['psm.oracleRelayMaxE9']   = str(cfg.oracleRelayMaxPriceE9);
+    snap['psm.oracleRelayPythProgramOwner'] = str(cfg.oracleRelayPythProgramOwner);
   } catch (e: any) {
     snap['psm.fetchError'] = (e.message ?? String(e)).slice(0, 120);
   }

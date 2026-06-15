@@ -274,8 +274,9 @@ async function readState(ctx: TestContext) {
       'Max Supply': fmtAmount(Number(config.maxSupply)),
       'Minter Allowance': fmtAmount(Number(config.minterAllowance)),
       'Is Paused': String(config.isPaused),
-      'Oracle': (config.oracle as PublicKey).toBase58(),
-      'Staleness Threshold': `${config.stalenessThreshold}s`,
+      'Oracle Relay Feed': (config.oracleRelayFeed as PublicKey).toBase58(),
+      'Oracle Relay Staleness': `${config.oracleRelayStaleness}s`,
+      'Oracle Relay Band (e9)': `[${String(config.oracleRelayMinPriceE9)}, ${String(config.oracleRelayMaxPriceE9)}]`,
       'OkuM Price': String(config.okuMPrice),
     });
   } catch (e: any) {
@@ -356,11 +357,11 @@ async function testMint(ctx: TestContext) {
 
   const amount = 100_000_000; // 100 USDC
 
-  // 1. Ensure oracle is disabled (Pubkey.default = disabled)
-  logger.info('Disabling oracle for test mint...');
+  // 1. Ensure the peg circuit-breaker is disabled (feed = default = kill switch)
+  logger.info('Disabling oracle relay for test mint...');
   try {
     const sig = await ctx.psm.methods
-      .setOracle(PublicKey.default, new BN(0))
+      .setOracleRelayFeed(PublicKey.default)
       .accountsPartial({
         oracleManager: ctx.deployer.publicKey,
         config: ctx.psmConfig,
@@ -368,9 +369,9 @@ async function testMint(ctx: TestContext) {
       })
       .rpc();
     await confirmTx(ctx, sig);
-    logger.success(`Oracle disabled. Tx: ${explorerLink(ctx.network, sig)}`);
+    logger.success(`Oracle relay disabled. Tx: ${explorerLink(ctx.network, sig)}`);
   } catch (e: any) {
-    logger.warning(`Oracle may already be disabled: ${e.message}`);
+    logger.warning(`Oracle relay may already be disabled: ${e.message}`);
   }
 
   // 2. Mint test USDC to deployer
@@ -398,7 +399,7 @@ async function testMint(ctx: TestContext) {
       userUsdcAta,
       userOkuMoneyAta: userOkuMoneyAta,
       vaultUsdc: ctx.psmVaultUsdc,
-      priceUpdate: null,
+      oracleRelayFeed: null,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -759,6 +760,8 @@ async function testRedeem(ctx: TestContext) {
         userOkuMoneyAta: userOkuMoneyAta,
         vaultUsdc: ctx.psmVaultUsdc,
         vaultOkuMoney: ctx.psmOkuMoneyEscrow,
+        oracleRelayFeed: null,
+
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -994,6 +997,8 @@ async function testQueueRedeem(ctx: TestContext) {
       userOkuMoneyAta,
       vaultUsdc: ctx.psmVaultUsdc,
       vaultOkuMoney: ctx.psmOkuMoneyEscrow,
+      oracleRelayFeed: null,
+
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1201,7 +1206,7 @@ async function testPause(ctx: TestContext) {
         userUsdcAta,
         userOkuMoneyAta,
         vaultUsdc: ctx.psmVaultUsdc,
-        priceUpdate: null,
+        oracleRelayFeed: null,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1333,22 +1338,23 @@ async function testSetAuthority(ctx: TestContext) {
 }
 
 // ---------------------------------------------------------------------------
-// Step: oracleMint
+// Step: oracleRelayPeg
 // ---------------------------------------------------------------------------
 
 /**
- * Exercise the oracle gating mechanism:
- *   1. With oracle disabled (PublicKey.default) → mint succeeds.
- *   2. With oracle set to a random non-Pyth account → mint fails (oracle error).
- *   3. Oracle reset to disabled → mint succeeds again.
+ * Exercise the USDC peg circuit-breaker round-trip:
+ *   1. Relay disabled (feed = Pubkey::default()) → mint succeeds.
+ *   2. Relay configured with a random non-Pyth account → either
+ *      `set_oracle_relay_feed` pre-flight rejects (a valid gate), or the
+ *      subsequent `mint_oku_m` rejects when the malformed feed is read.
+ *   3. Relay re-disabled → mint succeeds again.
  *
- * On localnet/devnet there is no real Pyth feed, so we simulate an invalid
- * oracle by using a freshly-generated (empty) account pubkey. The PSM will
- * attempt to deserialize it as a Pyth price account and fail with an
- * InvalidPythAccount (or similar) error, confirming the oracle check fires.
+ * This replaces the previous PoR-style `oracleMint` step. The peg-check
+ * shape is identical on EVM and SVM; see `EVM/test/hardhat/scenarios/
+ * RealWorldUsage.ts § E6` for the symmetric Hardhat-side test.
  */
-async function testOracleMint(ctx: TestContext) {
-  logger.section('Test: Oracle-Gated Mint');
+async function testOracleRelayPeg(ctx: TestContext) {
+  logger.section('Test: USDC Peg Circuit-Breaker');
 
   const mintSmall = new BN(1_000_000); // 1 USDC
   await mintTestUsdc(ctx, mintSmall.toNumber());
@@ -1360,7 +1366,7 @@ async function testOracleMint(ctx: TestContext) {
     ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID
   );
 
-  async function tryMint(priceUpdateAccount: PublicKey | null): Promise<boolean> {
+  async function tryMint(feedAccount: PublicKey | null): Promise<boolean> {
     try {
       await ctx.psm.methods
         .mintOkuM(mintSmall)
@@ -1372,7 +1378,7 @@ async function testOracleMint(ctx: TestContext) {
           userUsdcAta,
           userOkuMoneyAta,
           vaultUsdc: ctx.psmVaultUsdc,
-          priceUpdate: priceUpdateAccount,
+          oracleRelayFeed: feedAccount,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1385,10 +1391,10 @@ async function testOracleMint(ctx: TestContext) {
     }
   }
 
-  // ---- 1. Oracle disabled → mint succeeds ----
-  logger.info('Step 1: Ensure oracle disabled, then mint...');
+  // ---- 1. Relay disabled (kill switch) → mint succeeds ----
+  logger.info('Step 1: Ensure relay disabled, then mint...');
   const disableSig = await ctx.psm.methods
-    .setOracle(PublicKey.default, new BN(0))
+    .setOracleRelayFeed(PublicKey.default)
     .accountsPartial({
       oracleManager: ctx.deployer.publicKey,
       config: ctx.psmConfig,
@@ -1398,43 +1404,41 @@ async function testOracleMint(ctx: TestContext) {
   await confirmTx(ctx, disableSig);
 
   const ok1 = await tryMint(null);
-  if (!ok1) throw new Error('mint_oku_m should succeed when oracle is disabled.');
-  logger.success('Step 1 passed: oracle-disabled mint succeeded.');
+  if (!ok1) throw new Error('mint_oku_m should succeed when relay is disabled.');
+  logger.success('Step 1 passed: relay-disabled mint succeeded.');
 
-  // ---- 2. Oracle set to a random empty account → mint rejects ----
-  logger.info('Step 2: Configure a non-Pyth oracle, then mint (expect revert)...');
-  const fakeOracle = Keypair.generate().publicKey;
-  // `set_oracle` with a non-default pubkey validates the header on `oracleAccount`.
-  // On localnet the account doesn't exist so this call itself may fail — catch it.
+  // ---- 2. Wire a non-Pyth feed → mint should reject ----
+  logger.info('Step 2: Wire a non-Pyth relay feed, then mint (expect revert)...');
+  const fakeFeed = Keypair.generate().publicKey;
   try {
     await ctx.psm.methods
-      .setOracle(fakeOracle, new BN(300))
+      .setOracleRelayFeed(fakeFeed)
       .accountsPartial({
         oracleManager: ctx.deployer.publicKey,
         config: ctx.psmConfig,
-        oracleAccount: fakeOracle,
+        oracleAccount: fakeFeed,
       })
       .rpc();
 
-    // If set_oracle succeeded (some networks allow it), verify mint rejects the stale feed.
-    const cfgWithOracle = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
-    if (!(cfgWithOracle.oracle as PublicKey).equals(PublicKey.default)) {
-      const ok2 = await tryMint(fakeOracle);
+    // If set_oracle_relay_feed succeeded (account exists but invalid),
+    // verify mint rejects the malformed feed.
+    const cfgWithRelay = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+    if (!(cfgWithRelay.oracleRelayFeed as PublicKey).equals(PublicKey.default)) {
+      const ok2 = await tryMint(fakeFeed);
       if (ok2) {
-        logger.warning('mint_oku_m did not revert with a fake oracle — may need a real stale feed to test gating.');
+        logger.warning('mint_oku_m did not revert with a fake feed — may need a real stale feed to test the gate.');
       } else {
-        logger.success('Step 2 passed: mint_oku_m correctly rejected stale/invalid oracle.');
+        logger.success('Step 2 passed: mint_oku_m correctly rejected the malformed feed.');
       }
     }
   } catch (e: any) {
-    // set_oracle itself pre-validates; rejection here is also a valid gate.
-    logger.success(`Step 2 passed: set_oracle pre-flight rejected invalid oracle account (${String(e?.message ?? '').slice(0, 80)}).`);
+    logger.success(`Step 2 passed: set_oracle_relay_feed pre-flight rejected invalid feed (${String(e?.message ?? '').slice(0, 80)}).`);
   }
 
-  // ---- 3. Reset oracle to disabled → mint works again ----
-  logger.info('Step 3: Re-disable oracle, verify mint succeeds...');
+  // ---- 3. Re-disable the relay → mint works again ----
+  logger.info('Step 3: Re-disable relay, verify mint succeeds...');
   const resetSig = await ctx.psm.methods
-    .setOracle(PublicKey.default, new BN(0))
+    .setOracleRelayFeed(PublicKey.default)
     .accountsPartial({
       oracleManager: ctx.deployer.publicKey,
       config: ctx.psmConfig,
@@ -1444,9 +1448,9 @@ async function testOracleMint(ctx: TestContext) {
   await confirmTx(ctx, resetSig);
 
   const ok3 = await tryMint(null);
-  if (!ok3) throw new Error('mint_oku_m should succeed after oracle re-disabled.');
-  logger.success('Step 3 passed: oracle re-disabled, mint succeeded.');
-  logger.success('Oracle gating round-trip verified.');
+  if (!ok3) throw new Error('mint_oku_m should succeed after relay re-disabled.');
+  logger.success('Step 3 passed: relay re-disabled, mint succeeded.');
+  logger.success('Peg circuit-breaker round-trip verified.');
 }
 
 // ---------------------------------------------------------------------------
@@ -1465,7 +1469,7 @@ const STEPS: Record<string, (ctx: TestContext) => Promise<void>> = {
   distributeYield: testDistributeYield,
   pause: testPause,
   setAuthority: testSetAuthority,
-  oracleMint: testOracleMint,
+  oracleRelayPeg: testOracleRelayPeg,
 };
 
 async function main() {
@@ -1526,7 +1530,7 @@ async function main() {
       'distributeYield',
       'pause',
       'setAuthority',
-      'oracleMint',
+      'oracleRelayPeg',
     ];
     let passed = 0;
     let failed = 0;

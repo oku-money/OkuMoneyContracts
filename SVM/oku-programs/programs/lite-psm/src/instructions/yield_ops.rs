@@ -14,23 +14,32 @@ use anchor_lang::prelude::*;
 /// Set OkuMoney price directly
 ///
 /// REBASER only. Sets last_yield_distribution_slot for sandwich prevention.
-/// new_multiplier must be >= current (price never decreases).
+/// `new_multiplier` must be strictly greater than the current price.
 ///
-/// This is the SVM equivalent of EVM's `setOkuMPrice(uint256 newPrice)`.
+/// This is the SVM equivalent of EVM's `setOkuMMultiplier(uint256)`.
+///
+/// Rejects `new_multiplier == oku_m_price` so a no-op call cannot stamp
+/// the sandwich-lock slot without actually moving the multiplier (which
+/// would waste the lock window for the entire slot). Mirrors the
+/// `YieldTooSmall` guard on `distribute_yield` and the EVM fix landed
+/// alongside the oracle-relay cycle.
 pub fn set_oku_m_price(ctx: Context<SetOkuMPrice>, new_multiplier: u64) -> Result<()> {
     let config = &mut ctx.accounts.config;
 
     // Read current multiplier from config
     let current_multiplier = config.oku_m_price;
 
-    // Price can only increase (or stay the same)
+    // Strict increase — see fn-level doc for rationale.
     require!(
-        new_multiplier >= current_multiplier,
+        new_multiplier > current_multiplier,
         LitePsmError::PriceCannotDecrease
     );
 
-    // Sanity ceiling — bounds the math even if the rebaser key is compromised.
-    // See `MAX_OKU_M_PRICE` in `constants.rs`.
+    // Math-sanity ceiling — keeps the downstream `u64 * u64 -> u128`
+    // multiplications inside the overflow-safe region. Not a guard against
+    // a malicious operator (which is out of scope per the centralized
+    // trust model) but a math bound. See `MAX_OKU_M_PRICE` in
+    // `oku-shared/constants.rs`.
     require!(
         new_multiplier <= MAX_OKU_M_PRICE,
         LitePsmError::PriceAboveMax

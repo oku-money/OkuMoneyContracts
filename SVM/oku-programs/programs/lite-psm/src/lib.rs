@@ -32,6 +32,15 @@
 // annotations are also present in each instruction module that contains CPIs.
 // Confirmed false positives — suppressed here for `cargo dylint` cleanliness.
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
+// Anchor's `#[program]` macro expands into dispatch glue with a pattern that
+// trips clippy's `diverging_sub_expression` lint. Suppressed crate-wide
+// because we can't annotate inside macro-expanded code and the warning
+// fires identically on every program in the workspace.
+#![allow(clippy::diverging_sub_expression)]
+// `target_os = "solana"` is emitted by `solana-program-entrypoint`'s panic
+// handler macro. The check-cfg machinery doesn't know about the BPF target.
+// Suppressed crate-wide — the cfg is intrinsic to building for Solana.
+#![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
 
@@ -85,7 +94,7 @@ pub mod lite_psm {
         cap_manager: Pubkey,
         allowance_manager: Pubkey,
         rebaser: Pubkey,
-        pyth_program_owner: Pubkey,
+        oracle_relay_pyth_program_owner: Pubkey,
     ) -> Result<()> {
         instructions::init::initialize(
             ctx,
@@ -102,7 +111,7 @@ pub mod lite_psm {
             cap_manager,
             allowance_manager,
             rebaser,
-            pyth_program_owner,
+            oracle_relay_pyth_program_owner,
         )
     }
 
@@ -171,23 +180,51 @@ pub mod lite_psm {
         instructions::psm_admin::set_minter_allowance(ctx, amount)
     }
 
-    pub fn set_oracle(
+    // ===== Oracle Relay (USDC peg circuit-breaker) admin =====
+
+    /// Rotate the USDC/USD Pyth feed used by the peg-check.
+    /// `new_feed == Pubkey::default()` is the operator-side kill switch
+    /// (disables the peg check entirely; mirrors EVM
+    /// `setOracleRelay(address(0))`). `oracle_manager`-gated.
+    pub fn set_oracle_relay_feed(
         ctx: Context<OracleManager>,
-        oracle: Pubkey,
-        staleness_threshold: i64,
+        new_feed: Pubkey,
     ) -> Result<()> {
-        instructions::psm_admin::set_oracle(ctx, oracle, staleness_threshold)
+        instructions::psm_admin::set_oracle_relay_feed(ctx, new_feed)
     }
 
-    /// Rotate the accepted Pyth program owner pubkey.
-    /// Use this to migrate from legacy Pyth V2 to a different Pyth deployment
-    /// (e.g. the Pyth Solana Receiver) without redeploying the proxy.
-    /// Oracle_manager-gated.
-    pub fn set_pyth_program_owner(
+    /// Rotate the relay staleness threshold (seconds). Bounded by
+    /// `[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]`.
+    /// `oracle_manager`-gated.
+    pub fn set_oracle_relay_staleness(
+        ctx: Context<OracleManager>,
+        new_staleness: i64,
+    ) -> Result<()> {
+        instructions::psm_admin::set_oracle_relay_staleness(ctx, new_staleness)
+    }
+
+    /// Rotate the in-band USDC peg window (1e9 precision). Constrained by
+    /// the hard `ORACLE_USDC_PRICE_FLOOR` / `_CEILING` bounds.
+    /// `oracle_manager`-gated.
+    pub fn set_oracle_relay_band(
+        ctx: Context<OracleManager>,
+        new_min_e9: u64,
+        new_max_e9: u64,
+    ) -> Result<()> {
+        instructions::psm_admin::set_oracle_relay_band(ctx, new_min_e9, new_max_e9)
+    }
+
+    /// Rotate the accepted Pyth program owner pubkey. Migration hook for
+    /// future Pyth deployments (e.g. Pyth Solana Receiver) without
+    /// redeploying. `oracle_manager`-gated.
+    pub fn set_oracle_relay_pyth_program_owner(
         ctx: Context<OracleManager>,
         new_pyth_program_owner: Pubkey,
     ) -> Result<()> {
-        instructions::psm_admin::set_pyth_program_owner(ctx, new_pyth_program_owner)
+        instructions::psm_admin::set_oracle_relay_pyth_program_owner(
+            ctx,
+            new_pyth_program_owner,
+        )
     }
 
     pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {

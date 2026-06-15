@@ -147,7 +147,7 @@ async function buildCtx(): Promise<Ctx & {
   const vault = getProgram<OkuDollar>(h, "oku_dollar");
 
   const [configPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("psm_config_v2")],
+    [Buffer.from("psm_config_v3")],
     psm.programId
   );
 
@@ -257,6 +257,8 @@ async function userRedeemOkuM(
         userOkuMoneyAta: ctx.userOkuMoneyAtas[userIndex],
         vaultUsdc: ctx.vaultUsdcAta,
         vaultOkuMoney: ctx.vaultOkuMoneyAta,
+        oracleRelayFeed: null,
+
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -304,6 +306,8 @@ async function orchestratorBridge(
       userOkuMoneyAta: ctx.orchOkuMoneyAta,
       vaultUsdc: ctx.vaultUsdcAta,
       vaultOkuMoney: ctx.vaultOkuMoneyAta,
+      oracleRelayFeed: null,
+
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -377,6 +381,8 @@ async function drainQueue(
         okuMoneyMint: ctx.okuMoneyMint,
         vaultUsdc: ctx.vaultUsdcAta,
         vaultOkuMoney: ctx.vaultOkuMoneyAta,
+        oracleRelayFeed: null,
+
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
@@ -667,6 +673,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
           userOkuMoneyAta: ctx.orchOkuMoneyAta,
           vaultUsdc: ctx.vaultUsdcAta,
           vaultOkuMoney: ctx.vaultOkuMoneyAta,
+          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -741,7 +748,8 @@ describe("realWorldUsage (SVM) edge cases", () => {
           redemptionQueue: ctx.redemptionQueuePda, usdcMint: ctx.usdcMint,
           okuMoneyMint: ctx.okuMoneyMint, userUsdcAta: ctx.orchUsdcAta,
           userOkuMoneyAta: ctx.orchOkuMoneyAta, vaultUsdc: ctx.vaultUsdcAta,
-          vaultOkuMoney: ctx.vaultOkuMoneyAta, tokenProgram: TOKEN_PROGRAM_ID,
+          vaultOkuMoney: ctx.vaultOkuMoneyAta, oracleRelayFeed: null,
+          tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -821,7 +829,8 @@ describe("realWorldUsage (SVM) edge cases", () => {
           redemptionQueue: ctx.redemptionQueuePda, usdcMint: ctx.usdcMint,
           okuMoneyMint: ctx.okuMoneyMint, userUsdcAta: ctx.orchUsdcAta,
           userOkuMoneyAta: ctx.orchOkuMoneyAta, vaultUsdc: ctx.vaultUsdcAta,
-          vaultOkuMoney: ctx.vaultOkuMoneyAta, tokenProgram: TOKEN_PROGRAM_ID,
+          vaultOkuMoney: ctx.vaultOkuMoneyAta, oracleRelayFeed: null,
+          tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
@@ -932,38 +941,39 @@ describe("realWorldUsage (SVM) edge cases", () => {
   });
 
   // -------------------------------------------------------------------------
-  // E6: Oracle enables/disables mint gating
+  // E6: USDC peg circuit-breaker round-trip
   // -------------------------------------------------------------------------
-  describe("E6: oracle disabled → enabled → disabled flow", () => {
-    it("oracle can be configured and disabled without affecting permissionless mint path", async function () {
+  describe("E6: oracle relay disabled → wired → disabled flow", () => {
+    it("relay can be wired and disabled; disable is the operator kill switch", async function () {
       this.timeout(60_000);
       const ctx = await buildCtx();
 
       await mintUsdc(ctx.h, ctx.vaultUsdcAta, ctx.usdcMint, 100_000_000);
 
-      // Mint with oracle disabled (default) succeeds
+      // Mint with relay disabled (default = kill switch) succeeds
       await userMintOkuM(ctx, 0, 10_000_000);
       assertGt(await tokenBalance(ctx.h, ctx.userOkuMoneyAtas[0], TOKEN_2022_PROGRAM_ID), 0n);
 
-      // Set oracle to a dummy (non-existent) pubkey; configure as enabled
-      const dummyOracle = Keypair.generate().publicKey;
-      let setFailed = false;
+      // Try to wire a dummy (non-Pyth) feed. The set-feed pre-flight
+      // parses the Pyth header and should reject the malformed account;
+      // this is the program doing its job and counts as a valid gate.
+      const dummyFeed = Keypair.generate().publicKey;
       try {
         await ctx.psm.methods
-          .setOracle(dummyOracle, new BN(300))
+          .setOracleRelayFeed(dummyFeed)
           .accountsPartial({
             oracleManager: coldMultisig.publicKey,
             config: ctx.configPda,
-            oracleAccount: dummyOracle,
+            oracleAccount: dummyFeed,
           })
           .signers([coldMultisig]).rpc();
-      } catch { setFailed = true; }
-      // set_oracle pre-validates the Pyth header; failure is also a valid gate
-      // (It means the program is doing its job: rejecting invalid oracles)
+      } catch {
+        // Expected — pre-flight rejected a non-Pyth account.
+      }
 
-      // Disable oracle (reset to default — pass null oracleAccount for disable)
+      // Disable relay (operator kill switch — feed = Pubkey::default()).
       await ctx.psm.methods
-        .setOracle(PublicKey.default, new BN(0))
+        .setOracleRelayFeed(PublicKey.default)
         .accountsPartial({
           oracleManager: coldMultisig.publicKey,
           config: ctx.configPda,
@@ -971,7 +981,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
         })
         .signers([coldMultisig]).rpc();
 
-      // Mint still works with oracle disabled
+      // Mint still works with relay disabled
       await userMintOkuM(ctx, 0, 10_000_000);
       assertGt(await tokenBalance(ctx.h, ctx.userOkuMoneyAtas[0], TOKEN_2022_PROGRAM_ID), 0n);
     });
@@ -988,7 +998,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
       const payer = h.payer;
       anchor.setProvider(h.provider as unknown as anchor.AnchorProvider);
       const psm = h.program as unknown as Program<LitePsm>;
-      const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("psm_config_v2")], psm.programId);
+      const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("psm_config_v3")], psm.programId);
       const usdcMintKp = Keypair.generate();
       const okuMoneyMintKp = Keypair.generate();
       const usdcMint = await createMintViaBankrun(h, payer.publicKey, null, DECIMALS, usdcMintKp, TOKEN_PROGRAM_ID);

@@ -97,9 +97,9 @@ export interface PsmSetupResult {
  * config: cold for high-security, warm for medium, psmOrchestrator for
  * automated.
  *
- * `pythProgramOwner` is fixed at the legacy mainnet Pyth ID as a
- * placeholder; tests that exercise the oracle path call
- * `set_pyth_program_owner` to rotate to their fixture's owner.
+ * `oracleRelayPythProgramOwner` is fixed at the legacy mainnet Pyth ID as
+ * a placeholder; tests that exercise the peg-check path call
+ * `set_oracle_relay_pyth_program_owner` to rotate to their fixture's owner.
  */
 export async function initializePsm(
   h: BankrunHarness,
@@ -109,7 +109,7 @@ export async function initializePsm(
   okuMoneyMint: PublicKey
 ): Promise<PsmSetupResult> {
   const [configPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("psm_config_v2")],
+    [Buffer.from("psm_config_v3")],
     program.programId
   );
   const [redemptionQueuePda] = PublicKey.findProgramAddressSync(
@@ -137,8 +137,9 @@ export async function initializePsm(
     10 * anchor.web3.LAMPORTS_PER_SOL
   );
 
-  // Legacy mainnet Pyth ID — placeholder. Tests that need a different
-  // oracle program rotate via `set_pyth_program_owner` after init.
+  // Legacy mainnet Pyth ID — placeholder. Tests that exercise the
+  // peg-check path rotate to their fixture's owner via
+  // `set_oracle_relay_pyth_program_owner` after init.
   const PYTH_LEGACY_MAINNET = new PublicKey(
     "FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH"
   );
@@ -205,8 +206,8 @@ export async function initializePsm(
 // ---------------------------------------------------------------------------
 
 /**
- * Mint OkuMoney to `user` via `mint_oku_m` with the oracle disabled
- * (`priceUpdate: null`). Caller is responsible for funding the user's
+ * Mint OkuMoney to `user` via `mint_oku_m` with the oracle relay disabled
+ * (`oracleRelayFeed: null`). Caller is responsible for funding the user's
  * USDC ATA and creating their OkuMoney ATA.
  */
 export async function mintOkuMoneyViaProgram(
@@ -230,7 +231,7 @@ export async function mintOkuMoneyViaProgram(
       userUsdcAta,
       userOkuMoneyAta,
       vaultUsdc: vaultUsdcAta,
-      priceUpdate: null,
+      oracleRelayFeed: null,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,

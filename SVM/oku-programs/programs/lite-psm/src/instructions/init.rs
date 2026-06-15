@@ -2,6 +2,7 @@ use crate::constants::PRECISION;
 use crate::contexts::{Initialize, SetupOkuMoneyEscrow, SetupRedemptionQueue};
 use crate::errors::LitePsmError;
 use crate::events::InitializeEvent;
+use oku_shared::{ORACLE_USDC_PRICE_CEILING, ORACLE_USDC_PRICE_FLOOR};
 use anchor_lang::prelude::*;
 use anchor_spl::token_2022::spl_token_2022::extension::{
     BaseStateWithExtensions, ExtensionType, StateWithExtensions,
@@ -13,10 +14,13 @@ use anchor_spl::token_2022::spl_token_2022::state::Mint as MintRaw;
 /// Call `setup_redemption_queue` and `setup_oku_money_escrow` afterwards to complete initialization.
 /// Authority pubkeys passed as args to reduce stack usage (avoids BPF stack overflow).
 ///
-/// `pyth_program_owner` is the program-owner pubkey accepted by the on-chain
-/// Pyth oracle check. The deployer chooses this per-cluster (legacy Pyth on
-/// mainnet/devnet, or any future Pyth deployment). Rotate post-deploy via
-/// `set_pyth_program_owner`.
+/// `oracle_relay_pyth_program_owner` is the program-owner pubkey accepted
+/// by the on-chain peg-check parser. The deployer chooses this per-cluster
+/// (legacy Pyth on mainnet/devnet, or any future Pyth deployment). The
+/// oracle relay is otherwise left disabled at init — the operator calls
+/// `set_oracle_relay_feed` and `set_oracle_relay_staleness` post-deploy to
+/// wire the USDC/USD feed in. Rotate post-deploy via
+/// `set_oracle_relay_pyth_program_owner`.
 // F-13: 15 arguments is intentional — each maps to an independent on-chain
 // authority role. Grouping into a struct would change the Anchor IDL wire
 // format and break all existing callers. Suppressed.
@@ -36,10 +40,10 @@ pub fn initialize(
     cap_manager: Pubkey,
     allowance_manager: Pubkey,
     rebaser: Pubkey,
-    pyth_program_owner: Pubkey,
+    oracle_relay_pyth_program_owner: Pubkey,
 ) -> Result<()> {
     require!(
-        pyth_program_owner != Pubkey::default(),
+        oracle_relay_pyth_program_owner != Pubkey::default(),
         LitePsmError::InvalidPythProgramOwner
     );
 
@@ -101,10 +105,18 @@ pub fn initialize(
     config.minter_allowance = minter_allowance;
     config.is_paused = false;
 
-    // Set oracle config
-    config.oracle = Pubkey::default(); // Oracle disabled initially
-    config.staleness_threshold = 0;
-    config.pyth_program_owner = pyth_program_owner;
+    // Oracle relay (USDC peg circuit-breaker): disabled until the operator
+    // wires the feed via `set_oracle_relay_feed`. The Pyth program-owner
+    // pubkey is fixed here so the relay parser can validate feed ownership
+    // the moment a feed is wired. Default the band to the protocol-wide
+    // hard floor/ceiling — operators are expected to narrow this via
+    // `set_oracle_relay_band` to ±3% (`[0.97e9, 1.03e9]`) before going
+    // live. Same default-permissive posture EVM ships with.
+    config.oracle_relay_feed = Pubkey::default();
+    config.oracle_relay_pyth_program_owner = oracle_relay_pyth_program_owner;
+    config.oracle_relay_staleness = 0; // 0 = relay disabled until set
+    config.oracle_relay_min_price_e9 = ORACLE_USDC_PRICE_FLOOR;
+    config.oracle_relay_max_price_e9 = ORACLE_USDC_PRICE_CEILING;
 
     // Yield distribution lock - starts at 0 (no lock)
     config.last_yield_distribution_slot = 0;

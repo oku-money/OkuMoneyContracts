@@ -40,7 +40,7 @@ describe("init invariants (TransferHook reject)", () => {
 
   it("initialize rejects an OkuMoney mint that has the TransferHook extension", async () => {
     const [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v2")],
+      [Buffer.from("psm_config_v3")],
       program.programId
     );
 

@@ -212,22 +212,44 @@ pub struct MinterAllowanceUpdatedEvent {
     pub new_allowance: u64,
 }
 
-/// Emitted when oracle configuration changes.
-/// EVM equivalent: `OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled)`
+/// Emitted when the oracle relay feed pubkey is rotated.
+/// EVM equivalent: `PriceFeedUpdated(address indexed oldFeed, address indexed newFeed, uint8 feedDecimals)`
+/// (SVM uses Pyth `expo` rather than `decimals`, so the third field is omitted —
+/// `expo` is read fresh on every consumer call.)
 #[event]
-pub struct OracleUpdatedEvent {
+pub struct OracleRelayFeedUpdatedEvent {
     /// Caller of the update (`oracle_manager` authority).
     pub actor: Pubkey,
-    pub oracle: Pubkey,
-    pub staleness_threshold: i64,
+    pub old_feed: Pubkey,
+    pub new_feed: Pubkey,
+}
+
+/// Emitted when the relay staleness threshold is rotated.
+/// EVM equivalent: `StalenessThresholdUpdated(uint256 oldSeconds, uint256 newSeconds)`
+#[event]
+pub struct OracleRelayStalenessUpdatedEvent {
+    pub actor: Pubkey,
+    pub old_staleness: i64,
+    pub new_staleness: i64,
+}
+
+/// Emitted when the in-band peg window is rotated.
+/// EVM equivalent: `PriceBandUpdated(uint256 oldMin, uint256 oldMax, uint256 newMin, uint256 newMax)`
+#[event]
+pub struct OracleRelayBandUpdatedEvent {
+    pub actor: Pubkey,
+    pub old_min_e9: u64,
+    pub old_max_e9: u64,
+    pub new_min_e9: u64,
+    pub new_max_e9: u64,
 }
 
 /// Emitted when the accepted Pyth program owner pubkey is rotated.
-/// SVM-only — no direct EVM equivalent (EVM oracle owner is implicit in the
-/// AggregatorV3 interface address).
+/// SVM-only — no direct EVM equivalent (Chainlink AggregatorV3 owner is
+/// implicit in the feed address). Kept as the migration hook for future
+/// Pyth Solana Receiver support.
 #[event]
-pub struct PythProgramOwnerUpdatedEvent {
-    /// Caller of the update (`oracle_manager` authority).
+pub struct OracleRelayPythProgramOwnerUpdatedEvent {
     pub actor: Pubkey,
     pub old_pyth_program_owner: Pubkey,
     pub new_pyth_program_owner: Pubkey,

@@ -105,6 +105,54 @@ After running once per orphan PDA, remove the ix in a follow-up upgrade.
 
 ---
 
+## 2026-06-12 — Audit-prep PsmConfig seed rotation (PoR → peg circuit-breaker)
+
+**Cause.** The lite-psm `PsmConfig` storage layout changed in the audit-prep
+cycle: the Proof-of-Reserves fields (`oracle`, `staleness_threshold`,
+`pyth_program_owner`) were removed and the USDC peg circuit-breaker fields
+(`oracle_relay_feed`, `oracle_relay_pyth_program_owner`,
+`oracle_relay_staleness`, `oracle_relay_min_price_e9`,
+`oracle_relay_max_price_e9`) were added. Net layout delta: 658 → 674 bytes.
+
+Rationale for the change: okuMoney is a centralized US-regulated MSB.
+The operator is already responsible for backing USDC; the on-chain PoR
+check did not detect operator-side reserve fraud — only oracle
+malfunction. The redesigned relay is a strict USDC peg circuit-breaker
+that defends against the *one* threat the trust model doesn't cover
+(USDC depeg events), which matches the EVM-side cycle that landed first.
+
+The PSM config seed was rotated:
+
+| Seed (Rust constant)        | Old                 | New                 |
+| --------------------------- | ------------------- | ------------------- |
+| `lite_psm::PsmConfig::SEED` | `b"psm_config_v2"`  | `b"psm_config_v3"`  |
+
+The three other seeds (`redemption_queue_v2`, `oku_dollar_config_v2`,
+`usd_oku_mint_v2`) are unchanged because their storage layouts did not
+change. The oku-dollar vault's `OkuDollarConfig::psm_config` field
+already stores a literal pubkey, so the new `psm_config_v3` PDA will be
+referenced naturally on a fresh deploy without any client changes.
+
+### Newly orphaned accounts on devnet
+
+| Account | Address | Length | Rent (SOL) | Owner (now-orphan) |
+| ------- | ------- | -----: | ---------: | ------------------ |
+| `_v2` `PsmConfig` PDA | (per-network — see `deployments/devnet.json` snapshot tag `noBridge-mvp-deployed`) | 658 | ~0.00542 | lite_psm program |
+
+Cross-program impact: the existing `_v2`-era `OkuDollarConfig` PDA stores
+its `psm_config` field as the address of the old `_v2` `PsmConfig` PDA.
+A fresh deploy will re-initialise both PDAs against the new `_v3` PSM
+PDA; the legacy vault config is orphaned along with the legacy PSM
+config (already enumerated above).
+
+### Why we cannot close it today
+
+Same as the prior rotation entry: no `admin_close_legacy_pda` ix exists
+in lite-psm. Recoverable via the same one-shot ix pattern when telemetry
+justifies.
+
+---
+
 ## (Reserved for future deprecation entries)
 
 When the next round of breaking changes lands, append a new dated section above.

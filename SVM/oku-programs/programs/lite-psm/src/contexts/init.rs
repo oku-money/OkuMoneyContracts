@@ -7,6 +7,7 @@ use anchor_spl::{
     token_2022::Token2022,
     token_interface::{Mint as MintInterface, TokenAccount as TokenAccountInterface},
 };
+use oku_shared::TOKEN_DECIMALS;
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
@@ -24,12 +25,13 @@ pub struct Initialize<'info> {
 
     /// USDC mint (standard SPL).
     ///
-    /// Must have exactly 6 decimals on Solana — this matches the
-    /// `OkuMoney`/`usdOku` decimal model. EVM resolves a runtime
-    /// `usdcDecimalMultiplier` from `IERC20Metadata.decimals()`; SVM hardcodes
-    /// 6 decimals and asserts at init. See `EVM_VS_SVM.md`.
+    /// Must have exactly `TOKEN_DECIMALS` (= 6) decimals on Solana —
+    /// this matches the `OkuMoney`/`usdOku` decimal model. EVM resolves
+    /// a runtime `usdcDecimalMultiplier` from `IERC20Metadata.decimals()`;
+    /// SVM hardcodes the value via the shared constant and asserts at
+    /// init.
     #[account(
-        constraint = usdc_mint.decimals == 6 @ LitePsmError::InvalidUsdcDecimals
+        constraint = usdc_mint.decimals == TOKEN_DECIMALS @ LitePsmError::InvalidUsdcDecimals
     )]
     pub usdc_mint: Box<Account<'info, Mint>>,
 
@@ -41,15 +43,16 @@ pub struct Initialize<'info> {
     /// mint whose authority is a different program / multisig, silently
     /// breaking supply accounting.
     ///
-    /// Decimals are pinned at 6 — all PSM math (`oku_m_price`,
-    /// `oku_m_to_dollars`, yield distribution) assumes 6-decimal raw
-    /// amounts. EVM resolves this at runtime from `IERC20Metadata`; SVM
-    /// hardcodes the assumption and asserts it at init.
+    /// Decimals are pinned at `TOKEN_DECIMALS` (= 6) — all PSM math
+    /// (`oku_m_price`, `oku_m_to_dollars`, yield distribution) assumes
+    /// 6-decimal raw amounts. Cycle 4: replaced the literal `6` with
+    /// the shared constant so a future re-decimalisation can't drift
+    /// the assertion away from the assumed precision.
     #[account(
         mint::token_program = token_2022_program,
         mint::authority = config,
         mint::freeze_authority = config,
-        constraint = oku_money_mint.decimals == 6 @ LitePsmError::InvalidOkuMoneyDecimals,
+        constraint = oku_money_mint.decimals == TOKEN_DECIMALS @ LitePsmError::InvalidOkuMoneyDecimals,
     )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 

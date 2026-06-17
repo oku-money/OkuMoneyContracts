@@ -212,6 +212,10 @@ contract LitePSM is
         if (usdcAmount == 0) revert Errors.ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
+        // Cycle 4 (EVM-17): peg check hoisted above the math + transfers
+        // so the depeg-revert path doesn't waste compute on the
+        // dollar-conversion ladder.
+        _pegCheck($);
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
 
         uint256 usdcValue18 = MathLib.usdcToDollars(usdcAmount, decimalMultiplier);
@@ -228,8 +232,6 @@ contract LitePSM is
         if (roundTripUsdc + 1 < usdcAmount) {
             revert RoundTripDriftTooLarge(roundTripUsdc, usdcAmount);
         }
-
-        _pegCheck($);
 
         $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
         $.okuMoney.mint(msg.sender, okuMAmount);
@@ -299,6 +301,14 @@ contract LitePSM is
         _pegCheck($);
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
 
+        // Cycle 4 (EVM-05): reject sub-USDC-unit redemptions BEFORE
+        // doing any math. Without this guard, an input less than the
+        // decimal multiplier could in principle compute a non-zero
+        // `usdcAmount` whose slippage floor (`okuMFloor`) collapses
+        // to zero and trivially passes the post-conversion check.
+        // Minimum redemption granularity = 1 USDC-unit worth of OkuM.
+        if (okuMAmount < decimalMultiplier) revert AmountTooSmall();
+
         uint256 okuMMult = $.okuMoney.okuMMultiplier();
         uint256 dollarValue18 = MathLib.okuMToDollars(okuMAmount, okuMMult);
         usdcAmount = MathLib.dollarsToUsdc(dollarValue18, decimalMultiplier);
@@ -357,6 +367,8 @@ contract LitePSM is
         if (usdcAmount == 0) revert Errors.ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
+        // Cycle 4 (EVM-17): peg check hoisted above the math.
+        _pegCheck($);
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
 
         uint256 usdcValue18 = MathLib.usdcToDollars(usdcAmount, decimalMultiplier);
@@ -379,8 +391,6 @@ contract LitePSM is
         if (roundTripUsdc + 1 < usdcAmount) {
             revert RoundTripDriftTooLarge(roundTripUsdc, usdcAmount);
         }
-
-        _pegCheck($);
 
         $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
         $.okuMoney.mint(address(this), okuMAmount);
@@ -480,14 +490,23 @@ contract LitePSM is
     // ============ Oracle Relay Management ============
 
     /// @notice Wire (or unwire) the USDC peg circuit-breaker.
-    /// @dev `address(0)` disables the check — operational kill switch for incident
-    ///      response. When set to a non-zero address, every mint and redeem path
-    ///      calls `relay.checkUsdcPeg()` and reverts on depeg / unhealthy oracle data.
+    /// @dev `address(0)` disables the check — operational kill switch
+    ///      for incident response. When set to a non-zero address,
+    ///      every mint and redeem path calls `relay.checkUsdcPeg()`
+    ///      and reverts on depeg / unhealthy oracle data.
+    ///
+    ///      Cycle 4 (EVM-03): emits a dedicated `OracleRelayDisabled`
+    ///      event in addition to `OracleRelayUpdated` so monitoring
+    ///      tooling can distinguish a routine rotation from a
+    ///      kill-switch trip.
     function setOracleRelay(address newRelay) external onlyRole(Roles.PSM_ORACLE_MANAGER) {
         LitePSMStorage storage $ = _getLitePSMStorage();
         address oldRelay = address($.oracleRelay);
         $.oracleRelay = IOracleRelay(newRelay);
         emit OracleRelayUpdated(oldRelay, newRelay);
+        if (newRelay == address(0)) {
+            emit OracleRelayDisabled(msg.sender, oldRelay, block.number);
+        }
     }
 
     /// @dev Single peg-check call site reused by every mint/redeem path. When the

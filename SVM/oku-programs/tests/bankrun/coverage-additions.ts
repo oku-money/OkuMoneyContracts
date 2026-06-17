@@ -120,23 +120,24 @@ describe("WS3.2 PSM coverage additions", () => {
 
   it("WS3.2.b: lite-psm initialize fails if config PDA already exists", async () => {
     try {
+      // Cycle 4 (PSM-17): `initialize` takes an `InitializeParams` struct.
       await psm.methods
-        .initialize(
-          MAX_SUPPLY,
-          MINTER_ALLOWANCE,
-          warmMultisig.publicKey,
-          coldMultisig.publicKey,
-          warmMultisig.publicKey,
-          coldMultisig.publicKey,
-          orchestrator.publicKey,
-          orchestrator.publicKey,
-          coldMultisig.publicKey,
-          coldMultisig.publicKey,
-          coldMultisig.publicKey,
-          coldMultisig.publicKey,
-          orchestrator.publicKey,
-          SystemProgram.programId
-        )
+        .initialize({
+          maxSupply: MAX_SUPPLY,
+          minterAllowance: MINTER_ALLOWANCE,
+          pauser: warmMultisig.publicKey,
+          unpauser: coldMultisig.publicKey,
+          freezer: warmMultisig.publicKey,
+          unfreezer: coldMultisig.publicKey,
+          queueProcessor: orchestrator.publicKey,
+          bufferDepositor: orchestrator.publicKey,
+          bufferWithdrawer: coldMultisig.publicKey,
+          oracleManager: coldMultisig.publicKey,
+          capManager: coldMultisig.publicKey,
+          allowanceManager: coldMultisig.publicKey,
+          rebaser: orchestrator.publicKey,
+          oracleRelayPythProgramOwner: SystemProgram.programId,
+        })
         .accountsPartial({
           roleAdmin: payer.publicKey,
           config: configPda,

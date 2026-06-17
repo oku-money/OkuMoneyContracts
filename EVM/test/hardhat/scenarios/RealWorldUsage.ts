@@ -72,6 +72,8 @@ const DAY = 86400
 // ---------------------------------------------------------------------------
 
 const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"))
+// Cycle 4 (EVM-15): OKUM_BURNER split from OKUM_MINTER.
+const OKUM_BURNER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BURNER"))
 const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
 const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"))
 const OKUM_BLACKLISTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BLACKLISTER"))
@@ -153,7 +155,9 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
 
     // Roles
     await okuMoney.connect(admin).grantRole(OKUM_MINTER, await psm.getAddress())
+    await okuMoney.connect(admin).grantRole(OKUM_BURNER, await psm.getAddress())
     await okuMoney.connect(admin).grantRole(OKUM_MINTER, await queue.getAddress())
+    await okuMoney.connect(admin).grantRole(OKUM_BURNER, await queue.getAddress())
     await okuMoney.connect(admin).grantRole(OKUM_REBASER, adminAddr)
     await okuMoney.connect(admin).grantRole(OKUM_ALLOWANCE_MANAGER, adminAddr)
     await okuMoney.connect(admin).grantRole(OKUM_BLACKLISTER, adminAddr)

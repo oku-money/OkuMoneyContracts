@@ -31,6 +31,7 @@ describe("OkuMoney Scenarios", () => {
     let usdc: ReturnType<typeof IERC20__factory.connect>
 
     const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"))
+    const OKUM_BURNER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BURNER"))
     const QUEUE_PSM = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PSM"))
     const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"))
     const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
@@ -151,6 +152,7 @@ describe("OkuMoney Scenarios", () => {
         // but never exercised in this scenario suite.
 
         await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await psm.getAddress())
+        await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await psm.getAddress())
 
         // Grant RBAC roles to Frank (admin) for testing
         await okuMoney.connect(Frank).grantRole(OKUM_ALLOWANCE_MANAGER, frankAddr)
@@ -171,6 +173,7 @@ describe("OkuMoney Scenarios", () => {
         )
         await queue.connect(Frank).grantRole(QUEUE_PSM, await psm.getAddress())
         await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await queue.getAddress())
+        await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await queue.getAddress())
     })
 
     describe("User-to-User Transfers", () => {
@@ -331,6 +334,7 @@ describe("OkuMoney Scenarios", () => {
 
             // Grant PSM minter role with HIGH allowance (1B in 18 decimals)
             await freshOkuMoney.connect(Frank).grantRole(OKUM_MINTER, await freshPSM.getAddress())
+            await freshOkuMoney.connect(Frank).grantRole(OKUM_BURNER, await freshPSM.getAddress())
 
             // Grant RBAC roles to Frank for fresh contracts
             await freshOkuMoney.connect(Frank).grantRole(OKUM_ALLOWANCE_MANAGER, frankAddr)

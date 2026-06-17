@@ -144,23 +144,25 @@ export async function initializePsm(
     "FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH"
   );
 
+  // Cycle 4 (PSM-17): `initialize` now takes a single `InitializeParams`
+  // struct in place of the prior 15 positional pubkey args.
   await program.methods
-    .initialize(
-      MAX_SUPPLY,
-      MINTER_ALLOWANCE,
-      warmMultisig.publicKey,    // pauser
-      coldMultisig.publicKey,    // unpauser
-      warmMultisig.publicKey,    // freezer
-      coldMultisig.publicKey,    // unfreezer
-      psmOrchestrator.publicKey, // queueProcessor
-      psmOrchestrator.publicKey, // bufferDepositor
-      coldMultisig.publicKey,    // bufferWithdrawer
-      coldMultisig.publicKey,    // oracleManager
-      coldMultisig.publicKey,    // capManager
-      coldMultisig.publicKey,    // allowanceManager
-      psmOrchestrator.publicKey, // rebaser
-      PYTH_LEGACY_MAINNET,
-    )
+    .initialize({
+      maxSupply: MAX_SUPPLY,
+      minterAllowance: MINTER_ALLOWANCE,
+      pauser: warmMultisig.publicKey,
+      unpauser: coldMultisig.publicKey,
+      freezer: warmMultisig.publicKey,
+      unfreezer: coldMultisig.publicKey,
+      queueProcessor: psmOrchestrator.publicKey,
+      bufferDepositor: psmOrchestrator.publicKey,
+      bufferWithdrawer: coldMultisig.publicKey,
+      oracleManager: coldMultisig.publicKey,
+      capManager: coldMultisig.publicKey,
+      allowanceManager: coldMultisig.publicKey,
+      rebaser: psmOrchestrator.publicKey,
+      oracleRelayPythProgramOwner: PYTH_LEGACY_MAINNET,
+    })
     .accountsPartial({
       roleAdmin: payer.publicKey,
       config: configPda,
@@ -171,7 +173,6 @@ export async function initializePsm(
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
-      // F-04: rent sysvar removed from Initialize context (Anchor uses Rent::get() internally)
     })
     .rpc();
 

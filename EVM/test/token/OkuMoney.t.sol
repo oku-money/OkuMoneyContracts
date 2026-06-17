@@ -20,9 +20,19 @@ contract OkuMoneyTest is BaseTest {
     // ============ Events ============
 
     event Transfer(address indexed from, address indexed to, uint256 value);
-    event OkuMMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply);
+    // Cycle 4 (EVM-01): both events now include `indexed blockNumber`.
+    event OkuMMultiplierUpdated(
+        uint256 oldMultiplier,
+        uint256 newMultiplier,
+        uint256 totalSupply,
+        uint256 indexed blockNumber
+    );
     event YieldDistributed(
-        uint256 yieldAmount, uint256 oldPrice, uint256 newPrice, uint256 totalSupply
+        uint256 yieldAmount,
+        uint256 oldPrice,
+        uint256 newPrice,
+        uint256 totalSupply,
+        uint256 indexed blockNumber
     );
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
@@ -161,13 +171,17 @@ contract OkuMoneyTest is BaseTest {
 
     // ============ Burning Tests ============
 
-    function test_Burn_OnlyMinterRole() public {
+    function test_Burn_OnlyBurnerRole() public {
         _mintOkuMoney(user1, 100e18);
 
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_MINTER
+                // Cycle 4 (EVM-15): burn requires OKUM_BURNER (split
+                // from OKUM_MINTER). user1 holds neither.
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                OKUM_BURNER
             )
         );
         okuMoney.burn(50e18);
@@ -464,8 +478,10 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_SetOkuMMultiplier_EmitsEvent() public {
-        vm.expectEmit(false, false, false, true);
-        emit OkuMMultiplierUpdated(PRECISION, PRECISION * 2, okuMoney.totalSupply());
+        // Cycle 4 (EVM-01): event payload now includes the indexed
+        // `blockNumber` field for subgraph sharding.
+        vm.expectEmit(true, false, false, true);
+        emit OkuMMultiplierUpdated(PRECISION, PRECISION * 2, okuMoney.totalSupply(), block.number);
 
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
@@ -525,8 +541,10 @@ contract OkuMoneyTest is BaseTest {
         uint256 expectedOldPrice = PRECISION;
         uint256 expectedNewPrice = PRECISION + 0.1e18;
 
-        vm.expectEmit(false, false, false, true);
-        emit YieldDistributed(yieldAmount, expectedOldPrice, expectedNewPrice, supply);
+        // Cycle 4 (EVM-01): event payload now includes the indexed
+        // `blockNumber` field.
+        vm.expectEmit(true, false, false, true);
+        emit YieldDistributed(yieldAmount, expectedOldPrice, expectedNewPrice, supply, block.number);
 
         vm.prank(rebaser);
         okuMoney.distributeYield(yieldAmount);

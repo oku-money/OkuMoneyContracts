@@ -28,10 +28,9 @@
 //! | `AllowanceManager` | `OKUM_ALLOWANCE_MANAGER` | Cold Multisig - reset minter allowance |
 //! | `Rebaser` | `OKUM_REBASER` | Orchestrator - update OkuMoney price |
 //!
-//! Bridge roles (`BridgeAuthorityRole`) were removed in the noBridge
-//! refactor. v1 cross-chain transfers are mediated by the orchestrator
-//! holding the standard PSM roles above (`BufferDepositor` +
-//! `QueueProcessor` + `Rebaser`) — there is no separate bridge RBAC.
+//! v1 cross-chain transfers are mediated off-chain by an orchestrator
+//! holding `BufferDepositor` + `QueueProcessor` + `Rebaser`; there is
+//! no separate bridge RBAC.
 
 use anchor_lang::prelude::*;
 

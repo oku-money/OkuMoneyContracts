@@ -40,6 +40,23 @@ pub struct InitializeEvent {
     pub max_supply: u64,
 }
 
+/// Emitted when the redemption-queue PDA is created. Cycle 4 (PSM-22):
+/// added so the three-step init flow has full event coverage and
+/// indexers can observe each setup leg landing on-chain.
+#[event]
+pub struct QueueInitializedEvent {
+    pub redemption_queue: Pubkey,
+    /// Compile-time queue capacity (`RedemptionQueue::MAX_ENTRIES`).
+    pub max_entries: u32,
+}
+
+/// Emitted when the OkuMoney escrow vault is wired into config.
+/// Cycle 4 (PSM-22): added so the final init step is observable.
+#[event]
+pub struct EscrowInitializedEvent {
+    pub vault_oku_money: Pubkey,
+}
+
 /// Emitted when OkuMoney is minted via PSM.
 /// EVM equivalent: `MintNote(address indexed user, uint256 usdcAmount, uint256 okuMAmount, uint256 okuMMultiplier)`
 #[event]
@@ -55,6 +72,10 @@ pub struct MintEvent {
     /// OkuMoney price multiplier at time of mint (1e9 = $1.00)
     /// EVM equivalent: okuMMultiplier
     pub oku_m_price: u64,
+    /// OkuMoney supply AFTER the mint completed. Cycle 4 (PSM-23):
+    /// added for indexing parity with `YieldDistributed` /
+    /// `OkuMPriceUpdated` (both of which emit `total_supply`).
+    pub new_total_supply: u64,
 }
 
 /// Emitted when OkuMoney is redeemed for USDC (instant redemption).
@@ -72,6 +93,8 @@ pub struct RedeemEvent {
     /// OkuMoney price multiplier at time of redeem (1e9 = $1.00)
     /// EVM equivalent: okuMMultiplier
     pub oku_m_price: u64,
+    /// OkuMoney supply AFTER the burn completed. Cycle 4 (PSM-23).
+    pub new_total_supply: u64,
 }
 
 /// Emitted when a redemption is queued (insufficient buffer).
@@ -85,10 +108,8 @@ pub struct RedemptionQueuedEvent {
     /// Dollar value at time of queueing
     pub dollar_value: u64,
     /// Position in queue (0-indexed; absolute tail index, not ring slot).
-    /// Widened from u32 to u64 in Phase 13b alongside the
-    /// `RedemptionQueue::{head,tail}` widening.
     pub queue_position: u64,
-    /// Total queue length after this entry. Widened to u64 in Phase 13b.
+    /// Total queue length after this entry.
     pub queue_length: u64,
 }
 
@@ -106,6 +127,12 @@ pub struct RedemptionProcessedEvent {
     pub usdc_amount: u64,
     /// Time spent in queue (seconds)
     pub wait_time: i64,
+    /// OkuMoney supply AFTER the per-entry burn. Cycle 4 (PSM-23):
+    /// added so indexers can reconstruct supply trajectory through the
+    /// queue-drain phase without summing batch events. Note that
+    /// because `process_queue` emits one of these per processed entry,
+    /// the value decreases monotonically across the batch.
+    pub new_total_supply: u64,
 }
 
 /// Emitted when `process_queue` skips a previously-rescued entry.
@@ -113,7 +140,6 @@ pub struct RedemptionProcessedEvent {
 #[event]
 pub struct RedemptionSkippedEvent {
     /// Absolute queue index that was skipped (already cleared by rescue).
-    /// Widened from u32 to u64 in Phase 13b.
     pub queue_index: u64,
 }
 
@@ -128,12 +154,10 @@ pub struct BufferRefilledEvent {
     /// USDC vault balance after the batch completed (6 decimals).
     pub new_buffer_balance: u64,
     /// Number of entries that received a USDC payout in this batch.
-    /// Widened to u64 in Phase 13b (bounded by `process_queue`'s
-    /// `MAX_BATCH_ENTRIES = 50` in practice, but the type now matches the
-    /// queue's u64 indices).
+    /// Bounded by `RedemptionQueue::MAX_BATCH_ENTRIES` (= 50) per call;
+    /// u64 matches the queue's u64 indices.
     pub processed_count: u64,
     /// Number of cleared (rescued) entries skipped during traversal.
-    /// Widened to u64 in Phase 13b.
     pub skipped_count: u64,
 }
 
@@ -141,8 +165,7 @@ pub struct BufferRefilledEvent {
 /// EVM equivalent: `RedemptionRescued(uint256 indexed index, address originalUser, address recipient, uint256 okuMAmount, uint256 dollarValue)`
 #[event]
 pub struct RedemptionRescuedEvent {
-    /// Absolute index of the rescued entry. Widened from u32 to u64 in
-    /// Phase 13b.
+    /// Absolute index of the rescued entry.
     pub queue_index: u64,
     /// Original user who was owed redemption
     pub original_user: Pubkey,

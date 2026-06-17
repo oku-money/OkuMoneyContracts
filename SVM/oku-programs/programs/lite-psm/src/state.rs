@@ -8,24 +8,11 @@
 
 use anchor_lang::prelude::*;
 
-/// PSM configuration PDA
-/// Seeds: ["psm_config_v3"]
+/// PSM configuration PDA.
 ///
-/// noBridge migration (2026-06-05): seed rotated from `b"psm_config"` to
-/// `b"psm_config_v2"` to force a fresh PDA layout after the blacklist-exempt
-/// fields were removed.
-///
-/// Audit-prep migration (2026-06-12): seed rotated from `b"psm_config_v2"`
-/// to `b"psm_config_v3"` to force a fresh PDA after the Proof-of-Reserves
-/// fields (`oracle`, `staleness_threshold`, `pyth_program_owner`) were
-/// removed and replaced with the USDC peg circuit-breaker fields
-/// (`oracle_relay_*`). The trust model is centralized US-regulated MSB;
-/// PoR added no real protection on top of the operator's existing
-/// custody obligation, and reframing the oracle as a depeg circuit-
-/// breaker is the change the EVM side made first.
-///
-/// Both orphaned PDAs are tracked in
-/// `SVM/oku-programs/deployments/DEPRECATED.md`.
+/// Seeds: `["psm_config_v3"]`. Migration history (seed-rotation log) is
+/// tracked in `SVM/oku-programs/deployments/DEPRECATED.md`; the `_v3`
+/// suffix marks the post-oracle-relay layout.
 #[account]
 #[derive(InitSpace)]
 pub struct PsmConfig {
@@ -136,13 +123,6 @@ impl PsmConfig {
     /// `InitSpace`-derived field sum. Pinned to 674 bytes by the
     /// compile-time assertion below; if a reviewer changes a field's
     /// width the assertion fires.
-    ///
-    /// Layout evolution:
-    /// - 722 → 658 (noBridge phase C, removed two `blacklist_exempt_*` slots)
-    /// - 658 → 674 (audit-prep, PoR `(oracle, staleness, pyth_program_owner)`
-    ///   = 32+8+32 = 72 bytes removed; relay `(feed, pyth_program_owner,
-    ///   staleness, min_e9, max_e9)` = 32+32+8+8+8 = 88 bytes added.
-    ///   Net delta = +16: 658 + 16 = 674).
     pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
 
@@ -157,22 +137,18 @@ const _: () = assert!(PsmConfig::LEN == 674);
 
 /// Redemption queue PDA — zero-copy ring buffer.
 ///
-/// Phase 13b: moved from `#[account]` (Borsh-deserialized into a stack frame
-/// on every handler entry) to `#[account(zero_copy)]` (byte-indexed directly
-/// out of account data, no stack pressure). This is what unblocks the
-/// `MAX_ENTRIES` bump from 10 to 200; the previous cap was a BPF stack
-/// constraint, not an account-size constraint.
+/// Uses `#[account(zero_copy)]` rather than `#[account]` so the 200-entry
+/// array isn't Borsh-deserialised into a stack frame on every handler
+/// entry. `AccountLoader<RedemptionQueue>` is the canonical access path;
+/// `load_init` for `setup_redemption_queue`, `load` / `load_mut`
+/// elsewhere with the borrow strictly scoped before any CPI.
 ///
-/// **Why 200 and not 500.** The original Phase 13b plan targeted 500
-/// entries. Solana's runtime caps CPI-driven account allocations at
-/// `MAX_PERMITTED_DATA_INCREASE = 10_240` bytes per call — and Anchor's
-/// `init` constraint goes through a `system_program::create_account` CPI
-/// for the allocation. A 500-entry queue would be ~24 KB and require a
-/// multi-step `init + realloc + realloc` deploy flow. 200 entries fits
-/// into the 10 KB single-CPI budget with 600 bytes of headroom, keeps
-/// the single-step `setup_redemption_queue` flow, and is still a 20×
-/// improvement over the pre-Phase-13b cap of 10. See
-/// `SVM/EVM_VS_SVM.md` for the divergence note.
+/// **Why 200 entries.** Solana caps CPI-driven account allocations at
+/// `MAX_PERMITTED_DATA_INCREASE = 10_240` bytes per call (Anchor's `init`
+/// constraint goes through `system_program::create_account`). 200
+/// entries × 48 B = 9 600 B fits with 600 B of headroom; a single-step
+/// `setup_redemption_queue` would otherwise require a `init + realloc +
+/// realloc` flow. See `SVM/EVM_VS_SVM.md` for the EVM divergence note.
 ///
 /// Wire layout (`#[repr(C)]`, packed to native alignment):
 ///
@@ -199,7 +175,8 @@ const _: () = assert!(PsmConfig::LEN == 674);
 /// - `load_init()` only at the one `init`-constraint site
 ///   (`setup_redemption_queue`).
 ///
-/// Seeds: `["redemption_queue_v2"]` (rotated in noBridge migration; see PsmConfig).
+/// Seeds: `["redemption_queue_v2"]`. Rotation history tracked in
+/// `SVM/oku-programs/deployments/DEPRECATED.md`.
 #[account(zero_copy)]
 #[repr(C)]
 pub struct RedemptionQueue {
@@ -207,15 +184,12 @@ pub struct RedemptionQueue {
     pub bump: u8,
     /// Padding so `head` lands on an 8-byte boundary. Reserved; do not use.
     pub _pad0: [u8; 7],
-    /// Index of next entry to process (head of queue).
-    ///
-    /// Widened from `u32` (Phase 13a) to `u64` (Phase 13b). At 500 entries
-    /// the previous u32 head/tail would wrap after ~4.3B enqueues — fine
-    /// in practice but uncomfortably finite. `u64` is effectively unbounded
-    /// (~5.8e10 years at 100 enqueues/sec).
+    /// Index of next entry to process (head of queue). u64 so the
+    /// absolute counter is effectively unbounded
+    /// (~5.8 × 10¹⁰ years at 100 enqueues/sec); ring-buffer position
+    /// is `RedemptionQueue::ring_index(head)`.
     pub head: u64,
-    /// Index of next slot to write (tail of queue). See `head` for the u64
-    /// rationale.
+    /// Index of next slot to write (tail of queue).
     pub tail: u64,
     /// Running total of OkuMoney held in escrow (updated on
     /// enqueue/process/rescue).
@@ -228,18 +202,12 @@ pub struct RedemptionQueue {
 impl RedemptionQueue {
     pub const SEED: &'static [u8] = b"redemption_queue_v2";
 
-    /// Maximum queue entries: 200 (Phase 13b).
+    /// Maximum queue entries: 200.
     ///
-    /// Before Phase 13b this was 10 (BPF stack limit on the old
-    /// `Account<RedemptionQueue>` deserialization path). The zero-copy
-    /// migration eliminated the stack constraint; 200 is the largest
-    /// value that fits in a single-CPI `system_program::create_account`
-    /// allocation, given Solana's `MAX_PERMITTED_DATA_INCREASE = 10_240`
-    /// cap on CPI-driven allocations / reallocs.
-    ///
-    /// 200 entries × 48 bytes = 9 600 bytes of array. Account rent at
-    /// this size is ~0.067 SOL, paid once at `setup_redemption_queue`
-    /// time by the deployer keypair.
+    /// 200 × 48 B = 9 600 B of array, which fits inside Solana's
+    /// `MAX_PERMITTED_DATA_INCREASE = 10_240` CPI allocation cap with
+    /// 600 B headroom. Account rent at this size is ~0.067 SOL, paid
+    /// once at `setup_redemption_queue` by the deployer keypair.
     pub const MAX_ENTRIES: usize = 200;
 
     /// Account size (8-byte Anchor discriminator + struct size).
@@ -263,16 +231,37 @@ impl RedemptionQueue {
     pub fn pending_count(&self) -> u64 {
         self.tail.wrapping_sub(self.head)
     }
+
+    /// Per-batch processing cap. Larger values risk exceeding the
+    /// Solana CU budget on a single `process_queue` call; the previous
+    /// cap of 50 was chosen empirically.
+    ///
+    /// Cycle 4 (PSM-18): moved onto the impl block from a free `pub
+    /// const` in `instructions::psm`; lives next to `MAX_ENTRIES` so a
+    /// reviewer reading `state.rs` sees both queue-shape constants at
+    /// once.
+    pub const MAX_BATCH_ENTRIES: u32 = 50;
+
+    /// Cycle 4 (PSM-30): canonical helper for the `abs_index → ring
+    /// slot` modulo + cast pattern. Replaces ~4 inline
+    /// `#[allow(clippy::cast_possible_truncation)]` blocks across
+    /// the instruction module. Safe because the result is bounded by
+    /// `MAX_ENTRIES` (= 200), well below `usize::MAX` on BPF (64-bit
+    /// platform).
+    #[allow(clippy::arithmetic_side_effects, clippy::cast_possible_truncation)]
+    #[inline]
+    pub const fn ring_index(abs_index: u64) -> usize {
+        (abs_index % Self::MAX_ENTRIES as u64) as usize
+    }
 }
 
 /// A single entry in the redemption queue.
 ///
-/// `#[zero_copy]` (no `unsafe`) is Anchor's marker for inner types embedded
-/// in `#[account(zero_copy)]` accounts. It derives the bytemuck `Pod` +
-/// `Zeroable` impls and registers the type with Anchor's IDL build so the
-/// generated TS client can decode it. `#[repr(C)]` is required and has no
-/// implicit padding here (`Pubkey` is align-1, `u64`/`i64` align-8; natural
-/// C layout aligns correctly to 48 bytes — pinned by the assert below).
+/// `#[zero_copy]` is Anchor's marker for inner types embedded in
+/// `#[account(zero_copy)]` accounts — derives `Pod` + `Zeroable` and
+/// registers the type with the IDL. `#[repr(C)]` has no implicit
+/// padding here (`Pubkey` is align-1, `u64`/`i64` align-8); the layout
+/// is pinned to 48 bytes by the `assert!` below.
 #[zero_copy]
 #[derive(Default)]
 #[repr(C)]
@@ -301,10 +290,7 @@ const _: () = assert!(RedemptionQueue::LEN == 9_640);
 // 9_640 is comfortably under Solana's `MAX_PERMITTED_DATA_INCREASE = 10_240`
 // CPI-allocation cap, so `setup_redemption_queue` can allocate in one shot.
 
-// === Bridge state removed in noBridge refactor (phase B) ===
-//
-// `BridgeConfig`, `BridgeNonce`, `ProcessedRequest`, `RefundedRequest`,
-// `PendingRefund`, and the on-wire `BridgeRequest` packed message used to
-// live here. They have been deleted; v1 cross-chain transfers are handled
-// off-chain by an orchestrator calling `mint_oku_m` / `redeem_oku_m` on
-// each side. See the crate-level docs in `lib.rs` for the model.
+// Cycle 4 (PSM-20): historical "bridge state removed" note moved out
+// of source. See lib.rs for the orchestrator-bridge model and
+// `SVM/oku-programs/deployments/DEPRECATED.md` for the on-chain
+// removal history.

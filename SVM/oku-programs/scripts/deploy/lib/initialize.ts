@@ -110,23 +110,24 @@ export async function initializePsm(
   // post-deploy via `set_oracle_relay_feed` / `_staleness` / `_band`.
   logger.info('Calling initialize()...');
   try {
+    // Cycle 4 (PSM-17): `initialize` takes an `InitializeParams` struct.
     await program.methods
-      .initialize(
-        config.maxSupply,
-        config.minterAllowance,
-        authorities.psm.pauser,
-        authorities.psm.unpauser,
-        authorities.psm.freezer,
-        authorities.psm.unfreezer,
-        authorities.psm.queueProcessor,
-        authorities.psm.bufferDepositor,
-        authorities.psm.bufferWithdrawer,
-        authorities.psm.oracleManager,
-        authorities.psm.capManager,
-        authorities.psm.allowanceManager,
-        authorities.psm.rebaser,
-        networkConfig.oracleRelay.pythProgramOwner
-      )
+      .initialize({
+        maxSupply: config.maxSupply,
+        minterAllowance: config.minterAllowance,
+        pauser: authorities.psm.pauser,
+        unpauser: authorities.psm.unpauser,
+        freezer: authorities.psm.freezer,
+        unfreezer: authorities.psm.unfreezer,
+        queueProcessor: authorities.psm.queueProcessor,
+        bufferDepositor: authorities.psm.bufferDepositor,
+        bufferWithdrawer: authorities.psm.bufferWithdrawer,
+        oracleManager: authorities.psm.oracleManager,
+        capManager: authorities.psm.capManager,
+        allowanceManager: authorities.psm.allowanceManager,
+        rebaser: authorities.psm.rebaser,
+        oracleRelayPythProgramOwner: networkConfig.oracleRelay.pythProgramOwner,
+      })
       .accountsPartial({
         roleAdmin: provider.wallet.publicKey,
         config: psmConfig,

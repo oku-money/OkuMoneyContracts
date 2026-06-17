@@ -2,12 +2,16 @@
 //!
 //! Properties verified:
 //!
-//! 1. No panic for any (amount, multiplier) pair.
-//! 2. At multiplier == PRECISION ($1.00), dollar_value == amount (identity).
-//! 3. At multiplier > PRECISION, dollar_value > amount (yield > 0).
-//! 4. At multiplier < PRECISION (discounted), dollar_value < amount.
-//! 5. Result never exceeds amount when multiplier <= PRECISION (no inflation via small multiplier).
-//! 6. Consistency with mul_div_floor reference: result == mul_div_floor(amount, multiplier, PRECISION).
+//!   1. No panic for any (amount, multiplier) pair.
+//!   2. At `multiplier == PRECISION` ($1.00), `dollar_value == amount`
+//!      (identity).
+//!   3. At `multiplier > PRECISION` with non-zero amount,
+//!      `dollar_value >= amount` (floor-rounding can equalize at small
+//!      `amount` even when the multiplier indicates yield). Cycle 4
+//!      (S-25): header previously claimed `>` which is wrong on dust.
+//!   4. At `multiplier < PRECISION` (discounted), `dollar_value <= amount`.
+//!   5. Consistency with `mul_div_floor`: result ==
+//!      `mul_div_floor(amount, multiplier, PRECISION)`.
 //!
 //! Run: cargo +nightly fuzz run oku_m_to_dollars -- -max_total_time=60
 

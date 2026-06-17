@@ -48,6 +48,8 @@ abstract contract BaseTest is Test, Actors {
     bytes32 public constant OKUM_PAUSER = TestRoles.OKUM_PAUSER;
     bytes32 public constant OKUM_UNPAUSER = TestRoles.OKUM_UNPAUSER;
     bytes32 public constant OKUM_MINTER = TestRoles.OKUM_MINTER;
+    /// @dev Cycle 4 (EVM-15): burn-only role.
+    bytes32 public constant OKUM_BURNER = TestRoles.OKUM_BURNER;
     bytes32 public constant OKUM_REBASER = TestRoles.OKUM_REBASER;
     bytes32 public constant OKUM_BLACKLISTER = TestRoles.OKUM_BLACKLISTER;
     bytes32 public constant OKUM_UNBLACKLISTER = TestRoles.OKUM_UNBLACKLISTER;
@@ -130,10 +132,15 @@ abstract contract BaseTest is Test, Actors {
         vm.startPrank(admin);
 
         // OkuMoney roles - Granular RBAC (OKUM_ prefix)
+        // Cycle 4 (EVM-15): OKUM_BURNER split from OKUM_MINTER. Mint
+        // and burn now require explicit grants; tests grant both
+        // together because every minter in this setup is also a burner.
         okuMoney.grantRole(OKUM_PAUSER, pauser);
         okuMoney.grantRole(OKUM_UNPAUSER, unpauser);
         okuMoney.grantRole(OKUM_MINTER, minter);
+        okuMoney.grantRole(OKUM_BURNER, minter);
         okuMoney.grantRole(OKUM_MINTER, address(litePsm)); // PSM can mint
+        okuMoney.grantRole(OKUM_BURNER, address(litePsm)); // PSM can burn
         okuMoney.grantRole(OKUM_REBASER, rebaser);
         okuMoney.grantRole(OKUM_BLACKLISTER, blacklister);
         okuMoney.grantRole(OKUM_UNBLACKLISTER, unblacklister);
@@ -161,8 +168,10 @@ abstract contract BaseTest is Test, Actors {
         redemptionQueue.grantRole(QUEUE_PSM, address(litePsm));
         redemptionQueue.grantRole(QUEUE_RESCUER, queueRescuer);
 
-        // Grant RedemptionQueue MINTER role on OkuMoney (needed for self-burn in processQueue)
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        // Grant RedemptionQueue burn role on OkuMoney (self-burn in
+        // processQueue). Cycle 4: only OKUM_BURNER is required for the
+        // burn path now — minting is not needed.
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         // Wire the always-pass MockOracleRelay so mint/redeem/processQueue exercise the
         // peg-check call site without tripping. Tests that want the depeg-revert branch

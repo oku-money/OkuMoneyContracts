@@ -44,6 +44,7 @@ use crate::constants::MAX_FEED_EXPO_MAGNITUDE;
 use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
+use oku_shared::{BASIS_POINTS, MAX_ORACLE_CONFIDENCE_BPS};
 
 // ---- Pyth V2 PriceAccount byte offsets ----
 //
@@ -66,6 +67,10 @@ const PYTH_EXPO_OFFSET: usize = 20;
 const PYTH_TIMESTAMP_OFFSET: usize = 96;
 /// Aggregate price (`agg.price: i64`, scaled by `10^expo`).
 const PYTH_PRICE_OFFSET: usize = 208;
+/// Aggregate confidence interval (`agg.conf: u64`, in the same units as
+/// `agg.price`). Sits immediately after `agg.price` in the canonical
+/// `PriceInfo` struct.
+const PYTH_CONF_OFFSET: usize = 216;
 /// Aggregate status (`agg.status: u8`; `1 == Trading`).
 const PYTH_STATUS_OFFSET: usize = 224;
 /// Minimum data length we require — covers through `agg.pub_slot` end
@@ -167,6 +172,11 @@ pub fn get_usdc_price<'info>(
             .try_into()
             .map_err(|_| LitePsmError::InvalidOracleResponse)?,
     );
+    let conf = u64::from_le_bytes(
+        data[PYTH_CONF_OFFSET..PYTH_CONF_OFFSET + 8]
+            .try_into()
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?,
+    );
     let status = data[PYTH_STATUS_OFFSET];
     let publish_time = i64::from_le_bytes(
         data[PYTH_TIMESTAMP_OFFSET..PYTH_TIMESTAMP_OFFSET + 8]
@@ -196,7 +206,33 @@ pub fn get_usdc_price<'info>(
     //    for a USDC/USD feed and treated as malformed.
     require!(price > 0, LitePsmError::NonPositiveAnswer);
 
-    // 4. Normalize raw `(price, expo)` to 1e9 precision (matching SVM's
+    // 4. Confidence interval. Reject rounds where the publisher set's
+    //    stated uncertainty (`conf`) exceeds
+    //    `MAX_ORACLE_CONFIDENCE_BPS / 10_000` of the price. The standard
+    //    Pyth integration guidance (every Solana DeFi protocol that
+    //    consumes Pyth — Marginfi, Drift, Kamino — does this) protects
+    //    against publisher-degradation rounds whose `price` is in-band
+    //    but whose `conf` is unbounded.
+    //
+    //    Use cross-multiplication (`conf * BASIS_POINTS > price * bps`)
+    //    rather than `conf / price > bps / BASIS_POINTS` to avoid the
+    //    truncation in the divide direction. `price` is non-negative
+    //    (checked above) and the cast to u128 keeps both products from
+    //    overflowing for any pair of i64 / u64 values.
+    {
+        let price_u128 = u128::try_from(price)
+            .map_err(|_| LitePsmError::InvalidOracleResponse)?;
+        let conf_u128 = conf as u128;
+        let lhs = conf_u128
+            .checked_mul(BASIS_POINTS as u128)
+            .ok_or(LitePsmError::Overflow)?;
+        let rhs = price_u128
+            .checked_mul(MAX_ORACLE_CONFIDENCE_BPS as u128)
+            .ok_or(LitePsmError::Overflow)?;
+        require!(lhs <= rhs, LitePsmError::OracleConfidenceTooWide);
+    }
+
+    // 5. Normalize raw `(price, expo)` to 1e9 precision (matching SVM's
     //    `oku_m_price` / `usd_multiplier` scale).
     //
     //    Real value = price * 10^expo.
@@ -248,7 +284,7 @@ pub fn get_usdc_price<'info>(
 
     let price_e9 = u64::try_from(price_e9_u128).map_err(|_| LitePsmError::Overflow)?;
 
-    // 5. Band check. Both bounds inclusive — same semantics as EVM's
+    // 6. Band check. Both bounds inclusive — same semantics as EVM's
     //    `priceE18 < min || priceE18 > max` revert.
     require!(
         price_e9 >= config.oracle_relay_min_price_e9

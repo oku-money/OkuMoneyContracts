@@ -14,32 +14,24 @@
 //! Inline `// see EVM_VS_SVM.md` comments throughout this crate point to
 //! specific divergence rows in that document.
 
-// F-17: Zero unsafe code in this crate (confirmed by cargo-geiger). Forbid
-// future accidental introduction.
+// Zero unsafe code (confirmed by cargo-geiger); forbid accidental
+// introduction.
 #![forbid(unsafe_code)]
-// F-13: The Anchor #[program] macro generates a dispatch wrapper for
-// initialize() that inherits its 15-argument signature. Clippy fires on the
-// macro-expansion site, which cannot be suppressed externally. Suppressed
-// crate-wide — this is the only 15-arg function and it is intentional.
-#![allow(clippy::too_many_arguments)]
-// F-02 (audit finding): The solana-lints `arbitrary_cpi` lint flags CPI call
-// sites in this crate because program ID is obtained at runtime from typed
-// account fields rather than a hardcoded literal.
-//
-// After review (self-audit 2026-05-27), every CPI target is constrained by
-// Anchor's typed `Program<'info, T>` account system, which validates
-// `account.key == T::id()` at deserialization time. Targeted `#![allow]`
-// annotations are also present in each instruction module that contains CPIs.
-// Confirmed false positives — suppressed here for `cargo dylint` cleanliness.
+// Cycle 4 (PSM-17): the crate-wide
+// `#![allow(clippy::too_many_arguments)]` is gone. `initialize`'s
+// 15-pubkey signature collapsed into `InitializeParams`; no other
+// instruction in the crate has more than 3 arguments.
+// solana-lints `arbitrary_cpi` flags every CPI here because program ID
+// is obtained at runtime from typed account fields. Every CPI target
+// is constrained by Anchor's typed `Program<'info, T>` (which validates
+// `account.key == T::id()` at deserialization), so all hits are false
+// positives. See `audit/SVM/ACCEPTED_RISKS.md` for the per-call review.
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
-// Anchor's `#[program]` macro expands into dispatch glue with a pattern that
-// trips clippy's `diverging_sub_expression` lint. Suppressed crate-wide
-// because we can't annotate inside macro-expanded code and the warning
-// fires identically on every program in the workspace.
+// Anchor `#[program]` dispatch glue trips
+// `clippy::diverging_sub_expression`; can't annotate inside macro output.
 #![allow(clippy::diverging_sub_expression)]
-// `target_os = "solana"` is emitted by `solana-program-entrypoint`'s panic
-// handler macro. The check-cfg machinery doesn't know about the BPF target.
-// Suppressed crate-wide — the cfg is intrinsic to building for Solana.
+// `target_os = "solana"` is emitted by `solana-program-entrypoint`'s
+// panic handler; check-cfg doesn't know about the BPF target.
 #![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
@@ -76,43 +68,11 @@ pub mod lite_psm {
 
     // ===== Initialization (3-step) =====
 
-    // F-13: 15 args maps one-to-one to independent on-chain authority roles.
-    // Grouping into a struct would change the Anchor IDL wire format.
-    #[allow(clippy::too_many_arguments)]
     pub fn initialize(
         ctx: Context<Initialize>,
-        max_supply: u64,
-        minter_allowance: u64,
-        pauser: Pubkey,
-        unpauser: Pubkey,
-        freezer: Pubkey,
-        unfreezer: Pubkey,
-        queue_processor: Pubkey,
-        buffer_depositor: Pubkey,
-        buffer_withdrawer: Pubkey,
-        oracle_manager: Pubkey,
-        cap_manager: Pubkey,
-        allowance_manager: Pubkey,
-        rebaser: Pubkey,
-        oracle_relay_pyth_program_owner: Pubkey,
+        params: instructions::init::InitializeParams,
     ) -> Result<()> {
-        instructions::init::initialize(
-            ctx,
-            max_supply,
-            minter_allowance,
-            pauser,
-            unpauser,
-            freezer,
-            unfreezer,
-            queue_processor,
-            buffer_depositor,
-            buffer_withdrawer,
-            oracle_manager,
-            cap_manager,
-            allowance_manager,
-            rebaser,
-            oracle_relay_pyth_program_owner,
-        )
+        instructions::init::initialize(ctx, params)
     }
 
     pub fn setup_redemption_queue(ctx: Context<SetupRedemptionQueue>) -> Result<()> {
@@ -155,11 +115,25 @@ pub mod lite_psm {
     /// Rescue a stuck queue entry — returns escrowed OkuMoney to recipient.
     /// Only queue_processor can call (matches EVM's rescueQueueEntry).
     ///
-    /// `queue_index` widened from u32 → u64 in Phase 13b alongside the
-    /// `RedemptionQueue::{head,tail}` widening. Indexer / orchestrator code
-    /// must pass the index as a `BN`/bigint on the TS side.
+    /// `queue_index` is u64 — indexer / orchestrator code must pass
+    /// the index as a `BN`/bigint on the TS side.
     pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u64) -> Result<()> {
         instructions::psm::rescue_queue_entry(ctx, queue_index)
+    }
+
+    /// Permissionless self-rescue (cycle 4 / PSM-06).
+    ///
+    /// Any user can reclaim their own queued OkuMoney without operator
+    /// involvement, unblocking the head-pin DoS where a frozen ATA on
+    /// the head entry stalls every subsequent `process_queue` call.
+    /// Signer must be the entry's original queued user; recipient ATA
+    /// must be owned by that user (constraints enforced on the
+    /// `UserSelfRescueQueueEntry` context).
+    pub fn user_self_rescue_queue_entry(
+        ctx: Context<UserSelfRescueQueueEntry>,
+        queue_index: u64,
+    ) -> Result<()> {
+        instructions::psm::user_self_rescue_queue_entry(ctx, queue_index)
     }
 
     // ===== PSM Admin =====

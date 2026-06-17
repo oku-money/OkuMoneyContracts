@@ -144,6 +144,11 @@ contract OkuMoney is
         _grantRole(Roles.OKUM_PAUSER, _admin);
         _grantRole(Roles.OKUM_UNPAUSER, _admin);
         _grantRole(Roles.OKUM_MINTER, _admin);
+        // Cycle 4 (EVM-15): grant both mint and burn to `_admin` at
+        // init so the cycle-3 deploy story (single admin grants every
+        // role, then redistributes) keeps working. Operational scripts
+        // grant both to the LitePSM proxy after deploy.
+        _grantRole(Roles.OKUM_BURNER, _admin);
         _grantRole(Roles.OKUM_REBASER, _admin);
         _grantRole(Roles.OKUM_BLACKLISTER, _admin);
         _grantRole(Roles.OKUM_UNBLACKLISTER, _admin);
@@ -225,7 +230,7 @@ contract OkuMoney is
         if (newMultiplier > Constants.MAX_MULTIPLIER) revert MultiplierTooHigh();
         $.lastYieldDistributionBlock = block.number;
         $.okuMMultiplier = newMultiplier;
-        emit OkuMMultiplierUpdated(currentMultiplier, newMultiplier, totalSupply());
+        emit OkuMMultiplierUpdated(currentMultiplier, newMultiplier, totalSupply(), block.number);
     }
 
     /// @notice Distribute realized dollar yield across all token holders
@@ -252,7 +257,7 @@ contract OkuMoney is
         if (newMultiplier > Constants.MAX_MULTIPLIER) revert MultiplierTooHigh();
         $.lastYieldDistributionBlock = block.number;
         $.okuMMultiplier = newMultiplier;
-        emit YieldDistributed(yieldAmount, oldMultiplier, newMultiplier, supply);
+        emit YieldDistributed(yieldAmount, oldMultiplier, newMultiplier, supply, block.number);
     }
 
     // ============ ERC20Permit Override (Blacklist Check) ============
@@ -311,15 +316,25 @@ contract OkuMoney is
         if (totalSupply() + amount > $.maxSupply) revert ExceedsSupplyCap();
         if ($.minterAllowance[msg.sender] < amount) revert ExceedsAllowance();
 
-        unchecked {
-            $.minterAllowance[msg.sender] -= amount;
-        }
+        // Cycle 4 (EVM-08): the `unchecked` block previously here was
+        // a micro-optimization on top of the explicit bounds check just
+        // above. The savings are ~30 gas and the cognitive cost of an
+        // `unchecked` block for an auditor is much higher. Solidity
+        // 0.8.28's underflow protection makes this a no-op safety win.
+        $.minterAllowance[msg.sender] -= amount;
 
         _mint(to, amount);
     }
 
     /// @notice Burn raw tokens from caller. Allowed while paused.
-    function burn(uint256 amount) external onlyRole(Roles.OKUM_MINTER) {
+    /// @dev Cycle 4 (EVM-15): gated on `OKUM_BURNER` (split from
+    ///      `OKUM_MINTER`). Grant both to LitePSM at deploy time;
+    ///      separating the two lets a future upgrade revoke burn
+    ///      privileges without touching mint plumbing. Initialise
+    ///      grants both roles on the same address (`_admin`) so
+    ///      pre-cycle-4 deploys remain compatible after a one-time
+    ///      grant of `OKUM_BURNER` to the PSM proxy.
+    function burn(uint256 amount) external onlyRole(Roles.OKUM_BURNER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         if ($.isBlacklisted[msg.sender]) revert SenderBlacklisted();
         _burn(msg.sender, amount);

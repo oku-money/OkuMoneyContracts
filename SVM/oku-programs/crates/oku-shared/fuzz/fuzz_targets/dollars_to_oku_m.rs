@@ -61,13 +61,28 @@ fuzz_target!(|data: (u64, u64)| {
                 "dollars_to_oku_m round-trip: got more dollars back than input (dollar_value={dollar_value}, multiplier={multiplier}, oku_m={oku_m}, dollars_back={dollars_back})"
             );
 
-            // Property 5: precision bound
-            // The round-trip loss in dollar units is bounded by:
-            //   ceil(multiplier / PRECISION) + 1
-            // This accounts for floor-rounding in both the dollars->oku_m
-            // division (loses up to 1 oku_m unit = multiplier/PRECISION dollars)
-            // and the oku_m->dollars division (loses up to 1 dollar unit).
-            let max_loss = (multiplier / PRECISION) + 2; // generous bound
+            // Property 5: precision bound (smoke-test, intentionally loose).
+            //
+            // The round-trip loss in dollar units is bounded by
+            // `ceil(multiplier / PRECISION) + 1`. The `+1` accounts for
+            // floor-rounding in the `dollars → oku_m` division; the
+            // `ceil` term accounts for the floor in the
+            // `oku_m → dollars` direction whose unit is
+            // `multiplier / PRECISION` dollars.
+            //
+            // We use a deliberately loose bound (`+2` slack) to avoid
+            // false positives in the `multiplier < PRECISION` regime
+            // where the floor asymmetry is non-trivial; this catches
+            // order-of-magnitude regressions but not single-unit drift.
+            // For single-unit-tight verification see the Kani
+            // `proof_dollars_to_oku_m_round_trip_monotone` proof which
+            // pins `dollars_back <= dollar_value` symbolically.
+            //
+            // Cycle 4 (S-24, harness-overflow defense): `saturating_add`
+            // mirrors the `vault_share_round_trip` cycle-3 fix so a
+            // future `multiplier` near `u64::MAX` can't crash the
+            // harness on `+ 2`.
+            let max_loss = (multiplier / PRECISION).saturating_add(2);
             let actual_loss = dollar_value.saturating_sub(dollars_back);
             assert!(
                 actual_loss <= max_loss,

@@ -5,17 +5,21 @@
 //! enqueue when buffer is depleted, drain queue from a separate USDC top-up.
 //! Taken from https://github.com/makerdao/dss-lite-psm/blob/master/src/DssLitePsm.sol
 
-// F-02: All CPI targets in this module are constrained by Anchor's typed
-// `Program<'info, T>` accounts (Token, Token2022) which validate program ID at
-// deserialization. The `arbitrary_cpi` warning is a false positive here.
+// All CPI targets in this module are constrained by Anchor's typed
+// `Program<'info, T>` accounts (Token, Token2022) which validate program
+// ID at deserialization. The `arbitrary_cpi` warning is a false
+// positive here (see `audit/SVM/ACCEPTED_RISKS.md`).
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
 
 use crate::contexts::{
-    DepositBuffer, MintOkuM, ProcessQueue, RedeemOkuM, RescueQueueEntry, WithdrawBuffer,
+    DepositBuffer, MintOkuM, ProcessQueue, RedeemOkuM, RescueQueueEntry,
+    UserSelfRescueQueueEntry, WithdrawBuffer,
 };
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::{check_usdc_peg, check_yield_lock, dollars_to_oku_m, oku_m_to_dollars};
+use crate::helpers::{
+    check_usdc_peg, check_yield_lock, dollars_to_oku_m, oku_m_to_dollars, oku_m_to_dollars_ceil,
+};
 use crate::state::{PsmConfig, QueueEntry, RedemptionQueue};
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
@@ -140,12 +144,19 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     // Calculate dollar value for event
     let dollar_value = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
 
+    // Cycle 4 (PSM-23): emit post-mint supply for indexer reconciliation.
+    // `reload()` refreshes the mint account's `supply` field after the
+    // mint_to CPI; without it we'd read the pre-mint cached value.
+    ctx.accounts.oku_money_mint.reload()?;
+    let new_total_supply = ctx.accounts.oku_money_mint.supply;
+
     emit!(MintEvent {
         user: user_key,
         usdc_amount,
         oku_m_amount,
         dollar_value,
         oku_m_price,
+        new_total_supply,
     });
 
     Ok(())
@@ -198,13 +209,14 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
     require!(usdc_amount > 0, LitePsmError::OutputBelowMinimum);
 
     // Pre-check user balance to surface a custom error instead of the
-    // opaque SPL insufficient-balance error. EVM parity: OkuMoney.burn's
-    // internal check emits ERC-20 InsufficientBalance; SVM wraps the
-    // equivalent as LitePsmError::InsufficientBuffer (the closest semantic
-    // equivalent for a redemption that cannot proceed).
+    // opaque SPL insufficient-balance error. Cycle 4 (PSM-11): emits
+    // `InsufficientUserBalance` (was misleadingly `InsufficientBuffer`).
     {
         let user_balance = ctx.accounts.user_oku_money_ata.amount;
-        require!(user_balance >= oku_m_amount, LitePsmError::InsufficientBuffer);
+        require!(
+            user_balance >= oku_m_amount,
+            LitePsmError::InsufficientUserBalance
+        );
     }
 
     // Check if buffer is sufficient for instant redemption
@@ -241,12 +253,20 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
             usdc_amount,
         )?;
 
+        // Cycle 4 (PSM-23): emit post-burn supply for indexer
+        // reconciliation. The OkuMoney burn happened earlier in this
+        // branch (see the `token_interface::burn` call above this
+        // transfer); `reload()` refreshes the cached supply.
+        ctx.accounts.oku_money_mint.reload()?;
+        let new_total_supply = ctx.accounts.oku_money_mint.supply;
+
         emit!(RedeemEvent {
             user: ctx.accounts.user.key(),
             oku_m_amount,
             usdc_amount,
             dollar_value: usdc_amount, // USDC is dollar-denominated
             oku_m_price,
+            new_total_supply,
         });
     } else {
         // Queue redemption path:
@@ -291,16 +311,16 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
                 timestamp: clock.unix_timestamp,
             };
 
-            // Insert at tail position (ring buffer: modulo into fixed array).
-            // F-11: modulo safe (u64 % u64). The u64→usize cast is safe on BPF
-            // (64-bit) because the result is always < MAX_ENTRIES (200).
-            #[allow(clippy::arithmetic_side_effects)]
-            let position: u64 = queue.tail % RedemptionQueue::MAX_ENTRIES as u64;
-            // F-11: u64→usize safe on BPF (64-bit); result < MAX_ENTRIES (200)
-            #[allow(clippy::cast_possible_truncation)]
-            let pos_idx = position as usize;
+            // Insert at tail position (ring buffer).
+            let position = queue.tail; // absolute index for the event
+            let pos_idx = RedemptionQueue::ring_index(position);
             queue.entries[pos_idx] = entry;
-            queue.tail = queue.tail.wrapping_add(1);
+            // Cycle 4 (PSM-16): `checked_add(1)?` rather than
+            // `wrapping_add(1)` even though u64 wrap is mathematically
+            // unreachable (`~5.8e10` years at 100 enqueues/sec). The
+            // checked variant makes the no-wrap invariant explicit
+            // for auditors.
+            queue.tail = queue.tail.checked_add(1).ok_or(LitePsmError::Overflow)?;
 
             // Update running counter
             queue.total_queued_oku_m = queue
@@ -337,8 +357,8 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
 /// pause, the operator should use `rescue_queue_entry` to return OkuM to
 /// users and unpause before restarting the drain.
 ///
-/// NOTE (Phase 10): Deliberately does NOT call `check_yield_lock`. This
-/// matches EVM `RedemptionQueue.processQueue`'s lack of the
+/// Deliberately does NOT call `check_yield_lock`. This matches EVM
+/// `RedemptionQueue.processQueue`'s lack of the
 /// `whenYieldNotDistributing` modifier. The reasoning:
 ///
 /// - Queued entries store the raw `oku_m_amount` (token count), not the
@@ -362,7 +382,7 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
 /// load + store, empirically ~18–22 K CU/entry. 50 entries × 22 K = 1.1 M CU,
 /// well under the 1.4 M raised cap orchestrators set on this instruction.
 ///
-/// At Phase 13b's 200-entry queue cap, this static ceiling also bounds the
+/// At the 200-entry queue cap, this static ceiling also bounds the
 /// `remaining_accounts` slice SDK consumers must build, giving a predictable
 /// worst-case account-list size.
 ///
@@ -371,7 +391,13 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
 /// syscall`) that is currently inactive on devnet — see the comment at the
 /// top of this file. The static cap alone is sufficient for the CU-bound
 /// safety property; the dynamic check was strict belt-and-suspenders.
-pub const MAX_BATCH_ENTRIES: u32 = 50;
+///
+/// Cycle 4 (PSM-18): the cap now lives on `RedemptionQueue::MAX_BATCH_ENTRIES`
+/// next to `MAX_ENTRIES`. This local re-export is preserved so callers in
+/// this module can write `MAX_BATCH_ENTRIES` without the type prefix.
+pub use crate::state::RedemptionQueue as _RingQueue;
+#[allow(dead_code)]
+const MAX_BATCH_ENTRIES: u32 = _RingQueue::MAX_BATCH_ENTRIES;
 
 pub fn process_queue<'info>(
     ctx: Context<'info, ProcessQueue<'info>>,
@@ -382,8 +408,9 @@ pub fn process_queue<'info>(
 
     let bump = ctx.accounts.config.bump;
 
-    // Hard-cap the batch size. See `MAX_BATCH_ENTRIES` above for rationale.
-    let effective_max = max_entries.min(MAX_BATCH_ENTRIES);
+    // Hard-cap the batch size. See `RedemptionQueue::MAX_BATCH_ENTRIES`
+    // for rationale.
+    let effective_max = max_entries.min(RedemptionQueue::MAX_BATCH_ENTRIES);
 
     // Initial empty check (scoped borrow).
     {
@@ -441,9 +468,7 @@ pub fn process_queue<'info>(
             if queue.is_empty() {
                 break 'batch;
             }
-            // F-11: modulo safe; result < MAX_ENTRIES (200) so u64→usize is safe on BPF.
-            #[allow(clippy::arithmetic_side_effects, clippy::cast_possible_truncation)]
-            let head_idx = (queue.head % RedemptionQueue::MAX_ENTRIES as u64) as usize;
+            let head_idx = RedemptionQueue::ring_index(queue.head);
             let entry = &queue.entries[head_idx];
             (queue.head, entry.user, entry.oku_m_amount, entry.timestamp)
         };
@@ -458,12 +483,12 @@ pub fn process_queue<'info>(
         if entry_user == Pubkey::default() {
             {
                 let mut queue = ctx.accounts.redemption_queue.load_mut()?;
-                queue.head = queue.head.wrapping_add(1);
+                queue.head = queue.head.checked_add(1).ok_or(LitePsmError::Overflow)?;
             }
             emit!(RedemptionSkippedEvent {
                 queue_index: head_now,
             });
-            // F-11: counter bounded by MAX_ENTRIES (200) per batch — fits in u64.
+            // Counter bounded by MAX_ENTRIES (200) per batch — fits in u64.
             #[allow(clippy::arithmetic_side_effects)]
             {
                 processed += 1;
@@ -495,15 +520,25 @@ pub fn process_queue<'info>(
         // If validation fails (wrong owner/mint OR frozen ATA), we soft-skip:
         // emit RedemptionSkippedEvent and break (not revert). This prevents a
         // single USDC-blacklisted/frozen recipient from reverting the whole
-        // batch. The entry stays at head — it will be skipped on every future
-        // process_queue call until an operator calls `rescue_queue_entry` to
-        // return OkuM to the user and clear the slot.
+        // batch.
         //
         // SVM FIFO semantics: because the queue processes from head forward,
-        // a stuck head entry blocks all subsequent entries in the same batch.
-        // This differs from the EVM implementation which supports random-access
-        // [startIndex, endIndex] ranges. Use `rescue_queue_entry` before
-        // calling `process_queue` to unblock a frozen-ATA head entry.
+        // a stuck head entry blocks every subsequent entry in the same
+        // batch. This differs from the EVM implementation which supports
+        // random-access `[startIndex, endIndex]` ranges. Two unblock paths
+        // exist post-cycle-4 (PSM-06):
+        //
+        //   * **Operator path** — `queue_processor` calls
+        //     `rescue_queue_entry`, returning OkuM to any recipient.
+        //     Same flow EVM uses.
+        //   * **User path** — the affected user calls
+        //     `user_self_rescue_queue_entry` from any wallet they
+        //     control (thawed ATA on the same mint), unblocking
+        //     themselves without operator action. This eliminates the
+        //     head-pin DoS finding from the audit triage.
+        //
+        // Either path clears the slot and the next `process_queue` call
+        // proceeds through the rest of the queue.
         {
             let ata_ok = match recipient_usdc_ata.try_borrow_data() {
                 Ok(account_data) => match SplTokenAccount::unpack(&account_data) {
@@ -560,7 +595,7 @@ pub fn process_queue<'info>(
         // Advance head + decrement counter under a scoped write borrow.
         {
             let mut queue = ctx.accounts.redemption_queue.load_mut()?;
-            queue.head = queue.head.wrapping_add(1);
+            queue.head = queue.head.checked_add(1).ok_or(LitePsmError::Overflow)?;
             // checked_sub catches accounting bugs early rather than silently clamping.
             queue.total_queued_oku_m = queue
                 .total_queued_oku_m
@@ -568,7 +603,7 @@ pub fn process_queue<'info>(
                 .ok_or(LitePsmError::Overflow)?;
         }
 
-        // F-11: counters bounded by MAX_ENTRIES (200) per batch — fits in u64.
+        // Counters bounded by MAX_ENTRIES (200) per batch — fits in u64.
         #[allow(clippy::arithmetic_side_effects)]
         {
             processed += 1;
@@ -581,12 +616,20 @@ pub fn process_queue<'info>(
         // Calculate wait time
         let wait_time = clock.unix_timestamp.saturating_sub(entry_ts);
 
+        // Cycle 4 (PSM-23): refresh the mint's `supply` field so the
+        // event carries the post-burn value. `reload()` re-reads from
+        // the underlying AccountInfo; safe to call here because no
+        // zero-copy queue borrow is held at this point in the loop.
+        ctx.accounts.oku_money_mint.reload()?;
+        let new_total_supply = ctx.accounts.oku_money_mint.supply;
+
         emit!(RedemptionProcessedEvent {
             user: entry_user,
             oku_m_amount: entry_oku_m,
             dollar_value,
             usdc_amount,
             wait_time,
+            new_total_supply,
         });
     }
 
@@ -656,16 +699,20 @@ pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> 
 
     // Calculate reserved USDC from running counter (O(1) instead of iterating).
     //
-    // F-05 (rounding note): This computes floor(total_queued_oku_m * price / PRECISION).
-    // When `process_queue` later pays each entry individually, it also floors each
-    // per-entry calculation. Since floor(a+b) <= floor(a) + floor(b), the sum of
-    // individual payouts can be at most `queue_depth` lamports *more* than this single
-    // floor calculation. In practice the queue holds at most 200 entries, so the
-    // worst-case underestimation of reserved USDC is 200 lamports ($0.000200).
-    // This is economically negligible and accepted as a design trade-off. If the
-    // vault ever has a marginal balance, the last queue entries will be processed
-    // at the then-current price which may have risen to cover any gap.
-    let reserved = oku_m_to_dollars(total_queued_oku_m, oku_m_price)?;
+    // Cycle 4 — rounding direction (PSM-05):
+    //
+    // This computes `ceil(total_queued_oku_m * price / PRECISION)`. When
+    // `process_queue` later pays each entry individually, it floors each
+    // per-entry calculation; since `floor(a) + floor(b) <= floor(a+b)`,
+    // the sum of individual payouts is bounded above by the ceiling
+    // taken here, NEVER below it. The ceiling therefore over-reserves by
+    // at most one lamport per call — strictly favouring queued users
+    // over the buffer-withdrawer and removing the "last entries
+    // unpayable" liveness window the previous floor variant carried.
+    //
+    // The asymmetry is the industry-standard direction: MakerDAO
+    // `DssLitePsm` uses `_divup` (ceil) for the same accounting choice.
+    let reserved = oku_m_to_dollars_ceil(total_queued_oku_m, oku_m_price)?;
 
     let vault_balance = ctx.accounts.vault_usdc.amount;
     require!(
@@ -724,9 +771,7 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u64) -> R
             queue_index >= queue.head && queue_index < queue.tail,
             LitePsmError::InvalidQueueIndex
         );
-        // F-11: modulo safe; result < MAX_ENTRIES (200) so u64→usize is safe on BPF.
-        #[allow(clippy::arithmetic_side_effects, clippy::cast_possible_truncation)]
-        let position = (queue_index % RedemptionQueue::MAX_ENTRIES as u64) as usize;
+        let position = RedemptionQueue::ring_index(queue_index);
         let entry = &queue.entries[position];
         require!(
             entry.user != Pubkey::default(),
@@ -771,11 +816,9 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u64) -> R
 
         // Advance head past contiguous cleared entries (matches EVM behavior).
         while queue.head < queue.tail {
-            // F-11: modulo safe; result < MAX_ENTRIES (200) so u64→usize is safe on BPF.
-            #[allow(clippy::arithmetic_side_effects, clippy::cast_possible_truncation)]
-            let head_pos = (queue.head % RedemptionQueue::MAX_ENTRIES as u64) as usize;
+            let head_pos = RedemptionQueue::ring_index(queue.head);
             if queue.entries[head_pos].user == Pubkey::default() {
-                queue.head = queue.head.wrapping_add(1);
+                queue.head = queue.head.checked_add(1).ok_or(LitePsmError::Overflow)?;
             } else {
                 break;
             }
@@ -789,6 +832,104 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u64) -> R
     emit!(RedemptionRescuedEvent {
         queue_index,
         original_user,
+        recipient: ctx.accounts.recipient_oku_money_ata.owner,
+        oku_m_amount,
+        dollar_value,
+    });
+
+    Ok(())
+}
+
+/// Permissionless self-rescue — user reclaims their OWN queued OkuMoney.
+///
+/// Cycle 4 (PSM-06): the dual of `rescue_queue_entry`. Any user may
+/// withdraw their queued OkuMoney back to a recipient ATA they control.
+/// Resolves the head-pin DoS: a frozen / wrong-owner ATA on the head
+/// entry previously blocked `process_queue` until the operator
+/// intervened; now the affected user can self-unblock by calling this
+/// instruction from a different (or thawed) ATA.
+///
+/// Key constraints (vs the operator rescue):
+///   * Signer must be the entry's original queued user.
+///   * Recipient ATA must be owned by that user (pinned via
+///     `token::authority = user` on the context).
+///   * No role check on `config` — explicitly permissionless.
+///
+/// # Arguments
+/// * `queue_index` — absolute index of the entry to rescue
+///   (`head <= queue_index < tail`).
+pub fn user_self_rescue_queue_entry(
+    ctx: Context<UserSelfRescueQueueEntry>,
+    queue_index: u64,
+) -> Result<()> {
+    let bump = ctx.accounts.config.bump;
+    let caller = ctx.accounts.user.key();
+
+    // Read + validate (scoped read borrow).
+    let (oku_m_amount, position) = {
+        let queue = ctx.accounts.redemption_queue.load()?;
+        require!(
+            queue_index >= queue.head && queue_index < queue.tail,
+            LitePsmError::InvalidQueueIndex
+        );
+        let position = RedemptionQueue::ring_index(queue_index);
+        let entry = &queue.entries[position];
+        require!(
+            entry.user != Pubkey::default(),
+            LitePsmError::EntryAlreadyCleared
+        );
+        // Authorization: caller must be the original queued user.
+        // This is what distinguishes user-self-rescue from the
+        // privileged operator path.
+        require!(entry.user == caller, LitePsmError::Unauthorized);
+        (entry.oku_m_amount, position)
+    };
+
+    let oku_money_decimals = ctx.accounts.oku_money_mint.decimals;
+    let seeds = &[PsmConfig::SEED, &[bump]];
+    let signer = &[&seeds[..]];
+
+    // Return OkuMoney from escrow to the caller's chosen recipient ATA.
+    token_interface::transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_2022_program.key(),
+            token_interface::TransferChecked {
+                from: ctx.accounts.vault_oku_money.to_account_info(),
+                to: ctx.accounts.recipient_oku_money_ata.to_account_info(),
+                authority: ctx.accounts.config.to_account_info(),
+                mint: ctx.accounts.oku_money_mint.to_account_info(),
+            },
+            signer,
+        ),
+        oku_m_amount,
+        oku_money_decimals,
+    )?;
+
+    // Mutate: clear entry, decrement counter, advance head over contiguous
+    // cleared entries (same as `rescue_queue_entry`).
+    {
+        let mut queue = ctx.accounts.redemption_queue.load_mut()?;
+        queue.entries[position] = QueueEntry::default();
+        queue.total_queued_oku_m = queue
+            .total_queued_oku_m
+            .checked_sub(oku_m_amount)
+            .ok_or(LitePsmError::Overflow)?;
+        while queue.head < queue.tail {
+            let head_pos = RedemptionQueue::ring_index(queue.head);
+            if queue.entries[head_pos].user == Pubkey::default() {
+                queue.head = queue.head.checked_add(1).ok_or(LitePsmError::Overflow)?;
+            } else {
+                break;
+            }
+        }
+    }
+
+    let oku_m_price = ctx.accounts.config.oku_m_price;
+    let dollar_value = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
+
+    emit!(RedemptionRescuedEvent {
+        queue_index,
+        original_user: caller,
         recipient: ctx.accounts.recipient_oku_money_ata.owner,
         oku_m_amount,
         dollar_value,

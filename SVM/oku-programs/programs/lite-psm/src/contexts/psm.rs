@@ -308,6 +308,70 @@ pub struct WithdrawBuffer<'info> {
     pub token_2022_program: Program<'info, Token2022>,
 }
 
+/// Permissionless self-rescue — any user can withdraw THEIR OWN queued
+/// OkuMoney back to themselves. Cycle 4 (PSM-06): the dual to operator
+/// `rescue_queue_entry`. Resolves the head-pin DoS where a frozen /
+/// wrong-owner ATA on the head entry indefinitely blocks `process_queue`
+/// for everyone downstream. The user whose entry is stuck can call this
+/// to clear their slot, which both unblocks the queue and returns their
+/// OkuMoney to a recipient ATA they control.
+///
+/// Constraints (vs the operator rescue below):
+///   * `user` MUST be the original queued user — checked in the handler
+///     against the entry's stored `user` field. No `has_one` here because
+///     the user pubkey lives inside the queue zero-copy data, not on
+///     `PsmConfig`.
+///   * `recipient_oku_money_ata` MUST be owned by `user` — `token::authority`
+///     constraint pins this.
+///
+/// The instruction does NOT require the queue to be at head — any
+/// pending entry the user owns can be rescued. This matches the existing
+/// operator rescue's permissions and lets a user unblock themselves
+/// even if their entry isn't at the head.
+#[derive(Accounts)]
+pub struct UserSelfRescueQueueEntry<'info> {
+    pub user: Signer<'info>,
+
+    #[account(
+        seeds = [PsmConfig::SEED],
+        bump = config.bump,
+    )]
+    pub config: Box<Account<'info, PsmConfig>>,
+
+    #[account(
+        mut,
+        seeds = [RedemptionQueue::SEED],
+        bump
+    )]
+    pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
+
+    #[account(
+        address = config.oku_money_mint,
+        mint::token_program = token_2022_program
+    )]
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    #[account(
+        mut,
+        address = config.vault_oku_money
+    )]
+    pub vault_oku_money: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    /// Recipient ATA — must be owned by `user` (enforced by
+    /// `token::authority = user`). Pinning the authority is what
+    /// distinguishes self-rescue from the privileged operator rescue
+    /// (which can target an arbitrary recipient).
+    #[account(
+        mut,
+        token::mint = oku_money_mint,
+        token::authority = user,
+        token::token_program = token_2022_program,
+    )]
+    pub recipient_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    pub token_2022_program: Program<'info, Token2022>,
+}
+
 /// Rescue a stuck queue entry — return escrowed OkuMoney to an alternate recipient.
 ///
 /// Only `queue_processor` can call. On EVM this is a separate `QUEUE_RESCUER` role;

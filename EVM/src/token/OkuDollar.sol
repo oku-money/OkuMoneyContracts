@@ -316,11 +316,18 @@ contract OkuDollar is
     }
 
     function transfer(address to, uint256 amount) public override whenNotPaused returns (bool) {
-        uint256 shares =
-            Math.mulDiv(amount, Constants.PRECISION, usdMultiplier(), Math.Rounding.Floor);
+        uint256 multiplier = usdMultiplier();
+        uint256 shares = Math.mulDiv(amount, Constants.PRECISION, multiplier, Math.Rounding.Floor);
         _transferUsdShares(msg.sender, to, shares);
-        // Emit caller-specified amount; share-reconverted value can drift 1 wei due to truncation.
-        emit Transfer(msg.sender, to, amount);
+        // Cycle 4 (EVM-04): emit `Transfer` with the effective
+        // post-rounding dollar amount (`shares * multiplier / 1e18`)
+        // rather than the caller-specified `amount`. This keeps the
+        // ERC-20 invariant `sum(Transfer.value) == Δ balanceOf`
+        // intact for indexers/accounting; the prior behaviour drifted
+        // by ~1 wei due to the share floor.
+        uint256 effective =
+            Math.mulDiv(shares, multiplier, Constants.PRECISION, Math.Rounding.Floor);
+        emit Transfer(msg.sender, to, effective);
         return true;
     }
 
@@ -335,10 +342,13 @@ contract OkuDollar is
         returns (bool)
     {
         _spendAllowance(from, msg.sender, amount);
-        uint256 shares =
-            Math.mulDiv(amount, Constants.PRECISION, usdMultiplier(), Math.Rounding.Floor);
+        uint256 multiplier = usdMultiplier();
+        uint256 shares = Math.mulDiv(amount, Constants.PRECISION, multiplier, Math.Rounding.Floor);
         _transferUsdShares(from, to, shares);
-        emit Transfer(from, to, amount);
+        // Cycle 4 (EVM-04): see `transfer` above.
+        uint256 effective =
+            Math.mulDiv(shares, multiplier, Constants.PRECISION, Math.Rounding.Floor);
+        emit Transfer(from, to, effective);
         return true;
     }
 
@@ -668,6 +678,20 @@ contract OkuDollar is
 
     // ============ Rate Management (VAULT_REBASER) ============
 
+    /// @notice Set the USD multiplier accrual rate.
+    /// @dev Cycle 4 (EVM-09): does NOT stamp a separate
+    ///      `lastUsdRateUpdateBlock`. Rate changes manifest over time
+    ///      (the multiplier moves linearly per-second), not instantly,
+    ///      so the same-block sandwich attack vector that `OkuMoney`'s
+    ///      `distributeYield` carries does not apply: a tx landing in
+    ///      the same block as `setUsdYieldRate` reads the (just-
+    ///      recomputed) `usdBaseMultiplier` and `usdLastAccrualTime`,
+    ///      so its `usdMultiplier()` view returns the pre-jump value
+    ///      until at least one second has elapsed. The
+    ///      `whenYieldNotDistributing` modifier on user-facing paths
+    ///      (`wrap`, `unwrap`, `transfer`) still defends against
+    ///      OkuMoney-side `distributeYield` collisions, which is the
+    ///      attack class that does have instantaneous impact.
     function setUsdYieldRate(
         uint256 newRate,
         uint256 endTimestamp

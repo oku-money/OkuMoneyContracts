@@ -80,9 +80,14 @@ disable path and confirm it can only be reached by the operator multisig.
 on observed Chainlink feed jitter in production. Set at proxy initialization
 and tunable later via `setPriceBand`.
 
-**SVM mirror:** out of scope for this audit; the SVM TRACKER carries a
-parallel work item for a `lite-psm`-consumed peg check program / PDA on
-Solana that matches these constants.
+**SVM mirror:** Cycle 4 update — the SVM port DOES ship a peg-check
+in-program at `programs/lite-psm/src/helpers/oracle_relay.rs` (Pyth
+V2 layout, ~334 LoC). Constants are byte-mirrored (see
+`audit/PARITY.md` § Constants). SVM-side hardening **adds** a
+confidence-interval check (`MAX_ORACLE_CONFIDENCE_BPS = 200`,
+cycle 4 / PSM-04) that EVM Chainlink cannot mirror because
+Chainlink doesn't publish per-round confidence. The previous
+"out of scope" claim was stale through cycle 3; corrected here.
 
 ---
 

@@ -771,7 +771,7 @@ contract LitePSMTest is BaseTest {
 
         // Grant queue ability to burn OkuMoney
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         // processQueue now handles approve-use-revoke internally
         uint256 head = redemptionQueue.queueHead();
@@ -804,7 +804,7 @@ contract LitePSMTest is BaseTest {
 
         // Grant queue ability to burn OkuMoney
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         // Verify allowance is 0 before processing
         assertEq(usdc.allowance(address(litePsm), address(redemptionQueue)), 0);
@@ -849,7 +849,7 @@ contract LitePSMTest is BaseTest {
 
         // Grant queue ability to burn OkuMoney
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         // Process only 1 entry
         uint256 head = redemptionQueue.queueHead();
@@ -889,7 +889,7 @@ contract LitePSMTest is BaseTest {
         _mintUsdc(address(litePsm), 10_000e6);
 
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
         uint256 head = redemptionQueue.queueHead();
@@ -1737,8 +1737,13 @@ contract LitePSMTest is BaseTest {
         // Mint/redeem round-trip
         uint256 usdcAmount = 100e8; // 100 USDC at 8 decimals
         usdc8.mint(user1, usdcAmount);
-        vm.prank(admin);
+        // Cycle 4 (EVM-15): both OKUM_MINTER and OKUM_BURNER needed —
+        // the PSM mints OkuMoney on USDC deposits and burns it on
+        // USDC redemptions.
+        vm.startPrank(admin);
         okuMoney.grantRole(OKUM_MINTER, address(psm8));
+        okuMoney.grantRole(OKUM_BURNER, address(psm8));
+        vm.stopPrank();
         vm.prank(allowanceManager);
         okuMoney.configureMinterAllowance(address(psm8), MAX_SUPPLY);
         vm.prank(admin);

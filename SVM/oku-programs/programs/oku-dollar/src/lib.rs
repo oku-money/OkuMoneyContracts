@@ -7,23 +7,20 @@
 //! including the dual-side yield-distribution slot fence (PSM + vault) and
 //! the Uniswap-V2 dead-shares first-deposit defense (SVM-only addition).
 
-// F-17: Zero unsafe code in this crate (confirmed by cargo-geiger).
+// Zero unsafe code (confirmed by cargo-geiger); forbid accidental
+// introduction.
 #![forbid(unsafe_code)]
-// F-02 (audit finding): The solana-lints `arbitrary_cpi` lint flags CPI call
-// sites in this crate because program ID is obtained at runtime from typed
-// account fields rather than a hardcoded literal.
-//
-// After review (self-audit 2026-05-27), every CPI target is constrained by
-// Anchor's typed `Program<'info, T>` account system. Targeted `#![allow]`
-// annotations are also present in each instruction module that contains CPIs.
-// Confirmed false positives — suppressed here for `cargo dylint` cleanliness.
+// solana-lints `arbitrary_cpi` flags every CPI here because program ID
+// is obtained at runtime from typed account fields. Every CPI target
+// is constrained by Anchor's typed `Program<'info, T>` accounts (which
+// validate program ID at deserialisation), so all hits are false
+// positives. See `audit/SVM/ACCEPTED_RISKS.md`.
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
-// Anchor's `#[program]` macro expands into dispatch glue with a pattern that
-// trips clippy's `diverging_sub_expression` lint. Suppressed crate-wide
-// because we can't annotate inside macro-expanded code.
+// Anchor `#[program]` dispatch glue trips
+// `clippy::diverging_sub_expression`; can't annotate inside macro output.
 #![allow(clippy::diverging_sub_expression)]
-// `target_os = "solana"` is emitted by `solana-program-entrypoint`'s panic
-// handler macro. The check-cfg machinery doesn't know about the BPF target.
+// `target_os = "solana"` is emitted by `solana-program-entrypoint`'s
+// panic handler; check-cfg doesn't know about the BPF target.
 #![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;

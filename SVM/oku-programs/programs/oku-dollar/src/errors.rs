@@ -86,6 +86,13 @@ pub enum OkuDollarError {
     #[msg("Dead-shares ATA must be the canonical associated address")]
     InvalidDeadSharesAddress,
 
+    /// Cycle 4 (OKUD-09): `dead_shares_ata` was supplied on a
+    /// subsequent-deposit wrap. The account is only meaningful on the
+    /// first deposit (`total_supply == 0`); passing it on later calls
+    /// invites confusion about which path the program took.
+    #[msg("dead_shares_ata must be omitted on subsequent deposits")]
+    UnexpectedDeadSharesAccount,
+
     // ===== Initialization Errors =====
     /// Authority pubkey supplied to `initialize` was the default (zero) pubkey.
     #[msg("Authority pubkey cannot be the zero pubkey")]
@@ -102,6 +109,13 @@ pub enum OkuDollarError {
     /// references that break wrap/unwrap math.
     #[msg("Vault oku_money_mint must match PSM oku_money_mint")]
     OkuMoneyMintMismatch,
+
+    /// OkuMoney mint decimals do not equal `oku_shared::TOKEN_DECIMALS`
+    /// (= 6). Every share-math conversion assumes 6-decimal raw tokens
+    /// and would silently invert by an order of magnitude on mismatch.
+    /// Cycle 4 (OKUD-01).
+    #[msg("OkuMoney mint must have exactly 6 decimals")]
+    InvalidOkuMoneyDecimals,
 
     /// `accept_role_admin` was called but no proposal is in flight
     /// (`pending_role_admin == Pubkey::default()`).

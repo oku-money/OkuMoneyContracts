@@ -2,13 +2,11 @@
 //!
 //! Pause / unpause and the role-rotation match arms mirror OpenZeppelin's
 //! `Pausable` and `AccessControl` patterns.
-//! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/Pausable.sol
-//! Taken from https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol
+//! Taken from <https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/Pausable.sol>.
+//! Taken from <https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/AccessControl.sol>.
 //!
-//! Freeze / thaw mirrors Circle FiatToken's blacklister pattern. The
-//! blacklist-exempt mechanism (bridge/router PDA exemption) was removed
-//! in the noBridge refactor — no on-chain infrastructure PDAs remain.
-//! Taken from https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v1/Blacklistable.sol
+//! Freeze / thaw mirrors Circle FiatToken's blacklister pattern.
+//! Taken from <https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v1/Blacklistable.sol>.
 
 // F-02: CPI targets (freeze_account, thaw_account) use Anchor's typed
 // `Interface<'info, TokenInterface>` account which validates program ID at
@@ -318,9 +316,30 @@ pub fn set_authority(
 
     let config = &mut ctx.accounts.config;
 
+    // Cycle 4 (PSM-02): reject `new_authority == role_admin` for
+    // non-RoleAdmin roles. Collapsing the cold-multisig key into a
+    // warm-multisig role destroys the separation-of-duties model the
+    // protocol is designed around, and a typo or stale-key in the
+    // proposing flow is the most likely way it would happen. The
+    // `RoleAdmin` two-step branch below handles its own equality check
+    // (a self-set is a legal no-op cancel/re-propose).
+    if !matches!(role, AuthorityRole::RoleAdmin) {
+        require!(
+            new_authority != config.role_admin,
+            LitePsmError::InvalidAuthority
+        );
+    }
+
     // RoleAdmin uses a two-step transfer; every other role commits
     // immediately. See doc comment above for rationale.
     if matches!(role, AuthorityRole::RoleAdmin) {
+        // Cycle 4 (PSM-02): also reject a no-op proposal (proposing the
+        // current admin to themselves). Harmless on-chain but obscures
+        // event-log inspection of in-flight rotations.
+        require!(
+            new_authority != config.role_admin,
+            LitePsmError::InvalidAuthority
+        );
         let current_admin = config.role_admin;
         config.pending_role_admin = new_authority;
 

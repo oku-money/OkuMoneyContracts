@@ -92,11 +92,26 @@ pub enum LitePsmError {
     #[msg("Pyth feed expo magnitude exceeds MAX_FEED_EXPO_MAGNITUDE")]
     FeedExpoTooLarge,
 
+    /// Pyth round's confidence-interval-to-price ratio exceeds
+    /// `MAX_ORACLE_CONFIDENCE_BPS / 10_000`. Publisher set degenerate;
+    /// reject for safety. SVM-only hardening (Chainlink doesn't publish
+    /// per-round confidence so EVM has no analogue — see
+    /// `audit/PARITY.md`).
+    #[msg("Pyth oracle confidence interval too wide for safe consumption")]
+    OracleConfidenceTooWide,
+
     // ===== Buffer Errors =====
     /// Insufficient buffer for redemption
     /// EVM: InsufficientBuffer()
     #[msg("Insufficient buffer for redemption")]
     InsufficientBuffer,
+
+    /// User does not hold enough OkuMoney to satisfy the redemption.
+    /// Cycle 4 (PSM-11): separated from `InsufficientBuffer` to remove
+    /// the misleading "the PSM's buffer is empty" interpretation.
+    /// EVM analogue: `ERC20InsufficientBalance` (OZ standard revert).
+    #[msg("User does not hold enough OkuMoney for redemption")]
+    InsufficientUserBalance,
 
     // ===== Account Errors =====
     /// Account is frozen (blacklisted)
@@ -230,12 +245,20 @@ pub enum LitePsmError {
     #[msg("Staleness threshold out of range (must be 60s..=7 days)")]
     InvalidStaleness,
 
-    // ===== Phase 10: mint extension invariants =====
-    /// The OkuMoney mint has the Token-2022 `TransferHook` extension
-    /// enabled. The SVM port assumes no transfer hook is installed (the
-    /// hook could re-enter the PSM mid-transfer and break the
-    /// effects-checks-interactions ordering that defends against
-    /// re-entrancy). Rebuild the mint without `TransferHook` and re-init.
+    // ===== Phase 10 / Cycle 4: mint extension invariants =====
+    /// Legacy alias for `IncompatibleMintExtension` (cycle 3 emitted this
+    /// variant for the TransferHook-only check). Retained so existing IDL
+    /// clients that decoded the error code continue to render a useful
+    /// message; new call sites should emit `IncompatibleMintExtension`.
     #[msg("OkuMoney mint must not have the TransferHook Token-2022 extension")]
     TransferHookNotAllowed,
+
+    /// The OkuMoney mint carries a Token-2022 extension that the protocol
+    /// does not support. Cycle 4 widened the original `TransferHook`-only
+    /// check to a full allow-list (see `helpers::mint_extensions`); any
+    /// extension not on the whitelist trips this error at `initialize`.
+    /// Same hard reject is applied at the `oku-dollar` initialize boundary
+    /// so both programs agree on what a clean OkuMoney mint looks like.
+    #[msg("OkuMoney mint carries an incompatible Token-2022 extension (see helpers::mint_extensions for the allow-list)")]
+    IncompatibleMintExtension,
 }

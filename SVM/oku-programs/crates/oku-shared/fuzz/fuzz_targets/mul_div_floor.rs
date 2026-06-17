@@ -61,4 +61,32 @@ fuzz_target!(|data: (u64, u64, u64)| {
             }
         }
     }
+
+    // Property 5: upper bound. When `b <= divisor`, `a*b/divisor <= a`.
+    // When `a <= divisor`, `a*b/divisor <= b`. Trivially true from the
+    // u128 oracle above; assert directly so a refactor that drops the
+    // oracle still gets caught.
+    if let Some(r) = result {
+        if b <= divisor {
+            assert!(r <= a, "Property 5: r <= a when b <= divisor (got {r} > {a})");
+        }
+        if a <= divisor {
+            assert!(r <= b, "Property 5: r <= b when a <= divisor (got {r} > {b})");
+        }
+    }
+
+    // Property 6: monotonicity in `a`. `mul_div_floor(a+1, b, d) >= mul_div_floor(a, b, d)`
+    // whenever both succeed. Only check `a < u64::MAX` to avoid the
+    // `a+1` wrap. Overflow on the higher side is acceptable (the
+    // bigger product can overflow u128 narrowing where the smaller
+    // didn't).
+    if a < u64::MAX {
+        let next = mul_div_floor(a + 1, b, divisor);
+        if let (Some(curr), Some(nxt)) = (result, next) {
+            assert!(
+                nxt >= curr,
+                "Property 6: non-monotone (a={a}, b={b}, d={divisor}): curr={curr}, next={nxt}"
+            );
+        }
+    }
 });

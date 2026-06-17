@@ -9,23 +9,41 @@ input.
 
 **Status legend:** 🔴 blocks external exposure · 🟡 should-fix before audit · ⚪ post-launch
 
-## Audit-readiness snapshot
+## Audit-readiness snapshot (cycle 4)
 
 | Item | State |
 |---|---|
 | Production programs | 2 (`lite-psm`, `oku-dollar`) + 1 shared crate (`oku-shared`) |
 | Bankrun tests | 129 / 129 |
-| Cargo unit tests | 20 / 20 |
+| Cargo unit tests | 36 / 36 (cycle 4 added 16 from new ceil + vault-math + mint-extensions tests) |
 | Anchor build | clean |
 | `cargo clippy -D warnings` (lenient) | clean |
 | `cargo clippy -W arithmetic_side_effects -W cast_sign_loss …` (strict) | clean |
-| `cargo dylint` | deferred (upstream `crytic/solana-lints` still pinned to `nightly-2025-01-09`, incompatible with Anchor 1.0.2's `extract_if` — re-probed 2026-06-15, no upstream bump since cycle 1) |
-| Pyth USDC/USD peg circuit-breaker | embedded in `lite-psm` (audit-prep cycle) |
-| Trident `#[init]` invariants | wired (cycle 3); 0 panics across ~100 k random tx per program; `oku_m_price`/`usd_multiplier` invariants firing |
-| Kani formal proofs | 9 / 9 SUCCESSFUL (cycle 3 tightened the two SAT-hard harness domains) |
+| `cargo dylint` | deferred (upstream still pinned to `nightly-2025-01-09`) |
+| Pyth USDC/USD peg circuit-breaker | embedded in `lite-psm`; cycle 4 added `MAX_ORACLE_CONFIDENCE_BPS = 200` check |
+| Token-2022 mint-extension allow-list | enforced at init on both `lite-psm` and `oku-dollar` (cycle 4 / PSM-13 / OKUD-02) |
+| Trident `#[init]` invariants | wired (cycle 3); 0 panics across ~100 k random tx per program |
+| Kani formal proofs | **17 / 17 SUCCESSFUL** (cycle 4 added 4 ceil-primitive proofs + 4 vault-math proofs) |
+| cargo-fuzz targets | **7** (cycle 4 added `collateral_ratio` + `mul_div_ceil`); 0 crashes on all targets after one fuzz-harness property fix |
 | Rust toolchain pin | 1.90.0 across `programs/` + `trident-tests/` |
-| Anchor CLI / lib | 1.0.2 / 1.0.2 (no drift warning) |
-| EVM ↔ SVM constant parity | re-verified post-cycle |
+| Anchor CLI / lib | 1.0.2 / 1.0.2 |
+| EVM ↔ SVM parity | published as `audit/PARITY.md` (cycle 4) |
+| Reader's-guide entry points | `audit/SVM/README.audit.md`, `audit/EVM/README.audit.md` (cycle 4) |
+
+### Cycle 4 highlights
+
+- **PSM-04** — Pyth `conf / price ≤ 200 bps` band check added.
+- **PSM-05** — `withdraw_buffer` switched from floor to ceil rounding via new `oku_shared::mul_div_ceil` primitive.
+- **PSM-06** — Permissionless `user_self_rescue_queue_entry` ix added; resolves head-pin DoS without operator intervention.
+- **PSM-13 / OKUD-02** — Token-2022 mint-extension allow-list at init on both programs.
+- **PSM-17** — `initialize` signature collapsed from 15 positional args into a single `InitializeParams` struct (IDL break accepted pre-audit).
+- **OKUD-01** — OkuMoney mint decimals invariant pinned at the oku-dollar boundary.
+- **OKUD-03** — Dead-shares ATA mint constraint moved into the Anchor context.
+- **OKUD-06** — Self-fence on `update_usd_multiplier` (plus mirror on lite-psm yield ix).
+- **OKUD-13 / OKUD-14** — Event payload additions (`dead_shares_minted`, `collateralization_ratio`).
+- **M-28 / OKUD-20** — Vault math + yield-lock primitive moved into `oku-shared`.
+- **PSM-20** — Comment surgery (~50 % of historical Phase / F-tag commentary stripped).
+- **EVM cycle-4 work** — `OKUM_BURNER` split, `OracleRelayDisabled` event, multiplier-event indexed `blockNumber`, ERC-20 invariant restoration on `Transfer.value`, sub-USDC redemption guard.
 
 Full audit handoff package lives under `oku-programs/audit/`:
 

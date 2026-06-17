@@ -184,13 +184,21 @@ contract RedemptionQueue is
     // ============ Oracle Relay Management ============
 
     /// @notice Wire (or unwire) the USDC peg circuit-breaker.
-    /// @dev `address(0)` disables the check. When set, `processQueue` calls
-    ///      `relay.checkUsdcPeg()` once before the batch loop and reverts on depeg.
+    /// @dev `address(0)` disables the check. When set, `processQueue`
+    ///      calls `relay.checkUsdcPeg()` once before the batch loop
+    ///      and reverts on depeg.
+    ///
+    ///      Cycle 4 (EVM-03): emits a dedicated `OracleRelayDisabled`
+    ///      event when `newRelay == 0` so monitoring tooling can
+    ///      distinguish a kill-switch trip from a routine rotation.
     function setOracleRelay(address newRelay) external onlyRole(Roles.QUEUE_ORACLE_MANAGER) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         address oldRelay = address($.oracleRelay);
         $.oracleRelay = IOracleRelay(newRelay);
         emit OracleRelayUpdated(oldRelay, newRelay);
+        if (newRelay == address(0)) {
+            emit OracleRelayDisabled(msg.sender, oldRelay, block.number);
+        }
     }
 
     // ============ Queue Management ============

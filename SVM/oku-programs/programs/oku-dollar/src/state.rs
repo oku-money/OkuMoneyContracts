@@ -61,7 +61,9 @@ pub struct OkuDollarConfig {
 }
 
 impl OkuDollarConfig {
-    /// noBridge migration (2026-06-05): seed rotated from `b"oku_dollar_config"`
+    /// Migration history (seed-rotation log) tracked in
+    /// `SVM/oku-programs/deployments/DEPRECATED.md`. Seed rotated from
+    /// `b"oku_dollar_config"`
     /// to `b"oku_dollar_config_v2"` to force a fresh PDA after the lite-psm
     /// PsmConfig seed rotation. The OLD `OkuDollarConfig.psm_config` field
     /// pointed at the OLD PsmConfig PDA, which no longer exists — re-init
@@ -80,6 +82,13 @@ impl OkuDollarConfig {
     /// assertion below (330 + 32 for `pending_role_admin`).
     pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
+
+// Cycle 4 (OKUD-08): handlers construct PDA signer seeds via
+// `&[OkuDollarConfig::SEED, &[bump]]`. The literal isn't duplicated —
+// every site references `Self::SEED` — so a future seed rotation
+// remains a single-file edit. The repeated bracketing is canonical
+// Anchor pattern; lifetime constraints prevent factoring into a
+// helper that returns the `&[&[&[u8]]]` slice the CPI signer needs.
 
 // Compile-time assertion: if OkuDollarConfig layout changes, this will fail to compile
 const _: () = assert!(OkuDollarConfig::LEN == 362);

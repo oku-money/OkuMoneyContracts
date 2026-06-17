@@ -9,6 +9,7 @@ use crate::constants::{MAX_OKU_M_PRICE, PRECISION};
 use crate::contexts::{DistributeYield, SetOkuMPrice};
 use crate::errors::LitePsmError;
 use crate::events::*;
+use crate::helpers::check_yield_lock;
 use anchor_lang::prelude::*;
 
 /// Set OkuMoney price directly
@@ -24,6 +25,14 @@ use anchor_lang::prelude::*;
 /// `YieldTooSmall` guard on `distribute_yield` and the EVM fix landed
 /// alongside the oracle-relay cycle.
 pub fn set_oku_m_price(ctx: Context<SetOkuMPrice>, new_multiplier: u64) -> Result<()> {
+    // Cycle 4 (OKUD-06 mirror): self-fence on the lite-psm yield slot.
+    // Two yield-affecting writes in the same slot would otherwise be
+    // legal (strict-increase admits the second), defeating the
+    // "one yield event per slot per program" invariant. Strict-increase
+    // alone catches no-op writes; this catches near-no-op writes that
+    // would still consume the same-slot lock budget.
+    check_yield_lock(&ctx.accounts.config)?;
+
     let config = &mut ctx.accounts.config;
 
     // Read current multiplier from config
@@ -75,6 +84,10 @@ pub fn set_oku_m_price(ctx: Context<SetOkuMPrice>, new_multiplier: u64) -> Resul
 ///
 /// This is the SVM equivalent of EVM's `distributeYield(uint256 yieldAmount)`.
 pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Result<()> {
+    // Cycle 4 (OKUD-06 mirror): self-fence on the lite-psm yield slot.
+    // See `set_oku_m_price` for rationale.
+    check_yield_lock(&ctx.accounts.config)?;
+
     require!(yield_amount > 0, LitePsmError::ZeroAmount);
 
     let total_supply = ctx.accounts.oku_money_mint.supply;
@@ -85,23 +98,13 @@ pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Res
     // Read current multiplier from config
     let current_multiplier = config.oku_m_price;
 
-    // Calculate new multiplier
-    // new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)
-    // This distributes the yield proportionally across all holders.
-    //
-    // Use `u64::try_from` (NOT `as u64`) on the final widening cast so that
-    // any value exceeding `u64::MAX` is surfaced as `Overflow` rather than
-    // silently truncated. With `PRECISION = 1e9` and a pathologically small
-    // `total_supply`, the quotient can exceed `u64::MAX`; the subsequent
-    // `MAX_OKU_M_PRICE` ceiling would only catch the final multiplier, not
-    // the corrupted per-token value.
-    let yield_per_token_u128 = (yield_amount as u128)
-        .checked_mul(PRECISION as u128)
-        .ok_or(LitePsmError::Overflow)?
-        .checked_div(total_supply as u128)
+    // Cycle 4 (S-29): use the shared `mul_div_floor` primitive instead
+    // of open-coding the same `(yield * PRECISION) / total_supply` math.
+    // Identical semantics (floor + u128 widening + try_from narrowing)
+    // and the path is now covered by the cargo-fuzz `mul_div_floor`
+    // target and the Kani correctness proof at no extra cost.
+    let yield_per_token = oku_shared::mul_div_floor(yield_amount, PRECISION, total_supply)
         .ok_or(LitePsmError::Overflow)?;
-    let yield_per_token =
-        u64::try_from(yield_per_token_u128).map_err(|_| LitePsmError::Overflow)?;
 
     // Prevent no-op distributions that waste the yield lock slot
     // This can happen when yield_amount is tiny relative to total_supply

@@ -1435,14 +1435,23 @@ describe("lite-psm", () => {
         // WS2.7 added a balance pre-check in redeem_oku_m that fires
         // `InsufficientBuffer` before the Token-2022 burn CPI can reject
         // with its own `InsufficientFunds` error. Either is acceptable.
+        // Cycle 4 (PSM-11): the on-program error for a user balance
+        // shortfall is `InsufficientUserBalance` (was misleadingly
+        // `InsufficientBuffer` before, which is now reserved for the
+        // PSM-side buffer drain case). Accept both for transitional
+        // compatibility plus the SPL Token raw insufficient-funds
+        // selector that the underlying program may surface if the
+        // pre-check is somehow skipped.
         const code = err?.error?.errorCode?.code;
         const msg = String(err?.message ?? err);
         const isInsufficient =
           code === "InsufficientFunds" ||
           code === "InsufficientBuffer" ||
+          code === "InsufficientUserBalance" ||
           msg.includes("custom program error: 0x1") ||
           msg.includes("insufficient funds") ||
-          msg.includes("InsufficientBuffer");
+          msg.includes("InsufficientBuffer") ||
+          msg.includes("InsufficientUserBalance");
         expect(isInsufficient, `unexpected error: ${msg}`).to.equal(true);
       }
     });

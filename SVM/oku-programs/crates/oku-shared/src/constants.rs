@@ -1,9 +1,29 @@
 //! Protocol-wide numeric constants.
 //!
 //! Anything declared here MUST also appear in `EVM/src/lib/Constants.sol`
-//! (or be a documented divergence in `SVM/EVM_VS_SVM.md`). Scaling is the
-//! one deliberate exception: EVM uses `1e18`, SVM uses `1e9`, because
-//! SVM tokens are 6-decimal vs EVM's 18-decimal.
+//! (or be a documented divergence in `SVM/EVM_VS_SVM.md`).
+//!
+//! ## Why 1e9 on SVM vs 1e18 on EVM
+//!
+//! Cycle 4 (constants doc fix): the previous comment claimed SVM
+//! used 1e9 "because SVM tokens are 6-decimal vs EVM's 18-decimal".
+//! That doesn't actually follow — token decimals and multiplier
+//! precision are independent. The real reason is structural:
+//!
+//!   * EVM has 256-bit native integers, so 1e18 fits comfortably and
+//!     matches Solidity's ERC-20 18-decimal convention.
+//!   * SVM uses `u64` for token amounts and BPF natively widens to
+//!     `u128` for intermediates. `1e9 × u64` peaks around `1.8e28`,
+//!     well within `u128::MAX (≈ 3.4e38)`. A 1e18 precision would
+//!     require either `u128` token amounts (no SPL Token-2022 support)
+//!     or aggressive precision loss on every operation.
+//!
+//! In other words: 1e9 is the largest decimal-power scale that keeps
+//! the canonical `u64 × u64 / divisor → u64` math pattern safe for
+//! all realistic supply / multiplier combinations. The decimal-count
+//! coincidence (both EVM's MathLib and SVM's mul_div_floor use 9
+//! decimal digits less than the token's stated precision) is just
+//! that — a coincidence.
 
 // ---------------------------------------------------------------------------
 // Precision / basis points
@@ -61,6 +81,16 @@ pub const MAX_OKU_M_PRICE: u64 = MAX_MULTIPLIER;
 /// the USD multiplier specifically.
 pub const MAX_USD_MULTIPLIER: u64 = MAX_MULTIPLIER;
 
+// Cycle 4 (C-16): pin the alias relationship at compile time. If
+// anyone bumps `MAX_OKU_M_PRICE` or `MAX_USD_MULTIPLIER` independently
+// (e.g. as part of a future "vault and PSM can have different ceilings"
+// refactor), this assertion fires and the workspace fails to compile.
+// Cheap, structural, audit-friendly.
+const _: () = {
+    assert!(MAX_OKU_M_PRICE == MAX_MULTIPLIER);
+    assert!(MAX_USD_MULTIPLIER == MAX_MULTIPLIER);
+};
+
 // ---------------------------------------------------------------------------
 // Oracle relay bounds (USDC peg circuit-breaker)
 // ---------------------------------------------------------------------------
@@ -103,6 +133,26 @@ pub const ORACLE_USDC_PRICE_CEILING: u64 = 1_050_000_000;
 /// EVM analogue: `MAX_FEED_DECIMALS = 18` (Chainlink reports `decimals()`
 /// rather than a signed exponent; conceptually identical clamp).
 pub const MAX_FEED_EXPO_MAGNITUDE: u32 = 18;
+
+/// Maximum permitted Pyth confidence-interval-to-price ratio, in basis
+/// points. Pyth publishes `(price, conf)` per round; the canonical advice
+/// is to reject rounds with `conf / price > MAX_CONFIDENCE_BPS / 10_000`,
+/// i.e. the publisher set's stated uncertainty about the price is too wide
+/// for the round to be useful for liquidation-grade pricing.
+///
+/// 200 bps = 2 %. Empirically USDC/USD `conf / price` is sub-10 bps during
+/// normal market hours; rounds above 2 % only appear during publisher-set
+/// degradation or major market dislocations — exactly when the relay's
+/// circuit-breaker is supposed to trip.
+///
+/// Used by `helpers::oracle_relay::get_usdc_price`. Sister constants are
+/// `ORACLE_USDC_PRICE_{FLOOR,CEILING}` (absolute band) and
+/// `ORACLE_M{IN,AX}_STALENESS_SECS` (temporal freshness).
+///
+/// EVM analogue: not present — Chainlink AggregatorV3 does not expose
+/// per-round confidence, so this is a Pyth-only defense. Documented in
+/// `audit/PARITY.md` as a deliberate SVM-only hardening.
+pub const MAX_ORACLE_CONFIDENCE_BPS: u64 = 200;
 
 // ---------------------------------------------------------------------------
 // Token decimals

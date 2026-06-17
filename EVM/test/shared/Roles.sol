@@ -20,6 +20,8 @@ library TestRoles {
     bytes32 public constant OKUM_PAUSER = SrcRoles.OKUM_PAUSER;
     bytes32 public constant OKUM_UNPAUSER = SrcRoles.OKUM_UNPAUSER;
     bytes32 public constant OKUM_MINTER = SrcRoles.OKUM_MINTER;
+    /// @dev Cycle 4 (EVM-15): burn role split from `OKUM_MINTER`.
+    bytes32 public constant OKUM_BURNER = SrcRoles.OKUM_BURNER;
     bytes32 public constant OKUM_REBASER = SrcRoles.OKUM_REBASER;
     bytes32 public constant OKUM_BLACKLISTER = SrcRoles.OKUM_BLACKLISTER;
     bytes32 public constant OKUM_UNBLACKLISTER = SrcRoles.OKUM_UNBLACKLISTER;

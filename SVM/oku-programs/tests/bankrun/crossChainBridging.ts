@@ -36,7 +36,7 @@
  * off-chain rail). This is the same shape as the EVM test which uses
  * two independently-deployed LitePSM instances on the same node.
  *
- * Reference: SVM/EVM_VS_SVM.md § Cross-chain operational requirements.
+ * Reference: SVM/README.md § "EVM vs SVM — divergence catalogue" → "Cross-chain operational requirements (v1 noBridge)".
  */
 
 import * as anchor from "@anchor-lang/core";

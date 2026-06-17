@@ -729,3 +729,182 @@ The Foundry suite is the authoritative functional coverage. The Hardhat suite ex
 3. **Real-world scenario simulation** (`test/hardhat/scenarios/RealWorldUsage.ts`): 365-day stochastic simulation (seeded PRNG, 7 action categories, daily `evm_increaseTime` steps) plus 8 deterministic edge-case suites covering round-trips, queued redeems, multiplier divergence, blacklist/freeze, pause windows, oracle staleness, yield-lock, and cap exhaustion.
 
 Any new unit or invariant test should be added to the Foundry suite; Hardhat is reserved for fork-dependent or multi-contract scenario work.
+
+---
+
+## Forge coverage notes
+
+**Cycle 4 baseline:** **577 / 577 forge tests passing** (unit + fuzz +
+invariants + fork + happy-path). Coverage held at the cycle-3 totals:
+
+| File | Lines | Statements | Branches | Funcs |
+|---|---|---|---|---|
+| `src/lib/MathLib.sol` | **100 %** | 96 % | 40 % | 100 % |
+| `src/lib/ReentrancyGuardUpgradeable.sol` | **100 %** | 100 % | 100 % | 100 % |
+| `src/lib/SafeApprove.sol` | **100 %** | 100 % | 100 % | 100 % |
+| `src/lib/YieldSandwichGuard.sol` | **100 %** | 100 % | 100 % | 100 % |
+| `src/psm/LitePSM.sol` | **98.43 %** | 93.51 % | 57.14 % | 100 % |
+| `src/psm/RedemptionQueue.sol` | **100 %** | 96.09 % | 66.67 % | 100 % |
+| `src/token/OkuDollar.sol` | **98.30 %** | 94.79 % | 75.51 % | 97.56 % |
+| `src/token/OkuMoney.sol` | **100 %** | 97.58 % | 83.33 % | 100 % |
+| **Total** | **99.00 %** | 95.22 % | 69.35 % | 99.23 % |
+
+A CI gate in `.github/workflows/test.yml` fails the build if any `src/` file
+or the overall total drops below **95 % line coverage**.
+
+### Uncovered lines (intentional)
+
+The remaining uncovered lines are **defensive guards unreachable from
+the contracts as currently composed**. They are kept for
+future-proofing against changes to dependent contracts. Driving them
+in tests would require malicious mock contracts that misrepresent
+the multiplier or share-conversion semantics — a test surface we
+judged not worth the maintenance cost.
+
+| Location | Code | Why unreachable today |
+|---|---|---|
+| `LitePSM.sol` `mintOkuM` | `revert RoundTripDriftTooLarge` | The round-trip check is mathematically bounded above by `usdcAmount` for any well-behaved `okuMMultiplier()`. Defends against an OkuMoney variant whose multiplier mutates between reads inside one transaction — impossible under the current `setOkuMMultiplier` + yield-distribution-guard policy. |
+| `LitePSM.sol` `_redeemOkuMShared` | `revert OutputBelowMinimum` | `usdcAmount` is computed once. The floor `okuMFloor = (okuMAmount / dm) * dm` then `minUsdcExpected` is bounded above by `usdcAmount` by construction. Defends against an OkuMoney whose multiplier shifts during the same call. |
+| `LitePSM.sol` `mintUsdOku` | `revert RoundTripDriftTooLarge` | Mirror of the `mintOkuM` case for the wrap path. |
+| `OkuDollar.sol` `_update` | `UseWrapInstead` / `UseUnwrapInstead` guards | `OkuDollar` overrides `transfer` / `transferFrom` to use share-based accounting, so the inherited ERC20 `_update` hook is only reachable via the inherited `_mint` / `_burn` — which the contract never calls. The guards halt any future refactor that accidentally invokes `_mint` or `_burn`. |
+
+### Auditor checklist — sensitive functions
+
+1. **`OkuDollar.withdrawSurplus` post-withdrawal ratio math**
+   - `test_WithdrawSurplus_SucceedsAtExactFloor` — `postRatio == minCollateralRatio` (inclusive).
+   - `test_WithdrawSurplus_OneWeiBelowFloor_Reverts` — `postRatio == minCollateralRatio - 1 wei` → `BelowMinimumCollateral`.
+   - `test_WithdrawSurplus_ZeroObligations_UsesInfiniteRatio` — `obligations == 0` → `type(uint256).max`.
+   - `test_WithdrawSurplus_EventPostRatioMatchesView` — post-tx ratio observable matches `collateralizationRatio()`.
+
+2. **`LitePSM._redeemOkuMShared(okuMAtPsm=true)` branch**
+   - `test_RedeemUsdOku_OkuMAtPsmInstant_NoOkuMRedeemedEvent` — buffer-covered redemption suppresses `OkuMRedeemed`.
+   - `test_RedeemUsdOku_OkuMAtPsmQueued_OkuMRoutedToQueue` — buffer-drained redemption routes OkuM to the queue without pulling from user.
+
+3. **`RedemptionQueue.processQueue` TransferFailed soft-skip path**
+   - `test_ProcessQueue_TransferFailed_SoftSkipEmitsEvent` — blocked recipient → `RedemptionSkipped(idx, TransferFailed)`, OkuM stays in escrow, `totalQueuedOkuM` unchanged.
+   - `test_ProcessQueue_TransferFailed_NextEntryStillProcesses` — interleaved blocked + clean users.
+   - `test_ProcessQueue_TransferFailed_ThenRescueClearsIt` — soft-skip + `rescueQueueEntry` round trip.
+   - `test_ProcessQueue_AlreadyCleared_SoftSkipEmitsEvent`, `test_ProcessQueue_InsufficientFunds_EmitsEventAndBreaks` — companion skip paths.
+   - Backed by `MockUSDC.setBlocked` (`test/mocks/MockUSDC.sol`) which mirrors Circle USDC's revert-on-blacklist semantics.
+
+4. **`setNextUsdYieldRate` boundary conditions (`block.timestamp >= usdRateEnd`)**
+   - `test_SetNextUsdYieldRate_RevertAtExactEndBoundary` — `block.timestamp == usdRateEnd` → `RateAlreadyExpired`.
+   - `test_SetNextUsdYieldRate_RevertOneSecondPastEnd` — `block.timestamp == usdRateEnd + 1` → `RateAlreadyExpired`.
+   - `test_SetNextUsdYieldRate_SucceedsOneSecondBeforeEnd` — `block.timestamp == usdRateEnd - 1` → success.
+
+### Test harnesses
+
+Two test-only harness contracts expose `internal` library surface for
+last-mile branches:
+
+- `test/mocks/MathLibHarness.sol` — exposes `MathLib.rpow` so the
+  `x == 0` and `mul`-overflow branches of MakerDAO's `rpow` assembly
+  are reachable from Solidity.
+- `test/mocks/ReentrancyGuardHarness.sol` — exposes `nonReentrant`
+  so the `ReentrancyGuardReentrantCall` revert can be driven
+  directly.
+
+Neither is in any production import path.
+
+### Audit finding surfaced + remediated during coverage work
+
+While extending `MockUSDC` with `setBlocked` to drive the
+TransferFailed branch, `RedemptionQueue.processQueue` previously used
+the low-level `.call` pattern that treated a `transferFrom`
+returning `false` (without reverting) as success. Real Circle USDC's
+blacklist reverts, so production behaviour was safe, but a
+non-standard ERC-20 (or future USDC variant) that returns `false`
+would have silently drained queue entries without paying users.
+
+**Fix:** replaced the raw `.call` with `SafeERC20.trySafeTransferFrom`,
+which both (a) swallows reverts and (b) decodes the boolean return
+value. Tests now drive both shapes independently — revert (matches
+real USDC blacklist) and return-false (hypothetical non-standard
+USDC). The return-false test is the regression guard for this
+finding.
+
+---
+
+## Dependencies — pinned for audit
+
+All `^` ranges in `package.json` have been replaced with exact
+versions, and the Foundry submodule pins in `foundry.lock` are
+aligned with the Node-side OpenZeppelin packages so both compile
+paths (Foundry, Hardhat) produce bytecode against identical sources.
+
+### Solidity sources
+
+| Library | Version | Source |
+|---|---|---|
+| `solc` (compiler) | `0.8.28` | `foundry.toml`, `hardhat.config.ts` |
+| `@openzeppelin/contracts` | `5.6.1` | `package.json` (Hardhat path) |
+| `@openzeppelin/contracts-upgradeable` | `5.6.1` | `package.json` (Hardhat path) |
+| `lib/openzeppelin-contracts` | `v5.6.1` @ `5fd1781b1454fd1ef8e722282f86f9293cacf256` | `foundry.lock` (Foundry path) |
+| `lib/openzeppelin-contracts-upgradeable` | `v5.6.1` @ `7bf4727aacdbfaa0f36cbd664654d0c9e1dc52bf` | `foundry.lock` (Foundry path) |
+| `lib/forge-std` | `v1.12.0` @ `7117c90c8cf6c68e5acce4f09a6b24715cea4de6` | `foundry.lock` |
+
+Both compile paths build against **OpenZeppelin v5.6.1**. The prior
+drift (Foundry on 5.5.0, Hardhat resolving to 5.4.0 from `^5.4.0`)
+is closed.
+
+### Node tooling
+
+Pinned exactly in `EVM/package.json`:
+
+| Package | Version |
+|---|---|
+| `@nomicfoundation/hardhat-toolbox` | `6.1.2` |
+| `@openzeppelin/hardhat-upgrades` | `3.9.0` |
+| `@typechain/ethers-v6` | `0.5.1` |
+| `@typechain/hardhat` | `9.1.0` |
+| `ethers` | `6.16.0` |
+| `hardhat` | `2.28.6` |
+| `hardhat-deploy` | `0.12.4` |
+| `hardhat-deploy-ethers` | `0.4.2` |
+| `typechain` | `8.3.2` |
+| `typescript` | `5.6.3` |
+| `ts-node` | `10.9.2` |
+| `chai` | `4.5.0` |
+| `dotenv` | `17.2.3` |
+| `bs58` | `6.0.0` |
+
+### OpenZeppelin 5.4 → 5.6.1 breaking-change review (audit-relevant)
+
+The following 5.6.0 breaking changes were reviewed against the
+OkuMoney contracts; **none affect us**:
+
+- `Strings.escapeJSON` escape-range expansion — not used.
+- `ERC1155` single-element batch transfer callback change — not used.
+- `ERC1967Proxy` / `TransparentUpgradeableProxy` mandate initialization
+  during construction — we deploy UUPS proxies via
+  `@openzeppelin/hardhat-upgrades`, which always calls `initialize`
+  as part of `deployProxy`. Verified via the Hardhat integration
+  suite.
+- `ERC721` / `ERC1155` operator allowance changes — neither standard
+  is used.
+- `RLP` `encode(bytes32)` fixed-size change — not used.
+- `ERC4337Utils` / `WebAuthn` / `Memory` API changes —
+  account-abstraction and webauthn modules not used.
+- `Math`, `SafeERC20`, `AccessControl`, `Pausable`, `ERC20*`,
+  `UUPSUpgradeable`, `Initializable` — no behavioural changes
+  between 5.4 and 5.6.1 affecting our call sites. Storage layouts
+  within `5.x` are guaranteed compatible by the OpenZeppelin release
+  process.
+
+### `npm audit` posture
+
+`npm audit` reports vulnerabilities in transitive dev dependencies
+pulled in by `hardhat-deploy` and `@nomicfoundation/hardhat-toolbox`.
+These do NOT enter production bytecode — JavaScript dev tooling
+only — and have no impact on the audited Solidity contracts. Listed
+for transparency.
+
+---
+
+## Pointers
+
+- **Workspace overview + cross-chain parity matrix:** [`../../audit/README.md`](../../audit/README.md)
+- **Open issues:** [`TRACKER.md`](TRACKER.md)
+- **In-repo audit package** (accepted risks, slither triage, captured tool snapshots): [`audit/README.md`](audit/README.md)
+- **Self-audit toolkit:** [`../../audit/EVM/README.md`](../../audit/EVM/README.md)
+- **SVM-side docs:** [`../SVM/README.md`](../SVM/README.md)

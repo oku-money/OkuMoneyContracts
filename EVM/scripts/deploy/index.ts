@@ -478,7 +478,8 @@ async function configureRoles(
   // RedemptionQueue roles
   await sendAndWait("Grant QUEUE_PSM to LitePSM", () => redemptionQueue.grantRole(ROLES.QUEUE_PSM, litePSMAddress));
 
-  // LitePSM roles — full operational set for testnet (all to deployer per TESTNET_DEPLOYMENT.md).
+  // LitePSM roles — full operational set for testnet (all to deployer; see
+  // contracts/README.md § Deployment runbook for the production RBAC split).
   // Production: run grantRolesMainnet.ts to distribute roles to cold/warm multisig + orchestrator.
   await sendAndWait("Grant PSM_BUFFER_DEPOSITOR to Admin", () => litePSM.grantRole(ROLES.PSM_BUFFER_DEPOSITOR, deployerAddress));
   await sendAndWait("Grant PSM_QUEUE_PROCESSOR to Admin", () => litePSM.grantRole(ROLES.PSM_QUEUE_PROCESSOR, deployerAddress));

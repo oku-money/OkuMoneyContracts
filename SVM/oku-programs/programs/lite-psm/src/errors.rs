@@ -96,7 +96,7 @@ pub enum LitePsmError {
     /// `MAX_ORACLE_CONFIDENCE_BPS / 10_000`. Publisher set degenerate;
     /// reject for safety. SVM-only hardening (Chainlink doesn't publish
     /// per-round confidence so EVM has no analogue — see
-    /// `audit/PARITY.md`).
+    /// `audit/README.md` § "Deliberate non-parity").
     #[msg("Pyth oracle confidence interval too wide for safe consumption")]
     OracleConfidenceTooWide,
 

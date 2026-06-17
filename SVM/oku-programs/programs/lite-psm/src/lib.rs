@@ -3,16 +3,15 @@
 //! SVM port of the EVM-side `LitePSM.sol`. The structure mirrors
 //! `EVM/src/psm/` module-for-module; deliberate divergences (token
 //! decimals, yield-distribution model, oracle parser, queue size) are
-//! documented in the top-level [`SVM/EVM_VS_SVM.md`](../../../EVM_VS_SVM.md)
-//! reference.
+//! documented in [`SVM/README.md § EVM vs SVM — divergence catalogue`](../../../README.md).
 //!
 //! v1 cross-chain transfers are handled off-chain by an orchestrator that
 //! holds the PSM operational roles (`buffer_depositor`, `queue_processor`,
 //! `rebaser`) and signs `mint_oku_m` / `redeem_oku_m` against its own
 //! ATAs on each chain. There is no on-chain bridge program.
 //!
-//! Inline `// see EVM_VS_SVM.md` comments throughout this crate point to
-//! specific divergence rows in that document.
+//! Inline `// see SVM/README.md` comments throughout this crate point
+//! to specific divergence rows in the catalogue.
 
 // Zero unsafe code (confirmed by cargo-geiger); forbid accidental
 // introduction.
@@ -25,7 +24,8 @@
 // is obtained at runtime from typed account fields. Every CPI target
 // is constrained by Anchor's typed `Program<'info, T>` (which validates
 // `account.key == T::id()` at deserialization), so all hits are false
-// positives. See `audit/SVM/ACCEPTED_RISKS.md` for the per-call review.
+// positives. See `oku-programs/audit/README.md` § Accepted Risks for
+// the per-call review.
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
 // Anchor `#[program]` dispatch glue trips
 // `clippy::diverging_sub_expression`; can't annotate inside macro output.

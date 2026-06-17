@@ -3,7 +3,7 @@
 //! SVM port of the EVM-side `OkuDollar.sol`. usdOku shares appreciate via a
 //! discrete `usd_multiplier` bumped by the orchestrator (`update_usd_multiplier`),
 //! NOT a continuous `_rpow`-style accrual as on EVM. See
-//! [`SVM/EVM_VS_SVM.md`](../../../EVM_VS_SVM.md) for the full divergence list,
+//! [`SVM/README.md`](../../../README.md) (§ "EVM vs SVM divergence catalogue") for the full divergence list,
 //! including the dual-side yield-distribution slot fence (PSM + vault) and
 //! the Uniswap-V2 dead-shares first-deposit defense (SVM-only addition).
 
@@ -14,7 +14,7 @@
 // is obtained at runtime from typed account fields. Every CPI target
 // is constrained by Anchor's typed `Program<'info, T>` accounts (which
 // validate program ID at deserialisation), so all hits are false
-// positives. See `audit/SVM/ACCEPTED_RISKS.md`.
+// positives. See `oku-programs/audit/README.md` § Accepted Risks.
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
 // Anchor `#[program]` dispatch glue trips
 // `clippy::diverging_sub_expression`; can't annotate inside macro output.

@@ -54,7 +54,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -107,7 +110,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -166,7 +172,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -315,7 +324,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -350,7 +362,10 @@
                   109,
                   105,
                   110,
-                  116
+                  116,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -437,7 +452,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ],
@@ -560,7 +578,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -614,7 +635,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -680,7 +704,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -762,7 +789,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -816,7 +846,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1033,7 +1066,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1113,7 +1149,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1261,7 +1300,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1416,9 +1458,19 @@
         {
           "name": "dead_shares_ata",
           "docs": [
-            "Dead shares ATA — only required on the first deposit (total_shares == 0).",
-            "This is a usdOku ATA owned by a known dead address (System Program)",
-            "where MINIMUM_LIQUIDITY shares are permanently locked."
+            "Dead-shares ATA — only required on the first deposit",
+            "(`total_supply == 0`). This is a usdOku ATA owned by the System",
+            "Program where `MINIMUM_LIQUIDITY` shares are permanently locked",
+            "to defeat the first-depositor inflation attack.",
+            "",
+            "Cycle 4 (OKUD-03): `token::mint` + `token::token_program` moved",
+            "onto the context so Anchor enforces them declaratively (visible",
+            "in IDL, can't be silently bypassed by a future handler refactor).",
+            "The two remaining invariants — SP-owner + canonical-ATA — still",
+            "live in the handler because Anchor doesn't have a single",
+            "attribute that expresses \"owner = system_program AND address ==",
+            "canonical ATA derivation for (mint, system_program, Token2022)\".",
+            "See `instructions::core::wrap` for the handler-side validation."
           ],
           "writable": true,
           "optional": true
@@ -1704,7 +1756,7 @@
     {
       "code": 6013,
       "name": "MultiplierCannotDecrease",
-      "msg": "USD multiplier can only increase"
+      "msg": "USD multiplier must strictly increase"
     },
     {
       "code": 6014,
@@ -1748,26 +1800,36 @@
     },
     {
       "code": 6022,
+      "name": "UnexpectedDeadSharesAccount",
+      "msg": "dead_shares_ata must be omitted on subsequent deposits"
+    },
+    {
+      "code": 6023,
       "name": "ZeroAuthority",
       "msg": "Authority pubkey cannot be the zero pubkey"
     },
     {
-      "code": 6023,
+      "code": 6024,
       "name": "YieldDistributionInProgress",
       "msg": "Cannot perform operation in same slot as USD multiplier update"
     },
     {
-      "code": 6024,
+      "code": 6025,
       "name": "OkuMoneyMintMismatch",
       "msg": "Vault oku_money_mint must match PSM oku_money_mint"
     },
     {
-      "code": 6025,
+      "code": 6026,
+      "name": "InvalidOkuMoneyDecimals",
+      "msg": "OkuMoney mint must have exactly 6 decimals"
+    },
+    {
+      "code": 6027,
       "name": "NoPendingRoleAdmin",
       "msg": "No pending role-admin transfer to accept"
     },
     {
-      "code": 6026,
+      "code": 6028,
       "name": "NotPendingRoleAdmin",
       "msg": "Caller is not the pending role admin"
     }
@@ -1892,7 +1954,7 @@
       "name": "OkuDollarConfig",
       "docs": [
         "OkuDollar vault configuration PDA",
-        "Seeds: [\"oku_dollar_config\"]"
+        "Seeds: [\"oku_dollar_config_v2\"]"
       ],
       "type": {
         "kind": "struct",
@@ -2040,8 +2102,11 @@
     {
       "name": "PsmConfig",
       "docs": [
-        "PSM configuration PDA",
-        "Seeds: [\"psm_config\"]"
+        "PSM configuration PDA.",
+        "",
+        "Seeds: `[\"psm_config_v3\"]`. Migration history (seed-rotation log) is",
+        "tracked in `SVM/README.md` § \"PDA seed history\"; the `_v3` suffix",
+        "marks the post-oracle-relay layout."
       ],
       "type": {
         "kind": "struct",
@@ -2191,18 +2256,48 @@
             "type": "bool"
           },
           {
-            "name": "oracle",
+            "name": "oracle_relay_feed",
             "docs": [
-              "Pyth oracle feed (or Pubkey::default() if disabled)"
+              "USDC/USD Pyth feed account (or `Pubkey::default()` to disable the",
+              "peg check — the operator-side kill switch, mirrors EVM",
+              "`setOracleRelay(address(0))`)."
             ],
             "type": "pubkey"
           },
           {
-            "name": "staleness_threshold",
+            "name": "oracle_relay_pyth_program_owner",
             "docs": [
-              "Maximum oracle staleness in seconds"
+              "Pyth program-owner pubkey accepted by the relay parser. Set at",
+              "init via `initialize` and rotatable via",
+              "`set_oracle_relay_pyth_program_owner` (oracle_manager-gated). The",
+              "migration hook for future Pyth Solana Receiver support."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle_relay_staleness",
+            "docs": [
+              "Maximum oracle staleness in seconds. Bounded by",
+              "`[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]` whenever",
+              "the relay is configured."
             ],
             "type": "i64"
+          },
+          {
+            "name": "oracle_relay_min_price_e9",
+            "docs": [
+              "Lower bound of the in-band USDC price (1e9 precision).",
+              "Constrained by `ORACLE_USDC_PRICE_FLOOR`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oracle_relay_max_price_e9",
+            "docs": [
+              "Upper bound of the in-band USDC price (1e9 precision).",
+              "Constrained by `ORACLE_USDC_PRICE_CEILING`."
+            ],
+            "type": "u64"
           },
           {
             "name": "last_yield_distribution_slot",
@@ -2220,19 +2315,6 @@
               "Matches EVM's okuMPrice() storage pattern"
             ],
             "type": "u64"
-          },
-          {
-            "name": "pyth_program_owner",
-            "docs": [
-              "Pyth program owner pubkey accepted by `check_oracle_reserves`.",
-              "Replaces the previously hard-coded mainnet/devnet Pyth-V2 program IDs.",
-              "Set at init via `initialize(pyth_program_owner)` and rotatable via",
-              "`set_pyth_program_owner` (oracle_manager-gated). A deployer can point",
-              "this at the legacy Pyth program (mainnet `FsJ3...`, devnet `gSbe...`)",
-              "or, after parser support is added, at the Pyth Solana Receiver",
-              "(`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`)."
-            ],
-            "type": "pubkey"
           },
           {
             "name": "pending_role_admin",
@@ -2493,6 +2575,16 @@
             "type": "u64"
           },
           {
+            "name": "collateralization_ratio",
+            "docs": [
+              "Collateralization ratio AFTER the update (scaled by `PRECISION`,",
+              "`1e9 = 100 %`). Cycle 4 (OKUD-14): added so monitoring tooling",
+              "doesn't have to re-derive the value off-chain. Parity with",
+              "`ReservesDepositedEvent` / `ReservesWithdrawnEvent`."
+            ],
+            "type": "u64"
+          },
+          {
             "name": "timestamp",
             "type": "i64"
           }
@@ -2532,7 +2624,21 @@
           {
             "name": "shares_minted",
             "docs": [
-              "OkuDollar shares minted (6 decimals)"
+              "OkuDollar shares minted to the user (6 decimals). Cycle 4",
+              "(OKUD-13): does NOT include the `dead_shares_minted` quantity",
+              "on the first deposit — see that field for the inflation-defence",
+              "allocation."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dead_shares_minted",
+            "docs": [
+              "Dead-shares minted to the System-Program-owned ATA on the FIRST",
+              "deposit (cycle 4 / OKUD-13). Always `0` on subsequent deposits.",
+              "`MINIMUM_LIQUIDITY` on the first deposit. Off-chain indexers",
+              "reconstructing `usd_oku_mint.supply` must sum `shares_minted +",
+              "dead_shares_minted` across all WrapEvents."
             ],
             "type": "u64"
           },

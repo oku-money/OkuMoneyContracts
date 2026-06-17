@@ -6,7 +6,7 @@
     "okuDollarProgram": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy"
   },
   "_archived_pre_v2_seed_rotation": {
-    "note": "These accounts were created under the old (pre-noBridge) PDA seeds (psm_config, redemption_queue, oku_dollar_config, usd_oku_mint). After the 2026-06-05 seed rotation to *_v2, all of them are orphaned. See deployments/DEPRECATED.md for rent-recovery plan. Kept here for audit history; the program IDs above are reused with fresh PDAs/mints created by the next deploy:init run.",
+    "note": "These accounts were created under the old (pre-noBridge) PDA seeds (psm_config, redemption_queue, oku_dollar_config, usd_oku_mint). After the 2026-06-05 seed rotation to *_v2, all of them are orphaned. See SVM/README.md § 'PDA seed history' for the orphan-PDA inventory and future rent-recovery plan. Kept here for audit history; the program IDs above are reused with fresh PDAs/mints created by the next deploy:init run.",
     "archivedAt": "2026-06-05T15:30:00.000Z",
     "tokens": {
       "usdc": "AGwA2n1bgTt969wSbhnoyjVsDENaCoyR1W46uEf7LFQA",

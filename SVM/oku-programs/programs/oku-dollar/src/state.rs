@@ -62,13 +62,11 @@ pub struct OkuDollarConfig {
 
 impl OkuDollarConfig {
     /// Migration history (seed-rotation log) tracked in
-    /// `SVM/oku-programs/deployments/DEPRECATED.md`. Seed rotated from
-    /// `b"oku_dollar_config"`
-    /// to `b"oku_dollar_config_v2"` to force a fresh PDA after the lite-psm
-    /// PsmConfig seed rotation. The OLD `OkuDollarConfig.psm_config` field
-    /// pointed at the OLD PsmConfig PDA, which no longer exists — re-init
-    /// at a new seed wires the vault to the new PsmConfig PDA. See
-    /// `SVM/oku-programs/deployments/DEPRECATED.md` for orphan-PDA cleanup.
+    /// `SVM/README.md § PDA seed history` for the seed-rotation log
+    /// and the orphan-PDA inventory. Seed rotated from
+    /// `b"oku_dollar_config"` to `b"oku_dollar_config_v2"` after the
+    /// lite-psm `PsmConfig` rotation; re-init at the new seed wires the
+    /// vault to the new `PsmConfig` PDA.
     pub const SEED: &'static [u8] = b"oku_dollar_config_v2";
 
     /// PDA seed for the usdOku mint (rebasing share token controlled by this vault).

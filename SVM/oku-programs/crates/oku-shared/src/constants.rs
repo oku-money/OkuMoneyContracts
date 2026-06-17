@@ -1,7 +1,8 @@
 //! Protocol-wide numeric constants.
 //!
 //! Anything declared here MUST also appear in `EVM/src/lib/Constants.sol`
-//! (or be a documented divergence in `SVM/EVM_VS_SVM.md`).
+//! (or be a documented divergence in `SVM/README.md` § "EVM vs SVM —
+//! divergence catalogue").
 //!
 //! ## Why 1e9 on SVM vs 1e18 on EVM
 //!
@@ -151,7 +152,7 @@ pub const MAX_FEED_EXPO_MAGNITUDE: u32 = 18;
 ///
 /// EVM analogue: not present — Chainlink AggregatorV3 does not expose
 /// per-round confidence, so this is a Pyth-only defense. Documented in
-/// `audit/PARITY.md` as a deliberate SVM-only hardening.
+/// `audit/README.md` § "Deliberate non-parity" as an SVM-only hardening.
 pub const MAX_ORACLE_CONFIDENCE_BPS: u64 = 200;
 
 // ---------------------------------------------------------------------------

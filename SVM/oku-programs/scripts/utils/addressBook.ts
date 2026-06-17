@@ -29,8 +29,9 @@
  *
  * before deleting the stale `deployments/<network>.json`. Do NOT delete the
  * file first or the old program IDs are gone from the repo and you have to
- * fish them out of explorer history. See SVM/TESTNET_DEPLOYMENT.md for the
- * full rent-recovery walkthrough.
+ * fish them out of explorer history. See contracts/README.md
+ * § "Deployment runbook" → "Stale deployments/devnet.json recovery"
+ * for the full rent-recovery walkthrough.
  */
 
 import * as fs from 'fs';

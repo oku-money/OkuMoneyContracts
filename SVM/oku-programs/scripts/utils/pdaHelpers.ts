@@ -14,8 +14,8 @@
  *   touched.
  *
  * All pre-rotation PDAs are orphaned on devnet; see
- * `deployments/DEPRECATED.md` for the orphan-PDA tracking and future
- * rent-recovery plan.
+ * `SVM/README.md` § "PDA seed history" for the orphan-PDA inventory
+ * and future rent-recovery plan.
  */
 
 import { PublicKey } from "@solana/web3.js";

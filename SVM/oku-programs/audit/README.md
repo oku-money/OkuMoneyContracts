@@ -1,20 +1,18 @@
-# Audit Package — okuMoney SVM programs
+# Audit Package — okuMoney SVM Programs
 
-This directory contains the pre-audit deliverables for the OkuMoney
-SVM programs (`lite-psm`, `oku-dollar`). Companion to `EVM/audit/`.
-Reference these files when preparing the audit scope document.
+Pre-audit deliverables for the OkuMoney SVM programs (`lite-psm`,
+`oku-dollar`). Companion to `../../EVM/audit/`. Cycle 4 (2026-06-15)
+baseline.
 
 ## Contents
 
 | File | Description |
 |---|---|
-| `README.md` | This file. |
-| `ACCEPTED_RISKS.md` | Known issues / accepted risks the auditor should NOT re-flag. |
-| `clippy-checklist.md` | `cargo clippy -D warnings` output + per-finding disposition. |
+| `README.md` | This file — accepted risks, clippy triage, tool snapshots. |
 | `clippy-output.txt` | Raw `cargo clippy` transcript. |
 | `program-sizes.txt` | `.so` sizes for both production programs. |
-| `test-output-bankrun.txt` | `npm run test:bankrun` output (128 tests). |
-| `test-output-cargo.txt` | `cargo test --workspace` output (20 tests). |
+| `test-output-bankrun.txt` | `npm run test:bankrun` output. |
+| `test-output-cargo.txt` | `cargo test --workspace` output. |
 
 ## Toolchain headline
 
@@ -24,212 +22,263 @@ Reference these files when preparing the audit scope document.
 | Anchor CLI / lib | 1.0.2 / 1.0.2 (`Anchor.toml`, workspace `Cargo.toml`) |
 | Solana CLI | 3.1.10 (`Anchor.toml`) |
 
-Run `make doctor` from `audit/SVM/` to verify the installed binaries
-match these pins.
+Run `make doctor` from `../../../../audit/SVM/` to verify the
+installed binaries match these pins.
 
-## Test count headline
+## Test count headline (cycle 4)
 
 | Suite | Tests | Failures |
 |---|---:|---:|
-| Bankrun (full suite + scenarios) | 129 | 0 |
-| Cargo unit tests | 20 | 0 |
-| **Total** | **149** | **0** |
+| Bankrun | 129 | 0 |
+| Cargo unit | 36 | 0 |
+| **Total** | **165** | **0** |
 
-Bankrun added one test in the cycle-2 pass:
-`set_oracle_relay_feed rejects non-default new_feed when oracleAccount
-is missing` — codifies the admin-time validation gate documented under
-"Audit-toolkit-pass changes" below.
+Kani (cycle 4): **17 / 17 SUCCESSFUL** (added 4 ceil-primitive
+proofs + 4 vault-math proofs to the cycle-3 baseline of 9).
 
-Trident (cycle-3 addition): both programs now have working `#[init]`
-flows. 1-minute smoke runs archived under
-`audit/SVM/reports/trident/{lite-psm,oku-dollar}_20260615_phase2.txt`
-show 100% Init/Setup ix success and 0 panics across ~100 k random tx
-per program. The `#[end]` invariants on `oku_m_price` /
-`usd_multiplier` are now firing.
+cargo-fuzz (cycle 4): **7 targets** (added `collateral_ratio` +
+`mul_div_ceil`); 0 crashes after one fuzz-harness property fix
+during cycle-4 validation.
 
-Kani (cycle-3 retune): 9 / 9 SUCCESSFUL (cycle 2 had 7/9 with 2
-SAT-hard timeouts). Domain bounds on the two affected harnesses were
-tightened with documented complementary `cargo-fuzz` coverage of the
-full u64 range.
+Trident (cycle 3): both programs have working `#[init]` flows.
+1-minute smoke runs show 100 % Init/Setup ix success and 0 panics
+across ~100 k random tx per program. `#[end]` invariants on
+`oku_m_price` / `usd_multiplier` are firing.
 
 ## Static analysis headline
 
 `cargo clippy --workspace --all-targets -- -D warnings` exits 0.
+Strict invocation in `audit/SVM/Makefile` (with `-W
+clippy::arithmetic_side_effects -W clippy::cast_*` family) also
+exits 0 on Rust 1.90.0.
 
-Two suppressions are applied crate-wide on both production programs
-(documented inline with rationale):
+Three suppressions applied crate-wide on both production programs,
+documented inline with rationale:
 
 - `clippy::diverging_sub_expression` — fires on Anchor's `#[program]`
   macro expansion; cannot be annotated inside generated code.
 - `unexpected_cfgs` — `target_os = "solana"` cfg used by
   `solana-program-entrypoint`'s panic handler.
+- `clippy::arbitrary_cpi` — every CPI target is constrained by
+  Anchor's typed `Program<'info, T>` accounts; the lint fires because
+  the program ID is obtained at runtime from a typed account field
+  rather than a hardcoded literal.
 
-`cargo dylint` (Trail of Bits' solana-lints) was re-probed upstream in
-cycle 3 (2026-06-15). The pin (`nightly-2025-01-09`) is unchanged from
-cycle 1 and incompatible with `anchor-lang 1.0.2` (which uses
-`extract_if`, stable since Rust 1.87). Per the cycle-3 plan we did
-not vendor a fork; the audit Makefile's `solana-lints` target stubs
-out with a deferred-status marker. See `ACCEPTED_RISKS.md § 5` for
-the deferral plan and `audit/SVM/FINDINGS.md § Cycle 3 / Phase 3` for
-the upstream-tracking signal.
+`cargo dylint` (Trail of Bits `solana-lints`) was re-probed upstream
+in cycle 3 (2026-06-15). The pin (`nightly-2025-01-09`) is unchanged
+from cycle 1 and incompatible with `anchor-lang 1.0.2`. Currently
+deferred — see Accepted Risk § 5.
 
 ## Program sizes headline
 
-Both programs are within standard BPF-loader bounds:
+Both programs within standard BPF-loader bounds (post-cycle-4):
 
 | Program | Runtime size (B) |
 |---|---:|
-| `lite-psm.so` | 535,464 |
-| `oku-dollar.so` | 414,912 |
-
-(lite-psm grew +272 B from the new `OracleAccountMissing` enforcement
-path on `set_oracle_relay_feed`; see "Audit-toolkit-pass changes" below.)
-
-## Oracle relay (USDC peg circuit-breaker)
-
-Audit-prep cycle deleted the Proof-of-Reserves plumbing
-(`helpers::oracle::check_oracle_reserves`, the `oracle` /
-`staleness_threshold` / `pyth_program_owner` fields on `PsmConfig`, and
-the `set_oracle` / `set_pyth_program_owner` admin ix). Rationale: okuMoney
-is a centralized US-regulated MSB and the operator is already responsible
-for backing USDC; PoR did not detect operator-side reserve fraud, only
-oracle malfunction. The replacement is a strict peg circuit-breaker.
-
-New surface:
-
-- `programs/lite-psm/src/helpers/oracle_relay.rs` — Pyth-V2 USDC/USD
-  parser with band + status + freshness + positive-answer + owner checks.
-  Normalizes `(price: i64, expo: i32)` to SVM's 1e9 precision.
-- Five new fields on `PsmConfig`: `oracle_relay_feed`,
-  `oracle_relay_pyth_program_owner`, `oracle_relay_staleness`,
-  `oracle_relay_min_price_e9`, `oracle_relay_max_price_e9`.
-- Four new `oracle_manager`-gated admin ix:
-  `set_oracle_relay_feed` (also the kill switch via
-  `Pubkey::default()`), `set_oracle_relay_staleness`,
-  `set_oracle_relay_band`, `set_oracle_relay_pyth_program_owner`.
-- Wired into `mint_oku_m`, `redeem_oku_m`, `process_queue` (lite-psm).
-- Cross-program wiring into `oku_dollar::wrap` / `unwrap` lives in the
-  same shape — the vault reads `PsmConfig` directly for the lock check
-  and would do the same for the relay if the operator decides to require
-  peg-gated wrap (kept disabled in v1 — wrap/unwrap operate on share
-  accounting that doesn't directly transact USDC; gating it would only
-  add latency without changing the threat).
-- Shared constants in `oku-shared`:
-  `ORACLE_USDC_PRICE_FLOOR = 0.95e9`, `_CEILING = 1.05e9`,
-  `MAX_FEED_EXPO_MAGNITUDE = 18`. Mirror EVM (`0.95e18` / `1.05e18` /
-  `MAX_FEED_DECIMALS = 18`).
-- Default band: `[0.97e9, 1.03e9]` (±3%) seeded by the deploy script.
-- Default staleness: `3600s`. Bounded by `[60s, 7 days]`.
-
-PSM config seed rotated `psm_config_v2 → psm_config_v3`. Orphan-PDA
-tracking in `deployments/DEPRECATED.md`. Audit risk #3 (operator-side
-oracle compromise) is documented in `ACCEPTED_RISKS.md`.
-
-## Defensive-check pass
-
-Surveyed all defensive guards on `lite-psm` and `oku-dollar` against the
-"operator-trust-only redundant" criterion used on the EVM side. Same
-finding: every guard is either math sanity (e.g. `MAX_OKU_M_PRICE`
-ceiling), operator-footgun protection (e.g. `BelowCurrentSupply`,
-`YieldTooSmall`), or fail-loud rails for future maintainers (e.g.
-`TransferHookNotAllowed`, `OkuMoneyMintMismatch`). None were stripped;
-NatSpec/comments updated to drop the "defense against compromised key"
-framing because operator-compromise is out of scope per the centralized
-trust model documented in `SVM/README.md § Authority Model`.
-
-One small consistency fix applied (mirrors the EVM cycle):
-
-- `lite_psm::set_oku_m_price` and `oku_dollar::update_usd_multiplier`
-  now reject equal-value writes (strict-increase). Aligns with
-  `distribute_yield`'s `YieldTooSmall` so a no-op call cannot stamp the
-  sandwich-lock slot without moving the multiplier.
-
-## Yield-lock parity fix
-
-`oku_dollar::withdraw_reserves` now calls `check_yield_lock` (PSM) and
-`check_vault_yield_lock` (vault) before computing the post-withdrawal
-collateral ratio. Mirrors EVM `OkuDollar.withdrawSurplus`'s
-`whenYieldNotDistributing` modifier. Closes a small symmetry gap noted
-in the audit-prep plan.
+| `lite-psm.so` | 556,920 (+21 456 from cycle 3 — new `user_self_rescue_queue_entry` ix + Token-2022 extension helper + ceil math) |
+| `oku-dollar.so` | 422,600 (+7 688 from cycle 3 — new event fields + mint-extension wiring) |
 
 ## Dependency pinning
 
-- Rust toolchain: pinned in `rust-toolchain.toml` (1.90.0 as of cycle 3,
-  2026-06-15; bumped from 1.85.0). `trident-tests/rust-toolchain.toml`
-  pins the same version (cycle 3 collapsed the previous "stable" float).
-- Anchor: `anchor_version = "1.0.2"` in `Anchor.toml`; `anchor-lang = "1.0.2"`
-  in the workspace `Cargo.toml`. CLI and lib match — no build-time
-  drift warning (cycle 3 closed the 1.0.0 / 1.0.2 mismatch).
-- Solana: `solana_version = "3.1.10"` in `Anchor.toml`. The 4.x major
-  bump is deferred post-audit (cycle 3 decision; see TRACKER).
+- **Rust toolchain:** 1.90.0 (collapsed across `programs/` + `trident-tests/` in cycle 3).
+- **Anchor:** `anchor_version = "1.0.2"` in `Anchor.toml`; `anchor-lang = "1.0.2"` in workspace `Cargo.toml`. No build-time drift warning.
+- **Solana:** `solana_version = "3.1.10"`. 4.x major bump deferred post-audit.
 - No `solana-sdk` direct dependency; everything pulled through Anchor.
 
-## Audit-toolkit-pass changes (2026-06-15)
+---
 
-A pass with the `../audit/SVM/` toolkit (clippy + cargo-audit +
-cargo-deny + cargo-geiger + cargo-fuzz + Kani; dylint deferred per
-`ACCEPTED_RISKS.md § 5`) surfaced a handful of items not caught by the
-prior `cargo clippy -D warnings` invocation. All addressed in this
-cycle:
+# Accepted Risks — SVM Programs
 
-### Code fixes
+This document lists trust assumptions and design decisions that the
+SVM side of okuMoney makes deliberately. Auditors should NOT re-flag
+these; they are the considered output of design discussion.
 
-1. **`programs/lite-psm/src/helpers/oracle_relay.rs`** — replaced
-   raw arithmetic + sign-cast on the Pyth `(price, expo)` normalization
-   path with `checked_add` / `unsigned_abs` / `u128::try_from(price)`.
-   Five clippy errors under
-   `-W clippy::arithmetic_side_effects -W clippy::cast_sign_loss`
-   cleared. Behavior unchanged — the normalization is the same
-   `price * 10^(expo + 9)` (or `price / 10^|expo + 9|`) computation,
-   just with overflow-safe primitives so the audit-tool flags don't
-   need a per-line `#[allow]`.
+## 1. Operator-compromise is out of scope
 
-2. **`programs/oku-dollar/src/helpers.rs::calculate_collateral_ratio`** —
-   replaced the bare `numerator / denominator` with `checked_div`. The
-   `denominator > 0` invariant is asserted in the preceding lines so
-   the division can never trap; `checked_div` is the documented form
-   that clippy accepts.
+okuMoney is a centralized US-regulated MSB. The on-chain authority
+model encodes separation-of-duties within the company (see
+[`../README.md § Authority model`](../README.md)), but the threat
+model does NOT include "what if the cold multisig is malicious."
+That scenario is managed via off-chain controls (key custody,
+change-management procedures, regulatory framework).
 
-3. **`programs/lite-psm/src/instructions/psm_admin.rs::set_oracle_relay_feed`** —
-   **audit-grade gap closed**. The prior revision accepted
-   `new_feed != Pubkey::default()` with `oracle_account: None` and
-   silently persisted the new feed pubkey without running
-   `validate_oracle_relay_feed`. An operator could stamp a malformed
-   feed that would then error at every subsequent `mint` / `redeem` /
-   `process_queue` call until they noticed. The handler now returns
-   `OracleAccountMissing` when the account is omitted and the new feed
-   is non-default; the disable path (`new_feed == Pubkey::default()`)
-   still accepts a null account, matching EVM's
-   `setOracleRelay(address(0))` kill-switch shape. A new bankrun test
-   (`set_oracle_relay_feed rejects non-default new_feed when
-   oracleAccount is missing`) codifies the gate.
+This affects how the auditor should interpret defensive checks.
+Guards like `MAX_OKU_M_PRICE`, `MIN_COLLATERAL_RATIO_FLOOR`, and
+the peg-band hard floor/ceiling are present as math-sanity bounds
+(keeping the `u64 * u64 -> u128` paths in the overflow-safe region,
+and stopping operator typos), not as defense against a compromised
+rebaser key. NatSpec / comments have been stripped of the "defense
+in depth against compromised key" language because it over-promised
+a guarantee the model doesn't provide.
 
-4. **`tests/shared/pythFixture.ts`** — extracted the Pyth-V2
-   `SolanaPriceAccount` fixture builder from `tests/bankrun/oracle-relay.ts`
-   into a shared helper so `tests/bankrun/lite-psm.ts` can wire a valid
-   feed for the role-gating / missing-account-at-mint tests that used
-   to rely on the now-removed silent-bypass.
+## 2. Proof-of-Reserves was removed in favour of a USDC peg circuit-breaker
 
-### Housekeeping
+The `check_oracle_reserves` helper (Pyth-V2 custom-feed parser
+publishing total reserves in OkuMoney base units) was deleted in
+the audit-prep cycle. Rationale: PoR did not actually detect
+operator-side reserve fraud — the operator controls the reserve
+attestation feed. The replacement is a strict USDC peg
+circuit-breaker (`helpers::oracle_relay::check_usdc_peg`) wrapping
+the live Pyth USDC/USD feed, which defends against the one threat
+the trust model doesn't cover (USDC depeg events).
 
-- Removed orphan `target/deploy/{wokusd_vault,oku_shared}-keypair.json`
-  (former `wokusd_vault` program renamed to `oku_dollar` in earlier
-  cycle; `oku_shared` is a library crate with no on-chain entrypoint).
-- Updated `audit/SVM/Makefile` to drop the removed `oku-bridge-router`
-  program from `TRIDENT_TARGETS`, `cargo-geiger`'s crate list, and
-  `anchor-verify`'s program list.
-- Fixed `audit/SVM/Makefile`'s `cargo-geiger` loop: each crate scan now
-  runs in its own subshell (`( cd … && cargo geiger )`) so iterations
-  don't share cwd.
-- `trident-tests/fuzz_lite_psm/test_fuzz.rs` — rotated the hard-coded
-  `psm_config_v2` PDA seed to `psm_config_v3` (cycle 2026-06-12 left
-  the harness pointing at a non-existent PDA), and updated the
-  `oku_m_price` byte offset for the `#[end]` invariant from `[586..594]`
-  to `[634..642]` to match `PsmConfig::LEN == 674`.
-- `SVM/TRACKER.md` — documented the `psm_config_v2 → psm_config_v3`
-  cycle alongside the noBridge `_v1 → _v2` rotation. The other three
-  SVM PDA seeds (`redemption_queue`, `oku_dollar_config`, `usd_oku_mint`)
-  remain on `_v2`.
-- `deny.toml` — annotated the `license-not-encountered` warnings as
-  intentional headroom (Anchor/Solana SDK bumps may surface new
-  licenses).
+This change was storage-incompatible with the `_v2` PDA layout; the
+PSM config seed rotated `psm_config_v2 → psm_config_v3`. Deployed
+testnet PDAs are throwaway, so no migration ceremony was required.
+
+## 3. Pyth Solana Receiver (`PriceUpdateV2`) not supported in v1
+
+The relay parser at `helpers::oracle_relay` accepts only the legacy
+Pyth V2 `SolanaPriceAccount` layout (`magic == 0xa1b2c3d4`,
+`version == 2`, `atype == Price`). The modern Pyth Solana Receiver
+program (`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`) uses a
+different account layout (`PriceUpdateV2`) and is NOT parsed.
+
+Migration hook: `set_oracle_relay_pyth_program_owner` rotates the
+accepted owner pubkey. A second parser path can be added in a
+follow-up upgrade when receiver-only USDC/USD feeds become the only
+option; for v1, every Pyth deployment we target still publishes V2
+feeds.
+
+## 4. Queue capacity capped at 200 entries
+
+The `RedemptionQueue` zero-copy ring is sized at `MAX_ENTRIES = 200`.
+Solana's `MAX_PERMITTED_DATA_INCREASE = 10_240` bytes per single-CPI
+allocation caps the largest single-step `init` to ~9.6 KB of array
+data. The spec target was 500; reaching it would require a
+multi-step `init + 2× realloc` deploy flow OR per-user PDAs.
+
+The 200-entry cap with `MAX_BATCH_ENTRIES = 50` per `process_queue`
+tx is sufficient for launch SLA. Cycle 4 added permissionless
+`user_self_rescue_queue_entry` (PSM-06) so a frozen / wrong-owner
+ATA at the queue head no longer DoSes downstream entries — the
+affected user can self-unblock from a thawed ATA. Defer the 500
+upgrade until telemetry shows operators repeatedly hitting
+`QueueFull`.
+
+## 5. `cargo dylint` (solana-lints) deferred — upstream incompatibility
+
+The Trail of Bits Solana lint suite is declared in `Cargo.toml` and
+was run during an earlier review pass. F-02 (`arbitrary_cpi`), F-03
+(`type_cosplay`), and F-04 (`sysvar_get`) were triaged crate-wide
+via `#![allow]` annotations with documented rationale.
+
+Cycle 3 (2026-06-15) re-probed upstream
+(`https://github.com/crytic/solana-lints`). The repository's
+`rust-toolchain` is still pinned to `nightly-2025-01-09`, the same
+pin from cycle 1. Recent commits (most recent 2025-05-15) are all
+dependabot bumps for ancillary deps — no `clippy_utils` or
+nightly-toolchain bumps in 2025-H2 or 2026-H1. Anchor 1.0.2's
+proc-macros use `extract_if` (stabilized in Rust 1.87), which is
+unavailable on that nightly. Running `cargo dylint` against the
+current workspace fails at the proc-macro derive stage.
+
+Per the cycle-3 plan we deliberately did **not** vendor a fork. The
+audit Makefile's `solana-lints` target now stubs out with a
+deferred-status marker and writes a marker file under
+`reports/solana-lints/`. The original invocation is preserved in a
+commented-out block adjacent to the target for one-line re-enable
+when upstream bumps.
+
+**Tracking signal:** watch
+`https://github.com/crytic/solana-lints/blob/master/rust-toolchain`
+for a channel newer than `nightly-2025-04-xx` (first nightly to ship
+`extract_if`-compatible `clippy_utils`). Re-enable is ~½ day once
+that lands.
+
+## 6. `cargo fmt --check` and `cargo deny check` not wired into CI
+
+Both tools are configured (`deny.toml` exists; rustfmt config exists)
+but not yet invoked by `.github/workflows/test.yml`. Documented as a
+post-launch follow-up. Manual runs are expected to be clean.
+
+## 7. SVM ↔ EVM constant parity carries the 1e9 vs 1e18 scaling delta
+
+SVM uses `PRECISION = 1e9` for the structural reason that `u64`
+token amounts × `1e9` precision peak around `1.8e28`, comfortably
+within `u128::MAX`. A `1e18` precision would require either `u128`
+token amounts (no SPL Token-2022 support) or aggressive precision
+loss on every operation. Every numeric constant has its SVM-scaled
+counterpart (`ORACLE_USDC_PRICE_FLOOR = 0.95e9` vs `0.95e18` on
+EVM, etc.). The off-chain orchestrator handles the scale conversion
+when reflecting value across the EVM ↔ SVM boundary. See
+[`../../../audit/README.md § Decimals boundary`](../../../audit/README.md).
+
+## 8. Peg-check on wrap/unwrap deferred
+
+The vault's `wrap` / `unwrap` instructions DO read PSM state
+(`oku_m_price`, `check_yield_lock`) but currently do NOT call
+`check_usdc_peg`. Rationale: `wrap` / `unwrap` move OkuMoney shares
+in and out of usdOku — neither side touches USDC directly. The peg
+circuit-breaker exists to prevent USDC value bleed; gating
+wrap / unwrap on it would only add latency without changing the
+threat. PSM-side mint / redeem are the relevant entry points and
+ARE gated.
+
+If a future product change makes vault operations USDC-flow-sensitive
+(e.g. a direct USDC ↔ usdOku route), the peg check should be added
+on the new path.
+
+## 9. Cycle-4 IDL break — `InitializeParams` struct
+
+Cycle 4 (PSM-17) collapsed the lite-psm `initialize` instruction's
+15 positional pubkey args into a single `InitializeParams` borsh
+struct. This is a wire-format break for any TS client compiled
+against the cycle-3 IDL. Accepted pre-audit because the IDL break
+significantly improves audit readability (every field is named, not
+positional). All test fixtures + the deploy script were updated in
+the same cycle.
+
+---
+
+# Clippy findings — pre-audit triage
+
+Tool: `cargo clippy --workspace --all-targets -- -D warnings`.
+Toolchain: Rust **1.90.0** (cycle-3 bump).
+Result: **0 errors, 0 warnings**.
+
+The audit toolkit also runs the stricter:
+
+```bash
+cargo clippy --workspace --all-features -- -D warnings -D clippy::all \
+  -W clippy::arithmetic_side_effects \
+  -W clippy::cast_possible_truncation \
+  -W clippy::cast_sign_loss \
+  -W clippy::cast_possible_wrap \
+  -W clippy::checked_conversions
+```
+
+invocation defined in `../../../../audit/SVM/Makefile`. Result: **0
+errors, 0 warnings** as of cycle 4 (no new lints surfaced from the
+cycle-3 toolchain bump nor the cycle-4 contract changes).
+
+## Resolved findings (historical, kept for reference)
+
+| Lint | Location | Disposition |
+|---|---|---|
+| `clippy::needless_return` | `oku_dollar::core::wrap` (two arms) | Fixed — converted `return Ok(x);` to bare `Ok(x)`. |
+| `clippy::arithmetic_side_effects` | `lite_psm::helpers::oracle_relay::get_usdc_price` (`expo + precision_exp`, `(-shift) as u32`) | Fixed — `expo.checked_add(PRECISION_EXP)` + `shift.unsigned_abs()`. |
+| `clippy::cast_sign_loss` | `lite_psm::helpers::oracle_relay::get_usdc_price` (`price as u128`, `shift as u32`, `(-shift) as u32`) | Fixed — `u128::try_from(price)` (sign-safe after `price > 0` assertion) + `shift.unsigned_abs()`. |
+| `clippy::arithmetic_side_effects` | `oku_dollar::helpers::calculate_collateral_ratio` (`numerator / denominator`) | Fixed — `numerator.checked_div(denominator)`. The `denominator > 0` invariant is asserted in the preceding lines so the division can never trap. |
+
+## Crate-wide suppressions (documented inline)
+
+| Lint | Suppression scope | Rationale |
+|---|---|---|
+| `clippy::diverging_sub_expression` | `lite-psm`, `oku-dollar` | Fires on Anchor's `#[program]` macro expansion. Cannot be annotated inside generated code. |
+| `unexpected_cfgs` | `lite-psm`, `oku-dollar` | `target_os = "solana"` cfg emitted by `solana-program-entrypoint`'s panic-handler macro. The check-cfg machinery doesn't know about the BPF target. |
+| `clippy::arbitrary_cpi` | `lite-psm`, `oku-dollar` | F-02 disposition. Every CPI target is constrained by Anchor's typed `Program<'info, T>` account system; the lint fires because the program ID is obtained at runtime from a typed account field rather than a hardcoded literal. |
+
+Cycle 4 dropped the `clippy::too_many_arguments` crate-wide
+suppression — the only fn that triggered it (`initialize`) collapsed
+its signature into `InitializeParams`.
+
+---
+
+## Pointers
+
+- **SVM-specific docs:** [`../README.md`](../README.md) (programs, design choices, deployment, runbook, EVM divergence)
+- **Open issues:** [`../../TRACKER.md`](../../TRACKER.md)
+- **Workspace overview + parity matrix:** [`../../../../audit/README.md`](../../../../audit/README.md)
+- **Self-audit toolkit:** [`../../../../audit/SVM/README.md`](../../../../audit/SVM/README.md)
+- **EVM in-repo audit:** [`../../../EVM/audit/README.md`](../../../EVM/audit/README.md)

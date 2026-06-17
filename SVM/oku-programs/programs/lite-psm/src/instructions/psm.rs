@@ -8,7 +8,7 @@
 // All CPI targets in this module are constrained by Anchor's typed
 // `Program<'info, T>` accounts (Token, Token2022) which validate program
 // ID at deserialization. The `arbitrary_cpi` warning is a false
-// positive here (see `audit/SVM/ACCEPTED_RISKS.md`).
+// positive here (see `oku-programs/audit/README.md` § Accepted Risks).
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
 
 use crate::contexts::{
@@ -199,8 +199,8 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
     // truncates the 18-decimal `okuMAmount` down to USDC's 6-decimal grid via
     // `usdcDecimalMultiplier`), the SVM math is already 1:1 in decimals. The
     // only zero-output path is `oku_m_amount * oku_m_price < PRECISION`, which
-    // we explicitly reject below. See `EVM_VS_SVM.md` for the full divergence
-    // table.
+    // we explicitly reject below. See `SVM/README.md` § "EVM vs SVM —
+    // divergence catalogue" for the full divergence table.
     let usdc_amount = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
 
     // Reject zero-output redeems — at low `oku_m_amount` and unit price the

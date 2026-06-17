@@ -11,8 +11,8 @@ use anchor_lang::prelude::*;
 /// PSM configuration PDA.
 ///
 /// Seeds: `["psm_config_v3"]`. Migration history (seed-rotation log) is
-/// tracked in `SVM/oku-programs/deployments/DEPRECATED.md`; the `_v3`
-/// suffix marks the post-oracle-relay layout.
+/// tracked in `SVM/README.md` § "PDA seed history"; the `_v3` suffix
+/// marks the post-oracle-relay layout.
 #[account]
 #[derive(InitSpace)]
 pub struct PsmConfig {
@@ -148,7 +148,8 @@ const _: () = assert!(PsmConfig::LEN == 674);
 /// constraint goes through `system_program::create_account`). 200
 /// entries × 48 B = 9 600 B fits with 600 B of headroom; a single-step
 /// `setup_redemption_queue` would otherwise require a `init + realloc +
-/// realloc` flow. See `SVM/EVM_VS_SVM.md` for the EVM divergence note.
+/// realloc` flow. See `SVM/README.md` § "EVM vs SVM — divergence
+/// catalogue" for the EVM divergence note.
 ///
 /// Wire layout (`#[repr(C)]`, packed to native alignment):
 ///
@@ -176,7 +177,7 @@ const _: () = assert!(PsmConfig::LEN == 674);
 ///   (`setup_redemption_queue`).
 ///
 /// Seeds: `["redemption_queue_v2"]`. Rotation history tracked in
-/// `SVM/oku-programs/deployments/DEPRECATED.md`.
+/// `SVM/README.md` § "PDA seed history".
 #[account(zero_copy)]
 #[repr(C)]
 pub struct RedemptionQueue {
@@ -291,6 +292,6 @@ const _: () = assert!(RedemptionQueue::LEN == 9_640);
 // CPI-allocation cap, so `setup_redemption_queue` can allocate in one shot.
 
 // Cycle 4 (PSM-20): historical "bridge state removed" note moved out
-// of source. See lib.rs for the orchestrator-bridge model and
-// `SVM/oku-programs/deployments/DEPRECATED.md` for the on-chain
-// removal history.
+// of source. See `lib.rs` for the orchestrator-bridge model and
+// `SVM/README.md` § "PDA seed history" for the on-chain removal
+// history.

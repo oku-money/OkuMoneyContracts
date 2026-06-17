@@ -5,7 +5,7 @@
  * In production, minterAllowance should be set well below maxSupply (e.g. 1%
  * of max supply) and rotated weekly. This script is the rotation tool.
  *
- * See docs/orchestrator-runbook.md § Minter allowance rotation policy.
+ * See ../../README.md § Orchestrator runbook — Minter allowance rotation policy.
  *
  * Usage:
  *   NETWORK=base npx hardhat run scripts/operator/configureMinterAllowance.ts --network base \

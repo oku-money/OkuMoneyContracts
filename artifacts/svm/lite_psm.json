@@ -49,7 +49,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -106,7 +109,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -151,7 +157,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -286,7 +295,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -352,7 +364,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -413,7 +428,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -424,10 +442,11 @@
           "docs": [
             "USDC mint (standard SPL).",
             "",
-            "Must have exactly 6 decimals on Solana — this matches the",
-            "`OkuMoney`/`usdOku` decimal model. EVM resolves a runtime",
-            "`usdcDecimalMultiplier` from `IERC20Metadata.decimals()`; SVM hardcodes",
-            "6 decimals and asserts at init. See `EVM_VS_SVM.md`."
+            "Must have exactly `TOKEN_DECIMALS` (= 6) decimals on Solana —",
+            "this matches the `OkuMoney`/`usdOku` decimal model. EVM resolves",
+            "a runtime `usdcDecimalMultiplier` from `IERC20Metadata.decimals()`;",
+            "SVM hardcodes the value via the shared constant and asserts at",
+            "init."
           ]
         },
         {
@@ -441,10 +460,11 @@
             "mint whose authority is a different program / multisig, silently",
             "breaking supply accounting.",
             "",
-            "Decimals are pinned at 6 — all PSM math (`oku_m_price`,",
-            "`oku_m_to_dollars`, yield distribution) assumes 6-decimal raw",
-            "amounts. EVM resolves this at runtime from `IERC20Metadata`; SVM",
-            "hardcodes the assumption and asserts it at init."
+            "Decimals are pinned at `TOKEN_DECIMALS` (= 6) — all PSM math",
+            "(`oku_m_price`, `oku_m_to_dollars`, yield distribution) assumes",
+            "6-decimal raw amounts. Cycle 4: replaced the literal `6` with",
+            "the shared constant so a future re-decimalisation can't drift",
+            "the assertion away from the assumed precision."
           ]
         },
         {
@@ -526,60 +546,12 @@
       ],
       "args": [
         {
-          "name": "max_supply",
-          "type": "u64"
-        },
-        {
-          "name": "minter_allowance",
-          "type": "u64"
-        },
-        {
-          "name": "pauser",
-          "type": "pubkey"
-        },
-        {
-          "name": "unpauser",
-          "type": "pubkey"
-        },
-        {
-          "name": "freezer",
-          "type": "pubkey"
-        },
-        {
-          "name": "unfreezer",
-          "type": "pubkey"
-        },
-        {
-          "name": "queue_processor",
-          "type": "pubkey"
-        },
-        {
-          "name": "buffer_depositor",
-          "type": "pubkey"
-        },
-        {
-          "name": "buffer_withdrawer",
-          "type": "pubkey"
-        },
-        {
-          "name": "oracle_manager",
-          "type": "pubkey"
-        },
-        {
-          "name": "cap_manager",
-          "type": "pubkey"
-        },
-        {
-          "name": "allowance_manager",
-          "type": "pubkey"
-        },
-        {
-          "name": "rebaser",
-          "type": "pubkey"
-        },
-        {
-          "name": "pyth_program_owner",
-          "type": "pubkey"
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "InitializeParams"
+            }
+          }
         }
       ]
     },
@@ -622,7 +594,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -638,7 +613,11 @@
           "name": "oku_money_mint",
           "docs": [
             "OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy",
-            "script chooses which extensions (if any) are configured at mint creation."
+            "script chooses which extensions (if any) are configured at mint creation.",
+            "`mint::authority = config` is defense-in-depth: even if someone attempted",
+            "an out-of-band mint-authority rotation (which requires a CPI signed by",
+            "the current authority = config PDA, so it cannot happen without the",
+            "program's consent), this constraint would catch it at deserialization."
           ],
           "writable": true
         },
@@ -770,9 +749,12 @@
           "writable": true
         },
         {
-          "name": "price_update",
+          "name": "oracle_relay_feed",
           "docs": [
-            "Pyth price account (optional - only required if oracle is configured)"
+            "USDC/USD Pyth feed used by the oracle-relay peg-check (optional —",
+            "only required when `config.oracle_relay_feed != Pubkey::default()`).",
+            "account key matches `config.oracle_relay_feed` and the owner",
+            "matches `config.oracle_relay_pyth_program_owner`."
           ],
           "optional": true
         },
@@ -838,7 +820,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -883,7 +868,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -917,7 +905,10 @@
                   117,
                   101,
                   117,
-                  101
+                  101,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -926,7 +917,9 @@
         {
           "name": "oku_money_mint",
           "docs": [
-            "OkuMoney mint (Token-2022) - needed for burn CPI and price reads"
+            "OkuMoney mint (Token-2022) — needed for burn CPI and price reads.",
+            "`mint::authority = config` is defense-in-depth (see rationale on",
+            "`MintOkuM::oku_money_mint`)."
           ],
           "writable": true
         },
@@ -944,6 +937,14 @@
             "Pinned to `config.vault_oku_money` (see rationale on `RedeemOkuM`)."
           ],
           "writable": true
+        },
+        {
+          "name": "oracle_relay_feed",
+          "docs": [
+            "USDC/USD Pyth feed for the peg circuit-breaker (optional — only",
+            "required when `config.oracle_relay_feed != Pubkey::default()`)."
+          ],
+          "optional": true
         },
         {
           "name": "token_program",
@@ -999,7 +1000,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -1036,7 +1040,10 @@
                   117,
                   101,
                   117,
-                  101
+                  101,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1051,8 +1058,8 @@
         {
           "name": "oku_money_mint",
           "docs": [
-            "OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy",
-            "script chooses which extensions (if any) are configured at mint creation."
+            "OkuMoney mint (Token-2022). `mint::authority = config` is defense-in-depth",
+            "(see rationale on `MintOkuM::oku_money_mint`)."
           ],
           "writable": true
         },
@@ -1196,6 +1203,14 @@
           "writable": true
         },
         {
+          "name": "oracle_relay_feed",
+          "docs": [
+            "USDC/USD Pyth feed for the peg circuit-breaker (optional — only",
+            "required when `config.oracle_relay_feed != Pubkey::default()`)."
+          ],
+          "optional": true
+        },
+        {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -1225,9 +1240,8 @@
         "Rescue a stuck queue entry — returns escrowed OkuMoney to recipient.",
         "Only queue_processor can call (matches EVM's rescueQueueEntry).",
         "",
-        "`queue_index` widened from u32 → u64 in Phase 13b alongside the",
-        "`RedemptionQueue::{head,tail}` widening. Indexer / orchestrator code",
-        "must pass the index as a `BN`/bigint on the TS side."
+        "`queue_index` is u64 — indexer / orchestrator code must pass",
+        "the index as a `BN`/bigint on the TS side."
       ],
       "discriminator": [
         128,
@@ -1263,7 +1277,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -1296,7 +1313,10 @@
                   117,
                   101,
                   117,
-                  101
+                  101,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1381,7 +1401,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -1441,7 +1464,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -1452,7 +1478,7 @@
           "docs": [
             "OkuMoney mint — read so `set_max_supply` can refuse a new cap below",
             "the current circulating supply (would silently brick all future",
-            "mints, including bridge mints). EVM `OkuMoney.setMaxSupply` parity."
+            "mints). EVM `OkuMoney.setMaxSupply` parity."
           ]
         },
         {
@@ -1505,7 +1531,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -1566,7 +1595,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -1594,16 +1626,21 @@
       ]
     },
     {
-      "name": "set_oracle",
+      "name": "set_oracle_relay_band",
+      "docs": [
+        "Rotate the in-band USDC peg window (1e9 precision). Constrained by",
+        "the hard `ORACLE_USDC_PRICE_FLOOR` / `_CEILING` bounds.",
+        "`oracle_manager`-gated."
+      ],
       "discriminator": [
-        186,
-        128,
-        81,
-        104,
-        74,
-        79,
-        18,
-        224
+        184,
+        112,
+        164,
+        206,
+        83,
+        36,
+        216,
+        178
       ],
       "accounts": [
         {
@@ -1631,7 +1668,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -1640,47 +1680,50 @@
         {
           "name": "oracle_account",
           "docs": [
-            "Optional pre-flight account for `set_oracle`. When `oracle !=",
-            "Pubkey::default()` and this account is supplied, the handler parses",
-            "the Pyth header and asserts the runtime invariants (`expo == 0`,",
-            "header magic / version / atype) before persisting the new oracle",
-            "pubkey. Without the pre-flight check, an admin could silently",
-            "configure an exponentially-scaled feed that would only error at",
-            "every subsequent `mint_oku_m` call. Other instructions on this",
-            "context (e.g. `set_pyth_program_owner`) ignore the account.",
-            "for the `set_oracle` path with a non-default oracle pubkey."
+            "Optional pre-flight account for `set_oracle_relay_feed`. When",
+            "`new_feed != Pubkey::default()` and this account is supplied, the",
+            "handler parses the Pyth header and asserts the runtime invariants",
+            "(`magic`, `version == 2`, `atype == Price`, owner,",
+            "`|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before persisting the new",
+            "feed pubkey. Without the pre-flight check, an admin could silently",
+            "configure a malformed feed that would only error at every",
+            "subsequent mint / redeem / queue-process call. The other relay",
+            "setters (`set_oracle_relay_staleness`, `_band`,",
+            "`_pyth_program_owner`) ignore this account.",
+            "required for the `set_oracle_relay_feed` path with a non-default",
+            "feed pubkey."
           ],
           "optional": true
         }
       ],
       "args": [
         {
-          "name": "oracle",
-          "type": "pubkey"
+          "name": "new_min_e9",
+          "type": "u64"
         },
         {
-          "name": "staleness_threshold",
-          "type": "i64"
+          "name": "new_max_e9",
+          "type": "u64"
         }
       ]
     },
     {
-      "name": "set_pyth_program_owner",
+      "name": "set_oracle_relay_feed",
       "docs": [
-        "Rotate the accepted Pyth program owner pubkey.",
-        "Use this to migrate from legacy Pyth V2 to a different Pyth deployment",
-        "(e.g. the Pyth Solana Receiver) without redeploying the proxy.",
-        "Oracle_manager-gated."
+        "Rotate the USDC/USD Pyth feed used by the peg-check.",
+        "`new_feed == Pubkey::default()` is the operator-side kill switch",
+        "(disables the peg check entirely; mirrors EVM",
+        "`setOracleRelay(address(0))`). `oracle_manager`-gated."
       ],
       "discriminator": [
-        18,
-        104,
-        228,
-        232,
-        143,
-        141,
-        83,
-        100
+        119,
+        168,
+        245,
+        188,
+        153,
+        247,
+        97,
+        209
       ],
       "accounts": [
         {
@@ -1708,7 +1751,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -1717,15 +1763,96 @@
         {
           "name": "oracle_account",
           "docs": [
-            "Optional pre-flight account for `set_oracle`. When `oracle !=",
-            "Pubkey::default()` and this account is supplied, the handler parses",
-            "the Pyth header and asserts the runtime invariants (`expo == 0`,",
-            "header magic / version / atype) before persisting the new oracle",
-            "pubkey. Without the pre-flight check, an admin could silently",
-            "configure an exponentially-scaled feed that would only error at",
-            "every subsequent `mint_oku_m` call. Other instructions on this",
-            "context (e.g. `set_pyth_program_owner`) ignore the account.",
-            "for the `set_oracle` path with a non-default oracle pubkey."
+            "Optional pre-flight account for `set_oracle_relay_feed`. When",
+            "`new_feed != Pubkey::default()` and this account is supplied, the",
+            "handler parses the Pyth header and asserts the runtime invariants",
+            "(`magic`, `version == 2`, `atype == Price`, owner,",
+            "`|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before persisting the new",
+            "feed pubkey. Without the pre-flight check, an admin could silently",
+            "configure a malformed feed that would only error at every",
+            "subsequent mint / redeem / queue-process call. The other relay",
+            "setters (`set_oracle_relay_staleness`, `_band`,",
+            "`_pyth_program_owner`) ignore this account.",
+            "required for the `set_oracle_relay_feed` path with a non-default",
+            "feed pubkey."
+          ],
+          "optional": true
+        }
+      ],
+      "args": [
+        {
+          "name": "new_feed",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_oracle_relay_pyth_program_owner",
+      "docs": [
+        "Rotate the accepted Pyth program owner pubkey. Migration hook for",
+        "future Pyth deployments (e.g. Pyth Solana Receiver) without",
+        "redeploying. `oracle_manager`-gated."
+      ],
+      "discriminator": [
+        128,
+        136,
+        203,
+        167,
+        185,
+        107,
+        20,
+        15
+      ],
+      "accounts": [
+        {
+          "name": "oracle_manager",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  51
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle_account",
+          "docs": [
+            "Optional pre-flight account for `set_oracle_relay_feed`. When",
+            "`new_feed != Pubkey::default()` and this account is supplied, the",
+            "handler parses the Pyth header and asserts the runtime invariants",
+            "(`magic`, `version == 2`, `atype == Price`, owner,",
+            "`|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before persisting the new",
+            "feed pubkey. Without the pre-flight check, an admin could silently",
+            "configure a malformed feed that would only error at every",
+            "subsequent mint / redeem / queue-process call. The other relay",
+            "setters (`set_oracle_relay_staleness`, `_band`,",
+            "`_pyth_program_owner`) ignore this account.",
+            "required for the `set_oracle_relay_feed` path with a non-default",
+            "feed pubkey."
           ],
           "optional": true
         }
@@ -1734,6 +1861,84 @@
         {
           "name": "new_pyth_program_owner",
           "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_oracle_relay_staleness",
+      "docs": [
+        "Rotate the relay staleness threshold (seconds). Bounded by",
+        "`[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]`.",
+        "`oracle_manager`-gated."
+      ],
+      "discriminator": [
+        148,
+        100,
+        26,
+        43,
+        136,
+        190,
+        220,
+        92
+      ],
+      "accounts": [
+        {
+          "name": "oracle_manager",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  51
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle_account",
+          "docs": [
+            "Optional pre-flight account for `set_oracle_relay_feed`. When",
+            "`new_feed != Pubkey::default()` and this account is supplied, the",
+            "handler parses the Pyth header and asserts the runtime invariants",
+            "(`magic`, `version == 2`, `atype == Price`, owner,",
+            "`|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before persisting the new",
+            "feed pubkey. Without the pre-flight check, an admin could silently",
+            "configure a malformed feed that would only error at every",
+            "subsequent mint / redeem / queue-process call. The other relay",
+            "setters (`set_oracle_relay_staleness`, `_band`,",
+            "`_pyth_program_owner`) ignore this account.",
+            "required for the `set_oracle_relay_feed` path with a non-default",
+            "feed pubkey."
+          ],
+          "optional": true
+        }
+      ],
+      "args": [
+        {
+          "name": "new_staleness",
+          "type": "i64"
         }
       ]
     },
@@ -1775,7 +1980,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -1913,7 +2121,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -1942,7 +2153,10 @@
                   117,
                   101,
                   117,
-                  101
+                  101,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1994,7 +2208,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -2058,7 +2275,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -2066,6 +2286,119 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "user_self_rescue_queue_entry",
+      "docs": [
+        "Permissionless self-rescue (cycle 4 / PSM-06).",
+        "",
+        "Any user can reclaim their own queued OkuMoney without operator",
+        "involvement, unblocking the head-pin DoS where a frozen ATA on",
+        "the head entry stalls every subsequent `process_queue` call.",
+        "Signer must be the entry's original queued user; recipient ATA",
+        "must be owned by that user (constraints enforced on the",
+        "`UserSelfRescueQueueEntry` context)."
+      ],
+      "discriminator": [
+        89,
+        16,
+        194,
+        125,
+        85,
+        57,
+        140,
+        38
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  51
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "redemption_queue",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  100,
+                  101,
+                  109,
+                  112,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  113,
+                  117,
+                  101,
+                  117,
+                  101,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint"
+        },
+        {
+          "name": "vault_oku_money",
+          "writable": true
+        },
+        {
+          "name": "recipient_oku_money_ata",
+          "docs": [
+            "Recipient ATA — must be owned by `user` (enforced by",
+            "`token::authority = user`). Pinning the authority is what",
+            "distinguishes self-rescue from the privileged operator rescue",
+            "(which can target an arbitrary recipient)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "queue_index",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "withdraw_buffer",
@@ -2103,7 +2436,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -2135,7 +2471,10 @@
                   117,
                   101,
                   117,
-                  101
+                  101,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -2263,6 +2602,19 @@
       ]
     },
     {
+      "name": "EscrowInitializedEvent",
+      "discriminator": [
+        17,
+        220,
+        22,
+        132,
+        33,
+        81,
+        105,
+        59
+      ]
+    },
+    {
       "name": "FreezeEvent",
       "discriminator": [
         71,
@@ -2341,16 +2693,55 @@
       ]
     },
     {
-      "name": "OracleUpdatedEvent",
+      "name": "OracleRelayBandUpdatedEvent",
       "discriminator": [
-        243,
-        170,
+        63,
+        9,
+        54,
+        221,
         206,
-        180,
-        16,
-        29,
-        202,
-        190
+        203,
+        38,
+        27
+      ]
+    },
+    {
+      "name": "OracleRelayFeedUpdatedEvent",
+      "discriminator": [
+        213,
+        185,
+        8,
+        22,
+        104,
+        167,
+        161,
+        134
+      ]
+    },
+    {
+      "name": "OracleRelayPythProgramOwnerUpdatedEvent",
+      "discriminator": [
+        107,
+        4,
+        162,
+        18,
+        166,
+        213,
+        231,
+        68
+      ]
+    },
+    {
+      "name": "OracleRelayStalenessUpdatedEvent",
+      "discriminator": [
+        47,
+        168,
+        108,
+        170,
+        217,
+        89,
+        81,
+        83
       ]
     },
     {
@@ -2367,16 +2758,16 @@
       ]
     },
     {
-      "name": "PythProgramOwnerUpdatedEvent",
+      "name": "QueueInitializedEvent",
       "discriminator": [
-        103,
-        146,
-        216,
-        52,
-        147,
-        64,
-        146,
-        213
+        191,
+        4,
+        110,
+        210,
+        5,
+        226,
+        87,
+        143
       ]
     },
     {
@@ -2579,148 +2970,173 @@
     },
     {
       "code": 6008,
-      "name": "InsufficientReserves",
-      "msg": "Insufficient reserves per oracle"
+      "name": "PriceOutOfBand",
+      "msg": "USDC price out of band — depeg circuit-breaker tripped"
     },
     {
       "code": 6009,
+      "name": "NonPositiveAnswer",
+      "msg": "Oracle returned a non-positive answer"
+    },
+    {
+      "code": 6010,
+      "name": "InvalidPriceBand",
+      "msg": "Invalid peg band — must satisfy min < max within hard bounds"
+    },
+    {
+      "code": 6011,
+      "name": "FeedExpoTooLarge",
+      "msg": "Pyth feed expo magnitude exceeds MAX_FEED_EXPO_MAGNITUDE"
+    },
+    {
+      "code": 6012,
+      "name": "OracleConfidenceTooWide",
+      "msg": "Pyth oracle confidence interval too wide for safe consumption"
+    },
+    {
+      "code": 6013,
       "name": "InsufficientBuffer",
       "msg": "Insufficient buffer for redemption"
     },
     {
-      "code": 6010,
+      "code": 6014,
+      "name": "InsufficientUserBalance",
+      "msg": "User does not hold enough OkuMoney for redemption"
+    },
+    {
+      "code": 6015,
       "name": "AccountFrozen",
       "msg": "Account is frozen"
     },
     {
-      "code": 6011,
+      "code": 6016,
       "name": "QueueEmpty",
       "msg": "Queue is empty"
     },
     {
-      "code": 6012,
+      "code": 6017,
       "name": "QueueFull",
       "msg": "Queue is full"
     },
     {
-      "code": 6013,
+      "code": 6018,
       "name": "InvalidQueueIndex",
       "msg": "Invalid queue index"
     },
     {
-      "code": 6014,
+      "code": 6019,
       "name": "EntryAlreadyCleared",
       "msg": "Queue entry already cleared"
     },
     {
-      "code": 6015,
+      "code": 6020,
       "name": "Overflow",
       "msg": "Arithmetic overflow"
     },
     {
-      "code": 6016,
+      "code": 6021,
       "name": "ZeroAmount",
       "msg": "Amount must be greater than zero"
     },
     {
-      "code": 6017,
+      "code": 6022,
       "name": "InsufficientAccounts",
       "msg": "Not enough accounts provided for queue entries"
     },
     {
-      "code": 6018,
+      "code": 6023,
       "name": "RecipientMismatch",
       "msg": "Recipient account does not match queue entry user"
     },
     {
-      "code": 6019,
+      "code": 6024,
       "name": "OracleAccountMissing",
-      "msg": "Oracle account not provided but oracle is configured"
+      "msg": "Oracle relay feed account not provided but relay is configured"
     },
     {
-      "code": 6020,
+      "code": 6025,
       "name": "InvalidOracleResponse",
       "msg": "Invalid oracle response"
     },
     {
-      "code": 6021,
-      "name": "OracleConfidenceTooWide",
-      "msg": "Oracle confidence interval too wide"
-    },
-    {
-      "code": 6022,
+      "code": 6026,
       "name": "YieldDistributionInProgress",
       "msg": "Cannot perform operation in same slot as yield distribution"
     },
     {
-      "code": 6023,
+      "code": 6027,
       "name": "PriceCannotDecrease",
-      "msg": "New price must be >= current price"
+      "msg": "New price must strictly increase"
     },
     {
-      "code": 6024,
+      "code": 6028,
       "name": "YieldTooSmall",
       "msg": "Yield amount too small to affect price (truncates to zero)"
     },
     {
-      "code": 6025,
+      "code": 6029,
       "name": "PriceAboveMax",
       "msg": "Proposed oku_m_price exceeds MAX_OKU_M_PRICE ceiling"
     },
     {
-      "code": 6026,
+      "code": 6030,
       "name": "InvalidAuthority",
       "msg": "Authority pubkey is invalid (e.g. zero pubkey)"
     },
     {
-      "code": 6027,
+      "code": 6031,
       "name": "NoPendingRoleAdmin",
       "msg": "No pending role-admin transfer to accept"
     },
     {
-      "code": 6028,
+      "code": 6032,
       "name": "NotPendingRoleAdmin",
       "msg": "Caller is not the pending role admin"
     },
     {
-      "code": 6029,
+      "code": 6033,
       "name": "EscrowAlreadyInitialized",
       "msg": "Escrow vault already initialized"
     },
     {
-      "code": 6030,
+      "code": 6034,
       "name": "InvalidPythProgramOwner",
       "msg": "Pyth program owner pubkey is required (cannot be the zero pubkey)"
     },
     {
-      "code": 6031,
+      "code": 6035,
       "name": "InvalidUsdcDecimals",
       "msg": "USDC mint must have exactly 6 decimals"
     },
     {
-      "code": 6032,
+      "code": 6036,
       "name": "InvalidOkuMoneyDecimals",
       "msg": "OkuMoney mint must have exactly 6 decimals"
     },
     {
-      "code": 6033,
+      "code": 6037,
       "name": "AmountTooSmall",
       "msg": "Output amount too small (rounds to zero)"
     },
     {
-      "code": 6034,
+      "code": 6038,
       "name": "OutputBelowMinimum",
       "msg": "Output below minimum (slippage exceeded)"
     },
     {
-      "code": 6035,
+      "code": 6039,
       "name": "InvalidStaleness",
       "msg": "Staleness threshold out of range (must be 60s..=7 days)"
     },
     {
-      "code": 6036,
+      "code": 6040,
       "name": "TransferHookNotAllowed",
       "msg": "OkuMoney mint must not have the TransferHook Token-2022 extension"
+    },
+    {
+      "code": 6041,
+      "name": "IncompatibleMintExtension",
+      "msg": "OkuMoney mint carries an incompatible Token-2022 extension (see helpers::mint_extensions for the allow-list)"
     }
   ],
   "types": [
@@ -2863,17 +3279,15 @@
             "name": "processed_count",
             "docs": [
               "Number of entries that received a USDC payout in this batch.",
-              "Widened to u64 in Phase 13b (bounded by `process_queue`'s",
-              "`MAX_BATCH_ENTRIES = 50` in practice, but the type now matches the",
-              "queue's u64 indices)."
+              "Bounded by `RedemptionQueue::MAX_BATCH_ENTRIES` (= 50) per call;",
+              "u64 matches the queue's u64 indices."
             ],
             "type": "u64"
           },
           {
             "name": "skipped_count",
             "docs": [
-              "Number of cleared (rescued) entries skipped during traversal.",
-              "Widened to u64 in Phase 13b."
+              "Number of cleared (rescued) entries skipped during traversal."
             ],
             "type": "u64"
           }
@@ -2909,6 +3323,22 @@
               "New buffer balance after withdrawal"
             ],
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EscrowInitializedEvent",
+      "docs": [
+        "Emitted when the OkuMoney escrow vault is wired into config.",
+        "Cycle 4 (PSM-22): added so the final init step is observable."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault_oku_money",
+            "type": "pubkey"
           }
         ]
       }
@@ -2958,6 +3388,91 @@
           {
             "name": "max_supply",
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "InitializeParams",
+      "docs": [
+        "Parameter bundle for [`initialize`]. Cycle 4 (PSM-17): collapses",
+        "the 15-argument instruction signature into a single struct so the",
+        "IDL slot is self-documenting and the call site is harder to",
+        "scramble (every field is named, not positional). Anchor borsh-",
+        "encodes the struct in a single byte run, so the wire format is",
+        "equivalent in size and shape to the prior positional args; only",
+        "the IDL changes (and only additively from the client's",
+        "perspective once the new struct is in their generated types).",
+        "",
+        "All `*` pubkey fields are the granular on-chain authorities; see",
+        "`roles::AuthorityRole` for the role catalogue and",
+        "`audit/SVM/README.md` § \"Trust model\" for the warm-vs-cold matrix."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "max_supply",
+            "type": "u64"
+          },
+          {
+            "name": "minter_allowance",
+            "type": "u64"
+          },
+          {
+            "name": "pauser",
+            "type": "pubkey"
+          },
+          {
+            "name": "unpauser",
+            "type": "pubkey"
+          },
+          {
+            "name": "freezer",
+            "type": "pubkey"
+          },
+          {
+            "name": "unfreezer",
+            "type": "pubkey"
+          },
+          {
+            "name": "queue_processor",
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer_depositor",
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer_withdrawer",
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle_manager",
+            "type": "pubkey"
+          },
+          {
+            "name": "cap_manager",
+            "type": "pubkey"
+          },
+          {
+            "name": "allowance_manager",
+            "type": "pubkey"
+          },
+          {
+            "name": "rebaser",
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle_relay_pyth_program_owner",
+            "docs": [
+              "Program-owner pubkey accepted by the on-chain peg-check parser.",
+              "Deployer chooses per-cluster (legacy Pyth mainnet/devnet, or a",
+              "future Pyth deployment). The relay is otherwise disabled at",
+              "init — operators call `set_oracle_relay_feed` /",
+              "`set_oracle_relay_staleness` post-deploy."
+            ],
+            "type": "pubkey"
           }
         ]
       }
@@ -3033,6 +3548,15 @@
               "EVM equivalent: okuMMultiplier"
             ],
             "type": "u64"
+          },
+          {
+            "name": "new_total_supply",
+            "docs": [
+              "OkuMoney supply AFTER the mint completed. Cycle 4 (PSM-23):",
+              "added for indexing parity with `YieldDistributed` /",
+              "`OkuMPriceUpdated` (both of which emit `total_supply`)."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -3096,10 +3620,44 @@
       }
     },
     {
-      "name": "OracleUpdatedEvent",
+      "name": "OracleRelayBandUpdatedEvent",
       "docs": [
-        "Emitted when oracle configuration changes.",
-        "EVM equivalent: `OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled)`"
+        "Emitted when the in-band peg window is rotated.",
+        "EVM equivalent: `PriceBandUpdated(uint256 oldMin, uint256 oldMax, uint256 newMin, uint256 newMax)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "actor",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_min_e9",
+            "type": "u64"
+          },
+          {
+            "name": "old_max_e9",
+            "type": "u64"
+          },
+          {
+            "name": "new_min_e9",
+            "type": "u64"
+          },
+          {
+            "name": "new_max_e9",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OracleRelayFeedUpdatedEvent",
+      "docs": [
+        "Emitted when the oracle relay feed pubkey is rotated.",
+        "EVM equivalent: `PriceFeedUpdated(address indexed oldFeed, address indexed newFeed, uint8 feedDecimals)`",
+        "(SVM uses Pyth `expo` rather than `decimals`, so the third field is omitted —",
+        "`expo` is read fresh on every consumer call.)"
       ],
       "type": {
         "kind": "struct",
@@ -3112,11 +3670,61 @@
             "type": "pubkey"
           },
           {
-            "name": "oracle",
+            "name": "old_feed",
             "type": "pubkey"
           },
           {
-            "name": "staleness_threshold",
+            "name": "new_feed",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OracleRelayPythProgramOwnerUpdatedEvent",
+      "docs": [
+        "Emitted when the accepted Pyth program owner pubkey is rotated.",
+        "SVM-only — no direct EVM equivalent (Chainlink AggregatorV3 owner is",
+        "implicit in the feed address). Kept as the migration hook for future",
+        "Pyth Solana Receiver support."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "actor",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_pyth_program_owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_pyth_program_owner",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OracleRelayStalenessUpdatedEvent",
+      "docs": [
+        "Emitted when the relay staleness threshold is rotated.",
+        "EVM equivalent: `StalenessThresholdUpdated(uint256 oldSeconds, uint256 newSeconds)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "actor",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_staleness",
+            "type": "i64"
+          },
+          {
+            "name": "new_staleness",
             "type": "i64"
           }
         ]
@@ -3141,8 +3749,11 @@
     {
       "name": "PsmConfig",
       "docs": [
-        "PSM configuration PDA",
-        "Seeds: [\"psm_config\"]"
+        "PSM configuration PDA.",
+        "",
+        "Seeds: `[\"psm_config_v3\"]`. Migration history (seed-rotation log) is",
+        "tracked in `SVM/README.md` § \"PDA seed history\"; the `_v3` suffix",
+        "marks the post-oracle-relay layout."
       ],
       "type": {
         "kind": "struct",
@@ -3292,18 +3903,48 @@
             "type": "bool"
           },
           {
-            "name": "oracle",
+            "name": "oracle_relay_feed",
             "docs": [
-              "Pyth oracle feed (or Pubkey::default() if disabled)"
+              "USDC/USD Pyth feed account (or `Pubkey::default()` to disable the",
+              "peg check — the operator-side kill switch, mirrors EVM",
+              "`setOracleRelay(address(0))`)."
             ],
             "type": "pubkey"
           },
           {
-            "name": "staleness_threshold",
+            "name": "oracle_relay_pyth_program_owner",
             "docs": [
-              "Maximum oracle staleness in seconds"
+              "Pyth program-owner pubkey accepted by the relay parser. Set at",
+              "init via `initialize` and rotatable via",
+              "`set_oracle_relay_pyth_program_owner` (oracle_manager-gated). The",
+              "migration hook for future Pyth Solana Receiver support."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle_relay_staleness",
+            "docs": [
+              "Maximum oracle staleness in seconds. Bounded by",
+              "`[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]` whenever",
+              "the relay is configured."
             ],
             "type": "i64"
+          },
+          {
+            "name": "oracle_relay_min_price_e9",
+            "docs": [
+              "Lower bound of the in-band USDC price (1e9 precision).",
+              "Constrained by `ORACLE_USDC_PRICE_FLOOR`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oracle_relay_max_price_e9",
+            "docs": [
+              "Upper bound of the in-band USDC price (1e9 precision).",
+              "Constrained by `ORACLE_USDC_PRICE_CEILING`."
+            ],
+            "type": "u64"
           },
           {
             "name": "last_yield_distribution_slot",
@@ -3321,19 +3962,6 @@
               "Matches EVM's okuMPrice() storage pattern"
             ],
             "type": "u64"
-          },
-          {
-            "name": "pyth_program_owner",
-            "docs": [
-              "Pyth program owner pubkey accepted by `check_oracle_reserves`.",
-              "Replaces the previously hard-coded mainnet/devnet Pyth-V2 program IDs.",
-              "Set at init via `initialize(pyth_program_owner)` and rotatable via",
-              "`set_pyth_program_owner` (oracle_manager-gated). A deployer can point",
-              "this at the legacy Pyth program (mainnet `FsJ3...`, devnet `gSbe...`)",
-              "or, after parser support is added, at the Pyth Solana Receiver",
-              "(`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`)."
-            ],
-            "type": "pubkey"
           },
           {
             "name": "pending_role_admin",
@@ -3354,44 +3982,15 @@
       }
     },
     {
-      "name": "PythProgramOwnerUpdatedEvent",
-      "docs": [
-        "Emitted when the accepted Pyth program owner pubkey is rotated.",
-        "SVM-only — no direct EVM equivalent (EVM oracle owner is implicit in the",
-        "AggregatorV3 interface address)."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "actor",
-            "docs": [
-              "Caller of the update (`oracle_manager` authority)."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "old_pyth_program_owner",
-            "type": "pubkey"
-          },
-          {
-            "name": "new_pyth_program_owner",
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
       "name": "QueueEntry",
       "docs": [
         "A single entry in the redemption queue.",
         "",
-        "`#[zero_copy]` (no `unsafe`) is Anchor's marker for inner types embedded",
-        "in `#[account(zero_copy)]` accounts. It derives the bytemuck `Pod` +",
-        "`Zeroable` impls and registers the type with Anchor's IDL build so the",
-        "generated TS client can decode it. `#[repr(C)]` is required and has no",
-        "implicit padding here (`Pubkey` is align-1, `u64`/`i64` align-8; natural",
-        "C layout aligns correctly to 48 bytes — pinned by the assert below)."
+        "`#[zero_copy]` is Anchor's marker for inner types embedded in",
+        "`#[account(zero_copy)]` accounts — derives `Pod` + `Zeroable` and",
+        "registers the type with the IDL. `#[repr(C)]` has no implicit",
+        "padding here (`Pubkey` is align-1, `u64`/`i64` align-8); the layout",
+        "is pinned to 48 bytes by the `assert!` below."
       ],
       "serialization": "bytemuck",
       "repr": {
@@ -3422,6 +4021,30 @@
               "Timestamp when queued (kept for audit trail)"
             ],
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "QueueInitializedEvent",
+      "docs": [
+        "Emitted when the redemption-queue PDA is created. Cycle 4 (PSM-22):",
+        "added so the three-step init flow has full event coverage and",
+        "indexers can observe each setup leg landing on-chain."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "redemption_queue",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_entries",
+            "docs": [
+              "Compile-time queue capacity (`RedemptionQueue::MAX_ENTRIES`)."
+            ],
+            "type": "u32"
           }
         ]
       }
@@ -3468,6 +4091,13 @@
             "docs": [
               "OkuMoney price multiplier at time of redeem (1e9 = $1.00)",
               "EVM equivalent: okuMMultiplier"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "new_total_supply",
+            "docs": [
+              "OkuMoney supply AFTER the burn completed. Cycle 4 (PSM-23)."
             ],
             "type": "u64"
           }
@@ -3517,6 +4147,17 @@
               "Time spent in queue (seconds)"
             ],
             "type": "i64"
+          },
+          {
+            "name": "new_total_supply",
+            "docs": [
+              "OkuMoney supply AFTER the per-entry burn. Cycle 4 (PSM-23):",
+              "added so indexers can reconstruct supply trajectory through the",
+              "queue-drain phase without summing batch events. Note that",
+              "because `process_queue` emits one of these per processed entry,",
+              "the value decreases monotonically across the batch."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -3526,22 +4167,19 @@
       "docs": [
         "Redemption queue PDA — zero-copy ring buffer.",
         "",
-        "Phase 13b: moved from `#[account]` (Borsh-deserialized into a stack frame",
-        "on every handler entry) to `#[account(zero_copy)]` (byte-indexed directly",
-        "out of account data, no stack pressure). This is what unblocks the",
-        "`MAX_ENTRIES` bump from 10 to 200; the previous cap was a BPF stack",
-        "constraint, not an account-size constraint.",
+        "Uses `#[account(zero_copy)]` rather than `#[account]` so the 200-entry",
+        "array isn't Borsh-deserialised into a stack frame on every handler",
+        "entry. `AccountLoader<RedemptionQueue>` is the canonical access path;",
+        "`load_init` for `setup_redemption_queue`, `load` / `load_mut`",
+        "elsewhere with the borrow strictly scoped before any CPI.",
         "",
-        "**Why 200 and not 500.** The original Phase 13b plan targeted 500",
-        "entries. Solana's runtime caps CPI-driven account allocations at",
-        "`MAX_PERMITTED_DATA_INCREASE = 10_240` bytes per call — and Anchor's",
-        "`init` constraint goes through a `system_program::create_account` CPI",
-        "for the allocation. A 500-entry queue would be ~24 KB and require a",
-        "multi-step `init + realloc + realloc` deploy flow. 200 entries fits",
-        "into the 10 KB single-CPI budget with 600 bytes of headroom, keeps",
-        "the single-step `setup_redemption_queue` flow, and is still a 20×",
-        "improvement over the pre-Phase-13b cap of 10. See",
-        "`SVM/EVM_VS_SVM.md` for the divergence note.",
+        "**Why 200 entries.** Solana caps CPI-driven account allocations at",
+        "`MAX_PERMITTED_DATA_INCREASE = 10_240` bytes per call (Anchor's `init`",
+        "constraint goes through `system_program::create_account`). 200",
+        "entries × 48 B = 9 600 B fits with 600 B of headroom; a single-step",
+        "`setup_redemption_queue` would otherwise require a `init + realloc +",
+        "realloc` flow. See `SVM/README.md` § \"EVM vs SVM — divergence",
+        "catalogue\" for the EVM divergence note.",
         "",
         "Wire layout (`#[repr(C)]`, packed to native alignment):",
         "",
@@ -3568,7 +4206,8 @@
         "- `load_init()` only at the one `init`-constraint site",
         "(`setup_redemption_queue`).",
         "",
-        "Seeds: `[\"redemption_queue\"]`."
+        "Seeds: `[\"redemption_queue_v2\"]`. Rotation history tracked in",
+        "`SVM/README.md` § \"PDA seed history\"."
       ],
       "serialization": "bytemuck",
       "repr": {
@@ -3599,20 +4238,17 @@
           {
             "name": "head",
             "docs": [
-              "Index of next entry to process (head of queue).",
-              "",
-              "Widened from `u32` (Phase 13a) to `u64` (Phase 13b). At 500 entries",
-              "the previous u32 head/tail would wrap after ~4.3B enqueues — fine",
-              "in practice but uncomfortably finite. `u64` is effectively unbounded",
-              "(~5.8e10 years at 100 enqueues/sec)."
+              "Index of next entry to process (head of queue). u64 so the",
+              "absolute counter is effectively unbounded",
+              "(~5.8 × 10¹⁰ years at 100 enqueues/sec); ring-buffer position",
+              "is `RedemptionQueue::ring_index(head)`."
             ],
             "type": "u64"
           },
           {
             "name": "tail",
             "docs": [
-              "Index of next slot to write (tail of queue). See `head` for the u64",
-              "rationale."
+              "Index of next slot to write (tail of queue)."
             ],
             "type": "u64"
           },
@@ -3677,16 +4313,14 @@
           {
             "name": "queue_position",
             "docs": [
-              "Position in queue (0-indexed; absolute tail index, not ring slot).",
-              "Widened from u32 to u64 in Phase 13b alongside the",
-              "`RedemptionQueue::{head,tail}` widening."
+              "Position in queue (0-indexed; absolute tail index, not ring slot)."
             ],
             "type": "u64"
           },
           {
             "name": "queue_length",
             "docs": [
-              "Total queue length after this entry. Widened to u64 in Phase 13b."
+              "Total queue length after this entry."
             ],
             "type": "u64"
           }
@@ -3705,8 +4339,7 @@
           {
             "name": "queue_index",
             "docs": [
-              "Absolute index of the rescued entry. Widened from u32 to u64 in",
-              "Phase 13b."
+              "Absolute index of the rescued entry."
             ],
             "type": "u64"
           },
@@ -3753,8 +4386,7 @@
           {
             "name": "queue_index",
             "docs": [
-              "Absolute queue index that was skipped (already cleared by rescue).",
-              "Widened from u32 to u64 in Phase 13b."
+              "Absolute queue index that was skipped (already cleared by rescue)."
             ],
             "type": "u64"
           }

@@ -3,7 +3,7 @@
 // All CPI targets in this module are constrained by Anchor's typed
 // `Program<'info, Token2022>` accounts which validate program ID at
 // deserialisation. The `arbitrary_cpi` warning is a false positive
-// here (see `audit/SVM/ACCEPTED_RISKS.md`).
+// here (see `oku-programs/audit/README.md` § Accepted Risks).
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
 
 use crate::constants::{

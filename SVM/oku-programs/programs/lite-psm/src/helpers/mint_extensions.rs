@@ -27,11 +27,13 @@
 //! | `ScaledUiAmount` | **reject** | UI-only multiplier conflicts with the protocol's `oku_m_price`. |
 //! | Account-only extensions (`TransferFeeAmount`, `*Account`, etc.) | reject as mint extensions | Not valid on a mint TLV in any case. |
 //!
-//! See `audit/PARITY.md` for the EVM side — Solidity has no analogous
-//! per-mint extension surface, so this hardening is SVM-only.
+//! See `audit/README.md` § "Behaviour deltas" for the EVM side —
+//! Solidity has no analogous per-mint extension surface, so this
+//! hardening is SVM-only.
 //!
-//! Mirrors EVM `audit/ACCEPTED_RISKS.md` risk #4 ("operator-deployed
-//! OkuMoney mint must not be misconfigured").
+//! Mirrors EVM `contracts/EVM/audit/README.md` § Accepted Risks
+//! (the "operator-deployed OkuMoney mint must not be misconfigured"
+//! constraint).
 
 use crate::errors::LitePsmError;
 use anchor_lang::prelude::*;

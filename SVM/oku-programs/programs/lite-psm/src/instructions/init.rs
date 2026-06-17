@@ -18,7 +18,7 @@ use oku_shared::{ORACLE_USDC_PRICE_CEILING, ORACLE_USDC_PRICE_FLOOR};
 ///
 /// All `*` pubkey fields are the granular on-chain authorities; see
 /// `roles::AuthorityRole` for the role catalogue and
-/// `audit/SVM/README.audit.md` for the warm-vs-cold matrix.
+/// `audit/SVM/README.md` § "Trust model" for the warm-vs-cold matrix.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct InitializeParams {
     // ----- Supply / capacity -----

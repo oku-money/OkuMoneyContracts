@@ -267,6 +267,27 @@ per rotation — not material; tracked for completeness, not urgency.
 A future one-shot `admin_close_legacy_pda(seed_str)` ix gated by
 `role_admin` could recover the rent (post-launch enhancement).
 
+#### Seed-rotation checklist
+
+Every rotation must update ALL of these sites in lockstep. A drift
+between any pair produces silent PDA-address mismatches that would
+brick clients without a compile-time error.
+
+| Site | Path | What to change |
+|---|---|---|
+| PSM config seed | `oku-programs/programs/lite-psm/src/state.rs` | `PsmConfig::SEED` byte-string |
+| Queue seed | `oku-programs/programs/lite-psm/src/state.rs` | `RedemptionQueue::SEED` |
+| Vault config seed | `oku-programs/programs/oku-dollar/src/state.rs` | `OkuDollarConfig::SEED` |
+| usdOku mint seed | `oku-programs/programs/oku-dollar/src/state.rs` | `USD_OKU_MINT_SEED` |
+| Client seed mirror | `oku-programs/scripts/utils/pdaHelpers.ts` | `PDA_SEEDS` map (must match the Rust constants byte-for-byte) |
+| Address-book | `oku-programs/deployments/{devnet,mainnet}.json` | Update PDA addresses post-redeploy; flag old entries as orphan |
+| Seed-history table | `contracts/SVM/README.md § PDA seed history` | New row documenting cause + layout delta |
+
+Verification step: after rotation, run `npm test` (bankrun) — the PDA
+derivations are exercised by every test, and a drift produces an
+`AccountOwnedByWrongProgram` or `AccountNotInitialized` error on the
+first test that touches the rotated PDA.
+
 ---
 
 ## Core operations
@@ -826,6 +847,72 @@ nonces, no refund flow — all cross-chain coordination is off-chain.
 | `RedemptionQueue` | inside `LitePSM` (separate file) | inside `lite-psm` (`state::RedemptionQueue`) | parity |
 | `oku-bridge-router` convenience program | n/a | removed in noBridge | EVM never had a router program |
 | On-chain bridge | removed in noBridge (`OkuBridge`, `OkuBridgeRouter`, `NttAdapter` deleted) | removed in noBridge | both sides v1 are off-chain orchestrator-mediated |
+
+### Cross-program coupling — `oku-dollar` static-links `lite-psm` helpers
+
+`programs/oku-dollar/src/instructions/core.rs` imports two helpers
+directly from the `lite-psm` crate:
+
+```rust
+use lite_psm::helpers::mint_extensions::assert_oku_money_mint_extensions_whitelisted;
+use lite_psm::helpers::yield_lock::check_yield_lock;
+```
+
+These are **NOT cross-program invocations.** The two programs share
+the Cargo workspace; the helpers are linked at build time and run
+inside the `oku-dollar` program's own runtime context (its own clock
+sysvar read, its own account view). The functions are pure-Rust
+predicates — no on-chain state mutation, no signer seeds, no CPI.
+
+**Why it's done this way:** the mint-extension allow-list and the
+yield-lock predicate must be byte-for-byte identical on both
+programs so an OkuMoney mint accepted by `lite-psm::initialize` is
+also accepted by `oku-dollar::initialize`, and any same-slot
+`set_oku_m_price` blocks `wrap`/`unwrap` exactly as it blocks
+`mint_oku_m`/`redeem_oku_m`. Duplicating the logic into both
+programs would introduce drift risk; sharing via a CPI would
+require a `lite-psm` instruction whose only job is to read state
+the caller already has. Static-link is the cheapest correct option.
+
+**Trust implication:** the `oku-dollar` program's logic is partly
+"defined by" the `lite-psm` crate's source. A `lite-psm` source
+change that subtly mutates either helper would propagate to
+`oku-dollar` at the next workspace build. Reviewers should treat
+the two crates as a single audit unit; the helper-import boundary
+is a developer-ergonomics convenience, not a security one.
+
+### `ScaledUiAmount` deferral
+
+The Token-2022 `ScaledUiAmount` extension would let wallets render
+OkuMoney with the on-chain multiplier baked into the displayed
+balance (1 OkuM at `oku_m_price = 1.05e9` displays as "1.05" without
+client-side math). The extension is explicitly REJECTED by
+`assert_oku_money_mint_extensions_whitelisted` today because:
+
+1. Wallet support is uneven across the major Solana wallet ecosystem
+   (Phantom, Backpack, Solflare) as of cycle 4.
+2. PSM math assumes a non-scaled mint — the `oku_m_price` field on
+   `PsmConfig` is the protocol's source of truth for OkuM-to-dollar
+   pricing, and `ScaledUiAmount` would introduce a second multiplier
+   layer at the SPL level that the protocol math doesn't account for.
+
+**Migration path if/when re-enabled:**
+
+1. Add `ScaledUiAmount` to the allow-list in
+   `lite-psm/src/helpers/mint_extensions.rs`.
+2. Pin the Token-2022 multiplier value to `1` (no UI scaling) in
+   `initialize` so the PSM-side `oku_m_price` remains the canonical
+   pricing source; OR refactor PSM math to read the mint's
+   ui-amount-multiplier and combine it with `oku_m_price`. The
+   former is the conservative path — the extension's authority field
+   is left unset so the multiplier cannot be changed later.
+3. Redeploy under a new PDA seed (`psm_config_v4`, etc.), since
+   changing the accepted-extension set on a live OkuMoney mint is
+   not a property the existing init flow supports.
+
+Deferred per cycle 4; revisit if/when major Solana wallets ship
+`ScaledUiAmount` rendering and the marketing team prefers it over
+the orchestrator-driven `okuMMultiplier` displayed in the dApp.
 
 ---
 

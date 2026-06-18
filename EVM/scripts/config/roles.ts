@@ -16,6 +16,9 @@ export const ROLES = {
   OKUM_PAUSER: keccak256(toUtf8Bytes("OKUM_PAUSER")),
   OKUM_UNPAUSER: keccak256(toUtf8Bytes("OKUM_UNPAUSER")),
   OKUM_MINTER: keccak256(toUtf8Bytes("OKUM_MINTER")),
+  // Cycle 4 (EVM-15): OKUM_BURNER was split out of OKUM_MINTER. Both LitePSM
+  // and RedemptionQueue must hold OKUM_BURNER to call `OkuMoney.burn(...)`.
+  OKUM_BURNER: keccak256(toUtf8Bytes("OKUM_BURNER")),
   OKUM_REBASER: keccak256(toUtf8Bytes("OKUM_REBASER")),
   OKUM_BLACKLISTER: keccak256(toUtf8Bytes("OKUM_BLACKLISTER")),
   OKUM_UNBLACKLISTER: keccak256(toUtf8Bytes("OKUM_UNBLACKLISTER")),

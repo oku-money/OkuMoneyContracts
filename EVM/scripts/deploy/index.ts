@@ -458,11 +458,29 @@ async function configureRoles(
   const litePSMAddress = await litePSM.getAddress();
   const redemptionQueueAddress = await redemptionQueue.getAddress();
 
+  // EVM-J3: Fail-fast check that queue and PSM share the same USDC before
+  // we start granting roles. A mismatch here would leave the chain with a
+  // partially-roled deployment that the operator would have to manually
+  // un-grant from. Doing this first means a mismatch reverts with no state
+  // change on the proxies.
+  await sendAndWait("Assert queue.usdc == psm.usdc", async () => {
+    const psmUsdc = await litePSM.usdc();
+    return redemptionQueue.assertUsdcMatch(psmUsdc);
+  });
+
   // OkuMoney minter roles. LitePSM is the sole user-facing OKUM_MINTER in the
   // noBridge model; RedemptionQueue mints rebase deltas; off-chain cross-chain
   // mint/burn flows route through LitePSM via the orchestrator's USDC custody.
   await sendAndWait("Grant OKUM_MINTER to LitePSM", () => okuMoney.grantRole(ROLES.OKUM_MINTER, litePSMAddress));
   await sendAndWait("Grant OKUM_MINTER to RedemptionQueue", () => okuMoney.grantRole(ROLES.OKUM_MINTER, redemptionQueueAddress));
+
+  // Cycle 4 (EVM-15): OKUM_BURNER was split out of OKUM_MINTER. Both consumers
+  // of `OkuMoney.burn(...)` need the burner role:
+  //   - LitePSM redeem flows (`_redeemOkuMShared`)
+  //   - RedemptionQueue.processQueue (per-entry burn after USDC payout)
+  // Without these grants every redeem reverts with AccessControlUnauthorizedAccount.
+  await sendAndWait("Grant OKUM_BURNER to LitePSM", () => okuMoney.grantRole(ROLES.OKUM_BURNER, litePSMAddress));
+  await sendAndWait("Grant OKUM_BURNER to RedemptionQueue", () => okuMoney.grantRole(ROLES.OKUM_BURNER, redemptionQueueAddress));
 
   // OkuMoney admin roles (testnet only)
   await sendAndWait("Grant OKUM_REBASER to Admin", () => okuMoney.grantRole(ROLES.OKUM_REBASER, deployerAddress));
@@ -522,14 +540,21 @@ async function configureRoles(
     await sendAndWait("Grant RELAY_CONFIG_MANAGER to Admin", () => oracleRelay.grantRole(ROLES.RELAY_CONFIG_MANAGER, deployerAddress));
     await sendAndWait("Wire OracleRelay onto LitePSM", () => litePSM.setOracleRelay(relayAddress));
     await sendAndWait("Wire OracleRelay onto RedemptionQueue", () => redemptionQueue.setOracleRelay(relayAddress));
+
+    // EVM-J4: Post-wire invariant — PSM and Queue MUST point at the same relay.
+    // If one setOracleRelay tx lands and the other reverts, the consumers desync
+    // and the operator must rotate the relay on the surviving consumer. This
+    // check catches it at deploy time instead of in the next user mint/redeem.
+    const psmRelay = await litePSM.oracleRelay();
+    const queueRelay = await redemptionQueue.oracleRelay();
+    if (psmRelay !== queueRelay) {
+      throw new Error(
+        `OracleRelay wiring mismatch: LitePSM=${psmRelay}, RedemptionQueue=${queueRelay}`
+      );
+    }
+    logger.success("  OracleRelay wiring matches across PSM and Queue");
   }
   void config;
-
-  // Wire USDC consistency assertion (post-init verification that queue and PSM share the same USDC)
-  await sendAndWait("Assert queue.usdc == psm.usdc", async () => {
-    const psmUsdc = await litePSM.usdc();
-    return redemptionQueue.assertUsdcMatch(psmUsdc);
-  });
 }
 
 async function verifyDeployment(
@@ -541,11 +566,21 @@ async function verifyDeployment(
   logger.step(6, "Verifying Deployment");
 
   // Check roles
-  const hasLitePSMMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, await litePSM.getAddress());
-  const hasQueueMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, await redemptionQueue.getAddress());
+  const litePSMAddress = await litePSM.getAddress();
+  const queueAddress = await redemptionQueue.getAddress();
+  const hasLitePSMMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, litePSMAddress);
+  const hasQueueMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, queueAddress);
+  // Cycle 4 (EVM-15): OKUM_BURNER is required for redeem paths.
+  const hasLitePSMBurner = await okuMoney.hasRole(ROLES.OKUM_BURNER, litePSMAddress);
+  const hasQueueBurner = await okuMoney.hasRole(ROLES.OKUM_BURNER, queueAddress);
 
   logger.info(`  LitePSM has OKUM_MINTER: ${hasLitePSMMinter}`);
   logger.info(`  RedemptionQueue has OKUM_MINTER: ${hasQueueMinter}`);
+  logger.info(`  LitePSM has OKUM_BURNER: ${hasLitePSMBurner}`);
+  logger.info(`  RedemptionQueue has OKUM_BURNER: ${hasQueueBurner}`);
+  if (!hasLitePSMBurner || !hasQueueBurner) {
+    logger.warning("  Missing OKUM_BURNER grants — redeem paths will revert!");
+  }
 
   // Verify all addresses saved
   const book = loadAddressBook();

@@ -89,8 +89,8 @@ describe("init invariants (Token-2022 extension whitelist)", () => {
     );
     await h.provider.sendAndConfirm!(tx, [okuMoneyKp]);
 
-    // Now attempt initialize — the new invariant must reject with
-    // TransferHookNotAllowed.
+    // Now attempt initialize — the allow-list invariant must reject the
+    // TransferHook extension with IncompatibleMintExtension.
     const vaultUsdc = getAssociatedTokenAddressSync(
       usdcMint,
       configPda,
@@ -142,8 +142,8 @@ describe("init invariants (Token-2022 extension whitelist)", () => {
       ].join(" ");
       // Cycle 4: the allow-list check returns IncompatibleMintExtension
       // for any non-whitelisted extension (TransferHook included). The
-      // legacy TransferHookNotAllowed error variant is retained but no
-      // longer emitted by the init path.
+      // legacy TransferHookNotAllowed error variant was removed as dead
+      // code in the audit-prep cleanup pass.
       expect(haystack).to.include("IncompatibleMintExtension");
     }
     expect(threw, "initialize must reject a mint with TransferHook").to.equal(true);

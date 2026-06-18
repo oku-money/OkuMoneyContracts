@@ -7,6 +7,14 @@ findings section).
 
 **Status legend:** 🔴 blocks external exposure · 🟡 should-fix before audit · ⚪ post-launch
 
+**Audit-prep cycle (2026-06-18) — landed:**
+- 4 new admin CLIs: `pause-vault.ts`, `unpause-vault.ts`, `set-vault-authority.ts`, `set-min-collateral-ratio.ts`.
+- 2 standalone orchestrator bridge-leg CLIs: `mint-okum.ts`, `redeem-okum.ts` (previously only reachable via `test-devnet.ts` step runner).
+- L1/L2 SoD parity: vault `set_authority` now mirrors PSM-02 — rejects collapsing non-RoleAdmin roles into `role_admin` and rejects no-op self-proposals.
+- Dead code purge: 4 unused error variants removed (`AccountFrozen`, `RecipientMismatch`, `TransferHookNotAllowed` from PSM; `InvalidDeadSharesMint` from vault) + `_RingQueue` re-export shim deleted.
+- Polish: `OracleRelayDisabled` event gated on `oldRelay != 0`, `withdraw_buffer` pause-bypass intent documented in source, `ImmutableOwner` allow-list rationale added.
+- Coverage: 4 bankrun tests for `user_self_rescue_queue_entry` (cycle-4 instruction, previously uncovered); 5 bankrun tests for vault `set_authority` + two-step `accept_role_admin` + L1/L2 guards. `npm test` 138/138.
+
 ---
 
 ## 🔴 Pre-external-deploy (needed before any non-internal devnet)
@@ -124,18 +132,23 @@ the full surface as currently shipped.
   admin time (`validate_oracle_relay_feed`), so the runtime branch
   is unreachable; kept as math-safety net.
 
-### SVM standalone orchestrator CLI scripts
+### Remaining admin CLI gaps (post-audit triage)
 
-`scripts/admin/mint-okum.ts` and `scripts/admin/redeem-okum.ts` —
-standalone CLIs for the orchestrator's bridge legs. Currently only
-accessible inside the `test-devnet.ts` step runner. Mirror the EVM
-`scripts/operator/mintOkuM.ts` pattern.
+Audit-prep cycle added the four hottest gaps
+(`pause-vault`, `unpause-vault`, `set-vault-authority`,
+`set-min-collateral-ratio`) plus the two standalone orchestrator
+bridge-leg CLIs (`mint-okum`, `redeem-okum`). Still missing CLIs —
+defer until post-audit when the function kill-list is finalised:
 
-`scripts/admin/set-vault-authority.ts` — OkuDollar (vault) role
-rotation. The existing `set-authority.ts` only handles PSM roles;
-vault roles lack a CLI.
-
-**Effort:** 2–3 hours each.
+- `accept-role-admin.ts`, `cancel-role-admin-transfer.ts` — both
+  programs. The two-step transfer's second step happens once per
+  rotation by the cold multisig via Squads; a documented IDL call
+  in the runbook is sufficient. Build CLIs only if the runbook
+  requires them.
+- `deposit-reserves.ts`, `withdraw-reserves.ts` — already on the
+  "potentially redundant" review list; triage before shipping CLIs.
+- `user-self-rescue-queue-entry.ts` — permissionless self-rescue
+  for queued users. Belongs in `scripts/user/`, not `admin/`.
 
 ### `cargo fmt --check` / `cargo deny check` in CI
 
@@ -191,6 +204,23 @@ rotation. Not material; tracked for completeness. A future one-shot
 `admin_close_legacy_pda(seed_str)` ix gated by `role_admin` could
 recover the rent. Details in
 [`../README.md § PDA seed history`](../README.md).
+
+### Queue spam DoS via 1-OkuM entries
+
+A user can fill the 200-entry redemption queue with minimum-size entries
+(1 OkuM each) faster than the operator's `MAX_BATCH_ENTRIES = 50`
+per-tx drain can clear them. Cost to the attacker: 200 × redeem-tx fees
++ escrowed OkuM for the queue duration. The `MINIMUM_QUEUE_ENTRY_OKUM`
+mitigation (single constant + `require!`) was considered but deferred
+to avoid pre-audit churn on a tuneable parameter the auditor would probe.
+
+**Mitigation options when revisited:**
+1. Add a `MINIMUM_QUEUE_ENTRY_OKUM` constant + `require!` in
+   `redeem_oku_m` queued branch.
+2. Per-user PDA queue (lifts the cap; see "Queue capacity: 200 → 500").
+3. Escalating spam fee.
+
+**Defer until:** auditor opinion or operator telemetry shows abuse.
 
 ### Two-chain Foundry invariant harness
 

@@ -392,13 +392,9 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
 /// top of this file. The static cap alone is sufficient for the CU-bound
 /// safety property; the dynamic check was strict belt-and-suspenders.
 ///
-/// Cycle 4 (PSM-18): the cap now lives on `RedemptionQueue::MAX_BATCH_ENTRIES`
-/// next to `MAX_ENTRIES`. This local re-export is preserved so callers in
-/// this module can write `MAX_BATCH_ENTRIES` without the type prefix.
-pub use crate::state::RedemptionQueue as _RingQueue;
-#[allow(dead_code)]
-const MAX_BATCH_ENTRIES: u32 = _RingQueue::MAX_BATCH_ENTRIES;
-
+/// Cycle 4 (PSM-18): the cap lives on `RedemptionQueue::MAX_BATCH_ENTRIES`
+/// next to `MAX_ENTRIES`. Callers reference it via the type prefix
+/// (`RedemptionQueue::MAX_BATCH_ENTRIES`); see line 413 below.
 pub fn process_queue<'info>(
     ctx: Context<'info, ProcessQueue<'info>>,
     max_entries: u32,
@@ -683,6 +679,13 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
 /// or `set_oku_m_price` changes `oku_m_price`, which is read inside the reserved-USDC
 /// calculation below. Defense-in-depth: the window is tiny and `buffer_withdrawer`
 /// is already permissioned, but the lock makes the invariant explicit.
+///
+/// **Intentionally NOT pause-gated.** Mirrors EVM `LitePSM.withdrawUsdc`, which
+/// has no `whenNotPaused` modifier (verified `EVM/src/psm/LitePSM.sol:540`).
+/// Pause is a user-side incident lever: it blocks mints/redeems but must NOT
+/// block the cold multisig from rebalancing buffer USDC during an incident
+/// response. The `WouldStrandQueue`-equivalent reserved-USDC check above is
+/// the only invariant that matters here, and it runs regardless of pause state.
 pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> {
     check_yield_lock(&ctx.accounts.config)?;
     require!(amount > 0, LitePsmError::ZeroAmount);

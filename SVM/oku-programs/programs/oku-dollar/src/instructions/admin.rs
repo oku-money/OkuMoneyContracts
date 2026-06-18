@@ -63,7 +63,26 @@ pub fn set_authority(
 
     let config = &mut ctx.accounts.config;
 
+    // Audit-prep parity with PSM-02: reject `new_authority == role_admin`
+    // for non-RoleAdmin roles. Collapsing the cold-multisig key into a
+    // warm-multisig role destroys the separation-of-duties model the
+    // protocol is designed around, and a typo or stale-key in the
+    // proposing flow is the most likely way it would happen.
+    if !matches!(role, AuthorityRole::RoleAdmin) {
+        require!(
+            new_authority != config.role_admin,
+            OkuDollarError::InvalidAuthority
+        );
+    }
+
     if matches!(role, AuthorityRole::RoleAdmin) {
+        // Audit-prep parity with PSM-02: also reject a no-op proposal
+        // (proposing the current admin to themselves). Harmless on-chain
+        // but obscures event-log inspection of in-flight rotations.
+        require!(
+            new_authority != config.role_admin,
+            OkuDollarError::InvalidAuthority
+        );
         let current_admin = config.role_admin;
         config.pending_role_admin = new_authority;
 

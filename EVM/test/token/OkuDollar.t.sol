@@ -302,6 +302,24 @@ contract OkuDollarTest is BaseTest {
         okuDollar.unwrap(okuMAmount, address(0));
     }
 
+    /// @dev Post-cycle-4 D2 fix: `unwrap` now mirrors `wrap`'s receiver check
+    ///      so a user blacklisted only on OkuDollar cannot route OkuMoney to
+    ///      a third-party recipient via `unwrap(amount, victimAddr)`. The
+    ///      OkuMoney-side `_update` blacklist check is still independent;
+    ///      this assertion closes the cross-token consistency hole.
+    function test_Unwrap_RevertsOnBlacklistedReceiver() public {
+        uint256 okuMAmount = 100e18;
+        _mintUsdOku(user1, okuMAmount);
+
+        // Blacklist user2 only on OkuDollar (not on OkuMoney).
+        vm.prank(blacklister);
+        okuDollar.blacklist(user2);
+
+        vm.prank(user1);
+        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        okuDollar.unwrap(okuMAmount, user2);
+    }
+
     // ============ Unwrap Rounding Tests ============
 
     function test_Unwrap_SharesBurnedRoundUp_FavorsVault() public {

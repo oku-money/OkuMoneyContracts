@@ -498,6 +498,19 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.setOkuMMultiplier(currentPrice);
     }
 
+    /// @dev Post-cycle-4: yield-state setters must freeze with the rest of the
+    ///      contract while paused. Rate-config setters on OkuDollar remain
+    ///      available while paused (operators need to be able to zero accrual
+    ///      mid-pause); rate-effect setters like this one must not run.
+    function test_SetOkuMMultiplier_RevertsWhenPaused() public {
+        vm.prank(pauser);
+        okuMoney.pause();
+
+        vm.prank(rebaser);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
+    }
+
     // ============ distributeYield Tests ============
 
     function test_DistributeYield_OnlyRebaser() public {
@@ -530,6 +543,19 @@ contract OkuMoneyTest is BaseTest {
         // No tokens minted
         vm.prank(rebaser);
         vm.expectRevert(OkuMoney.ZeroSupply.selector);
+        okuMoney.distributeYield(1000e18);
+    }
+
+    /// @dev Sibling of test_SetOkuMMultiplier_RevertsWhenPaused. See that test's
+    ///      NatSpec for the rationale.
+    function test_DistributeYield_RevertsWhenPaused() public {
+        _mintOkuMoney(user1, 10_000e18);
+
+        vm.prank(pauser);
+        okuMoney.pause();
+
+        vm.prank(rebaser);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
         okuMoney.distributeYield(1000e18);
     }
 

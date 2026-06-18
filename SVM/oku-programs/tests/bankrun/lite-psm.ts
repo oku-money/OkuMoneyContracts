@@ -1968,7 +1968,7 @@ describe("lite-psm", () => {
     // that has no effect on the payout path. The interesting case is
     // when the recipient's USDC ATA cannot receive (e.g. account
     // doesn't exist). We assert the program reverts with
-    // `RecipientMismatch` when we omit the recipient ATA from
+    // `InsufficientAccounts` when we omit the recipient ATA from
     // `remainingAccounts`.
     it("process_queue rejects when recipient ATA missing from remaining_accounts", async () => {
       // Queue a fresh entry.
@@ -2481,6 +2481,254 @@ describe("lite-psm", () => {
       );
       const delta = Number(user2OkuMoneyAfter.amount) - Number(user2OkuMoneyBefore.amount);
       expect(delta).to.equal(rescuedAmount);
+    });
+  });
+
+  // ==========================================================================
+  // NEW COVERAGE (audit-prep): user_self_rescue_queue_entry
+  // Permissionless self-rescue added in cycle 4 (PSM-06). Lets a user unblock
+  // themselves from a queued entry without operator action (e.g. when their
+  // recipient ATA is frozen and a different ATA they control still works).
+  // ==========================================================================
+  describe("user_self_rescue_queue_entry", () => {
+    const REDEEM_AMOUNT = new BN(500_000); // 0.5 OkuMoney
+
+    async function drainBuffer() {
+      const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint,
+        coldMultisig.publicKey,
+        false,
+        TOKEN_PROGRAM_ID
+      );
+      await ensureAtaViaBankrun(h, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID);
+      const vaultUsdc = await getAccount(
+        provider.connection,
+        vaultUsdcAta,
+        undefined,
+        TOKEN_PROGRAM_ID
+      );
+      if (Number(vaultUsdc.amount) > 0) {
+        await program.methods
+          .withdrawBuffer(new BN(Number(vaultUsdc.amount)))
+          .accountsPartial({
+            bufferWithdrawer: coldMultisig.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okuMoneyMint: okuMoneyMint,
+            withdrawerUsdcAta: bufferWithdrawerUsdcAta,
+            vaultUsdc: vaultUsdcAta,
+            usdcMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([coldMultisig])
+          .rpc();
+      }
+    }
+
+    before(async () => {
+      await mintOkuMoneyViaProgram(
+        program,
+        user,
+        REDEEM_AMOUNT.muln(4),
+        configPda,
+        usdcMint,
+        okuMoneyMint,
+        userUsdcAta,
+        userOkuMoneyAta,
+        vaultUsdcAta
+      );
+      await drainBuffer();
+    });
+
+    after(async () => {
+      await drainBuffer();
+    });
+
+    /** Queue a single redemption for `user` and return the absolute index. */
+    async function queueOne(): Promise<BN> {
+      await program.methods
+        .redeemOkuM(REDEEM_AMOUNT)
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          usdcMint,
+          okuMoneyMint,
+          userUsdcAta,
+          userOkuMoneyAta,
+          vaultUsdc: vaultUsdcAta,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          oracleRelayFeed: null,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
+      const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      return (queue.tail as BN).sub(new BN(1));
+    }
+
+    it("happy path: original queued user reclaims their escrowed OkuMoney", async () => {
+      const rescueIndex = await queueOne();
+      const slot = ringSlot(rescueIndex);
+      const userOkuBefore = await getAccount(
+        provider.connection,
+        userOkuMoneyAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+
+      await program.methods
+        .userSelfRescueQueueEntry(rescueIndex)
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          okuMoneyMint,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          recipientOkuMoneyAta: userOkuMoneyAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([user])
+        .rpc();
+
+      const queueAfter = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      const cleared = queueAfter.entries[slot];
+      expect(cleared.user.toString()).to.equal(PublicKey.default.toString());
+      expect(Number(cleared.okuMAmount)).to.equal(0);
+
+      const userOkuAfter = await getAccount(
+        provider.connection,
+        userOkuMoneyAta,
+        undefined,
+        TOKEN_2022_PROGRAM_ID
+      );
+      expect(Number(userOkuAfter.amount) - Number(userOkuBefore.amount)).to.equal(
+        REDEEM_AMOUNT.toNumber()
+      );
+    });
+
+    it("rejects a different signer than the original queued user", async () => {
+      const rescueIndex = await queueOne();
+
+      // Set up a clean OkuMoney ATA for user2 (the wrong signer) since the
+      // context pins `token::authority = user`. Without a user2-owned ATA the
+      // tx would fail earlier on the account constraint, not on Unauthorized.
+      const user2OkuAta = getAssociatedTokenAddressSync(
+        okuMoneyMint,
+        user2.publicKey,
+        false,
+        TOKEN_2022_PROGRAM_ID
+      );
+      await ensureAtaViaBankrun(h, user2.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+
+      try {
+        await program.methods
+          .userSelfRescueQueueEntry(rescueIndex)
+          .accountsPartial({
+            user: user2.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okuMoneyMint,
+            vaultOkuMoney: vaultOkuMoneyAta,
+            recipientOkuMoneyAta: user2OkuAta,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([user2])
+          .rpc();
+        expect.fail("Should have failed Unauthorized");
+      } catch (err: any) {
+        expect(err?.error?.errorCode?.code).to.equal("Unauthorized");
+      }
+
+      // Cleanup: real user clears the entry so subsequent tests start clean.
+      await program.methods
+        .userSelfRescueQueueEntry(rescueIndex)
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          okuMoneyMint,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          recipientOkuMoneyAta: userOkuMoneyAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([user])
+        .rpc();
+    });
+
+    it("rejects an already-cleared slot with EntryAlreadyCleared", async () => {
+      const rescueIndex = await queueOne();
+
+      // First rescue succeeds and clears the slot.
+      await program.methods
+        .userSelfRescueQueueEntry(rescueIndex)
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          okuMoneyMint,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          recipientOkuMoneyAta: userOkuMoneyAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([user])
+        .rpc();
+
+      // Second rescue of the same slot must fail. Head may have already
+      // advanced past this index — that surfaces as `InvalidQueueIndex`
+      // rather than `EntryAlreadyCleared`. Accept either; both are the
+      // "you can't re-rescue a slot you already rescued" property.
+      try {
+        await program.methods
+          .userSelfRescueQueueEntry(rescueIndex)
+          .accountsPartial({
+            user: user.publicKey,
+            config: configPda,
+            redemptionQueue: redemptionQueuePda,
+            okuMoneyMint,
+            vaultOkuMoney: vaultOkuMoneyAta,
+            recipientOkuMoneyAta: userOkuMoneyAta,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([user])
+          .rpc();
+        expect.fail("Should have failed on second rescue");
+      } catch (err: any) {
+        const code = err?.error?.errorCode?.code;
+        expect(["EntryAlreadyCleared", "InvalidQueueIndex"]).to.include(code);
+      }
+    });
+
+    it("unblocks a head-pinned queue: user self-rescue advances head past their slot", async () => {
+      // Queue an entry, then verify head moves forward after self-rescue.
+      const queueBefore = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      const headBefore = queueBefore.head as BN;
+
+      const rescueIndex = await queueOne();
+      // Only the just-queued entry is in flight, so its index == head.
+      expect(rescueIndex.toString()).to.equal(headBefore.toString());
+
+      await program.methods
+        .userSelfRescueQueueEntry(rescueIndex)
+        .accountsPartial({
+          user: user.publicKey,
+          config: configPda,
+          redemptionQueue: redemptionQueuePda,
+          okuMoneyMint,
+          vaultOkuMoney: vaultOkuMoneyAta,
+          recipientOkuMoneyAta: userOkuMoneyAta,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([user])
+        .rpc();
+
+      const queueAfter = await program.account.redemptionQueue.fetch(redemptionQueuePda);
+      // Head must have advanced past the rescued slot.
+      expect((queueAfter.head as BN).toNumber()).to.be.greaterThan(headBefore.toNumber());
     });
   });
 

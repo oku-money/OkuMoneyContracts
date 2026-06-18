@@ -129,6 +129,11 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
     "OKUM_PAUSER",
     "OKUM_UNPAUSER",
     "OKUM_MINTER",
+    // Cycle 4 (EVM-15): OKUM_BURNER required for redeem flows on both LitePSM
+    // and RedemptionQueue. Granting it to the master EOA is a no-op safety net
+    // (the master EOA never calls OkuMoney.burn() directly) but keeps the role
+    // surface complete for emergency operator action.
+    "OKUM_BURNER",
     "OKUM_REBASER",
     "OKUM_BLACKLISTER",
     "OKUM_UNBLACKLISTER",

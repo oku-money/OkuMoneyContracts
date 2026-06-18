@@ -78,9 +78,14 @@ contract OracleRelay is
     error InvalidPriceBand(uint256 minE18, uint256 maxE18);
     /// @dev Chainlink read returned an incomplete round (answeredInRound < roundId).
     error IncompleteOracleRound();
-    /// @dev Chainlink read returned malformed timestamps (updatedAt == 0, startedAt zero,
-    ///      or startedAt > updatedAt).
-    error InvalidOracleResponse();
+    /// @dev Chainlink read returned `updatedAt == 0` (the round was never
+    ///      updated). Split from the broader `InvalidOracleResponse` for
+    ///      incident-triage clarity.
+    error OracleUpdatedAtZero();
+    /// @dev Chainlink read returned malformed `startedAt` (zero or after
+    ///      `updatedAt`). Distinct from `OracleUpdatedAtZero` so monitoring
+    ///      can tell the two malformation classes apart.
+    error OracleStartedAtInvalid();
     /// @dev Chainlink read returned a non-positive answer.
     error NonPositiveAnswer();
     /// @dev Chainlink read is older than the configured staleness threshold.
@@ -168,8 +173,8 @@ contract OracleRelay is
     /// @inheritdoc IOracleRelay
     /// @dev Five-step Chainlink read-safety:
     ///        1. answeredInRound < roundId  -> IncompleteOracleRound
-    ///        2. updatedAt == 0              -> InvalidOracleResponse
-    ///        3. startedAt zero or > updatedAt -> InvalidOracleResponse
+    ///        2. updatedAt == 0              -> OracleUpdatedAtZero
+    ///        3. startedAt zero or > updatedAt -> OracleStartedAtInvalid
     ///        4. block.timestamp - updatedAt >= stalenessThreshold -> StaleOracleData
     ///        5. answer <= 0                 -> NonPositiveAnswer
     ///      then normalize 1e<feedDecimals> -> 1e18 and enforce the configured band.
@@ -185,8 +190,8 @@ contract OracleRelay is
         ) = $.priceFeed.latestRoundData();
 
         if (answeredInRound < roundId) revert IncompleteOracleRound();
-        if (updatedAt == 0) revert InvalidOracleResponse();
-        if (startedAt == 0 || startedAt > updatedAt) revert InvalidOracleResponse();
+        if (updatedAt == 0) revert OracleUpdatedAtZero();
+        if (startedAt == 0 || startedAt > updatedAt) revert OracleStartedAtInvalid();
         if (block.timestamp - updatedAt >= $.stalenessThreshold) revert StaleOracleData();
         if (answer <= 0) revert NonPositiveAnswer();
 

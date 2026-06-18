@@ -12,6 +12,11 @@
  * QUEUE_PSM is intentionally NOT in this list — it must remain on the LitePSM
  * proxy address (set at deploy time via configureRoles).
  *
+ * OKUM_MINTER and OKUM_BURNER (cycle 4 / EVM-15) are likewise intentionally
+ * NOT in this list — they must remain on the LitePSM and RedemptionQueue
+ * proxy addresses (granted at deploy time via configureRoles). This script
+ * verifies those grants exist before proceeding; missing grants are fatal.
+ *
  * Final step: revokes DEFAULT_ADMIN_ROLE from the deployer key, making the
  * Cold Multisig the sole meta-role holder.
  *
@@ -236,6 +241,33 @@ async function main() {
       continue;
     }
     contracts[name] = await getDeployedContract(name, addr);
+  }
+
+  // -------- Sanity check: deploy-time proxy grants must already exist --------
+  // EVM-A1: OKUM_MINTER and OKUM_BURNER live on the LitePSM/RedemptionQueue
+  // proxies, not on EOAs. They are granted in scripts/deploy/index.ts and must
+  // be present before this script runs. Missing grants here mean a fresh
+  // deploy is broken — fail loudly before we touch any role state.
+  if (contracts.OkuMoney && contracts.LitePSM && contracts.RedemptionQueue) {
+    const okuMoney = contracts.OkuMoney;
+    const psmAddr = await contracts.LitePSM.getAddress();
+    const queueAddr = await contracts.RedemptionQueue.getAddress();
+    const checks: Array<[string, string, string]> = [
+      ["OKUM_MINTER on LitePSM", ROLES.OKUM_MINTER, psmAddr],
+      ["OKUM_MINTER on RedemptionQueue", ROLES.OKUM_MINTER, queueAddr],
+      ["OKUM_BURNER on LitePSM", ROLES.OKUM_BURNER, psmAddr],
+      ["OKUM_BURNER on RedemptionQueue", ROLES.OKUM_BURNER, queueAddr],
+    ];
+    for (const [label, role, account] of checks) {
+      const has = await okuMoney.hasRole(role, account);
+      if (!has) {
+        throw new Error(
+          `Deploy-time proxy grant missing: ${label}. ` +
+          `Re-run scripts/deploy/index.ts:configureRoles or grant manually before continuing.`
+        );
+      }
+      logger.info(`  [verified] ${label}`);
+    }
   }
 
   // -------- Grant Cold Multisig roles --------

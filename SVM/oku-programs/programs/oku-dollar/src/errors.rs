@@ -72,10 +72,6 @@ pub enum OkuDollarError {
     #[msg("Dead-shares ATA missing (required on first deposit)")]
     MissingDeadSharesAccount,
 
-    /// Dead-shares ATA does not belong to the usdOku mint.
-    #[msg("Dead-shares ATA mint does not match usdOku")]
-    InvalidDeadSharesMint,
-
     /// Dead-shares ATA owner is not the System Program.
     #[msg("Dead-shares ATA owner must be the System Program")]
     InvalidDeadSharesOwner,

@@ -44,6 +44,13 @@ use anchor_spl::token_2022::spl_token_2022::state::Mint as MintRaw;
 
 /// Returns `true` if `e` is an extension the protocol will tolerate on
 /// the OkuMoney mint. Anything not on this list is rejected at init.
+///
+/// Note on `ImmutableOwner`: this is technically a Token-2022 *account*
+/// extension, not a *mint* extension. It cannot appear in the mint's
+/// extension TLV — `get_extension_types` here only returns mint-level
+/// extensions. The variant is included in the allow-list defensively in
+/// case the SPL Token-2022 enum is ever shared across the mint/account
+/// boundary in a future SDK release; today it is dead-defense.
 #[inline]
 fn is_allowed_mint_extension(e: ExtensionType) -> bool {
     matches!(

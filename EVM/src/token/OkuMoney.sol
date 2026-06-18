@@ -223,7 +223,17 @@ contract OkuMoney is
     ///      stamp `lastYieldDistributionBlock` without actually moving the
     ///      multiplier (which would waste the sandwich-lock slot). Mirrors the
     ///      `YieldTooSmall` guard on `distributeYield`.
-    function setOkuMMultiplier(uint256 newMultiplier) external onlyRole(Roles.OKUM_REBASER) {
+    ///
+    ///      Pause-gated: while paused, the rebaser cannot move the multiplier.
+    ///      Yield is a state-effect and must be frozen alongside user-facing
+    ///      transfers during an incident response. The rate-config setters on
+    ///      `OkuDollar` (`setUsdYieldRate`, `setNextUsdYieldRate`) intentionally
+    ///      remain available while paused so operators can zero accrual mid-pause.
+    function setOkuMMultiplier(uint256 newMultiplier)
+        external
+        onlyRole(Roles.OKUM_REBASER)
+        whenNotPaused
+    {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 currentMultiplier = $.okuMMultiplier;
         if (newMultiplier <= currentMultiplier) revert Errors.MultiplierCannotDecrease();
@@ -241,8 +251,16 @@ contract OkuMoney is
     ///      Enforces the same `MAX_MULTIPLIER` ceiling as `setOkuMMultiplier`.
     ///      The check runs against the freshly-computed `newMultiplier`, so a
     ///      single huge `yieldAmount` cannot bypass it.
+    ///
+    ///      Pause-gated for the same reason as `setOkuMMultiplier`: yield is a
+    ///      state-effect that must freeze with user-facing transfers during
+    ///      pause. See `setOkuMMultiplier` NatSpec.
     /// @param yieldAmount Dollar yield to distribute (18 decimals)
-    function distributeYield(uint256 yieldAmount) external onlyRole(Roles.OKUM_REBASER) {
+    function distributeYield(uint256 yieldAmount)
+        external
+        onlyRole(Roles.OKUM_REBASER)
+        whenNotPaused
+    {
         uint256 supply = totalSupply();
         if (supply == 0) revert ZeroSupply();
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();

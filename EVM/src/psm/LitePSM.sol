@@ -498,13 +498,16 @@ contract LitePSM is
     ///      Cycle 4 (EVM-03): emits a dedicated `OracleRelayDisabled`
     ///      event in addition to `OracleRelayUpdated` so monitoring
     ///      tooling can distinguish a routine rotation from a
-    ///      kill-switch trip.
+    ///      kill-switch trip. The disable event only fires when an
+    ///      actually-configured relay is being cleared (i.e.
+    ///      `oldRelay != 0`); a no-op `setOracleRelay(0)` on a fresh
+    ///      deploy does not pollute the monitoring feed.
     function setOracleRelay(address newRelay) external onlyRole(Roles.PSM_ORACLE_MANAGER) {
         LitePSMStorage storage $ = _getLitePSMStorage();
         address oldRelay = address($.oracleRelay);
         $.oracleRelay = IOracleRelay(newRelay);
         emit OracleRelayUpdated(oldRelay, newRelay);
-        if (newRelay == address(0)) {
+        if (newRelay == address(0) && oldRelay != address(0)) {
             emit OracleRelayDisabled(msg.sender, oldRelay, block.number);
         }
     }

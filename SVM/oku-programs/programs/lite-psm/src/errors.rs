@@ -113,12 +113,6 @@ pub enum LitePsmError {
     #[msg("User does not hold enough OkuMoney for redemption")]
     InsufficientUserBalance,
 
-    // ===== Account Errors =====
-    /// Account is frozen (blacklisted)
-    /// EVM: SenderBlacklisted() / RecipientBlacklisted()
-    #[msg("Account is frozen")]
-    AccountFrozen,
-
     // ===== Queue Errors =====
     /// Queue is empty
     #[msg("Queue is empty")]
@@ -150,10 +144,6 @@ pub enum LitePsmError {
     /// Not enough accounts provided for queue entries
     #[msg("Not enough accounts provided for queue entries")]
     InsufficientAccounts,
-
-    /// Recipient account does not match queue entry user
-    #[msg("Recipient account does not match queue entry user")]
-    RecipientMismatch,
 
     // ===== Oracle Relay Validation Errors =====
     /// Relay is configured but the feed account was not supplied as a
@@ -246,13 +236,6 @@ pub enum LitePsmError {
     InvalidStaleness,
 
     // ===== Phase 10 / Cycle 4: mint extension invariants =====
-    /// Legacy alias for `IncompatibleMintExtension` (cycle 3 emitted this
-    /// variant for the TransferHook-only check). Retained so existing IDL
-    /// clients that decoded the error code continue to render a useful
-    /// message; new call sites should emit `IncompatibleMintExtension`.
-    #[msg("OkuMoney mint must not have the TransferHook Token-2022 extension")]
-    TransferHookNotAllowed,
-
     /// The OkuMoney mint carries a Token-2022 extension that the protocol
     /// does not support. Cycle 4 widened the original `TransferHook`-only
     /// check to a full allow-list (see `helpers::mint_extensions`); any

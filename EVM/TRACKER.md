@@ -6,35 +6,37 @@ Resolved items are removed; full history lives in git +
 
 **Status legend:** 🔴 blocks external exposure · 🟡 should-fix before audit · ⚪ post-launch
 
+**Audit-prep cycle (2026-06-18) — landed:**
+- EVM-A1: `OKUM_BURNER` wired into deploy + grant scripts (was missing → fresh deploys would have bricked redeem).
+- EVM-D5/E5: `whenNotPaused` on `setOkuMMultiplier` + `distributeYield` (yield state-effects now freeze with the rest of the contract).
+- 4 new operator CLIs: `blacklistBoth.ts`, `setMaxSupply.ts`, `setUsdYieldRate.ts`, `setMinCollateralRatio.ts`.
+- Polish: `OkuDollar.unwrap` receiver-blacklist check (D2), `InvalidOracleResponse` split into `OracleUpdatedAtZero` + `OracleStartedAtInvalid` (F3), `OracleRelayDisabled` event gated on `oldRelay != 0` (B3), deploy script reordered to fail-fast on USDC mismatch (J3), post-deploy oracle-relay parity assertion (J4).
+- Coverage: `_compoundFor` saturation @ `MAX_MULTIPLIER`, `LitePSM` USDC-balance invariant, `OkuDollar.unwrap` receiver-blacklist test. `forge test` 600/600.
+
 ---
 
 ## 🟡 Should-fix before external audit
 
 ### Key custody + change-management documentation
 
-Auditors of centralized stablecoin contracts evaluate operational
-controls, not on-chain delay mechanisms. What's expected and
-currently missing from the repo:
+Stub committed at [`../runbooks/key-custody.md`](../runbooks/key-custody.md).
+The on-chain primitives (3-tier RBAC, two-step `RoleAdmin` transfer,
+`blacklistBoth.ts` for the dual-token blacklist gap, pause matrix
+documented in [`../../audit/README.md`](../../audit/README.md)) all
+shipped in the audit-prep cycle. The stub is structurally complete
+but every `<TBD>` placeholder requires team input before it is
+audit-ready. Specifically pending team review:
 
-- **Key custody procedures.** Where are the cold / warm multisig
-  hardware devices stored? What's the off-boarding process when a
-  signer leaves? What's the recovery process if a device is lost?
-- **Change-management runbook per admin action class.** For each
-  cold-multisig action (`configureRelay`, `configureMinterAllowance`,
-  `setMaxSupply`, role grants, upgrade ceremonies): who proposes?
-  Who reviews the proposed tx data? Who signs? What's the dry-run /
-  fork-test requirement before mainnet?
-- **Segregation-of-duties statement.** Which humans hold cold vs
-  warm vs orchestrator keys? Do any individuals hold keys in more
-  than one tier? (The system allows overlap on-chain; operational
-  policy should prohibit it.)
-- **Incident response procedures.** Specific runbooks for:
-  compromised orchestrator key, compromised warm multisig,
-  unexpected admin event detected by monitoring.
+- Signer roster + hardware-device inventory per tier.
+- Cold-multisig threshold, geographic distribution, seed-backup mechanism.
+- Per-action change-management workflow (proposer / reviewer / dry-run / approval medium).
+- Off-boarding cadence + lost-device recovery flow.
+- Segregation-of-duties statement (which humans hold which tier keys).
+- Incident response specifics — compromised orchestrator / warm / cold.
+- KMS provider, region, access policy, rotation cadence.
 
-**Effort:** 2–4 days (writing, not implementation). This is what
-audit reports flag for centralized stablecoin projects, not missing
-timelocks.
+**Effort:** 1–2 days of team input + 1 day to fold into the stub
+once placeholders are filled. Drafting is done.
 
 ### Health-check / monitoring scripts
 
@@ -132,6 +134,23 @@ in a v2 upgrade with a careful migration. Defer to v2.
 
 Both exist for SVM; EVM-side TypeScript linting is currently
 ESLint-only. Worth aligning so `npm run lint` covers both.
+
+### Operator CLI gaps (post-audit triage)
+
+Audit-prep cycle added wrappers for the four hottest gaps
+(`setMaxSupply`, `setUsdYieldRate`, `setMinCollateralRatio`,
+`blacklistBoth`). Still missing CLIs — defer until post-audit when
+the function kill-list is finalised:
+
+- `setOkuMMultiplier` — `OkuMoney.setOkuMMultiplier` (the direct
+  multiplier setter, distinct from `distributeYield` which already
+  has a CLI). If the runbook never calls it outside `distributeYield`,
+  remove the function instead of adding a CLI.
+- `depositReserves` / `withdrawSurplus` on `OkuDollar` — already on
+  the "potentially redundant" review list; triage before shipping CLIs.
+- `setNextUsdYieldRate` — schedules a future rate; `setUsdYieldRate`
+  covers the immediate-effect case. Add only if the schedule-ahead
+  flow becomes part of the runbook.
 
 ---
 

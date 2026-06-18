@@ -523,7 +523,8 @@ Every user-facing PSM function is protected by `whenYieldNotDistributing` + `whe
 `LitePSM` and `RedemptionQueue` consume a separate `OracleRelay` proxy (`src/oracle/OracleRelay.sol`) that wraps a Chainlink USDC/USD aggregator. Every mint, redeem, and `processQueue` path calls `oracleRelay.checkUsdcPeg()` (when wired) and reverts on:
 
 - Incomplete round (`answeredInRound < roundId`) → `IncompleteOracleRound`.
-- Malformed timestamps (`updatedAt == 0`, `startedAt == 0`, or `startedAt > updatedAt`) → `InvalidOracleResponse`.
+- `updatedAt == 0` (round never updated) → `OracleUpdatedAtZero`.
+- Malformed `startedAt` (`== 0` or `> updatedAt`) → `OracleStartedAtInvalid`.
 - Stale data (`block.timestamp - updatedAt >= stalenessThreshold`) → `StaleOracleData`.
 - Non-positive answer → `NonPositiveAnswer`.
 - Normalized price outside the configured band → `PriceOutOfBand`.

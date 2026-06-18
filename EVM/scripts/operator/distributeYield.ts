@@ -1,10 +1,14 @@
 /**
  * Distribute yield into OkuMoney via the rebaser path (OKUM_REBASER role).
  *
- * Calls `OkuMoney.distributeYield(yieldAmount)`, which proportionally bumps
- * every holder's effective balance by `yieldAmount / totalSupply`. This is
- * the on-chain primitive the orchestrator drives once per yield-distribution
- * window; the rebase changes balances without moving tokens.
+ * Calls `OkuMoney.distributeYield(yieldAmount)`, which advances the global
+ * `okuMMultiplier` by `yieldAmount / totalSupply` (dollar-denominated, 18-dec).
+ * OkuMoney is NON-rebasing: `balanceOf()` is unchanged. The multiplier is
+ * consumed by the PSM and the OkuDollar vault to compute per-token dollar
+ * value, so the same raw OkuM balance is worth more USD after a distribute.
+ *
+ * This is the on-chain primitive the orchestrator drives once per
+ * yield-distribution window.
  *
  * Usage:
  *   NETWORK=base npx hardhat run scripts/operator/distributeYield.ts --network base \

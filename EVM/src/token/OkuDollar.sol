@@ -331,6 +331,14 @@ contract OkuDollar is
         return true;
     }
 
+    /// @dev Allowance is debited by the caller-supplied `amount`, while the
+    ///      actual moved value is `effective = floor(shares * multiplier / 1e18)`.
+    ///      Because share derivation floors, `effective <= amount` always, and
+    ///      the gap (at most 1 wei per call) is consumed from the allowance
+    ///      rather than the holder's balance. This is in the protocol's favor
+    ///      and mirrors the same flooring direction documented on `wrap` /
+    ///      `unwrap`. Indexers should reconstruct the moved value from the
+    ///      `Transfer` event payload, not from the allowance delta.
     function transferFrom(
         address from,
         address to,
@@ -500,6 +508,13 @@ contract OkuDollar is
 
         OkuDollarStorage storage $ = _getOkuDollarStorage();
         if ($.isBlacklisted[msg.sender]) revert SenderBlacklisted();
+        // Symmetric with `wrap`: both sides of the principal flow are
+        // checked. The receiver gets OkuMoney back, and OkuMoney's `_update`
+        // hook independently enforces its own blacklist on the recipient.
+        // We add the explicit check here so a user blacklisted only on
+        // OkuDollar (but not OkuMoney) cannot route OkuM to a third party
+        // via `unwrap(amount, victimAddr)`.
+        if ($.isBlacklisted[receiver]) revert RecipientBlacklisted();
 
         uint256 usdMult = usdMultiplier();
         uint256 okuMMult = $.okuMoney.okuMMultiplier();
@@ -692,6 +707,20 @@ contract OkuDollar is
     ///      (`wrap`, `unwrap`, `transfer`) still defends against
     ///      OkuMoney-side `distributeYield` collisions, which is the
     ///      attack class that does have instantaneous impact.
+    ///
+    ///      `endTimestamp == 0` is the "open-ended" sentinel: the rate
+    ///      accrues indefinitely until the next `setUsdYieldRate` call.
+    ///      Non-zero values must be strictly in the future. While an
+    ///      open-ended rate is active, `setNextUsdYieldRate` cannot
+    ///      schedule a successor (it reverts with `NoRateEndSet`); the
+    ///      operator must re-call `setUsdYieldRate` to switch.
+    ///
+    ///      Pause-bypass is intentional: operators may need to ZERO the
+    ///      rate (pass `newRate = PRECISION`) during an incident response,
+    ///      and pausing this setter would defeat that. The companion
+    ///      rate-effect setters on `OkuMoney` (`setOkuMMultiplier`,
+    ///      `distributeYield`) ARE pause-gated — see those for the
+    ///      effect-vs-config split rationale.
     function setUsdYieldRate(
         uint256 newRate,
         uint256 endTimestamp

@@ -189,14 +189,17 @@ contract RedemptionQueue is
     ///      and reverts on depeg.
     ///
     ///      Cycle 4 (EVM-03): emits a dedicated `OracleRelayDisabled`
-    ///      event when `newRelay == 0` so monitoring tooling can
-    ///      distinguish a kill-switch trip from a routine rotation.
+    ///      event when an actually-configured relay is being cleared
+    ///      (i.e. `oldRelay != 0`) so monitoring tooling can
+    ///      distinguish a kill-switch trip from a routine rotation,
+    ///      and a no-op `setOracleRelay(0)` on a fresh deploy does
+    ///      not pollute the monitoring feed.
     function setOracleRelay(address newRelay) external onlyRole(Roles.QUEUE_ORACLE_MANAGER) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         address oldRelay = address($.oracleRelay);
         $.oracleRelay = IOracleRelay(newRelay);
         emit OracleRelayUpdated(oldRelay, newRelay);
-        if (newRelay == address(0)) {
+        if (newRelay == address(0) && oldRelay != address(0)) {
             emit OracleRelayDisabled(msg.sender, oldRelay, block.number);
         }
     }

@@ -67,7 +67,7 @@ pub const MIN_COLLATERAL_RATIO_FLOOR: u64 = 900_000_000;
 /// Math-sanity bound that keeps the rpow / mul-div input space finite.
 /// Not a guard against a compromised rebaser key — operator-compromise
 /// is out of scope per the centralized trust model (see
-/// `SVM/README.md § Authority Model` and `SVM/TRACKER.md`).
+/// `SVM/README.md § Authority Model` and `contracts/TRACKER.md`).
 ///
 /// EVM mirror: `Constants.MAX_MULTIPLIER = 1e24`. EVM also relies on
 /// `Constants.MAX_RATE` for the per-second rate cap; SVM uses discrete

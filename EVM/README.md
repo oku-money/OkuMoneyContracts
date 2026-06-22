@@ -469,7 +469,7 @@ Pause is a **full freeze**. The following are gated behind `whenNotPaused`:
 
 - OkuMoney: peer-to-peer `transfer` / `transferFrom` (mint also; burn is NOT gated — self-burn works while paused to support the pause-to-blacklist protocol).
 - OkuDollar: `transfer` / `transferFrom`, `wrap`, `unwrap`, `depositReserves`, `withdrawSurplus`.
-- LitePSM: `mintOkuM`, `redeemOkuM`, `mintUsdOku`, `redeemUsdOku`, `redeemOkuMWithPermit`, `redeemUsdOkuWithPermit`, `processQueue`.
+- LitePSM: `mintOkuM`, `redeemOkuM`, `mintUsdOku`, `redeemUsdOku`, `processQueue`.
 
 **Intentionally NOT pause-gated**: the vault's yield-rate setters (`setUsdYieldRate`, `setNextUsdYieldRate`) and `setMinCollateralRatio` — these are admin emergency levers that must remain callable during a pause.
 
@@ -501,7 +501,6 @@ function mintOkuM(uint256 usdcAmount) external;
 
 // usdcAmount = okuMAmount × okuMMultiplier() / PRECISION (scaled to 6 decimals)
 function redeemOkuM(uint256 okuMAmount) external;
-function redeemOkuMWithPermit(uint256 okuMAmount, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;
 ```
 
 At `okuMMultiplier = $1.05`: depositing 100 USDC gives ~95.24 OkuM; redeeming 95.24 OkuM returns ~100 USDC.
@@ -511,7 +510,6 @@ At `okuMMultiplier = $1.05`: depositing 100 USDC gives ~95.24 OkuM; redeeming 95
 ```solidity
 function mintUsdOku(uint256 usdcAmount) external;           // USDC → mint OkuM → wrap → usdOku to user
 function redeemUsdOku(uint256 usdAmount) external;          // usdOku → unwrap → redeem → USDC to user
-function redeemUsdOkuWithPermit(...) external;              // Permit variant
 ```
 
 `redeemUsdOku` has two distinct failure modes: (a) vault undercollateralized → `unwrap` reverts with `InsufficientReserves` → entire tx reverts; (b) vault has OkuM but PSM buffer insufficient → OkuM goes to the redemption queue.
@@ -905,7 +903,7 @@ for transparency.
 ## Pointers
 
 - **Workspace overview + cross-chain parity matrix:** [`../../audit/README.md`](../../audit/README.md)
-- **Open issues:** [`TRACKER.md`](TRACKER.md)
+- **Open issues:** [`../TRACKER.md`](../TRACKER.md)
 - **In-repo audit package** (accepted risks, slither triage, captured tool snapshots): [`audit/README.md`](audit/README.md)
 - **Self-audit toolkit:** [`../../audit/EVM/README.md`](../../audit/EVM/README.md)
 - **SVM-side docs:** [`../SVM/README.md`](../SVM/README.md)

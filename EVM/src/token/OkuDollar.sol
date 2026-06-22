@@ -89,20 +89,6 @@ contract OkuDollar is
         }
     }
 
-    /// @notice Bundled rate-and-share status for off-chain consumers / scripts.
-    /// @dev Convenience view; the existing individual getters remain available.
-    struct OkuDollarStatus {
-        uint256 usdMultiplier;
-        uint256 usdBaseMultiplier;
-        uint256 usdRatePerSecond;
-        uint256 usdPendingRatePerSecond;
-        uint256 usdLastAccrualTime;
-        uint256 usdRateEnd;
-        uint256 totalUsdShares;
-        uint256 minCollateralRatio;
-        uint256 collateralizationRatio;
-    }
-
     // ============ Custom Errors ============
 
     // Common errors (ZeroAddress, MultiplierCannotDecrease, ZeroAmount, InsufficientBalance)
@@ -213,22 +199,6 @@ contract OkuDollar is
 
     function isBlacklisted(address account) external view returns (bool) {
         return _getOkuDollarStorage().isBlacklisted[account];
-    }
-
-    /// @notice Snapshot of all rate-and-share state in one call.
-    function getStatus() external view returns (OkuDollarStatus memory) {
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
-        return OkuDollarStatus({
-            usdMultiplier: usdMultiplier(),
-            usdBaseMultiplier: $.usdBaseMultiplier,
-            usdRatePerSecond: $.usdRatePerSecond,
-            usdPendingRatePerSecond: $.usdPendingRatePerSecond,
-            usdLastAccrualTime: $.usdLastAccrualTime,
-            usdRateEnd: $.usdRateEnd,
-            totalUsdShares: $.totalUsdShares,
-            minCollateralRatio: $.minCollateralRatio,
-            collateralizationRatio: collateralizationRatio()
-        });
     }
 
     // ============ USD Multiplier (Continuous Accrual) ============

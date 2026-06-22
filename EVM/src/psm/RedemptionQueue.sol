@@ -97,9 +97,6 @@ contract RedemptionQueue is
     error EntryAlreadyCleared();
     /// @dev USDC reports more decimals than supported (>18).
     error UsdcDecimalsTooLarge(uint8 reported);
-    /// @dev The USDC configured on this queue does not match the calling PSM's USDC.
-    ///      Detected at wire-time via {assertUsdcMatch}; prevents silent misconfiguration.
-    error UsdcMismatch(address queueUsdc, address psmUsdc);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -136,19 +133,6 @@ contract RedemptionQueue is
         _grantRole(Roles.QUEUE_UPGRADER, _admin);
         _grantRole(Roles.QUEUE_RESCUER, _admin);
         _grantRole(Roles.QUEUE_ORACLE_MANAGER, _admin);
-    }
-
-    // ============ Post-Init Wiring ============
-
-    /// @notice Assert that the caller's USDC matches the queue's USDC configuration.
-    /// @dev Called by the deployer (or a deploy script) immediately after wiring the
-    ///      PSM to this queue, to catch the "deployed with wrong USDC" footgun at
-    ///      setup time rather than at first processQueue invocation. Reverts with
-    ///      `UsdcMismatch` if the addresses differ.
-    ///      The check is callable by anyone — it is read-only and has no side effects.
-    function assertUsdcMatch(address psmUsdc) external view {
-        IERC20 queueUsdc = _getRedemptionQueueStorage().usdc;
-        if (address(queueUsdc) != psmUsdc) revert UsdcMismatch(address(queueUsdc), psmUsdc);
     }
 
     // ============ Storage Accessor Views ============

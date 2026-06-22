@@ -429,6 +429,7 @@ non-parity items — in [`../audit/README.md`](../audit/README.md).
 ```
 contracts/
 ├── README.md            # this file
+├── TRACKER.md           # Open issues + follow-ups (EVM + SVM)
 ├── EVM/                 # Solidity contracts (Foundry + Hardhat)
 │   ├── README.md        # EVM-specific deployment, contracts, runbook
 │   ├── src/
@@ -439,11 +440,9 @@ contracts/
 │   │   └── lib/         # Roles, Constants, MathLib, events
 │   ├── test/            # Foundry + Hardhat suites
 │   ├── scripts/         # Deploy + operator scripts
-│   ├── audit/           # In-repo audit package (accepted risks, snapshots)
-│   └── TRACKER.md       # Open issues
+│   └── audit/           # In-repo audit package (accepted risks, snapshots)
 ├── SVM/                 # Anchor programs (Rust)
 │   ├── README.md        # SVM-specific runbook, divergence catalogue, deployment
-│   ├── TRACKER.md       # Open issues
 │   └── oku-programs/
 │       ├── programs/
 │       │   ├── lite-psm/    # PSM + queue + yield ops + compliance + oracle relay
@@ -731,7 +730,7 @@ metadata after the noBridge refactor.
 
 - **EVM-specific docs:** [`EVM/README.md`](EVM/README.md)
 - **SVM-specific docs:** [`SVM/README.md`](SVM/README.md)
-- **Open issues:** [`EVM/TRACKER.md`](EVM/TRACKER.md), [`SVM/TRACKER.md`](SVM/TRACKER.md)
+- **Open issues:** [`TRACKER.md`](TRACKER.md)
 - **Audit handoff:** [`../audit/README.md`](../audit/README.md)
 - **Cross-chain parity matrix:** [`../audit/README.md`](../audit/README.md) (§ "Cross-chain parity matrix")
 - **In-repo audit packages:** [`EVM/audit/README.md`](EVM/audit/README.md), [`SVM/oku-programs/audit/README.md`](SVM/oku-programs/audit/README.md)

@@ -291,7 +291,7 @@ no IDs have changed since.
 ## Pointers
 
 - **EVM-specific docs:** [`../README.md`](../README.md)
-- **Open issues:** [`../TRACKER.md`](../TRACKER.md)
+- **Open issues:** [`../../TRACKER.md`](../../TRACKER.md)
 - **Workspace overview + parity matrix:** [`../../../audit/README.md`](../../../audit/README.md)
 - **Self-audit toolkit:** [`../../../audit/EVM/README.md`](../../../audit/EVM/README.md)
 - **SVM in-repo audit:** [`../../SVM/oku-programs/audit/README.md`](../../SVM/oku-programs/audit/README.md)

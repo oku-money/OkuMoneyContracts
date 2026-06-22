@@ -11,7 +11,7 @@ use trident_fuzz::fuzzing::*;
 /// (mirroring the IDL accounts catalog) so each instruction can fetch a
 /// stable handle without scaffolding per-flow boilerplate. Many fields are
 /// unused by today's flow set (signer-gated admin paths aren't fuzzed yet —
-/// see `SVM/TRACKER.md § 🟡 Trident #[init] wiring`); the `dead_code`
+/// see `contracts/TRACKER.md § Trident #[init] follow-ons`); the `dead_code`
 /// suppression is intentional and crate-local.
 #[allow(dead_code)]
 #[derive(Default)]

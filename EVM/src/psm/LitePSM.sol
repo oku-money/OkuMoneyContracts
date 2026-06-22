@@ -13,7 +13,6 @@ import {ReentrancyGuardUpgradeable} from "../lib/ReentrancyGuardUpgradeable.sol"
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {RedemptionQueue} from "./RedemptionQueue.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
@@ -251,25 +250,6 @@ contract LitePSM is
         _redeemOkuMShared(msg.sender, okuMAmount, false);
     }
 
-    /// @notice Redeem OkuMoney for USDC using EIP-2612 permit (single transaction).
-    function redeemOkuMWithPermit(
-        uint256 okuMAmount,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    )
-        external
-        nonReentrant
-        whenNotPaused
-        whenYieldNotDistributing
-    {
-        LitePSMStorage storage $ = _getLitePSMStorage();
-        IERC20Permit(address($.okuMoney))
-            .permit(msg.sender, address(this), okuMAmount, deadline, v, r, s);
-        _redeemOkuMShared(msg.sender, okuMAmount, false);
-    }
-
     /// @notice Redeem OkuMoney for USDC where the OkuM is already held by the PSM.
     /// @dev Used by `_redeemUsdOku` after `okuDollar.unwrap()` deposits the OkuM here.
     ///      Does NOT emit `OkuMRedeemed`; callers emit their own user-facing event.
@@ -414,25 +394,6 @@ contract LitePSM is
         whenNotPaused
         whenYieldNotDistributing
     {
-        _redeemUsdOku(msg.sender, usdAmount);
-    }
-
-    /// @notice Redeem OkuDollar for USDC using EIP-2612 permit (single transaction).
-    function redeemUsdOkuWithPermit(
-        uint256 usdAmount,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    )
-        external
-        nonReentrant
-        whenNotPaused
-        whenYieldNotDistributing
-    {
-        LitePSMStorage storage $ = _getLitePSMStorage();
-        IERC20Permit(address($.okuDollar))
-            .permit(msg.sender, address(this), usdAmount, deadline, v, r, s);
         _redeemUsdOku(msg.sender, usdAmount);
     }
 

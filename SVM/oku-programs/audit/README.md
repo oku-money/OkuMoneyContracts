@@ -278,7 +278,7 @@ its signature into `InitializeParams`.
 ## Pointers
 
 - **SVM-specific docs:** [`../README.md`](../README.md) (programs, design choices, deployment, runbook, EVM divergence)
-- **Open issues:** [`../../TRACKER.md`](../../TRACKER.md)
+- **Open issues:** [`../../../TRACKER.md`](../../../TRACKER.md)
 - **Workspace overview + parity matrix:** [`../../../../audit/README.md`](../../../../audit/README.md)
 - **Self-audit toolkit:** [`../../../../audit/SVM/README.md`](../../../../audit/SVM/README.md)
 - **EVM in-repo audit:** [`../../../EVM/audit/README.md`](../../../EVM/audit/README.md)

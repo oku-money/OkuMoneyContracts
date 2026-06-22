@@ -2261,24 +2261,4 @@ contract OkuDollarTest is BaseTest {
         okuDollar.setUsdYieldRate(PRECISION + 1e9, 0);
         assertEq(okuDollar.usdLastAccrualTime(), block.timestamp);
     }
-
-    function test_View_GetStatus_ReflectsLiveState() public {
-        _mintUsdOku(user1, 100e18);
-
-        uint256 endTime = block.timestamp + 30 days;
-        vm.prank(usdRebaser);
-        okuDollar.setUsdYieldRate(PRECISION + 1393e6, endTime);
-
-        OkuDollar.OkuDollarStatus memory status = okuDollar.getStatus();
-
-        assertEq(status.usdMultiplier, okuDollar.usdMultiplier());
-        assertEq(status.usdBaseMultiplier, okuDollar.usdBaseMultiplier());
-        assertEq(status.usdRatePerSecond, PRECISION + 1393e6);
-        assertEq(status.usdPendingRatePerSecond, PRECISION);
-        assertEq(status.usdLastAccrualTime, block.timestamp);
-        assertEq(status.usdRateEnd, endTime);
-        assertEq(status.totalUsdShares, okuDollar.totalUsdShares());
-        assertEq(status.minCollateralRatio, okuDollar.minCollateralRatio());
-        assertEq(status.collateralizationRatio, okuDollar.collateralizationRatio());
-    }
 }

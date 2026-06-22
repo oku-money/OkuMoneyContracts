@@ -463,10 +463,14 @@ async function configureRoles(
   // partially-roled deployment that the operator would have to manually
   // un-grant from. Doing this first means a mismatch reverts with no state
   // change on the proxies.
-  await sendAndWait("Assert queue.usdc == psm.usdc", async () => {
-    const psmUsdc = await litePSM.usdc();
-    return redemptionQueue.assertUsdcMatch(psmUsdc);
-  });
+  const psmUsdc = (await litePSM.usdc()).toString();
+  const queueUsdc = (await redemptionQueue.usdc()).toString();
+  if (psmUsdc.toLowerCase() !== queueUsdc.toLowerCase()) {
+    throw new Error(
+      `USDC mismatch: PSM=${psmUsdc} queue=${queueUsdc}. Aborting before role grants.`
+    );
+  }
+  logger.info(`  USDC match verified: ${psmUsdc}`);
 
   // OkuMoney minter roles. LitePSM is the sole user-facing OKUM_MINTER in the
   // noBridge model; RedemptionQueue mints rebase deltas; off-chain cross-chain

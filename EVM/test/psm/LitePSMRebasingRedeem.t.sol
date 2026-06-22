@@ -9,8 +9,8 @@ import {MathLib} from "../../src/lib/MathLib.sol";
 
 /**
  * @title LitePSMRebasingRedeemTest
- * @notice Regression suite for `LitePSM.redeemUsdOku` and `redeemUsdOkuWithPermit`
- *         when `okuDollar.usdMultiplier() > 1e18` (i.e. yield is live and accruing).
+ * @notice Regression suite for `LitePSM.redeemUsdOku` when
+ *         `okuDollar.usdMultiplier() > 1e18` (i.e. yield is live and accruing).
  *
  * @dev Historical bug (Sepolia, May 2026): `_redeemUsdOku` pulled UsdOku by nominal
  *      amount and then called `unwrap(amount)` with the same nominal value. Because
@@ -28,7 +28,7 @@ import {MathLib} from "../../src/lib/MathLib.sol";
  *        * time horizons: 1 second, 1 minute, 1 hour, 1 day, 30 days, 1 year,
  *          5 years, 10 years, 25 years, ~50 years (capped to keep multiplier
  *          within reachable bounds).
- *        * entry points: `redeemUsdOku` and `redeemUsdOkuWithPermit`.
+ *        * entry points: `redeemUsdOku`.
  *
  *      The reference rate used in long-horizon tests is the live Sepolia
  *      production rate (`1_000_000_001_546_176_000` ≈ 5% APY). Selected because
@@ -228,46 +228,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
     }
 
     // ============================================================
-    // SECTION 4 — Permit variant coverage
-    // ============================================================
-
-    function test_RedeemUsdOkuWithPermit_AtElevatedMultiplier_Succeeds() public {
-        address userAddr = vm.addr(user1Pk);
-
-        // Mint via PSM (uses the unrelated `user1` actor for funding; we need the
-        // permit signer's address to hold UsdOku, so we mint to them directly via
-        // the PSM mintUsdOku path).
-        _mintUsdc(userAddr, 10_000e6);
-        vm.startPrank(userAddr);
-        usdc.approve(address(litePsm), 10_000e6);
-        litePsm.mintUsdOku(10_000e6);
-        vm.stopPrank();
-
-        // Now elevate the multiplier — this happens AFTER the mint, matching the
-        // production timeline where users minted at 1.0x and redeem at >1.0x.
-        _elevateUsdMultiplier(PRECISION + 1e15); // ~0.1% elevated
-
-        uint256 redeemAmount = 1e18; // 1 UsdOku — the exact Sepolia failing case
-        uint256 deadline = block.timestamp + 1 hours;
-        (uint8 v, bytes32 r, bytes32 s) =
-            _signOkuDollarPermit(user1Pk, address(litePsm), redeemAmount, deadline);
-
-        uint256 usdcBefore = usdc.balanceOf(userAddr);
-
-        vm.prank(userAddr);
-        litePsm.redeemUsdOkuWithPermit(redeemAmount, deadline, v, r, s);
-
-        assertGt(usdc.balanceOf(userAddr), usdcBefore, "Permit redeem must pay USDC");
-        // Stranded check.
-        assertLe(
-            okuDollar.balanceOf(address(litePsm)),
-            MAX_STRANDED_DUST,
-            "Permit path must not strand UsdOku"
-        );
-    }
-
-    // ============================================================
-    // SECTION 5 — Live compounding multiplier (rate > PRECISION + active accrual)
+    // SECTION 4 — Live compounding multiplier (rate > PRECISION + active accrual)
     // ============================================================
     //
     // The `_elevateUsdMultiplier` helper resets the rate to PRECISION after
@@ -385,7 +346,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
     }
 
     // ============================================================
-    // SECTION 6 — Time-walk: many redeems across a long horizon
+    // SECTION 5 — Time-walk: many redeems across a long horizon
     // ============================================================
 
     /// @notice Walk forward through 25 years of 5% APY, redeeming at each anniversary.
@@ -432,7 +393,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
     }
 
     // ============================================================
-    // SECTION 7 — Cross-product: okuMMultiplier × usdMultiplier
+    // SECTION 6 — Cross-product: okuMMultiplier × usdMultiplier
     // ============================================================
 
     /// @notice Both multipliers elevated AND usd rate live. The single scenario
@@ -459,7 +420,7 @@ contract LitePSMRebasingRedeemTest is BaseTest {
     }
 
     // ============================================================
-    // SECTION 8 — Property invariants
+    // SECTION 7 — Property invariants
     // ============================================================
 
     /// @notice USDC paid out must never exceed the dollar value of the UsdOku that
@@ -498,47 +459,5 @@ contract LitePSMRebasingRedeemTest is BaseTest {
         uint256 strandedAfter = okuDollar.balanceOf(address(litePsm));
         // Delta is the actual stranded amount from this single redeem.
         assertLe(strandedAfter - strandedBefore, MAX_STRANDED_DUST);
-    }
-
-    // ============================================================
-    // Permit signing helper (kept local to avoid touching the giant LitePSM.t.sol)
-    // ============================================================
-
-    function _signOkuDollarPermit(
-        uint256 pk,
-        address spender,
-        uint256 value,
-        uint256 deadline
-    )
-        internal
-        view
-        returns (uint8 v, bytes32 r, bytes32 s)
-    {
-        address owner = vm.addr(pk);
-        bytes32 domain = keccak256(
-            abi.encode(
-                keccak256(
-                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
-                ),
-                keccak256(bytes("OkuDollar")),
-                keccak256(bytes("1")),
-                block.chainid,
-                address(okuDollar)
-            )
-        );
-        bytes32 permitHash = keccak256(
-            abi.encode(
-                keccak256(
-                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
-                ),
-                owner,
-                spender,
-                value,
-                okuDollar.nonces(owner),
-                deadline
-            )
-        );
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domain, permitHash));
-        (v, r, s) = vm.sign(pk, digest);
     }
 }

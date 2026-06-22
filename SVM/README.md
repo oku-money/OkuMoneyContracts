@@ -601,7 +601,6 @@ solana program set-upgrade-authority <OKU_DOLLAR_PROGRAM> --new-upgrade-authorit
 
 ### Pre-mainnet checklist
 
-- [ ] `security_txt!` contact in both programs — currently points at the GitHub security advisory URL; replace with a dedicated `email:security@<domain>` if available.
 - [ ] `MAINNET_ORCHESTRATOR` env var points at a KMS-backed signer, not the deployer wallet.
 - [ ] BPF loader upgrade authority transferred to the cold multisig.
 - [ ] Pyth feed configured (`scripts/admin/set-oracle-relay.ts --feed=<feed>`). Legacy Pyth V2 `SolanaPriceAccount` required; modern Receiver `PriceUpdateV2` is NOT supported.
@@ -920,7 +919,7 @@ the orchestrator-driven `okuMMultiplier` displayed in the dApp.
 
 - **Workspace overview + cross-chain parity matrix:** [`../../audit/README.md`](../../audit/README.md)
 - **Orchestrator runbook + deployment guide:** [`../README.md`](../README.md)
-- **Open issues:** [`TRACKER.md`](TRACKER.md)
+- **Open issues:** [`../TRACKER.md`](../TRACKER.md)
 - **In-repo audit package** (accepted risks, clippy triage): [`oku-programs/audit/README.md`](oku-programs/audit/README.md)
 - **Self-audit toolkit:** [`../../audit/SVM/README.md`](../../audit/SVM/README.md)
 - **EVM-side docs:** [`../EVM/README.md`](../EVM/README.md)

@@ -160,6 +160,15 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
     // No whales — testnet; deploy script defaults to MockUSDC.
   },
 
+  // Arbitrum Sepolia (testnet)
+  arbSepolia: {
+    tokens: {
+      usdc: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d", // Circle's official Arbitrum Sepolia USDC (6 decimals)
+      weth: "0x980B62Da83eFf3D4576C647993b0c1D7faf17c73", // Canonical Arbitrum Sepolia WETH
+    },
+    // No whales — testnet; deploy script defaults to MockUSDC.
+  },
+
   // BNB Smart Chain Testnet (Chapel)
   // NOTE: like mainnet BSC, the canonical Binance-Peg USDC carries 18 decimals (NOT 6).
   // Live deploys here default to MockUSDC; if SKIP_MOCK_USDC=true is ever flipped, the
@@ -188,8 +197,9 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
  *
  * Lookup is case-sensitive because the CHAIN_ADDRESSES keys (and the parallel
  * CHAIN_METADATA keys) use camelCase for multi-word chains (`opSepolia`,
- * `baseSepolia`, `bscTestnet`) to match Hardhat's `network.name`. Callers must
- * pass the canonical name; we don't lower-case the input or the map keys.
+ * `baseSepolia`, `arbSepolia`, `bscTestnet`) to match Hardhat's `network.name`.
+ * Callers must pass the canonical name; we don't lower-case the input or the
+ * map keys.
  */
 export function getChainAddresses(network: string): ChainAddresses {
   const addresses = CHAIN_ADDRESSES[network];
@@ -284,6 +294,12 @@ export const CHAIN_METADATA: Record<string, ChainMetadata> = {
     rpcUrl: process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org",
     explorer: "https://sepolia.basescan.org",
   },
+  arbSepolia: {
+    name: "Arbitrum Sepolia",
+    chainId: 421614,
+    rpcUrl: process.env.ARB_SEPOLIA_RPC_URL || "https://sepolia-rollup.arbitrum.io/rpc",
+    explorer: "https://sepolia.arbiscan.io",
+  },
   bscTestnet: {
     name: "BNB Smart Chain Testnet",
     chainId: 97,
@@ -358,6 +374,7 @@ export const FORK_IMPERSONATE_ADDRESS = DEV_WALLET_ADDRESS;
 export const SEPOLIA_CHAIN_ID = 11155111;
 export const OP_SEPOLIA_CHAIN_ID = 11155420;
 export const BASE_SEPOLIA_CHAIN_ID = 84532;
+export const ARB_SEPOLIA_CHAIN_ID = 421614;
 export const BSC_TESTNET_CHAIN_ID = 97;
 export const OPTIMISM_CHAIN_ID = 10;
 export const ARBITRUM_CHAIN_ID = 42161;

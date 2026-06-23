@@ -43,6 +43,7 @@ function alchemyUrl(network: string): string {
       "opt-mainnet":  "https://mainnet.optimism.io",
       "opt-sepolia":  "https://sepolia.optimism.io",
       "arb-mainnet":  "https://arb1.arbitrum.io/rpc",
+      "arb-sepolia":  "https://sepolia-rollup.arbitrum.io/rpc",
       "base-mainnet": "https://mainnet.base.org",
       "base-sepolia": "https://sepolia.base.org",
       "bnb-mainnet":  "https://bsc-dataseed.binance.org",
@@ -85,6 +86,7 @@ const FORK_TARGETS: Record<string, ForkTarget> = {
   optimism:    { alchemySubdomain: "opt-mainnet",   chainId: 10 },
   opSepolia:   { alchemySubdomain: "opt-sepolia",   chainId: 11155420 },
   arbitrum:    { alchemySubdomain: "arb-mainnet",   chainId: 42161 },
+  arbSepolia:  { alchemySubdomain: "arb-sepolia",   chainId: 421614 },
   base:        { alchemySubdomain: "base-mainnet",  chainId: 8453 },
   baseSepolia: { alchemySubdomain: "base-sepolia",  chainId: 84532 },
   bsc:         { alchemySubdomain: "bnb-mainnet",   chainId: 56 },
@@ -201,6 +203,18 @@ const config: HardhatUserConfig = {
         etherscan: {
           apiUrl: "https://api-sepolia.basescan.org",
           apiKey: process.env.BASESCAN_API_KEY || process.env.ETHERSCAN_API_KEY || "",
+        },
+      },
+    },
+
+    arbSepolia: {
+      url: process.env.ARB_SEPOLIA_RPC_URL || alchemyUrl("arb-sepolia"),
+      chainId: 421614,
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      verify: {
+        etherscan: {
+          apiUrl: "https://api-sepolia.arbiscan.io",
+          apiKey: process.env.ARBISCAN_API_KEY || process.env.ETHERSCAN_API_KEY || "",
         },
       },
     },

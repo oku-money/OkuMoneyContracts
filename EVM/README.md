@@ -65,6 +65,7 @@ Defined in [`hardhat.config.ts`](hardhat.config.ts) and [`scripts/config/chains.
 | `sepolia` | 11155111 | Eth Sepolia testnet |
 | `opSepolia` | 11155420 | OP Sepolia testnet |
 | `baseSepolia` | 84532 | Base Sepolia testnet |
+| `arbSepolia` | 421614 | Arbitrum Sepolia testnet |
 | `bscTestnet` | 97 | BNB Smart Chain testnet (Chapel) |
 | `mainnet` | 1 | Ethereum mainnet |
 | `optimism` | 10 | Optimism mainnet |
@@ -178,10 +179,10 @@ shipped deployments.
 | `npm run test` | Hardhat fork + gas suite |
 | `npm run test:all` | Both |
 | `npm run node` | Start `hardhat node` (default forks Sepolia; override via `FORK_NETWORK`) |
-| `npm run deploy:sepolia` / `:opSepolia` / `:baseSepolia` / `:bscTestnet` | Live deploy to the named testnet |
+| `npm run deploy:sepolia` / `:opSepolia` / `:baseSepolia` / `:arbSepolia` / `:bscTestnet` | Live deploy to the named testnet |
 | `npm run deploy:base` / `:bsc` | Live deploy to the named mainnet |
 | `npm run upgrade` | Upgrade proxies on a running localhost fork (auto-detects target chain) |
-| `npm run upgrade:sepolia` / `:opSepolia` / `:baseSepolia` / `:bscTestnet` | Live upgrade on the named testnet |
+| `npm run upgrade:sepolia` / `:opSepolia` / `:baseSepolia` / `:arbSepolia` / `:bscTestnet` | Live upgrade on the named testnet |
 | `npm run upgrade:base` / `:bsc` | Live upgrade on the named mainnet |
 | `npm run test:flow` / `:live` | `test-flow.ts` against a running localhost fork (or live Sepolia) |
 

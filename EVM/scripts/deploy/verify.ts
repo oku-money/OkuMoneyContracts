@@ -14,6 +14,7 @@ const VERIFIABLE_NETWORKS = [
   "sepolia",
   "opSepolia",
   "baseSepolia",
+  "arbSepolia",
   "bscTestnet",
   "mainnet",
   "optimism",

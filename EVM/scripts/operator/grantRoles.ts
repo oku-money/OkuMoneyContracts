@@ -17,7 +17,11 @@
  * Usage:
  *   npx hardhat run scripts/operator/grantRoles.ts --network sepolia
  *   npx hardhat run scripts/operator/grantRoles.ts --network baseSepolia
+ *   npx hardhat run scripts/operator/grantRoles.ts --network arbSepolia
  *   npx hardhat run scripts/operator/grantRoles.ts --network bscTestnet
+ *
+ *   # Preview without broadcasting (works on any chain, no PRIVATE_KEY needed):
+ *   DRY_RUN=1 npx hardhat run scripts/operator/grantRoles.ts --network arbSepolia
  *
  *   # Fork (auto-detects target chain from the running node, or pass NETWORK=…):
  *   NETWORK=base npx hardhat run scripts/operator/grantRoles.ts --network localhost
@@ -29,7 +33,8 @@
  *   CONFIRMATIONS=N   confirmations to wait per tx (default 2)
  *   SETTLE_MS=N       extra ms to sleep after each mined tx before the next
  *                     hasRole read (default 1500; set 0 to disable)
- *   DRY_RUN=1         print planned grants without broadcasting (safe on any chain)
+ *   DRY_RUN=1         print planned grants without broadcasting (safe on any chain,
+ *                     no PRIVATE_KEY required — uses a read-only VoidSigner)
  *   YES_MAINNET=1     bypass the mainnet safety gate (see notes above)
  */
 
@@ -188,7 +193,7 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
 // Types
 // ============================================================================
 
-type GrantStatus = "granted" | "already" | "skipped" | "error";
+type GrantStatus = "granted" | "already" | "would_grant" | "skipped" | "error";
 
 interface GrantResult {
   contract: string;
@@ -208,15 +213,32 @@ interface GrantResult {
 async function resolveAdminSigner(isFork: boolean) {
   const [primary] = await ethers.getSigners();
 
-  if (primary.address.toLowerCase() === ADMIN_EOA.toLowerCase()) {
+  if (primary && primary.address.toLowerCase() === ADMIN_EOA.toLowerCase()) {
     return primary;
   }
 
   if (!isFork) {
+    // DRY_RUN on live: no broadcast happens, so the live signer doesn't need
+    // to match ADMIN_EOA. We still need *a* signer for `contract.connect()`
+    // and the per-contract `hasRole(ADMIN_EOA, ...)` sanity check. If
+    // PRIVATE_KEY isn't set, hardhat returns an empty signers list — fall
+    // back to a JsonRpcProvider read-only signer wrapper by impersonating
+    // through ethers (read-only ops don't need a private key).
+    if (DRY_RUN) {
+      // primary may be undefined if PRIVATE_KEY isn't configured. The
+      // grant-loop's sanity check only calls hasRole (read-only), so any
+      // address that's "labeled as" ADMIN_EOA works. Use a VoidSigner so
+      // any accidental write call fails loudly instead of silently sending.
+      const voidSigner = new ethers.VoidSigner(ADMIN_EOA, ethers.provider);
+      logger.warning(
+        `DRY_RUN: no live admin private key required; using read-only VoidSigner for ${ADMIN_EOA}`
+      );
+      return voidSigner;
+    }
     throw new Error(
-      `Active hardhat signer is ${primary.address} but DEFAULT_ADMIN_ROLE is held by ${ADMIN_EOA}.\n` +
+      `Active hardhat signer is ${primary?.address ?? "<none>"} but DEFAULT_ADMIN_ROLE is held by ${ADMIN_EOA}.\n` +
         `  Set the PRIVATE_KEY env (or the network's accounts entry in hardhat.config.ts) ` +
-        `to the admin EOA's key and re-run.`
+        `to the admin EOA's key and re-run, or pass DRY_RUN=1 for a non-broadcasting preview.`
     );
   }
 
@@ -310,6 +332,19 @@ async function grantRolesOnContract(
         continue;
       }
 
+      if (DRY_RUN) {
+        // DRY_RUN: do NOT broadcast. Just record what we would have sent. The
+        // `hasRole` read above already confirmed the grant is needed, so the
+        // would_grant count in the summary accurately previews the live run's
+        // tx count. Note: we cannot estimateGas here without a signer that
+        // holds DEFAULT_ADMIN_ROLE on every contract, and on a non-fork dry
+        // run the active signer typically isn't admin — so we skip gas probe
+        // and rely on the static role inventory instead.
+        results.push({ contract: contractName, role: roleName, status: "would_grant" });
+        logger.info(`  [${contractName}] ${roleName}: would grant (DRY_RUN)`);
+        continue;
+      }
+
       await sendAndConfirm(
         contract.grantRole(roleHash, MASTER_EOA),
         `[${contractName}] grantRole(${roleName})`,
@@ -335,6 +370,7 @@ function printSummary(results: GrantResult[], skippedContracts: string[]) {
 
   const granted = results.filter((r) => r.status === "granted").length;
   const already = results.filter((r) => r.status === "already").length;
+  const wouldGrant = results.filter((r) => r.status === "would_grant").length;
   const errors = results.filter((r) => r.status === "error").length;
 
   // Pretty per-role table.
@@ -350,15 +386,18 @@ function printSummary(results: GrantResult[], skippedContracts: string[]) {
         ? "\x1b[32mGRANTED\x1b[0m"
         : r.status === "already"
           ? "\x1b[36malready\x1b[0m"
-          : r.status === "error"
-            ? "\x1b[31mERROR\x1b[0m"
-            : "skipped";
+          : r.status === "would_grant"
+            ? "\x1b[33mWOULD GRANT\x1b[0m"
+            : r.status === "error"
+              ? "\x1b[31mERROR\x1b[0m"
+              : "skipped";
     console.log(`  ${pad(r.contract, colC)}  ${pad(r.role, colR)}  ${statusStr}`);
   }
 
   console.log();
   logger.info(`Granted:           ${granted}`);
   logger.info(`Already held:      ${already}`);
+  if (wouldGrant > 0) logger.info(`Would grant (dry): ${wouldGrant}`);
   if (errors > 0) logger.error(`Errors:            ${errors}`);
   if (skippedContracts.length > 0) {
     logger.warning(
@@ -386,9 +425,14 @@ async function main() {
   const candidateKeys: string[] = isFork ? [bookKey, networkName] : [bookKey];
 
   logger.header(
-    `Grant Roles → ${MASTER_EOA} (${networkName}${isFork ? " fork" : ""})`
+    `Grant Roles → ${MASTER_EOA} (${networkName}${isFork ? " fork" : ""}${DRY_RUN ? " — DRY_RUN" : ""})`
   );
   logger.info(`Address book key: ${bookKey}`);
+  if (DRY_RUN) {
+    logger.warning(
+      `DRY_RUN=1 set — no transactions will be broadcast. Re-run without DRY_RUN to execute.`
+    );
+  }
   if (isFork) {
     logger.info(`Fallback key:     ${networkName} (used if fork entries missing)`);
   }
@@ -486,7 +530,15 @@ async function main() {
     throw new Error(`${errorCount} role grant(s) failed — see log above`);
   }
 
-  logger.success(`All applicable roles granted to ${MASTER_EOA}`);
+  if (DRY_RUN) {
+    const wouldGrant = allResults.filter((r) => r.status === "would_grant").length;
+    logger.success(
+      `DRY_RUN complete — ${wouldGrant} role(s) would be granted to ${MASTER_EOA}. ` +
+        `No transactions broadcast. Re-run without DRY_RUN=1 to execute.`
+    );
+  } else {
+    logger.success(`All applicable roles granted to ${MASTER_EOA}`);
+  }
 }
 
 main()

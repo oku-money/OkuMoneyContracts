@@ -202,7 +202,9 @@ loss on every operation. Every numeric constant has its SVM-scaled
 counterpart (`ORACLE_USDC_PRICE_FLOOR = 0.95e9` vs `0.95e18` on
 EVM, etc.). The off-chain orchestrator handles the scale conversion
 when reflecting value across the EVM ↔ SVM boundary. See
-[`../../../audit/README.md § Decimals boundary`](../../../audit/README.md).
+[`../crates/oku-shared/src/constants.rs`](../crates/oku-shared/src/constants.rs)
+for the SVM-side constants and the EVM mirror in
+[`../../../EVM/src/lib/Constants.sol`](../../../EVM/src/lib/Constants.sol).
 
 ## 8. Peg-check on wrap/unwrap deferred
 
@@ -278,7 +280,6 @@ its signature into `InitializeParams`.
 ## Pointers
 
 - **SVM-specific docs:** [`../README.md`](../README.md) (programs, design choices, deployment, runbook, EVM divergence)
+- **Workspace overview:** [`../../../README.md`](../../../README.md)
 - **Open issues:** [`../../../TRACKER.md`](../../../TRACKER.md)
-- **Workspace overview + parity matrix:** [`../../../../audit/README.md`](../../../../audit/README.md)
-- **Self-audit toolkit:** [`../../../../audit/SVM/README.md`](../../../../audit/SVM/README.md)
 - **EVM in-repo audit:** [`../../../EVM/audit/README.md`](../../../EVM/audit/README.md)

@@ -4,7 +4,7 @@ Open issues + follow-ups for the okuMoney on-chain stack (EVM + SVM).
 Scope is on-chain code; operational items (key custody, monitoring,
 incident response) are tracked separately by the operator team and
 intentionally excluded from this file. Resolved items are removed;
-full history lives in git + [`../audit/README.md`](../audit/README.md).
+full history lives in git + in the per-chain audit READMEs below.
 
 **Status legend:** 🔴 blocks external exposure · 🟡 should-fix before audit · ⚪ post-launch
 
@@ -15,7 +15,7 @@ removable post-launch.
 
 ---
 
-## Audit-prep cycle (2026-06-18) — landed
+## Audit-prep cycle (2026-06-18 → 2026-06-23) — landed
 
 ### EVM
 
@@ -24,7 +24,8 @@ removable post-launch.
 - 4 new operator CLIs: `blacklistBoth.ts`, `setMaxSupply.ts`, `setUsdYieldRate.ts`, `setMinCollateralRatio.ts`.
 - Polish: `OkuDollar.unwrap` receiver-blacklist check (D2), `InvalidOracleResponse` split into `OracleUpdatedAtZero` + `OracleStartedAtInvalid` (F3), `OracleRelayDisabled` event gated on `oldRelay != 0` (B3), deploy script reordered to fail-fast on USDC mismatch (J3), post-deploy oracle-relay parity assertion (J4).
 - Surface pruning (Tier A): removed `LitePSM.redeemOkuMWithPermit` / `redeemUsdOkuWithPermit` (permit + redeem composable client-side); removed `OkuDollar.getStatus` + `OkuDollarStatus` struct (off-chain bundle of fields already individually exposed); removed `RedemptionQueue.assertUsdcMatch` + `UsdcMismatch` error (hoisted into the deploy script as an inline check).
-- Coverage: `_compoundFor` saturation @ `MAX_MULTIPLIER`, `LitePSM` USDC-balance invariant, `OkuDollar.unwrap` receiver-blacklist test. `forge test` 592/592.
+- CI: TypeScript type-check (`npm run typecheck`) wired into CI as the EVM-side analog of `cargo fmt`/`cargo deny`. Pre-existing TS drift cleared.
+- Coverage: `_compoundFor` saturation @ `MAX_MULTIPLIER`, `LitePSM` USDC-balance invariant, `OkuDollar.unwrap` receiver-blacklist test. `forge test` 592/592. `forge coverage` gated at 95% line coverage per src/ file.
 
 ### SVM
 
@@ -33,56 +34,29 @@ removable post-launch.
 - L1/L2 SoD parity: vault `set_authority` now mirrors PSM-02 — rejects collapsing non-RoleAdmin roles into `role_admin` and rejects no-op self-proposals.
 - Dead code purge: 4 unused error variants removed (`AccountFrozen`, `RecipientMismatch`, `TransferHookNotAllowed` from PSM; `InvalidDeadSharesMint` from vault) + `_RingQueue` re-export shim deleted.
 - Polish: `OracleRelayDisabled` event gated on `oldRelay != 0`, `withdraw_buffer` pause-bypass intent documented in source, `ImmutableOwner` allow-list rationale added.
+- CI hardening: `cargo fmt --check`, `cargo deny check`, and `cargo llvm-cov` (oku-shared gated at 90% line coverage) wired into `.github/workflows/test.yml`. Repo-wide cargo fmt pass cleared all pre-existing drift.
+- Trident harness: `.insert(None)` → `.get()` conversion for canonical addresses (config / mints / vault / queue) stashed in `#[init]`. Harness now compiles cleanly against current IDL and is regression-gated in CI via `cargo check --all-targets`. Full `trident fuzz run` left out of CI (heavy toolchain + multi-minute runtime); the smoke compile catches harness drift.
 - Coverage: 4 bankrun tests for `user_self_rescue_queue_entry` (cycle-4 instruction, previously uncovered); 5 bankrun tests for vault `set_authority` + two-step `accept_role_admin` + L1/L2 guards. `npm test` 138/138.
 
 ---
 
 ## 🟡 Should-fix before external audit
 
-### `cargo dylint` (crytic/solana-lints) — deferred `[SVM]`
+### `cargo dylint` (crytic/solana-lints) — upstream-blocked `[SVM]`
 
 Tracking signal: watch
 `https://github.com/crytic/solana-lints/blob/master/rust-toolchain`
 for a channel newer than `nightly-2025-04-xx` (the first nightly
-to ship `extract_if`-compatible `clippy_utils`). Re-enable is ~½ day
-once that lands.
+to ship `extract_if`-compatible `clippy_utils`). Upstream is
+currently pinned at `nightly-2025-01-09` (regressed from the channel
+we were tracking). Re-enable is ~½ day once a newer nightly lands.
 
 The earlier review-pass findings (F-02 `arbitrary_cpi`, F-03 manual
 byte parsing in oracle helpers, F-04 sysvar usage) remain triaged via
 crate-wide `#![allow]` suppressions plus inline comments. Cycle-4
 contract changes use the same patterns those suppressions already
-cover.
-
-### Trident `#[init]` follow-ons (post-audit) `[SVM]`
-
-Wire dead-shares pre-seed via `set_account_custom`, convert
-flows from `.insert()` to `.get()` so they reuse canonical
-mint / vault addresses for higher `Ix Success` rates. Add a CI
-smoke run: `trident fuzz run fuzz_lite_psm --max-iterations 1000`.
-
-**Effort:** 1–2 days.
-
-### `cargo fmt --check` / `cargo deny check` in CI `[SVM]`
-
-Both exist in the repo but are not wired into
-`.github/workflows/test.yml`. `cargo fmt` needs one pass to clean up
-any drift; `deny.toml` already exists for `cargo deny`.
-
-**Effort:** 30 min each.
-
-### Lint parity for EVM-side TypeScript `[EVM]`
-
-SVM ships `cargo fmt` / `cargo deny` style checks; EVM-side
-TypeScript linting is currently ESLint-only. Worth aligning so
-`npm run lint` covers both.
-
-### Coverage reporting `[both]`
-
-`forge coverage --report lcov` (upload to Codecov) and
-`cargo llvm-cov` — not produced or uploaded. Useful for surfacing
-uncovered branches before audit.
-
-**Effort:** 1 hour to wire.
+cover. **Not actionable until upstream moves**; tracked here so it
+re-enters the queue automatically once the upstream pin advances.
 
 ---
 
@@ -219,4 +193,3 @@ kill-list is finalised:
 - [`SVM/README.md`](SVM/README.md) — SVM-specific docs (programs, design, runbook, EVM divergence)
 - [`EVM/audit/README.md`](EVM/audit/README.md) — accepted risks + slither triage + tool snapshots
 - [`SVM/oku-programs/audit/README.md`](SVM/oku-programs/audit/README.md) — accepted risks + clippy triage
-- [`../audit/README.md`](../audit/README.md) — cross-chain parity matrix + cycle headline

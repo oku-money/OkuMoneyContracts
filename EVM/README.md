@@ -903,8 +903,7 @@ for transparency.
 
 ## Pointers
 
-- **Workspace overview + cross-chain parity matrix:** [`../../audit/README.md`](../../audit/README.md)
+- **Workspace overview:** [`../README.md`](../README.md)
 - **Open issues:** [`../TRACKER.md`](../TRACKER.md)
 - **In-repo audit package** (accepted risks, slither triage, captured tool snapshots): [`audit/README.md`](audit/README.md)
-- **Self-audit toolkit:** [`../../audit/EVM/README.md`](../../audit/EVM/README.md)
 - **SVM-side docs:** [`../SVM/README.md`](../SVM/README.md)

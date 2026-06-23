@@ -188,14 +188,22 @@ mod tests {
 
     #[test]
     fn is_sufficiently_collateralized_basic() {
-        assert!(
-            is_sufficiently_collateralized(110_000_000, 100_000_000, PRECISION, PRECISION, PRECISION)
-                .unwrap()
-        );
-        assert!(
-            !is_sufficiently_collateralized(90_000_000, 100_000_000, PRECISION, PRECISION, PRECISION)
-                .unwrap()
-        );
+        assert!(is_sufficiently_collateralized(
+            110_000_000,
+            100_000_000,
+            PRECISION,
+            PRECISION,
+            PRECISION
+        )
+        .unwrap());
+        assert!(!is_sufficiently_collateralized(
+            90_000_000,
+            100_000_000,
+            PRECISION,
+            PRECISION,
+            PRECISION
+        )
+        .unwrap());
     }
 
     /// Pin the rounding direction at FLOOR — the unit-level analog of

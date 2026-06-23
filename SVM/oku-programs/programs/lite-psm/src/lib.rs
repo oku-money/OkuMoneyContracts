@@ -160,10 +160,7 @@ pub mod lite_psm {
     /// `new_feed == Pubkey::default()` is the operator-side kill switch
     /// (disables the peg check entirely; mirrors EVM
     /// `setOracleRelay(address(0))`). `oracle_manager`-gated.
-    pub fn set_oracle_relay_feed(
-        ctx: Context<OracleManager>,
-        new_feed: Pubkey,
-    ) -> Result<()> {
+    pub fn set_oracle_relay_feed(ctx: Context<OracleManager>, new_feed: Pubkey) -> Result<()> {
         instructions::psm_admin::set_oracle_relay_feed(ctx, new_feed)
     }
 
@@ -195,10 +192,7 @@ pub mod lite_psm {
         ctx: Context<OracleManager>,
         new_pyth_program_owner: Pubkey,
     ) -> Result<()> {
-        instructions::psm_admin::set_oracle_relay_pyth_program_owner(
-            ctx,
-            new_pyth_program_owner,
-        )
+        instructions::psm_admin::set_oracle_relay_pyth_program_owner(ctx, new_pyth_program_owner)
     }
 
     pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {

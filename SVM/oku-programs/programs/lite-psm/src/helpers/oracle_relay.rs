@@ -220,8 +220,7 @@ pub fn get_usdc_price<'info>(
     //    (checked above) and the cast to u128 keeps both products from
     //    overflowing for any pair of i64 / u64 values.
     {
-        let price_u128 = u128::try_from(price)
-            .map_err(|_| LitePsmError::InvalidOracleResponse)?;
+        let price_u128 = u128::try_from(price).map_err(|_| LitePsmError::InvalidOracleResponse)?;
         let conf_u128 = conf as u128;
         let lhs = conf_u128
             .checked_mul(BASIS_POINTS as u128)

@@ -73,7 +73,6 @@ pub struct PsmConfig {
     // and queue-process path calls `helpers::oracle_relay::check_usdc_peg`
     // when the relay is configured (`oracle_relay_feed != Pubkey::default()`).
     // Mirrors EVM `OracleRelay` (see `EVM/src/oracle/OracleRelay.sol`).
-
     /// USDC/USD Pyth feed account (or `Pubkey::default()` to disable the
     /// peg check — the operator-side kill switch, mirrors EVM
     /// `setOracleRelay(address(0))`).

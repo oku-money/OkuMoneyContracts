@@ -88,29 +88,22 @@ impl FuzzTest {
         // -----------------------------------------------------------------
         // PDAs (lite-psm + oku-dollar).
         // -----------------------------------------------------------------
-        let (psm_config_pda, _) = Pubkey::find_program_address(
-            &[b"psm_config_v3"],
-            &lite_psm_types::program_id(),
-        );
-        let (queue_pda, _) = Pubkey::find_program_address(
-            &[b"redemption_queue_v2"],
-            &lite_psm_types::program_id(),
-        );
-        let (oku_dollar_config_pda, _) = Pubkey::find_program_address(
-            &[b"oku_dollar_config_v2"],
-            &oku_dollar::program_id(),
-        );
-        let (usd_oku_mint_pda, _) = Pubkey::find_program_address(
-            &[b"usd_oku_mint_v2"],
-            &oku_dollar::program_id(),
-        );
+        let (psm_config_pda, _) =
+            Pubkey::find_program_address(&[b"psm_config_v3"], &lite_psm_types::program_id());
+        let (queue_pda, _) =
+            Pubkey::find_program_address(&[b"redemption_queue_v2"], &lite_psm_types::program_id());
+        let (oku_dollar_config_pda, _) =
+            Pubkey::find_program_address(&[b"oku_dollar_config_v2"], &oku_dollar::program_id());
+        let (usd_oku_mint_pda, _) =
+            Pubkey::find_program_address(&[b"usd_oku_mint_v2"], &oku_dollar::program_id());
 
         // -----------------------------------------------------------------
         // 1. USDC SPL mint.
         // -----------------------------------------------------------------
         let usdc_mint = self.fuzz_accounts.usdc_mint.insert(&mut self.trident, None);
-        let usdc_init_ixs =
-            self.trident.initialize_mint(&payer, &usdc_mint, 6, &payer, None);
+        let usdc_init_ixs = self
+            .trident
+            .initialize_mint(&payer, &usdc_mint, 6, &payer, None);
         let _ = self
             .trident
             .process_transaction(&usdc_init_ixs, Some("InitUsdcMint"));
@@ -146,12 +139,22 @@ impl FuzzTest {
             lite_psm_types::InitializeInstructionData::new(
                 1_000_000_000_000_000_000u64, // max_supply
                 1_000_000_000_000_000_000u64, // minter_allowance
-                payer, payer, payer, payer, payer, payer, payer, payer, payer, payer, payer,
+                payer,
+                payer,
+                payer,
+                payer,
+                payer,
+                payer,
+                payer,
+                payer,
+                payer,
+                payer,
+                payer,
                 payer, // oracle_relay_pyth_program_owner (non-zero placeholder; relay disabled)
             ),
         )
         .accounts(lite_psm_types::InitializeInstructionAccounts::new(
-            payer,           // role_admin
+            payer, // role_admin
             psm_config_pda,
             usdc_mint,
             oku_money_mint,
@@ -174,9 +177,10 @@ impl FuzzTest {
                 queue_pda,
             ),
         );
-        let _ = self
-            .trident
-            .process_transaction(&[setup_queue_ix.instruction()], Some("SetupRedemptionQueue"));
+        let _ = self.trident.process_transaction(
+            &[setup_queue_ix.instruction()],
+            Some("SetupRedemptionQueue"),
+        );
 
         // -----------------------------------------------------------------
         // 5. lite-psm `SetupOkuMoneyEscrow`.
@@ -186,17 +190,16 @@ impl FuzzTest {
         let setup_escrow_ix = lite_psm_types::SetupOkuMoneyEscrowInstruction::data(
             lite_psm_types::SetupOkuMoneyEscrowInstructionData::new(),
         )
-        .accounts(
-            lite_psm_types::SetupOkuMoneyEscrowInstructionAccounts::new(
-                payer,
-                psm_config_pda,
-                oku_money_mint,
-                vault_oku_money_psm,
-            ),
+        .accounts(lite_psm_types::SetupOkuMoneyEscrowInstructionAccounts::new(
+            payer,
+            psm_config_pda,
+            oku_money_mint,
+            vault_oku_money_psm,
+        ));
+        let _ = self.trident.process_transaction(
+            &[setup_escrow_ix.instruction()],
+            Some("SetupOkuMoneyEscrow"),
         );
-        let _ = self
-            .trident
-            .process_transaction(&[setup_escrow_ix.instruction()], Some("SetupOkuMoneyEscrow"));
 
         // -----------------------------------------------------------------
         // 6. oku-dollar `Initialize` — creates OkuDollarConfig PDA,
@@ -208,20 +211,35 @@ impl FuzzTest {
         self.fuzz_accounts
             .wokusd_mint
             .insert_with_address(usd_oku_mint_pda);
+        // Stash additional canonicals so flows can `.get()` them.
+        self.fuzz_accounts.usdc_mint.insert_with_address(usdc_mint);
+        self.fuzz_accounts
+            .okusd_mint
+            .insert_with_address(oku_money_mint);
 
         // Reserve vault: ATA(oku_money_mint, oku_dollar_config_pda) on Token-2022.
+        // This holds the OkuMoney reserves for the vault and is read-only in the
+        // wrap/unwrap rounding paths plus `UpdateUsdMultiplier`. Stashed under
+        // both names (`vault_okusd` and `reserve_vault`) because the IDL uses the
+        // latter name for `UpdateUsdMultiplier` while wrap/unwrap use the former.
         let reserve_vault =
             spl_associated_token_account_ata(&oku_money_mint, &oku_dollar_config_pda, true);
+        self.fuzz_accounts
+            .vault_okusd
+            .insert_with_address(reserve_vault);
+        self.fuzz_accounts
+            .reserve_vault
+            .insert_with_address(reserve_vault);
 
         let init_dollar_ix = InitializeInstruction::data(InitializeInstructionData::new(
-            payer,         // pauser
-            payer,         // unpauser
-            payer,         // usd_rebaser
-            payer,         // reserve_manager
-            950_000_000,   // min_collateral_ratio (95%)
+            payer,       // pauser
+            payer,       // unpauser
+            payer,       // usd_rebaser
+            payer,       // reserve_manager
+            950_000_000, // min_collateral_ratio (95%)
         ))
         .accounts(InitializeInstructionAccounts::new(
-            payer,                  // role_admin
+            payer, // role_admin
             oku_dollar_config_pda,
             oku_money_mint,
             usd_oku_mint_pda,
@@ -234,7 +252,11 @@ impl FuzzTest {
 
         // Sanity check: confirm the OkuDollarConfig PDA reached the
         // canonical 362-byte layout.
-        let cfg_data = self.trident.get_account(&oku_dollar_config_pda).data().to_vec();
+        let cfg_data = self
+            .trident
+            .get_account(&oku_dollar_config_pda)
+            .data()
+            .to_vec();
         if cfg_data.len() < 305 {
             eprintln!(
                 "[trident-init] WARN: oku_dollar_config PDA has {} bytes (expected >= 305); \
@@ -245,13 +267,10 @@ impl FuzzTest {
     }
 
     fn config_pda(&mut self) -> Pubkey {
-        self.fuzz_accounts.config.insert(
-            &mut self.trident,
-            Some(PdaSeeds::new(
-                &[b"oku_dollar_config_v2"],
-                oku_dollar::program_id(),
-            )),
-        )
+        self.fuzz_accounts
+            .config
+            .get(&mut self.trident)
+            .unwrap_or_default()
     }
 
     // ----------------------------------------------------------------
@@ -266,15 +285,23 @@ impl FuzzTest {
         let psm_config = self
             .fuzz_accounts
             .psm_config
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let okusd_mint = self
             .fuzz_accounts
             .okusd_mint
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let wokusd_mint = self
             .fuzz_accounts
             .wokusd_mint
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
+        let vault_okusd = self
+            .fuzz_accounts
+            .vault_okusd
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let user_okusd_ata = self
             .fuzz_accounts
             .user_okusd_ata
@@ -282,10 +309,6 @@ impl FuzzTest {
         let user_wokusd_ata = self
             .fuzz_accounts
             .user_wokusd_ata
-            .insert(&mut self.trident, None);
-        let vault_okusd = self
-            .fuzz_accounts
-            .vault_okusd
             .insert(&mut self.trident, None);
         let dead_shares_ata = self
             .fuzz_accounts
@@ -306,7 +329,9 @@ impl FuzzTest {
             ),
         );
 
-        let _ = self.trident.process_transaction(&[ix.instruction()], Some("Wrap"));
+        let _ = self
+            .trident
+            .process_transaction(&[ix.instruction()], Some("Wrap"));
     }
 
     // ----------------------------------------------------------------
@@ -321,11 +346,23 @@ impl FuzzTest {
         let okusd_mint = self
             .fuzz_accounts
             .okusd_mint
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let wokusd_mint = self
             .fuzz_accounts
             .wokusd_mint
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
+        let vault_okusd = self
+            .fuzz_accounts
+            .vault_okusd
+            .get(&mut self.trident)
+            .unwrap_or_default();
+        let psm_config = self
+            .fuzz_accounts
+            .psm_config
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let user_okusd_ata = self
             .fuzz_accounts
             .user_okusd_ata
@@ -333,15 +370,6 @@ impl FuzzTest {
         let user_wokusd_ata = self
             .fuzz_accounts
             .user_wokusd_ata
-            .insert(&mut self.trident, None);
-        let vault_okusd = self
-            .fuzz_accounts
-            .vault_okusd
-            .insert(&mut self.trident, None);
-
-        let psm_config = self
-            .fuzz_accounts
-            .psm_config
             .insert(&mut self.trident, None);
         let ix = UnwrapInstruction::data(UnwrapInstructionData::new(shares)).accounts(
             UnwrapInstructionAccounts::new(
@@ -356,7 +384,9 @@ impl FuzzTest {
             ),
         );
 
-        let _ = self.trident.process_transaction(&[ix.instruction()], Some("Unwrap"));
+        let _ = self
+            .trident
+            .process_transaction(&[ix.instruction()], Some("Unwrap"));
     }
 
     // ----------------------------------------------------------------
@@ -372,11 +402,18 @@ impl FuzzTest {
         let okusd_mint = self
             .fuzz_accounts
             .okusd_mint
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let wokusd_mint = self
             .fuzz_accounts
             .wokusd_mint
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
+        let vault_okusd = self
+            .fuzz_accounts
+            .vault_okusd
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let user_okusd_ata = self
             .fuzz_accounts
             .user_okusd_ata
@@ -384,10 +421,6 @@ impl FuzzTest {
         let user_wokusd_ata = self
             .fuzz_accounts
             .user_wokusd_ata
-            .insert(&mut self.trident, None);
-        let vault_okusd = self
-            .fuzz_accounts
-            .vault_okusd
             .insert(&mut self.trident, None);
         let dead_shares_ata = self
             .fuzz_accounts
@@ -404,7 +437,8 @@ impl FuzzTest {
         let psm_config = self
             .fuzz_accounts
             .psm_config
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
 
         // Wrap
         let wrap_ix = WrapInstruction::data(WrapInstructionData::new(oku_m_to_wrap, 0)).accounts(
@@ -497,13 +531,10 @@ impl FuzzTest {
             0..=39 => self.trident.random_from_range(1u64..10u64), // ~40% single-digit bps
             40..=74 => self.trident.random_from_range(10u64..100u64), // ~35% double-digit bps
             75..=94 => self.trident.random_from_range(100u64..1000u64), // ~20% 1%-10%
-            _ => self.trident.random_from_range(1000u64..5000u64),     // ~5% large moves
+            _ => self.trident.random_from_range(1000u64..5000u64), // ~5% large moves
         };
         // target = last * (10_000 + bps) / 10_000
-        let target = self
-            .last_usd_multiplier
-            .saturating_mul(10_000 + bps_inc)
-            / 10_000;
+        let target = self.last_usd_multiplier.saturating_mul(10_000 + bps_inc) / 10_000;
         // Never decrease (the program rejects this with MultiplierCannotDecrease)
         // and never exceed the program's MAX_USD_MULTIPLIER bound.
         let target = target.min(MAX_USD_MULTIPLIER).max(self.last_usd_multiplier);
@@ -516,26 +547,28 @@ impl FuzzTest {
         let reserve_vault = self
             .fuzz_accounts
             .reserve_vault
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let usd_oku_mint = self
             .fuzz_accounts
             .wokusd_mint
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let psm_config = self
             .fuzz_accounts
             .psm_config
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
 
-        let ix = UpdateUsdMultiplierInstruction::data(UpdateUsdMultiplierInstructionData::new(
-            target,
-        ))
-        .accounts(UpdateUsdMultiplierInstructionAccounts::new(
-            usd_rebaser,
-            config,
-            reserve_vault,
-            usd_oku_mint,
-            psm_config,
-        ));
+        let ix =
+            UpdateUsdMultiplierInstruction::data(UpdateUsdMultiplierInstructionData::new(target))
+                .accounts(UpdateUsdMultiplierInstructionAccounts::new(
+                    usd_rebaser,
+                    config,
+                    reserve_vault,
+                    usd_oku_mint,
+                    psm_config,
+                ));
 
         let result = self
             .trident
@@ -562,12 +595,16 @@ impl FuzzTest {
             let pauser = self.fuzz_accounts.pauser.insert(&mut self.trident, None);
             let ix = PauseInstruction::data(PauseInstructionData::new())
                 .accounts(PauseInstructionAccounts::new(pauser, config));
-            let _ = self.trident.process_transaction(&[ix.instruction()], Some("Pause"));
+            let _ = self
+                .trident
+                .process_transaction(&[ix.instruction()], Some("Pause"));
         } else {
             let unpauser = self.fuzz_accounts.unpauser.insert(&mut self.trident, None);
             let ix = UnpauseInstruction::data(UnpauseInstructionData::new())
                 .accounts(UnpauseInstructionAccounts::new(unpauser, config));
-            let _ = self.trident.process_transaction(&[ix.instruction()], Some("Unpause"));
+            let _ = self
+                .trident
+                .process_transaction(&[ix.instruction()], Some("Unpause"));
         }
     }
 
@@ -591,10 +628,8 @@ impl FuzzTest {
     /// deferred until #[init] is wired with current types.rs.
     #[end]
     fn end(&mut self) {
-        let (config_pda, _) = Pubkey::find_program_address(
-            &[b"oku_dollar_config_v2"],
-            &oku_dollar::program_id(),
-        );
+        let (config_pda, _) =
+            Pubkey::find_program_address(&[b"oku_dollar_config_v2"], &oku_dollar::program_id());
 
         let config_data = self.trident.get_account(&config_pda).data().to_vec();
 
@@ -604,7 +639,8 @@ impl FuzzTest {
             let usd_multiplier = u64::from_le_bytes(mult_bytes);
             assert!(
                 usd_multiplier >= self.last_usd_multiplier,
-                "INV1: usd_multiplier decreased ({usd_multiplier} < {})", self.last_usd_multiplier
+                "INV1: usd_multiplier decreased ({usd_multiplier} < {})",
+                self.last_usd_multiplier
             );
             assert!(
                 usd_multiplier <= MAX_USD_MULTIPLIER,

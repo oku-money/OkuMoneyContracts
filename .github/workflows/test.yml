@@ -83,6 +83,9 @@ jobs:
       - name: Compile with Hardhat
         run: npx hardhat compile
 
+      - name: Run TypeScript type-check
+        run: npm run typecheck
+
       - name: Run Hardhat tests
         run: npx hardhat test
 
@@ -180,6 +183,13 @@ jobs:
       - name: Run bankrun test suite
         run: npm run test:bankrun
 
+      - name: Trident harness compile smoke
+        # Verifies the fuzz harness still compiles against the current IDL +
+        # program surface. A full `trident fuzz run` is out of CI scope (heavy
+        # toolchain + multi-minute runtime); this catches harness drift.
+        working-directory: SVM/oku-programs/trident-tests
+        run: cargo check --all-targets
+
   # ---------------------------------------------------------------------------
   # SVM: cargo unit tests only (fast, no Solana toolchain needed)
   # ---------------------------------------------------------------------------
@@ -198,6 +208,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Cache Cargo registry
         uses: actions/cache@v4
@@ -208,5 +220,66 @@ jobs:
           key: ${{ runner.os }}-cargo-unit-${{ hashFiles('SVM/oku-programs/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-unit-
 
+      - name: Run cargo fmt --check
+        run: cargo fmt --all -- --check
+
       - name: Run cargo unit tests
         run: cargo test --workspace --lib --quiet
+
+      - name: Cache cargo-llvm-cov binary
+        uses: actions/cache@v4
+        id: cargo-llvm-cov-cache
+        with:
+          path: ~/.cargo/bin/cargo-llvm-cov
+          key: cargo-llvm-cov-0.8
+
+      - name: Install cargo-llvm-cov
+        if: steps.cargo-llvm-cov-cache.outputs.cache-hit != 'true'
+        run: cargo install --locked cargo-llvm-cov
+
+      - name: Install llvm-tools
+        run: rustup component add llvm-tools-preview
+
+      - name: Run cargo llvm-cov on oku-shared (pure-math crate, line threshold = 90%)
+        run: |
+          # JSON output is parser-friendly (vs. the rendered text table).
+          cargo llvm-cov --package oku-shared --lib --json --summary-only > coverage.json
+          cargo llvm-cov --package oku-shared --lib --summary-only
+
+          # Gate: oku-shared TOTAL line coverage must be >= 90%.
+          PCT=$(node -e "const d=require('./coverage.json'); console.log(d.data[0].totals.lines.percent.toFixed(2));")
+          echo "oku-shared total line coverage: ${PCT}%"
+          awk -v pct="$PCT" 'BEGIN { if (pct + 0 < 90.0) { print "::error::oku-shared line coverage " pct "% is below 90% threshold"; exit 1 } }'
+
+  # ---------------------------------------------------------------------------
+  # SVM: supply-chain hygiene (cargo-deny)
+  # ---------------------------------------------------------------------------
+  svm-deny:
+    name: SVM (cargo deny check)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: SVM/oku-programs
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo-deny binary
+        uses: actions/cache@v4
+        id: cargo-deny-cache
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-0.16
+
+      - name: Install cargo-deny
+        if: steps.cargo-deny-cache.outputs.cache-hit != 'true'
+        run: cargo install --locked cargo-deny
+
+      - name: Run cargo deny check
+        run: cargo deny check

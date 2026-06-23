@@ -68,7 +68,6 @@ describe("OkuMoney Scenarios", () => {
         // Since check is output >= input, and loss is at most (price-1) wei at 18 decimals,
         // we need input to be a multiple of price/1e18 (rounded up).
         const currentPrice = await okuMoney.okuMMultiplier()
-        const PRECISION = parseEther("1")
         const DECIMAL_MULT = 10n ** 12n // 6 to 18 decimal conversion
         
         // Calculate the minimum unit that divides evenly

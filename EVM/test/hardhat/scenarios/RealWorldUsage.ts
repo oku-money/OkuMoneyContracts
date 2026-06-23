@@ -400,7 +400,7 @@ describe(`RealWorldUsage — ${DURATION_DAYS}-day stochastic simulation (seed 0x
         // Must deposit reserves to the vault first if vault is undercollateralised
         try {
             await chain.okuMoney.connect(user).approve(await chain.okuDollar.getAddress(), wrapAmt)
-            await chain.okuDollar.connect(user).wrap(wrapAmt, 0n)
+            await chain.okuDollar.connect(user).wrap(wrapAmt, await user.getAddress(), 0n)
         } catch {
             // undercollateralised or paused — skip
         }
@@ -630,7 +630,6 @@ describe("RealWorldUsage edge cases", () => {
         it("bridges preserve dollar value despite different multipliers on each chain", async () => {
             const { chainA, chainB } = await freshChains()
             const aliceAddr = await alice.getAddress()
-            const bobAddr = await bob.getAddress()
 
             // Alice mints on A
             const aliceUsdc = parseUnits("1000", 6)

@@ -217,7 +217,7 @@ async function deployUUPSProxy(
     await proxy.waitForDeployment();
     const address = await proxy.getAddress();
     saveAddress(bookKey, contractName, address);
-    return proxy;
+    return proxy as unknown as Contract;
   });
 }
 

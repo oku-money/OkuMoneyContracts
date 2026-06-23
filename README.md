@@ -4,10 +4,11 @@ Yield-bearing stablecoin infrastructure backed by US Treasury Bills.
 Centralized B2B product — registered MSB, not a DeFi protocol. EVM +
 SVM in parallel, off-chain orchestrator coordinating both.
 
-> **For auditors:** the audit handoff package lives at `../audit/`.
-> Start with [`../audit/README.md`](../audit/README.md) (parity
-> matrix + cycle headline), then move into the per-side READMEs
-> linked below.
+> **For auditors:** start with the per-side READMEs ([`EVM/README.md`](EVM/README.md),
+> [`SVM/README.md`](SVM/README.md)) and the in-repo audit packages
+> ([`EVM/audit/README.md`](EVM/audit/README.md),
+> [`SVM/oku-programs/audit/README.md`](SVM/oku-programs/audit/README.md)).
+> Open items live in [`TRACKER.md`](TRACKER.md).
 
 ---
 
@@ -420,7 +421,8 @@ requirement is itself the delay mechanism. **Timelocks are not pursued.**
 
 **Full cross-chain parity matrix** — constants, roles, pause
 semantics, sandwich-fence behaviour, event schema diffs, deliberate
-non-parity items — in [`../audit/README.md`](../audit/README.md).
+non-parity items — see [`EVM/audit/README.md`](EVM/audit/README.md)
+and [`SVM/oku-programs/audit/README.md`](SVM/oku-programs/audit/README.md).
 
 ---
 
@@ -731,7 +733,5 @@ metadata after the noBridge refactor.
 - **EVM-specific docs:** [`EVM/README.md`](EVM/README.md)
 - **SVM-specific docs:** [`SVM/README.md`](SVM/README.md)
 - **Open issues:** [`TRACKER.md`](TRACKER.md)
-- **Audit handoff:** [`../audit/README.md`](../audit/README.md)
-- **Cross-chain parity matrix:** [`../audit/README.md`](../audit/README.md) (§ "Cross-chain parity matrix")
 - **In-repo audit packages:** [`EVM/audit/README.md`](EVM/audit/README.md), [`SVM/oku-programs/audit/README.md`](SVM/oku-programs/audit/README.md)
 - **Downstream SDK / backend consumption:** [`artifacts/README.md`](artifacts/README.md)

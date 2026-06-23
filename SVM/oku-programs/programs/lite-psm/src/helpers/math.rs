@@ -70,7 +70,10 @@ mod tests {
     #[test]
     fn oku_m_to_dollars_ceil_basic() {
         // Exact division — equal to floor.
-        assert_eq!(oku_m_to_dollars_ceil(1_000_000, PRECISION).unwrap(), 1_000_000);
+        assert_eq!(
+            oku_m_to_dollars_ceil(1_000_000, PRECISION).unwrap(),
+            1_000_000
+        );
     }
 
     #[test]

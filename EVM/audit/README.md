@@ -147,8 +147,10 @@ revisited based on observed Chainlink feed jitter in production.
 **SVM mirror:** Cycle 4 correction — the SVM port DOES ship a
 peg-check in-program at
 `programs/lite-psm/src/helpers/oracle_relay.rs` (Pyth V2 layout,
-~334 LoC). Constants are byte-mirrored — see `../../../audit/README.md
-§ Constants`. SVM-side hardening **adds** a confidence-interval
+~334 LoC). Constants are byte-mirrored — see
+[`../../SVM/oku-programs/programs/lite-psm/src/helpers/oracle_relay.rs`](../../SVM/oku-programs/programs/lite-psm/src/helpers/oracle_relay.rs)
+and [`../src/lib/Constants.sol`](../src/lib/Constants.sol).
+SVM-side hardening **adds** a confidence-interval
 check (`MAX_ORACLE_CONFIDENCE_BPS = 200`, cycle 4 / PSM-04) that
 EVM Chainlink cannot mirror because Chainlink doesn't publish
 per-round confidence. The previous "out of scope" claim in earlier
@@ -291,7 +293,6 @@ no IDs have changed since.
 ## Pointers
 
 - **EVM-specific docs:** [`../README.md`](../README.md)
+- **Workspace overview:** [`../../README.md`](../../README.md)
 - **Open issues:** [`../../TRACKER.md`](../../TRACKER.md)
-- **Workspace overview + parity matrix:** [`../../../audit/README.md`](../../../audit/README.md)
-- **Self-audit toolkit:** [`../../../audit/EVM/README.md`](../../../audit/EVM/README.md)
 - **SVM in-repo audit:** [`../../SVM/oku-programs/audit/README.md`](../../SVM/oku-programs/audit/README.md)

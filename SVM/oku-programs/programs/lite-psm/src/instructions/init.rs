@@ -63,9 +63,7 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     // close-authority are tolerated). Single source of truth lives in
     // `helpers::mint_extensions` and is also called from
     // `oku-dollar::initialize`.
-    assert_oku_money_mint_extensions_whitelisted(
-        &ctx.accounts.oku_money_mint.to_account_info(),
-    )?;
+    assert_oku_money_mint_extensions_whitelisted(&ctx.accounts.oku_money_mint.to_account_info())?;
 
     let config = &mut ctx.accounts.config;
     config.bump = ctx.bumps.config;

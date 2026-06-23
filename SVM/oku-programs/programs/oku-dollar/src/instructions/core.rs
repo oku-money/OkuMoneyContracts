@@ -71,9 +71,7 @@ pub fn initialize(
     // but the vault may be initialised against a separately-deployed
     // OkuMoney mint (the PSM-side check has already fired by then on the
     // same key but defense-in-depth is cheap and consistent).
-    assert_oku_money_mint_extensions_whitelisted(
-        &ctx.accounts.oku_money_mint.to_account_info(),
-    )?;
+    assert_oku_money_mint_extensions_whitelisted(&ctx.accounts.oku_money_mint.to_account_info())?;
 
     // Cycle 4 (OKUD-01): assert the OkuMoney mint uses the protocol-wide
     // decimal scheme. All vault share math assumes 6-decimal raw tokens;

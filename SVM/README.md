@@ -700,11 +700,9 @@ All admin scripts live under `scripts/admin/`. Each:
 
 ## EVM vs SVM — divergence catalogue
 
-Companion to the cross-chain parity matrix in
-[`../../audit/README.md`](../../audit/README.md). This section
-catalogues SVM-specific deliberate departures from the EVM
-implementation; pair with the parity matrix when comparing the two
-stacks.
+This section catalogues SVM-specific deliberate departures from the
+EVM implementation. See the EVM-side mirror in
+[`../EVM/README.md`](../EVM/README.md) for the symmetric perspective.
 
 ### Workspace layout — where the EVM libs went
 
@@ -805,8 +803,10 @@ instructions.
 
 PSM, vault, and queue events have matching shapes across EVM and SVM
 with minor naming differences (e.g. `BufferRefilled` ↔
-`BufferRefilledEvent`). For the field-by-field event-schema diff
-see [`../../audit/README.md § Event schema differences`](../../audit/README.md).
+`BufferRefilledEvent`). For per-event schemas see
+[`../EVM/src/lib/events/`](../EVM/src/lib/events) (Solidity event
+declarations) and [`oku-programs/programs/lite-psm/src/events.rs`](oku-programs/programs/lite-psm/src/events.rs) /
+[`oku-programs/programs/oku-dollar/src/events.rs`](oku-programs/programs/oku-dollar/src/events.rs).
 
 ### Approval model
 
@@ -917,9 +917,7 @@ the orchestrator-driven `okuMMultiplier` displayed in the dApp.
 
 ## Pointers
 
-- **Workspace overview + cross-chain parity matrix:** [`../../audit/README.md`](../../audit/README.md)
 - **Orchestrator runbook + deployment guide:** [`../README.md`](../README.md)
 - **Open issues:** [`../TRACKER.md`](../TRACKER.md)
 - **In-repo audit package** (accepted risks, clippy triage): [`oku-programs/audit/README.md`](oku-programs/audit/README.md)
-- **Self-audit toolkit:** [`../../audit/SVM/README.md`](../../audit/SVM/README.md)
 - **EVM-side docs:** [`../EVM/README.md`](../EVM/README.md)

@@ -246,7 +246,6 @@ describe("OkuDollar Vault Scenarios", () => {
 
             // Expected: notesReturned = okuUsdBalance × usdMultiplier / notePrice
             // With usdMultiplier = 1e18, notePrice = 1.1e18: notesReturned ≈ okuUsdBalance / 1.1
-            const PRECISION = parseEther("1")
             const usdMult = await okuUsd.usdMultiplier()
             const expectedNotes = (okuUsdBalance * usdMult) / newPrice
             expect(notesReturned).to.be.closeTo(expectedNotes, 1n)

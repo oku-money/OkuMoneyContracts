@@ -103,17 +103,16 @@ impl FuzzTest {
 
         // Derive the PSM config PDA — the mints' authorities point to
         // this address.
-        let (config_pda, _) = Pubkey::find_program_address(
-            &[b"psm_config_v3"],
-            &lite_psm::program_id(),
-        );
+        let (config_pda, _) =
+            Pubkey::find_program_address(&[b"psm_config_v3"], &lite_psm::program_id());
 
         // -----------------------------------------------------------------
         // 1. USDC SPL mint (legacy Token program, 6 decimals).
         // -----------------------------------------------------------------
         let usdc_mint = self.fuzz_accounts.usdc_mint.insert(&mut self.trident, None);
-        let usdc_init_ixs =
-            self.trident.initialize_mint(&payer, &usdc_mint, 6, &payer, None);
+        let usdc_init_ixs = self
+            .trident
+            .initialize_mint(&payer, &usdc_mint, 6, &payer, None);
         let _ = self
             .trident
             .process_transaction(&usdc_init_ixs, Some("InitUsdcMint"));
@@ -134,9 +133,9 @@ impl FuzzTest {
             &payer,
             &oku_money_mint,
             6,
-            &config_pda,        // mint authority
-            Some(&config_pda),  // freeze authority
-            &[],                // no extensions
+            &config_pda,       // mint authority
+            Some(&config_pda), // freeze authority
+            &[],               // no extensions
         );
         let _ = self
             .trident
@@ -145,13 +144,19 @@ impl FuzzTest {
         // -----------------------------------------------------------------
         // 3a. PSM `Initialize` — creates the PsmConfig PDA + vault_usdc ATA.
         // -----------------------------------------------------------------
-        // The vault_usdc ATA is derived deterministically from
-        // (usdc_mint, config_pda) by Anchor; we don't have a public
-        // helper for the ATA pubkey but Anchor's `associated_token`
-        // constraint will create it and we never reference it from the
-        // harness side anyway (the program owns the lookup). Stash
-        // `config_pda` so flows can `.get(...)` the actual PDA.
+        // Stash canonical addresses so flows can `.get(...)` them instead
+        // of minting fresh random pubkeys per call (the latter trivially
+        // fails the program's account-relation constraints).
         self.fuzz_accounts.config.insert_with_address(config_pda);
+        self.fuzz_accounts.usdc_mint.insert_with_address(usdc_mint);
+        self.fuzz_accounts
+            .okusd_mint
+            .insert_with_address(oku_money_mint);
+        let vault_usdc_ata = spl_associated_token_account_ata(&usdc_mint, &config_pda, false);
+        self.fuzz_accounts
+            .vault_usdc
+            .insert_with_address(vault_usdc_ata);
+        self.fuzz_accounts.role_admin.insert_with_address(payer);
 
         // Non-zero placeholder for the relay's pyth program owner. The
         // relay itself is disabled (`oracle_relay_feed == Pubkey::default()`
@@ -162,21 +167,21 @@ impl FuzzTest {
         let init_ix = InitializeInstruction::data(InitializeInstructionData::new(
             1_000_000_000_000_000_000u64, // max_supply (1e18 base units → effectively unbounded)
             1_000_000_000_000_000_000u64, // minter_allowance (same)
-            payer, // pauser
-            payer, // unpauser
-            payer, // freezer
-            payer, // unfreezer
-            payer, // queue_processor
-            payer, // buffer_depositor
-            payer, // buffer_withdrawer
-            payer, // oracle_manager
-            payer, // cap_manager
-            payer, // allowance_manager
-            payer, // rebaser
-            relay_owner_placeholder, // oracle_relay_pyth_program_owner (non-zero)
+            payer,                        // pauser
+            payer,                        // unpauser
+            payer,                        // freezer
+            payer,                        // unfreezer
+            payer,                        // queue_processor
+            payer,                        // buffer_depositor
+            payer,                        // buffer_withdrawer
+            payer,                        // oracle_manager
+            payer,                        // cap_manager
+            payer,                        // allowance_manager
+            payer,                        // rebaser
+            relay_owner_placeholder,      // oracle_relay_pyth_program_owner (non-zero)
         ))
         .accounts(InitializeInstructionAccounts::new(
-            payer,          // role_admin (Signer)
+            payer, // role_admin (Signer)
             config_pda,
             usdc_mint,
             oku_money_mint,
@@ -201,41 +206,38 @@ impl FuzzTest {
             .redemption_queue
             .insert_with_address(queue_pda);
 
-        let setup_queue_ix = SetupRedemptionQueueInstruction::data(
-            SetupRedemptionQueueInstructionData::new(),
-        )
-        .accounts(SetupRedemptionQueueInstructionAccounts::new(
-            payer,
-            config_pda,
-            queue_pda,
-        ));
+        let setup_queue_ix =
+            SetupRedemptionQueueInstruction::data(SetupRedemptionQueueInstructionData::new())
+                .accounts(SetupRedemptionQueueInstructionAccounts::new(
+                    payer, config_pda, queue_pda,
+                ));
 
-        let _ = self
-            .trident
-            .process_transaction(&[setup_queue_ix.instruction()], Some("SetupRedemptionQueue"));
+        let _ = self.trident.process_transaction(
+            &[setup_queue_ix.instruction()],
+            Some("SetupRedemptionQueue"),
+        );
 
         // -----------------------------------------------------------------
         // 3c. `SetupOkuMoneyEscrow` — creates vault_oku_money ATA(oku_money_mint, config_pda).
         // -----------------------------------------------------------------
-        let vault_oku_money =
-            spl_associated_token_account_ata(&oku_money_mint, &config_pda, true);
+        let vault_oku_money = spl_associated_token_account_ata(&oku_money_mint, &config_pda, true);
         self.fuzz_accounts
             .vault_okusd
             .insert_with_address(vault_oku_money);
 
-        let setup_escrow_ix = SetupOkuMoneyEscrowInstruction::data(
-            SetupOkuMoneyEscrowInstructionData::new(),
-        )
-        .accounts(SetupOkuMoneyEscrowInstructionAccounts::new(
-            payer,
-            config_pda,
-            oku_money_mint,
-            vault_oku_money,
-        ));
+        let setup_escrow_ix =
+            SetupOkuMoneyEscrowInstruction::data(SetupOkuMoneyEscrowInstructionData::new())
+                .accounts(SetupOkuMoneyEscrowInstructionAccounts::new(
+                    payer,
+                    config_pda,
+                    oku_money_mint,
+                    vault_oku_money,
+                ));
 
-        let _ = self
-            .trident
-            .process_transaction(&[setup_escrow_ix.instruction()], Some("SetupOkuMoneyEscrow"));
+        let _ = self.trident.process_transaction(
+            &[setup_escrow_ix.instruction()],
+            Some("SetupOkuMoneyEscrow"),
+        );
 
         // Sanity check (best-effort): confirm the config PDA now has the
         // canonical 674-byte PsmConfig payload. The #[end] invariants
@@ -261,16 +263,33 @@ impl FuzzTest {
     fn flow_mint(&mut self) {
         let usdc_amount: u64 = self.trident.random_from_range(1u64..1_000_000_000u64);
 
+        // Signer (user) is intentionally a fresh random keypair — exercises
+        // unique-caller paths each iteration.
         let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
-        let config = self.fuzz_accounts.config.insert(
-            &mut self.trident,
-            Some(PdaSeeds::new(&[b"psm_config_v3"], lite_psm::program_id())),
-        );
-        let usdc_mint = self.fuzz_accounts.usdc_mint.insert(&mut self.trident, None);
+        // Canonical addresses (stashed in #[init]) are fetched via `.get()`
+        // so the program's account-relation constraints can be satisfied.
+        // Falls back to a no-op address if init didn't run.
+        let config = self
+            .fuzz_accounts
+            .config
+            .get(&mut self.trident)
+            .unwrap_or_default();
+        let usdc_mint = self
+            .fuzz_accounts
+            .usdc_mint
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let okusd_mint = self
             .fuzz_accounts
             .okusd_mint
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
+        let vault_usdc = self
+            .fuzz_accounts
+            .vault_usdc
+            .get(&mut self.trident)
+            .unwrap_or_default();
+        // User-owned ATAs remain `.insert(None)` — they're fresh per flow.
         let user_usdc_ata = self
             .fuzz_accounts
             .user_usdc_ata
@@ -278,10 +297,6 @@ impl FuzzTest {
         let user_okusd_ata = self
             .fuzz_accounts
             .user_okusd_ata
-            .insert(&mut self.trident, None);
-        let vault_usdc = self
-            .fuzz_accounts
-            .vault_usdc
             .insert(&mut self.trident, None);
 
         // IDL slot 8 was `price_update` in the pre-audit-prep PoR design;
@@ -301,7 +316,9 @@ impl FuzzTest {
             ),
         );
 
-        let _ = self.trident.process_transaction(&[ix.instruction()], Some("Mint"));
+        let _ = self
+            .trident
+            .process_transaction(&[ix.instruction()], Some("Mint"));
     }
 
     // ----------------------------------------------------------------
@@ -313,15 +330,36 @@ impl FuzzTest {
         let oku_m_amount: u64 = self.trident.random_from_range(1u64..1_000_000_000u64);
 
         let user = self.fuzz_accounts.user.insert(&mut self.trident, None);
-        let config = self.fuzz_accounts.config.insert(
-            &mut self.trident,
-            Some(PdaSeeds::new(&[b"psm_config_v3"], lite_psm::program_id())),
-        );
-        let usdc_mint = self.fuzz_accounts.usdc_mint.insert(&mut self.trident, None);
+        let config = self
+            .fuzz_accounts
+            .config
+            .get(&mut self.trident)
+            .unwrap_or_default();
+        let usdc_mint = self
+            .fuzz_accounts
+            .usdc_mint
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let okusd_mint = self
             .fuzz_accounts
             .okusd_mint
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
+        let vault_usdc = self
+            .fuzz_accounts
+            .vault_usdc
+            .get(&mut self.trident)
+            .unwrap_or_default();
+        let vault_okusd = self
+            .fuzz_accounts
+            .vault_okusd
+            .get(&mut self.trident)
+            .unwrap_or_default();
+        let redemption_queue = self
+            .fuzz_accounts
+            .redemption_queue
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let user_usdc_ata = self
             .fuzz_accounts
             .user_usdc_ata
@@ -329,18 +367,6 @@ impl FuzzTest {
         let user_okusd_ata = self
             .fuzz_accounts
             .user_okusd_ata
-            .insert(&mut self.trident, None);
-        let vault_usdc = self
-            .fuzz_accounts
-            .vault_usdc
-            .insert(&mut self.trident, None);
-        let vault_okusd = self
-            .fuzz_accounts
-            .vault_okusd
-            .insert(&mut self.trident, None);
-        let redemption_queue = self
-            .fuzz_accounts
-            .redemption_queue
             .insert(&mut self.trident, None);
 
         // IDL field order (audit-prep cycle): user, config, redemption_queue,
@@ -350,8 +376,8 @@ impl FuzzTest {
         // Pubkey::default() in config), so we pass `Pubkey::default()`
         // here too — the runtime helper short-circuits to a no-op when
         // the configured feed is the zero pubkey.
-        let ix = RedeemOkuMInstruction::data(RedeemOkuMInstructionData::new(oku_m_amount)).accounts(
-            RedeemOkuMInstructionAccounts::new(
+        let ix = RedeemOkuMInstruction::data(RedeemOkuMInstructionData::new(oku_m_amount))
+            .accounts(RedeemOkuMInstructionAccounts::new(
                 user,
                 config,
                 redemption_queue,
@@ -362,10 +388,11 @@ impl FuzzTest {
                 vault_usdc,
                 vault_okusd,
                 Pubkey::default(),
-            ),
-        );
+            ));
 
-        let _ = self.trident.process_transaction(&[ix.instruction()], Some("Redeem"));
+        let _ = self
+            .trident
+            .process_transaction(&[ix.instruction()], Some("Redeem"));
     }
 
     // ----------------------------------------------------------------
@@ -379,26 +406,31 @@ impl FuzzTest {
             .fuzz_accounts
             .queue_processor
             .insert(&mut self.trident, None);
-        let config = self.fuzz_accounts.config.insert(
-            &mut self.trident,
-            Some(PdaSeeds::new(&[b"psm_config_v3"], lite_psm::program_id())),
-        );
+        let config = self
+            .fuzz_accounts
+            .config
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let redemption_queue = self
             .fuzz_accounts
             .redemption_queue
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let okusd_mint = self
             .fuzz_accounts
             .okusd_mint
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let vault_usdc = self
             .fuzz_accounts
             .vault_usdc
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let vault_okusd = self
             .fuzz_accounts
             .vault_okusd
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
 
         // IDL field order: queue_processor, config, redemption_queue,
         // oku_money_mint, vault_usdc, vault_oku_money, oracle_relay_feed.
@@ -414,7 +446,9 @@ impl FuzzTest {
                 Pubkey::default(),
             ));
 
-        let _ = self.trident.process_transaction(&[ix.instruction()], Some("ProcessQueue"));
+        let _ = self
+            .trident
+            .process_transaction(&[ix.instruction()], Some("ProcessQueue"));
     }
 
     // ----------------------------------------------------------------
@@ -424,21 +458,26 @@ impl FuzzTest {
     #[flow]
     fn flow_pause_toggle(&mut self) {
         let do_pause: bool = self.trident.random_bool();
-        let config = self.fuzz_accounts.config.insert(
-            &mut self.trident,
-            Some(PdaSeeds::new(&[b"psm_config_v3"], lite_psm::program_id())),
-        );
+        let config = self
+            .fuzz_accounts
+            .config
+            .get(&mut self.trident)
+            .unwrap_or_default();
 
         if do_pause {
             let pauser = self.fuzz_accounts.pauser.insert(&mut self.trident, None);
             let ix = PauseInstruction::data(PauseInstructionData::new())
                 .accounts(PauseInstructionAccounts::new(pauser, config));
-            let _ = self.trident.process_transaction(&[ix.instruction()], Some("Pause"));
+            let _ = self
+                .trident
+                .process_transaction(&[ix.instruction()], Some("Pause"));
         } else {
             let unpauser = self.fuzz_accounts.unpauser.insert(&mut self.trident, None);
             let ix = UnpauseInstruction::data(UnpauseInstructionData::new())
                 .accounts(UnpauseInstructionAccounts::new(unpauser, config));
-            let _ = self.trident.process_transaction(&[ix.instruction()], Some("Unpause"));
+            let _ = self
+                .trident
+                .process_transaction(&[ix.instruction()], Some("Unpause"));
         }
     }
 
@@ -450,15 +489,21 @@ impl FuzzTest {
     fn flow_buffer(&mut self) {
         let amount: u64 = self.trident.random_from_range(1u64..1_000_000u64);
         let do_deposit: bool = self.trident.random_bool();
-        let config = self.fuzz_accounts.config.insert(
-            &mut self.trident,
-            Some(PdaSeeds::new(&[b"psm_config_v3"], lite_psm::program_id())),
-        );
-        let usdc_mint = self.fuzz_accounts.usdc_mint.insert(&mut self.trident, None);
+        let config = self
+            .fuzz_accounts
+            .config
+            .get(&mut self.trident)
+            .unwrap_or_default();
+        let usdc_mint = self
+            .fuzz_accounts
+            .usdc_mint
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let vault_usdc = self
             .fuzz_accounts
             .vault_usdc
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
 
         if do_deposit {
             let buffer_depositor = self
@@ -477,7 +522,9 @@ impl FuzzTest {
                     buffer_depositor_usdc_ata,
                     vault_usdc,
                 ));
-            let _ = self.trident.process_transaction(&[ix.instruction()], Some("DepositBuffer"));
+            let _ = self
+                .trident
+                .process_transaction(&[ix.instruction()], Some("DepositBuffer"));
         } else {
             let buffer_withdrawer = self
                 .fuzz_accounts
@@ -491,7 +538,10 @@ impl FuzzTest {
                 .fuzz_accounts
                 .redemption_queue
                 .insert(&mut self.trident, None);
-            let okusd_mint = self.fuzz_accounts.okusd_mint.insert(&mut self.trident, None);
+            let okusd_mint = self
+                .fuzz_accounts
+                .okusd_mint
+                .insert(&mut self.trident, None);
             let ix = WithdrawBufferInstruction::data(WithdrawBufferInstructionData::new(amount))
                 .accounts(WithdrawBufferInstructionAccounts::new(
                     buffer_withdrawer,
@@ -502,7 +552,9 @@ impl FuzzTest {
                     vault_usdc,
                     usdc_mint,
                 ));
-            let _ = self.trident.process_transaction(&[ix.instruction()], Some("WithdrawBuffer"));
+            let _ = self
+                .trident
+                .process_transaction(&[ix.instruction()], Some("WithdrawBuffer"));
         }
     }
 
@@ -513,14 +565,16 @@ impl FuzzTest {
     #[flow]
     fn flow_freeze_thaw(&mut self) {
         let do_freeze: bool = self.trident.random_bool();
-        let config = self.fuzz_accounts.config.insert(
-            &mut self.trident,
-            Some(PdaSeeds::new(&[b"psm_config_v3"], lite_psm::program_id())),
-        );
+        let config = self
+            .fuzz_accounts
+            .config
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let okusd_mint = self
             .fuzz_accounts
             .okusd_mint
-            .insert(&mut self.trident, None);
+            .get(&mut self.trident)
+            .unwrap_or_default();
         let target_okusd_ata = self
             .fuzz_accounts
             .target_okusd_ata
@@ -536,7 +590,9 @@ impl FuzzTest {
                     target_okusd_ata,
                 ),
             );
-            let _ = self.trident.process_transaction(&[ix.instruction()], Some("FreezeAccount"));
+            let _ = self
+                .trident
+                .process_transaction(&[ix.instruction()], Some("FreezeAccount"));
         } else {
             let unfreezer = self.fuzz_accounts.unfreezer.insert(&mut self.trident, None);
             let ix = ThawAccountInstruction::data(ThawAccountInstructionData::new()).accounts(
@@ -547,7 +603,9 @@ impl FuzzTest {
                     target_okusd_ata,
                 ),
             );
-            let _ = self.trident.process_transaction(&[ix.instruction()], Some("ThawAccount"));
+            let _ = self
+                .trident
+                .process_transaction(&[ix.instruction()], Some("ThawAccount"));
         }
     }
 
@@ -572,24 +630,12 @@ impl FuzzTest {
     ///   oracle_relay_min_price_e9 (618) + 8 oracle_relay_max_price_e9
     ///   (626) + 8 last_yield_distribution_slot (634) + 8 oku_m_price
     ///   (642) + 32 pending_role_admin (674).
-    ///
-    /// NOTE: #[init] is not yet wired because types.rs requires regeneration
-    /// via `trident fuzz add --skip-build` after `anchor build` to get current
-    /// instruction discriminators (including the new
-    /// `set_oracle_relay_{feed,staleness,band,pyth_program_owner}` ix surface
-    /// landed in the audit-prep cycle). Until then, flows silently fail
-    /// (let _ = tx) and these invariants are no-ops because the PDA doesn't
-    /// exist. The assertions are ready to fire as soon as #[init] is wired.
     #[end]
     fn end(&mut self) {
-        let (config_pda, _) = Pubkey::find_program_address(
-            &[b"psm_config_v3"],
-            &lite_psm::program_id(),
-        );
-        let (queue_pda, _) = Pubkey::find_program_address(
-            &[b"redemption_queue_v2"],
-            &lite_psm::program_id(),
-        );
+        let (config_pda, _) =
+            Pubkey::find_program_address(&[b"psm_config_v3"], &lite_psm::program_id());
+        let (queue_pda, _) =
+            Pubkey::find_program_address(&[b"redemption_queue_v2"], &lite_psm::program_id());
 
         let config_data = self.trident.get_account(&config_pda).data().to_vec();
 
@@ -599,7 +645,8 @@ impl FuzzTest {
             let oku_m_price = u64::from_le_bytes(price_bytes);
             assert!(
                 oku_m_price >= self.last_oku_m_price,
-                "INV1: oku_m_price decreased ({oku_m_price} < {})", self.last_oku_m_price
+                "INV1: oku_m_price decreased ({oku_m_price} < {})",
+                self.last_oku_m_price
             );
             assert!(
                 oku_m_price <= MAX_OKU_M_PRICE,

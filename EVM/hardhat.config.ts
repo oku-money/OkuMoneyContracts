@@ -104,7 +104,10 @@ const DEFAULT_FORK_CHAIN_ID = process.env.HARDHAT_CHAIN_ID
   ? parseInt(process.env.HARDHAT_CHAIN_ID)
   : _forkTarget.chainId;
 
-const config: HardhatUserConfig = {
+// `typechain` is contributed by `@typechain/hardhat` via module augmentation,
+// but the toolbox/standalone version mismatch occasionally drops the augmentation.
+// Cast to `any` on assignment keeps tsc happy without weakening per-key types.
+const config: HardhatUserConfig & { typechain?: any } = {
   solidity: {
     version: "0.8.28",
     settings: {

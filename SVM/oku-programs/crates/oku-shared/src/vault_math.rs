@@ -44,7 +44,11 @@ use crate::math::mul_div_floor;
 /// specific error (`InvalidMultiplier` / `InvalidPrice`); a `None` here
 /// almost always means overflow at realistic inputs.
 #[inline]
-pub fn oku_money_to_shares(oku_m_amount: u64, usd_multiplier: u64, oku_m_price: u64) -> Option<u64> {
+pub fn oku_money_to_shares(
+    oku_m_amount: u64,
+    usd_multiplier: u64,
+    oku_m_price: u64,
+) -> Option<u64> {
     if usd_multiplier == 0 || oku_m_price == 0 {
         return None;
     }
@@ -58,7 +62,11 @@ pub fn oku_money_to_shares(oku_m_amount: u64, usd_multiplier: u64, oku_m_price: 
 ///
 /// `None` semantics identical to [`oku_money_to_shares`].
 #[inline]
-pub fn shares_to_oku_money(usd_oku_shares: u64, usd_multiplier: u64, oku_m_price: u64) -> Option<u64> {
+pub fn shares_to_oku_money(
+    usd_oku_shares: u64,
+    usd_multiplier: u64,
+    oku_m_price: u64,
+) -> Option<u64> {
     if oku_m_price == 0 {
         return None;
     }
@@ -198,12 +206,18 @@ mod tests {
 
     #[test]
     fn surplus_zero_supply_returns_all_reserve() {
-        assert_eq!(surplus_oku_m(50_000_000, 0, PRECISION, PRECISION), Some(50_000_000));
+        assert_eq!(
+            surplus_oku_m(50_000_000, 0, PRECISION, PRECISION),
+            Some(50_000_000)
+        );
     }
 
     #[test]
     fn surplus_underwater_is_zero() {
-        assert_eq!(surplus_oku_m(90_000_000, 100_000_000, PRECISION, PRECISION), Some(0));
+        assert_eq!(
+            surplus_oku_m(90_000_000, 100_000_000, PRECISION, PRECISION),
+            Some(0)
+        );
     }
 
     #[test]

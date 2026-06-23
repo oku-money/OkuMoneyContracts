@@ -144,10 +144,7 @@ pub fn set_oracle_relay_feed(ctx: Context<OracleManager>, new_feed: Pubkey) -> R
 ///
 /// Must lie in `[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]`.
 /// Mirrors EVM `OracleRelay.setStalenessThreshold` bounds.
-pub fn set_oracle_relay_staleness(
-    ctx: Context<OracleManager>,
-    new_staleness: i64,
-) -> Result<()> {
+pub fn set_oracle_relay_staleness(ctx: Context<OracleManager>, new_staleness: i64) -> Result<()> {
     require!(
         (ORACLE_MIN_STALENESS_SECS..=ORACLE_MAX_STALENESS_SECS).contains(&new_staleness),
         LitePsmError::InvalidStaleness

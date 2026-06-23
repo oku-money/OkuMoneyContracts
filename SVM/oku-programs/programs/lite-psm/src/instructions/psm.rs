@@ -12,8 +12,8 @@
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
 
 use crate::contexts::{
-    DepositBuffer, MintOkuM, ProcessQueue, RedeemOkuM, RescueQueueEntry,
-    UserSelfRescueQueueEntry, WithdrawBuffer,
+    DepositBuffer, MintOkuM, ProcessQueue, RedeemOkuM, RescueQueueEntry, UserSelfRescueQueueEntry,
+    WithdrawBuffer,
 };
 use crate::errors::LitePsmError;
 use crate::events::*;

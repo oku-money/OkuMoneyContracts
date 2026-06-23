@@ -416,9 +416,7 @@ mod verification {
         kani::assume(b <= DOMAIN_MAX);
         kani::assume(d > 0);
         kani::assume(d <= DOMAIN_MAX);
-        if let (Some(ceil_val), Some(floor_val)) =
-            (mul_div_ceil(a, b, d), mul_div_floor(a, b, d))
-        {
+        if let (Some(ceil_val), Some(floor_val)) = (mul_div_ceil(a, b, d), mul_div_floor(a, b, d)) {
             assert!(ceil_val >= floor_val);
             // Difference is 0 or 1.
             assert!(ceil_val - floor_val <= 1);
@@ -439,9 +437,7 @@ mod verification {
         // Restrict to inputs where the product divides evenly.
         let product = (a as u128) * (b as u128);
         kani::assume(product % (d as u128) == 0);
-        if let (Some(ceil_val), Some(floor_val)) =
-            (mul_div_ceil(a, b, d), mul_div_floor(a, b, d))
-        {
+        if let (Some(ceil_val), Some(floor_val)) = (mul_div_ceil(a, b, d), mul_div_floor(a, b, d)) {
             assert_eq!(ceil_val, floor_val);
         }
     }

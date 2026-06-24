@@ -1,8 +1,8 @@
 # Audit Package — okuMoney EVM Contracts
 
 Pre-audit deliverables for the OkuMoney EVM contracts. Reference
-these files when preparing the audit scope document. Cycle 4
-(2026-06-15) baseline.
+these files when preparing the audit scope document. Post-Tier-A
+surface-pruning baseline (2026-06-23).
 
 ## Contents
 
@@ -16,34 +16,44 @@ these files when preparing the audit scope document. Cycle 4
 | `test-output-forge-invariants.txt` | `forge test --match-path 'test/invariants/*'` output. |
 | `test-output-hardhat.txt` | `npx hardhat test` output. |
 
-## Test count headline (cycle 4)
+## Test count headline (post-Tier-A)
 
 | Suite | Tests | Failures |
 |---|---:|---:|
-| `forge` unit + fuzz | 577 | 0 |
+| `forge` unit + fuzz | 574 | 0 |
 | `forge` invariants | 18 | 0 |
 | Hardhat (fork + integration + scenarios) | 28 | 0 |
-| **Total** | **623** | **0** |
+| **Total** | **620** | **0** |
+
+Test deltas vs. cycle-4 baseline (623 → 620, −3): Tier A surface
+pruning removed 4 permit-redemption tests in
+`test/psm/LitePSM.t.sol`, 1 permit test in
+`test/psm/LitePSMRebasingRedeem.t.sol`, 1 `getStatus` test in
+`test/token/OkuDollar.t.sol`, and 2 `assertUsdcMatch` tests in
+`test/psm/LitePSM.t.sol` — 8 deletions offset by 5 new coverage
+additions (saturation, balance invariants, blacklist tests).
 
 ## Coverage headline
 
 | Metric | Value | Target |
 |---|---:|---:|
-| Lines | 98.90 % | ≥ 95 % ✓ |
-| Statements | 97.75 % | ≥ 95 % ✓ |
-| Branches | 86.99 % | ≥ 90 % (see notes) |
-| Functions | 99.23 % | ≥ 95 % ✓ |
+| Lines | 98.85 % | ≥ 95 % ✓ |
+| Statements | 97.49 % | ≥ 95 % ✓ |
+| Branches | 84.96 % | ≥ 90 % (see notes) |
+| Functions | 99.30 % | ≥ 95 % ✓ |
 
 Branch metric falls under 90 % on the aggregate. Remaining uncovered
 branches are defensive guards unreachable through user-callable
 paths — full disposition in `coverage-summary.txt` and in the
 "Forge coverage notes" section of `../README.md`.
 
+CI gates `forge coverage` at ≥ 95 % per-file line coverage (see
+`.github/workflows/test.yml`).
+
 ## Static analysis headline
 
 Slither 0.11.4 reports **21 informational-severity findings**. None
-are actionable; per-detector triage in `slither-checklist.md`
-collapsed below.
+are actionable; per-detector triage collapsed inline below.
 
 ## Contract sizes headline
 
@@ -51,17 +61,40 @@ All five production contracts well below the EIP-170 24 KB limit:
 
 | Contract | Runtime size (B) | Margin (B) |
 |---|---:|---:|
-| `OkuMoney` | 11,742 | 12,834 |
-| `OkuDollar` | 16,806 |  7,770 |
-| `LitePSM` | 13,137 | 11,439 |
-| `RedemptionQueue` |  8,889 | 15,687 |
+| `OkuMoney` | 11,853 | 12,723 |
+| `OkuDollar` | 16,596 |  7,980 |
+| `LitePSM` | 12,341 | 12,235 |
+| `RedemptionQueue` |  9,255 | 15,321 |
 | `OracleRelay` |  6,268 | 18,308 |
+
+Tier A pruning shrank `LitePSM` by 796 B (removed
+`redeemOkuMWithPermit`, `redeemUsdOkuWithPermit`) and `OkuDollar`
+by 210 B (removed `getStatus`, `OkuDollarStatus` struct).
+`RedemptionQueue` and `OkuMoney` grew slightly from unrelated
+cycle work; `OracleRelay` unchanged.
 
 ## Dependency pinning
 
 OpenZeppelin v5.6.1 (Foundry + Hardhat identical), solc 0.8.28,
 Hardhat 2.28.6, ethers 6.16.0, hardhat-toolbox 6.1.2. Full pin list
 in `../README.md § Dependencies`.
+
+## Tier A surface pruning (post-cycle-4)
+
+The audit-prep cycle (2026-06-18 → 2026-06-23) removed external
+surface that was reachable but had no on-chain caller and was
+trivially composable off-chain. Auditors comparing source against
+an earlier draft should note these no longer exist:
+
+| Removed | Replacement | File |
+|---|---|---|
+| `LitePSM.redeemOkuMWithPermit` | client-side `permit()` + `redeemOkuM()` | `src/psm/LitePSM.sol` |
+| `LitePSM.redeemUsdOkuWithPermit` | client-side `permit()` + `redeemUsdOku()` | `src/psm/LitePSM.sol` |
+| `OkuDollar.getStatus` + `OkuDollarStatus` struct | per-field views already on the contract | `src/token/OkuDollar.sol` |
+| `RedemptionQueue.assertUsdcMatch` + `UsdcMismatch` error | inline equality check in `scripts/deploy/index.ts` | `src/psm/RedemptionQueue.sol` |
+
+Storage layouts were not touched. The removals shrink the audit
+surface area without changing semantics of any retained function.
 
 ---
 

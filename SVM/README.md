@@ -184,7 +184,7 @@ programs/
       contexts.rs                  # All account contexts
 
 tests/
-  bankrun/                  # Default in-process suite (npm test, ~12 s, 129 tests)
+  bankrun/                  # Default in-process suite (npm test, ~12 s, 138 tests)
     smoke.ts
     lite-psm.ts
     oku-dollar.ts
@@ -518,7 +518,7 @@ Full list in `programs/lite-psm/src/errors.rs` and
 ## Testing
 
 ```bash
-# Full bankrun suite — 129 tests, ~12 s in-process.
+# Full bankrun suite — 138 tests, ~12 s in-process.
 npm test
 # or directly:
 npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'

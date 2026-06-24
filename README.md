@@ -172,8 +172,9 @@ USDC custody.
 Cumulative drift across N bridges ≤ N USDC-units
 ```
 
-Tested by `EVM/test/hardhat/crossChain/OrchestratorPsmBridging.ts § WS3.3`
-and `SVM/oku-programs/tests/bankrun/crossChainBridging.ts`.
+Tested by `EVM/test/hardhat/scenarios/RealWorldUsage.ts`
+(cross-chain bridge scenarios) and
+`SVM/oku-programs/tests/bankrun/crossChainBridging.ts`.
 
 OkuBridge (proprietary burn-and-mint) and third-party rails (NTT,
 CCIP) are planned post-launch and will be introduced as additive
@@ -640,7 +641,7 @@ NETWORK=devnet npm run test:onchain -- --step=queueRedeem   # single step
 ```
 
 EVM cross-chain accounting covered by
-`EVM/test/hardhat/crossChain/OrchestratorPsmBridging.ts`. SVM queue
+`EVM/test/hardhat/scenarios/RealWorldUsage.ts`. SVM queue
 drain validated by:
 
 ```bash

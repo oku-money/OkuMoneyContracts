@@ -1,30 +1,51 @@
 
 running 4 tests
-....
+test helpers::math::tests::dollars_to_oku_m_zero_price_is_zero_amount ... ok
+test helpers::math::tests::oku_m_to_dollars_basic_at_par ... ok
+test test_id ... ok
+test helpers::math::tests::oku_m_to_dollars_ceil_basic ... ok
+
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 
-running 10 tests
-..........
-test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 7 tests
+test helpers::tests::is_sufficiently_collateralized_basic ... ok
+test helpers::tests::oku_money_to_shares_rejects_zero_multiplier ... ok
+test helpers::tests::collateral_ratio_at_par_is_precision ... ok
+test helpers::tests::shares_to_oku_money_uses_floor_rounding ... ok
+test helpers::tests::shares_to_oku_money_rejects_zero_price ... ok
+test helpers::tests::oku_money_to_usd_basic ... ok
+test test_id ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 
-running 6 tests
-......
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 25 tests
+test math::tests::calculate_fee_ceil_works ... ok
+test math::tests::mul_div_ceil_at_u64_max_boundary ... ok
+test math::tests::dollars_to_oku_m_works ... ok
+test math::tests::mul_div_ceil_basics ... ok
+test math::tests::calculate_fee_works ... ok
+test math::tests::mul_div_ceil_div_by_zero ... ok
+test math::tests::mul_div_ceil_overflow ... ok
+test math::tests::mul_div_floor_basics ... ok
+test math::tests::mul_div_floor_div_by_zero ... ok
+test math::tests::mul_div_floor_overflow ... ok
+test math::tests::oku_m_to_dollars_ceil_works ... ok
+test math::tests::oku_m_to_dollars_works ... ok
+test vault_math::tests::collateral_ratio_100_percent_at_par ... ok
+test vault_math::tests::collateral_ratio_at_high_price_increases ... ok
+test vault_math::tests::collateral_ratio_returns_max_on_zero_supply ... ok
+test vault_math::tests::oku_money_to_shares_identity_at_par ... ok
+test vault_math::tests::oku_money_to_shares_rejects_zero_divisors ... ok
+test vault_math::tests::shares_to_oku_money_floors ... ok
+test vault_math::tests::shares_to_oku_money_identity_at_par ... ok
+test vault_math::tests::surplus_undefined_at_zero_price ... ok
+test vault_math::tests::surplus_underwater_is_zero ... ok
+test vault_math::tests::surplus_zero_supply_returns_all_reserve ... ok
+test yield_lock::tests::disengaged_adjacent_slots ... ok
+test yield_lock::tests::disengaged_initial_state ... ok
+test yield_lock::tests::engaged_same_slot ... ok
 
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 

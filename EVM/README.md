@@ -712,7 +712,7 @@ psmUsdcOutflow <= seededBuffer + trackedDeposits + tolerance    // USDC outflow 
 ## Testing
 
 ```bash
-forge test                                         # All unit + invariant tests (481 total)
+forge test                                         # All unit + invariant tests (592 total)
 forge test --match-path "test/invariants/*"        # Invariant suite (256 runs × 500 depth by default)
 forge test --match-contract OkuMoneyTest -vv       # OkuMoney unit tests
 forge test --match-contract VaultInvariants        # OkuDollar backing invariants
@@ -734,8 +734,9 @@ Any new unit or invariant test should be added to the Foundry suite; Hardhat is 
 
 ## Forge coverage notes
 
-**Cycle 4 baseline:** **577 / 577 forge tests passing** (unit + fuzz +
-invariants + fork + happy-path). Coverage held at the cycle-3 totals:
+**Post-Tier-A baseline:** **592 / 592 forge tests passing** (574 unit
++ fuzz + 18 invariants) plus **28 / 28 hardhat tests** (fork +
+happy-path + scenarios). Per-file coverage:
 
 | File | Lines | Statements | Branches | Funcs |
 |---|---|---|---|---|
@@ -743,11 +744,12 @@ invariants + fork + happy-path). Coverage held at the cycle-3 totals:
 | `src/lib/ReentrancyGuardUpgradeable.sol` | **100 %** | 100 % | 100 % | 100 % |
 | `src/lib/SafeApprove.sol` | **100 %** | 100 % | 100 % | 100 % |
 | `src/lib/YieldSandwichGuard.sol` | **100 %** | 100 % | 100 % | 100 % |
-| `src/psm/LitePSM.sol` | **98.43 %** | 93.51 % | 57.14 % | 100 % |
-| `src/psm/RedemptionQueue.sol` | **100 %** | 96.09 % | 66.67 % | 100 % |
-| `src/token/OkuDollar.sol` | **98.30 %** | 94.79 % | 75.51 % | 97.56 % |
-| `src/token/OkuMoney.sol` | **100 %** | 97.58 % | 83.33 % | 100 % |
-| **Total** | **99.00 %** | 95.22 % | 69.35 % | 99.23 % |
+| `src/oracle/OracleRelay.sol` | **98.84 %** | 95.74 % | 71.43 % | 100 % |
+| `src/psm/LitePSM.sol` | **98.16 %** | 96.37 % | 74.07 % | 100 % |
+| `src/psm/RedemptionQueue.sol` | **100 %** | 99.32 % | 94.12 % | 100 % |
+| `src/token/OkuDollar.sol` | **97.93 %** | 96.92 % | 90.00 % | 97.50 % |
+| `src/token/OkuMoney.sol` | **100 %** | 100 % | 100 % | 100 % |
+| **Total** | **98.85 %** | 97.49 % | 84.96 % | 99.30 % |
 
 A CI gate in `.github/workflows/test.yml` fails the build if any `src/` file
 or the overall total drops below **95 % line coverage**.

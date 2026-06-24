@@ -1,8 +1,8 @@
 # Audit Package — okuMoney SVM Programs
 
 Pre-audit deliverables for the OkuMoney SVM programs (`lite-psm`,
-`oku-dollar`). Companion to `../../EVM/audit/`. Cycle 4 (2026-06-15)
-baseline.
+`oku-dollar`). Companion to `../../../EVM/audit/`. Post-Tier-A
+baseline (2026-06-23).
 
 ## Contents
 
@@ -10,9 +10,10 @@ baseline.
 |---|---|
 | `README.md` | This file — accepted risks, clippy triage, tool snapshots. |
 | `clippy-output.txt` | Raw `cargo clippy` transcript. |
+| `coverage-summary.txt` | `cargo llvm-cov` summary for the `oku-shared` workspace crate. |
 | `program-sizes.txt` | `.so` sizes for both production programs. |
 | `test-output-bankrun.txt` | `npm run test:bankrun` output. |
-| `test-output-cargo.txt` | `cargo test --workspace` output. |
+| `test-output-cargo.txt` | `cargo test --workspace --lib` output. |
 
 ## Toolchain headline
 
@@ -25,13 +26,18 @@ baseline.
 Run `make doctor` from `../../../../audit/SVM/` to verify the
 installed binaries match these pins.
 
-## Test count headline (cycle 4)
+## Test count headline (post-Tier-A)
 
 | Suite | Tests | Failures |
 |---|---:|---:|
-| Bankrun | 129 | 0 |
+| Bankrun | 138 | 0 |
 | Cargo unit | 36 | 0 |
-| **Total** | **165** | **0** |
+| **Total** | **174** | **0** |
+
+Test deltas vs. cycle-4 baseline (165 → 174, +9): 4 bankrun tests
+for `user_self_rescue_queue_entry` (cycle-4 instruction, previously
+uncovered) + 5 bankrun tests for vault `set_authority` + two-step
+`accept_role_admin` + L1/L2 guards.
 
 Kani (cycle 4): **17 / 17 SUCCESSFUL** (added 4 ceil-primitive
 proofs + 4 vault-math proofs to the cycle-3 baseline of 9).
@@ -40,10 +46,22 @@ cargo-fuzz (cycle 4): **7 targets** (added `collateral_ratio` +
 `mul_div_ceil`); 0 crashes after one fuzz-harness property fix
 during cycle-4 validation.
 
-Trident (cycle 3): both programs have working `#[init]` flows.
-1-minute smoke runs show 100 % Init/Setup ix success and 0 panics
-across ~100 k random tx per program. `#[end]` invariants on
-`oku_m_price` / `usd_multiplier` are firing.
+## Coverage headline
+
+`cargo llvm-cov` on the `oku-shared` workspace crate (pure-Rust
+math + vault math + yield-lock):
+
+| Metric | Value | Target |
+|---|---:|---:|
+| Lines | 97.47 % | ≥ 90 % ✓ |
+| Functions | 97.37 % | ≥ 90 % ✓ |
+| Regions | 94.93 % | ≥ 90 % ✓ |
+
+CI gates `cargo llvm-cov --package oku-shared --lib` at ≥ 90 %
+line coverage (see `.github/workflows/test.yml`). The Anchor
+program crates (`lite-psm`, `oku-dollar`) are exercised through
+the bankrun integration suite rather than `--lib`-style unit
+tests; their coverage is captured by the bankrun suite itself.
 
 ## Static analysis headline
 
@@ -64,19 +82,26 @@ documented inline with rationale:
   the program ID is obtained at runtime from a typed account field
   rather than a hardcoded literal.
 
-`cargo dylint` (Trail of Bits `solana-lints`) was re-probed upstream
-in cycle 3 (2026-06-15). The pin (`nightly-2025-01-09`) is unchanged
-from cycle 1 and incompatible with `anchor-lang 1.0.2`. Currently
+`cargo dylint` (Trail of Bits `solana-lints`) re-probed
+2026-06-23. The upstream pin (`nightly-2025-01-09`) is unchanged
+since cycle 1 and incompatible with `anchor-lang 1.0.2`. Currently
 deferred — see Accepted Risk § 5.
+
+`cargo fmt --check` and `cargo deny check` are wired into CI
+(`.github/workflows/test.yml`). Both exit clean on the current
+workspace. `cargo deny` ignores two transitive advisories from
+Anchor/Solana SDK deps (bincode 1.3.3 unmaintained, rand 0.8.5
+unsoundness conditions unreachable on-chain) — documented in
+`../deny.toml`.
 
 ## Program sizes headline
 
-Both programs within standard BPF-loader bounds (post-cycle-4):
+Both programs within standard BPF-loader bounds (post-Tier-A):
 
 | Program | Runtime size (B) |
 |---|---:|
-| `lite-psm.so` | 556,920 (+21 456 from cycle 3 — new `user_self_rescue_queue_entry` ix + Token-2022 extension helper + ceil math) |
-| `oku-dollar.so` | 422,600 (+7 688 from cycle 3 — new event fields + mint-extension wiring) |
+| `lite-psm.so` | 555,752 |
+| `oku-dollar.so` | 422,496 |
 
 ## Dependency pinning
 
@@ -163,36 +188,25 @@ was run during an earlier review pass. F-02 (`arbitrary_cpi`), F-03
 (`type_cosplay`), and F-04 (`sysvar_get`) were triaged crate-wide
 via `#![allow]` annotations with documented rationale.
 
-Cycle 3 (2026-06-15) re-probed upstream
-(`https://github.com/crytic/solana-lints`). The repository's
-`rust-toolchain` is still pinned to `nightly-2025-01-09`, the same
-pin from cycle 1. Recent commits (most recent 2025-05-15) are all
-dependabot bumps for ancillary deps — no `clippy_utils` or
-nightly-toolchain bumps in 2025-H2 or 2026-H1. Anchor 1.0.2's
-proc-macros use `extract_if` (stabilized in Rust 1.87), which is
-unavailable on that nightly. Running `cargo dylint` against the
-current workspace fails at the proc-macro derive stage.
+The upstream `https://github.com/crytic/solana-lints` repository's
+`rust-toolchain` remains pinned to `nightly-2025-01-09`
+(re-checked 2026-06-23). Anchor 1.0.2's proc-macros use
+`extract_if` (stabilized in Rust 1.87), which is unavailable on
+that nightly. Running `cargo dylint` against the current workspace
+fails at the proc-macro derive stage.
 
-Per the cycle-3 plan we deliberately did **not** vendor a fork. The
-audit Makefile's `solana-lints` target now stubs out with a
-deferred-status marker and writes a marker file under
-`reports/solana-lints/`. The original invocation is preserved in a
-commented-out block adjacent to the target for one-line re-enable
-when upstream bumps.
+We deliberately did **not** vendor a fork. The audit Makefile's
+`solana-lints` target stubs out with a deferred-status marker. The
+original invocation is preserved in a commented-out block adjacent
+to the target for one-line re-enable when upstream bumps.
 
 **Tracking signal:** watch
 `https://github.com/crytic/solana-lints/blob/master/rust-toolchain`
 for a channel newer than `nightly-2025-04-xx` (first nightly to ship
 `extract_if`-compatible `clippy_utils`). Re-enable is ~½ day once
-that lands.
+that lands. **Not actionable until upstream moves.**
 
-## 6. `cargo fmt --check` and `cargo deny check` not wired into CI
-
-Both tools are configured (`deny.toml` exists; rustfmt config exists)
-but not yet invoked by `.github/workflows/test.yml`. Documented as a
-post-launch follow-up. Manual runs are expected to be clean.
-
-## 7. SVM ↔ EVM constant parity carries the 1e9 vs 1e18 scaling delta
+## 6. SVM ↔ EVM constant parity carries the 1e9 vs 1e18 scaling delta
 
 SVM uses `PRECISION = 1e9` for the structural reason that `u64`
 token amounts × `1e9` precision peak around `1.8e28`, comfortably
@@ -206,7 +220,7 @@ when reflecting value across the EVM ↔ SVM boundary. See
 for the SVM-side constants and the EVM mirror in
 [`../../../EVM/src/lib/Constants.sol`](../../../EVM/src/lib/Constants.sol).
 
-## 8. Peg-check on wrap/unwrap deferred
+## 7. Peg-check on wrap/unwrap deferred
 
 The vault's `wrap` / `unwrap` instructions DO read PSM state
 (`oku_m_price`, `check_yield_lock`) but currently do NOT call
@@ -221,7 +235,7 @@ If a future product change makes vault operations USDC-flow-sensitive
 (e.g. a direct USDC ↔ usdOku route), the peg check should be added
 on the new path.
 
-## 9. Cycle-4 IDL break — `InitializeParams` struct
+## 8. Cycle-4 IDL break — `InitializeParams` struct
 
 Cycle 4 (PSM-17) collapsed the lite-psm `initialize` instruction's
 15 positional pubkey args into a single `InitializeParams` borsh

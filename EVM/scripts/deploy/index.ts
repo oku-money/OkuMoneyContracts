@@ -28,6 +28,16 @@ import {
 import { resolveNetworkContext } from "../utils/networkContext";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
+import {
+  CREATE2_FACTORY,
+  saltFor,
+} from "../config/deploymentVersion";
+import {
+  create2FactoryAvailable,
+  deployContractDeterministic,
+  buildERC1967ProxyInitCode,
+  computeCreate2Address,
+} from "../utils/create2Deploy";
 
 // Networks that support Etherscan-family verification.
 // Etherscan V2 (single ETHERSCAN_API_KEY) covers Ethereum, Optimism, Arbitrum,
@@ -211,8 +221,107 @@ async function deployUUPSProxy(
   const existing = await tryAttach(contractName, bookKey, deployer);
   if (existing) return existing;
 
-  return await withRetry(`deploy ${contractName} (UUPS)`, async () => {
-    const Factory = await ethers.getContractFactory(contractName, deployer);
+  const Factory = await ethers.getContractFactory(contractName, deployer);
+
+  // CREATE2 path: when the Arachnid factory exists on this chain, deploy
+  // both the impl and the ERC1967 proxy through it so the proxy address is
+  // identical across every chain that has the factory + the same source
+  // tree. Per-chain constructor variations (USDC address, Chainlink feed)
+  // still produce different addresses on chains where those args differ.
+  //
+  // See scripts/config/deploymentVersion.ts for the salt scheme.
+  if (await create2FactoryAvailable(ethers.provider)) {
+    return await withRetry(`deploy ${contractName} (UUPS via CREATE2)`, async () => {
+      // 1. Impl deploy (no constructor args; OZ initializers handle setup).
+      const implSalt = saltFor(`${contractName}.impl`);
+      const { address: implAddress, reused: implReused } = await deployContractDeterministic(
+        Factory,
+        implSalt,
+        [],
+        deployer,
+        `${contractName} impl`
+      );
+      logger.info(
+        `  ${contractName} impl ${implReused ? "reused" : "deployed"} ` +
+          `at ${implAddress} (CREATE2)`
+      );
+
+      // 2. Proxy deploy: ERC1967Proxy(impl, initCalldata) constructor args.
+      const initCalldata = Factory.interface.encodeFunctionData(
+        "initialize",
+        initArgs
+      );
+      const proxyInitCode = await buildERC1967ProxyInitCode(
+        implAddress,
+        initCalldata
+      );
+      const proxySalt = saltFor(`${contractName}.proxy`);
+      const predictedProxy = computeCreate2Address(proxySalt, proxyInitCode);
+
+      // Resumability check: if the proxy is already at the predicted
+      // address (prior partial run), skip re-broadcast — we'd revert with
+      // "already deployed" anyway.
+      const existingCode = await ethers.provider.getCode(predictedProxy);
+      let proxyAddress: string;
+      let proxyReused: boolean;
+      if (existingCode && existingCode !== "0x" && existingCode.length > 2) {
+        proxyAddress = predictedProxy;
+        proxyReused = true;
+      } else {
+        // Send the deploy tx directly to the factory: calldata = salt ++ initCode.
+        const calldata = proxySalt + proxyInitCode.slice(2);
+        const tx = await deployer.sendTransaction({
+          to: CREATE2_FACTORY,
+          data: calldata,
+        });
+        const receipt = await tx.wait();
+        if (!receipt || receipt.status !== 1) {
+          throw new Error(
+            `CREATE2 proxy deploy for ${contractName} failed (tx ${tx.hash})`
+          );
+        }
+        const code = await ethers.provider.getCode(predictedProxy);
+        if (!code || code === "0x" || code.length <= 2) {
+          throw new Error(
+            `CREATE2 proxy deploy for ${contractName} reported success but ` +
+              `no bytecode at predicted address ${predictedProxy}.`
+          );
+        }
+        proxyAddress = predictedProxy;
+        proxyReused = false;
+      }
+      logger.info(
+        `  ${contractName} proxy ${proxyReused ? "reused" : "deployed"} ` +
+          `at ${proxyAddress} (CREATE2)`
+      );
+
+      // 3. Register with the OZ manifest so the upgrade script's storage-layout
+      //    validation still works. forceImport is metadata-only (no on-chain tx)
+      //    and idempotent.
+      try {
+        await upgrades.forceImport(proxyAddress, Factory, { kind: "uups" });
+      } catch (e: any) {
+        // Already-imported is fine; anything else is logged but non-fatal
+        // (the upgrade script can re-import on demand).
+        const msg = (e?.message ?? String(e)).toString();
+        if (!/already/i.test(msg)) {
+          logger.warning(
+            `  forceImport of ${contractName} into OZ manifest failed (non-fatal): ${msg.slice(0, 120)}`
+          );
+        }
+      }
+
+      saveAddress(bookKey, contractName, proxyAddress);
+      return Factory.attach(proxyAddress).connect(deployer) as Contract;
+    });
+  }
+
+  // Fallback: standard OZ-plugin deploy (non-deterministic addresses).
+  logger.warning(
+    `  CREATE2 factory not available at ${CREATE2_FACTORY} on this chain — ` +
+      `falling back to nonce-based CREATE deploy for ${contractName}`
+  );
+  return await withRetry(`deploy ${contractName} (UUPS, fallback CREATE)`, async () => {
     const proxy = await upgrades.deployProxy(Factory, initArgs, { kind: "uups" });
     await proxy.waitForDeployment();
     const address = await proxy.getAddress();
@@ -318,8 +427,34 @@ async function deployMockUSDC(bookKey: string, deployer: Signer): Promise<string
     return await existing.getAddress();
   }
 
-  return await withRetry("deploy MockUSDC", async () => {
-    const MockUSDC = await ethers.getContractFactory("MockUSDC", deployer);
+  const MockUSDC = await ethers.getContractFactory("MockUSDC", deployer);
+
+  // CREATE2 path: MockUSDC must be deterministic across chains so the
+  // downstream PSM + queue proxies (whose constructor args include the
+  // USDC address) also end up with identical addresses across chains.
+  if (await create2FactoryAvailable(ethers.provider)) {
+    return await withRetry("deploy MockUSDC (CREATE2)", async () => {
+      const salt = saltFor("MockUSDC");
+      // MockUSDC has no constructor args (mints to msg.sender via initializer).
+      const { address, reused } = await deployContractDeterministic(
+        MockUSDC,
+        salt,
+        [],
+        deployer,
+        "MockUSDC"
+      );
+      saveAddress(bookKey, "MockUSDC", address);
+      logger.success(`  MockUSDC ${reused ? "reused" : "deployed"} at ${address} (CREATE2)`);
+      return address;
+    });
+  }
+
+  // Fallback: standard CREATE deploy.
+  logger.warning(
+    `  CREATE2 factory not available at ${CREATE2_FACTORY} — ` +
+      `falling back to nonce-based CREATE deploy for MockUSDC`
+  );
+  return await withRetry("deploy MockUSDC (fallback CREATE)", async () => {
     const mockUsdc = await MockUSDC.deploy();
     await mockUsdc.waitForDeployment();
 

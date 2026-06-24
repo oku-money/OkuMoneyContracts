@@ -194,12 +194,22 @@ async function sendAndWait(
  * Critical for live-network resumability: a partial-deploy failure (e.g. flaky
  * RPC mid-run) shouldn't force redeploying — and orphaning — every contract
  * that already made it on-chain in the failed run.
+ *
+ * `FRESH_DEPLOY=true` short-circuits this: skip the attach check entirely and
+ * always redeploy. Use when intentionally abandoning a prior deployment
+ * (e.g. moving to a new deterministic address scheme or after a storage-
+ * incompatible source change). The pre-existing on-chain contracts are
+ * orphaned but harmless — their addresses simply stop being referenced.
  */
 async function tryAttach(
   contractName: string,
   bookKey: string,
   deployer: Signer
 ): Promise<Contract | null> {
+  if (process.env.FRESH_DEPLOY === "true") {
+    logger.info(`  ${contractName}: FRESH_DEPLOY=true — skipping attach check`);
+    return null;
+  }
   if (!hasAddress(bookKey, contractName)) return null;
   const addr = loadAddress(bookKey, contractName);
   const code = await ethers.provider.getCode(addr);

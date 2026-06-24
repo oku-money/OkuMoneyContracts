@@ -79,6 +79,9 @@ edr-cache/
 # Local dry-run logs from scripts/deploy/dryRunForks.sh
 EVM/.dry-run-logs/
 
+# Live deploy logs (per-chain transcripts, machine-specific)
+EVM/.live-deploy-logs/
+
 # Rust build artifacts
 target/
 

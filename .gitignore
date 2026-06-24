@@ -76,6 +76,9 @@ EVM/scripts/logs/*.jsonl
 # Hardhat EDR cache
 edr-cache/
 
+# Local dry-run logs from scripts/deploy/dryRunForks.sh
+EVM/.dry-run-logs/
+
 # Rust build artifacts
 target/
 

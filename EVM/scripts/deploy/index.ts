@@ -290,11 +290,32 @@ async function deployUUPSProxy(
             `CREATE2 proxy deploy for ${contractName} failed (tx ${tx.hash})`
           );
         }
-        const code = await ethers.provider.getCode(predictedProxy);
-        if (!code || code === "0x" || code.length <= 2) {
+        // Poll for bytecode at the predicted address. Load-balanced public
+        // RPCs can return stale `getCode` results for several seconds after
+        // a tx mines; the receipt already confirmed success, we just need
+        // to give the RPC network a chance to propagate.
+        const pollMaxMs = 30_000;
+        const pollIntervalMs = 2_000;
+        const pollStart = Date.now();
+        let found = false;
+        let lastCode = "0x";
+        while (Date.now() - pollStart < pollMaxMs) {
+          try {
+            lastCode = await ethers.provider.getCode(predictedProxy);
+            if (lastCode && lastCode !== "0x" && lastCode.length > 2) {
+              found = true;
+              break;
+            }
+          } catch {
+            // Transient — keep polling within budget.
+          }
+          await new Promise((r) => setTimeout(r, pollIntervalMs));
+        }
+        if (!found) {
           throw new Error(
-            `CREATE2 proxy deploy for ${contractName} reported success but ` +
-              `no bytecode at predicted address ${predictedProxy}.`
+            `CREATE2 proxy deploy for ${contractName} reported success (tx ${tx.hash}) but ` +
+              `no bytecode at predicted address ${predictedProxy} after ${pollMaxMs / 1000}s of polling. ` +
+              `Last getCode result: ${lastCode.slice(0, 80)}`
           );
         }
         proxyAddress = predictedProxy;

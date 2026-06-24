@@ -108,17 +108,34 @@ export async function deployContractDeterministic(
     );
   }
 
-  // Confirm the deployed bytecode lives where we expect.
-  const code = await ethers.provider.getCode(predicted);
-  if (!code || code === "0x" || code.length <= 2) {
-    throw new Error(
-      `CREATE2 deploy of ${label} reported success (tx ${tx.hash}) but no ` +
-        `bytecode at predicted address ${predicted}. Factory at ${CREATE2_FACTORY} ` +
-        `may have rejected the deploy (salt collision?).`
-    );
+  // Confirm the deployed bytecode lives where we expect. Poll with backoff
+  // because load-balanced public RPCs (Alchemy, etc.) can return stale
+  // `getCode` results for several seconds after a tx mines — different
+  // request → different node → state not propagated yet. The receipt
+  // already told us the tx succeeded, so we just need to give the RPC
+  // network a chance to catch up.
+  const pollMaxMs = 30_000;
+  const pollIntervalMs = 2_000;
+  const pollStart = Date.now();
+  let lastCode = "0x";
+  while (Date.now() - pollStart < pollMaxMs) {
+    try {
+      lastCode = await ethers.provider.getCode(predicted);
+      if (lastCode && lastCode !== "0x" && lastCode.length > 2) {
+        return { address: predicted, reused: false };
+      }
+    } catch {
+      // Transient — keep polling within budget.
+    }
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
   }
 
-  return { address: predicted, reused: false };
+  throw new Error(
+    `CREATE2 deploy of ${label} reported success (tx ${tx.hash}) but no ` +
+      `bytecode at predicted address ${predicted} after ${pollMaxMs / 1000}s of polling. ` +
+      `Factory at ${CREATE2_FACTORY} may have rejected the deploy (salt collision?), ` +
+      `or the RPC node is severely lagged. Last getCode result: ${lastCode.slice(0, 80)}`
+  );
 }
 
 /**

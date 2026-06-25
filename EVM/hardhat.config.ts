@@ -38,7 +38,7 @@ function alchemyUrl(network: string): string {
   if (!ALCHEMY_API_KEY) {
     // Fallback to public RPCs if no Alchemy key
     const publicRpcs: Record<string, string> = {
-      "eth-mainnet":  "https://eth.llamarpc.com",
+      "eth-mainnet":  "https://ethereum-rpc.publicnode.com",
       "eth-sepolia":  "https://ethereum-sepolia-rpc.publicnode.com",
       "opt-mainnet":  "https://mainnet.optimism.io",
       "opt-sepolia":  "https://sepolia.optimism.io",

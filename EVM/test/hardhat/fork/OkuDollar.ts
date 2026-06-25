@@ -80,7 +80,7 @@ describe("OkuDollar Vault Scenarios", () => {
             method: "hardhat_reset",
             params: [{
                 forking: {
-                    jsonRpcUrl: process.env.MAINNET_RPC_URL || "https://eth.llamarpc.com"
+                    jsonRpcUrl: process.env.MAINNET_RPC_URL || "https://ethereum-rpc.publicnode.com"
                 }
             }]
         })

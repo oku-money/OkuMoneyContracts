@@ -249,7 +249,7 @@ export const CHAIN_METADATA: Record<string, ChainMetadata> = {
   mainnet: {
     name: "Ethereum Mainnet",
     chainId: 1,
-    rpcUrl: process.env.MAINNET_RPC_URL || "https://eth.llamarpc.com",
+    rpcUrl: process.env.MAINNET_RPC_URL || "https://ethereum-rpc.publicnode.com",
     explorer: "https://etherscan.io",
   },
   optimism: {

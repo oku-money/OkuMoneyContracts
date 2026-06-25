@@ -97,7 +97,7 @@ describe("LitePSM Scenarios", () => {
             method: "hardhat_reset",
             params: [{
                 forking: {
-                    jsonRpcUrl: process.env.MAINNET_RPC_URL
+                    jsonRpcUrl: process.env.MAINNET_RPC_URL || "https://eth.llamarpc.com"
                 }
             }]
         })

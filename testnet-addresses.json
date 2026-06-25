@@ -4,7 +4,7 @@
   "evm": {
     "sepolia": {
       "chainId": 11155111,
-      "rpcUrl": "https://rpc.sepolia.org",
+      "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
       "explorer": "https://sepolia.etherscan.io",
       "contracts": {
         "okuMoney": "0x965C273E2AcA382Da3a97Fbaf489e76921A959CC",

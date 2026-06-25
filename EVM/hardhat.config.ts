@@ -39,7 +39,7 @@ function alchemyUrl(network: string): string {
     // Fallback to public RPCs if no Alchemy key
     const publicRpcs: Record<string, string> = {
       "eth-mainnet":  "https://eth.llamarpc.com",
-      "eth-sepolia":  "https://rpc.sepolia.org",
+      "eth-sepolia":  "https://ethereum-sepolia-rpc.publicnode.com",
       "opt-mainnet":  "https://mainnet.optimism.io",
       "opt-sepolia":  "https://sepolia.optimism.io",
       "arb-mainnet":  "https://arb1.arbitrum.io/rpc",
@@ -175,7 +175,7 @@ const config: HardhatUserConfig & { typechain?: any } = {
     // Testnets
     sepolia: {
       // Prefer Alchemy if API key is set (more reliable than public RPC)
-      url: ALCHEMY_API_KEY ? alchemyUrl("eth-sepolia") : (process.env.SEPOLIA_RPC_URL || "https://rpc.sepolia.org"),
+      url: ALCHEMY_API_KEY ? alchemyUrl("eth-sepolia") : (process.env.SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com"),
       chainId: 11155111,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {

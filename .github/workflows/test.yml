@@ -88,6 +88,8 @@ jobs:
 
       - name: Run Hardhat tests
         run: npx hardhat test
+        env:
+          FORK_NETWORK: mainnet
 
       - name: Export ABIs
         run: npm run export-abis
@@ -178,7 +180,7 @@ jobs:
         run: npm ci
 
       - name: Build Anchor programs
-        run: anchor build
+        run: anchor build --ignore-keys
 
       - name: Run bankrun test suite
         run: npm run test:bankrun

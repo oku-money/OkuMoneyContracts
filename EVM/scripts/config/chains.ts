@@ -285,7 +285,7 @@ export const CHAIN_METADATA: Record<string, ChainMetadata> = {
   sepolia: {
     name: "Eth Sepolia",
     chainId: 11155111,
-    rpcUrl: process.env.SEPOLIA_RPC_URL || "https://rpc.sepolia.org",
+    rpcUrl: process.env.SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com",
     explorer: "https://sepolia.etherscan.io",
   },
   baseSepolia: {

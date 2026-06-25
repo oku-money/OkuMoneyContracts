@@ -26,7 +26,7 @@ pub mod oku_dollar {
 
     /// Returns the program ID for oku_dollar
     pub fn program_id() -> Pubkey {
-        pubkey!("3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy")
+        pubkey!("7jKeiuc8gKvQhasbno27wbNMnrwi8g9sb6WPriWkzNd")
     }
 
     // ------------------------------------------------------------------------
@@ -1786,7 +1786,7 @@ pub mod lite_psm {
 
     /// Returns the program ID for lite_psm
     pub fn program_id() -> Pubkey {
-        pubkey!("3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N")
+        pubkey!("3KZtxxYXD4tMZvVZk4EhCRxoTorBDZyJZuLE3znQ9kF1")
     }
 
     // ------------------------------------------------------------------------

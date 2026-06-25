@@ -34,6 +34,7 @@
     "admin:withdraw-buffer": "tsx scripts/admin/withdraw-buffer.ts",
     "admin:rescue-queue-entry": "tsx scripts/admin/rescue-queue-entry.ts",
     "admin:close-programs": "tsx scripts/admin/close-programs.ts",
+    "admin:grant-roles": "tsx scripts/admin/grant-roles.ts",
     "upgrade": "tsx scripts/upgrade/index.ts",
     "upgrade:devnet": "NETWORK=devnet tsx scripts/upgrade/index.ts",
     "upgrade:mainnet": "NETWORK=mainnet-beta tsx scripts/upgrade/index.ts",

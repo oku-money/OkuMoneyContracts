@@ -342,7 +342,17 @@ async function stepTransfer(ctx: TestCtx) {
   // Throwaway recipient: deterministic test wallet (PrivateKey #1 from a known
   // mnemonic). Live testnets only — never used as a custody account.
   const recipient = ethers.Wallet.createRandom().address;
-  const balBefore: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
+  // Poll for non-zero balance — BSC testnet RPCs can lag a block after mint.
+  let balBefore: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
+  if (balBefore === 0n) {
+    logger.info("Waiting for OkuM balance to propagate...");
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      balBefore = await ctx.okuMoney.balanceOf(ctx.user.address);
+      if (balBefore > 0n) break;
+    }
+  }
   if (balBefore === 0n) {
     throw new Error("Signer has zero OkuM; run mint step before transfer.");
   }
@@ -372,6 +382,15 @@ async function stepWrap(ctx: TestCtx): Promise<bigint> {
   const usdoBefore: bigint = await ctx.okuDollar.balanceOf(ctx.user.address);
 
   await waitForTx(await ctx.okuMoney.approve(okuDollarAddr, half), "okuMoney.approve(OkuDollar)");
+  // BSC RPCs can lag — poll until the allowance is visible before calling wrap.
+  {
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      const allowance: bigint = await ctx.okuMoney.allowance(ctx.user.address, okuDollarAddr);
+      if (allowance >= half) break;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
   await waitForTx(
     await ctx.okuDollar.wrap(half, ctx.user.address, 0n),
     `okuDollar.wrap(${ethers.formatUnits(half, 18)} OkuM)`
@@ -395,8 +414,15 @@ async function stepUnwrap(ctx: TestCtx): Promise<bigint> {
     await ctx.okuDollar.unwrap(half, ctx.user.address),
     `okuDollar.unwrap(${ethers.formatUnits(half, 18)} usdOku)`
   );
-  const okuMAfter: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
-  const returned = okuMAfter - okuMBefore;
+  // Poll for balance change — load-balanced RPCs can return stale reads.
+  let returned = 0n;
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const okuMAfter: bigint = await ctx.okuMoney.balanceOf(ctx.user.address);
+    returned = okuMAfter - okuMBefore;
+    if (returned > 0n) break;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
   logger.success(`Received ${ethers.formatUnits(returned, 18)} OkuM`);
   if (returned === 0n) throw new Error("unwrap produced zero OkuM");
   return returned;
@@ -553,6 +579,13 @@ async function stepQueueRedeem(ctx: TestCtx) {
   await waitForTx(
     await ctx.litePSM.processQueue(head, tail, bufNow),
     `LitePSM.processQueue(${head}, ${tail}, ${ethers.formatUnits(bufNow, 6)} USDC)`
+  );
+
+  // processQueue clears entries (sets user=address(0)) but does NOT
+  // auto-advance queueHead. Call advanceHead to move it past cleared slots.
+  await waitForTx(
+    await ctx.queue.advanceHead(tail - head),
+    `queue.advanceHead(${tail - head})`
   );
 
   const tailFinal: bigint = await ctx.queue.queueTail();

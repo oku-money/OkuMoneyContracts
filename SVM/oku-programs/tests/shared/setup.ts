@@ -1,11 +1,10 @@
 /**
  * Shared PSM test setup — bankrun-only.
  *
- * Module-level keypairs (`coldMultisig`, `warmMultisig`, `psmOrchestrator`,
- * `bridgeOrchestrator`) are generated once at module load and reused
- * across the entire mocha process. They are deterministic per-process
- * but freshly generated per-process boot, so each test run starts with
- * pristine authorities.
+ * Module-level keypairs (`coldMultisig`, `warmMultisig`, `psmOrchestrator`)
+ * are generated once at module load and reused across the entire mocha
+ * process. They are deterministic per-process but freshly generated per-
+ * process boot, so each test run starts with pristine authorities.
  *
  * `initializePsm` runs the PSM `initialize` + `setup_redemption_queue` +
  * `setup_oku_money_escrow` instructions against the supplied program.
@@ -68,12 +67,10 @@ export const coldMultisig = Keypair.generate();
 export const warmMultisig = Keypair.generate();
 
 /** PSM orchestrator — automated operations. PSM roles: queueProcessor,
- *  bufferDepositor, rebaser. */
+ *  bufferDepositor, rebaser. In v1 noBridge this same key also drives
+ *  cross-chain transfers off-chain by calling `mint_oku_m` /
+ *  `redeem_oku_m` on each side. */
 export const psmOrchestrator = Keypair.generate();
-
-/** Bridge orchestrator — Ed25519 signer for bridge_mint. Separate from
- *  psmOrchestrator to keep role separation explicit. */
-export const bridgeOrchestrator = Keypair.generate();
 
 // ---------------------------------------------------------------------------
 // PSM initialization
@@ -100,9 +97,9 @@ export interface PsmSetupResult {
  * config: cold for high-security, warm for medium, psmOrchestrator for
  * automated.
  *
- * `pythProgramOwner` is fixed at the legacy mainnet Pyth ID as a
- * placeholder; tests that exercise the oracle path call
- * `set_pyth_program_owner` to rotate to their fixture's owner.
+ * `oracleRelayPythProgramOwner` is fixed at the legacy mainnet Pyth ID as
+ * a placeholder; tests that exercise the peg-check path call
+ * `set_oracle_relay_pyth_program_owner` to rotate to their fixture's owner.
  */
 export async function initializePsm(
   h: BankrunHarness,
@@ -112,11 +109,11 @@ export async function initializePsm(
   okuMoneyMint: PublicKey
 ): Promise<PsmSetupResult> {
   const [configPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("psm_config")],
+    [Buffer.from("psm_config_v3")],
     program.programId
   );
   const [redemptionQueuePda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("redemption_queue")],
+    [Buffer.from("redemption_queue_v2")],
     program.programId
   );
   const vaultUsdcAta = getAssociatedTokenAddressSync(
@@ -140,29 +137,32 @@ export async function initializePsm(
     10 * anchor.web3.LAMPORTS_PER_SOL
   );
 
-  // Legacy mainnet Pyth ID — placeholder. Tests that need a different
-  // oracle program rotate via `set_pyth_program_owner` after init.
+  // Legacy mainnet Pyth ID — placeholder. Tests that exercise the
+  // peg-check path rotate to their fixture's owner via
+  // `set_oracle_relay_pyth_program_owner` after init.
   const PYTH_LEGACY_MAINNET = new PublicKey(
     "FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH"
   );
 
+  // Cycle 4 (PSM-17): `initialize` now takes a single `InitializeParams`
+  // struct in place of the prior 15 positional pubkey args.
   await program.methods
-    .initialize(
-      MAX_SUPPLY,
-      MINTER_ALLOWANCE,
-      warmMultisig.publicKey,    // pauser
-      coldMultisig.publicKey,    // unpauser
-      warmMultisig.publicKey,    // freezer
-      coldMultisig.publicKey,    // unfreezer
-      psmOrchestrator.publicKey, // queueProcessor
-      psmOrchestrator.publicKey, // bufferDepositor
-      coldMultisig.publicKey,    // bufferWithdrawer
-      coldMultisig.publicKey,    // oracleManager
-      coldMultisig.publicKey,    // capManager
-      coldMultisig.publicKey,    // allowanceManager
-      psmOrchestrator.publicKey, // rebaser
-      PYTH_LEGACY_MAINNET,
-    )
+    .initialize({
+      maxSupply: MAX_SUPPLY,
+      minterAllowance: MINTER_ALLOWANCE,
+      pauser: warmMultisig.publicKey,
+      unpauser: coldMultisig.publicKey,
+      freezer: warmMultisig.publicKey,
+      unfreezer: coldMultisig.publicKey,
+      queueProcessor: psmOrchestrator.publicKey,
+      bufferDepositor: psmOrchestrator.publicKey,
+      bufferWithdrawer: coldMultisig.publicKey,
+      oracleManager: coldMultisig.publicKey,
+      capManager: coldMultisig.publicKey,
+      allowanceManager: coldMultisig.publicKey,
+      rebaser: psmOrchestrator.publicKey,
+      oracleRelayPythProgramOwner: PYTH_LEGACY_MAINNET,
+    })
     .accountsPartial({
       roleAdmin: payer.publicKey,
       config: configPda,
@@ -173,7 +173,6 @@ export async function initializePsm(
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
-      // F-04: rent sysvar removed from Initialize context (Anchor uses Rent::get() internally)
     })
     .rpc();
 
@@ -208,8 +207,8 @@ export async function initializePsm(
 // ---------------------------------------------------------------------------
 
 /**
- * Mint OkuMoney to `user` via `mint_oku_m` with the oracle disabled
- * (`priceUpdate: null`). Caller is responsible for funding the user's
+ * Mint OkuMoney to `user` via `mint_oku_m` with the oracle relay disabled
+ * (`oracleRelayFeed: null`). Caller is responsible for funding the user's
  * USDC ATA and creating their OkuMoney ATA.
  */
 export async function mintOkuMoneyViaProgram(
@@ -233,7 +232,7 @@ export async function mintOkuMoneyViaProgram(
       userUsdcAta,
       userOkuMoneyAta,
       vaultUsdc: vaultUsdcAta,
-      priceUpdate: null,
+      oracleRelayFeed: null,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,

@@ -1,8 +1,6 @@
 import {
     LitePSM,
     LitePSM__factory,
-    OkuBridgeRouter,
-    OkuBridgeRouter__factory,
     OkuMoney,
     OkuMoney__factory,
     OkuDollar,
@@ -25,7 +23,6 @@ describe("OkuMoney Scenarios", () => {
     let Alice: Signer
     let Charlie: Signer
 
-    let okuBridgeRouter: OkuBridgeRouter
     let psm: LitePSM
     let queue: RedemptionQueue
     let okuMoney: OkuMoney
@@ -34,6 +31,7 @@ describe("OkuMoney Scenarios", () => {
     let usdc: ReturnType<typeof IERC20__factory.connect>
 
     const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"))
+    const OKUM_BURNER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BURNER"))
     const QUEUE_PSM = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PSM"))
     const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"))
     const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
@@ -70,7 +68,6 @@ describe("OkuMoney Scenarios", () => {
         // Since check is output >= input, and loss is at most (price-1) wei at 18 decimals,
         // we need input to be a multiple of price/1e18 (rounded up).
         const currentPrice = await okuMoney.okuMMultiplier()
-        const PRECISION = parseEther("1")
         const DECIMAL_MULT = 10n ** 12n // 6 to 18 decimal conversion
         
         // Calculate the minimum unit that divides evenly
@@ -91,7 +88,7 @@ describe("OkuMoney Scenarios", () => {
             method: "hardhat_reset",
             params: [{
                 forking: {
-                    jsonRpcUrl: process.env.MAINNET_RPC_URL
+                    jsonRpcUrl: process.env.MAINNET_RPC_URL || "https://ethereum-rpc.publicnode.com"
                 }
             }]
         })
@@ -138,27 +135,23 @@ describe("OkuMoney Scenarios", () => {
 
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            // initialize(_okuMoney, _okuDollar, _usdc, _redemptionQueue, admin, _stalenessThreshold)
+            // initialize(_okuMoney, _okuDollar, _usdc, _redemptionQueue, admin)
             [
                 await okuMoney.getAddress(),
                 await okuUsd.getAddress(),
                 USDC_MAINNET,
                 await queue.getAddress(),
-                frankAddr,
-                3600
+                frankAddr
             ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()
 
-        okuBridgeRouter = await upgrades.deployProxy(
-            new OkuBridgeRouter__factory(Frank),
-            [await okuUsd.getAddress(), await okuMoney.getAddress(), frankAddr, frankAddr],
-            { kind: "uups", unsafeAllow: ["constructor"] }
-        ) as unknown as OkuBridgeRouter
-        await okuBridgeRouter.waitForDeployment()
+        // OkuBridgeRouter was removed in the noBridge refactor; previously deployed here
+        // but never exercised in this scenario suite.
 
         await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await psm.getAddress())
+        await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await psm.getAddress())
 
         // Grant RBAC roles to Frank (admin) for testing
         await okuMoney.connect(Frank).grantRole(OKUM_ALLOWANCE_MANAGER, frankAddr)
@@ -179,6 +172,7 @@ describe("OkuMoney Scenarios", () => {
         )
         await queue.connect(Frank).grantRole(QUEUE_PSM, await psm.getAddress())
         await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await queue.getAddress())
+        await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await queue.getAddress())
     })
 
     describe("User-to-User Transfers", () => {
@@ -331,8 +325,7 @@ describe("OkuMoney Scenarios", () => {
                     await freshOkuUsd.getAddress(),
                     USDC_MAINNET,
                     await freshQueue.getAddress(),
-                    frankAddr,
-                    3600
+                    frankAddr
                 ],
                 { kind: "uups", unsafeAllow: ["constructor"] }
             ) as unknown as LitePSM
@@ -340,6 +333,7 @@ describe("OkuMoney Scenarios", () => {
 
             // Grant PSM minter role with HIGH allowance (1B in 18 decimals)
             await freshOkuMoney.connect(Frank).grantRole(OKUM_MINTER, await freshPSM.getAddress())
+            await freshOkuMoney.connect(Frank).grantRole(OKUM_BURNER, await freshPSM.getAddress())
 
             // Grant RBAC roles to Frank for fresh contracts
             await freshOkuMoney.connect(Frank).grantRole(OKUM_ALLOWANCE_MANAGER, frankAddr)

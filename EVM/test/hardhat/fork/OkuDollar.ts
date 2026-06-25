@@ -1,8 +1,6 @@
 import {
     LitePSM,
     LitePSM__factory,
-    OkuBridgeRouter,
-    OkuBridgeRouter__factory,
     OkuMoney,
     OkuMoney__factory,
     OkuDollar,
@@ -25,7 +23,6 @@ describe("OkuDollar Vault Scenarios", () => {
     let Alice: Signer
     let Charlie: Signer
 
-    let okuBridgeRouter: OkuBridgeRouter
     let psm: LitePSM
     let queue: RedemptionQueue
     let okuMoney: OkuMoney
@@ -34,6 +31,7 @@ describe("OkuDollar Vault Scenarios", () => {
     let usdc: ReturnType<typeof IERC20__factory.connect>
 
     const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"))
+    const OKUM_BURNER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BURNER"))
     const QUEUE_PSM = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PSM"))
     const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"))
     const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
@@ -82,7 +80,7 @@ describe("OkuDollar Vault Scenarios", () => {
             method: "hardhat_reset",
             params: [{
                 forking: {
-                    jsonRpcUrl: process.env.MAINNET_RPC_URL
+                    jsonRpcUrl: process.env.MAINNET_RPC_URL || "https://ethereum-rpc.publicnode.com"
                 }
             }]
         })
@@ -133,21 +131,17 @@ describe("OkuDollar Vault Scenarios", () => {
                 await okuUsd.getAddress(),
                 USDC_MAINNET,
                 await queue.getAddress(),
-                frankAddr,
-                3600
+                frankAddr
             ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()
 
-        okuBridgeRouter = await upgrades.deployProxy(
-            new OkuBridgeRouter__factory(Frank),
-            [await okuUsd.getAddress(), await okuMoney.getAddress(), frankAddr, frankAddr],
-            { kind: "uups", unsafeAllow: ["constructor"] }
-        ) as unknown as OkuBridgeRouter
-        await okuBridgeRouter.waitForDeployment()
+        // OkuBridgeRouter was removed in the noBridge refactor; previously deployed here
+        // but never exercised in this scenario suite.
 
         await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await psm.getAddress())
+        await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await psm.getAddress())
 
         // Grant RBAC roles to Frank (admin) for testing
         await okuMoney.connect(Frank).grantRole(OKUM_ALLOWANCE_MANAGER, frankAddr)
@@ -168,6 +162,7 @@ describe("OkuDollar Vault Scenarios", () => {
         )
         await queue.connect(Frank).grantRole(QUEUE_PSM, await psm.getAddress())
         await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await queue.getAddress())
+        await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await queue.getAddress())
     })
 
     describe("Wrap/Unwrap Round-Trip", () => {
@@ -251,7 +246,6 @@ describe("OkuDollar Vault Scenarios", () => {
 
             // Expected: notesReturned = okuUsdBalance × usdMultiplier / notePrice
             // With usdMultiplier = 1e18, notePrice = 1.1e18: notesReturned ≈ okuUsdBalance / 1.1
-            const PRECISION = parseEther("1")
             const usdMult = await okuUsd.usdMultiplier()
             const expectedNotes = (okuUsdBalance * usdMult) / newPrice
             expect(notesReturned).to.be.closeTo(expectedNotes, 1n)

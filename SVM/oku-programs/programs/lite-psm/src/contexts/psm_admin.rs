@@ -49,7 +49,7 @@ pub struct CapManager<'info> {
 
     /// OkuMoney mint — read so `set_max_supply` can refuse a new cap below
     /// the current circulating supply (would silently brick all future
-    /// mints, including bridge mints). EVM `OkuMoney.setMaxSupply` parity.
+    /// mints). EVM `OkuMoney.setMaxSupply` parity.
     #[account(
         address = config.oku_money_mint,
         mint::token_program = token_2022_program,
@@ -86,16 +86,19 @@ pub struct OracleManager<'info> {
     )]
     pub config: Account<'info, PsmConfig>,
 
-    /// Optional pre-flight account for `set_oracle`. When `oracle !=
-    /// Pubkey::default()` and this account is supplied, the handler parses
-    /// the Pyth header and asserts the runtime invariants (`expo == 0`,
-    /// header magic / version / atype) before persisting the new oracle
-    /// pubkey. Without the pre-flight check, an admin could silently
-    /// configure an exponentially-scaled feed that would only error at
-    /// every subsequent `mint_oku_m` call. Other instructions on this
-    /// context (e.g. `set_pyth_program_owner`) ignore the account.
-    /// CHECK: parsed defensively by `validate_oracle_feed`; only required
-    /// for the `set_oracle` path with a non-default oracle pubkey.
+    /// Optional pre-flight account for `set_oracle_relay_feed`. When
+    /// `new_feed != Pubkey::default()` and this account is supplied, the
+    /// handler parses the Pyth header and asserts the runtime invariants
+    /// (`magic`, `version == 2`, `atype == Price`, owner,
+    /// `|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before persisting the new
+    /// feed pubkey. Without the pre-flight check, an admin could silently
+    /// configure a malformed feed that would only error at every
+    /// subsequent mint / redeem / queue-process call. The other relay
+    /// setters (`set_oracle_relay_staleness`, `_band`,
+    /// `_pyth_program_owner`) ignore this account.
+    /// CHECK: parsed defensively by `validate_oracle_relay_feed`; only
+    /// required for the `set_oracle_relay_feed` path with a non-default
+    /// feed pubkey.
     pub oracle_account: Option<UncheckedAccount<'info>>,
 }
 
@@ -157,21 +160,6 @@ pub struct ThawAccount<'info> {
     pub target_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,
-}
-
-#[derive(Accounts)]
-pub struct InitializeBlacklistExempt<'info> {
-    /// Role admin - only role_admin can set blacklist exemptions
-    pub role_admin: Signer<'info>,
-
-    /// PSM config
-    #[account(
-        mut,
-        seeds = [PsmConfig::SEED],
-        bump = config.bump,
-        has_one = role_admin @ LitePsmError::Unauthorized
-    )]
-    pub config: Account<'info, PsmConfig>,
 }
 
 #[derive(Accounts)]

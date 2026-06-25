@@ -1,8 +1,8 @@
 /**
- * Role constants for OkuMoney contracts
- * These are the keccak256 hashes of role names used in AccessControl
+ * Role constants for OkuMoney contracts.
+ * These are the keccak256 hashes of role names used in OpenZeppelin AccessControl.
  *
- * NOTE: These must match the roles defined in src/lib/Roles.sol
+ * NOTE: These must match the roles defined in `src/lib/Roles.sol`.
  */
 
 import { keccak256, toUtf8Bytes } from "ethers";
@@ -16,6 +16,9 @@ export const ROLES = {
   OKUM_PAUSER: keccak256(toUtf8Bytes("OKUM_PAUSER")),
   OKUM_UNPAUSER: keccak256(toUtf8Bytes("OKUM_UNPAUSER")),
   OKUM_MINTER: keccak256(toUtf8Bytes("OKUM_MINTER")),
+  // Cycle 4 (EVM-15): OKUM_BURNER was split out of OKUM_MINTER. Both LitePSM
+  // and RedemptionQueue must hold OKUM_BURNER to call `OkuMoney.burn(...)`.
+  OKUM_BURNER: keccak256(toUtf8Bytes("OKUM_BURNER")),
   OKUM_REBASER: keccak256(toUtf8Bytes("OKUM_REBASER")),
   OKUM_BLACKLISTER: keccak256(toUtf8Bytes("OKUM_BLACKLISTER")),
   OKUM_UNBLACKLISTER: keccak256(toUtf8Bytes("OKUM_UNBLACKLISTER")),
@@ -45,25 +48,12 @@ export const ROLES = {
   QUEUE_UPGRADER: keccak256(toUtf8Bytes("QUEUE_UPGRADER")),
   QUEUE_PSM: keccak256(toUtf8Bytes("QUEUE_PSM")),
   QUEUE_RESCUER: keccak256(toUtf8Bytes("QUEUE_RESCUER")),
+  QUEUE_ORACLE_MANAGER: keccak256(toUtf8Bytes("QUEUE_ORACLE_MANAGER")),
 
-  // ============ OkuBridge Roles ============
-  BRIDGE_SIGNER_MANAGER: keccak256(toUtf8Bytes("BRIDGE_SIGNER_MANAGER")),
-  BRIDGE_PAUSER: keccak256(toUtf8Bytes("BRIDGE_PAUSER")),
-  BRIDGE_UNPAUSER: keccak256(toUtf8Bytes("BRIDGE_UNPAUSER")),
-  BRIDGE_FEE_MANAGER: keccak256(toUtf8Bytes("BRIDGE_FEE_MANAGER")),
-  BRIDGE_NONCE_ADMIN: keccak256(toUtf8Bytes("BRIDGE_NONCE_ADMIN")),
-  BRIDGE_CHAIN_MANAGER: keccak256(toUtf8Bytes("BRIDGE_CHAIN_MANAGER")),
-  BRIDGE_LIMITS_MANAGER: keccak256(toUtf8Bytes("BRIDGE_LIMITS_MANAGER")),
-  BRIDGE_UPGRADER: keccak256(toUtf8Bytes("BRIDGE_UPGRADER")),
-  BRIDGE_REFUND_INITIATOR: keccak256(toUtf8Bytes("BRIDGE_REFUND_INITIATOR")),
-  BRIDGE_REFUND_CONFIRMER: keccak256(toUtf8Bytes("BRIDGE_REFUND_CONFIRMER")),
-
-  // ============ OkuBridgeRouter Roles ============
-  ROUTER_UPGRADER: keccak256(toUtf8Bytes("ROUTER_UPGRADER")),
-  ROUTER_PAUSER: keccak256(toUtf8Bytes("ROUTER_PAUSER")),
-  ROUTER_UNPAUSER: keccak256(toUtf8Bytes("ROUTER_UNPAUSER")),
-  ROUTER_ADAPTER_MANAGER: keccak256(toUtf8Bytes("ROUTER_ADAPTER_MANAGER")),
-  ROUTER_BRIDGE_MANAGER: keccak256(toUtf8Bytes("ROUTER_BRIDGE_MANAGER")),
+  // ============ OracleRelay Roles ============
+  RELAY_UPGRADER: keccak256(toUtf8Bytes("RELAY_UPGRADER")),
+  RELAY_FEED_MANAGER: keccak256(toUtf8Bytes("RELAY_FEED_MANAGER")),
+  RELAY_CONFIG_MANAGER: keccak256(toUtf8Bytes("RELAY_CONFIG_MANAGER")),
 };
 
 /**

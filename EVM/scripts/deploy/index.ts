@@ -23,13 +23,21 @@ import { saveAddress, loadAddressBook, saveAddressBook, hasAddress, loadAddress 
 import { syncEvmRegistry } from "../utils/testnetRegistry";
 import {
   getChainMetadata,
-  getBridgeChainId,
-  getSolanaCounterpartChainId,
   DEV_WALLET_ADDRESS,
 } from "../config/chains";
 import { resolveNetworkContext } from "../utils/networkContext";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
+import {
+  CREATE2_FACTORY,
+  saltFor,
+} from "../config/deploymentVersion";
+import {
+  create2FactoryAvailable,
+  deployContractDeterministic,
+  buildERC1967ProxyInitCode,
+  computeCreate2Address,
+} from "../utils/create2Deploy";
 
 // Networks that support Etherscan-family verification.
 // Etherscan V2 (single ETHERSCAN_API_KEY) covers Ethereum, Optimism, Arbitrum,
@@ -39,6 +47,7 @@ const VERIFIABLE_NETWORKS = [
   "sepolia",
   "opSepolia",
   "baseSepolia",
+  "arbSepolia",
   "bscTestnet",
   "mainnet",
   "optimism",
@@ -57,24 +66,27 @@ const DEV_WALLET = DEV_WALLET_ADDRESS;
 interface DeploymentConfig {
   maxSupply: bigint;
   minterAllowance: bigint;
-  bridgeFee: bigint;
-  minBridgeAmount: bigint;
-  maxBridgeAmount: bigint;
-  bridgeDeadline: bigint;
-  // PSM oracle staleness threshold (seconds). Bounded by Constants.ORACLE_MIN/MAX_STALENESS
-  // (60 .. 7 days). Operators can re-tune via configureOracle post-deploy.
-  psmStalenessThreshold: bigint;
+  // OracleRelay (USDC peg circuit-breaker) defaults — operators can re-tune via the
+  // RELAY_FEED_MANAGER / RELAY_CONFIG_MANAGER setters post-deploy.
+  oracleRelayStalenessThreshold: bigint;
+  oracleRelayMinPriceE18: bigint;
+  oracleRelayMaxPriceE18: bigint;
+  // Per-chain USDC/USD Chainlink aggregator address. When empty (testnet), the
+  // OracleRelay deploy is skipped; LitePSM and RedemptionQueue start with
+  // oracleRelay = address(0) (peg check disabled, mirrors old bootstrap behavior).
+  oracleRelayPriceFeed: string;
 }
 
 function getDeploymentConfig(): DeploymentConfig {
   return {
     maxSupply: ethers.parseUnits("1000000000", 18), // 1 billion
     minterAllowance: ethers.parseUnits("1000000000", 18), // 1 billion
-    bridgeFee: 10n, // 0.1% (10 bps)
-    minBridgeAmount: ethers.parseUnits("1", 18), // 1 OkuM
-    maxBridgeAmount: ethers.parseUnits("100000", 18), // 100,000 OkuM
-    bridgeDeadline: 3600n, // 1 hour
-    psmStalenessThreshold: 3600n, // 1 hour
+    oracleRelayStalenessThreshold: 3600n, // 1 hour
+    oracleRelayMinPriceE18: ethers.parseUnits("0.97", 18), // $0.97
+    oracleRelayMaxPriceE18: ethers.parseUnits("1.03", 18), // $1.03
+    // Per-chain Chainlink USDC/USD feed: pulled from chainConfig at main() entry.
+    // Leave empty here; main() injects the chain-specific value if present.
+    oracleRelayPriceFeed: "",
   };
 }
 
@@ -182,12 +194,22 @@ async function sendAndWait(
  * Critical for live-network resumability: a partial-deploy failure (e.g. flaky
  * RPC mid-run) shouldn't force redeploying — and orphaning — every contract
  * that already made it on-chain in the failed run.
+ *
+ * `FRESH_DEPLOY=true` short-circuits this: skip the attach check entirely and
+ * always redeploy. Use when intentionally abandoning a prior deployment
+ * (e.g. moving to a new deterministic address scheme or after a storage-
+ * incompatible source change). The pre-existing on-chain contracts are
+ * orphaned but harmless — their addresses simply stop being referenced.
  */
 async function tryAttach(
   contractName: string,
   bookKey: string,
   deployer: Signer
 ): Promise<Contract | null> {
+  if (process.env.FRESH_DEPLOY === "true") {
+    logger.info(`  ${contractName}: FRESH_DEPLOY=true — skipping attach check`);
+    return null;
+  }
   if (!hasAddress(bookKey, contractName)) return null;
   const addr = loadAddress(bookKey, contractName);
   const code = await ethers.provider.getCode(addr);
@@ -209,32 +231,133 @@ async function deployUUPSProxy(
   const existing = await tryAttach(contractName, bookKey, deployer);
   if (existing) return existing;
 
-  return await withRetry(`deploy ${contractName} (UUPS)`, async () => {
-    const Factory = await ethers.getContractFactory(contractName, deployer);
+  const Factory = await ethers.getContractFactory(contractName, deployer);
+
+  // CREATE2 path: when the Arachnid factory exists on this chain, deploy
+  // both the impl and the ERC1967 proxy through it so the proxy address is
+  // identical across every chain that has the factory + the same source
+  // tree. Per-chain constructor variations (USDC address, Chainlink feed)
+  // still produce different addresses on chains where those args differ.
+  //
+  // See scripts/config/deploymentVersion.ts for the salt scheme.
+  if (await create2FactoryAvailable(ethers.provider)) {
+    return await withRetry(`deploy ${contractName} (UUPS via CREATE2)`, async () => {
+      // 1. Impl deploy (no constructor args; OZ initializers handle setup).
+      const implSalt = saltFor(`${contractName}.impl`);
+      const { address: implAddress, reused: implReused } = await deployContractDeterministic(
+        Factory,
+        implSalt,
+        [],
+        deployer,
+        `${contractName} impl`
+      );
+      logger.info(
+        `  ${contractName} impl ${implReused ? "reused" : "deployed"} ` +
+          `at ${implAddress} (CREATE2)`
+      );
+
+      // 2. Proxy deploy: ERC1967Proxy(impl, initCalldata) constructor args.
+      const initCalldata = Factory.interface.encodeFunctionData(
+        "initialize",
+        initArgs
+      );
+      const proxyInitCode = await buildERC1967ProxyInitCode(
+        implAddress,
+        initCalldata
+      );
+      const proxySalt = saltFor(`${contractName}.proxy`);
+      const predictedProxy = computeCreate2Address(proxySalt, proxyInitCode);
+
+      // Resumability check: if the proxy is already at the predicted
+      // address (prior partial run), skip re-broadcast — we'd revert with
+      // "already deployed" anyway.
+      const existingCode = await ethers.provider.getCode(predictedProxy);
+      let proxyAddress: string;
+      let proxyReused: boolean;
+      if (existingCode && existingCode !== "0x" && existingCode.length > 2) {
+        proxyAddress = predictedProxy;
+        proxyReused = true;
+      } else {
+        // Send the deploy tx directly to the factory: calldata = salt ++ initCode.
+        const calldata = proxySalt + proxyInitCode.slice(2);
+        const tx = await deployer.sendTransaction({
+          to: CREATE2_FACTORY,
+          data: calldata,
+        });
+        const receipt = await tx.wait();
+        if (!receipt || receipt.status !== 1) {
+          throw new Error(
+            `CREATE2 proxy deploy for ${contractName} failed (tx ${tx.hash})`
+          );
+        }
+        // Poll for bytecode at the predicted address. Load-balanced public
+        // RPCs can return stale `getCode` results for several seconds after
+        // a tx mines; the receipt already confirmed success, we just need
+        // to give the RPC network a chance to propagate.
+        const pollMaxMs = 30_000;
+        const pollIntervalMs = 2_000;
+        const pollStart = Date.now();
+        let found = false;
+        let lastCode = "0x";
+        while (Date.now() - pollStart < pollMaxMs) {
+          try {
+            lastCode = await ethers.provider.getCode(predictedProxy);
+            if (lastCode && lastCode !== "0x" && lastCode.length > 2) {
+              found = true;
+              break;
+            }
+          } catch {
+            // Transient — keep polling within budget.
+          }
+          await new Promise((r) => setTimeout(r, pollIntervalMs));
+        }
+        if (!found) {
+          throw new Error(
+            `CREATE2 proxy deploy for ${contractName} reported success (tx ${tx.hash}) but ` +
+              `no bytecode at predicted address ${predictedProxy} after ${pollMaxMs / 1000}s of polling. ` +
+              `Last getCode result: ${lastCode.slice(0, 80)}`
+          );
+        }
+        proxyAddress = predictedProxy;
+        proxyReused = false;
+      }
+      logger.info(
+        `  ${contractName} proxy ${proxyReused ? "reused" : "deployed"} ` +
+          `at ${proxyAddress} (CREATE2)`
+      );
+
+      // 3. Register with the OZ manifest so the upgrade script's storage-layout
+      //    validation still works. forceImport is metadata-only (no on-chain tx)
+      //    and idempotent.
+      try {
+        await upgrades.forceImport(proxyAddress, Factory, { kind: "uups" });
+      } catch (e: any) {
+        // Already-imported is fine; anything else is logged but non-fatal
+        // (the upgrade script can re-import on demand).
+        const msg = (e?.message ?? String(e)).toString();
+        if (!/already/i.test(msg)) {
+          logger.warning(
+            `  forceImport of ${contractName} into OZ manifest failed (non-fatal): ${msg.slice(0, 120)}`
+          );
+        }
+      }
+
+      saveAddress(bookKey, contractName, proxyAddress);
+      return Factory.attach(proxyAddress).connect(deployer) as Contract;
+    });
+  }
+
+  // Fallback: standard OZ-plugin deploy (non-deterministic addresses).
+  logger.warning(
+    `  CREATE2 factory not available at ${CREATE2_FACTORY} on this chain — ` +
+      `falling back to nonce-based CREATE deploy for ${contractName}`
+  );
+  return await withRetry(`deploy ${contractName} (UUPS, fallback CREATE)`, async () => {
     const proxy = await upgrades.deployProxy(Factory, initArgs, { kind: "uups" });
     await proxy.waitForDeployment();
     const address = await proxy.getAddress();
     saveAddress(bookKey, contractName, address);
-    return proxy;
-  });
-}
-
-async function deployTransparentProxy(
-  contractName: string,
-  initArgs: any[],
-  bookKey: string,
-  deployer: Signer
-): Promise<Contract> {
-  const existing = await tryAttach(contractName, bookKey, deployer);
-  if (existing) return existing;
-
-  return await withRetry(`deploy ${contractName} (Transparent)`, async () => {
-    const Factory = await ethers.getContractFactory(contractName, deployer);
-    const proxy = await upgrades.deployProxy(Factory, initArgs, { kind: "transparent" });
-    await proxy.waitForDeployment();
-    const address = await proxy.getAddress();
-    saveAddress(bookKey, contractName, address);
-    return proxy;
+    return proxy as unknown as Contract;
   });
 }
 
@@ -297,14 +420,16 @@ async function verifyAllContracts(networkName: string): Promise<void> {
     return;
   }
 
-  logger.step(8, "Verifying Contracts on Etherscan");
+  logger.step(7, "Verifying Contracts on Etherscan");
   logger.info("  Waiting 30s for Etherscan to index contracts...");
   await new Promise(resolve => setTimeout(resolve, 30000));
 
   const addresses = loadAddressBook()[networkName] || {};
-  
-  // Proxy contracts need special handling
-  const proxyContracts = ["OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM", "OkuBridge", "OkuBridgeRouter"];
+
+  // Proxy contracts need special handling. OkuBridge/OkuBridgeRouter were removed
+  // in the noBridge refactor; v1 cross-chain transfers are PSM-mediated mint/burn
+  // orchestrated off-chain.
+  const proxyContracts = ["OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM"];
   
   for (const contractName of Object.keys(addresses)) {
     const address = addresses[contractName];
@@ -333,8 +458,34 @@ async function deployMockUSDC(bookKey: string, deployer: Signer): Promise<string
     return await existing.getAddress();
   }
 
-  return await withRetry("deploy MockUSDC", async () => {
-    const MockUSDC = await ethers.getContractFactory("MockUSDC", deployer);
+  const MockUSDC = await ethers.getContractFactory("MockUSDC", deployer);
+
+  // CREATE2 path: MockUSDC must be deterministic across chains so the
+  // downstream PSM + queue proxies (whose constructor args include the
+  // USDC address) also end up with identical addresses across chains.
+  if (await create2FactoryAvailable(ethers.provider)) {
+    return await withRetry("deploy MockUSDC (CREATE2)", async () => {
+      const salt = saltFor("MockUSDC");
+      // MockUSDC has no constructor args (mints to msg.sender via initializer).
+      const { address, reused } = await deployContractDeterministic(
+        MockUSDC,
+        salt,
+        [],
+        deployer,
+        "MockUSDC"
+      );
+      saveAddress(bookKey, "MockUSDC", address);
+      logger.success(`  MockUSDC ${reused ? "reused" : "deployed"} at ${address} (CREATE2)`);
+      return address;
+    });
+  }
+
+  // Fallback: standard CREATE deploy.
+  logger.warning(
+    `  CREATE2 factory not available at ${CREATE2_FACTORY} — ` +
+      `falling back to nonce-based CREATE deploy for MockUSDC`
+  );
+  return await withRetry("deploy MockUSDC (fallback CREATE)", async () => {
     const mockUsdc = await MockUSDC.deploy();
     await mockUsdc.waitForDeployment();
 
@@ -405,11 +556,14 @@ async function deployPSM(
   okuDollarAddress: string,
   redemptionQueueAddress: string,
   usdcAddress: string,
-  config: DeploymentConfig
+  _config: DeploymentConfig
 ): Promise<Contract> {
   logger.step(3, "Deploying LitePSM");
 
-  // LitePSM.initialize(okuMoney, okuDollar, usdc, redemptionQueue, admin, stalenessThreshold)
+  // LitePSM.initialize(okuMoney, okuDollar, usdc, redemptionQueue, admin).
+  // The OracleRelay address (USDC peg circuit-breaker) is wired post-deploy via
+  // litePSM.setOracleRelay(...), so a deploy can complete with the relay disabled
+  // (testnet bootstrap path).
   const litePSM = await deployUUPSProxy(
     "LitePSM",
     [
@@ -418,7 +572,6 @@ async function deployPSM(
       usdcAddress,                      // _usdc
       redemptionQueueAddress,           // _redemptionQueue
       deployerAddress,                  // admin
-      config.psmStalenessThreshold,     // _stalenessThreshold (PoR oracle bound)
     ],
     bookKey,
     deployer
@@ -428,67 +581,34 @@ async function deployPSM(
   return litePSM;
 }
 
-async function deployBridge(
+async function deployOracleRelay(
   deployer: Signer,
   deployerAddress: string,
   bookKey: string,
-  okuMoneyAddress: string,
-  okuDollarAddress: string,
-  evmChainId: number,
+  priceFeedAddress: string,
   config: DeploymentConfig
-): Promise<{ okuBridge: Contract; bridgeRouter: Contract }> {
-  logger.step(4, "Deploying Bridge Contracts");
+): Promise<Contract | null> {
+  if (!priceFeedAddress || priceFeedAddress === ethers.ZeroAddress) {
+    logger.info("  OracleRelay: skipped (no Chainlink USDC/USD feed configured for this chain)");
+    return null;
+  }
 
-  // Pick Solana Devnet (for EVM testnets) or Solana Mainnet (for EVM mainnets)
-  // as the bridge counterpart. This used to be hardcoded to Solana Devnet, which
-  // was wrong for Base/BSC/etc. mainnet deploys.
-  const solanaCounterpartId = getSolanaCounterpartChainId(evmChainId);
-  logger.info(`  Bridge counterpart Solana chain id: ${solanaCounterpartId} (${solanaCounterpartId === 103 ? "Devnet" : "Mainnet"})`);
-
-  // OkuBridge (Transparent Proxy). Initializer now takes a 6th `InitConfig` tuple so
-  // limits / fee / deadline come in at deploy time instead of being hardcoded constants.
-  // Subsequent updateLimits / updateFee / updateDeadline calls in configureBridge become
-  // no-ops in the common case but are kept as a safety net for redeployments that need
-  // to override the init values.
-  const bridgeInitConfig = {
-    minBridgeAmount: config.minBridgeAmount,
-    maxBridgeAmount: config.maxBridgeAmount,
-    feeBps: config.bridgeFee,
-    bridgeDeadline: config.bridgeDeadline,
-  };
-
-  logger.info("  Deploying OkuBridge...");
-  const okuBridge = await deployTransparentProxy(
-    "OkuBridge",
+  logger.step(3, "Deploying OracleRelay");
+  // OracleRelay.initialize(priceFeed, staleness, minPriceE18, maxPriceE18, admin)
+  const oracleRelay = await deployUUPSProxy(
+    "OracleRelay",
     [
-      okuMoneyAddress,
-      deployerAddress, // orchestrator signer (deployer for testnet)
-      deployerAddress, // fee recipient
-      deployerAddress, // admin
-      [BigInt(solanaCounterpartId)], // supported chains
-      bridgeInitConfig,
-    ],
-    bookKey,
-    deployer
-  );
-  logger.success(`  OkuBridge: ${await okuBridge.getAddress()}`);
-
-  // OkuBridgeRouter (UUPS Proxy)
-  logger.info("  Deploying OkuBridgeRouter...");
-  const bridgeRouter = await deployUUPSProxy(
-    "OkuBridgeRouter",
-    [
-      okuDollarAddress,
-      okuMoneyAddress,
-      await okuBridge.getAddress(),
+      priceFeedAddress,
+      config.oracleRelayStalenessThreshold,
+      config.oracleRelayMinPriceE18,
+      config.oracleRelayMaxPriceE18,
       deployerAddress,
     ],
     bookKey,
     deployer
   );
-  logger.success(`  OkuBridgeRouter: ${await bridgeRouter.getAddress()}`);
-
-  return { okuBridge, bridgeRouter };
+  logger.success(`  OracleRelay: ${await oracleRelay.getAddress()}`);
+  return oracleRelay;
 }
 
 async function configureRoles(
@@ -497,22 +617,41 @@ async function configureRoles(
   okuDollar: Contract,
   redemptionQueue: Contract,
   litePSM: Contract,
-  okuBridge: Contract,
-  bridgeRouter: Contract,
+  oracleRelay: Contract | null,
   config: DeploymentConfig
 ): Promise<void> {
-  logger.step(5, "Configuring Roles");
+  logger.step(4, "Configuring Roles");
 
   const litePSMAddress = await litePSM.getAddress();
   const redemptionQueueAddress = await redemptionQueue.getAddress();
-  const okuBridgeAddress = await okuBridge.getAddress();
-  const bridgeRouterAddress = await bridgeRouter.getAddress();
 
-  // OkuMoney minter roles
+  // EVM-J3: Fail-fast check that queue and PSM share the same USDC before
+  // we start granting roles. A mismatch here would leave the chain with a
+  // partially-roled deployment that the operator would have to manually
+  // un-grant from. Doing this first means a mismatch reverts with no state
+  // change on the proxies.
+  const psmUsdc = (await litePSM.usdc()).toString();
+  const queueUsdc = (await redemptionQueue.usdc()).toString();
+  if (psmUsdc.toLowerCase() !== queueUsdc.toLowerCase()) {
+    throw new Error(
+      `USDC mismatch: PSM=${psmUsdc} queue=${queueUsdc}. Aborting before role grants.`
+    );
+  }
+  logger.info(`  USDC match verified: ${psmUsdc}`);
+
+  // OkuMoney minter roles. LitePSM is the sole user-facing OKUM_MINTER in the
+  // noBridge model; RedemptionQueue mints rebase deltas; off-chain cross-chain
+  // mint/burn flows route through LitePSM via the orchestrator's USDC custody.
   await sendAndWait("Grant OKUM_MINTER to LitePSM", () => okuMoney.grantRole(ROLES.OKUM_MINTER, litePSMAddress));
   await sendAndWait("Grant OKUM_MINTER to RedemptionQueue", () => okuMoney.grantRole(ROLES.OKUM_MINTER, redemptionQueueAddress));
-  await sendAndWait("Grant OKUM_MINTER to OkuBridge", () => okuMoney.grantRole(ROLES.OKUM_MINTER, okuBridgeAddress));
-  await sendAndWait("Grant OKUM_MINTER to OkuBridgeRouter", () => okuMoney.grantRole(ROLES.OKUM_MINTER, bridgeRouterAddress));
+
+  // Cycle 4 (EVM-15): OKUM_BURNER was split out of OKUM_MINTER. Both consumers
+  // of `OkuMoney.burn(...)` need the burner role:
+  //   - LitePSM redeem flows (`_redeemOkuMShared`)
+  //   - RedemptionQueue.processQueue (per-entry burn after USDC payout)
+  // Without these grants every redeem reverts with AccessControlUnauthorizedAccount.
+  await sendAndWait("Grant OKUM_BURNER to LitePSM", () => okuMoney.grantRole(ROLES.OKUM_BURNER, litePSMAddress));
+  await sendAndWait("Grant OKUM_BURNER to RedemptionQueue", () => okuMoney.grantRole(ROLES.OKUM_BURNER, redemptionQueueAddress));
 
   // OkuMoney admin roles (testnet only)
   await sendAndWait("Grant OKUM_REBASER to Admin", () => okuMoney.grantRole(ROLES.OKUM_REBASER, deployerAddress));
@@ -521,8 +660,6 @@ async function configureRoles(
   // Minter allowances
   await sendAndWait("Set LitePSM minter allowance", () => okuMoney.configureMinterAllowance(litePSMAddress, config.minterAllowance));
   await sendAndWait("Set RedemptionQueue minter allowance", () => okuMoney.configureMinterAllowance(redemptionQueueAddress, config.minterAllowance));
-  await sendAndWait("Set OkuBridge minter allowance", () => okuMoney.configureMinterAllowance(okuBridgeAddress, config.minterAllowance));
-  await sendAndWait("Set OkuBridgeRouter minter allowance", () => okuMoney.configureMinterAllowance(bridgeRouterAddress, config.minterAllowance));
 
   // OkuDollar roles
   await sendAndWait("Grant VAULT_REBASER to Admin", () => okuDollar.grantRole(ROLES.VAULT_REBASER, deployerAddress));
@@ -530,81 +667,110 @@ async function configureRoles(
   // RedemptionQueue roles
   await sendAndWait("Grant QUEUE_PSM to LitePSM", () => redemptionQueue.grantRole(ROLES.QUEUE_PSM, litePSMAddress));
 
-  // LitePSM roles
+  // LitePSM roles — full operational set for testnet (all to deployer; see
+  // contracts/README.md § Deployment runbook for the production RBAC split).
+  // Production: run grantRolesMainnet.ts to distribute roles to cold/warm multisig + orchestrator.
   await sendAndWait("Grant PSM_BUFFER_DEPOSITOR to Admin", () => litePSM.grantRole(ROLES.PSM_BUFFER_DEPOSITOR, deployerAddress));
-}
+  await sendAndWait("Grant PSM_QUEUE_PROCESSOR to Admin", () => litePSM.grantRole(ROLES.PSM_QUEUE_PROCESSOR, deployerAddress));
+  await sendAndWait("Grant PSM_BUFFER_WITHDRAWER to Admin", () => litePSM.grantRole(ROLES.PSM_BUFFER_WITHDRAWER, deployerAddress));
+  await sendAndWait("Grant PSM_ORACLE_MANAGER to Admin", () => litePSM.grantRole(ROLES.PSM_ORACLE_MANAGER, deployerAddress));
 
-async function configureBridge(
-  okuBridge: Contract,
-  evmChainId: number,
-  config: DeploymentConfig
-): Promise<void> {
-  logger.step(6, "Configuring Bridge (Testnet Settings)");
+  // OkuMoney additional admin roles
+  await sendAndWait("Grant OKUM_PAUSER to Admin", () => okuMoney.grantRole(ROLES.OKUM_PAUSER, deployerAddress));
+  await sendAndWait("Grant OKUM_UNPAUSER to Admin", () => okuMoney.grantRole(ROLES.OKUM_UNPAUSER, deployerAddress));
+  await sendAndWait("Grant OKUM_BLACKLISTER to Admin", () => okuMoney.grantRole(ROLES.OKUM_BLACKLISTER, deployerAddress));
+  await sendAndWait("Grant OKUM_UNBLACKLISTER to Admin", () => okuMoney.grantRole(ROLES.OKUM_UNBLACKLISTER, deployerAddress));
+  await sendAndWait("Grant OKUM_CAP_MANAGER to Admin", () => okuMoney.grantRole(ROLES.OKUM_CAP_MANAGER, deployerAddress));
 
-  await sendAndWait(`Set bridge fee to ${config.bridgeFee} bps`, () => okuBridge.updateFee(config.bridgeFee));
+  // OkuDollar additional admin roles
+  await sendAndWait("Grant VAULT_PAUSER to Admin", () => okuDollar.grantRole(ROLES.VAULT_PAUSER, deployerAddress));
+  await sendAndWait("Grant VAULT_UNPAUSER to Admin", () => okuDollar.grantRole(ROLES.VAULT_UNPAUSER, deployerAddress));
+  await sendAndWait("Grant VAULT_RESERVE_MANAGER to Admin", () => okuDollar.grantRole(ROLES.VAULT_RESERVE_MANAGER, deployerAddress));
 
-  // Note: updateLimits takes uint128 values
-  const minAmount = BigInt(config.minBridgeAmount.toString());
-  const maxAmount = BigInt(config.maxBridgeAmount.toString());
-  await sendAndWait("Set bridge limits", () => okuBridge.updateLimits(minAmount, maxAmount));
+  // OkuDollar blacklist roles (shared OKUM_ prefix — one grant covers both tokens)
+  await sendAndWait("Grant OKUM_BLACKLISTER on OkuDollar to Admin", () => okuDollar.grantRole(ROLES.OKUM_BLACKLISTER, deployerAddress));
+  await sendAndWait("Grant OKUM_UNBLACKLISTER on OkuDollar to Admin", () => okuDollar.grantRole(ROLES.OKUM_UNBLACKLISTER, deployerAddress));
 
-  await sendAndWait(`Set bridge deadline to ${config.bridgeDeadline}s`, () => okuBridge.updateDeadline(config.bridgeDeadline));
+  // RedemptionQueue additional role
+  await sendAndWait("Grant QUEUE_RESCUER to Admin", () => redemptionQueue.grantRole(ROLES.QUEUE_RESCUER, deployerAddress));
 
-  // Verify the correct Solana counterpart (Devnet for EVM testnets, Mainnet otherwise) is supported
-  const solanaCounterpartId = getSolanaCounterpartChainId(evmChainId);
-  const counterpartName = solanaCounterpartId === 103 ? "Devnet" : "Mainnet";
-  const isSolanaSupported = await okuBridge.supportedChains(solanaCounterpartId);
-  if (!isSolanaSupported) {
-    await sendAndWait(`Add Solana ${counterpartName} as supported chain`, () => okuBridge.addSupportedChain(solanaCounterpartId));
-  } else {
-    logger.success(`  Solana ${counterpartName} (${solanaCounterpartId}) already supported`);
+  // QUEUE_ORACLE_MANAGER is granted to admin at queue.initialize, but mirror an
+  // explicit grant here for parity with the PSM_ORACLE_MANAGER pattern. The PSM
+  // already received PSM_ORACLE_MANAGER above.
+  await sendAndWait("Grant QUEUE_ORACLE_MANAGER to Admin", () => redemptionQueue.grantRole(ROLES.QUEUE_ORACLE_MANAGER, deployerAddress));
+
+  // Wire the OracleRelay (USDC peg circuit-breaker) onto LitePSM and the queue.
+  // The relay is optional: when no Chainlink USDC/USD feed is configured for
+  // this chain the relay is null and we leave oracleRelay = address(0)
+  // (peg check disabled — explicit operator-controlled enablement).
+  if (oracleRelay !== null) {
+    const relayAddress = await oracleRelay.getAddress();
+    // Relay roles are already granted to admin at initialize-time, but mirror the
+    // explicit grant here for symmetry with the PSM_/QUEUE_/VAULT_ patterns above.
+    await sendAndWait("Grant RELAY_FEED_MANAGER to Admin", () => oracleRelay.grantRole(ROLES.RELAY_FEED_MANAGER, deployerAddress));
+    await sendAndWait("Grant RELAY_CONFIG_MANAGER to Admin", () => oracleRelay.grantRole(ROLES.RELAY_CONFIG_MANAGER, deployerAddress));
+    await sendAndWait("Wire OracleRelay onto LitePSM", () => litePSM.setOracleRelay(relayAddress));
+    await sendAndWait("Wire OracleRelay onto RedemptionQueue", () => redemptionQueue.setOracleRelay(relayAddress));
+
+    // EVM-J4: Post-wire invariant — PSM and Queue MUST point at the same relay.
+    // If one setOracleRelay tx lands and the other reverts, the consumers desync
+    // and the operator must rotate the relay on the surviving consumer. This
+    // check catches it at deploy time instead of in the next user mint/redeem.
+    const psmRelay = await litePSM.oracleRelay();
+    const queueRelay = await redemptionQueue.oracleRelay();
+    if (psmRelay !== queueRelay) {
+      throw new Error(
+        `OracleRelay wiring mismatch: LitePSM=${psmRelay}, RedemptionQueue=${queueRelay}`
+      );
+    }
+    logger.success("  OracleRelay wiring matches across PSM and Queue");
   }
+  void config;
 }
 
 async function verifyDeployment(
   bookKey: string,
-  evmChainId: number,
   okuMoney: Contract,
-  okuDollar: Contract,
   litePSM: Contract,
-  okuBridge: Contract,
-  bridgeRouter: Contract
+  redemptionQueue: Contract
 ): Promise<void> {
-  logger.step(7, "Verifying Deployment");
+  logger.step(6, "Verifying Deployment");
 
   // Check roles
-  const hasLitePSMMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, await litePSM.getAddress());
-  const hasBridgeMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, await okuBridge.getAddress());
+  const litePSMAddress = await litePSM.getAddress();
+  const queueAddress = await redemptionQueue.getAddress();
+  const hasLitePSMMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, litePSMAddress);
+  const hasQueueMinter = await okuMoney.hasRole(ROLES.OKUM_MINTER, queueAddress);
+  // Cycle 4 (EVM-15): OKUM_BURNER is required for redeem paths.
+  const hasLitePSMBurner = await okuMoney.hasRole(ROLES.OKUM_BURNER, litePSMAddress);
+  const hasQueueBurner = await okuMoney.hasRole(ROLES.OKUM_BURNER, queueAddress);
 
   logger.info(`  LitePSM has OKUM_MINTER: ${hasLitePSMMinter}`);
-  logger.info(`  OkuBridge has OKUM_MINTER: ${hasBridgeMinter}`);
-
-  // Check bridge config
-  const bridgeFee = await okuBridge.bridgeFee();
-  const authorizedSigner = await okuBridge.authorizedSigner();
-  const isPaused = await okuBridge.paused();
-  const solanaCounterpartId = getSolanaCounterpartChainId(evmChainId);
-  const counterpartName = solanaCounterpartId === 103 ? "Devnet" : "Mainnet";
-  const isSolanaSupported = await okuBridge.supportedChains(solanaCounterpartId);
-  const bridgeLimits = await okuBridge.limits();
-
-  logger.info(`  Bridge fee: ${bridgeFee} bps`);
-  logger.info(`  Authorized signer: ${authorizedSigner}`);
-  logger.info(`  Bridge paused: ${isPaused}`);
-  logger.info(`  Solana ${counterpartName} (${solanaCounterpartId}) supported: ${isSolanaSupported}`);
-  logger.info(`  Min bridge: ${ethers.formatUnits(bridgeLimits.min, 18)} OkuM`);
-  logger.info(`  Max bridge: ${ethers.formatUnits(bridgeLimits.max, 18)} OkuM`);
+  logger.info(`  RedemptionQueue has OKUM_MINTER: ${hasQueueMinter}`);
+  logger.info(`  LitePSM has OKUM_BURNER: ${hasLitePSMBurner}`);
+  logger.info(`  RedemptionQueue has OKUM_BURNER: ${hasQueueBurner}`);
+  if (!hasLitePSMBurner || !hasQueueBurner) {
+    logger.warning("  Missing OKUM_BURNER grants — redeem paths will revert!");
+  }
 
   // Verify all addresses saved
   const book = loadAddressBook();
   const contracts = book[bookKey] || {};
-  const expectedContracts = ["MockUSDC", "OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM", "OkuBridge", "OkuBridgeRouter"];
+  // OracleRelay is conditionally deployed (skipped when no Chainlink USDC/USD feed is
+  // configured for the chain), so it is NOT included in the "must exist" list.
+  const expectedContracts = ["MockUSDC", "OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM"];
 
   const missing = expectedContracts.filter(c => !contracts[c]);
   if (missing.length > 0) {
     logger.warning(`  Missing contracts in address book: ${missing.join(", ")}`);
   } else {
     logger.success("  All contracts saved to address book");
+  }
+
+  if (contracts["OracleRelay"]) {
+    logger.success(`  OracleRelay: ${contracts["OracleRelay"]}`);
+  } else {
+    logger.info("  OracleRelay: not deployed (no Chainlink USDC/USD feed configured)");
   }
 }
 
@@ -712,44 +878,41 @@ async function main() {
     config
   );
 
-  // Step 4: Deploy bridge contracts
-  const { okuBridge, bridgeRouter } = await deployBridge(
+  // Step 3b: Deploy OracleRelay (when a Chainlink USDC/USD feed is configured for
+  // this chain). Skipped on chains where the feed address is empty — those
+  // deployments boot with the peg check disabled and rely on later
+  // setOracleRelay(...) to enable it.
+  const relayPriceFeed = (chainConfig as any).chainlinkUsdcUsdFeed ?? "";
+  const oracleRelay = await deployOracleRelay(
     deployer,
     deployerAddress,
     bookKey,
-    await okuMoney.getAddress(),
-    await okuDollar.getAddress(),
-    chainConfig.chainId,
+    relayPriceFeed,
     config
   );
 
-  // Step 5: Configure roles
+  // Step 4: Configure roles
   await configureRoles(
     deployerAddress,
     okuMoney,
     okuDollar,
     redemptionQueue,
     litePSM,
-    okuBridge,
-    bridgeRouter,
+    oracleRelay,
     config
   );
 
-  // Step 6: Configure bridge
-  await configureBridge(okuBridge, chainConfig.chainId, config);
+  // Step 5: (was bridge configuration — removed in noBridge refactor)
 
-  // Step 7: Verify deployment state
+  // Step 6: Verify deployment state
   await verifyDeployment(
     bookKey,
-    chainConfig.chainId,
     okuMoney,
-    okuDollar,
     litePSM,
-    okuBridge,
-    bridgeRouter
+    redemptionQueue
   );
 
-  // Step 8: Etherscan verification (live networks only — never on a fork)
+  // Step 7: Etherscan verification (live networks only — never on a fork)
   if (!isFork) {
     await verifyAllContracts(networkName);
   }
@@ -770,15 +933,8 @@ async function main() {
   if (!isFork) {
     try {
       const metadata = getChainMetadata(networkName);
-      let bridgeChainId: number | undefined;
-      try {
-        bridgeChainId = getBridgeChainId(metadata.chainId);
-      } catch {
-        // Not all chains have a bridge mapping (e.g., certain mainnets pre-support)
-      }
       syncEvmRegistry(networkName, {
         chainId: metadata.chainId,
-        bridgeChainId,
         rpcUrl: metadata.rpcUrl,
         explorer: metadata.explorer,
         contracts: {
@@ -786,8 +942,7 @@ async function main() {
           okuDollar: addresses.OkuDollar,
           litePSM: addresses.LitePSM,
           redemptionQueue: addresses.RedemptionQueue,
-          okuBridge: addresses.OkuBridge,
-          okuBridgeRouter: addresses.OkuBridgeRouter,
+          oracleRelay: addresses.OracleRelay, // optional — may be undefined for chains without a Chainlink USDC/USD feed
           mockUSDC: addresses.MockUSDC,
         },
         deployer: deployerAddress,
@@ -800,7 +955,7 @@ async function main() {
   logger.info("Next steps:");
   logger.info("1. Check the updated testnet-addresses.json at the repo root");
   logger.info("2. Deploy SVM: cd ../SVM/oku-programs && NETWORK=devnet npm run deploy:programs && npm run deploy:init");
-  logger.info("3. Test bridge: npx hardhat run scripts/bridge/bridge-burn-to-solana.ts --network " + networkName);
+  logger.info("3. Test PSM flow: npx hardhat run scripts/test/test-onchain.ts --network " + networkName);
 }
 
 main()

@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {BaseTest} from "../Base.t.sol";
 import {Errors} from "../../src/lib/Errors.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {OkuDollarEvents} from "../../src/lib/events/OkuDollarEvents.sol";
 import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
@@ -167,7 +168,8 @@ contract OkuDollarTest is BaseTest {
         assertEq(okuDollar.usdSharesOf(user2), expectedShares, "Shares should round down");
 
         // Dollar value from shares <= noteValue of tokens deposited (rounding favors vault)
-        uint256 depositedNoteValue = (okuMAmount * okuMoney.okuMMultiplier()) / PRECISION;
+        uint256 depositedNoteValue =
+            Math.mulDiv(okuMAmount, okuMoney.okuMMultiplier(), PRECISION, Math.Rounding.Floor);
         assertLe(
             okuDollar.balanceOf(user2),
             depositedNoteValue,
@@ -226,8 +228,8 @@ contract OkuDollarTest is BaseTest {
         uint256 usdMinted = okuDollar.wrap(okuMAmount, user1, 0);
 
         // sharesToMint = okuMAmount * okuMMult / usdMult; usdMinted = shares * usdMult / PRECISION
-        uint256 sharesToMint = (okuMAmount * okuMMult) / usdMult;
-        uint256 expected = (sharesToMint * usdMult) / PRECISION;
+        uint256 sharesToMint = Math.mulDiv(okuMAmount, okuMMult, usdMult, Math.Rounding.Floor);
+        uint256 expected = Math.mulDiv(sharesToMint, usdMult, PRECISION, Math.Rounding.Floor);
         assertEq(usdMinted, expected);
     }
 
@@ -300,6 +302,24 @@ contract OkuDollarTest is BaseTest {
         okuDollar.unwrap(okuMAmount, address(0));
     }
 
+    /// @dev Post-cycle-4 D2 fix: `unwrap` now mirrors `wrap`'s receiver check
+    ///      so a user blacklisted only on OkuDollar cannot route OkuMoney to
+    ///      a third-party recipient via `unwrap(amount, victimAddr)`. The
+    ///      OkuMoney-side `_update` blacklist check is still independent;
+    ///      this assertion closes the cross-token consistency hole.
+    function test_Unwrap_RevertsOnBlacklistedReceiver() public {
+        uint256 okuMAmount = 100e18;
+        _mintUsdOku(user1, okuMAmount);
+
+        // Blacklist user2 only on OkuDollar (not on OkuMoney).
+        vm.prank(blacklister);
+        okuDollar.blacklist(user2);
+
+        vm.prank(user1);
+        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        okuDollar.unwrap(okuMAmount, user2);
+    }
+
     // ============ Unwrap Rounding Tests ============
 
     function test_Unwrap_SharesBurnedRoundUp_FavorsVault() public {
@@ -323,13 +343,13 @@ contract OkuDollarTest is BaseTest {
 
         // Direct ceiling-division assertion — this is the actual invariant the vault
         // relies on (vault always rounds shares burned UP to favour itself).
-        uint256 expectedSharesCeil = (usdAmount * PRECISION + mult - 1) / mult;
+        uint256 expectedSharesCeil = Math.mulDiv(usdAmount, PRECISION, mult, Math.Rounding.Ceil);
         assertEq(sharesBurned, expectedSharesCeil, "must burn ceil(usdAmount * 1e18 / mult) shares");
 
         // The dollar value of the shares burned must equal-or-exceed the requested
         // usdAmount. This is what "favors the vault" actually means — the user can
         // never extract more dollars than they burn shares for.
-        uint256 dollarValueBurned = (sharesBurned * mult) / PRECISION;
+        uint256 dollarValueBurned = Math.mulDiv(sharesBurned, mult, PRECISION, Math.Rounding.Floor);
         assertGe(dollarValueBurned, usdAmount, "vault must not be drained by rounding");
     }
 
@@ -349,7 +369,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(user1);
         uint256 okuMReturned = okuDollar.unwrap(100e18, user1);
 
-        uint256 expected = (100e18 * PRECISION) / 105e16;
+        uint256 expected = Math.mulDiv(100e18, PRECISION, 105e16, Math.Rounding.Floor);
         assertEq(okuMReturned, expected);
         // Notes returned should be less than 100 (each note is worth more now)
         assertLt(okuMReturned, 100e18, "Should return fewer notes since each note is worth more");
@@ -487,7 +507,7 @@ contract OkuDollarTest is BaseTest {
         uint256 notesBack = okuDollar.unwrap(66e18, user1);
 
         // Expected = usdAmount × PRECISION / okuMMultiplier = 66e18 × 1e18 / 1e18 = 66e18
-        uint256 expected = (66e18 * PRECISION) / PRECISION;
+        uint256 expected = Math.mulDiv(66e18, PRECISION, PRECISION, Math.Rounding.Floor);
         assertEq(notesBack, expected);
     }
 
@@ -506,7 +526,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(user1);
         uint256 notesBack = okuDollar.unwrap(100e18, user1);
 
-        uint256 expected = (100e18 * PRECISION) / ((PRECISION * 3) / 2);
+        uint256 expected = Math.mulDiv(100e18, PRECISION, (PRECISION * 3) / 2, Math.Rounding.Floor);
         assertEq(notesBack, expected);
         // Fewer notes returned, but each note is worth more dollars
         assertLt(notesBack, 100e18, "Should return fewer notes at higher note price");
@@ -586,7 +606,9 @@ contract OkuDollarTest is BaseTest {
 
         // _elevateUsdMultiplier may overshoot the target slightly; compute expected
         // balance from the achieved multiplier and the user's share count.
-        uint256 expected = (okuDollar.usdSharesOf(user1) * okuDollar.usdMultiplier()) / PRECISION;
+        uint256 expected = Math.mulDiv(
+            okuDollar.usdSharesOf(user1), okuDollar.usdMultiplier(), PRECISION, Math.Rounding.Floor
+        );
         assertEq(okuDollar.balanceOf(user1), expected);
         assertGe(okuDollar.balanceOf(user1), 200e18);
     }
@@ -598,7 +620,9 @@ contract OkuDollarTest is BaseTest {
 
         _elevateUsdMultiplier(PRECISION * 2);
 
-        uint256 expected = (okuDollar.totalUsdShares() * okuDollar.usdMultiplier()) / PRECISION;
+        uint256 expected = Math.mulDiv(
+            okuDollar.totalUsdShares(), okuDollar.usdMultiplier(), PRECISION, Math.Rounding.Floor
+        );
         assertEq(okuDollar.totalSupply(), expected);
         assertGe(okuDollar.totalSupply(), 200e18);
     }
@@ -804,15 +828,18 @@ contract OkuDollarTest is BaseTest {
         _approveOkuMoney(reserveManager, address(okuDollar), 50e18);
 
         uint256 mult = okuMoney.okuMMultiplier();
-        uint256 dollarValue = (50e18 * mult) / PRECISION;
+        uint256 dollarValue = Math.mulDiv(50e18, mult, PRECISION, Math.Rounding.Floor);
 
         // Pre-compute the expected post-deposit collateralization ratio:
         //   reservesAfter = totalReserves + 50e18
         //   reservesDollarValueAfter = reservesAfter * mult / PRECISION
         //   ratio = reservesDollarValueAfter * PRECISION / totalSupply
         uint256 reservesAfter = okuDollar.totalOkuMReserves() + 50e18;
-        uint256 reservesDollarValueAfter = (reservesAfter * mult) / PRECISION;
-        uint256 expectedRatio = (reservesDollarValueAfter * PRECISION) / okuDollar.totalSupply();
+        uint256 reservesDollarValueAfter =
+            Math.mulDiv(reservesAfter, mult, PRECISION, Math.Rounding.Floor);
+        uint256 expectedRatio = Math.mulDiv(
+            reservesDollarValueAfter, PRECISION, okuDollar.totalSupply(), Math.Rounding.Floor
+        );
 
         vm.expectEmit(true, false, false, true, address(okuDollar));
         emit OkuDollarEvents.ReservesDeposited(reserveManager, 50e18, dollarValue, expectedRatio);
@@ -1069,7 +1096,8 @@ contract OkuDollarTest is BaseTest {
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier((PRECISION * 3) / 2);
 
-        uint256 expectedSurplus = (50e18 * PRECISION) / ((PRECISION * 3) / 2);
+        uint256 expectedSurplus =
+            Math.mulDiv(50e18, PRECISION, (PRECISION * 3) / 2, Math.Rounding.Floor);
         assertEq(okuDollar.surplus(), expectedSurplus);
         assertGt(okuDollar.surplus(), 0, "Note price increase should create surplus");
     }
@@ -1284,7 +1312,9 @@ contract OkuDollarTest is BaseTest {
         // Multiplier elevated -> balanceOf grows, shares unchanged.
         _elevateUsdMultiplier(PRECISION * 2);
 
-        uint256 expected = (okuDollar.usdSharesOf(user1) * okuDollar.usdMultiplier()) / PRECISION;
+        uint256 expected = Math.mulDiv(
+            okuDollar.usdSharesOf(user1), okuDollar.usdMultiplier(), PRECISION, Math.Rounding.Floor
+        );
         assertEq(okuDollar.balanceOf(user1), expected);
         assertGe(okuDollar.balanceOf(user1), 200e18);
         assertEq(okuDollar.usdSharesOf(user1), 100e18);
@@ -1581,7 +1611,8 @@ contract OkuDollarTest is BaseTest {
 
         // Share movement should be `transferAmt * PRECISION / multiplier`; per-side
         // balances should approximate `transferAmt` (1 wei tolerance for share rounding).
-        uint256 expectedShares = (transferAmt * PRECISION) / okuDollar.usdMultiplier();
+        uint256 expectedShares =
+            Math.mulDiv(transferAmt, PRECISION, okuDollar.usdMultiplier(), Math.Rounding.Floor);
         assertEq(okuDollar.usdSharesOf(user1), 100e18 - expectedShares);
         assertEq(okuDollar.usdSharesOf(user2), expectedShares);
         assertApproxEqAbs(okuDollar.balanceOf(user2), transferAmt, 1);
@@ -1673,9 +1704,9 @@ contract OkuDollarTest is BaseTest {
     // ============ Fuzz Round-Trip Tests ============
 
     function testFuzz_WrapUnwrap_RoundTrip(uint256 mult) public {
-        // Test wrap/unwrap at base multiplier=1e18 but varying okuMMultiplier
-        // This tests the multiplier-aware conversion without hitting collateralization issues
-        mult = bound(mult, PRECISION, 5e18);
+        // Test wrap/unwrap at base multiplier=1e18 but varying okuMMultiplier.
+        // `setOkuMMultiplier` requires strict increase, so bound starts above PRECISION.
+        mult = bound(mult, PRECISION + 1, 5e18);
 
         // Only set okuMMultiplier (not multiplier) to avoid collateralization issues
         _setOkuMMultiplierAndRoll(mult);
@@ -1696,13 +1727,14 @@ contract OkuDollarTest is BaseTest {
 
         uint256 finalNotes = okuMoney.balanceOf(user1);
         // Price-aware wrap/unwrap has multiple division steps, each losing up to 1 wei
-        uint256 maxLoss = (5 * mult + PRECISION - 1) / PRECISION + 5;
+        uint256 maxLoss = Math.mulDiv(5, mult, PRECISION, Math.Rounding.Ceil) + 5;
         assertApproxEqAbs(finalNotes, okuMAmount, maxLoss, "Round trip rounding loss within bounds");
         assertLe(finalNotes, okuMAmount, "Must not gain from round trip");
     }
 
     function testFuzz_WrapUnwrap_RoundTrip_WithNotePrice(uint256 price) public {
-        price = bound(price, PRECISION, 3e18); // $1.00 to $3.00
+        // Strict increase required by setOkuMMultiplier.
+        price = bound(price, PRECISION + 1, 3e18);
 
         _setOkuMMultiplierAndRoll(price);
 
@@ -1725,9 +1757,9 @@ contract OkuDollarTest is BaseTest {
     }
 
     function testFuzz_WrapUnwrap_RoundTrip_BothPriceAndMult(uint256 price) public {
-        // Test wrap/unwrap when price varies but multiplier stays at base (1e18)
-        // This is a common scenario where okuMMultiplier appreciates but OkuDollar multiplier hasn't changed yet
-        price = bound(price, PRECISION, 3e18); // $1.00 to $3.00
+        // Test wrap/unwrap when price varies but multiplier stays at base (1e18).
+        // Strict increase required by setOkuMMultiplier.
+        price = bound(price, PRECISION + 1, 3e18);
         // Keep mult at base - this ensures vault stays solvent (price >= mult means overcollateralized)
         uint256 mult = PRECISION;
 
@@ -1751,8 +1783,8 @@ contract OkuDollarTest is BaseTest {
         uint256 finalNotes = okuMoney.balanceOf(user1);
         // When price >= mult, round trip should return ≈ okuMAmount (within rounding)
         // Loss bounded by combined rounding effects
-        uint256 maxLoss =
-            (5 * mult + PRECISION - 1) / PRECISION + (5 * price + PRECISION - 1) / PRECISION + 10;
+        uint256 maxLoss = Math.mulDiv(5, mult, PRECISION, Math.Rounding.Ceil)
+            + Math.mulDiv(5, price, PRECISION, Math.Rounding.Ceil) + 10;
         assertApproxEqAbs(finalNotes, okuMAmount, maxLoss, "Round trip rounding loss within bounds");
         assertLe(finalNotes, okuMAmount, "Must not gain from round trip");
     }
@@ -1868,5 +1900,365 @@ contract OkuDollarTest is BaseTest {
         okuDollar.transfer(user2, 50e18);
 
         assertGt(okuDollar.balanceOf(user2), 0);
+    }
+
+    // ============ WS3 Additional Tests ============
+
+    // ---- WS3.1.a: zero-supply setUsdYieldRate ----
+
+    /// @notice setUsdYieldRate when totalUsdShares == 0 should succeed
+    ///         (unlike OkuMoney.distributeYield which rejects ZeroSupply).
+    ///         The rate is stored and will accrue when wrap() is called later.
+    function test_SetUsdYieldRate_WorksWithZeroSupply() public {
+        assertEq(okuDollar.totalSupply(), 0);
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(MAX_RATE, 0);
+        assertGt(okuDollar.usdRatePerSecond(), PRECISION);
+    }
+
+    /// @notice Verify that a non-zero rate accrues correctly after supply is added.
+    function test_SetUsdYieldRate_AccruesAfterSubsequentWrap() public {
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(MAX_RATE, 0);
+        vm.warp(block.timestamp + 1 days);
+
+        _mintOkuMoney(user1, 100e18);
+        _approveOkuMoney(user1, address(okuDollar), 100e18);
+        vm.prank(user1);
+        uint256 usdMinted = okuDollar.wrap(100e18, user1, 0);
+
+        // Rate accrued before wrap — usdMultiplier > 1e18
+        assertGt(okuDollar.usdMultiplier(), PRECISION);
+        // Dollar-adjusted balance > raw wrap amount
+        assertGt(okuDollar.balanceOf(user1), 0);
+        assertEq(usdMinted, okuDollar.balanceOf(user1));
+    }
+
+    // ---- WS3.1.c: reinit guard on OkuDollar ----
+
+    function test_Initialize_CannotReinitialize() public {
+        vm.expectRevert();
+        okuDollar.initialize(address(okuMoney), "OkuDollar", "usdOku", admin, 95e16);
+    }
+
+    // ---- WS3.1.d: OkuDollar UUPS upgrade authorization ----
+
+    function test_UUPS_Upgrade_RevertsForNonUpgrader() public {
+        OkuDollar newImpl = new OkuDollar();
+        vm.expectRevert();
+        vm.prank(user1);
+        okuDollar.upgradeToAndCall(address(newImpl), "");
+    }
+
+    function test_UUPS_Upgrade_SucceedsForUpgrader() public {
+        OkuDollar newImpl = new OkuDollar();
+        vm.prank(admin);
+        okuDollar.upgradeToAndCall(address(newImpl), "");
+        // State preserved through upgrade
+        assertEq(okuDollar.minCollateralRatio(), 95e16);
+    }
+
+    // ---- WS3.1.f: pause for depositReserves / withdrawSurplus ----
+
+    function test_Pause_BlocksDepositReserves() public {
+        vm.prank(vaultPauser);
+        okuDollar.pause();
+
+        _mintOkuMoney(reserveManager, 100e18);
+        _approveOkuMoney(reserveManager, address(okuDollar), 100e18);
+        vm.expectRevert();
+        vm.prank(reserveManager);
+        okuDollar.depositReserves(100e18);
+    }
+
+    function test_Pause_BlocksWithdrawSurplus() public {
+        // First create surplus
+        _mintOkuMoney(reserveManager, 200e18);
+        _approveOkuMoney(reserveManager, address(okuDollar), 200e18);
+        vm.prank(reserveManager);
+        okuDollar.depositReserves(200e18);
+
+        vm.prank(vaultPauser);
+        okuDollar.pause();
+
+        vm.expectRevert();
+        vm.prank(reserveManager);
+        okuDollar.withdrawSurplus(10e18);
+    }
+
+    function test_Unpause_AllowsDepositReservesAgain() public {
+        vm.prank(vaultPauser);
+        okuDollar.pause();
+        vm.prank(vaultUnpauser);
+        okuDollar.unpause();
+
+        _mintOkuMoney(reserveManager, 100e18);
+        _approveOkuMoney(reserveManager, address(okuDollar), 100e18);
+        vm.prank(reserveManager);
+        okuDollar.depositReserves(100e18); // should not revert
+    }
+
+    // ---- WS3.1.j: OkuDollar blacklist ----
+
+    function test_Blacklist_BlocksWrapSender() public {
+        _mintOkuMoney(user1, 100e18);
+        _approveOkuMoney(user1, address(okuDollar), 100e18);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+
+        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.prank(user1);
+        okuDollar.wrap(100e18, user1, 0);
+    }
+
+    function test_Blacklist_BlocksWrapReceiver() public {
+        _mintOkuMoney(user2, 100e18);
+        _approveOkuMoney(user2, address(okuDollar), 100e18);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1); // blacklist receiver, not sender
+
+        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        vm.prank(user2);
+        okuDollar.wrap(100e18, user1, 0); // receiver is blacklisted
+    }
+
+    function test_Blacklist_BlocksUnwrapSender() public {
+        _mintUsdOku(user1, 100e18);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+
+        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.prank(user1);
+        okuDollar.unwrap(50e18, user1);
+    }
+
+    function test_Blacklist_BlocksTransferSender() public {
+        _mintUsdOku(user1, 100e18);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+
+        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.prank(user1);
+        okuDollar.transfer(user2, 50e18);
+    }
+
+    function test_Blacklist_BlocksTransferReceiver() public {
+        _mintUsdOku(user1, 100e18);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user2);
+
+        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        vm.prank(user1);
+        okuDollar.transfer(user2, 50e18);
+    }
+
+    function test_Blacklist_PermitBlocksBlacklistedOwner() public {
+        _mintUsdOku(user1, 100e18);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+
+        // Permit with blacklisted owner should revert
+        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        okuDollar.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
+    }
+
+    function test_Blacklist_UnblacklistRestoresAccess() public {
+        _mintUsdOku(user1, 100e18);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+        vm.prank(unblacklister);
+        okuDollar.unblacklist(user1);
+
+        // Should work again after unblacklist
+        vm.prank(user1);
+        okuDollar.transfer(user2, 50e18);
+        assertGt(okuDollar.balanceOf(user2), 0);
+    }
+
+    function test_Blacklist_IsBlacklistedView() public {
+        assertFalse(okuDollar.isBlacklisted(user1));
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+        assertTrue(okuDollar.isBlacklisted(user1));
+        vm.prank(unblacklister);
+        okuDollar.unblacklist(user1);
+        assertFalse(okuDollar.isBlacklisted(user1));
+    }
+
+    function test_Blacklist_RevertAlreadyBlacklisted() public {
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+        vm.expectRevert(OkuDollar.AlreadyBlacklisted.selector);
+        vm.prank(blacklister);
+        okuDollar.blacklist(user1);
+    }
+
+    function test_Blacklist_RevertNotBlacklisted() public {
+        vm.expectRevert(OkuDollar.NotBlacklisted.selector);
+        vm.prank(unblacklister);
+        okuDollar.unblacklist(user1);
+    }
+
+    // ---- WS3.1.j: withdrawSurplus yield-lock guard (new from WS1.3) ----
+
+    function test_WithdrawSurplus_BlockedDuringYieldDistribution() public {
+        // Setup surplus: deposit reserves without minting shares
+        _mintOkuMoney(reserveManager, 200e18);
+        _approveOkuMoney(reserveManager, address(okuDollar), 200e18);
+        vm.prank(reserveManager);
+        okuDollar.depositReserves(200e18);
+
+        // Distribute yield to stamp lastYieldDistributionBlock
+        _mintOkuMoney(user1, 100e18);
+        vm.prank(rebaser);
+        okuMoney.distributeYield(10e18);
+
+        // Same block: withdrawSurplus should be blocked by yield lock
+        vm.expectRevert(YieldSandwichGuard.YieldDistributionInProgress.selector);
+        vm.prank(reserveManager);
+        okuDollar.withdrawSurplus(10e18);
+    }
+
+    // ============ withdrawSurplus Boundary / postRatio Math ============
+    //
+    // Companion to `test_WithdrawSurplus_SucceedsAtExactFloor` which pins the
+    // inclusive postRatio == minCollateralRatio success case. Below we drive:
+    //   * postRatio == minCollateralRatio - 1 wei -> revert (strict-less branch).
+    //   * obligations == 0 -> postRatio set to type(uint256).max (always passes).
+
+    /// @notice One wei past the exact-floor case must revert with
+    ///         BelowMinimumCollateral. Pairs with SucceedsAtExactFloor above.
+    function test_WithdrawSurplus_OneWeiBelowFloor_Reverts() public {
+        _mintUsdOku(user1, 100e18);
+
+        // Reserves = 110 notes, obligations = 100 OkuDollar (multiplier 1e18).
+        _mintOkuMoney(reserveManager, 10e18);
+        _approveOkuMoney(reserveManager, address(okuDollar), 10e18);
+        vm.prank(reserveManager);
+        okuDollar.depositReserves(10e18);
+
+        // 15e18 leaves 95e18 reserves -> exact 95% floor (passes).
+        // 15e18 + 1 leaves (95e18 - 1) wei reserves; postRatio falls below floor
+        // by exactly one PRECISION-scaled unit. Must revert.
+        vm.prank(reserveManager);
+        vm.expectRevert(OkuDollar.BelowMinimumCollateral.selector);
+        okuDollar.withdrawSurplus(15e18 + 1);
+    }
+
+    /// @notice obligations == 0 takes the `type(uint256).max` postRatio branch.
+    ///         With no UsdOku in circulation, withdrawSurplus must succeed
+    ///         regardless of reserves (no UsdOku holders to protect).
+    function test_WithdrawSurplus_ZeroObligations_UsesInfiniteRatio() public {
+        // Fund reserves but mint NO UsdOku.
+        _mintOkuMoney(reserveManager, 100e18);
+        _approveOkuMoney(reserveManager, address(okuDollar), 100e18);
+        vm.prank(reserveManager);
+        okuDollar.depositReserves(100e18);
+
+        assertEq(okuDollar.totalUsdObligations(), 0);
+        assertEq(okuDollar.collateralizationRatio(), type(uint256).max);
+
+        uint256 reservesBefore = okuDollar.totalOkuMReserves();
+        vm.prank(reserveManager);
+        okuDollar.withdrawSurplus(reservesBefore); // drain everything
+
+        assertEq(okuDollar.totalOkuMReserves(), 0);
+    }
+
+    /// @notice Companion: post-withdrawal ratio reflects the live
+    ///         `collateralizationRatio()` view exactly.
+    function test_WithdrawSurplus_EventPostRatioMatchesView() public {
+        // _mintUsdOku wraps 100 OkuM -> 100 reserves + 100 obligations.
+        _mintUsdOku(user1, 100e18);
+        // Add 50 reserves more: total 150 reserves, 100 obligations -> 150% ratio.
+        _mintOkuMoney(reserveManager, 50e18);
+        _approveOkuMoney(reserveManager, address(okuDollar), 50e18);
+        vm.prank(reserveManager);
+        okuDollar.depositReserves(50e18);
+        assertEq(okuDollar.collateralizationRatio(), 150e16);
+
+        vm.prank(reserveManager);
+        okuDollar.withdrawSurplus(20e18);
+
+        // Reserves: 150 -> 130; obligations: 100; ratio = 130%.
+        assertEq(okuDollar.collateralizationRatio(), 130e16);
+    }
+
+    // ============ setNextUsdYieldRate Boundary Tests ============
+
+    /// @notice `block.timestamp == usdRateEnd` must revert (closed inequality:
+    ///         the production check is `>= usdRateEnd`).
+    function test_SetNextUsdYieldRate_RevertAtExactEndBoundary() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(PRECISION + 1393e6, endTime);
+
+        // Warp to exactly endTime — the inequality is `>=`, so this reverts.
+        vm.warp(endTime);
+
+        vm.prank(usdRebaser);
+        vm.expectRevert(OkuDollar.RateAlreadyExpired.selector);
+        okuDollar.setNextUsdYieldRate(PRECISION + 2000e6);
+    }
+
+    /// @notice One second past `usdRateEnd` must revert.
+    function test_SetNextUsdYieldRate_RevertOneSecondPastEnd() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(PRECISION + 1393e6, endTime);
+
+        vm.warp(endTime + 1);
+
+        vm.prank(usdRebaser);
+        vm.expectRevert(OkuDollar.RateAlreadyExpired.selector);
+        okuDollar.setNextUsdYieldRate(PRECISION + 2000e6);
+    }
+
+    /// @notice One second before `usdRateEnd` must succeed (open boundary).
+    function test_SetNextUsdYieldRate_SucceedsOneSecondBeforeEnd() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(PRECISION + 1393e6, endTime);
+
+        vm.warp(endTime - 1);
+
+        uint256 nextRate = PRECISION + 2000e6;
+        vm.prank(usdRebaser);
+        okuDollar.setNextUsdYieldRate(nextRate);
+        assertEq(okuDollar.usdPendingRatePerSecond(), nextRate);
+    }
+
+    /// @notice `RateTooHigh` boundary for `setNextUsdYieldRate` (companion to
+    ///         the existing `setUsdYieldRate` RateTooHigh test).
+    function test_SetNextUsdYieldRate_RevertsOnRateTooHigh() public {
+        uint256 endTime = block.timestamp + 30 days;
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(PRECISION + 1393e6, endTime);
+
+        vm.prank(usdRebaser);
+        vm.expectRevert(OkuDollar.RateTooHigh.selector);
+        okuDollar.setNextUsdYieldRate(MAX_RATE + 1);
+    }
+
+    // ============ Permit Blacklist Spender Branch ============
+
+    function test_Permit_RevertBlacklistedSpender() public {
+        _mintUsdOku(user1, 100e18);
+        // user1 is the (clean) owner; blacklist the spender (user2).
+        vm.prank(blacklister);
+        okuDollar.blacklist(user2);
+
+        // Permit signature is bogus — call must revert before signature check.
+        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        okuDollar.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
+    }
+
+    // ============ View Getter Tests ============
+
+    function test_View_UsdLastAccrualTime() public {
+        // Calling setUsdYieldRate stamps usdLastAccrualTime = block.timestamp.
+        vm.prank(usdRebaser);
+        okuDollar.setUsdYieldRate(PRECISION + 1e9, 0);
+        assertEq(okuDollar.usdLastAccrualTime(), block.timestamp);
     }
 }

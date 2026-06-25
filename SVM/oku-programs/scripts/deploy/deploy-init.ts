@@ -28,10 +28,7 @@ import {
   deployTokens,
   initializePsm,
   initializeVault,
-  initializeRouter,
   verifyDeployment,
-  initializeBlacklistExemptIfNeeded,
-  setupRouterAltIfMissing,
 } from './lib';
 
 // ============================================================================
@@ -70,13 +67,11 @@ async function main() {
   const programIds = {
     litePsm: new PublicKey(existingDeployment.programs.litePsm),
     okuDollar: new PublicKey(existingDeployment.programs.okuDollarProgram),
-    okuBridgeRouter: new PublicKey(existingDeployment.programs.okuBridgeRouter),
   };
 
   logger.info('Found deployed programs:');
   logger.info(`  lite_psm: ${programIds.litePsm.toBase58()}`);
   logger.info(`  oku_dollar: ${programIds.okuDollar.toBase58()}`);
-  logger.info(`  oku_bridge_router: ${programIds.okuBridgeRouter.toBase58()}`);
   logger.log('');
 
   // Create provider
@@ -109,7 +104,6 @@ async function main() {
   const {
     psmConfig,
     redemptionQueue,
-    bridgeConfig,
     vaultUsdc: psmVaultUsdc,
     vaultOkuMoney: psmOkuMoneyEscrow,
   } = await initializePsm(
@@ -134,20 +128,6 @@ async function main() {
   );
   logger.log('');
 
-  // Initialize Router. Pass the PSM + OkuDollar program IDs so the router
-  // can cross-check the supplied mints against the canonical mints stored
-  // in the PSM/vault configs (see `initializeRouter` doc).
-  const { routerConfig } = await initializeRouter(
-    provider,
-    programIds.okuBridgeRouter,
-    programIds.litePsm,
-    programIds.okuDollar,
-    okuMoneyMint,
-    usdOkuMint,
-    authorities
-  );
-  logger.log('');
-
   // Save complete deployment
   const deployment: DeploymentAddresses = {
     network,
@@ -161,13 +141,10 @@ async function main() {
     pdas: {
       psmConfig: psmConfig.toBase58(),
       redemptionQueue: redemptionQueue.toBase58(),
-      bridgeConfig: bridgeConfig.toBase58(),
       vaultConfig: vaultConfig.toBase58(),
-      routerConfig: routerConfig.toBase58(),
       // PSM-owned ATAs (created by `initialize()` / `setup_oku_money_escrow()`).
-      // Both are referenced by `admin:setup-router-alt` and admin/bridge
-      // scripts; persist them rather than re-deriving from mint+config at
-      // every call site.
+      // Persisted so admin/test scripts can read them without re-deriving
+      // from mint+config at every call site.
       psmVaultUsdc: psmVaultUsdc.toBase58(),
       psmOkuMoneyEscrow: psmOkuMoneyEscrow.toBase58(),
       // Vault-owned OkuMoney reserve ATA, returned by `initializeVault`
@@ -179,53 +156,13 @@ async function main() {
     authorities: {
       coldMultisig: authorities.psm.roleAdmin.toBase58(),
       warmMultisig: authorities.psm.pauser.toBase58(),
-      orchestrator: authorities.bridge.orchestratorSigner.toBase58(),
-      feeRecipient: authorities.bridge.feeRecipient.toBase58(),
+      orchestrator: authorities.psm.rebaser.toBase58(),
     },
   };
 
   saveDeployment(network, deployment);
 
-  // -----------------------------------------------------------------
-  // Post-init lockdown (idempotent — safe to re-run, no-ops on second
-  // pass). Previously documented as "run these admin scripts after
-  // deploy:init", which was easy to miss. Wiring them here removes the
-  // human-error surface.
-  // -----------------------------------------------------------------
-
-  // Step 1: lock down `PsmConfig.blacklist_exempt_{bridge,router}` so
-  // `freeze_account` cannot brick the bridge or router PDAs. One-shot
-  // on-chain; the helper skips if already initialised.
-  try {
-    await initializeBlacklistExemptIfNeeded(
-      provider,
-      programIds.litePsm,
-      programIds.okuBridgeRouter
-    );
-  } catch (err: any) {
-    logger.warning(
-      `Blacklist-exempt initialization failed (non-fatal): ${err.message}. ` +
-        `Re-run manually with: npm run admin:blacklist-exempt`
-    );
-  }
-  logger.log('');
-
-  // Step 2: create the router Address Lookup Table so `mint_usd_oku`
-  // and `redeem_usd_oku` fit under the v0 tx-size ceiling. The helper
-  // skips if the ALT is already recorded in the deployment file AND
-  // alive on chain.
-  try {
-    await setupRouterAltIfMissing(provider, network);
-  } catch (err: any) {
-    logger.warning(
-      `Router ALT setup failed (non-fatal): ${err.message}. ` +
-        `Re-run manually with: npm run admin:setup-router-alt`
-    );
-  }
-  logger.log('');
-
-  // Mirror into the repo-root testnet-addresses.json registry (non-localnet only)
-  // — runs AFTER post-init so the registry captures the ALT too.
+  // Mirror into the repo-root testnet-addresses.json registry (non-localnet only).
   if (network !== 'localnet') {
     try {
       const finalDeployment = loadDeployment(network)!;

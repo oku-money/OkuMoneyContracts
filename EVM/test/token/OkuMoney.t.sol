@@ -20,9 +20,19 @@ contract OkuMoneyTest is BaseTest {
     // ============ Events ============
 
     event Transfer(address indexed from, address indexed to, uint256 value);
-    event OkuMMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply);
+    // Cycle 4 (EVM-01): both events now include `indexed blockNumber`.
+    event OkuMMultiplierUpdated(
+        uint256 oldMultiplier,
+        uint256 newMultiplier,
+        uint256 totalSupply,
+        uint256 indexed blockNumber
+    );
     event YieldDistributed(
-        uint256 yieldAmount, uint256 oldPrice, uint256 newPrice, uint256 totalSupply
+        uint256 yieldAmount,
+        uint256 oldPrice,
+        uint256 newPrice,
+        uint256 totalSupply,
+        uint256 indexed blockNumber
     );
     event MinterAllowanceUpdated(
         address indexed minter, uint256 oldAllowance, uint256 newAllowance
@@ -161,13 +171,17 @@ contract OkuMoneyTest is BaseTest {
 
     // ============ Burning Tests ============
 
-    function test_Burn_OnlyMinterRole() public {
+    function test_Burn_OnlyBurnerRole() public {
         _mintOkuMoney(user1, 100e18);
 
         vm.prank(user1);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, OKUM_MINTER
+                // Cycle 4 (EVM-15): burn requires OKUM_BURNER (split
+                // from OKUM_MINTER). user1 holds neither.
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                OKUM_BURNER
             )
         );
         okuMoney.burn(50e18);
@@ -464,27 +478,37 @@ contract OkuMoneyTest is BaseTest {
     }
 
     function test_SetOkuMMultiplier_EmitsEvent() public {
-        vm.expectEmit(false, false, false, true);
-        emit OkuMMultiplierUpdated(PRECISION, PRECISION * 2, okuMoney.totalSupply());
+        // Cycle 4 (EVM-01): event payload now includes the indexed
+        // `blockNumber` field for subgraph sharding.
+        vm.expectEmit(true, false, false, true);
+        emit OkuMMultiplierUpdated(PRECISION, PRECISION * 2, okuMoney.totalSupply(), block.number);
 
         vm.prank(rebaser);
         okuMoney.setOkuMMultiplier(PRECISION * 2);
     }
 
-    function test_SetOkuMMultiplier_SameValueStillEmitsEvent() public {
-        // Setting the multiplier to its current value is a no-op for the multiplier
-        // but should still emit OkuMMultiplierUpdated so off-chain observers see the
-        // operator action (and lastYieldDistributionBlock advances).
+    function test_SetOkuMMultiplier_RevertsOnEqualValue() public {
+        // Setting the multiplier to its current value is a no-op for the value but
+        // would otherwise stamp `lastYieldDistributionBlock` and burn a sandwich-lock
+        // slot for nothing. {setOkuMMultiplier} requires strict increase.
         uint256 currentPrice = okuMoney.okuMMultiplier();
 
-        vm.expectEmit(false, false, false, true, address(okuMoney));
-        emit OkuMMultiplierUpdated(currentPrice, currentPrice, okuMoney.totalSupply());
+        vm.prank(rebaser);
+        vm.expectRevert(Errors.MultiplierCannotDecrease.selector);
+        okuMoney.setOkuMMultiplier(currentPrice);
+    }
+
+    /// @dev Post-cycle-4: yield-state setters must freeze with the rest of the
+    ///      contract while paused. Rate-config setters on OkuDollar remain
+    ///      available while paused (operators need to be able to zero accrual
+    ///      mid-pause); rate-effect setters like this one must not run.
+    function test_SetOkuMMultiplier_RevertsWhenPaused() public {
+        vm.prank(pauser);
+        okuMoney.pause();
 
         vm.prank(rebaser);
-        okuMoney.setOkuMMultiplier(currentPrice);
-
-        assertEq(okuMoney.okuMMultiplier(), currentPrice);
-        assertEq(okuMoney.lastYieldDistributionBlock(), block.number);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        okuMoney.setOkuMMultiplier(PRECISION * 2);
     }
 
     // ============ distributeYield Tests ============
@@ -522,6 +546,19 @@ contract OkuMoneyTest is BaseTest {
         okuMoney.distributeYield(1000e18);
     }
 
+    /// @dev Sibling of test_SetOkuMMultiplier_RevertsWhenPaused. See that test's
+    ///      NatSpec for the rationale.
+    function test_DistributeYield_RevertsWhenPaused() public {
+        _mintOkuMoney(user1, 10_000e18);
+
+        vm.prank(pauser);
+        okuMoney.pause();
+
+        vm.prank(rebaser);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        okuMoney.distributeYield(1000e18);
+    }
+
     function test_DistributeYield_EmitsEvent() public {
         uint256 supply = 10_000e18;
         _mintOkuMoney(user1, supply);
@@ -530,8 +567,10 @@ contract OkuMoneyTest is BaseTest {
         uint256 expectedOldPrice = PRECISION;
         uint256 expectedNewPrice = PRECISION + 0.1e18;
 
-        vm.expectEmit(false, false, false, true);
-        emit YieldDistributed(yieldAmount, expectedOldPrice, expectedNewPrice, supply);
+        // Cycle 4 (EVM-01): event payload now includes the indexed
+        // `blockNumber` field.
+        vm.expectEmit(true, false, false, true);
+        emit YieldDistributed(yieldAmount, expectedOldPrice, expectedNewPrice, supply, block.number);
 
         vm.prank(rebaser);
         okuMoney.distributeYield(yieldAmount);
@@ -1202,5 +1241,45 @@ contract OkuMoneyTest is BaseTest {
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPk, digest);
         okuMoney.permit(owner, spender, value, deadline, v, r, s);
+    }
+
+    // ============ Permit Blacklist Guards ============
+    //
+    // OkuMoney.permit blocks blacklisted owners and spenders before delegating
+    // to OZ's ERC20Permit. Both branches are exercised below.
+
+    function test_Permit_RevertBlacklistedOwner() public {
+        vm.prank(blacklister);
+        okuMoney.blacklist(user1);
+
+        // Bogus signature is fine — call must revert before signature check.
+        vm.expectRevert(OkuMoney.SenderBlacklisted.selector);
+        okuMoney.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
+    }
+
+    function test_Permit_RevertBlacklistedSpender() public {
+        // Owner is clean; blacklist the spender.
+        vm.prank(blacklister);
+        okuMoney.blacklist(user2);
+
+        vm.expectRevert(OkuMoney.RecipientBlacklisted.selector);
+        okuMoney.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
+    }
+
+    // ============ AlreadyBlacklisted Guard ============
+
+    function test_Blacklist_RevertsOnDoubleBlacklist() public {
+        vm.prank(blacklister);
+        okuMoney.blacklist(user1);
+
+        vm.prank(blacklister);
+        vm.expectRevert(OkuMoney.AlreadyBlacklisted.selector);
+        okuMoney.blacklist(user1);
+    }
+
+    function test_Unblacklist_RevertsOnNotBlacklisted() public {
+        vm.prank(unblacklister);
+        vm.expectRevert(OkuMoney.NotBlacklisted.selector);
+        okuMoney.unblacklist(user1);
     }
 }

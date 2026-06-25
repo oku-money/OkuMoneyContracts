@@ -836,17 +836,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oku-bridge-router"
-version = "0.1.0"
-dependencies = [
- "anchor-lang",
- "anchor-spl",
- "lite-psm",
- "oku-dollar",
- "solana-security-txt",
-]
-
-[[package]]
 name = "oku-dollar"
 version = "0.1.0"
 dependencies = [

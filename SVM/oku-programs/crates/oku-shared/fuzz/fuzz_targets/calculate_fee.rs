@@ -53,4 +53,34 @@ fuzz_target!(|data: (u64, u16)| {
             }
         }
     }
+
+    // Property 5: monotonicity in fee_bps. Cycle 4 (S-20): header
+    // claimed this property but the body didn't actually check it.
+    // `calculate_fee(amount, k) <= calculate_fee(amount, k+1)`
+    // whenever both succeed. Overflow on the higher side is
+    // acceptable (the bigger product can narrow-fail where the
+    // smaller didn't).
+    if fee_bps < u16::MAX {
+        let next = calculate_fee(amount, fee_bps + 1);
+        match (result, next) {
+            (Some(a), Some(b)) => {
+                assert!(
+                    a <= b,
+                    "fee non-monotone: f({fee_bps})={a} > f({})={b}",
+                    fee_bps + 1
+                );
+            }
+            (Some(_), None) => {
+                // Higher fee_bps overflowed — acceptable (fee math
+                // narrowing fails earlier as bps climbs).
+            }
+            (None, Some(_)) => {
+                panic!(
+                    "non-monotone overflow: f({fee_bps})=None but f({})=Some",
+                    fee_bps + 1
+                );
+            }
+            (None, None) => {}
+        }
+    }
 });

@@ -1,0 +1,28 @@
+{
+  "contractName": "IOracleRelay",
+  "sourceName": "src/oracle/IOracleRelay.sol",
+  "abi": [
+    {
+      "inputs": [],
+      "name": "checkUsdcPeg",
+      "outputs": [],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getUsdcPrice",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "priceE18",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x",
+  "deployedBytecode": "0x"
+}

@@ -15,7 +15,7 @@ EVM/crytic-export/
 /broadcast/**/dry-run/
 
 # Docs
-docs/
+# docs/ intentionally tracked — runbooks and protocol documentation live here
 
 # Dotenv file
 .env
@@ -64,9 +64,8 @@ SVM/oku-programs/deployments/localnet.json
 .env.local
 .env.*.local
 
-# Bridge relay logs and request files (auto-generated)
+# Script run logs (auto-generated)
 EVM/scripts/logs/*.jsonl
-**/bridge-request.json
 
 # Anchor (Solana test artifacts)
 .anchor/
@@ -76,6 +75,12 @@ EVM/scripts/logs/*.jsonl
 
 # Hardhat EDR cache
 edr-cache/
+
+# Local dry-run logs from scripts/deploy/dryRunForks.sh
+EVM/.dry-run-logs/
+
+# Live deploy logs (per-chain transcripts, machine-specific)
+EVM/.live-deploy-logs/
 
 # Rust build artifacts
 target/
@@ -99,14 +104,9 @@ test-ledger/
 *.log
 !*.changelog
 
-# Development documentation (keep only READMEs)
-BridgeReport.md
-BridgeTest.md
-TESTNET_DEPLOYMENT.md
+# Development documentation (keep only top-level READMEs + TESTNET_DEPLOYMENT.md)
 EVM/scripts/TEST_RESULTS.md
 EVM/scripts/QUICKSTART.md
-EVM/bridge/FILES.md
-EVM/bridge/README.md
 EVM/config/README.md
 EVM/scripts/README.md
 # Solana signing keypairs (never commit private keys)

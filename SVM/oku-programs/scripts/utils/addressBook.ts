@@ -29,8 +29,9 @@
  *
  * before deleting the stale `deployments/<network>.json`. Do NOT delete the
  * file first or the old program IDs are gone from the repo and you have to
- * fish them out of explorer history. See SVM/TESTNET_DEPLOYMENT.md for the
- * full rent-recovery walkthrough.
+ * fish them out of explorer history. See contracts/README.md
+ * § "Deployment runbook" → "Stale deployments/devnet.json recovery"
+ * for the full rent-recovery walkthrough.
  */
 
 import * as fs from 'fs';
@@ -96,7 +97,6 @@ export interface DeploymentAddresses {
   programs: {
     litePsm?: string;
     okuDollarProgram?: string;
-    okuBridgeRouter?: string;
   };
   pdas: {
     psmConfig?: string;
@@ -106,26 +106,11 @@ export interface DeploymentAddresses {
     vaultConfig?: string;
     vaultOkusd?: string;
     vaultOkuMoney?: string;
-    bridgeConfig?: string;
-    routerConfig?: string;
   };
-  nonces?: Record<number, string>; // chain_id -> nonce PDA
   authorities?: {
     coldMultisig?: string;
     warmMultisig?: string;
     orchestrator?: string;
-    bridgeOrchestrator?: string;
-    feeRecipient?: string;
-  };
-  /**
-   * Address Lookup Tables (Phase 8.6). The router ALT collapses ~10
-   * common pubkeys into 1-byte indices so `mint_usd_oku`/`redeem_usd_oku`
-   * fit under the v0 tx-size ceiling. Created by
-   * `scripts/admin/setup-router-alt.ts`. SDK consumers must include the
-   * router ALT in every router CPI tx.
-   */
-  addressLookupTables?: {
-    router?: string;
   };
   /**
    * Per-upgrade audit trail appended by `scripts/upgrade/index.ts`.
@@ -204,9 +189,8 @@ function anchorSectionFor(network: NetworkName): 'devnet' | 'localnet' | 'mainne
  *
  * Snake-case → camelCase mapping between Anchor.toml's keys and the
  * `deployments/*.json` `programs` keys:
- *   lite_psm           ↔  litePsm
- *   oku_dollar         ↔  okuDollarProgram
- *   oku_bridge_router  ↔  okuBridgeRouter
+ *   lite_psm    ↔  litePsm
+ *   oku_dollar  ↔  okuDollarProgram
  */
 export function diffDeploymentProgramIds(
   network: NetworkName,
@@ -217,7 +201,6 @@ export function diffDeploymentProgramIds(
   const map: Array<[string, keyof DeploymentAddresses['programs']]> = [
     ['lite_psm', 'litePsm'],
     ['oku_dollar', 'okuDollarProgram'],
-    ['oku_bridge_router', 'okuBridgeRouter'],
   ];
   const diffs: { key: string; fromFile: string; fromAnchorToml: string }[] = [];
   for (const [tomlKey, fileKey] of map) {
@@ -271,7 +254,7 @@ export function loadDeployment(network: NetworkName): DeploymentAddresses | null
         `[addressBook]   1. Run \`npm run deploy:init\` to overwrite with current IDs, or`,
         `[addressBook]   2. \`solana program close <OLD_ID> --recipient <YOU> --url ${network}\``,
         `[addressBook]      to recover rent from the old program(s), then delete the file.`,
-        `[addressBook] Continuing with file contents — admin/bridge txs will hit `,
+        `[addressBook] Continuing with file contents — admin txs will hit `,
         `[addressBook] the FILE-level program IDs, NOT the Anchor.toml IDs.`,
         '',
       ].join('\n')
@@ -330,7 +313,6 @@ export function saveDeployment(
     tokens: {},
     programs: {},
     pdas: {},
-    nonces: {},
     authorities: {},
   };
 
@@ -343,12 +325,7 @@ export function saveDeployment(
     tokens: { ...existing.tokens, ...addresses.tokens },
     programs: { ...existing.programs, ...addresses.programs },
     pdas: { ...existing.pdas, ...addresses.pdas },
-    nonces: { ...existing.nonces, ...addresses.nonces },
     authorities: { ...existing.authorities, ...addresses.authorities },
-    addressLookupTables: {
-      ...existing.addressLookupTables,
-      ...addresses.addressLookupTables,
-    },
   };
 
   fs.writeFileSync(filepath, JSON.stringify(updated, null, 2));
@@ -368,7 +345,6 @@ export function updateDeployment(
     tokens: {},
     programs: {},
     pdas: {},
-    nonces: {},
     authorities: {},
   };
 

@@ -67,9 +67,9 @@ pub struct Initialize<'info> {
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
-    // F-04: Rent::get() is called internally by Anchor's `init` and
-    // `associated_token::*` constraints — passing the sysvar account is
-    // unnecessary since Solana v1.8. Removed to save a transaction account slot.
+    // Rent sysvar is read internally by Anchor's `init` /
+    // `associated_token::*` constraints since Solana v1.8; not in the
+    // account list.
 }
 
 /// Wrap OkuMoney into usdOku
@@ -134,11 +134,24 @@ pub struct Wrap<'info> {
     )]
     pub psm_config: Box<Account<'info, PsmConfig>>,
 
-    /// Dead shares ATA — only required on the first deposit (total_shares == 0).
-    /// This is a usdOku ATA owned by a known dead address (System Program)
-    /// where MINIMUM_LIQUIDITY shares are permanently locked.
-    /// CHECK: Validated in handler when needed
-    #[account(mut)]
+    /// Dead-shares ATA — only required on the first deposit
+    /// (`total_supply == 0`). This is a usdOku ATA owned by the System
+    /// Program where `MINIMUM_LIQUIDITY` shares are permanently locked
+    /// to defeat the first-depositor inflation attack.
+    ///
+    /// Cycle 4 (OKUD-03): `token::mint` + `token::token_program` moved
+    /// onto the context so Anchor enforces them declaratively (visible
+    /// in IDL, can't be silently bypassed by a future handler refactor).
+    /// The two remaining invariants — SP-owner + canonical-ATA — still
+    /// live in the handler because Anchor doesn't have a single
+    /// attribute that expresses "owner = system_program AND address ==
+    /// canonical ATA derivation for (mint, system_program, Token2022)".
+    /// See `instructions::core::wrap` for the handler-side validation.
+    #[account(
+        mut,
+        token::mint = usd_oku_mint,
+        token::token_program = token_2022_program,
+    )]
     pub dead_shares_ata: Option<Box<InterfaceAccount<'info, TokenAccountInterface>>>,
 
     pub token_2022_program: Program<'info, Token2022>,

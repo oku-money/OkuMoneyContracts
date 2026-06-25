@@ -1,0 +1,69 @@
+[dotenv@17.2.3] injecting env (14) from .env -- tip: 🗂️ backup and recover secrets: https://dotenvx.com/ops
+Warning: All subsequent Upgrades warnings will be silenced.
+
+    Make sure you have manually checked all uses of unsafe flags.
+
+
+
+  LitePSM Scenarios
+    Instant Redemption
+      ✔ Users receive USDC instantly when buffer is sufficient (1228ms)
+    Partial Queue Processing
+      ✔ Processes only what buffer can cover (2198ms)
+    Mixed Instant and Queued Redemptions
+      ✔ First users redeem instantly, later users get queued as buffer depletes (721ms)
+    Yield Accrual While in Queue
+      ✔ Users earn rebase yield while waiting in queue (567ms)
+
+  OkuDollar Vault Scenarios
+    Wrap/Unwrap Round-Trip
+      ✔ Wrap OkuMoney and unwrap with minimal loss (1110ms)
+    Exchange Rate After NotePrice Update
+      ✔ NotePrice increase creates surplus, unwrap returns fewer notes (price-aware) (70ms)
+    Multiple Depositors Share Accounting
+      ✔ Multiple users share vault proportionally, unwrap returns dollar-for-dollar (971ms)
+
+  OkuMoney Scenarios
+    User-to-User Transfers
+      ✔ Transfers work correctly and balances are unaffected by notePrice update (707ms)
+    Minter Allowance Exhaustion
+      ✔ PSM cannot mint beyond allowance, admin can reset (57ms)
+    Max Supply Cap
+      ✔ Minting fails at cap, admin can increase (1238ms)
+    Access Control / Safety
+      ✔ Pause/unpause blocks and allows transfers (112ms)
+      ✔ Blacklisted addresses cannot send or receive (440ms)
+      ✔ Blacklist works while paused (pause-to-blacklist protocol) (74ms)
+
+  Happy Path Testing
+    ✔ Deposit (993ms)
+    ✔ NotePrice Update
+    ✔ Withdraw with insufficient reserves (1388ms)
+    ✔ Rebalance reserves (208ms)
+    ✔ Partial buffer redemption (mixed instant + queued) (485ms)
+    ✔ Withdraw (109ms)
+
+  RealWorldUsage — 365-day stochastic simulation (seed 0xC0DEF00D)
+    ✔ simulates 365 days of protocol activity and holds all invariants (13176ms)
+
+  RealWorldUsage edge cases
+    E1: round-trip A→B→A with 90-day yield accrual
+      ✔ dollar value is conserved across an A→B→A round-trip with yield accruing on B (7028ms)
+    E2: queued redeem blocks orchestrator
+      ✔ src redeem queued when buffer empty; orchestrator must processQueue before dst mint (6024ms)
+    E3: multiplier divergence — A rebases, B does not
+      ✔ bridges preserve dollar value despite different multipliers on each chain (6386ms)
+    E4: blacklisted recipient cannot receive OkuM transfer
+      ✔ transfer to blacklisted address on dst reverts; orchestrator holds OkuM float (5970ms)
+    E5: pause on one side during a multi-week run
+      ✔ mints on paused chain revert; system resumes cleanly after unpause (5455ms)
+    E6: USDC depeg suspends mint until peg restored
+      ✔ mint reverts when relay reports depeg; resumes after relay re-passes (5739ms)
+    E7: yield-lock prevents bridge in same block as multiplier bump
+      ✔ mintOkuM reverts in same block as setOkuMMultiplier; next block succeeds (4732ms)
+    E8: minterAllowance exhaustion and rotation
+      ✔ mint fails when minterAllowance exhausted; resumes after configureMinterAllowance rotation (4271ms)
+
+
+  28 passing (1m)
+

@@ -1,12 +1,12 @@
 /**
- * Phase 10: PSM init-time invariant tests.
+ * Phase 10 / Cycle 4: PSM init-time mint-extension invariant test.
  *
- * `initialize` enforces a no-TransferHook invariant on the OkuMoney mint
- * (see `programs/lite-psm/src/instructions/init.rs`). The legacy
- * production deploy creates the mint with `InterestBearingConfig` only,
- * which is fine. But a misconfigured deploy that adds `TransferHook`
- * would silently break the PSM's re-entrancy assumptions; this test
- * proves the program now refuses such mints at init.
+ * `initialize` enforces a Token-2022 extension allow-list on the
+ * OkuMoney mint (see `programs/lite-psm/src/helpers/mint_extensions.rs`).
+ * Cycle 4 widened the original TransferHook-only check into a positive
+ * allow-list; the production deploy uses InterestBearingConfig only,
+ * which is allowed. This test fires a TransferHook-bearing mint at
+ * `initialize` and expects the `IncompatibleMintExtension` error.
  */
 
 import * as anchor from "@anchor-lang/core";
@@ -27,7 +27,7 @@ import { LitePsm } from "../../target/types/lite_psm";
 import { startBankrun, BankrunHarness, createMintViaBankrun } from "../shared/bankrun";
 
 
-describe("init invariants (TransferHook reject)", () => {
+describe("init invariants (Token-2022 extension whitelist)", () => {
   let h: BankrunHarness;
   let program: Program<LitePsm>;
   let payer: Keypair;
@@ -40,7 +40,7 @@ describe("init invariants (TransferHook reject)", () => {
 
   it("initialize rejects an OkuMoney mint that has the TransferHook extension", async () => {
     const [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config")],
+      [Buffer.from("psm_config_v3")],
       program.programId
     );
 
@@ -89,8 +89,8 @@ describe("init invariants (TransferHook reject)", () => {
     );
     await h.provider.sendAndConfirm!(tx, [okuMoneyKp]);
 
-    // Now attempt initialize — the new invariant must reject with
-    // TransferHookNotAllowed.
+    // Now attempt initialize — the allow-list invariant must reject the
+    // TransferHook extension with IncompatibleMintExtension.
     const vaultUsdc = getAssociatedTokenAddressSync(
       usdcMint,
       configPda,
@@ -101,23 +101,26 @@ describe("init invariants (TransferHook reject)", () => {
 
     let threw = false;
     try {
+      // Cycle 4 (PSM-17): `initialize` now takes a single
+      // `InitializeParams` struct in place of the prior positional
+      // pubkey args.
       await program.methods
-        .initialize(
-          new BN(1_000_000_000),
-          new BN(1_000_000_000),
-          payer.publicKey,
-          payer.publicKey,
-          payer.publicKey,
-          payer.publicKey,
-          payer.publicKey,
-          payer.publicKey,
-          payer.publicKey,
-          payer.publicKey,
-          payer.publicKey,
-          payer.publicKey,
-          payer.publicKey,
-          PYTH_LEGACY
-        )
+        .initialize({
+          maxSupply: new BN(1_000_000_000),
+          minterAllowance: new BN(1_000_000_000),
+          pauser: payer.publicKey,
+          unpauser: payer.publicKey,
+          freezer: payer.publicKey,
+          unfreezer: payer.publicKey,
+          queueProcessor: payer.publicKey,
+          bufferDepositor: payer.publicKey,
+          bufferWithdrawer: payer.publicKey,
+          oracleManager: payer.publicKey,
+          capManager: payer.publicKey,
+          allowanceManager: payer.publicKey,
+          rebaser: payer.publicKey,
+          oracleRelayPythProgramOwner: PYTH_LEGACY,
+        })
         .accountsPartial({
           roleAdmin: payer.publicKey,
           config: configPda,
@@ -128,7 +131,6 @@ describe("init invariants (TransferHook reject)", () => {
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          // F-04: rent sysvar removed from Initialize context (Anchor uses Rent::get() internally)
         })
         .rpc();
     } catch (err: any) {
@@ -138,7 +140,11 @@ describe("init invariants (TransferHook reject)", () => {
         String(err?.message ?? ""),
         ...(err?.logs ?? []),
       ].join(" ");
-      expect(haystack).to.include("TransferHookNotAllowed");
+      // Cycle 4: the allow-list check returns IncompatibleMintExtension
+      // for any non-whitelisted extension (TransferHook included). The
+      // legacy TransferHookNotAllowed error variant was removed as dead
+      // code in the audit-prep cleanup pass.
+      expect(haystack).to.include("IncompatibleMintExtension");
     }
     expect(threw, "initialize must reject a mint with TransferHook").to.equal(true);
   });

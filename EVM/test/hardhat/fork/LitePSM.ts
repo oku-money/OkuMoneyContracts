@@ -1,8 +1,6 @@
 import {
     LitePSM,
     LitePSM__factory,
-    OkuBridgeRouter,
-    OkuBridgeRouter__factory,
     OkuMoney,
     OkuMoney__factory,
     OkuDollar,
@@ -26,7 +24,6 @@ describe("LitePSM Scenarios", () => {
     let Charlie: Signer
     let Dave: Signer
 
-    let okuBridgeRouter: OkuBridgeRouter
     let psm: LitePSM
     let queue: RedemptionQueue
     let okuMoney: OkuMoney
@@ -35,6 +32,7 @@ describe("LitePSM Scenarios", () => {
     let usdc: ReturnType<typeof IERC20__factory.connect>
 
     const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"))
+    const OKUM_BURNER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BURNER"))
     const QUEUE_PSM = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PSM"))
     const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"))
     const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
@@ -85,7 +83,11 @@ describe("LitePSM Scenarios", () => {
         if (queueLen > 0n) {
             await fundPSM(parseUnits("1000000", 6))
             // approveAmount: generous amount to cover all queued entries
-            await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("1000000", 6))
+            const head = await queue.queueHead()
+            const tail = await queue.queueTail()
+            await psm.connect(Frank).processQueue(head, tail, parseUnits("1000000", 6))
+            // processQueue no longer auto-advances the head; do it explicitly.
+            await queue.advanceHead(tail - head)
         }
     }
 
@@ -95,7 +97,7 @@ describe("LitePSM Scenarios", () => {
             method: "hardhat_reset",
             params: [{
                 forking: {
-                    jsonRpcUrl: process.env.MAINNET_RPC_URL
+                    jsonRpcUrl: process.env.MAINNET_RPC_URL || "https://ethereum-rpc.publicnode.com"
                 }
             }]
         })
@@ -145,27 +147,23 @@ describe("LitePSM Scenarios", () => {
 
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
-            // initialize(_okuMoney, _okuDollar, _usdc, _redemptionQueue, admin, _stalenessThreshold)
+            // initialize(_okuMoney, _okuDollar, _usdc, _redemptionQueue, admin)
             [
                 await okuMoney.getAddress(),
                 await okuUsd.getAddress(),
                 USDC_MAINNET,
                 await queue.getAddress(),
-                frankAddr,
-                3600 // 1 hour staleness threshold
+                frankAddr
             ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()
 
-        okuBridgeRouter = await upgrades.deployProxy(
-            new OkuBridgeRouter__factory(Frank),
-            [await okuUsd.getAddress(), await okuMoney.getAddress(), frankAddr, frankAddr],
-            { kind: "uups", unsafeAllow: ["constructor"] }
-        ) as unknown as OkuBridgeRouter
-        await okuBridgeRouter.waitForDeployment()
+        // OkuBridgeRouter was removed in the noBridge refactor; previously deployed here
+        // but never exercised in this scenario suite.
 
         await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await psm.getAddress())
+        await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await psm.getAddress())
 
         // Grant RBAC roles to Frank for testing
         await okuMoney.connect(Frank).grantRole(OKUM_ALLOWANCE_MANAGER, frankAddr)
@@ -179,6 +177,7 @@ describe("LitePSM Scenarios", () => {
         )
         await queue.connect(Frank).grantRole(QUEUE_PSM, await psm.getAddress())
         await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await queue.getAddress())
+        await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await queue.getAddress())
     })
 
     describe("Instant Redemption", () => {
@@ -292,7 +291,10 @@ describe("LitePSM Scenarios", () => {
             await fundPSM(parseUnits("10000", 6))
 
             // Process queue (approve enough for all entries — queue will stop when buffer runs out)
-            await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("20000", 6))
+            const h1 = await queue.queueHead()
+            const t1 = await queue.queueTail()
+            await psm.connect(Frank).processQueue(h1, t1, parseUnits("20000", 6))
+            await queue.advanceHead(t1 - h1)
 
             // Should have processed Alice + Bob, leaving Charlie + Dave
             expect(await queue.queueLength()).to.equal(2)
@@ -308,7 +310,10 @@ describe("LitePSM Scenarios", () => {
 
             // Cleanup: process remaining
             await fundPSM(parseUnits("20000", 6))
-            await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("20000", 6))
+            const h2 = await queue.queueHead()
+            const t2 = await queue.queueTail()
+            await psm.connect(Frank).processQueue(h2, t2, parseUnits("20000", 6))
+            await queue.advanceHead(t2 - h2)
             expect(await queue.queueLength()).to.equal(0)
         })
     })
@@ -394,7 +399,10 @@ describe("LitePSM Scenarios", () => {
 
             // Cleanup
             await fundPSM(parseUnits("20000", 6))
-            await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("20000", 6))
+            const h3 = await queue.queueHead()
+            const t3 = await queue.queueTail()
+            await psm.connect(Frank).processQueue(h3, t3, parseUnits("20000", 6))
+            await queue.advanceHead(t3 - h3)
             expect(await queue.queueLength()).to.equal(0)
         })
     })
@@ -450,7 +458,10 @@ describe("LitePSM Scenarios", () => {
 
             // Replenish and process
             await fundPSM(parseUnits("50000", 6))
-            await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("50000", 6))
+            const h4 = await queue.queueHead()
+            const t4 = await queue.queueTail()
+            await psm.connect(Frank).processQueue(h4, t4, parseUnits("50000", 6))
+            await queue.advanceHead(t4 - h4)
 
             expect(await queue.queueLength()).to.equal(0)
 

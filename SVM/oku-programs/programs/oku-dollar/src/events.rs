@@ -38,8 +38,17 @@ pub struct WrapEvent {
     pub receiver: Pubkey,
     /// OkuMoney deposited (6 decimals)
     pub oku_m_amount: u64,
-    /// OkuDollar shares minted (6 decimals)
+    /// OkuDollar shares minted to the user (6 decimals). Cycle 4
+    /// (OKUD-13): does NOT include the `dead_shares_minted` quantity
+    /// on the first deposit — see that field for the inflation-defence
+    /// allocation.
     pub shares_minted: u64,
+    /// Dead-shares minted to the System-Program-owned ATA on the FIRST
+    /// deposit (cycle 4 / OKUD-13). Always `0` on subsequent deposits.
+    /// `MINIMUM_LIQUIDITY` on the first deposit. Off-chain indexers
+    /// reconstructing `usd_oku_mint.supply` must sum `shares_minted +
+    /// dead_shares_minted` across all WrapEvents.
+    pub dead_shares_minted: u64,
     /// USD multiplier at time of wrap (1e9 = $1.00)
     pub usd_multiplier: u64,
     /// OkuMoney price at time of wrap (1e9 = $1.00)
@@ -104,6 +113,11 @@ pub struct UsdMultiplierUpdatedEvent {
     pub new_multiplier: u64,
     /// Total OkuDollar supply at time of update
     pub total_supply: u64,
+    /// Collateralization ratio AFTER the update (scaled by `PRECISION`,
+    /// `1e9 = 100 %`). Cycle 4 (OKUD-14): added so monitoring tooling
+    /// doesn't have to re-derive the value off-chain. Parity with
+    /// `ReservesDepositedEvent` / `ReservesWithdrawnEvent`.
+    pub collateralization_ratio: u64,
     pub timestamp: i64,
 }
 

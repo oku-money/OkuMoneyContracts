@@ -1,0 +1,296 @@
+Warning: This is a nightly build of Foundry. It is recommended to use the latest stable version. To mute this warning set `FOUNDRY_DISABLE_NIGHTLY_WARNING` in your environment. 
+
+No files changed, compilation skipped
+
+╭----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------╮
+| Contract                                                       | Runtime Size (B) | Initcode Size (B) | Runtime Margin (B) | Initcode Margin (B) |
++==================================================================================================================================================+
+| Address                                                        | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| Bytes                                                          | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| Constants                                                      | 455              | 507               | 24,121             | 48,645              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| Deploy                                                         | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| ECDSA                                                          | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| ERC1967Proxy                                                   | 163              | 950               | 24,413             | 48,202              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| ERC1967Utils                                                   | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| Errors (lib/openzeppelin-contracts/contracts/utils/Errors.sol) | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| Errors (src/lib/Errors.sol)                                    | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| LitePSM                                                        | 12,341           | 12,590            | 12,235             | 36,562              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| LowLevelCall                                                   | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| Math                                                           | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| MathLib                                                        | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| MathLibHarness                                                 | 1,294            | 1,322             | 23,282             | 47,830              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| MessageHashUtils                                               | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| MockAggregatorV3                                               | 665              | 748               | 23,911             | 48,404              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| MockAggregatorV3WithDecimals                                   | 326              | 531               | 24,250             | 48,621              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| MockHighDecimalToken                                           | 1,798            | 2,346             | 22,778             | 46,806              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| MockOracleRelay                                                | 287              | 327               | 24,289             | 48,825              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| MockUSDC                                                       | 2,497            | 2,962             | 22,079             | 46,190              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| MockUSDC18Dec                                                  | 1,862            | 2,309             | 22,714             | 46,843              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| MockUSDC8Dec                                                   | 1,862            | 2,308             | 22,714             | 46,844              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| OkuDollar                                                      | 16,596           | 16,845            | 7,980              | 32,307              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| OkuMoney                                                       | 11,853           | 12,102            | 12,723             | 37,050              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| OldMathShadow                                                  | 543              | 571               | 24,033             | 48,581              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| OracleRelay                                                    | 6,268            | 6,517             | 18,308             | 42,635              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| Panic                                                          | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| RedemptionQueue                                                | 9,255            | 9,504             | 15,321             | 39,648              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| ReentrancyGuardHarness                                         | 1,010            | 1,038             | 23,566             | 48,114              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| Roles                                                          | 1,722            | 1,774             | 22,854             | 47,378              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| SafeApprove                                                    | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| SafeCast                                                       | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| SafeERC20                                                      | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| SignedMath                                                     | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| StorageSlot                                                    | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| Strings                                                        | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| TestConstants                                                  | 868              | 920               | 23,708             | 48,232              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| TestKeys                                                       | 85               | 135               | 24,491             | 49,017              |
+|----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------|
+| TestRoles                                                      | 1,740            | 1,792             | 22,836             | 47,360              |
+╰----------------------------------------------------------------+------------------+-------------------+--------------------+---------------------╯
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+   --> test/token/OkuMoney.fuzz.t.sol:344:9
+    |
+344 |         okuMoney.transfer(minter, mintAmount);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+   --> test/oracle/OracleRelay.t.sol:417:29
+    |
+417 |         int256 feedAnswer = int256(priceE18 / 1e10);
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: consider disabling this lint if you're certain the cast is safe
+            
+            // casting to 'int256' is safe because [explain why]
+            // forge-lint: disable-next-line(unsafe-typecast)
+            
+            
+    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+   --> test/oracle/OracleRelay.t.sol:421:37
+    |
+421 |         uint256 effectivePriceE18 = uint256(feedAnswer) * 1e10;
+    |                                     ^^^^^^^^^^^^^^^^^^^
+    |
+    = note: consider disabling this lint if you're certain the cast is safe
+            
+            // casting to 'uint256' is safe because [explain why]
+            // forge-lint: disable-next-line(unsafe-typecast)
+            
+            
+    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+   --> test/CoverageGaps.t.sol:296:9
+    |
+296 |         okuDollar.transfer(user2, bal / 2);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+   --> test/token/OkuDollar.fuzz.t.sol:654:9
+    |
+654 |         okuDollar.transfer(user2, transferAmount);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+   --> test/token/OkuDollar.fuzz.t.sol:675:9
+    |
+675 |         okuDollar.transfer(user2, transferAmount);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+   --> test/token/OkuMoney.fuzz.t.sol:426:9
+    |
+426 |         okuMoney.transfer(user2, transfer1);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[unsafe-typecast]: typecasts that can truncate values should be checked
+   --> src/oracle/OracleRelay.sol:201:23
+    |
+201 |         uint256 raw = uint256(answer);
+    |                       ^^^^^^^^^^^^^^^
+    |
+    = note: consider disabling this lint if you're certain the cast is safe
+            
+            // casting to 'uint256' is safe because [explain why]
+            // forge-lint: disable-next-line(unsafe-typecast)
+            
+            
+    = help: https://book.getfoundry.sh/reference/forge/forge-lint#unsafe-typecast
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/token/OkuDollar.t.sol:1115:9
+     |
+1115 |         okuDollar.transfer(user2, 50e18);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/token/OkuDollar.t.sol:1129:9
+     |
+1129 |         okuDollar.transferFrom(user1, user2, 50e18);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/token/OkuDollar.t.sol:1216:9
+     |
+1216 |         okuDollar.transfer(user2, 50e18);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/token/OkuDollar.t.sol:1227:9
+     |
+1227 |         okuDollar.transfer(user2, 40e18);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[divide-before-multiply]: multiplication should occur before division to avoid loss of precision
+   --> src/psm/LitePSM.sol:301:29
+    |
+301 |         uint256 okuMFloor = (okuMAmount / decimalMultiplier) * decimalMultiplier;
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: https://book.getfoundry.sh/reference/forge/forge-lint#divide-before-multiply
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/token/OkuDollar.t.sol:1240:9
+     |
+1240 |         okuDollar.transfer(user2, 40e18);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/psm/LitePSM.t.sol:1281:9
+     |
+1281 |         okuMoney.transfer(address(0xDEAD), okuMAmount);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/token/OkuDollar.t.sol:1250:9
+     |
+1250 |         okuDollar.transferFrom(user1, user2, 50e18);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/token/OkuDollar.t.sol:1261:9
+     |
+1261 |         okuDollar.transferFrom(user1, user2, 50e18);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/token/OkuDollar.t.sol:1272:9
+     |
+1272 |         okuDollar.transfer(user2, 101e18);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/token/OkuDollar.t.sol:1298:9
+     |
+1298 |         okuDollar.transfer(user2, transferAmt);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/token/OkuDollar.t.sol:1610:9
+     |
+1610 |         okuDollar.transferFrom(user1, user2, transferAmt);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/token/OkuDollar.t.sol:1900:9
+     |
+1900 |         okuDollar.transfer(user2, 50e18);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/token/OkuDollar.t.sol:2042:9
+     |
+2042 |         okuDollar.transfer(user2, 50e18);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/token/OkuDollar.t.sol:2052:9
+     |
+2052 |         okuDollar.transfer(user2, 50e18);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+
+warning[erc20-unchecked-transfer]: ERC20 'transfer' and 'transferFrom' calls should check the return value
+    --> test/token/OkuDollar.t.sol:2074:9
+     |
+2074 |         okuDollar.transfer(user2, 50e18);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: https://book.getfoundry.sh/reference/forge/forge-lint#erc20-unchecked-transfer
+

@@ -83,19 +83,15 @@ interface UpgradeTarget {
   stateKey?: string;
 }
 
+// OkuBridge / OkuBridgeRouter targets were removed in the noBridge refactor.
+// Live deployments from prior to the refactor may still have those proxies
+// on-chain; they can be upgraded by re-adding entries here when needed.
 const UPGRADE_TARGETS: Record<string, UpgradeTarget> = {
   // UUPS proxies — upgrade gated by the contract's own _authorizeUpgrade role.
   OkuMoney:        { factory: "OkuMoney",        upgraderRole: ROLES.OKUM_UPGRADER },
   OkuDollar:       { factory: "OkuDollar",       upgraderRole: ROLES.VAULT_UPGRADER },
   RedemptionQueue: { factory: "RedemptionQueue", upgraderRole: ROLES.QUEUE_UPGRADER },
   LitePSM:         { factory: "LitePSM",         upgraderRole: ROLES.PSM_UPGRADER },
-  OkuBridgeRouter: { factory: "OkuBridgeRouter", upgraderRole: ROLES.ROUTER_UPGRADER },
-
-  // Transparent proxy — upgrade goes through ProxyAdmin.upgrade(), not the
-  // contract's UPGRADER role. We still set `upgraderRole` to BRIDGE_UPGRADER so
-  // the ensure-role helper has something coherent to check; the actual
-  // permissioning that matters for Transparent is "signer == ProxyAdmin.owner()".
-  OkuBridge:       { factory: "OkuBridge",       upgraderRole: ROLES.BRIDGE_UPGRADER, proxyKind: "transparent" },
 };
 
 // Networks where Etherscan-family verification is supported.
@@ -105,6 +101,7 @@ const VERIFIABLE_NETWORKS = [
   "sepolia",
   "opSepolia",
   "baseSepolia",
+  "arbSepolia",
   "bscTestnet",
   "mainnet",
   "optimism",
@@ -705,17 +702,24 @@ async function upgradeOne(
       newImpl: oldImpl,
       txHash: "<bytecode-unchanged>",
     };
-    const skipRecord: UpgradeRecord = {
-      contract: name,
-      proxy: skipOutcome.proxy,
-      oldImpl: skipOutcome.oldImpl,
-      newImpl: skipOutcome.newImpl,
-      txHash: skipOutcome.txHash,
-      timestamp: new Date().toISOString(),
-      deployer: signerAddress,
-    };
-    appendUpgradeRecord(bookKey, skipRecord);
-    logger.info(`  Recorded skip in addresses.json under upgrades.${bookKey}`);
+    if (isFork) {
+      logger.info(
+        `  Fork rehearsal: not appending audit record to addresses.json ` +
+          `(local-only run; live key "${bookKey}" left untouched).`
+      );
+    } else {
+      const skipRecord: UpgradeRecord = {
+        contract: name,
+        proxy: skipOutcome.proxy,
+        oldImpl: skipOutcome.oldImpl,
+        newImpl: skipOutcome.newImpl,
+        txHash: skipOutcome.txHash,
+        timestamp: new Date().toISOString(),
+        deployer: signerAddress,
+      };
+      appendUpgradeRecord(bookKey, skipRecord);
+      logger.info(`  Recorded skip in addresses.json under upgrades.${bookKey}`);
+    }
     return skipOutcome;
   }
   if (skipBytecodeCheck) {
@@ -870,13 +874,14 @@ async function upgradeOne(
 
     await withRetry(`upgradeProxy(${name})`, async () => {
       // Pass `kind: "transparent"` explicitly. Without it, OZ infers the kind
-      // from the implementation contract's source — and our OkuBridge impl
-      // inherits UUPSUpgradeable (it carries an _authorizeUpgrade hook even
-      // though the deployed proxy is actually Transparent). OZ then asserts
-      // "Requested an upgrade of kind uups but proxy is transparent" against
-      // the manifest's recorded kind. The fix: tell OZ explicitly that we
-      // know it's transparent, matching the manifest. The _authorizeUpgrade
-      // method in the impl is dead code for Transparent proxies and harmless.
+      // from the implementation contract's source — and any impl that inherits
+      // UUPSUpgradeable carries an _authorizeUpgrade hook even when the deployed
+      // proxy is actually Transparent. OZ then asserts "Requested an upgrade of
+      // kind uups but proxy is transparent" against the manifest's recorded kind.
+      // The fix: tell OZ explicitly that we know it's transparent, matching the
+      // manifest. The _authorizeUpgrade method in the impl is dead code for
+      // Transparent proxies and harmless. (Historical note: this branch existed
+      // primarily for OkuBridge, removed in the noBridge refactor.)
       let upgraded;
       try {
         upgraded = await upgrades.upgradeProxy(proxyAddress, Factory, {
@@ -1055,18 +1060,28 @@ async function upgradeOne(
   };
 
   // 10. Append audit-trail record (before returning so a later target failure
-  //     doesn't lose this one's history).
-  const record: UpgradeRecord = {
-    contract: name,
-    proxy: outcome.proxy,
-    oldImpl: outcome.oldImpl,
-    newImpl: outcome.newImpl,
-    txHash: outcome.txHash,
-    timestamp: new Date().toISOString(),
-    deployer: signerAddress,
-  };
-  appendUpgradeRecord(bookKey, record);
-  logger.success(`  Recorded upgrade in addresses.json under upgrades.${bookKey}`);
+  //     doesn't lose this one's history). Suppressed on local forks: fork
+  //     rehearsals share the live network's bookKey (see main()) but their
+  //     impl/tx hashes are throwaway local-node values — writing them into
+  //     addresses.json would pollute the live audit trail.
+  if (isFork) {
+    logger.info(
+      `  Fork rehearsal: not appending audit record to addresses.json ` +
+        `(local-only run; live key "${bookKey}" left untouched).`
+    );
+  } else {
+    const record: UpgradeRecord = {
+      contract: name,
+      proxy: outcome.proxy,
+      oldImpl: outcome.oldImpl,
+      newImpl: outcome.newImpl,
+      txHash: outcome.txHash,
+      timestamp: new Date().toISOString(),
+      deployer: signerAddress,
+    };
+    appendUpgradeRecord(bookKey, record);
+    logger.success(`  Recorded upgrade in addresses.json under upgrades.${bookKey}`);
+  }
 
   return outcome;
 }
@@ -1121,9 +1136,28 @@ function parseTargets(): string[] {
 // Main
 // ============================================================================
 
+// ---- Mainnet safety gate (WS5.3) ----
+const UPGRADE_DRY_RUN = process.env.DRY_RUN === "true" || process.env.DRY_RUN === "1";
+const UPGRADE_YES_MAINNET = process.argv.includes("--yes-mainnet") || process.env.YES_MAINNET === "true";
+const UPGRADE_MAINNET_NETWORKS = new Set(["base", "bsc", "mainnet", "ethereum"]);
+function assertNotMainnetUpgrade(networkName: string) {
+  if (!UPGRADE_MAINNET_NETWORKS.has(networkName)) return;
+  if (UPGRADE_YES_MAINNET) {
+    logger.warning(`--yes-mainnet passed; proceeding with upgrade on ${networkName}`);
+    return;
+  }
+  if (UPGRADE_DRY_RUN) return;
+  throw new Error(
+    `Refusing to broadcast upgrade on ${networkName} without --yes-mainnet flag.\n` +
+    `Re-run with: TARGETS=... npx hardhat run scripts/upgrade/index.ts --network ${networkName} --yes-mainnet`
+  );
+}
+// ---- end mainnet safety gate ----
+
 async function main() {
   const ctx = await resolveNetworkContext();
   const { networkName, isFork, chainConfig } = ctx;
+  if (!isFork) assertNotMainnetUpgrade(networkName);
 
   // Upgrade scripts always target the LIVE address-book key, even on a fork.
   // Rationale: a fork rehearsal upgrades the *real* deployed proxies (whose

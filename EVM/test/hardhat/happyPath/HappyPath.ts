@@ -1,8 +1,6 @@
 import {
     LitePSM,
     LitePSM__factory,
-    OkuBridgeRouter,
-    OkuBridgeRouter__factory,
     OkuMoney,
     OkuMoney__factory,
     OkuDollar,
@@ -28,7 +26,6 @@ describe("Happy Path Testing", () => {
     let Dave: Signer
 
     //contracts
-    let okuBridgeRouter: OkuBridgeRouter
     let psm: LitePSM
     let queue: RedemptionQueue
     let okuMoney: OkuMoney
@@ -39,6 +36,7 @@ describe("Happy Path Testing", () => {
 
     // Constants (role names must match contract constants)
     const OKUM_MINTER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_MINTER"))
+    const OKUM_BURNER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_BURNER"))
     const QUEUE_PSM = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PSM"))
     const OKUM_ALLOWANCE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_ALLOWANCE_MANAGER"))
     const OKUM_REBASER = ethers.keccak256(ethers.toUtf8Bytes("OKUM_REBASER"))
@@ -53,7 +51,7 @@ describe("Happy Path Testing", () => {
             method: "hardhat_reset",
             params: [{
                 forking: {
-                    jsonRpcUrl: process.env.MAINNET_RPC_URL
+                    jsonRpcUrl: process.env.MAINNET_RPC_URL || "https://ethereum-rpc.publicnode.com"
                 }
             }]
         })
@@ -97,7 +95,7 @@ describe("Happy Path Testing", () => {
         ) as unknown as RedemptionQueue
         await queue.waitForDeployment()
 
-        // Deploy LitePSM (needs OkuMoney, OkuDollar, USDC, Queue, admin, stalenessThreshold)
+        // Deploy LitePSM (needs OkuMoney, OkuDollar, USDC, Queue, admin)
         psm = await upgrades.deployProxy(
             new LitePSM__factory(Frank),
             [
@@ -105,23 +103,18 @@ describe("Happy Path Testing", () => {
                 await okuUsd.getAddress(),
                 USDC_MAINNET,
                 await queue.getAddress(),
-                frankAddr,
-                3600
+                frankAddr
             ],
             { kind: "uups", unsafeAllow: ["constructor"] }
         ) as unknown as LitePSM
         await psm.waitForDeployment()
 
-        // Deploy OkuBridgeRouter
-        okuBridgeRouter = await upgrades.deployProxy(
-            new OkuBridgeRouter__factory(Frank),
-            [await okuUsd.getAddress(), await okuMoney.getAddress(), frankAddr, frankAddr],
-            { kind: "uups", unsafeAllow: ["constructor"] }
-        ) as unknown as OkuBridgeRouter
-        await okuBridgeRouter.waitForDeployment()
+        // OkuBridgeRouter was removed in the noBridge refactor; previously deployed here
+        // but never exercised in this scenario suite.
 
         // Grant MINTER to PSM so it can mint OkuMoney
         await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await psm.getAddress())
+        await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await psm.getAddress())
 
         // Grant RBAC roles to Frank (admin) for testing
         await okuMoney.connect(Frank).grantRole(OKUM_ALLOWANCE_MANAGER, frankAddr)
@@ -142,6 +135,7 @@ describe("Happy Path Testing", () => {
 
         // Grant MINTER to queue so it can burn OkuMoney when processing
         await okuMoney.connect(Frank).grantRole(OKUM_MINTER, await queue.getAddress())
+        await okuMoney.connect(Frank).grantRole(OKUM_BURNER, await queue.getAddress())
     })
 
     it("Deposit", async () => {
@@ -317,7 +311,11 @@ describe("Happy Path Testing", () => {
         })
 
         // Admin processes the queue
-        await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("50000", 6))
+        const headBefore = await queue.queueHead()
+        const tailBefore = await queue.queueTail()
+        await psm.connect(Frank).processQueue(headBefore, tailBefore, parseUnits("50000", 6))
+        // processQueue no longer auto-advances the cursor; drive it forward.
+        await queue.advanceHead(tailBefore - headBefore)
 
         // Verify queue is now empty
         expect(await queue.queueLength()).to.equal(0)
@@ -426,7 +424,10 @@ describe("Happy Path Testing", () => {
             params: [USDC_WHALE]
         })
 
-        await psm.connect(Frank).processQueue(await queue.queueHead(), await queue.queueTail(), parseUnits("10000", 6))
+        const headBefore2 = await queue.queueHead()
+        const tailBefore2 = await queue.queueTail()
+        await psm.connect(Frank).processQueue(headBefore2, tailBefore2, parseUnits("10000", 6))
+        await queue.advanceHead(tailBefore2 - headBefore2)
 
         // Queue should now be empty
         expect(await queue.queueLength()).to.equal(0)

@@ -5,8 +5,8 @@
  * the rent SOL escrowed in a program's ProgramData account — there is no
  * direct RPC instruction for this).
  *
- * Default behavior: read the three program IDs from
- * `deployments/<network>.json::programs.{litePsm,okuDollarProgram,okuBridgeRouter}`,
+ * Default behavior: read the two program IDs from
+ * `deployments/<network>.json::programs.{litePsm,okuDollarProgram}`,
  * `solana program show` each (verifying it's deployed and that the
  * deployer wallet is its upgrade authority), then close them and report
  * recovered SOL.
@@ -213,7 +213,6 @@ async function main() {
     ids = [
       dep.programs.litePsm,
       dep.programs.okuDollarProgram,
-      dep.programs.okuBridgeRouter,
     ].filter((x): x is string => typeof x === 'string' && x.length > 0);
     source = `deployments/${network}.json`;
     if (ids.length === 0) {

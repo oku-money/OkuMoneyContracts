@@ -21,10 +21,8 @@ export async function verifyDeployment(
     { name: 'OkuMoney Mint', address: addresses.tokens?.okuMoney },
     { name: 'PSM Config', address: addresses.pdas?.psmConfig },
     { name: 'Redemption Queue', address: addresses.pdas?.redemptionQueue },
-    { name: 'Bridge Config', address: addresses.pdas?.bridgeConfig },
     { name: 'Vault Config', address: addresses.pdas?.vaultConfig },
     { name: 'usdOku Mint', address: addresses.tokens?.usdOku },
-    { name: 'Router Config', address: addresses.pdas?.routerConfig },
   ];
 
   let allPassed = true;

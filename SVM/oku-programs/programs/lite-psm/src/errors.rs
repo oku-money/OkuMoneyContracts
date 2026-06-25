@@ -17,8 +17,11 @@
 //! | `OutputBelowMinimum` | `OutputBelowMinimum(uint256 actual, uint256 minimum)` |
 //! | `AmountTooSmall` | `AmountTooSmall()` |
 //! | `InvalidUsdcDecimals` | (initialize-time decimals check) |
-//! | `InvalidStaleness` | `StalenessOutOfBounds(uint256 staleness)` |
-//! | `InvalidChainId` | `InvalidChainId(uint16 chainId)` |
+//! | `InvalidStaleness` | `InvalidStaleness(uint256 provided, ...)` |
+//! | `PriceOutOfBand` | `PriceOutOfBand(uint256 priceE18, uint256 minE18, uint256 maxE18)` |
+//! | `NonPositiveAnswer` | `NonPositiveAnswer()` |
+//! | `InvalidPriceBand` | `InvalidPriceBand(uint256 minE18, uint256 maxE18)` |
+//! | `FeedExpoTooLarge` | `FeedDecimalsTooLarge(uint8 reported)` |
 
 use anchor_lang::prelude::*;
 
@@ -60,14 +63,42 @@ pub enum LitePsmError {
     #[msg("Mint would exceed minter allowance")]
     AllowanceExceeded,
 
-    // ===== Oracle Errors =====
+    // ===== Oracle Relay (USDC peg circuit-breaker) Errors =====
     /// Oracle data is stale
+    /// EVM: StaleOracleData()
     #[msg("Oracle data is stale")]
     StaleOracle,
 
-    /// Insufficient reserves per oracle
-    #[msg("Insufficient reserves per oracle")]
-    InsufficientReserves,
+    /// Normalized USDC price is outside the configured peg band
+    /// (`[oracle_relay_min_price_e9, oracle_relay_max_price_e9]`).
+    /// EVM: PriceOutOfBand(uint256 priceE18, uint256 minE18, uint256 maxE18)
+    #[msg("USDC price out of band — depeg circuit-breaker tripped")]
+    PriceOutOfBand,
+
+    /// Pyth aggregate price is zero or negative.
+    /// EVM: NonPositiveAnswer()
+    #[msg("Oracle returned a non-positive answer")]
+    NonPositiveAnswer,
+
+    /// Provided peg band is invalid (`min >= max`, or outside the hard
+    /// floor/ceiling defined by `ORACLE_USDC_PRICE_FLOOR`/`_CEILING`).
+    /// EVM: InvalidPriceBand(uint256 minE18, uint256 maxE18)
+    #[msg("Invalid peg band — must satisfy min < max within hard bounds")]
+    InvalidPriceBand,
+
+    /// Pyth `expo` magnitude exceeds `MAX_FEED_EXPO_MAGNITUDE`. The
+    /// normalization math caps at 1e18 of scaling either direction.
+    /// EVM: FeedDecimalsTooLarge(uint8 reported)
+    #[msg("Pyth feed expo magnitude exceeds MAX_FEED_EXPO_MAGNITUDE")]
+    FeedExpoTooLarge,
+
+    /// Pyth round's confidence-interval-to-price ratio exceeds
+    /// `MAX_ORACLE_CONFIDENCE_BPS / 10_000`. Publisher set degenerate;
+    /// reject for safety. SVM-only hardening (Chainlink doesn't publish
+    /// per-round confidence so EVM has no analogue — see
+    /// `audit/README.md` § "Deliberate non-parity").
+    #[msg("Pyth oracle confidence interval too wide for safe consumption")]
+    OracleConfidenceTooWide,
 
     // ===== Buffer Errors =====
     /// Insufficient buffer for redemption
@@ -75,11 +106,12 @@ pub enum LitePsmError {
     #[msg("Insufficient buffer for redemption")]
     InsufficientBuffer,
 
-    // ===== Account Errors =====
-    /// Account is frozen (blacklisted)
-    /// EVM: SenderBlacklisted() / RecipientBlacklisted()
-    #[msg("Account is frozen")]
-    AccountFrozen,
+    /// User does not hold enough OkuMoney to satisfy the redemption.
+    /// Cycle 4 (PSM-11): separated from `InsufficientBuffer` to remove
+    /// the misleading "the PSM's buffer is empty" interpretation.
+    /// EVM analogue: `ERC20InsufficientBalance` (OZ standard revert).
+    #[msg("User does not hold enough OkuMoney for redemption")]
+    InsufficientUserBalance,
 
     // ===== Queue Errors =====
     /// Queue is empty
@@ -113,24 +145,17 @@ pub enum LitePsmError {
     #[msg("Not enough accounts provided for queue entries")]
     InsufficientAccounts,
 
-    /// Recipient account does not match queue entry user
-    #[msg("Recipient account does not match queue entry user")]
-    RecipientMismatch,
-
-    // ===== Oracle Validation Errors =====
-    /// Oracle account not provided but oracle is configured
-    #[msg("Oracle account not provided but oracle is configured")]
+    // ===== Oracle Relay Validation Errors =====
+    /// Relay is configured but the feed account was not supplied as a
+    /// remaining/optional account on the call.
+    #[msg("Oracle relay feed account not provided but relay is configured")]
     OracleAccountMissing,
 
-    /// Invalid oracle response
+    /// Generic invalid-oracle response (wrong account, owner mismatch,
+    /// malformed Pyth header, non-Trading status, etc.).
+    /// EVM: InvalidOracleResponse() / IncompleteOracleRound()
     #[msg("Invalid oracle response")]
     InvalidOracleResponse,
-
-    /// Pyth confidence interval is wider than the protocol's tolerance
-    /// (`MAX_CONF_RATIO_BPS`). Indicates a thin / illiquid market and is
-    /// rejected to avoid backing supply against an unreliable price print.
-    #[msg("Oracle confidence interval too wide")]
-    OracleConfidenceTooWide,
 
     // ===== Yield Distribution Errors =====
     /// Cannot perform operation in same slot as yield distribution
@@ -138,9 +163,11 @@ pub enum LitePsmError {
     #[msg("Cannot perform operation in same slot as yield distribution")]
     YieldDistributionInProgress,
 
-    /// New price must be >= current price
+    /// New price did not strictly increase. Reverts on both backward moves
+    /// and no-op (equal-value) updates so a no-op call cannot stamp the
+    /// sandwich-lock slot without moving the multiplier.
     /// EVM: MultiplierCannotDecrease()
-    #[msg("New price must be >= current price")]
+    #[msg("New price must strictly increase")]
     PriceCannotDecrease,
 
     /// Yield amount too small to affect price (truncates to zero)
@@ -148,44 +175,14 @@ pub enum LitePsmError {
     YieldTooSmall,
 
     /// Proposed `oku_m_price` exceeds the configured ceiling.
-    /// Defense-in-depth: even with the rebaser key compromised, the price
-    /// cannot be pushed past `MAX_OKU_M_PRICE`.
+    /// Math-sanity bound that keeps downstream `u64 * u64 -> u128`
+    /// multiplications inside the overflow-safe region. Not a guard
+    /// against operator compromise (out of scope per the centralized
+    /// trust model) but a math bound.
     #[msg("Proposed oku_m_price exceeds MAX_OKU_M_PRICE ceiling")]
     PriceAboveMax,
 
-    // ===== Blacklist Errors =====
-    /// Account is blacklist exempt and cannot be frozen
-    #[msg("Account is blacklist exempt and cannot be frozen")]
-    BlacklistExempt,
-
-    /// Blacklist exemption already initialized
-    #[msg("Blacklist exemption already initialized")]
-    BlacklistExemptAlreadyInitialized,
-
-    /// One of the supplied blacklist-exempt pubkeys is invalid (e.g. the
-    /// zero pubkey). Distinct from `InvalidAuthority` — those pubkeys are
-    /// not authorities, they're addresses that `freeze_account` must
-    /// refuse to freeze.
-    #[msg("Blacklist-exempt pubkey is invalid (e.g. zero pubkey)")]
-    InvalidBlacklistExemptAddress,
-
-    // ===== Bridge-Specific Errors =====
-    /// Bridge is paused
-    #[msg("Bridge is paused")]
-    BridgePaused,
-
-    /// Signature has expired
-    #[msg("Signature has expired")]
-    SignatureExpired,
-
-    /// Invalid Ed25519 signature
-    #[msg("Invalid Ed25519 signature")]
-    InvalidSignature,
-
-    /// Recipient account does not match parameter
-    #[msg("Recipient account does not match parameter")]
-    InvalidRecipient,
-
+    // ===== Authority validation =====
     /// Authority pubkey is the zero pubkey or otherwise invalid
     #[msg("Authority pubkey is invalid (e.g. zero pubkey)")]
     InvalidAuthority,
@@ -199,132 +196,14 @@ pub enum LitePsmError {
     #[msg("Caller is not the pending role admin")]
     NotPendingRoleAdmin,
 
-    /// Request ID mismatch
-    #[msg("Request ID mismatch")]
-    InvalidRequestId,
-
-    /// Invalid message length (expected 80 bytes)
-    #[msg("Invalid message length (expected 80 bytes)")]
-    InvalidMessageLength,
-
-    /// Wrong destination chain
-    #[msg("Wrong destination chain")]
-    WrongDestinationChain,
-
-    /// Chain not supported
-    #[msg("Chain not supported")]
-    UnsupportedChain,
-
-    /// Request already processed.
-    ///
-    /// Reserved — replay protection is currently enforced via the `init`
-    /// constraint on the `ProcessedRequest` PDA, which surfaces an Anchor
-    /// `AccountAlreadyInitialized` error rather than this variant. Kept in
-    /// the enum so the error-code numbering remains stable for indexers
-    /// that decode by number.
-    #[msg("Request already processed")]
-    RequestAlreadyProcessed,
-
-    /// Amount below minimum
-    #[msg("Amount below minimum")]
-    BelowMinimum,
-
-    /// Amount above maximum
-    #[msg("Amount above maximum")]
-    AboveMaximum,
-
-    /// Limits configuration invalid (e.g., min > max)
-    #[msg("Limits configuration invalid (min > max)")]
-    InvalidLimits,
-
-    /// Nonce skip request did not strictly advance the nonce
-    #[msg("Nonce must strictly advance (new_nonce > current)")]
-    NonceNotMonotonic,
-
-    /// Nonce skip delta exceeds `MAX_NONCE_SKIP`. Defense in depth: bounds
-    /// the per-call jump so a fat-finger can't push next_nonce near u64::MAX.
-    #[msg("Nonce skip delta exceeds MAX_NONCE_SKIP")]
-    NonceSkipTooLarge,
-
-    /// Chain already supported
-    #[msg("Chain already supported")]
-    ChainAlreadySupported,
-
-    /// Chain list is full (max 32)
-    #[msg("Chain list is full (max 32)")]
-    ChainListFull,
-
-    /// Chain not found in supported list
-    #[msg("Chain not found in supported list")]
-    ChainNotFound,
-
-    /// Mint window still open, cannot refund yet
-    #[msg("Mint window still open, cannot refund yet")]
-    MintWindowStillOpen,
-
-    /// Request source chain does not match this chain
-    #[msg("Request source chain does not match this chain")]
-    WrongSourceChain,
-
-    /// Request was already minted, cannot refund
-    #[msg("Request was already minted, cannot refund")]
-    RequestAlreadyMinted,
-
     /// Escrow vault already initialized
     #[msg("Escrow vault already initialized")]
     EscrowAlreadyInitialized,
 
-    /// Invalid fee basis points (must be <= 10000)
-    #[msg("Invalid fee basis points (must be <= 10000)")]
-    InvalidFeeBps,
-
-    /// Invalid deadline value
-    #[msg("Invalid deadline value")]
-    InvalidDeadline,
-
-    // ===== Two-Step Refund Errors =====
-    /// Refund already pending for this request.
-    ///
-    /// Reserved — enforced by the `init` constraint on the `PendingRefund`
-    /// PDA which surfaces `AccountAlreadyInitialized`. Kept for error-code
-    /// numbering stability.
-    #[msg("Refund already pending for this request")]
-    RefundAlreadyPending,
-
-    /// No pending refund found for this request.
-    ///
-    /// Reserved — enforced by the `mut` constraint on the `PendingRefund`
-    /// PDA which surfaces `AccountNotInitialized`. Kept for error-code
-    /// numbering stability.
-    #[msg("No pending refund found for this request")]
-    NoPendingRefund,
-
-    /// Request was already refunded
-    #[msg("Request was already refunded")]
-    RequestAlreadyRefunded,
-
-    /// Refund initiator and confirmer must be distinct keys, and neither may
-    /// equal `bridge_admin`. Mirrors EVM OkuBridge's two-step refund key-separation
-    /// requirement enforced at init time.
-    #[msg("Refund initiator/confirmer must be distinct keys (and != bridge_admin)")]
-    RefundRolesNotSeparated,
-
-    /// `confirm_refund` rejects calls signed by the same physical key that
-    /// initiated the refund. The role-level separation is configurable, but
-    /// the per-call check is unconditional.
-    /// Mirrors EVM `OkuBridge.confirmRefund`'s `InitiatorCannotConfirm` revert.
-    #[msg("Confirmer must be a different key than the initiator that proposed this refund")]
-    InitiatorCannotConfirm,
-
-    /// `set_bridge_authority` refused to rotate `OrchestratorSigner` or
-    /// `FeeRecipient` because those config pubkeys have dedicated rotation
-    /// paths gated by different roles (`signer_manager` and `fee_manager`).
-    /// Routing them through `bridge_admin` would be privilege escalation.
-    #[msg("Use the dedicated rotation instruction (update_orchestrator_signer / update_fee_recipient)")]
-    UseDedicatedRotation,
-
     // ===== Initialization Errors =====
-    /// Pyth program owner pubkey supplied to `initialize` was the default (zero) pubkey.
+    /// Oracle relay Pyth program-owner pubkey rotated to the default (zero)
+    /// pubkey. Rejected because the runtime peg-check requires a non-zero
+    /// owner to validate the feed account's ownership against.
     #[msg("Pyth program owner pubkey is required (cannot be the zero pubkey)")]
     InvalidPythProgramOwner,
 
@@ -356,25 +235,13 @@ pub enum LitePsmError {
     #[msg("Staleness threshold out of range (must be 60s..=7 days)")]
     InvalidStaleness,
 
-    // ===== Bridge Configuration Errors =====
-    /// Chain ID is invalid (zero, or equal to source_chain_id which would
-    /// allow self-bridging).
-    #[msg("Invalid chain ID (zero or equal to source chain)")]
-    InvalidChainId,
-
-    /// `bridge_burn` was called with a non-zero fee but `fee_recipient_ata` was not
-    /// provided. The fee re-mint must always be executed (even when user == fee_recipient)
-    /// to match EVM OkuBridge.bridgeBurn which unconditionally mints the fee back.
-    /// Pass the fee recipient's ATA in this field for every bridge burn where fee > 0.
-    #[msg("fee_recipient_ata must be provided when bridge fee > 0")]
-    MissingFeeRecipientAta,
-
-    // ===== Phase 10: mint extension invariants =====
-    /// The OkuMoney mint has the Token-2022 `TransferHook` extension
-    /// enabled. The SVM port assumes no transfer hook is installed (the
-    /// hook could re-enter the PSM mid-transfer and break the
-    /// effects-checks-interactions ordering that defends against
-    /// re-entrancy). Rebuild the mint without `TransferHook` and re-init.
-    #[msg("OkuMoney mint must not have the TransferHook Token-2022 extension")]
-    TransferHookNotAllowed,
+    // ===== Phase 10 / Cycle 4: mint extension invariants =====
+    /// The OkuMoney mint carries a Token-2022 extension that the protocol
+    /// does not support. Cycle 4 widened the original `TransferHook`-only
+    /// check to a full allow-list (see `helpers::mint_extensions`); any
+    /// extension not on the whitelist trips this error at `initialize`.
+    /// Same hard reject is applied at the `oku-dollar` initialize boundary
+    /// so both programs agree on what a clean OkuMoney mint looks like.
+    #[msg("OkuMoney mint carries an incompatible Token-2022 extension (see helpers::mint_extensions for the allow-list)")]
+    IncompatibleMintExtension,
 }

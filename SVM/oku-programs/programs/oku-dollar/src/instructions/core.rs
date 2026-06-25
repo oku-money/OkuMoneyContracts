@@ -1,8 +1,9 @@
 //! OkuDollar core instructions.
 
-// F-02: All CPI targets in this module are constrained by Anchor's typed
+// All CPI targets in this module are constrained by Anchor's typed
 // `Program<'info, Token2022>` accounts which validate program ID at
-// deserialization. The `arbitrary_cpi` warning is a false positive here.
+// deserialisation. The `arbitrary_cpi` warning is a false positive
+// here (see `oku-programs/audit/README.md` § Accepted Risks).
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
 
 use crate::constants::{
@@ -20,6 +21,7 @@ use crate::helpers::{
 use crate::state::OkuDollarConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
+use lite_psm::helpers::mint_extensions::assert_oku_money_mint_extensions_whitelisted;
 use lite_psm::helpers::yield_lock::check_yield_lock;
 
 /// Initialize the OkuDollar vault
@@ -41,7 +43,7 @@ pub fn initialize(
 ) -> Result<()> {
     // Reject zero-pubkey authorities — they would silently lock the role out
     // of any future use without offering a recovery path. Mirrors the
-    // analogous guards in `lite-psm::initialize_bridge`.
+    // analogous guards in `lite-psm::initialize`.
     require!(pauser != Pubkey::default(), OkuDollarError::ZeroAuthority);
     require!(unpauser != Pubkey::default(), OkuDollarError::ZeroAuthority);
     require!(
@@ -57,13 +59,39 @@ pub fn initialize(
     // PSM's OkuMoney mint. Without this, a deployer could initialise the
     // vault pointing at the right `psm_config` PDA but a different
     // OkuMoney mint, which would store an inconsistent reference and
-    // silently break wrap/unwrap math. The router's
-    // `validation::verify_vault_config` checks the psm_config link but
-    // not the mint link, so this assertion is the single point that
-    // catches the case.
+    // silently break wrap/unwrap math.
     require!(
         ctx.accounts.psm_config.oku_money_mint == ctx.accounts.oku_money_mint.key(),
         OkuDollarError::OkuMoneyMintMismatch
+    );
+
+    // Cycle 4 (OKUD-02): mirror lite-psm's Token-2022 extension allow-list
+    // at the vault boundary so the two programs agree on what a clean
+    // OkuMoney mint looks like. lite-psm enforces this at its own init,
+    // but the vault may be initialised against a separately-deployed
+    // OkuMoney mint (the PSM-side check has already fired by then on the
+    // same key but defense-in-depth is cheap and consistent).
+    assert_oku_money_mint_extensions_whitelisted(&ctx.accounts.oku_money_mint.to_account_info())?;
+
+    // Cycle 4 (OKUD-01): assert the OkuMoney mint uses the protocol-wide
+    // decimal scheme. All vault share math assumes 6-decimal raw tokens;
+    // a mismatched mint would silently invert every wrap/unwrap by an
+    // order of magnitude. The PSM hard-codes the same invariant on the
+    // USDC mint at its own init.
+    require!(
+        ctx.accounts.oku_money_mint.decimals == oku_shared::TOKEN_DECIMALS,
+        OkuDollarError::InvalidOkuMoneyDecimals
+    );
+
+    // Cycle 4 (OKUD-04, defense-in-depth): assert the PSM's `oku_m_price`
+    // is initialised and non-zero. Structurally lite-psm seeds this to
+    // `PRECISION` at its own init.rs (so `oku_m_price > 0` already holds
+    // for any real PSM PDA), but the require pins the invariant at the
+    // vault boundary and gives a clear error if anyone ever wires the
+    // two programs in the wrong order.
+    require!(
+        ctx.accounts.psm_config.oku_m_price > 0,
+        OkuDollarError::InvalidPrice
     );
 
     let config = &mut ctx.accounts.config;
@@ -86,8 +114,15 @@ pub fn initialize(
     config.usd_multiplier = PRECISION;
     let clock = Clock::get()?;
     config.usd_last_update_time = clock.unix_timestamp;
-    // No yield event has occurred yet; setting to 0 means no slot is fenced.
-    // (Slot 0 is the genesis slot, which is never re-encountered post-genesis.)
+    // No yield event has occurred yet. Slot 0 is the genesis slot,
+    // which is never re-encountered on a live network post-genesis.
+    // Cycle 4 (OKUD-28): on a `solana-test-validator` reset slot does
+    // start at 0, so a `wrap`/`unwrap` landing in slot 0 immediately
+    // after init will hit the sandwich-fence. Mitigation is operational
+    // (advance the validator a slot before the first user action);
+    // a u64::MAX sentinel was considered but rejected because it
+    // would require every `check_yield_lock_*` call site to special-
+    // case the sentinel, expanding the audit surface.
     config.last_yield_distribution_slot = 0;
 
     // Set minimum collateral ratio (must lie in [floor, PRECISION]).
@@ -190,11 +225,12 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
             .as_ref()
             .ok_or(OkuDollarError::MissingDeadSharesAccount)?;
 
-        // Verify the dead ATA is for the correct mint (usdOku)
-        require!(
-            dead_ata.mint == ctx.accounts.usd_oku_mint.key(),
-            OkuDollarError::InvalidDeadSharesMint
-        );
+        // Cycle 4 (OKUD-03): mint + token-program invariants are now
+        // enforced declaratively by the `token::mint = usd_oku_mint,
+        // token::token_program = token_2022_program` constraints on
+        // the Wrap context (see contexts.rs). The two remaining
+        // properties below (SP-owner + canonical-ATA) can't be
+        // expressed via Anchor attributes alone — keep them here.
 
         // Verify the dead ATA is owned by the System Program (truly unrecoverable)
         require!(
@@ -253,13 +289,23 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
             receiver: ctx.accounts.user.key(),
             oku_m_amount,
             shares_minted: user_shares,
+            dead_shares_minted: MINIMUM_LIQUIDITY,
             usd_multiplier,
             oku_m_price,
             dollar_value,
         });
 
-        return Ok(user_shares);
+        Ok(user_shares)
     } else {
+        // Cycle 4 (OKUD-09): a `dead_shares_ata` is only meaningful on
+        // the first deposit. Reject it on subsequent wraps so callers
+        // can't pass arbitrary unused accounts in a slot the program
+        // would otherwise ignore. Tightens the API contract.
+        require!(
+            ctx.accounts.dead_shares_ata.is_none(),
+            OkuDollarError::UnexpectedDeadSharesAccount
+        );
+
         // Slippage protection
         require!(shares >= min_shares_out, OkuDollarError::SlippageExceeded);
 
@@ -286,12 +332,13 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
             receiver: ctx.accounts.user.key(),
             oku_m_amount,
             shares_minted: shares,
+            dead_shares_minted: 0,
             usd_multiplier,
             oku_m_price,
             dollar_value,
         });
 
-        return Ok(shares);
+        Ok(shares)
     }
 }
 
@@ -398,30 +445,45 @@ pub fn update_usd_multiplier(
     ctx: Context<UpdateUsdMultiplier>,
     new_usd_multiplier: u64,
 ) -> Result<()> {
-    // Cross-program yield-lock fence. The collateral check below reads
-    // `oku_m_price` from PSM config; if the orchestrator just bumped that
-    // price in the same slot (`set_oku_m_price` / `distribute_yield`),
-    // running the multiplier update in that same slot would let the
-    // collateral check use the freshly-updated price. Refusing same-slot
-    // operation keeps the price snapshot consistent across both legs and
-    // mirrors the `check_yield_lock` discipline already enforced on
-    // `wrap` / `unwrap`. The orchestrator should batch its PSM price
-    // update and vault multiplier update across adjacent slots.
+    // Cross-program yield-lock fence (PSM side). The collateral check
+    // below reads `oku_m_price` from PSM config; if the orchestrator
+    // just bumped that price in the same slot (`set_oku_m_price` /
+    // `distribute_yield`), running the multiplier update in that same
+    // slot would let the collateral check use the freshly-updated
+    // price. Refusing same-slot operation keeps the price snapshot
+    // consistent across both legs and mirrors the `check_yield_lock`
+    // discipline already enforced on `wrap` / `unwrap`. The
+    // orchestrator should batch its PSM price update and vault
+    // multiplier update across adjacent slots.
     check_yield_lock(&ctx.accounts.psm_config)?;
+
+    // Cycle 4 (OKUD-06): self-fence on the vault's own yield slot for
+    // parity with EVM `YieldSandwichGuard`. Two `update_usd_multiplier`
+    // calls in the same slot would otherwise be legal (strict-increase
+    // tolerates the second), defeating the "one yield event per slot
+    // per program" invariant. The same fix is mirrored on the lite-psm
+    // side (see `yield_ops::set_oku_m_price` / `distribute_yield`).
+    check_vault_yield_lock(&ctx.accounts.config)?;
 
     let config = &ctx.accounts.config;
     let old_multiplier = config.usd_multiplier;
     let min_collateral_ratio = config.min_collateral_ratio;
 
-    // Multiplier can only increase (yield distribution) or stay same
+    // Strict increase — a no-op multiplier write would stamp the
+    // sandwich-lock slot without moving any economic state, wasting the
+    // lock window for the entire slot. Mirrors the EVM fix landed in the
+    // oracle-relay cycle and the symmetric lite-psm
+    // `set_oku_m_price` strict-increase guard.
     require!(
-        new_usd_multiplier >= old_multiplier,
+        new_usd_multiplier > old_multiplier,
         OkuDollarError::MultiplierCannotDecrease
     );
 
-    // Sanity ceiling — bounds the math even if the rebaser key is compromised.
-    // See `MAX_USD_MULTIPLIER` in `constants.rs`. Mirrors lite-psm's
-    // `MAX_OKU_M_PRICE` ceiling on `set_oku_m_price` / `distribute_yield`.
+    // Math-sanity ceiling — keeps the downstream `u64 * u64 -> u128`
+    // multiplications inside the overflow-safe region. Not a guard
+    // against a malicious operator (out of scope per the centralized
+    // trust model) but a math bound. See `MAX_USD_MULTIPLIER` in
+    // `oku-shared/constants.rs`.
     require!(
         new_usd_multiplier <= MAX_USD_MULTIPLIER,
         OkuDollarError::MultiplierAboveMax
@@ -444,6 +506,18 @@ pub fn update_usd_multiplier(
         OkuDollarError::InsufficientCollateral
     );
 
+    // Cycle 4 (OKUD-14): snapshot the post-update collateral ratio for
+    // the event payload so monitoring tooling doesn't have to re-derive
+    // it. Uses the SAME inputs as the `is_sufficiently_collateralized`
+    // check above so the emitted ratio is exactly what the require
+    // just validated against.
+    let new_collateralization_ratio = calculate_collateral_ratio(
+        reserve_balance,
+        total_supply,
+        new_usd_multiplier,
+        oku_m_price,
+    )?;
+
     // Update the multiplier and stamp the yield-lock slot. Subsequent wraps
     // and unwraps in the SAME slot will be rejected by `check_vault_yield_lock`.
     let clock = Clock::get()?;
@@ -456,6 +530,7 @@ pub fn update_usd_multiplier(
         old_multiplier,
         new_multiplier: new_usd_multiplier,
         total_supply,
+        collateralization_ratio: new_collateralization_ratio,
         timestamp: config.usd_last_update_time,
     });
 
@@ -522,11 +597,24 @@ pub fn deposit_reserves(ctx: Context<DepositReserves>, amount: u64) -> Result<()
 ///
 /// Allows reserve manager to remove excess OkuMoney from the vault. Must
 /// maintain minimum collateralization ratio after withdrawal. Mirrors EVM
-/// `OkuDollar.withdrawSurplus`, which is gated by `whenNotPaused`.
+/// `OkuDollar.withdrawSurplus`, which is gated by `whenNotPaused` AND
+/// `whenYieldNotDistributing`.
 ///
 /// The pause check lives on the `WithdrawReserves` context as
 /// `constraint = !config.is_paused`, matching the `Wrap`/`Unwrap` pattern.
+///
+/// Yield-lock parity (EVM `withdrawSurplus`): the post-withdrawal
+/// collateralization check reads `oku_m_price` from `psm_config` AND
+/// `usd_multiplier` from this vault. A same-slot `set_oku_m_price` /
+/// `distribute_yield` (PSM) or `update_usd_multiplier` (vault) would shift
+/// the multipliers underneath that read. Even though `reserve_manager` is
+/// already a permissioned role, the lock makes the invariant explicit and
+/// matches the EVM defense-in-depth posture.
 pub fn withdraw_reserves(ctx: Context<WithdrawReserves>, amount: u64) -> Result<()> {
+    // Dual yield-lock fence (matches `wrap` / `unwrap`).
+    check_yield_lock(&ctx.accounts.psm_config)?;
+    check_vault_yield_lock(&ctx.accounts.config)?;
+
     require!(amount > 0, OkuDollarError::ZeroAmount);
 
     let bump = ctx.accounts.config.bump;

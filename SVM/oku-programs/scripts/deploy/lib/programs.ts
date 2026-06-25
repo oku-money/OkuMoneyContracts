@@ -41,10 +41,10 @@ type DeployPrecheckOutcome =
  * fastest meaningful sanity test ("did the same .so make it on chain?")
  * without re-fetching and byte-comparing the full ProgramData.
  *
- * Rationale: the deploy script orphaned a buffer + timed out in the last
- * run, but `oku_bridge_router` actually finalized on chain. Re-running
- * without this check would re-attempt a fresh deploy of the same .so,
- * which `solana program deploy` rejects with "Program already exists"
+ * Rationale: a prior deploy run could orphan a buffer + time out, even
+ * though the program actually finalized on chain. Re-running without
+ * this check would re-attempt a fresh deploy of the same .so, which
+ * `solana program deploy` rejects with "Program already exists"
  * (after eating gas) — or worse, on a hash-collision shape, would
  * unnecessarily upgrade. Skipping cleanly is the right behavior.
  */
@@ -156,7 +156,6 @@ export function loadIdlWithAddress(idl: any, programId: PublicKey): any {
 export interface ProgramIds {
   litePsm: PublicKey;
   okuDollar: PublicKey;
-  okuBridgeRouter: PublicKey;
 }
 
 /**
@@ -173,7 +172,7 @@ export async function deployPrograms(
 
   // Deploy programs one at a time using solana CLI with priority fees
   // Order: smallest to largest to fail fast if there's an issue
-  const programs = ['oku_bridge_router', 'oku_dollar', 'lite_psm'];
+  const programs = ['oku_dollar', 'lite_psm'];
   const { maxRetries, retryDelayMs, programDelayMs, priorityFee, deployTimeoutMs } = DEPLOYMENT_CONFIG;
   
   logger.info(`Deployment config: priorityFee=${priorityFee}, maxRetries=${maxRetries}, retryDelay=${retryDelayMs/1000}s`);
@@ -278,12 +277,10 @@ export async function deployPrograms(
   const programIds = {
     litePsm: getProgramIdFromKeypair(join(process.cwd(), keypairDir, 'lite_psm-keypair.json')),
     okuDollar: getProgramIdFromKeypair(join(process.cwd(), keypairDir, 'oku_dollar-keypair.json')),
-    okuBridgeRouter: getProgramIdFromKeypair(join(process.cwd(), keypairDir, 'oku_bridge_router-keypair.json')),
   };
 
   logger.success(`lite_psm: ${programIds.litePsm.toBase58()}`);
   logger.success(`oku_dollar: ${programIds.okuDollar.toBase58()}`);
-  logger.success(`oku_bridge_router: ${programIds.okuBridgeRouter.toBase58()}`);
 
   return programIds;
 }

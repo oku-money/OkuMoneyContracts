@@ -1,576 +1,36 @@
 {
-  "address": "3pi3vBj7dn98C4QbrrKD1LEFacpXBtmCzY17YR6j7wNa",
+  "address": "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N",
   "metadata": {
     "name": "lite_psm",
     "version": "0.1.0",
     "spec": "0.1.0",
-    "description": "LitePSM - USDC to OkuUSD peg stability module"
+    "description": "LitePSM - USDC to OkuMoney peg stability module"
   },
   "instructions": [
     {
-      "name": "add_supported_chain",
-      "discriminator": [
-        60,
-        144,
-        188,
-        237,
-        143,
-        56,
-        39,
-        112
-      ],
-      "accounts": [
-        {
-          "name": "chain_manager",
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "chain_id",
-          "type": "u16"
-        }
-      ]
-    },
-    {
-      "name": "bridge_burn",
-      "discriminator": [
-        158,
-        215,
-        142,
-        128,
-        223,
-        121,
-        29,
-        74
-      ],
-      "accounts": [
-        {
-          "name": "user",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "docs": [
-            "Bridge configuration"
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "config",
-          "docs": [
-            "PSM configuration"
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "bridge_nonce",
-          "docs": [
-            "Bridge nonce tracker for destination chain"
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  110,
-                  111,
-                  110,
-                  99,
-                  101
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "destination_chain_id"
-              }
-            ]
-          }
-        },
-        {
-          "name": "oku_money_mint",
-          "docs": [
-            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)"
-          ],
-          "writable": true
-        },
-        {
-          "name": "user_oku_money_ata",
-          "docs": [
-            "User's OkuMoney account"
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "user"
-              },
-              {
-                "kind": "account",
-                "path": "token_2022_program"
-              },
-              {
-                "kind": "account",
-                "path": "oku_money_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "fee_recipient_ata",
-          "docs": [
-            "Fee recipient's OkuMoney account (optional - skip if user == fee_recipient)",
-            "When user is the fee recipient, pass None to avoid duplicate mutable account error.",
-            "The instruction will skip fee minting in that case (user already \"paid\" the fee by burning)."
-          ],
-          "writable": true,
-          "optional": true
-        },
-        {
-          "name": "token_2022_program",
-          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "amount",
-          "type": "u64"
-        },
-        {
-          "name": "recipient",
-          "type": {
-            "array": [
-              "u8",
-              20
-            ]
-          }
-        },
-        {
-          "name": "destination_chain_id",
-          "type": "u16"
-        }
-      ]
-    },
-    {
-      "name": "bridge_mint",
-      "discriminator": [
-        71,
-        115,
-        241,
-        7,
-        103,
-        250,
-        26,
-        84
-      ],
-      "accounts": [
-        {
-          "name": "payer",
-          "docs": [
-            "Payer for ProcessedRequest PDA creation"
-          ],
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "docs": [
-            "Bridge configuration"
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "config",
-          "docs": [
-            "PSM configuration"
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "processed_request",
-          "docs": [
-            "ProcessedRequest PDA (prevents replay attacks)",
-            "Seeds are derived from keccak256(message_bytes), passed as request_id"
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  114,
-                  101,
-                  113,
-                  117,
-                  101,
-                  115,
-                  116
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "request_id"
-              }
-            ]
-          }
-        },
-        {
-          "name": "oku_money_mint",
-          "docs": [
-            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)"
-          ],
-          "writable": true
-        },
-        {
-          "name": "recipient_oku_money_ata",
-          "docs": [
-            "Recipient's OkuMoney account (will validate owner in function body)"
-          ],
-          "writable": true
-        },
-        {
-          "name": "instruction_sysvar",
-          "docs": [
-            "Instruction sysvar for Ed25519 signature verification"
-          ],
-          "address": "Sysvar1nstructions1111111111111111111111111"
-        },
-        {
-          "name": "token_2022_program",
-          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "message_bytes",
-          "type": "bytes"
-        },
-        {
-          "name": "signature",
-          "type": "bytes"
-        },
-        {
-          "name": "request_id",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "cancel_refund",
+      "name": "accept_role_admin",
       "docs": [
-        "Cancel a pending refund",
-        "Can be called by either refund_initiator or refund_confirmer"
+        "Step 2 of the two-step `RoleAdmin` rotation. Must be signed by the",
+        "`pending_role_admin` previously proposed via `set_authority(RoleAdmin,",
+        "new_admin)`. See `instructions::psm_admin::accept_role_admin`."
       ],
       "discriminator": [
-        192,
-        62,
-        158,
         203,
-        193,
-        97,
-        26,
-        15
+        100,
+        15,
+        101,
+        168,
+        236,
+        213,
+        218
       ],
       "accounts": [
         {
-          "name": "canceller",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "pending_refund",
+          "name": "new_role_admin",
           "docs": [
-            "PendingRefund PDA - will be closed"
+            "The proposed new role admin — must match `config.pending_role_admin`."
           ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  101,
-                  110,
-                  100,
-                  105,
-                  110,
-                  103,
-                  95,
-                  114,
-                  101,
-                  102,
-                  117,
-                  110,
-                  100
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "request_id"
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "request_id",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "confirm_refund",
-      "docs": [
-        "Confirm a refund (step 2 of two-step refund pattern)",
-        "Must be called by refund_confirmer (different key than initiator)"
-      ],
-      "discriminator": [
-        0,
-        242,
-        219,
-        133,
-        105,
-        39,
-        74,
-        20
-      ],
-      "accounts": [
-        {
-          "name": "refund_confirmer",
-          "writable": true,
           "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
         },
         {
           "name": "config",
@@ -589,16 +49,50 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
           }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "cancel_role_admin_transfer",
+      "docs": [
+        "Withdraw an in-flight `RoleAdmin` two-step proposal (current",
+        "`role_admin` only). Useful for typo recovery before the new admin",
+        "accepts."
+      ],
+      "discriminator": [
+        155,
+        31,
+        41,
+        13,
+        107,
+        117,
+        20,
+        22
+      ],
+      "accounts": [
+        {
+          "name": "role_admin",
+          "docs": [
+            "Role admin - only role_admin can update authorities"
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
         },
         {
-          "name": "pending_refund",
+          "name": "config",
           "docs": [
-            "PendingRefund PDA - must exist"
+            "PSM config"
           ],
           "writable": true,
           "pda": {
@@ -607,94 +101,25 @@
                 "kind": "const",
                 "value": [
                   112,
-                  101,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
                   110,
-                  100,
+                  102,
                   105,
-                  110,
                   103,
                   95,
-                  114,
-                  101,
-                  102,
-                  117,
-                  110,
-                  100
+                  118,
+                  51
                 ]
-              },
-              {
-                "kind": "arg",
-                "path": "request_id"
               }
-            ]
-          }
-        },
-        {
-          "name": "refunded_request",
-          "docs": [
-            "RefundedRequest PDA - will be created"
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  114,
-                  101,
-                  102,
-                  117,
-                  110,
-                  100
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "request_id"
-              }
-            ]
-          }
-        },
-        {
-          "name": "oku_money_mint",
-          "docs": [
-            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)"
-          ],
-          "writable": true
-        },
-        {
-          "name": "sender_oku_money_ata",
-          "docs": [
-            "Sender's OkuMoney ATA - owner is validated against pending_refund.recipient"
-          ],
-          "writable": true
-        },
-        {
-          "name": "token_2022_program"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "request_id",
-          "type": {
-            "array": [
-              "u8",
-              32
             ]
           }
         }
-      ]
+      ],
+      "args": []
     },
     {
       "name": "deposit_buffer",
@@ -711,7 +136,10 @@
       "accounts": [
         {
           "name": "buffer_depositor",
-          "signer": true
+          "signer": true,
+          "relations": [
+            "config"
+          ]
         },
         {
           "name": "config",
@@ -729,7 +157,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -839,7 +270,10 @@
           "docs": [
             "Rebaser role - authorized to distribute yield"
           ],
-          "signer": true
+          "signer": true,
+          "relations": [
+            "config"
+          ]
         },
         {
           "name": "config",
@@ -861,7 +295,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -906,7 +343,10 @@
           "docs": [
             "Blacklister authority - can freeze even when PSM is paused"
           ],
-          "signer": true
+          "signer": true,
+          "relations": [
+            "config"
+          ]
         },
         {
           "name": "config",
@@ -924,7 +364,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -985,7 +428,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -994,14 +440,31 @@
         {
           "name": "usdc_mint",
           "docs": [
-            "USDC mint (standard SPL)"
+            "USDC mint (standard SPL).",
+            "",
+            "Must have exactly `TOKEN_DECIMALS` (= 6) decimals on Solana —",
+            "this matches the `OkuMoney`/`usdOku` decimal model. EVM resolves",
+            "a runtime `usdcDecimalMultiplier` from `IERC20Metadata.decimals()`;",
+            "SVM hardcodes the value via the shared constant and asserts at",
+            "init."
           ]
         },
         {
           "name": "oku_money_mint",
           "docs": [
-            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)",
-            "PSM config PDA must be mint authority"
+            "OkuMoney mint (Token-2022).",
+            "",
+            "At init we lock down both authorities to the PSM config PDA so that",
+            "no EOA can mint or freeze OkuMoney post-deployment. Without these",
+            "constraints, a misconfigured deploy could initialize PSM against a",
+            "mint whose authority is a different program / multisig, silently",
+            "breaking supply accounting.",
+            "",
+            "Decimals are pinned at `TOKEN_DECIMALS` (= 6) — all PSM math",
+            "(`oku_m_price`, `oku_m_to_dollars`, yield distribution) assumes",
+            "6-decimal raw amounts. Cycle 4: replaced the literal `6` with",
+            "the shared constant so a future re-decimalisation can't drift",
+            "the assertion away from the assumed precision."
           ]
         },
         {
@@ -1079,398 +542,15 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
-        },
-        {
-          "name": "rent",
-          "address": "SysvarRent111111111111111111111111111111111"
         }
       ],
       "args": [
         {
-          "name": "max_supply",
-          "type": "u64"
-        },
-        {
-          "name": "minter_allowance",
-          "type": "u64"
-        },
-        {
-          "name": "pauser",
-          "type": "pubkey"
-        },
-        {
-          "name": "unpauser",
-          "type": "pubkey"
-        },
-        {
-          "name": "freezer",
-          "type": "pubkey"
-        },
-        {
-          "name": "unfreezer",
-          "type": "pubkey"
-        },
-        {
-          "name": "queue_processor",
-          "type": "pubkey"
-        },
-        {
-          "name": "buffer_depositor",
-          "type": "pubkey"
-        },
-        {
-          "name": "buffer_withdrawer",
-          "type": "pubkey"
-        },
-        {
-          "name": "oracle_manager",
-          "type": "pubkey"
-        },
-        {
-          "name": "cap_manager",
-          "type": "pubkey"
-        },
-        {
-          "name": "allowance_manager",
-          "type": "pubkey"
-        },
-        {
-          "name": "rebaser",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
-      "name": "initialize_blacklist_exempt",
-      "docs": [
-        "Initialize blacklist exemption for bridge and router (one-time, ROLE_ADMIN only)"
-      ],
-      "discriminator": [
-        184,
-        212,
-        138,
-        218,
-        87,
-        96,
-        176,
-        148
-      ],
-      "accounts": [
-        {
-          "name": "role_admin",
-          "docs": [
-            "Role admin - only role_admin can set blacklist exemptions"
-          ],
-          "signer": true
-        },
-        {
-          "name": "config",
-          "docs": [
-            "PSM config"
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "bridge",
-          "type": "pubkey"
-        },
-        {
-          "name": "router",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
-      "name": "initialize_bridge",
-      "discriminator": [
-        6,
-        173,
-        152,
-        229,
-        35,
-        112,
-        127,
-        151
-      ],
-      "accounts": [
-        {
-          "name": "bridge_admin",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "bridge_pauser"
-        },
-        {
-          "name": "bridge_unpauser"
-        },
-        {
-          "name": "orchestrator_signer"
-        },
-        {
-          "name": "fee_recipient"
-        },
-        {
-          "name": "chain_manager"
-        },
-        {
-          "name": "fee_manager"
-        },
-        {
-          "name": "nonce_admin"
-        },
-        {
-          "name": "signer_manager"
-        },
-        {
-          "name": "limits_manager"
-        },
-        {
-          "name": "bridge_config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "source_chain_id",
-          "type": "u16"
-        }
-      ]
-    },
-    {
-      "name": "initiate_refund",
-      "docs": [
-        "Initiate a refund (step 1 of two-step refund pattern)",
-        "Creates a PendingRefund PDA that must be confirmed by refund_confirmer"
-      ],
-      "discriminator": [
-        98,
-        61,
-        179,
-        65,
-        151,
-        150,
-        94,
-        1
-      ],
-      "accounts": [
-        {
-          "name": "refund_initiator",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "pending_refund",
-          "docs": [
-            "PendingRefund PDA - will be created"
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  101,
-                  110,
-                  100,
-                  105,
-                  110,
-                  103,
-                  95,
-                  114,
-                  101,
-                  102,
-                  117,
-                  110,
-                  100
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "request_id"
-              }
-            ]
-          }
-        },
-        {
-          "name": "processed_request",
-          "docs": [
-            "ProcessedRequest PDA - must NOT exist (checked via constraint)",
-            "This prevents refunding a request that was already successfully minted"
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  114,
-                  101,
-                  113,
-                  117,
-                  101,
-                  115,
-                  116
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "request_id"
-              }
-            ]
-          }
-        },
-        {
-          "name": "refunded_request",
-          "docs": [
-            "RefundedRequest PDA - must NOT exist (checked via constraint)",
-            "This prevents double-refunding a request"
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  114,
-                  101,
-                  102,
-                  117,
-                  110,
-                  100
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "request_id"
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "message_bytes",
-          "type": "bytes"
-        },
-        {
-          "name": "request_id",
+          "name": "params",
           "type": {
-            "array": [
-              "u8",
-              32
-            ]
+            "defined": {
+              "name": "InitializeParams"
+            }
           }
         }
       ]
@@ -1514,7 +594,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -1529,7 +612,12 @@
         {
           "name": "oku_money_mint",
           "docs": [
-            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)"
+            "OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy",
+            "script chooses which extensions (if any) are configured at mint creation.",
+            "`mint::authority = config` is defense-in-depth: even if someone attempted",
+            "an out-of-band mint-authority rotation (which requires a CPI signed by",
+            "the current authority = config PDA, so it cannot happen without the",
+            "program's consent), this constraint would catch it at deserialization."
           ],
           "writable": true
         },
@@ -1661,9 +749,12 @@
           "writable": true
         },
         {
-          "name": "price_update",
+          "name": "oracle_relay_feed",
           "docs": [
-            "Pyth price account (optional - only required if oracle is configured)"
+            "USDC/USD Pyth feed used by the oracle-relay peg-check (optional —",
+            "only required when `config.oracle_relay_feed != Pubkey::default()`).",
+            "account key matches `config.oracle_relay_feed` and the owner",
+            "matches `config.oracle_relay_pyth_program_owner`."
           ],
           "optional": true
         },
@@ -1729,53 +820,10 @@
                   110,
                   102,
                   105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "pause_bridge",
-      "discriminator": [
-        162,
-        103,
-        59,
-        230,
-        104,
-        233,
-        25,
-        246
-      ],
-      "accounts": [
-        {
-          "name": "bridge_pauser",
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
                   103,
-                  101,
                   95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
+                  118,
+                  51
                 ]
               }
             ]
@@ -1799,7 +847,10 @@
       "accounts": [
         {
           "name": "queue_processor",
-          "signer": true
+          "signer": true,
+          "relations": [
+            "config"
+          ]
         },
         {
           "name": "config",
@@ -1817,7 +868,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -1825,6 +879,11 @@
         },
         {
           "name": "redemption_queue",
+          "docs": [
+            "Redemption queue (zero-copy). `process_queue` uses `load()`+`load_mut()`",
+            "interleaved with CPIs to advance the head ring. See `bump` note on",
+            "`RedeemOkuM::redemption_queue`."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -1846,7 +905,10 @@
                   117,
                   101,
                   117,
-                  101
+                  101,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1855,7 +917,9 @@
         {
           "name": "oku_money_mint",
           "docs": [
-            "OkuMoney mint (Token-2022) - needed for burn CPI and price reads"
+            "OkuMoney mint (Token-2022) — needed for burn CPI and price reads.",
+            "`mint::authority = config` is defense-in-depth (see rationale on",
+            "`MintOkuM::oku_money_mint`)."
           ],
           "writable": true
         },
@@ -1869,9 +933,18 @@
         {
           "name": "vault_oku_money",
           "docs": [
-            "PSM's OkuMoney escrow vault - holds queued redemptions"
+            "PSM's OkuMoney escrow vault - holds queued redemptions.",
+            "Pinned to `config.vault_oku_money` (see rationale on `RedeemOkuM`)."
           ],
           "writable": true
+        },
+        {
+          "name": "oracle_relay_feed",
+          "docs": [
+            "USDC/USD Pyth feed for the peg circuit-breaker (optional — only",
+            "required when `config.oracle_relay_feed != Pubkey::default()`)."
+          ],
+          "optional": true
         },
         {
           "name": "token_program",
@@ -1927,7 +1000,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -1935,6 +1011,14 @@
         },
         {
           "name": "redemption_queue",
+          "docs": [
+            "Redemption queue (zero-copy ring buffer). Use `load_mut()` to enqueue,",
+            "`load()` for read-only inspection. The handler is responsible for",
+            "dropping the borrow before any CPI that re-borrows the account info.",
+            "The `bump = redemption_queue.load()?.bump` constraint pattern is",
+            "awkward in Anchor's derive; we instead use the canonical",
+            "`bump` lookup (Anchor will recompute it from seeds)."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -1956,7 +1040,10 @@
                   117,
                   101,
                   117,
-                  101
+                  101,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1971,7 +1058,8 @@
         {
           "name": "oku_money_mint",
           "docs": [
-            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)"
+            "OkuMoney mint (Token-2022). `mint::authority = config` is defense-in-depth",
+            "(see rationale on `MintOkuM::oku_money_mint`)."
           ],
           "writable": true
         },
@@ -2105,9 +1193,22 @@
         {
           "name": "vault_oku_money",
           "docs": [
-            "PSM's OkuMoney escrow vault (for queued redemptions)"
+            "PSM's OkuMoney escrow vault (for queued redemptions).",
+            "Pinned to `config.vault_oku_money` so a caller cannot substitute an",
+            "alternate config-owned OkuMoney ATA — without the explicit address",
+            "pin, any Token-2022 OkuMoney account whose authority is the config",
+            "PDA would satisfy the constraints and the user's escrowed tokens",
+            "would be silently routed away from the canonical escrow."
           ],
           "writable": true
+        },
+        {
+          "name": "oracle_relay_feed",
+          "docs": [
+            "USDC/USD Pyth feed for the peg circuit-breaker (optional — only",
+            "required when `config.oracle_relay_feed != Pubkey::default()`)."
+          ],
+          "optional": true
         },
         {
           "name": "token_program",
@@ -2134,233 +1235,13 @@
       ]
     },
     {
-      "name": "refund_bridge_request",
-      "docs": [
-        "Legacy single-step refund (deprecated)",
-        "Use initiate_refund + confirm_refund for new integrations"
-      ],
-      "discriminator": [
-        87,
-        7,
-        9,
-        200,
-        30,
-        164,
-        134,
-        77
-      ],
-      "accounts": [
-        {
-          "name": "refund_admin",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "refunded_request",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  114,
-                  101,
-                  102,
-                  117,
-                  110,
-                  100
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "request_id"
-              }
-            ]
-          }
-        },
-        {
-          "name": "processed_request",
-          "docs": [
-            "ProcessedRequest PDA - must NOT exist (checked via constraint)",
-            "This prevents refunding a request that was already successfully minted"
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  114,
-                  101,
-                  113,
-                  117,
-                  101,
-                  115,
-                  116
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "request_id"
-              }
-            ]
-          }
-        },
-        {
-          "name": "oku_money_mint",
-          "docs": [
-            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)"
-          ],
-          "writable": true
-        },
-        {
-          "name": "sender_oku_money_ata",
-          "docs": [
-            "Sender's OkuMoney ATA - owner is validated in instruction body"
-          ],
-          "writable": true
-        },
-        {
-          "name": "token_2022_program"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "message_bytes",
-          "type": "bytes"
-        },
-        {
-          "name": "request_id",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "remove_supported_chain",
-      "discriminator": [
-        0,
-        48,
-        119,
-        114,
-        52,
-        213,
-        242,
-        33
-      ],
-      "accounts": [
-        {
-          "name": "chain_manager",
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "chain_id",
-          "type": "u16"
-        }
-      ]
-    },
-    {
       "name": "rescue_queue_entry",
       "docs": [
-        "Rescue a stuck queue entry — returns escrowed OkuMoney to recipient",
-        "Only queue_processor can call (matches EVM's rescueQueueEntry)"
+        "Rescue a stuck queue entry — returns escrowed OkuMoney to recipient.",
+        "Only queue_processor can call (matches EVM's rescueQueueEntry).",
+        "",
+        "`queue_index` is u64 — indexer / orchestrator code must pass",
+        "the index as a `BN`/bigint on the TS side."
       ],
       "discriminator": [
         128,
@@ -2375,7 +1256,10 @@
       "accounts": [
         {
           "name": "queue_processor",
-          "signer": true
+          "signer": true,
+          "relations": [
+            "config"
+          ]
         },
         {
           "name": "config",
@@ -2393,7 +1277,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -2401,6 +1288,10 @@
         },
         {
           "name": "redemption_queue",
+          "docs": [
+            "Redemption queue (zero-copy). `rescue_queue_entry` uses `load_mut()`",
+            "after the CPI to clear the entry and advance the head ring."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -2422,7 +1313,10 @@
                   117,
                   101,
                   117,
-                  101
+                  101,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -2444,7 +1338,11 @@
         {
           "name": "recipient_oku_money_ata",
           "docs": [
-            "Recipient's OkuMoney account (can be original user or alternate)"
+            "Recipient's OkuMoney account (can be original user or alternate).",
+            "Must hold the configured OkuMoney mint and live under the Token-2022",
+            "program — without these constraints a `queue_processor` could be",
+            "tricked into transferring the escrowed OkuMoney into an account on the",
+            "wrong mint, surfacing only as an opaque SPL-layer error."
           ],
           "writable": true
         },
@@ -2456,7 +1354,7 @@
       "args": [
         {
           "name": "queue_index",
-          "type": "u32"
+          "type": "u64"
         }
       ]
     },
@@ -2478,7 +1376,10 @@
           "docs": [
             "Role admin - only role_admin can update authorities"
           ],
-          "signer": true
+          "signer": true,
+          "relations": [
+            "config"
+          ]
         },
         {
           "name": "config",
@@ -2500,7 +1401,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -2513,65 +1417,6 @@
           "type": {
             "defined": {
               "name": "AuthorityRole"
-            }
-          }
-        },
-        {
-          "name": "new_authority",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
-      "name": "set_bridge_authority",
-      "discriminator": [
-        158,
-        241,
-        140,
-        64,
-        226,
-        16,
-        99,
-        251
-      ],
-      "accounts": [
-        {
-          "name": "bridge_admin",
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "role",
-          "type": {
-            "defined": {
-              "name": "BridgeAuthorityRole"
             }
           }
         },
@@ -2619,11 +1464,26 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
           }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint — read so `set_max_supply` can refuse a new cap below",
+            "the current circulating supply (would silently brick all future",
+            "mints). EVM `OkuMoney.setMaxSupply` parity."
+          ]
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         }
       ],
       "args": [
@@ -2671,7 +1531,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -2707,7 +1570,10 @@
           "docs": [
             "Rebaser role - authorized to update OkuMoney price"
           ],
-          "signer": true
+          "signer": true,
+          "relations": [
+            "config"
+          ]
         },
         {
           "name": "config",
@@ -2729,7 +1595,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -2757,16 +1626,21 @@
       ]
     },
     {
-      "name": "set_oracle",
+      "name": "set_oracle_relay_band",
+      "docs": [
+        "Rotate the in-band USDC peg window (1e9 precision). Constrained by",
+        "the hard `ORACLE_USDC_PRICE_FLOOR` / `_CEILING` bounds.",
+        "`oracle_manager`-gated."
+      ],
       "discriminator": [
-        186,
-        128,
-        81,
-        104,
-        74,
-        79,
-        18,
-        224
+        184,
+        112,
+        164,
+        206,
+        83,
+        36,
+        216,
+        178
       ],
       "accounts": [
         {
@@ -2794,20 +1668,276 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
           }
+        },
+        {
+          "name": "oracle_account",
+          "docs": [
+            "Optional pre-flight account for `set_oracle_relay_feed`. When",
+            "`new_feed != Pubkey::default()` and this account is supplied, the",
+            "handler parses the Pyth header and asserts the runtime invariants",
+            "(`magic`, `version == 2`, `atype == Price`, owner,",
+            "`|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before persisting the new",
+            "feed pubkey. Without the pre-flight check, an admin could silently",
+            "configure a malformed feed that would only error at every",
+            "subsequent mint / redeem / queue-process call. The other relay",
+            "setters (`set_oracle_relay_staleness`, `_band`,",
+            "`_pyth_program_owner`) ignore this account.",
+            "required for the `set_oracle_relay_feed` path with a non-default",
+            "feed pubkey."
+          ],
+          "optional": true
         }
       ],
       "args": [
         {
-          "name": "oracle",
-          "type": "pubkey"
+          "name": "new_min_e9",
+          "type": "u64"
         },
         {
-          "name": "staleness_threshold",
+          "name": "new_max_e9",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_oracle_relay_feed",
+      "docs": [
+        "Rotate the USDC/USD Pyth feed used by the peg-check.",
+        "`new_feed == Pubkey::default()` is the operator-side kill switch",
+        "(disables the peg check entirely; mirrors EVM",
+        "`setOracleRelay(address(0))`). `oracle_manager`-gated."
+      ],
+      "discriminator": [
+        119,
+        168,
+        245,
+        188,
+        153,
+        247,
+        97,
+        209
+      ],
+      "accounts": [
+        {
+          "name": "oracle_manager",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  51
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle_account",
+          "docs": [
+            "Optional pre-flight account for `set_oracle_relay_feed`. When",
+            "`new_feed != Pubkey::default()` and this account is supplied, the",
+            "handler parses the Pyth header and asserts the runtime invariants",
+            "(`magic`, `version == 2`, `atype == Price`, owner,",
+            "`|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before persisting the new",
+            "feed pubkey. Without the pre-flight check, an admin could silently",
+            "configure a malformed feed that would only error at every",
+            "subsequent mint / redeem / queue-process call. The other relay",
+            "setters (`set_oracle_relay_staleness`, `_band`,",
+            "`_pyth_program_owner`) ignore this account.",
+            "required for the `set_oracle_relay_feed` path with a non-default",
+            "feed pubkey."
+          ],
+          "optional": true
+        }
+      ],
+      "args": [
+        {
+          "name": "new_feed",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_oracle_relay_pyth_program_owner",
+      "docs": [
+        "Rotate the accepted Pyth program owner pubkey. Migration hook for",
+        "future Pyth deployments (e.g. Pyth Solana Receiver) without",
+        "redeploying. `oracle_manager`-gated."
+      ],
+      "discriminator": [
+        128,
+        136,
+        203,
+        167,
+        185,
+        107,
+        20,
+        15
+      ],
+      "accounts": [
+        {
+          "name": "oracle_manager",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  51
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle_account",
+          "docs": [
+            "Optional pre-flight account for `set_oracle_relay_feed`. When",
+            "`new_feed != Pubkey::default()` and this account is supplied, the",
+            "handler parses the Pyth header and asserts the runtime invariants",
+            "(`magic`, `version == 2`, `atype == Price`, owner,",
+            "`|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before persisting the new",
+            "feed pubkey. Without the pre-flight check, an admin could silently",
+            "configure a malformed feed that would only error at every",
+            "subsequent mint / redeem / queue-process call. The other relay",
+            "setters (`set_oracle_relay_staleness`, `_band`,",
+            "`_pyth_program_owner`) ignore this account.",
+            "required for the `set_oracle_relay_feed` path with a non-default",
+            "feed pubkey."
+          ],
+          "optional": true
+        }
+      ],
+      "args": [
+        {
+          "name": "new_pyth_program_owner",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_oracle_relay_staleness",
+      "docs": [
+        "Rotate the relay staleness threshold (seconds). Bounded by",
+        "`[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]`.",
+        "`oracle_manager`-gated."
+      ],
+      "discriminator": [
+        148,
+        100,
+        26,
+        43,
+        136,
+        190,
+        220,
+        92
+      ],
+      "accounts": [
+        {
+          "name": "oracle_manager",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  51
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle_account",
+          "docs": [
+            "Optional pre-flight account for `set_oracle_relay_feed`. When",
+            "`new_feed != Pubkey::default()` and this account is supplied, the",
+            "handler parses the Pyth header and asserts the runtime invariants",
+            "(`magic`, `version == 2`, `atype == Price`, owner,",
+            "`|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before persisting the new",
+            "feed pubkey. Without the pre-flight check, an admin could silently",
+            "configure a malformed feed that would only error at every",
+            "subsequent mint / redeem / queue-process call. The other relay",
+            "setters (`set_oracle_relay_staleness`, `_band`,",
+            "`_pyth_program_owner`) ignore this account.",
+            "required for the `set_oracle_relay_feed` path with a non-default",
+            "feed pubkey."
+          ],
+          "optional": true
+        }
+      ],
+      "args": [
+        {
+          "name": "new_staleness",
           "type": "i64"
         }
       ]
@@ -2850,7 +1980,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -2859,8 +1992,9 @@
         {
           "name": "oku_money_mint",
           "docs": [
-            "OkuMoney mint (Token-2022 with Scaled UI Amount extension)",
-            "Must match the mint stored in config during initialize"
+            "OkuMoney mint (Token-2022).",
+            "Must match the mint stored in config during initialize, and must have",
+            "the PSM config PDA as both mint and freeze authority."
           ]
         },
         {
@@ -2953,14 +2087,25 @@
       ],
       "accounts": [
         {
-          "name": "payer",
+          "name": "role_admin",
+          "docs": [
+            "`role_admin` is the only authority permitted to create the queue PDA.",
+            "Without this gate, any signer could front-run the deployer and create",
+            "the canonical-seeded `RedemptionQueue` PDA, forcing the legitimate",
+            "`initialize` flow to fail with `AccountAlreadyInitialized` until the",
+            "griefer's account is closed. Matches the authority model used by",
+            "`SetupOkuMoneyEscrow` below."
+          ],
           "writable": true,
-          "signer": true
+          "signer": true,
+          "relations": [
+            "config"
+          ]
         },
         {
           "name": "config",
           "docs": [
-            "PSM config must exist (initialize was called)"
+            "PSM config must exist (initialize was called)."
           ],
           "pda": {
             "seeds": [
@@ -2976,7 +2121,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -3005,7 +2153,10 @@
                   117,
                   101,
                   117,
-                  101
+                  101,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -3017,94 +2168,6 @@
         }
       ],
       "args": []
-    },
-    {
-      "name": "skip_nonce",
-      "discriminator": [
-        118,
-        164,
-        229,
-        14,
-        80,
-        41,
-        153,
-        97
-      ],
-      "accounts": [
-        {
-          "name": "nonce_admin",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "bridge_nonce",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  110,
-                  111,
-                  110,
-                  99,
-                  101
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "destination_chain_id"
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "destination_chain_id",
-          "type": "u16"
-        },
-        {
-          "name": "new_nonce",
-          "type": "u64"
-        }
-      ]
     },
     {
       "name": "thaw_account",
@@ -3124,7 +2187,10 @@
           "docs": [
             "Unblacklister authority - can thaw even when PSM is paused (requires deliberate review)"
           ],
-          "signer": true
+          "signer": true,
+          "relations": [
+            "config"
+          ]
         },
         {
           "name": "config",
@@ -3142,7 +2208,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -3206,7 +2275,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -3216,325 +2288,30 @@
       "args": []
     },
     {
-      "name": "unpause_bridge",
+      "name": "user_self_rescue_queue_entry",
+      "docs": [
+        "Permissionless self-rescue (cycle 4 / PSM-06).",
+        "",
+        "Any user can reclaim their own queued OkuMoney without operator",
+        "involvement, unblocking the head-pin DoS where a frozen ATA on",
+        "the head entry stalls every subsequent `process_queue` call.",
+        "Signer must be the entry's original queued user; recipient ATA",
+        "must be owned by that user (constraints enforced on the",
+        "`UserSelfRescueQueueEntry` context)."
+      ],
       "discriminator": [
-        38,
-        76,
-        229,
-        108,
+        89,
+        16,
+        194,
         125,
-        173,
-        75,
-        116
-      ],
-      "accounts": [
-        {
-          "name": "bridge_unpauser",
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "update_bridge_deadline",
-      "discriminator": [
-        107,
-        125,
-        202,
-        52,
-        71,
-        136,
-        173,
-        94
-      ],
-      "accounts": [
-        {
-          "name": "limits_manager",
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "new_deadline",
-          "type": "i64"
-        }
-      ]
-    },
-    {
-      "name": "update_bridge_fee",
-      "discriminator": [
-        179,
-        226,
-        77,
-        242,
-        24,
-        214,
-        150,
-        167
-      ],
-      "accounts": [
-        {
-          "name": "fee_manager",
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "new_fee_bps",
-          "type": "u16"
-        }
-      ]
-    },
-    {
-      "name": "update_bridge_limits",
-      "discriminator": [
-        227,
-        239,
-        135,
-        205,
-        142,
-        223,
-        185,
-        11
-      ],
-      "accounts": [
-        {
-          "name": "limits_manager",
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "min_amount",
-          "type": "u64"
-        },
-        {
-          "name": "max_amount",
-          "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "update_fee_recipient",
-      "discriminator": [
-        249,
-        0,
-        198,
-        35,
-        183,
-        123,
-        57,
-        188
-      ],
-      "accounts": [
-        {
-          "name": "fee_manager",
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "new_recipient",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
-      "name": "update_orchestrator_signer",
-      "discriminator": [
-        94,
-        183,
-        245,
-        63,
-        245,
         85,
-        114,
-        89
+        57,
+        140,
+        38
       ],
       "accounts": [
         {
-          "name": "signer_manager",
-          "signer": true
-        },
-        {
-          "name": "bridge_config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  114,
-                  105,
-                  100,
-                  103,
-                  101,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "new_signer",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
-      "name": "withdraw_buffer",
-      "discriminator": [
-        90,
-        131,
-        164,
-        164,
-        84,
-        162,
-        127,
-        172
-      ],
-      "accounts": [
-        {
-          "name": "buffer_withdrawer",
+          "name": "user",
           "signer": true
         },
         {
@@ -3553,7 +2330,116 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  51
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "redemption_queue",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  100,
+                  101,
+                  109,
+                  112,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  113,
+                  117,
+                  101,
+                  117,
+                  101,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint"
+        },
+        {
+          "name": "vault_oku_money",
+          "writable": true
+        },
+        {
+          "name": "recipient_oku_money_ata",
+          "docs": [
+            "Recipient ATA — must be owned by `user` (enforced by",
+            "`token::authority = user`). Pinning the authority is what",
+            "distinguishes self-rescue from the privileged operator rescue",
+            "(which can target an arbitrary recipient)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "queue_index",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "withdraw_buffer",
+      "discriminator": [
+        90,
+        131,
+        164,
+        164,
+        84,
+        162,
+        127,
+        172
+      ],
+      "accounts": [
+        {
+          "name": "buffer_withdrawer",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  51
                 ]
               }
             ]
@@ -3562,7 +2448,8 @@
         {
           "name": "redemption_queue",
           "docs": [
-            "Redemption queue (read-only) - used to calculate reserved USDC for pending entries"
+            "Redemption queue (read-only) — used to calculate reserved USDC for",
+            "pending entries. `load()` only."
           ],
           "pda": {
             "seeds": [
@@ -3584,7 +2471,10 @@
                   117,
                   101,
                   117,
-                  101
+                  101,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -3632,58 +2522,6 @@
   ],
   "accounts": [
     {
-      "name": "BridgeConfig",
-      "discriminator": [
-        40,
-        206,
-        51,
-        233,
-        246,
-        40,
-        178,
-        85
-      ]
-    },
-    {
-      "name": "BridgeNonce",
-      "discriminator": [
-        194,
-        75,
-        5,
-        181,
-        240,
-        118,
-        188,
-        64
-      ]
-    },
-    {
-      "name": "PendingRefund",
-      "discriminator": [
-        21,
-        143,
-        71,
-        34,
-        213,
-        21,
-        173,
-        155
-      ]
-    },
-    {
-      "name": "ProcessedRequest",
-      "discriminator": [
-        20,
-        124,
-        158,
-        247,
-        78,
-        104,
-        105,
-        189
-      ]
-    },
-    {
       "name": "PsmConfig",
       "discriminator": [
         145,
@@ -3708,19 +2546,6 @@
         214,
         153
       ]
-    },
-    {
-      "name": "RefundedRequest",
-      "discriminator": [
-        38,
-        30,
-        25,
-        79,
-        168,
-        201,
-        85,
-        186
-      ]
     }
   ],
   "events": [
@@ -3738,136 +2563,6 @@
       ]
     },
     {
-      "name": "BlacklistExemptInitialized",
-      "discriminator": [
-        44,
-        220,
-        97,
-        197,
-        106,
-        233,
-        9,
-        153
-      ]
-    },
-    {
-      "name": "BridgeAuthorityUpdatedEvent",
-      "discriminator": [
-        87,
-        122,
-        164,
-        124,
-        61,
-        208,
-        91,
-        2
-      ]
-    },
-    {
-      "name": "BridgeBurnEvent",
-      "discriminator": [
-        128,
-        121,
-        253,
-        157,
-        83,
-        33,
-        183,
-        101
-      ]
-    },
-    {
-      "name": "BridgeDeadlineUpdatedEvent",
-      "discriminator": [
-        151,
-        197,
-        105,
-        59,
-        35,
-        46,
-        58,
-        47
-      ]
-    },
-    {
-      "name": "BridgeFeeUpdatedEvent",
-      "discriminator": [
-        7,
-        154,
-        58,
-        230,
-        218,
-        111,
-        15,
-        249
-      ]
-    },
-    {
-      "name": "BridgeInitializedEvent",
-      "discriminator": [
-        199,
-        12,
-        201,
-        11,
-        202,
-        197,
-        132,
-        44
-      ]
-    },
-    {
-      "name": "BridgeLimitsUpdatedEvent",
-      "discriminator": [
-        171,
-        137,
-        71,
-        238,
-        10,
-        208,
-        151,
-        32
-      ]
-    },
-    {
-      "name": "BridgeMintEvent",
-      "discriminator": [
-        229,
-        205,
-        217,
-        227,
-        148,
-        198,
-        188,
-        13
-      ]
-    },
-    {
-      "name": "BridgePauseEvent",
-      "discriminator": [
-        55,
-        175,
-        126,
-        61,
-        103,
-        112,
-        65,
-        26
-      ]
-    },
-    {
-      "name": "BridgeUnpauseEvent",
-      "discriminator": [
-        27,
-        175,
-        113,
-        210,
-        99,
-        137,
-        42,
-        179
-      ]
-    },
-    {
       "name": "BufferDepositEvent",
       "discriminator": [
         156,
@@ -3878,6 +2573,19 @@
         115,
         108,
         116
+      ]
+    },
+    {
+      "name": "BufferRefilledEvent",
+      "discriminator": [
+        228,
+        63,
+        122,
+        26,
+        170,
+        8,
+        222,
+        65
       ]
     },
     {
@@ -3894,42 +2602,16 @@
       ]
     },
     {
-      "name": "ChainAddedEvent",
+      "name": "EscrowInitializedEvent",
       "discriminator": [
-        177,
-        189,
-        86,
-        73,
-        165,
-        227,
-        146,
-        72
-      ]
-    },
-    {
-      "name": "ChainRemovedEvent",
-      "discriminator": [
-        210,
-        214,
-        162,
-        178,
-        104,
-        100,
-        137,
-        206
-      ]
-    },
-    {
-      "name": "FeeRecipientUpdatedEvent",
-      "discriminator": [
-        253,
-        5,
-        188,
-        179,
-        215,
-        147,
-        124,
-        145
+        17,
+        220,
+        22,
+        132,
+        33,
+        81,
+        105,
+        59
       ]
     },
     {
@@ -3998,19 +2680,6 @@
       ]
     },
     {
-      "name": "NonceSkippedEvent",
-      "discriminator": [
-        7,
-        199,
-        145,
-        226,
-        131,
-        104,
-        179,
-        85
-      ]
-    },
-    {
       "name": "OkuMPriceUpdated",
       "discriminator": [
         244,
@@ -4024,29 +2693,55 @@
       ]
     },
     {
-      "name": "OracleUpdatedEvent",
+      "name": "OracleRelayBandUpdatedEvent",
       "discriminator": [
-        243,
-        170,
+        63,
+        9,
+        54,
+        221,
         206,
-        180,
-        16,
-        29,
-        202,
-        190
+        203,
+        38,
+        27
       ]
     },
     {
-      "name": "OrchestratorSignerUpdatedEvent",
+      "name": "OracleRelayFeedUpdatedEvent",
       "discriminator": [
-        88,
-        10,
-        48,
-        247,
-        124,
-        180,
-        219,
-        192
+        213,
+        185,
+        8,
+        22,
+        104,
+        167,
+        161,
+        134
+      ]
+    },
+    {
+      "name": "OracleRelayPythProgramOwnerUpdatedEvent",
+      "discriminator": [
+        107,
+        4,
+        162,
+        18,
+        166,
+        213,
+        231,
+        68
+      ]
+    },
+    {
+      "name": "OracleRelayStalenessUpdatedEvent",
+      "discriminator": [
+        47,
+        168,
+        108,
+        170,
+        217,
+        89,
+        81,
+        83
       ]
     },
     {
@@ -4060,6 +2755,19 @@
         104,
         130,
         43
+      ]
+    },
+    {
+      "name": "QueueInitializedEvent",
+      "discriminator": [
+        191,
+        4,
+        110,
+        210,
+        5,
+        226,
+        87,
+        143
       ]
     },
     {
@@ -4115,55 +2823,55 @@
       ]
     },
     {
-      "name": "RefundCancelledEvent",
+      "name": "RedemptionSkippedEvent",
       "discriminator": [
-        147,
-        232,
-        142,
-        161,
-        3,
-        199,
-        24,
-        90
-      ]
-    },
-    {
-      "name": "RefundConfirmedEvent",
-      "discriminator": [
-        66,
-        24,
-        114,
+        210,
+        250,
+        168,
+        62,
+        1,
+        172,
         135,
-        3,
-        249,
-        86,
-        20
+        114
       ]
     },
     {
-      "name": "RefundInitiatedEvent",
+      "name": "RoleAdminTransferAcceptedEvent",
       "discriminator": [
-        32,
-        79,
-        118,
-        100,
-        204,
-        76,
+        36,
+        91,
+        149,
+        11,
+        232,
+        178,
+        29,
+        75
+      ]
+    },
+    {
+      "name": "RoleAdminTransferCancelledEvent",
+      "discriminator": [
+        96,
+        159,
+        231,
+        140,
+        179,
+        244,
+        89,
+        43
+      ]
+    },
+    {
+      "name": "RoleAdminTransferProposedEvent",
+      "discriminator": [
+        168,
+        216,
+        252,
+        233,
+        109,
+        135,
         120,
-        66
-      ]
-    },
-    {
-      "name": "RefundProcessedEvent",
-      "discriminator": [
-        8,
-        240,
-        44,
-        110,
-        236,
-        151,
-        171,
-        223
+        145
       ]
     },
     {
@@ -4232,233 +2940,203 @@
     },
     {
       "code": 6002,
+      "name": "AlreadyPaused",
+      "msg": "Program is already paused"
+    },
+    {
+      "code": 6003,
+      "name": "NotPaused",
+      "msg": "Program is not paused"
+    },
+    {
+      "code": 6004,
       "name": "MaxSupplyExceeded",
       "msg": "Mint would exceed max supply"
     },
     {
-      "code": 6003,
+      "code": 6005,
+      "name": "BelowCurrentSupply",
+      "msg": "New max_supply must be >= current circulating supply"
+    },
+    {
+      "code": 6006,
       "name": "AllowanceExceeded",
       "msg": "Mint would exceed minter allowance"
     },
     {
-      "code": 6004,
+      "code": 6007,
       "name": "StaleOracle",
       "msg": "Oracle data is stale"
     },
     {
-      "code": 6005,
-      "name": "InsufficientReserves",
-      "msg": "Insufficient reserves per oracle"
+      "code": 6008,
+      "name": "PriceOutOfBand",
+      "msg": "USDC price out of band — depeg circuit-breaker tripped"
     },
     {
-      "code": 6006,
+      "code": 6009,
+      "name": "NonPositiveAnswer",
+      "msg": "Oracle returned a non-positive answer"
+    },
+    {
+      "code": 6010,
+      "name": "InvalidPriceBand",
+      "msg": "Invalid peg band — must satisfy min < max within hard bounds"
+    },
+    {
+      "code": 6011,
+      "name": "FeedExpoTooLarge",
+      "msg": "Pyth feed expo magnitude exceeds MAX_FEED_EXPO_MAGNITUDE"
+    },
+    {
+      "code": 6012,
+      "name": "OracleConfidenceTooWide",
+      "msg": "Pyth oracle confidence interval too wide for safe consumption"
+    },
+    {
+      "code": 6013,
       "name": "InsufficientBuffer",
       "msg": "Insufficient buffer for redemption"
     },
     {
-      "code": 6007,
+      "code": 6014,
+      "name": "InsufficientUserBalance",
+      "msg": "User does not hold enough OkuMoney for redemption"
+    },
+    {
+      "code": 6015,
       "name": "AccountFrozen",
       "msg": "Account is frozen"
     },
     {
-      "code": 6008,
+      "code": 6016,
       "name": "QueueEmpty",
       "msg": "Queue is empty"
     },
     {
-      "code": 6009,
+      "code": 6017,
       "name": "QueueFull",
       "msg": "Queue is full"
     },
     {
-      "code": 6010,
+      "code": 6018,
       "name": "InvalidQueueIndex",
       "msg": "Invalid queue index"
     },
     {
-      "code": 6011,
+      "code": 6019,
       "name": "EntryAlreadyCleared",
       "msg": "Queue entry already cleared"
     },
     {
-      "code": 6012,
+      "code": 6020,
       "name": "Overflow",
       "msg": "Arithmetic overflow"
     },
     {
-      "code": 6013,
+      "code": 6021,
       "name": "ZeroAmount",
       "msg": "Amount must be greater than zero"
     },
     {
-      "code": 6014,
+      "code": 6022,
       "name": "InsufficientAccounts",
       "msg": "Not enough accounts provided for queue entries"
     },
     {
-      "code": 6015,
+      "code": 6023,
       "name": "RecipientMismatch",
       "msg": "Recipient account does not match queue entry user"
     },
     {
-      "code": 6016,
+      "code": 6024,
       "name": "OracleAccountMissing",
-      "msg": "Oracle account not provided but oracle is configured"
+      "msg": "Oracle relay feed account not provided but relay is configured"
     },
     {
-      "code": 6017,
+      "code": 6025,
       "name": "InvalidOracleResponse",
       "msg": "Invalid oracle response"
     },
     {
-      "code": 6018,
+      "code": 6026,
       "name": "YieldDistributionInProgress",
       "msg": "Cannot perform operation in same slot as yield distribution"
     },
     {
-      "code": 6019,
+      "code": 6027,
       "name": "PriceCannotDecrease",
-      "msg": "New price must be >= current price"
+      "msg": "New price must strictly increase"
     },
     {
-      "code": 6020,
+      "code": 6028,
       "name": "YieldTooSmall",
       "msg": "Yield amount too small to affect price (truncates to zero)"
     },
     {
-      "code": 6021,
-      "name": "InvalidMintExtension",
-      "msg": "Invalid mint extension configuration"
-    },
-    {
-      "code": 6022,
-      "name": "InvalidPsmConfig",
-      "msg": "Invalid PSM config account"
-    },
-    {
-      "code": 6023,
-      "name": "BlacklistExempt",
-      "msg": "Account is blacklist exempt and cannot be frozen"
-    },
-    {
-      "code": 6024,
-      "name": "BlacklistExemptAlreadyInitialized",
-      "msg": "Blacklist exemption already initialized"
-    },
-    {
-      "code": 6025,
-      "name": "BridgePaused",
-      "msg": "Bridge is paused"
-    },
-    {
-      "code": 6026,
-      "name": "SignatureExpired",
-      "msg": "Signature has expired"
-    },
-    {
-      "code": 6027,
-      "name": "InvalidSignature",
-      "msg": "Invalid Ed25519 signature"
-    },
-    {
-      "code": 6028,
-      "name": "InvalidRecipient",
-      "msg": "Recipient account does not match parameter"
-    },
-    {
       "code": 6029,
-      "name": "InvalidRequestId",
-      "msg": "Request ID mismatch"
+      "name": "PriceAboveMax",
+      "msg": "Proposed oku_m_price exceeds MAX_OKU_M_PRICE ceiling"
     },
     {
       "code": 6030,
-      "name": "InvalidMessageLength",
-      "msg": "Invalid message length (expected 80 bytes)"
+      "name": "InvalidAuthority",
+      "msg": "Authority pubkey is invalid (e.g. zero pubkey)"
     },
     {
       "code": 6031,
-      "name": "WrongDestinationChain",
-      "msg": "Wrong destination chain"
+      "name": "NoPendingRoleAdmin",
+      "msg": "No pending role-admin transfer to accept"
     },
     {
       "code": 6032,
-      "name": "UnsupportedChain",
-      "msg": "Chain not supported"
+      "name": "NotPendingRoleAdmin",
+      "msg": "Caller is not the pending role admin"
     },
     {
       "code": 6033,
-      "name": "RequestAlreadyProcessed",
-      "msg": "Request already processed"
-    },
-    {
-      "code": 6034,
-      "name": "BelowMinimum",
-      "msg": "Amount below minimum"
-    },
-    {
-      "code": 6035,
-      "name": "AboveMaximum",
-      "msg": "Amount above maximum"
-    },
-    {
-      "code": 6036,
-      "name": "ChainAlreadySupported",
-      "msg": "Chain already supported"
-    },
-    {
-      "code": 6037,
-      "name": "ChainListFull",
-      "msg": "Chain list is full (max 32)"
-    },
-    {
-      "code": 6038,
-      "name": "ChainNotFound",
-      "msg": "Chain not found in supported list"
-    },
-    {
-      "code": 6039,
-      "name": "MintWindowStillOpen",
-      "msg": "Mint window still open, cannot refund yet"
-    },
-    {
-      "code": 6040,
-      "name": "WrongSourceChain",
-      "msg": "Request source chain does not match this chain"
-    },
-    {
-      "code": 6041,
-      "name": "RequestAlreadyMinted",
-      "msg": "Request was already minted, cannot refund"
-    },
-    {
-      "code": 6042,
       "name": "EscrowAlreadyInitialized",
       "msg": "Escrow vault already initialized"
     },
     {
-      "code": 6043,
-      "name": "InvalidFeeBps",
-      "msg": "Invalid fee basis points (must be <= 10000)"
+      "code": 6034,
+      "name": "InvalidPythProgramOwner",
+      "msg": "Pyth program owner pubkey is required (cannot be the zero pubkey)"
     },
     {
-      "code": 6044,
-      "name": "InvalidDeadline",
-      "msg": "Invalid deadline value"
+      "code": 6035,
+      "name": "InvalidUsdcDecimals",
+      "msg": "USDC mint must have exactly 6 decimals"
     },
     {
-      "code": 6045,
-      "name": "RefundAlreadyPending",
-      "msg": "Refund already pending for this request"
+      "code": 6036,
+      "name": "InvalidOkuMoneyDecimals",
+      "msg": "OkuMoney mint must have exactly 6 decimals"
     },
     {
-      "code": 6046,
-      "name": "NoPendingRefund",
-      "msg": "No pending refund found for this request"
+      "code": 6037,
+      "name": "AmountTooSmall",
+      "msg": "Output amount too small (rounds to zero)"
     },
     {
-      "code": 6047,
-      "name": "RequestAlreadyRefunded",
-      "msg": "Request was already refunded"
+      "code": 6038,
+      "name": "OutputBelowMinimum",
+      "msg": "Output below minimum (slippage exceeded)"
+    },
+    {
+      "code": 6039,
+      "name": "InvalidStaleness",
+      "msg": "Staleness threshold out of range (must be 60s..=7 days)"
+    },
+    {
+      "code": 6040,
+      "name": "TransferHookNotAllowed",
+      "msg": "OkuMoney mint must not have the TransferHook Token-2022 extension"
+    },
+    {
+      "code": 6041,
+      "name": "IncompatibleMintExtension",
+      "msg": "OkuMoney mint carries an incompatible Token-2022 extension (see helpers::mint_extensions for the allow-list)"
     }
   ],
   "types": [
@@ -4467,7 +3145,7 @@
       "docs": [
         "Authority roles that can be updated via set_authority.",
         "",
-        "These roles govern PSM-specific operations separate from bridge roles."
+        "These roles govern PSM-specific operations."
       ],
       "type": {
         "kind": "enum",
@@ -4514,7 +3192,13 @@
     {
       "name": "AuthorityUpdatedEvent",
       "docs": [
-        "Emitted when a PSM authority role is updated."
+        "Emitted when a PSM authority role is updated.",
+        "",
+        "For `RoleAdmin` rotations this fires twice: once at proposal time",
+        "(`new_authority` = the *pending* admin, surfaced via",
+        "`RoleAdminTransferProposed` for indexers that want to distinguish the",
+        "two phases) and a second time on acceptance (`old_authority` = previous",
+        "admin, `new_authority` = newly accepted admin)."
       ],
       "type": {
         "kind": "struct",
@@ -4533,586 +3217,6 @@
           },
           {
             "name": "new_authority",
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "BlacklistExemptInitialized",
-      "docs": [
-        "Emitted when blacklist exemption is initialized."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "bridge",
-            "type": "pubkey"
-          },
-          {
-            "name": "router",
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "BridgeAuthorityRole",
-      "docs": [
-        "Bridge authority roles that can be updated via set_bridge_authority.",
-        "",
-        "These roles are separate from PSM roles and govern bridge-specific operations.",
-        "The two-step refund pattern uses `RefundInitiator` and `RefundConfirmer` to",
-        "prevent single-key double-mint attacks."
-      ],
-      "type": {
-        "kind": "enum",
-        "variants": [
-          {
-            "name": "BridgeAdmin"
-          },
-          {
-            "name": "BridgePauser"
-          },
-          {
-            "name": "BridgeUnpauser"
-          },
-          {
-            "name": "OrchestratorSigner"
-          },
-          {
-            "name": "FeeRecipient"
-          },
-          {
-            "name": "ChainManager"
-          },
-          {
-            "name": "FeeManager"
-          },
-          {
-            "name": "NonceAdmin"
-          },
-          {
-            "name": "RefundInitiator"
-          },
-          {
-            "name": "RefundConfirmer"
-          },
-          {
-            "name": "SignerManager"
-          },
-          {
-            "name": "LimitsManager"
-          }
-        ]
-      }
-    },
-    {
-      "name": "BridgeAuthorityUpdatedEvent",
-      "docs": [
-        "Emitted when a bridge authority role is updated."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "role",
-            "type": {
-              "defined": {
-                "name": "BridgeAuthorityRole"
-              }
-            }
-          },
-          {
-            "name": "old_authority",
-            "type": "pubkey"
-          },
-          {
-            "name": "new_authority",
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "BridgeBurnEvent",
-      "docs": [
-        "Emitted when tokens are burned for bridging to another chain.",
-        "EVM equivalent: `BridgeBurn(bytes32 indexed requestId, address indexed user, bytes32 recipient, uint256 destChainId, uint256 amount, uint256 nonce, uint256 deadline)`"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "request_id",
-            "docs": [
-              "Unique request identifier (keccak256 hash)"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "user",
-            "docs": [
-              "User who burned tokens"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "recipient",
-            "docs": [
-              "Recipient on destination chain (EVM address, 20 bytes)"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                20
-              ]
-            }
-          },
-          {
-            "name": "source_chain_id",
-            "docs": [
-              "Source chain ID (Solana)"
-            ],
-            "type": "u16"
-          },
-          {
-            "name": "destination_chain",
-            "docs": [
-              "Destination chain ID"
-            ],
-            "type": "u16"
-          },
-          {
-            "name": "amount",
-            "docs": [
-              "Amount burned excluding fee (6 decimals)"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "nonce",
-            "docs": [
-              "Sequential nonce for ordering"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "deadline",
-            "docs": [
-              "Request expiration timestamp"
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "dollar_value",
-            "docs": [
-              "Dollar value of burned amount"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "fee_amount",
-            "docs": [
-              "Fee amount deducted (6 decimals)"
-            ],
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "BridgeConfig",
-      "docs": [
-        "Bridge configuration PDA",
-        "Seeds: [\"bridge_config\"]"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "bump",
-            "docs": [
-              "PDA bump seed"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "bridge_admin",
-            "docs": [
-              "Bridge admin - manages bridge roles (meta-role)",
-              "EVM: DEFAULT_ADMIN_ROLE"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "bridge_pauser",
-            "docs": [
-              "Bridge pauser - emergency pause",
-              "EVM: BRIDGE_PAUSER"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "bridge_unpauser",
-            "docs": [
-              "Bridge unpauser - unpause",
-              "EVM: BRIDGE_UNPAUSER"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "orchestrator_signer",
-            "docs": [
-              "Orchestrator signer - Ed25519 public key for signature verification"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "fee_recipient",
-            "docs": [
-              "Fee recipient - receives bridge fees"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "chain_manager",
-            "docs": [
-              "Chain manager - add/remove supported chains",
-              "EVM: BRIDGE_CHAIN_MANAGER"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "fee_manager",
-            "docs": [
-              "Fee manager - update fee configuration and fee recipient",
-              "EVM: BRIDGE_FEE_MANAGER"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "nonce_admin",
-            "docs": [
-              "Nonce admin - emergency nonce management",
-              "EVM: BRIDGE_NONCE_ADMIN"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "refund_initiator",
-            "docs": [
-              "Refund initiator - initiate refunds (step 1 of two-step refund)",
-              "EVM: BRIDGE_REFUND_INITIATOR"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "refund_confirmer",
-            "docs": [
-              "Refund confirmer - confirm refunds (step 2 of two-step refund)",
-              "Must be different key than refund_initiator to prevent single-key double-mint",
-              "EVM: BRIDGE_REFUND_CONFIRMER"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "signer_manager",
-            "docs": [
-              "Signer manager - update orchestrator signer (Cold Multisig)",
-              "EVM: BRIDGE_SIGNER_MANAGER"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "limits_manager",
-            "docs": [
-              "Limits manager - update bridge limits and deadline (Cold Multisig)",
-              "EVM: BRIDGE_LIMITS_MANAGER"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "bridge_fee_bps",
-            "docs": [
-              "Bridge fee in basis points (10 = 0.1%)"
-            ],
-            "type": "u16"
-          },
-          {
-            "name": "min_bridge_amount",
-            "docs": [
-              "Minimum bridge amount"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "max_bridge_amount",
-            "docs": [
-              "Maximum bridge amount"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "is_paused",
-            "docs": [
-              "Whether bridge is paused"
-            ],
-            "type": "bool"
-          },
-          {
-            "name": "bridge_deadline_secs",
-            "docs": [
-              "Configurable bridge deadline in seconds (default 3600 = 1 hour)"
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "source_chain_id",
-            "docs": [
-              "This chain's ID (e.g., Solana), set during initialize_bridge"
-            ],
-            "type": "u16"
-          },
-          {
-            "name": "supported_chains",
-            "docs": [
-              "Supported destination chain IDs (fixed array, max 32 chains)"
-            ],
-            "type": {
-              "array": [
-                "u16",
-                32
-              ]
-            }
-          },
-          {
-            "name": "supported_chains_count",
-            "docs": [
-              "Number of active chains in the array"
-            ],
-            "type": "u8"
-          }
-        ]
-      }
-    },
-    {
-      "name": "BridgeDeadlineUpdatedEvent",
-      "docs": [
-        "Emitted when bridge deadline is updated.",
-        "EVM equivalent: `DeadlineUpdated(uint256 oldDeadline, uint256 newDeadline)`"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "old_deadline_secs",
-            "type": "i64"
-          },
-          {
-            "name": "new_deadline_secs",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "BridgeFeeUpdatedEvent",
-      "docs": [
-        "Emitted when bridge fee is updated.",
-        "EVM equivalent: `FeeUpdated(uint256 oldFee, uint256 newFee)`"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "old_fee_bps",
-            "type": "u16"
-          },
-          {
-            "name": "new_fee_bps",
-            "type": "u16"
-          }
-        ]
-      }
-    },
-    {
-      "name": "BridgeInitializedEvent",
-      "docs": [
-        "Emitted when bridge is initialized."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "bridge_admin",
-            "type": "pubkey"
-          },
-          {
-            "name": "orchestrator_signer",
-            "type": "pubkey"
-          },
-          {
-            "name": "fee_bps",
-            "type": "u16"
-          }
-        ]
-      }
-    },
-    {
-      "name": "BridgeLimitsUpdatedEvent",
-      "docs": [
-        "Emitted when bridge limits are updated.",
-        "EVM equivalent: `LimitsUpdated(uint256 minAmount, uint256 maxAmount)`"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "min_amount",
-            "type": "u64"
-          },
-          {
-            "name": "max_amount",
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "BridgeMintEvent",
-      "docs": [
-        "Emitted when tokens are bridged from another chain (mint).",
-        "EVM equivalent: `BridgeMint(bytes32 indexed requestId, uint256 sourceChainId, address recipient, uint256 amount, uint256 nonce)`"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "request_id",
-            "docs": [
-              "Unique request identifier (keccak256 hash)"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "source_chain_id",
-            "docs": [
-              "Source chain ID (e.g., Ethereum = 1)"
-            ],
-            "type": "u16"
-          },
-          {
-            "name": "recipient",
-            "docs": [
-              "Recipient on Solana"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "amount",
-            "docs": [
-              "Amount minted (6 decimals)"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "nonce",
-            "docs": [
-              "Sequential nonce for ordering"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "dollar_value",
-            "docs": [
-              "Dollar value of minted amount"
-            ],
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "BridgeNonce",
-      "docs": [
-        "Bridge nonce tracking PDA (one per destination chain)",
-        "Seeds: [\"bridge_nonce\", destination_chain_id.to_le_bytes()]"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "bump",
-            "docs": [
-              "PDA bump seed"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "is_initialized",
-            "docs": [
-              "Whether this nonce account has been initialized (avoids ambiguity with chain_id == 0)"
-            ],
-            "type": "bool"
-          },
-          {
-            "name": "destination_chain",
-            "docs": [
-              "Destination chain ID"
-            ],
-            "type": "u16"
-          },
-          {
-            "name": "next_nonce",
-            "docs": [
-              "Next sequential nonce for this destination"
-            ],
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "BridgePauseEvent",
-      "docs": [
-        "Emitted when bridge is paused."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "pauser",
-            "type": "pubkey"
-          },
-          {
-            "name": "paused",
-            "type": "bool"
-          }
-        ]
-      }
-    },
-    {
-      "name": "BridgeUnpauseEvent",
-      "docs": [
-        "Emitted when bridge is unpaused."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "unpauser",
             "type": "pubkey"
           }
         ]
@@ -5152,6 +3256,45 @@
       }
     },
     {
+      "name": "BufferRefilledEvent",
+      "docs": [
+        "Emitted at the end of `process_queue` with batch-level summary.",
+        "",
+        "EVM equivalent: `BufferRefilled(uint256 newBufferBalance,",
+        "uint256 processedCount, uint256 skippedCount)`. Indexers can use this",
+        "to reconcile buffer state after a queue drain without summing per-entry",
+        "`RedemptionProcessed`/`Skipped` events."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "new_buffer_balance",
+            "docs": [
+              "USDC vault balance after the batch completed (6 decimals)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "processed_count",
+            "docs": [
+              "Number of entries that received a USDC payout in this batch.",
+              "Bounded by `RedemptionQueue::MAX_BATCH_ENTRIES` (= 50) per call;",
+              "u64 matches the queue's u64 indices."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "skipped_count",
+            "docs": [
+              "Number of cleared (rescued) entries skipped during traversal."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "BufferWithdrawEvent",
       "docs": [
         "Emitted when USDC is withdrawn from buffer.",
@@ -5161,7 +3304,7 @@
         "kind": "struct",
         "fields": [
           {
-            "name": "role_admin",
+            "name": "actor",
             "docs": [
               "Withdrawer (buffer_withdrawer role)"
             ],
@@ -5185,52 +3328,16 @@
       }
     },
     {
-      "name": "ChainAddedEvent",
+      "name": "EscrowInitializedEvent",
       "docs": [
-        "Emitted when a chain is added to supported list.",
-        "EVM equivalent: `ChainAdded(uint256 indexed chainId)`"
+        "Emitted when the OkuMoney escrow vault is wired into config.",
+        "Cycle 4 (PSM-22): added so the final init step is observable."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "chain_id",
-            "type": "u16"
-          }
-        ]
-      }
-    },
-    {
-      "name": "ChainRemovedEvent",
-      "docs": [
-        "Emitted when a chain is removed from supported list.",
-        "EVM equivalent: `ChainRemoved(uint256 indexed chainId)`"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "chain_id",
-            "type": "u16"
-          }
-        ]
-      }
-    },
-    {
-      "name": "FeeRecipientUpdatedEvent",
-      "docs": [
-        "Emitted when fee recipient is updated.",
-        "EVM equivalent: `FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient)`"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "old_recipient",
-            "type": "pubkey"
-          },
-          {
-            "name": "new_recipient",
+            "name": "vault_oku_money",
             "type": "pubkey"
           }
         ]
@@ -5260,7 +3367,8 @@
       "name": "InitializeEvent",
       "docs": [
         "Emitted when PSM is initialized.",
-        "EVM equivalent: Initialize event in LitePSM constructor"
+        "EVM equivalent: the `Initialized(uint64 version)` event from OZ's `Initializable`",
+        "(LitePSM is upgradeable; there is no Solidity constructor event)."
       ],
       "type": {
         "kind": "struct",
@@ -5285,6 +3393,91 @@
       }
     },
     {
+      "name": "InitializeParams",
+      "docs": [
+        "Parameter bundle for [`initialize`]. Cycle 4 (PSM-17): collapses",
+        "the 15-argument instruction signature into a single struct so the",
+        "IDL slot is self-documenting and the call site is harder to",
+        "scramble (every field is named, not positional). Anchor borsh-",
+        "encodes the struct in a single byte run, so the wire format is",
+        "equivalent in size and shape to the prior positional args; only",
+        "the IDL changes (and only additively from the client's",
+        "perspective once the new struct is in their generated types).",
+        "",
+        "All `*` pubkey fields are the granular on-chain authorities; see",
+        "`roles::AuthorityRole` for the role catalogue and",
+        "`audit/SVM/README.md` § \"Trust model\" for the warm-vs-cold matrix."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "max_supply",
+            "type": "u64"
+          },
+          {
+            "name": "minter_allowance",
+            "type": "u64"
+          },
+          {
+            "name": "pauser",
+            "type": "pubkey"
+          },
+          {
+            "name": "unpauser",
+            "type": "pubkey"
+          },
+          {
+            "name": "freezer",
+            "type": "pubkey"
+          },
+          {
+            "name": "unfreezer",
+            "type": "pubkey"
+          },
+          {
+            "name": "queue_processor",
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer_depositor",
+            "type": "pubkey"
+          },
+          {
+            "name": "buffer_withdrawer",
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle_manager",
+            "type": "pubkey"
+          },
+          {
+            "name": "cap_manager",
+            "type": "pubkey"
+          },
+          {
+            "name": "allowance_manager",
+            "type": "pubkey"
+          },
+          {
+            "name": "rebaser",
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle_relay_pyth_program_owner",
+            "docs": [
+              "Program-owner pubkey accepted by the on-chain peg-check parser.",
+              "Deployer chooses per-cluster (legacy Pyth mainnet/devnet, or a",
+              "future Pyth deployment). The relay is otherwise disabled at",
+              "init — operators call `set_oracle_relay_feed` /",
+              "`set_oracle_relay_staleness` post-deploy."
+            ],
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "MaxSupplyUpdatedEvent",
       "docs": [
         "Emitted when max supply is updated.",
@@ -5294,7 +3487,10 @@
         "kind": "struct",
         "fields": [
           {
-            "name": "role_admin",
+            "name": "actor",
+            "docs": [
+              "Caller of the update (`cap_manager` authority)."
+            ],
             "type": "pubkey"
           },
           {
@@ -5352,6 +3548,15 @@
               "EVM equivalent: okuMMultiplier"
             ],
             "type": "u64"
+          },
+          {
+            "name": "new_total_supply",
+            "docs": [
+              "OkuMoney supply AFTER the mint completed. Cycle 4 (PSM-23):",
+              "added for indexing parity with `YieldDistributed` /",
+              "`OkuMPriceUpdated` (both of which emit `total_supply`)."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -5366,7 +3571,10 @@
         "kind": "struct",
         "fields": [
           {
-            "name": "role_admin",
+            "name": "actor",
+            "docs": [
+              "Caller of the update (`allowance_manager` authority)."
+            ],
             "type": "pubkey"
           },
           {
@@ -5375,30 +3583,6 @@
           },
           {
             "name": "new_allowance",
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "NonceSkippedEvent",
-      "docs": [
-        "Emitted when a nonce is skipped (emergency recovery).",
-        "EVM equivalent: `NonceSkipped(uint256 indexed destChainId, uint256 skippedNonce)`"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "destination_chain_id",
-            "type": "u16"
-          },
-          {
-            "name": "old_nonce",
-            "type": "u64"
-          },
-          {
-            "name": "new_nonce",
             "type": "u64"
           }
         ]
@@ -5436,45 +3620,112 @@
       }
     },
     {
-      "name": "OracleUpdatedEvent",
+      "name": "OracleRelayBandUpdatedEvent",
       "docs": [
-        "Emitted when oracle configuration changes.",
-        "EVM equivalent: `OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled)`"
+        "Emitted when the in-band peg window is rotated.",
+        "EVM equivalent: `PriceBandUpdated(uint256 oldMin, uint256 oldMax, uint256 newMin, uint256 newMax)`"
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "role_admin",
+            "name": "actor",
             "type": "pubkey"
           },
           {
-            "name": "oracle",
-            "type": "pubkey"
+            "name": "old_min_e9",
+            "type": "u64"
           },
           {
-            "name": "staleness_threshold",
-            "type": "i64"
+            "name": "old_max_e9",
+            "type": "u64"
+          },
+          {
+            "name": "new_min_e9",
+            "type": "u64"
+          },
+          {
+            "name": "new_max_e9",
+            "type": "u64"
           }
         ]
       }
     },
     {
-      "name": "OrchestratorSignerUpdatedEvent",
+      "name": "OracleRelayFeedUpdatedEvent",
       "docs": [
-        "Emitted when orchestrator signer is updated.",
-        "EVM equivalent: `SignerUpdated(address indexed oldSigner, address indexed newSigner)`"
+        "Emitted when the oracle relay feed pubkey is rotated.",
+        "EVM equivalent: `PriceFeedUpdated(address indexed oldFeed, address indexed newFeed, uint8 feedDecimals)`",
+        "(SVM uses Pyth `expo` rather than `decimals`, so the third field is omitted —",
+        "`expo` is read fresh on every consumer call.)"
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "old_signer",
+            "name": "actor",
+            "docs": [
+              "Caller of the update (`oracle_manager` authority)."
+            ],
             "type": "pubkey"
           },
           {
-            "name": "new_signer",
+            "name": "old_feed",
             "type": "pubkey"
+          },
+          {
+            "name": "new_feed",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OracleRelayPythProgramOwnerUpdatedEvent",
+      "docs": [
+        "Emitted when the accepted Pyth program owner pubkey is rotated.",
+        "SVM-only — no direct EVM equivalent (Chainlink AggregatorV3 owner is",
+        "implicit in the feed address). Kept as the migration hook for future",
+        "Pyth Solana Receiver support."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "actor",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_pyth_program_owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_pyth_program_owner",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OracleRelayStalenessUpdatedEvent",
+      "docs": [
+        "Emitted when the relay staleness threshold is rotated.",
+        "EVM equivalent: `StalenessThresholdUpdated(uint256 oldSeconds, uint256 newSeconds)`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "actor",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_staleness",
+            "type": "i64"
+          },
+          {
+            "name": "new_staleness",
+            "type": "i64"
           }
         ]
       }
@@ -5491,128 +3742,6 @@
           {
             "name": "pauser",
             "type": "pubkey"
-          },
-          {
-            "name": "paused",
-            "type": "bool"
-          }
-        ]
-      }
-    },
-    {
-      "name": "PendingRefund",
-      "docs": [
-        "Pending refund PDA (two-step refund pattern)",
-        "Seeds: [\"pending_refund\", request_id]",
-        "",
-        "This implements the EVM OkuBridge two-step refund pattern:",
-        "1. RefundInitiator calls initiate_refund() to create this PDA",
-        "2. RefundConfirmer (different key) calls confirm_refund() to complete",
-        "3. Either party can call cancel_refund() to abort",
-        "",
-        "This prevents a single compromised key from completing refunds unilaterally."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "bump",
-            "docs": [
-              "PDA bump seed"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "request_id",
-            "docs": [
-              "Request ID (keccak256 hash of original request data)"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "recipient",
-            "docs": [
-              "Original sender who will receive the refund"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "amount",
-            "docs": [
-              "Amount to be refunded"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "initiated_at",
-            "docs": [
-              "Timestamp when refund was initiated"
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "initiator",
-            "docs": [
-              "Who initiated the refund (for audit trail)"
-            ],
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "ProcessedRequest",
-      "docs": [
-        "Processed bridge request PDA (prevents replay attacks)",
-        "Seeds: [\"bridge_request\", request_id]"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "bump",
-            "docs": [
-              "PDA bump seed"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "request_id",
-            "docs": [
-              "Request ID (keccak256 hash of request data)"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "processed_at",
-            "docs": [
-              "Timestamp when processed"
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "recipient",
-            "docs": [
-              "Recipient who received tokens"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "amount",
-            "docs": [
-              "Amount minted"
-            ],
-            "type": "u64"
           }
         ]
       }
@@ -5620,8 +3749,11 @@
     {
       "name": "PsmConfig",
       "docs": [
-        "PSM configuration PDA",
-        "Seeds: [\"psm_config\"]"
+        "PSM configuration PDA.",
+        "",
+        "Seeds: `[\"psm_config_v3\"]`. Migration history (seed-rotation log) is",
+        "tracked in `SVM/README.md` § \"PDA seed history\"; the `_v3` suffix",
+        "marks the post-oracle-relay layout."
       ],
       "type": {
         "kind": "struct",
@@ -5727,7 +3859,9 @@
           {
             "name": "oku_money_mint",
             "docs": [
-              "OkuMoney mint address (Token-2022 with Scaled UI Amount extension)"
+              "OkuMoney mint address (Token-2022 with InterestBearingConfig extension).",
+              "The extension is informational only — economic price comes from",
+              "`oku_m_price` on this account, not from the mint's interest accrual."
             ],
             "type": "pubkey"
           },
@@ -5749,14 +3883,15 @@
           {
             "name": "max_supply",
             "docs": [
-              "Maximum OkuUSD supply cap"
+              "Maximum OkuMoney supply cap"
             ],
             "type": "u64"
           },
           {
             "name": "minter_allowance",
             "docs": [
-              "Bridge mint allowance remaining"
+              "Mint allowance remaining (configurable cap on freshly minted OkuMoney",
+              "between admin resets, mirroring the EVM `minterAllowance` pattern)."
             ],
             "type": "u64"
           },
@@ -5768,18 +3903,48 @@
             "type": "bool"
           },
           {
-            "name": "oracle",
+            "name": "oracle_relay_feed",
             "docs": [
-              "Pyth oracle feed (or Pubkey::default() if disabled)"
+              "USDC/USD Pyth feed account (or `Pubkey::default()` to disable the",
+              "peg check — the operator-side kill switch, mirrors EVM",
+              "`setOracleRelay(address(0))`)."
             ],
             "type": "pubkey"
           },
           {
-            "name": "staleness_threshold",
+            "name": "oracle_relay_pyth_program_owner",
             "docs": [
-              "Maximum oracle staleness in seconds"
+              "Pyth program-owner pubkey accepted by the relay parser. Set at",
+              "init via `initialize` and rotatable via",
+              "`set_oracle_relay_pyth_program_owner` (oracle_manager-gated). The",
+              "migration hook for future Pyth Solana Receiver support."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle_relay_staleness",
+            "docs": [
+              "Maximum oracle staleness in seconds. Bounded by",
+              "`[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]` whenever",
+              "the relay is configured."
             ],
             "type": "i64"
+          },
+          {
+            "name": "oracle_relay_min_price_e9",
+            "docs": [
+              "Lower bound of the in-band USDC price (1e9 precision).",
+              "Constrained by `ORACLE_USDC_PRICE_FLOOR`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oracle_relay_max_price_e9",
+            "docs": [
+              "Upper bound of the in-band USDC price (1e9 precision).",
+              "Constrained by `ORACLE_USDC_PRICE_CEILING`."
+            ],
+            "type": "u64"
           },
           {
             "name": "last_yield_distribution_slot",
@@ -5799,16 +3964,17 @@
             "type": "u64"
           },
           {
-            "name": "blacklist_exempt_bridge",
+            "name": "pending_role_admin",
             "docs": [
-              "Blacklist-exempt bridge address (cannot be frozen)"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "blacklist_exempt_router",
-            "docs": [
-              "Blacklist-exempt router address (cannot be frozen)"
+              "Pending `role_admin` rotation target — the two-step admin-transfer",
+              "model (OpenZeppelin `Ownable2Step` pattern). `set_authority(RoleAdmin,",
+              "new_admin)` writes to this slot only; the rotation does NOT take",
+              "effect until `new_admin` signs `accept_role_admin`, which moves the",
+              "value into `role_admin` and clears the slot. This protects the",
+              "protocol from a typo or stale key on the proposing side silently",
+              "locking out the meta-role.",
+              "",
+              "`Pubkey::default()` means \"no pending rotation\"."
             ],
             "type": "pubkey"
           }
@@ -5818,8 +3984,18 @@
     {
       "name": "QueueEntry",
       "docs": [
-        "A single entry in the redemption queue"
+        "A single entry in the redemption queue.",
+        "",
+        "`#[zero_copy]` is Anchor's marker for inner types embedded in",
+        "`#[account(zero_copy)]` accounts — derives `Pod` + `Zeroable` and",
+        "registers the type with the IDL. `#[repr(C)]` has no implicit",
+        "padding here (`Pubkey` is align-1, `u64`/`i64` align-8); the layout",
+        "is pinned to 48 bytes by the `assert!` below."
       ],
+      "serialization": "bytemuck",
+      "repr": {
+        "kind": "c"
+      },
       "type": {
         "kind": "struct",
         "fields": [
@@ -5833,9 +4009,9 @@
           {
             "name": "oku_m_amount",
             "docs": [
-              "OkuMoney amount held in escrow",
-              "The actual USDC payout will be calculated at process_queue time",
-              "using the current oku_m_price multiplier"
+              "OkuMoney amount held in escrow.",
+              "The actual USDC payout is calculated at `process_queue` time using",
+              "the current `oku_m_price` multiplier."
             ],
             "type": "u64"
           },
@@ -5845,6 +4021,30 @@
               "Timestamp when queued (kept for audit trail)"
             ],
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "QueueInitializedEvent",
+      "docs": [
+        "Emitted when the redemption-queue PDA is created. Cycle 4 (PSM-22):",
+        "added so the three-step init flow has full event coverage and",
+        "indexers can observe each setup leg landing on-chain."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "redemption_queue",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_entries",
+            "docs": [
+              "Compile-time queue capacity (`RedemptionQueue::MAX_ENTRIES`)."
+            ],
+            "type": "u32"
           }
         ]
       }
@@ -5891,6 +4091,13 @@
             "docs": [
               "OkuMoney price multiplier at time of redeem (1e9 = $1.00)",
               "EVM equivalent: okuMMultiplier"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "new_total_supply",
+            "docs": [
+              "OkuMoney supply AFTER the burn completed. Cycle 4 (PSM-23)."
             ],
             "type": "u64"
           }
@@ -5940,6 +4147,17 @@
               "Time spent in queue (seconds)"
             ],
             "type": "i64"
+          },
+          {
+            "name": "new_total_supply",
+            "docs": [
+              "OkuMoney supply AFTER the per-entry burn. Cycle 4 (PSM-23):",
+              "added so indexers can reconstruct supply trajectory through the",
+              "queue-drain phase without summing batch events. Note that",
+              "because `process_queue` emits one of these per processed entry,",
+              "the value decreases monotonically across the batch."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -5947,9 +4165,54 @@
     {
       "name": "RedemptionQueue",
       "docs": [
-        "Redemption queue PDA",
-        "Seeds: [\"redemption_queue\"]"
+        "Redemption queue PDA — zero-copy ring buffer.",
+        "",
+        "Uses `#[account(zero_copy)]` rather than `#[account]` so the 200-entry",
+        "array isn't Borsh-deserialised into a stack frame on every handler",
+        "entry. `AccountLoader<RedemptionQueue>` is the canonical access path;",
+        "`load_init` for `setup_redemption_queue`, `load` / `load_mut`",
+        "elsewhere with the borrow strictly scoped before any CPI.",
+        "",
+        "**Why 200 entries.** Solana caps CPI-driven account allocations at",
+        "`MAX_PERMITTED_DATA_INCREASE = 10_240` bytes per call (Anchor's `init`",
+        "constraint goes through `system_program::create_account`). 200",
+        "entries × 48 B = 9 600 B fits with 600 B of headroom; a single-step",
+        "`setup_redemption_queue` would otherwise require a `init + realloc +",
+        "realloc` flow. See `SVM/README.md` § \"EVM vs SVM — divergence",
+        "catalogue\" for the EVM divergence note.",
+        "",
+        "Wire layout (`#[repr(C)]`, packed to native alignment):",
+        "",
+        "```text",
+        "8   Anchor discriminator",
+        "1   bump",
+        "7   _pad0  (align head to 8)",
+        "8   head",
+        "8   tail",
+        "8   total_queued_oku_m",
+        "48 * 200   entries",
+        "```",
+        "",
+        "Total: 8 + 1 + 7 + 8 + 8 + 8 + 9_600 = **9 640** bytes. See the",
+        "compile-time `assert!` below.",
+        "",
+        "Field-access rules:",
+        "- Use `AccountLoader<RedemptionQueue>` in contexts, never",
+        "`Account<RedemptionQueue>` — the latter would attempt to Borsh-deserialize",
+        "the whole struct into a stack frame and overflow.",
+        "- `load()` for read-only, `load_mut()` for read-write. Drop the borrow",
+        "before any CPI that re-borrows the account info (the borrow is a",
+        "runtime `RefCell` borrow under the hood).",
+        "- `load_init()` only at the one `init`-constraint site",
+        "(`setup_redemption_queue`).",
+        "",
+        "Seeds: `[\"redemption_queue_v2\"]`. Rotation history tracked in",
+        "`SVM/README.md` § \"PDA seed history\"."
       ],
+      "serialization": "bytemuck",
+      "repr": {
+        "kind": "c"
+      },
       "type": {
         "kind": "struct",
         "fields": [
@@ -5961,31 +4224,47 @@
             "type": "u8"
           },
           {
+            "name": "_pad0",
+            "docs": [
+              "Padding so `head` lands on an 8-byte boundary. Reserved; do not use."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                7
+              ]
+            }
+          },
+          {
             "name": "head",
             "docs": [
-              "Index of next entry to process (head of queue)"
+              "Index of next entry to process (head of queue). u64 so the",
+              "absolute counter is effectively unbounded",
+              "(~5.8 × 10¹⁰ years at 100 enqueues/sec); ring-buffer position",
+              "is `RedemptionQueue::ring_index(head)`."
             ],
-            "type": "u32"
+            "type": "u64"
           },
           {
             "name": "tail",
             "docs": [
-              "Index of next slot to write (tail of queue)"
+              "Index of next slot to write (tail of queue)."
             ],
-            "type": "u32"
+            "type": "u64"
           },
           {
             "name": "total_queued_oku_m",
             "docs": [
-              "Running total of OkuMoney held in escrow (updated on enqueue/process/rescue)"
+              "Running total of OkuMoney held in escrow (updated on",
+              "enqueue/process/rescue)."
             ],
             "type": "u64"
           },
           {
             "name": "entries",
             "docs": [
-              "Queue entries (fixed array for predictable sizing)",
-              "Size must match MAX_ENTRIES constant below"
+              "Ring-buffer entries. Index into via",
+              "`entries[(head_or_tail % MAX_ENTRIES) as usize]`."
             ],
             "type": {
               "array": [
@@ -5994,7 +4273,7 @@
                     "name": "QueueEntry"
                   }
                 },
-                10
+                200
               ]
             }
           }
@@ -6034,16 +4313,16 @@
           {
             "name": "queue_position",
             "docs": [
-              "Position in queue (0-indexed)"
+              "Position in queue (0-indexed; absolute tail index, not ring slot)."
             ],
-            "type": "u32"
+            "type": "u64"
           },
           {
             "name": "queue_length",
             "docs": [
-              "Total queue length after this entry"
+              "Total queue length after this entry."
             ],
-            "type": "u32"
+            "type": "u64"
           }
         ]
       }
@@ -6060,9 +4339,9 @@
           {
             "name": "queue_index",
             "docs": [
-              "Index of the rescued entry"
+              "Absolute index of the rescued entry."
             ],
-            "type": "u32"
+            "type": "u64"
           },
           {
             "name": "original_user",
@@ -6096,68 +4375,18 @@
       }
     },
     {
-      "name": "RefundCancelledEvent",
+      "name": "RedemptionSkippedEvent",
       "docs": [
-        "Emitted when a pending refund is cancelled.",
-        "EVM equivalent: `RefundCancelled(bytes32 indexed requestId, address indexed canceller, string reason)`"
+        "Emitted when `process_queue` skips a previously-rescued entry.",
+        "EVM equivalent: `RedemptionSkipped(uint256 indexed index)`."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "request_id",
+            "name": "queue_index",
             "docs": [
-              "Unique request identifier"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "canceller",
-            "docs": [
-              "Who cancelled the refund"
-            ],
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "RefundConfirmedEvent",
-      "docs": [
-        "Emitted when a refund is confirmed (step 2 of 2).",
-        "EVM equivalent: `RefundConfirmed(bytes32 indexed requestId, address indexed sender, uint256 amount)`"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "request_id",
-            "docs": [
-              "Unique request identifier"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "recipient",
-            "docs": [
-              "Recipient who received the refund"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "amount",
-            "docs": [
-              "Amount refunded"
+              "Absolute queue index that was skipped (already cleared by rescue)."
             ],
             "type": "u64"
           }
@@ -6165,127 +4394,61 @@
       }
     },
     {
-      "name": "RefundInitiatedEvent",
+      "name": "RoleAdminTransferAcceptedEvent",
       "docs": [
-        "Emitted when a refund is initiated (step 1 of 2).",
-        "EVM equivalent: `RefundInitiated(bytes32 indexed requestId, address indexed sender, uint256 amount)`"
+        "Emitted when `accept_role_admin` completes a previously-proposed",
+        "two-step transfer."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "request_id",
-            "docs": [
-              "Unique request identifier"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "recipient",
-            "docs": [
-              "Original sender who will receive the refund"
-            ],
+            "name": "previous_admin",
             "type": "pubkey"
           },
           {
-            "name": "amount",
-            "docs": [
-              "Amount to be refunded"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "initiator",
-            "docs": [
-              "Who initiated the refund"
-            ],
+            "name": "new_admin",
             "type": "pubkey"
           }
         ]
       }
     },
     {
-      "name": "RefundProcessedEvent",
+      "name": "RoleAdminTransferCancelledEvent",
       "docs": [
-        "Emitted when a refund is processed (legacy single-step).",
-        "Deprecated: Use RefundInitiatedEvent + RefundConfirmedEvent for new integrations."
+        "Emitted when `cancel_role_admin_transfer` clears an in-flight proposal."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "request_id",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "recipient",
+            "name": "current_admin",
             "type": "pubkey"
           },
           {
-            "name": "amount",
-            "type": "u64"
+            "name": "cancelled_pending",
+            "type": "pubkey"
           }
         ]
       }
     },
     {
-      "name": "RefundedRequest",
+      "name": "RoleAdminTransferProposedEvent",
       "docs": [
-        "Refunded bridge request PDA (prevents double-refund)",
-        "Seeds: [\"bridge_refund\", request_id]"
+        "Emitted when `set_authority(RoleAdmin, ...)` proposes a two-step",
+        "transfer of the meta-role. The rotation has NOT taken effect — the new",
+        "admin must still sign `accept_role_admin` to commit it."
       ],
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "bump",
-            "docs": [
-              "PDA bump seed"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "request_id",
-            "docs": [
-              "Request ID (keccak256 hash of request data)"
-            ],
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "refunded_at",
-            "docs": [
-              "Timestamp when refunded"
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "recipient",
-            "docs": [
-              "Original sender who received refund"
-            ],
+            "name": "current_admin",
             "type": "pubkey"
           },
           {
-            "name": "amount",
-            "docs": [
-              "Amount refunded"
-            ],
-            "type": "u64"
+            "name": "pending_admin",
+            "type": "pubkey"
           }
         ]
       }

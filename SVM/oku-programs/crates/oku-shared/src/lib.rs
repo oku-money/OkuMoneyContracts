@@ -26,8 +26,14 @@
 
 pub mod constants;
 pub mod math;
+pub mod vault_math;
+pub mod yield_lock;
 
 // Re-export the public surface at crate root so callers can write
 // `use oku_shared::{PRECISION, mul_div_floor};` instead of nested paths.
 pub use constants::*;
 pub use math::*;
+pub use yield_lock::yield_lock_engaged;
+// `vault_math` types intentionally NOT glob-re-exported — the function
+// names collide with `oku-dollar`'s own helpers wrappers. Callers
+// reference them as `oku_shared::vault_math::*`.

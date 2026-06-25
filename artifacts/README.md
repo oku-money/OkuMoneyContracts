@@ -27,18 +27,19 @@ Each file has the shape:
 }
 ```
 
-Exported contracts (8):
+Exported contracts (5):
 
 | File | Purpose |
 |------|---------|
 | `OkuMoney.json` | Non-rebasing base token (OkuM) |
 | `OkuDollar.json` | Rebasing $1-pegged stablecoin (usdOku) |
-| `LitePSM.json` | USDC ↔ OkuM peg stability module |
+| `LitePSM.json` | USDC ↔ OkuM peg stability module (sole user-facing mint/burn surface in v1) |
 | `RedemptionQueue.json` | FIFO queue for PSM-buffer-depleted redemptions |
-| `OkuBridge.json` | Native cross-chain bridge (burn/mint) |
-| `OkuBridgeRouter.json` | User entry point for bridging OkuM / usdOku |
-| `NttAdapter.json` | Wormhole NTT adapter (third-party bridge path) |
 | `MockUSDC.json` | 6-decimal ERC-20 used on testnets |
+
+> `OkuBridge.json`, `OkuBridgeRouter.json`, and `NttAdapter.json` were removed
+> in the noBridge refactor. v1 cross-chain transfers are PSM-mediated
+> mint/burn orchestrated off-chain. See `contracts/README.md` for the design.
 
 **Refresh:**
 
@@ -52,13 +53,17 @@ npm run export-abis   # slim + copy into ../artifacts/evm/
 
 Raw Anchor IDLs copied from `SVM/oku-programs/target/idl/`.
 
-Exported programs (3):
+Exported programs (2):
 
 | File | Purpose |
 |------|---------|
-| `lite_psm.json` | PSM + bridge + redemption queue + yield ops + compliance |
+| `lite_psm.json` | PSM + redemption queue + yield ops + compliance (sole user-facing mint/burn surface in v1) |
 | `oku_dollar.json` | OkuDollar vault (wrap/unwrap OkuMoney → usdOku) |
-| `oku_bridge_router.json` | Convenience CPI coordinator for single-tx user flows |
+
+> `oku_bridge_router.json` was removed in the noBridge refactor along
+> with the EVM-side bridge artifacts (see note above). v1 cross-chain
+> transfers are PSM-mediated mint/burn orchestrated off-chain on both
+> sides.
 
 **Refresh:**
 
@@ -80,16 +85,20 @@ See `/testnet-addresses.json` at the repo root for the addresses these ABIs / ID
 import OkuMoney from "okumoney-contracts/artifacts/evm/OkuMoney.json";
 import { Contract, JsonRpcProvider } from "ethers";
 
-const provider = new JsonRpcProvider("https://rpc.sepolia.org");
+// bscTestnet / baseSepolia OkuMoney (see testnet-addresses.json for all chains)
+const provider = new JsonRpcProvider("https://data-seed-prebsc-1-s1.binance.org:8545/");
 const addr = "0xe548f960EbB46f9DC504e4107A552309796c863b";
 const okuMoney = new Contract(addr, OkuMoney.abi, provider);
 ```
 
-### TypeScript (@coral-xyz/anchor) — SVM
+### TypeScript (@anchor-lang/core) — SVM
 
 ```ts
 import idl from "okumoney-contracts/artifacts/svm/lite_psm.json";
-import { Program, AnchorProvider } from "@coral-xyz/anchor";
+import { Program } from "@anchor-lang/core";
 
+// `provider` is an AnchorProvider bound to a Solana connection + wallet.
+// The IDL's `address` field is rewritten to the deployed program ID;
+// see SVM/oku-programs/scripts/deploy/lib/programs.ts::loadIdlWithAddress.
 const program = new Program(idl as any, provider);
 ```

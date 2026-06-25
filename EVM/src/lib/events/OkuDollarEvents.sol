@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity 0.8.28;
 
 /**
  * @title OkuDollarEvents
@@ -67,4 +67,11 @@ abstract contract OkuDollarEvents {
     event SurplusWithdrawn(
         address indexed to, uint256 okuMAmount, uint256 dollarValue, uint256 collateralizationRatio
     );
+
+    /// @notice Emitted when an address is added to the OkuDollar blacklist
+    /// @dev Uses the shared OKUM_BLACKLISTER role for consistency with OkuMoney.
+    event Blacklisted(address indexed account);
+
+    /// @notice Emitted when an address is removed from the OkuDollar blacklist
+    event Unblacklisted(address indexed account);
 }

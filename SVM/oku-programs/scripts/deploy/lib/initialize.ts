@@ -2,26 +2,22 @@
  * Program initialization utilities
  */
 
-import { PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
+import { PublicKey, SystemProgram } from '@solana/web3.js';
 import { Program, AnchorProvider } from '@anchor-lang/core';
 import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
-  createAssociatedTokenAccountIdempotentInstruction,
 } from '@solana/spl-token';
 import { logger } from '../../utils/logger';
 import { loadAuthorities } from '../../config/authorities';
-import { sourceChainIdForNetwork } from '../../config/constants';
 import { NetworkConfig } from '../../config/networks';
 import {
   derivePsmConfigPDA,
   deriveRedemptionQueuePDA,
-  deriveBridgeConfigPDA,
   deriveVaultConfigPDA,
   deriveUsdOkuMintPDA,
-  deriveRouterConfigPDA,
 } from '../../utils/pdaHelpers';
 import { loadIdlWithAddress } from './programs';
 import { DeploymentConfig } from './config';
@@ -29,7 +25,6 @@ import { DeploymentConfig } from './config';
 // Import IDLs
 import litePsmIdl from '../../../target/idl/lite_psm.json';
 import okuDollarIdl from '../../../target/idl/oku_dollar.json';
-import okuBridgeRouterIdl from '../../../target/idl/oku_bridge_router.json';
 
 /**
  * Returns true if `error` indicates that the target account is already
@@ -37,9 +32,8 @@ import okuBridgeRouterIdl from '../../../target/idl/oku_bridge_router.json';
  *
  * Anchor 1.0 surfaces this in multiple ways depending on the construction
  * path: the legacy 'already in use' string, AnchorError with code
- * `AccountAlreadyInitialized` (= 0), the program-level
- * `EscrowAlreadyInitialized` from lite-psm's `setup_oku_money_escrow`, or
- * `BlacklistExemptAlreadyInitialized` from `initialize_blacklist_exempt`.
+ * `AccountAlreadyInitialized` (= 0), or the program-level
+ * `EscrowAlreadyInitialized` from lite-psm's `setup_oku_money_escrow`.
  * We check all of them; brittle string-only matching has bitten us across
  * Anchor minor-version bumps.
  */
@@ -50,8 +44,7 @@ function isAlreadyInitialized(error: any): boolean {
   const number = error?.error?.errorCode?.number ?? error?.errorCode?.number;
   if (
     code === 'AccountAlreadyInitialized' ||
-    code === 'EscrowAlreadyInitialized' ||
-    code === 'BlacklistExemptAlreadyInitialized'
+    code === 'EscrowAlreadyInitialized'
   ) {
     return true;
   }
@@ -65,20 +58,18 @@ function isAlreadyInitialized(error: any): boolean {
   return (
     msg.includes('already in use') ||
     msg.includes('AccountAlreadyInitialized') ||
-    msg.includes('EscrowAlreadyInitialized') ||
-    msg.includes('BlacklistExemptAlreadyInitialized')
+    msg.includes('EscrowAlreadyInitialized')
   );
 }
 
 export interface PsmInitResult {
   psmConfig: PublicKey;
   redemptionQueue: PublicKey;
-  bridgeConfig: PublicKey;
   /**
    * USDC vault ATA, owned by `psmConfig`. Created by `initialize()`.
    * Persisted into the deployment file as `pdas.psmVaultUsdc` for
-   * downstream scripts (notably `admin:setup-router-alt`) that need it
-   * without re-deriving from mint + config.
+   * downstream scripts that need it without re-deriving from mint +
+   * config.
    */
   vaultUsdc: PublicKey;
   /**
@@ -107,34 +98,36 @@ export async function initializePsm(
 
   const [psmConfig] = derivePsmConfigPDA(programId);
   const [redemptionQueue] = deriveRedemptionQueuePDA(programId);
-  const [bridgeConfig] = deriveBridgeConfigPDA(programId);
 
   // PSM vault accounts
   const vaultUsdc = getAssociatedTokenAddressSync(usdcMint, psmConfig, true, TOKEN_PROGRAM_ID);
 
   logger.info(`PSM Config PDA: ${psmConfig.toBase58()}`);
 
-  // Initialize PSM. The Pyth program-owner check is now configurable per-network
-  // (was previously hardcoded in `programs/lite-psm/src/helpers/oracle.rs`).
+  // Initialize PSM. The oracle-relay Pyth program-owner pubkey is
+  // per-network (legacy V2 mainnet vs devnet IDs). The relay's USDC/USD
+  // feed itself is left unwired by `initialize`; operators set it
+  // post-deploy via `set_oracle_relay_feed` / `_staleness` / `_band`.
   logger.info('Calling initialize()...');
   try {
+    // Cycle 4 (PSM-17): `initialize` takes an `InitializeParams` struct.
     await program.methods
-      .initialize(
-        config.maxSupply,
-        config.minterAllowance,
-        authorities.psm.pauser,
-        authorities.psm.unpauser,
-        authorities.psm.freezer,
-        authorities.psm.unfreezer,
-        authorities.psm.queueProcessor,
-        authorities.psm.bufferDepositor,
-        authorities.psm.bufferWithdrawer,
-        authorities.psm.oracleManager,
-        authorities.psm.capManager,
-        authorities.psm.allowanceManager,
-        authorities.psm.rebaser,
-        networkConfig.oracle.pythProgramOwner
-      )
+      .initialize({
+        maxSupply: config.maxSupply,
+        minterAllowance: config.minterAllowance,
+        pauser: authorities.psm.pauser,
+        unpauser: authorities.psm.unpauser,
+        freezer: authorities.psm.freezer,
+        unfreezer: authorities.psm.unfreezer,
+        queueProcessor: authorities.psm.queueProcessor,
+        bufferDepositor: authorities.psm.bufferDepositor,
+        bufferWithdrawer: authorities.psm.bufferWithdrawer,
+        oracleManager: authorities.psm.oracleManager,
+        capManager: authorities.psm.capManager,
+        allowanceManager: authorities.psm.allowanceManager,
+        rebaser: authorities.psm.rebaser,
+        oracleRelayPythProgramOwner: networkConfig.oracleRelay.pythProgramOwner,
+      })
       .accountsPartial({
         roleAdmin: provider.wallet.publicKey,
         config: psmConfig,
@@ -177,108 +170,10 @@ export async function initializePsm(
     }
   }
 
-  // Initialize bridge config.
-  //
-  // `initialize_bridge` now takes a `BridgeInitConfig` struct so all the
-  // chain-specific defaults (fee, limits, deadline, refund roles) are
-  // caller-supplied at deploy time rather than hardcoded in the handler.
-  // The on-chain init validates that refund_initiator and refund_confirmer
-  // differ from each other AND from bridge_admin (key separation enforced).
-  logger.info('Initializing bridge config...');
-  try {
-    await program.methods
-      .initializeBridge({
-        // CRITICAL: source_chain_id MUST match the cluster the program is
-        // being deployed to. Hardcoding devnet's 103 here would silently
-        // misconfigure a mainnet bridge — see the comment on
-        // `sourceChainIdForNetwork` in scripts/config/constants.ts.
-        sourceChainId: sourceChainIdForNetwork(networkConfig.name),
-        bridgeFeeBps: config.bridgeFeeBps,
-        minBridgeAmount: config.minBridgeAmount,
-        maxBridgeAmount: config.maxBridgeAmount,
-        bridgeDeadlineSecs: config.bridgeDeadlineSecs,
-        refundInitiator: authorities.bridge.refundInitiator,
-        refundConfirmer: authorities.bridge.refundConfirmer,
-      })
-      .accountsPartial({
-        bridgeAdmin: authorities.bridge.bridgeAdmin,
-        bridgePauser: authorities.bridge.bridgePauser,
-        bridgeUnpauser: authorities.bridge.bridgeUnpauser,
-        orchestratorSigner: authorities.bridge.orchestratorSigner,
-        feeRecipient: authorities.bridge.feeRecipient,
-        chainManager: authorities.bridge.chainManager,
-        feeManager: authorities.bridge.feeManager,
-        nonceAdmin: authorities.bridge.nonceAdmin,
-        signerManager: authorities.bridge.signerManager,
-        limitsManager: authorities.bridge.limitsManager,
-        bridgeConfig: bridgeConfig,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
-    logger.success('Bridge config initialized');
-  } catch (error: any) {
-    if (isAlreadyInitialized(error)) {
-      logger.warning('Bridge config already initialized');
-    } else {
-      throw error;
-    }
-  }
-
-  // Create the fee-recipient ATA (owned by the configured fee_recipient, which
-  // may be a PDA on testnet). bridgeBurn references this ATA via a regular
-  // (non-init_if_needed) constraint, so it must exist ahead of time.
-  const feeRecipientAta = getAssociatedTokenAddressSync(
-    okuMoneyMint,
-    authorities.bridge.feeRecipient,
-    true /* allowOwnerOffCurve — fee_recipient can be a PDA on testnet */,
-    TOKEN_2022_PROGRAM_ID
-  );
-  logger.info(`Fee recipient ATA: ${feeRecipientAta.toBase58()}`);
-  try {
-    const ix = createAssociatedTokenAccountIdempotentInstruction(
-      provider.wallet.publicKey,
-      feeRecipientAta,
-      authorities.bridge.feeRecipient,
-      okuMoneyMint,
-      TOKEN_2022_PROGRAM_ID,
-      ASSOCIATED_TOKEN_PROGRAM_ID
-    );
-    const tx = new Transaction().add(ix);
-    await provider.sendAndConfirm(tx);
-    logger.success('Fee recipient ATA ready');
-  } catch (error: any) {
-    logger.warning(`Fee recipient ATA setup: ${error.message}`);
-  }
-
-  // Add supported chains
-  for (const chainId of config.supportedChains) {
-    logger.info(`Adding supported chain ${chainId}...`);
-    try {
-      await program.methods
-        .addSupportedChain(chainId)
-        .accountsPartial({
-          chainManager: provider.wallet.publicKey,
-          bridgeConfig: bridgeConfig,
-        })
-        .rpc();
-      logger.success(`Chain ${chainId} added`);
-    } catch (error: any) {
-      // Use Anchor's structured error code rather than substring matching;
-      // the actual variant is `LitePsmError::ChainAlreadySupported`.
-      const code =
-        error?.error?.errorCode?.code ?? error?.errorCode?.code;
-      const msg = String(error?.message ?? error);
-      if (
-        code === 'ChainAlreadySupported' ||
-        msg.includes('ChainAlreadySupported') ||
-        msg.includes('already supported')
-      ) {
-        logger.warning(`Chain ${chainId} already supported`);
-      } else {
-        throw error;
-      }
-    }
-  }
+  // Bridge init / supported-chain / fee-recipient ATA setup removed in
+  // the noBridge refactor (phase B). v1 cross-chain transfers are
+  // mediated by an off-chain orchestrator that calls `mint_oku_m` /
+  // `redeem_oku_m` directly; no on-chain bridge state remains.
 
   // Setup OkuMoney escrow vault (for queued redemptions).
   //
@@ -334,7 +229,6 @@ export async function initializePsm(
   return {
     psmConfig,
     redemptionQueue,
-    bridgeConfig,
     vaultUsdc,
     vaultOkuMoney,
   };
@@ -405,64 +299,4 @@ export async function initializeVault(
   return { vaultConfig, usdOkuMint, reserveVault };
 }
 
-export interface RouterInitResult {
-  routerConfig: PublicKey;
-}
 
-/**
- * Initialize the Bridge Router program.
- *
- * `psmProgramId` / `okuDollarProgramId` are required so the router can
- * cross-check the supplied `okuMoneyMint` / `usdOkuMint` against the
- * canonical mints already stored in the PSM and vault configs at their
- * own initialize time. If the router were allowed to silently accept the
- * wrong mints here, every subsequent CPI would fail with an opaque
- * token-program error instead of a clean router-side rejection.
- */
-export async function initializeRouter(
-  provider: AnchorProvider,
-  programId: PublicKey,
-  psmProgramId: PublicKey,
-  okuDollarProgramId: PublicKey,
-  okuMoneyMint: PublicKey,
-  usdOkuMint: PublicKey,
-  authorities: ReturnType<typeof loadAuthorities>
-): Promise<RouterInitResult> {
-  logger.nextStep('Initializing Router');
-
-  const idl = loadIdlWithAddress(okuBridgeRouterIdl, programId);
-  const program = new Program(idl as any, provider);
-
-  const [routerConfig] = deriveRouterConfigPDA(programId);
-  const [psmConfig] = derivePsmConfigPDA(psmProgramId);
-  const [vaultConfig] = deriveVaultConfigPDA(okuDollarProgramId);
-
-  logger.info(`Router Config PDA: ${routerConfig.toBase58()}`);
-
-  // Initialize router
-  logger.info('Calling initialize()...');
-  try {
-    await program.methods
-      .initialize(authorities.psm.pauser, authorities.psm.unpauser)
-      .accountsPartial({
-        roleAdmin: provider.wallet.publicKey,
-        config: routerConfig,
-        okuMoneyMint: okuMoneyMint,
-        usdOkuMint: usdOkuMint,
-        psmConfig,
-        vaultConfig,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
-    logger.success('Router initialized');
-  } catch (error: any) {
-    if (isAlreadyInitialized(error)) {
-      logger.warning('Router already initialized');
-    } else {
-      throw error;
-    }
-  }
-
-  return { routerConfig };
-}

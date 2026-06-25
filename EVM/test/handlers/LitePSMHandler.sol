@@ -3,17 +3,19 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {LitePSM} from "../../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 import {IOkuMoney} from "../../src/interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../../src/interfaces/IOkuDollar.sol";
+import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {TestConstants} from "../shared/Constants.sol";
 
 /**
  * @title LitePSMHandler
  * @notice Stateful handler for LitePSM invariants. Exercises the full public surface
  *         (mintOkuM, redeemOkuM, mintUsdOku, redeemUsdOku, depositBuffer,
- *         withdrawUsdc, processQueue, rescueQueueEntry, configureOracle) and tracks
+ *         withdrawUsdc, processQueue, rescueQueueEntry, setOracleRelay) and tracks
  *         exact USDC flow + multiplier-observation ghost state.
  * @dev The PSM is granted the admin role at the test level; this handler invokes
  *      role-gated functions via `vm.prank(bridgeAdmin)` (where bridgeAdmin is the
@@ -28,6 +30,9 @@ contract LitePSMHandler is Test {
     RedemptionQueue public queue;
     address public rebaser;
     address public minter;
+    /// @notice Address holding VAULT_REBASER on the OkuDollar instance. Allowed to be
+    ///         address(0); in that case `setUsdYieldRate` becomes a no-op handler.
+    address public usdRebaser;
 
     address[] public actors;
     mapping(address => bool) public isActor;
@@ -35,6 +40,7 @@ contract LitePSMHandler is Test {
     uint256 public constant PRECISION = TestConstants.PRECISION;
     uint256 public constant MAX_FUZZ_PRICE = TestConstants.MAX_FUZZ_PRICE;
     uint256 public constant DECIMAL_MULTIPLIER = TestConstants.DECIMAL_MULTIPLIER;
+    uint256 public constant MAX_RATE = TestConstants.MAX_RATE;
 
     // ============ USDC flow ghost state ============
     uint256 public ghostUsdcDeposited;
@@ -67,8 +73,8 @@ contract LitePSMHandler is Test {
     uint256 public ghostProcessQueueReverts;
     uint256 public ghostRescueCalls;
     uint256 public ghostRescueReverts;
-    uint256 public ghostConfigureOracleCalls;
-    uint256 public ghostConfigureOracleReverts;
+    uint256 public ghostSetOracleRelayCalls;
+    uint256 public ghostSetOracleRelayReverts;
 
     // ============ Multiplier observation ============
 
@@ -93,12 +99,21 @@ contract LitePSMHandler is Test {
         queue = _queue;
         rebaser = _rebaser;
         minter = _minter;
+        // usdRebaser defaults to zero; PSMInvariants sets it via setUsdRebaser
+        // after granting VAULT_REBASER so this handler can exercise the USD-yield
+        // path. Zero means the `setUsdYieldRate` handler is a no-op.
 
         _addActor(makeAddr("psmActor1"));
         _addActor(makeAddr("psmActor2"));
         _addActor(makeAddr("psmActor3"));
 
         ghostLastSeenMultiplier = okuMoney.okuMMultiplier();
+    }
+
+    /// @notice Set the USD rebaser address. Used by PSMInvariants after it grants
+    ///         VAULT_REBASER on OkuDollar so this handler can drive USD yield rates.
+    function setUsdRebaser(address _usdRebaser) external {
+        usdRebaser = _usdRebaser;
     }
 
     function _addActor(address actor) internal {
@@ -131,7 +146,8 @@ contract LitePSMHandler is Test {
         usdc.approve(address(psm), usdcAmount);
 
         uint256 okuMMult = okuMoney.okuMMultiplier();
-        uint256 expectedOkuM = (usdcAmount * DECIMAL_MULTIPLIER * PRECISION) / okuMMult;
+        uint256 expectedOkuM =
+            Math.mulDiv(usdcAmount * DECIMAL_MULTIPLIER, PRECISION, okuMMult, Math.Rounding.Floor);
 
         vm.prank(actor);
         try psm.mintOkuM(usdcAmount) {
@@ -154,7 +170,8 @@ contract LitePSMHandler is Test {
         IERC20(address(okuMoney)).approve(address(psm), okuMAmount);
 
         uint256 okuMMult = okuMoney.okuMMultiplier();
-        uint256 expectedUsdc = (okuMAmount * okuMMult) / PRECISION / DECIMAL_MULTIPLIER;
+        uint256 expectedUsdc =
+            Math.mulDiv(okuMAmount, okuMMult, PRECISION, Math.Rounding.Floor) / DECIMAL_MULTIPLIER;
         uint256 psmUsdcBalance = usdc.balanceOf(address(psm));
 
         vm.prank(actor);
@@ -318,24 +335,54 @@ contract LitePSMHandler is Test {
         }
     }
 
-    function configureOracle(uint256 stalenessSeed, bool enabled) external {
-        ghostConfigureOracleCalls++;
-
-        // Bound staleness to the contract-allowed window. ORACLE_MIN/MAX_STALENESS now
-        // live in the shared src/lib/Constants.sol; the redundant public constants on
-        // LitePSM were removed during the role/constants cleanup.
-        uint256 minStale = TestConstants.ORACLE_MIN_STALENESS;
-        uint256 maxStale = TestConstants.ORACLE_MAX_STALENESS;
-        uint256 staleness = bound(stalenessSeed, minStale, maxStale);
-
-        // We can't configure with a real oracle here (no oracle addr in handler);
-        // instead try with address(this) as a sham oracle — when enabled this will
-        // revert later in mintOkuM if used, but the configure call itself proves
-        // the role-gated branch is exercised.
-        try psm.configureOracle(enabled ? address(this) : address(0), staleness, enabled) {}
+    /// @notice Drive the LitePSM.setOracleRelay branch by toggling between the wired
+    ///         relay and address(0) (kill-switch). The handler does not know the
+    ///         live relay address, so it always passes address(0) — exercising the
+    ///         "disable peg check" path. Re-enabling is handled by the invariant
+    ///         test harness in afterInvariant if it needs to.
+    function setOracleRelay() external {
+        ghostSetOracleRelayCalls++;
+        try psm.setOracleRelay(address(0)) {}
         catch {
-            ghostConfigureOracleReverts++;
+            ghostSetOracleRelayReverts++;
         }
+    }
+
+    // ============ USD Yield Rate (drives usdMultiplier compounding) ============
+
+    uint256 public ghostSetUsdYieldRateCalls;
+    uint256 public ghostSetUsdYieldRateReverts;
+
+    /// @notice Drive `usdRatePerSecond` so that subsequent `warpTime` calls compound
+    ///         `usdMultiplier()` above PRECISION. No-op if PSMInvariants did not
+    ///         configure a usdRebaser address.
+    function setUsdYieldRate(uint256 rate) external {
+        if (usdRebaser == address(0)) return;
+        ghostSetUsdYieldRateCalls++;
+        rate = bound(rate, PRECISION, MAX_RATE);
+        vm.prank(usdRebaser);
+        try OkuDollar(address(okuDollar)).setUsdYieldRate(rate, 0) {}
+        catch {
+            ghostSetUsdYieldRateReverts++;
+        }
+    }
+
+    // ============ Time Progression ============
+    //
+    // Required so that any active `usdRatePerSecond` actually compounds
+    // `usdMultiplier()` during invariant runs. Without this, the multiplier stays
+    // pinned at PRECISION and rounding-asymmetry bugs in PSM redeem paths
+    // (historical: `_redeemUsdOku` InsufficientBalance) cannot be caught.
+
+    uint256 public ghostWarpCalls;
+    uint256 public ghostTotalElapsed;
+
+    function warpTime(uint256 elapsed) external {
+        ghostWarpCalls++;
+        elapsed = bound(elapsed, 1, 30 days);
+        ghostTotalElapsed += elapsed;
+        vm.warp(block.timestamp + elapsed);
+        vm.roll(block.number + 1);
     }
 
     // ============ View helpers ============
@@ -352,12 +399,12 @@ contract LitePSMHandler is Test {
         return ghostMintOkuMCalls + ghostRedeemOkuMCalls + ghostMintOkuDollarCalls
             + ghostRedeemOkuDollarCalls + ghostRebaseCalls + ghostDepositBufferCalls
             + ghostWithdrawUsdcCalls + ghostProcessQueueCalls + ghostRescueCalls
-            + ghostConfigureOracleCalls;
+            + ghostSetOracleRelayCalls + ghostWarpCalls;
     }
 
     function ghostTotalReverts() external view returns (uint256) {
         return ghostMintOkuMReverts + ghostRedeemOkuMReverts + ghostMintOkuDollarReverts
             + ghostRedeemOkuDollarReverts + ghostDepositBufferReverts + ghostWithdrawUsdcReverts
-            + ghostProcessQueueReverts + ghostRescueReverts + ghostConfigureOracleReverts;
+            + ghostProcessQueueReverts + ghostRescueReverts + ghostSetOracleRelayReverts;
     }
 }

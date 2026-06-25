@@ -20,6 +20,8 @@ library TestRoles {
     bytes32 public constant OKUM_PAUSER = SrcRoles.OKUM_PAUSER;
     bytes32 public constant OKUM_UNPAUSER = SrcRoles.OKUM_UNPAUSER;
     bytes32 public constant OKUM_MINTER = SrcRoles.OKUM_MINTER;
+    /// @dev Cycle 4 (EVM-15): burn role split from `OKUM_MINTER`.
+    bytes32 public constant OKUM_BURNER = SrcRoles.OKUM_BURNER;
     bytes32 public constant OKUM_REBASER = SrcRoles.OKUM_REBASER;
     bytes32 public constant OKUM_BLACKLISTER = SrcRoles.OKUM_BLACKLISTER;
     bytes32 public constant OKUM_UNBLACKLISTER = SrcRoles.OKUM_UNBLACKLISTER;
@@ -50,25 +52,11 @@ library TestRoles {
     bytes32 public constant QUEUE_UPGRADER = SrcRoles.QUEUE_UPGRADER;
     bytes32 public constant QUEUE_PSM = SrcRoles.QUEUE_PSM;
     bytes32 public constant QUEUE_RESCUER = SrcRoles.QUEUE_RESCUER;
+    bytes32 public constant QUEUE_ORACLE_MANAGER = SrcRoles.QUEUE_ORACLE_MANAGER;
 
-    // ============ OkuBridge Roles (BRIDGE_ prefix) ============
+    // ============ OracleRelay Roles (RELAY_ prefix) ============
 
-    bytes32 public constant BRIDGE_SIGNER_MANAGER = SrcRoles.BRIDGE_SIGNER_MANAGER;
-    bytes32 public constant BRIDGE_PAUSER = SrcRoles.BRIDGE_PAUSER;
-    bytes32 public constant BRIDGE_UNPAUSER = SrcRoles.BRIDGE_UNPAUSER;
-    bytes32 public constant BRIDGE_FEE_MANAGER = SrcRoles.BRIDGE_FEE_MANAGER;
-    bytes32 public constant BRIDGE_NONCE_ADMIN = SrcRoles.BRIDGE_NONCE_ADMIN;
-    bytes32 public constant BRIDGE_CHAIN_MANAGER = SrcRoles.BRIDGE_CHAIN_MANAGER;
-    bytes32 public constant BRIDGE_LIMITS_MANAGER = SrcRoles.BRIDGE_LIMITS_MANAGER;
-    bytes32 public constant BRIDGE_UPGRADER = SrcRoles.BRIDGE_UPGRADER;
-    bytes32 public constant BRIDGE_REFUND_INITIATOR = SrcRoles.BRIDGE_REFUND_INITIATOR;
-    bytes32 public constant BRIDGE_REFUND_CONFIRMER = SrcRoles.BRIDGE_REFUND_CONFIRMER;
-
-    // ============ OkuBridgeRouter Roles (ROUTER_ prefix) ============
-
-    bytes32 public constant ROUTER_UPGRADER = SrcRoles.ROUTER_UPGRADER;
-    bytes32 public constant ROUTER_PAUSER = SrcRoles.ROUTER_PAUSER;
-    bytes32 public constant ROUTER_UNPAUSER = SrcRoles.ROUTER_UNPAUSER;
-    bytes32 public constant ROUTER_ADAPTER_MANAGER = SrcRoles.ROUTER_ADAPTER_MANAGER;
-    bytes32 public constant ROUTER_BRIDGE_MANAGER = SrcRoles.ROUTER_BRIDGE_MANAGER;
+    bytes32 public constant RELAY_UPGRADER = SrcRoles.RELAY_UPGRADER;
+    bytes32 public constant RELAY_FEED_MANAGER = SrcRoles.RELAY_FEED_MANAGER;
+    bytes32 public constant RELAY_CONFIG_MANAGER = SrcRoles.RELAY_CONFIG_MANAGER;
 }

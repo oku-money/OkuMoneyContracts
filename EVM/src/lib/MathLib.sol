@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity 0.8.28;
+
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {Constants} from "./Constants.sol";
 
@@ -7,6 +9,15 @@ import {Constants} from "./Constants.sol";
  * @title MathLib
  * @notice Shared math utilities for OkuMoney contracts
  * @dev See Constants.sol for terminology legend.
+ *
+ *      ROUNDING POLICY: All conversion functions use OpenZeppelin
+ *      `Math.mulDiv` for full-precision 512-bit intermediate computation and
+ *      explicit `Math.Rounding` semantics. Floor is the default direction;
+ *      the only Ceil site in the protocol is `OkuDollar.unwrap`'s
+ *      `sharesToBurn` computation, which favors the vault on user
+ *      withdrawals (ERC-4626 convention). `rpow` retains MakerDAO's
+ *      half-up assembly rounding because it has no direct `mulDiv`
+ *      equivalent.
  */
 library MathLib {
     /**
@@ -68,7 +79,7 @@ library MathLib {
         pure
         returns (uint256)
     {
-        return (okuMAmount * okuMMultiplier) / Constants.PRECISION;
+        return Math.mulDiv(okuMAmount, okuMMultiplier, Constants.PRECISION, Math.Rounding.Floor);
     }
 
     /**
@@ -85,7 +96,7 @@ library MathLib {
         pure
         returns (uint256)
     {
-        return (dollarValue * Constants.PRECISION) / okuMMultiplier;
+        return Math.mulDiv(dollarValue, Constants.PRECISION, okuMMultiplier, Math.Rounding.Floor);
     }
 
     /**
@@ -127,7 +138,7 @@ library MathLib {
     /**
      * @notice Compute the OkuDollar share count produced by wrapping `okuMAmount`.
      * @dev Single source of truth for `OkuDollar.wrap`'s share formula.
-     *      shares = okuMAmount * okuMMultiplier / usdMultiplier (floor)
+     *      shares = mulDiv(okuMAmount, okuMMultiplier, usdMultiplier, Floor)
      * @param okuMAmount OkuMoney token amount being wrapped
      * @param okuMMult Current okuMMultiplier
      * @param usdMult Current usdMultiplier (must be non-zero)
@@ -142,14 +153,14 @@ library MathLib {
         pure
         returns (uint256 shares)
     {
-        return (okuMAmount * okuMMult) / usdMult;
+        return Math.mulDiv(okuMAmount, okuMMult, usdMult, Math.Rounding.Floor);
     }
 
     /**
      * @notice Compute the dollar-denominated UsdOku amount minted when wrapping `okuMAmount`.
      * @dev Replicates `OkuDollar.wrap`'s two-step truncation exactly:
-     *        shares    = okuMAmount * okuMMultiplier / usdMultiplier   (floor)
-     *        usdMinted = shares     * usdMultiplier  / PRECISION        (floor)
+     *        shares    = mulDiv(okuMAmount, okuMMultiplier, usdMultiplier, Floor)
+     *        usdMinted = mulDiv(shares,     usdMultiplier,  PRECISION,     Floor)
      *      Used by both `OkuDollar.wrap` and `LitePSM.mintUsdOku` so the slippage
      *      floor passed to `wrap` matches what `wrap` actually produces — eliminating
      *      reverts driven solely by integer-division rounding at non-even multipliers.
@@ -167,7 +178,7 @@ library MathLib {
         pure
         returns (uint256 usdMinted)
     {
-        uint256 shares = (okuMAmount * okuMMult) / usdMult;
-        return (shares * usdMult) / Constants.PRECISION;
+        uint256 shares = Math.mulDiv(okuMAmount, okuMMult, usdMult, Math.Rounding.Floor);
+        return Math.mulDiv(shares, usdMult, Constants.PRECISION, Math.Rounding.Floor);
     }
 }

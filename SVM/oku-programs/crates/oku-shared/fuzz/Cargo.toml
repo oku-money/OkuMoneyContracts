@@ -45,3 +45,23 @@ name = "vault_share_round_trip"
 path = "fuzz_targets/vault_share_round_trip.rs"
 test = false
 doc = false
+
+# Cycle 4 (S-26): fuzz coverage for the collateral-ratio primitive
+# (`oku_shared::vault_math::collateral_ratio`). Three-way widening
+# multiplication, two sentinel branches — exactly the kind of math
+# that benefits from full-u64 randomized inputs cross-checked
+# against a u128 reference implementation.
+[[bin]]
+name = "collateral_ratio"
+path = "fuzz_targets/collateral_ratio.rs"
+test = false
+doc = false
+
+# Cycle 4: fuzz coverage for the new `mul_div_ceil` primitive.
+# Same shape as `mul_div_floor` with the `+ (d-1)` numerator
+# adjustment that needs its own overflow-safety witness.
+[[bin]]
+name = "mul_div_ceil"
+path = "fuzz_targets/mul_div_ceil.rs"
+test = false
+doc = false

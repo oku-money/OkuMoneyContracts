@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity 0.8.28;
 
 /**
  * @title RedemptionQueueEvents
@@ -10,7 +10,8 @@ abstract contract RedemptionQueueEvents {
     /// @notice Reasons why processQueue may skip an entry instead of processing it.
     enum RedemptionSkipReason {
         AlreadyCleared, // Entry was previously processed or rescued
-        InsufficientFunds // Not enough USDC to process this entry
+        InsufficientFunds, // Not enough USDC to process this entry
+        TransferFailed // USDC transfer to recipient reverted (e.g., blacklisted ATA); use rescueQueueEntry
     }
 
     /// @notice Emitted when a redemption is added to the queue
@@ -42,4 +43,17 @@ abstract contract RedemptionQueueEvents {
         uint256 okuMAmount,
         uint256 dollarValue
     );
+
+    /// @notice Emitted when `advanceHead` skips one or more cleared slots.
+    /// @param newHead New value of `queueHead` after the advance.
+    /// @param slotsAdvanced Number of cleared slots skipped in this call.
+    event QueueHeadAdvanced(uint256 newHead, uint256 slotsAdvanced);
+
+    /// @notice Emitted when the USDC peg circuit-breaker relay is rotated.
+    /// @dev Address(0) means the peg check is disabled (operational kill switch).
+    event OracleRelayUpdated(address indexed oldRelay, address indexed newRelay);
+
+    /// @notice Loud-signal event emitted when the peg check is
+    ///         disabled on the queue. Cycle 4 (EVM-03).
+    event OracleRelayDisabled(address indexed actor, address indexed oldRelay, uint256 blockNumber);
 }

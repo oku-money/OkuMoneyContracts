@@ -1,5 +1,6 @@
 [toolchain]
-# Trident 0.12.0 requires Rust >= 1.88 for some dependencies.
-# This is separate from the main project's 1.85.0 pin -- trident-tests
-# run in their own workspace and don't affect the on-chain build.
-channel = "stable"
+# Pinned to match the main project's `rust-toolchain.toml` (1.90.0). One
+# Rust version across `programs/`, `crates/`, and `trident-tests/`
+# eliminates the previous two-pin matrix and the floating `stable` channel.
+# Trident 0.12.0's dep tree requires >= 1.88; 1.90 is well inside that.
+channel = "1.90.0"

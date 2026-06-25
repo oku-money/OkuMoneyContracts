@@ -43,12 +43,18 @@ pub enum OkuDollarError {
     #[msg("Collateral ratio exceeds maximum (100%)")]
     RatioExceedsMax,
 
-    #[msg("USD multiplier can only increase")]
+    /// New `usd_multiplier` did not strictly increase. Reverts on both
+    /// backward moves and no-op (equal-value) updates so a no-op call
+    /// cannot stamp the sandwich-lock slot without moving the multiplier.
+    /// EVM: MultiplierCannotDecrease() (post audit-prep tighten).
+    #[msg("USD multiplier must strictly increase")]
     MultiplierCannotDecrease,
 
-    /// Proposed `usd_multiplier` exceeds `MAX_USD_MULTIPLIER`. Defense in
-    /// depth — even with the rebaser key compromised, the multiplier cannot
-    /// be pushed past the ceiling. Mirrors lite-psm `PriceAboveMax`.
+    /// Proposed `usd_multiplier` exceeds `MAX_USD_MULTIPLIER`. Math-sanity
+    /// bound that keeps downstream `u64 * u64 -> u128` multiplications
+    /// inside the overflow-safe region. Not a guard against operator
+    /// compromise (out of scope per the centralized trust model) but a
+    /// math bound. Mirrors lite-psm `PriceAboveMax`.
     #[msg("Proposed usd_multiplier exceeds MAX_USD_MULTIPLIER ceiling")]
     MultiplierAboveMax,
 
@@ -66,10 +72,6 @@ pub enum OkuDollarError {
     #[msg("Dead-shares ATA missing (required on first deposit)")]
     MissingDeadSharesAccount,
 
-    /// Dead-shares ATA does not belong to the usdOku mint.
-    #[msg("Dead-shares ATA mint does not match usdOku")]
-    InvalidDeadSharesMint,
-
     /// Dead-shares ATA owner is not the System Program.
     #[msg("Dead-shares ATA owner must be the System Program")]
     InvalidDeadSharesOwner,
@@ -79,6 +81,13 @@ pub enum OkuDollarError {
     /// that would split the dead supply across multiple accounts.
     #[msg("Dead-shares ATA must be the canonical associated address")]
     InvalidDeadSharesAddress,
+
+    /// Cycle 4 (OKUD-09): `dead_shares_ata` was supplied on a
+    /// subsequent-deposit wrap. The account is only meaningful on the
+    /// first deposit (`total_supply == 0`); passing it on later calls
+    /// invites confusion about which path the program took.
+    #[msg("dead_shares_ata must be omitted on subsequent deposits")]
+    UnexpectedDeadSharesAccount,
 
     // ===== Initialization Errors =====
     /// Authority pubkey supplied to `initialize` was the default (zero) pubkey.
@@ -96,6 +105,13 @@ pub enum OkuDollarError {
     /// references that break wrap/unwrap math.
     #[msg("Vault oku_money_mint must match PSM oku_money_mint")]
     OkuMoneyMintMismatch,
+
+    /// OkuMoney mint decimals do not equal `oku_shared::TOKEN_DECIMALS`
+    /// (= 6). Every share-math conversion assumes 6-decimal raw tokens
+    /// and would silently invert by an order of magnitude on mismatch.
+    /// Cycle 4 (OKUD-01).
+    #[msg("OkuMoney mint must have exactly 6 decimals")]
+    InvalidOkuMoneyDecimals,
 
     /// `accept_role_admin` was called but no proposal is in flight
     /// (`pending_role_admin == Pubkey::default()`).

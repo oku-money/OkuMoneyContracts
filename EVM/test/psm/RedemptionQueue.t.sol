@@ -3,9 +3,11 @@ pragma solidity ^0.8.28;
 
 import {BaseTest} from "../Base.t.sol";
 import {Errors} from "../../src/lib/Errors.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 import {RedemptionQueueEvents} from "../../src/lib/events/RedemptionQueueEvents.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {MockOracleRelay} from "../mocks/MockOracleRelay.sol";
 
 /**
  * @title RedemptionQueueTest
@@ -122,7 +124,8 @@ contract RedemptionQueueTest is BaseTest {
         uint256 amount = 100e18;
         _mintOkuMoney(address(redemptionQueue), amount);
 
-        uint256 dollarValue = (amount * okuMoney.okuMMultiplier()) / PRECISION;
+        uint256 dollarValue =
+            Math.mulDiv(amount, okuMoney.okuMMultiplier(), PRECISION, Math.Rounding.Floor);
         uint256 position = redemptionQueue.queueTail();
         uint256 queueLength = 1; // First entry
 
@@ -170,11 +173,13 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup: give queue minter role to burn
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         // Setup: approve USDC for transfer
         // At 1x okuMMultiplier, usdcAmount = okuMAmount * okuMMultiplier / PRECISION / DECIMAL_MULTIPLIER
-        uint256 usdcAmount = amount * okuMoney.okuMMultiplier() / PRECISION / DECIMAL_MULTIPLIER;
+        uint256 usdcAmount = Math.mulDiv(
+            amount, okuMoney.okuMMultiplier(), PRECISION, Math.Rounding.Floor
+        ) / DECIMAL_MULTIPLIER;
         _mintUsdc(address(this), usdcAmount);
         _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
 
@@ -192,7 +197,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         _mintUsdc(address(this), usdcAmount);
         _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
@@ -215,7 +220,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
         _approveUsdc(address(this), address(redemptionQueue), 100e6);
@@ -223,7 +228,10 @@ contract RedemptionQueueTest is BaseTest {
         // Process only 1 entry
         redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueHead() + 1);
 
-        // Queue head should advance, length decreases
+        // processQueue no longer auto-advances; caller drives head forward via advanceHead.
+        redemptionQueue.advanceHead(2);
+
+        // Queue head should now have advanced, length decreases
         assertEq(redemptionQueue.queueLength(), 1);
 
         // First entry should now be invalid
@@ -240,13 +248,14 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.enqueue(user3, 100e18);
 
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         _mintUsdc(address(this), 300e6); // 300 USDC (6 decimals)
         _approveUsdc(address(this), address(redemptionQueue), 300e6);
 
         // Process only 2 entries
         redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueHead() + 2);
+        redemptionQueue.advanceHead(3);
 
         // Should have 1 entry left
         assertEq(redemptionQueue.queueLength(), 1);
@@ -259,13 +268,14 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.enqueue(user2, 100e18);
 
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         // Only provide enough USDC for 1 entry
         _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
         _approveUsdc(address(this), address(redemptionQueue), 100e6);
 
         redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
+        redemptionQueue.advanceHead(2);
 
         // Should have processed only 1
         assertEq(redemptionQueue.queueLength(), 1);
@@ -279,12 +289,13 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.enqueue(user1, okuMoneyAmount);
 
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         _mintUsdc(address(this), usdcAmount);
         _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
 
-        uint256 dollarValue = (okuMoneyAmount * okuMoney.okuMMultiplier()) / PRECISION;
+        uint256 dollarValue =
+            Math.mulDiv(okuMoneyAmount, okuMoney.okuMMultiplier(), PRECISION, Math.Rounding.Floor);
 
         // Skip exact event check since waitTime depends on block.timestamp
         // Just verify the processing works
@@ -305,7 +316,7 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.enqueue(user3, 300e18);
 
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         // Only provide enough for first entry
         _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
@@ -333,10 +344,12 @@ contract RedemptionQueueTest is BaseTest {
 
         // Process one
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
         _mintUsdc(address(this), 100e6); // 100 USDC (6 decimals)
         _approveUsdc(address(this), address(redemptionQueue), 100e6);
         redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueHead() + 1);
+        // queueLength is now an upper bound until advanceHead runs.
+        redemptionQueue.advanceHead(2);
 
         assertEq(redemptionQueue.queueLength(), 1);
     }
@@ -379,7 +392,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Process queue and verify user receives the increased amount
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         // Need 200 USDC (6 decimals) now to match 200e18 dollar value
         _mintUsdc(address(this), 200e6); // 200 USDC (6 decimals)
@@ -414,7 +427,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup for processing
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         _mintUsdc(address(this), 300e6); // 300 USDC (6 decimals)
         _approveUsdc(address(this), address(redemptionQueue), 300e6);
@@ -460,7 +473,9 @@ contract RedemptionQueueTest is BaseTest {
     function testFuzz_QueuePriceAppreciation(uint256 amount, uint256 priceIncrease) public {
         // Bound inputs to reasonable ranges
         amount = bound(amount, 1e18, 1_000_000e18);
-        priceIncrease = bound(priceIncrease, 0, PRECISION * 9); // Up to 10x total
+        // setOkuMMultiplier requires strict increase, so the increment is bounded
+        // away from zero.
+        priceIncrease = bound(priceIncrease, 1, PRECISION * 9); // Up to 10x total
 
         _mintOkuMoney(user1, amount);
         _mintOkuMoney(address(redemptionQueue), amount);
@@ -485,7 +500,8 @@ contract RedemptionQueueTest is BaseTest {
         );
 
         // Verify dollar value increased correctly
-        uint256 expectedValue = (initialNoteAmount * newPrice) / PRECISION;
+        uint256 expectedValue =
+            Math.mulDiv(initialNoteAmount, newPrice, PRECISION, Math.Rounding.Floor);
         uint256 actualValue = redemptionQueue.getQueueEntryValue(0);
         assertEq(actualValue, expectedValue, "Value should reflect new okuMMultiplier");
     }
@@ -520,7 +536,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup for processing
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         _mintUsdc(address(this), expectedPayoutUsdc);
         _approveUsdc(address(this), address(redemptionQueue), expectedPayoutUsdc);
@@ -528,6 +544,7 @@ contract RedemptionQueueTest is BaseTest {
         uint256 user1UsdcBefore = usdc.balanceOf(user1);
 
         redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
+        redemptionQueue.advanceHead(redemptionQueue.queueTail());
 
         // User should receive exact expected payout (in USDC - 6 decimals)
         assertEq(
@@ -570,7 +587,8 @@ contract RedemptionQueueTest is BaseTest {
         okuMoney.setOkuMMultiplier(price2);
 
         // Final dollar value should be okuMAmount * finalPrice / PRECISION
-        uint256 expectedValue = (initialNoteAmount * price2) / PRECISION;
+        uint256 expectedValue =
+            Math.mulDiv(initialNoteAmount, price2, PRECISION, Math.Rounding.Floor);
         uint256 actualValue = redemptionQueue.getQueueEntryValue(0);
 
         assertEq(actualValue, expectedValue, "Multiple price increases should compound correctly");
@@ -612,7 +630,7 @@ contract RedemptionQueueTest is BaseTest {
         // Setup for processing - convert note dollar value to USDC
         // At 1x okuMMultiplier, dollar value == okuMAmount
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         uint256 totalNeededUsdc = totalNeeded / DECIMAL_MULTIPLIER;
         _mintUsdc(address(this), totalNeededUsdc);
@@ -620,6 +638,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Process all
         redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
+        redemptionQueue.advanceHead(numUsers);
 
         // Verify all processed in order (each received their amount in USDC)
         assertEq(redemptionQueue.queueLength(), 0, "Queue should be empty");
@@ -669,7 +688,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup - only provide enough USDC for the ones we'll process
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         uint256 totalForProcessedUsdc = totalForProcessed / DECIMAL_MULTIPLIER;
         _mintUsdc(address(this), totalForProcessedUsdc);
@@ -679,6 +698,7 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.processQueue(
             redemptionQueue.queueHead(), redemptionQueue.queueHead() + numToProcess
         );
+        redemptionQueue.advanceHead(numToProcess);
 
         // Verify: first numToProcess users got paid, rest didn't
         assertEq(
@@ -744,20 +764,21 @@ contract RedemptionQueueTest is BaseTest {
         uint256[] memory expectedPayoutsUsdc = new uint256[](numUsers);
         for (uint256 i = 0; i < numUsers; i++) {
             // dollarValue = okuMAmount * okuMMultiplier / PRECISION
-            uint256 dollarValue = (amounts[i] * newPrice) / PRECISION;
+            uint256 dollarValue = Math.mulDiv(amounts[i], newPrice, PRECISION, Math.Rounding.Floor);
             expectedPayoutsUsdc[i] = dollarValue / DECIMAL_MULTIPLIER;
             totalNeededUsdc += expectedPayoutsUsdc[i];
         }
 
         // Setup for processing
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         _mintUsdc(address(this), totalNeededUsdc);
         _approveUsdc(address(this), address(redemptionQueue), totalNeededUsdc);
 
         // Process all
         redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
+        redemptionQueue.advanceHead(numUsers);
 
         // Verify each user got their price-adjusted amount in FIFO order
         assertEq(redemptionQueue.queueLength(), 0, "Queue should be empty");
@@ -800,7 +821,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup - provide exactly enough for numToPay users
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         uint256 bufferAmountNotes = amountPerUser * numToPay;
         uint256 bufferAmountUsdc = bufferAmountNotes / DECIMAL_MULTIPLIER;
@@ -811,6 +832,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Try to process all - will stop after numToPay
         redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
+        redemptionQueue.advanceHead(numToPay);
 
         // Verify: first numToPay users got paid, rest didn't (FIFO)
         for (uint256 i = 0; i < numUsers; i++) {
@@ -868,7 +890,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Setup - provide enough for roughly half
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         // Convert to USDC amount inline
         uint256 bufferUsdc = (totalQueued / 2) / DECIMAL_MULTIPLIER;
@@ -880,6 +902,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Process
         redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
+        redemptionQueue.advanceHead(numUsers);
 
         uint256 processed = queueLengthBefore - redemptionQueue.queueLength();
 
@@ -1038,7 +1061,7 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.rescueQueueEntry(1, user2);
     }
 
-    function test_RescueQueueEntry_AdvancesHeadWhenFirst() public {
+    function test_RescueQueueEntry_FirstThenAdvanceHead() public {
         uint256 amount = 500e18;
 
         // Enqueue 3 entries
@@ -1050,11 +1073,15 @@ contract RedemptionQueueTest is BaseTest {
         assertEq(redemptionQueue.queueHead(), 0);
         assertEq(redemptionQueue.queueTail(), 3);
 
-        // Rescue the first entry — head should advance
+        // Rescue the first entry — head does NOT auto-advance.
         vm.prank(queueRescuer);
         redemptionQueue.rescueQueueEntry(0, user1);
+        assertEq(redemptionQueue.queueHead(), 0, "Rescue must not auto-advance head");
 
-        assertEq(redemptionQueue.queueHead(), 1, "Head should advance after rescuing first entry");
+        // advanceHead is the explicit cursor advance.
+        uint256 advanced = redemptionQueue.advanceHead(3);
+        assertEq(advanced, 1, "Exactly one cleared slot was skipped");
+        assertEq(redemptionQueue.queueHead(), 1, "Head should advance after advanceHead");
     }
 
     function test_RescueQueueEntry_DoesNotAdvanceHeadWhenMiddle() public {
@@ -1068,13 +1095,13 @@ contract RedemptionQueueTest is BaseTest {
 
         assertEq(redemptionQueue.queueHead(), 0);
 
-        // Rescue the middle entry — head should NOT advance
+        // Rescue the middle entry — head should not move even after advanceHead
+        // because index 0 is still live.
         vm.prank(queueRescuer);
         redemptionQueue.rescueQueueEntry(1, user2);
+        redemptionQueue.advanceHead(3);
 
-        assertEq(
-            redemptionQueue.queueHead(), 0, "Head should not advance when rescuing middle entry"
-        );
+        assertEq(redemptionQueue.queueHead(), 0, "Head should not advance when middle is cleared");
     }
 
     function test_RescueQueueEntry_ProcessQueueAfterRescue() public {
@@ -1088,7 +1115,7 @@ contract RedemptionQueueTest is BaseTest {
 
         // Grant queue the ability to burn
         vm.prank(admin);
-        okuMoney.grantRole(OKUM_MINTER, address(redemptionQueue));
+        okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
 
         // Rescue the first entry (stuck)
         vm.prank(queueRescuer);
@@ -1136,7 +1163,7 @@ contract RedemptionQueueTest is BaseTest {
     // ============ ProcessQueue Range Validation ============
 
     function test_ProcessQueue_RevertStartBelowHead() public {
-        // Process one entry to advance head past index 0, then try to re-process from 0.
+        // Process one entry, advance head past index 0, then try to re-process from 0.
         uint256 amount = 100e18;
         _mintOkuMoney(address(redemptionQueue), amount);
         redemptionQueue.enqueue(user1, amount);
@@ -1146,6 +1173,8 @@ contract RedemptionQueueTest is BaseTest {
         _mintUsdc(address(this), usdcAmount);
         _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
         redemptionQueue.processQueue(0, 1);
+        // processQueue no longer auto-advances; drive the cursor forward explicitly.
+        redemptionQueue.advanceHead(1);
         assertEq(redemptionQueue.queueHead(), 1);
 
         vm.expectRevert(RedemptionQueue.StartBelowHead.selector);
@@ -1158,7 +1187,7 @@ contract RedemptionQueueTest is BaseTest {
         redemptionQueue.processQueue(0, 5);
     }
 
-    function test_RescueQueueEntry_AdvancesHeadPastChainOfRescued() public {
+    function test_AdvanceHead_PastChainOfRescued() public {
         uint256 amount = 100e18;
         _mintOkuMoney(address(redemptionQueue), amount * 4);
 
@@ -1170,20 +1199,79 @@ contract RedemptionQueueTest is BaseTest {
         assertEq(redemptionQueue.queueHead(), 0);
         assertEq(redemptionQueue.queueTail(), 4);
 
-        // Rescue indices 0, 1, 2 in order. After each rescue the head should advance
-        // past every contiguous cleared entry. Final state: head == 3, tail == 4.
+        // Rescue indices 0, 1, 2 in order. rescueQueueEntry no longer auto-advances
+        // the head, so it stays at 0 throughout.
         vm.startPrank(queueRescuer);
         redemptionQueue.rescueQueueEntry(0, user2);
-        assertEq(redemptionQueue.queueHead(), 1);
-
         redemptionQueue.rescueQueueEntry(1, user2);
-        assertEq(redemptionQueue.queueHead(), 2);
-
         redemptionQueue.rescueQueueEntry(2, user2);
+        vm.stopPrank();
+        assertEq(redemptionQueue.queueHead(), 0, "Rescue must not auto-advance");
+
+        // A single advanceHead call drains all contiguous cleared slots up to the cap.
+        uint256 advanced = redemptionQueue.advanceHead(10);
+        assertEq(advanced, 3, "Three contiguous cleared slots are skipped");
         assertEq(redemptionQueue.queueHead(), 3);
+        assertEq(redemptionQueue.queueTail(), 4);
+    }
+
+    function test_AdvanceHead_RespectsMaxSlots() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount * 4);
+
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        // Clear the first three slots.
+        vm.startPrank(queueRescuer);
+        redemptionQueue.rescueQueueEntry(0, user2);
+        redemptionQueue.rescueQueueEntry(1, user2);
+        redemptionQueue.rescueQueueEntry(2, user2);
         vm.stopPrank();
 
-        assertEq(redemptionQueue.queueTail(), 4);
+        // Cap to 2 slots — head should land at 2, not 3.
+        uint256 advanced = redemptionQueue.advanceHead(2);
+        assertEq(advanced, 2);
+        assertEq(redemptionQueue.queueHead(), 2);
+
+        // A second call finishes the job.
+        advanced = redemptionQueue.advanceHead(10);
+        assertEq(advanced, 1);
+        assertEq(redemptionQueue.queueHead(), 3);
+    }
+
+    function test_AdvanceHead_NoopWhenAllLive() public {
+        _mintOkuMoney(address(redemptionQueue), 100e18);
+        redemptionQueue.enqueue(user1, 100e18);
+
+        uint256 advanced = redemptionQueue.advanceHead(100);
+        assertEq(advanced, 0);
+        assertEq(redemptionQueue.queueHead(), 0);
+    }
+
+    function test_AdvanceHead_NoopWhenEmpty() public {
+        // queueHead == queueTail == 0
+        uint256 advanced = redemptionQueue.advanceHead(100);
+        assertEq(advanced, 0);
+        assertEq(redemptionQueue.queueHead(), 0);
+    }
+
+    function test_AdvanceHead_StopsAtLiveSlot() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount * 3);
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user2, amount);
+        redemptionQueue.enqueue(user3, amount);
+
+        // Clear index 0 only, leave index 1 live.
+        vm.prank(queueRescuer);
+        redemptionQueue.rescueQueueEntry(0, user1);
+
+        uint256 advanced = redemptionQueue.advanceHead(10);
+        assertEq(advanced, 1, "Should stop at the first live slot");
+        assertEq(redemptionQueue.queueHead(), 1);
     }
 
     function test_TotalQueuedUsdc_AfterMultiplierChange() public {
@@ -1197,5 +1285,308 @@ contract RedemptionQueueTest is BaseTest {
         // Bump multiplier 2x — totalQueuedUsdc must reflect the new dollar value.
         _setOkuMMultiplierAndRoll(PRECISION * 2);
         assertEq(redemptionQueue.totalQueuedUsdc(), 2 * amount / DECIMAL_MULTIPLIER);
+    }
+
+    // ============ TransferFailed Soft-Skip Tests ============
+    //
+    // Drives the mock-USDC blocked-address path through {RedemptionQueue.processQueue}
+    // so the low-level `.call` returns `ok = false` and the entry is soft-skipped via
+    // `RedemptionSkipped(i, TransferFailed)` instead of reverting the whole batch.
+    // The OkuM for the skipped entry stays in escrow and `totalQueuedOkuM` is NOT
+    // decremented; the operator clears it later via `rescueQueueEntry`.
+
+    /// @notice Blocked recipient on a single-entry queue: skip event emitted,
+    ///         no OkuM burned, totalQueuedOkuM unchanged, queueHead does NOT advance
+    ///         (entry slot still occupied).
+    function test_ProcessQueue_TransferFailed_SoftSkipEmitsEvent() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        // Approve USDC for the (would-be) transfer.
+        uint256 usdcAmount = Math.mulDiv(
+            amount, okuMoney.okuMMultiplier(), PRECISION, Math.Rounding.Floor
+        ) / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), usdcAmount);
+        _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
+
+        // Block user1 so transferFrom returns false without reverting.
+        usdc.setBlocked(user1, true);
+
+        uint256 escrowBefore = okuMoney.balanceOf(address(redemptionQueue));
+        uint256 totalQueuedBefore = redemptionQueue.totalQueuedOkuM();
+
+        vm.expectEmit(true, false, false, true);
+        emit RedemptionQueueEvents.RedemptionSkipped(
+            0, RedemptionQueueEvents.RedemptionSkipReason.TransferFailed
+        );
+        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
+
+        // OkuM stays in escrow.
+        assertEq(okuMoney.balanceOf(address(redemptionQueue)), escrowBefore);
+        // Accumulator is NOT decremented.
+        assertEq(redemptionQueue.totalQueuedOkuM(), totalQueuedBefore);
+        // User got no USDC.
+        assertEq(usdc.balanceOf(user1), 0);
+        // Entry slot is still populated (not deleted).
+        RedemptionQueue.QueueEntry memory entry = redemptionQueue.getQueueEntry(0);
+        assertEq(entry.user, user1);
+        assertEq(entry.okuMAmount, amount);
+        // queueHead still 0: _advanceHead does not skip the failed entry because
+        // entry.user != address(0).
+        assertEq(redemptionQueue.queueHead(), 0);
+    }
+
+    /// @notice Interleave blocked + clean users: the blocked one is skipped, the
+    ///         clean one is processed in the same batch.
+    function test_ProcessQueue_TransferFailed_NextEntryStillProcesses() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount * 3);
+
+        // user1 blocked, user2 clean, user3 blocked.
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user2, amount);
+        redemptionQueue.enqueue(user3, amount);
+
+        usdc.setBlocked(user1, true);
+        usdc.setBlocked(user3, true);
+
+        uint256 perEntryUsdc = amount * okuMoney.okuMMultiplier() / PRECISION / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), perEntryUsdc * 3);
+        _approveUsdc(address(this), address(redemptionQueue), perEntryUsdc * 3);
+
+        uint256 escrowBefore = okuMoney.balanceOf(address(redemptionQueue));
+
+        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
+
+        // user2 processed: received USDC, OkuM burned.
+        assertEq(usdc.balanceOf(user2), perEntryUsdc);
+        // user1 + user3 skipped: no USDC, OkuM still in escrow.
+        assertEq(usdc.balanceOf(user1), 0);
+        assertEq(usdc.balanceOf(user3), 0);
+        // Only user2's OkuM was burned (1 entry of `amount`).
+        assertEq(okuMoney.balanceOf(address(redemptionQueue)), escrowBefore - amount);
+        // totalQueuedOkuM decremented only by user2's portion.
+        assertEq(redemptionQueue.totalQueuedOkuM(), amount * 2);
+        // queueHead still 0 (user1's slot blocks advancement).
+        assertEq(redemptionQueue.queueHead(), 0);
+        // user1 and user3 entries still live.
+        assertEq(redemptionQueue.getQueueEntry(0).user, user1);
+        assertEq(redemptionQueue.getQueueEntry(2).user, user3);
+        // user2's slot is deleted (zeroed but still in [head, tail) range).
+        RedemptionQueue.QueueEntry memory cleared = redemptionQueue.getQueueEntry(1);
+        assertEq(cleared.user, address(0));
+        assertEq(cleared.okuMAmount, 0);
+    }
+
+    /// @notice TransferFailed via the *return-false* shape (no revert).
+    ///         Hardening regression: before SafeERC20.trySafeTransferFrom was
+    ///         introduced here, `transferFrom` returning `false` was treated as
+    ///         success and the OkuM would have been burned while the user got
+    ///         no USDC. The fix decodes the return data — both this test and
+    ///         the revert-shape test above must now route into the same skip
+    ///         branch.
+    function test_ProcessQueue_TransferFailed_ReturnFalse_IsAlsoSoftSkipped() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        uint256 usdcAmount = Math.mulDiv(
+            amount, okuMoney.okuMMultiplier(), PRECISION, Math.Rounding.Floor
+        ) / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), usdcAmount);
+        _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
+
+        // Configure MockUSDC to *return false* (no revert) for transfers
+        // involving user1. Mirrors a hypothetical non-standard USDC variant.
+        usdc.setReturnFalse(user1, true);
+
+        uint256 escrowBefore = okuMoney.balanceOf(address(redemptionQueue));
+        uint256 totalQueuedBefore = redemptionQueue.totalQueuedOkuM();
+
+        vm.expectEmit(true, false, false, true);
+        emit RedemptionQueueEvents.RedemptionSkipped(
+            0, RedemptionQueueEvents.RedemptionSkipReason.TransferFailed
+        );
+        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
+
+        // Same post-conditions as the revert-shape test: OkuM in escrow,
+        // accumulator unchanged, no USDC paid, slot still occupied.
+        assertEq(okuMoney.balanceOf(address(redemptionQueue)), escrowBefore);
+        assertEq(redemptionQueue.totalQueuedOkuM(), totalQueuedBefore);
+        assertEq(usdc.balanceOf(user1), 0);
+        RedemptionQueue.QueueEntry memory entry = redemptionQueue.getQueueEntry(0);
+        assertEq(entry.user, user1);
+        assertEq(entry.okuMAmount, amount);
+        assertEq(redemptionQueue.queueHead(), 0);
+    }
+
+    /// @notice After a TransferFailed skip, the queue can be cleared via
+    ///         rescueQueueEntry: OkuM is returned to the alternate recipient and
+    ///         the queue advances.
+    function test_ProcessQueue_TransferFailed_ThenRescueClearsIt() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        // First attempt: blocked -> soft-skip.
+        usdc.setBlocked(user1, true);
+        uint256 usdcAmount = Math.mulDiv(
+            amount, okuMoney.okuMMultiplier(), PRECISION, Math.Rounding.Floor
+        ) / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), usdcAmount);
+        _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
+        redemptionQueue.processQueue(redemptionQueue.queueHead(), redemptionQueue.queueTail());
+
+        // Operator rescues to an alternate recipient (user2).
+        uint256 user2OkuMBefore = okuMoney.balanceOf(user2);
+        vm.prank(queueRescuer);
+        redemptionQueue.rescueQueueEntry(0, user2);
+        // Explicit cursor advance after rescue.
+        redemptionQueue.advanceHead(1);
+
+        assertEq(okuMoney.balanceOf(user2), user2OkuMBefore + amount);
+        assertEq(redemptionQueue.totalQueuedOkuM(), 0);
+        // Slot cleared; head advanced past it.
+        assertEq(redemptionQueue.queueHead(), 1);
+        assertEq(redemptionQueue.queueLength(), 0);
+    }
+
+    /// @notice Drive the `RedemptionSkipped(AlreadyCleared)` branch.
+    ///         Path: enqueue three entries [u1, u2, u3], rescue the middle slot
+    ///         (index 1), then process the [0,3) range. Index 0 (user1) processes
+    ///         normally, index 1 fires AlreadyCleared, index 2 (user3) processes.
+    function test_ProcessQueue_AlreadyCleared_SoftSkipEmitsEvent() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount * 3);
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user2, amount);
+        redemptionQueue.enqueue(user3, amount);
+
+        // Rescue the middle slot — head stays at 0 because index 0 still live.
+        vm.prank(queueRescuer);
+        redemptionQueue.rescueQueueEntry(1, user2);
+        assertEq(redemptionQueue.queueHead(), 0);
+
+        uint256 perEntryUsdc = amount * okuMoney.okuMMultiplier() / PRECISION / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), perEntryUsdc * 2);
+        _approveUsdc(address(this), address(redemptionQueue), perEntryUsdc * 2);
+
+        vm.expectEmit(true, false, false, true);
+        emit RedemptionQueueEvents.RedemptionSkipped(
+            1, RedemptionQueueEvents.RedemptionSkipReason.AlreadyCleared
+        );
+        redemptionQueue.processQueue(0, 3);
+        redemptionQueue.advanceHead(3);
+
+        // Both live entries processed; head advanced past all three after advanceHead.
+        assertEq(usdc.balanceOf(user1), perEntryUsdc);
+        assertEq(usdc.balanceOf(user3), perEntryUsdc);
+        assertEq(redemptionQueue.queueHead(), 3);
+        assertEq(redemptionQueue.queueLength(), 0);
+    }
+
+    /// @notice Drive the `RedemptionSkipped(InsufficientFunds)` branch.
+    ///         Approve less USDC than the second entry requires; loop should
+    ///         break with InsufficientFunds and stop processing further entries.
+    function test_ProcessQueue_InsufficientFunds_EmitsEventAndBreaks() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount * 2);
+        redemptionQueue.enqueue(user1, amount);
+        redemptionQueue.enqueue(user2, amount);
+
+        uint256 perEntryUsdc = amount * okuMoney.okuMMultiplier() / PRECISION / DECIMAL_MULTIPLIER;
+        // Fund only the first entry.
+        _mintUsdc(address(this), perEntryUsdc);
+        _approveUsdc(address(this), address(redemptionQueue), perEntryUsdc);
+
+        vm.expectEmit(true, false, false, true);
+        emit RedemptionQueueEvents.RedemptionSkipped(
+            1, RedemptionQueueEvents.RedemptionSkipReason.InsufficientFunds
+        );
+        redemptionQueue.processQueue(0, 2);
+        redemptionQueue.advanceHead(2);
+
+        // user1 paid; user2 still queued.
+        assertEq(usdc.balanceOf(user1), perEntryUsdc);
+        assertEq(usdc.balanceOf(user2), 0);
+        // queueHead advanced past user1 (cleared), stopped at user2 (live).
+        assertEq(redemptionQueue.queueHead(), 1);
+        assertEq(redemptionQueue.queueLength(), 1);
+    }
+
+    // ============ View Getter Tests ============
+
+    function test_View_Usdc() public view {
+        assertEq(address(redemptionQueue.usdc()), address(usdc));
+    }
+
+    function test_View_UsdcDecimalMultiplier() public view {
+        // MockUSDC is 6 decimals; multiplier = 10**(18-6) = 1e12.
+        assertEq(redemptionQueue.usdcDecimalMultiplier(), 1e12);
+        assertEq(redemptionQueue.usdcDecimalMultiplier(), DECIMAL_MULTIPLIER);
+    }
+
+    function test_View_OracleRelay() public view {
+        // BaseTest wires the MockOracleRelay during _setupRoles().
+        assertEq(address(redemptionQueue.oracleRelay()), address(oracleRelay));
+    }
+
+    // ============ Oracle Relay (USDC peg circuit-breaker) ============
+
+    /// @notice ProcessQueue must revert when the peg check fails. The check runs once
+    ///         per batch, before any entries are processed, so a depeg event suspends
+    ///         queue drains entirely.
+    function test_ProcessQueue_RevertsOnDepeg() public {
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+
+        // Provide USDC and approval so the only failure mode is the relay.
+        uint256 usdcAmount = amount / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), usdcAmount);
+        _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
+
+        oracleRelay.setPass(false);
+        vm.expectRevert(MockOracleRelay.MockOracleRelayDepeg.selector);
+        redemptionQueue.processQueue(0, 1);
+    }
+
+    function test_ProcessQueue_SucceedsWhenRelayDisabledViaSetOracleRelay() public {
+        // Wire the relay to fail, then disable it on the queue: processQueue should
+        // proceed because the check is skipped when oracleRelay is address(0).
+        uint256 amount = 100e18;
+        _mintOkuMoney(address(redemptionQueue), amount);
+        redemptionQueue.enqueue(user1, amount);
+        uint256 usdcAmount = amount / DECIMAL_MULTIPLIER;
+        _mintUsdc(address(this), usdcAmount);
+        _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
+
+        oracleRelay.setPass(false);
+        vm.prank(admin); // admin holds QUEUE_ORACLE_MANAGER
+        redemptionQueue.setOracleRelay(address(0));
+
+        uint256 user1Before = usdc.balanceOf(user1);
+        redemptionQueue.processQueue(0, 1);
+        assertEq(usdc.balanceOf(user1), user1Before + usdcAmount);
+    }
+
+    function test_SetOracleRelay_RevertsForNonOracleManager() public {
+        vm.prank(user1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                user1,
+                QUEUE_ORACLE_MANAGER
+            )
+        );
+        redemptionQueue.setOracleRelay(address(0xBEEF));
+    }
+
+    function test_SetOracleRelay_EmitsEvent() public {
+        vm.expectEmit(true, true, false, false);
+        emit RedemptionQueueEvents.OracleRelayUpdated(address(oracleRelay), address(0xBEEF));
+        vm.prank(admin); // admin holds QUEUE_ORACLE_MANAGER
+        redemptionQueue.setOracleRelay(address(0xBEEF));
     }
 }

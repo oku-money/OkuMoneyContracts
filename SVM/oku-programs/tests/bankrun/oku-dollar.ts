@@ -160,7 +160,7 @@ describe("oku-dollar", () => {
 
     // Derive PSM config PDA up front.
     [psmConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config")],
+      [Buffer.from("psm_config_v3")],
       psmProgram.programId
     );
 
@@ -198,13 +198,13 @@ describe("oku-dollar", () => {
 
     // Derive vault config PDA
     [vaultConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("oku_dollar_config")],
+      [Buffer.from("oku_dollar_config_v2")],
       program.programId
     );
 
     // Derive usdOku mint PDA (created by vault initialize)
     [usdOkuMint] = PublicKey.findProgramAddressSync(
-      [Buffer.from("usd_oku_mint")],
+      [Buffer.from("usd_oku_mint_v2")],
       program.programId
     );
 
@@ -1257,6 +1257,195 @@ describe("oku-dollar", () => {
       expect(after.minCollateralRatio.toString()).to.equal(
         DEFAULT_MIN_COLLATERAL_RATIO.toString()
       );
+    });
+  });
+
+  // ==========================================================================
+  // NEW COVERAGE (audit-prep): vault set_authority + two-step accept_role_admin
+  // Mirrors the lite-psm `set_authority` describe block. Cycle 4 added the
+  // two-step rotation to oku-dollar but didn't ship the matching tests.
+  // ==========================================================================
+  describe("set_authority + accept_role_admin (vault)", () => {
+    it("role_admin can update vault pauser", async () => {
+      const newPauser = Keypair.generate();
+
+      await program.methods
+        .setAuthority({ pauser: {} }, newPauser.publicKey)
+        .accountsPartial({
+          roleAdmin: roleAdmin.publicKey,
+          config: vaultConfigPda,
+        })
+        .signers([roleAdmin])
+        .rpc();
+
+      let cfg = await program.account.okuDollarConfig.fetch(vaultConfigPda);
+      expect(cfg.pauser.toString()).to.equal(newPauser.publicKey.toString());
+
+      // Restore.
+      await program.methods
+        .setAuthority({ pauser: {} }, vaultPauser.publicKey)
+        .accountsPartial({
+          roleAdmin: roleAdmin.publicKey,
+          config: vaultConfigPda,
+        })
+        .signers([roleAdmin])
+        .rpc();
+      cfg = await program.account.okuDollarConfig.fetch(vaultConfigPda);
+      expect(cfg.pauser.toString()).to.equal(vaultPauser.publicKey.toString());
+    });
+
+    it("two-step RoleAdmin rotation: propose → accept → transfer back", async () => {
+      const tempAdmin = Keypair.generate();
+      await fundKeypairs(h, [tempAdmin], 5 * anchor.web3.LAMPORTS_PER_SOL);
+
+      // ---- Step 1: current admin proposes tempAdmin.
+      await program.methods
+        .setAuthority({ roleAdmin: {} }, tempAdmin.publicKey)
+        .accountsPartial({
+          roleAdmin: roleAdmin.publicKey,
+          config: vaultConfigPda,
+        })
+        .signers([roleAdmin])
+        .rpc();
+
+      let cfg = await program.account.okuDollarConfig.fetch(vaultConfigPda);
+      expect(cfg.roleAdmin.toString()).to.equal(roleAdmin.publicKey.toString());
+      expect(cfg.pendingRoleAdmin.toString()).to.equal(tempAdmin.publicKey.toString());
+
+      // Wrong signer cannot accept.
+      const stranger = Keypair.generate();
+      await fundKeypairs(h, [stranger], 2 * anchor.web3.LAMPORTS_PER_SOL);
+      try {
+        await program.methods
+          .acceptRoleAdmin()
+          .accountsPartial({
+            newRoleAdmin: stranger.publicKey,
+            config: vaultConfigPda,
+          })
+          .signers([stranger])
+          .rpc();
+        expect.fail("non-pending admin should not be able to accept");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("NotPendingRoleAdmin");
+      }
+
+      // ---- Step 2: tempAdmin accepts.
+      await program.methods
+        .acceptRoleAdmin()
+        .accountsPartial({
+          newRoleAdmin: tempAdmin.publicKey,
+          config: vaultConfigPda,
+        })
+        .signers([tempAdmin])
+        .rpc();
+
+      cfg = await program.account.okuDollarConfig.fetch(vaultConfigPda);
+      expect(cfg.roleAdmin.toString()).to.equal(tempAdmin.publicKey.toString());
+      expect(cfg.pendingRoleAdmin.toString()).to.equal(PublicKey.default.toString());
+
+      // ---- Transfer back: tempAdmin proposes original admin, original accepts.
+      await program.methods
+        .setAuthority({ roleAdmin: {} }, roleAdmin.publicKey)
+        .accountsPartial({
+          roleAdmin: tempAdmin.publicKey,
+          config: vaultConfigPda,
+        })
+        .signers([tempAdmin])
+        .rpc();
+      await program.methods
+        .acceptRoleAdmin()
+        .accountsPartial({
+          newRoleAdmin: roleAdmin.publicKey,
+          config: vaultConfigPda,
+        })
+        .signers([roleAdmin])
+        .rpc();
+
+      cfg = await program.account.okuDollarConfig.fetch(vaultConfigPda);
+      expect(cfg.roleAdmin.toString()).to.equal(roleAdmin.publicKey.toString());
+      expect(cfg.pendingRoleAdmin.toString()).to.equal(PublicKey.default.toString());
+    });
+
+    it("cancel_role_admin_transfer withdraws a pending proposal", async () => {
+      const tempAdmin = Keypair.generate();
+      await fundKeypairs(h, [tempAdmin], 5 * anchor.web3.LAMPORTS_PER_SOL);
+
+      // Propose.
+      await program.methods
+        .setAuthority({ roleAdmin: {} }, tempAdmin.publicKey)
+        .accountsPartial({
+          roleAdmin: roleAdmin.publicKey,
+          config: vaultConfigPda,
+        })
+        .signers([roleAdmin])
+        .rpc();
+
+      let cfg = await program.account.okuDollarConfig.fetch(vaultConfigPda);
+      expect(cfg.pendingRoleAdmin.toString()).to.equal(tempAdmin.publicKey.toString());
+
+      // Cancel.
+      await program.methods
+        .cancelRoleAdminTransfer()
+        .accountsPartial({
+          roleAdmin: roleAdmin.publicKey,
+          config: vaultConfigPda,
+        })
+        .signers([roleAdmin])
+        .rpc();
+
+      cfg = await program.account.okuDollarConfig.fetch(vaultConfigPda);
+      expect(cfg.pendingRoleAdmin.toString()).to.equal(PublicKey.default.toString());
+
+      // Acceptance after cancellation rejects with NoPendingRoleAdmin.
+      try {
+        await program.methods
+          .acceptRoleAdmin()
+          .accountsPartial({
+            newRoleAdmin: tempAdmin.publicKey,
+            config: vaultConfigPda,
+          })
+          .signers([tempAdmin])
+          .rpc();
+        expect.fail("Acceptance after cancel should fail");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("NoPendingRoleAdmin");
+      }
+    });
+
+    it("Audit-prep (L1): rejects setting a non-RoleAdmin role to the current role_admin", async () => {
+      // Proposing the cold-multisig admin as the pauser collapses SoD —
+      // the vault's set_authority must mirror the PSM-side guard.
+      try {
+        await program.methods
+          .setAuthority({ pauser: {} }, roleAdmin.publicKey)
+          .accountsPartial({
+            roleAdmin: roleAdmin.publicKey,
+            config: vaultConfigPda,
+          })
+          .signers([roleAdmin])
+          .rpc();
+        expect.fail("Should have rejected role-into-role-admin collapse");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("InvalidAuthority");
+      }
+    });
+
+    it("Audit-prep (L2): rejects proposing the current role_admin to themselves", async () => {
+      // No-op self-proposal is silent-equal-ok on EVM but here it would
+      // pollute the event log with bogus RoleAdminTransferProposedEvents.
+      try {
+        await program.methods
+          .setAuthority({ roleAdmin: {} }, roleAdmin.publicKey)
+          .accountsPartial({
+            roleAdmin: roleAdmin.publicKey,
+            config: vaultConfigPda,
+          })
+          .signers([roleAdmin])
+          .rpc();
+        expect.fail("Should have rejected self-proposal");
+      } catch (err: any) {
+        expect(err.error.errorCode.code).to.equal("InvalidAuthority");
+      }
     });
   });
 });

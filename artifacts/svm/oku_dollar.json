@@ -1,5 +1,5 @@
 {
-  "address": "AWwByFuQfnoiCEZAMdSc4WixepppzXXStXkQijPoKNi5",
+  "address": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy",
   "metadata": {
     "name": "oku_dollar",
     "version": "0.1.0",
@@ -7,6 +7,121 @@
     "description": "OkuDollar vault - rebasing $1-pegged stablecoin backed by OkuMoney"
   },
   "instructions": [
+    {
+      "name": "accept_role_admin",
+      "docs": [
+        "Step 2 of the two-step `RoleAdmin` rotation."
+      ],
+      "discriminator": [
+        203,
+        100,
+        15,
+        101,
+        168,
+        236,
+        213,
+        218
+      ],
+      "accounts": [
+        {
+          "name": "new_role_admin",
+          "docs": [
+            "Proposed new role admin — must match `config.pending_role_admin`."
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  107,
+                  117,
+                  95,
+                  100,
+                  111,
+                  108,
+                  108,
+                  97,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "cancel_role_admin_transfer",
+      "docs": [
+        "Withdraw an in-flight `RoleAdmin` two-step proposal."
+      ],
+      "discriminator": [
+        155,
+        31,
+        41,
+        13,
+        107,
+        117,
+        20,
+        22
+      ],
+      "accounts": [
+        {
+          "name": "role_admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  107,
+                  117,
+                  95,
+                  100,
+                  111,
+                  108,
+                  108,
+                  97,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
     {
       "name": "deposit_reserves",
       "docs": [
@@ -30,6 +145,12 @@
         },
         {
           "name": "config",
+          "docs": [
+            "Vault config — pause check enforced at the constraint level",
+            "(instead of inside the handler body) so any future refactor that",
+            "reorders the handler's prelude cannot accidentally skip it. The",
+            "`Wrap` / `Unwrap` contexts use the same pattern."
+          ],
           "pda": {
             "seeds": [
               {
@@ -51,7 +172,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -200,7 +324,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -235,7 +362,10 @@
                   109,
                   105,
                   110,
-                  116
+                  116,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -304,8 +434,69 @@
         {
           "name": "psm_config",
           "docs": [
-            "PSM config account (for reading oku_m_price)"
-          ]
+            "PSM config account (for reading oku_m_price). The deserialized type pins this",
+            "to lite-psm's `PsmConfig`, and the seeds constraint pins it to the canonical",
+            "`psm_config` PDA — so the deployer cannot point the vault at an arbitrary account."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  51
+                ]
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                32,
+                158,
+                125,
+                116,
+                8,
+                160,
+                94,
+                74,
+                53,
+                139,
+                115,
+                69,
+                156,
+                87,
+                233,
+                251,
+                47,
+                76,
+                177,
+                207,
+                192,
+                137,
+                168,
+                196,
+                235,
+                213,
+                6,
+                100,
+                114,
+                116,
+                161,
+                5
+              ]
+            }
+          }
         },
         {
           "name": "token_2022_program",
@@ -318,10 +509,6 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
-        },
-        {
-          "name": "rent",
-          "address": "SysvarRent111111111111111111111111111111111"
         }
       ],
       "args": [
@@ -391,7 +578,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -403,7 +593,8 @@
     {
       "name": "set_authority",
       "docs": [
-        "Update an authority role"
+        "Update an authority role. `RoleAdmin` is two-step (propose +",
+        "accept, via `set_authority(RoleAdmin, ...)` + `accept_role_admin`)."
       ],
       "discriminator": [
         133,
@@ -444,7 +635,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -510,11 +704,38 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
           }
+        },
+        {
+          "name": "usd_oku_mint",
+          "docs": [
+            "usdOku mint — read for `supply` (the obligations leg of the ratio)."
+          ]
+        },
+        {
+          "name": "reserve_vault",
+          "docs": [
+            "Vault's OkuMoney reserve account — read for `amount` (the assets",
+            "leg of the ratio)."
+          ]
+        },
+        {
+          "name": "psm_config",
+          "docs": [
+            "PSM config — read for `oku_m_price` (translates reserve OkuMoney",
+            "into dollar terms for the ratio computation)."
+          ]
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         }
       ],
       "args": [
@@ -568,7 +789,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -622,7 +846,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -839,7 +1066,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -919,7 +1149,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1067,7 +1300,10 @@
                   110,
                   102,
                   105,
-                  103
+                  103,
+                  95,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1222,9 +1458,19 @@
         {
           "name": "dead_shares_ata",
           "docs": [
-            "Dead shares ATA — only required on the first deposit (total_shares == 0).",
-            "This is a usdOku ATA owned by a known dead address (System Program)",
-            "where MINIMUM_LIQUIDITY shares are permanently locked."
+            "Dead-shares ATA — only required on the first deposit",
+            "(`total_supply == 0`). This is a usdOku ATA owned by the System",
+            "Program where `MINIMUM_LIQUIDITY` shares are permanently locked",
+            "to defeat the first-depositor inflation attack.",
+            "",
+            "Cycle 4 (OKUD-03): `token::mint` + `token::token_program` moved",
+            "onto the context so Anchor enforces them declaratively (visible",
+            "in IDL, can't be silently bypassed by a future handler refactor).",
+            "The two remaining invariants — SP-owner + canonical-ATA — still",
+            "live in the handler because Anchor doesn't have a single",
+            "attribute that expresses \"owner = system_program AND address ==",
+            "canonical ATA derivation for (mint, system_program, Token2022)\".",
+            "See `instructions::core::wrap` for the handler-side validation."
           ],
           "writable": true,
           "optional": true
@@ -1350,6 +1596,45 @@
       ]
     },
     {
+      "name": "RoleAdminTransferAcceptedEvent",
+      "discriminator": [
+        36,
+        91,
+        149,
+        11,
+        232,
+        178,
+        29,
+        75
+      ]
+    },
+    {
+      "name": "RoleAdminTransferCancelledEvent",
+      "discriminator": [
+        96,
+        159,
+        231,
+        140,
+        179,
+        244,
+        89,
+        43
+      ]
+    },
+    {
+      "name": "RoleAdminTransferProposedEvent",
+      "discriminator": [
+        168,
+        216,
+        252,
+        233,
+        109,
+        135,
+        120,
+        145
+      ]
+    },
+    {
       "name": "UnpauseEvent",
       "discriminator": [
         134,
@@ -1455,43 +1740,98 @@
     },
     {
       "code": 6010,
-      "name": "InvalidPsmConfig",
-      "msg": "Invalid PSM config account"
-    },
-    {
-      "code": 6011,
       "name": "InsufficientCollateral",
       "msg": "Operation would breach minimum collateral ratio"
     },
     {
-      "code": 6012,
+      "code": 6011,
       "name": "InvalidCollateralRatio",
       "msg": "Invalid collateral ratio (below minimum floor)"
     },
     {
+      "code": 6012,
+      "name": "RatioExceedsMax",
+      "msg": "Collateral ratio exceeds maximum (100%)"
+    },
+    {
       "code": 6013,
       "name": "MultiplierCannotDecrease",
-      "msg": "USD multiplier can only increase"
+      "msg": "USD multiplier must strictly increase"
     },
     {
       "code": 6014,
+      "name": "MultiplierAboveMax",
+      "msg": "Proposed usd_multiplier exceeds MAX_USD_MULTIPLIER ceiling"
+    },
+    {
+      "code": 6015,
       "name": "InvalidMultiplier",
       "msg": "Invalid USD multiplier"
     },
     {
-      "code": 6015,
+      "code": 6016,
       "name": "InvalidPrice",
       "msg": "Invalid OkuMoney price"
-    },
-    {
-      "code": 6016,
-      "name": "InvalidMintExtension",
-      "msg": "Invalid mint extension"
     },
     {
       "code": 6017,
       "name": "SlippageExceeded",
       "msg": "Output below minimum (slippage exceeded)"
+    },
+    {
+      "code": 6018,
+      "name": "MissingDeadSharesAccount",
+      "msg": "Dead-shares ATA missing (required on first deposit)"
+    },
+    {
+      "code": 6019,
+      "name": "InvalidDeadSharesMint",
+      "msg": "Dead-shares ATA mint does not match usdOku"
+    },
+    {
+      "code": 6020,
+      "name": "InvalidDeadSharesOwner",
+      "msg": "Dead-shares ATA owner must be the System Program"
+    },
+    {
+      "code": 6021,
+      "name": "InvalidDeadSharesAddress",
+      "msg": "Dead-shares ATA must be the canonical associated address"
+    },
+    {
+      "code": 6022,
+      "name": "UnexpectedDeadSharesAccount",
+      "msg": "dead_shares_ata must be omitted on subsequent deposits"
+    },
+    {
+      "code": 6023,
+      "name": "ZeroAuthority",
+      "msg": "Authority pubkey cannot be the zero pubkey"
+    },
+    {
+      "code": 6024,
+      "name": "YieldDistributionInProgress",
+      "msg": "Cannot perform operation in same slot as USD multiplier update"
+    },
+    {
+      "code": 6025,
+      "name": "OkuMoneyMintMismatch",
+      "msg": "Vault oku_money_mint must match PSM oku_money_mint"
+    },
+    {
+      "code": 6026,
+      "name": "InvalidOkuMoneyDecimals",
+      "msg": "OkuMoney mint must have exactly 6 decimals"
+    },
+    {
+      "code": 6027,
+      "name": "NoPendingRoleAdmin",
+      "msg": "No pending role-admin transfer to accept"
+    },
+    {
+      "code": 6028,
+      "name": "NotPendingRoleAdmin",
+      "msg": "Caller is not the pending role admin"
     }
   ],
   "types": [
@@ -1526,7 +1866,8 @@
     {
       "name": "AuthorityUpdatedEvent",
       "docs": [
-        "Emitted when a vault authority role is updated."
+        "Emitted when a vault authority role is updated. For two-step",
+        "`RoleAdmin` transfers this fires only on acceptance (not on proposal)."
       ],
       "type": {
         "kind": "struct",
@@ -1613,7 +1954,7 @@
       "name": "OkuDollarConfig",
       "docs": [
         "OkuDollar vault configuration PDA",
-        "Seeds: [\"oku_dollar_config\"]"
+        "Seeds: [\"oku_dollar_config_v2\"]"
       ],
       "type": {
         "kind": "struct",
@@ -1704,6 +2045,18 @@
             "type": "i64"
           },
           {
+            "name": "last_yield_distribution_slot",
+            "docs": [
+              "Slot of the most recent yield-affecting update (currently",
+              "`update_usd_multiplier`). `wrap`/`unwrap` reject when",
+              "`current_slot == last_yield_distribution_slot` to prevent the",
+              "orchestrator (or anyone observing the orchestrator's tx) from",
+              "sandwiching the multiplier bump. Mirrors the analogous field on",
+              "`lite_psm::PsmConfig` and EVM's `YieldSandwichGuard` modifier."
+            ],
+            "type": "u64"
+          },
+          {
             "name": "min_collateral_ratio",
             "docs": [
               "Minimum collateralization ratio (scaled by 1e9)",
@@ -1717,6 +2070,16 @@
               "Whether the vault is paused"
             ],
             "type": "bool"
+          },
+          {
+            "name": "pending_role_admin",
+            "docs": [
+              "Pending `role_admin` rotation target — two-step admin-transfer slot",
+              "(OpenZeppelin `Ownable2Step` pattern). Written by",
+              "`set_authority(RoleAdmin, ...)`; consumed by `accept_role_admin`.",
+              "`Pubkey::default()` means \"no rotation in flight\"."
+            ],
+            "type": "pubkey"
           }
         ]
       }
@@ -1739,8 +2102,11 @@
     {
       "name": "PsmConfig",
       "docs": [
-        "PSM configuration PDA",
-        "Seeds: [\"psm_config\"]"
+        "PSM configuration PDA.",
+        "",
+        "Seeds: `[\"psm_config_v3\"]`. Migration history (seed-rotation log) is",
+        "tracked in `SVM/README.md` § \"PDA seed history\"; the `_v3` suffix",
+        "marks the post-oracle-relay layout."
       ],
       "type": {
         "kind": "struct",
@@ -1846,7 +2212,9 @@
           {
             "name": "oku_money_mint",
             "docs": [
-              "OkuMoney mint address (Token-2022 with Scaled UI Amount extension)"
+              "OkuMoney mint address (Token-2022 with InterestBearingConfig extension).",
+              "The extension is informational only — economic price comes from",
+              "`oku_m_price` on this account, not from the mint's interest accrual."
             ],
             "type": "pubkey"
           },
@@ -1868,14 +2236,15 @@
           {
             "name": "max_supply",
             "docs": [
-              "Maximum OkuUSD supply cap"
+              "Maximum OkuMoney supply cap"
             ],
             "type": "u64"
           },
           {
             "name": "minter_allowance",
             "docs": [
-              "Bridge mint allowance remaining"
+              "Mint allowance remaining (configurable cap on freshly minted OkuMoney",
+              "between admin resets, mirroring the EVM `minterAllowance` pattern)."
             ],
             "type": "u64"
           },
@@ -1887,18 +2256,48 @@
             "type": "bool"
           },
           {
-            "name": "oracle",
+            "name": "oracle_relay_feed",
             "docs": [
-              "Pyth oracle feed (or Pubkey::default() if disabled)"
+              "USDC/USD Pyth feed account (or `Pubkey::default()` to disable the",
+              "peg check — the operator-side kill switch, mirrors EVM",
+              "`setOracleRelay(address(0))`)."
             ],
             "type": "pubkey"
           },
           {
-            "name": "staleness_threshold",
+            "name": "oracle_relay_pyth_program_owner",
             "docs": [
-              "Maximum oracle staleness in seconds"
+              "Pyth program-owner pubkey accepted by the relay parser. Set at",
+              "init via `initialize` and rotatable via",
+              "`set_oracle_relay_pyth_program_owner` (oracle_manager-gated). The",
+              "migration hook for future Pyth Solana Receiver support."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle_relay_staleness",
+            "docs": [
+              "Maximum oracle staleness in seconds. Bounded by",
+              "`[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]` whenever",
+              "the relay is configured."
             ],
             "type": "i64"
+          },
+          {
+            "name": "oracle_relay_min_price_e9",
+            "docs": [
+              "Lower bound of the in-band USDC price (1e9 precision).",
+              "Constrained by `ORACLE_USDC_PRICE_FLOOR`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oracle_relay_max_price_e9",
+            "docs": [
+              "Upper bound of the in-band USDC price (1e9 precision).",
+              "Constrained by `ORACLE_USDC_PRICE_CEILING`."
+            ],
+            "type": "u64"
           },
           {
             "name": "last_yield_distribution_slot",
@@ -1918,16 +2317,17 @@
             "type": "u64"
           },
           {
-            "name": "blacklist_exempt_bridge",
+            "name": "pending_role_admin",
             "docs": [
-              "Blacklist-exempt bridge address (cannot be frozen)"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "blacklist_exempt_router",
-            "docs": [
-              "Blacklist-exempt router address (cannot be frozen)"
+              "Pending `role_admin` rotation target — the two-step admin-transfer",
+              "model (OpenZeppelin `Ownable2Step` pattern). `set_authority(RoleAdmin,",
+              "new_admin)` writes to this slot only; the rotation does NOT take",
+              "effect until `new_admin` signs `accept_role_admin`, which moves the",
+              "value into `role_admin` and clears the slot. This protects the",
+              "protocol from a typo or stale key on the proposing side silently",
+              "locking out the meta-role.",
+              "",
+              "`Pubkey::default()` means \"no pending rotation\"."
             ],
             "type": "pubkey"
           }
@@ -2010,6 +2410,66 @@
               "Collateralization ratio after withdrawal (scaled by PRECISION, 1e9 = 100%)"
             ],
             "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoleAdminTransferAcceptedEvent",
+      "docs": [
+        "Emitted when `accept_role_admin` completes a previously-proposed",
+        "two-step transfer."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "previous_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoleAdminTransferCancelledEvent",
+      "docs": [
+        "Emitted when `cancel_role_admin_transfer` clears an in-flight proposal."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "current_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "cancelled_pending",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoleAdminTransferProposedEvent",
+      "docs": [
+        "Emitted when `set_authority(RoleAdmin, ...)` proposes a two-step",
+        "transfer of the meta-role. Rotation is NOT yet effective — the new",
+        "admin must sign `accept_role_admin` to commit it."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "current_admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_admin",
+            "type": "pubkey"
           }
         ]
       }
@@ -2115,6 +2575,16 @@
             "type": "u64"
           },
           {
+            "name": "collateralization_ratio",
+            "docs": [
+              "Collateralization ratio AFTER the update (scaled by `PRECISION`,",
+              "`1e9 = 100 %`). Cycle 4 (OKUD-14): added so monitoring tooling",
+              "doesn't have to re-derive the value off-chain. Parity with",
+              "`ReservesDepositedEvent` / `ReservesWithdrawnEvent`."
+            ],
+            "type": "u64"
+          },
+          {
             "name": "timestamp",
             "type": "i64"
           }
@@ -2154,7 +2624,21 @@
           {
             "name": "shares_minted",
             "docs": [
-              "OkuDollar shares minted (6 decimals)"
+              "OkuDollar shares minted to the user (6 decimals). Cycle 4",
+              "(OKUD-13): does NOT include the `dead_shares_minted` quantity",
+              "on the first deposit — see that field for the inflation-defence",
+              "allocation."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dead_shares_minted",
+            "docs": [
+              "Dead-shares minted to the System-Program-owned ATA on the FIRST",
+              "deposit (cycle 4 / OKUD-13). Always `0` on subsequent deposits.",
+              "`MINIMUM_LIQUIDITY` on the first deposit. Off-chain indexers",
+              "reconstructing `usd_oku_mint.supply` must sum `shares_minted +",
+              "dead_shares_minted` across all WrapEvents."
             ],
             "type": "u64"
           },

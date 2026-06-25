@@ -1,7 +1,7 @@
 //! # OkuMoney Lite-PSM Events
 //!
 //! Event definitions for the Lite-PSM program.
-//! Aligned with EVM contract events from `LitePSM.sol`, `RedemptionQueue.sol`, and `OkuBridge.sol`.
+//! Aligned with EVM contract events from `LitePSM.sol` and `RedemptionQueue.sol`.
 //!
 //! ## EVM Event Mapping
 //!
@@ -16,13 +16,13 @@
 //! | `RedemptionRescuedEvent` | `RedemptionRescued` |
 //! | `BufferDepositEvent` | `BufferDeposited` |
 //! | `BufferWithdrawEvent` | `BufferWithdrawn` |
-//! | `BridgeMintEvent` | `BridgeMint` |
-//! | `BridgeBurnEvent` | `BridgeBurn` |
-//! | `RefundInitiatedEvent` | `RefundInitiated` |
-//! | `RefundConfirmedEvent` | `RefundConfirmed` |
-//! | `RefundCancelledEvent` | `RefundCancelled` |
+//!
+//! Bridge events (BridgeMintEvent, BridgeBurnEvent, refund events, bridge
+//! admin events) were removed in the noBridge refactor. v1 cross-chain
+//! transfers are mediated off-chain and surface on-chain as ordinary
+//! `MintEvent` / `RedeemEvent` records.
 
-use crate::roles::{AuthorityRole, BridgeAuthorityRole};
+use crate::roles::AuthorityRole;
 use anchor_lang::prelude::*;
 
 // ============================================================================
@@ -40,6 +40,23 @@ pub struct InitializeEvent {
     pub max_supply: u64,
 }
 
+/// Emitted when the redemption-queue PDA is created. Cycle 4 (PSM-22):
+/// added so the three-step init flow has full event coverage and
+/// indexers can observe each setup leg landing on-chain.
+#[event]
+pub struct QueueInitializedEvent {
+    pub redemption_queue: Pubkey,
+    /// Compile-time queue capacity (`RedemptionQueue::MAX_ENTRIES`).
+    pub max_entries: u32,
+}
+
+/// Emitted when the OkuMoney escrow vault is wired into config.
+/// Cycle 4 (PSM-22): added so the final init step is observable.
+#[event]
+pub struct EscrowInitializedEvent {
+    pub vault_oku_money: Pubkey,
+}
+
 /// Emitted when OkuMoney is minted via PSM.
 /// EVM equivalent: `MintNote(address indexed user, uint256 usdcAmount, uint256 okuMAmount, uint256 okuMMultiplier)`
 #[event]
@@ -55,6 +72,10 @@ pub struct MintEvent {
     /// OkuMoney price multiplier at time of mint (1e9 = $1.00)
     /// EVM equivalent: okuMMultiplier
     pub oku_m_price: u64,
+    /// OkuMoney supply AFTER the mint completed. Cycle 4 (PSM-23):
+    /// added for indexing parity with `YieldDistributed` /
+    /// `OkuMPriceUpdated` (both of which emit `total_supply`).
+    pub new_total_supply: u64,
 }
 
 /// Emitted when OkuMoney is redeemed for USDC (instant redemption).
@@ -72,6 +93,8 @@ pub struct RedeemEvent {
     /// OkuMoney price multiplier at time of redeem (1e9 = $1.00)
     /// EVM equivalent: okuMMultiplier
     pub oku_m_price: u64,
+    /// OkuMoney supply AFTER the burn completed. Cycle 4 (PSM-23).
+    pub new_total_supply: u64,
 }
 
 /// Emitted when a redemption is queued (insufficient buffer).
@@ -85,10 +108,8 @@ pub struct RedemptionQueuedEvent {
     /// Dollar value at time of queueing
     pub dollar_value: u64,
     /// Position in queue (0-indexed; absolute tail index, not ring slot).
-    /// Widened from u32 to u64 in Phase 13b alongside the
-    /// `RedemptionQueue::{head,tail}` widening.
     pub queue_position: u64,
-    /// Total queue length after this entry. Widened to u64 in Phase 13b.
+    /// Total queue length after this entry.
     pub queue_length: u64,
 }
 
@@ -106,6 +127,12 @@ pub struct RedemptionProcessedEvent {
     pub usdc_amount: u64,
     /// Time spent in queue (seconds)
     pub wait_time: i64,
+    /// OkuMoney supply AFTER the per-entry burn. Cycle 4 (PSM-23):
+    /// added so indexers can reconstruct supply trajectory through the
+    /// queue-drain phase without summing batch events. Note that
+    /// because `process_queue` emits one of these per processed entry,
+    /// the value decreases monotonically across the batch.
+    pub new_total_supply: u64,
 }
 
 /// Emitted when `process_queue` skips a previously-rescued entry.
@@ -113,7 +140,6 @@ pub struct RedemptionProcessedEvent {
 #[event]
 pub struct RedemptionSkippedEvent {
     /// Absolute queue index that was skipped (already cleared by rescue).
-    /// Widened from u32 to u64 in Phase 13b.
     pub queue_index: u64,
 }
 
@@ -128,12 +154,10 @@ pub struct BufferRefilledEvent {
     /// USDC vault balance after the batch completed (6 decimals).
     pub new_buffer_balance: u64,
     /// Number of entries that received a USDC payout in this batch.
-    /// Widened to u64 in Phase 13b (bounded by `process_queue`'s
-    /// `MAX_BATCH_ENTRIES = 50` in practice, but the type now matches the
-    /// queue's u64 indices).
+    /// Bounded by `RedemptionQueue::MAX_BATCH_ENTRIES` (= 50) per call;
+    /// u64 matches the queue's u64 indices.
     pub processed_count: u64,
     /// Number of cleared (rescued) entries skipped during traversal.
-    /// Widened to u64 in Phase 13b.
     pub skipped_count: u64,
 }
 
@@ -141,8 +165,7 @@ pub struct BufferRefilledEvent {
 /// EVM equivalent: `RedemptionRescued(uint256 indexed index, address originalUser, address recipient, uint256 okuMAmount, uint256 dollarValue)`
 #[event]
 pub struct RedemptionRescuedEvent {
-    /// Absolute index of the rescued entry. Widened from u32 to u64 in
-    /// Phase 13b.
+    /// Absolute index of the rescued entry.
     pub queue_index: u64,
     /// Original user who was owed redemption
     pub original_user: Pubkey,
@@ -176,57 +199,6 @@ pub struct BufferWithdrawEvent {
     pub amount: u64,
     /// New buffer balance after withdrawal
     pub new_buffer_balance: u64,
-}
-
-/// Emitted when tokens are bridged from another chain (mint).
-/// EVM equivalent: `BridgeMint(bytes32 indexed requestId, uint256 sourceChainId, address recipient, uint256 amount, uint256 nonce)`
-#[event]
-pub struct BridgeMintEvent {
-    /// Unique request identifier (keccak256 hash)
-    pub request_id: [u8; 32],
-    /// Source chain ID (e.g., Ethereum = 1)
-    pub source_chain_id: u16,
-    /// Recipient on Solana
-    pub recipient: Pubkey,
-    /// Amount minted (6 decimals)
-    pub amount: u64,
-    /// Sequential nonce for ordering
-    pub nonce: u64,
-    /// Dollar value of minted amount
-    pub dollar_value: u64,
-}
-
-/// Emitted when tokens are burned for bridging to another chain.
-/// EVM equivalent: `BridgeBurn(bytes32 indexed requestId, address indexed sender,
-///   bytes32 recipient, uint256 sourceChainId, uint256 destChainId,
-///   uint256 grossAmount, uint256 netAmount, uint256 feeAmount, uint256 nonce,
-///   uint256 deadline)`.
-#[event]
-pub struct BridgeBurnEvent {
-    /// Unique request identifier (keccak256 hash).
-    pub request_id: [u8; 32],
-    /// User who burned tokens.
-    pub user: Pubkey,
-    /// Recipient on destination chain (EVM address, 20 bytes).
-    pub recipient: [u8; 20],
-    /// Source chain ID (Solana).
-    pub source_chain_id: u16,
-    /// Destination chain ID.
-    pub destination_chain: u16,
-    /// Gross amount the user submitted (pre-fee, 6 decimals). Restored for
-    /// cross-chain reconciliation parity with EVM `BridgeBurn.grossAmount`.
-    pub gross_amount: u64,
-    /// Net amount bridged (post-fee, 6 decimals). This is the `amount` field
-    /// embedded in the signed BridgeRequest message.
-    pub amount: u64,
-    /// Sequential nonce for ordering.
-    pub nonce: u64,
-    /// Request expiration timestamp.
-    pub deadline: i64,
-    /// Dollar value of net amount bridged.
-    pub dollar_value: u64,
-    /// Fee amount deducted (6 decimals).
-    pub fee_amount: u64,
 }
 
 /// Emitted when PSM is paused.
@@ -263,22 +235,44 @@ pub struct MinterAllowanceUpdatedEvent {
     pub new_allowance: u64,
 }
 
-/// Emitted when oracle configuration changes.
-/// EVM equivalent: `OracleConfigured(address indexed oracle, uint256 stalenessThreshold, bool enabled)`
+/// Emitted when the oracle relay feed pubkey is rotated.
+/// EVM equivalent: `PriceFeedUpdated(address indexed oldFeed, address indexed newFeed, uint8 feedDecimals)`
+/// (SVM uses Pyth `expo` rather than `decimals`, so the third field is omitted —
+/// `expo` is read fresh on every consumer call.)
 #[event]
-pub struct OracleUpdatedEvent {
+pub struct OracleRelayFeedUpdatedEvent {
     /// Caller of the update (`oracle_manager` authority).
     pub actor: Pubkey,
-    pub oracle: Pubkey,
-    pub staleness_threshold: i64,
+    pub old_feed: Pubkey,
+    pub new_feed: Pubkey,
+}
+
+/// Emitted when the relay staleness threshold is rotated.
+/// EVM equivalent: `StalenessThresholdUpdated(uint256 oldSeconds, uint256 newSeconds)`
+#[event]
+pub struct OracleRelayStalenessUpdatedEvent {
+    pub actor: Pubkey,
+    pub old_staleness: i64,
+    pub new_staleness: i64,
+}
+
+/// Emitted when the in-band peg window is rotated.
+/// EVM equivalent: `PriceBandUpdated(uint256 oldMin, uint256 oldMax, uint256 newMin, uint256 newMax)`
+#[event]
+pub struct OracleRelayBandUpdatedEvent {
+    pub actor: Pubkey,
+    pub old_min_e9: u64,
+    pub old_max_e9: u64,
+    pub new_min_e9: u64,
+    pub new_max_e9: u64,
 }
 
 /// Emitted when the accepted Pyth program owner pubkey is rotated.
-/// SVM-only — no direct EVM equivalent (EVM oracle owner is implicit in the
-/// AggregatorV3 interface address).
+/// SVM-only — no direct EVM equivalent (Chainlink AggregatorV3 owner is
+/// implicit in the feed address). Kept as the migration hook for future
+/// Pyth Solana Receiver support.
 #[event]
-pub struct PythProgramOwnerUpdatedEvent {
-    /// Caller of the update (`oracle_manager` authority).
+pub struct OracleRelayPythProgramOwnerUpdatedEvent {
     pub actor: Pubkey,
     pub old_pyth_program_owner: Pubkey,
     pub new_pyth_program_owner: Pubkey,
@@ -312,13 +306,6 @@ pub struct YieldDistributed {
 #[event]
 pub struct YieldDistributionSlotSet {
     pub slot: u64,
-}
-
-/// Emitted when blacklist exemption is initialized.
-#[event]
-pub struct BlacklistExemptInitialized {
-    pub bridge: Pubkey,
-    pub router: Pubkey,
 }
 
 /// Emitted when an account is frozen.
@@ -373,145 +360,4 @@ pub struct RoleAdminTransferAcceptedEvent {
 pub struct RoleAdminTransferCancelledEvent {
     pub current_admin: Pubkey,
     pub cancelled_pending: Pubkey,
-}
-
-// ============================================================================
-// Bridge Events
-// ============================================================================
-
-/// Emitted when bridge is initialized.
-#[event]
-pub struct BridgeInitializedEvent {
-    pub bridge_admin: Pubkey,
-    pub orchestrator_signer: Pubkey,
-    pub fee_bps: u16,
-}
-
-/// Emitted when a chain is added to supported list.
-/// EVM equivalent: `ChainAdded(uint256 indexed chainId)`
-#[event]
-pub struct ChainAddedEvent {
-    pub chain_id: u16,
-}
-
-/// Emitted when a chain is removed from supported list.
-/// EVM equivalent: `ChainRemoved(uint256 indexed chainId)`
-#[event]
-pub struct ChainRemovedEvent {
-    pub chain_id: u16,
-}
-
-/// Emitted when bridge fee is updated.
-/// EVM equivalent: `FeeUpdated(uint256 oldFee, uint256 newFee)`
-#[event]
-pub struct BridgeFeeUpdatedEvent {
-    pub old_fee_bps: u16,
-    pub new_fee_bps: u16,
-}
-
-/// Emitted when fee recipient is updated.
-/// EVM equivalent: `FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient)`
-#[event]
-pub struct FeeRecipientUpdatedEvent {
-    pub old_recipient: Pubkey,
-    pub new_recipient: Pubkey,
-}
-
-/// Emitted when bridge limits are updated.
-/// EVM equivalent: `LimitsUpdated(uint256 minAmount, uint256 maxAmount)`
-#[event]
-pub struct BridgeLimitsUpdatedEvent {
-    pub min_amount: u64,
-    pub max_amount: u64,
-}
-
-/// Emitted when bridge is paused.
-#[event]
-pub struct BridgePauseEvent {
-    pub pauser: Pubkey,
-}
-
-/// Emitted when bridge is unpaused.
-#[event]
-pub struct BridgeUnpauseEvent {
-    pub unpauser: Pubkey,
-}
-
-/// Emitted when a nonce is skipped (emergency recovery).
-/// EVM equivalent: `NonceSkipped(uint256 indexed destChainId, uint256 skippedNonce)`
-#[event]
-pub struct NonceSkippedEvent {
-    pub destination_chain_id: u16,
-    pub old_nonce: u64,
-    pub new_nonce: u64,
-}
-
-/// Emitted when orchestrator signer is updated.
-/// EVM equivalent: `SignerUpdated(address indexed oldSigner, address indexed newSigner)`
-#[event]
-pub struct OrchestratorSignerUpdatedEvent {
-    pub old_signer: Pubkey,
-    pub new_signer: Pubkey,
-}
-
-/// Emitted when a bridge authority role is updated.
-#[event]
-pub struct BridgeAuthorityUpdatedEvent {
-    pub role: BridgeAuthorityRole,
-    pub old_authority: Pubkey,
-    pub new_authority: Pubkey,
-}
-
-/// Emitted when bridge deadline is updated.
-/// EVM equivalent: `DeadlineUpdated(uint256 oldDeadline, uint256 newDeadline)`
-#[event]
-pub struct BridgeDeadlineUpdatedEvent {
-    pub old_deadline_secs: i64,
-    pub new_deadline_secs: i64,
-}
-
-// ============================================================================
-// Two-Step Refund Events (matching EVM OkuBridge)
-// ============================================================================
-
-/// Emitted when a refund is initiated (step 1 of 2).
-/// EVM equivalent: `RefundInitiated(bytes32 indexed requestId, address indexed sender, uint256 amount)`
-#[event]
-pub struct RefundInitiatedEvent {
-    /// Unique request identifier
-    pub request_id: [u8; 32],
-    /// Original sender who will receive the refund
-    pub recipient: Pubkey,
-    /// Amount to be refunded
-    pub amount: u64,
-    /// Who initiated the refund
-    pub initiator: Pubkey,
-}
-
-/// Emitted when a refund is confirmed (step 2 of 2).
-/// EVM equivalent: `RefundConfirmed(bytes32 indexed requestId, address indexed sender, uint256 amount)`
-#[event]
-pub struct RefundConfirmedEvent {
-    /// Unique request identifier
-    pub request_id: [u8; 32],
-    /// Recipient who received the refund
-    pub recipient: Pubkey,
-    /// Amount refunded
-    pub amount: u64,
-}
-
-/// Emitted when a pending refund is cancelled.
-///
-/// EVM equivalent: `RefundCancelled(bytes32 indexed requestId, address indexed
-/// initiator, address cancelledBy)` — both the original initiator (so the
-/// audit trail captures the full proposal-to-cancel lifecycle) and the
-/// canceller are reported.
-#[event]
-pub struct RefundCancelledEvent {
-    /// Unique request identifier.
-    pub request_id: [u8; 32],
-    /// Original initiator (the proposer recorded in `PendingRefund.initiator`).
-    pub initiator: Pubkey,
-    /// Who cancelled the refund.
-    pub canceller: Pubkey,
 }

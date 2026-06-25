@@ -1,32 +1,38 @@
 //! # OkuMoney Lite-PSM
 //!
-//! SVM port of the EVM-side `LitePSM.sol` + `OkuBridge.sol`. The structure
-//! mirrors `EVM/src/psm/` and `EVM/src/bridge/` module-for-module; deliberate
-//! divergences (token decimals, yield-distribution model, bridge wire
-//! format, oracle parser, queue size) are documented in the top-level
-//! [`SVM/EVM_VS_SVM.md`](../../../EVM_VS_SVM.md) reference.
+//! SVM port of the EVM-side `LitePSM.sol`. The structure mirrors
+//! `EVM/src/psm/` module-for-module; deliberate divergences (token
+//! decimals, yield-distribution model, oracle parser, queue size) are
+//! documented in [`SVM/README.md § EVM vs SVM — divergence catalogue`](../../../README.md).
 //!
-//! Inline `// see EVM_VS_SVM.md` comments throughout this crate point to
-//! specific divergence rows in that document.
+//! v1 cross-chain transfers are handled off-chain by an orchestrator that
+//! holds the PSM operational roles (`buffer_depositor`, `queue_processor`,
+//! `rebaser`) and signs `mint_oku_m` / `redeem_oku_m` against its own
+//! ATAs on each chain. There is no on-chain bridge program.
+//!
+//! Inline `// see SVM/README.md` comments throughout this crate point
+//! to specific divergence rows in the catalogue.
 
-// F-17: Zero unsafe code in this crate (confirmed by cargo-geiger). Forbid
-// future accidental introduction.
+// Zero unsafe code (confirmed by cargo-geiger); forbid accidental
+// introduction.
 #![forbid(unsafe_code)]
-// F-13: The Anchor #[program] macro generates a dispatch wrapper for
-// initialize() that inherits its 15-argument signature. Clippy fires on the
-// macro-expansion site, which cannot be suppressed externally. Suppressed
-// crate-wide — this is the only 15-arg function and it is intentional.
-#![allow(clippy::too_many_arguments)]
-// F-02 (audit finding): The solana-lints `arbitrary_cpi` lint flags CPI call
-// sites in this crate because program ID is obtained at runtime from typed
-// account fields rather than a hardcoded literal.
-//
-// After review (self-audit 2026-05-27), every CPI target is constrained by
-// Anchor's typed `Program<'info, T>` account system, which validates
-// `account.key == T::id()` at deserialization time. Targeted `#![allow]`
-// annotations are also present in each instruction module that contains CPIs.
-// Confirmed false positives — suppressed here for `cargo dylint` cleanliness.
+// Cycle 4 (PSM-17): the crate-wide
+// `#![allow(clippy::too_many_arguments)]` is gone. `initialize`'s
+// 15-pubkey signature collapsed into `InitializeParams`; no other
+// instruction in the crate has more than 3 arguments.
+// solana-lints `arbitrary_cpi` flags every CPI here because program ID
+// is obtained at runtime from typed account fields. Every CPI target
+// is constrained by Anchor's typed `Program<'info, T>` (which validates
+// `account.key == T::id()` at deserialization), so all hits are false
+// positives. See `oku-programs/audit/README.md` § Accepted Risks for
+// the per-call review.
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
+// Anchor `#[program]` dispatch glue trips
+// `clippy::diverging_sub_expression`; can't annotate inside macro output.
+#![allow(clippy::diverging_sub_expression)]
+// `target_os = "solana"` is emitted by `solana-program-entrypoint`'s
+// panic handler; check-cfg doesn't know about the BPF target.
+#![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
 
@@ -42,7 +48,7 @@ pub mod state;
 use contexts::*;
 use roles::*;
 
-declare_id!("3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N");
+declare_id!("3KZtxxYXD4tMZvVZk4EhCRxoTorBDZyJZuLE3znQ9kF1");
 
 // `auditors` and `acknowledgements` are intentionally omitted until an audit
 // is complete; populate them in a follow-up commit.
@@ -50,7 +56,7 @@ declare_id!("3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N");
 solana_security_txt::security_txt! {
     name: "OkuMoney Lite-PSM",
     project_url: "https://github.com/anomalyco/okuMoney",
-    contacts: "email:security@okumoney.example",
+    contacts: "uri:https://github.com/anomalyco/okuMoney/security/advisories/new",
     policy: "https://github.com/anomalyco/okuMoney/blob/main/SECURITY.md",
     preferred_languages: "en",
     source_code: "https://github.com/anomalyco/okuMoney"
@@ -62,43 +68,11 @@ pub mod lite_psm {
 
     // ===== Initialization (3-step) =====
 
-    // F-13: 15 args maps one-to-one to independent on-chain authority roles.
-    // Grouping into a struct would change the Anchor IDL wire format.
-    #[allow(clippy::too_many_arguments)]
     pub fn initialize(
         ctx: Context<Initialize>,
-        max_supply: u64,
-        minter_allowance: u64,
-        pauser: Pubkey,
-        unpauser: Pubkey,
-        freezer: Pubkey,
-        unfreezer: Pubkey,
-        queue_processor: Pubkey,
-        buffer_depositor: Pubkey,
-        buffer_withdrawer: Pubkey,
-        oracle_manager: Pubkey,
-        cap_manager: Pubkey,
-        allowance_manager: Pubkey,
-        rebaser: Pubkey,
-        pyth_program_owner: Pubkey,
+        params: instructions::init::InitializeParams,
     ) -> Result<()> {
-        instructions::init::initialize(
-            ctx,
-            max_supply,
-            minter_allowance,
-            pauser,
-            unpauser,
-            freezer,
-            unfreezer,
-            queue_processor,
-            buffer_depositor,
-            buffer_withdrawer,
-            oracle_manager,
-            cap_manager,
-            allowance_manager,
-            rebaser,
-            pyth_program_owner,
-        )
+        instructions::init::initialize(ctx, params)
     }
 
     pub fn setup_redemption_queue(ctx: Context<SetupRedemptionQueue>) -> Result<()> {
@@ -141,11 +115,25 @@ pub mod lite_psm {
     /// Rescue a stuck queue entry — returns escrowed OkuMoney to recipient.
     /// Only queue_processor can call (matches EVM's rescueQueueEntry).
     ///
-    /// `queue_index` widened from u32 → u64 in Phase 13b alongside the
-    /// `RedemptionQueue::{head,tail}` widening. Indexer / orchestrator code
-    /// must pass the index as a `BN`/bigint on the TS side.
+    /// `queue_index` is u64 — indexer / orchestrator code must pass
+    /// the index as a `BN`/bigint on the TS side.
     pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u64) -> Result<()> {
         instructions::psm::rescue_queue_entry(ctx, queue_index)
+    }
+
+    /// Permissionless self-rescue (cycle 4 / PSM-06).
+    ///
+    /// Any user can reclaim their own queued OkuMoney without operator
+    /// involvement, unblocking the head-pin DoS where a frozen ATA on
+    /// the head entry stalls every subsequent `process_queue` call.
+    /// Signer must be the entry's original queued user; recipient ATA
+    /// must be owned by that user (constraints enforced on the
+    /// `UserSelfRescueQueueEntry` context).
+    pub fn user_self_rescue_queue_entry(
+        ctx: Context<UserSelfRescueQueueEntry>,
+        queue_index: u64,
+    ) -> Result<()> {
+        instructions::psm::user_self_rescue_queue_entry(ctx, queue_index)
     }
 
     // ===== PSM Admin =====
@@ -166,23 +154,45 @@ pub mod lite_psm {
         instructions::psm_admin::set_minter_allowance(ctx, amount)
     }
 
-    pub fn set_oracle(
-        ctx: Context<OracleManager>,
-        oracle: Pubkey,
-        staleness_threshold: i64,
-    ) -> Result<()> {
-        instructions::psm_admin::set_oracle(ctx, oracle, staleness_threshold)
+    // ===== Oracle Relay (USDC peg circuit-breaker) admin =====
+
+    /// Rotate the USDC/USD Pyth feed used by the peg-check.
+    /// `new_feed == Pubkey::default()` is the operator-side kill switch
+    /// (disables the peg check entirely; mirrors EVM
+    /// `setOracleRelay(address(0))`). `oracle_manager`-gated.
+    pub fn set_oracle_relay_feed(ctx: Context<OracleManager>, new_feed: Pubkey) -> Result<()> {
+        instructions::psm_admin::set_oracle_relay_feed(ctx, new_feed)
     }
 
-    /// Rotate the accepted Pyth program owner pubkey.
-    /// Use this to migrate from legacy Pyth V2 to a different Pyth deployment
-    /// (e.g. the Pyth Solana Receiver) without redeploying the proxy.
-    /// Oracle_manager-gated.
-    pub fn set_pyth_program_owner(
+    /// Rotate the relay staleness threshold (seconds). Bounded by
+    /// `[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]`.
+    /// `oracle_manager`-gated.
+    pub fn set_oracle_relay_staleness(
+        ctx: Context<OracleManager>,
+        new_staleness: i64,
+    ) -> Result<()> {
+        instructions::psm_admin::set_oracle_relay_staleness(ctx, new_staleness)
+    }
+
+    /// Rotate the in-band USDC peg window (1e9 precision). Constrained by
+    /// the hard `ORACLE_USDC_PRICE_FLOOR` / `_CEILING` bounds.
+    /// `oracle_manager`-gated.
+    pub fn set_oracle_relay_band(
+        ctx: Context<OracleManager>,
+        new_min_e9: u64,
+        new_max_e9: u64,
+    ) -> Result<()> {
+        instructions::psm_admin::set_oracle_relay_band(ctx, new_min_e9, new_max_e9)
+    }
+
+    /// Rotate the accepted Pyth program owner pubkey. Migration hook for
+    /// future Pyth deployments (e.g. Pyth Solana Receiver) without
+    /// redeploying. `oracle_manager`-gated.
+    pub fn set_oracle_relay_pyth_program_owner(
         ctx: Context<OracleManager>,
         new_pyth_program_owner: Pubkey,
     ) -> Result<()> {
-        instructions::psm_admin::set_pyth_program_owner(ctx, new_pyth_program_owner)
+        instructions::psm_admin::set_oracle_relay_pyth_program_owner(ctx, new_pyth_program_owner)
     }
 
     pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
@@ -215,15 +225,6 @@ pub mod lite_psm {
         instructions::psm_admin::cancel_role_admin_transfer(ctx)
     }
 
-    /// Initialize blacklist exemption for bridge and router (one-time, ROLE_ADMIN only)
-    pub fn initialize_blacklist_exempt(
-        ctx: Context<InitializeBlacklistExempt>,
-        bridge: Pubkey,
-        router: Pubkey,
-    ) -> Result<()> {
-        instructions::psm_admin::initialize_blacklist_exempt(ctx, bridge, router)
-    }
-
     // ===== Yield Operations =====
 
     /// Set OkuMoney price directly (REBASER only)
@@ -236,123 +237,5 @@ pub mod lite_psm {
     /// new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)
     pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Result<()> {
         instructions::yield_ops::distribute_yield(ctx, yield_amount)
-    }
-
-    // ===== Bridge Operations =====
-
-    pub fn bridge_mint(
-        ctx: Context<BridgeMint>,
-        message_bytes: Vec<u8>,
-        signature: Vec<u8>,
-        request_id: [u8; 32],
-    ) -> Result<()> {
-        instructions::bridge::bridge_mint(ctx, message_bytes, signature, request_id)
-    }
-
-    pub fn bridge_burn(
-        ctx: Context<BridgeBurn>,
-        amount: u64,
-        recipient: [u8; 20],
-        destination_chain_id: u16,
-    ) -> Result<()> {
-        instructions::bridge::bridge_burn(ctx, amount, recipient, destination_chain_id)
-    }
-
-    // ===== Two-Step Refund (matching EVM OkuBridge) =====
-
-    /// Initiate a refund (step 1 of two-step refund pattern)
-    /// Creates a PendingRefund PDA that must be confirmed by refund_confirmer
-    pub fn initiate_refund(
-        ctx: Context<InitiateRefund>,
-        message_bytes: Vec<u8>,
-        request_id: [u8; 32],
-    ) -> Result<()> {
-        instructions::bridge::initiate_refund(ctx, message_bytes, request_id)
-    }
-
-    /// Confirm a refund (step 2 of two-step refund pattern)
-    /// Must be called by refund_confirmer (different key than initiator)
-    pub fn confirm_refund(ctx: Context<ConfirmRefund>, request_id: [u8; 32]) -> Result<()> {
-        instructions::bridge::confirm_refund(ctx, request_id)
-    }
-
-    /// Cancel a pending refund
-    /// Can be called by either refund_initiator or refund_confirmer
-    pub fn cancel_refund(ctx: Context<CancelRefund>, request_id: [u8; 32]) -> Result<()> {
-        instructions::bridge::cancel_refund(ctx, request_id)
-    }
-
-    // ===== Bridge Admin =====
-
-    pub fn initialize_bridge(
-        ctx: Context<InitializeBridge>,
-        config_args: instructions::bridge_admin::BridgeInitConfig,
-    ) -> Result<()> {
-        instructions::bridge_admin::initialize_bridge(ctx, config_args)
-    }
-
-    pub fn add_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -> Result<()> {
-        instructions::bridge_admin::add_supported_chain(ctx, chain_id)
-    }
-
-    pub fn remove_supported_chain(ctx: Context<BridgeChainManager>, chain_id: u16) -> Result<()> {
-        instructions::bridge_admin::remove_supported_chain(ctx, chain_id)
-    }
-
-    pub fn update_bridge_fee(ctx: Context<BridgeFeeManager>, new_fee_bps: u16) -> Result<()> {
-        instructions::bridge_admin::update_bridge_fee(ctx, new_fee_bps)
-    }
-
-    pub fn update_fee_recipient(
-        ctx: Context<BridgeFeeManager>,
-        new_recipient: Pubkey,
-    ) -> Result<()> {
-        instructions::bridge_admin::update_fee_recipient(ctx, new_recipient)
-    }
-
-    pub fn update_bridge_limits(
-        ctx: Context<BridgeLimitsManager>,
-        min_amount: u64,
-        max_amount: u64,
-    ) -> Result<()> {
-        instructions::bridge_admin::update_bridge_limits(ctx, min_amount, max_amount)
-    }
-
-    pub fn pause_bridge(ctx: Context<BridgePause>) -> Result<()> {
-        instructions::bridge_admin::pause_bridge(ctx)
-    }
-
-    pub fn unpause_bridge(ctx: Context<BridgeUnpause>) -> Result<()> {
-        instructions::bridge_admin::unpause_bridge(ctx)
-    }
-
-    pub fn skip_nonce(
-        ctx: Context<BridgeNonceAdmin>,
-        destination_chain_id: u16,
-        new_nonce: u64,
-    ) -> Result<()> {
-        instructions::bridge_admin::skip_nonce(ctx, destination_chain_id, new_nonce)
-    }
-
-    pub fn update_bridge_deadline(
-        ctx: Context<BridgeLimitsManager>,
-        new_deadline: i64,
-    ) -> Result<()> {
-        instructions::bridge_admin::update_bridge_deadline(ctx, new_deadline)
-    }
-
-    pub fn update_orchestrator_signer(
-        ctx: Context<BridgeSignerManager>,
-        new_signer: Pubkey,
-    ) -> Result<()> {
-        instructions::bridge_admin::update_orchestrator_signer(ctx, new_signer)
-    }
-
-    pub fn set_bridge_authority(
-        ctx: Context<BridgeAdmin>,
-        role: BridgeAuthorityRole,
-        new_authority: Pubkey,
-    ) -> Result<()> {
-        instructions::bridge_admin::set_bridge_authority(ctx, role, new_authority)
     }
 }

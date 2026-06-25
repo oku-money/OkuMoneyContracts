@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity 0.8.28;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -13,12 +13,10 @@ import {ReentrancyGuardUpgradeable} from "../lib/ReentrancyGuardUpgradeable.sol"
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {RedemptionQueue} from "./RedemptionQueue.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
-import {IAggregatorV3} from "../interfaces/IAggregatorV3.sol";
+import {IOracleRelay} from "../oracle/IOracleRelay.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
@@ -38,8 +36,13 @@ import {LitePSMEvents} from "../lib/events/LitePSMEvents.sol";
  *      OkuMoney is non-rebasing — okuMMultiplier() tracks appreciation separately.
  *      The PSM converts at dollar value via okuMMultiplier(): depositing 100 USDC at
  *      okuMMultiplier=$1.05 yields ~95.24 OkuM; redeeming those OkuM returns ~100 USDC.
- *      Includes PoR oracle checks and a redemption queue for when the buffer is empty.
- *      Convenience functions wrap/unwrap OkuDollar via the vault.
+ *      Includes a USDC peg circuit-breaker (via {IOracleRelay}) and a redemption queue
+ *      for when the buffer is empty. Convenience functions wrap/unwrap OkuDollar via
+ *      the vault.
+ *
+ *      Peg-check semantics: every mint/redeem path calls `oracleRelay.checkUsdcPeg()`
+ *      when the relay is configured. Operators can disable the check by calling
+ *      `setOracleRelay(address(0))` (operational kill switch for incident response).
  *
  *      Decimal flexibility: the USDC-side decimal multiplier is computed at init from
  *      `IERC20Metadata(usdc).decimals()` and stored on the proxy. This lets the PSM run
@@ -68,10 +71,8 @@ contract LitePSM is
         IOkuDollar okuDollar;
         IERC20 usdc;
         RedemptionQueue redemptionQueue;
-        // Oracle configuration
-        IAggregatorV3 porOracle;
-        uint256 stalenessThreshold;
-        bool oracleEnabled;
+        // USDC peg circuit-breaker. `address(0)` disables the check.
+        IOracleRelay oracleRelay;
         // Decimal conversion multiplier resolved at init from IERC20Metadata(usdc).decimals().
         // For Circle USDC (6 decimals) this is 1e12.
         uint256 usdcDecimalMultiplier;
@@ -97,14 +98,8 @@ contract LitePSM is
     ///      non-even multipliers. Mirrors MakerDAO LitePSM's tin/tout dust handling.
     error RoundTripDriftTooLarge(uint256 actual, uint256 expected);
     error OutputBelowMinimum(uint256 actual, uint256 minimum);
-    error OracleNotConfigured();
-    error IncompleteOracleRound();
-    error StaleOracleData();
-    error InvalidOracleResponse();
-    error ExceedsReserves(uint256 newSupply, uint256 reserves);
     error InsufficientBuffer(uint256 available, uint256 required);
     error WouldStrandQueue(uint256 remainingBalance, uint256 queueObligation);
-    error InvalidStaleness(uint256 provided, uint256 minAllowed, uint256 maxAllowed);
     /// @dev Reverted when the configured USDC reports more decimals than supported (>18).
     error UsdcDecimalsTooLarge(uint8 reported);
 
@@ -119,15 +114,16 @@ contract LitePSM is
     /// @param _usdc USDC token address (must implement IERC20Metadata.decimals())
     /// @param _redemptionQueue RedemptionQueue address
     /// @param _admin Admin address (receives full role set; see {OkuMoney.initialize})
-    /// @param _stalenessThreshold Initial PoR oracle staleness threshold (seconds);
-    ///        bounded by Constants.ORACLE_MIN_STALENESS / Constants.ORACLE_MAX_STALENESS.
+    /// @dev The OracleRelay is wired post-deploy via {setOracleRelay}; until then,
+    ///      the peg check is bypassed. This bootstrap path is required because
+    ///      the chain-specific Chainlink feed address may not be known at the
+    ///      moment the PSM proxy is deployed.
     function initialize(
         address _okuMoney,
         address _okuDollar,
         address _usdc,
         address _redemptionQueue,
-        address _admin,
-        uint256 _stalenessThreshold
+        address _admin
     )
         public
         initializer
@@ -137,14 +133,6 @@ contract LitePSM is
         if (_usdc == address(0)) revert Errors.ZeroAddress();
         if (_redemptionQueue == address(0)) revert Errors.ZeroAddress();
         if (_admin == address(0)) revert Errors.ZeroAddress();
-        if (
-            _stalenessThreshold < Constants.ORACLE_MIN_STALENESS
-                || _stalenessThreshold > Constants.ORACLE_MAX_STALENESS
-        ) {
-            revert InvalidStaleness(
-                _stalenessThreshold, Constants.ORACLE_MIN_STALENESS, Constants.ORACLE_MAX_STALENESS
-            );
-        }
 
         __AccessControl_init();
         __Pausable_init();
@@ -155,7 +143,6 @@ contract LitePSM is
         $.okuDollar = IOkuDollar(_okuDollar);
         $.usdc = IERC20(_usdc);
         $.redemptionQueue = RedemptionQueue(_redemptionQueue);
-        $.stalenessThreshold = _stalenessThreshold;
 
         // Resolve decimal multiplier from the USDC contract. Token decimal counts of >18
         // are rejected — OkuMoney is 18 decimals, so a higher-precision USDC would force
@@ -177,36 +164,28 @@ contract LitePSM is
 
     // ============ Storage Accessor Views ============
 
-    function okuMoney() public view returns (IOkuMoney) {
+    function okuMoney() external view returns (IOkuMoney) {
         return _getLitePSMStorage().okuMoney;
     }
 
-    function okuDollar() public view returns (IOkuDollar) {
+    function okuDollar() external view returns (IOkuDollar) {
         return _getLitePSMStorage().okuDollar;
     }
 
-    function usdc() public view returns (IERC20) {
+    function usdc() external view returns (IERC20) {
         return _getLitePSMStorage().usdc;
     }
 
-    function redemptionQueue() public view returns (RedemptionQueue) {
+    function redemptionQueue() external view returns (RedemptionQueue) {
         return _getLitePSMStorage().redemptionQueue;
     }
 
-    function porOracle() public view returns (IAggregatorV3) {
-        return _getLitePSMStorage().porOracle;
-    }
-
-    function stalenessThreshold() public view returns (uint256) {
-        return _getLitePSMStorage().stalenessThreshold;
-    }
-
-    function oracleEnabled() public view returns (bool) {
-        return _getLitePSMStorage().oracleEnabled;
+    function oracleRelay() external view returns (IOracleRelay) {
+        return _getLitePSMStorage().oracleRelay;
     }
 
     /// @notice Decimal conversion multiplier for the configured USDC variant.
-    function usdcDecimalMultiplier() public view returns (uint256) {
+    function usdcDecimalMultiplier() external view returns (uint256) {
         return _getLitePSMStorage().usdcDecimalMultiplier;
     }
 
@@ -232,6 +211,10 @@ contract LitePSM is
         if (usdcAmount == 0) revert Errors.ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
+        // Cycle 4 (EVM-17): peg check hoisted above the math + transfers
+        // so the depeg-revert path doesn't waste compute on the
+        // dollar-conversion ladder.
+        _pegCheck($);
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
 
         uint256 usdcValue18 = MathLib.usdcToDollars(usdcAmount, decimalMultiplier);
@@ -249,10 +232,6 @@ contract LitePSM is
             revert RoundTripDriftTooLarge(roundTripUsdc, usdcAmount);
         }
 
-        if ($.oracleEnabled && address($.porOracle) != address(0)) {
-            _checkReserves(okuMAmount);
-        }
-
         $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
         $.okuMoney.mint(msg.sender, okuMAmount);
 
@@ -268,25 +247,6 @@ contract LitePSM is
         whenNotPaused
         whenYieldNotDistributing
     {
-        _redeemOkuMShared(msg.sender, okuMAmount, false);
-    }
-
-    /// @notice Redeem OkuMoney for USDC using EIP-2612 permit (single transaction).
-    function redeemOkuMWithPermit(
-        uint256 okuMAmount,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    )
-        external
-        nonReentrant
-        whenNotPaused
-        whenYieldNotDistributing
-    {
-        LitePSMStorage storage $ = _getLitePSMStorage();
-        IERC20Permit(address($.okuMoney))
-            .permit(msg.sender, address(this), okuMAmount, deadline, v, r, s);
         _redeemOkuMShared(msg.sender, okuMAmount, false);
     }
 
@@ -318,7 +278,16 @@ contract LitePSM is
         if (okuMAmount == 0) revert Errors.ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
+        _pegCheck($);
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
+
+        // Cycle 4 (EVM-05): reject sub-USDC-unit redemptions BEFORE
+        // doing any math. Without this guard, an input less than the
+        // decimal multiplier could in principle compute a non-zero
+        // `usdcAmount` whose slippage floor (`okuMFloor`) collapses
+        // to zero and trivially passes the post-conversion check.
+        // Minimum redemption granularity = 1 USDC-unit worth of OkuM.
+        if (okuMAmount < decimalMultiplier) revert AmountTooSmall();
 
         uint256 okuMMult = $.okuMoney.okuMMultiplier();
         uint256 dollarValue18 = MathLib.okuMToDollars(okuMAmount, okuMMult);
@@ -378,6 +347,8 @@ contract LitePSM is
         if (usdcAmount == 0) revert Errors.ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
+        // Cycle 4 (EVM-17): peg check hoisted above the math.
+        _pegCheck($);
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
 
         uint256 usdcValue18 = MathLib.usdcToDollars(usdcAmount, decimalMultiplier);
@@ -399,10 +370,6 @@ contract LitePSM is
         uint256 roundTripUsdc = MathLib.dollarsToUsdc(expectedUsdMinted, decimalMultiplier);
         if (roundTripUsdc + 1 < usdcAmount) {
             revert RoundTripDriftTooLarge(roundTripUsdc, usdcAmount);
-        }
-
-        if ($.oracleEnabled && address($.porOracle) != address(0)) {
-            _checkReserves(okuMAmount);
         }
 
         $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
@@ -430,37 +397,32 @@ contract LitePSM is
         _redeemUsdOku(msg.sender, usdAmount);
     }
 
-    /// @notice Redeem OkuDollar for USDC using EIP-2612 permit (single transaction).
-    function redeemUsdOkuWithPermit(
-        uint256 usdAmount,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    )
-        external
-        nonReentrant
-        whenNotPaused
-        whenYieldNotDistributing
-    {
-        LitePSMStorage storage $ = _getLitePSMStorage();
-        IERC20Permit(address($.okuDollar))
-            .permit(msg.sender, address(this), usdAmount, deadline, v, r, s);
-        _redeemUsdOku(msg.sender, usdAmount);
-    }
-
     function _redeemUsdOku(address user, uint256 usdAmount) internal {
         if (usdAmount == 0) revert Errors.ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
+        _pegCheck($);
 
+        // Measure actual UsdOku received: OkuDollar is share-based with a continuously
+        // compounding usdMultiplier. `transferFrom(amount)` floors the share conversion
+        // (OkuDollar.transferFrom), while `unwrap(amount)` ceils the share burn
+        // (OkuDollar.unwrap). When `usdMultiplier > 1e18`, the two diverge by up to 1
+        // share and `unwrap(usdAmount)` would revert with InsufficientBalance because
+        // the PSM holds 1 share less than `unwrap` demands. Reading the post-transfer
+        // balance delta and passing that to `unwrap` guarantees the share counts align.
+        // Same balance-delta pattern as OkuDollar.wrap (handles share-based / fee-on-
+        // transfer tokens generally).
+        uint256 balBefore = IERC20(address($.okuDollar)).balanceOf(address(this));
         IERC20(address($.okuDollar)).safeTransferFrom(user, address(this), usdAmount);
+        uint256 received = IERC20(address($.okuDollar)).balanceOf(address(this)) - balBefore;
+        if (received == 0) revert AmountTooSmall();
+
         // Reverts if vault undercollateralized (distinct failure mode).
-        uint256 okuMReturned = $.okuDollar.unwrap(usdAmount, address(this));
+        uint256 okuMReturned = $.okuDollar.unwrap(received, address(this));
         // UsdOkuRedeemed is the sole event for this path (no underlying OkuMRedeemed).
         uint256 usdcOut = _redeemOkuMFromSelf(user, okuMReturned);
 
-        emit UsdOkuRedeemed(user, usdAmount, usdcOut, $.okuMoney.okuMMultiplier());
+        emit UsdOkuRedeemed(user, received, usdcOut, $.okuMoney.okuMMultiplier());
     }
 
     /// @notice Process queued redemptions (called by operator when buffer refilled).
@@ -486,51 +448,39 @@ contract LitePSM is
         emit BufferRefilled($.usdc.balanceOf(address(this)), startIndex, endIndex);
     }
 
-    // ============ Oracle Management ============
+    // ============ Oracle Relay Management ============
 
-    function configureOracle(
-        address _oracle,
-        uint256 _stalenessThreshold,
-        bool _enabled
-    )
-        external
-        onlyRole(Roles.PSM_ORACLE_MANAGER)
-    {
-        // Configuring an "enabled" oracle at address(0) silently bypasses reserve checks
-        // (the runtime guard skips when porOracle == 0); reject that footgun here.
-        if (_enabled && _oracle == address(0)) revert Errors.ZeroAddress();
-        // Bound the staleness threshold to a sensible range. Outside this range either
-        // every oracle read reverts (too low) or stale data is silently accepted (too high).
-        if (
-            _stalenessThreshold < Constants.ORACLE_MIN_STALENESS
-                || _stalenessThreshold > Constants.ORACLE_MAX_STALENESS
-        ) {
-            revert InvalidStaleness(
-                _stalenessThreshold, Constants.ORACLE_MIN_STALENESS, Constants.ORACLE_MAX_STALENESS
-            );
-        }
-
+    /// @notice Wire (or unwire) the USDC peg circuit-breaker.
+    /// @dev `address(0)` disables the check — operational kill switch
+    ///      for incident response. When set to a non-zero address,
+    ///      every mint and redeem path calls `relay.checkUsdcPeg()`
+    ///      and reverts on depeg / unhealthy oracle data.
+    ///
+    ///      Cycle 4 (EVM-03): emits a dedicated `OracleRelayDisabled`
+    ///      event in addition to `OracleRelayUpdated` so monitoring
+    ///      tooling can distinguish a routine rotation from a
+    ///      kill-switch trip. The disable event only fires when an
+    ///      actually-configured relay is being cleared (i.e.
+    ///      `oldRelay != 0`); a no-op `setOracleRelay(0)` on a fresh
+    ///      deploy does not pollute the monitoring feed.
+    function setOracleRelay(address newRelay) external onlyRole(Roles.PSM_ORACLE_MANAGER) {
         LitePSMStorage storage $ = _getLitePSMStorage();
-        $.porOracle = IAggregatorV3(_oracle);
-        $.stalenessThreshold = _stalenessThreshold;
-        $.oracleEnabled = _enabled;
-        emit OracleConfigured(_oracle, _stalenessThreshold, _enabled);
+        address oldRelay = address($.oracleRelay);
+        $.oracleRelay = IOracleRelay(newRelay);
+        emit OracleRelayUpdated(oldRelay, newRelay);
+        if (newRelay == address(0) && oldRelay != address(0)) {
+            emit OracleRelayDisabled(msg.sender, oldRelay, block.number);
+        }
     }
 
-    function _checkReserves(uint256 mintAmount) internal view {
-        LitePSMStorage storage $ = _getLitePSMStorage();
-        if (address($.porOracle) == address(0)) revert OracleNotConfigured();
-
-        (uint80 roundId, int256 answer,, uint256 updatedAt, uint80 answeredInRound) =
-            $.porOracle.latestRoundData();
-
-        if (answeredInRound < roundId) revert IncompleteOracleRound();
-        if (block.timestamp - updatedAt >= $.stalenessThreshold) revert StaleOracleData();
-        if (answer < 0) revert InvalidOracleResponse();
-
-        uint256 newSupply = $.okuMoney.totalSupply() + mintAmount;
-        uint256 reserves = SafeCast.toUint256(answer);
-        if (reserves < newSupply) revert ExceedsReserves(newSupply, reserves);
+    /// @dev Single peg-check call site reused by every mint/redeem path. When the
+    ///      relay is not configured the check is a no-op (matches the relay
+    ///      bootstrap path; see {initialize}).
+    function _pegCheck(LitePSMStorage storage $) internal view {
+        IOracleRelay relay = $.oracleRelay;
+        if (address(relay) != address(0)) {
+            relay.checkUsdcPeg();
+        }
     }
 
     // ============ Admin Functions ============
@@ -543,20 +493,23 @@ contract LitePSM is
         _unpause();
     }
 
+    /// @dev `whenYieldNotDistributing` guards the `totalQueuedUsdc()` read below,
+    ///      which is multiplier-aware. Without the guard a same-block yield
+    ///      distribution would shift the queue obligation while the buffer
+    ///      balance held still, opening a thin sandwich window against the
+    ///      `WouldStrandQueue` check.
     function withdrawUsdc(
         address to,
         uint256 amount
     )
         external
+        whenYieldNotDistributing
         onlyRole(Roles.PSM_BUFFER_WITHDRAWER)
     {
         if (to == address(0)) revert Errors.ZeroAddress();
         LitePSMStorage storage $ = _getLitePSMStorage();
         uint256 balance = $.usdc.balanceOf(address(this));
         if (balance < amount) revert InsufficientBuffer(balance, amount);
-        // NOTE: queueObligation is computed at the current okuMMultiplier. Race with a
-        // yield event is possible but PSM_BUFFER_WITHDRAWER is permissioned. Tracked
-        // for revisit alongside the yield-distribution guard policy above.
         uint256 queueObligation = $.redemptionQueue.totalQueuedUsdc();
         uint256 remainingBalance = balance - amount;
         if (remainingBalance < queueObligation) {

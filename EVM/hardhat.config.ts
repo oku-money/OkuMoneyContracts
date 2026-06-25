@@ -38,11 +38,12 @@ function alchemyUrl(network: string): string {
   if (!ALCHEMY_API_KEY) {
     // Fallback to public RPCs if no Alchemy key
     const publicRpcs: Record<string, string> = {
-      "eth-mainnet":  "https://eth.llamarpc.com",
-      "eth-sepolia":  "https://rpc.sepolia.org",
+      "eth-mainnet":  "https://ethereum-rpc.publicnode.com",
+      "eth-sepolia":  "https://ethereum-sepolia-rpc.publicnode.com",
       "opt-mainnet":  "https://mainnet.optimism.io",
       "opt-sepolia":  "https://sepolia.optimism.io",
       "arb-mainnet":  "https://arb1.arbitrum.io/rpc",
+      "arb-sepolia":  "https://sepolia-rollup.arbitrum.io/rpc",
       "base-mainnet": "https://mainnet.base.org",
       "base-sepolia": "https://sepolia.base.org",
       "bnb-mainnet":  "https://bsc-dataseed.binance.org",
@@ -85,6 +86,7 @@ const FORK_TARGETS: Record<string, ForkTarget> = {
   optimism:    { alchemySubdomain: "opt-mainnet",   chainId: 10 },
   opSepolia:   { alchemySubdomain: "opt-sepolia",   chainId: 11155420 },
   arbitrum:    { alchemySubdomain: "arb-mainnet",   chainId: 42161 },
+  arbSepolia:  { alchemySubdomain: "arb-sepolia",   chainId: 421614 },
   base:        { alchemySubdomain: "base-mainnet",  chainId: 8453 },
   baseSepolia: { alchemySubdomain: "base-sepolia",  chainId: 84532 },
   bsc:         { alchemySubdomain: "bnb-mainnet",   chainId: 56 },
@@ -102,7 +104,10 @@ const DEFAULT_FORK_CHAIN_ID = process.env.HARDHAT_CHAIN_ID
   ? parseInt(process.env.HARDHAT_CHAIN_ID)
   : _forkTarget.chainId;
 
-const config: HardhatUserConfig = {
+// `typechain` is contributed by `@typechain/hardhat` via module augmentation,
+// but the toolbox/standalone version mismatch occasionally drops the augmentation.
+// Cast to `any` on assignment keeps tsc happy without weakening per-key types.
+const config: HardhatUserConfig & { typechain?: any } = {
   solidity: {
     version: "0.8.28",
     settings: {
@@ -136,6 +141,11 @@ const config: HardhatUserConfig = {
       allowUnlimitedContractSize: false,
       gas: "auto",
       gasPrice: "auto",
+      // Pin base fee to 0 in the local hardhat-network. Without this, Hardhat
+      // 2.20+ enforces EIP-1559 base-fee growth between blocks; fork tests that
+      // signed transactions with `gasPrice: auto` against an older base-fee
+      // snapshot will revert with "maxFeePerGas too low for next block".
+      initialBaseFeePerGas: 0,
       // Fund the test mnemonic accounts (NOT the dev wallet — that is impersonated
       // separately by deploy scripts and uses its real on-chain balance from the fork).
       accounts: {
@@ -165,7 +175,7 @@ const config: HardhatUserConfig = {
     // Testnets
     sepolia: {
       // Prefer Alchemy if API key is set (more reliable than public RPC)
-      url: ALCHEMY_API_KEY ? alchemyUrl("eth-sepolia") : (process.env.SEPOLIA_RPC_URL || "https://rpc.sepolia.org"),
+      url: ALCHEMY_API_KEY ? alchemyUrl("eth-sepolia") : (process.env.SEPOLIA_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com"),
       chainId: 11155111,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       verify: {
@@ -196,6 +206,18 @@ const config: HardhatUserConfig = {
         etherscan: {
           apiUrl: "https://api-sepolia.basescan.org",
           apiKey: process.env.BASESCAN_API_KEY || process.env.ETHERSCAN_API_KEY || "",
+        },
+      },
+    },
+
+    arbSepolia: {
+      url: process.env.ARB_SEPOLIA_RPC_URL || alchemyUrl("arb-sepolia"),
+      chainId: 421614,
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+      verify: {
+        etherscan: {
+          apiUrl: "https://api-sepolia.arbiscan.io",
+          apiKey: process.env.ARBISCAN_API_KEY || process.env.ETHERSCAN_API_KEY || "",
         },
       },
     },

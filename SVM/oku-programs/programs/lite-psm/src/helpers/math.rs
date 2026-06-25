@@ -11,11 +11,29 @@ use crate::errors::LitePsmError;
 use anchor_lang::prelude::*;
 use oku_shared::math as shared;
 
-/// Convert OkuMoney amount to dollar value using `oku_m_price`.
+/// Convert OkuMoney amount to dollar value using `oku_m_price` with
+/// **floor** rounding. Use when the dollar figure is being credited to a
+/// user (user gets no more than they earned).
 ///
-/// Formula: `dollar_value = (oku_m_amount * oku_m_price) / PRECISION`.
+/// Formula: `dollar_value = floor(oku_m_amount * oku_m_price / PRECISION)`.
 pub fn oku_m_to_dollars(oku_m_amount: u64, oku_m_price: u64) -> Result<u64> {
     shared::oku_m_to_dollars(oku_m_amount, oku_m_price)
+        .ok_or_else(|| error!(LitePsmError::Overflow))
+}
+
+/// Convert OkuMoney amount to dollar value using `oku_m_price` with
+/// **ceil** rounding. Use when the dollar figure becomes a protocol
+/// obligation (reserved-balance accounting in `withdraw_buffer`, e.g.).
+///
+/// Formula: `dollar_value = ceil(oku_m_amount * oku_m_price / PRECISION)`.
+///
+/// The semantic contract — over-reserve by at most one lamport per call
+/// rather than under-reserve by up to `queue_depth` lamports per batch —
+/// is the audit-grade fix for the rounding asymmetry between
+/// `withdraw_buffer` (single floor) and `process_queue` (per-entry
+/// floors that sum to `≤ floor(sum)`).
+pub fn oku_m_to_dollars_ceil(oku_m_amount: u64, oku_m_price: u64) -> Result<u64> {
+    shared::oku_m_to_dollars_ceil(oku_m_amount, oku_m_price)
         .ok_or_else(|| error!(LitePsmError::Overflow))
 }
 
@@ -30,12 +48,11 @@ pub fn dollars_to_oku_m(dollar_value: u64, oku_m_price: u64) -> Result<u64> {
         .ok_or_else(|| error!(LitePsmError::Overflow))
 }
 
-/// Calculate a basis-points fee on `amount`.
-///
-/// Formula: `fee = (amount * fee_bps) / BASIS_POINTS`.
-pub fn calculate_fee(amount: u64, fee_bps: u16) -> Result<u64> {
-    shared::calculate_fee(amount, fee_bps).ok_or_else(|| error!(LitePsmError::Overflow))
-}
+// Cycle 4 (S-33): `calculate_fee` wrapper deleted (was
+// `#[allow(dead_code)]` for the "future PSM fee" seam). The
+// `oku_shared::calculate_fee` primitive remains — whoever lands a
+// PSM fee instruction adds the thin Anchor-error wrapper at that
+// time.
 
 #[cfg(test)]
 mod tests {
@@ -51,6 +68,15 @@ mod tests {
     }
 
     #[test]
+    fn oku_m_to_dollars_ceil_basic() {
+        // Exact division — equal to floor.
+        assert_eq!(
+            oku_m_to_dollars_ceil(1_000_000, PRECISION).unwrap(),
+            1_000_000
+        );
+    }
+
+    #[test]
     fn dollars_to_oku_m_zero_price_is_zero_amount() {
         let err = dollars_to_oku_m(1_000_000, 0).unwrap_err();
         // `ZeroAmount` is the program-side invariant; the underlying
@@ -61,10 +87,5 @@ mod tests {
             msg.contains("Amount must be greater than zero"),
             "got: {msg}"
         );
-    }
-
-    #[test]
-    fn calculate_fee_basic() {
-        assert_eq!(calculate_fee(10_000, 100).unwrap(), 100);
     }
 }

@@ -9,7 +9,7 @@ Solidity smart contracts for OkuMoney — institutional-grade yield infrastructu
 - **Language**: Solidity 0.8.28 / EVM Cancun
 - **Framework**: Foundry (Forge, Cast, Anvil) for unit + invariant tests; Hardhat for fork + gas-regression tests
 - **Dependencies**: OpenZeppelin Contracts v5 (Upgradeable)
-- **Proxy pattern**: UUPS (all upgradeable contracts: `OkuMoney`, `OkuDollar`, `LitePSM`, `RedemptionQueue`, `OkuBridge`, `OkuBridgeRouter`)
+- **Proxy pattern**: UUPS (all upgradeable contracts: `OkuMoney`, `OkuDollar`, `LitePSM`, `RedemptionQueue`)
 - **Oracle**: Chainlink `AggregatorV3` (subset interface at `src/interfaces/IAggregatorV3.sol`)
 - **Storage**: ERC-7201 namespaced storage across every upgradeable contract (canonical slots — see any `*_STORAGE_LOCATION` literal)
 
@@ -21,9 +21,8 @@ Solidity smart contracts for OkuMoney — institutional-grade yield infrastructu
 | `src/token/OkuDollar.sol` | Rebasing $1-pegged stablecoin (usdOku) — growing balance via continuous `_rpow` USD multiplier |
 | `src/psm/LitePSM.sol` | Peg Stability Module — multiplier-aware USDC ↔ OkuM + usdOku convenience functions |
 | `src/psm/RedemptionQueue.sol` | FIFO queue for OkuMoney redemptions when the PSM buffer is depleted |
-| `src/bridge/OkuBridge.sol` | Native cross-chain bridge (burn/mint with EIP-712 orchestrator signatures) |
-| `src/bridge/OkuBridgeRouter.sol` | User entry point for bridging OkuMoney and OkuDollar across chains |
-| `src/bridge/adapters/NttAdapter.sol` | Wormhole NTT adapter (third-party adapter path) — AccessControl-gated |
+| `src/oracle/OracleRelay.sol` | USDC peg circuit-breaker — wraps a Chainlink USDC/USD aggregator, validates round/freshness/in-band, normalizes to 1e18 |
+| `src/oracle/IOracleRelay.sol` | Consumer interface (`checkUsdcPeg`, `getUsdcPrice`) used by LitePSM and RedemptionQueue |
 | `src/lib/YieldSandwichGuard.sol` | Shared abstract enforcing per-block sandwich protection around yield distribution |
 | `src/lib/MathLib.sol` | Multiplier conversion helpers (`okuMToDollars`, `dollarsToOkuM`, `usdcToDollars`, `dollarsToUsdc`, `rpow`) |
 | `src/lib/Constants.sol` | Shared constants + canonical terminology legend |
@@ -40,8 +39,7 @@ forge test --match-path "test/invariants/*"   # Invariant suite only (256 runs, 
 forge test --match-contract OkuMoneyTest -vv  # Targeted
 
 npx hardhat compile                           # Required before fork tests
-npx hardhat test                              # Fork + gas-regression tests
-npx hardhat test test/hardhat/gas/            # Gas-regression only
+npx hardhat test                              # Fork + happyPath + scenarios tests
 ```
 
 ## Deployment & Address Book
@@ -50,37 +48,75 @@ The unified deploy script (`scripts/deploy/index.ts`) provisions every contract
 for a given chain in one run, captures addresses to a working address book, and
 on live networks also mirrors them into the canonical repo-root registry.
 
+### Deterministic addresses (CREATE2, v0.1)
+
+Every UUPS proxy + its implementation, plus `MockUSDC`, are deployed via the
+Arachnid CREATE2 factory at `0x4e59b44847b379578588920cA78FbF26c0B4956C`. The
+factory exists at the same address on every supported chain (see
+[github.com/Arachnid/deterministic-deployment-proxy](https://github.com/Arachnid/deterministic-deployment-proxy)),
+so the same source tree + same `DEPLOYMENT_VERSION` + same constructor args
+produces the **same contract address on every chain that has the factory**.
+
+Salt formula:
+```
+salt = keccak256("okumoney." + DEPLOYMENT_VERSION + "." + <name>)
+```
+where `<name>` is `OkuMoney.impl`, `OkuMoney.proxy`, `MockUSDC`, etc. The
+configuration lives in [`scripts/config/deploymentVersion.ts`](scripts/config/deploymentVersion.ts);
+the deploy helpers in [`scripts/utils/create2Deploy.ts`](scripts/utils/create2Deploy.ts).
+
+**Version semantics:** `v0.x` is for pre-audit iteration; addresses may
+change across versions. `v1.0+` is reserved for post-audit deployments.
+Bumping `DEPLOYMENT_VERSION` is a one-way door — any prior-version deploy
+keeps its addresses; the new version takes fresh addresses.
+
+**Fallback:** if the CREATE2 factory is not deployed on a target chain
+(`eth_getCode` returns `0x` for it), the deploy script logs a warning and
+falls through to standard nonce-based CREATE — that chain gets unique,
+non-deterministic addresses. All chains in the current network list have
+the factory deployed.
+
+**Per-chain variance:** chain-specific constructor args still cascade into
+different addresses on chains where they differ — specifically the
+Chainlink USDC/USD feed address (for `OracleRelay`), and real Circle USDC
+on mainnet (vs. `MockUSDC` on testnets). For pre-audit v0.1, `MockUSDC` is
+deployed deterministically on every testnet, so `RedemptionQueue` and
+`LitePSM` reach identical addresses across testnets too. Mainnet deploys
+(with real USDC) will diverge — handled post-audit.
+
+To inspect the deterministic address for any contract before deploying:
+```bash
+node -e "const{ethers}=require('ethers');const v='v0.1';for(const n of ['MockUSDC','OkuMoney.impl','OkuMoney.proxy']){console.log(n.padEnd(20), ethers.keccak256(ethers.toUtf8Bytes('okumoney.'+v+'.'+n)))}"
+```
+
 ### Where deployed addresses live
 
 | File | Role | Touched by |
 |------|------|------------|
-| [`scripts/config/addresses.json`](scripts/config/addresses.json) | Working per-network address book consumed by deploy / test / bridge scripts. Keyed `<chain>` for live deploys; `fork:<chain>` for local-fork runs (so fork tests never overwrite live entries). | Every script run. |
-| [`../testnet-addresses.json`](../testnet-addresses.json) | Canonical, auto-synced multi-chain registry consumed by the SDK / backend / orchestrator. Includes `chainId`, `bridgeChainId`, `rpcUrl`, `explorer`, `contracts{}`, `deployer`. | Live deploys only — fork runs never write here. |
+| [`scripts/config/addresses.json`](scripts/config/addresses.json) | Working per-network address book consumed by deploy / test scripts. Keyed `<chain>` for live deploys; `fork:<chain>` for local-fork runs (so fork tests never overwrite live entries). | Every script run. |
+| [`../testnet-addresses.json`](../testnet-addresses.json) | Canonical, auto-synced multi-chain registry consumed by the SDK / backend / orchestrator. Includes `chainId`, `rpcUrl`, `explorer`, `contracts{}`, `deployer`. | Live deploys only — fork runs never write here. |
 | `.openzeppelin/<network>.json` | OZ upgrades plugin's per-chain proxy/impl manifest. Required for `upgradeProxy` to work. | OZ upgrades plugin. |
 
 ### Configured networks
 
 Defined in [`hardhat.config.ts`](hardhat.config.ts) and [`scripts/config/chains.ts`](scripts/config/chains.ts):
 
-| Network key | Chain ID | Bridge ID (u16) | Status |
-|---|---|---|---|
-| `sepolia` | 11155111 | 111 | Eth Sepolia testnet |
-| `opSepolia` | 11155420 | 420 | OP Sepolia testnet |
-| `baseSepolia` | 84532 | 846 | Base Sepolia testnet |
-| `bscTestnet` | 97 | 97 | BNB Smart Chain testnet (Chapel) |
-| `mainnet` | 1 | 1 | Ethereum mainnet |
-| `optimism` | 10 | 10 | Optimism mainnet |
-| `arbitrum` | 42161 | 421 | Arbitrum One |
-| `base` | 8453 | 845 | Base mainnet |
-| `bsc` | 56 | 56 | BNB Smart Chain mainnet |
+| Network key | Chain ID | Status |
+|---|---|---|
+| `sepolia` | 11155111 | Eth Sepolia testnet |
+| `opSepolia` | 11155420 | OP Sepolia testnet |
+| `baseSepolia` | 84532 | Base Sepolia testnet |
+| `arbSepolia` | 421614 | Arbitrum Sepolia testnet |
+| `bscTestnet` | 97 | BNB Smart Chain testnet (Chapel) |
+| `mainnet` | 1 | Ethereum mainnet |
+| `optimism` | 10 | Optimism mainnet |
+| `arbitrum` | 42161 | Arbitrum One |
+| `base` | 8453 | Base mainnet |
+| `bsc` | 56 | BNB Smart Chain mainnet |
 
-The `bridgeChainId` column lists the protocol-internal `u16` ID embedded in
-bridge messages (some EVM chain IDs exceed `u16` and need mapping). Solana
-counterpart is auto-selected per-chain by `getSolanaCounterpartChainId()`:
-testnet EVM → Solana Devnet (103), mainnet EVM → Solana Mainnet (101).
-
-Note `baseSepolia` uses bridge ID `846` (one off from Base mainnet's `845`)
-so cross-chain handlers can never confuse testnet for mainnet messages.
+The protocol-internal `u16` "bridge chain ID" mapping table and the
+`getSolanaCounterpartChainId()` helper were removed in the noBridge
+refactor — no on-chain message carries a chain identifier in v1.
 
 ### Local-fork pre-flight (recommended before any live deploy)
 
@@ -93,7 +129,7 @@ FORK_NETWORK=base hh node            # =sepolia, =bsc, =arbitrum, =mainnet, ...
 
 # Terminal 2: deploy + run integration test against the running fork.
 hh run scripts/deploy/index.ts --network localhost     # auto-detects target chain from fork's chainId
-hh run scripts/interactions/test-flow.ts --network localhost
+hh run scripts/test/test-onchain.ts --network localhost
 ```
 
 The deploy script auto-detects the target chain from the running node's
@@ -184,22 +220,22 @@ shipped deployments.
 | `npm run test` | Hardhat fork + gas suite |
 | `npm run test:all` | Both |
 | `npm run node` | Start `hardhat node` (default forks Sepolia; override via `FORK_NETWORK`) |
-| `npm run deploy:sepolia` / `:opSepolia` / `:baseSepolia` / `:bscTestnet` | Live deploy to the named testnet |
+| `npm run deploy:sepolia` / `:opSepolia` / `:baseSepolia` / `:arbSepolia` / `:bscTestnet` | Live deploy to the named testnet |
 | `npm run deploy:base` / `:bsc` | Live deploy to the named mainnet |
 | `npm run upgrade` | Upgrade proxies on a running localhost fork (auto-detects target chain) |
-| `npm run upgrade:sepolia` / `:opSepolia` / `:baseSepolia` / `:bscTestnet` | Live upgrade on the named testnet |
+| `npm run upgrade:sepolia` / `:opSepolia` / `:baseSepolia` / `:arbSepolia` / `:bscTestnet` | Live upgrade on the named testnet |
 | `npm run upgrade:base` / `:bsc` | Live upgrade on the named mainnet |
 | `npm run test:flow` / `:live` | `test-flow.ts` against a running localhost fork (or live Sepolia) |
-| `npm run bridge:state` / `:live` | OkuBridge read-only state dump |
-| `npm run bridge:burn` / `:live` | Burn-to-Solana flow |
-| `npm run bridge:mint` | Mint-from-Solana flow |
+
+> The `npm run bridge:*` scripts were removed in the noBridge refactor.
+> Cross-chain transfers are now PSM-mediated mint/burn coordinated off-chain.
 
 For chains without a pre-baked npm alias (`base`, `bsc`, `arbitrum`, `optimism`,
 `mainnet`):
 
 ```bash
 hh run scripts/deploy/index.ts --network <chain>
-NETWORK=<chain> hh run scripts/interactions/test-flow.ts --network <chain>
+NETWORK=<chain> hh run scripts/test/test-onchain.ts --network <chain>
 ```
 
 ## Contract Structure
@@ -212,31 +248,41 @@ src/
   psm/
     LitePSM.sol             # USDC ↔ OkuM (multiplier-aware) + usdOku convenience functions
     RedemptionQueue.sol     # Queue for when PSM USDC buffer is insufficient
-  bridge/
-    OkuBridge.sol           # Native cross-chain bridge (full burn/mint protocol)
-    OkuBridgeRouter.sol     # Entry point: token normalization + bridge path selection
-    adapters/
-      IBridgeAdapter.sol    # Canonical interface for third-party message-only adapters
-      INttManager.sol       # Wormhole NTT manager interface
-      NttAdapter.sol        # Wormhole NTT adapter (AccessControl-gated)
+  oracle/
+    OracleRelay.sol         # USDC peg circuit-breaker (UUPS proxy) consumed by LitePSM/Queue
+    IOracleRelay.sol        # checkUsdcPeg() / getUsdcPrice() consumer surface
   interfaces/
-    IOkuMoney.sol           # OkuMoney interface (used by PSM, vault, bridge)
+    IOkuMoney.sol           # OkuMoney interface (used by PSM, vault, mocks)
     IOkuDollar.sol          # OkuDollar vault interface
-    IOkuBridgeNative.sol    # OkuBridge subset surface used by the router
-    IAggregatorV3.sol       # Chainlink PoR oracle subset used by LitePSM
+    IAggregatorV3.sol       # Chainlink AggregatorV3 subset consumed by OracleRelay
   lib/
     Roles.sol               # Shared RBAC role constants (prefix-namespaced)
     Constants.sol           # PRECISION, DECIMAL_MULTIPLIER, MAX_RATE, BASIS_POINTS + terminology legend
+    Errors.sol              # Shared error types (ZeroAddress, InsufficientBalance, MultiplierCannotDecrease)
+    SafeApprove.sol         # USDT-safe approve helpers (setExactAllowance, revokeAllowance)
     MathLib.sol             # Multiplier math + rpow
     ReentrancyGuardUpgradeable.sol  # OZ-5.x-compatible upgradeable reentrancy guard
     YieldSandwichGuard.sol  # Shared whenYieldNotDistributing modifier (OkuDollar + LitePSM)
+    events/
+      OkuMoneyEvents.sol    # Event declarations for OkuMoney
+      OkuDollarEvents.sol   # Event declarations for OkuDollar (incl. Blacklisted/Unblacklisted)
+      LitePSMEvents.sol     # Event declarations for LitePSM
+      RedemptionQueueEvents.sol  # Event declarations for RedemptionQueue (incl. TransferFailed skip)
 
 test/
   mocks/                    # Test-only mocks (live under test/, never compiled into production artifacts)
     MockUSDC.sol            # 6-decimal ERC-20; used on testnets + in tests
-    MockBridgeAdapter.sol   # Test double for IBridgeAdapter (used by both Foundry and Hardhat)
-    MockNttManager.sol      # Test double for INttManager
 ```
+
+> **noBridge refactor**: `src/bridge/OkuBridge.sol`, `OkuBridgeRouter.sol`,
+> `adapters/NttAdapter.sol` + `INttManager.sol`, and the corresponding event
+> files were removed. v1 cross-chain transfers are PSM-mediated mint/burn,
+> orchestrated off-chain (the orchestrator custodies USDC and calls
+> `LitePSM.mintOkuM` / `LitePSM.redeemOkuM` on the source/destination chains).
+> The retained `IBridgeAdapter` and `IOkuBridgeNative` interfaces plus the
+> `BRIDGE_*` / `ROUTER_*` / `NTT_*` constants in `Roles.sol` are reserved seams
+> for future re-introduction of OkuBridge / NTT / CCIP; those will arrive as
+> contract additions, not modifications to the existing suite.
 
 ---
 
@@ -255,7 +301,9 @@ Every contract's NatSpec references `src/lib/Constants.sol` for the authoritativ
 
 **Conversion constants**
 - `PRECISION = 1e18` — base unit for multiplier math
-- `DECIMAL_MULTIPLIER = 1e12` — converts USDC (6 dec) ↔ dollars (18 dec)
+- `usdcDecimalMultiplier` — per-PSM stored value (`= 10 ** (18 - usdcDecimals)`),
+  computed at `LitePSM.initialize` from the deployed USDC mint's `decimals()`.
+  On every chain we currently target this is `1e12` (USDC has 6 decimals).
 - `MAX_RATE = PRECISION + 1e11` — safety cap on vault `usdRatePerSecond`
 - `BASIS_POINTS = 10_000` — fee denominator
 
@@ -463,9 +511,7 @@ Pause is a **full freeze**. The following are gated behind `whenNotPaused`:
 
 - OkuMoney: peer-to-peer `transfer` / `transferFrom` (mint also; burn is NOT gated — self-burn works while paused to support the pause-to-blacklist protocol).
 - OkuDollar: `transfer` / `transferFrom`, `wrap`, `unwrap`, `depositReserves`, `withdrawSurplus`.
-- LitePSM: `mintOkuM`, `redeemOkuM`, `mintUsdOku`, `redeemUsdOku`, `redeemOkuMWithPermit`, `redeemUsdOkuWithPermit`, `processQueue`.
-- OkuBridge: `bridgeBurn`, `bridgeMint`, `initiateRefund`, `confirmRefund`, `cancelRefund`.
-- OkuBridgeRouter: `bridgeUsdOku`, `bridgeOkuM`, `bridgeWrappedVia`, `bridgeVia`.
+- LitePSM: `mintOkuM`, `redeemOkuM`, `mintUsdOku`, `redeemUsdOku`, `processQueue`.
 
 **Intentionally NOT pause-gated**: the vault's yield-rate setters (`setUsdYieldRate`, `setNextUsdYieldRate`) and `setMinCollateralRatio` — these are admin emergency levers that must remain callable during a pause.
 
@@ -497,7 +543,6 @@ function mintOkuM(uint256 usdcAmount) external;
 
 // usdcAmount = okuMAmount × okuMMultiplier() / PRECISION (scaled to 6 decimals)
 function redeemOkuM(uint256 okuMAmount) external;
-function redeemOkuMWithPermit(uint256 okuMAmount, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;
 ```
 
 At `okuMMultiplier = $1.05`: depositing 100 USDC gives ~95.24 OkuM; redeeming 95.24 OkuM returns ~100 USDC.
@@ -507,24 +552,26 @@ At `okuMMultiplier = $1.05`: depositing 100 USDC gives ~95.24 OkuM; redeeming 95
 ```solidity
 function mintUsdOku(uint256 usdcAmount) external;           // USDC → mint OkuM → wrap → usdOku to user
 function redeemUsdOku(uint256 usdAmount) external;          // usdOku → unwrap → redeem → USDC to user
-function redeemUsdOkuWithPermit(...) external;              // Permit variant
 ```
 
 `redeemUsdOku` has two distinct failure modes: (a) vault undercollateralized → `unwrap` reverts with `InsufficientReserves` → entire tx reverts; (b) vault has OkuM but PSM buffer insufficient → OkuM goes to the redemption queue.
 
 Every user-facing PSM function is protected by `whenYieldNotDistributing` + `whenNotPaused`.
 
-### Oracle Configuration
+### USDC Peg Circuit-Breaker (`OracleRelay`)
 
-`configureOracle(oracle, stalenessThreshold, enabled)` — `PSM_ORACLE_MANAGER`:
-- Reverts with `ZeroAddress` if `enabled && oracle == 0` (prevents silent bypass via mis-config).
-- Reverts with `InvalidStaleness(provided, min, max)` if `stalenessThreshold` is outside `[ORACLE_MIN_STALENESS=60, ORACLE_MAX_STALENESS=7 days]`.
+`LitePSM` and `RedemptionQueue` consume a separate `OracleRelay` proxy (`src/oracle/OracleRelay.sol`) that wraps a Chainlink USDC/USD aggregator. Every mint, redeem, and `processQueue` path calls `oracleRelay.checkUsdcPeg()` (when wired) and reverts on:
 
-Runtime oracle check (on `mintOkuM` / `mintUsdOku` when enabled):
-- `answeredInRound < roundId` → `IncompleteOracleRound`.
-- `block.timestamp - updatedAt >= stalenessThreshold` → `StaleOracleData`.
-- `answer < 0` → `InvalidOracleResponse`.
-- `reserves < totalSupply + mintAmount` → `ExceedsReserves(newSupply, reserves)`.
+- Incomplete round (`answeredInRound < roundId`) → `IncompleteOracleRound`.
+- `updatedAt == 0` (round never updated) → `OracleUpdatedAtZero`.
+- Malformed `startedAt` (`== 0` or `> updatedAt`) → `OracleStartedAtInvalid`.
+- Stale data (`block.timestamp - updatedAt >= stalenessThreshold`) → `StaleOracleData`.
+- Non-positive answer → `NonPositiveAnswer`.
+- Normalized price outside the configured band → `PriceOutOfBand`.
+
+`setOracleRelay(address)` (gated on `PSM_ORACLE_MANAGER` / `QUEUE_ORACLE_MANAGER`) wires a relay onto the consumer. Passing `address(0)` disables the peg check — operational kill switch for incident response.
+
+The relay's own configuration setters (`setPriceFeed`, `setStalenessThreshold`, `setPriceBand`) are gated on the relay-side roles `RELAY_FEED_MANAGER` and `RELAY_CONFIG_MANAGER`. Hardcoded defense-in-depth bounds (`ORACLE_USDC_PRICE_FLOOR = 0.95e18`, `ORACLE_USDC_PRICE_CEILING = 1.05e18`, `ORACLE_MIN_STALENESS = 60s`, `ORACLE_MAX_STALENESS = 7 days`) prevent operator misconfiguration.
 
 ### Admin / Operator Surface
 
@@ -543,7 +590,7 @@ function pause() / unpause() external;                                     // PS
 | `OkuMRedeemed(user, okuMIn, usdcOut, okuMMultiplier)` | `redeemOkuM` instant path only. Queued path emits `RedemptionQueued` instead. |
 | `UsdOkuMinted(user, usdcAmount, usdAmount, okuMMultiplier)` | `mintUsdOku` success. |
 | `UsdOkuRedeemed(user, usdIn, usdcOut, okuMMultiplier)` | `redeemUsdOku` — sole event for this path; no inner `OkuMRedeemed` is emitted. |
-| `OracleConfigured(oracle, stalenessThreshold, enabled)` | `configureOracle`. |
+| `OracleRelayUpdated(oldRelay, newRelay)` | `setOracleRelay`. address(0) disables the peg check. |
 | `BufferRefilled(newBufferBalance, processedStart, processedEnd)` | After `processQueue`. |
 | `BufferDeposited(depositor, amount, newBufferBalance)` | After `depositBuffer`. |
 | `BufferWithdrawn(to, amount, newBufferBalance)` | After `withdrawUsdc`. |
@@ -556,102 +603,52 @@ Stores raw OkuMoney token amounts. Since OkuMoney is non-rebasing, queued tokens
 
 `enqueue(user, okuMTokenAmount)` is record-only — the PSM transfers OkuMoney into the queue before calling. `processQueue(startIndex, endIndex)` (called by the PSM via `QUEUE_PSM`) burns OkuMoney, pulls USDC from the PSM, and pays users. `rescueQueueEntry(index, alternateRecipient)` returns OkuMoney to a stuck entry (e.g., USDC-blacklisted recipient) — called by `QUEUE_RESCUER`.
 
+`processQueue` and `rescueQueueEntry` do NOT auto-advance `queueHead`. Operators (or anyone — the call is permissionless) call `advanceHead(maxSlots)` after a batch to amortize the head walk into a separate, gas-bounded transaction. `queueLength()` is an upper bound on live entries until `advanceHead` runs; redemption correctness is independent of the cursor.
+
 ### Events
 
 | Event | Parameters |
 |---|---|
 | `RedemptionQueued(user, okuMAmount, dollarValue, position, queueLength)` | `enqueue`. |
 | `RedemptionProcessed(user, okuMAmount, dollarValue, usdcAmount, waitTime)` | `processQueue` success. |
-| `RedemptionSkipped(index, reason)` | `reason` is `AlreadyCleared` or `InsufficientFunds`. |
+| `RedemptionSkipped(index, reason)` | `reason` is `AlreadyCleared`, `InsufficientFunds`, or `TransferFailed`. |
 | `RedemptionRescued(index, originalUser, recipient, okuMAmount, dollarValue)` | `rescueQueueEntry`. |
+| `QueueHeadAdvanced(newHead, slotsAdvanced)` | `advanceHead` (only when slots were actually skipped). |
 
 ---
 
-## Bridge Architecture
+## Cross-Chain Transfers (v1: noBridge / PSM-Mediated)
 
-Three-tier hierarchy:
+The EVM side ships without on-chain bridging in v1. Cross-chain transfers are
+PSM-mediated mint/burn coordinated by the off-chain orchestrator:
 
 ```
-OkuBridgeRouter          ← single user entry point; token normalization + path selection
-  ├── native path        → OkuBridge.bridgeBurn() (bridge owns burn lifecycle)
-  └── adapter path       → router pre-burns OkuMoney → IBridgeAdapter.bridge() (message-only shim)
-
-OkuBridge                ← full native protocol (source burn + destination mint)
-  bridgeBurn()           ← burns from caller, subtractive fee, EIP-712 BridgeBurn event
-  bridgeMint()           ← validates orchestrator EIP-712 sig, mints on destination
-
-IBridgeAdapter shims     ← third-party protocol adapters (NTT today, CCIP / OFT future)
+chain A                                       chain B
+LitePSM.redeemOkuM(user, n) ─► orchestrator ─► LitePSM.mintOkuM (USDC custody)
+                                              ─► OkuM credited to user on B
 ```
 
-Bridge operates on raw OkuMoney token amounts — no share conversion. MINTER on OkuMoney is granted to LitePSM, OkuBridge, and OkuBridgeRouter (the router holds MINTER so its adapter-path burns succeed).
+- LitePSM holds `OKUM_MINTER` on every chain — sole user-facing mint/burn surface.
+- The orchestrator custodies USDC and rebalances PSM buffers operationally.
+- No on-chain signature verification, EIP-712 BridgeRequest, or refund flow in v1.
 
-### Refund Flow (two-step, keyed dual-control)
+### Reserved seams (for future OkuBridge / NTT / CCIP)
 
-`BRIDGE_REFUND_INITIATOR` calls `initiateRefund(request)` → `BRIDGE_REFUND_CONFIRMER` calls `confirmRefund(request)`. The confirmer MUST be a different address than the initiator (`InitiatorCannotConfirm`). `cancelRefund(request)` can be called by the original initiator or an admin to drop a pending proposal. All three are `whenNotPaused`.
+Deleted in the noBridge refactor: `OkuBridge.sol`, `OkuBridgeRouter.sol`,
+`NttAdapter.sol`, `INttManager.sol`, the bridge event files, the bridge test
+suite, and the `scripts/bridge/` flow. The master branch retains the full
+implementation if it ever needs to be restored.
 
-### `bridgeMint` Validation
+Retained as forward-compatibility scaffolding:
 
-Validates in order:
-1. `destChainId == block.chainid` (`WrongChain`).
-2. `sourceChainId != block.chainid` (`CannotBridgeToSelf`).
-3. `request.amount > 0` (`ZeroAmount`) — a signed zero-amount mint would permanently mark the `requestId` as processed while being a no-op.
-4. `uint256(recipient) >> 160 == 0` (`InvalidRecipient`) — for EVM destinations, reject any `bytes32` with non-zero high bytes (guards against a Solana-style 32-byte pubkey being silently truncated into an EVM address).
-5. `supportedChains[sourceChainId]` (`UnsupportedChain`).
-6. `block.timestamp <= request.deadline` (`SignatureExpired`).
-7. `!processedRequests[requestId]` (`AlreadyProcessed`).
-8. EIP-712 signature verified against `authorizedSigner` (`InvalidSignature`).
-9. Extracted low-20-byte recipient != `address(0)` (`ZeroAddress`).
+- `src/interfaces/IOkuBridgeNative.sol` — OkuBridge subset surface.
+- `src/bridge/adapters/IBridgeAdapter.sol` — third-party adapter interface.
+- `BRIDGE_*`, `ROUTER_*`, `NTT_*` constants in `src/lib/Roles.sol`.
 
-### OkuBridge Events
-
-| Event | Parameters |
-|---|---|
-| `BridgeBurn(requestId, sender, recipient, sourceChainId, destChainId, grossAmount, netAmount, feeAmount, nonce, deadline)` | Source-chain burn. |
-| `BridgeMint(requestId, recipient, sourceChainId, destChainId, amount)` | Destination-chain mint. |
-| `SignerUpdated(oldSigner, newSigner)` | Orchestrator key rotation. |
-| `FeeUpdated(oldFee, newFee)` | Basis-point fee change. |
-| `FeeRecipientUpdated(oldRecipient, newRecipient)` | Fee recipient change. |
-| `ChainAdded(chainId)` / `ChainRemoved(chainId)` | Supported-chain set changes. |
-| `LimitsUpdated(oldMin, oldMax, newMin, newMax)` | Bridge amount limits. |
-| `NonceSkipped(destChainId, skippedNonce)` | Admin forcibly advanced a stuck nonce. |
-| `DeadlineUpdated(oldDeadline, newDeadline)` | Signature-window TTL. |
-| `RefundInitiated(requestId, initiator, sender, amount)` | Step 1 of refund flow. |
-| `RefundConfirmed(requestId, sender, amount)` | Step 2 — tokens returned. |
-| `RefundCancelled(requestId, initiator, cancelledBy)` | Pending proposal dropped. |
-
-### OkuBridgeRouter Events
-
-| Event | Parameters |
-|---|---|
-| `NativeBridgeInitiated(user, requestId, inputAmount, bridgedAmount, feeAmount, destinationChain, recipient)` | Native path — `bridgeUsdOku` / `bridgeOkuM`. `inputAmount` is in the input token's units (usdOku or OkuM). |
-| `BridgeInitiated(user, adapter, sourceToken, amount, destinationChain, recipient)` | Adapter path — `bridgeWrappedVia` / `bridgeVia`. |
-| `AdapterConfigured(adapter, supported)` | Registered/unregistered an adapter. |
-| `OkuBridgeUpdated(oldBridge, newBridge)` | Router re-pointed at a different OkuBridge (e.g. after upgrade). |
-| `Swept(token, to, amount)` | Admin pulled a stuck third-party ERC-20 out of the router (`sweep` — blocks OkuMoney + OkuDollar). |
-
----
-
-## NttAdapter.sol
-
-**Inherits**: `AccessControl` (migrated from `Ownable` in Phase 4 for consistency with the rest of the protocol).
-
-Adapter integrating Wormhole NTT with `OkuBridgeRouter`. The router pre-burns OkuMoney before calling this adapter, so the adapter only handles cross-chain message delivery. Conversions: `uint256 destinationChain → uint16 wormholeChainId`, `address recipient → bytes32` (left-padded for EVM destinations).
-
-Roles (Anchor-equivalent `DEFAULT_ADMIN_ROLE` / `NTT_CONFIGURATOR` / `NTT_RESCUER`):
-
-```solidity
-bytes32 public constant NTT_CONFIGURATOR = keccak256("NTT_CONFIGURATOR"); // configureChainId
-bytes32 public constant NTT_RESCUER      = keccak256("NTT_RESCUER");      // withdrawEth / withdrawTokens
-```
-
-### Events
-
-| Event | Parameters |
-|---|---|
-| `NttBridgeInitiated(amount, wormholeChainId, recipient, sequence)` | NTT `transfer` call from the router. |
-| `ChainIdConfigured(evmChainId, wormholeChainId)` | EVM → Wormhole chain-id mapping added/updated. |
-
-`IOFTAdapter.sol` was removed in Phase 1 (unused). Only `IBridgeAdapter` + `NttAdapter` + `INttManager` remain in `src/bridge/adapters/`.
+When OkuBridge / NTT / CCIP return, the upgrade is additive: deploy the new
+proxy, grant it `OKUM_MINTER`, configure its minter allowance. No changes to
+the existing `OkuMoney` / `OkuDollar` / `LitePSM` / `RedemptionQueue`
+contracts are required.
 
 ---
 
@@ -686,10 +683,35 @@ OkuMoney records `lastYieldDistributionBlock = block.number` inside `setOkuMMult
 
 ## Role Grants Policy
 
-As of Phase 4, every contract's `initialize` grants its **full** role set to `admin`. Admin is expected to redistribute operational roles (minters, rebasers, reserve managers, refund confirmers, etc.) to other parties (multisigs, bots, bridge contracts) post-deployment. This removes contract-specific role plumbing from deployment scripts.
+Every contract's `initialize` grants its **full** role set to `admin`. Admin is expected to redistribute operational roles (minters, rebasers, reserve managers, etc.) to other parties (multisigs, bots) post-deployment via `grantRoles.ts` or `grantRolesMainnet.ts`. This removes contract-specific role plumbing from deployment scripts.
 
 One intentional exception:
 - `RedemptionQueue.QUEUE_PSM` is NOT granted at init — it is granted post-deploy to the `LitePSM` proxy address. This avoids a circular deployment dependency AND keeps admin from being able to call `enqueue` / `processQueue` directly (bypassing the PSM).
+
+### Per-role trust and blast radius
+
+The production role assignment and what each tier can and cannot do — see
+`README.md § Signer trust implications` for the full model that applies to
+both EVM and SVM. EVM-specific notes:
+
+| Role | Held by | What it can do | What on-chain code prevents |
+|---|---|---|---|
+| `DEFAULT_ADMIN_ROLE` | Cold Multisig | Grant/revoke any role; effectively controls everything | Nothing — this is the meta-role. Quorum breach = system compromise |
+| `OKUM_UPGRADER` / `VAULT_UPGRADER` / `PSM_UPGRADER` / `QUEUE_UPGRADER` / `RELAY_UPGRADER` | Cold Multisig | Replace any contract's logic via UUPS `_authorizeUpgrade`; new logic could do anything | Nothing — upgrade is unconditional once authorized. Mitigated by: every upgrade is tested on a fork and diff-reviewed before mainnet execution |
+| `OKUM_ALLOWANCE_MANAGER` | Cold Multisig | Set any address's `minterAllowance` to any value | Cannot set above `maxSupply`; minting still requires `OKUM_MINTER` (held by contracts, not EOAs) |
+| `OKUM_CAP_MANAGER` | Cold Multisig | Set `maxSupply` | Cannot set below current `totalSupply()` |
+| `PSM_ORACLE_MANAGER` / `QUEUE_ORACLE_MANAGER` | Cold Multisig | Wire (or unwire) the `OracleRelay` peg-check contract onto LitePSM / RedemptionQueue | `address(0)` disables the peg check entirely (operational kill switch); pointed at a non-zero address, every mint/redeem/`processQueue` gates on `relay.checkUsdcPeg()` |
+| `RELAY_FEED_MANAGER` | Cold Multisig | Rotate the Chainlink USDC/USD aggregator wrapped by `OracleRelay` | Rejects `address(0)` and feeds reporting `> MAX_FEED_DECIMALS` (18) |
+| `RELAY_CONFIG_MANAGER` | Cold Multisig | Set the staleness threshold and the in-band price window on the relay | Staleness bounded `[60s, 7d]`; band bounded by `[0.95e18, 1.05e18]` (`ORACLE_USDC_PRICE_FLOOR`/`CEILING`) and `min < max` |
+| `PSM_BUFFER_WITHDRAWER` | Cold Multisig | Drain PSM USDC buffer | Cannot withdraw below amount needed to cover pending queue obligations (`queueObligation`) |
+| `VAULT_RESERVE_MANAGER` | Cold Multisig | Withdraw OkuMoney surplus from vault | Cannot push vault below `minCollateralRatio` (90% floor enforced post-withdrawal) |
+| `VAULT_ADMIN` | Cold Multisig | Set `minCollateralRatio` | Cannot set below `MIN_COLLATERAL_RATIO_FLOOR` (90%); live-health gate rejects if existing positions would breach the new floor |
+| `PSM_PAUSER` / `VAULT_PAUSER` / `OKUM_PAUSER` | Warm Multisig | Halt minting, redemption, wrapping, transfers | Cannot unpause — that requires cold multisig (`*_UNPAUSER`) |
+| `OKUM_BLACKLISTER` | Warm Multisig | Block any address from OkuMoney and OkuDollar operations | Cannot unblacklist (cold only); cannot access funds |
+| `OKUM_REBASER` / `VAULT_REBASER` | Orchestrator | Bump `okuMMultiplier` and `usdMultiplier` | Cannot decrease either multiplier; hard capped at `MAX_MULTIPLIER` (1e24) |
+| `PSM_QUEUE_PROCESSOR` | Orchestrator | Process queue entries — burns OkuM, pays USDC to users | Payment destination is fixed to the queue entry's `user` address; cannot reroute |
+| `PSM_BUFFER_DEPOSITOR` | Orchestrator | Deposit USDC to buffer from caller's wallet | Caller must hold the USDC; no damage possible |
+| `OKUM_MINTER` | LitePSM + RedemptionQueue (contracts) | Call `OkuMoney.mint()` inside swap/processQueue paths | Bounded by per-minter `minterAllowance` and global `maxSupply`; never callable by EOA |
 
 ---
 
@@ -726,34 +748,205 @@ redemptionQueue.totalQueuedOkuM == okuMoney.balanceOf(queue)    // Queue backed 
 psmUsdcOutflow <= seededBuffer + trackedDeposits + tolerance    // USDC outflow bounded by inflow
 ```
 
-**Bridge (stateful)**
-```
-okuMoney.balanceOf(okuBridge) == 0                              // Bridge never holds OkuMoney
-outboundNonce[chain] == sum(bridgeBurn calls to chain)          // Nonce monotonic, exact count
-processedRequests ∩ refundedRequests == ∅                       // No double-finalisation
-okuMoney.balanceOf(feeRecipient) == ghostFeesCollected          // Exact fee accounting
-netMinted <= netBurned + netRefunded                            // Value conservation
-```
-
 ---
 
 ## Testing
 
 ```bash
-forge test                                         # All unit + invariant tests
+forge test                                         # All unit + invariant tests (592 total)
 forge test --match-path "test/invariants/*"        # Invariant suite (256 runs × 500 depth by default)
 forge test --match-contract OkuMoneyTest -vv       # OkuMoney unit tests
 forge test --match-contract VaultInvariants        # OkuDollar backing invariants
-forge test --match-contract BridgeInvariants       # Stateful bridge invariants (requires OkuBridgeHandler)
 forge test --match-contract HandlerSanityTest      # Handler success-rate sanity checks
 
 npx hardhat compile                                # Regenerates typechain before fork tests
-npx hardhat test                                   # Fork tests (mainnet/Sepolia) + gas regression
-npx hardhat test test/hardhat/gas/                 # Gas-regression only
+npx hardhat test                                   # Fork + happyPath + scenarios
+npx hardhat test test/hardhat/scenarios/RealWorldUsage.ts  # 365-day simulation + 8 edge cases
 ```
 
-The Foundry suite is the authoritative functional coverage (~580 tests across 19 test files). The Hardhat suite (~37 tests across 6 test files) exists for two specific purposes only:
-1. **Fork tests** (`test/hardhat/fork/`, `test/hardhat/happyPath/`): exercise the protocol against real mainnet/Sepolia state that Foundry can't easily reach in CI.
-2. **Gas regression** (`test/hardhat/gas/`): assert that real-deployment gas costs (under the `@openzeppelin/hardhat-upgrades` plugin and full proxy machinery) stay within published targets.
+The Foundry suite is the authoritative functional coverage. The Hardhat suite exists for three specific purposes:
+1. **Fork tests** (`test/hardhat/fork/`): exercise the protocol against real mainnet / Sepolia state that Foundry can't reach in CI.
+2. **Happy-path integration** (`test/hardhat/happyPath/`): full deposit/yield/withdraw walk-through against the OZ upgrades plugin's real proxy machinery.
+3. **Real-world scenario simulation** (`test/hardhat/scenarios/RealWorldUsage.ts`): 365-day stochastic simulation (seeded PRNG, 7 action categories, daily `evm_increaseTime` steps) plus 8 deterministic edge-case suites covering round-trips, queued redeems, multiplier divergence, blacklist/freeze, pause windows, oracle staleness, yield-lock, and cap exhaustion.
 
-Any non-fork functional test should be added to the Foundry suite.
+Any new unit or invariant test should be added to the Foundry suite; Hardhat is reserved for fork-dependent or multi-contract scenario work.
+
+---
+
+## Forge coverage notes
+
+**Post-Tier-A baseline:** **592 / 592 forge tests passing** (574 unit
++ fuzz + 18 invariants) plus **28 / 28 hardhat tests** (fork +
+happy-path + scenarios). Per-file coverage:
+
+| File | Lines | Statements | Branches | Funcs |
+|---|---|---|---|---|
+| `src/lib/MathLib.sol` | **100 %** | 96 % | 40 % | 100 % |
+| `src/lib/ReentrancyGuardUpgradeable.sol` | **100 %** | 100 % | 100 % | 100 % |
+| `src/lib/SafeApprove.sol` | **100 %** | 100 % | 100 % | 100 % |
+| `src/lib/YieldSandwichGuard.sol` | **100 %** | 100 % | 100 % | 100 % |
+| `src/oracle/OracleRelay.sol` | **98.84 %** | 95.74 % | 71.43 % | 100 % |
+| `src/psm/LitePSM.sol` | **98.16 %** | 96.37 % | 74.07 % | 100 % |
+| `src/psm/RedemptionQueue.sol` | **100 %** | 99.32 % | 94.12 % | 100 % |
+| `src/token/OkuDollar.sol` | **97.93 %** | 96.92 % | 90.00 % | 97.50 % |
+| `src/token/OkuMoney.sol` | **100 %** | 100 % | 100 % | 100 % |
+| **Total** | **98.85 %** | 97.49 % | 84.96 % | 99.30 % |
+
+A CI gate in `.github/workflows/test.yml` fails the build if any `src/` file
+or the overall total drops below **95 % line coverage**.
+
+### Uncovered lines (intentional)
+
+The remaining uncovered lines are **defensive guards unreachable from
+the contracts as currently composed**. They are kept for
+future-proofing against changes to dependent contracts. Driving them
+in tests would require malicious mock contracts that misrepresent
+the multiplier or share-conversion semantics — a test surface we
+judged not worth the maintenance cost.
+
+| Location | Code | Why unreachable today |
+|---|---|---|
+| `LitePSM.sol` `mintOkuM` | `revert RoundTripDriftTooLarge` | The round-trip check is mathematically bounded above by `usdcAmount` for any well-behaved `okuMMultiplier()`. Defends against an OkuMoney variant whose multiplier mutates between reads inside one transaction — impossible under the current `setOkuMMultiplier` + yield-distribution-guard policy. |
+| `LitePSM.sol` `_redeemOkuMShared` | `revert OutputBelowMinimum` | `usdcAmount` is computed once. The floor `okuMFloor = (okuMAmount / dm) * dm` then `minUsdcExpected` is bounded above by `usdcAmount` by construction. Defends against an OkuMoney whose multiplier shifts during the same call. |
+| `LitePSM.sol` `mintUsdOku` | `revert RoundTripDriftTooLarge` | Mirror of the `mintOkuM` case for the wrap path. |
+| `OkuDollar.sol` `_update` | `UseWrapInstead` / `UseUnwrapInstead` guards | `OkuDollar` overrides `transfer` / `transferFrom` to use share-based accounting, so the inherited ERC20 `_update` hook is only reachable via the inherited `_mint` / `_burn` — which the contract never calls. The guards halt any future refactor that accidentally invokes `_mint` or `_burn`. |
+
+### Auditor checklist — sensitive functions
+
+1. **`OkuDollar.withdrawSurplus` post-withdrawal ratio math**
+   - `test_WithdrawSurplus_SucceedsAtExactFloor` — `postRatio == minCollateralRatio` (inclusive).
+   - `test_WithdrawSurplus_OneWeiBelowFloor_Reverts` — `postRatio == minCollateralRatio - 1 wei` → `BelowMinimumCollateral`.
+   - `test_WithdrawSurplus_ZeroObligations_UsesInfiniteRatio` — `obligations == 0` → `type(uint256).max`.
+   - `test_WithdrawSurplus_EventPostRatioMatchesView` — post-tx ratio observable matches `collateralizationRatio()`.
+
+2. **`LitePSM._redeemOkuMShared(okuMAtPsm=true)` branch**
+   - `test_RedeemUsdOku_OkuMAtPsmInstant_NoOkuMRedeemedEvent` — buffer-covered redemption suppresses `OkuMRedeemed`.
+   - `test_RedeemUsdOku_OkuMAtPsmQueued_OkuMRoutedToQueue` — buffer-drained redemption routes OkuM to the queue without pulling from user.
+
+3. **`RedemptionQueue.processQueue` TransferFailed soft-skip path**
+   - `test_ProcessQueue_TransferFailed_SoftSkipEmitsEvent` — blocked recipient → `RedemptionSkipped(idx, TransferFailed)`, OkuM stays in escrow, `totalQueuedOkuM` unchanged.
+   - `test_ProcessQueue_TransferFailed_NextEntryStillProcesses` — interleaved blocked + clean users.
+   - `test_ProcessQueue_TransferFailed_ThenRescueClearsIt` — soft-skip + `rescueQueueEntry` round trip.
+   - `test_ProcessQueue_AlreadyCleared_SoftSkipEmitsEvent`, `test_ProcessQueue_InsufficientFunds_EmitsEventAndBreaks` — companion skip paths.
+   - Backed by `MockUSDC.setBlocked` (`test/mocks/MockUSDC.sol`) which mirrors Circle USDC's revert-on-blacklist semantics.
+
+4. **`setNextUsdYieldRate` boundary conditions (`block.timestamp >= usdRateEnd`)**
+   - `test_SetNextUsdYieldRate_RevertAtExactEndBoundary` — `block.timestamp == usdRateEnd` → `RateAlreadyExpired`.
+   - `test_SetNextUsdYieldRate_RevertOneSecondPastEnd` — `block.timestamp == usdRateEnd + 1` → `RateAlreadyExpired`.
+   - `test_SetNextUsdYieldRate_SucceedsOneSecondBeforeEnd` — `block.timestamp == usdRateEnd - 1` → success.
+
+### Test harnesses
+
+Two test-only harness contracts expose `internal` library surface for
+last-mile branches:
+
+- `test/mocks/MathLibHarness.sol` — exposes `MathLib.rpow` so the
+  `x == 0` and `mul`-overflow branches of MakerDAO's `rpow` assembly
+  are reachable from Solidity.
+- `test/mocks/ReentrancyGuardHarness.sol` — exposes `nonReentrant`
+  so the `ReentrancyGuardReentrantCall` revert can be driven
+  directly.
+
+Neither is in any production import path.
+
+### Audit finding surfaced + remediated during coverage work
+
+While extending `MockUSDC` with `setBlocked` to drive the
+TransferFailed branch, `RedemptionQueue.processQueue` previously used
+the low-level `.call` pattern that treated a `transferFrom`
+returning `false` (without reverting) as success. Real Circle USDC's
+blacklist reverts, so production behaviour was safe, but a
+non-standard ERC-20 (or future USDC variant) that returns `false`
+would have silently drained queue entries without paying users.
+
+**Fix:** replaced the raw `.call` with `SafeERC20.trySafeTransferFrom`,
+which both (a) swallows reverts and (b) decodes the boolean return
+value. Tests now drive both shapes independently — revert (matches
+real USDC blacklist) and return-false (hypothetical non-standard
+USDC). The return-false test is the regression guard for this
+finding.
+
+---
+
+## Dependencies — pinned for audit
+
+All `^` ranges in `package.json` have been replaced with exact
+versions, and the Foundry submodule pins in `foundry.lock` are
+aligned with the Node-side OpenZeppelin packages so both compile
+paths (Foundry, Hardhat) produce bytecode against identical sources.
+
+### Solidity sources
+
+| Library | Version | Source |
+|---|---|---|
+| `solc` (compiler) | `0.8.28` | `foundry.toml`, `hardhat.config.ts` |
+| `@openzeppelin/contracts` | `5.6.1` | `package.json` (Hardhat path) |
+| `@openzeppelin/contracts-upgradeable` | `5.6.1` | `package.json` (Hardhat path) |
+| `lib/openzeppelin-contracts` | `v5.6.1` @ `5fd1781b1454fd1ef8e722282f86f9293cacf256` | `foundry.lock` (Foundry path) |
+| `lib/openzeppelin-contracts-upgradeable` | `v5.6.1` @ `7bf4727aacdbfaa0f36cbd664654d0c9e1dc52bf` | `foundry.lock` (Foundry path) |
+| `lib/forge-std` | `v1.12.0` @ `7117c90c8cf6c68e5acce4f09a6b24715cea4de6` | `foundry.lock` |
+
+Both compile paths build against **OpenZeppelin v5.6.1**. The prior
+drift (Foundry on 5.5.0, Hardhat resolving to 5.4.0 from `^5.4.0`)
+is closed.
+
+### Node tooling
+
+Pinned exactly in `EVM/package.json`:
+
+| Package | Version |
+|---|---|
+| `@nomicfoundation/hardhat-toolbox` | `6.1.2` |
+| `@openzeppelin/hardhat-upgrades` | `3.9.0` |
+| `@typechain/ethers-v6` | `0.5.1` |
+| `@typechain/hardhat` | `9.1.0` |
+| `ethers` | `6.16.0` |
+| `hardhat` | `2.28.6` |
+| `hardhat-deploy` | `0.12.4` |
+| `hardhat-deploy-ethers` | `0.4.2` |
+| `typechain` | `8.3.2` |
+| `typescript` | `5.6.3` |
+| `ts-node` | `10.9.2` |
+| `chai` | `4.5.0` |
+| `dotenv` | `17.2.3` |
+| `bs58` | `6.0.0` |
+
+### OpenZeppelin 5.4 → 5.6.1 breaking-change review (audit-relevant)
+
+The following 5.6.0 breaking changes were reviewed against the
+OkuMoney contracts; **none affect us**:
+
+- `Strings.escapeJSON` escape-range expansion — not used.
+- `ERC1155` single-element batch transfer callback change — not used.
+- `ERC1967Proxy` / `TransparentUpgradeableProxy` mandate initialization
+  during construction — we deploy UUPS proxies via
+  `@openzeppelin/hardhat-upgrades`, which always calls `initialize`
+  as part of `deployProxy`. Verified via the Hardhat integration
+  suite.
+- `ERC721` / `ERC1155` operator allowance changes — neither standard
+  is used.
+- `RLP` `encode(bytes32)` fixed-size change — not used.
+- `ERC4337Utils` / `WebAuthn` / `Memory` API changes —
+  account-abstraction and webauthn modules not used.
+- `Math`, `SafeERC20`, `AccessControl`, `Pausable`, `ERC20*`,
+  `UUPSUpgradeable`, `Initializable` — no behavioural changes
+  between 5.4 and 5.6.1 affecting our call sites. Storage layouts
+  within `5.x` are guaranteed compatible by the OpenZeppelin release
+  process.
+
+### `npm audit` posture
+
+`npm audit` reports vulnerabilities in transitive dev dependencies
+pulled in by `hardhat-deploy` and `@nomicfoundation/hardhat-toolbox`.
+These do NOT enter production bytecode — JavaScript dev tooling
+only — and have no impact on the audited Solidity contracts. Listed
+for transparency.
+
+---
+
+## Pointers
+
+- **Workspace overview:** [`../README.md`](../README.md)
+- **Open issues:** [`../TRACKER.md`](../TRACKER.md)
+- **In-repo audit package** (accepted risks, slither triage, captured tool snapshots): [`audit/README.md`](audit/README.md)
+- **SVM-side docs:** [`../SVM/README.md`](../SVM/README.md)

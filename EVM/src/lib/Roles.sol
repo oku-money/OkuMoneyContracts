@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
+pragma solidity 0.8.28;
 
 /**
  * @title Roles
  * @notice Centralized role constants for all OkuMoney contracts
- * @dev All roles use contract-specific prefixes (OKUM_, VAULT_, PSM_, QUEUE_, BRIDGE_, ROUTER_)
+ * @dev All roles use contract-specific prefixes (OKUM_, VAULT_, PSM_, QUEUE_, RELAY_)
  *      to prevent accidental role collisions across contracts.
  */
 library Roles {
@@ -13,6 +13,13 @@ library Roles {
     bytes32 public constant OKUM_PAUSER = keccak256("OKUM_PAUSER");
     bytes32 public constant OKUM_UNPAUSER = keccak256("OKUM_UNPAUSER");
     bytes32 public constant OKUM_MINTER = keccak256("OKUM_MINTER");
+    /// @dev Cycle 4 (EVM-15): split out from `OKUM_MINTER` so the
+    ///      burn surface can be locked down independently of the mint
+    ///      allowance system. Granted to LitePSM at deploy time
+    ///      alongside `OKUM_MINTER` because both flows route through
+    ///      the PSM, but separating the role lets a future upgrade
+    ///      withdraw burn privileges without touching mint plumbing.
+    bytes32 public constant OKUM_BURNER = keccak256("OKUM_BURNER");
     bytes32 public constant OKUM_REBASER = keccak256("OKUM_REBASER");
     bytes32 public constant OKUM_BLACKLISTER = keccak256("OKUM_BLACKLISTER");
     bytes32 public constant OKUM_UNBLACKLISTER = keccak256("OKUM_UNBLACKLISTER");
@@ -45,27 +52,10 @@ library Roles {
     bytes32 public constant QUEUE_UPGRADER = keccak256("QUEUE_UPGRADER");
     bytes32 public constant QUEUE_PSM = keccak256("QUEUE_PSM");
     bytes32 public constant QUEUE_RESCUER = keccak256("QUEUE_RESCUER");
+    bytes32 public constant QUEUE_ORACLE_MANAGER = keccak256("QUEUE_ORACLE_MANAGER");
 
-    // ============ OkuBridge Roles ============
-    bytes32 public constant BRIDGE_SIGNER_MANAGER = keccak256("BRIDGE_SIGNER_MANAGER");
-    bytes32 public constant BRIDGE_PAUSER = keccak256("BRIDGE_PAUSER");
-    bytes32 public constant BRIDGE_UNPAUSER = keccak256("BRIDGE_UNPAUSER");
-    bytes32 public constant BRIDGE_FEE_MANAGER = keccak256("BRIDGE_FEE_MANAGER");
-    bytes32 public constant BRIDGE_NONCE_ADMIN = keccak256("BRIDGE_NONCE_ADMIN");
-    bytes32 public constant BRIDGE_CHAIN_MANAGER = keccak256("BRIDGE_CHAIN_MANAGER");
-    bytes32 public constant BRIDGE_LIMITS_MANAGER = keccak256("BRIDGE_LIMITS_MANAGER");
-    bytes32 public constant BRIDGE_UPGRADER = keccak256("BRIDGE_UPGRADER");
-    bytes32 public constant BRIDGE_REFUND_INITIATOR = keccak256("BRIDGE_REFUND_INITIATOR");
-    bytes32 public constant BRIDGE_REFUND_CONFIRMER = keccak256("BRIDGE_REFUND_CONFIRMER");
-
-    // ============ OkuBridgeRouter Roles ============
-    bytes32 public constant ROUTER_UPGRADER = keccak256("ROUTER_UPGRADER");
-    bytes32 public constant ROUTER_PAUSER = keccak256("ROUTER_PAUSER");
-    bytes32 public constant ROUTER_UNPAUSER = keccak256("ROUTER_UNPAUSER");
-    bytes32 public constant ROUTER_ADAPTER_MANAGER = keccak256("ROUTER_ADAPTER_MANAGER");
-    bytes32 public constant ROUTER_BRIDGE_MANAGER = keccak256("ROUTER_BRIDGE_MANAGER");
-
-    // ============ NttAdapter Roles ============
-    bytes32 public constant NTT_CONFIGURATOR = keccak256("NTT_CONFIGURATOR");
-    bytes32 public constant NTT_RESCUER = keccak256("NTT_RESCUER");
+    // ============ OracleRelay Roles ============
+    bytes32 public constant RELAY_UPGRADER = keccak256("RELAY_UPGRADER");
+    bytes32 public constant RELAY_FEED_MANAGER = keccak256("RELAY_FEED_MANAGER");
+    bytes32 public constant RELAY_CONFIG_MANAGER = keccak256("RELAY_CONFIG_MANAGER");
 }

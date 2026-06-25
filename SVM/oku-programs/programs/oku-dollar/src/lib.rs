@@ -3,21 +3,25 @@
 //! SVM port of the EVM-side `OkuDollar.sol`. usdOku shares appreciate via a
 //! discrete `usd_multiplier` bumped by the orchestrator (`update_usd_multiplier`),
 //! NOT a continuous `_rpow`-style accrual as on EVM. See
-//! [`SVM/EVM_VS_SVM.md`](../../../EVM_VS_SVM.md) for the full divergence list,
+//! [`SVM/README.md`](../../../README.md) (§ "EVM vs SVM divergence catalogue") for the full divergence list,
 //! including the dual-side yield-distribution slot fence (PSM + vault) and
 //! the Uniswap-V2 dead-shares first-deposit defense (SVM-only addition).
 
-// F-17: Zero unsafe code in this crate (confirmed by cargo-geiger).
+// Zero unsafe code (confirmed by cargo-geiger); forbid accidental
+// introduction.
 #![forbid(unsafe_code)]
-// F-02 (audit finding): The solana-lints `arbitrary_cpi` lint flags CPI call
-// sites in this crate because program ID is obtained at runtime from typed
-// account fields rather than a hardcoded literal.
-//
-// After review (self-audit 2026-05-27), every CPI target is constrained by
-// Anchor's typed `Program<'info, T>` account system. Targeted `#![allow]`
-// annotations are also present in each instruction module that contains CPIs.
-// Confirmed false positives — suppressed here for `cargo dylint` cleanliness.
+// solana-lints `arbitrary_cpi` flags every CPI here because program ID
+// is obtained at runtime from typed account fields. Every CPI target
+// is constrained by Anchor's typed `Program<'info, T>` accounts (which
+// validate program ID at deserialisation), so all hits are false
+// positives. See `oku-programs/audit/README.md` § Accepted Risks.
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
+// Anchor `#[program]` dispatch glue trips
+// `clippy::diverging_sub_expression`; can't annotate inside macro output.
+#![allow(clippy::diverging_sub_expression)]
+// `target_os = "solana"` is emitted by `solana-program-entrypoint`'s
+// panic handler; check-cfg doesn't know about the BPF target.
+#![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
 
@@ -33,7 +37,7 @@ pub mod state;
 use contexts::*;
 use roles::*;
 
-declare_id!("3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy");
+declare_id!("7jKeiuc8gKvQhasbno27wbNMnrwi8g9sb6WPriWkzNd");
 
 // `auditors` and `acknowledgements` are intentionally omitted until an audit
 // is complete; populate them in a follow-up commit.
@@ -41,7 +45,7 @@ declare_id!("3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy");
 solana_security_txt::security_txt! {
     name: "OkuMoney OkuDollar Vault",
     project_url: "https://github.com/anomalyco/okuMoney",
-    contacts: "email:security@okumoney.example",
+    contacts: "uri:https://github.com/anomalyco/okuMoney/security/advisories/new",
     policy: "https://github.com/anomalyco/okuMoney/blob/main/SECURITY.md",
     preferred_languages: "en",
     source_code: "https://github.com/anomalyco/okuMoney"

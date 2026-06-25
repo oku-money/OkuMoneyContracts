@@ -2,121 +2,58 @@
  * PDA derivation helpers
  *
  * All PDA seeds must be kept in sync with the corresponding Rust `SEED` constants
- * in programs/lite-psm/src/state.rs, programs/oku-dollar/src/state.rs, and
- * programs/oku-bridge-router/src/state.rs.
+ * in programs/lite-psm/src/state.rs and programs/oku-dollar/src/state.rs.
+ *
+ * Seed history:
+ * - noBridge migration (2026-06-05): all four seeds rotated to `_v2` after
+ *   the PsmConfig storage layout shrank from 722 → 658 bytes.
+ * - Audit-prep migration (2026-06-12): `psmConfig` rotated to `_v3` after
+ *   the Proof-of-Reserves fields were removed and replaced with the
+ *   USDC peg circuit-breaker fields (`oracle_relay_*`), changing the
+ *   `PsmConfig` layout to 674 bytes. The other three seeds were not
+ *   touched.
+ *
+ * All pre-rotation PDAs are orphaned on devnet; see
+ * `SVM/README.md` § "PDA seed history" for the orphan-PDA inventory
+ * and future rent-recovery plan.
  */
 
 import { PublicKey } from "@solana/web3.js";
 
-/** Derive PSM config PDA. Seeds: ["psm_config"] */
+/**
+ * Centralized seed strings. Update both Rust state.rs constants and this
+ * map together — any drift will produce silent PDA-address mismatches.
+ */
+export const PDA_SEEDS = {
+  psmConfig: "psm_config_v3",
+  redemptionQueue: "redemption_queue_v2",
+  okuDollarConfig: "oku_dollar_config_v2",
+  usdOkuMint: "usd_oku_mint_v2",
+} as const;
+
+/** Derive PSM config PDA. */
 export function derivePsmConfigPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("psm_config")], programId);
+  return PublicKey.findProgramAddressSync([Buffer.from(PDA_SEEDS.psmConfig)], programId);
 }
 
-/** Derive redemption queue PDA. Seeds: ["redemption_queue"] */
+/** Derive redemption queue PDA. */
 export function deriveRedemptionQueuePDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("redemption_queue")], programId);
+  return PublicKey.findProgramAddressSync([Buffer.from(PDA_SEEDS.redemptionQueue)], programId);
 }
 
-/** Derive OkuDollar vault config PDA. Seeds: ["oku_dollar_config"] */
+/** Derive OkuDollar vault config PDA. */
 export function deriveVaultConfigPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("oku_dollar_config")], programId);
+  return PublicKey.findProgramAddressSync([Buffer.from(PDA_SEEDS.okuDollarConfig)], programId);
 }
 
-/** Derive usdOku mint PDA. Seeds: ["usd_oku_mint"] */
+/** Derive usdOku mint PDA. */
 export function deriveUsdOkuMintPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("usd_oku_mint")], programId);
+  return PublicKey.findProgramAddressSync([Buffer.from(PDA_SEEDS.usdOkuMint)], programId);
 }
 
-/** Derive bridge config PDA. Seeds: ["bridge_config"] */
-export function deriveBridgeConfigPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("bridge_config")], programId);
-}
-
-/**
- * Derive bridge nonce PDA for a specific destination chain.
- * Seeds: ["bridge_nonce", chain_id_u16_le]
- */
-export function deriveBridgeNoncePDA(
-  programId: PublicKey,
-  chainId: number
-): [PublicKey, number] {
-  // `Buffer.alloc` zero-initialises; `allocUnsafe` does not. Although
-  // `writeUInt16LE` writes both bytes today, defensively zeroing makes any
-  // future width change deterministic. PDA derivation MUST be deterministic.
-  const chainIdBuffer = Buffer.alloc(2);
-  chainIdBuffer.writeUInt16LE(chainId);
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("bridge_nonce"), chainIdBuffer],
-    programId
-  );
-}
-
-/** Derive router config PDA. Seeds: ["router_config"] */
-export function deriveRouterConfigPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("router_config")], programId);
-}
-
-/**
- * Derive processed request PDA (replay-prevention marker).
- * Seeds: ["bridge_request", request_id_bytes32]
- */
-export function deriveProcessedRequestPDA(
-  programId: PublicKey,
-  requestId: Buffer
-): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("bridge_request"), requestId],
-    programId
-  );
-}
-
-/**
- * Derive bridge fee treasury PDA.
- * Seeds: ["bridge_fee_treasury"]
- *
- * Used as the bridge fee recipient on non-mainnet deployments (see
- * `scripts/config/authorities.ts::allRolesToSingleKey`) so bridge fees
- * accumulate in a distinct account from the deployer wallet. The PDA owns an
- * OkuMoney (Token-2022) ATA created during `deploy:init`. Mainnet uses a real
- * wallet pubkey from `MAINNET_FEE_RECIPIENT` instead.
- */
-export function deriveBridgeFeeTreasuryPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("bridge_fee_treasury")],
-    programId
-  );
-}
-
-/**
- * Derive default refund-initiator pubkey for testnet/fork deployments.
- * Seeds: ["refund_initiator_default"]
- *
- * The on-chain `initialize_bridge` now requires `refund_initiator` and
- * `refund_confirmer` to be distinct keys AND distinct from `bridge_admin`.
- * For testnet/fork (where all roles default to the deployer), we use two
- * deterministic PDAs as placeholders. They cannot sign `initiate_refund`
- * directly (PDAs only sign via CPI from their owning program), so testnet
- * operators wanting to exercise the two-step refund flow should rotate them
- * to real keypairs via `set_bridge_authority` post-deploy. Mainnet supplies
- * separate pubkeys via env (see `MAINNET_REFUND_INITIATOR` /
- * `MAINNET_REFUND_CONFIRMER` in `scripts/config/authorities.ts`).
- */
-export function deriveRefundInitiatorDefaultPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("refund_initiator_default")],
-    programId
-  );
-}
-
-/**
- * Derive default refund-confirmer pubkey for testnet/fork deployments.
- * Seeds: ["refund_confirmer_default"]
- * See `deriveRefundInitiatorDefaultPDA` for the rationale.
- */
-export function deriveRefundConfirmerDefaultPDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("refund_confirmer_default")],
-    programId
-  );
-}
+// Bridge / router PDA helpers (deriveBridgeConfigPDA, deriveBridgeNoncePDA,
+// deriveProcessedRequestPDA, deriveBridgeFeeTreasuryPDA, deriveRefund*
+// helpers, deriveRouterConfigPDA) were removed in the noBridge refactor.
+// v1 cross-chain transfers are mediated off-chain by an orchestrator
+// calling `mint_oku_m` / `redeem_oku_m` directly; no bridge PDAs are
+// derived on-chain or by tooling.

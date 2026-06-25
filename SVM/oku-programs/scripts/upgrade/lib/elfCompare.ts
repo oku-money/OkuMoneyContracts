@@ -89,10 +89,24 @@ export async function getUpgradeAuthority(
 /**
  * Read and fingerprint the on-chain ELF for a deployed program.
  * Strips the 45-byte ProgramData header before returning.
+ *
+ * IMPORTANT: BPFLoaderUpgradeable does NOT shrink the ProgramData account
+ * when a smaller ELF is deployed over a larger one — the trailing bytes of
+ * the previous ELF remain in place (zeroed by the upgrade machinery but
+ * still allocated). To get a meaningful fingerprint of the *current*
+ * program, pass `expectedSize` set to the size of the local ELF that was
+ * just deployed (or expected to be on chain); we then hash only the first
+ * `expectedSize` bytes after the header.
+ *
+ * Without `expectedSize` we hash the full account tail, which is correct
+ * for pre-upgrade comparison (we want to detect ANY difference, including
+ * size shrinkage) but produces a false-positive mismatch in the post-
+ * upgrade verification path when the new ELF is smaller than the old.
  */
 export async function readOnChainElf(
   connection: Connection,
-  programId: PublicKey
+  programId: PublicKey,
+  expectedSize?: number,
 ): Promise<ElfInfo> {
   const programDataAddr = await getProgramDataAddress(connection, programId);
   const pdInfo = await connection.getAccountInfo(programDataAddr, 'confirmed');
@@ -108,7 +122,16 @@ export async function readOnChainElf(
         `header size (${pdInfo.data.length} < ${PROGRAM_DATA_HEADER_SIZE}).`
     );
   }
-  const elfBytes = pdInfo.data.subarray(PROGRAM_DATA_HEADER_SIZE);
+  let elfBytes = pdInfo.data.subarray(PROGRAM_DATA_HEADER_SIZE);
+  if (expectedSize !== undefined) {
+    if (elfBytes.length < expectedSize) {
+      throw new Error(
+        `On-chain ELF tail length ${elfBytes.length} < expectedSize ${expectedSize}; ` +
+          `cannot fingerprint truncated payload.`
+      );
+    }
+    elfBytes = elfBytes.subarray(0, expectedSize);
+  }
   return {
     size: elfBytes.length,
     sha256: createHash('sha256').update(elfBytes).digest('hex'),
@@ -171,8 +194,19 @@ export async function compareElf(
     return { unchanged: false, local: { size: 0, sha256: '' }, onChain: null };
   }
 
+  // Fingerprint the on-chain ELF using `local.size` so the hash covers
+  // exactly the prefix the local ELF occupies on chain. BPFLoaderUpgradeable
+  // does NOT shrink the ProgramData account on a smaller-ELF upgrade — the
+  // trailing bytes from the previous (larger) ELF are zeroed but still
+  // allocated, so a full-tail hash spuriously differs whenever the new ELF
+  // is smaller than the historical maximum. The "size matches but content
+  // matches the local prefix" case is the correct "already deployed" signal.
+  //
+  // Edge case: if the on-chain ELF tail is shorter than `local.size`, the
+  // helper throws — that case is genuinely "different" (the account has
+  // never held an ELF this large), so we fall through to the upgrade path.
   try {
-    onChain = await readOnChainElf(connection, programId);
+    onChain = await readOnChainElf(connection, programId, local.size);
   } catch (err: any) {
     logger.warning(
       `Cannot read on-chain ELF (${err.message?.slice(0, 100) ?? err}); ` +

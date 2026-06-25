@@ -11,8 +11,11 @@ env:
   FOUNDRY_PROFILE: ci
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # EVM: forge test + hardhat compile/test + ABI drift check
+  # ---------------------------------------------------------------------------
   check:
-    name: Foundry project
+    name: EVM (Foundry + Hardhat)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -40,6 +43,35 @@ jobs:
       - name: Run Forge tests
         run: forge test -vvv
 
+      - name: Run Forge coverage (line threshold = 95%)
+        run: |
+          # Exclude test mocks / harnesses from the coverage run itself.
+          forge coverage --no-match-coverage 'test/|script/' --report summary | tee coverage.txt
+
+          # Gate: every src/ file must have >= 95% line coverage, and the
+          # overall Total line must be >= 95%. Parses the rendered summary
+          # table. Awk-only — no jq/python needed in CI.
+          awk -F'|' '
+            /^\| (src\/|Total)/ {
+              # Strip leading/trailing whitespace from each field.
+              for (i = 1; i <= NF; i++) {
+                gsub(/^[ \t]+|[ \t]+$/, "", $i)
+              }
+              file = $2
+              lines = $3
+              # Extract the percentage (e.g. "98.43% (188/191)" -> 98.43).
+              if (match(lines, /[0-9]+\.[0-9]+/)) {
+                pct = substr(lines, RSTART, RLENGTH) + 0
+                printf "  %-50s %s\n", file, lines
+                if (pct < 95.0) {
+                  printf "::error::%s line coverage %s is below 95%% threshold\n", file, lines
+                  failed = 1
+                }
+              }
+            }
+            END { exit failed }
+          ' coverage.txt
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -50,6 +82,14 @@ jobs:
 
       - name: Compile with Hardhat
         run: npx hardhat compile
+
+      - name: Run TypeScript type-check
+        run: npm run typecheck
+
+      - name: Run Hardhat tests
+        run: npx hardhat test
+        env:
+          FORK_NETWORK: mainnet
 
       - name: Export ABIs
         run: npm run export-abis
@@ -63,3 +103,185 @@ jobs:
             git diff artifacts/evm/ | head -200
             exit 1
           fi
+
+  # ---------------------------------------------------------------------------
+  # SVM: Anchor build + bankrun tests + cargo unit tests
+  #
+  # Uses Solana v3.1.10 + Anchor CLI v1.0.0 to match Anchor.toml [toolchain].
+  # The bankrun suite (litesvm, in-process) does NOT require a running validator.
+  # ---------------------------------------------------------------------------
+  svm-tests:
+    name: SVM (Anchor build + bankrun)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: SVM/oku-programs
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('SVM/oku-programs/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Cache Solana install
+        uses: actions/cache@v4
+        id: solana-cache
+        with:
+          path: ~/.local/share/solana
+          key: solana-3.1.10
+
+      - name: Install Solana CLI
+        if: steps.solana-cache.outputs.cache-hit != 'true'
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.1.10/install)"
+
+      - name: Add Solana to PATH
+        run: echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Cache Anchor CLI
+        uses: actions/cache@v4
+        id: anchor-cache
+        with:
+          path: ~/.cargo/bin/anchor
+          key: anchor-1.0.0
+
+      - name: Install Anchor CLI
+        if: steps.anchor-cache.outputs.cache-hit != 'true'
+        run: cargo install --git https://github.com/coral-xyz/anchor --tag v1.0.0 anchor-cli --locked --force
+
+      - name: Show tool versions
+        run: |
+          solana --version
+          anchor --version
+          node --version
+
+      - name: Generate Solana keypair for CI
+        run: solana-keygen new --no-bip39-passphrase --silent
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build Anchor programs
+        run: anchor build --ignore-keys
+
+      - name: Run bankrun test suite
+        run: npm run test:bankrun
+
+      - name: Trident harness compile smoke
+        # Verifies the fuzz harness still compiles against the current IDL +
+        # program surface. A full `trident fuzz run` is out of CI scope (heavy
+        # toolchain + multi-minute runtime); this catches harness drift.
+        working-directory: SVM/oku-programs/trident-tests
+        run: cargo check --all-targets
+
+  # ---------------------------------------------------------------------------
+  # SVM: cargo unit tests only (fast, no Solana toolchain needed)
+  # ---------------------------------------------------------------------------
+  svm-cargo:
+    name: SVM (cargo test --workspace)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: SVM/oku-programs
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-unit-${{ hashFiles('SVM/oku-programs/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-unit-
+
+      - name: Run cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: Run cargo unit tests
+        run: cargo test --workspace --lib --quiet
+
+      - name: Cache cargo-llvm-cov binary
+        uses: actions/cache@v4
+        id: cargo-llvm-cov-cache
+        with:
+          path: ~/.cargo/bin/cargo-llvm-cov
+          key: cargo-llvm-cov-0.8
+
+      - name: Install cargo-llvm-cov
+        if: steps.cargo-llvm-cov-cache.outputs.cache-hit != 'true'
+        run: cargo install --locked cargo-llvm-cov
+
+      - name: Install llvm-tools
+        run: rustup component add llvm-tools-preview
+
+      - name: Run cargo llvm-cov on oku-shared (pure-math crate, line threshold = 90%)
+        run: |
+          # JSON output is parser-friendly (vs. the rendered text table).
+          cargo llvm-cov --package oku-shared --lib --json --summary-only > coverage.json
+          cargo llvm-cov --package oku-shared --lib --summary-only
+
+          # Gate: oku-shared TOTAL line coverage must be >= 90%.
+          PCT=$(node -e "const d=require('./coverage.json'); console.log(d.data[0].totals.lines.percent.toFixed(2));")
+          echo "oku-shared total line coverage: ${PCT}%"
+          awk -v pct="$PCT" 'BEGIN { if (pct + 0 < 90.0) { print "::error::oku-shared line coverage " pct "% is below 90% threshold"; exit 1 } }'
+
+  # ---------------------------------------------------------------------------
+  # SVM: supply-chain hygiene (cargo-deny)
+  # ---------------------------------------------------------------------------
+  svm-deny:
+    name: SVM (cargo deny check)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: SVM/oku-programs
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo-deny binary
+        uses: actions/cache@v4
+        id: cargo-deny-cache
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-0.16
+
+      - name: Install cargo-deny
+        if: steps.cargo-deny-cache.outputs.cache-hit != 'true'
+        run: cargo install --locked cargo-deny
+
+      - name: Run cargo deny check
+        run: cargo deny check

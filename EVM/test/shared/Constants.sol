@@ -43,36 +43,8 @@ library TestConstants {
     /// @notice Default min collateral ratio for OkuDollar vault (95%)
     uint256 public constant MIN_COLLATERAL_RATIO = 95e16;
 
-    /// @notice Default bridge fee in basis points (0.1% = 10 bps)
-    uint256 public constant DEFAULT_BRIDGE_FEE = 10;
-
-    /// @notice Default bridge deadline (1 hour)
-    uint256 public constant DEFAULT_BRIDGE_DEADLINE = 1 hours;
-
-    /// @notice Default min bridge amount
-    uint128 public constant DEFAULT_MIN_BRIDGE_AMOUNT = 1e18;
-
-    /// @notice Default max bridge amount
-    uint128 public constant DEFAULT_MAX_BRIDGE_AMOUNT = 1_000_000e18;
-
     /// @notice Default PSM oracle staleness threshold for tests (1 hour)
     uint256 public constant DEFAULT_STALENESS_THRESHOLD = 1 hours;
-
-    // ============ Chain IDs for Testing ============
-
-    uint256 public constant OPTIMISM_CHAIN_ID = 10;
-    uint256 public constant ARBITRUM_CHAIN_ID = 42_161;
-    uint256 public constant BASE_CHAIN_ID = 8453;
-    uint256 public constant POLYGON_CHAIN_ID = 137;
-
-    /// @notice Solana mainnet chain ID (Wormhole format)
-    uint256 public constant SOLANA_MAINNET_CHAIN_ID = 1_399_811_149;
-
-    /// @notice Solana devnet chain ID (Wormhole format)
-    uint256 public constant SOLANA_DEVNET_CHAIN_ID = 1_399_811_150;
-
-    /// @notice Unsupported chain for negative tests
-    uint256 public constant UNSUPPORTED_CHAIN_ID = 999;
 
     // ============ Fuzz Bounds ============
 

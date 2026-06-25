@@ -8,11 +8,11 @@
  * an opt-in escape hatch via `npm run test:validator`.
  *
  * Why bankrun? `solana-test-validator` has a 30s confirmation polling
- * window in `@solana/web3.js@1.x` that times out on heavyweight bridge
- * transactions (Ed25519 sigverify + sysvar introspection + keccak256 +
- * PDA init + Token-2022 mint CPI in one tx). Bankrun runs the BPF
- * programs in-process via `solana-bankrun` (which wraps `litesvm`),
- * eliminating the validator's confirmation loop entirely.
+ * window in `@solana/web3.js@1.x` that times out on heavyweight
+ * transactions (multi-CPI mint + Token-2022 hop + PDA init in one
+ * call). Bankrun runs the BPF programs in-process via `solana-bankrun`
+ * (which wraps `litesvm`), eliminating the validator's confirmation
+ * loop entirely.
  *
  * `anchor-bankrun`'s `BankrunProvider` is structurally compatible with
  * `@anchor-lang/core`'s `Provider` interface — both sides have the same
@@ -170,8 +170,8 @@ export function loadProgramFromIdl<T extends Idl>(
 }
 
 /**
- * Resolve any other workspace program (oku_dollar, oku_bridge_router)
- * from the same harness. Loads the IDL from `target/idl/<name>.json`
+ * Resolve any other workspace program (e.g. oku_dollar) from the same
+ * harness. Loads the IDL from `target/idl/<name>.json`
  * and binds it to the harness's provider. Bypasses `anchor.workspace`'s
  * process-level cache (which would otherwise leak provider bindings
  * across sequential bankrun-flavoured test files).

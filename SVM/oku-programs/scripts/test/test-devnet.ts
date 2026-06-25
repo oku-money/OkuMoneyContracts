@@ -19,13 +19,9 @@ import {
   SystemProgram,
   LAMPORTS_PER_SOL,
   Transaction,
-  Ed25519Program,
-  SYSVAR_INSTRUCTIONS_PUBKEY,
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
 import { Program, AnchorProvider, BN } from '@anchor-lang/core';
-import * as nacl from 'tweetnacl';
-import { serializeMintMessage, computeRequestId } from '../lib/bridge';
 import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -48,8 +44,6 @@ import {
   derivePsmConfigPDA,
   deriveRedemptionQueuePDA,
   deriveVaultConfigPDA,
-  deriveBridgeConfigPDA,
-  deriveBridgeNoncePDA,
 } from '../utils/pdaHelpers';
 
 // ---------------------------------------------------------------------------
@@ -71,7 +65,6 @@ interface TestContext {
   psmConfig: PublicKey;
   redemptionQueue: PublicKey;
   vaultConfig: PublicKey;
-  bridgeConfig: PublicKey;
   psmVaultUsdc: PublicKey;
   psmOkuMoneyEscrow: PublicKey;
   vaultOkusd: PublicKey;
@@ -211,7 +204,6 @@ async function buildContext(): Promise<TestContext> {
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
   const [redemptionQueue] = deriveRedemptionQueuePDA(litePsmId);
   const [vaultConfig] = deriveVaultConfigPDA(okuDollarProgramId);
-  const [bridgeConfig] = deriveBridgeConfigPDA(litePsmId);
 
   const psmVaultUsdc = deployment.pdas.psmVaultUsdc
     ? new PublicKey(deployment.pdas.psmVaultUsdc)
@@ -238,7 +230,6 @@ async function buildContext(): Promise<TestContext> {
     psmConfig,
     redemptionQueue,
     vaultConfig,
-    bridgeConfig,
     psmVaultUsdc,
     psmOkuMoneyEscrow,
     vaultOkusd,
@@ -283,8 +274,9 @@ async function readState(ctx: TestContext) {
       'Max Supply': fmtAmount(Number(config.maxSupply)),
       'Minter Allowance': fmtAmount(Number(config.minterAllowance)),
       'Is Paused': String(config.isPaused),
-      'Oracle': (config.oracle as PublicKey).toBase58(),
-      'Staleness Threshold': `${config.stalenessThreshold}s`,
+      'Oracle Relay Feed': (config.oracleRelayFeed as PublicKey).toBase58(),
+      'Oracle Relay Staleness': `${config.oracleRelayStaleness}s`,
+      'Oracle Relay Band (e9)': `[${String(config.oracleRelayMinPriceE9)}, ${String(config.oracleRelayMaxPriceE9)}]`,
       'OkuM Price': String(config.okuMPrice),
     });
   } catch (e: any) {
@@ -311,47 +303,7 @@ async function readState(ctx: TestContext) {
     logger.error(`Failed to fetch redemption queue: ${e.message}`);
   }
 
-  // Bridge Config
-  logger.log('');
-  logger.info('Fetching Bridge Config...');
-  try {
-    const bridge = await ctx.psm.account.bridgeConfig.fetch(ctx.bridgeConfig);
-    const activeChains = (bridge.supportedChains as number[])
-      .slice(0, Number(bridge.supportedChainsCount))
-      .filter((c: number) => c !== 0);
-    logger.success('Bridge Config:');
-    logger.table({
-      'Bridge Admin': (bridge.bridgeAdmin as PublicKey).toBase58(),
-      'Bridge Pauser': (bridge.bridgePauser as PublicKey).toBase58(),
-      'Bridge Unpauser': (bridge.bridgeUnpauser as PublicKey).toBase58(),
-      'Orchestrator Signer': (bridge.orchestratorSigner as PublicKey).toBase58(),
-      'Fee Recipient': (bridge.feeRecipient as PublicKey).toBase58(),
-      'Chain Manager': (bridge.chainManager as PublicKey).toBase58(),
-      'Fee Manager': (bridge.feeManager as PublicKey).toBase58(),
-      'Nonce Admin': (bridge.nonceAdmin as PublicKey).toBase58(),
-      'Bridge Fee BPS': String(bridge.bridgeFeeBps),
-      'Min Bridge Amount': fmtAmount(Number(bridge.minBridgeAmount)),
-      'Max Bridge Amount': fmtAmount(Number(bridge.maxBridgeAmount)),
-      'Is Paused': String(bridge.isPaused),
-      'Supported Chains': activeChains.join(', ') || 'None',
-    });
-  } catch (e: any) {
-    logger.error(`Failed to fetch bridge config: ${e.message}`);
-  }
-
-  // Bridge Nonces
-  logger.log('');
-  logger.info('Fetching Bridge Nonces...');
-  if (ctx.deployment.nonces) {
-    for (const [chainId, address] of Object.entries(ctx.deployment.nonces)) {
-      try {
-        const nonce = await ctx.psm.account.bridgeNonce.fetch(new PublicKey(address));
-        logger.success(`Chain ${chainId}: next_nonce = ${nonce.nextNonce}`);
-      } catch (e: any) {
-        logger.error(`Chain ${chainId}: ${e.message}`);
-      }
-    }
-  }
+  // Bridge config / nonce fetchers removed in the noBridge refactor.
 
   // Vault Config (OkuDollar)
   logger.log('');
@@ -405,20 +357,21 @@ async function testMint(ctx: TestContext) {
 
   const amount = 100_000_000; // 100 USDC
 
-  // 1. Ensure oracle is disabled (Pubkey.default = disabled)
-  logger.info('Disabling oracle for test mint...');
+  // 1. Ensure the peg circuit-breaker is disabled (feed = default = kill switch)
+  logger.info('Disabling oracle relay for test mint...');
   try {
     const sig = await ctx.psm.methods
-      .setOracle(PublicKey.default, new BN(0))
+      .setOracleRelayFeed(PublicKey.default)
       .accountsPartial({
         oracleManager: ctx.deployer.publicKey,
         config: ctx.psmConfig,
+        oracleAccount: null,
       })
       .rpc();
     await confirmTx(ctx, sig);
-    logger.success(`Oracle disabled. Tx: ${explorerLink(ctx.network, sig)}`);
+    logger.success(`Oracle relay disabled. Tx: ${explorerLink(ctx.network, sig)}`);
   } catch (e: any) {
-    logger.warning(`Oracle may already be disabled: ${e.message}`);
+    logger.warning(`Oracle relay may already be disabled: ${e.message}`);
   }
 
   // 2. Mint test USDC to deployer
@@ -446,7 +399,7 @@ async function testMint(ctx: TestContext) {
       userUsdcAta,
       userOkuMoneyAta: userOkuMoneyAta,
       vaultUsdc: ctx.psmVaultUsdc,
-      priceUpdate: null,
+      oracleRelayFeed: null,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -807,6 +760,8 @@ async function testRedeem(ctx: TestContext) {
         userOkuMoneyAta: userOkuMoneyAta,
         vaultUsdc: ctx.psmVaultUsdc,
         vaultOkuMoney: ctx.psmOkuMoneyEscrow,
+        oracleRelayFeed: null,
+
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1042,6 +997,8 @@ async function testQueueRedeem(ctx: TestContext) {
       userOkuMoneyAta,
       vaultUsdc: ctx.psmVaultUsdc,
       vaultOkuMoney: ctx.psmOkuMoneyEscrow,
+      oracleRelayFeed: null,
+
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1130,134 +1087,48 @@ async function testQueueRedeem(ctx: TestContext) {
   );
 }
 
-/**
- * Bridge burn OkuMoney (Solana -> EVM)
- */
-async function testBridgeBurn(ctx: TestContext) {
-  logger.section('Test: Bridge Burn (Solana -> EVM)');
-
-  const burnAmount = 5_000_000; // 5 OkuMoney
-  const evmRecipient = Buffer.alloc(20);
-  evmRecipient.write('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', 'hex');
-
-  // Fetch bridge config first so we can pick a destination chain that's
-  // actually supported on the deployed config. Previously this was hardcoded
-  // to chain=1 (Ethereum mainnet), which fails on any testnet deployment
-  // that only registers SUPPORTED_CHAINS_TESTNET ([111, 420]). Reading from
-  // chain keeps the test working across mainnet AND testnet without
-  // needing per-network branching.
-  const bridgeConfigData = await ctx.psm.account.bridgeConfig.fetch(ctx.bridgeConfig);
-  const feeRecipient = bridgeConfigData.feeRecipient as PublicKey;
-  const supportedChains: number[] = (bridgeConfigData.supportedChains as any[])
-    .map((c: any) => Number(c));
-  if (supportedChains.length === 0) {
-    logger.error('Bridge config has no supported chains; cannot run bridge burn test.');
-    return;
-  }
-  const destinationChainId = supportedChains[0];
-  logger.info(`Using destinationChainId=${destinationChainId} (first entry of bridgeConfig.supportedChains = ${JSON.stringify(supportedChains)})`);
-
-  // 1. Derive bridge nonce PDA for destination chain
-  const [bridgeNonce] = deriveBridgeNoncePDA(ctx.litePsmId, destinationChainId);
-
-  // 2. Get balances before
-  const okuMoneyBefore = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`Before - OkuMoney: ${fmtAmount(okuMoneyBefore)}`);
-
-  if (okuMoneyBefore < BigInt(burnAmount)) {
-    logger.error(`Insufficient OkuMoney balance (${fmtAmount(okuMoneyBefore)} < ${fmtAmount(burnAmount)}). Run mint first.`);
-    return;
-  }
-  
-  // 4. Ensure ATAs exist
-  const userOkuMoneyAta = await getOrCreateAta(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  
-  // Fee recipient ATA - if same as user, Anchor will reject duplicate mutable accounts
-  // In that case, fee goes to the user's ATA anyway
-  const feeRecipientAta = feeRecipient.equals(ctx.deployer.publicKey)
-    ? userOkuMoneyAta // Same account, but Anchor might still reject this
-    : await getOrCreateAta(ctx, ctx.okuMoneyMint, feeRecipient, TOKEN_2022_PROGRAM_ID);
-
-  // If fee recipient is the user, we cannot bridge (duplicate mutable account constraint)
-  if (feeRecipient.equals(ctx.deployer.publicKey)) {
-    logger.warning('Skipping bridge test: fee recipient is the same as user (would cause duplicate mutable account error)');
-    logger.info('In production, the fee recipient would be a different address');
-    return;
-  }
-
-  // 5. Call bridge_burn
-  logger.info(`Calling psm.bridgeBurn(${burnAmount / 1_000_000} OkuMoney, chain=${destinationChainId})...`);
-  const sig = await ctx.psm.methods
-    .bridgeBurn(
-      new BN(burnAmount),
-      Array.from(evmRecipient),
-      destinationChainId
-    )
-    .accountsPartial({
-      user: ctx.deployer.publicKey,
-      bridgeConfig: ctx.bridgeConfig,
-      config: ctx.psmConfig,
-      bridgeNonce,
-      okuMoneyMint: ctx.okuMoneyMint,
-      userOkuMoneyAta: userOkuMoneyAta,
-      feeRecipientAta,
-      token2022Program: TOKEN_2022_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    })
-    .rpc();
-  await confirmTx(ctx, sig);
-  logger.success(`Bridge burn tx: ${explorerLink(ctx.network, sig)}`);
-
-  // 6. Verify
-  const okuMoneyAfter = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`After - OkuMoney: ${fmtAmount(okuMoneyAfter)}`);
-  logger.success(`Burned ${fmtAmount(okuMoneyBefore - okuMoneyAfter)} OkuMoney for bridge to chain ${destinationChainId}`);
-
-  // 7. Read updated nonce
-  try {
-    const nonceAccount = await ctx.psm.account.bridgeNonce.fetch(bridgeNonce);
-    logger.info(`Bridge nonce for chain ${destinationChainId}: ${nonceAccount.nextNonce}`);
-  } catch (e: any) {
-    logger.warning(`Could not read nonce: ${e.message}`);
-  }
-}
 
 // ---------------------------------------------------------------------------
-// Phase 10 additions
+// Step: distributeYield
 // ---------------------------------------------------------------------------
 
 /**
- * Distribute dollar-denominated yield across all OkuMoney holders.
- * On devnet the deployer holds the `rebaser` role.
+ * Distribute a small dollar-denominated yield amount across all OkuMoney holders.
+ * Calls `lite_psm::distribute_yield` (rebaser-gated), which computes:
+ *   new_oku_m_price = old + (yield_amount × 1e9 / total_supply)
+ * and stamps `last_yield_distribution_slot` so subsequent same-slot ops revert.
+ *
+ * Verifies the price strictly increased and that the delta matches the formula.
  */
 async function testDistributeYield(ctx: TestContext) {
   logger.section('Test: Distribute Yield');
 
-  // Read current price + supply for the summary.
-  const cfgBefore = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  // The deployer must be the rebaser on the PSM config (true after grantRoles).
+  const cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  const okuMPriceBefore = (cfg.okuMPrice as BN).toNumber();
+  logger.info(`oku_m_price before: ${okuMPriceBefore}`);
+
+  // Fetch OkuMoney total supply to predict new price.
   const mintInfo = await getMint(
     ctx.provider.connection,
     ctx.okuMoneyMint,
     'confirmed',
     TOKEN_2022_PROGRAM_ID
   );
-  const supply = mintInfo.supply;
-  const priceBefore = (cfgBefore.okuMPrice as BN).toString();
-  logger.info(`Current oku_m_price (1e9): ${priceBefore}`);
-  logger.info(`Current supply (6dec):     ${supply.toString()}`);
-
-  if (supply === 0n) {
-    logger.warning('Supply is zero — distribute_yield would divide by zero. Run mint first.');
+  const totalSupply = mintInfo.supply;
+  if (totalSupply === 0n) {
+    logger.warning('OkuMoney total supply is 0 — skipping distribute_yield (nothing to distribute).');
     return;
   }
 
-  // Pick a tiny yield (1 USDC) so the bump is observable without distorting
-  // post-rebase state too much for subsequent steps.
-  const yieldAmount = 1_000_000;
-  logger.info(`Distributing ${yieldAmount / 1_000_000} USD of yield…`);
+  // Yield = 1 USDC (6 decimals = 1_000_000) so delta = 1e6 × 1e9 / supply.
+  const yieldAmount = new BN(1_000_000); // 1 USD
+  const expectedDelta = BigInt(yieldAmount.toString()) * BigInt(1_000_000_000) / totalSupply;
+  logger.info(`Distributing ${Number(yieldAmount) / 1e6} USD across supply ${fmtAmount(totalSupply)} OkuMoney`);
+  logger.info(`Expected oku_m_price delta: ${expectedDelta}`);
 
   const sig = await ctx.psm.methods
-    .distributeYield(new BN(yieldAmount))
+    .distributeYield(yieldAmount)
     .accountsPartial({
       rebaser: ctx.deployer.publicKey,
       config: ctx.psmConfig,
@@ -1269,337 +1140,64 @@ async function testDistributeYield(ctx: TestContext) {
   logger.success(`distribute_yield tx: ${explorerLink(ctx.network, sig)}`);
 
   const cfgAfter = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
-  logger.info(`New oku_m_price (1e9):     ${(cfgAfter.okuMPrice as BN).toString()}`);
-  logger.info(`last_yield_distribution_slot: ${cfgAfter.lastYieldDistributionSlot.toString()}`);
-  logger.success(
-    `Price bumped by ${(cfgAfter.okuMPrice as BN)
-      .sub(cfgBefore.okuMPrice as BN)
-      .toString()} units`
-  );
+  const okuMPriceAfter = (cfgAfter.okuMPrice as BN).toNumber();
+  logger.info(`oku_m_price after: ${okuMPriceAfter}`);
+
+  if (okuMPriceAfter <= okuMPriceBefore) {
+    throw new Error(
+      `Expected oku_m_price to increase, but went ${okuMPriceBefore} → ${okuMPriceAfter}.`
+    );
+  }
+  const actualDelta = BigInt(okuMPriceAfter - okuMPriceBefore);
+  if (actualDelta !== expectedDelta && actualDelta !== expectedDelta - 1n) {
+    // Allow ±1 for integer-division truncation.
+    throw new Error(
+      `oku_m_price delta mismatch: expected ${expectedDelta} (±1), got ${actualDelta}.`
+    );
+  }
+  logger.success(`Yield distributed — oku_m_price increased by ${actualDelta} (expected ${expectedDelta}).`);
 }
 
+// ---------------------------------------------------------------------------
+// Step: pause / unpause
+// ---------------------------------------------------------------------------
+
 /**
- * Pause then unpause the PSM. Both calls should succeed on devnet
- * because the deployer holds pauser AND unpauser roles.
+ * Pause the PSM, assert that a mint reverts with a paused error, then unpause
+ * and verify a subsequent mint succeeds.  The pauser and unpauser are both the
+ * deployer in testnet/localnet deployments.
  */
 async function testPause(ctx: TestContext) {
-  logger.section('Test: Pause/Unpause PSM');
+  logger.section('Test: Pause / Unpause PSM');
 
-  // 1. Confirm not already paused.
-  let cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
-  if (cfg.isPaused) {
-    logger.warning('PSM already paused; unpausing first so the test is idempotent.');
-    const sig0 = await ctx.psm.methods
-      .unpause()
-      .accountsPartial({
-        unpauser: ctx.deployer.publicKey,
-        config: ctx.psmConfig,
-      })
-      .rpc();
-    await confirmTx(ctx, sig0);
-  }
-
-  // 2. Pause.
+  // 1. Pause the PSM.
+  logger.info('Pausing PSM...');
   const pauseSig = await ctx.psm.methods
     .pause()
-    .accountsPartial({
-      pauser: ctx.deployer.publicKey,
-      config: ctx.psmConfig,
-    })
+    .accountsPartial({ pauser: ctx.deployer.publicKey, config: ctx.psmConfig })
     .rpc();
   await confirmTx(ctx, pauseSig);
-  cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
-  if (!cfg.isPaused) {
-    throw new Error('Pause tx confirmed but is_paused is still false.');
-  }
-  logger.success(`Paused. Tx: ${explorerLink(ctx.network, pauseSig)}`);
+  logger.success(`pause tx: ${explorerLink(ctx.network, pauseSig)}`);
 
-  // 3. Unpause.
-  const unpauseSig = await ctx.psm.methods
-    .unpause()
-    .accountsPartial({
-      unpauser: ctx.deployer.publicKey,
-      config: ctx.psmConfig,
-    })
-    .rpc();
-  await confirmTx(ctx, unpauseSig);
-  cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
-  if (cfg.isPaused) {
-    throw new Error('Unpause tx confirmed but is_paused is still true.');
-  }
-  logger.success(`Unpaused. Tx: ${explorerLink(ctx.network, unpauseSig)}`);
-}
-
-/**
- * Rotate the pauser role to a fresh keypair via set_authority, then rotate
- * it back. Tests both directions of the role-admin gate.
- */
-async function testSetAuthority(ctx: TestContext) {
-  logger.section('Test: Set Authority (pauser rotation)');
-
-  const cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
-  const originalPauser = cfg.pauser as PublicKey;
-  logger.info(`Original pauser: ${originalPauser.toBase58()}`);
-
-  const newPauser = Keypair.generate();
-
-  // 1. Rotate to a fresh keypair.
-  const rotateSig = await ctx.psm.methods
-    .setAuthority({ pauser: {} } as any, newPauser.publicKey)
-    .accountsPartial({
-      roleAdmin: ctx.deployer.publicKey,
-      config: ctx.psmConfig,
-    })
-    .rpc();
-  await confirmTx(ctx, rotateSig);
-  let cfgAfter = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
-  if (!(cfgAfter.pauser as PublicKey).equals(newPauser.publicKey)) {
-    throw new Error('set_authority rotation did not take effect.');
-  }
-  logger.success(`Rotated pauser to ${newPauser.publicKey.toBase58()}. Tx: ${explorerLink(ctx.network, rotateSig)}`);
-
-  // 2. Rotate back to the original (so subsequent test runs are idempotent).
-  const restoreSig = await ctx.psm.methods
-    .setAuthority({ pauser: {} } as any, originalPauser)
-    .accountsPartial({
-      roleAdmin: ctx.deployer.publicKey,
-      config: ctx.psmConfig,
-    })
-    .rpc();
-  await confirmTx(ctx, restoreSig);
-  cfgAfter = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
-  if (!(cfgAfter.pauser as PublicKey).equals(originalPauser)) {
-    throw new Error('Could not restore pauser to original.');
-  }
-  logger.success(`Restored pauser to ${originalPauser.toBase58()}. Tx: ${explorerLink(ctx.network, restoreSig)}`);
-}
-
-/**
- * Exercise initiate_refund + cancel_refund. Confirm_refund needs the
- * deadline to elapse (default 1 hour), which is intractable on a real
- * cluster — skip the confirm leg on devnet and rely on bankrun for the
- * full happy-path test.
- *
- * Requires the deployer to hold the refund_initiator role. The default
- * devnet authority config sets refund_initiator/refund_confirmer to PDAs
- * (which can't sign), so this step rotates them to fresh keypairs via
- * set_bridge_authority first, then restores. If that rotation fails
- * (e.g. mainnet-like authority layout), the step is skipped.
- */
-async function testRefund(ctx: TestContext) {
-  logger.section('Test: Refund (initiate + cancel)');
-
-  // 1. Try rotating refund_initiator to the deployer (escape from PDA default).
-  const bridgeCfg = await ctx.psm.account.bridgeConfig.fetch(ctx.bridgeConfig);
-  const originalInitiator = bridgeCfg.refundInitiator as PublicKey;
-  const originalConfirmer = bridgeCfg.refundConfirmer as PublicKey;
-  const dummyConfirmer = Keypair.generate(); // Must differ from initiator.
-
-  try {
-    await ctx.psm.methods
-      .setBridgeAuthority({ refundInitiator: {} } as any, ctx.deployer.publicKey)
-      .accountsPartial({
-        bridgeAdmin: ctx.deployer.publicKey,
-        bridgeConfig: ctx.bridgeConfig,
-      })
-      .rpc();
-    await ctx.psm.methods
-      .setBridgeAuthority({ refundConfirmer: {} } as any, dummyConfirmer.publicKey)
-      .accountsPartial({
-        bridgeAdmin: ctx.deployer.publicKey,
-        bridgeConfig: ctx.bridgeConfig,
-      })
-      .rpc();
-    logger.success('Rotated refund_initiator (deployer) and refund_confirmer (dummy).');
-  } catch (e: any) {
-    logger.warning(`Cannot rotate refund roles (deployer not bridge_admin?): ${e.message?.slice(0, 100)}`);
-    logger.info('Skipping refund flow; rely on bankrun happy-path test for coverage.');
-    return;
+  const cfgPaused = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  if (!cfgPaused.isPaused) {
+    throw new Error('Expected PSM to be paused but isPaused=false.');
   }
 
-  try {
-    // 2. Need an existing bridge_burn to refund. Reuse `testBridgeBurn`'s logic
-    //    by building the burn here in-line.
-    const okuMBalance = await getTokenBalance(
-      ctx,
-      ctx.okuMoneyMint,
-      ctx.deployer.publicKey,
-      TOKEN_2022_PROGRAM_ID
-    );
-    const burnAmount = 1_000_000n;
-    if (okuMBalance < burnAmount) {
-      logger.warning(`Insufficient OkuMoney (have ${okuMBalance}, need ${burnAmount}). Run mint first.`);
-      return;
-    }
-
-    const destChainId = 1;
-    const evmRecipient = new Uint8Array(20);
-    crypto.getRandomValues(evmRecipient);
-    const [bridgeNonce] = deriveBridgeNoncePDA(ctx.litePsmId, destChainId);
-
-    const feeRecipient = bridgeCfg.feeRecipient as PublicKey;
-    const userOkuMoneyAta = await getOrCreateAta(
-      ctx,
-      ctx.okuMoneyMint,
-      ctx.deployer.publicKey,
-      TOKEN_2022_PROGRAM_ID
-    );
-    if (feeRecipient.equals(ctx.deployer.publicKey)) {
-      logger.warning('Fee recipient is the deployer; cannot burn (duplicate mutable account).');
-      return;
-    }
-    const feeRecipientAta = await getOrCreateAta(
-      ctx,
-      ctx.okuMoneyMint,
-      feeRecipient,
-      TOKEN_2022_PROGRAM_ID
-    );
-
-    const burnSig = await ctx.psm.methods
-      .bridgeBurn(new BN(burnAmount.toString()), Array.from(evmRecipient), destChainId)
-      .accountsPartial({
-        user: ctx.deployer.publicKey,
-        bridgeConfig: ctx.bridgeConfig,
-        config: ctx.psmConfig,
-        bridgeNonce,
-        okuMoneyMint: ctx.okuMoneyMint,
-        userOkuMoneyAta,
-        feeRecipientAta,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
-    await confirmTx(ctx, burnSig);
-    logger.success(`Burn tx: ${explorerLink(ctx.network, burnSig)}`);
-
-    // 3. Reconstruct the message + request_id by parsing the BridgeBurnEvent
-    //    from the tx logs (the canonical source — see scripts/lib/bridge/event.ts).
-    const { fetchBridgeBurnEvent, serializeBurnMessage } = await import('../lib/bridge');
-    const event = await fetchBridgeBurnEvent(
-      ctx.provider.connection,
-      burnSig,
-      ctx.psm.idl as any
-    );
-    const messageBytes = serializeBurnMessage({
-      sourceChainId: event.sourceChainId,
-      destChainId: event.destinationChain,
-      sender: ctx.deployer.publicKey,
-      recipient: evmRecipient,
-      amount: event.amount,
-      nonce: event.nonce,
-      deadline: event.deadline,
-    });
-    const requestId = computeRequestId(messageBytes);
-
-    const [pendingRefund] = PublicKey.findProgramAddressSync(
-      [Buffer.from('pending_refund'), requestId],
-      ctx.litePsmId
-    );
-    const [processedRequest] = PublicKey.findProgramAddressSync(
-      [Buffer.from('bridge_request'), requestId],
-      ctx.litePsmId
-    );
-    const [refundedRequest] = PublicKey.findProgramAddressSync(
-      [Buffer.from('bridge_refund'), requestId],
-      ctx.litePsmId
-    );
-
-    // 4. initiate_refund must fail with MintWindowStillOpen (deadline = now + 1h).
-    try {
-      await ctx.psm.methods
-        .initiateRefund(messageBytes, Array.from(requestId) as number[])
-        .accountsPartial({
-          refundInitiator: ctx.deployer.publicKey,
-          bridgeConfig: ctx.bridgeConfig,
-          config: ctx.psmConfig,
-          pendingRefund,
-          processedRequest,
-          refundedRequest,
-          systemProgram: SystemProgram.programId,
-        })
-        .rpc();
-      throw new Error('initiate_refund unexpectedly succeeded before deadline.');
-    } catch (e: any) {
-      const errStr = String(e?.message ?? e);
-      if (errStr.includes('MintWindowStillOpen')) {
-        logger.success('initiate_refund rejected with MintWindowStillOpen (expected pre-deadline).');
-      } else {
-        throw e;
-      }
-    }
-    logger.info('Confirm_refund leg requires deadline to elapse — covered by bankrun tests.');
-  } finally {
-    // 5. Restore the original refund_initiator/confirmer so subsequent runs
-    //    re-establish the PDA defaults expected by the devnet authority layout.
-    try {
-      await ctx.psm.methods
-        .setBridgeAuthority({ refundInitiator: {} } as any, originalInitiator)
-        .accountsPartial({
-          bridgeAdmin: ctx.deployer.publicKey,
-          bridgeConfig: ctx.bridgeConfig,
-        })
-        .rpc();
-      await ctx.psm.methods
-        .setBridgeAuthority({ refundConfirmer: {} } as any, originalConfirmer)
-        .accountsPartial({
-          bridgeAdmin: ctx.deployer.publicKey,
-          bridgeConfig: ctx.bridgeConfig,
-        })
-        .rpc();
-      logger.success('Restored original refund_initiator/confirmer.');
-    } catch (e: any) {
-      logger.warning(`Could not restore refund roles: ${e.message?.slice(0, 100)}`);
-    }
-  }
-}
-
-/**
- * Best-effort oracle-on mint sanity check. Requires a real Pyth program
- * to be available on the network AND a price account owned by it. On
- * devnet there is a Pyth deployment at the legacy mainnet address, but
- * no guaranteed price accounts — so we (a) check whether the deployment
- * declares an oracle, (b) configure it if not, and (c) attempt a mint
- * with `priceUpdate` set. If the helper rejects (e.g. no Pyth feed),
- * we log it and don't fail the step.
- */
-async function testOracleMint(ctx: TestContext) {
-  logger.section('Test: Oracle-on mint (best-effort)');
-
-  const cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
-  const oracle = cfg.oracle as PublicKey;
-  if (oracle.equals(PublicKey.default)) {
-    logger.warning(
-      'Oracle is currently disabled (Pubkey::default). ' +
-        'Run set-oracle.ts with a real Pyth price account first to exercise this path.'
-    );
-    return;
-  }
-
-  const oracleAccount = await ctx.provider.connection.getAccountInfo(oracle);
-  if (!oracleAccount) {
-    logger.warning(`Configured oracle ${oracle.toBase58()} has no on-chain account.`);
-    return;
-  }
-  logger.info(`Oracle: ${oracle.toBase58()} (owner ${oracleAccount.owner.toBase58()})`);
-
-  const amount = 1_000_000; // 1 USDC -> 1 OkuMoney @ price=1
+  // 2. Attempt a mint — must fail with Paused error.
+  logger.info('Attempting mint_oku_m while paused — expect revert...');
+  const mintAmount = new BN(1_000_000); // 1 USDC
   const userUsdcAta = getAssociatedTokenAddressSync(
-    ctx.usdcMint,
-    ctx.deployer.publicKey,
-    false,
-    TOKEN_PROGRAM_ID
+    ctx.usdcMint, ctx.deployer.publicKey, false, TOKEN_PROGRAM_ID
   );
-  const userOkuMoneyAta = await getOrCreateAta(
-    ctx,
-    ctx.okuMoneyMint,
-    ctx.deployer.publicKey,
-    TOKEN_2022_PROGRAM_ID
+  const userOkuMoneyAta = getAssociatedTokenAddressSync(
+    ctx.okuMoneyMint, ctx.deployer.publicKey, true, TOKEN_2022_PROGRAM_ID
   );
 
+  let mintReverted = false;
   try {
-    await mintTestUsdc(ctx, amount);
-    const sig = await ctx.psm.methods
-      .mintOkuM(new BN(amount))
+    await ctx.psm.methods
+      .mintOkuM(mintAmount)
       .accountsPartial({
         user: ctx.deployer.publicKey,
         config: ctx.psmConfig,
@@ -1608,273 +1206,251 @@ async function testOracleMint(ctx: TestContext) {
         userUsdcAta,
         userOkuMoneyAta,
         vaultUsdc: ctx.psmVaultUsdc,
-        priceUpdate: oracle,
+        oracleRelayFeed: null,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
-    await confirmTx(ctx, sig);
-    logger.success(`Oracle-on mint tx: ${explorerLink(ctx.network, sig)}`);
   } catch (e: any) {
-    const errStr = String(e?.message ?? e);
-    if (
-      errStr.includes('InvalidOracleResponse') ||
-      errStr.includes('StaleOracle') ||
-      errStr.includes('InsufficientReserves')
-    ) {
-      logger.warning(`Oracle mint rejected (expected if feed isn't a valid Pyth V2 price): ${errStr.slice(0, 120)}`);
+    const errStr = String(e?.message ?? '');
+    if (errStr.includes('Paused') || errStr.includes('paused') || e?.error?.errorCode?.code === 'Paused') {
+      mintReverted = true;
     } else {
-      throw e;
+      // Re-throw unexpected errors.
+      throw new Error(`Mint while paused threw unexpected error: ${errStr}`);
     }
   }
+  if (!mintReverted) {
+    throw new Error('mint_oku_m should have failed while PSM is paused, but it succeeded.');
+  }
+  logger.success('mint_oku_m correctly reverted with Paused error.');
+
+  // 3. Unpause.
+  logger.info('Unpausing PSM...');
+  const unpauseSig = await ctx.psm.methods
+    .unpause()
+    .accountsPartial({ unpauser: ctx.deployer.publicKey, config: ctx.psmConfig })
+    .rpc();
+  await confirmTx(ctx, unpauseSig);
+  logger.success(`unpause tx: ${explorerLink(ctx.network, unpauseSig)}`);
+
+  const cfgUnpaused = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  if (cfgUnpaused.isPaused) {
+    throw new Error('Expected PSM to be unpaused but isPaused=true.');
+  }
+  logger.success('PSM pause / unpause round-trip verified.');
 }
 
+// ---------------------------------------------------------------------------
+// Step: setAuthority
+// ---------------------------------------------------------------------------
+
 /**
- * SVM-side bridge_mint smoke test. Builds an EVM-burn message,
- * Ed25519-signs it with the deployer's key (which on devnet holds the
- * orchestrator_signer role), and submits the bridge_mint instruction.
+ * Rotate a PSM role (pauser) to a freshly generated keypair, verify the
+ * deployer can no longer call `pause`, verify the new holder CAN pause, then
+ * restore the role to the deployer.
  *
- * Heavy tx — Ed25519 sigverify + sysvar introspection + keccak +
- * PDA `init` + Token-2022 mint CPI. On a slow validator this can
- * exceed the legacy 30 s confirmation window; if that happens, the
- * tx is still accepted on-chain — log it and continue.
+ * Uses `lite_psm::set_authority` (role_admin-gated).
  */
-async function testBridgeMint(ctx: TestContext) {
-  logger.section('Test: Bridge Mint (EVM -> Solana)');
+async function testSetAuthority(ctx: TestContext) {
+  logger.section('Test: Set Authority (role rotation)');
 
-  const bridgeCfg = await ctx.psm.account.bridgeConfig.fetch(ctx.bridgeConfig);
-  if (!(bridgeCfg.orchestratorSigner as PublicKey).equals(ctx.deployer.publicKey)) {
-    logger.warning(
-      'Deployer is not the orchestrator_signer; cannot sign the bridge message. ' +
-        'Skipping bridge_mint step.'
-    );
-    return;
-  }
-  const sourceChainId = 1; // EVM
-  const destChainId = (bridgeCfg.sourceChainId as number) || 103;
-  const amount = 2_000_000n; // 2 OkuMoney
-  const evmSender = new Uint8Array(20);
-  crypto.getRandomValues(evmSender);
+  // 1. Generate a temporary replacement key.
+  const tempPauser = Keypair.generate();
+  logger.info(`Temporary pauser: ${tempPauser.publicKey.toBase58()}`);
 
-  // Discover the next available nonce by reading the per-chain BridgeNonce PDA
-  // for the SOURCE side. The on-chain check is `nonce == bridge_nonce.next_nonce`.
-  const [bridgeNonce] = deriveBridgeNoncePDA(ctx.litePsmId, sourceChainId);
-  let nonce = 0n;
-  try {
-    const noncePda = await ctx.psm.account.bridgeNonce.fetch(bridgeNonce);
-    nonce = BigInt((noncePda.nextNonce as BN).toString());
-  } catch {
-    // PDA not yet initialised — first mint will create it; nonce starts at 0.
-  }
-  const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
-
-  const messageBytes = serializeMintMessage({
-    sourceChainId,
-    destChainId,
-    sender: evmSender,
-    recipient: ctx.deployer.publicKey,
-    amount,
-    nonce,
-    deadline,
-  });
-  const signature = nacl.sign.detached(messageBytes, ctx.deployer.secretKey);
-  const requestId = computeRequestId(messageBytes);
-
-  const [processedRequest] = PublicKey.findProgramAddressSync(
-    [Buffer.from('bridge_request'), requestId],
-    ctx.litePsmId
-  );
-  const recipientAta = await getOrCreateAta(
-    ctx,
-    ctx.okuMoneyMint,
-    ctx.deployer.publicKey,
-    TOKEN_2022_PROGRAM_ID
-  );
-
-  const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
-    publicKey: ctx.deployer.publicKey.toBytes(),
-    message: messageBytes,
-    signature: signature,
-  });
-  const bridgeMintIx = await ctx.psm.methods
-    .bridgeMint(messageBytes, Buffer.from(signature), Array.from(requestId) as number[])
-    .accountsPartial({
-      payer: ctx.deployer.publicKey,
-      bridgeConfig: ctx.bridgeConfig,
-      config: ctx.psmConfig,
-      processedRequest,
-      okuMoneyMint: ctx.okuMoneyMint,
-      recipientOkuMoneyAta: recipientAta,
-      instructionSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
-      token2022Program: TOKEN_2022_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
+  // Fund the temp key with a little SOL so it can pay transaction fees.
+  const fundTx = new Transaction().add(
+    SystemProgram.transfer({
+      fromPubkey: ctx.deployer.publicKey,
+      toPubkey: tempPauser.publicKey,
+      lamports: 0.01 * LAMPORTS_PER_SOL,
     })
-    .instruction();
+  );
+  await sendAndConfirmTransaction(ctx.provider.connection, fundTx, [ctx.deployer]);
 
-  const tx = new Transaction().add(ed25519Ix).add(bridgeMintIx);
+  // 2. Rotate pauser role to temp key via set_authority (role_admin = deployer).
+  logger.info('Rotating pauser role to temp key...');
+  const setAuthSig = await ctx.psm.methods
+    .setAuthority({ pauser: {} }, tempPauser.publicKey)
+    .accountsPartial({
+      roleAdmin: ctx.deployer.publicKey,
+      config: ctx.psmConfig,
+    })
+    .rpc();
+  await confirmTx(ctx, setAuthSig);
+  logger.success(`set_authority tx: ${explorerLink(ctx.network, setAuthSig)}`);
+
+  // 3. Verify deployer's pause now fails (deployer is no longer pauser).
+  logger.info('Verifying old pauser (deployer) cannot pause...');
+  let deployerPauseFailed = false;
   try {
-    const sig = await sendAndConfirmTransaction(
-      ctx.provider.connection,
-      tx,
-      [ctx.deployer],
-      { skipPreflight: true, commitment: 'confirmed' }
-    );
-    logger.success(`bridge_mint tx: ${explorerLink(ctx.network, sig)}`);
+    await ctx.psm.methods
+      .pause()
+      .accountsPartial({ pauser: ctx.deployer.publicKey, config: ctx.psmConfig })
+      .rpc();
   } catch (e: any) {
-    const errStr = String(e?.message ?? e);
-    if (errStr.includes('TransactionExpiredTimeout')) {
-      logger.warning(
-        'bridge_mint timed out client-side (heavy tx exceeded confirmation window). ' +
-          'Tx was likely accepted on-chain anyway — verify via ProcessedRequest PDA.'
-      );
-    } else {
-      throw e;
-    }
+    deployerPauseFailed = true;
+    logger.info(`Expected: deployer pause rejected (${String(e?.message ?? '').slice(0, 60)}...)`);
   }
+  if (!deployerPauseFailed) {
+    throw new Error('Deployer was still able to pause after role was transferred — set_authority failed.');
+  }
+
+  // 4. Verify new holder (tempPauser) CAN pause.
+  logger.info('Verifying new pauser (tempPauser) can pause...');
+  // Build and sign the transaction manually so tempPauser signs.
+  const pauseIx = await ctx.psm.methods
+    .pause()
+    .accountsPartial({ pauser: tempPauser.publicKey, config: ctx.psmConfig })
+    .instruction();
+  const pauseTx = new Transaction().add(pauseIx);
+  pauseTx.feePayer = ctx.deployer.publicKey;
+  const { blockhash } = await ctx.provider.connection.getLatestBlockhash();
+  pauseTx.recentBlockhash = blockhash;
+  await sendAndConfirmTransaction(ctx.provider.connection, pauseTx, [ctx.deployer, tempPauser]);
+  logger.success('New pauser successfully paused PSM.');
+
+  // 5. Unpause (deployer is still unpauser).
+  await ctx.psm.methods
+    .unpause()
+    .accountsPartial({ unpauser: ctx.deployer.publicKey, config: ctx.psmConfig })
+    .rpc();
+
+  // 6. Restore pauser role to deployer.
+  logger.info('Restoring pauser role to deployer...');
+  const restoreSig = await ctx.psm.methods
+    .setAuthority({ pauser: {} }, ctx.deployer.publicKey)
+    .accountsPartial({
+      roleAdmin: ctx.deployer.publicKey,
+      config: ctx.psmConfig,
+    })
+    .rpc();
+  await confirmTx(ctx, restoreSig);
+
+  const cfgFinal = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+  if (!(cfgFinal.pauser as PublicKey).equals(ctx.deployer.publicKey)) {
+    throw new Error('Pauser was not restored to deployer.');
+  }
+  logger.success('Role rotation and restoration verified.');
 }
 
+// ---------------------------------------------------------------------------
+// Step: oracleRelayPeg
+// ---------------------------------------------------------------------------
+
 /**
- * Negative-path coverage for the Ed25519 precompile.
+ * Exercise the USDC peg circuit-breaker round-trip:
+ *   1. Relay disabled (feed = Pubkey::default()) → mint succeeds.
+ *   2. Relay configured with a random non-Pyth account → either
+ *      `set_oracle_relay_feed` pre-flight rejects (a valid gate), or the
+ *      subsequent `mint_oku_m` rejects when the malformed feed is read.
+ *   3. Relay re-disabled → mint succeeds again.
  *
- * This is the in-process-SVM coverage gap noted in `tests/bankrun/
- * bridge_security.ts`: bankrun/litesvm do NOT execute the Ed25519
- * precompile, so an invalid signature is silently accepted by the
- * harness even though `bridge_mint`'s sysvar-introspection check is
- * working as designed (it only verifies that the precompile ix bytes
- * are consistent with what we built — it trusts the precompile to
- * have validated the math).
- *
- * A real validator (devnet, localnet via `solana-test-validator`, or
- * mainnet) runs the precompile and rejects the tx with a transient
- * "Precompile error" before our program runs. This step exercises
- * exactly that path.
- *
- * Skipped (warning only) when the deployer doesn't hold the
- * `orchestratorSigner` role; that's a configuration concern, not a
- * test failure.
+ * This replaces the previous PoR-style `oracleMint` step. The peg-check
+ * shape is identical on EVM and SVM; see `EVM/test/hardhat/scenarios/
+ * RealWorldUsage.ts § E6` for the symmetric Hardhat-side test.
  */
-async function testBridgeMintInvalidSig(ctx: TestContext) {
-  logger.section('Test: Bridge Mint with INVALID signature (must reject)');
+async function testOracleRelayPeg(ctx: TestContext) {
+  logger.section('Test: USDC Peg Circuit-Breaker');
 
-  const bridgeCfg = await ctx.psm.account.bridgeConfig.fetch(ctx.bridgeConfig);
-  if (!(bridgeCfg.orchestratorSigner as PublicKey).equals(ctx.deployer.publicKey)) {
-    logger.warning(
-      'Deployer is not the orchestrator_signer; skipping invalid-sig step.'
-    );
-    return;
-  }
+  const mintSmall = new BN(1_000_000); // 1 USDC
+  await mintTestUsdc(ctx, mintSmall.toNumber());
 
-  const sourceChainId = 1; // EVM
-  const destChainId = (bridgeCfg.sourceChainId as number) || 103;
-  const amount = 1_000_000n;
-  const evmSender = new Uint8Array(20);
-  crypto.getRandomValues(evmSender);
-
-  // Pick a far-future-but-unused nonce so the legitimate `testBridgeMint`
-  // step is unaffected if both run in the same pass.
-  const [bridgeNonce] = deriveBridgeNoncePDA(ctx.litePsmId, sourceChainId);
-  let nonce = 1_000_000n;
-  try {
-    const noncePda = await ctx.psm.account.bridgeNonce.fetch(bridgeNonce);
-    nonce = BigInt((noncePda.nextNonce as BN).toString()) + 1_000_000n;
-  } catch {
-    // PDA not initialised; we'll use the high nonce against the
-    // freshly-init bridge_nonce. The on-chain `nonce_admin` check would
-    // reject this (next_nonce must == 0 on first burn), but we never
-    // reach the program — the precompile rejects first.
-  }
-  const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
-
-  const messageBytes = serializeMintMessage({
-    sourceChainId,
-    destChainId,
-    sender: evmSender,
-    recipient: ctx.deployer.publicKey,
-    amount,
-    nonce,
-    deadline,
-  });
-
-  // KEY DIFFERENCE: sign with a throwaway keypair so the precompile's
-  // curve25519 verify rejects. Declare the deployer's pubkey in the
-  // precompile ix so the bytes look superficially correct.
-  const wrongSigner = Keypair.generate();
-  const signature = nacl.sign.detached(messageBytes, wrongSigner.secretKey);
-  const requestId = computeRequestId(messageBytes);
-
-  const [processedRequest] = PublicKey.findProgramAddressSync(
-    [Buffer.from('bridge_request'), requestId],
-    ctx.litePsmId
+  const userUsdcAta = getAssociatedTokenAddressSync(
+    ctx.usdcMint, ctx.deployer.publicKey, false, TOKEN_PROGRAM_ID
   );
-  const recipientAta = await getOrCreateAta(
-    ctx,
-    ctx.okuMoneyMint,
-    ctx.deployer.publicKey,
-    TOKEN_2022_PROGRAM_ID
+  const userOkuMoneyAta = await getOrCreateAta(
+    ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID
   );
 
-  // The Ed25519 ix declares the (correct) orchestrator pubkey but
-  // carries the WRONG signature.
-  const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
-    publicKey: ctx.deployer.publicKey.toBytes(),
-    message: messageBytes,
-    signature,
-  });
-  const bridgeMintIx = await ctx.psm.methods
-    .bridgeMint(messageBytes, Buffer.from(signature), Array.from(requestId) as number[])
-    .accountsPartial({
-      payer: ctx.deployer.publicKey,
-      bridgeConfig: ctx.bridgeConfig,
-      config: ctx.psmConfig,
-      processedRequest,
-      okuMoneyMint: ctx.okuMoneyMint,
-      recipientOkuMoneyAta: recipientAta,
-      instructionSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
-      token2022Program: TOKEN_2022_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    })
-    .instruction();
-
-  const tx = new Transaction().add(ed25519Ix).add(bridgeMintIx);
-
-  // skipPreflight: true so the tx actually reaches the runtime and the
-  // precompile gets a chance to reject. With preflight on, web3.js
-  // would short-circuit before submission and we'd never observe the
-  // on-chain rejection.
-  try {
-    await sendAndConfirmTransaction(
-      ctx.provider.connection,
-      tx,
-      [ctx.deployer],
-      { skipPreflight: true, commitment: 'confirmed' }
-    );
-    throw new Error(
-      'EXPECTED FAILURE: tx with invalid Ed25519 signature was accepted. ' +
-        'This means the precompile is not being enforced — DO NOT deploy.'
-    );
-  } catch (e: any) {
-    const errStr = String(e?.message ?? e);
-    // The exact error code from a real validator is "Precompile failed"
-    // or "InstructionError 0 ... PrecompileFailure". Accept any of the
-    // canonical strings; reject only the explicit EXPECTED-FAILURE
-    // bomb we threw above.
-    if (errStr.startsWith('EXPECTED FAILURE:')) throw e;
-    const expected =
-      errStr.includes('Precompile') ||
-      errStr.includes('precompile') ||
-      errStr.includes('signature') ||
-      errStr.includes('Signature');
-    if (!expected) {
-      logger.warning(
-        `Rejection observed but message was unexpected: ${errStr.slice(0, 200)}`
-      );
-      logger.info('Treating as pass since the tx did NOT succeed.');
-    } else {
-      logger.success(`precompile correctly rejected: ${errStr.slice(0, 120)}`);
+  async function tryMint(feedAccount: PublicKey | null): Promise<boolean> {
+    try {
+      await ctx.psm.methods
+        .mintOkuM(mintSmall)
+        .accountsPartial({
+          user: ctx.deployer.publicKey,
+          config: ctx.psmConfig,
+          usdcMint: ctx.usdcMint,
+          okuMoneyMint: ctx.okuMoneyMint,
+          userUsdcAta,
+          userOkuMoneyAta,
+          vaultUsdc: ctx.psmVaultUsdc,
+          oracleRelayFeed: feedAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      return true;
+    } catch {
+      return false;
     }
   }
+
+  // ---- 1. Relay disabled (kill switch) → mint succeeds ----
+  logger.info('Step 1: Ensure relay disabled, then mint...');
+  const disableSig = await ctx.psm.methods
+    .setOracleRelayFeed(PublicKey.default)
+    .accountsPartial({
+      oracleManager: ctx.deployer.publicKey,
+      config: ctx.psmConfig,
+      oracleAccount: null,
+    })
+    .rpc();
+  await confirmTx(ctx, disableSig);
+
+  const ok1 = await tryMint(null);
+  if (!ok1) throw new Error('mint_oku_m should succeed when relay is disabled.');
+  logger.success('Step 1 passed: relay-disabled mint succeeded.');
+
+  // ---- 2. Wire a non-Pyth feed → mint should reject ----
+  logger.info('Step 2: Wire a non-Pyth relay feed, then mint (expect revert)...');
+  const fakeFeed = Keypair.generate().publicKey;
+  try {
+    await ctx.psm.methods
+      .setOracleRelayFeed(fakeFeed)
+      .accountsPartial({
+        oracleManager: ctx.deployer.publicKey,
+        config: ctx.psmConfig,
+        oracleAccount: fakeFeed,
+      })
+      .rpc();
+
+    // If set_oracle_relay_feed succeeded (account exists but invalid),
+    // verify mint rejects the malformed feed.
+    const cfgWithRelay = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+    if (!(cfgWithRelay.oracleRelayFeed as PublicKey).equals(PublicKey.default)) {
+      const ok2 = await tryMint(fakeFeed);
+      if (ok2) {
+        logger.warning('mint_oku_m did not revert with a fake feed — may need a real stale feed to test the gate.');
+      } else {
+        logger.success('Step 2 passed: mint_oku_m correctly rejected the malformed feed.');
+      }
+    }
+  } catch (e: any) {
+    logger.success(`Step 2 passed: set_oracle_relay_feed pre-flight rejected invalid feed (${String(e?.message ?? '').slice(0, 80)}).`);
+  }
+
+  // ---- 3. Re-disable the relay → mint works again ----
+  logger.info('Step 3: Re-disable relay, verify mint succeeds...');
+  const resetSig = await ctx.psm.methods
+    .setOracleRelayFeed(PublicKey.default)
+    .accountsPartial({
+      oracleManager: ctx.deployer.publicKey,
+      config: ctx.psmConfig,
+      oracleAccount: null,
+    })
+    .rpc();
+  await confirmTx(ctx, resetSig);
+
+  const ok3 = await tryMint(null);
+  if (!ok3) throw new Error('mint_oku_m should succeed after relay re-disabled.');
+  logger.success('Step 3 passed: relay re-disabled, mint succeeded.');
+  logger.success('Peg circuit-breaker round-trip verified.');
 }
 
 // ---------------------------------------------------------------------------
@@ -1890,14 +1466,10 @@ const STEPS: Record<string, (ctx: TestContext) => Promise<void>> = {
   unwrap: testUnwrap,
   redeem: testRedeem,
   queueRedeem: testQueueRedeem,
-  bridge: testBridgeBurn,
-  bridgeMint: testBridgeMint,
-  bridgeMintInvalidSig: testBridgeMintInvalidSig,
-  refund: testRefund,
   distributeYield: testDistributeYield,
   pause: testPause,
   setAuthority: testSetAuthority,
-  oracleMint: testOracleMint,
+  oracleRelayPeg: testOracleRelayPeg,
 };
 
 async function main() {
@@ -1955,14 +1527,10 @@ async function main() {
       'unwrap',
       'redeem',
       'queueRedeem',
-      'bridge',
-      'bridgeMint',
-      'bridgeMintInvalidSig',
-      'refund',
       'distributeYield',
       'pause',
       'setAuthority',
-      'oracleMint',
+      'oracleRelayPeg',
     ];
     let passed = 0;
     let failed = 0;

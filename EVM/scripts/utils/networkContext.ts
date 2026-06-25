@@ -1,5 +1,5 @@
 /**
- * Centralized network resolution for deploy / test / bridge scripts.
+ * Centralized network resolution for deploy / test / admin scripts.
  *
  * A "network context" cleanly separates three things that scripts repeatedly
  * confused before:
@@ -56,7 +56,7 @@ const FORK_RUNTIME_NETWORKS = new Set(["localhost", "hardhat"]);
  * Async because it may need to query the running node's chainId for auto-detect.
  *
  * @param opts.silent - if true, suppress info-level logs about auto-detection.
- *                      Useful for quick read-only scripts (bridge state checks).
+ *                      Useful for quick read-only scripts.
  */
 export async function resolveNetworkContext(
   opts: { silent?: boolean } = {}

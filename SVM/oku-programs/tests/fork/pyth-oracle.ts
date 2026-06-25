@@ -189,10 +189,10 @@ describe("Pyth Oracle Fork Tests", function () {
 
       // In actual PSM integration, passing this account should fail validation
       // await expectError(
-      //   () => program.methods.mintOkuMWithOracle(amount).accounts({
-      //     priceUpdate: fakePriceAccount,
+      //   () => program.methods.mintOkuM(amount).accounts({
+      //     oracleRelayFeed: fakePriceAccount,
       //   }).rpc(),
-      //   "InvalidPriceAccount"
+      //   "InvalidOracleResponse"
       // );
     });
   });

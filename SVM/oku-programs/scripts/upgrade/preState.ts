@@ -13,7 +13,6 @@
  *   is_paused         → isPaused
  *   role_admin        → roleAdmin
  *   oku_money_mint    → okuMoneyMint
- *   bridge_fee_bps    → bridgeFeeBps
  *   etc.
  */
 
@@ -22,9 +21,7 @@ import { Program, BN } from '@anchor-lang/core';
 import {
   derivePsmConfigPDA,
   deriveRedemptionQueuePDA,
-  deriveBridgeConfigPDA,
   deriveVaultConfigPDA,
-  deriveRouterConfigPDA,
 } from '../utils/pdaHelpers';
 
 // ============================================================================
@@ -33,11 +30,10 @@ import {
 
 export type StateSnapshot = Record<string, string>;
 
-/** All three Anchor program handles needed for state reading. */
+/** Anchor program handles needed for state reading. */
 export interface ProgramSet {
   psm: Program;
   vault: Program;
-  router: Program;
 }
 
 export interface FieldDiff {
@@ -75,7 +71,7 @@ function str(v: unknown): string {
 /**
  * Snapshot LitePSM's invariant on-chain state.
  *
- * Three PDAs are read: PsmConfig, RedemptionQueue, BridgeConfig.
+ * Two PDAs are read: PsmConfig and RedemptionQueue.
  * Fields that legitimately change between admin ops (price, nonces, balances)
  * are omitted — we only capture structural/config fields that must stay
  * identical across an upgrade.
@@ -86,7 +82,6 @@ export async function readLitePsmState(
 ): Promise<StateSnapshot> {
   const [psmConfigPDA] = derivePsmConfigPDA(programId);
   const [redemptionQueuePDA] = deriveRedemptionQueuePDA(programId);
-  const [bridgeConfigPDA] = deriveBridgeConfigPDA(programId);
 
   const snap: StateSnapshot = {};
 
@@ -100,9 +95,14 @@ export async function readLitePsmState(
     snap['psm.usdcMint']           = str(cfg.usdcMint);
     snap['psm.okuMoneyMint']       = str(cfg.okuMoneyMint);
     snap['psm.maxSupply']          = str(cfg.maxSupply);
-    snap['psm.oracleEnabled']      = str(cfg.oracleEnabled ?? cfg.oracle?.toBase58() !== PublicKey.default.toBase58());
-    snap['psm.stalenessThreshold'] = str(cfg.stalenessThreshold);
-    snap['psm.pythProgramOwner']   = str(cfg.pythProgramOwner);
+    snap['psm.oracleRelayEnabled'] = str(
+      cfg.oracleRelayFeed?.toBase58() !== PublicKey.default.toBase58()
+    );
+    snap['psm.oracleRelayFeed']    = str(cfg.oracleRelayFeed);
+    snap['psm.oracleRelayStaleness'] = str(cfg.oracleRelayStaleness);
+    snap['psm.oracleRelayMinE9']   = str(cfg.oracleRelayMinPriceE9);
+    snap['psm.oracleRelayMaxE9']   = str(cfg.oracleRelayMaxPriceE9);
+    snap['psm.oracleRelayPythProgramOwner'] = str(cfg.oracleRelayPythProgramOwner);
   } catch (e: any) {
     snap['psm.fetchError'] = (e.message ?? String(e)).slice(0, 120);
   }
@@ -118,23 +118,6 @@ export async function readLitePsmState(
     snap['queue.tail'] = str(q.tail);
   } catch (e: any) {
     snap['queue.fetchError'] = (e.message ?? String(e)).slice(0, 120);
-  }
-
-  // BridgeConfig
-  try {
-    const bc: any = await psm.account['bridgeConfig'].fetch(bridgeConfigPDA);
-    snap['bridge.isPaused']          = str(bc.isPaused);
-    snap['bridge.bridgeAdmin']       = str(bc.bridgeAdmin);
-    snap['bridge.orchestratorSigner'] = str(bc.orchestratorSigner);
-    snap['bridge.feeRecipient']      = str(bc.feeRecipient);
-    snap['bridge.bridgeFeeBps']      = str(bc.bridgeFeeBps);
-    snap['bridge.minBridgeAmount']   = str(bc.minBridgeAmount);
-    snap['bridge.maxBridgeAmount']   = str(bc.maxBridgeAmount);
-    snap['bridge.bridgeDeadlineSecs'] = str(bc.bridgeDeadlineSecs);
-    snap['bridge.sourceChainId']     = str(bc.sourceChainId);
-    snap['bridge.supportedChainsCount'] = str(bc.supportedChainsCount);
-  } catch (e: any) {
-    snap['bridge.fetchError'] = (e.message ?? String(e)).slice(0, 120);
   }
 
   return snap;
@@ -173,34 +156,6 @@ export async function readOkuDollarState(
   return snap;
 }
 
-/**
- * Snapshot OkuBridgeRouter's invariant on-chain state.
- *
- * Reads the RouterConfig PDA.
- */
-export async function readOkuBridgeRouterState(
-  router: Program,
-  programId: PublicKey
-): Promise<StateSnapshot> {
-  const [routerConfigPDA] = deriveRouterConfigPDA(programId);
-  const snap: StateSnapshot = {};
-
-  try {
-    const rc: any = await router.account['routerConfig'].fetch(routerConfigPDA);
-    snap['router.isPaused']      = str(rc.isPaused);
-    snap['router.roleAdmin']     = str(rc.roleAdmin);
-    snap['router.pauser']        = str(rc.pauser);
-    snap['router.unpauser']      = str(rc.unpauser);
-    snap['router.okuMoneyMint']  = str(rc.okuMoneyMint);
-    snap['router.usdOkuMint']    = str(rc.usdOkuMint);
-    snap['router.pendingRoleAdmin'] = str(rc.pendingRoleAdmin);
-  } catch (e: any) {
-    snap['router.fetchError'] = (e.message ?? String(e)).slice(0, 120);
-  }
-
-  return snap;
-}
-
 // ============================================================================
 // Reader registry
 // ============================================================================
@@ -211,9 +166,8 @@ export type StateReader = (
 ) => Promise<StateSnapshot>;
 
 export const STATE_READERS: Record<string, StateReader> = {
-  LitePsm:         (ps, id) => readLitePsmState(ps.psm, id),
-  OkuDollar:       (ps, id) => readOkuDollarState(ps.vault, id),
-  OkuBridgeRouter: (ps, id) => readOkuBridgeRouterState(ps.router, id),
+  LitePsm:   (ps, id) => readLitePsmState(ps.psm, id),
+  OkuDollar: (ps, id) => readOkuDollarState(ps.vault, id),
 };
 
 // ============================================================================

@@ -26,9 +26,14 @@ pub struct MintOkuM<'info> {
 
     /// OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy
     /// script chooses which extensions (if any) are configured at mint creation.
+    /// `mint::authority = config` is defense-in-depth: even if someone attempted
+    /// an out-of-band mint-authority rotation (which requires a CPI signed by
+    /// the current authority = config PDA, so it cannot happen without the
+    /// program's consent), this constraint would catch it at deserialization.
     #[account(
         mut,
         address = config.oku_money_mint,
+        mint::authority = config,
         mint::token_program = token_2022_program
     )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
@@ -59,9 +64,12 @@ pub struct MintOkuM<'info> {
     )]
     pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
-    /// Pyth price account (optional - only required if oracle is configured)
-    /// CHECK: Validated manually in check_oracle_reserves - verifies account key matches config.oracle
-    pub price_update: Option<UncheckedAccount<'info>>,
+    /// USDC/USD Pyth feed used by the oracle-relay peg-check (optional —
+    /// only required when `config.oracle_relay_feed != Pubkey::default()`).
+    /// CHECK: validated manually in `check_usdc_peg`; verifies that the
+    /// account key matches `config.oracle_relay_feed` and the owner
+    /// matches `config.oracle_relay_pyth_program_owner`.
+    pub oracle_relay_feed: Option<UncheckedAccount<'info>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -97,11 +105,12 @@ pub struct RedeemOkuM<'info> {
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Box<Account<'info, Mint>>,
 
-    /// OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy
-    /// script chooses which extensions (if any) are configured at mint creation.
+    /// OkuMoney mint (Token-2022). `mint::authority = config` is defense-in-depth
+    /// (see rationale on `MintOkuM::oku_money_mint`).
     #[account(
         mut,
         address = config.oku_money_mint,
+        mint::authority = config,
         mint::token_program = token_2022_program
     )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
@@ -147,6 +156,11 @@ pub struct RedeemOkuM<'info> {
     )]
     pub vault_oku_money: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
+    /// USDC/USD Pyth feed for the peg circuit-breaker (optional — only
+    /// required when `config.oracle_relay_feed != Pubkey::default()`).
+    /// CHECK: validated manually in `check_usdc_peg`.
+    pub oracle_relay_feed: Option<UncheckedAccount<'info>>,
+
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -174,10 +188,13 @@ pub struct ProcessQueue<'info> {
     )]
     pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
 
-    /// OkuMoney mint (Token-2022) - needed for burn CPI and price reads
+    /// OkuMoney mint (Token-2022) — needed for burn CPI and price reads.
+    /// `mint::authority = config` is defense-in-depth (see rationale on
+    /// `MintOkuM::oku_money_mint`).
     #[account(
         mut,
         address = config.oku_money_mint,
+        mint::authority = config,
         mint::token_program = token_2022_program
     )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
@@ -199,6 +216,11 @@ pub struct ProcessQueue<'info> {
         token::token_program = token_2022_program,
     )]
     pub vault_oku_money: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    /// USDC/USD Pyth feed for the peg circuit-breaker (optional — only
+    /// required when `config.oracle_relay_feed != Pubkey::default()`).
+    /// CHECK: validated manually in `check_usdc_peg`.
+    pub oracle_relay_feed: Option<UncheckedAccount<'info>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -283,6 +305,70 @@ pub struct WithdrawBuffer<'info> {
     pub usdc_mint: Box<Account<'info, Mint>>,
 
     pub token_program: Program<'info, Token>,
+    pub token_2022_program: Program<'info, Token2022>,
+}
+
+/// Permissionless self-rescue — any user can withdraw THEIR OWN queued
+/// OkuMoney back to themselves. Cycle 4 (PSM-06): the dual to operator
+/// `rescue_queue_entry`. Resolves the head-pin DoS where a frozen /
+/// wrong-owner ATA on the head entry indefinitely blocks `process_queue`
+/// for everyone downstream. The user whose entry is stuck can call this
+/// to clear their slot, which both unblocks the queue and returns their
+/// OkuMoney to a recipient ATA they control.
+///
+/// Constraints (vs the operator rescue below):
+///   * `user` MUST be the original queued user — checked in the handler
+///     against the entry's stored `user` field. No `has_one` here because
+///     the user pubkey lives inside the queue zero-copy data, not on
+///     `PsmConfig`.
+///   * `recipient_oku_money_ata` MUST be owned by `user` — `token::authority`
+///     constraint pins this.
+///
+/// The instruction does NOT require the queue to be at head — any
+/// pending entry the user owns can be rescued. This matches the existing
+/// operator rescue's permissions and lets a user unblock themselves
+/// even if their entry isn't at the head.
+#[derive(Accounts)]
+pub struct UserSelfRescueQueueEntry<'info> {
+    pub user: Signer<'info>,
+
+    #[account(
+        seeds = [PsmConfig::SEED],
+        bump = config.bump,
+    )]
+    pub config: Box<Account<'info, PsmConfig>>,
+
+    #[account(
+        mut,
+        seeds = [RedemptionQueue::SEED],
+        bump
+    )]
+    pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
+
+    #[account(
+        address = config.oku_money_mint,
+        mint::token_program = token_2022_program
+    )]
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    #[account(
+        mut,
+        address = config.vault_oku_money
+    )]
+    pub vault_oku_money: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    /// Recipient ATA — must be owned by `user` (enforced by
+    /// `token::authority = user`). Pinning the authority is what
+    /// distinguishes self-rescue from the privileged operator rescue
+    /// (which can target an arbitrary recipient).
+    #[account(
+        mut,
+        token::mint = oku_money_mint,
+        token::authority = user,
+        token::token_program = token_2022_program,
+    )]
+    pub recipient_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
     pub token_2022_program: Program<'info, Token2022>,
 }
 

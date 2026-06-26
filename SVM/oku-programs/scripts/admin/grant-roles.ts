@@ -19,10 +19,24 @@
 
 import * as anchor from '@anchor-lang/core';
 import { Program } from '@anchor-lang/core';
-import { PublicKey } from '@solana/web3.js';
+import {
+  Keypair,
+  PublicKey,
+  Transaction,
+  sendAndConfirmTransaction,
+} from '@solana/web3.js';
+import {
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountInstruction,
+  createMintToInstruction,
+  getAccount,
+} from '@solana/spl-token';
+import * as os from 'os';
 import { LitePsm } from '../../target/types/lite_psm';
 import { OkuDollar } from '../../target/types/oku_dollar';
-import { createProvider, detectNetwork } from '../utils/network';
+import { createProvider, detectNetwork, loadKeypair } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import { derivePsmConfigPDA, deriveVaultConfigPDA } from '../utils/pdaHelpers';
@@ -40,6 +54,9 @@ function parseArg(name: string): string | undefined {
 }
 
 const MASTER_PUBKEY = new PublicKey(parseArg('master') ?? DEFAULT_MASTER);
+
+/** Amount of mock USDC to mint to the master EOA (100k USDC, 6 decimals). */
+const USDC_MINT_AMOUNT = 100_000 * 1_000_000; // 100,000 USDC
 
 // ============================================================================
 // Role definitions
@@ -244,6 +261,75 @@ async function main() {
       const msg = e?.message?.slice(0, 80) ?? String(e);
       logger.error(`  ${role.padEnd(20)} error: ${msg}`);
       results.push({ program: 'oku-dollar', role, status: 'error', detail: msg });
+    }
+  }
+
+  // ---- Mint mock USDC to master EOA ----
+  logger.section('Mock USDC mint');
+
+  const usdcMintAddr = deployment.tokens?.usdc;
+  if (!usdcMintAddr) {
+    logger.warning('No USDC mint in deployment; skipping mock USDC mint.');
+  } else {
+    const usdcMint = new PublicKey(usdcMintAddr);
+
+    // Load the deployer keypair (needed for signing mintTo -- the deployer
+    // is the mint authority on mock USDC).
+    const walletPath =
+      process.env.WALLET_PATH || `${os.homedir()}/.config/solana/id.json`;
+    const deployer = loadKeypair(walletPath);
+    const connection = provider.connection;
+
+    // Get or create the master's USDC ATA.
+    const masterUsdcAta = getAssociatedTokenAddressSync(
+      usdcMint,
+      MASTER_PUBKEY,
+      true,
+      TOKEN_PROGRAM_ID
+    );
+    const ataInfo = await connection.getAccountInfo(masterUsdcAta);
+    if (!ataInfo) {
+      if (dryRun) {
+        logger.info(`Would create USDC ATA for ${MASTER_PUBKEY.toBase58().slice(0, 12)}...`);
+      } else {
+        const createAtaTx = new Transaction().add(
+          createAssociatedTokenAccountInstruction(
+            deployer.publicKey,
+            masterUsdcAta,
+            MASTER_PUBKEY,
+            usdcMint,
+            TOKEN_PROGRAM_ID,
+            ASSOCIATED_TOKEN_PROGRAM_ID
+          )
+        );
+        await sendAndConfirmTransaction(connection, createAtaTx, [deployer]);
+        logger.success(`Created USDC ATA ${masterUsdcAta.toBase58().slice(0, 12)}...`);
+      }
+    }
+
+    if (dryRun) {
+      logger.info(
+        `Would mint ${USDC_MINT_AMOUNT / 1_000_000} USDC to ${MASTER_PUBKEY.toBase58().slice(0, 12)}...`
+      );
+    } else {
+      const mintTx = new Transaction().add(
+        createMintToInstruction(
+          usdcMint,
+          masterUsdcAta,
+          deployer.publicKey,
+          USDC_MINT_AMOUNT,
+          [],
+          TOKEN_PROGRAM_ID
+        )
+      );
+      const sig = await sendAndConfirmTransaction(connection, mintTx, [deployer]);
+      logger.success(
+        `Minted ${USDC_MINT_AMOUNT / 1_000_000} USDC to ${MASTER_PUBKEY.toBase58().slice(0, 12)}... (tx: ${sig.slice(0, 20)}...)`
+      );
+
+      // Verify
+      const acct = await getAccount(connection, masterUsdcAta, 'confirmed', TOKEN_PROGRAM_ID);
+      logger.info(`Master USDC balance: ${Number(acct.amount) / 1_000_000} USDC`);
     }
   }
 

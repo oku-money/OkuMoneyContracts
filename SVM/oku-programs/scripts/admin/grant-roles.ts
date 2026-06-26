@@ -55,8 +55,13 @@ function parseArg(name: string): string | undefined {
 
 const MASTER_PUBKEY = new PublicKey(parseArg('master') ?? DEFAULT_MASTER);
 
-/** Amount of mock USDC to mint to the master EOA (100k USDC, 6 decimals). */
+/** Amount of mock USDC to mint (100k USDC, 6 decimals). */
 const USDC_MINT_AMOUNT = 100_000 * 1_000_000; // 100,000 USDC
+
+/** Recipient for mock USDC mint (may differ from the master EOA). */
+const USDC_RECIPIENT = new PublicKey(
+  parseArg('usdc-recipient') ?? '2rWhEhK8kqdsS8NjtAQZdG6CK17NZMnPKmsrrsDuotoo'
+);
 
 // ============================================================================
 // Role definitions
@@ -280,42 +285,43 @@ async function main() {
     const deployer = loadKeypair(walletPath);
     const connection = provider.connection;
 
-    // Get or create the master's USDC ATA.
-    const masterUsdcAta = getAssociatedTokenAddressSync(
+    // Get or create the recipient's USDC ATA.
+    logger.info(`USDC recipient: ${USDC_RECIPIENT.toBase58()}`);
+    const recipientUsdcAta = getAssociatedTokenAddressSync(
       usdcMint,
-      MASTER_PUBKEY,
+      USDC_RECIPIENT,
       true,
       TOKEN_PROGRAM_ID
     );
-    const ataInfo = await connection.getAccountInfo(masterUsdcAta);
+    const ataInfo = await connection.getAccountInfo(recipientUsdcAta);
     if (!ataInfo) {
       if (dryRun) {
-        logger.info(`Would create USDC ATA for ${MASTER_PUBKEY.toBase58().slice(0, 12)}...`);
+        logger.info(`Would create USDC ATA for ${USDC_RECIPIENT.toBase58().slice(0, 12)}...`);
       } else {
         const createAtaTx = new Transaction().add(
           createAssociatedTokenAccountInstruction(
             deployer.publicKey,
-            masterUsdcAta,
-            MASTER_PUBKEY,
+            recipientUsdcAta,
+            USDC_RECIPIENT,
             usdcMint,
             TOKEN_PROGRAM_ID,
             ASSOCIATED_TOKEN_PROGRAM_ID
           )
         );
         await sendAndConfirmTransaction(connection, createAtaTx, [deployer]);
-        logger.success(`Created USDC ATA ${masterUsdcAta.toBase58().slice(0, 12)}...`);
+        logger.success(`Created USDC ATA ${recipientUsdcAta.toBase58().slice(0, 12)}...`);
       }
     }
 
     if (dryRun) {
       logger.info(
-        `Would mint ${USDC_MINT_AMOUNT / 1_000_000} USDC to ${MASTER_PUBKEY.toBase58().slice(0, 12)}...`
+        `Would mint ${USDC_MINT_AMOUNT / 1_000_000} USDC to ${USDC_RECIPIENT.toBase58().slice(0, 12)}...`
       );
     } else {
       const mintTx = new Transaction().add(
         createMintToInstruction(
           usdcMint,
-          masterUsdcAta,
+          recipientUsdcAta,
           deployer.publicKey,
           USDC_MINT_AMOUNT,
           [],
@@ -324,12 +330,12 @@ async function main() {
       );
       const sig = await sendAndConfirmTransaction(connection, mintTx, [deployer]);
       logger.success(
-        `Minted ${USDC_MINT_AMOUNT / 1_000_000} USDC to ${MASTER_PUBKEY.toBase58().slice(0, 12)}... (tx: ${sig.slice(0, 20)}...)`
+        `Minted ${USDC_MINT_AMOUNT / 1_000_000} USDC to ${USDC_RECIPIENT.toBase58().slice(0, 12)}... (tx: ${sig.slice(0, 20)}...)`
       );
 
       // Verify
-      const acct = await getAccount(connection, masterUsdcAta, 'confirmed', TOKEN_PROGRAM_ID);
-      logger.info(`Master USDC balance: ${Number(acct.amount) / 1_000_000} USDC`);
+      const acct = await getAccount(connection, recipientUsdcAta, 'confirmed', TOKEN_PROGRAM_ID);
+      logger.info(`Recipient USDC balance: ${Number(acct.amount) / 1_000_000} USDC`);
     }
   }
 

@@ -103,6 +103,9 @@ export async function readLitePsmState(
     snap['psm.oracleRelayMinE9']   = str(cfg.oracleRelayMinPriceE9);
     snap['psm.oracleRelayMaxE9']   = str(cfg.oracleRelayMaxPriceE9);
     snap['psm.oracleRelayPythProgramOwner'] = str(cfg.oracleRelayPythProgramOwner);
+    // Direct-mint fields (added in the direct-mint migration)
+    snap['psm.directMinter']           = str(cfg.directMinter);
+    snap['psm.directMinterAllowance']  = str(cfg.directMinterAllowance);
   } catch (e: any) {
     snap['psm.fetchError'] = (e.message ?? String(e)).slice(0, 120);
   }

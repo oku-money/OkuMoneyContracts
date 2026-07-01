@@ -143,22 +143,27 @@ contract OracleRelay is
 
     // ============ Storage Accessor Views ============
 
+    /// @notice The underlying Chainlink-compatible USDC/USD price feed.
     function priceFeed() external view returns (IAggregatorV3) {
         return _getOracleRelayStorage().priceFeed;
     }
 
+    /// @notice Seconds after which a Chainlink round is considered stale.
     function stalenessThreshold() external view returns (uint256) {
         return _getOracleRelayStorage().stalenessThreshold;
     }
 
+    /// @notice Lower edge of the in-band USDC price (1e18-scaled).
     function minPriceE18() external view returns (uint256) {
         return _getOracleRelayStorage().minPriceE18;
     }
 
+    /// @notice Upper edge of the in-band USDC price (1e18-scaled).
     function maxPriceE18() external view returns (uint256) {
         return _getOracleRelayStorage().maxPriceE18;
     }
 
+    /// @notice Cached decimal count of the underlying price feed.
     function feedDecimals() external view returns (uint8) {
         return _getOracleRelayStorage().feedDecimals;
     }
@@ -214,6 +219,7 @@ contract OracleRelay is
     // ============ Admin / Operator Setters ============
 
     /// @notice Rotate the underlying price feed.
+    /// @param newFeed Address of the new Chainlink-compatible aggregator (non-zero).
     /// @dev Re-caches the feed's decimals at the time of the call. The new feed must
     ///      be a non-zero address reporting <= Constants.MAX_FEED_DECIMALS decimals.
     function setPriceFeed(address newFeed) external onlyRole(Roles.RELAY_FEED_MANAGER) {
@@ -227,6 +233,7 @@ contract OracleRelay is
     }
 
     /// @notice Update the staleness threshold (seconds).
+    /// @param newSeconds New threshold (must be in [ORACLE_MIN_STALENESS, ORACLE_MAX_STALENESS]).
     /// @dev Bounded by Constants.ORACLE_MIN_STALENESS / Constants.ORACLE_MAX_STALENESS.
     function setStalenessThreshold(uint256 newSeconds)
         external
@@ -240,6 +247,8 @@ contract OracleRelay is
     }
 
     /// @notice Update the in-band USDC price window (1e18-scaled).
+    /// @param newMinE18 New lower band edge (>= ORACLE_USDC_PRICE_FLOOR).
+    /// @param newMaxE18 New upper band edge (<= ORACLE_USDC_PRICE_CEILING, > newMinE18).
     /// @dev Bounded by Constants.ORACLE_USDC_PRICE_FLOOR / ORACLE_USDC_PRICE_CEILING and
     ///      requires newMinE18 < newMaxE18.
     function setPriceBand(

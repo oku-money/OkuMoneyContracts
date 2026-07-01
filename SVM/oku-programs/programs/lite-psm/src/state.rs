@@ -113,6 +113,23 @@ pub struct PsmConfig {
     ///
     /// `Pubkey::default()` means "no pending rotation".
     pub pending_role_admin: Pubkey,
+
+    // ===== Direct Mint (fiat on-ramp) =====
+    //
+    // Permissioned direct OkuMoney mint path — no USDC collateral required
+    // on-chain. Matches EVM `OkuMoney.mint(to, amount)` called by an
+    // `OKUM_MINTER` role holder. The fiat collateral is held off-chain.
+
+    /// Operator / fiat gateway — can mint OkuMoney directly without USDC.
+    /// EVM equivalent: address granted `OKUM_MINTER` role.
+    /// `Pubkey::default()` means "not configured / disabled".
+    pub direct_minter: Pubkey,
+
+    /// Per-direct-minter allowance (separate from the USDC-backed
+    /// `minter_allowance`). Decremented on each direct mint; reset by
+    /// `allowance_manager` via `set_direct_minter_allowance`. Mirrors
+    /// EVM `minterAllowance[directMinter]`.
+    pub direct_minter_allowance: u64,
 }
 
 impl PsmConfig {
@@ -126,13 +143,14 @@ impl PsmConfig {
 }
 
 // Compile-time assertion: if PsmConfig layout changes, this will fail to compile.
-// (674 = 8 disc + 1 bump + 32*12 authorities (384) + 32*4 token refs (128)
+// (714 = 8 disc + 1 bump + 32*12 authorities (384) + 32*4 token refs (128)
 //      + 8 max_supply + 8 minter_allowance + 1 is_paused
 //      + 32 oracle_relay_feed + 32 oracle_relay_pyth_program_owner
 //      + 8 oracle_relay_staleness + 8 oracle_relay_min_price_e9
 //      + 8 oracle_relay_max_price_e9 + 8 last_yield_distribution_slot
-//      + 8 oku_m_price + 32 pending_role_admin.)
-const _: () = assert!(PsmConfig::LEN == 674);
+//      + 8 oku_m_price + 32 pending_role_admin
+//      + 32 direct_minter + 8 direct_minter_allowance.)
+const _: () = assert!(PsmConfig::LEN == 714);
 
 /// Redemption queue PDA — zero-copy ring buffer.
 ///

@@ -118,6 +118,13 @@ contract OkuDollar is
         _disableInitializers();
     }
 
+    /// @notice Initialize the OkuDollar proxy.
+    /// @param _okuMoney OkuMoney token address (backing reserve asset).
+    /// @param name_ ERC-20 name.
+    /// @param symbol_ ERC-20 symbol (canonical ticker is `usdOku`).
+    /// @param _admin Admin address (receives full vault role set; see {OkuMoney.initialize}).
+    /// @param _minCollateralRatio Initial minimum collateral ratio enforced by `withdrawSurplus`
+    ///        (1e18 = 100%). Must be within [MIN_COLLATERAL_RATIO_FLOOR, PRECISION].
     function initialize(
         address _okuMoney,
         string memory name_,
@@ -161,42 +168,54 @@ contract OkuDollar is
 
     // ============ Storage Accessor Views ============
 
+    /// @notice The OkuMoney token held as reserves by this vault.
     function okuMoney() external view returns (IOkuMoney) {
         return _getOkuDollarStorage().okuMoney;
     }
 
+    /// @notice Active per-second accrual rate for the USD multiplier (1e18 = no yield).
     function usdRatePerSecond() external view returns (uint256) {
         return _getOkuDollarStorage().usdRatePerSecond;
     }
 
+    /// @notice Timestamp when the base multiplier was last snapshotted.
     function usdLastAccrualTime() external view returns (uint256) {
         return _getOkuDollarStorage().usdLastAccrualTime;
     }
 
+    /// @notice Timestamp at which the active rate expires (0 = open-ended).
     function usdRateEnd() external view returns (uint256) {
         return _getOkuDollarStorage().usdRateEnd;
     }
 
+    /// @notice Pending per-second rate that activates after `usdRateEnd` (1e18 = no yield).
     function usdPendingRatePerSecond() external view returns (uint256) {
         return _getOkuDollarStorage().usdPendingRatePerSecond;
     }
 
+    /// @notice Minimum collateral ratio enforced by `withdrawSurplus` (1e18 = 100%).
     function minCollateralRatio() external view returns (uint256) {
         return _getOkuDollarStorage().minCollateralRatio;
     }
 
+    /// @notice Total internal share tokens across all holders.
     function totalUsdShares() external view returns (uint256) {
         return _getOkuDollarStorage().totalUsdShares;
     }
 
+    /// @notice Internal share balance for `account`.
+    /// @param account Address to query.
     function usdSharesOf(address account) external view returns (uint256) {
         return _getOkuDollarStorage().usdShares[account];
     }
 
+    /// @notice Snapshotted base multiplier before continuous accrual is applied.
     function usdBaseMultiplier() external view returns (uint256) {
         return _getOkuDollarStorage().usdBaseMultiplier;
     }
 
+    /// @notice Whether `account` is on the OkuDollar blacklist.
+    /// @param account Address to check.
     function isBlacklisted(address account) external view returns (bool) {
         return _getOkuDollarStorage().isBlacklisted[account];
     }
@@ -516,6 +535,7 @@ contract OkuDollar is
     }
 
     /// @notice Deposit OkuMoney without minting OkuDollar shares (top up reserves).
+    /// @param okuMAmount Amount of OkuMoney tokens to deposit.
     /// @dev Used when USD rate > OkuM rate (vault undercollateralized). OkuMoney is
     ///      non-rebasing — token value depends on okuMMultiplier().
     ///
@@ -524,6 +544,13 @@ contract OkuDollar is
     ///      (the multiplier appears only in the informational event field), and
     ///      `withdrawSurplus` carries the cross-side guard that protects the
     ///      collateralization invariant.
+    ///
+    ///      No `nonReentrant` guard: the only external call is `safeTransferFrom`
+    ///      on OkuMoney, which is a controlled, standard ERC-20 with no transfer
+    ///      hooks. A reentrant callback is not possible today. If OkuMoney is ever
+    ///      upgraded to introduce hooks, the risk is limited to inflating the
+    ///      `ReservesDeposited` event (reserves only increase, so the accounting
+    ///      invariant cannot be broken by a reentrant deposit).
     function depositReserves(uint256 okuMAmount)
         external
         whenNotPaused
@@ -540,6 +567,7 @@ contract OkuDollar is
     }
 
     /// @notice Withdraw surplus OkuMoney without burning OkuDollar shares.
+    /// @param okuMAmount Amount of OkuMoney tokens to withdraw.
     /// @dev Enforces `collateralizationRatio() >= minCollateralRatio` BEFORE the
     ///      token transfer (correct CEI ordering). `nonReentrant` is applied as
     ///      defense-in-depth — OkuMoney today is a standard ERC-20 with no
@@ -602,6 +630,8 @@ contract OkuDollar is
     // ============ Admin ============
 
     /// @notice Update the minimum collateral ratio enforced by `withdrawSurplus`.
+    /// @param newRatio New ratio (1e18 = 100%). Must be within
+    ///        [MIN_COLLATERAL_RATIO_FLOOR, PRECISION] and <= current live ratio.
     /// @dev Gated on `VAULT_ADMIN` rather than `DEFAULT_ADMIN_ROLE` so the
     ///      vault-config key can be rotated independently of the AccessControl
     ///      meta-role holder. Mirrors the granular-role posture used by every
@@ -651,6 +681,7 @@ contract OkuDollar is
     }
 
     /// @notice Extractable surplus as OkuMoney tokens (0 if undercollateralized).
+    /// @return Amount of OkuMoney tokens withdrawable without breaching the floor.
     function surplus() external view returns (uint256) {
         OkuDollarStorage storage $ = _getOkuDollarStorage();
         uint256 okuMMult = $.okuMoney.okuMMultiplier();
@@ -664,6 +695,8 @@ contract OkuDollar is
     // ============ Rate Management (VAULT_REBASER) ============
 
     /// @notice Set the USD multiplier accrual rate.
+    /// @param newRate Per-second rate (1e18 = no yield). Must be in [PRECISION, MAX_RATE].
+    /// @param endTimestamp Unix timestamp at which the rate expires (0 = open-ended).
     /// @dev Cycle 4 (EVM-09): does NOT stamp a separate
     ///      `lastUsdRateUpdateBlock`. Rate changes manifest over time
     ///      (the multiplier moves linearly per-second), not instantly,
@@ -714,6 +747,10 @@ contract OkuDollar is
         emit UsdYieldRateUpdated(oldRate, newRate, endTimestamp, $.usdBaseMultiplier);
     }
 
+    /// @notice Schedule a successor rate that activates after the current rate's `usdRateEnd`.
+    /// @param newRate Per-second rate (1e18 = no yield). Must be in [PRECISION, MAX_RATE].
+    /// @dev Requires a non-zero `usdRateEnd` (cannot schedule against an open-ended rate)
+    ///      and the current rate must not have already expired.
     function setNextUsdYieldRate(uint256 newRate) external onlyRole(Roles.VAULT_REBASER) {
         if (newRate < Constants.PRECISION) revert InvalidRate();
         if (newRate > Constants.MAX_RATE) revert RateTooHigh();
@@ -760,10 +797,12 @@ contract OkuDollar is
 
     // ============ Pause Management ============
 
+    /// @notice Pause the vault (blocks wrap, unwrap, transfers, and reserve management).
     function pause() external onlyRole(Roles.VAULT_PAUSER) {
         _pause();
     }
 
+    /// @notice Unpause the vault.
     function unpause() external onlyRole(Roles.VAULT_UNPAUSER) {
         _unpause();
     }

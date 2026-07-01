@@ -162,7 +162,10 @@ programs/
                                    # user_self_rescue_queue_entry (cycle 4 / PSM-06),
                                    # deposit_buffer, withdraw_buffer (ceil-rounded, cycle 4 / PSM-05)
         psm_admin.rs               # pause/unpause, freeze/thaw, set_authority (macro-driven, no-op reject — cycle 4),
-                                   # set_oracle_relay_*, set_max_supply, set_minter_allowance
+                                   # set_oracle_relay_*, set_max_supply, set_minter_allowance,
+                                   # set_direct_minter_allowance
+        direct_mint.rs             # mint_oku_m_direct, mint_usd_oku_direct (fiat on-ramp),
+                                   # migrate_psm_config (one-time realloc 674 → 714)
         yield_ops.rs               # set_oku_m_price, distribute_yield (self-fenced, cycle 4)
       contexts/                    # Per-instruction account contexts
 
@@ -177,17 +180,18 @@ programs/
       helpers.rs                   # Thin wrappers around oku_shared::vault_math + check_vault_yield_lock
       instructions/
         core.rs                    # initialize (decimals + oku_m_price > 0 invariants, cycle 4),
-                                   # wrap (dead-shares first deposit), unwrap,
-                                   # update_usd_multiplier (self-fenced, cycle 4 / OKUD-06),
+                                   # wrap (dead-shares first deposit), wrap_to (receiver != caller),
+                                   # unwrap, update_usd_multiplier (self-fenced, cycle 4 / OKUD-06),
                                    # deposit_reserves, withdraw_reserves
         admin.rs                   # pause/unpause, set_authority, set_min_collateral_ratio
       contexts.rs                  # All account contexts
 
 tests/
-  bankrun/                  # Default in-process suite (npm test, ~12 s, 138 tests)
+  bankrun/                  # Default in-process suite (npm test, ~12 s, 149 tests)
     smoke.ts
     lite-psm.ts
     oku-dollar.ts
+    direct-mint.ts                 # mint_oku_m_direct, mint_usd_oku_direct, wrap_to, set_direct_minter_allowance
     pyth-oracle.ts
     oracle-relay.ts
     init-invariants.ts             # Token-2022 extension whitelist
@@ -258,6 +262,7 @@ indices. Cycle 4 added `RedemptionQueue::ring_index(abs_index)` +
 |---|---|---|
 | 2026-06-05 (noBridge phase C) | `psm_config → psm_config_v2`, `redemption_queue → redemption_queue_v2`, `oku_dollar_config → oku_dollar_config_v2`, `usd_oku_mint → usd_oku_mint_v2` | `PsmConfig` storage shrank from 722 → 658 bytes after the `blacklist_exempt_*` fields were removed. In-place BPF upgrade would have re-interpreted old slots — security-relevant corruption. Forced PDA rotation via seed bump. |
 | 2026-06-12 (audit-prep cycle) | `psm_config_v2 → psm_config_v3` | PoR fields removed, USDC peg circuit-breaker fields added. Net layout delta: 658 → 674 bytes. Other three SVM seeds unchanged. |
+| 2026-07-01 (direct-mint) | No seed change (in-place realloc) | `direct_minter: Pubkey` + `direct_minter_allowance: u64` appended to `PsmConfig`. Layout delta: 674 → 714 bytes (+40). First in-place `realloc` migration — `migrate_psm_config` extends the account without rotating the PDA seed. All other seeds unchanged. |
 
 **Orphan-PDA inventory** (devnet, post-rotation): pre-rotation PDAs +
 SPL mints are orphaned because their `owner` field still references
@@ -462,7 +467,8 @@ SVM-specific table:
 | `buffer_withdrawer` | PSM | Cold Multisig | Drain USDC from the PSM vault | Cannot withdraw below USDC reserved for pending queue entries. Cycle 4: ceil-rounded reservation. |
 | `oracle_manager` | PSM | Cold Multisig | Set `oracle_relay_feed` (`Pubkey::default()` disables), `oracle_relay_staleness`, `oracle_relay_min/max_price_e9`, `pyth_program_owner` | Staleness ∈ `[60 s, 7 days]`. Band ⊆ `[0.95e9, 1.05e9]`. `set_oracle_relay_feed` validates Pyth header magic + version. |
 | `cap_manager` | PSM | Cold Multisig | Set `max_supply` | Cannot set below current circulating supply. |
-| `allowance_manager` | PSM | Cold Multisig | Set `minter_allowance` | Bounded by `max_supply`; PSM PDA is the mint authority. |
+| `allowance_manager` | PSM | Cold Multisig | Set `minter_allowance` and `direct_minter_allowance` | Bounded by `max_supply`; PSM PDA is the mint authority. |
+| `direct_minter` | PSM | Operator / Fiat Gateway | `mint_oku_m_direct` (OkuM without USDC) and `mint_usd_oku_direct` (OkuM + wrap to usdOku) | Bounded by `direct_minter_allowance` + `max_supply`. No USDC collateral on-chain — fiat backing is off-chain. EVM: `OKUM_MINTER` (non-PSM). |
 
 Key separation: `rebaser` (rear-facing — updates OkuMoney price
 from realized T-Bill returns) ≠ `usd_rebaser` (forward-facing —
@@ -798,6 +804,18 @@ EVM `LitePSM` ships single-tx convenience flows (e.g. `mintUsdOku`,
 noBridge refactor. SVM SDK consumers now compose multi-step flows
 from the raw `mint_oku_m` / `wrap` / `unwrap` / `redeem_oku_m`
 instructions.
+
+**Direct-mint exception:** `mint_usd_oku_direct` is a single-instruction
+convenience that mints OkuMoney to the PSM PDA's escrow ATA and CPIs
+into `oku_dollar::wrap_to` in one atomic instruction. This matches
+EVM `LitePSM.mintUsdOku` (minus the USDC leg). The CPI is built
+manually (not via Cargo dependency) because oku-dollar already
+depends on lite-psm, and a reverse dependency would be circular.
+
+**`wrap_to`:** oku-dollar's `wrap_to` instruction mirrors EVM's
+`wrap(amount, receiver, minAmountOut)` — the caller provides OkuMoney
+and a separate `receiver` gets the minted usdOku shares. The existing
+`wrap` instruction locks both source and destination to the signer.
 
 ### Events
 

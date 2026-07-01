@@ -137,30 +137,37 @@ contract RedemptionQueue is
 
     // ============ Storage Accessor Views ============
 
+    /// @notice The OkuMoney token held in escrow by the queue.
     function okuMoney() external view returns (IOkuMoney) {
         return _getRedemptionQueueStorage().okuMoney;
     }
 
+    /// @notice The USDC token used for payouts.
     function usdc() external view returns (IERC20) {
         return _getRedemptionQueueStorage().usdc;
     }
 
+    /// @notice Decimal conversion multiplier for the configured USDC variant.
     function usdcDecimalMultiplier() external view returns (uint256) {
         return _getRedemptionQueueStorage().usdcDecimalMultiplier;
     }
 
+    /// @notice Index of the first potentially-live slot in the queue.
     function queueHead() external view returns (uint256) {
         return _getRedemptionQueueStorage().queueHead;
     }
 
+    /// @notice Index of the next slot to be written (one past the last entry).
     function queueTail() external view returns (uint256) {
         return _getRedemptionQueueStorage().queueTail;
     }
 
+    /// @notice Total OkuMoney tokens escrowed across all pending queue entries.
     function totalQueuedOkuM() external view returns (uint256) {
         return _getRedemptionQueueStorage().totalQueuedOkuM;
     }
 
+    /// @notice The configured USDC peg oracle relay (address(0) = disabled).
     function oracleRelay() external view returns (IOracleRelay) {
         return _getRedemptionQueueStorage().oracleRelay;
     }
@@ -168,6 +175,7 @@ contract RedemptionQueue is
     // ============ Oracle Relay Management ============
 
     /// @notice Wire (or unwire) the USDC peg circuit-breaker.
+    /// @param newRelay Address of the new oracle relay (address(0) to disable).
     /// @dev `address(0)` disables the check. When set, `processQueue`
     ///      calls `relay.checkUsdcPeg()` once before the batch loop
     ///      and reverts on depeg.
@@ -389,6 +397,8 @@ contract RedemptionQueue is
     }
 
     /// @notice Queue entry at `index` (bounds-checked).
+    /// @param index Queue index to look up (must be in [queueHead, queueTail)).
+    /// @return The stored QueueEntry (user, okuMAmount, timestamp).
     function getQueueEntry(uint256 index) external view returns (QueueEntry memory) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         if (index < $.queueHead || index >= $.queueTail) revert InvalidIndex();
@@ -396,6 +406,8 @@ contract RedemptionQueue is
     }
 
     /// @notice Current dollar value (18 decimals) for a queue entry (multiplier-aware).
+    /// @param index Queue index to look up (must be in [queueHead, queueTail)).
+    /// @return Dollar value of the entry at the current okuMMultiplier (18 decimals).
     function getQueueEntryValue(uint256 index) external view returns (uint256) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         if (index < $.queueHead || index >= $.queueTail) revert InvalidIndex();

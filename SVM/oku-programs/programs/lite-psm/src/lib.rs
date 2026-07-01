@@ -91,6 +91,34 @@ pub mod lite_psm {
         instructions::psm::mint_oku_m(ctx, usdc_amount)
     }
 
+    // ===== Migration =====
+
+    /// One-time migration: extend PsmConfig from 674 → 714 bytes to
+    /// accommodate the `direct_minter` + `direct_minter_allowance` fields.
+    /// Must be signed by the current `role_admin`.
+    pub fn migrate_psm_config(ctx: Context<MigratePsmConfig>) -> Result<()> {
+        instructions::direct_mint::migrate_psm_config(ctx)
+    }
+
+    // ===== Direct Mint (fiat on-ramp) =====
+
+    /// Mint OkuMoney directly without USDC (permissioned — `direct_minter` only).
+    /// Matches EVM `OkuMoney.mint(to, amount)` called by a non-PSM `OKUM_MINTER`.
+    pub fn mint_oku_m_direct(ctx: Context<MintOkuMDirect>, oku_m_amount: u64) -> Result<()> {
+        instructions::direct_mint::mint_oku_m_direct(ctx, oku_m_amount)
+    }
+
+    /// Mint OkuMoney and wrap into usdOku in a single instruction
+    /// (permissioned — `direct_minter` only). Matches EVM `LitePSM.mintUsdOku`
+    /// convenience pattern without USDC.
+    pub fn mint_usd_oku_direct(
+        ctx: Context<MintUsdOkuDirect>,
+        oku_m_amount: u64,
+        min_shares_out: u64,
+    ) -> Result<()> {
+        instructions::direct_mint::mint_usd_oku_direct(ctx, oku_m_amount, min_shares_out)
+    }
+
     /// Redeem OkuMoney for USDC (price-aware)
     /// usdc_amount = oku_m_amount * oku_m_price / PRECISION
     pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
@@ -152,6 +180,10 @@ pub mod lite_psm {
 
     pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()> {
         instructions::psm_admin::set_minter_allowance(ctx, amount)
+    }
+
+    pub fn set_direct_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()> {
+        instructions::psm_admin::set_direct_minter_allowance(ctx, amount)
     }
 
     // ===== Oracle Relay (USDC peg circuit-breaker) admin =====

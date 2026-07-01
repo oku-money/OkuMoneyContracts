@@ -10,7 +10,7 @@ use crate::constants::{
     MAX_USD_MULTIPLIER, MINIMUM_LIQUIDITY, MIN_COLLATERAL_RATIO_FLOOR, PRECISION,
 };
 use crate::contexts::{
-    DepositReserves, Initialize, Unwrap, UpdateUsdMultiplier, WithdrawReserves, Wrap,
+    DepositReserves, Initialize, Unwrap, UpdateUsdMultiplier, WithdrawReserves, Wrap, WrapTo,
 };
 use crate::errors::OkuDollarError;
 use crate::events::*;
@@ -330,6 +330,174 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
         emit!(WrapEvent {
             user: ctx.accounts.user.key(),
             receiver: ctx.accounts.user.key(),
+            oku_m_amount,
+            shares_minted: shares,
+            dead_shares_minted: 0,
+            usd_multiplier,
+            oku_m_price,
+            dollar_value,
+        });
+
+        Ok(shares)
+    }
+}
+
+/// Wrap OkuMoney -> usdOku with a separate receiver.
+///
+/// Identical math/logic to `wrap`, but the caller provides OkuMoney and a
+/// separate `receiver` gets the minted usdOku shares. Matches EVM
+/// `OkuDollar.wrap(amount, receiver, minAmountOut)`.
+///
+/// Primary use case: CPI from lite-psm's `mint_usd_oku_direct`, where the
+/// PsmConfig PDA wraps OkuMoney it just minted into usdOku for a user.
+pub fn wrap_to(ctx: Context<WrapTo>, oku_m_amount: u64, min_shares_out: u64) -> Result<u64> {
+    // Yield lock: block wrap in same slot as either a PSM-side yield event
+    // or a vault-side yield event.
+    check_yield_lock(&ctx.accounts.psm_config)?;
+    check_vault_yield_lock(&ctx.accounts.config)?;
+
+    // Read state
+    let total_supply = ctx.accounts.usd_oku_mint.supply;
+    let bump = ctx.accounts.config.bump;
+    let usd_multiplier = ctx.accounts.config.usd_multiplier;
+    let oku_m_price = ctx.accounts.psm_config.oku_m_price;
+    let decimals = ctx.accounts.oku_money_mint.decimals;
+
+    require!(oku_m_amount > 0, OkuDollarError::ZeroAmount);
+
+    // Calculate shares to mint based on current multiplier and price
+    let shares = oku_money_to_shares(oku_m_amount, usd_multiplier, oku_m_price)?;
+    require!(shares > 0, OkuDollarError::ZeroAmount);
+
+    // Transfer OkuMoney from caller to reserve vault (Token-2022)
+    token_interface::transfer_checked(
+        CpiContext::new(
+            ctx.accounts.token_2022_program.key(),
+            token_interface::TransferChecked {
+                from: ctx.accounts.caller_oku_money_ata.to_account_info(),
+                to: ctx.accounts.reserve_vault.to_account_info(),
+                authority: ctx.accounts.caller.to_account_info(),
+                mint: ctx.accounts.oku_money_mint.to_account_info(),
+            },
+        ),
+        oku_m_amount,
+        decimals,
+    )?;
+
+    let seeds = &[OkuDollarConfig::SEED, &[bump]];
+    let signer = &[&seeds[..]];
+
+    let caller_key = ctx.accounts.caller.key();
+    let receiver_key = ctx.accounts.receiver.key();
+
+    if total_supply == 0 {
+        // First deposit — enforce minimum liquidity and mint dead shares
+        require!(shares > MINIMUM_LIQUIDITY, OkuDollarError::MinimumLiquidity);
+
+        let user_shares = shares
+            .checked_sub(MINIMUM_LIQUIDITY)
+            .ok_or(OkuDollarError::Overflow)?;
+
+        // Slippage protection (on user shares after dead shares subtraction)
+        require!(
+            user_shares >= min_shares_out,
+            OkuDollarError::SlippageExceeded
+        );
+
+        let dead_ata = ctx
+            .accounts
+            .dead_shares_ata
+            .as_ref()
+            .ok_or(OkuDollarError::MissingDeadSharesAccount)?;
+
+        // Verify the dead ATA is owned by the System Program (truly unrecoverable)
+        require!(
+            dead_ata.owner == anchor_lang::system_program::ID,
+            OkuDollarError::InvalidDeadSharesOwner
+        );
+
+        // Verify the dead ATA is the canonical Associated Token Account
+        let expected_dead_ata =
+            anchor_spl::associated_token::get_associated_token_address_with_program_id(
+                &anchor_lang::system_program::ID,
+                &ctx.accounts.usd_oku_mint.key(),
+                &ctx.accounts.token_2022_program.key(),
+            );
+        require!(
+            dead_ata.key() == expected_dead_ata,
+            OkuDollarError::InvalidDeadSharesAddress
+        );
+
+        // Mint user shares to receiver (Token-2022)
+        token_interface::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_2022_program.key(),
+                token_interface::MintTo {
+                    mint: ctx.accounts.usd_oku_mint.to_account_info(),
+                    to: ctx.accounts.receiver_usd_oku_ata.to_account_info(),
+                    authority: ctx.accounts.config.to_account_info(),
+                },
+                signer,
+            ),
+            user_shares,
+        )?;
+
+        // Mint dead shares (permanently locked)
+        token_interface::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_2022_program.key(),
+                token_interface::MintTo {
+                    mint: ctx.accounts.usd_oku_mint.to_account_info(),
+                    to: dead_ata.to_account_info(),
+                    authority: ctx.accounts.config.to_account_info(),
+                },
+                signer,
+            ),
+            MINIMUM_LIQUIDITY,
+        )?;
+
+        let dollar_value = oku_money_to_usd(oku_m_amount, oku_m_price)?;
+
+        emit!(WrapEvent {
+            user: caller_key,
+            receiver: receiver_key,
+            oku_m_amount,
+            shares_minted: user_shares,
+            dead_shares_minted: MINIMUM_LIQUIDITY,
+            usd_multiplier,
+            oku_m_price,
+            dollar_value,
+        });
+
+        Ok(user_shares)
+    } else {
+        require!(
+            ctx.accounts.dead_shares_ata.is_none(),
+            OkuDollarError::UnexpectedDeadSharesAccount
+        );
+
+        // Slippage protection
+        require!(shares >= min_shares_out, OkuDollarError::SlippageExceeded);
+
+        // Mint usdOku shares to receiver (Token-2022)
+        token_interface::mint_to(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_2022_program.key(),
+                token_interface::MintTo {
+                    mint: ctx.accounts.usd_oku_mint.to_account_info(),
+                    to: ctx.accounts.receiver_usd_oku_ata.to_account_info(),
+                    authority: ctx.accounts.config.to_account_info(),
+                },
+                signer,
+            ),
+            shares,
+        )?;
+
+        let dollar_value = oku_money_to_usd(oku_m_amount, oku_m_price)?;
+
+        emit!(WrapEvent {
+            user: caller_key,
+            receiver: receiver_key,
             oku_m_amount,
             shares_minted: shares,
             dead_shares_minted: 0,

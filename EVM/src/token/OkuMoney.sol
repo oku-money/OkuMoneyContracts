@@ -186,18 +186,28 @@ contract OkuMoney is
 
     // ============ Storage Accessor Views ============
 
+    /// @notice Remaining minter allowance for `minter_`.
+    /// @param minter_ Address of the minter to query.
+    /// @return Remaining allowance in raw token units.
     function minterAllowance(address minter_) external view returns (uint256) {
         return _getOkuMoneyStorage().minterAllowance[minter_];
     }
 
+    /// @notice Global supply cap in raw token units.
+    /// @return Maximum number of tokens that can exist simultaneously.
     function maxSupply() external view returns (uint256) {
         return _getOkuMoneyStorage().maxSupply;
     }
 
+    /// @notice Whether `account` is on the blacklist.
+    /// @param account Address to check.
+    /// @return True if blacklisted.
     function isBlacklisted(address account) external view returns (bool) {
         return _getOkuMoneyStorage().isBlacklisted[account];
     }
 
+    /// @notice Block number of the last yield distribution (used by YieldSandwichGuard).
+    /// @return Block number, or 0 if no distribution has occurred.
     function lastYieldDistributionBlock() external view returns (uint256) {
         return _getOkuMoneyStorage().lastYieldDistributionBlock;
     }
@@ -323,7 +333,9 @@ contract OkuMoney is
 
     // ============ Minting & Burning ============
 
-    /// @notice Mint raw tokens to an address
+    /// @notice Mint raw tokens to an address.
+    /// @param to Recipient of the minted tokens.
+    /// @param amount Number of raw tokens to mint.
     /// @dev Creates raw tokens; minting 100 tokens at okuMMultiplier=$1.05 creates $105 of value.
     ///      The PSM handles USDC <-> OkuM conversion using okuMMultiplier(). See contract
     ///      NatSpec for the Circle FiatToken minter-allowance source reference.
@@ -344,7 +356,8 @@ contract OkuMoney is
         _mint(to, amount);
     }
 
-    /// @notice Burn raw tokens from caller. Allowed while paused.
+    /// @notice Burn raw tokens from the caller's balance. Allowed while paused.
+    /// @param amount Number of raw tokens to burn.
     /// @dev Cycle 4 (EVM-15): gated on `OKUM_BURNER` (split from
     ///      `OKUM_MINTER`). Grant both to LitePSM at deploy time;
     ///      separating the two lets a future upgrade revoke burn
@@ -360,6 +373,9 @@ contract OkuMoney is
 
     // ============ Minter Allowance Management ============
 
+    /// @notice Set or update the minter allowance for `minter_`.
+    /// @param minter_ Address whose allowance is being configured.
+    /// @param newAllowance New allowance in raw token units.
     function configureMinterAllowance(
         address minter_,
         uint256 newAllowance
@@ -367,6 +383,7 @@ contract OkuMoney is
         external
         onlyRole(Roles.OKUM_ALLOWANCE_MANAGER)
     {
+        if (minter_ == address(0)) revert Errors.ZeroAddress();
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         uint256 oldAllowance = $.minterAllowance[minter_];
         $.minterAllowance[minter_] = newAllowance;
@@ -375,6 +392,8 @@ contract OkuMoney is
 
     // ============ Supply Cap Management ============
 
+    /// @notice Update the global supply cap.
+    /// @param newMaxSupply New cap in raw token units (must be >= current totalSupply).
     function setMaxSupply(uint256 newMaxSupply) external onlyRole(Roles.OKUM_CAP_MANAGER) {
         if (newMaxSupply < totalSupply()) revert BelowCurrentSupply();
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
@@ -385,6 +404,8 @@ contract OkuMoney is
 
     // ============ Blacklist (Works While Paused) ============
 
+    /// @notice Add `account` to the blacklist. Works while paused.
+    /// @param account Address to blacklist.
     function blacklist(address account) external onlyRole(Roles.OKUM_BLACKLISTER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         if ($.isBlacklisted[account]) revert AlreadyBlacklisted();
@@ -392,6 +413,8 @@ contract OkuMoney is
         emit Blacklisted(account);
     }
 
+    /// @notice Remove `account` from the blacklist. Works while paused.
+    /// @param account Address to unblacklist.
     function unblacklist(address account) external onlyRole(Roles.OKUM_UNBLACKLISTER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         if (!$.isBlacklisted[account]) revert NotBlacklisted();
@@ -401,10 +424,12 @@ contract OkuMoney is
 
     // ============ Pause Management ============
 
+    /// @notice Pause the contract (blocks minting, transfers, and yield distribution).
     function pause() external onlyRole(Roles.OKUM_PAUSER) {
         _pause();
     }
 
+    /// @notice Unpause the contract.
     function unpause() external onlyRole(Roles.OKUM_UNPAUSER) {
         _unpause();
     }

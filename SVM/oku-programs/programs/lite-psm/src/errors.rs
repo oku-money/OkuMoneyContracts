@@ -200,6 +200,10 @@ pub enum LitePsmError {
     #[msg("Escrow vault already initialized")]
     EscrowAlreadyInitialized,
 
+    /// PsmConfig is already at the new size (migration not needed).
+    #[msg("PsmConfig already migrated to current layout")]
+    MigrationNotNeeded,
+
     // ===== Initialization Errors =====
     /// Oracle relay Pyth program-owner pubkey rotated to the default (zero)
     /// pubkey. Rejected because the runtime peg-check requires a non-zero

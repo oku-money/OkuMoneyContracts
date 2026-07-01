@@ -164,27 +164,33 @@ contract LitePSM is
 
     // ============ Storage Accessor Views ============
 
+    /// @notice The OkuMoney token this PSM mints/burns.
     function okuMoney() external view returns (IOkuMoney) {
         return _getLitePSMStorage().okuMoney;
     }
 
+    /// @notice The OkuDollar vault used by the convenience mint/redeem functions.
     function okuDollar() external view returns (IOkuDollar) {
         return _getLitePSMStorage().okuDollar;
     }
 
+    /// @notice The USDC token held in the PSM buffer.
     function usdc() external view returns (IERC20) {
         return _getLitePSMStorage().usdc;
     }
 
+    /// @notice The RedemptionQueue contract for deferred redemptions.
     function redemptionQueue() external view returns (RedemptionQueue) {
         return _getLitePSMStorage().redemptionQueue;
     }
 
+    /// @notice The configured USDC peg oracle relay (address(0) = disabled).
     function oracleRelay() external view returns (IOracleRelay) {
         return _getLitePSMStorage().oracleRelay;
     }
 
     /// @notice Decimal conversion multiplier for the configured USDC variant.
+    /// @return Multiplier such that `usdcAmount * multiplier` converts to 18-decimal dollars.
     function usdcDecimalMultiplier() external view returns (uint256) {
         return _getLitePSMStorage().usdcDecimalMultiplier;
     }
@@ -332,6 +338,7 @@ contract LitePSM is
     // ============ OkuDollar Convenience Functions ============
 
     /// @notice Mint OkuDollar by depositing USDC (USDC -> mint OkuM -> wrap -> OkuDollar to user).
+    /// @param usdcAmount Amount of USDC to deposit (USDC native decimals).
     /// @dev Multiplier-aware. The slippage floor passed to `wrap` is computed by
     ///      replicating `wrap`'s exact two-step floor math via {MathLib.okuMToWrappedUsd}.
     ///      Passing `usdcValue18` directly would revert at non-even multipliers because
@@ -385,6 +392,7 @@ contract LitePSM is
     }
 
     /// @notice Redeem OkuDollar for USDC (OkuDollar -> unwrap -> burn OkuM -> USDC to user).
+    /// @param usdAmount Amount of OkuDollar to redeem (dollar terms, 18 decimals).
     /// @dev Reverts if the vault is undercollateralized (unwrap fails).
     ///      If the buffer is insufficient, OkuM is queued (the user earns yield while
     ///      queued via okuMMultiplier appreciation).
@@ -451,6 +459,7 @@ contract LitePSM is
     // ============ Oracle Relay Management ============
 
     /// @notice Wire (or unwire) the USDC peg circuit-breaker.
+    /// @param newRelay Address of the new oracle relay (address(0) to disable).
     /// @dev `address(0)` disables the check — operational kill switch
     ///      for incident response. When set to a non-zero address,
     ///      every mint and redeem path calls `relay.checkUsdcPeg()`
@@ -485,15 +494,25 @@ contract LitePSM is
 
     // ============ Admin Functions ============
 
+    /// @notice Pause the PSM (blocks minting, redeeming, and queue processing).
     function pause() external onlyRole(Roles.PSM_PAUSER) {
         _pause();
     }
 
+    /// @notice Unpause the PSM.
     function unpause() external onlyRole(Roles.PSM_UNPAUSER) {
         _unpause();
     }
 
-    /// @dev `whenYieldNotDistributing` guards the `totalQueuedUsdc()` read below,
+    /// @notice Withdraw USDC from the PSM buffer.
+    /// @param to Recipient of the USDC.
+    /// @param amount Amount of USDC to withdraw (native decimals).
+    /// @dev Not pause-gated by design: during an incident response the buffer
+    ///      withdrawer may need to move USDC to safety while the PSM is paused.
+    ///      Pause blocks user-facing mint/redeem; buffer operations are privileged
+    ///      and governed by the `PSM_BUFFER_WITHDRAWER` role.
+    ///
+    ///      `whenYieldNotDistributing` guards the `totalQueuedUsdc()` read,
     ///      which is multiplier-aware. Without the guard a same-block yield
     ///      distribution would shift the queue obligation while the buffer
     ///      balance held still, opening a thin sandwich window against the
@@ -519,8 +538,10 @@ contract LitePSM is
         emit BufferWithdrawn(to, amount, remainingBalance);
     }
 
-    /// @notice Deposit USDC to PSM buffer for redemptions.
+    /// @notice Deposit USDC into the PSM buffer for redemptions.
+    /// @param amount Amount of USDC to deposit (native decimals).
     function depositBuffer(uint256 amount) external onlyRole(Roles.PSM_BUFFER_DEPOSITOR) {
+        if (amount == 0) revert Errors.ZeroAmount();
         LitePSMStorage storage $ = _getLitePSMStorage();
         $.usdc.safeTransferFrom(msg.sender, address(this), amount);
         emit BufferDeposited(msg.sender, amount, $.usdc.balanceOf(address(this)));

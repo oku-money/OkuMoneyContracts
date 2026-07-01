@@ -235,6 +235,65 @@ pub struct MinterAllowanceUpdatedEvent {
     pub new_allowance: u64,
 }
 
+/// Emitted when PsmConfig is migrated (realloc'd) to the new layout.
+#[event]
+pub struct PsmConfigMigratedEvent {
+    pub old_len: u64,
+    pub new_len: u64,
+}
+
+/// Emitted when direct-minter allowance is updated.
+/// EVM equivalent: `MinterAllowanceUpdated` (for the direct-minter address)
+#[event]
+pub struct DirectMinterAllowanceUpdatedEvent {
+    /// Caller of the update (`allowance_manager` authority).
+    pub actor: Pubkey,
+    pub old_allowance: u64,
+    pub new_allowance: u64,
+}
+
+/// Emitted when OkuMoney is minted via the permissioned direct-mint path
+/// (no USDC required). EVM equivalent: the Transfer event from
+/// `OkuMoney.mint(to, amount)` called by a non-PSM `OKUM_MINTER`.
+#[event]
+pub struct DirectMintEvent {
+    /// Operator who initiated the mint
+    pub direct_minter: Pubkey,
+    /// Recipient of the minted OkuMoney
+    pub recipient: Pubkey,
+    /// OkuMoney minted (6 decimals)
+    pub oku_m_amount: u64,
+    /// OkuMoney price multiplier at time of mint (1e9 = $1.00)
+    pub oku_m_price: u64,
+    /// Dollar value of the minted amount
+    pub dollar_value: u64,
+    /// OkuMoney supply AFTER the mint completed
+    pub new_total_supply: u64,
+}
+
+/// Emitted when OkuMoney is direct-minted and immediately wrapped into
+/// usdOku in a single instruction. EVM equivalent: a hypothetical
+/// `mintUsdOkuDirect` convenience path using `OkuMoney.mint` + `wrap`.
+#[event]
+pub struct DirectMintUsdOkuEvent {
+    /// Operator who initiated the mint+wrap
+    pub direct_minter: Pubkey,
+    /// Recipient of the minted usdOku shares
+    pub recipient: Pubkey,
+    /// OkuMoney minted and wrapped (6 decimals)
+    pub oku_m_amount: u64,
+    /// usdOku shares minted to the recipient
+    pub shares_minted: u64,
+    /// OkuMoney price multiplier at time of mint (1e9 = $1.00)
+    pub oku_m_price: u64,
+    /// USD multiplier at time of wrap (1e9 = $1.00)
+    pub usd_multiplier: u64,
+    /// Dollar value of the minted amount
+    pub dollar_value: u64,
+    /// OkuMoney supply AFTER the mint completed
+    pub new_total_supply: u64,
+}
+
 /// Emitted when the oracle relay feed pubkey is rotated.
 /// EVM equivalent: `PriceFeedUpdated(address indexed oldFeed, address indexed newFeed, uint8 feedDecimals)`
 /// (SVM uses Pyth `expo` rather than `decimals`, so the third field is omitted —

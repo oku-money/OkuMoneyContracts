@@ -80,7 +80,11 @@ const PSM_ROLES = [
   'capManager',
   'allowanceManager',
   'rebaser',
+  'directMinter',
 ] as const;
+
+/** Direct-minter allowance to set after granting roles (1M OkuMoney, 6 decimals). */
+const DIRECT_MINTER_ALLOWANCE = 1_000_000 * 1_000_000; // 1,000,000 OkuMoney
 
 /** OkuDollar vault roles (excluding roleAdmin). */
 const VAULT_ROLES = [
@@ -146,7 +150,7 @@ async function main() {
       'signer (role_admin)': roleAdmin.toBase58(),
       'PSM config': psmConfig.toBase58(),
       'Vault config': vaultConfig.toBase58(),
-      'PSM roles': `${PSM_ROLES.length} (roleAdmin skipped)`,
+      'PSM roles': `${PSM_ROLES.length} (roleAdmin skipped, includes directMinter)`,
       'Vault roles': `${VAULT_ROLES.length} (roleAdmin skipped)`,
       'dry-run': String(dryRun),
     })
@@ -266,6 +270,50 @@ async function main() {
       const msg = e?.message?.slice(0, 80) ?? String(e);
       logger.error(`  ${role.padEnd(20)} error: ${msg}`);
       results.push({ program: 'oku-dollar', role, status: 'error', detail: msg });
+    }
+  }
+
+  // ---- Set direct-minter allowance ----
+  // NOTE: This runs after role grants. If allowanceManager has already been
+  // rotated to MASTER_PUBKEY, the deployer wallet can't sign this call.
+  // In that case, use the standalone set-direct-minter-allowance.ts script
+  // with the master wallet, or rotate allowanceManager back temporarily.
+  logger.section('Direct-minter allowance');
+
+  {
+    const psmCfgNow = await psmProgram.account.psmConfig.fetch(psmConfig);
+    const currentAllowance = (psmCfgNow as any).directMinterAllowance;
+    const targetAllowance = new anchor.BN(DIRECT_MINTER_ALLOWANCE);
+    const currentAllowanceManager = (psmCfgNow as any).allowanceManager as PublicKey;
+
+    if (currentAllowance && currentAllowance.eq(targetAllowance)) {
+      logger.info(`  direct_minter_allowance already ${targetAllowance.toString()} -- skipping`);
+    } else if (!currentAllowanceManager.equals(roleAdmin)) {
+      logger.warning(
+        `  allowanceManager is ${currentAllowanceManager.toBase58().slice(0, 12)}... (not the signer). ` +
+          `Skipping -- use set-direct-minter-allowance.ts with the allowanceManager wallet.`
+      );
+    } else if (dryRun) {
+      logger.info(
+        `  Would set direct_minter_allowance to ${targetAllowance.toString()} ` +
+          `(current: ${currentAllowance?.toString() ?? '0'})`
+      );
+    } else {
+      try {
+        const sig = await psmProgram.methods
+          .setDirectMinterAllowance(targetAllowance)
+          .accountsPartial({
+            allowanceManager: roleAdmin,
+            config: psmConfig,
+          })
+          .rpc();
+        logger.success(
+          `  set_direct_minter_allowance(${targetAllowance.toString()}) -- tx: ${sig.slice(0, 20)}...`
+        );
+      } catch (e: any) {
+        const msg = e?.message?.slice(0, 80) ?? String(e);
+        logger.error(`  set_direct_minter_allowance failed: ${msg}`);
+      }
     }
   }
 

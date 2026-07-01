@@ -130,6 +130,11 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     // `set_authority(RoleAdmin, ...)` proposes a rotation.
     config.pending_role_admin = Pubkey::default();
 
+    // Direct mint — disabled by default. Operator configures via
+    // `set_authority(DirectMinter, ...)` + `set_direct_minter_allowance`.
+    config.direct_minter = Pubkey::default();
+    config.direct_minter_allowance = 0;
+
     emit!(InitializeEvent {
         role_admin: config.role_admin,
         usdc_mint: config.usdc_mint,

@@ -16,11 +16,16 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  *      via `IERC20` to use SafeERC20. See Constants.sol for terminology legend.
  */
 interface IOkuMoney is IERC20 {
+    /// @notice Mint raw tokens to `to`.
     function mint(address to, uint256 amount) external;
+    /// @notice Burn raw tokens from the caller's balance.
     function burn(uint256 amount) external;
+    /// @notice Stored OkuM multiplier (dollar value per token, 1e18 = $1.00).
     function okuMMultiplier() external view returns (uint256);
+    /// @notice Directly override the stored multiplier.
     function setOkuMMultiplier(uint256 newMultiplier) external;
+    /// @notice Distribute realized dollar yield across all token holders.
     function distributeYield(uint256 yieldAmount) external;
-    /// @notice Block number of last yield distribution (for sandwich-attack prevention)
+    /// @notice Block number of last yield distribution (for sandwich-attack prevention).
     function lastYieldDistributionBlock() external view returns (uint256);
 }

@@ -81,6 +81,13 @@ pub mod oku_dollar {
         instructions::core::wrap(ctx, oku_m_amount, min_shares_out)
     }
 
+    /// Wrap OkuMoney -> usdOku with a separate receiver.
+    /// Caller provides OkuMoney; receiver gets usdOku shares.
+    /// Matches EVM `OkuDollar.wrap(amount, receiver, minAmountOut)`.
+    pub fn wrap_to(ctx: Context<WrapTo>, oku_m_amount: u64, min_shares_out: u64) -> Result<u64> {
+        instructions::core::wrap_to(ctx, oku_m_amount, min_shares_out)
+    }
+
     /// Unwrap usdOku -> OkuMoney
     /// Burns usdOku shares and returns OkuMoney
     pub fn unwrap(ctx: Context<Unwrap>, shares: u64) -> Result<()> {

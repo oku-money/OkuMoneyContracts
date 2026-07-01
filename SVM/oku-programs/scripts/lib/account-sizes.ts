@@ -14,10 +14,10 @@
  */
 
 // lite_psm — programs/lite-psm/src/state.rs
-export const PSM_CONFIG_LEN = 658;            // const _: () = assert!(PsmConfig::LEN == 658);
-                                              // Was 722 before noBridge phase C (which removed
-                                              // the two `blacklist_exempt_*` Pubkey slots,
-                                              // -64 bytes).
+export const PSM_CONFIG_LEN = 714;            // const _: () = assert!(PsmConfig::LEN == 714);
+                                              // Was 674 before direct-mint addition (which added
+                                              // `direct_minter: Pubkey` + `direct_minter_allowance: u64`,
+                                              // +40 bytes).
 export const REDEMPTION_QUEUE_LEN = 9_640;    // const _: () = assert!(RedemptionQueue::LEN == 9_640);
                                               // Zero-copy ring at MAX_ENTRIES=200 (Phase 13b).
                                               // Capped at 200 (not the spec target of 500) by Solana's

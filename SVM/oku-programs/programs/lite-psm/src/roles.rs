@@ -27,6 +27,7 @@
 //! | `CapManager` | `OKUM_CAP_MANAGER` | Cold Multisig - set max supply |
 //! | `AllowanceManager` | `OKUM_ALLOWANCE_MANAGER` | Cold Multisig - reset minter allowance |
 //! | `Rebaser` | `OKUM_REBASER` | Orchestrator - update OkuMoney price |
+//! | `DirectMinter` | `OKUM_MINTER` (non-PSM) | Operator - direct OkuMoney mint without USDC |
 //!
 //! v1 cross-chain transfers are mediated off-chain by an orchestrator
 //! holding `BufferDepositor` + `QueueProcessor` + `Rebaser`; there is
@@ -86,4 +87,8 @@ pub enum AuthorityRole {
     /// Orchestrator - update OkuMoney price.
     /// EVM: OKUM_REBASER
     Rebaser,
+
+    /// Operator / fiat gateway — can mint OkuMoney directly without USDC.
+    /// EVM: `OKUM_MINTER` (when granted to a non-PSM address)
+    DirectMinter,
 }

@@ -97,6 +97,26 @@ pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Resu
     Ok(())
 }
 
+/// Reset direct-minter allowance (allowance_manager only).
+///
+/// Mirrors `set_minter_allowance` but controls the separate
+/// `direct_minter_allowance` consumed by `mint_oku_m_direct` /
+/// `mint_usd_oku_direct`. EVM equivalent: `configureMinterAllowance`
+/// called for the direct-minter address.
+pub fn set_direct_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    let old_allowance = config.direct_minter_allowance;
+    config.direct_minter_allowance = amount;
+
+    emit!(DirectMinterAllowanceUpdatedEvent {
+        actor: ctx.accounts.allowance_manager.key(),
+        old_allowance,
+        new_allowance: amount,
+    });
+
+    Ok(())
+}
+
 /// Rotate the oracle relay's Pyth USDC/USD feed (`oracle_manager` only).
 ///
 /// `new_feed == Pubkey::default()` is the operator-side kill switch — it
@@ -382,6 +402,7 @@ pub fn set_authority(
         CapManager        => cap_manager,
         AllowanceManager  => allowance_manager,
         Rebaser           => rebaser,
+        DirectMinter      => direct_minter,
     };
 
     emit!(AuthorityUpdatedEvent {

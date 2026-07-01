@@ -159,6 +159,105 @@ pub struct Wrap<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Wrap OkuMoney into usdOku — with a separate receiver.
+///
+/// Like `Wrap`, but the caller provides OkuMoney and a separate `receiver`
+/// gets the minted usdOku shares. Matches EVM `OkuDollar.wrap(amount,
+/// receiver, minAmountOut)` where the caller and receiver may differ.
+///
+/// Primary use case: CPI from lite-psm's `mint_usd_oku_direct` instruction,
+/// where the PsmConfig PDA mints OkuMoney to its own ATA and then wraps it
+/// into usdOku for a user in a single instruction.
+#[derive(Accounts)]
+pub struct WrapTo<'info> {
+    /// Payer for any ATA initialisation. Typically the operator submitting
+    /// the transaction. Must be a signer so Anchor can debit lamports for
+    /// `init_if_needed`.
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    /// Caller who owns the OkuMoney being wrapped. May be a PDA (via CPI
+    /// with `invoke_signed`). Distinct from `payer` so a PDA can be the
+    /// transfer authority without needing lamports.
+    /// CHECK: Validated as transfer authority on `caller_oku_money_ata`.
+    pub caller: Signer<'info>,
+
+    /// Receiver of the minted usdOku shares. Does NOT need to sign —
+    /// matches EVM `wrap(amount, receiver, min)`.
+    /// CHECK: Used only as the ATA authority for `receiver_usd_oku_ata`.
+    pub receiver: UncheckedAccount<'info>,
+
+    #[account(
+        seeds = [OkuDollarConfig::SEED],
+        bump = config.bump,
+        constraint = !config.is_paused @ OkuDollarError::VaultPaused
+    )]
+    pub config: Box<Account<'info, OkuDollarConfig>>,
+
+    /// OkuMoney mint (Token-2022)
+    #[account(
+        address = config.oku_money_mint,
+        mint::token_program = token_2022_program
+    )]
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    /// usdOku mint (Token-2022)
+    #[account(
+        mut,
+        address = config.usd_oku_mint,
+        mint::token_program = token_2022_program
+    )]
+    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    /// Caller's OkuMoney token account (source of OkuMoney).
+    /// Constrained to `caller` as authority so only the caller (or a PDA
+    /// signing via CPI) can authorise the transfer.
+    #[account(
+        mut,
+        token::mint = oku_money_mint,
+        token::authority = caller,
+        token::token_program = token_2022_program,
+    )]
+    pub caller_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    /// Receiver's usdOku token account (destination of minted shares).
+    /// `init_if_needed` so the receiver doesn't need a pre-existing ATA.
+    #[account(
+        init_if_needed,
+        payer = payer,
+        associated_token::mint = usd_oku_mint,
+        associated_token::authority = receiver,
+        associated_token::token_program = token_2022_program,
+    )]
+    pub receiver_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    /// Vault's OkuMoney reserve account
+    #[account(
+        mut,
+        address = config.reserve_vault
+    )]
+    pub reserve_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    /// PSM config account (for reading oku_m_price)
+    #[account(
+        address = config.psm_config
+    )]
+    pub psm_config: Box<Account<'info, PsmConfig>>,
+
+    /// Dead-shares ATA — only required on the first deposit
+    /// (`total_supply == 0`). See `Wrap` context for full documentation.
+    #[account(
+        mut,
+        token::mint = usd_oku_mint,
+        token::token_program = token_2022_program,
+    )]
+    pub dead_shares_ata: Option<Box<InterfaceAccount<'info, TokenAccountInterface>>>,
+
+    pub token_2022_program: Program<'info, Token2022>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
 /// Unwrap usdOku back to OkuMoney
 #[derive(Accounts)]
 pub struct Unwrap<'info> {

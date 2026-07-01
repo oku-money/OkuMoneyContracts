@@ -2253,6 +2253,91 @@ contract OkuDollarTest is BaseTest {
         okuDollar.permit(user1, user2, 50e18, block.timestamp + 1 hours, 0, bytes32(0), bytes32(0));
     }
 
+    // ============ Permit Positive-Path Tests ============
+
+    function test_Permit_SetsAllowance() public {
+        uint256 ownerPk = user2Pk;
+        address owner = vm.addr(ownerPk);
+
+        uint256 amount = 100e18;
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 nonce = okuDollar.nonces(owner);
+
+        bytes32 domainSeparator = _getOkuDollarDomainSeparator();
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256(
+                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+                ),
+                owner,
+                user1,
+                amount,
+                nonce,
+                deadline
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPk, digest);
+
+        okuDollar.permit(owner, user1, amount, deadline, v, r, s);
+
+        assertEq(okuDollar.allowance(owner, user1), amount);
+        assertEq(okuDollar.nonces(owner), nonce + 1);
+    }
+
+    function test_Permit_AllowsTransferFrom() public {
+        uint256 ownerPk = user2Pk;
+        address owner = vm.addr(ownerPk);
+
+        uint256 okuMAmount = 100e18;
+        _mintUsdOku(owner, okuMAmount);
+        uint256 ownerBalance = okuDollar.balanceOf(owner);
+        assertTrue(ownerBalance > 0);
+
+        // Sign permit for user1 to spend owner's OkuDollar
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes32 domainSeparator = _getOkuDollarDomainSeparator();
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256(
+                    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
+                ),
+                owner,
+                user1,
+                ownerBalance,
+                okuDollar.nonces(owner),
+                deadline
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPk, digest);
+
+        okuDollar.permit(owner, user1, ownerBalance, deadline, v, r, s);
+
+        // user1 can now transferFrom
+        vm.prank(user1);
+        assertTrue(okuDollar.transferFrom(owner, user3, ownerBalance));
+
+        assertEq(okuDollar.balanceOf(user3), ownerBalance);
+        assertEq(okuDollar.balanceOf(owner), 0);
+    }
+
+    // ============ Internal Helpers ============
+
+    function _getOkuDollarDomainSeparator() internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                keccak256(
+                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                ),
+                keccak256(bytes("OkuDollar")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(okuDollar)
+            )
+        );
+    }
+
     // ============ View Getter Tests ============
 
     function test_View_UsdLastAccrualTime() public {

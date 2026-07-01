@@ -419,4 +419,20 @@ contract CoverageGapsTest is BaseTest {
             );
         }
     }
+
+    // ============ configureMinterAllowance ZeroAddress ============
+
+    function test_ConfigureMinterAllowance_RevertZeroAddress() public {
+        vm.prank(allowanceManager);
+        vm.expectRevert(Errors.ZeroAddress.selector);
+        okuMoney.configureMinterAllowance(address(0), 1000e18);
+    }
+
+    // ============ depositBuffer ZeroAmount ============
+
+    function test_DepositBuffer_RevertZeroAmount() public {
+        vm.prank(bufferDepositor);
+        vm.expectRevert(Errors.ZeroAmount.selector);
+        litePsm.depositBuffer(0);
+    }
 }

@@ -35,6 +35,8 @@
     "admin:rescue-queue-entry": "tsx scripts/admin/rescue-queue-entry.ts",
     "admin:close-programs": "tsx scripts/admin/close-programs.ts",
     "admin:grant-roles": "tsx scripts/admin/grant-roles.ts",
+    "admin:grant-roles:devnet": "NETWORK=devnet tsx scripts/admin/grant-roles.ts",
+    "admin:grant-roles:mainnet": "NETWORK=mainnet-beta tsx scripts/admin/grant-roles.ts",
     "upgrade": "tsx scripts/upgrade/index.ts",
     "upgrade:devnet": "NETWORK=devnet tsx scripts/upgrade/index.ts",
     "upgrade:mainnet": "NETWORK=mainnet-beta tsx scripts/upgrade/index.ts",

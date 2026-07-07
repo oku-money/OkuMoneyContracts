@@ -34,7 +34,7 @@ function parseArg(name: string): string | undefined {
   return a ? a.split(/[= ]/)[1] : process.env[name.toUpperCase().replace(/-/g, "_")];
 }
 
-const YES_MAINNET = process.argv.includes("--yes-mainnet");
+const YES_MAINNET = process.argv.includes("--yes-mainnet") || process.env.YES_MAINNET === "true";
 const DRY_RUN = process.env.DRY_RUN === "true";
 
 async function main() {

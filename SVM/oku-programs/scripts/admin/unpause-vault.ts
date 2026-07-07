@@ -22,9 +22,11 @@ async function main() {
   const provider = createProvider(network);
   anchor.setProvider(provider);
   const deployment = loadDeployment(network);
-  if (!deployment?.programs?.okuDollar) throw new Error(`No deployment for ${network}.`);
+  const okuDollarAddr =
+    deployment?.programs?.okuDollarProgram ?? (deployment?.programs as any)?.okuDollar;
+  if (!okuDollarAddr) throw new Error(`No deployment for ${network}.`);
 
-  const okuDollarId = new PublicKey(deployment.programs.okuDollar);
+  const okuDollarId = new PublicKey(okuDollarAddr);
   const program = anchor.workspace.OkuDollar as Program<OkuDollar>;
   const [vaultConfig] = deriveVaultConfigPDA(okuDollarId);
 

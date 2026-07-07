@@ -3,7 +3,7 @@
  */
 
 import { PublicKey, SystemProgram } from '@solana/web3.js';
-import { Program, AnchorProvider } from '@anchor-lang/core';
+import { Program, AnchorProvider, BN } from '@anchor-lang/core';
 import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -13,6 +13,7 @@ import {
 import { logger } from '../../utils/logger';
 import { loadAuthorities } from '../../config/authorities';
 import { NetworkConfig } from '../../config/networks';
+import { DIRECT_MINTER_ALLOWANCE } from '../../config/constants';
 import {
   derivePsmConfigPDA,
   deriveRedemptionQueuePDA,
@@ -224,6 +225,67 @@ export async function initializePsm(
         throw error;
       }
     }
+  }
+
+  // ---- Step 4: Configure direct-minter role + allowance ----
+  // The Rust `initialize()` intentionally sets `direct_minter = Pubkey::default()`.
+  // If the authorities config specifies a non-default directMinter, wire it up
+  // here via `set_authority(DirectMinter, ...)` + `set_direct_minter_allowance(...)`.
+  // This ensures the fiat-mint path is operational immediately after deploy-init,
+  // without requiring a separate manual `grant-roles` step.
+  const directMinter = authorities.psm.directMinter;
+  if (directMinter && !directMinter.equals(PublicKey.default)) {
+    logger.info('Configuring direct-minter role...');
+    try {
+      const currentCfg: any = await program.account['psmConfig'].fetch(psmConfig);
+      const currentDirectMinter = currentCfg.directMinter as PublicKey;
+
+      if (currentDirectMinter.equals(directMinter)) {
+        logger.warning(
+          `direct_minter already set to ${directMinter.toBase58().slice(0, 12)}... — skipping`
+        );
+      } else {
+        await program.methods
+          .setAuthority({ directMinter: {} }, directMinter)
+          .accountsPartial({
+            roleAdmin: provider.wallet.publicKey,
+            config: psmConfig,
+          })
+          .rpc();
+        logger.success(`direct_minter set to ${directMinter.toBase58().slice(0, 12)}...`);
+      }
+
+      // Set the direct-minter allowance (allowance_manager is still the
+      // deployer at this point — deploy-init runs before grant-roles).
+      const currentAllowance = currentCfg.directMinterAllowance;
+      const targetAllowance = new BN(DIRECT_MINTER_ALLOWANCE);
+      if (currentAllowance && currentAllowance.eq(targetAllowance)) {
+        logger.warning(
+          `direct_minter_allowance already ${targetAllowance.toString()} — skipping`
+        );
+      } else {
+        await program.methods
+          .setDirectMinterAllowance(targetAllowance)
+          .accountsPartial({
+            allowanceManager: provider.wallet.publicKey,
+            config: psmConfig,
+          })
+          .rpc();
+        logger.success(
+          `direct_minter_allowance set to ${targetAllowance.toString()}`
+        );
+      }
+    } catch (error: any) {
+      // Non-fatal — directMinter can be configured later via grant-roles.ts
+      logger.warning(
+        `Direct-minter setup failed (non-fatal): ${error.message?.slice(0, 80)}`
+      );
+      logger.info(
+        'Run NETWORK=<network> tsx scripts/admin/grant-roles.ts to configure separately.'
+      );
+    }
+  } else {
+    logger.info('No directMinter configured in authorities — skipping (configure via grant-roles).');
   }
 
   return {

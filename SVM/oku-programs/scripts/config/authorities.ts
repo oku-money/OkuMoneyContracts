@@ -7,9 +7,10 @@
 
 import { PublicKey } from '@solana/web3.js';
 import { NetworkName } from './networks';
+import { DEFAULT_DIRECT_MINTER } from './constants';
 
 export interface AuthorityConfig {
-  // PSM authorities (12 roles)
+  // PSM authorities (13 roles)
   psm: {
     roleAdmin: PublicKey;
     pauser: PublicKey;
@@ -23,6 +24,12 @@ export interface AuthorityConfig {
     capManager: PublicKey;
     allowanceManager: PublicKey;
     rebaser: PublicKey;
+    /**
+     * Operator / fiat gateway — can mint OkuMoney directly without USDC.
+     * Cannot be the same as roleAdmin (separation-of-duties guard).
+     * `PublicKey.default` means "not configured / disabled".
+     */
+    directMinter: PublicKey;
   };
 
   // Vault authorities (5 roles)
@@ -55,6 +62,10 @@ function allRolesToSingleKey(deployer: PublicKey): AuthorityConfig {
       capManager: deployer,
       allowanceManager: deployer,
       rebaser: deployer,
+      // directMinter cannot be the deployer because deployer == role_admin
+      // and the on-chain guard rejects non-RoleAdmin roles set to
+      // role_admin. Use the shared devnet master EOA instead.
+      directMinter: new PublicKey(DEFAULT_DIRECT_MINTER),
     },
     vault: {
       roleAdmin: deployer,
@@ -104,6 +115,8 @@ export function loadAuthorities(
   const warmMultisig = getEnvPubkey('MAINNET_WARM_MULTISIG', true);
   const orchestrator = getEnvPubkey('MAINNET_ORCHESTRATOR', true);
 
+  const directMinter = getEnvPubkey('MAINNET_DIRECT_MINTER', false);
+
   return {
     psm: {
       roleAdmin: coldMultisig,
@@ -118,6 +131,7 @@ export function loadAuthorities(
       capManager: coldMultisig,
       allowanceManager: coldMultisig,
       rebaser: orchestrator,
+      directMinter,
     },
     vault: {
       roleAdmin: coldMultisig,

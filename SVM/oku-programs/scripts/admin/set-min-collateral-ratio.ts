@@ -52,14 +52,16 @@ async function main() {
   const provider = createProvider(network);
   anchor.setProvider(provider);
   const deployment = loadDeployment(network);
-  if (!deployment?.programs?.okuDollar) {
+  const okuDollarAddr =
+    deployment?.programs?.okuDollarProgram ?? (deployment?.programs as any)?.okuDollar;
+  if (!okuDollarAddr) {
     throw new Error(`No deployment for ${network}; run deploy:programs first.`);
   }
   if (!deployment?.programs?.litePsm) {
     throw new Error(`No litePsm deployment for ${network}; oku_dollar reads psm_config.oku_m_price.`);
   }
 
-  const okuDollarId = new PublicKey(deployment.programs.okuDollar);
+  const okuDollarId = new PublicKey(okuDollarAddr);
   const litePsmId = new PublicKey(deployment.programs.litePsm);
   const program = anchor.workspace.OkuDollar as Program<OkuDollar>;
   const [vaultConfig] = deriveVaultConfigPDA(okuDollarId);

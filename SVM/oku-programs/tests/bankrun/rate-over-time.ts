@@ -112,7 +112,7 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
     vault = getProgram<OkuDollar>(h, "oku_dollar");
 
     [psmConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v3")],
+      [Buffer.from("psm_config_v4")],
       psm.programId
     );
 
@@ -305,8 +305,6 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
         userOkuMoneyAta,
         vaultUsdc: vaultUsdcAta,
         vaultOkuMoney: vaultOkuMoneyAta,
-        oracleRelayFeed: null,
-
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -355,8 +353,6 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
         userOkuMoneyAta,
         vaultUsdc: vaultUsdcAta,
         vaultOkuMoney: vaultOkuMoneyAta,
-        oracleRelayFeed: null,
-
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -457,8 +453,6 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
         userOkuMoneyAta,
         vaultUsdc: vaultUsdcAta,
         vaultOkuMoney: vaultOkuMoneyAta,
-        oracleRelayFeed: null,
-
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -676,8 +670,6 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
         userOkuMoneyAta,
         vaultUsdc: vaultUsdcAta,
         vaultOkuMoney: vaultOkuMoneyAta,
-        oracleRelayFeed: null,
-
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -736,7 +728,7 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
     psm = h.program;
 
     [psmConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v3")],
+      [Buffer.from("psm_config_v4")],
       psm.programId
     );
 
@@ -863,7 +855,6 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
             userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
             vaultOkuMoney: vaultOkuMoneyAta,
-            oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -892,8 +883,6 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
         userOkuMoneyAta,
         vaultUsdc: vaultUsdcAta,
         vaultOkuMoney: vaultOkuMoneyAta,
-        oracleRelayFeed: null,
-
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,

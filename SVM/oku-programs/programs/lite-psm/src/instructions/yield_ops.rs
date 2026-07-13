@@ -22,8 +22,7 @@ use anchor_lang::prelude::*;
 /// Rejects `new_multiplier == oku_m_price` so a no-op call cannot stamp
 /// the sandwich-lock slot without actually moving the multiplier (which
 /// would waste the lock window for the entire slot). Mirrors the
-/// `YieldTooSmall` guard on `distribute_yield` and the EVM fix landed
-/// alongside the oracle-relay cycle.
+/// `YieldTooSmall` guard on `distribute_yield`.
 pub fn set_oku_m_price(ctx: Context<SetOkuMPrice>, new_multiplier: u64) -> Result<()> {
     // Cycle 4 (OKUD-06 mirror): self-fence on the lite-psm yield slot.
     // Two yield-affecting writes in the same slot would otherwise be

@@ -16,7 +16,6 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {RedemptionQueue} from "./RedemptionQueue.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
 import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
-import {IOracleRelay} from "../oracle/IOracleRelay.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
@@ -36,13 +35,11 @@ import {LitePSMEvents} from "../lib/events/LitePSMEvents.sol";
  *      OkuMoney is non-rebasing — okuMMultiplier() tracks appreciation separately.
  *      The PSM converts at dollar value via okuMMultiplier(): depositing 100 USDC at
  *      okuMMultiplier=$1.05 yields ~95.24 OkuM; redeeming those OkuM returns ~100 USDC.
- *      Includes a USDC peg circuit-breaker (via {IOracleRelay}) and a redemption queue
- *      for when the buffer is empty. Convenience functions wrap/unwrap OkuDollar via
- *      the vault.
+ *      Includes a redemption queue for when the buffer is empty. Convenience functions
+ *      wrap/unwrap OkuDollar via the vault.
  *
- *      Peg-check semantics: every mint/redeem path calls `oracleRelay.checkUsdcPeg()`
- *      when the relay is configured. Operators can disable the check by calling
- *      `setOracleRelay(address(0))` (operational kill switch for incident response).
+ *      USDC peg monitoring is handled off-chain; operators can pause the PSM via
+ *      `pause()` if a depeg is detected.
  *
  *      Decimal flexibility: the USDC-side decimal multiplier is computed at init from
  *      `IERC20Metadata(usdc).decimals()` and stored on the proxy. This lets the PSM run
@@ -71,8 +68,9 @@ contract LitePSM is
         IOkuDollar okuDollar;
         IERC20 usdc;
         RedemptionQueue redemptionQueue;
-        // USDC peg circuit-breaker. `address(0)` disables the check.
-        IOracleRelay oracleRelay;
+        // Deprecated: was the USDC peg circuit-breaker oracle relay.
+        // Retained as a placeholder to preserve UUPS storage layout (slot 4).
+        address __deprecated_oracleRelay;
         // Decimal conversion multiplier resolved at init from IERC20Metadata(usdc).decimals().
         // For Circle USDC (6 decimals) this is 1e12.
         uint256 usdcDecimalMultiplier;
@@ -114,10 +112,6 @@ contract LitePSM is
     /// @param _usdc USDC token address (must implement IERC20Metadata.decimals())
     /// @param _redemptionQueue RedemptionQueue address
     /// @param _admin Admin address (receives full role set; see {OkuMoney.initialize})
-    /// @dev The OracleRelay is wired post-deploy via {setOracleRelay}; until then,
-    ///      the peg check is bypassed. This bootstrap path is required because
-    ///      the chain-specific Chainlink feed address may not be known at the
-    ///      moment the PSM proxy is deployed.
     function initialize(
         address _okuMoney,
         address _okuDollar,
@@ -159,7 +153,6 @@ contract LitePSM is
         _grantRole(Roles.PSM_QUEUE_PROCESSOR, _admin);
         _grantRole(Roles.PSM_BUFFER_DEPOSITOR, _admin);
         _grantRole(Roles.PSM_BUFFER_WITHDRAWER, _admin);
-        _grantRole(Roles.PSM_ORACLE_MANAGER, _admin);
     }
 
     // ============ Storage Accessor Views ============
@@ -182,11 +175,6 @@ contract LitePSM is
     /// @notice The RedemptionQueue contract for deferred redemptions.
     function redemptionQueue() external view returns (RedemptionQueue) {
         return _getLitePSMStorage().redemptionQueue;
-    }
-
-    /// @notice The configured USDC peg oracle relay (address(0) = disabled).
-    function oracleRelay() external view returns (IOracleRelay) {
-        return _getLitePSMStorage().oracleRelay;
     }
 
     /// @notice Decimal conversion multiplier for the configured USDC variant.
@@ -217,10 +205,6 @@ contract LitePSM is
         if (usdcAmount == 0) revert Errors.ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
-        // Cycle 4 (EVM-17): peg check hoisted above the math + transfers
-        // so the depeg-revert path doesn't waste compute on the
-        // dollar-conversion ladder.
-        _pegCheck($);
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
 
         uint256 usdcValue18 = MathLib.usdcToDollars(usdcAmount, decimalMultiplier);
@@ -284,7 +268,6 @@ contract LitePSM is
         if (okuMAmount == 0) revert Errors.ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
-        _pegCheck($);
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
 
         // Cycle 4 (EVM-05): reject sub-USDC-unit redemptions BEFORE
@@ -354,8 +337,6 @@ contract LitePSM is
         if (usdcAmount == 0) revert Errors.ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
-        // Cycle 4 (EVM-17): peg check hoisted above the math.
-        _pegCheck($);
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
 
         uint256 usdcValue18 = MathLib.usdcToDollars(usdcAmount, decimalMultiplier);
@@ -409,7 +390,6 @@ contract LitePSM is
         if (usdAmount == 0) revert Errors.ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
-        _pegCheck($);
 
         // Measure actual UsdOku received: OkuDollar is share-based with a continuously
         // compounding usdMultiplier. `transferFrom(amount)` floors the share conversion
@@ -454,42 +434,6 @@ contract LitePSM is
         $.usdc.revokeAllowance(address($.redemptionQueue));
 
         emit BufferRefilled($.usdc.balanceOf(address(this)), startIndex, endIndex);
-    }
-
-    // ============ Oracle Relay Management ============
-
-    /// @notice Wire (or unwire) the USDC peg circuit-breaker.
-    /// @param newRelay Address of the new oracle relay (address(0) to disable).
-    /// @dev `address(0)` disables the check — operational kill switch
-    ///      for incident response. When set to a non-zero address,
-    ///      every mint and redeem path calls `relay.checkUsdcPeg()`
-    ///      and reverts on depeg / unhealthy oracle data.
-    ///
-    ///      Cycle 4 (EVM-03): emits a dedicated `OracleRelayDisabled`
-    ///      event in addition to `OracleRelayUpdated` so monitoring
-    ///      tooling can distinguish a routine rotation from a
-    ///      kill-switch trip. The disable event only fires when an
-    ///      actually-configured relay is being cleared (i.e.
-    ///      `oldRelay != 0`); a no-op `setOracleRelay(0)` on a fresh
-    ///      deploy does not pollute the monitoring feed.
-    function setOracleRelay(address newRelay) external onlyRole(Roles.PSM_ORACLE_MANAGER) {
-        LitePSMStorage storage $ = _getLitePSMStorage();
-        address oldRelay = address($.oracleRelay);
-        $.oracleRelay = IOracleRelay(newRelay);
-        emit OracleRelayUpdated(oldRelay, newRelay);
-        if (newRelay == address(0) && oldRelay != address(0)) {
-            emit OracleRelayDisabled(msg.sender, oldRelay, block.number);
-        }
-    }
-
-    /// @dev Single peg-check call site reused by every mint/redeem path. When the
-    ///      relay is not configured the check is a no-op (matches the relay
-    ///      bootstrap path; see {initialize}).
-    function _pegCheck(LitePSMStorage storage $) internal view {
-        IOracleRelay relay = $.oracleRelay;
-        if (address(relay) != address(0)) {
-            relay.checkUsdcPeg();
-        }
     }
 
     // ============ Admin Functions ============

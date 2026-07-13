@@ -1,7 +1,7 @@
 //! # Lite-PSM constants
 //!
-//! Protocol-wide constants (`PRECISION`, `BASIS_POINTS`, `MAX_OKU_M_PRICE`,
-//! oracle staleness bounds) live in the workspace crate `oku-shared` and
+//! Protocol-wide constants (`PRECISION`, `BASIS_POINTS`, `MAX_OKU_M_PRICE`)
+//! live in the workspace crate `oku-shared` and
 //! are re-exported here for ergonomics — call sites continue to write
 //! `use crate::constants::*` without caring where the constant is
 //! authored.
@@ -46,10 +46,7 @@
 // Re-exports from the shared workspace crate
 // ---------------------------------------------------------------------------
 
-pub use oku_shared::{
-    BASIS_POINTS, MAX_FEED_EXPO_MAGNITUDE, MAX_OKU_M_PRICE, ORACLE_MAX_STALENESS_SECS,
-    ORACLE_MIN_STALENESS_SECS, ORACLE_USDC_PRICE_CEILING, ORACLE_USDC_PRICE_FLOOR, PRECISION,
-};
+pub use oku_shared::{BASIS_POINTS, MAX_OKU_M_PRICE, PRECISION};
 
 // Bridge-specific constants (BRIDGE_DEADLINE_*, BRIDGE_MESSAGE_LEN,
 // BRIDGE_ED25519_*, MAX_SUPPORTED_CHAINS, MAX_NONCE_SKIP) were removed in the

@@ -128,7 +128,7 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
     vault = getProgram<OkuDollar>(h, "oku_dollar");
 
     [psmConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v3")],
+      [Buffer.from("psm_config_v4")],
       psm.programId
     );
 
@@ -375,8 +375,6 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
         userOkuMoneyAta: orchestratorOkuMoneyAta,
         vaultUsdc: vaultUsdcAta,
         vaultOkuMoney: vaultOkuMoneyAta,
-        oracleRelayFeed: null,
-
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -426,7 +424,6 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
         userUsdcAta: orchestratorUsdcAta,
         userOkuMoneyAta: orchestratorOkuMoneyAta,
         vaultUsdc: vaultUsdcAta,
-        oracleRelayFeed: null,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -550,8 +547,6 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
         userOkuMoneyAta: orchestratorOkuMoneyAta,
         vaultUsdc: vaultUsdcAta,
         vaultOkuMoney: vaultOkuMoneyAta,
-        oracleRelayFeed: null,
-
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -605,7 +600,6 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
         userUsdcAta: orchestratorUsdcAta,
         userOkuMoneyAta: orchestratorOkuMoneyAta,
         vaultUsdc: vaultUsdcAta,
-        oracleRelayFeed: null,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -782,8 +776,6 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
         userOkuMoneyAta: orchestratorOkuMoneyAta,
         vaultUsdc: vaultUsdcAta,
         vaultOkuMoney: vaultOkuMoneyAta,
-        oracleRelayFeed: null,
-
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -813,7 +805,6 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
         userUsdcAta: orchestratorUsdcAta,
         userOkuMoneyAta: orchestratorOkuMoneyAta,
         vaultUsdc: vaultUsdcAta,
-        oracleRelayFeed: null,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -895,7 +886,6 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
         userUsdcAta: bobUsdcAta,
         userOkuMoneyAta: bobOkuMoneyAta,
         vaultUsdc: vaultUsdcAta,
-        oracleRelayFeed: null,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,

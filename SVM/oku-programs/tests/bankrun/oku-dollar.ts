@@ -160,7 +160,7 @@ describe("oku-dollar", () => {
 
     // Derive PSM config PDA up front.
     [psmConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v3")],
+      [Buffer.from("psm_config_v4")],
       psmProgram.programId
     );
 

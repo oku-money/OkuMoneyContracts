@@ -23,11 +23,11 @@
 //! | `QueueProcessor` | `PSM_QUEUE_PROCESSOR` | Orchestrator - process redemption queue |
 //! | `BufferDepositor` | `PSM_BUFFER_DEPOSITOR` | Orchestrator - deposit USDC buffer |
 //! | `BufferWithdrawer` | `PSM_BUFFER_WITHDRAWER` | Cold Multisig - withdraw buffer |
-//! | `OracleManager` | `PSM_ORACLE_MANAGER` | Cold Multisig - configure oracle |
 //! | `CapManager` | `OKUM_CAP_MANAGER` | Cold Multisig - set max supply |
 //! | `AllowanceManager` | `OKUM_ALLOWANCE_MANAGER` | Cold Multisig - reset minter allowance |
 //! | `Rebaser` | `OKUM_REBASER` | Orchestrator - update OkuMoney price |
 //! | `DirectMinter` | `OKUM_MINTER` (non-PSM) | Operator - direct OkuMoney mint without USDC |
+//! | `DirectBurner` | `OKUM_BURNER` (non-PSM) | Operator - direct OkuMoney burn without USDC payout |
 //!
 //! v1 cross-chain transfers are mediated off-chain by an orchestrator
 //! holding `BufferDepositor` + `QueueProcessor` + `Rebaser`; there is
@@ -72,10 +72,6 @@ pub enum AuthorityRole {
     /// EVM: PSM_BUFFER_WITHDRAWER
     BufferWithdrawer,
 
-    /// Cold Multisig - configure oracle.
-    /// EVM: PSM_ORACLE_MANAGER
-    OracleManager,
-
     /// Cold Multisig - set max supply.
     /// EVM: OKUM_CAP_MANAGER
     CapManager,
@@ -91,4 +87,9 @@ pub enum AuthorityRole {
     /// Operator / fiat gateway — can mint OkuMoney directly without USDC.
     /// EVM: `OKUM_MINTER` (when granted to a non-PSM address)
     DirectMinter,
+
+    /// Operator / bridge backend — can burn OkuMoney directly without
+    /// triggering a USDC redemption. Enables SVM→EVM bridging.
+    /// EVM: `OKUM_BURNER` (when granted to a non-PSM address)
+    DirectBurner,
 }

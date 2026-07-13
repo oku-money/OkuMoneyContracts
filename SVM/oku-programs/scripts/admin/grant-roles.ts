@@ -81,7 +81,6 @@ const PSM_ROLES = [
   'queueProcessor',
   'bufferDepositor',
   'bufferWithdrawer',
-  'oracleManager',
   'capManager',
   'allowanceManager',
   'rebaser',

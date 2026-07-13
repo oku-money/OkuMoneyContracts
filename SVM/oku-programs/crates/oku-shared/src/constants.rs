@@ -93,69 +93,6 @@ const _: () = {
 };
 
 // ---------------------------------------------------------------------------
-// Oracle relay bounds (USDC peg circuit-breaker)
-// ---------------------------------------------------------------------------
-
-/// Lower bound on the configurable Pyth-oracle staleness threshold
-/// (seconds). Below this, freshness is so tight that benign network jitter
-/// will force every peg check to revert.
-///
-/// Mirrors EVM `Constants.ORACLE_MIN_STALENESS = 60`.
-pub const ORACLE_MIN_STALENESS_SECS: i64 = 60;
-
-/// Upper bound on the configurable Pyth-oracle staleness threshold
-/// (seconds). Above this, the oracle is essentially always "fresh" and
-/// provides no protection — caught at setter time to flag operator
-/// misconfiguration.
-///
-/// Mirrors EVM `Constants.ORACLE_MAX_STALENESS = 7 days`.
-pub const ORACLE_MAX_STALENESS_SECS: i64 = 7 * 24 * 60 * 60;
-
-/// Hard floor for the USDC peg band enforced by `set_oracle_relay_band`.
-/// `0.95e9` = $0.95 (1e9 precision). Configuring a band below this would
-/// silently accept catastrophic depeg events. Defense-in-depth bound on
-/// operator setters; mirrors EVM `Constants.ORACLE_USDC_PRICE_FLOOR = 0.95e18`
-/// scaled to 1e9.
-pub const ORACLE_USDC_PRICE_FLOOR: u64 = 950_000_000;
-
-/// Hard ceiling for the USDC peg band enforced by `set_oracle_relay_band`.
-/// `1.05e9` = $1.05 (1e9 precision). Symmetric to `ORACLE_USDC_PRICE_FLOOR`;
-/// USDC trading above this band is almost certainly an oracle malfunction
-/// rather than a legitimate market price; reject either way. Mirrors EVM
-/// `Constants.ORACLE_USDC_PRICE_CEILING = 1.05e18` scaled to 1e9.
-pub const ORACLE_USDC_PRICE_CEILING: u64 = 1_050_000_000;
-
-/// Maximum absolute magnitude of the Pyth aggregator `expo` field accepted
-/// by the relay. Pyth feeds publish `(price: i64, expo: i32)` where the
-/// real value is `price * 10^expo`. USDC/USD feeds use `expo` around `-8`;
-/// the relay normalizes that to 1e9 precision. Anything with `|expo| > 18`
-/// would force pathological scaling math and is rejected at admin time.
-///
-/// EVM analogue: `MAX_FEED_DECIMALS = 18` (Chainlink reports `decimals()`
-/// rather than a signed exponent; conceptually identical clamp).
-pub const MAX_FEED_EXPO_MAGNITUDE: u32 = 18;
-
-/// Maximum permitted Pyth confidence-interval-to-price ratio, in basis
-/// points. Pyth publishes `(price, conf)` per round; the canonical advice
-/// is to reject rounds with `conf / price > MAX_CONFIDENCE_BPS / 10_000`,
-/// i.e. the publisher set's stated uncertainty about the price is too wide
-/// for the round to be useful for liquidation-grade pricing.
-///
-/// 200 bps = 2 %. Empirically USDC/USD `conf / price` is sub-10 bps during
-/// normal market hours; rounds above 2 % only appear during publisher-set
-/// degradation or major market dislocations — exactly when the relay's
-/// circuit-breaker is supposed to trip.
-///
-/// Used by `helpers::oracle_relay::get_usdc_price`. Sister constants are
-/// `ORACLE_USDC_PRICE_{FLOOR,CEILING}` (absolute band) and
-/// `ORACLE_M{IN,AX}_STALENESS_SECS` (temporal freshness).
-///
-/// EVM analogue: not present — Chainlink AggregatorV3 does not expose
-/// per-round confidence, so this is a Pyth-only defense. Documented in
-/// `audit/README.md` § "Deliberate non-parity" as an SVM-only hardening.
-pub const MAX_ORACLE_CONFIDENCE_BPS: u64 = 200;
-
-// ---------------------------------------------------------------------------
 // Token decimals
 // ---------------------------------------------------------------------------
 

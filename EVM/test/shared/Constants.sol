@@ -26,12 +26,6 @@ library TestConstants {
     /// @notice Basis points denominator (10000 = 100%)
     uint256 public constant BASIS_POINTS = SrcConstants.BASIS_POINTS;
 
-    /// @notice Minimum allowed PoR oracle staleness (re-exported for tests)
-    uint256 public constant ORACLE_MIN_STALENESS = SrcConstants.ORACLE_MIN_STALENESS;
-
-    /// @notice Maximum allowed PoR oracle staleness (re-exported for tests)
-    uint256 public constant ORACLE_MAX_STALENESS = SrcConstants.ORACLE_MAX_STALENESS;
-
     /// @notice OkuDollar minimum collateral ratio floor (re-exported for tests)
     uint256 public constant MIN_COLLATERAL_RATIO_FLOOR = SrcConstants.MIN_COLLATERAL_RATIO_FLOOR;
 
@@ -42,9 +36,6 @@ library TestConstants {
 
     /// @notice Default min collateral ratio for OkuDollar vault (95%)
     uint256 public constant MIN_COLLATERAL_RATIO = 95e16;
-
-    /// @notice Default PSM oracle staleness threshold for tests (1 hour)
-    uint256 public constant DEFAULT_STALENESS_THRESHOLD = 1 hours;
 
     // ============ Fuzz Bounds ============
 

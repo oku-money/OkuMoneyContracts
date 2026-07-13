@@ -10,7 +10,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
-import {IOracleRelay} from "../oracle/IOracleRelay.sol";
 import {Roles} from "../lib/Roles.sol";
 import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
@@ -38,10 +37,8 @@ import {ReentrancyGuardUpgradeable} from "../lib/ReentrancyGuardUpgradeable.sol"
  *      Decimal flexibility: like LitePSM, the USDC-side decimal multiplier is computed at
  *      init from `IERC20Metadata(usdc).decimals()` and stored on the proxy.
  *
- *      USDC peg circuit-breaker: `processQueue` calls `oracleRelay.checkUsdcPeg()` once
- *      before the batch loop (when the relay is configured) so a depeg event suspends
- *      queue drains the same way it suspends PSM mint/redeem. Operators set the relay
- *      via {setOracleRelay} (gated on `QUEUE_ORACLE_MANAGER`).
+ *      USDC peg monitoring is handled off-chain; operators can pause the PSM (which
+ *      gates `processQueue`) if a depeg is detected.
  *
  *      See Constants.sol for terminology legend.
  *      See {OkuMoney.initialize} for the unified role-grant policy.
@@ -74,8 +71,9 @@ contract RedemptionQueue is
         // IERC20Metadata(usdc).decimals(). For Circle USDC (6 decimals) the multiplier is 1e12.
         IERC20 usdc;
         uint256 usdcDecimalMultiplier;
-        // USDC peg circuit-breaker. `address(0)` disables the check.
-        IOracleRelay oracleRelay;
+        // Deprecated: was the USDC peg circuit-breaker oracle relay.
+        // Retained as a placeholder to preserve UUPS storage layout (slot 7).
+        address __deprecated_oracleRelay;
     }
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.RedemptionQueue")) - 1)) & ~bytes32(uint256(0xff))
@@ -132,7 +130,6 @@ contract RedemptionQueue is
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(Roles.QUEUE_UPGRADER, _admin);
         _grantRole(Roles.QUEUE_RESCUER, _admin);
-        _grantRole(Roles.QUEUE_ORACLE_MANAGER, _admin);
     }
 
     // ============ Storage Accessor Views ============
@@ -165,35 +162,6 @@ contract RedemptionQueue is
     /// @notice Total OkuMoney tokens escrowed across all pending queue entries.
     function totalQueuedOkuM() external view returns (uint256) {
         return _getRedemptionQueueStorage().totalQueuedOkuM;
-    }
-
-    /// @notice The configured USDC peg oracle relay (address(0) = disabled).
-    function oracleRelay() external view returns (IOracleRelay) {
-        return _getRedemptionQueueStorage().oracleRelay;
-    }
-
-    // ============ Oracle Relay Management ============
-
-    /// @notice Wire (or unwire) the USDC peg circuit-breaker.
-    /// @param newRelay Address of the new oracle relay (address(0) to disable).
-    /// @dev `address(0)` disables the check. When set, `processQueue`
-    ///      calls `relay.checkUsdcPeg()` once before the batch loop
-    ///      and reverts on depeg.
-    ///
-    ///      Cycle 4 (EVM-03): emits a dedicated `OracleRelayDisabled`
-    ///      event when an actually-configured relay is being cleared
-    ///      (i.e. `oldRelay != 0`) so monitoring tooling can
-    ///      distinguish a kill-switch trip from a routine rotation,
-    ///      and a no-op `setOracleRelay(0)` on a fresh deploy does
-    ///      not pollute the monitoring feed.
-    function setOracleRelay(address newRelay) external onlyRole(Roles.QUEUE_ORACLE_MANAGER) {
-        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
-        address oldRelay = address($.oracleRelay);
-        $.oracleRelay = IOracleRelay(newRelay);
-        emit OracleRelayUpdated(oldRelay, newRelay);
-        if (newRelay == address(0) && oldRelay != address(0)) {
-            emit OracleRelayDisabled(msg.sender, oldRelay, block.number);
-        }
     }
 
     // ============ Queue Management ============
@@ -242,14 +210,6 @@ contract RedemptionQueue is
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         if (startIndex < $.queueHead) revert StartBelowHead();
         if (endIndex > $.queueTail) revert EndAboveTail();
-
-        // Single peg check per batch (not per entry): a depeg event during a partial
-        // batch is caught by the next operator call. Skipped when relay is unset
-        // (matches the bootstrap path).
-        IOracleRelay relay = $.oracleRelay;
-        if (address(relay) != address(0)) {
-            relay.checkUsdcPeg();
-        }
 
         IERC20 usdcContract = $.usdc;
         uint256 usdcBalance = usdcContract.balanceOf(msg.sender);

@@ -57,7 +57,7 @@ export const DECIMALS = 6;
 
 /**
  * Cold multisig authority — high-security operations.
- * PSM roles: unpauser, unfreezer, bufferWithdrawer, oracleManager,
+ * PSM roles: unpauser, unfreezer, bufferWithdrawer,
  * capManager, allowanceManager.
  */
 export const coldMultisig = Keypair.generate();
@@ -97,9 +97,6 @@ export interface PsmSetupResult {
  * config: cold for high-security, warm for medium, psmOrchestrator for
  * automated.
  *
- * `oracleRelayPythProgramOwner` is fixed at the legacy mainnet Pyth ID as
- * a placeholder; tests that exercise the peg-check path call
- * `set_oracle_relay_pyth_program_owner` to rotate to their fixture's owner.
  */
 export async function initializePsm(
   h: BankrunHarness,
@@ -109,7 +106,7 @@ export async function initializePsm(
   okuMoneyMint: PublicKey
 ): Promise<PsmSetupResult> {
   const [configPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("psm_config_v3")],
+    [Buffer.from("psm_config_v4")],
     program.programId
   );
   const [redemptionQueuePda] = PublicKey.findProgramAddressSync(
@@ -137,13 +134,6 @@ export async function initializePsm(
     10 * anchor.web3.LAMPORTS_PER_SOL
   );
 
-  // Legacy mainnet Pyth ID — placeholder. Tests that exercise the
-  // peg-check path rotate to their fixture's owner via
-  // `set_oracle_relay_pyth_program_owner` after init.
-  const PYTH_LEGACY_MAINNET = new PublicKey(
-    "FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH"
-  );
-
   // Cycle 4 (PSM-17): `initialize` now takes a single `InitializeParams`
   // struct in place of the prior 15 positional pubkey args.
   await program.methods
@@ -157,11 +147,9 @@ export async function initializePsm(
       queueProcessor: psmOrchestrator.publicKey,
       bufferDepositor: psmOrchestrator.publicKey,
       bufferWithdrawer: coldMultisig.publicKey,
-      oracleManager: coldMultisig.publicKey,
       capManager: coldMultisig.publicKey,
       allowanceManager: coldMultisig.publicKey,
       rebaser: psmOrchestrator.publicKey,
-      oracleRelayPythProgramOwner: PYTH_LEGACY_MAINNET,
     })
     .accountsPartial({
       roleAdmin: payer.publicKey,
@@ -207,9 +195,8 @@ export async function initializePsm(
 // ---------------------------------------------------------------------------
 
 /**
- * Mint OkuMoney to `user` via `mint_oku_m` with the oracle relay disabled
- * (`oracleRelayFeed: null`). Caller is responsible for funding the user's
- * USDC ATA and creating their OkuMoney ATA.
+ * Mint OkuMoney to `user` via `mint_oku_m`. Caller is responsible for
+ * funding the user's USDC ATA and creating their OkuMoney ATA.
  */
 export async function mintOkuMoneyViaProgram(
   program: Program,
@@ -232,7 +219,6 @@ export async function mintOkuMoneyViaProgram(
       userUsdcAta,
       userOkuMoneyAta,
       vaultUsdc: vaultUsdcAta,
-      oracleRelayFeed: null,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,

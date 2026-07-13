@@ -1,5 +1,5 @@
 {
-  "address": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy",
+  "address": "7jKeiuc8gKvQhasbno27wbNMnrwi8g9sb6WPriWkzNd",
   "metadata": {
     "name": "oku_dollar",
     "version": "0.1.0",
@@ -455,45 +455,45 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ],
             "program": {
               "kind": "const",
               "value": [
-                32,
-                158,
-                125,
-                116,
-                8,
-                160,
-                94,
-                74,
-                53,
-                139,
-                115,
-                69,
-                156,
-                87,
-                233,
-                251,
-                47,
-                76,
-                177,
-                207,
-                192,
-                137,
-                168,
-                196,
-                235,
-                213,
+                34,
+                121,
                 6,
-                100,
-                114,
-                116,
-                161,
-                5
+                35,
+                128,
+                55,
+                170,
+                171,
+                231,
+                5,
+                179,
+                232,
+                246,
+                29,
+                202,
+                33,
+                185,
+                77,
+                118,
+                102,
+                16,
+                152,
+                164,
+                110,
+                219,
+                42,
+                143,
+                31,
+                160,
+                28,
+                119,
+                72
               ]
             }
           }
@@ -1499,6 +1499,212 @@
         }
       ],
       "returns": "u64"
+    },
+    {
+      "name": "wrap_to",
+      "docs": [
+        "Wrap OkuMoney -> usdOku with a separate receiver.",
+        "Caller provides OkuMoney; receiver gets usdOku shares.",
+        "Matches EVM `OkuDollar.wrap(amount, receiver, minAmountOut)`."
+      ],
+      "discriminator": [
+        114,
+        10,
+        219,
+        5,
+        203,
+        174,
+        20,
+        209
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": [
+            "Payer for any ATA initialisation. Typically the operator submitting",
+            "the transaction. Must be a signer so Anchor can debit lamports for",
+            "`init_if_needed`."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "caller",
+          "docs": [
+            "Caller who owns the OkuMoney being wrapped. May be a PDA (via CPI",
+            "with `invoke_signed`). Distinct from `payer` so a PDA can be the",
+            "transfer authority without needing lamports."
+          ],
+          "signer": true
+        },
+        {
+          "name": "receiver",
+          "docs": [
+            "Receiver of the minted usdOku shares. Does NOT need to sign —",
+            "matches EVM `wrap(amount, receiver, min)`."
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  107,
+                  117,
+                  95,
+                  100,
+                  111,
+                  108,
+                  108,
+                  97,
+                  114,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022)"
+          ]
+        },
+        {
+          "name": "usd_oku_mint",
+          "docs": [
+            "usdOku mint (Token-2022)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "caller_oku_money_ata",
+          "docs": [
+            "Caller's OkuMoney token account (source of OkuMoney).",
+            "Constrained to `caller` as authority so only the caller (or a PDA",
+            "signing via CPI) can authorise the transfer."
+          ],
+          "writable": true
+        },
+        {
+          "name": "receiver_usd_oku_ata",
+          "docs": [
+            "Receiver's usdOku token account (destination of minted shares).",
+            "`init_if_needed` so the receiver doesn't need a pre-existing ATA."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "receiver"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "usd_oku_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "reserve_vault",
+          "docs": [
+            "Vault's OkuMoney reserve account"
+          ],
+          "writable": true
+        },
+        {
+          "name": "psm_config",
+          "docs": [
+            "PSM config account (for reading oku_m_price)"
+          ]
+        },
+        {
+          "name": "dead_shares_ata",
+          "docs": [
+            "Dead-shares ATA — only required on the first deposit",
+            "(`total_supply == 0`). See `Wrap` context for full documentation."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "oku_m_amount",
+          "type": "u64"
+        },
+        {
+          "name": "min_shares_out",
+          "type": "u64"
+        }
+      ],
+      "returns": "u64"
     }
   ],
   "accounts": [
@@ -1785,51 +1991,46 @@
     },
     {
       "code": 6019,
-      "name": "InvalidDeadSharesMint",
-      "msg": "Dead-shares ATA mint does not match usdOku"
-    },
-    {
-      "code": 6020,
       "name": "InvalidDeadSharesOwner",
       "msg": "Dead-shares ATA owner must be the System Program"
     },
     {
-      "code": 6021,
+      "code": 6020,
       "name": "InvalidDeadSharesAddress",
       "msg": "Dead-shares ATA must be the canonical associated address"
     },
     {
-      "code": 6022,
+      "code": 6021,
       "name": "UnexpectedDeadSharesAccount",
       "msg": "dead_shares_ata must be omitted on subsequent deposits"
     },
     {
-      "code": 6023,
+      "code": 6022,
       "name": "ZeroAuthority",
       "msg": "Authority pubkey cannot be the zero pubkey"
     },
     {
-      "code": 6024,
+      "code": 6023,
       "name": "YieldDistributionInProgress",
       "msg": "Cannot perform operation in same slot as USD multiplier update"
     },
     {
-      "code": 6025,
+      "code": 6024,
       "name": "OkuMoneyMintMismatch",
       "msg": "Vault oku_money_mint must match PSM oku_money_mint"
     },
     {
-      "code": 6026,
+      "code": 6025,
       "name": "InvalidOkuMoneyDecimals",
       "msg": "OkuMoney mint must have exactly 6 decimals"
     },
     {
-      "code": 6027,
+      "code": 6026,
       "name": "NoPendingRoleAdmin",
       "msg": "No pending role-admin transfer to accept"
     },
     {
-      "code": 6028,
+      "code": 6027,
       "name": "NotPendingRoleAdmin",
       "msg": "Caller is not the pending role admin"
     }
@@ -2104,9 +2305,9 @@
       "docs": [
         "PSM configuration PDA.",
         "",
-        "Seeds: `[\"psm_config_v3\"]`. Migration history (seed-rotation log) is",
-        "tracked in `SVM/README.md` § \"PDA seed history\"; the `_v3` suffix",
-        "marks the post-oracle-relay layout."
+        "Seeds: `[\"psm_config_v4\"]`. Migration history (seed-rotation log) is",
+        "tracked in `SVM/README.md` § \"PDA seed history\"; the `_v4` suffix",
+        "marks the post-oracle-removal layout."
       ],
       "type": {
         "kind": "struct",
@@ -2171,13 +2372,6 @@
             "name": "buffer_withdrawer",
             "docs": [
               "Cold Multisig - withdraw buffer"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "oracle_manager",
-            "docs": [
-              "Cold Multisig - configure oracle"
             ],
             "type": "pubkey"
           },
@@ -2256,50 +2450,6 @@
             "type": "bool"
           },
           {
-            "name": "oracle_relay_feed",
-            "docs": [
-              "USDC/USD Pyth feed account (or `Pubkey::default()` to disable the",
-              "peg check — the operator-side kill switch, mirrors EVM",
-              "`setOracleRelay(address(0))`)."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "oracle_relay_pyth_program_owner",
-            "docs": [
-              "Pyth program-owner pubkey accepted by the relay parser. Set at",
-              "init via `initialize` and rotatable via",
-              "`set_oracle_relay_pyth_program_owner` (oracle_manager-gated). The",
-              "migration hook for future Pyth Solana Receiver support."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "oracle_relay_staleness",
-            "docs": [
-              "Maximum oracle staleness in seconds. Bounded by",
-              "`[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]` whenever",
-              "the relay is configured."
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "oracle_relay_min_price_e9",
-            "docs": [
-              "Lower bound of the in-band USDC price (1e9 precision).",
-              "Constrained by `ORACLE_USDC_PRICE_FLOOR`."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "oracle_relay_max_price_e9",
-            "docs": [
-              "Upper bound of the in-band USDC price (1e9 precision).",
-              "Constrained by `ORACLE_USDC_PRICE_CEILING`."
-            ],
-            "type": "u64"
-          },
-          {
             "name": "last_yield_distribution_slot",
             "docs": [
               "Solana slot of last yield distribution (sandwich prevention)",
@@ -2330,6 +2480,45 @@
               "`Pubkey::default()` means \"no pending rotation\"."
             ],
             "type": "pubkey"
+          },
+          {
+            "name": "direct_minter",
+            "docs": [
+              "Operator / fiat gateway — can mint OkuMoney directly without USDC.",
+              "EVM equivalent: address granted `OKUM_MINTER` role.",
+              "`Pubkey::default()` means \"not configured / disabled\"."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "direct_minter_allowance",
+            "docs": [
+              "Per-direct-minter allowance (separate from the USDC-backed",
+              "`minter_allowance`). Decremented on each direct mint; reset by",
+              "`allowance_manager` via `set_direct_minter_allowance`. Mirrors",
+              "EVM `minterAllowance[directMinter]`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "direct_burner",
+            "docs": [
+              "Operator / bridge backend — can burn OkuMoney directly without",
+              "triggering a USDC redemption.",
+              "EVM equivalent: address granted `OKUM_BURNER` role.",
+              "`Pubkey::default()` means \"not configured / disabled\"."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "direct_burner_allowance",
+            "docs": [
+              "Per-direct-burner allowance. Decremented on each direct burn;",
+              "reset by `allowance_manager` via `set_direct_burner_allowance`.",
+              "Mirrors EVM's role-gated burn with an additional allowance cap",
+              "for operational safety."
+            ],
+            "type": "u64"
           }
         ]
       }

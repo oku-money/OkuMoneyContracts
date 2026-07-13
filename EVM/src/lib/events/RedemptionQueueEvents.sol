@@ -48,12 +48,4 @@ abstract contract RedemptionQueueEvents {
     /// @param newHead New value of `queueHead` after the advance.
     /// @param slotsAdvanced Number of cleared slots skipped in this call.
     event QueueHeadAdvanced(uint256 newHead, uint256 slotsAdvanced);
-
-    /// @notice Emitted when the USDC peg circuit-breaker relay is rotated.
-    /// @dev Address(0) means the peg check is disabled (operational kill switch).
-    event OracleRelayUpdated(address indexed oldRelay, address indexed newRelay);
-
-    /// @notice Loud-signal event emitted when the peg check is
-    ///         disabled on the queue. Cycle 4 (EVM-03).
-    event OracleRelayDisabled(address indexed actor, address indexed oldRelay, uint256 blockNumber);
 }

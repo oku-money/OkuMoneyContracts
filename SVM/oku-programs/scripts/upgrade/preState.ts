@@ -95,17 +95,12 @@ export async function readLitePsmState(
     snap['psm.usdcMint']           = str(cfg.usdcMint);
     snap['psm.okuMoneyMint']       = str(cfg.okuMoneyMint);
     snap['psm.maxSupply']          = str(cfg.maxSupply);
-    snap['psm.oracleRelayEnabled'] = str(
-      cfg.oracleRelayFeed?.toBase58() !== PublicKey.default.toBase58()
-    );
-    snap['psm.oracleRelayFeed']    = str(cfg.oracleRelayFeed);
-    snap['psm.oracleRelayStaleness'] = str(cfg.oracleRelayStaleness);
-    snap['psm.oracleRelayMinE9']   = str(cfg.oracleRelayMinPriceE9);
-    snap['psm.oracleRelayMaxE9']   = str(cfg.oracleRelayMaxPriceE9);
-    snap['psm.oracleRelayPythProgramOwner'] = str(cfg.oracleRelayPythProgramOwner);
     // Direct-mint fields (added in the direct-mint migration)
     snap['psm.directMinter']           = str(cfg.directMinter);
     snap['psm.directMinterAllowance']  = str(cfg.directMinterAllowance);
+    // Direct-burn fields (added in the direct-burn migration v2)
+    snap['psm.directBurner']           = str(cfg.directBurner);
+    snap['psm.directBurnerAllowance']  = str(cfg.directBurnerAllowance);
   } catch (e: any) {
     snap['psm.fetchError'] = (e.message ?? String(e)).slice(0, 120);
   }

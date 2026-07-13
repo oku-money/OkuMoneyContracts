@@ -64,40 +64,9 @@ library Constants {
     /// @dev Mirrors the SVM-side floor so cross-chain accounting stays consistent.
     uint256 public constant MIN_COLLATERAL_RATIO_FLOOR = 9e17;
 
-    // ============ Oracle Bounds ============
-
-    /// @notice Minimum allowed staleness threshold for the OracleRelay USDC/USD feed (seconds).
-    /// @dev 60s is below any realistic Chainlink update interval. Configuring a value
-    ///      lower than this would cause every oracle read to revert.
-    uint256 public constant ORACLE_MIN_STALENESS = 60;
-
-    /// @notice Maximum allowed staleness threshold for the OracleRelay USDC/USD feed (seconds).
-    /// @dev 7 days catches operator misconfiguration where the oracle would effectively
-    ///      never be considered stale.
-    uint256 public constant ORACLE_MAX_STALENESS = 7 days;
-
     /// @notice Maximum supported USDC decimal count.
     /// @dev USDC implementations on EVM chains use 6 decimals; allowing up to 18 keeps
     ///      the protocol forward-compatible with non-Circle stablecoin variants while
     ///      preventing misconfiguration with absurd values.
     uint8 public constant MAX_USDC_DECIMALS = 18;
-
-    // ============ Oracle Relay ============
-
-    /// @notice Hard floor for the USDC peg band enforced by `OracleRelay.setPriceBand`.
-    /// @dev `0.95e18` = $0.95. Configuring a band below this would silently accept
-    ///      catastrophic depeg events. Defense-in-depth bound on operator setters.
-    uint256 public constant ORACLE_USDC_PRICE_FLOOR = 0.95e18;
-
-    /// @notice Hard ceiling for the USDC peg band enforced by `OracleRelay.setPriceBand`.
-    /// @dev `1.05e18` = $1.05. Symmetric to ORACLE_USDC_PRICE_FLOOR. USDC trading
-    ///      above this band is almost certainly an oracle malfunction rather than
-    ///      a legitimate market price; reject either way.
-    uint256 public constant ORACLE_USDC_PRICE_CEILING = 1.05e18;
-
-    /// @notice Maximum supported Chainlink aggregator decimal count for the USDC/USD feed.
-    /// @dev Most Chainlink USDC/USD feeds are 8 decimals. Allowing up to 18 keeps the
-    ///      relay forward-compatible with other feed variants while preventing
-    ///      negative-exponent math (which would otherwise be required for >18).
-    uint8 public constant MAX_FEED_DECIMALS = 18;
 }

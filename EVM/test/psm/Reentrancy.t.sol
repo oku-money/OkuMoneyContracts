@@ -10,7 +10,6 @@ import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 import {OkuDollar} from "../../src/token/OkuDollar.sol";
 import {ReentrancyGuardUpgradeable} from "../../src/lib/ReentrancyGuardUpgradeable.sol";
 import {MockUSDC} from "../mocks/MockUSDC.sol";
-import {MockOracleRelay} from "../mocks/MockOracleRelay.sol";
 import {ReentrantOkuMoney} from "../mocks/ReentrantOkuMoney.sol";
 import {Roles} from "../../src/lib/Roles.sol";
 
@@ -26,7 +25,6 @@ import {Roles} from "../../src/lib/Roles.sol";
 contract ReentrancyTest is Test {
     ReentrantOkuMoney internal rOkuM;
     MockUSDC internal usdc;
-    MockOracleRelay internal oracleRelay;
     LitePSM internal litePsm;
     RedemptionQueue internal redemptionQueue;
     OkuDollar internal okuDollar;
@@ -38,7 +36,6 @@ contract ReentrancyTest is Test {
         // Deploy mocks
         rOkuM = new ReentrantOkuMoney();
         usdc = new MockUSDC();
-        oracleRelay = new MockOracleRelay();
 
         // Deploy OkuDollar
         OkuDollar dollarImpl = new OkuDollar();
@@ -89,8 +86,6 @@ contract ReentrancyTest is Test {
         // Wire roles
         vm.startPrank(admin);
         redemptionQueue.grantRole(Roles.QUEUE_PSM, address(litePsm));
-        litePsm.setOracleRelay(address(oracleRelay));
-        redemptionQueue.setOracleRelay(address(oracleRelay));
         vm.stopPrank();
 
         // Fund user with USDC and OkuM

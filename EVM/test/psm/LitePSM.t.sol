@@ -19,7 +19,6 @@ import {YieldSandwichGuard} from "../../src/lib/YieldSandwichGuard.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {MathLib} from "../../src/lib/MathLib.sol";
 import {LitePSMEvents} from "../../src/lib/events/LitePSMEvents.sol";
-import {MockOracleRelay} from "../mocks/MockOracleRelay.sol";
 
 /**
  * @title LitePSMTest
@@ -408,78 +407,6 @@ contract LitePSMTest is BaseTest {
 
         vm.prank(user1);
         litePsm.mintUsdOku(usdcAmount);
-    }
-
-    // ============ Oracle Relay (USDC peg circuit-breaker) ============
-    //
-    // BaseTest wires an always-pass MockOracleRelay onto litePsm in setUp(). Tests
-    // here flip the toggle to drive the depeg branch. The previous PoR-style
-    // reserve-check tests have been retired alongside that feature.
-
-    function test_MintOkuM_RevertsOnDepeg() public {
-        oracleRelay.setPass(false);
-        _approveUsdc(user1, address(litePsm), 100e6);
-        vm.prank(user1);
-        vm.expectRevert(MockOracleRelay.MockOracleRelayDepeg.selector);
-        litePsm.mintOkuM(100e6);
-    }
-
-    function test_MintUsdOku_RevertsOnDepeg() public {
-        oracleRelay.setPass(false);
-        _approveUsdc(user1, address(litePsm), 100e6);
-        vm.prank(user1);
-        vm.expectRevert(MockOracleRelay.MockOracleRelayDepeg.selector);
-        litePsm.mintUsdOku(100e6);
-    }
-
-    function test_RedeemOkuM_RevertsOnDepeg() public {
-        _mintOkuMoney(user1, 100e18);
-        _approveOkuMoney(user1, address(litePsm), 100e18);
-
-        oracleRelay.setPass(false);
-        vm.prank(user1);
-        vm.expectRevert(MockOracleRelay.MockOracleRelayDepeg.selector);
-        litePsm.redeemOkuM(100e18);
-    }
-
-    function test_RedeemUsdOku_RevertsOnDepeg() public {
-        _mintUsdOku(user1, 100e18);
-        vm.prank(user1);
-        okuDollar.approve(address(litePsm), 100e18);
-
-        oracleRelay.setPass(false);
-        vm.prank(user1);
-        vm.expectRevert(MockOracleRelay.MockOracleRelayDepeg.selector);
-        litePsm.redeemUsdOku(50e18);
-    }
-
-    function test_SetOracleRelay_DisablesPegCheckWithZeroAddress() public {
-        oracleRelay.setPass(false); // the wired relay is failing
-        // Operator kill-switch: clear the relay pointer so mint/redeem stop calling it.
-        vm.prank(oracleManager);
-        litePsm.setOracleRelay(address(0));
-
-        _approveUsdc(user1, address(litePsm), 100e6);
-        vm.prank(user1);
-        litePsm.mintOkuM(100e6); // succeeds because relay is unset
-        assertGt(okuMoney.balanceOf(user1), 0);
-    }
-
-    function test_SetOracleRelay_RevertsForNonOracleManager() public {
-        vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, user1, PSM_ORACLE_MANAGER
-            )
-        );
-        litePsm.setOracleRelay(address(0xBEEF));
-    }
-
-    function test_SetOracleRelay_EmitsEvent() public {
-        vm.expectEmit(true, true, false, false);
-        emit LitePSMEvents.OracleRelayUpdated(address(oracleRelay), address(0xBEEF));
-        vm.prank(oracleManager);
-        litePsm.setOracleRelay(address(0xBEEF));
     }
 
     // ============ Redeem Tests ============
@@ -1593,11 +1520,6 @@ contract LitePSMTest is BaseTest {
         assertEq(psm18.usdcDecimalMultiplier(), 1);
     }
 
-    // Note: the previous in-PSM Chainlink read-safety tests (updatedAt == 0,
-    // answer == 0, startedAt == 0, startedAt > updatedAt) have been moved to
-    // OracleRelay.t.sol now that the relay owns those checks. The PSM only
-    // delegates via `oracleRelay.checkUsdcPeg()`.
-
     // ---- WS3.1.i: setMaxSupply edge case ----
 
     function test_SetMaxSupply_AllowsDecreaseToCurrentSupply() public {
@@ -1656,10 +1578,6 @@ contract LitePSMTest is BaseTest {
         assertGt(usdc.balanceOf(user1), 0);
     }
 
-    // Initialize staleness-bound tests for the prior PoR-era LitePSM init signature
-    // have been removed. The staleness window now belongs to OracleRelay.initialize
-    // and is exercised by OracleRelay.t.sol.
-
     // ============ Unpause Success Test ============
 
     function test_Unpause_Succeeds() public {
@@ -1692,11 +1610,6 @@ contract LitePSMTest is BaseTest {
 
     function test_View_RedemptionQueue() public view {
         assertEq(address(litePsm.redemptionQueue()), address(redemptionQueue));
-    }
-
-    function test_View_OracleRelay() public view {
-        // BaseTest wires the MockOracleRelay during _setupRoles().
-        assertEq(address(litePsm.oracleRelay()), address(oracleRelay));
     }
 
     function test_View_UsdcDecimalMultiplier_Litepsm() public view {

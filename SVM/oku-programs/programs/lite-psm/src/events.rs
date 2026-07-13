@@ -294,47 +294,31 @@ pub struct DirectMintUsdOkuEvent {
     pub new_total_supply: u64,
 }
 
-/// Emitted when the oracle relay feed pubkey is rotated.
-/// EVM equivalent: `PriceFeedUpdated(address indexed oldFeed, address indexed newFeed, uint8 feedDecimals)`
-/// (SVM uses Pyth `expo` rather than `decimals`, so the third field is omitted —
-/// `expo` is read fresh on every consumer call.)
+/// Emitted when direct-burner allowance is updated.
+/// EVM equivalent: allowance management for the `OKUM_BURNER` address.
 #[event]
-pub struct OracleRelayFeedUpdatedEvent {
-    /// Caller of the update (`oracle_manager` authority).
+pub struct DirectBurnerAllowanceUpdatedEvent {
+    /// Caller of the update (`allowance_manager` authority).
     pub actor: Pubkey,
-    pub old_feed: Pubkey,
-    pub new_feed: Pubkey,
+    pub old_allowance: u64,
+    pub new_allowance: u64,
 }
 
-/// Emitted when the relay staleness threshold is rotated.
-/// EVM equivalent: `StalenessThresholdUpdated(uint256 oldSeconds, uint256 newSeconds)`
+/// Emitted when OkuMoney is burned via the permissioned direct-burn path
+/// (no USDC payout). EVM equivalent: the Transfer-to-zero event from
+/// `OkuMoney.burn(amount)` called by a non-PSM `OKUM_BURNER`.
 #[event]
-pub struct OracleRelayStalenessUpdatedEvent {
-    pub actor: Pubkey,
-    pub old_staleness: i64,
-    pub new_staleness: i64,
-}
-
-/// Emitted when the in-band peg window is rotated.
-/// EVM equivalent: `PriceBandUpdated(uint256 oldMin, uint256 oldMax, uint256 newMin, uint256 newMax)`
-#[event]
-pub struct OracleRelayBandUpdatedEvent {
-    pub actor: Pubkey,
-    pub old_min_e9: u64,
-    pub old_max_e9: u64,
-    pub new_min_e9: u64,
-    pub new_max_e9: u64,
-}
-
-/// Emitted when the accepted Pyth program owner pubkey is rotated.
-/// SVM-only — no direct EVM equivalent (Chainlink AggregatorV3 owner is
-/// implicit in the feed address). Kept as the migration hook for future
-/// Pyth Solana Receiver support.
-#[event]
-pub struct OracleRelayPythProgramOwnerUpdatedEvent {
-    pub actor: Pubkey,
-    pub old_pyth_program_owner: Pubkey,
-    pub new_pyth_program_owner: Pubkey,
+pub struct DirectBurnEvent {
+    /// Operator who initiated the burn
+    pub direct_burner: Pubkey,
+    /// OkuMoney burned (6 decimals)
+    pub oku_m_amount: u64,
+    /// OkuMoney price multiplier at time of burn (1e9 = $1.00)
+    pub oku_m_price: u64,
+    /// Dollar value of the burned amount
+    pub dollar_value: u64,
+    /// OkuMoney supply AFTER the burn completed
+    pub new_total_supply: u64,
 }
 
 /// Emitted when OkuMoney price is updated directly.

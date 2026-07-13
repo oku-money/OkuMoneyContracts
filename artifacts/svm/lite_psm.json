@@ -1,5 +1,5 @@
 {
-  "address": "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N",
+  "address": "3KZtxxYXD4tMZvVZk4EhCRxoTorBDZyJZuLE3znQ9kF1",
   "metadata": {
     "name": "lite_psm",
     "version": "0.1.0",
@@ -52,7 +52,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -60,6 +60,89 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "burn_oku_m_direct",
+      "docs": [
+        "Burn OkuMoney directly without USDC payout (permissioned --",
+        "`direct_burner` only). Matches EVM `OkuMoney.burn(amount)` called",
+        "by a non-PSM `OKUM_BURNER`. Enables SVM->EVM bridging."
+      ],
+      "discriminator": [
+        202,
+        251,
+        16,
+        220,
+        210,
+        118,
+        204,
+        245
+      ],
+      "accounts": [
+        {
+          "name": "direct_burner",
+          "docs": [
+            "Operator / bridge backend holding the `direct_burner` authority."
+          ],
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  52
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022). `mint::authority = config` is",
+            "defense-in-depth (see rationale on `MintOkuM::oku_money_mint`)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "burner_oku_money_ata",
+          "docs": [
+            "Burner's OkuMoney token account -- source of the burn. The burner",
+            "must hold the tokens it wants to destroy."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "oku_m_amount",
+          "type": "u64"
+        }
+      ]
     },
     {
       "name": "cancel_role_admin_transfer",
@@ -112,7 +195,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -160,7 +243,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -298,7 +381,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -367,7 +450,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -431,7 +514,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -556,6 +639,146 @@
       ]
     },
     {
+      "name": "migrate_psm_config",
+      "docs": [
+        "One-time migration: extend PsmConfig from 674 -> 714 bytes to",
+        "accommodate the `direct_minter` + `direct_minter_allowance` fields.",
+        "Must be signed by the current `role_admin`."
+      ],
+      "discriminator": [
+        156,
+        113,
+        132,
+        161,
+        244,
+        108,
+        219,
+        217
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": [
+            "Pays for the additional rent-exempt lamports."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "role_admin",
+          "docs": [
+            "Must match the `role_admin` stored in PsmConfig."
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "PsmConfig PDA — verified by seeds but NOT deserialized as",
+            "`Account<PsmConfig>` (it's too small pre-migration)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  52
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "migrate_psm_config_v2",
+      "docs": [
+        "One-time migration: extend PsmConfig from 594 -> 634 bytes to",
+        "accommodate the `direct_burner` + `direct_burner_allowance` fields.",
+        "Must be signed by the current `role_admin`."
+      ],
+      "discriminator": [
+        230,
+        121,
+        29,
+        153,
+        236,
+        176,
+        215,
+        192
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": [
+            "Pays for the additional rent-exempt lamports."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "role_admin",
+          "docs": [
+            "Must match the `role_admin` stored in PsmConfig."
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "PsmConfig PDA -- verified by seeds but NOT deserialized as",
+            "`Account<PsmConfig>` (it's too small pre-migration)."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  52
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "mint_oku_m",
       "docs": [
         "Mint OkuMoney with USDC (price-aware)",
@@ -597,7 +820,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -749,16 +972,6 @@
           "writable": true
         },
         {
-          "name": "oracle_relay_feed",
-          "docs": [
-            "USDC/USD Pyth feed used by the oracle-relay peg-check (optional —",
-            "only required when `config.oracle_relay_feed != Pubkey::default()`).",
-            "account key matches `config.oracle_relay_feed` and the owner",
-            "matches `config.oracle_relay_pyth_program_owner`."
-          ],
-          "optional": true
-        },
-        {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -778,6 +991,302 @@
       "args": [
         {
           "name": "usdc_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "mint_oku_m_direct",
+      "docs": [
+        "Mint OkuMoney directly without USDC (permissioned — `direct_minter` only).",
+        "Matches EVM `OkuMoney.mint(to, amount)` called by a non-PSM `OKUM_MINTER`."
+      ],
+      "discriminator": [
+        76,
+        111,
+        110,
+        216,
+        39,
+        168,
+        159,
+        223
+      ],
+      "accounts": [
+        {
+          "name": "direct_minter",
+          "docs": [
+            "Operator / fiat gateway holding the `direct_minter` authority.",
+            "Also pays for any ATA initialisation."
+          ],
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  52
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022). `mint::authority = config` is",
+            "defense-in-depth (see rationale on `MintOkuM::oku_money_mint`)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "recipient",
+          "docs": [
+            "Recipient of the minted OkuMoney. Does NOT need to sign —",
+            "the operator mints on behalf of the user."
+          ]
+        },
+        {
+          "name": "recipient_oku_money_ata",
+          "docs": [
+            "Recipient's OkuMoney token account. `init_if_needed` so the",
+            "recipient doesn't need a pre-existing ATA."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "recipient"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "oku_money_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "oku_m_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "mint_usd_oku_direct",
+      "docs": [
+        "Mint OkuMoney and wrap into usdOku in a single instruction",
+        "(permissioned — `direct_minter` only). Matches EVM `LitePSM.mintUsdOku`",
+        "convenience pattern without USDC."
+      ],
+      "discriminator": [
+        53,
+        214,
+        16,
+        215,
+        232,
+        52,
+        144,
+        125
+      ],
+      "accounts": [
+        {
+          "name": "direct_minter",
+          "docs": [
+            "Operator / fiat gateway. Also pays for ATA init."
+          ],
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  52
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "oku_money_mint",
+          "docs": [
+            "OkuMoney mint (Token-2022)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "vault_oku_money",
+          "docs": [
+            "PSM's OkuMoney escrow vault — used as the intermediary ATA for the",
+            "mint→wrap atomic flow. The OkuMoney is minted here and immediately",
+            "transferred to the oku-dollar reserve vault via the `wrap_to` CPI,",
+            "so the balance is net-zero before and after the instruction."
+          ],
+          "writable": true
+        },
+        {
+          "name": "recipient",
+          "docs": [
+            "Recipient of the minted usdOku shares. Does NOT need to sign."
+          ]
+        },
+        {
+          "name": "oku_dollar_config",
+          "docs": [
+            "OkuDollar config PDA (read-only for wrap math).",
+            "the address matches config.psm_config's back-reference by checking",
+            "it is the canonical oku-dollar PDA."
+          ]
+        },
+        {
+          "name": "usd_oku_mint",
+          "docs": [
+            "usdOku mint (Token-2022) — mutated by wrap_to's mint_to CPI."
+          ],
+          "writable": true
+        },
+        {
+          "name": "recipient_usd_oku_ata",
+          "docs": [
+            "Recipient's usdOku token account — init_if_needed by wrap_to."
+          ],
+          "writable": true
+        },
+        {
+          "name": "oku_dollar_reserve_vault",
+          "docs": [
+            "OkuDollar's OkuMoney reserve vault — receives OkuMoney from wrap_to."
+          ],
+          "writable": true
+        },
+        {
+          "name": "dead_shares_ata",
+          "docs": [
+            "Dead-shares ATA (optional, only needed on first usdOku deposit)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "oku_dollar_program",
+          "docs": [
+            "The oku-dollar program to CPI into."
+          ]
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "oku_m_amount",
+          "type": "u64"
+        },
+        {
+          "name": "min_shares_out",
           "type": "u64"
         }
       ]
@@ -823,7 +1332,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -871,7 +1380,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -939,14 +1448,6 @@
           "writable": true
         },
         {
-          "name": "oracle_relay_feed",
-          "docs": [
-            "USDC/USD Pyth feed for the peg circuit-breaker (optional — only",
-            "required when `config.oracle_relay_feed != Pubkey::default()`)."
-          ],
-          "optional": true
-        },
-        {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -1003,7 +1504,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -1203,14 +1704,6 @@
           "writable": true
         },
         {
-          "name": "oracle_relay_feed",
-          "docs": [
-            "USDC/USD Pyth feed for the peg circuit-breaker (optional — only",
-            "required when `config.oracle_relay_feed != Pubkey::default()`)."
-          ],
-          "optional": true
-        },
-        {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -1280,7 +1773,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -1404,7 +1897,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -1423,6 +1916,116 @@
         {
           "name": "new_authority",
           "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_direct_burner_allowance",
+      "discriminator": [
+        62,
+        173,
+        62,
+        89,
+        202,
+        158,
+        15,
+        27
+      ],
+      "accounts": [
+        {
+          "name": "allowance_manager",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  52
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_direct_minter_allowance",
+      "discriminator": [
+        145,
+        198,
+        248,
+        218,
+        60,
+        85,
+        134,
+        225
+      ],
+      "accounts": [
+        {
+          "name": "allowance_manager",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103,
+                  95,
+                  118,
+                  52
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
         }
       ]
     },
@@ -1467,7 +2070,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -1534,7 +2137,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -1598,7 +2201,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -1622,323 +2225,6 @@
         {
           "name": "new_multiplier",
           "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "set_oracle_relay_band",
-      "docs": [
-        "Rotate the in-band USDC peg window (1e9 precision). Constrained by",
-        "the hard `ORACLE_USDC_PRICE_FLOOR` / `_CEILING` bounds.",
-        "`oracle_manager`-gated."
-      ],
-      "discriminator": [
-        184,
-        112,
-        164,
-        206,
-        83,
-        36,
-        216,
-        178
-      ],
-      "accounts": [
-        {
-          "name": "oracle_manager",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103,
-                  95,
-                  118,
-                  51
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "oracle_account",
-          "docs": [
-            "Optional pre-flight account for `set_oracle_relay_feed`. When",
-            "`new_feed != Pubkey::default()` and this account is supplied, the",
-            "handler parses the Pyth header and asserts the runtime invariants",
-            "(`magic`, `version == 2`, `atype == Price`, owner,",
-            "`|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before persisting the new",
-            "feed pubkey. Without the pre-flight check, an admin could silently",
-            "configure a malformed feed that would only error at every",
-            "subsequent mint / redeem / queue-process call. The other relay",
-            "setters (`set_oracle_relay_staleness`, `_band`,",
-            "`_pyth_program_owner`) ignore this account.",
-            "required for the `set_oracle_relay_feed` path with a non-default",
-            "feed pubkey."
-          ],
-          "optional": true
-        }
-      ],
-      "args": [
-        {
-          "name": "new_min_e9",
-          "type": "u64"
-        },
-        {
-          "name": "new_max_e9",
-          "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "set_oracle_relay_feed",
-      "docs": [
-        "Rotate the USDC/USD Pyth feed used by the peg-check.",
-        "`new_feed == Pubkey::default()` is the operator-side kill switch",
-        "(disables the peg check entirely; mirrors EVM",
-        "`setOracleRelay(address(0))`). `oracle_manager`-gated."
-      ],
-      "discriminator": [
-        119,
-        168,
-        245,
-        188,
-        153,
-        247,
-        97,
-        209
-      ],
-      "accounts": [
-        {
-          "name": "oracle_manager",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103,
-                  95,
-                  118,
-                  51
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "oracle_account",
-          "docs": [
-            "Optional pre-flight account for `set_oracle_relay_feed`. When",
-            "`new_feed != Pubkey::default()` and this account is supplied, the",
-            "handler parses the Pyth header and asserts the runtime invariants",
-            "(`magic`, `version == 2`, `atype == Price`, owner,",
-            "`|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before persisting the new",
-            "feed pubkey. Without the pre-flight check, an admin could silently",
-            "configure a malformed feed that would only error at every",
-            "subsequent mint / redeem / queue-process call. The other relay",
-            "setters (`set_oracle_relay_staleness`, `_band`,",
-            "`_pyth_program_owner`) ignore this account.",
-            "required for the `set_oracle_relay_feed` path with a non-default",
-            "feed pubkey."
-          ],
-          "optional": true
-        }
-      ],
-      "args": [
-        {
-          "name": "new_feed",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
-      "name": "set_oracle_relay_pyth_program_owner",
-      "docs": [
-        "Rotate the accepted Pyth program owner pubkey. Migration hook for",
-        "future Pyth deployments (e.g. Pyth Solana Receiver) without",
-        "redeploying. `oracle_manager`-gated."
-      ],
-      "discriminator": [
-        128,
-        136,
-        203,
-        167,
-        185,
-        107,
-        20,
-        15
-      ],
-      "accounts": [
-        {
-          "name": "oracle_manager",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103,
-                  95,
-                  118,
-                  51
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "oracle_account",
-          "docs": [
-            "Optional pre-flight account for `set_oracle_relay_feed`. When",
-            "`new_feed != Pubkey::default()` and this account is supplied, the",
-            "handler parses the Pyth header and asserts the runtime invariants",
-            "(`magic`, `version == 2`, `atype == Price`, owner,",
-            "`|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before persisting the new",
-            "feed pubkey. Without the pre-flight check, an admin could silently",
-            "configure a malformed feed that would only error at every",
-            "subsequent mint / redeem / queue-process call. The other relay",
-            "setters (`set_oracle_relay_staleness`, `_band`,",
-            "`_pyth_program_owner`) ignore this account.",
-            "required for the `set_oracle_relay_feed` path with a non-default",
-            "feed pubkey."
-          ],
-          "optional": true
-        }
-      ],
-      "args": [
-        {
-          "name": "new_pyth_program_owner",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
-      "name": "set_oracle_relay_staleness",
-      "docs": [
-        "Rotate the relay staleness threshold (seconds). Bounded by",
-        "`[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]`.",
-        "`oracle_manager`-gated."
-      ],
-      "discriminator": [
-        148,
-        100,
-        26,
-        43,
-        136,
-        190,
-        220,
-        92
-      ],
-      "accounts": [
-        {
-          "name": "oracle_manager",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103,
-                  95,
-                  118,
-                  51
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "oracle_account",
-          "docs": [
-            "Optional pre-flight account for `set_oracle_relay_feed`. When",
-            "`new_feed != Pubkey::default()` and this account is supplied, the",
-            "handler parses the Pyth header and asserts the runtime invariants",
-            "(`magic`, `version == 2`, `atype == Price`, owner,",
-            "`|expo| <= MAX_FEED_EXPO_MAGNITUDE`) before persisting the new",
-            "feed pubkey. Without the pre-flight check, an admin could silently",
-            "configure a malformed feed that would only error at every",
-            "subsequent mint / redeem / queue-process call. The other relay",
-            "setters (`set_oracle_relay_staleness`, `_band`,",
-            "`_pyth_program_owner`) ignore this account.",
-            "required for the `set_oracle_relay_feed` path with a non-default",
-            "feed pubkey."
-          ],
-          "optional": true
-        }
-      ],
-      "args": [
-        {
-          "name": "new_staleness",
-          "type": "i64"
         }
       ]
     },
@@ -1983,7 +2269,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -2124,7 +2410,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -2211,7 +2497,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -2278,7 +2564,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -2333,7 +2619,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -2439,7 +2725,7 @@
                   103,
                   95,
                   118,
-                  51
+                  52
                 ]
               }
             ]
@@ -2602,6 +2888,71 @@
       ]
     },
     {
+      "name": "DirectBurnEvent",
+      "discriminator": [
+        183,
+        248,
+        178,
+        16,
+        155,
+        250,
+        206,
+        9
+      ]
+    },
+    {
+      "name": "DirectBurnerAllowanceUpdatedEvent",
+      "discriminator": [
+        54,
+        179,
+        105,
+        133,
+        31,
+        84,
+        82,
+        161
+      ]
+    },
+    {
+      "name": "DirectMintEvent",
+      "discriminator": [
+        190,
+        183,
+        184,
+        65,
+        45,
+        246,
+        151,
+        121
+      ]
+    },
+    {
+      "name": "DirectMintUsdOkuEvent",
+      "discriminator": [
+        207,
+        242,
+        215,
+        36,
+        136,
+        68,
+        108,
+        204
+      ]
+    },
+    {
+      "name": "DirectMinterAllowanceUpdatedEvent",
+      "discriminator": [
+        116,
+        97,
+        64,
+        133,
+        148,
+        39,
+        157,
+        230
+      ]
+    },
+    {
       "name": "EscrowInitializedEvent",
       "discriminator": [
         17,
@@ -2693,58 +3044,6 @@
       ]
     },
     {
-      "name": "OracleRelayBandUpdatedEvent",
-      "discriminator": [
-        63,
-        9,
-        54,
-        221,
-        206,
-        203,
-        38,
-        27
-      ]
-    },
-    {
-      "name": "OracleRelayFeedUpdatedEvent",
-      "discriminator": [
-        213,
-        185,
-        8,
-        22,
-        104,
-        167,
-        161,
-        134
-      ]
-    },
-    {
-      "name": "OracleRelayPythProgramOwnerUpdatedEvent",
-      "discriminator": [
-        107,
-        4,
-        162,
-        18,
-        166,
-        213,
-        231,
-        68
-      ]
-    },
-    {
-      "name": "OracleRelayStalenessUpdatedEvent",
-      "discriminator": [
-        47,
-        168,
-        108,
-        170,
-        217,
-        89,
-        81,
-        83
-      ]
-    },
-    {
       "name": "PauseEvent",
       "discriminator": [
         32,
@@ -2755,6 +3054,19 @@
         104,
         130,
         43
+      ]
+    },
+    {
+      "name": "PsmConfigMigratedEvent",
+      "discriminator": [
+        191,
+        124,
+        205,
+        185,
+        81,
+        10,
+        165,
+        254
       ]
     },
     {
@@ -2965,176 +3277,116 @@
     },
     {
       "code": 6007,
-      "name": "StaleOracle",
-      "msg": "Oracle data is stale"
-    },
-    {
-      "code": 6008,
-      "name": "PriceOutOfBand",
-      "msg": "USDC price out of band — depeg circuit-breaker tripped"
-    },
-    {
-      "code": 6009,
-      "name": "NonPositiveAnswer",
-      "msg": "Oracle returned a non-positive answer"
-    },
-    {
-      "code": 6010,
-      "name": "InvalidPriceBand",
-      "msg": "Invalid peg band — must satisfy min < max within hard bounds"
-    },
-    {
-      "code": 6011,
-      "name": "FeedExpoTooLarge",
-      "msg": "Pyth feed expo magnitude exceeds MAX_FEED_EXPO_MAGNITUDE"
-    },
-    {
-      "code": 6012,
-      "name": "OracleConfidenceTooWide",
-      "msg": "Pyth oracle confidence interval too wide for safe consumption"
-    },
-    {
-      "code": 6013,
       "name": "InsufficientBuffer",
       "msg": "Insufficient buffer for redemption"
     },
     {
-      "code": 6014,
+      "code": 6008,
       "name": "InsufficientUserBalance",
       "msg": "User does not hold enough OkuMoney for redemption"
     },
     {
-      "code": 6015,
-      "name": "AccountFrozen",
-      "msg": "Account is frozen"
-    },
-    {
-      "code": 6016,
+      "code": 6009,
       "name": "QueueEmpty",
       "msg": "Queue is empty"
     },
     {
-      "code": 6017,
+      "code": 6010,
       "name": "QueueFull",
       "msg": "Queue is full"
     },
     {
-      "code": 6018,
+      "code": 6011,
       "name": "InvalidQueueIndex",
       "msg": "Invalid queue index"
     },
     {
-      "code": 6019,
+      "code": 6012,
       "name": "EntryAlreadyCleared",
       "msg": "Queue entry already cleared"
     },
     {
-      "code": 6020,
+      "code": 6013,
       "name": "Overflow",
       "msg": "Arithmetic overflow"
     },
     {
-      "code": 6021,
+      "code": 6014,
       "name": "ZeroAmount",
       "msg": "Amount must be greater than zero"
     },
     {
-      "code": 6022,
+      "code": 6015,
       "name": "InsufficientAccounts",
       "msg": "Not enough accounts provided for queue entries"
     },
     {
-      "code": 6023,
-      "name": "RecipientMismatch",
-      "msg": "Recipient account does not match queue entry user"
-    },
-    {
-      "code": 6024,
-      "name": "OracleAccountMissing",
-      "msg": "Oracle relay feed account not provided but relay is configured"
-    },
-    {
-      "code": 6025,
-      "name": "InvalidOracleResponse",
-      "msg": "Invalid oracle response"
-    },
-    {
-      "code": 6026,
+      "code": 6016,
       "name": "YieldDistributionInProgress",
       "msg": "Cannot perform operation in same slot as yield distribution"
     },
     {
-      "code": 6027,
+      "code": 6017,
       "name": "PriceCannotDecrease",
       "msg": "New price must strictly increase"
     },
     {
-      "code": 6028,
+      "code": 6018,
       "name": "YieldTooSmall",
       "msg": "Yield amount too small to affect price (truncates to zero)"
     },
     {
-      "code": 6029,
+      "code": 6019,
       "name": "PriceAboveMax",
       "msg": "Proposed oku_m_price exceeds MAX_OKU_M_PRICE ceiling"
     },
     {
-      "code": 6030,
+      "code": 6020,
       "name": "InvalidAuthority",
       "msg": "Authority pubkey is invalid (e.g. zero pubkey)"
     },
     {
-      "code": 6031,
+      "code": 6021,
       "name": "NoPendingRoleAdmin",
       "msg": "No pending role-admin transfer to accept"
     },
     {
-      "code": 6032,
+      "code": 6022,
       "name": "NotPendingRoleAdmin",
       "msg": "Caller is not the pending role admin"
     },
     {
-      "code": 6033,
+      "code": 6023,
       "name": "EscrowAlreadyInitialized",
       "msg": "Escrow vault already initialized"
     },
     {
-      "code": 6034,
-      "name": "InvalidPythProgramOwner",
-      "msg": "Pyth program owner pubkey is required (cannot be the zero pubkey)"
+      "code": 6024,
+      "name": "MigrationNotNeeded",
+      "msg": "PsmConfig already migrated to current layout"
     },
     {
-      "code": 6035,
+      "code": 6025,
       "name": "InvalidUsdcDecimals",
       "msg": "USDC mint must have exactly 6 decimals"
     },
     {
-      "code": 6036,
+      "code": 6026,
       "name": "InvalidOkuMoneyDecimals",
       "msg": "OkuMoney mint must have exactly 6 decimals"
     },
     {
-      "code": 6037,
+      "code": 6027,
       "name": "AmountTooSmall",
       "msg": "Output amount too small (rounds to zero)"
     },
     {
-      "code": 6038,
+      "code": 6028,
       "name": "OutputBelowMinimum",
       "msg": "Output below minimum (slippage exceeded)"
     },
     {
-      "code": 6039,
-      "name": "InvalidStaleness",
-      "msg": "Staleness threshold out of range (must be 60s..=7 days)"
-    },
-    {
-      "code": 6040,
-      "name": "TransferHookNotAllowed",
-      "msg": "OkuMoney mint must not have the TransferHook Token-2022 extension"
-    },
-    {
-      "code": 6041,
+      "code": 6029,
       "name": "IncompatibleMintExtension",
       "msg": "OkuMoney mint carries an incompatible Token-2022 extension (see helpers::mint_extensions for the allow-list)"
     }
@@ -3175,9 +3427,6 @@
             "name": "BufferWithdrawer"
           },
           {
-            "name": "OracleManager"
-          },
-          {
             "name": "CapManager"
           },
           {
@@ -3185,6 +3434,12 @@
           },
           {
             "name": "Rebaser"
+          },
+          {
+            "name": "DirectMinter"
+          },
+          {
+            "name": "DirectBurner"
           }
         ]
       }
@@ -3328,6 +3583,232 @@
       }
     },
     {
+      "name": "DirectBurnEvent",
+      "docs": [
+        "Emitted when OkuMoney is burned via the permissioned direct-burn path",
+        "(no USDC payout). EVM equivalent: the Transfer-to-zero event from",
+        "`OkuMoney.burn(amount)` called by a non-PSM `OKUM_BURNER`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "direct_burner",
+            "docs": [
+              "Operator who initiated the burn"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_m_amount",
+            "docs": [
+              "OkuMoney burned (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oku_m_price",
+            "docs": [
+              "OkuMoney price multiplier at time of burn (1e9 = $1.00)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value of the burned amount"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "new_total_supply",
+            "docs": [
+              "OkuMoney supply AFTER the burn completed"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DirectBurnerAllowanceUpdatedEvent",
+      "docs": [
+        "Emitted when direct-burner allowance is updated.",
+        "EVM equivalent: allowance management for the `OKUM_BURNER` address."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "actor",
+            "docs": [
+              "Caller of the update (`allowance_manager` authority)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "old_allowance",
+            "type": "u64"
+          },
+          {
+            "name": "new_allowance",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DirectMintEvent",
+      "docs": [
+        "Emitted when OkuMoney is minted via the permissioned direct-mint path",
+        "(no USDC required). EVM equivalent: the Transfer event from",
+        "`OkuMoney.mint(to, amount)` called by a non-PSM `OKUM_MINTER`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "direct_minter",
+            "docs": [
+              "Operator who initiated the mint"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "recipient",
+            "docs": [
+              "Recipient of the minted OkuMoney"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_m_amount",
+            "docs": [
+              "OkuMoney minted (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oku_m_price",
+            "docs": [
+              "OkuMoney price multiplier at time of mint (1e9 = $1.00)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value of the minted amount"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "new_total_supply",
+            "docs": [
+              "OkuMoney supply AFTER the mint completed"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DirectMintUsdOkuEvent",
+      "docs": [
+        "Emitted when OkuMoney is direct-minted and immediately wrapped into",
+        "usdOku in a single instruction. EVM equivalent: a hypothetical",
+        "`mintUsdOkuDirect` convenience path using `OkuMoney.mint` + `wrap`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "direct_minter",
+            "docs": [
+              "Operator who initiated the mint+wrap"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "recipient",
+            "docs": [
+              "Recipient of the minted usdOku shares"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "oku_m_amount",
+            "docs": [
+              "OkuMoney minted and wrapped (6 decimals)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "shares_minted",
+            "docs": [
+              "usdOku shares minted to the recipient"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "oku_m_price",
+            "docs": [
+              "OkuMoney price multiplier at time of mint (1e9 = $1.00)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "usd_multiplier",
+            "docs": [
+              "USD multiplier at time of wrap (1e9 = $1.00)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "dollar_value",
+            "docs": [
+              "Dollar value of the minted amount"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "new_total_supply",
+            "docs": [
+              "OkuMoney supply AFTER the mint completed"
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DirectMinterAllowanceUpdatedEvent",
+      "docs": [
+        "Emitted when direct-minter allowance is updated.",
+        "EVM equivalent: `MinterAllowanceUpdated` (for the direct-minter address)"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "actor",
+            "docs": [
+              "Caller of the update (`allowance_manager` authority)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "old_allowance",
+            "type": "u64"
+          },
+          {
+            "name": "new_allowance",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "EscrowInitializedEvent",
       "docs": [
         "Emitted when the OkuMoney escrow vault is wired into config.",
@@ -3448,10 +3929,6 @@
             "type": "pubkey"
           },
           {
-            "name": "oracle_manager",
-            "type": "pubkey"
-          },
-          {
             "name": "cap_manager",
             "type": "pubkey"
           },
@@ -3461,17 +3938,6 @@
           },
           {
             "name": "rebaser",
-            "type": "pubkey"
-          },
-          {
-            "name": "oracle_relay_pyth_program_owner",
-            "docs": [
-              "Program-owner pubkey accepted by the on-chain peg-check parser.",
-              "Deployer chooses per-cluster (legacy Pyth mainnet/devnet, or a",
-              "future Pyth deployment). The relay is otherwise disabled at",
-              "init — operators call `set_oracle_relay_feed` /",
-              "`set_oracle_relay_staleness` post-deploy."
-            ],
             "type": "pubkey"
           }
         ]
@@ -3620,117 +4086,6 @@
       }
     },
     {
-      "name": "OracleRelayBandUpdatedEvent",
-      "docs": [
-        "Emitted when the in-band peg window is rotated.",
-        "EVM equivalent: `PriceBandUpdated(uint256 oldMin, uint256 oldMax, uint256 newMin, uint256 newMax)`"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "actor",
-            "type": "pubkey"
-          },
-          {
-            "name": "old_min_e9",
-            "type": "u64"
-          },
-          {
-            "name": "old_max_e9",
-            "type": "u64"
-          },
-          {
-            "name": "new_min_e9",
-            "type": "u64"
-          },
-          {
-            "name": "new_max_e9",
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "OracleRelayFeedUpdatedEvent",
-      "docs": [
-        "Emitted when the oracle relay feed pubkey is rotated.",
-        "EVM equivalent: `PriceFeedUpdated(address indexed oldFeed, address indexed newFeed, uint8 feedDecimals)`",
-        "(SVM uses Pyth `expo` rather than `decimals`, so the third field is omitted —",
-        "`expo` is read fresh on every consumer call.)"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "actor",
-            "docs": [
-              "Caller of the update (`oracle_manager` authority)."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "old_feed",
-            "type": "pubkey"
-          },
-          {
-            "name": "new_feed",
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "OracleRelayPythProgramOwnerUpdatedEvent",
-      "docs": [
-        "Emitted when the accepted Pyth program owner pubkey is rotated.",
-        "SVM-only — no direct EVM equivalent (Chainlink AggregatorV3 owner is",
-        "implicit in the feed address). Kept as the migration hook for future",
-        "Pyth Solana Receiver support."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "actor",
-            "type": "pubkey"
-          },
-          {
-            "name": "old_pyth_program_owner",
-            "type": "pubkey"
-          },
-          {
-            "name": "new_pyth_program_owner",
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "OracleRelayStalenessUpdatedEvent",
-      "docs": [
-        "Emitted when the relay staleness threshold is rotated.",
-        "EVM equivalent: `StalenessThresholdUpdated(uint256 oldSeconds, uint256 newSeconds)`"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "actor",
-            "type": "pubkey"
-          },
-          {
-            "name": "old_staleness",
-            "type": "i64"
-          },
-          {
-            "name": "new_staleness",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
       "name": "PauseEvent",
       "docs": [
         "Emitted when PSM is paused.",
@@ -3751,9 +4106,9 @@
       "docs": [
         "PSM configuration PDA.",
         "",
-        "Seeds: `[\"psm_config_v3\"]`. Migration history (seed-rotation log) is",
-        "tracked in `SVM/README.md` § \"PDA seed history\"; the `_v3` suffix",
-        "marks the post-oracle-relay layout."
+        "Seeds: `[\"psm_config_v4\"]`. Migration history (seed-rotation log) is",
+        "tracked in `SVM/README.md` § \"PDA seed history\"; the `_v4` suffix",
+        "marks the post-oracle-removal layout."
       ],
       "type": {
         "kind": "struct",
@@ -3818,13 +4173,6 @@
             "name": "buffer_withdrawer",
             "docs": [
               "Cold Multisig - withdraw buffer"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "oracle_manager",
-            "docs": [
-              "Cold Multisig - configure oracle"
             ],
             "type": "pubkey"
           },
@@ -3903,50 +4251,6 @@
             "type": "bool"
           },
           {
-            "name": "oracle_relay_feed",
-            "docs": [
-              "USDC/USD Pyth feed account (or `Pubkey::default()` to disable the",
-              "peg check — the operator-side kill switch, mirrors EVM",
-              "`setOracleRelay(address(0))`)."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "oracle_relay_pyth_program_owner",
-            "docs": [
-              "Pyth program-owner pubkey accepted by the relay parser. Set at",
-              "init via `initialize` and rotatable via",
-              "`set_oracle_relay_pyth_program_owner` (oracle_manager-gated). The",
-              "migration hook for future Pyth Solana Receiver support."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "oracle_relay_staleness",
-            "docs": [
-              "Maximum oracle staleness in seconds. Bounded by",
-              "`[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]` whenever",
-              "the relay is configured."
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "oracle_relay_min_price_e9",
-            "docs": [
-              "Lower bound of the in-band USDC price (1e9 precision).",
-              "Constrained by `ORACLE_USDC_PRICE_FLOOR`."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "oracle_relay_max_price_e9",
-            "docs": [
-              "Upper bound of the in-band USDC price (1e9 precision).",
-              "Constrained by `ORACLE_USDC_PRICE_CEILING`."
-            ],
-            "type": "u64"
-          },
-          {
             "name": "last_yield_distribution_slot",
             "docs": [
               "Solana slot of last yield distribution (sandwich prevention)",
@@ -3977,6 +4281,64 @@
               "`Pubkey::default()` means \"no pending rotation\"."
             ],
             "type": "pubkey"
+          },
+          {
+            "name": "direct_minter",
+            "docs": [
+              "Operator / fiat gateway — can mint OkuMoney directly without USDC.",
+              "EVM equivalent: address granted `OKUM_MINTER` role.",
+              "`Pubkey::default()` means \"not configured / disabled\"."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "direct_minter_allowance",
+            "docs": [
+              "Per-direct-minter allowance (separate from the USDC-backed",
+              "`minter_allowance`). Decremented on each direct mint; reset by",
+              "`allowance_manager` via `set_direct_minter_allowance`. Mirrors",
+              "EVM `minterAllowance[directMinter]`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "direct_burner",
+            "docs": [
+              "Operator / bridge backend — can burn OkuMoney directly without",
+              "triggering a USDC redemption.",
+              "EVM equivalent: address granted `OKUM_BURNER` role.",
+              "`Pubkey::default()` means \"not configured / disabled\"."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "direct_burner_allowance",
+            "docs": [
+              "Per-direct-burner allowance. Decremented on each direct burn;",
+              "reset by `allowance_manager` via `set_direct_burner_allowance`.",
+              "Mirrors EVM's role-gated burn with an additional allowance cap",
+              "for operational safety."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PsmConfigMigratedEvent",
+      "docs": [
+        "Emitted when PsmConfig is migrated (realloc'd) to the new layout."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_len",
+            "type": "u64"
+          },
+          {
+            "name": "new_len",
+            "type": "u64"
           }
         ]
       }

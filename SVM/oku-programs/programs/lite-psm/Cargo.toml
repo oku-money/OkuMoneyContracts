@@ -31,3 +31,7 @@ solana-sysvar = "3.1"
 solana-security-txt = "1.1"
 # Protocol-wide constants + pure-math primitives. See `crates/oku-shared`.
 oku-shared = { path = "../../crates/oku-shared" }
+
+[dev-dependencies]
+# SHA-256 for verifying Anchor instruction discriminators in tests.
+solana-sha256-hasher = "3.1"

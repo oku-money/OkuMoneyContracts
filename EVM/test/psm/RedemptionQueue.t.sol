@@ -7,7 +7,6 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 import {RedemptionQueueEvents} from "../../src/lib/events/RedemptionQueueEvents.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {MockOracleRelay} from "../mocks/MockOracleRelay.sol";
 
 /**
  * @title RedemptionQueueTest
@@ -1525,68 +1524,5 @@ contract RedemptionQueueTest is BaseTest {
         // MockUSDC is 6 decimals; multiplier = 10**(18-6) = 1e12.
         assertEq(redemptionQueue.usdcDecimalMultiplier(), 1e12);
         assertEq(redemptionQueue.usdcDecimalMultiplier(), DECIMAL_MULTIPLIER);
-    }
-
-    function test_View_OracleRelay() public view {
-        // BaseTest wires the MockOracleRelay during _setupRoles().
-        assertEq(address(redemptionQueue.oracleRelay()), address(oracleRelay));
-    }
-
-    // ============ Oracle Relay (USDC peg circuit-breaker) ============
-
-    /// @notice ProcessQueue must revert when the peg check fails. The check runs once
-    ///         per batch, before any entries are processed, so a depeg event suspends
-    ///         queue drains entirely.
-    function test_ProcessQueue_RevertsOnDepeg() public {
-        uint256 amount = 100e18;
-        _mintOkuMoney(address(redemptionQueue), amount);
-        redemptionQueue.enqueue(user1, amount);
-
-        // Provide USDC and approval so the only failure mode is the relay.
-        uint256 usdcAmount = amount / DECIMAL_MULTIPLIER;
-        _mintUsdc(address(this), usdcAmount);
-        _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
-
-        oracleRelay.setPass(false);
-        vm.expectRevert(MockOracleRelay.MockOracleRelayDepeg.selector);
-        redemptionQueue.processQueue(0, 1);
-    }
-
-    function test_ProcessQueue_SucceedsWhenRelayDisabledViaSetOracleRelay() public {
-        // Wire the relay to fail, then disable it on the queue: processQueue should
-        // proceed because the check is skipped when oracleRelay is address(0).
-        uint256 amount = 100e18;
-        _mintOkuMoney(address(redemptionQueue), amount);
-        redemptionQueue.enqueue(user1, amount);
-        uint256 usdcAmount = amount / DECIMAL_MULTIPLIER;
-        _mintUsdc(address(this), usdcAmount);
-        _approveUsdc(address(this), address(redemptionQueue), usdcAmount);
-
-        oracleRelay.setPass(false);
-        vm.prank(admin); // admin holds QUEUE_ORACLE_MANAGER
-        redemptionQueue.setOracleRelay(address(0));
-
-        uint256 user1Before = usdc.balanceOf(user1);
-        redemptionQueue.processQueue(0, 1);
-        assertEq(usdc.balanceOf(user1), user1Before + usdcAmount);
-    }
-
-    function test_SetOracleRelay_RevertsForNonOracleManager() public {
-        vm.prank(user1);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                user1,
-                QUEUE_ORACLE_MANAGER
-            )
-        );
-        redemptionQueue.setOracleRelay(address(0xBEEF));
-    }
-
-    function test_SetOracleRelay_EmitsEvent() public {
-        vm.expectEmit(true, true, false, false);
-        emit RedemptionQueueEvents.OracleRelayUpdated(address(oracleRelay), address(0xBEEF));
-        vm.prank(admin); // admin holds QUEUE_ORACLE_MANAGER
-        redemptionQueue.setOracleRelay(address(0xBEEF));
     }
 }

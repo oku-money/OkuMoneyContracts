@@ -14,10 +14,12 @@
  */
 
 // lite_psm — programs/lite-psm/src/state.rs
-export const PSM_CONFIG_LEN = 714;            // const _: () = assert!(PsmConfig::LEN == 714);
-                                              // Was 674 before direct-mint addition (which added
-                                              // `direct_minter: Pubkey` + `direct_minter_allowance: u64`,
-                                              // +40 bytes).
+export const PSM_CONFIG_LEN = 594;            // const _: () = assert!(PsmConfig::LEN == 594);
+                                              // Was 714 before oracle removal (which removed
+                                              // oracle_manager, oracle_relay_feed,
+                                              // oracle_relay_pyth_program_owner, oracle_relay_staleness,
+                                              // oracle_relay_min_price_e9, oracle_relay_max_price_e9;
+                                              // -120 bytes).
 export const REDEMPTION_QUEUE_LEN = 9_640;    // const _: () = assert!(RedemptionQueue::LEN == 9_640);
                                               // Zero-copy ring at MAX_ENTRIES=200 (Phase 13b).
                                               // Capped at 200 (not the spec target of 500) by Solana's

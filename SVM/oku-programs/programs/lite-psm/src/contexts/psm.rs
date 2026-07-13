@@ -64,13 +64,6 @@ pub struct MintOkuM<'info> {
     )]
     pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
-    /// USDC/USD Pyth feed used by the oracle-relay peg-check (optional —
-    /// only required when `config.oracle_relay_feed != Pubkey::default()`).
-    /// CHECK: validated manually in `check_usdc_peg`; verifies that the
-    /// account key matches `config.oracle_relay_feed` and the owner
-    /// matches `config.oracle_relay_pyth_program_owner`.
-    pub oracle_relay_feed: Option<UncheckedAccount<'info>>,
-
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -156,11 +149,6 @@ pub struct RedeemOkuM<'info> {
     )]
     pub vault_oku_money: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// USDC/USD Pyth feed for the peg circuit-breaker (optional — only
-    /// required when `config.oracle_relay_feed != Pubkey::default()`).
-    /// CHECK: validated manually in `check_usdc_peg`.
-    pub oracle_relay_feed: Option<UncheckedAccount<'info>>,
-
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -216,11 +204,6 @@ pub struct ProcessQueue<'info> {
         token::token_program = token_2022_program,
     )]
     pub vault_oku_money: Box<InterfaceAccount<'info, TokenAccountInterface>>,
-
-    /// USDC/USD Pyth feed for the peg circuit-breaker (optional — only
-    /// required when `config.oracle_relay_feed != Pubkey::default()`).
-    /// CHECK: validated manually in `check_usdc_peg`.
-    pub oracle_relay_feed: Option<UncheckedAccount<'info>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,

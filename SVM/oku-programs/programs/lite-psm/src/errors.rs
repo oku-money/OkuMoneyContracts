@@ -17,11 +17,6 @@
 //! | `OutputBelowMinimum` | `OutputBelowMinimum(uint256 actual, uint256 minimum)` |
 //! | `AmountTooSmall` | `AmountTooSmall()` |
 //! | `InvalidUsdcDecimals` | (initialize-time decimals check) |
-//! | `InvalidStaleness` | `InvalidStaleness(uint256 provided, ...)` |
-//! | `PriceOutOfBand` | `PriceOutOfBand(uint256 priceE18, uint256 minE18, uint256 maxE18)` |
-//! | `NonPositiveAnswer` | `NonPositiveAnswer()` |
-//! | `InvalidPriceBand` | `InvalidPriceBand(uint256 minE18, uint256 maxE18)` |
-//! | `FeedExpoTooLarge` | `FeedDecimalsTooLarge(uint8 reported)` |
 
 use anchor_lang::prelude::*;
 
@@ -62,43 +57,6 @@ pub enum LitePsmError {
     /// EVM: ExceedsAllowance()
     #[msg("Mint would exceed minter allowance")]
     AllowanceExceeded,
-
-    // ===== Oracle Relay (USDC peg circuit-breaker) Errors =====
-    /// Oracle data is stale
-    /// EVM: StaleOracleData()
-    #[msg("Oracle data is stale")]
-    StaleOracle,
-
-    /// Normalized USDC price is outside the configured peg band
-    /// (`[oracle_relay_min_price_e9, oracle_relay_max_price_e9]`).
-    /// EVM: PriceOutOfBand(uint256 priceE18, uint256 minE18, uint256 maxE18)
-    #[msg("USDC price out of band — depeg circuit-breaker tripped")]
-    PriceOutOfBand,
-
-    /// Pyth aggregate price is zero or negative.
-    /// EVM: NonPositiveAnswer()
-    #[msg("Oracle returned a non-positive answer")]
-    NonPositiveAnswer,
-
-    /// Provided peg band is invalid (`min >= max`, or outside the hard
-    /// floor/ceiling defined by `ORACLE_USDC_PRICE_FLOOR`/`_CEILING`).
-    /// EVM: InvalidPriceBand(uint256 minE18, uint256 maxE18)
-    #[msg("Invalid peg band — must satisfy min < max within hard bounds")]
-    InvalidPriceBand,
-
-    /// Pyth `expo` magnitude exceeds `MAX_FEED_EXPO_MAGNITUDE`. The
-    /// normalization math caps at 1e18 of scaling either direction.
-    /// EVM: FeedDecimalsTooLarge(uint8 reported)
-    #[msg("Pyth feed expo magnitude exceeds MAX_FEED_EXPO_MAGNITUDE")]
-    FeedExpoTooLarge,
-
-    /// Pyth round's confidence-interval-to-price ratio exceeds
-    /// `MAX_ORACLE_CONFIDENCE_BPS / 10_000`. Publisher set degenerate;
-    /// reject for safety. SVM-only hardening (Chainlink doesn't publish
-    /// per-round confidence so EVM has no analogue — see
-    /// `audit/README.md` § "Deliberate non-parity").
-    #[msg("Pyth oracle confidence interval too wide for safe consumption")]
-    OracleConfidenceTooWide,
 
     // ===== Buffer Errors =====
     /// Insufficient buffer for redemption
@@ -144,18 +102,6 @@ pub enum LitePsmError {
     /// Not enough accounts provided for queue entries
     #[msg("Not enough accounts provided for queue entries")]
     InsufficientAccounts,
-
-    // ===== Oracle Relay Validation Errors =====
-    /// Relay is configured but the feed account was not supplied as a
-    /// remaining/optional account on the call.
-    #[msg("Oracle relay feed account not provided but relay is configured")]
-    OracleAccountMissing,
-
-    /// Generic invalid-oracle response (wrong account, owner mismatch,
-    /// malformed Pyth header, non-Trading status, etc.).
-    /// EVM: InvalidOracleResponse() / IncompleteOracleRound()
-    #[msg("Invalid oracle response")]
-    InvalidOracleResponse,
 
     // ===== Yield Distribution Errors =====
     /// Cannot perform operation in same slot as yield distribution
@@ -205,11 +151,6 @@ pub enum LitePsmError {
     MigrationNotNeeded,
 
     // ===== Initialization Errors =====
-    /// Oracle relay Pyth program-owner pubkey rotated to the default (zero)
-    /// pubkey. Rejected because the runtime peg-check requires a non-zero
-    /// owner to validate the feed account's ownership against.
-    #[msg("Pyth program owner pubkey is required (cannot be the zero pubkey)")]
-    InvalidPythProgramOwner,
 
     /// USDC mint must have exactly 6 decimals on Solana.
     /// EVM uses a runtime-resolved `usdcDecimalMultiplier`; SVM hardcodes 6.
@@ -233,11 +174,6 @@ pub enum LitePsmError {
     /// EVM: OutputBelowMinimum(uint256 actual, uint256 minimum)
     #[msg("Output below minimum (slippage exceeded)")]
     OutputBelowMinimum,
-
-    // ===== Oracle Validation Errors =====
-    /// Staleness threshold is outside accepted range [60s, 7 days]
-    #[msg("Staleness threshold out of range (must be 60s..=7 days)")]
-    InvalidStaleness,
 
     // ===== Phase 10 / Cycle 4: mint extension invariants =====
     /// The OkuMoney mint carries a Token-2022 extension that the protocol

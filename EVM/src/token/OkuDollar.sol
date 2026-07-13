@@ -112,6 +112,9 @@ contract OkuDollar is
     error UseWrapInstead();
     /// @notice Defensive guard: direct `_burn` is forbidden; use `unwrap()` instead.
     error UseUnwrapInstead();
+    /// @notice Defensive guard: OkuDollar uses share-based accounting; the inherited
+    ///         ERC-20 `_update` path must never execute for any transfer type.
+    error OkuDollarDoesNotUseInternalUpdate();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -402,17 +405,18 @@ contract OkuDollar is
     // ============ Inherited ERC20 guard ============
 
     /// @dev OkuDollar overrides `transfer`/`transferFrom` to use share-based accounting.
-    ///      The inherited ERC20 `_update` hook is therefore only reachable via the
-    ///      inherited `_mint` (from == address(0)) or `_burn` (to == address(0)) paths,
-    ///      which must never be called — all supply changes go through `wrap()`/`unwrap()`
-    ///      which manage `usdShares` directly.
-    ///      Peer-to-peer `_update` calls (both from and to non-zero) should also never
-    ///      occur since `transfer`/`transferFrom` bypass ERC20's internal path, but they
-    ///      are allowed to fall through to `super._update` harmlessly.
-    function _update(address from, address to, uint256 amount) internal override {
+    ///      The inherited ERC-20 `_update` hook must never execute — all supply changes
+    ///      go through `wrap()`/`unwrap()` which manage `usdShares` directly, and
+    ///      peer-to-peer transfers are handled by the overridden `transfer`/`transferFrom`.
+    ///
+    ///      Unconditional revert (with diagnostic sub-errors for mint/burn) ensures that
+    ///      no future code change can accidentally write to the inherited `_balances`
+    ///      mapping, which `balanceOf()` never reads.  This matches the hard-revert
+    ///      pattern used by stETH and Aave aToken.
+    function _update(address from, address to, uint256) internal pure override {
         if (from == address(0)) revert UseWrapInstead();
         if (to == address(0)) revert UseUnwrapInstead();
-        super._update(from, to, amount);
+        revert OkuDollarDoesNotUseInternalUpdate();
     }
 
     // ============ Yield Distribution Lock ============

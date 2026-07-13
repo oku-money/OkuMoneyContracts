@@ -45,18 +45,10 @@ library TestRoles {
     bytes32 public constant PSM_QUEUE_PROCESSOR = SrcRoles.PSM_QUEUE_PROCESSOR;
     bytes32 public constant PSM_BUFFER_DEPOSITOR = SrcRoles.PSM_BUFFER_DEPOSITOR;
     bytes32 public constant PSM_BUFFER_WITHDRAWER = SrcRoles.PSM_BUFFER_WITHDRAWER;
-    bytes32 public constant PSM_ORACLE_MANAGER = SrcRoles.PSM_ORACLE_MANAGER;
 
     // ============ RedemptionQueue Roles (QUEUE_ prefix) ============
 
     bytes32 public constant QUEUE_UPGRADER = SrcRoles.QUEUE_UPGRADER;
     bytes32 public constant QUEUE_PSM = SrcRoles.QUEUE_PSM;
     bytes32 public constant QUEUE_RESCUER = SrcRoles.QUEUE_RESCUER;
-    bytes32 public constant QUEUE_ORACLE_MANAGER = SrcRoles.QUEUE_ORACLE_MANAGER;
-
-    // ============ OracleRelay Roles (RELAY_ prefix) ============
-
-    bytes32 public constant RELAY_UPGRADER = SrcRoles.RELAY_UPGRADER;
-    bytes32 public constant RELAY_FEED_MANAGER = SrcRoles.RELAY_FEED_MANAGER;
-    bytes32 public constant RELAY_CONFIG_MANAGER = SrcRoles.RELAY_CONFIG_MANAGER;
 }

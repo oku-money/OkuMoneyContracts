@@ -10,7 +10,7 @@ import { NetworkName } from './networks';
 import { DEFAULT_DIRECT_MINTER } from './constants';
 
 export interface AuthorityConfig {
-  // PSM authorities (13 roles)
+  // PSM authorities (12 roles)
   psm: {
     roleAdmin: PublicKey;
     pauser: PublicKey;
@@ -20,7 +20,6 @@ export interface AuthorityConfig {
     queueProcessor: PublicKey;
     bufferDepositor: PublicKey;
     bufferWithdrawer: PublicKey;
-    oracleManager: PublicKey;
     capManager: PublicKey;
     allowanceManager: PublicKey;
     rebaser: PublicKey;
@@ -58,7 +57,6 @@ function allRolesToSingleKey(deployer: PublicKey): AuthorityConfig {
       queueProcessor: deployer,
       bufferDepositor: deployer,
       bufferWithdrawer: deployer,
-      oracleManager: deployer,
       capManager: deployer,
       allowanceManager: deployer,
       rebaser: deployer,
@@ -127,7 +125,6 @@ export function loadAuthorities(
       queueProcessor: orchestrator,
       bufferDepositor: orchestrator,
       bufferWithdrawer: coldMultisig,
-      oracleManager: coldMultisig,
       capManager: coldMultisig,
       allowanceManager: coldMultisig,
       rebaser: orchestrator,

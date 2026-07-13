@@ -15,7 +15,7 @@ import {TestConstants} from "../shared/Constants.sol";
  * @title LitePSMHandler
  * @notice Stateful handler for LitePSM invariants. Exercises the full public surface
  *         (mintOkuM, redeemOkuM, mintUsdOku, redeemUsdOku, depositBuffer,
- *         withdrawUsdc, processQueue, rescueQueueEntry, setOracleRelay) and tracks
+ *         withdrawUsdc, processQueue, rescueQueueEntry) and tracks
  *         exact USDC flow + multiplier-observation ghost state.
  * @dev The PSM is granted the admin role at the test level; this handler invokes
  *      role-gated functions via `vm.prank(bridgeAdmin)` (where bridgeAdmin is the
@@ -73,8 +73,6 @@ contract LitePSMHandler is Test {
     uint256 public ghostProcessQueueReverts;
     uint256 public ghostRescueCalls;
     uint256 public ghostRescueReverts;
-    uint256 public ghostSetOracleRelayCalls;
-    uint256 public ghostSetOracleRelayReverts;
 
     // ============ Multiplier observation ============
 
@@ -335,19 +333,6 @@ contract LitePSMHandler is Test {
         }
     }
 
-    /// @notice Drive the LitePSM.setOracleRelay branch by toggling between the wired
-    ///         relay and address(0) (kill-switch). The handler does not know the
-    ///         live relay address, so it always passes address(0) — exercising the
-    ///         "disable peg check" path. Re-enabling is handled by the invariant
-    ///         test harness in afterInvariant if it needs to.
-    function setOracleRelay() external {
-        ghostSetOracleRelayCalls++;
-        try psm.setOracleRelay(address(0)) {}
-        catch {
-            ghostSetOracleRelayReverts++;
-        }
-    }
-
     // ============ USD Yield Rate (drives usdMultiplier compounding) ============
 
     uint256 public ghostSetUsdYieldRateCalls;
@@ -398,13 +383,12 @@ contract LitePSMHandler is Test {
     function ghostTotalCalls() external view returns (uint256) {
         return ghostMintOkuMCalls + ghostRedeemOkuMCalls + ghostMintOkuDollarCalls
             + ghostRedeemOkuDollarCalls + ghostRebaseCalls + ghostDepositBufferCalls
-            + ghostWithdrawUsdcCalls + ghostProcessQueueCalls + ghostRescueCalls
-            + ghostSetOracleRelayCalls + ghostWarpCalls;
+            + ghostWithdrawUsdcCalls + ghostProcessQueueCalls + ghostRescueCalls + ghostWarpCalls;
     }
 
     function ghostTotalReverts() external view returns (uint256) {
         return ghostMintOkuMReverts + ghostRedeemOkuMReverts + ghostMintOkuDollarReverts
             + ghostRedeemOkuDollarReverts + ghostDepositBufferReverts + ghostWithdrawUsdcReverts
-            + ghostProcessQueueReverts + ghostRescueReverts + ghostSetOracleRelayReverts;
+            + ghostProcessQueueReverts + ghostRescueReverts;
     }
 }

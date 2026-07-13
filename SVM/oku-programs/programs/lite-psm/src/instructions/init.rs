@@ -5,7 +5,7 @@ use crate::events::{EscrowInitializedEvent, InitializeEvent, QueueInitializedEve
 use crate::helpers::mint_extensions::assert_oku_money_mint_extensions_whitelisted;
 use crate::state::RedemptionQueue;
 use anchor_lang::prelude::*;
-use oku_shared::{ORACLE_USDC_PRICE_CEILING, ORACLE_USDC_PRICE_FLOOR};
+
 
 /// Parameter bundle for [`initialize`]. Cycle 4 (PSM-17): collapses
 /// the 15-argument instruction signature into a single struct so the
@@ -32,17 +32,9 @@ pub struct InitializeParams {
     pub queue_processor: Pubkey,
     pub buffer_depositor: Pubkey,
     pub buffer_withdrawer: Pubkey,
-    pub oracle_manager: Pubkey,
     pub cap_manager: Pubkey,
     pub allowance_manager: Pubkey,
     pub rebaser: Pubkey,
-    // ----- Oracle relay -----
-    /// Program-owner pubkey accepted by the on-chain peg-check parser.
-    /// Deployer chooses per-cluster (legacy Pyth mainnet/devnet, or a
-    /// future Pyth deployment). The relay is otherwise disabled at
-    /// init — operators call `set_oracle_relay_feed` /
-    /// `set_oracle_relay_staleness` post-deploy.
-    pub oracle_relay_pyth_program_owner: Pubkey,
 }
 
 /// Initialize the PSM — step 1.
@@ -52,11 +44,6 @@ pub struct InitializeParams {
 /// Authority pubkeys are bundled into [`InitializeParams`] to keep the
 /// IDL slot self-documenting (cycle 4 / PSM-17).
 pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<()> {
-    require!(
-        params.oracle_relay_pyth_program_owner != Pubkey::default(),
-        LitePsmError::InvalidPythProgramOwner
-    );
-
     // Cycle 4 (PSM-13): enforce the Token-2022 extension allow-list on
     // the OkuMoney mint. Replaces the cycle-3 TransferHook-only check
     // with a positive allow-list (only InterestBearingConfig / metadata /
@@ -77,7 +64,6 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     config.queue_processor = params.queue_processor;
     config.buffer_depositor = params.buffer_depositor;
     config.buffer_withdrawer = params.buffer_withdrawer;
-    config.oracle_manager = params.oracle_manager;
     config.cap_manager = params.cap_manager;
     config.allowance_manager = params.allowance_manager;
     config.rebaser = params.rebaser;
@@ -93,33 +79,6 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     config.minter_allowance = params.minter_allowance;
     config.is_paused = false;
 
-    // Oracle relay (USDC peg circuit-breaker). Disabled until the
-    // operator wires the feed via `set_oracle_relay_feed`. The Pyth
-    // program-owner pubkey is fixed here so the relay parser can
-    // validate feed ownership the moment a feed is wired.
-    //
-    // Defaults:
-    //   * `oracle_relay_feed = Pubkey::default()` is the kill-switch
-    //     sentinel — the only field that gates whether the relay is
-    //     consumed at all (mirrors EVM `setOracleRelay(address(0))`).
-    //   * `oracle_relay_staleness = ORACLE_MAX_STALENESS_SECS` (7 days).
-    //     Cycle 4 (PSM-08): previously initialised to 0, which conflicted
-    //     with the setter's `[ORACLE_MIN, ORACLE_MAX]` range — an
-    //     operator who called `set_oracle_relay_feed` before
-    //     `set_oracle_relay_staleness` would brick every mint/redeem
-    //     until staleness was raised. The max default lets the relay
-    //     function the moment a feed is wired; operators tighten as
-    //     part of go-live hardening.
-    //   * Band defaults to the protocol-wide hard floor/ceiling
-    //     (`±5%`). Operators narrow this to ±3% (`[0.97e9, 1.03e9]`)
-    //     before going live. Same default-permissive posture EVM
-    //     ships with.
-    config.oracle_relay_feed = Pubkey::default();
-    config.oracle_relay_pyth_program_owner = params.oracle_relay_pyth_program_owner;
-    config.oracle_relay_staleness = oku_shared::ORACLE_MAX_STALENESS_SECS;
-    config.oracle_relay_min_price_e9 = ORACLE_USDC_PRICE_FLOOR;
-    config.oracle_relay_max_price_e9 = ORACLE_USDC_PRICE_CEILING;
-
     // Yield distribution lock - starts at 0 (no lock)
     config.last_yield_distribution_slot = 0;
 
@@ -134,6 +93,11 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     // `set_authority(DirectMinter, ...)` + `set_direct_minter_allowance`.
     config.direct_minter = Pubkey::default();
     config.direct_minter_allowance = 0;
+
+    // Direct burn — disabled by default. Operator configures via
+    // `set_authority(DirectBurner, ...)` + `set_direct_burner_allowance`.
+    config.direct_burner = Pubkey::default();
+    config.direct_burner_allowance = 0;
 
     emit!(InitializeEvent {
         role_admin: config.role_admin,

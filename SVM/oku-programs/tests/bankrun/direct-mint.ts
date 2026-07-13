@@ -95,7 +95,7 @@ describe("direct-mint", () => {
 
     // Derive PSM config PDA
     [psmConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v3")],
+      [Buffer.from("psm_config_v4")],
       psmProgram.programId
     );
 

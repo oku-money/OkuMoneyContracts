@@ -10,8 +10,6 @@ import {LitePSM} from "../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../src/psm/RedemptionQueue.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {MockAggregatorV3} from "./mocks/MockAggregatorV3.sol";
-import {MockOracleRelay} from "./mocks/MockOracleRelay.sol";
-
 import {TestConstants} from "./shared/Constants.sol";
 import {TestRoles} from "./shared/Roles.sol";
 import {Actors} from "./shared/Actors.sol";
@@ -71,18 +69,10 @@ abstract contract BaseTest is Test, Actors {
     bytes32 public constant PSM_QUEUE_PROCESSOR = TestRoles.PSM_QUEUE_PROCESSOR;
     bytes32 public constant PSM_BUFFER_DEPOSITOR = TestRoles.PSM_BUFFER_DEPOSITOR;
     bytes32 public constant PSM_BUFFER_WITHDRAWER = TestRoles.PSM_BUFFER_WITHDRAWER;
-    bytes32 public constant PSM_ORACLE_MANAGER = TestRoles.PSM_ORACLE_MANAGER;
-
     // RedemptionQueue roles (QUEUE_ prefix)
     bytes32 public constant QUEUE_PSM = TestRoles.QUEUE_PSM;
     bytes32 public constant QUEUE_UPGRADER = TestRoles.QUEUE_UPGRADER;
     bytes32 public constant QUEUE_RESCUER = TestRoles.QUEUE_RESCUER;
-    bytes32 public constant QUEUE_ORACLE_MANAGER = TestRoles.QUEUE_ORACLE_MANAGER;
-
-    // OracleRelay roles (RELAY_ prefix)
-    bytes32 public constant RELAY_UPGRADER = TestRoles.RELAY_UPGRADER;
-    bytes32 public constant RELAY_FEED_MANAGER = TestRoles.RELAY_FEED_MANAGER;
-    bytes32 public constant RELAY_CONFIG_MANAGER = TestRoles.RELAY_CONFIG_MANAGER;
 
     // ============ Contracts ============
 
@@ -96,7 +86,6 @@ abstract contract BaseTest is Test, Actors {
     RedemptionQueue public redemptionQueueImpl;
     MockUSDC public usdc;
     MockAggregatorV3 public oracle;
-    MockOracleRelay public oracleRelay;
 
     // ============ Setup ============
 
@@ -110,7 +99,6 @@ abstract contract BaseTest is Test, Actors {
         // Deploy mocks
         usdc = new MockUSDC();
         oracle = new MockAggregatorV3();
-        oracleRelay = new MockOracleRelay(); // defaults to pass (price = 1e18)
 
         // Deploy OkuMoney
         (okuMoney, okuMoneyImpl) = Deploy.deployOkuMoney(admin);
@@ -162,8 +150,6 @@ abstract contract BaseTest is Test, Actors {
         litePsm.grantRole(PSM_QUEUE_PROCESSOR, queueProcessor);
         litePsm.grantRole(PSM_BUFFER_DEPOSITOR, bufferDepositor);
         litePsm.grantRole(PSM_BUFFER_WITHDRAWER, bufferWithdrawer);
-        litePsm.grantRole(PSM_ORACLE_MANAGER, oracleManager);
-
         // RedemptionQueue roles (QUEUE_ prefix)
         redemptionQueue.grantRole(QUEUE_PSM, address(litePsm));
         redemptionQueue.grantRole(QUEUE_RESCUER, queueRescuer);
@@ -172,12 +158,6 @@ abstract contract BaseTest is Test, Actors {
         // processQueue). Cycle 4: only OKUM_BURNER is required for the
         // burn path now — minting is not needed.
         okuMoney.grantRole(OKUM_BURNER, address(redemptionQueue));
-
-        // Wire the always-pass MockOracleRelay so mint/redeem/processQueue exercise the
-        // peg-check call site without tripping. Tests that want the depeg-revert branch
-        // call `oracleRelay.setPass(false)` ad hoc.
-        litePsm.setOracleRelay(address(oracleRelay));
-        redemptionQueue.setOracleRelay(address(oracleRelay));
 
         vm.stopPrank();
     }

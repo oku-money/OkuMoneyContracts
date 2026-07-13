@@ -10,9 +10,9 @@ use anchor_lang::prelude::*;
 
 /// PSM configuration PDA.
 ///
-/// Seeds: `["psm_config_v3"]`. Migration history (seed-rotation log) is
-/// tracked in `SVM/README.md` § "PDA seed history"; the `_v3` suffix
-/// marks the post-oracle-relay layout.
+/// Seeds: `["psm_config_v4"]`. Migration history (seed-rotation log) is
+/// tracked in `SVM/README.md` § "PDA seed history"; the `_v4` suffix
+/// marks the post-oracle-removal layout.
 #[account]
 #[derive(InitSpace)]
 pub struct PsmConfig {
@@ -36,8 +36,6 @@ pub struct PsmConfig {
     pub buffer_depositor: Pubkey,
     /// Cold Multisig - withdraw buffer
     pub buffer_withdrawer: Pubkey,
-    /// Cold Multisig - configure oracle
-    pub oracle_manager: Pubkey,
     /// Cold Multisig - set max supply
     pub cap_manager: Pubkey,
     /// Cold Multisig - reset minter allowance
@@ -66,32 +64,6 @@ pub struct PsmConfig {
     pub minter_allowance: u64,
     /// Whether the PSM is paused
     pub is_paused: bool,
-
-    // ===== Oracle Relay (USDC peg circuit-breaker) =====
-    //
-    // Replaces the previous Proof-of-Reserves plumbing. Every mint, redeem,
-    // and queue-process path calls `helpers::oracle_relay::check_usdc_peg`
-    // when the relay is configured (`oracle_relay_feed != Pubkey::default()`).
-    // Mirrors EVM `OracleRelay` (see `EVM/src/oracle/OracleRelay.sol`).
-    /// USDC/USD Pyth feed account (or `Pubkey::default()` to disable the
-    /// peg check — the operator-side kill switch, mirrors EVM
-    /// `setOracleRelay(address(0))`).
-    pub oracle_relay_feed: Pubkey,
-    /// Pyth program-owner pubkey accepted by the relay parser. Set at
-    /// init via `initialize` and rotatable via
-    /// `set_oracle_relay_pyth_program_owner` (oracle_manager-gated). The
-    /// migration hook for future Pyth Solana Receiver support.
-    pub oracle_relay_pyth_program_owner: Pubkey,
-    /// Maximum oracle staleness in seconds. Bounded by
-    /// `[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]` whenever
-    /// the relay is configured.
-    pub oracle_relay_staleness: i64,
-    /// Lower bound of the in-band USDC price (1e9 precision).
-    /// Constrained by `ORACLE_USDC_PRICE_FLOOR`.
-    pub oracle_relay_min_price_e9: u64,
-    /// Upper bound of the in-band USDC price (1e9 precision).
-    /// Constrained by `ORACLE_USDC_PRICE_CEILING`.
-    pub oracle_relay_max_price_e9: u64,
 
     /// Solana slot of last yield distribution (sandwich prevention)
     /// Operations like mint/redeem are blocked in the same slot as yield distribution
@@ -130,27 +102,46 @@ pub struct PsmConfig {
     /// `allowance_manager` via `set_direct_minter_allowance`. Mirrors
     /// EVM `minterAllowance[directMinter]`.
     pub direct_minter_allowance: u64,
+
+    // ===== Direct Burn (bridge / off-ramp) =====
+    //
+    // Permissioned direct OkuMoney burn path — burns OkuMoney from the
+    // caller's ATA without USDC payout. Matches EVM `OkuMoney.burn(amount)`
+    // called by an `OKUM_BURNER` role holder. Enables SVM→EVM bridging
+    // where the KMS-backed orchestrator burns on the source chain.
+
+    /// Operator / bridge backend — can burn OkuMoney directly without
+    /// triggering a USDC redemption.
+    /// EVM equivalent: address granted `OKUM_BURNER` role.
+    /// `Pubkey::default()` means "not configured / disabled".
+    pub direct_burner: Pubkey,
+
+    /// Per-direct-burner allowance. Decremented on each direct burn;
+    /// reset by `allowance_manager` via `set_direct_burner_allowance`.
+    /// Mirrors EVM's role-gated burn with an additional allowance cap
+    /// for operational safety.
+    pub direct_burner_allowance: u64,
 }
 
 impl PsmConfig {
-    pub const SEED: &'static [u8] = b"psm_config_v3";
+    pub const SEED: &'static [u8] = b"psm_config_v4";
 
     /// Space needed for PsmConfig account: 8 byte discriminator +
-    /// `InitSpace`-derived field sum. Pinned to 674 bytes by the
+    /// `InitSpace`-derived field sum. Pinned to 594 bytes by the
     /// compile-time assertion below; if a reviewer changes a field's
     /// width the assertion fires.
     pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
 
 // Compile-time assertion: if PsmConfig layout changes, this will fail to compile.
-// (714 = 8 disc + 1 bump + 32*12 authorities (384) + 32*4 token refs (128)
+// (634 = 8 disc + 1 bump + 32*11 authorities (352) + 32*4 token refs (128)
 //      + 8 max_supply + 8 minter_allowance + 1 is_paused
-//      + 32 oracle_relay_feed + 32 oracle_relay_pyth_program_owner
-//      + 8 oracle_relay_staleness + 8 oracle_relay_min_price_e9
-//      + 8 oracle_relay_max_price_e9 + 8 last_yield_distribution_slot
-//      + 8 oku_m_price + 32 pending_role_admin
-//      + 32 direct_minter + 8 direct_minter_allowance.)
-const _: () = assert!(PsmConfig::LEN == 714);
+//      + 8 last_yield_distribution_slot + 8 oku_m_price
+//      + 32 pending_role_admin
+//      + 32 direct_minter + 8 direct_minter_allowance
+//      + 32 direct_burner + 8 direct_burner_allowance.)
+// 634 = 594 (previous) + 32 direct_burner + 8 direct_burner_allowance.
+const _: () = assert!(PsmConfig::LEN == 634);
 
 /// Redemption queue PDA — zero-copy ring buffer.
 ///

@@ -2,7 +2,7 @@
 //!
 //! SVM port of the EVM-side `LitePSM.sol`. The structure mirrors
 //! `EVM/src/psm/` module-for-module; deliberate divergences (token
-//! decimals, yield-distribution model, oracle parser, queue size) are
+//! decimals, yield-distribution model, queue size) are
 //! documented in [`SVM/README.md § EVM vs SVM — divergence catalogue`](../../../README.md).
 //!
 //! v1 cross-chain transfers are handled off-chain by an orchestrator that
@@ -93,11 +93,18 @@ pub mod lite_psm {
 
     // ===== Migration =====
 
-    /// One-time migration: extend PsmConfig from 674 → 714 bytes to
+    /// One-time migration: extend PsmConfig from 674 -> 714 bytes to
     /// accommodate the `direct_minter` + `direct_minter_allowance` fields.
     /// Must be signed by the current `role_admin`.
     pub fn migrate_psm_config(ctx: Context<MigratePsmConfig>) -> Result<()> {
         instructions::direct_mint::migrate_psm_config(ctx)
+    }
+
+    /// One-time migration: extend PsmConfig from 594 -> 634 bytes to
+    /// accommodate the `direct_burner` + `direct_burner_allowance` fields.
+    /// Must be signed by the current `role_admin`.
+    pub fn migrate_psm_config_v2(ctx: Context<MigratePsmConfigV2>) -> Result<()> {
+        instructions::direct_burn::migrate_psm_config_v2(ctx)
     }
 
     // ===== Direct Mint (fiat on-ramp) =====
@@ -117,6 +124,15 @@ pub mod lite_psm {
         min_shares_out: u64,
     ) -> Result<()> {
         instructions::direct_mint::mint_usd_oku_direct(ctx, oku_m_amount, min_shares_out)
+    }
+
+    // ===== Direct Burn (bridge / off-ramp) =====
+
+    /// Burn OkuMoney directly without USDC payout (permissioned --
+    /// `direct_burner` only). Matches EVM `OkuMoney.burn(amount)` called
+    /// by a non-PSM `OKUM_BURNER`. Enables SVM->EVM bridging.
+    pub fn burn_oku_m_direct(ctx: Context<BurnOkuMDirect>, oku_m_amount: u64) -> Result<()> {
+        instructions::direct_burn::burn_oku_m_direct(ctx, oku_m_amount)
     }
 
     /// Redeem OkuMoney for USDC (price-aware)
@@ -186,45 +202,8 @@ pub mod lite_psm {
         instructions::psm_admin::set_direct_minter_allowance(ctx, amount)
     }
 
-    // ===== Oracle Relay (USDC peg circuit-breaker) admin =====
-
-    /// Rotate the USDC/USD Pyth feed used by the peg-check.
-    /// `new_feed == Pubkey::default()` is the operator-side kill switch
-    /// (disables the peg check entirely; mirrors EVM
-    /// `setOracleRelay(address(0))`). `oracle_manager`-gated.
-    pub fn set_oracle_relay_feed(ctx: Context<OracleManager>, new_feed: Pubkey) -> Result<()> {
-        instructions::psm_admin::set_oracle_relay_feed(ctx, new_feed)
-    }
-
-    /// Rotate the relay staleness threshold (seconds). Bounded by
-    /// `[ORACLE_MIN_STALENESS_SECS, ORACLE_MAX_STALENESS_SECS]`.
-    /// `oracle_manager`-gated.
-    pub fn set_oracle_relay_staleness(
-        ctx: Context<OracleManager>,
-        new_staleness: i64,
-    ) -> Result<()> {
-        instructions::psm_admin::set_oracle_relay_staleness(ctx, new_staleness)
-    }
-
-    /// Rotate the in-band USDC peg window (1e9 precision). Constrained by
-    /// the hard `ORACLE_USDC_PRICE_FLOOR` / `_CEILING` bounds.
-    /// `oracle_manager`-gated.
-    pub fn set_oracle_relay_band(
-        ctx: Context<OracleManager>,
-        new_min_e9: u64,
-        new_max_e9: u64,
-    ) -> Result<()> {
-        instructions::psm_admin::set_oracle_relay_band(ctx, new_min_e9, new_max_e9)
-    }
-
-    /// Rotate the accepted Pyth program owner pubkey. Migration hook for
-    /// future Pyth deployments (e.g. Pyth Solana Receiver) without
-    /// redeploying. `oracle_manager`-gated.
-    pub fn set_oracle_relay_pyth_program_owner(
-        ctx: Context<OracleManager>,
-        new_pyth_program_owner: Pubkey,
-    ) -> Result<()> {
-        instructions::psm_admin::set_oracle_relay_pyth_program_owner(ctx, new_pyth_program_owner)
+    pub fn set_direct_burner_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()> {
+        instructions::psm_admin::set_direct_burner_allowance(ctx, amount)
     }
 
     pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {

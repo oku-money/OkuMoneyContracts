@@ -78,7 +78,7 @@ describe("WS3.2 PSM coverage additions", () => {
     psm = h.program as unknown as Program<LitePsm>;
 
     [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v3")], psm.programId
+      [Buffer.from("psm_config_v4")], psm.programId
     );
 
     usdcMint = await createMintViaBankrun(
@@ -132,11 +132,9 @@ describe("WS3.2 PSM coverage additions", () => {
           queueProcessor: orchestrator.publicKey,
           bufferDepositor: orchestrator.publicKey,
           bufferWithdrawer: coldMultisig.publicKey,
-          oracleManager: coldMultisig.publicKey,
           capManager: coldMultisig.publicKey,
           allowanceManager: coldMultisig.publicKey,
           rebaser: orchestrator.publicKey,
-          oracleRelayPythProgramOwner: SystemProgram.programId,
         })
         .accountsPartial({
           roleAdmin: payer.publicKey,
@@ -173,7 +171,6 @@ describe("WS3.2 PSM coverage additions", () => {
           okuMoneyMint,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
@@ -222,7 +219,7 @@ describe("WS3.2.e: wrong-owner-ATA soft-skip in process_queue (WS2.1)", () => {
     psm = h.program as unknown as Program<LitePsm>;
 
     [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v3")], psm.programId
+      [Buffer.from("psm_config_v4")], psm.programId
     );
 
     usdcMint = await createMintViaBankrun(
@@ -288,8 +285,6 @@ describe("WS3.2.e: wrong-owner-ATA soft-skip in process_queue (WS2.1)", () => {
         userOkuMoneyAta,
         vaultUsdc: vaultUsdcAta,
         vaultOkuMoney: vaultOkuMoneyAta,
-        oracleRelayFeed: null,
-
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -319,8 +314,6 @@ describe("WS3.2.e: wrong-owner-ATA soft-skip in process_queue (WS2.1)", () => {
         okuMoneyMint,
         vaultUsdc: vaultUsdcAta,
         vaultOkuMoney: vaultOkuMoneyAta,
-        oracleRelayFeed: null,
-
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
@@ -365,7 +358,7 @@ describe("WS3.2 vault coverage additions", () => {
     vault = getProgram<OkuDollar>(h, "oku_dollar") as Program<OkuDollar>;
 
     [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v3")], psm.programId
+      [Buffer.from("psm_config_v4")], psm.programId
     );
     [vaultConfigPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("oku_dollar_config_v2")], vault.programId

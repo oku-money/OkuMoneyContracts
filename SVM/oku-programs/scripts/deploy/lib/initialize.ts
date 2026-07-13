@@ -105,10 +105,6 @@ export async function initializePsm(
 
   logger.info(`PSM Config PDA: ${psmConfig.toBase58()}`);
 
-  // Initialize PSM. The oracle-relay Pyth program-owner pubkey is
-  // per-network (legacy V2 mainnet vs devnet IDs). The relay's USDC/USD
-  // feed itself is left unwired by `initialize`; operators set it
-  // post-deploy via `set_oracle_relay_feed` / `_staleness` / `_band`.
   logger.info('Calling initialize()...');
   try {
     // Cycle 4 (PSM-17): `initialize` takes an `InitializeParams` struct.
@@ -123,11 +119,9 @@ export async function initializePsm(
         queueProcessor: authorities.psm.queueProcessor,
         bufferDepositor: authorities.psm.bufferDepositor,
         bufferWithdrawer: authorities.psm.bufferWithdrawer,
-        oracleManager: authorities.psm.oracleManager,
         capManager: authorities.psm.capManager,
         allowanceManager: authorities.psm.allowanceManager,
         rebaser: authorities.psm.rebaser,
-        oracleRelayPythProgramOwner: networkConfig.oracleRelay.pythProgramOwner,
       })
       .accountsPartial({
         roleAdmin: provider.wallet.publicKey,

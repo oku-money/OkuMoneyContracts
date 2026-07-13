@@ -112,7 +112,6 @@ pub fn migrate_psm_config(ctx: Context<MigratePsmConfig>) -> Result<()> {
 /// - `direct_minter_allowance` check + decrement (effects-before-interactions)
 ///
 /// NOT included (no USDC involvement):
-/// - No oracle peg check
 /// - No USDC transfer
 /// - No round-trip drift check
 pub fn mint_oku_m_direct(ctx: Context<MintOkuMDirect>, oku_m_amount: u64) -> Result<()> {
@@ -196,8 +195,16 @@ pub fn mint_oku_m_direct(ctx: Context<MintOkuMDirect>, oku_m_amount: u64) -> Res
 /// 3. CPI to `oku_dollar::wrap_to` — PDA transfers OkuMoney to oku-dollar
 ///    reserve vault, usdOku shares are minted to the `recipient`
 ///
-/// The CPI is built manually (no cargo dependency on oku-dollar due to
-/// circular dependency: oku-dollar already depends on lite-psm).
+/// The CPI is built manually because Anchor's `#[account]` macro ties
+/// `PsmConfig`'s `Owner` impl to `crate::ID` (the lite-psm program ID).
+/// Moving `PsmConfig` to a shared crate would break the `Owner` trait
+/// derivation, and adding `oku-dollar = { features = ["cpi"] }` to
+/// lite-psm creates a circular dependency since oku-dollar already
+/// depends on `lite-psm = { features = ["cpi"] }` for `PsmConfig`.
+///
+/// Safety net: the `#[cfg(test)]` module at the bottom of this file
+/// recomputes `sha256("global:wrap_to")[0..8]` and asserts it equals
+/// the hardcoded discriminator, so any rename is caught by `cargo test`.
 pub fn mint_usd_oku_direct(
     ctx: Context<MintUsdOkuDirect>,
     oku_m_amount: u64,
@@ -389,4 +396,57 @@ pub fn mint_usd_oku_direct(
     });
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Discriminator safety-net
+// ---------------------------------------------------------------------------
+// The `wrap_to` CPI above uses a hardcoded 8-byte Anchor discriminator.
+// If the oku-dollar instruction is ever renamed, the discriminator would
+// silently change and the CPI would fail at runtime. This test recomputes
+// the discriminator from the canonical Anchor formula and asserts equality,
+// so `cargo test` catches any rename before it reaches a deployment.
+#[cfg(test)]
+mod cpi_safety_tests {
+    use super::*;
+    use solana_sha256_hasher::hash as sha256;
+
+    /// Anchor instruction discriminator: first 8 bytes of SHA-256("global:<ix_name>").
+    fn anchor_discriminator(ix_name: &str) -> [u8; 8] {
+        let input = format!("global:{ix_name}");
+        let hash = sha256(input.as_bytes());
+        let mut disc = [0u8; 8];
+        disc.copy_from_slice(&hash.to_bytes()[..8]);
+        disc
+    }
+
+    /// Verify the hardcoded wrap_to discriminator matches the canonical
+    /// Anchor derivation. If oku-dollar renames `wrap_to`, this test
+    /// fails and prevents a silent runtime CPI failure.
+    #[test]
+    fn wrap_to_discriminator_matches() {
+        let expected: [u8; 8] = [0x72, 0x0a, 0xdb, 0x05, 0xcb, 0xae, 0x14, 0xd1];
+        let computed = anchor_discriminator("wrap_to");
+        assert_eq!(
+            computed, expected,
+            "wrap_to discriminator changed — the oku-dollar instruction was likely renamed. \
+             Update the hardcoded discriminator in mint_usd_oku_direct."
+        );
+    }
+
+    /// Verify the hardcoded OKU_DOLLAR_PROGRAM_ID matches the oku-dollar
+    /// program's declared ID. If the oku-dollar keypair is rotated, this
+    /// test must be updated in lockstep.
+    #[test]
+    fn oku_dollar_program_id_matches_declared_id() {
+        // Base58: 7jKeiuc8gKvQhasbno27wbNMnrwi8g9sb6WPriWkzNd
+        // Must match `declare_id!` in oku-dollar/src/lib.rs
+        let expected_base58 = "7jKeiuc8gKvQhasbno27wbNMnrwi8g9sb6WPriWkzNd";
+        assert_eq!(
+            OKU_DOLLAR_PROGRAM_ID.to_string(),
+            expected_base58,
+            "OKU_DOLLAR_PROGRAM_ID does not match oku-dollar's declare_id!. \
+             The raw bytes in constants.rs must be updated."
+        );
+    }
 }

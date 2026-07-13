@@ -640,7 +640,7 @@ pub fn update_usd_multiplier(
     // Strict increase — a no-op multiplier write would stamp the
     // sandwich-lock slot without moving any economic state, wasting the
     // lock window for the entire slot. Mirrors the EVM fix landed in the
-    // oracle-relay cycle and the symmetric lite-psm
+    // the symmetric lite-psm
     // `set_oku_m_price` strict-increase guard.
     require!(
         new_usd_multiplier > old_multiplier,

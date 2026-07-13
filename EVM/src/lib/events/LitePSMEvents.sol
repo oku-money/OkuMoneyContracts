@@ -31,19 +31,6 @@ abstract contract LitePSMEvents {
         address indexed user, uint256 usdIn, uint256 usdcOut, uint256 okuMMultiplier
     );
 
-    /// @notice Emitted when the USDC peg circuit-breaker relay is rotated.
-    /// @dev `newRelay == address(0)` means the peg check is disabled
-    ///      (operational kill switch). A separate, louder
-    ///      `OracleRelayDisabled` event also fires in that case.
-    event OracleRelayUpdated(address indexed oldRelay, address indexed newRelay);
-
-    /// @notice Loud-signal event emitted when the peg check is disabled.
-    /// @dev Cycle 4 (EVM-03): subgraph operators and monitoring
-    ///      tooling watch this event specifically to detect the
-    ///      operator-driven kill switch. Indexed on the actor so
-    ///      operational dashboards can attribute the action.
-    event OracleRelayDisabled(address indexed actor, address indexed oldRelay, uint256 blockNumber);
-
     /// @notice Emitted after queue processing completes
     event BufferRefilled(uint256 newBufferBalance, uint256 processedStart, uint256 processedEnd);
 

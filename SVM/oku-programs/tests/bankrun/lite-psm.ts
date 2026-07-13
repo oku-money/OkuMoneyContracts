@@ -31,12 +31,6 @@ import {
   mintToViaBankrun,
   ensureAtaViaBankrun,
 } from "../shared/bankrun";
-import {
-  buildPythFixture,
-  ONE_DOLLAR_AT_EXPO_M8,
-  PythStatus,
-} from "../shared/pythFixture";
-
 // Use anchor's web3 to avoid version conflicts
 const { Keypair, SystemProgram, PublicKey } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;
@@ -122,7 +116,7 @@ describe("lite-psm", () => {
     // Pre-derive the PSM config PDA so the OkuMoney mint can be created
     // with it as the mint/freeze authority before `initializePsm` runs.
     [configPda, configBump] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v3")],
+      [Buffer.from("psm_config_v4")],
       program.programId
     );
 
@@ -193,7 +187,6 @@ describe("lite-psm", () => {
       expect(config.queueProcessor.toString()).to.equal(orchestrator.publicKey.toString());
       expect(config.bufferDepositor.toString()).to.equal(orchestrator.publicKey.toString());
       expect(config.bufferWithdrawer.toString()).to.equal(coldMultisig.publicKey.toString());
-      expect(config.oracleManager.toString()).to.equal(coldMultisig.publicKey.toString());
       expect(config.capManager.toString()).to.equal(coldMultisig.publicKey.toString());
       expect(config.allowanceManager.toString()).to.equal(coldMultisig.publicKey.toString());
       expect(config.rebaser.toString()).to.equal(orchestrator.publicKey.toString());
@@ -240,7 +233,6 @@ describe("lite-psm", () => {
           userUsdcAta: userUsdcAta,
           userOkuMoneyAta: userOkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -290,7 +282,6 @@ describe("lite-psm", () => {
           userUsdcAta: freshUserUsdcAta,
           userOkuMoneyAta: freshUserOkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -328,8 +319,7 @@ describe("lite-psm", () => {
             userUsdcAta: userUsdcAta,
             userOkuMoneyAta: userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
-            oracleRelayFeed: null,
-            tokenProgram: TOKEN_PROGRAM_ID,
+        tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
@@ -535,228 +525,6 @@ describe("lite-psm", () => {
           expect.fail("Should have failed");
         } catch (err: any) {
           expect(err.error.errorCode.code).to.equal("Unauthorized");
-        }
-      });
-
-      // ===== Oracle Relay (USDC peg circuit-breaker) =====
-      // Full peg-check + Pyth-fixture coverage lives in tests/bankrun/oracle-relay.ts.
-      // This block only exercises role-gating and bounds on the relay setters.
-
-      it("oracle_manager can rotate the relay feed and clear it (kill switch)", async () => {
-        // Build a real Pyth fixture so the on-chain pre-flight passes.
-        // The relay's `set_oracle_relay_feed` now requires a valid feed
-        // account when `new_feed != default` — passing `oracleAccount: null`
-        // returns `OracleAccountMissing` (intentional admin-time gate).
-        const fakeFeed = Keypair.generate().publicKey;
-        const fakePythProgramOwner = Keypair.generate().publicKey;
-        const setupClock = await h.context.banksClient.getClock();
-        h.context.setAccount(fakeFeed, {
-          lamports: 1_000_000_000,
-          data: buildPythFixture({
-            unixTimestamp: setupClock.unixTimestamp,
-            priceRaw: ONE_DOLLAR_AT_EXPO_M8,
-            status: PythStatus.Trading,
-          }),
-          owner: fakePythProgramOwner,
-          executable: false,
-          rentEpoch: 0,
-        });
-
-        // Point the relay at the fixture's owner so the pre-flight's
-        // owner check matches.
-        await program.methods
-          .setOracleRelayPythProgramOwner(fakePythProgramOwner)
-          .accountsPartial({
-            oracleManager: coldMultisig.publicKey,
-            config: configPda,
-            oracleAccount: null,
-          })
-          .signers([coldMultisig])
-          .rpc();
-
-        // Set
-        await program.methods
-          .setOracleRelayFeed(fakeFeed)
-          .accountsPartial({
-            oracleManager: coldMultisig.publicKey,
-            config: configPda,
-            oracleAccount: fakeFeed,
-          })
-          .signers([coldMultisig])
-          .rpc();
-
-        let config = await program.account.psmConfig.fetch(configPda);
-        expect((config.oracleRelayFeed as PublicKey).toString()).to.equal(fakeFeed.toString());
-
-        // Kill switch — `oracleAccount: null` is the documented disable path.
-        await program.methods
-          .setOracleRelayFeed(PublicKey.default)
-          .accountsPartial({
-            oracleManager: coldMultisig.publicKey,
-            config: configPda,
-            oracleAccount: null,
-          })
-          .signers([coldMultisig])
-          .rpc();
-
-        config = await program.account.psmConfig.fetch(configPda);
-        expect((config.oracleRelayFeed as PublicKey).toString()).to.equal(
-          PublicKey.default.toString()
-        );
-      });
-
-      it("set_oracle_relay_feed rejects non-default new_feed when oracleAccount is missing", async () => {
-        // Audit-prep finding: the previous revision silently allowed an
-        // admin to stamp a non-default feed pubkey without supplying the
-        // pre-flight account. Confirm the closed gate.
-        try {
-          await program.methods
-            .setOracleRelayFeed(Keypair.generate().publicKey)
-            .accountsPartial({
-              oracleManager: coldMultisig.publicKey,
-              config: configPda,
-              oracleAccount: null,
-            })
-            .signers([coldMultisig])
-            .rpc();
-          expect.fail("Should have failed with OracleAccountMissing");
-        } catch (err: any) {
-          expect(err.error.errorCode.code).to.equal("OracleAccountMissing");
-        }
-      });
-
-      it("non-oracle_manager CANNOT call relay setters", async () => {
-        try {
-          await program.methods
-            .setOracleRelayFeed(Keypair.generate().publicKey)
-            .accountsPartial({
-              oracleManager: warmMultisig.publicKey, // Wrong role
-              config: configPda,
-              oracleAccount: null,
-            })
-            .signers([warmMultisig])
-            .rpc();
-          expect.fail("Should have failed");
-        } catch (err: any) {
-          expect(err.error.errorCode.code).to.equal("Unauthorized");
-        }
-      });
-
-      it("set_oracle_relay_staleness rejects below ORACLE_MIN_STALENESS_SECS (60s)", async () => {
-        try {
-          await program.methods
-            .setOracleRelayStaleness(new BN(30))
-            .accountsPartial({
-              oracleManager: coldMultisig.publicKey,
-              config: configPda,
-              oracleAccount: null,
-            })
-            .signers([coldMultisig])
-            .rpc();
-          expect.fail("Should have rejected staleness < 60s");
-        } catch (err: any) {
-          expect(err.error.errorCode.code).to.equal("InvalidStaleness");
-        }
-      });
-
-      it("set_oracle_relay_staleness rejects above ORACLE_MAX_STALENESS_SECS (7d)", async () => {
-        const eightDays = 8 * 24 * 60 * 60;
-        try {
-          await program.methods
-            .setOracleRelayStaleness(new BN(eightDays))
-            .accountsPartial({
-              oracleManager: coldMultisig.publicKey,
-              config: configPda,
-              oracleAccount: null,
-            })
-            .signers([coldMultisig])
-            .rpc();
-          expect.fail("Should have rejected staleness > 7d");
-        } catch (err: any) {
-          expect(err.error.errorCode.code).to.equal("InvalidStaleness");
-        }
-      });
-
-      it("set_oracle_relay_band rejects min outside the hard floor", async () => {
-        try {
-          await program.methods
-            .setOracleRelayBand(new BN(900_000_000), new BN(1_030_000_000))
-            .accountsPartial({
-              oracleManager: coldMultisig.publicKey,
-              config: configPda,
-              oracleAccount: null,
-            })
-            .signers([coldMultisig])
-            .rpc();
-          expect.fail("Should have rejected band below ORACLE_USDC_PRICE_FLOOR");
-        } catch (err: any) {
-          expect(err.error.errorCode.code).to.equal("InvalidPriceBand");
-        }
-      });
-
-      it("set_oracle_relay_band rejects max above the hard ceiling", async () => {
-        try {
-          await program.methods
-            .setOracleRelayBand(new BN(970_000_000), new BN(1_100_000_000))
-            .accountsPartial({
-              oracleManager: coldMultisig.publicKey,
-              config: configPda,
-              oracleAccount: null,
-            })
-            .signers([coldMultisig])
-            .rpc();
-          expect.fail("Should have rejected band above ORACLE_USDC_PRICE_CEILING");
-        } catch (err: any) {
-          expect(err.error.errorCode.code).to.equal("InvalidPriceBand");
-        }
-      });
-
-      it("oracle_manager can rotate the Pyth program owner", async () => {
-        const newOwner = Keypair.generate().publicKey;
-        const before = await program.account.psmConfig.fetch(configPda);
-        const originalOwner = before.oracleRelayPythProgramOwner as PublicKey;
-
-        await program.methods
-          .setOracleRelayPythProgramOwner(newOwner)
-          .accountsPartial({
-            oracleManager: coldMultisig.publicKey,
-            config: configPda,
-            oracleAccount: null,
-          })
-          .signers([coldMultisig])
-          .rpc();
-
-        const after = await program.account.psmConfig.fetch(configPda);
-        expect((after.oracleRelayPythProgramOwner as PublicKey).toString()).to.equal(
-          newOwner.toString()
-        );
-
-        // Restore so subsequent tests still match the original owner.
-        await program.methods
-          .setOracleRelayPythProgramOwner(originalOwner)
-          .accountsPartial({
-            oracleManager: coldMultisig.publicKey,
-            config: configPda,
-            oracleAccount: null,
-          })
-          .signers([coldMultisig])
-          .rpc();
-      });
-
-      it("set_oracle_relay_pyth_program_owner rejects zero pubkey", async () => {
-        try {
-          await program.methods
-            .setOracleRelayPythProgramOwner(PublicKey.default)
-            .accountsPartial({
-              oracleManager: coldMultisig.publicKey,
-              config: configPda,
-              oracleAccount: null,
-            })
-            .signers([coldMultisig])
-            .rpc();
-          expect.fail("Should have rejected zero pubkey");
-        } catch (err: any) {
-          expect(err.error.errorCode.code).to.equal("InvalidPythProgramOwner");
         }
       });
     });
@@ -1104,8 +872,7 @@ describe("lite-psm", () => {
             userUsdcAta,
             userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
-            oracleRelayFeed: null,
-            tokenProgram: TOKEN_PROGRAM_ID,
+        tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
@@ -1156,8 +923,7 @@ describe("lite-psm", () => {
             userUsdcAta,
             userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
-            oracleRelayFeed: null,
-            tokenProgram: TOKEN_PROGRAM_ID,
+        tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
@@ -1183,82 +949,6 @@ describe("lite-psm", () => {
         .rpc();
     });
 
-    it("fails when oracle relay is wired but no feed account is passed at mint", async () => {
-      // Wire a valid Pyth fixture so the admin-time pre-flight passes.
-      // The runtime mint path is what we're testing here — it must fail
-      // when `oracleRelayFeed: null` is supplied but a feed pubkey is
-      // configured.
-      const fakeFeed = Keypair.generate().publicKey;
-      const fakePythProgramOwner = Keypair.generate().publicKey;
-      const setupClock = await h.context.banksClient.getClock();
-      h.context.setAccount(fakeFeed, {
-        lamports: 1_000_000_000,
-        data: buildPythFixture({
-          unixTimestamp: setupClock.unixTimestamp,
-          priceRaw: ONE_DOLLAR_AT_EXPO_M8,
-          status: PythStatus.Trading,
-        }),
-        owner: fakePythProgramOwner,
-        executable: false,
-        rentEpoch: 0,
-      });
-      await program.methods
-        .setOracleRelayPythProgramOwner(fakePythProgramOwner)
-        .accountsPartial({
-          oracleManager: coldMultisig.publicKey,
-          config: configPda,
-          oracleAccount: null,
-        })
-        .signers([coldMultisig])
-        .rpc();
-      await program.methods
-        .setOracleRelayFeed(fakeFeed)
-        .accountsPartial({
-          oracleManager: coldMultisig.publicKey,
-          config: configPda,
-          oracleAccount: fakeFeed,
-        })
-        .signers([coldMultisig])
-        .rpc();
-
-      try {
-        await program.methods
-          .mintOkuM(new BN(1_000_000))
-          .accountsPartial({
-            user: user.publicKey,
-            config: configPda,
-            usdcMint,
-            okuMoneyMint,
-            userUsdcAta,
-            userOkuMoneyAta,
-            vaultUsdc: vaultUsdcAta,
-            oracleRelayFeed: null, // Relay wired but no feed account passed
-            tokenProgram: TOKEN_PROGRAM_ID,
-            token2022Program: TOKEN_2022_PROGRAM_ID,
-            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
-          })
-          .signers([user])
-          .rpc();
-        expect.fail("Should have failed");
-      } catch (err: any) {
-        const errorCode = err?.error?.errorCode?.code || err?.message || "";
-        expect(errorCode).to.satisfy((c: string) =>
-          c === "OracleAccountMissing" || c.includes("OracleAccountMissing") || c.includes("oracle")
-        );
-      }
-
-      // Reset relay to disabled (kill switch)
-      await program.methods
-        .setOracleRelayFeed(PublicKey.default)
-        .accountsPartial({
-          oracleManager: coldMultisig.publicKey,
-          config: configPda,
-          oracleAccount: null,
-        })
-        .signers([coldMultisig])
-        .rpc();
-    });
   });
 
   // ==========================================================================
@@ -1313,7 +1003,6 @@ describe("lite-psm", () => {
           userOkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1354,8 +1043,7 @@ describe("lite-psm", () => {
             userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
             vaultOkuMoney: vaultOkuMoneyAta,
-            oracleRelayFeed: null,
-          tokenProgram: TOKEN_PROGRAM_ID,
+            tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
@@ -1390,8 +1078,7 @@ describe("lite-psm", () => {
             userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
             vaultOkuMoney: vaultOkuMoneyAta,
-            oracleRelayFeed: null,
-          tokenProgram: TOKEN_PROGRAM_ID,
+            tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
@@ -1422,8 +1109,7 @@ describe("lite-psm", () => {
             userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
             vaultOkuMoney: vaultOkuMoneyAta,
-            oracleRelayFeed: null,
-          tokenProgram: TOKEN_PROGRAM_ID,
+            tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
@@ -1512,7 +1198,6 @@ describe("lite-psm", () => {
           userOkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1550,7 +1235,6 @@ describe("lite-psm", () => {
           userOkuMoneyAta: user2OkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1626,8 +1310,7 @@ describe("lite-psm", () => {
             userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
             vaultOkuMoney: vaultOkuMoneyAta,
-            oracleRelayFeed: null,
-          tokenProgram: TOKEN_PROGRAM_ID,
+            tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
@@ -1668,7 +1351,6 @@ describe("lite-psm", () => {
           okuMoneyMint,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
@@ -1711,8 +1393,7 @@ describe("lite-psm", () => {
             okuMoneyMint,
             vaultUsdc: vaultUsdcAta,
             vaultOkuMoney: vaultOkuMoneyAta,
-            oracleRelayFeed: null,
-          tokenProgram: TOKEN_PROGRAM_ID,
+            tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .remainingAccounts(remainingAccts)
@@ -1781,7 +1462,6 @@ describe("lite-psm", () => {
           userOkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1802,7 +1482,6 @@ describe("lite-psm", () => {
           userOkuMoneyAta: user2OkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1845,7 +1524,6 @@ describe("lite-psm", () => {
           okuMoneyMint,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
@@ -1896,8 +1574,7 @@ describe("lite-psm", () => {
             okuMoneyMint,
             vaultUsdc: vaultUsdcAta,
             vaultOkuMoney: vaultOkuMoneyAta,
-            oracleRelayFeed: null,
-          tokenProgram: TOKEN_PROGRAM_ID,
+            tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .remainingAccounts(accounts)
@@ -1915,8 +1592,7 @@ describe("lite-psm", () => {
             okuMoneyMint,
             vaultUsdc: vaultUsdcAta,
             vaultOkuMoney: vaultOkuMoneyAta,
-            oracleRelayFeed: null,
-          tokenProgram: TOKEN_PROGRAM_ID,
+            tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .remainingAccounts([])
@@ -1940,8 +1616,7 @@ describe("lite-psm", () => {
             okuMoneyMint,
             vaultUsdc: vaultUsdcAta,
             vaultOkuMoney: vaultOkuMoneyAta,
-            oracleRelayFeed: null,
-          tokenProgram: TOKEN_PROGRAM_ID,
+            tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .remainingAccounts([])
@@ -2026,7 +1701,6 @@ describe("lite-psm", () => {
           userOkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -2063,8 +1737,7 @@ describe("lite-psm", () => {
             okuMoneyMint,
             vaultUsdc: vaultUsdcAta,
             vaultOkuMoney: vaultOkuMoneyAta,
-            oracleRelayFeed: null,
-          tokenProgram: TOKEN_PROGRAM_ID,
+            tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .remainingAccounts([])
@@ -2100,7 +1773,6 @@ describe("lite-psm", () => {
           okuMoneyMint,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
@@ -2191,7 +1863,6 @@ describe("lite-psm", () => {
           userOkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -2264,7 +1935,6 @@ describe("lite-psm", () => {
           userOkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -2326,7 +1996,6 @@ describe("lite-psm", () => {
           userOkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -2428,7 +2097,6 @@ describe("lite-psm", () => {
           userOkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -2559,7 +2227,6 @@ describe("lite-psm", () => {
           userOkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -2826,7 +2493,6 @@ describe("lite-psm", () => {
           userUsdcAta, userOkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -2854,7 +2520,6 @@ describe("lite-psm", () => {
           userUsdcAta, userOkuMoneyAta,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -2898,7 +2563,6 @@ describe("lite-psm", () => {
           okuMoneyMint,
           vaultUsdc: vaultUsdcAta,
           vaultOkuMoney: vaultOkuMoneyAta,
-          oracleRelayFeed: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
@@ -2975,8 +2639,7 @@ describe("lite-psm", () => {
             userUsdcAta, userOkuMoneyAta,
             vaultUsdc: vaultUsdcAta,
             vaultOkuMoney: vaultOkuMoneyAta,
-            oracleRelayFeed: null,
-          tokenProgram: TOKEN_PROGRAM_ID,
+            tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
@@ -3026,8 +2689,7 @@ describe("lite-psm", () => {
             okuMoneyMint,
             vaultUsdc: vaultUsdcAta,
             vaultOkuMoney: vaultOkuMoneyAta,
-            oracleRelayFeed: null,
-          tokenProgram: TOKEN_PROGRAM_ID,
+            tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .remainingAccounts(recipients)

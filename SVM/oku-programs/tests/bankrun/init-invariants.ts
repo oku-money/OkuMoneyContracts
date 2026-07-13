@@ -40,7 +40,7 @@ describe("init invariants (Token-2022 extension whitelist)", () => {
 
   it("initialize rejects an OkuMoney mint that has the TransferHook extension", async () => {
     const [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v3")],
+      [Buffer.from("psm_config_v4")],
       program.programId
     );
 
@@ -97,8 +97,6 @@ describe("init invariants (Token-2022 extension whitelist)", () => {
       true,
       TOKEN_PROGRAM_ID
     );
-    const PYTH_LEGACY = new PublicKey("FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH");
-
     let threw = false;
     try {
       // Cycle 4 (PSM-17): `initialize` now takes a single
@@ -115,11 +113,9 @@ describe("init invariants (Token-2022 extension whitelist)", () => {
           queueProcessor: payer.publicKey,
           bufferDepositor: payer.publicKey,
           bufferWithdrawer: payer.publicKey,
-          oracleManager: payer.publicKey,
           capManager: payer.publicKey,
           allowanceManager: payer.publicKey,
           rebaser: payer.publicKey,
-          oracleRelayPythProgramOwner: PYTH_LEGACY,
         })
         .accountsPartial({
           roleAdmin: payer.publicKey,

@@ -4,9 +4,7 @@
  *
  * Covered:
  *   WS3.2.a  zero-supply distribute_yield reverts with ZeroAmount (PSM)
- *   WS3.2.a  zero-supply update_usd_multiplier succeeds (vault — u64::MAX collateral)
  *   WS3.2.b  PSM double-init negative test
- *   WS3.2.b  vault double-init negative test
  *   WS3.2.c  pause-during-process_queue (WS2.8 enforcement)
  *   WS3.2.e  wrong-owner-ATA soft-skip in process_queue (WS2.1 enforcement)
  *
@@ -24,13 +22,12 @@ import {
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { LitePsm } from "../../target/types/lite_psm";
-import { OkuDollar } from "../../target/types/oku_dollar";
 import {
   coldMultisig,
   warmMultisig,
   psmOrchestrator,
   initializePsm,
-  mintOkuMoneyViaProgram,
+  mintUsdOkuViaProgram,
   DECIMALS,
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
@@ -40,18 +37,14 @@ import {
   startBankrun,
   fundKeypairs,
   createMintViaBankrun,
-  createOkuMoneyMintViaBankrun,
   mintToViaBankrun,
   ensureAtaViaBankrun,
-  getProgram,
   warpSlots,
 } from "../shared/bankrun";
 
 const { Keypair, SystemProgram, PublicKey } = anchor.web3;
 type PublicKey = anchor.web3.PublicKey;
 type Keypair = anchor.web3.Keypair;
-
-const DEAD_ADDRESS = SystemProgram.programId;
 
 // ---------------------------------------------------------------------------
 // PSM-only describe: WS3.2.a (PSM yield), WS3.2.b (PSM init), WS3.2.c (pause)
@@ -62,11 +55,11 @@ describe("WS3.2 PSM coverage additions", () => {
   let psm: Program<LitePsm>;
   let payer: Keypair;
   let usdcMint: PublicKey;
-  let okuMoneyMint: PublicKey;
+  let usdOkuMint: PublicKey;
   let configPda: PublicKey;
   let redemptionQueuePda: PublicKey;
   let vaultUsdcAta: PublicKey;
-  let vaultOkuMoneyAta: PublicKey;
+  let vaultUsdOkuAta: PublicKey;
 
   const orchestrator = psmOrchestrator;
   const user = Keypair.generate();
@@ -77,33 +70,28 @@ describe("WS3.2 PSM coverage additions", () => {
     anchor.setProvider(h.provider as unknown as anchor.AnchorProvider);
     psm = h.program as unknown as Program<LitePsm>;
 
-    [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v4")], psm.programId
-    );
-
     usdcMint = await createMintViaBankrun(
       h, payer.publicKey, null, DECIMALS, Keypair.generate(), TOKEN_PROGRAM_ID
     );
-    okuMoneyMint = await createOkuMoneyMintViaBankrun(
-      h, configPda, configPda, DECIMALS, orchestrator.publicKey, 0, Keypair.generate()
-    );
+
+    const setup = await initializePsm(h, psm as any, payer, usdcMint);
+    configPda = setup.configPda;
+    redemptionQueuePda = setup.redemptionQueuePda;
+    usdOkuMint = setup.usdOkuMint;
+    vaultUsdcAta = setup.vaultUsdcAta;
+    vaultUsdOkuAta = setup.vaultUsdOkuAta;
 
     await fundKeypairs(h, [user], 10 * anchor.web3.LAMPORTS_PER_SOL);
-
-    const setup = await initializePsm(h, psm as any, payer, usdcMint, okuMoneyMint);
-    redemptionQueuePda = setup.redemptionQueuePda;
-    vaultUsdcAta = setup.vaultUsdcAta;
-    vaultOkuMoneyAta = setup.vaultOkuMoneyAta;
   });
 
-  it("WS3.2.a: distribute_yield reverts ZeroAmount when OkuM supply == 0", async () => {
+  it("WS3.2.a: distribute_yield reverts ZeroAmount when usdOku supply == 0", async () => {
     try {
       await psm.methods
         .distributeYield(new BN(1_000_000))
         .accountsPartial({
           rebaser: orchestrator.publicKey,
           config: configPda,
-          okuMoneyMint,
+          usdOkuMint,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([orchestrator])
@@ -120,7 +108,6 @@ describe("WS3.2 PSM coverage additions", () => {
 
   it("WS3.2.b: lite-psm initialize fails if config PDA already exists", async () => {
     try {
-      // Cycle 4 (PSM-17): `initialize` takes an `InitializeParams` struct.
       await psm.methods
         .initialize({
           maxSupply: MAX_SUPPLY,
@@ -140,7 +127,7 @@ describe("WS3.2 PSM coverage additions", () => {
           roleAdmin: payer.publicKey,
           config: configPda,
           usdcMint,
-          okuMoneyMint,
+          usdOkuMint,
           vaultUsdc: vaultUsdcAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -168,9 +155,9 @@ describe("WS3.2 PSM coverage additions", () => {
           queueProcessor: orchestrator.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          okuMoneyMint,
+          usdOkuMint,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
@@ -202,11 +189,11 @@ describe("WS3.2.e: wrong-owner-ATA soft-skip in process_queue (WS2.1)", () => {
   let psm: Program<LitePsm>;
   let payer: Keypair;
   let usdcMint: PublicKey;
-  let okuMoneyMint: PublicKey;
+  let usdOkuMint: PublicKey;
   let configPda: PublicKey;
   let redemptionQueuePda: PublicKey;
   let vaultUsdcAta: PublicKey;
-  let vaultOkuMoneyAta: PublicKey;
+  let vaultUsdOkuAta: PublicKey;
 
   const orchestrator = psmOrchestrator;
   const user = Keypair.generate();
@@ -218,41 +205,35 @@ describe("WS3.2.e: wrong-owner-ATA soft-skip in process_queue (WS2.1)", () => {
     anchor.setProvider(h.provider as unknown as anchor.AnchorProvider);
     psm = h.program as unknown as Program<LitePsm>;
 
-    [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v4")], psm.programId
-    );
-
     usdcMint = await createMintViaBankrun(
       h, payer.publicKey, null, DECIMALS, Keypair.generate(), TOKEN_PROGRAM_ID
     );
-    okuMoneyMint = await createOkuMoneyMintViaBankrun(
-      h, configPda, configPda, DECIMALS, orchestrator.publicKey, 0, Keypair.generate()
-    );
+
+    const setup = await initializePsm(h, psm as any, payer, usdcMint);
+    configPda = setup.configPda;
+    redemptionQueuePda = setup.redemptionQueuePda;
+    usdOkuMint = setup.usdOkuMint;
+    vaultUsdcAta = setup.vaultUsdcAta;
+    vaultUsdOkuAta = setup.vaultUsdOkuAta;
 
     await fundKeypairs(h, [user, wrongUser], 10 * anchor.web3.LAMPORTS_PER_SOL);
-
-    const setup = await initializePsm(h, psm as any, payer, usdcMint, okuMoneyMint);
-    redemptionQueuePda = setup.redemptionQueuePda;
-    vaultUsdcAta = setup.vaultUsdcAta;
-    vaultOkuMoneyAta = setup.vaultOkuMoneyAta;
   });
 
   it("process_queue soft-skips (breaks without reverting) when recipient ATA owner is wrong", async () => {
     // 1. Setup user ATAs
     const userUsdcAta = await ensureAtaViaBankrun(h, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
-    const userOkuMoneyAta = await ensureAtaViaBankrun(
-      h, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID
+    const userUsdOkuAta = await ensureAtaViaBankrun(
+      h, user.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID
     );
     await mintToViaBankrun(h, usdcMint, userUsdcAta, payer, 5_000_000n, TOKEN_PROGRAM_ID);
 
-    // 2. Mint 2M OkuM (deposits 2M USDC into buffer)
-    await mintOkuMoneyViaProgram(
+    // 2. Mint 2M usdOku (deposits 2M USDC into buffer)
+    await mintUsdOkuViaProgram(
       psm as any, user, new BN(2_000_000), configPda,
-      usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta
+      usdcMint, usdOkuMint, userUsdcAta, userUsdOkuAta, vaultUsdcAta
     );
 
     // 3. Drain buffer so redemption will queue
-    //    Buffer now has 2M USDC. Use coldMultisig (has buffer_withdrawer role) to drain.
     const coldUsdcAta = await ensureAtaViaBankrun(
       h, coldMultisig.publicKey, usdcMint, TOKEN_PROGRAM_ID
     );
@@ -262,7 +243,7 @@ describe("WS3.2.e: wrong-owner-ATA soft-skip in process_queue (WS2.1)", () => {
         bufferWithdrawer: coldMultisig.publicKey,
         config: configPda,
         redemptionQueue: redemptionQueuePda,
-        okuMoneyMint,
+        usdOkuMint,
         withdrawerUsdcAta: coldUsdcAta,
         vaultUsdc: vaultUsdcAta,
         usdcMint,
@@ -272,19 +253,19 @@ describe("WS3.2.e: wrong-owner-ATA soft-skip in process_queue (WS2.1)", () => {
       .signers([coldMultisig])
       .rpc();
 
-    // 4. User redeems — buffer is 0 → queues
+    // 4. User redeems — buffer is 0 -> queues
     await psm.methods
-      .redeemOkuM(new BN(2_000_000))
+      .redeemUsdOku(new BN(2_000_000))
       .accountsPartial({
         user: user.publicKey,
         config: configPda,
         redemptionQueue: redemptionQueuePda,
         usdcMint,
-        okuMoneyMint,
+        usdOkuMint,
         userUsdcAta,
-        userOkuMoneyAta,
+        userUsdOkuAta,
         vaultUsdc: vaultUsdcAta,
-        vaultOkuMoney: vaultOkuMoneyAta,
+        vaultUsdOku: vaultUsdOkuAta,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -311,9 +292,9 @@ describe("WS3.2.e: wrong-owner-ATA soft-skip in process_queue (WS2.1)", () => {
         queueProcessor: orchestrator.publicKey,
         config: configPda,
         redemptionQueue: redemptionQueuePda,
-        okuMoneyMint,
+        usdOkuMint,
         vaultUsdc: vaultUsdcAta,
-        vaultOkuMoney: vaultOkuMoneyAta,
+        vaultUsdOku: vaultUsdOkuAta,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
@@ -326,162 +307,5 @@ describe("WS3.2.e: wrong-owner-ATA soft-skip in process_queue (WS2.1)", () => {
     expect((queueAfter.tail as BN).sub(queueAfter.head as BN).toNumber()).to.equal(
       1, "Wrong-owner ATA: entry must remain in queue for rescue_queue_entry"
     );
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Vault describe: WS3.2.a (vault) + WS3.2.b (vault)
-// ---------------------------------------------------------------------------
-
-describe("WS3.2 vault coverage additions", () => {
-  let h: BankrunHarness;
-  let psm: Program<LitePsm>;
-  let vault: Program<OkuDollar>;
-  let payer: Keypair;
-  let usdcMint: PublicKey;
-  let okuMoneyMint: PublicKey;
-  let configPda: PublicKey;
-  let vaultConfigPda: PublicKey;
-  let usdOkuMint: PublicKey;
-  let reserveVault: PublicKey;
-  let vaultUsdcAta: PublicKey;
-
-  const orchestrator = psmOrchestrator;
-  const usdRebaser = Keypair.generate();
-  const reserveManager = Keypair.generate();
-
-  before(async () => {
-    h = await startBankrun();
-    payer = h.payer;
-    anchor.setProvider(h.provider as unknown as anchor.AnchorProvider);
-    psm = h.program as unknown as Program<LitePsm>;
-    vault = getProgram<OkuDollar>(h, "oku_dollar") as Program<OkuDollar>;
-
-    [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v4")], psm.programId
-    );
-    [vaultConfigPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("oku_dollar_config_v2")], vault.programId
-    );
-    [usdOkuMint] = PublicKey.findProgramAddressSync(
-      [Buffer.from("usd_oku_mint_v2")], vault.programId
-    );
-
-    usdcMint = await createMintViaBankrun(
-      h, payer.publicKey, null, DECIMALS, Keypair.generate(), TOKEN_PROGRAM_ID
-    );
-    okuMoneyMint = await createOkuMoneyMintViaBankrun(
-      h, configPda, configPda, DECIMALS, orchestrator.publicKey, 0, Keypair.generate()
-    );
-
-    await fundKeypairs(h, [usdRebaser, reserveManager], 10 * anchor.web3.LAMPORTS_PER_SOL);
-
-    const setup = await initializePsm(h, psm as any, payer, usdcMint, okuMoneyMint);
-    vaultUsdcAta = setup.vaultUsdcAta;
-
-    reserveVault = getAssociatedTokenAddressSync(
-      okuMoneyMint, vaultConfigPda, true, TOKEN_2022_PROGRAM_ID
-    );
-
-    await vault.methods
-      .initialize(
-        warmMultisig.publicKey,
-        coldMultisig.publicKey,
-        usdRebaser.publicKey,
-        reserveManager.publicKey,
-        new BN(950_000_000)
-      )
-      .accountsPartial({
-        roleAdmin: payer.publicKey,
-        config: vaultConfigPda,
-        okuMoneyMint,
-        usdOkuMint,
-        reserveVault,
-        psmConfig: configPda,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
-
-    await ensureAtaViaBankrun(h, DEAD_ADDRESS, usdOkuMint, TOKEN_2022_PROGRAM_ID);
-  });
-
-  it("WS3.2.a vault: update_usd_multiplier rejects equal value (strict increase)", async () => {
-    // The vault enforces strict-increase on `usd_multiplier` (audit-prep
-    // cycle) so a no-op write cannot stamp the sandwich-lock slot without
-    // moving the multiplier. Mirrors EVM `setOkuMMultiplier`'s
-    // strict-increase fix and the lite-psm `set_oku_m_price` symmetric
-    // tighten.
-    const config = await vault.account.okuDollarConfig.fetch(vaultConfigPda);
-    const current = config.usdMultiplier as BN;
-
-    await warpSlots(h, 1);
-
-    let threw = false;
-    try {
-      await vault.methods
-        .updateUsdMultiplier(current)
-        .accountsPartial({
-          usdRebaser: usdRebaser.publicKey,
-          config: vaultConfigPda,
-          psmConfig: configPda,
-          usdOkuMint,
-          reserveVault,
-        })
-        .signers([usdRebaser])
-        .rpc();
-    } catch (err: any) {
-      threw = true;
-      expect(String(err?.error?.errorCode?.code ?? "")).to.include(
-        "MultiplierCannotDecrease"
-      );
-    }
-    expect(threw, "expected equal-value update to revert").to.equal(true);
-
-    // A strict-increase write succeeds and bumps the lock slot.
-    const bumped = current.addn(1);
-    await vault.methods
-      .updateUsdMultiplier(bumped)
-      .accountsPartial({
-        usdRebaser: usdRebaser.publicKey,
-        config: vaultConfigPda,
-        psmConfig: configPda,
-        usdOkuMint,
-        reserveVault,
-      })
-      .signers([usdRebaser])
-      .rpc();
-
-    const after = await vault.account.okuDollarConfig.fetch(vaultConfigPda);
-    expect((after.usdMultiplier as BN).toString()).to.equal(bumped.toString());
-  });
-
-  it("WS3.2.b vault: oku-dollar initialize fails if vaultConfig PDA already exists", async () => {
-    try {
-      await vault.methods
-        .initialize(
-          warmMultisig.publicKey,
-          coldMultisig.publicKey,
-          usdRebaser.publicKey,
-          reserveManager.publicKey,
-          new BN(950_000_000)
-        )
-        .accountsPartial({
-          roleAdmin: payer.publicKey,
-          config: vaultConfigPda,
-          okuMoneyMint,
-          usdOkuMint,
-          reserveVault,
-          psmConfig: configPda,
-          token2022Program: TOKEN_2022_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .rpc();
-      expect.fail("Should have failed — vault config PDA already initialized");
-    } catch (err: any) {
-      expect(err).to.exist;
-    }
   });
 });

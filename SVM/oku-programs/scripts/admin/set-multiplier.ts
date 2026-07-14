@@ -1,19 +1,19 @@
 /**
- * Set the OkuMoney price directly (rebaser-only).
+ * Set the usdOku multiplier directly (rebaser-only).
  *
- * Wraps `lite_psm::set_oku_m_price`. Price is never allowed to decrease
- * and is capped by `MAX_OKU_M_PRICE`. Stamps the
+ * Wraps `lite_psm::set_multiplier`. The multiplier is never allowed to
+ * decrease and is capped by `MAX_MULTIPLIER`. Stamps the
  * `last_yield_distribution_slot` so PSM/vault operations in the same
  * slot are rejected (sandwich prevention). SVM equivalent of EVM's
- * `LitePSM.setOkuMPrice`.
+ * `LitePSM.setMultiplier`.
  *
  * Usage:
- *   NETWORK=devnet tsx scripts/admin/set-oku-m-price.ts --new=<1e9-scaled>
- *   NETWORK=mainnet-beta tsx scripts/admin/set-oku-m-price.ts \
+ *   NETWORK=devnet tsx scripts/admin/set-multiplier.ts --new=<1e9-scaled>
+ *   NETWORK=mainnet-beta tsx scripts/admin/set-multiplier.ts \
  *       --new=<1e9-scaled> --yes-i-mean-it-on-mainnet
  *   --dry-run     do not submit
  *
- * Scale: prices are stored at 1e9 precision. `1_000_000_000` means $1.00.
+ * Scale: multipliers are stored at 1e9 precision. `1_000_000_000` means 1x.
  */
 
 import * as anchor from '@anchor-lang/core';
@@ -34,67 +34,67 @@ function parseArg(name: string): string | undefined {
 
 async function main() {
   const network = detectNetwork();
-  logger.header(`set_oku_m_price (${network})`);
+  logger.header(`set_multiplier (${network})`);
 
-  const newPriceArg = parseArg('new');
-  if (!newPriceArg) {
-    throw new Error('Required: --new=<1e9-scaled price, e.g. 1000000000 for $1.00>');
+  const newMultiplierArg = parseArg('new');
+  if (!newMultiplierArg) {
+    throw new Error('Required: --new=<1e9-scaled multiplier, e.g. 1000000000 for 1x>');
   }
-  const newPrice = new BN(newPriceArg);
-  if (newPrice.isNeg() || newPrice.isZero()) {
+  const newMultiplier = new BN(newMultiplierArg);
+  if (newMultiplier.isNeg() || newMultiplier.isZero()) {
     throw new Error('--new must be > 0.');
   }
 
   const provider = createProvider(network);
   anchor.setProvider(provider);
   const deployment = loadDeployment(network);
-  if (!deployment?.programs?.litePsm || !deployment.tokens?.okuMoney) {
+  if (!deployment?.programs?.litePsm || !deployment.tokens?.usdOku) {
     throw new Error(`No deployment for ${network}.`);
   }
 
   const litePsmId = new PublicKey(deployment.programs.litePsm);
-  const okuMoneyMint = new PublicKey(deployment.tokens.okuMoney);
+  const usdOkuMint = new PublicKey(deployment.tokens.usdOku);
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
   const cfg = await program.account.psmConfig.fetch(psmConfig);
-  const oldPrice = cfg.okuMPrice as BN;
+  const oldMultiplier = cfg.multiplier as BN;
   logger.info(
-    summaryBlock('set_oku_m_price()', {
+    summaryBlock('set_multiplier()', {
       'config PDA': psmConfig.toBase58(),
-      'okuMoney mint': okuMoneyMint.toBase58(),
-      'current oku_m_price (1e9)': oldPrice.toString(),
-      'new oku_m_price (1e9)': newPrice.toString(),
+      'usdOku mint': usdOkuMint.toBase58(),
+      'current multiplier (1e9)': oldMultiplier.toString(),
+      'new multiplier (1e9)': newMultiplier.toString(),
       'signer (rebaser)': provider.wallet.publicKey.toBase58(),
     })
   );
 
-  if (newPrice.lt(oldPrice)) {
+  if (newMultiplier.lt(oldMultiplier)) {
     throw new Error(
-      `Price cannot decrease (program enforces PriceCannotDecrease); ` +
-        `current ${oldPrice.toString()}, requested ${newPrice.toString()}.`
+      `Multiplier cannot decrease (program enforces MultiplierCannotDecrease); ` +
+        `current ${oldMultiplier.toString()}, requested ${newMultiplier.toString()}.`
     );
   }
 
   if (isDryRun()) return logger.success('--dry-run set; not submitting.');
   await confirmIfMainnet(
     network,
-    `set_oku_m_price(${newPrice.toString()}) on mainnet — atomic price bump`
+    `set_multiplier(${newMultiplier.toString()}) on mainnet — atomic multiplier bump`
   );
 
   const sig = await program.methods
-    .setOkuMPrice(newPrice)
+    .setMultiplier(newMultiplier)
     .accountsPartial({
       rebaser: provider.wallet.publicKey,
       config: psmConfig,
-      okuMoneyMint,
+      usdOkuMint,
       token2022Program: TOKEN_2022_PROGRAM_ID,
     })
     .rpc();
   logger.success(`tx: ${sig}`);
 
   const after = await program.account.psmConfig.fetch(psmConfig);
-  logger.info(`new oku_m_price: ${after.okuMPrice.toString()}`);
+  logger.info(`new multiplier: ${after.multiplier.toString()}`);
 }
 
 main()

@@ -1,4 +1,4 @@
-.PHONY: setup build test test-fork clean
+.PHONY: setup build test test-fork clean fetch-token-2022
 
 setup:
 	@echo "Installing Rust toolchain (from rust-toolchain.toml)..."
@@ -23,6 +23,14 @@ test:
 #   npm run surfpool:mainnet  (mainnet fork)
 test-fork:
 	npm run test:fork
+
+# Fetch the mainnet Token-2022 binary for bankrun tests.
+# Required because solana-bankrun 0.4.0 bundles an older Token-2022
+# that doesn't support ScaledUiAmount. Remove this target once
+# solana-bankrun ships with a compatible version.
+fetch-token-2022:
+	solana program dump TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb \
+		target/deploy/spl_token_2022.so --url mainnet-beta
 
 clean:
 	anchor clean && rm -f deployments/localnet.json

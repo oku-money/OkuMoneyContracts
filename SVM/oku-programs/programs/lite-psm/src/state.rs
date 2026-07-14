@@ -1,5 +1,10 @@
 //! Account state definitions for the Lite-PSM program.
 //!
+//! Single-token design: the PSM deals exclusively in **usdOku** (a
+//! Token-2022 mint with the `ScaledUiAmount` extension). The multiplier
+//! that converts raw token amounts to dollar-display values lives on the
+//! mint itself, not in PsmConfig.
+//!
 //! Storage patterns adapted from a few upstream sources:
 //! - The minter-allowance + blacklist-exempt fields on `PsmConfig` mirror
 //!   Circle's FiatToken minter / blacklist controller pattern.
@@ -10,9 +15,9 @@ use anchor_lang::prelude::*;
 
 /// PSM configuration PDA.
 ///
-/// Seeds: `["psm_config_v4"]`. Migration history (seed-rotation log) is
-/// tracked in `SVM/README.md` § "PDA seed history"; the `_v4` suffix
-/// marks the post-oracle-removal layout.
+/// Seeds: `["psm_config_v5"]`. Migration history (seed-rotation log) is
+/// tracked in `SVM/README.md` § "PDA seed history"; the `_v5` suffix
+/// marks the single-token (usdOku) layout with ScaledUiAmount.
 #[account]
 #[derive(InitSpace)]
 pub struct PsmConfig {
@@ -40,40 +45,34 @@ pub struct PsmConfig {
     pub cap_manager: Pubkey,
     /// Cold Multisig - reset minter allowance
     pub allowance_manager: Pubkey,
-    /// Orchestrator - update interest rate
+    /// Orchestrator - update multiplier on the usdOku mint
     pub rebaser: Pubkey,
 
     // ===== Token References =====
     /// USDC mint address
     pub usdc_mint: Pubkey,
-    /// OkuMoney mint address (Token-2022 with InterestBearingConfig extension).
-    /// The extension is informational only — economic price comes from
-    /// `oku_m_price` on this account, not from the mint's interest accrual.
-    pub oku_money_mint: Pubkey,
+    /// usdOku mint address (Token-2022 with ScaledUiAmount extension).
+    /// The multiplier for USDC ↔ usdOku conversion is read from the
+    /// mint's ScaledUiAmountConfig extension, not stored on PsmConfig.
+    pub usd_oku_mint: Pubkey,
     /// PSM's USDC buffer vault (ATA)
     pub vault_usdc: Pubkey,
-    /// PSM's OkuMoney escrow vault for queued redemptions (ATA)
-    /// Holds OkuMoney while users are in queue (yield comes from price appreciation)
-    pub vault_oku_money: Pubkey,
+    /// PSM's usdOku escrow vault for queued redemptions (ATA).
+    /// Holds raw usdOku while users are in queue.
+    pub vault_usd_oku: Pubkey,
 
     // ===== Limits =====
-    /// Maximum OkuMoney supply cap
+    /// Maximum usdOku supply cap (in raw token units)
     pub max_supply: u64,
-    /// Mint allowance remaining (configurable cap on freshly minted OkuMoney
+    /// Mint allowance remaining (configurable cap on freshly minted usdOku
     /// between admin resets, mirroring the EVM `minterAllowance` pattern).
     pub minter_allowance: u64,
     /// Whether the PSM is paused
     pub is_paused: bool,
 
-    /// Solana slot of last yield distribution (sandwich prevention)
-    /// Operations like mint/redeem are blocked in the same slot as yield distribution
+    /// Solana slot of last yield distribution (sandwich prevention).
+    /// Operations like mint/redeem are blocked in the same slot as yield distribution.
     pub last_yield_distribution_slot: u64,
-
-    // ===== OkuMoney Price =====
-    /// Current OkuMoney price multiplier (1e9 = $1.00)
-    /// Updated by set_oku_m_price() or distribute_yield()
-    /// Matches EVM's okuMPrice() storage pattern
-    pub oku_m_price: u64,
 
     /// Pending `role_admin` rotation target — the two-step admin-transfer
     /// model (OpenZeppelin `Ownable2Step` pattern). `set_authority(RoleAdmin,
@@ -88,58 +87,53 @@ pub struct PsmConfig {
 
     // ===== Direct Mint (fiat on-ramp) =====
     //
-    // Permissioned direct OkuMoney mint path — no USDC collateral required
-    // on-chain. Matches EVM `OkuMoney.mint(to, amount)` called by an
-    // `OKUM_MINTER` role holder. The fiat collateral is held off-chain.
-    /// Operator / fiat gateway — can mint OkuMoney directly without USDC.
-    /// EVM equivalent: address granted `OKUM_MINTER` role.
+    // Permissioned direct usdOku mint path — no USDC collateral required
+    // on-chain. Matches EVM `usdOku.mint(to, amount)` called by an
+    // authorised minter role holder. The fiat collateral is held off-chain.
+    /// Operator / fiat gateway — can mint usdOku directly without USDC.
     /// `Pubkey::default()` means "not configured / disabled".
     pub direct_minter: Pubkey,
 
     /// Per-direct-minter allowance (separate from the USDC-backed
     /// `minter_allowance`). Decremented on each direct mint; reset by
-    /// `allowance_manager` via `set_direct_minter_allowance`. Mirrors
-    /// EVM `minterAllowance[directMinter]`.
+    /// `allowance_manager` via `set_direct_minter_allowance`.
     pub direct_minter_allowance: u64,
 
     // ===== Direct Burn (bridge / off-ramp) =====
     //
-    // Permissioned direct OkuMoney burn path — burns OkuMoney from the
-    // caller's ATA without USDC payout. Matches EVM `OkuMoney.burn(amount)`
-    // called by an `OKUM_BURNER` role holder. Enables SVM→EVM bridging
+    // Permissioned direct usdOku burn path — burns usdOku from the
+    // caller's ATA without USDC payout. Enables SVM→EVM bridging
     // where the KMS-backed orchestrator burns on the source chain.
-    /// Operator / bridge backend — can burn OkuMoney directly without
+    /// Operator / bridge backend — can burn usdOku directly without
     /// triggering a USDC redemption.
-    /// EVM equivalent: address granted `OKUM_BURNER` role.
     /// `Pubkey::default()` means "not configured / disabled".
     pub direct_burner: Pubkey,
 
     /// Per-direct-burner allowance. Decremented on each direct burn;
     /// reset by `allowance_manager` via `set_direct_burner_allowance`.
-    /// Mirrors EVM's role-gated burn with an additional allowance cap
-    /// for operational safety.
     pub direct_burner_allowance: u64,
 }
 
 impl PsmConfig {
-    pub const SEED: &'static [u8] = b"psm_config_v4";
+    pub const SEED: &'static [u8] = b"psm_config_v5";
 
     /// Space needed for PsmConfig account: 8 byte discriminator +
-    /// `InitSpace`-derived field sum. Pinned to 594 bytes by the
+    /// `InitSpace`-derived field sum. Pinned to 626 bytes by the
     /// compile-time assertion below; if a reviewer changes a field's
     /// width the assertion fires.
     pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
 
 // Compile-time assertion: if PsmConfig layout changes, this will fail to compile.
-// (634 = 8 disc + 1 bump + 32*11 authorities (352) + 32*4 token refs (128)
+// (626 = 8 disc + 1 bump + 32*11 authorities (352)
+//      + 32*2 token mints (usdc_mint + usd_oku_mint = 64)
+//      + 32*2 vaults (vault_usdc + vault_usd_oku = 64)
 //      + 8 max_supply + 8 minter_allowance + 1 is_paused
-//      + 8 last_yield_distribution_slot + 8 oku_m_price
+//      + 8 last_yield_distribution_slot
 //      + 32 pending_role_admin
 //      + 32 direct_minter + 8 direct_minter_allowance
 //      + 32 direct_burner + 8 direct_burner_allowance.)
-// 634 = 594 (previous) + 32 direct_burner + 8 direct_burner_allowance.
-const _: () = assert!(PsmConfig::LEN == 634);
+const _: () = assert!(PsmConfig::LEN == 626);
 
 /// Redemption queue PDA — zero-copy ring buffer.
 ///
@@ -165,7 +159,7 @@ const _: () = assert!(PsmConfig::LEN == 634);
 ///   7   _pad0  (align head to 8)
 ///   8   head
 ///   8   tail
-///   8   total_queued_oku_m
+///   8   total_queued_usd_oku
 ///  48 * 200   entries
 /// ```
 ///
@@ -182,7 +176,7 @@ const _: () = assert!(PsmConfig::LEN == 634);
 /// - `load_init()` only at the one `init`-constraint site
 ///   (`setup_redemption_queue`).
 ///
-/// Seeds: `["redemption_queue_v2"]`. Rotation history tracked in
+/// Seeds: `["redemption_queue_v3"]`. Rotation history tracked in
 /// `SVM/README.md` § "PDA seed history".
 #[account(zero_copy)]
 #[repr(C)]
@@ -198,16 +192,16 @@ pub struct RedemptionQueue {
     pub head: u64,
     /// Index of next slot to write (tail of queue).
     pub tail: u64,
-    /// Running total of OkuMoney held in escrow (updated on
+    /// Running total of raw usdOku held in escrow (updated on
     /// enqueue/process/rescue).
-    pub total_queued_oku_m: u64,
+    pub total_queued_usd_oku: u64,
     /// Ring-buffer entries. Index into via
     /// `entries[(head_or_tail % MAX_ENTRIES) as usize]`.
     pub entries: [QueueEntry; RedemptionQueue::MAX_ENTRIES],
 }
 
 impl RedemptionQueue {
-    pub const SEED: &'static [u8] = b"redemption_queue_v2";
+    pub const SEED: &'static [u8] = b"redemption_queue_v3";
 
     /// Maximum queue entries: 200.
     ///
@@ -275,17 +269,17 @@ impl RedemptionQueue {
 pub struct QueueEntry {
     /// User who is owed redemption
     pub user: Pubkey,
-    /// OkuMoney amount held in escrow.
+    /// Raw usdOku amount held in escrow.
     /// The actual USDC payout is calculated at `process_queue` time using
-    /// the current `oku_m_price` multiplier.
-    pub oku_m_amount: u64,
+    /// the multiplier from the usdOku mint's ScaledUiAmountConfig extension.
+    pub raw_usd_oku_amount: u64,
     /// Timestamp when queued (kept for audit trail)
     pub timestamp: i64,
 }
 
 impl QueueEntry {
     /// Space for a single queue entry (no account discriminator — inner
-    /// type only): `32 user + 8 oku_m_amount + 8 timestamp = 48 bytes`.
+    /// type only): `32 user + 8 raw_usd_oku_amount + 8 timestamp = 48 bytes`.
     pub const LEN: usize = core::mem::size_of::<Self>();
 }
 

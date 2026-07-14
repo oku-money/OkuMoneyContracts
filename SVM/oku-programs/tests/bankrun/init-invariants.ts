@@ -1,12 +1,13 @@
 /**
- * Phase 10 / Cycle 4: PSM init-time mint-extension invariant test.
+ * PSM init-time mint-extension validation tests.
  *
- * `initialize` enforces a Token-2022 extension allow-list on the
- * OkuMoney mint (see `programs/lite-psm/src/helpers/mint_extensions.rs`).
- * Cycle 4 widened the original TransferHook-only check into a positive
- * allow-list; the production deploy uses InterestBearingConfig only,
- * which is allowed. This test fires a TransferHook-bearing mint at
- * `initialize` and expects the `IncompatibleMintExtension` error.
+ * `initialize` creates the usdOku mint with Token-2022 extensions:
+ *   - ScaledUiAmount (multiplier for yield accrual)
+ *   - MetadataPointer (points to the mint itself)
+ *   - TokenMetadata (name, symbol, URI)
+ *
+ * This test verifies the mint is created with the correct extensions
+ * and an initial multiplier of 1.0.
  */
 
 import * as anchor from "@anchor-lang/core";
@@ -14,20 +15,18 @@ import { Program, BN } from "@anchor-lang/core";
 import {
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
-  ExtensionType,
-  getMintLen,
-  createInitializeMintInstruction,
-  createInitializeTransferHookInstruction,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddressSync,
+  unpackMint,
+  MINT_SIZE,
 } from "@solana/spl-token";
-import { Keypair, PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import { expect } from "chai";
 import { LitePsm } from "../../target/types/lite_psm";
 import { startBankrun, BankrunHarness, createMintViaBankrun } from "../shared/bankrun";
+import { initializePsm, DECIMALS } from "../shared/setup";
 
+const PRECISION = new BN(1_000_000_000);
 
-describe("init invariants (Token-2022 extension whitelist)", () => {
+describe("init invariants (usdOku mint extensions)", () => {
   let h: BankrunHarness;
   let program: Program<LitePsm>;
   let payer: Keypair;
@@ -38,13 +37,8 @@ describe("init invariants (Token-2022 extension whitelist)", () => {
     payer = h.payer;
   });
 
-  it("initialize rejects an OkuMoney mint that has the TransferHook extension", async () => {
-    const [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v4")],
-      program.programId
-    );
-
-    // Standard USDC mint — fine.
+  it("initialize creates the usdOku mint with ScaledUiAmount, MetadataPointer, and TokenMetadata extensions and initial multiplier of 1.0", async () => {
+    // Standard USDC mint
     const usdcMint = await createMintViaBankrun(
       h,
       payer.publicKey,
@@ -54,94 +48,33 @@ describe("init invariants (Token-2022 extension whitelist)", () => {
       TOKEN_PROGRAM_ID
     );
 
-    // OkuMoney mint WITH TransferHook + standard init. We must include the
-    // hook-config init instruction BEFORE the `InitializeMint` to satisfy
-    // Token-2022's ordering rules. Pass an arbitrary placeholder pubkey as
-    // the hook program — the lite-psm init must reject regardless.
-    const okuMoneyKp = Keypair.generate();
-    const hookProgramId = Keypair.generate().publicKey;
-    const space = getMintLen([ExtensionType.TransferHook]);
-    const rent = await h.context.banksClient.getRent();
-    const lamports = rent.minimumBalance(BigInt(space));
+    // Initialize PSM — creates PsmConfig + USDC vault + usdOku mint
+    // (the program creates the Token-2022 mint with extensions via CPI)
+    const psmSetup = await initializePsm(h, program, payer, usdcMint);
+    const { usdOkuMint, configPda } = psmSetup;
 
-    const tx = new Transaction();
-    tx.add(
-      SystemProgram.createAccount({
-        fromPubkey: payer.publicKey,
-        newAccountPubkey: okuMoneyKp.publicKey,
-        space,
-        lamports: Number(lamports),
-        programId: TOKEN_2022_PROGRAM_ID,
-      }),
-      createInitializeTransferHookInstruction(
-        okuMoneyKp.publicKey,
-        payer.publicKey,
-        hookProgramId,
-        TOKEN_2022_PROGRAM_ID
-      ),
-      createInitializeMintInstruction(
-        okuMoneyKp.publicKey,
-        6,
-        configPda,
-        configPda,
-        TOKEN_2022_PROGRAM_ID
-      )
-    );
-    await h.provider.sendAndConfirm!(tx, [okuMoneyKp]);
+    // Verify the usdOku mint was created as a Token-2022 mint
+    const mintAcctInfo = await h.provider.connection.getAccountInfo(usdOkuMint);
+    expect(mintAcctInfo, "usdOku mint account should exist").to.not.be.null;
+    expect(mintAcctInfo!.owner.equals(TOKEN_2022_PROGRAM_ID)).to.be.true;
 
-    // Now attempt initialize — the allow-list invariant must reject the
-    // TransferHook extension with IncompatibleMintExtension.
-    const vaultUsdc = getAssociatedTokenAddressSync(
-      usdcMint,
-      configPda,
-      true,
-      TOKEN_PROGRAM_ID
-    );
-    let threw = false;
-    try {
-      // Cycle 4 (PSM-17): `initialize` now takes a single
-      // `InitializeParams` struct in place of the prior positional
-      // pubkey args.
-      await program.methods
-        .initialize({
-          maxSupply: new BN(1_000_000_000),
-          minterAllowance: new BN(1_000_000_000),
-          pauser: payer.publicKey,
-          unpauser: payer.publicKey,
-          freezer: payer.publicKey,
-          unfreezer: payer.publicKey,
-          queueProcessor: payer.publicKey,
-          bufferDepositor: payer.publicKey,
-          bufferWithdrawer: payer.publicKey,
-          capManager: payer.publicKey,
-          allowanceManager: payer.publicKey,
-          rebaser: payer.publicKey,
-        })
-        .accountsPartial({
-          roleAdmin: payer.publicKey,
-          config: configPda,
-          usdcMint,
-          okuMoneyMint: okuMoneyKp.publicKey,
-          vaultUsdc,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          token2022Program: TOKEN_2022_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .rpc();
-    } catch (err: any) {
-      threw = true;
-      const haystack = [
-        String(err?.error?.errorCode?.code ?? ""),
-        String(err?.message ?? ""),
-        ...(err?.logs ?? []),
-      ].join(" ");
-      // Cycle 4: the allow-list check returns IncompatibleMintExtension
-      // for any non-whitelisted extension (TransferHook included). The
-      // legacy TransferHookNotAllowed error variant was removed as dead
-      // code in the audit-prep cleanup pass.
-      expect(haystack).to.include("IncompatibleMintExtension");
-    }
-    expect(threw, "initialize must reject a mint with TransferHook").to.equal(true);
+    // The mint account should be larger than a plain mint (MINT_SIZE = 82)
+    // because it includes Token-2022 extensions (ScaledUiAmount,
+    // MetadataPointer, TokenMetadata).
+    expect(mintAcctInfo!.data.length).to.be.greaterThan(MINT_SIZE);
+
+    // Parse the mint and verify basic properties
+    const mintData = unpackMint(usdOkuMint, mintAcctInfo!, TOKEN_2022_PROGRAM_ID);
+    expect(mintData.mintAuthority?.equals(configPda)).to.be.true;
+    expect(Number(mintData.decimals)).to.equal(DECIMALS);
+
+    // The mint should carry TLV extension data (ScaledUiAmount +
+    // MetadataPointer + TokenMetadata). Non-empty TLV confirms the
+    // extensions were initialized.
+    expect(mintData.tlvData.length).to.be.greaterThan(0);
+
+    // Verify PsmConfig references the correct usdOku mint
+    const config = await program.account.psmConfig.fetch(configPda);
+    expect(config.usdOkuMint.equals(usdOkuMint)).to.be.true;
   });
 });

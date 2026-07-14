@@ -1,4 +1,4 @@
-//! # OkuMoney Lite-PSM Errors
+//! # usdOku Lite-PSM Errors
 //!
 //! Error codes for the Lite-PSM program.
 //! Aligned with EVM custom errors where applicable.
@@ -12,7 +12,7 @@
 //! | `MaxSupplyExceeded` | `ExceedsSupplyCap()` |
 //! | `AllowanceExceeded` | `ExceedsAllowance()` |
 //! | `InsufficientBuffer` | `InsufficientBuffer()` |
-//! | `PriceCannotDecrease` | `MultiplierCannotDecrease()` |
+//! | `MultiplierCannotDecrease` | `MultiplierCannotDecrease()` |
 //! | `YieldDistributionInProgress` | `YieldDistributionInProgress()` |
 //! | `OutputBelowMinimum` | `OutputBelowMinimum(uint256 actual, uint256 minimum)` |
 //! | `AmountTooSmall` | `AmountTooSmall()` |
@@ -49,7 +49,7 @@ pub enum LitePsmError {
 
     /// Proposed `max_supply` is below the current circulating supply.
     /// Setting it would silently brick all future mints. EVM
-    /// `OkuMoney.setMaxSupply` parity.
+    /// `usdOku.setMaxSupply` parity.
     #[msg("New max_supply must be >= current circulating supply")]
     BelowCurrentSupply,
 
@@ -64,11 +64,11 @@ pub enum LitePsmError {
     #[msg("Insufficient buffer for redemption")]
     InsufficientBuffer,
 
-    /// User does not hold enough OkuMoney to satisfy the redemption.
+    /// User does not hold enough usdOku to satisfy the redemption.
     /// Cycle 4 (PSM-11): separated from `InsufficientBuffer` to remove
     /// the misleading "the PSM's buffer is empty" interpretation.
     /// EVM analogue: `ERC20InsufficientBalance` (OZ standard revert).
-    #[msg("User does not hold enough OkuMoney for redemption")]
+    #[msg("User does not hold enough usdOku for redemption")]
     InsufficientUserBalance,
 
     // ===== Queue Errors =====
@@ -109,24 +109,32 @@ pub enum LitePsmError {
     #[msg("Cannot perform operation in same slot as yield distribution")]
     YieldDistributionInProgress,
 
-    /// New price did not strictly increase. Reverts on both backward moves
-    /// and no-op (equal-value) updates so a no-op call cannot stamp the
-    /// sandwich-lock slot without moving the multiplier.
+    /// New multiplier did not strictly increase. Reverts on both backward
+    /// moves and no-op (equal-value) updates so a no-op call cannot stamp
+    /// the sandwich-lock slot without moving the multiplier.
     /// EVM: MultiplierCannotDecrease()
-    #[msg("New price must strictly increase")]
-    PriceCannotDecrease,
+    #[msg("New multiplier must strictly increase")]
+    MultiplierCannotDecrease,
 
-    /// Yield amount too small to affect price (truncates to zero)
-    #[msg("Yield amount too small to affect price (truncates to zero)")]
+    /// Yield amount too small to affect multiplier (truncates to zero)
+    #[msg("Yield amount too small to affect multiplier (truncates to zero)")]
     YieldTooSmall,
 
-    /// Proposed `oku_m_price` exceeds the configured ceiling.
+    /// Proposed multiplier exceeds the configured ceiling.
     /// Math-sanity bound that keeps downstream `u64 * u64 -> u128`
     /// multiplications inside the overflow-safe region. Not a guard
     /// against operator compromise (out of scope per the centralized
     /// trust model) but a math bound.
-    #[msg("Proposed oku_m_price exceeds MAX_OKU_M_PRICE ceiling")]
-    PriceAboveMax,
+    #[msg("Proposed multiplier exceeds MAX_MULTIPLIER ceiling")]
+    MultiplierAboveMax,
+
+    /// Failed to read multiplier from ScaledUiAmount extension
+    #[msg("Failed to read multiplier from ScaledUiAmount extension")]
+    MultiplierReadFailed,
+
+    /// Failed to update ScaledUiAmount multiplier
+    #[msg("Failed to update ScaledUiAmount multiplier")]
+    MultiplierUpdateFailed,
 
     // ===== Authority validation =====
     /// Authority pubkey is the zero pubkey or otherwise invalid
@@ -156,15 +164,15 @@ pub enum LitePsmError {
     #[msg("USDC mint must have exactly 6 decimals")]
     InvalidUsdcDecimals,
 
-    /// OkuMoney mint must have exactly 6 decimals on Solana.
-    /// All PSM math (oku_m_price, distribute_yield, oku_m_to_dollars)
+    /// usdOku mint must have exactly 6 decimals on Solana.
+    /// All PSM math (multiplier, distribute_yield, raw-to-dollars)
     /// assumes 6-decimal raw token amounts; a mismatched decimal count
     /// would silently break every accounting path.
-    #[msg("OkuMoney mint must have exactly 6 decimals")]
-    InvalidOkuMoneyDecimals,
+    #[msg("usdOku mint must have exactly 6 decimals")]
+    InvalidUsdOkuDecimals,
 
     // ===== PSM Math / Slippage Errors =====
-    /// Mint output rounded down to zero (oku_m_price too high relative to input).
+    /// Mint output rounded down to zero (multiplier too high relative to input).
     /// EVM: AmountTooSmall()
     #[msg("Output amount too small (rounds to zero)")]
     AmountTooSmall,
@@ -173,14 +181,4 @@ pub enum LitePsmError {
     /// EVM: OutputBelowMinimum(uint256 actual, uint256 minimum)
     #[msg("Output below minimum (slippage exceeded)")]
     OutputBelowMinimum,
-
-    // ===== Phase 10 / Cycle 4: mint extension invariants =====
-    /// The OkuMoney mint carries a Token-2022 extension that the protocol
-    /// does not support. Cycle 4 widened the original `TransferHook`-only
-    /// check to a full allow-list (see `helpers::mint_extensions`); any
-    /// extension not on the whitelist trips this error at `initialize`.
-    /// Same hard reject is applied at the `oku-dollar` initialize boundary
-    /// so both programs agree on what a clean OkuMoney mint looks like.
-    #[msg("OkuMoney mint carries an incompatible Token-2022 extension (see helpers::mint_extensions for the allow-list)")]
-    IncompatibleMintExtension,
 }

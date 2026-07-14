@@ -1,5 +1,5 @@
 /**
- * Freeze a user's OkuMoney token account.
+ * Freeze a user's usdOku token account.
  *
  * Wraps `lite_psm::freeze_account` (freezer-gated). Works even when PSM
  * is paused.
@@ -10,7 +10,7 @@
  *       --owner=<user-pubkey> --yes-i-mean-it-on-mainnet
  *   --dry-run     do not submit
  *
- * The script derives the user's OkuMoney ATA from their wallet pubkey.
+ * The script derives the user's usdOku ATA from their wallet pubkey.
  * Pass `--ata=<ata-pubkey>` directly if you need to freeze a non-ATA
  * account (rare).
  */
@@ -47,12 +47,12 @@ async function main() {
   const provider = createProvider(network);
   anchor.setProvider(provider);
   const deployment = loadDeployment(network);
-  if (!deployment?.programs?.litePsm || !deployment.tokens?.okuMoney) {
+  if (!deployment?.programs?.litePsm || !deployment.tokens?.usdOku) {
     throw new Error(`No deployment for ${network}.`);
   }
 
   const litePsmId = new PublicKey(deployment.programs.litePsm);
-  const okuMoneyMint = new PublicKey(deployment.tokens.okuMoney);
+  const usdOkuMint = new PublicKey(deployment.tokens.usdOku);
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
@@ -64,7 +64,7 @@ async function main() {
   } else {
     const owner = new PublicKey(ownerArg!);
     targetAta = getAssociatedTokenAddressSync(
-      okuMoneyMint,
+      usdOkuMint,
       owner,
       false,
       TOKEN_2022_PROGRAM_ID
@@ -77,7 +77,7 @@ async function main() {
       'config PDA': psmConfig.toBase58(),
       'target owner': ownerLabel,
       'target ATA': targetAta.toBase58(),
-      'okuMoney mint': okuMoneyMint.toBase58(),
+      'usdOku mint': usdOkuMint.toBase58(),
       'signer (freezer)': provider.wallet.publicKey.toBase58(),
     })
   );
@@ -93,8 +93,8 @@ async function main() {
     .accountsPartial({
       freezer: provider.wallet.publicKey,
       config: psmConfig,
-      okuMoneyMint,
-      targetOkuMoneyAta: targetAta,
+      usdOkuMint,
+      targetUsdOkuAta: targetAta,
       token2022Program: TOKEN_2022_PROGRAM_ID,
     })
     .rpc();

@@ -58,7 +58,7 @@ pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
 /// true on a starting state of `current_supply > cap`. Mirrors EVM
 /// `OkuMoney.setMaxSupply`'s `BelowCurrentSupply` revert.
 pub fn set_max_supply(ctx: Context<CapManager>, new_max_supply: u64) -> Result<()> {
-    let current_supply = ctx.accounts.oku_money_mint.supply;
+    let current_supply = ctx.accounts.usd_oku_mint.supply;
     require!(
         new_max_supply >= current_supply,
         LitePsmError::BelowCurrentSupply
@@ -95,8 +95,8 @@ pub fn set_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Resu
 /// Reset direct-minter allowance (allowance_manager only).
 ///
 /// Mirrors `set_minter_allowance` but controls the separate
-/// `direct_minter_allowance` consumed by `mint_oku_m_direct` /
-/// `mint_usd_oku_direct`. EVM equivalent: `configureMinterAllowance`
+/// `direct_minter_allowance` consumed by `mint_usd_oku_direct`.
+/// EVM equivalent: `configureMinterAllowance`
 /// called for the direct-minter address.
 pub fn set_direct_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()> {
     let config = &mut ctx.accounts.config;
@@ -115,7 +115,7 @@ pub fn set_direct_minter_allowance(ctx: Context<AllowanceManager>, amount: u64) 
 /// Reset direct-burner allowance (allowance_manager only).
 ///
 /// Mirrors `set_direct_minter_allowance` but controls the separate
-/// `direct_burner_allowance` consumed by `burn_oku_m_direct`.
+/// `direct_burner_allowance` consumed by `burn_usd_oku_direct`.
 /// EVM equivalent: allowance management for the `OKUM_BURNER` address.
 pub fn set_direct_burner_allowance(ctx: Context<AllowanceManager>, amount: u64) -> Result<()> {
     let config = &mut ctx.accounts.config;
@@ -136,7 +136,7 @@ pub fn set_direct_burner_allowance(ctx: Context<AllowanceManager>, amount: u64) 
 /// MUST work even when PSM is paused (no pause check).
 pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
     let config = &ctx.accounts.config;
-    let target_owner = ctx.accounts.target_oku_money_ata.owner;
+    let target_owner = ctx.accounts.target_usd_oku_ata.owner;
 
     let bump = config.bump;
     let seeds = &[PsmConfig::SEED, &[bump]];
@@ -146,15 +146,15 @@ pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
     token_interface::freeze_account(CpiContext::new_with_signer(
         ctx.accounts.token_2022_program.key(),
         token_interface::FreezeAccount {
-            account: ctx.accounts.target_oku_money_ata.to_account_info(),
-            mint: ctx.accounts.oku_money_mint.to_account_info(),
+            account: ctx.accounts.target_usd_oku_ata.to_account_info(),
+            mint: ctx.accounts.usd_oku_mint.to_account_info(),
             authority: ctx.accounts.config.to_account_info(),
         },
         signer,
     ))?;
 
     emit!(FreezeEvent {
-        account: ctx.accounts.target_oku_money_ata.key(),
+        account: ctx.accounts.target_usd_oku_ata.key(),
         target_owner,
     });
 
@@ -173,16 +173,16 @@ pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
     token_interface::thaw_account(CpiContext::new_with_signer(
         ctx.accounts.token_2022_program.key(),
         token_interface::ThawAccount {
-            account: ctx.accounts.target_oku_money_ata.to_account_info(),
-            mint: ctx.accounts.oku_money_mint.to_account_info(),
+            account: ctx.accounts.target_usd_oku_ata.to_account_info(),
+            mint: ctx.accounts.usd_oku_mint.to_account_info(),
             authority: ctx.accounts.config.to_account_info(),
         },
         signer,
     ))?;
 
     emit!(ThawEvent {
-        account: ctx.accounts.target_oku_money_ata.key(),
-        target_owner: ctx.accounts.target_oku_money_ata.owner,
+        account: ctx.accounts.target_usd_oku_ata.key(),
+        target_owner: ctx.accounts.target_usd_oku_ata.owner,
     });
 
     Ok(())

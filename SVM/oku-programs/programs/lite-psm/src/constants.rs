@@ -1,36 +1,33 @@
 //! # Lite-PSM constants
 //!
-//! Protocol-wide constants (`PRECISION`, `BASIS_POINTS`, `MAX_OKU_M_PRICE`)
+//! Protocol-wide constants (`PRECISION`, `BASIS_POINTS`, `MAX_MULTIPLIER`)
 //! live in the workspace crate `oku-shared` and
 //! are re-exported here for ergonomics — call sites continue to write
 //! `use crate::constants::*` without caring where the constant is
 //! authored.
 //!
-//! ## Terminology Legend
+//! ## Single-Token Design (usdOku)
 //!
-//! ### Multipliers (Dollar Value Per Token)
-//!
-//! | SVM Name | EVM Equivalent | Description |
-//! |----------|----------------|-------------|
-//! | `oku_m_price` | `okuMMultiplier()` | Dollar value of 1 OkuMoney token (1e9 = $1.00, grows with yield) |
-//! | `usd_multiplier` | `usdMultiplier()` | Dollar value of 1 OkuDollar share (1e9 = $1.00, grows with yield) |
+//! The PSM operates on a single token: **usdOku**, a Token-2022 mint with
+//! the `ScaledUiAmount` extension. The multiplier that converts between
+//! raw token amounts and dollar-display values is stored on the mint
+//! itself via `ScaledUiAmountConfig`.
 //!
 //! ### Token Amounts
 //!
 //! | Name | Decimals | Description |
 //! |------|----------|-------------|
-//! | `oku_m_amount` | 6 | Raw OkuMoney token count (non-rebasing, Token-2022) |
-//! | `usd_amount` | 6 | OkuDollar amount in dollar terms (rebasing via `usd_multiplier`) |
+//! | `raw_amount` | 6 | Raw usdOku token count (on-chain) |
 //! | `usdc_amount` | 6 | USDC amount |
 //!
 //! ## Key Formulas
 //!
+//! The `multiplier` is read from the usdOku mint's `ScaledUiAmountConfig`
+//! extension at the time of the operation.
+//!
 //! ```text
-//! USDC -> OkuMoney:  oku_m_amount = (usdc_amount * PRECISION) / oku_m_price
-//! OkuMoney -> USDC:  usdc_amount = (oku_m_amount * oku_m_price) / PRECISION
-//! OkuMoney -> OkuDollar shares: shares = (oku_m_amount * oku_m_price) / usd_multiplier
-//! OkuDollar -> OkuMoney: oku_m_amount = (usd_amount * usd_multiplier) / oku_m_price
-//! Dollar value: dollar_value = (oku_m_amount * oku_m_price) / PRECISION
+//! USDC -> usdOku:  raw_amount  = (usdc_amount * PRECISION) / multiplier
+//! usdOku -> USDC:  usdc_amount = (raw_amount * multiplier) / PRECISION
 //! ```
 //!
 //! ## EVM ↔ SVM Decimal Mapping
@@ -38,38 +35,11 @@
 //! | Type | EVM (decimals) | SVM (decimals) |
 //! |------|----------------|----------------|
 //! | USDC | 6 | 6 |
-//! | OkuMoney | 18 | 6 |
-//! | OkuDollar | 18 | 6 |
+//! | usdOku | 18 | 6 |
 //! | Multipliers | 18 (1e18 = $1) | 9 (1e9 = $1) |
 
 // ---------------------------------------------------------------------------
 // Re-exports from the shared workspace crate
 // ---------------------------------------------------------------------------
 
-pub use oku_shared::{BASIS_POINTS, MAX_OKU_M_PRICE, PRECISION};
-
-// Bridge-specific constants (BRIDGE_DEADLINE_*, BRIDGE_MESSAGE_LEN,
-// BRIDGE_ED25519_*, MAX_SUPPORTED_CHAINS, MAX_NONCE_SKIP) were removed in the
-// noBridge refactor (phase B). v1 cross-chain transfers are handled
-// off-chain by an orchestrator; the on-chain bridge module that consumed
-// these constants no longer exists.
-
-// ---------------------------------------------------------------------------
-// Cross-program references
-// ---------------------------------------------------------------------------
-
-/// OkuDollar program ID. Used by `mint_usd_oku_direct` to validate the
-/// oku-dollar program account before issuing a CPI. Matches the
-/// `declare_id!` in `oku-dollar/src/lib.rs`.
-///
-/// We cannot add oku-dollar as a cargo dependency (circular: oku-dollar
-/// already depends on lite-psm), so the program ID is pinned here as raw
-/// bytes. If the oku-dollar program ID ever changes, this constant MUST be
-/// updated in lockstep.
-pub const OKU_DOLLAR_PROGRAM_ID: anchor_lang::prelude::Pubkey =
-    anchor_lang::prelude::Pubkey::new_from_array([
-        // Base58: 7jKeiuc8gKvQhasbno27wbNMnrwi8g9sb6WPriWkzNd
-        0x01, 0xb9, 0x56, 0x86, 0xb7, 0x88, 0xd5, 0x46, 0xb5, 0x6d, 0x0c, 0x20, 0x86, 0x61, 0xf7,
-        0x8f, 0x38, 0x90, 0x98, 0x5c, 0x59, 0xb8, 0xf9, 0x0a, 0x26, 0x9f, 0xd8, 0x66, 0x30, 0x2c,
-        0x78, 0x52,
-    ]);
+pub use oku_shared::{BASIS_POINTS, MAX_MULTIPLIER, PRECISION};

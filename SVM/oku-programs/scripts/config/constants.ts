@@ -3,7 +3,7 @@
  */
 
 // Supply limits
-export const MAX_SUPPLY = 1_000_000_000 * 1_000_000; // 1B OkuMoney (6 decimals)
+export const MAX_SUPPLY = 1_000_000_000 * 1_000_000; // 1B usdOku (6 decimals)
 // WS5.7: aligned up to EVM's MINTER_ALLOWANCE (1B) from the prior 100M.
 // EVM uses 1B to match max_supply; SVM was conservatively set to 100M.
 // Production: orchestrator can reset via set-minter-allowance after deploy.
@@ -17,15 +17,14 @@ export const ORACLE_STALENESS_THRESHOLD = 3600; // 3600 seconds (1 hour), matche
 
 // Token decimals
 export const USDC_DECIMALS = 6;
-export const OKUSD_DECIMALS = 6;
-
-// Initial interest rate (0% - can be updated by orchestrator)
-export const INITIAL_INTEREST_RATE_BPS = 0;
+export const USD_OKU_DECIMALS = 6;
+/** @deprecated Use `USD_OKU_DECIMALS` instead. */
+export const OKUSD_DECIMALS = USD_OKU_DECIMALS;
 
 // NOTE: Cross-chain bridge constants (chain IDs, EIP-155 mappings, supported
 // chain whitelists) were removed in the noBridge refactor (phase B). v1
 // cross-chain transfers are mediated by an off-chain orchestrator calling
-// `mint_oku_m` / `redeem_oku_m` on each side; no on-chain chain-ID metadata
+// `mint_usd_oku` / `redeem_usd_oku` on each side; no on-chain chain-ID metadata
 // is persisted.
 
 // ===== Direct Mint (fiat on-ramp) =====
@@ -38,8 +37,8 @@ export const INITIAL_INTEREST_RATE_BPS = 0;
  */
 export const DEFAULT_DIRECT_MINTER = '5Miw5ZQ4vT8MBSFcp8vtwearNpZiXZVa43WrRZDpXbzT';
 
-/** Direct-minter allowance (1M OkuMoney, 6 decimals). */
-export const DIRECT_MINTER_ALLOWANCE = 1_000_000 * 1_000_000; // 1,000,000 OkuMoney
+/** Direct-minter allowance (1M usdOku, 6 decimals). */
+export const DIRECT_MINTER_ALLOWANCE = 1_000_000 * 1_000_000; // 1,000,000 usdOku
 
 // NOTE: Program IDs are NOT stored here. They are read at runtime from
 // deployments/{network}.json via scripts/utils/addressBook.ts::loadDeployment().

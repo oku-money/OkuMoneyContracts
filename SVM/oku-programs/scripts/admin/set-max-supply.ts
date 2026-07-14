@@ -1,10 +1,10 @@
 /**
- * Update the OkuMoney max-supply cap.
+ * Update the usdOku max-supply cap.
  *
  * Wraps `lite_psm::set_max_supply` (cap_manager-gated). The handler
- * refuses any new cap below the current circulating supply — that would
- * silently brick every subsequent `mint_oku_m`. EVM
- * `OkuMoney.setMaxSupply` parity.
+ * refuses any new cap below the current circulating supply -- that would
+ * silently brick every subsequent `mint_usd_oku`. EVM
+ * `UsdOku.setMaxSupply` parity.
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/admin/set-max-supply.ts --new=<6dec>
@@ -43,12 +43,12 @@ async function main() {
   const provider = createProvider(network);
   anchor.setProvider(provider);
   const deployment = loadDeployment(network);
-  if (!deployment?.programs?.litePsm || !deployment.tokens?.okuMoney) {
+  if (!deployment?.programs?.litePsm || !deployment.tokens?.usdOku) {
     throw new Error(`No deployment for ${network}.`);
   }
 
   const litePsmId = new PublicKey(deployment.programs.litePsm);
-  const okuMoneyMint = new PublicKey(deployment.tokens.okuMoney);
+  const usdOkuMint = new PublicKey(deployment.tokens.usdOku);
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
@@ -56,7 +56,7 @@ async function main() {
   logger.info(
     summaryBlock('set_max_supply()', {
       'config PDA': psmConfig.toBase58(),
-      'okuMoney mint': okuMoneyMint.toBase58(),
+      'usdOku mint': usdOkuMint.toBase58(),
       'current max_supply': cfg.maxSupply.toString(),
       'new max_supply': newCap.toString(),
       'signer (cap_manager)': provider.wallet.publicKey.toBase58(),
@@ -74,7 +74,7 @@ async function main() {
     .accountsPartial({
       capManager: provider.wallet.publicKey,
       config: psmConfig,
-      okuMoneyMint,
+      usdOkuMint,
       token2022Program: TOKEN_2022_PROGRAM_ID,
     })
     .rpc();

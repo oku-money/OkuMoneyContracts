@@ -1,8 +1,8 @@
 /**
- * Thaw a previously-frozen OkuMoney token account.
+ * Thaw a previously-frozen usdOku token account.
  *
  * Wraps `lite_psm::thaw_account` (unfreezer-gated). Works even when PSM
- * is paused. By Phase 4 RBAC design the unfreezer is the cold multisig —
+ * is paused. By Phase 4 RBAC design the unfreezer is the cold multisig --
  * deliberately a higher bar than the freezer (warm multisig) since
  * thawing reverses a compliance freeze.
  *
@@ -45,12 +45,12 @@ async function main() {
   const provider = createProvider(network);
   anchor.setProvider(provider);
   const deployment = loadDeployment(network);
-  if (!deployment?.programs?.litePsm || !deployment.tokens?.okuMoney) {
+  if (!deployment?.programs?.litePsm || !deployment.tokens?.usdOku) {
     throw new Error(`No deployment for ${network}.`);
   }
 
   const litePsmId = new PublicKey(deployment.programs.litePsm);
-  const okuMoneyMint = new PublicKey(deployment.tokens.okuMoney);
+  const usdOkuMint = new PublicKey(deployment.tokens.usdOku);
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
@@ -62,7 +62,7 @@ async function main() {
   } else {
     const owner = new PublicKey(ownerArg!);
     targetAta = getAssociatedTokenAddressSync(
-      okuMoneyMint,
+      usdOkuMint,
       owner,
       false,
       TOKEN_2022_PROGRAM_ID
@@ -75,7 +75,7 @@ async function main() {
       'config PDA': psmConfig.toBase58(),
       'target owner': ownerLabel,
       'target ATA': targetAta.toBase58(),
-      'okuMoney mint': okuMoneyMint.toBase58(),
+      'usdOku mint': usdOkuMint.toBase58(),
       'signer (unfreezer)': provider.wallet.publicKey.toBase58(),
     })
   );
@@ -91,8 +91,8 @@ async function main() {
     .accountsPartial({
       unfreezer: provider.wallet.publicKey,
       config: psmConfig,
-      okuMoneyMint,
-      targetOkuMoneyAta: targetAta,
+      usdOkuMint,
+      targetUsdOkuAta: targetAta,
       token2022Program: TOKEN_2022_PROGRAM_ID,
     })
     .rpc();

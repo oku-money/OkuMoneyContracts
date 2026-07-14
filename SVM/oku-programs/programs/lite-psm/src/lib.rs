@@ -7,7 +7,7 @@
 //!
 //! v1 cross-chain transfers are handled off-chain by an orchestrator that
 //! holds the PSM operational roles (`buffer_depositor`, `queue_processor`,
-//! `rebaser`) and signs `mint_oku_m` / `redeem_oku_m` against its own
+//! `rebaser`) and signs `mint_usd_oku` / `redeem_usd_oku` against its own
 //! ATAs on each chain. There is no on-chain bridge program.
 //!
 //! Inline `// see SVM/README.md` comments throughout this crate point
@@ -48,7 +48,7 @@ pub mod state;
 use contexts::*;
 use roles::*;
 
-declare_id!("3KZtxxYXD4tMZvVZk4EhCRxoTorBDZyJZuLE3znQ9kF1");
+declare_id!("App49HmtSBMwh42tUpZT7gSbEbq7HiA6QED2BBnXtzxo");
 
 // `auditors` and `acknowledgements` are intentionally omitted until an audit
 // is complete; populate them in a follow-up commit.
@@ -79,66 +79,39 @@ pub mod lite_psm {
         instructions::init::setup_redemption_queue(ctx)
     }
 
-    pub fn setup_oku_money_escrow(ctx: Context<SetupOkuMoneyEscrow>) -> Result<()> {
-        instructions::init::setup_oku_money_escrow(ctx)
+    pub fn setup_usd_oku_escrow(ctx: Context<SetupUsdOkuEscrow>) -> Result<()> {
+        instructions::init::setup_usd_oku_escrow(ctx)
     }
 
     // ===== PSM Operations =====
 
-    /// Mint OkuMoney with USDC (price-aware)
-    /// oku_m_amount = usdc_amount * PRECISION / oku_m_price
-    pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
-        instructions::psm::mint_oku_m(ctx, usdc_amount)
-    }
-
-    // ===== Migration =====
-
-    /// One-time migration: extend PsmConfig from 674 -> 714 bytes to
-    /// accommodate the `direct_minter` + `direct_minter_allowance` fields.
-    /// Must be signed by the current `role_admin`.
-    pub fn migrate_psm_config(ctx: Context<MigratePsmConfig>) -> Result<()> {
-        instructions::direct_mint::migrate_psm_config(ctx)
-    }
-
-    /// One-time migration: extend PsmConfig from 594 -> 634 bytes to
-    /// accommodate the `direct_burner` + `direct_burner_allowance` fields.
-    /// Must be signed by the current `role_admin`.
-    pub fn migrate_psm_config_v2(ctx: Context<MigratePsmConfigV2>) -> Result<()> {
-        instructions::direct_burn::migrate_psm_config_v2(ctx)
+    /// Mint usdOku with USDC (multiplier-aware)
+    /// raw_usd_oku_amount = usdc_amount * PRECISION / multiplier
+    pub fn mint_usd_oku(ctx: Context<MintUsdOku>, usdc_amount: u64) -> Result<()> {
+        instructions::psm::mint_usd_oku(ctx, usdc_amount)
     }
 
     // ===== Direct Mint (fiat on-ramp) =====
 
-    /// Mint OkuMoney directly without USDC (permissioned — `direct_minter` only).
-    /// Matches EVM `OkuMoney.mint(to, amount)` called by a non-PSM `OKUM_MINTER`.
-    pub fn mint_oku_m_direct(ctx: Context<MintOkuMDirect>, oku_m_amount: u64) -> Result<()> {
-        instructions::direct_mint::mint_oku_m_direct(ctx, oku_m_amount)
-    }
-
-    /// Mint OkuMoney and wrap into usdOku in a single instruction
-    /// (permissioned — `direct_minter` only). Matches EVM `LitePSM.mintUsdOku`
-    /// convenience pattern without USDC.
-    pub fn mint_usd_oku_direct(
-        ctx: Context<MintUsdOkuDirect>,
-        oku_m_amount: u64,
-        min_shares_out: u64,
-    ) -> Result<()> {
-        instructions::direct_mint::mint_usd_oku_direct(ctx, oku_m_amount, min_shares_out)
+    /// Mint usdOku directly without USDC (permissioned -- `direct_minter` only).
+    /// Matches EVM `usdOku.mint(to, amount)` called by a non-PSM `OKUM_MINTER`.
+    pub fn mint_usd_oku_direct(ctx: Context<MintUsdOkuDirect>, raw_amount: u64) -> Result<()> {
+        instructions::direct_mint::mint_usd_oku_direct(ctx, raw_amount)
     }
 
     // ===== Direct Burn (bridge / off-ramp) =====
 
-    /// Burn OkuMoney directly without USDC payout (permissioned --
-    /// `direct_burner` only). Matches EVM `OkuMoney.burn(amount)` called
+    /// Burn usdOku directly without USDC payout (permissioned --
+    /// `direct_burner` only). Matches EVM `usdOku.burn(amount)` called
     /// by a non-PSM `OKUM_BURNER`. Enables SVM->EVM bridging.
-    pub fn burn_oku_m_direct(ctx: Context<BurnOkuMDirect>, oku_m_amount: u64) -> Result<()> {
-        instructions::direct_burn::burn_oku_m_direct(ctx, oku_m_amount)
+    pub fn burn_usd_oku_direct(ctx: Context<BurnUsdOkuDirect>, raw_amount: u64) -> Result<()> {
+        instructions::direct_burn::burn_usd_oku_direct(ctx, raw_amount)
     }
 
-    /// Redeem OkuMoney for USDC (price-aware)
-    /// usdc_amount = oku_m_amount * oku_m_price / PRECISION
-    pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
-        instructions::psm::redeem_oku_m(ctx, oku_m_amount)
+    /// Redeem usdOku for USDC (multiplier-aware)
+    /// usdc_amount = raw_usd_oku_amount * multiplier / PRECISION
+    pub fn redeem_usd_oku(ctx: Context<RedeemUsdOku>, raw_usd_oku_amount: u64) -> Result<()> {
+        instructions::psm::redeem_usd_oku(ctx, raw_usd_oku_amount)
     }
 
     pub fn process_queue<'info>(
@@ -156,7 +129,7 @@ pub mod lite_psm {
         instructions::psm::withdraw_buffer(ctx, amount)
     }
 
-    /// Rescue a stuck queue entry — returns escrowed OkuMoney to recipient.
+    /// Rescue a stuck queue entry — returns escrowed usdOku to recipient.
     /// Only queue_processor can call (matches EVM's rescueQueueEntry).
     ///
     /// `queue_index` is u64 — indexer / orchestrator code must pass
@@ -167,7 +140,7 @@ pub mod lite_psm {
 
     /// Permissionless self-rescue (cycle 4 / PSM-06).
     ///
-    /// Any user can reclaim their own queued OkuMoney without operator
+    /// Any user can reclaim their own queued usdOku without operator
     /// involvement, unblocking the head-pin DoS where a frozen ATA on
     /// the head entry stalls every subsequent `process_queue` call.
     /// Signer must be the entry's original queued user; recipient ATA
@@ -238,13 +211,13 @@ pub mod lite_psm {
 
     // ===== Yield Operations =====
 
-    /// Set OkuMoney price directly (REBASER only)
+    /// Set usdOku multiplier directly (REBASER only)
     /// Sets last_yield_distribution_slot for sandwich prevention
-    pub fn set_oku_m_price(ctx: Context<SetOkuMPrice>, new_multiplier: u64) -> Result<()> {
-        instructions::yield_ops::set_oku_m_price(ctx, new_multiplier)
+    pub fn set_multiplier(ctx: Context<SetMultiplier>, new_multiplier: u64) -> Result<()> {
+        instructions::yield_ops::set_multiplier(ctx, new_multiplier)
     }
 
-    /// Distribute yield across all OkuMoney holders (REBASER only)
+    /// Distribute yield across all usdOku holders (REBASER only)
     /// new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)
     pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Result<()> {
         instructions::yield_ops::distribute_yield(ctx, yield_amount)

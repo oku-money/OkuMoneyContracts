@@ -2,7 +2,7 @@
  * Rescue a stuck redemption-queue entry (queue_processor-gated on SVM).
  *
  * Wraps `lite_psm::rescue_queue_entry(queue_index)`. Returns the escrowed
- * OkuMoney for the entry to `--recipient`, then clears the slot in the
+ * usdOku for the entry to `--recipient`, then clears the slot in the
  * ring buffer (subsequent `process_queue` calls will skip it).
  *
  * Usage:
@@ -59,22 +59,22 @@ async function main() {
   const provider = createProvider(network);
   anchor.setProvider(provider);
   const deployment = loadDeployment(network);
-  if (!deployment?.programs?.litePsm || !deployment.tokens?.okuMoney) {
+  if (!deployment?.programs?.litePsm || !deployment.tokens?.usdOku) {
     throw new Error(`No deployment for ${network}.`);
   }
 
   const litePsmId = new PublicKey(deployment.programs.litePsm);
-  const okuMoneyMint = new PublicKey(deployment.tokens.okuMoney);
+  const usdOkuMint = new PublicKey(deployment.tokens.usdOku);
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
   const [redemptionQueue] = deriveRedemptionQueuePDA(litePsmId);
 
   const cfg = await program.account.psmConfig.fetch(psmConfig);
-  const vaultOkuMoney = cfg.vaultOkuMoney as PublicKey;
+  const vaultUsdOku = cfg.vaultUsdOku as PublicKey;
 
-  // Derive the recipient's OkuMoney ATA (Token-2022).
-  const recipientOkuMoneyAta = getAssociatedTokenAddressSync(
-    okuMoneyMint,
+  // Derive the recipient's usdOku ATA (Token-2022).
+  const recipientUsdOkuAta = getAssociatedTokenAddressSync(
+    usdOkuMint,
     recipientOwner,
     false,
     TOKEN_2022_PROGRAM_ID
@@ -91,22 +91,22 @@ async function main() {
     );
   }
   const slot = Number(absolute % QUEUE_MAX_ENTRIES);
-  const entry = (queue.entries as Array<{ user: PublicKey; okuMAmount: anchor.BN }>)[slot];
+  const entry = (queue.entries as Array<{ user: PublicKey; usdOkuAmount: anchor.BN }>)[slot];
 
   logger.info(
     summaryBlock('rescue_queue_entry()', {
       'config PDA': psmConfig.toBase58(),
       'queue PDA': redemptionQueue.toBase58(),
-      'okuMoneyMint': okuMoneyMint.toBase58(),
-      'vault OkuMoney': vaultOkuMoney.toBase58(),
+      'usdOkuMint': usdOkuMint.toBase58(),
+      'vault usdOku': vaultUsdOku.toBase58(),
       'queue head': head.toString(),
       'queue tail': tail.toString(),
       'absolute index': absolute.toString(),
       'ring slot': String(slot),
       'entry user (original)': entry.user.toBase58(),
-      'entry okuM (raw)': entry.okuMAmount.toString(),
+      'entry usdOku (raw)': entry.usdOkuAmount.toString(),
       'recipient owner': recipientOwner.toBase58(),
-      'recipient OkuM ATA': recipientOkuMoneyAta.toBase58(),
+      'recipient usdOku ATA': recipientUsdOkuAta.toBase58(),
       'signer (queue_processor)': provider.wallet.publicKey.toBase58(),
     })
   );
@@ -114,7 +114,7 @@ async function main() {
   if (isDryRun()) return logger.success('--dry-run set; not submitting.');
   await confirmIfMainnet(
     network,
-    `rescue_queue_entry(index=${absolute}) on mainnet — returns escrowed OkuM to ${recipientOwner.toBase58()}`
+    `rescue_queue_entry(index=${absolute}) on mainnet — returns escrowed usdOku to ${recipientOwner.toBase58()}`
   );
 
   const sig = await program.methods
@@ -123,9 +123,9 @@ async function main() {
       queueProcessor: provider.wallet.publicKey,
       config: psmConfig,
       redemptionQueue,
-      okuMoneyMint,
-      vaultOkuMoney,
-      recipientOkuMoneyAta,
+      usdOkuMint,
+      vaultUsdOku,
+      recipientUsdOkuAta,
       token2022Program: TOKEN_2022_PROGRAM_ID,
     })
     .rpc();

@@ -1,4 +1,4 @@
-//! # OkuMoney Lite-PSM Events
+//! # usdOku Lite-PSM Events
 //!
 //! Event definitions for the Lite-PSM program.
 //! Aligned with EVM contract events from `LitePSM.sol` and `RedemptionQueue.sol`.
@@ -36,7 +36,7 @@ use anchor_lang::prelude::*;
 pub struct InitializeEvent {
     pub role_admin: Pubkey,
     pub usdc_mint: Pubkey,
-    pub oku_money_mint: Pubkey,
+    pub usd_oku_mint: Pubkey,
     pub max_supply: u64,
 }
 
@@ -50,61 +50,61 @@ pub struct QueueInitializedEvent {
     pub max_entries: u32,
 }
 
-/// Emitted when the OkuMoney escrow vault is wired into config.
+/// Emitted when the usdOku escrow vault is wired into config.
 /// Cycle 4 (PSM-22): added so the final init step is observable.
 #[event]
 pub struct EscrowInitializedEvent {
-    pub vault_oku_money: Pubkey,
+    pub vault_usd_oku: Pubkey,
 }
 
-/// Emitted when OkuMoney is minted via PSM.
-/// EVM equivalent: `MintNote(address indexed user, uint256 usdcAmount, uint256 okuMAmount, uint256 okuMMultiplier)`
+/// Emitted when usdOku is minted via PSM.
+/// EVM equivalent: `MintNote(address indexed user, uint256 usdcAmount, uint256 rawUsdOkuAmount, uint256 multiplier)`
 #[event]
 pub struct MintEvent {
     /// User who minted
     pub user: Pubkey,
     /// USDC deposited (6 decimals)
     pub usdc_amount: u64,
-    /// OkuMoney minted (6 decimals)
-    pub oku_m_amount: u64,
-    /// Dollar value of the minted amount (oku_m_amount * oku_m_price / PRECISION)
+    /// usdOku raw amount minted (6 decimals)
+    pub raw_usd_oku_amount: u64,
+    /// Dollar value of the minted amount (raw_usd_oku_amount * multiplier / PRECISION)
     pub dollar_value: u64,
-    /// OkuMoney price multiplier at time of mint (1e9 = $1.00)
-    /// EVM equivalent: okuMMultiplier
-    pub oku_m_price: u64,
-    /// OkuMoney supply AFTER the mint completed. Cycle 4 (PSM-23):
+    /// usdOku multiplier at time of mint (1e9 = $1.00)
+    /// EVM equivalent: multiplier
+    pub multiplier: u64,
+    /// usdOku supply AFTER the mint completed. Cycle 4 (PSM-23):
     /// added for indexing parity with `YieldDistributed` /
-    /// `OkuMPriceUpdated` (both of which emit `total_supply`).
+    /// `MultiplierUpdated` (both of which emit `total_supply`).
     pub new_total_supply: u64,
 }
 
-/// Emitted when OkuMoney is redeemed for USDC (instant redemption).
-/// EVM equivalent: `RedeemNote(address indexed user, uint256 okuMIn, uint256 usdcOut, uint256 okuMMultiplier)`
+/// Emitted when usdOku is redeemed for USDC (instant redemption).
+/// EVM equivalent: `RedeemNote(address indexed user, uint256 rawUsdOkuIn, uint256 usdcOut, uint256 multiplier)`
 #[event]
 pub struct RedeemEvent {
     /// User who redeemed
     pub user: Pubkey,
-    /// OkuMoney burned (6 decimals)
-    pub oku_m_amount: u64,
+    /// usdOku raw amount burned (6 decimals)
+    pub raw_usd_oku_amount: u64,
     /// USDC received (6 decimals)
     pub usdc_amount: u64,
     /// Dollar value of the redeemed amount
     pub dollar_value: u64,
-    /// OkuMoney price multiplier at time of redeem (1e9 = $1.00)
-    /// EVM equivalent: okuMMultiplier
-    pub oku_m_price: u64,
-    /// OkuMoney supply AFTER the burn completed. Cycle 4 (PSM-23).
+    /// usdOku multiplier at time of redeem (1e9 = $1.00)
+    /// EVM equivalent: multiplier
+    pub multiplier: u64,
+    /// usdOku supply AFTER the burn completed. Cycle 4 (PSM-23).
     pub new_total_supply: u64,
 }
 
 /// Emitted when a redemption is queued (insufficient buffer).
-/// EVM equivalent: `RedemptionQueued(address indexed user, uint256 okuMAmount, uint256 dollarValue, uint256 position, uint256 queueLength)`
+/// EVM equivalent: `RedemptionQueued(address indexed user, uint256 rawUsdOkuAmount, uint256 dollarValue, uint256 position, uint256 queueLength)`
 #[event]
 pub struct RedemptionQueuedEvent {
     /// User who is owed redemption
     pub user: Pubkey,
-    /// OkuMoney amount held in escrow (6 decimals)
-    pub oku_m_amount: u64,
+    /// usdOku raw amount held in escrow (6 decimals)
+    pub raw_usd_oku_amount: u64,
     /// Dollar value at time of queueing
     pub dollar_value: u64,
     /// Position in queue (0-indexed; absolute tail index, not ring slot).
@@ -114,20 +114,20 @@ pub struct RedemptionQueuedEvent {
 }
 
 /// Emitted when a queued redemption is processed.
-/// EVM equivalent: `RedemptionProcessed(address indexed user, uint256 okuMAmount, uint256 dollarValue, uint256 usdcAmount, uint256 waitTime)`
+/// EVM equivalent: `RedemptionProcessed(address indexed user, uint256 rawUsdOkuAmount, uint256 dollarValue, uint256 usdcAmount, uint256 waitTime)`
 #[event]
 pub struct RedemptionProcessedEvent {
     /// User who received redemption
     pub user: Pubkey,
-    /// OkuMoney amount that was escrowed (6 decimals)
-    pub oku_m_amount: u64,
+    /// usdOku raw amount that was escrowed (6 decimals)
+    pub raw_usd_oku_amount: u64,
     /// Dollar value at time of processing
     pub dollar_value: u64,
     /// USDC received (6 decimals)
     pub usdc_amount: u64,
     /// Time spent in queue (seconds)
     pub wait_time: i64,
-    /// OkuMoney supply AFTER the per-entry burn. Cycle 4 (PSM-23):
+    /// usdOku supply AFTER the per-entry burn. Cycle 4 (PSM-23):
     /// added so indexers can reconstruct supply trajectory through the
     /// queue-drain phase without summing batch events. Note that
     /// because `process_queue` emits one of these per processed entry,
@@ -162,17 +162,17 @@ pub struct BufferRefilledEvent {
 }
 
 /// Emitted when a stuck queue entry is rescued.
-/// EVM equivalent: `RedemptionRescued(uint256 indexed index, address originalUser, address recipient, uint256 okuMAmount, uint256 dollarValue)`
+/// EVM equivalent: `RedemptionRescued(uint256 indexed index, address originalUser, address recipient, uint256 rawUsdOkuAmount, uint256 dollarValue)`
 #[event]
 pub struct RedemptionRescuedEvent {
     /// Absolute index of the rescued entry.
     pub queue_index: u64,
     /// Original user who was owed redemption
     pub original_user: Pubkey,
-    /// Recipient who received the OkuMoney
+    /// Recipient who received the usdOku
     pub recipient: Pubkey,
-    /// OkuMoney amount returned (6 decimals)
-    pub oku_m_amount: u64,
+    /// usdOku raw amount returned (6 decimals)
+    pub raw_usd_oku_amount: u64,
     /// Dollar value at time of rescue
     pub dollar_value: u64,
 }
@@ -252,50 +252,27 @@ pub struct DirectMinterAllowanceUpdatedEvent {
     pub new_allowance: u64,
 }
 
-/// Emitted when OkuMoney is minted via the permissioned direct-mint path
+/// Emitted when usdOku is minted via the permissioned direct-mint path
 /// (no USDC required). EVM equivalent: the Transfer event from
-/// `OkuMoney.mint(to, amount)` called by a non-PSM `OKUM_MINTER`.
+/// `usdOku.mint(to, amount)` called by a non-PSM minter.
 #[event]
 pub struct DirectMintEvent {
     /// Operator who initiated the mint
     pub direct_minter: Pubkey,
-    /// Recipient of the minted OkuMoney
+    /// Recipient of the minted usdOku
     pub recipient: Pubkey,
-    /// OkuMoney minted (6 decimals)
-    pub oku_m_amount: u64,
-    /// OkuMoney price multiplier at time of mint (1e9 = $1.00)
-    pub oku_m_price: u64,
+    /// usdOku raw amount minted (6 decimals)
+    pub raw_usd_oku_amount: u64,
+    /// usdOku multiplier at time of mint (1e9 = $1.00)
+    pub multiplier: u64,
     /// Dollar value of the minted amount
     pub dollar_value: u64,
-    /// OkuMoney supply AFTER the mint completed
-    pub new_total_supply: u64,
-}
-
-/// Emitted when OkuMoney is direct-minted and immediately wrapped into
-/// usdOku in a single instruction. EVM equivalent: a hypothetical
-/// `mintUsdOkuDirect` convenience path using `OkuMoney.mint` + `wrap`.
-#[event]
-pub struct DirectMintUsdOkuEvent {
-    /// Operator who initiated the mint+wrap
-    pub direct_minter: Pubkey,
-    /// Recipient of the minted usdOku shares
-    pub recipient: Pubkey,
-    /// OkuMoney minted and wrapped (6 decimals)
-    pub oku_m_amount: u64,
-    /// usdOku shares minted to the recipient
-    pub shares_minted: u64,
-    /// OkuMoney price multiplier at time of mint (1e9 = $1.00)
-    pub oku_m_price: u64,
-    /// USD multiplier at time of wrap (1e9 = $1.00)
-    pub usd_multiplier: u64,
-    /// Dollar value of the minted amount
-    pub dollar_value: u64,
-    /// OkuMoney supply AFTER the mint completed
+    /// usdOku supply AFTER the mint completed
     pub new_total_supply: u64,
 }
 
 /// Emitted when direct-burner allowance is updated.
-/// EVM equivalent: allowance management for the `OKUM_BURNER` address.
+/// EVM equivalent: allowance management for the burner address.
 #[event]
 pub struct DirectBurnerAllowanceUpdatedEvent {
     /// Caller of the update (`allowance_manager` authority).
@@ -304,35 +281,35 @@ pub struct DirectBurnerAllowanceUpdatedEvent {
     pub new_allowance: u64,
 }
 
-/// Emitted when OkuMoney is burned via the permissioned direct-burn path
+/// Emitted when usdOku is burned via the permissioned direct-burn path
 /// (no USDC payout). EVM equivalent: the Transfer-to-zero event from
-/// `OkuMoney.burn(amount)` called by a non-PSM `OKUM_BURNER`.
+/// `usdOku.burn(amount)` called by a non-PSM burner.
 #[event]
 pub struct DirectBurnEvent {
     /// Operator who initiated the burn
     pub direct_burner: Pubkey,
-    /// OkuMoney burned (6 decimals)
-    pub oku_m_amount: u64,
-    /// OkuMoney price multiplier at time of burn (1e9 = $1.00)
-    pub oku_m_price: u64,
+    /// usdOku raw amount burned (6 decimals)
+    pub raw_usd_oku_amount: u64,
+    /// usdOku multiplier at time of burn (1e9 = $1.00)
+    pub multiplier: u64,
     /// Dollar value of the burned amount
     pub dollar_value: u64,
-    /// OkuMoney supply AFTER the burn completed
+    /// usdOku supply AFTER the burn completed
     pub new_total_supply: u64,
 }
 
-/// Emitted when OkuMoney price is updated directly.
-/// EVM equivalent: `OkuMMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`
+/// Emitted when usdOku multiplier is updated directly.
+/// EVM equivalent: `MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`
 #[event]
-pub struct OkuMPriceUpdated {
+pub struct MultiplierUpdated {
     pub old_multiplier: u64,
     pub new_multiplier: u64,
-    /// Total OkuMoney supply at time of update
+    /// Total usdOku supply at time of update
     pub total_supply: u64,
     pub timestamp: i64,
 }
 
-/// Emitted when yield is distributed across all OkuMoney holders.
+/// Emitted when yield is distributed across all usdOku holders.
 /// EVM equivalent: `YieldDistributed(uint256 yieldAmount, uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`
 #[event]
 pub struct YieldDistributed {
@@ -340,7 +317,7 @@ pub struct YieldDistributed {
     pub yield_amount: u64,
     pub old_multiplier: u64,
     pub new_multiplier: u64,
-    /// Total OkuMoney supply at time of distribution
+    /// Total usdOku supply at time of distribution
     pub total_supply: u64,
     pub timestamp: i64,
 }

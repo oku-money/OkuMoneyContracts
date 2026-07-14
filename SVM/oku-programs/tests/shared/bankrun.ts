@@ -31,7 +31,7 @@
  */
 import { startAnchor, BankrunProvider } from 'anchor-bankrun';
 import * as anchor from '@anchor-lang/core';
-import { Program, Idl } from '@anchor-lang/core';
+import { Program, Idl, BN } from '@anchor-lang/core';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -53,10 +53,7 @@ import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   MINT_SIZE,
-  ExtensionType,
-  getMintLen,
   createInitializeMintInstruction,
-  createInitializeInterestBearingMintInstruction,
   createMintToInstruction,
   createAssociatedTokenAccountInstruction,
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -72,8 +69,7 @@ export interface BankrunHarness {
   context: ProgramTestContext;
   provider: BankrunProvider;
   payer: Keypair;
-  /** The lite-psm program. For the other workspace programs use
-   *  `getProgram(harness, OkuDollarIdl)` etc. */
+  /** The lite-psm program. */
   program: Program<LitePsm>;
 }
 
@@ -116,9 +112,23 @@ export interface StartBankrunOptions {
 export async function startBankrun(
   opts: StartBankrunOptions = {}
 ): Promise<BankrunHarness> {
+  // Override the built-in Token-2022 binary with a mainnet dump that
+  // supports the ScaledUiAmount extension. The version bundled with
+  // solana-bankrun 0.4.0 (solana-program-test 1.18.x) predates
+  // ScaledUiAmount (instruction index 43) and returns InvalidInstruction.
+  //
+  // The binary lives at `target/deploy/spl_token_2022.so` and is
+  // regenerated via `make fetch-token-2022`. Once solana-bankrun ships
+  // a version with ScaledUiAmount support, this override can be removed.
+  const token2022Program: AddedProgram = {
+    name: "spl_token_2022",
+    programId: TOKEN_2022_PROGRAM_ID,
+  };
+  const programs = [token2022Program, ...(opts.extraPrograms ?? [])];
+
   const context = await startAnchor(
     '.',
-    opts.extraPrograms ?? [],
+    programs,
     opts.extraAccounts ?? [],
     opts.computeMaxUnits
   );
@@ -170,11 +180,11 @@ export function loadProgramFromIdl<T extends Idl>(
 }
 
 /**
- * Resolve any other workspace program (e.g. oku_dollar) from the same
- * harness. Loads the IDL from `target/idl/<name>.json`
- * and binds it to the harness's provider. Bypasses `anchor.workspace`'s
- * process-level cache (which would otherwise leak provider bindings
- * across sequential bankrun-flavoured test files).
+ * Resolve another workspace program from the same harness. Loads the IDL
+ * from `target/idl/<name>.json` and binds it to the harness's provider.
+ * Bypasses `anchor.workspace`'s process-level cache (which would
+ * otherwise leak provider bindings across sequential bankrun-flavoured
+ * test files).
  */
 export function getProgram<I extends Idl>(
   h: BankrunHarness,
@@ -343,53 +353,6 @@ export async function createMintViaBankrun(
 }
 
 /**
- * Create a Token-2022 mint with the InterestBearing + (optional) other
- * extensions enabled. Used by the OkuMoney mint setup in tests.
- *
- * `extensions` defaults to `[InterestBearingConfig]`; pass more if a test
- * needs to exercise additional extensions.
- */
-export async function createOkuMoneyMintViaBankrun(
-  h: BankrunHarness,
-  mintAuthority: PublicKey,
-  freezeAuthority: PublicKey | null,
-  decimals: number,
-  rateAuthority: PublicKey,
-  initialRateBps: number,
-  keypair: Keypair = Keypair.generate(),
-  extensions: ExtensionType[] = [ExtensionType.InterestBearingConfig]
-): Promise<PublicKey> {
-  const space = getMintLen(extensions);
-  const rent = await h.context.banksClient.getRent();
-  const lamports = rent.minimumBalance(BigInt(space));
-  const tx = new Transaction();
-  tx.add(
-    SystemProgram.createAccount({
-      fromPubkey: h.payer.publicKey,
-      newAccountPubkey: keypair.publicKey,
-      lamports: Number(lamports),
-      space,
-      programId: TOKEN_2022_PROGRAM_ID,
-    }),
-    createInitializeInterestBearingMintInstruction(
-      keypair.publicKey,
-      rateAuthority,
-      initialRateBps,
-      TOKEN_2022_PROGRAM_ID
-    ),
-    createInitializeMintInstruction(
-      keypair.publicKey,
-      decimals,
-      mintAuthority,
-      freezeAuthority,
-      TOKEN_2022_PROGRAM_ID
-    )
-  );
-  await h.provider.sendAndConfirm!(tx, [keypair] as Signer[]);
-  return keypair.publicKey;
-}
-
-/**
  * Mint `amount` tokens to `destination` ATA, signing as `authority`.
  * Replaces `@solana/spl-token::mintTo`, which is `Connection`-bound.
  */
@@ -470,6 +433,59 @@ export async function tryProcess(
   }
   tx.partialSign(h.payer);
   return h.context.banksClient.tryProcessTransaction(tx);
+}
+
+/**
+ * Read the current effective multiplier from a usdOku mint's
+ * ScaledUiAmountConfig extension. Returns the multiplier as a BN
+ * scaled by PRECISION (1e9), matching the on-chain representation.
+ *
+ * The ScaledUiAmountConfig extension (ExtensionType 25 = 0x19) stores:
+ *   - authority (32 bytes)
+ *   - multiplier (f64, 8 bytes)
+ *   - new_multiplier_effective_timestamp (i64, 8 bytes)
+ *   - new_multiplier (f64, 8 bytes)
+ *
+ * Uses the same zero-init guard as the on-chain `read_multiplier`:
+ * if `new_multiplier > 0` and current time >= effective_timestamp,
+ * returns new_multiplier; otherwise returns base multiplier.
+ */
+export async function readMultiplierFromMint(
+  h: BankrunHarness,
+  mintPubkey: PublicKey,
+): Promise<BN> {
+  const PRECISION = 1_000_000_000;
+  const SCALED_UI_AMOUNT_TYPE = 25; // ExtensionType::ScaledUiAmount
+
+  const acct = await h.provider.connection.getAccountInfo(mintPubkey);
+  if (!acct) throw new Error("Mint account not found");
+
+  const data = acct.data;
+  // TLV area starts at byte 166 (82 mint + 83 padding + 1 account type)
+  for (let i = 166; i < data.length - 4; i++) {
+    const extType = data[i] | (data[i + 1] << 8);
+    if (extType === SCALED_UI_AMOUNT_TYPE) {
+      const len = data[i + 2] | (data[i + 3] << 8);
+      const extData = data.slice(i + 4, i + 4 + len);
+      if (extData.length < 56) throw new Error("ScaledUiAmountConfig too short");
+
+      const multiplier = Buffer.from(extData.slice(32, 40)).readDoubleLE(0);
+      const effectiveTs = Number(Buffer.from(extData.slice(40, 48)).readBigInt64LE(0));
+      const newMultiplier = Buffer.from(extData.slice(48, 56)).readDoubleLE(0);
+
+      // Get current cluster time
+      const clock = await h.context.banksClient.getClock();
+      const unixTimestamp = Number(clock.unixTimestamp);
+
+      // Same zero-init guard as the on-chain read_multiplier
+      const effective = (newMultiplier > 0 && unixTimestamp >= effectiveTs)
+        ? newMultiplier
+        : multiplier;
+
+      return new BN(Math.round(effective * PRECISION));
+    }
+  }
+  throw new Error("ScaledUiAmountConfig extension not found on mint");
 }
 
 /**

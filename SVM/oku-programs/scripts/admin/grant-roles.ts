@@ -1,14 +1,14 @@
 /**
  * Grant all non-RoleAdmin roles to a master EOA.
  *
- * Idempotently rotates every authority on both lite-psm (11 roles) and
- * oku-dollar (4 roles) to a single "master" pubkey so that one dev
- * wallet can do everything during testing.
+ * Idempotently rotates every authority on lite-psm (11 roles)
+ * to a single "master" pubkey so that one dev wallet can do everything
+ * during testing.
  *
  * RoleAdmin is intentionally skipped -- it uses a two-step transfer
  * (propose + accept) and should be handled separately if needed.
  *
- * The signer must hold `role_admin` on both programs (the deployer
+ * The signer must hold `role_admin` on the PSM program (the deployer
  * wallet on testnet deployments).
  *
  * Usage:
@@ -35,11 +35,10 @@ import {
 } from '@solana/spl-token';
 import * as os from 'os';
 import { LitePsm } from '../../target/types/lite_psm';
-import { OkuDollar } from '../../target/types/oku_dollar';
 import { createProvider, detectNetwork, loadKeypair } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
-import { derivePsmConfigPDA, deriveVaultConfigPDA } from '../utils/pdaHelpers';
+import { derivePsmConfigPDA } from '../utils/pdaHelpers';
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 
 // ============================================================================
@@ -87,16 +86,8 @@ const PSM_ROLES = [
   'directMinter',
 ] as const;
 
-/** Direct-minter allowance to set after granting roles (1M OkuMoney, 6 decimals). */
+/** Direct-minter allowance to set after granting roles (1M usdOku, 6 decimals). */
 const DIRECT_MINTER_ALLOWANCE = DIRECT_MINTER_ALLOWANCE_CONST;
-
-/** OkuDollar vault roles (excluding roleAdmin). */
-const VAULT_ROLES = [
-  'pauser',
-  'unpauser',
-  'usdRebaser',
-  'reserveManager',
-] as const;
 
 // ============================================================================
 // Types
@@ -131,19 +122,12 @@ async function main() {
   if (!deployment?.programs?.litePsm) {
     throw new Error(`No lite-psm deployment for ${network}; run deploy:programs first.`);
   }
-  const okuDollarProgramId = deployment.programs.okuDollarProgram ?? deployment.programs.okuDollar;
-  if (!okuDollarProgramId) {
-    throw new Error(`No oku-dollar deployment for ${network}; run deploy:programs first.`);
-  }
 
   const litePsmId = new PublicKey(deployment.programs.litePsm);
-  const okuDollarId = new PublicKey(okuDollarProgramId);
 
   const psmProgram = anchor.workspace.LitePsm as Program<LitePsm>;
-  const vaultProgram = anchor.workspace.OkuDollar as Program<OkuDollar>;
 
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
-  const [vaultConfig] = deriveVaultConfigPDA(okuDollarId);
 
   const roleAdmin = provider.wallet.publicKey;
 
@@ -153,9 +137,7 @@ async function main() {
       master: MASTER_PUBKEY.toBase58(),
       'signer (role_admin)': roleAdmin.toBase58(),
       'PSM config': psmConfig.toBase58(),
-      'Vault config': vaultConfig.toBase58(),
       'PSM roles': `${PSM_ROLES.length} (roleAdmin skipped, includes directMinter)`,
-      'Vault roles': `${VAULT_ROLES.length} (roleAdmin skipped)`,
       'dry-run': String(dryRun),
     })
   );
@@ -271,57 +253,6 @@ async function main() {
     }
   }
 
-  // ---- Vault roles ----
-  logger.section('oku-dollar roles');
-
-  const vaultCfg = await vaultProgram.account.okuDollarConfig.fetch(vaultConfig);
-
-  const vaultRoleAdmin = vaultCfg.roleAdmin as PublicKey;
-  if (!vaultRoleAdmin.equals(roleAdmin)) {
-    throw new Error(
-      `Vault role_admin is ${vaultRoleAdmin.toBase58()} but signer is ${roleAdmin.toBase58()}.`
-    );
-  }
-
-  if (MASTER_PUBKEY.equals(vaultRoleAdmin)) {
-    throw new Error(
-      `Master pubkey equals Vault role_admin (${vaultRoleAdmin.toBase58()}). ` +
-        `Separation-of-duties guard would reject.`
-    );
-  }
-
-  for (const role of VAULT_ROLES) {
-    const current = (vaultCfg as any)[role] as PublicKey;
-    if (current && current.equals(MASTER_PUBKEY)) {
-      logger.info(`  ${role.padEnd(20)} already`);
-      results.push({ program: 'oku-dollar', role, status: 'already' });
-      continue;
-    }
-
-    if (dryRun) {
-      logger.info(`  ${role.padEnd(20)} would_grant (current: ${current?.toBase58() ?? '?'})`);
-      results.push({ program: 'oku-dollar', role, status: 'would_grant' });
-      continue;
-    }
-
-    try {
-      const roleEnum = { [role]: {} } as any;
-      const sig = await vaultProgram.methods
-        .setAuthority(roleEnum, MASTER_PUBKEY)
-        .accountsPartial({
-          roleAdmin,
-          config: vaultConfig,
-        })
-        .rpc();
-      logger.success(`  ${role.padEnd(20)} granted (tx: ${sig.slice(0, 20)}...)`);
-      results.push({ program: 'oku-dollar', role, status: 'granted' });
-    } catch (e: any) {
-      const msg = e?.message?.slice(0, 80) ?? String(e);
-      logger.error(`  ${role.padEnd(20)} error: ${msg}`);
-      results.push({ program: 'oku-dollar', role, status: 'error', detail: msg });
-    }
-  }
-
   // ---- Mint mock USDC to master EOA ----
   logger.section('Mock USDC mint');
 
@@ -427,7 +358,7 @@ async function main() {
   }
 
   logger.success(
-    `All ${PSM_ROLES.length + VAULT_ROLES.length} roles ` +
+    `All ${PSM_ROLES.length} roles ` +
       (dryRun ? 'would be ' : '') +
       `granted to ${MASTER_PUBKEY.toBase58()}`
   );

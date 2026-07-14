@@ -47,14 +47,14 @@ pub struct CapManager<'info> {
     )]
     pub config: Account<'info, PsmConfig>,
 
-    /// OkuMoney mint — read so `set_max_supply` can refuse a new cap below
+    /// usdOku mint -- read so `set_max_supply` can refuse a new cap below
     /// the current circulating supply (would silently brick all future
-    /// mints). EVM `OkuMoney.setMaxSupply` parity.
+    /// mints). EVM `usdOku.setMaxSupply` parity.
     #[account(
-        address = config.oku_money_mint,
+        address = config.usd_oku_mint,
         mint::token_program = token_2022_program,
     )]
-    pub oku_money_mint: InterfaceAccount<'info, MintInterface>,
+    pub usd_oku_mint: InterfaceAccount<'info, MintInterface>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }
@@ -85,20 +85,20 @@ pub struct FreezeAccount<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// OkuMoney mint (Token-2022)
+    /// usdOku mint (Token-2022)
     #[account(
-        address = config.oku_money_mint,
+        address = config.usd_oku_mint,
         mint::token_program = token_2022_program
     )]
-    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// Target account to freeze
     #[account(
         mut,
-        token::mint = oku_money_mint,
+        token::mint = usd_oku_mint,
         token::token_program = token_2022_program,
     )]
-    pub target_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub target_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }
@@ -115,20 +115,20 @@ pub struct ThawAccount<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// OkuMoney mint (Token-2022)
+    /// usdOku mint (Token-2022)
     #[account(
-        address = config.oku_money_mint,
+        address = config.usd_oku_mint,
         mint::token_program = token_2022_program
     )]
-    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// Target account to thaw
     #[account(
         mut,
-        token::mint = oku_money_mint,
+        token::mint = usd_oku_mint,
         token::token_program = token_2022_program,
     )]
-    pub target_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub target_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }

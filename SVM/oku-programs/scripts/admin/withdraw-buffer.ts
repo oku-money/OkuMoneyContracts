@@ -2,7 +2,7 @@
  * Withdraw USDC from the PSM's reserve buffer (buffer_withdrawer-gated).
  *
  * Wraps `lite_psm::withdraw_buffer(amount)`. The handler refuses to drain
- * below `total_queued_oku_m * oku_m_price`, preserving the reserve
+ * below `total_queued_usd_oku * multiplier`, preserving the reserve
  * earmarked for pending redemptions.
  *
  * Usage:
@@ -51,14 +51,14 @@ async function main() {
   if (
     !deployment?.programs?.litePsm ||
     !deployment.tokens?.usdc ||
-    !deployment.tokens?.okuMoney
+    !deployment.tokens?.usdOku
   ) {
     throw new Error(`No deployment for ${network}.`);
   }
 
   const litePsmId = new PublicKey(deployment.programs.litePsm);
   const usdcMint = new PublicKey(deployment.tokens.usdc);
-  const okuMoneyMint = new PublicKey(deployment.tokens.okuMoney);
+  const usdOkuMint = new PublicKey(deployment.tokens.usdOku);
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
   const [redemptionQueue] = deriveRedemptionQueuePDA(litePsmId);
@@ -95,7 +95,7 @@ async function main() {
       'config PDA': psmConfig.toBase58(),
       'queue PDA': redemptionQueue.toBase58(),
       'usdcMint': usdcMint.toBase58(),
-      'okuMoneyMint': okuMoneyMint.toBase58(),
+      'usdOkuMint': usdOkuMint.toBase58(),
       'vault USDC': vaultUsdc.toBase58(),
       'withdrawer ATA': withdrawerUsdcAta.toBase58(),
       'vault USDC (before)': vaultBefore,
@@ -117,7 +117,7 @@ async function main() {
       bufferWithdrawer: provider.wallet.publicKey,
       config: psmConfig,
       redemptionQueue,
-      okuMoneyMint,
+      usdOkuMint,
       withdrawerUsdcAta,
       vaultUsdc,
       usdcMint,

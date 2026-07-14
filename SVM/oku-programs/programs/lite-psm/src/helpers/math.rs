@@ -11,21 +11,23 @@ use crate::errors::LitePsmError;
 use anchor_lang::prelude::*;
 use oku_shared::math as shared;
 
-/// Convert OkuMoney amount to dollar value using `oku_m_price` with
-/// **floor** rounding. Use when the dollar figure is being credited to a
-/// user (user gets no more than they earned).
+/// Convert raw usdOku amount to dollar value using the multiplier from
+/// the ScaledUiAmount extension, with **floor** rounding. Use when the
+/// dollar figure is being credited to a user (user gets no more than
+/// they earned).
 ///
-/// Formula: `dollar_value = floor(oku_m_amount * oku_m_price / PRECISION)`.
+/// Formula: `dollar_value = floor(oku_m_amount * multiplier / PRECISION)`.
 pub fn oku_m_to_dollars(oku_m_amount: u64, oku_m_price: u64) -> Result<u64> {
     shared::oku_m_to_dollars(oku_m_amount, oku_m_price)
         .ok_or_else(|| error!(LitePsmError::Overflow))
 }
 
-/// Convert OkuMoney amount to dollar value using `oku_m_price` with
-/// **ceil** rounding. Use when the dollar figure becomes a protocol
-/// obligation (reserved-balance accounting in `withdraw_buffer`, e.g.).
+/// Convert raw usdOku amount to dollar value using the multiplier from
+/// the ScaledUiAmount extension, with **ceil** rounding. Use when the
+/// dollar figure becomes a protocol obligation (reserved-balance
+/// accounting in `withdraw_buffer`, e.g.).
 ///
-/// Formula: `dollar_value = ceil(oku_m_amount * oku_m_price / PRECISION)`.
+/// Formula: `dollar_value = ceil(oku_m_amount * multiplier / PRECISION)`.
 ///
 /// The semantic contract — over-reserve by at most one lamport per call
 /// rather than under-reserve by up to `queue_depth` lamports per batch —
@@ -37,10 +39,11 @@ pub fn oku_m_to_dollars_ceil(oku_m_amount: u64, oku_m_price: u64) -> Result<u64>
         .ok_or_else(|| error!(LitePsmError::Overflow))
 }
 
-/// Convert dollar value to OkuMoney amount using `oku_m_price`.
+/// Convert dollar value to raw usdOku amount using the multiplier from
+/// the ScaledUiAmount extension.
 ///
-/// Formula: `oku_m_amount = (dollar_value * PRECISION) / oku_m_price`.
-/// Rejects `oku_m_price == 0` with `ZeroAmount` (the program-side
+/// Formula: `oku_m_amount = (dollar_value * PRECISION) / multiplier`.
+/// Rejects `multiplier == 0` with `ZeroAmount` (the program-side
 /// invariant); pure overflow propagates as `Overflow`.
 pub fn dollars_to_oku_m(dollar_value: u64, oku_m_price: u64) -> Result<u64> {
     require!(oku_m_price > 0, LitePsmError::ZeroAmount);

@@ -9,7 +9,7 @@ use anchor_spl::{
 };
 
 #[derive(Accounts)]
-pub struct MintOkuM<'info> {
+pub struct MintUsdOku<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
@@ -24,19 +24,18 @@ pub struct MintOkuM<'info> {
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Account<'info, Mint>,
 
-    /// OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy
-    /// script chooses which extensions (if any) are configured at mint creation.
+    /// usdOku mint (Token-2022 with ScaledUiAmount extension).
     /// `mint::authority = config` is defense-in-depth: even if someone attempted
     /// an out-of-band mint-authority rotation (which requires a CPI signed by
     /// the current authority = config PDA, so it cannot happen without the
     /// program's consent), this constraint would catch it at deserialization.
     #[account(
         mut,
-        address = config.oku_money_mint,
+        address = config.usd_oku_mint,
         mint::authority = config,
         mint::token_program = token_2022_program
     )]
-    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// User's USDC account
     #[account(
@@ -47,15 +46,15 @@ pub struct MintOkuM<'info> {
     )]
     pub user_usdc_ata: Box<Account<'info, TokenAccount>>,
 
-    /// User's OkuMoney account
+    /// User's usdOku account
     #[account(
         init_if_needed,
         payer = user,
-        associated_token::mint = oku_money_mint,
+        associated_token::mint = usd_oku_mint,
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub user_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// PSM's USDC vault
     #[account(
@@ -71,7 +70,7 @@ pub struct MintOkuM<'info> {
 }
 
 #[derive(Accounts)]
-pub struct RedeemOkuM<'info> {
+pub struct RedeemUsdOku<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
@@ -98,15 +97,16 @@ pub struct RedeemOkuM<'info> {
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Box<Account<'info, Mint>>,
 
-    /// OkuMoney mint (Token-2022). `mint::authority = config` is defense-in-depth
-    /// (see rationale on `MintOkuM::oku_money_mint`).
+    /// usdOku mint (Token-2022 with ScaledUiAmount extension).
+    /// `mint::authority = config` is defense-in-depth
+    /// (see rationale on `MintUsdOku::usd_oku_mint`).
     #[account(
         mut,
-        address = config.oku_money_mint,
+        address = config.usd_oku_mint,
         mint::authority = config,
         mint::token_program = token_2022_program
     )]
-    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// User's USDC account
     #[account(
@@ -118,14 +118,14 @@ pub struct RedeemOkuM<'info> {
     )]
     pub user_usdc_ata: Box<Account<'info, TokenAccount>>,
 
-    /// User's OkuMoney account
+    /// User's usdOku account
     #[account(
         mut,
-        associated_token::mint = oku_money_mint,
+        associated_token::mint = usd_oku_mint,
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub user_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// PSM's USDC vault
     #[account(
@@ -134,20 +134,20 @@ pub struct RedeemOkuM<'info> {
     )]
     pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
-    /// PSM's OkuMoney escrow vault (for queued redemptions).
-    /// Pinned to `config.vault_oku_money` so a caller cannot substitute an
-    /// alternate config-owned OkuMoney ATA — without the explicit address
-    /// pin, any Token-2022 OkuMoney account whose authority is the config
+    /// PSM's usdOku escrow vault (for queued redemptions).
+    /// Pinned to `config.vault_usd_oku` so a caller cannot substitute an
+    /// alternate config-owned usdOku ATA — without the explicit address
+    /// pin, any Token-2022 usdOku account whose authority is the config
     /// PDA would satisfy the constraints and the user's escrowed tokens
     /// would be silently routed away from the canonical escrow.
     #[account(
         mut,
-        address = config.vault_oku_money,
-        token::mint = oku_money_mint,
+        address = config.vault_usd_oku,
+        token::mint = usd_oku_mint,
         token::authority = config,
         token::token_program = token_2022_program,
     )]
-    pub vault_oku_money: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub vault_usd_oku: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -168,7 +168,7 @@ pub struct ProcessQueue<'info> {
 
     /// Redemption queue (zero-copy). `process_queue` uses `load()`+`load_mut()`
     /// interleaved with CPIs to advance the head ring. See `bump` note on
-    /// `RedeemOkuM::redemption_queue`.
+    /// `RedeemUsdOku::redemption_queue`.
     #[account(
         mut,
         seeds = [RedemptionQueue::SEED],
@@ -176,16 +176,16 @@ pub struct ProcessQueue<'info> {
     )]
     pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
 
-    /// OkuMoney mint (Token-2022) — needed for burn CPI and price reads.
+    /// usdOku mint (Token-2022) — needed for burn CPI and multiplier reads.
     /// `mint::authority = config` is defense-in-depth (see rationale on
-    /// `MintOkuM::oku_money_mint`).
+    /// `MintUsdOku::usd_oku_mint`).
     #[account(
         mut,
-        address = config.oku_money_mint,
+        address = config.usd_oku_mint,
         mint::authority = config,
         mint::token_program = token_2022_program
     )]
-    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// PSM's USDC vault
     #[account(
@@ -194,16 +194,16 @@ pub struct ProcessQueue<'info> {
     )]
     pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
-    /// PSM's OkuMoney escrow vault - holds queued redemptions.
-    /// Pinned to `config.vault_oku_money` (see rationale on `RedeemOkuM`).
+    /// PSM's usdOku escrow vault - holds queued redemptions.
+    /// Pinned to `config.vault_usd_oku` (see rationale on `RedeemUsdOku`).
     #[account(
         mut,
-        address = config.vault_oku_money,
-        token::mint = oku_money_mint,
+        address = config.vault_usd_oku,
+        token::mint = usd_oku_mint,
         token::authority = config,
         token::token_program = token_2022_program,
     )]
-    pub vault_oku_money: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub vault_usd_oku: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
@@ -262,12 +262,12 @@ pub struct WithdrawBuffer<'info> {
     )]
     pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
 
-    /// OkuMoney mint - needed to read current price for reserve calculation
+    /// usdOku mint - needed to read current multiplier for reserve calculation
     #[account(
-        address = config.oku_money_mint,
+        address = config.usd_oku_mint,
         mint::token_program = token_2022_program
     )]
-    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// Buffer withdrawer's USDC account (destination)
     #[account(
@@ -292,19 +292,19 @@ pub struct WithdrawBuffer<'info> {
 }
 
 /// Permissionless self-rescue — any user can withdraw THEIR OWN queued
-/// OkuMoney back to themselves. Cycle 4 (PSM-06): the dual to operator
+/// usdOku back to themselves. Cycle 4 (PSM-06): the dual to operator
 /// `rescue_queue_entry`. Resolves the head-pin DoS where a frozen /
 /// wrong-owner ATA on the head entry indefinitely blocks `process_queue`
 /// for everyone downstream. The user whose entry is stuck can call this
 /// to clear their slot, which both unblocks the queue and returns their
-/// OkuMoney to a recipient ATA they control.
+/// usdOku to a recipient ATA they control.
 ///
 /// Constraints (vs the operator rescue below):
 ///   * `user` MUST be the original queued user — checked in the handler
 ///     against the entry's stored `user` field. No `has_one` here because
 ///     the user pubkey lives inside the queue zero-copy data, not on
 ///     `PsmConfig`.
-///   * `recipient_oku_money_ata` MUST be owned by `user` — `token::authority`
+///   * `recipient_usd_oku_ata` MUST be owned by `user` — `token::authority`
 ///     constraint pins this.
 ///
 /// The instruction does NOT require the queue to be at head — any
@@ -329,16 +329,16 @@ pub struct UserSelfRescueQueueEntry<'info> {
     pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
 
     #[account(
-        address = config.oku_money_mint,
+        address = config.usd_oku_mint,
         mint::token_program = token_2022_program
     )]
-    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     #[account(
         mut,
-        address = config.vault_oku_money
+        address = config.vault_usd_oku
     )]
-    pub vault_oku_money: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub vault_usd_oku: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// Recipient ATA — must be owned by `user` (enforced by
     /// `token::authority = user`). Pinning the authority is what
@@ -346,16 +346,16 @@ pub struct UserSelfRescueQueueEntry<'info> {
     /// (which can target an arbitrary recipient).
     #[account(
         mut,
-        token::mint = oku_money_mint,
+        token::mint = usd_oku_mint,
         token::authority = user,
         token::token_program = token_2022_program,
     )]
-    pub recipient_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub recipient_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }
 
-/// Rescue a stuck queue entry — return escrowed OkuMoney to an alternate recipient.
+/// Rescue a stuck queue entry — return escrowed usdOku to an alternate recipient.
 ///
 /// Only `queue_processor` can call. On EVM this is a separate `QUEUE_RESCUER` role;
 /// the SVM side collapses both into the `queue_processor` authority for simplicity.
@@ -379,31 +379,31 @@ pub struct RescueQueueEntry<'info> {
     )]
     pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
 
-    /// OkuMoney mint (Token-2022)
+    /// usdOku mint (Token-2022)
     #[account(
-        address = config.oku_money_mint,
+        address = config.usd_oku_mint,
         mint::token_program = token_2022_program
     )]
-    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// PSM's OkuMoney escrow vault — holds queued redemptions
+    /// PSM's usdOku escrow vault — holds queued redemptions
     #[account(
         mut,
-        address = config.vault_oku_money
+        address = config.vault_usd_oku
     )]
-    pub vault_oku_money: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub vault_usd_oku: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// Recipient's OkuMoney account (can be original user or alternate).
-    /// Must hold the configured OkuMoney mint and live under the Token-2022
+    /// Recipient's usdOku account (can be original user or alternate).
+    /// Must hold the configured usdOku mint and live under the Token-2022
     /// program — without these constraints a `queue_processor` could be
-    /// tricked into transferring the escrowed OkuMoney into an account on the
+    /// tricked into transferring the escrowed usdOku into an account on the
     /// wrong mint, surfacing only as an opaque SPL-layer error.
     #[account(
         mut,
-        token::mint = oku_money_mint,
+        token::mint = usd_oku_mint,
         token::token_program = token_2022_program,
     )]
-    pub recipient_oku_money_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub recipient_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }

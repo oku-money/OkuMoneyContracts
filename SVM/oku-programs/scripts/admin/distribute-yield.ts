@@ -1,10 +1,10 @@
 /**
- * Distribute dollar-denominated yield across all OkuMoney holders.
+ * Distribute dollar-denominated yield across all usdOku holders.
  *
  * Wraps `lite_psm::distribute_yield` (rebaser-gated). The handler computes
- *   new_oku_m_price = old_oku_m_price + (yield_amount * 1e9 / total_supply)
+ *   new_multiplier = old_multiplier + (yield_amount * 1e9 / total_supply)
  * and stamps `last_yield_distribution_slot = Clock::slot` so subsequent
- * mints/redeems/wraps/unwraps in the same slot are rejected.
+ * mints/redeems in the same slot are rejected.
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/admin/distribute-yield.ts --amount=1000000   # 1 USD
@@ -45,12 +45,12 @@ async function main() {
   const provider = createProvider(network);
   anchor.setProvider(provider);
   const deployment = loadDeployment(network);
-  if (!deployment?.programs?.litePsm || !deployment.tokens?.okuMoney) {
+  if (!deployment?.programs?.litePsm || !deployment.tokens?.usdOku) {
     throw new Error(`No deployment for ${network}.`);
   }
 
   const litePsmId = new PublicKey(deployment.programs.litePsm);
-  const okuMoneyMint = new PublicKey(deployment.tokens.okuMoney);
+  const usdOkuMint = new PublicKey(deployment.tokens.usdOku);
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
@@ -58,8 +58,8 @@ async function main() {
   logger.info(
     summaryBlock('distribute_yield()', {
       'config PDA': psmConfig.toBase58(),
-      'okuMoney mint': okuMoneyMint.toBase58(),
-      'current oku_m_price': cfg.okuMPrice.toString(),
+      'usdOku mint': usdOkuMint.toBase58(),
+      'current multiplier': cfg.multiplier.toString(),
       'yield amount (6dec)': amount.toString(),
       'signer (rebaser)': provider.wallet.publicKey.toBase58(),
     })
@@ -68,7 +68,7 @@ async function main() {
   if (isDryRun()) return logger.success('--dry-run set; not submitting.');
   await confirmIfMainnet(
     network,
-    `distribute_yield(${amount.toString()}) on mainnet — bumps oku_m_price`
+    `distribute_yield(${amount.toString()}) on mainnet — bumps multiplier`
   );
 
   const sig = await program.methods
@@ -76,14 +76,14 @@ async function main() {
     .accountsPartial({
       rebaser: provider.wallet.publicKey,
       config: psmConfig,
-      okuMoneyMint,
+      usdOkuMint,
       token2022Program: TOKEN_2022_PROGRAM_ID,
     })
     .rpc();
   logger.success(`tx: ${sig}`);
 
   const after = await program.account.psmConfig.fetch(psmConfig);
-  logger.info(`new oku_m_price: ${after.okuMPrice.toString()}`);
+  logger.info(`new multiplier: ${after.multiplier.toString()}`);
 }
 
 main().then(() => process.exit(0)).catch((err) => {

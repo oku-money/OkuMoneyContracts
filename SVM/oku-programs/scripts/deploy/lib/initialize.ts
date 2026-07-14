@@ -17,30 +17,27 @@ import { DIRECT_MINTER_ALLOWANCE } from '../../config/constants';
 import {
   derivePsmConfigPDA,
   deriveRedemptionQueuePDA,
-  deriveVaultConfigPDA,
-  deriveUsdOkuMintPDA,
 } from '../../utils/pdaHelpers';
 import { loadIdlWithAddress } from './programs';
 import { DeploymentConfig } from './config';
 
 // Import IDLs
 import litePsmIdl from '../../../target/idl/lite_psm.json';
-import okuDollarIdl from '../../../target/idl/oku_dollar.json';
 
 /**
  * Returns true if `error` indicates that the target account is already
- * initialized — i.e. this initialize call is a no-op rather than a real failure.
+ * initialized -- i.e. this initialize call is a no-op rather than a real failure.
  *
  * Anchor 1.0 surfaces this in multiple ways depending on the construction
  * path: the legacy 'already in use' string, AnchorError with code
  * `AccountAlreadyInitialized` (= 0), or the program-level
- * `EscrowAlreadyInitialized` from lite-psm's `setup_oku_money_escrow`.
+ * `EscrowAlreadyInitialized` from lite-psm's `setup_usd_oku_escrow`.
  * We check all of them; brittle string-only matching has bitten us across
  * Anchor minor-version bumps.
  */
 function isAlreadyInitialized(error: any): boolean {
   if (!error) return false;
-  // Anchor 1.0 structured errors — try first
+  // Anchor 1.0 structured errors -- try first
   const code = error?.error?.errorCode?.code ?? error?.errorCode?.code;
   const number = error?.error?.errorCode?.number ?? error?.errorCode?.number;
   if (
@@ -74,10 +71,10 @@ export interface PsmInitResult {
    */
   vaultUsdc: PublicKey;
   /**
-   * OkuMoney escrow ATA, owned by `psmConfig`. Created by
-   * `setup_oku_money_escrow()`. Persisted as `pdas.psmOkuMoneyEscrow`.
+   * usdOku escrow ATA, owned by `psmConfig`. Created by
+   * `setup_usd_oku_escrow()`. Persisted as `pdas.psmUsdOkuEscrow`.
    */
-  vaultOkuMoney: PublicKey;
+  vaultUsdOku: PublicKey;
 }
 
 /**
@@ -87,7 +84,7 @@ export async function initializePsm(
   provider: AnchorProvider,
   programId: PublicKey,
   usdcMint: PublicKey,
-  okuMoneyMint: PublicKey,
+  usdOkuMint: PublicKey,
   authorities: ReturnType<typeof loadAuthorities>,
   config: DeploymentConfig,
   networkConfig: NetworkConfig
@@ -127,7 +124,7 @@ export async function initializePsm(
         roleAdmin: provider.wallet.publicKey,
         config: psmConfig,
         usdcMint: usdcMint,
-        okuMoneyMint: okuMoneyMint,
+        usdOkuMint: usdOkuMint,
         vaultUsdc: vaultUsdc,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -167,12 +164,12 @@ export async function initializePsm(
 
   // Bridge init / supported-chain / fee-recipient ATA setup removed in
   // the noBridge refactor (phase B). v1 cross-chain transfers are
-  // mediated by an off-chain orchestrator that calls `mint_oku_m` /
-  // `redeem_oku_m` directly; no on-chain bridge state remains.
+  // mediated by an off-chain orchestrator that calls `mint_usd_oku` /
+  // `redeem_usd_oku` directly; no on-chain bridge state remains.
 
-  // Setup OkuMoney escrow vault (for queued redemptions).
+  // Setup usdOku escrow vault (for queued redemptions).
   //
-  // Idempotency note: `setupOkuMoneyEscrow()` creates an Associated Token
+  // Idempotency note: `setupUsdOkuEscrow()` creates an Associated Token
   // Account at the derived address. On a second deploy:init run, the ATA
   // already exists, and the ATA program returns `Provided owner is not
   // allowed` (NOT one of Anchor's standard already-initialized codes)
@@ -186,35 +183,35 @@ export async function initializePsm(
   // If so, skip the on-chain call entirely. This is safer than catching
   // the post-failure error string (which can drift across Solana
   // versions).
-  const vaultOkuMoney = getAssociatedTokenAddressSync(okuMoneyMint, psmConfig, true, TOKEN_2022_PROGRAM_ID);
-  logger.info('Setting up OkuMoney escrow vault...');
+  const vaultUsdOku = getAssociatedTokenAddressSync(usdOkuMint, psmConfig, true, TOKEN_2022_PROGRAM_ID);
+  logger.info('Setting up usdOku escrow vault...');
 
   const existingAtaInfo = await provider.connection.getAccountInfo(
-    vaultOkuMoney,
+    vaultUsdOku,
     'confirmed'
   );
   if (existingAtaInfo && existingAtaInfo.owner.equals(TOKEN_2022_PROGRAM_ID)) {
     logger.warning(
-      `OkuMoney escrow vault ATA ${vaultOkuMoney.toBase58()} already exists (Token-2022 program). Skipping setup.`
+      `usdOku escrow vault ATA ${vaultUsdOku.toBase58()} already exists (Token-2022 program). Skipping setup.`
     );
   } else {
     try {
       await program.methods
-        .setupOkuMoneyEscrow()
+        .setupUsdOkuEscrow()
         .accountsPartial({
           roleAdmin: provider.wallet.publicKey,
           config: psmConfig,
-          okuMoneyMint: okuMoneyMint,
-          vaultOkuMoney: vaultOkuMoney,
+          usdOkuMint: usdOkuMint,
+          vaultUsdOku: vaultUsdOku,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
-      logger.success('OkuMoney escrow vault initialized');
+      logger.success('usdOku escrow vault initialized');
     } catch (error: any) {
       if (isAlreadyInitialized(error)) {
-        logger.warning('OkuMoney escrow vault already initialized');
+        logger.warning('usdOku escrow vault already initialized');
       } else {
         throw error;
       }
@@ -250,7 +247,7 @@ export async function initializePsm(
       }
 
       // Set the direct-minter allowance (allowance_manager is still the
-      // deployer at this point — deploy-init runs before grant-roles).
+      // deployer at this point -- deploy-init runs before grant-roles).
       const currentAllowance = currentCfg.directMinterAllowance;
       const targetAllowance = new BN(DIRECT_MINTER_ALLOWANCE);
       if (currentAllowance && currentAllowance.eq(targetAllowance)) {
@@ -270,7 +267,7 @@ export async function initializePsm(
         );
       }
     } catch (error: any) {
-      // Non-fatal — directMinter can be configured later via grant-roles.ts
+      // Non-fatal -- directMinter can be configured later via grant-roles.ts
       logger.warning(
         `Direct-minter setup failed (non-fatal): ${error.message?.slice(0, 80)}`
       );
@@ -279,80 +276,14 @@ export async function initializePsm(
       );
     }
   } else {
-    logger.info('No directMinter configured in authorities — skipping (configure via grant-roles).');
+    logger.info('No directMinter configured in authorities -- skipping (configure via grant-roles).');
   }
 
   return {
     psmConfig,
     redemptionQueue,
     vaultUsdc,
-    vaultOkuMoney,
+    vaultUsdOku,
   };
 }
-
-export interface VaultInitResult {
-  vaultConfig: PublicKey;
-  usdOkuMint: PublicKey;
-  reserveVault: PublicKey;
-}
-
-/**
- * Initialize the Vault (OkuDollar) program
- */
-export async function initializeVault(
-  provider: AnchorProvider,
-  programId: PublicKey,
-  psmProgramId: PublicKey,
-  okuMoneyMint: PublicKey,
-  authorities: ReturnType<typeof loadAuthorities>,
-  config: DeploymentConfig
-): Promise<VaultInitResult> {
-  logger.nextStep('Initializing Vault');
-
-  const idl = loadIdlWithAddress(okuDollarIdl, programId);
-  const program = new Program(idl as any, provider);
-
-  const [vaultConfig] = deriveVaultConfigPDA(programId);
-  const [usdOkuMint] = deriveUsdOkuMintPDA(programId);
-  const [psmConfig] = derivePsmConfigPDA(psmProgramId);
-  const reserveVault = getAssociatedTokenAddressSync(okuMoneyMint, vaultConfig, true, TOKEN_2022_PROGRAM_ID);
-
-  logger.info(`Vault Config PDA: ${vaultConfig.toBase58()}`);
-  logger.info(`usdOku Mint PDA: ${usdOkuMint.toBase58()}`);
-
-  // Initialize vault
-  logger.info('Calling initialize()...');
-  try {
-    await program.methods
-      .initialize(
-        authorities.vault.pauser,
-        authorities.vault.unpauser,
-        authorities.vault.usdRebaser,
-        authorities.vault.reserveManager,
-        config.minCollateralRatio
-      )
-      .accountsPartial({
-        roleAdmin: provider.wallet.publicKey,
-        config: vaultConfig,
-        okuMoneyMint: okuMoneyMint,
-        usdOkuMint: usdOkuMint,
-        reserveVault: reserveVault,
-        psmConfig: psmConfig,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
-    logger.success('Vault initialized');
-  } catch (error: any) {
-    if (isAlreadyInitialized(error)) {
-      logger.warning('Vault already initialized');
-    } else {
-      throw error;
-    }
-  }
-
-  return { vaultConfig, usdOkuMint, reserveVault };
-}
-
 

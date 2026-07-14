@@ -2,9 +2,9 @@
  * Reset the direct-minter allowance.
  *
  * Wraps `lite_psm::set_direct_minter_allowance` (allowance_manager-gated).
- * The allowance caps how much OkuMoney can be minted via the permissioned
- * direct-mint path (`mint_oku_m_direct` / `mint_usd_oku_direct`) between
- * resets. Separate from the USDC-backed `minter_allowance`.
+ * The allowance caps how much usdOku can be minted via the permissioned
+ * direct-mint path (`mint_usd_oku_direct`) between resets. Separate from
+ * the USDC-backed `minter_allowance`.
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/admin/set-direct-minter-allowance.ts --amount=<6dec>

@@ -16,7 +16,3 @@ features = ["token"]
 [[bin]]
 name = "fuzz_lite_psm"
 path = "fuzz_lite_psm/test_fuzz.rs"
-
-[[bin]]
-name = "fuzz_oku_dollar"
-path = "fuzz_oku_dollar/test_fuzz.rs"

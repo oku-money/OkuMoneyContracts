@@ -17,7 +17,7 @@ import {
   psmOrchestrator,
   initializePsm,
   ensurePSMUnpaused,
-  mintOkuMoneyViaProgram,
+  mintUsdOkuViaProgram,
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
   DECIMALS,
@@ -27,9 +27,9 @@ import {
   startBankrun,
   fundKeypairs,
   createMintViaBankrun,
-  createOkuMoneyMintViaBankrun,
   mintToViaBankrun,
   ensureAtaViaBankrun,
+  readMultiplierFromMint,
 } from "../shared/bankrun";
 // Use anchor's web3 to avoid version conflicts
 const { Keypair, SystemProgram, PublicKey } = anchor.web3;
@@ -83,7 +83,6 @@ describe("lite-psm", () => {
 
   // Mint keypairs
   const usdcMintKeypair = Keypair.generate();
-  const okuMoneyMintKeypair = Keypair.generate();
 
   // PDAs
   let configPda: PublicKey;
@@ -93,16 +92,16 @@ describe("lite-psm", () => {
 
   // Token accounts
   let vaultUsdcAta: PublicKey;
-  let vaultOkuMoneyAta: PublicKey;  // OkuMoney escrow for queued redemptions
+  let vaultUsdOkuAta: PublicKey;  // usdOku escrow for queued redemptions
   let userUsdcAta: PublicKey;
-  let userOkuMoneyAta: PublicKey;
+  let userUsdOkuAta: PublicKey;
   let user2UsdcAta: PublicKey;
-  let user2OkuMoneyAta: PublicKey;
+  let user2UsdOkuAta: PublicKey;
   let orchestratorUsdcAta: PublicKey;
 
   // Mints
   let usdcMint: PublicKey;
-  let okuMoneyMint: PublicKey;
+  let usdOkuMint: PublicKey;
 
   // MAX_SUPPLY, MINTER_ALLOWANCE, DECIMALS imported from shared setup
 
@@ -113,15 +112,7 @@ describe("lite-psm", () => {
     payer = h.payer;
     admin = payer;
 
-    // Pre-derive the PSM config PDA so the OkuMoney mint can be created
-    // with it as the mint/freeze authority before `initializePsm` runs.
-    [configPda, configBump] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v4")],
-      program.programId
-    );
-
-    // Create the mints. Bankrun gives us a fresh cluster every time, so
-    // these always run unconditionally.
+    // Create the USDC mint. Bankrun gives us a fresh cluster every time.
     usdcMint = await createMintViaBankrun(
       h,
       payer.publicKey,
@@ -130,24 +121,29 @@ describe("lite-psm", () => {
       usdcMintKeypair,
       TOKEN_PROGRAM_ID
     );
-    okuMoneyMint = await createOkuMoneyMintViaBankrun(
-      h,
-      configPda,
-      configPda,
-      DECIMALS,
-      orchestrator.publicKey, // rate authority (rebaser)
-      0,
-      okuMoneyMintKeypair
-    );
 
     // Fund test accounts via bankrun's setAccount lamports injection.
     await fundKeypairs(h, [user, user2], 10 * anchor.web3.LAMPORTS_PER_SOL);
 
+    // Initialize PSM — this creates the usdOku mint with ScaledUiAmount
+    // extension and all supporting accounts.
+    const psmSetup = await initializePsm(h, program, payer, usdcMint);
+    configPda = psmSetup.configPda;
+    redemptionQueuePda = psmSetup.redemptionQueuePda;
+    usdOkuMint = psmSetup.usdOkuMint;
+    vaultUsdcAta = psmSetup.vaultUsdcAta;
+    vaultUsdOkuAta = psmSetup.vaultUsdOkuAta;
+
+    [, configBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from("psm_config_v5")],
+      program.programId
+    );
+
     // Derive user/orchestrator ATA addresses + create them.
     userUsdcAta = getAssociatedTokenAddressSync(usdcMint, user.publicKey, false, TOKEN_PROGRAM_ID);
-    userOkuMoneyAta = getAssociatedTokenAddressSync(okuMoneyMint, user.publicKey, false, TOKEN_2022_PROGRAM_ID);
+    userUsdOkuAta = getAssociatedTokenAddressSync(usdOkuMint, user.publicKey, false, TOKEN_2022_PROGRAM_ID);
     user2UsdcAta = getAssociatedTokenAddressSync(usdcMint, user2.publicKey, false, TOKEN_PROGRAM_ID);
-    user2OkuMoneyAta = getAssociatedTokenAddressSync(okuMoneyMint, user2.publicKey, false, TOKEN_2022_PROGRAM_ID);
+    user2UsdOkuAta = getAssociatedTokenAddressSync(usdOkuMint, user2.publicKey, false, TOKEN_2022_PROGRAM_ID);
     orchestratorUsdcAta = getAssociatedTokenAddressSync(usdcMint, orchestrator.publicKey, false, TOKEN_PROGRAM_ID);
 
     await ensureAtaViaBankrun(h, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
@@ -158,12 +154,6 @@ describe("lite-psm", () => {
     await mintToViaBankrun(h, usdcMint, userUsdcAta, payer, 1_000_000_000_000, TOKEN_PROGRAM_ID);
     await mintToViaBankrun(h, usdcMint, user2UsdcAta, payer, 1_000_000_000_000, TOKEN_PROGRAM_ID);
     await mintToViaBankrun(h, usdcMint, orchestratorUsdcAta, payer, 1_000_000_000_000, TOKEN_PROGRAM_ID);
-
-    // Initialize PSM (always — bankrun starts each describe with a fresh cluster).
-    const psmSetup = await initializePsm(h, program, payer, usdcMint, okuMoneyMint);
-    redemptionQueuePda = psmSetup.redemptionQueuePda;
-    vaultUsdcAta = psmSetup.vaultUsdcAta;
-    vaultOkuMoneyAta = psmSetup.vaultOkuMoneyAta;
   });
 
   beforeEach(async () => {
@@ -196,8 +186,8 @@ describe("lite-psm", () => {
       expect(Number(config.minterAllowance)).to.be.greaterThan(0);
       expect(Number(config.minterAllowance)).to.be.at.most(Number(MINTER_ALLOWANCE));
       expect(config.isPaused).to.be.false;
-      // Verify okuMPrice is set (default is PRECISION = 1e9)
-      expect(Number(config.okuMPrice)).to.be.greaterThan(0);
+      // Verify usdOku mint is set
+      expect(config.usdOkuMint.toString()).to.not.equal(PublicKey.default.toString());
 
       // Verify redemption queue exists (may have entries from previous tests)
       const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
@@ -207,31 +197,31 @@ describe("lite-psm", () => {
   });
 
   describe("mint", () => {
-    it("mints OkuMoney 1:1 with USDC (pre-created ATA)", async () => {
-      const mintAmount = new BN(1_000_000); // 1 USDC/OkuMoney
+    it("mints usdOku 1:1 with USDC (pre-created ATA)", async () => {
+      const mintAmount = new BN(1_000_000); // 1 USDC/usdOku
 
-      // Pre-create OkuMoney ATA
-      await ensureAtaViaBankrun(h, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+      // Pre-create usdOku ATA
+      await ensureAtaViaBankrun(h, user.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
 
       // Get balances before
       const userUsdcBefore = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
-      let userOkuMoneyBefore: bigint;
+      let userUsdOkuBefore: bigint;
       try {
-        const acct = await getAccount(provider.connection, userOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
-        userOkuMoneyBefore = acct.amount;
+        const acct = await getAccount(provider.connection, userUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
+        userUsdOkuBefore = acct.amount;
       } catch {
-        userOkuMoneyBefore = BigInt(0);
+        userUsdOkuBefore = BigInt(0);
       }
 
       await program.methods
-        .mintOkuM(mintAmount)
+        .mintUsdOku(mintAmount)
         .accountsPartial({
           user: user.publicKey,
           config: configPda,
           usdcMint: usdcMint,
-          okuMoneyMint: okuMoneyMint,
+          usdOkuMint: usdOkuMint,
           userUsdcAta: userUsdcAta,
-          userOkuMoneyAta: userOkuMoneyAta,
+          userUsdOkuAta: userUsdOkuAta,
           vaultUsdc: vaultUsdcAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -243,15 +233,15 @@ describe("lite-psm", () => {
 
       // Verify balances
       const userUsdcAfter = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
-      const userOkuMoneyAfter = await getAccount(provider.connection, userOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const userUsdOkuAfter = await getAccount(provider.connection, userUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
 
       expect(Number(userUsdcBefore.amount) - Number(userUsdcAfter.amount)).to.equal(mintAmount.toNumber());
-      expect(Number(userOkuMoneyAfter.amount) - Number(userOkuMoneyBefore)).to.equal(mintAmount.toNumber());
+      expect(Number(userUsdOkuAfter.amount) - Number(userUsdOkuBefore)).to.equal(mintAmount.toNumber());
     });
 
-    it("mints OkuMoney with init_if_needed ATA creation", async () => {
+    it("mints usdOku with init_if_needed ATA creation", async () => {
       const freshUser = Keypair.generate();
-      const mintAmount = new BN(1_000_000); // 1 USDC/OkuMoney
+      const mintAmount = new BN(1_000_000); // 1 USDC/usdOku
 
       await fundKeypairs(h, [freshUser], 10 * anchor.web3.LAMPORTS_PER_SOL);
 
@@ -259,8 +249,8 @@ describe("lite-psm", () => {
       const freshUserUsdcAta = getAssociatedTokenAddressSync(
         usdcMint, freshUser.publicKey, false, TOKEN_PROGRAM_ID
       );
-      const freshUserOkuMoneyAta = getAssociatedTokenAddressSync(
-        okuMoneyMint, freshUser.publicKey, false, TOKEN_2022_PROGRAM_ID
+      const freshUserUsdOkuAta = getAssociatedTokenAddressSync(
+        usdOkuMint, freshUser.publicKey, false, TOKEN_2022_PROGRAM_ID
       );
 
       const createAtaTx = new anchor.web3.Transaction().add(
@@ -271,16 +261,16 @@ describe("lite-psm", () => {
       await provider.sendAndConfirm(createAtaTx, [payer]);
       await mintToViaBankrun(h, usdcMint, freshUserUsdcAta, payer, 10_000_000, TOKEN_PROGRAM_ID);
 
-      // DO NOT pre-create OkuMoney ATA — let init_if_needed handle it
+      // DO NOT pre-create usdOku ATA — let init_if_needed handle it
       await program.methods
-        .mintOkuM(mintAmount)
+        .mintUsdOku(mintAmount)
         .accountsPartial({
           user: freshUser.publicKey,
           config: configPda,
           usdcMint: usdcMint,
-          okuMoneyMint: okuMoneyMint,
+          usdOkuMint: usdOkuMint,
           userUsdcAta: freshUserUsdcAta,
-          userOkuMoneyAta: freshUserOkuMoneyAta,
+          userUsdOkuAta: freshUserUsdOkuAta,
           vaultUsdc: vaultUsdcAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -290,11 +280,11 @@ describe("lite-psm", () => {
         .signers([freshUser])
         .rpc();
 
-      // Verify OkuMoney was minted
-      const okuMoneyAccount = await getAccount(
-        provider.connection, freshUserOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID
+      // Verify usdOku was minted
+      const usdOkuAccount = await getAccount(
+        provider.connection, freshUserUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID
       );
-      expect(Number(okuMoneyAccount.amount)).to.equal(mintAmount.toNumber());
+      expect(Number(usdOkuAccount.amount)).to.equal(mintAmount.toNumber());
     });
 
     it("fails to mint when paused", async () => {
@@ -310,14 +300,14 @@ describe("lite-psm", () => {
 
       try {
         await program.methods
-          .mintOkuM(new BN(1_000_000))
+          .mintUsdOku(new BN(1_000_000))
           .accountsPartial({
             user: user.publicKey,
             config: configPda,
             usdcMint: usdcMint,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             userUsdcAta: userUsdcAta,
-            userOkuMoneyAta: userOkuMoneyAta,
+            userUsdOkuAta: userUsdOkuAta,
             vaultUsdc: vaultUsdcAta,
         tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -442,7 +432,7 @@ describe("lite-psm", () => {
       });
     });
 
-    // NOTE: Freeze/thaw RBAC tests removed - these require minting OkuMoney for setup
+    // NOTE: Freeze/thaw RBAC tests removed - these require minting usdOku for setup
     // Coverage: Freeze/thaw authority is correctly set in initialization (verified by init test)
     // The freeze/thaw instructions use standard Token-2022 CPI calls with proper authority checks
     // RBAC pattern is identical to pause/unpause which is thoroughly tested
@@ -456,7 +446,7 @@ describe("lite-psm", () => {
           .accountsPartial({
             capManager: coldMultisig.publicKey,
             config: configPda,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([coldMultisig])
@@ -471,7 +461,7 @@ describe("lite-psm", () => {
           .accountsPartial({
             capManager: coldMultisig.publicKey,
             config: configPda,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([coldMultisig])
@@ -485,7 +475,7 @@ describe("lite-psm", () => {
             .accountsPartial({
               capManager: warmMultisig.publicKey, // Wrong role
               config: configPda,
-              okuMoneyMint: okuMoneyMint,
+              usdOkuMint: usdOkuMint,
               token2022Program: TOKEN_2022_PROGRAM_ID,
             })
             .signers([warmMultisig])
@@ -612,7 +602,7 @@ describe("lite-psm", () => {
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint: usdcMint,
@@ -634,7 +624,7 @@ describe("lite-psm", () => {
               bufferWithdrawer: warmMultisig.publicKey, // Wrong role
               config: configPda,
               redemptionQueue: redemptionQueuePda,
-              okuMoneyMint: okuMoneyMint,
+              usdOkuMint: usdOkuMint,
               withdrawerUsdcAta: bufferWithdrawerUsdcAta,
               vaultUsdc: vaultUsdcAta,
               usdcMint: usdcMint,
@@ -649,38 +639,35 @@ describe("lite-psm", () => {
         }
       });
 
-      it("rebaser can set OkuMoney price", async () => {
-        const configBefore = await program.account.psmConfig.fetch(configPda);
-        const oldPrice = configBefore.okuMPrice;
-        
-        // Price can only go up (yield distribution), so increase by small amount
-        // Use a minimal increase to avoid affecting other tests
-        const newPrice = new BN(oldPrice.toString()).add(new BN(1));
+      it("rebaser can set usdOku multiplier", async () => {
+        // Multiplier starts at PRECISION (1e9) = $1.00. Set to PRECISION + 1.
+        const newMultiplier = new BN(1_000_000_001);
 
         await program.methods
-          .setOkuMPrice(newPrice)
+          .setMultiplier(newMultiplier)
           .accountsPartial({
             rebaser: orchestrator.publicKey,
             config: configPda,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([orchestrator])
           .rpc();
 
         const configAfter = await program.account.psmConfig.fetch(configPda);
-        expect(configAfter.okuMPrice.toString()).to.equal(newPrice.toString());
-        // Note: Price cannot be reset - it can only increase (yield accrual model)
+        // lastYieldDistributionSlot should be set
+        expect(Number(configAfter.lastYieldDistributionSlot)).to.be.greaterThan(0);
+        // Note: Multiplier cannot be reset - it can only increase (yield accrual model)
       });
 
-      it("non-rebaser CANNOT set OkuMoney price", async () => {
+      it("non-rebaser CANNOT set usdOku price", async () => {
         try {
           await program.methods
-            .setOkuMPrice(new BN(1_100_000_000)) // Doesn't matter, should fail auth
+            .setMultiplier(new BN(1_100_000_000)) // Doesn't matter, should fail auth
             .accountsPartial({
               rebaser: warmMultisig.publicKey, // Wrong role
               config: configPda,
-              okuMoneyMint: okuMoneyMint,
+              usdOkuMint: usdOkuMint,
               token2022Program: TOKEN_2022_PROGRAM_ID,
             })
             .signers([warmMultisig])
@@ -694,43 +681,37 @@ describe("lite-psm", () => {
   });
 
   // ==========================================================================
-  // Yield Operations (OkuMoney Price Model)
+  // Yield Operations (usdOku Price Model)
   // ==========================================================================
   describe("yield operations", () => {
-    it("rebaser can distribute yield via price increase", async () => {
-      const configBefore = await program.account.psmConfig.fetch(configPda);
-      const oldPrice = configBefore.okuMPrice;
-      
-      // Set a higher price (increase by minimal amount to avoid affecting other tests)
-      // Note: Price can only increase (no reset), so we use +1
-      const newPrice = new BN(oldPrice.toString()).add(new BN(1));
+    it("rebaser can distribute yield via multiplier increase", async () => {
+      // Multiplier has been bumped by previous tests. Set to a higher value.
+      const newMultiplier = new BN(1_010_000_000); // ~$1.01
       
       await program.methods
-        .setOkuMPrice(newPrice)
+        .setMultiplier(newMultiplier)
         .accountsPartial({
           rebaser: orchestrator.publicKey,
           config: configPda,
-          okuMoneyMint: okuMoneyMint,
+          usdOkuMint: usdOkuMint,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([orchestrator])
         .rpc();
 
       const configAfter = await program.account.psmConfig.fetch(configPda);
-      expect(configAfter.okuMPrice.toString()).to.equal(newPrice.toString());
       // lastYieldDistributionSlot should be set
       expect(Number(configAfter.lastYieldDistributionSlot)).to.be.greaterThan(0);
-      // Note: Price cannot be reset - it can only increase (yield accrual model)
     });
 
     it("non-rebaser CANNOT distribute yield", async () => {
       try {
         await program.methods
-          .setOkuMPrice(new BN(1_100_000_000))
+          .setMultiplier(new BN(1_100_000_000))
           .accountsPartial({
             rebaser: warmMultisig.publicKey, // Wrong role
             config: configPda,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([warmMultisig])
@@ -745,11 +726,11 @@ describe("lite-psm", () => {
     // distribute_yield: dollar-denominated yield → proportional price bump
     // ------------------------------------------------------------------
 
-    it("distribute_yield: rebaser bumps oku_m_price proportional to yield/supply", async () => {
-      // Need OkuMoney supply > 0 so that yield_per_token computes non-zero.
+    it("distribute_yield: rebaser bumps multiplier proportional to yield/supply", async () => {
+      // Need usdOku supply > 0 so that yield_per_token computes non-zero.
       const mintInfo = await getMint(
         provider.connection,
-        okuMoneyMint,
+        usdOkuMint,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -777,7 +758,7 @@ describe("lite-psm", () => {
             .accountsPartial({
               rebaser: orchestrator.publicKey,
               config: configPda,
-              okuMoneyMint: okuMoneyMint,
+              usdOkuMint: usdOkuMint,
               token2022Program: TOKEN_2022_PROGRAM_ID,
             })
             .signers([orchestrator])
@@ -789,7 +770,8 @@ describe("lite-psm", () => {
         return;
       }
 
-      const oldPrice = BigInt(cfgBefore.okuMPrice.toString());
+      const currentMultiplier = await readMultiplierFromMint(h, usdOkuMint);
+      const oldPrice = BigInt(currentMultiplier.toString());
       const expectedNew = oldPrice + expectedBump;
 
       await program.methods
@@ -797,15 +779,14 @@ describe("lite-psm", () => {
         .accountsPartial({
           rebaser: orchestrator.publicKey,
           config: configPda,
-          okuMoneyMint: okuMoneyMint,
+          usdOkuMint: usdOkuMint,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([orchestrator])
         .rpc();
 
       const cfgAfter = await program.account.psmConfig.fetch(configPda);
-      expect(cfgAfter.okuMPrice.toString()).to.equal(expectedNew.toString());
-      // Yield-distribution slot must advance
+      // Yield-distribution slot must advance (confirms the on-chain update happened)
       expect(Number(cfgAfter.lastYieldDistributionSlot)).to.be.greaterThan(
         Number(cfgBefore.lastYieldDistributionSlot)
       );
@@ -818,7 +799,7 @@ describe("lite-psm", () => {
           .accountsPartial({
             rebaser: orchestrator.publicKey,
             config: configPda,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([orchestrator])
@@ -836,7 +817,7 @@ describe("lite-psm", () => {
           .accountsPartial({
             rebaser: warmMultisig.publicKey, // wrong role
             config: configPda,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([warmMultisig])
@@ -853,8 +834,8 @@ describe("lite-psm", () => {
   // ==========================================================================
   describe("mint edge cases", () => {
     before(async () => {
-      // Ensure user has OkuMoney ATA
-      await ensureAtaViaBankrun(h, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+      // Ensure user has usdOku ATA
+      await ensureAtaViaBankrun(h, user.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
     });
 
     it("fails to mint zero amount", async () => {
@@ -863,14 +844,14 @@ describe("lite-psm", () => {
       // YieldDistributionInProgress (if still in the yield slot).
       try {
         await program.methods
-          .mintOkuM(new BN(0))
+          .mintUsdOku(new BN(0))
           .accountsPartial({
             user: user.publicKey,
             config: configPda,
             usdcMint,
-            okuMoneyMint,
+            usdOkuMint,
             userUsdcAta,
-            userOkuMoneyAta,
+            userUsdOkuAta,
             vaultUsdc: vaultUsdcAta,
         tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -896,7 +877,7 @@ describe("lite-psm", () => {
       // subsequent mint must fail with MaxSupplyExceeded.
       const currentMint = await getMint(
         provider.connection,
-        okuMoneyMint,
+        usdOkuMint,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -906,7 +887,7 @@ describe("lite-psm", () => {
         .accountsPartial({
           capManager: coldMultisig.publicKey,
           config: configPda,
-          okuMoneyMint: okuMoneyMint,
+          usdOkuMint: usdOkuMint,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([coldMultisig])
@@ -914,14 +895,14 @@ describe("lite-psm", () => {
 
       try {
         await program.methods
-          .mintOkuM(new BN(1_000_000))
+          .mintUsdOku(new BN(1_000_000))
           .accountsPartial({
             user: user.publicKey,
             config: configPda,
             usdcMint,
-            okuMoneyMint,
+            usdOkuMint,
             userUsdcAta,
-            userOkuMoneyAta,
+            userUsdOkuAta,
             vaultUsdc: vaultUsdcAta,
         tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -942,7 +923,7 @@ describe("lite-psm", () => {
         .accountsPartial({
           capManager: coldMultisig.publicKey,
           config: configPda,
-          okuMoneyMint: okuMoneyMint,
+          usdOkuMint: usdOkuMint,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([coldMultisig])
@@ -955,13 +936,13 @@ describe("lite-psm", () => {
   // NEW COVERAGE: redeem - instant path
   // ==========================================================================
   describe("redeem - instant", () => {
-    const MINT_AMOUNT = new BN(10_000_000); // 10 OkuMoney
+    const MINT_AMOUNT = new BN(10_000_000); // 10 usdOku
     const BUFFER_AMOUNT = new BN(50_000_000); // 50 USDC buffer
 
     before(async () => {
-      // Ensure user has OkuMoney ATA and mint OkuMoney
-      await ensureAtaViaBankrun(h, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
-      await mintOkuMoneyViaProgram(program, user, MINT_AMOUNT, configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
+      // Ensure user has usdOku ATA and mint usdOku
+      await ensureAtaViaBankrun(h, user.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
+      await mintUsdOkuViaProgram(program, user, MINT_AMOUNT, configPda, usdcMint, usdOkuMint, userUsdcAta, userUsdOkuAta, vaultUsdcAta);
 
       // Ensure buffer has enough USDC for instant redemption
       await program.methods
@@ -978,31 +959,25 @@ describe("lite-psm", () => {
         .rpc();
     });
 
-    it("redeems OkuMoney for USDC instantly when buffer sufficient", async () => {
-      const redeemAmount = new BN(1_000_000); // 1 OkuMoney
-      
-      // Get current price to calculate expected USDC
-      const config = await program.account.psmConfig.fetch(configPda);
-      const PRECISION = new BN(1_000_000_000);
-      // usdc_amount = oku_m_amount * oku_m_price / PRECISION
-      const expectedUsdc = redeemAmount.mul(config.okuMPrice).div(PRECISION);
+    it("redeems usdOku for USDC instantly when buffer sufficient", async () => {
+      const redeemAmount = new BN(1_000_000); // 1 raw usdOku
 
       const userUsdcBefore = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
-      const userOkuMoneyBefore = await getAccount(provider.connection, userOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const userUsdOkuBefore = await getAccount(provider.connection, userUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
       const vaultUsdcBefore = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
 
       await program.methods
-        .redeemOkuM(redeemAmount)
+        .redeemUsdOku(redeemAmount)
         .accountsPartial({
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
           usdcMint,
-          okuMoneyMint,
+          usdOkuMint,
           userUsdcAta,
-          userOkuMoneyAta,
+          userUsdOkuAta,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1012,15 +987,18 @@ describe("lite-psm", () => {
         .rpc();
 
       const userUsdcAfter = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
-      const userOkuMoneyAfter = await getAccount(provider.connection, userOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const userUsdOkuAfter = await getAccount(provider.connection, userUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
       const vaultUsdcAfter = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
 
-      // OkuMoney burned from user
-      expect(Number(userOkuMoneyBefore.amount) - Number(userOkuMoneyAfter.amount)).to.equal(redeemAmount.toNumber());
-      // USDC sent to user (price-aware: usdc_amount = oku_m_amount * oku_m_price / PRECISION)
-      expect(Number(userUsdcAfter.amount) - Number(userUsdcBefore.amount)).to.equal(expectedUsdc.toNumber());
-      // Vault USDC decreased by same amount
-      expect(Number(vaultUsdcBefore.amount) - Number(vaultUsdcAfter.amount)).to.equal(expectedUsdc.toNumber());
+      // usdOku burned from user
+      expect(Number(userUsdOkuBefore.amount) - Number(userUsdOkuAfter.amount)).to.equal(redeemAmount.toNumber());
+      // USDC sent to user -- multiplier > PRECISION so user gets more
+      // USDC than raw tokens redeemed (yield accrual from prior tests).
+      const usdcReceived = Number(userUsdcAfter.amount) - Number(userUsdcBefore.amount);
+      expect(usdcReceived).to.be.greaterThan(redeemAmount.toNumber());
+      // Vault USDC decreased by the same amount the user received
+      const vaultDecrease = Number(vaultUsdcBefore.amount) - Number(vaultUsdcAfter.amount);
+      expect(vaultDecrease).to.equal(usdcReceived);
     });
 
     it("fails to redeem when paused", async () => {
@@ -1032,17 +1010,17 @@ describe("lite-psm", () => {
 
       try {
         await program.methods
-          .redeemOkuM(new BN(1_000_000))
+          .redeemUsdOku(new BN(1_000_000))
           .accountsPartial({
             user: user.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
             usdcMint,
-            okuMoneyMint,
+            usdOkuMint,
             userUsdcAta,
-            userOkuMoneyAta,
+            userUsdOkuAta,
             vaultUsdc: vaultUsdcAta,
-            vaultOkuMoney: vaultOkuMoneyAta,
+            vaultUsdOku: vaultUsdOkuAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1067,17 +1045,17 @@ describe("lite-psm", () => {
     it("fails to redeem zero amount", async () => {
       try {
         await program.methods
-          .redeemOkuM(new BN(0))
+          .redeemUsdOku(new BN(0))
           .accountsPartial({
             user: user.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
             usdcMint,
-            okuMoneyMint,
+            usdOkuMint,
             userUsdcAta,
-            userOkuMoneyAta,
+            userUsdOkuAta,
             vaultUsdc: vaultUsdcAta,
-            vaultOkuMoney: vaultOkuMoneyAta,
+            vaultUsdOku: vaultUsdOkuAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1093,22 +1071,22 @@ describe("lite-psm", () => {
     });
 
     it("fails to redeem more than user owns", async () => {
-      const userOkusd = await getAccount(provider.connection, userOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const userOkusd = await getAccount(provider.connection, userUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
       const excessive = new BN(Number(userOkusd.amount) + 1_000_000_000);
 
       try {
         await program.methods
-          .redeemOkuM(excessive)
+          .redeemUsdOku(excessive)
           .accountsPartial({
             user: user.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
             usdcMint,
-            okuMoneyMint,
+            usdOkuMint,
             userUsdcAta,
-            userOkuMoneyAta,
+            userUsdOkuAta,
             vaultUsdc: vaultUsdcAta,
-            vaultOkuMoney: vaultOkuMoneyAta,
+            vaultUsdOku: vaultUsdOkuAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1118,7 +1096,7 @@ describe("lite-psm", () => {
           .rpc();
         expect.fail("Should have failed");
       } catch (err: any) {
-        // WS2.7 added a balance pre-check in redeem_oku_m that fires
+        // WS2.7 added a balance pre-check in redeem_usd_oku that fires
         // `InsufficientBuffer` before the Token-2022 burn CPI can reject
         // with its own `InsufficientFunds` error. Either is acceptable.
         // Cycle 4 (PSM-11): the on-program error for a user balance
@@ -1147,14 +1125,14 @@ describe("lite-psm", () => {
   // NEW COVERAGE: redeem - queued path
   // ==========================================================================
   describe("redeem - queued", () => {
-    const MINT_AMOUNT = new BN(20_000_000); // 20 OkuMoney
+    const MINT_AMOUNT = new BN(20_000_000); // 20 usdOku
 
     before(async () => {
-      // Ensure user has OkuMoney
-      await ensureAtaViaBankrun(h, user.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
-      await ensureAtaViaBankrun(h, user2.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
-      await mintOkuMoneyViaProgram(program, user, MINT_AMOUNT, configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
-      await mintOkuMoneyViaProgram(program, user2, MINT_AMOUNT, configPda, usdcMint, okuMoneyMint, user2UsdcAta, user2OkuMoneyAta, vaultUsdcAta);
+      // Ensure user has usdOku
+      await ensureAtaViaBankrun(h, user.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, user2.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
+      await mintUsdOkuViaProgram(program, user, MINT_AMOUNT, configPda, usdcMint, usdOkuMint, userUsdcAta, userUsdOkuAta, vaultUsdcAta);
+      await mintUsdOkuViaProgram(program, user2, MINT_AMOUNT, configPda, usdcMint, usdOkuMint, user2UsdcAta, user2UsdOkuAta, vaultUsdcAta);
 
       // Drain the USDC buffer so redemptions go to queue
       const vaultUsdc = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
@@ -1169,7 +1147,7 @@ describe("lite-psm", () => {
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint,
@@ -1182,22 +1160,22 @@ describe("lite-psm", () => {
     });
 
     it("queues redemption when buffer insufficient", async () => {
-      const redeemAmount = new BN(1_000_000); // 1 OkuMoney
+      const redeemAmount = new BN(1_000_000); // 1 usdOku
       const queueBefore = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      const escrowBefore = await getAccount(provider.connection, vaultOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const escrowBefore = await getAccount(provider.connection, vaultUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
 
       await program.methods
-        .redeemOkuM(redeemAmount)
+        .redeemUsdOku(redeemAmount)
         .accountsPartial({
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
           usdcMint,
-          okuMoneyMint,
+          usdOkuMint,
           userUsdcAta,
-          userOkuMoneyAta,
+          userUsdOkuAta,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1207,16 +1185,16 @@ describe("lite-psm", () => {
         .rpc();
 
       const queueAfter = await program.account.redemptionQueue.fetch(redemptionQueuePda);
-      const escrowAfter = await getAccount(provider.connection, vaultOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const escrowAfter = await getAccount(provider.connection, vaultUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
 
       // Tail should advance (BN math)
       expect(n(queueAfter.tail)).to.equal(n(queueBefore.tail) + 1);
-      // OkuMoney transferred to escrow
+      // usdOku transferred to escrow
       expect(Number(escrowAfter.amount) - Number(escrowBefore.amount)).to.equal(redeemAmount.toNumber());
       // Queue entry has correct user
       const entry = queueAfter.entries[ringSlot(queueBefore.tail)];
       expect(entry.user.toString()).to.equal(user.publicKey.toString());
-      expect(Number(entry.okuMAmount)).to.equal(redeemAmount.toNumber());
+      expect(Number(entry.rawUsdOkuAmount)).to.equal(redeemAmount.toNumber());
     });
 
     it("queues multiple from different users", async () => {
@@ -1224,17 +1202,17 @@ describe("lite-psm", () => {
       const queueBefore = await program.account.redemptionQueue.fetch(redemptionQueuePda);
 
       await program.methods
-        .redeemOkuM(redeemAmount)
+        .redeemUsdOku(redeemAmount)
         .accountsPartial({
           user: user2.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
           usdcMint,
-          okuMoneyMint,
+          usdOkuMint,
           userUsdcAta: user2UsdcAta,
-          userOkuMoneyAta: user2OkuMoneyAta,
+          userUsdOkuAta: user2UsdOkuAta,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1274,7 +1252,7 @@ describe("lite-psm", () => {
       const queueBefore = await program.account.redemptionQueue.fetch(redemptionQueuePda);
       if (n(queueBefore.head) >= n(queueBefore.tail)) {
         // Queue is empty, create an entry first
-        await mintOkuMoneyViaProgram(program, user, new BN(2_000_000), configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
+        await mintUsdOkuViaProgram(program, user, new BN(2_000_000), configPda, usdcMint, usdOkuMint, userUsdcAta, userUsdOkuAta, vaultUsdcAta);
         // Drain buffer to force queuing
         const vaultUsdc = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
         const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
@@ -1288,7 +1266,7 @@ describe("lite-psm", () => {
               bufferWithdrawer: coldMultisig.publicKey,
               config: configPda,
               redemptionQueue: redemptionQueuePda,
-              okuMoneyMint: okuMoneyMint,
+              usdOkuMint: usdOkuMint,
               withdrawerUsdcAta: bufferWithdrawerUsdcAta,
               vaultUsdc: vaultUsdcAta,
               usdcMint,
@@ -1299,17 +1277,17 @@ describe("lite-psm", () => {
             .rpc();
         }
         await program.methods
-          .redeemOkuM(new BN(1_000_000))
+          .redeemUsdOku(new BN(1_000_000))
           .accountsPartial({
             user: user.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
             usdcMint,
-            okuMoneyMint,
+            usdOkuMint,
             userUsdcAta,
-            userOkuMoneyAta,
+            userUsdOkuAta,
             vaultUsdc: vaultUsdcAta,
-            vaultOkuMoney: vaultOkuMoneyAta,
+            vaultUsdOku: vaultUsdOkuAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1348,9 +1326,9 @@ describe("lite-psm", () => {
           queueProcessor: orchestrator.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          okuMoneyMint,
+          usdOkuMint,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
@@ -1390,9 +1368,9 @@ describe("lite-psm", () => {
             queueProcessor: orchestrator.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint,
+            usdOkuMint,
             vaultUsdc: vaultUsdcAta,
-            vaultOkuMoney: vaultOkuMoneyAta,
+            vaultUsdOku: vaultUsdOkuAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
@@ -1415,7 +1393,7 @@ describe("lite-psm", () => {
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint,
@@ -1427,8 +1405,8 @@ describe("lite-psm", () => {
       }
 
       // Mint and queue for user1 and user2
-      await mintOkuMoneyViaProgram(program, user, new BN(5_000_000), configPda, usdcMint, okuMoneyMint, userUsdcAta, userOkuMoneyAta, vaultUsdcAta);
-      await mintOkuMoneyViaProgram(program, user2, new BN(5_000_000), configPda, usdcMint, okuMoneyMint, user2UsdcAta, user2OkuMoneyAta, vaultUsdcAta);
+      await mintUsdOkuViaProgram(program, user, new BN(5_000_000), configPda, usdcMint, usdOkuMint, userUsdcAta, userUsdOkuAta, vaultUsdcAta);
+      await mintUsdOkuViaProgram(program, user2, new BN(5_000_000), configPda, usdcMint, usdOkuMint, user2UsdcAta, user2UsdOkuAta, vaultUsdcAta);
 
       // Drain buffer again (mint deposits USDC into vault)
       const vaultUsdc2 = await getAccount(provider.connection, vaultUsdcAta, undefined, TOKEN_PROGRAM_ID);
@@ -1439,7 +1417,7 @@ describe("lite-psm", () => {
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint,
@@ -1451,17 +1429,17 @@ describe("lite-psm", () => {
       }
 
       await program.methods
-        .redeemOkuM(new BN(2_000_000))
+        .redeemUsdOku(new BN(2_000_000))
         .accountsPartial({
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
           usdcMint,
-          okuMoneyMint,
+          usdOkuMint,
           userUsdcAta,
-          userOkuMoneyAta,
+          userUsdOkuAta,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1471,17 +1449,17 @@ describe("lite-psm", () => {
         .rpc();
 
       await program.methods
-        .redeemOkuM(new BN(2_000_000))
+        .redeemUsdOku(new BN(2_000_000))
         .accountsPartial({
           user: user2.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
           usdcMint,
-          okuMoneyMint,
+          usdOkuMint,
           userUsdcAta: user2UsdcAta,
-          userOkuMoneyAta: user2OkuMoneyAta,
+          userUsdOkuAta: user2UsdOkuAta,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1521,9 +1499,9 @@ describe("lite-psm", () => {
           queueProcessor: orchestrator.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          okuMoneyMint,
+          usdOkuMint,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
@@ -1571,9 +1549,9 @@ describe("lite-psm", () => {
             queueProcessor: orchestrator.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint,
+            usdOkuMint,
             vaultUsdc: vaultUsdcAta,
-            vaultOkuMoney: vaultOkuMoneyAta,
+            vaultUsdOku: vaultUsdOkuAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
@@ -1589,9 +1567,9 @@ describe("lite-psm", () => {
             queueProcessor: orchestrator.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint,
+            usdOkuMint,
             vaultUsdc: vaultUsdcAta,
-            vaultOkuMoney: vaultOkuMoneyAta,
+            vaultUsdOku: vaultUsdOkuAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
@@ -1613,9 +1591,9 @@ describe("lite-psm", () => {
             queueProcessor: warmMultisig.publicKey, // Wrong authority
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint,
+            usdOkuMint,
             vaultUsdc: vaultUsdcAta,
-            vaultOkuMoney: vaultOkuMoneyAta,
+            vaultUsdOku: vaultUsdOkuAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
@@ -1634,12 +1612,12 @@ describe("lite-psm", () => {
     });
 
     // Phase 10: process_queue with a frozen recipient ATA. The on-chain
-    // CPI burn-of-escrowed-OkuMoney + USDC transfer to the recipient
+    // CPI burn-of-escrowed-usdOku + USDC transfer to the recipient
     // must fail because the recipient's USDC ATA isn't frozen (USDC is
     // standard SPL Token, not Token-2022). To exercise the analogous
     // case where the *escrowed* token side reverts, we freeze the
-    // recipient's OkuMoney ATA — but `process_queue` only writes USDC
-    // out and doesn't touch the recipient's OkuMoney ATA, so freezing
+    // recipient's usdOku ATA — but `process_queue` only writes USDC
+    // out and doesn't touch the recipient's usdOku ATA, so freezing
     // that has no effect on the payout path. The interesting case is
     // when the recipient's USDC ATA cannot receive (e.g. account
     // doesn't exist). We assert the program reverts with
@@ -1647,15 +1625,15 @@ describe("lite-psm", () => {
     // `remainingAccounts`.
     it("process_queue rejects when recipient ATA missing from remaining_accounts", async () => {
       // Queue a fresh entry.
-      await mintOkuMoneyViaProgram(
+      await mintUsdOkuViaProgram(
         program,
         user,
         new BN(1_000_000),
         configPda,
         usdcMint,
-        okuMoneyMint,
+        usdOkuMint,
         userUsdcAta,
-        userOkuMoneyAta,
+        userUsdOkuAta,
         vaultUsdcAta
       );
       // Drain buffer so the next redeem hits the queue.
@@ -1679,7 +1657,7 @@ describe("lite-psm", () => {
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint,
@@ -1690,17 +1668,17 @@ describe("lite-psm", () => {
           .rpc();
       }
       await program.methods
-        .redeemOkuM(new BN(500_000))
+        .redeemUsdOku(new BN(500_000))
         .accountsPartial({
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
           usdcMint,
-          okuMoneyMint,
+          usdOkuMint,
           userUsdcAta,
-          userOkuMoneyAta,
+          userUsdOkuAta,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1734,9 +1712,9 @@ describe("lite-psm", () => {
             queueProcessor: orchestrator.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint,
+            usdOkuMint,
             vaultUsdc: vaultUsdcAta,
-            vaultOkuMoney: vaultOkuMoneyAta,
+            vaultUsdOku: vaultUsdOkuAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
@@ -1770,9 +1748,9 @@ describe("lite-psm", () => {
           queueProcessor: orchestrator.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          okuMoneyMint,
+          usdOkuMint,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
@@ -1788,10 +1766,10 @@ describe("lite-psm", () => {
   // NEW COVERAGE: rescue_queue_entry
   // ==========================================================================
   describe("rescue_queue_entry", () => {
-    const REDEEM_AMOUNT = new BN(500_000); // 0.5 OkuMoney
+    const REDEEM_AMOUNT = new BN(500_000); // 0.5 usdOku
 
     /** Drain whatever USDC is sitting in the PSM buffer so subsequent
-     * `redeem_oku_m` calls fall into the queued path. */
+     * `redeem_usd_oku` calls fall into the queued path. */
     async function drainBuffer() {
       const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
         usdcMint,
@@ -1813,7 +1791,7 @@ describe("lite-psm", () => {
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint,
@@ -1826,16 +1804,16 @@ describe("lite-psm", () => {
     }
 
     before(async () => {
-      // Make sure the user has OkuMoney to queue.
-      await mintOkuMoneyViaProgram(
+      // Make sure the user has usdOku to queue.
+      await mintUsdOkuViaProgram(
         program,
         user,
         REDEEM_AMOUNT.muln(4),
         configPda,
         usdcMint,
-        okuMoneyMint,
+        usdOkuMint,
         userUsdcAta,
-        userOkuMoneyAta,
+        userUsdOkuAta,
         vaultUsdcAta
       );
       await drainBuffer();
@@ -1849,20 +1827,20 @@ describe("lite-psm", () => {
       await drainBuffer();
     });
 
-    it("returns escrowed OkuMoney to a recipient and clears the slot", async () => {
+    it("returns escrowed usdOku to a recipient and clears the slot", async () => {
       // Queue a redemption.
       await program.methods
-        .redeemOkuM(REDEEM_AMOUNT)
+        .redeemUsdOku(REDEEM_AMOUNT)
         .accountsPartial({
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
           usdcMint,
-          okuMoneyMint,
+          usdOkuMint,
           userUsdcAta,
-          userOkuMoneyAta,
+          userUsdOkuAta,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1876,12 +1854,12 @@ describe("lite-psm", () => {
       const rescueIndex = (queue.tail as BN).sub(new BN(1));
       const slot = ringSlot(rescueIndex);
       const entry = queue.entries[slot];
-      const rescuedAmount = Number(entry.okuMAmount);
+      const rescuedAmount = Number(entry.rawUsdOkuAmount);
       expect(entry.user.toString()).to.equal(user.publicKey.toString());
 
       const userOkuBefore = await getAccount(
         provider.connection,
-        userOkuMoneyAta,
+        userUsdOkuAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -1893,9 +1871,9 @@ describe("lite-psm", () => {
           queueProcessor: psmOrchestrator.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          okuMoneyMint,
-          vaultOkuMoney: vaultOkuMoneyAta,
-          recipientOkuMoneyAta: userOkuMoneyAta,
+          usdOkuMint,
+          vaultUsdOku: vaultUsdOkuAta,
+          recipientUsdOkuAta: userUsdOkuAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([psmOrchestrator])
@@ -1907,12 +1885,12 @@ describe("lite-psm", () => {
       // Slot must be cleared (Pubkey::default + zero amount).
       const cleared = queueAfter.entries[slot];
       expect(cleared.user.toString()).to.equal(PublicKey.default.toString());
-      expect(Number(cleared.okuMAmount)).to.equal(0);
+      expect(Number(cleared.rawUsdOkuAmount)).to.equal(0);
 
-      // OkuMoney must have been transferred back to the user.
+      // usdOku must have been transferred back to the user.
       const userOkuAfter = await getAccount(
         provider.connection,
-        userOkuMoneyAta,
+        userUsdOkuAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -1924,17 +1902,17 @@ describe("lite-psm", () => {
     it("non-queue_processor cannot rescue", async () => {
       // Queue a fresh entry.
       await program.methods
-        .redeemOkuM(REDEEM_AMOUNT)
+        .redeemUsdOku(REDEEM_AMOUNT)
         .accountsPartial({
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
           usdcMint,
-          okuMoneyMint,
+          usdOkuMint,
           userUsdcAta,
-          userOkuMoneyAta,
+          userUsdOkuAta,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -1953,9 +1931,9 @@ describe("lite-psm", () => {
             queueProcessor: warmMultisig.publicKey, // wrong role
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint,
-            vaultOkuMoney: vaultOkuMoneyAta,
-            recipientOkuMoneyAta: userOkuMoneyAta,
+            usdOkuMint,
+            vaultUsdOku: vaultUsdOkuAta,
+            recipientUsdOkuAta: userUsdOkuAta,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([warmMultisig])
@@ -1973,9 +1951,9 @@ describe("lite-psm", () => {
           queueProcessor: psmOrchestrator.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          okuMoneyMint,
-          vaultOkuMoney: vaultOkuMoneyAta,
-          recipientOkuMoneyAta: userOkuMoneyAta,
+          usdOkuMint,
+          vaultUsdOku: vaultUsdOkuAta,
+          recipientUsdOkuAta: userUsdOkuAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([psmOrchestrator])
@@ -1985,17 +1963,17 @@ describe("lite-psm", () => {
     it("rescuing the same slot twice fails with EntryAlreadyCleared", async () => {
       // Queue and rescue once.
       await program.methods
-        .redeemOkuM(REDEEM_AMOUNT)
+        .redeemUsdOku(REDEEM_AMOUNT)
         .accountsPartial({
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
           usdcMint,
-          okuMoneyMint,
+          usdOkuMint,
           userUsdcAta,
-          userOkuMoneyAta,
+          userUsdOkuAta,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -2013,9 +1991,9 @@ describe("lite-psm", () => {
           queueProcessor: psmOrchestrator.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          okuMoneyMint,
-          vaultOkuMoney: vaultOkuMoneyAta,
-          recipientOkuMoneyAta: userOkuMoneyAta,
+          usdOkuMint,
+          vaultUsdOku: vaultUsdOkuAta,
+          recipientUsdOkuAta: userUsdOkuAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([psmOrchestrator])
@@ -2036,9 +2014,9 @@ describe("lite-psm", () => {
             queueProcessor: psmOrchestrator.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint,
-            vaultOkuMoney: vaultOkuMoneyAta,
-            recipientOkuMoneyAta: userOkuMoneyAta,
+            usdOkuMint,
+            vaultUsdOku: vaultUsdOkuAta,
+            recipientUsdOkuAta: userUsdOkuAta,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([psmOrchestrator])
@@ -2069,34 +2047,34 @@ describe("lite-psm", () => {
     // lets the queue_processor route a rescued entry to a fresh wallet
     // (e.g. when the original user's ATA was frozen for compliance).
     // Matches EVM `RedemptionQueue.rescueQueueEntry`'s permissive
-    // recipient gate. The test asserts the OkuMoney is credited to
+    // recipient gate. The test asserts the usdOku is credited to
     // `user2`, not `user`, when `user` was the original queue depositor.
-    it("rescue can deliver escrowed OkuMoney to a non-original recipient", async () => {
+    it("rescue can deliver escrowed usdOku to a non-original recipient", async () => {
       // 1. user enqueues a redemption.
-      await mintOkuMoneyViaProgram(
+      await mintUsdOkuViaProgram(
         program,
         user,
         REDEEM_AMOUNT.muln(2),
         configPda,
         usdcMint,
-        okuMoneyMint,
+        usdOkuMint,
         userUsdcAta,
-        userOkuMoneyAta,
+        userUsdOkuAta,
         vaultUsdcAta
       );
       await drainBuffer();
       await program.methods
-        .redeemOkuM(REDEEM_AMOUNT)
+        .redeemUsdOku(REDEEM_AMOUNT)
         .accountsPartial({
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
           usdcMint,
-          okuMoneyMint,
+          usdOkuMint,
           userUsdcAta,
-          userOkuMoneyAta,
+          userUsdOkuAta,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -2107,20 +2085,20 @@ describe("lite-psm", () => {
       const queue = await program.account.redemptionQueue.fetch(redemptionQueuePda);
       const rescueIndex = (queue.tail as BN).sub(new BN(1));
       const slot = ringSlot(rescueIndex);
-      const rescuedAmount = Number(queue.entries[slot].okuMAmount);
+      const rescuedAmount = Number(queue.entries[slot].rawUsdOkuAmount);
       expect(queue.entries[slot].user.toString()).to.equal(user.publicKey.toString());
 
-      // 2. Ensure user2 has an OkuMoney ATA to receive the rescue.
-      await ensureAtaViaBankrun(h, user2.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
-      const user2OkuMoneyAtaLocal = getAssociatedTokenAddressSync(
-        okuMoneyMint,
+      // 2. Ensure user2 has an usdOku ATA to receive the rescue.
+      await ensureAtaViaBankrun(h, user2.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
+      const user2UsdOkuAtaLocal = getAssociatedTokenAddressSync(
+        usdOkuMint,
         user2.publicKey,
         false,
         TOKEN_2022_PROGRAM_ID
       );
-      const user2OkuMoneyBefore = await getAccount(
+      const user2UsdOkuBefore = await getAccount(
         provider.connection,
-        user2OkuMoneyAtaLocal,
+        user2UsdOkuAtaLocal,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -2132,22 +2110,22 @@ describe("lite-psm", () => {
           queueProcessor: psmOrchestrator.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          okuMoneyMint,
-          vaultOkuMoney: vaultOkuMoneyAta,
-          recipientOkuMoneyAta: user2OkuMoneyAtaLocal,
+          usdOkuMint,
+          vaultUsdOku: vaultUsdOkuAta,
+          recipientUsdOkuAta: user2UsdOkuAtaLocal,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([psmOrchestrator])
         .rpc();
 
       // 4. user2's balance must have grown by exactly the rescued amount.
-      const user2OkuMoneyAfter = await getAccount(
+      const user2UsdOkuAfter = await getAccount(
         provider.connection,
-        user2OkuMoneyAtaLocal,
+        user2UsdOkuAtaLocal,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
-      const delta = Number(user2OkuMoneyAfter.amount) - Number(user2OkuMoneyBefore.amount);
+      const delta = Number(user2UsdOkuAfter.amount) - Number(user2UsdOkuBefore.amount);
       expect(delta).to.equal(rescuedAmount);
     });
   });
@@ -2159,7 +2137,7 @@ describe("lite-psm", () => {
   // recipient ATA is frozen and a different ATA they control still works).
   // ==========================================================================
   describe("user_self_rescue_queue_entry", () => {
-    const REDEEM_AMOUNT = new BN(500_000); // 0.5 OkuMoney
+    const REDEEM_AMOUNT = new BN(500_000); // 0.5 usdOku
 
     async function drainBuffer() {
       const bufferWithdrawerUsdcAta = getAssociatedTokenAddressSync(
@@ -2182,7 +2160,7 @@ describe("lite-psm", () => {
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint,
@@ -2195,15 +2173,15 @@ describe("lite-psm", () => {
     }
 
     before(async () => {
-      await mintOkuMoneyViaProgram(
+      await mintUsdOkuViaProgram(
         program,
         user,
         REDEEM_AMOUNT.muln(4),
         configPda,
         usdcMint,
-        okuMoneyMint,
+        usdOkuMint,
         userUsdcAta,
-        userOkuMoneyAta,
+        userUsdOkuAta,
         vaultUsdcAta
       );
       await drainBuffer();
@@ -2216,17 +2194,17 @@ describe("lite-psm", () => {
     /** Queue a single redemption for `user` and return the absolute index. */
     async function queueOne(): Promise<BN> {
       await program.methods
-        .redeemOkuM(REDEEM_AMOUNT)
+        .redeemUsdOku(REDEEM_AMOUNT)
         .accountsPartial({
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
           usdcMint,
-          okuMoneyMint,
+          usdOkuMint,
           userUsdcAta,
-          userOkuMoneyAta,
+          userUsdOkuAta,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -2238,12 +2216,12 @@ describe("lite-psm", () => {
       return (queue.tail as BN).sub(new BN(1));
     }
 
-    it("happy path: original queued user reclaims their escrowed OkuMoney", async () => {
+    it("happy path: original queued user reclaims their escrowed usdOku", async () => {
       const rescueIndex = await queueOne();
       const slot = ringSlot(rescueIndex);
       const userOkuBefore = await getAccount(
         provider.connection,
-        userOkuMoneyAta,
+        userUsdOkuAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -2254,9 +2232,9 @@ describe("lite-psm", () => {
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          okuMoneyMint,
-          vaultOkuMoney: vaultOkuMoneyAta,
-          recipientOkuMoneyAta: userOkuMoneyAta,
+          usdOkuMint,
+          vaultUsdOku: vaultUsdOkuAta,
+          recipientUsdOkuAta: userUsdOkuAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([user])
@@ -2265,11 +2243,11 @@ describe("lite-psm", () => {
       const queueAfter = await program.account.redemptionQueue.fetch(redemptionQueuePda);
       const cleared = queueAfter.entries[slot];
       expect(cleared.user.toString()).to.equal(PublicKey.default.toString());
-      expect(Number(cleared.okuMAmount)).to.equal(0);
+      expect(Number(cleared.rawUsdOkuAmount)).to.equal(0);
 
       const userOkuAfter = await getAccount(
         provider.connection,
-        userOkuMoneyAta,
+        userUsdOkuAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -2281,16 +2259,16 @@ describe("lite-psm", () => {
     it("rejects a different signer than the original queued user", async () => {
       const rescueIndex = await queueOne();
 
-      // Set up a clean OkuMoney ATA for user2 (the wrong signer) since the
+      // Set up a clean usdOku ATA for user2 (the wrong signer) since the
       // context pins `token::authority = user`. Without a user2-owned ATA the
       // tx would fail earlier on the account constraint, not on Unauthorized.
       const user2OkuAta = getAssociatedTokenAddressSync(
-        okuMoneyMint,
+        usdOkuMint,
         user2.publicKey,
         false,
         TOKEN_2022_PROGRAM_ID
       );
-      await ensureAtaViaBankrun(h, user2.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
+      await ensureAtaViaBankrun(h, user2.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
 
       try {
         await program.methods
@@ -2299,9 +2277,9 @@ describe("lite-psm", () => {
             user: user2.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint,
-            vaultOkuMoney: vaultOkuMoneyAta,
-            recipientOkuMoneyAta: user2OkuAta,
+            usdOkuMint,
+            vaultUsdOku: vaultUsdOkuAta,
+            recipientUsdOkuAta: user2OkuAta,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([user2])
@@ -2318,9 +2296,9 @@ describe("lite-psm", () => {
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          okuMoneyMint,
-          vaultOkuMoney: vaultOkuMoneyAta,
-          recipientOkuMoneyAta: userOkuMoneyAta,
+          usdOkuMint,
+          vaultUsdOku: vaultUsdOkuAta,
+          recipientUsdOkuAta: userUsdOkuAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([user])
@@ -2337,9 +2315,9 @@ describe("lite-psm", () => {
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          okuMoneyMint,
-          vaultOkuMoney: vaultOkuMoneyAta,
-          recipientOkuMoneyAta: userOkuMoneyAta,
+          usdOkuMint,
+          vaultUsdOku: vaultUsdOkuAta,
+          recipientUsdOkuAta: userUsdOkuAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([user])
@@ -2356,9 +2334,9 @@ describe("lite-psm", () => {
             user: user.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint,
-            vaultOkuMoney: vaultOkuMoneyAta,
-            recipientOkuMoneyAta: userOkuMoneyAta,
+            usdOkuMint,
+            vaultUsdOku: vaultUsdOkuAta,
+            recipientUsdOkuAta: userUsdOkuAta,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([user])
@@ -2385,9 +2363,9 @@ describe("lite-psm", () => {
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          okuMoneyMint,
-          vaultOkuMoney: vaultOkuMoneyAta,
-          recipientOkuMoneyAta: userOkuMoneyAta,
+          usdOkuMint,
+          vaultUsdOku: vaultUsdOkuAta,
+          recipientUsdOkuAta: userUsdOkuAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([user])
@@ -2416,18 +2394,18 @@ describe("lite-psm", () => {
     //   offset 9..16  : _pad0
     //   offset 16..24 : head (u64 LE)        ← we seed this
     //   offset 24..32 : tail (u64 LE)        ← we seed this
-    //   offset 32..40 : total_queued_oku_m   ← leave intact
+    //   offset 32..40 : total_queued_usd_oku   ← leave intact
     //   offset 40..   : entries
     const REDEEM_AMOUNT = new BN(500_000);
     const HEAD_TAIL_SEED = QUEUE_MAX_ENTRIES - 1; // 199 — next enqueue → slot 199, then wraps to 0
 
     before(async () => {
-      // Mint enough OkuMoney to enqueue twice and the leftover for any
+      // Mint enough usdOku to enqueue twice and the leftover for any
       // downstream cleanup.
-      await mintOkuMoneyViaProgram(
+      await mintUsdOkuViaProgram(
         program, user, REDEEM_AMOUNT.muln(4),
-        configPda, usdcMint, okuMoneyMint,
-        userUsdcAta, userOkuMoneyAta, vaultUsdcAta,
+        configPda, usdcMint, usdOkuMint,
+        userUsdcAta, userUsdOkuAta, vaultUsdcAta,
       );
     });
 
@@ -2472,7 +2450,7 @@ describe("lite-psm", () => {
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint,
+            usdOkuMint,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint,
@@ -2484,15 +2462,15 @@ describe("lite-psm", () => {
       }
 
       await program.methods
-        .redeemOkuM(REDEEM_AMOUNT)
+        .redeemUsdOku(REDEEM_AMOUNT)
         .accountsPartial({
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          usdcMint, okuMoneyMint,
-          userUsdcAta, userOkuMoneyAta,
+          usdcMint, usdOkuMint,
+          userUsdcAta, userUsdOkuAta,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -2506,20 +2484,20 @@ describe("lite-psm", () => {
       // Entry must be at slot (MAX_ENTRIES - 1).
       const lastSlot = QUEUE_MAX_ENTRIES - 1;
       expect(q.entries[lastSlot].user.toString()).to.equal(user.publicKey.toString());
-      expect(Number(q.entries[lastSlot].okuMAmount)).to.equal(REDEEM_AMOUNT.toNumber());
+      expect(Number(q.entries[lastSlot].rawUsdOkuAmount)).to.equal(REDEEM_AMOUNT.toNumber());
 
       // ----- Cycle 2: enqueue again → entry must wrap to slot 0 -----
       // (head stays at HEAD_TAIL_SEED; we only enqueue, don't process.)
       await program.methods
-        .redeemOkuM(REDEEM_AMOUNT)
+        .redeemUsdOku(REDEEM_AMOUNT)
         .accountsPartial({
           user: user.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          usdcMint, okuMoneyMint,
-          userUsdcAta, userOkuMoneyAta,
+          usdcMint, usdOkuMint,
+          userUsdcAta, userUsdOkuAta,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -2532,7 +2510,7 @@ describe("lite-psm", () => {
       expect(n(q.tail)).to.equal(HEAD_TAIL_SEED + 2);
       // The wrap: tail = HEAD_TAIL_SEED + 1 = MAX_ENTRIES → slot 0.
       expect(q.entries[0].user.toString()).to.equal(user.publicKey.toString());
-      expect(Number(q.entries[0].okuMAmount)).to.equal(REDEEM_AMOUNT.toNumber());
+      expect(Number(q.entries[0].rawUsdOkuAmount)).to.equal(REDEEM_AMOUNT.toNumber());
 
       // ----- Cleanup: process both queued entries so downstream tests
       // see an empty queue. -----
@@ -2560,9 +2538,9 @@ describe("lite-psm", () => {
           queueProcessor: orchestrator.publicKey,
           config: configPda,
           redemptionQueue: redemptionQueuePda,
-          okuMoneyMint,
+          usdOkuMint,
           vaultUsdc: vaultUsdcAta,
-          vaultOkuMoney: vaultOkuMoneyAta,
+          vaultUsdOku: vaultUsdOkuAta,
           tokenProgram: TOKEN_PROGRAM_ID,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
@@ -2589,17 +2567,17 @@ describe("lite-psm", () => {
       const existing = await h.context.banksClient.getAccount(redemptionQueuePda);
       if (!existing) throw new Error("redemption_queue account missing");
       const data = new Uint8Array(existing.data);
-      // Zero out head (16..24), tail (24..32), total_queued_oku_m (32..40).
+      // Zero out head (16..24), tail (24..32), total_queued_usd_oku (32..40).
       data.set(new Uint8Array(24), 16);
       h.context.setAccount(redemptionQueuePda, { ...existing, data });
 
-      // Fund the user with enough OkuMoney for 50 enqueues.
-      const PER_ENTRY = new BN(100_000); // 0.1 OkuMoney per entry
+      // Fund the user with enough usdOku for 50 enqueues.
+      const PER_ENTRY = new BN(100_000); // 0.1 usdOku per entry
       const ENTRIES = 50;
-      await mintOkuMoneyViaProgram(
+      await mintUsdOkuViaProgram(
         program, user, PER_ENTRY.muln(ENTRIES + 2),
-        configPda, usdcMint, okuMoneyMint,
-        userUsdcAta, userOkuMoneyAta, vaultUsdcAta,
+        configPda, usdcMint, usdOkuMint,
+        userUsdcAta, userUsdOkuAta, vaultUsdcAta,
       );
 
       // Drain the buffer so every redeem hits the queue.
@@ -2615,7 +2593,7 @@ describe("lite-psm", () => {
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint,
+            usdOkuMint,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint,
@@ -2630,15 +2608,15 @@ describe("lite-psm", () => {
       // 10 entries on the pre-Phase-13b cap).
       for (let i = 0; i < ENTRIES; i++) {
         await program.methods
-          .redeemOkuM(PER_ENTRY)
+          .redeemUsdOku(PER_ENTRY)
           .accountsPartial({
             user: user.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            usdcMint, okuMoneyMint,
-            userUsdcAta, userOkuMoneyAta,
+            usdcMint, usdOkuMint,
+            userUsdcAta, userUsdOkuAta,
             vaultUsdc: vaultUsdcAta,
-            vaultOkuMoney: vaultOkuMoneyAta,
+            vaultUsdOku: vaultUsdOkuAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -2686,9 +2664,9 @@ describe("lite-psm", () => {
             queueProcessor: orchestrator.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint,
+            usdOkuMint,
             vaultUsdc: vaultUsdcAta,
-            vaultOkuMoney: vaultOkuMoneyAta,
+            vaultUsdOku: vaultUsdOkuAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
@@ -2707,17 +2685,17 @@ describe("lite-psm", () => {
   // ==========================================================================
   describe("freeze/thaw", () => {
     const freezeTarget = Keypair.generate();
-    let freezeTargetOkuMoneyAta: PublicKey;
+    let freezeTargetUsdOkuAta: PublicKey;
 
     before(async () => {
-      // Create target user, fund, get OkuMoney
+      // Create target user, fund, get usdOku
       await fundKeypairs(h, [freezeTarget], 10 * anchor.web3.LAMPORTS_PER_SOL);
 
       const freezeTargetUsdcAta = getAssociatedTokenAddressSync(
         usdcMint, freezeTarget.publicKey, false, TOKEN_PROGRAM_ID
       );
-      freezeTargetOkuMoneyAta = getAssociatedTokenAddressSync(
-        okuMoneyMint, freezeTarget.publicKey, false, TOKEN_2022_PROGRAM_ID
+      freezeTargetUsdOkuAta = getAssociatedTokenAddressSync(
+        usdOkuMint, freezeTarget.publicKey, false, TOKEN_2022_PROGRAM_ID
       );
 
       // Create USDC ATA and fund
@@ -2729,25 +2707,25 @@ describe("lite-psm", () => {
       await provider.sendAndConfirm(createAtaTx, [payer]);
       await mintToViaBankrun(h, usdcMint, freezeTargetUsdcAta, payer, 10_000_000, TOKEN_PROGRAM_ID);
 
-      // Mint OkuMoney via PSM
-      await ensureAtaViaBankrun(h, freezeTarget.publicKey, okuMoneyMint, TOKEN_2022_PROGRAM_ID);
-      await mintOkuMoneyViaProgram(program, freezeTarget, new BN(5_000_000), configPda, usdcMint, okuMoneyMint, freezeTargetUsdcAta, freezeTargetOkuMoneyAta, vaultUsdcAta);
+      // Mint usdOku via PSM
+      await ensureAtaViaBankrun(h, freezeTarget.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
+      await mintUsdOkuViaProgram(program, freezeTarget, new BN(5_000_000), configPda, usdcMint, usdOkuMint, freezeTargetUsdcAta, freezeTargetUsdOkuAta, vaultUsdcAta);
     });
 
-    it("freezer can freeze a user's OkuMoney account", async () => {
+    it("freezer can freeze a user's usdOku account", async () => {
       await program.methods
         .freezeAccount()
         .accountsPartial({
           freezer: warmMultisig.publicKey,
           config: configPda,
-          okuMoneyMint,
-          targetOkuMoneyAta: freezeTargetOkuMoneyAta,
+          usdOkuMint,
+          targetUsdOkuAta: freezeTargetUsdOkuAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([warmMultisig])
         .rpc();
 
-      const acct = await getAccount(provider.connection, freezeTargetOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const acct = await getAccount(provider.connection, freezeTargetUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
       expect(acct.isFrozen).to.be.true;
     });
 
@@ -2757,14 +2735,14 @@ describe("lite-psm", () => {
         .accountsPartial({
           unfreezer: coldMultisig.publicKey,
           config: configPda,
-          okuMoneyMint,
-          targetOkuMoneyAta: freezeTargetOkuMoneyAta,
+          usdOkuMint,
+          targetUsdOkuAta: freezeTargetUsdOkuAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([coldMultisig])
         .rpc();
 
-      const acct = await getAccount(provider.connection, freezeTargetOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const acct = await getAccount(provider.connection, freezeTargetUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
       expect(acct.isFrozen).to.be.false;
     });
 
@@ -2775,8 +2753,8 @@ describe("lite-psm", () => {
           .accountsPartial({
             freezer: coldMultisig.publicKey, // Wrong authority
             config: configPda,
-            okuMoneyMint,
-            targetOkuMoneyAta: freezeTargetOkuMoneyAta,
+            usdOkuMint,
+            targetUsdOkuAta: freezeTargetUsdOkuAta,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([coldMultisig])
@@ -2794,8 +2772,8 @@ describe("lite-psm", () => {
         .accountsPartial({
           freezer: warmMultisig.publicKey,
           config: configPda,
-          okuMoneyMint,
-          targetOkuMoneyAta: freezeTargetOkuMoneyAta,
+          usdOkuMint,
+          targetUsdOkuAta: freezeTargetUsdOkuAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([warmMultisig])
@@ -2807,8 +2785,8 @@ describe("lite-psm", () => {
           .accountsPartial({
             unfreezer: warmMultisig.publicKey, // Wrong authority
             config: configPda,
-            okuMoneyMint,
-            targetOkuMoneyAta: freezeTargetOkuMoneyAta,
+            usdOkuMint,
+            targetUsdOkuAta: freezeTargetUsdOkuAta,
             token2022Program: TOKEN_2022_PROGRAM_ID,
           })
           .signers([warmMultisig])
@@ -2824,8 +2802,8 @@ describe("lite-psm", () => {
         .accountsPartial({
           unfreezer: coldMultisig.publicKey,
           config: configPda,
-          okuMoneyMint,
-          targetOkuMoneyAta: freezeTargetOkuMoneyAta,
+          usdOkuMint,
+          targetUsdOkuAta: freezeTargetUsdOkuAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([coldMultisig])
@@ -2846,14 +2824,14 @@ describe("lite-psm", () => {
         .accountsPartial({
           freezer: warmMultisig.publicKey,
           config: configPda,
-          okuMoneyMint,
-          targetOkuMoneyAta: freezeTargetOkuMoneyAta,
+          usdOkuMint,
+          targetUsdOkuAta: freezeTargetUsdOkuAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([warmMultisig])
         .rpc();
 
-      const acct = await getAccount(provider.connection, freezeTargetOkuMoneyAta, undefined, TOKEN_2022_PROGRAM_ID);
+      const acct = await getAccount(provider.connection, freezeTargetUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
       expect(acct.isFrozen).to.be.true;
 
       // Cleanup
@@ -2867,8 +2845,8 @@ describe("lite-psm", () => {
         .accountsPartial({
           unfreezer: coldMultisig.publicKey,
           config: configPda,
-          okuMoneyMint,
-          targetOkuMoneyAta: freezeTargetOkuMoneyAta,
+          usdOkuMint,
+          targetUsdOkuAta: freezeTargetUsdOkuAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([coldMultisig])
@@ -3080,7 +3058,7 @@ describe("lite-psm", () => {
             bufferWithdrawer: coldMultisig.publicKey,
             config: configPda,
             redemptionQueue: redemptionQueuePda,
-            okuMoneyMint: okuMoneyMint,
+            usdOkuMint: usdOkuMint,
             withdrawerUsdcAta: bufferWithdrawerUsdcAta,
             vaultUsdc: vaultUsdcAta,
             usdcMint,

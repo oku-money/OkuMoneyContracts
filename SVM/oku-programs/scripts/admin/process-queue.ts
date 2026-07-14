@@ -46,7 +46,7 @@ import {
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 
 // Mirrors `RedemptionQueue::MAX_ENTRIES` in
-// programs/lite-psm/src/state.rs (Phase 13b: 10 → 200, zero-copy).
+// programs/lite-psm/src/state.rs (Phase 13b: 10 -> 200, zero-copy).
 const QUEUE_MAX_ENTRIES = 200n;
 
 // Mirrors `MAX_BATCH_ENTRIES` in
@@ -71,7 +71,7 @@ function bnToBigInt(bn: anchor.BN): bigint {
 
 interface QueueEntry {
   user: PublicKey;
-  okuMAmount: anchor.BN;
+  usdOkuAmount: anchor.BN;
 }
 
 /**
@@ -79,7 +79,7 @@ interface QueueEntry {
  * `MAX_BATCH_ENTRIES` entries starting at the current `head`.
  *
  * Skipped entries (user == default) do NOT consume a remainingAccounts
- * slot — this matches the on-chain `payouts` counter in `process_queue`
+ * slot -- this matches the on-chain `payouts` counter in `process_queue`
  * which only increments for non-skipped entries.
  *
  * Returns the entries to be processed in this batch (for the summary
@@ -119,7 +119,7 @@ function buildBatch(
       TOKEN_PROGRAM_ID
     );
     summary[`slot[${slot}]`] =
-      `${user.toBase58()} (okuM=${entry.okuMAmount.toString()}) ata=${ata.toBase58()}`;
+      `${user.toBase58()} (usdOku=${entry.usdOkuAmount.toString()}) ata=${ata.toBase58()}`;
     recipientAtas.push(ata);
   }
 
@@ -145,7 +145,7 @@ async function main() {
   const deployment = loadDeployment(network);
   if (
     !deployment?.programs?.litePsm ||
-    !deployment.tokens?.okuMoney ||
+    !deployment.tokens?.usdOku ||
     !deployment.tokens?.usdc
   ) {
     throw new Error(`No deployment for ${network}.`);
@@ -153,20 +153,20 @@ async function main() {
 
   const litePsmId = new PublicKey(deployment.programs.litePsm);
   const usdcMint = new PublicKey(deployment.tokens.usdc);
-  const okuMoneyMint = new PublicKey(deployment.tokens.okuMoney);
+  const usdOkuMint = new PublicKey(deployment.tokens.usdOku);
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
   const [redemptionQueue] = deriveRedemptionQueuePDA(litePsmId);
 
-  // Derive the vault ATAs (USDC + OkuMoney escrow) — both are config-PDA-owned.
+  // Derive the vault ATAs (USDC + usdOku escrow) -- both are config-PDA-owned.
   const vaultUsdc = getAssociatedTokenAddressSync(
     usdcMint,
     psmConfig,
     true,
     TOKEN_PROGRAM_ID
   );
-  const vaultOkuMoney = getAssociatedTokenAddressSync(
-    okuMoneyMint,
+  const vaultUsdOku = getAssociatedTokenAddressSync(
+    usdOkuMint,
     psmConfig,
     true,
     TOKEN_2022_PROGRAM_ID
@@ -185,7 +185,7 @@ async function main() {
   }
   const initialPending = initialTail - initialHead;
   if (initialPending === 0n) {
-    logger.warning('Queue is empty — nothing to process.');
+    logger.warning('Queue is empty -- nothing to process.');
     return;
   }
 
@@ -196,13 +196,13 @@ async function main() {
   const expectedBatches = Math.ceil(targetTotal / MAX_BATCH_ENTRIES);
 
   logger.info(
-    summaryBlock('process_queue() — drain plan', {
+    summaryBlock('process_queue() -- drain plan', {
       'config PDA': psmConfig.toBase58(),
       'queue PDA': redemptionQueue.toBase58(),
       'usdcMint': usdcMint.toBase58(),
-      'okuMoneyMint': okuMoneyMint.toBase58(),
+      'usdOkuMint': usdOkuMint.toBase58(),
       'vault USDC': vaultUsdc.toBase58(),
-      'vault OkuMoney': vaultOkuMoney.toBase58(),
+      'vault usdOku': vaultUsdOku.toBase58(),
       'queue head (initial)': initialHead.toString(),
       'queue tail (initial)': initialTail.toString(),
       'pending entries': initialPending.toString(),
@@ -220,7 +220,7 @@ async function main() {
   }
   await confirmIfMainnet(
     network,
-    `process_queue auto-drain on mainnet — ${targetTotal} entries across ${expectedBatches} tx(s)`
+    `process_queue auto-drain on mainnet -- ${targetTotal} entries across ${expectedBatches} tx(s)`
   );
 
   // Auto-loop: re-fetch the queue between batches because each successful
@@ -235,7 +235,7 @@ async function main() {
     const head = bnToBigInt(queue.head as anchor.BN);
     const tail = bnToBigInt(queue.tail as anchor.BN);
     if (tail <= head) {
-      logger.success('Queue is now empty — drain complete.');
+      logger.success('Queue is now empty -- drain complete.');
       break;
     }
     const remainingTarget = targetTotal - drained;
@@ -250,7 +250,7 @@ async function main() {
     );
     if (pendingThisBatch === 0) {
       logger.warning(
-        'Calculated batch size 0 with queue non-empty — likely all-skipped slots; bailing.'
+        'Calculated batch size 0 with queue non-empty -- likely all-skipped slots; bailing.'
       );
       break;
     }
@@ -272,9 +272,9 @@ async function main() {
         queueProcessor: provider.wallet.publicKey,
         config: psmConfig,
         redemptionQueue,
-        okuMoneyMint,
+        usdOkuMint,
         vaultUsdc,
-        vaultOkuMoney,
+        vaultUsdOku,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
@@ -288,7 +288,7 @@ async function main() {
       .rpc();
     logger.success(`batch ${batchNum} tx: ${sig}`);
 
-    // Confirm head advanced — otherwise we'd loop forever. The on-chain
+    // Confirm head advanced -- otherwise we'd loop forever. The on-chain
     // handler returns Ok with `processed = 0` only when the queue was
     // already empty on entry (caught above) or it ran out of CU mid-call;
     // in either case re-running this script later is the right answer.
@@ -299,7 +299,7 @@ async function main() {
       logger.warning(
         `head did not advance after batch ${batchNum} (still ${headAfter}). ` +
           'Likely the on-chain handler returned early (e.g. all entries ' +
-          'skipped, or vault USDC depleted). Stopping the loop — re-run ' +
+          'skipped, or vault USDC depleted). Stopping the loop -- re-run ' +
           'after investigating.'
       );
       break;
@@ -307,7 +307,7 @@ async function main() {
     drained += advanced;
     logger.info(
       `Progress: drained ${drained} / target ${targetTotal} ` +
-        `(head ${head} → ${headAfter}).`
+        `(head ${head} -> ${headAfter}).`
     );
   }
 

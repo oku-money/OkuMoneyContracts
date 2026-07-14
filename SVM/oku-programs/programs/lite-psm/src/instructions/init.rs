@@ -6,7 +6,6 @@ use crate::helpers::mint_extensions::assert_oku_money_mint_extensions_whiteliste
 use crate::state::RedemptionQueue;
 use anchor_lang::prelude::*;
 
-
 /// Parameter bundle for [`initialize`]. Cycle 4 (PSM-17): collapses
 /// the 15-argument instruction signature into a single struct so the
 /// IDL slot is self-documenting and the call site is harder to

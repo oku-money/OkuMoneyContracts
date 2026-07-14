@@ -91,7 +91,6 @@ pub struct PsmConfig {
     // Permissioned direct OkuMoney mint path — no USDC collateral required
     // on-chain. Matches EVM `OkuMoney.mint(to, amount)` called by an
     // `OKUM_MINTER` role holder. The fiat collateral is held off-chain.
-
     /// Operator / fiat gateway — can mint OkuMoney directly without USDC.
     /// EVM equivalent: address granted `OKUM_MINTER` role.
     /// `Pubkey::default()` means "not configured / disabled".
@@ -109,7 +108,6 @@ pub struct PsmConfig {
     // caller's ATA without USDC payout. Matches EVM `OkuMoney.burn(amount)`
     // called by an `OKUM_BURNER` role holder. Enables SVM→EVM bridging
     // where the KMS-backed orchestrator burns on the source chain.
-
     /// Operator / bridge backend — can burn OkuMoney directly without
     /// triggering a USDC redemption.
     /// EVM equivalent: address granted `OKUM_BURNER` role.

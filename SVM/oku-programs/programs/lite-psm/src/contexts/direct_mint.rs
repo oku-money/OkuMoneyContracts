@@ -115,7 +115,6 @@ pub struct MintUsdOkuDirect<'info> {
     pub recipient: UncheckedAccount<'info>,
 
     // ===== oku-dollar CPI accounts (passed through to `wrap_to`) =====
-
     /// OkuDollar config PDA (read-only for wrap math).
     /// CHECK: Validated by the oku-dollar program during CPI. We verify
     /// the address matches config.psm_config's back-reference by checking

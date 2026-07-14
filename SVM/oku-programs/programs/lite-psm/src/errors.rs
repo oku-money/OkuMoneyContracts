@@ -151,7 +151,6 @@ pub enum LitePsmError {
     MigrationNotNeeded,
 
     // ===== Initialization Errors =====
-
     /// USDC mint must have exactly 6 decimals on Solana.
     /// EVM uses a runtime-resolved `usdcDecimalMultiplier`; SVM hardcodes 6.
     #[msg("USDC mint must have exactly 6 decimals")]

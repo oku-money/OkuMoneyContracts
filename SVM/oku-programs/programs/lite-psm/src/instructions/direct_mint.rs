@@ -56,9 +56,8 @@ pub fn migrate_psm_config(ctx: Context<MigratePsmConfig>) -> Result<()> {
         let data = config_info.try_borrow_data()?;
 
         // Verify role_admin matches the signer
-        let stored_role_admin =
-            Pubkey::try_from(&data[ROLE_ADMIN_OFFSET..ROLE_ADMIN_OFFSET + 32])
-                .map_err(|_| error!(LitePsmError::Unauthorized))?;
+        let stored_role_admin = Pubkey::try_from(&data[ROLE_ADMIN_OFFSET..ROLE_ADMIN_OFFSET + 32])
+            .map_err(|_| error!(LitePsmError::Unauthorized))?;
         require!(
             stored_role_admin == ctx.accounts.role_admin.key(),
             LitePsmError::Unauthorized

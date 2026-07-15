@@ -1,36 +1,53 @@
 
-> test:bankrun
-> RUST_LOG= npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'
-
-
 
   WS3.2 PSM coverage additions
-    ✔ WS3.2.a: distribute_yield reverts ZeroAmount when OkuM supply == 0
+    ✔ WS3.2.a: distribute_yield reverts ZeroAmount when usdOku supply == 0
     ✔ WS3.2.b: lite-psm initialize fails if config PDA already exists
     ✔ WS3.2.c: process_queue reverts with Paused when PSM is paused
 
   WS3.2.e: wrong-owner-ATA soft-skip in process_queue (WS2.1)
-    ✔ process_queue soft-skips (breaks without reverting) when recipient ATA owner is wrong (64ms)
-
-  WS3.2 vault coverage additions
-    ✔ WS3.2.a vault: update_usd_multiplier rejects equal value (strict increase)
-    ✔ WS3.2.b vault: oku-dollar initialize fails if vaultConfig PDA already exists
+    ✔ process_queue soft-skips (breaks without reverting) when recipient ATA owner is wrong (66ms)
 
   cross-chain bridging via orchestrator + PSM (noBridge, SVM)
-    ✔ orchestrator-mediated bridge: Alice OkuM on A → Bob OkuM on B (price-aware) (44ms)
-    ✔ preserves dollar value across an orchestrator price tick between redeem and mint (52ms)
-    ✔ usdOku bridge: orchestrator unwraps to OkuM on A, mints OkuM on B (no usdOku on dest) (281ms)
-    ✔ a non-orchestrator key cannot mint OkuM directly (PSM is the sole minter)
+    ✔ orchestrator-mediated bridge: Alice usdOku on A -> Bob usdOku on B (direct burn/mint)
+    ✔ raw amount conserved across an orchestrator multiplier tick between burn and mint (41ms)
+    ✔ a non-orchestrator key cannot mint usdOku directly (PSM public mint is permissionless)
 
-  init invariants (Token-2022 extension whitelist)
-    ✔ initialize rejects an OkuMoney mint that has the TransferHook extension
+  direct-burn
+    set_direct_burner_allowance
+      ✔ sets the allowance correctly
+      ✔ overwrites the allowance on subsequent calls
+      ✔ rejects non-allowanceManager signer
+    burn_usd_oku_direct
+      ✔ burns usdOku from burner's ATA without USDC payout
+      ✔ reduces total supply after burn (219ms)
+      ✔ rejects zero amount
+      ✔ rejects when paused
+      ✔ rejects exceeding allowance
+      ✔ rejects wrong signer (not direct_burner)
+      ✔ rejects when burner has insufficient token balance
+
+  direct-mint
+    set_direct_minter_allowance
+      ✔ sets the allowance correctly
+      ✔ overwrites the allowance on subsequent calls
+      ✔ rejects non-allowanceManager signer
+    mint_usd_oku_direct
+      ✔ mints usdOku to recipient without USDC
+      ✔ rejects zero amount
+      ✔ rejects when paused
+      ✔ rejects exceeding allowance
+      ✔ rejects wrong signer (not direct_minter)
+
+  init invariants (usdOku mint extensions)
+    ✔ initialize creates the usdOku mint with ScaledUiAmount, MetadataPointer, and TokenMetadata extensions and initial multiplier of 1.0 (40ms)
 
   lite-psm
     initialize
       ✔ verifies PSM was initialized with all granular authorities
     mint
-      ✔ mints OkuMoney 1:1 with USDC (pre-created ATA)
-      ✔ mints OkuMoney with init_if_needed ATA creation
+      ✔ mints usdOku 1:1 with USDC (pre-created ATA)
+      ✔ mints usdOku with init_if_needed ATA creation
       ✔ fails to mint when paused
     RBAC Role Separation Tests
       pause/unpause separation
@@ -43,34 +60,24 @@
         ✔ non-cap_manager CANNOT set max supply
         ✔ allowance_manager can set minter allowance
         ✔ non-allowance_manager CANNOT set allowance
-        ✔ oracle_manager can rotate the relay feed and clear it (kill switch)
-        ✔ set_oracle_relay_feed rejects non-default new_feed when oracleAccount is missing
-        ✔ non-oracle_manager CANNOT call relay setters
-        ✔ set_oracle_relay_staleness rejects below ORACLE_MIN_STALENESS_SECS (60s)
-        ✔ set_oracle_relay_staleness rejects above ORACLE_MAX_STALENESS_SECS (7d)
-        ✔ set_oracle_relay_band rejects min outside the hard floor
-        ✔ set_oracle_relay_band rejects max above the hard ceiling
-        ✔ oracle_manager can rotate the Pyth program owner
-        ✔ set_oracle_relay_pyth_program_owner rejects zero pubkey
       orchestrator role separation
         ✔ buffer_depositor can deposit buffer
         ✔ non-buffer_depositor CANNOT deposit buffer
         ✔ buffer_withdrawer can withdraw buffer
         ✔ non-buffer_withdrawer CANNOT withdraw buffer
-        ✔ rebaser can set OkuMoney price
-        ✔ non-rebaser CANNOT set OkuMoney price
+        ✔ rebaser can set usdOku multiplier
+        ✔ non-rebaser CANNOT set usdOku price
     yield operations
-      ✔ rebaser can distribute yield via price increase
+      ✔ rebaser can distribute yield via multiplier increase
       ✔ non-rebaser CANNOT distribute yield
-      ✔ distribute_yield: rebaser bumps oku_m_price proportional to yield/supply
+      ✔ distribute_yield: rebaser bumps multiplier proportional to yield/supply
       ✔ distribute_yield: zero yield_amount rejected
       ✔ distribute_yield: non-rebaser is rejected with Unauthorized
     mint edge cases
       ✔ fails to mint zero amount
       ✔ fails to mint when max supply exceeded
-      ✔ fails when oracle relay is wired but no feed account is passed at mint
     redeem - instant
-      ✔ redeems OkuMoney for USDC instantly when buffer sufficient
+      ✔ redeems usdOku for USDC instantly when buffer sufficient
       ✔ fails to redeem when paused
       ✔ fails to redeem zero amount
       ✔ fails to redeem more than user owns
@@ -82,23 +89,23 @@
       ✔ processes multiple entries FIFO (65ms)
       ✔ fails with QueueEmpty when no entries
       ✔ non-queue_processor rejected
-      ✔ process_queue rejects when recipient ATA missing from remaining_accounts (46ms)
+      ✔ process_queue rejects when recipient ATA missing from remaining_accounts (41ms)
     rescue_queue_entry
-      ✔ returns escrowed OkuMoney to a recipient and clears the slot
+      ✔ returns escrowed usdOku to a recipient and clears the slot
       ✔ non-queue_processor cannot rescue
       ✔ rescuing the same slot twice fails with EntryAlreadyCleared
-      ✔ rescue can deliver escrowed OkuMoney to a non-original recipient
+      ✔ rescue can deliver escrowed usdOku to a non-original recipient
     user_self_rescue_queue_entry
-      ✔ happy path: original queued user reclaims their escrowed OkuMoney
+      ✔ happy path: original queued user reclaims their escrowed usdOku
       ✔ rejects a different signer than the original queued user
       ✔ rejects an already-cleared slot with EntryAlreadyCleared
       ✔ unblocks a head-pinned queue: user self-rescue advances head past their slot
     queue ring buffer wraparound
-      ✔ wraps tail from MAX_ENTRIES-1 back to slot 0 (42ms)
+      ✔ wraps tail from MAX_ENTRIES-1 back to slot 0 (38ms)
     queue capacity (Phase 13b)
-      ✔ accepts at least 50 queued entries without QueueFull (438ms)
+      ✔ accepts at least 50 queued entries without QueueFull (417ms)
     freeze/thaw
-      ✔ freezer can freeze a user's OkuMoney account
+      ✔ freezer can freeze a user's usdOku account
       ✔ unfreezer can thaw a frozen account
       ✔ non-freezer CANNOT freeze
       ✔ non-unfreezer CANNOT thaw
@@ -112,100 +119,47 @@
       ✔ deposit_buffer fails with zero amount
       ✔ withdraw_buffer fails with zero amount
 
-  oku-dollar
-    initialize
-      ✔ initializes the vault with correct configuration
-      ✔ rejects initialization with collateral ratio below floor
-    wrap
-      ✔ wraps OkuMoney -> usdOku (first deposit with dead shares)
-      ✔ wraps OkuMoney -> usdOku (subsequent deposit)
-      ✔ fails to wrap when paused
-      ✔ fails to wrap zero amount
-    unwrap
-      ✔ unwraps usdOku -> OkuMoney
-      ✔ CRITICAL: blocks unwrap when paused (matches EVM behavior)
-      ✔ fails to unwrap zero shares
-    update_usd_multiplier
-      ✔ usd_rebaser can increase multiplier (distributes yield)
-      ✔ rejects multiplier decrease (yield cannot go negative)
-      ✔ rejects multiplier update from non-rebaser
-      ✔ rejects multiplier update that would breach collateral ratio
-    deposit_reserves
-      ✔ reserve_manager can deposit additional collateral
-      ✔ rejects deposit from non-reserve_manager
-    withdraw_reserves
-      ✔ reserve_manager can withdraw excess collateral
-      ✔ rejects withdrawal that would breach collateral ratio
-    RBAC: Role Separation
-      ✔ pauser can pause, but cannot unpause
-      ✔ unpauser can unpause, but cannot pause
-      ✔ role_admin can update authorities
-      ✔ non-role_admin cannot update authorities
-    round-trip accuracy
-      ✔ maintains accuracy through wrap -> yield -> unwrap cycle
-    security: minimum liquidity
-      ✔ dead shares prevent first-depositor inflation attack
-    set_min_collateral_ratio
-      ✔ role_admin can update minimum collateral ratio
-      ✔ rejects ratio below floor
-      ✔ rejects raising floor above the live vault health (must deposit_reserves first)
-    set_authority + accept_role_admin (vault)
-      ✔ role_admin can update vault pauser
-      ✔ two-step RoleAdmin rotation: propose → accept → transfer back
-      ✔ cancel_role_admin_transfer withdraws a pending proposal
-      ✔ Audit-prep (L1): rejects setting a non-RoleAdmin role to the current role_admin
-      ✔ Audit-prep (L2): rejects proposing the current role_admin to themselves
-
-  OracleRelay (bankrun)
-    ✔ mint_oku_m succeeds when relay reports in-band price
-    ✔ mint_oku_m rejects when oracle is stale
-    ✔ mint_oku_m rejects when oracle status is not Trading
-    ✔ mint_oku_m rejects when USDC depegs below the band (0.90)
-    ✔ mint_oku_m rejects when USDC depegs above the band (1.10)
-    ✔ mint_oku_m rejects when oracle returns a non-positive answer
-    ✔ kill switch: setting feed = default disables the peg-check
-    setters: role gating + bounds
-      ✔ set_oracle_relay_staleness rejects below ORACLE_MIN_STALENESS_SECS (60s)
-      ✔ set_oracle_relay_band rejects min outside the hard floor
-      ✔ set_oracle_relay_band rejects min >= max
-      ✔ set_oracle_relay_pyth_program_owner rejects zero pubkey
-      ✔ non-oracle_manager CANNOT call relay setters
-
   rate changes over time (slot + wall-clock progression)
-    ✔ redeem_oku_m payout tracks set_oku_m_price across explicit slot ticks
-    ✔ distribute_yield bumps oku_m_price by yield/supply across consecutive slot ticks
-    ✔ update_usd_multiplier bumps unwrap payout per share across slot ticks
-    ✔ wall-clock progression alone does NOT change oku_m_price (discrete model)
-    ✔ 3 × small set_oku_m_price ticks compose to a strictly higher redeem payout
+    ✔ redeem_usd_oku payout tracks set_multiplier across explicit slot ticks
+    ✔ distribute_yield bumps multiplier by yield/supply across consecutive slot ticks
+    ✔ wall-clock progression alone does NOT change multiplier (discrete model)
+    ✔ 3 x small set_multiplier ticks compose to a strictly higher redeem payout
 
   sandwich lock under manual slot control (autoBumpSlot=false)
-    ✔ same-slot redeem after set_oku_m_price reverts with YieldDistributionInProgress; next slot succeeds
+    ✔ same-slot redeem after set_multiplier reverts with YieldDistributionInProgress; next slot succeeds
+
+  ScaledUiAmount extension behavior
+    ✔ usdOku mint has ScaledUiAmount extension with initial multiplier 1.0
+    ✔ raw token balance unchanged after multiplier update
+    ✔ mint amount decreases as multiplier increases
+    ✔ redeem returns more USDC per raw token as multiplier increases
+    ✔ setMultiplier cannot decrease multiplier
+    ✔ setMultiplier cannot exceed MAX_MULTIPLIER
+    ✔ distribute_yield increments multiplier proportionally
 
   realWorldUsage (SVM) — 60-day stochastic simulation (seed 0xC0DEF00D)
-    ✔ runs 60 daily ticks with stochastic actions and holds all invariants (1036ms)
+    ✔ runs 60 daily ticks with stochastic actions and holds all invariants (870ms)
 
   realWorldUsage (SVM) edge cases
-    E1: round-trip bridge with price tick between legs
-      ✔ dollar value conserved across A→B price-tick→B→A round-trip (462ms)
+    E1: round-trip bridge with multiplier tick between legs
+      ✔ dollar value conserved across A->B multiplier-tick->B->A round-trip (406ms)
     E2: queued redeem blocks bridge
-      ✔ orchestrator must wait for queue drain before completing bridge (446ms)
-    E3: price tick between redeem and mint legs
-      ✔ dollar value conserved when set_oku_m_price fires between bridge legs (416ms)
+      ✔ orchestrator must wait for queue drain before completing bridge (386ms)
+    E3: multiplier tick between redeem and mint legs
+      ✔ dollar value conserved when set_multiplier fires between bridge legs (366ms)
     E4: frozen ATA soft-skips in process_queue
-      ✔ frozen OkuMoney ATA rejects transfers; orchestrator must hold float until thaw (448ms)
+      ✔ frozen usdOku ATA rejects transfers; orchestrator must hold float until thaw (378ms)
     E5: pause halts mints/redeems, system recovers after unpause
-      ✔ mint and redeem revert while paused; both succeed after unpause (396ms)
-    E6: oracle relay disabled → wired → disabled flow
-      ✔ relay can be wired and disabled; disable is the operator kill switch (398ms)
-    E7: yield-lock prevents mint in same slot as set_oku_m_price
-      ✔ mint_oku_m reverts in same slot as set_oku_m_price; succeeds next slot (338ms)
+      ✔ mint and redeem revert while paused; both succeed after unpause (365ms)
+    E7: yield-lock prevents mint in same slot as set_multiplier
+      ✔ mint_usd_oku reverts in same slot as set_multiplier; succeeds next slot (285ms)
     E8: minterAllowance exhaustion and rotation
-      ✔ mint fails when minterAllowance exhausted; resumes after set_minter_allowance (390ms)
+      ✔ mint fails when minterAllowance exhausted; resumes after set_minter_allowance (366ms)
 
   bankrun smoke
-    ✔ boots bankrun and resolves the lite-psm program from the workspace (242ms)
-    ✔ reads cluster state via the BankrunConnectionProxy (251ms)
+    ✔ boots bankrun and resolves the lite-psm program from the workspace (215ms)
+    ✔ reads cluster state via the BankrunConnectionProxy (221ms)
 
 
-  138 passing (11s)
+  105 passing (13s)
 

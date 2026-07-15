@@ -29,9 +29,9 @@ removable post-launch.
 
 ### SVM
 
-- 4 new admin CLIs: `pause-vault.ts`, `unpause-vault.ts`, `set-vault-authority.ts`, `set-min-collateral-ratio.ts`.
+- 4 new admin CLIs: `pause-vault.ts`, `unpause-vault.ts`, `set-vault-authority.ts`, `set-min-collateral-ratio.ts`. *(Subsequently deleted in the single-token refactor — vault program removed.)*
 - 2 standalone orchestrator bridge-leg CLIs: `mint-okum.ts`, `redeem-okum.ts` (previously only reachable via `test-devnet.ts` step runner).
-- L1/L2 SoD parity: vault `set_authority` now mirrors PSM-02 — rejects collapsing non-RoleAdmin roles into `role_admin` and rejects no-op self-proposals.
+- L1/L2 SoD parity: vault `set_authority` now mirrors PSM-02 — rejects collapsing non-RoleAdmin roles into `role_admin` and rejects no-op self-proposals. *(Vault program subsequently removed in the single-token refactor; parity logic lives only in lite-psm now.)*
 - Dead code purge: 4 unused error variants removed (`AccountFrozen`, `RecipientMismatch`, `TransferHookNotAllowed` from PSM; `InvalidDeadSharesMint` from vault) + `_RingQueue` re-export shim deleted.
 - Polish: `OracleRelayDisabled` event gated on `oldRelay != 0`, `withdraw_buffer` pause-bypass intent documented in source, `ImmutableOwner` allow-list rationale added.
 - CI hardening: `cargo fmt --check`, `cargo deny check`, and `cargo llvm-cov` (oku-shared gated at 90% line coverage) wired into `.github/workflows/test.yml`. Repo-wide cargo fmt pass cleared all pre-existing drift.
@@ -108,40 +108,46 @@ limit. The spec target was 500. Two paths:
 drain + auto-batching `process-queue.ts` script is sufficient for
 launch.
 
-### oku-dollar reserved storage padding `[SVM]`
+### ~~oku-dollar reserved storage padding `[SVM]`~~ — CANCELLED
 
-Account size is pinned at 362 bytes by `const _: () = assert!(...)`.
+~~Account size is pinned at 362 bytes by `const _: () = assert!(...)`.
 Any new field requires a seed rotation and migration. Standard
 pattern in mature Solana programs is to reserve a `_reserved: [u8; N]`
-tail. Weigh against the cost of the next rotation.
+tail. Weigh against the cost of the next rotation.~~
+
+*Removed: the `oku-dollar` program was deleted in the single-token
+refactor. No longer applicable.*
 
 ### Solana 3 → 4 SDK bump `[SVM]`
 
 Deferred post-audit. Major-version bump scope unclear; revisit once
 audit feedback narrows the surface.
 
-### Dead orphan PDAs from cycle-2 + cycle-3 seed rotations `[SVM]`
+### Dead orphan PDAs from cycle-2 + cycle-3 + single-token-refactor seed rotations `[SVM]`
 
 Pre-rotation PDAs are orphaned because their `owner` field still
 references the same program ID, but the program no longer derives
-those addresses. Total rent locked ~0.085 SOL across ~9 accounts per
-rotation. Not material; tracked for completeness. A future one-shot
-`admin_close_legacy_pda(seed_str)` ix gated by `role_admin` could
-recover the rent. Details in
+those addresses. The single-token refactor added further orphans:
+`psm_config_v4` and `redemption_queue_v2` seeds (superseded by v5/v3),
+plus all `oku-dollar` program PDAs (program deleted). Total rent
+locked ~0.085 SOL across ~9 accounts per earlier rotation, plus
+additional accounts from the refactor. Not material; tracked for
+completeness. A future one-shot `admin_close_legacy_pda(seed_str)` ix
+gated by `role_admin` could recover the rent. Details in
 [`SVM/README.md § PDA seed history`](SVM/README.md).
 
-### Queue spam DoS via 1-OkuM entries `[SVM]`
+### Queue spam DoS via 1-usdOku entries `[SVM]`
 
 A user can fill the 200-entry redemption queue with minimum-size entries
-(1 OkuM each) faster than the operator's `MAX_BATCH_ENTRIES = 50`
+(1 usdOku each) faster than the operator's `MAX_BATCH_ENTRIES = 50`
 per-tx drain can clear them. Cost to the attacker: 200 × redeem-tx fees
-+ escrowed OkuM for the queue duration. The `MINIMUM_QUEUE_ENTRY_OKUM`
++ escrowed usdOku for the queue duration. The `MINIMUM_QUEUE_ENTRY_USD_OKU`
 mitigation (single constant + `require!`) was considered but deferred
 to avoid pre-audit churn on a tuneable parameter the auditor would probe.
 
 **Mitigation options when revisited:**
-1. Add a `MINIMUM_QUEUE_ENTRY_OKUM` constant + `require!` in
-   `redeem_oku_m` queued branch.
+1. Add a `MINIMUM_QUEUE_ENTRY_USD_OKU` constant + `require!` in
+   `redeem_usd_oku` queued branch.
 2. Per-user PDA queue (lifts the cap; see "Queue capacity: 200 → 500").
 3. Escalating spam fee.
 
@@ -176,11 +182,11 @@ kill-list is finalised:
 
 **SVM:**
 
-- `accept-role-admin.ts`, `cancel-role-admin-transfer.ts` — both
-  programs. The two-step transfer's second step happens once per
-  rotation by the cold multisig via Squads; a documented IDL call
-  in the runbook is sufficient. Build CLIs only if the runbook
-  requires them.
+- `accept-role-admin.ts`, `cancel-role-admin-transfer.ts` — lite-psm
+  only (vault program removed in single-token refactor). The two-step
+  transfer's second step happens once per rotation by the cold multisig
+  via Squads; a documented IDL call in the runbook is sufficient. Build
+  CLIs only if the runbook requires them.
 - `user-self-rescue-queue-entry.ts` — permissionless self-rescue
   for queued users. Belongs in `scripts/user/`, not `admin/`.
 

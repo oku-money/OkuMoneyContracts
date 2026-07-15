@@ -177,17 +177,12 @@ path is reachable only by the operator multisig.
 **Default initial band:** `[0.97e18, 1.03e18]` (±3 %). To be
 revisited based on observed Chainlink feed jitter in production.
 
-**SVM mirror:** Cycle 4 correction — the SVM port DOES ship a
-peg-check in-program at
-`programs/lite-psm/src/helpers/oracle_relay.rs` (Pyth V2 layout,
-~334 LoC). Constants are byte-mirrored — see
-[`../../SVM/oku-programs/programs/lite-psm/src/helpers/oracle_relay.rs`](../../SVM/oku-programs/programs/lite-psm/src/helpers/oracle_relay.rs)
-and [`../src/lib/Constants.sol`](../src/lib/Constants.sol).
-SVM-side hardening **adds** a confidence-interval
-check (`MAX_ORACLE_CONFIDENCE_BPS = 200`, cycle 4 / PSM-04) that
-EVM Chainlink cannot mirror because Chainlink doesn't publish
-per-round confidence. The previous "out of scope" claim in earlier
-revisions of this doc was stale; corrected here.
+**SVM mirror:** The SVM single-token refactor removed the on-chain
+oracle relay (`oracle_relay.rs`, Pyth V2 parser) from `lite-psm`.
+USDC peg monitoring on SVM is now handled entirely off-chain by
+the orchestrator, which pauses the PSM if a depeg is detected.
+The EVM side retains the on-chain `OracleRelay` circuit-breaker
+(Chainlink USDC/USD aggregator) as described above.
 
 ## 4. 1-wei share dust in `OkuDollar.transferFrom` under inflated `usdMultiplier`
 

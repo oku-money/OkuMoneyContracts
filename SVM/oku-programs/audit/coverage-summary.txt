@@ -1,41 +1,6 @@
-info: cargo-llvm-cov currently setting cfg(coverage); you can opt-out it by passing --no-cfg-coverage
-   Compiling oku-shared v0.1.0 (/home/jbarber/gfx/okuMoney/contracts/SVM/oku-programs/crates/oku-shared)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.56s
-     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/oku_shared-ca340e823e9389a6)
-
-running 25 tests
-test math::tests::calculate_fee_ceil_works ... ok
-test math::tests::calculate_fee_works ... ok
-test math::tests::mul_div_ceil_at_u64_max_boundary ... ok
-test math::tests::mul_div_ceil_basics ... ok
-test math::tests::mul_div_ceil_div_by_zero ... ok
-test math::tests::mul_div_ceil_overflow ... ok
-test math::tests::dollars_to_oku_m_works ... ok
-test math::tests::mul_div_floor_basics ... ok
-test math::tests::mul_div_floor_div_by_zero ... ok
-test math::tests::oku_m_to_dollars_ceil_works ... ok
-test math::tests::oku_m_to_dollars_works ... ok
-test math::tests::mul_div_floor_overflow ... ok
-test vault_math::tests::collateral_ratio_100_percent_at_par ... ok
-test vault_math::tests::collateral_ratio_at_high_price_increases ... ok
-test vault_math::tests::collateral_ratio_returns_max_on_zero_supply ... ok
-test vault_math::tests::oku_money_to_shares_identity_at_par ... ok
-test vault_math::tests::oku_money_to_shares_rejects_zero_divisors ... ok
-test vault_math::tests::shares_to_oku_money_floors ... ok
-test vault_math::tests::shares_to_oku_money_identity_at_par ... ok
-test vault_math::tests::surplus_undefined_at_zero_price ... ok
-test vault_math::tests::surplus_underwater_is_zero ... ok
-test vault_math::tests::surplus_zero_supply_returns_all_reserve ... ok
-test yield_lock::tests::disengaged_adjacent_slots ... ok
-test yield_lock::tests::disengaged_initial_state ... ok
-test yield_lock::tests::engaged_same_slot ... ok
-
-test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
 Filename                      Regions    Missed Regions     Cover   Functions  Missed Functions  Executed       Lines      Missed Lines     Cover    Branches   Missed Branches     Cover
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 math.rs                           156                 8    94.87%          20                 1    95.00%          93                 3    96.77%           0                 0         -
-vault_math.rs                     103                 6    94.17%          14                 0   100.00%          92                 2    97.83%           0                 0         -
 yield_lock.rs                      17                 0   100.00%           4                 0   100.00%          13                 0   100.00%           0                 0         -
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-TOTAL                             276                14    94.93%          38                 1    97.37%         198                 5    97.47%           0                 0         -
+TOTAL                             173                 8    95.38%          24                 1    95.83%         106                 3    97.17%           0                 0         -

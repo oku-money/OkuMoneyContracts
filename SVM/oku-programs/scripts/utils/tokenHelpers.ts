@@ -15,6 +15,7 @@ import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   createInitializeMintInstruction,
+  createInitializeScaledUiAmountConfigInstruction,
   createInitializeInterestBearingMintInstruction,
   getMintLen,
   ExtensionType,
@@ -61,12 +62,22 @@ export interface CreateToken2022Params {
   decimals: number;
   mintAuthority: PublicKey;
   freezeAuthority: PublicKey | null;
-  rateAuthority: PublicKey;
-  initialRate: number; // In basis points
+  /** ScaledUiAmountConfig authority (PsmConfig PDA) */
+  scaledUiAmountAuthority: PublicKey;
+  /** Initial multiplier for ScaledUiAmountConfig (1.0 = $1.00) */
+  initialMultiplier: number;
 }
 
 /**
- * Create Token-2022 mint with Interest-Bearing extension
+ * Create Token-2022 mint with ScaledUiAmountConfig extension.
+ *
+ * OkuMoney uses ScaledUiAmountConfig as the AUTHORITATIVE source of
+ * oku_m_price. The multiplier is a flat f64 scalar updated discretely
+ * by the rebaser (rear-facing, realized yield). The PsmConfig PDA is
+ * the ScaledUiAmount authority; yield ops write via CPI.
+ *
+ * f64 precision is proven lossless for multiplier values up to
+ * MAX_OKU_M_PRICE = 1e15 (2.25x margin below 2^51).
  */
 export async function createToken2022Mint(
   params: CreateToken2022Params
@@ -77,15 +88,15 @@ export async function createToken2022Mint(
     decimals,
     mintAuthority,
     freezeAuthority,
-    rateAuthority,
-    initialRate,
+    scaledUiAmountAuthority,
+    initialMultiplier,
   } = params;
 
   const mintKeypair = Keypair.generate();
   const mint = mintKeypair.publicKey;
 
-  // Calculate space needed for mint with extensions
-  const extensions = [ExtensionType.InterestBearingConfig];
+  // Calculate space needed for mint with ScaledUiAmountConfig extension
+  const extensions = [ExtensionType.ScaledUiAmountConfig];
   const mintLen = getMintLen(extensions);
 
   // Calculate minimum lamports for rent exemption
@@ -100,11 +111,11 @@ export async function createToken2022Mint(
       lamports,
       programId: TOKEN_2022_PROGRAM_ID,
     }),
-    // Initialize interest-bearing extension
-    createInitializeInterestBearingMintInstruction(
+    // Initialize ScaledUiAmountConfig extension
+    createInitializeScaledUiAmountConfigInstruction(
       mint,
-      rateAuthority,
-      initialRate,
+      scaledUiAmountAuthority,
+      initialMultiplier,
       TOKEN_2022_PROGRAM_ID
     ),
     // Initialize mint
@@ -123,8 +134,8 @@ export async function createToken2022Mint(
   logger.info(`Decimals: ${decimals}`);
   logger.info(`Mint Authority: ${mintAuthority.toBase58()}`);
   logger.info(`Freeze Authority: ${freezeAuthority?.toBase58() || 'None'}`);
-  logger.info(`Rate Authority: ${rateAuthority.toBase58()}`);
-  logger.info(`Initial Rate: ${initialRate} bps`);
+  logger.info(`ScaledUiAmount Authority: ${scaledUiAmountAuthority.toBase58()}`);
+  logger.info(`Initial Multiplier: ${initialMultiplier}`);
 
   return mint;
 }
@@ -175,4 +186,88 @@ export async function createSPLTokenMint(
   return mint;
 }
 
+export interface CreateUsdOkuMintParams {
+  connection: Connection;
+  payer: Keypair;
+  decimals: number;
+  mintAuthority: PublicKey;
+  freezeAuthority: PublicKey | null;
+  /** InterestBearingConfig rate authority (OkuDollarConfig PDA) */
+  rateAuthority: PublicKey;
+  /** Initial interest rate in basis points (0 = no yield until set) */
+  initialRate: number;
+}
+
+/**
+ * Create Token-2022 mint with InterestBearingConfig extension for usdOku.
+ *
+ * usdOku uses InterestBearingConfig for forward-facing continuous yield
+ * display in wallets. The rate is set in whole basis points (i16) for
+ * cross-chain parity with EVM's usdRatePerSecond. The on-chain
+ * `usd_multiplier` in OkuDollarConfig remains authoritative for
+ * share/vault math; the extension is informational.
+ *
+ * The rate must correspond to a whole-basis-point APY to maintain
+ * cross-chain parity with SVM's InterestBearingConfig (i16 basis points).
+ */
+export async function createUsdOkuMint(
+  params: CreateUsdOkuMintParams
+): Promise<PublicKey> {
+  const {
+    connection,
+    payer,
+    decimals,
+    mintAuthority,
+    freezeAuthority,
+    rateAuthority,
+    initialRate,
+  } = params;
+
+  const mintKeypair = Keypair.generate();
+  const mint = mintKeypair.publicKey;
+
+  // Calculate space needed for mint with InterestBearingConfig extension
+  const extensions = [ExtensionType.InterestBearingConfig];
+  const mintLen = getMintLen(extensions);
+
+  // Calculate minimum lamports for rent exemption
+  const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);
+
+  const transaction = new Transaction().add(
+    // Create account
+    SystemProgram.createAccount({
+      fromPubkey: payer.publicKey,
+      newAccountPubkey: mint,
+      space: mintLen,
+      lamports,
+      programId: TOKEN_2022_PROGRAM_ID,
+    }),
+    // Initialize InterestBearingConfig extension
+    createInitializeInterestBearingMintInstruction(
+      mint,
+      rateAuthority,
+      initialRate,
+      TOKEN_2022_PROGRAM_ID
+    ),
+    // Initialize mint
+    createInitializeMintInstruction(
+      mint,
+      decimals,
+      mintAuthority,
+      freezeAuthority,
+      TOKEN_2022_PROGRAM_ID
+    )
+  );
+
+  await sendWithRetry(connection, transaction, [payer, mintKeypair]);
+
+  logger.success(`Created usdOku Token-2022 mint: ${mint.toBase58()}`);
+  logger.info(`Decimals: ${decimals}`);
+  logger.info(`Mint Authority: ${mintAuthority.toBase58()}`);
+  logger.info(`Freeze Authority: ${freezeAuthority?.toBase58() || 'None'}`);
+  logger.info(`Rate Authority: ${rateAuthority.toBase58()}`);
+  logger.info(`Initial Rate: ${initialRate} bps`);
+
+  return mint;
+}
 

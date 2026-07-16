@@ -10,7 +10,8 @@ use crate::constants::{
     MAX_USD_MULTIPLIER, MINIMUM_LIQUIDITY, MIN_COLLATERAL_RATIO_FLOOR, PRECISION,
 };
 use crate::contexts::{
-    DepositReserves, Initialize, Unwrap, UpdateUsdMultiplier, WithdrawReserves, Wrap, WrapTo,
+    DepositReserves, Initialize, SetUsdYieldRate, Unwrap, UpdateUsdMultiplier, WithdrawReserves,
+    Wrap, WrapTo,
 };
 use crate::errors::OkuDollarError;
 use crate::events::*;
@@ -22,6 +23,7 @@ use crate::state::OkuDollarConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
 use lite_psm::helpers::mint_extensions::assert_oku_money_mint_extensions_whitelisted;
+use lite_psm::helpers::scaled_ui::read_oku_m_price;
 use lite_psm::helpers::yield_lock::check_yield_lock;
 
 /// Initialize the OkuDollar vault
@@ -83,16 +85,15 @@ pub fn initialize(
         OkuDollarError::InvalidOkuMoneyDecimals
     );
 
-    // Cycle 4 (OKUD-04, defense-in-depth): assert the PSM's `oku_m_price`
-    // is initialised and non-zero. Structurally lite-psm seeds this to
-    // `PRECISION` at its own init.rs (so `oku_m_price > 0` already holds
-    // for any real PSM PDA), but the require pins the invariant at the
-    // vault boundary and gives a clear error if anyone ever wires the
-    // two programs in the wrong order.
-    require!(
-        ctx.accounts.psm_config.oku_m_price > 0,
-        OkuDollarError::InvalidPrice
-    );
+    // Defense-in-depth: assert the OkuMoney price (stored on the mint's
+    // ScaledUiAmountConfig extension) is initialised and non-zero.
+    // Structurally lite-psm validates this at its own init, but the
+    // require pins the invariant at the vault boundary.
+    {
+        let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())
+            .map_err(|_| error!(OkuDollarError::InvalidPrice))?;
+        require!(oku_m_price > 0, OkuDollarError::InvalidPrice);
+    }
 
     let config = &mut ctx.accounts.config;
     config.bump = ctx.bumps.config;
@@ -178,7 +179,7 @@ pub fn wrap(ctx: Context<Wrap>, oku_m_amount: u64, min_shares_out: u64) -> Resul
     let total_supply = ctx.accounts.usd_oku_mint.supply;
     let bump = ctx.accounts.config.bump;
     let usd_multiplier = ctx.accounts.config.usd_multiplier;
-    let oku_m_price = ctx.accounts.psm_config.oku_m_price;
+    let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
     let decimals = ctx.accounts.oku_money_mint.decimals;
 
     require!(oku_m_amount > 0, OkuDollarError::ZeroAmount);
@@ -360,7 +361,7 @@ pub fn wrap_to(ctx: Context<WrapTo>, oku_m_amount: u64, min_shares_out: u64) -> 
     let total_supply = ctx.accounts.usd_oku_mint.supply;
     let bump = ctx.accounts.config.bump;
     let usd_multiplier = ctx.accounts.config.usd_multiplier;
-    let oku_m_price = ctx.accounts.psm_config.oku_m_price;
+    let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
     let decimals = ctx.accounts.oku_money_mint.decimals;
 
     require!(oku_m_amount > 0, OkuDollarError::ZeroAmount);
@@ -529,7 +530,7 @@ pub fn unwrap(ctx: Context<Unwrap>, shares: u64) -> Result<()> {
     // Read state
     let bump = ctx.accounts.config.bump;
     let usd_multiplier = ctx.accounts.config.usd_multiplier;
-    let oku_m_price = ctx.accounts.psm_config.oku_m_price;
+    let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
     let reserve_balance = ctx.accounts.reserve_vault.amount;
     let decimals = ctx.accounts.oku_money_mint.decimals;
     let user_shares_balance = ctx.accounts.user_usd_oku_ata.amount;
@@ -660,7 +661,7 @@ pub fn update_usd_multiplier(
     // Check collateralization after the update
     let reserve_balance = ctx.accounts.reserve_vault.amount;
     let total_supply = ctx.accounts.usd_oku_mint.supply;
-    let oku_m_price = ctx.accounts.psm_config.oku_m_price;
+    let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
 
     // Verify the vault remains sufficiently collateralized with new multiplier
     require!(
@@ -735,7 +736,7 @@ pub fn deposit_reserves(ctx: Context<DepositReserves>, amount: u64) -> Result<()
     )?;
 
     // Calculate dollar value and collateralization ratio after deposit
-    let oku_m_price = ctx.accounts.psm_config.oku_m_price;
+    let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
     let dollar_value = oku_money_to_usd(amount, oku_m_price)?;
 
     // Reload reserve vault balance after transfer
@@ -790,7 +791,7 @@ pub fn withdraw_reserves(ctx: Context<WithdrawReserves>, amount: u64) -> Result<
     let min_collateral_ratio = ctx.accounts.config.min_collateral_ratio;
     let reserve_balance = ctx.accounts.reserve_vault.amount;
     let total_supply = ctx.accounts.usd_oku_mint.supply;
-    let oku_m_price = ctx.accounts.psm_config.oku_m_price;
+    let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
     let decimals = ctx.accounts.oku_money_mint.decimals;
 
     require!(
@@ -854,6 +855,61 @@ pub fn withdraw_reserves(ctx: Context<WithdrawReserves>, amount: u64) -> Result<
         amount,
         dollar_value,
         collateralization_ratio,
+    });
+
+    Ok(())
+}
+
+/// Set the forward-facing yield rate on the usdOku mint's
+/// `InterestBearingConfig` extension.
+///
+/// USD_REBASER only. Mirrors EVM `OkuDollar.setUsdYieldRate(rate, endTimestamp)`.
+///
+/// The rate is in whole basis points (`i16`): 500 = 5.00% APY. This
+/// constraint ensures cross-chain parity with EVM, where the backend
+/// constrains published APYs to be divisible by 1 bip (0.01%).
+///
+/// The on-chain `usd_multiplier` in `OkuDollarConfig` is NOT affected;
+/// the extension rate is informational (wallet display layer). Wallets
+/// that support `InterestBearingConfig` will show the user's usdOku
+/// balance growing continuously at this rate.
+///
+/// NOTE: Not pause-gated (matches EVM where rate configuration setters
+/// are not pause-gated — operators need to zero accrual during incidents).
+pub fn set_usd_yield_rate(ctx: Context<SetUsdYieldRate>, rate_bps: i16) -> Result<()> {
+    // Reject negative rates — usdOku yield should never be negative.
+    require!(rate_bps >= 0, OkuDollarError::InvalidRate);
+
+    let config = &ctx.accounts.config;
+    let bump = config.bump;
+
+    // CPI to Token-2022's UpdateRate on the usdOku mint's
+    // InterestBearingConfig extension.
+    let seeds: &[&[u8]] = &[OkuDollarConfig::SEED, &[bump]];
+    let signer = &[seeds];
+
+    let ix = anchor_spl::token_2022::spl_token_2022::extension::interest_bearing_mint::instruction::update_rate(
+        &anchor_spl::token_2022::ID,
+        ctx.accounts.usd_oku_mint.to_account_info().key,
+        ctx.accounts.config.to_account_info().key,
+        &[],       // no multisig signers
+        rate_bps,
+    )
+    .map_err(|_| error!(OkuDollarError::Overflow))?;
+
+    anchor_lang::solana_program::program::invoke_signed(
+        &ix,
+        &[
+            ctx.accounts.usd_oku_mint.to_account_info(),
+            ctx.accounts.config.to_account_info(),
+            ctx.accounts.token_2022_program.to_account_info(),
+        ],
+        signer,
+    )?;
+
+    emit!(UsdYieldRateSetEvent {
+        rate_bps,
+        timestamp: Clock::get()?.unix_timestamp,
     });
 
     Ok(())

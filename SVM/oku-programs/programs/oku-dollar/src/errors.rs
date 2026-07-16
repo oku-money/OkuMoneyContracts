@@ -121,4 +121,8 @@ pub enum OkuDollarError {
     /// `accept_role_admin` caller is not the proposed `pending_role_admin`.
     #[msg("Caller is not the pending role admin")]
     NotPendingRoleAdmin,
+
+    /// Yield rate is negative. usdOku yield should never be negative.
+    #[msg("Yield rate must be non-negative")]
+    InvalidRate,
 }

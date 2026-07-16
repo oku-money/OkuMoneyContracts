@@ -15,7 +15,7 @@
 use crate::contexts::direct_burn::{BurnOkuMDirect, MigratePsmConfigV2};
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::{check_yield_lock, oku_m_to_dollars};
+use crate::helpers::{check_yield_lock, oku_m_to_dollars, read_oku_m_price};
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
@@ -147,11 +147,11 @@ pub fn burn_oku_m_direct(ctx: Context<BurnOkuMDirect>, oku_m_amount: u64) -> Res
         oku_m_amount,
     )?;
 
-    // Calculate dollar value and post-burn supply for event
-    let oku_m_price = ctx.accounts.config.oku_m_price;
-    let dollar_value = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
-
+    // Calculate dollar value and post-burn supply for event.
+    // Read price from the mint's ScaledUiAmountConfig extension.
     ctx.accounts.oku_money_mint.reload()?;
+    let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
+    let dollar_value = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
     let new_total_supply = ctx.accounts.oku_money_mint.supply;
 
     emit!(DirectBurnEvent {

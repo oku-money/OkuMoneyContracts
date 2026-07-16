@@ -25,7 +25,6 @@ contract OkuMPriceInvariantsTest is BaseTest {
         excludeContract(address(litePsm));
         excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));
-        excludeContract(address(oracle));
     }
 
     /**

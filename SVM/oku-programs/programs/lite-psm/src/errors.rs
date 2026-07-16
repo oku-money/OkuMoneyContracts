@@ -183,4 +183,16 @@ pub enum LitePsmError {
     /// so both programs agree on what a clean OkuMoney mint looks like.
     #[msg("OkuMoney mint carries an incompatible Token-2022 extension (see helpers::mint_extensions for the allow-list)")]
     IncompatibleMintExtension,
+
+    // ===== ScaledUiAmountConfig extension errors =====
+    /// The OkuMoney mint does not carry the expected `ScaledUiAmountConfig`
+    /// extension, or the extension data could not be parsed.
+    #[msg("OkuMoney mint missing or corrupt ScaledUiAmountConfig extension")]
+    InvalidMintExtension,
+
+    /// The OkuMoney price read from the `ScaledUiAmountConfig` extension
+    /// is zero or negative. This should never happen in normal operation;
+    /// a zero multiplier would break all PSM math.
+    #[msg("OkuMoney price from ScaledUiAmountConfig is zero or invalid")]
+    InvalidPrice,
 }

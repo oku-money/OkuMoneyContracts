@@ -15,7 +15,7 @@
 //! | `MintCloseAuthority` | allow | Cosmetic; doesn't affect transfer semantics. |
 //! | `MetadataPointer` | allow | Read-only pointer; off-chain only. |
 //! | `TokenMetadata` | allow | Read-only on-chain metadata; no behaviour change. |
-//! | `InterestBearingConfig` | allow | Read-only UI-only accrual; OkuMoney's economic price is set via `oku_m_price`, not the mint's interest field. (Already in use; see `state.rs` doc-comment.) |
+//! | `ScaledUiAmount` | **allow** | AUTHORITATIVE source of `oku_m_price`. The PsmConfig PDA is the `ScaledUiAmount` authority; yield ops write the multiplier via CPI and all PSM/vault math reads it via `helpers::scaled_ui::read_oku_m_price`. f64 round-trip is proven lossless up to `MAX_OKU_M_PRICE = 1e15` (2.25x margin below 2^51). |
 //! | `TransferFeeConfig` | **reject** | Would deduct fees on every escrow / vault transfer, breaking `actualReceived == amount`. |
 //! | `TransferHook` | **reject** | Re-enters the PSM mid-transfer (the original Phase 10 reject reason). |
 //! | `ConfidentialTransferMint` | **reject** | Encrypted balances; on-chain `amount` field becomes meaningless. |
@@ -24,7 +24,7 @@
 //! | `DefaultAccountState` | **reject** | Could make all freshly-created OkuMoney ATAs frozen by default. |
 //! | `Pausable` | **reject** | Mint-level pause overrides program-level pause; surface area duplication. |
 //! | `ConfidentialMintBurn` / `ConfidentialTransferFee*` | **reject** | Encrypted-supply variants of above. |
-//! | `ScaledUiAmount` | **reject** | UI-only multiplier conflicts with the protocol's `oku_m_price`. |
+//! | `InterestBearingConfig` | **reject** | Mutually exclusive with `ScaledUiAmount` (Token-2022 enforces this). OkuMoney is rear-facing/discrete; `ScaledUiAmount` is the correct extension for this yield model. `InterestBearingConfig` is used on the usdOku mint (oku-dollar program) for forward-facing continuous yield display. |
 //! | Account-only extensions (`TransferFeeAmount`, `*Account`, etc.) | reject as mint extensions | Not valid on a mint TLV in any case. |
 //!
 //! See `audit/README.md` § "Behaviour deltas" for the EVM side —
@@ -59,7 +59,7 @@ fn is_allowed_mint_extension(e: ExtensionType) -> bool {
             | ExtensionType::MintCloseAuthority
             | ExtensionType::MetadataPointer
             | ExtensionType::TokenMetadata
-            | ExtensionType::InterestBearingConfig
+            | ExtensionType::ScaledUiAmount
             | ExtensionType::ImmutableOwner
             | ExtensionType::GroupPointer
             | ExtensionType::GroupMemberPointer

@@ -31,16 +31,16 @@ pub struct Initialize<'info> {
     )]
     pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// usdOku mint (Token-2022)
-    /// Mint authority must be the config PDA
+    /// usdOku mint (Token-2022 with InterestBearingConfig extension).
+    /// Created externally by the deploy script with `InterestBearingConfig`
+    /// initialized. Mint authority must be the config PDA. The
+    /// `InterestBearingConfig` extension provides forward-facing continuous
+    /// yield display for wallets; the on-chain `usd_multiplier` in
+    /// `OkuDollarConfig` remains the authoritative value for share math.
     #[account(
-        init,
-        payer = role_admin,
         mint::decimals = oku_money_mint.decimals,
         mint::authority = config,
         mint::token_program = token_2022_program,
-        seeds = [OkuDollarConfig::USD_OKU_MINT_SEED],
-        bump
     )]
     pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
@@ -358,12 +358,54 @@ pub struct UpdateUsdMultiplier<'info> {
     )]
     pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
-    /// PSM config account (for reading oku_m_price for collateral check)
+    /// PSM config account (for `last_yield_distribution_slot` and address
+    /// validation).
     #[account(
         address = config.psm_config
     )]
     pub psm_config: Box<Account<'info, PsmConfig>>,
 
+    /// OkuMoney mint — read for `oku_m_price` via ScaledUiAmountConfig
+    /// extension (collateral ratio check).
+    #[account(
+        address = config.oku_money_mint,
+        mint::token_program = token_2022_program
+    )]
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    pub token_2022_program: Program<'info, Token2022>,
+}
+
+/// Set the forward-facing yield rate on the usdOku mint's
+/// `InterestBearingConfig` extension.
+///
+/// USD_REBASER only. Mirrors EVM `OkuDollar.setUsdYieldRate(rate, endTimestamp)`.
+/// The rate is in whole basis points (i16) for cross-chain parity with EVM.
+/// The on-chain `usd_multiplier` is NOT affected; the extension rate is
+/// informational (wallet display layer).
+#[derive(Accounts)]
+pub struct SetUsdYieldRate<'info> {
+    #[account(
+        constraint = usd_rebaser.key() == config.usd_rebaser @ OkuDollarError::Unauthorized
+    )]
+    pub usd_rebaser: Signer<'info>,
+
+    #[account(
+        seeds = [OkuDollarConfig::SEED],
+        bump = config.bump
+    )]
+    pub config: Box<Account<'info, OkuDollarConfig>>,
+
+    /// usdOku mint — carries the InterestBearingConfig extension.
+    /// Mutable because the CPI writes to the extension's rate field.
+    #[account(
+        mut,
+        address = config.usd_oku_mint,
+        mint::token_program = token_2022_program
+    )]
+    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    /// Token-2022 program (target of the UpdateRate CPI)
     pub token_2022_program: Program<'info, Token2022>,
 }
 
@@ -591,10 +633,19 @@ pub struct SetMinCollateralRatio<'info> {
     #[account(address = config.reserve_vault)]
     pub reserve_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// PSM config — read for `oku_m_price` (translates reserve OkuMoney
-    /// into dollar terms for the ratio computation).
+    /// PSM config — read for `last_yield_distribution_slot` and address
+    /// validation.
     #[account(address = config.psm_config)]
     pub psm_config: Box<Account<'info, PsmConfig>>,
+
+    /// OkuMoney mint — read for `oku_m_price` via ScaledUiAmountConfig
+    /// extension (translates reserve OkuMoney into dollar terms for the
+    /// ratio computation).
+    #[account(
+        address = config.oku_money_mint,
+        mint::token_program = token_2022_program
+    )]
+    pub oku_money_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }

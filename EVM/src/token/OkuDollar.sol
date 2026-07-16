@@ -728,6 +728,14 @@ contract OkuDollar is
     ///      rate-effect setters on `OkuMoney` (`setOkuMMultiplier`,
     ///      `distributeYield`) ARE pause-gated — see those for the
     ///      effect-vs-config split rationale.
+    ///
+    ///      Cross-chain parity: the rate MUST correspond to a whole-basis-point
+    ///      APY (i.e. the effective APY must be expressible as N * 0.01% for
+    ///      integer N). SVM's usdOku mint uses Token-2022's
+    ///      `InterestBearingConfig` extension, which stores the rate as an
+    ///      `i16` in basis points. Constraining EVM to the same granularity
+    ///      ensures that both chains display identical yield rates. The backend
+    ///      enforces this constraint; the contract does not validate it on-chain.
     function setUsdYieldRate(
         uint256 newRate,
         uint256 endTimestamp

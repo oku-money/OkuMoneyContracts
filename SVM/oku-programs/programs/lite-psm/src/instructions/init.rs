@@ -3,6 +3,7 @@ use crate::contexts::{Initialize, SetupOkuMoneyEscrow, SetupRedemptionQueue};
 use crate::errors::LitePsmError;
 use crate::events::{EscrowInitializedEvent, InitializeEvent, QueueInitializedEvent};
 use crate::helpers::mint_extensions::assert_oku_money_mint_extensions_whitelisted;
+use crate::helpers::read_oku_m_price;
 use crate::state::RedemptionQueue;
 use anchor_lang::prelude::*;
 
@@ -43,13 +44,15 @@ pub struct InitializeParams {
 /// Authority pubkeys are bundled into [`InitializeParams`] to keep the
 /// IDL slot self-documenting (cycle 4 / PSM-17).
 pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<()> {
-    // Cycle 4 (PSM-13): enforce the Token-2022 extension allow-list on
-    // the OkuMoney mint. Replaces the cycle-3 TransferHook-only check
-    // with a positive allow-list (only InterestBearingConfig / metadata /
-    // close-authority are tolerated). Single source of truth lives in
-    // `helpers::mint_extensions` and is also called from
-    // `oku-dollar::initialize`.
+    // Enforce the Token-2022 extension allow-list on the OkuMoney mint.
+    // Single source of truth lives in `helpers::mint_extensions` and is
+    // also called from `oku-dollar::initialize`.
     assert_oku_money_mint_extensions_whitelisted(&ctx.accounts.oku_money_mint.to_account_info())?;
+
+    // Validate that the OkuMoney mint has the ScaledUiAmountConfig
+    // extension initialized with a valid price (>= PRECISION = $1.00).
+    let initial_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
+    require!(initial_price >= PRECISION, LitePsmError::InvalidPrice);
 
     let config = &mut ctx.accounts.config;
     config.bump = ctx.bumps.config;
@@ -81,8 +84,8 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     // Yield distribution lock - starts at 0 (no lock)
     config.last_yield_distribution_slot = 0;
 
-    // OkuMoney price - starts at PRECISION (1e9 = $1.00)
-    config.oku_m_price = PRECISION;
+    // OkuMoney price is stored on the mint's ScaledUiAmountConfig extension
+    // (validated above). No PDA field needed.
 
     // Two-step `role_admin` transfer slot — empty until
     // `set_authority(RoleAdmin, ...)` proposes a rotation.

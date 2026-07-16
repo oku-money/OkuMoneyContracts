@@ -119,16 +119,19 @@ export async function deployTokens(
     null
   );
 
-  // Create OkuMoney (Token-2022 with interest-bearing extension)
-  logger.info('Creating OkuMoney (Token-2022)...');
+  // Create OkuMoney (Token-2022 with ScaledUiAmountConfig extension).
+  // The ScaledUiAmountConfig extension is AUTHORITATIVE for oku_m_price.
+  // PsmConfig PDA is the ScaledUiAmount authority; yield ops write the
+  // multiplier via CPI to Token-2022's UpdateMultiplier.
+  logger.info('Creating OkuMoney (Token-2022 + ScaledUiAmountConfig)...');
   const okuMoneyMint = await createToken2022Mint({
     connection: provider.connection,
     payer: provider.wallet.payer,
     decimals: OKUSD_DECIMALS,
     mintAuthority: psmConfigPDA, // PSM controls minting
     freezeAuthority: psmConfigPDA,
-    rateAuthority: authorities.psm.rebaser,
-    initialRate: 0, // 0% initial rate
+    scaledUiAmountAuthority: psmConfigPDA, // PSM controls multiplier updates
+    initialMultiplier: 1.0, // $1.00 per OkuMoney
   });
 
   return { usdcMint, okuMoneyMint };

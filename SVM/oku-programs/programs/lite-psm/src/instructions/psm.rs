@@ -17,7 +17,9 @@ use crate::contexts::{
 };
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::{check_yield_lock, dollars_to_oku_m, oku_m_to_dollars, oku_m_to_dollars_ceil};
+use crate::helpers::{
+    check_yield_lock, dollars_to_oku_m, oku_m_to_dollars, oku_m_to_dollars_ceil, read_oku_m_price,
+};
 use crate::state::{PsmConfig, QueueEntry, RedemptionQueue};
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_pack::Pack;
@@ -62,8 +64,8 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     require!(!is_paused, LitePsmError::Paused);
     require!(usdc_amount > 0, LitePsmError::ZeroAmount);
 
-    // Read current price from config
-    let oku_m_price = ctx.accounts.config.oku_m_price;
+    // Read current price from the OkuMoney mint's ScaledUiAmountConfig extension
+    let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
 
     // Calculate OkuMoney amount (price-aware): treat usdc_amount as a dollar value.
     let oku_m_amount = dollars_to_oku_m(usdc_amount, oku_m_price)?;
@@ -170,8 +172,8 @@ pub fn redeem_oku_m(ctx: Context<RedeemOkuM>, oku_m_amount: u64) -> Result<()> {
     require!(!is_paused, LitePsmError::Paused);
     require!(oku_m_amount > 0, LitePsmError::ZeroAmount);
 
-    // Read current price from config
-    let oku_m_price = ctx.accounts.config.oku_m_price;
+    // Read current price from the OkuMoney mint's ScaledUiAmountConfig extension
+    let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
 
     // Calculate USDC amount (price-aware): treat dollar value as USDC.
     //
@@ -397,8 +399,9 @@ pub fn process_queue<'info>(
     let seeds = &[PsmConfig::SEED, &[bump]];
     let signer = &[&seeds[..]];
 
-    // Cache price once for batch consistency (matches EVM behavior)
-    let oku_m_price = ctx.accounts.config.oku_m_price;
+    // Cache price once for batch consistency (matches EVM behavior).
+    // Read from the OkuMoney mint's ScaledUiAmountConfig extension.
+    let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
     let configured_usdc_mint = ctx.accounts.config.usdc_mint;
 
     let mut processed = 0u32;
@@ -669,8 +672,8 @@ pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> 
         queue.total_queued_oku_m
     };
 
-    // Read current price from config to calculate reserved USDC
-    let oku_m_price = ctx.accounts.config.oku_m_price;
+    // Read current price from the OkuMoney mint's ScaledUiAmountConfig extension
+    let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
 
     // Calculate reserved USDC from running counter (O(1) instead of iterating).
     //
@@ -801,7 +804,7 @@ pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u64) -> R
     }
 
     // Calculate dollar value at time of rescue
-    let oku_m_price = ctx.accounts.config.oku_m_price;
+    let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
     let dollar_value = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
 
     emit!(RedemptionRescuedEvent {
@@ -899,7 +902,7 @@ pub fn user_self_rescue_queue_entry(
         }
     }
 
-    let oku_m_price = ctx.accounts.config.oku_m_price;
+    let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
     let dollar_value = oku_m_to_dollars(oku_m_amount, oku_m_price)?;
 
     emit!(RedemptionRescuedEvent {

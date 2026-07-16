@@ -17,6 +17,8 @@
 import * as anchor from '@anchor-lang/core';
 import { Program } from '@anchor-lang/core';
 import { PublicKey } from '@solana/web3.js';
+import * as fs from 'fs';
+import * as path from 'path';
 import { LitePsm } from '../../target/types/lite_psm';
 import { createProvider, detectNetwork } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
@@ -73,7 +75,17 @@ async function main() {
     throw new Error(`No deployment for ${network}; run deploy:programs first.`);
   }
   const litePsmId = new PublicKey(deployment.programs.litePsm);
-  const program = anchor.workspace.LitePsm as Program<LitePsm>;
+
+  // Load the IDL and patch the address from the deployment file so we use
+  // the correct on-chain program ID (anchor.workspace uses the stale IDL
+  // address which may differ from the deployed program).
+  const psmIdlPath = path.join(process.cwd(), 'target/idl/lite_psm.json');
+  if (!fs.existsSync(psmIdlPath)) {
+    throw new Error(`IDL not found at ${psmIdlPath}. Run \`anchor build\` first.`);
+  }
+  const psmIdl = JSON.parse(fs.readFileSync(psmIdlPath, 'utf-8'));
+  psmIdl.address = litePsmId.toBase58();
+  const program = new Program<LitePsm>(psmIdl as any, provider);
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
   const cfg = await program.account.psmConfig.fetch(psmConfig);

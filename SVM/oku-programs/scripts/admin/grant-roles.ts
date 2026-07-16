@@ -34,6 +34,8 @@ import {
   getAccount,
 } from '@solana/spl-token';
 import * as os from 'os';
+import * as fs from 'fs';
+import * as path from 'path';
 import { LitePsm } from '../../target/types/lite_psm';
 import { OkuDollar } from '../../target/types/oku_dollar';
 import { createProvider, detectNetwork, loadKeypair } from '../utils/network';
@@ -60,8 +62,8 @@ function parseArg(name: string): string | undefined {
 
 const MASTER_PUBKEY = new PublicKey(parseArg('master') ?? DEFAULT_MASTER);
 
-/** Amount of mock USDC to mint (100k USDC, 6 decimals). */
-const USDC_MINT_AMOUNT = 100_000 * 1_000_000; // 100,000 USDC
+/** Amount of mock USDC to mint (1M USDC, 6 decimals). */
+const USDC_MINT_AMOUNT = 1_000_000 * 1_000_000; // 1,000,000 USDC
 
 /** Recipient for mock USDC mint (may differ from the master EOA). */
 const USDC_RECIPIENT = new PublicKey(
@@ -85,10 +87,14 @@ const PSM_ROLES = [
   'allowanceManager',
   'rebaser',
   'directMinter',
+  'directBurner',
 ] as const;
 
 /** Direct-minter allowance to set after granting roles (1M OkuMoney, 6 decimals). */
 const DIRECT_MINTER_ALLOWANCE = DIRECT_MINTER_ALLOWANCE_CONST;
+
+/** Direct-burner allowance — mirrors the minter allowance for symmetry. */
+const DIRECT_BURNER_ALLOWANCE = DIRECT_MINTER_ALLOWANCE_CONST;
 
 /** OkuDollar vault roles (excluding roleAdmin). */
 const VAULT_ROLES = [
@@ -139,8 +145,24 @@ async function main() {
   const litePsmId = new PublicKey(deployment.programs.litePsm);
   const okuDollarId = new PublicKey(okuDollarProgramId);
 
-  const psmProgram = anchor.workspace.LitePsm as Program<LitePsm>;
-  const vaultProgram = anchor.workspace.OkuDollar as Program<OkuDollar>;
+  // Load IDLs and patch addresses from deployment file so we use the
+  // correct on-chain program IDs (anchor.workspace uses the stale IDL
+  // address which may differ from the deployed program).
+  const psmIdlPath = path.join(process.cwd(), 'target/idl/lite_psm.json');
+  const vaultIdlPath = path.join(process.cwd(), 'target/idl/oku_dollar.json');
+  if (!fs.existsSync(psmIdlPath) || !fs.existsSync(vaultIdlPath)) {
+    throw new Error(
+      `IDL files not found. Run \`anchor build\` first. ` +
+        `Looking for: ${psmIdlPath}, ${vaultIdlPath}`
+    );
+  }
+  const psmIdl = JSON.parse(fs.readFileSync(psmIdlPath, 'utf-8'));
+  const vaultIdl = JSON.parse(fs.readFileSync(vaultIdlPath, 'utf-8'));
+  psmIdl.address = litePsmId.toBase58();
+  vaultIdl.address = okuDollarId.toBase58();
+
+  const psmProgram = new Program<LitePsm>(psmIdl as any, provider);
+  const vaultProgram = new Program<OkuDollar>(vaultIdl as any, provider);
 
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
   const [vaultConfig] = deriveVaultConfigPDA(okuDollarId);
@@ -154,7 +176,7 @@ async function main() {
       'signer (role_admin)': roleAdmin.toBase58(),
       'PSM config': psmConfig.toBase58(),
       'Vault config': vaultConfig.toBase58(),
-      'PSM roles': `${PSM_ROLES.length} (roleAdmin skipped, includes directMinter)`,
+      'PSM roles': `${PSM_ROLES.length} (roleAdmin skipped, includes directMinter + directBurner)`,
       'Vault roles': `${VAULT_ROLES.length} (roleAdmin skipped)`,
       'dry-run': String(dryRun),
     })
@@ -207,6 +229,49 @@ async function main() {
       } catch (e: any) {
         const msg = e?.message?.slice(0, 80) ?? String(e);
         logger.error(`  set_direct_minter_allowance failed: ${msg}`);
+      }
+    }
+  }
+
+  // ---- Set direct-burner allowance BEFORE rotating roles ----
+  // Same reasoning as the minter allowance above: allowanceManager is
+  // rotated in the PSM grants loop, so we must set the burner allowance
+  // while the deployer still holds that role.
+  logger.section('Direct-burner allowance (pre-rotation)');
+
+  {
+    const psmCfgPre2 = await psmProgram.account.psmConfig.fetch(psmConfig);
+    const currentBurnerAllowance = (psmCfgPre2 as any).directBurnerAllowance;
+    const targetBurnerAllowance = new anchor.BN(DIRECT_BURNER_ALLOWANCE);
+    const currentAllowanceManager2 = (psmCfgPre2 as any).allowanceManager as PublicKey;
+
+    if (currentBurnerAllowance && currentBurnerAllowance.eq(targetBurnerAllowance)) {
+      logger.info(`  direct_burner_allowance already ${targetBurnerAllowance.toString()} -- skipping`);
+    } else if (!currentAllowanceManager2.equals(roleAdmin)) {
+      logger.warning(
+        `  allowanceManager is ${currentAllowanceManager2.toBase58().slice(0, 12)}... (not the signer). ` +
+          `Skipping -- set burner allowance with the allowanceManager wallet.`
+      );
+    } else if (dryRun) {
+      logger.info(
+        `  Would set direct_burner_allowance to ${targetBurnerAllowance.toString()} ` +
+          `(current: ${currentBurnerAllowance?.toString() ?? '0'})`
+      );
+    } else {
+      try {
+        const sig = await psmProgram.methods
+          .setDirectBurnerAllowance(targetBurnerAllowance)
+          .accountsPartial({
+            allowanceManager: roleAdmin,
+            config: psmConfig,
+          })
+          .rpc();
+        logger.success(
+          `  set_direct_burner_allowance(${targetBurnerAllowance.toString()}) -- tx: ${sig.slice(0, 20)}...`
+        );
+      } catch (e: any) {
+        const msg = e?.message?.slice(0, 80) ?? String(e);
+        logger.error(`  set_direct_burner_allowance failed: ${msg}`);
       }
     }
   }

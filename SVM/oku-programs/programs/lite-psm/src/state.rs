@@ -10,9 +10,20 @@ use anchor_lang::prelude::*;
 
 /// PSM configuration PDA.
 ///
-/// Seeds: `["psm_config_v4"]`. Migration history (seed-rotation log) is
-/// tracked in `SVM/README.md` § "PDA seed history"; the `_v4` suffix
-/// marks the post-oracle-removal layout.
+/// Seeds: `["psm_config_v5"]`. Migration history (seed-rotation log) is
+/// tracked in `SVM/README.md` § "PDA seed history"; the `_v5` suffix
+/// marks the ScaledUiAmountConfig-authoritative layout.
+///
+/// ## OkuMoney price (oku_m_price)
+///
+/// The OkuMoney price multiplier is stored authoritatively on the
+/// OkuMoney mint's `ScaledUiAmountConfig` Token-2022 extension (f64
+/// multiplier, read via `helpers::scaled_ui::read_oku_m_price`). It is
+/// NOT stored as a field on this PDA.
+///
+/// The f64 round-trip is proven lossless for all multiplier values up to
+/// `MAX_OKU_M_PRICE = 1e15` (2.25x safety margin below `2^51`). See
+/// `helpers/scaled_ui.rs` for the precision analysis.
 #[account]
 #[derive(InitSpace)]
 pub struct PsmConfig {
@@ -40,15 +51,16 @@ pub struct PsmConfig {
     pub cap_manager: Pubkey,
     /// Cold Multisig - reset minter allowance
     pub allowance_manager: Pubkey,
-    /// Orchestrator - update interest rate
+    /// Orchestrator - update OkuMoney price via ScaledUiAmountConfig
     pub rebaser: Pubkey,
 
     // ===== Token References =====
     /// USDC mint address
     pub usdc_mint: Pubkey,
-    /// OkuMoney mint address (Token-2022 with InterestBearingConfig extension).
-    /// The extension is informational only — economic price comes from
-    /// `oku_m_price` on this account, not from the mint's interest accrual.
+    /// OkuMoney mint address (Token-2022 with ScaledUiAmountConfig extension).
+    /// The extension is AUTHORITATIVE — `oku_m_price` is read from and
+    /// written to the mint's `ScaledUiAmountConfig` multiplier via CPI.
+    /// See `helpers/scaled_ui.rs`.
     pub oku_money_mint: Pubkey,
     /// PSM's USDC buffer vault (ATA)
     pub vault_usdc: Pubkey,
@@ -68,12 +80,6 @@ pub struct PsmConfig {
     /// Solana slot of last yield distribution (sandwich prevention)
     /// Operations like mint/redeem are blocked in the same slot as yield distribution
     pub last_yield_distribution_slot: u64,
-
-    // ===== OkuMoney Price =====
-    /// Current OkuMoney price multiplier (1e9 = $1.00)
-    /// Updated by set_oku_m_price() or distribute_yield()
-    /// Matches EVM's okuMPrice() storage pattern
-    pub oku_m_price: u64,
 
     /// Pending `role_admin` rotation target — the two-step admin-transfer
     /// model (OpenZeppelin `Ownable2Step` pattern). `set_authority(RoleAdmin,
@@ -122,24 +128,25 @@ pub struct PsmConfig {
 }
 
 impl PsmConfig {
-    pub const SEED: &'static [u8] = b"psm_config_v4";
+    pub const SEED: &'static [u8] = b"psm_config_v5";
 
     /// Space needed for PsmConfig account: 8 byte discriminator +
-    /// `InitSpace`-derived field sum. Pinned to 594 bytes by the
+    /// `InitSpace`-derived field sum. Pinned to 626 bytes by the
     /// compile-time assertion below; if a reviewer changes a field's
     /// width the assertion fires.
     pub const LEN: usize = 8 + Self::INIT_SPACE;
 }
 
 // Compile-time assertion: if PsmConfig layout changes, this will fail to compile.
-// (634 = 8 disc + 1 bump + 32*11 authorities (352) + 32*4 token refs (128)
+// (626 = 8 disc + 1 bump + 32*11 authorities (352) + 32*4 token refs (128)
 //      + 8 max_supply + 8 minter_allowance + 1 is_paused
-//      + 8 last_yield_distribution_slot + 8 oku_m_price
+//      + 8 last_yield_distribution_slot
 //      + 32 pending_role_admin
 //      + 32 direct_minter + 8 direct_minter_allowance
 //      + 32 direct_burner + 8 direct_burner_allowance.)
-// 634 = 594 (previous) + 32 direct_burner + 8 direct_burner_allowance.
-const _: () = assert!(PsmConfig::LEN == 634);
+// Note: oku_m_price removed — now authoritative on the OkuMoney mint's
+// ScaledUiAmountConfig extension. See helpers/scaled_ui.rs.
+const _: () = assert!(PsmConfig::LEN == 626);
 
 /// Redemption queue PDA — zero-copy ring buffer.
 ///

@@ -9,7 +9,6 @@ import {OkuDollar} from "../src/token/OkuDollar.sol";
 import {LitePSM} from "../src/psm/LitePSM.sol";
 import {RedemptionQueue} from "../src/psm/RedemptionQueue.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
-import {MockAggregatorV3} from "./mocks/MockAggregatorV3.sol";
 import {TestConstants} from "./shared/Constants.sol";
 import {TestRoles} from "./shared/Roles.sol";
 import {Actors} from "./shared/Actors.sol";
@@ -85,7 +84,6 @@ abstract contract BaseTest is Test, Actors {
     RedemptionQueue public redemptionQueue;
     RedemptionQueue public redemptionQueueImpl;
     MockUSDC public usdc;
-    MockAggregatorV3 public oracle;
 
     // ============ Setup ============
 
@@ -98,7 +96,6 @@ abstract contract BaseTest is Test, Actors {
     function _deployContracts() internal {
         // Deploy mocks
         usdc = new MockUSDC();
-        oracle = new MockAggregatorV3();
 
         // Deploy OkuMoney
         (okuMoney, okuMoneyImpl) = Deploy.deployOkuMoney(admin);

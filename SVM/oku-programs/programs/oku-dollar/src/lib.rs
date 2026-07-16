@@ -152,4 +152,14 @@ pub mod oku_dollar {
     ) -> Result<()> {
         instructions::admin::set_min_collateral_ratio(ctx, new_min_collateral_ratio)
     }
+
+    /// Set the forward-facing yield rate on the usdOku mint's
+    /// `InterestBearingConfig` extension.
+    ///
+    /// USD_REBASER only. Rate is in whole basis points (i16): 500 = 5.00% APY.
+    /// Constrained to whole bips for cross-chain parity with EVM.
+    /// The on-chain `usd_multiplier` is NOT affected.
+    pub fn set_usd_yield_rate(ctx: Context<SetUsdYieldRate>, rate_bps: i16) -> Result<()> {
+        instructions::core::set_usd_yield_rate(ctx, rate_bps)
+    }
 }

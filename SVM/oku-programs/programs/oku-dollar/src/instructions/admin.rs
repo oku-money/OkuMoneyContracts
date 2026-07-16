@@ -12,6 +12,7 @@ use crate::contexts::{AcceptRoleAdmin, Pause, SetAuthority, SetMinCollateralRati
 use crate::errors::OkuDollarError;
 use crate::events::*;
 use crate::helpers::is_sufficiently_collateralized;
+use lite_psm::helpers::scaled_ui::read_oku_m_price;
 use crate::roles::AuthorityRole;
 use anchor_lang::prelude::*;
 
@@ -211,7 +212,7 @@ pub fn set_min_collateral_ratio(
     // borrow keeps the borrow checker happy.
     let reserve_balance = ctx.accounts.reserve_vault.amount;
     let total_supply = ctx.accounts.usd_oku_mint.supply;
-    let oku_m_price = ctx.accounts.psm_config.oku_m_price;
+    let oku_m_price = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
     let usd_multiplier = ctx.accounts.config.usd_multiplier;
 
     require!(

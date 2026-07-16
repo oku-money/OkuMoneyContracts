@@ -9,7 +9,7 @@ use crate::constants::{MAX_OKU_M_PRICE, PRECISION};
 use crate::contexts::{DistributeYield, SetOkuMPrice};
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::check_yield_lock;
+use crate::helpers::{check_yield_lock, read_oku_m_price, write_oku_m_price};
 use anchor_lang::prelude::*;
 
 /// Set OkuMoney price directly
@@ -32,10 +32,9 @@ pub fn set_oku_m_price(ctx: Context<SetOkuMPrice>, new_multiplier: u64) -> Resul
     // would still consume the same-slot lock budget.
     check_yield_lock(&ctx.accounts.config)?;
 
-    let config = &mut ctx.accounts.config;
-
-    // Read current multiplier from config
-    let current_multiplier = config.oku_m_price;
+    // Read current multiplier from the OkuMoney mint's ScaledUiAmountConfig
+    // extension (authoritative source of truth).
+    let current_multiplier = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
 
     // Strict increase — see fn-level doc for rationale.
     require!(
@@ -53,12 +52,21 @@ pub fn set_oku_m_price(ctx: Context<SetOkuMPrice>, new_multiplier: u64) -> Resul
         LitePsmError::PriceAboveMax
     );
 
-    // Stamp the yield-distribution slot and update the price. Both writes
-    // commit atomically at the end of the instruction (Anchor's storage
-    // deltas are flushed together), so ordering here is purely stylistic.
+    // Stamp the yield-distribution slot on the PDA.
     let clock = Clock::get()?;
+    let config = &mut ctx.accounts.config;
     config.last_yield_distribution_slot = clock.slot;
-    config.oku_m_price = new_multiplier;
+    let bump = config.bump;
+
+    // Write the new price to the mint's ScaledUiAmountConfig extension
+    // via CPI to Token-2022's UpdateMultiplier.
+    write_oku_m_price(
+        new_multiplier,
+        &ctx.accounts.oku_money_mint.to_account_info(),
+        &ctx.accounts.config.to_account_info(),
+        &ctx.accounts.token_2022_program.to_account_info(),
+        bump,
+    )?;
 
     emit!(YieldDistributionSlotSet { slot: clock.slot });
 
@@ -92,21 +100,16 @@ pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Res
     let total_supply = ctx.accounts.oku_money_mint.supply;
     require!(total_supply > 0, LitePsmError::ZeroAmount);
 
-    let config = &mut ctx.accounts.config;
-
-    // Read current multiplier from config
-    let current_multiplier = config.oku_m_price;
+    // Read current multiplier from the OkuMoney mint's ScaledUiAmountConfig
+    // extension (authoritative source of truth).
+    let current_multiplier = read_oku_m_price(&ctx.accounts.oku_money_mint.to_account_info())?;
 
     // Cycle 4 (S-29): use the shared `mul_div_floor` primitive instead
     // of open-coding the same `(yield * PRECISION) / total_supply` math.
-    // Identical semantics (floor + u128 widening + try_from narrowing)
-    // and the path is now covered by the cargo-fuzz `mul_div_floor`
-    // target and the Kani correctness proof at no extra cost.
     let yield_per_token = oku_shared::mul_div_floor(yield_amount, PRECISION, total_supply)
         .ok_or(LitePsmError::Overflow)?;
 
     // Prevent no-op distributions that waste the yield lock slot
-    // This can happen when yield_amount is tiny relative to total_supply
     require!(yield_per_token > 0, LitePsmError::YieldTooSmall);
 
     let new_multiplier = current_multiplier
@@ -119,11 +122,21 @@ pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Res
         LitePsmError::PriceAboveMax
     );
 
-    // Stamp the yield-distribution slot and update the price; ordering is
-    // stylistic — both commit atomically at the end of the instruction.
+    // Stamp the yield-distribution slot on the PDA.
     let clock = Clock::get()?;
+    let config = &mut ctx.accounts.config;
     config.last_yield_distribution_slot = clock.slot;
-    config.oku_m_price = new_multiplier;
+    let bump = config.bump;
+
+    // Write the new price to the mint's ScaledUiAmountConfig extension
+    // via CPI to Token-2022's UpdateMultiplier.
+    write_oku_m_price(
+        new_multiplier,
+        &ctx.accounts.oku_money_mint.to_account_info(),
+        &ctx.accounts.config.to_account_info(),
+        &ctx.accounts.token_2022_program.to_account_info(),
+        bump,
+    )?;
 
     emit!(YieldDistributionSlotSet { slot: clock.slot });
 

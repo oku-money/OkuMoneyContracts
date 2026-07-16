@@ -239,6 +239,10 @@ contract OkuMoney is
     ///      transfers during an incident response. The rate-config setters on
     ///      `OkuDollar` (`setUsdYieldRate`, `setNextUsdYieldRate`) intentionally
     ///      remain available while paused so operators can zero accrual mid-pause.
+    ///
+    ///      SVM equivalent: `lite_psm::set_oku_m_price`, which writes the
+    ///      multiplier to the OkuMoney mint's `ScaledUiAmountConfig` Token-2022
+    ///      extension (authoritative source on SVM; no PDA field).
     function setOkuMMultiplier(uint256 newMultiplier)
         external
         onlyRole(Roles.OKUM_REBASER)
@@ -265,6 +269,10 @@ contract OkuMoney is
     ///      Pause-gated for the same reason as `setOkuMMultiplier`: yield is a
     ///      state-effect that must freeze with user-facing transfers during
     ///      pause. See `setOkuMMultiplier` NatSpec.
+    ///
+    ///      SVM equivalent: `lite_psm::distribute_yield`, which reads the
+    ///      current price from and writes the new price to the OkuMoney mint's
+    ///      `ScaledUiAmountConfig` Token-2022 extension.
     /// @param yieldAmount Dollar yield to distribute (18 decimals)
     function distributeYield(uint256 yieldAmount)
         external

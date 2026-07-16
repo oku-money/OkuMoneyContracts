@@ -173,3 +173,14 @@ pub struct RoleAdminTransferCancelledEvent {
     pub current_admin: Pubkey,
     pub cancelled_pending: Pubkey,
 }
+
+/// Emitted when `set_usd_yield_rate` updates the `InterestBearingConfig`
+/// rate on the usdOku mint.
+///
+/// EVM equivalent: `UsdYieldRateSet` event.
+#[event]
+pub struct UsdYieldRateSetEvent {
+    /// New rate in basis points (i16). 500 = 5.00% APY.
+    pub rate_bps: i16,
+    pub timestamp: i64,
+}

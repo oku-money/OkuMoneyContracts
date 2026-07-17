@@ -1,4 +1,4 @@
-//! cargo-fuzz target: `oku_m_to_dollars`
+//! cargo-fuzz target: `raw_to_dollars` (file retains legacy name)
 //!
 //! Properties verified:
 //!
@@ -13,17 +13,17 @@
 //!   5. Consistency with `mul_div_floor`: result ==
 //!      `mul_div_floor(amount, multiplier, PRECISION)`.
 //!
-//! Run: cargo +nightly fuzz run oku_m_to_dollars -- -max_total_time=60
+//! Run: cargo +nightly fuzz run raw_to_dollars -- -max_total_time=60
 
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use oku_shared::{mul_div_floor, oku_m_to_dollars, PRECISION};
+use oku_shared::{mul_div_floor, raw_to_dollars, PRECISION};
 
 fuzz_target!(|data: (u64, u64)| {
     let (amount, multiplier) = data;
 
-    let result = oku_m_to_dollars(amount, multiplier);
+    let result = raw_to_dollars(amount, multiplier);
 
     // Property 1: no panic (guaranteed by return type, but sanitizers will catch UB)
 
@@ -31,7 +31,7 @@ fuzz_target!(|data: (u64, u64)| {
     let reference = mul_div_floor(amount, multiplier, PRECISION);
     assert_eq!(
         result, reference,
-        "oku_m_to_dollars inconsistent with mul_div_floor (amount={amount}, multiplier={multiplier})"
+        "raw_to_dollars inconsistent with mul_div_floor (amount={amount}, multiplier={multiplier})"
     );
 
     // Property 2: identity at PRECISION
@@ -39,7 +39,7 @@ fuzz_target!(|data: (u64, u64)| {
         assert_eq!(
             result,
             Some(amount),
-            "oku_m_to_dollars: at PRECISION multiplier result must equal amount"
+            "raw_to_dollars: at PRECISION multiplier result must equal amount"
         );
     }
 
@@ -48,13 +48,13 @@ fuzz_target!(|data: (u64, u64)| {
         if multiplier > PRECISION && amount > 0 {
             assert!(
                 dollars >= amount,
-                "oku_m_to_dollars: multiplier > PRECISION should yield dollars >= amount (amount={amount}, multiplier={multiplier}, dollars={dollars})"
+                "raw_to_dollars: multiplier > PRECISION should yield dollars >= amount (amount={amount}, multiplier={multiplier}, dollars={dollars})"
             );
         }
         if multiplier < PRECISION {
             assert!(
                 dollars <= amount,
-                "oku_m_to_dollars: multiplier < PRECISION should yield dollars <= amount"
+                "raw_to_dollars: multiplier < PRECISION should yield dollars <= amount"
             );
         }
     }

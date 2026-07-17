@@ -8,14 +8,10 @@
 //! orchestrator mints on the destination chain via `mint_usd_oku`). This
 //! instruction is the supply-destruction half of the SVM->EVM bridge flow.
 
-// CPI targets are constrained by Anchor's typed `Program<'info, Token2022>`
-// accounts. The `arbitrary_cpi` warning is a false positive.
-#![allow(unknown_lints, clippy::arbitrary_cpi)]
-
 use crate::contexts::direct_burn::BurnUsdOkuDirect;
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::{check_yield_lock, oku_m_to_dollars, read_multiplier};
+use crate::helpers::{check_yield_lock, raw_to_dollars, read_multiplier};
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
 
@@ -74,7 +70,7 @@ pub fn burn_usd_oku_direct(ctx: Context<BurnUsdOkuDirect>, raw_amount: u64) -> R
 
     // Read multiplier from mint to compute dollar value for event
     let multiplier = read_multiplier(&ctx.accounts.usd_oku_mint.to_account_info())?;
-    let dollar_value = oku_m_to_dollars(raw_amount, multiplier)?;
+    let dollar_value = raw_to_dollars(raw_amount, multiplier)?;
 
     ctx.accounts.usd_oku_mint.reload()?;
     let new_total_supply = ctx.accounts.usd_oku_mint.supply;

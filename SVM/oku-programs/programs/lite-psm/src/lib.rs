@@ -1,12 +1,12 @@
-//! # OkuMoney Lite-PSM
+//! # usdOku Lite-PSM
 //!
 //! SVM port of the EVM-side `LitePSM.sol`. The structure mirrors
 //! `EVM/src/psm/` module-for-module; deliberate divergences (token
-//! decimals, yield-distribution model, queue size) are
+//! decimals, yield-distribution model) are
 //! documented in [`SVM/README.md § EVM vs SVM — divergence catalogue`](../../../README.md).
 //!
 //! v1 cross-chain transfers are handled off-chain by an orchestrator that
-//! holds the PSM operational roles (`buffer_depositor`, `queue_processor`,
+//! holds the PSM operational roles (`buffer_depositor`,
 //! `rebaser`) and signs `mint_usd_oku` / `redeem_usd_oku` against its own
 //! ATAs on each chain. There is no on-chain bridge program.
 //!
@@ -54,7 +54,7 @@ declare_id!("App49HmtSBMwh42tUpZT7gSbEbq7HiA6QED2BBnXtzxo");
 // is complete; populate them in a follow-up commit.
 #[cfg(not(feature = "no-entrypoint"))]
 solana_security_txt::security_txt! {
-    name: "OkuMoney Lite-PSM",
+    name: "usdOku Lite-PSM",
     project_url: "https://github.com/anomalyco/okuMoney",
     contacts: "uri:https://github.com/anomalyco/okuMoney/security/advisories/new",
     policy: "https://github.com/anomalyco/okuMoney/blob/main/SECURITY.md",
@@ -66,21 +66,13 @@ solana_security_txt::security_txt! {
 pub mod lite_psm {
     use super::*;
 
-    // ===== Initialization (3-step) =====
+    // ===== Initialization =====
 
     pub fn initialize(
         ctx: Context<Initialize>,
         params: instructions::init::InitializeParams,
     ) -> Result<()> {
         instructions::init::initialize(ctx, params)
-    }
-
-    pub fn setup_redemption_queue(ctx: Context<SetupRedemptionQueue>) -> Result<()> {
-        instructions::init::setup_redemption_queue(ctx)
-    }
-
-    pub fn setup_usd_oku_escrow(ctx: Context<SetupUsdOkuEscrow>) -> Result<()> {
-        instructions::init::setup_usd_oku_escrow(ctx)
     }
 
     // ===== PSM Operations =====
@@ -114,43 +106,12 @@ pub mod lite_psm {
         instructions::psm::redeem_usd_oku(ctx, raw_usd_oku_amount)
     }
 
-    pub fn process_queue<'info>(
-        ctx: Context<'info, ProcessQueue<'info>>,
-        max_entries: u32,
-    ) -> Result<()> {
-        instructions::psm::process_queue(ctx, max_entries)
-    }
-
     pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
         instructions::psm::deposit_buffer(ctx, amount)
     }
 
     pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> {
         instructions::psm::withdraw_buffer(ctx, amount)
-    }
-
-    /// Rescue a stuck queue entry — returns escrowed usdOku to recipient.
-    /// Only queue_processor can call (matches EVM's rescueQueueEntry).
-    ///
-    /// `queue_index` is u64 — indexer / orchestrator code must pass
-    /// the index as a `BN`/bigint on the TS side.
-    pub fn rescue_queue_entry(ctx: Context<RescueQueueEntry>, queue_index: u64) -> Result<()> {
-        instructions::psm::rescue_queue_entry(ctx, queue_index)
-    }
-
-    /// Permissionless self-rescue (cycle 4 / PSM-06).
-    ///
-    /// Any user can reclaim their own queued usdOku without operator
-    /// involvement, unblocking the head-pin DoS where a frozen ATA on
-    /// the head entry stalls every subsequent `process_queue` call.
-    /// Signer must be the entry's original queued user; recipient ATA
-    /// must be owned by that user (constraints enforced on the
-    /// `UserSelfRescueQueueEntry` context).
-    pub fn user_self_rescue_queue_entry(
-        ctx: Context<UserSelfRescueQueueEntry>,
-        queue_index: u64,
-    ) -> Result<()> {
-        instructions::psm::user_self_rescue_queue_entry(ctx, queue_index)
     }
 
     // ===== PSM Admin =====

@@ -81,7 +81,7 @@ pub fn read_multiplier(mint_account: &AccountInfo) -> Result<u64> {
 
     // Convert f64 to PRECISION-scaled u64.
     // A multiplier of 1.0 yields PRECISION (1_000_000_000).
-    let scaled = (effective * PRECISION as f64) as u64;
+    let scaled = (effective * PRECISION as f64).round() as u64;
     if scaled == 0 {
         return Err(error!(LitePsmError::MultiplierReadFailed));
     }

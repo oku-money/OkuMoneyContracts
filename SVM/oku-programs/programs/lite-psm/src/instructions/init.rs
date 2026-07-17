@@ -1,7 +1,7 @@
-use crate::contexts::{Initialize, SetupRedemptionQueue, SetupUsdOkuEscrow};
+use crate::contexts::Initialize;
 use crate::errors::LitePsmError;
-use crate::events::{EscrowInitializedEvent, InitializeEvent, QueueInitializedEvent};
-use crate::state::{PsmConfig, RedemptionQueue};
+use crate::events::InitializeEvent;
+use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::invoke;
 use anchor_spl::token_2022::spl_token_2022::{
@@ -35,7 +35,6 @@ pub struct InitializeParams {
     pub unpauser: Pubkey,
     pub freezer: Pubkey,
     pub unfreezer: Pubkey,
-    pub queue_processor: Pubkey,
     pub buffer_depositor: Pubkey,
     pub buffer_withdrawer: Pubkey,
     pub cap_manager: Pubkey,
@@ -45,12 +44,10 @@ pub struct InitializeParams {
     pub usd_oku_uri: String,
 }
 
-/// Initialize the PSM — step 1.
+/// Initialize the PSM.
 ///
 /// Creates config PDA, USDC vault, and the usdOku mint (Token-2022 with
-/// ScaledUiAmount + MetadataPointer + TokenMetadata extensions). Call
-/// `setup_redemption_queue` and `setup_usd_oku_escrow` afterwards to
-/// complete initialization.
+/// ScaledUiAmount + MetadataPointer + TokenMetadata extensions).
 ///
 /// The usdOku mint is created in this instruction via CPIs because
 /// Anchor's `init` macro doesn't support multi-extension Token-2022
@@ -208,7 +205,6 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     config.unpauser = params.unpauser;
     config.freezer = params.freezer;
     config.unfreezer = params.unfreezer;
-    config.queue_processor = params.queue_processor;
     config.buffer_depositor = params.buffer_depositor;
     config.buffer_withdrawer = params.buffer_withdrawer;
     config.cap_manager = params.cap_manager;
@@ -219,7 +215,6 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     config.usdc_mint = ctx.accounts.usdc_mint.key();
     config.usd_oku_mint = mint_key;
     config.vault_usdc = ctx.accounts.vault_usdc.key();
-    config.vault_usd_oku = Pubkey::default(); // Set in setup_usd_oku_escrow
 
     // Set limits
     config.max_supply = params.max_supply;
@@ -248,58 +243,6 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
         usdc_mint: config.usdc_mint,
         usd_oku_mint: config.usd_oku_mint,
         max_supply: params.max_supply,
-    });
-
-    Ok(())
-}
-
-/// Initialize the PSM - Step 2
-/// Creates redemption queue PDA (zero-copy ring buffer, ~9.4 KB / 9 640 bytes).
-///
-/// Uses `load_init()` because Anchor's `init` constraint allocates and
-/// zero-fills the account data; `load_init()` is the zero-copy companion
-/// that validates the discriminator wasn't set yet and returns a mutable
-/// `RefMut` over the freshly-zeroed bytes. The 200-entry array
-/// The 200-entry array is already zeroed; we only need to set the header.
-///
-/// Must be called after `initialize()`.
-pub fn setup_redemption_queue(ctx: Context<SetupRedemptionQueue>) -> Result<()> {
-    {
-        let mut queue = ctx.accounts.redemption_queue.load_init()?;
-        queue.bump = ctx.bumps.redemption_queue;
-        queue.head = 0;
-        queue.tail = 0;
-        queue.total_queued_usd_oku = 0;
-        // entries array was already zero-filled by Anchor's `init` allocation.
-    }
-
-    emit!(QueueInitializedEvent {
-        redemption_queue: ctx.accounts.redemption_queue.key(),
-        // `MAX_ENTRIES` is a `const usize` (currently 200); the cast is
-        // safe because it's pinned at compile time and fits in u32.
-        #[allow(clippy::cast_possible_truncation)]
-        max_entries: RedemptionQueue::MAX_ENTRIES as u32,
-    });
-
-    Ok(())
-}
-
-/// Initialize the PSM - Step 3
-/// Creates usdOku escrow vault for queued redemptions
-/// Must be called after initialize()
-pub fn setup_usd_oku_escrow(ctx: Context<SetupUsdOkuEscrow>) -> Result<()> {
-    let config = &mut ctx.accounts.config;
-
-    // Ensure escrow hasn't already been set
-    require!(
-        config.vault_usd_oku == Pubkey::default(),
-        LitePsmError::EscrowAlreadyInitialized
-    );
-
-    config.vault_usd_oku = ctx.accounts.vault_usd_oku.key();
-
-    emit!(EscrowInitializedEvent {
-        vault_usd_oku: config.vault_usd_oku,
     });
 
     Ok(())

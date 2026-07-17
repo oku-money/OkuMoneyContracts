@@ -18,9 +18,9 @@ use oku_shared::yield_lock_engaged;
 /// yield distribution.
 ///
 /// This prevents sandwich attacks where an attacker:
-///   1. Frontruns `distribute_yield()` with `mint_oku_m()` at the old
+///   1. Frontruns `distribute_yield()` with `mint_usd_oku()` at the old
 ///      (lower) price.
-///   2. Backruns with `redeem_oku_m()` at the new (higher) price.
+///   2. Backruns with `redeem_usd_oku()` at the new (higher) price.
 ///
 /// The lock uses Solana slots (~400 ms each) and auto-releases in
 /// subsequent slots.

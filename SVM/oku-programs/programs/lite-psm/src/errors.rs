@@ -71,23 +71,6 @@ pub enum LitePsmError {
     #[msg("User does not hold enough usdOku for redemption")]
     InsufficientUserBalance,
 
-    // ===== Queue Errors =====
-    /// Queue is empty
-    #[msg("Queue is empty")]
-    QueueEmpty,
-
-    /// Queue is full
-    #[msg("Queue is full")]
-    QueueFull,
-
-    /// Invalid queue index
-    #[msg("Invalid queue index")]
-    InvalidQueueIndex,
-
-    /// Queue entry already cleared
-    #[msg("Queue entry already cleared")]
-    EntryAlreadyCleared,
-
     // ===== Arithmetic Errors =====
     /// Arithmetic overflow
     #[msg("Arithmetic overflow")]
@@ -98,10 +81,6 @@ pub enum LitePsmError {
     /// EVM: ZeroAmount()
     #[msg("Amount must be greater than zero")]
     ZeroAmount,
-
-    /// Not enough accounts provided for queue entries
-    #[msg("Not enough accounts provided for queue entries")]
-    InsufficientAccounts,
 
     // ===== Yield Distribution Errors =====
     /// Cannot perform operation in same slot as yield distribution
@@ -153,10 +132,6 @@ pub enum LitePsmError {
     /// Escrow vault already initialized
     #[msg("Escrow vault already initialized")]
     EscrowAlreadyInitialized,
-
-    /// PsmConfig is already at the new size (migration not needed).
-    #[msg("PsmConfig already migrated to current layout")]
-    MigrationNotNeeded,
 
     // ===== Initialization Errors =====
     /// USDC mint must have exactly 6 decimals on Solana.

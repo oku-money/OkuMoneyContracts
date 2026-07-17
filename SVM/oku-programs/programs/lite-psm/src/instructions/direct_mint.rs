@@ -5,18 +5,14 @@
 //! called by a non-PSM `OKUM_MINTER` role holder.
 //!
 //! The on-chain collateral discipline for USDC-backed mints lives in
-//! `instructions::psm::mint_oku_m`; the `direct_minter` path enforces
+//! `instructions::psm::mint_usd_oku`; the `direct_minter` path enforces
 //! only role + allowance + supply-cap guards. The fiat collateral backing
 //! these mints is held off-chain by the operator.
-
-// CPI targets are constrained by Anchor's typed `Program<'info, Token2022>`
-// accounts. The `arbitrary_cpi` warning is a false positive.
-#![allow(unknown_lints, clippy::arbitrary_cpi)]
 
 use crate::contexts::direct_mint::MintUsdOkuDirect;
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::{check_yield_lock, oku_m_to_dollars, read_multiplier};
+use crate::helpers::{check_yield_lock, raw_to_dollars, read_multiplier};
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
@@ -89,7 +85,7 @@ pub fn mint_usd_oku_direct(ctx: Context<MintUsdOkuDirect>, raw_amount: u64) -> R
 
     // Read multiplier from mint to compute dollar value for the event
     let multiplier = read_multiplier(&ctx.accounts.usd_oku_mint.to_account_info())?;
-    let dollar_value = oku_m_to_dollars(raw_amount, multiplier)?;
+    let dollar_value = raw_to_dollars(raw_amount, multiplier)?;
 
     ctx.accounts.usd_oku_mint.reload()?;
     let new_total_supply = ctx.accounts.usd_oku_mint.supply;

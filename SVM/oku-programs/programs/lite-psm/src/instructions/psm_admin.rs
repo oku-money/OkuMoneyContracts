@@ -8,11 +8,6 @@
 //! Freeze / thaw mirrors Circle FiatToken's blacklister pattern.
 //! Taken from <https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v1/Blacklistable.sol>.
 
-// F-02: CPI targets (freeze_account, thaw_account) use Anchor's typed
-// `Interface<'info, TokenInterface>` account which validates program ID at
-// deserialization. The `arbitrary_cpi` warning is a false positive here.
-#![allow(unknown_lints, clippy::arbitrary_cpi)]
-
 use crate::contexts::{
     AcceptRoleAdmin, AllowanceManager, CapManager, FreezeAccount, Pause, SetAuthority, ThawAccount,
     Unpause,
@@ -53,10 +48,10 @@ pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
 /// Update max supply (cap_manager only).
 ///
 /// Refuses any new cap below the current circulating supply — that would
-/// silently brick every subsequent `mint_oku_m` because the mint path
+/// silently brick every subsequent `mint_usd_oku` because the mint path
 /// checks `current_supply + amount <= max_supply` and `add(0) > cap` is
 /// true on a starting state of `current_supply > cap`. Mirrors EVM
-/// `OkuMoney.setMaxSupply`'s `BelowCurrentSupply` revert.
+/// `usdOku.setMaxSupply`'s `BelowCurrentSupply` revert.
 pub fn set_max_supply(ctx: Context<CapManager>, new_max_supply: u64) -> Result<()> {
     let current_supply = ctx.accounts.usd_oku_mint.supply;
     require!(
@@ -131,7 +126,7 @@ pub fn set_direct_burner_allowance(ctx: Context<AllowanceManager>, amount: u64) 
     Ok(())
 }
 
-/// Freeze an OkuMoney token account (compliance/blacklist).
+/// Freeze a usdOku token account (compliance/blacklist).
 /// Uses Token-2022 freeze authority CPI.
 /// MUST work even when PSM is paused (no pause check).
 pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
@@ -161,7 +156,7 @@ pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
     Ok(())
 }
 
-/// Thaw a frozen OkuMoney token account
+/// Thaw a frozen usdOku token account
 /// Uses Token-2022 thaw authority CPI
 /// MUST work even when PSM is paused (no pause check)
 pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
@@ -256,7 +251,7 @@ pub fn set_authority(
     // Swap-in the new authority and return the old value. Each arm is
     // structurally identical (`let old = config.X; config.X = new;
     // old`), so we use a one-line macro to dispatch on the role enum
-    // and collapse the 12-arm match. Behavior is byte-for-byte
+    // and collapse the match. Behavior is byte-for-byte
     // identical to the previous open-coded version. `RoleAdmin` is
     // intentionally absent — it's handled by the two-step branch above.
     macro_rules! rotate_role {
@@ -278,7 +273,6 @@ pub fn set_authority(
         Unpauser          => unpauser,
         Freezer           => freezer,
         Unfreezer         => unfreezer,
-        QueueProcessor    => queue_processor,
         BufferDepositor   => buffer_depositor,
         BufferWithdrawer  => buffer_withdrawer,
         CapManager        => cap_manager,

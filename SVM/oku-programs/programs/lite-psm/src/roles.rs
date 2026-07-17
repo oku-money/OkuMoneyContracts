@@ -1,4 +1,4 @@
-//! # OkuMoney Lite-PSM Roles
+//! # usdOku Lite-PSM Roles
 //!
 //! Authority role definitions for the Lite-PSM program. Modeled on
 //! OpenZeppelin's `AccessControl` (one role per capability, single meta-role
@@ -20,18 +20,16 @@
 //! | `Unpauser` | `PSM_UNPAUSER` | Cold Multisig - unpause PSM |
 //! | `Freezer` | `OKUM_BLACKLISTER` | Warm Multisig - freeze accounts |
 //! | `Unfreezer` | `OKUM_UNBLACKLISTER` | Cold Multisig - thaw accounts |
-//! | `QueueProcessor` | `PSM_QUEUE_PROCESSOR` | Orchestrator - process redemption queue |
 //! | `BufferDepositor` | `PSM_BUFFER_DEPOSITOR` | Orchestrator - deposit USDC buffer |
 //! | `BufferWithdrawer` | `PSM_BUFFER_WITHDRAWER` | Cold Multisig - withdraw buffer |
 //! | `CapManager` | `OKUM_CAP_MANAGER` | Cold Multisig - set max supply |
 //! | `AllowanceManager` | `OKUM_ALLOWANCE_MANAGER` | Cold Multisig - reset minter allowance |
-//! | `Rebaser` | `OKUM_REBASER` | Orchestrator - update OkuMoney price |
-//! | `DirectMinter` | `OKUM_MINTER` (non-PSM) | Operator - direct OkuMoney mint without USDC |
-//! | `DirectBurner` | `OKUM_BURNER` (non-PSM) | Operator - direct OkuMoney burn without USDC payout |
+//! | `Rebaser` | `OKUM_REBASER` | Orchestrator - update usdOku price |
+//! | `DirectMinter` | `OKUM_MINTER` (non-PSM) | Operator - direct usdOku mint without USDC |
+//! | `DirectBurner` | `OKUM_BURNER` (non-PSM) | Operator - direct usdOku burn without USDC payout |
 //!
 //! v1 cross-chain transfers are mediated off-chain by an orchestrator
-//! holding `BufferDepositor` + `QueueProcessor` + `Rebaser`; there is
-//! no separate bridge RBAC.
+//! holding `BufferDepositor` + `Rebaser`; there is no separate bridge RBAC.
 
 use anchor_lang::prelude::*;
 
@@ -60,10 +58,6 @@ pub enum AuthorityRole {
     /// EVM: OKUM_UNBLACKLISTER
     Unfreezer,
 
-    /// Orchestrator - process redemption queue.
-    /// EVM: PSM_QUEUE_PROCESSOR
-    QueueProcessor,
-
     /// Orchestrator - deposit USDC buffer.
     /// EVM: PSM_BUFFER_DEPOSITOR
     BufferDepositor,
@@ -80,15 +74,15 @@ pub enum AuthorityRole {
     /// EVM: OKUM_ALLOWANCE_MANAGER
     AllowanceManager,
 
-    /// Orchestrator - update OkuMoney price.
+    /// Orchestrator - update usdOku price.
     /// EVM: OKUM_REBASER
     Rebaser,
 
-    /// Operator / fiat gateway — can mint OkuMoney directly without USDC.
+    /// Operator / fiat gateway — can mint usdOku directly without USDC.
     /// EVM: `OKUM_MINTER` (when granted to a non-PSM address)
     DirectMinter,
 
-    /// Operator / bridge backend — can burn OkuMoney directly without
+    /// Operator / bridge backend — can burn usdOku directly without
     /// triggering a USDC redemption. Enables SVM→EVM bridging.
     /// EVM: `OKUM_BURNER` (when granted to a non-PSM address)
     DirectBurner,

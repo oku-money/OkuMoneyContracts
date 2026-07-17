@@ -1,7 +1,7 @@
 //! # usdOku Lite-PSM Events
 //!
 //! Event definitions for the Lite-PSM program.
-//! Aligned with EVM contract events from `LitePSM.sol` and `RedemptionQueue.sol`.
+//! Aligned with EVM contract events from `LitePSM.sol`.
 //!
 //! ## EVM Event Mapping
 //!
@@ -9,11 +9,6 @@
 //! |-----------|----------------|
 //! | `MintEvent` | `MintNote` |
 //! | `RedeemEvent` | `RedeemNote` |
-//! | `RedemptionQueuedEvent` | `RedemptionQueued` |
-//! | `RedemptionProcessedEvent` | `RedemptionProcessed` |
-//! | `RedemptionSkippedEvent` | `RedemptionSkipped` |
-//! | `BufferRefilledEvent` | `BufferRefilled` |
-//! | `RedemptionRescuedEvent` | `RedemptionRescued` |
 //! | `BufferDepositEvent` | `BufferDeposited` |
 //! | `BufferWithdrawEvent` | `BufferWithdrawn` |
 //!
@@ -38,23 +33,6 @@ pub struct InitializeEvent {
     pub usdc_mint: Pubkey,
     pub usd_oku_mint: Pubkey,
     pub max_supply: u64,
-}
-
-/// Emitted when the redemption-queue PDA is created. Cycle 4 (PSM-22):
-/// added so the three-step init flow has full event coverage and
-/// indexers can observe each setup leg landing on-chain.
-#[event]
-pub struct QueueInitializedEvent {
-    pub redemption_queue: Pubkey,
-    /// Compile-time queue capacity (`RedemptionQueue::MAX_ENTRIES`).
-    pub max_entries: u32,
-}
-
-/// Emitted when the usdOku escrow vault is wired into config.
-/// Cycle 4 (PSM-22): added so the final init step is observable.
-#[event]
-pub struct EscrowInitializedEvent {
-    pub vault_usd_oku: Pubkey,
 }
 
 /// Emitted when usdOku is minted via PSM.
@@ -95,86 +73,6 @@ pub struct RedeemEvent {
     pub multiplier: u64,
     /// usdOku supply AFTER the burn completed. Cycle 4 (PSM-23).
     pub new_total_supply: u64,
-}
-
-/// Emitted when a redemption is queued (insufficient buffer).
-/// EVM equivalent: `RedemptionQueued(address indexed user, uint256 rawUsdOkuAmount, uint256 dollarValue, uint256 position, uint256 queueLength)`
-#[event]
-pub struct RedemptionQueuedEvent {
-    /// User who is owed redemption
-    pub user: Pubkey,
-    /// usdOku raw amount held in escrow (6 decimals)
-    pub raw_usd_oku_amount: u64,
-    /// Dollar value at time of queueing
-    pub dollar_value: u64,
-    /// Position in queue (0-indexed; absolute tail index, not ring slot).
-    pub queue_position: u64,
-    /// Total queue length after this entry.
-    pub queue_length: u64,
-}
-
-/// Emitted when a queued redemption is processed.
-/// EVM equivalent: `RedemptionProcessed(address indexed user, uint256 rawUsdOkuAmount, uint256 dollarValue, uint256 usdcAmount, uint256 waitTime)`
-#[event]
-pub struct RedemptionProcessedEvent {
-    /// User who received redemption
-    pub user: Pubkey,
-    /// usdOku raw amount that was escrowed (6 decimals)
-    pub raw_usd_oku_amount: u64,
-    /// Dollar value at time of processing
-    pub dollar_value: u64,
-    /// USDC received (6 decimals)
-    pub usdc_amount: u64,
-    /// Time spent in queue (seconds)
-    pub wait_time: i64,
-    /// usdOku supply AFTER the per-entry burn. Cycle 4 (PSM-23):
-    /// added so indexers can reconstruct supply trajectory through the
-    /// queue-drain phase without summing batch events. Note that
-    /// because `process_queue` emits one of these per processed entry,
-    /// the value decreases monotonically across the batch.
-    pub new_total_supply: u64,
-}
-
-/// Emitted when `process_queue` skips a previously-rescued entry.
-/// EVM equivalent: `RedemptionSkipped(uint256 indexed index)`.
-#[event]
-pub struct RedemptionSkippedEvent {
-    /// Absolute queue index that was skipped (already cleared by rescue).
-    pub queue_index: u64,
-}
-
-/// Emitted at the end of `process_queue` with batch-level summary.
-///
-/// EVM equivalent: `BufferRefilled(uint256 newBufferBalance,
-///   uint256 processedCount, uint256 skippedCount)`. Indexers can use this
-/// to reconcile buffer state after a queue drain without summing per-entry
-/// `RedemptionProcessed`/`Skipped` events.
-#[event]
-pub struct BufferRefilledEvent {
-    /// USDC vault balance after the batch completed (6 decimals).
-    pub new_buffer_balance: u64,
-    /// Number of entries that received a USDC payout in this batch.
-    /// Bounded by `RedemptionQueue::MAX_BATCH_ENTRIES` (= 50) per call;
-    /// u64 matches the queue's u64 indices.
-    pub processed_count: u64,
-    /// Number of cleared (rescued) entries skipped during traversal.
-    pub skipped_count: u64,
-}
-
-/// Emitted when a stuck queue entry is rescued.
-/// EVM equivalent: `RedemptionRescued(uint256 indexed index, address originalUser, address recipient, uint256 rawUsdOkuAmount, uint256 dollarValue)`
-#[event]
-pub struct RedemptionRescuedEvent {
-    /// Absolute index of the rescued entry.
-    pub queue_index: u64,
-    /// Original user who was owed redemption
-    pub original_user: Pubkey,
-    /// Recipient who received the usdOku
-    pub recipient: Pubkey,
-    /// usdOku raw amount returned (6 decimals)
-    pub raw_usd_oku_amount: u64,
-    /// Dollar value at time of rescue
-    pub dollar_value: u64,
 }
 
 /// Emitted when USDC is deposited into buffer.
@@ -233,13 +131,6 @@ pub struct MinterAllowanceUpdatedEvent {
     pub actor: Pubkey,
     pub old_allowance: u64,
     pub new_allowance: u64,
-}
-
-/// Emitted when PsmConfig is migrated (realloc'd) to the new layout.
-#[event]
-pub struct PsmConfigMigratedEvent {
-    pub old_len: u64,
-    pub new_len: u64,
 }
 
 /// Emitted when direct-minter allowance is updated.

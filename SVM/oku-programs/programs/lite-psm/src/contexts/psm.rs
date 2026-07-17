@@ -1,5 +1,5 @@
 use crate::errors::LitePsmError;
-use crate::state::{PsmConfig, RedemptionQueue};
+use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
@@ -80,19 +80,6 @@ pub struct RedeemUsdOku<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// Redemption queue (zero-copy ring buffer). Use `load_mut()` to enqueue,
-    /// `load()` for read-only inspection. The handler is responsible for
-    /// dropping the borrow before any CPI that re-borrows the account info.
-    /// The `bump = redemption_queue.load()?.bump` constraint pattern is
-    /// awkward in Anchor's derive; we instead use the canonical
-    /// `bump` lookup (Anchor will recompute it from seeds).
-    #[account(
-        mut,
-        seeds = [RedemptionQueue::SEED],
-        bump
-    )]
-    pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
-
     /// USDC mint
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Box<Account<'info, Mint>>,
@@ -134,80 +121,10 @@ pub struct RedeemUsdOku<'info> {
     )]
     pub vault_usdc: Box<Account<'info, TokenAccount>>,
 
-    /// PSM's usdOku escrow vault (for queued redemptions).
-    /// Pinned to `config.vault_usd_oku` so a caller cannot substitute an
-    /// alternate config-owned usdOku ATA — without the explicit address
-    /// pin, any Token-2022 usdOku account whose authority is the config
-    /// PDA would satisfy the constraints and the user's escrowed tokens
-    /// would be silently routed away from the canonical escrow.
-    #[account(
-        mut,
-        address = config.vault_usd_oku,
-        token::mint = usd_oku_mint,
-        token::authority = config,
-        token::token_program = token_2022_program,
-    )]
-    pub vault_usd_oku: Box<InterfaceAccount<'info, TokenAccountInterface>>,
-
     pub token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct ProcessQueue<'info> {
-    pub queue_processor: Signer<'info>,
-
-    #[account(
-        seeds = [PsmConfig::SEED],
-        bump = config.bump,
-        has_one = queue_processor @ LitePsmError::Unauthorized
-    )]
-    pub config: Box<Account<'info, PsmConfig>>,
-
-    /// Redemption queue (zero-copy). `process_queue` uses `load()`+`load_mut()`
-    /// interleaved with CPIs to advance the head ring. See `bump` note on
-    /// `RedeemUsdOku::redemption_queue`.
-    #[account(
-        mut,
-        seeds = [RedemptionQueue::SEED],
-        bump
-    )]
-    pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
-
-    /// usdOku mint (Token-2022) — needed for burn CPI and multiplier reads.
-    /// `mint::authority = config` is defense-in-depth (see rationale on
-    /// `MintUsdOku::usd_oku_mint`).
-    #[account(
-        mut,
-        address = config.usd_oku_mint,
-        mint::authority = config,
-        mint::token_program = token_2022_program
-    )]
-    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
-
-    /// PSM's USDC vault
-    #[account(
-        mut,
-        address = config.vault_usdc
-    )]
-    pub vault_usdc: Box<Account<'info, TokenAccount>>,
-
-    /// PSM's usdOku escrow vault - holds queued redemptions.
-    /// Pinned to `config.vault_usd_oku` (see rationale on `RedeemUsdOku`).
-    #[account(
-        mut,
-        address = config.vault_usd_oku,
-        token::mint = usd_oku_mint,
-        token::authority = config,
-        token::token_program = token_2022_program,
-    )]
-    pub vault_usd_oku: Box<InterfaceAccount<'info, TokenAccountInterface>>,
-
-    pub token_program: Program<'info, Token>,
-    pub token_2022_program: Program<'info, Token2022>,
-    // Note: Recipient USDC ATAs are passed via remaining_accounts in queue order
 }
 
 #[derive(Accounts)]
@@ -254,21 +171,6 @@ pub struct WithdrawBuffer<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// Redemption queue (read-only) — used to calculate reserved USDC for
-    /// pending entries. `load()` only.
-    #[account(
-        seeds = [RedemptionQueue::SEED],
-        bump
-    )]
-    pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
-
-    /// usdOku mint - needed to read current multiplier for reserve calculation
-    #[account(
-        address = config.usd_oku_mint,
-        mint::token_program = token_2022_program
-    )]
-    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
-
     /// Buffer withdrawer's USDC account (destination)
     #[account(
         mut,
@@ -288,122 +190,4 @@ pub struct WithdrawBuffer<'info> {
     pub usdc_mint: Box<Account<'info, Mint>>,
 
     pub token_program: Program<'info, Token>,
-    pub token_2022_program: Program<'info, Token2022>,
-}
-
-/// Permissionless self-rescue — any user can withdraw THEIR OWN queued
-/// usdOku back to themselves. Cycle 4 (PSM-06): the dual to operator
-/// `rescue_queue_entry`. Resolves the head-pin DoS where a frozen /
-/// wrong-owner ATA on the head entry indefinitely blocks `process_queue`
-/// for everyone downstream. The user whose entry is stuck can call this
-/// to clear their slot, which both unblocks the queue and returns their
-/// usdOku to a recipient ATA they control.
-///
-/// Constraints (vs the operator rescue below):
-///   * `user` MUST be the original queued user — checked in the handler
-///     against the entry's stored `user` field. No `has_one` here because
-///     the user pubkey lives inside the queue zero-copy data, not on
-///     `PsmConfig`.
-///   * `recipient_usd_oku_ata` MUST be owned by `user` — `token::authority`
-///     constraint pins this.
-///
-/// The instruction does NOT require the queue to be at head — any
-/// pending entry the user owns can be rescued. This matches the existing
-/// operator rescue's permissions and lets a user unblock themselves
-/// even if their entry isn't at the head.
-#[derive(Accounts)]
-pub struct UserSelfRescueQueueEntry<'info> {
-    pub user: Signer<'info>,
-
-    #[account(
-        seeds = [PsmConfig::SEED],
-        bump = config.bump,
-    )]
-    pub config: Box<Account<'info, PsmConfig>>,
-
-    #[account(
-        mut,
-        seeds = [RedemptionQueue::SEED],
-        bump
-    )]
-    pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
-
-    #[account(
-        address = config.usd_oku_mint,
-        mint::token_program = token_2022_program
-    )]
-    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
-
-    #[account(
-        mut,
-        address = config.vault_usd_oku
-    )]
-    pub vault_usd_oku: Box<InterfaceAccount<'info, TokenAccountInterface>>,
-
-    /// Recipient ATA — must be owned by `user` (enforced by
-    /// `token::authority = user`). Pinning the authority is what
-    /// distinguishes self-rescue from the privileged operator rescue
-    /// (which can target an arbitrary recipient).
-    #[account(
-        mut,
-        token::mint = usd_oku_mint,
-        token::authority = user,
-        token::token_program = token_2022_program,
-    )]
-    pub recipient_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
-
-    pub token_2022_program: Program<'info, Token2022>,
-}
-
-/// Rescue a stuck queue entry — return escrowed usdOku to an alternate recipient.
-///
-/// Only `queue_processor` can call. On EVM this is a separate `QUEUE_RESCUER` role;
-/// the SVM side collapses both into the `queue_processor` authority for simplicity.
-#[derive(Accounts)]
-pub struct RescueQueueEntry<'info> {
-    pub queue_processor: Signer<'info>,
-
-    #[account(
-        seeds = [PsmConfig::SEED],
-        bump = config.bump,
-        has_one = queue_processor @ LitePsmError::Unauthorized
-    )]
-    pub config: Box<Account<'info, PsmConfig>>,
-
-    /// Redemption queue (zero-copy). `rescue_queue_entry` uses `load_mut()`
-    /// after the CPI to clear the entry and advance the head ring.
-    #[account(
-        mut,
-        seeds = [RedemptionQueue::SEED],
-        bump
-    )]
-    pub redemption_queue: AccountLoader<'info, RedemptionQueue>,
-
-    /// usdOku mint (Token-2022)
-    #[account(
-        address = config.usd_oku_mint,
-        mint::token_program = token_2022_program
-    )]
-    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
-
-    /// PSM's usdOku escrow vault — holds queued redemptions
-    #[account(
-        mut,
-        address = config.vault_usd_oku
-    )]
-    pub vault_usd_oku: Box<InterfaceAccount<'info, TokenAccountInterface>>,
-
-    /// Recipient's usdOku account (can be original user or alternate).
-    /// Must hold the configured usdOku mint and live under the Token-2022
-    /// program — without these constraints a `queue_processor` could be
-    /// tricked into transferring the escrowed usdOku into an account on the
-    /// wrong mint, surfacing only as an opaque SPL-layer error.
-    #[account(
-        mut,
-        token::mint = usd_oku_mint,
-        token::token_program = token_2022_program,
-    )]
-    pub recipient_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
-
-    pub token_2022_program: Program<'info, Token2022>,
 }

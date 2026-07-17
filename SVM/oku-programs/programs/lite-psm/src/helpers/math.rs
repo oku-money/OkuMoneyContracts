@@ -16,46 +16,34 @@ use oku_shared::math as shared;
 /// dollar figure is being credited to a user (user gets no more than
 /// they earned).
 ///
-/// Formula: `dollar_value = floor(oku_m_amount * multiplier / PRECISION)`.
-pub fn oku_m_to_dollars(oku_m_amount: u64, oku_m_price: u64) -> Result<u64> {
-    shared::oku_m_to_dollars(oku_m_amount, oku_m_price)
+/// Formula: `dollar_value = floor(raw_amount * multiplier / PRECISION)`.
+pub fn raw_to_dollars(raw_amount: u64, multiplier: u64) -> Result<u64> {
+    shared::raw_to_dollars(raw_amount, multiplier)
         .ok_or_else(|| error!(LitePsmError::Overflow))
 }
 
 /// Convert raw usdOku amount to dollar value using the multiplier from
 /// the ScaledUiAmount extension, with **ceil** rounding. Use when the
 /// dollar figure becomes a protocol obligation (reserved-balance
-/// accounting in `withdraw_buffer`, e.g.).
+/// accounting, e.g.).
 ///
-/// Formula: `dollar_value = ceil(oku_m_amount * multiplier / PRECISION)`.
-///
-/// The semantic contract — over-reserve by at most one lamport per call
-/// rather than under-reserve by up to `queue_depth` lamports per batch —
-/// is the audit-grade fix for the rounding asymmetry between
-/// `withdraw_buffer` (single floor) and `process_queue` (per-entry
-/// floors that sum to `≤ floor(sum)`).
-pub fn oku_m_to_dollars_ceil(oku_m_amount: u64, oku_m_price: u64) -> Result<u64> {
-    shared::oku_m_to_dollars_ceil(oku_m_amount, oku_m_price)
+/// Formula: `dollar_value = ceil(raw_amount * multiplier / PRECISION)`.
+pub fn raw_to_dollars_ceil(raw_amount: u64, multiplier: u64) -> Result<u64> {
+    shared::raw_to_dollars_ceil(raw_amount, multiplier)
         .ok_or_else(|| error!(LitePsmError::Overflow))
 }
 
 /// Convert dollar value to raw usdOku amount using the multiplier from
 /// the ScaledUiAmount extension.
 ///
-/// Formula: `oku_m_amount = (dollar_value * PRECISION) / multiplier`.
+/// Formula: `raw_amount = (dollar_value * PRECISION) / multiplier`.
 /// Rejects `multiplier == 0` with `ZeroAmount` (the program-side
 /// invariant); pure overflow propagates as `Overflow`.
-pub fn dollars_to_oku_m(dollar_value: u64, oku_m_price: u64) -> Result<u64> {
-    require!(oku_m_price > 0, LitePsmError::ZeroAmount);
-    shared::dollars_to_oku_m(dollar_value, oku_m_price)
+pub fn dollars_to_raw(dollar_value: u64, multiplier: u64) -> Result<u64> {
+    require!(multiplier > 0, LitePsmError::ZeroAmount);
+    shared::dollars_to_raw(dollar_value, multiplier)
         .ok_or_else(|| error!(LitePsmError::Overflow))
 }
-
-// Cycle 4 (S-33): `calculate_fee` wrapper deleted (was
-// `#[allow(dead_code)]` for the "future PSM fee" seam). The
-// `oku_shared::calculate_fee` primitive remains — whoever lands a
-// PSM fee instruction adds the thin Anchor-error wrapper at that
-// time.
 
 #[cfg(test)]
 mod tests {
@@ -66,22 +54,36 @@ mod tests {
     use oku_shared::PRECISION;
 
     #[test]
-    fn oku_m_to_dollars_basic_at_par() {
-        assert_eq!(oku_m_to_dollars(1_000_000, PRECISION).unwrap(), 1_000_000);
+    fn raw_to_dollars_basic_at_par() {
+        assert_eq!(raw_to_dollars(1_000_000, PRECISION).unwrap(), 1_000_000);
     }
 
     #[test]
-    fn oku_m_to_dollars_ceil_basic() {
+    fn raw_to_dollars_ceil_basic() {
         // Exact division — equal to floor.
         assert_eq!(
-            oku_m_to_dollars_ceil(1_000_000, PRECISION).unwrap(),
+            raw_to_dollars_ceil(1_000_000, PRECISION).unwrap(),
             1_000_000
         );
     }
 
     #[test]
-    fn dollars_to_oku_m_zero_price_is_zero_amount() {
-        let err = dollars_to_oku_m(1_000_000, 0).unwrap_err();
+    fn raw_to_dollars_at_105_multiplier() {
+        // At multiplier 1.05 (5% yield), 100_000_000 raw tokens
+        // should redeem for 105_000_000 USDC lamports ($105).
+        let multiplier = 1_050_000_000u64; // 1.05 * PRECISION
+        let raw_amount = 100_000_000u64; // 100 usdOku (6 decimals)
+        let dollars = raw_to_dollars(raw_amount, multiplier).unwrap();
+        assert_eq!(dollars, 105_000_000); // $105 USDC
+
+        // Reverse: $100 USDC at 1.05 multiplier = ~95.238095 raw tokens
+        let raw_back = dollars_to_raw(100_000_000, multiplier).unwrap();
+        assert_eq!(raw_back, 95_238_095); // floor rounding
+    }
+
+    #[test]
+    fn dollars_to_raw_zero_price_is_zero_amount() {
+        let err = dollars_to_raw(1_000_000, 0).unwrap_err();
         // `ZeroAmount` is the program-side invariant; the underlying
         // primitive returns `None` on division-by-zero and we surface
         // it as a specific error rather than the generic Overflow.

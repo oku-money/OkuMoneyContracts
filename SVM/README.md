@@ -64,6 +64,76 @@ operational procedures.
 
 ---
 
+## Why a single token on SVM
+
+### The platform constraint
+
+Solana's SPL Token program stores balances as a literal `u64` in each
+token account. There is no `balanceOf()` override -- programs and
+wallets read `token_account.amount` directly. This means **true
+on-chain rebasing is impossible on SVM**. No mechanism exists to make
+stored balances grow over time without explicit mint/burn/transfer
+instructions.
+
+On EVM, projects like Lido (stETH), Mountain Protocol (USDM), and
+Ondo (rUSDY) implement rebasing by overriding `balanceOf()` to return
+`shares * exchangeRate`, giving users a $1-pegged token whose balance
+grows. This technique is unavailable on SVM.
+
+### How every project handles this today
+
+Every yield-bearing token on Solana uses the **value-appreciating
+(exchange-rate) model**: raw balances are static, and the value per
+token increases over time.
+
+| Project | Token | Model | $1 Peg? |
+|---------|-------|-------|---------|
+| Jito | JitoSOL | Value-appreciating (stake pool) | No |
+| Marinade | mSOL | Value-appreciating | No |
+| Sanctum | INF, jupSOL, etc. | Value-appreciating (stake pool) | No |
+| Lido (sunset) | stSOL | Value-appreciating | No |
+| Ondo | USDY | Value-appreciating | No (>$1) |
+
+Notably, Ondo offers rUSDY (rebasing, $1 peg) on EVM but ships only
+the value-appreciating USDY on Solana -- users see a token priced at
+>$1 that keeps rising, which does not feel like a stablecoin.
+
+No project rebases on Solana. None use Token-2022 extensions for
+yield display.
+
+### What ScaledUiAmountConfig changes
+
+Token-2022's `ScaledUiAmountConfig` extension stores an updatable f64
+multiplier on the mint. Wallets and RPCs that support it return
+`raw_amount * multiplier` as the user's displayed balance. The raw
+`token_account.amount` is unchanged -- DeFi protocols see static
+balances (AMM/lending compatible by construction).
+
+This gives us the best of both models:
+
+- **Under the hood:** value-appreciating shares, identical to
+  JitoSOL/mSOL/USDY -- industry standard, DeFi compatible.
+- **User-facing:** $1-pegged stablecoin display. Deposit 100 USDC,
+  see 100.00 usdOku. After 5% yield, see 105.00 usdOku. Each
+  displayed unit is $1.
+
+The Solana ecosystem is actively standardizing on this pattern.
+The official [ScaledUiAmount integration guide](https://solana.com/docs/tokens/extensions/scaled-ui-amount/integration-guide)
+assigns P0 priority to wallet, DEX, explorer, and CEX support,
+and explicitly describes yield distribution as a primary use case.
+
+### First-mover status
+
+As of July 2026, **no production project has shipped a yield-bearing
+stablecoin using `ScaledUiAmountConfig` on Solana**. OkuMoney's
+single-token design would be the first to use this extension for its
+intended purpose: a T-Bill-backed token that displays as a $1
+stablecoin while accumulating yield through multiplier updates. The
+extension was designed for this use case -- we are simply the first to
+ship it.
+
+---
+
 ## Key SVM design choices
 
 **Single token with ScaledUiAmount.** `usdOku` ("OkuDollar") is the

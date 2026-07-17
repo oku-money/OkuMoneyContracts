@@ -85,21 +85,21 @@
     "devnet": {
       "rpcUrl": "https://api.devnet.solana.com",
       "programs": {
-        "litePsm": "3KZtxxYXD4tMZvVZk4EhCRxoTorBDZyJZuLE3znQ9kF1",
-        "okuDollar": "7jKeiuc8gKvQhasbno27wbNMnrwi8g9sb6WPriWkzNd"
+        "litePsm": "BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g",
+        "okuDollar": "5SK6EhbXf9d7jW4vzobZfbtUsZBQmFyo9w3xuSQY3Zke"
       },
       "mints": {
-        "usdc": "AtX9msvC3mWpbviUZnj751fPFVzjh1Kpdh7rnsbmJsAK",
-        "okuMoney": "9JVkEmstHaLxMcFXLesWYhzWxZcDVYk4qLSSXbKy3whW",
-        "usdOku": "GjShbiAeDVi9p6evYYzccZzqNGS8yTvryNsfxL2uvRUd"
+        "usdc": "3YzYLAbgMTToTZtiJY8m3ttWUvtgiKFdeE8txmmcG2o4",
+        "okuMoney": "DgRAySuXiwbLVWyBK8Khf7LpjdHkRDqNL46FUvyzTSWR",
+        "usdOku": "DxhKfdYzXJwTR7Tw2Mxcjozz66smQ4Q1Cxs5AKtMn1YS"
       },
       "pdas": {
-        "psmConfig": "EzbRfyw2xoSyvom3qpAgNddgxZSGJ5mJMMytD7qeWHKD",
-        "redemptionQueue": "4L35bBwEbbF4NWRTiLNS8BvX1cYk7w5bSya7mtj2kkfx",
-        "vaultConfig": "5LvCowpwWo9ZnbDVcT7tJ27GpCCK3QkLAs1id8W4tECU",
-        "psmOkuMoneyEscrow": "6G2goquVNEa3g3tqtpCKdrhkBKY1MVAmEi7Tuc9Z8QLX",
-        "psmVaultUsdc": "2JMdZyeJvW8MRtw56efHaUXYEd1p58SDXFGbiBzZvaQu",
-        "vaultOkuMoney": "EvDycE2EqkhbcF8BzqrgUxXGFzmS5TBCyjJVktqpPefd"
+        "psmConfig": "8vusqe62KdT6chsDHsCvdPsJbWPD5nuhg9k35fcVFckC",
+        "redemptionQueue": "DDcosumKY1hty6o3uZpvuYcaQ2ts7aBmgBp8jwytfHoB",
+        "vaultConfig": "3HKdxmZZpuXMb6gTadNaXvrZdoe1rwUiztgk3sVPB5Re",
+        "psmOkuMoneyEscrow": "3yi9S1biCYDmS12Hc2B6xHwtKW1DDDJ1Ne1KtgEMYrGr",
+        "psmVaultUsdc": "CNEdRK2f3s6k4FdXW65QxPicF9Zn7ez8UV3ZcWXrduKe",
+        "vaultOkuMoney": "F1yjE5Myy59QPZMgBK1ZTY6GXYVjJXkScuHuN5hbVgsY"
       },
       "authorities": {
         "coldMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",

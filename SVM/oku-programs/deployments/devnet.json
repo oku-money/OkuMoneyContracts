@@ -1,209 +1,22 @@
 {
   "network": "devnet",
-  "timestamp": "2026-07-11T01:15:26.070Z",
+  "timestamp": "2026-07-16T22:21:39.023Z",
   "programs": {
-    "litePsm": "3KZtxxYXD4tMZvVZk4EhCRxoTorBDZyJZuLE3znQ9kF1",
-    "okuDollarProgram": "7jKeiuc8gKvQhasbno27wbNMnrwi8g9sb6WPriWkzNd"
-  },
-  "_archived_pre_v3_seed_rotation": {
-    "note": "These accounts were created under the v2 PDA seeds (psm_config_v2, redemption_queue_v2, oku_dollar_config_v2, usd_oku_mint_v2) and old program IDs (3CLDWjDT..., 3TeNwAqQ...). After the 2026-06-24 program-close + redeploy with fresh program IDs and psm_config_v3 seed, all of them are orphaned. Old program data accounts were closed and ~8.48 SOL recovered.",
-    "archivedAt": "2026-06-24T00:00:00.000Z",
-    "closedProgramIds": {
-      "litePsm": "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N",
-      "okuDollarProgram": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy"
-    },
-    "tokens": {
-      "usdc": "GeeZQMVYtVzur6QVztAA4u4gKrpPhfiLEYDsmq6kFTNb",
-      "okuMoney": "HqXYE37285yeYppyaUiBXqfdK7q9SfhyNjPo3Utmucmi",
-      "usdOku": "5WcYgoCmo4cCWcmbE3DhdkhTWErv8JJM5ExMqXatG8Nn"
-    },
-    "pdas": {
-      "psmConfig": "2A8FojJFHVycFDBhpndoiFjdbwRBac7gNDLRt9Syzm1f",
-      "redemptionQueue": "CGqUfzhP94cgv2P53gKq2cbhiabsCzVxDzj4wYFAHMq9",
-      "vaultConfig": "5z9cQQfz9rVYudd7dRHPvfLxovWLfC4JXcU9UvdbyMuj",
-      "psmVaultUsdc": "DYZkQqW5UAnjMVo4irv8x1Ad3XPVjXDaWiFXax2RjefT",
-      "psmOkuMoneyEscrow": "AZfzJ1ZFuPUZVmLDkHoNrZFfTMfWCkR9hqMa1h8o3LFs",
-      "vaultOkuMoney": "GrMqGraDogyU1QNrZm1sUXDd36TuhbCnQaemxTXGyGe4"
-    },
-    "rentRecovered": "~8.48 SOL from program data accounts"
-  },
-  "_archived_pre_v2_seed_rotation": {
-    "note": "These accounts were created under the old (pre-noBridge) PDA seeds (psm_config, redemption_queue, oku_dollar_config, usd_oku_mint). After the 2026-06-05 seed rotation to *_v2, all of them are orphaned. See SVM/README.md § 'PDA seed history' for the orphan-PDA inventory and future rent-recovery plan. Kept here for audit history; the program IDs above are reused with fresh PDAs/mints created by the next deploy:init run.",
-    "archivedAt": "2026-06-05T15:30:00.000Z",
-    "tokens": {
-      "usdc": "AGwA2n1bgTt969wSbhnoyjVsDENaCoyR1W46uEf7LFQA",
-      "okuMoney": "8F7oEy9dhanAyHDDCTcnoexiNGW8BH9AhiFJwU5DeEQY",
-      "usdOku": "C4D88J3d5pTtLcJeWEHkRb7pxngBsM9v8R48oRM2N1bF"
-    },
-    "pdas": {
-      "psmConfig": "EkCYunihwmNasBEnNXoJx8sb3CdZnDYKLpPvLyY6Hm3u",
-      "redemptionQueue": "5FWTuuF67sUNca3w8cqHta4Q5xF6jAiFhGYunuFrSUBz",
-      "vaultConfig": "93tqPwYQfFtmuU5SxL4xuzi3PMbjZWKmuiHt2FBe8qaK",
-      "psmVaultUsdc": "HrnfYJM4a3QprfmUCpzXg2L94CF2ym8GooqquqSsmVT2",
-      "psmOkuMoneyEscrow": "7HrzaCMWzjQ3HGa5fhQP2NFTaxsaTJGeKvLWd46HURxP",
-      "vaultOkuMoney": "4e9a8SNTc1sWke5F4r2AkRWtq1miV52KanGxncJYLk6i"
-    }
-  },
-  "upgrades": [
-    {
-      "program": "LitePsm",
-      "programId": "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N",
-      "oldElfSize": 795656,
-      "newElfSize": 795656,
-      "oldElfSha256": "4f791b412a6a8e08366b71446ae5cbf068f10e0644cf5966ebd4ee8aa22b2588",
-      "newElfSha256": "4f791b412a6a8e08366b71446ae5cbf068f10e0644cf5966ebd4ee8aa22b2588",
-      "txSignature": "<bytecode-unchanged>",
-      "timestamp": "2026-05-26T22:49:15.716Z",
-      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
-    },
-    {
-      "program": "OkuDollar",
-      "programId": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy",
-      "oldElfSize": 422032,
-      "newElfSize": 422032,
-      "oldElfSha256": "3f058b682bbcbe125894635f4a639ba9b692c188a532c8228b3ae70bcc931770",
-      "newElfSha256": "3f058b682bbcbe125894635f4a639ba9b692c188a532c8228b3ae70bcc931770",
-      "txSignature": "<bytecode-unchanged>",
-      "timestamp": "2026-05-26T22:49:16.122Z",
-      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
-    },
-    {
-      "program": "LitePsm",
-      "programId": "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N",
-      "oldElfSize": 795600,
-      "newElfSize": 795600,
-      "oldElfSha256": "3cb7e6bbe2fea08aa538868168b8351139fa007bad8f939e8442cac204c95732",
-      "newElfSha256": "3cb7e6bbe2fea08aa538868168b8351139fa007bad8f939e8442cac204c95732",
-      "txSignature": "<bytecode-unchanged>",
-      "timestamp": "2026-06-02T16:49:21.124Z",
-      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej"
-    },
-    {
-      "program": "OkuDollar",
-      "programId": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy",
-      "oldElfSize": 422032,
-      "newElfSize": 421688,
-      "oldElfSha256": "3f058b682bbcbe125894635f4a639ba9b692c188a532c8228b3ae70bcc931770",
-      "newElfSha256": "fcb663f93edebe4fc8875a8653558423ce1befb8122b23cb0c369ab42695bfc9",
-      "txSignature": "4eDGhXBfzeSNf8r3LFBWD5ztwdbxn3GXGtSVyQ8cnc1Yo8RmaGjK1yxd1Hr2h5P1VrR66jqYVfCHVFkDsMNSoPqu",
-      "timestamp": "2026-06-02T17:12:30.495Z",
-      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
-      "note": "This was the last recorded OkuDollar upgrade. devnet-fork rehearsal on 2026-06-04 confirmed on-chain SHA matches local noBridge build (0e19cd51e40b43c4). No further OkuDollar upgrade needed.",
-      "idlSnapshot": {
-        "sha256": "4496574e01b88381d188acdab7f3627eef3b631ff929d2a4964e0a5519c4af41",
-        "accountTypes": {
-          "OkuDollarConfig": [
-            {
-              "name": "bump",
-              "type": "u8"
-            },
-            {
-              "name": "role_admin",
-              "type": "pubkey"
-            },
-            {
-              "name": "pauser",
-              "type": "pubkey"
-            },
-            {
-              "name": "unpauser",
-              "type": "pubkey"
-            },
-            {
-              "name": "usd_rebaser",
-              "type": "pubkey"
-            },
-            {
-              "name": "reserve_manager",
-              "type": "pubkey"
-            },
-            {
-              "name": "oku_money_mint",
-              "type": "pubkey"
-            },
-            {
-              "name": "usd_oku_mint",
-              "type": "pubkey"
-            },
-            {
-              "name": "reserve_vault",
-              "type": "pubkey"
-            },
-            {
-              "name": "psm_config",
-              "type": "pubkey"
-            },
-            {
-              "name": "usd_multiplier",
-              "type": "u64"
-            },
-            {
-              "name": "usd_last_update_time",
-              "type": "i64"
-            },
-            {
-              "name": "last_yield_distribution_slot",
-              "type": "u64"
-            },
-            {
-              "name": "min_collateral_ratio",
-              "type": "u64"
-            },
-            {
-              "name": "is_paused",
-              "type": "bool"
-            },
-            {
-              "name": "pending_role_admin",
-              "type": "pubkey"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "program": "OkuDollar",
-      "programId": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy",
-      "oldElfSize": 422032,
-      "newElfSize": 415696,
-      "oldElfSha256": "4b2fa596f2fc144ba1a32d2d529839795e0f33dca52666a9ca6af851b0766e52",
-      "newElfSha256": "0e19cd51e40b43c4688c0b9eacc128cd960d846fce37b09235ef2e44ccb31b3a",
-      "txSignature": "hzoK7s5o8mfqNUh6XkZzRUHVbX6QDmt6oiFZL1uMw5AwP4NX4QnxTokBP58Uj1HB9kHa8grtmVoRiYMDNaqFDnQ",
-      "timestamp": "2026-06-05T14:55:00.000Z",
-      "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
-      "deployedInSlot": 467393427,
-      "note": "Phase 1 of noBridge SVM upgrade ceremony. In-place BPF upgrade — OkuDollarConfig layout unchanged (362 bytes) so no PDA reinit needed. Used direct `solana program deploy --use-rpc --max-sign-attempts 500` against api.devnet.solana.com after the wrapper script's Helius-routed buffer uploads kept producing corrupt ELFs (transient devnet congestion). Post-upgrade config read verified: all 5 authorities = deployer, usd_multiplier=1000003000, no pending role_admin transfer. Earlier devnet.json upgrade records for this program (txSig `4eDGhX...` on 2026-06-02, claiming sha256 `fcb663f9...`) appear stale — actual on-chain pre-upgrade SHA was `4b2fa596...` not `fcb663f9...`."
-    }
-  ],
-  "_archived_pre_v4_seed_rotation": {
-    "note": "These accounts were created under the v3 PDA seed (psm_config_v3). After the 2026-07-10 v4 seed rotation (oracle removal), all of them are orphaned. The OkuMoney mint authority points to the old v3 PsmConfig PDA and is no longer controllable.",
-    "archivedAt": "2026-07-10T00:00:00.000Z",
-    "tokens": {
-      "usdc": "8yZNxn4gpLHJ6oxugnvD2qqxodVPJTyjgspLaMB9Kz9y",
-      "okuMoney": "APBstjJ7JoVTL1MaP3wwhzuddTtxitpHASriEY3sZrg2",
-      "usdOku": "GjShbiAeDVi9p6evYYzccZzqNGS8yTvryNsfxL2uvRUd"
-    },
-    "pdas": {
-      "psmConfig": "3DFKHa8L4yCrESPJtWKHwMYN9Hbeycr8HhmbdKVY8vvt",
-      "redemptionQueue": "4L35bBwEbbF4NWRTiLNS8BvX1cYk7w5bSya7mtj2kkfx",
-      "vaultConfig": "5LvCowpwWo9ZnbDVcT7tJ27GpCCK3QkLAs1id8W4tECU",
-      "psmVaultUsdc": "EKzeKxzF8jKGWGEyLgJU8BxLNQ2YFiyDcjuK3ffrQ4Yn",
-      "psmOkuMoneyEscrow": "8b2Rt4M7eyuqotKNLipUFBtemtxJUdwZadCYNE3mpHNk",
-      "vaultOkuMoney": "EZkGYwMxtxHtesabUSbx4qSgBgUeKYUp48ZR2BJdVKmo"
-    }
+    "litePsm": "BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g",
+    "okuDollarProgram": "5SK6EhbXf9d7jW4vzobZfbtUsZBQmFyo9w3xuSQY3Zke"
   },
   "tokens": {
-    "usdc": "AtX9msvC3mWpbviUZnj751fPFVzjh1Kpdh7rnsbmJsAK",
-    "okuMoney": "9JVkEmstHaLxMcFXLesWYhzWxZcDVYk4qLSSXbKy3whW",
-    "usdOku": "GjShbiAeDVi9p6evYYzccZzqNGS8yTvryNsfxL2uvRUd"
+    "usdc": "3YzYLAbgMTToTZtiJY8m3ttWUvtgiKFdeE8txmmcG2o4",
+    "okuMoney": "DgRAySuXiwbLVWyBK8Khf7LpjdHkRDqNL46FUvyzTSWR",
+    "usdOku": "DxhKfdYzXJwTR7Tw2Mxcjozz66smQ4Q1Cxs5AKtMn1YS"
   },
   "pdas": {
-    "psmConfig": "EzbRfyw2xoSyvom3qpAgNddgxZSGJ5mJMMytD7qeWHKD",
-    "psmVaultUsdc": "2JMdZyeJvW8MRtw56efHaUXYEd1p58SDXFGbiBzZvaQu",
-    "psmOkuMoneyEscrow": "6G2goquVNEa3g3tqtpCKdrhkBKY1MVAmEi7Tuc9Z8QLX",
-    "redemptionQueue": "4L35bBwEbbF4NWRTiLNS8BvX1cYk7w5bSya7mtj2kkfx",
-    "vaultConfig": "5LvCowpwWo9ZnbDVcT7tJ27GpCCK3QkLAs1id8W4tECU",
-    "vaultOkuMoney": "EvDycE2EqkhbcF8BzqrgUxXGFzmS5TBCyjJVktqpPefd"
+    "psmConfig": "8vusqe62KdT6chsDHsCvdPsJbWPD5nuhg9k35fcVFckC",
+    "redemptionQueue": "DDcosumKY1hty6o3uZpvuYcaQ2ts7aBmgBp8jwytfHoB",
+    "vaultConfig": "3HKdxmZZpuXMb6gTadNaXvrZdoe1rwUiztgk3sVPB5Re",
+    "psmVaultUsdc": "CNEdRK2f3s6k4FdXW65QxPicF9Zn7ez8UV3ZcWXrduKe",
+    "psmOkuMoneyEscrow": "3yi9S1biCYDmS12Hc2B6xHwtKW1DDDJ1Ne1KtgEMYrGr",
+    "vaultOkuMoney": "F1yjE5Myy59QPZMgBK1ZTY6GXYVjJXkScuHuN5hbVgsY"
   },
   "authorities": {
     "coldMultisig": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",

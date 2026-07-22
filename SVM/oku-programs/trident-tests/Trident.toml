@@ -8,9 +8,9 @@ enabled = true
 # ============================================================
 
 [[fuzz.programs]]
-address = "3KZtxxYXD4tMZvVZk4EhCRxoTorBDZyJZuLE3znQ9kF1"
+address = "BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g"
 program = "../target/deploy/lite_psm.so"
 
 [[fuzz.programs]]
-address = "7jKeiuc8gKvQhasbno27wbNMnrwi8g9sb6WPriWkzNd"
+address = "5SK6EhbXf9d7jW4vzobZfbtUsZBQmFyo9w3xuSQY3Zke"
 program = "../target/deploy/oku_dollar.so"

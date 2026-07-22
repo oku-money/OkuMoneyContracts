@@ -437,9 +437,9 @@ mod cpi_safety_tests {
     /// test must be updated in lockstep.
     #[test]
     fn oku_dollar_program_id_matches_declared_id() {
-        // Base58: 7jKeiuc8gKvQhasbno27wbNMnrwi8g9sb6WPriWkzNd
+        // Base58: 5SK6EhbXf9d7jW4vzobZfbtUsZBQmFyo9w3xuSQY3Zke
         // Must match `declare_id!` in oku-dollar/src/lib.rs
-        let expected_base58 = "7jKeiuc8gKvQhasbno27wbNMnrwi8g9sb6WPriWkzNd";
+        let expected_base58 = "5SK6EhbXf9d7jW4vzobZfbtUsZBQmFyo9w3xuSQY3Zke";
         assert_eq!(
             OKU_DOLLAR_PROGRAM_ID.to_string(),
             expected_base58,

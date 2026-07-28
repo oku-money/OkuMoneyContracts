@@ -2,7 +2,7 @@
  * Program initialization utilities
  */
 
-import { PublicKey, SystemProgram } from '@solana/web3.js';
+import { Keypair, PublicKey, SystemProgram } from '@solana/web3.js';
 import { Program, AnchorProvider, BN } from '@anchor-lang/core';
 import {
   TOKEN_PROGRAM_ID,
@@ -61,28 +61,26 @@ function isAlreadyInitialized(error: any): boolean {
 
 export interface PsmInitResult {
   psmConfig: PublicKey;
-  /**
-   * USDC vault ATA, owned by `psmConfig`. Created by `initialize()`.
-   * Persisted into the deployment file as `pdas.psmVaultUsdc` for
-   * downstream scripts that need it without re-deriving from mint +
-   * config.
-   */
+  /** OkuM mint (Token-2022). Created on-chain by `initialize()`. */
+  okuMMint: PublicKey;
+  /** USDC vault ATA, owned by `psmConfig`. Created by `initialize()`. */
   vaultUsdc: PublicKey;
-  /**
-   * OkuM escrow ATA, owned by `psmConfig`. Created by
-   * `setup_oku_m_escrow()`. Persisted as `pdas.psmOkuMEscrow`.
-   */
+  /** OkuM escrow ATA, owned by `psmConfig`. Created by `setup_oku_m_escrow()`. */
   vaultOkuM: PublicKey;
 }
 
 /**
- * Initialize the PSM program
+ * Initialize the PSM program.
+ *
+ * The on-chain `initialize` instruction creates the OkuM mint (Token-2022
+ * with ScaledUiAmount + MetadataPointer + TokenMetadata extensions) via
+ * CPIs. This function generates a fresh keypair for the mint and passes
+ * it as an additional signer.
  */
 export async function initializePsm(
   provider: AnchorProvider,
   programId: PublicKey,
   usdcMint: PublicKey,
-  okuMMint: PublicKey,
   authorities: ReturnType<typeof loadAuthorities>,
   config: DeploymentConfig,
   networkConfig: NetworkConfig
@@ -97,11 +95,17 @@ export async function initializePsm(
   // PSM vault accounts
   const vaultUsdc = getAssociatedTokenAddressSync(usdcMint, psmConfig, true, TOKEN_PROGRAM_ID);
 
+  // Generate a fresh keypair for the OkuM mint. The on-chain
+  // `initialize` instruction will create the account via CPI
+  // (CreateAccount + extension inits + InitializeMint).
+  const okuMMintKeypair = Keypair.generate();
+  const okuMMint = okuMMintKeypair.publicKey;
+
   logger.info(`PSM Config PDA: ${psmConfig.toBase58()}`);
+  logger.info(`OkuM mint (fresh keypair): ${okuMMint.toBase58()}`);
 
   logger.info('Calling initialize()...');
   try {
-    // Cycle 4 (PSM-17): `initialize` takes an `InitializeParams` struct.
     await program.methods
       .initialize({
         maxSupply: config.maxSupply,
@@ -115,6 +119,7 @@ export async function initializePsm(
         capManager: authorities.psm.capManager,
         allowanceManager: authorities.psm.allowanceManager,
         rebaser: authorities.psm.rebaser,
+        okuMUri: '', // metadata URI — empty for devnet, set in mainnet config
       })
       .accountsPartial({
         roleAdmin: provider.wallet.publicKey,
@@ -127,8 +132,10 @@ export async function initializePsm(
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
+      .signers([okuMMintKeypair])
       .rpc();
-    logger.success('PSM initialized');
+    logger.success('PSM initialized + OkuM mint created');
+    logger.info(`OkuM mint: ${okuMMint.toBase58()}`);
   } catch (error: any) {
     if (isAlreadyInitialized(error)) {
       logger.warning('PSM already initialized');
@@ -137,27 +144,7 @@ export async function initializePsm(
     }
   }
 
-  // Bridge init / supported-chain / fee-recipient ATA setup removed in
-  // the noBridge refactor (phase B). v1 cross-chain transfers are
-  // mediated by an off-chain orchestrator that calls `mint_oku_m` /
-  // `redeem_oku_m` directly; no on-chain bridge state remains.
-
-  // Setup OkuM escrow vault.
-  //
-  // Idempotency note: `setupOkuMEscrow()` creates an Associated Token
-  // Account at the derived address. On a second deploy:init run, the ATA
-  // already exists, and the ATA program returns `Provided owner is not
-  // allowed` (NOT one of Anchor's standard already-initialized codes)
-  // because its `create` path checks the existing account's owner against
-  // a fresh-account expectation. The error isn't matched by
-  // `isAlreadyInitialized()`, which is why this step blew up before this
-  // short-circuit was added.
-  //
-  // Cleanest fix: pre-check whether the ATA exists at the derived address
-  // with the expected Token-2022 program as owner and the expected mint.
-  // If so, skip the on-chain call entirely. This is safer than catching
-  // the post-failure error string (which can drift across Solana
-  // versions).
+  // Setup OkuM escrow vault (ATA owned by config PDA).
   const vaultOkuM = getAssociatedTokenAddressSync(okuMMint, psmConfig, true, TOKEN_2022_PROGRAM_ID);
   logger.info('Setting up OkuM escrow vault...');
 
@@ -256,6 +243,7 @@ export async function initializePsm(
 
   return {
     psmConfig,
+    okuMMint,
     vaultUsdc,
     vaultOkuM,
   };

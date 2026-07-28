@@ -7,7 +7,7 @@ import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { logger } from '../../utils/logger';
 
-const PROGRAMS = ['lite_psm', 'oku_money'];
+const PROGRAMS = ['lite_psm'];
 
 /**
  * Build programs, optionally swapping keypairs for fork deployment

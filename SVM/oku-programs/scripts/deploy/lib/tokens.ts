@@ -1,116 +1,47 @@
 /**
  * Token deployment utilities
+ *
+ * Single-token model: only a mock USDC mint is created externally.
+ * The OkuM mint (Token-2022 with ScaledUiAmount + MetadataPointer +
+ * TokenMetadata) is created on-chain by the `initialize` instruction
+ * via CPIs -- see `programs/lite-psm/src/instructions/init.rs`.
  */
 
 import { PublicKey } from '@solana/web3.js';
-import { getMint, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 import { AnchorProvider } from '@anchor-lang/core';
 import { logger } from '../../utils/logger';
-import { createSPLTokenMint, createToken2022Mint } from '../../utils/tokenHelpers';
-import { loadAuthorities } from '../../config/authorities';
-import { USDC_DECIMALS, OKUSD_DECIMALS } from '../../config/constants';
+import { createSPLTokenMint } from '../../utils/tokenHelpers';
+import { USDC_DECIMALS } from '../../config/constants';
 import { loadDeployment } from '../../utils/addressBook';
 import { NetworkName } from '../../config/networks';
 
 export interface DeployedTokens {
   usdcMint: PublicKey;
-  okuMMint: PublicKey;
 }
 
 /**
- * Deploy tokens, reusing any mints already saved in `deployments/<network>.json`.
+ * Deploy the mock USDC mint (devnet/localnet only).
  *
- * Without idempotency, re-running `deploy:init` after a successful run silently
- * mints fresh USDC / okuM keypairs, then attempts to re-`initialize` the
- * PSM (which fails on `AccountAlreadyInitialized`). The fresh mints become
- * orphan accounts and the deployment file is overwritten with addresses
- * users on the OLD mint can no longer redeem against.
- *
- * Behavior:
- *   - If `deployments/<network>.json` already lists `tokens.usdc` and
- *     `tokens?.okuM`, return those PublicKeys verbatim.
- *   - If only one is present, error loudly -- partial state usually means a
- *     half-completed previous run that needs manual cleanup.
- *   - Otherwise, mint fresh keypairs.
+ * Reuses any USDC mint already saved in `deployments/<network>.json`.
+ * The OkuM mint is NOT created here -- it's created on-chain by the
+ * PSM's `initialize` instruction.
  */
 export async function deployTokens(
   provider: AnchorProvider,
-  psmConfigPDA: PublicKey,
-  authorities: ReturnType<typeof loadAuthorities>,
+  _psmConfigPDA: PublicKey,
   network: NetworkName
 ): Promise<DeployedTokens> {
   const existing = loadDeployment(network);
   const existingUsdc = existing?.tokens?.usdc;
-  const existingOkuM = existing?.tokens?.okuM;
 
-  if (existingUsdc && existingOkuM) {
-    logger.nextStep('Reusing existing tokens (idempotent)');
-    logger.info(`USDC mint:   ${existingUsdc}`);
-    logger.info(`OkuM mint: ${existingOkuM}`);
-
-    // Sanity check: the persisted OkuM mint MUST have the current PSM
-    // config PDA as its mint authority. Otherwise the upcoming PSM
-    // `initialize()` will fail with ConstraintMintMintAuthority (anchor
-    // error 2016) -- which is what bit us when re-running deploy:init
-    // after a fresh program-keypair rotation: the file pointed at a mint
-    // authored by the OLD PSM PDA. Refusing here gives a clear remediation
-    // path instead of a cryptic anchor-constraint failure deep in init.
-    const okuMMintPk = new PublicKey(existingOkuM);
-    try {
-      const mintAccount = await getMint(
-        provider.connection,
-        okuMMintPk,
-        'confirmed',
-        TOKEN_2022_PROGRAM_ID
-      );
-      const onChainAuthority = mintAccount.mintAuthority;
-      if (!onChainAuthority || !onChainAuthority.equals(psmConfigPDA)) {
-        throw new Error(
-          `Refusing to reuse OkuM mint ${existingOkuM}: on-chain mint ` +
-            `authority is ${onChainAuthority?.toBase58() ?? '<none>'}, but the ` +
-            `current PSM config PDA is ${psmConfigPDA.toBase58()}. This usually ` +
-            `means the program keypairs were rotated since this mint was created, ` +
-            `and the mint is now orphaned. Remediation:\n` +
-            `  1. Scrub deployments/${network}.json -- remove the .tokens and .pdas ` +
-            `     blocks (back the file up first; consider preserving them under ` +
-            `     a _archived key for audit history).\n` +
-            `  2. Re-run \`npm run deploy:init\` -- it will mint fresh tokens ` +
-            `     wired to the current PSM PDA.\n` +
-            `Note: any okuM already minted on the orphaned mint is stranded ` +
-            `(no live program controls its mint authority).`
-        );
-      }
-      logger.success(
-        `OkuM mint authority matches current PSM config PDA (${psmConfigPDA.toBase58()})`
-      );
-    } catch (err: any) {
-      // Re-throw our refusal verbatim; otherwise wrap with context.
-      if (err.message?.startsWith('Refusing to reuse OkuM mint')) throw err;
-      throw new Error(
-        `Failed to verify OkuM mint authority for ${existingOkuM}: ` +
-          `${err.message ?? err}. Cannot safely reuse this mint.`
-      );
-    }
-
-    return {
-      usdcMint: new PublicKey(existingUsdc),
-      okuMMint: okuMMintPk,
-    };
+  if (existingUsdc) {
+    logger.nextStep('Reusing existing USDC mint (idempotent)');
+    logger.info(`USDC mint: ${existingUsdc}`);
+    return { usdcMint: new PublicKey(existingUsdc) };
   }
 
-  if (existingUsdc || existingOkuM) {
-    throw new Error(
-      `Partial token state detected for network "${network}" -- usdc=${existingUsdc} ` +
-        `okuM=${existingOkuM}. Aborting to avoid creating orphans. ` +
-        `Either restore the missing field manually or run \`npm run clean\` ` +
-        `to start over.`
-    );
-  }
+  logger.nextStep('Deploying Mock USDC');
 
-  logger.nextStep('Deploying Tokens (Fresh)');
-
-  // Create Mock USDC (standard SPL token)
-  logger.info('Creating Mock USDC...');
   const usdcMint = await createSPLTokenMint(
     provider.connection,
     provider.wallet.payer,
@@ -119,17 +50,5 @@ export async function deployTokens(
     null
   );
 
-  // Create okuM (Token-2022 with ScaledUiAmount extension)
-  logger.info('Creating okuM (Token-2022)...');
-  const okuMMint = await createToken2022Mint({
-    connection: provider.connection,
-    payer: provider.wallet.payer,
-    decimals: OKUSD_DECIMALS,
-    mintAuthority: psmConfigPDA, // PSM controls minting
-    freezeAuthority: psmConfigPDA,
-    rateAuthority: authorities.psm.rebaser,
-    initialRate: 0, // 0% initial rate
-  });
-
-  return { usdcMint, okuMMint };
+  return { usdcMint };
 }

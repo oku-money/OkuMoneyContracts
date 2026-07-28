@@ -88,25 +88,25 @@ async function main() {
   // Derive PSM config PDA (needed for mint authority)
   const [psmConfigPDA] = derivePsmConfigPDA(programIds.litePsm);
 
-  // Deploy tokens (idempotent — reuses any mints already in the deployment file)
-  const { usdcMint, okuMMint } = await deployTokens(
+  // Deploy mock USDC (idempotent — reuses any mint already in the deployment file)
+  const { usdcMint } = await deployTokens(
     provider,
     psmConfigPDA,
-    authorities,
     network
   );
   logger.log('');
 
-  // Initialize PSM (single-token model: OkuM mint with ScaledUiAmountConfig)
+  // Initialize PSM (single-token model: OkuM mint created on-chain
+  // by the initialize instruction with ScaledUiAmount extension)
   const {
     psmConfig,
+    okuMMint,
     vaultUsdc: psmVaultUsdc,
     vaultOkuM: psmOkuMEscrow,
   } = await initializePsm(
     provider,
     programIds.litePsm,
     usdcMint,
-    okuMMint,
     authorities,
     config,
     networkConfig

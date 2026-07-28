@@ -14,9 +14,9 @@
  *   oracle fields were removed from `PsmConfig`. The other three seeds
  *   were not touched.
  * - Single-token refactor (2026-07): oku-dollar program removed entirely.
- *   `psmConfig` rotated to `_v5` (OkuMoney mint replaced by usdOku mint
- *   created by the program's `initialize` with ScaledUiAmount extension).
- *   `redemptionQueue` rotated to `_v3`.
+ *   `psmConfig` rotated to `_v5` then `_v6` (queue removed, OkuMoney mint
+ *   replaced by OkuM mint created by the program's `initialize` with
+ *   ScaledUiAmount extension). Redemption queue removed entirely.
  *
  * All pre-rotation PDAs are orphaned on devnet; see
  * `SVM/README.md` § "PDA seed history" for the orphan-PDA inventory
@@ -30,23 +30,10 @@ import { PublicKey } from "@solana/web3.js";
  * map together — any drift will produce silent PDA-address mismatches.
  */
 export const PDA_SEEDS = {
-  psmConfig: "psm_config_v5",
-  redemptionQueue: "redemption_queue_v3",
+  psmConfig: "psm_config_v6",
 } as const;
 
 /** Derive PSM config PDA. */
 export function derivePsmConfigPDA(programId: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([Buffer.from(PDA_SEEDS.psmConfig)], programId);
 }
-
-/** Derive redemption queue PDA. */
-export function deriveRedemptionQueuePDA(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from(PDA_SEEDS.redemptionQueue)], programId);
-}
-
-// Bridge / router PDA helpers (deriveBridgeConfigPDA, deriveBridgeNoncePDA,
-// deriveProcessedRequestPDA, deriveBridgeFeeTreasuryPDA, deriveRefund*
-// helpers, deriveRouterConfigPDA) were removed in the noBridge refactor.
-// v1 cross-chain transfers are mediated off-chain by an orchestrator
-// calling `mint_usd_oku` / `redeem_usd_oku` directly; no bridge PDAs are
-// derived on-chain or by tooling.

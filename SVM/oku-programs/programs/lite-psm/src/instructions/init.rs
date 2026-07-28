@@ -40,18 +40,18 @@ pub struct InitializeParams {
     pub cap_manager: Pubkey,
     pub allowance_manager: Pubkey,
     pub rebaser: Pubkey,
-    // ----- usdOku mint metadata -----
-    pub usd_oku_uri: String,
+    // ----- OkuM mint metadata -----
+    pub oku_m_uri: String,
 }
 
 /// Initialize the PSM.
 ///
-/// Creates config PDA, USDC vault, and the usdOku mint (Token-2022 with
+/// Creates config PDA, USDC vault, and the OkuM mint (Token-2022 with
 /// ScaledUiAmount + MetadataPointer + TokenMetadata extensions).
 ///
-/// The usdOku mint is created in this instruction via CPIs because
+/// The OkuM mint is created in this instruction via CPIs because
 /// Anchor's `init` macro doesn't support multi-extension Token-2022
-/// mints. The deployer passes a fresh keypair as `usd_oku_mint`
+/// mints. The deployer passes a fresh keypair as `oku_m_mint`
 /// (Signer); the instruction issues CreateAccount + extension init +
 /// InitializeMint2 + metadata init CPIs. The PsmConfig PDA is the
 /// mint authority, freeze authority, and ScaledUiAmount authority.
@@ -62,7 +62,7 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     // Capture keys before taking the mutable borrow on config, so we
     // can still call `ctx.accounts.config.to_account_info()` for CPIs.
     let bump = ctx.bumps.config;
-    let mint_key = ctx.accounts.usd_oku_mint.key();
+    let mint_key = ctx.accounts.oku_m_mint.key();
     let config_key = ctx.accounts.config.key();
     let token_2022_id = ctx.accounts.token_2022_program.key();
 
@@ -70,11 +70,14 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     //   Base mint + ScaledUiAmount + MetadataPointer + TokenMetadata
     let metadata = TokenMetadata {
         update_authority: spl_pod::optional_keys::OptionalNonZeroPubkey::try_from(Some(config_key))
-            .unwrap(),
+            .map_err(|_| error!(LitePsmError::InvalidAuthority))?,
         mint: mint_key,
+        // NB: "OkuDollar" and "usdOku" are the wallet-facing brand strings
+        // stored in on-chain token metadata. They MUST NOT be renamed to
+        // "OkuM" — wallets and block explorers display these values directly.
         name: "OkuDollar".to_string(),
         symbol: "usdOku".to_string(),
-        uri: params.usd_oku_uri.clone(),
+        uri: params.oku_m_uri.clone(),
         additional_metadata: vec![],
     };
     let metadata_len = metadata.tlv_size_of().map_err(|_| LitePsmError::Overflow)?;
@@ -125,7 +128,7 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
         ),
         &[
             ctx.accounts.role_admin.to_account_info(),
-            ctx.accounts.usd_oku_mint.to_account_info(),
+            ctx.accounts.oku_m_mint.to_account_info(),
             ctx.accounts.system_program.to_account_info(),
         ],
     )?;
@@ -141,7 +144,7 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
             Some(config_key), // authority
             Some(mint_key),   // metadata address = self
         )?,
-        &[ctx.accounts.usd_oku_mint.to_account_info()],
+        &[ctx.accounts.oku_m_mint.to_account_info()],
     )?;
     // InitializeScaledUiAmountConfig — multiplier starts at 1.0
     // (ScaledUiAmount uses f64; 1.0 means raw == display).
@@ -152,7 +155,7 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
             Some(config_key), // authority = config PDA
             1.0_f64,          // initial multiplier
         )?,
-        &[ctx.accounts.usd_oku_mint.to_account_info()],
+        &[ctx.accounts.oku_m_mint.to_account_info()],
     )?;
     // InitializeMint — decimals 6, authorities = config PDA
     // Uses InitializeMint (not InitializeMint2) which also takes the
@@ -166,7 +169,7 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
             6,                 // decimals
         )?,
         &[
-            ctx.accounts.usd_oku_mint.to_account_info(),
+            ctx.accounts.oku_m_mint.to_account_info(),
             ctx.accounts.rent.to_account_info(),
         ],
     )?;
@@ -182,12 +185,13 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
             &config_key, // update authority
             &mint_key,   // mint
             &config_key, // mint authority
+            // NB: wallet-facing brand — see NatSpec on the TokenMetadata block above.
             "OkuDollar".to_string(),
             "usdOku".to_string(),
-            params.usd_oku_uri.clone(),
+            params.oku_m_uri.clone(),
         ),
         &[
-            ctx.accounts.usd_oku_mint.to_account_info(),
+            ctx.accounts.oku_m_mint.to_account_info(),
             ctx.accounts.config.to_account_info(),
         ],
         signer_seeds,
@@ -213,7 +217,7 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
 
     // Set token references
     config.usdc_mint = ctx.accounts.usdc_mint.key();
-    config.usd_oku_mint = mint_key;
+    config.oku_m_mint = mint_key;
     config.vault_usdc = ctx.accounts.vault_usdc.key();
 
     // Set limits
@@ -241,7 +245,7 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     emit!(InitializeEvent {
         role_admin: config.role_admin,
         usdc_mint: config.usdc_mint,
-        usd_oku_mint: config.usd_oku_mint,
+        oku_m_mint: config.oku_m_mint,
         max_supply: params.max_supply,
     });
 

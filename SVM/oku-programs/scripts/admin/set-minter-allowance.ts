@@ -1,10 +1,10 @@
 /**
- * Reset the usdOku minter allowance.
+ * Reset the OkuM minter allowance.
  *
  * Wraps `lite_psm::set_minter_allowance` (allowance_manager-gated). The
- * allowance caps how much usdOku can be minted (across all callers)
- * between resets; each `mint_usd_oku` decrements it by the amount minted.
- * Mirrors EVM `UsdOku.setMinterAllowance` semantics.
+ * allowance caps how much okuM can be minted (across all callers)
+ * between resets; each `mint_oku_m` decrements it by the amount minted.
+ * Mirrors EVM `OkuM.setMinterAllowance` semantics.
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/admin/set-minter-allowance.ts --amount=<6dec>

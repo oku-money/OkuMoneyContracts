@@ -10,14 +10,13 @@ import { NetworkName } from './networks';
 import { DEFAULT_DIRECT_MINTER } from './constants';
 
 export interface AuthorityConfig {
-  // PSM authorities (12 roles)
+  // PSM authorities (11 roles — queueProcessor removed with redemption queue)
   psm: {
     roleAdmin: PublicKey;
     pauser: PublicKey;
     unpauser: PublicKey;
     freezer: PublicKey;
     unfreezer: PublicKey;
-    queueProcessor: PublicKey;
     bufferDepositor: PublicKey;
     bufferWithdrawer: PublicKey;
     capManager: PublicKey;
@@ -29,15 +28,6 @@ export interface AuthorityConfig {
      * `PublicKey.default` means "not configured / disabled".
      */
     directMinter: PublicKey;
-  };
-
-  // Vault authorities (5 roles)
-  vault: {
-    roleAdmin: PublicKey;
-    pauser: PublicKey;
-    unpauser: PublicKey;
-    usdRebaser: PublicKey;
-    reserveManager: PublicKey;
   };
 }
 
@@ -54,7 +44,6 @@ function allRolesToSingleKey(deployer: PublicKey): AuthorityConfig {
       unpauser: deployer,
       freezer: deployer,
       unfreezer: deployer,
-      queueProcessor: deployer,
       bufferDepositor: deployer,
       bufferWithdrawer: deployer,
       capManager: deployer,
@@ -64,13 +53,6 @@ function allRolesToSingleKey(deployer: PublicKey): AuthorityConfig {
       // and the on-chain guard rejects non-RoleAdmin roles set to
       // role_admin. Use the shared devnet master EOA instead.
       directMinter: new PublicKey(DEFAULT_DIRECT_MINTER),
-    },
-    vault: {
-      roleAdmin: deployer,
-      pauser: deployer,
-      unpauser: deployer,
-      usdRebaser: deployer,
-      reserveManager: deployer,
     },
   };
 }
@@ -122,20 +104,12 @@ export function loadAuthorities(
       unpauser: coldMultisig,
       freezer: warmMultisig,
       unfreezer: coldMultisig,
-      queueProcessor: orchestrator,
       bufferDepositor: orchestrator,
       bufferWithdrawer: coldMultisig,
       capManager: coldMultisig,
       allowanceManager: coldMultisig,
       rebaser: orchestrator,
       directMinter,
-    },
-    vault: {
-      roleAdmin: coldMultisig,
-      pauser: warmMultisig,
-      unpauser: coldMultisig,
-      usdRebaser: orchestrator,
-      reserveManager: coldMultisig,
     },
   };
 }

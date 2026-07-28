@@ -1,4 +1,4 @@
-//! # usdOku Lite-PSM
+//! # OkuM Lite-PSM
 //!
 //! SVM port of the EVM-side `LitePSM.sol`. The structure mirrors
 //! `EVM/src/psm/` module-for-module; deliberate divergences (token
@@ -7,7 +7,7 @@
 //!
 //! v1 cross-chain transfers are handled off-chain by an orchestrator that
 //! holds the PSM operational roles (`buffer_depositor`,
-//! `rebaser`) and signs `mint_usd_oku` / `redeem_usd_oku` against its own
+//! `rebaser`) and signs `mint_oku_m` / `redeem_oku_m` against its own
 //! ATAs on each chain. There is no on-chain bridge program.
 //!
 //! Inline `// see SVM/README.md` comments throughout this crate point
@@ -54,7 +54,7 @@ declare_id!("App49HmtSBMwh42tUpZT7gSbEbq7HiA6QED2BBnXtzxo");
 // is complete; populate them in a follow-up commit.
 #[cfg(not(feature = "no-entrypoint"))]
 solana_security_txt::security_txt! {
-    name: "usdOku Lite-PSM",
+    name: "OkuMoney Lite-PSM",
     project_url: "https://github.com/anomalyco/okuMoney",
     contacts: "uri:https://github.com/anomalyco/okuMoney/security/advisories/new",
     policy: "https://github.com/anomalyco/okuMoney/blob/main/SECURITY.md",
@@ -77,33 +77,38 @@ pub mod lite_psm {
 
     // ===== PSM Operations =====
 
-    /// Mint usdOku with USDC (multiplier-aware)
-    /// raw_usd_oku_amount = usdc_amount * PRECISION / multiplier
-    pub fn mint_usd_oku(ctx: Context<MintUsdOku>, usdc_amount: u64) -> Result<()> {
-        instructions::psm::mint_usd_oku(ctx, usdc_amount)
+    /// Mint OkuM with USDC (multiplier-aware)
+    /// raw_oku_m_amount = usdc_amount * PRECISION / multiplier
+    pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
+        instructions::psm::mint_oku_m(ctx, usdc_amount)
     }
 
     // ===== Direct Mint (fiat on-ramp) =====
 
-    /// Mint usdOku directly without USDC (permissioned -- `direct_minter` only).
-    /// Matches EVM `usdOku.mint(to, amount)` called by a non-PSM `OKUM_MINTER`.
-    pub fn mint_usd_oku_direct(ctx: Context<MintUsdOkuDirect>, raw_amount: u64) -> Result<()> {
-        instructions::direct_mint::mint_usd_oku_direct(ctx, raw_amount)
+    /// Mint OkuM directly without USDC (permissioned -- `direct_minter` only).
+    /// Matches EVM `OkuM.mint(to, amount)` called by a non-PSM `OKUM_MINTER`.
+    pub fn mint_oku_m_direct(ctx: Context<MintOkuMDirect>, raw_amount: u64) -> Result<()> {
+        instructions::direct_mint::mint_oku_m_direct(ctx, raw_amount)
     }
 
     // ===== Direct Burn (bridge / off-ramp) =====
 
-    /// Burn usdOku directly without USDC payout (permissioned --
-    /// `direct_burner` only). Matches EVM `usdOku.burn(amount)` called
+    /// Burn OkuM directly without USDC payout (permissioned --
+    /// `direct_burner` only). Matches EVM `OkuM.burn(amount)` called
     /// by a non-PSM `OKUM_BURNER`. Enables SVM->EVM bridging.
-    pub fn burn_usd_oku_direct(ctx: Context<BurnUsdOkuDirect>, raw_amount: u64) -> Result<()> {
-        instructions::direct_burn::burn_usd_oku_direct(ctx, raw_amount)
+    pub fn burn_oku_m_direct(ctx: Context<BurnOkuMDirect>, raw_amount: u64) -> Result<()> {
+        instructions::direct_burn::burn_oku_m_direct(ctx, raw_amount)
     }
 
-    /// Redeem usdOku for USDC (multiplier-aware)
-    /// usdc_amount = raw_usd_oku_amount * multiplier / PRECISION
-    pub fn redeem_usd_oku(ctx: Context<RedeemUsdOku>, raw_usd_oku_amount: u64) -> Result<()> {
-        instructions::psm::redeem_usd_oku(ctx, raw_usd_oku_amount)
+    /// Redeem OkuM for USDC (multiplier-aware, with slippage protection)
+    /// usdc_amount = raw_oku_m_amount * multiplier / PRECISION
+    /// Pass min_usdc_out = 0 to skip slippage check.
+    pub fn redeem_oku_m(
+        ctx: Context<RedeemOkuM>,
+        raw_oku_m_amount: u64,
+        min_usdc_out: u64,
+    ) -> Result<()> {
+        instructions::psm::redeem_oku_m(ctx, raw_oku_m_amount, min_usdc_out)
     }
 
     pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
@@ -172,13 +177,13 @@ pub mod lite_psm {
 
     // ===== Yield Operations =====
 
-    /// Set usdOku multiplier directly (REBASER only)
+    /// Set OkuM multiplier directly (REBASER only)
     /// Sets last_yield_distribution_slot for sandwich prevention
     pub fn set_multiplier(ctx: Context<SetMultiplier>, new_multiplier: u64) -> Result<()> {
         instructions::yield_ops::set_multiplier(ctx, new_multiplier)
     }
 
-    /// Distribute yield across all usdOku holders (REBASER only)
+    /// Distribute yield across all OkuM holders (REBASER only)
     /// new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)
     pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Result<()> {
         instructions::yield_ops::distribute_yield(ctx, yield_amount)

@@ -28,14 +28,11 @@
  *
  * Usage:
  *
- *   # Upgrade both programs on devnet
- *   TARGETS=LitePsm,OkuDollar npm run upgrade:devnet
- *
- *   # Single target
+ *   # Upgrade LitePsm on devnet
  *   TARGETS=LitePsm npm run upgrade:devnet
  *
  *   # Dry run — shows plan + IDL diff without broadcasting
- *   TARGETS=LitePsm,OkuDollar npm run upgrade:devnet -- --dry-run
+ *   TARGETS=LitePsm npm run upgrade:devnet -- --dry-run
  *
  *   # Force deploy even if ELF hasn't changed (useful for CI smoke-test)
  *   TARGETS=LitePsm SKIP_BYTECODE_CHECK=true npm run upgrade:devnet
@@ -88,7 +85,7 @@ interface UpgradeTarget {
   /** Filesystem key (matches target/deploy/<programKey>.so and *-keypair.json). */
   programKey: string;
   /** Key in deployments/<network>.json::programs. */
-  bookKey: 'litePsm' | 'okuDollarProgram';
+  bookKey: 'litePsm' | 'okuMoneyProgram';
   /** Key in STATE_READERS. */
   stateKey: string;
   /** Human-readable display name. */
@@ -101,12 +98,6 @@ const UPGRADE_TARGETS: Record<string, UpgradeTarget> = {
     bookKey:    'litePsm',
     stateKey:   'LitePsm',
     idlFile:    'lite_psm.json',
-  },
-  OkuDollar: {
-    programKey: 'oku_dollar',
-    bookKey:    'okuDollarProgram',
-    stateKey:   'OkuDollar',
-    idlFile:    'oku_dollar.json',
   },
 };
 
@@ -582,7 +573,7 @@ function parseTargets(): string[] {
   if (!raw) {
     throw new Error(
       `TARGETS env var is not set. Specify one or more programs to upgrade, e.g.\n` +
-        `  TARGETS=LitePsm,OkuDollar npm run upgrade -- --network=devnet\n` +
+        `  TARGETS=LitePsm npm run upgrade -- --network=devnet\n` +
         `Known targets: ${Object.keys(UPGRADE_TARGETS).join(', ')}.`
     );
   }
@@ -629,7 +620,6 @@ function loadPrograms(
 
   return {
     psm:    loadProgram('lite_psm.json',   deployment.programs.litePsm),
-    vault:  loadProgram('oku_dollar.json', deployment.programs.okuDollarProgram),
   };
 }
 

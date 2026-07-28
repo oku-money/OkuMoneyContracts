@@ -1,20 +1,20 @@
 /**
- * Standalone usdOku mint CLI (orchestrator bridge-leg).
+ * Standalone OkuM mint CLI (orchestrator bridge-leg).
  *
- * Wraps `lite_psm::mint_usd_oku`. Mints `usdOku` to the caller in exchange
+ * Wraps `lite_psm::mint_oku_m`. Mints `OkuM` to the caller in exchange
  * for USDC. This is the SVM side of the cross-chain mint flow — the EVM
- * sibling lives at `EVM/scripts/operator/mintUsdOku.ts`.
+ * sibling lives at `EVM/scripts/operator/mintOkuM.ts`.
  *
  * Previously this logic was only reachable via the in-tree integration
  * runner at `scripts/test/test-devnet.ts`. Surfaced as a standalone CLI so
  * the off-chain orchestrator can drive it without spinning up the runner.
  *
  * The caller must already hold the USDC; the PSM has its own minter-allowance
- * check on usdOku issuance.
+ * check on okuM issuance.
  *
  * Usage:
- *   NETWORK=devnet tsx scripts/admin/mint-usd-oku.ts --amount 1000000           # 1.00 USDC (6-dec)
- *   NETWORK=mainnet-beta tsx scripts/admin/mint-usd-oku.ts --amount 100000000 \
+ *   NETWORK=devnet tsx scripts/admin/mint-oku-m.ts --amount 1000000           # 1.00 USDC (6-dec)
+ *   NETWORK=mainnet-beta tsx scripts/admin/mint-oku-m.ts --amount 100000000 \
  *       --yes-i-mean-it-on-mainnet
  *   --dry-run    print the planned tx without submitting
  */
@@ -42,7 +42,7 @@ function parseArg(name: string): string | undefined {
 
 async function main() {
   const network = detectNetwork();
-  logger.header(`mint_usd_oku (${network})`);
+  logger.header(`mint_oku_m (${network})`);
 
   const amountArg = parseArg('amount');
   if (!amountArg) {
@@ -56,13 +56,13 @@ async function main() {
   const provider = createProvider(network) as AnchorProvider;
   anchor.setProvider(provider);
   const deployment = loadDeployment(network);
-  if (!deployment?.programs?.litePsm || !deployment.tokens?.usdc || !deployment.tokens?.usdOku) {
+  if (!deployment?.programs?.litePsm || !deployment.tokens?.usdc || !deployment.tokens?.okuM) {
     throw new Error(`Incomplete SVM deployment for ${network}.`);
   }
 
   const litePsmId = new PublicKey(deployment.programs.litePsm);
   const usdcMint = new PublicKey(deployment.tokens.usdc);
-  const usdOkuMint = new PublicKey(deployment.tokens.usdOku);
+  const okuMMint = new PublicKey(deployment.tokens?.okuM);
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
@@ -71,36 +71,36 @@ async function main() {
 
   const user = provider.wallet.publicKey;
   const userUsdcAta = await getAssociatedTokenAddress(usdcMint, user, false, TOKEN_PROGRAM_ID);
-  const userUsdOkuAta = await getAssociatedTokenAddress(
-    usdOkuMint,
+  const userOkuMAta = await getAssociatedTokenAddress(
+    okuMMint,
     user,
     false,
     TOKEN_2022_PROGRAM_ID
   );
 
   logger.info(
-    summaryBlock('mint_usd_oku()', {
+    summaryBlock('mint_oku_m()', {
       'config PDA': psmConfig.toBase58(),
       'user (signer)': user.toBase58(),
       'usdcAmount (6-dec)': amountArg,
       'usdc mint': usdcMint.toBase58(),
-      'usdOku mint': usdOkuMint.toBase58(),
+      'OkuM mint': okuMMint.toBase58(),
       'vault USDC': vaultUsdc.toBase58(),
     })
   );
 
   if (isDryRun()) return logger.success('--dry-run set; not submitting.');
-  await confirmIfMainnet(network, `mint_usd_oku(${amountArg}) on mainnet`);
+  await confirmIfMainnet(network, `mint_oku_m(${amountArg}) on mainnet`);
 
   const sig = await program.methods
-    .mintUsdOku(usdcAmount)
+    .mintOkuM(usdcAmount)
     .accountsPartial({
       user,
       config: psmConfig,
       usdcMint,
-      usdOkuMint,
+      okuMMint,
       userUsdcAta,
-      userUsdOkuAta,
+      userOkuMAta,
       vaultUsdc,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,

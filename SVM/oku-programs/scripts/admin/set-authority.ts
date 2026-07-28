@@ -1,8 +1,8 @@
 /**
  * Rotate a PSM authority role.
  *
- * Wraps `lite_psm::set_authority` (role_admin-gated). Eleven roles are
- * exposed: roleAdmin, pauser, unpauser, freezer, unfreezer, queueProcessor,
+ * Wraps `lite_psm::set_authority` (role_admin-gated). Ten roles are
+ * exposed: roleAdmin, pauser, unpauser, freezer, unfreezer,
  * bufferDepositor, bufferWithdrawer, capManager,
  * allowanceManager, rebaser.
  *
@@ -30,7 +30,6 @@ const ROLES = [
   'unpauser',
   'freezer',
   'unfreezer',
-  'queueProcessor',
   'bufferDepositor',
   'bufferWithdrawer',
   'capManager',

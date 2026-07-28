@@ -5,7 +5,6 @@ members = [
 ]
 exclude = [
     "crates/oku-shared/fuzz",   # cargo-fuzz crate (runs via `cargo +nightly fuzz`, not workspace builds)
-    "trident-tests",            # Trident fuzz harnesses (run via `trident fuzz`, not workspace builds)
 ]
 resolver = "2"
 

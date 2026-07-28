@@ -1,5 +1,5 @@
 /**
- * Distribute dollar-denominated yield across all usdOku holders.
+ * Distribute dollar-denominated yield across all OkuM holders.
  *
  * Wraps `lite_psm::distribute_yield` (rebaser-gated). The handler computes
  *   new_multiplier = old_multiplier + (yield_amount * 1e9 / total_supply)
@@ -45,12 +45,12 @@ async function main() {
   const provider = createProvider(network);
   anchor.setProvider(provider);
   const deployment = loadDeployment(network);
-  if (!deployment?.programs?.litePsm || !deployment.tokens?.usdOku) {
+  if (!deployment?.programs?.litePsm || !deployment.tokens?.okuM) {
     throw new Error(`No deployment for ${network}.`);
   }
 
   const litePsmId = new PublicKey(deployment.programs.litePsm);
-  const usdOkuMint = new PublicKey(deployment.tokens.usdOku);
+  const okuMMint = new PublicKey(deployment.tokens?.okuM);
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
@@ -58,7 +58,7 @@ async function main() {
   logger.info(
     summaryBlock('distribute_yield()', {
       'config PDA': psmConfig.toBase58(),
-      'usdOku mint': usdOkuMint.toBase58(),
+      'OkuM mint': okuMMint.toBase58(),
       'current multiplier': cfg.multiplier.toString(),
       'yield amount (6dec)': amount.toString(),
       'signer (rebaser)': provider.wallet.publicKey.toBase58(),
@@ -76,7 +76,7 @@ async function main() {
     .accountsPartial({
       rebaser: provider.wallet.publicKey,
       config: psmConfig,
-      usdOkuMint,
+      okuMMint,
       token2022Program: TOKEN_2022_PROGRAM_ID,
     })
     .rpc();

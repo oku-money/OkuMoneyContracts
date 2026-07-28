@@ -67,7 +67,6 @@ import { logger } from '../utils/logger';
 import { loadDeployment } from '../utils/addressBook';
 import {
   derivePsmConfigPDA,
-  deriveRedemptionQueuePDA,
 } from '../utils/pdaHelpers';
 
 // ============================================================================
@@ -254,11 +253,9 @@ interface SvmCtx {
   psm: Program<LitePsm>;
   litePsmId: PublicKey;
   psmConfig: PublicKey;
-  redemptionQueue: PublicKey;
   usdcMint: PublicKey;
   okuMoneyMint: PublicKey;
   vaultUsdc: PublicKey;
-  vaultOkuMoney: PublicKey;
   usdcDecimals: number;
 }
 
@@ -279,7 +276,6 @@ async function makeSvmCtx(network: NetworkName): Promise<SvmCtx> {
   const usdcMint = new PublicKey(deployment.tokens.usdc);
   const okuMoneyMint = new PublicKey(deployment.tokens.okuMoney);
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
-  const [redemptionQueue] = deriveRedemptionQueuePDA(litePsmId);
 
   // Load the IDL from target/idl and bind to the deployed program id.
   // `anchor.workspace.<Name>` only works under `anchor test`, not under tsx.
@@ -295,7 +291,6 @@ async function makeSvmCtx(network: NetworkName): Promise<SvmCtx> {
 
   const cfg = await psm.account.psmConfig.fetch(psmConfig);
   const vaultUsdc = cfg.vaultUsdc as PublicKey;
-  const vaultOkuMoney = cfg.vaultOkuMoney as PublicKey;
 
   // The AnchorProvider wallet wraps the Keypair loaded from WALLET_PATH (or
   // ~/.config/solana/id.json). Re-load it so we have a concrete Keypair for
@@ -313,11 +308,9 @@ async function makeSvmCtx(network: NetworkName): Promise<SvmCtx> {
     psm,
     litePsmId,
     psmConfig,
-    redemptionQueue,
     usdcMint,
     okuMoneyMint,
     vaultUsdc,
-    vaultOkuMoney,
     usdcDecimals: 6, // MockUSDC on devnet is 6 decimals (matches EVM MockUSDC)
   };
 }
@@ -454,9 +447,6 @@ async function svmRedeemOkuM(ctx: SvmCtx, okuMAmount: bigint): Promise<bigint> {
     ctx.signer.publicKey,
     TOKEN_2022_PROGRAM_ID
   );
-  // Ensure escrow ATA exists (matches test-devnet pre-create)
-  await svmGetOrCreateAta(ctx, ctx.okuMoneyMint, ctx.psmConfig, TOKEN_2022_PROGRAM_ID);
-
   const usdcBefore = await svmTokenBalance(
     ctx,
     ctx.usdcMint,
@@ -470,17 +460,15 @@ async function svmRedeemOkuM(ctx: SvmCtx, okuMAmount: bigint): Promise<bigint> {
   }
 
   const sig = await ctx.psm.methods
-    .redeemOkuM(new BN(okuMAmount.toString()))
+    .redeemOkuM(new BN(okuMAmount.toString()), new BN(0))
     .accountsPartial({
       user: ctx.signer.publicKey,
       config: ctx.psmConfig,
-      redemptionQueue: ctx.redemptionQueue,
       usdcMint: ctx.usdcMint,
       okuMoneyMint: ctx.okuMoneyMint,
       userUsdcAta,
       userOkuMoneyAta,
       vaultUsdc: ctx.vaultUsdc,
-      vaultOkuMoney: ctx.vaultOkuMoney,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,

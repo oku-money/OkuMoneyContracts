@@ -8,7 +8,6 @@ use anchor_spl::{
 
 #[derive(Accounts)]
 pub struct Pause<'info> {
-    #[account(mut)]
     pub pauser: Signer<'info>,
 
     #[account(
@@ -22,7 +21,6 @@ pub struct Pause<'info> {
 
 #[derive(Accounts)]
 pub struct Unpause<'info> {
-    #[account(mut)]
     pub unpauser: Signer<'info>,
 
     #[account(
@@ -36,7 +34,6 @@ pub struct Unpause<'info> {
 
 #[derive(Accounts)]
 pub struct CapManager<'info> {
-    #[account(mut)]
     pub cap_manager: Signer<'info>,
 
     #[account(
@@ -47,21 +44,20 @@ pub struct CapManager<'info> {
     )]
     pub config: Account<'info, PsmConfig>,
 
-    /// usdOku mint -- read so `set_max_supply` can refuse a new cap below
+    /// OkuM mint -- read so `set_max_supply` can refuse a new cap below
     /// the current circulating supply (would silently brick all future
-    /// mints). EVM `usdOku.setMaxSupply` parity.
+    /// mints). EVM `OkuM.setMaxSupply` parity.
     #[account(
-        address = config.usd_oku_mint,
+        address = config.oku_m_mint,
         mint::token_program = token_2022_program,
     )]
-    pub usd_oku_mint: InterfaceAccount<'info, MintInterface>,
+    pub oku_m_mint: InterfaceAccount<'info, MintInterface>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }
 
 #[derive(Accounts)]
 pub struct AllowanceManager<'info> {
-    #[account(mut)]
     pub allowance_manager: Signer<'info>,
 
     #[account(
@@ -85,20 +81,20 @@ pub struct FreezeAccount<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// usdOku mint (Token-2022)
+    /// OkuM mint (Token-2022)
     #[account(
-        address = config.usd_oku_mint,
+        address = config.oku_m_mint,
         mint::token_program = token_2022_program
     )]
-    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub oku_m_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// Target account to freeze
     #[account(
         mut,
-        token::mint = usd_oku_mint,
+        token::mint = oku_m_mint,
         token::token_program = token_2022_program,
     )]
-    pub target_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub target_oku_m_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }
@@ -115,20 +111,20 @@ pub struct ThawAccount<'info> {
     )]
     pub config: Box<Account<'info, PsmConfig>>,
 
-    /// usdOku mint (Token-2022)
+    /// OkuM mint (Token-2022)
     #[account(
-        address = config.usd_oku_mint,
+        address = config.oku_m_mint,
         mint::token_program = token_2022_program
     )]
-    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub oku_m_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// Target account to thaw
     #[account(
         mut,
-        token::mint = usd_oku_mint,
+        token::mint = oku_m_mint,
         token::token_program = token_2022_program,
     )]
-    pub target_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub target_oku_m_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub token_2022_program: Program<'info, Token2022>,
 }

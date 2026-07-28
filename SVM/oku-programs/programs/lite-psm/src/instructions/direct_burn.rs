@@ -1,23 +1,23 @@
 //! Permissioned direct-burn instruction (bridge / off-ramp path).
 //!
-//! This instruction allows a `direct_burner` authority to burn usdOku
+//! This instruction allows a `direct_burner` authority to burn OkuM
 //! from its own ATA WITHOUT triggering a USDC payout. Matches EVM's
-//! `usdOku.burn(amount)` called by a non-PSM `OKUM_BURNER` role holder.
+//! `OkuM.burn(amount)` called by a non-PSM `OKUM_BURNER` role holder.
 //!
 //! The USDC settlement for burns lives off-chain (the KMS-backed
-//! orchestrator mints on the destination chain via `mint_usd_oku`). This
+//! orchestrator mints on the destination chain via `mint_oku_m`). This
 //! instruction is the supply-destruction half of the SVM->EVM bridge flow.
 
-use crate::contexts::direct_burn::BurnUsdOkuDirect;
+use crate::contexts::direct_burn::BurnOkuMDirect;
 use crate::errors::LitePsmError;
 use crate::events::*;
 use crate::helpers::{check_yield_lock, raw_to_dollars, read_multiplier};
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
 
-/// Burn usdOku directly without USDC payout (permissioned).
+/// Burn OkuM directly without USDC payout (permissioned).
 ///
-/// Guards (matching EVM `usdOku.burn`):
+/// Guards (matching EVM `OkuM.burn`):
 /// - `direct_burner` must be signer, validated via `has_one` on config
 /// - Pause check (EVM `burn()` is allowed while paused; we match the
 ///   stricter SVM convention of checking pause on all user-facing ops)
@@ -27,7 +27,7 @@ use anchor_spl::token_interface;
 /// NOT included:
 /// - No USDC transfer (pure supply destruction)
 /// - No max supply check (burning reduces supply, doesn't increase it)
-pub fn burn_usd_oku_direct(ctx: Context<BurnUsdOkuDirect>, raw_amount: u64) -> Result<()> {
+pub fn burn_oku_m_direct(ctx: Context<BurnOkuMDirect>, raw_amount: u64) -> Result<()> {
     // Check yield distribution lock FIRST
     check_yield_lock(&ctx.accounts.config)?;
 
@@ -52,7 +52,7 @@ pub fn burn_usd_oku_direct(ctx: Context<BurnUsdOkuDirect>, raw_amount: u64) -> R
     // Capture keys before borrow
     let direct_burner_key = ctx.accounts.direct_burner.key();
 
-    // Burn usdOku from the burner's ATA (Token-2022).
+    // Burn OkuM from the burner's ATA (Token-2022).
     // The burner is the token account owner, so it signs the burn directly.
     // No PDA signer needed -- unlike minting, burning only requires the
     // token account owner's signature, not the mint authority.
@@ -60,8 +60,8 @@ pub fn burn_usd_oku_direct(ctx: Context<BurnUsdOkuDirect>, raw_amount: u64) -> R
         CpiContext::new(
             ctx.accounts.token_2022_program.key(),
             token_interface::Burn {
-                mint: ctx.accounts.usd_oku_mint.to_account_info(),
-                from: ctx.accounts.burner_usd_oku_ata.to_account_info(),
+                mint: ctx.accounts.oku_m_mint.to_account_info(),
+                from: ctx.accounts.burner_oku_m_ata.to_account_info(),
                 authority: ctx.accounts.direct_burner.to_account_info(),
             },
         ),
@@ -69,15 +69,15 @@ pub fn burn_usd_oku_direct(ctx: Context<BurnUsdOkuDirect>, raw_amount: u64) -> R
     )?;
 
     // Read multiplier from mint to compute dollar value for event
-    let multiplier = read_multiplier(&ctx.accounts.usd_oku_mint.to_account_info())?;
+    let multiplier = read_multiplier(&ctx.accounts.oku_m_mint.to_account_info())?;
     let dollar_value = raw_to_dollars(raw_amount, multiplier)?;
 
-    ctx.accounts.usd_oku_mint.reload()?;
-    let new_total_supply = ctx.accounts.usd_oku_mint.supply;
+    ctx.accounts.oku_m_mint.reload()?;
+    let new_total_supply = ctx.accounts.oku_m_mint.supply;
 
     emit!(DirectBurnEvent {
         direct_burner: direct_burner_key,
-        raw_usd_oku_amount: raw_amount,
+        raw_oku_m_amount: raw_amount,
         multiplier,
         dollar_value,
         new_total_supply,

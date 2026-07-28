@@ -1,4 +1,4 @@
-//! # usdOku Lite-PSM Events
+//! # OkuM Lite-PSM Events
 //!
 //! Event definitions for the Lite-PSM program.
 //! Aligned with EVM contract events from `LitePSM.sol`.
@@ -31,47 +31,47 @@ use anchor_lang::prelude::*;
 pub struct InitializeEvent {
     pub role_admin: Pubkey,
     pub usdc_mint: Pubkey,
-    pub usd_oku_mint: Pubkey,
+    pub oku_m_mint: Pubkey,
     pub max_supply: u64,
 }
 
-/// Emitted when usdOku is minted via PSM.
-/// EVM equivalent: `MintNote(address indexed user, uint256 usdcAmount, uint256 rawUsdOkuAmount, uint256 multiplier)`
+/// Emitted when OkuM is minted via PSM.
+/// EVM equivalent: `MintNote(address indexed user, uint256 usdcAmount, uint256 rawOkuMAmount, uint256 multiplier)`
 #[event]
 pub struct MintEvent {
     /// User who minted
     pub user: Pubkey,
     /// USDC deposited (6 decimals)
     pub usdc_amount: u64,
-    /// usdOku raw amount minted (6 decimals)
-    pub raw_usd_oku_amount: u64,
-    /// Dollar value of the minted amount (raw_usd_oku_amount * multiplier / PRECISION)
+    /// OkuM raw amount minted (6 decimals)
+    pub raw_oku_m_amount: u64,
+    /// Dollar value of the minted amount (raw_oku_m_amount * multiplier / PRECISION)
     pub dollar_value: u64,
-    /// usdOku multiplier at time of mint (1e9 = $1.00)
+    /// OkuM multiplier at time of mint (1e9 = $1.00)
     /// EVM equivalent: multiplier
     pub multiplier: u64,
-    /// usdOku supply AFTER the mint completed. Cycle 4 (PSM-23):
+    /// OkuM supply AFTER the mint completed. Cycle 4 (PSM-23):
     /// added for indexing parity with `YieldDistributed` /
     /// `MultiplierUpdated` (both of which emit `total_supply`).
     pub new_total_supply: u64,
 }
 
-/// Emitted when usdOku is redeemed for USDC (instant redemption).
-/// EVM equivalent: `RedeemNote(address indexed user, uint256 rawUsdOkuIn, uint256 usdcOut, uint256 multiplier)`
+/// Emitted when OkuM is redeemed for USDC (instant redemption).
+/// EVM equivalent: `RedeemNote(address indexed user, uint256 rawOkuMIn, uint256 usdcOut, uint256 multiplier)`
 #[event]
 pub struct RedeemEvent {
     /// User who redeemed
     pub user: Pubkey,
-    /// usdOku raw amount burned (6 decimals)
-    pub raw_usd_oku_amount: u64,
+    /// OkuM raw amount burned (6 decimals)
+    pub raw_oku_m_amount: u64,
     /// USDC received (6 decimals)
     pub usdc_amount: u64,
     /// Dollar value of the redeemed amount
     pub dollar_value: u64,
-    /// usdOku multiplier at time of redeem (1e9 = $1.00)
+    /// OkuM multiplier at time of redeem (1e9 = $1.00)
     /// EVM equivalent: multiplier
     pub multiplier: u64,
-    /// usdOku supply AFTER the burn completed. Cycle 4 (PSM-23).
+    /// OkuM supply AFTER the burn completed. Cycle 4 (PSM-23).
     pub new_total_supply: u64,
 }
 
@@ -143,22 +143,22 @@ pub struct DirectMinterAllowanceUpdatedEvent {
     pub new_allowance: u64,
 }
 
-/// Emitted when usdOku is minted via the permissioned direct-mint path
+/// Emitted when OkuM is minted via the permissioned direct-mint path
 /// (no USDC required). EVM equivalent: the Transfer event from
-/// `usdOku.mint(to, amount)` called by a non-PSM minter.
+/// `OkuM.mint(to, amount)` called by a non-PSM minter.
 #[event]
 pub struct DirectMintEvent {
     /// Operator who initiated the mint
     pub direct_minter: Pubkey,
-    /// Recipient of the minted usdOku
+    /// Recipient of the minted OkuM
     pub recipient: Pubkey,
-    /// usdOku raw amount minted (6 decimals)
-    pub raw_usd_oku_amount: u64,
-    /// usdOku multiplier at time of mint (1e9 = $1.00)
+    /// OkuM raw amount minted (6 decimals)
+    pub raw_oku_m_amount: u64,
+    /// OkuM multiplier at time of mint (1e9 = $1.00)
     pub multiplier: u64,
     /// Dollar value of the minted amount
     pub dollar_value: u64,
-    /// usdOku supply AFTER the mint completed
+    /// OkuM supply AFTER the mint completed
     pub new_total_supply: u64,
 }
 
@@ -172,35 +172,35 @@ pub struct DirectBurnerAllowanceUpdatedEvent {
     pub new_allowance: u64,
 }
 
-/// Emitted when usdOku is burned via the permissioned direct-burn path
+/// Emitted when OkuM is burned via the permissioned direct-burn path
 /// (no USDC payout). EVM equivalent: the Transfer-to-zero event from
-/// `usdOku.burn(amount)` called by a non-PSM burner.
+/// `OkuM.burn(amount)` called by a non-PSM burner.
 #[event]
 pub struct DirectBurnEvent {
     /// Operator who initiated the burn
     pub direct_burner: Pubkey,
-    /// usdOku raw amount burned (6 decimals)
-    pub raw_usd_oku_amount: u64,
-    /// usdOku multiplier at time of burn (1e9 = $1.00)
+    /// OkuM raw amount burned (6 decimals)
+    pub raw_oku_m_amount: u64,
+    /// OkuM multiplier at time of burn (1e9 = $1.00)
     pub multiplier: u64,
     /// Dollar value of the burned amount
     pub dollar_value: u64,
-    /// usdOku supply AFTER the burn completed
+    /// OkuM supply AFTER the burn completed
     pub new_total_supply: u64,
 }
 
-/// Emitted when usdOku multiplier is updated directly.
+/// Emitted when OkuM multiplier is updated directly.
 /// EVM equivalent: `MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`
 #[event]
 pub struct MultiplierUpdated {
     pub old_multiplier: u64,
     pub new_multiplier: u64,
-    /// Total usdOku supply at time of update
+    /// Total OkuM supply at time of update
     pub total_supply: u64,
     pub timestamp: i64,
 }
 
-/// Emitted when yield is distributed across all usdOku holders.
+/// Emitted when yield is distributed across all OkuM holders.
 /// EVM equivalent: `YieldDistributed(uint256 yieldAmount, uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`
 #[event]
 pub struct YieldDistributed {
@@ -208,15 +208,9 @@ pub struct YieldDistributed {
     pub yield_amount: u64,
     pub old_multiplier: u64,
     pub new_multiplier: u64,
-    /// Total usdOku supply at time of distribution
+    /// Total OkuM supply at time of distribution
     pub total_supply: u64,
     pub timestamp: i64,
-}
-
-/// Emitted when yield distribution slot is set (for sandwich prevention).
-#[event]
-pub struct YieldDistributionSlotSet {
-    pub slot: u64,
 }
 
 /// Emitted when an account is frozen.

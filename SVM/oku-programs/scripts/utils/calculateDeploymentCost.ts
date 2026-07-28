@@ -20,9 +20,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { detectNetwork, getNetworkConfig } from './network';
 import {
-  OKU_DOLLAR_CONFIG_LEN,
   PSM_CONFIG_LEN,
-  REDEMPTION_QUEUE_LEN,
 } from '../lib/account-sizes';
 
 interface SizedItem {
@@ -82,8 +80,6 @@ async function main() {
   // ===== PDA accounts =====
   const pdas: SizedItem[] = [
     { name: 'PsmConfig', size: PSM_CONFIG_LEN },
-    { name: 'RedemptionQueue', size: REDEMPTION_QUEUE_LEN },
-    { name: 'OkuDollarConfig', size: OKU_DOLLAR_CONFIG_LEN },
   ];
 
   console.log('PDAs (one-time + per-instance):\n');
@@ -99,14 +95,12 @@ async function main() {
   // Mint sizes: legacy SPL = 82, Token-2022 base = 82 + extension TLV
   // (~165 bytes for InterestBearingConfig). The deploy script picks the
   // exact extensions; we approximate.
+  // Single-token model: OkuM mint with ScaledUiAmountConfig + MetadataPointer
+  // + TokenMetadata extensions. No OkuMoney mint, no vault, no dead-shares.
   const tokenAccounts: SizedItem[] = [
-    { name: 'OkuMoney mint (Token-2022 + IBC ext)', size: 175 },
-    { name: 'usdOku mint (Token-2022)', size: 165 },
+    { name: 'OkuM mint (Token-2022 + 3 ext)', size: 400 },
     { name: 'Mock USDC mint (legacy SPL)', size: 82 },
     { name: 'PSM USDC vault ATA (legacy)', size: 165 },
-    { name: 'PSM OkuMoney escrow ATA (T22)', size: 175 },
-    { name: 'OkuDollar reserve vault ATA (T22)', size: 175 },
-    { name: 'usdOku dead-shares ATA (T22)', size: 175 },
   ];
 
   console.log('TOKEN ACCOUNTS:\n');

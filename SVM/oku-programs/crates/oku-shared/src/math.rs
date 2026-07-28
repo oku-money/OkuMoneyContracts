@@ -19,9 +19,9 @@
 //!
 //! | Direction | Rounding | Primitive |
 //! |---|---|---|
-//! | usdOku → dollars (mint) | floor (give the user no more than they earned) | [`raw_to_dollars`] |
-//! | dollars → usdOku (mint) | floor | [`dollars_to_raw`] |
-//! | reserved-balance accounting | ceil (over-reserve, never under-reserve) | [`raw_to_dollars_ceil`] |
+//! | OkuM → dollars (mint) | floor (give the user no more than they earned) | [`raw_to_dollars`] |
+//! | dollars → OkuM (mint) | floor | [`dollars_to_raw`] |
+//! | reserved-balance accounting | ceil (over-reserve, never under-reserve) | [`mul_div_ceil`] |
 //!
 //! Pick `*_ceil` when a floor would under-protect the protocol's
 //! obligations to other users.
@@ -52,7 +52,7 @@ pub fn mul_div_floor(a: u64, b: u64, divisor: u64) -> Option<u64> {
     u64::try_from(result).ok()
 }
 
-/// Convert usdOku raw amount → dollar value using a multiplier.
+/// Convert OkuM raw amount → dollar value using a multiplier.
 ///
 /// Formula: `dollar_value = (raw_amount * multiplier) / PRECISION`.
 ///
@@ -64,7 +64,7 @@ pub fn raw_to_dollars(raw_amount: u64, multiplier: u64) -> Option<u64> {
     mul_div_floor(raw_amount, multiplier, PRECISION)
 }
 
-/// Convert dollar value → usdOku raw amount using a multiplier.
+/// Convert dollar value → OkuM raw amount using a multiplier.
 ///
 /// Formula: `raw_amount = (dollar_value * PRECISION) / multiplier`.
 ///
@@ -110,15 +110,6 @@ pub fn mul_div_ceil(a: u64, b: u64, divisor: u64) -> Option<u64> {
     #[allow(clippy::arithmetic_side_effects)]
     let result = numerator / d;
     u64::try_from(result).ok()
-}
-
-/// Convert usdOku raw amount → dollar value with **ceil** rounding.
-///
-/// Use when the dollar figure represents a protocol-side obligation
-/// (reserved-balance accounting).
-#[inline]
-pub fn raw_to_dollars_ceil(raw_amount: u64, multiplier: u64) -> Option<u64> {
-    mul_div_ceil(raw_amount, multiplier, PRECISION)
 }
 
 // ---------------------------------------------------------------------------
@@ -343,11 +334,11 @@ mod tests {
 
     #[test]
     fn raw_to_dollars_works() {
-        // At $1.00 price, 1 usdOku = $1.00
+        // At $1.00 price, 1 OkuM = $1.00
         assert_eq!(raw_to_dollars(1_000_000, PRECISION), Some(1_000_000));
-        // At $1.10 price, 1 usdOku = $1.10
+        // At $1.10 price, 1 OkuM = $1.10
         assert_eq!(raw_to_dollars(1_000_000, 1_100_000_000), Some(1_100_000));
-        // At $1.05 price, 100 usdOku = $105.00
+        // At $1.05 price, 100 OkuM = $105.00
         assert_eq!(
             raw_to_dollars(100_000_000, 1_050_000_000),
             Some(105_000_000)
@@ -356,9 +347,9 @@ mod tests {
 
     #[test]
     fn dollars_to_raw_works() {
-        // At $1.00 price, $1.00 = 1 usdOku
+        // At $1.00 price, $1.00 = 1 OkuM
         assert_eq!(dollars_to_raw(1_000_000, PRECISION), Some(1_000_000));
-        // At $1.10 price, $1.10 = 1 usdOku
+        // At $1.10 price, $1.10 = 1 OkuM
         assert_eq!(dollars_to_raw(1_100_000, 1_100_000_000), Some(1_000_000));
         // Zero price → None
         assert_eq!(dollars_to_raw(1_000_000, 0), None);
@@ -393,11 +384,4 @@ mod tests {
         assert_eq!(mul_div_floor(u64::MAX, u64::MAX, u64::MAX), Some(u64::MAX));
     }
 
-    #[test]
-    fn raw_to_dollars_ceil_works() {
-        // Exact at $1.00: 1 usdOku = $1.00, floor == ceil.
-        assert_eq!(raw_to_dollars_ceil(1_000_000, PRECISION), Some(1_000_000));
-        assert_eq!(raw_to_dollars(1, PRECISION + 1), Some(1));
-        assert_eq!(raw_to_dollars_ceil(1, PRECISION + 1), Some(2));
-    }
 }

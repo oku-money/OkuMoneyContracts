@@ -37,7 +37,7 @@ installed binaries match these pins.
 Test deltas vs. cycle-4 baseline (174 → 120, −54): the single-token
 refactor deleted `oku-dollar` and its vault/wrap/unwrap test suites,
 removed vault-math unit tests, and added ScaledUiAmount extension
-tests for the new single-token usdOku design.
+tests for the new single-token OkuM design.
 
 Kani (cycle 4): **13 / 13 SUCCESSFUL** (4 vault-math proofs removed
 with the oku-dollar program deletion).

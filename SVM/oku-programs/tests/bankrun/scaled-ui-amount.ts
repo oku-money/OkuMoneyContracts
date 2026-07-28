@@ -2,7 +2,7 @@
  * ScaledUiAmount extension behavior tests for the lite-psm program.
  *
  * These tests verify that the Token-2022 ScaledUiAmount extension is
- * correctly configured on the usdOku mint, and that multiplier changes
+ * correctly configured on the OkuM mint, and that multiplier changes
  * (via `set_multiplier` and `distribute_yield`) correctly affect:
  *   - the UI amount reported by `getTokenAccountBalance`
  *   - the raw token amounts minted per USDC deposited
@@ -31,7 +31,7 @@ import {
   psmOrchestrator as orchestrator,
   initializePsm,
   ensurePSMUnpaused,
-  mintUsdOkuViaProgram,
+  mintOkuMViaProgram,
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
   DECIMALS,
@@ -64,17 +64,16 @@ describe("ScaledUiAmount extension behavior", () => {
   let user2: Keypair;
 
   let configPda: PublicKey;
-  let redemptionQueuePda: PublicKey;
   let vaultUsdcAta: PublicKey;
-  let vaultUsdOkuAta: PublicKey;
+  let vaultOkuMAta: PublicKey;
 
   let usdcMint: PublicKey;
-  let usdOkuMint: PublicKey;
+  let okuMMint: PublicKey;
 
   let userUsdcAta: PublicKey;
-  let userUsdOkuAta: PublicKey;
+  let userOkuMAta: PublicKey;
   let user2UsdcAta: PublicKey;
-  let user2UsdOkuAta: PublicKey;
+  let user2OkuMAta: PublicKey;
   let orchestratorUsdcAta: PublicKey;
 
   beforeEach(async () => {
@@ -100,24 +99,23 @@ describe("ScaledUiAmount extension behavior", () => {
 
     const psmSetup = await initializePsm(h, program, payer, usdcMint);
     configPda = psmSetup.configPda;
-    redemptionQueuePda = psmSetup.redemptionQueuePda;
-    usdOkuMint = psmSetup.usdOkuMint;
+    okuMMint = psmSetup.okuMMint;
     vaultUsdcAta = psmSetup.vaultUsdcAta;
-    vaultUsdOkuAta = psmSetup.vaultUsdOkuAta;
+    vaultOkuMAta = psmSetup.vaultOkuMAta;
 
     // Derive ATA addresses
     userUsdcAta = getAssociatedTokenAddressSync(usdcMint, user.publicKey, false, TOKEN_PROGRAM_ID);
-    userUsdOkuAta = getAssociatedTokenAddressSync(usdOkuMint, user.publicKey, false, TOKEN_2022_PROGRAM_ID);
+    userOkuMAta = getAssociatedTokenAddressSync(okuMMint, user.publicKey, false, TOKEN_2022_PROGRAM_ID);
     user2UsdcAta = getAssociatedTokenAddressSync(usdcMint, user2.publicKey, false, TOKEN_PROGRAM_ID);
-    user2UsdOkuAta = getAssociatedTokenAddressSync(usdOkuMint, user2.publicKey, false, TOKEN_2022_PROGRAM_ID);
+    user2OkuMAta = getAssociatedTokenAddressSync(okuMMint, user2.publicKey, false, TOKEN_2022_PROGRAM_ID);
     orchestratorUsdcAta = getAssociatedTokenAddressSync(usdcMint, orchestrator.publicKey, false, TOKEN_PROGRAM_ID);
 
     // Create ATAs
     await ensureAtaViaBankrun(h, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
     await ensureAtaViaBankrun(h, user2.publicKey, usdcMint, TOKEN_PROGRAM_ID);
     await ensureAtaViaBankrun(h, orchestrator.publicKey, usdcMint, TOKEN_PROGRAM_ID);
-    await ensureAtaViaBankrun(h, user.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
-    await ensureAtaViaBankrun(h, user2.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, user.publicKey, okuMMint, TOKEN_2022_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, user2.publicKey, okuMMint, TOKEN_2022_PROGRAM_ID);
 
     // Fund with USDC
     await mintToViaBankrun(h, usdcMint, userUsdcAta, payer, 1_000_000_000_000, TOKEN_PROGRAM_ID);
@@ -145,11 +143,11 @@ describe("ScaledUiAmount extension behavior", () => {
   // 1. Mint introspection
   // =========================================================================
 
-  it("usdOku mint has ScaledUiAmount extension with initial multiplier 1.0", async () => {
-    const info = await provider.connection.getAccountInfo(usdOkuMint);
+  it("OkuM mint has ScaledUiAmount extension with initial multiplier 1.0", async () => {
+    const info = await provider.connection.getAccountInfo(okuMMint);
     expect(info).to.not.be.null;
 
-    const mint = unpackMint(usdOkuMint, info!, TOKEN_2022_PROGRAM_ID);
+    const mint = unpackMint(okuMMint, info!, TOKEN_2022_PROGRAM_ID);
 
     // Extensions are stored in tlvData — non-empty means extensions present
     expect(mint.tlvData.length).to.be.greaterThan(0);
@@ -162,7 +160,7 @@ describe("ScaledUiAmount extension behavior", () => {
     expect(mint.decimals).to.equal(6);
 
     // Verify initial multiplier is 1.0
-    const multiplier = await readMultiplierFromMint(h, usdOkuMint);
+    const multiplier = await readMultiplierFromMint(h, okuMMint);
     expect(multiplier.eq(PRECISION)).to.be.true;
   });
 
@@ -171,15 +169,15 @@ describe("ScaledUiAmount extension behavior", () => {
   // =========================================================================
 
   it("raw token balance unchanged after multiplier update", async () => {
-    // Mint 10 USDC worth of usdOku (10_000_000 base units at multiplier 1.0)
+    // Mint 10 USDC worth of okuM (10_000_000 base units at multiplier 1.0)
     const mintAmount = new BN(10_000_000);
-    await mintUsdOkuViaProgram(
+    await mintOkuMViaProgram(
       program, user, mintAmount,
-      configPda, usdcMint, usdOkuMint,
-      userUsdcAta, userUsdOkuAta, vaultUsdcAta
+      configPda, usdcMint, okuMMint,
+      userUsdcAta, userOkuMAta, vaultUsdcAta
     );
 
-    const balBefore = await getAccount(provider.connection, userUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
+    const balBefore = await getAccount(provider.connection, userOkuMAta, undefined, TOKEN_2022_PROGRAM_ID);
     const rawBefore = Number(balBefore.amount);
     expect(rawBefore).to.be.greaterThanOrEqual(mintAmount.toNumber());
 
@@ -190,7 +188,7 @@ describe("ScaledUiAmount extension behavior", () => {
       .accountsPartial({
         rebaser: orchestrator.publicKey,
         config: configPda,
-        usdOkuMint,
+        okuMMint,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
       .signers([orchestrator])
@@ -199,11 +197,11 @@ describe("ScaledUiAmount extension behavior", () => {
     await warpSlots(h, 1);
 
     // Raw balance must NOT have changed after multiplier update
-    const balAfter = await getAccount(provider.connection, userUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID);
+    const balAfter = await getAccount(provider.connection, userOkuMAta, undefined, TOKEN_2022_PROGRAM_ID);
     expect(Number(balAfter.amount)).to.equal(rawBefore);
 
     // Verify the on-chain multiplier matches what we set
-    const actualMultiplier = await readMultiplierFromMint(h, usdOkuMint);
+    const actualMultiplier = await readMultiplierFromMint(h, okuMMint);
     expect(actualMultiplier.eq(newMultiplier)).to.be.true;
   });
 
@@ -219,7 +217,7 @@ describe("ScaledUiAmount extension behavior", () => {
       .accountsPartial({
         rebaser: orchestrator.publicKey,
         config: configPda,
-        usdOkuMint,
+        okuMMint,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
       .signers([orchestrator])
@@ -228,18 +226,18 @@ describe("ScaledUiAmount extension behavior", () => {
 
     // Mint 1 USDC at multiplier 3.0
     const user2OkuBefore = await getAccount(
-      provider.connection, user2UsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID
+      provider.connection, user2OkuMAta, undefined, TOKEN_2022_PROGRAM_ID
     );
     const rawBefore = Number(user2OkuBefore.amount);
 
-    await mintUsdOkuViaProgram(
+    await mintOkuMViaProgram(
       program, user2, new BN(1_000_000),
-      configPda, usdcMint, usdOkuMint,
-      user2UsdcAta, user2UsdOkuAta, vaultUsdcAta
+      configPda, usdcMint, okuMMint,
+      user2UsdcAta, user2OkuMAta, vaultUsdcAta
     );
 
     const user2OkuAfter = await getAccount(
-      provider.connection, user2UsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID
+      provider.connection, user2OkuMAta, undefined, TOKEN_2022_PROGRAM_ID
     );
     const rawMintedAt3x = Number(user2OkuAfter.amount) - rawBefore;
 
@@ -254,7 +252,7 @@ describe("ScaledUiAmount extension behavior", () => {
       .accountsPartial({
         rebaser: orchestrator.publicKey,
         config: configPda,
-        usdOkuMint,
+        okuMMint,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
       .signers([orchestrator])
@@ -264,18 +262,18 @@ describe("ScaledUiAmount extension behavior", () => {
 
     // Use user (not user2) for the second mint to keep things isolated
     const userOkuBefore2 = await getAccount(
-      provider.connection, userUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID
+      provider.connection, userOkuMAta, undefined, TOKEN_2022_PROGRAM_ID
     );
     const rawBefore2 = Number(userOkuBefore2.amount);
 
-    await mintUsdOkuViaProgram(
+    await mintOkuMViaProgram(
       program, user, new BN(1_000_000),
-      configPda, usdcMint, usdOkuMint,
-      userUsdcAta, userUsdOkuAta, vaultUsdcAta
+      configPda, usdcMint, okuMMint,
+      userUsdcAta, userOkuMAta, vaultUsdcAta
     );
 
     const userOkuAfter2 = await getAccount(
-      provider.connection, userUsdOkuAta, undefined, TOKEN_2022_PROGRAM_ID
+      provider.connection, userOkuMAta, undefined, TOKEN_2022_PROGRAM_ID
     );
     const rawMintedAt6x = Number(userOkuAfter2.amount) - rawBefore2;
 
@@ -298,18 +296,18 @@ describe("ScaledUiAmount extension behavior", () => {
       .accountsPartial({
         rebaser: orchestrator.publicKey,
         config: configPda,
-        usdOkuMint,
+        okuMMint,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
       .signers([orchestrator])
       .rpc();
     await warpSlots(h, 1);
 
-    // Mint some usdOku for user to redeem (at multiplier 8.0)
-    await mintUsdOkuViaProgram(
+    // Mint some okuM for user to redeem (at multiplier 8.0)
+    await mintOkuMViaProgram(
       program, user, new BN(10_000_000), // 10 USDC
-      configPda, usdcMint, usdOkuMint,
-      userUsdcAta, userUsdOkuAta, vaultUsdcAta
+      configPda, usdcMint, okuMMint,
+      userUsdcAta, userOkuMAta, vaultUsdcAta
     );
 
     await warpSlots(h, 1);
@@ -321,17 +319,16 @@ describe("ScaledUiAmount extension behavior", () => {
     );
 
     await program.methods
-      .redeemUsdOku(redeemAmount)
+      .redeemOkuM(redeemAmount, new BN(0))
       .accountsPartial({
         user: user.publicKey,
         config: configPda,
-        redemptionQueue: redemptionQueuePda,
         usdcMint,
-        usdOkuMint,
+        okuMMint,
         userUsdcAta,
-        userUsdOkuAta,
+        userOkuMAta,
         vaultUsdc: vaultUsdcAta,
-        vaultUsdOku: vaultUsdOkuAta,
+        vaultOkuM: vaultOkuMAta,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -366,7 +363,7 @@ describe("ScaledUiAmount extension behavior", () => {
       .accountsPartial({
         rebaser: orchestrator.publicKey,
         config: configPda,
-        usdOkuMint,
+        okuMMint,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
       .signers([orchestrator])
@@ -375,7 +372,7 @@ describe("ScaledUiAmount extension behavior", () => {
     await warpSlots(h, 1);
 
     // Verify the multiplier is set
-    const actualMultiplier = await readMultiplierFromMint(h, usdOkuMint);
+    const actualMultiplier = await readMultiplierFromMint(h, okuMMint);
     expect(actualMultiplier.eq(higher)).to.be.true;
 
     // Try to decrease to 1.0 -> should fail
@@ -385,7 +382,7 @@ describe("ScaledUiAmount extension behavior", () => {
         .accountsPartial({
           rebaser: orchestrator.publicKey,
           config: configPda,
-          usdOkuMint,
+          okuMMint,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([orchestrator])
@@ -413,7 +410,7 @@ describe("ScaledUiAmount extension behavior", () => {
         .accountsPartial({
           rebaser: orchestrator.publicKey,
           config: configPda,
-          usdOkuMint,
+          okuMMint,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([orchestrator])
@@ -432,20 +429,20 @@ describe("ScaledUiAmount extension behavior", () => {
   // =========================================================================
 
   it("distribute_yield increments multiplier proportionally", async () => {
-    // Mint some usdOku to create supply (at multiplier 1.0)
-    await mintUsdOkuViaProgram(
+    // Mint some okuM to create supply (at multiplier 1.0)
+    await mintOkuMViaProgram(
       program, user, new BN(10_000_000), // 10 USDC
-      configPda, usdcMint, usdOkuMint,
-      userUsdcAta, userUsdOkuAta, vaultUsdcAta
+      configPda, usdcMint, okuMMint,
+      userUsdcAta, userOkuMAta, vaultUsdcAta
     );
 
     // Verify initial multiplier is 1.0
-    const startMultiplier = await readMultiplierFromMint(h, usdOkuMint);
+    const startMultiplier = await readMultiplierFromMint(h, okuMMint);
     expect(startMultiplier.eq(PRECISION)).to.be.true;
 
     // Read the current supply from the mint
-    const mintInfo = await provider.connection.getAccountInfo(usdOkuMint);
-    const mintData = unpackMint(usdOkuMint, mintInfo!, TOKEN_2022_PROGRAM_ID);
+    const mintInfo = await provider.connection.getAccountInfo(okuMMint);
+    const mintData = unpackMint(okuMMint, mintInfo!, TOKEN_2022_PROGRAM_ID);
     const totalSupply = new BN(mintData.supply.toString());
 
     // Distribute $1 of yield (1_000_000 base units)
@@ -464,7 +461,7 @@ describe("ScaledUiAmount extension behavior", () => {
       .accountsPartial({
         rebaser: orchestrator.publicKey,
         config: configPda,
-        usdOkuMint,
+        okuMMint,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
       .signers([orchestrator])
@@ -473,7 +470,7 @@ describe("ScaledUiAmount extension behavior", () => {
     await warpSlots(h, 1);
 
     // Verify the on-chain multiplier matches the expected computation
-    const actualNewMultiplier = await readMultiplierFromMint(h, usdOkuMint);
+    const actualNewMultiplier = await readMultiplierFromMint(h, okuMMint);
     expect(actualNewMultiplier.eq(expectedNewMultiplier)).to.be.true;
 
     // Verify by redeeming some tokens and checking the USDC payout
@@ -484,17 +481,16 @@ describe("ScaledUiAmount extension behavior", () => {
     );
 
     await program.methods
-      .redeemUsdOku(redeemAmount)
+      .redeemOkuM(redeemAmount, new BN(0))
       .accountsPartial({
         user: user.publicKey,
         config: configPda,
-        redemptionQueue: redemptionQueuePda,
         usdcMint,
-        usdOkuMint,
+        okuMMint,
         userUsdcAta,
-        userUsdOkuAta,
+        userOkuMAta,
         vaultUsdc: vaultUsdcAta,
-        vaultUsdOku: vaultUsdOkuAta,
+        vaultOkuM: vaultOkuMAta,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,

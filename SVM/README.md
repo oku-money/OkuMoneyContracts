@@ -6,14 +6,14 @@
 
 Solana implementation of OkuMoney — institutional-grade yield
 infrastructure backed by US Treasury Bills. Single-token architecture
-(`usdOku`) with ScaledUiAmount-based yield display.
+(`OkuM`) with ScaledUiAmount-based yield display.
 
 ## Stack
 
 - **Language:** Rust 1.90.0 (pinned in `oku-programs/rust-toolchain.toml`)
 - **Framework:** Anchor 1.0.2 (`Anchor.toml` + workspace `Cargo.toml`)
 - **Solana crates:** 3.x series (`solana_version = "3.1.10"` in `Anchor.toml`)
-- **Token standard:** Token-2022 (`usdOku` mint with `ScaledUiAmount` + `MetadataPointer` + `TokenMetadata` extensions)
+- **Token standard:** Token-2022 (`OkuM` mint with `ScaledUiAmount` + `MetadataPointer` + `TokenMetadata` extensions)
 - **Multisig:** Squads Protocol
 - **JavaScript bindings:** `@anchor-lang/core 1.0.x`
 
@@ -26,10 +26,10 @@ queue, yield distribution, compliance (freeze / thaw), and direct
 mint/burn for bridging. Program ID:
 `App49HmtSBMwh42tUpZT7gSbEbq7HiA6QED2BBnXtzxo`. Holds mint
 authority, freeze authority, and `ScaledUiAmountConfig` authority
-over the `usdOku` mint. All program authority is held by a PDA — no
+over the `OkuM` mint. All program authority is held by a PDA — no
 EOA controls minting.
 
-The `initialize` instruction creates the `usdOku` Token-2022 mint
+The `initialize` instruction creates the `OkuM` Token-2022 mint
 with three extensions (`ScaledUiAmount`, `MetadataPointer`,
 `TokenMetadata`) via CPIs to the Token-2022 program.
 
@@ -51,9 +51,9 @@ walks `programs/*` and requires every member to declare an
 There is no on-chain bridge program. Cross-chain transfers use an
 asymmetric model:
 
-- **SVM side:** The orchestrator calls `burn_usd_oku_direct` on the
-  source chain (burns raw usdOku tokens) and `mint_usd_oku_direct`
-  on the destination chain (mints raw usdOku tokens). Raw amounts
+- **SVM side:** The orchestrator calls `burn_oku_m_direct` on the
+  source chain (burns raw OkuM tokens) and `mint_oku_m_direct`
+  on the destination chain (mints raw OkuM tokens). Raw amounts
   are conserved directly — no USDC intermediate on the SVM side.
 - **EVM side:** Still uses PSM-mediated USDC flow
   (`mint` / `redeem`).
@@ -114,7 +114,7 @@ This gives us the best of both models:
 - **Under the hood:** value-appreciating shares, identical to
   JitoSOL/mSOL/USDY -- industry standard, DeFi compatible.
 - **User-facing:** $1-pegged stablecoin display. Deposit 100 USDC,
-  see 100.00 usdOku. After 5% yield, see 105.00 usdOku. Each
+  see 100.00 OkuM. After 5% yield, see 105.00 OkuM. Each
   displayed unit is $1.
 
 The Solana ecosystem is actively standardizing on this pattern.
@@ -132,11 +132,23 @@ stablecoin while accumulating yield through multiplier updates. The
 extension was designed for this use case -- we are simply the first to
 ship it.
 
+### Naming convention
+
+The on-chain token is **OkuM (OkuMoney)** in all code, instruction
+names, field names, and developer-facing surfaces (`oku_m_mint`,
+`mint_oku_m`, `MintOkuM`, etc.). The `TokenMetadata` extension on
+the mint stores `name: "OkuDollar", symbol: "usdOku"` so wallets
+display the $1 stablecoin brand. This split is intentional: the
+codebase uses OkuM naming because the on-chain token IS OkuM (a
+value-appreciating T-Bill-backed token), while the wallet display
+layer presents it as usdOku (a $1-pegged stablecoin) via the
+`ScaledUiAmountConfig` multiplier.
+
 ---
 
 ## Key SVM design choices
 
-**Single token with ScaledUiAmount.** `usdOku` ("OkuDollar") is the
+**Single token with ScaledUiAmount.** `OkuM` ("OkuMoney") is the
 sole protocol token. It is a Token-2022 mint with the
 `ScaledUiAmountConfig` extension, which stores an f64 multiplier.
 Wallets and explorers that support `ScaledUiAmount` render the
@@ -180,7 +192,7 @@ last_yield_distribution_slot` before executing. Self-fence prevents
 same-slot re-entry by the rebaser. Mirrors EVM's
 `lastYieldDistributionBlock`.
 
-**6-decimal token.** `usdOku` uses 6 decimals, matching USDC on
+**6-decimal token.** `OkuM` uses 6 decimals, matching USDC on
 Solana. EVM uses 18 decimals. The off-chain orchestrator handles
 decimal conversion when reflecting value across chains.
 
@@ -220,16 +232,16 @@ programs/
         yield_lock.rs              # check_yield_lock (delegates to shared yield_lock_engaged)
         math.rs                    # Anchor-error-flavoured wrappers over oku_shared::math
       instructions/
-        init.rs                    # initialize (creates usdOku mint with ScaledUiAmount + MetadataPointer +
-                                   # TokenMetadata via CPIs), setup_redemption_queue, setup_usd_oku_escrow
-        psm.rs                     # mint_usd_oku, redeem_usd_oku, process_queue, rescue_queue_entry,
+        init.rs                    # initialize (creates OkuM mint with ScaledUiAmount + MetadataPointer +
+                                   # TokenMetadata via CPIs), setup_redemption_queue, setup_oku_m_escrow
+        psm.rs                     # mint_oku_m, redeem_oku_m, process_queue, rescue_queue_entry,
                                    # user_self_rescue_queue_entry, deposit_buffer, withdraw_buffer
         psm_admin.rs               # pause/unpause, freeze/thaw, set_authority, accept_role_admin,
                                    # cancel_role_admin_transfer, set_max_supply,
                                    # set_minter_allowance, set_direct_minter_allowance,
                                    # set_direct_burner_allowance
-        direct_mint.rs             # mint_usd_oku_direct (bridge/fiat on-ramp)
-        direct_burn.rs             # burn_usd_oku_direct (bridge off-ramp)
+        direct_mint.rs             # mint_oku_m_direct (bridge/fiat on-ramp)
+        direct_burn.rs             # burn_oku_m_direct (bridge off-ramp)
         yield_ops.rs               # set_multiplier, distribute_yield (CPI to Token-2022 UpdateMultiplier)
       contexts/                    # Per-instruction account contexts
 
@@ -266,7 +278,7 @@ pub struct PsmConfig {
     // 13 authority pubkeys: role_admin, pauser, unpauser, freezer, unfreezer,
     //   queue_processor, buffer_depositor, buffer_withdrawer,
     //   cap_manager, allowance_manager, rebaser, direct_minter, direct_burner
-    // Token references: usdc_mint, usd_oku_mint, vault_usdc, vault_usd_oku
+    // Token references: usdc_mint, oku_m_mint, vault_usdc, vault_oku_m
     // Limits: max_supply, minter_allowance, direct_minter_allowance,
     //   direct_burner_allowance, is_paused
     // Yield: last_yield_distribution_slot
@@ -277,13 +289,13 @@ pub struct PsmConfig {
 LEN pinned at 626 bytes by compile-time `assert!`.
 
 The PsmConfig PDA is the **mint authority**, **freeze authority**, and
-**ScaledUiAmount authority** for the `usdOku` mint. All mint/freeze/
+**ScaledUiAmount authority** for the `OkuM` mint. All mint/freeze/
 multiplier-update CPIs are signed by the PDA's seeds.
 
 ### RedemptionQueue PDA (`b"redemption_queue_v3"`)
 
 Zero-copy ring buffer (200 entries max — `MAX_ENTRIES`). Each entry:
-`{ user: Pubkey, raw_usd_oku_amount: u64, timestamp: i64 }` = 48 bytes.
+`{ user: Pubkey, raw_oku_m_amount: u64, timestamp: i64 }` = 48 bytes.
 Total account size 9 640 bytes; rent ~0.067 SOL one-time at deploy.
 Cap of 200 (vs the EVM spec target of 500) is bounded by Solana's
 `MAX_PERMITTED_DATA_INCREASE = 10_240`-byte single-CPI allocation
@@ -295,10 +307,10 @@ indices. `RedemptionQueue::ring_index(abs_index)` +
 
 | Migration date | Affected seeds | Cause |
 |---|---|---|
-| 2026-06-05 (noBridge phase C) | `psm_config → psm_config_v2`, `redemption_queue → redemption_queue_v2`, `oku_dollar_config → oku_dollar_config_v2`, `usd_oku_mint → usd_oku_mint_v2` | `PsmConfig` storage shrank from 722 → 658 bytes after the `blacklist_exempt_*` fields were removed. In-place BPF upgrade would have re-interpreted old slots — security-relevant corruption. Forced PDA rotation via seed bump. |
+| 2026-06-05 (noBridge phase C) | `psm_config → psm_config_v2`, `redemption_queue → redemption_queue_v2`, `oku_money_config → oku_money_config_v2`, `oku_m_mint → oku_m_mint_v2` | `PsmConfig` storage shrank from 722 → 658 bytes after the `blacklist_exempt_*` fields were removed. In-place BPF upgrade would have re-interpreted old slots — security-relevant corruption. Forced PDA rotation via seed bump. |
 | 2026-06-12 (audit-prep cycle) | `psm_config_v2 → psm_config_v3` | PoR fields removed, USDC peg circuit-breaker fields added. Net layout delta: 658 → 674 bytes. Other three SVM seeds unchanged. |
 | 2026-07-01 (direct-mint) | No seed change (in-place realloc) | `direct_minter: Pubkey` + `direct_minter_allowance: u64` appended to `PsmConfig`. Layout delta: 674 → 714 bytes (+40). First in-place `realloc` migration — `migrate_psm_config` extends the account without rotating the PDA seed. All other seeds unchanged. |
-| 2026-07-xx (single-token refactor) | `psm_config_v4 → psm_config_v5`, `redemption_queue_v2 → redemption_queue_v3` | OkuMoney eliminated; `oku_money_mint`/`vault_oku_money`/`oku_m_price` removed from PsmConfig; `usd_oku_mint`/`vault_usd_oku` added. Queue entries changed from `oku_m_amount` to `raw_usd_oku_amount`. `oku-dollar` program deleted entirely. Fresh program ID (`App49HmtSBMwh42tUpZT7gSbEbq7HiA6QED2BBnXtzxo`). |
+| 2026-07-xx (single-token refactor) | `psm_config_v4 → psm_config_v5`, `redemption_queue_v2 → redemption_queue_v3` | OkuMoney eliminated; `oku_money_mint`/`vault_oku_money`/`oku_m_price` removed from PsmConfig; `oku_m_mint`/`vault_oku_m` added. Queue entries changed from `oku_m_amount` to `raw_oku_m_amount`. `oku-dollar` program deleted entirely. Fresh program ID (`App49HmtSBMwh42tUpZT7gSbEbq7HiA6QED2BBnXtzxo`). |
 
 **Orphan-PDA inventory** (devnet, post-rotation): pre-rotation PDAs +
 SPL mints are orphaned because their `owner` field still references
@@ -332,7 +344,7 @@ first test that touches the rotated PDA.
 ### Yield (ScaledUiAmount multiplier)
 
 ```rust
-// Set the ScaledUiAmount multiplier on the usdOku mint — REBASER only, monotonic
+// Set the ScaledUiAmount multiplier on the OkuM mint — REBASER only, monotonic
 // CPIs into Token-2022 UpdateMultiplier
 pub fn set_multiplier(new_multiplier: f64)
 
@@ -353,14 +365,14 @@ no duplicate field on `PsmConfig`.
 ### PSM
 
 ```rust
-// raw_usd_oku_amount = usdc_amount (1:1 at raw level; ScaledUiAmount handles display)
-pub fn mint_usd_oku(usdc_amount: u64)
+// raw_oku_m_amount = usdc_amount (1:1 at raw level; ScaledUiAmount handles display)
+pub fn mint_oku_m(usdc_amount: u64)
 
-// usdc_amount = raw_usd_oku_amount (1:1 at raw level)
-pub fn redeem_usd_oku(raw_usd_oku_amount: u64)     // instant or queued
+// usdc_amount = raw_oku_m_amount (1:1 at raw level)
+pub fn redeem_oku_m(raw_oku_m_amount: u64)     // instant or queued
 
 pub fn process_queue(max_entries: u32)               // hard-capped at MAX_BATCH_ENTRIES=50
-pub fn rescue_queue_entry(queue_index: u64)          // operator: return usdOku for stuck entries
+pub fn rescue_queue_entry(queue_index: u64)          // operator: return OkuM for stuck entries
 pub fn user_self_rescue_queue_entry(queue_index: u64)  // permissionless self-rescue
 pub fn deposit_buffer(amount: u64)                   // top up USDC vault
 pub fn withdraw_buffer(amount: u64)                  // drain USDC vault (ceil-rounded reservation)
@@ -371,13 +383,13 @@ All protected by yield-lock.
 ### Direct mint / burn (bridging + fiat on-ramp)
 
 ```rust
-// Mint raw usdOku tokens — DIRECT_MINTER only
+// Mint raw OkuM tokens — DIRECT_MINTER only
 // Used for cross-chain bridging (SVM side) and fiat on-ramp
-pub fn mint_usd_oku_direct(amount: u64)
+pub fn mint_oku_m_direct(amount: u64)
 
-// Burn raw usdOku tokens — DIRECT_BURNER only
+// Burn raw OkuM tokens — DIRECT_BURNER only
 // Used for cross-chain bridging off-ramp
-pub fn burn_usd_oku_direct(amount: u64)
+pub fn burn_oku_m_direct(amount: u64)
 ```
 
 Raw amounts are conserved across chains — no multiplier conversion
@@ -387,16 +399,16 @@ separately by the rebaser on each chain.
 ### Cross-chain (noBridge, v1)
 
 No on-chain bridge instructions. The orchestrator uses
-`burn_usd_oku_direct` on the source chain and `mint_usd_oku_direct`
+`burn_oku_m_direct` on the source chain and `mint_oku_m_direct`
 on the destination chain, conserving raw token amounts directly.
 
 **SVM ≠ EVM bridging model:** SVM uses direct raw-amount
 burn/mint (no USDC intermediate). EVM still uses PSM-mediated USDC
 flow. The orchestrator handles this asymmetry.
 
-**`mint_usd_oku` is fully permissionless.** Any USDC holder can call
+**`mint_oku_m` is fully permissionless.** Any USDC holder can call
 it; the orchestrator does NOT hold a privileged mint authority for
-PSM operations. The PSM config PDA is the usdOku mint authority and
+PSM operations. The PSM config PDA is the OkuM mint authority and
 signs the inner `mint_to` CPI. Orchestrator key compromise does not
 grant mint privilege beyond the orchestrator's direct_minter
 allowance. This property is load-bearing;
@@ -446,7 +458,7 @@ None can be changed without a program upgrade.
 | `PRECISION` | `1_000_000_000` (1e9) | Fixed-point base for all multiplier math. |
 | `BASIS_POINTS` | `10_000` | Universal bps denominator. |
 | `MAX_MULTIPLIER` | `1_000_000_000_000_000` (1e15, = $1M/token) | Overflow guard / f64 precision boundary. Math-sanity bound. |
-| `TOKEN_DECIMALS` | `6` | usdOku uses 6 decimals on SVM (matches USDC). Asserted at init. |
+| `TOKEN_DECIMALS` | `6` | OkuM uses 6 decimals on SVM (matches USDC). Asserted at init. |
 
 ### Lite-PSM
 
@@ -474,7 +486,7 @@ SVM-specific table:
 | `role_admin` | Cold Multisig (Squads) | Rotate any other role via `set_authority` (two-step `accept_role_admin` handshake for its own transfer) | Meta-role. Quorum breach = full system compromise. Two-step rotation catches typos. No-op rejection on self-assignment. |
 | `pauser` | Warm Multisig | Set `is_paused = true`, halting mint/redeem | Cannot unpause (requires `unpauser`). Cannot access funds. |
 | `unpauser` | Cold Multisig | Clear `is_paused` | — |
-| `freezer` | Warm Multisig | CPI-freeze any usdOku ATA via Token-2022 freeze authority | Cannot drain or redirect frozen tokens. |
+| `freezer` | Warm Multisig | CPI-freeze any OkuM ATA via Token-2022 freeze authority | Cannot drain or redirect frozen tokens. |
 | `unfreezer` | Cold Multisig | CPI-thaw a frozen ATA | — |
 | `rebaser` | Orchestrator (KMS) | Update ScaledUiAmount multiplier (non-decreasing) and call `distribute_yield` | Cannot decrease; capped at `MAX_MULTIPLIER`. Self-fenced (same-slot re-entry rejected). |
 | `queue_processor` | Orchestrator | `process_queue` (pays USDC to queued entries) + `rescue_queue_entry` | Pays the entry's `user` field; cannot reroute. Rescue per-entry only. |
@@ -482,8 +494,8 @@ SVM-specific table:
 | `buffer_withdrawer` | Cold Multisig | Drain USDC from the PSM vault | Cannot withdraw below USDC reserved for pending queue entries. Ceil-rounded reservation. |
 | `cap_manager` | Cold Multisig | Set `max_supply` | Cannot set below current circulating supply. |
 | `allowance_manager` | Cold Multisig | Set `minter_allowance`, `direct_minter_allowance`, and `direct_burner_allowance` | Bounded by `max_supply`; PSM PDA is the mint authority. |
-| `direct_minter` | Operator / Bridge Orchestrator | `mint_usd_oku_direct` (raw usdOku without USDC) | Bounded by `direct_minter_allowance` + `max_supply`. No USDC collateral on-chain — fiat/bridge backing is off-chain. |
-| `direct_burner` | Operator / Bridge Orchestrator | `burn_usd_oku_direct` (raw usdOku burn for bridge off-ramp) | Bounded by `direct_burner_allowance`. Burns from caller's ATA only. |
+| `direct_minter` | Operator / Bridge Orchestrator | `mint_oku_m_direct` (raw OkuM without USDC) | Bounded by `direct_minter_allowance` + `max_supply`. No USDC collateral on-chain — fiat/bridge backing is off-chain. |
+| `direct_burner` | Operator / Bridge Orchestrator | `burn_oku_m_direct` (raw OkuM burn for bridge off-ramp) | Bounded by `direct_burner_allowance`. Burns from caller's ATA only. |
 
 ---
 
@@ -493,13 +505,13 @@ PSM initialization is split into three instructions to avoid BPF
 stack overflow on the large account contexts:
 
 1. `initialize(InitializeParams)` — creates `PsmConfig` and the USDC
-   vault. Also creates the `usdOku` Token-2022 mint with three
+   vault. Also creates the `OkuM` Token-2022 mint with three
    extensions: `ScaledUiAmount` (multiplier authority = PsmConfig PDA),
    `MetadataPointer`, and `TokenMetadata`. The PsmConfig PDA is set as
    mint authority and freeze authority.
 2. `setup_redemption_queue` — creates the `RedemptionQueue` PDA.
    Emits `QueueInitializedEvent`.
-3. `setup_usd_oku_escrow` — creates the usdOku escrow vault.
+3. `setup_oku_m_escrow` — creates the OkuM escrow vault.
    Emits `EscrowInitializedEvent`.
 
 No on-chain bridge or router is deployed (noBridge model).
@@ -623,7 +635,7 @@ npm run cost                  # ~0.067 SOL for the queue rent alone
 # Phase 1 — deploy program .so file
 NETWORK=devnet npm run deploy:programs
 
-# Phase 2 — create usdOku mint + initialize PSM
+# Phase 2 — create OkuM mint + initialize PSM
 NETWORK=devnet npm run deploy:init
 
 # Mainnet — transfer program upgrade authority to cold multisig
@@ -646,7 +658,7 @@ solana program set-upgrade-authority <LITE_PSM_PROGRAM> --new-upgrade-authority 
 In v1 (noBridge) the orchestrator holds a single Solana keypair that
 is granted roles for `buffer_depositor`, `queue_processor`, `rebaser`,
 `direct_minter`, and `direct_burner`. For cross-chain transfers it
-calls `burn_usd_oku_direct` / `mint_usd_oku_direct`. It also holds
+calls `burn_oku_m_direct` / `mint_oku_m_direct`. It also holds
 the matching EVM key on the other side. Both keys KMS-backed.
 
 A future on-chain bridge (NTT, CCIP, native OkuBridge port) would
@@ -657,10 +669,10 @@ add a separate signing scheme — out of v1 scope.
 The `RedemptionQueue` is a fixed 200-entry zero-copy ring. Operations
 discipline:
 
-- Keep `vault_usdc.amount` topped up so `redeem_usd_oku` falls into
+- Keep `vault_usdc.amount` topped up so `redeem_oku_m` falls into
   the instant path.
 - If the queue fills (200 simultaneously-pending redemptions), the
-  201st `redeem_usd_oku` reverts with `QueueFull`. The fix is to call
+  201st `redeem_oku_m` reverts with `QueueFull`. The fix is to call
   `process_queue` from a `queue_processor`-keyed orchestrator.
 - `process_queue` is hard-capped at `MAX_BATCH_ENTRIES = 50` per tx.
   To drain 200 entries you need at least 4 `process_queue` calls.
@@ -736,10 +748,10 @@ EVM groups protocol-wide invariants into `EVM/src/lib/`:
 ### Single-token architecture
 
 EVM has two tokens: `OkuMoney` (non-rebasing, stored price) and
-`OkuDollar` (rebasing wrapper vault). SVM has a single token:
-`usdOku`, which is a Token-2022 mint with the `ScaledUiAmountConfig`
+`OkuMoney` (rebasing wrapper vault). SVM has a single token:
+`OkuM`, which is a Token-2022 mint with the `ScaledUiAmountConfig`
 extension. Raw balances are static (like EVM OkuMoney); displayed
-dollar values scale with the multiplier (like EVM OkuDollar).
+dollar values scale with the multiplier (like EVM OkuMoney).
 
 This eliminates the need for wrap/unwrap, the vault program, dead
 shares, collateral ratios, and the two-program CPI chain.
@@ -755,7 +767,7 @@ and `distribute_yield()` write it via CPI to the Token-2022 program.
 
 ### Rebasing model
 
-EVM `OkuDollar` accrues USD yield continuously between calls via
+EVM `OkuMoney` accrues USD yield continuously between calls via
 `MathLib._rpow`. SVM uses discrete `set_multiplier` updates driven
 by the orchestrator. Solana's Token-2022 `ScaledUiAmount` extension
 stores a flat scalar (no per-second compounding), so wallets cannot
@@ -785,7 +797,7 @@ block/slot.
 
 | Aspect | EVM | SVM |
 |---|---|---|
-| Bridge mechanism | PSM-mediated USDC flow (`mint` / `redeem`) | Direct raw-amount `burn_usd_oku_direct` / `mint_usd_oku_direct` |
+| Bridge mechanism | PSM-mediated USDC flow (`mint` / `redeem`) | Direct raw-amount `burn_oku_m_direct` / `mint_oku_m_direct` |
 | USDC intermediate | yes | no |
 | Multiplier during bridge | not applicable (USDC is 1:1) | raw amounts conserved; multiplier synced separately by rebaser |
 
@@ -800,7 +812,7 @@ The orchestrator handles this asymmetry transparently.
 | Strict FIFO | yes (`head` / `tail`) | yes (`head` / `tail` u64 absolute indices) |
 | Batch limit | none | `MAX_BATCH_ENTRIES = 50` per `process_queue` tx (CU budget) |
 | Head-pin recovery | random-access `[startIndex, endIndex]` ranges | permissionless `user_self_rescue_queue_entry` |
-| Entry amount field | `okuMAmount` | `raw_usd_oku_amount` |
+| Entry amount field | `okuMAmount` | `raw_oku_m_amount` |
 
 ### DeFi compatibility
 
@@ -821,7 +833,7 @@ global approval table.
 ### Round-trip drift
 
 PSM mint/redeem rounding direction is identical on both sides
-(round down, favouring the protocol). End-to-end USDC → usdOku → USDC
+(round down, favouring the protocol). End-to-end USDC → OkuM → USDC
 round-trips lose at most 1 wei (EVM) / 1 micro-USDC (SVM) of dust
 per round-trip from integer-division truncation.
 
@@ -831,7 +843,7 @@ The orchestrator holds:
 
 - A Solana keypair with `buffer_depositor`, `queue_processor`,
   `rebaser`, `direct_minter`, and `direct_burner` roles. Uses
-  `burn_usd_oku_direct` / `mint_usd_oku_direct` for cross-chain
+  `burn_oku_m_direct` / `mint_oku_m_direct` for cross-chain
   settlement.
 - An EVM EOA with `PSM_BUFFER_DEPOSITOR`, `PSM_QUEUE_PROCESSOR`,
   `OKUM_REBASER` (and a separate EVM owner key for relevant LitePSM
@@ -844,9 +856,9 @@ nonces, no refund flow — all cross-chain coordination is off-chain.
 
 | Component | EVM | SVM | Notes |
 |---|---|---|---|
-| `OkuMoney` (ERC-20) | yes | no | SVM uses single `usdOku` token |
-| `OkuDollar` vault | yes (separate contract) | no | SVM uses `ScaledUiAmount` instead |
-| `usdOku` (Token-2022 + ScaledUiAmount) | no | yes | SVM-only single token |
+| `OkuMoney` (ERC-20) | yes | no | SVM uses single `OkuM` token |
+| `OkuMoney` vault | yes (separate contract) | no | SVM uses `ScaledUiAmount` instead |
+| `OkuM` (Token-2022 + ScaledUiAmount) | no | yes | SVM-only single token |
 | `LitePSM` | yes (`EVM/src/psm/LitePSM.sol`) | yes (`programs/lite-psm`) | parity (different token model) |
 | `RedemptionQueue` | inside `LitePSM` | inside `lite-psm` (`state::RedemptionQueue`) | parity |
 | On-chain bridge | removed in noBridge | removed in noBridge | both sides v1 are off-chain orchestrator-mediated |

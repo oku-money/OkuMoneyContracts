@@ -1,7 +1,7 @@
 /**
  * PSM init-time mint-extension validation tests.
  *
- * `initialize` creates the usdOku mint with Token-2022 extensions:
+ * `initialize` creates the OkuM mint with Token-2022 extensions:
  *   - ScaledUiAmount (multiplier for yield accrual)
  *   - MetadataPointer (points to the mint itself)
  *   - TokenMetadata (name, symbol, URI)
@@ -26,7 +26,7 @@ import { initializePsm, DECIMALS } from "../shared/setup";
 
 const PRECISION = new BN(1_000_000_000);
 
-describe("init invariants (usdOku mint extensions)", () => {
+describe("init invariants (OkuM mint extensions)", () => {
   let h: BankrunHarness;
   let program: Program<LitePsm>;
   let payer: Keypair;
@@ -37,7 +37,7 @@ describe("init invariants (usdOku mint extensions)", () => {
     payer = h.payer;
   });
 
-  it("initialize creates the usdOku mint with ScaledUiAmount, MetadataPointer, and TokenMetadata extensions and initial multiplier of 1.0", async () => {
+  it("initialize creates the OkuM mint with ScaledUiAmount, MetadataPointer, and TokenMetadata extensions and initial multiplier of 1.0", async () => {
     // Standard USDC mint
     const usdcMint = await createMintViaBankrun(
       h,
@@ -48,14 +48,14 @@ describe("init invariants (usdOku mint extensions)", () => {
       TOKEN_PROGRAM_ID
     );
 
-    // Initialize PSM — creates PsmConfig + USDC vault + usdOku mint
+    // Initialize PSM — creates PsmConfig + USDC vault + OkuM mint
     // (the program creates the Token-2022 mint with extensions via CPI)
     const psmSetup = await initializePsm(h, program, payer, usdcMint);
-    const { usdOkuMint, configPda } = psmSetup;
+    const { okuMMint, configPda } = psmSetup;
 
-    // Verify the usdOku mint was created as a Token-2022 mint
-    const mintAcctInfo = await h.provider.connection.getAccountInfo(usdOkuMint);
-    expect(mintAcctInfo, "usdOku mint account should exist").to.not.be.null;
+    // Verify the OkuM mint was created as a Token-2022 mint
+    const mintAcctInfo = await h.provider.connection.getAccountInfo(okuMMint);
+    expect(mintAcctInfo, "OkuM mint account should exist").to.not.be.null;
     expect(mintAcctInfo!.owner.equals(TOKEN_2022_PROGRAM_ID)).to.be.true;
 
     // The mint account should be larger than a plain mint (MINT_SIZE = 82)
@@ -64,7 +64,7 @@ describe("init invariants (usdOku mint extensions)", () => {
     expect(mintAcctInfo!.data.length).to.be.greaterThan(MINT_SIZE);
 
     // Parse the mint and verify basic properties
-    const mintData = unpackMint(usdOkuMint, mintAcctInfo!, TOKEN_2022_PROGRAM_ID);
+    const mintData = unpackMint(okuMMint, mintAcctInfo!, TOKEN_2022_PROGRAM_ID);
     expect(mintData.mintAuthority?.equals(configPda)).to.be.true;
     expect(Number(mintData.decimals)).to.equal(DECIMALS);
 
@@ -73,8 +73,8 @@ describe("init invariants (usdOku mint extensions)", () => {
     // extensions were initialized.
     expect(mintData.tlvData.length).to.be.greaterThan(0);
 
-    // Verify PsmConfig references the correct usdOku mint
+    // Verify PsmConfig references the correct OkuM mint
     const config = await program.account.psmConfig.fetch(configPda);
-    expect(config.usdOkuMint.equals(usdOkuMint)).to.be.true;
+    expect(config.okuMMint.equals(okuMMint)).to.be.true;
   });
 });

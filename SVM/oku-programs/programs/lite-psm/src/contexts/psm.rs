@@ -9,7 +9,7 @@ use anchor_spl::{
 };
 
 #[derive(Accounts)]
-pub struct MintUsdOku<'info> {
+pub struct MintOkuM<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
@@ -24,18 +24,18 @@ pub struct MintUsdOku<'info> {
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Account<'info, Mint>,
 
-    /// usdOku mint (Token-2022 with ScaledUiAmount extension).
+    /// OkuM mint (Token-2022 with ScaledUiAmount extension).
     /// `mint::authority = config` is defense-in-depth: even if someone attempted
     /// an out-of-band mint-authority rotation (which requires a CPI signed by
     /// the current authority = config PDA, so it cannot happen without the
     /// program's consent), this constraint would catch it at deserialization.
     #[account(
         mut,
-        address = config.usd_oku_mint,
+        address = config.oku_m_mint,
         mint::authority = config,
         mint::token_program = token_2022_program
     )]
-    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub oku_m_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// User's USDC account
     #[account(
@@ -46,15 +46,15 @@ pub struct MintUsdOku<'info> {
     )]
     pub user_usdc_ata: Box<Account<'info, TokenAccount>>,
 
-    /// User's usdOku account
+    /// User's OkuM account
     #[account(
         init_if_needed,
         payer = user,
-        associated_token::mint = usd_oku_mint,
+        associated_token::mint = oku_m_mint,
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub user_oku_m_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// PSM's USDC vault
     #[account(
@@ -70,7 +70,7 @@ pub struct MintUsdOku<'info> {
 }
 
 #[derive(Accounts)]
-pub struct RedeemUsdOku<'info> {
+pub struct RedeemOkuM<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
@@ -84,16 +84,16 @@ pub struct RedeemUsdOku<'info> {
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Box<Account<'info, Mint>>,
 
-    /// usdOku mint (Token-2022 with ScaledUiAmount extension).
+    /// OkuM mint (Token-2022 with ScaledUiAmount extension).
     /// `mint::authority = config` is defense-in-depth
-    /// (see rationale on `MintUsdOku::usd_oku_mint`).
+    /// (see rationale on `MintOkuM::oku_m_mint`).
     #[account(
         mut,
-        address = config.usd_oku_mint,
+        address = config.oku_m_mint,
         mint::authority = config,
         mint::token_program = token_2022_program
     )]
-    pub usd_oku_mint: Box<InterfaceAccount<'info, MintInterface>>,
+    pub oku_m_mint: Box<InterfaceAccount<'info, MintInterface>>,
 
     /// User's USDC account
     #[account(
@@ -105,14 +105,14 @@ pub struct RedeemUsdOku<'info> {
     )]
     pub user_usdc_ata: Box<Account<'info, TokenAccount>>,
 
-    /// User's usdOku account
+    /// User's OkuM account
     #[account(
         mut,
-        associated_token::mint = usd_oku_mint,
+        associated_token::mint = oku_m_mint,
         associated_token::authority = user,
         associated_token::token_program = token_2022_program,
     )]
-    pub user_usd_oku_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub user_oku_m_ata: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     /// PSM's USDC vault
     #[account(

@@ -20,8 +20,6 @@ import { PublicKey } from '@solana/web3.js';
 import { Program, BN } from '@anchor-lang/core';
 import {
   derivePsmConfigPDA,
-  deriveRedemptionQueuePDA,
-  deriveVaultConfigPDA,
 } from '../utils/pdaHelpers';
 
 // ============================================================================
@@ -33,7 +31,6 @@ export type StateSnapshot = Record<string, string>;
 /** Anchor program handles needed for state reading. */
 export interface ProgramSet {
   psm: Program;
-  vault: Program;
 }
 
 export interface FieldDiff {
@@ -71,7 +68,7 @@ function str(v: unknown): string {
 /**
  * Snapshot LitePSM's invariant on-chain state.
  *
- * Two PDAs are read: PsmConfig and RedemptionQueue.
+ * Reads the PsmConfig PDA.
  * Fields that legitimately change between admin ops (price, nonces, balances)
  * are omitted — we only capture structural/config fields that must stay
  * identical across an upgrade.
@@ -81,7 +78,6 @@ export async function readLitePsmState(
   programId: PublicKey
 ): Promise<StateSnapshot> {
   const [psmConfigPDA] = derivePsmConfigPDA(programId);
-  const [redemptionQueuePDA] = deriveRedemptionQueuePDA(programId);
 
   const snap: StateSnapshot = {};
 
@@ -93,62 +89,14 @@ export async function readLitePsmState(
     snap['psm.pauser']             = str(cfg.pauser);
     snap['psm.unpauser']           = str(cfg.unpauser);
     snap['psm.usdcMint']           = str(cfg.usdcMint);
-    snap['psm.okuMoneyMint']       = str(cfg.okuMoneyMint);
+    snap['psm.okuMMint']           = str(cfg.okuMMint);
     snap['psm.maxSupply']          = str(cfg.maxSupply);
-    // Direct-mint fields (added in the direct-mint migration)
     snap['psm.directMinter']           = str(cfg.directMinter);
     snap['psm.directMinterAllowance']  = str(cfg.directMinterAllowance);
-    // Direct-burn fields (added in the direct-burn migration v2)
     snap['psm.directBurner']           = str(cfg.directBurner);
     snap['psm.directBurnerAllowance']  = str(cfg.directBurnerAllowance);
   } catch (e: any) {
     snap['psm.fetchError'] = (e.message ?? String(e)).slice(0, 120);
-  }
-
-  // RedemptionQueue
-  try {
-    const q: any = await psm.account['redemptionQueue'].fetch(redemptionQueuePDA);
-    snap['queue.capacity'] = str(q.capacity);
-    // head/tail are monotonically increasing — include for completeness but a
-    // mismatch between pre- and post-upgrade is only possible if an admin
-    // queued/processed between the two reads, which can't happen atomically.
-    snap['queue.head'] = str(q.head);
-    snap['queue.tail'] = str(q.tail);
-  } catch (e: any) {
-    snap['queue.fetchError'] = (e.message ?? String(e)).slice(0, 120);
-  }
-
-  return snap;
-}
-
-/**
- * Snapshot OkuDollar's invariant on-chain state.
- *
- * Reads the OkuDollarConfig PDA.
- */
-export async function readOkuDollarState(
-  vault: Program,
-  programId: PublicKey
-): Promise<StateSnapshot> {
-  const [vaultConfigPDA] = deriveVaultConfigPDA(programId);
-  const snap: StateSnapshot = {};
-
-  try {
-    const vc: any = await vault.account['okuDollarConfig'].fetch(vaultConfigPDA);
-    snap['vault.isPaused']      = str(vc.isPaused);
-    snap['vault.roleAdmin']     = str(vc.roleAdmin);
-    snap['vault.pauser']        = str(vc.pauser);
-    snap['vault.unpauser']      = str(vc.unpauser);
-    snap['vault.usdRebaser']    = str(vc.usdRebaser);
-    snap['vault.reserveManager'] = str(vc.reserveManager);
-    snap['vault.okuMoneyMint']  = str(vc.okuMoneyMint);
-    snap['vault.usdOkuMint']    = str(vc.usdOkuMint);
-    snap['vault.reserveVault']  = str(vc.reserveVault);
-    snap['vault.psmConfig']     = str(vc.psmConfig);
-    snap['vault.usdMultiplier'] = str(vc.usdMultiplier);
-    snap['vault.minCollateralRatio'] = str(vc.minCollateralRatio);
-  } catch (e: any) {
-    snap['vault.fetchError'] = (e.message ?? String(e)).slice(0, 120);
   }
 
   return snap;
@@ -165,7 +113,6 @@ export type StateReader = (
 
 export const STATE_READERS: Record<string, StateReader> = {
   LitePsm:   (ps, id) => readLitePsmState(ps.psm, id),
-  OkuDollar: (ps, id) => readOkuDollarState(ps.vault, id),
 };
 
 // ============================================================================

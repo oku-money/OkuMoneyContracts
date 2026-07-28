@@ -1,8 +1,8 @@
 //! Sandwich-attack guard for yield distribution.
 //!
 //! Same-slot lock (Solana analogue of EVM's `block.number` lock) used by
-//! both lite-psm and oku-dollar to block user operations in the same
-//! slot as a yield distribution. SVM port of the EVM-side
+//! lite-psm to block user operations in the same slot as a yield
+//! distribution. SVM port of the EVM-side
 //! `YieldSandwichGuard` (`EVM/src/lib/YieldSandwichGuard.sol`).
 //!
 //! Cycle 4 (OKUD-20): the slot comparison itself lives in
@@ -18,9 +18,9 @@ use oku_shared::yield_lock_engaged;
 /// yield distribution.
 ///
 /// This prevents sandwich attacks where an attacker:
-///   1. Frontruns `distribute_yield()` with `mint_usd_oku()` at the old
-///      (lower) price.
-///   2. Backruns with `redeem_usd_oku()` at the new (higher) price.
+///   1. Frontruns `distribute_yield()` with `mint_oku_m()` at the old
+///      (lower) multiplier.
+///   2. Backruns with `redeem_oku_m()` at the new (higher) multiplier.
 ///
 /// The lock uses Solana slots (~400 ms each) and auto-releases in
 /// subsequent slots.

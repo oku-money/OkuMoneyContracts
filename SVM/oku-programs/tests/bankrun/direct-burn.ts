@@ -1,13 +1,13 @@
 /**
  * Direct-Burn Integration Tests
  *
- * Tests the permissioned usdOku burn path that does NOT trigger a USDC
- * payout. Matches EVM's `UsdOku.burn(amount)` called by a non-PSM
+ * Tests the permissioned okuM burn path that does NOT trigger a USDC
+ * payout. Matches EVM's `OkuM.burn(amount)` called by a non-PSM
  * `OKUM_BURNER` role holder. Enables SVM->EVM bridging where the
  * KMS-backed orchestrator burns on the source chain.
  *
  * Covers:
- *   - `burn_usd_oku_direct` — permissioned direct usdOku burn from burner's ATA
+ *   - `burn_oku_m_direct` — permissioned direct okuM burn from burner's ATA
  *   - `set_direct_burner_allowance` — admin allowance management
  */
 
@@ -51,14 +51,14 @@ describe("direct-burn", () => {
   const directMinter = Keypair.generate();
 
   // Mints
-  let usdOkuMint: PublicKey;
+  let okuMMint: PublicKey;
   let usdcMint: PublicKey;
 
   // PDAs
   let psmConfigPda: PublicKey;
 
   // ATAs
-  let burnerUsdOkuAta: PublicKey;
+  let burnerOkuMAta: PublicKey;
 
   const DIRECT_BURNER_ALLOWANCE = new BN(50_000_000_000); // 50k with 6 decimals
   const DIRECT_MINTER_ALLOWANCE = new BN(50_000_000_000); // 50k with 6 decimals
@@ -79,10 +79,10 @@ describe("direct-burn", () => {
       TOKEN_PROGRAM_ID
     );
 
-    // Initialize PSM (creates usdOku mint internally)
+    // Initialize PSM (creates OkuM mint internally)
     const psmSetup = await initializePsm(h, psmProgram, payer, usdcMint);
     psmConfigPda = psmSetup.configPda;
-    usdOkuMint = psmSetup.usdOkuMint;
+    okuMMint = psmSetup.okuMMint;
 
     // Fund keypairs
     await fundKeypairs(
@@ -129,24 +129,24 @@ describe("direct-burn", () => {
       .signers([coldMultisig])
       .rpc();
 
-    // Derive burner's usdOku ATA
-    burnerUsdOkuAta = getAssociatedTokenAddressSync(
-      usdOkuMint,
+    // Derive burner's okuM ATA
+    burnerOkuMAta = getAssociatedTokenAddressSync(
+      okuMMint,
       directBurner.publicKey,
       false,
       TOKEN_2022_PROGRAM_ID
     );
 
-    // Mint some usdOku to the burner so it has tokens to burn
-    const mintAmount = new BN(30_000_000_000); // 30k usdOku
+    // Mint some OkuM to the burner so it has tokens to burn
+    const mintAmount = new BN(30_000_000_000); // 30k okuM
     await psmProgram.methods
-      .mintUsdOkuDirect(mintAmount)
+      .mintOkuMDirect(mintAmount)
       .accountsPartial({
         directMinter: directMinter.publicKey,
         config: psmConfigPda,
-        usdOkuMint,
+        okuMMint,
         recipient: directBurner.publicKey,
-        recipientUsdOkuAta: burnerUsdOkuAta,
+        recipientOkuMAta: burnerOkuMAta,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
@@ -211,13 +211,13 @@ describe("direct-burn", () => {
   });
 
   // ==========================================================================
-  // burn_usd_oku_direct
+  // burn_oku_m_direct
   // ==========================================================================
 
-  describe("burn_usd_oku_direct", () => {
-    const BURN_AMOUNT = new BN(5_000_000); // 5 usdOku
+  describe("burn_oku_m_direct", () => {
+    const BURN_AMOUNT = new BN(5_000_000); // 5 okuM
 
-    it("burns usdOku from burner's ATA without USDC payout", async () => {
+    it("burns okuM from burner's ATA without USDC payout", async () => {
       // Record state before
       const configBefore = await psmProgram.account.psmConfig.fetch(
         psmConfigPda
@@ -225,19 +225,19 @@ describe("direct-burn", () => {
       const allowanceBefore = configBefore.directBurnerAllowance;
       const burnerAccountBefore = await getAccount(
         h.provider.connection,
-        burnerUsdOkuAta,
+        burnerOkuMAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
       const balanceBefore = Number(burnerAccountBefore.amount);
 
       await psmProgram.methods
-        .burnUsdOkuDirect(BURN_AMOUNT)
+        .burnOkuMDirect(BURN_AMOUNT)
         .accountsPartial({
           directBurner: directBurner.publicKey,
           config: psmConfigPda,
-          usdOkuMint,
-          burnerUsdOkuAta,
+          okuMMint,
+          burnerOkuMAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([directBurner])
@@ -246,7 +246,7 @@ describe("direct-burn", () => {
       // Verify burner's balance decreased
       const burnerAccountAfter = await getAccount(
         h.provider.connection,
-        burnerUsdOkuAta,
+        burnerOkuMAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -268,21 +268,21 @@ describe("direct-burn", () => {
 
       // Get supply before
       const mintBefore = await h.provider.connection.getAccountInfo(
-        usdOkuMint
+        okuMMint
       );
       const supplyBefore = unpackMint(
-        usdOkuMint,
+        okuMMint,
         mintBefore,
         TOKEN_2022_PROGRAM_ID
       ).supply;
 
       await psmProgram.methods
-        .burnUsdOkuDirect(BURN_AMOUNT)
+        .burnOkuMDirect(BURN_AMOUNT)
         .accountsPartial({
           directBurner: directBurner.publicKey,
           config: psmConfigPda,
-          usdOkuMint,
-          burnerUsdOkuAta,
+          okuMMint,
+          burnerOkuMAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([directBurner])
@@ -290,10 +290,10 @@ describe("direct-burn", () => {
 
       // Get supply after
       const mintAfter = await h.provider.connection.getAccountInfo(
-        usdOkuMint
+        okuMMint
       );
       const supplyAfter = unpackMint(
-        usdOkuMint,
+        okuMMint,
         mintAfter,
         TOKEN_2022_PROGRAM_ID
       ).supply;
@@ -307,12 +307,12 @@ describe("direct-burn", () => {
       await expectBankrunError(
         () =>
           psmProgram.methods
-            .burnUsdOkuDirect(new BN(0))
+            .burnOkuMDirect(new BN(0))
             .accountsPartial({
               directBurner: directBurner.publicKey,
               config: psmConfigPda,
-              usdOkuMint,
-              burnerUsdOkuAta,
+              okuMMint,
+              burnerOkuMAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
             })
             .signers([directBurner])
@@ -335,12 +335,12 @@ describe("direct-burn", () => {
       await expectBankrunError(
         () =>
           psmProgram.methods
-            .burnUsdOkuDirect(BURN_AMOUNT)
+            .burnOkuMDirect(BURN_AMOUNT)
             .accountsPartial({
               directBurner: directBurner.publicKey,
               config: psmConfigPda,
-              usdOkuMint,
-              burnerUsdOkuAta,
+              okuMMint,
+              burnerOkuMAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
             })
             .signers([directBurner])
@@ -373,12 +373,12 @@ describe("direct-burn", () => {
       await expectBankrunError(
         () =>
           psmProgram.methods
-            .burnUsdOkuDirect(BURN_AMOUNT)
+            .burnOkuMDirect(BURN_AMOUNT)
             .accountsPartial({
               directBurner: directBurner.publicKey,
               config: psmConfigPda,
-              usdOkuMint,
-              burnerUsdOkuAta,
+              okuMMint,
+              burnerOkuMAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
             })
             .signers([directBurner])
@@ -405,19 +405,19 @@ describe("direct-burn", () => {
       const imposterAta = await ensureAtaViaBankrun(
         h,
         imposter.publicKey,
-        usdOkuMint,
+        okuMMint,
         TOKEN_2022_PROGRAM_ID
       );
 
       await expectBankrunError(
         () =>
           psmProgram.methods
-            .burnUsdOkuDirect(BURN_AMOUNT)
+            .burnOkuMDirect(BURN_AMOUNT)
             .accountsPartial({
               directBurner: imposter.publicKey,
               config: psmConfigPda,
-              usdOkuMint,
-              burnerUsdOkuAta: imposterAta,
+              okuMMint,
+              burnerOkuMAta: imposterAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
             })
             .signers([imposter])
@@ -445,19 +445,19 @@ describe("direct-burn", () => {
       const poorBurnerAta = await ensureAtaViaBankrun(
         h,
         poorBurner.publicKey,
-        usdOkuMint,
+        okuMMint,
         TOKEN_2022_PROGRAM_ID
       );
 
       await expectBankrunError(
         () =>
           psmProgram.methods
-            .burnUsdOkuDirect(BURN_AMOUNT)
+            .burnOkuMDirect(BURN_AMOUNT)
             .accountsPartial({
               directBurner: poorBurner.publicKey,
               config: psmConfigPda,
-              usdOkuMint,
-              burnerUsdOkuAta: poorBurnerAta,
+              okuMMint,
+              burnerOkuMAta: poorBurnerAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
             })
             .signers([poorBurner])

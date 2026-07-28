@@ -1,7 +1,7 @@
 //! # oku-shared
 //!
 //! Protocol-wide constants and pure-math primitives shared by the
-//! usdOku SVM workspace (`lite-psm` and any future program that needs
+//! OkuM SVM workspace (`lite-psm` and any future program that needs
 //! to agree on a number with the rest of the protocol).
 //!
 //! This crate is the SVM-side counterpart to `EVM/src/lib/Constants.sol` +

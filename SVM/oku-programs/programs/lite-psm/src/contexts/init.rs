@@ -25,7 +25,7 @@ pub struct Initialize<'info> {
     /// USDC mint (standard SPL).
     ///
     /// Must have exactly `TOKEN_DECIMALS` (= 6) decimals on Solana —
-    /// this matches the `usdOku` decimal model. EVM resolves
+    /// this matches the `OkuM` decimal model. EVM resolves
     /// a runtime `usdcDecimalMultiplier` from `IERC20Metadata.decimals()`;
     /// SVM hardcodes the value via the shared constant and asserts at
     /// init.
@@ -34,7 +34,7 @@ pub struct Initialize<'info> {
     )]
     pub usdc_mint: Box<Account<'info, Mint>>,
 
-    /// Fresh keypair for the usdOku mint (Token-2022).
+    /// Fresh keypair for the OkuM mint (Token-2022).
     ///
     /// The instruction creates this mint via manual CPIs with
     /// ScaledUiAmount + MetadataPointer + TokenMetadata extensions.
@@ -42,7 +42,7 @@ pub struct Initialize<'info> {
     /// and ScaledUiAmount authority. Passed as a `Signer` because
     /// `CreateAccount` requires the new account to sign.
     #[account(mut)]
-    pub usd_oku_mint: Signer<'info>,
+    pub oku_m_mint: Signer<'info>,
 
     /// PSM's USDC vault
     #[account(

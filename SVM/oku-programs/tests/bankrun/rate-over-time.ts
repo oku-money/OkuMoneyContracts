@@ -5,9 +5,9 @@
  * and wall-clock progression, validating that:
  *
  *   1. `set_multiplier` bumps the PSM `multiplier` and a subsequent
- *      `redeem_usd_oku` returns the corresponding higher USDC payout.
+ *      `redeem_oku_m` returns the corresponding higher USDC payout.
  *   2. `distribute_yield(yield_amount)` bumps the multiplier proportional
- *      to `yield_amount / total_supply` and `redeem_usd_oku` reflects the
+ *      to `yield_amount / total_supply` and `redeem_oku_m` reflects the
  *      bump across multiple ticks.
  *   3. The yield-distribution sandwich lock fires on a same-slot
  *      mint/redeem and releases on the next slot — verified with a
@@ -41,7 +41,7 @@ import {
   psmOrchestrator,
   initializePsm,
   ensurePSMUnpaused,
-  mintUsdOkuViaProgram,
+  mintOkuMViaProgram,
   DECIMALS,
 } from "../shared/setup";
 import {
@@ -74,15 +74,14 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
   const user = Keypair.generate();
 
   let usdcMint: PublicKey;
-  let usdOkuMint: PublicKey;
+  let okuMMint: PublicKey;
 
   let psmConfigPda: PublicKey;
-  let redemptionQueuePda: PublicKey;
   let vaultUsdcAta: PublicKey;
-  let vaultUsdOkuAta: PublicKey;
+  let vaultOkuMAta: PublicKey;
 
   let userUsdcAta: PublicKey;
-  let userUsdOkuAta: PublicKey;
+  let userOkuMAta: PublicKey;
   let orchestratorUsdcAta: PublicKey;
 
   before(async () => {
@@ -109,10 +108,9 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
 
     const psmSetup = await initializePsm(h, psm, payer, usdcMint);
     psmConfigPda = psmSetup.configPda;
-    redemptionQueuePda = psmSetup.redemptionQueuePda;
-    usdOkuMint = psmSetup.usdOkuMint;
+    okuMMint = psmSetup.okuMMint;
     vaultUsdcAta = psmSetup.vaultUsdcAta;
-    vaultUsdOkuAta = psmSetup.vaultUsdOkuAta;
+    vaultOkuMAta = psmSetup.vaultOkuMAta;
 
     // User / orchestrator ATAs.
     userUsdcAta = await ensureAtaViaBankrun(h, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
@@ -122,28 +120,28 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
       usdcMint,
       TOKEN_PROGRAM_ID
     );
-    userUsdOkuAta = getAssociatedTokenAddressSync(
-      usdOkuMint,
+    userOkuMAta = getAssociatedTokenAddressSync(
+      okuMMint,
       user.publicKey,
       false,
       TOKEN_2022_PROGRAM_ID
     );
-    await ensureAtaViaBankrun(h, user.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, user.publicKey, okuMMint, TOKEN_2022_PROGRAM_ID);
 
     // Fund users with USDC.
     await mintToViaBankrun(h, usdcMint, userUsdcAta, payer, 100_000_000_000, TOKEN_PROGRAM_ID); // 100k
     await mintToViaBankrun(h, usdcMint, orchestratorUsdcAta, payer, 100_000_000_000, TOKEN_PROGRAM_ID);
 
-    // Mint usdOku to user (50k).
-    await mintUsdOkuViaProgram(
+    // Mint okuM to user (50k).
+    await mintOkuMViaProgram(
       psm as any,
       user,
       new BN(50_000_000_000),
       psmConfigPda,
       usdcMint,
-      usdOkuMint,
+      okuMMint,
       userUsdcAta,
-      userUsdOkuAta,
+      userOkuMAta,
       vaultUsdcAta
     );
 
@@ -170,25 +168,24 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
   // 1. PSM multiplier tick under explicit slot progression
   // -------------------------------------------------------------------
 
-  it("redeem_usd_oku payout tracks set_multiplier across explicit slot ticks", async () => {
-    const m0 = await readMultiplierFromMint(h, usdOkuMint);
+  it("redeem_oku_m payout tracks set_multiplier across explicit slot ticks", async () => {
+    const m0 = await readMultiplierFromMint(h, okuMMint);
 
-    // Redeem at m0 -> expected: usd_oku * m0 / PRECISION.
-    const redeemAmt = new BN(1_000_000_000); // 1000 usdOku
+    // Redeem at m0 -> expected: oku_m * m0 / PRECISION.
+    const redeemAmt = new BN(1_000_000_000); // 1000 okuM
     const expectedUsdc0 = redeemAmt.mul(m0).div(PRECISION);
     const usdcBefore0 = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
     await psm.methods
-      .redeemUsdOku(redeemAmt)
+      .redeemOkuM(redeemAmt, new BN(0))
       .accountsPartial({
         user: user.publicKey,
         config: psmConfigPda,
-        redemptionQueue: redemptionQueuePda,
         usdcMint,
-        usdOkuMint,
+        okuMMint,
         userUsdcAta,
-        userUsdOkuAta,
+        userOkuMAta,
         vaultUsdc: vaultUsdcAta,
-        vaultUsdOku: vaultUsdOkuAta,
+        vaultOkuM: vaultOkuMAta,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -208,7 +205,7 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
       .accountsPartial({
         rebaser: orchestrator.publicKey,
         config: psmConfigPda,
-        usdOkuMint,
+        okuMMint,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
       .signers([orchestrator])
@@ -225,17 +222,16 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
     const expectedUsdc1 = redeemAmt.mul(m1).div(PRECISION);
     const usdcBefore1 = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
     await psm.methods
-      .redeemUsdOku(redeemAmt)
+      .redeemOkuM(redeemAmt, new BN(0))
       .accountsPartial({
         user: user.publicKey,
         config: psmConfigPda,
-        redemptionQueue: redemptionQueuePda,
         usdcMint,
-        usdOkuMint,
+        okuMMint,
         userUsdcAta,
-        userUsdOkuAta,
+        userOkuMAta,
         vaultUsdc: vaultUsdcAta,
-        vaultUsdOku: vaultUsdOkuAta,
+        vaultOkuM: vaultOkuMAta,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -249,7 +245,7 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
     );
 
     // The tick payout must be strictly larger than the pre-tick payout
-    // (same usdOku input, higher multiplier).
+    // (same okuM input, higher multiplier).
     expect(expectedUsdc1.gt(expectedUsdc0)).to.be.true;
   });
 
@@ -258,14 +254,14 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
   // -------------------------------------------------------------------
 
   it("distribute_yield bumps multiplier by yield/supply across consecutive slot ticks", async () => {
-    const m0 = await readMultiplierFromMint(h, usdOkuMint);
+    const m0 = await readMultiplierFromMint(h, okuMMint);
 
-    // Read live usdOku supply — distribute_yield uses this as the
+    // Read live okuM supply — distribute_yield uses this as the
     // denominator (`new_multiplier = old + yield * PRECISION / supply`).
     const { unpackMint } = await import("@solana/spl-token");
-    const mintAcct0 = await provider.connection.getAccountInfo(usdOkuMint);
+    const mintAcct0 = await provider.connection.getAccountInfo(okuMMint);
     const supply0 = new BN(
-      unpackMint(usdOkuMint, mintAcct0!, TOKEN_2022_PROGRAM_ID).supply.toString()
+      unpackMint(okuMMint, mintAcct0!, TOKEN_2022_PROGRAM_ID).supply.toString()
     );
 
     // === Tick A: distribute_yield($10) ===
@@ -278,7 +274,7 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
       .accountsPartial({
         rebaser: orchestrator.publicKey,
         config: psmConfigPda,
-        usdOkuMint,
+        okuMMint,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
       .signers([orchestrator])
@@ -292,9 +288,9 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
     await warpSlots(h, 1);
 
     // === Tick B: distribute_yield($20) at the (unchanged) supply ===
-    const mintAcctB = await provider.connection.getAccountInfo(usdOkuMint);
+    const mintAcctB = await provider.connection.getAccountInfo(okuMMint);
     const supplyB = new BN(
-      unpackMint(usdOkuMint, mintAcctB!, TOKEN_2022_PROGRAM_ID).supply.toString()
+      unpackMint(okuMMint, mintAcctB!, TOKEN_2022_PROGRAM_ID).supply.toString()
     );
     const yieldB = new BN(20_000_000);
     const expectedDeltaB = yieldB.mul(PRECISION).div(supplyB);
@@ -305,7 +301,7 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
       .accountsPartial({
         rebaser: orchestrator.publicKey,
         config: psmConfigPda,
-        usdOkuMint,
+        okuMMint,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
       .signers([orchestrator])
@@ -320,21 +316,20 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
     // === Downstream redeem at the cumulative multiplier ===
     await warpSlots(h, 1);
 
-    const redeemAmt = new BN(500_000_000); // 500 usdOku
+    const redeemAmt = new BN(500_000_000); // 500 okuM
     const expectedUsdc = redeemAmt.mul(mBExpected).div(PRECISION);
     const usdcBefore = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
     await psm.methods
-      .redeemUsdOku(redeemAmt)
+      .redeemOkuM(redeemAmt, new BN(0))
       .accountsPartial({
         user: user.publicKey,
         config: psmConfigPda,
-        redemptionQueue: redemptionQueuePda,
         usdcMint,
-        usdOkuMint,
+        okuMMint,
         userUsdcAta,
-        userUsdOkuAta,
+        userOkuMAta,
         vaultUsdc: vaultUsdcAta,
-        vaultUsdOku: vaultUsdOkuAta,
+        vaultOkuM: vaultOkuMAta,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -377,7 +372,7 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
   // -------------------------------------------------------------------
 
   it("3 x small set_multiplier ticks compose to a strictly higher redeem payout", async () => {
-    const mStart = await readMultiplierFromMint(h, usdOkuMint);
+    const mStart = await readMultiplierFromMint(h, okuMMint);
 
     let mCurrent = mStart;
     for (let i = 0; i < 3; i++) {
@@ -387,7 +382,7 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
         .accountsPartial({
           rebaser: orchestrator.publicKey,
           config: psmConfigPda,
-          usdOkuMint,
+          okuMMint,
           token2022Program: TOKEN_2022_PROGRAM_ID,
         })
         .signers([orchestrator])
@@ -397,22 +392,21 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
     }
     const mAfter3Ticks = mCurrent;
 
-    // Redeem 100 usdOku at the final composed multiplier.
+    // Redeem 100 okuM at the final composed multiplier.
     const redeemAmt = new BN(100_000_000);
     const expectedUsdc = redeemAmt.mul(mAfter3Ticks).div(PRECISION);
     const usdcBefore = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
     await psm.methods
-      .redeemUsdOku(redeemAmt)
+      .redeemOkuM(redeemAmt, new BN(0))
       .accountsPartial({
         user: user.publicKey,
         config: psmConfigPda,
-        redemptionQueue: redemptionQueuePda,
         usdcMint,
-        usdOkuMint,
+        okuMMint,
         userUsdcAta,
-        userUsdOkuAta,
+        userOkuMAta,
         vaultUsdc: vaultUsdcAta,
-        vaultUsdOku: vaultUsdOkuAta,
+        vaultOkuM: vaultOkuMAta,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -450,13 +444,12 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
   const user = Keypair.generate();
 
   let usdcMint: PublicKey;
-  let usdOkuMint: PublicKey;
+  let okuMMint: PublicKey;
   let psmConfigPda: PublicKey;
-  let redemptionQueuePda: PublicKey;
   let vaultUsdcAta: PublicKey;
-  let vaultUsdOkuAta: PublicKey;
+  let vaultOkuMAta: PublicKey;
   let userUsdcAta: PublicKey;
-  let userUsdOkuAta: PublicKey;
+  let userOkuMAta: PublicKey;
   let orchestratorUsdcAta: PublicKey;
 
   before(async () => {
@@ -483,10 +476,9 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
 
     const psmSetup = await initializePsm(h, psm, payer, usdcMint);
     psmConfigPda = psmSetup.configPda;
-    redemptionQueuePda = psmSetup.redemptionQueuePda;
-    usdOkuMint = psmSetup.usdOkuMint;
+    okuMMint = psmSetup.okuMMint;
     vaultUsdcAta = psmSetup.vaultUsdcAta;
-    vaultUsdOkuAta = psmSetup.vaultUsdOkuAta;
+    vaultOkuMAta = psmSetup.vaultOkuMAta;
     await warpSlots(h, 1);
 
     userUsdcAta = await ensureAtaViaBankrun(h, user.publicKey, usdcMint, TOKEN_PROGRAM_ID);
@@ -498,13 +490,13 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
       TOKEN_PROGRAM_ID
     );
     await warpSlots(h, 1);
-    userUsdOkuAta = getAssociatedTokenAddressSync(
-      usdOkuMint,
+    userOkuMAta = getAssociatedTokenAddressSync(
+      okuMMint,
       user.publicKey,
       false,
       TOKEN_2022_PROGRAM_ID
     );
-    await ensureAtaViaBankrun(h, user.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, user.publicKey, okuMMint, TOKEN_2022_PROGRAM_ID);
     await warpSlots(h, 1);
 
     await mintToViaBankrun(h, usdcMint, userUsdcAta, payer, 5_000_000_000, TOKEN_PROGRAM_ID);
@@ -519,15 +511,15 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
     );
     await warpSlots(h, 1);
 
-    await mintUsdOkuViaProgram(
+    await mintOkuMViaProgram(
       psm as any,
       user,
       new BN(1_000_000_000),
       psmConfigPda,
       usdcMint,
-      usdOkuMint,
+      okuMMint,
       userUsdcAta,
-      userUsdOkuAta,
+      userOkuMAta,
       vaultUsdcAta
     );
     await warpSlots(h, 1);
@@ -548,7 +540,7 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
   });
 
   it("same-slot redeem after set_multiplier reverts with YieldDistributionInProgress; next slot succeeds", async () => {
-    const m0 = await readMultiplierFromMint(h, usdOkuMint);
+    const m0 = await readMultiplierFromMint(h, okuMMint);
     const m1 = m0.add(m0.div(new BN(100))); // +1%
 
     // Stamp the yield-lock slot.
@@ -557,7 +549,7 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
       .accountsPartial({
         rebaser: orchestrator.publicKey,
         config: psmConfigPda,
-        usdOkuMint,
+        okuMMint,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
       .signers([orchestrator])
@@ -567,17 +559,16 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
     await expectBankrunError(
       () =>
         psm.methods
-          .redeemUsdOku(new BN(1_000_000))
+          .redeemOkuM(new BN(1_000_000), new BN(0))
           .accountsPartial({
             user: user.publicKey,
             config: psmConfigPda,
-            redemptionQueue: redemptionQueuePda,
             usdcMint,
-            usdOkuMint,
+            okuMMint,
             userUsdcAta,
-            userUsdOkuAta,
+            userOkuMAta,
             vaultUsdc: vaultUsdcAta,
-            vaultUsdOku: vaultUsdOkuAta,
+            vaultOkuM: vaultOkuMAta,
             tokenProgram: TOKEN_PROGRAM_ID,
             token2022Program: TOKEN_2022_PROGRAM_ID,
             associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -595,17 +586,16 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
     const expectedUsdc = redeemAmt.mul(m1).div(PRECISION);
     const usdcBefore = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
     await psm.methods
-      .redeemUsdOku(redeemAmt)
+      .redeemOkuM(redeemAmt, new BN(0))
       .accountsPartial({
         user: user.publicKey,
         config: psmConfigPda,
-        redemptionQueue: redemptionQueuePda,
         usdcMint,
-        usdOkuMint,
+        okuMMint,
         userUsdcAta,
-        userUsdOkuAta,
+        userOkuMAta,
         vaultUsdc: vaultUsdcAta,
-        vaultUsdOku: vaultUsdOkuAta,
+        vaultOkuM: vaultOkuMAta,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,

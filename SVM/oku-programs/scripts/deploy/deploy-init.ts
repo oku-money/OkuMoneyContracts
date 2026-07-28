@@ -27,7 +27,6 @@ import {
   getDeploymentConfig,
   deployTokens,
   initializePsm,
-  initializeVault,
   verifyDeployment,
 } from './lib';
 
@@ -66,12 +65,10 @@ async function main() {
 
   const programIds = {
     litePsm: new PublicKey(existingDeployment.programs.litePsm),
-    okuDollar: new PublicKey(existingDeployment.programs.okuDollarProgram),
   };
 
   logger.info('Found deployed programs:');
   logger.info(`  lite_psm: ${programIds.litePsm.toBase58()}`);
-  logger.info(`  oku_dollar: ${programIds.okuDollar.toBase58()}`);
   logger.log('');
 
   // Create provider
@@ -92,7 +89,7 @@ async function main() {
   const [psmConfigPDA] = derivePsmConfigPDA(programIds.litePsm);
 
   // Deploy tokens (idempotent — reuses any mints already in the deployment file)
-  const { usdcMint, okuMoneyMint } = await deployTokens(
+  const { usdcMint, okuMMint } = await deployTokens(
     provider,
     psmConfigPDA,
     authorities,
@@ -100,31 +97,19 @@ async function main() {
   );
   logger.log('');
 
-  // Initialize PSM
+  // Initialize PSM (single-token model: OkuM mint with ScaledUiAmountConfig)
   const {
     psmConfig,
-    redemptionQueue,
     vaultUsdc: psmVaultUsdc,
-    vaultOkuMoney: psmOkuMoneyEscrow,
+    vaultOkuM: psmOkuMEscrow,
   } = await initializePsm(
     provider,
     programIds.litePsm,
     usdcMint,
-    okuMoneyMint,
+    okuMMint,
     authorities,
     config,
     networkConfig
-  );
-  logger.log('');
-
-  // Initialize Vault
-  const { vaultConfig, usdOkuMint, reserveVault: vaultOkuMoney } = await initializeVault(
-    provider,
-    programIds.okuDollar,
-    programIds.litePsm,
-    okuMoneyMint,
-    authorities,
-    config
   );
   logger.log('');
 
@@ -134,24 +119,13 @@ async function main() {
     timestamp: new Date().toISOString(),
     tokens: {
       usdc: usdcMint.toBase58(),
-      okuMoney: okuMoneyMint.toBase58(),
-      usdOku: usdOkuMint.toBase58(),
+      okuM: okuMMint.toBase58(),
     },
     programs: existingDeployment.programs,
     pdas: {
       psmConfig: psmConfig.toBase58(),
-      redemptionQueue: redemptionQueue.toBase58(),
-      vaultConfig: vaultConfig.toBase58(),
-      // PSM-owned ATAs (created by `initialize()` / `setup_oku_money_escrow()`).
-      // Persisted so admin/test scripts can read them without re-deriving
-      // from mint+config at every call site.
       psmVaultUsdc: psmVaultUsdc.toBase58(),
-      psmOkuMoneyEscrow: psmOkuMoneyEscrow.toBase58(),
-      // Vault-owned OkuMoney reserve ATA, returned by `initializeVault`
-      // as `reserveVault`. Distinct from `psmOkuMoneyEscrow` above:
-      //   - `psmOkuMoneyEscrow` holds queued-redemption escrow on the PSM.
-      //   - `vaultOkuMoney` holds the OkuDollar vault's reserves backing usdOku.
-      vaultOkuMoney: vaultOkuMoney.toBase58(),
+      psmOkuMoneyEscrow: psmOkuMEscrow.toBase58(),
     },
     authorities: {
       coldMultisig: authorities.psm.roleAdmin.toBase58(),

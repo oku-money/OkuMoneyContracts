@@ -24,7 +24,7 @@
 /// Standard precision for multipliers (1e9 = $1.00).
 ///
 /// SVM equivalent of EVM's `Constants.PRECISION = 1e18`. Used by the
-/// usdOku multiplier and all dollar-conversion math in `lite-psm`.
+/// OkuM multiplier and all dollar-conversion math in `lite-psm`.
 pub const PRECISION: u64 = 1_000_000_000;
 
 /// Basis-points denominator (10_000 = 100%). Mirrors EVM
@@ -35,7 +35,7 @@ pub const BASIS_POINTS: u64 = 10_000;
 // Multiplier ceiling
 // ---------------------------------------------------------------------------
 
-/// Absolute maximum allowed value for the usdOku multiplier.
+/// Absolute maximum allowed value for the OkuM multiplier.
 ///
 /// Set to `1e15` (≈ $1,000,000.00 per raw token), which is far above any
 /// realistic yield trajectory and keeps subsequent `u64 * u64 -> u128`
@@ -48,7 +48,7 @@ pub const MAX_MULTIPLIER: u64 = 1_000_000_000_000_000;
 // Token decimals
 // ---------------------------------------------------------------------------
 
-/// usdOku uses 6 decimals on SVM (matching USDC's representation on
+/// OkuM uses 6 decimals on SVM (matching USDC's representation on
 /// Solana). EVM uses 18 decimals; the off-chain orchestrator handles
 /// the cross-chain scale conversion.
 pub const TOKEN_DECIMALS: u8 = 6;

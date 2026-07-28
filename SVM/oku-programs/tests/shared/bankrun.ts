@@ -436,7 +436,7 @@ export async function tryProcess(
 }
 
 /**
- * Read the current effective multiplier from a usdOku mint's
+ * Read the current effective multiplier from a OkuM mint's
  * ScaledUiAmountConfig extension. Returns the multiplier as a BN
  * scaled by PRECISION (1e9), matching the on-chain representation.
  *

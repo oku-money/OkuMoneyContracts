@@ -1,4 +1,4 @@
-//! # usdOku Lite-PSM Errors
+//! # OkuM Lite-PSM Errors
 //!
 //! Error codes for the Lite-PSM program.
 //! Aligned with EVM custom errors where applicable.
@@ -14,7 +14,7 @@
 //! | `InsufficientBuffer` | `InsufficientBuffer()` |
 //! | `MultiplierCannotDecrease` | `MultiplierCannotDecrease()` |
 //! | `YieldDistributionInProgress` | `YieldDistributionInProgress()` |
-//! | `OutputBelowMinimum` | `OutputBelowMinimum(uint256 actual, uint256 minimum)` |
+//! | `OutputBelowMinimum` | N/A (zero-output guard; EVM uses `OutputBelowMinimum` for slippage) |
 //! | `AmountTooSmall` | `AmountTooSmall()` |
 //! | `InvalidUsdcDecimals` | (initialize-time decimals check) |
 
@@ -49,7 +49,7 @@ pub enum LitePsmError {
 
     /// Proposed `max_supply` is below the current circulating supply.
     /// Setting it would silently brick all future mints. EVM
-    /// `usdOku.setMaxSupply` parity.
+    /// `OkuM.setMaxSupply` parity.
     #[msg("New max_supply must be >= current circulating supply")]
     BelowCurrentSupply,
 
@@ -64,11 +64,11 @@ pub enum LitePsmError {
     #[msg("Insufficient buffer for redemption")]
     InsufficientBuffer,
 
-    /// User does not hold enough usdOku to satisfy the redemption.
+    /// User does not hold enough OkuM to satisfy the redemption.
     /// Cycle 4 (PSM-11): separated from `InsufficientBuffer` to remove
     /// the misleading "the PSM's buffer is empty" interpretation.
     /// EVM analogue: `ERC20InsufficientBalance` (OZ standard revert).
-    #[msg("User does not hold enough usdOku for redemption")]
+    #[msg("User does not hold enough OkuM for redemption")]
     InsufficientUserBalance,
 
     // ===== Arithmetic Errors =====
@@ -129,31 +129,21 @@ pub enum LitePsmError {
     #[msg("Caller is not the pending role admin")]
     NotPendingRoleAdmin,
 
-    /// Escrow vault already initialized
-    #[msg("Escrow vault already initialized")]
-    EscrowAlreadyInitialized,
-
     // ===== Initialization Errors =====
     /// USDC mint must have exactly 6 decimals on Solana.
     /// EVM uses a runtime-resolved `usdcDecimalMultiplier`; SVM hardcodes 6.
     #[msg("USDC mint must have exactly 6 decimals")]
     InvalidUsdcDecimals,
 
-    /// usdOku mint must have exactly 6 decimals on Solana.
-    /// All PSM math (multiplier, distribute_yield, raw-to-dollars)
-    /// assumes 6-decimal raw token amounts; a mismatched decimal count
-    /// would silently break every accounting path.
-    #[msg("usdOku mint must have exactly 6 decimals")]
-    InvalidUsdOkuDecimals,
-
-    // ===== PSM Math / Slippage Errors =====
+    // ===== PSM Math Errors =====
     /// Mint output rounded down to zero (multiplier too high relative to input).
     /// EVM: AmountTooSmall()
     #[msg("Output amount too small (rounds to zero)")]
     AmountTooSmall,
 
-    /// Redeem output below user-specified minimum (slippage exceeded).
-    /// EVM: OutputBelowMinimum(uint256 actual, uint256 minimum)
-    #[msg("Output below minimum (slippage exceeded)")]
+    /// Redeem output is zero. At low `raw_oku_m_amount` and near-unit
+    /// multiplier, the floor division can truncate to zero, which would
+    /// burn OkuM for no USDC.
+    #[msg("Redeem output is zero")]
     OutputBelowMinimum,
 }

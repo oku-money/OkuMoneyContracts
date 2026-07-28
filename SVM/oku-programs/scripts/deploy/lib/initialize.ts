@@ -16,7 +16,6 @@ import { NetworkConfig } from '../../config/networks';
 import { DIRECT_MINTER_ALLOWANCE } from '../../config/constants';
 import {
   derivePsmConfigPDA,
-  deriveRedemptionQueuePDA,
 } from '../../utils/pdaHelpers';
 import { loadIdlWithAddress } from './programs';
 import { DeploymentConfig } from './config';
@@ -31,7 +30,7 @@ import litePsmIdl from '../../../target/idl/lite_psm.json';
  * Anchor 1.0 surfaces this in multiple ways depending on the construction
  * path: the legacy 'already in use' string, AnchorError with code
  * `AccountAlreadyInitialized` (= 0), or the program-level
- * `EscrowAlreadyInitialized` from lite-psm's `setup_usd_oku_escrow`.
+ * `EscrowAlreadyInitialized` from lite-psm's `setup_oku_m_escrow`.
  * We check all of them; brittle string-only matching has bitten us across
  * Anchor minor-version bumps.
  */
@@ -62,7 +61,6 @@ function isAlreadyInitialized(error: any): boolean {
 
 export interface PsmInitResult {
   psmConfig: PublicKey;
-  redemptionQueue: PublicKey;
   /**
    * USDC vault ATA, owned by `psmConfig`. Created by `initialize()`.
    * Persisted into the deployment file as `pdas.psmVaultUsdc` for
@@ -71,10 +69,10 @@ export interface PsmInitResult {
    */
   vaultUsdc: PublicKey;
   /**
-   * usdOku escrow ATA, owned by `psmConfig`. Created by
-   * `setup_usd_oku_escrow()`. Persisted as `pdas.psmUsdOkuEscrow`.
+   * OkuM escrow ATA, owned by `psmConfig`. Created by
+   * `setup_oku_m_escrow()`. Persisted as `pdas.psmOkuMEscrow`.
    */
-  vaultUsdOku: PublicKey;
+  vaultOkuM: PublicKey;
 }
 
 /**
@@ -84,7 +82,7 @@ export async function initializePsm(
   provider: AnchorProvider,
   programId: PublicKey,
   usdcMint: PublicKey,
-  usdOkuMint: PublicKey,
+  okuMMint: PublicKey,
   authorities: ReturnType<typeof loadAuthorities>,
   config: DeploymentConfig,
   networkConfig: NetworkConfig
@@ -95,7 +93,6 @@ export async function initializePsm(
   const program = new Program(idl as any, provider);
 
   const [psmConfig] = derivePsmConfigPDA(programId);
-  const [redemptionQueue] = deriveRedemptionQueuePDA(programId);
 
   // PSM vault accounts
   const vaultUsdc = getAssociatedTokenAddressSync(usdcMint, psmConfig, true, TOKEN_PROGRAM_ID);
@@ -113,7 +110,6 @@ export async function initializePsm(
         unpauser: authorities.psm.unpauser,
         freezer: authorities.psm.freezer,
         unfreezer: authorities.psm.unfreezer,
-        queueProcessor: authorities.psm.queueProcessor,
         bufferDepositor: authorities.psm.bufferDepositor,
         bufferWithdrawer: authorities.psm.bufferWithdrawer,
         capManager: authorities.psm.capManager,
@@ -124,7 +120,7 @@ export async function initializePsm(
         roleAdmin: provider.wallet.publicKey,
         config: psmConfig,
         usdcMint: usdcMint,
-        usdOkuMint: usdOkuMint,
+        okuMMint: okuMMint,
         vaultUsdc: vaultUsdc,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -141,35 +137,14 @@ export async function initializePsm(
     }
   }
 
-  // Setup redemption queue
-  logger.info('Setting up redemption queue...');
-  try {
-    await program.methods
-      .setupRedemptionQueue()
-      .accountsPartial({
-        roleAdmin: provider.wallet.publicKey,
-        config: psmConfig,
-        redemptionQueue: redemptionQueue,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
-    logger.success('Redemption queue initialized');
-  } catch (error: any) {
-    if (isAlreadyInitialized(error)) {
-      logger.warning('Redemption queue already exists');
-    } else {
-      throw error;
-    }
-  }
-
   // Bridge init / supported-chain / fee-recipient ATA setup removed in
   // the noBridge refactor (phase B). v1 cross-chain transfers are
-  // mediated by an off-chain orchestrator that calls `mint_usd_oku` /
-  // `redeem_usd_oku` directly; no on-chain bridge state remains.
+  // mediated by an off-chain orchestrator that calls `mint_oku_m` /
+  // `redeem_oku_m` directly; no on-chain bridge state remains.
 
-  // Setup usdOku escrow vault (for queued redemptions).
+  // Setup OkuM escrow vault.
   //
-  // Idempotency note: `setupUsdOkuEscrow()` creates an Associated Token
+  // Idempotency note: `setupOkuMEscrow()` creates an Associated Token
   // Account at the derived address. On a second deploy:init run, the ATA
   // already exists, and the ATA program returns `Provided owner is not
   // allowed` (NOT one of Anchor's standard already-initialized codes)
@@ -183,35 +158,35 @@ export async function initializePsm(
   // If so, skip the on-chain call entirely. This is safer than catching
   // the post-failure error string (which can drift across Solana
   // versions).
-  const vaultUsdOku = getAssociatedTokenAddressSync(usdOkuMint, psmConfig, true, TOKEN_2022_PROGRAM_ID);
-  logger.info('Setting up usdOku escrow vault...');
+  const vaultOkuM = getAssociatedTokenAddressSync(okuMMint, psmConfig, true, TOKEN_2022_PROGRAM_ID);
+  logger.info('Setting up OkuM escrow vault...');
 
   const existingAtaInfo = await provider.connection.getAccountInfo(
-    vaultUsdOku,
+    vaultOkuM,
     'confirmed'
   );
   if (existingAtaInfo && existingAtaInfo.owner.equals(TOKEN_2022_PROGRAM_ID)) {
     logger.warning(
-      `usdOku escrow vault ATA ${vaultUsdOku.toBase58()} already exists (Token-2022 program). Skipping setup.`
+      `OkuM escrow vault ATA ${vaultOkuM.toBase58()} already exists (Token-2022 program). Skipping setup.`
     );
   } else {
     try {
       await program.methods
-        .setupUsdOkuEscrow()
+        .setupOkuMEscrow()
         .accountsPartial({
           roleAdmin: provider.wallet.publicKey,
           config: psmConfig,
-          usdOkuMint: usdOkuMint,
-          vaultUsdOku: vaultUsdOku,
+          okuMMint: okuMMint,
+          vaultOkuM: vaultOkuM,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
-      logger.success('usdOku escrow vault initialized');
+      logger.success('OkuM escrow vault initialized');
     } catch (error: any) {
       if (isAlreadyInitialized(error)) {
-        logger.warning('usdOku escrow vault already initialized');
+        logger.warning('OkuM escrow vault already initialized');
       } else {
         throw error;
       }
@@ -281,9 +256,8 @@ export async function initializePsm(
 
   return {
     psmConfig,
-    redemptionQueue,
     vaultUsdc,
-    vaultUsdOku,
+    vaultOkuM,
   };
 }
 

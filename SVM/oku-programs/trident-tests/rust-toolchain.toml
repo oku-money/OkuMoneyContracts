@@ -1,6 +1,0 @@
-[toolchain]
-# Pinned to match the main project's `rust-toolchain.toml` (1.90.0). One
-# Rust version across `programs/`, `crates/`, and `trident-tests/`
-# eliminates the previous two-pin matrix and the floating `stable` channel.
-# Trident 0.12.0's dep tree requires >= 1.88; 1.90 is well inside that.
-channel = "1.90.0"

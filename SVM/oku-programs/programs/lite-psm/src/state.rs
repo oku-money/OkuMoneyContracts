@@ -1,6 +1,6 @@
 //! Account state definitions for the Lite-PSM program.
 //!
-//! Single-token design: the PSM deals exclusively in **usdOku** (a
+//! Single-token design: the PSM deals exclusively in **OkuM** (a
 //! Token-2022 mint with the `ScaledUiAmount` extension). The multiplier
 //! that converts raw token amounts to dollar-display values lives on the
 //! mint itself, not in PsmConfig.
@@ -17,7 +17,7 @@ use anchor_lang::prelude::*;
 ///
 /// Seeds: `["psm_config_v6"]`. Migration history (seed-rotation log) is
 /// tracked in `SVM/README.md` § "PDA seed history"; the `_v6` suffix
-/// marks the single-token (usdOku) layout without the redemption queue.
+/// marks the single-token (OkuM) layout with ScaledUiAmountConfig.
 #[account]
 #[derive(InitSpace)]
 pub struct PsmConfig {
@@ -43,23 +43,23 @@ pub struct PsmConfig {
     pub cap_manager: Pubkey,
     /// Cold Multisig - reset minter allowance
     pub allowance_manager: Pubkey,
-    /// Orchestrator - update multiplier on the usdOku mint
+    /// Orchestrator - update multiplier on the OkuM mint
     pub rebaser: Pubkey,
 
     // ===== Token References =====
     /// USDC mint address
     pub usdc_mint: Pubkey,
-    /// usdOku mint address (Token-2022 with ScaledUiAmount extension).
-    /// The multiplier for USDC ↔ usdOku conversion is read from the
+    /// OkuM mint address (Token-2022 with ScaledUiAmount extension).
+    /// The multiplier for USDC ↔ OkuM conversion is read from the
     /// mint's ScaledUiAmountConfig extension, not stored on PsmConfig.
-    pub usd_oku_mint: Pubkey,
+    pub oku_m_mint: Pubkey,
     /// PSM's USDC buffer vault (ATA)
     pub vault_usdc: Pubkey,
 
     // ===== Limits =====
-    /// Maximum usdOku supply cap (in raw token units)
+    /// Maximum OkuM supply cap (in raw token units)
     pub max_supply: u64,
-    /// Mint allowance remaining (configurable cap on freshly minted usdOku
+    /// Mint allowance remaining (configurable cap on freshly minted OkuM
     /// between admin resets, mirroring the EVM `minterAllowance` pattern).
     pub minter_allowance: u64,
     /// Whether the PSM is paused
@@ -82,10 +82,10 @@ pub struct PsmConfig {
 
     // ===== Direct Mint (fiat on-ramp) =====
     //
-    // Permissioned direct usdOku mint path — no USDC collateral required
-    // on-chain. Matches EVM `usdOku.mint(to, amount)` called by an
+    // Permissioned direct OkuM mint path — no USDC collateral required
+    // on-chain. Matches EVM `OkuM.mint(to, amount)` called by an
     // authorised minter role holder. The fiat collateral is held off-chain.
-    /// Operator / fiat gateway — can mint usdOku directly without USDC.
+    /// Operator / fiat gateway — can mint OkuM directly without USDC.
     /// `Pubkey::default()` means "not configured / disabled".
     pub direct_minter: Pubkey,
 
@@ -96,10 +96,10 @@ pub struct PsmConfig {
 
     // ===== Direct Burn (bridge / off-ramp) =====
     //
-    // Permissioned direct usdOku burn path — burns usdOku from the
+    // Permissioned direct OkuM burn path — burns OkuM from the
     // caller's ATA without USDC payout. Enables SVM→EVM bridging
     // where the KMS-backed orchestrator burns on the source chain.
-    /// Operator / bridge backend — can burn usdOku directly without
+    /// Operator / bridge backend — can burn OkuM directly without
     /// triggering a USDC redemption.
     /// `Pubkey::default()` means "not configured / disabled".
     pub direct_burner: Pubkey,
@@ -121,7 +121,7 @@ impl PsmConfig {
 
 // Compile-time assertion: if PsmConfig layout changes, this will fail to compile.
 // (562 = 8 disc + 1 bump + 32*10 authorities (320)
-//      + 32*2 token mints (usdc_mint + usd_oku_mint = 64)
+//      + 32*2 token mints (usdc_mint + oku_m_mint = 64)
 //      + 32*1 vault (vault_usdc = 32)
 //      + 8 max_supply + 8 minter_allowance + 1 is_paused
 //      + 8 last_yield_distribution_slot

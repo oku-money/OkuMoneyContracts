@@ -6,13 +6,13 @@
  * process. They are deterministic per-process but freshly generated per-
  * process boot, so each test run starts with pristine authorities.
  *
- * `initializePsm` runs the PSM `initialize` + `setup_redemption_queue` +
- * `setup_usd_oku_escrow` instructions against the supplied program.
+ * `initializePsm` runs the PSM `initialize` +
+ * `setup_oku_m_escrow` instructions against the supplied program.
  * No memoization, no singleton, no cross-file cache — every bankrun
  * cluster is fresh and the on-chain PsmConfig must always be created
  * by the calling describe's `before()` hook.
  *
- * The `initialize` instruction now creates the usdOku mint itself with
+ * The `initialize` instruction now creates the OkuM mint itself with
  * Token-2022 ScaledUiAmount + MetadataPointer + TokenMetadata extensions.
  * Callers pass a fresh keypair for the mint; no pre-creation is needed.
  */
@@ -60,10 +60,10 @@ export const coldMultisig = Keypair.generate();
  *  pauser, freezer. */
 export const warmMultisig = Keypair.generate();
 
-/** PSM orchestrator — automated operations. PSM roles: queueProcessor,
+/** PSM orchestrator — automated operations. PSM roles:
  *  bufferDepositor, rebaser. In v1 noBridge this same key also drives
- *  cross-chain transfers off-chain by calling `mint_usd_oku` /
- *  `redeem_usd_oku` on each side. */
+ *  cross-chain transfers off-chain by calling `mint_oku_m` /
+ *  `redeem_oku_m` on each side. */
 export const psmOrchestrator = Keypair.generate();
 
 // ---------------------------------------------------------------------------
@@ -72,10 +72,9 @@ export const psmOrchestrator = Keypair.generate();
 
 export interface PsmSetupResult {
   configPda: PublicKey;
-  redemptionQueuePda: PublicKey;
-  usdOkuMint: PublicKey;
+  okuMMint: PublicKey;
   vaultUsdcAta: PublicKey;
-  vaultUsdOkuAta: PublicKey;
+  vaultOkuMAta: PublicKey;
 }
 
 /**
@@ -84,11 +83,10 @@ export interface PsmSetupResult {
  * Steps performed (no caching — every call runs all three on-chain
  * instructions):
  *   1. fund the shared authority keypairs via `fundKeypairs(h, ...)`
- *   2. `initialize(...)` — creates PsmConfig + USDC vault + usdOku mint
+ *   2. `initialize(...)` — creates PsmConfig + USDC vault + OkuM mint
  *      (the program creates the Token-2022 mint with ScaledUiAmount +
  *      MetadataPointer + TokenMetadata extensions)
- *   3. `setupRedemptionQueue()`
- *   4. `setupUsdOkuEscrow()` — creates the usdOku escrow ATA
+ *   3. `setupOkuMEscrow()` — creates the OkuM escrow ATA
  *
  * Authority roles use the same keypair-per-role mapping as the deploy
  * config: cold for high-security, warm for medium, psmOrchestrator for
@@ -100,17 +98,13 @@ export async function initializePsm(
   payer: Keypair,
   usdcMint: PublicKey
 ): Promise<PsmSetupResult> {
-  // Generate a fresh keypair for the usdOku mint — the program's
+  // Generate a fresh keypair for the OkuM mint — the program's
   // `initialize` instruction creates it with Token-2022 extensions.
-  const usdOkuMintKeypair = Keypair.generate();
-  const usdOkuMint = usdOkuMintKeypair.publicKey;
+  const okuMMintKeypair = Keypair.generate();
+  const okuMMint = okuMMintKeypair.publicKey;
 
   const [configPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("psm_config_v5")],
-    program.programId
-  );
-  const [redemptionQueuePda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("redemption_queue_v3")],
+    [Buffer.from("psm_config_v6")],
     program.programId
   );
   const vaultUsdcAta = getAssociatedTokenAddressSync(
@@ -119,8 +113,8 @@ export async function initializePsm(
     true,
     TOKEN_PROGRAM_ID
   );
-  const vaultUsdOkuAta = getAssociatedTokenAddressSync(
-    usdOkuMint,
+  const vaultOkuMAta = getAssociatedTokenAddressSync(
+    okuMMint,
     configPda,
     true,
     TOKEN_2022_PROGRAM_ID
@@ -134,7 +128,7 @@ export async function initializePsm(
     10 * anchor.web3.LAMPORTS_PER_SOL
   );
 
-  // `initialize` takes an `InitializeParams` struct and a `usdOkuMint`
+  // `initialize` takes an `InitializeParams` struct and a `okuMMint`
   // signer keypair. The program creates the mint with extensions via CPI.
   await program.methods
     .initialize({
@@ -144,52 +138,41 @@ export async function initializePsm(
       unpauser: coldMultisig.publicKey,
       freezer: warmMultisig.publicKey,
       unfreezer: coldMultisig.publicKey,
-      queueProcessor: psmOrchestrator.publicKey,
       bufferDepositor: psmOrchestrator.publicKey,
       bufferWithdrawer: coldMultisig.publicKey,
       capManager: coldMultisig.publicKey,
       allowanceManager: coldMultisig.publicKey,
       rebaser: psmOrchestrator.publicKey,
-      usdOkuUri: "",
+      okuMUri: "",
     })
     .accountsPartial({
       roleAdmin: payer.publicKey,
       config: configPda,
       usdcMint,
-      usdOkuMint,
+      okuMMint,
       vaultUsdc: vaultUsdcAta,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
-    .signers([usdOkuMintKeypair])
+    .signers([okuMMintKeypair])
     .rpc();
 
   await program.methods
-    .setupRedemptionQueue()
+    .setupOkuMEscrow()
     .accountsPartial({
       roleAdmin: payer.publicKey,
       config: configPda,
-      redemptionQueue: redemptionQueuePda,
-      systemProgram: SystemProgram.programId,
-    })
-    .rpc();
-
-  await program.methods
-    .setupUsdOkuEscrow()
-    .accountsPartial({
-      roleAdmin: payer.publicKey,
-      config: configPda,
-      usdOkuMint,
-      vaultUsdOku: vaultUsdOkuAta,
+      okuMMint,
+      vaultOkuM: vaultOkuMAta,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
     .rpc();
 
-  return { configPda, redemptionQueuePda, usdOkuMint, vaultUsdcAta, vaultUsdOkuAta };
+  return { configPda, okuMMint, vaultUsdcAta, vaultOkuMAta };
 }
 
 // ---------------------------------------------------------------------------
@@ -197,29 +180,29 @@ export async function initializePsm(
 // ---------------------------------------------------------------------------
 
 /**
- * Mint usdOku to `user` via `mint_usd_oku`. Caller is responsible for
- * funding the user's USDC ATA and creating their usdOku ATA.
+ * Mint okuM to `user` via `mint_oku_m`. Caller is responsible for
+ * funding the user's USDC ATA and creating their okuM ATA.
  */
-export async function mintUsdOkuViaProgram(
+export async function mintOkuMViaProgram(
   program: Program,
   user: Keypair,
   amount: BN,
   configPda: PublicKey,
   usdcMint: PublicKey,
-  usdOkuMint: PublicKey,
+  okuMMint: PublicKey,
   userUsdcAta: PublicKey,
-  userUsdOkuAta: PublicKey,
+  userOkuMAta: PublicKey,
   vaultUsdcAta: PublicKey
 ): Promise<void> {
   await program.methods
-    .mintUsdOku(amount)
+    .mintOkuM(amount)
     .accountsPartial({
       user: user.publicKey,
       config: configPda,
       usdcMint,
-      usdOkuMint,
+      okuMMint,
       userUsdcAta,
-      userUsdOkuAta,
+      userOkuMAta,
       vaultUsdc: vaultUsdcAta,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,

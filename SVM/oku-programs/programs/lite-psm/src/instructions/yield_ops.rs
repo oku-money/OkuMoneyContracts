@@ -1,6 +1,6 @@
 //! Yield distribution / multiplier-update instructions.
 //!
-//! The usdOku multiplier lives on the mint itself via the Token-2022
+//! The OkuM multiplier lives on the mint itself via the Token-2022
 //! `ScaledUiAmountConfig` extension. These instructions read the current
 //! multiplier from the extension, compute the new value, and CPI to
 //! Token-2022's `UpdateMultiplier` to write it back.
@@ -19,7 +19,44 @@ use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_2022::spl_token_2022::extension::scaled_ui_amount::instruction::update_multiplier;
 
-/// Set usdOku multiplier directly
+/// Write a new multiplier to the OkuM mint's ScaledUiAmountConfig extension
+/// via CPI, and stamp the yield-distribution slot on PsmConfig.
+///
+/// Shared by `set_multiplier` and `distribute_yield` to ensure both paths
+/// use identical CPI construction and slot-stamping logic.
+fn write_multiplier_and_stamp<'info>(
+    new_multiplier: u64,
+    config: &mut Account<'info, PsmConfig>,
+    oku_m_mint: &AccountInfo<'info>,
+    token_2022_program: &AccountInfo<'info>,
+) -> Result<Clock> {
+    let new_multiplier_f64 = new_multiplier as f64 / PRECISION as f64;
+
+    let ix = update_multiplier(
+        &token_2022_program.key(),
+        &oku_m_mint.key(),
+        &config.key(),
+        &[],
+        new_multiplier_f64,
+        0, // effective_timestamp = 0 (immediate)
+    )
+    .map_err(|_| error!(LitePsmError::MultiplierUpdateFailed))?;
+
+    let seeds = &[PsmConfig::SEED, &[config.bump]];
+    let signer = &[&seeds[..]];
+    anchor_lang::solana_program::program::invoke_signed(
+        &ix,
+        &[oku_m_mint.clone(), config.to_account_info()],
+        signer,
+    )
+    .map_err(|_| error!(LitePsmError::MultiplierUpdateFailed))?;
+
+    let clock = Clock::get()?;
+    config.last_yield_distribution_slot = clock.slot;
+    Ok(clock)
+}
+
+/// Set OkuM multiplier directly
 ///
 /// REBASER only. Sets last_yield_distribution_slot for sandwich prevention.
 /// `new_multiplier` must be strictly greater than the current multiplier
@@ -40,9 +77,9 @@ pub fn set_multiplier(ctx: Context<SetMultiplier>, new_multiplier: u64) -> Resul
     // would still consume the same-slot lock budget.
     check_yield_lock(&ctx.accounts.config)?;
 
-    // Read current multiplier from the usdOku mint's ScaledUiAmountConfig extension
+    // Read current multiplier from the OkuM mint's ScaledUiAmountConfig extension
     let current_multiplier =
-        crate::helpers::scaled_ui::read_multiplier(&ctx.accounts.usd_oku_mint.to_account_info())?;
+        crate::helpers::scaled_ui::read_multiplier(&ctx.accounts.oku_m_mint.to_account_info())?;
 
     // Strict increase — see fn-level doc for rationale.
     require!(
@@ -60,54 +97,24 @@ pub fn set_multiplier(ctx: Context<SetMultiplier>, new_multiplier: u64) -> Resul
         LitePsmError::MultiplierAboveMax
     );
 
-    // Convert PRECISION-scaled u64 to f64 for the ScaledUiAmount extension.
-    // E.g. new_multiplier = 1_500_000_000 (1.5x) → 1.5f64
-    let new_multiplier_f64 = new_multiplier as f64 / PRECISION as f64;
-
-    // CPI to Token-2022 UpdateMultiplier on the usdOku mint.
-    // PsmConfig PDA signs as the ScaledUiAmount authority.
-    let ix = update_multiplier(
-        &ctx.accounts.token_2022_program.key(),
-        &ctx.accounts.usd_oku_mint.key(),
-        &ctx.accounts.config.key(),
-        &[], // no multisig signers
-        new_multiplier_f64,
-        0, // effective_timestamp = 0 (immediate)
-    )
-    .map_err(|_| error!(LitePsmError::MultiplierUpdateFailed))?;
-
-    let account_infos = &[
-        ctx.accounts.usd_oku_mint.to_account_info(),
-        ctx.accounts.config.to_account_info(),
-    ];
-
-    let seeds = &[PsmConfig::SEED, &[ctx.accounts.config.bump]];
-    let signer = &[&seeds[..]];
-    anchor_lang::solana_program::program::invoke_signed(&ix, account_infos, signer)
-        .map_err(|_| error!(LitePsmError::MultiplierUpdateFailed))?;
-
-    // Stamp the yield-distribution slot. The multiplier itself is now
-    // stored on the mint extension (written by the CPI above), not on
-    // PsmConfig.
-    let clock = Clock::get()?;
-    ctx.accounts.config.last_yield_distribution_slot = clock.slot;
-
-    emit!(YieldDistributionSlotSet { slot: clock.slot });
-
-    // Get total supply for event
-    let total_supply = ctx.accounts.usd_oku_mint.supply;
+    let clock = write_multiplier_and_stamp(
+        new_multiplier,
+        &mut ctx.accounts.config,
+        &ctx.accounts.oku_m_mint.to_account_info(),
+        &ctx.accounts.token_2022_program.to_account_info(),
+    )?;
 
     emit!(MultiplierUpdated {
         old_multiplier: current_multiplier,
         new_multiplier,
-        total_supply,
+        total_supply: ctx.accounts.oku_m_mint.supply,
         timestamp: clock.unix_timestamp,
     });
 
     Ok(())
 }
 
-/// Distribute dollar-denominated yield across all usdOku holders
+/// Distribute dollar-denominated yield across all OkuM holders
 ///
 /// new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)
 ///
@@ -121,12 +128,12 @@ pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Res
 
     require!(yield_amount > 0, LitePsmError::ZeroAmount);
 
-    let total_supply = ctx.accounts.usd_oku_mint.supply;
+    let total_supply = ctx.accounts.oku_m_mint.supply;
     require!(total_supply > 0, LitePsmError::ZeroAmount);
 
-    // Read current multiplier from the usdOku mint's ScaledUiAmountConfig extension
+    // Read current multiplier from the OkuM mint's ScaledUiAmountConfig extension
     let current_multiplier =
-        crate::helpers::scaled_ui::read_multiplier(&ctx.accounts.usd_oku_mint.to_account_info())?;
+        crate::helpers::scaled_ui::read_multiplier(&ctx.accounts.oku_m_mint.to_account_info())?;
 
     // Cycle 4 (S-29): use the shared `mul_div_floor` primitive instead
     // of open-coding the same `(yield * PRECISION) / total_supply` math.
@@ -150,36 +157,12 @@ pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Res
         LitePsmError::MultiplierAboveMax
     );
 
-    // Convert PRECISION-scaled u64 to f64 for the ScaledUiAmount extension.
-    let new_multiplier_f64 = new_multiplier as f64 / PRECISION as f64;
-
-    // CPI to Token-2022 UpdateMultiplier on the usdOku mint.
-    let ix = update_multiplier(
-        &ctx.accounts.token_2022_program.key(),
-        &ctx.accounts.usd_oku_mint.key(),
-        &ctx.accounts.config.key(),
-        &[], // no multisig signers
-        new_multiplier_f64,
-        0, // effective_timestamp = 0 (immediate)
-    )
-    .map_err(|_| error!(LitePsmError::MultiplierUpdateFailed))?;
-
-    let account_infos = &[
-        ctx.accounts.usd_oku_mint.to_account_info(),
-        ctx.accounts.config.to_account_info(),
-    ];
-
-    let seeds = &[PsmConfig::SEED, &[ctx.accounts.config.bump]];
-    let signer = &[&seeds[..]];
-    anchor_lang::solana_program::program::invoke_signed(&ix, account_infos, signer)
-        .map_err(|_| error!(LitePsmError::MultiplierUpdateFailed))?;
-
-    // Stamp the yield-distribution slot; the multiplier is stored on the
-    // mint extension (written by the CPI above).
-    let clock = Clock::get()?;
-    ctx.accounts.config.last_yield_distribution_slot = clock.slot;
-
-    emit!(YieldDistributionSlotSet { slot: clock.slot });
+    let clock = write_multiplier_and_stamp(
+        new_multiplier,
+        &mut ctx.accounts.config,
+        &ctx.accounts.oku_m_mint.to_account_info(),
+        &ctx.accounts.token_2022_program.to_account_info(),
+    )?;
 
     emit!(YieldDistributed {
         yield_amount,

@@ -1,9 +1,7 @@
 /**
  * Withdraw USDC from the PSM's reserve buffer (buffer_withdrawer-gated).
  *
- * Wraps `lite_psm::withdraw_buffer(amount)`. The handler refuses to drain
- * below `total_queued_usd_oku * multiplier`, preserving the reserve
- * earmarked for pending redemptions.
+ * Wraps `lite_psm::withdraw_buffer(amount)`.
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/admin/withdraw-buffer.ts --amount=1000000   # 1 USDC
@@ -27,7 +25,6 @@ import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import {
   derivePsmConfigPDA,
-  deriveRedemptionQueuePDA,
 } from '../utils/pdaHelpers';
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 
@@ -51,17 +48,16 @@ async function main() {
   if (
     !deployment?.programs?.litePsm ||
     !deployment.tokens?.usdc ||
-    !deployment.tokens?.usdOku
+    !deployment.tokens?.okuM
   ) {
     throw new Error(`No deployment for ${network}.`);
   }
 
   const litePsmId = new PublicKey(deployment.programs.litePsm);
   const usdcMint = new PublicKey(deployment.tokens.usdc);
-  const usdOkuMint = new PublicKey(deployment.tokens.usdOku);
+  const okuMMint = new PublicKey(deployment.tokens?.okuM);
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
-  const [redemptionQueue] = deriveRedemptionQueuePDA(litePsmId);
 
   const cfg = await program.account.psmConfig.fetch(psmConfig);
   const vaultUsdc = cfg.vaultUsdc as PublicKey;
@@ -93,9 +89,8 @@ async function main() {
   logger.info(
     summaryBlock('withdraw_buffer()', {
       'config PDA': psmConfig.toBase58(),
-      'queue PDA': redemptionQueue.toBase58(),
       'usdcMint': usdcMint.toBase58(),
-      'usdOkuMint': usdOkuMint.toBase58(),
+      'okuMMint': okuMMint.toBase58(),
       'vault USDC': vaultUsdc.toBase58(),
       'withdrawer ATA': withdrawerUsdcAta.toBase58(),
       'vault USDC (before)': vaultBefore,
@@ -116,8 +111,7 @@ async function main() {
     .accountsPartial({
       bufferWithdrawer: provider.wallet.publicKey,
       config: psmConfig,
-      redemptionQueue,
-      usdOkuMint,
+      okuMMint,
       withdrawerUsdcAta,
       vaultUsdc,
       usdcMint,

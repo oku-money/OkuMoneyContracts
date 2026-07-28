@@ -11,7 +11,7 @@ use crate::errors::LitePsmError;
 use anchor_lang::prelude::*;
 use oku_shared::math as shared;
 
-/// Convert raw usdOku amount to dollar value using the multiplier from
+/// Convert raw OkuM amount to dollar value using the multiplier from
 /// the ScaledUiAmount extension, with **floor** rounding. Use when the
 /// dollar figure is being credited to a user (user gets no more than
 /// they earned).
@@ -22,18 +22,7 @@ pub fn raw_to_dollars(raw_amount: u64, multiplier: u64) -> Result<u64> {
         .ok_or_else(|| error!(LitePsmError::Overflow))
 }
 
-/// Convert raw usdOku amount to dollar value using the multiplier from
-/// the ScaledUiAmount extension, with **ceil** rounding. Use when the
-/// dollar figure becomes a protocol obligation (reserved-balance
-/// accounting, e.g.).
-///
-/// Formula: `dollar_value = ceil(raw_amount * multiplier / PRECISION)`.
-pub fn raw_to_dollars_ceil(raw_amount: u64, multiplier: u64) -> Result<u64> {
-    shared::raw_to_dollars_ceil(raw_amount, multiplier)
-        .ok_or_else(|| error!(LitePsmError::Overflow))
-}
-
-/// Convert dollar value to raw usdOku amount using the multiplier from
+/// Convert dollar value to raw OkuM amount using the multiplier from
 /// the ScaledUiAmount extension.
 ///
 /// Formula: `raw_amount = (dollar_value * PRECISION) / multiplier`.
@@ -59,20 +48,11 @@ mod tests {
     }
 
     #[test]
-    fn raw_to_dollars_ceil_basic() {
-        // Exact division — equal to floor.
-        assert_eq!(
-            raw_to_dollars_ceil(1_000_000, PRECISION).unwrap(),
-            1_000_000
-        );
-    }
-
-    #[test]
     fn raw_to_dollars_at_105_multiplier() {
         // At multiplier 1.05 (5% yield), 100_000_000 raw tokens
         // should redeem for 105_000_000 USDC lamports ($105).
         let multiplier = 1_050_000_000u64; // 1.05 * PRECISION
-        let raw_amount = 100_000_000u64; // 100 usdOku (6 decimals)
+        let raw_amount = 100_000_000u64; // 100 OkuM (6 decimals)
         let dollars = raw_to_dollars(raw_amount, multiplier).unwrap();
         assert_eq!(dollars, 105_000_000); // $105 USDC
 

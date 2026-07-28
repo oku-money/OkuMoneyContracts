@@ -14,21 +14,21 @@ import { NetworkName } from '../../config/networks';
 
 export interface DeployedTokens {
   usdcMint: PublicKey;
-  usdOkuMint: PublicKey;
+  okuMMint: PublicKey;
 }
 
 /**
  * Deploy tokens, reusing any mints already saved in `deployments/<network>.json`.
  *
  * Without idempotency, re-running `deploy:init` after a successful run silently
- * mints fresh USDC / usdOku keypairs, then attempts to re-`initialize` the
+ * mints fresh USDC / okuM keypairs, then attempts to re-`initialize` the
  * PSM (which fails on `AccountAlreadyInitialized`). The fresh mints become
  * orphan accounts and the deployment file is overwritten with addresses
  * users on the OLD mint can no longer redeem against.
  *
  * Behavior:
  *   - If `deployments/<network>.json` already lists `tokens.usdc` and
- *     `tokens.usdOku`, return those PublicKeys verbatim.
+ *     `tokens?.okuM`, return those PublicKeys verbatim.
  *   - If only one is present, error loudly -- partial state usually means a
  *     half-completed previous run that needs manual cleanup.
  *   - Otherwise, mint fresh keypairs.
@@ -41,32 +41,32 @@ export async function deployTokens(
 ): Promise<DeployedTokens> {
   const existing = loadDeployment(network);
   const existingUsdc = existing?.tokens?.usdc;
-  const existingUsdOku = existing?.tokens?.usdOku;
+  const existingOkuM = existing?.tokens?.okuM;
 
-  if (existingUsdc && existingUsdOku) {
+  if (existingUsdc && existingOkuM) {
     logger.nextStep('Reusing existing tokens (idempotent)');
     logger.info(`USDC mint:   ${existingUsdc}`);
-    logger.info(`usdOku mint: ${existingUsdOku}`);
+    logger.info(`OkuM mint: ${existingOkuM}`);
 
-    // Sanity check: the persisted usdOku mint MUST have the current PSM
+    // Sanity check: the persisted OkuM mint MUST have the current PSM
     // config PDA as its mint authority. Otherwise the upcoming PSM
     // `initialize()` will fail with ConstraintMintMintAuthority (anchor
     // error 2016) -- which is what bit us when re-running deploy:init
     // after a fresh program-keypair rotation: the file pointed at a mint
     // authored by the OLD PSM PDA. Refusing here gives a clear remediation
     // path instead of a cryptic anchor-constraint failure deep in init.
-    const usdOkuMintPk = new PublicKey(existingUsdOku);
+    const okuMMintPk = new PublicKey(existingOkuM);
     try {
       const mintAccount = await getMint(
         provider.connection,
-        usdOkuMintPk,
+        okuMMintPk,
         'confirmed',
         TOKEN_2022_PROGRAM_ID
       );
       const onChainAuthority = mintAccount.mintAuthority;
       if (!onChainAuthority || !onChainAuthority.equals(psmConfigPDA)) {
         throw new Error(
-          `Refusing to reuse usdOku mint ${existingUsdOku}: on-chain mint ` +
+          `Refusing to reuse OkuM mint ${existingOkuM}: on-chain mint ` +
             `authority is ${onChainAuthority?.toBase58() ?? '<none>'}, but the ` +
             `current PSM config PDA is ${psmConfigPDA.toBase58()}. This usually ` +
             `means the program keypairs were rotated since this mint was created, ` +
@@ -76,32 +76,32 @@ export async function deployTokens(
             `     a _archived key for audit history).\n` +
             `  2. Re-run \`npm run deploy:init\` -- it will mint fresh tokens ` +
             `     wired to the current PSM PDA.\n` +
-            `Note: any usdOku already minted on the orphaned mint is stranded ` +
+            `Note: any okuM already minted on the orphaned mint is stranded ` +
             `(no live program controls its mint authority).`
         );
       }
       logger.success(
-        `usdOku mint authority matches current PSM config PDA (${psmConfigPDA.toBase58()})`
+        `OkuM mint authority matches current PSM config PDA (${psmConfigPDA.toBase58()})`
       );
     } catch (err: any) {
       // Re-throw our refusal verbatim; otherwise wrap with context.
-      if (err.message?.startsWith('Refusing to reuse usdOku mint')) throw err;
+      if (err.message?.startsWith('Refusing to reuse OkuM mint')) throw err;
       throw new Error(
-        `Failed to verify usdOku mint authority for ${existingUsdOku}: ` +
+        `Failed to verify OkuM mint authority for ${existingOkuM}: ` +
           `${err.message ?? err}. Cannot safely reuse this mint.`
       );
     }
 
     return {
       usdcMint: new PublicKey(existingUsdc),
-      usdOkuMint: usdOkuMintPk,
+      okuMMint: okuMMintPk,
     };
   }
 
-  if (existingUsdc || existingUsdOku) {
+  if (existingUsdc || existingOkuM) {
     throw new Error(
       `Partial token state detected for network "${network}" -- usdc=${existingUsdc} ` +
-        `usdOku=${existingUsdOku}. Aborting to avoid creating orphans. ` +
+        `okuM=${existingOkuM}. Aborting to avoid creating orphans. ` +
         `Either restore the missing field manually or run \`npm run clean\` ` +
         `to start over.`
     );
@@ -119,9 +119,9 @@ export async function deployTokens(
     null
   );
 
-  // Create usdOku (Token-2022 with ScaledUiAmount extension)
-  logger.info('Creating usdOku (Token-2022)...');
-  const usdOkuMint = await createToken2022Mint({
+  // Create okuM (Token-2022 with ScaledUiAmount extension)
+  logger.info('Creating okuM (Token-2022)...');
+  const okuMMint = await createToken2022Mint({
     connection: provider.connection,
     payer: provider.wallet.payer,
     decimals: OKUSD_DECIMALS,
@@ -131,5 +131,5 @@ export async function deployTokens(
     initialRate: 0, // 0% initial rate
   });
 
-  return { usdcMint, usdOkuMint };
+  return { usdcMint, okuMMint };
 }

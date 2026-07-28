@@ -1,7 +1,7 @@
 [package]
 name = "oku-shared"
 version = "0.1.0"
-description = "OkuMoney SVM — protocol-wide constants and pure-math primitives shared by lite-psm and oku-dollar."
+description = "OkuMoney SVM — protocol-wide constants and pure-math primitives for lite-psm."
 edition = "2021"
 license = "MIT"
 

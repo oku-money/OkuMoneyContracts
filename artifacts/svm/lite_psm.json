@@ -1,5 +1,5 @@
 {
-  "address": "3KZtxxYXD4tMZvVZk4EhCRxoTorBDZyJZuLE3znQ9kF1",
+  "address": "App49HmtSBMwh42tUpZT7gSbEbq7HiA6QED2BBnXtzxo",
   "metadata": {
     "name": "lite_psm",
     "version": "0.1.0",
@@ -52,7 +52,7 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
@@ -64,8 +64,8 @@
     {
       "name": "burn_oku_m_direct",
       "docs": [
-        "Burn OkuMoney directly without USDC payout (permissioned --",
-        "`direct_burner` only). Matches EVM `OkuMoney.burn(amount)` called",
+        "Burn OkuM directly without USDC payout (permissioned --",
+        "`direct_burner` only). Matches EVM `OkuM.burn(amount)` called",
         "by a non-PSM `OKUM_BURNER`. Enables SVM->EVM bridging."
       ],
       "discriminator": [
@@ -84,7 +84,6 @@
           "docs": [
             "Operator / bridge backend holding the `direct_burner` authority."
           ],
-          "writable": true,
           "signer": true,
           "relations": [
             "config"
@@ -110,24 +109,24 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
           }
         },
         {
-          "name": "oku_money_mint",
+          "name": "oku_m_mint",
           "docs": [
-            "OkuMoney mint (Token-2022). `mint::authority = config` is",
-            "defense-in-depth (see rationale on `MintOkuM::oku_money_mint`)."
+            "OkuM mint (Token-2022). `mint::authority = config` is",
+            "defense-in-depth (see rationale on `MintOkuM::oku_m_mint`)."
           ],
           "writable": true
         },
         {
-          "name": "burner_oku_money_ata",
+          "name": "burner_oku_m_ata",
           "docs": [
-            "Burner's OkuMoney token account -- source of the burn. The burner",
+            "Burner's OkuM token account -- source of the burn. The burner",
             "must hold the tokens it wants to destroy."
           ],
           "writable": true
@@ -139,7 +138,7 @@
       ],
       "args": [
         {
-          "name": "oku_m_amount",
+          "name": "raw_amount",
           "type": "u64"
         }
       ]
@@ -195,7 +194,7 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
@@ -243,7 +242,7 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
@@ -334,7 +333,7 @@
     {
       "name": "distribute_yield",
       "docs": [
-        "Distribute yield across all OkuMoney holders (REBASER only)",
+        "Distribute yield across all OkuM holders (REBASER only)",
         "new_multiplier = old_multiplier + (yield_amount * PRECISION / total_supply)"
       ],
       "discriminator": [
@@ -361,7 +360,7 @@
         {
           "name": "config",
           "docs": [
-            "PSM config - stores oku_m_price and last_yield_distribution_slot"
+            "PSM config - stores multiplier state and last_yield_distribution_slot"
           ],
           "writable": true,
           "pda": {
@@ -381,17 +380,18 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
           }
         },
         {
-          "name": "oku_money_mint",
+          "name": "oku_m_mint",
           "docs": [
-            "OkuMoney mint - needed to read total supply for yield distribution calculation"
-          ]
+            "OkuM mint - mutable (needed for UpdateMultiplier CPI) and to read total supply"
+          ],
+          "writable": true
         },
         {
           "name": "token_2022_program",
@@ -450,20 +450,20 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
           }
         },
         {
-          "name": "oku_money_mint",
+          "name": "oku_m_mint",
           "docs": [
-            "OkuMoney mint (Token-2022)"
+            "OkuM mint (Token-2022)"
           ]
         },
         {
-          "name": "target_oku_money_ata",
+          "name": "target_oku_m_ata",
           "docs": [
             "Target account to freeze"
           ],
@@ -514,7 +514,7 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
@@ -526,29 +526,25 @@
             "USDC mint (standard SPL).",
             "",
             "Must have exactly `TOKEN_DECIMALS` (= 6) decimals on Solana —",
-            "this matches the `OkuMoney`/`usdOku` decimal model. EVM resolves",
+            "this matches the `OkuM` decimal model. EVM resolves",
             "a runtime `usdcDecimalMultiplier` from `IERC20Metadata.decimals()`;",
             "SVM hardcodes the value via the shared constant and asserts at",
             "init."
           ]
         },
         {
-          "name": "oku_money_mint",
+          "name": "oku_m_mint",
           "docs": [
-            "OkuMoney mint (Token-2022).",
+            "Fresh keypair for the OkuM mint (Token-2022).",
             "",
-            "At init we lock down both authorities to the PSM config PDA so that",
-            "no EOA can mint or freeze OkuMoney post-deployment. Without these",
-            "constraints, a misconfigured deploy could initialize PSM against a",
-            "mint whose authority is a different program / multisig, silently",
-            "breaking supply accounting.",
-            "",
-            "Decimals are pinned at `TOKEN_DECIMALS` (= 6) — all PSM math",
-            "(`oku_m_price`, `oku_m_to_dollars`, yield distribution) assumes",
-            "6-decimal raw amounts. Cycle 4: replaced the literal `6` with",
-            "the shared constant so a future re-decimalisation can't drift",
-            "the assertion away from the assumed precision."
-          ]
+            "The instruction creates this mint via manual CPIs with",
+            "ScaledUiAmount + MetadataPointer + TokenMetadata extensions.",
+            "The PsmConfig PDA is set as mint authority, freeze authority,",
+            "and ScaledUiAmount authority. Passed as a `Signer` because",
+            "`CreateAccount` requires the new account to sign."
+          ],
+          "writable": true,
+          "signer": true
         },
         {
           "name": "vault_usdc",
@@ -625,6 +621,10 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
         }
       ],
       "args": [
@@ -639,150 +639,10 @@
       ]
     },
     {
-      "name": "migrate_psm_config",
-      "docs": [
-        "One-time migration: extend PsmConfig from 674 -> 714 bytes to",
-        "accommodate the `direct_minter` + `direct_minter_allowance` fields.",
-        "Must be signed by the current `role_admin`."
-      ],
-      "discriminator": [
-        156,
-        113,
-        132,
-        161,
-        244,
-        108,
-        219,
-        217
-      ],
-      "accounts": [
-        {
-          "name": "payer",
-          "docs": [
-            "Pays for the additional rent-exempt lamports."
-          ],
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "role_admin",
-          "docs": [
-            "Must match the `role_admin` stored in PsmConfig."
-          ],
-          "signer": true
-        },
-        {
-          "name": "config",
-          "docs": [
-            "PsmConfig PDA — verified by seeds but NOT deserialized as",
-            "`Account<PsmConfig>` (it's too small pre-migration)."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103,
-                  95,
-                  118,
-                  52
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "migrate_psm_config_v2",
-      "docs": [
-        "One-time migration: extend PsmConfig from 594 -> 634 bytes to",
-        "accommodate the `direct_burner` + `direct_burner_allowance` fields.",
-        "Must be signed by the current `role_admin`."
-      ],
-      "discriminator": [
-        230,
-        121,
-        29,
-        153,
-        236,
-        176,
-        215,
-        192
-      ],
-      "accounts": [
-        {
-          "name": "payer",
-          "docs": [
-            "Pays for the additional rent-exempt lamports."
-          ],
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "role_admin",
-          "docs": [
-            "Must match the `role_admin` stored in PsmConfig."
-          ],
-          "signer": true
-        },
-        {
-          "name": "config",
-          "docs": [
-            "PsmConfig PDA -- verified by seeds but NOT deserialized as",
-            "`Account<PsmConfig>` (it's too small pre-migration)."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103,
-                  95,
-                  118,
-                  52
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "mint_oku_m",
       "docs": [
-        "Mint OkuMoney with USDC (price-aware)",
-        "oku_m_amount = usdc_amount * PRECISION / oku_m_price"
+        "Mint OkuM with USDC (multiplier-aware)",
+        "raw_oku_m_amount = usdc_amount * PRECISION / multiplier"
       ],
       "discriminator": [
         200,
@@ -820,7 +680,7 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
@@ -833,10 +693,9 @@
           ]
         },
         {
-          "name": "oku_money_mint",
+          "name": "oku_m_mint",
           "docs": [
-            "OkuMoney mint (Token-2022). The program is extension-agnostic; the deploy",
-            "script chooses which extensions (if any) are configured at mint creation.",
+            "OkuM mint (Token-2022 with ScaledUiAmount extension).",
             "`mint::authority = config` is defense-in-depth: even if someone attempted",
             "an out-of-band mint-authority rotation (which requires a CPI signed by",
             "the current authority = config PDA, so it cannot happen without the",
@@ -905,9 +764,9 @@
           }
         },
         {
-          "name": "user_oku_money_ata",
+          "name": "user_oku_m_ata",
           "docs": [
-            "User's OkuMoney account"
+            "User's OkuM account"
           ],
           "writable": true,
           "pda": {
@@ -922,7 +781,7 @@
               },
               {
                 "kind": "account",
-                "path": "oku_money_mint"
+                "path": "oku_m_mint"
               }
             ],
             "program": {
@@ -998,8 +857,8 @@
     {
       "name": "mint_oku_m_direct",
       "docs": [
-        "Mint OkuMoney directly without USDC (permissioned — `direct_minter` only).",
-        "Matches EVM `OkuMoney.mint(to, amount)` called by a non-PSM `OKUM_MINTER`."
+        "Mint OkuM directly without USDC (permissioned -- `direct_minter` only).",
+        "Matches EVM `OkuM.mint(to, amount)` called by a non-PSM `OKUM_MINTER`."
       ],
       "discriminator": [
         76,
@@ -1044,31 +903,31 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
           }
         },
         {
-          "name": "oku_money_mint",
+          "name": "oku_m_mint",
           "docs": [
-            "OkuMoney mint (Token-2022). `mint::authority = config` is",
-            "defense-in-depth (see rationale on `MintOkuM::oku_money_mint`)."
+            "OkuM mint (Token-2022). `mint::authority = config` is",
+            "defense-in-depth (see rationale on `MintOkuM::oku_m_mint`)."
           ],
           "writable": true
         },
         {
           "name": "recipient",
           "docs": [
-            "Recipient of the minted OkuMoney. Does NOT need to sign —",
+            "Recipient of the minted OkuM. Does NOT need to sign --",
             "the operator mints on behalf of the user."
           ]
         },
         {
-          "name": "recipient_oku_money_ata",
+          "name": "recipient_oku_m_ata",
           "docs": [
-            "Recipient's OkuMoney token account. `init_if_needed` so the",
+            "Recipient's OkuM token account. `init_if_needed` so the",
             "recipient doesn't need a pre-existing ATA."
           ],
           "writable": true,
@@ -1084,7 +943,7 @@
               },
               {
                 "kind": "account",
-                "path": "oku_money_mint"
+                "path": "oku_m_mint"
               }
             ],
             "program": {
@@ -1141,152 +1000,7 @@
       ],
       "args": [
         {
-          "name": "oku_m_amount",
-          "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "mint_usd_oku_direct",
-      "docs": [
-        "Mint OkuMoney and wrap into usdOku in a single instruction",
-        "(permissioned — `direct_minter` only). Matches EVM `LitePSM.mintUsdOku`",
-        "convenience pattern without USDC."
-      ],
-      "discriminator": [
-        53,
-        214,
-        16,
-        215,
-        232,
-        52,
-        144,
-        125
-      ],
-      "accounts": [
-        {
-          "name": "direct_minter",
-          "docs": [
-            "Operator / fiat gateway. Also pays for ATA init."
-          ],
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103,
-                  95,
-                  118,
-                  52
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "oku_money_mint",
-          "docs": [
-            "OkuMoney mint (Token-2022)."
-          ],
-          "writable": true
-        },
-        {
-          "name": "vault_oku_money",
-          "docs": [
-            "PSM's OkuMoney escrow vault — used as the intermediary ATA for the",
-            "mint→wrap atomic flow. The OkuMoney is minted here and immediately",
-            "transferred to the oku-dollar reserve vault via the `wrap_to` CPI,",
-            "so the balance is net-zero before and after the instruction."
-          ],
-          "writable": true
-        },
-        {
-          "name": "recipient",
-          "docs": [
-            "Recipient of the minted usdOku shares. Does NOT need to sign."
-          ]
-        },
-        {
-          "name": "oku_dollar_config",
-          "docs": [
-            "OkuDollar config PDA (read-only for wrap math).",
-            "the address matches config.psm_config's back-reference by checking",
-            "it is the canonical oku-dollar PDA."
-          ]
-        },
-        {
-          "name": "usd_oku_mint",
-          "docs": [
-            "usdOku mint (Token-2022) — mutated by wrap_to's mint_to CPI."
-          ],
-          "writable": true
-        },
-        {
-          "name": "recipient_usd_oku_ata",
-          "docs": [
-            "Recipient's usdOku token account — init_if_needed by wrap_to."
-          ],
-          "writable": true
-        },
-        {
-          "name": "oku_dollar_reserve_vault",
-          "docs": [
-            "OkuDollar's OkuMoney reserve vault — receives OkuMoney from wrap_to."
-          ],
-          "writable": true
-        },
-        {
-          "name": "dead_shares_ata",
-          "docs": [
-            "Dead-shares ATA (optional, only needed on first usdOku deposit)."
-          ],
-          "writable": true,
-          "optional": true
-        },
-        {
-          "name": "oku_dollar_program",
-          "docs": [
-            "The oku-dollar program to CPI into."
-          ]
-        },
-        {
-          "name": "token_2022_program",
-          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
-        },
-        {
-          "name": "associated_token_program",
-          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "oku_m_amount",
-          "type": "u64"
-        },
-        {
-          "name": "min_shares_out",
+          "name": "raw_amount",
           "type": "u64"
         }
       ]
@@ -1306,7 +1020,6 @@
       "accounts": [
         {
           "name": "pauser",
-          "writable": true,
           "signer": true,
           "relations": [
             "config"
@@ -1332,7 +1045,7 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
@@ -1342,132 +1055,11 @@
       "args": []
     },
     {
-      "name": "process_queue",
-      "discriminator": [
-        178,
-        215,
-        43,
-        144,
-        239,
-        34,
-        170,
-        155
-      ],
-      "accounts": [
-        {
-          "name": "queue_processor",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103,
-                  95,
-                  118,
-                  52
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "redemption_queue",
-          "docs": [
-            "Redemption queue (zero-copy). `process_queue` uses `load()`+`load_mut()`",
-            "interleaved with CPIs to advance the head ring. See `bump` note on",
-            "`RedeemOkuM::redemption_queue`."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  114,
-                  101,
-                  100,
-                  101,
-                  109,
-                  112,
-                  116,
-                  105,
-                  111,
-                  110,
-                  95,
-                  113,
-                  117,
-                  101,
-                  117,
-                  101,
-                  95,
-                  118,
-                  50
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "oku_money_mint",
-          "docs": [
-            "OkuMoney mint (Token-2022) — needed for burn CPI and price reads.",
-            "`mint::authority = config` is defense-in-depth (see rationale on",
-            "`MintOkuM::oku_money_mint`)."
-          ],
-          "writable": true
-        },
-        {
-          "name": "vault_usdc",
-          "docs": [
-            "PSM's USDC vault"
-          ],
-          "writable": true
-        },
-        {
-          "name": "vault_oku_money",
-          "docs": [
-            "PSM's OkuMoney escrow vault - holds queued redemptions.",
-            "Pinned to `config.vault_oku_money` (see rationale on `RedeemOkuM`)."
-          ],
-          "writable": true
-        },
-        {
-          "name": "token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        },
-        {
-          "name": "token_2022_program",
-          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
-        }
-      ],
-      "args": [
-        {
-          "name": "max_entries",
-          "type": "u32"
-        }
-      ]
-    },
-    {
       "name": "redeem_oku_m",
       "docs": [
-        "Redeem OkuMoney for USDC (price-aware)",
-        "usdc_amount = oku_m_amount * oku_m_price / PRECISION"
+        "Redeem OkuM for USDC (multiplier-aware, with slippage protection)",
+        "usdc_amount = raw_oku_m_amount * multiplier / PRECISION",
+        "Pass min_usdc_out = 0 to skip slippage check."
       ],
       "discriminator": [
         85,
@@ -1504,47 +1096,7 @@
                   103,
                   95,
                   118,
-                  52
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "redemption_queue",
-          "docs": [
-            "Redemption queue (zero-copy ring buffer). Use `load_mut()` to enqueue,",
-            "`load()` for read-only inspection. The handler is responsible for",
-            "dropping the borrow before any CPI that re-borrows the account info.",
-            "The `bump = redemption_queue.load()?.bump` constraint pattern is",
-            "awkward in Anchor's derive; we instead use the canonical",
-            "`bump` lookup (Anchor will recompute it from seeds)."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  114,
-                  101,
-                  100,
-                  101,
-                  109,
-                  112,
-                  116,
-                  105,
-                  111,
-                  110,
-                  95,
-                  113,
-                  117,
-                  101,
-                  117,
-                  101,
-                  95,
-                  118,
-                  50
+                  54
                 ]
               }
             ]
@@ -1557,10 +1109,11 @@
           ]
         },
         {
-          "name": "oku_money_mint",
+          "name": "oku_m_mint",
           "docs": [
-            "OkuMoney mint (Token-2022). `mint::authority = config` is defense-in-depth",
-            "(see rationale on `MintOkuM::oku_money_mint`)."
+            "OkuM mint (Token-2022 with ScaledUiAmount extension).",
+            "`mint::authority = config` is defense-in-depth",
+            "(see rationale on `MintOkuM::oku_m_mint`)."
           ],
           "writable": true
         },
@@ -1625,9 +1178,9 @@
           }
         },
         {
-          "name": "user_oku_money_ata",
+          "name": "user_oku_m_ata",
           "docs": [
-            "User's OkuMoney account"
+            "User's OkuM account"
           ],
           "writable": true,
           "pda": {
@@ -1642,7 +1195,7 @@
               },
               {
                 "kind": "account",
-                "path": "oku_money_mint"
+                "path": "oku_m_mint"
               }
             ],
             "program": {
@@ -1692,18 +1245,6 @@
           "writable": true
         },
         {
-          "name": "vault_oku_money",
-          "docs": [
-            "PSM's OkuMoney escrow vault (for queued redemptions).",
-            "Pinned to `config.vault_oku_money` so a caller cannot substitute an",
-            "alternate config-owned OkuMoney ATA — without the explicit address",
-            "pin, any Token-2022 OkuMoney account whose authority is the config",
-            "PDA would satisfy the constraints and the user's escrowed tokens",
-            "would be silently routed away from the canonical escrow."
-          ],
-          "writable": true
-        },
-        {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -1722,131 +1263,11 @@
       ],
       "args": [
         {
-          "name": "oku_m_amount",
+          "name": "raw_oku_m_amount",
           "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "rescue_queue_entry",
-      "docs": [
-        "Rescue a stuck queue entry — returns escrowed OkuMoney to recipient.",
-        "Only queue_processor can call (matches EVM's rescueQueueEntry).",
-        "",
-        "`queue_index` is u64 — indexer / orchestrator code must pass",
-        "the index as a `BN`/bigint on the TS side."
-      ],
-      "discriminator": [
-        128,
-        16,
-        159,
-        60,
-        109,
-        35,
-        157,
-        229
-      ],
-      "accounts": [
-        {
-          "name": "queue_processor",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
         },
         {
-          "name": "config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103,
-                  95,
-                  118,
-                  52
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "redemption_queue",
-          "docs": [
-            "Redemption queue (zero-copy). `rescue_queue_entry` uses `load_mut()`",
-            "after the CPI to clear the entry and advance the head ring."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  114,
-                  101,
-                  100,
-                  101,
-                  109,
-                  112,
-                  116,
-                  105,
-                  111,
-                  110,
-                  95,
-                  113,
-                  117,
-                  101,
-                  117,
-                  101,
-                  95,
-                  118,
-                  50
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "oku_money_mint",
-          "docs": [
-            "OkuMoney mint (Token-2022)"
-          ]
-        },
-        {
-          "name": "vault_oku_money",
-          "docs": [
-            "PSM's OkuMoney escrow vault — holds queued redemptions"
-          ],
-          "writable": true
-        },
-        {
-          "name": "recipient_oku_money_ata",
-          "docs": [
-            "Recipient's OkuMoney account (can be original user or alternate).",
-            "Must hold the configured OkuMoney mint and live under the Token-2022",
-            "program — without these constraints a `queue_processor` could be",
-            "tricked into transferring the escrowed OkuMoney into an account on the",
-            "wrong mint, surfacing only as an opaque SPL-layer error."
-          ],
-          "writable": true
-        },
-        {
-          "name": "token_2022_program",
-          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
-        }
-      ],
-      "args": [
-        {
-          "name": "queue_index",
+          "name": "min_usdc_out",
           "type": "u64"
         }
       ]
@@ -1897,7 +1318,7 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
@@ -1934,7 +1355,6 @@
       "accounts": [
         {
           "name": "allowance_manager",
-          "writable": true,
           "signer": true,
           "relations": [
             "config"
@@ -1960,7 +1380,7 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
@@ -1989,7 +1409,6 @@
       "accounts": [
         {
           "name": "allowance_manager",
-          "writable": true,
           "signer": true,
           "relations": [
             "config"
@@ -2015,7 +1434,7 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
@@ -2044,7 +1463,6 @@
       "accounts": [
         {
           "name": "cap_manager",
-          "writable": true,
           "signer": true,
           "relations": [
             "config"
@@ -2070,18 +1488,18 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
           }
         },
         {
-          "name": "oku_money_mint",
+          "name": "oku_m_mint",
           "docs": [
-            "OkuMoney mint — read so `set_max_supply` can refuse a new cap below",
+            "OkuM mint -- read so `set_max_supply` can refuse a new cap below",
             "the current circulating supply (would silently brick all future",
-            "mints). EVM `OkuMoney.setMaxSupply` parity."
+            "mints). EVM `OkuM.setMaxSupply` parity."
           ]
         },
         {
@@ -2111,7 +1529,6 @@
       "accounts": [
         {
           "name": "allowance_manager",
-          "writable": true,
           "signer": true,
           "relations": [
             "config"
@@ -2137,7 +1554,7 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
@@ -2152,26 +1569,26 @@
       ]
     },
     {
-      "name": "set_oku_m_price",
+      "name": "set_multiplier",
       "docs": [
-        "Set OkuMoney price directly (REBASER only)",
+        "Set OkuM multiplier directly (REBASER only)",
         "Sets last_yield_distribution_slot for sandwich prevention"
       ],
       "discriminator": [
-        204,
-        17,
+        214,
+        246,
+        86,
+        131,
         196,
-        98,
-        3,
-        56,
-        160,
-        65
+        139,
+        23,
+        91
       ],
       "accounts": [
         {
           "name": "rebaser",
           "docs": [
-            "Rebaser role - authorized to update OkuMoney price"
+            "Rebaser role - authorized to update OkuM multiplier"
           ],
           "signer": true,
           "relations": [
@@ -2181,7 +1598,7 @@
         {
           "name": "config",
           "docs": [
-            "PSM config - stores oku_m_price and last_yield_distribution_slot"
+            "PSM config - stores multiplier state and last_yield_distribution_slot"
           ],
           "writable": true,
           "pda": {
@@ -2201,17 +1618,18 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
           }
         },
         {
-          "name": "oku_money_mint",
+          "name": "oku_m_mint",
           "docs": [
-            "OkuMoney mint - needed to read total supply for event"
-          ]
+            "OkuM mint - mutable (needed for UpdateMultiplier CPI) and to read total supply for event"
+          ],
+          "writable": true
         },
         {
           "name": "token_2022_program",
@@ -2227,233 +1645,6 @@
           "type": "u64"
         }
       ]
-    },
-    {
-      "name": "setup_oku_money_escrow",
-      "discriminator": [
-        244,
-        190,
-        167,
-        147,
-        230,
-        204,
-        23,
-        96
-      ],
-      "accounts": [
-        {
-          "name": "role_admin",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103,
-                  95,
-                  118,
-                  52
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "oku_money_mint",
-          "docs": [
-            "OkuMoney mint (Token-2022).",
-            "Must match the mint stored in config during initialize, and must have",
-            "the PSM config PDA as both mint and freeze authority."
-          ]
-        },
-        {
-          "name": "vault_oku_money",
-          "docs": [
-            "PSM's OkuMoney escrow vault for queued redemptions",
-            "Holds OkuMoney while users are in queue (yield comes from price appreciation)"
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "config"
-              },
-              {
-                "kind": "account",
-                "path": "token_2022_program"
-              },
-              {
-                "kind": "account",
-                "path": "oku_money_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "token_2022_program",
-          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
-        },
-        {
-          "name": "associated_token_program",
-          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "setup_redemption_queue",
-      "discriminator": [
-        235,
-        136,
-        242,
-        154,
-        153,
-        136,
-        246,
-        48
-      ],
-      "accounts": [
-        {
-          "name": "role_admin",
-          "docs": [
-            "`role_admin` is the only authority permitted to create the queue PDA.",
-            "Without this gate, any signer could front-run the deployer and create",
-            "the canonical-seeded `RedemptionQueue` PDA, forcing the legitimate",
-            "`initialize` flow to fail with `AccountAlreadyInitialized` until the",
-            "griefer's account is closed. Matches the authority model used by",
-            "`SetupOkuMoneyEscrow` below."
-          ],
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "docs": [
-            "PSM config must exist (initialize was called)."
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103,
-                  95,
-                  118,
-                  52
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "redemption_queue",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  114,
-                  101,
-                  100,
-                  101,
-                  109,
-                  112,
-                  116,
-                  105,
-                  111,
-                  110,
-                  95,
-                  113,
-                  117,
-                  101,
-                  117,
-                  101,
-                  95,
-                  118,
-                  50
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": []
     },
     {
       "name": "thaw_account",
@@ -2497,20 +1688,20 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
           }
         },
         {
-          "name": "oku_money_mint",
+          "name": "oku_m_mint",
           "docs": [
-            "OkuMoney mint (Token-2022)"
+            "OkuM mint (Token-2022)"
           ]
         },
         {
-          "name": "target_oku_money_ata",
+          "name": "target_oku_m_ata",
           "docs": [
             "Target account to thaw"
           ],
@@ -2538,7 +1729,6 @@
       "accounts": [
         {
           "name": "unpauser",
-          "writable": true,
           "signer": true,
           "relations": [
             "config"
@@ -2564,7 +1754,7 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
@@ -2572,119 +1762,6 @@
         }
       ],
       "args": []
-    },
-    {
-      "name": "user_self_rescue_queue_entry",
-      "docs": [
-        "Permissionless self-rescue (cycle 4 / PSM-06).",
-        "",
-        "Any user can reclaim their own queued OkuMoney without operator",
-        "involvement, unblocking the head-pin DoS where a frozen ATA on",
-        "the head entry stalls every subsequent `process_queue` call.",
-        "Signer must be the entry's original queued user; recipient ATA",
-        "must be owned by that user (constraints enforced on the",
-        "`UserSelfRescueQueueEntry` context)."
-      ],
-      "discriminator": [
-        89,
-        16,
-        194,
-        125,
-        85,
-        57,
-        140,
-        38
-      ],
-      "accounts": [
-        {
-          "name": "user",
-          "signer": true
-        },
-        {
-          "name": "config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103,
-                  95,
-                  118,
-                  52
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "redemption_queue",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  114,
-                  101,
-                  100,
-                  101,
-                  109,
-                  112,
-                  116,
-                  105,
-                  111,
-                  110,
-                  95,
-                  113,
-                  117,
-                  101,
-                  117,
-                  101,
-                  95,
-                  118,
-                  50
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "oku_money_mint"
-        },
-        {
-          "name": "vault_oku_money",
-          "writable": true
-        },
-        {
-          "name": "recipient_oku_money_ata",
-          "docs": [
-            "Recipient ATA — must be owned by `user` (enforced by",
-            "`token::authority = user`). Pinning the authority is what",
-            "distinguishes self-rescue from the privileged operator rescue",
-            "(which can target an arbitrary recipient)."
-          ],
-          "writable": true
-        },
-        {
-          "name": "token_2022_program",
-          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
-        }
-      ],
-      "args": [
-        {
-          "name": "queue_index",
-          "type": "u64"
-        }
-      ]
     },
     {
       "name": "withdraw_buffer",
@@ -2725,52 +1802,11 @@
                   103,
                   95,
                   118,
-                  52
+                  54
                 ]
               }
             ]
           }
-        },
-        {
-          "name": "redemption_queue",
-          "docs": [
-            "Redemption queue (read-only) — used to calculate reserved USDC for",
-            "pending entries. `load()` only."
-          ],
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  114,
-                  101,
-                  100,
-                  101,
-                  109,
-                  112,
-                  116,
-                  105,
-                  111,
-                  110,
-                  95,
-                  113,
-                  117,
-                  101,
-                  117,
-                  101,
-                  95,
-                  118,
-                  50
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "oku_money_mint",
-          "docs": [
-            "OkuMoney mint - needed to read current price for reserve calculation"
-          ]
         },
         {
           "name": "withdrawer_usdc_ata",
@@ -2792,10 +1828,6 @@
         {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        },
-        {
-          "name": "token_2022_program",
-          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         }
       ],
       "args": [
@@ -2818,19 +1850,6 @@
         201,
         86,
         180
-      ]
-    },
-    {
-      "name": "RedemptionQueue",
-      "discriminator": [
-        57,
-        164,
-        202,
-        114,
-        174,
-        102,
-        214,
-        153
       ]
     }
   ],
@@ -2859,19 +1878,6 @@
         115,
         108,
         116
-      ]
-    },
-    {
-      "name": "BufferRefilledEvent",
-      "discriminator": [
-        228,
-        63,
-        122,
-        26,
-        170,
-        8,
-        222,
-        65
       ]
     },
     {
@@ -2927,19 +1933,6 @@
       ]
     },
     {
-      "name": "DirectMintUsdOkuEvent",
-      "discriminator": [
-        207,
-        242,
-        215,
-        36,
-        136,
-        68,
-        108,
-        204
-      ]
-    },
-    {
       "name": "DirectMinterAllowanceUpdatedEvent",
       "discriminator": [
         116,
@@ -2950,19 +1943,6 @@
         39,
         157,
         230
-      ]
-    },
-    {
-      "name": "EscrowInitializedEvent",
-      "discriminator": [
-        17,
-        220,
-        22,
-        132,
-        33,
-        81,
-        105,
-        59
       ]
     },
     {
@@ -3031,16 +2011,16 @@
       ]
     },
     {
-      "name": "OkuMPriceUpdated",
+      "name": "MultiplierUpdated",
       "discriminator": [
-        244,
-        181,
-        144,
-        109,
-        164,
-        114,
-        188,
-        130
+        97,
+        156,
+        95,
+        2,
+        94,
+        11,
+        231,
+        105
       ]
     },
     {
@@ -3057,32 +2037,6 @@
       ]
     },
     {
-      "name": "PsmConfigMigratedEvent",
-      "discriminator": [
-        191,
-        124,
-        205,
-        185,
-        81,
-        10,
-        165,
-        254
-      ]
-    },
-    {
-      "name": "QueueInitializedEvent",
-      "discriminator": [
-        191,
-        4,
-        110,
-        210,
-        5,
-        226,
-        87,
-        143
-      ]
-    },
-    {
       "name": "RedeemEvent",
       "discriminator": [
         90,
@@ -3093,58 +2047,6 @@
         26,
         217,
         59
-      ]
-    },
-    {
-      "name": "RedemptionProcessedEvent",
-      "discriminator": [
-        122,
-        56,
-        178,
-        198,
-        53,
-        37,
-        147,
-        49
-      ]
-    },
-    {
-      "name": "RedemptionQueuedEvent",
-      "discriminator": [
-        43,
-        134,
-        42,
-        57,
-        119,
-        120,
-        120,
-        55
-      ]
-    },
-    {
-      "name": "RedemptionRescuedEvent",
-      "discriminator": [
-        72,
-        88,
-        47,
-        53,
-        229,
-        167,
-        169,
-        73
-      ]
-    },
-    {
-      "name": "RedemptionSkippedEvent",
-      "discriminator": [
-        210,
-        250,
-        168,
-        62,
-        1,
-        172,
-        135,
-        114
       ]
     },
     {
@@ -3224,19 +2126,6 @@
         248,
         94
       ]
-    },
-    {
-      "name": "YieldDistributionSlotSet",
-      "discriminator": [
-        197,
-        154,
-        102,
-        178,
-        122,
-        97,
-        252,
-        144
-      ]
     }
   ],
   "errors": [
@@ -3283,112 +2172,77 @@
     {
       "code": 6008,
       "name": "InsufficientUserBalance",
-      "msg": "User does not hold enough OkuMoney for redemption"
+      "msg": "User does not hold enough OkuM for redemption"
     },
     {
       "code": 6009,
-      "name": "QueueEmpty",
-      "msg": "Queue is empty"
-    },
-    {
-      "code": 6010,
-      "name": "QueueFull",
-      "msg": "Queue is full"
-    },
-    {
-      "code": 6011,
-      "name": "InvalidQueueIndex",
-      "msg": "Invalid queue index"
-    },
-    {
-      "code": 6012,
-      "name": "EntryAlreadyCleared",
-      "msg": "Queue entry already cleared"
-    },
-    {
-      "code": 6013,
       "name": "Overflow",
       "msg": "Arithmetic overflow"
     },
     {
-      "code": 6014,
+      "code": 6010,
       "name": "ZeroAmount",
       "msg": "Amount must be greater than zero"
     },
     {
-      "code": 6015,
-      "name": "InsufficientAccounts",
-      "msg": "Not enough accounts provided for queue entries"
-    },
-    {
-      "code": 6016,
+      "code": 6011,
       "name": "YieldDistributionInProgress",
       "msg": "Cannot perform operation in same slot as yield distribution"
     },
     {
-      "code": 6017,
-      "name": "PriceCannotDecrease",
-      "msg": "New price must strictly increase"
+      "code": 6012,
+      "name": "MultiplierCannotDecrease",
+      "msg": "New multiplier must strictly increase"
     },
     {
-      "code": 6018,
+      "code": 6013,
       "name": "YieldTooSmall",
-      "msg": "Yield amount too small to affect price (truncates to zero)"
+      "msg": "Yield amount too small to affect multiplier (truncates to zero)"
     },
     {
-      "code": 6019,
-      "name": "PriceAboveMax",
-      "msg": "Proposed oku_m_price exceeds MAX_OKU_M_PRICE ceiling"
+      "code": 6014,
+      "name": "MultiplierAboveMax",
+      "msg": "Proposed multiplier exceeds MAX_MULTIPLIER ceiling"
     },
     {
-      "code": 6020,
+      "code": 6015,
+      "name": "MultiplierReadFailed",
+      "msg": "Failed to read multiplier from ScaledUiAmount extension"
+    },
+    {
+      "code": 6016,
+      "name": "MultiplierUpdateFailed",
+      "msg": "Failed to update ScaledUiAmount multiplier"
+    },
+    {
+      "code": 6017,
       "name": "InvalidAuthority",
       "msg": "Authority pubkey is invalid (e.g. zero pubkey)"
     },
     {
-      "code": 6021,
+      "code": 6018,
       "name": "NoPendingRoleAdmin",
       "msg": "No pending role-admin transfer to accept"
     },
     {
-      "code": 6022,
+      "code": 6019,
       "name": "NotPendingRoleAdmin",
       "msg": "Caller is not the pending role admin"
     },
     {
-      "code": 6023,
-      "name": "EscrowAlreadyInitialized",
-      "msg": "Escrow vault already initialized"
-    },
-    {
-      "code": 6024,
-      "name": "MigrationNotNeeded",
-      "msg": "PsmConfig already migrated to current layout"
-    },
-    {
-      "code": 6025,
+      "code": 6020,
       "name": "InvalidUsdcDecimals",
       "msg": "USDC mint must have exactly 6 decimals"
     },
     {
-      "code": 6026,
-      "name": "InvalidOkuMoneyDecimals",
-      "msg": "OkuMoney mint must have exactly 6 decimals"
-    },
-    {
-      "code": 6027,
+      "code": 6021,
       "name": "AmountTooSmall",
       "msg": "Output amount too small (rounds to zero)"
     },
     {
-      "code": 6028,
+      "code": 6022,
       "name": "OutputBelowMinimum",
-      "msg": "Output below minimum (slippage exceeded)"
-    },
-    {
-      "code": 6029,
-      "name": "IncompatibleMintExtension",
-      "msg": "OkuMoney mint carries an incompatible Token-2022 extension (see helpers::mint_extensions for the allow-list)"
+      "msg": "Redeem output is zero"
     }
   ],
   "types": [
@@ -3416,9 +2270,6 @@
           },
           {
             "name": "Unfreezer"
-          },
-          {
-            "name": "QueueProcessor"
           },
           {
             "name": "BufferDepositor"
@@ -3511,45 +2362,6 @@
       }
     },
     {
-      "name": "BufferRefilledEvent",
-      "docs": [
-        "Emitted at the end of `process_queue` with batch-level summary.",
-        "",
-        "EVM equivalent: `BufferRefilled(uint256 newBufferBalance,",
-        "uint256 processedCount, uint256 skippedCount)`. Indexers can use this",
-        "to reconcile buffer state after a queue drain without summing per-entry",
-        "`RedemptionProcessed`/`Skipped` events."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "new_buffer_balance",
-            "docs": [
-              "USDC vault balance after the batch completed (6 decimals)."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "processed_count",
-            "docs": [
-              "Number of entries that received a USDC payout in this batch.",
-              "Bounded by `RedemptionQueue::MAX_BATCH_ENTRIES` (= 50) per call;",
-              "u64 matches the queue's u64 indices."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "skipped_count",
-            "docs": [
-              "Number of cleared (rescued) entries skipped during traversal."
-            ],
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
       "name": "BufferWithdrawEvent",
       "docs": [
         "Emitted when USDC is withdrawn from buffer.",
@@ -3585,9 +2397,9 @@
     {
       "name": "DirectBurnEvent",
       "docs": [
-        "Emitted when OkuMoney is burned via the permissioned direct-burn path",
+        "Emitted when OkuM is burned via the permissioned direct-burn path",
         "(no USDC payout). EVM equivalent: the Transfer-to-zero event from",
-        "`OkuMoney.burn(amount)` called by a non-PSM `OKUM_BURNER`."
+        "`OkuM.burn(amount)` called by a non-PSM burner."
       ],
       "type": {
         "kind": "struct",
@@ -3600,16 +2412,16 @@
             "type": "pubkey"
           },
           {
-            "name": "oku_m_amount",
+            "name": "raw_oku_m_amount",
             "docs": [
-              "OkuMoney burned (6 decimals)"
+              "OkuM raw amount burned (6 decimals)"
             ],
             "type": "u64"
           },
           {
-            "name": "oku_m_price",
+            "name": "multiplier",
             "docs": [
-              "OkuMoney price multiplier at time of burn (1e9 = $1.00)"
+              "OkuM multiplier at time of burn (1e9 = $1.00)"
             ],
             "type": "u64"
           },
@@ -3623,7 +2435,7 @@
           {
             "name": "new_total_supply",
             "docs": [
-              "OkuMoney supply AFTER the burn completed"
+              "OkuM supply AFTER the burn completed"
             ],
             "type": "u64"
           }
@@ -3634,7 +2446,7 @@
       "name": "DirectBurnerAllowanceUpdatedEvent",
       "docs": [
         "Emitted when direct-burner allowance is updated.",
-        "EVM equivalent: allowance management for the `OKUM_BURNER` address."
+        "EVM equivalent: allowance management for the burner address."
       ],
       "type": {
         "kind": "struct",
@@ -3660,9 +2472,9 @@
     {
       "name": "DirectMintEvent",
       "docs": [
-        "Emitted when OkuMoney is minted via the permissioned direct-mint path",
+        "Emitted when OkuM is minted via the permissioned direct-mint path",
         "(no USDC required). EVM equivalent: the Transfer event from",
-        "`OkuMoney.mint(to, amount)` called by a non-PSM `OKUM_MINTER`."
+        "`OkuM.mint(to, amount)` called by a non-PSM minter."
       ],
       "type": {
         "kind": "struct",
@@ -3677,21 +2489,21 @@
           {
             "name": "recipient",
             "docs": [
-              "Recipient of the minted OkuMoney"
+              "Recipient of the minted OkuM"
             ],
             "type": "pubkey"
           },
           {
-            "name": "oku_m_amount",
+            "name": "raw_oku_m_amount",
             "docs": [
-              "OkuMoney minted (6 decimals)"
+              "OkuM raw amount minted (6 decimals)"
             ],
             "type": "u64"
           },
           {
-            "name": "oku_m_price",
+            "name": "multiplier",
             "docs": [
-              "OkuMoney price multiplier at time of mint (1e9 = $1.00)"
+              "OkuM multiplier at time of mint (1e9 = $1.00)"
             ],
             "type": "u64"
           },
@@ -3705,76 +2517,7 @@
           {
             "name": "new_total_supply",
             "docs": [
-              "OkuMoney supply AFTER the mint completed"
-            ],
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "DirectMintUsdOkuEvent",
-      "docs": [
-        "Emitted when OkuMoney is direct-minted and immediately wrapped into",
-        "usdOku in a single instruction. EVM equivalent: a hypothetical",
-        "`mintUsdOkuDirect` convenience path using `OkuMoney.mint` + `wrap`."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "direct_minter",
-            "docs": [
-              "Operator who initiated the mint+wrap"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "recipient",
-            "docs": [
-              "Recipient of the minted usdOku shares"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "oku_m_amount",
-            "docs": [
-              "OkuMoney minted and wrapped (6 decimals)"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "shares_minted",
-            "docs": [
-              "usdOku shares minted to the recipient"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "oku_m_price",
-            "docs": [
-              "OkuMoney price multiplier at time of mint (1e9 = $1.00)"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "usd_multiplier",
-            "docs": [
-              "USD multiplier at time of wrap (1e9 = $1.00)"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "dollar_value",
-            "docs": [
-              "Dollar value of the minted amount"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "new_total_supply",
-            "docs": [
-              "OkuMoney supply AFTER the mint completed"
+              "OkuM supply AFTER the mint completed"
             ],
             "type": "u64"
           }
@@ -3804,22 +2547,6 @@
           {
             "name": "new_allowance",
             "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "EscrowInitializedEvent",
-      "docs": [
-        "Emitted when the OkuMoney escrow vault is wired into config.",
-        "Cycle 4 (PSM-22): added so the final init step is observable."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "vault_oku_money",
-            "type": "pubkey"
           }
         ]
       }
@@ -3863,7 +2590,7 @@
             "type": "pubkey"
           },
           {
-            "name": "oku_money_mint",
+            "name": "oku_m_mint",
             "type": "pubkey"
           },
           {
@@ -3917,10 +2644,6 @@
             "type": "pubkey"
           },
           {
-            "name": "queue_processor",
-            "type": "pubkey"
-          },
-          {
             "name": "buffer_depositor",
             "type": "pubkey"
           },
@@ -3939,6 +2662,10 @@
           {
             "name": "rebaser",
             "type": "pubkey"
+          },
+          {
+            "name": "oku_m_uri",
+            "type": "string"
           }
         ]
       }
@@ -3973,8 +2700,8 @@
     {
       "name": "MintEvent",
       "docs": [
-        "Emitted when OkuMoney is minted via PSM.",
-        "EVM equivalent: `MintNote(address indexed user, uint256 usdcAmount, uint256 okuMAmount, uint256 okuMMultiplier)`"
+        "Emitted when OkuM is minted via PSM.",
+        "EVM equivalent: `MintNote(address indexed user, uint256 usdcAmount, uint256 rawOkuMAmount, uint256 multiplier)`"
       ],
       "type": {
         "kind": "struct",
@@ -3994,33 +2721,33 @@
             "type": "u64"
           },
           {
-            "name": "oku_m_amount",
+            "name": "raw_oku_m_amount",
             "docs": [
-              "OkuMoney minted (6 decimals)"
+              "OkuM raw amount minted (6 decimals)"
             ],
             "type": "u64"
           },
           {
             "name": "dollar_value",
             "docs": [
-              "Dollar value of the minted amount (oku_m_amount * oku_m_price / PRECISION)"
+              "Dollar value of the minted amount (raw_oku_m_amount * multiplier / PRECISION)"
             ],
             "type": "u64"
           },
           {
-            "name": "oku_m_price",
+            "name": "multiplier",
             "docs": [
-              "OkuMoney price multiplier at time of mint (1e9 = $1.00)",
-              "EVM equivalent: okuMMultiplier"
+              "OkuM multiplier at time of mint (1e9 = $1.00)",
+              "EVM equivalent: multiplier"
             ],
             "type": "u64"
           },
           {
             "name": "new_total_supply",
             "docs": [
-              "OkuMoney supply AFTER the mint completed. Cycle 4 (PSM-23):",
+              "OkuM supply AFTER the mint completed. Cycle 4 (PSM-23):",
               "added for indexing parity with `YieldDistributed` /",
-              "`OkuMPriceUpdated` (both of which emit `total_supply`)."
+              "`MultiplierUpdated` (both of which emit `total_supply`)."
             ],
             "type": "u64"
           }
@@ -4055,10 +2782,10 @@
       }
     },
     {
-      "name": "OkuMPriceUpdated",
+      "name": "MultiplierUpdated",
       "docs": [
-        "Emitted when OkuMoney price is updated directly.",
-        "EVM equivalent: `OkuMMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`"
+        "Emitted when OkuM multiplier is updated directly.",
+        "EVM equivalent: `MultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`"
       ],
       "type": {
         "kind": "struct",
@@ -4074,7 +2801,7 @@
           {
             "name": "total_supply",
             "docs": [
-              "Total OkuMoney supply at time of update"
+              "Total OkuM supply at time of update"
             ],
             "type": "u64"
           },
@@ -4106,9 +2833,9 @@
       "docs": [
         "PSM configuration PDA.",
         "",
-        "Seeds: `[\"psm_config_v4\"]`. Migration history (seed-rotation log) is",
-        "tracked in `SVM/README.md` § \"PDA seed history\"; the `_v4` suffix",
-        "marks the post-oracle-removal layout."
+        "Seeds: `[\"psm_config_v6\"]`. Migration history (seed-rotation log) is",
+        "tracked in `SVM/README.md` § \"PDA seed history\"; the `_v6` suffix",
+        "marks the single-token (OkuM) layout with ScaledUiAmountConfig."
       ],
       "type": {
         "kind": "struct",
@@ -4156,13 +2883,6 @@
             "type": "pubkey"
           },
           {
-            "name": "queue_processor",
-            "docs": [
-              "Orchestrator - process redemption queue"
-            ],
-            "type": "pubkey"
-          },
-          {
             "name": "buffer_depositor",
             "docs": [
               "Orchestrator - deposit USDC buffer"
@@ -4193,7 +2913,7 @@
           {
             "name": "rebaser",
             "docs": [
-              "Orchestrator - update interest rate"
+              "Orchestrator - update multiplier on the OkuM mint"
             ],
             "type": "pubkey"
           },
@@ -4205,11 +2925,11 @@
             "type": "pubkey"
           },
           {
-            "name": "oku_money_mint",
+            "name": "oku_m_mint",
             "docs": [
-              "OkuMoney mint address (Token-2022 with InterestBearingConfig extension).",
-              "The extension is informational only — economic price comes from",
-              "`oku_m_price` on this account, not from the mint's interest accrual."
+              "OkuM mint address (Token-2022 with ScaledUiAmount extension).",
+              "The multiplier for USDC ↔ OkuM conversion is read from the",
+              "mint's ScaledUiAmountConfig extension, not stored on PsmConfig."
             ],
             "type": "pubkey"
           },
@@ -4221,24 +2941,16 @@
             "type": "pubkey"
           },
           {
-            "name": "vault_oku_money",
-            "docs": [
-              "PSM's OkuMoney escrow vault for queued redemptions (ATA)",
-              "Holds OkuMoney while users are in queue (yield comes from price appreciation)"
-            ],
-            "type": "pubkey"
-          },
-          {
             "name": "max_supply",
             "docs": [
-              "Maximum OkuMoney supply cap"
+              "Maximum OkuM supply cap (in raw token units)"
             ],
             "type": "u64"
           },
           {
             "name": "minter_allowance",
             "docs": [
-              "Mint allowance remaining (configurable cap on freshly minted OkuMoney",
+              "Mint allowance remaining (configurable cap on freshly minted OkuM",
               "between admin resets, mirroring the EVM `minterAllowance` pattern)."
             ],
             "type": "u64"
@@ -4253,17 +2965,8 @@
           {
             "name": "last_yield_distribution_slot",
             "docs": [
-              "Solana slot of last yield distribution (sandwich prevention)",
-              "Operations like mint/redeem are blocked in the same slot as yield distribution"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "oku_m_price",
-            "docs": [
-              "Current OkuMoney price multiplier (1e9 = $1.00)",
-              "Updated by set_oku_m_price() or distribute_yield()",
-              "Matches EVM's okuMPrice() storage pattern"
+              "Solana slot of last yield distribution (sandwich prevention).",
+              "Operations like mint/redeem are blocked in the same slot as yield distribution."
             ],
             "type": "u64"
           },
@@ -4285,8 +2988,7 @@
           {
             "name": "direct_minter",
             "docs": [
-              "Operator / fiat gateway — can mint OkuMoney directly without USDC.",
-              "EVM equivalent: address granted `OKUM_MINTER` role.",
+              "Operator / fiat gateway — can mint OkuM directly without USDC.",
               "`Pubkey::default()` means \"not configured / disabled\"."
             ],
             "type": "pubkey"
@@ -4296,17 +2998,15 @@
             "docs": [
               "Per-direct-minter allowance (separate from the USDC-backed",
               "`minter_allowance`). Decremented on each direct mint; reset by",
-              "`allowance_manager` via `set_direct_minter_allowance`. Mirrors",
-              "EVM `minterAllowance[directMinter]`."
+              "`allowance_manager` via `set_direct_minter_allowance`."
             ],
             "type": "u64"
           },
           {
             "name": "direct_burner",
             "docs": [
-              "Operator / bridge backend — can burn OkuMoney directly without",
+              "Operator / bridge backend — can burn OkuM directly without",
               "triggering a USDC redemption.",
-              "EVM equivalent: address granted `OKUM_BURNER` role.",
               "`Pubkey::default()` means \"not configured / disabled\"."
             ],
             "type": "pubkey"
@@ -4315,98 +3015,9 @@
             "name": "direct_burner_allowance",
             "docs": [
               "Per-direct-burner allowance. Decremented on each direct burn;",
-              "reset by `allowance_manager` via `set_direct_burner_allowance`.",
-              "Mirrors EVM's role-gated burn with an additional allowance cap",
-              "for operational safety."
+              "reset by `allowance_manager` via `set_direct_burner_allowance`."
             ],
             "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "PsmConfigMigratedEvent",
-      "docs": [
-        "Emitted when PsmConfig is migrated (realloc'd) to the new layout."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "old_len",
-            "type": "u64"
-          },
-          {
-            "name": "new_len",
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "QueueEntry",
-      "docs": [
-        "A single entry in the redemption queue.",
-        "",
-        "`#[zero_copy]` is Anchor's marker for inner types embedded in",
-        "`#[account(zero_copy)]` accounts — derives `Pod` + `Zeroable` and",
-        "registers the type with the IDL. `#[repr(C)]` has no implicit",
-        "padding here (`Pubkey` is align-1, `u64`/`i64` align-8); the layout",
-        "is pinned to 48 bytes by the `assert!` below."
-      ],
-      "serialization": "bytemuck",
-      "repr": {
-        "kind": "c"
-      },
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "user",
-            "docs": [
-              "User who is owed redemption"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "oku_m_amount",
-            "docs": [
-              "OkuMoney amount held in escrow.",
-              "The actual USDC payout is calculated at `process_queue` time using",
-              "the current `oku_m_price` multiplier."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "timestamp",
-            "docs": [
-              "Timestamp when queued (kept for audit trail)"
-            ],
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "QueueInitializedEvent",
-      "docs": [
-        "Emitted when the redemption-queue PDA is created. Cycle 4 (PSM-22):",
-        "added so the three-step init flow has full event coverage and",
-        "indexers can observe each setup leg landing on-chain."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "redemption_queue",
-            "type": "pubkey"
-          },
-          {
-            "name": "max_entries",
-            "docs": [
-              "Compile-time queue capacity (`RedemptionQueue::MAX_ENTRIES`)."
-            ],
-            "type": "u32"
           }
         ]
       }
@@ -4414,8 +3025,8 @@
     {
       "name": "RedeemEvent",
       "docs": [
-        "Emitted when OkuMoney is redeemed for USDC (instant redemption).",
-        "EVM equivalent: `RedeemNote(address indexed user, uint256 okuMIn, uint256 usdcOut, uint256 okuMMultiplier)`"
+        "Emitted when OkuM is redeemed for USDC (instant redemption).",
+        "EVM equivalent: `RedeemNote(address indexed user, uint256 rawOkuMIn, uint256 usdcOut, uint256 multiplier)`"
       ],
       "type": {
         "kind": "struct",
@@ -4428,9 +3039,9 @@
             "type": "pubkey"
           },
           {
-            "name": "oku_m_amount",
+            "name": "raw_oku_m_amount",
             "docs": [
-              "OkuMoney burned (6 decimals)"
+              "OkuM raw amount burned (6 decimals)"
             ],
             "type": "u64"
           },
@@ -4449,306 +3060,17 @@
             "type": "u64"
           },
           {
-            "name": "oku_m_price",
+            "name": "multiplier",
             "docs": [
-              "OkuMoney price multiplier at time of redeem (1e9 = $1.00)",
-              "EVM equivalent: okuMMultiplier"
+              "OkuM multiplier at time of redeem (1e9 = $1.00)",
+              "EVM equivalent: multiplier"
             ],
             "type": "u64"
           },
           {
             "name": "new_total_supply",
             "docs": [
-              "OkuMoney supply AFTER the burn completed. Cycle 4 (PSM-23)."
-            ],
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "RedemptionProcessedEvent",
-      "docs": [
-        "Emitted when a queued redemption is processed.",
-        "EVM equivalent: `RedemptionProcessed(address indexed user, uint256 okuMAmount, uint256 dollarValue, uint256 usdcAmount, uint256 waitTime)`"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "user",
-            "docs": [
-              "User who received redemption"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "oku_m_amount",
-            "docs": [
-              "OkuMoney amount that was escrowed (6 decimals)"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "dollar_value",
-            "docs": [
-              "Dollar value at time of processing"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "usdc_amount",
-            "docs": [
-              "USDC received (6 decimals)"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "wait_time",
-            "docs": [
-              "Time spent in queue (seconds)"
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "new_total_supply",
-            "docs": [
-              "OkuMoney supply AFTER the per-entry burn. Cycle 4 (PSM-23):",
-              "added so indexers can reconstruct supply trajectory through the",
-              "queue-drain phase without summing batch events. Note that",
-              "because `process_queue` emits one of these per processed entry,",
-              "the value decreases monotonically across the batch."
-            ],
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "RedemptionQueue",
-      "docs": [
-        "Redemption queue PDA — zero-copy ring buffer.",
-        "",
-        "Uses `#[account(zero_copy)]` rather than `#[account]` so the 200-entry",
-        "array isn't Borsh-deserialised into a stack frame on every handler",
-        "entry. `AccountLoader<RedemptionQueue>` is the canonical access path;",
-        "`load_init` for `setup_redemption_queue`, `load` / `load_mut`",
-        "elsewhere with the borrow strictly scoped before any CPI.",
-        "",
-        "**Why 200 entries.** Solana caps CPI-driven account allocations at",
-        "`MAX_PERMITTED_DATA_INCREASE = 10_240` bytes per call (Anchor's `init`",
-        "constraint goes through `system_program::create_account`). 200",
-        "entries × 48 B = 9 600 B fits with 600 B of headroom; a single-step",
-        "`setup_redemption_queue` would otherwise require a `init + realloc +",
-        "realloc` flow. See `SVM/README.md` § \"EVM vs SVM — divergence",
-        "catalogue\" for the EVM divergence note.",
-        "",
-        "Wire layout (`#[repr(C)]`, packed to native alignment):",
-        "",
-        "```text",
-        "8   Anchor discriminator",
-        "1   bump",
-        "7   _pad0  (align head to 8)",
-        "8   head",
-        "8   tail",
-        "8   total_queued_oku_m",
-        "48 * 200   entries",
-        "```",
-        "",
-        "Total: 8 + 1 + 7 + 8 + 8 + 8 + 9_600 = **9 640** bytes. See the",
-        "compile-time `assert!` below.",
-        "",
-        "Field-access rules:",
-        "- Use `AccountLoader<RedemptionQueue>` in contexts, never",
-        "`Account<RedemptionQueue>` — the latter would attempt to Borsh-deserialize",
-        "the whole struct into a stack frame and overflow.",
-        "- `load()` for read-only, `load_mut()` for read-write. Drop the borrow",
-        "before any CPI that re-borrows the account info (the borrow is a",
-        "runtime `RefCell` borrow under the hood).",
-        "- `load_init()` only at the one `init`-constraint site",
-        "(`setup_redemption_queue`).",
-        "",
-        "Seeds: `[\"redemption_queue_v2\"]`. Rotation history tracked in",
-        "`SVM/README.md` § \"PDA seed history\"."
-      ],
-      "serialization": "bytemuck",
-      "repr": {
-        "kind": "c"
-      },
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "bump",
-            "docs": [
-              "PDA bump seed"
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "_pad0",
-            "docs": [
-              "Padding so `head` lands on an 8-byte boundary. Reserved; do not use."
-            ],
-            "type": {
-              "array": [
-                "u8",
-                7
-              ]
-            }
-          },
-          {
-            "name": "head",
-            "docs": [
-              "Index of next entry to process (head of queue). u64 so the",
-              "absolute counter is effectively unbounded",
-              "(~5.8 × 10¹⁰ years at 100 enqueues/sec); ring-buffer position",
-              "is `RedemptionQueue::ring_index(head)`."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "tail",
-            "docs": [
-              "Index of next slot to write (tail of queue)."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "total_queued_oku_m",
-            "docs": [
-              "Running total of OkuMoney held in escrow (updated on",
-              "enqueue/process/rescue)."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "entries",
-            "docs": [
-              "Ring-buffer entries. Index into via",
-              "`entries[(head_or_tail % MAX_ENTRIES) as usize]`."
-            ],
-            "type": {
-              "array": [
-                {
-                  "defined": {
-                    "name": "QueueEntry"
-                  }
-                },
-                200
-              ]
-            }
-          }
-        ]
-      }
-    },
-    {
-      "name": "RedemptionQueuedEvent",
-      "docs": [
-        "Emitted when a redemption is queued (insufficient buffer).",
-        "EVM equivalent: `RedemptionQueued(address indexed user, uint256 okuMAmount, uint256 dollarValue, uint256 position, uint256 queueLength)`"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "user",
-            "docs": [
-              "User who is owed redemption"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "oku_m_amount",
-            "docs": [
-              "OkuMoney amount held in escrow (6 decimals)"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "dollar_value",
-            "docs": [
-              "Dollar value at time of queueing"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "queue_position",
-            "docs": [
-              "Position in queue (0-indexed; absolute tail index, not ring slot)."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "queue_length",
-            "docs": [
-              "Total queue length after this entry."
-            ],
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "RedemptionRescuedEvent",
-      "docs": [
-        "Emitted when a stuck queue entry is rescued.",
-        "EVM equivalent: `RedemptionRescued(uint256 indexed index, address originalUser, address recipient, uint256 okuMAmount, uint256 dollarValue)`"
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "queue_index",
-            "docs": [
-              "Absolute index of the rescued entry."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "original_user",
-            "docs": [
-              "Original user who was owed redemption"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "recipient",
-            "docs": [
-              "Recipient who received the OkuMoney"
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "oku_m_amount",
-            "docs": [
-              "OkuMoney amount returned (6 decimals)"
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "dollar_value",
-            "docs": [
-              "Dollar value at time of rescue"
-            ],
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "RedemptionSkippedEvent",
-      "docs": [
-        "Emitted when `process_queue` skips a previously-rescued entry.",
-        "EVM equivalent: `RedemptionSkipped(uint256 indexed index)`."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "queue_index",
-            "docs": [
-              "Absolute queue index that was skipped (already cleared by rescue)."
+              "OkuM supply AFTER the burn completed. Cycle 4 (PSM-23)."
             ],
             "type": "u64"
           }
@@ -4854,7 +3176,7 @@
     {
       "name": "YieldDistributed",
       "docs": [
-        "Emitted when yield is distributed across all OkuMoney holders.",
+        "Emitted when yield is distributed across all OkuM holders.",
         "EVM equivalent: `YieldDistributed(uint256 yieldAmount, uint256 oldMultiplier, uint256 newMultiplier, uint256 totalSupply)`"
       ],
       "type": {
@@ -4878,28 +3200,13 @@
           {
             "name": "total_supply",
             "docs": [
-              "Total OkuMoney supply at time of distribution"
+              "Total OkuM supply at time of distribution"
             ],
             "type": "u64"
           },
           {
             "name": "timestamp",
             "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "YieldDistributionSlotSet",
-      "docs": [
-        "Emitted when yield distribution slot is set (for sandwich prevention)."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "slot",
-            "type": "u64"
           }
         ]
       }

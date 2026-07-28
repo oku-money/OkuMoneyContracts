@@ -1,14 +1,14 @@
 //! # Lite-PSM constants
 //!
-//! Protocol-wide constants (`PRECISION`, `BASIS_POINTS`, `MAX_MULTIPLIER`)
+//! Protocol-wide constants (`PRECISION`, `MAX_MULTIPLIER`)
 //! live in the workspace crate `oku-shared` and
 //! are re-exported here for ergonomics — call sites continue to write
 //! `use crate::constants::*` without caring where the constant is
 //! authored.
 //!
-//! ## Single-Token Design (usdOku)
+//! ## Single-Token Design (OkuM)
 //!
-//! The PSM operates on a single token: **usdOku**, a Token-2022 mint with
+//! The PSM operates on a single token: **OkuM**, a Token-2022 mint with
 //! the `ScaledUiAmount` extension. The multiplier that converts between
 //! raw token amounts and dollar-display values is stored on the mint
 //! itself via `ScaledUiAmountConfig`.
@@ -17,17 +17,17 @@
 //!
 //! | Name | Decimals | Description |
 //! |------|----------|-------------|
-//! | `raw_amount` | 6 | Raw usdOku token count (on-chain) |
+//! | `raw_amount` | 6 | Raw OkuM token count (on-chain) |
 //! | `usdc_amount` | 6 | USDC amount |
 //!
 //! ## Key Formulas
 //!
-//! The `multiplier` is read from the usdOku mint's `ScaledUiAmountConfig`
+//! The `multiplier` is read from the OkuM mint's `ScaledUiAmountConfig`
 //! extension at the time of the operation.
 //!
 //! ```text
-//! USDC -> usdOku:  raw_amount  = (usdc_amount * PRECISION) / multiplier
-//! usdOku -> USDC:  usdc_amount = (raw_amount * multiplier) / PRECISION
+//! USDC -> OkuM:  raw_amount  = (usdc_amount * PRECISION) / multiplier
+//! OkuM -> USDC:  usdc_amount = (raw_amount * multiplier) / PRECISION
 //! ```
 //!
 //! ## EVM ↔ SVM Decimal Mapping
@@ -35,11 +35,11 @@
 //! | Type | EVM (decimals) | SVM (decimals) |
 //! |------|----------------|----------------|
 //! | USDC | 6 | 6 |
-//! | usdOku | 18 | 6 |
+//! | OkuM | 18 | 6 |
 //! | Multipliers | 18 (1e18 = $1) | 9 (1e9 = $1) |
 
 // ---------------------------------------------------------------------------
 // Re-exports from the shared workspace crate
 // ---------------------------------------------------------------------------
 
-pub use oku_shared::{BASIS_POINTS, MAX_MULTIPLIER, PRECISION};
+pub use oku_shared::{MAX_MULTIPLIER, PRECISION};

@@ -98,7 +98,6 @@ async function main() {
   saveDeployment(network, {
     programs: {
       litePsm: programIds.litePsm.toBase58(),
-      okuDollarProgram: programIds.okuDollar.toBase58(),
     },
   });
 
@@ -122,7 +121,6 @@ async function main() {
     logger.log('');
     logger.log(`[programs.${tomlSection}]`);
     logger.log(`lite_psm   = "${programIds.litePsm.toBase58()}"`);
-    logger.log(`oku_dollar = "${programIds.okuDollar.toBase58()}"`);
     logger.log('');
     logger.info(
       'Until Anchor.toml matches, the [addressBook] mismatch warning will'

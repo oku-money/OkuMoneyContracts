@@ -1,12 +1,12 @@
 /**
  * Direct-Mint Integration Tests
  *
- * Tests the permissioned usdOku mint path that does NOT require USDC
- * collateral on-chain. Matches EVM's `UsdOku.mint(to, amount)` called
+ * Tests the permissioned OkuM mint path that does NOT require USDC
+ * collateral on-chain. Matches EVM's `OkuM.mint(to, amount)` called
  * by a non-PSM `OKUM_MINTER` role holder.
  *
  * Covers:
- *   - `mint_usd_oku_direct` — permissioned direct usdOku mint to recipient
+ *   - `mint_oku_m_direct` — permissioned direct OkuM mint to recipient
  *   - `set_direct_minter_allowance` — admin allowance management
  */
 
@@ -48,14 +48,14 @@ describe("direct-mint", () => {
   const recipient = Keypair.generate();
 
   // Mints
-  let usdOkuMint: PublicKey;
+  let okuMMint: PublicKey;
   let usdcMint: PublicKey;
 
   // PDAs
   let psmConfigPda: PublicKey;
 
   // ATAs
-  let recipientUsdOkuAta: PublicKey;
+  let recipientOkuMAta: PublicKey;
 
   const DIRECT_MINTER_ALLOWANCE = new BN(50_000_000_000); // 50k with 6 decimals
 
@@ -75,10 +75,10 @@ describe("direct-mint", () => {
       TOKEN_PROGRAM_ID
     );
 
-    // Initialize PSM (creates usdOku mint internally)
+    // Initialize PSM (creates OkuM mint internally)
     const psmSetup = await initializePsm(h, psmProgram, payer, usdcMint);
     psmConfigPda = psmSetup.configPda;
-    usdOkuMint = psmSetup.usdOkuMint;
+    okuMMint = psmSetup.okuMMint;
 
     // Fund keypairs
     await fundKeypairs(
@@ -107,8 +107,8 @@ describe("direct-mint", () => {
       .rpc();
 
     // Derive recipient ATA
-    recipientUsdOkuAta = getAssociatedTokenAddressSync(
-      usdOkuMint,
+    recipientOkuMAta = getAssociatedTokenAddressSync(
+      okuMMint,
       recipient.publicKey,
       false,
       TOKEN_2022_PROGRAM_ID
@@ -171,26 +171,26 @@ describe("direct-mint", () => {
   });
 
   // ==========================================================================
-  // mint_usd_oku_direct
+  // mint_oku_m_direct
   // ==========================================================================
 
-  describe("mint_usd_oku_direct", () => {
-    const MINT_AMOUNT = new BN(5_000_000); // 5 usdOku
+  describe("mint_oku_m_direct", () => {
+    const MINT_AMOUNT = new BN(5_000_000); // 5 okuM
 
-    it("mints usdOku to recipient without USDC", async () => {
+    it("mints okuM to recipient without USDC", async () => {
       const configBefore = await psmProgram.account.psmConfig.fetch(
         psmConfigPda
       );
       const allowanceBefore = configBefore.directMinterAllowance;
 
       await psmProgram.methods
-        .mintUsdOkuDirect(MINT_AMOUNT)
+        .mintOkuMDirect(MINT_AMOUNT)
         .accountsPartial({
           directMinter: directMinter.publicKey,
           config: psmConfigPda,
-          usdOkuMint,
+          okuMMint,
           recipient: recipient.publicKey,
-          recipientUsdOkuAta,
+          recipientOkuMAta,
           token2022Program: TOKEN_2022_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -198,10 +198,10 @@ describe("direct-mint", () => {
         .signers([directMinter])
         .rpc();
 
-      // Verify recipient received usdOku
+      // Verify recipient received okuM
       const recipientAccount = await getAccount(
         h.provider.connection,
-        recipientUsdOkuAta,
+        recipientOkuMAta,
         undefined,
         TOKEN_2022_PROGRAM_ID
       );
@@ -220,13 +220,13 @@ describe("direct-mint", () => {
       await expectBankrunError(
         () =>
           psmProgram.methods
-            .mintUsdOkuDirect(new BN(0))
+            .mintOkuMDirect(new BN(0))
             .accountsPartial({
               directMinter: directMinter.publicKey,
               config: psmConfigPda,
-              usdOkuMint,
+              okuMMint,
               recipient: recipient.publicKey,
-              recipientUsdOkuAta,
+              recipientOkuMAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
               associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
               systemProgram: SystemProgram.programId,
@@ -252,13 +252,13 @@ describe("direct-mint", () => {
       await expectBankrunError(
         () =>
           psmProgram.methods
-            .mintUsdOkuDirect(MINT_AMOUNT)
+            .mintOkuMDirect(MINT_AMOUNT)
             .accountsPartial({
               directMinter: directMinter.publicKey,
               config: psmConfigPda,
-              usdOkuMint,
+              okuMMint,
               recipient: recipient.publicKey,
-              recipientUsdOkuAta,
+              recipientOkuMAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
               associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
               systemProgram: SystemProgram.programId,
@@ -293,13 +293,13 @@ describe("direct-mint", () => {
       await expectBankrunError(
         () =>
           psmProgram.methods
-            .mintUsdOkuDirect(MINT_AMOUNT)
+            .mintOkuMDirect(MINT_AMOUNT)
             .accountsPartial({
               directMinter: directMinter.publicKey,
               config: psmConfigPda,
-              usdOkuMint,
+              okuMMint,
               recipient: recipient.publicKey,
-              recipientUsdOkuAta,
+              recipientOkuMAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
               associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
               systemProgram: SystemProgram.programId,
@@ -327,13 +327,13 @@ describe("direct-mint", () => {
       await expectBankrunError(
         () =>
           psmProgram.methods
-            .mintUsdOkuDirect(MINT_AMOUNT)
+            .mintOkuMDirect(MINT_AMOUNT)
             .accountsPartial({
               directMinter: imposter.publicKey,
               config: psmConfigPda,
-              usdOkuMint,
+              okuMMint,
               recipient: recipient.publicKey,
-              recipientUsdOkuAta,
+              recipientOkuMAta,
               token2022Program: TOKEN_2022_PROGRAM_ID,
               associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
               systemProgram: SystemProgram.programId,

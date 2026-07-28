@@ -14,23 +14,6 @@
  */
 
 // lite_psm — programs/lite-psm/src/state.rs
-export const PSM_CONFIG_LEN = 594;            // const _: () = assert!(PsmConfig::LEN == 594);
-                                              // Was 714 before oracle removal (which removed
-                                              // oracle_manager, oracle_relay_feed,
-                                              // oracle_relay_pyth_program_owner, oracle_relay_staleness,
-                                              // oracle_relay_min_price_e9, oracle_relay_max_price_e9;
-                                              // -120 bytes).
-export const REDEMPTION_QUEUE_LEN = 9_640;    // const _: () = assert!(RedemptionQueue::LEN == 9_640);
-                                              // Zero-copy ring at MAX_ENTRIES=200 (Phase 13b).
-                                              // Capped at 200 (not the spec target of 500) by Solana's
-                                              // MAX_PERMITTED_DATA_INCREASE = 10_240 single-CPI alloc
-                                              // budget; a 500-entry queue (~24 KB) would need a
-                                              // multi-step `realloc` upgrade.
-
-// oku_dollar — programs/oku-dollar/src/state.rs
-export const OKU_DOLLAR_CONFIG_LEN = 330;    // const _: () = assert!(OkuDollarConfig::LEN == 330);
-
-// Bridge-related size constants (BRIDGE_CONFIG_LEN, BRIDGE_NONCE_LEN,
-// PROCESSED_REQUEST_LEN, PENDING_REFUND_LEN, REFUNDED_REQUEST_LEN) were
-// removed in the noBridge refactor (phase B) — no on-chain bridge state
-// remains.
+export const PSM_CONFIG_LEN = 562;            // const _: () = assert!(PsmConfig::LEN == 562);
+                                              // Was 594 before queue removal (queue_processor pubkey
+                                              // removed = -32 bytes).

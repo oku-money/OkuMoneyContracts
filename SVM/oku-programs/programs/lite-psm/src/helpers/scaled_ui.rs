@@ -1,4 +1,4 @@
-//! Helpers for reading the ScaledUiAmount extension on the usdOku mint.
+//! Helpers for reading the ScaledUiAmount extension on the OkuM mint.
 //!
 //! The multiplier stored in this extension is the single source of truth
 //! for the raw-token-to-dollar conversion rate. All mint/redeem/yield
@@ -10,9 +10,9 @@ use anchor_spl::token_2022::spl_token_2022::extension::{
     BaseStateWithExtensions, StateWithExtensions,
 };
 use anchor_spl::token_2022::spl_token_2022::state::Mint as MintRaw;
-use oku_shared::PRECISION;
+use oku_shared::{MAX_MULTIPLIER, PRECISION};
 
-/// Read the current effective multiplier from the usdOku mint's
+/// Read the current effective multiplier from the OkuM mint's
 /// `ScaledUiAmountConfig` extension and convert the f64 value to a
 /// PRECISION-scaled u64 for use in integer math.
 ///
@@ -82,7 +82,11 @@ pub fn read_multiplier(mint_account: &AccountInfo) -> Result<u64> {
     // Convert f64 to PRECISION-scaled u64.
     // A multiplier of 1.0 yields PRECISION (1_000_000_000).
     let scaled = (effective * PRECISION as f64).round() as u64;
-    if scaled == 0 {
+
+    // Guard: reject zero (NaN/negative f64 -> 0 via saturating cast)
+    // and values above MAX_MULTIPLIER (infinity/corrupt f64 -> u64::MAX
+    // via saturating cast). Both would silently break PSM math.
+    if scaled == 0 || scaled > MAX_MULTIPLIER {
         return Err(error!(LitePsmError::MultiplierReadFailed));
     }
 

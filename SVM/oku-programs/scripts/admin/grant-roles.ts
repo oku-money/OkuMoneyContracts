@@ -77,7 +77,6 @@ const PSM_ROLES = [
   'unpauser',
   'freezer',
   'unfreezer',
-  'queueProcessor',
   'bufferDepositor',
   'bufferWithdrawer',
   'capManager',
@@ -86,7 +85,7 @@ const PSM_ROLES = [
   'directMinter',
 ] as const;
 
-/** Direct-minter allowance to set after granting roles (1M usdOku, 6 decimals). */
+/** Direct-minter allowance to set after granting roles (1M OkuM, 6 decimals). */
 const DIRECT_MINTER_ALLOWANCE = DIRECT_MINTER_ALLOWANCE_CONST;
 
 // ============================================================================

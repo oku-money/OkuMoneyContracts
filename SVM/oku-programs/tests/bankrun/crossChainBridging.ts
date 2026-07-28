@@ -6,15 +6,15 @@
  * Design under test:
  *   - There is no on-chain bridge program on SVM.
  *   - The orchestrator holds the `direct_minter` and `direct_burner`
- *     roles on the lite-psm. Bridging uses `mint_usd_oku_direct` /
- *     `burn_usd_oku_direct` (raw usdOku tokens).
+ *     roles on the lite-psm. Bridging uses `mint_oku_m_direct` /
+ *     `burn_oku_m_direct` (raw OkuM tokens).
  *
- *   - To "bridge" usdOku from chain A to chain B, the orchestrator:
- *       1. Pulls the user's usdOku on A (SPL `transfer` from
- *          user -> orchestrator's usdOku ATA — the user signs).
- *       2. Calls `burn_usd_oku_direct` on chain A -> usdOku is burned.
+ *   - To "bridge" okuM from chain A to chain B, the orchestrator:
+ *       1. Pulls the user's okuM on A (SPL `transfer` from
+ *          user -> orchestrator's okuM ATA — the user signs).
+ *       2. Calls `burn_oku_m_direct` on chain A -> okuM is burned.
  *       3. Off-chain notification (no USDC hand-off needed).
- *       4. Calls `mint_usd_oku_direct` on chain B -> usdOku is minted
+ *       4. Calls `mint_oku_m_direct` on chain B -> okuM is minted
  *          directly to the recipient's ATA.
  *
  *   - Raw token amounts are conserved across the bridge (1:1).
@@ -43,7 +43,7 @@ import {
   warmMultisig,
   psmOrchestrator,
   initializePsm,
-  mintUsdOkuViaProgram,
+  mintOkuMViaProgram,
   DECIMALS,
 } from "../shared/setup";
 import {
@@ -74,19 +74,19 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
   const bob = Keypair.generate();
 
   let usdcMint: PublicKey;
-  let usdOkuMint: PublicKey;
+  let okuMMint: PublicKey;
 
   let psmConfigPda: PublicKey;
   let vaultUsdcAta: PublicKey;
 
   // Alice = sender on "chain A"
   let aliceUsdcAta: PublicKey;
-  let aliceUsdOkuAta: PublicKey;
+  let aliceOkuMAta: PublicKey;
   // Bob = recipient on "chain B"
-  let bobUsdOkuAta: PublicKey;
+  let bobOkuMAta: PublicKey;
   // Orchestrator ATAs
   let orchestratorUsdcAta: PublicKey;
-  let orchestratorUsdOkuAta: PublicKey;
+  let orchestratorOkuMAta: PublicKey;
 
   const DIRECT_MINTER_ALLOWANCE = new BN(1_000_000_000_000); // 1M
   const DIRECT_BURNER_ALLOWANCE = new BN(1_000_000_000_000); // 1M
@@ -115,7 +115,7 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
 
     const psmSetup = await initializePsm(h, psm, payer, usdcMint);
     psmConfigPda = psmSetup.configPda;
-    usdOkuMint = psmSetup.usdOkuMint;
+    okuMMint = psmSetup.okuMMint;
     vaultUsdcAta = psmSetup.vaultUsdcAta;
 
     // Grant orchestrator the DirectMinter and DirectBurner roles
@@ -156,21 +156,21 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
 
     // ATAs.
     aliceUsdcAta = await ensureAtaViaBankrun(h, alice.publicKey, usdcMint, TOKEN_PROGRAM_ID);
-    aliceUsdOkuAta = getAssociatedTokenAddressSync(
-      usdOkuMint,
+    aliceOkuMAta = getAssociatedTokenAddressSync(
+      okuMMint,
       alice.publicKey,
       false,
       TOKEN_2022_PROGRAM_ID
     );
-    await ensureAtaViaBankrun(h, alice.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, alice.publicKey, okuMMint, TOKEN_2022_PROGRAM_ID);
 
-    bobUsdOkuAta = getAssociatedTokenAddressSync(
-      usdOkuMint,
+    bobOkuMAta = getAssociatedTokenAddressSync(
+      okuMMint,
       bob.publicKey,
       false,
       TOKEN_2022_PROGRAM_ID
     );
-    await ensureAtaViaBankrun(h, bob.publicKey, usdOkuMint, TOKEN_2022_PROGRAM_ID);
+    await ensureAtaViaBankrun(h, bob.publicKey, okuMMint, TOKEN_2022_PROGRAM_ID);
 
     orchestratorUsdcAta = await ensureAtaViaBankrun(
       h,
@@ -178,8 +178,8 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
       usdcMint,
       TOKEN_PROGRAM_ID
     );
-    orchestratorUsdOkuAta = getAssociatedTokenAddressSync(
-      usdOkuMint,
+    orchestratorOkuMAta = getAssociatedTokenAddressSync(
+      okuMMint,
       orchestrator.publicKey,
       false,
       TOKEN_2022_PROGRAM_ID
@@ -187,7 +187,7 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
     await ensureAtaViaBankrun(
       h,
       orchestrator.publicKey,
-      usdOkuMint,
+      okuMMint,
       TOKEN_2022_PROGRAM_ID
     );
 
@@ -227,36 +227,36 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
   }
 
   // ---------------------------------------------------------------------
-  // Test 1 — usdOku bridging via direct burn/mint
+  // Test 1 — okuM bridging via direct burn/mint
   // ---------------------------------------------------------------------
 
-  it("orchestrator-mediated bridge: Alice usdOku on A -> Bob usdOku on B (direct burn/mint)", async () => {
-    // Step 0: Alice mints usdOku via public PSM on chain A (1000 USDC -> ~1000 usdOku).
+  it("orchestrator-mediated bridge: Alice okuM on A -> Bob okuM on B (direct burn/mint)", async () => {
+    // Step 0: Alice mints okuM via public PSM on chain A (1000 USDC -> ~1000 okuM).
     const mintUsdc = new BN(1_000_000_000); // 1000 USDC
-    await mintUsdOkuViaProgram(
+    await mintOkuMViaProgram(
       psm as any,
       alice,
       mintUsdc,
       psmConfigPda,
       usdcMint,
-      usdOkuMint,
+      okuMMint,
       aliceUsdcAta,
-      aliceUsdOkuAta,
+      aliceOkuMAta,
       vaultUsdcAta
     );
-    const aliceUsdOkuBefore = await ataAmount(aliceUsdOkuAta, TOKEN_2022_PROGRAM_ID);
-    expect(Number(aliceUsdOkuBefore)).to.be.greaterThan(0);
+    const aliceOkuMBefore = await ataAmount(aliceOkuMAta, TOKEN_2022_PROGRAM_ID);
+    expect(Number(aliceOkuMBefore)).to.be.greaterThan(0);
 
     // Snapshot pre-bridge state.
-    const bobUsdOkuStart = await ataAmount(bobUsdOkuAta, TOKEN_2022_PROGRAM_ID);
+    const bobOkuMStart = await ataAmount(bobOkuMAta, TOKEN_2022_PROGRAM_ID);
 
-    // ===== Step 1: Alice transfers her usdOku to the orchestrator's ATA =====
-    const bridgeAmount = new BN(Number(aliceUsdOkuBefore));
+    // ===== Step 1: Alice transfers her OkuM to the orchestrator's ATA =====
+    const bridgeAmount = new BN(Number(aliceOkuMBefore));
 
     const transferIx = createTransferCheckedInstruction(
-      aliceUsdOkuAta,
-      usdOkuMint,
-      orchestratorUsdOkuAta,
+      aliceOkuMAta,
+      okuMMint,
+      orchestratorOkuMAta,
       alice.publicKey,
       BigInt(bridgeAmount.toString()),
       DECIMALS,
@@ -265,38 +265,38 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
     );
     await provider.sendAndConfirm!(new Transaction().add(transferIx), [alice]);
 
-    const aliceUsdOkuAfterTransfer = await ataAmount(aliceUsdOkuAta, TOKEN_2022_PROGRAM_ID);
-    expect(Number(aliceUsdOkuAfterTransfer)).to.equal(0);
+    const aliceOkuMAfterTransfer = await ataAmount(aliceOkuMAta, TOKEN_2022_PROGRAM_ID);
+    expect(Number(aliceOkuMAfterTransfer)).to.equal(0);
 
-    // ===== Step 2: Orchestrator burns usdOku on chain A =====
+    // ===== Step 2: Orchestrator burns okuM on chain A =====
     await psm.methods
-      .burnUsdOkuDirect(bridgeAmount)
+      .burnOkuMDirect(bridgeAmount)
       .accountsPartial({
         directBurner: orchestrator.publicKey,
         config: psmConfigPda,
-        usdOkuMint,
-        burnerUsdOkuAta: orchestratorUsdOkuAta,
+        okuMMint,
+        burnerOkuMAta: orchestratorOkuMAta,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
       .signers([orchestrator])
       .rpc();
 
-    // Orchestrator's usdOku balance should be 0 after burn
-    const orchUsdOkuAfterBurn = await ataAmount(orchestratorUsdOkuAta, TOKEN_2022_PROGRAM_ID);
-    expect(Number(orchUsdOkuAfterBurn)).to.equal(0);
+    // Orchestrator's okuM balance should be 0 after burn
+    const orchOkuMAfterBurn = await ataAmount(orchestratorOkuMAta, TOKEN_2022_PROGRAM_ID);
+    expect(Number(orchOkuMAfterBurn)).to.equal(0);
 
     // ===== Step 3: Off-chain notification (no USDC hand-off needed) =====
     // With direct burn/mint, no USDC flows through the bridge.
 
-    // ===== Step 4: Orchestrator mints usdOku to Bob on chain B =====
+    // ===== Step 4: Orchestrator mints okuM to Bob on chain B =====
     await psm.methods
-      .mintUsdOkuDirect(bridgeAmount)
+      .mintOkuMDirect(bridgeAmount)
       .accountsPartial({
         directMinter: orchestrator.publicKey,
         config: psmConfigPda,
-        usdOkuMint,
+        okuMMint,
         recipient: bob.publicKey,
-        recipientUsdOkuAta: bobUsdOkuAta,
+        recipientOkuMAta: bobOkuMAta,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
@@ -304,54 +304,54 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
       .signers([orchestrator])
       .rpc();
 
-    const bobUsdOkuEnd = await ataAmount(bobUsdOkuAta, TOKEN_2022_PROGRAM_ID);
-    const bobReceived = bobUsdOkuEnd - bobUsdOkuStart;
+    const bobOkuMEnd = await ataAmount(bobOkuMAta, TOKEN_2022_PROGRAM_ID);
+    const bobReceived = bobOkuMEnd - bobOkuMStart;
 
     // ===== Invariants =====
     // I1: Raw amount burned == raw amount minted (1:1 conservation).
     expect(bobReceived.toString()).to.equal(bridgeAmount.toString());
 
-    // I2: Orchestrator holds no leftover usdOku.
-    const orchUsdOkuFinal = await ataAmount(orchestratorUsdOkuAta, TOKEN_2022_PROGRAM_ID);
-    expect(Number(orchUsdOkuFinal)).to.equal(0);
+    // I2: Orchestrator holds no leftover okuM.
+    const orchOkuMFinal = await ataAmount(orchestratorOkuMAta, TOKEN_2022_PROGRAM_ID);
+    expect(Number(orchOkuMFinal)).to.equal(0);
 
     // I3: Alice's tokens are fully consumed.
-    expect(Number(aliceUsdOkuAfterTransfer)).to.equal(0);
+    expect(Number(aliceOkuMAfterTransfer)).to.equal(0);
   });
 
   // ---------------------------------------------------------------------
-  // Test 2 — usdOku bridging across a multiplier tick
+  // Test 2 — okuM bridging across a multiplier tick
   // ---------------------------------------------------------------------
 
   it("raw amount conserved across an orchestrator multiplier tick between burn and mint", async () => {
-    // Fund Alice with fresh usdOku.
+    // Fund Alice with fresh okuM.
     await mintToViaBankrun(h, usdcMint, aliceUsdcAta, payer, 1_000_000_000, TOKEN_PROGRAM_ID);
-    await mintUsdOkuViaProgram(
+    await mintOkuMViaProgram(
       psm as any,
       alice,
       new BN(1_000_000_000),
       psmConfigPda,
       usdcMint,
-      usdOkuMint,
+      okuMMint,
       aliceUsdcAta,
-      aliceUsdOkuAta,
+      aliceOkuMAta,
       vaultUsdcAta
     );
 
-    const aliceUsdOku = await ataAmount(aliceUsdOkuAta, TOKEN_2022_PROGRAM_ID);
-    const bobStart = await ataAmount(bobUsdOkuAta, TOKEN_2022_PROGRAM_ID);
+    const aliceOkuM = await ataAmount(aliceOkuMAta, TOKEN_2022_PROGRAM_ID);
+    const bobStart = await ataAmount(bobOkuMAta, TOKEN_2022_PROGRAM_ID);
 
     // Snapshot starting multiplier from the mint extension.
-    const multiplier0 = await readMultiplierFromMint(h, usdOkuMint);
+    const multiplier0 = await readMultiplierFromMint(h, okuMMint);
 
     // Alice -> orchestrator (pull).
-    const bridgeAmount = new BN(Number(aliceUsdOku));
+    const bridgeAmount = new BN(Number(aliceOkuM));
     await provider.sendAndConfirm!(
       new Transaction().add(
         createTransferCheckedInstruction(
-          aliceUsdOkuAta,
-          usdOkuMint,
-          orchestratorUsdOkuAta,
+          aliceOkuMAta,
+          okuMMint,
+          orchestratorOkuMAta,
           alice.publicKey,
           BigInt(bridgeAmount.toString()),
           DECIMALS,
@@ -364,12 +364,12 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
 
     // Orchestrator burns on chain A.
     await psm.methods
-      .burnUsdOkuDirect(bridgeAmount)
+      .burnOkuMDirect(bridgeAmount)
       .accountsPartial({
         directBurner: orchestrator.publicKey,
         config: psmConfigPda,
-        usdOkuMint,
-        burnerUsdOkuAta: orchestratorUsdOkuAta,
+        okuMMint,
+        burnerOkuMAta: orchestratorOkuMAta,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
       .signers([orchestrator])
@@ -384,7 +384,7 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
       .accountsPartial({
         rebaser: orchestrator.publicKey,
         config: psmConfigPda,
-        usdOkuMint,
+        okuMMint,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
       .signers([orchestrator])
@@ -393,13 +393,13 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
 
     // Mint on "chain B" — same raw amount, regardless of multiplier.
     await psm.methods
-      .mintUsdOkuDirect(bridgeAmount)
+      .mintOkuMDirect(bridgeAmount)
       .accountsPartial({
         directMinter: orchestrator.publicKey,
         config: psmConfigPda,
-        usdOkuMint,
+        okuMMint,
         recipient: bob.publicKey,
-        recipientUsdOkuAta: bobUsdOkuAta,
+        recipientOkuMAta: bobOkuMAta,
         token2022Program: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
@@ -407,7 +407,7 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
       .signers([orchestrator])
       .rpc();
 
-    const bobEnd = await ataAmount(bobUsdOkuAta, TOKEN_2022_PROGRAM_ID);
+    const bobEnd = await ataAmount(bobOkuMAta, TOKEN_2022_PROGRAM_ID);
     const bobReceived = new BN((bobEnd - bobStart).toString());
 
     // Raw amounts are conserved 1:1 regardless of multiplier changes.
@@ -415,17 +415,17 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
     expect(bobReceived.toString()).to.equal(bridgeAmount.toString());
 
     // Orchestrator holds no leftover.
-    const orchFinal = await ataAmount(orchestratorUsdOkuAta, TOKEN_2022_PROGRAM_ID);
+    const orchFinal = await ataAmount(orchestratorOkuMAta, TOKEN_2022_PROGRAM_ID);
     expect(Number(orchFinal)).to.equal(0);
   });
 
   // ---------------------------------------------------------------------
-  // Test 3 — Authority boundary: random key cannot mint usdOku directly
+  // Test 3 — Authority boundary: random key cannot mint okuM directly
   // ---------------------------------------------------------------------
 
-  it("a non-orchestrator key cannot mint usdOku directly (PSM public mint is permissionless)", async () => {
-    // Bob — random key with USDC — tries to call mint_usd_oku directly
-    // against his own ATA. mint_usd_oku is permissionless, so this should
+  it("a non-orchestrator key cannot mint okuM directly (PSM public mint is permissionless)", async () => {
+    // Bob — random key with USDC — tries to call mint_oku_m directly
+    // against his own ATA. mint_oku_m is permissionless, so this should
     // SUCCEED for him, but the result must not differ from any other
     // user's mint. The point of this test is to assert that the
     // orchestrator's privileges are bounded: it has no special public
@@ -433,16 +433,16 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
     const bobUsdcAta = await ensureAtaViaBankrun(h, bob.publicKey, usdcMint, TOKEN_PROGRAM_ID);
     await mintToViaBankrun(h, usdcMint, bobUsdcAta, payer, 100_000_000, TOKEN_PROGRAM_ID);
 
-    const bobUsdOkuBefore = await ataAmount(bobUsdOkuAta, TOKEN_2022_PROGRAM_ID);
+    const bobOkuMBefore = await ataAmount(bobOkuMAta, TOKEN_2022_PROGRAM_ID);
     await psm.methods
-      .mintUsdOku(new BN(100_000_000))
+      .mintOkuM(new BN(100_000_000))
       .accountsPartial({
         user: bob.publicKey,
         config: psmConfigPda,
         usdcMint,
-        usdOkuMint,
+        okuMMint,
         userUsdcAta: bobUsdcAta,
-        userUsdOkuAta: bobUsdOkuAta,
+        userOkuMAta: bobOkuMAta,
         vaultUsdc: vaultUsdcAta,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -451,16 +451,15 @@ describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
       })
       .signers([bob])
       .rpc();
-    const bobUsdOkuAfter = await ataAmount(bobUsdOkuAta, TOKEN_2022_PROGRAM_ID);
-    expect(Number(bobUsdOkuAfter) - Number(bobUsdOkuBefore)).to.be.greaterThan(0);
+    const bobOkuMAfter = await ataAmount(bobOkuMAta, TOKEN_2022_PROGRAM_ID);
+    expect(Number(bobOkuMAfter) - Number(bobOkuMBefore)).to.be.greaterThan(0);
 
-    // The orchestrator role-set (queue_processor / buffer_depositor /
+    // The orchestrator role-set (buffer_depositor /
     // rebaser / direct_minter / direct_burner) does NOT grant a public
     // mint privilege — confirm by inspecting PsmConfig. Bob can mint
-    // because `mint_usd_oku` is permissionless; the PSM PDA signs the
+    // because `mint_oku_m` is permissionless; the PSM PDA signs the
     // inner CPI to Token-2022's `mint_to`.
     const cfg = await psm.account.psmConfig.fetch(psmConfigPda);
-    expect(cfg.queueProcessor.toString()).to.equal(orchestrator.publicKey.toString());
     expect(cfg.bufferDepositor.toString()).to.equal(orchestrator.publicKey.toString());
     expect(cfg.rebaser.toString()).to.equal(orchestrator.publicKey.toString());
   });

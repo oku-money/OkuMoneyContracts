@@ -1,31 +1,28 @@
 /**
- * Standalone usdOku redeem CLI (orchestrator bridge-leg).
+ * Standalone okuM redeem CLI (orchestrator bridge-leg).
  *
- * Wraps `lite_psm::redeem_usd_oku`. Burns the caller's `usdOku` and either
- * (a) pays out USDC from the buffer in the same tx, or (b) escrows the
- * usdOku into the redemption queue if the buffer is depleted. The EVM
- * sibling lives at `EVM/scripts/operator/redeemUsdOku.ts`.
+ * Wraps `lite_psm::redeem_oku_m`. Burns the caller's `OkuM` and pays out
+ * USDC from the buffer. Reverts with `InsufficientBuffer` if the buffer
+ * is depleted. The EVM sibling lives at `EVM/scripts/operator/redeemOkuM.ts`.
  *
  * Previously only reachable via the integration runner at
  * `scripts/test/test-devnet.ts`. Surfaced as a standalone CLI so the
  * off-chain orchestrator can drive it directly.
  *
  * Usage:
- *   NETWORK=devnet tsx scripts/admin/redeem-usd-oku.ts --amount 1000000          # 1 usdOku (6-dec)
- *   NETWORK=mainnet-beta tsx scripts/admin/redeem-usd-oku.ts --amount 100000000 \
+ *   NETWORK=devnet tsx scripts/admin/redeem-oku-m.ts --amount 1000000          # 1 okuM (6-dec)
+ *   NETWORK=mainnet-beta tsx scripts/admin/redeem-oku-m.ts --amount 100000000 \
  *       --yes-i-mean-it-on-mainnet
  *   --dry-run    print the planned tx without submitting
  */
 
 import * as anchor from '@anchor-lang/core';
 import { Program, BN, AnchorProvider } from '@anchor-lang/core';
-import { PublicKey, SystemProgram } from '@solana/web3.js';
+import { PublicKey } from '@solana/web3.js';
 import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddress,
-  createAssociatedTokenAccountIdempotentInstruction,
 } from '@solana/spl-token';
 import { LitePsm } from '../../target/types/lite_psm';
 import { createProvider, detectNetwork } from '../utils/network';
@@ -33,7 +30,6 @@ import { loadDeployment } from '../utils/addressBook';
 import { logger } from '../utils/logger';
 import {
   derivePsmConfigPDA,
-  deriveRedemptionQueuePDA,
 } from '../utils/pdaHelpers';
 import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 
@@ -44,98 +40,70 @@ function parseArg(name: string): string | undefined {
 
 async function main() {
   const network = detectNetwork();
-  logger.header(`redeem_usd_oku (${network})`);
+  logger.header(`redeem_oku_m (${network})`);
 
   const amountArg = parseArg('amount');
   if (!amountArg) {
-    throw new Error('Required: --amount=<usdOku in base units (6-dec)>. e.g. --amount=1000000 = 1 usdOku');
+    throw new Error('Required: --amount=<okuM in base units (6-dec)>. e.g. --amount=1000000 = 1 okuM');
   }
-  const usdOkuAmount = new BN(amountArg);
-  if (usdOkuAmount.lten(0)) {
+  const okuMAmount = new BN(amountArg);
+  if (okuMAmount.lten(0)) {
     throw new Error('--amount must be > 0');
   }
 
   const provider = createProvider(network) as AnchorProvider;
   anchor.setProvider(provider);
   const deployment = loadDeployment(network);
-  if (!deployment?.programs?.litePsm || !deployment.tokens?.usdc || !deployment.tokens?.usdOku) {
+  if (!deployment?.programs?.litePsm || !deployment.tokens?.usdc || !deployment.tokens?.okuM) {
     throw new Error(`Incomplete SVM deployment for ${network}.`);
   }
 
   const litePsmId = new PublicKey(deployment.programs.litePsm);
   const usdcMint = new PublicKey(deployment.tokens.usdc);
-  const usdOkuMint = new PublicKey(deployment.tokens.usdOku);
+  const okuMMint = new PublicKey(deployment.tokens?.okuM);
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
-  const [redemptionQueue] = deriveRedemptionQueuePDA(litePsmId);
 
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
   const cfg = await program.account.psmConfig.fetch(psmConfig);
   const vaultUsdc = cfg.vaultUsdc as PublicKey;
-  const vaultUsdOku = cfg.vaultUsdOku as PublicKey;
 
   const user = provider.wallet.publicKey;
   const userUsdcAta = await getAssociatedTokenAddress(usdcMint, user, false, TOKEN_PROGRAM_ID);
-  const userUsdOkuAta = await getAssociatedTokenAddress(
-    usdOkuMint,
+  const userOkuMAta = await getAssociatedTokenAddress(
+    okuMMint,
     user,
     false,
     TOKEN_2022_PROGRAM_ID
   );
 
-  // The escrow ATA owned by the PSM config PDA must exist before a queued
-  // redeem can deposit usdOku into escrow. test-devnet.ts pre-creates it
-  // defensively (it's idempotent), so mirror that here.
-  const escrowAta = await getAssociatedTokenAddress(
-    usdOkuMint,
-    psmConfig,
-    true, // allowOwnerOffCurve
-    TOKEN_2022_PROGRAM_ID
-  );
-  const escrowIxs = [
-    createAssociatedTokenAccountIdempotentInstruction(
-      user, // payer
-      escrowAta,
-      psmConfig, // owner
-      usdOkuMint,
-      TOKEN_2022_PROGRAM_ID,
-      ASSOCIATED_TOKEN_PROGRAM_ID
-    ),
-  ];
-
   logger.info(
-    summaryBlock('redeem_usd_oku()', {
+    summaryBlock('redeem_oku_m()', {
       'config PDA': psmConfig.toBase58(),
-      'redemption queue': redemptionQueue.toBase58(),
       'user (signer)': user.toBase58(),
-      'usdOkuAmount (6-dec)': amountArg,
+      'okuMAmount (6-dec)': amountArg,
       'usdc mint': usdcMint.toBase58(),
-      'usdOku mint': usdOkuMint.toBase58(),
+      'OkuM mint': okuMMint.toBase58(),
       'vault USDC': vaultUsdc.toBase58(),
-      'vault usdOku (escrow)': vaultUsdOku.toBase58(),
     })
   );
 
   if (isDryRun()) return logger.success('--dry-run set; not submitting.');
-  await confirmIfMainnet(network, `redeem_usd_oku(${amountArg}) on mainnet`);
+  await confirmIfMainnet(network, `redeem_oku_m(${amountArg}) on mainnet`);
 
+  const minUsdcOut = new BN(0); // no slippage protection for CLI usage
   const sig = await program.methods
-    .redeemUsdOku(usdOkuAmount)
+    .redeemOkuM(okuMAmount, minUsdcOut)
     .accountsPartial({
       user,
       config: psmConfig,
-      redemptionQueue,
       usdcMint,
-      usdOkuMint,
+      okuMMint,
       userUsdcAta,
-      userUsdOkuAta,
+      userOkuMAta,
       vaultUsdc,
-      vaultUsdOku,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
     })
-    .preInstructions(escrowIxs)
     .rpc();
   logger.success(`tx: ${sig}`);
 }

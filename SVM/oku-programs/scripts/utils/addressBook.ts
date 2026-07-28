@@ -92,20 +92,18 @@ export interface DeploymentAddresses {
   tokens: {
     usdc?: string;
     okuMoney?: string;
-    usdOku?: string;
+    okuM?: string;
   };
   programs: {
     litePsm?: string;
-    okuDollarProgram?: string;
+    // Legacy: kept for backwards compatibility with existing deployment files
+    okuMoneyProgram?: string;
+    okuMoney?: string;
   };
   pdas: {
     psmConfig?: string;
-    redemptionQueue?: string;
     psmVaultUsdc?: string;
     psmOkuMoneyEscrow?: string;
-    vaultConfig?: string;
-    vaultOkusd?: string;
-    vaultOkuMoney?: string;
   };
   authorities?: {
     coldMultisig?: string;
@@ -190,7 +188,6 @@ function anchorSectionFor(network: NetworkName): 'devnet' | 'localnet' | 'mainne
  * Snake-case → camelCase mapping between Anchor.toml's keys and the
  * `deployments/*.json` `programs` keys:
  *   lite_psm    ↔  litePsm
- *   oku_dollar  ↔  okuDollarProgram
  */
 export function diffDeploymentProgramIds(
   network: NetworkName,
@@ -200,7 +197,6 @@ export function diffDeploymentProgramIds(
   if (Object.keys(anchorPrograms).length === 0) return [];
   const map: Array<[string, keyof DeploymentAddresses['programs']]> = [
     ['lite_psm', 'litePsm'],
-    ['oku_dollar', 'okuDollarProgram'],
   ];
   const diffs: { key: string; fromFile: string; fromAnchorToml: string }[] = [];
   for (const [tomlKey, fileKey] of map) {

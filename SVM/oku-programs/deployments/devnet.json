@@ -2,8 +2,7 @@
   "network": "devnet",
   "timestamp": "2026-07-11T01:15:26.070Z",
   "programs": {
-    "litePsm": "3KZtxxYXD4tMZvVZk4EhCRxoTorBDZyJZuLE3znQ9kF1",
-    "okuDollarProgram": "7jKeiuc8gKvQhasbno27wbNMnrwi8g9sb6WPriWkzNd"
+    "litePsm": "App49HmtSBMwh42tUpZT7gSbEbq7HiA6QED2BBnXtzxo"
   },
   "_archived_pre_v3_seed_rotation": {
     "note": "These accounts were created under the v2 PDA seeds (psm_config_v2, redemption_queue_v2, oku_dollar_config_v2, usd_oku_mint_v2) and old program IDs (3CLDWjDT..., 3TeNwAqQ...). After the 2026-06-24 program-close + redeploy with fresh program IDs and psm_config_v3 seed, all of them are orphaned. Old program data accounts were closed and ~8.48 SOL recovered.",

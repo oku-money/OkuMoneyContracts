@@ -2,13 +2,14 @@
  * Program initialization utilities
  */
 
-import { Keypair, PublicKey, SystemProgram } from '@solana/web3.js';
+import { Keypair, PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
 import { Program, AnchorProvider, BN } from '@anchor-lang/core';
 import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountIdempotentInstruction,
 } from '@solana/spl-token';
 import { logger } from '../../utils/logger';
 import { loadAuthorities } from '../../config/authorities';
@@ -99,7 +100,7 @@ export async function initializePsm(
   // `initialize` instruction will create the account via CPI
   // (CreateAccount + extension inits + InitializeMint).
   const okuMMintKeypair = Keypair.generate();
-  const okuMMint = okuMMintKeypair.publicKey;
+  let okuMMint = okuMMintKeypair.publicKey;
 
   logger.info(`PSM Config PDA: ${psmConfig.toBase58()}`);
   logger.info(`OkuM mint (fresh keypair): ${okuMMint.toBase58()}`);
@@ -138,13 +139,20 @@ export async function initializePsm(
     logger.info(`OkuM mint: ${okuMMint.toBase58()}`);
   } catch (error: any) {
     if (isAlreadyInitialized(error)) {
-      logger.warning('PSM already initialized');
+      logger.warning('PSM already initialized -- reading OkuM mint from on-chain state');
+      // Retrieve the OkuM mint from the existing PsmConfig
+      const existingCfg: any = await program.account['psmConfig'].fetch(psmConfig);
+      okuMMint = existingCfg.okuMMint as PublicKey;
+      logger.info(`OkuM mint (from config): ${okuMMint.toBase58()}`);
     } else {
       throw error;
     }
   }
 
   // Setup OkuM escrow vault (ATA owned by config PDA).
+  // Created via the standard ATA program (idempotent instruction).
+  // The `setup_oku_m_escrow` on-chain instruction was removed with the
+  // redemption queue; this is now a client-side ATA creation.
   const vaultOkuM = getAssociatedTokenAddressSync(okuMMint, psmConfig, true, TOKEN_2022_PROGRAM_ID);
   logger.info('Setting up OkuM escrow vault...');
 
@@ -157,27 +165,17 @@ export async function initializePsm(
       `OkuM escrow vault ATA ${vaultOkuM.toBase58()} already exists (Token-2022 program). Skipping setup.`
     );
   } else {
-    try {
-      await program.methods
-        .setupOkuMEscrow()
-        .accountsPartial({
-          roleAdmin: provider.wallet.publicKey,
-          config: psmConfig,
-          okuMMint: okuMMint,
-          vaultOkuM: vaultOkuM,
-          token2022Program: TOKEN_2022_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .rpc();
-      logger.success('OkuM escrow vault initialized');
-    } catch (error: any) {
-      if (isAlreadyInitialized(error)) {
-        logger.warning('OkuM escrow vault already initialized');
-      } else {
-        throw error;
-      }
-    }
+    const createAtaIx = createAssociatedTokenAccountIdempotentInstruction(
+      provider.wallet.publicKey, // payer
+      vaultOkuM,                // ata
+      psmConfig,                // owner (PDA)
+      okuMMint,                 // mint
+      TOKEN_2022_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+    const tx = new Transaction().add(createAtaIx);
+    await provider.sendAndConfirm(tx);
+    logger.success('OkuM escrow vault initialized');
   }
 
   // ---- Step 4: Configure direct-minter role + allowance ----

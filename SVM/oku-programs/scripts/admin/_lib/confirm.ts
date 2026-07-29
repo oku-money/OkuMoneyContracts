@@ -16,9 +16,21 @@ import type { NetworkName } from '../../config/networks';
 import { verifyCluster } from '../../utils/network';
 import { Connection } from '@solana/web3.js';
 
-/** True if `--dry-run` appears anywhere in argv. */
+/**
+ * True if a dry run was requested, via either the `--dry-run` CLI flag
+ * OR the `DRY_RUN=true` environment variable.
+ *
+ * Both conventions exist across this repo's scripts (some non-admin
+ * scripts, e.g. bridge-svm-evm.ts, historically only supported the env
+ * var). Supporting both here prevents an operator who reaches for the
+ * "wrong" convention from silently executing a real, non-simulated
+ * mutation. This bit us for real once: `DRY_RUN=true tsx
+ * scripts/admin/grant-roles.ts` (no `--dry-run` flag) submitted 9 live
+ * role-rotation transactions against devnet because only the flag was
+ * checked.
+ */
 export function isDryRun(): boolean {
-  return process.argv.includes('--dry-run');
+  return process.argv.includes('--dry-run') || process.env.DRY_RUN === 'true';
 }
 
 /**

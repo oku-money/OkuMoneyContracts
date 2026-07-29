@@ -75,16 +75,21 @@ usdOku rate < OkuM rate  →  Vault overcollateralized  → Oku extracts revenue
 
 ### SVM — single-token model
 
-A single token: **usdOku** ("OkuDollar"), a Token-2022 mint
-(`App49HmtSBMwh42tUpZT7gSbEbq7HiA6QED2BBnXtzxo`) with
+A single token: **OkuM**, a Token-2022 mint
+(`BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g`) with
 `ScaledUiAmount` + `MetadataPointer` + `TokenMetadata` extensions.
+The on-chain token IS OkuM (a value-appreciating T-Bill-backed
+token); the `TokenMetadata` extension stores the wallet-facing brand
+`name: "OkuDollar", symbol: "usdOku"` so wallets display it as a $1
+stablecoin. See [`SVM/README.md` § Naming convention](SVM/README.md)
+for the full split.
 
-There is no OkuMoney token on SVM. The **multiplier** lives directly
-on the mint extension (`ScaledUiAmountConfig`) and is the single
-source of truth — it determines both the raw-to-UI scaling and the
-USDC conversion rate in the PSM. Revenue extraction happens off-chain
-before yield distribution (the orchestrator sets the multiplier to a
-value that already accounts for the protocol take).
+There is no separate OkuMoney token on SVM. The **multiplier** lives
+directly on the mint extension (`ScaledUiAmountConfig`) and is the
+single source of truth — it determines both the raw-to-UI scaling and
+the USDC conversion rate in the PSM. Revenue extraction happens
+off-chain before yield distribution (the orchestrator sets the
+multiplier to a value that already accounts for the protocol take).
 
 ---
 
@@ -121,29 +126,29 @@ value that already accounts for the protocol take).
 │                     SVM On-Chain (lite-psm)                      │
 │                                                                  │
 │  ┌────────────────────────────────────────────────────┐         │
-│  │  lite-psm (App49HmtSBMwh42tUpZT7gSbEbq7HiA6QED…) │         │
-│  │  ─ mint_usd_oku / redeem_usd_oku                  │         │
+│  │  lite-psm (BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCG…) │         │
+│  │  ─ mint_oku_m / redeem_oku_m (buffer-only)         │         │
 │  │  ─ set_multiplier / distribute_yield               │         │
-│  │  ─ mint_usd_oku_direct / burn_usd_oku_direct       │         │
+│  │  ─ mint_oku_m_direct / burn_oku_m_direct           │         │
 │  └────────────────────────────────────────────────────┘         │
 │                          │                                       │
 │                          ▼                                       │
 │  ┌────────────────────────────────────────────────────┐         │
-│  │  usdOku — Token-2022 mint                          │         │
+│  │  OkuM — Token-2022 mint                            │         │
 │  │  Extensions: ScaledUiAmount + MetadataPointer       │         │
 │  │              + TokenMetadata                        │         │
 │  │  Multiplier on ScaledUiAmountConfig                 │         │
 │  └────────────────────────────────────────────────────┘         │
 │                                                                  │
-│  PDAs: psm_config_v5, redemption_queue_v3                        │
+│  PDA: psm_config_v6 (no redemption queue — buffer-only PSM)      │
 │  Precision: 1e9 · MAX_MULTIPLIER: 1e15 · 6 decimals             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 | Component | Function |
 |---|---|
-| **lite-psm** | Single program handling PSM (USDC ↔ usdOku), yield distribution, compliance, oracle relay, and redemption queue. |
-| **usdOku mint** | Token-2022 mint with `ScaledUiAmount` extension — multiplier on the mint is the single source of truth for pricing and UI display. |
+| **lite-psm** | Single program handling PSM (USDC ↔ OkuM, buffer-only — no redemption queue), yield distribution, and compliance. |
+| **OkuM mint** | Token-2022 mint with `ScaledUiAmount` extension — multiplier on the mint is the single source of truth for pricing and UI display. |
 
 ---
 
@@ -187,15 +192,19 @@ mintUsdOku:    USDC → PSM mints OkuM → wraps into vault → usdOku to user
 redeemUsdOku:  usdOku → unwrap to OkuM → redeem for USDC (or queue if buffer empty)
 ```
 
-### SVM — direct USDC ↔ usdOku swaps
+### SVM — direct USDC ↔ OkuM swaps (buffer-only)
 
 ```
-mint_usd_oku:    raw_amount = usdc_amount × PRECISION / multiplier
-redeem_usd_oku:  usdc_amount = raw_amount × multiplier / PRECISION
+mint_oku_m:    raw_amount = usdc_amount × PRECISION / multiplier
+redeem_oku_m:  usdc_amount = raw_amount × multiplier / PRECISION
 ```
 
-lite-psm provides direct `mint_usd_oku` / `redeem_usd_oku`
-instructions — no wrapping or off-chain composition needed.
+lite-psm provides direct `mint_oku_m` / `redeem_oku_m` instructions —
+no wrapping or off-chain composition needed. `redeem_oku_m` is
+**buffer-only**: it reverts with `InsufficientBuffer` if the PSM's
+USDC vault can't cover the redemption. There is no redemption queue
+on SVM (deliberately removed — see
+[`SVM/README.md` § Why no redemption queue](SVM/README.md)).
 
 ---
 
@@ -225,14 +234,14 @@ USDC custody.
 Cumulative drift across N bridges ≤ N USDC-units
 ```
 
-### SVM ↔ SVM — direct burn/mint of usdOku
+### SVM ↔ SVM — direct burn/mint of OkuM
 
-SVM bridges use `burn_usd_oku_direct` / `mint_usd_oku_direct` —
-direct burn and mint of usdOku **without a USDC intermediary**. The
-orchestrator burns usdOku on the source chain and mints an equivalent
+SVM bridges use `burn_oku_m_direct` / `mint_oku_m_direct` —
+direct burn and mint of OkuM **without a USDC intermediary**. The
+orchestrator burns OkuM on the source chain and mints an equivalent
 raw amount on the destination chain.
 
-**SVM-to-SVM bridges conserve raw usdOku amounts 1:1** — no USDC
+**SVM-to-SVM bridges conserve raw OkuM amounts 1:1** — no USDC
 conversion, no rounding from multiplier differences.
 
 ### Cross-stack (EVM ↔ SVM)
@@ -240,9 +249,9 @@ conversion, no rounding from multiplier differences.
 The orchestrator handles the asymmetry between the two-token EVM
 model and the single-token SVM model:
 
-- **EVM → SVM:** redeem OkuM for USDC on EVM, then `mint_usd_oku`
+- **EVM → SVM:** redeem OkuM for USDC on EVM, then `mint_oku_m`
   on SVM (USDC-funded).
-- **SVM → EVM:** `burn_usd_oku_direct` on SVM, then `mintOkuM` on
+- **SVM → EVM:** `burn_oku_m_direct` on SVM, then `mintOkuM` on
   EVM (orchestrator supplies USDC). If the user wants usdOku on EVM,
   the convenience `mintUsdOku` flow wraps through the vault.
 
@@ -279,33 +288,36 @@ Verify on **both source and destination chains** before submitting:
 | Destination PSM not paused | `LitePSM.paused()` | `psm.account.psmConfig.fetch(...).isPaused` |
 | Destination supply headroom | `OkuMoney.maxSupply() - totalSupply() >= mintAmount` | `psmConfig.maxSupply - totalSupply >= mint_amount` |
 | Destination minter allowance | `OkuMoney.minterAllowance(psm) >= mintAmount` | `psmConfig.minterAllowance >= mint_amount` |
-| Source user token balance | `OkuMoney.balanceOf(user) >= bridgeAmount` | `getAccount(userUsdOkuAta).amount >= bridge_amount` |
+| Source user token balance | `OkuMoney.balanceOf(user) >= bridgeAmount` | `getAccount(userOkuMAta).amount >= bridge_amount` |
 | Source buffer for instant path | `usdc.balanceOf(psm) > expectedUsdcOut` | `getAccount(vaultUsdc).amount > expected_usdc_out` (EVM↔SVM only; SVM↔SVM uses direct burn/mint) |
 | Recipient ATA not frozen | `OkuMoney.isBlacklisted(recipient) == false` | `getAccount(recipientAta).state != AccountState::Frozen` |
-| Oracle peg-band fresh (if wired) | `OracleRelay.checkUsdcPeg()` | `helpers::oracle_relay::check_usdc_peg` |
 
-If source PSM buffer is insufficient, the redeem succeeds but the
-OkuM is escrowed in the redemption queue. **The orchestrator must
-wait for `processQueue` to pay out USDC before completing the
-destination mint leg.** Poll queue state to detect:
+If the EVM source PSM buffer is insufficient, the redeem succeeds but
+the OkuM is escrowed in EVM's redemption queue. **The orchestrator
+must wait for `processQueue` to pay out USDC before completing the
+destination mint leg.** Poll queue state to detect (EVM only — SVM
+has no redemption queue, see below):
 
 ```
 EVM:  queue.queueHead() < queue.queueTail()  → entries pending
-SVM:  redemptionQueue.head < redemptionQueue.tail  → entries pending
 ```
 
 The orchestrator can accelerate payment by calling `depositBuffer`
 to fund the queue, then `processQueue`.
 
-> **Note:** SVM-to-SVM bridges do not use the queue or USDC buffer —
-> they use direct `burn_usd_oku_direct` / `mint_usd_oku_direct` and
-> conserve raw usdOku amounts 1:1.
+> **Note:** SVM has no redemption queue at all (deliberately removed
+> — see [`SVM/README.md` § Why no redemption queue](SVM/README.md)).
+> `redeem_oku_m` on SVM is buffer-only: it reverts with
+> `InsufficientBuffer` if the vault can't cover it — there is nothing
+> to drain or poll. SVM-to-SVM bridges additionally bypass the USDC
+> buffer entirely, using direct `burn_oku_m_direct` /
+> `mint_oku_m_direct` to conserve raw OkuM amounts 1:1.
 
 #### Mid-flight failure recovery
 
 | Failure mode | Recovery |
 |---|---|
-| Source redeem succeeded, destination mint failed | Diagnose the revert reason (pause / cap / oracle), wait for the blocking condition to clear, retry `mintOkuM` with the same USDC amount. If unrecoverable inside SLA, hold the destination USDC and file an incident — the user's source-chain OkuM is already burned. |
+| Source redeem succeeded, destination mint failed | Diagnose the revert reason (pause / cap), wait for the blocking condition to clear, retry `mintOkuM` with the same USDC amount. If unrecoverable inside SLA, hold the destination USDC and file an incident — the user's source-chain OkuM is already burned. |
 | Source redeem was queued | Don't mint on destination until USDC is in hand. Poll queue state every ~30 s; call `depositBuffer` + `processQueue` to accelerate. |
 | Orchestrator process crashes between legs | On restart, inspect orchestrator USDC + OkuM balances on both chains. Source USDC > expected float → leg-2 (dest mint) didn't run. Destination OkuM > 0 → leg-3 (forward to recipient) didn't run. All zero → verify on-chain event logs. **Orchestrator OkuM float must be zero between completed bridges**; non-zero for > 1 batch cycle indicates a stuck bridge. |
 
@@ -329,8 +341,8 @@ causing accounting errors:
 #### Minter allowance rotation policy
 
 `minterAllowance` on `OkuMoney` (EVM) and `PsmConfig.minterAllowance`
-(SVM) bounds how many tokens (OkuM on EVM, usdOku on SVM) the PSM
-can mint before an explicit refresh.
+(SVM) bounds how many raw OkuM tokens the PSM can mint on each chain
+before an explicit refresh.
 
 - **Testnet:** `minterAllowance == maxSupply == 1B` — effectively uncapped for dev.
 - **Production:** ~ **1 % of weekly bridging volume**, rotated on a **weekly cadence** by `OKUM_ALLOWANCE_MANAGER` (cold multisig). Bounds a single-week worst-case mint by a compromised PSM contract or orchestrator USDC custody.
@@ -357,13 +369,12 @@ not rotated in > 7 days.
 | Metric | Alert threshold | Notes |
 |---|---|---|
 | Orchestrator token float (EVM) | Non-zero OkuM for > 1 h between batch cycles | EVM bridges use PSM-mediated USDC flow |
-| Queue depth | Oldest pending entry > 24 h unfilled | |
-| Oracle staleness | `updatedAt` within 80 % of `stalenessThreshold` | |
-| PSM buffer | < 2 × expected daily redemption volume | |
+| Queue depth (EVM only) | Oldest pending entry > 24 h unfilled | SVM has no queue — buffer depletion reverts the redeem instead |
+| PSM buffer | < 2 × expected daily redemption volume | Depleted buffer reverts SVM redeems with `InsufficientBuffer`; EVM redeems queue instead |
 | Minter allowance | < 10 % of weekly throughput estimate | |
 | Pause state | PSM paused for > 15 min unexpectedly | |
 
-SVM bridges use direct `burn_usd_oku_direct` / `mint_usd_oku_direct`
+SVM bridges use direct `burn_oku_m_direct` / `mint_oku_m_direct`
 — there is no orchestrator token float to monitor (no USDC
 intermediary). Monitor the direct minter/burner transaction success
 rate instead.
@@ -376,16 +387,18 @@ All metrics on a 1-min cadence. PagerDuty for "token float" and
 - Orchestrator key has **NO special minting authority** on EVM.
   Compromise does not allow minting beyond the key's USDC holdings.
   On SVM, the orchestrator may hold `direct_minter` / `direct_burner`
-  roles for cross-chain bridge operations (direct usdOku mint/burn).
+  roles for cross-chain bridge operations (direct OkuM mint/burn).
 - **EVM roles:** `OKUM_REBASER`, `VAULT_REBASER`,
   `PSM_QUEUE_PROCESSOR`, `PSM_BUFFER_DEPOSITOR`.
-- **SVM roles:** `OKUM_REBASER`, `PSM_QUEUE_PROCESSOR`,
-  `PSM_BUFFER_DEPOSITOR`, `direct_minter`, `direct_burner`.
-  (`VAULT_REBASER` does not exist on SVM — no vault.)
-- Compromise allows multiplier manipulation, buffer drain, queue
-  skipping — material but bounded. On SVM, compromise also allows
-  direct usdOku mint/burn up to `minterAllowance`. Cold multisig
-  controls `*_UNPAUSER` and `*_BUFFER_WITHDRAWER` (more dangerous).
+- **SVM roles:** `rebaser`, `buffer_depositor`, `direct_minter`,
+  `direct_burner`. (No `VAULT_REBASER` or queue-processor equivalent
+  on SVM — no vault, no redemption queue.)
+- Compromise allows multiplier manipulation and buffer drain —
+  material but bounded. On EVM, compromise also allows skipping
+  ahead in the redemption queue. On SVM, compromise allows direct
+  OkuM mint/burn up to `minterAllowance` (no queue to skip — SVM has
+  none). Cold multisig controls `*_UNPAUSER` and
+  `*_BUFFER_WITHDRAWER` (more dangerous).
 - Rotate the orchestrator key immediately on suspected compromise.
   Pausing both PSMs (warm multisig) is the emergency lever.
 - **No two concurrent orchestrator instances** should process the
@@ -400,11 +413,11 @@ One role per action. No role performs more than one function.
 
 | Entity | EVM Roles | SVM Roles |
 |---|---|---|
-| Cold Multisig | ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER, ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER, ORACLE_MANAGER, RESERVE_MANAGER | ADMIN, UNPAUSER, CAP_MANAGER, ALLOWANCE_MANAGER, BUFFER_WITHDRAWER, ORACLE_MANAGER |
-| Warm Multisig | all PAUSER, all BLACKLISTER | PAUSER, BLACKLISTER (freeze authority) |
-| Orchestrator | OKUM_REBASER, VAULT_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR | OKUM_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR, direct_minter, direct_burner |
-| LitePSM | OKUM_MINTER, OKUM_BURNER (cycle 4: split on EVM) | Mint authority on usdOku Token-2022 mint |
-| RedemptionQueue | OKUM_BURNER (cycle 4) | (integrated into lite-psm) |
+| Cold Multisig | ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER, ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER, RESERVE_MANAGER | role_admin, unpauser, cap_manager, allowance_manager, buffer_withdrawer |
+| Warm Multisig | all PAUSER, all BLACKLISTER | pauser, freezer |
+| Orchestrator | OKUM_REBASER, VAULT_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR | rebaser, buffer_depositor, direct_minter, direct_burner |
+| LitePSM | OKUM_MINTER, OKUM_BURNER (cycle 4: split on EVM) | Mint authority on OkuM Token-2022 mint |
+| RedemptionQueue | OKUM_BURNER (cycle 4) | no SVM equivalent — redemption queue removed entirely, buffer-only PSM |
 
 The `BRIDGE_*`, `ROUTER_*`, and `NTT_*` roles defined in
 `EVM/src/lib/Roles.sol` are reserved for future re-introduction of
@@ -423,15 +436,13 @@ the company*, not protection *against* the company.
 - Upgrade any contract (EVM: UUPS `_authorizeUpgrade`; SVM: BPF
   program upgrade authority). A malicious or erroneous upgrade can
   replace all logic — the highest-impact key.
-- Set the oracle feed address and staleness parameters. A swap to
-  an attacker-controlled feed could allow unbacked mints up to
-  `maxSupply`.
 - Configure `maxSupply` and `minterAllowance`. Raising allowance to
   the cap and minting up to it is the worst-case mint outcome.
-- Drain the USDC buffer (`withdrawUsdc` / `withdraw_buffer`) down
-  to the amount needed to cover pending queue obligations.
+- Drain the USDC buffer (`withdrawUsdc` / `withdraw_buffer`). On EVM,
+  bounded by pending redemption-queue obligations; on SVM, bounded
+  only by the vault's current balance (no queue to protect).
 - Withdraw OkuMoney surplus from the vault (`withdrawSurplus` /
-  `withdraw_reserves`) down to the `minCollateralRatio` floor.
+  `withdraw_reserves`) down to the `minCollateralRatio` floor (EVM only).
 - Grant any role to any address (DEFAULT_ADMIN_ROLE / role_admin SVM).
 - Unblacklist, unpause, unfreeze ATAs.
 - Rotate operational authority pubkeys.
@@ -442,7 +453,6 @@ the company*, not protection *against* the company.
 - Set `usdMultiplier` below current (EVM only — SVM has no vault).
 - Push the vault below `minCollateralRatio` via surplus withdrawal (EVM only).
 - Set `maxSupply` below current `totalSupply`.
-- Set staleness threshold outside `[60 s, 7 days]`.
 - Set `minCollateralRatio` below the 90 % hard floor (EVM only).
 
 #### Warm Multisig (lower-quorum, faster to sign)
@@ -450,7 +460,7 @@ the company*, not protection *against* the company.
 **Can:**
 - Pause all protocol contracts, halting mint / redeem / bridging.
 - Blacklist any address on OkuMoney and OkuDollar (EVM).
-- On SVM: freeze any usdOku ATA via Token-2022 freeze authority.
+- On SVM: freeze any OkuM ATA via Token-2022 freeze authority.
 
 **Cannot:**
 - Unpause or unblacklist (cold multisig only). Pause is a one-way
@@ -468,12 +478,12 @@ the company*, not protection *against* the company.
   An extreme bump would push the vault toward the
   `minCollateralRatio` floor, requiring Oku to deposit more
   reserves. (Not applicable on SVM — no vault.)
-- Process the redemption queue.
+- Process the redemption queue (EVM only — SVM has no queue).
 - Deposit USDC to the PSM buffer.
-- Call `mintOkuM` / `redeemOkuM` (EVM) or `mint_usd_oku` /
-  `redeem_usd_oku` (SVM) as a normal user (**permissionless** — the
+- Call `mintOkuM` / `redeemOkuM` (EVM) or `mint_oku_m` /
+  `redeem_oku_m` (SVM) as a normal user (**permissionless** — the
   orchestrator holds no special mint authority, only USDC custody).
-- On SVM: call `mint_usd_oku_direct` / `burn_usd_oku_direct` for
+- On SVM: call `mint_oku_m_direct` / `burn_oku_m_direct` for
   cross-chain bridge operations (requires `direct_minter` /
   `direct_burner` roles).
 
@@ -491,10 +501,11 @@ per-minter `minterAllowance` and the global `maxSupply` cap. Burn
 (cycle-4 split role) only via `OkuMoney.burn()` from inside
 `redeemOkuM` / `processQueue`.
 
-**SVM:** lite-psm holds mint authority on the usdOku Token-2022 mint.
-Minting via `mint_usd_oku` / `mint_usd_oku_direct` is gated by
-`minterAllowance` and `maxSupply`. Burning via `redeem_usd_oku` /
-`burn_usd_oku_direct`.
+**SVM:** lite-psm holds mint authority on the OkuM Token-2022 mint.
+Minting via `mint_oku_m` / `mint_oku_m_direct` is gated by
+`minterAllowance` and `maxSupply`. Burning via `redeem_oku_m` /
+`burn_oku_m_direct`. `redeem_oku_m` is buffer-only — there is no
+redemption queue on SVM to fall back to.
 
 **On timelocks:** okuMoney is centralized US-regulated, not
 decentralized. Industry peers (USDC, USDT, USDP, PYUSD, FDUSD) do
@@ -511,15 +522,16 @@ requirement is itself the delay mechanism. **Timelocks are not pursued.**
 | Aspect | EVM | SVM |
 |---|---|---|
 | Language | Solidity 0.8.28 | Rust (Anchor 1.0.2) |
-| Token model | Dual-token: OkuMoney (non-rebasing) + OkuDollar (rebasing) | Single-token: usdOku with ScaledUiAmount extension |
+| Token model | Dual-token: OkuMoney (non-rebasing) + OkuDollar (rebasing) | Single-token: OkuM with ScaledUiAmount extension (displays as usdOku) |
 | Multiplier | Stored `uint256`, 18 decimals (`okuMMultiplier`) + continuous `_rpow` for OkuDollar | Multiplier on mint extension (ScaledUiAmountConfig), 1e9 precision, 6-decimal token |
 | OkuDollar multiplier | Continuous `_rpow` streaming | N/A — single-token model; multiplier serves as both pricing and UI display |
 | Yield lock | `block.number` comparison | `Clock::slot` comparison |
-| Token standard | ERC-20 (custom rebasing for OkuDollar) | Token-2022 (usdOku with ScaledUiAmount + MetadataPointer + TokenMetadata) |
+| Token standard | ERC-20 (custom rebasing for OkuDollar) | Token-2022 (OkuM with ScaledUiAmount + MetadataPointer + TokenMetadata) |
 | Decimals | 18 | 6 |
 | Proxy pattern | TransparentUpgradeable / UUPS | Solana program upgrades (Squads authority) |
-| Convenience functions | On LitePSM contract | Direct usdOku mint/redeem on the PSM; no wrapping needed |
-| Cross-chain transfers (v1) | Off-chain orchestrator + LitePSM mint/burn (USDC-mediated) | Off-chain orchestrator + direct burn/mint of usdOku (`burn_usd_oku_direct` / `mint_usd_oku_direct`) |
+| Convenience functions | On LitePSM contract | Direct OkuM mint/redeem on the PSM; no wrapping needed |
+| Redemption when buffer insufficient | Escrowed in `RedemptionQueue`, drained via `processQueue` | Reverts `InsufficientBuffer` — no queue (deliberately removed) |
+| Cross-chain transfers (v1) | Off-chain orchestrator + LitePSM mint/burn (USDC-mediated) | Off-chain orchestrator + direct burn/mint of OkuM (`burn_oku_m_direct` / `mint_oku_m_direct`) |
 
 **Full cross-chain parity matrix** — constants, roles, pause
 semantics, sandwich-fence behaviour, event schema diffs, deliberate
@@ -539,7 +551,6 @@ contracts/
 │   ├── src/
 │   │   ├── token/       # OkuMoney.sol, OkuDollar.sol
 │   │   ├── psm/         # LitePSM.sol, RedemptionQueue.sol
-│   │   ├── oracle/      # OracleRelay.sol, IOracleRelay.sol
 │   │   ├── interfaces/  # IOkuMoney.sol, IOkuDollar.sol, IOkuBridgeNative.sol (reserved)
 │   │   └── lib/         # Roles, Constants, MathLib, events
 │   ├── test/            # Foundry + Hardhat suites
@@ -549,7 +560,7 @@ contracts/
 │   ├── README.md        # SVM-specific runbook, divergence catalogue, deployment
 │   └── oku-programs/
 │       ├── programs/
-│       │   └── lite-psm/    # PSM + queue + yield ops + compliance + oracle relay + direct mint/burn
+│       │   └── lite-psm/    # PSM (buffer-only, no queue) + yield ops + compliance + direct mint/burn
 │       ├── crates/
 │       │   └── oku-shared/  # Pure-Rust shared constants + math + yield lock
 │       ├── tests/
@@ -678,13 +689,13 @@ Addresses written to `EVM/scripts/config/addresses.json` under
 cd SVM/oku-programs
 
 anchor build
-npm run cost                  # estimate one-time rent (~0.067 SOL queue alone)
+npm run cost                  # estimate one-time rent (program + PsmConfig + mint + ATAs)
 solana airdrop 5 --url devnet # x2
 
 # Phase 1 — deploy program .so files (writes IDs into deployments/devnet.json)
 NETWORK=devnet npm run deploy:programs
 
-# Phase 2 — create usdOku mint + initialize PSM config
+# Phase 2 — create OkuM mint + initialize PSM config
 NETWORK=devnet npm run deploy:init
 ```
 
@@ -729,7 +740,8 @@ NETWORK=sepolia npm run test:flow:live        # live round-trip + balance check
 ```bash
 cd SVM/oku-programs
 NETWORK=devnet npm run test:onchain           # ~30 s end-to-end smoke
-NETWORK=devnet npm run test:onchain -- --step=queueRedeem   # single step
+NETWORK=devnet npm run test:onchain -- --step=redeem   # single step (mint/transfer/redeem/
+                                                        # distributeYield/pause/setAuthority also available)
 ```
 
 ### Phase 4 — cross-chain bridge test (noBridge / PSM-mediated)
@@ -737,20 +749,17 @@ NETWORK=devnet npm run test:onchain -- --step=queueRedeem   # single step
 ```
 1. EVM source: LitePSM.redeemOkuM(amount) → orchestrator observes the OkuMRedeemed event + USDC outflow.
 2. Destination (EVM or SVM): orchestrator deposits USDC into the destination PSM and calls LitePSM.mintOkuM, crediting OkuM to recipient.
-3. Treasury periodically tops up / drains PSM USDC buffers per chain.
+3. Treasury periodically tops up PSM USDC buffers per chain (on SVM there is no queue to drain — see [`SVM/README.md`](SVM/README.md)).
 ```
 
 EVM cross-chain accounting covered by
-`EVM/test/hardhat/scenarios/RealWorldUsage.ts`. SVM queue
-drain validated by:
+`EVM/test/hardhat/scenarios/RealWorldUsage.ts`. Full EVM↔SVM
+roundtrip bridge test:
 
 ```bash
 cd SVM/oku-programs
-NETWORK=devnet npm run test:onchain -- --step=queueRedeem
-# or directly:
-NETWORK=devnet npm run admin:process-queue                # drain to empty
-NETWORK=devnet npm run admin:process-queue -- --max=25
-NETWORK=devnet npm run admin:process-queue -- --dry-run
+PRIVATE_KEY=<evm-key> tsx scripts/test/bridge-svm-evm.ts \
+    --evm=baseSepolia --svm=devnet --amount=5 --direction=roundtrip
 ```
 
 ### Troubleshooting
@@ -770,16 +779,14 @@ NETWORK=devnet npm run admin:process-queue -- --dry-run
 |---|---|---|
 | `maxSupply` | 1 B OkuM (1e27 raw) | 1 B token cap. |
 | `minterAllowance` | 1 B OkuM | Matches `maxSupply` (effectively uncapped on testnet). **Production**: 1 % of weekly bridging volume, weekly rotation. |
-| `psmStalenessThreshold` | 3 600 s | 1-hour Chainlink staleness window. |
 | `minCollateralRatio` | 100 % (1e18) | Full backing at deploy; lowerable post-deploy. |
 
 **SVM (`SVM/oku-programs/scripts/config/constants.ts`):**
 
 | Parameter | Value | Notes |
 |---|---|---|
-| `MAX_SUPPLY` | 1 B usdOku (6 dec = 1e15 raw) | 1 B token cap. |
-| `MINTER_ALLOWANCE` | 1 B usdOku | Matches EVM. **Production**: rotate weekly via `set-minter-allowance.ts`. |
-| `ORACLE_STALENESS_THRESHOLD` | 3 600 s | 1-hour Pyth window. |
+| `MAX_SUPPLY` | 1 B OkuM (6 dec = 1e15 raw) | 1 B token cap. |
+| `MINTER_ALLOWANCE` | 1 B OkuM | Matches EVM. **Production**: rotate weekly via `set-minter-allowance.ts`. |
 
 ### Mainnet ceremony
 

@@ -83,12 +83,11 @@ export function syncSvmRegistry(deployment: DeploymentAddresses): void {
     },
     mints: {
       usdc: deployment.tokens?.usdc,
-      okuMoney: deployment.tokens?.okuMoney,
       okuM: deployment.tokens?.okuM,
     },
     pdas: {
       psmConfig: deployment.pdas?.psmConfig,
-      psmOkuMoneyEscrow: deployment.pdas?.psmOkuMoneyEscrow,
+      psmOkuMEscrow: deployment.pdas?.psmOkuMEscrow,
       psmVaultUsdc: deployment.pdas?.psmVaultUsdc,
     },
     authorities: deployment.authorities,

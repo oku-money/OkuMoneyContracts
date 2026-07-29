@@ -125,7 +125,7 @@ async function main() {
     pdas: {
       psmConfig: psmConfig.toBase58(),
       psmVaultUsdc: psmVaultUsdc.toBase58(),
-      psmOkuMoneyEscrow: psmOkuMEscrow.toBase58(),
+      psmOkuMEscrow: psmOkuMEscrow.toBase58(),
     },
     authorities: {
       coldMultisig: authorities.psm.roleAdmin.toBase58(),

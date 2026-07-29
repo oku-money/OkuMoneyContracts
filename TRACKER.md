@@ -51,35 +51,18 @@ to ship `extract_if`-compatible `clippy_utils`). Upstream is
 currently pinned at `nightly-2025-01-09` (regressed from the channel
 we were tracking). Re-enable is ~½ day once a newer nightly lands.
 
-The earlier review-pass findings (F-02 `arbitrary_cpi`, F-03 manual
-byte parsing in oracle helpers, F-04 sysvar usage) remain triaged via
-crate-wide `#![allow]` suppressions plus inline comments. Cycle-4
-contract changes use the same patterns those suppressions already
-cover. **Not actionable until upstream moves**; tracked here so it
-re-enters the queue automatically once the upstream pin advances.
+The earlier review-pass findings (F-02 `arbitrary_cpi`, F-04 sysvar
+usage) remain triaged via crate-wide `#![allow]` suppressions plus
+inline comments. Cycle-4 contract changes use the same patterns those
+suppressions already cover. F-03 (manual byte parsing in the oracle
+helper) is moot — the oracle helper was removed entirely along with
+the rest of the SVM oracle infrastructure. **Not actionable until
+upstream moves**; tracked here so it re-enters the queue automatically
+once the upstream pin advances.
 
 ---
 
 ## ⚪ Post-launch / low priority
-
-### `OracleRelay` UUPS overhead `[EVM]`
-
-The relay holds 5 storage fields (feed, staleness, min/max band,
-cached feed decimals) and a small read-only consumer surface. The
-only mutable state is operator-set config, rotated via existing
-`RELAY_FEED_MANAGER` / `RELAY_CONFIG_MANAGER` setters — not via a
-logic upgrade. Operator-side kill switch lives on the consumer
-(`setOracleRelay(address(0))` on `LitePSM` and `RedemptionQueue`),
-so even bricking the relay implementation is recoverable without a
-UUPS upgrade.
-
-**Recommendation (follow-up cycle):** drop the UUPS scaffolding
-(`UUPSUpgradeable` import, `_authorizeUpgrade`, `RELAY_UPGRADER`
-role, `__disableInitializers` constructor pattern) and ship
-`OracleRelay` as a plain stateful contract that operators redeploy
-on rotation. Saves audit surface area and matches the SVM mirror,
-which embeds the peg-check directly inside `lite-psm` with no
-upgradeability of its own.
 
 ### `RedemptionQueue.QueueEntry` storage packing `[EVM]`
 
@@ -90,23 +73,6 @@ enough for any realistic OkuM amount given `MAX_MULTIPLIER` and
 
 **Caution:** storage-layout change on a UUPS proxy. Only do this
 in a v2 upgrade with a careful migration. Defer to v2.
-
-### Queue capacity: 200 → 500 entries `[SVM]`
-
-The SVM redemption queue is capped at 200 entries by the Solana
-`MAX_PERMITTED_DATA_INCREASE = 10_240` bytes single-CPI allocation
-limit. The spec target was 500. Two paths:
-
-1. **Multi-step init + 2× realloc** — initial `setup_redemption_queue`
-   allocates 10 KB, two follow-up `realloc` calls grow the PDA.
-   Keeps the zero-copy ring intact; only deploy script changes.
-2. **Per-user PDAs** — one PDA per queued entry; lifts the cap
-   entirely.
-
-**Defer until:** telemetry shows operators repeatedly hitting
-`QueueFull`. The 200-entry ring + `MAX_BATCH_ENTRIES = 50` per-tx
-drain + auto-batching `process-queue.ts` script is sufficient for
-launch.
 
 ### ~~oku-dollar reserved storage padding `[SVM]`~~ — CANCELLED
 
@@ -123,35 +89,19 @@ refactor. No longer applicable.*
 Deferred post-audit. Major-version bump scope unclear; revisit once
 audit feedback narrows the surface.
 
-### Dead orphan PDAs from cycle-2 + cycle-3 + single-token-refactor seed rotations `[SVM]`
+### Dead orphan PDAs from cycle-2 + cycle-3 + single-token-refactor + queue-removal seed rotations `[SVM]`
 
 Pre-rotation PDAs are orphaned because their `owner` field still
 references the same program ID, but the program no longer derives
 those addresses. The single-token refactor added further orphans:
-`psm_config_v4` and `redemption_queue_v2` seeds (superseded by v5/v3),
-plus all `oku-dollar` program PDAs (program deleted). Total rent
-locked ~0.085 SOL across ~9 accounts per earlier rotation, plus
-additional accounts from the refactor. Not material; tracked for
-completeness. A future one-shot `admin_close_legacy_pda(seed_str)` ix
-gated by `role_admin` could recover the rent. Details in
+`psm_config_v4` seed (superseded by v5), plus all `oku-dollar`
+program PDAs (program deleted) and the `redemption_queue_v3` PDA
+(the redemption queue account was removed entirely in a follow-up
+rotation to `psm_config_v6` — there is no longer any queue seed to
+derive). Not material; tracked for completeness. A future one-shot
+`admin_close_legacy_pda(seed_str)` ix gated by `role_admin` could
+recover the rent. Details in
 [`SVM/README.md § PDA seed history`](SVM/README.md).
-
-### Queue spam DoS via 1-usdOku entries `[SVM]`
-
-A user can fill the 200-entry redemption queue with minimum-size entries
-(1 usdOku each) faster than the operator's `MAX_BATCH_ENTRIES = 50`
-per-tx drain can clear them. Cost to the attacker: 200 × redeem-tx fees
-+ escrowed usdOku for the queue duration. The `MINIMUM_QUEUE_ENTRY_USD_OKU`
-mitigation (single constant + `require!`) was considered but deferred
-to avoid pre-audit churn on a tuneable parameter the auditor would probe.
-
-**Mitigation options when revisited:**
-1. Add a `MINIMUM_QUEUE_ENTRY_USD_OKU` constant + `require!` in
-   `redeem_usd_oku` queued branch.
-2. Per-user PDA queue (lifts the cap; see "Queue capacity: 200 → 500").
-3. Escalating spam fee.
-
-**Defer until:** auditor opinion or operator telemetry shows abuse.
 
 ### Two-chain Foundry invariant harness `[EVM]`
 
@@ -187,8 +137,6 @@ kill-list is finalised:
   transfer's second step happens once per rotation by the cold multisig
   via Squads; a documented IDL call in the runbook is sufficient. Build
   CLIs only if the runbook requires them.
-- `user-self-rescue-queue-entry.ts` — permissionless self-rescue
-  for queued users. Belongs in `scripts/user/`, not `admin/`.
 
 ---
 

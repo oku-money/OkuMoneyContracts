@@ -89,12 +89,11 @@
       },
       "mints": {
         "usdc": "AtX9msvC3mWpbviUZnj751fPFVzjh1Kpdh7rnsbmJsAK",
-        "okuMoney": "9JVkEmstHaLxMcFXLesWYhzWxZcDVYk4qLSSXbKy3whW",
         "okuM": "Hho5FfsLJMyEdP4JRB1d8S4jeU6eHJpKioQhqJ1fjHuA"
       },
       "pdas": {
         "psmConfig": "8EUyoPweZdVUfmqdvGxtKbukEFzjWJkvqA3Mnght142H",
-        "psmOkuMoneyEscrow": "14UBqnPp7mVxTi3haHDwAvfuP6WXPZJgMtDavodsa8jh",
+        "psmOkuMEscrow": "14UBqnPp7mVxTi3haHDwAvfuP6WXPZJgMtDavodsa8jh",
         "psmVaultUsdc": "3nTTc6hv5VWjG4upiMPYMdWHHY5nCqDQXpJBPqrM38Xm"
       },
       "authorities": {

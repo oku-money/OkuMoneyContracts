@@ -200,7 +200,7 @@
   "pdas": {
     "psmConfig": "8EUyoPweZdVUfmqdvGxtKbukEFzjWJkvqA3Mnght142H",
     "psmVaultUsdc": "3nTTc6hv5VWjG4upiMPYMdWHHY5nCqDQXpJBPqrM38Xm",
-    "psmOkuMoneyEscrow": "14UBqnPp7mVxTi3haHDwAvfuP6WXPZJgMtDavodsa8jh",
+    "psmOkuMEscrow": "14UBqnPp7mVxTi3haHDwAvfuP6WXPZJgMtDavodsa8jh",
     "redemptionQueue": "4L35bBwEbbF4NWRTiLNS8BvX1cYk7w5bSya7mtj2kkfx",
     "vaultConfig": "5LvCowpwWo9ZnbDVcT7tJ27GpCCK3QkLAs1id8W4tECU",
     "vaultOkuMoney": "EvDycE2EqkhbcF8BzqrgUxXGFzmS5TBCyjJVktqpPefd"

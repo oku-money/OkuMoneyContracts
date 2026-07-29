@@ -57,14 +57,16 @@ Exported programs (1):
 
 | File | Purpose |
 |------|---------|
-| `lite_psm.json` | PSM + redemption queue + yield ops + compliance — single-token usdOku design with ScaledUiAmount extension (sole user-facing mint/burn surface in v1) |
+| `lite_psm.json` | PSM (buffer-only — no redemption queue) + yield ops + compliance — single-token OkuM design with ScaledUiAmount extension (sole user-facing mint/burn surface in v1) |
 
 > `oku_bridge_router.json` was removed in the noBridge refactor along
 > with the EVM-side bridge artifacts (see note above). `oku_dollar.json`
 > was removed in the single-token refactor (the vault program no longer
-> exists; usdOku is now the sole mint managed by `lite-psm`). v1
-> cross-chain transfers are PSM-mediated mint/burn orchestrated
-> off-chain on both sides.
+> exists; OkuM is now the sole mint managed by `lite-psm`). The
+> redemption queue was subsequently removed entirely (buffer-only PSM
+> — reverts `InsufficientBuffer` instead of escrowing). v1 cross-chain
+> transfers are PSM-mediated mint/burn orchestrated off-chain on both
+> sides.
 
 **Refresh:**
 

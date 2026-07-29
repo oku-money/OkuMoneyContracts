@@ -21,10 +21,10 @@ infrastructure backed by US Treasury Bills. Single-token architecture
 
 ### lite-psm
 
-The single program housing the Peg Stability Module, redemption
-queue, yield distribution, compliance (freeze / thaw), and direct
-mint/burn for bridging. Program ID:
-`App49HmtSBMwh42tUpZT7gSbEbq7HiA6QED2BBnXtzxo`. Holds mint
+The single program housing the Peg Stability Module (buffer-only —
+no redemption queue), yield distribution, compliance (freeze / thaw),
+and direct mint/burn for bridging. Program ID:
+`BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g`. Holds mint
 authority, freeze authority, and `ScaledUiAmountConfig` authority
 over the `OkuM` mint. All program authority is held by a PDA — no
 EOA controls minting.
@@ -205,7 +205,7 @@ crates/
   oku-shared/                # Pure-Rust workspace lib (no solana-*, no anchor-lang)
     src/
       lib.rs
-      constants.rs           # PRECISION, BASIS_POINTS, MAX_MULTIPLIER, TOKEN_DECIMALS, oracle constants
+      constants.rs           # PRECISION, BASIS_POINTS, MAX_MULTIPLIER, TOKEN_DECIMALS
       math.rs                # mul_div_floor, mul_div_ceil + siblings, overflow-safe Option<u64>
                              # + Kani harnesses gated on #[cfg(kani)]
       yield_lock.rs          # Pure slot-comparison primitive
@@ -220,22 +220,23 @@ crates/
 programs/
   lite-psm/
     src/
-      lib.rs                       # 22 instruction entry points
-      state.rs                     # PsmConfig (seed: psm_config_v5, 626B),
-                                   # RedemptionQueue (zero-copy, seed: redemption_queue_v3, MAX_ENTRIES=200)
-      errors.rs                    # ~25 error variants
+      lib.rs                       # 18 instruction entry points
+      state.rs                     # PsmConfig only (seed: psm_config_v6, 562B) —
+                                   # no RedemptionQueue account; buffer-only PSM
+      errors.rs                    # 23 error variants
       events.rs
-      roles.rs                     # AuthorityRole enum (13 roles)
+      roles.rs                     # AuthorityRole enum (12 roles)
       constants.rs                 # Re-exports oku_shared::*
       helpers/
         scaled_ui.rs               # read_multiplier() — reads ScaledUiAmountConfig extension from mint
         yield_lock.rs              # check_yield_lock (delegates to shared yield_lock_engaged)
         math.rs                    # Anchor-error-flavoured wrappers over oku_shared::math
       instructions/
-        init.rs                    # initialize (creates OkuM mint with ScaledUiAmount + MetadataPointer +
-                                   # TokenMetadata via CPIs), setup_redemption_queue, setup_oku_m_escrow
-        psm.rs                     # mint_oku_m, redeem_oku_m, process_queue, rescue_queue_entry,
-                                   # user_self_rescue_queue_entry, deposit_buffer, withdraw_buffer
+        init.rs                    # initialize (creates PsmConfig + OkuM mint with ScaledUiAmount +
+                                   # MetadataPointer + TokenMetadata via CPIs); escrow ATA creation is
+                                   # client-side (no on-chain setup instruction)
+        psm.rs                     # mint_oku_m, redeem_oku_m (buffer-only — reverts InsufficientBuffer
+                                   # if the vault can't cover it), deposit_buffer, withdraw_buffer
         psm_admin.rs               # pause/unpause, freeze/thaw, set_authority, accept_role_admin,
                                    # cancel_role_admin_transfer, set_max_supply,
                                    # set_minter_allowance, set_direct_minter_allowance,
@@ -246,7 +247,7 @@ programs/
       contexts/                    # Per-instruction account contexts
 
 tests/
-  bankrun/                  # Default in-process suite (npm test, 105 bankrun tests)
+  bankrun/                  # Default in-process suite (npm test, 85 bankrun tests)
     smoke.ts
     lite-psm.ts
     direct-mint.ts
@@ -254,54 +255,59 @@ tests/
     init-invariants.ts
     rate-over-time.ts
     crossChainBridging.ts
-    scaled-ui-amount.ts          # ScaledUiAmount-specific suite (7 tests)
+    scaled-ui-amount.ts          # ScaledUiAmount-specific suite
     coverage-additions.ts
     scenarios/
       realWorldUsage.ts
-  fork/                          # surfpool-based, ad-hoc (npm run test:fork)
-    pyth-oracle.ts               # Mainnet-fork live Pyth
   shared/
     setup.ts                     # Shared authority keypairs + initializePsm
     bankrun.ts                   # Harness, helpers, autoBumpSlot wrapper
-    pythFixture.ts               # Pyth-V2 SolanaPriceAccount fixture builder
 ```
 
 ---
 
 ## State accounts
 
-### PsmConfig PDA (`b"psm_config_v5"`)
+### PsmConfig PDA (`b"psm_config_v6"`)
 
 ```rust
 pub struct PsmConfig {
     pub bump: u8,
-    // 13 authority pubkeys: role_admin, pauser, unpauser, freezer, unfreezer,
-    //   queue_processor, buffer_depositor, buffer_withdrawer,
-    //   cap_manager, allowance_manager, rebaser, direct_minter, direct_burner
-    // Token references: usdc_mint, oku_m_mint, vault_usdc, vault_oku_m
+    // 10 authority pubkeys: role_admin, pauser, unpauser, freezer, unfreezer,
+    //   buffer_depositor, buffer_withdrawer, cap_manager, allowance_manager,
+    //   rebaser
+    // Token references: usdc_mint, oku_m_mint, vault_usdc
     // Limits: max_supply, minter_allowance, direct_minter_allowance,
     //   direct_burner_allowance, is_paused
     // Yield: last_yield_distribution_slot
     // Two-step RoleAdmin: pending_role_admin
+    // Direct mint/burn: direct_minter, direct_burner
 }
 ```
 
-LEN pinned at 626 bytes by compile-time `assert!`.
+LEN pinned at 562 bytes by compile-time `assert!`. There is no
+`RedemptionQueue` account and no on-chain escrow-vault field — the
+PSM is buffer-only (see "Why no redemption queue" below), and the
+OkuM escrow ATA is derived client-side, not stored on `PsmConfig`.
 
 The PsmConfig PDA is the **mint authority**, **freeze authority**, and
 **ScaledUiAmount authority** for the `OkuM` mint. All mint/freeze/
 multiplier-update CPIs are signed by the PDA's seeds.
 
-### RedemptionQueue PDA (`b"redemption_queue_v3"`)
+### Why no redemption queue
 
-Zero-copy ring buffer (200 entries max — `MAX_ENTRIES`). Each entry:
-`{ user: Pubkey, raw_oku_m_amount: u64, timestamp: i64 }` = 48 bytes.
-Total account size 9 640 bytes; rent ~0.067 SOL one-time at deploy.
-Cap of 200 (vs the EVM spec target of 500) is bounded by Solana's
-`MAX_PERMITTED_DATA_INCREASE = 10_240`-byte single-CPI allocation
-budget. Strict FIFO preserved via `head` / `tail` `u64` absolute
-indices. `RedemptionQueue::ring_index(abs_index)` +
-`MAX_BATCH_ENTRIES` helpers on the impl block.
+Earlier design iterations included a zero-copy ring-buffer
+`RedemptionQueue` account (mirroring the EVM side) so `redeem_oku_m`
+could escrow a request when the USDC buffer was insufficient rather
+than reverting outright. This was removed entirely in the
+single-token refactor: `redeem_oku_m` now reverts with
+`InsufficientBuffer` if `vault_usdc.amount` can't cover the redemption.
+This matches how every other stablecoin issuer on Solana operates
+(buffer-only, no on-chain queue) and removes an entire class of
+queue-management operational surface (`process_queue`,
+`rescue_queue_entry`, `user_self_rescue_queue_entry`, queue capacity
+SLAs, `queue_processor` role). Operators keep the buffer topped up via
+`deposit_buffer` / `withdraw_buffer`; there is no queue to drain.
 
 ### PDA seed history
 
@@ -310,13 +316,14 @@ indices. `RedemptionQueue::ring_index(abs_index)` +
 | 2026-06-05 (noBridge phase C) | `psm_config → psm_config_v2`, `redemption_queue → redemption_queue_v2`, `oku_money_config → oku_money_config_v2`, `oku_m_mint → oku_m_mint_v2` | `PsmConfig` storage shrank from 722 → 658 bytes after the `blacklist_exempt_*` fields were removed. In-place BPF upgrade would have re-interpreted old slots — security-relevant corruption. Forced PDA rotation via seed bump. |
 | 2026-06-12 (audit-prep cycle) | `psm_config_v2 → psm_config_v3` | PoR fields removed, USDC peg circuit-breaker fields added. Net layout delta: 658 → 674 bytes. Other three SVM seeds unchanged. |
 | 2026-07-01 (direct-mint) | No seed change (in-place realloc) | `direct_minter: Pubkey` + `direct_minter_allowance: u64` appended to `PsmConfig`. Layout delta: 674 → 714 bytes (+40). First in-place `realloc` migration — `migrate_psm_config` extends the account without rotating the PDA seed. All other seeds unchanged. |
-| 2026-07-xx (single-token refactor) | `psm_config_v4 → psm_config_v5`, `redemption_queue_v2 → redemption_queue_v3` | OkuMoney eliminated; `oku_money_mint`/`vault_oku_money`/`oku_m_price` removed from PsmConfig; `oku_m_mint`/`vault_oku_m` added. Queue entries changed from `oku_m_amount` to `raw_oku_m_amount`. `oku-dollar` program deleted entirely. Fresh program ID (`App49HmtSBMwh42tUpZT7gSbEbq7HiA6QED2BBnXtzxo`). |
+| 2026-07 (single-token refactor) | `psm_config_v4 → psm_config_v5` | OkuMoney eliminated; `oku_money_mint`/`vault_oku_money`/`oku_m_price` removed from PsmConfig; `oku_m_mint` added. `oku-dollar` program deleted entirely. Redemption queue still present at this point (`redemption_queue_v3`). |
+| 2026-07 (queue removal) | `psm_config_v5 → psm_config_v6` | `RedemptionQueue` account, `queue_processor` role, and all queue instructions (`process_queue`, `rescue_queue_entry`, `user_self_rescue_queue_entry`, `setup_redemption_queue`) removed entirely — buffer-only PSM. Layout delta: 594 → 562 bytes (−32, the removed `queue_processor: Pubkey` field). Fresh program ID (`BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g`). |
 
 **Orphan-PDA inventory** (devnet, post-rotation): pre-rotation PDAs +
 SPL mints are orphaned because their `owner` field still references
 the old program ID, but the program no longer derives those addresses
-for any instruction. Total rent locked ~0.085 SOL across ~9 accounts
-per rotation — not material; tracked for completeness, not urgency.
+for any instruction. Not material; tracked for completeness, not
+urgency.
 
 #### Seed-rotation checklist
 
@@ -327,7 +334,6 @@ brick clients without a compile-time error.
 | Site | Path | What to change |
 |---|---|---|
 | PSM config seed | `programs/lite-psm/src/state.rs` | `PsmConfig::SEED` byte-string |
-| Queue seed | `programs/lite-psm/src/state.rs` | `RedemptionQueue::SEED` |
 | Client seed mirror | `scripts/utils/pdaHelpers.ts` | `PDA_SEEDS` map (must match the Rust constants byte-for-byte) |
 | Address-book | `deployments/{devnet,mainnet}.json` | Update PDA addresses post-redeploy; flag old entries as orphan |
 | Seed-history table | `contracts/SVM/README.md § PDA seed history` | New row documenting cause + layout delta |
@@ -368,17 +374,17 @@ no duplicate field on `PsmConfig`.
 // raw_oku_m_amount = usdc_amount (1:1 at raw level; ScaledUiAmount handles display)
 pub fn mint_oku_m(usdc_amount: u64)
 
-// usdc_amount = raw_oku_m_amount (1:1 at raw level)
-pub fn redeem_oku_m(raw_oku_m_amount: u64)     // instant or queued
+// usdc_amount = raw_oku_m_amount × multiplier / PRECISION.
+// Buffer-only: reverts InsufficientBuffer if vault_usdc can't cover it
+// (no redemption queue — see "Why no redemption queue" above).
+pub fn redeem_oku_m(raw_oku_m_amount: u64, min_usdc_out: u64)
 
-pub fn process_queue(max_entries: u32)               // hard-capped at MAX_BATCH_ENTRIES=50
-pub fn rescue_queue_entry(queue_index: u64)          // operator: return OkuM for stuck entries
-pub fn user_self_rescue_queue_entry(queue_index: u64)  // permissionless self-rescue
 pub fn deposit_buffer(amount: u64)                   // top up USDC vault
-pub fn withdraw_buffer(amount: u64)                  // drain USDC vault (ceil-rounded reservation)
+pub fn withdraw_buffer(amount: u64)                  // drain USDC vault
 ```
 
-All protected by yield-lock.
+All protected by yield-lock. `min_usdc_out` is slippage protection —
+pass `0` to disable the check.
 
 ### Direct mint / burn (bridging + fiat on-ramp)
 
@@ -466,13 +472,6 @@ After the single-token refactor `lite-psm/src/constants.rs` only
 re-exports shared constants from `oku-shared`; no program-specific
 values remain.
 
-### Queue / batch limits
-
-| Constant | Value | Location | Rationale |
-|---|---|---|---|
-| `RedemptionQueue::MAX_ENTRIES` | `200` | `lite-psm/src/state.rs` | Maximum entries in the zero-copy ring. Bounded by Solana's ~10 KB single-CPI allocation budget. |
-| `RedemptionQueue::MAX_BATCH_ENTRIES` | `50` | `lite-psm/src/state.rs` | Max entries `process_queue` walks per call. Bounded by BPF compute-unit budget. |
-
 ---
 
 ## Authority model
@@ -489,9 +488,8 @@ SVM-specific table:
 | `freezer` | Warm Multisig | CPI-freeze any OkuM ATA via Token-2022 freeze authority | Cannot drain or redirect frozen tokens. |
 | `unfreezer` | Cold Multisig | CPI-thaw a frozen ATA | — |
 | `rebaser` | Orchestrator (KMS) | Update ScaledUiAmount multiplier (non-decreasing) and call `distribute_yield` | Cannot decrease; capped at `MAX_MULTIPLIER`. Self-fenced (same-slot re-entry rejected). |
-| `queue_processor` | Orchestrator | `process_queue` (pays USDC to queued entries) + `rescue_queue_entry` | Pays the entry's `user` field; cannot reroute. Rescue per-entry only. |
 | `buffer_depositor` | Orchestrator | Transfer USDC from caller's ATA into the PSM vault | Caller must hold USDC; no damage possible. |
-| `buffer_withdrawer` | Cold Multisig | Drain USDC from the PSM vault | Cannot withdraw below USDC reserved for pending queue entries. Ceil-rounded reservation. |
+| `buffer_withdrawer` | Cold Multisig | Drain USDC from the PSM vault | Cannot withdraw more than the vault's current USDC balance. |
 | `cap_manager` | Cold Multisig | Set `max_supply` | Cannot set below current circulating supply. |
 | `allowance_manager` | Cold Multisig | Set `minter_allowance`, `direct_minter_allowance`, and `direct_burner_allowance` | Bounded by `max_supply`; PSM PDA is the mint authority. |
 | `direct_minter` | Operator / Bridge Orchestrator | `mint_oku_m_direct` (raw OkuM without USDC) | Bounded by `direct_minter_allowance` + `max_supply`. No USDC collateral on-chain — fiat/bridge backing is off-chain. |
@@ -501,32 +499,32 @@ SVM-specific table:
 
 ## Initialization
 
-PSM initialization is split into three instructions to avoid BPF
-stack overflow on the large account contexts:
+`initialize(InitializeParams)` creates `PsmConfig` and the USDC
+vault in a single instruction. It also creates the `OkuM` Token-2022
+mint with three extensions (`ScaledUiAmount` — multiplier authority =
+PsmConfig PDA, `MetadataPointer`, `TokenMetadata`) via CPIs to the
+Token-2022 program. The PsmConfig PDA is set as mint authority and
+freeze authority.
 
-1. `initialize(InitializeParams)` — creates `PsmConfig` and the USDC
-   vault. Also creates the `OkuM` Token-2022 mint with three
-   extensions: `ScaledUiAmount` (multiplier authority = PsmConfig PDA),
-   `MetadataPointer`, and `TokenMetadata`. The PsmConfig PDA is set as
-   mint authority and freeze authority.
-2. `setup_redemption_queue` — creates the `RedemptionQueue` PDA.
-   Emits `QueueInitializedEvent`.
-3. `setup_oku_m_escrow` — creates the OkuM escrow vault.
-   Emits `EscrowInitializedEvent`.
+The OkuM escrow ATA (owned by the PsmConfig PDA) is created
+client-side by the deploy script via a standard idempotent
+associated-token-account instruction — there is no separate on-chain
+`setup_oku_m_escrow` instruction.
 
-No on-chain bridge or router is deployed (noBridge model).
+No on-chain bridge, router, or redemption queue is deployed (noBridge,
+buffer-only model).
 
 ---
 
 ## Error codes
 
-Full list in `programs/lite-psm/src/errors.rs`. Key errors:
+Full list (23 variants) in `programs/lite-psm/src/errors.rs`. Key errors:
 
 - `YieldDistributionInProgress` — operation blocked during yield lock.
 - `MultiplierCannotDecrease` — ScaledUiAmount multiplier is monotonically increasing.
 - `InsufficientUserBalance` — user balance shortfall on redeem.
-- `SlippageExceeded` — output below user-specified minimum.
-- `QueueFull` — redemption queue at 200-entry capacity.
+- `InsufficientBuffer` — PSM USDC vault can't cover a redeem or withdraw_buffer (no queue fallback — the tx reverts).
+- `OutputBelowMinimum` — redeem output is zero, or below the caller's `min_usdc_out` slippage floor.
 - `YieldTooSmall` — `distribute_yield` amount truncates to zero.
 - `Paused` — operation attempted while system is paused.
 - `Unauthorized` — caller lacks the required role.
@@ -536,7 +534,7 @@ Full list in `programs/lite-psm/src/errors.rs`. Key errors:
 ## Testing
 
 ```bash
-# Full bankrun suite — 105 bankrun tests + 15 Rust unit tests = 120 total
+# Full bankrun suite — 85 bankrun tests + 16 Rust unit tests = 101 total
 npm test
 # or directly:
 npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'
@@ -549,14 +547,10 @@ npx mocha --require tsx --timeout 60000 'tests/bankrun/scaled-ui-amount.ts'
 npx mocha --require tsx --timeout 60000 'tests/bankrun/rate-over-time.ts'
 
 # Cargo unit tests (math primitives, helpers)
-cargo test --workspace                # 15 unit tests
+cargo test --workspace                # 16 unit tests
 
 # Anchor build
 anchor build
-
-# Fork tests — exercises real mainnet Pyth state via Surfpool.
-#   1. Start Surfpool: npm run surfpool:mainnet
-#   2. Run fork tests: npm run test:fork
 
 # Self-audit toolkit (../../audit/SVM/)
 cd ../../audit/SVM && make all    # clippy + cargo-audit + anchor-test
@@ -630,7 +624,7 @@ two-chain + SVM deploy walk-through. SVM-side highlights:
 ```bash
 # Pre-flight cost estimate
 anchor build
-npm run cost                  # ~0.067 SOL for the queue rent alone
+npm run cost                  # estimate one-time rent for program + PsmConfig + mint + ATAs
 
 # Phase 1 — deploy program .so file
 NETWORK=devnet npm run deploy:programs
@@ -650,47 +644,34 @@ solana program set-upgrade-authority <LITE_PSM_PROGRAM> --new-upgrade-authority 
 
 - [ ] `MAINNET_ORCHESTRATOR` env var points at a KMS-backed signer, not the deployer wallet.
 - [ ] BPF loader upgrade authority transferred to the cold multisig.
-- [ ] `Anchor.toml [programs.<network>]` matches the freshly-deployed program ID (`App49HmtSBMwh42tUpZT7gSbEbq7HiA6QED2BBnXtzxo`).
+- [ ] `Anchor.toml [programs.<network>]` matches the freshly-deployed program ID (`BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g`).
 - [ ] Token-2022 binary override applied if bankrun tests are part of CI (`make fetch-token-2022`).
 
 ### Orchestrator key
 
 In v1 (noBridge) the orchestrator holds a single Solana keypair that
-is granted roles for `buffer_depositor`, `queue_processor`, `rebaser`,
-`direct_minter`, and `direct_burner`. For cross-chain transfers it
-calls `burn_oku_m_direct` / `mint_oku_m_direct`. It also holds
+is granted roles for `buffer_depositor`, `rebaser`, `direct_minter`,
+and `direct_burner`. For cross-chain transfers it calls
+`burn_oku_m_direct` / `mint_oku_m_direct`. It also holds
 the matching EVM key on the other side. Both keys KMS-backed.
 
 A future on-chain bridge (NTT, CCIP, native OkuBridge port) would
 add a separate signing scheme — out of v1 scope.
 
-### Queue capacity SLA
+### Buffer discipline
 
-The `RedemptionQueue` is a fixed 200-entry zero-copy ring. Operations
-discipline:
+The PSM is buffer-only — `redeem_oku_m` reverts with
+`InsufficientBuffer` if `vault_usdc.amount` can't cover the
+redemption (see "Why no redemption queue" earlier in this doc).
+Operational discipline:
 
-- Keep `vault_usdc.amount` topped up so `redeem_oku_m` falls into
-  the instant path.
-- If the queue fills (200 simultaneously-pending redemptions), the
-  201st `redeem_oku_m` reverts with `QueueFull`. The fix is to call
-  `process_queue` from a `queue_processor`-keyed orchestrator.
-- `process_queue` is hard-capped at `MAX_BATCH_ENTRIES = 50` per tx.
-  To drain 200 entries you need at least 4 `process_queue` calls.
-- Permissionless `user_self_rescue_queue_entry` lets users unblock
-  their own stuck entries without operator intervention.
-
-Cron template (orchestrator side):
-
-```bash
-while true; do
-    npm run admin:process-queue   # auto-loops until empty
-    sleep 60
-done
-```
-
-`scripts/admin/process-queue.ts` auto-batches across multiple txs in
-a single invocation. Pass `--max=<N>` to cap how many entries a
-single invocation drains.
+- Keep `vault_usdc.amount` topped up via `deposit_buffer` so
+  `redeem_oku_m` always succeeds for expected redemption volume.
+- Monitor buffer balance against a rolling estimate of daily
+  redemption volume; alert well before it's depleted.
+- If a redeem reverts with `InsufficientBuffer`, the fix is simply
+  `deposit_buffer` — there is nothing "stuck" to rescue or drain,
+  since no queue exists to hold a failed redemption.
 
 ### Cross-chain refund / recovery
 
@@ -719,7 +700,7 @@ All admin scripts live under `scripts/admin/`. Each:
 | `admin:set-multiplier` | `set_multiplier` | `rebaser` (stamps yield-distribution slot) |
 | `admin:distribute-yield` | `distribute_yield` | `rebaser` |
 | `admin:freeze-account` / `admin:thaw-account` | `freeze_account` / `thaw_account` | `freezer` / `unfreezer` |
-| `admin:process-queue` | `process_queue` (auto-batches to drain-to-empty) | `queue_processor` |
+| `admin:deposit-buffer` / `admin:withdraw-buffer` | `deposit_buffer` / `withdraw_buffer` | `buffer_depositor` / `buffer_withdrawer` |
 | `admin:close-programs` | `solana program close` (BPF loader) — recover rent from stale program deployments. | BPF upgrade authority (deployer wallet) |
 
 ---
@@ -748,10 +729,10 @@ EVM groups protocol-wide invariants into `EVM/src/lib/`:
 ### Single-token architecture
 
 EVM has two tokens: `OkuMoney` (non-rebasing, stored price) and
-`OkuMoney` (rebasing wrapper vault). SVM has a single token:
+`OkuDollar` (rebasing wrapper vault). SVM has a single token:
 `OkuM`, which is a Token-2022 mint with the `ScaledUiAmountConfig`
 extension. Raw balances are static (like EVM OkuMoney); displayed
-dollar values scale with the multiplier (like EVM OkuMoney).
+dollar values scale with the multiplier (like EVM OkuDollar).
 
 This eliminates the need for wrap/unwrap, the vault program, dead
 shares, collateral ratios, and the two-program CPI chain.
@@ -791,7 +772,7 @@ block/slot.
 | Operation | EVM | SVM |
 |---|---|---|
 | `freeze_account` / `thaw_account` | bypasses pause (Token-2022 freeze authority independent of `Pausable`) | bypasses pause (Token-2022 freeze CPI signed by config PDA; pause check intentionally omitted) |
-| `process_queue` when paused | proceeds — pause must not lock users in the queue | proceeds, same rationale |
+| `processQueue` when paused | proceeds — pause must not lock users in the queue | N/A — SVM has no queue |
 
 ### Bridging model asymmetry
 
@@ -803,16 +784,16 @@ block/slot.
 
 The orchestrator handles this asymmetry transparently.
 
-### Queue model
+### Redemption model — queue (EVM) vs buffer-only (SVM)
 
-| Aspect | EVM | SVM |
-|---|---|---|
-| Storage | unbounded `mapping(uint256 → RedemptionEntry)` | fixed `[QueueEntry; 200]` zero-copy ring |
-| Cap | none | 200 (10 KB single-CPI alloc budget) |
-| Strict FIFO | yes (`head` / `tail`) | yes (`head` / `tail` u64 absolute indices) |
-| Batch limit | none | `MAX_BATCH_ENTRIES = 50` per `process_queue` tx (CU budget) |
-| Head-pin recovery | random-access `[startIndex, endIndex]` ranges | permissionless `user_self_rescue_queue_entry` |
-| Entry amount field | `okuMAmount` | `raw_oku_m_amount` |
+EVM keeps a `RedemptionQueue` (unbounded `mapping(uint256 →
+RedemptionEntry)`, strict FIFO via `head`/`tail`) so a redeem can be
+escrowed when the PSM's USDC buffer is insufficient, then drained
+later via `processQueue`. SVM has **no queue at all** — `redeem_oku_m`
+simply reverts with `InsufficientBuffer` if the vault can't cover it
+(see "Why no redemption queue" in the state-accounts section above).
+This is a deliberate SVM-specific simplification, not a parity gap
+the two sides are expected to close.
 
 ### DeFi compatibility
 
@@ -841,13 +822,12 @@ per round-trip from integer-division truncation.
 
 The orchestrator holds:
 
-- A Solana keypair with `buffer_depositor`, `queue_processor`,
-  `rebaser`, `direct_minter`, and `direct_burner` roles. Uses
-  `burn_oku_m_direct` / `mint_oku_m_direct` for cross-chain
-  settlement.
+- A Solana keypair with `buffer_depositor`, `rebaser`, `direct_minter`,
+  and `direct_burner` roles. Uses `burn_oku_m_direct` /
+  `mint_oku_m_direct` for cross-chain settlement.
 - An EVM EOA with `PSM_BUFFER_DEPOSITOR`, `PSM_QUEUE_PROCESSOR`,
   `OKUM_REBASER` (and a separate EVM owner key for relevant LitePSM
-  admin actions).
+  admin actions). SVM has no queue-processor equivalent.
 
 Both KMS-backed. No on-chain bridge state, no chain whitelist, no
 nonces, no refund flow — all cross-chain coordination is off-chain.
@@ -857,17 +837,17 @@ nonces, no refund flow — all cross-chain coordination is off-chain.
 | Component | EVM | SVM | Notes |
 |---|---|---|---|
 | `OkuMoney` (ERC-20) | yes | no | SVM uses single `OkuM` token |
-| `OkuMoney` vault | yes (separate contract) | no | SVM uses `ScaledUiAmount` instead |
+| `OkuDollar` (rebasing vault) | yes (separate contract) | no | SVM uses `ScaledUiAmount` instead |
 | `OkuM` (Token-2022 + ScaledUiAmount) | no | yes | SVM-only single token |
 | `LitePSM` | yes (`EVM/src/psm/LitePSM.sol`) | yes (`programs/lite-psm`) | parity (different token model) |
-| `RedemptionQueue` | inside `LitePSM` | inside `lite-psm` (`state::RedemptionQueue`) | parity |
+| `RedemptionQueue` | yes (`EVM/src/psm/RedemptionQueue.sol`) | no — removed entirely, buffer-only PSM | SVM-only deliberate simplification |
 | On-chain bridge | removed in noBridge | removed in noBridge | both sides v1 are off-chain orchestrator-mediated |
 
 ### Events
 
-PSM and queue events have matching shapes across EVM and SVM with
-minor naming differences (e.g. `BufferRefilled` ↔
-`BufferRefilledEvent`). For per-event schemas see
+PSM events have matching shapes across EVM and SVM with minor naming
+differences (e.g. `BufferDeposited` ↔ `BufferDepositEvent`). SVM has
+no queue events (no queue exists). For per-event schemas see
 [`../EVM/src/lib/events/`](../EVM/src/lib/events) (Solidity event
 declarations) and
 [`oku-programs/programs/lite-psm/src/events.rs`](oku-programs/programs/lite-psm/src/events.rs).

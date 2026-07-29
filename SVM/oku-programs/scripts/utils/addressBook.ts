@@ -103,7 +103,7 @@ export interface DeploymentAddresses {
   pdas: {
     psmConfig?: string;
     psmVaultUsdc?: string;
-    psmOkuMoneyEscrow?: string;
+    psmOkuMEscrow?: string;
   };
   authorities?: {
     coldMultisig?: string;

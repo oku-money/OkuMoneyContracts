@@ -146,21 +146,19 @@ along with the oracle infrastructure. v1 relies on off-chain
 monitoring for USDC depeg events; on-chain oracle integration is
 deferred to a future upgrade.
 
-## 3. Queue capacity capped at 200 entries (was §4)
+## 3. Redemption queue removed entirely — buffer-only PSM
 
-The `RedemptionQueue` zero-copy ring is sized at `MAX_ENTRIES = 200`.
-Solana's `MAX_PERMITTED_DATA_INCREASE = 10_240` bytes per single-CPI
-allocation caps the largest single-step `init` to ~9.6 KB of array
-data. The spec target was 500; reaching it would require a
-multi-step `init + 2× realloc` deploy flow OR per-user PDAs.
-
-The 200-entry cap with `MAX_BATCH_ENTRIES = 50` per `process_queue`
-tx is sufficient for launch SLA. Cycle 4 added permissionless
-`user_self_rescue_queue_entry` (PSM-06) so a frozen / wrong-owner
-ATA at the queue head no longer DoSes downstream entries — the
-affected user can self-unblock from a thawed ATA. Defer the 500
-upgrade until telemetry shows operators repeatedly hitting
-`QueueFull`.
+The `RedemptionQueue` account (zero-copy ring, `process_queue`,
+`rescue_queue_entry`, `user_self_rescue_queue_entry`,
+`setup_redemption_queue`, and the `queue_processor` role) was removed
+in a follow-up rotation after the single-token refactor. `redeem_oku_m`
+is now buffer-only: it reverts with `InsufficientBuffer` if
+`vault_usdc.amount` can't cover the redemption, instead of escrowing
+the request. This matches how every other stablecoin issuer operates
+on Solana and removes an entire class of queue-management operational
+surface (capacity limits, batch-drain SLAs, spam-DoS considerations).
+Operators keep the buffer topped up via `deposit_buffer` /
+`withdraw_buffer`; there is nothing to drain or rescue.
 
 ## 4. `cargo dylint` (solana-lints) deferred — upstream incompatibility
 
@@ -194,9 +192,9 @@ token amounts × `1e9` precision peak around `1.8e28`, comfortably
 within `u128::MAX`. A `1e18` precision would require either `u128`
 token amounts (no SPL Token-2022 support) or aggressive precision
 loss on every operation. Every numeric constant has its SVM-scaled
-counterpart (`ORACLE_USDC_PRICE_FLOOR = 0.95e9` vs `0.95e18` on
-EVM, etc.). The off-chain orchestrator handles the scale conversion
-when reflecting value across the EVM ↔ SVM boundary. See
+counterpart (e.g. `MAX_MULTIPLIER = 1e15` on SVM vs `MAX_MULTIPLIER
+= 1e24` on EVM). The off-chain orchestrator handles the scale
+conversion when reflecting value across the EVM ↔ SVM boundary. See
 [`../crates/oku-shared/src/constants.rs`](../crates/oku-shared/src/constants.rs)
 for the SVM-side constants and the EVM mirror in
 [`../../../EVM/src/lib/Constants.sol`](../../../EVM/src/lib/Constants.sol).

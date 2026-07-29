@@ -10,9 +10,9 @@
  * This is the SVM analogue of EVM/scripts/upgrade/preState.ts.
  *
  * Field names are the camelCase conversions of the Rust snake_case IDL names:
- *   is_paused         → isPaused
- *   role_admin        → roleAdmin
- *   oku_money_mint    → okuMoneyMint
+ *   is_paused    → isPaused
+ *   role_admin   → roleAdmin
+ *   oku_m_mint   → okuMMint
  *   etc.
  */
 

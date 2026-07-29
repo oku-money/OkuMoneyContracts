@@ -76,7 +76,7 @@ export interface BankrunHarness {
 export interface StartBankrunOptions {
   /** Extra .so programs to deploy beyond the workspace defaults. */
   extraPrograms?: AddedProgram[];
-  /** Extra account snapshots to seed (e.g., a captured Pyth PriceUpdateV2). */
+  /** Extra account snapshots to seed (e.g., a captured mainnet account). */
   extraAccounts?: AddedAccount[];
   /** Override compute budget if a single tx needs more than the default. */
   computeMaxUnits?: bigint;
@@ -105,9 +105,9 @@ export interface StartBankrunOptions {
  * Boot an in-process bankrun cluster, register a BankrunProvider, and
  * return a typed harness. Callers should `await` this in a `before` hook.
  *
- * The `extraAccounts` / `extraPrograms` knobs let oracle tests pre-seed
- * Pyth fixtures and similar pre-existing on-chain state without having
- * to fork a remote cluster.
+ * The `extraAccounts` / `extraPrograms` knobs let tests pre-seed
+ * arbitrary pre-existing on-chain state without having to fork a
+ * remote cluster.
  */
 export async function startBankrun(
   opts: StartBankrunOptions = {}

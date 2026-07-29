@@ -14,7 +14,6 @@
     "test": "npm run test:rust && npm run test:bankrun",
     "test:rust": "cargo test --workspace --quiet",
     "test:bankrun": "RUST_LOG= npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'",
-    "test:fork": "RUST_LOG= npx mocha --require tsx --timeout 180000 'tests/fork/**/*.ts'",
     "test:onchain": "NETWORK=devnet tsx scripts/test/test-devnet.ts",
     "test:onchain:fork": "NETWORK=devnet-fork tsx scripts/test/test-devnet.ts",
     "bridge:svm-evm": "tsx scripts/test/bridge-svm-evm.ts",

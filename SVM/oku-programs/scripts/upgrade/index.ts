@@ -85,7 +85,7 @@ interface UpgradeTarget {
   /** Filesystem key (matches target/deploy/<programKey>.so and *-keypair.json). */
   programKey: string;
   /** Key in deployments/<network>.json::programs. */
-  bookKey: 'litePsm' | 'okuMoneyProgram';
+  bookKey: 'litePsm';
   /** Key in STATE_READERS. */
   stateKey: string;
   /** Human-readable display name. */

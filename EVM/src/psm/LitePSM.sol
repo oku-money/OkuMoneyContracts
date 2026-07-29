@@ -68,9 +68,6 @@ contract LitePSM is
         IOkuDollar okuDollar;
         IERC20 usdc;
         RedemptionQueue redemptionQueue;
-        // Deprecated: was the USDC peg circuit-breaker oracle relay.
-        // Retained as a placeholder to preserve UUPS storage layout (slot 4).
-        address __deprecated_oracleRelay;
         // Decimal conversion multiplier resolved at init from IERC20Metadata(usdc).decimals().
         // For Circle USDC (6 decimals) this is 1e12.
         uint256 usdcDecimalMultiplier;

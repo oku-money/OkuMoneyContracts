@@ -42,18 +42,11 @@ export const ROLES = {
   PSM_QUEUE_PROCESSOR: keccak256(toUtf8Bytes("PSM_QUEUE_PROCESSOR")),
   PSM_BUFFER_DEPOSITOR: keccak256(toUtf8Bytes("PSM_BUFFER_DEPOSITOR")),
   PSM_BUFFER_WITHDRAWER: keccak256(toUtf8Bytes("PSM_BUFFER_WITHDRAWER")),
-  PSM_ORACLE_MANAGER: keccak256(toUtf8Bytes("PSM_ORACLE_MANAGER")),
 
   // ============ RedemptionQueue Roles ============
   QUEUE_UPGRADER: keccak256(toUtf8Bytes("QUEUE_UPGRADER")),
   QUEUE_PSM: keccak256(toUtf8Bytes("QUEUE_PSM")),
   QUEUE_RESCUER: keccak256(toUtf8Bytes("QUEUE_RESCUER")),
-  QUEUE_ORACLE_MANAGER: keccak256(toUtf8Bytes("QUEUE_ORACLE_MANAGER")),
-
-  // ============ OracleRelay Roles ============
-  RELAY_UPGRADER: keccak256(toUtf8Bytes("RELAY_UPGRADER")),
-  RELAY_FEED_MANAGER: keccak256(toUtf8Bytes("RELAY_FEED_MANAGER")),
-  RELAY_CONFIG_MANAGER: keccak256(toUtf8Bytes("RELAY_CONFIG_MANAGER")),
 };
 
 /**

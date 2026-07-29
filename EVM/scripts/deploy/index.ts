@@ -66,27 +66,12 @@ const DEV_WALLET = DEV_WALLET_ADDRESS;
 interface DeploymentConfig {
   maxSupply: bigint;
   minterAllowance: bigint;
-  // OracleRelay (USDC peg circuit-breaker) defaults — operators can re-tune via the
-  // RELAY_FEED_MANAGER / RELAY_CONFIG_MANAGER setters post-deploy.
-  oracleRelayStalenessThreshold: bigint;
-  oracleRelayMinPriceE18: bigint;
-  oracleRelayMaxPriceE18: bigint;
-  // Per-chain USDC/USD Chainlink aggregator address. When empty (testnet), the
-  // OracleRelay deploy is skipped; LitePSM and RedemptionQueue start with
-  // oracleRelay = address(0) (peg check disabled, mirrors old bootstrap behavior).
-  oracleRelayPriceFeed: string;
 }
 
 function getDeploymentConfig(): DeploymentConfig {
   return {
     maxSupply: ethers.parseUnits("1000000000", 18), // 1 billion
     minterAllowance: ethers.parseUnits("1000000000", 18), // 1 billion
-    oracleRelayStalenessThreshold: 3600n, // 1 hour
-    oracleRelayMinPriceE18: ethers.parseUnits("0.97", 18), // $0.97
-    oracleRelayMaxPriceE18: ethers.parseUnits("1.03", 18), // $1.03
-    // Per-chain Chainlink USDC/USD feed: pulled from chainConfig at main() entry.
-    // Leave empty here; main() injects the chain-specific value if present.
-    oracleRelayPriceFeed: "",
   };
 }
 
@@ -561,9 +546,6 @@ async function deployPSM(
   logger.step(3, "Deploying LitePSM");
 
   // LitePSM.initialize(okuMoney, okuDollar, usdc, redemptionQueue, admin).
-  // The OracleRelay address (USDC peg circuit-breaker) is wired post-deploy via
-  // litePSM.setOracleRelay(...), so a deploy can complete with the relay disabled
-  // (testnet bootstrap path).
   const litePSM = await deployUUPSProxy(
     "LitePSM",
     [
@@ -581,43 +563,12 @@ async function deployPSM(
   return litePSM;
 }
 
-async function deployOracleRelay(
-  deployer: Signer,
-  deployerAddress: string,
-  bookKey: string,
-  priceFeedAddress: string,
-  config: DeploymentConfig
-): Promise<Contract | null> {
-  if (!priceFeedAddress || priceFeedAddress === ethers.ZeroAddress) {
-    logger.info("  OracleRelay: skipped (no Chainlink USDC/USD feed configured for this chain)");
-    return null;
-  }
-
-  logger.step(3, "Deploying OracleRelay");
-  // OracleRelay.initialize(priceFeed, staleness, minPriceE18, maxPriceE18, admin)
-  const oracleRelay = await deployUUPSProxy(
-    "OracleRelay",
-    [
-      priceFeedAddress,
-      config.oracleRelayStalenessThreshold,
-      config.oracleRelayMinPriceE18,
-      config.oracleRelayMaxPriceE18,
-      deployerAddress,
-    ],
-    bookKey,
-    deployer
-  );
-  logger.success(`  OracleRelay: ${await oracleRelay.getAddress()}`);
-  return oracleRelay;
-}
-
 async function configureRoles(
   deployerAddress: string,
   okuMoney: Contract,
   okuDollar: Contract,
   redemptionQueue: Contract,
   litePSM: Contract,
-  oracleRelay: Contract | null,
   config: DeploymentConfig
 ): Promise<void> {
   logger.step(4, "Configuring Roles");
@@ -673,7 +624,6 @@ async function configureRoles(
   await sendAndWait("Grant PSM_BUFFER_DEPOSITOR to Admin", () => litePSM.grantRole(ROLES.PSM_BUFFER_DEPOSITOR, deployerAddress));
   await sendAndWait("Grant PSM_QUEUE_PROCESSOR to Admin", () => litePSM.grantRole(ROLES.PSM_QUEUE_PROCESSOR, deployerAddress));
   await sendAndWait("Grant PSM_BUFFER_WITHDRAWER to Admin", () => litePSM.grantRole(ROLES.PSM_BUFFER_WITHDRAWER, deployerAddress));
-  await sendAndWait("Grant PSM_ORACLE_MANAGER to Admin", () => litePSM.grantRole(ROLES.PSM_ORACLE_MANAGER, deployerAddress));
 
   // OkuMoney additional admin roles
   await sendAndWait("Grant OKUM_PAUSER to Admin", () => okuMoney.grantRole(ROLES.OKUM_PAUSER, deployerAddress));
@@ -693,39 +643,6 @@ async function configureRoles(
 
   // RedemptionQueue additional role
   await sendAndWait("Grant QUEUE_RESCUER to Admin", () => redemptionQueue.grantRole(ROLES.QUEUE_RESCUER, deployerAddress));
-
-  // QUEUE_ORACLE_MANAGER is granted to admin at queue.initialize, but mirror an
-  // explicit grant here for parity with the PSM_ORACLE_MANAGER pattern. The PSM
-  // already received PSM_ORACLE_MANAGER above.
-  await sendAndWait("Grant QUEUE_ORACLE_MANAGER to Admin", () => redemptionQueue.grantRole(ROLES.QUEUE_ORACLE_MANAGER, deployerAddress));
-
-  // Wire the OracleRelay (USDC peg circuit-breaker) onto LitePSM and the queue.
-  // The relay is optional: when no Chainlink USDC/USD feed is configured for
-  // this chain the relay is null and we leave oracleRelay = address(0)
-  // (peg check disabled — explicit operator-controlled enablement).
-  if (oracleRelay !== null) {
-    const relayAddress = await oracleRelay.getAddress();
-    // Relay roles are already granted to admin at initialize-time, but mirror the
-    // explicit grant here for symmetry with the PSM_/QUEUE_/VAULT_ patterns above.
-    await sendAndWait("Grant RELAY_FEED_MANAGER to Admin", () => oracleRelay.grantRole(ROLES.RELAY_FEED_MANAGER, deployerAddress));
-    await sendAndWait("Grant RELAY_CONFIG_MANAGER to Admin", () => oracleRelay.grantRole(ROLES.RELAY_CONFIG_MANAGER, deployerAddress));
-    await sendAndWait("Wire OracleRelay onto LitePSM", () => litePSM.setOracleRelay(relayAddress));
-    await sendAndWait("Wire OracleRelay onto RedemptionQueue", () => redemptionQueue.setOracleRelay(relayAddress));
-
-    // EVM-J4: Post-wire invariant — PSM and Queue MUST point at the same relay.
-    // If one setOracleRelay tx lands and the other reverts, the consumers desync
-    // and the operator must rotate the relay on the surviving consumer. This
-    // check catches it at deploy time instead of in the next user mint/redeem.
-    const psmRelay = await litePSM.oracleRelay();
-    const queueRelay = await redemptionQueue.oracleRelay();
-    if (psmRelay !== queueRelay) {
-      throw new Error(
-        `OracleRelay wiring mismatch: LitePSM=${psmRelay}, RedemptionQueue=${queueRelay}`
-      );
-    }
-    logger.success("  OracleRelay wiring matches across PSM and Queue");
-  }
-  void config;
 }
 
 async function verifyDeployment(
@@ -756,8 +673,6 @@ async function verifyDeployment(
   // Verify all addresses saved
   const book = loadAddressBook();
   const contracts = book[bookKey] || {};
-  // OracleRelay is conditionally deployed (skipped when no Chainlink USDC/USD feed is
-  // configured for the chain), so it is NOT included in the "must exist" list.
   const expectedContracts = ["MockUSDC", "OkuMoney", "OkuDollar", "RedemptionQueue", "LitePSM"];
 
   const missing = expectedContracts.filter(c => !contracts[c]);
@@ -765,12 +680,6 @@ async function verifyDeployment(
     logger.warning(`  Missing contracts in address book: ${missing.join(", ")}`);
   } else {
     logger.success("  All contracts saved to address book");
-  }
-
-  if (contracts["OracleRelay"]) {
-    logger.success(`  OracleRelay: ${contracts["OracleRelay"]}`);
-  } else {
-    logger.info("  OracleRelay: not deployed (no Chainlink USDC/USD feed configured)");
   }
 }
 
@@ -878,19 +787,6 @@ async function main() {
     config
   );
 
-  // Step 3b: Deploy OracleRelay (when a Chainlink USDC/USD feed is configured for
-  // this chain). Skipped on chains where the feed address is empty — those
-  // deployments boot with the peg check disabled and rely on later
-  // setOracleRelay(...) to enable it.
-  const relayPriceFeed = (chainConfig as any).chainlinkUsdcUsdFeed ?? "";
-  const oracleRelay = await deployOracleRelay(
-    deployer,
-    deployerAddress,
-    bookKey,
-    relayPriceFeed,
-    config
-  );
-
   // Step 4: Configure roles
   await configureRoles(
     deployerAddress,
@@ -898,7 +794,6 @@ async function main() {
     okuDollar,
     redemptionQueue,
     litePSM,
-    oracleRelay,
     config
   );
 
@@ -942,7 +837,6 @@ async function main() {
           okuDollar: addresses.OkuDollar,
           litePSM: addresses.LitePSM,
           redemptionQueue: addresses.RedemptionQueue,
-          oracleRelay: addresses.OracleRelay, // optional — may be undefined for chains without a Chainlink USDC/USD feed
           mockUSDC: addresses.MockUSDC,
         },
         deployer: deployerAddress,

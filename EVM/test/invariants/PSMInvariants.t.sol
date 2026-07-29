@@ -56,7 +56,6 @@ contract PSMInvariantsTest is BaseTest {
         excludeContract(address(litePsm));
         excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));
-        excludeContract(address(oracle));
     }
 
     /// @notice The PSM never holds OkuMoney across calls (within ≤1 wei rounding dust).

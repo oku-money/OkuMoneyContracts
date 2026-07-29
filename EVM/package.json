@@ -62,7 +62,6 @@
     "operator:withdrawBuffer": "hardhat run scripts/operator/withdrawBuffer.ts",
     "operator:processQueue": "hardhat run scripts/operator/processQueue.ts",
     "operator:configureMinterAllowance": "hardhat run scripts/operator/configureMinterAllowance.ts",
-    "operator:configureRelay": "hardhat run scripts/operator/configureRelay.ts",
     "operator:distributeYield": "hardhat run scripts/operator/distributeYield.ts",
     "operator:pause": "hardhat run scripts/operator/pause.ts",
     "operator:unpause": "hardhat run scripts/operator/unpause.ts",

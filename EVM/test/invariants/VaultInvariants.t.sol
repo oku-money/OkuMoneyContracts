@@ -37,7 +37,6 @@ contract VaultInvariantsTest is BaseTest {
         excludeContract(address(litePsm));
         excludeContract(address(redemptionQueue));
         excludeContract(address(usdc));
-        excludeContract(address(oracle));
     }
 
     /// @notice OkuDollar vault is collateralized by OkuMoney reserves (within a fixed

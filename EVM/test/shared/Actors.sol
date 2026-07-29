@@ -39,7 +39,6 @@ abstract contract Actors is Test {
     address public queueProcessor = makeAddr("queueProcessor");
     address public bufferDepositor = makeAddr("bufferDepositor");
     address public bufferWithdrawer = makeAddr("bufferWithdrawer");
-    address public oracleManager = makeAddr("oracleManager");
 
     // ============ RedemptionQueue Roles ============
 

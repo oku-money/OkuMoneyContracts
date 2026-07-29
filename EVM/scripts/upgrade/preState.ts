@@ -28,8 +28,6 @@ export type StateSnapshot = Record<string, string>;
 //
 // Invariants exercised on upgrade:
 //   - Wired addresses (okuMoney, okuDollar, usdc, redemptionQueue) preserved.
-//   - OracleRelay wire (oracleRelay) preserved — the relay itself is a separate
-//     proxy with its own state; only the consumer's pointer is captured here.
 //   - usdcDecimalMultiplier preserved (resolved once at init from IERC20Metadata).
 //   - Pause state preserved.
 
@@ -39,7 +37,6 @@ export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
     okuDollar,
     usdc,
     redemptionQueue,
-    oracleRelay,
     usdcDecimalMultiplier,
     paused,
   ] = await Promise.all([
@@ -47,7 +44,6 @@ export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
     c.okuDollar(),
     c.usdc(),
     c.redemptionQueue(),
-    c.oracleRelay(),
     c.usdcDecimalMultiplier(),
     c.paused(),
   ]);
@@ -57,7 +53,6 @@ export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
     okuDollar: String(okuDollar),
     usdc: String(usdc),
     redemptionQueue: String(redemptionQueue),
-    oracleRelay: String(oracleRelay),
     usdcDecimalMultiplier: usdcDecimalMultiplier.toString(),
     paused: String(paused),
   };

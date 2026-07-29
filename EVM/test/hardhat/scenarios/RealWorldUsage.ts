@@ -6,7 +6,7 @@
  *   - 5 users (Alice … Eve) randomly mint, redeem (instant + queued), wrap OkuDollar, bridge
  *   - Orchestrator bridges OkuM between chain A and chain B, maintaining USDC custody balance
  *   - Admin periodically bumps OkuM price multiplier and adjusts yield rate
- *   - Pause / unpause events, blacklist windows, oracle staleness, and cap exhaustion
+ *   - Pause / unpause events, blacklist windows, and cap exhaustion
  *     are injected stochastically across the timeline
  *
  * Timeline: 365 daily steps (evm_increaseTime 86400 per step).
@@ -25,7 +25,6 @@
  *   E3. Multiplier divergence between chains (A rebases, B does not)
  *   E4. Blacklisted recipient mid-bridge
  *   E5. Pause on one side during a multi-week run
- *   E6. Oracle staleness during simulation
  *   E7. Yield-lock vs same-block bridge attempt
  *   E8. Cap manager / minterAllowance exhaustion
  */
@@ -41,8 +40,6 @@ import {
     RedemptionQueue__factory,
     MockUSDC,
     MockUSDC__factory,
-    MockOracleRelay,
-    MockOracleRelay__factory,
 } from "../../../typechain-types"
 import { Signer, parseEther, parseUnits } from "ethers"
 import { ethers, upgrades, network } from "hardhat"
@@ -83,7 +80,6 @@ const PSM_BUFFER_WITHDRAWER = ethers.keccak256(ethers.toUtf8Bytes("PSM_BUFFER_WI
 const PSM_QUEUE_PROCESSOR = ethers.keccak256(ethers.toUtf8Bytes("PSM_QUEUE_PROCESSOR"))
 const PSM_PAUSER = ethers.keccak256(ethers.toUtf8Bytes("PSM_PAUSER"))
 const PSM_UNPAUSER = ethers.keccak256(ethers.toUtf8Bytes("PSM_UNPAUSER"))
-const PSM_ORACLE_MANAGER = ethers.keccak256(ethers.toUtf8Bytes("PSM_ORACLE_MANAGER"))
 const QUEUE_PSM = ethers.keccak256(ethers.toUtf8Bytes("QUEUE_PSM"))
 
 const MAX_SUPPLY = parseEther("1000000000")
@@ -103,7 +99,6 @@ type Chain = {
     okuDollar: OkuDollar
     queue: RedemptionQueue
     psm: LitePSM
-    oracleRelay: MockOracleRelay
     label: string
 }
 
@@ -170,19 +165,12 @@ async function deployChain(label: string, admin: Signer): Promise<Chain> {
     await psm.connect(admin).grantRole(PSM_QUEUE_PROCESSOR, adminAddr)
     await psm.connect(admin).grantRole(PSM_PAUSER, adminAddr)
     await psm.connect(admin).grantRole(PSM_UNPAUSER, adminAddr)
-    await psm.connect(admin).grantRole(PSM_ORACLE_MANAGER, adminAddr)
 
     // OkuDollar blacklist roles
     await okuDollar.connect(admin).grantRole(OKUM_BLACKLISTER, adminAddr)
     await okuDollar.connect(admin).grantRole(OKUM_UNBLACKLISTER, adminAddr)
 
-    // Always-pass MockOracleRelay (returns price = 1e18 unless toggled off in tests).
-    const oracleRelay = (await new MockOracleRelay__factory(admin).deploy()) as MockOracleRelay
-    await oracleRelay.waitForDeployment()
-    await psm.connect(admin).setOracleRelay(await oracleRelay.getAddress())
-    await queue.connect(admin).setOracleRelay(await oracleRelay.getAddress())
-
-    return { usdc, okuMoney, okuDollar, queue, psm, oracleRelay, label }
+    return { usdc, okuMoney, okuDollar, queue, psm, label }
 }
 
 async function warpDays(days: number) {
@@ -756,38 +744,6 @@ describe("RealWorldUsage edge cases", () => {
             await chainA.usdc.connect(alice).approve(await chainA.psm.getAddress(), parseUnits("100", 6))
             await chainA.psm.connect(alice).mintOkuM(parseUnits("100", 6))
             expect(await chainA.okuMoney.balanceOf(aliceAddr)).to.be.gt(0n, "A resumes after unpause")
-        })
-    })
-
-    // -------------------------------------------------------------------------
-    // E6. USDC peg circuit-breaker (OracleRelay)
-    // -------------------------------------------------------------------------
-    describe("E6: USDC depeg suspends mint until peg restored", () => {
-        it("mint reverts when relay reports depeg; resumes after relay re-passes", async () => {
-            const { chainA } = await freshChains()
-            const aliceAddr = await alice.getAddress()
-
-            // Fresh relay (always-pass by default) → mint succeeds
-            await chainA.usdc.mint(aliceAddr, parseUnits("100", 6))
-            await chainA.usdc.connect(alice).approve(await chainA.psm.getAddress(), parseUnits("100", 6))
-            await chainA.psm.connect(alice).mintOkuM(parseUnits("100", 6))
-
-            // Toggle the relay to fail (simulated depeg)
-            await chainA.oracleRelay.setPass(false)
-
-            // Mint now reverts
-            await chainA.usdc.mint(aliceAddr, parseUnits("100", 6))
-            await chainA.usdc.connect(alice).approve(await chainA.psm.getAddress(), parseUnits("100", 6))
-            await expect(
-                chainA.psm.connect(alice).mintOkuM(parseUnits("100", 6))
-            ).to.be.reverted
-
-            // Restore the peg
-            await chainA.oracleRelay.setPass(true)
-
-            // Mint succeeds again
-            await chainA.psm.connect(alice).mintOkuM(parseUnits("100", 6))
-            expect(await chainA.okuMoney.balanceOf(aliceAddr)).to.be.gt(0n, "mint works after peg restoration")
         })
     })
 

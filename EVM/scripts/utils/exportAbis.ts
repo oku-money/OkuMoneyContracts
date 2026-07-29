@@ -23,8 +23,6 @@ const PRODUCTION_CONTRACTS: ContractSpec[] = [
   { sol: "token/OkuDollar.sol", name: "OkuDollar" },
   { sol: "psm/LitePSM.sol", name: "LitePSM" },
   { sol: "psm/RedemptionQueue.sol", name: "RedemptionQueue" },
-  { sol: "oracle/OracleRelay.sol", name: "OracleRelay" },
-  { sol: "oracle/IOracleRelay.sol", name: "IOracleRelay" },
 ];
 
 const HARDHAT_ARTIFACTS_DIR = path.resolve(__dirname, "../../artifacts/src");

@@ -167,20 +167,12 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
     "PSM_QUEUE_PROCESSOR",
     "PSM_BUFFER_DEPOSITOR",
     "PSM_BUFFER_WITHDRAWER",
-    "PSM_ORACLE_MANAGER",
   ],
   // NOTE: QUEUE_PSM intentionally excluded — must stay on the LitePSM proxy.
   RedemptionQueue: [
     "DEFAULT_ADMIN_ROLE",
     "QUEUE_UPGRADER",
     "QUEUE_RESCUER",
-    "QUEUE_ORACLE_MANAGER",
-  ],
-  OracleRelay: [
-    "DEFAULT_ADMIN_ROLE",
-    "RELAY_UPGRADER",
-    "RELAY_FEED_MANAGER",
-    "RELAY_CONFIG_MANAGER",
   ],
   // OkuBridge / OkuBridgeRouter entries removed in the noBridge refactor.
   // Note: live deployments from prior to the refactor may still have these

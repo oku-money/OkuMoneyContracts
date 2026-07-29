@@ -5,7 +5,7 @@
  *
  *   Cold Multisig   → ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER,
  *                     ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER,
- *                     ORACLE_MANAGER, RESERVE_MANAGER
+ *                     RESERVE_MANAGER
  *   Warm Multisig   → all PAUSER, all BLACKLISTER
  *   Orchestrator    → OKUM_REBASER, VAULT_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR
  *
@@ -110,7 +110,6 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
       "PSM_UPGRADER",
       "PSM_UNPAUSER",
       "PSM_BUFFER_WITHDRAWER",
-      "PSM_ORACLE_MANAGER",
     ]],
     ["RedemptionQueue", [
       "DEFAULT_ADMIN_ROLE",

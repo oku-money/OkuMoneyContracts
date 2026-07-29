@@ -71,9 +71,6 @@ contract RedemptionQueue is
         // IERC20Metadata(usdc).decimals(). For Circle USDC (6 decimals) the multiplier is 1e12.
         IERC20 usdc;
         uint256 usdcDecimalMultiplier;
-        // Deprecated: was the USDC peg circuit-breaker oracle relay.
-        // Retained as a placeholder to preserve UUPS storage layout (slot 7).
-        address __deprecated_oracleRelay;
     }
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.RedemptionQueue")) - 1)) & ~bytes32(uint256(0xff))

@@ -12,6 +12,9 @@ optimizer_runs = 200
 # Test settings
 verbosity = 2
 fuzz = { runs = 256 }
+# Explicit invariant config (was previously relying on Foundry defaults,
+# which happen to match: 256 runs x 500 depth).
+invariant = { runs = 256, depth = 500 }
 
 # Gas reporting
 gas_reports = ["*"]

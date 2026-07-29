@@ -10,7 +10,6 @@ Solidity smart contracts for OkuMoney — institutional-grade yield infrastructu
 - **Framework**: Foundry (Forge, Cast, Anvil) for unit + invariant tests; Hardhat for fork + gas-regression tests
 - **Dependencies**: OpenZeppelin Contracts v5 (Upgradeable)
 - **Proxy pattern**: UUPS (all upgradeable contracts: `OkuMoney`, `OkuDollar`, `LitePSM`, `RedemptionQueue`)
-- **Oracle**: Chainlink `AggregatorV3` (subset interface at `src/interfaces/IAggregatorV3.sol`)
 - **Storage**: ERC-7201 namespaced storage across every upgradeable contract (canonical slots — see any `*_STORAGE_LOCATION` literal)
 
 ## Contracts
@@ -21,8 +20,6 @@ Solidity smart contracts for OkuMoney — institutional-grade yield infrastructu
 | `src/token/OkuDollar.sol` | Rebasing $1-pegged stablecoin (usdOku) — growing balance via continuous `_rpow` USD multiplier |
 | `src/psm/LitePSM.sol` | Peg Stability Module — multiplier-aware USDC ↔ OkuM + usdOku convenience functions |
 | `src/psm/RedemptionQueue.sol` | FIFO queue for OkuMoney redemptions when the PSM buffer is depleted |
-| `src/oracle/OracleRelay.sol` | USDC peg circuit-breaker — wraps a Chainlink USDC/USD aggregator, validates round/freshness/in-band, normalizes to 1e18 |
-| `src/oracle/IOracleRelay.sol` | Consumer interface (`checkUsdcPeg`, `getUsdcPrice`) used by LitePSM and RedemptionQueue |
 | `src/lib/YieldSandwichGuard.sol` | Shared abstract enforcing per-block sandwich protection around yield distribution |
 | `src/lib/MathLib.sol` | Multiplier conversion helpers (`okuMToDollars`, `dollarsToOkuM`, `usdcToDollars`, `dollarsToUsdc`, `rpow`) |
 | `src/lib/Constants.sol` | Shared constants + canonical terminology legend |
@@ -77,9 +74,8 @@ non-deterministic addresses. All chains in the current network list have
 the factory deployed.
 
 **Per-chain variance:** chain-specific constructor args still cascade into
-different addresses on chains where they differ — specifically the
-Chainlink USDC/USD feed address (for `OracleRelay`), and real Circle USDC
-on mainnet (vs. `MockUSDC` on testnets). For pre-audit v0.1, `MockUSDC` is
+different addresses on chains where they differ — specifically real Circle
+USDC on mainnet (vs. `MockUSDC` on testnets). For pre-audit v0.1, `MockUSDC` is
 deployed deterministically on every testnet, so `RedemptionQueue` and
 `LitePSM` reach identical addresses across testnets too. Mainnet deploys
 (with real USDC) will diverge — handled post-audit.
@@ -248,13 +244,9 @@ src/
   psm/
     LitePSM.sol             # USDC ↔ OkuM (multiplier-aware) + usdOku convenience functions
     RedemptionQueue.sol     # Queue for when PSM USDC buffer is insufficient
-  oracle/
-    OracleRelay.sol         # USDC peg circuit-breaker (UUPS proxy) consumed by LitePSM/Queue
-    IOracleRelay.sol        # checkUsdcPeg() / getUsdcPrice() consumer surface
   interfaces/
     IOkuMoney.sol           # OkuMoney interface (used by PSM, vault, mocks)
     IOkuDollar.sol          # OkuDollar vault interface
-    IAggregatorV3.sol       # Chainlink AggregatorV3 subset consumed by OracleRelay
   lib/
     Roles.sol               # Shared RBAC role constants (prefix-namespaced)
     Constants.sol           # PRECISION, DECIMAL_MULTIPLIER, MAX_RATE, BASIS_POINTS + terminology legend
@@ -330,8 +322,6 @@ All of the following are compile-time constants in [`src/lib/Constants.sol`](src
 | `MAX_MULTIPLIER` | `1e24` ($1,000,000 per token) | Overflow guard on both `okuMMultiplier` and `usdMultiplier`. Chosen as a round number six orders of magnitude above the starting value of 1e18. Arbitrary — any ceiling far above realistic yield trajectories would work. Prevents a compromised rebaser key from bricking downstream multiplier math via overflow. |
 | `BASIS_POINTS` | `10_000` | Universal basis-points denominator (100% = 10 000). Industry convention; not arbitrary. |
 | `MIN_COLLATERAL_RATIO_FLOOR` | `9e17` (90%) | Hard floor below which `minCollateralRatio` can never be configured, regardless of the `VAULT_ADMIN` key. **The 90% value is a round-number convention** — no specific analysis of T-Bill liquidity or yield-spread dynamics was used to derive it. For a product backed by short-duration T-Bills (extremely low volatility), a tighter floor (e.g. 95–98%) would also be defensible. The floor only gates `withdrawSurplus`; it does not halt minting or unwrapping if the live ratio drifts below it. |
-| `ORACLE_MIN_STALENESS` | `60` seconds | Lower bound on the configurable Chainlink PoR staleness threshold. Prevents an operator from setting a window so tight that routine block-time jitter causes every mint to revert. 60 s is below any realistic Chainlink update interval; the exact value is arbitrary within that constraint. |
-| `ORACLE_MAX_STALENESS` | `7 days` | Upper bound on the configurable staleness threshold. Prevents operator misconfiguration that would make the oracle check a no-op. 7 days is a conventional "obviously too stale" sentinel; any value of hours-to-weeks would serve the same purpose. |
 | `MAX_USDC_DECIMALS` | `18` | Cap on `IERC20Metadata.decimals()` accepted at PSM init. USDC uses 6 decimals on all EVM chains; 18 is the ERC-20 max. Prevents misconfiguration with nonsensical decimal counts. Not arbitrary per se — it is the ERC-20 upper bound — but the choice to cap rather than hardcode 6 is intentional forward-compat. |
 
 ---
@@ -558,21 +548,6 @@ function redeemUsdOku(uint256 usdAmount) external;          // usdOku → unwrap
 
 Every user-facing PSM function is protected by `whenYieldNotDistributing` + `whenNotPaused`.
 
-### USDC Peg Circuit-Breaker (`OracleRelay`)
-
-`LitePSM` and `RedemptionQueue` consume a separate `OracleRelay` proxy (`src/oracle/OracleRelay.sol`) that wraps a Chainlink USDC/USD aggregator. Every mint, redeem, and `processQueue` path calls `oracleRelay.checkUsdcPeg()` (when wired) and reverts on:
-
-- Incomplete round (`answeredInRound < roundId`) → `IncompleteOracleRound`.
-- `updatedAt == 0` (round never updated) → `OracleUpdatedAtZero`.
-- Malformed `startedAt` (`== 0` or `> updatedAt`) → `OracleStartedAtInvalid`.
-- Stale data (`block.timestamp - updatedAt >= stalenessThreshold`) → `StaleOracleData`.
-- Non-positive answer → `NonPositiveAnswer`.
-- Normalized price outside the configured band → `PriceOutOfBand`.
-
-`setOracleRelay(address)` (gated on `PSM_ORACLE_MANAGER` / `QUEUE_ORACLE_MANAGER`) wires a relay onto the consumer. Passing `address(0)` disables the peg check — operational kill switch for incident response.
-
-The relay's own configuration setters (`setPriceFeed`, `setStalenessThreshold`, `setPriceBand`) are gated on the relay-side roles `RELAY_FEED_MANAGER` and `RELAY_CONFIG_MANAGER`. Hardcoded defense-in-depth bounds (`ORACLE_USDC_PRICE_FLOOR = 0.95e18`, `ORACLE_USDC_PRICE_CEILING = 1.05e18`, `ORACLE_MIN_STALENESS = 60s`, `ORACLE_MAX_STALENESS = 7 days`) prevent operator misconfiguration.
-
 ### Admin / Operator Surface
 
 ```solidity
@@ -590,7 +565,6 @@ function pause() / unpause() external;                                     // PS
 | `OkuMRedeemed(user, okuMIn, usdcOut, okuMMultiplier)` | `redeemOkuM` instant path only. Queued path emits `RedemptionQueued` instead. |
 | `UsdOkuMinted(user, usdcAmount, usdAmount, okuMMultiplier)` | `mintUsdOku` success. |
 | `UsdOkuRedeemed(user, usdIn, usdcOut, okuMMultiplier)` | `redeemUsdOku` — sole event for this path; no inner `OkuMRedeemed` is emitted. |
-| `OracleRelayUpdated(oldRelay, newRelay)` | `setOracleRelay`. address(0) disables the peg check. |
 | `BufferRefilled(newBufferBalance, processedStart, processedEnd)` | After `processQueue`. |
 | `BufferDeposited(depositor, amount, newBufferBalance)` | After `depositBuffer`. |
 | `BufferWithdrawn(to, amount, newBufferBalance)` | After `withdrawUsdc`. |
@@ -697,12 +671,9 @@ both EVM and SVM. EVM-specific notes:
 | Role | Held by | What it can do | What on-chain code prevents |
 |---|---|---|---|
 | `DEFAULT_ADMIN_ROLE` | Cold Multisig | Grant/revoke any role; effectively controls everything | Nothing — this is the meta-role. Quorum breach = system compromise |
-| `OKUM_UPGRADER` / `VAULT_UPGRADER` / `PSM_UPGRADER` / `QUEUE_UPGRADER` / `RELAY_UPGRADER` | Cold Multisig | Replace any contract's logic via UUPS `_authorizeUpgrade`; new logic could do anything | Nothing — upgrade is unconditional once authorized. Mitigated by: every upgrade is tested on a fork and diff-reviewed before mainnet execution |
+| `OKUM_UPGRADER` / `VAULT_UPGRADER` / `PSM_UPGRADER` / `QUEUE_UPGRADER` | Cold Multisig | Replace any contract's logic via UUPS `_authorizeUpgrade`; new logic could do anything | Nothing — upgrade is unconditional once authorized. Mitigated by: every upgrade is tested on a fork and diff-reviewed before mainnet execution |
 | `OKUM_ALLOWANCE_MANAGER` | Cold Multisig | Set any address's `minterAllowance` to any value | Cannot set above `maxSupply`; minting still requires `OKUM_MINTER` (held by contracts, not EOAs) |
 | `OKUM_CAP_MANAGER` | Cold Multisig | Set `maxSupply` | Cannot set below current `totalSupply()` |
-| `PSM_ORACLE_MANAGER` / `QUEUE_ORACLE_MANAGER` | Cold Multisig | Wire (or unwire) the `OracleRelay` peg-check contract onto LitePSM / RedemptionQueue | `address(0)` disables the peg check entirely (operational kill switch); pointed at a non-zero address, every mint/redeem/`processQueue` gates on `relay.checkUsdcPeg()` |
-| `RELAY_FEED_MANAGER` | Cold Multisig | Rotate the Chainlink USDC/USD aggregator wrapped by `OracleRelay` | Rejects `address(0)` and feeds reporting `> MAX_FEED_DECIMALS` (18) |
-| `RELAY_CONFIG_MANAGER` | Cold Multisig | Set the staleness threshold and the in-band price window on the relay | Staleness bounded `[60s, 7d]`; band bounded by `[0.95e18, 1.05e18]` (`ORACLE_USDC_PRICE_FLOOR`/`CEILING`) and `min < max` |
 | `PSM_BUFFER_WITHDRAWER` | Cold Multisig | Drain PSM USDC buffer | Cannot withdraw below amount needed to cover pending queue obligations (`queueObligation`) |
 | `VAULT_RESERVE_MANAGER` | Cold Multisig | Withdraw OkuMoney surplus from vault | Cannot push vault below `minCollateralRatio` (90% floor enforced post-withdrawal) |
 | `VAULT_ADMIN` | Cold Multisig | Set `minCollateralRatio` | Cannot set below `MIN_COLLATERAL_RATIO_FLOOR` (90%); live-health gate rejects if existing positions would breach the new floor |
@@ -753,7 +724,7 @@ psmUsdcOutflow <= seededBuffer + trackedDeposits + tolerance    // USDC outflow 
 ## Testing
 
 ```bash
-forge test                                         # All unit + invariant tests (592 total)
+forge test                                         # All unit + invariant tests (564 total)
 forge test --match-path "test/invariants/*"        # Invariant suite (256 runs × 500 depth by default)
 forge test --match-contract OkuMoneyTest -vv       # OkuMoney unit tests
 forge test --match-contract VaultInvariants        # OkuDollar backing invariants
@@ -761,13 +732,13 @@ forge test --match-contract HandlerSanityTest      # Handler success-rate sanity
 
 npx hardhat compile                                # Regenerates typechain before fork tests
 npx hardhat test                                   # Fork + happyPath + scenarios
-npx hardhat test test/hardhat/scenarios/RealWorldUsage.ts  # 365-day simulation + 8 edge cases
+npx hardhat test test/hardhat/scenarios/RealWorldUsage.ts  # 365-day simulation + 7 edge cases
 ```
 
 The Foundry suite is the authoritative functional coverage. The Hardhat suite exists for three specific purposes:
 1. **Fork tests** (`test/hardhat/fork/`): exercise the protocol against real mainnet / Sepolia state that Foundry can't reach in CI.
 2. **Happy-path integration** (`test/hardhat/happyPath/`): full deposit/yield/withdraw walk-through against the OZ upgrades plugin's real proxy machinery.
-3. **Real-world scenario simulation** (`test/hardhat/scenarios/RealWorldUsage.ts`): 365-day stochastic simulation (seeded PRNG, 7 action categories, daily `evm_increaseTime` steps) plus 8 deterministic edge-case suites covering round-trips, queued redeems, multiplier divergence, blacklist/freeze, pause windows, oracle staleness, yield-lock, and cap exhaustion.
+3. **Real-world scenario simulation** (`test/hardhat/scenarios/RealWorldUsage.ts`): 365-day stochastic simulation (seeded PRNG, 7 action categories, daily `evm_increaseTime` steps) plus 7 deterministic edge-case suites covering round-trips, queued redeems, multiplier divergence, blacklist/freeze, pause windows, yield-lock, and cap exhaustion.
 
 Any new unit or invariant test should be added to the Foundry suite; Hardhat is reserved for fork-dependent or multi-contract scenario work.
 
@@ -775,9 +746,9 @@ Any new unit or invariant test should be added to the Foundry suite; Hardhat is 
 
 ## Forge coverage notes
 
-**Post-Tier-A baseline:** **592 / 592 forge tests passing** (574 unit
-+ fuzz + 18 invariants) plus **28 / 28 hardhat tests** (fork +
-happy-path + scenarios). Per-file coverage:
+**Post-OracleRelay-removal baseline:** **564 / 564 forge tests passing**
+plus **27 / 27 hardhat tests** (fork + happy-path + scenarios). Per-file
+coverage:
 
 | File | Lines | Statements | Branches | Funcs |
 |---|---|---|---|---|
@@ -785,12 +756,11 @@ happy-path + scenarios). Per-file coverage:
 | `src/lib/ReentrancyGuardUpgradeable.sol` | **100 %** | 100 % | 100 % | 100 % |
 | `src/lib/SafeApprove.sol` | **100 %** | 100 % | 100 % | 100 % |
 | `src/lib/YieldSandwichGuard.sol` | **100 %** | 100 % | 100 % | 100 % |
-| `src/oracle/OracleRelay.sol` | **98.84 %** | 95.74 % | 71.43 % | 100 % |
-| `src/psm/LitePSM.sol` | **98.16 %** | 96.37 % | 74.07 % | 100 % |
-| `src/psm/RedemptionQueue.sol` | **100 %** | 99.32 % | 94.12 % | 100 % |
-| `src/token/OkuDollar.sol` | **97.93 %** | 96.92 % | 90.00 % | 97.50 % |
+| `src/psm/LitePSM.sol` | **97.95 %** | 96.05 % | 73.08 % | 100 % |
+| `src/psm/RedemptionQueue.sol` | **100 %** | 99.25 % | 93.33 % | 100 % |
+| `src/token/OkuDollar.sol` | **98.34 %** | 97.26 % | 90.00 % | 97.50 % |
 | `src/token/OkuMoney.sol` | **100 %** | 100 % | 100 % | 100 % |
-| **Total** | **98.85 %** | 97.49 % | 84.96 % | 99.30 % |
+| **Total** | **98.95 %** | 97.73 % | 86.32 % | 99.17 % |
 
 A CI gate in `.github/workflows/test.yml` fails the build if any `src/` file
 or the overall total drops below **95 % line coverage**.

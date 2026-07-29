@@ -254,7 +254,7 @@ interface SvmCtx {
   litePsmId: PublicKey;
   psmConfig: PublicKey;
   usdcMint: PublicKey;
-  okuMoneyMint: PublicKey;
+  okuMMint: PublicKey;
   vaultUsdc: PublicKey;
   usdcDecimals: number;
 }
@@ -267,14 +267,14 @@ async function makeSvmCtx(network: NetworkName): Promise<SvmCtx> {
   if (
     !deployment?.programs?.litePsm ||
     !deployment.tokens?.usdc ||
-    !deployment.tokens?.okuMoney
+    !deployment.tokens?.okuM
   ) {
     throw new Error(`No SVM deployment for ${network}`);
   }
 
   const litePsmId = new PublicKey(deployment.programs.litePsm);
   const usdcMint = new PublicKey(deployment.tokens.usdc);
-  const okuMoneyMint = new PublicKey(deployment.tokens.okuMoney);
+  const okuMMint = new PublicKey(deployment.tokens.okuM);
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
   // Load the IDL from target/idl and bind to the deployed program id.
@@ -309,7 +309,7 @@ async function makeSvmCtx(network: NetworkName): Promise<SvmCtx> {
     litePsmId,
     psmConfig,
     usdcMint,
-    okuMoneyMint,
+    okuMMint,
     vaultUsdc,
     usdcDecimals: 6, // MockUSDC on devnet is 6 decimals (matches EVM MockUSDC)
   };
@@ -386,16 +386,16 @@ async function svmMintOkuM(ctx: SvmCtx, usdcAmount: bigint): Promise<bigint> {
     ctx.signer.publicKey,
     TOKEN_PROGRAM_ID
   );
-  const userOkuMoneyAta = await svmGetOrCreateAta(
+  const userOkuMAta = await svmGetOrCreateAta(
     ctx,
-    ctx.okuMoneyMint,
+    ctx.okuMMint,
     ctx.signer.publicKey,
     TOKEN_2022_PROGRAM_ID
   );
 
   const before = await svmTokenBalance(
     ctx,
-    ctx.okuMoneyMint,
+    ctx.okuMMint,
     ctx.signer.publicKey,
     TOKEN_2022_PROGRAM_ID
   );
@@ -411,9 +411,9 @@ async function svmMintOkuM(ctx: SvmCtx, usdcAmount: bigint): Promise<bigint> {
       user: ctx.signer.publicKey,
       config: ctx.psmConfig,
       usdcMint: ctx.usdcMint,
-      okuMoneyMint: ctx.okuMoneyMint,
+      okuMMint: ctx.okuMMint,
       userUsdcAta,
-      userOkuMoneyAta,
+      userOkuMAta,
       vaultUsdc: ctx.vaultUsdc,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -426,7 +426,7 @@ async function svmMintOkuM(ctx: SvmCtx, usdcAmount: bigint): Promise<bigint> {
 
   const after = await svmTokenBalance(
     ctx,
-    ctx.okuMoneyMint,
+    ctx.okuMMint,
     ctx.signer.publicKey,
     TOKEN_2022_PROGRAM_ID
   );
@@ -441,9 +441,9 @@ async function svmRedeemOkuM(ctx: SvmCtx, okuMAmount: bigint): Promise<bigint> {
     ctx.signer.publicKey,
     TOKEN_PROGRAM_ID
   );
-  const userOkuMoneyAta = await svmGetOrCreateAta(
+  const userOkuMAta = await svmGetOrCreateAta(
     ctx,
-    ctx.okuMoneyMint,
+    ctx.okuMMint,
     ctx.signer.publicKey,
     TOKEN_2022_PROGRAM_ID
   );
@@ -465,9 +465,9 @@ async function svmRedeemOkuM(ctx: SvmCtx, okuMAmount: bigint): Promise<bigint> {
       user: ctx.signer.publicKey,
       config: ctx.psmConfig,
       usdcMint: ctx.usdcMint,
-      okuMoneyMint: ctx.okuMoneyMint,
+      okuMMint: ctx.okuMMint,
       userUsdcAta,
-      userOkuMoneyAta,
+      userOkuMAta,
       vaultUsdc: ctx.vaultUsdc,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -536,7 +536,7 @@ async function pollEvmDelta(
 
 async function snapSvm(c: SvmCtx): Promise<SvmSnap> {
   const usdc = await svmTokenBalance(c, c.usdcMint, c.signer.publicKey, TOKEN_PROGRAM_ID);
-  const okuM = await svmTokenBalance(c, c.okuMoneyMint, c.signer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const okuM = await svmTokenBalance(c, c.okuMMint, c.signer.publicKey, TOKEN_2022_PROGRAM_ID);
   return { usdc, okuM };
 }
 
@@ -560,7 +560,7 @@ function printSvmSnap(c: SvmCtx, s: SvmSnap, label: string) {
 /**
  * EVM and SVM OkuM live in different decimal worlds:
  *   EVM OkuM: 18 decimals
- *   SVM OkuM:  6 decimals (Token-2022 interest-bearing mint)
+ *   SVM OkuM:  6 decimals (Token-2022 ScaledUiAmount mint)
  * Both sides hold their own independent supply. The bridge conserves USDC
  * (which is 6 decimals on both sides), not OkuM directly — OkuM is "burned
  * on source, minted on destination" but the raw amounts differ by 1e12.

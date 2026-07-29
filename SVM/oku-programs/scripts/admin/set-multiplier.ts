@@ -19,7 +19,7 @@
 import * as anchor from '@anchor-lang/core';
 import { BN, Program } from '@anchor-lang/core';
 import { PublicKey } from '@solana/web3.js';
-import { TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+import { TOKEN_2022_PROGRAM_ID, getMint, getScaledUiAmountConfig } from '@solana/spl-token';
 import { LitePsm } from '../../target/types/lite_psm';
 import { createProvider, detectNetwork } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
@@ -30,6 +30,24 @@ import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 function parseArg(name: string): string | undefined {
   const a = process.argv.find((x) => x.startsWith(`--${name}=`));
   return a ? a.split('=')[1] : undefined;
+}
+
+/** Read the current multiplier (1e9-scaled) from the OkuM mint's
+ * ScaledUiAmountConfig extension. */
+async function readMultiplier(
+  connection: Parameters<typeof getMint>[0],
+  mint: PublicKey
+): Promise<BN> {
+  const PRECISION = 1_000_000_000;
+  const mintInfo = await getMint(connection, mint, 'confirmed', TOKEN_2022_PROGRAM_ID);
+  const cfg = getScaledUiAmountConfig(mintInfo);
+  if (!cfg) throw new Error('OkuM mint has no ScaledUiAmountConfig extension');
+  const nowSec = Math.floor(Date.now() / 1000);
+  const effective =
+    cfg.newMultiplier > 0 && nowSec >= Number(cfg.newMultiplierEffectiveTimestamp)
+      ? cfg.newMultiplier
+      : cfg.multiplier;
+  return new BN(Math.round(effective * PRECISION));
 }
 
 async function main() {
@@ -57,8 +75,7 @@ async function main() {
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
-  const cfg = await program.account.psmConfig.fetch(psmConfig);
-  const oldMultiplier = cfg.multiplier as BN;
+  const oldMultiplier = await readMultiplier(provider.connection, okuMMint);
   logger.info(
     summaryBlock('set_multiplier()', {
       'config PDA': psmConfig.toBase58(),
@@ -93,8 +110,8 @@ async function main() {
     .rpc();
   logger.success(`tx: ${sig}`);
 
-  const after = await program.account.psmConfig.fetch(psmConfig);
-  logger.info(`new multiplier: ${after.multiplier.toString()}`);
+  const newMultiplierOnChain = await readMultiplier(provider.connection, okuMMint);
+  logger.info(`new multiplier: ${newMultiplierOnChain.toString()}`);
 }
 
 main()

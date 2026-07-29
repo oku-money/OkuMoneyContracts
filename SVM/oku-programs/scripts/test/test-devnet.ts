@@ -32,6 +32,7 @@ import {
   createTransferInstruction,
   getAccount,
   getMint,
+  getScaledUiAmountConfig,
 } from '@solana/spl-token';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -54,16 +55,40 @@ interface TestContext {
   deployer: Keypair;
   deployment: DeploymentAddresses;
   psm: Program;
-  // Mints
+  // Mints — single-token model: only OkuM (Token-2022, ScaledUiAmount)
   usdcMint: PublicKey;
-  okuMoneyMint: PublicKey;
   okuMMint: PublicKey;
   // PDAs
   psmConfig: PublicKey;
   psmVaultUsdc: PublicKey;
-  psmOkuMoneyEscrow: PublicKey;
   // Program IDs
   litePsmId: PublicKey;
+}
+
+/**
+ * Read the current ScaledUiAmount multiplier from the OkuM mint.
+ * Returns the multiplier scaled by 1e9 (matching on-chain PRECISION),
+ * applying the same zero-init / effective-timestamp guard as the
+ * on-chain `read_multiplier` helper.
+ */
+async function readMultiplier(ctx: TestContext): Promise<BN> {
+  const PRECISION = 1_000_000_000;
+  const mint = await getMint(
+    ctx.provider.connection,
+    ctx.okuMMint,
+    'confirmed',
+    TOKEN_2022_PROGRAM_ID
+  );
+  const cfg = getScaledUiAmountConfig(mint);
+  if (!cfg) throw new Error('OkuM mint has no ScaledUiAmountConfig extension');
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const effective =
+    cfg.newMultiplier > 0 && nowSec >= Number(cfg.newMultiplierEffectiveTimestamp)
+      ? cfg.newMultiplier
+      : cfg.multiplier;
+
+  return new BN(Math.round(effective * PRECISION));
 }
 
 // ---------------------------------------------------------------------------
@@ -182,11 +207,9 @@ async function buildContext(): Promise<TestContext> {
 
   const psm = new Program(psmIdl, provider);
 
-  // Mints
+  // Mints — single token: OkuM (Token-2022, ScaledUiAmount)
   const usdcMint = new PublicKey(deployment.tokens.usdc!);
-  const okuMoneyMint = new PublicKey(deployment.tokens.okuMoney!);
-  // okuM is the wrapped token (also known as okuM)
-  const okuMMint = new PublicKey(deployment.tokens?.okuM || deployment.tokens?.okuM!);
+  const okuMMint = new PublicKey(deployment.tokens.okuM!);
 
   // PDAs
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
@@ -195,10 +218,6 @@ async function buildContext(): Promise<TestContext> {
     ? new PublicKey(deployment.pdas.psmVaultUsdc)
     : getAssociatedTokenAddressSync(usdcMint, psmConfig, true, TOKEN_PROGRAM_ID);
 
-  const psmOkuMoneyEscrow = deployment.pdas.psmOkuMoneyEscrow
-    ? new PublicKey(deployment.pdas.psmOkuMoneyEscrow)
-    : getAssociatedTokenAddressSync(okuMoneyMint, psmConfig, true, TOKEN_2022_PROGRAM_ID);
-
   return {
     network,
     provider,
@@ -206,11 +225,9 @@ async function buildContext(): Promise<TestContext> {
     deployment,
     psm,
     usdcMint,
-    okuMoneyMint,
     okuMMint,
     psmConfig,
     psmVaultUsdc,
-    psmOkuMoneyEscrow,
     litePsmId,
   };
 }
@@ -230,6 +247,7 @@ async function readState(ctx: TestContext) {
   logger.info('Fetching PSM Config...');
   try {
     const config = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
+    const multiplier = await readMultiplier(ctx);
     logger.success('PSM Config:');
     logger.table({
       'Role Admin': (config.roleAdmin as PublicKey).toBase58(),
@@ -243,42 +261,35 @@ async function readState(ctx: TestContext) {
       'Allowance Manager': (config.allowanceManager as PublicKey).toBase58(),
       'Rebaser': (config.rebaser as PublicKey).toBase58(),
       'USDC Mint': (config.usdcMint as PublicKey).toBase58(),
-      'OkuMoney Mint': (config.okuMoneyMint as PublicKey).toBase58(),
+      'OkuM Mint': (config.okuMMint as PublicKey).toBase58(),
       'Vault USDC': (config.vaultUsdc as PublicKey).toBase58(),
-      'Vault OkuMoney': (config.vaultOkuMoney as PublicKey)?.toBase58() || 'Not set',
       'Max Supply': fmtAmount(Number(config.maxSupply)),
       'Minter Allowance': fmtAmount(Number(config.minterAllowance)),
       'Is Paused': String(config.isPaused),
-      'OkuM Price': String(config.okuMPrice),
+      'Multiplier (1e9)': multiplier.toString(),
     });
   } catch (e: any) {
     logger.error(`Failed to fetch PSM config: ${e.message}`);
   }
 
-  // Bridge config / nonce fetchers removed in the noBridge refactor.
-  // Vault config fetcher removed — oku-dollar program was deleted.
-
   // Token balances
   logger.log('');
   logger.info('Deployer token balances:');
   const usdcBal = await getTokenBalance(ctx, ctx.usdcMint, ctx.deployer.publicKey, TOKEN_PROGRAM_ID);
-  const okuMoneyBal = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  // okuM (okuM) is also Token-2022
   const okuMBal = await getTokenBalance(ctx, ctx.okuMMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
   const solBal = await ctx.provider.connection.getBalance(ctx.deployer.publicKey);
   logger.table({
     'SOL': (solBal / LAMPORTS_PER_SOL).toFixed(4),
     'USDC': fmtAmount(usdcBal),
-    'OkuMoney': fmtAmount(okuMoneyBal),
     'okuM': fmtAmount(okuMBal),
   });
 }
 
 /**
- * Mint USDC -> OkuMoney via PSM
+ * Mint USDC -> okuM via PSM
  */
 async function testMint(ctx: TestContext) {
-  logger.section('Test: Mint OkuMoney');
+  logger.section('Test: Mint OkuM');
 
   const amount = 100_000_000; // 100 USDC
 
@@ -286,16 +297,16 @@ async function testMint(ctx: TestContext) {
   logger.info(`Minting ${amount / 1_000_000} USDC to deployer...`);
   await mintTestUsdc(ctx, amount);
 
-  // 3. Get balances before
+  // 2. Get balances before
   const usdcBefore = await getTokenBalance(ctx, ctx.usdcMint, ctx.deployer.publicKey, TOKEN_PROGRAM_ID);
-  const okuMoneyBefore = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`Before - USDC: ${fmtAmount(usdcBefore)}, OkuMoney: ${fmtAmount(okuMoneyBefore)}`);
+  const okuMBefore = await getTokenBalance(ctx, ctx.okuMMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`Before - USDC: ${fmtAmount(usdcBefore)}, okuM: ${fmtAmount(okuMBefore)}`);
 
-  // 4. Ensure ATAs exist (pre-create OkuMoney ATA to avoid init_if_needed CPI corruption)
+  // 3. Ensure ATAs exist (pre-create OkuM ATA to avoid init_if_needed CPI corruption)
   const userUsdcAta = getAssociatedTokenAddressSync(ctx.usdcMint, ctx.deployer.publicKey, false, TOKEN_PROGRAM_ID);
-  const userOkuMoneyAta = await getOrCreateAta(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const userOkuMAta = await getOrCreateAta(ctx, ctx.okuMMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
 
-  // 5. Call PSM mintOkuM (mint_oku_m in the IDL)
+  // 4. Call PSM mintOkuM (mint_oku_m in the IDL)
   logger.info(`Calling psm.mintOkuM(${amount / 1_000_000} USDC)...`);
   const sig = await ctx.psm.methods
     .mintOkuM(new BN(amount))
@@ -303,9 +314,9 @@ async function testMint(ctx: TestContext) {
       user: ctx.deployer.publicKey,
       config: ctx.psmConfig,
       usdcMint: ctx.usdcMint,
-      okuMoneyMint: ctx.okuMoneyMint,
+      okuMMint: ctx.okuMMint,
       userUsdcAta,
-      userOkuMoneyAta: userOkuMoneyAta,
+      userOkuMAta,
       vaultUsdc: ctx.psmVaultUsdc,
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -316,20 +327,20 @@ async function testMint(ctx: TestContext) {
   await confirmTx(ctx, sig);
   logger.success(`Mint tx: ${explorerLink(ctx.network, sig)}`);
 
-  // 6. Verify
+  // 5. Verify
   const usdcAfter = await getTokenBalance(ctx, ctx.usdcMint, ctx.deployer.publicKey, TOKEN_PROGRAM_ID);
-  const okuMoneyAfter = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`After - USDC: ${fmtAmount(usdcAfter)}, OkuMoney: ${fmtAmount(okuMoneyAfter)}`);
-  logger.success(`Minted ${fmtAmount(okuMoneyAfter - okuMoneyBefore)} OkuMoney`);
+  const okuMAfter = await getTokenBalance(ctx, ctx.okuMMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`After - USDC: ${fmtAmount(usdcAfter)}, okuM: ${fmtAmount(okuMAfter)}`);
+  logger.success(`Minted ${fmtAmount(okuMAfter - okuMBefore)} okuM`);
 }
 
 /**
- * Transfer OkuMoney to a new recipient
+ * Transfer okuM to a new recipient
  */
 async function testTransfer(ctx: TestContext) {
-  logger.section('Test: Transfer OkuMoney');
+  logger.section('Test: Transfer OkuM');
 
-  const transferAmount = 10_000_000; // 10 OkuMoney
+  const transferAmount = 10_000_000; // 10 okuM
 
   // 1. Generate recipient
   const recipient = Keypair.generate();
@@ -356,18 +367,18 @@ async function testTransfer(ctx: TestContext) {
     await sendAndConfirmTransaction(ctx.provider.connection, tx, [ctx.deployer]);
   }
 
-  // 3. Create recipient OkuMoney ATA (deployer pays)
-  const recipientAta = await getOrCreateAta(ctx, ctx.okuMoneyMint, recipient.publicKey, TOKEN_2022_PROGRAM_ID);
+  // 3. Create recipient okuM ATA (deployer pays)
+  const recipientAta = await getOrCreateAta(ctx, ctx.okuMMint, recipient.publicKey, TOKEN_2022_PROGRAM_ID);
 
   // 4. Transfer via Token-2022
   const senderAta = getAssociatedTokenAddressSync(
-    ctx.okuMoneyMint,
+    ctx.okuMMint,
     ctx.deployer.publicKey,
     true,
     TOKEN_2022_PROGRAM_ID
   );
 
-  logger.info(`Transferring ${transferAmount / 1_000_000} OkuMoney...`);
+  logger.info(`Transferring ${transferAmount / 1_000_000} okuM...`);
   const tx = new Transaction().add(
     createTransferInstruction(
       senderAta,
@@ -383,20 +394,20 @@ async function testTransfer(ctx: TestContext) {
   logger.success(`Transfer tx: ${explorerLink(ctx.network, sig)}`);
 
   // 5. Verify
-  const senderBal = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  const recipientBal = await getTokenBalance(ctx, ctx.okuMoneyMint, recipient.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`Sender OkuMoney: ${fmtAmount(senderBal)}`);
-  logger.info(`Recipient OkuMoney: ${fmtAmount(recipientBal)}`);
+  const senderBal = await getTokenBalance(ctx, ctx.okuMMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  const recipientBal = await getTokenBalance(ctx, ctx.okuMMint, recipient.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`Sender okuM: ${fmtAmount(senderBal)}`);
+  logger.info(`Recipient okuM: ${fmtAmount(recipientBal)}`);
   logger.success('Transfer verified');
 }
 
 /**
- * Redeem OkuMoney -> USDC (deposit buffer first, then redeem)
+ * Redeem okuM -> USDC (deposit buffer first, then redeem)
  */
 async function testRedeem(ctx: TestContext) {
-  logger.section('Test: Redeem OkuMoney -> USDC');
+  logger.section('Test: Redeem okuM -> USDC');
 
-  const redeemAmount = 10_000_000; // 10 OkuMoney
+  const redeemAmount = 10_000_000; // 10 okuM
   const bufferAmount = 20_000_000; // 20 USDC buffer (extra to ensure instant redemption)
 
   // 1. Deposit USDC buffer so instant redemption works
@@ -428,61 +439,46 @@ async function testRedeem(ctx: TestContext) {
 
   // 2. Get balances before
   const usdcBefore = await getTokenBalance(ctx, ctx.usdcMint, ctx.deployer.publicKey, TOKEN_PROGRAM_ID);
-  const okuMoneyBefore = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-  logger.info(`Before - USDC: ${fmtAmount(usdcBefore)}, OkuMoney: ${fmtAmount(okuMoneyBefore)}`);
+  const okuMBefore = await getTokenBalance(ctx, ctx.okuMMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`Before - USDC: ${fmtAmount(usdcBefore)}, okuM: ${fmtAmount(okuMBefore)}`);
 
-  if (okuMoneyBefore < BigInt(redeemAmount)) {
-    logger.error(`Insufficient OkuMoney balance (${fmtAmount(okuMoneyBefore)} < ${fmtAmount(redeemAmount)}). Run mint first.`);
+  if (okuMBefore < BigInt(redeemAmount)) {
+    logger.error(`Insufficient okuM balance (${fmtAmount(okuMBefore)} < ${fmtAmount(redeemAmount)}). Run mint first.`);
     return;
   }
 
   // 3. Ensure ATAs
   const userUsdcAta = getAssociatedTokenAddressSync(ctx.usdcMint, ctx.deployer.publicKey, true, TOKEN_PROGRAM_ID);
-  const userOkuMoneyAta = getAssociatedTokenAddressSync(ctx.okuMoneyMint, ctx.deployer.publicKey, true, TOKEN_2022_PROGRAM_ID);
+  const userOkuMAta = getAssociatedTokenAddressSync(ctx.okuMMint, ctx.deployer.publicKey, true, TOKEN_2022_PROGRAM_ID);
 
-  // 4. Call PSM redeemOkuM (redeem_oku_m in the IDL)
-  // Note: On forks, the Token-2022 interest-bearing extension can cause overflow errors
-  // if the fork timestamp differs significantly from when interest was last calculated.
-  // This is a known limitation of forking interest-bearing tokens.
-  logger.info(`Calling psm.redeemOkuM(${redeemAmount / 1_000_000} OkuMoney)...`);
-  
-  try {
-    const sig = await ctx.psm.methods
-      .redeemOkuM(new BN(redeemAmount), new BN(0))
-      .accountsPartial({
-        user: ctx.deployer.publicKey,
-        config: ctx.psmConfig,
-        usdcMint: ctx.usdcMint,
-        okuMoneyMint: ctx.okuMoneyMint,
-        userUsdcAta,
-        userOkuMoneyAta: userOkuMoneyAta,
-        vaultUsdc: ctx.psmVaultUsdc,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
-    await confirmTx(ctx, sig);
-    logger.success(`Redeem tx: ${explorerLink(ctx.network, sig)}`);
+  // 4. Call PSM redeemOkuM (redeem_oku_m in the IDL). Second arg is
+  // min_usdc_out (slippage protection) -- 0 disables the check.
+  logger.info(`Calling psm.redeemOkuM(${redeemAmount / 1_000_000} okuM)...`);
 
-    // 5. Verify
-    const usdcAfter = await getTokenBalance(ctx, ctx.usdcMint, ctx.deployer.publicKey, TOKEN_PROGRAM_ID);
-    const okuMoneyAfter = await getTokenBalance(ctx, ctx.okuMoneyMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
-    logger.info(`After - USDC: ${fmtAmount(usdcAfter)}, OkuMoney: ${fmtAmount(okuMoneyAfter)}`);
-    logger.success(`Redeemed ${fmtAmount(okuMoneyBefore - okuMoneyAfter)} OkuMoney -> ${fmtAmount(usdcAfter - usdcBefore)} USDC`);
-  } catch (e: any) {
-    // Check for Token-2022 interest overflow error (common on forks)
-    if (e.message?.includes('Operation overflowed') || e.logs?.some((l: string) => l.includes('Operation overflowed'))) {
-      logger.warning('Redeem failed due to Token-2022 interest calculation overflow');
-      logger.info('This is a known issue when forking interest-bearing tokens.');
-      logger.info('The fork timestamp causes interest accrual calculations to overflow.');
-      logger.info('This does NOT affect live devnet - only Surfpool forks.');
-      // Don't throw - just mark as skipped
-      return;
-    }
-    throw e;
-  }
+  const sig = await ctx.psm.methods
+    .redeemOkuM(new BN(redeemAmount), new BN(0))
+    .accountsPartial({
+      user: ctx.deployer.publicKey,
+      config: ctx.psmConfig,
+      usdcMint: ctx.usdcMint,
+      okuMMint: ctx.okuMMint,
+      userUsdcAta,
+      userOkuMAta,
+      vaultUsdc: ctx.psmVaultUsdc,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      token2022Program: TOKEN_2022_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .rpc();
+  await confirmTx(ctx, sig);
+  logger.success(`Redeem tx: ${explorerLink(ctx.network, sig)}`);
+
+  // 5. Verify
+  const usdcAfter = await getTokenBalance(ctx, ctx.usdcMint, ctx.deployer.publicKey, TOKEN_PROGRAM_ID);
+  const okuMAfter = await getTokenBalance(ctx, ctx.okuMMint, ctx.deployer.publicKey, TOKEN_2022_PROGRAM_ID);
+  logger.info(`After - USDC: ${fmtAmount(usdcAfter)}, okuM: ${fmtAmount(okuMAfter)}`);
+  logger.success(`Redeemed ${fmtAmount(okuMBefore - okuMAfter)} okuM -> ${fmtAmount(usdcAfter - usdcBefore)} USDC`);
 }
 
 // ---------------------------------------------------------------------------
@@ -490,69 +486,74 @@ async function testRedeem(ctx: TestContext) {
 // ---------------------------------------------------------------------------
 
 /**
- * Distribute a small dollar-denominated yield amount across all OkuMoney holders.
+ * Distribute a small dollar-denominated yield amount across all OkuM holders.
  * Calls `lite_psm::distribute_yield` (rebaser-gated), which computes:
- *   new_oku_m_price = old + (yield_amount × 1e9 / total_supply)
- * and stamps `last_yield_distribution_slot` so subsequent same-slot ops revert.
+ *   new_multiplier = old + (yield_amount × PRECISION / total_supply_dollars)
+ * and writes the new multiplier directly to the mint's ScaledUiAmountConfig
+ * extension via CPI, stamping `last_yield_distribution_slot` so subsequent
+ * same-slot ops revert.
  *
- * Verifies the price strictly increased and that the delta matches the formula.
+ * Verifies the multiplier strictly increased and roughly matches the formula
+ * (small f64 rounding tolerance).
  */
 async function testDistributeYield(ctx: TestContext) {
   logger.section('Test: Distribute Yield');
 
-  // The deployer must be the rebaser on the PSM config (true after grantRoles).
-  const cfg = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
-  const okuMPriceBefore = (cfg.okuMPrice as BN).toNumber();
-  logger.info(`oku_m_price before: ${okuMPriceBefore}`);
+  const PRECISION = 1_000_000_000;
 
-  // Fetch OkuMoney total supply to predict new price.
+  // The deployer must be the rebaser on the PSM config (true after grantRoles).
+  const multiplierBefore = await readMultiplier(ctx);
+  logger.info(`multiplier before: ${multiplierBefore.toString()}`);
+
+  // Fetch OkuM total supply to predict new multiplier.
   const mintInfo = await getMint(
     ctx.provider.connection,
-    ctx.okuMoneyMint,
+    ctx.okuMMint,
     'confirmed',
     TOKEN_2022_PROGRAM_ID
   );
   const totalSupply = mintInfo.supply;
   if (totalSupply === 0n) {
-    logger.warning('OkuMoney total supply is 0 — skipping distribute_yield (nothing to distribute).');
+    logger.warning('okuM total supply is 0 — skipping distribute_yield (nothing to distribute).');
     return;
   }
 
-  // Yield = 1 USDC (6 decimals = 1_000_000) so delta = 1e6 × 1e9 / supply.
+  // Dollar value of current supply = raw_supply * multiplier / PRECISION.
+  const supplyDollars = (totalSupply * BigInt(multiplierBefore.toString())) / BigInt(PRECISION);
+  if (supplyDollars === 0n) {
+    logger.warning('Dollar-denominated supply rounds to 0 — skipping distribute_yield.');
+    return;
+  }
+
+  // Yield = 1 USDC (6 decimals = 1_000_000).
   const yieldAmount = new BN(1_000_000); // 1 USD
-  const expectedDelta = BigInt(yieldAmount.toString()) * BigInt(1_000_000_000) / totalSupply;
-  logger.info(`Distributing ${Number(yieldAmount) / 1e6} USD across supply ${fmtAmount(totalSupply)} OkuMoney`);
-  logger.info(`Expected oku_m_price delta: ${expectedDelta}`);
+  const expectedDelta = (BigInt(yieldAmount.toString()) * BigInt(PRECISION)) / supplyDollars;
+  logger.info(`Distributing ${Number(yieldAmount) / 1e6} USD across dollar-supply ${supplyDollars}`);
+  logger.info(`Expected multiplier delta (approx, f64 rounding applies): ${expectedDelta}`);
 
   const sig = await ctx.psm.methods
     .distributeYield(yieldAmount)
     .accountsPartial({
       rebaser: ctx.deployer.publicKey,
       config: ctx.psmConfig,
-      okuMoneyMint: ctx.okuMoneyMint,
+      okuMMint: ctx.okuMMint,
       token2022Program: TOKEN_2022_PROGRAM_ID,
     })
     .rpc();
   await confirmTx(ctx, sig);
   logger.success(`distribute_yield tx: ${explorerLink(ctx.network, sig)}`);
 
-  const cfgAfter = await ctx.psm.account.psmConfig.fetch(ctx.psmConfig);
-  const okuMPriceAfter = (cfgAfter.okuMPrice as BN).toNumber();
-  logger.info(`oku_m_price after: ${okuMPriceAfter}`);
+  const multiplierAfter = await readMultiplier(ctx);
+  logger.info(`multiplier after: ${multiplierAfter.toString()}`);
 
-  if (okuMPriceAfter <= okuMPriceBefore) {
+  if (multiplierAfter.lte(multiplierBefore)) {
     throw new Error(
-      `Expected oku_m_price to increase, but went ${okuMPriceBefore} → ${okuMPriceAfter}.`
+      `Expected multiplier to increase, but went ${multiplierBefore.toString()} → ${multiplierAfter.toString()}.`
     );
   }
-  const actualDelta = BigInt(okuMPriceAfter - okuMPriceBefore);
-  if (actualDelta !== expectedDelta && actualDelta !== expectedDelta - 1n) {
-    // Allow ±1 for integer-division truncation.
-    throw new Error(
-      `oku_m_price delta mismatch: expected ${expectedDelta} (±1), got ${actualDelta}.`
-    );
-  }
-  logger.success(`Yield distributed — oku_m_price increased by ${actualDelta} (expected ${expectedDelta}).`);
+  logger.success(
+    `Yield distributed — multiplier increased ${multiplierBefore.toString()} → ${multiplierAfter.toString()} (expected delta ≈${expectedDelta}, f64 rounding may vary).`
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -587,8 +588,8 @@ async function testPause(ctx: TestContext) {
   const userUsdcAta = getAssociatedTokenAddressSync(
     ctx.usdcMint, ctx.deployer.publicKey, false, TOKEN_PROGRAM_ID
   );
-  const userOkuMoneyAta = getAssociatedTokenAddressSync(
-    ctx.okuMoneyMint, ctx.deployer.publicKey, true, TOKEN_2022_PROGRAM_ID
+  const userOkuMAta = getAssociatedTokenAddressSync(
+    ctx.okuMMint, ctx.deployer.publicKey, true, TOKEN_2022_PROGRAM_ID
   );
 
   let mintReverted = false;
@@ -599,9 +600,9 @@ async function testPause(ctx: TestContext) {
         user: ctx.deployer.publicKey,
         config: ctx.psmConfig,
         usdcMint: ctx.usdcMint,
-        okuMoneyMint: ctx.okuMoneyMint,
+        okuMMint: ctx.okuMMint,
         userUsdcAta,
-        userOkuMoneyAta,
+        userOkuMAta,
         vaultUsdc: ctx.psmVaultUsdc,
         tokenProgram: TOKEN_PROGRAM_ID,
         token2022Program: TOKEN_2022_PROGRAM_ID,

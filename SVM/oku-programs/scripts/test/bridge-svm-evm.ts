@@ -486,7 +486,7 @@ async function svmRedeemOkuM(ctx: SvmCtx, okuMAmount: bigint): Promise<bigint> {
   );
   const delta = usdcAfter - usdcBefore;
   if (delta === 0n) {
-    throw new Error('[SVM] redeemOkuM released 0 USDC — likely queued; deposit_buffer first');
+    throw new Error('[SVM] redeemOkuM released 0 USDC — buffer may be depleted; deposit_buffer first');
   }
   return delta;
 }

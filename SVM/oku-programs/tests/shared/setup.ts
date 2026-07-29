@@ -6,11 +6,12 @@
  * process. They are deterministic per-process but freshly generated per-
  * process boot, so each test run starts with pristine authorities.
  *
- * `initializePsm` runs the PSM `initialize` +
- * `setup_oku_m_escrow` instructions against the supplied program.
- * No memoization, no singleton, no cross-file cache — every bankrun
- * cluster is fresh and the on-chain PsmConfig must always be created
- * by the calling describe's `before()` hook.
+ * `initializePsm` runs the PSM `initialize` instruction against the
+ * supplied program, then creates the OkuM escrow ATA client-side (the
+ * `setup_oku_m_escrow` on-chain instruction was removed along with the
+ * redemption queue). No memoization, no singleton, no cross-file cache
+ * — every bankrun cluster is fresh and the on-chain PsmConfig must
+ * always be created by the calling describe's `before()` hook.
  *
  * The `initialize` instruction now creates the OkuM mint itself with
  * Token-2022 ScaledUiAmount + MetadataPointer + TokenMetadata extensions.
@@ -31,7 +32,7 @@ import {
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import type { BankrunHarness } from "./bankrun";
-import { fundKeypairs } from "./bankrun";
+import { fundKeypairs, ensureAtaViaBankrun } from "./bankrun";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -80,13 +81,13 @@ export interface PsmSetupResult {
 /**
  * Initialize the PSM end-to-end on the supplied bankrun harness.
  *
- * Steps performed (no caching — every call runs all three on-chain
- * instructions):
+ * Steps performed (no caching — every call re-runs both steps):
  *   1. fund the shared authority keypairs via `fundKeypairs(h, ...)`
  *   2. `initialize(...)` — creates PsmConfig + USDC vault + OkuM mint
  *      (the program creates the Token-2022 mint with ScaledUiAmount +
  *      MetadataPointer + TokenMetadata extensions)
- *   3. `setupOkuMEscrow()` — creates the OkuM escrow ATA
+ *   3. create the OkuM escrow ATA client-side (idempotent ATA create;
+ *      no on-chain PSM instruction needed for this step)
  *
  * Authority roles use the same keypair-per-role mapping as the deploy
  * config: cold for high-security, warm for medium, psmOrchestrator for
@@ -159,18 +160,11 @@ export async function initializePsm(
     .signers([okuMMintKeypair])
     .rpc();
 
-  await program.methods
-    .setupOkuMEscrow()
-    .accountsPartial({
-      roleAdmin: payer.publicKey,
-      config: configPda,
-      okuMMint,
-      vaultOkuM: vaultOkuMAta,
-      token2022Program: TOKEN_2022_PROGRAM_ID,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    })
-    .rpc();
+  // Create the OkuM escrow ATA client-side (idempotent). The on-chain
+  // `setup_oku_m_escrow` instruction was removed along with the
+  // redemption queue -- this ATA is no longer used by any instruction
+  // but is retained for tests that still reference `vaultOkuMAta`.
+  await ensureAtaViaBankrun(h, configPda, okuMMint, TOKEN_2022_PROGRAM_ID);
 
   return { configPda, okuMMint, vaultUsdcAta, vaultOkuMAta };
 }

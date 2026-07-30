@@ -43,7 +43,7 @@
  * deploys take new addresses). Pre-audit iterate with v0.x; reserve v1.0+
  * for audited deployments.
  */
-export const DEPLOYMENT_VERSION = "v0.1";
+export const DEPLOYMENT_VERSION = "v0.2";
 
 /**
  * Canonical Arachnid CREATE2 factory. Same address on every supported chain.

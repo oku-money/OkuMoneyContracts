@@ -17,6 +17,59 @@ removable post-launch.
 
 ## 🟡 Should-fix before external audit
 
+### Live EVM redeploy required (testnet/mock addresses only) `[EVM]`
+
+**Root cause:** the last live EVM deploy (`testnet-addresses.json`,
+2026-07-28) predates the OracleRelay storage removal (`d8bee36`,
+2026-07-29), which deleted `address __deprecated_oracleRelay` from
+`LitePSM.sol`'s storage struct (a **middle slot**, offset +4 — every
+later field shifts up) and from `RedemptionQueue.sol`'s struct (a
+**trailing slot**, offset +7). Consequence: every currently-deployed
+`LitePSM` proxy would have the new implementation read
+`usdcDecimalMultiplier` from the slot still physically holding the
+old oracle-relay address — a genuine storage-corruption bug, not
+just a lint-level layout warning. `RedemptionQueue`'s break is
+mechanically benign (trailing-slot deletion) but still rejected by
+OZ's `validateUpgrade`. `OkuMoney`/`OkuDollar` have zero storage
+drift and remain upgrade-safe.
+
+**Upgrade is not viable:** `EVM/.openzeppelin/*.json` manifests were
+deleted in the same commit. `forceImport` would re-baseline the
+manifest against the *new* (already-shifted) layout rather than the
+genuine deployed layout, so it would let a corrupt "upgrade" through
+the safety check instead of catching it. A fresh deploy is required
+for `LitePSM` and `RedemptionQueue`.
+
+**Blast radius: zero.** All 6 currently-deployed networks — including
+the `base`/`bsc` entries, despite their mainnet chain IDs — are wired
+to `MockUSDC`; none is a production launch. Redeploying orphans
+nothing of value.
+
+**Status: rehearsed, not yet sent live.**
+`DEPLOYMENT_VERSION` bumped `v0.1` → `v0.2` (new CREATE2 salt for a
+clean, coherent address set — `OkuMoney`/`OkuDollar`/`MockUSDC`
+would've kept their `v0.1` addresses either way since their bytecode
+is unchanged, but the version bump avoids a partially-mixed old/new
+graph). Local-fork rehearsal (impersonating the real deployer wallet
+with its actual on-chain balance, no artificial funding) completed
+successfully against all 6 target networks
+(`sepolia`, `baseSepolia`, `arbSepolia`, `bscTestnet`, `base`, `bsc`)
+via `FORK_NETWORK=<chain> hh node` + `hh run scripts/deploy/index.ts
+--network localhost`. Deterministic addresses matched across all
+networks as expected (identical salt + identical `MockUSDC`/init
+code). A full `test-onchain.ts` lifecycle rehearsal (mint, transfer,
+wrap, unwrap, buffered redeem, forced-queue redeem +
+`processQueue` drain, `distributeYield`, pause/unpause, minter
+allowance rotation) also passed cleanly against the fresh v0.2
+deploy on the Sepolia fork — confirming the new storage layout is
+functionally correct end-to-end, not just deployable.
+
+**Next step:** run the live redeploy
+(`hh run scripts/deploy/index.ts --network <chain>` for each of the
+6 networks) whenever ready to refresh the actual on-chain testnet
+state; update `testnet-addresses.json` (auto-synced by the deploy
+script) accordingly.
+
 ### Regenerate audit tool-output snapshots before handoff `[both]`
 
 `EVM/audit/` and `SVM/oku-programs/audit/` intentionally do NOT

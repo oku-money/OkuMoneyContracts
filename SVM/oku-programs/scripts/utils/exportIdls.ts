@@ -1,8 +1,10 @@
 /**
  * Curated IDL export for downstream consumers.
  *
- * Copies the 3 production IDLs from target/idl/ (produced by `anchor build`)
- * into the repo-root artifacts/svm/ directory.
+ * Copies the production IDL(s) from target/idl/ (produced by `anchor build`)
+ * into the repo-root artifacts/svm/ directory. Currently a single program
+ * (`lite_psm`); the export is dynamic so it scales to more without a code
+ * change (see note below).
  *
  * This is a one-way mirror: artifacts/svm/ is considered read-only by
  * downstream consumers. To refresh, run `anchor build` then

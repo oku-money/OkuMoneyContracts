@@ -3,26 +3,22 @@
 Pre-audit deliverables for the OkuMoney EVM contracts. Reference
 these files when preparing the audit scope document.
 
-> **Snapshot status:** The raw tool-output snapshots
-> (`coverage-summary.txt`, `contract-sizes.txt`, `slither-report.json`,
-> `test-output-forge-unit.txt`, `test-output-forge-invariants.txt`,
-> `test-output-hardhat.txt`) were cleared following the OracleRelay
-> removal (the five-contract surface shrank to four: `OkuMoney`,
-> `OkuDollar`, `LitePSM`, `RedemptionQueue`). Regenerate them before
-> handing this package to an auditor — see the commands in the
-> Contents table below.
-
 ## Contents
 
-| File | Description |
-|---|---|
-| `README.md` | This file — accepted risks, slither triage, tool snapshots. |
-| `coverage-summary.txt` | *(cleared — regenerate via `forge coverage --report summary`)* per-file disposition of uncovered branches. |
-| `contract-sizes.txt` | *(cleared — regenerate via `forge build --sizes`)* output for the four production contracts. |
-| `slither-report.json` | *(cleared — regenerate via `slither . --filter-paths "test/\|lib/\|script/\|node_modules/"`)* machine-readable findings. |
-| `test-output-forge-unit.txt` | *(cleared — regenerate via `forge test --no-match-path 'test/invariants/*'`)* output. |
-| `test-output-forge-invariants.txt` | *(cleared — regenerate via `forge test --match-path 'test/invariants/*'`)* output. |
-| `test-output-hardhat.txt` | *(cleared — regenerate via `npx hardhat test`)* output. |
+This directory intentionally contains only this `README.md`. Raw
+tool transcripts (coverage, contract sizes, slither, test output) are
+NOT committed — they go stale the moment code changes and a stale
+transcript is worse than none. Regenerate on demand:
+
+```bash
+cd EVM
+forge coverage --report summary                                    # coverage
+forge build --sizes                                                 # contract sizes
+slither . --filter-paths "test/|lib/|script/|node_modules/"         # static analysis
+forge test --no-match-path 'test/invariants/*'                      # forge unit + fuzz
+forge test --match-path 'test/invariants/*'                         # forge invariants
+npx hardhat test                                                    # hardhat fork/integration
+```
 
 ## Test count headline (post-OracleRelay-removal)
 
@@ -51,15 +47,14 @@ CI gates `forge coverage` at ≥ 95 % per-file line coverage (see
 
 ## Static analysis headline
 
-Slither findings pending regeneration (see snapshot-status note above).
-The previous baseline reported informational-severity-only findings;
-re-run and re-triage against the current 4-contract surface before
-audit handoff.
+Not committed — run `slither .` (see Contents above). The previous
+baseline reported informational-severity-only findings; re-triage
+against the current 4-contract surface before audit handoff.
 
 ## Contract sizes headline
 
-All four production contracts well below the EIP-170 24 KB limit
-(sizes pending regeneration — see snapshot-status note above).
+All four production contracts are well below the EIP-170 24 KB limit.
+Run `forge build --sizes` (see Contents above) for exact byte counts.
 
 ## Dependency pinning
 
@@ -244,19 +239,18 @@ revisited. No bridge-related code remains in `src/`, `test/`, or
 
 # Slither findings — pre-audit triage
 
-> **Pending regeneration.** The triage below reflects the pre-
-> OracleRelay-removal 5-contract surface and is stale (it references
-> `OracleRelay._getOracleRelayStorage`, `OracleRelay._readAndValidateFeedDecimals`,
-> and `LitePSM._pegCheck`, all removed). Re-run
-> `slither . --filter-paths "test/|lib/|script/|node_modules/"`
-> against the current 4-contract surface (`OkuMoney`, `OkuDollar`,
-> `LitePSM`, `RedemptionQueue`) and replace this section before audit
-> handoff. The prior findings (assembly, dead-code false positives,
-> naming-convention, timestamp, calls-loop, unindexed-event-address)
-> are expected to recur in similar form on the remaining four
-> contracts, minus the OracleRelay-specific entries.
+Not committed — the prior triage referenced `OracleRelay` internals
+removed from the current 4-contract surface. Regenerate and re-triage
+before audit handoff:
 
-Regenerate and re-triage before audit handoff.
+```bash
+slither . --filter-paths "test/|lib/|script/|node_modules/"
+```
+
+Expect findings in the same categories as `§7. Slither informational
+findings` above (assembly, dead-code false positives, naming-convention,
+timestamp, calls-loop, unindexed-event-address) on the remaining four
+contracts.
 
 ---
 

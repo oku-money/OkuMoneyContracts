@@ -66,83 +66,33 @@ operational procedures.
 
 ## Why a single token on SVM
 
-### The platform constraint
+**Platform constraint:** Solana's SPL Token program stores balances
+as a literal `u64` in each token account — there is no `balanceOf()`
+override, so **true on-chain rebasing (the EVM stETH/USDM/rUSDY
+pattern) is impossible on SVM**. Every yield-bearing Solana token
+(JitoSOL, mSOL, Sanctum LSTs, Ondo USDY) instead uses a
+value-appreciating model: static raw balances, value-per-token rises
+over time. None of them use Token-2022 extensions for display.
 
-Solana's SPL Token program stores balances as a literal `u64` in each
-token account. There is no `balanceOf()` override -- programs and
-wallets read `token_account.amount` directly. This means **true
-on-chain rebasing is impossible on SVM**. No mechanism exists to make
-stored balances grow over time without explicit mint/burn/transfer
-instructions.
+**Our approach:** Token-2022's `ScaledUiAmountConfig` extension
+stores an updatable f64 multiplier on the mint. Wallets/RPCs that
+support it display `raw_amount * multiplier`; the raw
+`token_account.amount` never changes, so DeFi protocols (AMMs,
+lending) see static balances by construction. This gives the
+value-appreciating model under the hood with a $1-pegged display on
+top (deposit 100 USDC → see 100.00 OkuM; after 5% yield → see 105.00
+OkuM). This is the extension's intended use case per the [official
+ScaledUiAmount integration
+guide](https://solana.com/docs/tokens/extensions/scaled-ui-amount/integration-guide).
 
-On EVM, projects like Lido (stETH), Mountain Protocol (USDM), and
-Ondo (rUSDY) implement rebasing by overriding `balanceOf()` to return
-`shares * exchangeRate`, giving users a $1-pegged token whose balance
-grows. This technique is unavailable on SVM.
-
-### How every project handles this today
-
-Every yield-bearing token on Solana uses the **value-appreciating
-(exchange-rate) model**: raw balances are static, and the value per
-token increases over time.
-
-| Project | Token | Model | $1 Peg? |
-|---------|-------|-------|---------|
-| Jito | JitoSOL | Value-appreciating (stake pool) | No |
-| Marinade | mSOL | Value-appreciating | No |
-| Sanctum | INF, jupSOL, etc. | Value-appreciating (stake pool) | No |
-| Lido (sunset) | stSOL | Value-appreciating | No |
-| Ondo | USDY | Value-appreciating | No (>$1) |
-
-Notably, Ondo offers rUSDY (rebasing, $1 peg) on EVM but ships only
-the value-appreciating USDY on Solana -- users see a token priced at
->$1 that keeps rising, which does not feel like a stablecoin.
-
-No project rebases on Solana. None use Token-2022 extensions for
-yield display.
-
-### What ScaledUiAmountConfig changes
-
-Token-2022's `ScaledUiAmountConfig` extension stores an updatable f64
-multiplier on the mint. Wallets and RPCs that support it return
-`raw_amount * multiplier` as the user's displayed balance. The raw
-`token_account.amount` is unchanged -- DeFi protocols see static
-balances (AMM/lending compatible by construction).
-
-This gives us the best of both models:
-
-- **Under the hood:** value-appreciating shares, identical to
-  JitoSOL/mSOL/USDY -- industry standard, DeFi compatible.
-- **User-facing:** $1-pegged stablecoin display. Deposit 100 USDC,
-  see 100.00 OkuM. After 5% yield, see 105.00 OkuM. Each
-  displayed unit is $1.
-
-The Solana ecosystem is actively standardizing on this pattern.
-The official [ScaledUiAmount integration guide](https://solana.com/docs/tokens/extensions/scaled-ui-amount/integration-guide)
-assigns P0 priority to wallet, DEX, explorer, and CEX support,
-and explicitly describes yield distribution as a primary use case.
-
-### First-mover status
-
-As of July 2026, **no production project has shipped a yield-bearing
-stablecoin using `ScaledUiAmountConfig` on Solana**. OkuMoney's
-single-token design would be the first to use this extension for its
-intended purpose: a T-Bill-backed token that displays as a $1
-stablecoin while accumulating yield through multiplier updates. The
-extension was designed for this use case -- we are simply the first to
-ship it.
-
-### Naming convention
-
-The on-chain token is **OkuM (OkuMoney)** in all code, instruction
-names, field names, and developer-facing surfaces (`oku_m_mint`,
-`mint_oku_m`, `MintOkuM`, etc.). The `TokenMetadata` extension on
-the mint stores `name: "OkuDollar", symbol: "usdOku"` so wallets
-display the $1 stablecoin brand. This split is intentional: the
-codebase uses OkuM naming because the on-chain token IS OkuM (a
-value-appreciating T-Bill-backed token), while the wallet display
-layer presents it as usdOku (a $1-pegged stablecoin) via the
-`ScaledUiAmountConfig` multiplier.
+**Naming convention (important):** the on-chain token is **OkuM
+(OkuMoney)** in all code, instructions, and field names
+(`oku_m_mint`, `mint_oku_m`, `MintOkuM`, etc.). The `TokenMetadata`
+extension on the mint separately sets `name: "OkuDollar", symbol:
+"usdOku"` so wallets display the $1 stablecoin brand. This split is
+intentional — the on-chain token IS OkuM (value-appreciating,
+T-Bill-backed); the wallet display layer presents it as usdOku (a
+$1-pegged stablecoin) via the multiplier.
 
 ---
 
@@ -273,15 +223,14 @@ tests/
 ```rust
 pub struct PsmConfig {
     pub bump: u8,
-    // 10 authority pubkeys: role_admin, pauser, unpauser, freezer, unfreezer,
+    // 12 authority pubkeys: role_admin, pauser, unpauser, freezer, unfreezer,
     //   buffer_depositor, buffer_withdrawer, cap_manager, allowance_manager,
-    //   rebaser
+    //   rebaser, direct_minter, direct_burner
     // Token references: usdc_mint, oku_m_mint, vault_usdc
     // Limits: max_supply, minter_allowance, direct_minter_allowance,
     //   direct_burner_allowance, is_paused
     // Yield: last_yield_distribution_slot
     // Two-step RoleAdmin: pending_role_admin
-    // Direct mint/burn: direct_minter, direct_burner
 }
 ```
 
@@ -311,13 +260,13 @@ SLAs, `queue_processor` role). Operators keep the buffer topped up via
 
 ### PDA seed history
 
-| Migration date | Affected seeds | Cause |
-|---|---|---|
-| 2026-06-05 (noBridge phase C) | `psm_config → psm_config_v2`, `redemption_queue → redemption_queue_v2`, `oku_money_config → oku_money_config_v2`, `oku_m_mint → oku_m_mint_v2` | `PsmConfig` storage shrank from 722 → 658 bytes after the `blacklist_exempt_*` fields were removed. In-place BPF upgrade would have re-interpreted old slots — security-relevant corruption. Forced PDA rotation via seed bump. |
-| 2026-06-12 (audit-prep cycle) | `psm_config_v2 → psm_config_v3` | PoR fields removed, USDC peg circuit-breaker fields added. Net layout delta: 658 → 674 bytes. Other three SVM seeds unchanged. |
-| 2026-07-01 (direct-mint) | No seed change (in-place realloc) | `direct_minter: Pubkey` + `direct_minter_allowance: u64` appended to `PsmConfig`. Layout delta: 674 → 714 bytes (+40). First in-place `realloc` migration — `migrate_psm_config` extends the account without rotating the PDA seed. All other seeds unchanged. |
-| 2026-07 (single-token refactor) | `psm_config_v4 → psm_config_v5` | OkuMoney eliminated; `oku_money_mint`/`vault_oku_money`/`oku_m_price` removed from PsmConfig; `oku_m_mint` added. `oku-dollar` program deleted entirely. Redemption queue still present at this point (`redemption_queue_v3`). |
-| 2026-07 (queue removal) | `psm_config_v5 → psm_config_v6` | `RedemptionQueue` account, `queue_processor` role, and all queue instructions (`process_queue`, `rescue_queue_entry`, `user_self_rescue_queue_entry`, `setup_redemption_queue`) removed entirely — buffer-only PSM. Layout delta: 594 → 562 bytes (−32, the removed `queue_processor: Pubkey` field). Fresh program ID (`BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g`). |
+Current seed: `psm_config_v6`, 562 bytes (compile-time asserted).
+The seed has rotated six times as `PsmConfig`'s storage layout
+changed (noBridge phase C, audit-prep field swaps, direct-mint field
+additions, the single-token refactor, and finally redemption-queue
+removal) — full per-rotation cause/delta history is in `git log` for
+this file. Rotation is mandatory whenever a layout change would cause
+an in-place BPF upgrade to misinterpret old account bytes.
 
 **Orphan-PDA inventory** (devnet, post-rotation): pre-rotation PDAs +
 SPL mints are orphaned because their `owner` field still references
@@ -404,13 +353,8 @@ separately by the rebaser on each chain.
 
 ### Cross-chain (noBridge, v1)
 
-No on-chain bridge instructions. The orchestrator uses
-`burn_oku_m_direct` on the source chain and `mint_oku_m_direct`
-on the destination chain, conserving raw token amounts directly.
-
-**SVM ≠ EVM bridging model:** SVM uses direct raw-amount
-burn/mint (no USDC intermediate). EVM still uses PSM-mediated USDC
-flow. The orchestrator handles this asymmetry.
+See "Cross-chain transfers (noBridge model, v1)" above for the
+overview. One load-bearing property specific to this instruction set:
 
 **`mint_oku_m` is fully permissionless.** Any USDC holder can call
 it; the orchestrator does NOT hold a privileged mint authority for
@@ -729,7 +673,9 @@ All admin scripts live under `scripts/admin/`. Each:
 | `admin:pause-psm` / `admin:unpause-psm` | `pause` / `unpause` | `pauser` / `unpauser` |
 | `admin:set-max-supply` | `set_max_supply` | `cap_manager` |
 | `admin:set-minter-allowance` | `set_minter_allowance` | `allowance_manager` |
-| `set-direct-minter-allowance.ts` / `set-direct-burner-allowance.ts` | `set_direct_minter_allowance` / `set_direct_burner_allowance` | `allowance_manager` |
+| `admin:set-direct-minter-allowance` / `admin:set-direct-burner-allowance` | `set_direct_minter_allowance` / `set_direct_burner_allowance` | `allowance_manager` |
+| `admin:mint-oku-m` / `admin:redeem-oku-m` | `mint_oku_m` / `redeem_oku_m` — standalone orchestrator bridge-leg CLIs | permissionless / caller |
+| `admin:mint-oku-m-direct` | `mint_oku_m_direct` — permissioned fiat on-ramp | `direct_minter` |
 | `admin:set-multiplier` | `set_multiplier` | `rebaser` (stamps yield-distribution slot) |
 | `admin:distribute-yield` | `distribute_yield` | `rebaser` |
 | `admin:freeze-account` / `admin:thaw-account` | `freeze_account` / `thaw_account` | `freezer` / `unfreezer` |
@@ -819,14 +765,10 @@ The orchestrator handles this asymmetry transparently.
 
 ### Redemption model — queue (EVM) vs buffer-only (SVM)
 
-EVM keeps a `RedemptionQueue` (unbounded `mapping(uint256 →
-RedemptionEntry)`, strict FIFO via `head`/`tail`) so a redeem can be
-escrowed when the PSM's USDC buffer is insufficient, then drained
-later via `processQueue`. SVM has **no queue at all** — `redeem_oku_m`
-simply reverts with `InsufficientBuffer` if the vault can't cover it
-(see "Why no redemption queue" in the state-accounts section above).
-This is a deliberate SVM-specific simplification, not a parity gap
-the two sides are expected to close.
+EVM keeps a `RedemptionQueue` to escrow a redeem when the buffer is
+insufficient; SVM has no queue at all (`redeem_oku_m` reverts
+`InsufficientBuffer` instead). See "Why no redemption queue" above —
+this is a deliberate SVM-specific simplification, not a parity gap.
 
 ### DeFi compatibility
 

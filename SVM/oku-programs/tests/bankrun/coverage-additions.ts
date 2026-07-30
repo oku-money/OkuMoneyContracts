@@ -28,7 +28,6 @@ import {
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
 } from "../shared/setup";
-// mintOkuMViaProgram removed — no longer needed after queue tests removed
 import {
   BankrunHarness,
   startBankrun,

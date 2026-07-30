@@ -10,7 +10,7 @@ import { NetworkName } from './networks';
 import { DEFAULT_DIRECT_MINTER } from './constants';
 
 export interface AuthorityConfig {
-  // PSM authorities (11 roles — queueProcessor removed with redemption queue)
+  // PSM authorities (12 roles — matches `AuthorityRole` in roles.rs)
   psm: {
     roleAdmin: PublicKey;
     pauser: PublicKey;

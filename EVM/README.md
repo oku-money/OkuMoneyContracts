@@ -48,42 +48,27 @@ on live networks also mirrors them into the canonical repo-root registry.
 ### Deterministic addresses (CREATE2, v0.1)
 
 Every UUPS proxy + its implementation, plus `MockUSDC`, are deployed via the
-Arachnid CREATE2 factory at `0x4e59b44847b379578588920cA78FbF26c0B4956C`. The
-factory exists at the same address on every supported chain (see
-[github.com/Arachnid/deterministic-deployment-proxy](https://github.com/Arachnid/deterministic-deployment-proxy)),
-so the same source tree + same `DEPLOYMENT_VERSION` + same constructor args
-produces the **same contract address on every chain that has the factory**.
+[Arachnid CREATE2 factory](https://github.com/Arachnid/deterministic-deployment-proxy)
+(`0x4e59b44847b379578588920cA78FbF26c0B4956C`, present on every supported
+chain), so the same source tree + `DEPLOYMENT_VERSION` + constructor args
+produce the **same contract address on every chain**. Salt:
+`keccak256("okumoney." + DEPLOYMENT_VERSION + "." + <name>)` — config in
+[`scripts/config/deploymentVersion.ts`](scripts/config/deploymentVersion.ts),
+helpers in [`scripts/utils/create2Deploy.ts`](scripts/utils/create2Deploy.ts).
 
-Salt formula:
-```
-salt = keccak256("okumoney." + DEPLOYMENT_VERSION + "." + <name>)
-```
-where `<name>` is `OkuMoney.impl`, `OkuMoney.proxy`, `MockUSDC`, etc. The
-configuration lives in [`scripts/config/deploymentVersion.ts`](scripts/config/deploymentVersion.ts);
-the deploy helpers in [`scripts/utils/create2Deploy.ts`](scripts/utils/create2Deploy.ts).
-
-**Version semantics:** `v0.x` is for pre-audit iteration; addresses may
-change across versions. `v1.0+` is reserved for post-audit deployments.
-Bumping `DEPLOYMENT_VERSION` is a one-way door — any prior-version deploy
-keeps its addresses; the new version takes fresh addresses.
-
-**Fallback:** if the CREATE2 factory is not deployed on a target chain
-(`eth_getCode` returns `0x` for it), the deploy script logs a warning and
-falls through to standard nonce-based CREATE — that chain gets unique,
-non-deterministic addresses. All chains in the current network list have
-the factory deployed.
-
-**Per-chain variance:** chain-specific constructor args still cascade into
-different addresses on chains where they differ — specifically real Circle
-USDC on mainnet (vs. `MockUSDC` on testnets). For pre-audit v0.1, `MockUSDC` is
-deployed deterministically on every testnet, so `RedemptionQueue` and
-`LitePSM` reach identical addresses across testnets too. Mainnet deploys
-(with real USDC) will diverge — handled post-audit.
-
-To inspect the deterministic address for any contract before deploying:
-```bash
-node -e "const{ethers}=require('ethers');const v='v0.1';for(const n of ['MockUSDC','OkuMoney.impl','OkuMoney.proxy']){console.log(n.padEnd(20), ethers.keccak256(ethers.toUtf8Bytes('okumoney.'+v+'.'+n)))}"
-```
+Caveats:
+- **Version semantics:** `v0.x` = pre-audit iteration (addresses may change
+  across versions); `v1.0+` reserved for post-audit. Bumping
+  `DEPLOYMENT_VERSION` is one-way — prior-version deploys keep their
+  addresses.
+- **Fallback:** if the factory isn't deployed on a target chain, the script
+  warns and falls through to nonce-based CREATE (non-deterministic
+  addresses). All chains in the current network list have the factory.
+- **Per-chain variance:** differing constructor args (real Circle USDC on
+  mainnet vs. `MockUSDC` on testnets) still produce different addresses
+  where they apply. Testnets all use `MockUSDC` deterministically, so
+  `RedemptionQueue`/`LitePSM` match across testnets; mainnet (real USDC)
+  diverges — handled post-audit.
 
 ### Where deployed addresses live
 

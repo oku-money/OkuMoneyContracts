@@ -6,14 +6,19 @@ Companion to `../../../EVM/audit/`. Post-Tier-A baseline
 
 ## Contents
 
-| File | Description |
-|---|---|
-| `README.md` | This file — accepted risks, clippy triage, tool snapshots. |
-| `clippy-output.txt` | Raw `cargo clippy` transcript. |
-| `coverage-summary.txt` | `cargo llvm-cov` summary for the `oku-shared` workspace crate. |
-| `program-sizes.txt` | `.so` size for the production program. |
-| `test-output-bankrun.txt` | `npm run test:bankrun` output. |
-| `test-output-cargo.txt` | `cargo test --workspace --lib` output. |
+This directory intentionally contains only this `README.md`. Raw
+tool transcripts (clippy, coverage, test output, program size) are
+NOT committed — they go stale the moment code changes and a stale
+transcript is worse than none. Regenerate on demand:
+
+```bash
+cd SVM/oku-programs
+cargo clippy --workspace --all-targets -- -D warnings   # clippy
+cargo llvm-cov --package oku-shared --lib                # coverage
+npm run test:bankrun                                      # bankrun suite
+cargo test --workspace --lib                              # Rust unit tests
+anchor build && ls -la target/deploy/*.so                 # program size
+```
 
 ## Toolchain headline
 
@@ -30,14 +35,14 @@ installed binaries match these pins.
 
 | Suite | Tests | Failures |
 |---|---:|---:|
-| Bankrun | 105 | 0 |
-| Cargo unit | 15 | 0 |
-| **Total** | **120** | **0** |
+| Bankrun | 85 | 0 |
+| Cargo unit | 16 | 0 |
+| **Total** | **101** | **0** |
 
-Test deltas vs. cycle-4 baseline (174 → 120, −54): the single-token
-refactor deleted `oku-dollar` and its vault/wrap/unwrap test suites,
-removed vault-math unit tests, and added ScaledUiAmount extension
-tests for the new single-token OkuM design.
+The single-token refactor deleted `oku-dollar` and its vault/wrap/unwrap
+test suites, removed vault-math unit tests, and added ScaledUiAmount
+extension tests for the new single-token OkuM design. Re-run the
+commands above to reconfirm this count against current `HEAD`.
 
 Kani (cycle 4): **13 / 13 SUCCESSFUL** (4 vault-math proofs removed
 with the oku-dollar program deletion).
@@ -97,11 +102,9 @@ unsoundness conditions unreachable on-chain) — documented in
 
 ## Program sizes headline
 
-Program within standard BPF-loader bounds (post-single-token refactor):
-
-| Program | Runtime size (B) |
-|---|---:|
-| `lite-psm.so` | 608,024 |
+`lite-psm.so` is within standard BPF-loader bounds (post-single-token
+refactor, single program). Run `anchor build && ls -la
+target/deploy/lite_psm.so` to get the current byte size.
 
 ## Dependency pinning
 

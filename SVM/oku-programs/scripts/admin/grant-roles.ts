@@ -1,20 +1,63 @@
 /**
- * Grant all non-RoleAdmin roles to a master EOA.
+ * Grant OPERATIONAL (non-governance) roles to a delegate EOA.
  *
- * Idempotently rotates every authority on lite-psm (11 roles)
- * to a single "master" pubkey so that one dev wallet can do everything
- * during testing.
+ * ============================================================================
+ * NATSPEC / DESIGN NOTES -- READ BEFORE MODIFYING THIS SCRIPT
+ * ============================================================================
  *
- * RoleAdmin is intentionally skipped -- it uses a two-step transfer
- * (propose + accept) and should be handled separately if needed.
+ * Ownership vs. operation
+ * ------------------------
+ * This script implements "operate, don't own" delegation. It grants ONLY
+ * the operational roles a delegate (e.g. a coworker's backend/vault key)
+ * needs to run the app day-to-day:
+ *
+ *   - directMinter      mint OkuM directly (fiat on-ramp), capped by
+ *                       direct_minter_allowance
+ *   - directBurner      burn OkuM directly (fiat off-ramp / bridge), capped
+ *                       by direct_burner_allowance
+ *   - rebaser           trigger rebase operations
+ *   - bufferDepositor   deposit into the USDC buffer
+ *
+ * It deliberately does NOT touch the governance/safety roles:
+ *
+ *   - roleAdmin         two-step transfer, handled separately; NEVER granted
+ *                       here. Retaining roleAdmin is what gives the deployer
+ *                       unconditional claw-back power over every other role
+ *                       (via set_authority) and is the basis of "ownership".
+ *   - pauser/unpauser   circuit breaker
+ *   - freezer/unfreezer compliance/blacklist
+ *   - capManager        supply-cap changes
+ *   - allowanceManager  sets direct_minter_allowance / direct_burner_allowance
+ *                       (i.e. the blast-radius cap on the delegate's own
+ *                       direct-mint/burn power) -- must NOT be handed to the
+ *                       same party being capped
+ *   - bufferWithdrawer  pulls USDC back out of the buffer
+ *
+ * INCIDENT CONTEXT: an earlier version of this script granted all 10
+ * non-roleAdmin roles (including the 7 governance/safety roles above) to a
+ * single delegate pubkey. That is safe ONLY if the delegate key is one you
+ * control (e.g. a recovery/governance key you hold) -- it is NOT safe to
+ * point it at a third party's operating key, because it would hand them
+ * pause/freeze/cap/allowance/buffer-withdraw power alongside operations.
+ * If you need "single dev wallet does everything" behavior for local
+ * smoke-testing, grant the governance roles separately (e.g. via
+ * `set-authority.ts`) to a key you actually hold, and use THIS script only
+ * for the operational subset.
+ *
+ * Idempotent: skips any role whose current authority already equals the
+ * delegate. RoleAdmin itself is never touched by this script.
  *
  * The signer must hold `role_admin` on the PSM program (the deployer
  * wallet on testnet deployments).
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/admin/grant-roles.ts
- *   NETWORK=devnet tsx scripts/admin/grant-roles.ts --master=<pubkey>
+ *   NETWORK=devnet tsx scripts/admin/grant-roles.ts --delegate=<pubkey>
  *   NETWORK=devnet tsx scripts/admin/grant-roles.ts --dry-run
+ *   NETWORK=devnet tsx scripts/admin/grant-roles.ts --mint-usdc   (opt-in mock USDC mint)
+ *
+ *   --master=<pubkey> is a deprecated alias for --delegate (kept for
+ *   backwards compatibility with existing runbooks/CI).
  */
 
 import * as anchor from '@anchor-lang/core';
@@ -48,21 +91,32 @@ import { confirmIfMainnet, isDryRun, summaryBlock } from './_lib/confirm';
 import {
   DEFAULT_DIRECT_MINTER,
   DIRECT_MINTER_ALLOWANCE as DIRECT_MINTER_ALLOWANCE_CONST,
+  DIRECT_BURNER_ALLOWANCE as DIRECT_BURNER_ALLOWANCE_CONST,
 } from '../config/constants';
 
-const DEFAULT_MASTER = DEFAULT_DIRECT_MINTER;
+const DEFAULT_DELEGATE = DEFAULT_DIRECT_MINTER;
 
 function parseArg(name: string): string | undefined {
   const a = process.argv.find((x) => x.startsWith(`--${name}=`));
   return a ? a.split('=').slice(1).join('=') : undefined;
 }
 
-const MASTER_PUBKEY = new PublicKey(parseArg('master') ?? DEFAULT_MASTER);
+function hasFlag(name: string): boolean {
+  return process.argv.includes(`--${name}`);
+}
+
+// --delegate is the canonical flag; --master is kept as a deprecated alias
+// so existing runbooks/CI invocations don't break.
+const delegateArg = parseArg('delegate') ?? parseArg('master');
+const DELEGATE_PUBKEY = new PublicKey(delegateArg ?? DEFAULT_DELEGATE);
+
+/** Opt-in: mint mock USDC to a recipient. Off by default (see incident note above). */
+const MINT_USDC = hasFlag('mint-usdc');
 
 /** Amount of mock USDC to mint (100k USDC, 6 decimals). */
 const USDC_MINT_AMOUNT = 100_000 * 1_000_000; // 100,000 USDC
 
-/** Recipient for mock USDC mint (may differ from the master EOA). */
+/** Recipient for mock USDC mint (may differ from the delegate EOA). */
 const USDC_RECIPIENT = new PublicKey(
   parseArg('usdc-recipient') ?? '2rWhEhK8kqdsS8NjtAQZdG6CK17NZMnPKmsrrsDuotoo'
 );
@@ -71,22 +125,37 @@ const USDC_RECIPIENT = new PublicKey(
 // Role definitions
 // ============================================================================
 
-/** PSM roles (excluding roleAdmin -- two-step, handled separately). */
+/**
+ * OPERATIONAL PSM roles granted to the delegate by this script.
+ *
+ * Governance/safety roles (pauser, unpauser, freezer, unfreezer, capManager,
+ * allowanceManager, bufferWithdrawer) are intentionally excluded -- see the
+ * NatSpec header above. roleAdmin is never granted here (two-step transfer,
+ * handled separately, and retaining it is what preserves claw-back/ownership).
+ */
 const PSM_ROLES = [
+  'directMinter',
+  'directBurner',
+  'rebaser',
+  'bufferDepositor',
+] as const;
+
+/** Governance/safety roles this script deliberately does NOT touch (documented for operator visibility). */
+const RETAINED_GOVERNANCE_ROLES = [
   'pauser',
   'unpauser',
   'freezer',
   'unfreezer',
-  'bufferDepositor',
-  'bufferWithdrawer',
   'capManager',
   'allowanceManager',
-  'rebaser',
-  'directMinter',
+  'bufferWithdrawer',
 ] as const;
 
 /** Direct-minter allowance to set after granting roles (1M OkuM, 6 decimals). */
 const DIRECT_MINTER_ALLOWANCE = DIRECT_MINTER_ALLOWANCE_CONST;
+
+/** Direct-burner allowance to set after granting roles (1M OkuM, 6 decimals). */
+const DIRECT_BURNER_ALLOWANCE = DIRECT_BURNER_ALLOWANCE_CONST;
 
 // ============================================================================
 // Types
@@ -109,8 +178,8 @@ async function main() {
   const network = detectNetwork();
   logger.header(`grant-roles (${network})`);
 
-  if (MASTER_PUBKEY.equals(PublicKey.default)) {
-    throw new Error('Master pubkey cannot be the zero pubkey.');
+  if (DELEGATE_PUBKEY.equals(PublicKey.default)) {
+    throw new Error('Delegate pubkey cannot be the zero pubkey.');
   }
 
   const dryRun = isDryRun();
@@ -133,11 +202,13 @@ async function main() {
   logger.info(
     summaryBlock('grant-roles plan', {
       network,
-      master: MASTER_PUBKEY.toBase58(),
+      delegate: DELEGATE_PUBKEY.toBase58(),
       'signer (role_admin)': roleAdmin.toBase58(),
       'PSM config': psmConfig.toBase58(),
-      'PSM roles': `${PSM_ROLES.length} (roleAdmin skipped, includes directMinter)`,
+      'granting (operational)': `${PSM_ROLES.length} -- ${PSM_ROLES.join(', ')}`,
+      'retaining (governance, untouched)': `${RETAINED_GOVERNANCE_ROLES.length} -- ${RETAINED_GOVERNANCE_ROLES.join(', ')}`,
       'dry-run': String(dryRun),
+      'mint-usdc': String(MINT_USDC),
     })
   );
 
@@ -147,12 +218,15 @@ async function main() {
 
   const results: GrantResult[] = [];
 
-  // ---- Set direct-minter allowance BEFORE rotating roles ----
-  // IMPORTANT: This must run BEFORE the PSM role grants loop below.
-  // The loop rotates `allowanceManager` from the deployer to MASTER_PUBKEY,
-  // after which the deployer can no longer sign `setDirectMinterAllowance`.
-  // By setting the allowance first (while `allowanceManager` is still the
-  // deployer), we avoid the chicken-and-egg ordering problem.
+  // ---- Set direct-minter / direct-burner allowances BEFORE rotating roles ----
+  // NOTE: `allowanceManager` is a retained governance role (see NatSpec
+  // header) -- this script never rotates it. These allowance calls only
+  // succeed when the signer (role_admin/deployer) also happens to hold
+  // allowanceManager (e.g. fresh localnet/devnet where all roles start on
+  // the deployer). Once allowanceManager has been split out to a separate
+  // governance key, run `set-direct-minter-allowance.ts` /
+  // `set-direct-burner-allowance.ts` with that key instead -- this section
+  // will detect the mismatch and skip with a warning rather than fail.
   logger.section('Direct-minter allowance (pre-rotation)');
 
   {
@@ -192,12 +266,51 @@ async function main() {
     }
   }
 
-  // ---- PSM roles ----
-  logger.section('lite-psm roles');
+  logger.section('Direct-burner allowance (pre-rotation)');
+
+  {
+    const psmCfgPre = await psmProgram.account.psmConfig.fetch(psmConfig);
+    const currentAllowance = (psmCfgPre as any).directBurnerAllowance;
+    const targetAllowance = new anchor.BN(DIRECT_BURNER_ALLOWANCE);
+    const currentAllowanceManager = (psmCfgPre as any).allowanceManager as PublicKey;
+
+    if (currentAllowance && currentAllowance.eq(targetAllowance)) {
+      logger.info(`  direct_burner_allowance already ${targetAllowance.toString()} -- skipping`);
+    } else if (!currentAllowanceManager.equals(roleAdmin)) {
+      logger.warning(
+        `  allowanceManager is ${currentAllowanceManager.toBase58().slice(0, 12)}... (not the signer). ` +
+          `Skipping -- use set-direct-burner-allowance.ts with the allowanceManager wallet.`
+      );
+    } else if (dryRun) {
+      logger.info(
+        `  Would set direct_burner_allowance to ${targetAllowance.toString()} ` +
+          `(current: ${currentAllowance?.toString() ?? '0'})`
+      );
+    } else {
+      try {
+        const sig = await psmProgram.methods
+          .setDirectBurnerAllowance(targetAllowance)
+          .accountsPartial({
+            allowanceManager: roleAdmin,
+            config: psmConfig,
+          })
+          .rpc();
+        logger.success(
+          `  set_direct_burner_allowance(${targetAllowance.toString()}) -- tx: ${sig.slice(0, 20)}...`
+        );
+      } catch (e: any) {
+        const msg = e?.message?.slice(0, 80) ?? String(e);
+        logger.error(`  set_direct_burner_allowance failed: ${msg}`);
+      }
+    }
+  }
+
+  // ---- PSM roles (operational only -- see NatSpec header) ----
+  logger.section('lite-psm roles (operational)');
 
   // Fetch config once; re-fetch after mutations would be ideal but for
   // idempotency checking the initial snapshot is sufficient -- we only
-  // skip roles that already point to MASTER_PUBKEY, and the on-chain
+  // skip roles that already point to DELEGATE_PUBKEY, and the on-chain
   // set_authority is itself idempotent (re-setting to the same value
   // would succeed, though it wastes a tx).
   const psmCfg = await psmProgram.account.psmConfig.fetch(psmConfig);
@@ -212,9 +325,9 @@ async function main() {
   }
 
   // Separation-of-duties guard: new_authority must != role_admin
-  if (MASTER_PUBKEY.equals(psmRoleAdmin)) {
+  if (DELEGATE_PUBKEY.equals(psmRoleAdmin)) {
     throw new Error(
-      `Master pubkey equals PSM role_admin (${psmRoleAdmin.toBase58()}). ` +
+      `Delegate pubkey equals PSM role_admin (${psmRoleAdmin.toBase58()}). ` +
         `The contract rejects setting non-RoleAdmin roles to the role_admin pubkey ` +
         `(separation-of-duties guard).`
     );
@@ -222,7 +335,7 @@ async function main() {
 
   for (const role of PSM_ROLES) {
     const current = (psmCfg as any)[role] as PublicKey;
-    if (current && current.equals(MASTER_PUBKEY)) {
+    if (current && current.equals(DELEGATE_PUBKEY)) {
       logger.info(`  ${role.padEnd(20)} already`);
       results.push({ program: 'lite-psm', role, status: 'already' });
       continue;
@@ -237,7 +350,7 @@ async function main() {
     try {
       const roleEnum = { [role]: {} } as any;
       const sig = await psmProgram.methods
-        .setAuthority(roleEnum, MASTER_PUBKEY)
+        .setAuthority(roleEnum, DELEGATE_PUBKEY)
         .accountsPartial({
           roleAdmin,
           config: psmConfig,
@@ -252,9 +365,12 @@ async function main() {
     }
   }
 
-  // ---- Mint mock USDC to master EOA ----
+  // ---- Mint mock USDC to delegate EOA (opt-in via --mint-usdc) ----
   logger.section('Mock USDC mint');
 
+  if (!MINT_USDC) {
+    logger.info('Skipped (opt-in via --mint-usdc).');
+  } else {
   const usdcMintAddr = deployment.tokens?.usdc;
   if (!usdcMintAddr) {
     logger.warning('No USDC mint in deployment; skipping mock USDC mint.');
@@ -321,6 +437,7 @@ async function main() {
       logger.info(`Recipient USDC balance: ${Number(acct.amount) / 1_000_000} USDC`);
     }
   }
+  }
 
   // ---- Summary ----
   logger.section('Summary');
@@ -350,16 +467,19 @@ async function main() {
   logger.info(`Already:     ${already}`);
   if (wouldGrant) logger.info(`Would grant: ${wouldGrant} (dry-run)`);
   if (errors) logger.error(`Errors:      ${errors}`);
-  logger.info(`Skipped:     roleAdmin (two-step; handle separately)`);
+  logger.info(
+    `Retained (not touched): roleAdmin, ${RETAINED_GOVERNANCE_ROLES.join(', ')}`
+  );
 
   if (errors > 0) {
     throw new Error(`${errors} role grant(s) failed.`);
   }
 
   logger.success(
-    `All ${PSM_ROLES.length} roles ` +
+    `All ${PSM_ROLES.length} operational roles ` +
       (dryRun ? 'would be ' : '') +
-      `granted to ${MASTER_PUBKEY.toBase58()}`
+      `granted to ${DELEGATE_PUBKEY.toBase58()}. ` +
+      `Governance/safety roles remain with role_admin / the governance key.`
   );
 }
 

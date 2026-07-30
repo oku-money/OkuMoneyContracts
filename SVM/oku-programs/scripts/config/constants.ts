@@ -34,6 +34,14 @@ export const DEFAULT_DIRECT_MINTER = '5Miw5ZQ4vT8MBSFcp8vtwearNpZiXZVa43WrRZDpXb
 /** Direct-minter allowance (1M OkuM, 6 decimals). */
 export const DIRECT_MINTER_ALLOWANCE = 1_000_000 * 1_000_000; // 1,000,000 OkuM
 
+/**
+ * Direct-burner allowance (1M OkuM, 6 decimals).
+ * Mirrors `DIRECT_MINTER_ALLOWANCE` -- same cap, same rationale: bounds the
+ * blast radius of the permissioned `direct_burner` role between resets by
+ * `allowance_manager`.
+ */
+export const DIRECT_BURNER_ALLOWANCE = 1_000_000 * 1_000_000; // 1,000,000 OkuM
+
 // NOTE: Program IDs are NOT stored here. They are read at runtime from
 // deployments/{network}.json via scripts/utils/addressBook.ts::loadDeployment().
 // This is the single source of truth. Run `anchor keys list` or inspect

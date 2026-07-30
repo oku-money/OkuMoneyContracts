@@ -28,6 +28,12 @@ export interface AuthorityConfig {
      * `PublicKey.default` means "not configured / disabled".
      */
     directMinter: PublicKey;
+    /**
+     * Operator / bridge backend — can burn OkuMoney directly without USDC
+     * payout. Cannot be the same as roleAdmin (separation-of-duties guard).
+     * `PublicKey.default` means "not configured / disabled".
+     */
+    directBurner: PublicKey;
   };
 }
 
@@ -49,10 +55,12 @@ function allRolesToSingleKey(deployer: PublicKey): AuthorityConfig {
       capManager: deployer,
       allowanceManager: deployer,
       rebaser: deployer,
-      // directMinter cannot be the deployer because deployer == role_admin
-      // and the on-chain guard rejects non-RoleAdmin roles set to
-      // role_admin. Use the shared devnet master EOA instead.
+      // directMinter/directBurner cannot be the deployer because deployer ==
+      // role_admin and the on-chain guard rejects non-RoleAdmin roles set to
+      // role_admin. Use the shared devnet delegate EOA instead (the same
+      // key operates both direct-mint and direct-burn on devnet).
       directMinter: new PublicKey(DEFAULT_DIRECT_MINTER),
+      directBurner: new PublicKey(DEFAULT_DIRECT_MINTER),
     },
   };
 }
@@ -96,6 +104,7 @@ export function loadAuthorities(
   const orchestrator = getEnvPubkey('MAINNET_ORCHESTRATOR', true);
 
   const directMinter = getEnvPubkey('MAINNET_DIRECT_MINTER', false);
+  const directBurner = getEnvPubkey('MAINNET_DIRECT_BURNER', false);
 
   return {
     psm: {
@@ -110,6 +119,7 @@ export function loadAuthorities(
       allowanceManager: coldMultisig,
       rebaser: orchestrator,
       directMinter,
+      directBurner,
     },
   };
 }

@@ -423,6 +423,15 @@ The `BRIDGE_*`, `ROUTER_*`, and `NTT_*` roles defined in
 `EVM/src/lib/Roles.sol` are reserved for future re-introduction of
 OkuBridge / NTT / CCIP — not granted by v1 deploy scripts.
 
+**Devnet/testnet delegation.** The table above is the mainnet target
+model. On devnet/testnet it's common to delegate operational roles
+(`direct_minter`, `direct_burner`, `rebaser`, `buffer_depositor` on
+SVM) to a coworker- or CI-owned key while governance/safety roles
+and `role_admin` stay with the deployer/owner — see
+[`SVM/README.md § Delegated operation vs. retained ownership`](SVM/README.md)
+for the full rationale and the `grant-roles.ts --delegate=<pubkey>`
+tool that implements it.
+
 ### Signer trust implications
 
 okuMoney is a **centralized financial product**. Users trust Oku

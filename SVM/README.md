@@ -647,6 +647,37 @@ solana program set-upgrade-authority <LITE_PSM_PROGRAM> --new-upgrade-authority 
 - [ ] `Anchor.toml [programs.<network>]` matches the freshly-deployed program ID (`BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g`).
 - [ ] Token-2022 binary override applied if bankrun tests are part of CI (`make fetch-token-2022`).
 
+### Delegated operation vs. retained ownership (devnet/testnet)
+
+On mainnet, roles map to the Squads multisig tiers per the Authority
+model table above. On devnet/testnet it's common to delegate
+day-to-day operation of the app to a coworker or CI-owned key (the
+"delegate") while governance retains ownership. The rule of thumb:
+
+- **Operational roles** (safe to delegate to a third-party operating
+  key): `direct_minter`, `direct_burner`, `rebaser`, `buffer_depositor`.
+  These are bounded by allowances/caps and can't drain funds or
+  brick the protocol.
+- **Governance/safety roles** (must stay on a key you hold):
+  `pauser`, `unpauser`, `freezer`, `unfreezer`, `cap_manager`,
+  `allowance_manager`, `buffer_withdrawer`. `allowance_manager` in
+  particular sets the blast-radius cap (`direct_minter_allowance` /
+  `direct_burner_allowance`) on the delegate's own operational roles
+  — handing it to the same party being capped defeats the point.
+- **`role_admin`** never leaves the deployer/owner. It grants
+  unconditional claw-back of every other role via `set_authority`
+  (single tx, no coworker signature needed) and is the basis of
+  "ownership" independent of who currently holds an operational role.
+- **BPF upgrade authority** is a separate axis entirely (see
+  `admin:set-upgrade-authority`) and should also stay with the owner.
+
+`scripts/admin/grant-roles.ts` implements this split: it only grants
+the four operational roles to a `--delegate` pubkey and will never
+touch the governance/safety set or `role_admin` (see the NatSpec
+header in that file for full rationale, including an incident where
+an earlier version over-granted). Use `set-authority.ts` directly if
+you need to rotate an individual governance role.
+
 ### Orchestrator key
 
 In v1 (noBridge) the orchestrator holds a single Solana keypair that
@@ -693,10 +724,12 @@ All admin scripts live under `scripts/admin/`. Each:
 
 | Script | Wraps | Role gate |
 |---|---|---|
-| `admin:set-authority` | `set_authority` | `role_admin` |
+| `admin:set-authority` | `set_authority` (any single role, incl. `direct_minter`/`direct_burner`) | `role_admin` |
+| `admin:grant-roles` (`grant-roles.ts --delegate=<pubkey>`) | `set_authority` for the 4 *operational* roles only (`direct_minter`, `direct_burner`, `rebaser`, `buffer_depositor`) + resets their allowances | `role_admin` (roles) + `allowance_manager` (allowances, best-effort — see script header) |
 | `admin:pause-psm` / `admin:unpause-psm` | `pause` / `unpause` | `pauser` / `unpauser` |
 | `admin:set-max-supply` | `set_max_supply` | `cap_manager` |
 | `admin:set-minter-allowance` | `set_minter_allowance` | `allowance_manager` |
+| `set-direct-minter-allowance.ts` / `set-direct-burner-allowance.ts` | `set_direct_minter_allowance` / `set_direct_burner_allowance` | `allowance_manager` |
 | `admin:set-multiplier` | `set_multiplier` | `rebaser` (stamps yield-distribution slot) |
 | `admin:distribute-yield` | `distribute_yield` | `rebaser` |
 | `admin:freeze-account` / `admin:thaw-account` | `freeze_account` / `thaw_account` | `freezer` / `unfreezer` |

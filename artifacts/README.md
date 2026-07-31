@@ -86,12 +86,14 @@ See `/testnet-addresses.json` at the repo root for the addresses these ABIs / ID
 
 ```ts
 import OkuMoney from "okumoney-contracts/artifacts/evm/OkuMoney.json";
+import testnetAddresses from "okumoney-contracts/testnet-addresses.json";
 import { Contract, JsonRpcProvider } from "ethers";
 
-// bscTestnet / baseSepolia OkuMoney (see testnet-addresses.json for all chains)
-const provider = new JsonRpcProvider("https://data-seed-prebsc-1-s1.binance.org:8545/");
-const addr = "0xe548f960EbB46f9DC504e4107A552309796c863b";
-const okuMoney = new Contract(addr, OkuMoney.abi, provider);
+// Look up the current address per network from testnet-addresses.json
+// rather than hardcoding it here -- addresses change on redeploy.
+const { rpcUrl, contracts } = testnetAddresses.evm.baseSepolia;
+const provider = new JsonRpcProvider(rpcUrl);
+const okuMoney = new Contract(contracts.okuMoney, OkuMoney.abi, provider);
 ```
 
 ### TypeScript (@anchor-lang/core) — SVM

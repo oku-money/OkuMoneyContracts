@@ -17,49 +17,19 @@ removable post-launch.
 
 ## 🟡 Should-fix before external audit
 
-### Live EVM redeploy — testnets done, `base`/`bsc` mainnet-chainId mocks still pending `[EVM]`
+### Etherscan verification pending for v0.2 EVM addresses `[EVM]`
 
-**Root cause:** the last live EVM deploy predated the OracleRelay
-storage removal (`d8bee36`, 2026-07-29), which deleted
-`address __deprecated_oracleRelay` from `LitePSM.sol`'s storage
-struct (a **middle slot**, offset +4 — every later field shifts up)
-and from `RedemptionQueue.sol`'s struct (a **trailing slot**, offset
-+7). Every deployed `LitePSM` proxy would have the new implementation
-read `usdcDecimalMultiplier` from the slot still physically holding
-the old oracle-relay address — a genuine storage-corruption bug, not
-just a lint warning. Upgrade wasn't viable: `.openzeppelin/*.json`
-manifests were deleted in the same commit, and `forceImport` would
-re-baseline against the already-shifted layout rather than catch the
-real drift. `OkuMoney`/`OkuDollar` had zero storage drift.
-
-**Status: testnets redeployed live (2026-07-30).** Bumped
-`DEPLOYMENT_VERSION` `v0.1` → `v0.2`. Rehearsed on local forks of all
-6 target networks first (impersonating the real deployer wallet with
-its actual on-chain balance, no artificial funding), including a full
-`test-onchain.ts` lifecycle (mint/transfer/wrap/unwrap/redeem/queue
-drain/yield/pause/allowance-rotation) on the Sepolia fork — all
-green. Then executed the live redeploy
-(`FRESH_DEPLOY=true hh run scripts/deploy/index.ts --network <chain>`,
-`ETHERSCAN_API_KEY=""` to skip the slow verify step for this batch)
-against the 4 **testnets**: `sepolia`, `baseSepolia`, `arbSepolia`,
-`bscTestnet`. All 4 landed at identical deterministic addresses
-(same v0.2 salt + identical `MockUSDC`/init code) and had every role
-grant re-applied. Re-ran the live `test-onchain.ts` mint+wrap flow
-against the fresh Sepolia deploy to confirm on-chain correctness
-(not just simulated). `testnet-addresses.json` + `.openzeppelin/*`
-manifests updated/committed accordingly; old v0.1 testnet addresses
-were replaced.
-
-**Deliberately not yet done:** `base` and `bsc` — despite their
-mainnet chain IDs, both are still `MockUSDC`-wired test deploys
-(never a production launch), but redeploying to real mainnet
-infrastructure was intentionally deferred pending a separate
-go-ahead. Redeploy them the same way
-(`FRESH_DEPLOY=true hh run scripts/deploy/index.ts --network base`
-/ `bsc`) when ready. Etherscan verification was also skipped for
-this batch (`npm run verify` / `scripts/deploy/verify.ts` covers it
-separately) and should be run once `ETHERSCAN_API_KEY` verification
-is wanted for the new addresses.
+All 6 EVM networks (`sepolia`, `baseSepolia`, `arbSepolia`,
+`bscTestnet`, `base`, `bsc`) were redeployed 2026-07-30/31 to
+`DEPLOYMENT_VERSION = v0.2` (fixing a storage-layout break in
+`LitePSM`/`RedemptionQueue` left over from the OracleRelay removal —
+see git history around `d8bee36` and the `v0.2` bump for the full
+writeup). All 6 landed at identical deterministic addresses; roles
+configured; `testnet-addresses.json` + `.openzeppelin/*` manifests
+updated. Etherscan verification was skipped during the redeploy
+batch (`ETHERSCAN_API_KEY=""`, for speed). Run `npm run verify` /
+`scripts/deploy/verify.ts` per network to verify the new addresses
+on their respective explorers.
 
 ### Regenerate audit tool-output snapshots before handoff `[both]`
 

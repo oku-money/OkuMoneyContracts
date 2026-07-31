@@ -26,10 +26,15 @@ All 6 EVM networks (`sepolia`, `baseSepolia`, `arbSepolia`,
 see git history around `d8bee36` and the `v0.2` bump for the full
 writeup). All 6 landed at identical deterministic addresses; roles
 configured; `testnet-addresses.json` + `.openzeppelin/*` manifests
-updated. Etherscan verification was skipped during the redeploy
-batch (`ETHERSCAN_API_KEY=""`, for speed). Run `npm run verify` /
-`scripts/deploy/verify.ts` per network to verify the new addresses
-on their respective explorers.
+updated. `operator:grantRoles` was also run live against all 6
+networks (2026-07-31) — the dev/test master EOA
+`0x971A3e2b0031dE23715Fa1ce53843B5B045dae00` now holds every role
+(including `DEFAULT_ADMIN_ROLE`) on all four contracts across all 6
+chains, verified idempotent via a post-run `DRY_RUN=1` pass (30/30
+already-held on every chain). Etherscan verification was skipped
+during the redeploy batch (`ETHERSCAN_API_KEY=""`, for speed). Run
+`npm run verify` / `scripts/deploy/verify.ts` per network to verify
+the new addresses on their respective explorers.
 
 ### Regenerate audit tool-output snapshots before handoff `[both]`
 

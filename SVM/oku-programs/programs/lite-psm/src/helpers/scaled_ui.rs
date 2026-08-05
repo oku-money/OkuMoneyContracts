@@ -12,6 +12,26 @@ use anchor_spl::token_2022::spl_token_2022::extension::{
 use anchor_spl::token_2022::spl_token_2022::state::Mint as MintRaw;
 use oku_shared::{MAX_MULTIPLIER, PRECISION};
 
+// Compile-time invariant: the `u64 -> f64 -> u64` round trip performed by
+// `multiplier_f64_to_u64` is only exact because `MAX_MULTIPLIER` fits inside
+// an f64's 52-bit mantissa (2^52 represents all integers up to that bound
+// exactly). If `MAX_MULTIPLIER` is ever raised past this bound, `.round()`
+// in `multiplier_f64_to_u64` would start masking silent precision drift
+// instead of the exact identity it relies on today. This assertion fails
+// the build rather than the invariant failing silently at runtime.
+const _: () = assert!(MAX_MULTIPLIER < (1u64 << 52));
+
+/// Convert an effective `ScaledUiAmountConfig` multiplier (f64, where `1.0`
+/// = no yield) to a `PRECISION`-scaled `u64` for integer math.
+///
+/// Pure and side-effect-free so the `u64 -> f64 -> u64` round trip can be
+/// unit-tested directly (see `tests` module below) without needing a mint
+/// `AccountInfo`. Callers are responsible for the zero/overflow checks —
+/// see `read_multiplier`.
+fn multiplier_f64_to_u64(effective: f64) -> u64 {
+    (effective * PRECISION as f64).round() as u64
+}
+
 /// Read the current effective multiplier from the OkuM mint's
 /// `ScaledUiAmountConfig` extension and convert the f64 value to a
 /// PRECISION-scaled u64 for use in integer math.
@@ -81,7 +101,7 @@ pub fn read_multiplier(mint_account: &AccountInfo) -> Result<u64> {
 
     // Convert f64 to PRECISION-scaled u64.
     // A multiplier of 1.0 yields PRECISION (1_000_000_000).
-    let scaled = (effective * PRECISION as f64).round() as u64;
+    let scaled = multiplier_f64_to_u64(effective);
 
     // Guard: reject zero (NaN/negative f64 -> 0 via saturating cast)
     // and values above MAX_MULTIPLIER (infinity/corrupt f64 -> u64::MAX
@@ -91,4 +111,51 @@ pub fn read_multiplier(mint_account: &AccountInfo) -> Result<u64> {
     }
 
     Ok(scaled)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `u64 -> f64 -> u64` round trip must be the identity for every
+    /// multiplier value the protocol can produce (PRECISION..=MAX_MULTIPLIER
+    /// on the SVM side). This is the concrete check backing the compile-time
+    /// `MAX_MULTIPLIER < 2^52` assertion above: if this test ever fails,
+    /// either the assertion is wrong or `MAX_MULTIPLIER` has been raised
+    /// past the point where f64 can represent every integer in range.
+    fn round_trip(raw: u64) -> u64 {
+        let effective = raw as f64 / PRECISION as f64;
+        multiplier_f64_to_u64(effective)
+    }
+
+    #[test]
+    fn round_trip_identity_at_precision() {
+        // 1.0x multiplier (no yield) — the init-time default.
+        assert_eq!(round_trip(PRECISION), PRECISION);
+    }
+
+    #[test]
+    fn round_trip_identity_mid_range() {
+        // A representative mid-range value, e.g. ~1.05x.
+        let mid = PRECISION + PRECISION / 20;
+        assert_eq!(round_trip(mid), mid);
+    }
+
+    #[test]
+    fn round_trip_identity_at_max_multiplier() {
+        assert_eq!(round_trip(MAX_MULTIPLIER), MAX_MULTIPLIER);
+    }
+
+    #[test]
+    fn round_trip_identity_exhaustive_sample() {
+        // Sample densely across the full supported range (every integer is
+        // exactly representable below 2^52, well above MAX_MULTIPLIER, so
+        // this is expected to hold for all of them — sampling is just to
+        // keep the test fast rather than iterating every value).
+        let mut raw = 1u64;
+        while raw <= MAX_MULTIPLIER {
+            assert_eq!(round_trip(raw), raw, "round trip drifted at raw={raw}");
+            raw = raw.saturating_mul(7).saturating_add(1);
+        }
+    }
 }

@@ -15,14 +15,16 @@ import { Program, BN } from "@anchor-lang/core";
 import {
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
   unpackMint,
   MINT_SIZE,
 } from "@solana/spl-token";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import { expect } from "chai";
 import { LitePsm } from "../../target/types/lite_psm";
 import { startBankrun, BankrunHarness, createMintViaBankrun } from "../shared/bankrun";
-import { initializePsm, DECIMALS } from "../shared/setup";
+import { initializePsm, DECIMALS, MAX_SUPPLY, MINTER_ALLOWANCE } from "../shared/setup";
 
 const PRECISION = new BN(1_000_000_000);
 
@@ -76,5 +78,145 @@ describe("init invariants (OkuM mint extensions)", () => {
     // Verify PsmConfig references the correct OkuM mint
     const config = await program.account.psmConfig.fetch(configPda);
     expect(config.okuMMint.equals(okuMMint)).to.be.true;
+  });
+
+  describe("authority validation", () => {
+    // Base set of valid granular-authority params, matching
+    // `initializePsm` in shared/setup.ts. Each test below overrides
+    // exactly one field with an invalid value and expects `initialize`
+    // to revert with `InvalidAuthority` before any state is written.
+    function baseParams(warm: PublicKey, cold: PublicKey, orchestrator: PublicKey) {
+      return {
+        maxSupply: MAX_SUPPLY,
+        minterAllowance: MINTER_ALLOWANCE,
+        pauser: warm,
+        unpauser: cold,
+        freezer: warm,
+        unfreezer: cold,
+        bufferDepositor: orchestrator,
+        bufferWithdrawer: cold,
+        capManager: cold,
+        allowanceManager: cold,
+        rebaser: orchestrator,
+        okuMUri: "",
+      };
+    }
+
+    async function attemptInitialize(
+      params: ReturnType<typeof baseParams>
+    ): Promise<void> {
+      const usdcMint = await createMintViaBankrun(
+        h,
+        payer.publicKey,
+        null,
+        6,
+        Keypair.generate(),
+        TOKEN_PROGRAM_ID
+      );
+      const okuMMintKeypair = Keypair.generate();
+      const okuMMint = okuMMintKeypair.publicKey;
+      const [configPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("psm_config_v6")],
+        program.programId
+      );
+      const vaultUsdcAta = getAssociatedTokenAddressSync(
+        usdcMint,
+        configPda,
+        true,
+        TOKEN_PROGRAM_ID
+      );
+
+      await program.methods
+        .initialize(params)
+        .accountsPartial({
+          roleAdmin: payer.publicKey,
+          config: configPda,
+          usdcMint,
+          okuMMint,
+          vaultUsdc: vaultUsdcAta,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          token2022Program: TOKEN_2022_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([okuMMintKeypair])
+        .rpc();
+    }
+
+    it("rejects a zero-pubkey granular authority (pauser)", async () => {
+      // Fresh cluster per test — PsmConfig is a singleton PDA and
+      // initialize() can only run once per program deployment.
+      h = await startBankrun();
+      program = h.program;
+      payer = h.payer;
+
+      const warm = Keypair.generate().publicKey;
+      const cold = Keypair.generate().publicKey;
+      const orchestrator = Keypair.generate().publicKey;
+      const params = baseParams(warm, cold, orchestrator);
+      params.pauser = PublicKey.default;
+
+      try {
+        await attemptInitialize(params);
+        expect.fail("Should have rejected zero-pubkey pauser");
+      } catch (err: any) {
+        expect(err?.error?.errorCode?.code).to.equal("InvalidAuthority");
+      }
+    });
+
+    it("rejects a zero-pubkey granular authority (rebaser)", async () => {
+      h = await startBankrun();
+      program = h.program;
+      payer = h.payer;
+
+      const warm = Keypair.generate().publicKey;
+      const cold = Keypair.generate().publicKey;
+      const orchestrator = Keypair.generate().publicKey;
+      const params = baseParams(warm, cold, orchestrator);
+      params.rebaser = PublicKey.default;
+
+      try {
+        await attemptInitialize(params);
+        expect.fail("Should have rejected zero-pubkey rebaser");
+      } catch (err: any) {
+        expect(err?.error?.errorCode?.code).to.equal("InvalidAuthority");
+      }
+    });
+
+    it("rejects a granular authority collapsed into role_admin", async () => {
+      h = await startBankrun();
+      program = h.program;
+      payer = h.payer;
+
+      const warm = Keypair.generate().publicKey;
+      const cold = Keypair.generate().publicKey;
+      const orchestrator = Keypair.generate().publicKey;
+      const params = baseParams(warm, cold, orchestrator);
+      // roleAdmin in attemptInitialize is `payer.publicKey` — collapse
+      // `bufferWithdrawer` into it to exercise the separation-of-duties
+      // guard (mirrors `set_authority`'s equivalent check).
+      params.bufferWithdrawer = payer.publicKey;
+
+      try {
+        await attemptInitialize(params);
+        expect.fail("Should have rejected authority collapsed into role_admin");
+      } catch (err: any) {
+        expect(err?.error?.errorCode?.code).to.equal("InvalidAuthority");
+      }
+    });
+
+    it("accepts fully valid, distinct granular authorities (control case)", async () => {
+      h = await startBankrun();
+      program = h.program;
+      payer = h.payer;
+
+      const warm = Keypair.generate().publicKey;
+      const cold = Keypair.generate().publicKey;
+      const orchestrator = Keypair.generate().publicKey;
+      const params = baseParams(warm, cold, orchestrator);
+
+      // Should not throw.
+      await attemptInitialize(params);
+    });
   });
 });

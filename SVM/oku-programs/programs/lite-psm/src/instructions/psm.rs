@@ -231,7 +231,17 @@ pub fn redeem_oku_m(
 }
 
 /// Deposit USDC buffer (buffer_depositor role)
+///
+/// Yield-locked and pause-gated for symmetry with every other value-moving
+/// instruction (`mint_oku_m`, `redeem_oku_m`, `withdraw_buffer`,
+/// `mint_oku_m_direct`, `burn_oku_m_direct`). A deposit only grows the
+/// buffer so it was previously unguarded on the theory that it is
+/// monotonic-favorable to the protocol — but leaving it un-gated was an
+/// undocumented asymmetry an auditor would flag, so both guards were added
+/// for uniformity rather than because a concrete exploit was found.
 pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
+    check_yield_lock(&ctx.accounts.config)?;
+    require!(!ctx.accounts.config.is_paused, LitePsmError::Paused);
     require!(amount > 0, LitePsmError::ZeroAmount);
 
     anchor_spl::token::transfer(

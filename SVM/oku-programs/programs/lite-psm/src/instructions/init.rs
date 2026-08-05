@@ -198,13 +198,46 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     )?;
 
     // ---------------------------------------------------------------
-    // 2. Populate PsmConfig fields.
+    // 2. Validate + populate PsmConfig fields.
     // ---------------------------------------------------------------
+    let role_admin_key = ctx.accounts.role_admin.key();
+
+    // Validate the 9 granular authorities before writing any of them.
+    // Mirrors `set_authority`'s two guards (`psm_admin.rs`):
+    //   1. Reject the zero pubkey — a deploy-script typo/omission must
+    //      not silently seat a role at `Pubkey::default()`, which would
+    //      make that role permanently unusable (e.g. a zero `freezer`
+    //      quietly removes an incident-response lever with no on-chain
+    //      signal, since `has_one` constraints simply never match).
+    //   2. Reject collapsing a granular authority into `role_admin` —
+    //      the cold-multisig meta-role must stay separate from the warm
+    //      operational roles, same separation-of-duties rationale as
+    //      `set_authority` (`psm_admin.rs:221-224`). `role_admin` itself
+    //      is exempt (it is a `Signer` account, inherently non-default).
+    let granular_authorities = [
+        params.pauser,
+        params.unpauser,
+        params.freezer,
+        params.unfreezer,
+        params.buffer_depositor,
+        params.buffer_withdrawer,
+        params.cap_manager,
+        params.allowance_manager,
+        params.rebaser,
+    ];
+    for authority in granular_authorities {
+        require!(
+            authority != Pubkey::default(),
+            LitePsmError::InvalidAuthority
+        );
+        require!(authority != role_admin_key, LitePsmError::InvalidAuthority);
+    }
+
     let config = &mut ctx.accounts.config;
     config.bump = bump;
 
     // Set all granular authorities from the params struct.
-    config.role_admin = ctx.accounts.role_admin.key();
+    config.role_admin = role_admin_key;
     config.pauser = params.pauser;
     config.unpauser = params.unpauser;
     config.freezer = params.freezer;

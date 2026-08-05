@@ -17,24 +17,43 @@ removable post-launch.
 
 ## 🟡 Should-fix before external audit
 
-### Etherscan verification pending for v0.2 EVM addresses `[EVM]`
+### SVM program upgrade not yet deployed for the M-1/M-2/L-3 fixes `[SVM]`
 
-All 6 EVM networks (`sepolia`, `baseSepolia`, `arbSepolia`,
-`bscTestnet`, `base`, `bsc`) were redeployed 2026-07-30/31 to
-`DEPLOYMENT_VERSION = v0.2` (fixing a storage-layout break in
-`LitePSM`/`RedemptionQueue` left over from the OracleRelay removal —
-see git history around `d8bee36` and the `v0.2` bump for the full
-writeup). All 6 landed at identical deterministic addresses; roles
-configured; `testnet-addresses.json` + `.openzeppelin/*` manifests
-updated. `operator:grantRoles` was also run live against all 6
-networks (2026-07-31) — the dev/test master EOA
-`0x971A3e2b0031dE23715Fa1ce53843B5B045dae00` now holds every role
-(including `DEFAULT_ADMIN_ROLE`) on all four contracts across all 6
-chains, verified idempotent via a post-run `DRY_RUN=1` pass (30/30
-already-held on every chain). Etherscan verification was skipped
-during the redeploy batch (`ETHERSCAN_API_KEY=""`, for speed). Run
-`npm run verify` / `scripts/deploy/verify.ts` per network to verify
-the new addresses on their respective explorers.
+2026-08-05: the source fixes for three previously-tracked findings
+(M-1, M-2, L-3 from the pre-audit review pass) were implemented,
+tested, and merged, but **the SVM program has not been redeployed**
+to any cluster (devnet or mainnet-beta) — this pass was scoped to
+code + tests only:
+
+- **`initialize` zero-pubkey / role_admin-collapse validation**
+  (`instructions/init.rs`) — the 9 granular authorities are now
+  validated against `Pubkey::default()` and against collapsing into
+  `role_admin`, mirroring `set_authority`'s existing guards. Tests:
+  `tests/bankrun/init-invariants.ts` § "authority validation" (4 new
+  cases).
+- **`deposit_buffer` yield-lock + pause guard**
+  (`instructions/psm.rs`) — now calls `check_yield_lock` and rejects
+  while paused, for symmetry with every other value-moving
+  instruction. Tests: `tests/bankrun/lite-psm.ts` § "orchestrator role
+  separation" (2 new cases, incl. an isolated-harness same-slot
+  check).
+- **f64 multiplier round-trip made explicit**
+  (`helpers/scaled_ui.rs`) — the `u64 -> f64 -> u64` cast is now a
+  pure `multiplier_f64_to_u64` helper backed by a compile-time
+  `MAX_MULTIPLIER < 2^52` assertion and 4 Rust unit tests proving the
+  round-trip identity across the full supported range.
+
+Verified: `cargo build`/`cargo test --workspace` (20 tests, incl. the
+new ones) and `anchor build` + the full bankrun suite (91 tests, incl.
+the 6 new cases) all green with no regressions; `cargo fmt`/`clippy`
+clean on the changed lines.
+
+**Follow-up required before this can be closed:** deploy the rebuilt
+program to devnet, re-verify with the bankrun/devnet suites, then to
+mainnet-beta following the same testnet-then-mainnet posture used for
+the EVM redeploy. The SVM audit-snapshot regen (next item) must run
+**after** that upgrade, not before, or the snapshot captures stale
+bytecode.
 
 ### Regenerate audit tool-output snapshots before handoff `[both]`
 
@@ -45,7 +64,8 @@ they go stale on every commit. Each audit README documents the exact
 commands to regenerate them. Run all of them fresh immediately before
 handing either package to an external auditor; do not commit the
 output back into git (keep them local/attached-to-the-audit-request
-only).
+only). **SVM:** wait for the program-upgrade follow-up above to land
+first.
 
 ### `cargo dylint` (crytic/solana-lints) — upstream-blocked `[SVM]`
 
@@ -108,6 +128,42 @@ Forked EVM (anvil) + bankrun SVM + actual orchestrator process
 between them. Better suited as nightly CI than per-PR.
 
 **Effort:** 2–3 weeks.
+
+### Audit-attention surfaces flagged in final pre-review pass `[both]`
+
+Informational only — no functional issue, just where reviewer time
+will concentrate and where small refactors would reduce copy-paste
+risk:
+
+- **SVM manual Token-2022 mint construction in `initialize`**
+  (`init.rs:103-198`) is the highest-complexity code in the crate:
+  extension-length math, a two-step `CreateAccount`, and four raw
+  `invoke`/`invoke_signed` calls. Correct and well-commented as
+  written; flagged for focused audit attention rather than as a
+  defect. Related nit: the "OkuDollar"/"usdOku" brand strings are
+  duplicated as literals in both the `TokenMetadata` struct
+  (`init.rs:78-79`) and the metadata-init CPI (`init.rs:189-190`) —
+  a single source-of-truth constant would remove the risk of the two
+  drifting apart on a rename.
+- **SVM repeated inline PDA-signer construction.** The
+  `let seeds = &[PsmConfig::SEED, &[bump]]; let signer = &[&seeds[..]];`
+  pattern is copy-pasted across ~6 handlers (`psm.rs:84,201,279`;
+  `psm_admin.rs:137,164`; `direct_mint.rs:67`; `init.rs:179`;
+  `yield_ops.rs:45`). A `config.signer_seeds()` helper would cut the
+  duplication and the chance of a bump mismatch on a future edit.
+- **SVM overloaded error variants.** `OutputBelowMinimum` covers both
+  the zero-output guard (`psm.rs:163`) and the slippage check
+  (`psm.rs:166`) — two semantically distinct failures collapsed into
+  one error. `MultiplierReadFailed` (`errors.rs:110-112`) similarly
+  covers unpack failure, missing extension, and out-of-range value.
+  Splitting would aid debugging; low priority given the
+  centralized-trust model.
+- **EVM `LitePSM._redeemOkuMShared`** (`LitePSM.sol:257-316`) is the
+  densest control flow in the EVM suite — a single function serving
+  4 call shapes via a `bool okuMAtPsm` flag that toggles both the
+  token-pull and the event emission. Logic is correct and commented;
+  flagged as where auditor review time will concentrate, not as a
+  defect.
 
 ### Operator CLI gaps `[both]`
 

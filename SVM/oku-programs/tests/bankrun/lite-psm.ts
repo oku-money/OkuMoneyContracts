@@ -30,6 +30,8 @@ import {
   mintToViaBankrun,
   ensureAtaViaBankrun,
   readMultiplierFromMint,
+  warpSlots,
+  expectBankrunError,
 } from "../shared/bankrun";
 // Use anchor's web3 to avoid version conflicts
 const { Keypair, SystemProgram, PublicKey } = anchor.web3;
@@ -552,6 +554,145 @@ describe("lite-psm", () => {
         } catch (err: any) {
           expect(err.error.errorCode.code).to.equal("Unauthorized");
         }
+      });
+
+      it("deposit_buffer fails when paused", async () => {
+        await program.methods
+          .pause()
+          .accountsPartial({
+            pauser: warmMultisig.publicKey,
+            config: configPda,
+          })
+          .signers([warmMultisig])
+          .rpc();
+
+        try {
+          await program.methods
+            .depositBuffer(new BN(1_000_000))
+            .accountsPartial({
+              bufferDepositor: orchestrator.publicKey,
+              config: configPda,
+              bufferDepositorUsdcAta: orchestratorUsdcAta,
+              vaultUsdc: vaultUsdcAta,
+              usdcMint: usdcMint,
+              tokenProgram: TOKEN_PROGRAM_ID,
+            })
+            .signers([orchestrator])
+            .rpc();
+          expect.fail("Should have failed while paused");
+        } catch (err: any) {
+          const errorCode = err?.error?.errorCode?.code || err?.message;
+          expect(errorCode).to.satisfy((code: string) =>
+            code === "Paused" || code.includes("Paused")
+          );
+        }
+
+        // Unpause for subsequent tests.
+        await program.methods
+          .unpause()
+          .accountsPartial({
+            unpauser: coldMultisig.publicKey,
+            config: configPda,
+          })
+          .signers([coldMultisig])
+          .rpc();
+      });
+
+      it("deposit_buffer fails in the same slot as a yield distribution", async () => {
+        // Isolated bankrun harness: `setMultiplier` only ever increases the
+        // multiplier, and it's shared module-level state (this describe
+        // block's `program`/`configPda`/`okuMMint` are reused by later
+        // tests in this file — e.g. "rebaser can set okuM multiplier" —
+        // that assume the multiplier is still near PRECISION). Running
+        // this check against a throwaway harness avoids bumping the
+        // shared multiplier and breaking those later assertions.
+        //
+        // `autoBumpSlot: false` — the default harness advances the slot
+        // by 1 before every `.rpc()` (see `startBankrun` doc comment),
+        // which would make the two calls below land in different slots
+        // and defeat the same-slot assertion. Mirrors the override used
+        // by `rate-over-time.ts`'s own same-slot test.
+        const h2 = await startBankrun({ autoBumpSlot: false });
+        const program2 = h2.program;
+        const payer2 = h2.payer;
+        const usdcMint2 = await createMintViaBankrun(
+          h2,
+          payer2.publicKey,
+          null,
+          6,
+          Keypair.generate(),
+          TOKEN_PROGRAM_ID
+        );
+        await warpSlots(h2, 1);
+
+        const { configPda: configPda2, okuMMint: okuMMint2, vaultUsdcAta: vaultUsdcAta2 } =
+          await initializePsm(h2, program2, payer2, usdcMint2);
+        await warpSlots(h2, 1);
+
+        const orchestratorUsdcAta2 = getAssociatedTokenAddressSync(
+          usdcMint2,
+          orchestrator.publicKey,
+          false,
+          TOKEN_PROGRAM_ID
+        );
+        await ensureAtaViaBankrun(h2, orchestrator.publicKey, usdcMint2, TOKEN_PROGRAM_ID);
+        await warpSlots(h2, 1);
+        await mintToViaBankrun(
+          h2,
+          usdcMint2,
+          orchestratorUsdcAta2,
+          payer2,
+          10_000_000,
+          TOKEN_PROGRAM_ID
+        );
+        await warpSlots(h2, 1);
+
+        // Stamp the yield-lock slot via set_multiplier.
+        const m0 = await readMultiplierFromMint(h2, okuMMint2);
+        const m1 = m0.add(m0.div(new BN(100))); // +1%
+        await program2.methods
+          .setMultiplier(m1)
+          .accountsPartial({
+            rebaser: orchestrator.publicKey,
+            config: configPda2,
+            okuMMint: okuMMint2,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+          })
+          .signers([orchestrator])
+          .rpc();
+
+        // SAME SLOT deposit_buffer -> must revert with YieldDistributionInProgress.
+        await expectBankrunError(
+          () =>
+            program2.methods
+              .depositBuffer(new BN(1_000_000))
+              .accountsPartial({
+                bufferDepositor: orchestrator.publicKey,
+                config: configPda2,
+                bufferDepositorUsdcAta: orchestratorUsdcAta2,
+                vaultUsdc: vaultUsdcAta2,
+                usdcMint: usdcMint2,
+                tokenProgram: TOKEN_PROGRAM_ID,
+              })
+              .signers([orchestrator])
+              .rpc(),
+          "YieldDistributionInProgress"
+        );
+
+        // Advance one slot — lock releases — deposit succeeds.
+        await warpSlots(h2, 1);
+        await program2.methods
+          .depositBuffer(new BN(1_000_000))
+          .accountsPartial({
+            bufferDepositor: orchestrator.publicKey,
+            config: configPda2,
+            bufferDepositorUsdcAta: orchestratorUsdcAta2,
+            vaultUsdc: vaultUsdcAta2,
+            usdcMint: usdcMint2,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([orchestrator])
+          .rpc();
       });
 
       it("buffer_withdrawer can withdraw buffer", async () => {

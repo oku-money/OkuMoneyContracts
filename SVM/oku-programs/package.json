@@ -18,6 +18,8 @@
     "test:onchain:fork": "NETWORK=devnet-fork tsx scripts/test/test-devnet.ts",
     "bridge:svm-evm": "tsx scripts/test/bridge-svm-evm.ts",
     "admin:set-authority": "tsx scripts/admin/set-authority.ts",
+    "admin:update-metadata": "tsx scripts/admin/update-metadata.ts",
+    "admin:update-metadata:devnet": "NETWORK=devnet tsx scripts/admin/update-metadata.ts",
     "admin:set-upgrade-authority": "tsx scripts/admin/set-upgrade-authority.ts",
     "admin:pause-psm": "tsx scripts/admin/pause-psm.ts",
     "admin:unpause-psm": "tsx scripts/admin/unpause-psm.ts",

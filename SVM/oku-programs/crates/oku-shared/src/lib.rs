@@ -21,7 +21,7 @@
 //!    error type.
 //! 3. **No state, no I/O.** Just constants and pure functions.
 
-// F-17: Zero unsafe code in this crate (confirmed by cargo-geiger).
+// No unsafe code anywhere in this crate.
 #![forbid(unsafe_code)]
 
 pub mod constants;

@@ -1619,10 +1619,11 @@ contract LitePSMTest is BaseTest {
     // ============ _redeemOkuMShared(okuMAtPsm=true) Branch Tests ============
     //
     // The `okuMAtPsm=true` branch of `_redeemOkuMShared` is reached only via
-    // `_redeemOkuMFromSelf`, which is called by `_redeemUsdOku`. The branch
-    // SUPPRESSES the `OkuMRedeemed` event (the user-facing event is
-    // `UsdOkuRedeemed`, emitted by the caller). It also skips the OkuM
-    // safeTransferFrom (the OkuM already sits in this contract after `unwrap`).
+    // `_redeemUsdOku`, which calls it directly after `okuDollar.unwrap()`
+    // deposits the OkuM here. The branch SUPPRESSES the `OkuMRedeemed` event
+    // (the user-facing event is `UsdOkuRedeemed`, emitted by the caller). It
+    // also skips the OkuM safeTransferFrom (the OkuM already sits in this
+    // contract after `unwrap`).
     //
     // Two paths must be covered:
     //   1) Instant payout (buffer >= usdcAmount): OkuM burned, USDC sent, no OkuMRedeemed.

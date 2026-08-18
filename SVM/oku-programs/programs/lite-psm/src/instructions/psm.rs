@@ -4,6 +4,7 @@
 //! `DssLitePsm`: deposit USDC → mint at peg, redeem from buffer when liquid.
 //! Taken from https://github.com/makerdao/dss-lite-psm/blob/master/src/DssLitePsm.sol
 
+use crate::constants::TOKEN_DECIMALS;
 use crate::contexts::{DepositBuffer, MintOkuM, RedeemOkuM, WithdrawBuffer};
 use crate::errors::LitePsmError;
 use crate::events::*;
@@ -67,21 +68,26 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
         .checked_sub(raw_oku_m_amount)
         .ok_or(LitePsmError::Overflow)?;
 
-    // Transfer USDC from user to vault (standard SPL)
-    anchor_spl::token::transfer(
+    // Transfer USDC from user to vault. `transfer_checked` validates the mint
+    // and decimals on-chain so a wrong-mint or wrong-decimals account cannot be
+    // substituted for the USDC leg.
+    anchor_spl::token::transfer_checked(
         CpiContext::new(
             ctx.accounts.token_program.key(),
-            anchor_spl::token::Transfer {
+            anchor_spl::token::TransferChecked {
                 from: ctx.accounts.user_usdc_ata.to_account_info(),
+                mint: ctx.accounts.usdc_mint.to_account_info(),
                 to: ctx.accounts.vault_usdc.to_account_info(),
                 authority: ctx.accounts.user.to_account_info(),
             },
         ),
         usdc_amount,
+        TOKEN_DECIMALS,
     )?;
 
     // Mint OkuM to user (Token-2022)
-    let seeds = &[PsmConfig::SEED, &[bump]];
+    let bump = [bump];
+    let seeds = PsmConfig::signer_seeds(&bump);
     let signer = &[&seeds[..]];
 
     // Capture user key before borrows
@@ -103,9 +109,8 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     // Calculate dollar value for event
     let dollar_value = raw_to_dollars(raw_oku_m_amount, multiplier)?;
 
-    // Cycle 4 (PSM-23): emit post-mint supply for indexer reconciliation.
-    // `reload()` refreshes the mint account's `supply` field after the
-    // mint_to CPI; without it we'd read the pre-mint cached value.
+    // Reload the mint's `supply` field after the mint_to CPI so the event
+    // reports the post-mint total (the cached value is pre-mint).
     ctx.accounts.oku_m_mint.reload()?;
     let new_total_supply = ctx.accounts.oku_m_mint.supply;
 
@@ -159,14 +164,11 @@ pub fn redeem_oku_m(
     // Calculate USDC amount (multiplier-aware): treat dollar value as USDC.
     let usdc_amount = raw_to_dollars(raw_oku_m_amount, multiplier)?;
 
-    // Reject zero-output redeems
-    require!(usdc_amount > 0, LitePsmError::OutputBelowMinimum);
+    // Reject zero-output redeems.
+    require!(usdc_amount > 0, LitePsmError::ZeroOutput);
 
-    // Slippage protection: reject if output is below user's minimum
-    require!(
-        usdc_amount >= min_usdc_out,
-        LitePsmError::OutputBelowMinimum
-    );
+    // Slippage protection: reject if output is below the caller's minimum.
+    require!(usdc_amount >= min_usdc_out, LitePsmError::SlippageExceeded);
 
     // Pre-check user balance to surface a custom error instead of the
     // opaque SPL insufficient-balance error.
@@ -198,20 +200,23 @@ pub fn redeem_oku_m(
     )?;
 
     // Transfer USDC to user
-    let seeds = &[PsmConfig::SEED, &[bump]];
+    let bump = [bump];
+    let seeds = PsmConfig::signer_seeds(&bump);
     let signer = &[&seeds[..]];
 
-    anchor_spl::token::transfer(
+    anchor_spl::token::transfer_checked(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.key(),
-            anchor_spl::token::Transfer {
+            anchor_spl::token::TransferChecked {
                 from: ctx.accounts.vault_usdc.to_account_info(),
+                mint: ctx.accounts.usdc_mint.to_account_info(),
                 to: ctx.accounts.user_usdc_ata.to_account_info(),
                 authority: ctx.accounts.config.to_account_info(),
             },
             signer,
         ),
         usdc_amount,
+        TOKEN_DECIMALS,
     )?;
 
     // Emit post-burn supply for indexer reconciliation.
@@ -244,16 +249,18 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
     require!(!ctx.accounts.config.is_paused, LitePsmError::Paused);
     require!(amount > 0, LitePsmError::ZeroAmount);
 
-    anchor_spl::token::transfer(
+    anchor_spl::token::transfer_checked(
         CpiContext::new(
             ctx.accounts.token_program.key(),
-            anchor_spl::token::Transfer {
+            anchor_spl::token::TransferChecked {
                 from: ctx.accounts.buffer_depositor_usdc_ata.to_account_info(),
+                mint: ctx.accounts.usdc_mint.to_account_info(),
                 to: ctx.accounts.vault_usdc.to_account_info(),
                 authority: ctx.accounts.buffer_depositor.to_account_info(),
             },
         ),
         amount,
+        TOKEN_DECIMALS,
     )?;
 
     // Reload vault balance after transfer
@@ -285,21 +292,23 @@ pub fn withdraw_buffer(ctx: Context<WithdrawBuffer>, amount: u64) -> Result<()> 
     let vault_balance = ctx.accounts.vault_usdc.amount;
     require!(vault_balance >= amount, LitePsmError::InsufficientBuffer);
 
-    let bump = ctx.accounts.config.bump;
-    let seeds = &[PsmConfig::SEED, &[bump]];
+    let bump = [ctx.accounts.config.bump];
+    let seeds = PsmConfig::signer_seeds(&bump);
     let signer = &[&seeds[..]];
 
-    anchor_spl::token::transfer(
+    anchor_spl::token::transfer_checked(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.key(),
-            anchor_spl::token::Transfer {
+            anchor_spl::token::TransferChecked {
                 from: ctx.accounts.vault_usdc.to_account_info(),
+                mint: ctx.accounts.usdc_mint.to_account_info(),
                 to: ctx.accounts.withdrawer_usdc_ata.to_account_info(),
                 authority: ctx.accounts.config.to_account_info(),
             },
             signer,
         ),
         amount,
+        TOKEN_DECIMALS,
     )?;
 
     // Reload vault balance after transfer

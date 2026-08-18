@@ -5,9 +5,9 @@
 //! distribution. SVM port of the EVM-side
 //! `YieldSandwichGuard` (`EVM/src/lib/YieldSandwichGuard.sol`).
 //!
-//! Cycle 4 (OKUD-20): the slot comparison itself lives in
-//! `oku_shared::yield_lock_engaged`. This module is now just the
-//! Anchor-error mapping plus the `Clock::get()` sysvar read.
+//! The slot comparison itself lives in `oku_shared::yield_lock_engaged`;
+//! this module is the Anchor-error mapping plus the `Clock::get()` sysvar
+//! read.
 
 use crate::errors::LitePsmError;
 use crate::state::PsmConfig;

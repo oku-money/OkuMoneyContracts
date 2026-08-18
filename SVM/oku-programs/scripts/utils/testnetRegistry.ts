@@ -18,8 +18,7 @@ import type { DeploymentAddresses } from './addressBook';
 const REGISTRY_PATH = path.resolve(__dirname, '../../../../testnet-addresses.json');
 
 export interface SvmNetworkEntry {
-  // chainId was dropped in the noBridge refactor — SVM has no EIP-155-style
-  // chain ID and v1 carries no on-chain chain-ID state.
+  // SVM has no EIP-155-style chain ID and carries no on-chain chain-ID state.
   rpcUrl?: string;
   explorer?: string;
   programs: Record<string, string | undefined>;
@@ -56,10 +55,8 @@ function writeRegistry(registry: TestnetRegistry): void {
   fs.writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2) + '\n', 'utf8');
 }
 
-// RPC URLs are kept here because they're a registry-only concern and
-// not part of the on-chain config. Chain IDs were dropped in the
-// noBridge refactor — v1 has no on-chain chain-ID state to keep in
-// sync.
+// RPC URLs are kept here because they're a registry-only concern and not
+// part of the on-chain config. There is no on-chain chain-ID state.
 const SVM_CLUSTER_RPC: Record<string, string> = {
   'mainnet-beta': 'https://api.mainnet-beta.solana.com',
   devnet: 'https://api.devnet.solana.com',

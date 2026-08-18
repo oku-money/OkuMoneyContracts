@@ -150,9 +150,8 @@ export async function initializePsm(
   }
 
   // Setup OkuM escrow vault (ATA owned by config PDA).
-  // Created via the standard ATA program (idempotent instruction).
-  // The `setup_oku_m_escrow` on-chain instruction was removed with the
-  // redemption queue; this is now a client-side ATA creation.
+  // Created client-side via the standard ATA program (idempotent); there is
+  // no on-chain escrow-setup instruction.
   const vaultOkuM = getAssociatedTokenAddressSync(okuMMint, psmConfig, true, TOKEN_2022_PROGRAM_ID);
   logger.info('Setting up OkuM escrow vault...');
 

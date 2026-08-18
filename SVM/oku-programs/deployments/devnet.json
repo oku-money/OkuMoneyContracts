@@ -4,45 +4,6 @@
   "programs": {
     "litePsm": "BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g"
   },
-  "_archived_pre_v3_seed_rotation": {
-    "note": "These accounts were created under the v2 PDA seeds (psm_config_v2, redemption_queue_v2, oku_dollar_config_v2, usd_oku_mint_v2) and old program IDs (3CLDWjDT..., 3TeNwAqQ...). After the 2026-06-24 program-close + redeploy with fresh program IDs and psm_config_v3 seed, all of them are orphaned. Old program data accounts were closed and ~8.48 SOL recovered.",
-    "archivedAt": "2026-06-24T00:00:00.000Z",
-    "closedProgramIds": {
-      "litePsm": "3CLDWjDTtvWcRr1iNS9SRtDvqXgEZLm6hq1P6426YC7N",
-      "okuDollarProgram": "3TeNwAqQxxGZwF7LSveLcVEKZ5tuXNKSvfMj6nz3PJgy"
-    },
-    "tokens": {
-      "usdc": "GeeZQMVYtVzur6QVztAA4u4gKrpPhfiLEYDsmq6kFTNb",
-      "okuMoney": "HqXYE37285yeYppyaUiBXqfdK7q9SfhyNjPo3Utmucmi",
-      "usdOku": "5WcYgoCmo4cCWcmbE3DhdkhTWErv8JJM5ExMqXatG8Nn"
-    },
-    "pdas": {
-      "psmConfig": "2A8FojJFHVycFDBhpndoiFjdbwRBac7gNDLRt9Syzm1f",
-      "redemptionQueue": "CGqUfzhP94cgv2P53gKq2cbhiabsCzVxDzj4wYFAHMq9",
-      "vaultConfig": "5z9cQQfz9rVYudd7dRHPvfLxovWLfC4JXcU9UvdbyMuj",
-      "psmVaultUsdc": "DYZkQqW5UAnjMVo4irv8x1Ad3XPVjXDaWiFXax2RjefT",
-      "psmOkuMoneyEscrow": "AZfzJ1ZFuPUZVmLDkHoNrZFfTMfWCkR9hqMa1h8o3LFs",
-      "vaultOkuMoney": "GrMqGraDogyU1QNrZm1sUXDd36TuhbCnQaemxTXGyGe4"
-    },
-    "rentRecovered": "~8.48 SOL from program data accounts"
-  },
-  "_archived_pre_v2_seed_rotation": {
-    "note": "These accounts were created under the old (pre-noBridge) PDA seeds (psm_config, redemption_queue, oku_dollar_config, usd_oku_mint). After the 2026-06-05 seed rotation to *_v2, all of them are orphaned. See SVM/README.md § 'PDA seed history' for the orphan-PDA inventory and future rent-recovery plan. Kept here for audit history; the program IDs above are reused with fresh PDAs/mints created by the next deploy:init run.",
-    "archivedAt": "2026-06-05T15:30:00.000Z",
-    "tokens": {
-      "usdc": "AGwA2n1bgTt969wSbhnoyjVsDENaCoyR1W46uEf7LFQA",
-      "okuMoney": "8F7oEy9dhanAyHDDCTcnoexiNGW8BH9AhiFJwU5DeEQY",
-      "usdOku": "C4D88J3d5pTtLcJeWEHkRb7pxngBsM9v8R48oRM2N1bF"
-    },
-    "pdas": {
-      "psmConfig": "EkCYunihwmNasBEnNXoJx8sb3CdZnDYKLpPvLyY6Hm3u",
-      "redemptionQueue": "5FWTuuF67sUNca3w8cqHta4Q5xF6jAiFhGYunuFrSUBz",
-      "vaultConfig": "93tqPwYQfFtmuU5SxL4xuzi3PMbjZWKmuiHt2FBe8qaK",
-      "psmVaultUsdc": "HrnfYJM4a3QprfmUCpzXg2L94CF2ym8GooqquqSsmVT2",
-      "psmOkuMoneyEscrow": "7HrzaCMWzjQ3HGa5fhQP2NFTaxsaTJGeKvLWd46HURxP",
-      "vaultOkuMoney": "4e9a8SNTc1sWke5F4r2AkRWtq1miV52KanGxncJYLk6i"
-    }
-  },
   "upgrades": [
     {
       "program": "LitePsm",
@@ -171,26 +132,9 @@
       "timestamp": "2026-06-05T14:55:00.000Z",
       "deployer": "5WSQGabWxFT8Ge2CohzsD9ks4GtEyn2FbMEn91zDQeej",
       "deployedInSlot": 467393427,
-      "note": "Phase 1 of noBridge SVM upgrade ceremony. In-place BPF upgrade — OkuDollarConfig layout unchanged (362 bytes) so no PDA reinit needed. Used direct `solana program deploy --use-rpc --max-sign-attempts 500` against api.devnet.solana.com after the wrapper script's Helius-routed buffer uploads kept producing corrupt ELFs (transient devnet congestion). Post-upgrade config read verified: all 5 authorities = deployer, usd_multiplier=1000003000, no pending role_admin transfer. Earlier devnet.json upgrade records for this program (txSig `4eDGhX...` on 2026-06-02, claiming sha256 `fcb663f9...`) appear stale — actual on-chain pre-upgrade SHA was `4b2fa596...` not `fcb663f9...`."
+      "note": "Phase 1 of noBridge SVM upgrade ceremony. In-place BPF upgrade \u2014 OkuDollarConfig layout unchanged (362 bytes) so no PDA reinit needed. Used direct `solana program deploy --use-rpc --max-sign-attempts 500` against api.devnet.solana.com after the wrapper script's Helius-routed buffer uploads kept producing corrupt ELFs (transient devnet congestion). Post-upgrade config read verified: all 5 authorities = deployer, usd_multiplier=1000003000, no pending role_admin transfer. Earlier devnet.json upgrade records for this program (txSig `4eDGhX...` on 2026-06-02, claiming sha256 `fcb663f9...`) appear stale \u2014 actual on-chain pre-upgrade SHA was `4b2fa596...` not `fcb663f9...`."
     }
   ],
-  "_archived_pre_v4_seed_rotation": {
-    "note": "These accounts were created under the v3 PDA seed (psm_config_v3). After the 2026-07-10 v4 seed rotation (oracle removal), all of them are orphaned. The OkuMoney mint authority points to the old v3 PsmConfig PDA and is no longer controllable.",
-    "archivedAt": "2026-07-10T00:00:00.000Z",
-    "tokens": {
-      "usdc": "8yZNxn4gpLHJ6oxugnvD2qqxodVPJTyjgspLaMB9Kz9y",
-      "okuMoney": "APBstjJ7JoVTL1MaP3wwhzuddTtxitpHASriEY3sZrg2",
-      "usdOku": "GjShbiAeDVi9p6evYYzccZzqNGS8yTvryNsfxL2uvRUd"
-    },
-    "pdas": {
-      "psmConfig": "3DFKHa8L4yCrESPJtWKHwMYN9Hbeycr8HhmbdKVY8vvt",
-      "redemptionQueue": "4L35bBwEbbF4NWRTiLNS8BvX1cYk7w5bSya7mtj2kkfx",
-      "vaultConfig": "5LvCowpwWo9ZnbDVcT7tJ27GpCCK3QkLAs1id8W4tECU",
-      "psmVaultUsdc": "EKzeKxzF8jKGWGEyLgJU8BxLNQ2YFiyDcjuK3ffrQ4Yn",
-      "psmOkuMoneyEscrow": "8b2Rt4M7eyuqotKNLipUFBtemtxJUdwZadCYNE3mpHNk",
-      "vaultOkuMoney": "EZkGYwMxtxHtesabUSbx4qSgBgUeKYUp48ZR2BJdVKmo"
-    }
-  },
   "tokens": {
     "usdc": "AtX9msvC3mWpbviUZnj751fPFVzjh1Kpdh7rnsbmJsAK",
     "okuMoney": "9JVkEmstHaLxMcFXLesWYhzWxZcDVYk4qLSSXbKy3whW",

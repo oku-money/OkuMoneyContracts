@@ -14,10 +14,9 @@ abstract contract OkuMoneyEvents {
     /// @param oldMultiplier  Previous multiplier value
     /// @param newMultiplier  New multiplier value
     /// @param totalSupply    Token supply at time of update
-    /// @param blockNumber    `block.number` at update time (indexed) —
-    ///                       cycle 4 (EVM-01) addition so subgraphs can
-    ///                       shard yield events without re-deriving
-    ///                       block.number from the log.
+    /// @param blockNumber    `block.number` at update time (indexed, so
+    ///                       subgraphs can shard yield events without
+    ///                       re-deriving it from the log).
     event OkuMMultiplierUpdated(
         uint256 oldMultiplier,
         uint256 newMultiplier,
@@ -30,8 +29,7 @@ abstract contract OkuMoneyEvents {
     /// @param oldMultiplier  Previous multiplier value
     /// @param newMultiplier  New multiplier value
     /// @param totalSupply    Token supply at time of distribution
-    /// @param blockNumber    `block.number` at distribution time
-    ///                       (indexed) — cycle 4 (EVM-01).
+    /// @param blockNumber    `block.number` at distribution time (indexed).
     event YieldDistributed(
         uint256 yieldAmount,
         uint256 oldMultiplier,

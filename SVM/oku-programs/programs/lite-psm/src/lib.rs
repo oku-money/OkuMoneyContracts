@@ -13,25 +13,19 @@
 //! Inline `// see SVM/README.md` comments throughout this crate point
 //! to specific divergence rows in the catalogue.
 
-// Zero unsafe code (confirmed by cargo-geiger); forbid accidental
-// introduction.
+// No unsafe code anywhere in the crate.
 #![forbid(unsafe_code)]
-// Cycle 4 (PSM-17): the crate-wide
-// `#![allow(clippy::too_many_arguments)]` is gone. `initialize`'s
-// 15-pubkey signature collapsed into `InitializeParams`; no other
-// instruction in the crate has more than 3 arguments.
-// solana-lints `arbitrary_cpi` flags every CPI here because program ID
-// is obtained at runtime from typed account fields. Every CPI target
-// is constrained by Anchor's typed `Program<'info, T>` (which validates
-// `account.key == T::id()` at deserialization), so all hits are false
-// positives. See `oku-programs/audit/README.md` § Accepted Risks for
-// the per-call review.
+// `arbitrary_cpi` fires on every CPI here because the target program ID is
+// obtained at runtime from a typed account field. Each CPI target is a typed
+// `Program<'info, T>`, which validates `account.key == T::id()` at
+// deserialization, so the program ID is always constrained — these are false
+// positives.
 #![allow(unknown_lints, clippy::arbitrary_cpi)]
-// Anchor `#[program]` dispatch glue trips
-// `clippy::diverging_sub_expression`; can't annotate inside macro output.
+// Anchor's `#[program]` dispatch glue trips `clippy::diverging_sub_expression`
+// inside macro-generated code that cannot be annotated directly.
 #![allow(clippy::diverging_sub_expression)]
-// `target_os = "solana"` is emitted by `solana-program-entrypoint`'s
-// panic handler; check-cfg doesn't know about the BPF target.
+// `target_os = "solana"` is emitted by `solana-program-entrypoint`'s panic
+// handler; check-cfg does not know about the BPF target.
 #![allow(unexpected_cfgs)]
 
 use anchor_lang::prelude::*;
@@ -50,8 +44,6 @@ use roles::*;
 
 declare_id!("BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g");
 
-// `auditors` and `acknowledgements` are intentionally omitted until an audit
-// is complete; populate them in a follow-up commit.
 #[cfg(not(feature = "no-entrypoint"))]
 solana_security_txt::security_txt! {
     name: "OkuMoney Lite-PSM",
@@ -173,6 +165,16 @@ pub mod lite_psm {
     /// accepts.
     pub fn cancel_role_admin_transfer(ctx: Context<SetAuthority>) -> Result<()> {
         instructions::psm_admin::cancel_role_admin_transfer(ctx)
+    }
+
+    /// Rewrite the OkuM mint's Token-2022 `TokenMetadata` `name`/`symbol`
+    /// in place (`role_admin` only), to the canonical OkuM ("OkuMoney")
+    /// identity. This is the true on-chain token identity shown by wallets
+    /// and explorers; the "$1-pegged usdOku" figure is a separate
+    /// ScaledUiAmount display value and is unaffected. Used to correct a
+    /// mint deployed with stale brand strings without a new mint/migration.
+    pub fn update_token_metadata(ctx: Context<UpdateTokenMetadata>) -> Result<()> {
+        instructions::psm_admin::update_token_metadata(ctx)
     }
 
     // ===== Yield Operations =====

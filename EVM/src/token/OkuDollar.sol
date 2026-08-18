@@ -171,7 +171,6 @@ contract OkuDollar is
 
     // ============ Storage Accessor Views ============
 
-    /// @notice The OkuMoney token held as reserves by this vault.
     function okuMoney() external view returns (IOkuMoney) {
         return _getOkuDollarStorage().okuMoney;
     }
@@ -207,7 +206,6 @@ contract OkuDollar is
     }
 
     /// @notice Internal share balance for `account`.
-    /// @param account Address to query.
     function usdSharesOf(address account) external view returns (uint256) {
         return _getOkuDollarStorage().usdShares[account];
     }
@@ -218,7 +216,6 @@ contract OkuDollar is
     }
 
     /// @notice Whether `account` is on the OkuDollar blacklist.
-    /// @param account Address to check.
     function isBlacklisted(address account) external view returns (bool) {
         return _getOkuDollarStorage().isBlacklisted[account];
     }
@@ -311,12 +308,10 @@ contract OkuDollar is
         uint256 multiplier = usdMultiplier();
         uint256 shares = Math.mulDiv(amount, Constants.PRECISION, multiplier, Math.Rounding.Floor);
         _transferUsdShares(msg.sender, to, shares);
-        // Cycle 4 (EVM-04): emit `Transfer` with the effective
-        // post-rounding dollar amount (`shares * multiplier / 1e18`)
-        // rather than the caller-specified `amount`. This keeps the
-        // ERC-20 invariant `sum(Transfer.value) == Δ balanceOf`
-        // intact for indexers/accounting; the prior behaviour drifted
-        // by ~1 wei due to the share floor.
+        // Emit `Transfer` with the effective post-rounding dollar amount
+        // (`shares * multiplier / 1e18`) rather than the caller-specified
+        // `amount`, keeping the ERC-20 invariant `sum(Transfer.value) ==
+        // Δ balanceOf` intact for indexers/accounting.
         uint256 effective =
             Math.mulDiv(shares, multiplier, Constants.PRECISION, Math.Rounding.Floor);
         emit Transfer(msg.sender, to, effective);
@@ -345,7 +340,7 @@ contract OkuDollar is
         uint256 multiplier = usdMultiplier();
         uint256 shares = Math.mulDiv(amount, Constants.PRECISION, multiplier, Math.Rounding.Floor);
         _transferUsdShares(from, to, shares);
-        // Cycle 4 (EVM-04): see `transfer` above.
+        // See `transfer` above.
         uint256 effective =
             Math.mulDiv(shares, multiplier, Constants.PRECISION, Math.Rounding.Floor);
         emit Transfer(from, to, effective);
@@ -584,13 +579,9 @@ contract OkuDollar is
     ///      is read inside `collateralizationRatio()` and `withdrawSurplus`'s own
     ///      post-withdrawal ratio check. Without this guard a privileged operator
     ///      could sandwich a yield distribution and a withdrawal in the same block.
-    ///
-    ///      OPSEC MODEL: the `whenYieldNotDistributing` guard prevents intra-block
-    ///      sandwich. Cross-block manipulation by a compromised `VAULT_REBASER`
-    ///      + `VAULT_RESERVE_MANAGER` combination is NOT mitigated on-chain.
-    ///      These two roles MUST be held by separate keys, both rotated to
-    ///      multisigs before mainnet operation. This trust assumption is
-    ///      documented in the project's audit-scope notes.
+    ///      This guard only prevents the intra-block case; see
+    ///      `EVM/README.md § Accepted Risks (2)` for the cross-block trust
+    ///      assumption on `VAULT_REBASER` + `VAULT_RESERVE_MANAGER`.
     function withdrawSurplus(uint256 okuMAmount)
         external
         nonReentrant
@@ -701,7 +692,7 @@ contract OkuDollar is
     /// @notice Set the USD multiplier accrual rate.
     /// @param newRate Per-second rate (1e18 = no yield). Must be in [PRECISION, MAX_RATE].
     /// @param endTimestamp Unix timestamp at which the rate expires (0 = open-ended).
-    /// @dev Cycle 4 (EVM-09): does NOT stamp a separate
+    /// @dev Does NOT stamp a separate
     ///      `lastUsdRateUpdateBlock`. Rate changes manifest over time
     ///      (the multiplier moves linearly per-second), not instantly,
     ///      so the same-block sandwich attack vector that `OkuMoney`'s
@@ -813,9 +804,5 @@ contract OkuDollar is
 
     // ============ Upgradeability ============
 
-    function _authorizeUpgrade(address newImplementation)
-        internal
-        override
-        onlyRole(Roles.VAULT_UPGRADER)
-    {}
+    function _authorizeUpgrade(address) internal override onlyRole(Roles.VAULT_UPGRADER) {}
 }

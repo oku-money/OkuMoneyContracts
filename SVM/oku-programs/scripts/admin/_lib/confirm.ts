@@ -45,14 +45,14 @@ export function isDryRun(): boolean {
 export async function confirmIfMainnet(
   network: NetworkName,
   summary: string,
-  /** Optional connection for genesis-hash cluster verification (WS5.6). */
+  /** Optional connection for genesis-hash cluster verification. */
   connection?: Connection
 ): Promise<void> {
   const isMainnet =
     network === 'mainnet-beta' || network === 'mainnet-fork';
   if (!isMainnet) return;
 
-  // WS5.6: verify cluster genesis hash to catch wrong-cluster RPC misconfigurations.
+  // Verify cluster genesis hash to catch wrong-cluster RPC misconfigurations.
   if (connection) {
     await verifyCluster(connection, network);
   }

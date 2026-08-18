@@ -29,6 +29,11 @@ pub const PRECISION: u64 = 1_000_000_000;
 
 /// Basis-points denominator (10_000 = 100%). Mirrors EVM
 /// `Constants.BASIS_POINTS`.
+///
+/// Retained for EVM constant parity. The SVM PSM is currently fee-free,
+/// so no on-chain instruction consumes this value; it is kept so the
+/// SVM ↔ EVM constant set stays 1:1 and so a future fee path (should one
+/// be added) has the denominator already defined and audited.
 pub const BASIS_POINTS: u64 = 10_000;
 
 // ---------------------------------------------------------------------------

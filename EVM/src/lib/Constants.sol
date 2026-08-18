@@ -50,9 +50,11 @@ library Constants {
     ///      `PRECISION = 1e18` represents $1.00). Far above any realistic
     ///      yield trajectory and keeps downstream `uint256 * uint256`
     ///      multiplications away from the overflow region. Mirrors the SVM
-    ///      `MAX_OKU_M_PRICE` / `MAX_USD_MULTIPLIER` guard — math sanity bound
-    ///      that bounds the rpow / mulDiv input space, not a constraint on the
-    ///      trusted operator.
+    ///      `MAX_MULTIPLIER` guard (`oku-shared::constants::MAX_MULTIPLIER`,
+    ///      scaled for SVM's 1e9 precision) — math sanity bound that bounds
+    ///      the rpow / mulDiv input space, not a constraint on the trusted
+    ///      operator. Note SVM's `lite-psm` has no separate OkuDollar-equivalent
+    ///      vault program, so this constant governs only the OkuM-side price cap.
     uint256 public constant MAX_MULTIPLIER = 1e24;
 
     /// @notice Basis points denominator (10000 = 100%)

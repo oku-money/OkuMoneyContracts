@@ -1,7 +1,7 @@
 //! # OkuM Lite-PSM Errors
 //!
-//! Error codes for the Lite-PSM program.
-//! Aligned with EVM custom errors where applicable.
+//! Error codes for the Lite-PSM program. Aligned with the EVM custom
+//! errors where an equivalent exists.
 //!
 //! ## EVM Error Mapping
 //!
@@ -14,7 +14,7 @@
 //! | `InsufficientBuffer` | `InsufficientBuffer()` |
 //! | `MultiplierCannotDecrease` | `MultiplierCannotDecrease()` |
 //! | `YieldDistributionInProgress` | `YieldDistributionInProgress()` |
-//! | `OutputBelowMinimum` | N/A (zero-output guard; EVM uses `OutputBelowMinimum` for slippage) |
+//! | `SlippageExceeded` | `OutputBelowMinimum()` |
 //! | `AmountTooSmall` | `AmountTooSmall()` |
 //! | `InvalidUsdcDecimals` | (initialize-time decimals check) |
 
@@ -23,100 +23,105 @@ use anchor_lang::prelude::*;
 #[error_code]
 pub enum LitePsmError {
     // ===== Authorization Errors =====
-    /// Caller not authorized for this operation
+    /// Caller not authorized for this operation.
     #[msg("Caller not authorized")]
     Unauthorized,
 
     // ===== State Errors =====
-    /// Program is paused
-    /// EVM: Pausable revert
+    /// Program is paused.
     #[msg("Program is paused")]
     Paused,
 
-    /// Program is already paused
+    /// Program is already paused.
     #[msg("Program is already paused")]
     AlreadyPaused,
 
-    /// Program is not paused
+    /// Program is not paused.
     #[msg("Program is not paused")]
     NotPaused,
 
     // ===== Supply/Allowance Errors =====
-    /// Mint would exceed max supply
+    /// Mint would exceed max supply.
     /// EVM: ExceedsSupplyCap()
     #[msg("Mint would exceed max supply")]
     MaxSupplyExceeded,
 
     /// Proposed `max_supply` is below the current circulating supply.
-    /// Setting it would silently brick all future mints. EVM
-    /// `OkuM.setMaxSupply` parity.
+    /// Setting it would silently block all future mints.
     #[msg("New max_supply must be >= current circulating supply")]
     BelowCurrentSupply,
 
-    /// Mint would exceed minter allowance
+    /// Mint would exceed minter allowance.
     /// EVM: ExceedsAllowance()
     #[msg("Mint would exceed minter allowance")]
     AllowanceExceeded,
 
     // ===== Buffer Errors =====
-    /// Insufficient buffer for redemption
+    /// The USDC buffer vault cannot cover the redemption.
     /// EVM: InsufficientBuffer()
     #[msg("Insufficient buffer for redemption")]
     InsufficientBuffer,
 
-    /// User does not hold enough OkuM to satisfy the redemption.
-    /// Cycle 4 (PSM-11): separated from `InsufficientBuffer` to remove
-    /// the misleading "the PSM's buffer is empty" interpretation.
-    /// EVM analogue: `ERC20InsufficientBalance` (OZ standard revert).
+    /// The user does not hold enough OkuM to satisfy the redemption.
+    /// Distinct from `InsufficientBuffer` (which is about the vault) so the
+    /// failure reason is unambiguous.
+    /// EVM analogue: `ERC20InsufficientBalance`.
     #[msg("User does not hold enough OkuM for redemption")]
     InsufficientUserBalance,
 
     // ===== Arithmetic Errors =====
-    /// Arithmetic overflow
+    /// Arithmetic overflow.
     #[msg("Arithmetic overflow")]
     Overflow,
 
     // ===== Input Validation Errors =====
-    /// Amount must be greater than zero
+    /// Amount must be greater than zero.
     /// EVM: ZeroAmount()
     #[msg("Amount must be greater than zero")]
     ZeroAmount,
 
     // ===== Yield Distribution Errors =====
-    /// Cannot perform operation in same slot as yield distribution
+    /// Cannot perform this operation in the same slot as a yield distribution.
     /// EVM: YieldDistributionInProgress()
     #[msg("Cannot perform operation in same slot as yield distribution")]
     YieldDistributionInProgress,
 
     /// New multiplier did not strictly increase. Reverts on both backward
-    /// moves and no-op (equal-value) updates so a no-op call cannot stamp
+    /// moves and no-op (equal-value) updates, so a no-op call cannot stamp
     /// the sandwich-lock slot without moving the multiplier.
     /// EVM: MultiplierCannotDecrease()
     #[msg("New multiplier must strictly increase")]
     MultiplierCannotDecrease,
 
-    /// Yield amount too small to affect multiplier (truncates to zero)
+    /// Yield amount too small to affect the multiplier (truncates to zero).
     #[msg("Yield amount too small to affect multiplier (truncates to zero)")]
     YieldTooSmall,
 
-    /// Proposed multiplier exceeds the configured ceiling.
-    /// Math-sanity bound that keeps downstream `u64 * u64 -> u128`
-    /// multiplications inside the overflow-safe region. Not a guard
-    /// against operator compromise (out of scope per the centralized
-    /// trust model) but a math bound.
+    /// Proposed multiplier exceeds the configured ceiling. A math-sanity
+    /// bound that keeps downstream `u64 * u64 -> u128` multiplications inside
+    /// the overflow-safe region.
     #[msg("Proposed multiplier exceeds MAX_MULTIPLIER ceiling")]
     MultiplierAboveMax,
 
-    /// Failed to read multiplier from ScaledUiAmount extension
-    #[msg("Failed to read multiplier from ScaledUiAmount extension")]
-    MultiplierReadFailed,
+    /// The OkuM mint account data could not be unpacked as a Token-2022 mint.
+    #[msg("Failed to unpack OkuM mint account data")]
+    MultiplierUnpackFailed,
 
-    /// Failed to update ScaledUiAmount multiplier
+    /// The OkuM mint does not carry the `ScaledUiAmount` extension.
+    #[msg("OkuM mint is missing the ScaledUiAmount extension")]
+    ScaledUiExtensionMissing,
+
+    /// The multiplier read from the `ScaledUiAmount` extension is zero or
+    /// exceeds `MAX_MULTIPLIER` (e.g. an uninitialized, NaN, or corrupt f64).
+    #[msg("Multiplier from ScaledUiAmount extension is zero or out of range")]
+    MultiplierOutOfRange,
+
+    /// Failed to update the `ScaledUiAmount` multiplier.
     #[msg("Failed to update ScaledUiAmount multiplier")]
     MultiplierUpdateFailed,
 
     // ===== Authority validation =====
-    /// Authority pubkey is the zero pubkey or otherwise invalid
+    /// Authority pubkey is the zero pubkey or otherwise invalid.
     #[msg("Authority pubkey is invalid (e.g. zero pubkey)")]
     InvalidAuthority,
 
@@ -131,7 +136,6 @@ pub enum LitePsmError {
 
     // ===== Initialization Errors =====
     /// USDC mint must have exactly 6 decimals on Solana.
-    /// EVM uses a runtime-resolved `usdcDecimalMultiplier`; SVM hardcodes 6.
     #[msg("USDC mint must have exactly 6 decimals")]
     InvalidUsdcDecimals,
 
@@ -141,9 +145,14 @@ pub enum LitePsmError {
     #[msg("Output amount too small (rounds to zero)")]
     AmountTooSmall,
 
-    /// Redeem output is zero. At low `raw_oku_m_amount` and near-unit
-    /// multiplier, the floor division can truncate to zero, which would
+    /// Redeem output rounded down to zero. At a low `raw_oku_m_amount` and a
+    /// near-unit multiplier the floor division truncates to zero, which would
     /// burn OkuM for no USDC.
     #[msg("Redeem output is zero")]
-    OutputBelowMinimum,
+    ZeroOutput,
+
+    /// Redeem output is below the caller's `min_usdc_out` slippage floor.
+    /// EVM: OutputBelowMinimum()
+    #[msg("Redeem output is below min_usdc_out")]
+    SlippageExceeded,
 }

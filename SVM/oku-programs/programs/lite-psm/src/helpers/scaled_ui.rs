@@ -36,6 +36,19 @@ fn multiplier_f64_to_u64(effective: f64) -> u64 {
 /// `ScaledUiAmountConfig` extension and convert the f64 value to a
 /// PRECISION-scaled u64 for use in integer math.
 ///
+/// # AUDITOR ATTENTION
+///
+/// This function is the single most protocol-unique code path in the
+/// program: it re-implements effective-multiplier selection over the
+/// Token-2022 `ScaledUiAmountConfig` TLV rather than calling the
+/// upstream `current_multiplier()` helper, specifically to work around
+/// the zero-init edge case documented below (init writes `multiplier`
+/// but leaves `new_multiplier == 0.0`, and upstream would return that
+/// 0.0). The f64→u64 conversion is exact only because
+/// `MAX_MULTIPLIER < 2^52` (asserted at compile time above). Review the
+/// zero-init selection and the saturating-cast guards with care — a
+/// wrong multiplier here mis-prices every mint/redeem.
+///
 /// # ScaledUiAmountConfig layout
 ///
 /// The extension stores three fields beyond the authority pubkey:
@@ -71,20 +84,21 @@ fn multiplier_f64_to_u64(effective: f64) -> u64 {
 ///
 /// # Errors
 ///
-/// Returns `MultiplierReadFailed` if:
-/// - The mint account data cannot be unpacked
-/// - The `ScaledUiAmountConfig` extension is not present
-/// - The effective multiplier converts to 0 in u64
+/// - `MultiplierUnpackFailed` — the mint account data cannot be unpacked.
+/// - `ScaledUiExtensionMissing` — the `ScaledUiAmountConfig` extension is
+///   not present on the mint.
+/// - `MultiplierOutOfRange` — the effective multiplier is zero or above
+///   `MAX_MULTIPLIER`.
 pub fn read_multiplier(mint_account: &AccountInfo) -> Result<u64> {
     use anchor_spl::token_2022::spl_token_2022::extension::scaled_ui_amount::ScaledUiAmountConfig;
 
     let data = mint_account.try_borrow_data()?;
     let mint_state = StateWithExtensions::<MintRaw>::unpack(&data)
-        .map_err(|_| error!(LitePsmError::MultiplierReadFailed))?;
+        .map_err(|_| error!(LitePsmError::MultiplierUnpackFailed))?;
 
     let config = mint_state
         .get_extension::<ScaledUiAmountConfig>()
-        .map_err(|_| error!(LitePsmError::MultiplierReadFailed))?;
+        .map_err(|_| error!(LitePsmError::ScaledUiExtensionMissing))?;
 
     let clock = Clock::get()?;
 
@@ -107,7 +121,7 @@ pub fn read_multiplier(mint_account: &AccountInfo) -> Result<u64> {
     // and values above MAX_MULTIPLIER (infinity/corrupt f64 -> u64::MAX
     // via saturating cast). Both would silently break PSM math.
     if scaled == 0 || scaled > MAX_MULTIPLIER {
-        return Err(error!(LitePsmError::MultiplierReadFailed));
+        return Err(error!(LitePsmError::MultiplierOutOfRange));
     }
 
     Ok(scaled)

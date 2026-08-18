@@ -8,16 +8,19 @@
 //! Freeze / thaw mirrors Circle FiatToken's blacklister pattern.
 //! Taken from <https://github.com/circlefin/stablecoin-evm/blob/master/contracts/v1/Blacklistable.sol>.
 
+use crate::constants::{OKU_M_METADATA_NAME, OKU_M_METADATA_SYMBOL};
 use crate::contexts::{
     AcceptRoleAdmin, AllowanceManager, CapManager, FreezeAccount, Pause, SetAuthority, ThawAccount,
-    Unpause,
+    Unpause, UpdateTokenMetadata,
 };
 use crate::errors::LitePsmError;
 use crate::events::*;
 use crate::roles::AuthorityRole;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
+use anchor_spl::token_2022_extensions::spl_token_metadata_interface;
 use anchor_spl::token_interface;
+use spl_token_metadata_interface::state::Field;
 
 /// Pause the PSM (emergency response)
 pub fn pause(ctx: Context<Pause>) -> Result<()> {
@@ -133,8 +136,8 @@ pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
     let config = &ctx.accounts.config;
     let target_owner = ctx.accounts.target_oku_m_ata.owner;
 
-    let bump = config.bump;
-    let seeds = &[PsmConfig::SEED, &[bump]];
+    let bump = [config.bump];
+    let seeds = PsmConfig::signer_seeds(&bump);
     let signer = &[&seeds[..]];
 
     // CPI to Token-2022 to freeze the account
@@ -160,8 +163,8 @@ pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
 /// Uses Token-2022 thaw authority CPI
 /// MUST work even when PSM is paused (no pause check)
 pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
-    let bump = ctx.accounts.config.bump;
-    let seeds = &[PsmConfig::SEED, &[bump]];
+    let bump = [ctx.accounts.config.bump];
+    let seeds = PsmConfig::signer_seeds(&bump);
     let signer = &[&seeds[..]];
 
     // CPI to Token-2022 to thaw the account
@@ -211,13 +214,11 @@ pub fn set_authority(
 
     let config = &mut ctx.accounts.config;
 
-    // Cycle 4 (PSM-02): reject `new_authority == role_admin` for
-    // non-RoleAdmin roles. Collapsing the cold-multisig key into a
-    // warm-multisig role destroys the separation-of-duties model the
-    // protocol is designed around, and a typo or stale-key in the
-    // proposing flow is the most likely way it would happen. The
-    // `RoleAdmin` two-step branch below handles its own equality check
-    // (a self-set is a legal no-op cancel/re-propose).
+    // Reject `new_authority == role_admin` for non-RoleAdmin roles.
+    // Collapsing the cold-multisig key into a warm-multisig role would
+    // destroy the separation-of-duties model, and a typo or stale key in
+    // the proposing flow is the most likely way it would happen. The
+    // `RoleAdmin` two-step branch below handles its own equality check.
     if !matches!(role, AuthorityRole::RoleAdmin) {
         require!(
             new_authority != config.role_admin,
@@ -228,9 +229,9 @@ pub fn set_authority(
     // RoleAdmin uses a two-step transfer; every other role commits
     // immediately. See doc comment above for rationale.
     if matches!(role, AuthorityRole::RoleAdmin) {
-        // Cycle 4 (PSM-02): also reject a no-op proposal (proposing the
-        // current admin to themselves). Harmless on-chain but obscures
-        // event-log inspection of in-flight rotations.
+        // Also reject a no-op proposal (proposing the current admin to
+        // themselves) so the event log unambiguously reflects in-flight
+        // rotations.
         require!(
             new_authority != config.role_admin,
             LitePsmError::InvalidAuthority
@@ -348,6 +349,79 @@ pub fn cancel_role_admin_transfer(ctx: Context<SetAuthority>) -> Result<()> {
     emit!(RoleAdminTransferCancelledEvent {
         current_admin: config.role_admin,
         cancelled_pending,
+    });
+
+    Ok(())
+}
+
+/// Rewrite the OkuM mint's Token-2022 `TokenMetadata` `name`/`symbol`
+/// in place (`role_admin` only).
+///
+/// # Why this exists
+/// The OkuM mint's metadata is written once at `initialize`. For mints
+/// that were deployed with stale brand strings, this instruction lets an
+/// admin correct the on-chain identity WITHOUT a new mint or migration
+/// (existing balances/ATAs are untouched — this is a metadata-only edit).
+///
+/// # OkuM vs usdOku
+/// The `name`/`symbol` set here are the TRUE on-chain identity of the
+/// base token — **OkuM ("OkuMoney")** — which wallets and block explorers
+/// display for the mint and for transfers. Values come from the single
+/// source of truth `OKU_M_METADATA_*` (constants.rs) so they cannot drift
+/// from `initialize`. The "$1-pegged usdOku" figure is a separate
+/// ScaledUiAmount display value (raw_amount * multiplier) and is NOT
+/// affected by this instruction.
+///
+/// # Authority
+/// The metadata `update_authority` is the `config` PDA; it CPI-signs the
+/// two `update_field` calls (Name, Symbol) via `invoke_signed`. Access is
+/// gated to `role_admin` via `has_one` on the context.
+pub fn update_token_metadata(ctx: Context<UpdateTokenMetadata>) -> Result<()> {
+    let bump = [ctx.accounts.config.bump];
+    let config_key = ctx.accounts.config.key();
+    let mint_key = ctx.accounts.oku_m_mint.key();
+    let token_2022_id = ctx.accounts.token_2022_program.key();
+
+    // The config PDA is the metadata update authority; sign both CPIs
+    // with its seeds (same pattern as `initialize`'s metadata-init CPI).
+    let seeds = PsmConfig::signer_seeds(&bump);
+    let signer_seeds = &[&seeds[..]];
+
+    let account_infos = &[
+        ctx.accounts.oku_m_mint.to_account_info(),
+        ctx.accounts.config.to_account_info(),
+    ];
+
+    // Update `name`.
+    anchor_lang::solana_program::program::invoke_signed(
+        &spl_token_metadata_interface::instruction::update_field(
+            &token_2022_id,
+            &mint_key,   // metadata account = mint (self)
+            &config_key, // update authority (signs via PDA)
+            Field::Name,
+            OKU_M_METADATA_NAME.to_string(),
+        ),
+        account_infos,
+        signer_seeds,
+    )?;
+
+    // Update `symbol`.
+    anchor_lang::solana_program::program::invoke_signed(
+        &spl_token_metadata_interface::instruction::update_field(
+            &token_2022_id,
+            &mint_key,
+            &config_key,
+            Field::Symbol,
+            OKU_M_METADATA_SYMBOL.to_string(),
+        ),
+        account_infos,
+        signer_seeds,
+    )?;
+
+    emit!(TokenMetadataUpdatedEvent {
+        mint: mint_key,
+        name: OKU_M_METADATA_NAME.to_string(),
+        symbol: OKU_M_METADATA_SYMBOL.to_string(),
     });
 
     Ok(())

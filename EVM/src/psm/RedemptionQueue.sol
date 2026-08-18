@@ -131,12 +131,10 @@ contract RedemptionQueue is
 
     // ============ Storage Accessor Views ============
 
-    /// @notice The OkuMoney token held in escrow by the queue.
     function okuMoney() external view returns (IOkuMoney) {
         return _getRedemptionQueueStorage().okuMoney;
     }
 
-    /// @notice The USDC token used for payouts.
     function usdc() external view returns (IERC20) {
         return _getRedemptionQueueStorage().usdc;
     }
@@ -373,9 +371,5 @@ contract RedemptionQueue is
 
     // ============ Upgradeability ============
 
-    function _authorizeUpgrade(address newImplementation)
-        internal
-        override
-        onlyRole(Roles.QUEUE_UPGRADER)
-    {}
+    function _authorizeUpgrade(address) internal override onlyRole(Roles.QUEUE_UPGRADER) {}
 }

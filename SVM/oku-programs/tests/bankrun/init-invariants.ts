@@ -116,7 +116,7 @@ describe("init invariants (OkuM mint extensions)", () => {
       const okuMMintKeypair = Keypair.generate();
       const okuMMint = okuMMintKeypair.publicKey;
       const [configPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("psm_config_v6")],
+        [Buffer.from("psm_config")],
         program.programId
       );
       const vaultUsdcAta = getAssociatedTokenAddressSync(

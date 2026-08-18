@@ -26,8 +26,8 @@ need one key with SOL to run devnet flows end-to-end.
 On **mainnet**, each env var above must be set to the corresponding Squads
 vault or KMS public key; the private keys never touch this machine.
 
-In v1 noBridge there is no on-chain bridge program; the orchestrator key
-above signs both PSM ops and the off-chain cross-chain mint/burn flow.
+There is no on-chain bridge program; the orchestrator key above signs both
+PSM ops and the off-chain cross-chain mint/burn flow.
 
 ---
 

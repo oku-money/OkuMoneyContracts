@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Cross-stack SVM <-> EVM bridge test (noBridge orchestrator simulation).
+ * Cross-stack SVM <-> EVM bridge test (off-chain orchestrator simulation).
  *
  * Drives the verified 3-leg flow against ONE EVM testnet and the SVM devnet
  * in a single tsx process:

@@ -3,7 +3,7 @@
  *
  * SVM-side mirror of EVM/test/hardhat/scenarios/RealWorldUsage.ts.
  *
- * Simulates the full okuM noBridge lifecycle on a single bankrun PSM:
+ * Simulates the full okuM lifecycle on a single bankrun PSM:
  *
  *   - 5 users randomly mint, redeem (instant), and bridge cross-chain
  *   - Orchestrator bridges OkuM between virtual "chain A" and "chain B":

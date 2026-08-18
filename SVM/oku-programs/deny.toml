@@ -89,8 +89,6 @@ wildcards = "allow"
 deny = [
     # Prefer rustls over native OpenSSL for crypto — openssl-sys pulls in
     # a C build dependency and increases the attack surface.
-    # (Note: openssl is acceptable in dev tooling deps like cargo-dylint,
-    #  but should not appear as a runtime dep of the on-chain programs.)
     { name = "openssl",     reason = "prefer rustls; openssl adds C build dep and larger attack surface" },
     { name = "openssl-sys", reason = "prefer rustls; openssl-sys adds C build dep" },
 ]
@@ -107,10 +105,3 @@ unknown-registry = "deny"
 unknown-git = "deny"
 
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-
-# Explicitly allow the git deps we intentionally use.
-# crytic/solana-lints is in [workspace.metadata.dylint] for audit tooling only;
-# it is not a runtime dependency of the programs.
-allow-git = [
-    "https://github.com/crytic/solana-lints",
-]

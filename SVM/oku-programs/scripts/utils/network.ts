@@ -100,7 +100,7 @@ export function getNetworkConfig(network?: NetworkName): NetworkConfig {
 }
 
 /**
- * Known genesis hashes for cluster verification (WS5.6).
+ * Known genesis hashes for cluster verification.
  * These are the canonical, immutable hashes for mainnet-beta and devnet.
  * If the connected RPC serves a different genesis hash the cluster is wrong.
  */
@@ -163,9 +163,9 @@ export function createProvider(network?: NetworkName): AnchorProvider {
 
 /**
  * Create Anchor provider AND verify the RPC's genesis hash matches the
- * expected cluster (WS5.6). Use this in admin scripts that must guard
- * against wrong-cluster misconfigurations (e.g. SOLANA_RPC_URL pointing at
- * mainnet when NETWORK=devnet).
+ * expected cluster. Use this in admin scripts that must guard against
+ * wrong-cluster misconfigurations (e.g. SOLANA_RPC_URL pointing at mainnet
+ * when NETWORK=devnet).
  *
  * Throws if the genesis hash does not match the expected cluster.
  * No-op on localnet and fork networks (genesis hash varies per session).

@@ -32,13 +32,7 @@ path = "fuzz_targets/dollars_to_oku_m.rs"
 test = false
 doc = false
 
-[[bin]]
-name = "calculate_fee"
-path = "fuzz_targets/calculate_fee.rs"
-test = false
-doc = false
-
-# Cycle 4: fuzz coverage for the new `mul_div_ceil` primitive.
+# fuzz coverage for the `mul_div_ceil` primitive.
 # Same shape as `mul_div_floor` with the `+ (d-1)` numerator
 # adjustment that needs its own overflow-safety witness.
 [[bin]]

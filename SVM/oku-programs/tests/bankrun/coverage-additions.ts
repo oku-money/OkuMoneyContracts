@@ -1,13 +1,9 @@
 /**
- * WS3.2 coverage additions — bankrun tests for gaps identified in the
- * pre-MVP review.
+ * Additional PSM edge-case coverage.
  *
  * Covered:
- *   WS3.2.a  zero-supply distribute_yield reverts with ZeroAmount (PSM)
- *   WS3.2.b  PSM double-init negative test
- *
- * WS3.2.d (upgrade-path bankrun) is deferred — requires deploying a modified
- * program binary into the test environment, which is out of scope for bankrun.
+ *   - zero-supply distribute_yield reverts with ZeroAmount
+ *   - PSM double-init negative test
  */
 
 import * as anchor from "@anchor-lang/core";
@@ -40,10 +36,10 @@ type PublicKey = anchor.web3.PublicKey;
 type Keypair = anchor.web3.Keypair;
 
 // ---------------------------------------------------------------------------
-// PSM-only describe: WS3.2.a (PSM yield), WS3.2.b (PSM init)
+// PSM yield + init edge cases
 // ---------------------------------------------------------------------------
 
-describe("WS3.2 PSM coverage additions", () => {
+describe("PSM coverage additions", () => {
   let h: BankrunHarness;
   let psm: Program<LitePsm>;
   let payer: Keypair;
@@ -73,7 +69,7 @@ describe("WS3.2 PSM coverage additions", () => {
     await fundKeypairs(h, [user], 10 * anchor.web3.LAMPORTS_PER_SOL);
   });
 
-  it("WS3.2.a: distribute_yield reverts ZeroAmount when okuM supply == 0", async () => {
+  it("distribute_yield reverts ZeroAmount when okuM supply == 0", async () => {
     try {
       await psm.methods
         .distributeYield(new BN(1_000_000))
@@ -95,7 +91,7 @@ describe("WS3.2 PSM coverage additions", () => {
     }
   });
 
-  it("WS3.2.b: lite-psm initialize fails if config PDA already exists", async () => {
+  it("lite-psm initialize fails if config PDA already exists", async () => {
     try {
       await psm.methods
         .initialize({

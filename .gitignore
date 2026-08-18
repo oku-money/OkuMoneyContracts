@@ -76,10 +76,12 @@ EVM/scripts/logs/*.jsonl
 # Hardhat EDR cache
 edr-cache/
 
-# Local dry-run logs from scripts/deploy/dryRunForks.sh
+# Local dry-run logs from scripts/deploy/dryRunForks.sh (ephemeral: wiped at the
+# start of every run; canonical addresses live in scripts/config/addresses.json).
 EVM/.dry-run-logs/
 
-# Live deploy logs (per-chain transcripts, machine-specific)
+# Live deploy logs (ad-hoc per-chain transcripts, machine-specific & ephemeral;
+# safe to delete — canonical addresses live in testnet-addresses.json).
 EVM/.live-deploy-logs/
 
 # Rust build artifacts

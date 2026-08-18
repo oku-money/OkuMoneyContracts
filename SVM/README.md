@@ -46,7 +46,7 @@ Lives in `crates/` rather than `programs/` because `anchor build`
 walks `programs/*` and requires every member to declare an
 `idl-build` feature; `crates/*` is for ordinary workspace libs.
 
-### Cross-chain transfers (noBridge model, v1)
+### Cross-chain transfers (off-chain orchestrator)
 
 There is no on-chain bridge program. Cross-chain transfers use an
 asymmetric model:
@@ -87,12 +87,43 @@ guide](https://solana.com/docs/tokens/extensions/scaled-ui-amount/integration-gu
 
 **Naming convention (important):** the on-chain token is **OkuM
 (OkuMoney)** in all code, instructions, and field names
-(`oku_m_mint`, `mint_oku_m`, `MintOkuM`, etc.). The `TokenMetadata`
-extension on the mint separately sets `name: "OkuDollar", symbol:
-"usdOku"` so wallets display the $1 stablecoin brand. This split is
-intentional — the on-chain token IS OkuM (value-appreciating,
-T-Bill-backed); the wallet display layer presents it as usdOku (a
-$1-pegged stablecoin) via the multiplier.
+(`oku_m_mint`, `mint_oku_m`, `MintOkuM`, etc.). The mint's
+`TokenMetadata` extension carries this same on-chain identity —
+`name: "OkuMoney", symbol: "OkuM"` — matching the EVM `OkuMoney`
+token (`EVM/test/shared/Constants.sol`: `OKUMONEY_NAME`/`OKUMONEY_SYMBOL`).
+Wallets and block explorers therefore display **OkuM** for the mint
+and for transfers, showing the true, non-$1-pegged OkuM amounts.
+
+The **`name`/`symbol` strings are a single source of truth** —
+`OKU_M_METADATA_NAME` / `OKU_M_METADATA_SYMBOL` in
+`programs/lite-psm/src/constants.rs` — consumed by both `initialize`
+(mint creation) and `update_token_metadata` (in-place rename of an
+already-deployed mint by `role_admin`).
+
+**OkuM vs usdOku (display layer).** "usdOku" is NOT the on-chain
+symbol. The $1-pegged **usdOku** value is a *presentation-layer*
+number produced by the mint's `ScaledUiAmount` extension
+(`raw_amount * multiplier`), which Token-2022-aware wallets render
+automatically. So: on-chain identity = OkuM (value-appreciating,
+T-Bill-backed); the wallet/UI display of that same balance as a
+$1-pegged usdOku figure is the scaled UI amount. (On EVM, usdOku
+/ `OkuDollar` is a *separate* wrapper token; SVM collapses that role
+into the ScaledUiAmount display of the single OkuM mint.)
+
+**Why we keep the symbol as `OkuM` (not `usdOku`).** A Token-2022
+mint has a *single* `symbol` field; it cannot serve one label to
+explorers and another to wallets. Renaming the symbol to `usdOku`
+would not remove the raw layer — it would only relabel it, and a
+`usdOku` label on a raw (unscaled) number falsely asserts a $1 peg.
+Keeping `OkuM` means the raw number always reads as what it truly
+is (the underlying token count), while ScaledUiAmount-aware wallets
+still show the $1-pegged dollar value. **Testers will see the raw,
+non-scaled OkuM amount** (lower than the wallet's dollar figure
+whenever the multiplier > 1) in: non-ScaledUiAmount explorers, raw
+RPC (`amount` vs `uiAmount`), `spl-token accounts`, transfer
+instruction arguments in tx history, the mint's `supply`, and any
+program/AMM integration operating on base units. This is expected —
+those surfaces denominate in raw OkuM, not in the usdOku display.
 
 ---
 
@@ -102,10 +133,12 @@ $1-pegged stablecoin) via the multiplier.
 sole protocol token. It is a Token-2022 mint with the
 `ScaledUiAmountConfig` extension, which stores an f64 multiplier.
 Wallets and explorers that support `ScaledUiAmount` render the
-dollar-value balance automatically (e.g. 1 000 000 raw tokens at
-multiplier 1.05 displays as "1.05 usdOku"). The multiplier on the
-mint extension is the **single source of truth** — there is no
-`oku_m_price` PDA field or dual-write path.
+scaled dollar-value balance automatically (e.g. 1 000 000 raw OkuM
+tokens at multiplier 1.05 displays as a "1.05" usdOku value — the
+mint's on-chain symbol is still OkuM; "usdOku" is the UI label for
+the scaled figure). The multiplier on the mint extension is the
+**single source of truth** — there is no `oku_m_price` PDA field or
+dual-write path.
 
 **`read_multiplier()` helper and zero-init guard.** The helper at
 `lite-psm/src/helpers/scaled_ui.rs` reads the multiplier from the
@@ -170,10 +203,10 @@ crates/
 programs/
   lite-psm/
     src/
-      lib.rs                       # 18 instruction entry points
-      state.rs                     # PsmConfig only (seed: psm_config_v6, 562B) —
+      lib.rs                       # 21 instruction entry points
+      state.rs                     # PsmConfig only (seed: psm_config, 562B) —
                                    # no RedemptionQueue account; buffer-only PSM
-      errors.rs                    # 23 error variants
+      errors.rs                    # 26 error variants
       events.rs
       roles.rs                     # AuthorityRole enum (12 roles)
       constants.rs                 # Re-exports oku_shared::*
@@ -188,16 +221,16 @@ programs/
         psm.rs                     # mint_oku_m, redeem_oku_m (buffer-only — reverts InsufficientBuffer
                                    # if the vault can't cover it), deposit_buffer, withdraw_buffer
         psm_admin.rs               # pause/unpause, freeze/thaw, set_authority, accept_role_admin,
-                                   # cancel_role_admin_transfer, set_max_supply,
-                                   # set_minter_allowance, set_direct_minter_allowance,
-                                   # set_direct_burner_allowance
+                                   # cancel_role_admin_transfer, update_token_metadata,
+                                   # set_max_supply, set_minter_allowance,
+                                   # set_direct_minter_allowance, set_direct_burner_allowance
         direct_mint.rs             # mint_oku_m_direct (bridge/fiat on-ramp)
         direct_burn.rs             # burn_oku_m_direct (bridge off-ramp)
         yield_ops.rs               # set_multiplier, distribute_yield (CPI to Token-2022 UpdateMultiplier)
       contexts/                    # Per-instruction account contexts
 
 tests/
-  bankrun/                  # Default in-process suite (npm test, 85 bankrun tests)
+  bankrun/                  # Default in-process suite (npm test, 94 bankrun tests)
     smoke.ts
     lite-psm.ts
     direct-mint.ts
@@ -218,7 +251,7 @@ tests/
 
 ## State accounts
 
-### PsmConfig PDA (`b"psm_config_v6"`)
+### PsmConfig PDA (`b"psm_config"`)
 
 ```rust
 pub struct PsmConfig {
@@ -234,63 +267,27 @@ pub struct PsmConfig {
 }
 ```
 
-LEN pinned at 562 bytes by compile-time `assert!`. There is no
-`RedemptionQueue` account and no on-chain escrow-vault field — the
-PSM is buffer-only (see "Why no redemption queue" below), and the
-OkuM escrow ATA is derived client-side, not stored on `PsmConfig`.
+`PsmConfig` is the only state account. Its byte length is pinned at 562
+bytes by a compile-time `assert!`. There is no `RedemptionQueue` account
+and no on-chain escrow-vault field — the PSM is buffer-only (see "Why no
+redemption queue" below), and the OkuM escrow ATA is derived client-side,
+not stored on `PsmConfig`.
 
 The PsmConfig PDA is the **mint authority**, **freeze authority**, and
 **ScaledUiAmount authority** for the `OkuM` mint. All mint/freeze/
-multiplier-update CPIs are signed by the PDA's seeds.
+multiplier-update CPIs are signed by the PDA's seeds. The seed string is
+defined once as `PsmConfig::SEED` in `programs/lite-psm/src/state.rs` and
+mirrored for clients in `scripts/utils/pdaHelpers.ts`.
 
 ### Why no redemption queue
 
-Earlier design iterations included a zero-copy ring-buffer
-`RedemptionQueue` account (mirroring the EVM side) so `redeem_oku_m`
-could escrow a request when the USDC buffer was insufficient rather
-than reverting outright. This was removed entirely in the
-single-token refactor: `redeem_oku_m` now reverts with
-`InsufficientBuffer` if `vault_usdc.amount` can't cover the redemption.
-This matches how every other stablecoin issuer on Solana operates
-(buffer-only, no on-chain queue) and removes an entire class of
-queue-management operational surface (`process_queue`,
-`rescue_queue_entry`, `user_self_rescue_queue_entry`, queue capacity
-SLAs, `queue_processor` role). Operators keep the buffer topped up via
-`deposit_buffer` / `withdraw_buffer`; there is no queue to drain.
-
-### PDA seed history
-
-Current seed: `psm_config_v6`, 562 bytes (compile-time asserted).
-The seed has rotated six times as `PsmConfig`'s storage layout
-changed (noBridge phase C, audit-prep field swaps, direct-mint field
-additions, the single-token refactor, and finally redemption-queue
-removal) — full per-rotation cause/delta history is in `git log` for
-this file. Rotation is mandatory whenever a layout change would cause
-an in-place BPF upgrade to misinterpret old account bytes.
-
-**Orphan-PDA inventory** (devnet, post-rotation): pre-rotation PDAs +
-SPL mints are orphaned because their `owner` field still references
-the old program ID, but the program no longer derives those addresses
-for any instruction. Not material; tracked for completeness, not
-urgency.
-
-#### Seed-rotation checklist
-
-Every rotation must update ALL of these sites in lockstep. A drift
-between any pair produces silent PDA-address mismatches that would
-brick clients without a compile-time error.
-
-| Site | Path | What to change |
-|---|---|---|
-| PSM config seed | `programs/lite-psm/src/state.rs` | `PsmConfig::SEED` byte-string |
-| Client seed mirror | `scripts/utils/pdaHelpers.ts` | `PDA_SEEDS` map (must match the Rust constants byte-for-byte) |
-| Address-book | `deployments/{devnet,mainnet}.json` | Update PDA addresses post-redeploy; flag old entries as orphan |
-| Seed-history table | `contracts/SVM/README.md § PDA seed history` | New row documenting cause + layout delta |
-
-Verification step: after rotation, run `npm test` (bankrun) — the PDA
-derivations are exercised by every test, and a drift produces an
-`AccountOwnedByWrongProgram` or `AccountNotInitialized` error on the
-first test that touches the rotated PDA.
+`redeem_oku_m` is buffer-only: it reverts with `InsufficientBuffer` if
+`vault_usdc.amount` cannot cover the redemption. This matches how every
+other stablecoin issuer on Solana operates (buffer-only, no on-chain
+queue) and keeps the operational surface small — there are no
+queue-management instructions, capacity SLAs, or queue-processor role.
+Operators keep the buffer topped up via `deposit_buffer` /
+`withdraw_buffer`; there is nothing to drain.
 
 ---
 
@@ -320,7 +317,9 @@ no duplicate field on `PsmConfig`.
 ### PSM
 
 ```rust
-// raw_oku_m_amount = usdc_amount (1:1 at raw level; ScaledUiAmount handles display)
+// raw_oku_m_amount = usdc_amount × PRECISION / multiplier
+// (usdc_amount is treated as a dollar value; ScaledUiAmount handles $1-peg display).
+// At multiplier == PRECISION (1.0) this is 1:1; above it, fewer raw OkuM per USDC.
 pub fn mint_oku_m(usdc_amount: u64)
 
 // usdc_amount = raw_oku_m_amount × multiplier / PRECISION.
@@ -351,9 +350,9 @@ Raw amounts are conserved across chains — no multiplier conversion
 during bridging. The `ScaledUiAmount` multiplier is synchronized
 separately by the rebaser on each chain.
 
-### Cross-chain (noBridge, v1)
+### Cross-chain
 
-See "Cross-chain transfers (noBridge model, v1)" above for the
+See "Cross-chain transfers (off-chain orchestrator)" above for the
 overview. One load-bearing property specific to this instruction set:
 
 **`mint_oku_m` is fully permissionless.** Any USDC holder can call
@@ -412,9 +411,9 @@ None can be changed without a program upgrade.
 
 ### Lite-PSM
 
-After the single-token refactor `lite-psm/src/constants.rs` only
-re-exports shared constants from `oku-shared`; no program-specific
-values remain.
+`lite-psm/src/constants.rs` re-exports the shared constants from
+`oku-shared` and defines the on-chain OkuM metadata identity
+(`OKU_M_METADATA_NAME` / `OKU_M_METADATA_SYMBOL`).
 
 ---
 
@@ -455,30 +454,85 @@ client-side by the deploy script via a standard idempotent
 associated-token-account instruction — there is no separate on-chain
 `setup_oku_m_escrow` instruction.
 
-No on-chain bridge, router, or redemption queue is deployed (noBridge,
-buffer-only model).
+No on-chain bridge, router, or redemption queue is deployed — the PSM is
+buffer-only and cross-chain transfers are orchestrator-mediated.
 
 ---
 
 ## Error codes
 
-Full list (23 variants) in `programs/lite-psm/src/errors.rs`. Key errors:
+Full list (26 variants) in `programs/lite-psm/src/errors.rs`. Key errors:
 
 - `YieldDistributionInProgress` — operation blocked during yield lock.
 - `MultiplierCannotDecrease` — ScaledUiAmount multiplier is monotonically increasing.
 - `InsufficientUserBalance` — user balance shortfall on redeem.
-- `InsufficientBuffer` — PSM USDC vault can't cover a redeem or withdraw_buffer (no queue fallback — the tx reverts).
-- `OutputBelowMinimum` — redeem output is zero, or below the caller's `min_usdc_out` slippage floor.
+- `InsufficientBuffer` — PSM USDC vault can't cover a redeem or withdraw_buffer.
+- `ZeroOutput` — redeem output rounds down to zero.
+- `SlippageExceeded` — redeem output is below the caller's `min_usdc_out` floor.
 - `YieldTooSmall` — `distribute_yield` amount truncates to zero.
 - `Paused` — operation attempted while system is paused.
 - `Unauthorized` — caller lacks the required role.
 
 ---
 
+## Accepted Risks
+
+Trust assumptions and design decisions the SVM side makes
+deliberately. A third-party reviewer or auditor should not re-flag
+these; they are the considered output of design discussion.
+
+### 1. Operator-compromise is out of scope
+
+okuMoney is a centralized US-regulated MSB. The on-chain authority
+model encodes separation-of-duties within the company (see
+`Authority model` above), but the threat model does NOT include "what
+if the cold multisig is malicious." That scenario is managed via
+off-chain controls (key custody, change-management procedures,
+regulatory framework).
+
+Guards like `MAX_MULTIPLIER` and per-role allowance caps are present
+as math-sanity bounds (keeping `u64 * u64 -> u128` paths in the
+overflow-safe region, and stopping operator typos), not as defense
+against a compromised rebaser key.
+
+### 2. No on-chain Proof-of-Reserves or oracle
+
+There is no on-chain Proof-of-Reserves feed or USDC-peg circuit-breaker.
+A PoR feed controlled by the operator cannot detect operator-side
+reserve fraud, and USDC-depeg handling is a monitoring concern rather
+than an on-chain guard. The protocol relies on off-chain monitoring for
+USDC depeg events.
+
+### 3. Buffer-only PSM (no redemption queue)
+
+`redeem_oku_m` is buffer-only: it reverts with `InsufficientBuffer` if
+`vault_usdc.amount` can't cover the redemption, rather than escrowing the
+request in an on-chain queue. This matches how every other stablecoin
+issuer operates on Solana and keeps the operational surface small — no
+queue capacity limits, batch-drain SLAs, or spam-DoS considerations.
+Operators keep the buffer topped up via `deposit_buffer` /
+`withdraw_buffer`; there is nothing to drain or rescue.
+
+### 4. SVM ↔ EVM constant parity carries the 1e9 vs 1e18 scaling delta
+
+SVM uses `PRECISION = 1e9` for the structural reason that `u64` token
+amounts × `1e9` precision peak around `1.8e28`, comfortably within
+`u128::MAX`. A `1e18` precision would require either `u128` token
+amounts (no SPL Token-2022 support) or aggressive precision loss on
+every operation. Every numeric constant has its SVM-scaled
+counterpart (e.g. `MAX_MULTIPLIER = 1e15` on SVM vs `MAX_MULTIPLIER =
+1e24` on EVM). The off-chain orchestrator handles the scale
+conversion when reflecting value across the EVM ↔ SVM boundary. See
+[`oku-programs/crates/oku-shared/src/constants.rs`](oku-programs/crates/oku-shared/src/constants.rs)
+and the EVM mirror in
+[`../EVM/src/lib/Constants.sol`](../EVM/src/lib/Constants.sol).
+
+---
+
 ## Testing
 
 ```bash
-# Full bankrun suite — 85 bankrun tests + 16 Rust unit tests = 101 total
+# Full bankrun suite — 94 bankrun tests + 20 Rust unit tests = 114 total
 npm test
 # or directly:
 npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'
@@ -491,14 +545,10 @@ npx mocha --require tsx --timeout 60000 'tests/bankrun/scaled-ui-amount.ts'
 npx mocha --require tsx --timeout 60000 'tests/bankrun/rate-over-time.ts'
 
 # Cargo unit tests (math primitives, helpers)
-cargo test --workspace                # 16 unit tests
+cargo test --workspace                # 20 unit tests
 
 # Anchor build
 anchor build
-
-# Self-audit toolkit (../../audit/SVM/)
-cd ../../audit/SVM && make all    # clippy + cargo-audit + anchor-test
-cd ../../audit/SVM && make doctor # verify toolchain pins match installed binaries
 ```
 
 ### Token-2022 binary override for bankrun
@@ -618,13 +668,12 @@ day-to-day operation of the app to a coworker or CI-owned key (the
 `scripts/admin/grant-roles.ts` implements this split: it only grants
 the four operational roles to a `--delegate` pubkey and will never
 touch the governance/safety set or `role_admin` (see the NatSpec
-header in that file for full rationale, including an incident where
-an earlier version over-granted). Use `set-authority.ts` directly if
-you need to rotate an individual governance role.
+header in that file for full rationale). Use `set-authority.ts` directly
+if you need to rotate an individual governance role.
 
 ### Orchestrator key
 
-In v1 (noBridge) the orchestrator holds a single Solana keypair that
+In v1 the orchestrator holds a single Solana keypair that
 is granted roles for `buffer_depositor`, `rebaser`, `direct_minter`,
 and `direct_burner`. For cross-chain transfers it calls
 `burn_oku_m_direct` / `mint_oku_m_direct`. It also holds
@@ -793,7 +842,7 @@ PSM mint/redeem rounding direction is identical on both sides
 round-trips lose at most 1 wei (EVM) / 1 micro-USDC (SVM) of dust
 per round-trip from integer-division truncation.
 
-### Cross-chain operational requirements (v1 noBridge)
+### Cross-chain operational requirements (v1)
 
 The orchestrator holds:
 
@@ -815,8 +864,8 @@ nonces, no refund flow — all cross-chain coordination is off-chain.
 | `OkuDollar` (rebasing vault) | yes (separate contract) | no | SVM uses `ScaledUiAmount` instead |
 | `OkuM` (Token-2022 + ScaledUiAmount) | no | yes | SVM-only single token |
 | `LitePSM` | yes (`EVM/src/psm/LitePSM.sol`) | yes (`programs/lite-psm`) | parity (different token model) |
-| `RedemptionQueue` | yes (`EVM/src/psm/RedemptionQueue.sol`) | no — removed entirely, buffer-only PSM | SVM-only deliberate simplification |
-| On-chain bridge | removed in noBridge | removed in noBridge | both sides v1 are off-chain orchestrator-mediated |
+| `RedemptionQueue` | yes (`EVM/src/psm/RedemptionQueue.sol`) | no — buffer-only PSM | SVM-only deliberate simplification |
+| On-chain bridge | none | none | both sides are off-chain orchestrator-mediated |
 
 ### Events
 
@@ -833,5 +882,5 @@ declarations) and
 
 - **Orchestrator runbook + deployment guide:** [`../README.md`](../README.md)
 - **Open issues:** [`../TRACKER.md`](../TRACKER.md)
-- **In-repo audit package** (accepted risks, clippy triage): [`oku-programs/audit/README.md`](oku-programs/audit/README.md)
+- **Accepted risks:** see "Accepted Risks" above
 - **EVM-side docs:** [`../EVM/README.md`](../EVM/README.md)

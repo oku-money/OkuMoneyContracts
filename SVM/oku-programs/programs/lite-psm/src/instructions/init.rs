@@ -1,3 +1,4 @@
+use crate::constants::{OKU_M_METADATA_NAME, OKU_M_METADATA_SYMBOL};
 use crate::contexts::Initialize;
 use crate::errors::LitePsmError;
 use crate::events::InitializeEvent;
@@ -5,26 +6,22 @@ use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::invoke;
 use anchor_spl::token_2022::spl_token_2022::{
-    extension::scaled_ui_amount::instruction::initialize as initialize_scaled_ui_amount,
     extension::metadata_pointer::instruction::initialize as initialize_metadata_pointer,
+    extension::scaled_ui_amount::instruction::initialize as initialize_scaled_ui_amount,
     instruction::initialize_mint,
 };
 use anchor_spl::token_2022_extensions::spl_pod;
 use anchor_spl::token_2022_extensions::spl_token_metadata_interface;
 use spl_token_metadata_interface::state::TokenMetadata;
 
-/// Parameter bundle for [`initialize`]. Cycle 4 (PSM-17): collapses
-/// the 15-argument instruction signature into a single struct so the
-/// IDL slot is self-documenting and the call site is harder to
-/// scramble (every field is named, not positional). Anchor borsh-
-/// encodes the struct in a single byte run, so the wire format is
-/// equivalent in size and shape to the prior positional args; only
-/// the IDL changes (and only additively from the client's
-/// perspective once the new struct is in their generated types).
+/// Parameter bundle for [`initialize`]. Bundling the initialization
+/// arguments into a single named struct keeps the IDL self-documenting
+/// and the call site hard to scramble (every field is named, not
+/// positional).
 ///
-/// All `*` pubkey fields are the granular on-chain authorities; see
-/// `roles::AuthorityRole` for the role catalogue and
-/// `audit/SVM/README.md` § "Trust model" for the warm-vs-cold matrix.
+/// The pubkey fields are the granular on-chain authorities; see
+/// `roles::AuthorityRole` for the role catalogue and `SVM/README.md`
+/// § "Authority model" for the warm-vs-cold matrix.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct InitializeParams {
     // ----- Supply / capacity -----
@@ -53,11 +50,11 @@ pub struct InitializeParams {
 /// Anchor's `init` macro doesn't support multi-extension Token-2022
 /// mints. The deployer passes a fresh keypair as `oku_m_mint`
 /// (Signer); the instruction issues CreateAccount + extension init +
-/// InitializeMint2 + metadata init CPIs. The PsmConfig PDA is the
+/// InitializeMint + metadata init CPIs. The PsmConfig PDA is the
 /// mint authority, freeze authority, and ScaledUiAmount authority.
 ///
 /// Authority pubkeys are bundled into [`InitializeParams`] to keep the
-/// IDL slot self-documenting (cycle 4 / PSM-17).
+/// IDL self-documenting.
 pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<()> {
     // Capture keys before taking the mutable borrow on config, so we
     // can still call `ctx.accounts.config.to_account_info()` for CPIs.
@@ -72,11 +69,16 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
         update_authority: spl_pod::optional_keys::OptionalNonZeroPubkey::try_from(Some(config_key))
             .map_err(|_| error!(LitePsmError::InvalidAuthority))?,
         mint: mint_key,
-        // NB: "OkuDollar" and "usdOku" are the wallet-facing brand strings
-        // stored in on-chain token metadata. They MUST NOT be renamed to
-        // "OkuM" — wallets and block explorers display these values directly.
-        name: "OkuDollar".to_string(),
-        symbol: "usdOku".to_string(),
+        // On-chain identity is the base OkuM ("OkuMoney") token — the true,
+        // value-appreciating, T-Bill-backed token. Wallets and block
+        // explorers display THESE values for the mint and for transfers.
+        // The "$1-pegged usdOku" figure is a display-layer value produced
+        // by the ScaledUiAmount extension (raw_amount * multiplier), not
+        // the on-chain symbol. Strings mirror EVM `OkuMoney`/`OkuM`; kept
+        // in a single constant (see constants.rs) so this and the metadata
+        // -init CPI below cannot drift on a rename.
+        name: OKU_M_METADATA_NAME.to_string(),
+        symbol: OKU_M_METADATA_SYMBOL.to_string(),
         uri: params.oku_m_uri.clone(),
         additional_metadata: vec![],
     };
@@ -100,13 +102,12 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     //
     // This is the standard pattern for Token-2022 mints with metadata.
     // See: https://solana.com/docs/tokens/extensions/metadata-pointer
-    let fixed_space = spl_t22::extension::ExtensionType::try_calculate_account_len::<
-        spl_t22::state::Mint,
-    >(&[
-        spl_t22::extension::ExtensionType::ScaledUiAmount,
-        spl_t22::extension::ExtensionType::MetadataPointer,
-    ])
-    .map_err(|_| LitePsmError::Overflow)?;
+    let fixed_space =
+        spl_t22::extension::ExtensionType::try_calculate_account_len::<spl_t22::state::Mint>(&[
+            spl_t22::extension::ExtensionType::ScaledUiAmount,
+            spl_t22::extension::ExtensionType::MetadataPointer,
+        ])
+        .map_err(|_| LitePsmError::Overflow)?;
 
     let total_space = fixed_space
         .checked_add(metadata_len)
@@ -176,7 +177,8 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     // Initialize token metadata (name, symbol, uri).
     // The mint authority (config PDA) must sign this CPI because
     // Token-2022 requires the mint authority to authorize metadata init.
-    let seeds = &[PsmConfig::SEED, &[bump]];
+    let bump_seed = [bump];
+    let seeds = PsmConfig::signer_seeds(&bump_seed);
     let signer_seeds = &[&seeds[..]];
     anchor_lang::solana_program::program::invoke_signed(
         &spl_token_metadata_interface::instruction::initialize(
@@ -185,9 +187,10 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
             &config_key, // update authority
             &mint_key,   // mint
             &config_key, // mint authority
-            // NB: wallet-facing brand — see NatSpec on the TokenMetadata block above.
-            "OkuDollar".to_string(),
-            "usdOku".to_string(),
+            // On-chain OkuM identity — see the TokenMetadata block above and
+            // OKU_M_METADATA_* in constants.rs (single source of truth).
+            OKU_M_METADATA_NAME.to_string(),
+            OKU_M_METADATA_SYMBOL.to_string(),
             params.oku_m_uri.clone(),
         ),
         &[

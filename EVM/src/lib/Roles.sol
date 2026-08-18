@@ -13,12 +13,10 @@ library Roles {
     bytes32 public constant OKUM_PAUSER = keccak256("OKUM_PAUSER");
     bytes32 public constant OKUM_UNPAUSER = keccak256("OKUM_UNPAUSER");
     bytes32 public constant OKUM_MINTER = keccak256("OKUM_MINTER");
-    /// @dev Cycle 4 (EVM-15): split out from `OKUM_MINTER` so the
-    ///      burn surface can be locked down independently of the mint
-    ///      allowance system. Granted to LitePSM at deploy time
-    ///      alongside `OKUM_MINTER` because both flows route through
-    ///      the PSM, but separating the role lets a future upgrade
-    ///      withdraw burn privileges without touching mint plumbing.
+    /// @dev Split from `OKUM_MINTER` so the burn surface can be locked
+    ///      down independently of the mint allowance system. Granted to
+    ///      LitePSM at deploy time alongside `OKUM_MINTER` because both
+    ///      flows route through the PSM.
     bytes32 public constant OKUM_BURNER = keccak256("OKUM_BURNER");
     bytes32 public constant OKUM_REBASER = keccak256("OKUM_REBASER");
     bytes32 public constant OKUM_BLACKLISTER = keccak256("OKUM_BLACKLISTER");

@@ -43,10 +43,8 @@ pub fn mul_div_floor(a: u64, b: u64, divisor: u64) -> Option<u64> {
         return None;
     }
     let product = (a as u128).checked_mul(b as u128)?;
-    // F-06: `divisor` is guaranteed non-zero by the early return above.
-    // The `/ (divisor as u128)` cannot panic or wrap.
-    // Safety confirmed by 47M fuzz iterations across mul_div_floor,
-    // dollars_to_raw, raw_to_dollars targets.
+    // `divisor` is guaranteed non-zero by the early return above, so the
+    // `/ (divisor as u128)` cannot panic or wrap.
     #[allow(clippy::arithmetic_side_effects)]
     let result = product / (divisor as u128);
     u64::try_from(result).ok()
@@ -104,8 +102,8 @@ pub fn mul_div_ceil(a: u64, b: u64, divisor: u64) -> Option<u64> {
     let d = divisor as u128;
     let product = (a as u128).checked_mul(b as u128)?;
     // `product + (d - 1)` cannot overflow u128 — see module note above.
-    // `checked_add` is used for the audit trail; the bound is asserted
-    // structurally by Kani in `proof_mul_div_ceil_no_u128_overflow`.
+    // `checked_add` is used defensively; the bound is asserted structurally
+    // by Kani in `proof_mul_div_ceil_numerator_fits_u128`.
     let numerator = product.checked_add(d.saturating_sub(1))?;
     #[allow(clippy::arithmetic_side_effects)]
     let result = numerator / d;
@@ -383,5 +381,4 @@ mod tests {
         assert_eq!(mul_div_ceil(u64::MAX, u64::MAX, u64::MAX), Some(u64::MAX));
         assert_eq!(mul_div_floor(u64::MAX, u64::MAX, u64::MAX), Some(u64::MAX));
     }
-
 }

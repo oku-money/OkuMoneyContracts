@@ -1,8 +1,8 @@
 //! cargo-fuzz target: `mul_div_ceil`
 //!
-//! Coverage for the new `oku_shared::mul_div_ceil` primitive (cycle 4,
-//! PSM-05). Cross-checks against `mul_div_floor` and against an in-test
-//! u128 reference implementation.
+//! Coverage for the `oku_shared::mul_div_ceil` primitive. Cross-checks
+//! against `mul_div_floor` and against an in-test u128 reference
+//! implementation.
 //!
 //! Properties verified:
 //!

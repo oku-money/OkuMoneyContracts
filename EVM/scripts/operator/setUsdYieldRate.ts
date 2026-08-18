@@ -29,13 +29,14 @@
  *   --yes-mainnet                            bypass mainnet guard
  */
 
-import { ethers } from "hardhat";
+import { ethers, network } from "hardhat";
 import { Contract } from "ethers";
 import { resolveNetworkContext } from "../utils/networkContext";
 import { loadAddress } from "../utils/addressBook";
 import { getDeployedContract } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
+import { DEV_WALLET_ADDRESS } from "../config/chains";
 
 function parseArg(name: string): string | undefined {
   const a = process.argv.find((x) => x.startsWith(`--${name}=`) || x.startsWith(`--${name} `));
@@ -46,6 +47,49 @@ const YES_MAINNET = process.argv.includes("--yes-mainnet") || process.env.YES_MA
 const DRY_RUN = process.env.DRY_RUN === "true";
 
 const PRECISION = 10n ** 18n;
+
+/**
+ * Get the signer that will send the setUsdYieldRate tx. On a fork, the
+ * hardhat mnemonic accounts don't hold VAULT_REBASER — impersonate the dev
+ * wallet (which testnet deploys grant VAULT_REBASER to) instead, mirroring
+ * `grantRoles.ts`'s `resolveAdminSigner`.
+ */
+async function resolveVaultRebaserSigner(isFork: boolean) {
+  const [primary] = await ethers.getSigners();
+
+  if (primary && primary.address.toLowerCase() === DEV_WALLET_ADDRESS.toLowerCase()) {
+    return primary;
+  }
+
+  if (!isFork) {
+    if (DRY_RUN) {
+      const voidSigner = new ethers.VoidSigner(DEV_WALLET_ADDRESS, ethers.provider);
+      logger.warning(
+        `DRY_RUN: no live private key required; using read-only VoidSigner for ${DEV_WALLET_ADDRESS}`
+      );
+      return voidSigner;
+    }
+    return primary; // live: trust PRIVATE_KEY's signer holds VAULT_REBASER; contract call reverts otherwise
+  }
+
+  // Fork path — impersonate the dev wallet and top up its ETH for gas.
+  logger.info(`Impersonating dev wallet ${DEV_WALLET_ADDRESS} on fork...`);
+  await network.provider.request({
+    method: "hardhat_impersonateAccount",
+    params: [DEV_WALLET_ADDRESS],
+  });
+
+  const devBalance = await ethers.provider.getBalance(DEV_WALLET_ADDRESS);
+  if (devBalance < ethers.parseEther("0.5")) {
+    await primary.sendTransaction({
+      to: DEV_WALLET_ADDRESS,
+      value: ethers.parseEther("1"),
+    });
+    logger.info(`Funded ${DEV_WALLET_ADDRESS} with 1 ETH for gas`);
+  }
+
+  return ethers.getSigner(DEV_WALLET_ADDRESS);
+}
 
 async function main() {
   const ctx = await resolveNetworkContext();
@@ -69,7 +113,7 @@ async function main() {
   const okuDollarAddr = loadAddress(ctx.bookKey, "OkuDollar");
   if (!okuDollarAddr) throw new Error(`Missing OkuDollar in address book for ${ctx.bookKey}`);
 
-  const [signer] = await ethers.getSigners();
+  const signer = await resolveVaultRebaserSigner(ctx.isFork);
   const okuDollar = (await getDeployedContract("OkuDollar", okuDollarAddr)).connect(signer) as Contract;
 
   const currentRate = await (okuDollar as any).usdRatePerSecond();

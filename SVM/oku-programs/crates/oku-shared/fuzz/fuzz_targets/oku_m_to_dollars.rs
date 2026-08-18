@@ -7,8 +7,7 @@
 //!      (identity).
 //!   3. At `multiplier > PRECISION` with non-zero amount,
 //!      `dollar_value >= amount` (floor-rounding can equalize at small
-//!      `amount` even when the multiplier indicates yield). Cycle 4
-//!      (S-25): header previously claimed `>` which is wrong on dust.
+//!      `amount` even when the multiplier indicates yield).
 //!   4. At `multiplier < PRECISION` (discounted), `dollar_value <= amount`.
 //!   5. Consistency with `mul_div_floor`: result ==
 //!      `mul_div_floor(amount, multiplier, PRECISION)`.

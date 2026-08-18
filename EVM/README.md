@@ -252,14 +252,17 @@ test/
 ```
 
 > **noBridge refactor**: `src/bridge/OkuBridge.sol`, `OkuBridgeRouter.sol`,
-> `adapters/NttAdapter.sol` + `INttManager.sol`, and the corresponding event
-> files were removed. v1 cross-chain transfers are PSM-mediated mint/burn,
+> `adapters/NttAdapter.sol` + `INttManager.sol`, the corresponding event
+> files, the `IBridgeAdapter` / `IOkuBridgeNative` interfaces, and the
+> `BRIDGE_*` / `ROUTER_*` / `NTT_*` constants in `Roles.sol` were all removed
+> in a later cleanup pass — no bridge-related code or reserved role constants
+> remain in `src/`. v1 cross-chain transfers are PSM-mediated mint/burn,
 > orchestrated off-chain (the orchestrator custodies USDC and calls
 > `LitePSM.mintOkuM` / `LitePSM.redeemOkuM` on the source/destination chains).
-> The retained `IBridgeAdapter` and `IOkuBridgeNative` interfaces plus the
-> `BRIDGE_*` / `ROUTER_*` / `NTT_*` constants in `Roles.sol` are reserved seams
-> for future re-introduction of OkuBridge / NTT / CCIP; those will arrive as
-> contract additions, not modifications to the existing suite.
+> Should OkuBridge / NTT / CCIP return, the upgrade is additive — deploy the
+> new proxy, grant it `OKUM_MINTER`, configure its minter allowance — but it
+> requires re-adding the interfaces and role constants from git history
+> rather than resuming any scaffolding left in the current tree.
 
 ---
 
@@ -591,23 +594,20 @@ LitePSM.redeemOkuM(user, n) ─► orchestrator ─► LitePSM.mintOkuM (USDC cu
 - The orchestrator custodies USDC and rebalances PSM buffers operationally.
 - No on-chain signature verification, EIP-712 BridgeRequest, or refund flow in v1.
 
-### Reserved seams (for future OkuBridge / NTT / CCIP)
+### If OkuBridge / NTT / CCIP return
 
-Deleted in the noBridge refactor: `OkuBridge.sol`, `OkuBridgeRouter.sol`,
-`NttAdapter.sol`, `INttManager.sol`, the bridge event files, the bridge test
-suite, and the `scripts/bridge/` flow. The master branch retains the full
-implementation if it ever needs to be restored.
+Deleted in the noBridge refactor (no longer present anywhere in `src/`):
+`OkuBridge.sol`, `OkuBridgeRouter.sol`, `NttAdapter.sol`, `INttManager.sol`,
+the bridge event files, the `IOkuBridgeNative` / `IBridgeAdapter` interfaces,
+the `BRIDGE_*` / `ROUTER_*` / `NTT_*` role constants in `Roles.sol`, the
+bridge test suite, and the `scripts/bridge/` flow. A pre-noBridge git history
+retains the full implementation if it ever needs to be restored — there is
+no scaffolding left in the current tree to build on top of.
 
-Retained as forward-compatibility scaffolding:
-
-- `src/interfaces/IOkuBridgeNative.sol` — OkuBridge subset surface.
-- `src/bridge/adapters/IBridgeAdapter.sol` — third-party adapter interface.
-- `BRIDGE_*`, `ROUTER_*`, `NTT_*` constants in `src/lib/Roles.sol`.
-
-When OkuBridge / NTT / CCIP return, the upgrade is additive: deploy the new
-proxy, grant it `OKUM_MINTER`, configure its minter allowance. No changes to
-the existing `OkuMoney` / `OkuDollar` / `LitePSM` / `RedemptionQueue`
-contracts are required.
+When OkuBridge / NTT / CCIP return, the upgrade is additive: reintroduce the
+interfaces/roles from history, deploy the new proxy, grant it `OKUM_MINTER`,
+configure its minter allowance. No changes to the existing `OkuMoney` /
+`OkuDollar` / `LitePSM` / `RedemptionQueue` contracts are required.
 
 ---
 
@@ -706,6 +706,116 @@ psmUsdcOutflow <= seededBuffer + trackedDeposits + tolerance    // USDC outflow 
 
 ---
 
+## Accepted Risks
+
+Known issues and design choices explicitly accepted by the protocol
+team. A third-party reviewer or auditor should be aware of these so
+the same ground isn't re-covered as a new finding.
+
+### 1. Centralized operator model — no on-chain timelock
+
+OkuMoney v1 ships as a centralized financial product, modelled on
+similar yield-bearing stablecoins (Ondo Finance, Circle USDC). No
+`TimelockController` sits between the operator multisig and any
+contract.
+
+**Scope of operator powers:**
+
+- `OKUM_REBASER`: writes `okuMMultiplier` and `lastYieldDistributionBlock`. Bounded by `MAX_MULTIPLIER` and monotonic-increase invariants.
+- `VAULT_REBASER`: writes USD yield rate. Bounded by `MAX_RATE` and `MAX_MULTIPLIER`.
+- `VAULT_RESERVE_MANAGER`: deposits / withdraws OkuMoney from vault reserves. Withdrawals gated by `minCollateralRatio` post-condition and `whenYieldNotDistributing`.
+- `OKUM_MINTER` / `OKUM_BURNER`: bounded by per-minter allowance + global `maxSupply`. PSM and Queue are the only intended holders.
+- `PSM_*` roles: queue processing, buffer custody.
+- `OKUM_BLACKLISTER` / `OKUM_UNBLACKLISTER`: shared blacklist for OkuMoney + OkuDollar.
+
+**On-chain mitigations:**
+
+- All multiplier-write operations stamp `lastYieldDistributionBlock`; the `whenYieldNotDistributing` modifier prevents same-block sandwich attacks on every PSM + vault op that reads the multiplier.
+- Defense-in-depth ceilings (`MAX_MULTIPLIER = 1e24`, `MAX_RATE = PRECISION + 1e11`) cap the blast radius of a single-call compromise.
+- Monotonic guards (`MultiplierCannotDecrease`, `RateAlreadyExpired`) prevent backward writes.
+
+**Operational expectation:** each operational role must rotate to a
+multisig before mainnet launch. `VAULT_REBASER` and
+`VAULT_RESERVE_MANAGER` must be held by separate keys / multisigs
+(see Risk 2).
+
+### 2. `VAULT_REBASER` + `VAULT_RESERVE_MANAGER` cross-block opsec
+
+**Issue:** if both roles are held by the same key, that key can
+sequence `setUsdYieldRate` (or `distributeYield`) in block N followed
+by `withdrawSurplus` in block N + 1 to extract value just added to
+the apparent reserve dollar valuation.
+
+**On-chain mitigation:** `whenYieldNotDistributing` prevents the
+same-block attack. Cross-block manipulation is NOT mitigated
+on-chain — closing it would require either a timelock (rejected, see
+Risk 1) or stale-multiplier checks that themselves depend on the same
+compromised key.
+
+**Off-chain mitigation:** the two roles MUST be held by separate
+keys / multisigs, both rotated to multisigs before mainnet.
+Documented in NatSpec on `OkuDollar.withdrawSurplus`.
+
+### 3. USDC peg monitoring — off-chain (no on-chain oracle)
+
+Both EVM and SVM handle USDC peg monitoring entirely off-chain. EVM
+previously had an on-chain `OracleRelay` circuit-breaker (Chainlink
+USDC/USD aggregator, gating every mint/redeem/`processQueue` path) —
+this was fully removed, including the storage slots that referenced
+it (`LitePSM` and `RedemptionQueue` storage layouts were compacted,
+not `__gap`-padded). SVM's `lite-psm` similarly removed its Pyth
+oracle relay. Both chains now converge on the same model: the
+off-chain orchestrator monitors the peg and pauses the PSM on a
+detected depeg.
+
+### 4. 1-wei share dust in `OkuDollar.transferFrom` under inflated `usdMultiplier`
+
+**Issue:** `OkuDollar` accounts in shares but exposes a
+dollar-denominated ERC-20 interface. `transferFrom(amount)` floors
+the share conversion. When `usdMultiplier > 1e18`, multiple
+sequential `transferFrom` calls against a single permit-approved
+allowance may under-consume shares by ~1 share per call due to floor
+truncation.
+
+**Status:** documented in NatSpec on `OkuDollar.permit`. The 1-wei
+drift always favours the holder, never the protocol. The `Transfer`
+event's emitted `value` matches the post-rounding share-converted
+amount, preserving the ERC-20 invariant `Σ Transfer.value == Δ
+balanceOf`. Integrators planning batched `transferFrom` against a
+single permit allowance should account for the sub-call dust.
+
+### 5. `OkuDollar._update` ERC-20 tripwires
+
+`OkuDollar` overrides `transfer` / `transferFrom` to use share-based
+accounting, bypassing the inherited `ERC20Upgradeable._update`. The
+`_update` override unconditionally reverts (with diagnostic
+sub-errors for mint/burn) to ensure all supply changes go through
+`wrap()` / `unwrap()`, which manage `usdShares` directly. These are
+defensive forward-compat sentinels — the inherited `_mint`/`_burn`
+are not called anywhere in `OkuDollar` today. The reverts exist only
+to catch a future bug where an upgrade accidentally routes through
+`_update`.
+
+### 6. `RedemptionQueue.advanceHead` is permissionless
+
+The cursor-advance maintenance function is callable by anyone. No
+privileged effect — `queueHead` can only move forward, and only past
+slots that are already cleared (`user == address(0)`). Visible effect
+is purely on `queueLength()` accuracy. A privileged version (e.g.
+`onlyRole(QUEUE_RESCUER)`) adds no security and complicates the
+operator runbook; the function is gas-bounded by `maxSlots` and emits
+`QueueHeadAdvanced` on any non-zero advance.
+
+### 7. Deprecated bridge feature
+
+The on-chain `OkuBridge` / `OkuBridgeRouter` / `NttAdapter` contracts
+and all associated tests/scripts/role constants were deleted in a
+pre-review cleanup. The historical implementation is preserved on a
+separate git branch should it be revisited. No bridge-related code
+remains in `src/`, `test/`, or `scripts/`.
+
+---
+
 ## Testing
 
 ```bash
@@ -764,7 +874,7 @@ judged not worth the maintenance cost.
 | `LitePSM.sol` `mintOkuM` | `revert RoundTripDriftTooLarge` | The round-trip check is mathematically bounded above by `usdcAmount` for any well-behaved `okuMMultiplier()`. Defends against an OkuMoney variant whose multiplier mutates between reads inside one transaction — impossible under the current `setOkuMMultiplier` + yield-distribution-guard policy. |
 | `LitePSM.sol` `_redeemOkuMShared` | `revert OutputBelowMinimum` | `usdcAmount` is computed once. The floor `okuMFloor = (okuMAmount / dm) * dm` then `minUsdcExpected` is bounded above by `usdcAmount` by construction. Defends against an OkuMoney whose multiplier shifts during the same call. |
 | `LitePSM.sol` `mintUsdOku` | `revert RoundTripDriftTooLarge` | Mirror of the `mintOkuM` case for the wrap path. |
-| `OkuDollar.sol` `_update` | `UseWrapInstead` / `UseUnwrapInstead` guards | `OkuDollar` overrides `transfer` / `transferFrom` to use share-based accounting, so the inherited ERC20 `_update` hook is only reachable via the inherited `_mint` / `_burn` — which the contract never calls. The guards halt any future refactor that accidentally invokes `_mint` or `_burn`. |
+| `OkuDollar.sol` `_update` | `UseWrapInstead` / `UseUnwrapInstead` / `OkuDollarDoesNotUseInternalUpdate` guards | `OkuDollar` overrides `transfer` / `transferFrom` to use share-based accounting; all supply changes go through `wrap()` / `unwrap()`, which manage `usdShares` directly and never call the inherited `_mint` / `_burn`. Since nothing in the contract invokes `_mint` or `_burn`, this `pure`, unconditionally-reverting override is unreachable today — it exists purely to halt any future refactor that accidentally routes through the inherited ERC-20 `_update` hook. |
 
 ### Auditor checklist — sensitive functions
 
@@ -903,5 +1013,5 @@ for transparency.
 
 - **Workspace overview:** [`../README.md`](../README.md)
 - **Open issues:** [`../TRACKER.md`](../TRACKER.md)
-- **In-repo audit package** (accepted risks, slither triage, captured tool snapshots): [`audit/README.md`](audit/README.md)
+- **Accepted risks:** see "Accepted Risks" above
 - **SVM-side docs:** [`../SVM/README.md`](../SVM/README.md)

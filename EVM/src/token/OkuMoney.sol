@@ -98,7 +98,8 @@ contract OkuMoney is
     ///      lose precision or overflow. The cap is far above any realistic
     ///      yield trajectory; its purpose is to keep the `uint256 * uint256`
     ///      paths within the overflow-safe region, not to constrain a trusted
-    ///      operator. Mirrors the explicit `MAX_OKU_M_PRICE` guard on the SVM side.
+    ///      operator. Mirrors the explicit `MAX_MULTIPLIER` guard on the SVM side
+    ///      (`oku-shared::constants::MAX_MULTIPLIER`, scaled for SVM's 1e9 precision).
     error MultiplierTooHigh();
     /// @dev Mirrors SVM `LitePsmError::YieldTooSmall`. Prevents a tiny yieldAmount
     ///      that truncates to zero per-token from stamping `lastYieldDistributionBlock`
@@ -144,10 +145,8 @@ contract OkuMoney is
         _grantRole(Roles.OKUM_PAUSER, _admin);
         _grantRole(Roles.OKUM_UNPAUSER, _admin);
         _grantRole(Roles.OKUM_MINTER, _admin);
-        // Cycle 4 (EVM-15): grant both mint and burn to `_admin` at
-        // init so the cycle-3 deploy story (single admin grants every
-        // role, then redistributes) keeps working. Operational scripts
-        // grant both to the LitePSM proxy after deploy.
+        // Both mint and burn are granted to `_admin` at init; operational
+        // scripts grant both to the LitePSM proxy after deploy.
         _grantRole(Roles.OKUM_BURNER, _admin);
         _grantRole(Roles.OKUM_REBASER, _admin);
         _grantRole(Roles.OKUM_BLACKLISTER, _admin);
@@ -186,28 +185,23 @@ contract OkuMoney is
 
     // ============ Storage Accessor Views ============
 
-    /// @notice Remaining minter allowance for `minter_`.
-    /// @param minter_ Address of the minter to query.
-    /// @return Remaining allowance in raw token units.
+    /// @notice Remaining minter allowance for `minter_`, in raw token units.
     function minterAllowance(address minter_) external view returns (uint256) {
         return _getOkuMoneyStorage().minterAllowance[minter_];
     }
 
     /// @notice Global supply cap in raw token units.
-    /// @return Maximum number of tokens that can exist simultaneously.
     function maxSupply() external view returns (uint256) {
         return _getOkuMoneyStorage().maxSupply;
     }
 
     /// @notice Whether `account` is on the blacklist.
-    /// @param account Address to check.
-    /// @return True if blacklisted.
     function isBlacklisted(address account) external view returns (bool) {
         return _getOkuMoneyStorage().isBlacklisted[account];
     }
 
-    /// @notice Block number of the last yield distribution (used by YieldSandwichGuard).
-    /// @return Block number, or 0 if no distribution has occurred.
+    /// @notice Block number of the last yield distribution (used by YieldSandwichGuard,
+    ///         0 if no distribution has occurred).
     function lastYieldDistributionBlock() external view returns (uint256) {
         return _getOkuMoneyStorage().lastYieldDistributionBlock;
     }
@@ -227,7 +221,8 @@ contract OkuMoney is
     /// @dev The `<= Constants.MAX_MULTIPLIER` ceiling is a math sanity bound that
     ///      keeps downstream `uint256` multiplications in the PSM and vault
     ///      paths away from the overflow region. Mirrors the explicit
-    ///      `MAX_OKU_M_PRICE` guard on the SVM side.
+    ///      `MAX_MULTIPLIER` guard on the SVM side (`oku-shared::constants::MAX_MULTIPLIER`,
+    ///      scaled for SVM's 1e9 precision).
     ///
     ///      Rejects `newMultiplier == currentMultiplier` so a no-op call cannot
     ///      stamp `lastYieldDistributionBlock` without actually moving the
@@ -346,11 +341,6 @@ contract OkuMoney is
         if (totalSupply() + amount > $.maxSupply) revert ExceedsSupplyCap();
         if ($.minterAllowance[msg.sender] < amount) revert ExceedsAllowance();
 
-        // Cycle 4 (EVM-08): the `unchecked` block previously here was
-        // a micro-optimization on top of the explicit bounds check just
-        // above. The savings are ~30 gas and the cognitive cost of an
-        // `unchecked` block for an auditor is much higher. Solidity
-        // 0.8.28's underflow protection makes this a no-op safety win.
         $.minterAllowance[msg.sender] -= amount;
 
         _mint(to, amount);
@@ -358,13 +348,9 @@ contract OkuMoney is
 
     /// @notice Burn raw tokens from the caller's balance. Allowed while paused.
     /// @param amount Number of raw tokens to burn.
-    /// @dev Cycle 4 (EVM-15): gated on `OKUM_BURNER` (split from
-    ///      `OKUM_MINTER`). Grant both to LitePSM at deploy time;
-    ///      separating the two lets a future upgrade revoke burn
-    ///      privileges without touching mint plumbing. Initialise
-    ///      grants both roles on the same address (`_admin`) so
-    ///      pre-cycle-4 deploys remain compatible after a one-time
-    ///      grant of `OKUM_BURNER` to the PSM proxy.
+    /// @dev Gated on `OKUM_BURNER`, split from `OKUM_MINTER` — grant both to
+    ///      LitePSM at deploy time; separating the two lets a future upgrade
+    ///      revoke burn privileges without touching mint plumbing.
     function burn(uint256 amount) external onlyRole(Roles.OKUM_BURNER) {
         OkuMoneyStorage storage $ = _getOkuMoneyStorage();
         if ($.isBlacklisted[msg.sender]) revert SenderBlacklisted();
@@ -436,9 +422,5 @@ contract OkuMoney is
 
     // ============ Upgradeability ============
 
-    function _authorizeUpgrade(address newImplementation)
-        internal
-        override
-        onlyRole(Roles.OKUM_UPGRADER)
-    {}
+    function _authorizeUpgrade(address) internal override onlyRole(Roles.OKUM_UPGRADER) {}
 }

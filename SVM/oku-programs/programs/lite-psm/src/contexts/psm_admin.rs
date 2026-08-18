@@ -144,6 +144,45 @@ pub struct SetAuthority<'info> {
     pub config: Account<'info, PsmConfig>,
 }
 
+/// Update the OkuM mint's Token-2022 `TokenMetadata` `name`/`symbol`
+/// in place on an already-deployed mint.
+///
+/// This rewrites the TRUE on-chain identity (OkuM / "OkuMoney") that
+/// wallets and block explorers display for the mint and its transfers.
+/// It does NOT touch the ScaledUiAmount multiplier, so the "$1-pegged
+/// usdOku" display value is unaffected.
+///
+/// Authority model mirrors `SetAuthority`: only `role_admin` (the
+/// most-privileged config-level admin) may rename the token. The actual
+/// Token-2022 metadata `update_authority` is the `config` PDA, which
+/// signs the CPI via `invoke_signed` in the handler.
+#[derive(Accounts)]
+pub struct UpdateTokenMetadata<'info> {
+    /// Role admin — only `role_admin` may rename the token.
+    pub role_admin: Signer<'info>,
+
+    /// PSM config PDA. Holds the Token-2022 metadata `update_authority`
+    /// for the mint and CPI-signs the `update_field` calls.
+    #[account(
+        seeds = [PsmConfig::SEED],
+        bump = config.bump,
+        has_one = role_admin @ LitePsmError::Unauthorized
+    )]
+    pub config: Account<'info, PsmConfig>,
+
+    /// OkuM mint (Token-2022). The metadata is stored on the mint itself
+    /// (metadata-pointer points to self), so this is the `mut` metadata
+    /// account passed to `update_field`.
+    #[account(
+        mut,
+        address = config.oku_m_mint,
+        mint::token_program = token_2022_program,
+    )]
+    pub oku_m_mint: InterfaceAccount<'info, MintInterface>,
+
+    pub token_2022_program: Program<'info, Token2022>,
+}
+
 /// Step 2 of the two-step `role_admin` transfer.
 ///
 /// Signed by the proposed `pending_role_admin` (NOT the current

@@ -13,11 +13,7 @@ resolver = "2"
 # Splitting them keeps `anchor build` (which walks `programs/*` and
 # requires the `idl-build` feature on every member) honest.
 
-# ============================================================
-# Centralized dependency versions (F-01 remediation)
-# anchor-lang 1.0.2 fixes CVE-2026-45137 / RUSTSEC-2026-0144:
-#   Program<System> validation bypass in anchor-lang 1.0.0
-# ============================================================
+# Centralized dependency versions shared by every workspace member.
 [workspace.dependencies]
 anchor-lang = "1.0.2"
 anchor-spl = "1.0.2"
@@ -30,13 +26,3 @@ codegen-units = 1
 opt-level = 3
 incremental = false
 codegen-units = 1
-
-# ============================================================
-# Trail of Bits Solana Lints (crytic/solana-lints)
-# Used by `cargo dylint --all --workspace` in audit/SVM/Makefile
-# Requires: cargo-dylint, dylint-link, and nightly-2025-01-09 toolchain
-# ============================================================
-[workspace.metadata.dylint]
-libraries = [
-    { git = "https://github.com/crytic/solana-lints", pattern = "lints/*" },
-]

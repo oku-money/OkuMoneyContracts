@@ -64,7 +64,8 @@ pub fn mint_oku_m_direct(ctx: Context<MintOkuMDirect>, raw_amount: u64) -> Resul
         .ok_or(LitePsmError::Overflow)?;
 
     // Mint OkuM to recipient (Token-2022)
-    let seeds = &[PsmConfig::SEED, &[bump]];
+    let bump = [bump];
+    let seeds = PsmConfig::signer_seeds(&bump);
     let signer = &[&seeds[..]];
 
     let direct_minter_key = ctx.accounts.direct_minter.key();

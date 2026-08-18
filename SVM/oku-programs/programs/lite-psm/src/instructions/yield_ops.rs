@@ -42,7 +42,8 @@ fn write_multiplier_and_stamp<'info>(
     )
     .map_err(|_| error!(LitePsmError::MultiplierUpdateFailed))?;
 
-    let seeds = &[PsmConfig::SEED, &[config.bump]];
+    let bump = [config.bump];
+    let seeds = PsmConfig::signer_seeds(&bump);
     let signer = &[&seeds[..]];
     anchor_lang::solana_program::program::invoke_signed(
         &ix,
@@ -69,12 +70,11 @@ fn write_multiplier_and_stamp<'info>(
 /// would waste the lock window for the entire slot). Mirrors the
 /// `YieldTooSmall` guard on `distribute_yield`.
 pub fn set_multiplier(ctx: Context<SetMultiplier>, new_multiplier: u64) -> Result<()> {
-    // Cycle 4 (OKUD-06 mirror): self-fence on the lite-psm yield slot.
-    // Two yield-affecting writes in the same slot would otherwise be
-    // legal (strict-increase admits the second), defeating the
-    // "one yield event per slot per program" invariant. Strict-increase
-    // alone catches no-op writes; this catches near-no-op writes that
-    // would still consume the same-slot lock budget.
+    // Self-fence on the yield slot. Two yield-affecting writes in the same
+    // slot would otherwise be legal (strict-increase admits the second),
+    // defeating the "one yield event per slot" invariant. Strict-increase
+    // alone catches no-op writes; this catches near-no-op writes that would
+    // still consume the same-slot lock budget.
     check_yield_lock(&ctx.accounts.config)?;
 
     // Read current multiplier from the OkuM mint's ScaledUiAmountConfig extension
@@ -122,8 +122,7 @@ pub fn set_multiplier(ctx: Context<SetMultiplier>, new_multiplier: u64) -> Resul
 ///
 /// This is the SVM equivalent of EVM's `distributeYield(uint256 yieldAmount)`.
 pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Result<()> {
-    // Cycle 4 (OKUD-06 mirror): self-fence on the lite-psm yield slot.
-    // See `set_multiplier` for rationale.
+    // Self-fence on the yield slot. See `set_multiplier` for rationale.
     check_yield_lock(&ctx.accounts.config)?;
 
     require!(yield_amount > 0, LitePsmError::ZeroAmount);
@@ -135,11 +134,9 @@ pub fn distribute_yield(ctx: Context<DistributeYield>, yield_amount: u64) -> Res
     let current_multiplier =
         crate::helpers::scaled_ui::read_multiplier(&ctx.accounts.oku_m_mint.to_account_info())?;
 
-    // Cycle 4 (S-29): use the shared `mul_div_floor` primitive instead
-    // of open-coding the same `(yield * PRECISION) / total_supply` math.
-    // Identical semantics (floor + u128 widening + try_from narrowing)
-    // and the path is now covered by the cargo-fuzz `mul_div_floor`
-    // target and the Kani correctness proof at no extra cost.
+    // Per-token yield increment: `(yield_amount * PRECISION) / total_supply`,
+    // floored via the shared `mul_div_floor` primitive (u128 widening +
+    // try_from narrowing).
     let yield_per_token = oku_shared::mul_div_floor(yield_amount, PRECISION, total_supply)
         .ok_or(LitePsmError::Overflow)?;
 

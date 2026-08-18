@@ -105,7 +105,7 @@ describe("lite-psm", () => {
     vaultOkuMAta = psmSetup.vaultOkuMAta;
 
     [, configBump] = PublicKey.findProgramAddressSync(
-      [Buffer.from("psm_config_v6")],
+      [Buffer.from("psm_config")],
       program.programId
     );
 
@@ -1193,16 +1193,11 @@ describe("lite-psm", () => {
           .rpc();
         expect.fail("Should have failed");
       } catch (err: any) {
-        // WS2.7 added a balance pre-check in redeem_oku_m that fires
-        // `InsufficientBuffer` before the Token-2022 burn CPI can reject
-        // with its own `InsufficientFunds` error. Either is acceptable.
-        // Cycle 4 (PSM-11): the on-program error for a user balance
-        // shortfall is `InsufficientUserBalance` (was misleadingly
-        // `InsufficientBuffer` before, which is now reserved for the
-        // PSM-side buffer drain case). Accept both for transitional
-        // compatibility plus the SPL Token raw insufficient-funds
-        // selector that the underlying program may surface if the
-        // pre-check is somehow skipped.
+        // A user balance shortfall on redeem surfaces as
+        // `InsufficientUserBalance` from the program's pre-check. We also
+        // accept the SPL Token raw `InsufficientFunds` selector (and the
+        // PSM-side `InsufficientBuffer`) in case the underlying burn CPI
+        // is what rejects first.
         const code = err?.error?.errorCode?.code;
         const msg = String(err?.message ?? err);
         const isInsufficient =

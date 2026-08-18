@@ -1,5 +1,5 @@
 /**
- * Cross-Chain Bridging via Orchestrator + PSM (noBridge model, SVM side).
+ * Cross-Chain Bridging via Orchestrator + PSM (SVM side).
  *
  * Mirrors `EVM/test/hardhat/crossChain/OrchestratorPsmBridging.ts`.
  *
@@ -63,7 +63,7 @@ type Keypair = anchor.web3.Keypair;
 
 const PRECISION = new BN(1_000_000_000); // 1e9
 
-describe("cross-chain bridging via orchestrator + PSM (noBridge, SVM)", () => {
+describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
   let h: BankrunHarness;
   let provider: anchor.AnchorProvider;
   let psm: Program<LitePsm>;

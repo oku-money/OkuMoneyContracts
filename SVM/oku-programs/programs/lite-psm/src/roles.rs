@@ -23,7 +23,7 @@
 //! | `BufferDepositor` | `PSM_BUFFER_DEPOSITOR` | Orchestrator - deposit USDC buffer |
 //! | `BufferWithdrawer` | `PSM_BUFFER_WITHDRAWER` | Cold Multisig - withdraw buffer |
 //! | `CapManager` | `OKUM_CAP_MANAGER` | Cold Multisig - set max supply |
-//! | `AllowanceManager` | `OKUM_ALLOWANCE_MANAGER` | Cold Multisig - reset minter allowance |
+//! | `AllowanceManager` | `OKUM_ALLOWANCE_MANAGER` | Cold Multisig - reset minter / direct-minter / direct-burner allowances |
 //! | `Rebaser` | `OKUM_REBASER` | Orchestrator - update OkuM price |
 //! | `DirectMinter` | `OKUM_MINTER` (non-PSM) | Operator - direct OkuM mint without USDC |
 //! | `DirectBurner` | `OKUM_BURNER` (non-PSM) | Operator - direct OkuM burn without USDC payout |
@@ -70,7 +70,7 @@ pub enum AuthorityRole {
     /// EVM: OKUM_CAP_MANAGER
     CapManager,
 
-    /// Cold Multisig - reset minter allowance.
+    /// Cold Multisig - reset minter / direct-minter / direct-burner allowances.
     /// EVM: OKUM_ALLOWANCE_MANAGER
     AllowanceManager,
 

@@ -18,8 +18,7 @@ use oku_shared::math as shared;
 ///
 /// Formula: `dollar_value = floor(raw_amount * multiplier / PRECISION)`.
 pub fn raw_to_dollars(raw_amount: u64, multiplier: u64) -> Result<u64> {
-    shared::raw_to_dollars(raw_amount, multiplier)
-        .ok_or_else(|| error!(LitePsmError::Overflow))
+    shared::raw_to_dollars(raw_amount, multiplier).ok_or_else(|| error!(LitePsmError::Overflow))
 }
 
 /// Convert dollar value to raw OkuM amount using the multiplier from
@@ -30,8 +29,7 @@ pub fn raw_to_dollars(raw_amount: u64, multiplier: u64) -> Result<u64> {
 /// invariant); pure overflow propagates as `Overflow`.
 pub fn dollars_to_raw(dollar_value: u64, multiplier: u64) -> Result<u64> {
     require!(multiplier > 0, LitePsmError::ZeroAmount);
-    shared::dollars_to_raw(dollar_value, multiplier)
-        .ok_or_else(|| error!(LitePsmError::Overflow))
+    shared::dollars_to_raw(dollar_value, multiplier).ok_or_else(|| error!(LitePsmError::Overflow))
 }
 
 #[cfg(test)]

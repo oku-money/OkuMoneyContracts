@@ -12,10 +12,8 @@
 //! | `BufferDepositEvent` | `BufferDeposited` |
 //! | `BufferWithdrawEvent` | `BufferWithdrawn` |
 //!
-//! Bridge events (BridgeMintEvent, BridgeBurnEvent, refund events, bridge
-//! admin events) were removed in the noBridge refactor. v1 cross-chain
-//! transfers are mediated off-chain and surface on-chain as ordinary
-//! `MintEvent` / `RedeemEvent` records.
+//! There are no bridge events: cross-chain transfers are mediated off-chain
+//! and surface on-chain as ordinary `MintEvent` / `RedeemEvent` records.
 
 use crate::roles::AuthorityRole;
 use anchor_lang::prelude::*;
@@ -50,9 +48,7 @@ pub struct MintEvent {
     /// OkuM multiplier at time of mint (1e9 = $1.00)
     /// EVM equivalent: multiplier
     pub multiplier: u64,
-    /// OkuM supply AFTER the mint completed. Cycle 4 (PSM-23):
-    /// added for indexing parity with `YieldDistributed` /
-    /// `MultiplierUpdated` (both of which emit `total_supply`).
+    /// OkuM supply after the mint completed.
     pub new_total_supply: u64,
 }
 
@@ -71,7 +67,7 @@ pub struct RedeemEvent {
     /// OkuM multiplier at time of redeem (1e9 = $1.00)
     /// EVM equivalent: multiplier
     pub multiplier: u64,
-    /// OkuM supply AFTER the burn completed. Cycle 4 (PSM-23).
+    /// OkuM supply after the burn completed.
     pub new_total_supply: u64,
 }
 
@@ -265,4 +261,16 @@ pub struct RoleAdminTransferAcceptedEvent {
 pub struct RoleAdminTransferCancelledEvent {
     pub current_admin: Pubkey,
     pub cancelled_pending: Pubkey,
+}
+
+/// Emitted when `update_token_metadata` rewrites the OkuM mint's
+/// Token-2022 `TokenMetadata` `name`/`symbol` in place. This is the
+/// on-chain identity shown by wallets and explorers (the true OkuM
+/// token); the "$1-pegged usdOku" figure is a separate ScaledUiAmount
+/// display value and is unaffected.
+#[event]
+pub struct TokenMetadataUpdatedEvent {
+    pub mint: Pubkey,
+    pub name: String,
+    pub symbol: String,
 }

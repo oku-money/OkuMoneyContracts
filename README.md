@@ -4,11 +4,9 @@ Yield-bearing stablecoin infrastructure backed by US Treasury Bills.
 Centralized B2B product — registered MSB, not a DeFi protocol. EVM +
 SVM in parallel, off-chain orchestrator coordinating both.
 
-> **For auditors:** start with the per-side READMEs ([`EVM/README.md`](EVM/README.md),
-> [`SVM/README.md`](SVM/README.md)) and the in-repo audit packages
-> ([`EVM/audit/README.md`](EVM/audit/README.md),
-> [`SVM/oku-programs/audit/README.md`](SVM/oku-programs/audit/README.md)).
-> Open items live in [`TRACKER.md`](TRACKER.md).
+> **For reviewers:** start with the per-side READMEs ([`EVM/README.md`](EVM/README.md),
+> [`SVM/README.md`](SVM/README.md)), each with an "Accepted Risks" section
+> covering known design decisions. Open items live in [`TRACKER.md`](TRACKER.md).
 
 ---
 
@@ -544,8 +542,8 @@ requirement is itself the delay mechanism. **Timelocks are not pursued.**
 
 **Full cross-chain parity matrix** — constants, roles, pause
 semantics, sandwich-fence behaviour, event schema diffs, deliberate
-non-parity items — see [`EVM/audit/README.md`](EVM/audit/README.md)
-and [`SVM/oku-programs/audit/README.md`](SVM/oku-programs/audit/README.md).
+non-parity items — see [`SVM/README.md § EVM vs SVM — divergence
+catalogue`](SVM/README.md#evm-vs-svm--divergence-catalogue).
 
 ---
 
@@ -563,8 +561,7 @@ contracts/
 │   │   ├── interfaces/  # IOkuMoney.sol, IOkuDollar.sol, IOkuBridgeNative.sol (reserved)
 │   │   └── lib/         # Roles, Constants, MathLib, events
 │   ├── test/            # Foundry + Hardhat suites
-│   ├── scripts/         # Deploy + operator scripts
-│   └── audit/           # In-repo audit package (accepted risks, snapshots)
+│   └── scripts/         # Deploy + operator scripts
 ├── SVM/                 # Anchor programs (Rust)
 │   ├── README.md        # SVM-specific runbook, divergence catalogue, deployment
 │   └── oku-programs/
@@ -575,7 +572,6 @@ contracts/
 │       ├── tests/
 │       ├── scripts/
 │       ├── deployments/     # Per-network deployment records
-│       ├── audit/           # In-repo audit package
 │       └── keys/            # Local keypair directory (gitignored, see keys/README.md)
 ├── artifacts/           # Curated ABIs + IDLs for backend / SDK / frontend use
 │   ├── evm/             # Slim Hardhat artifacts (abi + bytecode) per contract
@@ -845,8 +841,7 @@ metadata after the noBridge refactor.
 
 ## Pointers
 
-- **EVM-specific docs:** [`EVM/README.md`](EVM/README.md)
-- **SVM-specific docs:** [`SVM/README.md`](SVM/README.md)
+- **EVM-specific docs:** [`EVM/README.md`](EVM/README.md) (incl. Accepted Risks)
+- **SVM-specific docs:** [`SVM/README.md`](SVM/README.md) (incl. Accepted Risks)
 - **Open issues:** [`TRACKER.md`](TRACKER.md)
-- **In-repo audit packages:** [`EVM/audit/README.md`](EVM/audit/README.md), [`SVM/oku-programs/audit/README.md`](SVM/oku-programs/audit/README.md)
 - **Downstream SDK / backend consumption:** [`artifacts/README.md`](artifacts/README.md)

@@ -7,11 +7,11 @@
  * process boot, so each test run starts with pristine authorities.
  *
  * `initializePsm` runs the PSM `initialize` instruction against the
- * supplied program, then creates the OkuM escrow ATA client-side (the
- * `setup_oku_m_escrow` on-chain instruction was removed along with the
- * redemption queue). No memoization, no singleton, no cross-file cache
- * — every bankrun cluster is fresh and the on-chain PsmConfig must
- * always be created by the calling describe's `before()` hook.
+ * supplied program, then creates the OkuM escrow ATA client-side (there
+ * is no on-chain escrow-setup instruction). No memoization, no singleton,
+ * no cross-file cache — every bankrun cluster is fresh and the on-chain
+ * PsmConfig must always be created by the calling describe's `before()`
+ * hook.
  *
  * The `initialize` instruction now creates the OkuM mint itself with
  * Token-2022 ScaledUiAmount + MetadataPointer + TokenMetadata extensions.
@@ -62,9 +62,9 @@ export const coldMultisig = Keypair.generate();
 export const warmMultisig = Keypair.generate();
 
 /** PSM orchestrator — automated operations. PSM roles:
- *  bufferDepositor, rebaser. In v1 noBridge this same key also drives
- *  cross-chain transfers off-chain by calling `mint_oku_m` /
- *  `redeem_oku_m` on each side. */
+ *  bufferDepositor, rebaser. This same key also drives cross-chain
+ *  transfers off-chain by calling `mint_oku_m` / `redeem_oku_m` on each
+ *  side. */
 export const psmOrchestrator = Keypair.generate();
 
 // ---------------------------------------------------------------------------
@@ -105,7 +105,7 @@ export async function initializePsm(
   const okuMMint = okuMMintKeypair.publicKey;
 
   const [configPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("psm_config_v6")],
+    [Buffer.from("psm_config")],
     program.programId
   );
   const vaultUsdcAta = getAssociatedTokenAddressSync(
@@ -160,10 +160,9 @@ export async function initializePsm(
     .signers([okuMMintKeypair])
     .rpc();
 
-  // Create the OkuM escrow ATA client-side (idempotent). The on-chain
-  // `setup_oku_m_escrow` instruction was removed along with the
-  // redemption queue -- this ATA is no longer used by any instruction
-  // but is retained for tests that still reference `vaultOkuMAta`.
+  // Create the OkuM escrow ATA client-side (idempotent). There is no
+  // on-chain escrow-setup instruction; this ATA is retained for tests that
+  // reference `vaultOkuMAta`.
   await ensureAtaViaBankrun(h, configPda, okuMMint, TOKEN_2022_PROGRAM_ID);
 
   return { configPda, okuMMint, vaultUsdcAta, vaultOkuMAta };

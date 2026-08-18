@@ -15,9 +15,9 @@ use anchor_lang::prelude::*;
 
 /// PSM configuration PDA.
 ///
-/// Seeds: `["psm_config_v6"]`. Migration history (seed-rotation log) is
-/// tracked in `SVM/README.md` § "PDA seed history"; the `_v6` suffix
-/// marks the single-token (OkuM) layout with ScaledUiAmountConfig.
+/// Seeds: `["psm_config"]`. This is the single, program-wide config
+/// account; it holds the granular authorities, token references, limits,
+/// and the yield-distribution slot.
 #[account]
 #[derive(InitSpace)]
 pub struct PsmConfig {
@@ -41,7 +41,7 @@ pub struct PsmConfig {
     pub buffer_withdrawer: Pubkey,
     /// Cold Multisig - set max supply
     pub cap_manager: Pubkey,
-    /// Cold Multisig - reset minter allowance
+    /// Cold Multisig - reset minter / direct-minter / direct-burner allowances
     pub allowance_manager: Pubkey,
     /// Orchestrator - update multiplier on the OkuM mint
     pub rebaser: Pubkey,
@@ -110,17 +110,49 @@ pub struct PsmConfig {
 }
 
 impl PsmConfig {
-    pub const SEED: &'static [u8] = b"psm_config_v6";
+    pub const SEED: &'static [u8] = b"psm_config";
 
     /// Space needed for PsmConfig account: 8 byte discriminator +
     /// `InitSpace`-derived field sum. Pinned to 562 bytes by the
     /// compile-time assertion below; if a reviewer changes a field's
     /// width the assertion fires.
     pub const LEN: usize = 8 + Self::INIT_SPACE;
+
+    /// PDA signer seeds for CPIs signed by the config PDA.
+    ///
+    /// Single source of truth for the `[SEED, [bump]]` seed shape that
+    /// every PDA-signed CPI in this program needs. Previously this was
+    /// hand-rolled at ~8 call sites as
+    /// `let seeds = &[PsmConfig::SEED, &[bump]]; let signer = &[&seeds[..]];`
+    /// which repeated the `SEED` reference and the double-wrap shape each
+    /// time (a bump/seed mismatch on any one edit would silently break
+    /// signing). The caller owns the 1-byte bump array and passes a
+    /// reference so no allocation or lifetime juggling is needed:
+    ///
+    /// ```ignore
+    /// let bump = [ctx.accounts.config.bump];
+    /// let seeds = PsmConfig::signer_seeds(&bump);
+    /// let signer = &[&seeds[..]];
+    /// // ... CpiContext::new_with_signer(..., signer)
+    /// ```
+    #[inline]
+    pub fn signer_seeds(bump: &[u8; 1]) -> [&[u8]; 2] {
+        [Self::SEED, bump]
+    }
 }
 
 // Compile-time assertion: if PsmConfig layout changes, this will fail to compile.
-// (562 = 8 disc + 1 bump + 32*10 authorities (320)
+//
+// Note on pubkey grouping: the `AuthorityRole` enum has 12 variants, but the
+// three "special" role pubkeys (role_admin, direct_minter, direct_burner) are
+// counted in their own lines below rather than in the "authorities" block, so
+// the arithmetic does not line up 1:1 with the enum count. Total stored
+// pubkeys = 13 role slots + pending_role_admin + 3 token refs = 17 * 32 = 544.
+//
+// (562 = 8 disc + 1 bump
+//      + 32*10 core-role authorities (role_admin, pauser, unpauser, freezer,
+//               unfreezer, buffer_depositor, buffer_withdrawer, cap_manager,
+//               allowance_manager, rebaser = 320)
 //      + 32*2 token mints (usdc_mint + oku_m_mint = 64)
 //      + 32*1 vault (vault_usdc = 32)
 //      + 8 max_supply + 8 minter_allowance + 1 is_paused

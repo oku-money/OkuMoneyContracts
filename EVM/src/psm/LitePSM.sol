@@ -154,22 +154,18 @@ contract LitePSM is
 
     // ============ Storage Accessor Views ============
 
-    /// @notice The OkuMoney token this PSM mints/burns.
     function okuMoney() external view returns (IOkuMoney) {
         return _getLitePSMStorage().okuMoney;
     }
 
-    /// @notice The OkuDollar vault used by the convenience mint/redeem functions.
     function okuDollar() external view returns (IOkuDollar) {
         return _getLitePSMStorage().okuDollar;
     }
 
-    /// @notice The USDC token held in the PSM buffer.
     function usdc() external view returns (IERC20) {
         return _getLitePSMStorage().usdc;
     }
 
-    /// @notice The RedemptionQueue contract for deferred redemptions.
     function redemptionQueue() external view returns (RedemptionQueue) {
         return _getLitePSMStorage().redemptionQueue;
     }
@@ -237,23 +233,11 @@ contract LitePSM is
         _redeemOkuMShared(msg.sender, okuMAmount, false);
     }
 
-    /// @notice Redeem OkuMoney for USDC where the OkuM is already held by the PSM.
-    /// @dev Used by `_redeemUsdOku` after `okuDollar.unwrap()` deposits the OkuM here.
-    ///      Does NOT emit `OkuMRedeemed`; callers emit their own user-facing event.
-    /// @return usdcAmount USDC transferred to user (0 if queued).
-    function _redeemOkuMFromSelf(
-        address user,
-        uint256 okuMAmount
-    )
-        internal
-        returns (uint256 usdcAmount)
-    {
-        return _redeemOkuMShared(user, okuMAmount, true);
-    }
-
     /// @dev Shared core for the four redemption paths.
     ///      `okuMAtPsm`: false -> pull OkuM from `user`, emit OkuMRedeemed on instant path;
-    ///                   true  -> OkuM is already held by this contract; do not emit.
+    ///                   true  -> OkuM is already held by this contract (used by
+    ///                   `_redeemUsdOku` after `okuDollar.unwrap()` deposits the OkuM
+    ///                   here); do not emit — callers emit their own user-facing event.
     function _redeemOkuMShared(
         address user,
         uint256 okuMAmount,
@@ -267,11 +251,10 @@ contract LitePSM is
         LitePSMStorage storage $ = _getLitePSMStorage();
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
 
-        // Cycle 4 (EVM-05): reject sub-USDC-unit redemptions BEFORE
-        // doing any math. Without this guard, an input less than the
-        // decimal multiplier could in principle compute a non-zero
-        // `usdcAmount` whose slippage floor (`okuMFloor`) collapses
-        // to zero and trivially passes the post-conversion check.
+        // Reject sub-USDC-unit redemptions before doing any math. Without
+        // this guard, an input less than the decimal multiplier could
+        // compute a non-zero `usdcAmount` whose slippage floor (`okuMFloor`)
+        // collapses to zero and trivially passes the post-conversion check.
         // Minimum redemption granularity = 1 USDC-unit worth of OkuM.
         if (okuMAmount < decimalMultiplier) revert AmountTooSmall();
 
@@ -405,7 +388,7 @@ contract LitePSM is
         // Reverts if vault undercollateralized (distinct failure mode).
         uint256 okuMReturned = $.okuDollar.unwrap(received, address(this));
         // UsdOkuRedeemed is the sole event for this path (no underlying OkuMRedeemed).
-        uint256 usdcOut = _redeemOkuMFromSelf(user, okuMReturned);
+        uint256 usdcOut = _redeemOkuMShared(user, okuMReturned, true);
 
         emit UsdOkuRedeemed(user, received, usdcOut, $.okuMoney.okuMMultiplier());
     }
@@ -490,9 +473,5 @@ contract LitePSM is
 
     // ============ Upgradeability ============
 
-    function _authorizeUpgrade(address newImplementation)
-        internal
-        override
-        onlyRole(Roles.PSM_UPGRADER)
-    {}
+    function _authorizeUpgrade(address) internal override onlyRole(Roles.PSM_UPGRADER) {}
 }

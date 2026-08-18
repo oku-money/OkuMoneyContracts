@@ -26,6 +26,12 @@ EVM_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="${EVM_ROOT}/.dry-run-logs"
 mkdir -p "$LOG_DIR"
 
+# Wipe the whole log dir at run start. These transcripts are ephemeral — the
+# canonical addresses land in scripts/config/addresses.json — and clearing
+# everything here prevents stragglers from prior subset runs (e.g.
+# `dryRunForks.sh sepolia base`) leaving stale logs for chains not in this run.
+rm -f "${LOG_DIR}"/*.log 2>/dev/null || true
+
 cd "$EVM_ROOT"
 
 # Kill any leftover hardhat node processes from prior runs.
@@ -42,7 +48,7 @@ for chain in "${CHAINS[@]}"; do
 
   NODE_LOG="${LOG_DIR}/${chain}-node.log"
   DEPLOY_LOG="${LOG_DIR}/${chain}-deploy.log"
-  rm -f "$NODE_LOG" "$DEPLOY_LOG"
+  # (LOG_DIR is wiped once at run start; no per-chain cleanup needed here.)
 
   # Start the fork in a detached session. Use setsid to fully unhook from this
   # shell so the script can continue without the node holding stdio.

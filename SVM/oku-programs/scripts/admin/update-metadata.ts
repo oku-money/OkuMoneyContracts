@@ -1,20 +1,20 @@
 /**
- * Rewrite the OkuM mint's Token-2022 `TokenMetadata` name/symbol in place.
+ * Set the OkuM mint's Token-2022 `TokenMetadata` name/symbol in place.
  *
- * Wraps `lite_psm::update_token_metadata` (role_admin-gated). The new
+ * Wraps `lite_psm::update_token_metadata` (role_admin-gated). The
  * name/symbol are hardcoded on-chain in the program's single source of
  * truth (`OKU_M_METADATA_*` in `programs/lite-psm/src/constants.rs`):
  *   name   = "OkuMoney"
  *   symbol = "OkuM"
  * matching the EVM `OkuMoney` (OkuM) token.
  *
- * This corrects the TRUE on-chain identity that wallets and block
- * explorers display for the mint and its transfers. It does NOT touch the
+ * These are the TRUE on-chain identity that wallets and block explorers
+ * display for the mint and its transfers. This does NOT touch the
  * ScaledUiAmount multiplier, so the "$1-pegged usdOku" display value
  * (raw_amount * multiplier, rendered by Token-2022-aware wallets) is
  * unaffected — usdOku is a UI-layer presentation, not the on-chain symbol.
  *
- * Metadata-only edit: no new mint, no migration, balances/ATAs untouched.
+ * Metadata-only edit: no new mint, balances/ATAs untouched.
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/admin/update-metadata.ts

@@ -7,9 +7,8 @@
  * `BankrunConnectionProxy` answers the few `Connection` methods Anchor
  * actually calls (`getAccountInfo`, `getMinimumBalanceForRentExemption`).
  *
- * Phase 9: this file is no longer the canary it was during the migration —
- * `npm test` runs the full bankrun suite. Kept around as the simplest
- * smoke test to flag a busted harness build (e.g. a stale `target/idl/*.json`).
+ * This is the simplest smoke test to flag a busted harness build (e.g. a
+ * stale `target/idl/*.json`).
  */
 
 import { startBankrun } from '../shared/bankrun';

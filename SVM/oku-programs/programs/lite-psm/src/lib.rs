@@ -167,12 +167,11 @@ pub mod lite_psm {
         instructions::psm_admin::cancel_role_admin_transfer(ctx)
     }
 
-    /// Rewrite the OkuM mint's Token-2022 `TokenMetadata` `name`/`symbol`
-    /// in place (`role_admin` only), to the canonical OkuM ("OkuMoney")
-    /// identity. This is the true on-chain token identity shown by wallets
-    /// and explorers; the "$1-pegged usdOku" figure is a separate
-    /// ScaledUiAmount display value and is unaffected. Used to correct a
-    /// mint deployed with stale brand strings without a new mint/migration.
+    /// Set the OkuM mint's Token-2022 `TokenMetadata` `name`/`symbol` in
+    /// place (`role_admin` only) to the canonical OkuM ("OkuMoney") identity.
+    /// This is the true on-chain token identity shown by wallets and
+    /// explorers; the "$1-pegged usdOku" figure is a separate ScaledUiAmount
+    /// display value and is unaffected.
     pub fn update_token_metadata(ctx: Context<UpdateTokenMetadata>) -> Result<()> {
         instructions::psm_admin::update_token_metadata(ctx)
     }

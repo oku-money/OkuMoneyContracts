@@ -142,8 +142,7 @@ export async function createSPLTokenMint(
   const mintKeypair = Keypair.generate();
   const mint = mintKeypair.publicKey;
 
-  // Legacy SPL Token mint size; derived via getMintLen([]) (no extensions).
-  // Was previously hardcoded to 82.
+  // SPL Token mint size, derived via getMintLen([]) (no extensions).
   const mintLen = getMintLen([]);
 
   const lamports = await connection.getMinimumBalanceForRentExemption(mintLen);

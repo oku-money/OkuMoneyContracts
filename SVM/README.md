@@ -196,9 +196,8 @@ crates/
       fuzz_targets/
         mul_div_floor.rs
         mul_div_ceil.rs
-        oku_m_to_dollars.rs
-        dollars_to_oku_m.rs
-        calculate_fee.rs
+        raw_to_dollars.rs
+        dollars_to_raw.rs
 
 programs/
   lite-psm/
@@ -452,7 +451,7 @@ freeze authority.
 The OkuM escrow ATA (owned by the PsmConfig PDA) is created
 client-side by the deploy script via a standard idempotent
 associated-token-account instruction — there is no separate on-chain
-`setup_oku_m_escrow` instruction.
+escrow-setup instruction.
 
 No on-chain bridge, router, or redemption queue is deployed — the PSM is
 buffer-only and cross-chain transfers are orchestrator-mediated.

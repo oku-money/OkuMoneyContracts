@@ -29,34 +29,27 @@ import litePsmIdl from '../../../target/idl/lite_psm.json';
  * initialized -- i.e. this initialize call is a no-op rather than a real failure.
  *
  * Anchor 1.0 surfaces this in multiple ways depending on the construction
- * path: the legacy 'already in use' string, AnchorError with code
- * `AccountAlreadyInitialized` (= 0), or the program-level
- * `EscrowAlreadyInitialized` from lite-psm's `setup_oku_m_escrow`.
- * We check all of them; brittle string-only matching has bitten us across
- * Anchor minor-version bumps.
+ * path: the 'already in use' string or an `AnchorError` with code
+ * `AccountAlreadyInitialized` (= 0). We check both, since structured-only
+ * matching is not reliable across Anchor minor versions.
  */
 function isAlreadyInitialized(error: any): boolean {
   if (!error) return false;
   // Anchor 1.0 structured errors -- try first
   const code = error?.error?.errorCode?.code ?? error?.errorCode?.code;
   const number = error?.error?.errorCode?.number ?? error?.errorCode?.number;
-  if (
-    code === 'AccountAlreadyInitialized' ||
-    code === 'EscrowAlreadyInitialized'
-  ) {
+  if (code === 'AccountAlreadyInitialized') {
     return true;
   }
   // Anchor's `AccountAlreadyInitialized` is canonically error code 0.
   if (number === 0 && typeof code === 'string' && code.length > 0) {
     return true;
   }
-  // Legacy / fallback: log strings still matter because the validator returns
-  // 'already in use' before Anchor wraps it.
+  // Fallback: the validator returns 'already in use' before Anchor wraps it.
   const msg = String(error?.message ?? error);
   return (
     msg.includes('already in use') ||
-    msg.includes('AccountAlreadyInitialized') ||
-    msg.includes('EscrowAlreadyInitialized')
+    msg.includes('AccountAlreadyInitialized')
   );
 }
 
@@ -66,7 +59,7 @@ export interface PsmInitResult {
   okuMMint: PublicKey;
   /** USDC vault ATA, owned by `psmConfig`. Created by `initialize()`. */
   vaultUsdc: PublicKey;
-  /** OkuM escrow ATA, owned by `psmConfig`. Created by `setup_oku_m_escrow()`. */
+  /** OkuM escrow ATA, owned by `psmConfig`. Created client-side (idempotent ATA). */
   vaultOkuM: PublicKey;
 }
 

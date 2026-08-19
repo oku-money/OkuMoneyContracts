@@ -4,10 +4,7 @@
  * Wraps `lite_psm::redeem_oku_m`. Burns the caller's `OkuM` and pays out
  * USDC from the buffer. Reverts with `InsufficientBuffer` if the buffer
  * is depleted. The EVM sibling lives at `EVM/scripts/operator/redeemOkuM.ts`.
- *
- * Previously only reachable via the integration runner at
- * `scripts/test/test-devnet.ts`. Surfaced as a standalone CLI so the
- * off-chain orchestrator can drive it directly.
+ * Lets the off-chain orchestrator drive a redeem directly.
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/admin/redeem-oku-m.ts --amount 1000000          # 1 okuM (6-dec)

@@ -1,4 +1,4 @@
-//! cargo-fuzz target: `raw_to_dollars` (file retains legacy name)
+//! cargo-fuzz target: `raw_to_dollars`
 //!
 //! Properties verified:
 //!

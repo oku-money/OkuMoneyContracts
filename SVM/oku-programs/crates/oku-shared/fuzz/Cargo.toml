@@ -21,14 +21,14 @@ test = false
 doc = false
 
 [[bin]]
-name = "oku_m_to_dollars"
-path = "fuzz_targets/oku_m_to_dollars.rs"
+name = "raw_to_dollars"
+path = "fuzz_targets/raw_to_dollars.rs"
 test = false
 doc = false
 
 [[bin]]
-name = "dollars_to_oku_m"
-path = "fuzz_targets/dollars_to_oku_m.rs"
+name = "dollars_to_raw"
+path = "fuzz_targets/dollars_to_raw.rs"
 test = false
 doc = false
 

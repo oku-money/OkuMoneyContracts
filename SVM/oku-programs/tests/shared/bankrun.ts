@@ -1,11 +1,7 @@
 /**
- * Bankrun harness for the SVM unit tests.
- *
- * Phase 9 expansion: this module is now the *only* test-runner harness for
- * the unit suite. `tests/unit/` is gone; all unit tests live in
- * `tests/bankrun/` and consume the helpers below. The legacy
- * `solana-test-validator` path (driven by `anchor test`) survives only as
- * an opt-in escape hatch via `npm run test:validator`.
+ * Bankrun harness for the SVM unit tests. This module is the test-runner
+ * harness for the bankrun suite; all unit tests under `tests/bankrun/`
+ * consume the helpers below.
  *
  * Why bankrun? `solana-test-validator` has a 30s confirmation polling
  * window in `@solana/web3.js@1.x` that times out on heavyweight
@@ -203,12 +199,9 @@ export async function getClock(h: BankrunHarness): Promise<Clock> {
 }
 
 /**
- * Advance bankrun's clock by `secs` seconds. Replaces the
- * `await new Promise(r => setTimeout(r, 500))` patterns scattered across
- * the legacy unit tests — those waits assumed solana-test-validator's
- * wall-clock advance, which bankrun does NOT do automatically.
- *
- * Uses the proper `Clock` constructor (no `as any`).
+ * Advance bankrun's clock by `secs` seconds. Bankrun does not advance its
+ * clock automatically, so tests that depend on elapsed time call this
+ * explicitly. Uses the `Clock` constructor directly (no `as any`).
  */
 export async function warpBy(h: BankrunHarness, secs: number | bigint): Promise<void> {
   const delta = typeof secs === 'bigint' ? secs : BigInt(secs);

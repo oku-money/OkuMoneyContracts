@@ -3,11 +3,8 @@
  *
  * Wraps `lite_psm::mint_oku_m`. Mints `OkuM` to the caller in exchange
  * for USDC. This is the SVM side of the cross-chain mint flow — the EVM
- * sibling lives at `EVM/scripts/operator/mintOkuM.ts`.
- *
- * Previously this logic was only reachable via the in-tree integration
- * runner at `scripts/test/test-devnet.ts`. Surfaced as a standalone CLI so
- * the off-chain orchestrator can drive it without spinning up the runner.
+ * sibling lives at `EVM/scripts/operator/mintOkuM.ts`. Lets the off-chain
+ * orchestrator drive a mint directly.
  *
  * The caller must already hold the USDC; the PSM has its own minter-allowance
  * check on okuM issuance.

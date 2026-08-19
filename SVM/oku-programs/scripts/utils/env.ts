@@ -1,10 +1,8 @@
 /**
  * Centralised environment loader. Importing this module has the side effect
- * of calling `dotenv.config()` once with deterministic search order; everywhere
- * else in the codebase should import from here rather than `'dotenv/config'`
- * directly. The duplicate-import-is-idempotent invariant of `dotenv` was
- * obscuring load order across `scripts/utils/network.ts` and
- * `scripts/config/networks.ts`.
+ * of calling `dotenv.config()` once with a deterministic search order.
+ * Everywhere else in the codebase should import from here rather than from
+ * `'dotenv/config'` directly, so env load order is consistent across scripts.
  */
 
 import * as path from 'path';

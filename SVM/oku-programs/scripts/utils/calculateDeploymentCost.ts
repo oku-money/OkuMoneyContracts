@@ -6,9 +6,8 @@
  * rent. PDA sizes come from the centralised `scripts/lib/account-sizes.ts`
  * TS shim (which mirrors the Rust `state.rs::T::LEN` compile-time
  * asserts). Rent-exempt minimum is fetched live via
- * `connection.getMinimumBalanceForRentExemption(size)` rather than the
- * legacy linear `RENT_PER_BYTE` constant — Solana's rent buffering and
- * fee adjustments make the legacy approximation off by ~2x.
+ * `connection.getMinimumBalanceForRentExemption(size)`, which accounts for
+ * Solana's rent buffering and fee adjustments.
  *
  * Usage:
  *   tsx scripts/utils/calculateDeploymentCost.ts                # mainnet RPC

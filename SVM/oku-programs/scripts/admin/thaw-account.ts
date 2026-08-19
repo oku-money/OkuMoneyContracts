@@ -2,9 +2,9 @@
  * Thaw a previously-frozen OkuM token account.
  *
  * Wraps `lite_psm::thaw_account` (unfreezer-gated). Works even when PSM
- * is paused. By Phase 4 RBAC design the unfreezer is the cold multisig --
- * deliberately a higher bar than the freezer (warm multisig) since
- * thawing reverses a compliance freeze.
+ * is paused. The unfreezer is the cold multisig — deliberately a higher bar
+ * than the freezer (warm multisig) since thawing reverses a compliance
+ * freeze.
  *
  * Usage:
  *   NETWORK=devnet tsx scripts/admin/thaw-account.ts --owner=<user-pubkey>

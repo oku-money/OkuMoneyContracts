@@ -396,10 +396,10 @@ describe("lite-psm", () => {
       });
     });
 
-    // NOTE: Freeze/thaw RBAC tests removed - these require minting okuM for setup
-    // Coverage: Freeze/thaw authority is correctly set in initialization (verified by init test)
-    // The freeze/thaw instructions use standard Token-2022 CPI calls with proper authority checks
-    // RBAC pattern is identical to pause/unpause which is thoroughly tested
+    // Freeze/thaw authority is verified by the init test; the freeze/thaw
+    // instructions use standard Token-2022 CPI calls with the same RBAC
+    // pattern as pause/unpause (covered above). Dedicated freeze/thaw
+    // behavior is exercised in the "freeze/thaw" describe below.
 
     describe("admin role separation", () => {
       it("cap_manager can set max supply", async () => {
@@ -931,7 +931,7 @@ describe("lite-psm", () => {
   });
 
   // ==========================================================================
-  // NEW COVERAGE: mint edge cases
+  // mint edge cases
   // ==========================================================================
   describe("mint edge cases", () => {
     before(async () => {
@@ -973,9 +973,9 @@ describe("lite-psm", () => {
     });
 
     it("fails to mint when max supply exceeded", async () => {
-      // Phase 8: set_max_supply now refuses to drop below current supply,
-      // so squeeze the cap down to *exactly* the current supply — any
-      // subsequent mint must fail with MaxSupplyExceeded.
+      // set_max_supply refuses to drop below current supply, so squeeze the
+      // cap down to *exactly* the current supply — any subsequent mint must
+      // fail with MaxSupplyExceeded.
       const currentMint = await getMint(
         provider.connection,
         okuMMint,
@@ -1034,7 +1034,7 @@ describe("lite-psm", () => {
   });
 
   // ==========================================================================
-  // NEW COVERAGE: redeem - instant path
+  // redeem - instant path
   // ==========================================================================
   describe("redeem - instant", () => {
     const MINT_AMOUNT = new BN(10_000_000); // 10 okuM
@@ -1214,14 +1214,7 @@ describe("lite-psm", () => {
   });
 
   // ==========================================================================
-  // REMOVED: process_queue, rescue_queue_entry, user_self_rescue_queue_entry,
-  // queue ring buffer wraparound, and queue capacity sections
-  // (redemption queue feature has been removed from on-chain program)
-  // ==========================================================================
-
-
-  // ==========================================================================
-  // NEW COVERAGE: freeze/thaw
+  // freeze/thaw
   // ==========================================================================
   describe("freeze/thaw", () => {
     const freezeTarget = Keypair.generate();
@@ -1395,7 +1388,7 @@ describe("lite-psm", () => {
   });
 
   // ==========================================================================
-  // NEW COVERAGE: set_authority (PSM)
+  // set_authority (PSM)
   // ==========================================================================
   describe("set_authority", () => {
     it("role_admin can update pauser", async () => {
@@ -1561,7 +1554,7 @@ describe("lite-psm", () => {
   });
 
   // ==========================================================================
-  // NEW COVERAGE: buffer edge cases
+  // buffer edge cases
   // ==========================================================================
   describe("buffer edge cases", () => {
     it("deposit_buffer fails with zero amount", async () => {

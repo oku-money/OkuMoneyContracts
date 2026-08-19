@@ -76,14 +76,11 @@ ignore = true
 # borsh, etc.) so we warn rather than deny to avoid false-positive noise.
 multiple-versions = "warn"
 
-# Deny wildcard version requirements (e.g. foo = "*") — these are a supply
-# chain risk as they silently accept any future version.
-# Note: cargo-deny treats path-only deps (no version field) as "wildcards".
-# Our own workspace-internal path deps are safe (they're local, not registry),
-# so we allow them explicitly via the skip list.
+# Wildcard version requirements (e.g. foo = "*") are a supply-chain risk since
+# they silently accept any future version. cargo-deny treats path-only deps
+# (no version field) as "wildcards"; the workspace-internal path deps are
+# local (not registry) and safe, so wildcards are allowed here.
 wildcards = "allow"
-# TODO: Once all programs are published with explicit versions, change this
-# back to "deny" and remove path-only deps or pin them to workspace version.
 
 # Crates that must not appear in the dependency tree
 deny = [

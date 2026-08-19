@@ -120,14 +120,10 @@ impl PsmConfig {
 
     /// PDA signer seeds for CPIs signed by the config PDA.
     ///
-    /// Single source of truth for the `[SEED, [bump]]` seed shape that
-    /// every PDA-signed CPI in this program needs. Previously this was
-    /// hand-rolled at ~8 call sites as
-    /// `let seeds = &[PsmConfig::SEED, &[bump]]; let signer = &[&seeds[..]];`
-    /// which repeated the `SEED` reference and the double-wrap shape each
-    /// time (a bump/seed mismatch on any one edit would silently break
-    /// signing). The caller owns the 1-byte bump array and passes a
-    /// reference so no allocation or lifetime juggling is needed:
+    /// Single source of truth for the `[SEED, [bump]]` seed shape that every
+    /// PDA-signed CPI in this program needs. The caller owns the 1-byte bump
+    /// array and passes a reference, so no allocation or lifetime juggling is
+    /// required:
     ///
     /// ```ignore
     /// let bump = [ctx.accounts.config.bump];
@@ -141,23 +137,18 @@ impl PsmConfig {
     }
 }
 
-// Compile-time assertion: if PsmConfig layout changes, this will fail to compile.
+// Compile-time assertion: if the PsmConfig layout changes, this fails to
+// compile. Byte breakdown (562 total):
 //
-// Note on pubkey grouping: the `AuthorityRole` enum has 12 variants, but the
-// three "special" role pubkeys (role_admin, direct_minter, direct_burner) are
-// counted in their own lines below rather than in the "authorities" block, so
-// the arithmetic does not line up 1:1 with the enum count. Total stored
-// pubkeys = 13 role slots + pending_role_admin + 3 token refs = 17 * 32 = 544.
-//
-// (562 = 8 disc + 1 bump
-//      + 32*10 core-role authorities (role_admin, pauser, unpauser, freezer,
-//               unfreezer, buffer_depositor, buffer_withdrawer, cap_manager,
-//               allowance_manager, rebaser = 320)
-//      + 32*2 token mints (usdc_mint + oku_m_mint = 64)
-//      + 32*1 vault (vault_usdc = 32)
-//      + 8 max_supply + 8 minter_allowance + 1 is_paused
-//      + 8 last_yield_distribution_slot
-//      + 32 pending_role_admin
-//      + 32 direct_minter + 8 direct_minter_allowance
-//      + 32 direct_burner + 8 direct_burner_allowance.)
+//   8   account discriminator
+//   1   bump (u8)
+//   512 16 pubkeys * 32:
+//         12 authorities (role_admin, pauser, unpauser, freezer, unfreezer,
+//            buffer_depositor, buffer_withdrawer, cap_manager,
+//            allowance_manager, rebaser, direct_minter, direct_burner)
+//         1  pending_role_admin
+//         3  token refs (usdc_mint, oku_m_mint, vault_usdc)
+//   40  5 u64 * 8 (max_supply, minter_allowance, last_yield_distribution_slot,
+//         direct_minter_allowance, direct_burner_allowance)
+//   1   is_paused (bool)
 const _: () = assert!(PsmConfig::LEN == 562);

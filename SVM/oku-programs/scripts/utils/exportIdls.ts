@@ -18,9 +18,8 @@ const SVM_IDL_DIR = path.resolve(__dirname, '../../target/idl');
 const OUT_DIR = path.resolve(__dirname, '../../../../artifacts/svm');
 
 /**
- * Reads the Anchor IDL directory dynamically. Phase 8.5 dropped the
- * hardcoded program-name list — adding a 4th program to Cargo.toml no
- * longer requires touching this file.
+ * Reads the Anchor IDL directory dynamically, so adding a program to
+ * Cargo.toml does not require touching this file.
  */
 function discoverIdlNames(idlDir: string): string[] {
   return fs

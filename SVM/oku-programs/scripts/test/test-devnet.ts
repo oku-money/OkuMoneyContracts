@@ -804,10 +804,8 @@ async function main() {
       process.exit(1);
     }
   } else {
-    // Run all steps in order. New Phase 10 steps appended at the end so they
-    // run after the mint/transfer/redeem flow has populated balances; this
-    // ordering also keeps the previous step layout for any operator who
-    // greps logs from earlier runs.
+    // Run all steps in order. The compliance/yield steps run after the
+    // mint/transfer/redeem flow so balances are already populated.
     const stepOrder = [
       'state',
       'mint',

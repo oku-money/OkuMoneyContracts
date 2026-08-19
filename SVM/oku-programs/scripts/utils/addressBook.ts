@@ -91,14 +91,10 @@ export interface DeploymentAddresses {
   timestamp: string;
   tokens: {
     usdc?: string;
-    okuMoney?: string;
     okuM?: string;
   };
   programs: {
     litePsm?: string;
-    // Legacy: kept for backwards compatibility with existing deployment files
-    okuMoneyProgram?: string;
-    okuMoney?: string;
   };
   pdas: {
     psmConfig?: string;

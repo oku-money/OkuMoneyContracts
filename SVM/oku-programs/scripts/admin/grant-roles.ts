@@ -55,9 +55,6 @@
  *   NETWORK=devnet tsx scripts/admin/grant-roles.ts --delegate=<pubkey>
  *   NETWORK=devnet tsx scripts/admin/grant-roles.ts --dry-run
  *   NETWORK=devnet tsx scripts/admin/grant-roles.ts --mint-usdc   (opt-in mock USDC mint)
- *
- *   --master=<pubkey> is a deprecated alias for --delegate (kept for
- *   backwards compatibility with existing runbooks/CI).
  */
 
 import * as anchor from '@anchor-lang/core';
@@ -105,9 +102,7 @@ function hasFlag(name: string): boolean {
   return process.argv.includes(`--${name}`);
 }
 
-// --delegate is the canonical flag; --master is kept as a deprecated alias
-// so existing runbooks/CI invocations don't break.
-const delegateArg = parseArg('delegate') ?? parseArg('master');
+const delegateArg = parseArg('delegate');
 const DELEGATE_PUBKEY = new PublicKey(delegateArg ?? DEFAULT_DELEGATE);
 
 /** Opt-in: mint mock USDC to a recipient. Off by default (see incident note above). */

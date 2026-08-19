@@ -249,12 +249,11 @@ pub fn set_authority(
         return Ok(());
     }
 
-    // Swap-in the new authority and return the old value. Each arm is
-    // structurally identical (`let old = config.X; config.X = new;
-    // old`), so we use a one-line macro to dispatch on the role enum
-    // and collapse the match. Behavior is byte-for-byte
-    // identical to the previous open-coded version. `RoleAdmin` is
-    // intentionally absent — it's handled by the two-step branch above.
+    // Swap in the new authority and return the old value. Each arm is
+    // structurally identical (`let old = config.X; config.X = new; old`),
+    // so a one-line macro dispatches on the role enum and collapses the
+    // match. `RoleAdmin` is intentionally absent — it's handled by the
+    // two-step branch above.
     macro_rules! rotate_role {
         ( $( $variant:ident => $field:ident ),+ $(,)? ) => {
             match role {
@@ -354,14 +353,13 @@ pub fn cancel_role_admin_transfer(ctx: Context<SetAuthority>) -> Result<()> {
     Ok(())
 }
 
-/// Rewrite the OkuM mint's Token-2022 `TokenMetadata` `name`/`symbol`
-/// in place (`role_admin` only).
+/// Set the OkuM mint's Token-2022 `TokenMetadata` `name`/`symbol` in place
+/// (`role_admin` only).
 ///
-/// # Why this exists
-/// The OkuM mint's metadata is written once at `initialize`. For mints
-/// that were deployed with stale brand strings, this instruction lets an
-/// admin correct the on-chain identity WITHOUT a new mint or migration
-/// (existing balances/ATAs are untouched — this is a metadata-only edit).
+/// # What it does
+/// Sets the mint's on-chain identity to the canonical OkuM ("OkuMoney")
+/// name/symbol. This is a metadata-only edit: existing balances and ATAs are
+/// untouched, and no new mint is created.
 ///
 /// # OkuM vs usdOku
 /// The `name`/`symbol` set here are the TRUE on-chain identity of the

@@ -76,8 +76,7 @@ describe("OkuM Token-2022 metadata identity", () => {
 
   it("update_token_metadata (role_admin) re-asserts OkuMoney/OkuM in place", async () => {
     // Even starting from the canonical values, the instruction must
-    // succeed and leave the on-chain identity as OkuMoney/OkuM. This is
-    // the exact call used to correct a mint deployed with stale strings.
+    // succeed and leave the on-chain identity as OkuMoney/OkuM.
     await program.methods
       .updateTokenMetadata()
       .accountsPartial({

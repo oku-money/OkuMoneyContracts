@@ -13,8 +13,17 @@
  * same address on every EVM chain it has been deployed to (gas-funded by
  * a presigned Nick's-method tx; see github.com/Arachnid/deterministic-deployment-proxy).
  *
- * Salt derivation (`saltFor("OkuMoney.impl")` etc.):
+ * Salt derivation (`saltFor("OkuDollar.impl")` etc.):
  *   keccak256("okumoney." + DEPLOYMENT_VERSION + "." + contractName)
+ *
+ * # Version history
+ *
+ *   v0.1 / v0.2 — dual-token model (OkuMoney + OkuDollar rebasing vault).
+ *                 Superseded; those proxies are retired, not upgraded.
+ *   v0.3        — single-token ERC-8056 model. `OkuDollar` (rUSDOku) is now the
+ *                 only token; `OkuMoney`, the share ledger, wrap/unwrap and the
+ *                 collateralization machinery are gone. Fresh addresses by
+ *                 design: this is a clean break, not a storage migration.
  *
  * CREATE2 address derivation:
  *   address = keccak256(0xff ++ CREATE2_FACTORY ++ salt ++ keccak256(initCode))[12:]
@@ -43,7 +52,7 @@
  * deploys take new addresses). Pre-audit iterate with v0.x; reserve v1.0+
  * for audited deployments.
  */
-export const DEPLOYMENT_VERSION = "v0.2";
+export const DEPLOYMENT_VERSION = "v0.3";
 
 /**
  * Canonical Arachnid CREATE2 factory. Same address on every supported chain.
@@ -62,9 +71,9 @@ export const CREATE2_FACTORY = "0x4e59b44847b379578588920cA78FbF26c0B4956C";
  *
  * The full salt is `keccak256("okumoney." + DEPLOYMENT_VERSION + "." + name)`,
  * where `name` typically includes the contract name + a role suffix
- * (e.g. `OkuMoney.impl`, `OkuMoney.proxy`).
+ * (e.g. `OkuDollar.impl`, `OkuDollar.proxy`).
  *
- * @param name salt namespace, e.g. "OkuMoney.impl", "MockUSDC".
+ * @param name salt namespace, e.g. "OkuDollar.impl", "MockUSDC".
  * @returns 32-byte salt as a 0x-prefixed hex string.
  */
 export function saltFor(name: string): string {

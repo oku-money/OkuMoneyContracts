@@ -18,6 +18,37 @@ removable post-launch.
 
 ## 🟡 Should-fix before external audit
 
+### v0.3 single-token refactor — follow-ups `[EVM]`
+
+The EVM side was refactored from the dual-token split economy to a single
+ERC-8056 token (`OkuDollar` / `rUSDOku`). Contracts, tests, scripts and docs are
+done; these items are outstanding.
+
+- **`MAX_IMPLIED_APR` is a placeholder.** Currently 1000 bps nominal. This is the
+  bound doing most of the work in the compromised-setter story, and it needs a
+  real number from treasury rather than a round one. Paired with
+  `MAX_RATE_DURATION = 30 days` it caps worst-case over-accrual at ~0.82% per
+  segment.
+- **ERC-7730 deployment addresses are zero-filled.** `EVM/metadata/erc7730/*.json`
+  carry the full field-label metadata but placeholder addresses. Fill them in
+  after the first `v0.3` deploy and submit to the Ledger registry.
+  **This is a launch blocker** — Ledger and Trezor render raw calldata, so without
+  it the app says "$1,050" while the device says "1,000".
+- **Client SDK not built.** `EVM/metadata/DISPLAY_CONVENTION.md` specifies the
+  required API shape (`getDisplayBalance`, `getMaxSendRaw` with no inverse,
+  `allowanceUI`). The contract-side surface it needs is complete and shipped.
+- **Reference AMM + lending integrations not built.** Rate-aware pools only —
+  a naive constant-product pair against USDC leaks the entire accrual rate to
+  arbitrageurs.
+- **Listings communications.** Neither number is a $1 unit price. What goes to
+  CoinGecko / CMC / exchange listing teams, and whether the ticker changes, must
+  land before launch.
+- **`MathLib.rpow` has one uncovered assembly branch.** The `zx` overflow revert
+  inside the squaring loop. Assembly branch coverage is unreliable and the branch
+  requires a very specific overflow shape; left uncovered deliberately rather
+  than chased with a contrived harness. `src/lib/MathLib.sol` is at 96.67% lines,
+  above the 95% CI gate.
+
 ### SVM devnet needs a fresh re-deploy (not an in-place upgrade) `[SVM]`
 
 The program builds and passes all tests, but **the devnet program has
@@ -62,9 +93,9 @@ re-introduce a lint runner (dylint or an alternative) in CI.
 ### `RedemptionQueue.QueueEntry` storage packing `[EVM]`
 
 Currently three `uint256` fields per entry = three storage slots.
-`address user` (160 bits) + `uint96 okuMAmount` (~7.9e28 max — large
-enough for any realistic OkuM amount given `MAX_MULTIPLIER` and
-`maxSupply`) + `uint48 timestamp` would pack into two slots.
+`address user` (160 bits) + `uint96 rawAmount` (~7.9e28 max — large
+enough for any realistic amount given `MAX_MULTIPLIER` and
+`MAX_TOTAL_SUPPLY`) + `uint48 timestamp` would pack into two slots.
 
 **Caution:** storage-layout change on a UUPS proxy. Only do this
 in a v2 upgrade with a careful migration. Defer to v2.
@@ -76,10 +107,11 @@ audit feedback narrows the surface.
 
 ### Two-chain Foundry invariant harness `[EVM]`
 
-Extend the existing `LitePSMHandler` / `OkuDollarHandler` stateful-fuzz
-harness to model a second simultaneous `chainB` LitePSM and randomly
-bridge between them. Surfaces cross-chain accounting bugs that
-scripted scenarios miss.
+Extend the v0.3 `SystemHandler` stateful-fuzz harness to model a second
+simultaneous `chainB` LitePSM and randomly bridge between them. Surfaces
+cross-chain accounting bugs that scripted scenarios miss — including the
+EVM-continuous vs SVM-stepwise multiplier skew, which is currently only
+reasoned about rather than fuzzed.
 
 **Effort:** 1–2 weeks.
 
@@ -107,7 +139,7 @@ will concentrate:
   `MAX_MULTIPLIER < 2^52` assertion, and `read_multiplier` re-implements
   effective-multiplier selection to work around the Token-2022 zero-init
   edge case. Carries an in-code `AUDITOR ATTENTION` block.
-- **EVM `LitePSM._redeemOkuMShared`** (`LitePSM.sol:257-316`) is the
+- **EVM `LitePSM._redeem`** (`LitePSM.sol`) is the
   densest control flow in the EVM suite — a single function serving
   4 call shapes via a `bool okuMAtPsm` flag that toggles both the
   token-pull and the event emission. Logic is correct and commented;

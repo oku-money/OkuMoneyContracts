@@ -16,7 +16,7 @@
 import * as anchor from '@anchor-lang/core';
 import { BN, Program } from '@anchor-lang/core';
 import { PublicKey } from '@solana/web3.js';
-import { TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+import { TOKEN_2022_PROGRAM_ID, getMint, getScaledUiAmountConfig } from '@solana/spl-token';
 import { LitePsm } from '../../target/types/lite_psm';
 import { createProvider, detectNetwork } from '../utils/network';
 import { loadDeployment } from '../utils/addressBook';
@@ -54,12 +54,26 @@ async function main() {
   const program = anchor.workspace.LitePsm as Program<LitePsm>;
   const [psmConfig] = derivePsmConfigPDA(litePsmId);
 
-  const cfg = await program.account.psmConfig.fetch(psmConfig);
+  // The multiplier lives on the mint's ScaledUiAmountConfig extension, NOT on
+  // PsmConfig. Reading `cfg.multiplier` (as this script previously did) yields
+  // `undefined` — the field was removed when the multiplier moved to the mint.
+  const readMultiplier = async (): Promise<string> => {
+    const mintInfo = await getMint(provider.connection, okuMMint, undefined, TOKEN_2022_PROGRAM_ID);
+    const scaled = getScaledUiAmountConfig(mintInfo);
+    if (!scaled) return '<ScaledUiAmount extension missing>';
+    const now = Math.floor(Date.now() / 1000);
+    const effective =
+      Number(scaled.newMultiplier) > 0 && now >= Number(scaled.newMultiplierEffectiveTimestamp)
+        ? scaled.newMultiplier
+        : scaled.multiplier;
+    return String(effective);
+  };
+
   logger.info(
     summaryBlock('distribute_yield()', {
       'config PDA': psmConfig.toBase58(),
       'OkuM mint': okuMMint.toBase58(),
-      'current multiplier': cfg.multiplier.toString(),
+      'current multiplier': await readMultiplier(),
       'yield amount (6dec)': amount.toString(),
       'signer (rebaser)': provider.wallet.publicKey.toBase58(),
     })
@@ -82,8 +96,7 @@ async function main() {
     .rpc();
   logger.success(`tx: ${sig}`);
 
-  const after = await program.account.psmConfig.fetch(psmConfig);
-  logger.info(`new multiplier: ${after.multiplier.toString()}`);
+  logger.info(`new multiplier: ${await readMultiplier()}`);
 }
 
 main().then(() => process.exit(0)).catch((err) => {

@@ -1,11 +1,11 @@
 /**
- * Pause one of the OkuMoney protocol contracts.
+ * Pause one of the OkuDollar protocol contracts.
  *
  * Single script with --target={psm|okuM|usdOku}. Each target's pause()
  * is gated by a distinct role:
  *   psm    -> LitePSM.pause()    [PSM_PAUSER]
- *   okuM   -> OkuMoney.pause()   [OKUM_PAUSER]
- *   usdOku -> OkuDollar.pause()  [VAULT_PAUSER]
+ *   token -> OkuDollar.pause()  [OKU_PAUSER]   blocks transfers + mint; burn stays open
+ *   psm   -> LitePSM.pause()    [PSM_PAUSER]   blocks mint/redeem; processQueue stays open
  *
  * Usage:
  *   NETWORK=base npx hardhat run scripts/operator/pause.ts --network base --target=psm
@@ -33,10 +33,9 @@ function parseArg(name: string): string | undefined {
 const YES_MAINNET = process.argv.includes("--yes-mainnet");
 const DRY_RUN = process.env.DRY_RUN === "true";
 
-const TARGET_MAP: Record<string, { name: "LitePSM" | "OkuMoney" | "OkuDollar"; bookKey: string }> = {
+const TARGET_MAP: Record<string, { name: "LitePSM" | "OkuDollar"; bookKey: string }> = {
+  token: { name: "OkuDollar", bookKey: "OkuDollar" },
   psm: { name: "LitePSM", bookKey: "LitePSM" },
-  okuM: { name: "OkuMoney", bookKey: "OkuMoney" },
-  usdOku: { name: "OkuDollar", bookKey: "OkuDollar" },
 };
 
 async function main() {

@@ -7,12 +7,12 @@
  *                     ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER,
  *                     RESERVE_MANAGER
  *   Warm Multisig   → all PAUSER, all BLACKLISTER
- *   Orchestrator    → OKUM_REBASER, VAULT_REBASER, QUEUE_PROCESSOR, BUFFER_DEPOSITOR
+ *   Orchestrator    → OKU_RATE_SETTER, PSM_QUEUE_PROCESSOR, PSM_BUFFER_DEPOSITOR
  *
  * QUEUE_PSM is intentionally NOT in this list — it must remain on the LitePSM
  * proxy address (set at deploy time via configureRoles).
  *
- * OKUM_MINTER and OKUM_BURNER (cycle 4 / EVM-15) are likewise intentionally
+ * OKU_MINTER, OKU_BURNER and QUEUE_PSM are likewise intentionally
  * NOT in this list — they must remain on the LitePSM and RedemptionQueue
  * proxy addresses (granted at deploy time via configureRoles). This script
  * verifies those grants exist before proceeding; missing grants are fatal.
@@ -88,22 +88,16 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
   warm: Map<string, RoleName[]>;
   orch: Map<string, RoleName[]>;
 } {
+  // COLD: everything irreversible or value-bearing. Upgrades, un-pause,
+  // un-blacklist, the supply cap, the mint allowance, buffer withdrawal.
   const coldRoles = new Map<string, RoleName[]>([
-    ["OkuMoney", [
-      "DEFAULT_ADMIN_ROLE",
-      "OKUM_UPGRADER",
-      "OKUM_UNPAUSER",
-      "OKUM_UNBLACKLISTER",
-      "OKUM_CAP_MANAGER",
-      "OKUM_ALLOWANCE_MANAGER",
-    ]],
     ["OkuDollar", [
       "DEFAULT_ADMIN_ROLE",
-      "VAULT_UPGRADER",
-      "VAULT_UNPAUSER",
-      "VAULT_RESERVE_MANAGER",
-      "VAULT_ADMIN",
-      "OKUM_UNBLACKLISTER",
+      "OKU_UPGRADER",
+      "OKU_UNPAUSER",
+      "OKU_UNBLACKLISTER",
+      "OKU_CAP_MANAGER",
+      "OKU_ALLOWANCE_MANAGER",
     ]],
     ["LitePSM", [
       "DEFAULT_ADMIN_ROLE",
@@ -118,22 +112,48 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
     ]],
   ]);
 
+  // WARM: levers that can only ever RESTRICT. Pause, blacklist, and
+  // haltAccrual. `OKU_GUARDIAN` belongs here rather than cold precisely because
+  // it is monotone-safe — it stops the multiplier growing but cannot reduce
+  // anything already accrued, so the abuse ceiling is "yield pauses until cold
+  // overrides". That is strictly better than being unable to stop a compromised
+  // rate setter for as long as it takes to convene the cold multisig.
   const warmRoles = new Map<string, RoleName[]>([
-    ["OkuMoney", ["OKUM_PAUSER", "OKUM_BLACKLISTER"]],
-    ["OkuDollar", ["VAULT_PAUSER", "OKUM_BLACKLISTER"]],
+    ["OkuDollar", ["OKU_PAUSER", "OKU_BLACKLISTER", "OKU_GUARDIAN"]],
     ["LitePSM", ["PSM_PAUSER"]],
     ["RedemptionQueue", []],
   ]);
 
+  // ORCHESTRATOR (KMS-backed): the routine operational cadence only.
+  // `OKU_RATE_SETTER` is the highest-value key in the system — it is an oracle
+  // write. It is bounded on-chain by MAX_IMPLIED_APR, MAX_RATE_DURATION,
+  // monotonicity and MAX_MULTIPLIER, and vetoable by the warm guardian.
   const orchRoles = new Map<string, RoleName[]>([
-    ["OkuMoney", ["OKUM_REBASER"]],
-    ["OkuDollar", ["VAULT_REBASER"]],
+    ["OkuDollar", ["OKU_RATE_SETTER"]],
     ["LitePSM", ["PSM_QUEUE_PROCESSOR", "PSM_BUFFER_DEPOSITOR"]],
     ["RedemptionQueue", []],
   ]);
 
   return { cold: coldRoles, warm: warmRoles, orch: orchRoles };
 }
+
+/**
+ * Roles that must be held by CONTRACTS and never by a key. Verified as
+ * pre-existing grants rather than granted here:
+ *   OKU_MINTER  -> LitePSM
+ *   OKU_BURNER  -> LitePSM, RedemptionQueue
+ *   QUEUE_PSM   -> LitePSM
+ */
+const CONTRACT_ROLE_EXPECTATIONS: Array<{
+  contract: string;
+  role: RoleName;
+  holder: string;
+}> = [
+  { contract: "OkuDollar", role: "OKU_MINTER", holder: "LitePSM" },
+  { contract: "OkuDollar", role: "OKU_BURNER", holder: "LitePSM" },
+  { contract: "OkuDollar", role: "OKU_BURNER", holder: "RedemptionQueue" },
+  { contract: "RedemptionQueue", role: "QUEUE_PSM", holder: "LitePSM" },
+];
 
 // ============================================================================
 // Helpers
@@ -231,7 +251,7 @@ async function main() {
   const { cold: coldMap, warm: warmMap, orch: orchMap } = buildRoleMap(cold, warm, orch);
 
   const contracts: Record<string, Contract> = {};
-  for (const name of ["OkuMoney", "OkuDollar", "LitePSM", "RedemptionQueue"]) {
+  for (const name of ["OkuDollar", "OkuDollar", "LitePSM", "RedemptionQueue"]) {
     let addr: string;
     try {
       addr = loadAddress(bookKey, name);
@@ -242,32 +262,46 @@ async function main() {
     contracts[name] = await getDeployedContract(name, addr);
   }
 
-  // -------- Sanity check: deploy-time proxy grants must already exist --------
-  // EVM-A1: OKUM_MINTER and OKUM_BURNER live on the LitePSM/RedemptionQueue
-  // proxies, not on EOAs. They are granted in scripts/deploy/index.ts and must
-  // be present before this script runs. Missing grants here mean a fresh
-  // deploy is broken — fail loudly before we touch any role state.
-  if (contracts.OkuMoney && contracts.LitePSM && contracts.RedemptionQueue) {
-    const okuMoney = contracts.OkuMoney;
+  // -------- Sanity check: deploy-time contract grants must already exist --------
+  // OKU_MINTER / OKU_BURNER / QUEUE_PSM live on the LitePSM and RedemptionQueue
+  // proxies, never on a key. They are granted in scripts/deploy/index.ts and must
+  // be present before this script runs. Missing grants mean a fresh deploy is
+  // broken — fail loudly before touching any role state.
+  if (contracts.OkuDollar && contracts.LitePSM && contracts.RedemptionQueue) {
     const psmAddr = await contracts.LitePSM.getAddress();
     const queueAddr = await contracts.RedemptionQueue.getAddress();
-    const checks: Array<[string, string, string]> = [
-      ["OKUM_MINTER on LitePSM", ROLES.OKUM_MINTER, psmAddr],
-      ["OKUM_MINTER on RedemptionQueue", ROLES.OKUM_MINTER, queueAddr],
-      ["OKUM_BURNER on LitePSM", ROLES.OKUM_BURNER, psmAddr],
-      ["OKUM_BURNER on RedemptionQueue", ROLES.OKUM_BURNER, queueAddr],
-    ];
-    for (const [label, role, account] of checks) {
-      const has = await okuMoney.hasRole(role, account);
+
+    for (const expectation of CONTRACT_ROLE_EXPECTATIONS) {
+      const target = contracts[expectation.contract];
+      if (!target) continue;
+      const holder = expectation.holder === "LitePSM" ? psmAddr : queueAddr;
+      const has = await target.hasRole(ROLES[expectation.role], holder);
+      const label = `${expectation.role} on ${expectation.holder}`;
       if (!has) {
         throw new Error(
-          `Deploy-time proxy grant missing: ${label}. ` +
-          `Re-run scripts/deploy/index.ts:configureRoles or grant manually before continuing.`
+          `Deploy-time contract grant missing: ${label}. ` +
+            `Re-run scripts/deploy/index.ts:configureRoles before continuing.`
         );
       }
       logger.info(`  [verified] ${label}`);
     }
+
+    // And the inverse: no key may hold a contract-only role.
+    for (const key of [cold, warm, orch]) {
+      if (!key) continue;
+      for (const expectation of CONTRACT_ROLE_EXPECTATIONS) {
+        const target = contracts[expectation.contract];
+        if (!target) continue;
+        if (await target.hasRole(ROLES[expectation.role], key)) {
+          throw new Error(
+            `SEPARATION-OF-DUTIES VIOLATION: key ${key} holds ${expectation.role} on ` +
+              `${expectation.contract}. Contract-only roles must never be held by a key.`
+          );
+        }
+      }
+    }
   }
+
 
   // -------- Grant Cold Multisig roles --------
   logger.step(1, `Granting Cold Multisig (${cold}) roles`);

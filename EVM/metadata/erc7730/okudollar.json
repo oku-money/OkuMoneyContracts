@@ -1,0 +1,178 @@
+{
+  "$schema": "https://eips.ethereum.org/assets/eip-7730/erc7730-v1.schema.json",
+  "context": {
+    "$id": "OkuDollar",
+    "contract": {
+      "abi": "../../artifacts/evm/OkuDollar.json",
+      "deployments": [
+        { "chainId": 1, "address": "0x0000000000000000000000000000000000000000" },
+        { "chainId": 8453, "address": "0x0000000000000000000000000000000000000000" },
+        { "chainId": 56, "address": "0x0000000000000000000000000000000000000000" }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "Oku Money",
+    "info": {
+      "legalName": "Oku Money",
+      "url": "https://oku.money",
+      "lastUpdate": "2026-08-20T00:00:00Z"
+    },
+    "constants": {
+      "tokenTicker": "rUSDOku",
+      "tokenDecimals": 18
+    },
+    "enums": {}
+  },
+  "display": {
+    "definitions": {
+      "rawAmount": {
+        "label": "Amount (rUSDOku)",
+        "format": "tokenAmount",
+        "params": { "tokenPath": "@.to", "nativeCurrencyAddress": null }
+      }
+    },
+    "formats": {
+      "transfer(address,uint256)": {
+        "$id": "transfer",
+        "intent": "Send rUSDOku",
+        "fields": [
+          {
+            "path": "to",
+            "label": "To",
+            "format": "addressName",
+            "params": { "types": ["eoa", "contract"] }
+          },
+          {
+            "path": "value",
+            "label": "Amount (rUSDOku units, NOT dollars)",
+            "format": "tokenAmount",
+            "params": { "ticker": "rUSDOku", "decimals": 18 }
+          }
+        ],
+        "required": ["to", "value"],
+        "excluded": []
+      },
+      "transferFrom(address,address,uint256)": {
+        "$id": "transferFrom",
+        "intent": "Send rUSDOku on behalf of another account",
+        "fields": [
+          { "path": "from", "label": "From", "format": "addressName" },
+          { "path": "to", "label": "To", "format": "addressName" },
+          {
+            "path": "value",
+            "label": "Amount (rUSDOku units, NOT dollars)",
+            "format": "tokenAmount",
+            "params": { "ticker": "rUSDOku", "decimals": 18 }
+          }
+        ],
+        "required": ["from", "to", "value"],
+        "excluded": []
+      },
+      "approve(address,uint256)": {
+        "$id": "approve",
+        "intent": "Approve rUSDOku spending",
+        "fields": [
+          { "path": "spender", "label": "Spender", "format": "addressName" },
+          {
+            "path": "value",
+            "label": "Allowance (rUSDOku units - dollar value GROWS over time)",
+            "format": "tokenAmount",
+            "params": { "ticker": "rUSDOku", "decimals": 18 }
+          }
+        ],
+        "required": ["spender", "value"],
+        "excluded": []
+      },
+      "setYieldRate(uint256,uint256)": {
+        "$id": "setYieldRate",
+        "intent": "ORACLE WRITE - set the yield accrual rate",
+        "fields": [
+          { "path": "ratePerSecond", "label": "Per-second rate (1e18 = no yield)", "format": "raw" },
+          { "path": "endTimestamp", "label": "Accrual halts at", "format": "date", "params": { "encoding": "timestamp" } }
+        ],
+        "required": ["ratePerSecond", "endTimestamp"],
+        "excluded": []
+      },
+      "haltAccrual()": {
+        "$id": "haltAccrual",
+        "intent": "EMERGENCY - freeze the yield multiplier immediately",
+        "fields": [],
+        "required": [],
+        "excluded": []
+      },
+      "blacklist(address)": {
+        "$id": "blacklist",
+        "intent": "Block an address from sending, receiving, minting or burning",
+        "fields": [{ "path": "account", "label": "Account", "format": "addressName" }],
+        "required": ["account"],
+        "excluded": []
+      },
+      "unblacklist(address)": {
+        "$id": "unblacklist",
+        "intent": "Unblock an address",
+        "fields": [{ "path": "account", "label": "Account", "format": "addressName" }],
+        "required": ["account"],
+        "excluded": []
+      },
+      "mint(address,uint256)": {
+        "$id": "mint",
+        "intent": "Mint rUSDOku",
+        "fields": [
+          { "path": "to", "label": "To", "format": "addressName" },
+          {
+            "path": "amount",
+            "label": "Amount (rUSDOku units, NOT dollars)",
+            "format": "tokenAmount",
+            "params": { "ticker": "rUSDOku", "decimals": 18 }
+          }
+        ],
+        "required": ["to", "amount"],
+        "excluded": []
+      },
+      "burn(uint256)": {
+        "$id": "burn",
+        "intent": "Burn rUSDOku from your own balance",
+        "fields": [
+          {
+            "path": "amount",
+            "label": "Amount (rUSDOku units, NOT dollars)",
+            "format": "tokenAmount",
+            "params": { "ticker": "rUSDOku", "decimals": 18 }
+          }
+        ],
+        "required": ["amount"],
+        "excluded": []
+      },
+      "setMaxSupply(uint256)": {
+        "$id": "setMaxSupply",
+        "intent": "Set the global supply cap",
+        "fields": [
+          {
+            "path": "newMaxSupply",
+            "label": "New cap (rUSDOku units)",
+            "format": "tokenAmount",
+            "params": { "ticker": "rUSDOku", "decimals": 18 }
+          }
+        ],
+        "required": ["newMaxSupply"],
+        "excluded": []
+      },
+      "configureMinterAllowance(address,uint256)": {
+        "$id": "configureMinterAllowance",
+        "intent": "Set a minter's allowance",
+        "fields": [
+          { "path": "minter_", "label": "Minter", "format": "addressName" },
+          {
+            "path": "newAllowance",
+            "label": "Allowance (rUSDOku units)",
+            "format": "tokenAmount",
+            "params": { "ticker": "rUSDOku", "decimals": 18 }
+          }
+        ],
+        "required": ["minter_", "newAllowance"],
+        "excluded": []
+      }
+    }
+  }
+}

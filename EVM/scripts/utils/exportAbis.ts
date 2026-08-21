@@ -19,8 +19,8 @@ interface ContractSpec {
 }
 
 const PRODUCTION_CONTRACTS: ContractSpec[] = [
-  { sol: "token/OkuMoney.sol", name: "OkuMoney" },
   { sol: "token/OkuDollar.sol", name: "OkuDollar" },
+  { sol: "oracle/OkuMultiplierAdapter.sol", name: "OkuMultiplierAdapter" },
   { sol: "psm/LitePSM.sol", name: "LitePSM" },
   { sol: "psm/RedemptionQueue.sol", name: "RedemptionQueue" },
 ];

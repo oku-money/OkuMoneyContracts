@@ -2,7 +2,7 @@
  * Rescue a stuck redemption-queue entry (QUEUE_RESCUER role required).
  *
  * Calls `RedemptionQueue.rescueQueueEntry(index, alternateRecipient)`,
- * which returns the OkuMoney for the entry to `alternateRecipient` and
+ * which returns the rUSDOku for the entry to `alternateRecipient` and
  * clears the slot without burning. Use when an entry is permanently
  * unprocessable (e.g. the original user has been USDC-blacklisted).
  *
@@ -67,7 +67,7 @@ async function main() {
   try {
     const entry = await (queue as any).getQueueEntry(index);
     logger.info(`Entry user: ${entry.user}`);
-    logger.info(`Entry okuMAmount: ${ethers.formatUnits(entry.okuMAmount, 18)} OkuM`);
+    logger.info(`Entry rawAmount: ${ethers.formatUnits(entry.rawAmount, 18)} OkuM`);
   } catch {
     logger.warning("getQueueEntry() not available; skipping pre-state read");
   }

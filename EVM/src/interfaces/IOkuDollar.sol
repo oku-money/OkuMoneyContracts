@@ -1,41 +1,45 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+import {IScaledUIAmount} from "./erc8056/IScaledUIAmount.sol";
+import {IScaledUIAmountConversion} from "./erc8056/IScaledUIAmountConversion.sol";
+import {IScaledUIAmountBalances} from "./erc8056/IScaledUIAmountBalances.sol";
+
 /**
  * @title IOkuDollar
- * @notice Interface for the OkuDollar vault (rebasing stablecoin backed by OkuMoney reserves).
- * @dev Exposes the full mint / redeem / view surface so tests, handlers, and invariant
- *      runners can program against a single interface. Production call sites only
- *      invoke `wrap` and `unwrap`; the read-only views are kept here for
- *      off-chain consumers and test scaffolding.
+ * @notice Consumer-facing surface of the OkuDollar (rUSDOku) token.
+ * @dev Composes the standard surfaces rather than redeclaring them, so there is
+ *      exactly one declaration of each function in the inheritance graph:
+ *        - `IERC20`                      — the raw accounting layer
+ *        - `IScaledUIAmount` + extensions — the ERC-8056 display layer
+ *      and adds only what is unique to this token: the value-layer anchor
+ *      (`asset`, `usdcDecimalMultiplier`) and the role-gated supply hooks the
+ *      PSM and queue call.
  */
-interface IOkuDollar {
-    /// @notice Wrap OkuMoney into OkuDollar.
-    function wrap(
-        uint256 okuMAmount,
-        address receiver,
-        uint256 minAmountOut
-    )
-        external
-        returns (uint256 usdMinted);
-    /// @notice Unwrap OkuDollar back to OkuMoney.
-    function unwrap(uint256 usdAmount, address receiver) external returns (uint256 okuMReturned);
-    /// @notice Dollar-denominated balance for `account` (rebasing).
-    function balanceOf(address account) external view returns (uint256);
-    /// @notice Total dollar-denominated supply (rebasing).
-    function totalSupply() external view returns (uint256);
-    /// @notice Computed USD multiplier with continuous yield accrual.
-    function usdMultiplier() external view returns (uint256);
-    /// @notice Internal share balance for `account`.
-    function usdSharesOf(address account) external view returns (uint256);
-    /// @notice Total internal share tokens across all holders.
-    function totalUsdShares() external view returns (uint256);
-    /// @notice Total OkuMoney tokens held as reserves.
-    function totalOkuMReserves() external view returns (uint256);
-    /// @notice Total OkuDollar obligations (in dollar terms).
-    function totalUsdObligations() external view returns (uint256);
-    /// @notice Multiplier-aware collateralization ratio.
-    function collateralizationRatio() external view returns (uint256);
-    /// @notice Extractable surplus as OkuMoney tokens.
-    function surplus() external view returns (uint256);
+interface IOkuDollar is
+    IERC20,
+    IScaledUIAmount,
+    IScaledUIAmountConversion,
+    IScaledUIAmountBalances
+{
+    // ============ Value-layer anchor ============
+
+    /// @notice The underlying asset all value conversions are denominated against.
+    /// @dev USDC on the deployed chain. Single source of truth: the PSM and queue
+    ///      cross-assert against this at `initialize` rather than deriving their
+    ///      own copy from a separately-supplied address.
+    function asset() external view returns (address);
+
+    /// @notice `10 ** (18 - IERC20Metadata(asset()).decimals())`. `1e12` for Circle USDC.
+    function usdcDecimalMultiplier() external view returns (uint256);
+
+    // ============ Supply hooks (role-gated) ============
+
+    /// @notice Mint `amount` raw tokens to `to`. Requires `OKU_MINTER`.
+    function mint(address to, uint256 amount) external;
+
+    /// @notice Burn `amount` raw tokens from the caller. Requires `OKU_BURNER`.
+    function burn(uint256 amount) external;
 }

@@ -121,43 +121,29 @@ type RoleName = keyof typeof ROLES;
  * NOTE: every list begins with DEFAULT_ADMIN_ROLE so the master EOA can
  * subsequently grant/revoke any role itself.
  *
- * OkuDollar reuses the OKUM_BLACKLISTER / OKUM_UNBLACKLISTER role hashes
- * (so a single role *name* spans both tokens for regulatory enforcement),
- * but AccessControl mappings are per-contract — the role must be granted
- * separately on OkuMoney AND OkuDollar. Mirrors deploy/index.ts and
+ * OkuDollar reuses the OKU_BLACKLISTER / OKU_UNBLACKLISTER role hashes
+ * v0.3: a single token, so there is no longer a duplicated blacklist to keep
+ * in sync across two contracts. Mirrors deploy/index.ts and
  * grantRolesMainnet.ts.
  */
 const ROLE_MAP: Record<string, readonly RoleName[]> = {
-  OkuMoney: [
-    "DEFAULT_ADMIN_ROLE",
-    "OKUM_UPGRADER",
-    "OKUM_PAUSER",
-    "OKUM_UNPAUSER",
-    "OKUM_MINTER",
-    // Cycle 4 (EVM-15): OKUM_BURNER required for redeem flows on both LitePSM
-    // and RedemptionQueue. Granting it to the master EOA is a no-op safety net
-    // (the master EOA never calls OkuMoney.burn() directly) but keeps the role
-    // surface complete for emergency operator action.
-    "OKUM_BURNER",
-    "OKUM_REBASER",
-    "OKUM_BLACKLISTER",
-    "OKUM_UNBLACKLISTER",
-    "OKUM_CAP_MANAGER",
-    "OKUM_ALLOWANCE_MANAGER",
-  ],
   OkuDollar: [
     "DEFAULT_ADMIN_ROLE",
-    "VAULT_UPGRADER",
-    "VAULT_REBASER",
-    "VAULT_RESERVE_MANAGER",
-    "VAULT_PAUSER",
-    "VAULT_UNPAUSER",
-    "VAULT_ADMIN",
-    // Per-contract grants of the shared OKUM_BLACKLISTER / OKUM_UNBLACKLISTER
-    // role hashes — required for OkuDollar.blacklist() / unblacklist() since
-    // AccessControl role mappings are per-contract even when the hash is shared.
-    "OKUM_BLACKLISTER",
-    "OKUM_UNBLACKLISTER",
+    "OKU_UPGRADER",
+    "OKU_PAUSER",
+    "OKU_UNPAUSER",
+    // Granting MINTER/BURNER to the master EOA is a no-op safety net on testnet
+    // (the EOA never calls mint/burn directly — LitePSM does) but keeps the role
+    // surface complete for emergency operator action. On MAINNET these are
+    // contract-only; grantRolesMainnet.ts asserts no key holds them.
+    "OKU_MINTER",
+    "OKU_BURNER",
+    "OKU_RATE_SETTER",
+    "OKU_GUARDIAN",
+    "OKU_BLACKLISTER",
+    "OKU_UNBLACKLISTER",
+    "OKU_CAP_MANAGER",
+    "OKU_ALLOWANCE_MANAGER",
   ],
   LitePSM: [
     "DEFAULT_ADMIN_ROLE",

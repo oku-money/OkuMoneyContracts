@@ -734,6 +734,15 @@ All admin scripts live under `scripts/admin/`. Each:
 
 ## EVM vs SVM — divergence catalogue
 
+> **Updated for EVM v0.3.** The EVM side no longer has a dual-token split
+> economy: `OkuMoney` and the rebasing `OkuDollar` vault were collapsed into a
+> single ERC-8056 token (`OkuDollar` / `rUSDOku`). The two chains now share the
+> same *interface* shape. They still differ in accrual granularity — EVM is
+> continuous, SVM is stepwise, because Token-2022 rejects `ScaledUiAmount` and
+> `InterestBearingConfig` on the same mint (verified at
+> `interface/src/extension/mod.rs:1365`). Entries below that describe two EVM
+> tokens, wrap/unwrap, share ledgers, or collateral ratios are historical.
+
 This section catalogues SVM-specific deliberate departures from the
 EVM implementation. See the EVM-side mirror in
 [`../EVM/README.md`](../EVM/README.md) for the symmetric perspective.

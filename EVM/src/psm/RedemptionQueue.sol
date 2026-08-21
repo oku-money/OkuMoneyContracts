@@ -9,89 +9,114 @@ import {
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IOkuMoney} from "../interfaces/IOkuMoney.sol";
-import {Roles} from "../lib/Roles.sol";
+
+import {ReentrancyGuardUpgradeable} from "../lib/ReentrancyGuardUpgradeable.sol";
 import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
 import {MathLib} from "../lib/MathLib.sol";
-import {RedemptionQueueEvents} from "../lib/events/RedemptionQueueEvents.sol";
-import {ReentrancyGuardUpgradeable} from "../lib/ReentrancyGuardUpgradeable.sol";
+import {Roles} from "../lib/Roles.sol";
+import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
 
 /**
  * @title RedemptionQueue
- * @notice FIFO queue for OkuMoney redemptions when the PSM buffer is depleted.
- * @dev Stores OkuM token amounts (not shares — OkuMoney is non-rebasing).
- *      Queued OkuM tokens do not grow in balance, but appreciate via okuMMultiplier().
- *      When the queue processes, the user receives USDC based on
- *      okuMAmount * okuMMultiplier() at processing time. Users earn yield while queued
- *      via multiplier appreciation rather than balance growth.
+ * @notice FIFO queue for rUSDOku redemptions when the PSM's USDC buffer is depleted.
  *
- *      Tokens are transferred into the queue by the PSM before `enqueue` is called;
- *      `enqueue` is record-only and does not pull tokens from the user.
+ * @dev Stores **raw** rUSDOku. Because raw balances are fixed, queued amounts do
+ *      not grow in count — but they appreciate in dollar value via the
+ *      multiplier, so a user waiting in the queue continues to earn yield. At
+ *      processing, `usdcAmount = rawAmount * uiMultiplier() / PRECISION` scaled
+ *      to USDC decimals, with the multiplier cached once per batch for gas and
+ *      cross-entry consistency.
  *
- *      If a queue entry becomes permanently unprocessable (e.g., USDC-blacklisted recipient),
- *      QUEUE_RESCUER can call `rescueQueueEntry` to return the OkuMoney to the original
- *      user or an alternate address and clear the slot. Operators should rescue any stuck
- *      entries before running `processQueue` over that range.
+ *      Deliberately NOT `Pausable`: pause lives at the LitePSM layer. Pausing
+ *      here would lock users into the queue.
  *
- *      Decimal flexibility: like LitePSM, the USDC-side decimal multiplier is computed at
- *      init from `IERC20Metadata(usdc).decimals()` and stored on the proxy.
- *
- *      USDC peg monitoring is handled off-chain; operators can pause the PSM (which
- *      gates `processQueue`) if a depeg is detected.
- *
- *      See Constants.sol for terminology legend.
- *      See {OkuMoney.initialize} for the unified role-grant policy.
+ *      Storage uses ERC-7201 namespaced storage.
  */
 contract RedemptionQueue is
     Initializable,
     AccessControlUpgradeable,
     ReentrancyGuardUpgradeable,
-    UUPSUpgradeable,
-    RedemptionQueueEvents
+    UUPSUpgradeable
 {
     using SafeERC20 for IERC20;
 
-    // ============ ERC-7201 Namespaced Storage ============
+    // ============ Types ============
 
     struct QueueEntry {
         address user;
-        uint256 okuMAmount; // Raw OkuM token amount (non-rebasing, appreciates via okuMMultiplier)
+        uint256 rawAmount;
         uint256 timestamp;
     }
 
-    /// @custom:storage-location erc7201:okumoney.storage.RedemptionQueue
+    /// @notice Why `processQueue` skipped an entry without clearing it.
+    enum RedemptionSkipReason {
+        AlreadyCleared,
+        InsufficientFunds,
+        TransferFailed
+    }
+
+    // ============ ERC-7201 Namespaced Storage ============
+
+    /// @custom:storage-location erc7201:okumoney.storage.RedemptionQueueV2
     struct RedemptionQueueStorage {
         mapping(uint256 => QueueEntry) queue;
         uint256 queueHead;
         uint256 queueTail;
-        uint256 totalQueuedOkuM;
-        IOkuMoney okuMoney;
-        // USDC reference + per-deployment decimal multiplier resolved at init from
-        // IERC20Metadata(usdc).decimals(). For Circle USDC (6 decimals) the multiplier is 1e12.
+        uint256 totalQueuedRaw;
+        IOkuDollar okuDollar;
         IERC20 usdc;
         uint256 usdcDecimalMultiplier;
     }
 
-    // keccak256(abi.encode(uint256(keccak256("okumoney.storage.RedemptionQueue")) - 1)) & ~bytes32(uint256(0xff))
-    bytes32 private constant REDEMPTIONQUEUE_STORAGE_LOCATION =
-        0xa62273ae8f4f9b4de76a6f11e9bbf5ca0a9c42e1f4bbbcb4369e173f90b6e000;
+    // keccak256(abi.encode(uint256(keccak256("okumoney.storage.RedemptionQueueV2")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant REDEMPTION_QUEUE_STORAGE_LOCATION =
+        0x6fb684f02919148f6d51ad47eb3d75c08306ce92047d0ad2154c86329afe9d00;
 
     function _getRedemptionQueueStorage() private pure returns (RedemptionQueueStorage storage $) {
         assembly {
-            $.slot := REDEMPTIONQUEUE_STORAGE_LOCATION
+            $.slot := REDEMPTION_QUEUE_STORAGE_LOCATION
         }
     }
 
-    // ============ Custom Errors ============
+    // ============ Errors ============
 
-    // Common errors (ZeroAddress) live in lib/Errors.sol.
-    error StartBelowHead();
-    error EndAboveTail();
     error InvalidIndex();
     error EntryAlreadyCleared();
-    /// @dev USDC reports more decimals than supported (>18).
     error UsdcDecimalsTooLarge(uint8 reported);
+    /// @notice The supplied USDC does not match `okuDollar.asset()`.
+    /// @dev Fail-fast on the misconfiguration that would otherwise produce
+    ///      silently divergent pricing between the token's value views and this
+    ///      contract's payouts.
+    error AssetMismatch(address expected, address supplied);
+    /// @notice The locally-derived decimal multiplier disagrees with the token's.
+    error DecimalMultiplierMismatch(uint256 expected, uint256 derived);
+    /// @notice `sweepExcess` was called with no donated surplus to sweep.
+    error NoExcessToSweep();
+
+    // ============ Events ============
+
+    event RedemptionQueued(
+        uint256 indexed index, address indexed user, uint256 rawAmount, uint256 uiAmount
+    );
+    event RedemptionProcessed(
+        address indexed user,
+        uint256 rawAmount,
+        uint256 uiAmount,
+        uint256 usdcAmount,
+        uint256 waitTime
+    );
+    event RedemptionSkipped(uint256 indexed index, RedemptionSkipReason reason);
+    event RedemptionRescued(
+        uint256 indexed index,
+        address indexed user,
+        address indexed recipient,
+        uint256 rawAmount,
+        uint256 uiAmount
+    );
+    event QueueHeadAdvanced(uint256 newHead, uint256 advanced);
+    /// @notice Donated (non-escrowed) tokens swept out of the contract.
+    event ExcessSwept(address indexed to, uint256 amount);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -99,12 +124,15 @@ contract RedemptionQueue is
     }
 
     /// @notice Initialize the queue proxy.
-    /// @param _okuMoney OkuMoney token address
-    /// @param _usdc USDC token address (must implement IERC20Metadata.decimals()).
-    ///        Must match the USDC configured on the LitePSM that will operate this queue.
-    /// @param _admin Admin address (receives upgrader/rescuer roles; NOT QUEUE_PSM)
-    function initialize(address _okuMoney, address _usdc, address _admin) public initializer {
-        if (_okuMoney == address(0)) revert Errors.ZeroAddress();
+    /// @param _okuDollar The rUSDOku token.
+    /// @param _usdc USDC address. MUST equal `_okuDollar.asset()`.
+    /// @param _admin Receives the queue role set (minus `QUEUE_PSM`).
+    /// @dev `QUEUE_PSM` is deliberately NOT granted here — it is granted
+    ///      post-deploy to the LitePSM proxy. That avoids a circular dependency
+    ///      and stops the deploy admin from calling `enqueue`/`processQueue`
+    ///      directly.
+    function initialize(address _okuDollar, address _usdc, address _admin) public initializer {
+        if (_okuDollar == address(0)) revert Errors.ZeroAddress();
         if (_usdc == address(0)) revert Errors.ZeroAddress();
         if (_admin == address(0)) revert Errors.ZeroAddress();
 
@@ -112,88 +140,89 @@ contract RedemptionQueue is
         __ReentrancyGuard_init();
 
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
-        $.okuMoney = IOkuMoney(_okuMoney);
+        $.okuDollar = IOkuDollar(_okuDollar);
         $.usdc = IERC20(_usdc);
+
+        // Single source of truth: cross-assert against the token rather than
+        // deriving a second, independently-supplied copy of the same constant.
+        address tokenAsset = IOkuDollar(_okuDollar).asset();
+        if (tokenAsset != _usdc) revert AssetMismatch(tokenAsset, _usdc);
 
         uint8 usdcDecimals = IERC20Metadata(_usdc).decimals();
         if (usdcDecimals > Constants.MAX_USDC_DECIMALS) revert UsdcDecimalsTooLarge(usdcDecimals);
-        $.usdcDecimalMultiplier =
-            10 ** (uint256(Constants.MAX_USDC_DECIMALS) - uint256(usdcDecimals));
+        uint256 derived = 10 ** (uint256(Constants.MAX_USDC_DECIMALS) - uint256(usdcDecimals));
+        uint256 expected = IOkuDollar(_okuDollar).usdcDecimalMultiplier();
+        if (expected != derived) revert DecimalMultiplierMismatch(expected, derived);
+        $.usdcDecimalMultiplier = derived;
 
-        // QUEUE_PSM is intentionally NOT granted here — it must be granted post-deployment
-        // to the LitePSM proxy address to avoid a circular deployment dependency. Granting
-        // it to admin would let admin bypass the PSM and call enqueue/processQueue directly.
-        // See {OkuMoney.initialize} for the broader role-grant policy.
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(Roles.QUEUE_UPGRADER, _admin);
         _grantRole(Roles.QUEUE_RESCUER, _admin);
     }
 
-    // ============ Storage Accessor Views ============
+    // ============ Storage accessors ============
 
-    function okuMoney() external view returns (IOkuMoney) {
-        return _getRedemptionQueueStorage().okuMoney;
+    function okuDollar() external view returns (IOkuDollar) {
+        return _getRedemptionQueueStorage().okuDollar;
     }
 
     function usdc() external view returns (IERC20) {
         return _getRedemptionQueueStorage().usdc;
     }
 
-    /// @notice Decimal conversion multiplier for the configured USDC variant.
     function usdcDecimalMultiplier() external view returns (uint256) {
         return _getRedemptionQueueStorage().usdcDecimalMultiplier;
     }
 
-    /// @notice Index of the first potentially-live slot in the queue.
     function queueHead() external view returns (uint256) {
         return _getRedemptionQueueStorage().queueHead;
     }
 
-    /// @notice Index of the next slot to be written (one past the last entry).
     function queueTail() external view returns (uint256) {
         return _getRedemptionQueueStorage().queueTail;
     }
 
-    /// @notice Total OkuMoney tokens escrowed across all pending queue entries.
-    function totalQueuedOkuM() external view returns (uint256) {
-        return _getRedemptionQueueStorage().totalQueuedOkuM;
+    /// @notice Total raw rUSDOku escrowed across all pending entries.
+    /// @dev INVARIANT: `totalQueuedRaw <= okuDollar.balanceOf(address(this))`.
+    ///      Stated as `<=`, never `==`: anyone can transfer tokens to this
+    ///      address for free, which would permanently break an equality. Donated
+    ///      surplus is recoverable via `sweepExcess`.
+    function totalQueuedRaw() external view returns (uint256) {
+        return _getRedemptionQueueStorage().totalQueuedRaw;
     }
 
-    // ============ Queue Management ============
+    // ============ Queue operations ============
 
-    /// @notice Record a redemption in the queue.
-    /// @param user User requesting redemption
-    /// @param okuMTokenAmount Amount of OkuMoney tokens to redeem
-    /// @dev Tokens must already be in this contract before calling (PSM transfers them first).
-    ///      Record-only: stores the raw OkuM amount and pushes an entry.
-    function enqueue(address user, uint256 okuMTokenAmount) external onlyRole(Roles.QUEUE_PSM) {
+    /// @notice Record a queued redemption. Record-only.
+    /// @dev The PSM transfers the tokens in before calling this.
+    function enqueue(
+        address user,
+        uint256 rawAmount
+    )
+        external
+        onlyRole(Roles.QUEUE_PSM)
+        returns (uint256 index)
+    {
+        if (user == address(0)) revert Errors.ZeroAddress();
+        if (rawAmount == 0) revert Errors.ZeroAmount();
+
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
-        uint256 position = $.queueTail;
-        $.queue[position] =
-            QueueEntry({user: user, okuMAmount: okuMTokenAmount, timestamp: block.timestamp});
-        $.queueTail = position + 1;
-        $.totalQueuedOkuM += okuMTokenAmount;
+        index = $.queueTail;
+        $.queue[index] = QueueEntry({user: user, rawAmount: rawAmount, timestamp: block.timestamp});
+        $.queueTail = index + 1;
+        $.totalQueuedRaw += rawAmount;
 
-        uint256 dollarValue = MathLib.okuMToDollars(okuMTokenAmount, $.okuMoney.okuMMultiplier());
-        uint256 currentQueueLength = $.queueTail - $.queueHead;
-        emit RedemptionQueued(user, okuMTokenAmount, dollarValue, position, currentQueueLength);
+        emit RedemptionQueued(index, user, rawAmount, $.okuDollar.toUIAmount(rawAmount));
     }
 
-    /// @notice Process queued redemptions within an index range.
-    /// @param startIndex First queue index to process (inclusive)
-    /// @param endIndex Last queue index to process (exclusive)
-    /// @dev Multiplier-aware: USDC output = okuMAmount * okuMMultiplier / PRECISION (USDC decimals).
-    ///      okuMMultiplier is cached once before the loop so all entries in a batch convert at
-    ///      the same rate (consistent within a single block; saves gas).
+    /// @notice Process queued redemptions over `[startIndex, endIndex)`.
+    /// @dev Burns rUSDOku, pulls USDC from the PSM, pays users. The multiplier is
+    ///      read once for the whole batch so every entry in a batch is priced
+    ///      identically.
     ///
-    ///      Pause semantics: this function is only callable by `QUEUE_PSM` (the LitePSM proxy).
-    ///      LitePSM.processQueue is already guarded by `whenNotPaused`, so pausing LitePSM
-    ///      effectively halts queue drain. RedemptionQueue deliberately does not inherit
-    ///      PausableUpgradeable to keep its storage layout minimal; the pause gate lives at
-    ///      the LitePSM layer.
-    ///
-    ///      Stuck entries (USDC-blacklisted/frozen recipients) are soft-skipped with a
-    ///      RedemptionSkipped(TransferFailed) event. Use `rescueQueueEntry` to clear them.
+    ///      Soft-skips (emit + continue) rather than reverting on a cleared entry
+    ///      or a failed USDC transfer, so one stuck recipient cannot block the
+    ///      queue. Breaks on insufficient PSM funds.
     function processQueue(
         uint256 startIndex,
         uint256 endIndex
@@ -203,79 +232,62 @@ contract RedemptionQueue is
         onlyRole(Roles.QUEUE_PSM)
     {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
-        if (startIndex < $.queueHead) revert StartBelowHead();
-        if (endIndex > $.queueTail) revert EndAboveTail();
-
-        IERC20 usdcContract = $.usdc;
-        uint256 usdcBalance = usdcContract.balanceOf(msg.sender);
+        IOkuDollar token = $.okuDollar;
+        IERC20 usdcToken = $.usdc;
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
-        uint256 cachedMult = $.okuMoney.okuMMultiplier();
-        // Accumulate decrements in memory; write once after the loop (saves ~2100 gas per
-        // additional processed entry vs. an SSTORE on every iteration).
-        uint256 totalOkuMDecrement = 0;
 
-        for (uint256 i = startIndex; i < endIndex; i++) {
+        // Cached once per batch: gas, and cross-entry pricing consistency.
+        uint256 multiplier = token.uiMultiplier();
+
+        address psm = msg.sender;
+        uint256 available = usdcToken.balanceOf(psm);
+        uint256 totalRawDecrement;
+
+        for (uint256 i = startIndex; i < endIndex; ++i) {
             QueueEntry memory entry = $.queue[i];
 
             if (entry.user == address(0)) {
-                // Slot was processed in an earlier batch or rescued out.
                 emit RedemptionSkipped(i, RedemptionSkipReason.AlreadyCleared);
                 continue;
             }
 
-            uint256 dollarValue18 = MathLib.okuMToDollars(entry.okuMAmount, cachedMult);
-            uint256 usdcAmount = MathLib.dollarsToUsdc(dollarValue18, decimalMultiplier);
+            uint256 uiAmount = MathLib.toUiAmount(entry.rawAmount, multiplier);
+            uint256 usdcAmount = MathLib.dollarsToUsdc(uiAmount, decimalMultiplier);
 
-            if (usdcBalance < usdcAmount) {
+            if (usdcAmount > available) {
                 emit RedemptionSkipped(i, RedemptionSkipReason.InsufficientFunds);
                 break;
             }
 
-            // Attempt the USDC transfer via SafeERC20's `trySafeTransferFrom`,
-            // which (a) swallows reverts (Circle USDC blacklist path), (b) decodes
-            // the boolean return value for tokens that signal failure by returning
-            // false instead of reverting, and (c) treats no-return-data + non-reverting
-            // call as success (matches OZ SafeERC20 semantics). All three failure
-            // shapes route into the soft-skip branch so a single uncooperative
-            // recipient cannot revert the whole batch — but the OkuM is NOT burned;
-            // it stays in escrow for `rescueQueueEntry` to recover later.
-            //
-            // Historical note: an earlier implementation used a raw `address.call`
-            // and only checked `ok`. That accepted a `false` return as success,
-            // which would silently drain queue entries against any non-standard
-            // ERC-20 whose `transferFrom` returns `false` on failure rather than
-            // reverting. Hardened here via SafeERC20 to be uniform across both
-            // failure shapes.
-            bool ok = usdcContract.trySafeTransferFrom(msg.sender, entry.user, usdcAmount);
+            // Non-standard ERC-20s that return `false` without reverting are
+            // soft-skipped rather than treated as paid.
+            (bool ok,) = _trySafeTransferFrom(usdcToken, psm, entry.user, usdcAmount);
             if (!ok) {
                 emit RedemptionSkipped(i, RedemptionSkipReason.TransferFailed);
                 continue;
             }
 
-            $.okuMoney.burn(entry.okuMAmount);
-            totalOkuMDecrement += entry.okuMAmount;
+            token.burn(entry.rawAmount);
+            totalRawDecrement += entry.rawAmount;
+            available -= usdcAmount;
 
-            uint256 waitTime = block.timestamp - entry.timestamp;
             emit RedemptionProcessed(
-                entry.user, entry.okuMAmount, dollarValue18, usdcAmount, waitTime
+                entry.user, entry.rawAmount, uiAmount, usdcAmount, block.timestamp - entry.timestamp
             );
 
             delete $.queue[i];
-            usdcBalance -= usdcAmount;
         }
 
-        $.totalQueuedOkuM -= totalOkuMDecrement;
-        // queueHead is NOT auto-advanced here. Operators (or anyone) may call
-        // `advanceHead(maxSlots)` after a batch to amortize the head walk into a
-        // separate, gas-bounded call. `queueLength()` is an upper bound until
-        // `advanceHead` runs; redemption correctness is unaffected.
+        $.totalQueuedRaw -= totalRawDecrement;
+
+        // queueHead is NOT auto-advanced here; see `advanceHead`.
     }
 
-    /// @notice Return OkuMoney for a stuck queue entry without burning it.
-    /// @dev Used when an entry is permanently unprocessable (e.g., recipient is USDC-blacklisted).
-    ///      Operator flow: identify stuck entry -> rescueQueueEntry(index, recipient) -> processQueue.
-    /// @param index Queue index to rescue
-    /// @param alternateRecipient Address to receive the OkuMoney (original user or other)
+    /// @notice Return escrowed tokens for a stuck entry without burning them.
+    /// @dev For entries that can never be processed — e.g. a USDC-blacklisted
+    ///      recipient. Cannot redirect a *live* entry's payment in the sense that
+    ///      matters: the entry is cleared and its escrow released, so no double
+    ///      spend is possible.
     function rescueQueueEntry(
         uint256 index,
         address alternateRecipient
@@ -291,27 +303,43 @@ contract RedemptionQueue is
         QueueEntry memory entry = $.queue[index];
         if (entry.user == address(0)) revert EntryAlreadyCleared();
 
-        // CEI: update all state before the external transfer.
-        $.totalQueuedOkuM -= entry.okuMAmount;
+        // CEI: all state updated before the external transfer.
+        $.totalQueuedRaw -= entry.rawAmount;
         delete $.queue[index];
 
-        uint256 dollarValue = MathLib.okuMToDollars(entry.okuMAmount, $.okuMoney.okuMMultiplier());
-        emit RedemptionRescued(index, entry.user, alternateRecipient, entry.okuMAmount, dollarValue);
+        emit RedemptionRescued(
+            index,
+            entry.user,
+            alternateRecipient,
+            entry.rawAmount,
+            $.okuDollar.toUIAmount(entry.rawAmount)
+        );
 
-        // Transfer OkuMoney back without burning — the user is reclaiming their tokens.
-        // queueHead is NOT auto-advanced here; see {advanceHead}.
-        IERC20(address($.okuMoney)).safeTransfer(alternateRecipient, entry.okuMAmount);
+        IERC20(address($.okuDollar)).safeTransfer(alternateRecipient, entry.rawAmount);
     }
 
-    /// @notice Advance `queueHead` past contiguous cleared entries at the front.
-    /// @dev Gas-bounded maintenance function. `processQueue` and `rescueQueueEntry`
-    ///      no longer auto-advance the head, so a long run of cleared slots can
-    ///      leave `queueHead` behind the live front. Anyone may call this — it
-    ///      can only move `queueHead` forward, and only past slots that are
-    ///      already cleared (`user == address(0)`). The effect on `queueLength()`
-    ///      is cosmetic; redemption correctness is independent of `queueHead`.
-    /// @param maxSlots Maximum number of cleared slots to skip in this call.
-    /// @return advanced Number of slots actually advanced.
+    /// @notice Sweep tokens donated to this contract beyond what is escrowed.
+    /// @dev Capped at `balanceOf(this) - totalQueuedRaw`, so it provably cannot
+    ///      touch user escrow. Exists because `totalQueuedRaw <= balanceOf` is a
+    ///      bound rather than an equality — anyone can donate for free, and
+    ///      without this the surplus would be stranded forever.
+    function sweepExcess(address to) external nonReentrant onlyRole(Roles.QUEUE_RESCUER) {
+        if (to == address(0)) revert Errors.ZeroAddress();
+        RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
+        uint256 balance = IERC20(address($.okuDollar)).balanceOf(address(this));
+        uint256 escrowed = $.totalQueuedRaw;
+        if (balance <= escrowed) revert NoExcessToSweep();
+        uint256 excess = balance - escrowed;
+        emit ExcessSwept(to, excess);
+        IERC20(address($.okuDollar)).safeTransfer(to, excess);
+    }
+
+    /// @notice Advance `queueHead` past contiguous cleared entries.
+    /// @dev Permissionless by design: it can only move `queueHead` forward, and
+    ///      only past slots that are already cleared. The effect on
+    ///      `queueLength()` is cosmetic — redemption correctness is independent
+    ///      of the cursor. A privileged version would add no security and would
+    ///      complicate the runbook.
     function advanceHead(uint256 maxSlots) external returns (uint256 advanced) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         uint256 head = $.queueHead;
@@ -330,43 +358,56 @@ contract RedemptionQueue is
 
     // ============ Views ============
 
-    /// @notice Number of slots between `queueHead` and `queueTail`.
-    /// @dev Equal to `queueTail - queueHead`. Since `processQueue` and
-    ///      `rescueQueueEntry` no longer auto-advance the head, this is an
-    ///      UPPER BOUND on live entries — cleared slots at the front of the
-    ///      window are counted until {advanceHead} is called. To get an exact
-    ///      live count off-chain, call {advanceHead}(N) first or iterate
-    ///      `getQueueEntry` over the range and filter `user == address(0)`.
+    /// @notice Slots between `queueHead` and `queueTail`.
+    /// @dev An UPPER BOUND on live entries: cleared slots at the front are
+    ///      counted until `advanceHead` runs.
     function queueLength() external view returns (uint256) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         return $.queueTail - $.queueHead;
     }
 
-    /// @notice Total USDC owed across all pending queue entries (multiplier-aware).
-    /// @dev O(1) calculation via running totalQueuedOkuM counter and okuMMultiplier().
+    /// @notice Total USDC owed across all pending entries. O(1), multiplier-aware.
     function totalQueuedUsdc() external view returns (uint256) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
-        uint256 dollarValue18 =
-            MathLib.okuMToDollars($.totalQueuedOkuM, $.okuMoney.okuMMultiplier());
-        return MathLib.dollarsToUsdc(dollarValue18, $.usdcDecimalMultiplier);
+        return
+            MathLib.dollarsToUsdc($.okuDollar.toUIAmount($.totalQueuedRaw), $.usdcDecimalMultiplier);
     }
 
-    /// @notice Queue entry at `index` (bounds-checked).
-    /// @param index Queue index to look up (must be in [queueHead, queueTail)).
-    /// @return The stored QueueEntry (user, okuMAmount, timestamp).
     function getQueueEntry(uint256 index) external view returns (QueueEntry memory) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
-        if (index < $.queueHead || index >= $.queueTail) revert InvalidIndex();
+        if (index >= $.queueTail) revert InvalidIndex();
         return $.queue[index];
     }
 
-    /// @notice Current dollar value (18 decimals) for a queue entry (multiplier-aware).
-    /// @param index Queue index to look up (must be in [queueHead, queueTail)).
-    /// @return Dollar value of the entry at the current okuMMultiplier (18 decimals).
+    /// @notice Current USDC value of the entry at `index`.
     function getQueueEntryValue(uint256 index) external view returns (uint256) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
-        if (index < $.queueHead || index >= $.queueTail) revert InvalidIndex();
-        return MathLib.okuMToDollars($.queue[index].okuMAmount, $.okuMoney.okuMMultiplier());
+        if (index >= $.queueTail) revert InvalidIndex();
+        return MathLib.dollarsToUsdc(
+            $.okuDollar.toUIAmount($.queue[index].rawAmount), $.usdcDecimalMultiplier
+        );
+    }
+
+    // ============ Internal ============
+
+    /// @dev `transferFrom` that neither reverts nor trusts a missing return value.
+    ///      Handles all three non-conforming shapes: revert, `false` return, and
+    ///      no return data (treated as success, per `SafeERC20` convention).
+    function _trySafeTransferFrom(
+        IERC20 token,
+        address from,
+        address to,
+        uint256 value
+    )
+        private
+        returns (bool success, bytes memory returndata)
+    {
+        (success, returndata) =
+            address(token).call(abi.encodeCall(IERC20.transferFrom, (from, to, value)));
+        if (!success) return (false, returndata);
+        if (returndata.length == 0) return (true, returndata);
+        if (returndata.length < 32) return (false, returndata);
+        success = abi.decode(returndata, (bool));
     }
 
     // ============ Upgradeability ============

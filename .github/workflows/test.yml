@@ -72,6 +72,23 @@ jobs:
             END { exit failed }
           ' coverage.txt
 
+          # Stricter gate on the ERC-8056 display layer: 100%. It is small, pure,
+          # and sits on every pricing path in the system, so there is no excuse
+          # for an uncovered branch there.
+          awk -F'|' '
+            /^\| src\/lib\/ScaledUIAmountUpgradeable\.sol/ {
+              for (i = 1; i <= NF; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i) }
+              if (match($3, /[0-9]+\.[0-9]+/)) {
+                pct = substr($3, RSTART, RLENGTH) + 0
+                printf "  ScaledUIAmountUpgradeable %s\n", $3
+                if (pct < 100.0) {
+                  printf "::error::ScaledUIAmountUpgradeable line coverage %s is below the 100%% requirement\n", $3
+                  exit 1
+                }
+              }
+            }
+          ' coverage.txt
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -88,8 +105,6 @@ jobs:
 
       - name: Run Hardhat tests
         run: npx hardhat test
-        env:
-          FORK_NETWORK: mainnet
 
       - name: Export ABIs
         run: npm run export-abis

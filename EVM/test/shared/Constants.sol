@@ -5,61 +5,48 @@ import {Constants as SrcConstants} from "../../src/lib/Constants.sol";
 
 /**
  * @title TestConstants
- * @notice Re-exports source constants + test-only constants
- * @dev Single source of truth for all numeric constants used in tests.
- *      Import from here instead of duplicating values.
+ * @notice Re-exports source constants plus test-only fixtures.
+ * @dev Single source of truth for numeric constants in tests. Import from here
+ *      rather than duplicating values.
  */
 library TestConstants {
     // ============ Re-exported from src/lib/Constants.sol ============
 
-    /// @notice Standard precision for price and multiplier calculations (1e18 = $1.00)
-    uint256 public constant PRECISION = SrcConstants.PRECISION;
+    uint256 internal constant PRECISION = SrcConstants.PRECISION;
+    uint256 internal constant BASIS_POINTS = SrcConstants.BASIS_POINTS;
+    uint256 internal constant SECONDS_PER_YEAR = SrcConstants.SECONDS_PER_YEAR;
+    uint256 internal constant MAX_IMPLIED_APR = SrcConstants.MAX_IMPLIED_APR;
+    uint256 internal constant MAX_RATE_DURATION = SrcConstants.MAX_RATE_DURATION;
+    uint256 internal constant MAX_MULTIPLIER = SrcConstants.MAX_MULTIPLIER;
+    uint256 internal constant MAX_TOTAL_SUPPLY = SrcConstants.MAX_TOTAL_SUPPLY;
 
-    /// @notice Decimal conversion multiplier for Circle-style USDC (6 decimals -> 18).
-    /// @dev The PSM / Queue resolve their own multipliers at init time from
-    ///      `IERC20Metadata.decimals()`. Tests pin to 1e12 because MockUSDC reports 6 decimals.
-    uint256 public constant DECIMAL_MULTIPLIER = 1e12;
+    /// @notice Decimal multiplier for Circle-style 6-decimal USDC.
+    /// @dev The token resolves this at init from `IERC20Metadata.decimals()`; the
+    ///      PSM and queue cross-assert against the token. Tests pin to 1e12
+    ///      because `MockUSDC` reports 6 decimals.
+    uint256 internal constant DECIMAL_MULTIPLIER = 1e12;
 
-    /// @notice Maximum yield rate: ~3700% APY safety cap
-    uint256 public constant MAX_RATE = SrcConstants.MAX_RATE;
+    // ============ Test-only ============
 
-    /// @notice Basis points denominator (10000 = 100%)
-    uint256 public constant BASIS_POINTS = SrcConstants.BASIS_POINTS;
+    /// @notice Default max supply for test deployments (1 billion tokens).
+    uint256 internal constant MAX_SUPPLY = 1_000_000_000e18;
 
-    /// @notice OkuDollar minimum collateral ratio floor (re-exported for tests)
-    uint256 public constant MIN_COLLATERAL_RATIO_FLOOR = SrcConstants.MIN_COLLATERAL_RATIO_FLOOR;
+    // ============ Fuzz bounds ============
 
-    // ============ Test-Only Constants ============
+    uint256 internal constant MIN_FUZZ_AMOUNT = 1e18;
+    uint256 internal constant MAX_FUZZ_AMOUNT = 100_000_000e18;
+    /// @notice Upper bound for fuzzed multipliers. Well above any realistic
+    ///         trajectory but far below `MAX_MULTIPLIER`, so `mulDiv` paths stay
+    ///         in the reachable envelope.
+    uint256 internal constant MAX_FUZZ_MULTIPLIER = PRECISION * 1000;
 
-    /// @notice Default max supply for test deployments (1 billion tokens)
-    uint256 public constant MAX_SUPPLY = 1_000_000_000e18;
+    // ============ Token identity ============
 
-    /// @notice Default min collateral ratio for OkuDollar vault (95%)
-    uint256 public constant MIN_COLLATERAL_RATIO = 95e16;
+    string internal constant TOKEN_NAME = "Oku Dollar";
+    string internal constant TOKEN_SYMBOL = "rUSDOku";
 
-    // ============ Fuzz Bounds ============
+    // ============ PSM ============
 
-    /// @notice Maximum multiplier increase per fuzz step (2x current, was 10x)
-    uint256 public constant MAX_MULTIPLIER_FACTOR = 2;
-
-    /// @notice Maximum price cap for fuzz testing (5x precision, was 1e24)
-    uint256 public constant MAX_FUZZ_PRICE = PRECISION * 5;
-
-    /// @notice Minimum fuzz amount for token operations
-    uint256 public constant MIN_FUZZ_AMOUNT = 1e18;
-
-    /// @notice Maximum fuzz amount for token operations
-    uint256 public constant MAX_FUZZ_AMOUNT = 100_000_000e18;
-
-    // ============ Token Names / Symbols ============
-
-    string public constant OKUMONEY_NAME = "OkuMoney";
-    string public constant OKUMONEY_SYMBOL = "OkuM";
-    string public constant OKUDOLLAR_NAME = "OkuDollar";
-    string public constant OKUDOLLAR_SYMBOL = "usdOku";
-
-    // ============ Default PSM Configuration ============
-
-    /// @notice Default USDC buffer seeded into LitePSM during setup (5,000 USDC, 6 decimals).
-    uint256 public constant DEFAULT_PSM_BUFFER = 5000e6;
+    /// @notice Default USDC buffer seeded into LitePSM during setup (5,000 USDC).
+    uint256 internal constant DEFAULT_PSM_BUFFER = 5000e6;
 }

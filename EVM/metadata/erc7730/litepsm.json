@@ -1,0 +1,125 @@
+{
+  "$schema": "https://eips.ethereum.org/assets/eip-7730/erc7730-v1.schema.json",
+  "context": {
+    "$id": "LitePSM",
+    "contract": {
+      "abi": "../../artifacts/evm/LitePSM.json",
+      "deployments": [
+        { "chainId": 1, "address": "0x0000000000000000000000000000000000000000" },
+        { "chainId": 8453, "address": "0x0000000000000000000000000000000000000000" },
+        { "chainId": 56, "address": "0x0000000000000000000000000000000000000000" }
+      ]
+    }
+  },
+  "metadata": {
+    "owner": "Oku Money",
+    "info": {
+      "legalName": "Oku Money",
+      "url": "https://oku.money",
+      "lastUpdate": "2026-08-20T00:00:00Z"
+    }
+  },
+  "display": {
+    "formats": {
+      "mint(uint256)": {
+        "$id": "mint",
+        "intent": "Buy rUSDOku with USDC",
+        "fields": [
+          {
+            "path": "usdcAmount",
+            "label": "USDC to spend",
+            "format": "tokenAmount",
+            "params": { "ticker": "USDC", "decimals": 6 }
+          }
+        ],
+        "required": ["usdcAmount"],
+        "excluded": []
+      },
+      "redeem(uint256)": {
+        "$id": "redeem",
+        "intent": "Redeem rUSDOku for USDC",
+        "fields": [
+          {
+            "path": "rawAmount",
+            "label": "rUSDOku units to redeem (NOT dollars)",
+            "format": "tokenAmount",
+            "params": { "ticker": "rUSDOku", "decimals": 18 }
+          }
+        ],
+        "required": ["rawAmount"],
+        "excluded": []
+      },
+      "redeemUiAmount(uint256)": {
+        "$id": "redeemUiAmount",
+        "intent": "Redeem a DOLLAR amount of rUSDOku for USDC",
+        "fields": [
+          {
+            "path": "uiAmount",
+            "label": "Dollar value to redeem",
+            "format": "tokenAmount",
+            "params": { "ticker": "USD", "decimals": 18 }
+          }
+        ],
+        "required": ["uiAmount"],
+        "excluded": []
+      },
+      "depositBuffer(uint256)": {
+        "$id": "depositBuffer",
+        "intent": "Deposit USDC into the redemption buffer",
+        "fields": [
+          {
+            "path": "amount",
+            "label": "USDC",
+            "format": "tokenAmount",
+            "params": { "ticker": "USDC", "decimals": 6 }
+          }
+        ],
+        "required": ["amount"],
+        "excluded": []
+      },
+      "withdrawUsdc(address,uint256)": {
+        "$id": "withdrawUsdc",
+        "intent": "WITHDRAW from the redemption buffer",
+        "fields": [
+          { "path": "to", "label": "To", "format": "addressName" },
+          {
+            "path": "amount",
+            "label": "USDC",
+            "format": "tokenAmount",
+            "params": { "ticker": "USDC", "decimals": 6 }
+          }
+        ],
+        "required": ["to", "amount"],
+        "excluded": []
+      },
+      "processQueue(uint256,uint256,uint256)": {
+        "$id": "processQueue",
+        "intent": "Pay out queued redemptions",
+        "fields": [
+          { "path": "startIndex", "label": "From index", "format": "raw" },
+          { "path": "endIndex", "label": "To index (exclusive)", "format": "raw" },
+          {
+            "path": "approveAmount",
+            "label": "USDC to approve for this batch",
+            "format": "tokenAmount",
+            "params": { "ticker": "USDC", "decimals": 6 }
+          }
+        ],
+        "required": ["startIndex", "endIndex", "approveAmount"],
+        "excluded": []
+      },
+      "sweepToken(address,address)": {
+        "$id": "sweepToken",
+        "intent": "Recover a non-USDC token donated to the PSM",
+        "fields": [
+          { "path": "token", "label": "Token", "format": "addressName" },
+          { "path": "to", "label": "To", "format": "addressName" }
+        ],
+        "required": ["token", "to"],
+        "excluded": []
+      },
+      "pause()": { "$id": "pause", "intent": "PAUSE mint and redeem", "fields": [], "required": [], "excluded": [] },
+      "unpause()": { "$id": "unpause", "intent": "Resume mint and redeem", "fields": [], "required": [], "excluded": [] }
+    }
+  }
+}

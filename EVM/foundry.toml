@@ -38,6 +38,12 @@ number_underscore = "thousands"
 
 # Lint configuration
 [lint]
-exclude_lints = ["asm-keccak256"]
+# asm-keccak256   — MathLib.rpow is MakerDAO's pot.sol assembly, kept verbatim.
+# erc20-unchecked-transfer — every `transfer` in this tree targets either OkuDollar
+#   (OZ ERC20, which reverts rather than returning false) or MockUSDC in tests.
+#   The one place a non-conforming false-return matters is
+#   RedemptionQueue.processQueue, which handles it explicitly via
+#   `_trySafeTransferFrom` and is covered by QueueSkipPathsTest.
+exclude_lints = ["asm-keccak256", "erc20-unchecked-transfer"]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

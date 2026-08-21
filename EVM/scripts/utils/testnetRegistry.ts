@@ -21,15 +21,26 @@ export interface EvmNetworkEntry {
   rpcUrl: string;
   explorer?: string;
   contracts: {
-    okuMoney?: string;
     okuDollar?: string;
     litePSM?: string;
     redemptionQueue?: string;
+    okuMultiplierAdapter?: string;
     mockUSDC?: string;
-    // okuBridge / okuBridgeRouter were removed in the noBridge refactor; the
-    // open-ended index keeps historical entries readable without re-typing them.
+    // `okuMoney` (v0.2 dual-token) and the removed bridge proxies may appear in
+    // historical entries; the open-ended index keeps them readable.
     [key: string]: string | undefined;
   };
+  /**
+   * Capability flags for this deployment, so the SDK and orchestrator can gate
+   * on features without an on-chain ERC-165 probe.
+   *
+   * Expected for v0.3: ["ERC-20", "ERC-2612", "ERC-8056", "ERC-4626-conversion-subset"].
+   * Note the last entry is deliberately NOT "ERC-4626" — only the conversion
+   * views are implemented, and the token does not claim the interface via
+   * ERC-165. A consumer that sees "ERC-4626" here and calls `deposit()` would
+   * revert.
+   */
+  standards?: string[];
   orchestrator?: string;
   deployer?: string;
 }

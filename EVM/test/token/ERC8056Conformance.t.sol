@@ -1,0 +1,327 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+import {Vm} from "forge-std/Vm.sol";
+
+import {BaseTest} from "../Base.t.sol";
+import {Constants} from "../../src/lib/Constants.sol";
+import {Errors} from "../../src/lib/Errors.sol";
+import {ScaledUIAmountUpgradeable} from "../../src/lib/ScaledUIAmountUpgradeable.sol";
+import {IScaledUIAmount} from "../../src/interfaces/erc8056/IScaledUIAmount.sol";
+import {
+    IScaledUIAmountNewUIMultiplier
+} from "../../src/interfaces/erc8056/IScaledUIAmountNewUIMultiplier.sol";
+import {
+    IScaledUIAmountConversion
+} from "../../src/interfaces/erc8056/IScaledUIAmountConversion.sol";
+import {IScaledUIAmountBalances} from "../../src/interfaces/erc8056/IScaledUIAmountBalances.sol";
+
+/**
+ * @title ERC8056ConformanceTest
+ * @notice Conformance against the ERC-8056 Draft, plus the interface-ID
+ *         precedence rule and the pending-multiplier boundary contract.
+ */
+contract ERC8056ConformanceTest is BaseTest {
+    // ============ Interface IDs ============
+
+    /// @notice Every published ID matches its computed counterpart.
+    /// @dev PRECEDENCE RULE: the interface *text* is normative, so
+    ///      `type(I).interfaceId` wins on divergence and the published literal is
+    ///      only a cross-check. This test is what turns a Draft-EIP ID change
+    ///      into a red build rather than a silently mis-registered ERC-165.
+    function test_InterfaceIds_PublishedMatchComputed() public pure {
+        assertEq(
+            Constants.IID_SCALED_UI_CORE,
+            type(IScaledUIAmount).interfaceId,
+            "core ID drifted from interface text"
+        );
+        assertEq(
+            Constants.IID_SCALED_UI_PENDING,
+            type(IScaledUIAmountNewUIMultiplier).interfaceId,
+            "pending ID drifted"
+        );
+        assertEq(
+            Constants.IID_SCALED_UI_CONVERSION,
+            type(IScaledUIAmountConversion).interfaceId,
+            "conversion ID drifted"
+        );
+        assertEq(
+            Constants.IID_SCALED_UI_BALANCES,
+            type(IScaledUIAmountBalances).interfaceId,
+            "balances ID drifted"
+        );
+    }
+
+    /// @notice The four literals from the published EIP table, hardcoded.
+    /// @dev Deliberately duplicated as raw literals rather than referencing
+    ///      `Constants`, so that editing `Constants` to chase a spec change
+    ///      cannot silently make this test vacuous.
+    function test_InterfaceIds_MatchPublishedTable() public pure {
+        assertEq(Constants.IID_SCALED_UI_CORE, bytes4(0xa60bf13d));
+        assertEq(Constants.IID_SCALED_UI_PENDING, bytes4(0x4bd27648));
+        assertEq(Constants.IID_SCALED_UI_CONVERSION, bytes4(0x57854fc3));
+        assertEq(Constants.IID_SCALED_UI_BALANCES, bytes4(0xd890fd71));
+    }
+
+    function test_SupportsInterface_AllFourClaimed() public view {
+        assertTrue(token.supportsInterface(Constants.IID_SCALED_UI_CORE));
+        assertTrue(token.supportsInterface(Constants.IID_SCALED_UI_PENDING));
+        assertTrue(token.supportsInterface(Constants.IID_SCALED_UI_CONVERSION));
+        assertTrue(token.supportsInterface(Constants.IID_SCALED_UI_BALANCES));
+    }
+
+    /// @notice ERC-4626 is deliberately NOT claimed — we ship the conversion
+    ///         subset only, and claiming it would be false advertisement.
+    function test_SupportsInterface_DoesNotClaimErc4626() public view {
+        // ERC-4626 defines no ERC-165 ID of its own; assert we return false for
+        // the XOR of the conversion-subset selectors we *do* implement, i.e. we
+        // are not opportunistically registering a 4626-shaped ID.
+        bytes4 pseudo4626 = bytes4(keccak256("asset()")) ^ bytes4(keccak256("totalAssets()"))
+            ^ bytes4(keccak256("convertToShares(uint256)"))
+            ^ bytes4(keccak256("convertToAssets(uint256)"));
+        assertFalse(token.supportsInterface(pseudo4626));
+    }
+
+    function test_SupportsInterface_UnknownIdIsFalse() public view {
+        assertFalse(token.supportsInterface(bytes4(0xdeadbeef)));
+    }
+
+    // ============ Initial state ============
+
+    /// @notice Spec Test Case 1: initial multiplier is 1.0 and UI == raw.
+    function test_InitialMultiplierIsOne() public view {
+        assertEq(token.uiMultiplier(), Constants.PRECISION);
+        assertEq(token.newUIMultiplier(), Constants.PRECISION);
+    }
+
+    function test_InitialState_BalanceEqualsBalanceUI() public {
+        _mintRaw(user1, 1000e18);
+        assertEq(token.balanceOf(user1), token.balanceOfUI(user1));
+        assertEq(token.totalSupply(), token.totalSupplyUI());
+    }
+
+    /// @notice `initialize` must leave `rateEnd == lastAccrualTime`, not zero.
+    /// @dev With `rateEnd == 0` and `lastAccrualTime == block.timestamp`, the
+    ///      subtraction inside `newUIMultiplier()` underflows and the view
+    ///      reverts — bricking every ERC-165-detected integration on day one.
+    function test_Initialize_NewUIMultiplierDoesNotRevert() public view {
+        assertEq(token.rateEnd(), token.lastAccrualTime());
+        assertEq(token.effectiveAt(), token.lastAccrualTime());
+        // The call itself not reverting is the assertion.
+        assertEq(token.newUIMultiplier(), token.uiMultiplier());
+    }
+
+    // ============ Spec Test Case 2: the "2x split" ============
+
+    function test_DoublingMultiplier_DoublesUiBalance() public {
+        _mintRaw(user1, 1000e18);
+        uint256 rawBefore = token.balanceOf(user1);
+
+        // Drive the multiplier to >= 2e18 by repeated capped accrual.
+        _accrueToAtLeast(2 * Constants.PRECISION);
+
+        assertEq(token.balanceOf(user1), rawBefore, "raw balance must not move");
+        assertGe(token.balanceOfUI(user1), 2 * rawBefore, "UI balance should have >= doubled");
+        assertEq(token.toUIAmount(rawBefore), token.balanceOfUI(user1));
+    }
+
+    // ============ Conversion extension ============
+
+    function test_Conversion_IdentityAtUnitMultiplier() public view {
+        assertEq(token.toUIAmount(12_345e18), 12_345e18);
+        assertEq(token.fromUIAmount(12_345e18), 12_345e18);
+    }
+
+    function test_Conversion_RoundTripWithinOneWei() public {
+        _accrue(RATE_5_PCT_APY, 20 days);
+        uint256[5] memory xs = [uint256(1), 1e6, 1e18, 123_456_789e18, 999_999_999_999_999_999];
+        for (uint256 i = 0; i < xs.length; ++i) {
+            uint256 back = token.fromUIAmount(token.toUIAmount(xs[i]));
+            assertLe(back, xs[i], "round trip must not exceed input");
+            assertGe(back + 1, xs[i], "round trip must lose at most 1 wei");
+        }
+    }
+
+    function test_Conversion_ZeroIsZero() public view {
+        assertEq(token.toUIAmount(0), 0);
+        assertEq(token.fromUIAmount(0), 0);
+    }
+
+    // ============ Balances extension ============
+
+    /// @notice Per-balance flooring means the sum is bounded ABOVE by the total,
+    ///         never equal to it. Do not tighten this to an equality.
+    function test_Balances_SumBoundedByTotalSupplyUI() public {
+        _mintRaw(user1, 333e18 + 7);
+        _mintRaw(user2, 111e18 + 13);
+        _mintRaw(user3, 1);
+        _accrue(RATE_5_PCT_APY, 17 days);
+
+        uint256 sum = token.balanceOfUI(user1) + token.balanceOfUI(user2) + token.balanceOfUI(user3);
+        uint256 total = token.totalSupplyUI();
+        assertLe(sum, total, "sum of floors cannot exceed total");
+        assertGe(sum + 3, total, "gap bounded by holder count");
+    }
+
+    // ============ Pending-multiplier boundary contract ============
+
+    /// @notice The reference implementation's observable contract: once
+    ///         `block.timestamp >= effectiveAt()`, `uiMultiplier()` equals
+    ///         `newUIMultiplier()`. Holds despite our rate-segment reading.
+    function test_PendingBoundary_TripleAroundEffectiveAt() public {
+        uint256 end = block.timestamp + 10 days;
+        vm.prank(rateSetter);
+        token.setYieldRate(RATE_5_PCT_APY, end);
+
+        uint256 projected = token.newUIMultiplier();
+        assertEq(token.effectiveAt(), end);
+
+        // Strictly before: still climbing, below the terminal value.
+        vm.warp(end - 1);
+        assertLt(token.uiMultiplier(), projected, "should not have arrived yet");
+
+        // Exactly at: arrives.
+        vm.warp(end);
+        assertEq(token.uiMultiplier(), projected, "must equal terminal at the boundary");
+        assertEq(token.newUIMultiplier(), projected);
+
+        // After: frozen — accrual halts at rateEnd.
+        vm.warp(end + 365 days);
+        assertEq(token.uiMultiplier(), projected, "must stay frozen past rateEnd");
+        assertEq(token.uiMultiplier(), token.newUIMultiplier());
+    }
+
+    /// @notice Accrual halting at `rateEnd` is a safety mechanism, not scheduling:
+    ///         an absent rate setter freezes the multiplier rather than letting it
+    ///         accrue forever against assets that are not there.
+    function test_AccrualHaltsAtRateEnd() public {
+        _accrue(RATE_5_PCT_APY, 30 days);
+        uint256 frozen = token.uiMultiplier();
+        vm.warp(block.timestamp + 3650 days);
+        assertEq(token.uiMultiplier(), frozen);
+    }
+
+    // ============ Continuity across rate changes ============
+
+    /// @notice A rate change moves the slope, never the value. This is what makes
+    ///         the rate-segment reading of the pending extension safe: there is no
+    ///         step to front-run.
+    function test_MultiplierContinuousAcrossRateChange() public {
+        _accrue(RATE_5_PCT_APY, 10 days);
+        uint256 before = token.uiMultiplier();
+
+        vm.prank(rateSetter);
+        token.setYieldRate(RATE_2_PCT_APY, block.timestamp + 10 days);
+
+        assertEq(token.uiMultiplier(), before, "value must be continuous at a rate change");
+    }
+
+    /// @notice Re-anchoring means an early renewal extends accrual with no gap.
+    function test_EarlyRenewalHasNoGap() public {
+        vm.prank(rateSetter);
+        token.setYieldRate(RATE_5_PCT_APY, block.timestamp + 30 days);
+        vm.warp(block.timestamp + 15 days);
+        uint256 mid = token.uiMultiplier();
+
+        vm.prank(rateSetter);
+        token.setYieldRate(RATE_5_PCT_APY, block.timestamp + 30 days);
+        assertEq(token.uiMultiplier(), mid);
+
+        vm.warp(block.timestamp + 1);
+        assertGt(token.uiMultiplier(), mid, "accrual must resume immediately");
+    }
+
+    // ============ Event emission ============
+
+    function test_UIMultiplierUpdated_EmittedOnEveryRateWrite() public {
+        uint256 end = block.timestamp + 5 days;
+        vm.recordLogs();
+        vm.prank(rateSetter);
+        token.setYieldRate(RATE_5_PCT_APY, end);
+
+        bytes32 sig = keccak256("UIMultiplierUpdated(uint256,uint256,uint256)");
+        bool found;
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i = 0; i < logs.length; ++i) {
+            if (logs[i].topics[0] == sig) found = true;
+        }
+        assertTrue(found, "ERC-8056 requires UIMultiplierUpdated on every change");
+    }
+
+    function test_TransferWithUIAmount_EmittedOnTransfer() public {
+        _mintRaw(user1, 100e18);
+        _accrue(RATE_5_PCT_APY, 10 days);
+
+        uint256 expectedUi = token.toUIAmount(40e18);
+        vm.expectEmit(true, true, false, true, address(token));
+        emit IScaledUIAmount.TransferWithUIAmount(user1, user2, 40e18, expectedUi);
+        vm.prank(user1);
+        token.transfer(user2, 40e18);
+    }
+
+    /// @notice The reference implementation emits `TransferWithUIAmount` from
+    ///         `_update`, which also fires on mint and burn where the counterparty
+    ///         UI amount is meaningless. We emit only for genuine transfers.
+    function test_TransferWithUIAmount_NotEmittedOnMintOrBurn() public {
+        bytes32 sig = keccak256("TransferWithUIAmount(address,address,uint256,uint256)");
+
+        vm.recordLogs();
+        _mintRaw(user1, 10e18);
+        Vm.Log[] memory mintLogs = vm.getRecordedLogs();
+        for (uint256 i = 0; i < mintLogs.length; ++i) {
+            assertTrue(mintLogs[i].topics[0] != sig, "must not emit on mint");
+        }
+
+        _mintRaw(burner, 10e18);
+        vm.recordLogs();
+        vm.prank(burner);
+        token.burn(10e18);
+        Vm.Log[] memory burnLogs = vm.getRecordedLogs();
+        for (uint256 i = 0; i < burnLogs.length; ++i) {
+            assertTrue(burnLogs[i].topics[0] != sig, "must not emit on burn");
+        }
+    }
+
+    // ============ Raw layer is untouched stock OZ ============
+
+    /// @notice ERC-8056 Implementation Requirement 3: standard ERC-20 functions
+    ///         MUST continue to work with raw amounts.
+    function test_RawLayer_BalanceStaticAcrossAYearOfAccrual() public {
+        _mintRaw(user1, 1000e18);
+        uint256 raw = token.balanceOf(user1);
+        uint256 supply = token.totalSupply();
+
+        for (uint256 i = 0; i < 12; ++i) {
+            _accrue(RATE_5_PCT_APY, 30 days);
+        }
+
+        assertEq(token.balanceOf(user1), raw, "raw balance must never move on accrual");
+        assertEq(token.totalSupply(), supply, "raw supply must never move on accrual");
+        assertGt(token.balanceOfUI(user1), raw, "but UI balance must have grown");
+    }
+
+    function test_RawLayer_TransferMovesRawNotUi() public {
+        _mintRaw(user1, 100e18);
+        _accrue(RATE_5_PCT_APY, 30 days);
+
+        vm.prank(user1);
+        token.transfer(user2, 30e18);
+
+        assertEq(token.balanceOf(user1), 70e18);
+        assertEq(token.balanceOf(user2), 30e18);
+    }
+
+    /// @notice Allowances are raw-denominated, so their dollar value drifts upward
+    ///         with the multiplier. Limitation 7 — surfaced on-chain via
+    ///         `allowanceUI` so wallets can warn without importing an SDK.
+    function test_AllowanceUI_DriftsWithMultiplier() public {
+        vm.prank(user1);
+        token.approve(user2, 100e18);
+        assertEq(token.allowanceUI(user1, user2), 100e18);
+
+        _accrue(RATE_5_PCT_APY, 30 days);
+
+        assertEq(token.allowance(user1, user2), 100e18, "raw allowance is unchanged");
+        assertGt(token.allowanceUI(user1, user2), 100e18, "but its dollar value grew");
+    }
+}

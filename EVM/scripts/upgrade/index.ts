@@ -1,5 +1,5 @@
 /**
- * Generic Upgrade Script for OkuMoney EVM Contracts
+ * Generic Upgrade Script for the OkuDollar (rUSDOku) EVM Contracts
  *
  * Upgrades the implementation behind one or more existing UUPS proxies to the
  * freshly-compiled source in `./src`. Works against:
@@ -83,13 +83,17 @@ interface UpgradeTarget {
   stateKey?: string;
 }
 
-// OkuBridge / OkuBridgeRouter targets were removed in the noBridge refactor.
-// Live deployments from prior to the refactor may still have those proxies
-// on-chain; they can be upgraded by re-adding entries here when needed.
 const UPGRADE_TARGETS: Record<string, UpgradeTarget> = {
   // UUPS proxies — upgrade gated by the contract's own _authorizeUpgrade role.
-  OkuMoney:        { factory: "OkuMoney",        upgraderRole: ROLES.OKUM_UPGRADER },
-  OkuDollar:       { factory: "OkuDollar",       upgraderRole: ROLES.VAULT_UPGRADER },
+  //
+  // v0.3 dropped `OkuMoney` with the dual-token model. Its v0.2 proxies are
+  // RETIRED, not upgraded: the storage layouts are unrelated and there is no
+  // migration path from a share ledger to a raw ledger. Do not re-add it here.
+  //
+  // `OkuMultiplierAdapter` is intentionally absent — it is immutable and
+  // non-upgradeable by design, so a bounds change means deploying a new one and
+  // re-pointing consumers.
+  OkuDollar:       { factory: "OkuDollar",       upgraderRole: ROLES.OKU_UPGRADER },
   RedemptionQueue: { factory: "RedemptionQueue", upgraderRole: ROLES.QUEUE_UPGRADER },
   LitePSM:         { factory: "LitePSM",         upgraderRole: ROLES.PSM_UPGRADER },
 };
@@ -567,7 +571,7 @@ async function ensureUpgraderRole(
   );
 
   // On a freshly-restarted fork, ROLES.DEFAULT_ADMIN_ROLE is held by whoever
-  // originally called `initialize`. For OkuMoney's role-grant policy that is
+  // originally called `initialize`. For OkuDollar's role-grant policy that is
   // also the dev wallet, so the same impersonated signer should be able to
   // self-grant. We still go through grantRole to keep this path generic in
   // case the admin diverges from the signer.
@@ -1170,7 +1174,7 @@ async function main() {
   const targets = parseTargets();
 
   logger.header(
-    `OkuMoney Upgrade on ${chainConfig.name}${isFork ? " (LOCAL FORK)" : ""}`
+    `OkuDollar Upgrade on ${chainConfig.name}${isFork ? " (LOCAL FORK)" : ""}`
   );
   logger.info(`Network: ${networkName} (chainId: ${chainConfig.chainId})`);
   logger.info(`Address book key: ${bookKey}${isFork ? " (live key reused on fork)" : ""}`);

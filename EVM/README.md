@@ -1,1011 +1,695 @@
-# OkuMoney EVM Implementation
+# OkuDollar (rUSDOku) — EVM Implementation
 
-> See [`../README.md`](../README.md) for shared architecture, business logic, and RBAC design.
+> See [`../README.md`](../README.md) for shared architecture and cross-VM design.
 
-Solidity smart contracts for OkuMoney — institutional-grade yield infrastructure backed by US Treasury Bills.
+Solidity contracts for OkuDollar, a yield-bearing dollar-denominated token backed by
+US Treasury Bills.
 
-## Stack
+**One token. One multiplier. Fixed raw balances.**
 
-- **Language**: Solidity 0.8.28 / EVM Cancun
-- **Framework**: Foundry (Forge, Cast, Anvil) for unit + invariant tests; Hardhat for fork + gas-regression tests
-- **Dependencies**: OpenZeppelin Contracts v5 (Upgradeable)
-- **Proxy pattern**: UUPS (all upgradeable contracts: `OkuMoney`, `OkuDollar`, `LitePSM`, `RedemptionQueue`)
-- **Storage**: ERC-7201 namespaced storage across every upgradeable contract (canonical slots — see any `*_STORAGE_LOCATION` literal)
+---
+
+## Design
+
+`rUSDOku` is a standard, non-rebasing ERC-20. Raw balances move only on transfer,
+mint, and burn. Yield accrues in a single **UI multiplier** that grows continuously
+with elapsed time, and a holding's dollar value is `rawBalance × uiMultiplier / 1e18`.
+
+```
+              raw layer                              display layer
+  ┌──────────────────────────────┐    ┌────────────────────────────────┐
+  │  balanceOf(user) = 954.20     │  × │  uiMultiplier() = 1.048...e18  │
+  │  transfer / approve / allowance│    │  (continuous, monotone)        │
+  │  — fixed, stock ERC-20 —      │    └────────────────────────────────┘
+  └──────────────────────────────┘                    ║
+              ║                                       ▼
+   DeFi prices and accounts        balanceOfUI(user) = $1,000.00
+   against this                    totalSupplyUI()
+```
+
+Same construction as Solana's Token-2022 `ScaledUiAmount` extension, which ERC-8056
+standardizes for EVM.
+
+### Why not rebasing
+
+A rebasing `balanceOf` breaks AMM pools, lending markets, and anything that snapshots
+balances, because the number changes underneath the integration with no transfer to
+observe. Fixing the raw balance and moving growth to a display multiplier gives users
+the same experience without any of that.
+
+The failure mode is graceful. A wallet that has never heard of ERC-8056 shows
+`954.20 rUSDOku` rather than `$1,000.00` — different unit count, **same dollar value**,
+no false claim about what the number means.
+
+### Two interfaces, one number
+
+ERC-8056 is a **display** extension. It makes no claim about value and specifies no
+redemption semantics, so shipping it alone would leave integrators with a multiplier
+and no standard way to price against it. The token also exposes the ERC-4626
+conversion views:
+
+| Layer | Functions | Consumers |
+|---|---|---|
+| **Display** | `uiMultiplier`, `balanceOfUI`, `toUIAmount`, … | Wallets, explorers, trackers |
+| **Value** | `convertToAssets`, `convertToShares`, `asset`, `totalAssets` | Lending markets, AMM rate providers |
+
+Both read the same multiplier, and an invariant holds them together at every block:
+
+```
+uiMultiplier() == convertToAssets(1e18)
+```
+
+### Naming
+
+The `r` prefix follows the convention around Token-2022 scaled-UI-amount tokens on
+Solana, expected to carry to ERC-8056 tokens on EVM. It marks a token whose *displayed*
+amount is multiplier-scaled — **not** one whose raw balance rebases, which it does not.
+
+---
+
+## The multiplier
+
+Four storage fields and one setter. There is no second multiplier, no pending
+multiplier value, and no scheduled step.
+
+```solidity
+struct OkuDollarStorage {
+    uint256 baseMultiplier;   // Anchor, snapshotted at the last rate write
+    uint256 ratePerSecond;    // Compound per-second rate (1e18 = no yield)
+    uint256 lastAccrualTime;  // When baseMultiplier was snapshotted
+    uint256 rateEnd;          // Accrual halts here
+
+    mapping(address => uint256) minterAllowance;
+    uint256 maxSupply;
+    mapping(address => bool) isBlacklisted;
+}
+```
+
+Raw balances, allowances, and total supply are **not** here — they live in OZ's
+`ERC20Upgradeable` namespace, untouched. Nothing overrides `_update`, `_mint`, or
+`_burn`. The raw layer is stock OpenZeppelin.
+
+### Accrual
+
+```solidity
+function uiMultiplier() public view returns (uint256) {
+    Storage storage $ = _s();
+    uint256 until = block.timestamp < $.rateEnd ? block.timestamp : $.rateEnd;
+    if (until <= $.lastAccrualTime) return $.baseMultiplier;
+    return Math.mulDiv(
+        $.baseMultiplier,
+        MathLib.rpow($.ratePerSecond, until - $.lastAccrualTime, PRECISION),
+        PRECISION
+    );
+}
+```
+
+Continuous, computed from a stored rate and elapsed time — the Aave liquidity-index /
+`sDAI` `chi` pattern. It changes every second with no transaction.
+
+Discrete revaluation would create a single block at which every cached multiplier in
+every integration is simultaneously wrong, which is an arbitrage window against your
+own integrators. Continuous accrual has no such block: at a rate change the multiplier
+is continuous and only its *slope* moves, so there is nothing to front-run.
+
+**Accrual halts at `rateEnd`.** This is a safety mechanism, not just scheduling — if
+the rate setter stops functioning, the multiplier stops growing rather than accruing
+indefinitely against assets that are not there. `rateEnd` is mandatory; a zero or
+past value is rejected.
+
+### The one setter
+
+```solidity
+function setYieldRate(uint256 ratePerSecond, uint256 endTimestamp) external; // OKU_RATE_SETTER
+```
+
+Snapshots `baseMultiplier = uiMultiplier()`, sets `lastAccrualTime = block.timestamp`,
+then writes the new rate and end. Because it re-anchors from the current value, calling
+it before `rateEnd` extends accrual seamlessly with no gap and no step — which is why
+no separate "pending rate" staging field is needed.
+
+| Constraint | Error |
+|---|---|
+| `ratePerSecond >= PRECISION` (monotone — see below) | `MultiplierCannotDecrease` |
+| Annualized rate `<= MAX_IMPLIED_APR` | `RateAboveMaximum` |
+| `endTimestamp > block.timestamp` | `RateEndNotInFuture` |
+| `endTimestamp - block.timestamp <= MAX_RATE_DURATION` | `RateDurationTooLong` |
+| `baseMultiplier` projected to `rateEnd` `<= MAX_MULTIPLIER` | `MultiplierAboveMaximum` |
+
+### ERC-8056's pending-multiplier extension
+
+The extension is Required and presumes a step function; this token accrues
+continuously. The mapping falls out naturally from `rateEnd`:
+
+```solidity
+function newUIMultiplier() public view returns (uint256) {
+    // The multiplier at rateEnd — where accrual stops absent a new rate.
+    Storage storage $ = _s();
+    return Math.mulDiv($.baseMultiplier,
+        MathLib.rpow($.ratePerSecond, $.rateEnd - $.lastAccrualTime, PRECISION), PRECISION);
+}
+
+function effectiveAt() public view returns (uint256) { return _s().rateEnd; }
+```
+
+This reads the pair as "the multiplier will reach this value at this time, and stop
+there unless the rate is renewed" — informative for an integrator, and it satisfies
+the reference implementation's contract exactly at the boundary: once
+`block.timestamp >= effectiveAt()`, `uiMultiplier()` returns `newUIMultiplier()`,
+which is precisely what the reference does.
+
+The divergence from the EIP's *intent* is that our pending value is where a trajectory
+terminates rather than a discontinuous jump. Documented in NatSpec on `setYieldRate`
+and raised as an open question below.
+
+### Monotonic
+
+`ratePerSecond` is floored at `PRECISION`, so the multiplier never decreases.
+ERC-8056 explicitly supports reverse splits; this is a deliberate narrowing.
+
+The consequence is that the multiplier cannot be corrected downward once published. If
+a published rate over-accrues relative to what the backing supports, the gap must be
+absorbed off-chain. Adding a downward path later is not a patch — it needs a longer
+timelock on decreases than increases, mandatory advance notice, and liquidation-impact
+review with every lending venue.
+
+### The setter is an oracle write
+
+The moment any lending market prices off `uiMultiplier()`, a wrong value mints
+borrowing power directly. There is no on-chain referent to check against —
+`totalAssets()` is *derived from* the multiplier, not measured. ERC-8056's reference
+implementation guards only `> 0` and a future timestamp, which is not sufficient for a
+value-bearing multiplier.
+
+Three bounds, which together cap the damage from a compromised setter key:
+
+- **`MAX_IMPLIED_APR`** — the rate ceiling. The binding economic bound.
+- **`MAX_RATE_DURATION`** — the exposure window. Worst-case over-accrual is `MAX_IMPLIED_APR × MAX_RATE_DURATION` before anyone intervenes.
+- **`haltAccrual()`** — `OKU_GUARDIAN` sets the rate to `PRECISION` (no yield) immediately, no timelock. Monotone-safe: it stops growth without reducing anything already accrued.
+
+`MAX_IMPLIED_APR` is doing most of the work here, and it is currently a placeholder.
+
+---
 
 ## Contracts
 
 | Contract | Description |
-|----------|-------------|
-| `src/token/OkuMoney.sol` | Non-rebasing base token (OkuM) — static balance, discrete multiplier appreciation via stored `okuMMultiplier` |
-| `src/token/OkuDollar.sol` | Rebasing $1-pegged stablecoin (usdOku) — growing balance via continuous `_rpow` USD multiplier |
-| `src/psm/LitePSM.sol` | Peg Stability Module — multiplier-aware USDC ↔ OkuM + usdOku convenience functions |
-| `src/psm/RedemptionQueue.sol` | FIFO queue for OkuMoney redemptions when the PSM buffer is depleted |
-| `src/lib/YieldSandwichGuard.sol` | Shared abstract enforcing per-block sandwich protection around yield distribution |
-| `src/lib/MathLib.sol` | Multiplier conversion helpers (`okuMToDollars`, `dollarsToOkuM`, `usdcToDollars`, `dollarsToUsdc`, `rpow`) |
-| `src/lib/Constants.sol` | Shared constants + canonical terminology legend |
-| `src/lib/Roles.sol` | Shared RBAC role constants (namespaced by contract prefix) |
-| `src/lib/ReentrancyGuardUpgradeable.sol` | OZ v5-compatible upgradeable reentrancy guard (OZ dropped the upgradeable variant in v5) |
-
-## Quick Start
-
-```bash
-forge install
-forge build
-forge test                                    # All unit + invariant tests
-forge test --match-path "test/invariants/*"   # Invariant suite only (256 runs, 500 depth)
-forge test --match-contract OkuMoneyTest -vv  # Targeted
-
-npx hardhat compile                           # Required before fork tests
-npx hardhat test                              # Fork + happyPath + scenarios tests
-```
-
-## Deployment & Address Book
-
-The unified deploy script (`scripts/deploy/index.ts`) provisions every contract
-for a given chain in one run, captures addresses to a working address book, and
-on live networks also mirrors them into the canonical repo-root registry.
-
-### Deterministic addresses (CREATE2, v0.1)
-
-Every UUPS proxy + its implementation, plus `MockUSDC`, are deployed via the
-[Arachnid CREATE2 factory](https://github.com/Arachnid/deterministic-deployment-proxy)
-(`0x4e59b44847b379578588920cA78FbF26c0B4956C`, present on every supported
-chain), so the same source tree + `DEPLOYMENT_VERSION` + constructor args
-produce the **same contract address on every chain**. Salt:
-`keccak256("okumoney." + DEPLOYMENT_VERSION + "." + <name>)` — config in
-[`scripts/config/deploymentVersion.ts`](scripts/config/deploymentVersion.ts),
-helpers in [`scripts/utils/create2Deploy.ts`](scripts/utils/create2Deploy.ts).
-
-Caveats:
-- **Version semantics:** `v0.x` = pre-audit iteration (addresses may change
-  across versions); `v1.0+` reserved for post-audit. Bumping
-  `DEPLOYMENT_VERSION` is one-way — prior-version deploys keep their
-  addresses.
-- **Fallback:** if the factory isn't deployed on a target chain, the script
-  warns and falls through to nonce-based CREATE (non-deterministic
-  addresses). All chains in the current network list have the factory.
-- **Per-chain variance:** differing constructor args (real Circle USDC on
-  mainnet vs. `MockUSDC` on testnets) still produce different addresses
-  where they apply. Testnets all use `MockUSDC` deterministically, so
-  `RedemptionQueue`/`LitePSM` match across testnets; mainnet (real USDC)
-  diverges — handled post-audit.
-
-### Where deployed addresses live
-
-| File | Role | Touched by |
-|------|------|------------|
-| [`scripts/config/addresses.json`](scripts/config/addresses.json) | Working per-network address book consumed by deploy / test scripts. Keyed `<chain>` for live deploys; `fork:<chain>` for local-fork runs (so fork tests never overwrite live entries). | Every script run. |
-| [`../testnet-addresses.json`](../testnet-addresses.json) | Canonical, auto-synced multi-chain registry consumed by the SDK / backend / orchestrator. Includes `chainId`, `rpcUrl`, `explorer`, `contracts{}`, `deployer`. | Live deploys only — fork runs never write here. |
-| `.openzeppelin/<network>.json` | OZ upgrades plugin's per-chain proxy/impl manifest. Required for `upgradeProxy` to work. | OZ upgrades plugin. |
-
-### Configured networks
-
-Defined in [`hardhat.config.ts`](hardhat.config.ts) and [`scripts/config/chains.ts`](scripts/config/chains.ts):
-
-| Network key | Chain ID | Status |
-|---|---|---|
-| `sepolia` | 11155111 | Eth Sepolia testnet |
-| `opSepolia` | 11155420 | OP Sepolia testnet |
-| `baseSepolia` | 84532 | Base Sepolia testnet |
-| `arbSepolia` | 421614 | Arbitrum Sepolia testnet |
-| `bscTestnet` | 97 | BNB Smart Chain testnet (Chapel) |
-| `mainnet` | 1 | Ethereum mainnet |
-| `optimism` | 10 | Optimism mainnet |
-| `arbitrum` | 42161 | Arbitrum One |
-| `base` | 8453 | Base mainnet |
-| `bsc` | 56 | BNB Smart Chain mainnet |
-
-The protocol-internal `u16` "bridge chain ID" mapping table and the
-`getSolanaCounterpartChainId()` helper were removed in the noBridge
-refactor — no on-chain message carries a chain identifier in v1.
-
-### Local-fork pre-flight (recommended before any live deploy)
-
-Forks against real chain state to validate the deploy will succeed (sufficient
-ETH/BNB, RPC behaves as expected) without spending real funds:
-
-```bash
-# Terminal 1: start a forked node. FORK_NETWORK selects which chain to fork.
-FORK_NETWORK=base hh node            # =sepolia, =bsc, =arbitrum, =mainnet, ...
-
-# Terminal 2: deploy + run integration test against the running fork.
-hh run scripts/deploy/index.ts --network localhost     # auto-detects target chain from fork's chainId
-hh run scripts/test/test-onchain.ts --network localhost
-```
-
-The deploy script auto-detects the target chain from the running node's
-`eth_chainId`, so you don't need to keep `FORK_NETWORK` and `NETWORK=` in sync
-across terminals. Fork-deployed addresses land under `addresses.json["fork:<chain>"]`
-so they never collide with live `<chain>` entries.
-
-### Live deploy
-
-```bash
-# .env: PRIVATE_KEY, ALCHEMY_API_KEY, ETHERSCAN_API_KEY (one Etherscan V2 key
-# covers Ethereum, Optimism, Arbitrum, Base, BSC verification).
-hh run scripts/deploy/index.ts --network base
-hh run scripts/deploy/index.ts --network bsc
-hh run scripts/deploy/index.ts --network sepolia
-```
-
-The script is **idempotent and resumable**:
-
-- `tryAttach` reuses any contract already in `addresses.json["<chain>"]` whose
-  address still has bytecode on chain — partial-deploy failures (RPC blip,
-  mid-run timeout, etc.) can just be re-run; nothing redeploys unnecessarily.
-- Transient RPC errors (`nonce too low`, `replacement transaction underpriced`,
-  BSC's `BAD_DATA: invalid address (value="")` pending-tx quirk, network
-  timeouts) are caught and retried with exponential backoff (2s → 32s, up to
-  5 attempts) inside `withRetry`.
-- A separate provider shim (`scripts/utils/rpcCompat.ts`) preventatively
-  normalises BSC's pending-tx response shape before ethers' strict formatter
-  ever sees it.
-
-### Upgrading deployed proxies
-
-`scripts/upgrade/index.ts` is a generic UUPS-proxy upgrade dispatcher. It
-re-uses the deploy script's network resolution, signer wiring (impersonates
-the dev wallet on a fork), and retry helpers, and adds:
-
-- **Permission check** — verifies the signer holds the contract-specific
-  `*_UPGRADER` role before broadcasting (auto-grants from the impersonated
-  DEFAULT_ADMIN on a fork; aborts on live with a clear error).
-- **Storage-layout safety** — runs OZ's `prepareUpgrade` so any layout-breaking
-  change aborts the run before any upgrade tx is broadcast.
-- **Pre/post state diff** — snapshots invariant fields per target (see
-  `scripts/upgrade/preState.ts`) and fails the run if anything diverges.
-- **Audit trail** — appends each upgrade to `addresses.json -> upgrades.<bookKey>`
-  with old/new impl, tx hash, signer, and ISO timestamp.
-
-Always rehearse against a fork before touching a live deployment:
-
-```bash
-# Terminal 1: fork the target chain
-FORK_NETWORK=sepolia hh node
-
-# Terminal 2: rehearse — uses the live address book key (e.g. "sepolia"),
-# upgrades the same proxies the live deploy would touch, against the fork's
-# state. The deploy script's fork:<chain> namespace is intentionally skipped
-# here because there are no fork-only proxies to upgrade.
-TARGETS=LitePSM,OkuDollar npm run upgrade
-
-# When the diff is clean, run for real:
-TARGETS=LitePSM,OkuDollar npm run upgrade:sepolia
-```
-
-Supported targets (v1): `LitePSM`, `OkuDollar`. Extend by adding a row to
-`UPGRADE_TARGETS` in `scripts/upgrade/index.ts` and a state reader in
-`scripts/upgrade/preState.ts`.
-
-Env vars:
-
-| Var | Purpose |
 |---|---|
-| `TARGETS` | Comma-separated contract names to upgrade (required). |
-| `NETWORK` | Override chain for live runs; auto-detected on a fork from the running node's chainId. |
-| `PROXY_<Name>` | Per-target proxy address override; defaults to `addresses.json` lookup. |
-| `SKIP_VERIFY` | Skip Etherscan verification of the new implementation. |
+| `src/token/OkuDollar.sol` | The token. Stock ERC-20 raw layer + ERC-8056 display layer + 4626 conversion views |
+| `src/psm/LitePSM.sol` | Peg Stability Module — USDC ↔ rUSDOku at the multiplier |
+| `src/psm/RedemptionQueue.sol` | FIFO queue for redemptions when the PSM buffer is depleted |
+| `src/lib/ScaledUIAmountUpgradeable.sol` | ERC-8056 core + all three extensions, with ERC-165 registration |
+| `src/oracle/OkuMultiplierAdapter.sol` | Chainlink `AggregatorV3Interface`-compatible read of `uiMultiplier()`, with bounds and staleness |
+| `src/lib/MathLib.sol` | `toUiAmount`, `fromUiAmount`, `usdcToDollars`, `dollarsToUsdc`, `rpow` |
+| `src/lib/Constants.sol` | Constants, interface IDs, terminology legend |
+| `src/lib/Roles.sol` | RBAC role constants |
+| `src/lib/Errors.sol` | Shared error types |
+| `src/lib/SafeApprove.sol` | USDT-safe approve helpers |
+| `src/lib/ReentrancyGuardUpgradeable.sol` | OZ-v5-compatible upgradeable reentrancy guard |
 
-The dev wallet (`0x3CB68a6762041aA05E762814A8791CA9d98E79A0`, the deployer on
-every live chain) already holds every `*_UPGRADER` role per `initialize()`'s
-role-grant policy, so no out-of-band role grants are required for the
-shipped deployments.
+**Stack:** Solidity 0.8.28 / Cancun · Foundry (unit + invariant) + Hardhat (fork) ·
+OpenZeppelin v5.6.1 Upgradeable · UUPS proxies · ERC-7201 namespaced storage.
 
-### npm scripts
+### Interfaces claimed via ERC-165
 
-| Script | Effect |
-|---|---|
-| `npm run compile` | `hardhat compile` (regenerates typechain) |
-| `npm run typechain` | Typechain bindings only |
-| `npm run test:forge` | Foundry unit + invariant suite |
-| `npm run test` | Hardhat fork + gas suite |
-| `npm run test:all` | Both |
-| `npm run node` | Start `hardhat node` (default forks Sepolia; override via `FORK_NETWORK`) |
-| `npm run deploy:sepolia` / `:opSepolia` / `:baseSepolia` / `:arbSepolia` / `:bscTestnet` | Live deploy to the named testnet |
-| `npm run deploy:base` / `:bsc` | Live deploy to the named mainnet |
-| `npm run upgrade` | Upgrade proxies on a running localhost fork (auto-detects target chain) |
-| `npm run upgrade:sepolia` / `:opSepolia` / `:baseSepolia` / `:arbSepolia` / `:bscTestnet` | Live upgrade on the named testnet |
-| `npm run upgrade:base` / `:bsc` | Live upgrade on the named mainnet |
-| `npm run test:flow` / `:live` | `test-flow.ts` against a running localhost fork (or live Sepolia) |
-
-> The `npm run bridge:*` scripts were removed in the noBridge refactor.
-> Cross-chain transfers are now PSM-mediated mint/burn coordinated off-chain.
-
-For chains without a pre-baked npm alias (`base`, `bsc`, `arbitrum`, `optimism`,
-`mainnet`):
-
-```bash
-hh run scripts/deploy/index.ts --network <chain>
-NETWORK=<chain> hh run scripts/test/test-onchain.ts --network <chain>
-```
-
-## Contract Structure
-
-```
-src/
-  token/
-    OkuMoney.sol            # Non-rebasing base token (stored okuMMultiplier, discrete updates)
-    OkuDollar.sol           # Rebasing stablecoin vault (continuous _rpow usdMultiplier)
-  psm/
-    LitePSM.sol             # USDC ↔ OkuM (multiplier-aware) + usdOku convenience functions
-    RedemptionQueue.sol     # Queue for when PSM USDC buffer is insufficient
-  interfaces/
-    IOkuMoney.sol           # OkuMoney interface (used by PSM, vault, mocks)
-    IOkuDollar.sol          # OkuDollar vault interface
-  lib/
-    Roles.sol               # Shared RBAC role constants (prefix-namespaced)
-    Constants.sol           # PRECISION, DECIMAL_MULTIPLIER, MAX_RATE, BASIS_POINTS + terminology legend
-    Errors.sol              # Shared error types (ZeroAddress, InsufficientBalance, MultiplierCannotDecrease)
-    SafeApprove.sol         # USDT-safe approve helpers (setExactAllowance, revokeAllowance)
-    MathLib.sol             # Multiplier math + rpow
-    ReentrancyGuardUpgradeable.sol  # OZ-5.x-compatible upgradeable reentrancy guard
-    YieldSandwichGuard.sol  # Shared whenYieldNotDistributing modifier (OkuDollar + LitePSM)
-    events/
-      OkuMoneyEvents.sol    # Event declarations for OkuMoney
-      OkuDollarEvents.sol   # Event declarations for OkuDollar (incl. Blacklisted/Unblacklisted)
-      LitePSMEvents.sol     # Event declarations for LitePSM
-      RedemptionQueueEvents.sol  # Event declarations for RedemptionQueue (incl. TransferFailed skip)
-
-test/
-  mocks/                    # Test-only mocks (live under test/, never compiled into production artifacts)
-    MockUSDC.sol            # 6-decimal ERC-20; used on testnets + in tests
-```
-
-> **noBridge refactor**: `src/bridge/OkuBridge.sol`, `OkuBridgeRouter.sol`,
-> `adapters/NttAdapter.sol` + `INttManager.sol`, the corresponding event
-> files, the `IBridgeAdapter` / `IOkuBridgeNative` interfaces, and the
-> `BRIDGE_*` / `ROUTER_*` / `NTT_*` constants in `Roles.sol` were all removed
-> in a later cleanup pass — no bridge-related code or reserved role constants
-> remain in `src/`. v1 cross-chain transfers are PSM-mediated mint/burn,
-> orchestrated off-chain (the orchestrator custodies USDC and calls
-> `LitePSM.mintOkuM` / `LitePSM.redeemOkuM` on the source/destination chains).
-> Should OkuBridge / NTT / CCIP return, the upgrade is additive — deploy the
-> new proxy, grant it `OKUM_MINTER`, configure its minter allowance — but it
-> requires re-adding the interfaces and role constants from git history
-> rather than resuming any scaffolding left in the current tree.
-
----
-
-## Terminology (canonical)
-
-Every contract's NatSpec references `src/lib/Constants.sol` for the authoritative terminology legend. Brief excerpt for quick reference:
-
-**Multipliers (dollar value per token)**
-- `okuMMultiplier` — dollar value of 1 OkuMoney token (starts 1e18 = $1.00, grows with yield, only increases)
-- `usdMultiplier` — dollar value of 1 OkuDollar share (starts 1e18 = $1.00, grows via `_rpow` accrual)
-
-**Token amounts**
-- `okuMAmount` — raw OkuMoney token count (18 decimals, non-rebasing)
-- `usdAmount` — OkuDollar amount in dollar terms (18 decimals, rebasing)
-- `usdcAmount` — USDC amount (6 decimals)
-
-**Conversion constants**
-- `PRECISION = 1e18` — base unit for multiplier math
-- `usdcDecimalMultiplier` — per-PSM stored value (`= 10 ** (18 - usdcDecimals)`),
-  computed at `LitePSM.initialize` from the deployed USDC mint's `decimals()`.
-  On every chain we currently target this is `1e12` (USDC has 6 decimals).
-- `MAX_RATE = PRECISION + 1e11` — safety cap on vault `usdRatePerSecond`
-- `BASIS_POINTS = 10_000` — fee denominator
-
-**Key formulas**
-```
-USDC → OkuMoney:         okuMAmount   = (usdcAmount × 1e12) × PRECISION / okuMMultiplier
-OkuMoney → USDC:         usdcAmount   = (okuMAmount × okuMMultiplier / PRECISION) / 1e12
-OkuMoney → usdOku share: shares       = okuMAmount × okuMMultiplier / usdMultiplier
-usdOku → OkuMoney:       okuMAmount   = usdAmount × PRECISION / okuMMultiplier
-```
-
-See [`src/lib/Constants.sol`](src/lib/Constants.sol) for the canonical version.
-
----
-
-## Hardcoded Constants
-
-All of the following are compile-time constants in [`src/lib/Constants.sol`](src/lib/Constants.sol). They cannot be changed without a contract upgrade. Where a constant is a round number or a conventional choice rather than a derived value, the rationale is noted.
-
-| Constant | Value | Rationale |
+| Interface | ID | Claimed |
 |---|---|---|
-| `PRECISION` | `1e18` | Standard 18-decimal fixed-point base. Matches ERC-20 18-decimal convention; $1.00 = 1e18. Not arbitrary — changing it would require rewriting all multiplier math. |
-| `MAX_RATE` | `PRECISION + 1e11` (~3700% APY per-second) | Safety cap on `usdRatePerSecond` passed to `rpow`. The value is arbitrary in the sense that any number far above realistic T-Bill yields would serve the same purpose. It is calibrated to stay well below `rpow` overflow regions while being comfortably above any plausible real-world rate. |
-| `MAX_MULTIPLIER` | `1e24` ($1,000,000 per token) | Overflow guard on both `okuMMultiplier` and `usdMultiplier`. Chosen as a round number six orders of magnitude above the starting value of 1e18. Arbitrary — any ceiling far above realistic yield trajectories would work. Prevents a compromised rebaser key from bricking downstream multiplier math via overflow. |
-| `BASIS_POINTS` | `10_000` | Universal basis-points denominator (100% = 10 000). Industry convention; not arbitrary. |
-| `MIN_COLLATERAL_RATIO_FLOOR` | `9e17` (90%) | Hard floor below which `minCollateralRatio` can never be configured, regardless of the `VAULT_ADMIN` key. **The 90% value is a round-number convention** — no specific analysis of T-Bill liquidity or yield-spread dynamics was used to derive it. For a product backed by short-duration T-Bills (extremely low volatility), a tighter floor (e.g. 95–98%) would also be defensible. The floor only gates `withdrawSurplus`; it does not halt minting or unwrapping if the live ratio drifts below it. |
-| `MAX_USDC_DECIMALS` | `18` | Cap on `IERC20Metadata.decimals()` accepted at PSM init. USDC uses 6 decimals on all EVM chains; 18 is the ERC-20 max. Prevents misconfiguration with nonsensical decimal counts. Not arbitrary per se — it is the ERC-20 upper bound — but the choice to cap rather than hardcode 6 is intentional forward-compat. |
+| `IScaledUIAmount` | `0xa60bf13d` | Yes |
+| `IScaledUIAmountNewUIMultiplier` | `0x4bd27648` | Yes |
+| `IScaledUIAmountConversion` | `0x57854fc3` | Yes |
+| `IScaledUIAmountBalances` | `0xd890fd71` | Yes |
+| `IERC4626` | — | **No** — conversion views only, see below |
+
+> ERC-8056 is a Standards Track **Draft** (created 2025-10-20). IDs are constants in
+> `Constants.sol`, never inline literals, so a spec revision is a one-line change.
+> Budget for one revision.
 
 ---
 
-## Dual-Token Split-Economy Model
+## Token surface
 
-OkuMoney and OkuDollar have **independent yield rates** controlled by separate roles:
-
-```
-usdOku rate > OkuM rate  →  Vault undercollateralized → Oku tops up (depositReserves)
-usdOku rate = OkuM rate  →  Vault fully collateralized → No action needed
-usdOku rate < OkuM rate  →  Vault overcollateralized  → Oku extracts revenue (withdrawSurplus)
-```
-
-OkuMoney is the solvency anchor (rear-facing, always backed). OkuDollar is the policy lever.
-
-**Key distinction**: OkuMoney is **non-rebasing** (standard ERC-20, multiplier appreciates discretely). OkuDollar is **rebasing** ($1-pegged, balance grows continuously via `_rpow`).
-
----
-
-## OkuMoney.sol
-
-**Inherits**: `ERC20Upgradeable`, `ERC20PermitUpgradeable`, `AccessControlUpgradeable`, `PausableUpgradeable`, `UUPSUpgradeable`.
-
-**Concept**: Non-rebasing base token with rear-facing yield. Standard ERC-20 balances (static). Yield is expressed through multiplier appreciation tracked by a stored `okuMMultiplier` value, updated discretely by the orchestrator.
-
-### Storage (ERC-7201 Namespaced)
+### ERC-8056
 
 ```solidity
-struct OkuMoneyStorage {
-    uint256 okuMMultiplier;                     // Stored dollar value per token (starts 1e18, only increases)
-    mapping(address => uint256) minterAllowance;
-    uint256 maxSupply;
-    mapping(address => bool) isBlacklisted;
-    uint256 lastYieldDistributionBlock;         // Sandwich attack prevention
-}
+function uiMultiplier() external view returns (uint256);
+function newUIMultiplier() external view returns (uint256);
+function effectiveAt() external view returns (uint256);
+function toUIAmount(uint256 rawAmount) external view returns (uint256);
+function fromUIAmount(uint256 uiAmount) external view returns (uint256);
+function balanceOfUI(address account) external view returns (uint256);
+function totalSupplyUI() external view returns (uint256);
 ```
 
-### Multiplier Model
+Two deliberate deviations from the EIP reference implementation:
 
-`okuMMultiplier()` is a **stored value** — not a computed view. There is no `_rpow`, no `ratePerSecond`, no rate scheduling on OkuMoney. The multiplier is written discretely by the orchestrator via two functions:
+1. **`Math.mulDiv`, not naive multiply.** The reference's `(raw * multiplier) / 1e18` reverts on intermediate overflow for large balances at high multipliers — reachable **inside the parameter space our own constants permit**. `mulDiv` computes the full 512-bit intermediate. ERC-8056 §Security Considerations 5 requires handling this.
+2. **No `_update` hook for `TransferWithUIAmount`.** The reference emits from `_update`, which also fires on mint and burn where the counterparty UI amount is ambiguous. The token emits from its transfer path instead, leaving OZ's `_update` untouched.
 
-- `setOkuMMultiplier(newMultiplier)` — OKUM_REBASER. Direct override, enforces `newMultiplier >= current`.
-- `distributeYield(yieldAmount)` — OKUM_REBASER. Dollar-denominated: `newMultiplier = oldMultiplier + (yieldAmount × PRECISION / totalSupply)`. E.g., $1000 yield on 10000 tokens → +$0.10/token.
-
-Both set `lastYieldDistributionBlock = block.number` (sandwich prevention — see [YieldSandwichGuard](#yieldsandwichguard)).
-
-**Rear-facing yield**: The orchestrator feeds realized T-Bill returns. January's actual yield gets distributed in February via `distributeYield()`. OkuMoney only ever distributes what was already earned — the multiplier reflects reality, never a projection.
-
-### IOkuMoney Interface
+### Value views
 
 ```solidity
-interface IOkuMoney {
-    function mint(address to, uint256 amount) external;
-    function burn(uint256 amount) external;
-    function transfer(address to, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
-    function totalSupply() external view returns (uint256);
-    function okuMMultiplier() external view returns (uint256);
-    function setOkuMMultiplier(uint256 newMultiplier) external;
-    function distributeYield(uint256 yieldAmount) external;
-    function lastYieldDistributionBlock() external view returns (uint256);
-}
+function asset() external view returns (address);   // USDC on this chain
+function totalAssets() external view returns (uint256);
+function convertToAssets(uint256 shares) external view returns (uint256);
+function convertToShares(uint256 assets) external view returns (uint256);
 ```
 
-### Key Implementation Notes
+**Not ERC-4626 compliant, and `supportsInterface` does not claim to be.** `deposit` /
+`mint` / `withdraw` / `redeem` are absent — subscription and redemption run through
+`LitePSM` and may queue rather than settle. A `deposit()` that reverts for everyone
+would be worse than an absent one, because integrators detect the interface and assume
+it works. Redemption capacity is exposed on the PSM, where it actually lives, not
+mirrored onto the token as `max*` views.
 
-- `balanceOf()` returns standard ERC-20 balance (raw token count, not multiplier-adjusted).
-- `transfer()` and `transferFrom()` are standard ERC-20 (no share conversion).
-- `okuMMultiplier()` is a stored value for pricing — used by PSM and vault, not by `balanceOf`.
-- `mint()` creates raw tokens; minting 100 tokens when `okuMMultiplier = $1.05` creates $105 of value.
-- The PSM handles USDC ↔ OkuMoney conversion using `okuMMultiplier()` (dollar-value aware).
-- `TransferValue` event emitted alongside the standard `Transfer` with the dollar-denominated amount.
-- Blacklist and pause checks apply to transfers; self-burn works while paused.
+### Standard surface
+
+ERC-20, ERC-2612 permit, `AccessControl`, `Pausable`, UUPS. Plus the usual regulated-
+stablecoin controls: per-minter `minterAllowance`, global `maxSupply`, and a blacklist.
+
+Pause is a full freeze on `transfer`, `transferFrom`, and `mint`. **Burn is not gated** —
+self-burn works while paused, supporting the pause-then-blacklist protocol. Also not
+gated: `setYieldRate`, `haltAccrual`, and `blacklist`, which are emergency levers that
+must remain callable during an incident.
 
 ### Events
 
 | Event | Parameters |
 |---|---|
-| `Transfer(from, to, amount)` | Standard ERC-20; emitted on mint/burn/transfer. |
-| `TransferValue(from, to, amount, dollarValue)` | Alongside `Transfer`; `dollarValue = amount × okuMMultiplier / PRECISION`. |
-| `OkuMMultiplierUpdated(oldMultiplier, newMultiplier, totalSupply)` | Emitted by `setOkuMMultiplier` and `distributeYield`. |
-| `YieldDistributed(yieldAmount, oldMultiplier, newMultiplier, totalSupply)` | Emitted by `distributeYield` only; `yieldAmount` is the dollar input. |
-| `MinterAllowanceUpdated(minter, oldAllowance, newAllowance)` | Emitted by `configureMinterAllowance`. |
-| `MaxSupplyUpdated(oldMaxSupply, newMaxSupply)` | Emitted by `setMaxSupply`. |
-| `Blacklisted(account)` / `Unblacklisted(account)` | Blacklist state changes. |
-| `Approval(owner, spender, value)` | Standard ERC-20 approval. |
-
-### Blacklist Exemption
-
-`blacklist()` deliberately does NOT use `whenNotPaused` — critical for the pause-to-blacklist protocol so operators can act during a paused incident.
-
-### Role Constants
-
-```solidity
-bytes32 public constant OKUM_UPGRADER          = keccak256("OKUM_UPGRADER");
-bytes32 public constant OKUM_PAUSER            = keccak256("OKUM_PAUSER");
-bytes32 public constant OKUM_UNPAUSER          = keccak256("OKUM_UNPAUSER");
-bytes32 public constant OKUM_MINTER            = keccak256("OKUM_MINTER");
-bytes32 public constant OKUM_REBASER           = keccak256("OKUM_REBASER");
-bytes32 public constant OKUM_BLACKLISTER       = keccak256("OKUM_BLACKLISTER");
-bytes32 public constant OKUM_UNBLACKLISTER     = keccak256("OKUM_UNBLACKLISTER");
-bytes32 public constant OKUM_CAP_MANAGER       = keccak256("OKUM_CAP_MANAGER");
-bytes32 public constant OKUM_ALLOWANCE_MANAGER = keccak256("OKUM_ALLOWANCE_MANAGER");
-```
-
-See [Role Grants Policy](#role-grants-policy) below for how roles are distributed at init.
-
----
-
-## OkuDollar.sol
-
-**Inherits**: `ERC20Upgradeable`, `ERC20PermitUpgradeable`, `AccessControlUpgradeable`, `PausableUpgradeable`, `ReentrancyGuardUpgradeable`, `YieldSandwichGuard`, `UUPSUpgradeable`.
-
-**Concept**: Rebasing $1-pegged stablecoin with an independent yield rate. Holds OkuMoney as reserves. Has its own USD shares mapping and its own **continuous** `_rpow` multiplier, decoupled from OkuMoney's multiplier. NOT an ERC-4626 vault — a custom rebasing token with reserve management.
-
-### Storage (ERC-7201 Namespaced)
-
-```solidity
-struct OkuDollarStorage {
-    IOkuMoney okuMoney;
-    mapping(address => uint256) usdShares;
-    uint256 totalUsdShares;
-    uint256 usdBaseMultiplier;        // Last snapshot (starts 1e18)
-    uint256 usdRatePerSecond;         // Compound rate (1e18 = no yield)
-    uint256 usdLastAccrualTime;
-    uint256 usdRateEnd;               // When current rate expires (0 = no expiry)
-    uint256 usdPendingRatePerSecond;  // Next rate (activates at usdRateEnd)
-    uint256 minCollateralRatio;       // e.g. 95e16 = 95%
-}
-```
-
-### USD Multiplier (Continuous `_rpow` Streaming)
-
-```
-usdMultiplier() = usdBaseMultiplier × _rpow(usdRatePerSecond, elapsed, PRECISION) / PRECISION
-```
-
-Unlike OkuMoney (stored discrete multiplier), OkuDollar uses continuous `_rpow` accrual. `balanceOf(user)` returns `usdShares[user] × usdMultiplier() / PRECISION` — this value changes every second without any transaction.
-
-**Rate scheduling**: Head-to-tail chaining via `setUsdYieldRate(rate, endTimestamp)` and `setNextUsdYieldRate(rate)` (rejects if the current `usdRateEnd` has already elapsed — `RateAlreadyExpired`).
-
-### Wrap / Unwrap (Multiplier-Aware)
-
-```solidity
-// wrap:   sharesToMint = actualReceived × okuMMultiplier / usdMultiplier
-//         usdMinted    = sharesToMint × usdMultiplier / PRECISION
-function wrap(uint256 okuMAmount, address receiver, uint256 minAmountOut)
-    external returns (uint256 usdMinted);
-
-// unwrap: okuMReturned = usdAmount × PRECISION / okuMMultiplier
-//         sharesToBurn = ceil(usdAmount × PRECISION / usdMultiplier)  -- rounded UP to favour vault
-function unwrap(uint256 usdAmount, address receiver)
-    external returns (uint256 okuMReturned);
-```
-
-Both are protected by `whenYieldNotDistributing` (via `YieldSandwichGuard`) and `whenNotPaused` (full freeze). `unwrap` reverts with `InsufficientBalance` if the caller's share balance is below `sharesToBurn`, or `InsufficientReserves` if the vault's OkuMoney reserves are below `okuMReturned`. These two errors are intentionally distinct — the first is a user balance check, the second is a vault-collateralization check.
-
-### Reserve Management (`VAULT_RESERVE_MANAGER`)
-
-```solidity
-function depositReserves(uint256 okuMAmount) external;   // Top up, no shares minted. whenNotPaused.
-function withdrawSurplus(uint256 okuMAmount) external;   // Extract, enforces minCollateralRatio. whenNotPaused.
-```
-
-### Collateralization (Multiplier-Aware)
-
-```
-collateralizationRatio = (OkuMoney.balanceOf(this) × okuMMultiplier / PRECISION) × PRECISION / totalSupply()
-```
-
-Numerator is dollar value of reserves. Denominator (`totalSupply()`) is dollar value of obligations (shares × multiplier). `surplus()` returns extractable OkuM tokens (0 if undercollateralized), computed as `max(0, reservesDollarValue - obligations) × PRECISION / okuMMultiplier`.
-
-### Pause Behavior
-
-Pause is a **full freeze**. The following are gated behind `whenNotPaused`:
-
-- OkuMoney: peer-to-peer `transfer` / `transferFrom` (mint also; burn is NOT gated — self-burn works while paused to support the pause-to-blacklist protocol).
-- OkuDollar: `transfer` / `transferFrom`, `wrap`, `unwrap`, `depositReserves`, `withdrawSurplus`.
-- LitePSM: `mintOkuM`, `redeemOkuM`, `mintUsdOku`, `redeemUsdOku`, `processQueue`.
-
-**Intentionally NOT pause-gated**: the vault's yield-rate setters (`setUsdYieldRate`, `setNextUsdYieldRate`) and `setMinCollateralRatio` — these are admin emergency levers that must remain callable during a pause.
-
-### Events
-
-| Event | Parameters |
-|---|---|
-| `Transfer(from, to, amount)` | Standard ERC-20, with the caller-specified amount (NOT share-reconverted — avoids 1-wei drift). |
-| `TransferValue(from, to, shares, dollarValue)` | Emitted alongside `Transfer`, exposing the share-level accounting. |
-| `Wrapped(user, receiver, okuMAmount, usdMinted, okuMMultiplier, usdMultiplier)` | Both multipliers snapshotted for rate reconstruction. |
-| `Unwrapped(user, receiver, usdAmount, okuMReturned, okuMMultiplier, usdMultiplier)` | Both multipliers snapshotted. |
-| `UsdYieldRateUpdated(oldRatePerSecond, newRatePerSecond, endTimestamp, snapshotMultiplier)` | Rate change with snapshot for off-chain reconstruction. |
-| `NextUsdYieldRateSet(newRatePerSecond, activatesAt)` | Pending rate staged. |
-| `MinCollateralRatioUpdated(oldRatio, newRatio)` | Collateralization floor changed. |
-| `ReservesDeposited(depositor, okuMAmount, dollarValue, collateralizationRatio)` | Reserve top-up with post-deposit ratio. |
-| `SurplusWithdrawn(to, okuMAmount, dollarValue, collateralizationRatio)` | Revenue extraction with post-withdrawal ratio. |
+| `Transfer(from, to, rawAmount)` | Standard ERC-20, raw |
+| `Approval(owner, spender, rawValue)` | Standard ERC-20, raw |
+| `TransferWithUIAmount(from, to, amount, uiAmount)` | ERC-8056 optional; both figures |
+| `UIMultiplierUpdated(oldMultiplier, newMultiplier, effectiveAtTimestamp)` | ERC-8056 required; emitted on every rate write |
+| `YieldRateSet(oldRate, newRate, rateEnd, snapshotMultiplier)` | Rate write, with snapshot for off-chain reconstruction |
+| `AccrualHalted(atMultiplier)` | `haltAccrual` |
+| `MinterAllowanceUpdated(minter, oldAllowance, newAllowance)` | |
+| `MaxSupplyUpdated(oldMaxSupply, newMaxSupply)` | |
+| `Blacklisted(account)` / `Unblacklisted(account)` | |
 
 ---
 
 ## LitePSM.sol
 
-**Concept**: Multiplier-aware USDC ↔ OkuMoney swaps with usdOku convenience functions.
-
-### OkuMoney Swap Functions
+USDC ↔ rUSDOku at the multiplier.
 
 ```solidity
-// okuMAmount = usdcValue18 × PRECISION / okuMMultiplier()
-function mintOkuM(uint256 usdcAmount) external;
+function mint(uint256 usdcAmount) external returns (uint256 rawOut);
+function redeem(uint256 rawAmount) external returns (uint256 usdcOut);
+function redeemUiAmount(uint256 uiAmount) external returns (uint256 usdcOut);
 
-// usdcAmount = okuMAmount × okuMMultiplier() / PRECISION (scaled to 6 decimals)
-function redeemOkuM(uint256 okuMAmount) external;
+function quoteMint(uint256 usdcAmount) external view returns (uint256 rawOut);
+function quoteRedeem(uint256 rawAmount) external view returns (uint256 usdcOut);
+function redeemableNow() external view returns (uint256 maxRawInstant);  // buffer capacity
 ```
 
-At `okuMMultiplier = $1.05`: depositing 100 USDC gives ~95.24 OkuM; redeeming 95.24 OkuM returns ~100 USDC.
+```
+USDC → raw:   raw  = (usdcAmount × usdcDecimalMultiplier) × PRECISION / uiMultiplier()
+raw → USDC:   usdc = (raw × uiMultiplier() / PRECISION) / usdcDecimalMultiplier
+```
 
-### Convenience Functions (usdOku ↔ USDC via Vault)
+At `uiMultiplier = 1.05e18`, depositing 100 USDC yields ~95.24 raw (displayed as
+$100.00); redeeming 95.24 raw returns ~100 USDC.
+
+`usdcDecimalMultiplier` is stored per-PSM (`10 ** (18 - usdcDecimals)`), computed at
+`initialize` from the deployed USDC's `decimals()`. `1e12` on every chain targeted.
+
+> **No sandwich guard, no announcement window, no forward pricing.** Continuous
+> accrual has no distribution transaction to sandwich and no scheduled step to
+> front-run. Pricing reads `uiMultiplier()` directly.
+
+### Admin surface
 
 ```solidity
-function mintUsdOku(uint256 usdcAmount) external;           // USDC → mint OkuM → wrap → usdOku to user
-function redeemUsdOku(uint256 usdAmount) external;          // usdOku → unwrap → redeem → USDC to user
+function depositBuffer(uint256 amount) external;             // PSM_BUFFER_DEPOSITOR
+function withdrawUsdc(address to, uint256 amount) external;  // PSM_BUFFER_WITHDRAWER
+function processQueue(uint256 startIndex, uint256 endIndex, uint256 approveAmount) external;
+function pause() / unpause() external;                       // PSM_PAUSER / PSM_UNPAUSER
 ```
 
-`redeemUsdOku` has two distinct failure modes: (a) vault undercollateralized → `unwrap` reverts with `InsufficientReserves` → entire tx reverts; (b) vault has OkuM but PSM buffer insufficient → OkuM goes to the redemption queue.
+`withdrawUsdc` reverts with `ZeroAddress` on `to == 0` and `WouldStrandQueue` if the
+withdrawal would drop the buffer below outstanding queue obligations.
 
-Every user-facing PSM function is protected by `whenYieldNotDistributing` + `whenNotPaused`.
-
-### Admin / Operator Surface
-
-```solidity
-function depositBuffer(uint256 amount) external;                           // PSM_BUFFER_DEPOSITOR
-function withdrawUsdc(address to, uint256 amount) external;                // PSM_BUFFER_WITHDRAWER — reverts with ZeroAddress on to == 0; WouldStrandQueue protection
-function processQueue(uint256 startIndex, uint256 endIndex, uint256 approveAmount) external;  // PSM_QUEUE_PROCESSOR. whenNotPaused + nonReentrant.
-function pause() / unpause() external;                                     // PSM_PAUSER / PSM_UNPAUSER
-```
-
-### Events
-
-| Event | Parameters |
-|---|---|
-| `OkuMMinted(user, usdcAmount, okuMAmount, okuMMultiplier)` | `mintOkuM` success. |
-| `OkuMRedeemed(user, okuMIn, usdcOut, okuMMultiplier)` | `redeemOkuM` instant path only. Queued path emits `RedemptionQueued` instead. |
-| `UsdOkuMinted(user, usdcAmount, usdAmount, okuMMultiplier)` | `mintUsdOku` success. |
-| `UsdOkuRedeemed(user, usdIn, usdcOut, okuMMultiplier)` | `redeemUsdOku` — sole event for this path; no inner `OkuMRedeemed` is emitted. |
-| `BufferRefilled(newBufferBalance, processedStart, processedEnd)` | After `processQueue`. |
-| `BufferDeposited(depositor, amount, newBufferBalance)` | After `depositBuffer`. |
-| `BufferWithdrawn(to, amount, newBufferBalance)` | After `withdrawUsdc`. |
+Events: `Minted(user, usdcAmount, rawOut, uiMultiplier)`,
+`Redeemed(user, rawIn, usdcOut, uiMultiplier)`,
+`BufferDeposited`, `BufferWithdrawn`, `BufferRefilled`.
 
 ---
 
 ## RedemptionQueue.sol
 
-Stores raw OkuMoney token amounts. Since OkuMoney is non-rebasing, queued tokens don't grow in balance — but they appreciate in dollar value via `okuMMultiplier()`. At processing time, `usdcAmount = okuMAmount × okuMMultiplier() / PRECISION` (scaled to 6 decimals). The multiplier is cached once per batch for gas efficiency and cross-entry consistency.
-
-`enqueue(user, okuMTokenAmount)` is record-only — the PSM transfers OkuMoney into the queue before calling. `processQueue(startIndex, endIndex)` (called by the PSM via `QUEUE_PSM`) burns OkuMoney, pulls USDC from the PSM, and pays users. `rescueQueueEntry(index, alternateRecipient)` returns OkuMoney to a stuck entry (e.g., USDC-blacklisted recipient) — called by `QUEUE_RESCUER`.
-
-`processQueue` and `rescueQueueEntry` do NOT auto-advance `queueHead`. Operators (or anyone — the call is permissionless) call `advanceHead(maxSlots)` after a batch to amortize the head walk into a separate, gas-bounded transaction. `queueLength()` is an upper bound on live entries until `advanceHead` runs; redemption correctness is independent of the cursor.
-
-### Events
-
-| Event | Parameters |
-|---|---|
-| `RedemptionQueued(user, okuMAmount, dollarValue, position, queueLength)` | `enqueue`. |
-| `RedemptionProcessed(user, okuMAmount, dollarValue, usdcAmount, waitTime)` | `processQueue` success. |
-| `RedemptionSkipped(index, reason)` | `reason` is `AlreadyCleared`, `InsufficientFunds`, or `TransferFailed`. |
-| `RedemptionRescued(index, originalUser, recipient, okuMAmount, dollarValue)` | `rescueQueueEntry`. |
-| `QueueHeadAdvanced(newHead, slotsAdvanced)` | `advanceHead` (only when slots were actually skipped). |
-
----
-
-## Cross-Chain Transfers (v1: noBridge / PSM-Mediated)
-
-The EVM side ships without on-chain bridging in v1. Cross-chain transfers are
-PSM-mediated mint/burn coordinated by the off-chain orchestrator:
-
-```
-chain A                                       chain B
-LitePSM.redeemOkuM(user, n) ─► orchestrator ─► LitePSM.mintOkuM (USDC custody)
-                                              ─► OkuM credited to user on B
-```
-
-- LitePSM holds `OKUM_MINTER` on every chain — sole user-facing mint/burn surface.
-- The orchestrator custodies USDC and rebalances PSM buffers operationally.
-- No on-chain signature verification, EIP-712 BridgeRequest, or refund flow in v1.
-
-### If OkuBridge / NTT / CCIP return
-
-Deleted in the noBridge refactor (no longer present anywhere in `src/`):
-`OkuBridge.sol`, `OkuBridgeRouter.sol`, `NttAdapter.sol`, `INttManager.sol`,
-the bridge event files, the `IOkuBridgeNative` / `IBridgeAdapter` interfaces,
-the `BRIDGE_*` / `ROUTER_*` / `NTT_*` role constants in `Roles.sol`, the
-bridge test suite, and the `scripts/bridge/` flow. A pre-noBridge git history
-retains the full implementation if it ever needs to be restored — there is
-no scaffolding left in the current tree to build on top of.
-
-When OkuBridge / NTT / CCIP return, the upgrade is additive: reintroduce the
-interfaces/roles from history, deploy the new proxy, grant it `OKUM_MINTER`,
-configure its minter allowance. No changes to the existing `OkuMoney` /
-`OkuDollar` / `LitePSM` / `RedemptionQueue` contracts are required.
-
----
-
-## YieldSandwichGuard
-
-Shared abstract at `src/lib/YieldSandwichGuard.sol`, inherited by both `OkuDollar` and `LitePSM`. Exposes the `whenYieldNotDistributing` modifier and the `YieldDistributionInProgress` error.
+Stores **raw** rUSDOku. Because raw balances are fixed, queued amounts do not grow in
+count — but they appreciate in dollar value via the multiplier. At processing,
+`usdcAmount = rawAmount × uiMultiplier() / PRECISION`, scaled to USDC decimals. The
+multiplier is cached once per batch for gas and cross-entry consistency.
 
 ```solidity
-abstract contract YieldSandwichGuard {
-    error YieldDistributionInProgress();
-
-    modifier whenYieldNotDistributing() {
-        if (block.number == _yieldSandwichOkuMoney().lastYieldDistributionBlock()) {
-            revert YieldDistributionInProgress();
-        }
-        _;
-    }
-
-    function _yieldSandwichOkuMoney() internal view virtual returns (IOkuMoney);
-}
+function enqueue(address user, uint256 rawAmount) external;           // QUEUE_PSM, record-only
+function processQueue(uint256 startIndex, uint256 endIndex) external; // QUEUE_PSM
+function rescueQueueEntry(uint256 index, address alt) external;       // QUEUE_RESCUER
+function advanceHead(uint256 maxSlots) external;                      // permissionless
 ```
 
-OkuMoney records `lastYieldDistributionBlock = block.number` inside `setOkuMMultiplier` and `distributeYield`. OkuDollar and LitePSM inherit the guard and override `_yieldSandwichOkuMoney()` to return their stored `okuMoney` reference. Result: **any** PSM mint/redeem or vault wrap/unwrap that lands in the same block as a yield distribution reverts with `YieldDistributionInProgress`. The lock releases automatically on the next block.
+`enqueue` is record-only — the PSM transfers tokens in before calling. `processQueue`
+burns rUSDOku, pulls USDC from the PSM, and pays users. `rescueQueueEntry` returns
+tokens for a stuck entry (e.g. a USDC-blacklisted recipient).
 
-**Protected operations**:
-- `LitePSM.mintOkuM` / `redeemOkuM` / `mintUsdOku` / `redeemUsdOku` (+ permit variants)
-- `OkuDollar.wrap` / `unwrap`
+Neither `processQueue` nor `rescueQueueEntry` advances `queueHead`; `advanceHead`
+amortizes the head walk into a separate gas-bounded transaction. `queueLength()` is an
+upper bound on live entries until it runs. Redemption correctness is independent of the
+cursor.
 
-**Unaffected**: OkuMoney transfers, OkuDollar transfers, operations in subsequent blocks.
+USDC transfers use `SafeERC20.trySafeTransferFrom`, which both swallows reverts and
+decodes the boolean return — a non-standard ERC-20 returning `false` without reverting
+is soft-skipped rather than treated as paid.
+
+Events: `RedemptionQueued`, `RedemptionProcessed`, `RedemptionSkipped(index, reason)`
+(`AlreadyCleared` / `InsufficientFunds` / `TransferFailed`), `RedemptionRescued`,
+`QueueHeadAdvanced`.
 
 ---
 
-## Role Grants Policy
+## Precision and rounding
 
-Every contract's `initialize` grants its **full** role set to `admin`. Admin is expected to redistribute operational roles (minters, rebasers, reserve managers, etc.) to other parties (multisigs, bots) post-deployment via `grantRoles.ts` or `grantRolesMainnet.ts`. This removes contract-specific role plumbing from deployment scripts.
+- **18 decimals on the raw token.** With a growing multiplier, 6 decimals would surface display-layer dust far sooner than expected.
+- **One rounding direction, stated once:** every conversion rounds **against the caller, in favour of the protocol**. `toUIAmount` and `fromUIAmount` both truncate; the caller absorbs the loss.
+- **Display precision:** truncate UI amounts to the token's decimals. Never render full multiplier precision — it implies precision the backing does not have.
 
-One intentional exception:
-- `RedemptionQueue.QUEUE_PSM` is NOT granted at init — it is granted post-deploy to the `LitePSM` proxy address. This avoids a circular deployment dependency AND keeps admin from being able to call `enqueue` / `processQueue` directly (bypassing the PSM).
+### The max-send rule
 
-### Per-role trust and blast radius
+> **A max-send must never round-trip through the display layer.** Compute the transfer
+> from raw `balanceOf`; derive the displayed value *from that raw amount*. Never
+> compute `fromUIAmount(displayedBalance)`.
 
-The production role assignment and what each tier can and cannot do — see
-`README.md § Signer trust implications` for the full model that applies to
-both EVM and SVM. EVM-specific notes:
+`fromUIAmount(toUIAmount(x))` is `x - 1` for most `x`. A "Max" button built the wrong
+way leaves dust on every send, or — rounding the other way — exceeds the balance and
+reverts, which users read as a broken app.
 
-| Role | Held by | What it can do | What on-chain code prevents |
+This is the most likely user-visible bug in the system. Enforced in three places: the
+SDK exposes `getMaxSendRaw()` and no inverse; the invariant suite fuzzes
+`fromUIAmount(toUIAmount(x)) ∈ [x-1, x]`; `MaxSendTest` drives the real transfer path
+across the full multiplier range.
+
+---
+
+## Integration surface
+
+The contract is small. This is where the work is.
+
+Every surface reading or writing a balance needs review: the app and any embedded
+wallet; third-party wallets (the long tail — there is no EVM equivalent of Solana's
+RPC-level `uiAmount`, so each must integrate explicitly); explorers, trackers,
+indexers, subgraphs; custodians and exchanges; bridges.
+
+**Hardware wallet signing is a launch blocker.** Ledger and Trezor render raw calldata
+amounts. The app says "$1,050"; the device says "1,000." Ship **ERC-7730** clear-signing
+metadata for the token and every PSM entry point before launch, not after.
+
+Ship alongside the contracts, not after:
+
+1. **Client SDK** — one `getDisplayBalance()`, one `getMaxSendRaw()` with no inverse, ERC-165 detection internal
+2. **Display convention** — what to show, how to label it, what to do when ERC-8056 is unsupported
+3. **ERC-7730 metadata**
+4. **`OkuMultiplierAdapter`** — Chainlink-compatible, with bounds and staleness, so lending markets do not hand-roll it
+5. **Reference integrations, open-sourced** — one AMM, one lending market
+
+### Venue requirements
+
+**AMMs — rate-aware pools only.** Curve stableswap with `uiMultiplier()` as the rate
+provider, or a Uniswap v4 hook. A naive constant-product pair against USDC leaks
+accrual to arbitrageurs continuously; LPs capture materially less than the yield rate.
+State this in LP-facing docs.
+
+**Lending — engage each risk team before launch.** The multiplier becomes their price
+feed; they will want the rate bounds and `haltAccrual` semantics in writing.
+
+**Cross-chain.** One canonical multiplier source pushed to satellites. Bridges move
+**raw units and nothing else** — audit each for decimal or display handling. Define
+acceptable skew and publish what integrations do at the boundary.
+
+**SVM.** Token-2022 rejects `ScaledUiAmount` and `InterestBearingConfig` on the same
+mint, making the Solana side **stepwise by construction**. *(Verify against current
+Token-2022 docs — this is load-bearing for the cross-chain story.)* If it holds, the
+two chains share an interface but not accrual granularity: multipliers diverge within
+a step interval by up to one step's yield, and a small standing cross-chain arbitrage
+cost is accepted. Making EVM stepwise to match was rejected for the reasons above.
+
+---
+
+## Terminology
+
+| Term | Meaning |
+|---|---|
+| `rawAmount` | Raw token count — what `balanceOf`, `transfer`, `approve` move (18 dp) |
+| `uiAmount` | Dollar value — what `balanceOfUI` returns (18 dp) |
+| `usdcAmount` | USDC amount (6 dp on all targeted chains) |
+| `uiMultiplier` | Dollar value of 1 raw token (starts `1e18` = $1.00, only increases) |
+| `ratePerSecond` | Compound per-second accrual rate (`1e18` = no yield) |
+| `rateEnd` | Accrual halt boundary; also ERC-8056's `effectiveAt()` |
+
+```
+USDC → raw:   raw  = (usdcAmount × usdcDecimalMultiplier) × PRECISION / uiMultiplier
+raw → USDC:   usdc = (raw × uiMultiplier / PRECISION) / usdcDecimalMultiplier
+raw → UI:     ui   = raw × uiMultiplier / PRECISION          // toUIAmount
+UI → raw:     raw  = ui × PRECISION / uiMultiplier           // fromUIAmount
+parity:       convertToAssets(1e18) == uiMultiplier()
+```
+
+---
+
+## Constants
+
+| Constant | Value | Rationale |
+|---|---|---|
+| `PRECISION` | `1e18` | Fixed-point base. ERC-8056 requires 18-decimal multiplier precision, so doubly mandated. |
+| `MAX_IMPLIED_APR` | `2000` bps (20%) | **The bound that actually binds.** A short-duration T-Bill product cannot legitimately exceed it. **Placeholder — needs a real number.** |
+| `MAX_RATE_DURATION` | `90 days` | Caps the exposure window on any single rate write. Combined with the APR cap, bounds worst-case over-accrual from a compromised setter. Round-number convention. |
+| `MAX_MULTIPLIER` | `1e24` | Overflow ceiling, six orders above `1e18`. Round-number convention. Also the bound making `Math.mulDiv` necessary. |
+| `BASIS_POINTS` | `10_000` | Industry convention. |
+| `MAX_USDC_DECIMALS` | `18` | ERC-20 upper bound; USDC is 6 dp everywhere targeted. Capping rather than hardcoding 6 is intentional forward-compat. |
+| `IID_SCALED_UI_*` | see above | From the draft EIP. Pinned; changes if the draft changes. |
+
+---
+
+## Roles
+
+Each contract's `initialize` grants its full role set to `admin`, who redistributes
+post-deployment. One exception: `RedemptionQueue.QUEUE_PSM` is granted after deployment
+to the `LitePSM` proxy, avoiding a circular dependency and keeping admin from calling
+`enqueue` / `processQueue` directly.
+
+| Role | Held by | Can do | Bounded by |
 |---|---|---|---|
-| `DEFAULT_ADMIN_ROLE` | Cold Multisig | Grant/revoke any role; effectively controls everything | Nothing — this is the meta-role. Quorum breach = system compromise |
-| `OKUM_UPGRADER` / `VAULT_UPGRADER` / `PSM_UPGRADER` / `QUEUE_UPGRADER` | Cold Multisig | Replace any contract's logic via UUPS `_authorizeUpgrade`; new logic could do anything | Nothing — upgrade is unconditional once authorized. Mitigated by: every upgrade is tested on a fork and diff-reviewed before mainnet execution |
-| `OKUM_ALLOWANCE_MANAGER` | Cold Multisig | Set any address's `minterAllowance` to any value | Cannot set above `maxSupply`; minting still requires `OKUM_MINTER` (held by contracts, not EOAs) |
-| `OKUM_CAP_MANAGER` | Cold Multisig | Set `maxSupply` | Cannot set below current `totalSupply()` |
-| `PSM_BUFFER_WITHDRAWER` | Cold Multisig | Drain PSM USDC buffer | Cannot withdraw below amount needed to cover pending queue obligations (`queueObligation`) |
-| `VAULT_RESERVE_MANAGER` | Cold Multisig | Withdraw OkuMoney surplus from vault | Cannot push vault below `minCollateralRatio` (90% floor enforced post-withdrawal) |
-| `VAULT_ADMIN` | Cold Multisig | Set `minCollateralRatio` | Cannot set below `MIN_COLLATERAL_RATIO_FLOOR` (90%); live-health gate rejects if existing positions would breach the new floor |
-| `PSM_PAUSER` / `VAULT_PAUSER` / `OKUM_PAUSER` | Warm Multisig | Halt minting, redemption, wrapping, transfers | Cannot unpause — that requires cold multisig (`*_UNPAUSER`) |
-| `OKUM_BLACKLISTER` | Warm Multisig | Block any address from OkuMoney and OkuDollar operations | Cannot unblacklist (cold only); cannot access funds |
-| `OKUM_REBASER` / `VAULT_REBASER` | Orchestrator | Bump `okuMMultiplier` and `usdMultiplier` | Cannot decrease either multiplier; hard capped at `MAX_MULTIPLIER` (1e24) |
-| `PSM_QUEUE_PROCESSOR` | Orchestrator | Process queue entries — burns OkuM, pays USDC to users | Payment destination is fixed to the queue entry's `user` address; cannot reroute |
-| `PSM_BUFFER_DEPOSITOR` | Orchestrator | Deposit USDC to buffer from caller's wallet | Caller must hold the USDC; no damage possible |
-| `OKUM_MINTER` | LitePSM + RedemptionQueue (contracts) | Call `OkuMoney.mint()` inside swap/processQueue paths | Bounded by per-minter `minterAllowance` and global `maxSupply`; never callable by EOA |
+| `DEFAULT_ADMIN_ROLE` | Cold multisig | Grant/revoke any role | Nothing — meta-role |
+| `OKU_UPGRADER` / `PSM_UPGRADER` / `QUEUE_UPGRADER` | Cold multisig | Replace logic via UUPS | Nothing — mitigated by fork rehearsal and diff review |
+| `OKU_ALLOWANCE_MANAGER` | Cold multisig | Set `minterAllowance` | Capped at `maxSupply`; minting still needs `OKU_MINTER` |
+| `OKU_CAP_MANAGER` | Cold multisig | Set `maxSupply` | Cannot go below `totalSupply()` |
+| `PSM_BUFFER_WITHDRAWER` | Cold multisig | Drain PSM buffer | Cannot drop below outstanding queue obligations |
+| `OKU_PAUSER` / `PSM_PAUSER` | Warm multisig | Halt operations | Cannot unpause — cold only |
+| `OKU_GUARDIAN` | Warm multisig | `haltAccrual()` | Can only stop growth; cannot set a rate or reduce the multiplier |
+| `OKU_BLACKLISTER` | Warm multisig | Block an address | Cannot unblacklist (cold only); cannot access funds |
+| `OKU_RATE_SETTER` | Orchestrator | `setYieldRate` | APR cap, duration cap, monotonicity, `MAX_MULTIPLIER` |
+| `PSM_QUEUE_PROCESSOR` | Orchestrator | Process queue entries | Destination fixed to the entry's `user` |
+| `PSM_BUFFER_DEPOSITOR` | Orchestrator | Deposit USDC to buffer | Caller must hold the USDC |
+| `OKU_MINTER` | LitePSM (contract) | `mint()` inside swap paths | Per-minter allowance and `maxSupply`; never an EOA |
+| `QUEUE_RESCUER` | Warm multisig | Return escrowed tokens for a stuck entry | Cannot redirect a live entry's payment |
+
+Named `OKU_RATE_SETTER`, not `REBASER` — nothing rebases.
 
 ---
 
-## Key Invariants
+## Invariants
 
-Maintained by the contracts and verified by the test suites at `test/invariants/`:
+```
+// Display / value parity
+uiMultiplier() == convertToAssets(1e18)
+totalSupplyUI() == totalSupply() × uiMultiplier() / PRECISION
+balanceOfUI(u)  == balanceOf(u)  × uiMultiplier() / PRECISION
+fromUIAmount(toUIAmount(x)) ∈ [x-1, x]                       // fuzzed, full range
+|Σ balanceOfUI(holder) - totalSupplyUI()| <= N wei            // stated tolerance
 
-**Token / multiplier**
-```
-balanceOf(user) == _balances[user]                              // OkuMoney: standard ERC-20
-okuMMultiplier() >= previousOkuMMultiplier                      // Multiplier never decreases
-totalSupply() <= maxSupply                                      // Supply cap respected
-balanceOf(user) == usdSharesOf(user) * usdMultiplier / PRECISION  // OkuDollar: share conversion
-```
+// Multiplier
+uiMultiplier() >= previousUiMultiplier                        // monotone
+uiMultiplier() continuous across every setYieldRate call      // slope moves, value does not
+uiMultiplier() constant once block.timestamp >= rateEnd       // accrual halts
+uiMultiplier() == newUIMultiplier() once past rateEnd         // ERC-8056 boundary contract
+maxSupply × MAX_MULTIPLIER < type(uint256).max                // asserted at init
 
-**Vault**
-```
-collateralizationRatio >= minCollateralRatio (after withdrawSurplus)
-reservesDollarValue + <100 wei rounding> >= totalSupply         // Vault-backed within tolerance
-unwrap(wrap(okuMAmount)) >= okuMAmount - 1                      // Round-trip accuracy
-totalOkuMReserves() == OkuMoney.balanceOf(address(okuDollar))   // Reserve accounting
-```
+// Raw layer
+balanceOf(u) == OZ ERC20 _balances[u]                         // stock OZ, unmodified
+totalSupply() <= maxSupply
 
-**Minter allowance**
-```
+// Interface
+supportsInterface(0xa60bf13d) == true
+supportsInterface(type(IERC4626).interfaceId) == false        // we do NOT claim this
+
+// PSM / queue
+token.balanceOf(litePsm) <= 1 wei                             // no stale tokens between calls
+queue.totalQueuedRaw == token.balanceOf(queue)                // backed exactly
+psmUsdcOutflow <= seededBuffer + trackedDeposits + tolerance
+
+// Allowance
 minterAllowance only decreases unless admin resets
-allowanceConsumed <= mintedTotal + 1                            // Burns don't restore allowance
+allowanceConsumed <= mintedTotal + 1                          // burns do not restore allowance
 ```
-
-**PSM**
-```
-okuMoney.balanceOf(litePsm) <= 1 wei                            // No stale OkuM held between calls
-redemptionQueue.totalQueuedOkuM == okuMoney.balanceOf(queue)    // Queue backed exactly by its OkuM
-psmUsdcOutflow <= seededBuffer + trackedDeposits + tolerance    // USDC outflow bounded by inflow
-```
-
----
-
-## Accepted Risks
-
-Known issues and design choices explicitly accepted by the protocol
-team. A third-party reviewer or auditor should be aware of these so
-the same ground isn't re-covered as a new finding.
-
-### 1. Centralized operator model — no on-chain timelock
-
-OkuMoney v1 ships as a centralized financial product, modelled on
-similar yield-bearing stablecoins (Ondo Finance, Circle USDC). No
-`TimelockController` sits between the operator multisig and any
-contract.
-
-**Scope of operator powers:**
-
-- `OKUM_REBASER`: writes `okuMMultiplier` and `lastYieldDistributionBlock`. Bounded by `MAX_MULTIPLIER` and monotonic-increase invariants.
-- `VAULT_REBASER`: writes USD yield rate. Bounded by `MAX_RATE` and `MAX_MULTIPLIER`.
-- `VAULT_RESERVE_MANAGER`: deposits / withdraws OkuMoney from vault reserves. Withdrawals gated by `minCollateralRatio` post-condition and `whenYieldNotDistributing`.
-- `OKUM_MINTER` / `OKUM_BURNER`: bounded by per-minter allowance + global `maxSupply`. PSM and Queue are the only intended holders.
-- `PSM_*` roles: queue processing, buffer custody.
-- `OKUM_BLACKLISTER` / `OKUM_UNBLACKLISTER`: shared blacklist for OkuMoney + OkuDollar.
-
-**On-chain mitigations:**
-
-- All multiplier-write operations stamp `lastYieldDistributionBlock`; the `whenYieldNotDistributing` modifier prevents same-block sandwich attacks on every PSM + vault op that reads the multiplier.
-- Defense-in-depth ceilings (`MAX_MULTIPLIER = 1e24`, `MAX_RATE = PRECISION + 1e11`) cap the blast radius of a single-call compromise.
-- Monotonic guards (`MultiplierCannotDecrease`, `RateAlreadyExpired`) prevent backward writes.
-
-**Operational expectation:** each operational role must rotate to a
-multisig before mainnet launch. `VAULT_REBASER` and
-`VAULT_RESERVE_MANAGER` must be held by separate keys / multisigs
-(see Risk 2).
-
-### 2. `VAULT_REBASER` + `VAULT_RESERVE_MANAGER` cross-block opsec
-
-**Issue:** if both roles are held by the same key, that key can
-sequence `setUsdYieldRate` (or `distributeYield`) in block N followed
-by `withdrawSurplus` in block N + 1 to extract value just added to
-the apparent reserve dollar valuation.
-
-**On-chain mitigation:** `whenYieldNotDistributing` prevents the
-same-block attack. Cross-block manipulation is NOT mitigated
-on-chain — closing it would require either a timelock (rejected, see
-Risk 1) or stale-multiplier checks that themselves depend on the same
-compromised key.
-
-**Off-chain mitigation:** the two roles MUST be held by separate
-keys / multisigs, both rotated to multisigs before mainnet.
-Documented in NatSpec on `OkuDollar.withdrawSurplus`.
-
-### 3. USDC peg monitoring — off-chain (no on-chain oracle)
-
-Both EVM and SVM handle USDC peg monitoring entirely off-chain. EVM
-previously had an on-chain `OracleRelay` circuit-breaker (Chainlink
-USDC/USD aggregator, gating every mint/redeem/`processQueue` path) —
-this was fully removed, including the storage slots that referenced
-it (`LitePSM` and `RedemptionQueue` storage layouts were compacted,
-not `__gap`-padded). SVM's `lite-psm` similarly removed its Pyth
-oracle relay. Both chains now converge on the same model: the
-off-chain orchestrator monitors the peg and pauses the PSM on a
-detected depeg.
-
-### 4. 1-wei share dust in `OkuDollar.transferFrom` under inflated `usdMultiplier`
-
-**Issue:** `OkuDollar` accounts in shares but exposes a
-dollar-denominated ERC-20 interface. `transferFrom(amount)` floors
-the share conversion. When `usdMultiplier > 1e18`, multiple
-sequential `transferFrom` calls against a single permit-approved
-allowance may under-consume shares by ~1 share per call due to floor
-truncation.
-
-**Status:** documented in NatSpec on `OkuDollar.permit`. The 1-wei
-drift always favours the holder, never the protocol. The `Transfer`
-event's emitted `value` matches the post-rounding share-converted
-amount, preserving the ERC-20 invariant `Σ Transfer.value == Δ
-balanceOf`. Integrators planning batched `transferFrom` against a
-single permit allowance should account for the sub-call dust.
-
-### 5. `OkuDollar._update` ERC-20 tripwires
-
-`OkuDollar` overrides `transfer` / `transferFrom` to use share-based
-accounting, bypassing the inherited `ERC20Upgradeable._update`. The
-`_update` override unconditionally reverts (with diagnostic
-sub-errors for mint/burn) to ensure all supply changes go through
-`wrap()` / `unwrap()`, which manage `usdShares` directly. These are
-defensive forward-compat sentinels — the inherited `_mint`/`_burn`
-are not called anywhere in `OkuDollar` today. The reverts exist only
-to catch a future bug where an upgrade accidentally routes through
-`_update`.
-
-### 6. `RedemptionQueue.advanceHead` is permissionless
-
-The cursor-advance maintenance function is callable by anyone. No
-privileged effect — `queueHead` can only move forward, and only past
-slots that are already cleared (`user == address(0)`). Visible effect
-is purely on `queueLength()` accuracy. A privileged version (e.g.
-`onlyRole(QUEUE_RESCUER)`) adds no security and complicates the
-operator runbook; the function is gas-bounded by `maxSlots` and emits
-`QueueHeadAdvanced` on any non-zero advance.
-
-### 7. Deprecated bridge feature
-
-The on-chain `OkuBridge` / `OkuBridgeRouter` / `NttAdapter` contracts
-and all associated tests/scripts/role constants were deleted in a
-pre-review cleanup. The historical implementation is preserved on a
-separate git branch should it be revisited. No bridge-related code
-remains in `src/`, `test/`, or `scripts/`.
 
 ---
 
 ## Testing
 
 ```bash
-forge test                                         # All unit + invariant tests (564 total)
-forge test --match-path "test/invariants/*"        # Invariant suite (256 runs × 500 depth by default)
-forge test --match-contract OkuMoneyTest -vv       # OkuMoney unit tests
-forge test --match-contract VaultInvariants        # OkuDollar backing invariants
-forge test --match-contract HandlerSanityTest      # Handler success-rate sanity checks
-
-npx hardhat compile                                # Regenerates typechain before fork tests
-npx hardhat test                                   # Fork + happyPath + scenarios
-npx hardhat test test/hardhat/scenarios/RealWorldUsage.ts  # 365-day simulation + 7 edge cases
+forge install && forge build
+forge test
+forge test --match-path "test/invariants/*"          # 256 runs × 500 depth
+npx hardhat compile && npx hardhat test              # Fork + scenarios
 ```
 
-The Foundry suite is the authoritative functional coverage. The Hardhat suite exists for three specific purposes:
-1. **Fork tests** (`test/hardhat/fork/`): exercise the protocol against real mainnet / Sepolia state that Foundry can't reach in CI.
-2. **Happy-path integration** (`test/hardhat/happyPath/`): full deposit/yield/withdraw walk-through against the OZ upgrades plugin's real proxy machinery.
-3. **Real-world scenario simulation** (`test/hardhat/scenarios/RealWorldUsage.ts`): 365-day stochastic simulation (seeded PRNG, 7 action categories, daily `evm_increaseTime` steps) plus 7 deterministic edge-case suites covering round-trips, queued redeems, multiplier divergence, blacklist/freeze, pause windows, yield-lock, and cap exhaustion.
-
-Any new unit or invariant test should be added to the Foundry suite; Hardhat is reserved for fork-dependent or multi-contract scenario work.
-
----
-
-## Forge coverage notes
-
-**Post-OracleRelay-removal baseline:** **564 / 564 forge tests passing**
-plus **27 / 27 hardhat tests** (fork + happy-path + scenarios). Per-file
-coverage:
-
-| File | Lines | Statements | Branches | Funcs |
-|---|---|---|---|---|
-| `src/lib/MathLib.sol` | **100 %** | 96 % | 40 % | 100 % |
-| `src/lib/ReentrancyGuardUpgradeable.sol` | **100 %** | 100 % | 100 % | 100 % |
-| `src/lib/SafeApprove.sol` | **100 %** | 100 % | 100 % | 100 % |
-| `src/lib/YieldSandwichGuard.sol` | **100 %** | 100 % | 100 % | 100 % |
-| `src/psm/LitePSM.sol` | **97.95 %** | 96.05 % | 73.08 % | 100 % |
-| `src/psm/RedemptionQueue.sol` | **100 %** | 99.25 % | 93.33 % | 100 % |
-| `src/token/OkuDollar.sol` | **98.34 %** | 97.26 % | 90.00 % | 97.50 % |
-| `src/token/OkuMoney.sol` | **100 %** | 100 % | 100 % | 100 % |
-| **Total** | **98.95 %** | 97.73 % | 86.32 % | 99.17 % |
-
-A CI gate in `.github/workflows/test.yml` fails the build if any `src/` file
-or the overall total drops below **95 % line coverage**.
-
-### Uncovered lines (intentional)
-
-The remaining uncovered lines are **defensive guards unreachable from
-the contracts as currently composed**. They are kept for
-future-proofing against changes to dependent contracts. Driving them
-in tests would require malicious mock contracts that misrepresent
-the multiplier or share-conversion semantics — a test surface we
-judged not worth the maintenance cost.
-
-| Location | Code | Why unreachable today |
-|---|---|---|
-| `LitePSM.sol` `mintOkuM` | `revert RoundTripDriftTooLarge` | The round-trip check is mathematically bounded above by `usdcAmount` for any well-behaved `okuMMultiplier()`. Defends against an OkuMoney variant whose multiplier mutates between reads inside one transaction — impossible under the current `setOkuMMultiplier` + yield-distribution-guard policy. |
-| `LitePSM.sol` `_redeemOkuMShared` | `revert OutputBelowMinimum` | `usdcAmount` is computed once. The floor `okuMFloor = (okuMAmount / dm) * dm` then `minUsdcExpected` is bounded above by `usdcAmount` by construction. Defends against an OkuMoney whose multiplier shifts during the same call. |
-| `LitePSM.sol` `mintUsdOku` | `revert RoundTripDriftTooLarge` | Mirror of the `mintOkuM` case for the wrap path. |
-| `OkuDollar.sol` `_update` | `UseWrapInstead` / `UseUnwrapInstead` / `OkuDollarDoesNotUseInternalUpdate` guards | `OkuDollar` overrides `transfer` / `transferFrom` to use share-based accounting; all supply changes go through `wrap()` / `unwrap()`, which manage `usdShares` directly and never call the inherited `_mint` / `_burn`. Since nothing in the contract invokes `_mint` or `_burn`, this `pure`, unconditionally-reverting override is unreachable today — it exists purely to halt any future refactor that accidentally routes through the inherited ERC-20 `_update` hook. |
-
-### Auditor checklist — sensitive functions
-
-1. **`OkuDollar.withdrawSurplus` post-withdrawal ratio math**
-   - `test_WithdrawSurplus_SucceedsAtExactFloor` — `postRatio == minCollateralRatio` (inclusive).
-   - `test_WithdrawSurplus_OneWeiBelowFloor_Reverts` — `postRatio == minCollateralRatio - 1 wei` → `BelowMinimumCollateral`.
-   - `test_WithdrawSurplus_ZeroObligations_UsesInfiniteRatio` — `obligations == 0` → `type(uint256).max`.
-   - `test_WithdrawSurplus_EventPostRatioMatchesView` — post-tx ratio observable matches `collateralizationRatio()`.
-
-2. **`LitePSM._redeemOkuMShared(okuMAtPsm=true)` branch**
-   - `test_RedeemUsdOku_OkuMAtPsmInstant_NoOkuMRedeemedEvent` — buffer-covered redemption suppresses `OkuMRedeemed`.
-   - `test_RedeemUsdOku_OkuMAtPsmQueued_OkuMRoutedToQueue` — buffer-drained redemption routes OkuM to the queue without pulling from user.
-
-3. **`RedemptionQueue.processQueue` TransferFailed soft-skip path**
-   - `test_ProcessQueue_TransferFailed_SoftSkipEmitsEvent` — blocked recipient → `RedemptionSkipped(idx, TransferFailed)`, OkuM stays in escrow, `totalQueuedOkuM` unchanged.
-   - `test_ProcessQueue_TransferFailed_NextEntryStillProcesses` — interleaved blocked + clean users.
-   - `test_ProcessQueue_TransferFailed_ThenRescueClearsIt` — soft-skip + `rescueQueueEntry` round trip.
-   - `test_ProcessQueue_AlreadyCleared_SoftSkipEmitsEvent`, `test_ProcessQueue_InsufficientFunds_EmitsEventAndBreaks` — companion skip paths.
-   - Backed by `MockUSDC.setBlocked` (`test/mocks/MockUSDC.sol`) which mirrors Circle USDC's revert-on-blacklist semantics.
-
-4. **`setNextUsdYieldRate` boundary conditions (`block.timestamp >= usdRateEnd`)**
-   - `test_SetNextUsdYieldRate_RevertAtExactEndBoundary` — `block.timestamp == usdRateEnd` → `RateAlreadyExpired`.
-   - `test_SetNextUsdYieldRate_RevertOneSecondPastEnd` — `block.timestamp == usdRateEnd + 1` → `RateAlreadyExpired`.
-   - `test_SetNextUsdYieldRate_SucceedsOneSecondBeforeEnd` — `block.timestamp == usdRateEnd - 1` → success.
-
-### Test harnesses
-
-Two test-only harness contracts expose `internal` library surface for
-last-mile branches:
-
-- `test/mocks/MathLibHarness.sol` — exposes `MathLib.rpow` so the
-  `x == 0` and `mul`-overflow branches of MakerDAO's `rpow` assembly
-  are reachable from Solidity.
-- `test/mocks/ReentrancyGuardHarness.sol` — exposes `nonReentrant`
-  so the `ReentrancyGuardReentrantCall` revert can be driven
-  directly.
-
-Neither is in any production import path.
-
-### Audit finding surfaced + remediated during coverage work
-
-While extending `MockUSDC` with `setBlocked` to drive the
-TransferFailed branch, `RedemptionQueue.processQueue` previously used
-the low-level `.call` pattern that treated a `transferFrom`
-returning `false` (without reverting) as success. Real Circle USDC's
-blacklist reverts, so production behaviour was safe, but a
-non-standard ERC-20 (or future USDC variant) that returns `false`
-would have silently drained queue entries without paying users.
-
-**Fix:** replaced the raw `.call` with `SafeERC20.trySafeTransferFrom`,
-which both (a) swallows reverts and (b) decodes the boolean return
-value. Tests now drive both shapes independently — revert (matches
-real USDC blacklist) and return-false (hypothetical non-standard
-USDC). The return-false test is the regression guard for this
-finding.
-
----
-
-## Dependencies — pinned for audit
-
-All `^` ranges in `package.json` have been replaced with exact
-versions, and the Foundry submodule pins in `foundry.lock` are
-aligned with the Node-side OpenZeppelin packages so both compile
-paths (Foundry, Hardhat) produce bytecode against identical sources.
-
-### Solidity sources
-
-| Library | Version | Source |
-|---|---|---|
-| `solc` (compiler) | `0.8.28` | `foundry.toml`, `hardhat.config.ts` |
-| `@openzeppelin/contracts` | `5.6.1` | `package.json` (Hardhat path) |
-| `@openzeppelin/contracts-upgradeable` | `5.6.1` | `package.json` (Hardhat path) |
-| `lib/openzeppelin-contracts` | `v5.6.1` @ `5fd1781b1454fd1ef8e722282f86f9293cacf256` | `foundry.lock` (Foundry path) |
-| `lib/openzeppelin-contracts-upgradeable` | `v5.6.1` @ `7bf4727aacdbfaa0f36cbd664654d0c9e1dc52bf` | `foundry.lock` (Foundry path) |
-| `lib/forge-std` | `v1.12.0` @ `7117c90c8cf6c68e5acce4f09a6b24715cea4de6` | `foundry.lock` |
-
-Both compile paths build against **OpenZeppelin v5.6.1**. The prior
-drift (Foundry on 5.5.0, Hardhat resolving to 5.4.0 from `^5.4.0`)
-is closed.
-
-### Node tooling
-
-Pinned exactly in `EVM/package.json`:
-
-| Package | Version |
+| Suite | Covers |
 |---|---|
-| `@nomicfoundation/hardhat-toolbox` | `6.1.2` |
-| `@openzeppelin/hardhat-upgrades` | `3.9.0` |
-| `@typechain/ethers-v6` | `0.5.1` |
-| `@typechain/hardhat` | `9.1.0` |
-| `ethers` | `6.16.0` |
-| `hardhat` | `2.28.6` |
-| `hardhat-deploy` | `0.12.4` |
-| `hardhat-deploy-ethers` | `0.4.2` |
-| `typechain` | `8.3.2` |
-| `typescript` | `5.6.3` |
-| `ts-node` | `10.9.2` |
-| `chai` | `4.5.0` |
-| `dotenv` | `17.2.3` |
-| `bs58` | `6.0.0` |
+| `ERC8056Conformance` | All four interface IDs; conversion round-trips; balance identities; `UIMultiplierUpdated` emission; the `uiMultiplier() == newUIMultiplier()` boundary contract |
+| `ValueDisplayParityTest` | `uiMultiplier == convertToAssets(1e18)` across the parameter space |
+| `AccrualTest` | Continuity across rate changes; halt at `rateEnd`; re-anchoring on `setYieldRate`; APR and duration cap rejections; `haltAccrual` |
+| `MaxSendTest` | The max-send rule against the real transfer path at low and high multiplier |
+| `TenYearAccrualTest` | Long-horizon simulation: overflow, precision drift, dust accumulation |
+| `MulDivOverflowTest` | `toUIAmount` at `MAX_MULTIPLIER` against a max-supply balance — the case the EIP reference implementation reverts on |
+| `QueueSkipPathsTest` | `AlreadyCleared`, `InsufficientFunds`, `TransferFailed` soft-skips, driven by `MockUSDC.setBlocked` (revert) and a return-false variant |
+| Fork tests | **Every intended integration, at both a low and a high multiplier.** A high-multiplier fork run is the only way to catch integrations that silently assume `multiplier ≈ 1e18`. |
 
-### OpenZeppelin 5.4 → 5.6.1 breaking-change review (audit-relevant)
+Foundry is the authoritative functional coverage; Hardhat is for fork-dependent and
+multi-contract scenario work. CI fails below 95% line coverage on any `src/` file, with
+100% required on `ScaledUIAmountUpgradeable` — small, pure, and on every pricing path.
 
-The following 5.6.0 breaking changes were reviewed against the
-OkuMoney contracts; **none affect us**:
+**Harnesses** (test-only, never in a production import path): `MathLibHarness` (exposes
+`rpow` so the `x == 0` and `mul`-overflow branches of MakerDAO's assembly are reachable);
+`ScaledUIHarness` (drives the multiplier to arbitrary values, including standard-legal
+ones this token forbids, so the PSM can be tested against a hostile-but-conformant
+counterparty); `MockScaledUIToken` (faithful port of the EIP reference implementation,
+used as a differential-testing oracle); `MockUSDC` (6-decimal, with `setBlocked`
+mirroring Circle's revert-on-blacklist semantics).
 
-- `Strings.escapeJSON` escape-range expansion — not used.
-- `ERC1155` single-element batch transfer callback change — not used.
-- `ERC1967Proxy` / `TransparentUpgradeableProxy` mandate initialization
-  during construction — we deploy UUPS proxies via
-  `@openzeppelin/hardhat-upgrades`, which always calls `initialize`
-  as part of `deployProxy`. Verified via the Hardhat integration
-  suite.
-- `ERC721` / `ERC1155` operator allowance changes — neither standard
-  is used.
-- `RLP` `encode(bytes32)` fixed-size change — not used.
-- `ERC4337Utils` / `WebAuthn` / `Memory` API changes —
-  account-abstraction and webauthn modules not used.
-- `Math`, `SafeERC20`, `AccessControl`, `Pausable`, `ERC20*`,
-  `UUPSUpgradeable`, `Initializable` — no behavioural changes
-  between 5.4 and 5.6.1 affecting our call sites. Storage layouts
-  within `5.x` are guaranteed compatible by the OpenZeppelin release
-  process.
+---
 
-### `npm audit` posture
+## Limitations
 
-`npm audit` reports vulnerabilities in transitive dev dependencies
-pulled in by `hardhat-deploy` and `@nomicfoundation/hardhat-toolbox`.
-These do NOT enter production bytecode — JavaScript dev tooling
-only — and have no impact on the audited Solidity contracts. Listed
-for transparency.
+**1. Centralized multiplier authority.** No timelock. `MAX_IMPLIED_APR`,
+`MAX_RATE_DURATION`, monotonicity, and `haltAccrual` bound the damage; role grants,
+upgrades, and buffer withdrawals remain unbounded beyond multisig custody.
+
+**2. No on-chain backing verification.** `totalAssets()` is derived from the multiplier,
+not measured. The value interface is exactly as trustworthy as the multiplier authority.
+Inherent to off-chain RWA backing, not a gap in the implementation.
+
+**3. USDC peg monitoring is off-chain.** No oracle gates the mint/redeem path on USDC's
+peg; the orchestrator monitors and pauses the PSM on a detected depeg. Note the
+asymmetry: no oracle on the input side, but `OkuMultiplierAdapter` makes this system a
+price *publisher* on the output side.
+
+**4. Monotonicity has no downward path.** Over-accrual relative to backing cannot be
+corrected on-chain.
+
+**5. ERC-8056 is a Draft.** IDs shift if any signature changes; the pending-multiplier
+extension could be redefined; the `rateEnd` reading of `newUIMultiplier` has no explicit
+blessing in the text. Re-conforming is a one-line change and a single-contract upgrade.
+
+**6. No $1-denominated raw unit.** Invoicing, payroll, and merchant flows require a
+multiplier lookup. Non-integrated surfaces show the raw count — graceful, but a real
+integration cost.
+
+**7. Allowance value drift.** Allowances are denominated in **raw** units, so a bounded
+approval's *dollar* value grows with the multiplier. A user who approved a fixed amount
+a year ago has granted more value than intended. Infinite approvals are unaffected.
+Mitigated by exposing `allowanceUI(owner, spender)` in the SDK and surfacing drifted
+approvals in the app; there is no contract-level fix that preserves ERC-20 semantics.
+
+**8. Max-send rounding hazard.** Inherent to any scaled-display token; mitigated by SDK
+design rather than eliminated.
+
+**9. `advanceHead` is permissionless.** No privileged effect — `queueHead` only moves
+forward, only past cleared slots. Gas-bounded by `maxSlots`. A privileged version adds
+no security and complicates the runbook.
+
+**10. EVM/SVM accrual granularity divergence.** EVM continuous, SVM stepwise by
+Token-2022 construction.
+
+---
+
+## Open questions
+
+1. **Continuous accrual under a step-based extension.** Is the `rateEnd` reading of `newUIMultiplier()` / `effectiveAt()` correct, or does the standard need to address continuously-accruing tokens? To be raised on the [Ethereum Magicians thread](https://ethereum-magicians.org/t/erc-8056-scaled-ui-amount-extension-for-erc-20-tokens/25899).
+2. **`MAX_IMPLIED_APR` and `MAX_RATE_DURATION`.** The first needs a real number; the second is a round-number convention. Together they define worst-case exposure to a compromised setter key.
+3. **`OKU_GUARDIAN` — warm or cold?** Warm gives a fast halt; cold makes the halt harder to abuse. A halt withholds yield from holders, which is not nothing.
+4. **Allowance drift.** Is an SDK-plus-app mitigation sufficient, or does this warrant something at the contract level?
+
+---
+
+## Deployment
+
+`scripts/deploy/index.ts` provisions every contract for a chain in one run and writes to
+a per-network address book. Proxies and implementations are CREATE2-deterministic via
+the [Arachnid factory](https://github.com/Arachnid/deterministic-deployment-proxy)
+(`0x4e59b44847b379578588920cA78FbF26c0B4956C`, present on every supported chain), so the
+same source tree, `DEPLOYMENT_VERSION`, and constructor args produce the same address on
+every chain. Salt: `keccak256("okumoney." + DEPLOYMENT_VERSION + "." + <name>)`.
+
+`v0.x` is pre-audit iteration (addresses may change across versions); `v1.0+` is reserved
+for post-audit. Bumping `DEPLOYMENT_VERSION` is one-way. Chains using real Circle USDC
+diverge from testnets using `MockUSDC`, since constructor args differ.
+
+**Networks:** `sepolia` (11155111), `opSepolia` (11155420), `baseSepolia` (84532),
+`arbSepolia` (421614), `bscTestnet` (97), `mainnet` (1), `optimism` (10),
+`arbitrum` (42161), `base` (8453), `bsc` (56).
+
+**Address book:** `scripts/config/addresses.json` (working; `fork:<chain>` namespaced so
+fork runs never overwrite live entries) and `../addresses.json` (canonical registry for
+the SDK and orchestrator, live deploys only, carrying `chainId`, `rpcUrl`, `explorer`,
+`contracts{}`, `standards[]`, `deployer`).
+
+```bash
+# Fork pre-flight
+FORK_NETWORK=base hh node                            # Terminal 1
+hh run scripts/deploy/index.ts --network localhost   # Terminal 2 — auto-detects chain
+
+# Live
+hh run scripts/deploy/index.ts --network base
+```
+
+Idempotent and resumable: `tryAttach` reuses any contract already in the address book
+whose address still has bytecode, so a partial-deploy failure can be re-run. Transient
+RPC errors — `nonce too low`, `replacement transaction underpriced`, BSC's
+`BAD_DATA: invalid address (value="")` pending-tx quirk, timeouts — are retried with
+exponential backoff (2s → 32s, five attempts) inside `withRetry`. A provider shim
+(`scripts/utils/rpcCompat.ts`) normalises BSC's pending-tx response shape before ethers'
+strict formatter sees it.
+
+### Upgrades
+
+```bash
+FORK_NETWORK=sepolia hh node                         # Terminal 1
+TARGETS=OkuDollar,LitePSM npm run upgrade            # Terminal 2 — rehearse
+TARGETS=OkuDollar,LitePSM npm run upgrade:sepolia    # When the diff is clean
+```
+
+`scripts/upgrade/index.ts` verifies the `*_UPGRADER` role before broadcasting, runs OZ's
+`prepareUpgrade` so a layout-breaking change aborts before any transaction, diffs
+pre/post invariant state (`uiMultiplier`, `newUIMultiplier`, `effectiveAt`,
+`convertToAssets(1e18)`, `supportsInterface(0xa60bf13d)`), and appends an audit trail
+with old/new implementation, tx hash, signer, and timestamp.
+
+---
+
+## Dependencies
+
+| Library | Version |
+|---|---|
+| `solc` | `0.8.28` |
+| `@openzeppelin/contracts` / `-upgradeable` | `5.6.1` |
+| `lib/openzeppelin-contracts` | `v5.6.1` @ `5fd1781b1454fd1ef8e722282f86f9293cacf256` |
+| `lib/openzeppelin-contracts-upgradeable` | `v5.6.1` @ `7bf4727aacdbfaa0f36cbd664654d0c9e1dc52bf` |
+| `lib/forge-std` | `v1.12.0` @ `7117c90c8cf6c68e5acce4f09a6b24715cea4de6` |
+
+Node tooling pinned exactly in `package.json`. There is no OpenZeppelin reference
+implementation of ERC-8056 to depend on — `ScaledUIAmountUpgradeable` is written against
+the EIP text. The only OZ surface beyond a standard ERC-20 is `ERC165Upgradeable` and
+`Math.mulDiv`, both in 5.6.1. `npm audit` findings are in transitive dev dependencies
+and do not enter production bytecode.
 
 ---
 
@@ -1013,5 +697,6 @@ for transparency.
 
 - **Workspace overview:** [`../README.md`](../README.md)
 - **Open issues:** [`../TRACKER.md`](../TRACKER.md)
-- **Accepted risks:** see "Accepted Risks" above
-- **SVM-side docs:** [`../SVM/README.md`](../SVM/README.md)
+- **SVM implementation:** [`../SVM/README.md`](../SVM/README.md)
+- **ERC-8056 (Draft):** https://eips.ethereum.org/EIPS/eip-8056
+- **ERC-8056 discussion:** https://ethereum-magicians.org/t/erc-8056-scaled-ui-amount-extension-for-erc-20-tokens/25899

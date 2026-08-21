@@ -3,11 +3,10 @@ pragma solidity 0.8.28;
 
 /**
  * @title Errors
- * @notice Shared error declarations used across multiple OkuMoney contracts.
+ * @notice Shared error declarations used across multiple OkuDollar contracts.
  * @dev Centralizing common errors keeps revert reasons consistent and avoids
  *      drift between contracts that all reject (e.g.) zero addresses or zero
- *      amounts. Contract-specific errors continue to live with their owning
- *      contract.
+ *      amounts. Contract-specific errors live with their owning contract.
  */
 library Errors {
     /// @notice An address parameter was the zero address.
@@ -16,9 +15,9 @@ library Errors {
     error ZeroAmount();
     /// @notice The caller's balance is below the requested amount.
     error InsufficientBalance();
-    /// @notice A monotonic multiplier value did not strictly increase.
-    /// @dev Reverts on both backward moves and no-op (equal-value) updates so a
-    ///      no-op call cannot stamp the sandwich-lock block without moving the
-    ///      multiplier. See {OkuMoney.setOkuMMultiplier}.
+    /// @notice A rate below `PRECISION` was supplied, which would decrease the multiplier.
+    /// @dev The UI multiplier is monotonic by deliberate narrowing of ERC-8056,
+    ///      which explicitly supports reverse splits. See EVM/README.md
+    ///      "Monotonic" and Limitation 4.
     error MultiplierCannotDecrease();
 }

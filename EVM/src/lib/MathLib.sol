@@ -7,30 +7,45 @@ import {Constants} from "./Constants.sol";
 
 /**
  * @title MathLib
- * @notice Shared math utilities for OkuMoney contracts
- * @dev See Constants.sol for terminology legend.
+ * @notice Shared math for the OkuDollar contracts. See Constants.sol for the
+ *         terminology legend.
  *
- *      ROUNDING POLICY: All conversion functions use OpenZeppelin
- *      `Math.mulDiv` for full-precision 512-bit intermediate computation and
- *      explicit `Math.Rounding` semantics. Floor is the default direction;
- *      the only Ceil site in the protocol is `OkuDollar.unwrap`'s
- *      `sharesToBurn` computation, which favors the vault on user
- *      withdrawals (ERC-4626 convention). `rpow` retains MakerDAO's
- *      half-up assembly rounding because it has no direct `mulDiv`
- *      equivalent.
+ * @dev ROUNDING POLICY — stated once, here, and nowhere contradicted:
+ *      **every conversion rounds against the caller and in favour of the
+ *      protocol.** All four conversion helpers below floor. The caller absorbs
+ *      the truncation.
+ *
+ *      Consequence: `toUiAmount` and `fromUiAmount` are NOT inverses.
+ *      `fromUiAmount(toUiAmount(x))` lies in `[x - 1, x]`. Integrators computing
+ *      a max-send MUST derive from raw `balanceOf`; see README "max-send rule".
+ *
+ *      WHY `Math.mulDiv` RATHER THAN `a * b / c`:
+ *        1. Explicit rounding control. The policy above cannot be expressed as
+ *           `*` and `/` in one reviewable place; `Math.Rounding.Floor` can.
+ *        2. `toUiAmount`/`fromUiAmount` are reachable from public views that
+ *           accept an arbitrary `uint256`, which no supply bound constrains.
+ *        3. This library is shared with `OkuMultiplierAdapter`, which may read a
+ *           third-party ERC-8056 token whose multiplier is unbounded.
+ *
+ *      NOT because this token's own balances could overflow: `MAX_TOTAL_SUPPLY *
+ *      MAX_MULTIPLIER = 1e57` sits ~1e20x below `type(uint256).max`. `mulDiv`
+ *      extends the safe input domain by exactly `PRECISION` (1e18x) relative to
+ *      a naive multiply — it does not make the domain unbounded. See
+ *      `MulDivBoundsTest`.
  */
 library MathLib {
     /**
-     * @notice Raise x to the power of n, modulo base b (exponentiation by squaring)
+     * @notice Raise `x` to the power `n`, in fixed point base `b`.
      * @dev Adapted verbatim from MakerDAO's `rpow` — battle-tested since 2017.
      *      Taken from https://github.com/makerdao/dss/blob/master/src/pot.sol
-     *      Used by OkuDollar for continuous yield accrual via usdMultiplier().
-     *      OkuMoney updates its multiplier discretely (setOkuMMultiplier /
-     *      distributeYield) and does NOT use rpow.
-     * @param x Base value (typically ratePerSecond, scaled by PRECISION)
-     * @param n Exponent (typically elapsed seconds)
-     * @param b Precision base (typically 1e18)
-     * @return z Result of x^n / b^(n-1)
+     *      Retains MakerDAO's half-up assembly rounding (it has no direct
+     *      `mulDiv` equivalent) and its own overflow checks on the squaring path.
+     *
+     *      Used by `OkuDollar.uiMultiplier()` for continuous accrual.
+     * @param x Base — `ratePerSecond`, scaled by `b`.
+     * @param n Exponent — elapsed seconds.
+     * @param b Fixed-point base, always `Constants.PRECISION` here.
+     * @return z `x^n / b^(n-1)`.
      */
     function rpow(uint256 x, uint256 n, uint256 b) internal pure returns (uint256 z) {
         assembly {
@@ -66,46 +81,33 @@ library MathLib {
     }
 
     /**
-     * @notice Convert OkuMoney token amount to dollar value
-     * @param okuMAmount Amount of OkuMoney tokens
-     * @param okuMMultiplier Current OkuMoney multiplier (dollar value per token, scaled by PRECISION)
-     * @return Dollar value in 18 decimals
+     * @notice Convert a raw token amount to its UI (dollar) amount. ERC-8056 `toUIAmount`.
+     * @param rawAmount Raw token count (18 dp).
+     * @param uiMultiplier Current UI multiplier (18 dp).
+     * @return UI amount (18 dp), floored.
      */
-    function okuMToDollars(
-        uint256 okuMAmount,
-        uint256 okuMMultiplier
-    )
-        internal
-        pure
-        returns (uint256)
-    {
-        return Math.mulDiv(okuMAmount, okuMMultiplier, Constants.PRECISION, Math.Rounding.Floor);
+    function toUiAmount(uint256 rawAmount, uint256 uiMultiplier) internal pure returns (uint256) {
+        return Math.mulDiv(rawAmount, uiMultiplier, Constants.PRECISION, Math.Rounding.Floor);
     }
 
     /**
-     * @notice Convert dollar value to OkuMoney token amount
-     * @param dollarValue Dollar value in 18 decimals
-     * @param okuMMultiplier Current OkuMoney multiplier (dollar value per token, scaled by PRECISION)
-     * @return Amount of OkuMoney tokens
+     * @notice Convert a UI (dollar) amount to a raw token amount. ERC-8056 `fromUIAmount`.
+     * @dev Floors. This is the direction that makes a naive max-send leave dust
+     *      rather than revert; flipping it to Ceil reintroduces the failure the
+     *      max-send rule exists to prevent. Pinned by `MaxSendTest`.
+     * @param uiAmount UI amount (18 dp).
+     * @param uiMultiplier Current UI multiplier (18 dp, must be non-zero).
+     * @return Raw token count (18 dp), floored.
      */
-    function dollarsToOkuM(
-        uint256 dollarValue,
-        uint256 okuMMultiplier
-    )
-        internal
-        pure
-        returns (uint256)
-    {
-        return Math.mulDiv(dollarValue, Constants.PRECISION, okuMMultiplier, Math.Rounding.Floor);
+    function fromUiAmount(uint256 uiAmount, uint256 uiMultiplier) internal pure returns (uint256) {
+        return Math.mulDiv(uiAmount, Constants.PRECISION, uiMultiplier, Math.Rounding.Floor);
     }
 
     /**
-     * @notice Convert 18-decimal dollar value to USDC's native decimal representation
-     * @param dollarValue18 Dollar value in 18 decimals
-     * @param decimalMultiplier 10**(18 - usdcDecimals); supplied by the caller from
-     *        an immutable / storage value resolved at init time via
-     *        IERC20Metadata(usdc).decimals(). For Circle USDC this is 1e12.
-     * @return USDC amount in its native decimals
+     * @notice Convert an 18-decimal dollar value to USDC's native decimals.
+     * @param dollarValue18 Dollar value (18 dp).
+     * @param decimalMultiplier `10 ** (18 - usdcDecimals)`; `1e12` for Circle USDC.
+     * @return USDC amount in native decimals, floored.
      */
     function dollarsToUsdc(
         uint256 dollarValue18,
@@ -119,10 +121,10 @@ library MathLib {
     }
 
     /**
-     * @notice Convert USDC amount (native decimals) to 18-decimal dollar value
-     * @param usdcAmount USDC amount in its native decimals
-     * @param decimalMultiplier 10**(18 - usdcDecimals); see {dollarsToUsdc} for sourcing.
-     * @return Dollar value in 18 decimals
+     * @notice Convert a USDC amount (native decimals) to an 18-decimal dollar value.
+     * @param usdcAmount USDC amount in native decimals.
+     * @param decimalMultiplier `10 ** (18 - usdcDecimals)`; `1e12` for Circle USDC.
+     * @return Dollar value (18 dp).
      */
     function usdcToDollars(
         uint256 usdcAmount,
@@ -133,52 +135,5 @@ library MathLib {
         returns (uint256)
     {
         return usdcAmount * decimalMultiplier;
-    }
-
-    /**
-     * @notice Compute the OkuDollar share count produced by wrapping `okuMAmount`.
-     * @dev Single source of truth for `OkuDollar.wrap`'s share formula.
-     *      shares = mulDiv(okuMAmount, okuMMultiplier, usdMultiplier, Floor)
-     * @param okuMAmount OkuMoney token amount being wrapped
-     * @param okuMMult Current okuMMultiplier
-     * @param usdMult Current usdMultiplier (must be non-zero)
-     * @return shares Internal OkuDollar share count credited to the receiver
-     */
-    function wrappedSharesFromOkuM(
-        uint256 okuMAmount,
-        uint256 okuMMult,
-        uint256 usdMult
-    )
-        internal
-        pure
-        returns (uint256 shares)
-    {
-        return Math.mulDiv(okuMAmount, okuMMult, usdMult, Math.Rounding.Floor);
-    }
-
-    /**
-     * @notice Compute the dollar-denominated UsdOku amount minted when wrapping `okuMAmount`.
-     * @dev Replicates `OkuDollar.wrap`'s two-step truncation exactly:
-     *        shares    = mulDiv(okuMAmount, okuMMultiplier, usdMultiplier, Floor)
-     *        usdMinted = mulDiv(shares,     usdMultiplier,  PRECISION,     Floor)
-     *      Used by both `OkuDollar.wrap` and `LitePSM.mintUsdOku` so the slippage
-     *      floor passed to `wrap` matches what `wrap` actually produces — eliminating
-     *      reverts driven solely by integer-division rounding at non-even multipliers.
-     * @param okuMAmount OkuMoney token amount being wrapped
-     * @param okuMMult Current okuMMultiplier
-     * @param usdMult Current usdMultiplier (must be non-zero)
-     * @return usdMinted Dollar value (18 decimals) the wrap would credit
-     */
-    function okuMToWrappedUsd(
-        uint256 okuMAmount,
-        uint256 okuMMult,
-        uint256 usdMult
-    )
-        internal
-        pure
-        returns (uint256 usdMinted)
-    {
-        uint256 shares = Math.mulDiv(okuMAmount, okuMMult, usdMult, Math.Rounding.Floor);
-        return Math.mulDiv(shares, usdMult, Constants.PRECISION, Math.Rounding.Floor);
     }
 }

@@ -1,7 +1,7 @@
 /**
- * Set the OkuMoney global supply cap (`OKUM_CAP_MANAGER` role required).
+ * Set the OkuDollar global supply cap (`OKU_CAP_MANAGER` role required).
  *
- * Calls `OkuMoney.setMaxSupply(newMaxSupply)`. The contract rejects values
+ * Calls `OkuDollar.setMaxSupply(newMaxSupply)`. The contract rejects values
  * below current totalSupply. Cap raises are the typical operation; cap
  * lowers are only safe when totalSupply has room.
  *
@@ -45,14 +45,14 @@ async function main() {
   const newMaxSupply = BigInt(newMaxStr);
   if (newMaxSupply <= 0n) throw new Error("--maxSupply must be > 0");
 
-  const okuMoneyAddr = loadAddress(ctx.bookKey, "OkuMoney");
-  if (!okuMoneyAddr) throw new Error(`Missing OkuMoney in address book for ${ctx.bookKey}`);
+  const okuDollarAddr = loadAddress(ctx.bookKey, "OkuDollar");
+  if (!okuDollarAddr) throw new Error(`Missing OkuDollar in address book for ${ctx.bookKey}`);
 
   const [signer] = await ethers.getSigners();
-  const okuMoney = (await getDeployedContract("OkuMoney", okuMoneyAddr)).connect(signer) as Contract;
+  const okuDollar = (await getDeployedContract("OkuDollar", okuDollarAddr)).connect(signer) as Contract;
 
-  const currentMax = await (okuMoney as any).maxSupply();
-  const currentSupply = await (okuMoney as any).totalSupply();
+  const currentMax = await (okuDollar as any).maxSupply();
+  const currentSupply = await (okuDollar as any).totalSupply();
 
   logger.info(`Signer (capManager): ${await signer.getAddress()}`);
   logger.info(`Current maxSupply:   ${ethers.formatEther(currentMax)} OkuM`);
@@ -70,11 +70,11 @@ async function main() {
     return;
   }
 
-  const tx = await (okuMoney as any).setMaxSupply(newMaxSupply);
+  const tx = await (okuDollar as any).setMaxSupply(newMaxSupply);
   const receipt = await tx.wait(1);
   logger.success(`setMaxSupply tx: ${receipt.hash}`);
 
-  const confirmed = await (okuMoney as any).maxSupply();
+  const confirmed = await (okuDollar as any).maxSupply();
   logger.success(`Confirmed maxSupply: ${ethers.formatEther(confirmed)} OkuM`);
 }
 

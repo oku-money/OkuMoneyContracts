@@ -32,24 +32,16 @@ export type StateSnapshot = Record<string, string>;
 //   - Pause state preserved.
 
 export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
-  const [
-    okuMoney,
-    okuDollar,
-    usdc,
-    redemptionQueue,
-    usdcDecimalMultiplier,
-    paused,
-  ] = await Promise.all([
-    c.okuMoney(),
-    c.okuDollar(),
-    c.usdc(),
-    c.redemptionQueue(),
-    c.usdcDecimalMultiplier(),
-    c.paused(),
-  ]);
+  const [okuDollar, usdc, redemptionQueue, usdcDecimalMultiplier, paused] =
+    await Promise.all([
+      c.okuDollar(),
+      c.usdc(),
+      c.redemptionQueue(),
+      c.usdcDecimalMultiplier(),
+      c.paused(),
+    ]);
 
   return {
-    okuMoney: String(okuMoney),
     okuDollar: String(okuDollar),
     usdc: String(usdc),
     redemptionQueue: String(redemptionQueue),
@@ -59,91 +51,80 @@ export async function readLitePSMState(c: Contract): Promise<StateSnapshot> {
 }
 
 // ============================================================================
-// OkuDollar (vault)
+// OkuDollar (rUSDOku) — the token
 // ============================================================================
 //
 // Invariants exercised on upgrade:
-//   - Wired okuMoney preserved.
-//   - Rate-and-share storage (usdBaseMultiplier, usdRatePerSecond, usdLastAccrualTime,
-//     usdRateEnd, usdPendingRatePerSecond, totalUsdShares, minCollateralRatio) preserved.
+//   - ERC-20 identity (name, symbol, decimals) preserved.
+//   - The value-layer anchor (asset, usdcDecimalMultiplier) preserved. These are
+//     resolved once at init and are the single source of truth the PSM and queue
+//     cross-assert against; if either moved, pricing would silently diverge.
+//   - The full multiplier trajectory (baseMultiplier, ratePerSecond,
+//     lastAccrualTime, rateEnd) preserved.
+//   - Supply cap and current supply preserved.
 //   - Pause state preserved.
+//   - ERC-165 advertisement of ERC-8056 preserved. If an upgrade dropped this,
+//     every wallet doing capability detection would silently fall back to raw
+//     balances with no indication why — a UX regression with no on-chain symptom.
 //
-// We deliberately *do not* snapshot `usdMultiplier()` because it is computed from
-// (base, rate, elapsed) at read time — if rate > PRECISION it will drift between
-// the pre- and post-snapshot reads even with zero storage change. The underlying
-// storage fields above are the right things to pin.
+// We deliberately do NOT snapshot `uiMultiplier()` itself: it is computed from
+// (baseMultiplier, ratePerSecond, elapsed) at read time, so with a live rate it
+// legitimately differs between the pre- and post-upgrade reads even with zero
+// storage change. Pinning the four storage fields is both stricter and stable.
+//
+// `newUIMultiplier()` IS snapshotted: it is a pure function of stored state with
+// no `block.timestamp` term, so it must be bit-identical across an impl swap.
+
+const IID_SCALED_UI_CORE = "0xa60bf13d";
 
 export async function readOkuDollarState(c: Contract): Promise<StateSnapshot> {
   const [
-    okuMoney,
-    usdBaseMultiplier,
-    usdRatePerSecond,
-    usdLastAccrualTime,
-    usdRateEnd,
-    usdPendingRatePerSecond,
-    totalUsdShares,
-    minCollateralRatio,
+    name,
+    symbol,
+    decimals,
+    asset,
+    usdcDecimalMultiplier,
+    baseMultiplier,
+    ratePerSecond,
+    lastAccrualTime,
+    rateEnd,
+    newUIMultiplier,
+    maxSupply,
+    totalSupply,
     paused,
+    supportsScaledUi,
   ] = await Promise.all([
-    c.okuMoney(),
-    c.usdBaseMultiplier(),
-    c.usdRatePerSecond(),
-    c.usdLastAccrualTime(),
-    c.usdRateEnd(),
-    c.usdPendingRatePerSecond(),
-    c.totalUsdShares(),
-    c.minCollateralRatio(),
-    c.paused(),
-  ]);
-
-  return {
-    okuMoney: String(okuMoney),
-    usdBaseMultiplier: usdBaseMultiplier.toString(),
-    usdRatePerSecond: usdRatePerSecond.toString(),
-    usdLastAccrualTime: usdLastAccrualTime.toString(),
-    usdRateEnd: usdRateEnd.toString(),
-    usdPendingRatePerSecond: usdPendingRatePerSecond.toString(),
-    totalUsdShares: totalUsdShares.toString(),
-    minCollateralRatio: minCollateralRatio.toString(),
-    paused: String(paused),
-  };
-}
-
-// ============================================================================
-// OkuMoney
-// ============================================================================
-//
-// Invariants exercised on upgrade:
-//   - ERC20 identity (name, symbol, decimals) preserved.
-//   - Supply cap (maxSupply) and current totalSupply preserved.
-//   - okuMMultiplier — this is rebase-style derived state. Like
-//     OkuDollar.usdMultiplier(), it CAN drift between two reads when a non-zero
-//     rate is being applied. We deliberately do NOT snapshot it; the underlying
-//     storage fields are pinned indirectly via totalSupply + maxSupply.
-//   - Pause state preserved.
-//
-// We do not snapshot DEFAULT_ADMIN_ROLE / OKUM_MINTER role grants here because
-// OZ AccessControl's `hasRole` requires a target address — there's no
-// "list all role holders" call. The deploy script's role configuration is
-// orthogonal to an impl-only upgrade and would not be touched by it.
-
-export async function readOkuMoneyState(c: Contract): Promise<StateSnapshot> {
-  const [name, symbol, decimals, maxSupply, totalSupply, paused] = await Promise.all([
     c.name(),
     c.symbol(),
     c.decimals(),
+    c.asset(),
+    c.usdcDecimalMultiplier(),
+    c.baseMultiplier(),
+    c.ratePerSecond(),
+    c.lastAccrualTime(),
+    c.rateEnd(),
+    c.newUIMultiplier(),
     c.maxSupply(),
     c.totalSupply(),
     c.paused(),
+    c.supportsInterface(IID_SCALED_UI_CORE),
   ]);
 
   return {
     name: String(name),
     symbol: String(symbol),
     decimals: decimals.toString(),
+    asset: String(asset),
+    usdcDecimalMultiplier: usdcDecimalMultiplier.toString(),
+    baseMultiplier: baseMultiplier.toString(),
+    ratePerSecond: ratePerSecond.toString(),
+    lastAccrualTime: lastAccrualTime.toString(),
+    rateEnd: rateEnd.toString(),
+    newUIMultiplier: newUIMultiplier.toString(),
     maxSupply: maxSupply.toString(),
     totalSupply: totalSupply.toString(),
     paused: String(paused),
+    supportsScaledUi: String(supportsScaledUi),
   };
 }
 
@@ -152,44 +133,37 @@ export async function readOkuMoneyState(c: Contract): Promise<StateSnapshot> {
 // ============================================================================
 //
 // Invariants exercised on upgrade:
-//   - Wired addresses (okuMoney, usdc) preserved.
-//   - usdcDecimalMultiplier preserved (resolved once at init from IERC20Metadata).
-//   - Queue head/tail counters and totalQueuedOkuM preserved (an impl upgrade
-//     must not advance or reset the queue cursor).
+//   - Wired addresses (okuDollar, usdc) preserved.
+//   - usdcDecimalMultiplier preserved (cross-asserted against the token at init).
+//   - Queue head/tail counters and totalQueuedRaw preserved (an impl upgrade must
+//     not advance or reset the queue cursor, nor lose track of escrow).
 //
 // RedemptionQueue does NOT inherit PausableUpgradeable — confirmed against
 // src/psm/RedemptionQueue.sol. No paused() field is snapshotted.
 
 export async function readRedemptionQueueState(c: Contract): Promise<StateSnapshot> {
-  const [okuMoney, usdc, usdcDecimalMultiplier, queueHead, queueTail, totalQueuedOkuM] =
+  const [okuDollar, usdc, usdcDecimalMultiplier, queueHead, queueTail, totalQueuedRaw] =
     await Promise.all([
-      c.okuMoney(),
+      c.okuDollar(),
       c.usdc(),
       c.usdcDecimalMultiplier(),
       c.queueHead(),
       c.queueTail(),
-      c.totalQueuedOkuM(),
+      c.totalQueuedRaw(),
     ]);
 
   return {
-    okuMoney: String(okuMoney),
+    okuDollar: String(okuDollar),
     usdc: String(usdc),
     usdcDecimalMultiplier: usdcDecimalMultiplier.toString(),
     queueHead: queueHead.toString(),
     queueTail: queueTail.toString(),
-    totalQueuedOkuM: totalQueuedOkuM.toString(),
+    totalQueuedRaw: totalQueuedRaw.toString(),
   };
 }
 
 // ============================================================================
 // OkuBridge / OkuBridgeRouter
-// ============================================================================
-//
-// State readers for OkuBridge and OkuBridgeRouter were removed in the noBridge
-// refactor. If a live deployment still has those proxies on-chain and an
-// upgrade is required, re-add the readers (and the corresponding STATE_READERS
-// entries) referencing the master-branch implementations.
-
 // ============================================================================
 // Registry
 // ============================================================================
@@ -200,7 +174,6 @@ export async function readRedemptionQueueState(c: Contract): Promise<StateSnapsh
  * rather than silently skipping the diff.
  */
 export const STATE_READERS: Record<string, (c: Contract) => Promise<StateSnapshot>> = {
-  OkuMoney: readOkuMoneyState,
   OkuDollar: readOkuDollarState,
   RedemptionQueue: readRedemptionQueueState,
   LitePSM: readLitePSMState,

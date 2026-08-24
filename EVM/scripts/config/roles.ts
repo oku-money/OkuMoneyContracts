@@ -42,6 +42,12 @@ export const ROLES = {
   PSM_QUEUE_PROCESSOR: h("PSM_QUEUE_PROCESSOR"),
   PSM_BUFFER_DEPOSITOR: h("PSM_BUFFER_DEPOSITOR"),
   PSM_BUFFER_WITHDRAWER: h("PSM_BUFFER_WITHDRAWER"),
+  /**
+   * Sets the `tin` / `tout` fee schedule. Belongs on the same cold key as
+   * `OKU_CAP_MANAGER` — economic policy — but must be its own PSM-namespaced
+   * role because AccessControl mappings are per-contract.
+   */
+  PSM_FEE_MANAGER: h("PSM_FEE_MANAGER"),
 
   // ============ RedemptionQueue ============
   QUEUE_UPGRADER: h("QUEUE_UPGRADER"),

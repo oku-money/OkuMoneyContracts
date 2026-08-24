@@ -214,6 +214,25 @@ contract LitePSMTest is BaseTest {
         vm.stopPrank();
     }
 
+    /// @notice `redeemUiAmount` carries `whenNotPaused` too, and previously had
+    ///         no test covering it — the sibling `redeem` case above was the only
+    ///         pause assertion on the redemption surface. Pinned here so the
+    ///         second entrypoint cannot silently lose its gate.
+    function test_RedeemUiAmount_WhenPausedReverts() public {
+        _seedBuffer(1000e6);
+        uint256 rawOut = _psmMint(user1, 100e6);
+        uint256 uiBalance = token.balanceOfUI(user1);
+
+        vm.prank(psmPauser);
+        litePsm.pause();
+
+        vm.startPrank(user1);
+        token.approve(address(litePsm), rawOut);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        litePsm.redeemUiAmount(uiBalance);
+        vm.stopPrank();
+    }
+
     // ============ Redeem: queue path ============
 
     function test_Redeem_QueuesWhenBufferEmpty() public {

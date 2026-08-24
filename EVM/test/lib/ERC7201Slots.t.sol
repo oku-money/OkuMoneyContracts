@@ -49,6 +49,17 @@ contract ERC7201SlotsTest is Test {
         );
     }
 
+    /// @notice The cross-chain sync window lives in its own namespace on
+    ///         `OkuDollar`, deliberately not inside `ScaledUIAmount` — that
+    ///         library sits on every pricing path and is held at 100% coverage,
+    ///         so it should not carry storage for a concern it does not own.
+    function test_SyncWindowSlot() public pure {
+        assertEq(
+            _derive("okumoney.storage.SyncWindow"),
+            0xf060659b9b87033111ee98a1780759ec75c780b1b57099783a2cb524034dd300
+        );
+    }
+
     /// @notice Must remain byte-identical to OZ 5.x so the local upgradeable
     ///         reentrancy guard stays slot-compatible with the canonical one.
     function test_ReentrancyGuardSlot() public pure {
@@ -60,11 +71,12 @@ contract ERC7201SlotsTest is Test {
 
     /// @notice All namespaces are distinct — no two structs can alias.
     function test_AllSlotsDistinct() public pure {
-        bytes32[5] memory slots = [
+        bytes32[6] memory slots = [
             _derive("okumoney.storage.ScaledUIAmount"),
             _derive("okumoney.storage.OkuDollarV2"),
             _derive("okumoney.storage.LitePSMV2"),
             _derive("okumoney.storage.RedemptionQueueV2"),
+            _derive("okumoney.storage.SyncWindow"),
             _derive("openzeppelin.storage.ReentrancyGuard")
         ];
         for (uint256 i = 0; i < slots.length; ++i) {
@@ -81,5 +93,6 @@ contract ERC7201SlotsTest is Test {
         assertEq(uint256(_derive("okumoney.storage.OkuDollarV2")) & 0xff, 0);
         assertEq(uint256(_derive("okumoney.storage.LitePSMV2")) & 0xff, 0);
         assertEq(uint256(_derive("okumoney.storage.RedemptionQueueV2")) & 0xff, 0);
+        assertEq(uint256(_derive("okumoney.storage.SyncWindow")) & 0xff, 0);
     }
 }

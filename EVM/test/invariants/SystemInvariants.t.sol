@@ -33,6 +33,7 @@ contract SystemInvariantsTest is BaseTest {
             bufferDepositor,
             queueProcessor,
             minter,
+            capManager,
             actors
         );
 
@@ -85,6 +86,28 @@ contract SystemInvariantsTest is BaseTest {
 
     function invariant_ImpliedAprWithinCap() public view {
         assertLe(token.impliedAprBps(), Constants.MAX_IMPLIED_APR);
+    }
+
+    // ============ Cross-chain sync window ============
+
+    /// @notice The window can never outlive its bound, from any reachable state.
+    ///
+    /// @dev This is the property that keeps the mechanism from degenerating into
+    ///      an unbounded pause on a warmer key. The handler drives
+    ///      `beginSyncWindow` / `endSyncWindow` / `setSyncWindowDuration` and
+    ///      `setYieldRate` (which arms implicitly) in arbitrary interleavings, so
+    ///      if any path could stack or extend a window past `MAX_SYNC_WINDOW`
+    ///      the fuzzer should find it.
+    function invariant_SyncWindowWithinBound() public view {
+        uint256 lockedUntil = token.syncLockedUntil();
+        if (lockedUntil > block.timestamp) {
+            assertLe(
+                lockedUntil - block.timestamp,
+                Constants.MAX_SYNC_WINDOW,
+                "sync window exceeded its ceiling"
+            );
+        }
+        assertLe(token.syncWindowDuration(), Constants.MAX_SYNC_WINDOW);
     }
 
     // ============ Display / value coherence ============

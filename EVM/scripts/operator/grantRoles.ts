@@ -153,6 +153,7 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
     "PSM_QUEUE_PROCESSOR",
     "PSM_BUFFER_DEPOSITOR",
     "PSM_BUFFER_WITHDRAWER",
+    "PSM_FEE_MANAGER",
   ],
   // NOTE: QUEUE_PSM intentionally excluded — must stay on the LitePSM proxy.
   RedemptionQueue: [

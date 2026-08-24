@@ -136,4 +136,34 @@ library MathLib {
     {
         return usdcAmount * decimalMultiplier;
     }
+
+    /**
+     * @notice Fee charged on `gross` at `feeBps`, rounded UP.
+     * @dev Rounds toward the protocol, per the same policy the conversion
+     *      helpers follow. A floored fee would let a stream of dust-sized
+     *      operations extract the rounding remainder.
+     *
+     *      Short-circuits at `feeBps == 0` so the disabled-fee path is exactly
+     *      free and cannot introduce a rounding difference — that is what makes
+     *      "fees ship inert" a bit-for-bit claim rather than an approximation.
+     *
+     *      SVM mirror: `oku_shared::math::fee_amount`.
+     */
+    function feeAmount(uint256 gross, uint256 feeBps) internal pure returns (uint256) {
+        if (feeBps == 0) return 0;
+        return Math.mulDiv(gross, feeBps, Constants.BASIS_POINTS, Math.Rounding.Ceil);
+    }
+
+    /**
+     * @notice `gross` less the ceil-rounded fee at `feeBps`.
+     * @dev Callers must reject a zero result rather than settling it: a
+     *      dust-sized `gross` can have its entire value rounded into the fee,
+     *      and consuming the user's tokens for a zero transfer would be theft
+     *      rather than a fee.
+     *
+     *      SVM mirror: `oku_shared::math::apply_fee`.
+     */
+    function applyFee(uint256 gross, uint256 feeBps) internal pure returns (uint256) {
+        return gross - feeAmount(gross, feeBps);
+    }
 }

@@ -45,6 +45,22 @@ contract RedemptionQueue is
 
     struct QueueEntry {
         address user;
+        /// @dev The `tout` (bps) prevailing when this entry was enqueued.
+        ///
+        ///      Snapshotted rather than read at processing time so a later fee
+        ///      change cannot retroactively tax users already waiting — they were
+        ///      quoted this rate when they joined.
+        ///
+        ///      Declared immediately after `user` so it occupies the 96 free bits
+        ///      already left in that slot: the entry still costs three slots, so
+        ///      the snapshot is storage-free. `uint16` holds 65535 against a
+        ///      `MAX_FEE_BPS` of 100.
+        ///
+        ///      NB: the separate slot-packing optimisation tracked for this struct
+        ///      (`uint96 rawAmount` + `uint48 timestamp`) is deliberately NOT
+        ///      bundled here — it introduces a real ceiling on a single entry and
+        ///      belongs in its own change.
+        uint16 toutBps;
         uint256 rawAmount;
         uint256 timestamp;
     }
@@ -93,6 +109,8 @@ contract RedemptionQueue is
     error DecimalMultiplierMismatch(uint256 expected, uint256 derived);
     /// @notice `sweepExcess` was called with no donated surplus to sweep.
     error NoExcessToSweep();
+    /// @notice Supplied `toutBps` exceeds `MAX_FEE_BPS`.
+    error FeeAboveMaximum(uint256 requested, uint256 maximum);
 
     // ============ Events ============
 
@@ -195,9 +213,14 @@ contract RedemptionQueue is
 
     /// @notice Record a queued redemption. Record-only.
     /// @dev The PSM transfers the tokens in before calling this.
+    /// @param toutBps The redemption fee prevailing now, snapshotted so a later
+    ///        fee change cannot retroactively tax this entry. Bounded by
+    ///        `MAX_FEE_BPS` at the PSM's `setFees`, re-asserted here because this
+    ///        is an external entrypoint and the cast below must not truncate.
     function enqueue(
         address user,
-        uint256 rawAmount
+        uint256 rawAmount,
+        uint256 toutBps
     )
         external
         onlyRole(Roles.QUEUE_PSM)
@@ -205,10 +228,21 @@ contract RedemptionQueue is
     {
         if (user == address(0)) revert Errors.ZeroAddress();
         if (rawAmount == 0) revert Errors.ZeroAmount();
+        if (toutBps > Constants.MAX_FEE_BPS) {
+            revert FeeAboveMaximum(toutBps, Constants.MAX_FEE_BPS);
+        }
 
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         index = $.queueTail;
-        $.queue[index] = QueueEntry({user: user, rawAmount: rawAmount, timestamp: block.timestamp});
+        $.queue[index] = QueueEntry({
+            user: user,
+            // casting to 'uint16' is safe because the bound check above caps
+            // `toutBps` at `MAX_FEE_BPS` (100).
+            // forge-lint: disable-next-line(unsafe-typecast)
+            toutBps: uint16(toutBps),
+            rawAmount: rawAmount,
+            timestamp: block.timestamp
+        });
         $.queueTail = index + 1;
         $.totalQueuedRaw += rawAmount;
 
@@ -252,7 +286,12 @@ contract RedemptionQueue is
             }
 
             uint256 uiAmount = MathLib.toUiAmount(entry.rawAmount, multiplier);
-            uint256 usdcAmount = MathLib.dollarsToUsdc(uiAmount, decimalMultiplier);
+            // Priced at the multiplier now (so the holder keeps the yield they
+            // earned while waiting) but at the `tout` snapshotted when they
+            // joined the queue (so a fee change since then cannot claw value
+            // back from them).
+            uint256 usdcAmount =
+                MathLib.applyFee(MathLib.dollarsToUsdc(uiAmount, decimalMultiplier), entry.toutBps);
 
             if (usdcAmount > available) {
                 emit RedemptionSkipped(i, RedemptionSkipReason.InsufficientFunds);
@@ -367,6 +406,14 @@ contract RedemptionQueue is
     }
 
     /// @notice Total USDC owed across all pending entries. O(1), multiplier-aware.
+    /// @dev Deliberately fee-FREE, and therefore an upper bound on the true
+    ///      obligation once `tout` is nonzero.
+    ///
+    ///      Per-entry fees are snapshotted, so an exact figure would require
+    ///      iterating the queue — this view is O(1) by design and is used to size
+    ///      the PSM's approval for `processQueue`. Over-approximating is the safe
+    ///      direction there: the approval covers the batch, and the unspent
+    ///      remainder is revoked immediately afterwards.
     function totalQueuedUsdc() external view returns (uint256) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         return
@@ -379,12 +426,15 @@ contract RedemptionQueue is
         return $.queue[index];
     }
 
-    /// @notice Current USDC value of the entry at `index`.
+    /// @notice Current USDC value of the entry at `index`, net of its snapshotted
+    ///         `tout` — i.e. what the holder would actually receive.
     function getQueueEntryValue(uint256 index) external view returns (uint256) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         if (index >= $.queueTail) revert InvalidIndex();
-        return MathLib.dollarsToUsdc(
-            $.okuDollar.toUIAmount($.queue[index].rawAmount), $.usdcDecimalMultiplier
+        QueueEntry storage entry = $.queue[index];
+        return MathLib.applyFee(
+            MathLib.dollarsToUsdc($.okuDollar.toUIAmount(entry.rawAmount), $.usdcDecimalMultiplier),
+            entry.toutBps
         );
     }
 

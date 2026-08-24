@@ -50,7 +50,7 @@ contract RedemptionQueueTest is BaseTest {
     function test_Enqueue_RequiresQueuePsmRole() public {
         vm.prank(user1);
         vm.expectPartialRevert(IAccessControl.AccessControlUnauthorizedAccount.selector);
-        queue.enqueue(user1, 1e18);
+        queue.enqueue(user1, 1e18, 0);
     }
 
     /// @notice `QUEUE_PSM` is deliberately not granted at init, so even the deploy
@@ -58,7 +58,7 @@ contract RedemptionQueueTest is BaseTest {
     function test_Enqueue_AdminCannotBypassPsm() public {
         vm.prank(admin);
         vm.expectPartialRevert(IAccessControl.AccessControlUnauthorizedAccount.selector);
-        queue.enqueue(user1, 1e18);
+        queue.enqueue(user1, 1e18, 0);
     }
 
     // ============ Process ============

@@ -59,8 +59,8 @@ contract ValueDisplayParityTest is BaseTest {
     }
 
     function testFuzz_Parity(uint256 rate, uint256 elapsed) public {
-        rate = bound(rate, Constants.PRECISION, Constants.PRECISION + 3_170_979_198);
-        elapsed = bound(elapsed, 1, Constants.MAX_RATE_DURATION);
+        rate = _bound(rate, Constants.PRECISION, Constants.PRECISION + 3_170_979_198);
+        elapsed = _bound(elapsed, 1, Constants.MAX_RATE_DURATION);
         _accrue(rate, elapsed);
         _assertParity();
     }

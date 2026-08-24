@@ -91,6 +91,60 @@ library Constants {
 
     // ============ USDC ============
 
+    // ============ Cross-chain multiplier sync window ============
+    //
+    // A multiplier tick is not atomic across chains. Between the EVM write and
+    // the SVM write the two sides price a raw token differently, so anything
+    // converting value *through* the multiplier in that interval settles at a
+    // stale price on one side. The sync window is a bounded, auto-expiring,
+    // epoch-attested block on exactly those operations.
+    //
+    // Structurally different from the local step-arbitrage surface, which is
+    // holding raw across a discrete multiplier step. The window cannot address
+    // that (the attacker never transacts during it) — `tout` does. EVM has no
+    // local step at all, since accrual here is continuous; the window exists on
+    // this side purely for cross-chain parity.
+    //
+    // Both bounds are constants rather than config fields so no key, warm or
+    // cold, can widen the window or shorten the gap.
+
+    /// @notice Hard ceiling on a single sync window.
+    /// @dev Auto-expiry is the liveness backstop: if the orchestrator dies
+    ///      mid-tick, mint/redeem resume unaided after at most this long. There
+    ///      is no code path that extends a window past this bound, which is what
+    ///      stops the mechanism becoming an indefinite pause held by a key
+    ///      warmer than `PSM_UNPAUSER`.
+    ///
+    ///      SVM mirror: `oku_shared::MAX_SYNC_WINDOW_SECS`.
+    uint256 internal constant MAX_SYNC_WINDOW = 15 minutes;
+
+    /// @notice Minimum gap between the end of one sync window and the start of
+    ///         the next.
+    /// @dev The anti-griefing bound. Without it a compromised rate setter could
+    ///      chain windows back-to-back and hold a permanent block. With it the
+    ///      on-chain availability floor is
+    ///      `MIN_SYNC_WINDOW_GAP / (MIN_SYNC_WINDOW_GAP + MAX_SYNC_WINDOW)`
+    ///      = `6h / 6.25h` = **96%**, independent of operator behaviour.
+    ///
+    ///      Interacts with the clamp rule: a `setYieldRate` inside the gap still
+    ///      succeeds, it just does not re-arm. Rejecting it instead would make
+    ///      the rate setter censorable, which contradicts its deliberate
+    ///      un-gated status (see `OkuDollar.setYieldRate`).
+    ///
+    ///      SVM mirror: `oku_shared::MIN_SYNC_WINDOW_GAP_SECS`.
+    uint256 internal constant MIN_SYNC_WINDOW_GAP = 6 hours;
+
+    // ============ PSM fees ============
+
+    /// @notice Hard ceiling on `tin` / `tout`, in basis points (100 = 1%).
+    /// @dev Anti-confiscation bound. The fee setter is `OKU_CAP_MANAGER` (cold),
+    ///      but a bounded parameter still beats an unbounded one: the worst case
+    ///      of a compromised cold key is a 1% haircut rather than seizure of
+    ///      every mint and redemption.
+    ///
+    ///      SVM mirror: `oku_shared::MAX_FEE_BPS`.
+    uint256 internal constant MAX_FEE_BPS = 100;
+
     /// @notice Maximum supported USDC decimal count.
     /// @dev USDC is 6 dp on every targeted chain. Capping at 18 rather than
     ///      hardcoding 6 is intentional forward-compatibility with non-Circle

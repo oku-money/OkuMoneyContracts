@@ -1,15 +1,20 @@
 /**
  * Hardhat scenario suite for the v0.3 single-token model.
  *
- * SCOPE. Foundry is the authoritative functional coverage — 200+ unit tests, 14
+ * SCOPE. Foundry is the authoritative functional coverage — 235 tests, 14
  * stateful-fuzz invariants, and the ERC-8056 conformance suite all live there.
- * This file deliberately covers only what Foundry cannot:
+ * This file covers what Foundry cannot, or covers less naturally:
  *
  *   1. The UUPS upgrade path, using @openzeppelin/hardhat-upgrades so the real
  *      storage-layout validator runs (forge cannot invoke it).
  *   2. Multi-contract scenarios over month-scale horizons with the full
  *      deploy-script wiring, rather than a test-harness approximation.
  *   3. Capability detection as an integrator would perform it, over the ABI.
+ *   4. **The high-multiplier regime.** At `uiMultiplier == 1e18` the raw and
+ *      displayed numbers are identical, so every off-by-a-multiplier bug is
+ *      invisible. Half of these tests run at >= 5x for exactly that reason.
+ *   5. The incident protocol end to end — pause, blacklist, guardian halt, and
+ *      the role splits that make each of them safe.
  *
  * This replaces v0.2's five files (2,698 lines: fork/OkuMoney.ts,
  * fork/OkuDollar.ts, fork/LitePSM.ts, happyPath/HappyPath.ts,
@@ -395,5 +400,303 @@ describe("rUSDOku — UUPS upgrade path", () => {
     expect(await queue2.usdcDecimalMultiplier()).to.equal(queueDm);
     expect(await psm2.okuDollar()).to.equal(await s.token.getAddress());
     expect(await queue2.okuDollar()).to.equal(await s.token.getAddress());
+  });
+});
+
+// ============================================================================
+// High-multiplier regime
+// ============================================================================
+//
+// The plan called for exercising every path "at both a low and a high
+// multiplier". A high-multiplier run is the only way to catch an integration
+// that silently assumes `multiplier ~= 1e18` — at 1e18 the raw and displayed
+// numbers are identical, so every off-by-a-multiplier bug is invisible.
+
+/** Drive the multiplier up by repeated capped segments. Asserts it got there. */
+async function accrueToAtLeast(s: System, target: bigint) {
+  let i = 0;
+  while ((await s.token.uiMultiplier()) < target) {
+    if (i++ > 2000) throw new Error("accrueToAtLeast: unreachable by legitimate accrual");
+    await setRate(s, RATE_AT_APR_CAP, MAX_RATE_DURATION);
+    await warp(MAX_RATE_DURATION);
+  }
+}
+
+describe("rUSDOku — high-multiplier regime", () => {
+  let s: System;
+  let multiplier: bigint;
+
+  before(async function () {
+    this.timeout(180_000);
+    s = await deploySystem();
+    await accrueToAtLeast(s, 5n * PRECISION);
+    multiplier = await s.token.uiMultiplier();
+    await seedBuffer(s, 5_000_000n * 10n ** 6n);
+  });
+
+  it("reached a materially non-unit multiplier", async () => {
+    expect(multiplier).to.be.greaterThanOrEqual(5n * PRECISION);
+  });
+
+  it("mints far fewer raw units than dollars deposited", async () => {
+    const raw = await psmMint(s, s.alice, 10_000n * 10n ** 6n);
+    // 10,000 USDC at >=5x buys <=2,000 raw.
+    expect(raw).to.be.lessThanOrEqual(2000n * PRECISION);
+    // But displays as ~$10,000.
+    const ui: bigint = await s.token.balanceOfUI(await s.alice.getAddress());
+    expect(ui).to.be.greaterThan(9_999n * PRECISION);
+    expect(ui).to.be.lessThan(10_001n * PRECISION);
+  });
+
+  it("holds the value/display parity bound", async () => {
+    const cta: bigint = await s.token.convertToAssets(PRECISION);
+    const m: bigint = await s.token.uiMultiplier();
+    expect(cta * DM).to.be.lessThanOrEqual(m);
+    expect(m).to.be.lessThan((cta + 1n) * DM);
+  });
+
+  it("round-trips through the PSM without losing more than a USDC unit", async () => {
+    const bobRaw = await psmMint(s, s.bob, 25_000n * 10n ** 6n);
+    const bobAddr = await s.bob.getAddress();
+    const before: bigint = await s.usdc.balanceOf(bobAddr);
+
+    await (await as(s.token, s.bob).approve(await s.psm.getAddress(), bobRaw)).wait();
+    await (await as(s.psm, s.bob).redeem(bobRaw)).wait();
+
+    const gained = (await s.usdc.balanceOf(bobAddr)) - before;
+    expect(gained).to.be.lessThanOrEqual(25_000n * 10n ** 6n);
+    expect(gained + 1n).to.be.greaterThanOrEqual(25_000n * 10n ** 6n);
+  });
+
+  it("keeps the max-send rule honest at high multiplier", async () => {
+    const aliceAddr = await s.alice.getAddress();
+    const raw: bigint = await s.token.balanceOf(aliceAddr);
+    const viaUi: bigint = await s.token.fromUIAmount(await s.token.balanceOfUI(aliceAddr));
+    // At a 5x multiplier the UI round trip loses more absolute wei than at 1x,
+    // but it must still never exceed the balance.
+    expect(viaUi).to.be.lessThanOrEqual(raw);
+  });
+
+  it("still refuses sub-USDC-granularity redemptions", async () => {
+    await expect(as(s.psm, s.alice).redeem(DM - 1n)).to.be.reverted;
+  });
+});
+
+// ============================================================================
+// Incident protocol: pause, blacklist, and the role split
+// ============================================================================
+
+describe("rUSDOku — incident protocol", () => {
+  let s: System;
+  const R = (n: string) => ethers.keccak256(ethers.toUtf8Bytes(n));
+
+  beforeEach(async () => {
+    s = await deploySystem();
+    await seedBuffer(s, 1_000_000n * 10n ** 6n);
+    await psmMint(s, s.alice, 10_000n * 10n ** 6n);
+  });
+
+  it("pause blocks transfers and mint but NOT burn", async () => {
+    const adminAddr = await s.admin.getAddress();
+    await (await s.token.grantRole(R("OKU_PAUSER"), adminAddr)).wait();
+    await (await s.token.grantRole(R("OKU_BURNER"), adminAddr)).wait();
+    await (await s.token.grantRole(R("OKU_MINTER"), adminAddr)).wait();
+    await (await s.token.configureMinterAllowance(adminAddr, PRECISION * 1000n)).wait();
+    await (await s.token.mint(adminAddr, PRECISION * 10n)).wait();
+
+    await (await s.token.pause()).wait();
+
+    await expect(as(s.token, s.alice).transfer(await s.bob.getAddress(), 1n)).to.be.reverted;
+    await expect(s.token.mint(adminAddr, 1n)).to.be.reverted;
+    // Burn must stay open: a holder has to be able to exit while paused, and
+    // the pause-then-blacklist protocol depends on it.
+    await (await s.token.burn(PRECISION)).wait();
+  });
+
+  it("pause on the token does not pause the PSM, and vice versa", async () => {
+    const adminAddr = await s.admin.getAddress();
+    await (await s.token.grantRole(R("OKU_PAUSER"), adminAddr)).wait();
+    await (await s.psm.grantRole(R("PSM_PAUSER"), adminAddr)).wait();
+
+    await (await s.psm.pause()).wait();
+    // Token transfers still work: the two pause switches are independent.
+    await (await as(s.token, s.alice).transfer(await s.bob.getAddress(), PRECISION)).wait();
+    await expect(as(s.psm, s.alice).mint(1_000n * 10n ** 6n)).to.be.reverted;
+  });
+
+  it("unpause requires a different role than pause", async () => {
+    const adminAddr = await s.admin.getAddress();
+    const [, , , outsider] = await ethers.getSigners();
+    await (await s.token.grantRole(R("OKU_PAUSER"), await outsider.getAddress())).wait();
+    await (await as(s.token, outsider).pause()).wait();
+
+    // The pauser cannot undo it — unpause is a cold-multisig role.
+    await expect(as(s.token, outsider).unpause()).to.be.reverted;
+    await (await s.token.grantRole(R("OKU_UNPAUSER"), adminAddr)).wait();
+    await (await s.token.unpause()).wait();
+    expect(await s.token.paused()).to.equal(false);
+  });
+
+  it("blacklist blocks send, receive, mint and burn — the guard is in _update", async () => {
+    const adminAddr = await s.admin.getAddress();
+    const aliceAddr = await s.alice.getAddress();
+    await (await s.token.grantRole(R("OKU_BLACKLISTER"), adminAddr)).wait();
+    await (await s.token.grantRole(R("OKU_MINTER"), adminAddr)).wait();
+    await (await s.token.configureMinterAllowance(adminAddr, PRECISION * 1000n)).wait();
+
+    await (await s.token.blacklist(aliceAddr)).wait();
+
+    await expect(as(s.token, s.alice).transfer(await s.bob.getAddress(), 1n)).to.be.reverted;
+    await expect(as(s.token, s.bob).transfer(aliceAddr, 1n)).to.be.reverted;
+    await expect(s.token.mint(aliceAddr, 1n)).to.be.reverted;
+  });
+
+  it("blacklisting works while paused — that is the whole point of the protocol", async () => {
+    const adminAddr = await s.admin.getAddress();
+    await (await s.token.grantRole(R("OKU_PAUSER"), adminAddr)).wait();
+    await (await s.token.grantRole(R("OKU_BLACKLISTER"), adminAddr)).wait();
+    await (await s.token.pause()).wait();
+    await (await s.token.blacklist(await s.alice.getAddress())).wait();
+    expect(await s.token.isBlacklisted(await s.alice.getAddress())).to.equal(true);
+  });
+
+  it("guardian can halt accrual while paused, and cannot set a rate", async () => {
+    const adminAddr = await s.admin.getAddress();
+    const [, , , guardian] = await ethers.getSigners();
+    await setRate(s, RATE_5_PCT_APY, MAX_RATE_DURATION);
+    await warp(5n * 24n * 60n * 60n);
+
+    await (await s.token.grantRole(R("OKU_PAUSER"), adminAddr)).wait();
+    await (await s.token.grantRole(R("OKU_GUARDIAN"), await guardian.getAddress())).wait();
+    await (await s.token.pause()).wait();
+
+    const before: bigint = await s.token.uiMultiplier();
+    await (await as(s.token, guardian).haltAccrual()).wait();
+    const after: bigint = await s.token.uiMultiplier();
+
+    // Monotone-safe: growth stops, nothing accrued is lost.
+    expect(after).to.be.greaterThanOrEqual(before);
+    expect(await s.token.newUIMultiplier()).to.equal(after);
+
+    // A guardian must not be able to set a rate — that is the separation of
+    // duties that makes a warm-multisig guardian safe.
+    const now = BigInt((await ethers.provider.getBlock("latest"))!.timestamp);
+    await expect(
+      as(s.token, guardian).setYieldRate(RATE_5_PCT_APY, now + 1000n)
+    ).to.be.reverted;
+  });
+});
+
+// ============================================================================
+// Multi-holder fairness
+// ============================================================================
+
+describe("rUSDOku — multi-holder fairness", () => {
+  let s: System;
+
+  before(async function () {
+    this.timeout(120_000);
+    s = await deploySystem();
+    await seedBuffer(s, 5_000_000n * 10n ** 6n);
+  });
+
+  it("accrues proportionally regardless of entry time, per raw unit held", async () => {
+    // Alice enters at a unit multiplier.
+    const aliceRaw = await psmMint(s, s.alice, 10_000n * 10n ** 6n);
+
+    await setRate(s, RATE_5_PCT_APY, MAX_RATE_DURATION);
+    await warp(MAX_RATE_DURATION);
+
+    // Bob enters later, at a higher multiplier, for the same dollar amount.
+    const bobRaw = await psmMint(s, s.bob, 10_000n * 10n ** 6n);
+    expect(bobRaw).to.be.lessThan(aliceRaw, "later entry buys fewer raw units");
+
+    const aliceUi: bigint = await s.token.balanceOfUI(await s.alice.getAddress());
+    const bobUi: bigint = await s.token.balanceOfUI(await s.bob.getAddress());
+
+    // Alice has earned a month of yield; Bob just arrived at par.
+    expect(aliceUi).to.be.greaterThan(bobUi);
+    expect(bobUi).to.be.greaterThan(9_999n * PRECISION);
+    expect(bobUi).to.be.lessThan(10_001n * PRECISION);
+
+    // Going forward they accrue at the same proportional rate.
+    const aliceBefore = aliceUi;
+    const bobBefore = bobUi;
+    await setRate(s, RATE_5_PCT_APY, MAX_RATE_DURATION);
+    await warp(MAX_RATE_DURATION);
+
+    const aliceGrowth =
+      ((await s.token.balanceOfUI(await s.alice.getAddress())) * PRECISION) / aliceBefore;
+    const bobGrowth =
+      ((await s.token.balanceOfUI(await s.bob.getAddress())) * PRECISION) / bobBefore;
+    // Same growth factor to within rounding dust.
+    const delta = aliceGrowth > bobGrowth ? aliceGrowth - bobGrowth : bobGrowth - aliceGrowth;
+    expect(delta).to.be.lessThan(10n ** 9n, "growth factors must match");
+  });
+
+  it("keeps the sum of displayed balances bounded by totalSupplyUI", async () => {
+    const holders = [
+      await s.alice.getAddress(),
+      await s.bob.getAddress(),
+      await s.psm.getAddress(),
+      await s.queue.getAddress(),
+    ];
+    let sum = 0n;
+    for (const h of holders) sum += await s.token.balanceOfUI(h);
+    const total: bigint = await s.token.totalSupplyUI();
+    // Per-balance flooring: bounded above, gap of at most 1 wei per holder.
+    expect(sum).to.be.lessThanOrEqual(total);
+    expect(sum + BigInt(holders.length)).to.be.greaterThanOrEqual(total);
+  });
+});
+
+// ============================================================================
+// Oracle adapter across the lifecycle
+// ============================================================================
+
+describe("rUSDOku — oracle adapter lifecycle", () => {
+  let s: System;
+  let feed: Contract;
+  const STALENESS = 7n * 24n * 60n * 60n;
+
+  before(async () => {
+    s = await deploySystem();
+    const Adapter = await ethers.getContractFactory("OkuMultiplierAdapter");
+    const deployed = await Adapter.deploy(
+      await s.token.getAddress(),
+      ethers.parseEther("0.99"),
+      ethers.parseEther("10"),
+      STALENESS
+    );
+    await deployed.waitForDeployment();
+    feed = deployed as unknown as Contract;
+  });
+
+  it("reports 18 decimals, not Chainlink's conventional 8", async () => {
+    // An integrator assuming 8 would misprice by 1e10.
+    expect(await feed.decimals()).to.equal(18n);
+  });
+
+  it("tracks the multiplier while a rate is live", async () => {
+    await setRate(s, RATE_5_PCT_APY, MAX_RATE_DURATION);
+    await warp(10n * 24n * 60n * 60n);
+    const [, answer] = await feed.latestRoundData();
+    expect(answer).to.equal(await s.token.uiMultiplier());
+    expect(await feed.isHealthy()).to.equal(true);
+    expect(await feed.isAccrualStopped()).to.equal(false);
+  });
+
+  it("signals a halt immediately, then goes stale", async () => {
+    await warp(20n * 24n * 60n * 60n); // past rateEnd
+    expect(await feed.isAccrualStopped()).to.equal(true);
+    expect(await feed.isHealthy()).to.equal(true, "flat but still fresh");
+
+    await warp(STALENESS + 1n);
+    expect(await feed.isHealthy()).to.equal(false, "an un-renewed rate must eventually go stale");
+    await expect(feed.latestRoundData()).to.be.reverted;
+  });
+
+  it("refuses historical rounds — it is a live derivation, not a push feed", async () => {
+    await expect(feed.getRoundData(1)).to.be.reverted;
   });
 });

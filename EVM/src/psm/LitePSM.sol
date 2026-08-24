@@ -38,10 +38,19 @@ import {RedemptionQueue} from "./RedemptionQueue.sol";
  *      At `uiMultiplier = 1.05e18`, depositing 100 USDC yields ~95.24 raw
  *      (displayed as $100.00); redeeming 95.24 raw returns ~100 USDC.
  *
- *      NO SANDWICH GUARD, NO ANNOUNCEMENT WINDOW, NO FORWARD PRICING.
- *      Continuous accrual has no distribution transaction to sandwich and no
- *      scheduled step to front-run, so pricing reads `uiMultiplier()` directly.
- *      This is the main practical dividend of the continuous design.
+ *      NO *LOCAL* SANDWICH GUARD AND NO FORWARD PRICING. Continuous accrual has
+ *      no distribution transaction to sandwich and no scheduled step to
+ *      front-run, so pricing reads `uiMultiplier()` directly. This remains the
+ *      main practical dividend of the continuous design, and it is why this side
+ *      needs no `tout`-style step-arbitrage control the way a stepped chain does.
+ *
+ *      THERE IS A CROSS-CHAIN SYNC WINDOW, which is a different concern. A
+ *      multiplier tick is not atomic across chains, and during propagation the
+ *      peer chain prices a raw token differently. `mint`, `redeem`,
+ *      `redeemUiAmount` and `processQueue` therefore revert while
+ *      `okuDollar.isSyncLocked()`. That window is bounded, auto-expiring and
+ *      duty-cycled (`Constants.MAX_SYNC_WINDOW` / `MIN_SYNC_WINDOW_GAP`), and it
+ *      is inert until an operator sets a nonzero duration.
  *
  *      USDC peg monitoring is off-chain; operators pause on a detected depeg.
  *
@@ -65,6 +74,19 @@ contract LitePSM is
         IERC20 usdc;
         RedemptionQueue redemptionQueue;
         uint256 usdcDecimalMultiplier;
+        /// @dev Mint fee in bps, charged on deposited USDC. Bounded by
+        ///      `MAX_FEE_BPS`. Defaults to 0 — fees ship inert.
+        uint256 tin;
+        /// @dev Redemption fee in bps, charged on the USDC paid out.
+        ///
+        ///      On this chain `tout` is present for parity with the upstream
+        ///      `dss-lite-psm` design and with the SVM side, NOT because EVM has
+        ///      a step-arbitrage surface to defend: accrual here is continuous,
+        ///      so there is no discrete step to hold across. It is SVM's stepped
+        ///      multiplier that makes `tout` load-bearing. Keeping the parameter
+        ///      on both sides keeps the fee schedule, runbook and monitoring
+        ///      symmetric.
+        uint256 tout;
     }
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.LitePSMV2")) - 1)) & ~bytes32(uint256(0xff))
@@ -75,6 +97,30 @@ contract LitePSM is
         assembly {
             $.slot := LITEPSM_STORAGE_LOCATION
         }
+    }
+
+    // ============ Modifiers ============
+
+    /// @dev Reject operations that convert value through the multiplier while a
+    ///      cross-chain tick is in flight.
+    ///
+    ///      GATING RULE: an operation is sync-gated iff it prices through the
+    ///      multiplier. That is the whole rule, and it is what keeps the
+    ///      exemptions principled rather than ad hoc — `depositBuffer`,
+    ///      `withdrawUsdc` and `advanceHead` all move value at par or move no
+    ///      value, so a stale multiplier cannot mis-price them.
+    ///
+    ///      Read from the token rather than mirrored here: one source of truth,
+    ///      and the token is where the multiplier authority lives.
+    modifier whenNotSyncLocked() {
+        IOkuDollar okuDollar_ = _getLitePSMStorage().okuDollar;
+        if (okuDollar_.isSyncLocked()) {
+            // Second read only on the revert path, so the happy path pays for
+            // one call rather than two. Gives the caller a retry-after instead
+            // of an opaque failure.
+            revert SyncWindowActive(okuDollar_.syncLockedUntil());
+        }
+        _;
     }
 
     // ============ Errors ============
@@ -92,6 +138,14 @@ contract LitePSM is
     error DecimalMultiplierMismatch(uint256 expected, uint256 derived);
     /// @notice `sweepToken` cannot move USDC — the buffer has its own gated path.
     error CannotSweepAsset();
+    /// @notice A cross-chain multiplier tick is propagating; operations that
+    ///         price through the multiplier are blocked until it lands.
+    /// @dev Distinct from `EnforcedPause`: bounded, auto-expiring, and driven by
+    ///      the tick protocol rather than by incident response. Integrators
+    ///      should retry rather than treat it as an outage.
+    error SyncWindowActive(uint256 lockedUntil);
+    /// @notice Proposed `tin` or `tout` exceeds `MAX_FEE_BPS`.
+    error FeeAboveMaximum(uint256 requested, uint256 maximum);
 
     // ============ Events ============
 
@@ -102,6 +156,7 @@ contract LitePSM is
     event BufferWithdrawn(address indexed to, uint256 amount, uint256 newBalance);
     event BufferRefilled(uint256 newBalance, uint256 startIndex, uint256 endIndex);
     event TokenSwept(address indexed token, address indexed to, uint256 amount);
+    event FeesUpdated(uint256 oldTin, uint256 newTin, uint256 oldTout, uint256 newTout);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -157,6 +212,7 @@ contract LitePSM is
         _grantRole(Roles.PSM_QUEUE_PROCESSOR, _admin);
         _grantRole(Roles.PSM_BUFFER_DEPOSITOR, _admin);
         _grantRole(Roles.PSM_BUFFER_WITHDRAWER, _admin);
+        _grantRole(Roles.PSM_FEE_MANAGER, _admin);
     }
 
     // ============ Storage accessors ============
@@ -180,18 +236,25 @@ contract LitePSM is
     // ============ Quotes ============
 
     /// @notice Raw tokens `mint(usdcAmount)` would produce right now.
+    /// @dev Fee-inclusive. An integrator pricing off a fee-free quote would
+    ///      over-estimate output by `tin` and mis-size every downstream trade.
     function quoteMint(uint256 usdcAmount) public view returns (uint256 rawOut) {
         LitePSMStorage storage $ = _getLitePSMStorage();
         return MathLib.fromUiAmount(
-            MathLib.usdcToDollars(usdcAmount, $.usdcDecimalMultiplier), $.okuDollar.uiMultiplier()
+            MathLib.usdcToDollars(MathLib.applyFee(usdcAmount, $.tin), $.usdcDecimalMultiplier),
+            $.okuDollar.uiMultiplier()
         );
     }
 
     /// @notice USDC `redeem(rawAmount)` would produce right now.
+    /// @dev Fee-inclusive, i.e. the amount actually received after `tout`.
     function quoteRedeem(uint256 rawAmount) public view returns (uint256 usdcOut) {
         LitePSMStorage storage $ = _getLitePSMStorage();
-        return MathLib.dollarsToUsdc(
-            MathLib.toUiAmount(rawAmount, $.okuDollar.uiMultiplier()), $.usdcDecimalMultiplier
+        return MathLib.applyFee(
+            MathLib.dollarsToUsdc(
+                MathLib.toUiAmount(rawAmount, $.okuDollar.uiMultiplier()), $.usdcDecimalMultiplier
+            ),
+            $.tout
         );
     }
 
@@ -200,6 +263,11 @@ contract LitePSM is
     ///      raw figure is floored, so the USDC it converts back to is <= balance.
     ///      Redemption capacity is exposed here, where it lives, rather than
     ///      mirrored onto the token as ERC-4626 `max*` views.
+    ///
+    ///      `tout` only makes this MORE conservative — a fee reduces the USDC
+    ///      leaving the buffer for a given raw input — so the "never over-draws"
+    ///      property is preserved without adjusting for it here. Deliberately
+    ///      left fee-free so the figure remains a pure capacity bound.
     function redeemableNow() external view returns (uint256 maxRawInstant) {
         LitePSMStorage storage $ = _getLitePSMStorage();
         return MathLib.fromUiAmount(
@@ -208,28 +276,58 @@ contract LitePSM is
         );
     }
 
+    /// @notice Mint fee in basis points.
+    function tin() external view returns (uint256) {
+        return _getLitePSMStorage().tin;
+    }
+
+    /// @notice Redemption fee in basis points.
+    function tout() external view returns (uint256) {
+        return _getLitePSMStorage().tout;
+    }
+
     // ============ Mint / redeem ============
 
     /// @notice Mint rUSDOku by depositing USDC.
     /// @param usdcAmount USDC to deposit, native decimals.
     /// @return rawOut Raw rUSDOku minted to the caller.
-    function mint(uint256 usdcAmount) external nonReentrant whenNotPaused returns (uint256 rawOut) {
+    function mint(uint256 usdcAmount)
+        external
+        nonReentrant
+        whenNotPaused
+        whenNotSyncLocked
+        returns (uint256 rawOut)
+    {
         if (usdcAmount == 0) revert Errors.ZeroAmount();
 
         LitePSMStorage storage $ = _getLitePSMStorage();
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
         uint256 multiplier = $.okuDollar.uiMultiplier();
 
-        rawOut =
-            MathLib.fromUiAmount(MathLib.usdcToDollars(usdcAmount, decimalMultiplier), multiplier);
+        // Apply `tin` before conversion. The full `usdcAmount` still enters the
+        // buffer; the fee portion simply has no rUSDOku minted against it, which
+        // is how the fee accretes to the buffer — and therefore to the
+        // collateral ratio — with no recipient account and no second transfer.
+        uint256 creditedUsdc = MathLib.applyFee(usdcAmount, $.tin);
+        if (creditedUsdc == 0) revert AmountTooSmall();
+
+        rawOut = MathLib.fromUiAmount(
+            MathLib.usdcToDollars(creditedUsdc, decimalMultiplier), multiplier
+        );
         if (rawOut == 0) revert AmountTooSmall();
 
         // Round-trip drift: usdc -> raw -> usdc must land within one USDC unit.
         // Truncation always favours the protocol; the 1-unit tolerance prevents
-        // reverts at non-even multipliers. Mirrors MakerDAO LitePSM tin/tout dust.
+        // reverts at non-even multipliers.
+        //
+        // Compared against `creditedUsdc`, NOT `usdcAmount`. Against the gross
+        // deposit this check would treat the fee itself as drift and revert every
+        // mint the moment `tin` became nonzero — the fee is an intended,
+        // exactly-known deduction, not round-trip error. At `tin == 0` the two
+        // are identical, so behaviour is unchanged while fees are disabled.
         uint256 roundTrip =
             MathLib.dollarsToUsdc(MathLib.toUiAmount(rawOut, multiplier), decimalMultiplier);
-        if (roundTrip + 1 < usdcAmount) revert RoundTripDriftTooLarge(roundTrip, usdcAmount);
+        if (roundTrip + 1 < creditedUsdc) revert RoundTripDriftTooLarge(roundTrip, creditedUsdc);
 
         $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
         $.okuDollar.mint(msg.sender, rawOut);
@@ -247,6 +345,7 @@ contract LitePSM is
         external
         nonReentrant
         whenNotPaused
+        whenNotSyncLocked
         returns (uint256 usdcOut)
     {
         return _redeem(msg.sender, rawAmount);
@@ -271,6 +370,7 @@ contract LitePSM is
         external
         nonReentrant
         whenNotPaused
+        whenNotSyncLocked
         returns (uint256 usdcOut)
     {
         if (uiAmount == 0) revert Errors.ZeroAmount();
@@ -292,8 +392,17 @@ contract LitePSM is
         if (rawAmount < decimalMultiplier) revert AmountTooSmall();
 
         uint256 multiplier = $.okuDollar.uiMultiplier();
-        usdcOut =
+        uint256 toutBps = $.tout;
+
+        // Gross dollar value of the raw being redeemed, then `tout`. The
+        // withheld amount is simply never transferred out — it stays in the
+        // buffer, so the fee accrues without a recipient or a second transfer.
+        uint256 grossUsdc =
             MathLib.dollarsToUsdc(MathLib.toUiAmount(rawAmount, multiplier), decimalMultiplier);
+        usdcOut = MathLib.applyFee(grossUsdc, toutBps);
+        // Checked on the NET payout: at a nonzero `tout` a dust redemption can
+        // have its whole payout rounded into the fee, and burning the user's
+        // tokens for a zero transfer would be theft rather than a fee.
         if (usdcOut == 0) revert AmountTooSmall();
 
         // Slippage floor: truncate the input to USDC granularity and require the
@@ -301,11 +410,20 @@ contract LitePSM is
         // The divide-before-multiply is intentional USDC-precision flooring, not a
         // rounding bug: it snaps the input down to the nearest whole USDC unit so
         // the payout comparison is made against a representable amount.
+        //
+        // BOTH SIDES ARE POST-FEE. Comparing a post-fee payout against a fee-free
+        // expectation would revert every redemption the instant `tout` became
+        // nonzero. `applyFee` is monotone non-decreasing in `gross`, so the
+        // inequality still holds for its intended purpose (catching genuine
+        // conversion drift) once the fee is applied consistently. At `tout == 0`
+        // this is bit-identical to the fee-free form.
         // slither-disable-next-line divide-before-multiply
         // forge-lint: disable-next-line(divide-before-multiply)
         uint256 rawFloor = (rawAmount / decimalMultiplier) * decimalMultiplier;
-        uint256 minExpected =
-            MathLib.dollarsToUsdc(MathLib.toUiAmount(rawFloor, multiplier), decimalMultiplier);
+        uint256 minExpected = MathLib.applyFee(
+            MathLib.dollarsToUsdc(MathLib.toUiAmount(rawFloor, multiplier), decimalMultiplier),
+            toutBps
+        );
         if (usdcOut < minExpected) revert OutputBelowMinimum(usdcOut, minExpected);
 
         IERC20 token = IERC20(address($.okuDollar));
@@ -319,8 +437,13 @@ contract LitePSM is
         }
 
         // Buffer short: escrow in the queue.
+        //
+        // The prevailing `tout` is snapshotted into the entry rather than read
+        // at processing time, so a later fee change cannot retroactively tax
+        // users who were already waiting. They were quoted this rate when they
+        // joined the queue.
         token.safeTransferFrom(user, address($.redemptionQueue), rawAmount);
-        uint256 index = $.redemptionQueue.enqueue(user, rawAmount);
+        uint256 index = $.redemptionQueue.enqueue(user, rawAmount, toutBps);
         emit RedemptionEnqueued(user, rawAmount, index);
         return 0;
     }
@@ -332,6 +455,15 @@ contract LitePSM is
     /// @param endIndex Last index, exclusive.
     /// @param approveAmount USDC to approve the queue to pull for this batch.
     /// @dev Not blocked by pause: pause must not lock users into the queue.
+    ///
+    ///      IS blocked by the sync window, and the distinction is the point.
+    ///      Pause is unbounded and incident-driven, so gating queue processing
+    ///      on it could strand users indefinitely. The sync window is bounded by
+    ///      `MAX_SYNC_WINDOW` and duty-cycled by `MIN_SYNC_WINDOW_GAP`, so the
+    ///      worst case is a short delay — and leaving it open would be a real
+    ///      hole, because the queue prices at the live multiplier
+    ///      (`RedemptionQueue.processQueue` caches `uiMultiplier()` per batch)
+    ///      and would therefore settle at a stale cross-chain price.
     function processQueue(
         uint256 startIndex,
         uint256 endIndex,
@@ -339,6 +471,7 @@ contract LitePSM is
     )
         external
         nonReentrant
+        whenNotSyncLocked
         onlyRole(Roles.PSM_QUEUE_PROCESSOR)
     {
         LitePSMStorage storage $ = _getLitePSMStorage();
@@ -406,6 +539,42 @@ contract LitePSM is
     }
 
     // ============ Pause ============
+
+    /// @notice Set the `tin` / `tout` fee schedule in basis points.
+    /// @dev `PSM_FEE_MANAGER`, intended for the same cold key that holds
+    ///      `OKU_CAP_MANAGER` — a fee schedule is economic policy, the same class
+    ///      as `setMaxSupply`. It is a distinct, PSM-namespaced constant rather
+    ///      than `OKU_CAP_MANAGER` itself because AccessControl mappings are
+    ///      per-contract: no new key, but a correctly-scoped capability.
+    ///      Both fees bounded by `MAX_FEE_BPS`.
+    ///
+    ///      Fees accrue to the USDC buffer: `tin` is deposited but not credited,
+    ///      `tout` is owed but not paid out. There is no recipient address and no
+    ///      sweep, so a fee raises the collateral ratio rather than being
+    ///      extracted.
+    ///
+    ///      Does NOT retroactively affect entries already in the redemption
+    ///      queue — each snapshots the `tout` prevailing when it was enqueued.
+    ///
+    ///      Ported from the upstream this PSM was modelled on, which carries
+    ///      `tin`/`tout` and which the original port omitted.
+    ///      Taken from https://github.com/makerdao/dss-lite-psm/blob/master/src/DssLitePsm.sol
+    function setFees(uint256 newTin, uint256 newTout) external onlyRole(Roles.PSM_FEE_MANAGER) {
+        if (newTin > Constants.MAX_FEE_BPS) {
+            revert FeeAboveMaximum(newTin, Constants.MAX_FEE_BPS);
+        }
+        if (newTout > Constants.MAX_FEE_BPS) {
+            revert FeeAboveMaximum(newTout, Constants.MAX_FEE_BPS);
+        }
+
+        LitePSMStorage storage $ = _getLitePSMStorage();
+        uint256 oldTin = $.tin;
+        uint256 oldTout = $.tout;
+        $.tin = newTin;
+        $.tout = newTout;
+
+        emit FeesUpdated(oldTin, newTin, oldTout, newTout);
+    }
 
     function pause() external onlyRole(Roles.PSM_PAUSER) {
         _pause();

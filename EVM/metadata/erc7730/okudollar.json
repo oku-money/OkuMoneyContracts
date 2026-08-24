@@ -101,6 +101,29 @@
         "required": [],
         "excluded": []
       },
+      "beginSyncWindow(uint256)": {
+        "$id": "beginSyncWindow",
+        "intent": "Block PSM mint/redeem while a multiplier tick propagates across chains",
+        "fields": [
+          { "path": "epoch", "label": "Tick number (must match every chain)", "format": "raw" }
+        ],
+        "required": ["epoch"],
+        "excluded": []
+      },
+      "endSyncWindow(uint256)": {
+        "$id": "endSyncWindow",
+        "intent": "Release the cross-chain sync window - tick confirmed on all chains",
+        "fields": [{ "path": "epoch", "label": "Tick number being released", "format": "raw" }],
+        "required": ["epoch"],
+        "excluded": []
+      },
+      "setSyncWindowDuration(uint256)": {
+        "$id": "setSyncWindowDuration",
+        "intent": "Set cross-chain sync window length (0 disables it)",
+        "fields": [{ "path": "newDuration", "label": "Window length (seconds)", "format": "raw" }],
+        "required": ["newDuration"],
+        "excluded": []
+      },
       "blacklist(address)": {
         "$id": "blacklist",
         "intent": "Block an address from sending, receiving, minting or burning",

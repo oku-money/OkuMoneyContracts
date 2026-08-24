@@ -104,6 +104,10 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
       "PSM_UPGRADER",
       "PSM_UNPAUSER",
       "PSM_BUFFER_WITHDRAWER",
+      // Fee schedule is economic policy of the same class as the supply cap, so
+      // it lands on the same cold key as OKU_CAP_MANAGER. It is a separate
+      // constant only because AccessControl mappings are per-contract.
+      "PSM_FEE_MANAGER",
     ]],
     ["RedemptionQueue", [
       "DEFAULT_ADMIN_ROLE",

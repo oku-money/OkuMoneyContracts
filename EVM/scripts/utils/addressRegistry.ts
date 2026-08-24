@@ -1,8 +1,13 @@
 /**
- * Testnet address registry sync (EVM side)
+ * Canonical address registry sync (EVM side)
  *
- * Writes the current EVM deployment into the repo-root `testnet-addresses.json`
- * file, which is the canonical human-readable address registry for all chains.
+ * Writes the current EVM deployment into the repo-root `addresses.json`, the
+ * canonical human-readable address registry for every chain.
+ *
+ * Renamed from `testnetRegistry.ts` / `testnet-addresses.json` in v0.3: the file
+ * has carried mainnet entries (base, bsc) since well before this refactor, so
+ * the "testnet" name was actively misleading. `EVM/README.md § Deployment`
+ * specifies `addresses.json`; the code now matches.
  *
  * The SVM side has a matching sync helper in its own scripts/utils tree. Each
  * side only updates its own section of the file, preserving the other side.
@@ -14,7 +19,7 @@
 import fs from "fs";
 import path from "path";
 
-const REGISTRY_PATH = path.resolve(__dirname, "../../../testnet-addresses.json");
+const REGISTRY_PATH = path.resolve(__dirname, "../../../addresses.json");
 
 export interface EvmNetworkEntry {
   chainId: number;
@@ -62,7 +67,7 @@ function loadRegistry(): TestnetRegistry {
   try {
     return JSON.parse(fs.readFileSync(REGISTRY_PATH, "utf8"));
   } catch (error) {
-    console.warn(`[testnetRegistry] Could not parse ${REGISTRY_PATH}:`, error);
+    console.warn(`[addressRegistry] Could not parse ${REGISTRY_PATH}:`, error);
     return {};
   }
 }
@@ -83,6 +88,6 @@ export function syncEvmRegistry(network: string, entry: EvmNetworkEntry): void {
   registry.evm[network] = entry;
   writeRegistry(registry);
   console.log(
-    `[testnetRegistry] Wrote EVM.${network} → ${path.relative(process.cwd(), REGISTRY_PATH)}`
+    `[addressRegistry] Wrote EVM.${network} → ${path.relative(process.cwd(), REGISTRY_PATH)}`
   );
 }

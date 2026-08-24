@@ -64,8 +64,8 @@ contract MaxSendTest is BaseTest {
     }
 
     function testFuzz_RoundTrip_BoundedBelowInput(uint256 x, uint256 elapsed) public {
-        x = bound(x, 1, 1e30);
-        elapsed = bound(elapsed, 0, Constants.MAX_RATE_DURATION);
+        x = _bound(x, 1, 1e30);
+        elapsed = _bound(elapsed, 0, Constants.MAX_RATE_DURATION);
         if (elapsed > 0) _accrue(RATE_5_PCT_APY, elapsed);
         uint256 back = token.fromUIAmount(token.toUIAmount(x));
         assertLe(back, x, "must never manufacture raw tokens");

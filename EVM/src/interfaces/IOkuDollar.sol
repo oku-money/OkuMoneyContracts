@@ -35,6 +35,25 @@ interface IOkuDollar is
     /// @notice `10 ** (18 - IERC20Metadata(asset()).decimals())`. `1e12` for Circle USDC.
     function usdcDecimalMultiplier() external view returns (uint256);
 
+    // ============ Cross-chain sync window ============
+
+    /// @notice True while a multiplier tick is propagating across chains.
+    /// @dev Read by the PSM to gate every operation that converts value through
+    ///      the multiplier. Lives on the token because the token owns the
+    ///      multiplier authority, so the dependency points PSM -> token rather
+    ///      than the reverse.
+    ///
+    ///      Bounded and auto-expiring by construction (`MAX_SYNC_WINDOW`), so a
+    ///      consumer can treat a `true` here as transient rather than as an
+    ///      indefinite outage.
+    function isSyncLocked() external view returns (bool);
+
+    /// @notice Exclusive timestamp at which the current sync window lifts.
+    /// @dev Surfaced so a blocked caller can be told when to retry, rather than
+    ///      having to poll. Only read on the revert path, so it costs nothing on
+    ///      a successful call.
+    function syncLockedUntil() external view returns (uint256);
+
     // ============ Supply hooks (role-gated) ============
 
     /// @notice Mint `amount` raw tokens to `to`. Requires `OKU_MINTER`.

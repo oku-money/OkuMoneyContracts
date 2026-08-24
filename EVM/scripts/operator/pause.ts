@@ -1,19 +1,21 @@
 /**
  * Pause one of the OkuDollar protocol contracts.
  *
- * Single script with --target={psm|okuM|usdOku}. Each target's pause()
- * is gated by a distinct role:
- *   psm    -> LitePSM.pause()    [PSM_PAUSER]
+ * Single script with --target={token|psm}. Each target's pause() is gated by a
+ * distinct role:
  *   token -> OkuDollar.pause()  [OKU_PAUSER]   blocks transfers + mint; burn stays open
  *   psm   -> LitePSM.pause()    [PSM_PAUSER]   blocks mint/redeem; processQueue stays open
  *
+ * PAUSE IS NOT THE CROSS-CHAIN TICK LEVER. It is unbounded incident response.
+ * For the routine multiplier-tick window use `beginSyncWindow.ts` /
+ * `endSyncWindow.ts`, which are bounded, auto-expiring and duty-cycled.
+ *
  * Usage:
  *   NETWORK=base npx hardhat run scripts/operator/pause.ts --network base --target=psm
- *   NETWORK=base npx hardhat run scripts/operator/pause.ts --network base --target=okuM
- *   NETWORK=base npx hardhat run scripts/operator/pause.ts --network base --target=usdOku
+ *   NETWORK=base npx hardhat run scripts/operator/pause.ts --network base --target=token
  *
  * Environment:
- *   TARGET         psm|okuM|usdOku (alternative to --target)
+ *   TARGET         token|psm (alternative to --target)
  *   DRY_RUN=true   Simulate without submitting
  *   --yes-mainnet  Required to broadcast on a mainnet network
  */
@@ -46,7 +48,9 @@ async function main() {
 
   const target = parseArg("target") ?? parseArg("TARGET");
   if (!target || !(target in TARGET_MAP)) {
-    throw new Error(`Required: --target=psm|okuM|usdOku (got ${target ?? "<none>"})`);
+    throw new Error(
+      `Required: --target=${Object.keys(TARGET_MAP).join("|")} (got ${target ?? "<none>"})`
+    );
   }
   const sel = TARGET_MAP[target];
 

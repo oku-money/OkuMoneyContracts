@@ -312,9 +312,17 @@ $100.00); redeeming 95.24 raw returns ~100 USDC.
 `usdcDecimalMultiplier` is stored per-PSM (`10 ** (18 - usdcDecimals)`), computed at
 `initialize` from the deployed USDC's `decimals()`. `1e12` on every chain targeted.
 
-> **No sandwich guard, no announcement window, no forward pricing.** Continuous
-> accrual has no distribution transaction to sandwich and no scheduled step to
-> front-run. Pricing reads `uiMultiplier()` directly.
+> **No *local* sandwich guard, no forward pricing.** Continuous accrual has no
+> distribution transaction to sandwich and no scheduled step to front-run.
+> Pricing reads `uiMultiplier()` directly. This is also why the EVM side needs no
+> step-arbitrage control: there is no discrete step to hold across, so the `tout`
+> fee exists here for cross-chain parity rather than as a defence.
+>
+> **There IS a cross-chain sync window.** That is a different concern. A
+> multiplier tick is not atomic across chains, and while it propagates the peer
+> chain prices a raw token differently. `mint`, `redeem`, `redeemUiAmount` and
+> `processQueue` therefore revert with `SyncWindowActive` while
+> `okuDollar.isSyncLocked()`. See [Cross-chain sync window](#cross-chain-sync-window).
 
 ### Admin surface
 
@@ -322,6 +330,7 @@ $100.00); redeeming 95.24 raw returns ~100 USDC.
 function depositBuffer(uint256 amount) external;             // PSM_BUFFER_DEPOSITOR
 function withdrawUsdc(address to, uint256 amount) external;  // PSM_BUFFER_WITHDRAWER
 function processQueue(uint256 startIndex, uint256 endIndex, uint256 approveAmount) external;
+function setFees(uint256 newTin, uint256 newTout) external;  // PSM_FEE_MANAGER
 function pause() / unpause() external;                       // PSM_PAUSER / PSM_UNPAUSER
 ```
 
@@ -330,7 +339,89 @@ withdrawal would drop the buffer below outstanding queue obligations.
 
 Events: `Minted(user, usdcAmount, rawOut, uiMultiplier)`,
 `Redeemed(user, rawIn, usdcOut, uiMultiplier)`,
-`BufferDeposited`, `BufferWithdrawn`, `BufferRefilled`.
+`BufferDeposited`, `BufferWithdrawn`, `BufferRefilled`, `FeesUpdated`.
+
+### Fees (`tin` / `tout`)
+
+Restored from the upstream this PSM was ported from
+([`dss-lite-psm`](https://github.com/makerdao/dss-lite-psm)), which carries
+`tin`/`tout` and which the original port dropped. Both default to **0 bps**, are
+bounded by `MAX_FEE_BPS` (100 = 1%), and are set by `PSM_FEE_MANAGER` (cold).
+
+```
+mint:   credited = usdcAmount − ceil(usdcAmount × tin / 10_000)   → raw minted against `credited`
+redeem: paid     = gross      − ceil(gross      × tout / 10_000)
+```
+
+The fee is **withheld, not forwarded**. `tin` enters the buffer without rUSDOku
+minted against it; `tout` is owed but never transferred out. There is no recipient
+and no sweep, so a fee raises the collateral ratio. Fees round up and payouts
+round down, per the library-wide protocol-favouring policy.
+
+**On EVM these are parity parameters, not a defence.** `tout` is the control for
+*local step arbitrage* — minting at `M0`, holding across a discrete multiplier
+step, redeeming at `M1`. That surface does not exist here, because accrual is
+continuous and there is no step. It exists on SVM, where Token-2022 forbids
+`ScaledUiAmount` alongside `InterestBearingConfig` and the multiplier must move in
+jumps. Keeping the parameters on both chains keeps the fee schedule, runbook and
+monitoring symmetric.
+
+Queued redemptions **snapshot** the prevailing `tout` at `enqueue`, so a later fee
+change cannot retroactively tax someone already waiting. `quoteMint` and
+`quoteRedeem` are fee-inclusive; `redeemableNow` is deliberately fee-free (a fee
+only reduces the USDC leaving the buffer, so the capacity bound stays valid) and
+`totalQueuedUsdc` is a fee-free upper bound (per-entry snapshots make an exact
+O(1) figure impossible, and over-approximating is the safe direction for sizing
+the `processQueue` approval).
+
+### Cross-chain sync window
+
+A multiplier tick is not atomic across chains. Between the EVM write and the SVM
+write the two sides price a raw token differently, so anything converting value
+*through* the multiplier in that interval settles at a stale price on one side.
+
+The window is a bounded, auto-expiring, epoch-attested block on exactly those
+operations. State and control live on `OkuDollar` (where the multiplier authority
+is); the PSM reads `isSyncLocked()`.
+
+```solidity
+function beginSyncWindow(uint256 epoch) external;        // OKU_RATE_SETTER
+function endSyncWindow(uint256 epoch) external;          // OKU_RATE_SETTER
+function setSyncWindowDuration(uint256 secs) external;   // OKU_CAP_MANAGER
+function isSyncLocked() / syncLockedUntil() / syncEpoch() / syncWindowDuration() view;
+```
+
+**Gating rule:** an operation is sync-gated **iff it prices through the
+multiplier**. Gated: `mint`, `redeem`, `redeemUiAmount`, `processQueue`. Not
+gated: `depositBuffer`, `withdrawUsdc`, `advanceHead`, `rescueQueueEntry`,
+`sweepExcess`, `setYieldRate`, `haltAccrual`.
+
+Note `processQueue` **is** sync-gated although it is deliberately *not*
+pause-gated. Pause is unbounded incident response, so gating queue processing on
+it could strand users indefinitely; the sync window is bounded by
+`MAX_SYNC_WINDOW` and duty-cycled by `MIN_SYNC_WINDOW_GAP`, and leaving it open
+would be a genuine hole because the queue prices at the live multiplier.
+
+**Properties:**
+
+| Property | Mechanism |
+|---|---|
+| Fail-closed | `setYieldRate` auto-arms, so a tick can never land unfenced |
+| Fail-open | auto-expiry at `MAX_SYNC_WINDOW` (15 min) — a dead orchestrator cannot brick redemption |
+| Anti-grief | `MIN_SYNC_WINDOW_GAP` (6 h) ⇒ **≥96% availability floor**, asserted in `SyncWindowTest` |
+| Never censoring | a rate write inside the gap **clamps** (succeeds without re-arming) rather than reverting |
+| Ships inert | duration defaults to `0`, which blocks nothing at all |
+
+`haltAccrual` deliberately does **not** arm a window: `OKU_GUARDIAN` is warm and
+justified as withhold-only, and arming would hand it a repeatable mint/redeem
+block the RBAC model denies it.
+
+**The epoch is orchestrator-assigned, never auto-incremented.** EVM re-ups its
+rate roughly monthly while SVM steps daily-to-weekly, so independently-bumped
+counters would diverge permanently. The orchestrator assigns one number per tick,
+both chains record it, and `syncEpoch()_evm == sync_epoch_svm` becomes an
+externally verifiable "no tick in flight" assertion — checked by
+`SVM/oku-programs/scripts/admin/check-sync-parity.ts`.
 
 ---
 
@@ -481,18 +572,27 @@ to the `LitePSM` proxy, avoiding a circular dependency and keeping admin from ca
 | `DEFAULT_ADMIN_ROLE` | Cold multisig | Grant/revoke any role | Nothing — meta-role |
 | `OKU_UPGRADER` / `PSM_UPGRADER` / `QUEUE_UPGRADER` | Cold multisig | Replace logic via UUPS | Nothing — mitigated by fork rehearsal and diff review |
 | `OKU_ALLOWANCE_MANAGER` | Cold multisig | Set `minterAllowance` | Capped at `maxSupply`; minting still needs `OKU_MINTER` |
-| `OKU_CAP_MANAGER` | Cold multisig | Set `maxSupply` | Cannot go below `totalSupply()` |
+| `OKU_CAP_MANAGER` | Cold multisig | Set `maxSupply`, `setSyncWindowDuration` | Cap cannot go below `totalSupply()`; window bounded by `MAX_SYNC_WINDOW` |
+| `PSM_FEE_MANAGER` | Cold multisig | `setFees` (`tin`/`tout`) | `MAX_FEE_BPS` (1%); cannot retroactively change queued entries |
 | `PSM_BUFFER_WITHDRAWER` | Cold multisig | Drain PSM buffer | Cannot drop below outstanding queue obligations |
 | `OKU_PAUSER` / `PSM_PAUSER` | Warm multisig | Halt operations | Cannot unpause — cold only |
-| `OKU_GUARDIAN` | Warm multisig | `haltAccrual()` | Can only stop growth; cannot set a rate or reduce the multiplier |
+| `OKU_GUARDIAN` | Warm multisig | `haltAccrual()` | Can only stop growth; cannot set a rate, reduce the multiplier, **or arm a sync window** |
 | `OKU_BLACKLISTER` | Warm multisig | Block an address | Cannot unblacklist (cold only); cannot access funds |
-| `OKU_RATE_SETTER` | Orchestrator | `setYieldRate` | APR cap, duration cap, monotonicity, `MAX_MULTIPLIER` |
+| `OKU_RATE_SETTER` | Orchestrator | `setYieldRate`, `begin`/`endSyncWindow` | APR cap, duration cap, monotonicity, `MAX_MULTIPLIER`; window bounded by `MAX_SYNC_WINDOW` + `MIN_SYNC_WINDOW_GAP` |
 | `PSM_QUEUE_PROCESSOR` | Orchestrator | Process queue entries | Destination fixed to the entry's `user` |
 | `PSM_BUFFER_DEPOSITOR` | Orchestrator | Deposit USDC to buffer | Caller must hold the USDC |
 | `OKU_MINTER` | LitePSM (contract) | `mint()` inside swap paths | Per-minter allowance and `maxSupply`; never an EOA |
 | `QUEUE_RESCUER` | Warm multisig | Return escrowed tokens for a stuck entry | Cannot redirect a live entry's payment |
 
 Named `OKU_RATE_SETTER`, not `REBASER` — nothing rebases.
+
+`PSM_FEE_MANAGER` is intended for the same cold key as `OKU_CAP_MANAGER` — a fee
+schedule is economic policy of the same class as a supply cap. It is nonetheless a
+distinct, PSM-namespaced constant rather than a reuse of `OKU_CAP_MANAGER`, because
+AccessControl mappings are per-contract: gating a PSM function on a role whose name
+reads as a token role would defeat the prefix convention that keeps a grant on one
+contract from being mistaken for a grant on another. Same key, correctly-scoped
+capability.
 
 ---
 
@@ -551,10 +651,13 @@ npx hardhat compile && npx hardhat test              # Fork + scenarios
 | `TenYearAccrualTest` | Long-horizon simulation: overflow, precision drift, dust accumulation |
 | `MulDivOverflowTest` | `toUIAmount` at `MAX_MULTIPLIER` against a max-supply balance — the case the EIP reference implementation reverts on |
 | `QueueSkipPathsTest` | `AlreadyCleared`, `InsufficientFunds`, `TransferFailed` soft-skips, driven by `MockUSDC.setBlocked` (revert) and a return-false variant |
+| `SyncWindowTest` | Cross-chain window: the four gated entrypoints; auto-expiry (liveness backstop); early close; exclusive upper bound; epoch succession and match; the gap clamping a rate-write loop rather than reverting; fail-closed auto-arm; `haltAccrual` **not** arming; the ≥96% availability floor; independence from pause |
+| `FeesTest` | `tin`/`tout` arithmetic and ceil-rounding; fee accrual to the buffer; fee-inclusive quotes; per-entry `tout` snapshot surviving a governance fee change; **and the two regressions** — that `tout` no longer trips the slippage floor and `tin` no longer trips the round-trip drift check, both of which were written against a fee-free world |
 | Fork tests | **Every intended integration, at both a low and a high multiplier.** A high-multiplier fork run is the only way to catch integrations that silently assume `multiplier ≈ 1e18`. |
 
-Foundry is the authoritative functional coverage; Hardhat is for fork-dependent and
-multi-contract scenario work. CI fails below 95% line coverage on any `src/` file, with
+Foundry is the authoritative functional coverage (276 tests, 15 stateful-fuzz
+invariants); Hardhat is for the OZ storage-layout validator, multi-contract
+scenario work, and the high-multiplier regime (30 tests). CI fails below 95% line coverage on any `src/` file, with
 100% required on `ScaledUIAmountUpgradeable` — small, pure, and on every pricing path.
 
 **Harnesses** (test-only, never in a production import path): `MathLibHarness` (exposes
@@ -607,7 +710,25 @@ forward, only past cleared slots. Gas-bounded by `maxSlots`. A privileged versio
 no security and complicates the runbook.
 
 **10. EVM/SVM accrual granularity divergence.** EVM continuous, SVM stepwise by
-Token-2022 construction.
+Token-2022 construction. The cross-chain sync window bounds the *transactable*
+consequence of a tick landing unevenly, but it does not make the two multipliers
+equal — they never are, and the divergence is structural rather than a defect.
+
+**11. Cross-chain tick completion is attested, not proven.** Neither chain can
+observe the other: there is no bridge, oracle or message passing between them. The
+sync window therefore blocks *the interval*, and `syncEpoch` records the
+orchestrator's *claim* about which tick is in flight. Equality of epochs across
+chains is externally verifiable (`check-sync-parity.ts`) but not on-chain
+enforceable. A malicious orchestrator can open a window and never write, or write
+without opening one — bounded respectively by `MAX_SYNC_WINDOW`/`MIN_SYNC_WINDOW_GAP`
+and by fail-closed auto-arming, but not eliminated.
+
+**12. `tout` is fee-based, not a hard block.** On a stepped chain a redemption fee
+makes step arbitrage unprofitable rather than impossible: an attacker willing to
+pay more than the step is worth can still transact. The bound is economic, and it
+only holds while `tout` exceeds the largest step the rebase cadence produces —
+which is an operational commitment, not an on-chain invariant. The cadence itself
+is still open (see `TRACKER.md`).
 
 ---
 

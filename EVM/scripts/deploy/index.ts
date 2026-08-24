@@ -20,7 +20,7 @@
 import { ethers, network, upgrades, run } from "hardhat";
 import { Contract, Signer } from "ethers";
 import { saveAddress, loadAddressBook, saveAddressBook, hasAddress, loadAddress } from "../utils/addressBook";
-import { syncEvmRegistry } from "../utils/testnetRegistry";
+import { syncEvmRegistry } from "../utils/addressRegistry";
 import {
   getChainMetadata,
   DEV_WALLET_ADDRESS,
@@ -868,7 +868,7 @@ async function main() {
   }
   console.log();
 
-  // Mirror into the repo-root testnet-addresses.json registry (live networks only)
+  // Mirror into the repo-root addresses.json registry (live networks only)
   if (!isFork) {
     try {
       const metadata = getChainMetadata(networkName);
@@ -894,7 +894,7 @@ async function main() {
   }
 
   logger.info("Next steps:");
-  logger.info("1. Check the updated testnet-addresses.json at the repo root");
+  logger.info("1. Check the updated addresses.json at the repo root");
   logger.info("2. Deploy SVM: cd ../SVM/oku-programs && NETWORK=devnet npm run deploy:programs && npm run deploy:init");
   logger.info("3. Test PSM flow: npx hardhat run scripts/test/test-onchain.ts --network " + networkName);
 }

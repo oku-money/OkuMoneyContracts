@@ -118,8 +118,30 @@
         "required": ["token", "to"],
         "excluded": []
       },
-      "pause()": { "$id": "pause", "intent": "PAUSE mint and redeem", "fields": [], "required": [], "excluded": [] },
-      "unpause()": { "$id": "unpause", "intent": "Resume mint and redeem", "fields": [], "required": [], "excluded": [] }
+      "setFees(uint256,uint256)": {
+        "$id": "setFees",
+        "intent": "Set PSM mint/redeem fees",
+        "fields": [
+          { "path": "newTin", "label": "Mint fee (basis points)", "format": "raw" },
+          { "path": "newTout", "label": "Redeem fee (basis points)", "format": "raw" }
+        ],
+        "required": ["newTin", "newTout"],
+        "excluded": []
+      },
+      "pause()": {
+        "$id": "pause",
+        "intent": "PAUSE mint and redeem INDEFINITELY (incident response)",
+        "fields": [],
+        "required": [],
+        "excluded": []
+      },
+      "unpause()": {
+        "$id": "unpause",
+        "intent": "Resume mint and redeem after a pause",
+        "fields": [],
+        "required": [],
+        "excluded": []
+      }
     }
   }
 }

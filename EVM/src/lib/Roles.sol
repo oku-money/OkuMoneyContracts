@@ -45,6 +45,15 @@ library Roles {
     bytes32 internal constant PSM_QUEUE_PROCESSOR = keccak256("PSM_QUEUE_PROCESSOR");
     bytes32 internal constant PSM_BUFFER_DEPOSITOR = keccak256("PSM_BUFFER_DEPOSITOR");
     bytes32 internal constant PSM_BUFFER_WITHDRAWER = keccak256("PSM_BUFFER_WITHDRAWER");
+    /// @dev Sets the `tin` / `tout` fee schedule. Economic policy, so it belongs
+    ///      on the same cold key as `OKU_CAP_MANAGER` — but it must be a
+    ///      PSM-namespaced constant, not `OKU_CAP_MANAGER` itself: AccessControl
+    ///      mappings are per-contract, and reusing the token's role identifier to
+    ///      gate a PSM function would defeat the prefix convention that keeps a
+    ///      grant on one contract from being mistaken for a grant on another.
+    ///
+    ///      Same key, distinct capability. Bounded by `MAX_FEE_BPS`.
+    bytes32 internal constant PSM_FEE_MANAGER = keccak256("PSM_FEE_MANAGER");
 
     // ============ RedemptionQueue ============
 

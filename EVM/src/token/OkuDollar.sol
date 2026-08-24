@@ -110,6 +110,48 @@ contract OkuDollar is
         }
     }
 
+    /// @dev Cross-chain multiplier sync window. Lives in its own namespace, and
+    ///      on the token rather than the PSM, for two reasons:
+    ///
+    ///      1. The multiplier authority is here (`setYieldRate`), so fail-closed
+    ///         arming is a local write rather than a token -> PSM call, which
+    ///         would invert the dependency direction.
+    ///      2. Keeping it out of `ScaledUIAmountUpgradeable` leaves that library
+    ///         untouched. It sits on every pricing path and is held at 100% line
+    ///         coverage by a CI gate; widening its storage struct for a concern
+    ///         it does not own would be a poor trade.
+    ///
+    ///      Three `uint64`s pack into a single slot. `uint64` seconds overflows
+    ///      in year ~584 billion, and the epoch would need 1.8e19 ticks.
+    /// @custom:storage-location erc7201:okumoney.storage.SyncWindow
+    struct SyncWindowStorage {
+        /// @dev Exclusive: the first timestamp at which the window is no longer
+        ///      engaged. `0` = never armed. Doubles as the anchor for the
+        ///      inter-window gap, which is why `endSyncWindow` truncates it to
+        ///      `block.timestamp` rather than zeroing it.
+        uint64 lockedUntil;
+        /// @dev Orchestrator-assigned tick number, identical on every chain for
+        ///      a given tick. Deliberately NOT auto-incremented on a multiplier
+        ///      write: EVM re-ups its rate roughly monthly while SVM steps
+        ///      daily-to-weekly, so independently-bumped counters would diverge
+        ///      permanently and make cross-chain parity meaningless.
+        uint64 epoch;
+        /// @dev Configured window length in seconds. `0` = inert, which is the
+        ///      deployed default; the mechanism ships audited but dormant and is
+        ///      switched on by `setSyncWindowDuration`.
+        uint64 duration;
+    }
+
+    // keccak256(abi.encode(uint256(keccak256("okumoney.storage.SyncWindow")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant SYNCWINDOW_STORAGE_LOCATION =
+        0xf060659b9b87033111ee98a1780759ec75c780b1b57099783a2cb524034dd300;
+
+    function _getSyncWindowStorage() private pure returns (SyncWindowStorage storage $) {
+        assembly {
+            $.slot := SYNCWINDOW_STORAGE_LOCATION
+        }
+    }
+
     // ============ Errors ============
 
     error ExceedsSupplyCap(uint256 requested, uint256 cap);
@@ -122,6 +164,16 @@ contract OkuDollar is
     error NotBlacklisted();
     /// @notice The configured asset reports more decimals than supported (>18).
     error AssetDecimalsTooLarge(uint8 reported);
+    /// @notice `beginSyncWindow` called before `MIN_SYNC_WINDOW_GAP` elapsed.
+    /// @dev Only reachable from the explicit entrypoint. On the `setYieldRate`
+    ///      path an unelapsed gap silently declines to re-arm instead of
+    ///      reverting, so the rate setter is never censorable.
+    error SyncWindowGapNotElapsed(uint256 earliestNextOpen);
+    /// @notice Supplied epoch does not follow (`begin`) or match (`end`) the
+    ///         stored one.
+    error SyncEpochMismatch(uint256 supplied, uint256 expected);
+    /// @notice Proposed sync-window duration exceeds `MAX_SYNC_WINDOW`.
+    error SyncWindowTooLong(uint256 requested, uint256 maximum);
 
     // ============ Events ============
 
@@ -131,6 +183,20 @@ contract OkuDollar is
     event MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply);
     event Blacklisted(address indexed account);
     event Unblacklisted(address indexed account);
+
+    /// @notice A cross-chain multiplier sync window opened.
+    /// @param epoch Orchestrator-assigned tick number; must match the peer chain.
+    /// @param lockedUntil Exclusive timestamp at which the window lifts.
+    /// @param autoArmed `true` when armed implicitly by `setYieldRate` rather
+    ///        than by an explicit `beginSyncWindow`. A sustained stream of
+    ///        `true` means the operator is writing rates without running the
+    ///        tick protocol, and should alarm.
+    event SyncWindowOpened(uint256 indexed epoch, uint256 lockedUntil, bool autoArmed);
+    /// @notice A sync window was closed early, i.e. the tick was confirmed
+    ///         landed on every chain. Absence of this before `lockedUntil` means
+    ///         the liveness backstop fired instead of the happy path.
+    event SyncWindowClosed(uint256 indexed epoch);
+    event SyncWindowDurationUpdated(uint256 oldDuration, uint256 newDuration);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -317,14 +383,172 @@ contract OkuDollar is
         onlyRole(Roles.OKU_RATE_SETTER)
     {
         _setYieldRate(ratePerSecond_, endTimestamp);
+        // Fail-closed: a rate write is a multiplier-trajectory change, so fence
+        // it even if the operator skipped `beginSyncWindow`. Clamped, never
+        // reverting — see `_armSyncWindow`.
+        _armSyncWindow(true);
     }
 
     /// @notice Freeze the multiplier at its current value, immediately.
     /// @dev No timelock — this is the guardian's emergency lever against a
     ///      compromised rate setter. Monotone-safe: stops growth without
     ///      reducing anything already accrued. Not pause-gated.
+    ///
+    ///      Deliberately does NOT arm the sync window. `OKU_GUARDIAN` sits on
+    ///      the warm multisig specifically because it is withhold-only — it
+    ///      cannot reduce an accrued multiplier, so its abuse ceiling is "yield
+    ///      pauses until cold overrides". Letting it arm a window would hand
+    ///      that warm key a repeatable mint/redeem block, a capability the RBAC
+    ///      documentation explicitly denies it. Halting also lowers no
+    ///      trajectory that could desync a peer chain upward, so there is
+    ///      nothing to fence.
     function haltAccrual() external onlyRole(Roles.OKU_GUARDIAN) {
         _haltAccrual();
+    }
+
+    // ============ Cross-chain sync window ============
+    //
+    // Step 1 and step 3 of the cross-chain multiplier tick protocol:
+    //
+    //   beginSyncWindow(N) on every chain
+    //     -> setYieldRate (EVM) / set_multiplier (SVM) on every chain
+    //   endSyncWindow(N) on every chain
+    //
+    // Between open and close, the PSM's `mint`, `redeem`, `redeemUiAmount` and
+    // `processQueue` revert, so nobody transacts against a price only some
+    // chains have updated. Neither chain can observe the other, so the epoch is
+    // orchestrator-assigned and identical across chains, making
+    // `syncEpoch()_evm == sync_epoch_svm` an externally verifiable "no tick in
+    // flight" assertion.
+
+    /// @notice Open a cross-chain multiplier sync window.
+    /// @param epoch Must be exactly `syncEpoch() + 1`. Strict succession stops a
+    ///        replayed open from silently reusing a number and defeating the
+    ///        cross-chain parity check.
+    /// @dev Held by `OKU_RATE_SETTER` rather than a new role: the orchestrator
+    ///      that writes the multiplier is the actor that knows when a tick has
+    ///      landed everywhere, so a separate key would add plumbing without
+    ///      adding separation of duties.
+    function beginSyncWindow(uint256 epoch) external onlyRole(Roles.OKU_RATE_SETTER) {
+        SyncWindowStorage storage $ = _getSyncWindowStorage();
+
+        uint256 expected = uint256($.epoch) + 1;
+        if (epoch != expected) revert SyncEpochMismatch(epoch, expected);
+
+        // Unlike the auto-arm path this DOES revert on an unelapsed gap.
+        // Nothing about protocol safety depends on an explicit open succeeding,
+        // so it is free to be strict — and being strict here is precisely what
+        // makes the availability floor enforceable.
+        if (!_syncGapElapsed($)) {
+            revert SyncWindowGapNotElapsed(uint256($.lockedUntil) + Constants.MIN_SYNC_WINDOW_GAP);
+        }
+
+        // casting to 'uint64' is safe because `epoch` was just required to equal
+        // `uint256($.epoch) + 1` and `$.epoch` is itself a uint64, so the value
+        // is at most 2^64. Reaching it needs 1.8e19 ticks.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        $.epoch = uint64(epoch);
+        $.lockedUntil = uint64(block.timestamp + $.duration);
+
+        emit SyncWindowOpened(epoch, $.lockedUntil, false);
+    }
+
+    /// @notice Close the current sync window early, once the tick is confirmed
+    ///         landed on every chain.
+    /// @param epoch Must equal `syncEpoch()`, so a stale release cannot close a
+    ///        window it never observed.
+    /// @dev Truncates `lockedUntil` to now rather than zeroing it: that field is
+    ///      also the gap anchor, and zeroing would reset the gap and permit
+    ///      windows to be chained back-to-back.
+    function endSyncWindow(uint256 epoch) external onlyRole(Roles.OKU_RATE_SETTER) {
+        SyncWindowStorage storage $ = _getSyncWindowStorage();
+
+        if (epoch != uint256($.epoch)) revert SyncEpochMismatch(epoch, uint256($.epoch));
+
+        // Only ever move the end backwards, so a same-second double-close
+        // cannot push the gap anchor forward.
+        if (uint256($.lockedUntil) > block.timestamp) {
+            $.lockedUntil = uint64(block.timestamp);
+        }
+
+        emit SyncWindowClosed(epoch);
+    }
+
+    /// @notice Set the sync-window length in seconds. `0` disables the window.
+    /// @dev `OKU_CAP_MANAGER` (cold) — this is economic/safety policy, the same
+    ///      class as `setMaxSupply`, so it reuses that role rather than adding
+    ///      one. Bounded by `MAX_SYNC_WINDOW`, so no key can turn this into an
+    ///      indefinite block.
+    function setSyncWindowDuration(uint256 newDuration) external onlyRole(Roles.OKU_CAP_MANAGER) {
+        if (newDuration > Constants.MAX_SYNC_WINDOW) {
+            revert SyncWindowTooLong(newDuration, Constants.MAX_SYNC_WINDOW);
+        }
+        SyncWindowStorage storage $ = _getSyncWindowStorage();
+        uint256 old = uint256($.duration);
+        // casting to 'uint64' is safe because the bound check immediately above
+        // caps `newDuration` at `MAX_SYNC_WINDOW` (15 minutes).
+        // forge-lint: disable-next-line(unsafe-typecast)
+        $.duration = uint64(newDuration);
+        emit SyncWindowDurationUpdated(old, newDuration);
+    }
+
+    /// @notice True while a multiplier tick is propagating across chains.
+    /// @dev Exclusive upper bound. A zero-length window is therefore genuinely
+    ///      inert rather than blocking the remainder of the current second,
+    ///      which is what lets the mechanism ship dormant.
+    function isSyncLocked() public view returns (bool) {
+        return block.timestamp < uint256(_getSyncWindowStorage().lockedUntil);
+    }
+
+    /// @notice Exclusive timestamp at which the current window lifts.
+    function syncLockedUntil() external view returns (uint256) {
+        return uint256(_getSyncWindowStorage().lockedUntil);
+    }
+
+    /// @notice Orchestrator-assigned tick number. Compare across chains.
+    function syncEpoch() external view returns (uint256) {
+        return uint256(_getSyncWindowStorage().epoch);
+    }
+
+    /// @notice Configured window length in seconds. `0` = inert.
+    function syncWindowDuration() external view returns (uint256) {
+        return uint256(_getSyncWindowStorage().duration);
+    }
+
+    /// @dev Arm the window, honouring the inter-window gap. No-op when the
+    ///      duration is zero or the gap has not elapsed.
+    ///
+    ///      CLAMP, NEVER REVERT. A multiplier write must not be rejectable on
+    ///      window state: that would let anyone able to open a window censor the
+    ///      rate setter, and `setYieldRate` is deliberately un-gated so an
+    ///      operator can zero the rate during an incident. The gap bound still
+    ///      holds — a caller looping `setYieldRate` gets at most one window per
+    ///      gap period, preserving the availability floor.
+    ///
+    ///      Writes nothing at all when `duration == 0`, so an inert deployment
+    ///      never moves the gap anchor and never emits a window event.
+    function _armSyncWindow(bool autoArmed) internal {
+        SyncWindowStorage storage $ = _getSyncWindowStorage();
+        if ($.duration == 0) return;
+        if (!_syncGapElapsed($)) return;
+        $.lockedUntil = uint64(block.timestamp + $.duration);
+        emit SyncWindowOpened(uint256($.epoch), $.lockedUntil, autoArmed);
+    }
+
+    /// @dev Whether enough time has passed since the last window closed for a
+    ///      new one to be armed.
+    ///
+    ///      `lockedUntil == 0` is the never-armed sentinel and always satisfies
+    ///      the gap. Checking it explicitly rather than letting the arithmetic
+    ///      fall out matters: without it the first window could not open until
+    ///      `MIN_SYNC_WINDOW_GAP` past the Unix epoch. That is unreachable on a
+    ///      production chain, which is exactly why it would have been a latent
+    ///      trap — it would only ever surface on a fresh local chain whose
+    ///      timestamp starts near zero.
+    function _syncGapElapsed(SyncWindowStorage storage $) private view returns (bool) {
+        uint64 until = $.lockedUntil;
+        if (until == 0) return true;
+        return block.timestamp >= uint256(until) + Constants.MIN_SYNC_WINDOW_GAP;
     }
 
     // ============ ERC-20 hook: pause + blacklist + UI event ============

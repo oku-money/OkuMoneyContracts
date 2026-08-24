@@ -125,6 +125,9 @@ abstract contract BaseTest is Actors {
         litePsm.grantRole(Roles.PSM_QUEUE_PROCESSOR, queueProcessor);
         litePsm.grantRole(Roles.PSM_BUFFER_DEPOSITOR, bufferDepositor);
         litePsm.grantRole(Roles.PSM_BUFFER_WITHDRAWER, bufferWithdrawer);
+        // Same cold actor as the token's cap manager: one key, two
+        // correctly-scoped capabilities on two contracts.
+        litePsm.grantRole(Roles.PSM_FEE_MANAGER, capManager);
 
         queue.grantRole(Roles.QUEUE_RESCUER, queueRescuer);
 

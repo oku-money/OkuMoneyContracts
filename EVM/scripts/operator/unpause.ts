@@ -1,17 +1,16 @@
 /**
  * Unpause one of the OkuDollar protocol contracts.
  *
- * Single script with --target={psm|okuM|usdOku}. Each target's unpause()
- * is gated by a distinct role:
- *   psm    -> LitePSM.unpause()    [PSM_UNPAUSER]
- *   token -> OkuDollar.unpause()  [OKU_UNPAUSER]  cold multisig only
- *   psm   -> LitePSM.unpause()    [PSM_UNPAUSER]  cold multisig only
+ * Single script with --target={token|psm}. Each target's unpause() is gated by a
+ * distinct role, both cold-multisig only:
+ *   token -> OkuDollar.unpause()  [OKU_UNPAUSER]
+ *   psm   -> LitePSM.unpause()    [PSM_UNPAUSER]
  *
  * Usage:
  *   NETWORK=base npx hardhat run scripts/operator/unpause.ts --network base --target=psm
  *
  * Environment:
- *   TARGET         psm|okuM|usdOku
+ *   TARGET         token|psm
  *   DRY_RUN=true
  *   --yes-mainnet
  */
@@ -44,7 +43,9 @@ async function main() {
 
   const target = parseArg("target") ?? parseArg("TARGET");
   if (!target || !(target in TARGET_MAP)) {
-    throw new Error(`Required: --target=psm|okuM|usdOku (got ${target ?? "<none>"})`);
+    throw new Error(
+      `Required: --target=${Object.keys(TARGET_MAP).join("|")} (got ${target ?? "<none>"})`
+    );
   }
   const sel = TARGET_MAP[target];
 

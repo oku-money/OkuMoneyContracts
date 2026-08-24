@@ -66,8 +66,8 @@ contract MulDivBoundsTest is Test {
     }
 
     function testFuzz_InsideEnvelope_NaiveAndMulDivAgree(uint256 raw, uint256 m) public view {
-        raw = bound(raw, 0, Constants.MAX_TOTAL_SUPPLY);
-        m = bound(m, 1, Constants.MAX_MULTIPLIER);
+        raw = _bound(raw, 0, Constants.MAX_TOTAL_SUPPLY);
+        m = _bound(m, 1, Constants.MAX_MULTIPLIER);
         assertEq(math.toUiAmount(raw, m), math.naiveToUiAmount(raw, m));
     }
 

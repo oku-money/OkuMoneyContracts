@@ -56,6 +56,29 @@ pub struct CapManager<'info> {
     pub token_2022_program: Program<'info, Token2022>,
 }
 
+/// Config-only `cap_manager` context for protocol parameters that need no
+/// token state: the sync-window length and the `tin`/`tout` fees.
+///
+/// Separate from [`CapManager`] (which reads the mint so `set_max_supply`
+/// can refuse a cap below circulating supply) so these setters do not
+/// force callers to pass a mint and token program they have no use for.
+///
+/// `cap_manager` is the cold-multisig economic-policy role, which is the
+/// right home for a fee schedule and for a bound on how long redemption
+/// can be gated. Reusing it avoids adding a thirteenth authority.
+#[derive(Accounts)]
+pub struct CapManagerParams<'info> {
+    pub cap_manager: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [PsmConfig::SEED],
+        bump = config.bump,
+        has_one = cap_manager @ LitePsmError::Unauthorized
+    )]
+    pub config: Account<'info, PsmConfig>,
+}
+
 #[derive(Accounts)]
 pub struct AllowanceManager<'info> {
     pub allowance_manager: Signer<'info>,

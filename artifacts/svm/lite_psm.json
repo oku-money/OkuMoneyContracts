@@ -59,6 +59,64 @@
       "args": []
     },
     {
+      "name": "begin_sync_window",
+      "docs": [
+        "Open a cross-chain multiplier sync window (REBASER only).",
+        "`epoch` must be exactly the stored epoch + 1."
+      ],
+      "discriminator": [
+        75,
+        243,
+        169,
+        167,
+        180,
+        191,
+        47,
+        52
+      ],
+      "accounts": [
+        {
+          "name": "rebaser",
+          "docs": [
+            "Rebaser role — the orchestrator driving the cross-chain tick."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "epoch",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "burn_oku_m_direct",
       "docs": [
         "Burn OkuM directly without USDC payout (permissioned --",
@@ -389,6 +447,65 @@
       "args": [
         {
           "name": "yield_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "end_sync_window",
+      "docs": [
+        "Close the current sync window early (REBASER only), once the tick",
+        "is confirmed landed on every chain. `epoch` must equal the stored",
+        "epoch so a stale call cannot close a window it never observed."
+      ],
+      "discriminator": [
+        253,
+        252,
+        26,
+        104,
+        157,
+        43,
+        205,
+        86
+      ],
+      "accounts": [
+        {
+          "name": "rebaser",
+          "docs": [
+            "Rebaser role — the orchestrator driving the cross-chain tick."
+          ],
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "epoch",
           "type": "u64"
         }
       ]
@@ -1240,6 +1357,59 @@
       ]
     },
     {
+      "name": "reset_step_high_water_mark",
+      "docs": [
+        "Clear the multiplier-step high-water mark (CAP_MANAGER only).",
+        "",
+        "REOPENS HISTORICAL STEP-ARBITRAGE EXPOSURE. Separate from `set_fees` so",
+        "it cannot happen as a side effect of a routine fee change. See the",
+        "instruction doc for when this is legitimate."
+      ],
+      "discriminator": [
+        228,
+        172,
+        87,
+        4,
+        88,
+        19,
+        98,
+        125
+      ],
+      "accounts": [
+        {
+          "name": "cap_manager",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "set_authority",
       "discriminator": [
         133,
@@ -1402,6 +1572,67 @@
       "args": [
         {
           "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_fees",
+      "docs": [
+        "Set the `tin` / `tout` fee schedule in basis points (CAP_MANAGER",
+        "only). `tout` is the local step-arbitrage control and must exceed",
+        "the yield delivered by a single multiplier step. Both bounded by",
+        "`MAX_FEE_BPS`; both default to 0."
+      ],
+      "discriminator": [
+        137,
+        178,
+        49,
+        58,
+        0,
+        245,
+        242,
+        190
+      ],
+      "accounts": [
+        {
+          "name": "cap_manager",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "tin_bps",
+          "type": "u64"
+        },
+        {
+          "name": "tout_bps",
           "type": "u64"
         }
       ]
@@ -1592,6 +1823,62 @@
         {
           "name": "new_multiplier",
           "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_sync_window_secs",
+      "docs": [
+        "Set the sync-window length in seconds (CAP_MANAGER only).",
+        "`0` = inert, which is the initialization default. Bounded by",
+        "`MAX_SYNC_WINDOW_SECS`."
+      ],
+      "discriminator": [
+        2,
+        85,
+        127,
+        25,
+        5,
+        79,
+        96,
+        114
+      ],
+      "accounts": [
+        {
+          "name": "cap_manager",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  115,
+                  109,
+                  95,
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_secs",
+          "type": "i64"
         }
       ]
     },
@@ -1958,6 +2245,19 @@
       ]
     },
     {
+      "name": "FeesSet",
+      "discriminator": [
+        121,
+        74,
+        126,
+        26,
+        13,
+        22,
+        27,
+        166
+      ]
+    },
+    {
       "name": "FreezeEvent",
       "discriminator": [
         71,
@@ -2098,6 +2398,58 @@
         135,
         120,
         145
+      ]
+    },
+    {
+      "name": "StepHighWaterMarkReset",
+      "discriminator": [
+        18,
+        13,
+        32,
+        72,
+        152,
+        242,
+        110,
+        173
+      ]
+    },
+    {
+      "name": "SyncWindowClosed",
+      "discriminator": [
+        152,
+        143,
+        242,
+        202,
+        97,
+        135,
+        200,
+        62
+      ]
+    },
+    {
+      "name": "SyncWindowOpened",
+      "discriminator": [
+        122,
+        163,
+        95,
+        82,
+        169,
+        15,
+        97,
+        83
+      ]
+    },
+    {
+      "name": "SyncWindowSecsSet",
+      "discriminator": [
+        147,
+        24,
+        134,
+        250,
+        103,
+        166,
+        79,
+        86
       ]
     },
     {
@@ -2283,6 +2635,46 @@
       "code": 6025,
       "name": "SlippageExceeded",
       "msg": "Redeem output is below min_usdc_out"
+    },
+    {
+      "code": 6026,
+      "name": "SyncWindowActive",
+      "msg": "Cross-chain multiplier sync window is active"
+    },
+    {
+      "code": 6027,
+      "name": "SyncWindowGapNotElapsed",
+      "msg": "Minimum gap between sync windows has not elapsed"
+    },
+    {
+      "code": 6028,
+      "name": "EpochMismatch",
+      "msg": "Sync epoch does not match the expected value"
+    },
+    {
+      "code": 6029,
+      "name": "SyncWindowTooLong",
+      "msg": "Proposed sync window exceeds MAX_SYNC_WINDOW_SECS"
+    },
+    {
+      "code": 6030,
+      "name": "FeeAboveMax",
+      "msg": "Proposed fee exceeds MAX_FEE_BPS"
+    },
+    {
+      "code": 6031,
+      "name": "StepExceedsFeeCoverage",
+      "msg": "Multiplier step exceeds what tout_bps covers (raise tout or take a smaller step)"
+    },
+    {
+      "code": 6032,
+      "name": "FeeBelowStepHighWaterMark",
+      "msg": "Proposed tout_bps is below the step high-water mark"
+    },
+    {
+      "code": 6033,
+      "name": "NoWriteInEpoch",
+      "msg": "No multiplier write landed in this sync epoch"
     }
   ],
   "types": [
@@ -2586,6 +2978,38 @@
           },
           {
             "name": "new_allowance",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FeesSet",
+      "docs": [
+        "Emitted when `set_fees` changes the `tin` / `tout` schedule.",
+        "",
+        "`tout` is the local step-arbitrage control: it must exceed the yield",
+        "delivered by a single multiplier step or a mint-hold-redeem round trip",
+        "across that step is profitable. Both values are in basis points and",
+        "bounded by `MAX_FEE_BPS`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_tin_bps",
+            "type": "u64"
+          },
+          {
+            "name": "new_tin_bps",
+            "type": "u64"
+          },
+          {
+            "name": "old_tout_bps",
+            "type": "u64"
+          },
+          {
+            "name": "new_tout_bps",
             "type": "u64"
           }
         ]
@@ -3052,6 +3476,99 @@
               "reset by `allowance_manager` via `set_direct_burner_allowance`."
             ],
             "type": "u64"
+          },
+          {
+            "name": "sync_lock_until_ts",
+            "docs": [
+              "Unix timestamp through which the sync window is engaged (inclusive).",
+              "`0` = never armed. Also serves as the anchor for the inter-window",
+              "gap check, which is why `end_sync_window` truncates it to `now`",
+              "rather than zeroing it."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "sync_epoch",
+            "docs": [
+              "Orchestrator-assigned tick counter, identical on both chains for a",
+              "given tick.",
+              "",
+              "Deliberately **not** auto-incremented on a multiplier write: EVM",
+              "writes its rate roughly monthly while SVM steps daily-to-weekly, so",
+              "independently-bumped counters would diverge permanently and make the",
+              "parity check useless. The orchestrator assigns the number, both",
+              "chains record it, and `epoch_evm == epoch_svm` becomes a meaningful",
+              "externally-verifiable statement that no tick is mid-flight."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "last_write_epoch",
+            "docs": [
+              "The epoch during which a multiplier write most recently landed.",
+              "",
+              "`end_sync_window(N)` requires `last_write_epoch == N`, which is what",
+              "stops a window being opened and closed with nothing having happened.",
+              "Without it, \"open, forget to write, close\" leaves `sync_epoch = N`",
+              "against an untouched multiplier and the cross-chain parity check",
+              "reports OK — a false negative on the one check that exists.",
+              "",
+              "With it, `sync_epoch` means \"this chain actually wrote for tick N\".",
+              "",
+              "SVM-only concept. EVM accrues continuously and has nothing to land per",
+              "tick; its role in a window is to hold still while this chain catches up."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "sync_window_secs",
+            "docs": [
+              "Configured window length in seconds. `0` = inert (arming blocks",
+              "nothing beyond the instant of the write itself), which is the",
+              "initialization default so the mechanism ships audited but dormant.",
+              "Bounded by `MAX_SYNC_WINDOW_SECS`."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "tin_bps",
+            "docs": [
+              "Mint fee in basis points, charged on the USDC deposited."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "tout_bps",
+            "docs": [
+              "Redemption fee in basis points, charged on the USDC paid out.",
+              "This is the step-arbitrage control; `tin` is present for upstream",
+              "parity and operator flexibility."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "max_step_bps",
+            "docs": [
+              "High-water mark of every multiplier step ever taken, in basis points,",
+              "rounded up. `set_fees` refuses any `tout_bps` below it.",
+              "",
+              "This is the second half of the step-arbitrage invariant. The first half",
+              "(`step_is_covered`, enforced at write time) stops an operator creating",
+              "exposure the current fee does not cover. This half stops them *removing*",
+              "coverage afterwards — otherwise \"raise tout, take a big step, lower tout\"",
+              "hands a cheap exit to everyone who held across the step.",
+              "",
+              "A time-based cooldown was considered and rejected: the attacker's edge is",
+              "locked in when the step lands and does not decay, and the multiplier is",
+              "monotonic so waiting costs them nothing. A cooldown delays the profit",
+              "rather than removing it. A high-water mark has no expiry.",
+              "",
+              "Less restrictive than it sounds: it pins the fee only against steps",
+              "actually taken. If every step was 1.4 bps, the fee can still be lowered",
+              "to 1.4 bps. Cleared only by the explicit, separately-gated",
+              "`reset_step_high_water_mark`."
+            ],
+            "type": "u64"
           }
         ]
       }
@@ -3167,6 +3684,122 @@
           {
             "name": "pending_admin",
             "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "StepHighWaterMarkReset",
+      "docs": [
+        "Emitted when `reset_step_high_water_mark` clears the step floor under",
+        "`tout_bps`.",
+        "",
+        "ALARM ON THIS. It reopens historical step-arbitrage exposure: raw acquired",
+        "before a large past step can subsequently be redeemed at a fee that no",
+        "longer covers that step. Legitimate only when the supply outstanding at the",
+        "time of the step has substantially turned over — a judgement the chain",
+        "cannot make, which is why the action is cold-gated and separately named."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_mark_bps",
+            "type": "u64"
+          },
+          {
+            "name": "tout_bps_at_reset",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SyncWindowClosed",
+      "docs": [
+        "Emitted when a sync window is closed early via `end_sync_window`,",
+        "i.e. the orchestrator confirmed the tick landed on every chain.",
+        "",
+        "Absence of this event before `until_ts` means the window expired on its",
+        "own — the liveness backstop fired rather than the happy path. Worth",
+        "alarming on, since it usually means the orchestrator died mid-tick and",
+        "the chains may now disagree on `sync_epoch`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SyncWindowOpened",
+      "docs": [
+        "Emitted when a cross-chain multiplier sync window opens.",
+        "",
+        "`auto_armed` distinguishes the two paths, which matters for monitoring:",
+        "`false` is the orchestrator explicitly opening a window as step 1 of a",
+        "tick (the healthy case), `true` is the fail-closed arm that fires on a",
+        "multiplier write which had no window open. A sustained stream of",
+        "`auto_armed: true` means the orchestrator is writing multipliers",
+        "without running the tick protocol, and should alarm."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "epoch",
+            "docs": [
+              "Orchestrator-assigned tick number; must match the peer chain's."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "until_ts",
+            "docs": [
+              "Inclusive Unix timestamp through which price-sensitive",
+              "instructions are blocked."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "auto_armed",
+            "docs": [
+              "`true` when armed implicitly by a multiplier write rather than by",
+              "an explicit `begin_sync_window`."
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SyncWindowSecsSet",
+      "docs": [
+        "Emitted when `set_sync_window_secs` changes the configured window",
+        "length. `0` means the window mechanism is inert."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_secs",
+            "type": "i64"
+          },
+          {
+            "name": "new_secs",
+            "type": "i64"
           }
         ]
       }

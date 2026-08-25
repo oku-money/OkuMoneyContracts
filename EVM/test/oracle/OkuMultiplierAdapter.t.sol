@@ -154,4 +154,46 @@ contract OkuMultiplierAdapterTest is BaseTest {
         vm.expectRevert(OkuMultiplierAdapter.NoDataPresent.selector);
         feed.getRoundData(1);
     }
+
+    // ============ Cross-chain sync window passthroughs ============
+
+    function test_SyncWindow_PassthroughTracksTheToken() public {
+        assertFalse(feed.isSyncLocked());
+        assertEq(feed.syncLockedUntil(), 0);
+
+        vm.prank(rateSetter);
+        token.beginSyncWindow(1);
+
+        assertTrue(feed.isSyncLocked(), "adapter must surface the PSM gate");
+        assertEq(feed.syncLockedUntil(), token.syncLockedUntil());
+
+        vm.warp(block.timestamp + Constants.DEFAULT_SYNC_WINDOW);
+        assertFalse(feed.isSyncLocked());
+    }
+
+    /// @notice The window must NOT mark the feed unhealthy.
+    ///
+    /// @dev Deliberate. The multiplier is genuinely correct during a sync
+    ///      window — EVM accrues continuously, and the window exists to hold
+    ///      this chain still while a peer catches up, not because anything here
+    ///      is wrong. Reporting unhealthy would trigger needless liquidation
+    ///      pauses on an accurate feed. The narrower fact worth surfacing is
+    ///      that a position valued off this feed cannot be unwound through the
+    ///      PSM for at most `MAX_SYNC_WINDOW`, which `isSyncLocked()` says
+    ///      precisely.
+    function test_SyncWindow_DoesNotAffectHealth() public {
+        assertTrue(feed.isHealthy());
+
+        vm.prank(rateSetter);
+        token.beginSyncWindow(1);
+
+        assertTrue(feed.isSyncLocked());
+        assertTrue(feed.isHealthy(), "an accurate price must not be marked unhealthy");
+        (, int256 answer,,,) = feed.latestRoundData();
+        // casting to 'uint256' is safe because the adapter derives `answer`
+        // from `uiMultiplier()`, which is monotonically >= PRECISION and
+        // bounded by MAX_MULTIPLIER, so it is never negative.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        assertEq(uint256(answer), token.uiMultiplier(), "and must still be readable");
+    }
 }

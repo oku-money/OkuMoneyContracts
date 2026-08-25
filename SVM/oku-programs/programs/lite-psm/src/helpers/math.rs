@@ -32,6 +32,17 @@ pub fn dollars_to_raw(dollar_value: u64, multiplier: u64) -> Result<u64> {
     shared::dollars_to_raw(dollar_value, multiplier).ok_or_else(|| error!(LitePsmError::Overflow))
 }
 
+/// Subtract a basis-point fee from `gross`, rounding the fee **up**
+/// (protocol-favouring) per the shared rounding policy.
+///
+/// Returns `Ok(0)` when a nonzero fee rounds a dust amount entirely away —
+/// callers MUST treat that as a reject (`ZeroOutput` / `AmountTooSmall`)
+/// rather than settling a zero-value transfer, since the user's tokens
+/// would still be consumed.
+pub fn apply_fee(gross: u64, fee_bps: u64) -> Result<u64> {
+    shared::apply_fee(gross, fee_bps).ok_or_else(|| error!(LitePsmError::Overflow))
+}
+
 #[cfg(test)]
 mod tests {
     //! These tests cover the Anchor-error-mapping layer. The underlying

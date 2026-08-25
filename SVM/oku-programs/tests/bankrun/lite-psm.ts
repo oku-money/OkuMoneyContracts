@@ -22,6 +22,7 @@ import {
   MINTER_ALLOWANCE,
   DECIMALS,
 } from "../shared/setup";
+import { clearSyncWindow } from "../shared/multiplier";
 import {
   BankrunHarness,
   startBankrun,
@@ -132,6 +133,12 @@ describe("lite-psm", () => {
     // slot by 1 before submitting. So `check_yield_lock` is never
     // poisoned by a stuck slot from a prior test.
     await ensurePSMUnpaused(program, configPda);
+
+    // The wall-clock sync window is NOT auto-cleared the way the slot fence
+    // is, so a multiplier write in an earlier describe would otherwise leak a
+    // SyncWindowActive revert into every later test. This suite is not about
+    // the window — that is `sync-window-and-fees.ts` — so settle it here.
+    await clearSyncWindow(h, program as any, configPda);
   });
 
   describe("initialize", () => {

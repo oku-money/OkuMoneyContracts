@@ -10,16 +10,18 @@
 
 use crate::constants::{OKU_M_METADATA_NAME, OKU_M_METADATA_SYMBOL};
 use crate::contexts::{
-    AcceptRoleAdmin, AllowanceManager, CapManager, FreezeAccount, Pause, SetAuthority, ThawAccount,
-    Unpause, UpdateTokenMetadata,
+    AcceptRoleAdmin, AllowanceManager, CapManager, CapManagerParams, FreezeAccount, Pause,
+    SetAuthority, ThawAccount, Unpause, UpdateTokenMetadata,
 };
 use crate::errors::LitePsmError;
 use crate::events::*;
+use crate::helpers::validate_sync_window_secs;
 use crate::roles::AuthorityRole;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_2022_extensions::spl_token_metadata_interface;
 use anchor_spl::token_interface;
+use oku_shared::MAX_FEE_BPS;
 use spl_token_metadata_interface::state::Field;
 
 /// Pause the PSM (emergency response)
@@ -420,6 +422,127 @@ pub fn update_token_metadata(ctx: Context<UpdateTokenMetadata>) -> Result<()> {
         mint: mint_key,
         name: OKU_M_METADATA_NAME.to_string(),
         symbol: OKU_M_METADATA_SYMBOL.to_string(),
+    });
+
+    Ok(())
+}
+
+/// Set the cross-chain sync window length in seconds (CAP_MANAGER only).
+///
+/// `0` disables the window entirely, which is the initialization default:
+/// the mechanism ships audited but inert and is switched on once the
+/// cross-chain tick cadence is settled. Bounded by
+/// `MAX_SYNC_WINDOW_SECS`, so no key — cold included — can turn this into
+/// an indefinite redemption block.
+///
+/// Sized from cross-chain propagation, not from arbitrage economics: the
+/// window only needs to outlast "both chains have landed the tick", which
+/// the orchestrator confirms explicitly via `end_sync_window` anyway. The
+/// configured value is the fallback for when that confirmation never
+/// arrives.
+pub fn set_sync_window_secs(ctx: Context<CapManagerParams>, new_secs: i64) -> Result<()> {
+    validate_sync_window_secs(new_secs)?;
+
+    let config = &mut ctx.accounts.config;
+    let old_secs = config.sync_window_secs;
+    config.sync_window_secs = new_secs;
+
+    emit!(SyncWindowSecsSet { old_secs, new_secs });
+
+    Ok(())
+}
+
+/// Set the PSM `tin` / `tout` fee schedule in basis points (CAP_MANAGER only).
+///
+/// # What `tout` is for
+///
+/// SVM's multiplier moves in discrete steps (Token-2022 forbids
+/// `ScaledUiAmount` alongside `InterestBearingConfig`, so continuous
+/// accrual is unavailable here as it is on EVM). A discrete step is
+/// free money to anyone who mints at `M0`, holds across the step, and
+/// redeems at `M1` — no risk, no meaningful holding period, repeatable
+/// every step, bounded only by `minter_allowance` and buffer depth.
+///
+/// The sync window does **not** stop this: the attacker never needs to
+/// transact while the window is open, so widening it only lengthens their
+/// hold. A `tout` exceeding the yield delivered by one step is what makes
+/// the round trip lossy, permanently and independently of tick cadence.
+/// Set it accordingly — at a weekly cadence and 5% APY one step is
+/// ~9.6 bps, so `tout` must exceed that with margin.
+///
+/// Both fees accrue to the USDC buffer (no recipient, no transfer), so
+/// they raise the collateral ratio rather than being swept.
+///
+/// Ported concept: `tin` / `tout` from the upstream this PSM was modelled on.
+/// Taken from <https://github.com/makerdao/dss-lite-psm/blob/master/src/DssLitePsm.sol>.
+pub fn set_fees(ctx: Context<CapManagerParams>, tin_bps: u64, tout_bps: u64) -> Result<()> {
+    require!(tin_bps <= MAX_FEE_BPS, LitePsmError::FeeAboveMax);
+    require!(tout_bps <= MAX_FEE_BPS, LitePsmError::FeeAboveMax);
+
+    // ---- STEP-ARBITRAGE COVERAGE (half 2 of 2) ----
+    //
+    // `tout` may not drop below the largest step ever taken. Half 1 (the
+    // `step_is_covered` check at write time) stops exposure being created that
+    // the fee does not cover; this stops the coverage being removed afterwards.
+    //
+    // Without it: raise tout, take a big step, lower tout — and everyone who
+    // held across the step gets a cheap exit. The attacker's edge is locked in
+    // the moment the step lands and never decays, which is why a time-based
+    // cooldown does not work here and a high-water mark does.
+    //
+    // Only pins against steps ACTUALLY taken: if every step was 1.4 bps, the fee
+    // can still be lowered to 1.4 bps. Clearing the mark is possible but is a
+    // separate, explicitly-named instruction.
+    require!(
+        tout_bps >= ctx.accounts.config.max_step_bps,
+        LitePsmError::FeeBelowStepHighWaterMark
+    );
+
+    let config = &mut ctx.accounts.config;
+    let old_tin_bps = config.tin_bps;
+    let old_tout_bps = config.tout_bps;
+    config.tin_bps = tin_bps;
+    config.tout_bps = tout_bps;
+
+    emit!(FeesSet {
+        old_tin_bps,
+        new_tin_bps: tin_bps,
+        old_tout_bps,
+        new_tout_bps: tout_bps,
+    });
+
+    Ok(())
+}
+
+/// Clear the multiplier-step high-water mark (CAP_MANAGER only).
+///
+/// # Read this before calling
+///
+/// `max_step_bps` is the floor under `tout_bps`, and it exists so a step that
+/// was covered when it was taken cannot be un-covered later. Clearing it
+/// **reopens that historical exposure**: anyone still holding raw acquired
+/// before a large past step can then redeem at a fee that no longer covers it.
+///
+/// This is deliberately a separate, explicitly-named instruction rather than a
+/// side effect of `set_fees`, so it cannot happen by accident during a routine
+/// fee change and shows up unambiguously in an audit trail.
+///
+/// # When it is legitimate
+///
+/// Moving to a materially finer cadence — e.g. a protocol that ran on weekly
+/// ~9.6 bps steps switching to hourly ~0.06 bps steps — would otherwise be
+/// pinned at the old weekly fee forever. The honest precondition is that the
+/// raw supply outstanding at the time of the large step has substantially
+/// turned over, which the chain cannot verify. That judgement is the cold
+/// multisig's, which is why this sits on `cap_manager`.
+pub fn reset_step_high_water_mark(ctx: Context<CapManagerParams>) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    let old_mark = config.max_step_bps;
+    config.max_step_bps = 0;
+
+    emit!(StepHighWaterMarkReset {
+        old_mark_bps: old_mark,
+        tout_bps_at_reset: config.tout_bps,
     });
 
     Ok(())

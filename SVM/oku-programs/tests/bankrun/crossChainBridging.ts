@@ -46,6 +46,7 @@ import {
   mintOkuMViaProgram,
   DECIMALS,
 } from "../shared/setup";
+import { clearSyncWindow } from "../shared/multiplier";
 import {
   BankrunHarness,
   startBankrun,
@@ -55,6 +56,7 @@ import {
   ensureAtaViaBankrun,
   warpSlots,
   readMultiplierFromMint,
+  expectBankrunError,
 } from "../shared/bankrun";
 
 const { Keypair, SystemProgram, PublicKey, Transaction } = anchor.web3;
@@ -323,7 +325,18 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
   // Test 2 — okuM bridging across a multiplier tick
   // ---------------------------------------------------------------------
 
-  it("raw amount conserved across an orchestrator multiplier tick between burn and mint", async () => {
+  it("bridge legs are BLOCKED mid-tick, and conserve raw 1:1 once the window lifts", async () => {
+    // This test previously asserted only that raw is conserved across a tick.
+    // That is still true, but it is no longer the interesting property: the
+    // legs are now refused outright while a tick is propagating.
+    //
+    // WHY. Neither leg prices through the multiplier on its own — each moves a
+    // caller-supplied raw amount, and the multiplier read inside feeds only the
+    // event. But the PAIR does price, across chains: burning 100 raw where
+    // M=1.04 destroys $104 of claim while minting 100 raw where M=1.05 creates
+    // $105, conjuring a dollar out of a mid-tick divergence. "Raw-conserving"
+    // is a per-instruction property that does not survive the round trip, so
+    // the gating rule is "can this move value across a multiplier boundary".
     // Fund Alice with fresh okuM.
     await mintToViaBankrun(h, usdcMint, aliceUsdcAta, payer, 1_000_000_000, TOKEN_PROGRAM_ID);
     await mintOkuMViaProgram(
@@ -376,9 +389,9 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
       .rpc();
 
     // ===== Multiplier tick BETWEEN the legs =====
-    // Simulate a rebase that lands while the orchestrator is in flight.
-    // Bump the multiplier by 1%.
-    const multiplier1 = multiplier0.mul(new BN(101)).div(new BN(100));
+    // A rebase lands while the orchestrator is in flight. Step by 0.99%, just
+    // inside what the configured `tout` covers.
+    const multiplier1 = multiplier0.add(multiplier0.muln(99).divn(10_000));
     await psm.methods
       .setMultiplier(multiplier1)
       .accountsPartial({
@@ -390,6 +403,31 @@ describe("cross-chain bridging via orchestrator + PSM (SVM)", () => {
       .signers([orchestrator])
       .rpc();
     await warpSlots(h, 1);
+
+    // The write auto-armed the sync window. The destination leg must now be
+    // REFUSED — completing it here is exactly the value-conjuring round trip.
+    await expectBankrunError(
+      () =>
+        psm.methods
+          .mintOkuMDirect(bridgeAmount)
+          .accountsPartial({
+            directMinter: orchestrator.publicKey,
+            config: psmConfigPda,
+            okuMMint,
+            recipient: bob.publicKey,
+            recipientOkuMAta: bobOkuMAta,
+            token2022Program: TOKEN_2022_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([orchestrator])
+          .rpc(),
+      "SyncWindowActive"
+    );
+
+    // Once the tick has propagated and the window lifts, the leg completes and
+    // raw is conserved 1:1 as before.
+    await clearSyncWindow(h, psm as any, psmConfigPda);
 
     // Mint on "chain B" — same raw amount, regardless of multiplier.
     await psm.methods

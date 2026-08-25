@@ -155,4 +155,73 @@ pub enum LitePsmError {
     /// EVM: OutputBelowMinimum()
     #[msg("Redeem output is below min_usdc_out")]
     SlippageExceeded,
+
+    // ===== Cross-chain sync window =====
+    //
+    // NOTE: appended deliberately. Anchor derives error codes from enum
+    // position, so inserting anywhere above would silently renumber every
+    // subsequent variant and invalidate every client that maps codes to
+    // names (including the bankrun assertions and the operator CLIs).
+    /// A multiplier tick is propagating across chains; price-sensitive
+    /// operations are blocked until it lands on both sides.
+    /// EVM: SyncWindowActive()
+    #[msg("Cross-chain multiplier sync window is active")]
+    SyncWindowActive,
+
+    /// `begin_sync_window` was called before `MIN_SYNC_WINDOW_GAP_SECS`
+    /// elapsed since the previous window closed. This bound is what stops
+    /// chained windows becoming an indefinite redemption lock.
+    ///
+    /// Note this error is reachable only from the explicit entrypoint. On
+    /// the multiplier-write path an unelapsed gap silently declines to
+    /// re-arm rather than failing, so the multiplier setter is never
+    /// censorable.
+    #[msg("Minimum gap between sync windows has not elapsed")]
+    SyncWindowGapNotElapsed,
+
+    /// The supplied sync epoch does not follow the stored one
+    /// (`begin_sync_window` requires exactly `stored + 1`) or does not
+    /// match it (`end_sync_window` requires equality).
+    ///
+    /// Equality on close makes the call idempotent-safe and prevents a
+    /// stale release from closing a window it never observed.
+    #[msg("Sync epoch does not match the expected value")]
+    EpochMismatch,
+
+    /// Proposed `sync_window_secs` exceeds `MAX_SYNC_WINDOW_SECS`, or is
+    /// negative.
+    #[msg("Proposed sync window exceeds MAX_SYNC_WINDOW_SECS")]
+    SyncWindowTooLong,
+
+    // ===== Fees =====
+    /// Proposed `tin_bps` / `tout_bps` exceeds `MAX_FEE_BPS`.
+    #[msg("Proposed fee exceeds MAX_FEE_BPS")]
+    FeeAboveMax,
+
+    // ===== Step-arbitrage coverage =====
+    /// The proposed multiplier step is larger than `tout_bps` covers, so a
+    /// mint-hold-redeem round trip across it would be profitable.
+    ///
+    /// At `tout_bps == 0` this rejects EVERY increase — rebasing is impossible
+    /// until a redemption fee is configured. That is deliberate: it makes the
+    /// operator unable to create the arbitrage condition rather than merely
+    /// trusted not to.
+    #[msg("Multiplier step exceeds what tout_bps covers (raise tout or take a smaller step)")]
+    StepExceedsFeeCoverage,
+
+    /// The proposed `tout_bps` is below `max_step_bps`, the high-water mark of
+    /// steps already taken.
+    ///
+    /// Lowering it would retroactively un-cover a past step and hand a cheap
+    /// exit to anyone who held across it. Clear the mark with
+    /// `reset_step_high_water_mark` first, understanding that doing so reopens
+    /// that historical exposure.
+    #[msg("Proposed tout_bps is below the step high-water mark")]
+    FeeBelowStepHighWaterMark,
+
+    /// `end_sync_window` was called for an epoch in which no multiplier write
+    /// landed. Closing here would leave `sync_epoch` claiming a tick completed
+    /// against an untouched multiplier.
+    #[msg("No multiplier write landed in this sync epoch")]
+    NoWriteInEpoch,
 }

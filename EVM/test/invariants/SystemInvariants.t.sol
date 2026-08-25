@@ -37,6 +37,13 @@ contract SystemInvariantsTest is BaseTest {
             actors
         );
 
+        // NOTE: the sync window is deliberately left at its DEPLOYED DEFAULT
+        // here rather than being disabled for the harness. Now that
+        // `SystemHandler._beginCall` advances `block.timestamp` every action,
+        // windows expire the way they would on a real chain and the fuzzer
+        // explores the gated paths without wedging itself shut. The handler
+        // still drives `setSyncWindowDuration` (0-30s) on top.
+
         // The handler drives privileged paths by pranking; it also needs to mint.
         vm.startPrank(admin);
         token.grantRole(keccak256("OKU_MINTER"), address(handler));

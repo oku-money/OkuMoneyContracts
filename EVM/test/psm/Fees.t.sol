@@ -258,6 +258,49 @@ contract FeesTest is BaseTest {
         );
     }
 
+    /// @notice A fee CUT must reach users already in the queue.
+    ///
+    /// @dev The snapshot exists to protect them from an increase. Taking the
+    ///      minimum of the snapshot and the live fee additionally passes on a
+    ///      decrease, so a queued user is never left paying more than someone
+    ///      redeeming instantly beside them. Nothing here is gameable: a user
+    ///      cannot influence which value is lower, nor choose to be queued.
+    function test_Queue_FeeCutIsPassedOnToQueuedUsers() public {
+        uint256 raw = _psmMint(user1, 1000e6);
+        uint256 buffered = usdc.balanceOf(address(litePsm));
+        vm.prank(bufferWithdrawer);
+        litePsm.withdrawUsdc(treasury, buffered);
+
+        // Queue at the maximum fee.
+        _setFees(0, Constants.MAX_FEE_BPS);
+        _redeemAs(user1, raw);
+        assertEq(queue.getQueueEntry(0).toutBps, uint16(Constants.MAX_FEE_BPS));
+
+        // Governance then CUTS the fee.
+        _setFees(0, TOUT);
+
+        uint256 gross = MathLib.dollarsToUsdc(
+            MathLib.toUiAmount(raw, token.uiMultiplier()), token.usdcDecimalMultiplier()
+        );
+        uint256 expected = gross - Math_ceilDiv(gross * TOUT, Constants.BASIS_POINTS);
+
+        // The view is a conservative floor — it cannot see the live fee, so it
+        // still reports the snapshotted (worse) rate. Erring low is correct for
+        // a quote: a holder is never told to expect more than they get.
+        assertLe(queue.getQueueEntryValue(0), expected, "view must not over-promise");
+
+        // Settlement applies the better of the two.
+        _seedBuffer(1_000_000e6);
+        uint256 before = usdc.balanceOf(user1);
+        vm.prank(queueProcessor);
+        litePsm.processQueue(0, 1, gross);
+        assertEq(
+            usdc.balanceOf(user1) - before,
+            expected,
+            "queued user must receive the benefit of a fee cut"
+        );
+    }
+
     /// @dev `enqueue` re-asserts the bound because it is an external entrypoint
     ///      and the `uint16` narrowing must not be reachable with a wider value.
     function test_Queue_EnqueueRejectsOutOfRangeFee() public {

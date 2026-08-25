@@ -26,10 +26,14 @@
 
 pub mod constants;
 pub mod math;
+pub mod step_coverage;
+pub mod sync_window;
 pub mod yield_lock;
 
 // Re-export the public surface at crate root so callers can write
 // `use oku_shared::{PRECISION, mul_div_floor};` instead of nested paths.
 pub use constants::*;
 pub use math::*;
+pub use step_coverage::{step_bps_ceil, step_is_covered};
+pub use sync_window::{sync_window_end, sync_window_engaged, sync_window_gap_elapsed};
 pub use yield_lock::yield_lock_engaged;

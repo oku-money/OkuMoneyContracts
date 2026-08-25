@@ -42,6 +42,49 @@ export const MAX_SUPPLY = new BN(1_000_000_000_000); // 1M with 6 decimals
 export const MINTER_ALLOWANCE = new BN(100_000_000_000); // 100k with 6 decimals
 export const DECIMALS = 6;
 
+/** `oku_shared::MAX_FEE_BPS` — the ceiling on `tin`/`tout`. */
+export const MAX_FEE_BPS = 100;
+/** `oku_shared::DEFAULT_SYNC_WINDOW_SECS` — window length written at init. */
+export const DEFAULT_SYNC_WINDOW_SECS = 60;
+/** `oku_shared::MIN_SYNC_WINDOW_GAP_SECS`. */
+export const MIN_SYNC_WINDOW_GAP_SECS = 21_600;
+
+/**
+ * Default `tout` applied by `initializePsm`.
+ *
+ * WHY TESTS MUST SET A FEE AT ALL. The program refuses any multiplier increase
+ * unless `tout_bps` covers the step (`step_is_covered`), and ships at 0 bps —
+ * fail-closed, so the step-arbitrage condition cannot be created by accident.
+ * A suite that wants to move the multiplier therefore has to configure a fee
+ * first, exactly as a real deployment does.
+ *
+ * `MAX_FEE_BPS` is used so no test is ever blocked by coverage. Note the
+ * consequence: it also caps a single step at 1%, so a test that wants a large
+ * multiplier must take several steps — see `stepMultiplierTo` in
+ * `tests/shared/multiplier.ts`.
+ */
+export const DEFAULT_TEST_TOUT_BPS = MAX_FEE_BPS;
+
+export interface InitializePsmOptions {
+  /**
+   * `tout` to configure immediately after `initialize`. Defaults to
+   * `DEFAULT_TEST_TOUT_BPS`. Pass `0` to observe the raw fail-closed
+   * post-initialize state (no multiplier increase will be permitted).
+   */
+  toutBps?: number;
+  /** `tin` to configure. Defaults to 0. */
+  tinBps?: number;
+  /**
+   * Sync-window length to configure after `initialize`. Defaults to whatever
+   * the program writes (`DEFAULT_SYNC_WINDOW_SECS`).
+   *
+   * Pass `0` to disable the window for suites that exercise a different,
+   * orthogonal guard — notably the same-slot yield fence, which the window
+   * would otherwise mask behind a `SyncWindowActive` revert.
+   */
+  syncWindowSecs?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Shared authority keypairs
 // ---------------------------------------------------------------------------
@@ -97,7 +140,8 @@ export async function initializePsm(
   h: BankrunHarness,
   program: Program,
   payer: Keypair,
-  usdcMint: PublicKey
+  usdcMint: PublicKey,
+  options: InitializePsmOptions = {}
 ): Promise<PsmSetupResult> {
   // Generate a fresh keypair for the OkuM mint — the program's
   // `initialize` instruction creates it with Token-2022 extensions.
@@ -164,6 +208,27 @@ export async function initializePsm(
   // on-chain escrow-setup instruction; this ATA is retained for tests that
   // reference `vaultOkuMAta`.
   await ensureAtaViaBankrun(h, configPda, okuMMint, TOKEN_2022_PROGRAM_ID);
+
+  // Configure fees. The program ships at 0 bps and refuses every multiplier
+  // increase while `tout_bps == 0`, so any suite that moves the multiplier has
+  // to do this — the same first step a real deployment takes.
+  const toutBps = options.toutBps ?? DEFAULT_TEST_TOUT_BPS;
+  const tinBps = options.tinBps ?? 0;
+  if (toutBps !== 0 || tinBps !== 0) {
+    await program.methods
+      .setFees(new BN(tinBps), new BN(toutBps))
+      .accountsPartial({ capManager: coldMultisig.publicKey, config: configPda })
+      .signers([coldMultisig])
+      .rpc();
+  }
+
+  if (options.syncWindowSecs !== undefined) {
+    await program.methods
+      .setSyncWindowSecs(new BN(options.syncWindowSecs))
+      .accountsPartial({ capManager: coldMultisig.publicKey, config: configPda })
+      .signers([coldMultisig])
+      .rpc();
+  }
 
   return { configPda, okuMMint, vaultUsdcAta, vaultOkuMAta };
 }

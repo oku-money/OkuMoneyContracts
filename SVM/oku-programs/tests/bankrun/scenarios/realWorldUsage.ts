@@ -53,7 +53,9 @@ import {
   DECIMALS,
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
+  MAX_FEE_BPS,
 } from "../../shared/setup";
+import { clearSyncWindow } from "../../shared/multiplier";
 import {
   BankrunHarness,
   startBankrun,
@@ -421,6 +423,7 @@ describe(
                 })
                 .signers([psmOrchestrator])
                 .rpc();
+              await clearSyncWindow(ctx.h, ctx.psm as any, ctx.configPda);
               await warpSlots(ctx.h, 1); // advance past yield lock
             } catch { /* soft */ }
 
@@ -515,11 +518,14 @@ describe("realWorldUsage (SVM) edge cases", () => {
       await warpBy(ctx.h, DAY_SECS * 30); // 30 days
       await warpSlots(ctx.h, 1);
       const curMultiplierE1 = await readMultiplierFromMint(ctx.h, ctx.okuMMint);
-      const newMultiplier = curMultiplierE1.muln(102).divn(100); // +2%
+      // +0.99%: a single step can never exceed MAX_FEE_BPS (1%), because the
+      // program refuses any step the redemption fee does not cover.
+      const newMultiplier = curMultiplierE1.add(curMultiplierE1.muln(99).divn(10_000));
       await ctx.psm.methods.setMultiplier(newMultiplier)
         .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: ctx.configPda, okuMMint: ctx.okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID })
         .signers([psmOrchestrator]).rpc();
       await warpSlots(ctx.h, 1);
+      await clearSyncWindow(ctx.h, ctx.psm as any, ctx.configPda);
 
       // Bridge leg B: user 1 -> user 0 (back again)
       const user1OkuM = await tokenBalance(ctx.h, ctx.userOkuMAtas[1], TOKEN_2022_PROGRAM_ID);
@@ -527,8 +533,28 @@ describe("realWorldUsage (SVM) edge cases", () => {
         const { usdcOut: usdcOutReturn } = await orchestratorBridge(ctx, 1, 0, user1OkuM);
         assertEq(await tokenBalance(ctx.h, ctx.orchOkuMAta, TOKEN_2022_PROGRAM_ID), 0n, "float after B->A");
 
-        // After multiplier increase, returning okuM yields at least as much USDC (within 1 wei)
-        assertGte(usdcOutReturn, usdcOut - 1n, "B->A leg should return >= A->B USDC (multiplier appreciated)");
+        // Value is conserved NET OF FEES, and cannot be better than that.
+        //
+        // Each bridge leg pays `tout` once on its redeem side, so a round trip
+        // pays it twice — while the tick in between is capped at ONE `tout`
+        // (the program refuses a step the fee does not cover). A round trip
+        // across a covered tick therefore can never be net-positive; that is
+        // precisely the "a covered step is never profitable" property, seen
+        // from the bridge side.
+        //
+        // So: the return leg must land within two fee-widths below the
+        // outbound leg, and must not exceed it.
+        const feeDrag = (usdcOut * 2n * BigInt(MAX_FEE_BPS)) / 10_000n + 2n;
+        assertGte(
+          usdcOutReturn,
+          usdcOut - feeDrag,
+          "B->A leg should be within round-trip fee drag of the A->B leg"
+        );
+        assertLte(
+          usdcOutReturn,
+          usdcOut + 1n,
+          "B->A leg must not exceed A->B: a covered tick cannot be arbitraged"
+        );
       }
     });
   });
@@ -575,11 +601,12 @@ describe("realWorldUsage (SVM) edge cases", () => {
       // Multiplier tick (+1%) between legs
       await warpSlots(ctx.h, 1);
       const curMultiplierE3 = await readMultiplierFromMint(ctx.h, ctx.okuMMint);
-      const newMultiplier = curMultiplierE3.muln(101).divn(100);
+      const newMultiplier = curMultiplierE3.add(curMultiplierE3.muln(99).divn(10_000));
       await ctx.psm.methods.setMultiplier(newMultiplier)
         .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: ctx.configPda, okuMMint: ctx.okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID })
         .signers([psmOrchestrator]).rpc();
       await warpSlots(ctx.h, 1);
+      await clearSyncWindow(ctx.h, ctx.psm as any, ctx.configPda);
 
       // Destination leg: mint okuM with same USDC at new (higher) multiplier -> fewer okuM
       await mintUsdc(ctx.h, ctx.orchUsdcAta, ctx.usdcMint, Number(usdcFromRedeem));
@@ -773,7 +800,10 @@ describe("realWorldUsage (SVM) edge cases", () => {
       const user = Keypair.generate();
       await fundKeypairs(h, [user, coldMultisig, warmMultisig, psmOrchestrator], 10 * anchor.web3.LAMPORTS_PER_SOL);
 
-      const setup = await initializePsm(h, psm, payer, usdcMint);
+      // Window disabled: this case is about the SAME-SLOT yield fence, an
+      // orthogonal mechanism that a live sync window would mask behind a
+      // SyncWindowActive revert.
+      const setup = await initializePsm(h, psm, payer, usdcMint, { syncWindowSecs: 0 });
       const configPda = setup.configPda;
       const okuMMint = setup.okuMMint;
 

@@ -229,7 +229,7 @@ programs/
       contexts/                    # Per-instruction account contexts
 
 tests/
-  bankrun/                  # Default in-process suite (npm test, 94 bankrun tests)
+  bankrun/                  # Default in-process suite (npm test, 128 bankrun tests)
     smoke.ts
     lite-psm.ts
     direct-mint.ts
@@ -263,10 +263,12 @@ pub struct PsmConfig {
     //   direct_burner_allowance, is_paused
     // Yield: last_yield_distribution_slot
     // Two-step RoleAdmin: pending_role_admin
+    // Cross-chain sync window: sync_lock_until_ts, sync_epoch, sync_window_secs
+    // Fees: tin_bps, tout_bps
 }
 ```
 
-`PsmConfig` is the only state account. Its byte length is pinned at 562
+`PsmConfig` is the only state account. Its byte length is pinned at 602
 bytes by a compile-time `assert!`. There is no `RedemptionQueue` account
 and no on-chain escrow-vault field — the PSM is buffer-only (see "Why no
 redemption queue" below), and the OkuM escrow ATA is derived client-side,
@@ -304,8 +306,167 @@ pub fn set_multiplier(new_multiplier: f64)
 pub fn distribute_yield(yield_amount: u64)
 ```
 
-Both set `last_yield_distribution_slot = Clock::get().slot` for
-sandwich prevention, and self-fence to reject same-slot re-entry.
+Both set `last_yield_distribution_slot = Clock::get().slot` and self-fence to
+reject same-slot re-entry. Both also **arm the cross-chain sync window**
+(fail-closed), so a tick can never land completely unfenced even if the
+orchestrator skipped `begin_sync_window`.
+
+> **Scope of the same-slot fence.** It stops an operation sharing a slot with the
+> multiplier write, and nothing more. It does **not** prevent step arbitrage: mint
+> at slot `N-1`, let the write land at `N`, redeem at `N+1`, and the whole step is
+> captured after ~800 ms of holding. Widening the fence does not help — the
+> attacker simply moves further out. Two separate mechanisms cover the two real
+> surfaces: the [sync window](#cross-chain-sync-window) for cross-chain
+> divergence, and [`tout`](#fees-tin--tout) for the step itself.
+
+### Cross-chain sync window
+
+A multiplier tick is not atomic across chains. Between the SVM write and the EVM
+write the two sides price a raw token differently, so anything converting value
+*through* the multiplier in that interval settles at a stale price on one side.
+
+```rust
+pub fn begin_sync_window(epoch: u64)      // REBASER — epoch must be stored + 1
+pub fn end_sync_window(epoch: u64)        // REBASER — epoch must equal stored
+pub fn set_sync_window_secs(secs: i64)    // CAP_MANAGER — 0 disables; <= MAX_SYNC_WINDOW_SECS
+```
+
+**Gating rule:** an instruction is sync-gated **iff it can move value across a
+multiplier boundary**. Gated: `mint_oku_m`, `redeem_oku_m`, `mint_oku_m_direct`,
+`burn_oku_m_direct`. Not gated: `deposit_buffer`, `withdraw_buffer`, and every
+admin path.
+
+> **The rule is deliberately not "does it price locally".** An earlier revision
+> exempted the direct bridge legs on exactly that basis — neither reads the
+> multiplier for its quantity, and the `read_multiplier` call inside feeds only
+> the event's `dollar_value`. That reasoning is correct per instruction and
+> wrong per round trip. The cross-chain PAIR does price: burning 100 raw where
+> `M = 1.04` destroys $104 of claim while minting 100 raw where `M = 1.05`
+> creates $105, conjuring a dollar out of a mid-tick divergence.
+> "Raw-conserving" is a property of one leg that does not survive both.
+> Pinned by `crossChainBridging.ts` — "bridge legs are BLOCKED mid-tick, and
+> conserve raw 1:1 once the window lifts".
+
+Buffer deposit/withdraw stay open because they move USDC at par and never
+consult the multiplier, so a stale price cannot misprice them — and blocking
+them would obstruct the operator's own remediation mid-tick.
+
+| Property | Mechanism |
+|---|---|
+| Fail-closed | every multiplier write auto-arms |
+| Fail-open | auto-expiry at `MAX_SYNC_WINDOW_SECS` (900s) — a dead orchestrator cannot brick redemption |
+| Anti-grief | `MIN_SYNC_WINDOW_GAP_SECS` (21600s) ⇒ **≥96% availability floor** |
+| Never censoring | a multiplier write inside the gap **clamps** (succeeds without re-arming) rather than reverting |
+| Ships inert | `sync_window_secs` defaults to `0`, which blocks nothing at all |
+
+Wall-clock seconds rather than slots, deliberately: Solana slot times stretch
+under exactly the congestion that slows cross-chain propagation, so a
+slot-denominated window would shrink precisely when it needs to be longest. This
+also keeps it cleanly orthogonal to the slot-based same-slot fence.
+
+`sync_epoch` is **orchestrator-assigned, never auto-incremented** — EVM re-ups its
+rate roughly monthly while SVM steps daily-to-weekly, so independently-bumped
+counters would diverge permanently. One number per tick, recorded on every chain,
+making `sync_epoch == syncEpoch()_evm` an externally verifiable "no tick in
+flight" assertion. Check it with `scripts/admin/check-sync-parity.ts`.
+
+**A window can only be closed if a multiplier write actually landed in it.**
+`end_sync_window(N)` requires `last_write_epoch == N`. Without that check,
+"open, forget to write, close" would advance `sync_epoch` against an untouched
+multiplier and the parity checker — which compares epochs — would report a false
+OK, a false negative on the only completion check the system has. With it,
+`sync_epoch` means *this chain actually wrote for tick N*. If a write genuinely
+cannot be made, let the window auto-expire instead: the epoch then visibly lags,
+which is the correct signal.
+
+This binding is SVM-only. EVM accrues continuously and has nothing to land per
+tick — its role in a window is to hold still while this chain catches up.
+
+### Fees (`tin` / `tout`)
+
+```rust
+pub fn set_fees(tin_bps: u64, tout_bps: u64)   // CAP_MANAGER — both <= MAX_FEE_BPS (100)
+```
+
+Restored from the upstream this PSM was modelled on
+([`dss-lite-psm`](https://github.com/makerdao/dss-lite-psm)), which the original
+port omitted. Both default to **0 bps** and ship inert.
+
+**`tout` is the control for local step arbitrage, and it is load-bearing on this
+chain.** The multiplier here moves in discrete steps — Token-2022 refuses
+`ScaledUiAmount` alongside `InterestBearingConfig`, so the continuous accrual that
+makes the EVM side immune is unavailable. A discrete step is free money without a
+fee: mint at `M0`, wait for the step to `M1`, redeem, pocket the difference. No
+risk, no meaningful holding period, repeatable every step, bounded only by
+`minter_allowance` and buffer depth. The yield captured belonged to holders who
+actually held.
+
+The sync window does **not** prevent this — the attacker never transacts while it
+is open.
+
+#### The coverage invariant
+
+Sizing `tout` correctly is **not** left to the operator. Two on-chain halves make
+step arbitrage impossible rather than merely discouraged:
+
+```rust
+// half 1 — at every multiplier write (set_multiplier, distribute_yield):
+require!( (M1 - M0) * 10_000  <=  tout_bps * M0 );   // StepExceedsFeeCoverage
+max_step_bps = max(max_step_bps, ceil_bps(M0 -> M1));
+
+// half 2 — at every fee change (set_fees):
+require!( new_tout_bps >= max_step_bps );            // FeeBelowStepHighWaterMark
+```
+
+**Half 1** stops an operator *creating* exposure the fee does not cover.
+**Half 2** stops them *removing* coverage afterwards. Neither is sufficient alone.
+
+*Proof.* A round trip profits iff `M1·(1−tout) > M0`, i.e. `M1 − M0 > tout·M1`.
+Half 1 gives `M1 − M0 ≤ tout·M0`, and `M0 < M1`, so `M1 − M0 ≤ tout·M0 < tout·M1`.
+The profit condition is never met, for any holding period and any later
+redemption, because half 2 guarantees `tout` never falls below the step. Verified
+by `oku_shared::step_coverage::verification::proof_covered_step_is_never_profitable`
+(Kani) and by `tests/bankrun/sync-window-and-fees.ts § local step arbitrage`.
+
+Two consequences worth internalising:
+
+- **`tout = 0` means the protocol cannot rebase at all.** Every increase fails
+  half 1. This is why shipping fees at 0 is fail-closed rather than a hole: an
+  operator cannot create the arbitrage condition, and configuring a fee sized to
+  the intended cadence becomes a precondition of rebasing rather than a step
+  someone might forget.
+- **A single step can never exceed `MAX_FEE_BPS` (1%),** since `step ≤ tout ≤ 100
+  bps`. That implies a **minimum cadence**: at 5% APY the multiplier cannot be
+  advanced more than ~73 days' worth in one write, so a long outage must be
+  caught up over several steps (each needing its own window, spaced by
+  `MIN_SYNC_WINDOW_GAP_SECS`). This is the direct analogue of the
+  `MAX_IMPLIED_APR` catch-up limitation on the EVM side.
+
+A time-based cooldown on fee decreases was considered and rejected: the
+attacker's edge is locked in the instant the step lands and does not decay, and
+the multiplier is monotonic so waiting costs them nothing. A cooldown delays the
+profit rather than removing it. The high-water mark has no expiry — and is
+*less* restrictive in the common case, because it pins only against steps
+actually taken (all-1.4 bps steps still permit lowering `tout` to 1.4 bps).
+
+Clearing the mark is possible via `reset_step_high_water_mark` (cap_manager), a
+separate and deliberately-named instruction — never a side effect of `set_fees`.
+It reopens historical exposure and emits `StepHighWaterMarkReset`; **alarm on it.**
+
+Sizing, at 5% APY:
+
+| Cadence | Step | `tout` must be at least |
+|---|---|---|
+| hourly | ~0.06 bps | 1 bps |
+| daily | ~1.4 bps | ~2 bps |
+| weekly | ~9.6 bps | ~10 bps + margin |
+
+Fees are **withheld, not forwarded**: `tin` enters the vault without OkuM minted
+against it, `tout` is owed but never transferred out. Both raise the collateral
+ratio. No recipient, no sweep. Fees round up and payouts round down, per the
+`oku-shared` protocol-favouring rounding policy; a redemption whose entire payout
+rounds into the fee is rejected with `ZeroOutput` rather than settling a zero
+transfer.
 
 The multiplier is read back from the mint via `read_multiplier()`
 (in `helpers/scaled_ui.rs`), which calls
@@ -330,8 +491,14 @@ pub fn deposit_buffer(amount: u64)                   // top up USDC vault
 pub fn withdraw_buffer(amount: u64)                  // drain USDC vault
 ```
 
-All protected by yield-lock. `min_usdc_out` is slippage protection —
-pass `0` to disable the check.
+All protected by the same-slot yield fence. `mint_oku_m` and `redeem_oku_m` are
+additionally gated by the [cross-chain sync window](#cross-chain-sync-window) and
+apply [`tin`/`tout`](#fees-tin--tout); `deposit_buffer` and `withdraw_buffer` are
+neither, since they move USDC at par and never read the multiplier.
+
+`min_usdc_out` is slippage protection — pass `0` to disable the check. It is
+compared against the **net** payout, after `tout`, so it means what the caller
+actually receives.
 
 ### Direct mint / burn (bridging + fiat on-ramp)
 
@@ -531,7 +698,7 @@ and the EVM mirror in
 ## Testing
 
 ```bash
-# Full bankrun suite — 94 bankrun tests + 20 Rust unit tests = 114 total
+# Full bankrun suite — 128 bankrun tests + 47 Rust unit tests = 175 total
 npm test
 # or directly:
 npx mocha --require tsx --timeout 60000 'tests/bankrun/**/*.ts'
@@ -544,7 +711,7 @@ npx mocha --require tsx --timeout 60000 'tests/bankrun/scaled-ui-amount.ts'
 npx mocha --require tsx --timeout 60000 'tests/bankrun/rate-over-time.ts'
 
 # Cargo unit tests (math primitives, helpers)
-cargo test --workspace                # 20 unit tests
+cargo test --workspace                # 47 unit tests
 
 # Anchor build
 anchor build
@@ -724,8 +891,12 @@ All admin scripts live under `scripts/admin/`. Each:
 | `admin:set-direct-minter-allowance` / `admin:set-direct-burner-allowance` | `set_direct_minter_allowance` / `set_direct_burner_allowance` | `allowance_manager` |
 | `admin:mint-oku-m` / `admin:redeem-oku-m` | `mint_oku_m` / `redeem_oku_m` — standalone orchestrator bridge-leg CLIs | permissionless / caller |
 | `admin:mint-oku-m-direct` | `mint_oku_m_direct` — permissioned fiat on-ramp | `direct_minter` |
-| `admin:set-multiplier` | `set_multiplier` | `rebaser` (stamps yield-distribution slot) |
-| `admin:distribute-yield` | `distribute_yield` | `rebaser` |
+| `admin:set-multiplier` | `set_multiplier` | `rebaser` (stamps yield slot + arms sync window) |
+| `admin:distribute-yield` | `distribute_yield` | `rebaser` (stamps yield slot + arms sync window) |
+| `admin:sync-window` (`--begin` / `--end` / `--status`) | `begin_sync_window` / `end_sync_window` — steps 1 and 3 of the cross-chain tick | `rebaser` |
+| `admin:set-sync-window-secs` | `set_sync_window_secs` (0 disables; ≤ `MAX_SYNC_WINDOW_SECS`) | `cap_manager` |
+| `admin:set-fees` | `set_fees` (`tin`/`tout`, ≤ `MAX_FEE_BPS`) — `tout` is the step-arbitrage control | `cap_manager` |
+| `admin:check-sync-parity` | read-only cross-chain epoch/window comparison — the only available proof a tick completed symmetrically | none (read-only) |
 | `admin:freeze-account` / `admin:thaw-account` | `freeze_account` / `thaw_account` | `freezer` / `unfreezer` |
 | `admin:deposit-buffer` / `admin:withdraw-buffer` | `deposit_buffer` / `withdraw_buffer` | `buffer_depositor` / `buffer_withdrawer` |
 | `admin:close-programs` | `solana program close` (BPF loader) — recover rent from stale program deployments. | BPF upgrade authority (deployer wallet) |
@@ -755,7 +926,9 @@ EVM groups protocol-wide invariants into `EVM/src/lib/`:
 |---|---|
 | `lib/Constants.sol` | `crates/oku-shared/src/constants.rs` |
 | `lib/MathLib.sol` | `crates/oku-shared/src/math.rs` |
-| `lib/YieldSandwichGuard.sol` | `crates/oku-shared/src/yield_lock.rs` + `lite-psm/src/helpers/yield_lock.rs` wrapper |
+| `lib/YieldSandwichGuard.sol` (removed on EVM when accrual went continuous) | `crates/oku-shared/src/yield_lock.rs` + `lite-psm/src/helpers/yield_lock.rs` wrapper — no longer a port of anything, SVM-only |
+| `OkuDollar` sync-window storage (own ERC-7201 namespace) | `crates/oku-shared/src/sync_window.rs` + `lite-psm/src/helpers/sync_window.rs` wrapper + `PsmConfig` fields |
+| `MathLib.feeAmount` / `applyFee` | `oku_shared::math::fee_amount` / `apply_fee` |
 | `lib/Roles.sol` | `programs/lite-psm/src/roles.rs` (single program owns all RBAC) |
 | `lib/Errors.sol` | `programs/lite-psm/src/errors.rs` |
 | `lib/events/*.sol` | `programs/lite-psm/src/events.rs` |
@@ -809,6 +982,24 @@ block/slot.
 |---|---|---|
 | `freeze_account` / `thaw_account` | bypasses pause (Token-2022 freeze authority independent of `Pausable`) | bypasses pause (Token-2022 freeze CPI signed by config PDA; pause check intentionally omitted) |
 | `processQueue` when paused | proceeds — pause must not lock users in the queue | N/A — SVM has no queue |
+
+### Sync-window and fee deltas
+
+| Aspect | EVM | SVM |
+|---|---|---|
+| Sync-gated surfaces | `mint`, `redeem`, `redeemUiAmount`, `processQueue` | `mint_oku_m`, `redeem_oku_m`, `mint_oku_m_direct`, `burn_oku_m_direct` |
+| Step-coverage invariant | none — continuous accrual has no step to cover | `step_is_covered` at write + `max_step_bps` floor at `set_fees` |
+| Window default | `DEFAULT_SYNC_WINDOW` (60s) | `DEFAULT_SYNC_WINDOW_SECS` (60s) |
+| Close requires a write | no — nothing lands per tick on a continuous chain | yes: `end_sync_window` needs `last_write_epoch == N` |
+| Max single multiplier move | unbounded per write (rate-bounded, continuous) | 1% — `step <= tout <= MAX_FEE_BPS`, implying a minimum cadence |
+| Window unit | `block.timestamp` seconds | `Clock::unix_timestamp` seconds (**not** slots — slot times stretch under the congestion that slows propagation) |
+| Window state location | `OkuDollar` (own ERC-7201 namespace) — the multiplier authority lives there; PSM reads `isSyncLocked()` | `PsmConfig` — same program owns both the multiplier write and the PSM |
+| Auto-arm trigger | `setYieldRate` only. `haltAccrual` deliberately does **not** arm — `OKU_GUARDIAN` is warm and withhold-only | `set_multiplier` and `distribute_yield` |
+| Same-slot fence | none — continuous accrual has no distribution tx to co-locate with | `last_yield_distribution_slot`, retained and orthogonal to the window |
+| `processQueue` under window | **gated** (prices at the live multiplier), unlike under pause | N/A — no queue |
+| `tout` role | parity only — continuous accrual means no local step to arbitrage | **load-bearing** — and enforced: `tout = 0` blocks rebasing entirely |
+| Queued-fee snapshot | `QueueEntry.toutBps`, packed into the entry's existing free bits; settles at `min(snapshot, live)` | N/A — no queue |
+| Window/fee setter | `OKU_CAP_MANAGER` (window), `PSM_FEE_MANAGER` (fees) — split because AccessControl is per-contract | `cap_manager` for both |
 
 ### Bridging model asymmetry
 

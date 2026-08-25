@@ -86,6 +86,30 @@ This is the most likely user-visible bug in the whole system. It is pinned by
 `test/psm/MaxSend.t.sol`, which also carries the regression assertions from the
 May-2026 Sepolia redemption incident.
 
+#### Required SDK surface
+
+The client SDK must make the wrong version *unavailable*, not merely
+discouraged. Minimum normative shape:
+
+```ts
+/** Display balance in dollars. Handles ERC-165 detection internally and
+ *  falls back to the raw balance, clearly flagged, when unsupported. */
+getDisplayBalance(token, user): Promise<{ display: bigint; raw: bigint; supported: boolean }>;
+
+/** The ONLY max-send helper. Returns raw, plus the display value derived
+ *  from that same raw figure. There is deliberately no inverse and no
+ *  `getMaxSendDisplay()` — an inverse is the bug. */
+getMaxSendRaw(token, user): Promise<{ raw: bigint; display: bigint }>;
+
+/** Current dollar value of a raw-denominated allowance. See §5. */
+allowanceUI(token, owner, spender): Promise<bigint>;
+```
+
+`getMaxSendRaw` returning both figures from one raw read is the whole point: it
+removes the opportunity to derive one from the other in the wrong direction.
+Any SDK that exposes a `fromUIAmount`-based max-send has not implemented this
+document.
+
 ### 4. Truncate to the token's decimals
 
 Render UI amounts at 18 decimals maximum, and in practice at 2 for currency

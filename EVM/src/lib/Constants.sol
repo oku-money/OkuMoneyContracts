@@ -118,6 +118,20 @@ library Constants {
     ///      SVM mirror: `oku_shared::MAX_SYNC_WINDOW_SECS`.
     uint256 internal constant MAX_SYNC_WINDOW = 15 minutes;
 
+    /// @notice Sync window length written at `initialize`.
+    /// @dev Deployments ship with the window ON. A zero default would leave the
+    ///      protection installed but inert, and therefore dependent on someone
+    ///      remembering to enable it — the class of dependency this design
+    ///      exists to remove.
+    ///
+    ///      A cross-chain propagation budget, not an economic parameter: the
+    ///      orchestrator normally closes the window explicitly as soon as the
+    ///      tick lands everywhere, so this length only matters when that
+    ///      confirmation never arrives.
+    ///
+    ///      SVM mirror: `oku_shared::DEFAULT_SYNC_WINDOW_SECS`.
+    uint256 internal constant DEFAULT_SYNC_WINDOW = 60;
+
     /// @notice Minimum gap between the end of one sync window and the start of
     ///         the next.
     /// @dev The anti-griefing bound. Without it a compromised rate setter could

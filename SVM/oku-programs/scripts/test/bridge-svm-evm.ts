@@ -27,7 +27,7 @@
  *       --evm=baseSepolia --svm=devnet --amount=5 --direction=roundtrip
  *
  * Environment / CLI:
- *   --evm=<chain>          EVM chain name (must be in testnet-addresses.json::evm)
+ *   --evm=<chain>          EVM chain name (must be in addresses.json::evm)
  *   --svm=<network>        SVM network name (devnet only for now)
  *   --amount=<okuM>        OkuM notional to bridge (default 5)
  *   --direction=evm-to-svm|svm-to-evm|roundtrip
@@ -120,15 +120,21 @@ const EVM_ERC20_ABI = [
   'function decimals() view returns (uint8)',
   'function mint(address,uint256)',
 ];
-const EVM_OKU_MONEY_ABI = [
+// EVM v0.3 surface. The dual-token model is gone: there is one token
+// (`OkuDollar` / rUSDOku) and the multiplier is `uiMultiplier()`, not
+// `okuMMultiplier()`. PSM entrypoints are `mint` / `redeem`.
+const EVM_TOKEN_ABI = [
   'function balanceOf(address) view returns (uint256)',
   'function approve(address,uint256) returns (bool)',
   'function totalSupply() view returns (uint256)',
-  'function okuMMultiplier() view returns (uint256)',
+  'function uiMultiplier() view returns (uint256)',
+  'function balanceOfUI(address) view returns (uint256)',
 ];
 const EVM_LITE_PSM_ABI = [
-  'function mintOkuM(uint256 usdcAmount)',
-  'function redeemOkuM(uint256 okuMAmount)',
+  'function mint(uint256 usdcAmount) returns (uint256)',
+  'function redeem(uint256 rawAmount) returns (uint256)',
+  'function quoteMint(uint256 usdcAmount) view returns (uint256)',
+  'function quoteRedeem(uint256 rawAmount) view returns (uint256)',
 ];
 
 interface EvmCtx {
@@ -137,7 +143,7 @@ interface EvmCtx {
   provider: ethers.JsonRpcProvider;
   wallet: ethers.Wallet;
   usdc: ethers.Contract;
-  okuMoney: ethers.Contract;
+  okuDollar: ethers.Contract;
   litePSM: ethers.Contract;
   litePSMAddr: string;
   hasMockUsdc: boolean;
@@ -145,14 +151,14 @@ interface EvmCtx {
 }
 
 /**
- * Read the canonical `testnet-addresses.json` registry to get EVM addresses
+ * Read the canonical `addresses.json` registry to get EVM addresses
  * (avoids importing hardhat config from this tsx process).
  */
 function loadEvmRegistry(): any {
-  // SVM/oku-programs -> repo root via ../../testnet-addresses.json
-  const registryPath = path.resolve(__dirname, '../../../../testnet-addresses.json');
+  // SVM/oku-programs -> repo root via ../../addresses.json
+  const registryPath = path.resolve(__dirname, '../../../../addresses.json');
   if (!fs.existsSync(registryPath)) {
-    throw new Error(`testnet-addresses.json not found at ${registryPath}`);
+    throw new Error(`addresses.json not found at ${registryPath}`);
   }
   return JSON.parse(fs.readFileSync(registryPath, 'utf8'));
 }
@@ -164,7 +170,7 @@ async function makeEvmCtx(chainName: string): Promise<EvmCtx> {
     throw new Error(`No EVM registry entry for "${chainName}"`);
   }
   const { chainId, rpcUrl, contracts } = entry;
-  if (!contracts.okuMoney || !contracts.litePSM) {
+  if (!contracts.okuDollar || !contracts.litePSM) {
     throw new Error(`Missing OkuMoney/LitePSM in registry for "${chainName}"`);
   }
   const provider = new ethers.JsonRpcProvider(rpcUrl, chainId);
@@ -175,7 +181,7 @@ async function makeEvmCtx(chainName: string): Promise<EvmCtx> {
   if (!usdcAddr) throw new Error(`No USDC in registry for "${chainName}"`);
 
   const usdc = new ethers.Contract(usdcAddr, EVM_ERC20_ABI, wallet);
-  const okuMoney = new ethers.Contract(contracts.okuMoney, EVM_OKU_MONEY_ABI, wallet);
+  const okuDollar = new ethers.Contract(contracts.okuDollar, EVM_TOKEN_ABI, wallet);
   const litePSM = new ethers.Contract(contracts.litePSM, EVM_LITE_PSM_ABI, wallet);
 
   const usdcDecimals = Number(await usdc.decimals());
@@ -186,7 +192,7 @@ async function makeEvmCtx(chainName: string): Promise<EvmCtx> {
     provider,
     wallet,
     usdc,
-    okuMoney,
+    okuDollar,
     litePSM,
     litePSMAddr: contracts.litePSM,
     hasMockUsdc: !!contracts.mockUSDC,
@@ -509,8 +515,8 @@ interface SvmSnap {
 async function snapEvm(c: EvmCtx): Promise<EvmSnap> {
   const [usdc, okuM, okuMSupply] = await Promise.all([
     c.usdc.balanceOf(c.wallet.address) as Promise<bigint>,
-    c.okuMoney.balanceOf(c.wallet.address) as Promise<bigint>,
-    c.okuMoney.totalSupply() as Promise<bigint>,
+    c.okuDollar.balanceOf(c.wallet.address) as Promise<bigint>,
+    c.okuDollar.totalSupply() as Promise<bigint>,
   ]);
   return { usdc, okuM, okuMSupply };
 }
@@ -579,14 +585,14 @@ async function evmToSvm(
 
   // Source leg (EVM): ensure OkuM, redeem.
   if (evmPre.okuM < okuMAmountEvm) {
-    const multiplier: bigint = await evm.okuMoney.okuMMultiplier();
+    const multiplier: bigint = await evm.okuDollar.uiMultiplier();
     const PRECISION = 10n ** 18n;
     const decScale = 10n ** BigInt(18 - evm.usdcDecimals);
     const usdcNeeded =
       ((okuMAmountEvm - evmPre.okuM) * multiplier) / PRECISION / decScale + 1n;
     logger.info(
       `[EVM:${evm.chainName}] Wallet short on OkuM; seeding via ` +
-        `MockUSDC.mint+psm.mintOkuM(${ethers.formatUnits(usdcNeeded, evm.usdcDecimals)} USDC)`
+        `MockUSDC.mint+psm.mint(${ethers.formatUnits(usdcNeeded, evm.usdcDecimals)} USDC)`
     );
     if (!evm.hasMockUsdc) {
       throw new Error(`[EVM:${evm.chainName}] No MockUSDC; cannot seed OkuM`);
@@ -602,29 +608,29 @@ async function evmToSvm(
       );
     }
     await evmSendTx(evm, evm.usdc, 'approve', [evm.litePSMAddr, usdcNeeded], 'usdc.approve');
-    await evmSendTx(evm, evm.litePSM, 'mintOkuM', [usdcNeeded], 'litePSM.mintOkuM');
+    await evmSendTx(evm, evm.litePSM, 'mint', [usdcNeeded], 'litePSM.mint');
   }
 
   const usdcBefore: bigint = await evm.usdc.balanceOf(evm.wallet.address);
   await evmSendTx(
     evm,
-    evm.okuMoney,
+    evm.okuDollar,
     'approve',
     [evm.litePSMAddr, okuMAmountEvm],
-    `okuMoney.approve(${ethers.formatUnits(okuMAmountEvm, 18)})`
+    `okuDollar.approve(${ethers.formatUnits(okuMAmountEvm, 18)})`
   );
   await evmSendTx(
     evm,
     evm.litePSM,
-    'redeemOkuM',
+    'redeem',
     [okuMAmountEvm],
-    `litePSM.redeemOkuM(${ethers.formatUnits(okuMAmountEvm, 18)})`
+    `litePSM.redeem(${ethers.formatUnits(okuMAmountEvm, 18)})`
   );
   const released = await pollEvmDelta(
     () => evm.usdc.balanceOf(evm.wallet.address) as Promise<bigint>,
     usdcBefore
   );
-  if (released === 0n) throw new Error('[EVM] redeemOkuM released 0 USDC');
+  if (released === 0n) throw new Error('[EVM] redeem released 0 USDC (buffer empty -> queued?)');
   logger.success(`[EVM:${evm.chainName}] released ${ethers.formatUnits(released, evm.usdcDecimals)} USDC`);
 
   // Off-chain rail: mint MockUSDC on SVM dest for the same amount.
@@ -716,18 +722,18 @@ async function svmToEvm(
     `MockUSDC.mint(${ethers.formatUnits(released, evm.usdcDecimals)})`
   );
 
-  // Dest leg (EVM): mintOkuM.
-  const evmOkuMBefore: bigint = await evm.okuMoney.balanceOf(evm.wallet.address);
+  // Dest leg (EVM): LitePSM.mint.
+  const evmOkuMBefore: bigint = await evm.okuDollar.balanceOf(evm.wallet.address);
   await evmSendTx(evm, evm.usdc, 'approve', [evm.litePSMAddr, released], 'usdc.approve');
   await evmSendTx(
     evm,
     evm.litePSM,
-    'mintOkuM',
+    'mint',
     [released],
-    `litePSM.mintOkuM(${ethers.formatUnits(released, evm.usdcDecimals)})`
+    `litePSM.mint(${ethers.formatUnits(released, evm.usdcDecimals)})`
   );
   const minted = await pollEvmDelta(
-    () => evm.okuMoney.balanceOf(evm.wallet.address) as Promise<bigint>,
+    () => evm.okuDollar.balanceOf(evm.wallet.address) as Promise<bigint>,
     evmOkuMBefore
   );
   logger.success(`[EVM:${evm.chainName}] minted ${ethers.formatUnits(minted, 18)} OkuM`);

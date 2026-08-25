@@ -243,6 +243,9 @@ contract OkuDollar is
 
         $.maxSupply = initialMaxSupply;
 
+        // Sync window ships ON — see `Constants.DEFAULT_SYNC_WINDOW`.
+        _getSyncWindowStorage().duration = uint64(Constants.DEFAULT_SYNC_WINDOW);
+
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(Roles.OKU_UPGRADER, _admin);
         _grantRole(Roles.OKU_PAUSER, _admin);

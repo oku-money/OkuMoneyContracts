@@ -8,7 +8,9 @@ use crate::constants::TOKEN_DECIMALS;
 use crate::contexts::{DepositBuffer, MintOkuM, RedeemOkuM, WithdrawBuffer};
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::{check_yield_lock, dollars_to_raw, raw_to_dollars};
+use crate::helpers::{
+    apply_fee, check_sync_window, check_yield_lock, dollars_to_raw, raw_to_dollars,
+};
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
@@ -24,10 +26,18 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     // Check yield distribution lock FIRST
     check_yield_lock(&ctx.accounts.config)?;
 
+    // Cross-chain sync window: mint prices through the multiplier, so it
+    // must not execute while a tick is propagating between chains. Gating
+    // mint as well as redeem is what makes the window a complete answer to
+    // cross-chain divergence — leaving the entry side open would just move
+    // the mispricing rather than remove it.
+    check_sync_window(&ctx.accounts.config)?;
+
     // Read state
     let is_paused = ctx.accounts.config.is_paused;
     let max_supply = ctx.accounts.config.max_supply;
     let minter_allowance = ctx.accounts.config.minter_allowance;
+    let tin_bps = ctx.accounts.config.tin_bps;
     let current_supply = ctx.accounts.oku_m_mint.supply;
 
     require!(!is_paused, LitePsmError::Paused);
@@ -37,8 +47,15 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     let multiplier =
         crate::helpers::scaled_ui::read_multiplier(&ctx.accounts.oku_m_mint.to_account_info())?;
 
-    // Calculate OkuM raw amount (multiplier-aware): treat usdc_amount as a dollar value.
-    let raw_oku_m_amount = dollars_to_raw(usdc_amount, multiplier)?;
+    // Apply `tin` to the deposited USDC before converting to raw. The full
+    // `usdc_amount` still enters the vault; the fee portion simply has no
+    // OkuM minted against it, which is how the fee accretes to the buffer
+    // (and therefore to the collateral ratio) with no separate transfer.
+    let credited_usdc = apply_fee(usdc_amount, tin_bps)?;
+    require!(credited_usdc > 0, LitePsmError::AmountTooSmall);
+
+    // Calculate OkuM raw amount (multiplier-aware): treat credited_usdc as a dollar value.
+    let raw_oku_m_amount = dollars_to_raw(credited_usdc, multiplier)?;
 
     // Reject zero-output mints — at high `multiplier`, the division can
     // truncate to zero, which would silently donate USDC to the buffer with
@@ -149,9 +166,14 @@ pub fn redeem_oku_m(
     // Check yield distribution lock FIRST
     check_yield_lock(&ctx.accounts.config)?;
 
+    // Cross-chain sync window: redeem prices through the multiplier, so it
+    // must not execute while a tick is propagating between chains.
+    check_sync_window(&ctx.accounts.config)?;
+
     // Read state
     let is_paused = ctx.accounts.config.is_paused;
     let bump = ctx.accounts.config.bump;
+    let tout_bps = ctx.accounts.config.tout_bps;
     let vault_usdc_balance = ctx.accounts.vault_usdc.amount;
 
     require!(!is_paused, LitePsmError::Paused);
@@ -161,13 +183,26 @@ pub fn redeem_oku_m(
     let multiplier =
         crate::helpers::scaled_ui::read_multiplier(&ctx.accounts.oku_m_mint.to_account_info())?;
 
-    // Calculate USDC amount (multiplier-aware): treat dollar value as USDC.
-    let usdc_amount = raw_to_dollars(raw_oku_m_amount, multiplier)?;
+    // Gross dollar value of the raw tokens being redeemed.
+    let gross_usdc = raw_to_dollars(raw_oku_m_amount, multiplier)?;
 
-    // Reject zero-output redeems.
+    // Apply `tout`. The fee is ceil-rounded and the payout floor-rounded,
+    // so rounding never favours a dust-spam loop. The withheld amount is
+    // simply not transferred out — it stays in the vault, which is how the
+    // fee accrues to the buffer without a second transfer or a recipient
+    // account.
+    let usdc_amount = apply_fee(gross_usdc, tout_bps)?;
+
+    // Reject zero-output redeems. Checked on the NET amount: at a nonzero
+    // `tout` a dust redemption can round its entire payout away, and
+    // burning the user's tokens for a zero transfer would be theft rather
+    // than a fee.
     require!(usdc_amount > 0, LitePsmError::ZeroOutput);
 
     // Slippage protection: reject if output is below the caller's minimum.
+    // Compared against the NET payout, so `min_usdc_out` means what the
+    // caller actually receives and a fee increase cannot silently deliver
+    // less than a quoted amount.
     require!(usdc_amount >= min_usdc_out, LitePsmError::SlippageExceeded);
 
     // Pre-check user balance to surface a custom error instead of the
@@ -227,7 +262,11 @@ pub fn redeem_oku_m(
         user: ctx.accounts.user.key(),
         raw_oku_m_amount,
         usdc_amount,
-        dollar_value: usdc_amount, // USDC is dollar-denominated
+        // Gross dollar value before `tout`. Kept distinct from
+        // `usdc_amount` (the net transfer) so an indexer can reconstruct
+        // fee revenue as `dollar_value - usdc_amount` without needing the
+        // fee schedule in force at the time.
+        dollar_value: gross_usdc,
         multiplier,
         new_total_supply,
     });
@@ -277,7 +316,8 @@ pub fn deposit_buffer(ctx: Context<DepositBuffer>, amount: u64) -> Result<()> {
 /// Used to reclaim excess buffer after redemptions processed.
 ///
 /// **Intentionally NOT pause-gated.** Mirrors EVM `LitePSM.withdrawUsdc`, which
-/// has no `whenNotPaused` modifier (verified `EVM/src/psm/LitePSM.sol:540`).
+/// has no `whenNotPaused` modifier (verified `EVM/src/psm/LitePSM.sol`
+/// `withdrawUsdc`).
 /// Pause is a user-side incident lever: it blocks mints/redeems but must NOT
 /// block the cold multisig from rebalancing buffer USDC during an incident
 /// response.

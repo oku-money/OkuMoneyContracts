@@ -35,7 +35,9 @@ import {
   MAX_SUPPLY,
   MINTER_ALLOWANCE,
   DECIMALS,
+  MAX_FEE_BPS,
 } from "../shared/setup";
+import { clearSyncWindow, expectedRedeemNet, stepMultiplierTo } from "../shared/multiplier";
 import {
   BankrunHarness,
   startBankrun,
@@ -183,16 +185,7 @@ describe("ScaledUiAmount extension behavior", () => {
 
     // Bump multiplier to 2.0 (2_000_000_000)
     const newMultiplier = new BN(2_000_000_000);
-    await program.methods
-      .setMultiplier(newMultiplier)
-      .accountsPartial({
-        rebaser: orchestrator.publicKey,
-        config: configPda,
-        okuMMint,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-      })
-      .signers([orchestrator])
-      .rpc();
+    await stepMultiplierTo(h, program as any, orchestrator, configPda, okuMMint, newMultiplier);
 
     await warpSlots(h, 1);
 
@@ -212,16 +205,7 @@ describe("ScaledUiAmount extension behavior", () => {
   it("mint amount decreases as multiplier increases", async () => {
     // Set multiplier to 3.0
     const m3 = new BN(3_000_000_000);
-    await program.methods
-      .setMultiplier(m3)
-      .accountsPartial({
-        rebaser: orchestrator.publicKey,
-        config: configPda,
-        okuMMint,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-      })
-      .signers([orchestrator])
-      .rpc();
+    await stepMultiplierTo(h, program as any, orchestrator, configPda, okuMMint, m3);
     await warpSlots(h, 1);
 
     // Mint 1 USDC at multiplier 3.0
@@ -247,16 +231,7 @@ describe("ScaledUiAmount extension behavior", () => {
 
     // Now bump multiplier to 6.0 and mint another 1 USDC
     const m6 = new BN(6_000_000_000);
-    await program.methods
-      .setMultiplier(m6)
-      .accountsPartial({
-        rebaser: orchestrator.publicKey,
-        config: configPda,
-        okuMMint,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-      })
-      .signers([orchestrator])
-      .rpc();
+    await stepMultiplierTo(h, program as any, orchestrator, configPda, okuMMint, m6);
 
     await warpSlots(h, 1);
 
@@ -291,16 +266,7 @@ describe("ScaledUiAmount extension behavior", () => {
   it("redeem returns more USDC per raw token as multiplier increases", async () => {
     // Set multiplier to 8.0
     const m8 = new BN(8_000_000_000);
-    await program.methods
-      .setMultiplier(m8)
-      .accountsPartial({
-        rebaser: orchestrator.publicKey,
-        config: configPda,
-        okuMMint,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-      })
-      .signers([orchestrator])
-      .rpc();
+    await stepMultiplierTo(h, program as any, orchestrator, configPda, okuMMint, m8);
     await warpSlots(h, 1);
 
     // Mint some okuM for user to redeem (at multiplier 8.0)
@@ -343,9 +309,11 @@ describe("ScaledUiAmount extension behavior", () => {
 
     const usdcReceived = Number(userUsdcAfter.amount) - Number(userUsdcBefore.amount);
 
-    // At multiplier 8.0: usdc_out = raw_tokens * multiplier / PRECISION
-    //   = 100_000 * 8_000_000_000 / 1_000_000_000 = 800_000
-    expect(usdcReceived).to.equal(800_000);
+    // At multiplier 8.0: gross = 100_000 * 8e9 / 1e9 = 800_000, less `tout`.
+    const m8Actual = await readMultiplierFromMint(h, okuMMint);
+    expect(usdcReceived).to.equal(
+      expectedRedeemNet(redeemAmount, m8Actual, PRECISION).toNumber()
+    );
 
     // Verify we got MORE USDC than raw tokens redeemed (multiplier > 1.0)
     expect(usdcReceived).to.be.greaterThan(redeemAmount.toNumber());
@@ -358,16 +326,7 @@ describe("ScaledUiAmount extension behavior", () => {
   it("setMultiplier cannot decrease multiplier", async () => {
     // Set multiplier to 2.0 first
     const higher = new BN(2_000_000_000);
-    await program.methods
-      .setMultiplier(higher)
-      .accountsPartial({
-        rebaser: orchestrator.publicKey,
-        config: configPda,
-        okuMMint,
-        token2022Program: TOKEN_2022_PROGRAM_ID,
-      })
-      .signers([orchestrator])
-      .rpc();
+    await stepMultiplierTo(h, program as any, orchestrator, configPda, okuMMint, higher);
 
     await warpSlots(h, 1);
 
@@ -445,8 +404,14 @@ describe("ScaledUiAmount extension behavior", () => {
     const mintData = unpackMint(okuMMint, mintInfo!, TOKEN_2022_PROGRAM_ID);
     const totalSupply = new BN(mintData.supply.toString());
 
-    // Distribute $1 of yield (1_000_000 base units)
-    const yieldAmount = new BN(1_000_000);
+    // Distribute $1 of yield — but cap it so the resulting multiplier step
+    // stays within what `tout` covers. The program refuses a step larger than
+    // the redemption fee can cover, and by this point in the suite the
+    // multiplier is high and the supply low, so a flat $1 would overshoot.
+    const maxBump = startMultiplier.muln(MAX_FEE_BPS).divn(10_000).muln(99).divn(100);
+    const maxYield = maxBump.mul(totalSupply).div(PRECISION);
+    const yieldAmount = BN.min(new BN(1_000_000), maxYield);
+    expect(yieldAmount.toNumber()).to.be.greaterThan(0);
 
     // Expected multiplier increase: yield * PRECISION / total_supply
     const expectedBump = yieldAmount.mul(PRECISION).div(totalSupply);
@@ -468,6 +433,9 @@ describe("ScaledUiAmount extension behavior", () => {
       .rpc();
 
     await warpSlots(h, 1);
+    // distribute_yield arms the cross-chain sync window (fail-closed), which
+    // blocks the verification redeem below until it lifts.
+    await clearSyncWindow(h, program as any, configPda);
 
     // Verify the on-chain multiplier matches the expected computation
     const actualNewMultiplier = await readMultiplierFromMint(h, okuMMint);
@@ -504,7 +472,9 @@ describe("ScaledUiAmount extension behavior", () => {
     );
 
     const usdcReceived = Number(userUsdcAfter.amount) - Number(userUsdcBefore.amount);
-    const expectedUsdc = redeemAmount.mul(expectedNewMultiplier).div(PRECISION).toNumber();
+    const expectedUsdc = expectedRedeemNet(
+      redeemAmount, expectedNewMultiplier, PRECISION
+    ).toNumber();
 
     // The USDC received should match the post-yield multiplier
     expect(usdcReceived).to.equal(expectedUsdc);

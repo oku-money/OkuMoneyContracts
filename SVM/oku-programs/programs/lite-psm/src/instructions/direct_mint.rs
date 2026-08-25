@@ -12,7 +12,7 @@
 use crate::contexts::direct_mint::MintOkuMDirect;
 use crate::errors::LitePsmError;
 use crate::events::*;
-use crate::helpers::{check_yield_lock, raw_to_dollars, read_multiplier};
+use crate::helpers::{check_sync_window, check_yield_lock, raw_to_dollars, read_multiplier};
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface;
@@ -32,6 +32,20 @@ use anchor_spl::token_interface;
 pub fn mint_oku_m_direct(ctx: Context<MintOkuMDirect>, raw_amount: u64) -> Result<()> {
     // Check yield distribution lock FIRST
     check_yield_lock(&ctx.accounts.config)?;
+
+    // Cross-chain sync window.
+    //
+    // This instruction does not price through the multiplier on its own --
+    // the quantity is the caller-supplied raw amount, and the multiplier read
+    // below feeds only the event's dollar_value field. But the CROSS-CHAIN
+    // PAIR does price: burning 100 raw where M=1.04 destroys $104 of claim
+    // while minting 100 raw where M=1.05 creates $105, conjuring $1 out of a
+    // mid-tick divergence.
+    //
+    // So the gating rule is "can this move value across a multiplier
+    // boundary", not "does this price locally". Raw-conserving is a
+    // per-instruction property and does not survive the round trip.
+    check_sync_window(&ctx.accounts.config)?;
 
     // Read state
     let is_paused = ctx.accounts.config.is_paused;

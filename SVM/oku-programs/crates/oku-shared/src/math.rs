@@ -29,7 +29,7 @@
 //! pool (the floor leaves dust in the pool, favoring everyone else
 //! collectively). When in doubt, document the choice at the call site.
 
-use crate::constants::PRECISION;
+use crate::constants::{BASIS_POINTS, PRECISION};
 
 /// Compute `(a * b) / divisor` with intermediate u128 widening and
 /// floor rounding. Returns `None` on overflow OR when `divisor == 0`.
@@ -108,6 +108,56 @@ pub fn mul_div_ceil(a: u64, b: u64, divisor: u64) -> Option<u64> {
     #[allow(clippy::arithmetic_side_effects)]
     let result = numerator / d;
     u64::try_from(result).ok()
+}
+
+// ---------------------------------------------------------------------------
+// PSM fees (tin / tout)
+// ---------------------------------------------------------------------------
+//
+// Ported concept: `tin` (fee on the way in, mint) and `tout` (fee on the
+// way out, redeem) from `makerdao/dss-lite-psm`, which this PSM's
+// instruction set was modelled on but which the original port omitted.
+// Taken from https://github.com/makerdao/dss-lite-psm/blob/master/src/DssLitePsm.sol
+//
+// `tout` is what actually closes the local step-arbitrage surface: SVM's
+// multiplier moves in discrete jumps, so absent a fee anyone can mint at
+// `M0`, hold across the jump, and redeem at `M1` for the whole step. A
+// fee above the maximum step yield makes that round trip lossy.
+//
+// Rounding: the fee rounds **up** and the user's payout rounds **down**,
+// per the module rounding-direction policy. A floor-rounded fee would let
+// a stream of dust-sized operations extract the rounding remainder.
+
+/// Fee charged on `gross` at `fee_bps`, rounded **up** (protocol-favouring).
+///
+/// Returns `Some(0)` for `fee_bps == 0` without touching the division, so
+/// the disabled-fee path is exactly free and cannot introduce rounding.
+///
+/// Callers are responsible for bounding `fee_bps` by `MAX_FEE_BPS`; this
+/// primitive stays total and simply returns `None` if a nonsensical
+/// `fee_bps` would produce a fee exceeding `u64`.
+#[inline]
+pub fn fee_amount(gross: u64, fee_bps: u64) -> Option<u64> {
+    if fee_bps == 0 {
+        return Some(0);
+    }
+    mul_div_ceil(gross, fee_bps, BASIS_POINTS)
+}
+
+/// `gross` less the ceil-rounded fee at `fee_bps`.
+///
+/// Returns `None` if the fee would exceed `gross`, which for any
+/// `fee_bps <= BASIS_POINTS` cannot happen — the `checked_sub` is a
+/// defensive backstop against an out-of-range `fee_bps` reaching this far
+/// rather than an expected path.
+///
+/// Note the result can legitimately be `Some(0)`: a dust-sized `gross`
+/// with a nonzero fee rounds the entire amount away. Callers must reject
+/// that explicitly (`ZeroOutput`) rather than settling a no-op transfer.
+#[inline]
+pub fn apply_fee(gross: u64, fee_bps: u64) -> Option<u64> {
+    let fee = fee_amount(gross, fee_bps)?;
+    gross.checked_sub(fee)
 }
 
 // ---------------------------------------------------------------------------
@@ -299,6 +349,47 @@ mod verification {
             assert_eq!(ceil_val, floor_val);
         }
     }
+
+    // -----------------------------------------------------------------------
+    // fee proofs
+    // -----------------------------------------------------------------------
+
+    /// Proof: for any in-range `fee_bps`, the fee never exceeds the gross,
+    /// so `apply_fee` cannot underflow and a redemption can never pay out
+    /// more than it was quoted.
+    #[kani::proof]
+    fn proof_apply_fee_never_underflows_in_range() {
+        let gross: u64 = kani::any();
+        let fee_bps: u64 = kani::any();
+        kani::assume(fee_bps <= crate::constants::MAX_FEE_BPS);
+
+        let net = apply_fee(gross, fee_bps);
+        assert!(net.is_some());
+        let net = net.unwrap();
+        assert!(net <= gross);
+    }
+
+    /// Proof: `fee + net == gross` exactly — the fee split is
+    /// conservative, losing no value and creating none.
+    #[kani::proof]
+    fn proof_fee_split_is_conservative() {
+        let gross: u64 = kani::any();
+        let fee_bps: u64 = kani::any();
+        kani::assume(fee_bps <= crate::constants::MAX_FEE_BPS);
+
+        let fee = fee_amount(gross, fee_bps).unwrap();
+        let net = apply_fee(gross, fee_bps).unwrap();
+        assert_eq!(fee + net, gross);
+    }
+
+    /// Proof: a zero fee rate is exactly the identity, for every input.
+    /// This is the formal statement of the "ships inert" property.
+    #[kani::proof]
+    fn proof_zero_fee_is_identity() {
+        let gross: u64 = kani::any();
+        assert_eq!(fee_amount(gross, 0), Some(0));
+        assert_eq!(apply_fee(gross, 0), Some(gross));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -380,5 +471,63 @@ mod tests {
     fn mul_div_ceil_at_u64_max_boundary() {
         assert_eq!(mul_div_ceil(u64::MAX, u64::MAX, u64::MAX), Some(u64::MAX));
         assert_eq!(mul_div_floor(u64::MAX, u64::MAX, u64::MAX), Some(u64::MAX));
+    }
+
+    // ---- fees ----
+
+    #[test]
+    fn fee_disabled_is_exactly_free() {
+        // The default configuration must be bit-for-bit a no-op, so the
+        // "ship inert" property is a fact rather than an approximation.
+        assert_eq!(fee_amount(1_000_000, 0), Some(0));
+        assert_eq!(apply_fee(1_000_000, 0), Some(1_000_000));
+        assert_eq!(apply_fee(0, 0), Some(0));
+        assert_eq!(apply_fee(u64::MAX, 0), Some(u64::MAX));
+    }
+
+    #[test]
+    fn fee_amount_basic_bps() {
+        // 15 bps on 1_000_000 = 1500.
+        assert_eq!(fee_amount(1_000_000, 15), Some(1_500));
+        // 100 bps (the MAX_FEE_BPS ceiling) on 1_000_000 = 10_000.
+        assert_eq!(fee_amount(1_000_000, 100), Some(10_000));
+        assert_eq!(apply_fee(1_000_000, 15), Some(998_500));
+    }
+
+    #[test]
+    fn fee_rounds_up_never_down() {
+        // 1 * 15 / 10_000 = 0.0015 → ceil = 1, so the protocol keeps the
+        // remainder instead of leaking it to a dust-spam loop.
+        assert_eq!(fee_amount(1, 15), Some(1));
+        assert_eq!(apply_fee(1, 15), Some(0));
+        // 667 * 15 / 10_000 = 1.0005 → ceil = 2.
+        assert_eq!(fee_amount(667, 15), Some(2));
+    }
+
+    #[test]
+    fn fee_can_consume_dust_entirely() {
+        // Callers must treat Some(0) as a reject, not a settle.
+        assert_eq!(apply_fee(1, 10_000), Some(0));
+    }
+
+    #[test]
+    fn fee_never_exceeds_gross_within_bounds() {
+        // Exhaustive over the whole legal fee range at several magnitudes.
+        for gross in [0u64, 1, 2, 999, 1_000_000, u64::MAX / 2] {
+            for bps in 0..=crate::constants::MAX_FEE_BPS {
+                let net = apply_fee(gross, bps).expect("in-range fee must not underflow");
+                assert!(net <= gross, "fee inflated the payout");
+                let fee = fee_amount(gross, bps).unwrap();
+                assert_eq!(net + fee, gross, "fee + net must reconstruct gross");
+            }
+        }
+    }
+
+    #[test]
+    fn fee_amount_overflow_is_none_not_panic() {
+        // gross * bps overflows u128 only past u64::MAX inputs; the
+        // narrowing back to u64 is what fails here.
+        assert_eq!(fee_amount(u64::MAX, 10_000), Some(u64::MAX));
+        assert_eq!(apply_fee(u64::MAX, 10_000), Some(0));
     }
 }

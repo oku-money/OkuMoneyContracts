@@ -61,27 +61,44 @@ contract SyncWindowTest is BaseTest {
 
     // ============ Ships inert ============
 
-    function test_ShipsInert_DurationZeroAndNeverLocked() public view {
-        assertEq(token.syncWindowDuration(), 0, "window must ship disabled");
-        assertEq(token.syncLockedUntil(), 0);
+    function test_ShipsOn_DurationDefaultedAndNeverLocked() public view {
+        // The window ships ON. Protection that depends on someone remembering
+        // to enable it is not protection.
+        assertEq(
+            token.syncWindowDuration(), Constants.DEFAULT_SYNC_WINDOW, "window must ship enabled"
+        );
+        assertEq(token.syncLockedUntil(), 0, "but not armed until a tick");
         assertEq(token.syncEpoch(), 0);
         assertFalse(token.isSyncLocked());
     }
 
-    /// @dev The property that lets this ship dormant: with duration 0, a rate
-    ///      write must not arm anything — not even for the current second, and
-    ///      critically must not move the gap anchor, or enabling the feature
-    ///      later could be blocked for `MIN_SYNC_WINDOW_GAP` by a rate write
-    ///      that predated it.
-    function test_ShipsInert_SetYieldRateDoesNotArm() public {
+    /// @dev With the window explicitly disabled, a rate write must not arm
+    ///      anything — not even for the current second — and critically must not
+    ///      move the gap anchor, or re-enabling the feature later could be
+    ///      blocked for `MIN_SYNC_WINDOW_GAP` by a rate write that predated it.
+    function test_DisabledWindow_SetYieldRateDoesNotArm() public {
+        _setWindow(0);
+
         vm.prank(rateSetter);
         token.setYieldRate(RATE_5_PCT_APY, block.timestamp + 30 days);
 
-        assertEq(token.syncLockedUntil(), 0, "inert config must not move gap anchor");
+        assertEq(token.syncLockedUntil(), 0, "disabled config must not move gap anchor");
         assertFalse(token.isSyncLocked());
 
         // And the price-sensitive path still works in the same block.
         _psmMint(user1, 1000e6);
+    }
+
+    /// @dev The converse, and the reason the default matters: straight out of
+    ///      `initialize`, with nobody having configured anything, a rate write
+    ///      fences itself.
+    function test_ShipsOn_SetYieldRateArmsByDefault() public {
+        vm.prank(rateSetter);
+        token.setYieldRate(RATE_5_PCT_APY, block.timestamp + 30 days);
+
+        assertTrue(token.isSyncLocked(), "default config must fence a rate write");
+        vm.warp(block.timestamp + Constants.DEFAULT_SYNC_WINDOW);
+        assertFalse(token.isSyncLocked());
     }
 
     // ============ Blocking ============

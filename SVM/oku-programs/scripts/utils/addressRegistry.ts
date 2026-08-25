@@ -1,7 +1,7 @@
 /**
  * Testnet address registry sync (SVM side)
  *
- * Writes the current SVM deployment into the repo-root `testnet-addresses.json`
+ * Writes the current SVM deployment into the repo-root `addresses.json`
  * file, which is the canonical human-readable address registry for all chains.
  *
  * The EVM side has a matching sync helper in its own scripts/utils tree. Each
@@ -15,7 +15,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { DeploymentAddresses } from './addressBook';
 
-const REGISTRY_PATH = path.resolve(__dirname, '../../../../testnet-addresses.json');
+const REGISTRY_PATH = path.resolve(__dirname, '../../../../addresses.json');
 
 export interface SvmNetworkEntry {
   // SVM has no EIP-155-style chain ID and carries no on-chain chain-ID state.
@@ -44,7 +44,7 @@ function loadRegistry(): TestnetRegistry {
   try {
     return JSON.parse(fs.readFileSync(REGISTRY_PATH, 'utf8'));
   } catch (error) {
-    console.warn(`[testnetRegistry] Could not parse ${REGISTRY_PATH}:`, error);
+    console.warn(`[addressRegistry] Could not parse ${REGISTRY_PATH}:`, error);
     return {};
   }
 }
@@ -93,6 +93,6 @@ export function syncSvmRegistry(deployment: DeploymentAddresses): void {
   registry.svm[deployment.network] = entry;
   writeRegistry(registry);
   console.log(
-    `[testnetRegistry] Wrote SVM.${deployment.network} → ${path.relative(process.cwd(), REGISTRY_PATH)}`
+    `[addressRegistry] Wrote SVM.${deployment.network} → ${path.relative(process.cwd(), REGISTRY_PATH)}`
   );
 }

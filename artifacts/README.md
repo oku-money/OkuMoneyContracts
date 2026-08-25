@@ -78,7 +78,7 @@ npm run export-idls   # copy into ../../artifacts/svm/
 
 ## Current canonical deployments
 
-See `/testnet-addresses.json` at the repo root for the addresses these ABIs / IDLs are deployed at on each network.
+See `/addresses.json` at the repo root for the addresses these ABIs / IDLs are deployed at on each network.
 
 ## Usage examples
 
@@ -86,12 +86,12 @@ See `/testnet-addresses.json` at the repo root for the addresses these ABIs / ID
 
 ```ts
 import OkuMoney from "okumoney-contracts/artifacts/evm/OkuMoney.json";
-import testnetAddresses from "okumoney-contracts/testnet-addresses.json";
+import deploymentAddresses from "okumoney-contracts/addresses.json";
 import { Contract, JsonRpcProvider } from "ethers";
 
-// Look up the current address per network from testnet-addresses.json
+// Look up the current address per network from addresses.json
 // rather than hardcoding it here -- addresses change on redeploy.
-const { rpcUrl, contracts } = testnetAddresses.evm.baseSepolia;
+const { rpcUrl, contracts } = deploymentAddresses.evm.baseSepolia;
 const provider = new JsonRpcProvider(rpcUrl);
 const okuMoney = new Contract(contracts.okuMoney, OkuMoney.abi, provider);
 ```

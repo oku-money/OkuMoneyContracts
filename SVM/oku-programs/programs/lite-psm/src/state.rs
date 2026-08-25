@@ -107,13 +107,101 @@ pub struct PsmConfig {
     /// Per-direct-burner allowance. Decremented on each direct burn;
     /// reset by `allowance_manager` via `set_direct_burner_allowance`.
     pub direct_burner_allowance: u64,
+
+    // ===== Cross-chain multiplier sync window =====
+    //
+    // Closes the cross-chain arbitrage surface: while a multiplier tick is
+    // propagating between EVM and SVM the two chains disagree on price, and
+    // any conversion through the multiplier in that interval transacts at a
+    // stale price on one side. Blocks exactly the price-sensitive
+    // instructions (`mint_oku_m`, `redeem_oku_m`) and nothing else.
+    //
+    // Independent of, and additive to, `last_yield_distribution_slot`. That
+    // field remains a same-slot atomic-re-entry fence measured in slots;
+    // this one is a multi-second propagation window measured in wall-clock
+    // seconds. Different units for different jobs — see
+    // `oku_shared::sync_window` for the rationale.
+    /// Unix timestamp through which the sync window is engaged (inclusive).
+    /// `0` = never armed. Also serves as the anchor for the inter-window
+    /// gap check, which is why `end_sync_window` truncates it to `now`
+    /// rather than zeroing it.
+    pub sync_lock_until_ts: i64,
+
+    /// Orchestrator-assigned tick counter, identical on both chains for a
+    /// given tick.
+    ///
+    /// Deliberately **not** auto-incremented on a multiplier write: EVM
+    /// writes its rate roughly monthly while SVM steps daily-to-weekly, so
+    /// independently-bumped counters would diverge permanently and make the
+    /// parity check useless. The orchestrator assigns the number, both
+    /// chains record it, and `epoch_evm == epoch_svm` becomes a meaningful
+    /// externally-verifiable statement that no tick is mid-flight.
+    pub sync_epoch: u64,
+
+    /// The epoch during which a multiplier write most recently landed.
+    ///
+    /// `end_sync_window(N)` requires `last_write_epoch == N`, which is what
+    /// stops a window being opened and closed with nothing having happened.
+    /// Without it, "open, forget to write, close" leaves `sync_epoch = N`
+    /// against an untouched multiplier and the cross-chain parity check
+    /// reports OK — a false negative on the one check that exists.
+    ///
+    /// With it, `sync_epoch` means "this chain actually wrote for tick N".
+    ///
+    /// SVM-only concept. EVM accrues continuously and has nothing to land per
+    /// tick; its role in a window is to hold still while this chain catches up.
+    pub last_write_epoch: u64,
+
+    /// Configured window length in seconds. `0` = inert (arming blocks
+    /// nothing beyond the instant of the write itself), which is the
+    /// initialization default so the mechanism ships audited but dormant.
+    /// Bounded by `MAX_SYNC_WINDOW_SECS`.
+    pub sync_window_secs: i64,
+
+    // ===== PSM fees =====
+    //
+    // `tin` / `tout` from the upstream `dss-lite-psm` this PSM was modelled
+    // on. `tout` is the mechanism that closes *local* step arbitrage —
+    // minting at `M0`, holding across a discrete multiplier step, and
+    // redeeming at `M1`. The sync window cannot address that (the attacker
+    // transacts outside it); a fee exceeding the maximum step yield makes
+    // the round trip unprofitable by construction.
+    //
+    // Both default to 0 and are bounded by `MAX_FEE_BPS`.
+    /// Mint fee in basis points, charged on the USDC deposited.
+    pub tin_bps: u64,
+
+    /// Redemption fee in basis points, charged on the USDC paid out.
+    /// This is the step-arbitrage control; `tin` is present for upstream
+    /// parity and operator flexibility.
+    pub tout_bps: u64,
+
+    /// High-water mark of every multiplier step ever taken, in basis points,
+    /// rounded up. `set_fees` refuses any `tout_bps` below it.
+    ///
+    /// This is the second half of the step-arbitrage invariant. The first half
+    /// (`step_is_covered`, enforced at write time) stops an operator creating
+    /// exposure the current fee does not cover. This half stops them *removing*
+    /// coverage afterwards — otherwise "raise tout, take a big step, lower tout"
+    /// hands a cheap exit to everyone who held across the step.
+    ///
+    /// A time-based cooldown was considered and rejected: the attacker's edge is
+    /// locked in when the step lands and does not decay, and the multiplier is
+    /// monotonic so waiting costs them nothing. A cooldown delays the profit
+    /// rather than removing it. A high-water mark has no expiry.
+    ///
+    /// Less restrictive than it sounds: it pins the fee only against steps
+    /// actually taken. If every step was 1.4 bps, the fee can still be lowered
+    /// to 1.4 bps. Cleared only by the explicit, separately-gated
+    /// `reset_step_high_water_mark`.
+    pub max_step_bps: u64,
 }
 
 impl PsmConfig {
     pub const SEED: &'static [u8] = b"psm_config";
 
     /// Space needed for PsmConfig account: 8 byte discriminator +
-    /// `InitSpace`-derived field sum. Pinned to 562 bytes by the
+    /// `InitSpace`-derived field sum. Pinned to 618 bytes by the
     /// compile-time assertion below; if a reviewer changes a field's
     /// width the assertion fires.
     pub const LEN: usize = 8 + Self::INIT_SPACE;
@@ -138,7 +226,7 @@ impl PsmConfig {
 }
 
 // Compile-time assertion: if the PsmConfig layout changes, this fails to
-// compile. Byte breakdown (562 total):
+// compile. Byte breakdown (618 total):
 //
 //   8   account discriminator
 //   1   bump (u8)
@@ -148,7 +236,12 @@ impl PsmConfig {
 //            allowance_manager, rebaser, direct_minter, direct_burner)
 //         1  pending_role_admin
 //         3  token refs (usdc_mint, oku_m_mint, vault_usdc)
-//   40  5 u64 * 8 (max_supply, minter_allowance, last_yield_distribution_slot,
-//         direct_minter_allowance, direct_burner_allowance)
+//   96  12 8-byte scalars (u64/i64):
+//         5 pre-existing (max_supply, minter_allowance,
+//           last_yield_distribution_slot, direct_minter_allowance,
+//           direct_burner_allowance)
+//         4 sync window (sync_lock_until_ts, sync_epoch, last_write_epoch,
+//           sync_window_secs)
+//         3 fees / step coverage (tin_bps, tout_bps, max_step_bps)
 //   1   is_paused (bool)
-const _: () = assert!(PsmConfig::LEN == 562);
+const _: () = assert!(PsmConfig::LEN == 618);

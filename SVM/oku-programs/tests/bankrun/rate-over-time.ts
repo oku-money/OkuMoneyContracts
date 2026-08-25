@@ -44,6 +44,7 @@ import {
   mintOkuMViaProgram,
   DECIMALS,
 } from "../shared/setup";
+import { clearSyncWindow, expectedRedeemNet } from "../shared/multiplier";
 import {
   BankrunHarness,
   startBankrun,
@@ -173,7 +174,7 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
 
     // Redeem at m0 -> expected: oku_m * m0 / PRECISION.
     const redeemAmt = new BN(1_000_000_000); // 1000 okuM
-    const expectedUsdc0 = redeemAmt.mul(m0).div(PRECISION);
+    const expectedUsdc0 = expectedRedeemNet(redeemAmt, m0, PRECISION);
     const usdcBefore0 = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
     await psm.methods
       .redeemOkuM(redeemAmt, new BN(0))
@@ -210,6 +211,8 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
       })
       .signers([orchestrator])
       .rpc();
+      await warpSlots(h, 1);
+      await clearSyncWindow(h, psm as any, psmConfigPda);
 
     // Confirm the update landed on-chain via lastYieldDistributionSlot.
     const cfg1 = await psm.account.psmConfig.fetch(psmConfigPda);
@@ -219,7 +222,7 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
     // `last_yield_distribution_slot` stamp lands before the next ix.
     await warpSlots(h, 1);
 
-    const expectedUsdc1 = redeemAmt.mul(m1).div(PRECISION);
+    const expectedUsdc1 = expectedRedeemNet(redeemAmt, m1, PRECISION);
     const usdcBefore1 = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
     await psm.methods
       .redeemOkuM(redeemAmt, new BN(0))
@@ -279,6 +282,8 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
       })
       .signers([orchestrator])
       .rpc();
+      await warpSlots(h, 1);
+      await clearSyncWindow(h, psm as any, psmConfigPda);
 
     const cfgA = await psm.account.psmConfig.fetch(psmConfigPda);
     // Verify the on-chain update happened via lastYieldDistributionSlot.
@@ -306,6 +311,8 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
       })
       .signers([orchestrator])
       .rpc();
+      await warpSlots(h, 1);
+      await clearSyncWindow(h, psm as any, psmConfigPda);
 
     const cfgB = await psm.account.psmConfig.fetch(psmConfigPda);
     // Verify the on-chain update happened via lastYieldDistributionSlot.
@@ -317,7 +324,7 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
     await warpSlots(h, 1);
 
     const redeemAmt = new BN(500_000_000); // 500 okuM
-    const expectedUsdc = redeemAmt.mul(mBExpected).div(PRECISION);
+    const expectedUsdc = expectedRedeemNet(redeemAmt, mBExpected, PRECISION);
     const usdcBefore = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
     await psm.methods
       .redeemOkuM(redeemAmt, new BN(0))
@@ -387,6 +394,8 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
         })
         .signers([orchestrator])
         .rpc();
+        await warpSlots(h, 1);
+        await clearSyncWindow(h, psm as any, psmConfigPda);
       mCurrent = next;
       await warpSlots(h, 1);
     }
@@ -394,7 +403,7 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
 
     // Redeem 100 okuM at the final composed multiplier.
     const redeemAmt = new BN(100_000_000);
-    const expectedUsdc = redeemAmt.mul(mAfter3Ticks).div(PRECISION);
+    const expectedUsdc = expectedRedeemNet(redeemAmt, mAfter3Ticks, PRECISION);
     const usdcBefore = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
     await psm.methods
       .redeemOkuM(redeemAmt, new BN(0))
@@ -422,7 +431,7 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
 
     // The composed payout must be strictly greater than the starting-multiplier
     // payout would have been (sanity that rate actually appreciated).
-    const baselineUsdc = redeemAmt.mul(mStart).div(PRECISION);
+    const baselineUsdc = expectedRedeemNet(redeemAmt, mStart, PRECISION);
     expect(Number(usdcAfter.amount) - Number(usdcBefore.amount)).to.be.greaterThan(
       baselineUsdc.toNumber()
     );
@@ -474,7 +483,12 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
     await fundKeypairs(h, [user], 10 * anchor.web3.LAMPORTS_PER_SOL);
     await warpSlots(h, 1);
 
-    const psmSetup = await initializePsm(h, psm, payer, usdcMint);
+    // Sync window disabled for this describe: it exercises the SAME-SLOT
+    // yield fence, which is a separate, orthogonal mechanism. Leaving the
+    // window on would mask the fence behind a SyncWindowActive revert.
+    const psmSetup = await initializePsm(h, psm, payer, usdcMint, {
+      syncWindowSecs: 0,
+    });
     psmConfigPda = psmSetup.configPda;
     okuMMint = psmSetup.okuMMint;
     vaultUsdcAta = psmSetup.vaultUsdcAta;
@@ -541,9 +555,16 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
 
   it("same-slot redeem after set_multiplier reverts with YieldDistributionInProgress; next slot succeeds", async () => {
     const m0 = await readMultiplierFromMint(h, okuMMint);
-    const m1 = m0.add(m0.div(new BN(100))); // +1%
+    // +0.99% — just inside what the 1% test `tout` covers, since the program
+    // now refuses a step the redemption fee cannot cover.
+    const m1 = m0.add(m0.muln(99).divn(10_000));
 
     // Stamp the yield-lock slot.
+    //
+    // Deliberately NO slot bump and NO window clear here — this test is
+    // specifically about the same-slot fence, and settling either guard would
+    // defeat the thing under test. The sync window is separately disabled in
+    // this describe's setup so the two mechanisms can be observed in isolation.
     await psm.methods
       .setMultiplier(m1)
       .accountsPartial({
@@ -583,7 +604,7 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
     await warpSlots(h, 1);
 
     const redeemAmt = new BN(1_000_000);
-    const expectedUsdc = redeemAmt.mul(m1).div(PRECISION);
+    const expectedUsdc = expectedRedeemNet(redeemAmt, m1, PRECISION);
     const usdcBefore = await getAccount(provider.connection, userUsdcAta, undefined, TOKEN_PROGRAM_ID);
     await psm.methods
       .redeemOkuM(redeemAmt, new BN(0))

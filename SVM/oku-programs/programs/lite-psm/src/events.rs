@@ -274,3 +274,81 @@ pub struct TokenMetadataUpdatedEvent {
     pub name: String,
     pub symbol: String,
 }
+
+// ===========================================================================
+// Cross-chain multiplier sync window
+// ===========================================================================
+
+/// Emitted when a cross-chain multiplier sync window opens.
+///
+/// `auto_armed` distinguishes the two paths, which matters for monitoring:
+/// `false` is the orchestrator explicitly opening a window as step 1 of a
+/// tick (the healthy case), `true` is the fail-closed arm that fires on a
+/// multiplier write which had no window open. A sustained stream of
+/// `auto_armed: true` means the orchestrator is writing multipliers
+/// without running the tick protocol, and should alarm.
+#[event]
+pub struct SyncWindowOpened {
+    /// Orchestrator-assigned tick number; must match the peer chain's.
+    pub epoch: u64,
+    /// Inclusive Unix timestamp through which price-sensitive
+    /// instructions are blocked.
+    pub until_ts: i64,
+    /// `true` when armed implicitly by a multiplier write rather than by
+    /// an explicit `begin_sync_window`.
+    pub auto_armed: bool,
+    pub timestamp: i64,
+}
+
+/// Emitted when a sync window is closed early via `end_sync_window`,
+/// i.e. the orchestrator confirmed the tick landed on every chain.
+///
+/// Absence of this event before `until_ts` means the window expired on its
+/// own — the liveness backstop fired rather than the happy path. Worth
+/// alarming on, since it usually means the orchestrator died mid-tick and
+/// the chains may now disagree on `sync_epoch`.
+#[event]
+pub struct SyncWindowClosed {
+    pub epoch: u64,
+    pub timestamp: i64,
+}
+
+/// Emitted when `set_sync_window_secs` changes the configured window
+/// length. `0` means the window mechanism is inert.
+#[event]
+pub struct SyncWindowSecsSet {
+    pub old_secs: i64,
+    pub new_secs: i64,
+}
+
+// ===========================================================================
+// PSM fees
+// ===========================================================================
+
+/// Emitted when `set_fees` changes the `tin` / `tout` schedule.
+///
+/// `tout` is the local step-arbitrage control: it must exceed the yield
+/// delivered by a single multiplier step or a mint-hold-redeem round trip
+/// across that step is profitable. Both values are in basis points and
+/// bounded by `MAX_FEE_BPS`.
+#[event]
+pub struct FeesSet {
+    pub old_tin_bps: u64,
+    pub new_tin_bps: u64,
+    pub old_tout_bps: u64,
+    pub new_tout_bps: u64,
+}
+
+/// Emitted when `reset_step_high_water_mark` clears the step floor under
+/// `tout_bps`.
+///
+/// ALARM ON THIS. It reopens historical step-arbitrage exposure: raw acquired
+/// before a large past step can subsequently be redeemed at a fee that no
+/// longer covers that step. Legitimate only when the supply outstanding at the
+/// time of the step has substantially turned over — a judgement the chain
+/// cannot make, which is why the action is cold-gated and separately named.
+#[event]
+pub struct StepHighWaterMarkReset {
+    pub old_mark_bps: u64,
+    pub tout_bps_at_reset: u64,
+}

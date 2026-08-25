@@ -57,3 +57,99 @@ pub const MAX_MULTIPLIER: u64 = 1_000_000_000_000_000;
 /// Solana). EVM uses 18 decimals; the off-chain orchestrator handles
 /// the cross-chain scale conversion.
 pub const TOKEN_DECIMALS: u8 = 6;
+
+// ---------------------------------------------------------------------------
+// Cross-chain multiplier sync window
+// ---------------------------------------------------------------------------
+//
+// The sync window closes the *cross-chain* arbitrage surface: while a
+// multiplier tick is propagating, EVM and SVM briefly disagree on the
+// price, and any conversion through the multiplier during that interval
+// transacts at a stale price on one side. The window blocks exactly the
+// price-sensitive instructions until the orchestrator has confirmed both
+// chains landed the tick.
+//
+// It does NOT address the *local* step-arbitrage surface (holding raw
+// across a discrete step) — that is what `tout` exists for. See the
+// module note on fees below.
+//
+// Both bounds are compile-time constants, not config fields, so a warm
+// key cannot widen the window or shrink the gap. Wall-clock seconds
+// rather than slots: Solana slot times stretch under congestion, which
+// is precisely when cross-chain propagation is slowest, so a
+// slot-denominated window would shrink exactly when it needs to be
+// longest.
+
+/// Hard ceiling on a single sync window, in seconds.
+///
+/// Auto-expiry is the liveness backstop: if the orchestrator dies
+/// mid-tick, redemption resumes on its own after at most this long. A
+/// window can never be extended past this bound, so the mechanism can
+/// never become an indefinite pause on a warmer key than
+/// `PSM_UNPAUSER`'s.
+///
+/// EVM mirror: `Constants.MAX_SYNC_WINDOW`.
+pub const MAX_SYNC_WINDOW_SECS: i64 = 900;
+
+/// Sync window length written at `initialize`, in seconds.
+///
+/// Deployments ship with the window ON. A zero default would mean the
+/// protection is installed but inert, and therefore dependent on someone
+/// remembering to enable it — which is exactly the class of dependency this
+/// design is trying to remove.
+///
+/// 60s is a cross-chain propagation budget, not an economic parameter: the
+/// orchestrator normally closes the window explicitly (`end_sync_window`) as
+/// soon as the tick lands everywhere, so the configured length only matters
+/// when that confirmation never arrives. Adjustable within
+/// `MAX_SYNC_WINDOW_SECS` via `set_sync_window_secs`.
+///
+/// EVM mirror: `Constants.DEFAULT_SYNC_WINDOW`.
+pub const DEFAULT_SYNC_WINDOW_SECS: i64 = 60;
+
+/// Minimum wall-clock gap between the end of one sync window and the
+/// start of the next, in seconds.
+///
+/// This is the anti-griefing bound. Without it, a compromised rebaser
+/// could chain `set_multiplier(current + 1)` calls back-to-back and hold
+/// a permanent redemption lock. With it, the on-chain availability floor
+/// is `GAP / (GAP + MAX_WINDOW)` = `21600 / 22500` = **96%**, regardless
+/// of operator behaviour.
+///
+/// Note the interaction with the clamp rule: a multiplier write inside
+/// the gap still *succeeds*, it just does not re-arm the window (see
+/// `sync_window_gap_elapsed`). Blocking the write instead would make the
+/// rate/multiplier setter censorable, which the EVM side explicitly
+/// forbids (`OkuDollar.setYieldRate` is deliberately not pause-gated).
+///
+/// EVM mirror: `Constants.MIN_SYNC_WINDOW_GAP`.
+pub const MIN_SYNC_WINDOW_GAP_SECS: i64 = 21_600;
+
+// ---------------------------------------------------------------------------
+// PSM fees (tin / tout)
+// ---------------------------------------------------------------------------
+//
+// Restores the `tin`/`tout` parameters from the upstream this PSM was
+// ported from (`makerdao/dss-lite-psm`), which the original port dropped.
+//
+// `tout` is the fix for *local* step arbitrage: SVM's multiplier steps
+// discretely (Token-2022 rejects `ScaledUiAmount` + `InterestBearingConfig`
+// on one mint, so continuous accrual is unavailable), and a discrete step
+// lets anyone mint at `M0`, hold across the step, and redeem at `M1` for
+// a risk-free profit equal to the whole step. A window cannot prevent
+// this — the attacker simply transacts outside it. A `tout` exceeding the
+// maximum single-step yield makes the round trip unprofitable by
+// construction, permanently and independently of rebase cadence.
+//
+// Both default to 0, so the mechanism ships audited but economically
+// inert and is enabled by configuration.
+
+/// Hard ceiling on `tin_bps` / `tout_bps`, in basis points (100 = 1%).
+///
+/// Anti-confiscation bound: the fee setter sits on the cold multisig
+/// (`cap_manager`), but a bounded parameter is still strictly better than
+/// an unbounded one — this caps the worst case of a compromised cold key
+/// at 1% rather than total seizure of every redemption.
+///
+/// EVM mirror: `Constants.MAX_FEE_BPS`.
+pub const MAX_FEE_BPS: u64 = 100;

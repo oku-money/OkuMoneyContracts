@@ -153,4 +153,33 @@ contract OkuMultiplierAdapter {
     function isAccrualStopped() external view returns (bool) {
         return block.timestamp >= IScaledUIAmountNewUIMultiplier(address(token)).effectiveAt();
     }
+
+    // ============ Cross-chain sync window ============
+    //
+    // Surfaced so a consumer can see that the PSM is refusing to transact
+    // against the price this adapter is publishing.
+    //
+    // DELIBERATELY NOT FOLDED INTO `isHealthy()`. The multiplier remains
+    // genuinely correct during a sync window — EVM accrues continuously and the
+    // window exists to hold this chain still while a peer catches up, not
+    // because anything here is wrong. Reporting unhealthy would trigger
+    // needless liquidation pauses on a feed that is accurate. The asymmetry
+    // worth knowing about is narrower than "bad price": for at most
+    // `MAX_SYNC_WINDOW`, a position valued off this feed cannot be unwound
+    // through the PSM. Consumers who care can branch on it; the rest are no
+    // worse off than before.
+
+    /// @notice True while a cross-chain multiplier tick is propagating, during
+    ///         which `LitePSM` mint/redeem revert.
+    /// @dev Bounded and auto-expiring by construction, so treat a `true` here as
+    ///      transient (retry) rather than as an outage.
+    function isSyncLocked() external view returns (bool) {
+        return token.isSyncLocked();
+    }
+
+    /// @notice Exclusive timestamp at which the current sync window lifts.
+    ///         `0` when none has ever been armed.
+    function syncLockedUntil() external view returns (uint256) {
+        return token.syncLockedUntil();
+    }
 }

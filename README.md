@@ -347,6 +347,8 @@ Verify on **both source and destination chains** before submitting:
 | Check | EVM | SVM |
 |---|---|---|
 | Destination PSM not paused | `LitePSM.paused()` | `psm.account.psmConfig.fetch(...).isPaused` |
+| No sync window open (either chain) | `OkuDollar.isSyncLocked()` | `now < psmConfig.syncLockUntilTs` |
+| Sync epochs agree across chains | `OkuDollar.syncEpoch()` | `psmConfig.syncEpoch` — or just run `check-sync-parity.ts` |
 | Destination supply headroom | `OkuDollar.maxSupply() - totalSupply() >= mintAmount` | `psmConfig.maxSupply - totalSupply >= mint_amount` |
 | Destination minter allowance | `OkuDollar.minterAllowance(psm) >= mintAmount` | `psmConfig.minterAllowance >= mint_amount` |
 | Source user token balance | `OkuDollar.balanceOf(user) >= bridgeAmount` | `getAccount(userOkuMAta).amount >= bridge_amount` |
@@ -384,20 +386,89 @@ to fund the queue, then `processQueue`.
 
 #### Multiplier-tick sequencing across chains
 
-The multiplier (`uiMultiplier` EVM / `multiplier` SVM) is updated
-by `OKU_RATE_SETTER` (EVM, as a rate) / `rebaser` (SVM, as a step). To prevent chain divergence from
-causing accounting errors:
+The multiplier (`uiMultiplier` EVM / `multiplier` SVM) is updated by
+`OKU_RATE_SETTER` (EVM, as a rate) / `rebaser` (SVM, as a step).
 
-1. Fire `setOkuMMultiplier` (EVM) / `set_multiplier` (SVM) on **all
-   chains in the same off-chain batch**, within one slot/block of
-   each other.
-2. If sequencing diverges, **per-bridge dollar value is still
-   conserved** — the PSM uses the current multiplier at redemption
-   time on source and at mint time on destination. The recipient
-   may receive a slightly different raw token amount; dollar value
-   is equivalent.
-3. After a price tick, wait one slot (SVM) / one block (EVM) before
-   bridging to avoid `YieldDistributionInProgress`.
+A tick is **not atomic across chains**. While it propagates, the two sides price a
+raw token differently, so anything converting value through the multiplier in that
+interval settles at a stale price on one side. This is now an enforced protocol
+rather than a timing convention.
+
+**The three-step tick. Same `epoch` number on every chain.**
+
+```
+1. OPEN     EVM:  beginSyncWindow.ts --epoch=N
+            SVM:  sync-window.ts --begin --epoch=N
+
+2. WRITE    EVM:  setYieldRate.ts          (optional - accrual is continuous)
+            SVM:  set-multiplier.ts        (REQUIRED - see below)
+
+3. CLOSE    EVM:  endSyncWindow.ts --epoch=N
+            SVM:  sync-window.ts --end --epoch=N
+```
+
+**Step 2 is mandatory on SVM.** `end_sync_window` refuses to close a window in
+which no multiplier write landed (`NoWriteInEpoch`), so `sync_epoch` cannot
+advance against an untouched multiplier. That is what makes epoch parity a real
+completion check rather than a claim. EVM has no such requirement — accrual there
+is continuous, so nothing needs to land per tick; its role in the window is to
+hold still while SVM catches up.
+
+**SVM will refuse a step larger than `tout` covers.** If `set-multiplier.ts`
+fails with `StepExceedsFeeCoverage`, the fee is too small for the step — either
+raise `tout` (`set-fees.ts`) or take a smaller step. With `tout = 0` no step is
+possible at all. A single step can never exceed 1%, so catching up a long outage
+takes several ticks.
+
+Between step 1 and step 3, `mint` / `redeem` / `redeemUiAmount` / `processQueue`
+(EVM) and `mint_oku_m` / `redeem_oku_m` (SVM) revert. Buffer movement, the direct
+mint/burn bridge legs, and the multiplier writes themselves stay open — the gating
+rule is *gated iff the instruction prices through the multiplier*.
+
+**Verify with `check-sync-parity.ts` before step 1 and after step 3.** Neither
+chain can observe the other, so epoch equality read from outside is the only
+available proof that a tick completed symmetrically:
+
+```bash
+cd SVM/oku-programs
+npm run admin:check-sync-parity -- --evm=base --svm=mainnet-beta --strict
+```
+
+**Failure modes.**
+
+- **Forgot step 3.** The window auto-expires after `syncWindowDuration()`
+  (≤ `MAX_SYNC_WINDOW`, 15 min). Users are delayed, never stranded. The absence of
+  a `SyncWindowClosed` event before expiry is the alarm.
+- **Step 2 landed on only some chains.** Epochs will agree (step 1 set them) but the
+  multipliers diverge persistently. `check-sync-parity.ts` cannot detect this —
+  reconcile against the intended rate directly, and re-run step 2 on the missing chain.
+- **Crashed between 1 and 2.** Window expires, nothing was written, epochs still
+  agree. Safe: retry the whole tick with `epoch = N+1`.
+- **Gap not elapsed.** `beginSyncWindow` reverts with `SyncWindowGapNotElapsed`.
+  `MIN_SYNC_WINDOW_GAP` (6 h) bounds the duty cycle to guarantee a ≥96% availability
+  floor; a tick cadence tighter than that is not supported by design.
+- **Step refused.** `StepExceedsFeeCoverage` on SVM — the fee does not cover the
+  step. Raise `tout` first, or split the move across several ticks.
+- **Close refused.** `NoWriteInEpoch` on SVM — the window was opened but step 2
+  never landed. Complete the write, or let the window expire and retry the whole
+  tick at `epoch = N+1`.
+
+**If sequencing still diverges,** per-bridge dollar value remains conserved — the
+PSM uses the current multiplier at redemption time on source and at mint time on
+destination. The recipient may receive a slightly different raw amount; dollar
+value is equivalent.
+
+**Still wait one slot (SVM) after a write** before bridging: the same-slot
+`YieldDistributionInProgress` fence is independent of the sync window and remains
+in force.
+
+> **The window is not a step-arbitrage defence.** Holding raw across a discrete
+> multiplier step needs no transaction while the window is open, so no window
+> length deters it. On SVM the `tout` fee is the control — and it is now enforced
+> on-chain, not merely advised: a step larger than `tout` covers is refused, and
+> `tout` cannot later drop below a step already taken. On EVM continuous accrual
+> means there is no step to hold across. Do not substitute one mechanism for the
+> other.
 
 #### Minter allowance rotation policy
 
@@ -434,6 +505,12 @@ not rotated in > 7 days.
 | PSM buffer | < 2 × expected daily redemption volume | Depleted buffer reverts SVM redeems with `InsufficientBuffer`; EVM redeems queue instead |
 | Minter allowance | < 10 % of weekly throughput estimate | |
 | Pause state | PSM paused for > 15 min unexpectedly | |
+| Sync epoch parity | `syncEpoch()_evm != sync_epoch_svm` for > 5 min | A tick did not complete symmetrically; the chains may be pricing differently. Run `check-sync-parity.ts --strict`. |
+| Sync window expiry | `SyncWindowOpened` with no matching `SyncWindowClosed` before `lockedUntil` | The liveness backstop fired instead of the happy path — usually an orchestrator death mid-tick |
+| Unexpected auto-arm | `SyncWindowOpened` with `autoArmed = true` | Multiplier written without running the tick protocol. Fail-closed worked, but the runbook was skipped |
+| `tout` vs cadence (SVM) | `set_multiplier` failing `StepExceedsFeeCoverage` | The fee no longer covers the intended step — rebasing is blocked until `tout` is raised. Fail-closed, but it stops yield accruing |
+| Step high-water reset (SVM) | any `StepHighWaterMarkReset` event | Cold multisig cleared the floor under `tout`, reopening historical step exposure. Should be rare and deliberate |
+| Sync close refused (SVM) | any `NoWriteInEpoch` | A window was opened without a multiplier write landing — the tick protocol was run out of order |
 
 SVM bridges use direct `burn_oku_m_direct` / `mint_oku_m_direct`
 — there is no orchestrator token float to monitor (no USDC
@@ -474,9 +551,16 @@ One role per action. No role performs more than one function.
 
 | Entity | EVM Roles | SVM Roles |
 |---|---|---|
-| Cold Multisig | ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER, ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER, RESERVE_MANAGER | role_admin, unpauser, cap_manager, allowance_manager, buffer_withdrawer |
+| Cold Multisig | ADMIN, all UNPAUSER, all UNBLACKLISTER, CAP_MANAGER, PSM_FEE_MANAGER, ALLOWANCE_MANAGER, all UPGRADER, BUFFER_WITHDRAWER, RESERVE_MANAGER | role_admin, unpauser, cap_manager, allowance_manager, buffer_withdrawer |
 | Warm Multisig | all PAUSER, all BLACKLISTER | pauser, freezer |
-| Orchestrator | OKU_RATE_SETTER, PSM_QUEUE_PROCESSOR, PSM_BUFFER_DEPOSITOR | rebaser, buffer_depositor, direct_minter, direct_burner |
+| Orchestrator | OKU_RATE_SETTER (incl. `begin`/`endSyncWindow`), PSM_QUEUE_PROCESSOR, PSM_BUFFER_DEPOSITOR | rebaser (incl. `begin`/`end_sync_window`), buffer_depositor, direct_minter, direct_burner |
+
+The sync window and the fee schedule deliberately add **no new keys**. Window
+control sits with the existing rate-setter/rebaser — the actor that writes the
+multiplier is the one that knows when a tick has landed everywhere. Fee and
+window-length setting sits with the existing cold cap-manager, as economic policy.
+`PSM_FEE_MANAGER` is a separate *constant* from `OKU_CAP_MANAGER` only because
+AccessControl mappings are per-contract; it is intended for the same cold key.
 | LitePSM | OKU_MINTER, OKU_BURNER | Mint authority on the OkuM Token-2022 mint |
 | RedemptionQueue | OKU_BURNER | no SVM equivalent — redemption queue removed entirely, buffer-only PSM |
 
@@ -592,7 +676,10 @@ requirement is itself the delay mechanism. **Timelocks are not pursued.**
 | Token model | Single-token: OkuDollar (`rUSDOku`) with the ERC-8056 ScaledUIAmount extension | Single-token: OkuM with the Token-2022 ScaledUiAmount extension |
 | Multiplier | Continuous, derived from a stored rate + elapsed time (`rpow`), 1e18 precision, 18-decimal token | Discrete, stored on the mint extension (`ScaledUiAmountConfig`), 1e9 precision, 6-decimal token |
 | OkuDollar multiplier | Continuous `_rpow` streaming | N/A — single-token model; multiplier serves as both pricing and UI display |
-| Yield lock | `block.number` comparison | `Clock::slot` comparison |
+| Same-slot yield fence | none — continuous accrual has no distribution tx to co-locate with | `Clock::slot` comparison against `last_yield_distribution_slot` |
+| Cross-chain sync window | `block.timestamp`, state on `OkuDollar`, gates `mint`/`redeem`/`redeemUiAmount`/`processQueue` | `Clock::unix_timestamp`, state on `PsmConfig`, gates `mint_oku_m`/`redeem_oku_m` |
+| Local step arbitrage | none possible — accrual is continuous | real; closed by `tout`, not by the window |
+| PSM fees | `tin`/`tout` for parity, default 0 | `tin`/`tout`, `tout` load-bearing, default 0 |
 | Token standard | ERC-20 (custom rebasing for OkuDollar) | Token-2022 (OkuM with ScaledUiAmount + MetadataPointer + TokenMetadata) |
 | Decimals | 18 | 6 |
 | Proxy pattern | TransparentUpgradeable / UUPS | Solana program upgrades (Squads authority) |
@@ -637,7 +724,7 @@ contracts/
 │   ├── evm/             # Slim Hardhat artifacts (abi + bytecode) per contract
 │   ├── svm/             # Anchor IDL JSON per program
 │   └── README.md        # Consumption docs for downstream services
-└── testnet-addresses.json  # Canonical live deployment registry (auto-generated)
+└── addresses.json  # Canonical live deployment registry (auto-generated)
 ```
 
 ---
@@ -650,7 +737,7 @@ are off-chain orchestrator-mediated (PSM mint/burn) — there is no
 on-chain bridge.
 
 > Authoritative deployment state lives in
-> [`testnet-addresses.json`](testnet-addresses.json) at the repo root,
+> [`addresses.json`](addresses.json) at the repo root,
 > auto-synced by every successful live EVM deploy. Do NOT hand-edit;
 > rerun the deploy script to refresh.
 >
@@ -745,7 +832,7 @@ RPC errors are absorbed by `withRetry` (exponential backoff, up to
 5 attempts). Partial-deploy failures: just rerun.
 
 Addresses written to `EVM/scripts/config/addresses.json` under
-`"<chain>"` and to repo-root `testnet-addresses.json` under
+`"<chain>"` and to repo-root `addresses.json` under
 `"evm.<chain>"`.
 
 **SVM:**

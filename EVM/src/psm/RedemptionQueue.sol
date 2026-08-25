@@ -18,6 +18,18 @@ import {Roles} from "../lib/Roles.sol";
 import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
 
 /**
+ * @dev The slice of `LitePSM` the queue needs.
+ *
+ * A minimal local interface rather than importing `LitePSM`: the queue is
+ * deployed first and the PSM cross-asserts against it, so a hard dependency
+ * back would be circular. `QUEUE_PSM` is granted only to the PSM proxy, so
+ * `msg.sender` in `processQueue` is always that contract.
+ */
+interface ILitePSMFees {
+    function tout() external view returns (uint256);
+}
+
+/**
  * @title RedemptionQueue
  * @notice FIFO queue for rUSDOku redemptions when the PSM's USDC buffer is depleted.
  *
@@ -272,6 +284,10 @@ contract RedemptionQueue is
 
         // Cached once per batch: gas, and cross-entry pricing consistency.
         uint256 multiplier = token.uiMultiplier();
+        // `msg.sender` is the LitePSM (QUEUE_PSM is granted only to it), which
+        // is where the fee schedule lives. Read once per batch, same as the
+        // multiplier.
+        uint256 currentTout = ILitePSMFees(msg.sender).tout();
 
         address psm = msg.sender;
         uint256 available = usdcToken.balanceOf(psm);
@@ -287,11 +303,17 @@ contract RedemptionQueue is
 
             uint256 uiAmount = MathLib.toUiAmount(entry.rawAmount, multiplier);
             // Priced at the multiplier now (so the holder keeps the yield they
-            // earned while waiting) but at the `tout` snapshotted when they
-            // joined the queue (so a fee change since then cannot claw value
-            // back from them).
+            // earned while waiting) and at the BETTER of the fee snapshotted
+            // when they joined and the fee prevailing now.
+            //
+            // The snapshot protects them from an increase. Taking the minimum
+            // additionally passes on a decrease, so a queued user is never left
+            // paying more than someone redeeming instantly beside them. It
+            // creates nothing to game — a user cannot influence which is lower,
+            // and cannot choose to be queued.
+            uint256 effectiveTout = _effectiveTout(entry.toutBps, currentTout);
             uint256 usdcAmount =
-                MathLib.applyFee(MathLib.dollarsToUsdc(uiAmount, decimalMultiplier), entry.toutBps);
+                MathLib.applyFee(MathLib.dollarsToUsdc(uiAmount, decimalMultiplier), effectiveTout);
 
             if (usdcAmount > available) {
                 emit RedemptionSkipped(i, RedemptionSkipReason.InsufficientFunds);
@@ -426,8 +448,20 @@ contract RedemptionQueue is
         return $.queue[index];
     }
 
-    /// @notice Current USDC value of the entry at `index`, net of its snapshotted
-    ///         `tout` — i.e. what the holder would actually receive.
+    /// @notice Current USDC value of the entry at `index`, net of its
+    ///         snapshotted `tout`.
+    /// @dev A CONSERVATIVE FLOOR, not necessarily the exact settlement amount.
+    ///
+    ///      Settlement charges `min(snapshot, live)`, so if the fee has been cut
+    ///      since this entry was queued the holder receives MORE than this
+    ///      reports. The view cannot see the live fee: it has no `msg.sender` to
+    ///      read it from (unlike `processQueue`, which is `QUEUE_PSM`-only and
+    ///      therefore always called by the PSM), and storing a pointer back to
+    ///      the PSM would create the circular deploy dependency that
+    ///      `QUEUE_PSM` being granted post-deploy exists to avoid.
+    ///
+    ///      Erring low is the right direction for a quote — a holder is never
+    ///      told to expect more than they get.
     function getQueueEntryValue(uint256 index) external view returns (uint256) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
         if (index >= $.queueTail) revert InvalidIndex();
@@ -439,6 +473,12 @@ contract RedemptionQueue is
     }
 
     // ============ Internal ============
+
+    /// @dev The better of the fee snapshotted at enqueue and the fee in force
+    ///      now. See the call site for why the minimum rather than the snapshot.
+    function _effectiveTout(uint256 snapshotted, uint256 current) private pure returns (uint256) {
+        return current < snapshotted ? current : snapshotted;
+    }
 
     /// @dev `transferFrom` that neither reverts nor trusts a missing return value.
     ///      Handles all three non-conforming shapes: revert, `false` return, and

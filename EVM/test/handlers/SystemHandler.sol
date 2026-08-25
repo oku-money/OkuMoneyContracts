@@ -90,6 +90,24 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
         return actors[seed % actors.length];
     }
 
+    /// @dev Open every action: count it, and advance the clock a little.
+    ///
+    /// Real chains advance `block.timestamp` every block. This harness
+    /// previously only moved time through its explicit `warp` action (roughly
+    /// 1 call in 17), which made short-lived time-based state — notably the
+    /// sync window — behave nothing like production: a window armed by
+    /// `setRate` would stay engaged for a dozen unrelated actions instead of
+    /// expiring in a few blocks.
+    ///
+    /// A ~12s bump per action models block progression, keeps the fuzzer from
+    /// wedging itself shut behind its own guards, and makes every time-based
+    /// invariant a fairer test. `warp` still exists for the long jumps that
+    /// exercise accrual over days.
+    function _beginCall() internal {
+        calls++;
+        vm.warp(block.timestamp + 12);
+    }
+
     function _observe() internal {
         uint256 m = token.uiMultiplier();
         if (m > ghostMaxMultiplier) ghostMaxMultiplier = m;
@@ -98,7 +116,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     // ============ Actions ============
 
     function psmMint(uint256 actorSeed, uint256 usdcAmount) external {
-        calls++;
+        _beginCall();
         address a = _actor(actorSeed);
         usdcAmount = _bound(usdcAmount, 1e6, 1_000_000e6);
         usdc.mint(a, usdcAmount);
@@ -113,7 +131,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     }
 
     function psmRedeem(uint256 actorSeed, uint256 rawAmount) external {
-        calls++;
+        _beginCall();
         address a = _actor(actorSeed);
         uint256 bal = token.balanceOf(a);
         if (bal == 0) return;
@@ -130,7 +148,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     }
 
     function psmRedeemUi(uint256 actorSeed, uint256 uiAmount) external {
-        calls++;
+        _beginCall();
         address a = _actor(actorSeed);
         uint256 balUi = token.balanceOfUI(a);
         if (balUi == 0) return;
@@ -147,7 +165,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     }
 
     function transfer(uint256 fromSeed, uint256 toSeed, uint256 amount) external {
-        calls++;
+        _beginCall();
         address from = _actor(fromSeed);
         address to = _actor(toSeed);
         uint256 bal = token.balanceOf(from);
@@ -160,7 +178,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     }
 
     function setRate(uint256 rateSeed, uint256 durationSeed) external {
-        calls++;
+        _beginCall();
         // Stay inside the APR cap so most calls succeed.
         uint256 rate = _bound(rateSeed, Constants.PRECISION, Constants.PRECISION + 3_170_979_198);
         uint256 duration = _bound(durationSeed, 1, Constants.MAX_RATE_DURATION);
@@ -172,7 +190,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     }
 
     function halt() external {
-        calls++;
+        _beginCall();
         vm.prank(guardian);
         try token.haltAccrual() {
             successes++;
@@ -181,14 +199,14 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     }
 
     function warp(uint256 secondsSeed) external {
-        calls++;
+        _beginCall();
         vm.warp(block.timestamp + _bound(secondsSeed, 1, 10 days));
         successes++;
         _observe();
     }
 
     function depositBuffer(uint256 amount) external {
-        calls++;
+        _beginCall();
         amount = _bound(amount, 1e6, 5_000_000e6);
         usdc.mint(bufferDepositor, amount);
         vm.startPrank(bufferDepositor);
@@ -201,7 +219,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     }
 
     function processQueue(uint256 countSeed) external {
-        calls++;
+        _beginCall();
         uint256 head = queue.queueHead();
         uint256 tail = queue.queueTail();
         if (head >= tail) return;
@@ -217,7 +235,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     }
 
     function advanceHead(uint256 slots) external {
-        calls++;
+        _beginCall();
         queue.advanceHead(_bound(slots, 1, 10));
         successes++;
     }
@@ -240,7 +258,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     ///      fee-bearing configuration, not to probe the bound (which
     ///      `FeesTest` does deterministically).
     function setFees(uint256 tinSeed, uint256 toutSeed) external {
-        calls++;
+        _beginCall();
         uint256 newTin = _bound(tinSeed, 0, Constants.MAX_FEE_BPS);
         uint256 newTout = _bound(toutSeed, 0, Constants.MAX_FEE_BPS);
         vm.prank(capManager);
@@ -252,7 +270,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     /// @notice Enable a deliberately short window so the fuzzer explores the
     ///         gated paths without wedging itself closed.
     function setSyncWindowDuration(uint256 durationSeed) external {
-        calls++;
+        _beginCall();
         uint256 duration = _bound(durationSeed, 0, 30);
         vm.prank(capManager);
         try token.setSyncWindowDuration(duration) {
@@ -270,7 +288,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     ///      gap itself is asserted properly in `SyncWindowTest`, where it can be
     ///      driven deterministically.
     function beginSyncWindow() external {
-        calls++;
+        _beginCall();
         uint256 lockedUntil = token.syncLockedUntil();
         if (lockedUntil != 0) {
             uint256 earliest = lockedUntil + Constants.MIN_SYNC_WINDOW_GAP;
@@ -284,7 +302,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     }
 
     function endSyncWindow() external {
-        calls++;
+        _beginCall();
         vm.prank(rateSetter);
         try token.endSyncWindow(token.syncEpoch()) {
             successes++;
@@ -296,7 +314,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     /// @notice Free, unpreventable donation of tokens to the queue.
     /// @dev Present specifically to break any equality-shaped backing invariant.
     function donateToken(uint256 actorSeed, uint256 amount) external {
-        calls++;
+        _beginCall();
         address a = _actor(actorSeed);
         uint256 bal = token.balanceOf(a);
         if (bal == 0) return;
@@ -310,7 +328,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
 
     /// @notice Free donation of tokens to the PSM.
     function donateTokenToPsm(uint256 actorSeed, uint256 amount) external {
-        calls++;
+        _beginCall();
         address a = _actor(actorSeed);
         uint256 bal = token.balanceOf(a);
         if (bal == 0) return;
@@ -324,7 +342,7 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     /// @notice Free donation of USDC to the PSM. Additive and benign, but it must
     ///         not be mistaken for tracked inflow.
     function donateUsdc(uint256 amount) external {
-        calls++;
+        _beginCall();
         amount = _bound(amount, 1, 1_000_000e6);
         usdc.mint(address(litePsm), amount);
         ghostUsdcIn += amount;

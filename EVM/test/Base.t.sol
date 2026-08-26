@@ -65,10 +65,18 @@ abstract contract BaseTest is Actors {
     RedemptionQueue internal queue;
     MockUSDC internal usdc;
 
+    /// @dev The USDC mock the whole stack is wired against. Overridable so a
+    ///      suite can substitute a hostile asset without duplicating the
+    ///      five-contract deploy — see `ReentrancyTest`, which swaps in
+    ///      `ReentrantUSDC` and keeps every production contract real.
+    function _deployAsset() internal virtual returns (MockUSDC) {
+        return new MockUSDC();
+    }
+
     function setUp() public virtual {
         _initOrchestrator();
 
-        usdc = new MockUSDC();
+        usdc = _deployAsset();
 
         // 1. OkuM first — the module and queue cross-assert against it.
         OkuM tokenImpl = new OkuM();

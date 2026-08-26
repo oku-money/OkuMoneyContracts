@@ -181,6 +181,135 @@ contract OkuMultiplierTest is BaseTest {
         assertLe(Constants.MAX_STEP_BPS, Constants.MAX_FEE_BPS);
     }
 
+    // ============ distributeYield ============
+    //
+    // The dollar-denominated entry point, restored for symmetry with SVM's
+    // `distribute_yield`. It is a convenience over `setOkuMultiplier`, not a
+    // second authority: it derives the target and routes through the identical
+    // validation path, so every bound below is inherited rather than restated.
+
+    function test_DistributeYield_StepsByYieldOverSupply() public {
+        vm.prank(minter);
+        token.mint(user1, 1_000_000e18);
+
+        uint256 supply = token.totalSupply();
+        uint256 yieldAmount = 100e18; // $100 across 1,000,000 raw = 1 bp
+        uint256 expected = token.uiMultiplier() + (yieldAmount * Constants.PRECISION) / supply;
+
+        vm.prank(rateSetter);
+        uint256 got = token.distributeYield(yieldAmount);
+
+        assertEq(got, expected);
+        assertEq(token.uiMultiplier(), expected);
+    }
+
+    /// @notice The dollar amount is recoverable from logs, not just the index it
+    ///         produced. A mark's INTENT is auditable separately from its effect.
+    function test_DistributeYield_EmitsYieldDistributed() public {
+        vm.prank(minter);
+        token.mint(user1, 1_000_000e18);
+
+        uint256 supply = token.totalSupply();
+        uint256 yieldAmount = 100e18;
+        uint256 expected = token.uiMultiplier() + (yieldAmount * Constants.PRECISION) / supply;
+
+        vm.expectEmit(address(token));
+        emit OkuM.YieldDistributed(yieldAmount, supply, expected);
+        vm.prank(rateSetter);
+        token.distributeYield(yieldAmount);
+    }
+
+    /// @notice Inherits `MAX_STEP_BPS`. There is no second door past the gates.
+    function test_DistributeYield_RespectsMaxStepBps() public {
+        vm.prank(minter);
+        token.mint(user1, 1_000_000e18);
+
+        // Enough dollars to imply a step above the ceiling.
+        uint256 tooMuch = (1_000_000e18 * (Constants.MAX_STEP_BPS + 2)) / Constants.BASIS_POINTS;
+
+        vm.prank(rateSetter);
+        vm.expectPartialRevert(ScaledUIAmountUpgradeable.StepAboveMaximum.selector);
+        token.distributeYield(tooMuch);
+    }
+
+    /// @notice Inherits the guardian halt.
+    function test_DistributeYield_BlockedByHalt() public {
+        vm.prank(minter);
+        token.mint(user1, 1_000_000e18);
+        vm.prank(guardian);
+        token.haltAccrual();
+
+        vm.prank(rateSetter);
+        vm.expectRevert(OkuM.AccrualIsHalted.selector);
+        token.distributeYield(100e18);
+    }
+
+    /// @notice Arms the sync window, exactly as `setOkuMultiplier` does — a step
+    ///         must never land unfenced regardless of which entry point took it.
+    function test_DistributeYield_ArmsSyncWindow() public {
+        vm.prank(minter);
+        token.mint(user1, 1_000_000e18);
+
+        vm.prank(rateSetter);
+        token.distributeYield(100e18);
+        assertTrue(token.isSyncLocked());
+    }
+
+    /// @notice A no-op must fail loudly rather than stamp `lastSteppedAt` and
+    ///         re-arm the window for free. Mirrors SVM's `YieldTooSmall`.
+    function test_DistributeYield_TooSmallToMoveIndexReverts() public {
+        vm.prank(minter);
+        token.mint(user1, 1_000_000e18);
+
+        vm.prank(rateSetter);
+        vm.expectPartialRevert(OkuM.YieldTooSmall.selector);
+        token.distributeYield(1); // 1 wei across 1e24 raw floors to 0
+    }
+
+    function test_DistributeYield_ZeroAmountReverts() public {
+        vm.prank(minter);
+        token.mint(user1, 1_000_000e18);
+
+        vm.prank(rateSetter);
+        vm.expectRevert(Errors.ZeroAmount.selector);
+        token.distributeYield(0);
+    }
+
+    /// @notice With no supply there is nobody to distribute to and the per-share
+    ///         divisor is zero. Named distinctly from `YieldTooSmall` so the
+    ///         operator can tell "mint first" from "send more".
+    function test_DistributeYield_ZeroSupplyReverts() public {
+        assertEq(token.totalSupply(), 0);
+        vm.prank(rateSetter);
+        vm.expectRevert(OkuM.NoSupplyToDistributeTo.selector);
+        token.distributeYield(100e18);
+    }
+
+    function test_DistributeYield_RequiresRateSetter() public {
+        vm.prank(minter);
+        token.mint(user1, 1_000_000e18);
+
+        vm.prank(user1);
+        vm.expectPartialRevert(IAccessControl.AccessControlUnauthorizedAccount.selector);
+        token.distributeYield(100e18);
+    }
+
+    /// @notice The undistributed remainder is NOT conjured into the index: the
+    ///         per-share delta floors, so a dollar amount that does not divide
+    ///         evenly leaves the remainder as buffer surplus rather than
+    ///         inflating the mark.
+    function test_DistributeYield_FloorsRatherThanRoundsUp() public {
+        vm.prank(minter);
+        token.mint(user1, 3e18); // an awkward divisor
+
+        uint256 before = token.uiMultiplier();
+        vm.prank(rateSetter);
+        token.distributeYield(1e15);
+
+        uint256 delta = token.uiMultiplier() - before;
+        assertLe(delta * 3e18 / Constants.PRECISION, 1e15, "never distributes more than given");
+    }
+
     // ============ Guardian halt ============
 
     function test_HaltAccrual_BlocksSteps() public {

@@ -355,4 +355,58 @@ contract RedemptionQueueTest is BaseTest {
         assertFalse(queue.hasRole(keccak256("QUEUE_PSM"), admin));
         assertTrue(queue.hasRole(keccak256("QUEUE_PSM"), address(module)));
     }
+
+    // ============ Storage packing ============
+
+    /// @notice `QueueEntry` occupies TWO slots, not three.
+    ///
+    /// @dev Asserted by probing storage directly rather than by measuring gas,
+    ///      which would be brittle across compiler versions. Slot 0 holds
+    ///      `user | toutBps | timestamp`; slot 1 holds `rawAmount`; slot 2 must
+    ///      be untouched.
+    function test_Packing_EntryOccupiesTwoSlots() public {
+        _queueRaw(user1, 1000e18);
+
+        // `queue` is the first field of the ERC-7201 struct, so entry `i` lives
+        // at `keccak256(i . baseSlot)`.
+        bytes32 base = keccak256(
+            abi.encode(uint256(keccak256("okumoney.storage.RedemptionQueueV2")) - 1)
+        ) & ~bytes32(uint256(0xff));
+        bytes32 entrySlot = keccak256(abi.encode(uint256(0), base));
+
+        bytes32 word0 = vm.load(address(queue), entrySlot);
+        bytes32 word1 = vm.load(address(queue), bytes32(uint256(entrySlot) + 1));
+        bytes32 word2 = vm.load(address(queue), bytes32(uint256(entrySlot) + 2));
+
+        assertTrue(word0 != bytes32(0), "slot 0 carries user/tout/timestamp");
+        assertEq(uint256(word1), 1000e18, "slot 1 carries rawAmount");
+        assertEq(word2, bytes32(0), "slot 2 must be unused - entry is two slots");
+
+        // And slot 0 really does hold all three fields.
+        assertEq(address(uint160(uint256(word0))), user1);
+        assertEq(uint256(word0) >> 160 & 0xffff, queue.getQueueEntry(0).toutBps);
+    }
+
+    /// @notice `uint128 rawAmount` cannot be overflowed by any reachable entry.
+    ///
+    /// @dev The width note in `QueueEntry` claims this is safe by construction
+    ///      rather than by a bounds check, so the claim is asserted. `uint96`
+    ///      would NOT satisfy this — it maxes at ~7.9e28, below
+    ///      `MAX_TOTAL_SUPPLY` — which is why the packing uses `uint128`.
+    function test_Packing_Uint128HoldsMaxTotalSupply() public pure {
+        assertGt(
+            type(uint128).max,
+            Constants.MAX_TOTAL_SUPPLY,
+            "a single entry can never exceed total supply, so uint128 must cover the cap"
+        );
+        // The margin, stated so a future cap raise trips this test rather than
+        // silently truncating an entry.
+        assertGt(type(uint128).max / Constants.MAX_TOTAL_SUPPLY, 100_000);
+    }
+
+    /// @notice `uint48 timestamp` does not overflow within any plausible horizon.
+    function test_Packing_Uint48TimestampHorizon() public pure {
+        // ~8.9 million years.
+        assertGt(uint256(type(uint48).max), 250_000_000_000);
+    }
 }

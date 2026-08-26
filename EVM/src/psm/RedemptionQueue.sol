@@ -55,6 +55,31 @@ contract RedemptionQueue is
 
     // ============ Types ============
 
+    /// @dev TWO SLOTS, packed. Field order here is load-bearing, not stylistic.
+    ///
+    ///      slot 0:  user (160) + toutBps (16) + timestamp (48)  = 224 bits
+    ///      slot 1:  rawAmount (128)
+    ///
+    ///      Was three slots (`address` + `uint16` + two full words). Packing
+    ///      saves one `SSTORE` per `enqueue`, ~20k gas, on the path a user hits
+    ///      precisely when the buffer is empty and they are already having a bad
+    ///      day.
+    ///
+    ///      DONE NOW BECAUSE IT IS FREE NOW. This is a storage-layout change on
+    ///      a UUPS proxy with no live state; after the first mainnet deploy it
+    ///      stops being a refactor and becomes a migration.
+    ///
+    ///      WIDTHS, and why each is safe rather than merely plausible:
+    ///
+    ///      - `rawAmount` at `uint128` caps a single entry at ~3.4e38, against
+    ///        `Constants.MAX_TOTAL_SUPPLY` of 1e33. No entry can exceed total
+    ///        supply, so the bound is unreachable by construction and needs no
+    ///        check in `enqueue` — asserted in `RedemptionQueueTest`. `uint96`
+    ///        was the obvious choice and is WRONG: it maxes at ~7.9e28, below
+    ///        `MAX_TOTAL_SUPPLY`, so it would have introduced a real ceiling
+    ///        requiring a new revert path.
+    ///      - `timestamp` at `uint48` overflows in year ~8.9 million.
+    ///      - `toutBps` at `uint16` holds 65535 against a `MAX_FEE_BPS` of 100.
     struct QueueEntry {
         address user;
         /// @dev The `tout` (bps) prevailing when this entry was enqueued.
@@ -62,19 +87,11 @@ contract RedemptionQueue is
         ///      Snapshotted rather than read at processing time so a later fee
         ///      change cannot retroactively tax users already waiting — they were
         ///      quoted this rate when they joined.
-        ///
-        ///      Declared immediately after `user` so it occupies the 96 free bits
-        ///      already left in that slot: the entry still costs three slots, so
-        ///      the snapshot is storage-free. `uint16` holds 65535 against a
-        ///      `MAX_FEE_BPS` of 100.
-        ///
-        ///      NB: the separate slot-packing optimisation tracked for this struct
-        ///      (`uint96 rawAmount` + `uint48 timestamp`) is deliberately NOT
-        ///      bundled here — it introduces a real ceiling on a single entry and
-        ///      belongs in its own change.
         uint16 toutBps;
-        uint256 rawAmount;
-        uint256 timestamp;
+        /// @dev Enqueue time. Packed into slot 0 alongside `user`/`toutBps`.
+        uint48 timestamp;
+        /// @dev Raw OkuM escrowed. See the width note above.
+        uint128 rawAmount;
     }
 
     /// @notice Why `processQueue` skipped an entry without clearing it.
@@ -252,8 +269,16 @@ contract RedemptionQueue is
             // `toutBps` at `MAX_FEE_BPS` (100).
             // forge-lint: disable-next-line(unsafe-typecast)
             toutBps: uint16(toutBps),
-            rawAmount: rawAmount,
-            timestamp: block.timestamp
+            // casting to 'uint48' is safe until year ~8.9 million.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            timestamp: uint48(block.timestamp),
+            // casting to 'uint128' is safe because no single entry can exceed
+            // total supply, which `Constants.MAX_TOTAL_SUPPLY` caps at 1e33 —
+            // some 3.4e5 times below `type(uint128).max`. The invariant is
+            // enforced upstream by the supply cap rather than re-checked here;
+            // `RedemptionQueueTest` asserts the headroom explicitly.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            rawAmount: uint128(rawAmount)
         });
         $.queueTail = index + 1;
         $.totalQueuedRaw += rawAmount;

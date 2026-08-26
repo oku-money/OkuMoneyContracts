@@ -22,35 +22,61 @@ removable post-launch.
 
 The mechanisms are built, enforced and tested. What is **not** decided is the
 numbers they are configured with. Read
-[`SVM/README.md § Fees`](SVM/README.md) for the invariant these feed.
+[`SVM/README.md § Fees`](SVM/README.md) for the invariant these feed. Step
+coverage is now the combined `tin_bps + tout_bps` on both chains (see the
+Decisions log entry below), which changes the "needs" column for the fee pair.
 
 | Parameter | Ships as | Needs |
 |---|---|---|
 | SVM rebase **cadence** | undecided | The driver for everything below |
-| `tout_bps` | **0** (fail-closed) | > one step's yield. ~2 bps daily, >10 bps weekly at 5% APY |
-| `tin_bps` | 0 | A product decision; not required for safety |
-| `sync_window_secs` / `syncWindowDuration` | 60 s | Confirm 60 s is the right propagation budget for the intended chain set |
-| `MAX_SYNC_WINDOW` / `MIN_SYNC_WINDOW_GAP` | 15 min / 6 h | Round placeholders. Give a ≥96% availability floor (asserted in `SyncWindowTest.test_Gap_AvailabilityFloorHolds` and `oku-shared::sync_window::availability_floor_holds`). The gap caps tick cadence at one per 6 h |
-| `MAX_FEE_BPS` | 100 (1%) | Confirm 1% is an acceptable worst-case haircut |
+| `tin_bps + tout_bps` (combined step coverage) | both **0** (fail-closed) | Combined must exceed one step's yield. ~2 bps daily, >10 bps weekly at 5% APY. Either `tin` or `tout` alone is no longer the right thing to reason about — it's the sum |
+| `sync_window_secs` / `syncWindowDuration` | 60 s (ships **on**) | Confirm 60 s is the right propagation budget for the intended chain set |
+| `MAX_SYNC_WINDOW` / `MIN_SYNC_WINDOW_GAP` | 15 min / 6 h | **Stale — see Decisions log.** `MIN_SYNC_WINDOW_GAP` no longer exists (the epoch protocol it gated was removed); `MAX_SYNC_WINDOW` (15 min fail-open expiry) still applies |
+| `MAX_FEE_BPS` | 100 (1%) | Confirm 1% is an acceptable worst-case haircut. Also caps the coverable step size, i.e. sets the *minimum* `M_oku` mark cadence — see the placeholder-parameter coupling item below |
 
-**`tout = 0` means the protocol cannot rebase at all.** `step_is_covered`
-rejects every multiplier increase while no fee is configured, so this is
-fail-closed and cannot be silently forgotten — but it does mean **yield does not
-accrue on SVM until `tout` is set**. That is the launch-blocking edge.
+**`tin + tout = 0` means the protocol cannot rebase at all.** `step_is_covered`
+rejects every multiplier increase while no combined fee is configured, so this
+is fail-closed and cannot be silently forgotten — but it does mean **yield does
+not accrue on SVM (or step on EVM's `OkuM`) until fees are set**. That is the
+launch-blocking edge.
 
-**Derived constraint, needs sign-off:** `step ≤ tout ≤ MAX_FEE_BPS` caps a single
-multiplier step at 1% — roughly 73 days of yield at 5% APY. This implies a
+**Derived constraint, needs sign-off:** `step ≤ tin + tout ≤ MAX_FEE_BPS` caps a
+single multiplier step at 1% — roughly 73 days of yield at 5% APY. This implies a
 **minimum cadence**: a longer outage cannot be caught up in one write and must be
-walked over several ticks, each needing its own window spaced by
-`MIN_SYNC_WINDOW_GAP`. Direct analogue of the existing `MAX_IMPLIED_APR`
-catch-up limitation on EVM.
+walked over several ticks. (The old `MIN_SYNC_WINDOW_GAP`-spaced-ticks framing no
+longer applies — see Decisions log — ticks are now only rate-limited by how often
+someone is willing to arm a window, not by an on-chain gap.) Direct analogue of
+the existing `MAX_IMPLIED_APR` catch-up limitation on EVM.
 
 **Historical correction worth keeping.** An earlier version of this file said the
 multiplier skew "is not user-exploitable because bridging is orchestrator-mediated".
 That was true only of the *cross-chain* surface. The *local* SVM surface — mint
 before a step, redeem after — needed no bridge, was fully permissionless, and the
 pre-existing same-slot fence does not prevent it (mint at slot `N-1`, step at `N`,
-redeem at `N+1`). That surface is what `tout` closes.
+redeem at `N+1`). That surface is what `tin + tout` coverage closes.
+
+### Placeholder treasury numbers are coupled, not independent `[EVM]`
+
+`MAX_STEP_BPS`, `MAX_IMPLIED_APR`, `MAX_SOLVENCY_GAP_BPS` (all `EVM/src/lib/Constants.sol`)
+and the SubscriptionModule `tin`/`tout` deploy defaults all interact and **must
+be tuned together**. Per `Constants.sol`'s own comments:
+
+- `MAX_SOLVENCY_GAP_BPS` is a **cumulative** ceiling on `USDOku`'s declared-vs-backed
+  gap, not a per-write one. Worst-case over-accrual inside a single maximum-length
+  rate segment (`MAX_IMPLIED_APR` over `MAX_RATE_DURATION` = 30 days) is ~79 bps —
+  *below* the current 100 bps bound. So at current placeholder values, no single
+  rate write starting from a zero gap can ever be refused; the bound only bites
+  after several consecutive segments have out-run realized marks. Raise
+  `MAX_SOLVENCY_GAP_BPS` above ~79 bps and it stops being able to catch even a
+  *single* pathological write — it becomes purely a multi-segment backstop.
+- `MAX_FEE_BPS` (the `tin + tout` ceiling, `SVM`/`OkuM` shared) caps the coverable
+  `M_oku` step size, which sets the *minimum* mark cadence: a longer gap between
+  marks needs a bigger step, and a bigger step needs more fee to stay covered.
+
+None of `MAX_STEP_BPS`, `MAX_IMPLIED_APR`, `MAX_SOLVENCY_GAP_BPS`, or the
+`tin`/`tout` defaults can be picked in isolation without silently changing what
+the others actually guarantee. **This blocks audit scoping** — see
+`EVM/README.md` Open questions 1–3, which name the same coupling.
 
 ---
 
@@ -69,13 +95,31 @@ redeem at `N+1`). That surface is what `tout` closes.
   permanently). The corresponding alarm and runbook entry are the operator
   team's, per this file's scope note.
 
-- **Cross-chain *value* equality is not proven `[both]`.** `end_sync_window`
-  requires that a multiplier write landed in the epoch, so equal epochs mean
-  *both chains wrote for tick N*. They do **not** mean both wrote the **same
-  value** — a wrong-value write is undetectable on-chain and must be reconciled
-  against the intended rate off-chain. Inherent: neither chain can observe the
-  other, and there is no bridge, oracle or messaging between them.
-  `check-sync-parity.ts` detects epoch divergence, not value divergence.
+- **Cross-chain *value* equality is not proven `[both]`.** Since the sync-window
+  simplification (see Decisions log), `check-sync-parity.ts` compares
+  `M_oku(evm) / 1e9 == multiplier(svm)` directly, which is strictly stronger than
+  the epoch-equality check it replaced — but it is still off-chain: a wrong-value
+  write on either chain is undetectable on-chain and must be reconciled against
+  the intended rate by whoever runs the comparison script. Inherent: neither
+  chain can observe the other, and there is no bridge, oracle or messaging
+  between them.
+
+- **`solvencyGapBps()` is a monitoring signal, not a continuously-preserved
+  on-chain invariant `[EVM]`.** The Foundry invariant fuzzer found a real
+  counterexample during this work: a sequence of unwraps alone (no rate write)
+  drove the ratio to 146 bps against what had been assumed to be a 100 bps
+  on-chain bound. The reason: an unwrap removes matching liability and backing,
+  so the *absolute* shortfall is unchanged but the ratio's denominator shrinks,
+  inflating the ratio. `M_oku` is monotonic and liability only grows toward its
+  projection, so a wrapper draining toward its last holders can present an
+  alarming percentage from an unchanged, small absolute shortfall. The invariant
+  suite was corrected to bound absolute shortfall against peak liability instead
+  (`EVM/test/invariants/SystemInvariants.t.sol::invariant_ShortfallBoundedByPeakLiability`;
+  full writeup in `EVM/test/wrapper/Solvency.t.sol`'s file header). Not a
+  contract bug — `setUsdOkuRate`'s enforcement point was always the absolute
+  shortfall, never the ratio — but `solvencyGapBps()` is exposed as a headline
+  number and needs an alerting design that accounts for this before launch,
+  rather than a naive "alarm above N bps" threshold on the ratio.
 
 - **Kani proofs are not run in CI `[SVM]`.** `crates/oku-shared/src/step_coverage.rs`
   carries `proof_covered_step_is_never_profitable` (the formal statement of the
@@ -103,36 +147,41 @@ redeem at `N+1`). That surface is what `tout` closes.
   has no equivalent, and it now changes on every instruction or `PsmConfig`
   edit — easy to forget after `anchor build`.
 
-### v0.3 single-token refactor — follow-ups `[EVM]`
+### v0.3 single-token refactor — follow-ups `[EVM]` — SUPERSEDED, historical only
 
-The EVM side was refactored from the dual-token split economy to a single
-ERC-8056 token (`OkuDollar` / `rUSDOku`). Contracts, tests, scripts and docs are
-done; these items are outstanding.
+**This entire section describes a design that no longer exists.** v0.3 moved
+the EVM side to a single continuous-accrual ERC-8056 token (`OkuDollar` /
+`rUSDOku`). That was itself superseded by the current two-token model — `OkuM`
+(stepwise `M_oku`, ERC-8056) + `USDOku` (continuous `M_usd`, rebasing, no
+ERC-8056) + `USDOkuWrapper` — described in full in `EVM/README.md`. Kept below
+for git-blame continuity; do not act on any item here without re-reading
+`EVM/README.md` first.
 
-- **`MAX_IMPLIED_APR` is a placeholder.** Currently 1000 bps nominal. This is the
-  bound doing most of the work in the compromised-setter story, and it needs a
-  real number from treasury rather than a round one. Paired with
-  `MAX_RATE_DURATION = 30 days` it caps worst-case over-accrual at ~0.82% per
-  segment.
-- **ERC-7730 deployment addresses are zero-filled.** `EVM/metadata/erc7730/*.json`
-  carry the full field-label metadata but placeholder addresses. Fill them in
-  after the first `v0.3` deploy and submit to the Ledger registry.
-  **This is a launch blocker** — Ledger and Trezor render raw calldata, so without
-  it the app says "$1,050" while the device says "1,000".
-- **Client SDK not built.** `EVM/metadata/DISPLAY_CONVENTION.md` specifies the
-  required API shape (`getDisplayBalance`, `getMaxSendRaw` with no inverse,
-  `allowanceUI`). The contract-side surface it needs is complete and shipped.
-- **Reference AMM + lending integrations not built.** Rate-aware pools only —
-  a naive constant-product pair against USDC leaks the entire accrual rate to
-  arbitrageurs.
-- **Listings communications.** Neither number is a $1 unit price. What goes to
-  CoinGecko / CMC / exchange listing teams, and whether the ticker changes, must
-  land before launch.
-- **`MathLib.rpow` has one uncovered assembly branch.** The `zx` overflow revert
-  inside the squaring loop. Assembly branch coverage is unreliable and the branch
-  requires a very specific overflow shape; left uncovered deliberately rather
-  than chased with a contrived harness. `src/lib/MathLib.sol` is at 96.67% lines,
-  above the 95% CI gate.
+- ~~**`MAX_IMPLIED_APR` is a placeholder.**~~ Still true, but the constant now
+  lives on `USDOku`'s continuous accrual, not `OkuDollar`'s. Re-tracked above
+  under "Placeholder treasury numbers are coupled, not independent".
+- ~~**ERC-7730 deployment addresses are zero-filled.**~~ Superseded by the
+  current contract set — `EVM/metadata/erc7730/*.json` needs re-auditing
+  against `OkuM`/`USDOku`/`USDOkuWrapper`/`SubscriptionModule` calldata shapes,
+  not just re-filled with addresses. Worth a fresh tracker item if this hasn't
+  been redone; not re-added here sight-unseen.
+- ~~**Client SDK not built.**~~ `DISPLAY_CONVENTION.md`'s API shape now needs to
+  cover two tokens with different display conventions (stepwise share token vs.
+  continuous rebasing dollar token) rather than one. Status not verified as
+  part of this pass.
+- ~~**Reference AMM + lending integrations not built.**~~ Still open in spirit;
+  `EVM/README.md` Limitation 6 now additionally warns USDOku specifically
+  should not be pooled or used as collateral (no on-chain peg defense).
+- ~~**Listings communications.**~~ Now a three-way problem (`OkuM`, `USDOku`,
+  and USDC) rather than two.
+- **`MathLib.rpow` has one uncovered assembly branch — still current, not
+  obsolete.** `MathLib.sol` and its `rpow` survived the refactor and now back
+  `USDOku`'s continuous `M_usd` accrual (`USDOku.sol` calls
+  `MathLib.rpow(rate, elapsed, PRECISION)`). The uncovered `zx`-overflow-revert
+  branch inside the squaring loop is the same one described previously; not
+  re-verified this pass whether it is still deliberately left uncovered or has
+  since been closed — check `MulDivBoundsTest`'s current coverage number
+  against the 95% CI gate before re-closing this line item.
 
 ### SVM devnet needs a fresh re-deploy (not an in-place upgrade) `[SVM]`
 
@@ -178,6 +227,35 @@ Note the new files added by the arbitrage work (`tests/shared/multiplier.ts`,
 `tests/bankrun/sync-window-and-fees.ts`) and the four new admin CLIs do type-check
 clean; the pre-existing variance issue is unchanged.
 
+### `addresses.json` still carries retired-layout live entries `[EVM]`
+
+Root `addresses.json` currently has `evm.<network>.contracts` keyed as
+`okuMoney` / `okuDollar` / `litePSM` (plus `redemptionQueue`, `mockUSDC`) across
+every listed EVM network (sepolia, base, bsc, bscTestnet, baseSepolia,
+arbSepolia), all pointing at addresses from the retired single-token storage
+layout that predates this refactor. Nothing is upgradeable in place across that
+boundary, so these entries are stale and unusable against the current
+`OkuM`/`USDOku`/`USDOkuWrapper`/`SubscriptionModule`/`RedemptionQueue` set — a
+consumer reading this file today would attach to dead or wrong-shaped
+contracts. `addresses.json` is marked auto-generated/do-not-hand-edit, so the
+correct fix is a fresh deploy per network (via `scripts/deploy/index.ts`,
+which is idempotent/resumable and will overwrite `addresses.json` on run), not
+a manual edit. **Until that redeploy happens, this file is actively
+misleading** and should probably be wiped or annotated as stale rather than
+left looking current. Retired addresses, for institutional memory — all
+identical across every listed network, i.e. never actually independently
+redeployed per chain:
+
+| Key | Address |
+|---|---|
+| `okuMoney` | `0x0696204405505f16bB5a8f5B227327c380e62796` |
+| `okuDollar` | `0x7A9948284F985cBC1E2Fdf23BBf763bcBd27A70C` |
+| `litePSM` | `0xee5D2cc97252353E50779D93D218057f6Ae93d80` |
+| `redemptionQueue` | `0x06eFbeFd14c5A90f9d84BFf47dF0512fd5b15929` |
+| `mockUSDC` | `0x437ABbc8d2dd04E383D557A8ea9c8451Ef9936e8` |
+
+SVM devnet `litePsm` program: `BUQ1ULxnJ1C4vuXD3gdrf9QEYo2juHzwVGCGZuQLJX2g`.
+
 ### SVM audit-tooling note `[SVM]`
 
 The Trail of Bits `solana-lints`/dylint integration
@@ -221,11 +299,14 @@ audit feedback narrows the surface.
 
 ### Two-chain Foundry invariant harness `[EVM]`
 
-Extend the v0.3 `SystemHandler` stateful-fuzz harness to model a second
-simultaneous `chainB` LitePSM and randomly bridge between them. Surfaces
-cross-chain accounting bugs that scripted scenarios miss — including the
-EVM-continuous vs SVM-stepwise multiplier skew, which is currently only
-reasoned about rather than fuzzed.
+Extend the `SystemHandler` stateful-fuzz harness to model a second simultaneous
+`chainB` `SubscriptionModule` and randomly bridge between them. Surfaces
+cross-chain accounting bugs that scripted scenarios miss. (The EVM-continuous
+vs SVM-stepwise multiplier skew this item originally called out no longer
+applies as stated — `OkuM`'s `M_oku` is stepwise on both chains now; the
+remaining cross-chain surface to fuzz is `M_oku` step *timing* divergence
+between chains, not a continuous-vs-stepwise mismatch. `USDOku`'s `M_usd` is
+EVM-only and has no SVM counterpart to diverge from.)
 
 **Effort:** 1–2 weeks.
 
@@ -284,7 +365,7 @@ kill-list is finalised:
 
 **EVM:**
 
-- `sweepToken` (LitePSM) / `sweepExcess` (RedemptionQueue) — recover tokens
+- `sweepToken` (`SubscriptionModule`) / `sweepExcess` (`RedemptionQueue`) — recover tokens
   donated to either contract. Both are role-gated and provably cannot touch
   user escrow or the USDC buffer, so a documented ABI call is sufficient
   until a donation actually happens. No CLI yet.
@@ -338,14 +419,21 @@ bridge legs: neither prices on its own, but burning 100 raw at `M=1.04` while
 minting 100 raw at `M=1.05` conjures a dollar. Raw-conserving is a property of
 one leg that does not survive both.
 
-**The epoch-to-write binding is SVM-only.** EVM accrues continuously and has
-nothing to land per tick; its role in a window is to hold still while SVM catches
-up. Requiring an EVM write per tick would be artificial ceremony.
+**SUPERSEDED by the two-token refactor — kept for history, do not rely on
+either claim below.** Both of the following were true when EVM had a single
+continuous-accrual token and are false now that `OkuM`'s `M_oku` is stepwise
+on both chains:
 
-**`tout` on EVM is parity-only.** Continuous accrual means no discrete step to
-hold across, so the step-coverage invariant is not enforced there and there is no
-`MAX_FEE_BPS`-derived minimum cadence on that side. The parameter exists so the
-fee schedule, runbook and monitoring stay symmetric.
+- ~~"The epoch-to-write binding is SVM-only. EVM accrues continuously and has
+  nothing to land per tick."~~ The epoch protocol this referred to no longer
+  exists at all (see the sync-window decision entry above); moot either way.
+- ~~"`tout` on EVM is parity-only ... the step-coverage invariant is not
+  enforced there."~~ Now false: `OkuM.setOkuMultiplier` enforces the same
+  `tin + tout >= step` coverage as SVM, reading the fees from
+  `SubscriptionModule`. `tout`/`tin` are load-bearing on both chains — see
+  "SVM step coverage moved from `tout`-only to combined `tin + tout`" above.
+  Continuous accrual (and its parity-only fee role) now lives on `USDOku`,
+  which has no SVM counterpart and no step to cover.
 
 **Token-2022's scheduled multiplier (`new_multiplier_effective_timestamp`) was
 considered and dropped.** Pre-announcing the step makes it *predictable* but not
@@ -368,11 +456,15 @@ justified as withhold-only; arming would hand that key a repeatable mint/redeem
 block the RBAC model denies it. Halting also lowers no trajectory that could
 desync a peer chain upward, so there is nothing to fence.
 
-**A window inside the inter-window gap clamps rather than reverts.** A multiplier
-write must never be rejectable on window state, or anyone able to open a window
-could censor the rate setter — `setYieldRate` is deliberately un-gated so an
-operator can zero the rate during an incident. The gap bound still holds: a
-caller looping the write gets at most one window per gap period.
+**A multiplier write must never be rejectable on window state.** Otherwise
+anyone able to open a window could censor the rate setter —
+`setUsdOkuRate`/`haltAccrual` are deliberately un-gated by `isSyncLocked()` so
+an operator can always zero or adjust the rate during an incident. (This entry
+originally also claimed an inter-window "gap" bound limited callers to one
+window per gap period — that referred to `MIN_SYNC_WINDOW_GAP`, which no longer
+exists post auto-arm; see the sync-window decision entry above. The
+never-censoring property itself still holds under auto-arm, just without a gap
+to reason about.)
 
 **`OkuMultiplierAdapter.isHealthy()` was deliberately left unchanged.** The
 multiplier is genuinely correct during a sync window; the window holds EVM still
@@ -399,6 +491,36 @@ a dormant window was the only remaining "protection that depends on someone
 remembering", so `DEFAULT_SYNC_WINDOW(_SECS) = 60` is now written at
 `initialize`.
 
+**The orchestrator-epoch sync-window protocol was replaced by auto-arm +
+off-chain value comparison.** The earlier design had each chain record an
+orchestrator-assigned `sync_epoch` per tick, with `beginSyncWindow(epoch)` /
+`endSyncWindow(epoch)` bracketing the write and a `MIN_SYNC_WINDOW_GAP`
+anti-grief cooldown between windows. It was removed because the machinery that
+looked load-bearing wasn't: the epoch was supposed to make "a tick completed on
+every chain" externally verifiable, but equal epochs never proved equal
+*values* — only that both chains wrote *something*. `beginSyncWindow` had to be
+callable before the write, so a window could be opened and never used, which
+needed a write-landed-in-epoch check to close, which needed a
+`last_write_epoch` field, which needed the anti-grief gap to stop windows being
+chained — each mechanism existed only to contain the previous one. Arming on the
+write (every `setOkuMultiplier` now sets `syncLockedUntil` unconditionally, no
+`beginSyncWindow`/`endSyncWindow`/epoch/gap) removes the whole chain: there is
+no unfenced tick to guard against, because the fence and the tick are the same
+transaction. `check-sync-parity.ts` was rewritten to match — it now compares
+`M_oku(evm) / 1e9 == multiplier(svm)` directly, which is strictly stronger than
+the epoch check it replaced. Full rationale in `EVM/README.md`'s "v0.x
+migration note: the epoch protocol was removed".
+
+**SVM step coverage moved from `tout`-only to combined `tin + tout`, mirroring
+EVM.** A round trip pays `tin` on the way in and `tout` on the way out, so the
+figure that actually bounds step arbitrage is the sum, not `tout` in isolation
+— a design that zeroed `tin` while relying on a nonzero `tout` was leaving half
+the round-trip cost unpriced into the coverage check. `step_is_covered` (and
+the fee-floor high-water mark that stops coverage being removed after the
+fact) now both read `tin_bps + tout_bps`; `OkuM.setOkuMultiplier` on EVM reads
+the module's `tin() + tout()` the same way, so the invariant is chain-symmetric.
+See `oku-shared::step_coverage` module docs for the full derivation.
+
 **The invariant fuzz harness now advances `block.timestamp` ~12 s per action.**
 It previously only moved time via its explicit `warp` action (~1 call in 17), so
 short-lived time-based state behaved nothing like production — a window armed by
@@ -411,7 +533,7 @@ of needing it disabled, which is strictly better coverage than before this work.
 ## Pointers
 
 - [`README.md`](README.md) — workspace overview + orchestrator runbook (incl. the
-  three-step multiplier-tick protocol and its failure modes)
+  auto-arm sync-window / value-comparison protocol and its failure modes)
 - [`EVM/README.md`](EVM/README.md) — EVM-specific docs (contracts, deployment, runbook, accepted risks)
 - [`SVM/README.md`](SVM/README.md) — SVM-specific docs (programs, design, runbook, EVM divergence, accepted risks).
   The step-coverage invariant and its proof sketch live in § Fees.

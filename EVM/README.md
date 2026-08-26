@@ -178,9 +178,10 @@ draft had it. `tin`/`tout` are a real defence here, bound to the step size. See
 [Fees](#fees-tin--tout).
 
 **Compensation:** the EVM/SVM accrual-granularity divergence is **gone**. Both
-chains step, with the same value at the same cadence, and epoch equality is
-externally verifiable. This was a standing limitation of the single-token design
-and this design does not have it.
+chains step, with the same value at the same cadence, and parity is externally
+verifiable by comparing the multiplier **values** directly
+(`check-sync-parity.ts` — see [Window mechanics](#window-mechanics)). This was a
+standing limitation of the single-token design and this design does not have it.
 
 `M_usd` has no step, so it needs no sandwich guard, no announcement window, and
 no forward pricing. Those mechanisms exist only where a step exists.
@@ -223,6 +224,44 @@ Because the check is a **projection to `rateEnd`**, it cannot be breached
 mid-segment by the passage of time alone — the same technique
 `MAX_MULTIPLIER` uses.
 
+**The bound is cumulative across rate-write segments, not per single write.**
+Worst-case accrual inside one maximum-length segment (`MAX_IMPLIED_APR` over
+`MAX_RATE_DURATION`) is only ≈79 bps — *below* `MAX_SOLVENCY_GAP_BPS` (100 bps
+placeholder). So no single `setUsdOkuRate` call starting from a zero gap can
+ever be refused; the check only bites once several consecutive segments have
+out-run realized marks. `Constants.sol` documents this at length on
+`MAX_SOLVENCY_GAP_BPS` — the three constants (`MAX_IMPLIED_APR`,
+`MAX_RATE_DURATION`, `MAX_SOLVENCY_GAP_BPS`) must be tuned together, or the
+solvency bound silently becomes a different, stricter product.
+
+**`solvencyGapBps()` is a monitoring ratio, not a continuously-preserved
+invariant — it can legitimately exceed `MAX_SOLVENCY_GAP_BPS` at some blocks.**
+The enforced quantity is the *absolute* shortfall, bounded against peak
+liability, not the ratio:
+
+- A **wrap** adds matching liability and backing (both price at `M_oku`), so the
+  absolute shortfall is unchanged and the ratio can only shrink — a wrap-side
+  check would be unreachable code.
+- An **unwrap** removes matching liability and backing too, so the shortfall is
+  *also* unchanged — but the ratio's denominator (`backing`) shrinks, so
+  `solvencyGapBps()` *grows*. Exits alone can walk the ratio past
+  `MAX_SOLVENCY_GAP_BPS` with no rate write at all.
+- `M_oku` only steps upward, so backing only ever grows; liability grows toward
+  the projection and never past it.
+
+So the actual invariant, asserted in
+`SystemInvariants.invariant_ShortfallBoundedByPeakLiability`, is on the
+*absolute* shortfall against *peak* liability:
+
+```
+liability > backing  =>  (liability − backing) <= MAX_SOLVENCY_GAP_BPS × peakLiability / 10_000 + 1
+```
+
+Treat `solvencyGapBps()` as the right thing to alarm on — a small shortfall
+becoming a large ratio is exactly the shape of a wrapper draining toward its
+last holders — but do not assume it stays under the bound at every block; it
+does not.
+
 ### When the gap approaches the bound
 
 Defined behavior, not improvisation:
@@ -233,6 +272,7 @@ Defined behavior, not improvisation:
 | Projected gap would breach | `setUsdOkuRate` reverts | Contract |
 | `gapBps` breached by realized underperformance | `haltUsdOkuAccrual()` — freeze `M_usd`, no timelock | `OKU_GUARDIAN` (warm) |
 | Sustained breach | Buffer top-up from issuer capital, or rate set below realized to close the gap | Cold multisig |
+| Realized marks overtake liability (surplus, the reverse condition) | `USDOkuWrapper.withdrawSurplus` recovers genuinely excess backing, bounded so `realizedBacking() >= declaredLiability()` always holds afterward | `WRAPPER_RESERVE_MANAGER` (cold) |
 
 `M_usd` is **monotone** — the rebase index never decreases. So a breach is closed
 by *slowing* accrual until realized catches up, never by writing balances down.
@@ -268,16 +308,17 @@ single-multiplier description.
 
 ```solidity
 // OkuM.sol — the realized step. Both chains. Cross-chain critical.
-function setOkuMultiplier(uint256 newMultiplier, uint256 epoch) external;  // OKU_RATE_SETTER
+function setOkuMultiplier(uint256 newMultiplier) external;  // OKU_RATE_SETTER
 
 // USDOku.sol — the declared smoothed rate. EVM only. Local.
 function setUsdOkuRate(uint256 ratePerSecond, uint256 endTimestamp) external;  // OKU_RATE_SETTER
 ```
 
-`setOkuMultiplier` writes a discrete value and takes an orchestrator-assigned
-`epoch`. `setUsdOkuRate` snapshots `baseIndex = usdOkuIndex()`, sets
-`lastAccrualTime = block.timestamp`, then writes rate and end — so calling it
-before `rateEnd` extends accrual with **no gap and no step**, which is why no
+`setOkuMultiplier` writes a discrete value, effective immediately, and arms the
+post-step sync window on every call — there is no orchestrator-assigned epoch
+and nothing to schedule. `setUsdOkuRate` snapshots `baseIndex = usdOkuIndex()`,
+sets `lastAccrualTime = block.timestamp`, then writes rate and end — so calling
+it before `rateEnd` extends accrual with **no gap and no step**, which is why no
 separate pending-rate staging field exists.
 
 ### Constraints
@@ -290,7 +331,7 @@ separate pending-rate staging field exists.
 | Step size `<= MAX_STEP_BPS` | `StepAboveMaximum` |
 | Round-trip fee covers the step (see Fees) | `StepNotCovered` |
 | `newMultiplier <= MAX_MULTIPLIER` | `MultiplierAboveMaximum` |
-| `epoch > lastEpoch` | `EpochNotIncreasing` |
+| Guardian has not halted accrual | `AccrualIsHalted` |
 
 **`setUsdOkuRate`:**
 
@@ -302,36 +343,38 @@ separate pending-rate staging field exists.
 | `endTimestamp - now <= MAX_RATE_DURATION` | `RateDurationTooLong` |
 | Projected `M_usd` at `rateEnd` `<= MAX_MULTIPLIER` | `MultiplierAboveMaximum` |
 | **Projected solvency gap at `rateEnd` within bound** | `SolvencyGapExceeded` |
-| **No OkuM sync window active** | `SyncWindowActive` |
-
-That last constraint is the one worth understanding, and it is new.
 
 ### The gating rule
 
-> An operation is sync-gated **iff** either
-> **(a)** it can move value across a multiplier boundary, **or**
-> **(b)** its own correctness depends on a multiplier that may be mid-propagation.
+> An operation is sync-gated **iff** it can move value across a multiplier
+> boundary — i.e. it prices a conversion at the live `M_oku`.
 
-Clause (a) is the rule from the single-token design. Clause (b) is required by
-the two-token model and is easy to miss.
-
-`setUsdOkuRate` moves no value. But its solvency precondition reads `M_oku` — so
-executing it mid-tick would check the declared rate against a **stale backing
-figure** on one chain. That is not an arbitrage; it is a correctness bug that
-silently admits a rate the backing does not support. Hence gated.
+`setUsdOkuRate` moves no value and is deliberately **not** sync-gated, even
+though its solvency precondition reads `M_oku`-derived backing. This looks like
+it should need clause-(b)-style reasoning, but it does not: `M_oku` is
+monotone, so a step still propagating can only make backing *larger* than the
+figure the check read. The projection is therefore conservative mid-tick — it
+can refuse a rate it would later allow, never allow one it should refuse.
+Gating it would buy nothing and would make the rate setter blockable during
+exactly the incident in which it most needs to write. (An earlier design gated
+`setUsdOkuRate` on a broader "depends on a possibly-stale multiplier" clause;
+that clause is gone because, for this specific check, staleness is provably
+one-directional and harmless.)
 
 ### What is gated
 
-| Operation | Gated | Clause |
+| Operation | Gated | Why |
 |---|---|---|
-| `SubscriptionModule.mint` / `redeem` / `redeemUiAmount` | Yes | (a) prices through `M_oku` |
-| `RedemptionQueue.processQueue` | Yes | (a) prices at live `M_oku` |
-| `USDOkuWrapper.wrap` / `unwrap` | Yes | (a) prices through `M_oku` |
-| `USDOku.setUsdOkuRate` | **Yes** | **(b) solvency check reads `M_oku`** |
-| `OkuM.setOkuMultiplier` | **Clamps, never reverts** | see below |
+| `SubscriptionModule.mint` / `redeem` / `redeemUiAmount` | Yes | prices through `M_oku` |
+| `SubscriptionModule.mintUsdOku` / `redeemUsdOku` | Yes | composes `mint`/`redeem` with `wrap`/`unwrap`, both `M_oku`-priced |
+| `RedemptionQueue.processQueue` | Yes | prices at live `M_oku` (via the module's gated wrapper call) |
+| `USDOkuWrapper.wrap` / `unwrap` | Yes | prices through `M_oku` |
+| `USDOkuWrapper.withdrawSurplus` | Yes | `surplus()` is `M_oku`-priced; must not be read or spent mid-step |
+| `USDOku.setUsdOkuRate` | **No** | moves no value; solvency check is provably conservative mid-tick (see above) |
+| `OkuM.setOkuMultiplier` | No | the write that *arms* the window; must always be callable to correct or halt |
 | `haltAccrual` / `haltUsdOkuAccrual` | No | emergency levers must stay callable |
 | `depositBuffer`, `withdrawUsdc`, `advanceHead`, `rescueQueueEntry`, `sweepExcess` | No | move value at par, or move raw without pricing it |
-| Bridge legs (when they land) | **Yes** | (a) — neither leg prices alone, but the pair does |
+| Bridge legs (when they land) | **Yes** | neither leg prices alone, but the pair does |
 
 On bridging: burn-and-mint via the off-chain KMS orchestrator is **part of the
 product**, not hypothetical. The gating rule above is written so the bridge legs
@@ -339,53 +382,62 @@ are covered the day they land, and the rule is deliberately *not* phrased as
 "does it price locally" — under that weaker phrasing each leg looks exempt while
 the pair creates value out of tick divergence.
 
-### Reject vs. clamp — the asymmetry
-
-**`setOkuMultiplier` clamps.** A write inside `MIN_SYNC_WINDOW_GAP` succeeds
-without re-arming rather than reverting. A multiplier write must never be
-rejectable on window state: rejecting it means the orchestrator cannot correct
-or halt during an incident, and it hands anyone who can keep a window open a
-censorship lever.
-
-**`setUsdOkuRate` reverts.** Safe, because `M_usd` accrual is continuous and
-re-anchoring. A delayed write simply means the prior slope persists a little
-longer — no gap, no step, no discontinuity for anyone. Rejecting is strictly
-simpler than clamping and costs nothing.
-
-This asymmetry is intentional. Do not "fix" it for symmetry's sake.
-
 ### Window mechanics
 
 State and control live on `OkuM`, where the cross-chain multiplier authority is.
 Everything else reads `okuM.isSyncLocked()`.
 
 ```solidity
-function beginSyncWindow(uint256 epoch) external;        // OKU_RATE_SETTER
-function endSyncWindow(uint256 epoch) external;          // OKU_RATE_SETTER
-function setSyncWindowDuration(uint256 secs) external;   // OKU_CAP_MANAGER
-function isSyncLocked() / syncLockedUntil() / syncEpoch() / syncWindowDuration() view;
+function setOkuMultiplier(uint256 newMultiplier) external;    // OKU_RATE_SETTER — arms the window
+function setSyncWindowDuration(uint256 secs) external;        // OKU_CAP_MANAGER
+function isSyncLocked() / syncLockedUntil() / syncWindowDuration() view;
 ```
+
+**Auto-arm only.** Every `setOkuMultiplier` write sets
+`syncLockedUntil = block.timestamp + syncWindowDuration()` unconditionally —
+an assignment, never an extension or a stack. There is no `beginSyncWindow`, no
+`endSyncWindow`, no epoch, and no inter-window gap. This is a deliberate
+reduction from an earlier orchestrator-driven epoch protocol; see
+[the v0.x migration note](#v0x-migration-note-the-epoch-protocol-was-removed)
+below for why.
 
 | Property | Mechanism |
 |---|---|
-| Fail-closed | `setOkuMultiplier` auto-arms, so a tick can never land unfenced |
+| Fail-closed | `setOkuMultiplier` auto-arms on every write, so a tick can never land unfenced |
 | Fail-open | auto-expiry at `MAX_SYNC_WINDOW` (15 min) — a dead orchestrator cannot brick redemption |
-| Anti-grief | `MIN_SYNC_WINDOW_GAP` (6 h) ⇒ **≥96% availability floor**, asserted in `SyncWindowTest` |
-| Never censoring | a multiplier write inside the gap clamps rather than reverting |
+| Never censoring | the multiplier write that arms the window is itself never gated on window state |
 | Ships **on** | duration defaults to `DEFAULT_SYNC_WINDOW` (60 s) |
-
-`endSyncWindow` requires that a multiplier write landed in the epoch, so equal
-epochs across chains mean *both chains wrote for tick N*. They do **not** mean
-both wrote the same value — see Limitation 13.
 
 `haltAccrual` deliberately does **not** arm a window. `OKU_GUARDIAN` is warm and
 justified as withhold-only; arming would hand a warm key a repeatable
 mint/redeem block the RBAC model denies it.
 
-**Epochs are orchestrator-assigned, never auto-incremented.** Both chains record
-one number per tick, and `syncEpoch()_evm == sync_epoch_svm` is an externally
-verifiable "no tick in flight" assertion — checked by
-`SVM/oku-programs/scripts/admin/check-sync-parity.ts`.
+**Cross-chain parity is verified off-chain by comparing multiplier *values*
+directly**, not epoch numbers:
+`M_oku(evm) / 1e9 == multiplier(svm)`, checked by
+`SVM/oku-programs/scripts/admin/check-sync-parity.ts`. This is strictly
+stronger than the epoch check it replaced — equal epochs only ever proved both
+chains *wrote* for a tick, never that they wrote the *same value*. See
+Limitation 11.
+
+#### v0.x migration note: the epoch protocol was removed
+
+An earlier design had each chain record an orchestrator-assigned `sync_epoch`
+per tick, with `beginSyncWindow(epoch)` / `endSyncWindow(epoch)` bracketing the
+write and a `MIN_SYNC_WINDOW_GAP` anti-grief cooldown between windows. None of
+that exists anymore. It was removed because the machinery that looked
+load-bearing wasn't: the epoch was supposed to make "a tick completed on every
+chain" externally verifiable, but equal epochs never proved equal *values* —
+only that both chains wrote *something*. `beginSyncWindow` had to be callable
+before the write, so a window could be opened and never used, which needed a
+write-landed-in-epoch check to close, which needed a `last_write_epoch` field,
+which needed the anti-grief gap to stop windows being chained — each mechanism
+existed only to contain the previous one. Arming on the write removes the whole
+chain: there is no unfenced tick to guard against, because the fence and the
+tick are the same transaction. The gap's 96%-availability floor is also
+superseded for free — the setter cannot arm without taking a real, capped,
+fee-covered step, which is a louder and more constrained attack than holding a
+lock open ever was.
 
 ### The setter is an oracle write
 
@@ -511,8 +563,11 @@ Namespaced per ERC-7201, one namespace per concern.
 // erc7201:okumoney.storage.ScaledUIAmount        — OkuM's realized index
 struct ScaledUIAmountStorage {
     uint256 multiplier;        // M_oku. Current, live value.
-    uint256 newMultiplier;     // Scheduled next step (ERC-8056 pending extension)
-    uint256 effectiveAt;       // When newMultiplier takes effect
+    uint256 lastSteppedAt;     // Timestamp of the last step. Aliased as
+                                // effectiveAt() (ERC-8056) and lastSteppedAt().
+                                // Steps are immediate, so newUIMultiplier()
+                                // just returns `multiplier` too — no separate
+                                // pending-value field exists.
     uint256 stepHighWaterMark; // Largest step taken; floors tin+tout. See Fees.
 }
 
@@ -527,9 +582,8 @@ struct OkuMStorage {
 
 // erc7201:okumoney.storage.SyncWindow            — cross-chain tick fence
 struct SyncWindowStorage {
-    uint64 lockedUntil;  // Exclusive; 0 = never armed. Also the gap anchor.
-    uint64 epoch;        // Orchestrator-assigned tick number
-    uint64 duration;     // Window length in seconds
+    uint64 lockedUntil;  // Exclusive; 0 = never armed. Assigned, not extended.
+    uint64 duration;     // Window length in seconds. 0 = inert.
 }
 
 // erc7201:okumoney.storage.UsdOkuIndex           — USDOku's declared rate
@@ -569,8 +623,8 @@ USDOku's rebasing ledger stores **shares** and derives `balanceOf` from
 |---|---|
 | `src/token/OkuM.sol` | The share token. Stock ERC-20 raw layer + ERC-8056 display layer + 4626 conversion views |
 | `src/token/USDOku.sol` | Rebasing dollar wrapper. Share-denominated ledger, `M_usd` index. **No ERC-8056** |
-| `src/wrapper/USDOkuWrapper.sol` | OkuM ↔ USDOku at `M_oku`. Owns the solvency views |
-| `src/psm/SubscriptionModule.sol` | USDC ↔ OkuM at `M_oku` |
+| `src/wrapper/USDOkuWrapper.sol` | OkuM ↔ USDOku at `M_oku`. Owns the solvency views and `withdrawSurplus` |
+| `src/psm/SubscriptionModule.sol` | USDC ↔ OkuM at `M_oku`, plus one-transaction USDC ↔ USDOku (`mintUsdOku`/`redeemUsdOku`) via the wrapper |
 | `src/psm/RedemptionQueue.sol` | FIFO queue for redemptions when the buffer is depleted |
 | `src/lib/ScaledUIAmountUpgradeable.sol` | ERC-8056 core + all three extensions, ERC-165 registration |
 | `src/oracle/OkuMultiplierAdapter.sol` | Chainlink `AggregatorV3Interface`-compatible read of `uiMultiplier()`, with bounds and staleness |
@@ -663,13 +717,15 @@ invariant quantity, and the alternative is each one reverse-engineering it.
 | `Transfer` / `Approval` | Both | Standard. **Raw on OkuM, rebased on USDOku** — different denominations, same signature. Document loudly |
 | `TransferWithUIAmount(from, to, amount, uiAmount)` | OkuM | ERC-8056 optional; both figures |
 | `UIMultiplierUpdated(old, new, effectiveAt)` | OkuM | ERC-8056 required; every step |
-| `OkuMultiplierStepped(old, new, epoch, stepBps)` | OkuM | Richer than the EIP event; carries the epoch for cross-chain reconciliation |
+| `OkuMultiplierStepped(old, new, stepBps)` | OkuM | Richer than the EIP event; carries `stepBps` for off-chain step-arbitrage monitoring |
+| `SyncWindowArmed(lockedUntil)` | OkuM | Emitted by every `setOkuMultiplier` write that arms a nonzero-duration window. No begin/end, no epoch — one event per step |
 | `UsdOkuRateSet(oldRate, newRate, rateEnd, snapshotIndex)` | USDOku | Snapshot for off-chain reconstruction |
 | `AccrualHalted(atMultiplier)` / `UsdOkuAccrualHalted(atIndex)` | Both | |
 | `SolvencyGapUpdated(liability, backing, gapBps)` | Wrapper | Emitted on every wrap/unwrap and rate write. **This is the series to alarm on** |
-| `SyncWindowOpened(epoch, lockedUntil, autoArmed)` | OkuM | `autoArmed = true` means a step fenced a tick the operator did not explicitly open. A sustained stream of `true` means the tick protocol is not being run — **alarm on it** |
-| `SyncWindowClosed(epoch)` | OkuM | Early close. Its *absence* before `lockedUntil` means the liveness backstop fired instead of the happy path |
-| `Wrapped` / `Unwrapped(user, okuMAmount, usdOkuAmount, multiplier)` | Wrapper | |
+| `Wrapped(user, okuMAmount, usdOkuAmount, multiplier)` / `Unwrapped(user, usdOkuAmount, okuMAmount, multiplier)` | Wrapper | |
+| `SurplusWithdrawn(to, okuMAmount, gapBpsAfter)` | Wrapper | Cold-only, `WRAPPER_RESERVE_MANAGER`. Issuer capital recovered from genuinely excess backing |
+| `UsdOkuMinted(user, usdcAmount, usdOkuOut, uiMultiplier)` / `UsdOkuRedeemed(user, usdOkuIn, usdcOut, uiMultiplier)` | Module | One-transaction USDC ↔ USDOku path |
+| `UsdOkuWrapperSet(oldWrapper, newWrapper)` | Module | Post-deploy wiring, `PSM_FEE_MANAGER` |
 | `StepHighWaterMarkReset(oldMark)` | OkuM | Cold-only. **Alarm on it** — see Limitation 12 |
 
 ---
@@ -678,11 +734,25 @@ invariant quantity, and the alternative is each one reverse-engineering it.
 
 ```solidity
 function wrap(uint256 okuMAmount) external returns (uint256 usdOkuOut);
+function wrap(uint256 okuMAmount, address receiver) external returns (uint256 usdOkuOut);
 function unwrap(uint256 usdOkuAmount) external returns (uint256 okuMOut);
+function unwrap(uint256 usdOkuAmount, address receiver) external returns (uint256 okuMOut);
 
 function quoteWrap(uint256 okuMAmount) external view returns (uint256);
 function quoteUnwrap(uint256 usdOkuAmount) external view returns (uint256);
+
+function surplus() external view returns (uint256);
+function withdrawSurplus(address to, uint256 okuMAmount) external;  // WRAPPER_RESERVE_MANAGER
 ```
+
+The `receiver`-parameterized `wrap`/`unwrap` overloads exist for
+`SubscriptionModule.mintUsdOku` / `redeemUsdOku`: the module pulls USDC, mints
+OkuM to itself, then calls `wrap(rawOut, user)` so USDOku lands directly with
+the caller — no intermediate OkuM balance the user has to hold or approve. The
+reverse for `redeemUsdOku`: the module pulls USDOku from the user (measuring the
+share delta of its own pull), then calls `unwrap(effectiveAmount, address(this))`
+so the OkuM lands where the module can redeem it for USDC in the same
+transaction.
 
 ```
 wrap:    usdOku = okuM × M_oku / PRECISION          // dollars in, 1:1 as USDOku
@@ -704,10 +774,41 @@ mechanism.
 
 `wrap` and `unwrap` are both **sync-gated** — they price through `M_oku`.
 
-`wrap` additionally reverts with `SolvencyGapExceeded` if the wrap would push the
-gap past the bound. Unwrap is **never** gated on solvency: refusing to let people
-out of a wrapper because the wrapper is under-funded is how a slow problem
-becomes a panic.
+Neither `wrap` nor `unwrap` reverts on the solvency bound directly — see
+[Solvency](#solvency) for why a wrap-side check would be unreachable code, and
+why unwrap is deliberately never gated on it either: refusing to let people out
+of a wrapper because the wrapper is under-funded is how a slow problem becomes a
+panic. (`setUsdOkuRate`'s projection check is the actual solvency gate.)
+
+### Surplus withdrawal
+
+The mirror image of the funding mechanism. `setUsdOkuRate` can open a gap that
+donations or issuer top-ups then fund by transferring OkuM into the wrapper.
+Once realized `M_oku` marks overtake the declared liability, that capital is no
+longer needed as backing — `withdrawSurplus` (`WRAPPER_RESERVE_MANAGER`, cold)
+is the recovery path back out. Without it, issuer capital committed to the
+wrapper would be permanently stranded the moment it stopped being needed.
+
+```
+surplus() = fromUIAmount(max(0, realizedBacking() - declaredLiability()))
+```
+
+**Deliberately bounded by `surplus()`, not by `MAX_SOLVENCY_GAP_BPS`.** A
+withdrawal may only remove backing the protocol does not need — after
+`withdrawSurplus`, `realizedBacking() >= declaredLiability()` always holds. This
+is *stricter* than the solvency bound `setUsdOkuRate` is allowed to spend
+**into**: if a withdrawal could spend backing **down to** that same ceiling,
+issuer capital could walk a fresh gap open from the withdrawal side immediately
+after a rate write legitimately opened one from the liability side — the two
+mechanisms would fight over the same headroom. `surplus()` reads `0` whenever
+`realizedBacking() <= declaredLiability()`, including every block in which any
+gap — even one within bound — is open.
+
+Sync-gated: `surplus()` is `M_oku`-priced, so it must not be read or spent while
+a step is propagating. Bound checked before the transfer against the
+pre-computed `surplus()` value, not re-checked after, so a hostile `IOkuM`
+reentering `realizedBacking()` mid-call cannot move the goalposts —
+`nonReentrant` covers the token call regardless.
 
 ---
 
@@ -722,6 +823,13 @@ function redeemUiAmount(uint256 uiAmount) external returns (uint256 usdcOut);
 function quoteMint(uint256 usdcAmount) external view returns (uint256 rawOut);
 function quoteRedeem(uint256 rawAmount) external view returns (uint256 usdcOut);
 function redeemableNow() external view returns (uint256 maxRawInstant);
+
+// USDC <-> USDOku, one transaction
+function mintUsdOku(uint256 usdcAmount) external returns (uint256 usdOkuOut);
+function redeemUsdOku(uint256 usdOkuAmount) external returns (uint256 usdcOut);
+function quoteMintUsdOku(uint256 usdcAmount) external view returns (uint256);
+function quoteRedeemUsdOku(uint256 usdOkuAmount) external view returns (uint256);
+function setUsdOkuWrapper(address newWrapper) external;  // PSM_FEE_MANAGER
 ```
 
 ```
@@ -733,9 +841,49 @@ At `M_oku = 1.05e18`, depositing 100 USDC yields ~95.24 raw OkuM (displayed as
 $100.00 by an 8056-aware surface); redeeming 95.24 raw returns ~100 USDC.
 
 Admin surface: `depositBuffer`, `withdrawUsdc`, `processQueue`, `setFees`,
-`sweepToken`, `pause` / `unpause`. `withdrawUsdc` reverts `ZeroAddress` on
-`to == 0` and `WouldStrandQueue` if it would drop the buffer below outstanding
-queue obligations.
+`setUsdOkuWrapper`, `sweepToken`, `pause` / `unpause`. `withdrawUsdc` reverts
+`ZeroAddress` on `to == 0` and `WouldStrandQueue` if it would drop the buffer
+below outstanding queue obligations.
+
+### USDC ↔ USDOku in one transaction (`mintUsdOku` / `redeemUsdOku`)
+
+**Why this exists.** Without it, acquiring USDOku is mint → approve → wrap
+(three transactions) and exiting is the four-transaction reverse — backwards for
+a token whose entire purpose is serving wallets that cannot yet render
+ERC-8056. `mintUsdOku` mints OkuM to the module itself, then calls
+`USDOkuWrapper.wrap(rawOut, msg.sender)` so USDOku lands directly with the
+caller; `redeemUsdOku` is the mirror.
+
+**`redeemUsdOku` measures the SHARE DELTA of its own pull, rather than passing
+the nominal `usdOkuAmount` straight through to the wrapper.** Flooring the
+pull (`transferFrom`, which floors to shares) and flooring the wrapper's own
+`unwrap` conversion *independently* could, in principle, ask the wrapper to
+pull marginally more than the module actually holds. The module instead:
+
+1. Reads `sharesOf(this)` before and after pulling `usdOkuAmount` from the
+   caller, and takes the *delta* — the shares it actually received.
+2. Converts that share delta back to a dollar figure at the current
+   `usdOkuIndex()` (floored).
+3. Hands the wrapper *that* figure, not the caller's nominal input.
+
+Flooring twice this way can only ask for the same or fewer shares than
+flooring once — provably no more than the module holds. At most 1 wei of
+USDOku dust can be left behind in the module; nothing user-facing rounds
+unfavourably. See the NatSpec on `redeemUsdOku` for the full proof.
+
+**Wired post-deploy, fails closed until then.** The wrapper does not exist yet
+when the module initializes (deploy order is OkuM → queue → module → USDOku →
+wrapper), so `usdOkuWrapper` starts at the zero address and both functions
+revert `UsdOkuWrapperNotSet` until `setUsdOkuWrapper` is called.
+
+**Quotes are approximate, not exact like `quoteMint`/`quoteRedeem`.**
+`quoteMintUsdOku` composes `quoteMint` with the wrapper's `quoteWrap` and can
+overstate by up to the flooring the real path performs on the module's actual
+OkuM receipt; `quoteRedeemUsdOku` has the same caveat via `quoteUnwrap`. Fine
+for UI display; do not use either as a slippage floor.
+
+Both are sync-gated (they price through `M_oku` via `mint`/`redeem` and
+`wrap`/`unwrap`) and emit `UsdOkuMinted` / `UsdOkuRedeemed`.
 
 ### Fees (`tin` / `tout`)
 
@@ -813,8 +961,8 @@ check.
 
 `processQueue` **is** sync-gated but deliberately **not** pause-gated. Pause is
 unbounded incident response, so gating queue processing on it could strand users
-indefinitely; the sync window is bounded by `MAX_SYNC_WINDOW` and duty-cycled by
-`MIN_SYNC_WINDOW_GAP`.
+indefinitely; the sync window is bounded by `MAX_SYNC_WINDOW`, and it can only
+ever be open because a real, capped, fee-covered multiplier step armed it.
 
 Neither `processQueue` nor `rescueQueueEntry` advances `queueHead`; `advanceHead`
 amortizes the head walk into a separate gas-bounded transaction. `queueLength()`
@@ -834,7 +982,6 @@ Chainlink `AggregatorV3Interface`-compatible read of `OkuM.uiMultiplier()`.
 function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80);
 function decimals() external pure returns (uint8);   // 18 — NOT Chainlink's usual 8
 function isHealthy() external view returns (bool);
-function isAccrualStopped() external view returns (bool);
 function isSyncLocked() / syncLockedUntil() external view;
 function getRoundData(uint80) external pure;         // always reverts NoDataPresent
 ```
@@ -852,10 +999,18 @@ should be borrowed against USDOku at its rebased balance while the solvency gap
 is nonzero.
 
 Immutable and non-upgradeable: `minAnswer`, `maxAnswer`, `stalenessThreshold` are
-constructor args. **Staleness** fires when the last step is older than
-`stalenessThreshold` — a lapsed mark leaves the multiplier flat and *truthful*,
-but a consumer should not price off it indefinitely. `getRoundData` always
-reverts: this is a live derivation, not a push feed with history.
+constructor args. **Staleness** fires when the last step (`effectiveAt()` /
+`lastSteppedAt()`) is older than `stalenessThreshold` — a lapsed mark leaves the
+multiplier flat and *truthful*, but a consumer should not price off it
+indefinitely. `getRoundData` always reverts: this is a live derivation, not a
+push feed with history.
+
+**No `isAccrualStopped()` view.** An earlier version exposed one; it was
+removed because under stepwise accrual the answer was true between every pair
+of marks — a step is a discrete event, not a continuous flow, so "has accrual
+stopped" read as "stopped" at literally every block that was not itself the
+block of a step. The view told consumers nothing they could not already get,
+more accurately, from staleness against `effectiveAt()`.
 
 **The sync window is surfaced but excluded from `isHealthy()`.** The multiplier
 is genuinely correct during a window; the window holds this chain still while a
@@ -1048,8 +1203,7 @@ solvency bound.
 | `MAX_TOTAL_SUPPLY` | `1e33` | Ceiling on `maxSupply`, enforced in **both** `initialize` and `setMaxSupply`. `maxSupply` is mutable, so an init-only assertion would evaporate the first time the cap moved — and with it the overflow invariant |
 | **Sync window** | | |
 | `MAX_SYNC_WINDOW` | `15 minutes` | Hard ceiling. Liveness backstop: a dead orchestrator cannot brick redemption longer than this. No code path extends past it |
-| `DEFAULT_SYNC_WINDOW` | `60` s | Written at `initialize` — ships **on**. A propagation budget, not an economic parameter |
-| `MIN_SYNC_WINDOW_GAP` | `6 hours` | Anti-grief. Availability floor `6h / 6.25h` = **≥96%**, independent of operator behaviour |
+| `DEFAULT_SYNC_WINDOW` | `60` s | Written at `initialize` — ships **on**. A propagation budget, not an economic parameter. Every `setOkuMultiplier` write assigns `lockedUntil = now + duration` unconditionally (auto-arm, never extend/stack) |
 | **Fees** | | |
 | `MAX_FEE_BPS` | `100` (1%) | Anti-confiscation *and* the binding constraint on maximum step size. Worst case is a 1% haircut, not seizure |
 | **Misc** | | |
@@ -1057,10 +1211,9 @@ solvency bound.
 | `IID_SCALED_UI_*` | see above | From the draft EIP. Pinned |
 
 Each has an SVM mirror in `oku_shared::constants` — `MAX_SYNC_WINDOW_SECS`,
-`DEFAULT_SYNC_WINDOW_SECS`, `MIN_SYNC_WINDOW_GAP_SECS`, `MAX_FEE_BPS`,
-`MAX_STEP_BPS` — so the two chains cannot drift on the bounds defining the tick
-protocol. `MAX_SOLVENCY_GAP_BPS` and `MAX_IMPLIED_APR` have **no** SVM mirror:
-USDOku is EVM-only.
+`DEFAULT_SYNC_WINDOW_SECS`, `MAX_FEE_BPS`, `MAX_STEP_BPS` — so the two chains
+cannot drift on the bounds defining the tick protocol. `MAX_SOLVENCY_GAP_BPS`
+and `MAX_IMPLIED_APR` have **no** SVM mirror: USDOku is EVM-only.
 
 ---
 
@@ -1077,15 +1230,16 @@ dependency and keeping admin from calling `enqueue` / `processQueue` directly.
 | `*_UPGRADER` | Cold | Replace logic via UUPS | Nothing — mitigated by fork rehearsal and diff review |
 | `OKU_ALLOWANCE_MANAGER` | Cold | Set `minterAllowance` | Capped at `maxSupply`; minting still needs `OKU_MINTER` |
 | `OKU_CAP_MANAGER` | Cold | `setMaxSupply`, `setSyncWindowDuration` | Cap cannot go below `totalSupply()`; window bounded by `MAX_SYNC_WINDOW` |
-| `PSM_FEE_MANAGER` | Cold | `setFees` | `MAX_FEE_BPS`; floored by `stepHighWaterMark`; cannot retroactively change queued entries |
+| `PSM_FEE_MANAGER` | Cold | `setFees`, `setUsdOkuWrapper` | `MAX_FEE_BPS`; floored by `stepHighWaterMark`; cannot retroactively change queued entries |
 | `PSM_BUFFER_WITHDRAWER` | Cold | Drain buffer | Cannot drop below outstanding queue obligations |
 | `WRAPPER_ADMIN` | Cold | Disable `wrap` (sunset step 1) | **Cannot disable `unwrap`** — deliberate |
+| `WRAPPER_RESERVE_MANAGER` | Cold | `withdrawSurplus` | Bounded by `surplus()`; post-withdrawal `realizedBacking() >= declaredLiability()` always. Distinct from `WRAPPER_ADMIN` — moving capital out is a different capability than gating the sunset switch |
 | `OKU_PAUSER` / `PSM_PAUSER` | Warm | Halt operations | Cannot unpause — cold only |
 | `OKU_UNPAUSER` / `PSM_UNPAUSER` | Cold | Resume | Deliberately a different role: a compromised warm key can stop the protocol but never restart it |
 | `OKU_BLACKLISTER` | Warm | Block an address | Cannot unblacklist; cannot access funds |
 | `OKU_UNBLACKLISTER` | Cold | Unblock | Same split, same reason |
 | `OKU_GUARDIAN` | Warm | `haltAccrual()`, `haltUsdOkuAccrual()` | Can only stop growth. Cannot set a rate, reduce either multiplier, **or arm a sync window**. Pulls `rateEnd` to `now` so the halted state reads unambiguously as "nothing pending" |
-| `OKU_RATE_SETTER` | Orchestrator | `setOkuMultiplier`, `setUsdOkuRate`, `begin`/`endSyncWindow` | Step cap, APR cap, duration cap, monotonicity, `MAX_MULTIPLIER`, **solvency bound**, window bounds |
+| `OKU_RATE_SETTER` | Orchestrator | `setOkuMultiplier`, `setUsdOkuRate` | Step cap, APR cap, duration cap, monotonicity, `MAX_MULTIPLIER`, **solvency bound**. `setOkuMultiplier` also auto-arms the sync window, capped at `MAX_SYNC_WINDOW` |
 | `PSM_QUEUE_PROCESSOR` | Orchestrator | Process queue entries | Destination fixed to the entry's `user` |
 | `PSM_BUFFER_DEPOSITOR` | Orchestrator | Deposit USDC to buffer | Caller must hold the USDC |
 | `QUEUE_RESCUER` | Warm | `rescueQueueEntry`, `sweepExcess` | Cannot redirect a live entry's payment; sweep capped at `balanceOf − totalQueuedRaw` |
@@ -1107,7 +1261,10 @@ schedule is economic policy of the same class as a supply cap. It is nonetheless
 a distinct, PSM-namespaced constant, because AccessControl mappings are
 per-contract: gating a module function on a role whose name reads as a token role
 would defeat the prefix convention that keeps a grant on one contract from being
-mistaken for a grant on another.
+mistaken for a grant on another. `setUsdOkuWrapper` (post-deploy wiring of the
+USDOku ↔ USDC convenience path) reuses `PSM_FEE_MANAGER` for the same reason —
+same cold key already performs this class of one-time wiring, e.g.
+`OkuM.setStepFeeSource` and `USDOku.setSolvencySource`.
 
 ---
 
@@ -1140,16 +1297,19 @@ M_usd constant once block.timestamp >= rateEnd              // accrual halts
 impliedAprBps() <= MAX_IMPLIED_APR
 
 // Solvency — the load-bearing set
-solvencyGapBps() <= MAX_SOLVENCY_GAP_BPS
+liability > backing =>
+    (liability - backing) <= MAX_SOLVENCY_GAP_BPS × peakLiability / 10_000 + 1
+                                                             // absolute shortfall, NOT the ratio —
+                                                             // solvencyGapBps() alone is a monitoring
+                                                             // signal and can exceed the bound (unwraps
+                                                             // shrink the denominator, not the shortfall)
 USDOku.totalSupply() == Σ (sharesOf × M_usd / PRECISION)    // exact, share layer
-wrapper OkuM balance × M_oku >= USDOku.totalSupply()
-    × (10_000 - MAX_SOLVENCY_GAP_BPS) / 10_000              // BOUND
 wrap/unwrap price at M_oku, never M_usd                     // asserted structurally
+withdrawSurplus never leaves realizedBacking() < declaredLiability()
 
 // Sync window
 syncLockedUntil() - now <= MAX_SYNC_WINDOW                  // bounded, always
-setUsdOkuRate reverts while isSyncLocked()                  // clause (b)
-setOkuMultiplier never reverts on window state              // clamp, not reject
+setOkuMultiplier always arms on a nonzero-duration write     // fail-closed, unconditional
 
 // Raw layer
 OkuM.balanceOf(u) == OZ ERC20 _balances[u]                  // stock OZ, unmodified
@@ -1195,8 +1355,9 @@ npx hardhat compile && npx hardhat test              # layout validator + scenar
 |---|---|
 | `ERC8056Conformance` | All four interface IDs; conversion round-trips; balance identities; `UIMultiplierUpdated`; the `uiMultiplier() == newUIMultiplier()` boundary contract. **Cross-checked against `jumpboxtech/erc-8056-conformance`**, not against the EIP's reference implementation |
 | `StepArbitrageTest` | **New.** The round trip across a step at every legal `(tin, tout, stepBps)` combination, asserting profit ≤ 0. Plus `stepHighWaterMark` flooring `setFees`, and `StepNotCovered` rejection |
-| `SolvencyTest` | **New.** Gap accounting across wrap/unwrap/step/rate sequences; `SolvencyGapExceeded` on both `wrap` and `setUsdOkuRate`; unwrap never gated on solvency; gap closing as realized catches up |
-| `WrapperTest` | **New.** `wrap`/`unwrap` price at `M_oku` and never `M_usd` (differential against a mutant that uses `M_usd`); round-trip dust; sunset — `wrap` disabled, `unwrap` still open |
+| `SolvencyTest` | Gap accounting across wrap/unwrap/step/rate sequences; `SolvencyGapExceeded` on `setUsdOkuRate`; unwrap never gated on solvency; gap closing as realized catches up; `withdrawSurplus` — bounded by `surplus()`, `ExceedsSurplus` rejection, post-withdrawal `realizedBacking() >= declaredLiability()` |
+| `WrapperTest` | `wrap`/`unwrap` price at `M_oku` and never `M_usd` (differential against a mutant that uses `M_usd`); round-trip dust; sunset — `wrap` disabled, `unwrap` still open; the `receiver`-parameterized overloads |
+| `UsdOkuConvenienceTest` | `mintUsdOku`/`redeemUsdOku` end to end; `UsdOkuWrapperNotSet` before wiring; the share-delta rounding proof pinned against a mutant that passes the nominal amount straight through; sync-gating |
 | `RebaseTest` | **New.** USDOku share-ledger identities; `balanceOf` continuity across rate writes; max-send from `sharesOf`; `supportsInterface(0xa60bf13d) == false` |
 | `AccrualTest` | `M_usd` continuity across rate changes; halt at `rateEnd`; re-anchoring; APR and duration cap rejections; `haltUsdOkuAccrual` |
 | `MaxSendTest` | The max-send rule against the real transfer path on **both** tokens, at low and high multiplier |
@@ -1205,7 +1366,7 @@ npx hardhat compile && npx hardhat test              # layout validator + scenar
 | `RedemptionQueueTest` | Queue lifecycle; the three soft-skip paths (`AlreadyCleared`, `InsufficientFunds`, `TransferFailed`) via `MockUSDC.setBlocked` (revert) and `setReturnFalse` (non-standard `false`) |
 | `OkuMTest` | Regulated-issuer surface: supply cap incl. `MAX_TOTAL_SUPPLY` on **both** write paths, minter allowances, blacklist reachable through `_update` on mint/burn, pause semantics, permit, upgrade authorization |
 | `OkuMultiplierAdapterTest` | Bounds, staleness, halt→fresh→stale, 18-decimal reporting, `getRoundData` refusing history |
-| `SyncWindowTest` | All gated entrypoints incl. wrapper and `setUsdOkuRate`; auto-expiry; early close; exclusive upper bound; epoch succession and match; **`setOkuMultiplier` clamping vs `setUsdOkuRate` reverting**; fail-closed auto-arm; `haltAccrual` **not** arming; ≥96% availability floor; independence from pause |
+| `SyncWindowTest` | All gated entrypoints incl. wrapper (`wrap`/`unwrap`/`withdrawSurplus`) and the module (`mint`/`redeem`/`redeemUiAmount`/`mintUsdOku`/`redeemUsdOku`/`processQueue`); auto-arm-only re-arming without stacking on a write inside an open window; **`setUsdOkuRate` deliberately NOT gated** (its solvency projection is conservative mid-tick); fail-closed auto-arm; `haltAccrual` **not** arming; exclusive upper bound; duration bounded by `MAX_SYNC_WINDOW`; independence from pause |
 | `FeesTest` | `tin`/`tout` arithmetic and ceil-rounding; accrual to the buffer; fee-inclusive quotes; per-entry `tout` snapshot surviving a governance change; the two regressions written against a fee-free world — **ported, not deleted** |
 | `SystemInvariants` | Stateful-fuzz at 256 runs × 500 depth, adversarial handler donating to module, queue, **and wrapper** |
 | Hardhat `Scenarios.ts` | OZ storage-layout validator on a real `upgradeProxy`; twelve-month operating scenario incl. a **full rate cycle where declared runs ahead then behind**; the **high-multiplier regime** (≥5x); incident protocol end to end; multi-holder fairness; adapter lifecycle; **the sunset sequence** |
@@ -1235,9 +1396,10 @@ pricing path.
   `MAX_MULTIPLIER`, decreasing). Two jobs: reaching defensive bounds legitimate
   accrual cannot, and standing in as a hostile-but-conformant ERC-8056
   counterparty for anything reading a third-party token.
-- `SolvencyHarness` — **new.** Forces arbitrary gap states, including past
-  `MAX_SOLVENCY_GAP_BPS`, so recovery paths are reachable without a multi-year
-  fuzz run.
+- `SolvencyHarness` — forces arbitrary gap and surplus states, including past
+  `MAX_SOLVENCY_GAP_BPS` and into genuine over-backing, so both recovery paths
+  (`haltUsdOkuAccrual` closing a gap, `withdrawSurplus` recovering excess) are
+  reachable without a multi-year fuzz run.
 - `MockUSDC` — 6-decimal, with `setBlocked` (revert, Circle's blacklist shape)
   and `setReturnFalse` (non-standard silent `false`) independently selectable.
 - `MockHighDecimalToken` — configurable `decimals()`. Above 18 to exercise
@@ -1303,31 +1465,34 @@ moves forward, only past cleared slots, gas-bounded by `maxSlots`.
 transaction on power-user paths, and liquidity fragmentation across two assets.
 Accepted deliberately, with a documented sunset path.
 
-**11. Cross-chain tick completion is attested, not proven.** Neither chain
-observes the other: no bridge, oracle or message passing between them for
-multiplier state. The window blocks *the interval*; `syncEpoch` records the
-orchestrator's *claim*. Epoch equality is externally verifiable
-(`check-sync-parity.ts`) but not on-chain enforceable. A malicious orchestrator
-can open a window and never write, or write without opening one — bounded
-respectively by `MAX_SYNC_WINDOW`/`MIN_SYNC_WINDOW_GAP` and by fail-closed
-auto-arming, but not eliminated.
+**11. Cross-chain tick completion is attested, not proven on-chain.** Neither
+chain observes the other: no bridge, oracle or message passing between them for
+multiplier state. Each chain fences itself with its own auto-arming sync
+window; nothing on-chain asserts what the *other* chain wrote. Parity is
+verified off-chain by directly comparing multiplier **values**
+(`check-sync-parity.ts`, `M_oku(evm) / 1e9 == multiplier(svm)`) rather than by
+comparing tick numbers — this is strictly stronger than the epoch-based check
+an earlier design used (equal epochs only ever proved both chains *wrote*,
+never that they wrote the *same value*; direct value comparison catches a
+wrong-value write and a missing write alike), but it is still an off-chain
+attestation, not an on-chain-enforceable invariant. A malicious or absent
+orchestrator can write a wrong value on one chain and never run the check;
+`MAX_SYNC_WINDOW` bounds how long redemption stays blocked on the chain that
+did step correctly, but does not itself detect divergence.
 
-**12. Step coverage has one named escape.** `reset_step_high_water_mark` is a
+**12. Step coverage has one named escape.** `resetStepHighWaterMark` is a
 cold-multisig action clearing the fee floor and reopening historical exposure. It
-is deliberately separate from `set_fees`, emits `StepHighWaterMarkReset`, and
+is deliberately separate from `setFees`, emits `StepHighWaterMarkReset`, and
 **should be alarmed on**. Its honest precondition — that supply outstanding at
 the time of the large step has substantially turned over — is not verifiable
 on-chain.
 
-**13. Cross-chain value equality is not proven.** `endSyncWindow` requires a
-multiplier write landed in the epoch, so equal epochs mean *both chains wrote for
-tick N*. They do not mean both wrote the **same value** — detecting a wrong-value
-write requires off-chain reconciliation against the intended mark. Inherent.
-
-**14. The solvency gap is publishable but not auditable on-chain.** `backing` is
+**13. The solvency gap is publishable but not auditable on-chain.** `backing` is
 computed from `M_oku`, which is itself declared. A holder can verify the gap
 between two declared numbers; they cannot verify either against reality without
-the off-chain attestation.
+the off-chain attestation. The same is true of `surplus()` and
+`withdrawSurplus`: a genuinely excess-backed state is only as trustworthy as
+the multiplier authority that reports it.
 
 ---
 
@@ -1381,9 +1546,22 @@ testnets using `MockUSDC`, since constructor args differ.
 (10), `arbitrum` (42161), `base` (8453), `bsc` (56).
 
 **Deployment order matters.** `OkuM` first (it owns `usdcDecimalMultiplier`),
-then `SubscriptionModule` and `RedemptionQueue` (which cross-assert against it),
+then `RedemptionQueue` and `SubscriptionModule` (which cross-assert against it),
 then `USDOku`, then `USDOkuWrapper` (which asserts against both tokens). The
 script enforces this; do not reorder.
+
+**Post-deploy wiring, once every contract exists.** `SubscriptionModule` cannot
+be told about `USDOkuWrapper` at `initialize` — the wrapper does not exist yet
+at that point in the order above. Wire it afterward, each a one-time
+cross-reference on the same class of cold key, though the role constant differs
+per contract (AccessControl mappings are per-contract):
+
+- `OkuM.setStepFeeSource(module)` — step-coverage fee reads (`OKU_CAP_MANAGER`)
+- `USDOku.setSolvencySource(wrapper)` — solvency projection reads
+  (`OKU_CAP_MANAGER`)
+- `SubscriptionModule.setUsdOkuWrapper(wrapper)` — enables `mintUsdOku` /
+  `redeemUsdOku`, which revert `UsdOkuWrapperNotSet` until this runs
+  (`PSM_FEE_MANAGER`)
 
 ```bash
 # Fork pre-flight

@@ -17,7 +17,7 @@ abstract contract Actors is Test {
 
     address public admin = makeAddr("admin");
 
-    // ============ OkuDollar (token) roles ============
+    // ============ Token roles (OkuM + USDOku) ============
 
     address public pauser = makeAddr("pauser");
     address public unpauser = makeAddr("unpauser");
@@ -30,7 +30,7 @@ abstract contract Actors is Test {
     address public capManager = makeAddr("capManager");
     address public allowanceManager = makeAddr("allowanceManager");
 
-    // ============ LitePSM roles ============
+    // ============ SubscriptionModule roles ============
 
     address public psmPauser = makeAddr("psmPauser");
     address public psmUnpauser = makeAddr("psmUnpauser");
@@ -41,6 +41,13 @@ abstract contract Actors is Test {
     // ============ RedemptionQueue roles ============
 
     address public queueRescuer = makeAddr("queueRescuer");
+
+    // ============ USDOkuWrapper roles ============
+
+    address public wrapperAdmin = makeAddr("wrapperAdmin");
+    address public wrapperReserveManager = makeAddr("wrapperReserveManager");
+    address public wrapperPauser = makeAddr("wrapperPauser");
+    address public wrapperUnpauser = makeAddr("wrapperUnpauser");
 
     // ============ Generic users ============
 

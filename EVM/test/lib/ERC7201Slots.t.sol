@@ -28,17 +28,31 @@ contract ERC7201SlotsTest is Test {
         );
     }
 
-    function test_OkuDollarSlot() public pure {
+    function test_OkuMSlot() public pure {
         assertEq(
-            _derive("okumoney.storage.OkuDollarV2"),
-            0x6befa17dca3cfb17c3f7e06c05462b39c1519ffa5ecf80eb3bf9bf86626ce300
+            _derive("okumoney.storage.OkuM"),
+            0xb452deea490617e43215efe5d1021937b5200d3dc5c52d3e2b801ca18fb58800
         );
     }
 
-    function test_LitePSMSlot() public pure {
+    function test_SubscriptionModuleSlot() public pure {
         assertEq(
-            _derive("okumoney.storage.LitePSMV2"),
-            0x952f98385f783df99339c223f883c63698c43fdc03355b407aa2180810717000
+            _derive("okumoney.storage.SubscriptionModule"),
+            0xecd0cb33fb25c826f207d6173dfc2e3b8a1f214fee397fc84b1785e86d97ea00
+        );
+    }
+
+    function test_USDOkuSlot() public pure {
+        assertEq(
+            _derive("okumoney.storage.USDOku"),
+            0xe244738c4870fb11359f7bdc9af3db99c1dc9ff2fda67cb0afd4e0d472bede00
+        );
+    }
+
+    function test_USDOkuWrapperSlot() public pure {
+        assertEq(
+            _derive("okumoney.storage.USDOkuWrapper"),
+            0x746c0addff87be07555f8f01375a53d4c1892eca9cb88c203061f4fd00a5eb00
         );
     }
 
@@ -49,10 +63,10 @@ contract ERC7201SlotsTest is Test {
         );
     }
 
-    /// @notice The cross-chain sync window lives in its own namespace on
-    ///         `OkuDollar`, deliberately not inside `ScaledUIAmount` — that
-    ///         library sits on every pricing path and is held at 100% coverage,
-    ///         so it should not carry storage for a concern it does not own.
+    /// @notice The post-step sync window lives in its own namespace on `OkuM`,
+    ///         deliberately not inside `ScaledUIAmount` — that library sits on
+    ///         every pricing path and is held at 100% coverage, so it should not
+    ///         carry storage for a concern it does not own.
     function test_SyncWindowSlot() public pure {
         assertEq(
             _derive("okumoney.storage.SyncWindow"),
@@ -71,10 +85,12 @@ contract ERC7201SlotsTest is Test {
 
     /// @notice All namespaces are distinct — no two structs can alias.
     function test_AllSlotsDistinct() public pure {
-        bytes32[6] memory slots = [
+        bytes32[8] memory slots = [
             _derive("okumoney.storage.ScaledUIAmount"),
-            _derive("okumoney.storage.OkuDollarV2"),
-            _derive("okumoney.storage.LitePSMV2"),
+            _derive("okumoney.storage.OkuM"),
+            _derive("okumoney.storage.USDOku"),
+            _derive("okumoney.storage.USDOkuWrapper"),
+            _derive("okumoney.storage.SubscriptionModule"),
             _derive("okumoney.storage.RedemptionQueueV2"),
             _derive("okumoney.storage.SyncWindow"),
             _derive("openzeppelin.storage.ReentrancyGuard")
@@ -90,8 +106,10 @@ contract ERC7201SlotsTest is Test {
     ///         to 255 further words without colliding with the next namespace.
     function test_AllSlotsAreAligned() public pure {
         assertEq(uint256(_derive("okumoney.storage.ScaledUIAmount")) & 0xff, 0);
-        assertEq(uint256(_derive("okumoney.storage.OkuDollarV2")) & 0xff, 0);
-        assertEq(uint256(_derive("okumoney.storage.LitePSMV2")) & 0xff, 0);
+        assertEq(uint256(_derive("okumoney.storage.OkuM")) & 0xff, 0);
+        assertEq(uint256(_derive("okumoney.storage.USDOku")) & 0xff, 0);
+        assertEq(uint256(_derive("okumoney.storage.USDOkuWrapper")) & 0xff, 0);
+        assertEq(uint256(_derive("okumoney.storage.SubscriptionModule")) & 0xff, 0);
         assertEq(uint256(_derive("okumoney.storage.RedemptionQueueV2")) & 0xff, 0);
         assertEq(uint256(_derive("okumoney.storage.SyncWindow")) & 0xff, 0);
     }

@@ -26,6 +26,9 @@ import {TestConstants} from "../shared/Constants.sol";
  *      Corollary: the value layer's resolution is ONE USDC UNIT (1e12 in 18-dp
  *      terms) while the display layer's is one wei. `convertToAssets` and
  *      `convertToShares` are therefore not inverses.
+ *
+ *      The multiplier is now stepwise, so all fixtures drive it with `_step`
+ *      rather than rates.
  */
 contract ValueDisplayParityTest is BaseTest {
     uint256 internal constant DM = TestConstants.DECIMAL_MULTIPLIER; // 1e12
@@ -44,31 +47,43 @@ contract ValueDisplayParityTest is BaseTest {
         _assertParity();
     }
 
-    function test_Parity_AcrossAccrualHorizons() public {
-        uint256[6] memory horizons =
-            [uint256(1), 1 hours, 1 days, 7 days, 21 days, Constants.MAX_RATE_DURATION];
-        for (uint256 i = 0; i < horizons.length; ++i) {
-            _accrue(RATE_5_PCT_APY, horizons[i]);
+    function test_Parity_AcrossStepTrajectory() public {
+        // Deliberately non-round targets, so the floor in `convertToAssets` is
+        // genuinely exercised rather than landing on 1e12 boundaries.
+        uint256[6] memory targets = [
+            uint256(1_000_000_000_000_000_001),
+            1_000_099_999_999_999_999,
+            1_003_333_333_333_333_337,
+            1_009_999_999_876_543_210,
+            1_017_171_717_171_717_171,
+            1_027_182_818_284_590_452
+        ];
+        for (uint256 i = 0; i < targets.length; ++i) {
+            _step(targets[i]);
             _assertParity();
         }
     }
 
     function test_Parity_AtHighMultiplier() public {
-        _accrueToAtLeast(5 * Constants.PRECISION);
+        _stepToAtLeast(5 * Constants.PRECISION);
         _assertParity();
     }
 
-    function testFuzz_Parity(uint256 rate, uint256 elapsed) public {
-        rate = _bound(rate, Constants.PRECISION, Constants.PRECISION + 3_170_979_198);
-        elapsed = _bound(elapsed, 1, Constants.MAX_RATE_DURATION);
-        _accrue(rate, elapsed);
+    function testFuzz_Parity(uint256 bps, uint256 wobble) public {
+        // A random step size with a random sub-bp wobble on top, so the fuzz
+        // explores non-round multipliers rather than exact bp multiples.
+        bps = _bound(bps, 1, Constants.MAX_STEP_BPS);
+        uint256 current = token.uiMultiplier();
+        uint256 stepSpan = (current * bps) / Constants.BASIS_POINTS;
+        wobble = _bound(wobble, 1, stepSpan);
+        _step(current + wobble);
         _assertParity();
     }
 
     // ============ Conversion directions ============
 
     function test_ConvertToShares_InverseWithinUsdcGranularity() public {
-        _accrue(RATE_5_PCT_APY, 20 days);
+        _step(1_027_400_000_123_456_789);
         uint256 back = token.convertToShares(token.convertToAssets(Constants.PRECISION));
         assertLe(back, Constants.PRECISION, "round trip must not manufacture value");
         // Bounded by the value layer's granularity, not by 1 wei.
@@ -78,9 +93,9 @@ contract ValueDisplayParityTest is BaseTest {
     /// @notice Explicitly documents that the two conversions are NOT inverses.
     function test_Conversions_AreNotInverses() public {
         // A multiplier with 18-dp detail that cannot survive a 6-dp round trip.
-        _accrue(RATE_5_PCT_APY, 13 days + 7 hours + 11);
+        _step(1_012_345_678_901_234_567);
         uint256 m = token.uiMultiplier();
-        vm.assume(m % DM != 0);
+        assertTrue(m % DM != 0, "fixture must be non-round in USDC granularity");
 
         uint256 back = token.convertToShares(token.convertToAssets(Constants.PRECISION));
         assertLt(back, Constants.PRECISION, "strict loss expected at a non-round multiplier");
@@ -90,7 +105,7 @@ contract ValueDisplayParityTest is BaseTest {
         _mintRaw(user1, 1000e18);
         assertEq(token.totalAssets(), 1000e6);
 
-        _accrue(RATE_5_PCT_APY, 30 days);
+        _stepBy(40);
         assertGt(token.totalAssets(), 1000e6);
         assertEq(token.totalAssets(), token.convertToAssets(token.totalSupply()));
     }
@@ -102,26 +117,34 @@ contract ValueDisplayParityTest is BaseTest {
 
     // ============ Single source of truth ============
 
-    /// @notice The PSM and queue must agree with the token, not derive their own.
-    ///         A misconfigured deployment would otherwise price divergently.
+    /// @notice The module and queue must agree with the token, not derive their
+    ///         own. A misconfigured deployment would otherwise price divergently.
     function test_DecimalMultiplier_AgreesAcrossAllThreeContracts() public view {
-        assertEq(token.usdcDecimalMultiplier(), litePsm.usdcDecimalMultiplier());
+        assertEq(token.usdcDecimalMultiplier(), module.usdcDecimalMultiplier());
         assertEq(token.usdcDecimalMultiplier(), queue.usdcDecimalMultiplier());
-        assertEq(token.asset(), address(litePsm.usdc()));
+        assertEq(token.asset(), address(module.usdc()));
         assertEq(token.asset(), address(queue.usdc()));
     }
 
-    // ============ PSM pricing agrees with the value layer ============
+    // ============ Module pricing agrees with the value layer ============
 
-    function test_PsmQuoteAgreesWithConvertToShares() public {
-        _accrue(RATE_5_PCT_APY, 20 days);
+    /// @dev `quoteMint`/`quoteRedeem` are fee-inclusive while `convertToShares`/
+    ///      `convertToAssets` are fee-free, so the identity only holds at zero
+    ///      fees. Stepping floors the fee schedule at the step size, so the
+    ///      fixtures use `_resetFees()` (the cold `resetStepHighWaterMark`
+    ///      escape hatch, then `setFees(0, 0)`) to restore fee-free math at an
+    ///      elevated multiplier.
+    function test_ModuleQuoteAgreesWithConvertToShares() public {
+        _step(1_027_400_000_000_000_001);
+        _resetFees();
         uint256 usdcIn = 1234e6;
-        assertEq(litePsm.quoteMint(usdcIn), token.convertToShares(usdcIn));
+        assertEq(module.quoteMint(usdcIn), token.convertToShares(usdcIn));
     }
 
-    function test_PsmQuoteRedeemAgreesWithConvertToAssets() public {
-        _accrue(RATE_5_PCT_APY, 20 days);
+    function test_ModuleQuoteRedeemAgreesWithConvertToAssets() public {
+        _step(1_027_400_000_000_000_001);
+        _resetFees();
         uint256 rawIn = 987e18;
-        assertEq(litePsm.quoteRedeem(rawIn), token.convertToAssets(rawIn));
+        assertEq(module.quoteRedeem(rawIn), token.convertToAssets(rawIn));
     }
 }

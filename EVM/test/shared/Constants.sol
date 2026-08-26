@@ -42,11 +42,13 @@ library TestConstants {
 
     // ============ Token identity ============
 
-    string internal constant TOKEN_NAME = "Oku Dollar";
-    string internal constant TOKEN_SYMBOL = "rUSDOku";
+    string internal constant TOKEN_NAME = "Oku Money";
+    string internal constant TOKEN_SYMBOL = "OkuM";
+    string internal constant USDOKU_NAME = "USD Oku";
+    string internal constant USDOKU_SYMBOL = "USDOku";
 
-    // ============ PSM ============
+    // ============ Module ============
 
-    /// @notice Default USDC buffer seeded into LitePSM during setup (5,000 USDC).
+    /// @notice Default USDC buffer seeded into the module during setup (5,000 USDC).
     uint256 internal constant DEFAULT_PSM_BUFFER = 5000e6;
 }

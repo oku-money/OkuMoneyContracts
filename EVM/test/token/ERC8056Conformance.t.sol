@@ -5,8 +5,6 @@ import {Vm} from "forge-std/Vm.sol";
 
 import {BaseTest} from "../Base.t.sol";
 import {Constants} from "../../src/lib/Constants.sol";
-import {Errors} from "../../src/lib/Errors.sol";
-import {ScaledUIAmountUpgradeable} from "../../src/lib/ScaledUIAmountUpgradeable.sol";
 import {IScaledUIAmount} from "../../src/interfaces/erc8056/IScaledUIAmount.sol";
 import {
     IScaledUIAmountNewUIMultiplier
@@ -19,7 +17,14 @@ import {IScaledUIAmountBalances} from "../../src/interfaces/erc8056/IScaledUIAmo
 /**
  * @title ERC8056ConformanceTest
  * @notice Conformance against the ERC-8056 Draft, plus the interface-ID
- *         precedence rule and the pending-multiplier boundary contract.
+ *         precedence rule and the immediate-step reading of the pending
+ *         extension.
+ *
+ * @dev THE IMMEDIATE-STEP INVARIANT. Steps crystallize the moment they are
+ *      written, so `uiMultiplier() == newUIMultiplier()` holds at EVERY
+ *      timestamp and `effectiveAt()` is the timestamp of the last step. There
+ *      is never a matured-but-uncrystallized pending value, which sidesteps the
+ *      reference implementation's documented `>=`/`>` boundary defect.
  */
 contract ERC8056ConformanceTest is BaseTest {
     // ============ Interface IDs ============
@@ -70,6 +75,16 @@ contract ERC8056ConformanceTest is BaseTest {
         assertTrue(token.supportsInterface(Constants.IID_SCALED_UI_BALANCES));
     }
 
+    /// @notice USDOku claims NO ERC-8056 interface: its `balanceOf` is already
+    ///         dollar-denominated, and an 8056-aware wallet applying a multiplier
+    ///         on top would double-scale it.
+    function test_UsdOku_DoesNotClaimErc8056() public view {
+        assertFalse(usdOku.supportsInterface(Constants.IID_SCALED_UI_CORE));
+        assertFalse(usdOku.supportsInterface(Constants.IID_SCALED_UI_PENDING));
+        assertFalse(usdOku.supportsInterface(Constants.IID_SCALED_UI_CONVERSION));
+        assertFalse(usdOku.supportsInterface(Constants.IID_SCALED_UI_BALANCES));
+    }
+
     /// @notice ERC-4626 is deliberately NOT claimed — we ship the conversion
     ///         subset only, and claiming it would be false advertisement.
     function test_SupportsInterface_DoesNotClaimErc4626() public view {
@@ -86,7 +101,7 @@ contract ERC8056ConformanceTest is BaseTest {
         assertFalse(token.supportsInterface(bytes4(0xdeadbeef)));
     }
 
-    // ============ Initial state ============
+    // ============ Genesis state ============
 
     /// @notice Spec Test Case 1: initial multiplier is 1.0 and UI == raw.
     function test_InitialMultiplierIsOne() public view {
@@ -100,15 +115,13 @@ contract ERC8056ConformanceTest is BaseTest {
         assertEq(token.totalSupply(), token.totalSupplyUI());
     }
 
-    /// @notice `initialize` must leave `rateEnd == lastAccrualTime`, not zero.
-    /// @dev With `rateEnd == 0` and `lastAccrualTime == block.timestamp`, the
-    ///      subtraction inside `newUIMultiplier()` underflows and the view
-    ///      reverts — bricking every ERC-165-detected integration on day one.
-    function test_Initialize_NewUIMultiplierDoesNotRevert() public view {
-        assertEq(token.rateEnd(), token.lastAccrualTime());
-        assertEq(token.effectiveAt(), token.lastAccrualTime());
-        // The call itself not reverting is the assertion.
-        assertEq(token.newUIMultiplier(), token.uiMultiplier());
+    /// @notice `initialize` stamps `lastSteppedAt`, so `effectiveAt()` is the
+    ///         deploy timestamp rather than zero and staleness math never
+    ///         underflows.
+    function test_Genesis_EffectiveAtIsDeployTimestamp() public view {
+        assertEq(token.effectiveAt(), block.timestamp, "deployed in this block at ts=1");
+        assertEq(token.effectiveAt(), token.lastSteppedAt());
+        assertGt(token.effectiveAt(), 0);
     }
 
     // ============ Spec Test Case 2: the "2x split" ============
@@ -117,8 +130,8 @@ contract ERC8056ConformanceTest is BaseTest {
         _mintRaw(user1, 1000e18);
         uint256 rawBefore = token.balanceOf(user1);
 
-        // Drive the multiplier to >= 2e18 by repeated capped accrual.
-        _accrueToAtLeast(2 * Constants.PRECISION);
+        // Drive the multiplier to >= 2e18 by repeated maximum steps.
+        _stepToAtLeast(2 * Constants.PRECISION);
 
         assertEq(token.balanceOf(user1), rawBefore, "raw balance must not move");
         assertGe(token.balanceOfUI(user1), 2 * rawBefore, "UI balance should have >= doubled");
@@ -133,7 +146,8 @@ contract ERC8056ConformanceTest is BaseTest {
     }
 
     function test_Conversion_RoundTripWithinOneWei() public {
-        _accrue(RATE_5_PCT_APY, 20 days);
+        // A deliberately non-round multiplier so flooring is actually exercised.
+        _step(1_034_567_891_234_567_891);
         uint256[5] memory xs = [uint256(1), 1e6, 1e18, 123_456_789e18, 999_999_999_999_999_999];
         for (uint256 i = 0; i < xs.length; ++i) {
             uint256 back = token.fromUIAmount(token.toUIAmount(xs[i]));
@@ -155,7 +169,7 @@ contract ERC8056ConformanceTest is BaseTest {
         _mintRaw(user1, 333e18 + 7);
         _mintRaw(user2, 111e18 + 13);
         _mintRaw(user3, 1);
-        _accrue(RATE_5_PCT_APY, 17 days);
+        _step(1_017_777_777_777_777_777);
 
         uint256 sum = token.balanceOfUI(user1) + token.balanceOfUI(user2) + token.balanceOfUI(user3);
         uint256 total = token.totalSupplyUI();
@@ -163,81 +177,52 @@ contract ERC8056ConformanceTest is BaseTest {
         assertGe(sum + 3, total, "gap bounded by holder count");
     }
 
-    // ============ Pending-multiplier boundary contract ============
+    // ============ The immediate-step invariant ============
 
-    /// @notice The reference implementation's observable contract: once
-    ///         `block.timestamp >= effectiveAt()`, `uiMultiplier()` equals
-    ///         `newUIMultiplier()`. Holds despite our rate-segment reading.
-    function test_PendingBoundary_TripleAroundEffectiveAt() public {
-        uint256 end = block.timestamp + 10 days;
-        vm.prank(rateSetter);
-        token.setYieldRate(RATE_5_PCT_APY, end);
+    /// @notice `uiMultiplier() == newUIMultiplier()` holds at EVERY moment: at
+    ///         genesis, in the write block, and arbitrarily far after — steps are
+    ///         immediate and future-dated steps are deliberately unsupported.
+    function test_ImmediateStep_PendingAlwaysEqualsLive() public {
+        assertEq(token.uiMultiplier(), token.newUIMultiplier(), "genesis");
 
-        uint256 projected = token.newUIMultiplier();
-        assertEq(token.effectiveAt(), end);
+        _stepNoWarp(1.005e18);
+        assertEq(token.uiMultiplier(), 1.005e18, "step is live in its own block");
+        assertEq(token.newUIMultiplier(), 1.005e18, "pending == live in the write block");
+        assertEq(token.effectiveAt(), block.timestamp, "effectiveAt is the write timestamp");
 
-        // Strictly before: still climbing, below the terminal value.
-        vm.warp(end - 1);
-        assertLt(token.uiMultiplier(), projected, "should not have arrived yet");
-
-        // Exactly at: arrives.
-        vm.warp(end);
-        assertEq(token.uiMultiplier(), projected, "must equal terminal at the boundary");
-        assertEq(token.newUIMultiplier(), projected);
-
-        // After: frozen — accrual halts at rateEnd.
-        vm.warp(end + 365 days);
-        assertEq(token.uiMultiplier(), projected, "must stay frozen past rateEnd");
-        assertEq(token.uiMultiplier(), token.newUIMultiplier());
+        vm.warp(block.timestamp + 365 days);
+        assertEq(token.uiMultiplier(), token.newUIMultiplier(), "and forever after");
+        assertEq(token.uiMultiplier(), 1.005e18, "stepwise: flat between steps");
     }
 
-    /// @notice Accrual halting at `rateEnd` is a safety mechanism, not scheduling:
-    ///         an absent rate setter freezes the multiplier rather than letting it
-    ///         accrue forever against assets that are not there.
-    function test_AccrualHaltsAtRateEnd() public {
-        _accrue(RATE_5_PCT_APY, 30 days);
+    /// @notice `effectiveAt()` tracks the LAST step, not any schedule.
+    function test_EffectiveAt_TracksLastStep() public {
+        uint256 t0 = block.timestamp;
+        assertEq(token.effectiveAt(), t0);
+
+        _stepBy(10); // steps now, then warps past the window
+        uint256 stepTs = block.timestamp - token.syncWindowDuration();
+        assertEq(token.effectiveAt(), stepTs);
+
+        vm.warp(block.timestamp + 30 days);
+        assertEq(token.effectiveAt(), stepTs, "flat until the next step");
+    }
+
+    /// @notice Between steps the multiplier is exactly flat: no time-based drift.
+    function test_Stepwise_FlatBetweenSteps() public {
+        _stepBy(25);
         uint256 frozen = token.uiMultiplier();
         vm.warp(block.timestamp + 3650 days);
-        assertEq(token.uiMultiplier(), frozen);
-    }
-
-    // ============ Continuity across rate changes ============
-
-    /// @notice A rate change moves the slope, never the value. This is what makes
-    ///         the rate-segment reading of the pending extension safe: there is no
-    ///         step to front-run.
-    function test_MultiplierContinuousAcrossRateChange() public {
-        _accrue(RATE_5_PCT_APY, 10 days);
-        uint256 before = token.uiMultiplier();
-
-        vm.prank(rateSetter);
-        token.setYieldRate(RATE_2_PCT_APY, block.timestamp + 10 days);
-
-        assertEq(token.uiMultiplier(), before, "value must be continuous at a rate change");
-    }
-
-    /// @notice Re-anchoring means an early renewal extends accrual with no gap.
-    function test_EarlyRenewalHasNoGap() public {
-        vm.prank(rateSetter);
-        token.setYieldRate(RATE_5_PCT_APY, block.timestamp + 30 days);
-        vm.warp(block.timestamp + 15 days);
-        uint256 mid = token.uiMultiplier();
-
-        vm.prank(rateSetter);
-        token.setYieldRate(RATE_5_PCT_APY, block.timestamp + 30 days);
-        assertEq(token.uiMultiplier(), mid);
-
-        vm.warp(block.timestamp + 1);
-        assertGt(token.uiMultiplier(), mid, "accrual must resume immediately");
+        assertEq(token.uiMultiplier(), frozen, "no continuous accrual on OkuM");
     }
 
     // ============ Event emission ============
 
-    function test_UIMultiplierUpdated_EmittedOnEveryRateWrite() public {
-        uint256 end = block.timestamp + 5 days;
+    function test_UIMultiplierUpdated_EmittedOnEveryStep() public {
+        _setFeesForStep(10);
         vm.recordLogs();
         vm.prank(rateSetter);
-        token.setYieldRate(RATE_5_PCT_APY, end);
+        token.setOkuMultiplier(1.001e18);
 
         bytes32 sig = keccak256("UIMultiplierUpdated(uint256,uint256,uint256)");
         bool found;
@@ -250,7 +235,7 @@ contract ERC8056ConformanceTest is BaseTest {
 
     function test_TransferWithUIAmount_EmittedOnTransfer() public {
         _mintRaw(user1, 100e18);
-        _accrue(RATE_5_PCT_APY, 10 days);
+        _stepBy(30);
 
         uint256 expectedUi = token.toUIAmount(40e18);
         vm.expectEmit(true, true, false, true, address(token));
@@ -286,23 +271,25 @@ contract ERC8056ConformanceTest is BaseTest {
 
     /// @notice ERC-8056 Implementation Requirement 3: standard ERC-20 functions
     ///         MUST continue to work with raw amounts.
-    function test_RawLayer_BalanceStaticAcrossAYearOfAccrual() public {
+    function test_RawLayer_BalanceStaticAcrossAYearOfSteps() public {
         _mintRaw(user1, 1000e18);
         uint256 raw = token.balanceOf(user1);
         uint256 supply = token.totalSupply();
 
+        // ~Monthly marks for a year at ~40 bps each.
         for (uint256 i = 0; i < 12; ++i) {
-            _accrue(RATE_5_PCT_APY, 30 days);
+            _stepBy(40);
+            vm.warp(block.timestamp + 30 days);
         }
 
-        assertEq(token.balanceOf(user1), raw, "raw balance must never move on accrual");
-        assertEq(token.totalSupply(), supply, "raw supply must never move on accrual");
+        assertEq(token.balanceOf(user1), raw, "raw balance must never move on a step");
+        assertEq(token.totalSupply(), supply, "raw supply must never move on a step");
         assertGt(token.balanceOfUI(user1), raw, "but UI balance must have grown");
     }
 
     function test_RawLayer_TransferMovesRawNotUi() public {
         _mintRaw(user1, 100e18);
-        _accrue(RATE_5_PCT_APY, 30 days);
+        _stepBy(40);
 
         vm.prank(user1);
         token.transfer(user2, 30e18);
@@ -319,7 +306,7 @@ contract ERC8056ConformanceTest is BaseTest {
         token.approve(user2, 100e18);
         assertEq(token.allowanceUI(user1, user2), 100e18);
 
-        _accrue(RATE_5_PCT_APY, 30 days);
+        _stepBy(40);
 
         assertEq(token.allowance(user1, user2), 100e18, "raw allowance is unchanged");
         assertGt(token.allowanceUI(user1, user2), 100e18, "but its dollar value grew");

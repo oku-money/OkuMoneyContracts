@@ -11,20 +11,23 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {BaseTest} from "../Base.t.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {Errors} from "../../src/lib/Errors.sol";
-import {OkuDollar} from "../../src/token/OkuDollar.sol";
+import {OkuM} from "../../src/token/OkuM.sol";
 import {Roles} from "../../src/lib/Roles.sol";
 
 /**
- * @title OkuDollarTest
+ * @title OkuMTest
  * @notice The standard regulated-stablecoin surface: supply cap, minter
  *         allowances, blacklist, pause semantics, permit, and upgradeability.
+ * @dev The multiplier authority (stepping) lives in `OkuMultiplierTest`; this
+ *      file covers the raw ERC-20 layer, which is stock OpenZeppelin plus the
+ *      Circle-style controls.
  */
-contract OkuDollarTest is BaseTest {
+contract OkuMTest is BaseTest {
     // ============ Identity ============
 
     function test_Metadata() public view {
-        assertEq(token.name(), "Oku Dollar");
-        assertEq(token.symbol(), "rUSDOku");
+        assertEq(token.name(), "Oku Money");
+        assertEq(token.symbol(), "OkuM");
         assertEq(token.decimals(), 18);
     }
 
@@ -34,22 +37,20 @@ contract OkuDollarTest is BaseTest {
     }
 
     function test_Initialize_ZeroAdminReverts() public {
-        OkuDollar impl = new OkuDollar();
+        OkuM impl = new OkuM();
         vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(
             address(impl),
-            abi.encodeCall(
-                OkuDollar.initialize, ("Oku Dollar", "rUSDOku", address(usdc), address(0), 1)
-            )
+            abi.encodeCall(OkuM.initialize, ("Oku Money", "OkuM", address(usdc), address(0), 1))
         );
     }
 
     function test_Initialize_ZeroAssetReverts() public {
-        OkuDollar impl = new OkuDollar();
+        OkuM impl = new OkuM();
         vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(
             address(impl),
-            abi.encodeCall(OkuDollar.initialize, ("Oku Dollar", "rUSDOku", address(0), admin, 1))
+            abi.encodeCall(OkuM.initialize, ("Oku Money", "OkuM", address(0), admin, 1))
         );
     }
 
@@ -63,14 +64,14 @@ contract OkuDollarTest is BaseTest {
     function test_Mint_AboveCapReverts() public {
         _mintRaw(user1, INITIAL_MAX_SUPPLY);
         vm.prank(minter);
-        vm.expectPartialRevert(OkuDollar.ExceedsSupplyCap.selector);
+        vm.expectPartialRevert(OkuM.ExceedsSupplyCap.selector);
         token.mint(user1, 1);
     }
 
     function test_SetMaxSupply_BelowCurrentSupplyReverts() public {
         _mintRaw(user1, 100e18);
         vm.prank(capManager);
-        vm.expectPartialRevert(OkuDollar.BelowCurrentSupply.selector);
+        vm.expectPartialRevert(OkuM.BelowCurrentSupply.selector);
         token.setMaxSupply(99e18);
     }
 
@@ -81,7 +82,7 @@ contract OkuDollarTest is BaseTest {
     ///      the guard on that reasoning.
     function test_SetMaxSupply_AboveMaxTotalSupplyReverts() public {
         vm.prank(capManager);
-        vm.expectPartialRevert(OkuDollar.AboveMaxTotalSupply.selector);
+        vm.expectPartialRevert(OkuM.AboveMaxTotalSupply.selector);
         token.setMaxSupply(Constants.MAX_TOTAL_SUPPLY + 1);
     }
 
@@ -92,13 +93,13 @@ contract OkuDollarTest is BaseTest {
     }
 
     function test_Initialize_AboveMaxTotalSupplyReverts() public {
-        OkuDollar impl = new OkuDollar();
-        vm.expectPartialRevert(OkuDollar.AboveMaxTotalSupply.selector);
+        OkuM impl = new OkuM();
+        vm.expectPartialRevert(OkuM.AboveMaxTotalSupply.selector);
         new ERC1967Proxy(
             address(impl),
             abi.encodeCall(
-                OkuDollar.initialize,
-                ("Oku Dollar", "rUSDOku", address(usdc), admin, Constants.MAX_TOTAL_SUPPLY + 1)
+                OkuM.initialize,
+                ("Oku Money", "OkuM", address(usdc), admin, Constants.MAX_TOTAL_SUPPLY + 1)
             )
         );
     }
@@ -121,7 +122,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(allowanceManager);
         token.configureMinterAllowance(minter, 50e18);
         vm.prank(minter);
-        vm.expectPartialRevert(OkuDollar.ExceedsAllowance.selector);
+        vm.expectPartialRevert(OkuM.ExceedsAllowance.selector);
         token.mint(user1, 51e18);
     }
 
@@ -210,7 +211,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(blacklister);
         token.blacklist(user1);
         vm.prank(user1);
-        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.expectRevert(OkuM.SenderBlacklisted.selector);
         token.transfer(user2, 1e18);
     }
 
@@ -219,7 +220,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(blacklister);
         token.blacklist(user2);
         vm.prank(user1);
-        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        vm.expectRevert(OkuM.RecipientBlacklisted.selector);
         token.transfer(user2, 1e18);
     }
 
@@ -228,7 +229,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(blacklister);
         token.blacklist(user1);
         vm.prank(minter);
-        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        vm.expectRevert(OkuM.RecipientBlacklisted.selector);
         token.mint(user1, 1e18);
     }
 
@@ -238,7 +239,7 @@ contract OkuDollarTest is BaseTest {
         vm.prank(blacklister);
         token.blacklist(burner);
         vm.prank(burner);
-        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.expectRevert(OkuM.SenderBlacklisted.selector);
         token.burn(1e18);
     }
 
@@ -255,14 +256,14 @@ contract OkuDollarTest is BaseTest {
     function test_Blacklist_DoubleBlacklistReverts() public {
         vm.startPrank(blacklister);
         token.blacklist(user1);
-        vm.expectRevert(OkuDollar.AlreadyBlacklisted.selector);
+        vm.expectRevert(OkuM.AlreadyBlacklisted.selector);
         token.blacklist(user1);
         vm.stopPrank();
     }
 
     function test_Unblacklist_NotBlacklistedReverts() public {
         vm.prank(unblacklister);
-        vm.expectRevert(OkuDollar.NotBlacklisted.selector);
+        vm.expectRevert(OkuM.NotBlacklisted.selector);
         token.unblacklist(user1);
     }
 
@@ -312,7 +313,7 @@ contract OkuDollarTest is BaseTest {
 
         uint256 deadline = block.timestamp + 1 hours;
         (uint8 v, bytes32 r, bytes32 s) = (uint8(27), bytes32(0), bytes32(0));
-        vm.expectRevert(OkuDollar.SenderBlacklisted.selector);
+        vm.expectRevert(OkuM.SenderBlacklisted.selector);
         token.permit(owner, user2, 1e18, deadline, v, r, s);
     }
 
@@ -323,7 +324,7 @@ contract OkuDollarTest is BaseTest {
 
         uint256 deadline = block.timestamp + 1 hours;
         (uint8 v, bytes32 r, bytes32 s) = (uint8(27), bytes32(0), bytes32(0));
-        vm.expectRevert(OkuDollar.RecipientBlacklisted.selector);
+        vm.expectRevert(OkuM.RecipientBlacklisted.selector);
         token.permit(owner, user2, 1e18, deadline, v, r, s);
     }
 
@@ -350,7 +351,7 @@ contract OkuDollarTest is BaseTest {
     // ============ Upgradeability ============
 
     function test_Upgrade_RequiresUpgraderRole() public {
-        address newImpl = address(new OkuDollar());
+        address newImpl = address(new OkuM());
         vm.prank(user1);
         vm.expectPartialRevert(IAccessControl.AccessControlUnauthorizedAccount.selector);
         token.upgradeToAndCall(newImpl, "");
@@ -358,17 +359,18 @@ contract OkuDollarTest is BaseTest {
 
     function test_Upgrade_PreservesStateAndMultiplier() public {
         _mintRaw(user1, 1234e18);
-        _accrue(RATE_5_PCT_APY, 20 days);
+        _stepBy(50); // 50 bps step, fees covered by the helper
         uint256 mBefore = token.uiMultiplier();
         uint256 balBefore = token.balanceOf(user1);
+        assertGt(mBefore, Constants.PRECISION, "fixture must have stepped");
 
         // Hoisted: the `new` consumes the prank if inlined as an argument.
-        address newImpl = address(new OkuDollar());
+        address newImpl = address(new OkuM());
         vm.prank(admin);
         token.upgradeToAndCall(newImpl, "");
 
         assertEq(token.uiMultiplier(), mBefore, "multiplier continuous across upgrade");
         assertEq(token.balanceOf(user1), balBefore);
-        assertEq(token.name(), "Oku Dollar");
+        assertEq(token.name(), "Oku Money");
     }
 }

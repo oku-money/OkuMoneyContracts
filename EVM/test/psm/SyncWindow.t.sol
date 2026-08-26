@@ -1,432 +1,398 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+
 import {BaseTest} from "../Base.t.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {Roles} from "../../src/lib/Roles.sol";
-import {OkuDollar} from "../../src/token/OkuDollar.sol";
-import {LitePSM} from "../../src/psm/LitePSM.sol";
-import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+import {OkuM} from "../../src/token/OkuM.sol";
+import {SubscriptionModule} from "../../src/psm/SubscriptionModule.sol";
+import {USDOkuWrapper} from "../../src/wrapper/USDOkuWrapper.sol";
 
 /**
  * @title SyncWindowTest
- * @notice Cross-chain multiplier sync window on the EVM side.
+ * @notice The post-step sync window: what it gates, what it does not, and that
+ *         it can never outlive its bound.
  *
- * @dev SCOPE. The window addresses exactly one thing: a multiplier tick is not
- *      atomic across chains, so during propagation the peer chain prices a raw
- *      token differently, and anything converting value through the multiplier
- *      in that interval settles at a stale price on one side.
+ * @dev THE MECHANISM IS AUTO-ARM ONLY. Every `setOkuMultiplier` write arms a
+ *      lock of `syncWindowDuration()` seconds on the operations that price
+ *      through the multiplier. The lock expires on its own. There is no
+ *      `beginSyncWindow`, no `endSyncWindow`, no epoch, and no inter-window gap.
  *
- *      It does NOT address local step arbitrage (mint at M0, hold across a
- *      discrete step, redeem at M1). On this chain that surface does not exist —
- *      accrual is continuous, so there is no step to hold across. On SVM it does,
- *      and `tout` is what closes it there. Do not extend this window expecting it
- *      to deter a hold-across-the-step attacker: such an attacker never transacts
- *      while the window is open, so window length is irrelevant to them.
+ *      That is a deliberate reduction from an earlier orchestrator-driven epoch
+ *      protocol, and the reasoning is worth stating because the machinery looked
+ *      load-bearing:
  *
- *      GATING RULE, asserted below: an operation is sync-gated iff it prices
- *      through the multiplier. `mint`, `redeem`, `redeemUiAmount` and
- *      `processQueue` are; `depositBuffer`, `withdrawUsdc`, `advanceHead`,
- *      `setYieldRate` and `haltAccrual` are not.
+ *        - The epoch was supposed to make "a tick completed on every chain"
+ *          externally verifiable. It never did: equal epochs proved both chains
+ *          *wrote*, never that they wrote the SAME VALUE. Off-chain parity
+ *          checking now compares the multiplier values directly, which is
+ *          strictly stronger and needs no on-chain bookkeeping at all.
+ *        - `beginSyncWindow` had to be callable before the write, which meant a
+ *          window could be opened and never used — so it needed a
+ *          write-landed-in-epoch check to close, which needed a
+ *          `last_write_epoch` field, which needed an anti-grief gap to stop
+ *          windows being chained... Each mechanism existed to contain the
+ *          previous one. Arming on the write removes the whole chain: there is
+ *          no unfenced tick to guard against, because the fence and the tick are
+ *          the same transaction.
+ *        - The gap (`MIN_SYNC_WINDOW_GAP`) bought a 96% availability floor
+ *          against a compromised rate setter. Arming-on-write gives a tighter
+ *          one for free: the setter cannot arm without also taking a step, steps
+ *          are capped at `MAX_STEP_BPS` each and floored by fee coverage, so
+ *          spamming windows means spamming real, bounded, self-limiting
+ *          multiplier increases — a far louder and more constrained attack than
+ *          holding a lock open.
+ *
+ *      What survives is the part that was actually doing work: a bounded,
+ *      auto-expiring block on multiplier-priced operations across the interval
+ *      in which a step has landed here but not yet on the peer chain.
  */
 contract SyncWindowTest is BaseTest {
-    uint256 internal constant WINDOW = 120;
-
     function setUp() public override {
         super.setUp();
         _seedBuffer(1_000_000e6);
+        // A covering fee schedule, so steps in this suite are about the window
+        // rather than about step coverage (which `StepArbitrageTest` owns).
+        vm.prank(capManager);
+        module.setFees(50, 50);
+    }
+
+    // ============ Ships on ============
+
+    /// @notice The window is ON at deployment. A zero default would leave the
+    ///         protection installed but inert, and therefore dependent on
+    ///         someone remembering to enable it — the class of dependency this
+    ///         design exists to remove.
+    function test_ShipsOnAtDefaultDuration() public view {
+        assertEq(token.syncWindowDuration(), Constants.DEFAULT_SYNC_WINDOW);
+        assertEq(Constants.DEFAULT_SYNC_WINDOW, 60);
+        assertFalse(token.isSyncLocked(), "but nothing is locked before the first step");
+        assertEq(token.syncLockedUntil(), 0);
+    }
+
+    // ============ Arming ============
+
+    function test_Step_ArmsTheWindowForExactlyDuration() public {
+        uint256 expected = block.timestamp + token.syncWindowDuration();
+
+        vm.expectEmit(false, false, false, true, address(token));
+        emit OkuM.SyncWindowArmed(expected);
+        vm.prank(rateSetter);
+        token.setOkuMultiplier(1.001e18);
+
+        assertTrue(token.isSyncLocked());
+        assertEq(token.syncLockedUntil(), expected);
+    }
+
+    /// @notice A second step inside an open window RE-ARMS from now — it does not
+    ///         stack. Assignment rather than extension is what makes the
+    ///         `MAX_SYNC_WINDOW` bound hold by construction rather than by
+    ///         argument.
+    function test_StepDuringOpenWindow_ReArmsWithoutStacking() public {
+        vm.prank(rateSetter);
+        token.setOkuMultiplier(1.001e18);
+        uint256 first = token.syncLockedUntil();
+
+        vm.warp(block.timestamp + 10);
+        vm.prank(rateSetter);
+        token.setOkuMultiplier(1.002e18);
+        uint256 second = token.syncLockedUntil();
+
+        assertEq(second, block.timestamp + token.syncWindowDuration());
+        assertEq(second - first, 10, "re-armed from now, not appended");
+        assertLe(second - block.timestamp, Constants.MAX_SYNC_WINDOW);
+    }
+
+    /// @notice `haltAccrual` does NOT arm. `OKU_GUARDIAN` is warm and justified
+    ///         as withhold-only; arming would hand that warm key a repeatable
+    ///         mint/redeem block the RBAC model explicitly denies it. Nothing
+    ///         about the current multiplier changes on a halt, so there is
+    ///         nothing to fence either.
+    function test_HaltAccrual_DoesNotArm() public {
+        vm.prank(guardian);
+        token.haltAccrual();
+        assertFalse(token.isSyncLocked());
+        assertEq(token.syncLockedUntil(), 0);
+    }
+
+    /// @notice A rejected step arms nothing — the arm is downstream of every
+    ///         guard, so a reverted write leaves no trace.
+    function test_RejectedStep_ArmsNothing() public {
+        // Drop coverage below the step so `StepNotCovered` is the binding
+        // rejection rather than `StepAboveMaximum`. The two bounds coincide at
+        // `MAX_FEE_BPS == MAX_STEP_BPS == 100`, so a fully-covered schedule
+        // makes the coverage check unreachable by construction — which is worth
+        // knowing: at maximum fees, step coverage never binds and only the step
+        // ceiling does.
+        vm.startPrank(capManager);
+        token.resetStepHighWaterMark();
+        module.setFees(1, 1);
+        vm.stopPrank();
+
+        vm.prank(rateSetter);
+        vm.expectPartialRevert(OkuM.StepNotCovered.selector);
+        token.setOkuMultiplier(1.005e18); // 50 bps against 2 bps of coverage
+        assertFalse(token.isSyncLocked());
+    }
+
+    // ============ What is gated ============
+
+    function test_Gated_ModuleMint() public {
+        _psmMint(user1, 100e6);
+        _stepNoWarp(1.001e18);
+
+        usdc.mint(user1, 100e6);
+        vm.startPrank(user1);
+        usdc.approve(address(module), 100e6);
+        vm.expectPartialRevert(SubscriptionModule.SyncWindowActive.selector);
+        module.mint(100e6);
+        vm.stopPrank();
+    }
+
+    function test_Gated_ModuleRedeem() public {
+        uint256 raw = _psmMint(user1, 100e6);
+        _stepNoWarp(1.001e18);
+
+        vm.startPrank(user1);
+        token.approve(address(module), raw);
+        vm.expectPartialRevert(SubscriptionModule.SyncWindowActive.selector);
+        module.redeem(raw);
+        vm.stopPrank();
+    }
+
+    function test_Gated_ModuleRedeemUiAmount() public {
+        _psmMint(user1, 100e6);
+        _stepNoWarp(1.001e18);
+
+        vm.startPrank(user1);
+        token.approve(address(module), type(uint256).max);
+        vm.expectPartialRevert(SubscriptionModule.SyncWindowActive.selector);
+        module.redeemUiAmount(10e18);
+        vm.stopPrank();
+    }
+
+    /// @notice Queue processing prices at the live multiplier, so it is gated —
+    ///         but note it is deliberately NOT pause-gated. The distinction is
+    ///         the point: pause is unbounded incident response and could strand
+    ///         queued users indefinitely; this window is bounded by
+    ///         `MAX_SYNC_WINDOW`.
+    function test_Gated_ProcessQueue() public {
+        _queueOneRedemption();
+        _stepNoWarp(1.001e18);
+
+        vm.prank(queueProcessor);
+        vm.expectPartialRevert(SubscriptionModule.SyncWindowActive.selector);
+        module.processQueue(0, 1, 1000e6);
+    }
+
+    function test_Gated_WrapperWrap() public {
+        uint256 raw = _psmMint(user1, 100e6);
+        _stepNoWarp(1.001e18);
+
+        vm.startPrank(user1);
+        token.approve(address(wrapper), raw);
+        vm.expectPartialRevert(USDOkuWrapper.SyncWindowActive.selector);
+        wrapper.wrap(raw);
+        vm.stopPrank();
+    }
+
+    function test_Gated_WrapperUnwrap() public {
+        uint256 raw = _psmMint(user1, 100e6);
+        uint256 usdOkuOut = _wrap(user1, raw);
+        _stepNoWarp(token.uiMultiplier() + 1e15);
+
+        vm.startPrank(user1);
+        usdOku.approve(address(wrapper), usdOkuOut);
+        vm.expectPartialRevert(USDOkuWrapper.SyncWindowActive.selector);
+        wrapper.unwrap(usdOkuOut);
+        vm.stopPrank();
+    }
+
+    // ============ What is NOT gated ============
+
+    /// @notice `setUsdOkuRate` is deliberately NOT gated, and this is the
+    ///         subtlest call in the design.
+    ///
+    /// @dev Its solvency precondition reads `M_oku`-derived backing, so an
+    ///      earlier draft gated it on the grounds that mid-propagation the
+    ///      backing figure is stale on one chain. But the staleness only ever
+    ///      runs one way: `M_oku` is monotone, so a step still in flight can
+    ///      only make backing LARGER than the figure checked. The check is
+    ///      therefore conservative mid-tick — it can refuse a rate it would
+    ///      later allow, never allow one it should refuse. Gating it would buy
+    ///      nothing and would make the rate setter blockable during exactly the
+    ///      incident in which it most needs to be able to write.
+    function test_NotGated_SetUsdOkuRate() public {
+        _stepNoWarp(1.001e18);
+        assertTrue(token.isSyncLocked());
+
+        vm.prank(rateSetter);
+        usdOku.setUsdOkuRate(RATE_5_PCT_APY, block.timestamp + 20 days);
+        assertGt(usdOku.ratePerSecond(), Constants.PRECISION);
+    }
+
+    /// @notice Buffer movement is at par — no multiplier in the arithmetic, so
+    ///         nothing a stale multiplier could misprice.
+    function test_NotGated_BufferMovement() public {
+        _stepNoWarp(1.001e18);
+
+        usdc.mint(bufferDepositor, 500e6);
+        vm.startPrank(bufferDepositor);
+        usdc.approve(address(module), 500e6);
+        module.depositBuffer(500e6);
+        vm.stopPrank();
+
+        vm.prank(bufferWithdrawer);
+        module.withdrawUsdc(treasury, 100e6);
+        assertEq(usdc.balanceOf(treasury), 100e6);
+    }
+
+    /// @notice Raw transfers move no value through the multiplier — the display
+    ///         layer is derived, not settled. Gating them would freeze the token
+    ///         for a display concern.
+    function test_NotGated_RawTransfers() public {
+        uint256 raw = _psmMint(user1, 100e6);
+        _stepNoWarp(1.001e18);
+
+        vm.prank(user1);
+        token.transfer(user2, raw / 2);
+        assertEq(token.balanceOf(user2), raw / 2);
+    }
+
+    /// @notice Emergency levers stay callable. A window must never be able to
+    ///         block incident response.
+    function test_NotGated_EmergencyLevers() public {
+        _stepNoWarp(1.001e18);
+
+        vm.prank(guardian);
+        token.haltAccrual();
+        vm.prank(blacklister);
+        token.blacklist(user5);
+        vm.prank(psmPauser);
+        module.pause();
+
+        assertTrue(token.accrualHalted());
+        assertTrue(token.isBlacklisted(user5));
+        assertTrue(module.paused());
+    }
+
+    // ============ Expiry ============
+
+    /// @notice The upper bound is EXCLUSIVE, so at `lockedUntil` exactly the
+    ///         system is already open. This is what lets a zero-length window be
+    ///         genuinely inert rather than blocking the rest of the second.
+    function test_Expiry_UpperBoundIsExclusive() public {
+        _stepNoWarp(1.001e18);
+        uint256 lockedUntil = token.syncLockedUntil();
+
+        vm.warp(lockedUntil - 1);
+        assertTrue(token.isSyncLocked(), "still locked one second before");
+
+        vm.warp(lockedUntil);
+        assertFalse(token.isSyncLocked(), "open exactly at lockedUntil");
+        _psmMint(user1, 100e6);
+    }
+
+    /// @notice THE LIVENESS BACKSTOP. There is no close call, so nothing has to
+    ///         run for the window to lift — a dead orchestrator cannot brick
+    ///         redemption. Under the old begin/end design this was a property of
+    ///         the auto-expiry path; here it is the only path.
+    function test_Expiry_NeedsNoTransaction() public {
+        _stepNoWarp(1.001e18);
+        assertTrue(token.isSyncLocked());
+
+        vm.warp(block.timestamp + Constants.MAX_SYNC_WINDOW);
+        assertFalse(token.isSyncLocked(), "lifted with no transaction of any kind");
+        _psmMint(user1, 100e6);
+    }
+
+    // ============ Duration configuration ============
+
+    function test_Duration_ZeroDisablesEntirely() public {
+        vm.prank(capManager);
+        token.setSyncWindowDuration(0);
+
+        vm.prank(rateSetter);
+        token.setOkuMultiplier(1.001e18);
+
+        assertFalse(token.isSyncLocked());
+        assertEq(token.syncLockedUntil(), 0, "an inert window never writes the anchor");
+        _psmMint(user1, 100e6);
+    }
+
+    function test_Duration_BoundedByMaxSyncWindow() public {
+        vm.prank(capManager);
+        vm.expectPartialRevert(OkuM.SyncWindowTooLong.selector);
+        token.setSyncWindowDuration(Constants.MAX_SYNC_WINDOW + 1);
+
+        vm.prank(capManager);
+        token.setSyncWindowDuration(Constants.MAX_SYNC_WINDOW);
+        assertEq(token.syncWindowDuration(), Constants.MAX_SYNC_WINDOW);
+    }
+
+    /// @notice The bound is a CONSTANT, not a config field: no key, warm or
+    ///         cold, can widen it. Combined with assign-not-extend arming, a
+    ///         window's remaining life is bounded from every reachable state.
+    function test_Duration_WindowNeverExceedsBoundEvenAtMaxDuration() public {
+        vm.prank(capManager);
+        token.setSyncWindowDuration(Constants.MAX_SYNC_WINDOW);
+
+        vm.prank(rateSetter);
+        token.setOkuMultiplier(1.001e18);
+        assertLe(token.syncLockedUntil() - block.timestamp, Constants.MAX_SYNC_WINDOW);
+
+        vm.warp(block.timestamp + 1);
+        vm.prank(rateSetter);
+        token.setOkuMultiplier(1.002e18);
+        assertLe(token.syncLockedUntil() - block.timestamp, Constants.MAX_SYNC_WINDOW);
+    }
+
+    function test_Duration_RequiresCapManager() public {
+        vm.prank(user1);
+        vm.expectPartialRevert(IAccessControl.AccessControlUnauthorizedAccount.selector);
+        token.setSyncWindowDuration(30);
+    }
+
+    // ============ Independence from pause ============
+
+    /// @notice Pause and the window are orthogonal: different causes, different
+    ///         durations, different keys. A paused module with an expired window
+    ///         is still paused; an unpaused module inside a window is still
+    ///         gated.
+    function test_IndependentOfPause() public {
+        _stepNoWarp(1.001e18);
+        vm.prank(psmPauser);
+        module.pause();
+
+        vm.warp(token.syncLockedUntil());
+        assertFalse(token.isSyncLocked());
+
+        usdc.mint(user1, 100e6);
+        vm.startPrank(user1);
+        usdc.approve(address(module), 100e6);
+        vm.expectRevert(); // still paused, window irrelevant
+        module.mint(100e6);
+        vm.stopPrank();
     }
 
     // ============ Helpers ============
 
-    function _setWindow(uint256 duration) internal {
-        vm.prank(capManager);
-        token.setSyncWindowDuration(duration);
-    }
-
-    function _open(uint256 epoch) internal {
-        vm.prank(rateSetter);
-        token.beginSyncWindow(epoch);
-    }
-
-    function _close(uint256 epoch) internal {
-        vm.prank(rateSetter);
-        token.endSyncWindow(epoch);
-    }
-
-    /// @dev Clear the inter-window gap so a fresh window can be opened.
-    function _clearGap() internal {
-        vm.warp(block.timestamp + Constants.MIN_SYNC_WINDOW_GAP);
-    }
-
-    // ============ Ships inert ============
-
-    function test_ShipsOn_DurationDefaultedAndNeverLocked() public view {
-        // The window ships ON. Protection that depends on someone remembering
-        // to enable it is not protection.
-        assertEq(
-            token.syncWindowDuration(), Constants.DEFAULT_SYNC_WINDOW, "window must ship enabled"
-        );
-        assertEq(token.syncLockedUntil(), 0, "but not armed until a tick");
-        assertEq(token.syncEpoch(), 0);
-        assertFalse(token.isSyncLocked());
-    }
-
-    /// @dev With the window explicitly disabled, a rate write must not arm
-    ///      anything — not even for the current second — and critically must not
-    ///      move the gap anchor, or re-enabling the feature later could be
-    ///      blocked for `MIN_SYNC_WINDOW_GAP` by a rate write that predated it.
-    function test_DisabledWindow_SetYieldRateDoesNotArm() public {
-        _setWindow(0);
-
-        vm.prank(rateSetter);
-        token.setYieldRate(RATE_5_PCT_APY, block.timestamp + 30 days);
-
-        assertEq(token.syncLockedUntil(), 0, "disabled config must not move gap anchor");
-        assertFalse(token.isSyncLocked());
-
-        // And the price-sensitive path still works in the same block.
-        _psmMint(user1, 1000e6);
-    }
-
-    /// @dev The converse, and the reason the default matters: straight out of
-    ///      `initialize`, with nobody having configured anything, a rate write
-    ///      fences itself.
-    function test_ShipsOn_SetYieldRateArmsByDefault() public {
-        vm.prank(rateSetter);
-        token.setYieldRate(RATE_5_PCT_APY, block.timestamp + 30 days);
-
-        assertTrue(token.isSyncLocked(), "default config must fence a rate write");
-        vm.warp(block.timestamp + Constants.DEFAULT_SYNC_WINDOW);
-        assertFalse(token.isSyncLocked());
-    }
-
-    // ============ Blocking ============
-
-    function test_Window_BlocksMintAndRedeem() public {
+    /// @dev Drain the buffer, then redeem so the redemption is escrowed.
+    function _queueOneRedemption() internal {
         uint256 raw = _psmMint(user1, 1000e6);
-        _setWindow(WINDOW);
-        _open(1);
-
-        assertTrue(token.isSyncLocked());
-
-        vm.expectRevert(
-            abi.encodeWithSelector(LitePSM.SyncWindowActive.selector, token.syncLockedUntil())
-        );
-        vm.prank(user1);
-        litePsm.mint(1e6);
-
-        vm.startPrank(user1);
-        token.approve(address(litePsm), raw);
-        vm.expectRevert(
-            abi.encodeWithSelector(LitePSM.SyncWindowActive.selector, token.syncLockedUntil())
-        );
-        litePsm.redeem(raw);
-        vm.stopPrank();
-    }
-
-    function test_Window_BlocksRedeemUiAmount() public {
-        uint256 raw = _psmMint(user1, 1000e6);
-        _setWindow(WINDOW);
-        _open(1);
-
-        // Hoist BOTH reads: an external call in the argument list would be the
-        // "next call" that `expectRevert` latches onto, so the assertion would
-        // pass or fail for the wrong reason.
-        uint256 uiBalance = token.balanceOfUI(user1);
-        uint256 lockedUntil = token.syncLockedUntil();
-
-        vm.startPrank(user1);
-        token.approve(address(litePsm), raw);
-        vm.expectRevert(abi.encodeWithSelector(LitePSM.SyncWindowActive.selector, lockedUntil));
-        litePsm.redeemUiAmount(uiBalance);
-        vm.stopPrank();
-    }
-
-    /// @dev The deliberate divergence from pause. `processQueue` is NOT
-    ///      pause-gated, because pause is unbounded and stranding users in the
-    ///      queue indefinitely would be worse than the risk. It IS sync-gated,
-    ///      because the window is bounded and duty-cycled, and because the queue
-    ///      prices at the live multiplier — leaving it open would be a real hole.
-    function test_Window_BlocksProcessQueue() public {
-        // Mint FIRST, then drain — minting deposits USDC into the very buffer
-        // we are trying to empty, so the reverse order leaves the redemption
-        // instantly satisfiable and nothing ever queues.
-        uint256 raw = _psmMint(user1, 1000e6);
-
-        // NB: read the balance BEFORE the prank — an external call in the
-        // argument list would consume `vm.prank` itself.
-        uint256 buffered = usdc.balanceOf(address(litePsm));
+        // Read the balance BEFORE the prank: an external call in an argument
+        // position consumes `vm.prank`, and the drain would then be attempted by
+        // the test contract and fail on the role check.
+        uint256 buffer = usdc.balanceOf(address(module));
         vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(treasury, buffered);
+        module.withdrawUsdc(treasury, buffer);
 
         vm.startPrank(user1);
-        token.approve(address(litePsm), raw);
-        litePsm.redeem(raw);
+        token.approve(address(module), raw);
+        module.redeem(raw);
         vm.stopPrank();
-        assertEq(queue.queueLength(), 1, "expected a queued entry");
-
-        _seedBuffer(10_000e6);
-        _setWindow(WINDOW);
-        _open(1);
-
-        vm.expectRevert(
-            abi.encodeWithSelector(LitePSM.SyncWindowActive.selector, token.syncLockedUntil())
-        );
-        vm.prank(queueProcessor);
-        litePsm.processQueue(0, 1, 10_000e6);
-
-        // Clears normally once released.
-        _close(1);
-        vm.prank(queueProcessor);
-        litePsm.processQueue(0, 1, 10_000e6);
-        assertEq(queue.totalQueuedRaw(), 0);
-    }
-
-    // ============ Release paths ============
-
-    function test_Window_EarlyCloseReleasesImmediately() public {
-        _setWindow(WINDOW);
-        _open(1);
-        assertTrue(token.isSyncLocked());
-
-        _close(1);
-        assertFalse(token.isSyncLocked());
-        _psmMint(user1, 1000e6);
-    }
-
-    /// @dev Liveness backstop: if the orchestrator dies mid-tick and never
-    ///      calls `endSyncWindow`, mint/redeem must resume unaided. Without
-    ///      this the mechanism would be a bricking vector strictly worse than
-    ///      the arbitrage it prevents.
-    function test_Window_AutoExpiresWithoutOperator() public {
-        _setWindow(WINDOW);
-        _open(1);
-        assertTrue(token.isSyncLocked());
-
-        vm.warp(block.timestamp + WINDOW);
-        assertFalse(token.isSyncLocked(), "window must self-expire");
-        _psmMint(user1, 1000e6);
-    }
-
-    function test_Window_ExclusiveUpperBound() public {
-        _setWindow(WINDOW);
-        uint256 openedAt = block.timestamp;
-        _open(1);
-
-        vm.warp(openedAt + WINDOW - 1);
-        assertTrue(token.isSyncLocked(), "last second must still be locked");
-        vm.warp(openedAt + WINDOW);
-        assertFalse(token.isSyncLocked(), "boundary is exclusive");
-    }
-
-    // ============ Ungated surfaces ============
-
-    /// @dev Everything that does not price through the multiplier must stay
-    ///      open, or the window would obstruct the operator's own remediation
-    ///      mid-tick.
-    function test_Window_LeavesParValueAndAdminPathsOpen() public {
-        _setWindow(WINDOW);
-        _open(1);
-
-        // Buffer movement is at par.
-        _seedBuffer(1000e6);
-        vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(treasury, 100e6);
-
-        // The multiplier itself must remain writable — the window must never
-        // censor the rate setter.
-        vm.prank(rateSetter);
-        token.setYieldRate(RATE_5_PCT_APY, block.timestamp + 30 days);
-
-        // And the guardian's emergency lever must remain available.
-        vm.prank(guardian);
-        token.haltAccrual();
-
-        // Plain transfers are unaffected — the window gates PSM conversion,
-        // not the raw ledger.
-        _mintRaw(user1, 100e18);
-        vm.prank(user1);
-        token.transfer(user2, 1e18);
-    }
-
-    /// @dev `haltAccrual` must not arm a window. `OKU_GUARDIAN` is warm and
-    ///      justified as withhold-only; arming would hand it a repeatable
-    ///      mint/redeem block, a capability the RBAC docs deny it.
-    function test_HaltAccrual_DoesNotArmWindow() public {
-        _setWindow(WINDOW);
-        vm.prank(guardian);
-        token.haltAccrual();
-
-        assertFalse(token.isSyncLocked(), "guardian must not be able to arm a window");
-        assertEq(token.syncLockedUntil(), 0);
-    }
-
-    // ============ Epoch discipline ============
-
-    function test_Epoch_BeginRequiresExactSuccessor() public {
-        _setWindow(WINDOW);
-
-        vm.expectRevert(abi.encodeWithSelector(OkuDollar.SyncEpochMismatch.selector, 0, 1));
-        vm.prank(rateSetter);
-        token.beginSyncWindow(0);
-
-        vm.expectRevert(abi.encodeWithSelector(OkuDollar.SyncEpochMismatch.selector, 2, 1));
-        vm.prank(rateSetter);
-        token.beginSyncWindow(2);
-
-        _open(1);
-        assertEq(token.syncEpoch(), 1);
-    }
-
-    /// @dev A release for a different tick must not close the live window,
-    ///      otherwise a stale or replayed call could unlock mid-propagation.
-    function test_Epoch_EndRequiresMatch() public {
-        _setWindow(WINDOW);
-        _open(1);
-
-        vm.expectRevert(abi.encodeWithSelector(OkuDollar.SyncEpochMismatch.selector, 0, 1));
-        vm.prank(rateSetter);
-        token.endSyncWindow(0);
-        assertTrue(token.isSyncLocked(), "stale release must not unlock");
-
-        _close(1);
-        assertFalse(token.isSyncLocked());
-    }
-
-    // ============ Anti-griefing gap ============
-
-    function test_Gap_RefusesSecondWindowInsideGap() public {
-        _setWindow(WINDOW);
-        _open(1);
-        _close(1);
-
-        uint256 earliest = token.syncLockedUntil() + Constants.MIN_SYNC_WINDOW_GAP;
-        vm.expectRevert(
-            abi.encodeWithSelector(OkuDollar.SyncWindowGapNotElapsed.selector, earliest)
-        );
-        vm.prank(rateSetter);
-        token.beginSyncWindow(2);
-
-        _clearGap();
-        _open(2);
-    }
-
-    /// @dev THE anti-griefing property. A caller looping `setYieldRate` must not
-    ///      be able to hold a permanent block — but the write must also never be
-    ///      rejected, since that would make the rate setter censorable by anyone
-    ///      able to open a window. So: clamp, never revert.
-    function test_Gap_RateWriteInsideGapClampsRatherThanReverts() public {
-        _setWindow(WINDOW);
-        _open(1);
-        _close(1);
-        uint256 anchor = token.syncLockedUntil();
-
-        for (uint256 i = 0; i < 3; ++i) {
-            vm.warp(block.timestamp + 10);
-            vm.prank(rateSetter);
-            token.setYieldRate(RATE_5_PCT_APY, block.timestamp + 30 days); // must SUCCEED
-        }
-
-        assertEq(token.syncLockedUntil(), anchor, "gap anchor moved: window was re-armed");
-        assertFalse(token.isSyncLocked());
-        _psmMint(user1, 1000e6);
-    }
-
-    /// @dev The other side of the clamp: outside the gap a bare rate write DOES
-    ///      arm, so a tick can never land completely unfenced merely because the
-    ///      operator skipped `beginSyncWindow`.
-    function test_Gap_RateWriteOutsideGapArmsFailClosed() public {
-        _setWindow(WINDOW);
-        _clearGap();
-
-        vm.prank(rateSetter);
-        token.setYieldRate(RATE_5_PCT_APY, block.timestamp + 30 days);
-
-        assertTrue(token.isSyncLocked(), "fail-closed arming did not fire");
-
-        vm.warp(block.timestamp + WINDOW);
-        assertFalse(token.isSyncLocked());
-    }
-
-    /// @dev The availability floor claimed in `Constants` is arithmetic, so
-    ///      assert it rather than trusting the comment.
-    function test_Gap_AvailabilityFloorHolds() public pure {
-        uint256 cycle = Constants.MIN_SYNC_WINDOW_GAP + Constants.MAX_SYNC_WINDOW;
-        assertGe((Constants.MIN_SYNC_WINDOW_GAP * 100) / cycle, 96);
-    }
-
-    // ============ Parameter bounds and RBAC ============
-
-    function test_Duration_RejectsAboveMax() public {
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                OkuDollar.SyncWindowTooLong.selector,
-                Constants.MAX_SYNC_WINDOW + 1,
-                Constants.MAX_SYNC_WINDOW
-            )
-        );
-        vm.prank(capManager);
-        token.setSyncWindowDuration(Constants.MAX_SYNC_WINDOW + 1);
-    }
-
-    function test_Duration_AcceptsExactlyMax() public {
-        _setWindow(Constants.MAX_SYNC_WINDOW);
-        assertEq(token.syncWindowDuration(), Constants.MAX_SYNC_WINDOW);
-    }
-
-    function test_Rbac_DurationIsCapManagerOnly() public {
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                rateSetter,
-                Roles.OKU_CAP_MANAGER
-            )
-        );
-        vm.prank(rateSetter);
-        token.setSyncWindowDuration(WINDOW);
-    }
-
-    function test_Rbac_WindowOpenCloseIsRateSetterOnly() public {
-        _setWindow(WINDOW);
-
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                capManager,
-                Roles.OKU_RATE_SETTER
-            )
-        );
-        vm.prank(capManager);
-        token.beginSyncWindow(1);
-
-        _open(1);
-
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector,
-                guardian,
-                Roles.OKU_RATE_SETTER
-            )
-        );
-        vm.prank(guardian);
-        token.endSyncWindow(1);
-    }
-
-    // ============ Pause independence ============
-
-    /// @dev Two orthogonal gates. Neither implies the other, and the sync
-    ///      window must not become a backdoor pause or vice versa.
-    function test_Window_AndPauseAreIndependent() public {
-        _setWindow(WINDOW);
-        _open(1);
-        assertTrue(token.isSyncLocked());
-        assertFalse(litePsm.paused(), "opening a window must not pause the PSM");
-
-        _close(1);
-        vm.prank(psmPauser);
-        litePsm.pause();
-        assertTrue(litePsm.paused());
-        assertFalse(token.isSyncLocked(), "pausing must not arm a window");
+        assertEq(queue.queueTail(), 1);
     }
 }

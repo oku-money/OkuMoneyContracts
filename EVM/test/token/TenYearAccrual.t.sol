@@ -80,10 +80,10 @@ contract TenYearAccrualTest is BaseTest {
             _accrue(RATE_5_PCT_APY, Constants.MAX_RATE_DURATION);
         }
 
-        uint256 expected = litePsm.quoteRedeem(rawOut);
+        uint256 expected = module.quoteRedeem(rawOut);
         vm.startPrank(user1);
-        token.approve(address(litePsm), rawOut);
-        uint256 usdcOut = litePsm.redeem(rawOut);
+        token.approve(address(module), rawOut);
+        uint256 usdcOut = module.redeem(rawOut);
         vm.stopPrank();
 
         assertEq(usdcOut, expected, "quote holds after a decade");

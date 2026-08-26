@@ -10,15 +10,15 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {BaseTest} from "../Base.t.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {Errors} from "../../src/lib/Errors.sol";
-import {LitePSM} from "../../src/psm/LitePSM.sol";
-import {OkuDollar} from "../../src/token/OkuDollar.sol";
+import {SubscriptionModule} from "../../src/psm/SubscriptionModule.sol";
+import {OkuM} from "../../src/token/OkuM.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 import {Roles} from "../../src/lib/Roles.sol";
 import {TestConstants} from "../shared/Constants.sol";
 import {MockUSDC} from "../mocks/MockUSDC.sol";
 import {MockHighDecimalToken} from "../mocks/MockHighDecimalToken.sol";
 
-contract LitePSMTest is BaseTest {
+contract SubscriptionModuleTest is BaseTest {
     uint256 internal constant DM = TestConstants.DECIMAL_MULTIPLIER;
 
     // ============ Mint ============
@@ -28,13 +28,18 @@ contract LitePSMTest is BaseTest {
         assertEq(rawOut, 100e18);
         assertEq(token.balanceOf(user1), 100e18);
         assertEq(token.balanceOfUI(user1), 100e18);
-        assertEq(usdc.balanceOf(address(litePsm)), 100e6);
+        assertEq(usdc.balanceOf(address(module)), 100e6);
     }
 
     /// @notice The README's worked example: at $1.05, 100 USDC buys ~95.24 raw,
     ///         which displays as $100.
     function test_Mint_AtElevatedMultiplier_BuysFewerRawSameDollars() public {
         _accrueToAtLeast((Constants.PRECISION * 105) / 100);
+        // Fee-free math below: reaching an elevated multiplier requires steps,
+        // and every step ratchets the `tin + tout` floor. `_resetFees` clears it
+        // via the cold escape hatch so this test measures pure multiplier
+        // conversion. Fee-inclusive behaviour is `FeesTest`'s job.
+        _resetFees();
         uint256 m = token.uiMultiplier();
 
         uint256 rawOut = _psmMint(user1, 100e6);
@@ -46,7 +51,7 @@ contract LitePSMTest is BaseTest {
     function test_Mint_ZeroReverts() public {
         vm.prank(user1);
         vm.expectRevert(Errors.ZeroAmount.selector);
-        litePsm.mint(0);
+        module.mint(0);
     }
 
     /// @notice Documents that `AmountTooSmall` on the MINT path is UNREACHABLE with
@@ -62,7 +67,12 @@ contract LitePSMTest is BaseTest {
     ///      reachability.
     function test_Mint_OneUsdcUnitAlwaysYieldsNonZeroRaw() public {
         _accrueToAtLeast(1000 * Constants.PRECISION);
-        assertGt(litePsm.quoteMint(1), 0, "6dp USDC cannot floor to zero raw");
+        // Fee-free math below: reaching an elevated multiplier requires steps,
+        // and every step ratchets the `tin + tout` floor. `_resetFees` clears it
+        // via the cold escape hatch so this test measures pure multiplier
+        // conversion. Fee-inclusive behaviour is `FeesTest`'s job.
+        _resetFees();
+        assertGt(module.quoteMint(1), 0, "6dp USDC cannot floor to zero raw");
         assertLt(Constants.MAX_MULTIPLIER, DM * Constants.PRECISION, "1e24 < 1e30");
     }
 
@@ -72,13 +82,13 @@ contract LitePSMTest is BaseTest {
     function test_Mint_DustFloorsToZero_With18DecimalAsset() public {
         MockHighDecimalToken asset18 = new MockHighDecimalToken(18);
 
-        OkuDollar t = OkuDollar(
+        OkuM t = OkuM(
             address(
                 new ERC1967Proxy(
-                    address(new OkuDollar()),
+                    address(new OkuM()),
                     abi.encodeCall(
-                        OkuDollar.initialize,
-                        ("Oku Dollar", "rUSDOku", address(asset18), admin, INITIAL_MAX_SUPPLY)
+                        OkuM.initialize,
+                        ("Oku Dollar", "OkuM", address(asset18), admin, INITIAL_MAX_SUPPLY)
                     )
                 )
             )
@@ -93,12 +103,13 @@ contract LitePSMTest is BaseTest {
                 )
             )
         );
-        LitePSM p = LitePSM(
+        SubscriptionModule p = SubscriptionModule(
             address(
                 new ERC1967Proxy(
-                    address(new LitePSM()),
+                    address(new SubscriptionModule()),
                     abi.encodeCall(
-                        LitePSM.initialize, (address(t), address(asset18), address(q), admin)
+                        SubscriptionModule.initialize,
+                        (address(t), address(asset18), address(q), admin)
                     )
                 )
             )
@@ -110,29 +121,35 @@ contract LitePSMTest is BaseTest {
         t.grantRole(Roles.OKU_MINTER, address(p));
         t.configureMinterAllowance(address(p), MINTER_ALLOWANCE);
         t.grantRole(Roles.OKU_RATE_SETTER, rateSetter);
+        // Step coverage is fail-closed: without the fee source wired and a
+        // covering fee set, `setOkuMultiplier` below would revert
+        // `StepNotCovered`. Wiring it here rather than working around it keeps
+        // this fixture honest about the production precondition.
+        t.setStepFeeSource(address(p));
+        p.setFees(50, 50);
         vm.stopPrank();
 
         vm.prank(rateSetter);
-        t.setYieldRate(RATE_5_PCT_APY, block.timestamp + 30 days);
-        vm.warp(block.timestamp + 30 days);
+        t.setOkuMultiplier((Constants.PRECISION * 10_050) / 10_000);
+        vm.warp(block.timestamp + t.syncWindowDuration());
         assertGt(t.uiMultiplier(), Constants.PRECISION);
 
         asset18.mint(user1, 10);
         vm.startPrank(user1);
         asset18.approve(address(p), 10);
-        vm.expectRevert(LitePSM.AmountTooSmall.selector);
+        vm.expectRevert(SubscriptionModule.AmountTooSmall.selector);
         p.mint(1);
         vm.stopPrank();
     }
 
     function test_Mint_WhenPausedReverts() public {
         vm.prank(psmPauser);
-        litePsm.pause();
+        module.pause();
         usdc.mint(user1, 100e6);
         vm.startPrank(user1);
-        usdc.approve(address(litePsm), 100e6);
+        usdc.approve(address(module), 100e6);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        litePsm.mint(100e6);
+        module.mint(100e6);
         vm.stopPrank();
     }
 
@@ -141,20 +158,20 @@ contract LitePSMTest is BaseTest {
         token.setMaxSupply(50e18);
         usdc.mint(user1, 100e6);
         vm.startPrank(user1);
-        usdc.approve(address(litePsm), 100e6);
-        vm.expectPartialRevert(OkuDollar.ExceedsSupplyCap.selector);
-        litePsm.mint(100e6);
+        usdc.approve(address(module), 100e6);
+        vm.expectPartialRevert(OkuM.ExceedsSupplyCap.selector);
+        module.mint(100e6);
         vm.stopPrank();
     }
 
     function test_Mint_RespectsMinterAllowance() public {
         vm.prank(allowanceManager);
-        token.configureMinterAllowance(address(litePsm), 10e18);
+        token.configureMinterAllowance(address(module), 10e18);
         usdc.mint(user1, 100e6);
         vm.startPrank(user1);
-        usdc.approve(address(litePsm), 100e6);
-        vm.expectPartialRevert(OkuDollar.ExceedsAllowance.selector);
-        litePsm.mint(100e6);
+        usdc.approve(address(module), 100e6);
+        vm.expectPartialRevert(OkuM.ExceedsAllowance.selector);
+        module.mint(100e6);
         vm.stopPrank();
     }
 
@@ -165,8 +182,8 @@ contract LitePSMTest is BaseTest {
         uint256 rawOut = _psmMint(user1, 100e6);
 
         vm.startPrank(user1);
-        token.approve(address(litePsm), rawOut);
-        uint256 usdcOut = litePsm.redeem(rawOut);
+        token.approve(address(module), rawOut);
+        uint256 usdcOut = module.redeem(rawOut);
         vm.stopPrank();
 
         assertEq(usdcOut, 100e6);
@@ -177,11 +194,16 @@ contract LitePSMTest is BaseTest {
     function test_Redeem_RoundTripPreservesValueWithinDust() public {
         _seedBuffer(1_000_000e6);
         _accrue(RATE_5_PCT_APY, 20 days);
+        // Fee-free math below: reaching an elevated multiplier requires steps,
+        // and every step ratchets the `tin + tout` floor. `_resetFees` clears it
+        // via the cold escape hatch so this test measures pure multiplier
+        // conversion. Fee-inclusive behaviour is `FeesTest`'s job.
+        _resetFees();
 
         uint256 rawOut = _psmMint(user1, 12_345e6);
         vm.startPrank(user1);
-        token.approve(address(litePsm), rawOut);
-        uint256 usdcOut = litePsm.redeem(rawOut);
+        token.approve(address(module), rawOut);
+        uint256 usdcOut = module.redeem(rawOut);
         vm.stopPrank();
 
         assertLe(usdcOut, 12_345e6, "round trip must never gain");
@@ -195,8 +217,8 @@ contract LitePSMTest is BaseTest {
         _accrue(RATE_5_PCT_APY, Constants.MAX_RATE_DURATION);
 
         vm.startPrank(user1);
-        token.approve(address(litePsm), rawOut);
-        uint256 usdcOut = litePsm.redeem(rawOut);
+        token.approve(address(module), rawOut);
+        uint256 usdcOut = module.redeem(rawOut);
         vm.stopPrank();
 
         assertGt(usdcOut, 10_000e6, "holder should be paid the accrual");
@@ -206,11 +228,11 @@ contract LitePSMTest is BaseTest {
         _seedBuffer(1000e6);
         uint256 rawOut = _psmMint(user1, 100e6);
         vm.prank(psmPauser);
-        litePsm.pause();
+        module.pause();
         vm.startPrank(user1);
-        token.approve(address(litePsm), rawOut);
+        token.approve(address(module), rawOut);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        litePsm.redeem(rawOut);
+        module.redeem(rawOut);
         vm.stopPrank();
     }
 
@@ -224,12 +246,12 @@ contract LitePSMTest is BaseTest {
         uint256 uiBalance = token.balanceOfUI(user1);
 
         vm.prank(psmPauser);
-        litePsm.pause();
+        module.pause();
 
         vm.startPrank(user1);
-        token.approve(address(litePsm), rawOut);
+        token.approve(address(module), rawOut);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        litePsm.redeemUiAmount(uiBalance);
+        module.redeemUiAmount(uiBalance);
         vm.stopPrank();
     }
 
@@ -239,11 +261,11 @@ contract LitePSMTest is BaseTest {
         uint256 rawOut = _psmMint(user1, 100e6);
         // Drain the buffer that the mint just filled.
         vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(treasury, 100e6);
+        module.withdrawUsdc(treasury, 100e6);
 
         vm.startPrank(user1);
-        token.approve(address(litePsm), rawOut);
-        uint256 usdcOut = litePsm.redeem(rawOut);
+        token.approve(address(module), rawOut);
+        uint256 usdcOut = module.redeem(rawOut);
         vm.stopPrank();
 
         assertEq(usdcOut, 0, "queued, not paid");
@@ -257,11 +279,11 @@ contract LitePSMTest is BaseTest {
     function test_Queue_EntryAppreciatesWhileWaiting() public {
         uint256 rawOut = _psmMint(user1, 1000e6);
         vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(treasury, 1000e6);
+        module.withdrawUsdc(treasury, 1000e6);
 
         vm.startPrank(user1);
-        token.approve(address(litePsm), rawOut);
-        litePsm.redeem(rawOut);
+        token.approve(address(module), rawOut);
+        module.redeem(rawOut);
         vm.stopPrank();
 
         uint256 owedBefore = queue.totalQueuedUsdc();
@@ -273,18 +295,18 @@ contract LitePSMTest is BaseTest {
     function test_ProcessQueue_PaysUserAndBurns() public {
         uint256 rawOut = _psmMint(user1, 1000e6);
         vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(treasury, 1000e6);
+        module.withdrawUsdc(treasury, 1000e6);
 
         vm.startPrank(user1);
-        token.approve(address(litePsm), rawOut);
-        litePsm.redeem(rawOut);
+        token.approve(address(module), rawOut);
+        module.redeem(rawOut);
         vm.stopPrank();
 
         _seedBuffer(2000e6);
         uint256 owed = queue.totalQueuedUsdc();
 
         vm.prank(queueProcessor);
-        litePsm.processQueue(0, 1, owed);
+        module.processQueue(0, 1, owed);
 
         assertEq(usdc.balanceOf(user1), owed);
         assertEq(queue.totalQueuedRaw(), 0);
@@ -295,27 +317,27 @@ contract LitePSMTest is BaseTest {
     function test_ProcessQueue_WorksWhilePaused() public {
         uint256 rawOut = _psmMint(user1, 1000e6);
         vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(treasury, 1000e6);
+        module.withdrawUsdc(treasury, 1000e6);
         vm.startPrank(user1);
-        token.approve(address(litePsm), rawOut);
-        litePsm.redeem(rawOut);
+        token.approve(address(module), rawOut);
+        module.redeem(rawOut);
         vm.stopPrank();
 
         _seedBuffer(2000e6);
         vm.prank(psmPauser);
-        litePsm.pause();
+        module.pause();
 
         // Hoisted: an inline call argument would consume the prank.
         uint256 owed = queue.totalQueuedUsdc();
         vm.prank(queueProcessor);
-        litePsm.processQueue(0, 1, owed);
+        module.processQueue(0, 1, owed);
         assertEq(queue.totalQueuedRaw(), 0);
     }
 
     function test_ProcessQueue_RequiresRole() public {
         vm.prank(user1);
         vm.expectPartialRevert(IAccessControl.AccessControlUnauthorizedAccount.selector);
-        litePsm.processQueue(0, 1, 0);
+        module.processQueue(0, 1, 0);
     }
 
     // ============ Buffer management ============
@@ -323,30 +345,30 @@ contract LitePSMTest is BaseTest {
     function test_WithdrawUsdc_CannotStrandQueue() public {
         uint256 rawOut = _psmMint(user1, 1000e6);
         vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(treasury, 1000e6);
+        module.withdrawUsdc(treasury, 1000e6);
         vm.startPrank(user1);
-        token.approve(address(litePsm), rawOut);
-        litePsm.redeem(rawOut);
+        token.approve(address(module), rawOut);
+        module.redeem(rawOut);
         vm.stopPrank();
 
         _seedBuffer(2000e6);
         uint256 obligation = queue.totalQueuedUsdc();
 
         vm.prank(bufferWithdrawer);
-        vm.expectPartialRevert(LitePSM.WouldStrandQueue.selector);
-        litePsm.withdrawUsdc(treasury, 2000e6);
+        vm.expectPartialRevert(SubscriptionModule.WouldStrandQueue.selector);
+        module.withdrawUsdc(treasury, 2000e6);
 
         // Leaving exactly the obligation is fine.
         vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(treasury, 2000e6 - obligation);
+        module.withdrawUsdc(treasury, 2000e6 - obligation);
     }
 
     function test_WithdrawUsdc_NotPauseGated() public {
         _seedBuffer(1000e6);
         vm.prank(psmPauser);
-        litePsm.pause();
+        module.pause();
         vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(treasury, 1000e6);
+        module.withdrawUsdc(treasury, 1000e6);
         assertEq(usdc.balanceOf(treasury), 1000e6);
     }
 
@@ -354,27 +376,27 @@ contract LitePSMTest is BaseTest {
         _seedBuffer(1e6);
         vm.prank(bufferWithdrawer);
         vm.expectRevert(Errors.ZeroAddress.selector);
-        litePsm.withdrawUsdc(address(0), 1e6);
+        module.withdrawUsdc(address(0), 1e6);
     }
 
     function test_WithdrawUsdc_AboveBalanceReverts() public {
         _seedBuffer(1e6);
         vm.prank(bufferWithdrawer);
-        vm.expectPartialRevert(LitePSM.InsufficientBuffer.selector);
-        litePsm.withdrawUsdc(treasury, 2e6);
+        vm.expectPartialRevert(SubscriptionModule.InsufficientBuffer.selector);
+        module.withdrawUsdc(treasury, 2e6);
     }
 
     function test_DepositBuffer_NotPauseGated() public {
         vm.prank(psmPauser);
-        litePsm.pause();
+        module.pause();
         _seedBuffer(500e6);
-        assertEq(usdc.balanceOf(address(litePsm)), 500e6);
+        assertEq(usdc.balanceOf(address(module)), 500e6);
     }
 
     function test_DepositBuffer_ZeroReverts() public {
         vm.prank(bufferDepositor);
         vm.expectRevert(Errors.ZeroAmount.selector);
-        litePsm.depositBuffer(0);
+        module.depositBuffer(0);
     }
 
     // ============ Donation sweep ============
@@ -385,13 +407,13 @@ contract LitePSMTest is BaseTest {
     function test_SweepToken_RecoversDonatedTokens() public {
         _mintRaw(user1, 100e18);
         vm.prank(user1);
-        token.transfer(address(litePsm), 100e18);
-        assertEq(token.balanceOf(address(litePsm)), 100e18);
+        token.transfer(address(module), 100e18);
+        assertEq(token.balanceOf(address(module)), 100e18);
 
         vm.prank(bufferWithdrawer);
-        litePsm.sweepToken(address(token), treasury);
+        module.sweepToken(address(token), treasury);
 
-        assertEq(token.balanceOf(address(litePsm)), 0);
+        assertEq(token.balanceOf(address(module)), 0);
         assertEq(token.balanceOf(treasury), 100e18);
     }
 
@@ -399,20 +421,20 @@ contract LitePSMTest is BaseTest {
     function test_SweepToken_CannotTakeUsdc() public {
         _seedBuffer(1000e6);
         vm.prank(bufferWithdrawer);
-        vm.expectRevert(LitePSM.CannotSweepAsset.selector);
-        litePsm.sweepToken(address(usdc), treasury);
+        vm.expectRevert(SubscriptionModule.CannotSweepAsset.selector);
+        module.sweepToken(address(usdc), treasury);
     }
 
     function test_SweepToken_RequiresRole() public {
         vm.prank(user1);
         vm.expectPartialRevert(IAccessControl.AccessControlUnauthorizedAccount.selector);
-        litePsm.sweepToken(address(token), treasury);
+        module.sweepToken(address(token), treasury);
     }
 
     function test_SweepToken_NothingToSweepReverts() public {
         vm.prank(bufferWithdrawer);
         vm.expectRevert(Errors.ZeroAmount.selector);
-        litePsm.sweepToken(address(token), treasury);
+        module.sweepToken(address(token), treasury);
     }
 
     // ============ Init cross-assertions (single source of truth) ============
@@ -421,22 +443,25 @@ contract LitePSMTest is BaseTest {
     ///         fail at deploy, not price divergently in production.
     function test_Initialize_AssetMismatchReverts() public {
         MockUSDC other = new MockUSDC();
-        LitePSM impl = new LitePSM();
-        vm.expectPartialRevert(LitePSM.AssetMismatch.selector);
+        SubscriptionModule impl = new SubscriptionModule();
+        vm.expectPartialRevert(SubscriptionModule.AssetMismatch.selector);
         new ERC1967Proxy(
             address(impl),
             abi.encodeCall(
-                LitePSM.initialize, (address(token), address(other), address(queue), admin)
+                SubscriptionModule.initialize,
+                (address(token), address(other), address(queue), admin)
             )
         );
     }
 
     function test_Initialize_ZeroAddressesRevert() public {
-        LitePSM impl = new LitePSM();
+        SubscriptionModule impl = new SubscriptionModule();
         vm.expectRevert(Errors.ZeroAddress.selector);
         new ERC1967Proxy(
             address(impl),
-            abi.encodeCall(LitePSM.initialize, (address(0), address(usdc), address(queue), admin))
+            abi.encodeCall(
+                SubscriptionModule.initialize, (address(0), address(usdc), address(queue), admin)
+            )
         );
     }
 
@@ -444,13 +469,12 @@ contract LitePSMTest is BaseTest {
     ///         a negative exponent.
     function test_Initialize_HighDecimalAssetRejectedByToken() public {
         MockHighDecimalToken weird = new MockHighDecimalToken(19);
-        OkuDollar impl = new OkuDollar();
-        vm.expectPartialRevert(OkuDollar.AssetDecimalsTooLarge.selector);
+        OkuM impl = new OkuM();
+        vm.expectPartialRevert(OkuM.AssetDecimalsTooLarge.selector);
         new ERC1967Proxy(
             address(impl),
             abi.encodeCall(
-                OkuDollar.initialize,
-                ("Oku Dollar", "rUSDOku", address(weird), admin, INITIAL_MAX_SUPPLY)
+                OkuM.initialize, ("Oku Dollar", "OkuM", address(weird), admin, INITIAL_MAX_SUPPLY)
             )
         );
     }
@@ -460,17 +484,17 @@ contract LitePSMTest is BaseTest {
     function test_Pause_RequiresPauserAndUnpauseRequiresUnpauser() public {
         vm.prank(user1);
         vm.expectPartialRevert(IAccessControl.AccessControlUnauthorizedAccount.selector);
-        litePsm.pause();
+        module.pause();
 
         vm.prank(psmPauser);
-        litePsm.pause();
+        module.pause();
 
         // A pauser must NOT be able to unpause — that is the cold multisig's job.
         vm.prank(psmPauser);
         vm.expectPartialRevert(IAccessControl.AccessControlUnauthorizedAccount.selector);
-        litePsm.unpause();
+        module.unpause();
 
         vm.prank(psmUnpauser);
-        litePsm.unpause();
+        module.unpause();
     }
 }

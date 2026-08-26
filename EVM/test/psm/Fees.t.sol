@@ -5,7 +5,7 @@ import {BaseTest} from "../Base.t.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {MathLib} from "../../src/lib/MathLib.sol";
 import {Roles} from "../../src/lib/Roles.sol";
-import {LitePSM} from "../../src/psm/LitePSM.sol";
+import {SubscriptionModule} from "../../src/psm/SubscriptionModule.sol";
 import {RedemptionQueue} from "../../src/psm/RedemptionQueue.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
@@ -46,13 +46,13 @@ contract FeesTest is BaseTest {
 
     function _setFees(uint256 tin_, uint256 tout_) internal {
         vm.prank(capManager);
-        litePsm.setFees(tin_, tout_);
+        module.setFees(tin_, tout_);
     }
 
     function _redeemAs(address user, uint256 raw) internal returns (uint256) {
         vm.startPrank(user);
-        token.approve(address(litePsm), raw);
-        uint256 out = litePsm.redeem(raw);
+        token.approve(address(module), raw);
+        uint256 out = module.redeem(raw);
         vm.stopPrank();
         return out;
     }
@@ -60,8 +60,8 @@ contract FeesTest is BaseTest {
     // ============ Ships inert ============
 
     function test_ShipsInert_BothFeesZero() public view {
-        assertEq(litePsm.tin(), 0);
-        assertEq(litePsm.tout(), 0);
+        assertEq(module.tin(), 0);
+        assertEq(module.tout(), 0);
     }
 
     /// @dev At zero fees the fee helpers must be exact identities, so existing
@@ -157,9 +157,9 @@ contract FeesTest is BaseTest {
         uint256 gross = MathLib.dollarsToUsdc(
             MathLib.toUiAmount(raw, token.uiMultiplier()), token.usdcDecimalMultiplier()
         );
-        uint256 psmBefore = usdc.balanceOf(address(litePsm));
+        uint256 psmBefore = usdc.balanceOf(address(module));
         uint256 paid = _redeemAs(user1, raw);
-        uint256 psmDelta = psmBefore - usdc.balanceOf(address(litePsm));
+        uint256 psmDelta = psmBefore - usdc.balanceOf(address(module));
 
         assertEq(psmDelta, paid, "buffer gave up exactly the net payout");
         assertGt(gross - psmDelta, 0, "fee was withheld from the buffer outflow");
@@ -175,9 +175,9 @@ contract FeesTest is BaseTest {
         // net = 0.
         uint256 dust = token.usdcDecimalMultiplier();
         vm.startPrank(user1);
-        token.approve(address(litePsm), dust);
-        vm.expectRevert(LitePSM.AmountTooSmall.selector);
-        litePsm.redeem(dust);
+        token.approve(address(module), dust);
+        vm.expectRevert(SubscriptionModule.AmountTooSmall.selector);
+        module.redeem(dust);
         vm.stopPrank();
     }
 
@@ -188,11 +188,11 @@ contract FeesTest is BaseTest {
     function test_Quotes_MatchActualUnderFees() public {
         _setFees(TIN, TOUT);
 
-        uint256 quotedRaw = litePsm.quoteMint(1000e6);
+        uint256 quotedRaw = module.quoteMint(1000e6);
         uint256 actualRaw = _psmMint(user1, 1000e6);
         assertEq(quotedRaw, actualRaw, "quoteMint must be fee-inclusive");
 
-        uint256 quotedUsdc = litePsm.quoteRedeem(actualRaw);
+        uint256 quotedUsdc = module.quoteRedeem(actualRaw);
         uint256 actualUsdc = _redeemAs(user1, actualRaw);
         assertEq(quotedUsdc, actualUsdc, "quoteRedeem must be fee-inclusive");
     }
@@ -208,9 +208,9 @@ contract FeesTest is BaseTest {
 
         // Drain the buffer so the redemption queues. Read before the prank — an
         // external call in the argument list would consume `vm.prank`.
-        uint256 buffered = usdc.balanceOf(address(litePsm));
+        uint256 buffered = usdc.balanceOf(address(module));
         vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(treasury, buffered);
+        module.withdrawUsdc(treasury, buffered);
 
         _setFees(0, TOUT);
         _redeemAs(user1, raw);
@@ -230,7 +230,7 @@ contract FeesTest is BaseTest {
         _seedBuffer(1_000_000e6);
         uint256 before = usdc.balanceOf(user1);
         vm.prank(queueProcessor);
-        litePsm.processQueue(0, 1, gross);
+        module.processQueue(0, 1, gross);
 
         assertEq(
             usdc.balanceOf(user1) - before,
@@ -243,9 +243,9 @@ contract FeesTest is BaseTest {
     ///      the holder will actually receive.
     function test_Queue_EntryValueIsNetOfSnapshottedFee() public {
         uint256 raw = _psmMint(user1, 1000e6);
-        uint256 buffered = usdc.balanceOf(address(litePsm));
+        uint256 buffered = usdc.balanceOf(address(module));
         vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(treasury, buffered);
+        module.withdrawUsdc(treasury, buffered);
 
         _setFees(0, TOUT);
         _redeemAs(user1, raw);
@@ -267,9 +267,9 @@ contract FeesTest is BaseTest {
     ///      cannot influence which value is lower, nor choose to be queued.
     function test_Queue_FeeCutIsPassedOnToQueuedUsers() public {
         uint256 raw = _psmMint(user1, 1000e6);
-        uint256 buffered = usdc.balanceOf(address(litePsm));
+        uint256 buffered = usdc.balanceOf(address(module));
         vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(treasury, buffered);
+        module.withdrawUsdc(treasury, buffered);
 
         // Queue at the maximum fee.
         _setFees(0, Constants.MAX_FEE_BPS);
@@ -293,7 +293,7 @@ contract FeesTest is BaseTest {
         _seedBuffer(1_000_000e6);
         uint256 before = usdc.balanceOf(user1);
         vm.prank(queueProcessor);
-        litePsm.processQueue(0, 1, gross);
+        module.processQueue(0, 1, gross);
         assertEq(
             usdc.balanceOf(user1) - before,
             expected,
@@ -305,7 +305,7 @@ contract FeesTest is BaseTest {
     ///      and the `uint16` narrowing must not be reachable with a wider value.
     function test_Queue_EnqueueRejectsOutOfRangeFee() public {
         // Impersonate the PSM, the only holder of `QUEUE_PSM`.
-        vm.prank(address(litePsm));
+        vm.prank(address(module));
         vm.expectRevert(
             abi.encodeWithSelector(
                 RedemptionQueue.FeeAboveMaximum.selector,
@@ -321,25 +321,29 @@ contract FeesTest is BaseTest {
     function test_SetFees_RejectsAboveMaxOnEitherLeg() public {
         vm.expectRevert(
             abi.encodeWithSelector(
-                LitePSM.FeeAboveMaximum.selector, Constants.MAX_FEE_BPS + 1, Constants.MAX_FEE_BPS
+                SubscriptionModule.FeeAboveMaximum.selector,
+                Constants.MAX_FEE_BPS + 1,
+                Constants.MAX_FEE_BPS
             )
         );
         vm.prank(capManager);
-        litePsm.setFees(Constants.MAX_FEE_BPS + 1, 0);
+        module.setFees(Constants.MAX_FEE_BPS + 1, 0);
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                LitePSM.FeeAboveMaximum.selector, Constants.MAX_FEE_BPS + 1, Constants.MAX_FEE_BPS
+                SubscriptionModule.FeeAboveMaximum.selector,
+                Constants.MAX_FEE_BPS + 1,
+                Constants.MAX_FEE_BPS
             )
         );
         vm.prank(capManager);
-        litePsm.setFees(0, Constants.MAX_FEE_BPS + 1);
+        module.setFees(0, Constants.MAX_FEE_BPS + 1);
     }
 
     function test_SetFees_AcceptsExactlyMax() public {
         _setFees(Constants.MAX_FEE_BPS, Constants.MAX_FEE_BPS);
-        assertEq(litePsm.tin(), Constants.MAX_FEE_BPS);
-        assertEq(litePsm.tout(), Constants.MAX_FEE_BPS);
+        assertEq(module.tin(), Constants.MAX_FEE_BPS);
+        assertEq(module.tout(), Constants.MAX_FEE_BPS);
     }
 
     /// @dev Gated on the PSM-namespaced `PSM_FEE_MANAGER`, not the token's
@@ -355,12 +359,12 @@ contract FeesTest is BaseTest {
             )
         );
         vm.prank(psmPauser);
-        litePsm.setFees(0, TOUT);
+        module.setFees(0, TOUT);
 
         // Holding the token's cap-manager role is NOT sufficient on the PSM.
         assertTrue(token.hasRole(Roles.OKU_CAP_MANAGER, capManager));
-        assertTrue(litePsm.hasRole(Roles.PSM_FEE_MANAGER, capManager));
-        assertFalse(litePsm.hasRole(Roles.OKU_CAP_MANAGER, capManager));
+        assertTrue(module.hasRole(Roles.PSM_FEE_MANAGER, capManager));
+        assertFalse(module.hasRole(Roles.OKU_CAP_MANAGER, capManager));
     }
 
     // ============ Helpers ============

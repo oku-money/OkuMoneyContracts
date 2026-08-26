@@ -24,8 +24,8 @@ contract RedemptionQueueTest is BaseTest {
     function _queueRaw(address user, uint256 rawAmount) internal {
         _mintRaw(user, rawAmount);
         vm.startPrank(user);
-        token.approve(address(litePsm), rawAmount);
-        litePsm.redeem(rawAmount);
+        token.approve(address(module), rawAmount);
+        module.redeem(rawAmount);
         vm.stopPrank();
     }
 
@@ -69,7 +69,7 @@ contract RedemptionQueueTest is BaseTest {
 
         uint256 owed = queue.totalQueuedUsdc();
         vm.prank(queueProcessor);
-        litePsm.processQueue(0, 3, owed);
+        module.processQueue(0, 3, owed);
 
         assertEq(queue.totalQueuedRaw(), 0);
         assertEq(token.balanceOf(address(queue)), 0);
@@ -86,7 +86,7 @@ contract RedemptionQueueTest is BaseTest {
         _seedBuffer(1500e6); // enough for entry 0 only
 
         vm.prank(queueProcessor);
-        litePsm.processQueue(0, 3, 1500e6);
+        module.processQueue(0, 3, 1500e6);
 
         assertApproxEqAbs(usdc.balanceOf(user1), 1000e6, 1);
         assertEq(usdc.balanceOf(user2), 0, "must not skip ahead");
@@ -103,7 +103,7 @@ contract RedemptionQueueTest is BaseTest {
 
         uint256 owed = queue.totalQueuedUsdc();
         vm.prank(queueProcessor);
-        litePsm.processQueue(0, 3, owed);
+        module.processQueue(0, 3, owed);
 
         assertGt(usdc.balanceOf(user1), 0);
         assertEq(usdc.balanceOf(user2), 0, "skipped");
@@ -120,7 +120,7 @@ contract RedemptionQueueTest is BaseTest {
 
         uint256 owed = queue.totalQueuedUsdc();
         vm.prank(queueProcessor);
-        litePsm.processQueue(0, 3, owed);
+        module.processQueue(0, 3, owed);
 
         assertEq(usdc.balanceOf(user2), 0);
         assertEq(queue.getQueueEntry(1).user, user2, "not cleared, so not paid");
@@ -133,12 +133,12 @@ contract RedemptionQueueTest is BaseTest {
 
         uint256 owed = queue.totalQueuedUsdc();
         vm.prank(queueProcessor);
-        litePsm.processQueue(0, 2, owed);
+        module.processQueue(0, 2, owed);
 
         // Re-processing the same range must not double-pay.
         uint256 balBefore = usdc.balanceOf(user1);
         vm.prank(queueProcessor);
-        litePsm.processQueue(0, 2, owed);
+        module.processQueue(0, 2, owed);
         assertEq(usdc.balanceOf(user1), balBefore, "cleared entries are inert");
     }
 
@@ -153,7 +153,7 @@ contract RedemptionQueueTest is BaseTest {
 
         uint256 owed = queue.totalQueuedUsdc();
         vm.prank(queueProcessor);
-        litePsm.processQueue(0, 2, owed);
+        module.processQueue(0, 2, owed);
 
         assertEq(usdc.balanceOf(user1), usdc.balanceOf(user2), "identical entries pay identically");
         assertGt(usdc.balanceOf(user1), 1000e6, "and both received the accrual");
@@ -225,7 +225,7 @@ contract RedemptionQueueTest is BaseTest {
         _seedBuffer(10_000e6);
         uint256 owed = queue.totalQueuedUsdc();
         vm.prank(queueProcessor);
-        litePsm.processQueue(0, 3, owed);
+        module.processQueue(0, 3, owed);
 
         assertEq(queue.queueHead(), 0, "processing does not auto-advance");
         assertEq(queue.queueLength(), 3, "so length is an upper bound");
@@ -246,7 +246,7 @@ contract RedemptionQueueTest is BaseTest {
         _queueThree();
         _seedBuffer(1500e6);
         vm.prank(queueProcessor);
-        litePsm.processQueue(0, 3, 1500e6);
+        module.processQueue(0, 3, 1500e6);
 
         queue.advanceHead(10);
         assertEq(queue.queueHead(), 1, "stops at the first live entry");
@@ -257,7 +257,7 @@ contract RedemptionQueueTest is BaseTest {
         _seedBuffer(10_000e6);
         uint256 owed = queue.totalQueuedUsdc();
         vm.prank(queueProcessor);
-        litePsm.processQueue(0, 3, owed);
+        module.processQueue(0, 3, owed);
 
         assertEq(queue.advanceHead(1), 1, "respects maxSlots");
         assertEq(queue.queueHead(), 1);
@@ -319,7 +319,7 @@ contract RedemptionQueueTest is BaseTest {
 
     function test_GetQueueEntryValue() public {
         _queueRaw(user1, 1000e18);
-        assertEq(queue.getQueueEntryValue(0), litePsm.quoteRedeem(1000e18));
+        assertEq(queue.getQueueEntryValue(0), module.quoteRedeem(1000e18));
     }
 
     function test_GetQueueEntry_OutOfRangeReverts() public {
@@ -351,6 +351,6 @@ contract RedemptionQueueTest is BaseTest {
     /// @notice The queue must not hold `QUEUE_PSM` for anyone at init.
     function test_Initialize_DoesNotGrantQueuePsm() public view {
         assertFalse(queue.hasRole(keccak256("QUEUE_PSM"), admin));
-        assertTrue(queue.hasRole(keccak256("QUEUE_PSM"), address(litePsm)));
+        assertTrue(queue.hasRole(keccak256("QUEUE_PSM"), address(module)));
     }
 }

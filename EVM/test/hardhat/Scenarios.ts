@@ -1,26 +1,56 @@
 /**
- * Hardhat scenario suite for the v0.3 single-token model.
+ * Hardhat scenario suite for the v0.4 two-token model (OkuM + USDOku).
  *
- * SCOPE. Foundry is the authoritative functional coverage — 235 tests, 14
- * stateful-fuzz invariants, and the ERC-8056 conformance suite all live there.
- * This file covers what Foundry cannot, or covers less naturally:
+ * SCOPE. Foundry is the authoritative functional coverage — 386 tests, the
+ * stateful-fuzz invariants and the ERC-8056 conformance suite all live there.
+ * This file is deliberately narrow: it covers only what forge cannot, or what
+ * forge covers less honestly.
  *
- *   1. The UUPS upgrade path, using @openzeppelin/hardhat-upgrades so the real
- *      storage-layout validator runs (forge cannot invoke it).
- *   2. Multi-contract scenarios over month-scale horizons with the full
- *      deploy-script wiring, rather than a test-harness approximation.
- *   3. Capability detection as an integrator would perform it, over the ABI.
- *   4. **The high-multiplier regime.** At `uiMultiplier == 1e18` the raw and
- *      displayed numbers are identical, so every off-by-a-multiplier bug is
- *      invisible. Half of these tests run at >= 5x for exactly that reason.
- *   5. The incident protocol end to end — pause, blacklist, guardian halt, and
- *      the role splits that make each of them safe.
+ *   1. THE OZ STORAGE-LAYOUT VALIDATOR ON A REAL `upgradeProxy`, across all
+ *      five UUPS proxies. This is the single most valuable thing in the file and
+ *      forge cannot invoke it at all.
+ *   2. Multi-contract scenarios wired exactly as `scripts/deploy/index.ts` wires
+ *      them, over month- and year-scale horizons — a real deployment rather than
+ *      a test-harness approximation.
+ *   3. **THE HIGH-MULTIPLIER REGIME (>= 5x), AND THE NONZERO SOLVENCY GAP.**
+ *      At `M_oku == 1e18` the raw and displayed numbers are identical, so every
+ *      off-by-a-multiplier bug is invisible. The same argument now applies to
+ *      the solvency gap: at gap zero, `liability == backing` and every
+ *      wrap/unwrap mispricing is invisible too. So the scenarios that exercise
+ *      conversion pricing run at >= 5x AND with a nonzero gap, on purpose.
+ *   4. Integrator capability detection over the ABI and ERC-165 — including the
+ *      one probe the two tokens must answer DIFFERENTLY.
  *
- * This replaces v0.2's five files (2,698 lines: fork/OkuMoney.ts,
- * fork/OkuDollar.ts, fork/LitePSM.ts, happyPath/HappyPath.ts,
- * scenarios/RealWorldUsage.ts). Every one of those was built on wrap/unwrap
- * between two tokens and a rebasing `balanceOf`; none of it survives the
- * refactor, so they were deleted rather than ported into something misleading.
+ * WHAT IS NOT HERE, AND WHY. Unit-level bounds (`MAX_STEP_BPS`,
+ * `MAX_IMPLIED_APR`, `MAX_FEE_BPS`, rounding directions, per-function role
+ * gates) are all pinned in Foundry, deterministically and far faster. Repeating
+ * them here would buy nothing and would rot.
+ *
+ * ---------------------------------------------------------------------------
+ * SEMANTICS THIS FILE HAS TO RESPECT (each one bit an earlier draft)
+ * ---------------------------------------------------------------------------
+ *
+ *   - A STEP IS IMPOSSIBLE AT ZERO FEES. `setOkuMultiplier` reverts
+ *     `StepNotCovered` unless `module.tin() + module.tout() >= stepBps`, read
+ *     via `okuM.stepFeeSource()`. The fixture therefore performs the same three
+ *     fail-closed writes the deploy script does. And coverage is a RATCHET:
+ *     once a step of N bps lands, `setFees` cannot drop the combined value below
+ *     N until `okuM.resetStepHighWaterMark()`.
+ *
+ *   - `MAX_STEP_BPS` IS 100 (1%). A 5x multiplier needs ~162 steps of 1%, hence
+ *     `stepToAtLeast`.
+ *
+ *   - EVERY STEP ARMS A 60s SYNC WINDOW blocking `module.mint/redeem/
+ *     redeemUiAmount/processQueue` and `wrapper.wrap/unwrap`. `setUsdOkuRate` is
+ *     NOT gated, and neither is `setOkuMultiplier` itself — see `stepToAtLeast`.
+ *
+ *   - THE SOLVENCY BOUND IS CUMULATIVE, NOT PER-WRITE. Worst-case accrual in one
+ *     maximum-length segment (1000 bps APR over 30 days) is ~82 bps, below
+ *     `MAX_SOLVENCY_GAP_BPS` (100), so a single rate write from a zero gap can
+ *     NEVER be refused. Producing a nonzero gap means accruing `M_usd` while
+ *     `M_oku` stands still; funding it means transferring OkuM to the wrapper,
+ *     because donations count as backing deliberately — that IS the funding
+ *     mechanism.
  */
 
 import { expect } from "chai";
@@ -35,15 +65,37 @@ function as(c: Contract, signer: Signer): Contract {
   return c.connect(signer) as unknown as Contract;
 }
 
-const PRECISION = 10n ** 18n;
-const DM = 10n ** 12n; // 6-decimal USDC
-const MAX_RATE_DURATION = 30n * 24n * 60n * 60n;
+/** Role identifier. `Roles.sol` is `keccak256("NAME")` throughout. */
+const R = (n: string) => ethers.keccak256(ethers.toUtf8Bytes(n));
 
-/** ~5% APY. The live Sepolia rate at the time of the May-2026 incident. */
+const PRECISION = 10n ** 18n;
+const BPS = 10_000n;
+const DM = 10n ** 12n; // 6-decimal USDC -> 18-decimal dollars
+const DAY = 24n * 60n * 60n;
+const MAX_RATE_DURATION = 30n * DAY;
+
+/** `Constants.MAX_STEP_BPS` — the per-step ceiling on `M_oku`. */
+const MAX_STEP_BPS = 100n;
+/** `Constants.MAX_SOLVENCY_GAP_BPS` — the cumulative ceiling on the gap. */
+const MAX_SOLVENCY_GAP_BPS = 100n;
+/** `Constants.MAX_FEE_BPS` — per-side ceiling on `tin` / `tout`. */
+const MAX_FEE_BPS = 100n;
+/** `Constants.DEFAULT_SYNC_WINDOW`. */
+const DEFAULT_SYNC_WINDOW = 60n;
+
+/** ~5% APY as a per-second `M_usd` rate. The live Sepolia rate. */
 const RATE_5_PCT_APY = 1_000_000_001_546_176_000n;
-/** Nominal 1000bps APR — exactly at `MAX_IMPLIED_APR`. */
+/** Nominal ~1000 bps APR — sitting exactly under `MAX_IMPLIED_APR`. */
 const RATE_AT_APR_CAP = PRECISION + 3_170_979_198n;
 
+/**
+ * A monthly `M_oku` mark at a 5% annual target is ~40.2 bps. 40 is used so the
+ * realized index tracks marginally BEHIND the declared 5% index, which is the
+ * direction that actually exercises the solvency gap.
+ */
+const MONTHLY_MARK_BPS = 40n;
+
+/** The four ERC-8056 interface ids, from `Constants.sol`. */
 const IID = {
   core: "0xa60bf13d",
   pending: "0x4bd27648",
@@ -52,70 +104,145 @@ const IID = {
 };
 
 interface System {
-  token: Contract;
-  psm: Contract;
+  okuM: Contract;
+  usdOku: Contract;
+  wrapper: Contract;
+  module: Contract;
   queue: Contract;
   usdc: Contract;
   admin: Signer;
   alice: Signer;
   bob: Signer;
+  /** Cached addresses — every helper needs them and `getAddress()` is an await. */
+  a: {
+    okuM: string;
+    usdOku: string;
+    wrapper: string;
+    module: string;
+    queue: string;
+    admin: string;
+    alice: string;
+    bob: string;
+  };
 }
+
+// ============================================================================
+// Fixture — mirrors scripts/deploy/index.ts, including the order
+// ============================================================================
+//
+// MockUSDC -> OkuM -> RedemptionQueue -> SubscriptionModule -> USDOku ->
+// USDOkuWrapper, then role wiring, then the three fail-closed writes.
+//
+// The order is not cosmetic: the module and queue initializers cross-assert
+// `okuM.asset()` and `okuM.usdcDecimalMultiplier()`, so OkuM must exist first.
+// USDOku has no dependency on any of them (its initializer takes only
+// name/symbol/admin) but the wrapper binds both tokens, so it comes last.
 
 async function deploySystem(): Promise<System> {
   const [admin, alice, bob] = await ethers.getSigners();
+  const adminAddr = await admin.getAddress();
 
   const MockUSDC = await ethers.getContractFactory("MockUSDC");
-  const usdc = await MockUSDC.deploy();
+  const usdc = (await MockUSDC.deploy()) as unknown as Contract;
   await usdc.waitForDeployment();
+  const usdcAddr = await usdc.getAddress();
 
-  // Token first: the PSM and queue initializers cross-assert `token.asset()`.
-  const OkuDollar = await ethers.getContractFactory("OkuDollar");
-  const token = (await upgrades.deployProxy(
-    OkuDollar,
-    ["Oku Dollar", "rUSDOku", await usdc.getAddress(), await admin.getAddress(), ethers.parseEther("1000000000")],
+  const OkuMFactory = await ethers.getContractFactory("OkuM");
+  const okuM = (await upgrades.deployProxy(
+    OkuMFactory,
+    ["Oku Money", "OkuM", usdcAddr, adminAddr, ethers.parseEther("1000000000")],
     { kind: "uups" }
   )) as unknown as Contract;
-  await token.waitForDeployment();
+  await okuM.waitForDeployment();
+  const okuMAddr = await okuM.getAddress();
 
-  const RedemptionQueue = await ethers.getContractFactory("RedemptionQueue");
+  const QueueFactory = await ethers.getContractFactory("RedemptionQueue");
   const queue = (await upgrades.deployProxy(
-    RedemptionQueue,
-    [await token.getAddress(), await usdc.getAddress(), await admin.getAddress()],
+    QueueFactory,
+    [okuMAddr, usdcAddr, adminAddr],
     { kind: "uups" }
   )) as unknown as Contract;
   await queue.waitForDeployment();
+  const queueAddr = await queue.getAddress();
 
-  const LitePSM = await ethers.getContractFactory("LitePSM");
-  const psm = (await upgrades.deployProxy(
-    LitePSM,
-    [
-      await token.getAddress(),
-      await usdc.getAddress(),
-      await queue.getAddress(),
-      await admin.getAddress(),
-    ],
+  const ModuleFactory = await ethers.getContractFactory("SubscriptionModule");
+  const module = (await upgrades.deployProxy(
+    ModuleFactory,
+    [okuMAddr, usdcAddr, queueAddr, adminAddr],
     { kind: "uups" }
   )) as unknown as Contract;
-  await psm.waitForDeployment();
+  await module.waitForDeployment();
+  const moduleAddr = await module.getAddress();
 
-  // Mirror scripts/deploy/index.ts:configureRoles.
-  const R = (n: string) => ethers.keccak256(ethers.toUtf8Bytes(n));
-  const psmAddr = await psm.getAddress();
-  const queueAddr = await queue.getAddress();
-  await (await token.grantRole(R("OKU_MINTER"), psmAddr)).wait();
-  await (await token.grantRole(R("OKU_BURNER"), psmAddr)).wait();
-  await (await token.grantRole(R("OKU_BURNER"), queueAddr)).wait();
-  await (await queue.grantRole(R("QUEUE_PSM"), psmAddr)).wait();
-  await (
-    await token.configureMinterAllowance(psmAddr, ethers.parseEther("1000000000"))
-  ).wait();
+  const UsdOkuFactory = await ethers.getContractFactory("USDOku");
+  const usdOku = (await upgrades.deployProxy(
+    UsdOkuFactory,
+    ["USD Oku", "USDOku", adminAddr],
+    { kind: "uups" }
+  )) as unknown as Contract;
+  await usdOku.waitForDeployment();
+  const usdOkuAddr = await usdOku.getAddress();
 
-  return { token, psm, queue, usdc: usdc as unknown as Contract, admin, alice, bob };
+  const WrapperFactory = await ethers.getContractFactory("USDOkuWrapper");
+  const wrapper = (await upgrades.deployProxy(
+    WrapperFactory,
+    [okuMAddr, usdOkuAddr, adminAddr],
+    { kind: "uups" }
+  )) as unknown as Contract;
+  await wrapper.waitForDeployment();
+  const wrapperAddr = await wrapper.getAddress();
+
+  // ---- Contract grants. These never go to a key in production. ----
+  await (await okuM.grantRole(R("OKU_MINTER"), moduleAddr)).wait();
+  await (await okuM.grantRole(R("OKU_BURNER"), moduleAddr)).wait();
+  await (await okuM.grantRole(R("OKU_BURNER"), queueAddr)).wait();
+  await (await okuM.configureMinterAllowance(moduleAddr, ethers.parseEther("1000000000"))).wait();
+
+  // Same role constants, but AccessControl mappings are per contract: holding
+  // OKU_MINTER on OkuM confers nothing on USDOku.
+  await (await usdOku.grantRole(R("OKU_MINTER"), wrapperAddr)).wait();
+  await (await usdOku.grantRole(R("OKU_BURNER"), wrapperAddr)).wait();
+
+  // Deliberately post-init, to avoid a circular dependency.
+  await (await queue.grantRole(R("QUEUE_PSM"), moduleAddr)).wait();
+
+  // ---- The three fail-closed writes. Without these the system is inert. ----
+  // `setStepFeeSource` unset  => every `setOkuMultiplier` reverts StepNotCovered.
+  // `setSolvencySource` unset => `setUsdOkuRate` reverts once liability exists.
+  // `tin + tout == 0`         => no step of any size is possible.
+  await (await okuM.setStepFeeSource(moduleAddr)).wait();
+  await (await usdOku.setSolvencySource(wrapperAddr)).wait();
+  await (await module.setFees(0, 50)).wait(); // the deploy-script default
+
+  return {
+    okuM,
+    usdOku,
+    wrapper,
+    module,
+    queue,
+    usdc,
+    admin,
+    alice,
+    bob,
+    a: {
+      okuM: okuMAddr,
+      usdOku: usdOkuAddr,
+      wrapper: wrapperAddr,
+      module: moduleAddr,
+      queue: queueAddr,
+      admin: adminAddr,
+      alice: await alice.getAddress(),
+      bob: await bob.getAddress(),
+    },
+  };
 }
 
-async function setRate(s: System, rate: bigint, durationSeconds: bigint) {
-  const now = BigInt((await ethers.provider.getBlock("latest"))!.timestamp);
-  await (await s.token.setYieldRate(rate, now + durationSeconds)).wait();
+// ============================================================================
+// Time
+// ============================================================================
+
+async function now(): Promise<bigint> {
+  return BigInt((await ethers.provider.getBlock("latest"))!.timestamp);
 }
 
 async function warp(seconds: bigint) {
@@ -123,37 +250,215 @@ async function warp(seconds: bigint) {
   await ethers.provider.send("evm_mine", []);
 }
 
+/**
+ * Advance past any armed post-step sync window, mining exactly at
+ * `syncLockedUntil()` — the bound is exclusive, so that timestamp is already
+ * unlocked. No-op when nothing is armed.
+ */
+async function clearSyncWindow(s: System) {
+  const until: bigint = await s.okuM.syncLockedUntil();
+  if ((await now()) < until) {
+    await ethers.provider.send("evm_setNextBlockTimestamp", [Number(until)]);
+    await ethers.provider.send("evm_mine", []);
+  }
+}
+
+// ============================================================================
+// M_oku — the stepwise realized index
+// ============================================================================
+
+/**
+ * Raise `tin`/`tout` until the round trip covers a step of `stepBps`.
+ *
+ * Step coverage is `tin + tout >= stepBps`, and it is a ratchet, so this only
+ * ever raises. Fees are split across both sides because each is independently
+ * capped at `MAX_FEE_BPS`.
+ */
+async function ensureStepCoverage(s: System, stepBps: bigint) {
+  const combined: bigint = (await s.module.tin()) + (await s.module.tout());
+  if (combined >= stepBps) return;
+  let tin = (stepBps + 1n) / 2n;
+  if (tin > MAX_FEE_BPS) tin = MAX_FEE_BPS;
+  let tout = stepBps > tin ? stepBps - tin : tin;
+  if (tout > MAX_FEE_BPS) tout = MAX_FEE_BPS;
+  await (await s.module.setFees(tin, tout)).wait();
+}
+
+/** Step `M_oku` to `target` without clearing the window it arms. */
+async function stepToNoClear(s: System, target: bigint) {
+  const current: bigint = await s.okuM.uiMultiplier();
+  if (target <= current) throw new Error("stepToNoClear: not increasing");
+  // `stepBps` rounds UP on-chain, so the coverage we request must too.
+  const stepBps = ((target - current) * BPS + current - 1n) / current;
+  await ensureStepCoverage(s, stepBps);
+  await (await s.okuM.setOkuMultiplier(target)).wait();
+}
+
+/** Step `M_oku` to `target`, then clear the window so pricing ops work again. */
+async function stepTo(s: System, target: bigint) {
+  await stepToNoClear(s, target);
+  await clearSyncWindow(s);
+}
+
+/** Step `M_oku` up by `bps` basis points of its current value. */
+async function stepBy(s: System, bps: bigint) {
+  const current: bigint = await s.okuM.uiMultiplier();
+  await stepTo(s, current + (current * bps) / BPS);
+}
+
+/**
+ * Drive `M_oku` to at least `target` by repeated `MAX_STEP_BPS` steps.
+ *
+ * ~1% per step means 5x needs ~162 iterations. Note that `setOkuMultiplier` is
+ * deliberately NOT itself sync-gated (correcting the multiplier during an
+ * incident must always be possible), so the loop does not have to warp past the
+ * window it arms on every iteration — only once, at the end, before the caller
+ * touches the module or the wrapper. That is the difference between ~160 and
+ * ~500 RPC round trips.
+ *
+ * Asserts rather than giving up quietly, so no test can pass vacuously against
+ * a multiplier that never reached the value under test.
+ */
+async function stepToAtLeast(s: System, target: bigint) {
+  await ensureStepCoverage(s, MAX_STEP_BPS);
+  let m: bigint = await s.okuM.uiMultiplier();
+  let iterations = 0;
+  while (m < target) {
+    if (iterations++ > 3000) throw new Error("stepToAtLeast: target unreachable");
+    let next = m + (m * MAX_STEP_BPS) / BPS;
+    if (next > target) next = target;
+    await (await s.okuM.setOkuMultiplier(next)).wait();
+    m = next;
+  }
+  await clearSyncWindow(s);
+  expect(await s.okuM.uiMultiplier()).to.be.greaterThanOrEqual(target);
+}
+
+// ============================================================================
+// M_usd — the continuous declared index
+// ============================================================================
+
+/** Declare a rate running `duration` seconds from now. Not sync-gated. */
+async function setUsdRate(s: System, rate: bigint, duration: bigint) {
+  await (await s.usdOku.setUsdOkuRate(rate, (await now()) + duration)).wait();
+}
+
+/** Declare a rate and run the clock to its end, so `M_usd` actually moves. */
+async function accrueUsd(s: System, rate: bigint, duration: bigint) {
+  const d = duration > MAX_RATE_DURATION ? MAX_RATE_DURATION : duration;
+  await setUsdRate(s, rate, d);
+  await warp(d);
+}
+
+// ============================================================================
+// Flows
+// ============================================================================
+
+async function seedBuffer(s: System, usdcAmount: bigint) {
+  await (await s.usdc.mint(s.a.admin, usdcAmount)).wait();
+  await (await s.usdc.approve(s.a.module, usdcAmount)).wait();
+  await (await s.module.depositBuffer(usdcAmount)).wait();
+}
+
+/**
+ * Mint raw OkuM directly, bypassing the module. The admin already holds
+ * `OKU_MINTER` from `initialize`; only the per-minter allowance needs topping up.
+ */
+async function mintRaw(s: System, to: string, amount: bigint) {
+  if ((await s.okuM.minterAllowance(s.a.admin)) < amount) {
+    await (
+      await s.okuM.configureMinterAllowance(s.a.admin, ethers.parseEther("1000000000"))
+    ).wait();
+  }
+  await (await s.okuM.mint(to, amount)).wait();
+}
+
+/**
+ * Fund the wrapper's OkuM buffer — the on-chain shape of an issuer top-up.
+ * Donations count as backing deliberately; this is how the solvency gap is
+ * funded, and it needs no privileged call on the wrapper at all.
+ */
+async function fundBacking(s: System, amount: bigint) {
+  await mintRaw(s, s.a.admin, amount);
+  await (await s.okuM.transfer(s.a.wrapper, amount)).wait();
+}
+
+/** Subscribe through the module. Returns raw OkuM received. */
 async function psmMint(s: System, who: Signer, usdcAmount: bigint): Promise<bigint> {
   const addr = await who.getAddress();
   await (await s.usdc.mint(addr, usdcAmount)).wait();
-  await (await as(s.usdc, who).approve(await s.psm.getAddress(), usdcAmount)).wait();
-  const before: bigint = await s.token.balanceOf(addr);
-  await (await as(s.psm, who).mint(usdcAmount)).wait();
-  return (await s.token.balanceOf(addr)) - before;
+  await (await as(s.usdc, who).approve(s.a.module, usdcAmount)).wait();
+  const before: bigint = await s.okuM.balanceOf(addr);
+  await (await as(s.module, who).mint(usdcAmount)).wait();
+  return (await s.okuM.balanceOf(addr)) - before;
 }
 
-async function seedBuffer(s: System, usdcAmount: bigint) {
-  const R = (n: string) => ethers.keccak256(ethers.toUtf8Bytes(n));
-  const adminAddr = await s.admin.getAddress();
-  await (await s.psm.grantRole(R("PSM_BUFFER_DEPOSITOR"), adminAddr)).wait();
-  await (await s.usdc.mint(adminAddr, usdcAmount)).wait();
-  await (await s.usdc.approve(await s.psm.getAddress(), usdcAmount)).wait();
-  await (await s.psm.depositBuffer(usdcAmount)).wait();
+/** Wrap raw OkuM into USDOku. Returns SHARES minted, the invariant quantity. */
+async function wrap(s: System, who: Signer, okuMAmount: bigint): Promise<bigint> {
+  const addr = await who.getAddress();
+  await (await as(s.okuM, who).approve(s.a.wrapper, okuMAmount)).wait();
+  const before: bigint = await s.usdOku.sharesOf(addr);
+  await (await as(s.wrapper, who).wrap(okuMAmount)).wait();
+  return (await s.usdOku.sharesOf(addr)) - before;
 }
 
-describe("rUSDOku — integrator capability detection", () => {
+/**
+ * Unwrap `usdOkuAmount` dollars back into OkuM. Returns raw OkuM received.
+ *
+ * Approves `MaxUint256` on purpose: the allowance is dollar-denominated on a
+ * rebasing token, so an exact approval computed one block earlier can be short
+ * by the time the unwrap lands. That drift is the max-send rule biting, and the
+ * fix in production is the same as here — do not size an approval off a moving
+ * `balanceOf`.
+ */
+async function unwrap(s: System, who: Signer, usdOkuAmount: bigint): Promise<bigint> {
+  const addr = await who.getAddress();
+  await (await as(s.usdOku, who).approve(s.a.wrapper, ethers.MaxUint256)).wait();
+  const before: bigint = await s.okuM.balanceOf(addr);
+  await (await as(s.wrapper, who).unwrap(usdOkuAmount)).wait();
+  return (await s.okuM.balanceOf(addr)) - before;
+}
+
+/** Function names on a contract's ABI. */
+function fnNames(c: Contract): string[] {
+  return c.interface.fragments
+    .filter((f: any) => f.type === "function")
+    .map((f: any) => f.name);
+}
+
+// ============================================================================
+// 1. Integrator capability detection
+// ============================================================================
+
+describe("OkuM / USDOku — integrator capability detection", () => {
   let s: System;
   before(async () => {
     s = await deploySystem();
   });
 
-  it("advertises all four ERC-8056 interfaces over ERC-165", async () => {
+  it("advertises all four ERC-8056 interfaces on OkuM", async () => {
     for (const [name, id] of Object.entries(IID)) {
-      expect(await s.token.supportsInterface(id), name).to.equal(true);
+      expect(await s.okuM.supportsInterface(id), name).to.equal(true);
     }
   });
 
-  it("does NOT advertise a 4626-shaped interface id", async () => {
+  it("does NOT advertise ERC-8056 on USDOku — the double-scaling hazard", async () => {
+    // THE PROBE THE TWO TOKENS MUST ANSWER DIFFERENTLY.
+    //
+    // USDOku's `balanceOf` is ALREADY dollar-denominated: it returns
+    // `sharesOf * usdOkuIndex() / 1e18`. An 8056-aware wallet that detected
+    // support here would fetch `uiMultiplier()` and apply it on top of a value
+    // that has already been scaled — displaying the balance squared, silently,
+    // in the wallet UI. That is strictly worse than advertising nothing at all,
+    // which is why `scripts/deploy/index.ts` treats a `true` here as a hard
+    // abort rather than a warning, and why it is asserted in both places.
+    expect(await s.usdOku.supportsInterface(IID.core)).to.equal(false);
+    for (const [name, id] of Object.entries(IID)) {
+      expect(await s.usdOku.supportsInterface(id), name).to.equal(false);
+    }
+  });
+
+  it("does NOT advertise a 4626-shaped interface id on either token", async () => {
     // We implement the conversion subset only; deposit/mint/withdraw/redeem are
     // absent. Advertising 4626 would make an integrator call a function that
     // does not exist.
@@ -167,328 +472,765 @@ describe("rUSDOku — integrator capability detection", () => {
       )
         .toString(16)
         .padStart(8, "0");
-    expect(await s.token.supportsInterface(pseudo)).to.equal(false);
+    expect(await s.okuM.supportsInterface(pseudo)).to.equal(false);
+    expect(await s.usdOku.supportsInterface(pseudo)).to.equal(false);
   });
 
-  it("has no deposit/redeem on the token — those live on the PSM", async () => {
-    const fns = s.token.interface.fragments
-      .filter((f: any) => f.type === "function")
-      .map((f: any) => f.name);
+  it("has no 4626 entrypoints on OkuM — subscription lives on the module", async () => {
+    const fns = fnNames(s.okuM);
     expect(fns).to.not.include("deposit");
     expect(fns).to.not.include("withdraw");
+    expect(fns).to.not.include("redeem");
+    expect(fns).to.not.include("maxDeposit");
+    // The conversion subset IS present.
     expect(fns).to.include("convertToAssets");
     expect(fns).to.include("convertToShares");
     expect(fns).to.include("totalAssets");
     expect(fns).to.include("asset");
+    // ...and so is the one place subscription/redemption actually happens.
+    expect(fnNames(s.module)).to.include("mint");
+    expect(fnNames(s.module)).to.include("redeem");
   });
 
-  it("reports 'Oku Dollar' / 'rUSDOku' / 18 decimals", async () => {
-    expect(await s.token.name()).to.equal("Oku Dollar");
-    expect(await s.token.symbol()).to.equal("rUSDOku");
-    expect(await s.token.decimals()).to.equal(18n);
+  it("exposes no continuous-accrual surface on OkuM — `M_oku` is stepwise", async () => {
+    // The v0.3 rate-per-second surface is GONE from the share token. An
+    // integrator probing for it must get a clean absence, not a reverting stub.
+    const fns = fnNames(s.okuM);
+    for (const gone of [
+      "setYieldRate",
+      "baseMultiplier",
+      "ratePerSecond",
+      "lastAccrualTime",
+      "rateEnd",
+      "impliedAprBps",
+      "beginSyncWindow",
+      "endSyncWindow",
+      "syncEpoch",
+    ]) {
+      expect(fns, gone).to.not.include(gone);
+    }
+    expect(fns).to.include("setOkuMultiplier");
+    expect(fns).to.include("lastSteppedAt");
+    expect(fns).to.include("stepHighWaterMark");
+    // The continuous surface moved to the token that is actually continuous.
+    const usdFns = fnNames(s.usdOku);
+    for (const present of ["setUsdOkuRate", "ratePerSecond", "rateEnd", "impliedAprBps"]) {
+      expect(usdFns, present).to.include(present);
+    }
+  });
+
+  it("reports the canonical metadata for both tokens", async () => {
+    expect(await s.okuM.name()).to.equal("Oku Money");
+    // No `r`/`s` prefix: an `r` reads as *rebasing*, which is precisely
+    // backwards for the fixed-balance share token.
+    expect(await s.okuM.symbol()).to.equal("OkuM");
+    expect(await s.okuM.decimals()).to.equal(18n);
+
+    expect(await s.usdOku.name()).to.equal("USD Oku");
+    expect(await s.usdOku.symbol()).to.equal("USDOku");
+    expect(await s.usdOku.decimals()).to.equal(18n);
+  });
+
+  it("starts with both indices at parity and the step machinery armed", async () => {
+    expect(await s.okuM.uiMultiplier()).to.equal(PRECISION);
+    // Steps are immediate, so ERC-8056's pending extension is degenerate and
+    // this equality is an ALWAYS invariant, not a genesis coincidence.
+    expect(await s.okuM.newUIMultiplier()).to.equal(await s.okuM.uiMultiplier());
+    expect(await s.okuM.effectiveAt()).to.equal(await s.okuM.lastSteppedAt());
+
+    expect(await s.usdOku.usdOkuIndex()).to.equal(PRECISION);
+    expect(await s.okuM.stepFeeSource()).to.equal(s.a.module);
+    expect(await s.usdOku.solvencySource()).to.equal(s.a.wrapper);
+    expect(await s.okuM.syncWindowDuration()).to.equal(DEFAULT_SYNC_WINDOW);
+    expect(await s.okuM.accrualHalted()).to.equal(false);
   });
 });
 
-describe("rUSDOku — one year of operation", () => {
-  let s: System;
+// ============================================================================
+// 2. Twelve months of operation
+// ============================================================================
 
-  before(async () => {
+describe("OkuM / USDOku — twelve months of operation", () => {
+  let s: System;
+  /** Raw OkuM alice bought at a unit multiplier. */
+  let aliceRaw: bigint;
+  /** Raw OkuM alice wrapped into USDOku on day zero. */
+  let wrappedRaw: bigint;
+  let aliceShares: bigint;
+  /** Solvency gap observed after every monthly cycle. */
+  const gaps: bigint[] = [];
+
+  before(async function () {
+    this.timeout(300_000);
     s = await deploySystem();
-    await seedBuffer(s, 5_000_000n * 10n ** 6n);
+    await seedBuffer(s, 20_000_000n * 10n ** 6n);
   });
 
   it("holds raw balances static while displayed value grows", async () => {
-    const raw = await psmMint(s, s.alice, 100_000n * 10n ** 6n);
-    const aliceAddr = await s.alice.getAddress();
+    aliceRaw = await psmMint(s, s.alice, 100_000n * 10n ** 6n);
+    expect(await s.okuM.balanceOf(s.a.alice)).to.equal(aliceRaw);
+    expect(await s.okuM.balanceOfUI(s.a.alice)).to.equal(aliceRaw, "multiplier == 1");
 
-    expect(await s.token.balanceOf(aliceAddr)).to.equal(raw);
-    expect(await s.token.balanceOfUI(aliceAddr)).to.equal(raw); // multiplier == 1
+    // 40% of the position goes into the dollar leg on day zero, so the same
+    // horizon exercises both indices against the same principal.
+    wrappedRaw = (aliceRaw * 40n) / 100n;
+    aliceShares = await wrap(s, s.alice, wrappedRaw);
+    expect(aliceShares).to.be.greaterThan(0n);
 
-    // Twelve monthly rate renewals — the real operational cadence.
+    // Twelve monthly cycles: mark the realized index, then declare the
+    // forward-looking rate for the month ahead, then let the month elapse.
+    // That is the real operational cadence, in the real order.
     for (let i = 0; i < 12; i++) {
-      await setRate(s, RATE_5_PCT_APY, MAX_RATE_DURATION);
-      await warp(MAX_RATE_DURATION);
+      await stepBy(s, MONTHLY_MARK_BPS);
+      await accrueUsd(s, RATE_5_PCT_APY, MAX_RATE_DURATION);
+      gaps.push(await s.wrapper.solvencyGapBps());
     }
 
-    expect(await s.token.balanceOf(aliceAddr)).to.equal(raw, "raw must never move");
-    const ui: bigint = await s.token.balanceOfUI(aliceAddr);
-    expect(ui).to.be.greaterThan(raw, "displayed value must have grown");
-    // ~5% over ~360 days.
-    expect(ui).to.be.greaterThan((raw * 1047n) / 1000n);
-    expect(ui).to.be.lessThan((raw * 1053n) / 1000n);
+    const remaining = aliceRaw - wrappedRaw;
+    expect(await s.okuM.balanceOf(s.a.alice)).to.equal(remaining, "raw must never move");
+
+    const ui: bigint = await s.okuM.balanceOfUI(s.a.alice);
+    expect(ui).to.be.greaterThan(remaining, "displayed value must have grown");
+    // Twelve 40 bps marks compound to ~4.91%.
+    expect(ui).to.be.greaterThan((remaining * 1047n) / 1000n);
+    expect(ui).to.be.lessThan((remaining * 1053n) / 1000n);
+  });
+
+  it("rebases USDOku balances pro rata over the same period", async () => {
+    const index: bigint = await s.usdOku.usdOkuIndex();
+    expect(index).to.be.greaterThan(PRECISION, "M_usd must have moved");
+
+    // The invariant ledger is shares. The share count is untouched by twelve
+    // months of rebasing; only the dollar view moved.
+    expect(await s.usdOku.sharesOf(s.a.alice)).to.equal(aliceShares, "shares are invariant");
+
+    const bal: bigint = await s.usdOku.balanceOf(s.a.alice);
+    expect(bal).to.equal((aliceShares * index) / PRECISION, "balanceOf is exactly shares * M_usd");
+    // Declared 5% for twelve 30-day segments: ~4.93%.
+    expect(bal).to.be.greaterThan((wrappedRaw * 1047n) / 1000n);
+    expect(bal).to.be.lessThan((wrappedRaw * 1053n) / 1000n);
+
+    // Sole holder, so the liability is exactly this balance up to the per-holder
+    // floor. Never assert equality across multiple holders.
+    expect(bal).to.be.lessThanOrEqual(await s.usdOku.totalSupply());
   });
 
   it("maintains the value/display parity bound throughout", async () => {
-    const cta: bigint = await s.token.convertToAssets(PRECISION);
-    const m: bigint = await s.token.uiMultiplier();
+    // The value layer is USDC-granular (6 dp) and the display layer is 18 dp, so
+    // they are related by a floor rather than an equality.
+    const cta: bigint = await s.okuM.convertToAssets(PRECISION);
+    const m: bigint = await s.okuM.uiMultiplier();
     expect(cta * DM).to.be.lessThanOrEqual(m);
     expect(m).to.be.lessThan((cta + 1n) * DM);
   });
 
-  it("pays the accrued yield on redemption", async () => {
-    const aliceAddr = await s.alice.getAddress();
-    const raw: bigint = await s.token.balanceOf(aliceAddr);
-    const quoted: bigint = await s.psm.quoteRedeem(raw);
+  it("keeps the solvency gap inside MAX_SOLVENCY_GAP_BPS at every mark", async () => {
+    expect(gaps.length).to.equal(12);
+    for (const [i, gap] of gaps.entries()) {
+      expect(gap, `month ${i + 1}`).to.be.lessThanOrEqual(MAX_SOLVENCY_GAP_BPS);
+    }
+    // 40 bps of realized mark against ~40.2 bps of declared accrual leaves the
+    // declared index a hair ahead, month on month. Tiny, positive, and the
+    // reason `MONTHLY_MARK_BPS` is 40 rather than 41: a gap that is exactly zero
+    // makes every wrap/unwrap mispricing invisible.
+    expect(gaps[11]).to.be.greaterThan(0n, "declared should be marginally ahead");
+    expect(gaps[11]).to.be.greaterThan(gaps[0], "and the divergence accumulates");
+  });
 
-    await (await as(s.token, s.alice).approve(await s.psm.getAddress(), raw)).wait();
-    const before: bigint = await s.usdc.balanceOf(aliceAddr);
-    await (await as(s.psm, s.alice).redeem(raw)).wait();
-    const gained = (await s.usdc.balanceOf(aliceAddr)) - before;
+  it("prices a later entrant at the higher multiplier", async () => {
+    const bobRaw = await psmMint(s, s.bob, 100_000n * 10n ** 6n);
+    expect(bobRaw).to.be.lessThan(aliceRaw, "later entry buys fewer raw units for the same dollars");
+
+    // Bob arrives at par, net of `tin` (0 bps in the deploy-shaped schedule).
+    const bobUi: bigint = await s.okuM.balanceOfUI(s.a.bob);
+    expect(bobUi).to.be.greaterThan(99_990n * PRECISION);
+    expect(bobUi).to.be.lessThan(100_001n * PRECISION);
+  });
+
+  it("keeps the sum of displayed balances bounded by totalSupplyUI", async () => {
+    const holders = [s.a.alice, s.a.bob, s.a.wrapper, s.a.module, s.a.queue, s.a.admin];
+    let sum = 0n;
+    for (const h of holders) sum += await s.okuM.balanceOfUI(h);
+    const total: bigint = await s.okuM.totalSupplyUI();
+    // Per-balance flooring: bounded above, gap of at most 1 wei per holder.
+    expect(sum).to.be.lessThanOrEqual(total);
+    expect(sum + BigInt(holders.length)).to.be.greaterThanOrEqual(total);
+  });
+
+  it("pays the accrued yield on redemption", async () => {
+    const raw: bigint = await s.okuM.balanceOf(s.a.alice);
+    const principal = ((100_000n * 10n ** 6n) * 60n) / 100n; // the unwrapped 60%
+    const quoted: bigint = await s.module.quoteRedeem(raw);
+
+    await (await as(s.okuM, s.alice).approve(s.a.module, raw)).wait();
+    const before: bigint = await s.usdc.balanceOf(s.a.alice);
+    await (await as(s.module, s.alice).redeem(raw)).wait();
+    const gained = (await s.usdc.balanceOf(s.a.alice)) - before;
 
     expect(gained).to.equal(quoted, "quote must match realised output");
-    expect(gained).to.be.greaterThan(100_000n * 10n ** 6n, "should exceed principal");
-    expect(await s.token.balanceOf(aliceAddr)).to.equal(0n, "raw max-redeem clears exactly");
-  });
-});
-
-describe("rUSDOku — accrual halts if the operator disappears", () => {
-  let s: System;
-  before(async () => {
-    s = await deploySystem();
-  });
-
-  it("freezes the multiplier at rateEnd rather than accruing forever", async () => {
-    await setRate(s, RATE_5_PCT_APY, MAX_RATE_DURATION);
-    await warp(MAX_RATE_DURATION);
-    const atEnd: bigint = await s.token.uiMultiplier();
-
-    // Ten years of silence.
-    await warp(3650n * 24n * 60n * 60n);
-
-    expect(await s.token.uiMultiplier()).to.equal(
-      atEnd,
-      "an absent rate setter must not keep accruing against assets that are not there"
-    );
-    expect(await s.token.newUIMultiplier()).to.equal(atEnd);
-    expect(await s.token.effectiveAt()).to.be.lessThanOrEqual(
-      BigInt((await ethers.provider.getBlock("latest"))!.timestamp)
-    );
-  });
-});
-
-describe("rUSDOku — queue lifecycle", () => {
-  let s: System;
-  before(async () => {
-    s = await deploySystem();
-  });
-
-  it("queues when the buffer is short, then pays out with accrued yield", async () => {
-    // Mint raw directly so no USDC enters the buffer.
-    const R = (n: string) => ethers.keccak256(ethers.toUtf8Bytes(n));
-    const adminAddr = await s.admin.getAddress();
-    await (await s.token.grantRole(R("OKU_MINTER"), adminAddr)).wait();
-    await (await s.token.configureMinterAllowance(adminAddr, ethers.parseEther("1000000"))).wait();
-
-    const aliceAddr = await s.alice.getAddress();
-    const raw = ethers.parseEther("1000");
-    await (await s.token.mint(aliceAddr, raw)).wait();
-
-    await (await as(s.token, s.alice).approve(await s.psm.getAddress(), raw)).wait();
-    await (await as(s.psm, s.alice).redeem(raw)).wait();
-
-    expect(await s.queue.totalQueuedRaw()).to.equal(raw, "escrowed");
-    expect(await s.token.balanceOf(await s.queue.getAddress())).to.equal(raw);
-
-    const owedBefore: bigint = await s.queue.totalQueuedUsdc();
-
-    // A queued holder keeps earning: the escrowed raw amount appreciates.
-    await setRate(s, RATE_AT_APR_CAP, MAX_RATE_DURATION);
-    await warp(MAX_RATE_DURATION);
-    const owedAfter: bigint = await s.queue.totalQueuedUsdc();
-    expect(owedAfter).to.be.greaterThan(owedBefore, "queued value must accrue");
-
-    await seedBuffer(s, 10_000n * 10n ** 6n);
-    await (await s.psm.grantRole(R("PSM_QUEUE_PROCESSOR"), adminAddr)).wait();
-    await (await s.psm.processQueue(0, 1, owedAfter)).wait();
-
-    expect(await s.queue.totalQueuedRaw()).to.equal(0n);
-    expect(await s.usdc.balanceOf(aliceAddr)).to.equal(owedAfter);
-    expect(await s.token.totalSupply()).to.equal(0n, "burned on processing");
-  });
-
-  it("keeps the escrow-backed bound after a free donation", async () => {
-    // Anyone can transfer tokens to the queue. The backing invariant is a bound,
-    // never an equality, precisely so this cannot break it.
-    const R = (n: string) => ethers.keccak256(ethers.toUtf8Bytes(n));
-    const adminAddr = await s.admin.getAddress();
-    const bobAddr = await s.bob.getAddress();
-    await (await s.token.mint(bobAddr, ethers.parseEther("5"))).wait();
-    await (
-      await as(s.token, s.bob).transfer(await s.queue.getAddress(), ethers.parseEther("5"))
-    ).wait();
-
-    expect(await s.queue.totalQueuedRaw()).to.be.lessThanOrEqual(
-      await s.token.balanceOf(await s.queue.getAddress())
-    );
-
-    // And the donation is recoverable rather than stranded.
-    await (await s.queue.grantRole(R("QUEUE_RESCUER"), adminAddr)).wait();
-    await (await s.queue.sweepExcess(adminAddr)).wait();
-    expect(await s.token.balanceOf(adminAddr)).to.equal(ethers.parseEther("5"));
-  });
-});
-
-describe("rUSDOku — UUPS upgrade path", () => {
-  let s: System;
-  before(async () => {
-    s = await deploySystem();
-  });
-
-  it("passes the OZ storage-layout validator and preserves state", async () => {
-    await seedBuffer(s, 1_000_000n * 10n ** 6n);
-    const raw = await psmMint(s, s.alice, 50_000n * 10n ** 6n);
-    await setRate(s, RATE_5_PCT_APY, MAX_RATE_DURATION);
-    await warp(15n * 24n * 60n * 60n);
-
-    const aliceAddr = await s.alice.getAddress();
-    const before = {
-      base: await s.token.baseMultiplier(),
-      rate: await s.token.ratePerSecond(),
-      rateEnd: await s.token.rateEnd(),
-      pending: await s.token.newUIMultiplier(),
-      asset: await s.token.asset(),
-      dm: await s.token.usdcDecimalMultiplier(),
-      supply: await s.token.totalSupply(),
-      bal: await s.token.balanceOf(aliceAddr),
-      maxSupply: await s.token.maxSupply(),
-    };
-
-    const OkuDollar = await ethers.getContractFactory("OkuDollar");
-    // This is the assertion that matters: `upgradeProxy` runs OZ's layout
-    // validator and throws on any incompatible storage change.
-    const upgraded = (await upgrades.upgradeProxy(
-      await s.token.getAddress(),
-      OkuDollar
-    )) as unknown as Contract;
-
-    expect(await upgraded.baseMultiplier()).to.equal(before.base);
-    expect(await upgraded.ratePerSecond()).to.equal(before.rate);
-    expect(await upgraded.rateEnd()).to.equal(before.rateEnd);
-    expect(await upgraded.newUIMultiplier()).to.equal(
-      before.pending,
-      "newUIMultiplier has no timestamp term, so it must be bit-identical"
-    );
-    expect(await upgraded.asset()).to.equal(before.asset);
-    expect(await upgraded.usdcDecimalMultiplier()).to.equal(before.dm);
-    expect(await upgraded.totalSupply()).to.equal(before.supply);
-    expect(await upgraded.balanceOf(aliceAddr)).to.equal(before.bal);
-    expect(await upgraded.maxSupply()).to.equal(before.maxSupply);
-    expect(await upgraded.supportsInterface(IID.core)).to.equal(
-      true,
-      "an upgrade must not silently drop ERC-8056 advertisement"
-    );
-    expect(raw).to.be.greaterThan(0n);
-  });
-
-  it("upgrades the PSM and queue without disturbing their USDC binding", async () => {
-    const LitePSM = await ethers.getContractFactory("LitePSM");
-    const RedemptionQueue = await ethers.getContractFactory("RedemptionQueue");
-
-    const psmDm = await s.psm.usdcDecimalMultiplier();
-    const queueDm = await s.queue.usdcDecimalMultiplier();
-
-    const psm2 = (await upgrades.upgradeProxy(
-      await s.psm.getAddress(),
-      LitePSM
-    )) as unknown as Contract;
-    const queue2 = (await upgrades.upgradeProxy(
-      await s.queue.getAddress(),
-      RedemptionQueue
-    )) as unknown as Contract;
-
-    expect(await psm2.usdcDecimalMultiplier()).to.equal(psmDm);
-    expect(await queue2.usdcDecimalMultiplier()).to.equal(queueDm);
-    expect(await psm2.okuDollar()).to.equal(await s.token.getAddress());
-    expect(await queue2.okuDollar()).to.equal(await s.token.getAddress());
+    expect(gained).to.be.greaterThan(principal, "a year of marks, net of tout");
+    expect(await s.okuM.balanceOf(s.a.alice)).to.equal(0n, "raw max-redeem clears exactly");
   });
 });
 
 // ============================================================================
-// High-multiplier regime
+// 3. The solvency cycle — declared ahead, then behind
+// ============================================================================
+
+describe("USDOku — the full rate cycle: declared ahead, then behind", () => {
+  let s: System;
+  let wrappedRaw: bigint;
+
+  before(async function () {
+    this.timeout(300_000);
+    s = await deploySystem();
+    await seedBuffer(s, 5_000_000n * 10n ** 6n);
+    wrappedRaw = await psmMint(s, s.alice, 1_000_000n * 10n ** 6n);
+    await wrap(s, s.alice, wrappedRaw);
+  });
+
+  it("starts gap-neutral: a fresh wrap creates liability and backing together", async () => {
+    expect(await s.wrapper.declaredLiability()).to.equal(await s.wrapper.realizedBacking());
+    expect(await s.wrapper.solvencyGapBps()).to.equal(0n);
+    expect(await s.wrapper.backingRatioBps()).to.equal(BPS);
+  });
+
+  it("opens a gap when M_usd runs while M_oku stands still", async () => {
+    await accrueUsd(s, RATE_AT_APR_CAP, MAX_RATE_DURATION);
+
+    const gap: bigint = await s.wrapper.solvencyGapBps();
+    // A full maximum-length segment at the APR cap is ~82 bps of divergence.
+    expect(gap).to.be.greaterThan(70n, "declared has run ahead of realized");
+    expect(gap).to.be.lessThanOrEqual(MAX_SOLVENCY_GAP_BPS, "but inside the bound");
+    expect(await s.wrapper.backingRatioBps()).to.be.lessThan(BPS, "under-backed");
+    expect(await s.wrapper.declaredLiability()).to.be.greaterThan(
+      await s.wrapper.realizedBacking()
+    );
+  });
+
+  it("refuses the next full-length segment — the bound is CUMULATIVE", async () => {
+    // This is the assertion that pins the constants' interaction. Worst-case
+    // accrual in ONE maximum-length segment is ~82 bps, below the 100 bps
+    // bound, so a single write from a zero gap can never be refused. The bound
+    // only bites once consecutive segments have out-run the realized marks —
+    // which is exactly the state the previous test left behind.
+    await expect(
+      s.usdOku.setUsdOkuRate(RATE_AT_APR_CAP, (await now()) + MAX_RATE_DURATION)
+    ).to.be.revertedWithCustomError(s.usdOku, "SolvencyGapExceeded");
+  });
+
+  it("can always SLOW DOWN, even sitting at the bound", async () => {
+    // Both indices are monotone, so cutting the declared rate is the only
+    // on-chain remedy for over-declaration. It must never be blocked by the
+    // very condition it fixes: a zero-yield rate makes the projection equal the
+    // spot liability, which the check cannot refuse.
+    await (await s.usdOku.setUsdOkuRate(PRECISION, (await now()) + MAX_RATE_DURATION)).wait();
+    expect(await s.usdOku.ratePerSecond()).to.equal(PRECISION);
+    expect(await s.usdOku.impliedAprBps()).to.equal(0n);
+  });
+
+  it("fences the module and the wrapper while a mark propagates", async () => {
+    await stepToNoClear(s, ((await s.okuM.uiMultiplier()) * 10_050n) / 10_000n);
+    expect(await s.okuM.isSyncLocked()).to.equal(true);
+
+    // Everything that prices through the multiplier is blocked...
+    await expect(
+      as(s.module, s.alice).mint(1_000n * 10n ** 6n)
+    ).to.be.revertedWithCustomError(s.module, "SyncWindowActive");
+    await expect(as(s.wrapper, s.alice).wrap(PRECISION)).to.be.revertedWithCustomError(
+      s.wrapper,
+      "SyncWindowActive"
+    );
+    await expect(as(s.wrapper, s.alice).unwrap(PRECISION)).to.be.revertedWithCustomError(
+      s.wrapper,
+      "SyncWindowActive"
+    );
+    // ...but the declared rate is NOT gated: the solvency projection reads
+    // `M_oku`-derived backing, and `M_oku` is monotone, so an in-flight step can
+    // only make the check more conservative.
+    await (await s.usdOku.setUsdOkuRate(PRECISION, (await now()) + MAX_RATE_DURATION)).wait();
+
+    await clearSyncWindow(s);
+    expect(await s.okuM.isSyncLocked()).to.equal(false);
+  });
+
+  it("closes the gap and crosses back over 10000 bps as realized catches up", async () => {
+    const gapBefore: bigint = await s.wrapper.solvencyGapBps();
+    expect(gapBefore).to.be.greaterThan(0n);
+    expect(await s.wrapper.backingRatioBps()).to.be.lessThan(BPS);
+
+    // A second 50 bps mark. Together with the one armed in the previous test
+    // that is ~100 bps of realized catch-up against ~82 bps of declared
+    // accrual, so backing overtakes liability.
+    await stepBy(s, 50n);
+
+    const gapAfter: bigint = await s.wrapper.solvencyGapBps();
+    expect(gapAfter).to.be.lessThan(gapBefore, "realized catching up closes it");
+    expect(gapAfter).to.be.lessThan(0n, "and overtakes — the gap is signed");
+    expect(await s.wrapper.backingRatioBps()).to.be.greaterThan(BPS, "crossed back over par");
+    expect(await s.wrapper.realizedBacking()).to.be.greaterThan(
+      await s.wrapper.declaredLiability()
+    );
+  });
+
+  it("restores rate headroom once realized backing has caught up", async () => {
+    // The two levers — realized marks and declared yield — are linked on-chain,
+    // not merely by policy. The write refused two tests ago now succeeds.
+    await (
+      await s.usdOku.setUsdOkuRate(RATE_AT_APR_CAP, (await now()) + MAX_RATE_DURATION)
+    ).wait();
+    expect(await s.usdOku.ratePerSecond()).to.equal(RATE_AT_APR_CAP);
+  });
+
+  it("funds the gap by donation, with no privileged call on the wrapper", async () => {
+    const before: bigint = await s.wrapper.realizedBacking();
+    await fundBacking(s, 10_000n * PRECISION);
+    expect(await s.wrapper.realizedBacking()).to.be.greaterThan(before);
+    expect(await s.wrapper.solvencyGapBps()).to.be.lessThan(0n, "over-backed");
+  });
+});
+
+// ============================================================================
+// 4. The high-multiplier regime
 // ============================================================================
 //
-// The plan called for exercising every path "at both a low and a high
-// multiplier". A high-multiplier run is the only way to catch an integration
-// that silently assumes `multiplier ~= 1e18` — at 1e18 the raw and displayed
-// numbers are identical, so every off-by-a-multiplier bug is invisible.
+// A high-multiplier run is the only way to catch an integration that silently
+// assumes `M_oku ~= 1e18` — at 1e18 the raw and displayed numbers are identical,
+// so every off-by-a-multiplier bug is invisible.
+//
+// The same argument applies, newly, to the SOLVENCY GAP. At gap zero the
+// wrapper's liability and backing are equal, `M_usd == M_oku`, and a conversion
+// mispriced at `M_usd` instead of `M_oku` produces the identical number. So the
+// conversion-pricing assertions below run at >= 5x AND against a nonzero gap.
 
-/** Drive the multiplier up by repeated capped segments. Asserts it got there. */
-async function accrueToAtLeast(s: System, target: bigint) {
-  let i = 0;
-  while ((await s.token.uiMultiplier()) < target) {
-    if (i++ > 2000) throw new Error("accrueToAtLeast: unreachable by legitimate accrual");
-    await setRate(s, RATE_AT_APR_CAP, MAX_RATE_DURATION);
-    await warp(MAX_RATE_DURATION);
-  }
-}
-
-describe("rUSDOku — high-multiplier regime", () => {
+describe("OkuM / USDOku — high-multiplier regime (>= 5x, nonzero gap)", () => {
   let s: System;
   let multiplier: bigint;
 
   before(async function () {
-    this.timeout(180_000);
+    this.timeout(600_000);
     s = await deploySystem();
-    await accrueToAtLeast(s, 5n * PRECISION);
-    multiplier = await s.token.uiMultiplier();
+    // 100 bps of combined coverage is what `MAX_STEP_BPS` steps require.
+    await (await s.module.setFees(50, 50)).wait();
+    await stepToAtLeast(s, 5n * PRECISION);
+    multiplier = await s.okuM.uiMultiplier();
     await seedBuffer(s, 5_000_000n * 10n ** 6n);
   });
 
-  it("reached a materially non-unit multiplier", async () => {
+  it("reached a materially non-unit multiplier by legitimate steps only", async () => {
     expect(multiplier).to.be.greaterThanOrEqual(5n * PRECISION);
+    // Every one of those ~162 steps was covered, so the high-water mark pins the
+    // fee floor at the largest of them.
+    expect(await s.okuM.stepHighWaterMark()).to.equal(MAX_STEP_BPS);
+    expect(await s.okuM.newUIMultiplier()).to.equal(multiplier);
+    expect(await s.okuM.effectiveAt()).to.equal(await s.okuM.lastSteppedAt());
+  });
+
+  it("floors the fee schedule at the largest step ever taken", async () => {
+    // Step coverage is a RATCHET. Dropping fees below a step already taken
+    // would silently evaporate the coverage that step relied on.
+    await expect(s.module.setFees(0, 50)).to.be.revertedWithCustomError(
+      s.module,
+      "FeesBelowStepFloor"
+    );
+    // Only the cold-gated escape hatch clears it — and it is alarmed on.
+    await expect(s.okuM.resetStepHighWaterMark()).to.emit(s.okuM, "StepHighWaterMarkReset");
+    await (await s.module.setFees(50, 50)).wait(); // put coverage back
   });
 
   it("mints far fewer raw units than dollars deposited", async () => {
     const raw = await psmMint(s, s.alice, 10_000n * 10n ** 6n);
     // 10,000 USDC at >=5x buys <=2,000 raw.
     expect(raw).to.be.lessThanOrEqual(2000n * PRECISION);
-    // But displays as ~$10,000.
-    const ui: bigint = await s.token.balanceOfUI(await s.alice.getAddress());
-    expect(ui).to.be.greaterThan(9_999n * PRECISION);
-    expect(ui).to.be.lessThan(10_001n * PRECISION);
+    // But displays as ~$9,950 — the deposit net of a 50 bps `tin`.
+    const ui: bigint = await s.okuM.balanceOfUI(s.a.alice);
+    expect(ui).to.be.greaterThan(9_949n * PRECISION);
+    expect(ui).to.be.lessThan(9_951n * PRECISION);
   });
 
-  it("holds the value/display parity bound", async () => {
-    const cta: bigint = await s.token.convertToAssets(PRECISION);
-    const m: bigint = await s.token.uiMultiplier();
+  it("holds the value/display parity bound at high multiplier", async () => {
+    const cta: bigint = await s.okuM.convertToAssets(PRECISION);
+    const m: bigint = await s.okuM.uiMultiplier();
     expect(cta * DM).to.be.lessThanOrEqual(m);
     expect(m).to.be.lessThan((cta + 1n) * DM);
   });
 
-  it("round-trips through the PSM without losing more than a USDC unit", async () => {
+  it("round-trips through the module for exactly the quoted amount", async () => {
     const bobRaw = await psmMint(s, s.bob, 25_000n * 10n ** 6n);
-    const bobAddr = await s.bob.getAddress();
-    const before: bigint = await s.usdc.balanceOf(bobAddr);
+    const quoted: bigint = await s.module.quoteRedeem(bobRaw);
+    const before: bigint = await s.usdc.balanceOf(s.a.bob);
 
-    await (await as(s.token, s.bob).approve(await s.psm.getAddress(), bobRaw)).wait();
-    await (await as(s.psm, s.bob).redeem(bobRaw)).wait();
+    await (await as(s.okuM, s.bob).approve(s.a.module, bobRaw)).wait();
+    await (await as(s.module, s.bob).redeem(bobRaw)).wait();
+    const gained = (await s.usdc.balanceOf(s.a.bob)) - before;
 
-    const gained = (await s.usdc.balanceOf(bobAddr)) - before;
-    expect(gained).to.be.lessThanOrEqual(25_000n * 10n ** 6n);
-    expect(gained + 1n).to.be.greaterThanOrEqual(25_000n * 10n ** 6n);
+    expect(gained).to.equal(quoted);
+    // 50 bps in and 50 bps out of 25,000 USDC, and nothing else.
+    expect(gained).to.be.lessThan(25_000n * 10n ** 6n);
+    expect(gained).to.be.greaterThan(24_740n * 10n ** 6n);
   });
 
   it("keeps the max-send rule honest at high multiplier", async () => {
-    const aliceAddr = await s.alice.getAddress();
-    const raw: bigint = await s.token.balanceOf(aliceAddr);
-    const viaUi: bigint = await s.token.fromUIAmount(await s.token.balanceOfUI(aliceAddr));
-    // At a 5x multiplier the UI round trip loses more absolute wei than at 1x,
-    // but it must still never exceed the balance.
+    const raw: bigint = await s.okuM.balanceOf(s.a.alice);
+    const viaUi: bigint = await s.okuM.fromUIAmount(await s.okuM.balanceOfUI(s.a.alice));
+    // At >=5x the UI round trip loses more absolute wei than at 1x, but it must
+    // still never exceed the balance. This is the shape of the May-2026
+    // `InsufficientBalance()` incident.
     expect(viaUi).to.be.lessThanOrEqual(raw);
   });
 
   it("still refuses sub-USDC-granularity redemptions", async () => {
-    await expect(as(s.psm, s.alice).redeem(DM - 1n)).to.be.reverted;
+    await expect(as(s.module, s.alice).redeem(DM - 1n)).to.be.revertedWithCustomError(
+      s.module,
+      "AmountTooSmall"
+    );
+  });
+
+  it("prices wrap and unwrap at M_oku, never at M_usd, across a nonzero gap", async () => {
+    const raw: bigint = await s.okuM.balanceOf(s.a.alice);
+    const m: bigint = await s.okuM.uiMultiplier();
+
+    // Quotes are pure `M_oku`.
+    expect(await s.wrapper.quoteWrap(raw)).to.equal((raw * m) / PRECISION);
+    const shares = await wrap(s, s.alice, raw);
+    expect(shares).to.be.greaterThan(0n);
+    expect(await s.wrapper.solvencyGapBps()).to.equal(0n, "a wrap is gap-neutral");
+
+    // Open a real gap: `M_usd` runs, `M_oku` stands still.
+    await accrueUsd(s, RATE_AT_APR_CAP, MAX_RATE_DURATION);
+    const gap: bigint = await s.wrapper.solvencyGapBps();
+    expect(gap).to.be.greaterThan(0n, "the gap must be NONZERO for this to prove anything");
+    expect(gap).to.be.lessThanOrEqual(MAX_SOLVENCY_GAP_BPS);
+
+    // The index has diverged, so `M_oku` and `M_usd` now give different answers.
+    const index: bigint = await s.usdOku.usdOkuIndex();
+    expect(index).to.not.equal(m);
+
+    const dollars: bigint = await s.usdOku.balanceOf(s.a.alice);
+    const atMoku: bigint = await s.wrapper.quoteUnwrap(dollars);
+    expect(atMoku).to.equal((dollars * PRECISION) / m, "unwrap quotes at M_oku");
+    expect(atMoku).to.not.equal((dollars * PRECISION) / index, "and NOT at M_usd");
+
+    // Unwrapping the grown balance needs more OkuM than was wrapped, and the
+    // wrapper only holds what was wrapped — so it refuses until the buffer is
+    // funded. That refusal is the gap being realized faster than it is funded,
+    // and it is the ONLY thing unwrap ever fails on: it is never gated on
+    // solvency, because refusing to let people out of an under-funded wrapper is
+    // how a slow problem becomes a panic.
+    await (await as(s.usdOku, s.alice).approve(s.a.wrapper, ethers.MaxUint256)).wait();
+    await expect(
+      as(s.wrapper, s.alice).unwrap(dollars)
+    ).to.be.revertedWithCustomError(s.wrapper, "InsufficientBacking");
+
+    // Issuer capital standing behind the smoothing.
+    await fundBacking(s, 1_000n * PRECISION);
+    const got = await unwrap(s, s.alice, await s.usdOku.balanceOf(s.a.alice));
+    expect(got).to.be.greaterThan(raw, "the smoothing gap is realized on exit");
+    // And the excess is exactly the index ratio, not some larger drain: the
+    // extraction is bounded by MAX_SOLVENCY_GAP_BPS at the rate write.
+    expect(got).to.be.lessThan((raw * (BPS + MAX_SOLVENCY_GAP_BPS)) / BPS);
+  });
+
+  it("round-trips wrap/unwrap within a couple of wei at >=5x", async () => {
+    await (await s.usdOku.haltUsdOkuAccrual()).wait(); // freeze M_usd so the trip is clean
+    const raw: bigint = await s.okuM.balanceOf(s.a.alice);
+    expect(raw).to.be.greaterThan(0n);
+
+    await wrap(s, s.alice, raw);
+    const back = await unwrap(s, s.alice, await s.usdOku.balanceOf(s.a.alice));
+
+    expect(back).to.be.lessThanOrEqual(raw, "rounding always favours the protocol");
+    expect(back + 2n).to.be.greaterThanOrEqual(raw, "and loses at most ~2 wei");
   });
 });
 
 // ============================================================================
-// Incident protocol: pause, blacklist, and the role split
+// 5. Operator absence
 // ============================================================================
 
-describe("rUSDOku — incident protocol", () => {
+describe("Operator absence — sticky halt on OkuM, flat index on USDOku", () => {
   let s: System;
-  const R = (n: string) => ethers.keccak256(ethers.toUtf8Bytes(n));
+
+  beforeEach(async () => {
+    s = await deploySystem();
+  });
+
+  it("haltAccrual is STICKY: it blocks every later step, not just the current one", async () => {
+    await stepBy(s, 10n);
+    const frozen: bigint = await s.okuM.uiMultiplier();
+
+    await (await s.okuM.haltAccrual()).wait();
+    expect(await s.okuM.accrualHalted()).to.equal(true);
+
+    // Not a one-shot: time passing does not lift it, and neither does anything
+    // the (possibly compromised) rate setter can do on its own.
+    await expect(s.okuM.setOkuMultiplier(frozen + 1n)).to.be.revertedWithCustomError(
+      s.okuM,
+      "AccrualIsHalted"
+    );
+    await warp(30n * DAY);
+    await expect(s.okuM.setOkuMultiplier(frozen + 1n)).to.be.revertedWithCustomError(
+      s.okuM,
+      "AccrualIsHalted"
+    );
+
+    // Monotone-safe: growth stops, nothing already accrued is lost.
+    expect(await s.okuM.uiMultiplier()).to.equal(frozen);
+    expect(await s.okuM.newUIMultiplier()).to.equal(frozen);
+
+    // A halt is deliberately NOT a sync window: nothing about the multiplier
+    // changed, so there is nothing to fence — and arming one would hand the warm
+    // guardian key a repeatable mint/redeem block the RBAC model denies it.
+    expect(await s.okuM.isSyncLocked()).to.equal(false);
+  });
+
+  it("resumeAccrual (cold) lifts the halt and stepping works again", async () => {
+    await stepBy(s, 10n);
+    await (await s.okuM.haltAccrual()).wait();
+    await (await s.okuM.resumeAccrual()).wait();
+    expect(await s.okuM.accrualHalted()).to.equal(false);
+    await stepBy(s, 10n);
+    expect(await s.okuM.uiMultiplier()).to.be.greaterThan(PRECISION);
+  });
+
+  it("a guardian can halt but cannot set — that is the separation of duties", async () => {
+    const [, , , guardian] = await ethers.getSigners();
+    await (await s.okuM.grantRole(R("OKU_GUARDIAN"), await guardian.getAddress())).wait();
+    await (await s.usdOku.grantRole(R("OKU_GUARDIAN"), await guardian.getAddress())).wait();
+
+    await (await as(s.okuM, guardian).haltAccrual()).wait();
+    await (await as(s.usdOku, guardian).haltUsdOkuAccrual()).wait();
+
+    // A warm guardian key must not be able to move either index upward.
+    await expect(as(s.okuM, guardian).setOkuMultiplier(2n * PRECISION)).to.be.reverted;
+    await expect(
+      as(s.usdOku, guardian).setUsdOkuRate(RATE_5_PCT_APY, (await now()) + 1000n)
+    ).to.be.reverted;
+    // Nor lift its own halt: `resumeAccrual` is OKU_CAP_MANAGER, i.e. cold.
+    await expect(as(s.okuM, guardian).resumeAccrual()).to.be.reverted;
+  });
+
+  it("freezes M_usd flat at rateEnd rather than accruing forever", async () => {
+    await accrueUsd(s, RATE_5_PCT_APY, MAX_RATE_DURATION);
+    const atEnd: bigint = await s.usdOku.usdOkuIndex();
+    expect(atEnd).to.be.greaterThan(PRECISION);
+
+    // Ten years of silence from an absent rate setter.
+    await warp(3650n * DAY);
+
+    expect(await s.usdOku.usdOkuIndex()).to.equal(
+      atEnd,
+      "an absent rate setter must not keep accruing against assets that are not there"
+    );
+    // And the APR cap binds the catch-up too, so a long outage cannot be fully
+    // compensated afterwards. That is the protection working, not a bug.
+    expect(await s.usdOku.rateEnd()).to.be.lessThan(await now());
+  });
+
+  it("leaves M_oku flat and truthful when no mark arrives", async () => {
+    await stepBy(s, 25n);
+    const marked: bigint = await s.okuM.uiMultiplier();
+    const at: bigint = await s.okuM.lastSteppedAt();
+    await warp(3650n * DAY);
+    expect(await s.okuM.uiMultiplier()).to.equal(marked, "stepwise: no mark, no movement");
+    expect(await s.okuM.lastSteppedAt()).to.equal(at, "and the staleness anchor does not drift");
+  });
+});
+
+// ============================================================================
+// 6. Queue lifecycle
+// ============================================================================
+
+describe("RedemptionQueue — lifecycle", () => {
+  let s: System;
+
+  before(async () => {
+    s = await deploySystem();
+  });
+
+  it("queues when the buffer is short, then pays out with the accrued mark", async () => {
+    // Mint raw directly so no USDC ever enters the buffer.
+    const raw = ethers.parseEther("1000");
+    await mintRaw(s, s.a.alice, raw);
+
+    await (await as(s.okuM, s.alice).approve(s.a.module, raw)).wait();
+    await (await as(s.module, s.alice).redeem(raw)).wait();
+
+    expect(await s.queue.totalQueuedRaw()).to.equal(raw, "escrowed, not burned");
+    expect(await s.okuM.balanceOf(s.a.queue)).to.equal(raw);
+    expect(await s.queue.queueLength()).to.equal(1n);
+    // The prevailing `tout` is snapshotted, so a later fee change cannot
+    // retroactively tax someone already waiting.
+    expect((await s.queue.getQueueEntry(0)).toutBps).to.equal(50n);
+
+    const owedBefore: bigint = await s.queue.totalQueuedUsdc();
+
+    // A queued holder keeps earning: the escrowed RAW amount appreciates with
+    // the multiplier, so waiting is not punished.
+    await stepBy(s, 50n);
+    const owedAfter: bigint = await s.queue.totalQueuedUsdc();
+    expect(owedAfter).to.be.greaterThan(owedBefore, "queued value must accrue");
+
+    // `totalQueuedUsdc` is deliberately fee-FREE — an upper bound used to size
+    // the approval. The exact settlement is the per-entry view.
+    const settlement: bigint = await s.queue.getQueueEntryValue(0);
+    expect(settlement).to.be.lessThan(owedAfter);
+
+    await seedBuffer(s, 10_000n * 10n ** 6n);
+    await (await s.module.processQueue(0, 1, owedAfter)).wait();
+
+    expect(await s.queue.totalQueuedRaw()).to.equal(0n);
+    expect(await s.usdc.balanceOf(s.a.alice)).to.equal(settlement);
+    expect(await s.okuM.totalSupply()).to.equal(0n, "burned on processing");
+  });
+
+  it("advances the head only past cleared slots, permissionlessly", async () => {
+    expect(await s.queue.queueHead()).to.equal(0n);
+    await (await as(s.queue, s.bob).advanceHead(10)).wait();
+    expect(await s.queue.queueHead()).to.equal(1n);
+    expect(await s.queue.queueLength()).to.equal(0n);
+  });
+
+  it("keeps the escrow-backed bound after a free donation, and recovers it", async () => {
+    // Anyone can transfer tokens to the queue. The backing invariant is a bound,
+    // never an equality, precisely so this cannot break it.
+    await mintRaw(s, s.a.bob, ethers.parseEther("5"));
+    await (await as(s.okuM, s.bob).transfer(s.a.queue, ethers.parseEther("5"))).wait();
+
+    expect(await s.queue.totalQueuedRaw()).to.be.lessThanOrEqual(
+      await s.okuM.balanceOf(s.a.queue)
+    );
+
+    // And the donation is recoverable rather than stranded.
+    const before: bigint = await s.okuM.balanceOf(s.a.admin);
+    await (await s.queue.sweepExcess(s.a.admin)).wait();
+    expect((await s.okuM.balanceOf(s.a.admin)) - before).to.equal(ethers.parseEther("5"));
+    // `sweepExcess` is capped at `balanceOf - totalQueuedRaw`, so with nothing
+    // donated there is nothing it could reach.
+    await expect(s.queue.sweepExcess(s.a.admin)).to.be.revertedWithCustomError(
+      s.queue,
+      "NoExcessToSweep"
+    );
+  });
+
+  it("is blocked by the sync window but NOT by the module pause", async () => {
+    // Pause is unbounded and incident-driven, so gating queue processing on it
+    // could strand users indefinitely. The sync window is bounded by
+    // MAX_SYNC_WINDOW, so the worst case is a short delay — and leaving it open
+    // would be a real hole, because the queue prices at the live multiplier.
+    const raw = ethers.parseEther("10");
+    await mintRaw(s, s.a.alice, raw);
+    await (await as(s.okuM, s.alice).approve(s.a.module, raw)).wait();
+    await (await s.module.withdrawUsdc(s.a.admin, await s.usdc.balanceOf(s.a.module))).wait();
+    await (await as(s.module, s.alice).redeem(raw)).wait();
+
+    await stepToNoClear(s, ((await s.okuM.uiMultiplier()) * 10_050n) / 10_000n);
+    await expect(s.module.processQueue(1, 2, 0)).to.be.revertedWithCustomError(
+      s.module,
+      "SyncWindowActive"
+    );
+    await clearSyncWindow(s);
+
+    await (await s.module.pause()).wait();
+    await seedBuffer(s, 1_000n * 10n ** 6n);
+    // Paused, and processing still works.
+    await (await s.module.processQueue(1, 2, await s.queue.totalQueuedUsdc())).wait();
+    expect(await s.queue.totalQueuedRaw()).to.equal(0n);
+  });
+});
+
+// ============================================================================
+// 7. The sunset sequence
+// ============================================================================
+
+describe("USDOku sunset — wrap closes, unwrap never does", () => {
+  let s: System;
+  let raw: bigint;
+
+  before(async () => {
+    s = await deploySystem();
+    await seedBuffer(s, 1_000_000n * 10n ** 6n);
+    raw = await psmMint(s, s.alice, 100_000n * 10n ** 6n);
+    await wrap(s, s.alice, raw / 2n);
+  });
+
+  it("step 1: setWrapEnabled(false) closes the entrance", async () => {
+    expect(await s.wrapper.wrapEnabled()).to.equal(true);
+    await expect(s.wrapper.setWrapEnabled(false)).to.emit(s.wrapper, "WrapEnabledSet");
+    expect(await s.wrapper.wrapEnabled()).to.equal(false);
+
+    await (await as(s.okuM, s.alice).approve(s.a.wrapper, raw / 2n)).wait();
+    await expect(as(s.wrapper, s.alice).wrap(raw / 2n)).to.be.revertedWithCustomError(
+      s.wrapper,
+      "WrapDisabled"
+    );
+  });
+
+  it("leaves the exit wide open, indefinitely", async () => {
+    const dollars: bigint = await s.usdOku.balanceOf(s.a.alice);
+    expect(dollars).to.be.greaterThan(0n);
+    const got = await unwrap(s, s.alice, dollars);
+    expect(got).to.be.greaterThan(0n);
+
+    // Still open a decade later — and wrap is still shut. No timer, no
+    // deadline, no "final redemption window".
+    await warp(3650n * DAY);
+    const rest: bigint = await s.okuM.balanceOf(s.a.alice);
+    await (await as(s.okuM, s.alice).approve(s.a.wrapper, rest)).wait();
+    await expect(as(s.wrapper, s.alice).wrap(rest)).to.be.revertedWithCustomError(
+      s.wrapper,
+      "WrapDisabled"
+    );
+    // A residual position from before the sunset still exits cleanly.
+    const residual: bigint = await s.usdOku.balanceOf(s.a.alice);
+    if (residual > 0n) {
+      expect(await unwrap(s, s.alice, residual)).to.be.greaterThan(0n);
+    }
+  });
+
+  it("has NO code path that disables unwrap — asserted over the ABI", async () => {
+    // Winding down by making redemption fail for whoever is last in line is a
+    // bank run with a published starting gun, not a sunset. The absence of the
+    // lever is a design commitment, so it is asserted as one rather than left to
+    // a code reading.
+    const fns = fnNames(s.wrapper);
+    expect(fns).to.include("setWrapEnabled");
+    expect(fns).to.include("wrapEnabled");
+    expect(fns).to.not.include("setUnwrapEnabled");
+    expect(fns).to.not.include("unwrapEnabled");
+    expect(fns).to.not.include("disableUnwrap");
+    // The ONLY unwrap-named entrypoints are the operation (in both its
+    // self-serve and receiver-parameterized overloads — the latter is what
+    // `SubscriptionModule.redeemUsdOku` calls internally to land the OkuM leg
+    // on itself rather than the caller) and its quote. Two overloads means two
+    // ABI fragments named "unwrap"; `fnNames` is not signature-deduped, so both
+    // show up. Neither is an admin lever — there is still no way to disable
+    // either.
+    expect(fns.filter((n) => /unwrap/i.test(n)).sort()).to.deep.equal([
+      "quoteUnwrap",
+      "unwrap",
+      "unwrap",
+    ]);
+  });
+
+  it("still lets an incident pause halt both directions — that is separate", async () => {
+    // Pause is bounded, reversible incident response and gates BOTH directions.
+    // The sunset lever is permanent, one-directional policy. Conflating them is
+    // how a sunset becomes a trap.
+    await (await s.wrapper.pause()).wait();
+    await expect(as(s.wrapper, s.alice).unwrap(PRECISION)).to.be.reverted;
+    await (await s.wrapper.unpause()).wait();
+    await (await s.wrapper.setWrapEnabled(true)).wait();
+    expect(await s.wrapper.wrapEnabled()).to.equal(true);
+  });
+});
+
+// ============================================================================
+// 8. Incident protocol
+// ============================================================================
+
+describe("Incident protocol — pause, blacklist, and the role split", () => {
+  let s: System;
 
   beforeEach(async () => {
     s = await deploySystem();
@@ -496,174 +1238,116 @@ describe("rUSDOku — incident protocol", () => {
     await psmMint(s, s.alice, 10_000n * 10n ** 6n);
   });
 
-  it("pause blocks transfers and mint but NOT burn", async () => {
-    const adminAddr = await s.admin.getAddress();
-    await (await s.token.grantRole(R("OKU_PAUSER"), adminAddr)).wait();
-    await (await s.token.grantRole(R("OKU_BURNER"), adminAddr)).wait();
-    await (await s.token.grantRole(R("OKU_MINTER"), adminAddr)).wait();
-    await (await s.token.configureMinterAllowance(adminAddr, PRECISION * 1000n)).wait();
-    await (await s.token.mint(adminAddr, PRECISION * 10n)).wait();
+  it("OkuM pause blocks transfers and mint but NOT burn", async () => {
+    await mintRaw(s, s.a.admin, PRECISION * 10n);
+    await (await s.okuM.pause()).wait();
 
-    await (await s.token.pause()).wait();
-
-    await expect(as(s.token, s.alice).transfer(await s.bob.getAddress(), 1n)).to.be.reverted;
-    await expect(s.token.mint(adminAddr, 1n)).to.be.reverted;
+    await expect(as(s.okuM, s.alice).transfer(s.a.bob, 1n)).to.be.reverted;
+    await expect(s.okuM.mint(s.a.admin, 1n)).to.be.reverted;
     // Burn must stay open: a holder has to be able to exit while paused, and
     // the pause-then-blacklist protocol depends on it.
-    await (await s.token.burn(PRECISION)).wait();
+    await (await s.okuM.burn(PRECISION)).wait();
   });
 
-  it("pause on the token does not pause the PSM, and vice versa", async () => {
-    const adminAddr = await s.admin.getAddress();
-    await (await s.token.grantRole(R("OKU_PAUSER"), adminAddr)).wait();
-    await (await s.psm.grantRole(R("PSM_PAUSER"), adminAddr)).wait();
+  it("USDOku pause blocks transfers, mint and (transitively) wrap/unwrap", async () => {
+    const raw: bigint = await s.okuM.balanceOf(s.a.alice);
+    await wrap(s, s.alice, raw / 2n);
+    // Admin holds OKU_MINTER on USDOku from `initialize`; in production only the
+    // wrapper ever does. Minted here purely to have shares to burn while paused.
+    await (await s.usdOku.mint(s.a.admin, PRECISION * 10n)).wait();
+    const adminShares: bigint = await s.usdOku.sharesOf(s.a.admin);
 
-    await (await s.psm.pause()).wait();
-    // Token transfers still work: the two pause switches are independent.
-    await (await as(s.token, s.alice).transfer(await s.bob.getAddress(), PRECISION)).wait();
-    await expect(as(s.psm, s.alice).mint(1_000n * 10n ** 6n)).to.be.reverted;
+    await (await s.usdOku.pause()).wait();
+
+    await expect(as(s.usdOku, s.alice).transfer(s.a.bob, 1n)).to.be.reverted;
+    await expect(s.usdOku.mint(s.a.admin, 1n)).to.be.reverted;
+    await (await as(s.okuM, s.alice).approve(s.a.wrapper, raw / 2n)).wait();
+    await expect(as(s.wrapper, s.alice).wrap(raw / 2n)).to.be.reverted;
+    await expect(as(s.wrapper, s.alice).unwrap(PRECISION)).to.be.reverted;
+
+    // Exit-path parity with `OkuM.burn`: burning shares is not pause-gated.
+    await (await s.usdOku.burnShares(adminShares)).wait();
+    expect(await s.usdOku.sharesOf(s.a.admin)).to.equal(0n);
   });
 
-  it("unpause requires a different role than pause", async () => {
-    const adminAddr = await s.admin.getAddress();
+  it("the three pause switches are independent", async () => {
+    await (await s.module.pause()).wait();
+    // Token transfers and wrapping still work: each contract owns its own switch.
+    await (await as(s.okuM, s.alice).transfer(s.a.bob, PRECISION)).wait();
+    await expect(as(s.module, s.alice).mint(1_000n * 10n ** 6n)).to.be.reverted;
+    expect(await s.okuM.paused()).to.equal(false);
+    expect(await s.usdOku.paused()).to.equal(false);
+    expect(await s.wrapper.paused()).to.equal(false);
+  });
+
+  it("unpause requires a different role than pause, on every contract", async () => {
     const [, , , outsider] = await ethers.getSigners();
-    await (await s.token.grantRole(R("OKU_PAUSER"), await outsider.getAddress())).wait();
-    await (await as(s.token, outsider).pause()).wait();
-
-    // The pauser cannot undo it — unpause is a cold-multisig role.
-    await expect(as(s.token, outsider).unpause()).to.be.reverted;
-    await (await s.token.grantRole(R("OKU_UNPAUSER"), adminAddr)).wait();
-    await (await s.token.unpause()).wait();
-    expect(await s.token.paused()).to.equal(false);
+    const outsiderAddr = await outsider.getAddress();
+    for (const [c, pauseRole] of [
+      [s.okuM, "OKU_PAUSER"],
+      [s.usdOku, "OKU_PAUSER"],
+      [s.wrapper, "WRAPPER_PAUSER"],
+      [s.module, "PSM_PAUSER"],
+    ] as Array<[Contract, string]>) {
+      await (await c.grantRole(R(pauseRole), outsiderAddr)).wait();
+      await (await as(c, outsider).pause()).wait();
+      // The pauser cannot undo it — unpause is a cold-multisig role.
+      await expect(as(c, outsider).unpause()).to.be.reverted;
+      await (await c.unpause()).wait();
+      expect(await c.paused()).to.equal(false);
+    }
   });
 
-  it("blacklist blocks send, receive, mint and burn — the guard is in _update", async () => {
-    const adminAddr = await s.admin.getAddress();
-    const aliceAddr = await s.alice.getAddress();
-    await (await s.token.grantRole(R("OKU_BLACKLISTER"), adminAddr)).wait();
-    await (await s.token.grantRole(R("OKU_MINTER"), adminAddr)).wait();
-    await (await s.token.configureMinterAllowance(adminAddr, PRECISION * 1000n)).wait();
+  it("blacklist blocks send, receive and mint on both tokens", async () => {
+    const raw: bigint = await s.okuM.balanceOf(s.a.alice);
+    await wrap(s, s.alice, raw / 2n);
 
-    await (await s.token.blacklist(aliceAddr)).wait();
+    await (await s.okuM.blacklist(s.a.alice)).wait();
+    await (await s.usdOku.blacklist(s.a.alice)).wait();
 
-    await expect(as(s.token, s.alice).transfer(await s.bob.getAddress(), 1n)).to.be.reverted;
-    await expect(as(s.token, s.bob).transfer(aliceAddr, 1n)).to.be.reverted;
-    await expect(s.token.mint(aliceAddr, 1n)).to.be.reverted;
+    await expect(as(s.okuM, s.alice).transfer(s.a.bob, 1n)).to.be.reverted;
+    await expect(as(s.okuM, s.bob).transfer(s.a.alice, 1n)).to.be.reverted;
+    await expect(s.okuM.mint(s.a.alice, 1n)).to.be.reverted;
+
+    await expect(as(s.usdOku, s.alice).transfer(s.a.bob, 1n)).to.be.reverted;
+    await expect(s.usdOku.mint(s.a.alice, 1n)).to.be.reverted;
   });
 
   it("blacklisting works while paused — that is the whole point of the protocol", async () => {
-    const adminAddr = await s.admin.getAddress();
-    await (await s.token.grantRole(R("OKU_PAUSER"), adminAddr)).wait();
-    await (await s.token.grantRole(R("OKU_BLACKLISTER"), adminAddr)).wait();
-    await (await s.token.pause()).wait();
-    await (await s.token.blacklist(await s.alice.getAddress())).wait();
-    expect(await s.token.isBlacklisted(await s.alice.getAddress())).to.equal(true);
+    await (await s.okuM.pause()).wait();
+    await (await s.usdOku.pause()).wait();
+    await (await s.okuM.blacklist(s.a.alice)).wait();
+    await (await s.usdOku.blacklist(s.a.alice)).wait();
+    expect(await s.okuM.isBlacklisted(s.a.alice)).to.equal(true);
+    expect(await s.usdOku.isBlacklisted(s.a.alice)).to.equal(true);
   });
 
-  it("guardian can halt accrual while paused, and cannot set a rate", async () => {
-    const adminAddr = await s.admin.getAddress();
-    const [, , , guardian] = await ethers.getSigners();
-    await setRate(s, RATE_5_PCT_APY, MAX_RATE_DURATION);
-    await warp(5n * 24n * 60n * 60n);
-
-    await (await s.token.grantRole(R("OKU_PAUSER"), adminAddr)).wait();
-    await (await s.token.grantRole(R("OKU_GUARDIAN"), await guardian.getAddress())).wait();
-    await (await s.token.pause()).wait();
-
-    const before: bigint = await s.token.uiMultiplier();
-    await (await as(s.token, guardian).haltAccrual()).wait();
-    const after: bigint = await s.token.uiMultiplier();
-
-    // Monotone-safe: growth stops, nothing accrued is lost.
-    expect(after).to.be.greaterThanOrEqual(before);
-    expect(await s.token.newUIMultiplier()).to.equal(after);
-
-    // A guardian must not be able to set a rate — that is the separation of
-    // duties that makes a warm-multisig guardian safe.
-    const now = BigInt((await ethers.provider.getBlock("latest"))!.timestamp);
-    await expect(
-      as(s.token, guardian).setYieldRate(RATE_5_PCT_APY, now + 1000n)
-    ).to.be.reverted;
+  it("keeps the multiplier authority reachable while everything is paused", async () => {
+    // Correcting the index during an incident must always be possible, so
+    // `setOkuMultiplier` and `setUsdOkuRate` are deliberately not pause-gated.
+    await (await s.okuM.pause()).wait();
+    await (await s.usdOku.pause()).wait();
+    await (await s.module.pause()).wait();
+    await stepBy(s, 10n);
+    expect(await s.okuM.uiMultiplier()).to.be.greaterThan(PRECISION);
+    await (await s.usdOku.setUsdOkuRate(RATE_5_PCT_APY, (await now()) + 10n * DAY)).wait();
   });
 });
 
 // ============================================================================
-// Multi-holder fairness
+// 9. Oracle adapter lifecycle
 // ============================================================================
 
-describe("rUSDOku — multi-holder fairness", () => {
-  let s: System;
-
-  before(async function () {
-    this.timeout(120_000);
-    s = await deploySystem();
-    await seedBuffer(s, 5_000_000n * 10n ** 6n);
-  });
-
-  it("accrues proportionally regardless of entry time, per raw unit held", async () => {
-    // Alice enters at a unit multiplier.
-    const aliceRaw = await psmMint(s, s.alice, 10_000n * 10n ** 6n);
-
-    await setRate(s, RATE_5_PCT_APY, MAX_RATE_DURATION);
-    await warp(MAX_RATE_DURATION);
-
-    // Bob enters later, at a higher multiplier, for the same dollar amount.
-    const bobRaw = await psmMint(s, s.bob, 10_000n * 10n ** 6n);
-    expect(bobRaw).to.be.lessThan(aliceRaw, "later entry buys fewer raw units");
-
-    const aliceUi: bigint = await s.token.balanceOfUI(await s.alice.getAddress());
-    const bobUi: bigint = await s.token.balanceOfUI(await s.bob.getAddress());
-
-    // Alice has earned a month of yield; Bob just arrived at par.
-    expect(aliceUi).to.be.greaterThan(bobUi);
-    expect(bobUi).to.be.greaterThan(9_999n * PRECISION);
-    expect(bobUi).to.be.lessThan(10_001n * PRECISION);
-
-    // Going forward they accrue at the same proportional rate.
-    const aliceBefore = aliceUi;
-    const bobBefore = bobUi;
-    await setRate(s, RATE_5_PCT_APY, MAX_RATE_DURATION);
-    await warp(MAX_RATE_DURATION);
-
-    const aliceGrowth =
-      ((await s.token.balanceOfUI(await s.alice.getAddress())) * PRECISION) / aliceBefore;
-    const bobGrowth =
-      ((await s.token.balanceOfUI(await s.bob.getAddress())) * PRECISION) / bobBefore;
-    // Same growth factor to within rounding dust.
-    const delta = aliceGrowth > bobGrowth ? aliceGrowth - bobGrowth : bobGrowth - aliceGrowth;
-    expect(delta).to.be.lessThan(10n ** 9n, "growth factors must match");
-  });
-
-  it("keeps the sum of displayed balances bounded by totalSupplyUI", async () => {
-    const holders = [
-      await s.alice.getAddress(),
-      await s.bob.getAddress(),
-      await s.psm.getAddress(),
-      await s.queue.getAddress(),
-    ];
-    let sum = 0n;
-    for (const h of holders) sum += await s.token.balanceOfUI(h);
-    const total: bigint = await s.token.totalSupplyUI();
-    // Per-balance flooring: bounded above, gap of at most 1 wei per holder.
-    expect(sum).to.be.lessThanOrEqual(total);
-    expect(sum + BigInt(holders.length)).to.be.greaterThanOrEqual(total);
-  });
-});
-
-// ============================================================================
-// Oracle adapter across the lifecycle
-// ============================================================================
-
-describe("rUSDOku — oracle adapter lifecycle", () => {
+describe("OkuMultiplierAdapter — fresh, stale, refreshed", () => {
   let s: System;
   let feed: Contract;
-  const STALENESS = 7n * 24n * 60n * 60n;
+  const STALENESS = 7n * DAY;
 
   before(async () => {
     s = await deploySystem();
     const Adapter = await ethers.getContractFactory("OkuMultiplierAdapter");
     const deployed = await Adapter.deploy(
-      await s.token.getAddress(),
+      s.a.okuM,
       ethers.parseEther("0.99"),
       ethers.parseEther("10"),
       STALENESS
@@ -675,28 +1359,270 @@ describe("rUSDOku — oracle adapter lifecycle", () => {
   it("reports 18 decimals, not Chainlink's conventional 8", async () => {
     // An integrator assuming 8 would misprice by 1e10.
     expect(await feed.decimals()).to.equal(18n);
+    expect(await feed.description()).to.equal("OkuM uiMultiplier / USD");
   });
 
-  it("tracks the multiplier while a rate is live", async () => {
-    await setRate(s, RATE_5_PCT_APY, MAX_RATE_DURATION);
-    await warp(10n * 24n * 60n * 60n);
-    const [, answer] = await feed.latestRoundData();
-    expect(answer).to.equal(await s.token.uiMultiplier());
+  it("is fresh at genesis — `initialize` stamps the staleness anchor", async () => {
     expect(await feed.isHealthy()).to.equal(true);
-    expect(await feed.isAccrualStopped()).to.equal(false);
+    const [, answer, startedAt, updatedAt] = await feed.latestRoundData();
+    expect(answer).to.equal(PRECISION);
+    expect(startedAt).to.equal(await s.okuM.lastSteppedAt());
+    expect(updatedAt).to.equal(startedAt, "stepwise: the last step IS the last update");
   });
 
-  it("signals a halt immediately, then goes stale", async () => {
-    await warp(20n * 24n * 60n * 60n); // past rateEnd
-    expect(await feed.isAccrualStopped()).to.equal(true);
+  it("no longer exposes isAccrualStopped — there is no rate to stop", async () => {
+    // `M_oku` is a discrete mark, not a trajectory, so "accrual stopped" has no
+    // referent. The honest signal is staleness of the last mark, below.
+    expect(fnNames(feed)).to.not.include("isAccrualStopped");
+    expect(fnNames(feed)).to.include("isSyncLocked");
+    expect(fnNames(feed)).to.include("syncLockedUntil");
+  });
+
+  it("tracks the multiplier across a mark, and re-anchors staleness on it", async () => {
+    await stepBy(s, 40n);
+    const m: bigint = await s.okuM.uiMultiplier();
+    const [, answer, startedAt, updatedAt] = await feed.latestRoundData();
+    expect(answer).to.equal(m);
+    expect(startedAt).to.equal(await s.okuM.effectiveAt());
+    expect(updatedAt).to.equal(startedAt);
+    expect(await feed.isHealthy()).to.equal(true);
+  });
+
+  it("stays healthy while flat but fresh, then goes stale with no new mark", async () => {
+    await warp(STALENESS - 2n * DAY);
     expect(await feed.isHealthy()).to.equal(true, "flat but still fresh");
 
-    await warp(STALENESS + 1n);
-    expect(await feed.isHealthy()).to.equal(false, "an un-renewed rate must eventually go stale");
-    await expect(feed.latestRoundData()).to.be.reverted;
+    await warp(3n * DAY);
+    expect(await feed.isHealthy()).to.equal(
+      false,
+      "nobody should price collateral off an unmarked index indefinitely"
+    );
+    await expect(feed.latestRoundData()).to.be.revertedWithCustomError(feed, "StaleAnswer");
+  });
+
+  it("is refreshed by a new mark", async () => {
+    await stepBy(s, 40n);
+    expect(await feed.isHealthy()).to.equal(true);
+    const [, answer] = await feed.latestRoundData();
+    expect(answer).to.equal(await s.okuM.uiMultiplier());
+  });
+
+  it("surfaces the sync window without folding it into isHealthy", async () => {
+    // The multiplier is genuinely correct during a window — the step that armed
+    // it has already landed here. Reporting unhealthy would trigger needless
+    // liquidation pauses on an accurate feed.
+    await stepToNoClear(s, ((await s.okuM.uiMultiplier()) * 10_040n) / 10_000n);
+    expect(await feed.isSyncLocked()).to.equal(true);
+    expect(await feed.syncLockedUntil()).to.equal(await s.okuM.syncLockedUntil());
+    expect(await feed.isHealthy()).to.equal(true);
+    await clearSyncWindow(s);
+    expect(await feed.isSyncLocked()).to.equal(false);
   });
 
   it("refuses historical rounds — it is a live derivation, not a push feed", async () => {
-    await expect(feed.getRoundData(1)).to.be.reverted;
+    await expect(feed.getRoundData(1)).to.be.revertedWithCustomError(feed, "NoDataPresent");
+  });
+
+  it("has no adapter for M_usd, deliberately", async () => {
+    // `M_usd` is a declared payout rate, not a value a lending market should
+    // price collateral against. Nothing should be borrowed against USDOku at its
+    // rebased balance while the solvency gap is nonzero.
+    expect(await feed.token()).to.equal(s.a.okuM);
+  });
+});
+
+// ============================================================================
+// 10. The UUPS upgrade path — the OZ storage-layout validator
+// ============================================================================
+//
+// THE REASON THIS FILE EXISTS. `upgrades.upgradeProxy` runs OpenZeppelin's real
+// storage-layout validator against the on-chain manifest and throws on any
+// incompatible change. Forge cannot invoke it, so this is the only place in the
+// repo where a storage-layout regression is caught before a live upgrade.
+//
+// All five proxies, all with meaningful state, all after real activity.
+
+describe("UUPS upgrade path — OZ layout validator on all five proxies", () => {
+  let s: System;
+
+  before(async function () {
+    this.timeout(300_000);
+    s = await deploySystem();
+    await seedBuffer(s, 1_000_000n * 10n ** 6n);
+
+    // Put real state everywhere before upgrading: a marked multiplier, a live
+    // declared rate, a wrapped position, a queued redemption, a nonzero gap.
+    const raw = await psmMint(s, s.alice, 50_000n * 10n ** 6n);
+    await stepBy(s, 50n);
+    await wrap(s, s.alice, raw / 2n);
+    await accrueUsd(s, RATE_5_PCT_APY, 10n * DAY);
+
+    // Drain the buffer so the next redemption escrows rather than settling.
+    const queued = ethers.parseEther("100");
+    await mintRaw(s, s.a.bob, queued);
+    await (await s.module.withdrawUsdc(s.a.admin, await s.usdc.balanceOf(s.a.module))).wait();
+    await (await as(s.okuM, s.bob).approve(s.a.module, queued)).wait();
+    await (await as(s.module, s.bob).redeem(queued)).wait();
+  });
+
+  it("preserves OkuM state across the upgrade", async () => {
+    const before = {
+      multiplier: await s.okuM.uiMultiplier(),
+      pending: await s.okuM.newUIMultiplier(),
+      lastStepped: await s.okuM.lastSteppedAt(),
+      hwm: await s.okuM.stepHighWaterMark(),
+      feeSource: await s.okuM.stepFeeSource(),
+      halted: await s.okuM.accrualHalted(),
+      asset: await s.okuM.asset(),
+      dm: await s.okuM.usdcDecimalMultiplier(),
+      supply: await s.okuM.totalSupply(),
+      bal: await s.okuM.balanceOf(s.a.alice),
+      maxSupply: await s.okuM.maxSupply(),
+      window: await s.okuM.syncWindowDuration(),
+      lockedUntil: await s.okuM.syncLockedUntil(),
+      allowance: await s.okuM.minterAllowance(s.a.module),
+    };
+
+    const OkuMFactory = await ethers.getContractFactory("OkuM");
+    // THE assertion that matters: this call runs the layout validator.
+    const up = (await upgrades.upgradeProxy(s.a.okuM, OkuMFactory)) as unknown as Contract;
+
+    expect(await up.uiMultiplier()).to.equal(before.multiplier);
+    expect(await up.newUIMultiplier()).to.equal(
+      before.pending,
+      "newUIMultiplier has no timestamp term, so it must be bit-identical"
+    );
+    expect(await up.lastSteppedAt()).to.equal(before.lastStepped);
+    expect(await up.effectiveAt()).to.equal(before.lastStepped);
+    expect(await up.stepHighWaterMark()).to.equal(before.hwm);
+    expect(await up.stepFeeSource()).to.equal(before.feeSource);
+    expect(await up.accrualHalted()).to.equal(before.halted);
+    expect(await up.asset()).to.equal(before.asset);
+    expect(await up.usdcDecimalMultiplier()).to.equal(before.dm);
+    expect(await up.totalSupply()).to.equal(before.supply);
+    expect(await up.balanceOf(s.a.alice)).to.equal(before.bal);
+    expect(await up.maxSupply()).to.equal(before.maxSupply);
+    expect(await up.syncWindowDuration()).to.equal(before.window);
+    expect(await up.syncLockedUntil()).to.equal(before.lockedUntil);
+    expect(await up.minterAllowance(s.a.module)).to.equal(before.allowance);
+    expect(await up.supportsInterface(IID.core)).to.equal(
+      true,
+      "an upgrade must not silently drop ERC-8056 advertisement"
+    );
+    expect(await up.name()).to.equal("Oku Money");
+  });
+
+  it("preserves USDOku state across the upgrade", async () => {
+    const before = {
+      baseIndex: await s.usdOku.baseIndex(),
+      rate: await s.usdOku.ratePerSecond(),
+      last: await s.usdOku.lastAccrualTime(),
+      end: await s.usdOku.rateEnd(),
+      totalShares: await s.usdOku.totalShares(),
+      shares: await s.usdOku.sharesOf(s.a.alice),
+      source: await s.usdOku.solvencySource(),
+    };
+    expect(before.totalShares).to.be.greaterThan(0n, "fixture must have real liability");
+
+    const UsdOkuFactory = await ethers.getContractFactory("USDOku");
+    const up = (await upgrades.upgradeProxy(s.a.usdOku, UsdOkuFactory)) as unknown as Contract;
+
+    // The share ledger and the index anchors are the whole state. Deliberately
+    // NOT asserting `balanceOf`/`totalSupply`: they are time-dependent, and the
+    // upgrade transaction itself mines a block.
+    expect(await up.baseIndex()).to.equal(before.baseIndex);
+    expect(await up.ratePerSecond()).to.equal(before.rate);
+    expect(await up.lastAccrualTime()).to.equal(before.last);
+    expect(await up.rateEnd()).to.equal(before.end);
+    expect(await up.totalShares()).to.equal(before.totalShares);
+    expect(await up.sharesOf(s.a.alice)).to.equal(before.shares);
+    expect(await up.solvencySource()).to.equal(before.source);
+    expect(await up.supportsInterface(IID.core)).to.equal(
+      false,
+      "and must not silently START advertising ERC-8056"
+    );
+    expect(await up.name()).to.equal("USD Oku");
+  });
+
+  it("preserves USDOkuWrapper state across the upgrade", async () => {
+    const before = {
+      okuM: await s.wrapper.okuM(),
+      usdOku: await s.wrapper.usdOku(),
+      wrapEnabled: await s.wrapper.wrapEnabled(),
+      backing: await s.wrapper.realizedBacking(),
+    };
+
+    const WrapperFactory = await ethers.getContractFactory("USDOkuWrapper");
+    const up = (await upgrades.upgradeProxy(s.a.wrapper, WrapperFactory)) as unknown as Contract;
+
+    expect(await up.okuM()).to.equal(before.okuM);
+    expect(await up.usdOku()).to.equal(before.usdOku);
+    expect(await up.wrapEnabled()).to.equal(before.wrapEnabled);
+    // `realizedBacking` is `M_oku`-derived only, so it is time-independent.
+    expect(await up.realizedBacking()).to.equal(before.backing);
+  });
+
+  it("preserves SubscriptionModule and RedemptionQueue bindings across the upgrade", async () => {
+    const beforeModule = {
+      okuM: await s.module.okuM(),
+      usdc: await s.module.usdc(),
+      queue: await s.module.redemptionQueue(),
+      dm: await s.module.usdcDecimalMultiplier(),
+      tin: await s.module.tin(),
+      tout: await s.module.tout(),
+    };
+    const beforeQueue = {
+      okuM: await s.queue.okuM(),
+      usdc: await s.queue.usdc(),
+      dm: await s.queue.usdcDecimalMultiplier(),
+      queued: await s.queue.totalQueuedRaw(),
+      head: await s.queue.queueHead(),
+      tail: await s.queue.queueTail(),
+      entryTout: (await s.queue.getQueueEntry(0)).toutBps,
+    };
+    expect(beforeQueue.queued).to.be.greaterThan(0n, "fixture must have a live queue entry");
+
+    const ModuleFactory = await ethers.getContractFactory("SubscriptionModule");
+    const QueueFactory = await ethers.getContractFactory("RedemptionQueue");
+    const m2 = (await upgrades.upgradeProxy(s.a.module, ModuleFactory)) as unknown as Contract;
+    const q2 = (await upgrades.upgradeProxy(s.a.queue, QueueFactory)) as unknown as Contract;
+
+    expect(await m2.okuM()).to.equal(beforeModule.okuM);
+    expect(await m2.usdc()).to.equal(beforeModule.usdc);
+    expect(await m2.redemptionQueue()).to.equal(beforeModule.queue);
+    expect(await m2.usdcDecimalMultiplier()).to.equal(beforeModule.dm);
+    expect(await m2.tin()).to.equal(beforeModule.tin);
+    expect(await m2.tout()).to.equal(beforeModule.tout);
+
+    expect(await q2.okuM()).to.equal(beforeQueue.okuM);
+    expect(await q2.usdc()).to.equal(beforeQueue.usdc);
+    expect(await q2.usdcDecimalMultiplier()).to.equal(beforeQueue.dm);
+    expect(await q2.totalQueuedRaw()).to.equal(beforeQueue.queued);
+    expect(await q2.queueHead()).to.equal(beforeQueue.head);
+    expect(await q2.queueTail()).to.equal(beforeQueue.tail);
+    // The per-entry `tout` snapshot must survive: it is the promise made to
+    // someone already waiting in the queue.
+    expect((await q2.getQueueEntry(0)).toutBps).to.equal(beforeQueue.entryTout);
+  });
+
+  it("still functions end to end after all five upgrades", async () => {
+    // A layout check that passes on a proxy nobody can use afterwards is not
+    // worth much. Drive one full cycle through the upgraded stack.
+    await seedBuffer(s, 500_000n * 10n ** 6n);
+    await stepBy(s, 20n);
+
+    const raw = await psmMint(s, s.bob, 1_000n * 10n ** 6n);
+    expect(raw).to.be.greaterThan(0n);
+    const shares = await wrap(s, s.bob, raw);
+    expect(shares).to.be.greaterThan(0n);
+    const back = await unwrap(s, s.bob, await s.usdOku.balanceOf(s.a.bob));
+    expect(back).to.be.greaterThan(0n);
+    expect(back).to.be.lessThanOrEqual(raw);
+
+    await (await as(s.okuM, s.bob).approve(s.a.module, back)).wait();
+    const quoted: bigint = await s.module.quoteRedeem(back);
+    const beforeUsdc: bigint = await s.usdc.balanceOf(s.a.bob);
+    await (await as(s.module, s.bob).redeem(back)).wait();
+    expect((await s.usdc.balanceOf(s.a.bob)) - beforeUsdc).to.equal(quoted);
   });
 });

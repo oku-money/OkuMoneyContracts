@@ -5,22 +5,22 @@ import {ScaledUIAmountUpgradeable} from "../../src/lib/ScaledUIAmountUpgradeable
 import {MathLib} from "../../src/lib/MathLib.sol";
 
 /// @title ScaledUIHarness
-/// @notice Test-only harness over the ERC-8056 display layer.
+/// @notice Test-only harness over the stepwise ERC-8056 display layer.
 /// @dev NOT FOR PRODUCTION DEPLOYMENT.
 ///
 ///      Two jobs:
 ///
-///      1. Reach the defensive bounds in `_setYieldRate` that legitimate rates
-///         cannot. `MAX_MULTIPLIER` is ~135,000x above where ten years at the APR
-///         cap lands, so the `MultiplierAboveMaximum` branch is unreachable
-///         without poking the anchor directly.
+///      1. Reach the defensive bounds in `_stepMultiplier` that legitimate steps
+///         cannot. `MAX_MULTIPLIER` (1e24) is unreachable from genesis without
+///         ~1,390 maximum steps, so `forceMultiplier` writes the namespaced slot
+///         directly (vm-free assembly) to park the state next to any bound.
 ///
 ///      2. Act as a hostile-but-standard-conformant ERC-8056 counterparty.
 ///         ERC-8056 permits any positive multiplier and permits decreases
 ///         (reverse splits); this token forbids both. Anything reading a
 ///         third-party scaled-UI token — notably `OkuMultiplierAdapter` and the
 ///         shared `MathLib` conversions — must behave against the full legal
-///         range, not just ours.
+///         range (below 1e18, above MAX_MULTIPLIER, decreasing), not just ours.
 contract ScaledUIHarness is ScaledUIAmountUpgradeable {
     /// @custom:storage-location erc7201-unsafe:test.harness
     struct HarnessStorage {
@@ -29,6 +29,12 @@ contract ScaledUIHarness is ScaledUIAmountUpgradeable {
     }
 
     bytes32 private constant HARNESS_SLOT = keccak256("test.harness.ScaledUIHarness");
+
+    /// @dev Must match `SCALED_UI_AMOUNT_STORAGE_LOCATION` in the base contract.
+    ///      Pinned by `ERC7201SlotsTest`. Layout: word 0 = multiplier,
+    ///      word 1 = lastSteppedAt, word 2 = stepHighWaterMark.
+    bytes32 private constant SCALED_UI_SLOT =
+        0x3cb9c1d6aa88f069eb5ba8341839db9b5d23817fee13933ec1221e36b8fe7800;
 
     function _h() private pure returns (HarnessStorage storage $) {
         bytes32 slot = HARNESS_SLOT;
@@ -43,36 +49,35 @@ contract ScaledUIHarness is ScaledUIAmountUpgradeable {
 
     // ============ Bound-reaching pokes ============
 
-    /// @notice Overwrite the anchor directly, bypassing every guard.
-    /// @dev The only way to reach the `MultiplierAboveMaximum` branch.
-    function pokeBase(uint256 newBase) external {
-        _pokeStorage(newBase, type(uint256).max, type(uint256).max);
-    }
-
-    /// @notice Set an arbitrary multiplier state, including states this token forbids
-    ///         (below `PRECISION`, above `MAX_MULTIPLIER`, decreasing).
-    function pokeMultiplier(uint256 value) external {
-        _pokeStorage(value, block.timestamp, block.timestamp);
-    }
-
-    function _pokeStorage(uint256 base, uint256 last, uint256 end) private {
-        // The display-layer struct is the first four words of its namespace.
-        bytes32 slot = 0x3cb9c1d6aa88f069eb5ba8341839db9b5d23817fee13933ec1221e36b8fe7800;
+    /// @notice Overwrite the multiplier directly, bypassing every guard.
+    /// @dev Reaches standard-legal-but-forbidden-here values: below `PRECISION`,
+    ///      above `MAX_MULTIPLIER`, or lower than the current value. vm-free so
+    ///      non-Test contracts can use it too.
+    function forceMultiplier(uint256 value) external {
+        bytes32 slot = SCALED_UI_SLOT;
         assembly {
-            sstore(slot, base)
-            if iszero(eq(last, not(0))) { sstore(add(slot, 2), last) }
-            if iszero(eq(end, not(0))) { sstore(add(slot, 3), end) }
+            sstore(slot, value)
+        }
+    }
+
+    /// @notice Overwrite `lastSteppedAt` directly (staleness scenarios).
+    function forceLastSteppedAt(uint256 value) external {
+        bytes32 slot = SCALED_UI_SLOT;
+        assembly {
+            sstore(add(slot, 1), value)
         }
     }
 
     // ============ Exposed authority path (ungated) ============
 
-    function setYieldRate(uint256 rate, uint256 end) external {
-        _setYieldRate(rate, end);
+    /// @notice Raw `_stepMultiplier`, with none of the token's policy layered on
+    ///         (no role gate, no halt flag, no step-coverage check, no window).
+    function step(uint256 newMultiplier) external returns (uint256 stepBps) {
+        return _stepMultiplier(newMultiplier);
     }
 
-    function haltAccrual() external {
-        _haltAccrual();
+    function resetHighWaterMark() external {
+        _resetStepHighWaterMark();
     }
 
     // ============ Minimal raw ledger for the balances extension ============

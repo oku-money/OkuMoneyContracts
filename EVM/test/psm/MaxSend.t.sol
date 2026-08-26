@@ -4,7 +4,7 @@ pragma solidity ^0.8.28;
 import {BaseTest} from "../Base.t.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {Errors} from "../../src/lib/Errors.sol";
-import {LitePSM} from "../../src/psm/LitePSM.sol";
+import {SubscriptionModule} from "../../src/psm/SubscriptionModule.sol";
 import {TestConstants} from "../shared/Constants.sol";
 
 /**
@@ -16,8 +16,8 @@ import {TestConstants} from "../shared/Constants.sol";
  *
  *      HISTORICAL INCIDENT (Sepolia, May 2026). The v1 PSM pulled usdOku by
  *      nominal amount and then called `unwrap(amount)` with the same value.
- *      `OkuDollar.transferFrom` floored the share conversion while
- *      `OkuDollar.unwrap` ceiled the share burn, so above a unit multiplier the
+ *      `OkuM.transferFrom` floored the share conversion while
+ *      `OkuM.unwrap` ceiled the share burn, so above a unit multiplier the
  *      two diverged by one share, the PSM held one share less than `unwrap`
  *      demanded, and the call reverted with `InsufficientBalance()`.
  *
@@ -137,8 +137,8 @@ contract MaxSendTest is BaseTest {
         _accrue(RATE_5_PCT_APY, 20 days);
 
         vm.startPrank(user1);
-        token.approve(address(litePsm), type(uint256).max);
-        uint256 usdcOut = litePsm.redeemUiAmount(token.balanceOfUI(user1));
+        token.approve(address(module), type(uint256).max);
+        uint256 usdcOut = module.redeemUiAmount(token.balanceOfUI(user1));
         vm.stopPrank();
 
         assertGt(usdcOut, 0, "must pay out, not queue");
@@ -153,8 +153,8 @@ contract MaxSendTest is BaseTest {
         _accrue(RATE_5_PCT_APY, 20 days);
 
         vm.startPrank(user1);
-        token.approve(address(litePsm), type(uint256).max);
-        litePsm.redeem(token.balanceOf(user1));
+        token.approve(address(module), type(uint256).max);
+        module.redeem(token.balanceOf(user1));
         vm.stopPrank();
 
         assertEq(token.balanceOf(user1), 0, "raw max-redeem leaves nothing");
@@ -168,11 +168,11 @@ contract MaxSendTest is BaseTest {
         _accrue(RATE_5_PCT_APY, 11 days);
 
         uint256 rawIn = token.balanceOf(user1) / 3;
-        uint256 quoted = litePsm.quoteRedeem(rawIn);
+        uint256 quoted = module.quoteRedeem(rawIn);
 
         vm.startPrank(user1);
-        token.approve(address(litePsm), type(uint256).max);
-        uint256 actual = litePsm.redeem(rawIn);
+        token.approve(address(module), type(uint256).max);
+        uint256 actual = module.redeem(rawIn);
         vm.stopPrank();
 
         assertEq(actual, quoted, "quote must equal realised output");
@@ -180,7 +180,7 @@ contract MaxSendTest is BaseTest {
 
     function test_Incident_QuoteMintAgreesWithRealisedOutput() public {
         _accrue(RATE_5_PCT_APY, 11 days);
-        uint256 quoted = litePsm.quoteMint(7777e6);
+        uint256 quoted = module.quoteMint(7777e6);
         uint256 actual = _psmMint(user1, 7777e6);
         assertEq(actual, quoted);
     }
@@ -191,9 +191,9 @@ contract MaxSendTest is BaseTest {
         // Reset to a tight buffer so the bound actually binds.
         // NOTE: the balance read is hoisted deliberately. Inlining it as a call
         // argument would consume the `vm.prank` before `withdrawUsdc` is reached.
-        uint256 seeded = usdc.balanceOf(address(litePsm));
+        uint256 seeded = usdc.balanceOf(address(module));
         vm.prank(bufferWithdrawer);
-        litePsm.withdrawUsdc(treasury, seeded);
+        module.withdrawUsdc(treasury, seeded);
         _seedBuffer(1337e6 + 7);
 
         // Mint raw directly rather than through the PSM: a PSM mint would add its
@@ -201,12 +201,12 @@ contract MaxSendTest is BaseTest {
         _mintRaw(user1, 1_000_000e18);
         _accrue(RATE_5_PCT_APY, 20 days);
 
-        uint256 maxRaw = litePsm.redeemableNow();
-        assertLe(litePsm.quoteRedeem(maxRaw), usdc.balanceOf(address(litePsm)));
+        uint256 maxRaw = module.redeemableNow();
+        assertLe(module.quoteRedeem(maxRaw), usdc.balanceOf(address(module)));
 
         vm.startPrank(user1);
-        token.approve(address(litePsm), type(uint256).max);
-        uint256 usdcOut = litePsm.redeem(maxRaw);
+        token.approve(address(module), type(uint256).max);
+        uint256 usdcOut = module.redeem(maxRaw);
         vm.stopPrank();
 
         assertGt(usdcOut, 0, "must settle instantly, not queue");
@@ -217,16 +217,16 @@ contract MaxSendTest is BaseTest {
     function test_RedeemBelowUsdcGranularity_Reverts() public {
         _mintRaw(user1, 1e18);
         vm.startPrank(user1);
-        token.approve(address(litePsm), type(uint256).max);
-        vm.expectRevert(LitePSM.AmountTooSmall.selector);
-        litePsm.redeem(DM - 1);
+        token.approve(address(module), type(uint256).max);
+        vm.expectRevert(SubscriptionModule.AmountTooSmall.selector);
+        module.redeem(DM - 1);
         vm.stopPrank();
     }
 
     function test_RedeemUiAmountZero_Reverts() public {
         vm.prank(user1);
         vm.expectRevert(Errors.ZeroAmount.selector);
-        litePsm.redeemUiAmount(0);
+        module.redeemUiAmount(0);
     }
 
     /// @notice A UI amount that floors to zero raw is rejected rather than
@@ -234,7 +234,7 @@ contract MaxSendTest is BaseTest {
     function test_RedeemUiAmountFlooringToZero_Reverts() public {
         _accrueToAtLeast(2 * Constants.PRECISION);
         vm.prank(user1);
-        vm.expectRevert(LitePSM.AmountTooSmall.selector);
-        litePsm.redeemUiAmount(1);
+        vm.expectRevert(SubscriptionModule.AmountTooSmall.selector);
+        module.redeemUiAmount(1);
     }
 }

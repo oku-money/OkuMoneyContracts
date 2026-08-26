@@ -15,28 +15,34 @@ import {IScaledUIAmountBalances} from "../interfaces/erc8056/IScaledUIAmountBala
 
 /**
  * @title ScaledUIAmountUpgradeable
- * @notice ERC-8056 display layer: continuous rate-based UI multiplier plus the
+ * @notice ERC-8056 display layer: stepwise UI multiplier (`M_oku`) plus the
  *         core interface and all three extensions.
  *
- * @dev DESIGN — four storage fields and one setter. There is no second
- *      multiplier, no pending multiplier *value*, and no scheduled step.
+ * @dev DESIGN — a stored, stepwise, monotone multiplier. `M_oku` is the
+ *      *realized* index: dollars per raw token, written when off-chain RWA
+ *      performance is marked. T-Bill performance is a discrete mark, not a
+ *      rate-per-second — publishing it continuously would make it
+ *      forward-looking, which is USDOku's job, not OkuM's. This also matches
+ *      Token-2022's `ScaledUiAmount` on SVM, which is stepwise by construction,
+ *      so both chains share the same value at the same cadence.
  *
- *      ```
- *      uiMultiplier() = baseMultiplier * rpow(ratePerSecond, elapsed, PRECISION) / PRECISION
- *      elapsed        = min(block.timestamp, rateEnd) - lastAccrualTime
- *      ```
+ *      STEPS ARE IMMEDIATE. The ERC-8056 pending-multiplier extension is
+ *      implemented degenerately: `newUIMultiplier()` reports the value of the
+ *      last step and `effectiveAt()` the timestamp it took effect, so
+ *      `uiMultiplier() == newUIMultiplier()` holds from the moment of every
+ *      write. Future-dated steps are deliberately NOT supported: a scheduled
+ *      step matures with no transaction, which would recreate the
+ *      unfenceable-revaluation problem the sync window exists to close (nothing
+ *      can auto-arm at maturity). This also sidesteps the reference
+ *      implementation's documented `>=`/`>` boundary defect — there is never a
+ *      matured-but-uncrystallized pending value.
  *
- *      Continuous accrual (the Aave liquidity-index / sDAI `chi` pattern) is
- *      chosen over discrete revaluation because a discrete step creates a single
- *      block at which every cached multiplier in every integration is
- *      simultaneously wrong — an arbitrage window against your own integrators.
- *      A rate change moves only the *slope*; the multiplier itself is continuous,
- *      so there is nothing to front-run and no sandwich guard is required.
- *
- *      ACCRUAL HALTS AT `rateEnd`. This is a safety mechanism, not merely
- *      scheduling: if the rate setter stops functioning, the multiplier stops
- *      growing rather than accruing indefinitely against assets that are not
- *      there. `rateEnd` is mandatory — a zero or past value is rejected.
+ *      STEP COVERAGE. Every step records `stepBps` and ratchets
+ *      `stepHighWaterMark`, the floor under the module's `tin + tout` fee
+ *      schedule. The inheriting token enforces `tin + tout >= stepBps` at write
+ *      time; the module enforces `tin + tout >= stepHighWaterMark` at fee-set
+ *      time. Together they close local step arbitrage
+ *      (mint-at-M0 / redeem-at-M1 across a step).
  *
  *      This contract deliberately does NOT hold raw balances, allowances, or
  *      total supply. Those stay in OZ's `ERC20Upgradeable` namespace, untouched.
@@ -53,14 +59,14 @@ abstract contract ScaledUIAmountUpgradeable is
 
     /// @custom:storage-location erc7201:okumoney.storage.ScaledUIAmount
     struct ScaledUIAmountStorage {
-        /// @dev Multiplier anchor, snapshotted at the last rate write.
-        uint256 baseMultiplier;
-        /// @dev Compound per-second rate. `PRECISION` == no yield.
-        uint256 ratePerSecond;
-        /// @dev Timestamp `baseMultiplier` was snapshotted at.
-        uint256 lastAccrualTime;
-        /// @dev Accrual halts here. Also ERC-8056's `effectiveAt()`.
-        uint256 rateEnd;
+        /// @dev `M_oku`. Current, live value. Starts at `PRECISION` ($1.00).
+        uint256 multiplier;
+        /// @dev Timestamp of the last step. ERC-8056's `effectiveAt()`.
+        uint256 lastSteppedAt;
+        /// @dev Largest `stepBps` ever taken. Floors the module's `tin + tout`
+        ///      so fees cannot later drop below a step already taken. Cleared
+        ///      only by the cold-gated `resetStepHighWaterMark`.
+        uint256 stepHighWaterMark;
     }
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.ScaledUIAmount")) - 1)) & ~bytes32(uint256(0xff))
@@ -75,86 +81,58 @@ abstract contract ScaledUIAmountUpgradeable is
 
     // ============ Errors ============
 
-    /// @notice Annualized rate exceeded `Constants.MAX_IMPLIED_APR`.
-    error RateAboveMaximum(uint256 impliedAprBps, uint256 maxAprBps);
-    /// @notice `endTimestamp` was zero or not strictly in the future.
-    error RateEndNotInFuture();
-    /// @notice `endTimestamp - block.timestamp` exceeded `Constants.MAX_RATE_DURATION`.
-    error RateDurationTooLong(uint256 requested, uint256 maximum);
-    /// @notice The multiplier projected to `rateEnd` would exceed `Constants.MAX_MULTIPLIER`.
-    error MultiplierAboveMaximum(uint256 projected, uint256 maximum);
+    /// @notice A single step exceeded `Constants.MAX_STEP_BPS`.
+    error StepAboveMaximum(uint256 stepBps, uint256 maxStepBps);
+    /// @notice The new multiplier would exceed `Constants.MAX_MULTIPLIER`.
+    error MultiplierAboveMaximum(uint256 requested, uint256 maximum);
 
     // ============ Events ============
 
-    /// @notice Emitted on every rate write, alongside ERC-8056's `UIMultiplierUpdated`.
-    /// @param oldRate Previous `ratePerSecond`.
-    /// @param newRate New `ratePerSecond`.
-    /// @param rateEnd New accrual halt boundary.
-    /// @param snapshotMultiplier `baseMultiplier` after re-anchoring, so an
-    ///        indexer can reconstruct the trajectory from events alone.
-    event YieldRateSet(
-        uint256 oldRate, uint256 newRate, uint256 rateEnd, uint256 snapshotMultiplier
-    );
+    /// @notice Emitted on every step, alongside ERC-8056's `UIMultiplierUpdated`.
+    /// @param oldMultiplier `M_oku` before the step.
+    /// @param newMultiplier `M_oku` after the step.
+    /// @param stepBps Step size in basis points of the old value, rounded up.
+    event OkuMultiplierStepped(uint256 oldMultiplier, uint256 newMultiplier, uint256 stepBps);
 
-    /// @notice Emitted when the guardian halts accrual.
-    /// @param atMultiplier The multiplier frozen in place.
-    event AccrualHalted(uint256 atMultiplier);
+    /// @notice The cold-gated step-coverage escape hatch fired.
+    /// @dev Clears the fee floor and reopens historical step exposure. Should be
+    ///      rare and deliberate — ALARM ON THIS EVENT.
+    event StepHighWaterMarkReset(uint256 oldMark);
 
     // ============ Initialization ============
 
-    /// @dev Seeds a neutral, self-consistent state:
-    ///      `baseMultiplier = ratePerSecond = PRECISION` and
-    ///      `rateEnd = lastAccrualTime = block.timestamp`.
-    ///
-    ///      `rateEnd` MUST equal `lastAccrualTime` rather than being left zero.
-    ///      With `rateEnd == 0` and `lastAccrualTime == block.timestamp`, the
-    ///      subtraction in `newUIMultiplier()` would underflow and revert,
-    ///      bricking every ERC-165-detected integration on day one. With them
-    ///      equal, `rpow(x, 0, PRECISION) == PRECISION`, so
-    ///      `uiMultiplier() == newUIMultiplier() == PRECISION`.
+    /// @dev Seeds `multiplier = PRECISION` ($1.00) and stamps `lastSteppedAt` so
+    ///      `effectiveAt()` never returns 0 and staleness math never underflows.
     // solhint-disable-next-line func-name-mixedcase
     function __ScaledUIAmount_init() internal {
         ScaledUIAmountStorage storage $ = _getScaledUIAmountStorage();
-        $.baseMultiplier = Constants.PRECISION;
-        $.ratePerSecond = Constants.PRECISION;
-        $.lastAccrualTime = block.timestamp;
-        $.rateEnd = block.timestamp;
+        $.multiplier = Constants.PRECISION;
+        $.lastSteppedAt = block.timestamp;
     }
 
     // ============ ERC-8056 Core ============
 
     /// @inheritdoc IScaledUIAmount
     function uiMultiplier() public view virtual returns (uint256) {
-        ScaledUIAmountStorage storage $ = _getScaledUIAmountStorage();
-        uint256 rateEnd_ = $.rateEnd;
-        uint256 until = block.timestamp < rateEnd_ ? block.timestamp : rateEnd_;
-        uint256 last = $.lastAccrualTime;
-        if (until <= last) return $.baseMultiplier;
-        return _compound($.baseMultiplier, $.ratePerSecond, until - last);
+        return _getScaledUIAmountStorage().multiplier;
     }
 
     // ============ ERC-8056 Pending Multiplier (REQUIRED extension) ============
 
     /// @inheritdoc IScaledUIAmountNewUIMultiplier
-    /// @dev The multiplier the trajectory reaches at `rateEnd` — where growth
-    ///      stops absent a renewed rate. See the interface NatSpec for why this
-    ///      reading of the extension is safe under continuous accrual.
-    ///
-    ///      The `rateEnd <= lastAccrualTime` branch is defensive: `setYieldRate`
-    ///      always leaves `rateEnd > lastAccrualTime`, and `__ScaledUIAmount_init`
-    ///      / `haltAccrual` leave them equal. The guard costs nothing and turns a
-    ///      future refactor bug into a correct answer rather than a reverting view.
+    /// @dev Steps are immediate, so the "pending" value is always the live one.
+    ///      `uiMultiplier() == newUIMultiplier()` is an invariant of this token,
+    ///      asserted in the conformance suite.
     function newUIMultiplier() public view virtual returns (uint256) {
-        ScaledUIAmountStorage storage $ = _getScaledUIAmountStorage();
-        uint256 rateEnd_ = $.rateEnd;
-        uint256 last = $.lastAccrualTime;
-        if (rateEnd_ <= last) return $.baseMultiplier;
-        return _compound($.baseMultiplier, $.ratePerSecond, rateEnd_ - last);
+        return _getScaledUIAmountStorage().multiplier;
     }
 
     /// @inheritdoc IScaledUIAmountNewUIMultiplier
+    /// @dev Timestamp of the last step. Doubles as the staleness anchor for
+    ///      `OkuMultiplierAdapter` — a lapsed mark leaves the multiplier flat
+    ///      and truthful, but a consumer should not price off it indefinitely.
     function effectiveAt() public view virtual returns (uint256) {
-        return _getScaledUIAmountStorage().rateEnd;
+        return _getScaledUIAmountStorage().lastSteppedAt;
     }
 
     // ============ ERC-8056 Conversion (OPTIONAL extension) ============
@@ -175,135 +153,63 @@ abstract contract ScaledUIAmountUpgradeable is
 
     // ============ Storage accessors ============
 
-    /// @notice Multiplier anchor snapshotted at the last rate write.
-    function baseMultiplier() external view returns (uint256) {
-        return _getScaledUIAmountStorage().baseMultiplier;
+    /// @notice Timestamp of the last multiplier step. Alias of `effectiveAt()`.
+    function lastSteppedAt() external view returns (uint256) {
+        return _getScaledUIAmountStorage().lastSteppedAt;
     }
 
-    /// @notice Compound per-second accrual rate (`PRECISION` == no yield).
-    function ratePerSecond() external view returns (uint256) {
-        return _getScaledUIAmountStorage().ratePerSecond;
+    /// @notice Largest single step ever taken, in basis points.
+    /// @dev Floors the module's `tin + tout`. See step coverage in the README.
+    function stepHighWaterMark() public view virtual returns (uint256) {
+        return _getScaledUIAmountStorage().stepHighWaterMark;
     }
 
-    /// @notice Timestamp the anchor was snapshotted at.
-    function lastAccrualTime() external view returns (uint256) {
-        return _getScaledUIAmountStorage().lastAccrualTime;
-    }
+    // ============ Internal: step management ============
 
-    /// @notice Accrual halt boundary. Alias of `effectiveAt()`.
-    function rateEnd() external view returns (uint256) {
-        return _getScaledUIAmountStorage().rateEnd;
-    }
-
-    /// @notice Nominal annualized rate currently in force, in basis points.
-    /// @dev Simple annualization; see `Constants.MAX_IMPLIED_APR`. Returns 0 when
-    ///      accrual is halted or the rate is the no-yield placeholder.
-    function impliedAprBps() external view returns (uint256) {
-        return _impliedAprBps(_getScaledUIAmountStorage().ratePerSecond);
-    }
-
-    // ============ Internal: rate management ============
-
-    /// @dev Re-anchors to the live multiplier, then writes the new rate and end.
-    ///      Because it re-anchors from the current value, calling this before
-    ///      `rateEnd` extends accrual seamlessly with no gap and no step — which
-    ///      is why no separate "pending rate" staging field is needed.
+    /// @dev Applies an immediate, bounded, monotone step and ratchets the
+    ///      high-water mark. The inheriting token layers policy on top (role
+    ///      gate, halt flag, step-coverage fee check, sync-window arming).
     ///
-    ///      Emits both `YieldRateSet` (protocol) and `UIMultiplierUpdated`
-    ///      (ERC-8056 required).
-    function _setYieldRate(uint256 newRatePerSecond, uint256 endTimestamp) internal {
-        // Monotonicity: the multiplier can never decrease. Deliberate narrowing
-        // of ERC-8056, which explicitly supports reverse splits.
-        if (newRatePerSecond < Constants.PRECISION) revert Errors.MultiplierCannotDecrease();
-
-        uint256 apr = _impliedAprBps(newRatePerSecond);
-        if (apr > Constants.MAX_IMPLIED_APR) {
-            revert RateAboveMaximum(apr, Constants.MAX_IMPLIED_APR);
-        }
-
-        if (endTimestamp <= block.timestamp) revert RateEndNotInFuture();
-        uint256 duration = endTimestamp - block.timestamp;
-        if (duration > Constants.MAX_RATE_DURATION) {
-            revert RateDurationTooLong(duration, Constants.MAX_RATE_DURATION);
-        }
-
+    ///      `stepBps` rounds UP: the coverage comparison `tin + tout >= stepBps`
+    ///      must be conservative, and rounding the step down would let a
+    ///      fractionally-larger-than-covered step through.
+    ///
+    ///      Emits both `OkuMultiplierStepped` (protocol) and
+    ///      `UIMultiplierUpdated` (ERC-8056 required).
+    function _stepMultiplier(uint256 newMultiplier_) internal returns (uint256 stepBps) {
         ScaledUIAmountStorage storage $ = _getScaledUIAmountStorage();
-        uint256 oldMultiplier = uiMultiplier();
-        uint256 oldRate = $.ratePerSecond;
+        uint256 old = $.multiplier;
 
-        // Project to the new rateEnd and bound it before committing, so the
-        // ceiling cannot be breached mid-segment.
-        uint256 projected = _compound(oldMultiplier, newRatePerSecond, duration);
-        if (projected > Constants.MAX_MULTIPLIER) {
-            revert MultiplierAboveMaximum(projected, Constants.MAX_MULTIPLIER);
+        // Monotonicity: the multiplier can never decrease. Strict, so a no-op
+        // write cannot be used to re-arm the sync window for free. Deliberate
+        // narrowing of ERC-8056, which explicitly supports reverse splits.
+        if (newMultiplier_ <= old) revert Errors.MultiplierCannotDecrease();
+        if (newMultiplier_ > Constants.MAX_MULTIPLIER) {
+            revert MultiplierAboveMaximum(newMultiplier_, Constants.MAX_MULTIPLIER);
         }
 
-        $.baseMultiplier = oldMultiplier;
-        $.lastAccrualTime = block.timestamp;
-        $.ratePerSecond = newRatePerSecond;
-        $.rateEnd = endTimestamp;
+        stepBps = Math.ceilDiv((newMultiplier_ - old) * Constants.BASIS_POINTS, old);
+        if (stepBps > Constants.MAX_STEP_BPS) {
+            revert StepAboveMaximum(stepBps, Constants.MAX_STEP_BPS);
+        }
 
-        emit YieldRateSet(oldRate, newRatePerSecond, endTimestamp, oldMultiplier);
-        emit UIMultiplierUpdated(oldMultiplier, projected, endTimestamp);
+        $.multiplier = newMultiplier_;
+        $.lastSteppedAt = block.timestamp;
+        if (stepBps > $.stepHighWaterMark) $.stepHighWaterMark = stepBps;
+
+        emit OkuMultiplierStepped(old, newMultiplier_, stepBps);
+        emit UIMultiplierUpdated(old, newMultiplier_, block.timestamp);
     }
 
-    /// @dev Freezes the multiplier at its current value, immediately, no timelock.
-    ///      Monotone-safe: it stops growth without reducing anything accrued.
-    ///
-    ///      Sets `rateEnd = lastAccrualTime = block.timestamp` as well as zeroing
-    ///      the rate. Leaving `rateEnd` in the future would put the token in an
-    ///      ambiguous "live rate that yields nothing" state, where `effectiveAt()`
-    ///      returns a future timestamp implying something will happen then. With
-    ///      all three equal, `uiMultiplier() == newUIMultiplier()` and
-    ///      `effectiveAt() == block.timestamp`, which reads unambiguously as
-    ///      "halted, nothing pending".
-    function _haltAccrual() internal {
+    /// @dev Clears the step high-water mark. Cold-only escape hatch, gated by
+    ///      the inheriting token. Its honest precondition — that supply
+    ///      outstanding at the time of the large step has substantially turned
+    ///      over — is not verifiable on-chain, which is why the event should be
+    ///      alarmed on.
+    function _resetStepHighWaterMark() internal {
         ScaledUIAmountStorage storage $ = _getScaledUIAmountStorage();
-        uint256 frozen = uiMultiplier();
-        $.baseMultiplier = frozen;
-        $.ratePerSecond = Constants.PRECISION;
-        $.lastAccrualTime = block.timestamp;
-        $.rateEnd = block.timestamp;
-        emit AccrualHalted(frozen);
-        emit UIMultiplierUpdated(frozen, frozen, block.timestamp);
-    }
-
-    // ============ Internal: math ============
-
-    /// @dev `base * rate^elapsed`. Identity at `elapsed == 0` or a no-yield rate.
-    ///
-    ///      Deliberately does NOT clamp at `MAX_MULTIPLIER`. An earlier revision
-    ///      clamped here, which silently made the explicit `MultiplierAboveMaximum`
-    ///      check in `_setYieldRate` unreachable dead code — the clamp guaranteed
-    ///      the comparison could never be true. Bounding at the authority boundary
-    ///      with an informative revert is strictly better than silently flattening
-    ///      the trajectory inside a view.
-    ///
-    ///      `uiMultiplier()` still cannot exceed `MAX_MULTIPLIER` or revert:
-    ///      `_setYieldRate` proves the projection to `rateEnd` is both computable
-    ///      and within bounds before committing, and accrual is monotone in
-    ///      elapsed time clamped at `rateEnd`, so every later evaluation is a
-    ///      strictly smaller case of a computation that already succeeded.
-    function _compound(uint256 base, uint256 rate, uint256 elapsed) private pure returns (uint256) {
-        if (elapsed == 0 || rate <= Constants.PRECISION) return base;
-        return Math.mulDiv(
-            base,
-            MathLib.rpow(rate, elapsed, Constants.PRECISION),
-            Constants.PRECISION,
-            Math.Rounding.Floor
-        );
-    }
-
-    /// @dev Nominal (simple) annualization of a per-second rate, in bps.
-    ///      `apr = (rate - PRECISION) * SECONDS_PER_YEAR * BASIS_POINTS / PRECISION`.
-    function _impliedAprBps(uint256 rate) private pure returns (uint256) {
-        if (rate <= Constants.PRECISION) return 0;
-        uint256 excess = rate - Constants.PRECISION;
-        return Math.mulDiv(
-            excess * Constants.SECONDS_PER_YEAR,
-            Constants.BASIS_POINTS,
-            Constants.PRECISION,
-            Math.Rounding.Floor
-        );
+        uint256 oldMark = $.stepHighWaterMark;
+        $.stepHighWaterMark = 0;
+        emit StepHighWaterMarkReset(oldMark);
     }
 }

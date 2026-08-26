@@ -16,14 +16,13 @@ import {
     ERC20PermitUpgradeable
 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {ScaledUIAmountUpgradeable} from "../lib/ScaledUIAmountUpgradeable.sol";
 import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
 import {MathLib} from "../lib/MathLib.sol";
 import {Roles} from "../lib/Roles.sol";
-import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
+import {IOkuM} from "../interfaces/IOkuM.sol";
 import {IScaledUIAmount} from "../interfaces/erc8056/IScaledUIAmount.sol";
 import {
     IScaledUIAmountNewUIMultiplier
@@ -31,19 +30,26 @@ import {
 import {IScaledUIAmountConversion} from "../interfaces/erc8056/IScaledUIAmountConversion.sol";
 import {IScaledUIAmountBalances} from "../interfaces/erc8056/IScaledUIAmountBalances.sol";
 
+/// @dev Minimal read surface of the fee schedule that step coverage binds to.
+///      Declared locally to avoid a circular import with the module.
+interface IStepFeeSource {
+    function tin() external view returns (uint256);
+    function tout() external view returns (uint256);
+}
+
 /**
- * @title OkuDollar
- * @notice rUSDOku — a yield-bearing, dollar-denominated token backed by US T-Bills.
+ * @title OkuM
+ * @notice The share token — a fully-backed claim on realized T-Bill yield.
  *
- * @dev **One token. One multiplier. Fixed raw balances.**
+ * @dev **Fixed raw balances. One stepwise realized index (`M_oku`).**
  *
  *      A standard, non-rebasing ERC-20. Raw balances move only on transfer, mint
- *      and burn. Yield accrues in a single UI multiplier that grows continuously
- *      with elapsed time; a holding's dollar value is
- *      `rawBalance * uiMultiplier() / 1e18`.
+ *      and burn. Realized yield accrues in a single stepwise UI multiplier; a
+ *      holding's dollar value is `rawBalance * uiMultiplier() / 1e18`.
  *
- *      Same construction as Solana's Token-2022 `ScaledUiAmount` extension, which
- *      ERC-8056 standardizes for EVM.
+ *      Same construction as Solana's Token-2022 `ScaledUiAmount` extension,
+ *      which ERC-8056 standardizes for EVM — including the accrual granularity:
+ *      both chains step, with the same value at the same cadence.
  *
  *      THREE LAYERS:
  *        - ERC-20     — raw, stock OpenZeppelin. The accounting layer.
@@ -52,10 +58,9 @@ import {IScaledUIAmountBalances} from "../interfaces/erc8056/IScaledUIAmountBala
  *
  *      NOT ERC-4626 COMPLIANT, and `supportsInterface` does not claim to be.
  *      `deposit`/`mint`/`withdraw`/`redeem` are absent: subscription and
- *      redemption run through `LitePSM` and may queue rather than settle. A
- *      `deposit()` that reverted for everyone would be worse than an absent one,
- *      because integrators detect the interface and assume it works. Redemption
- *      capacity is exposed on the PSM (`redeemableNow()`), where it lives.
+ *      redemption run through `SubscriptionModule` and may queue rather than
+ *      settle. A `deposit()` that reverted for everyone would be worse than an
+ *      absent one, because integrators detect the interface and assume it works.
  *
  *      VALUE LAYER IS COARSER THAN THE DISPLAY LAYER, BY CONSTRUCTION.
  *      `convertToAssets` returns USDC (6 dp) per ERC-4626 semantics, while
@@ -65,16 +70,12 @@ import {IScaledUIAmountBalances} from "../interfaces/erc8056/IScaledUIAmountBala
  *            <= uiMultiplier()
  *            <  (convertToAssets(1e18) + 1) * usdcDecimalMultiplier
  *
- *      `convertToAssets` and `convertToShares` are therefore NOT inverses — a
- *      round trip quantizes to USDC granularity, losing up to `1e12` in 18-dp
- *      terms. Fine for a lending market; written down here rather than discovered.
- *
  *      HARD RULE: the multiplier is an input to *pricing*, never to *accounting*.
  *      Every ledger in the system is denominated in raw units.
  *
  *      Storage uses ERC-7201 namespaced storage. See https://eips.ethereum.org/EIPS/eip-7201
  */
-contract OkuDollar is
+contract OkuM is
     Initializable,
     ERC20Upgradeable,
     ERC20PermitUpgradeable,
@@ -82,13 +83,13 @@ contract OkuDollar is
     PausableUpgradeable,
     UUPSUpgradeable,
     ScaledUIAmountUpgradeable,
-    IOkuDollar
+    IOkuM
 {
     // ============ ERC-7201 Namespaced Storage ============
 
-    /// @custom:storage-location erc7201:okumoney.storage.OkuDollarV2
-    struct OkuDollarStorage {
-        /// @dev USDC on this chain. Single source of truth — the PSM and queue
+    /// @custom:storage-location erc7201:okumoney.storage.OkuM
+    struct OkuMStorage {
+        /// @dev USDC on this chain. Single source of truth — the module and queue
         ///      assert against this at `initialize` rather than deriving their own.
         address asset;
         /// @dev `10 ** (18 - usdcDecimals)`. `1e12` for Circle USDC.
@@ -98,47 +99,38 @@ contract OkuDollar is
         /// @dev Global supply cap in raw units. Bounded by `MAX_TOTAL_SUPPLY`.
         uint256 maxSupply;
         mapping(address => bool) isBlacklisted;
+        /// @dev Where step coverage reads `tin`/`tout` from — the
+        ///      SubscriptionModule proxy. Zero = fail-closed: every step refused
+        ///      until wired, so a partially-configured deployment cannot step
+        ///      uncovered.
+        address stepFeeSource;
+        /// @dev Guardian halt flag. While true, `setOkuMultiplier` reverts.
+        bool accrualHalted;
     }
 
-    // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuDollarV2")) - 1)) & ~bytes32(uint256(0xff))
-    bytes32 private constant OKUDOLLAR_STORAGE_LOCATION =
-        0x6befa17dca3cfb17c3f7e06c05462b39c1519ffa5ecf80eb3bf9bf86626ce300;
+    // keccak256(abi.encode(uint256(keccak256("okumoney.storage.OkuM")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant OKUM_STORAGE_LOCATION =
+        0xb452deea490617e43215efe5d1021937b5200d3dc5c52d3e2b801ca18fb58800;
 
-    function _getOkuDollarStorage() private pure returns (OkuDollarStorage storage $) {
+    function _getOkuMStorage() private pure returns (OkuMStorage storage $) {
         assembly {
-            $.slot := OKUDOLLAR_STORAGE_LOCATION
+            $.slot := OKUM_STORAGE_LOCATION
         }
     }
 
-    /// @dev Cross-chain multiplier sync window. Lives in its own namespace, and
-    ///      on the token rather than the PSM, for two reasons:
+    /// @dev Post-step sync window. Lives in its own namespace, and on the token
+    ///      rather than the module, because the multiplier authority is here:
+    ///      fail-closed arming is a local write rather than a token -> module
+    ///      call, which would invert the dependency direction.
     ///
-    ///      1. The multiplier authority is here (`setYieldRate`), so fail-closed
-    ///         arming is a local write rather than a token -> PSM call, which
-    ///         would invert the dependency direction.
-    ///      2. Keeping it out of `ScaledUIAmountUpgradeable` leaves that library
-    ///         untouched. It sits on every pricing path and is held at 100% line
-    ///         coverage by a CI gate; widening its storage struct for a concern
-    ///         it does not own would be a poor trade.
-    ///
-    ///      Three `uint64`s pack into a single slot. `uint64` seconds overflows
-    ///      in year ~584 billion, and the epoch would need 1.8e19 ticks.
+    ///      Two `uint64`s pack into a single slot. `uint64` seconds overflows in
+    ///      year ~584 billion.
     /// @custom:storage-location erc7201:okumoney.storage.SyncWindow
     struct SyncWindowStorage {
         /// @dev Exclusive: the first timestamp at which the window is no longer
-        ///      engaged. `0` = never armed. Doubles as the anchor for the
-        ///      inter-window gap, which is why `endSyncWindow` truncates it to
-        ///      `block.timestamp` rather than zeroing it.
+        ///      engaged. `0` = never armed.
         uint64 lockedUntil;
-        /// @dev Orchestrator-assigned tick number, identical on every chain for
-        ///      a given tick. Deliberately NOT auto-incremented on a multiplier
-        ///      write: EVM re-ups its rate roughly monthly while SVM steps
-        ///      daily-to-weekly, so independently-bumped counters would diverge
-        ///      permanently and make cross-chain parity meaningless.
-        uint64 epoch;
-        /// @dev Configured window length in seconds. `0` = inert, which is the
-        ///      deployed default; the mechanism ships audited but dormant and is
-        ///      switched on by `setSyncWindowDuration`.
+        /// @dev Configured window length in seconds. `0` = inert.
         uint64 duration;
     }
 
@@ -164,16 +156,15 @@ contract OkuDollar is
     error NotBlacklisted();
     /// @notice The configured asset reports more decimals than supported (>18).
     error AssetDecimalsTooLarge(uint8 reported);
-    /// @notice `beginSyncWindow` called before `MIN_SYNC_WINDOW_GAP` elapsed.
-    /// @dev Only reachable from the explicit entrypoint. On the `setYieldRate`
-    ///      path an unelapsed gap silently declines to re-arm instead of
-    ///      reverting, so the rate setter is never censorable.
-    error SyncWindowGapNotElapsed(uint256 earliestNextOpen);
-    /// @notice Supplied epoch does not follow (`begin`) or match (`end`) the
-    ///         stored one.
-    error SyncEpochMismatch(uint256 supplied, uint256 expected);
     /// @notice Proposed sync-window duration exceeds `MAX_SYNC_WINDOW`.
     error SyncWindowTooLong(uint256 requested, uint256 maximum);
+    /// @notice The guardian halted stepping; `resumeAccrual` (cold) lifts it.
+    error AccrualIsHalted();
+    /// @notice The proposed step exceeds what the round-trip fee covers.
+    /// @dev Step coverage: `tin + tout >= stepBps` must hold for every step, or
+    ///      the round trip mint-at-M0 / redeem-at-M1 extracts the step from the
+    ///      buffer. Raise the fees first, or take a smaller step.
+    error StepNotCovered(uint256 stepBps, uint256 coverageBps);
 
     // ============ Events ============
 
@@ -184,28 +175,28 @@ contract OkuDollar is
     event Blacklisted(address indexed account);
     event Unblacklisted(address indexed account);
 
-    /// @notice A cross-chain multiplier sync window opened.
-    /// @param epoch Orchestrator-assigned tick number; must match the peer chain.
+    /// @notice A multiplier step armed the post-step sync window.
     /// @param lockedUntil Exclusive timestamp at which the window lifts.
-    /// @param autoArmed `true` when armed implicitly by `setYieldRate` rather
-    ///        than by an explicit `beginSyncWindow`. A sustained stream of
-    ///        `true` means the operator is writing rates without running the
-    ///        tick protocol, and should alarm.
-    event SyncWindowOpened(uint256 indexed epoch, uint256 lockedUntil, bool autoArmed);
-    /// @notice A sync window was closed early, i.e. the tick was confirmed
-    ///         landed on every chain. Absence of this before `lockedUntil` means
-    ///         the liveness backstop fired instead of the happy path.
-    event SyncWindowClosed(uint256 indexed epoch);
+    event SyncWindowArmed(uint256 lockedUntil);
     event SyncWindowDurationUpdated(uint256 oldDuration, uint256 newDuration);
+
+    /// @notice The guardian blocked further steps.
+    /// @param atMultiplier The multiplier frozen in place.
+    event AccrualHalted(uint256 atMultiplier);
+    /// @notice Cold lifted the guardian halt.
+    event AccrualResumed(uint256 atMultiplier);
+    /// @notice The step-coverage fee source was (re)wired.
+    event StepFeeSourceSet(address indexed oldSource, address indexed newSource);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    /// @notice Initialize the OkuDollar proxy.
-    /// @param name_ ERC-20 name (canonical: "Oku Dollar").
-    /// @param symbol_ ERC-20 symbol (canonical: "rUSDOku").
+    /// @notice Initialize the OkuM proxy.
+    /// @param name_ ERC-20 name (canonical: "Oku Money").
+    /// @param symbol_ ERC-20 symbol (canonical: "OkuM" — no `r`/`s` prefix; an
+    ///        `r` prefix reads as *rebasing*, which is precisely backwards here).
     /// @param _asset USDC address on this chain. Must expose `decimals()`.
     /// @param _admin Receives the full role set; redistributes post-deploy.
     /// @param initialMaxSupply Initial supply cap in raw units.
@@ -231,7 +222,7 @@ contract OkuDollar is
         __Pausable_init();
         __ScaledUIAmount_init();
 
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
+        OkuMStorage storage $ = _getOkuMStorage();
         $.asset = _asset;
 
         uint8 assetDecimals = IERC20Metadata(_asset).decimals();
@@ -300,21 +291,21 @@ contract OkuDollar is
     ///      Exposed on-chain (not only in the SDK) so explorers and wallets can
     ///      surface the drift without importing anything. There is no
     ///      contract-level fix that preserves ERC-20 semantics; see README
-    ///      Limitation 7.
+    ///      Limitations.
     function allowanceUI(address owner, address spender) external view returns (uint256) {
         return MathLib.toUiAmount(allowance(owner, spender), uiMultiplier());
     }
 
     // ============ ERC-4626 conversion subset (value layer) ============
 
-    /// @inheritdoc IOkuDollar
+    /// @inheritdoc IOkuM
     function asset() external view returns (address) {
-        return _getOkuDollarStorage().asset;
+        return _getOkuMStorage().asset;
     }
 
-    /// @inheritdoc IOkuDollar
+    /// @inheritdoc IOkuM
     function usdcDecimalMultiplier() external view returns (uint256) {
-        return _getOkuDollarStorage().usdcDecimalMultiplier;
+        return _getOkuMStorage().usdcDecimalMultiplier;
     }
 
     /// @notice Asset-denominated value of `shares` raw tokens. Floors.
@@ -322,22 +313,21 @@ contract OkuDollar is
     ///      inverse of `convertToShares` — see contract NatSpec.
     function convertToAssets(uint256 shares) public view returns (uint256) {
         return MathLib.dollarsToUsdc(
-            MathLib.toUiAmount(shares, uiMultiplier()), _getOkuDollarStorage().usdcDecimalMultiplier
+            MathLib.toUiAmount(shares, uiMultiplier()), _getOkuMStorage().usdcDecimalMultiplier
         );
     }
 
     /// @notice Raw tokens corresponding to `assets` USDC. Floors.
     function convertToShares(uint256 assets) public view returns (uint256) {
         return MathLib.fromUiAmount(
-            MathLib.usdcToDollars(assets, _getOkuDollarStorage().usdcDecimalMultiplier),
-            uiMultiplier()
+            MathLib.usdcToDollars(assets, _getOkuMStorage().usdcDecimalMultiplier), uiMultiplier()
         );
     }
 
     /// @notice Asset-denominated value of the entire supply.
     /// @dev Derived from the multiplier, not measured. There is no on-chain
     ///      referent for off-chain T-Bill backing; the value interface is exactly
-    ///      as trustworthy as the multiplier authority. README Limitation 2.
+    ///      as trustworthy as the multiplier authority. README Limitations.
     function totalAssets() external view returns (uint256) {
         return convertToAssets(totalSupply());
     }
@@ -346,142 +336,149 @@ contract OkuDollar is
 
     /// @notice Remaining minter allowance for `minter_`, in raw units.
     function minterAllowance(address minter_) external view returns (uint256) {
-        return _getOkuDollarStorage().minterAllowance[minter_];
+        return _getOkuMStorage().minterAllowance[minter_];
     }
 
     /// @notice Global supply cap in raw units.
     function maxSupply() external view returns (uint256) {
-        return _getOkuDollarStorage().maxSupply;
+        return _getOkuMStorage().maxSupply;
     }
 
     /// @notice Whether `account` is blacklisted.
     function isBlacklisted(address account) external view returns (bool) {
-        return _getOkuDollarStorage().isBlacklisted[account];
+        return _getOkuMStorage().isBlacklisted[account];
     }
 
-    // ============ Rate management ============
+    /// @inheritdoc IOkuM
+    function stepHighWaterMark()
+        public
+        view
+        override(ScaledUIAmountUpgradeable, IOkuM)
+        returns (uint256)
+    {
+        return super.stepHighWaterMark();
+    }
 
-    /// @notice Set the continuous accrual rate and its halt boundary.
-    /// @param ratePerSecond_ Compound per-second rate (`1e18` == no yield).
-    /// @param endTimestamp Accrual halts here. Mandatory, strictly future,
-    ///        within `MAX_RATE_DURATION`.
-    /// @dev Re-anchors `baseMultiplier` to the live value first, so calling this
-    ///      before `rateEnd` extends accrual with no gap and no step.
-    ///
-    ///      NOT pause-gated, by design: an operator may need to zero the rate
-    ///      during an incident response, and pausing this setter would defeat
-    ///      that. The companion emergency lever `haltAccrual` is likewise
-    ///      ungated.
-    ///
-    ///      This is an ORACLE WRITE. The moment a lending market prices off
+    /// @notice Whether the guardian has blocked further multiplier steps.
+    function accrualHalted() external view returns (bool) {
+        return _getOkuMStorage().accrualHalted;
+    }
+
+    /// @notice Where step coverage reads the `tin`/`tout` fee schedule from.
+    function stepFeeSource() external view returns (address) {
+        return _getOkuMStorage().stepFeeSource;
+    }
+
+    // ============ Multiplier authority ============
+
+    /// @notice Step `M_oku` to `newMultiplier`, effective immediately.
+    /// @dev THE oracle write. The moment a lending market prices off
     ///      `uiMultiplier()`, a wrong value mints borrowing power directly, and
     ///      `totalAssets()` is derived from the multiplier rather than measured,
-    ///      so it is not an independent check. Bounded by `MAX_IMPLIED_APR`,
-    ///      `MAX_RATE_DURATION`, monotonicity and `MAX_MULTIPLIER`.
-    function setYieldRate(
-        uint256 ratePerSecond_,
-        uint256 endTimestamp
-    )
-        external
-        onlyRole(Roles.OKU_RATE_SETTER)
-    {
-        _setYieldRate(ratePerSecond_, endTimestamp);
-        // Fail-closed: a rate write is a multiplier-trajectory change, so fence
-        // it even if the operator skipped `beginSyncWindow`. Clamped, never
-        // reverting — see `_armSyncWindow`.
-        _armSyncWindow(true);
+    ///      so there is no on-chain referent to catch a mistake. Bounded by:
+    ///
+    ///        - monotonicity (`MultiplierCannotDecrease`)
+    ///        - `MAX_STEP_BPS` per step (`StepAboveMaximum`)
+    ///        - step coverage `tin + tout >= stepBps` (`StepNotCovered`)
+    ///        - `MAX_MULTIPLIER` cumulative (`MultiplierAboveMaximum`)
+    ///        - the guardian halt flag (`AccrualIsHalted`)
+    ///
+    ///      NOT pause-gated, by design: correcting the multiplier during an
+    ///      incident must always be possible.
+    ///
+    ///      Arms the post-step sync window unconditionally (when a nonzero
+    ///      duration is configured), so a step can never land unfenced. There is
+    ///      no separate begin/end protocol: each chain fences itself on its own
+    ///      write, and cross-chain parity is verified off-chain by comparing
+    ///      multiplier values directly.
+    function setOkuMultiplier(uint256 newMultiplier) external onlyRole(Roles.OKU_RATE_SETTER) {
+        OkuMStorage storage $ = _getOkuMStorage();
+        if ($.accrualHalted) revert AccrualIsHalted();
+
+        uint256 stepBps = _stepMultiplier(newMultiplier);
+
+        // Step coverage. Fail-closed: an unwired fee source reads as zero
+        // coverage, so no step can land before the module is connected.
+        uint256 coverage = 0;
+        address feeSource = $.stepFeeSource;
+        if (feeSource != address(0)) {
+            coverage = IStepFeeSource(feeSource).tin() + IStepFeeSource(feeSource).tout();
+        }
+        if (stepBps > coverage) revert StepNotCovered(stepBps, coverage);
+
+        _armSyncWindow();
     }
 
-    /// @notice Freeze the multiplier at its current value, immediately.
+    /// @notice Block further multiplier steps, immediately.
     /// @dev No timelock — this is the guardian's emergency lever against a
     ///      compromised rate setter. Monotone-safe: stops growth without
     ///      reducing anything already accrued. Not pause-gated.
     ///
-    ///      Deliberately does NOT arm the sync window. `OKU_GUARDIAN` sits on
-    ///      the warm multisig specifically because it is withhold-only — it
-    ///      cannot reduce an accrued multiplier, so its abuse ceiling is "yield
-    ///      pauses until cold overrides". Letting it arm a window would hand
-    ///      that warm key a repeatable mint/redeem block, a capability the RBAC
-    ///      documentation explicitly denies it. Halting also lowers no
-    ///      trajectory that could desync a peer chain upward, so there is
-    ///      nothing to fence.
+    ///      Deliberately does NOT arm the sync window: nothing about the current
+    ///      multiplier changes, so there is nothing to fence, and arming would
+    ///      hand the warm guardian key a repeatable mint/redeem block the RBAC
+    ///      model denies it.
     function haltAccrual() external onlyRole(Roles.OKU_GUARDIAN) {
-        _haltAccrual();
+        _getOkuMStorage().accrualHalted = true;
+        emit AccrualHalted(uiMultiplier());
     }
 
-    // ============ Cross-chain sync window ============
-    //
-    // Step 1 and step 3 of the cross-chain multiplier tick protocol:
-    //
-    //   beginSyncWindow(N) on every chain
-    //     -> setYieldRate (EVM) / set_multiplier (SVM) on every chain
-    //   endSyncWindow(N) on every chain
-    //
-    // Between open and close, the PSM's `mint`, `redeem`, `redeemUiAmount` and
-    // `processQueue` revert, so nobody transacts against a price only some
-    // chains have updated. Neither chain can observe the other, so the epoch is
-    // orchestrator-assigned and identical across chains, making
-    // `syncEpoch()_evm == sync_epoch_svm` an externally verifiable "no tick in
-    // flight" assertion.
-
-    /// @notice Open a cross-chain multiplier sync window.
-    /// @param epoch Must be exactly `syncEpoch() + 1`. Strict succession stops a
-    ///        replayed open from silently reusing a number and defeating the
-    ///        cross-chain parity check.
-    /// @dev Held by `OKU_RATE_SETTER` rather than a new role: the orchestrator
-    ///      that writes the multiplier is the actor that knows when a tick has
-    ///      landed everywhere, so a separate key would add plumbing without
-    ///      adding separation of duties.
-    function beginSyncWindow(uint256 epoch) external onlyRole(Roles.OKU_RATE_SETTER) {
-        SyncWindowStorage storage $ = _getSyncWindowStorage();
-
-        uint256 expected = uint256($.epoch) + 1;
-        if (epoch != expected) revert SyncEpochMismatch(epoch, expected);
-
-        // Unlike the auto-arm path this DOES revert on an unelapsed gap.
-        // Nothing about protocol safety depends on an explicit open succeeding,
-        // so it is free to be strict — and being strict here is precisely what
-        // makes the availability floor enforceable.
-        if (!_syncGapElapsed($)) {
-            revert SyncWindowGapNotElapsed(uint256($.lockedUntil) + Constants.MIN_SYNC_WINDOW_GAP);
-        }
-
-        // casting to 'uint64' is safe because `epoch` was just required to equal
-        // `uint256($.epoch) + 1` and `$.epoch` is itself a uint64, so the value
-        // is at most 2^64. Reaching it needs 1.8e19 ticks.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        $.epoch = uint64(epoch);
-        $.lockedUntil = uint64(block.timestamp + $.duration);
-
-        emit SyncWindowOpened(epoch, $.lockedUntil, false);
+    /// @notice Lift the guardian halt. Cold-only.
+    function resumeAccrual() external onlyRole(Roles.OKU_CAP_MANAGER) {
+        _getOkuMStorage().accrualHalted = false;
+        emit AccrualResumed(uiMultiplier());
     }
 
-    /// @notice Close the current sync window early, once the tick is confirmed
-    ///         landed on every chain.
-    /// @param epoch Must equal `syncEpoch()`, so a stale release cannot close a
-    ///        window it never observed.
-    /// @dev Truncates `lockedUntil` to now rather than zeroing it: that field is
-    ///      also the gap anchor, and zeroing would reset the gap and permit
-    ///      windows to be chained back-to-back.
-    function endSyncWindow(uint256 epoch) external onlyRole(Roles.OKU_RATE_SETTER) {
-        SyncWindowStorage storage $ = _getSyncWindowStorage();
+    /// @notice Wire the step-coverage fee source (the SubscriptionModule proxy).
+    /// @dev Cold economic policy. Zero is allowed and fail-closed: it disables
+    ///      stepping entirely rather than disabling the coverage check.
+    function setStepFeeSource(address newSource) external onlyRole(Roles.OKU_CAP_MANAGER) {
+        OkuMStorage storage $ = _getOkuMStorage();
+        address old = $.stepFeeSource;
+        $.stepFeeSource = newSource;
+        emit StepFeeSourceSet(old, newSource);
+    }
 
-        if (epoch != uint256($.epoch)) revert SyncEpochMismatch(epoch, uint256($.epoch));
+    /// @notice Clear the step high-water mark, unfreezing the fee floor.
+    /// @dev Cold-only escape hatch; reopens historical step exposure. Emits
+    ///      `StepHighWaterMarkReset` — alarm on it.
+    function resetStepHighWaterMark() external onlyRole(Roles.OKU_CAP_MANAGER) {
+        _resetStepHighWaterMark();
+    }
 
-        // Only ever move the end backwards, so a same-second double-close
-        // cannot push the gap anchor forward.
-        if (uint256($.lockedUntil) > block.timestamp) {
-            $.lockedUntil = uint64(block.timestamp);
-        }
+    // ============ Post-step sync window ============
+    //
+    // `M_oku` steps on every chain in the same orchestrator tick, and the tick
+    // is not atomic across chains. Each chain fences ITSELF: the write above
+    // arms a bounded lock on everything that prices through the multiplier
+    // (module mint/redeem, queue processing, wrapper wrap/unwrap). The lock
+    // auto-expires; there is no close call, no epoch, and no cross-chain
+    // bookkeeping. Off-chain parity verification compares the multiplier VALUES
+    // (`check-sync-parity.ts`), which equal epochs never actually proved.
 
-        emit SyncWindowClosed(epoch);
+    /// @notice True while the post-step sync window is engaged.
+    /// @dev Exclusive upper bound. A zero-length window is therefore genuinely
+    ///      inert rather than blocking the remainder of the current second.
+    function isSyncLocked() public view returns (bool) {
+        return block.timestamp < uint256(_getSyncWindowStorage().lockedUntil);
+    }
+
+    /// @notice Exclusive timestamp at which the current window lifts.
+    function syncLockedUntil() external view returns (uint256) {
+        return uint256(_getSyncWindowStorage().lockedUntil);
+    }
+
+    /// @notice Configured window length in seconds. `0` = inert.
+    function syncWindowDuration() external view returns (uint256) {
+        return uint256(_getSyncWindowStorage().duration);
     }
 
     /// @notice Set the sync-window length in seconds. `0` disables the window.
     /// @dev `OKU_CAP_MANAGER` (cold) — this is economic/safety policy, the same
     ///      class as `setMaxSupply`, so it reuses that role rather than adding
     ///      one. Bounded by `MAX_SYNC_WINDOW`, so no key can turn this into an
-    ///      indefinite block.
+    ///      indefinite block: worst case, a compromised rate setter re-arming on
+    ///      every write still cannot hold a single window longer than 15 minutes.
     function setSyncWindowDuration(uint256 newDuration) external onlyRole(Roles.OKU_CAP_MANAGER) {
         if (newDuration > Constants.MAX_SYNC_WINDOW) {
             revert SyncWindowTooLong(newDuration, Constants.MAX_SYNC_WINDOW);
@@ -495,63 +492,13 @@ contract OkuDollar is
         emit SyncWindowDurationUpdated(old, newDuration);
     }
 
-    /// @notice True while a multiplier tick is propagating across chains.
-    /// @dev Exclusive upper bound. A zero-length window is therefore genuinely
-    ///      inert rather than blocking the remainder of the current second,
-    ///      which is what lets the mechanism ship dormant.
-    function isSyncLocked() public view returns (bool) {
-        return block.timestamp < uint256(_getSyncWindowStorage().lockedUntil);
-    }
-
-    /// @notice Exclusive timestamp at which the current window lifts.
-    function syncLockedUntil() external view returns (uint256) {
-        return uint256(_getSyncWindowStorage().lockedUntil);
-    }
-
-    /// @notice Orchestrator-assigned tick number. Compare across chains.
-    function syncEpoch() external view returns (uint256) {
-        return uint256(_getSyncWindowStorage().epoch);
-    }
-
-    /// @notice Configured window length in seconds. `0` = inert.
-    function syncWindowDuration() external view returns (uint256) {
-        return uint256(_getSyncWindowStorage().duration);
-    }
-
-    /// @dev Arm the window, honouring the inter-window gap. No-op when the
-    ///      duration is zero or the gap has not elapsed.
-    ///
-    ///      CLAMP, NEVER REVERT. A multiplier write must not be rejectable on
-    ///      window state: that would let anyone able to open a window censor the
-    ///      rate setter, and `setYieldRate` is deliberately un-gated so an
-    ///      operator can zero the rate during an incident. The gap bound still
-    ///      holds — a caller looping `setYieldRate` gets at most one window per
-    ///      gap period, preserving the availability floor.
-    ///
-    ///      Writes nothing at all when `duration == 0`, so an inert deployment
-    ///      never moves the gap anchor and never emits a window event.
-    function _armSyncWindow(bool autoArmed) internal {
+    /// @dev Arm the window. Writes nothing when `duration == 0`, so an inert
+    ///      configuration never emits a window event.
+    function _armSyncWindow() internal {
         SyncWindowStorage storage $ = _getSyncWindowStorage();
         if ($.duration == 0) return;
-        if (!_syncGapElapsed($)) return;
         $.lockedUntil = uint64(block.timestamp + $.duration);
-        emit SyncWindowOpened(uint256($.epoch), $.lockedUntil, autoArmed);
-    }
-
-    /// @dev Whether enough time has passed since the last window closed for a
-    ///      new one to be armed.
-    ///
-    ///      `lockedUntil == 0` is the never-armed sentinel and always satisfies
-    ///      the gap. Checking it explicitly rather than letting the arithmetic
-    ///      fall out matters: without it the first window could not open until
-    ///      `MIN_SYNC_WINDOW_GAP` past the Unix epoch. That is unreachable on a
-    ///      production chain, which is exactly why it would have been a latent
-    ///      trap — it would only ever surface on a fresh local chain whose
-    ///      timestamp starts near zero.
-    function _syncGapElapsed(SyncWindowStorage storage $) private view returns (bool) {
-        uint64 until = $.lockedUntil;
-        if (until == 0) return true;
-        return block.timestamp >= uint256(until) + Constants.MIN_SYNC_WINDOW_GAP;
+        emit SyncWindowArmed($.lockedUntil);
     }
 
     // ============ ERC-20 hook: pause + blacklist + UI event ============
@@ -573,7 +520,7 @@ contract OkuDollar is
     ///      unconditionally, including on mint and burn where the counterparty
     ///      UI amount is meaningless.
     function _update(address from, address to, uint256 value) internal override {
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
+        OkuMStorage storage $ = _getOkuMStorage();
 
         if (from != address(0) && $.isBlacklisted[from]) revert SenderBlacklisted();
         if (to != address(0) && $.isBlacklisted[to]) revert RecipientBlacklisted();
@@ -603,7 +550,7 @@ contract OkuDollar is
         virtual
         override
     {
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
+        OkuMStorage storage $ = _getOkuMStorage();
         if ($.isBlacklisted[owner]) revert SenderBlacklisted();
         if ($.isBlacklisted[spender]) revert RecipientBlacklisted();
         super.permit(owner, spender, value, deadline, v, r, s);
@@ -611,11 +558,11 @@ contract OkuDollar is
 
     // ============ Mint / burn ============
 
-    /// @inheritdoc IOkuDollar
+    /// @inheritdoc IOkuM
     /// @dev Minting `amount` raw at `uiMultiplier() = 1.05e18` creates $1.05*amount
-    ///      of displayed value. The PSM handles the USDC conversion.
+    ///      of displayed value. The module handles the USDC conversion.
     function mint(address to, uint256 amount) external onlyRole(Roles.OKU_MINTER) whenNotPaused {
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
+        OkuMStorage storage $ = _getOkuMStorage();
 
         uint256 cap = $.maxSupply;
         if (totalSupply() + amount > cap) revert ExceedsSupplyCap(totalSupply() + amount, cap);
@@ -629,7 +576,7 @@ contract OkuDollar is
         _mint(to, amount);
     }
 
-    /// @inheritdoc IOkuDollar
+    /// @inheritdoc IOkuM
     /// @dev Burns the caller's own balance. Allowed while paused. Burning does
     ///      NOT restore minter allowance.
     function burn(uint256 amount) external onlyRole(Roles.OKU_BURNER) {
@@ -647,7 +594,7 @@ contract OkuDollar is
         onlyRole(Roles.OKU_ALLOWANCE_MANAGER)
     {
         if (minter_ == address(0)) revert Errors.ZeroAddress();
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
+        OkuMStorage storage $ = _getOkuMStorage();
         uint256 oldAllowance = $.minterAllowance[minter_];
         $.minterAllowance[minter_] = newAllowance;
         emit MinterAllowanceUpdated(minter_, oldAllowance, newAllowance);
@@ -667,7 +614,7 @@ contract OkuDollar is
         if (newMaxSupply > Constants.MAX_TOTAL_SUPPLY) {
             revert AboveMaxTotalSupply(newMaxSupply, Constants.MAX_TOTAL_SUPPLY);
         }
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
+        OkuMStorage storage $ = _getOkuMStorage();
         uint256 oldMaxSupply = $.maxSupply;
         $.maxSupply = newMaxSupply;
         emit MaxSupplyUpdated(oldMaxSupply, newMaxSupply);
@@ -677,7 +624,7 @@ contract OkuDollar is
 
     /// @notice Add `account` to the blacklist. Works while paused.
     function blacklist(address account) external onlyRole(Roles.OKU_BLACKLISTER) {
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
+        OkuMStorage storage $ = _getOkuMStorage();
         if ($.isBlacklisted[account]) revert AlreadyBlacklisted();
         $.isBlacklisted[account] = true;
         emit Blacklisted(account);
@@ -685,7 +632,7 @@ contract OkuDollar is
 
     /// @notice Remove `account` from the blacklist. Works while paused.
     function unblacklist(address account) external onlyRole(Roles.OKU_UNBLACKLISTER) {
-        OkuDollarStorage storage $ = _getOkuDollarStorage();
+        OkuMStorage storage $ = _getOkuMStorage();
         if (!$.isBlacklisted[account]) revert NotBlacklisted();
         $.isBlacklisted[account] = false;
         emit Unblacklisted(account);

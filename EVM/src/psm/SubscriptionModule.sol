@@ -19,16 +19,24 @@ import {Errors} from "../lib/Errors.sol";
 import {MathLib} from "../lib/MathLib.sol";
 import {Roles} from "../lib/Roles.sol";
 import {SafeApprove} from "../lib/SafeApprove.sol";
-import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
+import {IOkuM} from "../interfaces/IOkuM.sol";
+import {IUSDOku} from "../interfaces/IUSDOku.sol";
 import {RedemptionQueue} from "./RedemptionQueue.sol";
+import {USDOkuWrapper} from "../wrapper/USDOkuWrapper.sol";
 
 /**
- * @title LitePSM
- * @notice Peg Stability Module — USDC <-> rUSDOku at the UI multiplier.
+ * @title SubscriptionModule
+ * @notice USDC <-> OkuM at `M_oku`. The sole user-facing mint/redeem surface.
  *
- * @dev Lifecycle (deposit -> buffer -> queued redemption -> processQueue ->
- *      withdraw) mirrors MakerDAO's `DssLitePsm`.
- *      Taken from https://github.com/makerdao/dss-lite-psm/blob/main/src/DssLitePsm.sol
+ * @dev RENAMED FROM `LitePSM`. Nothing here is pegged: this is a mint/redeem
+ *      facility quoting at the current realized index. A contract called *PSM*,
+ *      in a product with a dollar token, with `tin`/`tout` fees, would be read
+ *      by integrators and counsel as a peg mechanism — OkuM has no peg and never
+ *      will. (USDOku's $1 unit comes from the wrapper's 1:1 definition, not from
+ *      a stability module.) The `tin`/`tout` names and the lifecycle
+ *      (deposit -> buffer -> queued redemption -> processQueue -> withdraw) are
+ *      kept, inherited from MakerDAO's `DssLitePsm`:
+ *      https://github.com/makerdao/dss-lite-psm/blob/main/src/DssLitePsm.sol
  *
  *      ```
  *      USDC -> raw:  raw  = (usdcAmount * usdcDecimalMultiplier) * PRECISION / uiMultiplier()
@@ -38,25 +46,38 @@ import {RedemptionQueue} from "./RedemptionQueue.sol";
  *      At `uiMultiplier = 1.05e18`, depositing 100 USDC yields ~95.24 raw
  *      (displayed as $100.00); redeeming 95.24 raw returns ~100 USDC.
  *
- *      NO *LOCAL* SANDWICH GUARD AND NO FORWARD PRICING. Continuous accrual has
- *      no distribution transaction to sandwich and no scheduled step to
- *      front-run, so pricing reads `uiMultiplier()` directly. This remains the
- *      main practical dividend of the continuous design, and it is why this side
- *      needs no `tout`-style step-arbitrage control the way a stepped chain does.
+ *      FEES ARE A LIVE DEFENCE, NOT PARITY PARAMETERS. `M_oku` steps, so the
+ *      round trip mint-at-M0 / redeem-at-M1 extracts the step unless fees cover
+ *      it: `profit per unit = M1/M0 - 1 - (tin + tout)/10_000`. The
+ *      STEP-COVERAGE INVARIANT binds the combined round-trip cost:
  *
- *      THERE IS A CROSS-CHAIN SYNC WINDOW, which is a different concern. A
- *      multiplier tick is not atomic across chains, and during propagation the
- *      peer chain prices a raw token differently. `mint`, `redeem`,
- *      `redeemUiAmount` and `processQueue` therefore revert while
- *      `okuDollar.isSyncLocked()`. That window is bounded, auto-expiring and
- *      duty-cycled (`Constants.MAX_SYNC_WINDOW` / `MIN_SYNC_WINDOW_GAP`), and it
- *      is inert until an operator sets a nonzero duration.
+ *          tin + tout >= stepBps   for every step taken
+ *
+ *      enforced two ways — `OkuM.setOkuMultiplier` reverts `StepNotCovered` if
+ *      the proposed step exceeds what current fees cover, and OkuM's
+ *      `stepHighWaterMark` floors `setFees` here so fees cannot later drop
+ *      below a step already taken.
+ *
+ *      POST-STEP SYNC WINDOW. Every `setOkuMultiplier` write arms a bounded,
+ *      auto-expiring lock; `mint`, `redeem`, `redeemUiAmount` and `processQueue`
+ *      revert while `okuM.isSyncLocked()`. It fences the write itself and the
+ *      cross-chain propagation interval; it is NOT the step-arbitrage defence
+ *      (fees are — holding raw across a step needs no transaction).
+ *
+ *      USDC <-> USDOku IN ONE TRANSACTION. `mintUsdOku` / `redeemUsdOku` chain
+ *      the OkuM leg above through `USDOkuWrapper.wrap`/`unwrap` so a user never
+ *      has to hold the intermediate OkuM themselves — mint OkuM to this
+ *      contract, wrap it straight to the caller (or the reverse). This exists
+ *      because USDOku is the instrument for wallets that cannot yet render
+ *      ERC-8056, and making it the HARDEST asset to acquire (mint, approve,
+ *      wrap — three transactions) would defeat that purpose. Wired post-deploy
+ *      via `setUsdOkuWrapper`; both revert `UsdOkuWrapperNotSet` until then.
  *
  *      USDC peg monitoring is off-chain; operators pause on a detected depeg.
  *
  *      Storage uses ERC-7201 namespaced storage.
  */
-contract LitePSM is
+contract SubscriptionModule is
     Initializable,
     AccessControlUpgradeable,
     PausableUpgradeable,
@@ -68,41 +89,41 @@ contract LitePSM is
 
     // ============ ERC-7201 Namespaced Storage ============
 
-    /// @custom:storage-location erc7201:okumoney.storage.LitePSMV2
-    struct LitePSMStorage {
-        IOkuDollar okuDollar;
+    /// @custom:storage-location erc7201:okumoney.storage.SubscriptionModule
+    struct SubscriptionModuleStorage {
+        IOkuM okuM;
         IERC20 usdc;
         RedemptionQueue redemptionQueue;
         uint256 usdcDecimalMultiplier;
         /// @dev Mint fee in bps, charged on deposited USDC. Bounded by
-        ///      `MAX_FEE_BPS`. Defaults to 0 — fees ship inert.
+        ///      `MAX_FEE_BPS`; `tin + tout` floored by OkuM's
+        ///      `stepHighWaterMark`. Defaults to 0 — fees ship inert, which also
+        ///      means no step can land until a covering fee is set.
         uint256 tin;
-        /// @dev Redemption fee in bps, charged on the USDC paid out.
-        ///
-        ///      On this chain `tout` is present for parity with the upstream
-        ///      `dss-lite-psm` design and with the SVM side, NOT because EVM has
-        ///      a step-arbitrage surface to defend: accrual here is continuous,
-        ///      so there is no discrete step to hold across. It is SVM's stepped
-        ///      multiplier that makes `tout` load-bearing. Keeping the parameter
-        ///      on both sides keeps the fee schedule, runbook and monitoring
-        ///      symmetric.
+        /// @dev Redemption fee in bps, charged on the USDC paid out. Same
+        ///      bounds. Together with `tin` this is the step-arbitrage control.
         uint256 tout;
+        /// @dev The USDOku wrapper, wired post-deploy (it does not exist yet
+        ///      when this contract initializes — deploy order is OkuM, queue,
+        ///      module, USDOku, wrapper). Zero until wired; `mintUsdOku` and
+        ///      `redeemUsdOku` fail closed until it is.
+        USDOkuWrapper usdOkuWrapper;
     }
 
-    // keccak256(abi.encode(uint256(keccak256("okumoney.storage.LitePSMV2")) - 1)) & ~bytes32(uint256(0xff))
-    bytes32 private constant LITEPSM_STORAGE_LOCATION =
-        0x952f98385f783df99339c223f883c63698c43fdc03355b407aa2180810717000;
+    // keccak256(abi.encode(uint256(keccak256("okumoney.storage.SubscriptionModule")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant MODULE_STORAGE_LOCATION =
+        0xecd0cb33fb25c826f207d6173dfc2e3b8a1f214fee397fc84b1785e86d97ea00;
 
-    function _getLitePSMStorage() private pure returns (LitePSMStorage storage $) {
+    function _getModuleStorage() private pure returns (SubscriptionModuleStorage storage $) {
         assembly {
-            $.slot := LITEPSM_STORAGE_LOCATION
+            $.slot := MODULE_STORAGE_LOCATION
         }
     }
 
     // ============ Modifiers ============
 
     /// @dev Reject operations that convert value through the multiplier while a
-    ///      cross-chain tick is in flight.
+    ///      step is propagating.
     ///
     ///      GATING RULE: an operation is sync-gated iff it prices through the
     ///      multiplier. That is the whole rule, and it is what keeps the
@@ -113,12 +134,12 @@ contract LitePSM is
     ///      Read from the token rather than mirrored here: one source of truth,
     ///      and the token is where the multiplier authority lives.
     modifier whenNotSyncLocked() {
-        IOkuDollar okuDollar_ = _getLitePSMStorage().okuDollar;
-        if (okuDollar_.isSyncLocked()) {
+        IOkuM okuM_ = _getModuleStorage().okuM;
+        if (okuM_.isSyncLocked()) {
             // Second read only on the revert path, so the happy path pays for
             // one call rather than two. Gives the caller a retry-after instead
             // of an opaque failure.
-            revert SyncWindowActive(okuDollar_.syncLockedUntil());
+            revert SyncWindowActive(okuM_.syncLockedUntil());
         }
         _;
     }
@@ -132,20 +153,26 @@ contract LitePSM is
     error InsufficientBuffer(uint256 available, uint256 required);
     error WouldStrandQueue(uint256 remainingBalance, uint256 queueObligation);
     error UsdcDecimalsTooLarge(uint8 reported);
-    /// @notice The supplied USDC does not match `okuDollar.asset()`.
+    /// @notice The supplied USDC does not match `okuM.asset()`.
     error AssetMismatch(address expected, address supplied);
     /// @notice The locally-derived decimal multiplier disagrees with the token's.
     error DecimalMultiplierMismatch(uint256 expected, uint256 derived);
     /// @notice `sweepToken` cannot move USDC — the buffer has its own gated path.
     error CannotSweepAsset();
-    /// @notice A cross-chain multiplier tick is propagating; operations that
-    ///         price through the multiplier are blocked until it lands.
-    /// @dev Distinct from `EnforcedPause`: bounded, auto-expiring, and driven by
-    ///      the tick protocol rather than by incident response. Integrators
-    ///      should retry rather than treat it as an outage.
+    /// @notice A multiplier step is propagating; operations that price through
+    ///         the multiplier are blocked until it lands.
+    /// @dev Distinct from `EnforcedPause`: bounded, auto-expiring, and armed by
+    ///      the multiplier write itself rather than by incident response.
+    ///      Integrators should retry rather than treat it as an outage.
     error SyncWindowActive(uint256 lockedUntil);
     /// @notice Proposed `tin` or `tout` exceeds `MAX_FEE_BPS`.
     error FeeAboveMaximum(uint256 requested, uint256 maximum);
+    /// @notice Proposed `tin + tout` would drop below a step already taken.
+    /// @dev Step coverage is a ratchet: `stepHighWaterMark` floors the combined
+    ///      fee until cold explicitly resets it on the token.
+    error FeesBelowStepFloor(uint256 combinedBps, uint256 floorBps);
+    /// @notice `mintUsdOku` / `redeemUsdOku` called before `setUsdOkuWrapper`.
+    error UsdOkuWrapperNotSet();
 
     // ============ Events ============
 
@@ -157,19 +184,28 @@ contract LitePSM is
     event BufferRefilled(uint256 newBalance, uint256 startIndex, uint256 endIndex);
     event TokenSwept(address indexed token, address indexed to, uint256 amount);
     event FeesUpdated(uint256 oldTin, uint256 newTin, uint256 oldTout, uint256 newTout);
+    /// @notice USDC minted directly to USDOku in one transaction.
+    event UsdOkuMinted(
+        address indexed user, uint256 usdcAmount, uint256 usdOkuOut, uint256 uiMultiplier
+    );
+    /// @notice USDOku redeemed directly for USDC in one transaction.
+    event UsdOkuRedeemed(
+        address indexed user, uint256 usdOkuIn, uint256 usdcOut, uint256 uiMultiplier
+    );
+    event UsdOkuWrapperSet(address indexed oldWrapper, address indexed newWrapper);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    /// @notice Initialize the PSM proxy.
-    /// @param _okuDollar The rUSDOku token.
-    /// @param _usdc USDC address. MUST equal `_okuDollar.asset()`.
+    /// @notice Initialize the module proxy.
+    /// @param _okuM The OkuM token.
+    /// @param _usdc USDC address. MUST equal `_okuM.asset()`.
     /// @param _redemptionQueue The queue proxy.
-    /// @param _admin Receives the full PSM role set.
+    /// @param _admin Receives the full module role set.
     function initialize(
-        address _okuDollar,
+        address _okuM,
         address _usdc,
         address _redemptionQueue,
         address _admin
@@ -177,7 +213,7 @@ contract LitePSM is
         public
         initializer
     {
-        if (_okuDollar == address(0)) revert Errors.ZeroAddress();
+        if (_okuM == address(0)) revert Errors.ZeroAddress();
         if (_usdc == address(0)) revert Errors.ZeroAddress();
         if (_redemptionQueue == address(0)) revert Errors.ZeroAddress();
         if (_admin == address(0)) revert Errors.ZeroAddress();
@@ -186,8 +222,8 @@ contract LitePSM is
         __Pausable_init();
         __ReentrancyGuard_init();
 
-        LitePSMStorage storage $ = _getLitePSMStorage();
-        $.okuDollar = IOkuDollar(_okuDollar);
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
+        $.okuM = IOkuM(_okuM);
         $.usdc = IERC20(_usdc);
         $.redemptionQueue = RedemptionQueue(_redemptionQueue);
 
@@ -195,13 +231,13 @@ contract LitePSM is
         // maintaining a second independently-supplied copy. A misconfigured
         // deployment would otherwise get silently divergent pricing between
         // `convertToAssets` and this contract.
-        address tokenAsset = IOkuDollar(_okuDollar).asset();
+        address tokenAsset = IOkuM(_okuM).asset();
         if (tokenAsset != _usdc) revert AssetMismatch(tokenAsset, _usdc);
 
         uint8 usdcDecimals = IERC20Metadata(_usdc).decimals();
         if (usdcDecimals > Constants.MAX_USDC_DECIMALS) revert UsdcDecimalsTooLarge(usdcDecimals);
         uint256 derived = 10 ** (uint256(Constants.MAX_USDC_DECIMALS) - uint256(usdcDecimals));
-        uint256 expected = IOkuDollar(_okuDollar).usdcDecimalMultiplier();
+        uint256 expected = IOkuM(_okuM).usdcDecimalMultiplier();
         if (expected != derived) revert DecimalMultiplierMismatch(expected, derived);
         $.usdcDecimalMultiplier = derived;
 
@@ -217,20 +253,38 @@ contract LitePSM is
 
     // ============ Storage accessors ============
 
-    function okuDollar() external view returns (IOkuDollar) {
-        return _getLitePSMStorage().okuDollar;
+    function okuM() external view returns (IOkuM) {
+        return _getModuleStorage().okuM;
     }
 
     function usdc() external view returns (IERC20) {
-        return _getLitePSMStorage().usdc;
+        return _getModuleStorage().usdc;
     }
 
     function redemptionQueue() external view returns (RedemptionQueue) {
-        return _getLitePSMStorage().redemptionQueue;
+        return _getModuleStorage().redemptionQueue;
     }
 
     function usdcDecimalMultiplier() external view returns (uint256) {
-        return _getLitePSMStorage().usdcDecimalMultiplier;
+        return _getModuleStorage().usdcDecimalMultiplier;
+    }
+
+    function usdOkuWrapper() external view returns (USDOkuWrapper) {
+        return _getModuleStorage().usdOkuWrapper;
+    }
+
+    /// @notice Wire the USDOku wrapper for `mintUsdOku` / `redeemUsdOku`.
+    /// @dev `PSM_FEE_MANAGER` — the same cold key as `OkuM.setStepFeeSource`
+    ///      and `USDOku.setSolvencySource` performs this class of one-time
+    ///      post-deploy wiring; a dedicated role would add a key without
+    ///      adding separation of duties. Fails closed until called: both
+    ///      convenience functions revert `UsdOkuWrapperNotSet` at a zero
+    ///      address, which is the state right after `initialize`.
+    function setUsdOkuWrapper(address newWrapper) external onlyRole(Roles.PSM_FEE_MANAGER) {
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
+        address old = address($.usdOkuWrapper);
+        $.usdOkuWrapper = USDOkuWrapper(newWrapper);
+        emit UsdOkuWrapperSet(old, newWrapper);
     }
 
     // ============ Quotes ============
@@ -239,20 +293,20 @@ contract LitePSM is
     /// @dev Fee-inclusive. An integrator pricing off a fee-free quote would
     ///      over-estimate output by `tin` and mis-size every downstream trade.
     function quoteMint(uint256 usdcAmount) public view returns (uint256 rawOut) {
-        LitePSMStorage storage $ = _getLitePSMStorage();
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
         return MathLib.fromUiAmount(
             MathLib.usdcToDollars(MathLib.applyFee(usdcAmount, $.tin), $.usdcDecimalMultiplier),
-            $.okuDollar.uiMultiplier()
+            $.okuM.uiMultiplier()
         );
     }
 
     /// @notice USDC `redeem(rawAmount)` would produce right now.
     /// @dev Fee-inclusive, i.e. the amount actually received after `tout`.
     function quoteRedeem(uint256 rawAmount) public view returns (uint256 usdcOut) {
-        LitePSMStorage storage $ = _getLitePSMStorage();
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
         return MathLib.applyFee(
             MathLib.dollarsToUsdc(
-                MathLib.toUiAmount(rawAmount, $.okuDollar.uiMultiplier()), $.usdcDecimalMultiplier
+                MathLib.toUiAmount(rawAmount, $.okuM.uiMultiplier()), $.usdcDecimalMultiplier
             ),
             $.tout
         );
@@ -269,28 +323,47 @@ contract LitePSM is
     ///      property is preserved without adjusting for it here. Deliberately
     ///      left fee-free so the figure remains a pure capacity bound.
     function redeemableNow() external view returns (uint256 maxRawInstant) {
-        LitePSMStorage storage $ = _getLitePSMStorage();
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
         return MathLib.fromUiAmount(
             MathLib.usdcToDollars($.usdc.balanceOf(address(this)), $.usdcDecimalMultiplier),
-            $.okuDollar.uiMultiplier()
+            $.okuM.uiMultiplier()
         );
     }
 
-    /// @notice Mint fee in basis points.
+    /// @notice Mint fee in basis points. Read by OkuM's step-coverage check.
     function tin() external view returns (uint256) {
-        return _getLitePSMStorage().tin;
+        return _getModuleStorage().tin;
     }
 
-    /// @notice Redemption fee in basis points.
+    /// @notice Redemption fee in basis points. Read by OkuM's step-coverage check.
     function tout() external view returns (uint256) {
-        return _getLitePSMStorage().tout;
+        return _getModuleStorage().tout;
+    }
+
+    /// @notice Dollars of USDOku `mintUsdOku(usdcAmount)` would mint right now.
+    /// @dev An UPPER-BOUND approximation, not exact like `quoteMint`: the real
+    ///      path measures the wrapper's actual OkuM receipt, which can floor a
+    ///      wei below this composed estimate. Fine for UI display; do not use
+    ///      it as a slippage floor.
+    function quoteMintUsdOku(uint256 usdcAmount) external view returns (uint256) {
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
+        return $.usdOkuWrapper.quoteWrap(quoteMint(usdcAmount));
+    }
+
+    /// @notice USDC `redeemUsdOku(usdOkuAmount)` would produce right now.
+    /// @dev Same approximation caveat as `quoteMintUsdOku` — the real path
+    ///      settles on the dollar value of the shares actually pulled, which
+    ///      the module measures by balance delta, not on the nominal input.
+    function quoteRedeemUsdOku(uint256 usdOkuAmount) external view returns (uint256) {
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
+        return quoteRedeem($.usdOkuWrapper.quoteUnwrap(usdOkuAmount));
     }
 
     // ============ Mint / redeem ============
 
-    /// @notice Mint rUSDOku by depositing USDC.
+    /// @notice Mint OkuM by depositing USDC.
     /// @param usdcAmount USDC to deposit, native decimals.
-    /// @return rawOut Raw rUSDOku minted to the caller.
+    /// @return rawOut Raw OkuM minted to the caller.
     function mint(uint256 usdcAmount)
         external
         nonReentrant
@@ -298,14 +371,47 @@ contract LitePSM is
         whenNotSyncLocked
         returns (uint256 rawOut)
     {
+        return _mint(usdcAmount, msg.sender);
+    }
+
+    /// @notice Mint USDOku directly from USDC, in one transaction.
+    /// @param usdcAmount USDC to deposit, native decimals.
+    /// @return usdOkuOut Dollars of USDOku minted to the caller.
+    /// @dev Mints OkuM to THIS contract rather than the caller, then wraps it
+    ///      straight to them — no intermediate OkuM balance the caller has to
+    ///      hold or approve. Priced at whatever `M_oku` the module's `mint`
+    ///      leg used; the wrapper leg is then value-neutral (see
+    ///      `USDOkuWrapper.wrap`).
+    function mintUsdOku(uint256 usdcAmount)
+        external
+        nonReentrant
+        whenNotPaused
+        whenNotSyncLocked
+        returns (uint256 usdOkuOut)
+    {
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
+        USDOkuWrapper wrapper_ = $.usdOkuWrapper;
+        if (address(wrapper_) == address(0)) revert UsdOkuWrapperNotSet();
+
+        uint256 rawOut = _mint(usdcAmount, address(this));
+
+        IERC20 okuMToken = IERC20(address($.okuM));
+        okuMToken.setExactAllowance(address(wrapper_), rawOut);
+        usdOkuOut = wrapper_.wrap(rawOut, msg.sender);
+        okuMToken.revokeAllowance(address(wrapper_));
+
+        emit UsdOkuMinted(msg.sender, usdcAmount, usdOkuOut, $.okuM.uiMultiplier());
+    }
+
+    function _mint(uint256 usdcAmount, address okuMRecipient) internal returns (uint256 rawOut) {
         if (usdcAmount == 0) revert Errors.ZeroAmount();
 
-        LitePSMStorage storage $ = _getLitePSMStorage();
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
-        uint256 multiplier = $.okuDollar.uiMultiplier();
+        uint256 multiplier = $.okuM.uiMultiplier();
 
         // Apply `tin` before conversion. The full `usdcAmount` still enters the
-        // buffer; the fee portion simply has no rUSDOku minted against it, which
+        // buffer; the fee portion simply has no OkuM minted against it, which
         // is how the fee accretes to the buffer — and therefore to the
         // collateral ratio — with no recipient account and no second transfer.
         uint256 creditedUsdc = MathLib.applyFee(usdcAmount, $.tin);
@@ -329,14 +435,18 @@ contract LitePSM is
             MathLib.dollarsToUsdc(MathLib.toUiAmount(rawOut, multiplier), decimalMultiplier);
         if (roundTrip + 1 < creditedUsdc) revert RoundTripDriftTooLarge(roundTrip, creditedUsdc);
 
+        // `okuMRecipient` is deliberately independent of who the USDC is pulled
+        // from: `mintUsdOku` mints here-and-wraps rather than to `msg.sender`,
+        // but the USDC still always comes from the caller — the event
+        // attributes to `msg.sender` in both cases.
         $.usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
-        $.okuDollar.mint(msg.sender, rawOut);
+        $.okuM.mint(okuMRecipient, rawOut);
 
         emit Minted(msg.sender, usdcAmount, rawOut, multiplier);
     }
 
-    /// @notice Redeem raw rUSDOku for USDC.
-    /// @param rawAmount Raw rUSDOku to redeem (18 dp).
+    /// @notice Redeem raw OkuM for USDC.
+    /// @param rawAmount Raw OkuM to redeem (18 dp).
     /// @return usdcOut USDC paid, or 0 if the redemption was queued.
     /// @dev If the buffer cannot cover the payout the tokens are escrowed in the
     ///      queue and 0 is returned. The user keeps earning yield while queued,
@@ -348,7 +458,7 @@ contract LitePSM is
         whenNotSyncLocked
         returns (uint256 usdcOut)
     {
-        return _redeem(msg.sender, rawAmount);
+        return _redeem(msg.sender, rawAmount, true);
     }
 
     /// @notice Redeem by UI (dollar) amount rather than raw.
@@ -360,12 +470,11 @@ contract LitePSM is
     ///      For a true max-redeem use `redeem(balanceOf(msg.sender))`.
     ///
     ///      This is the shape of the May-2026 Sepolia `InsufficientBalance()`
-    ///      incident: a UI amount round-tripped back to raw. The share ledger
-    ///      that caused it is gone, but the *shape* survives here, and it only
-    ///      stays benign because `fromUIAmount` floors. Flipping that direction
-    ///      to Ceil — the natural "fix" for the dust — makes this revert.
-    ///      Pinned by `MaxSendTest`; see the assertions there before changing
-    ///      any rounding direction in `MathLib`.
+    ///      incident: a UI amount round-tripped back to raw. It only stays
+    ///      benign because `fromUIAmount` floors. Flipping that direction to
+    ///      Ceil — the natural "fix" for the dust — makes this revert. Pinned by
+    ///      `MaxSendTest`; see the assertions there before changing any rounding
+    ///      direction in `MathLib`.
     function redeemUiAmount(uint256 uiAmount)
         external
         nonReentrant
@@ -374,16 +483,69 @@ contract LitePSM is
         returns (uint256 usdcOut)
     {
         if (uiAmount == 0) revert Errors.ZeroAmount();
-        LitePSMStorage storage $ = _getLitePSMStorage();
-        uint256 rawAmount = $.okuDollar.fromUIAmount(uiAmount);
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
+        uint256 rawAmount = $.okuM.fromUIAmount(uiAmount);
         if (rawAmount == 0) revert AmountTooSmall();
-        return _redeem(msg.sender, rawAmount);
+        return _redeem(msg.sender, rawAmount, true);
     }
 
-    function _redeem(address user, uint256 rawAmount) internal returns (uint256 usdcOut) {
+    /// @notice Redeem USDOku directly for USDC, in one transaction.
+    /// @param usdOkuAmount Dollars of USDOku to redeem.
+    /// @return usdcOut USDC paid, or 0 if the OkuM leg was queued.
+    /// @dev THE ROUNDING HAZARD THIS FUNCTION EXISTS TO GET RIGHT: pulling
+    ///      `usdOkuAmount` from the caller floors to shares independently of
+    ///      whatever the wrapper's own unwrap does with the figure it is
+    ///      handed next — passing the nominal `usdOkuAmount` straight through
+    ///      could ask the wrapper to pull marginally more than this contract
+    ///      actually holds. So this measures the SHARE DELTA of its own pull,
+    ///      converts that back to the dollar value it actually received
+    ///      (floored), and hands the wrapper that — provably no more than it
+    ///      holds, because flooring twice can only ask for the same or fewer
+    ///      shares than flooring once. At most 1 wei of USDOku dust can be left
+    ///      behind in this contract; nothing user-facing rounds unfavourably.
+    function redeemUsdOku(uint256 usdOkuAmount)
+        external
+        nonReentrant
+        whenNotPaused
+        whenNotSyncLocked
+        returns (uint256 usdcOut)
+    {
+        if (usdOkuAmount == 0) revert Errors.ZeroAmount();
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
+        USDOkuWrapper wrapper_ = $.usdOkuWrapper;
+        if (address(wrapper_) == address(0)) revert UsdOkuWrapperNotSet();
+
+        IUSDOku usdOkuToken = wrapper_.usdOku();
+        IERC20 usdOkuErc20 = IERC20(address(usdOkuToken));
+
+        uint256 sharesBefore = usdOkuToken.sharesOf(address(this));
+        usdOkuErc20.safeTransferFrom(msg.sender, address(this), usdOkuAmount);
+        uint256 sharesReceived = usdOkuToken.sharesOf(address(this)) - sharesBefore;
+        if (sharesReceived == 0) revert AmountTooSmall();
+
+        uint256 effectiveUsdOku = MathLib.toUiAmount(sharesReceived, usdOkuToken.usdOkuIndex());
+
+        usdOkuErc20.setExactAllowance(address(wrapper_), effectiveUsdOku);
+        uint256 okuMOut = wrapper_.unwrap(effectiveUsdOku, address(this));
+        usdOkuErc20.revokeAllowance(address(wrapper_));
+
+        uint256 multiplier = $.okuM.uiMultiplier();
+        usdcOut = _redeem(msg.sender, okuMOut, false);
+
+        emit UsdOkuRedeemed(msg.sender, usdOkuAmount, usdcOut, multiplier);
+    }
+
+    function _redeem(
+        address user,
+        uint256 rawAmount,
+        bool pullFromUser
+    )
+        internal
+        returns (uint256 usdcOut)
+    {
         if (rawAmount == 0) revert Errors.ZeroAmount();
 
-        LitePSMStorage storage $ = _getLitePSMStorage();
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
 
         // Reject sub-USDC-unit redemptions before any math: an input below the
@@ -391,7 +553,7 @@ contract LitePSM is
         // floor collapses to zero and trivially passes the check below.
         if (rawAmount < decimalMultiplier) revert AmountTooSmall();
 
-        uint256 multiplier = $.okuDollar.uiMultiplier();
+        uint256 multiplier = $.okuM.uiMultiplier();
         uint256 toutBps = $.tout;
 
         // Gross dollar value of the raw being redeemed, then `tout`. The
@@ -426,11 +588,11 @@ contract LitePSM is
         );
         if (usdcOut < minExpected) revert OutputBelowMinimum(usdcOut, minExpected);
 
-        IERC20 token = IERC20(address($.okuDollar));
+        IERC20 token = IERC20(address($.okuM));
 
         if ($.usdc.balanceOf(address(this)) >= usdcOut) {
-            token.safeTransferFrom(user, address(this), rawAmount);
-            $.okuDollar.burn(rawAmount);
+            if (pullFromUser) token.safeTransferFrom(user, address(this), rawAmount);
+            $.okuM.burn(rawAmount);
             $.usdc.safeTransfer(user, usdcOut);
             emit Redeemed(user, rawAmount, usdcOut, multiplier);
             return usdcOut;
@@ -442,7 +604,16 @@ contract LitePSM is
         // at processing time, so a later fee change cannot retroactively tax
         // users who were already waiting. They were quoted this rate when they
         // joined the queue.
-        token.safeTransferFrom(user, address($.redemptionQueue), rawAmount);
+        //
+        // `pullFromUser` false means this contract already holds `rawAmount`
+        // (the `redeemUsdOku` path, paid out by the wrapper) — moved to the
+        // queue with a plain `transfer`, not `transferFrom`, since there is no
+        // allowance to spend against.
+        if (pullFromUser) {
+            token.safeTransferFrom(user, address($.redemptionQueue), rawAmount);
+        } else {
+            token.safeTransfer(address($.redemptionQueue), rawAmount);
+        }
         uint256 index = $.redemptionQueue.enqueue(user, rawAmount, toutBps);
         emit RedemptionEnqueued(user, rawAmount, index);
         return 0;
@@ -459,11 +630,10 @@ contract LitePSM is
     ///      IS blocked by the sync window, and the distinction is the point.
     ///      Pause is unbounded and incident-driven, so gating queue processing
     ///      on it could strand users indefinitely. The sync window is bounded by
-    ///      `MAX_SYNC_WINDOW` and duty-cycled by `MIN_SYNC_WINDOW_GAP`, so the
-    ///      worst case is a short delay — and leaving it open would be a real
-    ///      hole, because the queue prices at the live multiplier
-    ///      (`RedemptionQueue.processQueue` caches `uiMultiplier()` per batch)
-    ///      and would therefore settle at a stale cross-chain price.
+    ///      `MAX_SYNC_WINDOW`, so the worst case is a short delay — and leaving
+    ///      it open would be a real hole, because the queue prices at the live
+    ///      multiplier (`RedemptionQueue.processQueue` caches `uiMultiplier()`
+    ///      per batch) and would therefore settle mid-propagation.
     function processQueue(
         uint256 startIndex,
         uint256 endIndex,
@@ -474,7 +644,7 @@ contract LitePSM is
         whenNotSyncLocked
         onlyRole(Roles.PSM_QUEUE_PROCESSOR)
     {
-        LitePSMStorage storage $ = _getLitePSMStorage();
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
         $.usdc.setExactAllowance(address($.redemptionQueue), approveAmount);
         $.redemptionQueue.processQueue(startIndex, endIndex);
         $.usdc.revokeAllowance(address($.redemptionQueue));
@@ -488,7 +658,7 @@ contract LitePSM is
     ///      remediation, not an attack surface.
     function depositBuffer(uint256 amount) external onlyRole(Roles.PSM_BUFFER_DEPOSITOR) {
         if (amount == 0) revert Errors.ZeroAmount();
-        LitePSMStorage storage $ = _getLitePSMStorage();
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
         $.usdc.safeTransferFrom(msg.sender, address(this), amount);
         emit BufferDeposited(msg.sender, amount, $.usdc.balanceOf(address(this)));
     }
@@ -505,7 +675,7 @@ contract LitePSM is
         onlyRole(Roles.PSM_BUFFER_WITHDRAWER)
     {
         if (to == address(0)) revert Errors.ZeroAddress();
-        LitePSMStorage storage $ = _getLitePSMStorage();
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
         uint256 balance = $.usdc.balanceOf(address(this));
         if (balance < amount) revert InsufficientBuffer(balance, amount);
         uint256 queueObligation = $.redemptionQueue.totalQueuedUsdc();
@@ -515,8 +685,8 @@ contract LitePSM is
         emit BufferWithdrawn(to, amount, remaining);
     }
 
-    /// @notice Sweep a non-USDC token out of the PSM.
-    /// @dev The PSM holds no rUSDOku between calls by construction, but anyone
+    /// @notice Sweep a non-USDC token out of the module.
+    /// @dev The module holds no OkuM between calls by construction, but anyone
     ///      can transfer tokens here for free. Without this, donations are
     ///      stranded. USDC is explicitly excluded — the buffer has its own gated
     ///      path (`withdrawUsdc`) with the `WouldStrandQueue` check, and routing
@@ -530,7 +700,7 @@ contract LitePSM is
         onlyRole(Roles.PSM_BUFFER_WITHDRAWER)
     {
         if (token == address(0) || to == address(0)) revert Errors.ZeroAddress();
-        LitePSMStorage storage $ = _getLitePSMStorage();
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
         if (token == address($.usdc)) revert CannotSweepAsset();
         uint256 balance = IERC20(token).balanceOf(address(this));
         if (balance == 0) revert Errors.ZeroAmount();
@@ -538,7 +708,7 @@ contract LitePSM is
         IERC20(token).safeTransfer(to, balance);
     }
 
-    // ============ Pause ============
+    // ============ Fees ============
 
     /// @notice Set the `tin` / `tout` fee schedule in basis points.
     /// @dev `PSM_FEE_MANAGER`, intended for the same cold key that holds
@@ -546,7 +716,12 @@ contract LitePSM is
     ///      as `setMaxSupply`. It is a distinct, PSM-namespaced constant rather
     ///      than `OKU_CAP_MANAGER` itself because AccessControl mappings are
     ///      per-contract: no new key, but a correctly-scoped capability.
-    ///      Both fees bounded by `MAX_FEE_BPS`.
+    ///
+    ///      Both fees bounded by `MAX_FEE_BPS`; the combination floored by
+    ///      OkuM's `stepHighWaterMark` — fees cannot drop below a step already
+    ///      taken (`FeesBelowStepFloor`), or the coverage a past step relied on
+    ///      would silently evaporate. Cold can clear the floor via
+    ///      `OkuM.resetStepHighWaterMark`, which is alarmed.
     ///
     ///      Fees accrue to the USDC buffer: `tin` is deposited but not credited,
     ///      `tout` is owed but not paid out. There is no recipient address and no
@@ -555,10 +730,6 @@ contract LitePSM is
     ///
     ///      Does NOT retroactively affect entries already in the redemption
     ///      queue — each snapshots the `tout` prevailing when it was enqueued.
-    ///
-    ///      Ported from the upstream this PSM was modelled on, which carries
-    ///      `tin`/`tout` and which the original port omitted.
-    ///      Taken from https://github.com/makerdao/dss-lite-psm/blob/master/src/DssLitePsm.sol
     function setFees(uint256 newTin, uint256 newTout) external onlyRole(Roles.PSM_FEE_MANAGER) {
         if (newTin > Constants.MAX_FEE_BPS) {
             revert FeeAboveMaximum(newTin, Constants.MAX_FEE_BPS);
@@ -567,7 +738,13 @@ contract LitePSM is
             revert FeeAboveMaximum(newTout, Constants.MAX_FEE_BPS);
         }
 
-        LitePSMStorage storage $ = _getLitePSMStorage();
+        SubscriptionModuleStorage storage $ = _getModuleStorage();
+
+        uint256 floorBps = $.okuM.stepHighWaterMark();
+        if (newTin + newTout < floorBps) {
+            revert FeesBelowStepFloor(newTin + newTout, floorBps);
+        }
+
         uint256 oldTin = $.tin;
         uint256 oldTout = $.tout;
         $.tin = newTin;
@@ -575,6 +752,8 @@ contract LitePSM is
 
         emit FeesUpdated(oldTin, newTin, oldTout, newTout);
     }
+
+    // ============ Pause ============
 
     function pause() external onlyRole(Roles.PSM_PAUSER) {
         _pause();

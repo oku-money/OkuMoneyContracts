@@ -8,40 +8,44 @@ import {IScaledUIAmountConversion} from "./erc8056/IScaledUIAmountConversion.sol
 import {IScaledUIAmountBalances} from "./erc8056/IScaledUIAmountBalances.sol";
 
 /**
- * @title IOkuDollar
- * @notice Consumer-facing surface of the OkuDollar (rUSDOku) token.
+ * @title IOkuM
+ * @notice Consumer-facing surface of the OkuM share token.
  * @dev Composes the standard surfaces rather than redeclaring them, so there is
  *      exactly one declaration of each function in the inheritance graph:
- *        - `IERC20`                      — the raw accounting layer
+ *        - `IERC20`                       — the raw accounting layer
  *        - `IScaledUIAmount` + extensions — the ERC-8056 display layer
  *      and adds only what is unique to this token: the value-layer anchor
- *      (`asset`, `usdcDecimalMultiplier`) and the role-gated supply hooks the
- *      PSM and queue call.
+ *      (`asset`, `usdcDecimalMultiplier`), the step-coverage anchor
+ *      (`stepHighWaterMark`), the sync-window views, and the role-gated supply
+ *      hooks the module, queue and wrapper call.
  */
-interface IOkuDollar is
-    IERC20,
-    IScaledUIAmount,
-    IScaledUIAmountConversion,
-    IScaledUIAmountBalances
-{
+interface IOkuM is IERC20, IScaledUIAmount, IScaledUIAmountConversion, IScaledUIAmountBalances {
     // ============ Value-layer anchor ============
 
     /// @notice The underlying asset all value conversions are denominated against.
-    /// @dev USDC on the deployed chain. Single source of truth: the PSM and queue
-    ///      cross-assert against this at `initialize` rather than deriving their
-    ///      own copy from a separately-supplied address.
+    /// @dev USDC on the deployed chain. Single source of truth: the module and
+    ///      queue cross-assert against this at `initialize` rather than deriving
+    ///      their own copy from a separately-supplied address.
     function asset() external view returns (address);
 
     /// @notice `10 ** (18 - IERC20Metadata(asset()).decimals())`. `1e12` for Circle USDC.
     function usdcDecimalMultiplier() external view returns (uint256);
 
-    // ============ Cross-chain sync window ============
+    // ============ Step coverage ============
 
-    /// @notice True while a multiplier tick is propagating across chains.
-    /// @dev Read by the PSM to gate every operation that converts value through
-    ///      the multiplier. Lives on the token because the token owns the
-    ///      multiplier authority, so the dependency points PSM -> token rather
-    ///      than the reverse.
+    /// @notice Largest single `M_oku` step ever taken, in basis points.
+    /// @dev Floors the module's `tin + tout` fee schedule so fees cannot drop
+    ///      below a step already taken. Read by `SubscriptionModule.setFees`.
+    function stepHighWaterMark() external view returns (uint256);
+
+    // ============ Post-step sync window ============
+
+    /// @notice True while a multiplier step is propagating across chains.
+    /// @dev Armed automatically by every `setOkuMultiplier` write. Read by the
+    ///      module, queue path and wrapper to gate every operation that converts
+    ///      value through the multiplier. Lives on the token because the token
+    ///      owns the multiplier authority, so the dependency points
+    ///      consumer -> token rather than the reverse.
     ///
     ///      Bounded and auto-expiring by construction (`MAX_SYNC_WINDOW`), so a
     ///      consumer can treat a `true` here as transient rather than as an

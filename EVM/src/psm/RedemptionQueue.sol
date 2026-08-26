@@ -15,32 +15,32 @@ import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
 import {MathLib} from "../lib/MathLib.sol";
 import {Roles} from "../lib/Roles.sol";
-import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
+import {IOkuM} from "../interfaces/IOkuM.sol";
 
 /**
- * @dev The slice of `LitePSM` the queue needs.
+ * @dev The slice of `SubscriptionModule` the queue needs.
  *
- * A minimal local interface rather than importing `LitePSM`: the queue is
+ * A minimal local interface rather than importing `SubscriptionModule`: the queue is
  * deployed first and the PSM cross-asserts against it, so a hard dependency
  * back would be circular. `QUEUE_PSM` is granted only to the PSM proxy, so
  * `msg.sender` in `processQueue` is always that contract.
  */
-interface ILitePSMFees {
+interface IModuleFees {
     function tout() external view returns (uint256);
 }
 
 /**
  * @title RedemptionQueue
- * @notice FIFO queue for rUSDOku redemptions when the PSM's USDC buffer is depleted.
+ * @notice FIFO queue for OkuM redemptions when the PSM's USDC buffer is depleted.
  *
- * @dev Stores **raw** rUSDOku. Because raw balances are fixed, queued amounts do
+ * @dev Stores **raw** OkuM. Because raw balances are fixed, queued amounts do
  *      not grow in count — but they appreciate in dollar value via the
  *      multiplier, so a user waiting in the queue continues to earn yield. At
  *      processing, `usdcAmount = rawAmount * uiMultiplier() / PRECISION` scaled
  *      to USDC decimals, with the multiplier cached once per batch for gas and
  *      cross-entry consistency.
  *
- *      Deliberately NOT `Pausable`: pause lives at the LitePSM layer. Pausing
+ *      Deliberately NOT `Pausable`: pause lives at the SubscriptionModule layer. Pausing
  *      here would lock users into the queue.
  *
  *      Storage uses ERC-7201 namespaced storage.
@@ -92,7 +92,7 @@ contract RedemptionQueue is
         uint256 queueHead;
         uint256 queueTail;
         uint256 totalQueuedRaw;
-        IOkuDollar okuDollar;
+        IOkuM okuM;
         IERC20 usdc;
         uint256 usdcDecimalMultiplier;
     }
@@ -112,7 +112,7 @@ contract RedemptionQueue is
     error InvalidIndex();
     error EntryAlreadyCleared();
     error UsdcDecimalsTooLarge(uint8 reported);
-    /// @notice The supplied USDC does not match `okuDollar.asset()`.
+    /// @notice The supplied USDC does not match `okuM.asset()`.
     /// @dev Fail-fast on the misconfiguration that would otherwise produce
     ///      silently divergent pricing between the token's value views and this
     ///      contract's payouts.
@@ -154,15 +154,15 @@ contract RedemptionQueue is
     }
 
     /// @notice Initialize the queue proxy.
-    /// @param _okuDollar The rUSDOku token.
-    /// @param _usdc USDC address. MUST equal `_okuDollar.asset()`.
+    /// @param _okuM The OkuM token.
+    /// @param _usdc USDC address. MUST equal `_okuM.asset()`.
     /// @param _admin Receives the queue role set (minus `QUEUE_PSM`).
     /// @dev `QUEUE_PSM` is deliberately NOT granted here — it is granted
-    ///      post-deploy to the LitePSM proxy. That avoids a circular dependency
+    ///      post-deploy to the SubscriptionModule proxy. That avoids a circular dependency
     ///      and stops the deploy admin from calling `enqueue`/`processQueue`
     ///      directly.
-    function initialize(address _okuDollar, address _usdc, address _admin) public initializer {
-        if (_okuDollar == address(0)) revert Errors.ZeroAddress();
+    function initialize(address _okuM, address _usdc, address _admin) public initializer {
+        if (_okuM == address(0)) revert Errors.ZeroAddress();
         if (_usdc == address(0)) revert Errors.ZeroAddress();
         if (_admin == address(0)) revert Errors.ZeroAddress();
 
@@ -170,18 +170,18 @@ contract RedemptionQueue is
         __ReentrancyGuard_init();
 
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
-        $.okuDollar = IOkuDollar(_okuDollar);
+        $.okuM = IOkuM(_okuM);
         $.usdc = IERC20(_usdc);
 
         // Single source of truth: cross-assert against the token rather than
         // deriving a second, independently-supplied copy of the same constant.
-        address tokenAsset = IOkuDollar(_okuDollar).asset();
+        address tokenAsset = IOkuM(_okuM).asset();
         if (tokenAsset != _usdc) revert AssetMismatch(tokenAsset, _usdc);
 
         uint8 usdcDecimals = IERC20Metadata(_usdc).decimals();
         if (usdcDecimals > Constants.MAX_USDC_DECIMALS) revert UsdcDecimalsTooLarge(usdcDecimals);
         uint256 derived = 10 ** (uint256(Constants.MAX_USDC_DECIMALS) - uint256(usdcDecimals));
-        uint256 expected = IOkuDollar(_okuDollar).usdcDecimalMultiplier();
+        uint256 expected = IOkuM(_okuM).usdcDecimalMultiplier();
         if (expected != derived) revert DecimalMultiplierMismatch(expected, derived);
         $.usdcDecimalMultiplier = derived;
 
@@ -192,8 +192,8 @@ contract RedemptionQueue is
 
     // ============ Storage accessors ============
 
-    function okuDollar() external view returns (IOkuDollar) {
-        return _getRedemptionQueueStorage().okuDollar;
+    function okuM() external view returns (IOkuM) {
+        return _getRedemptionQueueStorage().okuM;
     }
 
     function usdc() external view returns (IERC20) {
@@ -212,8 +212,8 @@ contract RedemptionQueue is
         return _getRedemptionQueueStorage().queueTail;
     }
 
-    /// @notice Total raw rUSDOku escrowed across all pending entries.
-    /// @dev INVARIANT: `totalQueuedRaw <= okuDollar.balanceOf(address(this))`.
+    /// @notice Total raw OkuM escrowed across all pending entries.
+    /// @dev INVARIANT: `totalQueuedRaw <= okuM.balanceOf(address(this))`.
     ///      Stated as `<=`, never `==`: anyone can transfer tokens to this
     ///      address for free, which would permanently break an equality. Donated
     ///      surplus is recoverable via `sweepExcess`.
@@ -258,11 +258,11 @@ contract RedemptionQueue is
         $.queueTail = index + 1;
         $.totalQueuedRaw += rawAmount;
 
-        emit RedemptionQueued(index, user, rawAmount, $.okuDollar.toUIAmount(rawAmount));
+        emit RedemptionQueued(index, user, rawAmount, $.okuM.toUIAmount(rawAmount));
     }
 
     /// @notice Process queued redemptions over `[startIndex, endIndex)`.
-    /// @dev Burns rUSDOku, pulls USDC from the PSM, pays users. The multiplier is
+    /// @dev Burns OkuM, pulls USDC from the PSM, pays users. The multiplier is
     ///      read once for the whole batch so every entry in a batch is priced
     ///      identically.
     ///
@@ -278,16 +278,16 @@ contract RedemptionQueue is
         onlyRole(Roles.QUEUE_PSM)
     {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
-        IOkuDollar token = $.okuDollar;
+        IOkuM token = $.okuM;
         IERC20 usdcToken = $.usdc;
         uint256 decimalMultiplier = $.usdcDecimalMultiplier;
 
         // Cached once per batch: gas, and cross-entry pricing consistency.
         uint256 multiplier = token.uiMultiplier();
-        // `msg.sender` is the LitePSM (QUEUE_PSM is granted only to it), which
+        // `msg.sender` is the SubscriptionModule (QUEUE_PSM is granted only to it), which
         // is where the fee schedule lives. Read once per batch, same as the
         // multiplier.
-        uint256 currentTout = ILitePSMFees(msg.sender).tout();
+        uint256 currentTout = IModuleFees(msg.sender).tout();
 
         address psm = msg.sender;
         uint256 available = usdcToken.balanceOf(psm);
@@ -373,10 +373,10 @@ contract RedemptionQueue is
             entry.user,
             alternateRecipient,
             entry.rawAmount,
-            $.okuDollar.toUIAmount(entry.rawAmount)
+            $.okuM.toUIAmount(entry.rawAmount)
         );
 
-        IERC20(address($.okuDollar)).safeTransfer(alternateRecipient, entry.rawAmount);
+        IERC20(address($.okuM)).safeTransfer(alternateRecipient, entry.rawAmount);
     }
 
     /// @notice Sweep tokens donated to this contract beyond what is escrowed.
@@ -387,12 +387,12 @@ contract RedemptionQueue is
     function sweepExcess(address to) external nonReentrant onlyRole(Roles.QUEUE_RESCUER) {
         if (to == address(0)) revert Errors.ZeroAddress();
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
-        uint256 balance = IERC20(address($.okuDollar)).balanceOf(address(this));
+        uint256 balance = IERC20(address($.okuM)).balanceOf(address(this));
         uint256 escrowed = $.totalQueuedRaw;
         if (balance <= escrowed) revert NoExcessToSweep();
         uint256 excess = balance - escrowed;
         emit ExcessSwept(to, excess);
-        IERC20(address($.okuDollar)).safeTransfer(to, excess);
+        IERC20(address($.okuM)).safeTransfer(to, excess);
     }
 
     /// @notice Advance `queueHead` past contiguous cleared entries.
@@ -438,8 +438,7 @@ contract RedemptionQueue is
     ///      remainder is revoked immediately afterwards.
     function totalQueuedUsdc() external view returns (uint256) {
         RedemptionQueueStorage storage $ = _getRedemptionQueueStorage();
-        return
-            MathLib.dollarsToUsdc($.okuDollar.toUIAmount($.totalQueuedRaw), $.usdcDecimalMultiplier);
+        return MathLib.dollarsToUsdc($.okuM.toUIAmount($.totalQueuedRaw), $.usdcDecimalMultiplier);
     }
 
     function getQueueEntry(uint256 index) external view returns (QueueEntry memory) {
@@ -467,7 +466,7 @@ contract RedemptionQueue is
         if (index >= $.queueTail) revert InvalidIndex();
         QueueEntry storage entry = $.queue[index];
         return MathLib.applyFee(
-            MathLib.dollarsToUsdc($.okuDollar.toUIAmount(entry.rawAmount), $.usdcDecimalMultiplier),
+            MathLib.dollarsToUsdc($.okuM.toUIAmount(entry.rawAmount), $.usdcDecimalMultiplier),
             entry.toutBps
         );
     }

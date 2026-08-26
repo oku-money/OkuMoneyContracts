@@ -8,26 +8,25 @@ pragma solidity 0.8.28;
  *
  *      ============ IMPLEMENTATION NOTE (read before integrating) ============
  *
- *      The ERC-8056 reference implementation presumes a **step function**: a
- *      discrete jump from `uiMultiplier()` to `newUIMultiplier()` at
- *      `effectiveAt()`. OkuDollar accrues **continuously** from a stored
- *      per-second rate, so it maps this pair onto the rate segment instead:
+ *      The extension presumes a **step function**: a discrete jump from
+ *      `uiMultiplier()` to `newUIMultiplier()` at `effectiveAt()`. `M_oku` is
+ *      genuinely stepwise, so the fit is native — with one deliberate
+ *      narrowing: **steps are immediate**. A future-dated step would mature
+ *      with no transaction, recreating the unfenceable-revaluation problem the
+ *      post-step sync window exists to close (nothing can auto-arm at
+ *      maturity). So on this token:
  *
- *        - `effectiveAt()`      -> `rateEnd`, the timestamp at which accrual halts.
- *        - `newUIMultiplier()`  -> the multiplier the trajectory reaches at
- *                                  `rateEnd`, i.e. where growth stops absent a
- *                                  renewed rate.
+ *        - `newUIMultiplier()` -> the value of the last step (== `uiMultiplier()`).
+ *        - `effectiveAt()`     -> the timestamp of the last step.
  *
- *      The reference implementation's observable contract is nonetheless
- *      satisfied exactly: once `block.timestamp >= effectiveAt()`,
- *      `uiMultiplier() == newUIMultiplier()`, because `uiMultiplier()` clamps
- *      its elapsed-time term at `rateEnd`.
+ *      The observable boundary contract is satisfied trivially: once
+ *      `block.timestamp >= effectiveAt()`, `uiMultiplier() == newUIMultiplier()`
+ *      — which here is always. This also sidesteps the reference
+ *      implementation's documented `>=`/`>` defect at
+ *      `block.timestamp == effectiveAt()`: there is never a matured-but-
+ *      uncrystallized pending value.
  *
- *      The divergence is in *intent*, not in the boundary behaviour: our pending
- *      value is where a continuous trajectory terminates rather than a
- *      discontinuous jump. There is therefore no step to front-run.
- *
- *      See EVM/README.md "ERC-8056's pending-multiplier extension".
+ *      See EVM/README.md "ERC-8056 on OkuM".
  */
 interface IScaledUIAmountNewUIMultiplier {
     /// @notice Pending UI multiplier scheduled to obtain at `effectiveAt`, 18 decimals.

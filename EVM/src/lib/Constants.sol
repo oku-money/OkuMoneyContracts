@@ -3,28 +3,34 @@ pragma solidity 0.8.28;
 
 /**
  * @title Constants
- * @notice Shared constants and ERC-8056 interface IDs for the OkuDollar contracts.
+ * @notice Shared constants and ERC-8056 interface IDs for the OkuMoney contracts.
  *
  * ============ TERMINOLOGY LEGEND ============
  *
- * ONE TOKEN, ONE MULTIPLIER:
- *   - OkuDollar / rUSDOku : the single non-rebasing ERC-20 (contract name + ticker)
+ * TWO TOKENS, TWO INDICES, ONE REALIZED BACKING:
+ *   - OkuM   : the share token. Fixed raw balances; stepwise realized index.
+ *   - USDOku : the dollar wrapper. Rebasing balances; continuous declared index.
  *
  * AMOUNTS:
- *   - rawAmount   : raw token count — what `balanceOf`/`transfer`/`approve` move (18 dp)
- *   - uiAmount    : dollar value — what `balanceOfUI` returns (18 dp)
- *   - usdcAmount  : USDC amount in its native decimals (6 dp on every targeted chain)
+ *   - rawAmount    : raw OkuM count — what `balanceOf`/`transfer`/`approve` move (18 dp)
+ *   - uiAmount     : dollar value of an OkuM amount — what `balanceOfUI` returns (18 dp)
+ *   - usdcAmount   : USDC amount in its native decimals (6 dp on every targeted chain)
+ *   - shares       : USDOku's invariant ledger quantity — `sharesOf`
  *
- * MULTIPLIER:
- *   - uiMultiplier   : dollar value of 1 raw token (starts 1e18 = $1.00, only increases)
- *   - ratePerSecond  : compound per-second accrual rate (1e18 = no yield)
- *   - rateEnd        : accrual halt boundary; also ERC-8056's `effectiveAt()`
+ * INDICES:
+ *   - M_oku / uiMultiplier : dollar value of 1 raw OkuM (starts 1e18 = $1.00).
+ *                            STEPWISE, monotone, written by `setOkuMultiplier`.
+ *   - M_usd / usdOkuIndex  : USDOku's rebase index. CONTINUOUS, monotone,
+ *                            driven by `setUsdOkuRate`. NOT a conversion rate.
  *
  * KEY FORMULAS:
- *   USDC -> raw:  raw  = (usdcAmount * usdcDecimalMultiplier) * PRECISION / uiMultiplier
- *   raw -> USDC:  usdc = (raw * uiMultiplier / PRECISION) / usdcDecimalMultiplier
- *   raw -> UI:    ui   = raw * uiMultiplier / PRECISION            // toUIAmount
- *   UI -> raw:    raw  = ui * PRECISION / uiMultiplier             // fromUIAmount
+ *   USDC -> raw:    raw    = (usdcAmount * usdcDecimalMultiplier) * PRECISION / M_oku
+ *   raw -> USDC:    usdc   = (raw * M_oku / PRECISION) / usdcDecimalMultiplier
+ *   raw -> UI:      ui     = raw * M_oku / PRECISION          // toUIAmount
+ *   UI -> raw:      raw    = ui * PRECISION / M_oku           // fromUIAmount
+ *   OkuM -> USDOku: usdOku = okuM * M_oku / PRECISION         // wrap — M_oku, NOT M_usd
+ *   USDOku -> OkuM: okuM   = usdOku * PRECISION / M_oku       // unwrap — M_oku, NOT M_usd
+ *   USDOku balance: bal    = shares * M_usd / PRECISION
  *
  * ============================================
  */
@@ -41,10 +47,35 @@ library Constants {
     /// @notice Seconds in a 365-day year, used to annualize `ratePerSecond`.
     uint256 internal constant SECONDS_PER_YEAR = 365 days;
 
-    // ============ Multiplier authority bounds ============
+    // ============ M_oku authority bounds (OkuM, stepwise) ============
 
-    /// @notice Maximum nominal annualized rate accepted by `setYieldRate`, in bps.
-    /// @dev THE bound that actually binds. Annualization is *simple/nominal*:
+    /// @notice Ceiling on a single `M_oku` step, in basis points.
+    /// @dev Binds together with `MAX_FEE_BPS` via the step-coverage invariant
+    ///      `tin + tout >= stepBps`: a step larger than the round-trip fee can
+    ///      cover is refused (`StepNotCovered`), so the *effective* ceiling is
+    ///      `min(MAX_STEP_BPS, tin + tout)`.
+    ///
+    ///      At a 5% annual target a daily step is ~1.34 bps, weekly ~9.6 bps,
+    ///      monthly ~40.7 bps. 100 bps covers steps up to roughly a 2.4-month
+    ///      cadence.
+    ///
+    ///      PLACEHOLDER — needs a treasury number and a published cadence.
+    ///
+    ///      SVM mirror: `oku_shared::MAX_STEP_BPS`.
+    uint256 internal constant MAX_STEP_BPS = 100;
+
+    /// @notice Absolute ceiling for the cumulative `M_oku` multiplier.
+    /// @dev `1e24` = $1,000,000 of value per raw token. Mirrors the SVM-side
+    ///      `MAX_MULTIPLIER` guard (`oku-shared::constants::MAX_MULTIPLIER`,
+    ///      scaled for SVM's 1e9 precision). Math-sanity bound, not a constraint
+    ///      on a trusted operator. Also bounds the `M_usd` projection.
+    uint256 internal constant MAX_MULTIPLIER = 1e24;
+
+    // ============ M_usd authority bounds (USDOku, continuous) ============
+
+    /// @notice Maximum nominal annualized rate accepted by `setUsdOkuRate`, in bps.
+    /// @dev THE bound that actually binds `M_usd`. Annualization is
+    ///      *simple/nominal*:
     ///      `apr = (ratePerSecond - PRECISION) * SECONDS_PER_YEAR / PRECISION`.
     ///      At 1000 bps the per-second ceiling is `PRECISION + 3_170_979_198`,
     ///      which continuously compounds to ~10.52% APY — the delivered APY is
@@ -53,27 +84,51 @@ library Constants {
     ///      and simpler to audit than an `rpow` round trip in the setter.
     ///
     ///      A short-duration T-Bill product cannot legitimately exceed this.
+    ///      PLACEHOLDER — needs a real number.
     uint256 internal constant MAX_IMPLIED_APR = 1000;
 
-    /// @notice Maximum `rateEnd - block.timestamp` accepted by `setYieldRate`.
+    /// @notice Maximum `rateEnd - block.timestamp` accepted by `setUsdOkuRate`.
     /// @dev Caps the exposure window of any single rate write. Combined with
     ///      `MAX_IMPLIED_APR`, worst-case over-accrual from a compromised setter
     ///      key before anyone intervenes is ~0.82% (1000 bps over 30 days).
     ///
-    ///      OPERATIONAL CONSEQUENCE: a missed re-up freezes yield until someone
-    ///      acts, and because the APR cap also binds the catch-up rate, a long
-    ///      outage cannot be fully compensated afterwards. At a 1000 bps cap
-    ///      against a 450 bps target, recovery costs ~0.82 days at the cap per
-    ///      day of outage. This is the operator-absence protection working as
-    ///      designed; see EVM/README.md Limitations.
+    ///      OPERATIONAL CONSEQUENCE: a missed re-up freezes USDOku yield until
+    ///      someone acts, and because the APR cap also binds the catch-up rate,
+    ///      a long outage cannot be fully compensated afterwards. This is the
+    ///      operator-absence protection working as designed.
     uint256 internal constant MAX_RATE_DURATION = 30 days;
 
-    /// @notice Absolute ceiling for the cumulative UI multiplier.
-    /// @dev `1e24` = $1,000,000 of value per raw token. Mirrors the SVM-side
-    ///      `MAX_MULTIPLIER` guard (`oku-shared::constants::MAX_MULTIPLIER`,
-    ///      scaled for SVM's 1e9 precision). Math-sanity bound, not a constraint
-    ///      on a trusted operator.
-    uint256 internal constant MAX_MULTIPLIER = 1e24;
+    /// @notice How far USDOku's declared liability may outrun realized backing,
+    ///         in basis points of backing.
+    /// @dev The number that defines the product's risk. A constant, not a config
+    ///      field — no key can widen it. `setUsdOkuRate` reverts
+    ///      `SolvencyGapExceeded` if the liability *projected to `rateEnd`*
+    ///      would breach this bound against current realized backing. Because
+    ///      `M_oku` is monotone, any step landing after the check only
+    ///      *increases* backing, so the projection is conservative.
+    ///
+    ///      THIS IS A CUMULATIVE CEILING, NOT A PER-WRITE ONE, and the
+    ///      distinction is not obvious from the code. Worst-case accrual inside
+    ///      a single maximum-length segment is `MAX_IMPLIED_APR` over
+    ///      `MAX_RATE_DURATION` ~= **79 bps**, which is *below* this bound. So no
+    ///      single rate write starting from a zero gap can ever be refused: the
+    ///      three constants interact such that this check only bites once
+    ///      several consecutive segments have out-run realized marks.
+    ///
+    ///      That is a coherent design — the bound is the ceiling on accumulated
+    ///      divergence, and the per-segment exposure is bounded separately by
+    ///      the APR and duration caps — but it means anyone re-tuning these
+    ///      numbers must tune them together. Setting this below ~79 bps makes it
+    ///      the binding per-write constraint instead, which is a different
+    ///      product. `SolvencyTest` asserts the cumulative behaviour explicitly
+    ///      so the relationship cannot be changed silently.
+    ///
+    ///      PLACEHOLDER — needs treasury sign-off, not an engineering guess.
+    ///
+    ///      No SVM mirror: USDOku is EVM-only.
+    uint256 internal constant MAX_SOLVENCY_GAP_BPS = 100;
+
+    // ============ Supply ============
 
     /// @notice Hard ceiling on `maxSupply`, in raw units (1e15 whole tokens at 18 dp).
     /// @dev Enforced in BOTH `initialize` and `setMaxSupply`. `maxSupply` is
@@ -89,31 +144,26 @@ library Constants {
     ///      token's own balances need it. Asserted in `MulDivBoundsTest`.
     uint256 internal constant MAX_TOTAL_SUPPLY = 1e33;
 
-    // ============ USDC ============
+    // ============ Post-step sync window ============
+    //
+    // `M_oku` is stepwise and written on every chain by the same orchestrator
+    // tick. A tick is not atomic across chains, so for a short interval the two
+    // sides price a raw token differently. Each chain fences ITSELF: every
+    // `setOkuMultiplier` write auto-arms a bounded lock on the operations that
+    // price through the multiplier. There is no cross-chain epoch protocol —
+    // parity is verified off-chain by comparing the multiplier VALUES directly
+    // (`check-sync-parity.ts`), which is strictly stronger than any epoch
+    // bookkeeping (equal epochs never proved equal values).
+    //
+    // The window is NOT a step-arbitrage defence: holding raw across a step
+    // needs no transaction while the window is open, so no window length deters
+    // it. The step-coverage invariant (`tin + tout >= stepBps`) is the control.
 
-    // ============ Cross-chain multiplier sync window ============
-    //
-    // A multiplier tick is not atomic across chains. Between the EVM write and
-    // the SVM write the two sides price a raw token differently, so anything
-    // converting value *through* the multiplier in that interval settles at a
-    // stale price on one side. The sync window is a bounded, auto-expiring,
-    // epoch-attested block on exactly those operations.
-    //
-    // Structurally different from the local step-arbitrage surface, which is
-    // holding raw across a discrete multiplier step. The window cannot address
-    // that (the attacker never transacts during it) — `tout` does. EVM has no
-    // local step at all, since accrual here is continuous; the window exists on
-    // this side purely for cross-chain parity.
-    //
-    // Both bounds are constants rather than config fields so no key, warm or
-    // cold, can widen the window or shorten the gap.
-
-    /// @notice Hard ceiling on a single sync window.
-    /// @dev Auto-expiry is the liveness backstop: if the orchestrator dies
-    ///      mid-tick, mint/redeem resume unaided after at most this long. There
-    ///      is no code path that extends a window past this bound, which is what
-    ///      stops the mechanism becoming an indefinite pause held by a key
-    ///      warmer than `PSM_UNPAUSER`.
+    /// @notice Hard ceiling on the post-step sync window.
+    /// @dev Liveness backstop: mint/redeem resume unaided after at most this
+    ///      long. There is no code path that extends a window past this bound,
+    ///      which is what stops the mechanism becoming an indefinite pause held
+    ///      by a key warmer than `PSM_UNPAUSER`.
     ///
     ///      SVM mirror: `oku_shared::MAX_SYNC_WINDOW_SECS`.
     uint256 internal constant MAX_SYNC_WINDOW = 15 minutes;
@@ -124,37 +174,19 @@ library Constants {
     ///      remembering to enable it — the class of dependency this design
     ///      exists to remove.
     ///
-    ///      A cross-chain propagation budget, not an economic parameter: the
-    ///      orchestrator normally closes the window explicitly as soon as the
-    ///      tick lands everywhere, so this length only matters when that
-    ///      confirmation never arrives.
+    ///      A cross-chain propagation budget, not an economic parameter: it need
+    ///      only cover the time between the first chain's write and the last's.
     ///
     ///      SVM mirror: `oku_shared::DEFAULT_SYNC_WINDOW_SECS`.
     uint256 internal constant DEFAULT_SYNC_WINDOW = 60;
 
-    /// @notice Minimum gap between the end of one sync window and the start of
-    ///         the next.
-    /// @dev The anti-griefing bound. Without it a compromised rate setter could
-    ///      chain windows back-to-back and hold a permanent block. With it the
-    ///      on-chain availability floor is
-    ///      `MIN_SYNC_WINDOW_GAP / (MIN_SYNC_WINDOW_GAP + MAX_SYNC_WINDOW)`
-    ///      = `6h / 6.25h` = **96%**, independent of operator behaviour.
-    ///
-    ///      Interacts with the clamp rule: a `setYieldRate` inside the gap still
-    ///      succeeds, it just does not re-arm. Rejecting it instead would make
-    ///      the rate setter censorable, which contradicts its deliberate
-    ///      un-gated status (see `OkuDollar.setYieldRate`).
-    ///
-    ///      SVM mirror: `oku_shared::MIN_SYNC_WINDOW_GAP_SECS`.
-    uint256 internal constant MIN_SYNC_WINDOW_GAP = 6 hours;
-
-    // ============ PSM fees ============
+    // ============ Module fees ============
 
     /// @notice Hard ceiling on `tin` / `tout`, in basis points (100 = 1%).
-    /// @dev Anti-confiscation bound. The fee setter is `OKU_CAP_MANAGER` (cold),
-    ///      but a bounded parameter still beats an unbounded one: the worst case
-    ///      of a compromised cold key is a 1% haircut rather than seizure of
-    ///      every mint and redemption.
+    /// @dev Anti-confiscation bound AND the binding constraint on maximum step
+    ///      size via step coverage. The worst case of a compromised cold key is
+    ///      a 1% haircut per side rather than seizure of every mint and
+    ///      redemption.
     ///
     ///      SVM mirror: `oku_shared::MAX_FEE_BPS`.
     uint256 internal constant MAX_FEE_BPS = 100;

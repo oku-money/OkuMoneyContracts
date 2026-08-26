@@ -3,15 +3,15 @@ pragma solidity 0.8.28;
 
 import {Constants} from "../lib/Constants.sol";
 import {Errors} from "../lib/Errors.sol";
-import {IOkuDollar} from "../interfaces/IOkuDollar.sol";
+import {IOkuM} from "../interfaces/IOkuM.sol";
 import {
     IScaledUIAmountNewUIMultiplier
 } from "../interfaces/erc8056/IScaledUIAmountNewUIMultiplier.sol";
 
 /**
  * @title OkuMultiplierAdapter
- * @notice Chainlink `AggregatorV3Interface`-compatible read of `uiMultiplier()`,
- *         with bounds and staleness.
+ * @notice Chainlink `AggregatorV3Interface`-compatible read of
+ *         `OkuM.uiMultiplier()`, with bounds and staleness.
  *
  * @dev WHY THIS EXISTS. Lending markets will price collateral off the multiplier
  *      whether or not we give them a safe way to do it. Hand-rolled integrations
@@ -19,17 +19,22 @@ import {
  *      Shipping this adapter alongside the token is cheaper than auditing five
  *      different versions of it written by other people.
  *
- *      NOTE THE ASYMMETRY, and hand it to your auditor: the protocol removed an
- *      oracle on its *input* side (USDC peg monitoring is off-chain) and adds one
- *      on its *output* side. This contract makes the system a price PUBLISHER.
- *      `totalAssets()` on the token is derived from the multiplier rather than
- *      measured, so there is no on-chain referent to cross-check against; the
- *      feed is exactly as trustworthy as the multiplier authority.
+ *      THERE IS NO ADAPTER FOR `M_usd`, DELIBERATELY. `M_usd` is a declared
+ *      payout rate, not a value a lending market should price collateral
+ *      against. Nothing should be borrowed against USDOku at its rebased
+ *      balance while the solvency gap is nonzero.
+ *
+ *      NOTE THE ASYMMETRY, and hand it to your auditor: the protocol has no
+ *      oracle on its *input* side (USDC peg monitoring is off-chain) and adds
+ *      one on its *output* side. This contract makes the system a price
+ *      PUBLISHER. `totalAssets()` on the token is derived from the multiplier
+ *      rather than measured, so there is no on-chain referent to cross-check
+ *      against; the feed is exactly as trustworthy as the multiplier authority.
  *
  *      GUARDS:
  *        - `[minAnswer, maxAnswer]` bounds, set at construction, immutable.
- *        - Staleness: reverts once `rateEnd` is further in the past than
- *          `stalenessThreshold`. A halted or un-renewed rate leaves the
+ *        - Staleness: reverts once the last step (`effectiveAt()`) is further in
+ *          the past than `stalenessThreshold`. A lapsed mark leaves the
  *          multiplier flat and truthful for a while, but a consumer should not
  *          keep pricing off it indefinitely.
  *        - `isHealthy()` for consumers that prefer to branch rather than revert.
@@ -41,18 +46,18 @@ contract OkuMultiplierAdapter {
     // ============ Immutables ============
 
     /// @notice The token whose multiplier this feed publishes.
-    IOkuDollar public immutable token;
+    IOkuM public immutable token;
     /// @notice Lower bound on a reportable answer.
     uint256 public immutable minAnswer;
     /// @notice Upper bound on a reportable answer.
     uint256 public immutable maxAnswer;
-    /// @notice Seconds past `rateEnd` after which the feed is considered stale.
+    /// @notice Seconds past the last step after which the feed is considered stale.
     uint256 public immutable stalenessThreshold;
 
     // ============ Errors ============
 
     error AnswerOutOfBounds(uint256 answer, uint256 min, uint256 max);
-    error StaleAnswer(uint256 rateEnd, uint256 threshold);
+    error StaleAnswer(uint256 lastSteppedAt, uint256 threshold);
     error InvalidBounds();
     error NoDataPresent();
 
@@ -67,7 +72,7 @@ contract OkuMultiplierAdapter {
         if (_maxAnswer > Constants.MAX_MULTIPLIER) revert InvalidBounds();
         if (_stalenessThreshold == 0) revert InvalidBounds();
 
-        token = IOkuDollar(_token);
+        token = IOkuM(_token);
         minAnswer = _minAnswer;
         maxAnswer = _maxAnswer;
         stalenessThreshold = _stalenessThreshold;
@@ -81,7 +86,7 @@ contract OkuMultiplierAdapter {
     }
 
     function description() external pure returns (string memory) {
-        return "rUSDOku uiMultiplier / USD";
+        return "OkuM uiMultiplier / USD";
     }
 
     function version() external pure returns (uint256) {
@@ -91,9 +96,10 @@ contract OkuMultiplierAdapter {
     /// @notice Latest multiplier, bounds- and staleness-checked.
     /// @return roundId Monotonic pseudo-round: the timestamp of the read.
     /// @return answer The multiplier, 18 decimals.
-    /// @return startedAt Timestamp the current rate segment was anchored.
-    /// @return updatedAt Same as `startedAt` — the multiplier is a continuous
-    ///         function of that anchor, so there is no discrete "last update".
+    /// @return startedAt Timestamp of the last step.
+    /// @return updatedAt Same as `startedAt` — the multiplier is stepwise, so
+    ///         the last step IS the last update. Consumers running their own
+    ///         staleness checks against `updatedAt` get the honest figure.
     /// @return answeredInRound Equal to `roundId`.
     function latestRoundData()
         public
@@ -111,9 +117,9 @@ contract OkuMultiplierAdapter {
             revert AnswerOutOfBounds(multiplier, minAnswer, maxAnswer);
         }
 
-        uint256 end = IScaledUIAmountNewUIMultiplier(address(token)).effectiveAt();
-        if (block.timestamp > end && block.timestamp - end > stalenessThreshold) {
-            revert StaleAnswer(end, stalenessThreshold);
+        uint256 lastStep = IScaledUIAmountNewUIMultiplier(address(token)).effectiveAt();
+        if (block.timestamp > lastStep && block.timestamp - lastStep > stalenessThreshold) {
+            revert StaleAnswer(lastStep, stalenessThreshold);
         }
 
         roundId = uint80(block.timestamp);
@@ -124,9 +130,8 @@ contract OkuMultiplierAdapter {
         // reinterpreted.
         // forge-lint: disable-next-line(unsafe-typecast)
         answer = int256(multiplier);
-        // The anchor is the meaningful "as of" timestamp for a continuous feed.
-        startedAt = end > stalenessThreshold ? end - stalenessThreshold : 0;
-        updatedAt = block.timestamp;
+        startedAt = lastStep;
+        updatedAt = lastStep;
         answeredInRound = roundId;
     }
 
@@ -144,33 +149,29 @@ contract OkuMultiplierAdapter {
     function isHealthy() external view returns (bool) {
         uint256 multiplier = token.uiMultiplier();
         if (multiplier < minAnswer || multiplier > maxAnswer) return false;
-        uint256 end = IScaledUIAmountNewUIMultiplier(address(token)).effectiveAt();
-        if (block.timestamp > end && block.timestamp - end > stalenessThreshold) return false;
+        uint256 lastStep = IScaledUIAmountNewUIMultiplier(address(token)).effectiveAt();
+        if (block.timestamp > lastStep && block.timestamp - lastStep > stalenessThreshold) {
+            return false;
+        }
         return true;
     }
 
-    /// @notice Whether accrual has halted or the current rate segment has expired.
-    function isAccrualStopped() external view returns (bool) {
-        return block.timestamp >= IScaledUIAmountNewUIMultiplier(address(token)).effectiveAt();
-    }
-
-    // ============ Cross-chain sync window ============
+    // ============ Post-step sync window ============
     //
-    // Surfaced so a consumer can see that the PSM is refusing to transact
+    // Surfaced so a consumer can see that the module is refusing to transact
     // against the price this adapter is publishing.
     //
-    // DELIBERATELY NOT FOLDED INTO `isHealthy()`. The multiplier remains
-    // genuinely correct during a sync window — EVM accrues continuously and the
-    // window exists to hold this chain still while a peer catches up, not
-    // because anything here is wrong. Reporting unhealthy would trigger
-    // needless liquidation pauses on a feed that is accurate. The asymmetry
-    // worth knowing about is narrower than "bad price": for at most
-    // `MAX_SYNC_WINDOW`, a position valued off this feed cannot be unwound
-    // through the PSM. Consumers who care can branch on it; the rest are no
+    // DELIBERATELY NOT FOLDED INTO `isHealthy()`. The multiplier is genuinely
+    // correct during a window — the step that armed it has already landed here;
+    // the window holds this chain still while the peer catches up. Reporting
+    // unhealthy would trigger needless liquidation pauses on an accurate feed.
+    // The asymmetry worth knowing about is narrower than "bad price": for at
+    // most `MAX_SYNC_WINDOW`, a position valued off this feed cannot be unwound
+    // through the module. Consumers who care can branch on it; the rest are no
     // worse off than before.
 
-    /// @notice True while a cross-chain multiplier tick is propagating, during
-    ///         which `LitePSM` mint/redeem revert.
+    /// @notice True while the post-step sync window is engaged, during which
+    ///         `SubscriptionModule` mint/redeem revert.
     /// @dev Bounded and auto-expiring by construction, so treat a `true` here as
     ///      transient (retry) rather than as an outage.
     function isSyncLocked() external view returns (bool) {

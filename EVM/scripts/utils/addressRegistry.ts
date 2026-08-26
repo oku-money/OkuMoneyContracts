@@ -9,6 +9,12 @@
  * the "testnet" name was actively misleading. `EVM/README.md § Deployment`
  * specifies `addresses.json`; the code now matches.
  *
+ * v0.4 changed the shape of an EVM entry twice over: the `contracts` keys track
+ * the two-token rename (`okuDollar` -> `okuM`, `litePSM` ->
+ * `subscriptionModule`, plus `usdOku` / `usdOkuWrapper`), and `standards`
+ * became a per-token map. Both are breaking for consumers; see the interface
+ * below for why the second one had to be.
+ *
  * The SVM side has a matching sync helper in its own scripts/utils tree. Each
  * side only updates its own section of the file, preserving the other side.
  *
@@ -26,26 +32,48 @@ export interface EvmNetworkEntry {
   rpcUrl: string;
   explorer?: string;
   contracts: {
-    okuDollar?: string;
-    litePSM?: string;
+    /** The share token. Fixed raw balances, stepwise realized `M_oku`. */
+    okuM?: string;
+    /** The rebasing dollar token. Transitional; see README "USDOku is transitional". */
+    usdOku?: string;
+    /** OkuM <-> USDOku, priced at `M_oku`. Also the home of the solvency views. */
+    usdOkuWrapper?: string;
+    /** USDC <-> OkuM. Formerly `litePSM`. */
+    subscriptionModule?: string;
     redemptionQueue?: string;
     okuMultiplierAdapter?: string;
-    mockUSDC?: string;
-    // `okuMoney` (v0.2 dual-token) and the removed bridge proxies may appear in
-    // historical entries; the open-ended index keeps them readable.
+    mockUsdc?: string;
+    // Historical entries carry retired keys (`okuMoney` from the v0.2
+    // dual-token model, `okuDollar` / `litePSM` from v0.3, the removed bridge
+    // proxies). The open-ended index keeps them readable rather than forcing a
+    // lossy rewrite of the file on every rename.
     [key: string]: string | undefined;
   };
   /**
-   * Capability flags for this deployment, so the SDK and orchestrator can gate
-   * on features without an on-chain ERC-165 probe.
+   * Capability flags PER TOKEN, so the SDK and orchestrator can gate on
+   * features without an on-chain ERC-165 probe. Keys match `contracts` keys.
    *
-   * Expected for v0.3: ["ERC-20", "ERC-2612", "ERC-8056", "ERC-4626-conversion-subset"].
-   * Note the last entry is deliberately NOT "ERC-4626" — only the conversion
-   * views are implemented, and the token does not claim the interface via
-   * ERC-165. A consumer that sees "ERC-4626" here and calls `deposit()` would
-   * revert.
+   * Expected for v0.4:
+   *   okuM:   ["ERC-20", "ERC-2612", "ERC-8056", "ERC-4626-conversion-subset"]
+   *   usdOku: ["ERC-20", "ERC-2612", "rebasing"]
+   *
+   * PER-TOKEN, NOT PER-DEPLOYMENT — changed in v0.4, and the reason is the one
+   * flag that differs. OkuM is ERC-8056: a consumer must scale raw balances by
+   * `uiMultiplier()` for display. USDOku deliberately is NOT: its `balanceOf`
+   * already returns dollars, so a consumer that applied a UI multiplier would
+   * display the value squared. A single flat array covering both tokens could
+   * only be wrong about one of them.
+   *
+   * Note `"ERC-4626-conversion-subset"` is deliberately not `"ERC-4626"` —
+   * only the conversion views exist, and OkuM does not claim the interface via
+   * ERC-165. A consumer that saw "ERC-4626" and called `deposit()` would
+   * revert; subscription goes through SubscriptionModule.
+   *
+   * `"rebasing"` is a warning flag, not a feature: it means balances move with
+   * no Transfer event, which breaks AMM pools, balance snapshots and most
+   * lending markets. OkuM is the composable leg.
    */
-  standards?: string[];
+  standards?: Record<string, string[]>;
   orchestrator?: string;
   deployer?: string;
 }

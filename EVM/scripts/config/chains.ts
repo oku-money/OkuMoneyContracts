@@ -114,9 +114,11 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
   // BNB Smart Chain (BSC) Mainnet
   // NOTE: deploy script uses MockUSDC by default. The native Binance-Peg USDC
   // listed below has 18 decimals (NOT 6 like Ethereum/Base USDC). If we ever
-  // flip SKIP_MOCK_USDC=true on BSC, LitePSM/RedemptionQueue decimal handling
-  // must be verified — IERC20Metadata.decimals() will return 18 here, which
-  // changes the multiplier resolved in RedemptionQueue.initialize().
+  // flip SKIP_MOCK_USDC=true on BSC, the decimal handling must be verified —
+  // IERC20Metadata.decimals() will return 18 here, which changes
+  // `OkuM.usdcDecimalMultiplier()` to 1, and SubscriptionModule /
+  // RedemptionQueue both cross-assert their locally-derived value against the
+  // token's at `initialize` (DecimalMultiplierMismatch).
   bsc: {
     tokens: {
       usdc: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", // Binance-Peg USDC (18 decimals)
@@ -172,7 +174,7 @@ export const CHAIN_ADDRESSES: Record<string, ChainAddresses> = {
   // BNB Smart Chain Testnet (Chapel)
   // NOTE: like mainnet BSC, the canonical Binance-Peg USDC carries 18 decimals (NOT 6).
   // Live deploys here default to MockUSDC; if SKIP_MOCK_USDC=true is ever flipped, the
-  // 18-decimal path through LitePSM/RedemptionQueue must be re-verified.
+  // 18-decimal path through SubscriptionModule/RedemptionQueue must be re-verified.
   bscTestnet: {
     tokens: {
       usdc: "0x64544969ed7EBf5f083679233325356EbE738930", // Binance-Peg USDC (testnet, 18 decimals)

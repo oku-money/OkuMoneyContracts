@@ -13,7 +13,7 @@
  * same address on every EVM chain it has been deployed to (gas-funded by
  * a presigned Nick's-method tx; see github.com/Arachnid/deterministic-deployment-proxy).
  *
- * Salt derivation (`saltFor("OkuDollar.impl")` etc.):
+ * Salt derivation (`saltFor("OkuM.impl")` etc.):
  *   keccak256("okumoney." + DEPLOYMENT_VERSION + "." + contractName)
  *
  * # Version history
@@ -24,6 +24,19 @@
  *                 only token; `OkuMoney`, the share ledger, wrap/unwrap and the
  *                 collateralization machinery are gone. Fresh addresses by
  *                 design: this is a clean break, not a storage migration.
+ *   v0.4        — two-token model. `OkuDollar` -> `OkuM` (share token, stepwise
+ *                 realized `M_oku`), `LitePSM` -> `SubscriptionModule`, plus the
+ *                 new `USDOku` (rebasing dollar token, continuous declared
+ *                 `M_usd`) and `USDOkuWrapper`. The rename alone would justify
+ *                 a bump, but the substantive reason is that OkuM's storage is
+ *                 UNRELATED to v0.3's OkuDollar: `baseMultiplier` /
+ *                 `ratePerSecond` / `lastAccrualTime` / `rateEnd` are gone from
+ *                 the token and the ERC-7201 namespaces were re-derived under
+ *                 new labels. There is no migration path from a continuous
+ *                 multiplier to a stepwise one, so v0.3 proxies are RETIRED and
+ *                 v0.4 deployments are fresh. Do not attempt
+ *                 `upgrade/index.ts` across this boundary; the OZ layout check
+ *                 will refuse, and it is right to.
  *
  * CREATE2 address derivation:
  *   address = keccak256(0xff ++ CREATE2_FACTORY ++ salt ++ keccak256(initCode))[12:]
@@ -37,9 +50,14 @@
  *
  * Constructor args that are chain-specific (real USDC on mainnet vs.
  * MockUSDC on testnet, Chainlink feed addresses) cascade into different
- * proxy addresses on those chains. For pre-audit v0.1 testnets we deploy
- * MockUSDC deterministically too, so `RedemptionQueue` and `LitePSM` end
- * up with identical addresses across every testnet that has the factory.
+ * proxy addresses on those chains. For pre-audit testnets we deploy
+ * MockUSDC deterministically too, so `RedemptionQueue` and
+ * `SubscriptionModule` end up with identical addresses across every testnet
+ * that has the factory.
+ *
+ * `USDOku` takes no chain-specific init args at all, so its proxy address is
+ * identical on every chain with the factory regardless of the USDC binding.
+ * `USDOkuWrapper` inherits OkuM's per-chain variance through its init args.
  *
  * Chains without the CREATE2 factory fall through to standard
  * nonce-based CREATE deploys (unique addresses per chain). See
@@ -52,7 +70,7 @@
  * deploys take new addresses). Pre-audit iterate with v0.x; reserve v1.0+
  * for audited deployments.
  */
-export const DEPLOYMENT_VERSION = "v0.3";
+export const DEPLOYMENT_VERSION = "v0.4";
 
 /**
  * Canonical Arachnid CREATE2 factory. Same address on every supported chain.
@@ -71,9 +89,9 @@ export const CREATE2_FACTORY = "0x4e59b44847b379578588920cA78FbF26c0B4956C";
  *
  * The full salt is `keccak256("okumoney." + DEPLOYMENT_VERSION + "." + name)`,
  * where `name` typically includes the contract name + a role suffix
- * (e.g. `OkuDollar.impl`, `OkuDollar.proxy`).
+ * (e.g. `OkuM.impl`, `OkuM.proxy`).
  *
- * @param name salt namespace, e.g. "OkuDollar.impl", "MockUSDC".
+ * @param name salt namespace, e.g. "OkuM.impl", "MockUSDC".
  * @returns 32-byte salt as a 0x-prefixed hex string.
  */
 export function saltFor(name: string): string {

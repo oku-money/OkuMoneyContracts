@@ -1,13 +1,22 @@
 /**
  * Print the *current* implementation address behind each proxy + its raw bytecode size.
  * Use after a fork is up to see what code is actually deployed live.
+ *
+ * `OkuMultiplierAdapter` is absent because it is not a proxy — it is immutable
+ * by design, so its "implementation" is itself and there is no slot to read.
  */
 
 import { ethers, upgrades } from "hardhat";
 import { loadAddress, hasAddress } from "../utils/addressBook";
 import { resolveNetworkContext } from "../utils/networkContext";
 
-const TARGETS = ["OkuDollar", "RedemptionQueue", "LitePSM"];
+const TARGETS = [
+  "OkuM",
+  "USDOku",
+  "USDOkuWrapper",
+  "SubscriptionModule",
+  "RedemptionQueue",
+];
 
 async function main() {
   const { networkName } = await resolveNetworkContext();

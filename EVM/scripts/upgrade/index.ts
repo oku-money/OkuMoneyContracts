@@ -1,5 +1,5 @@
 /**
- * Generic Upgrade Script for the OkuDollar (rUSDOku) EVM Contracts
+ * Generic Upgrade Script for the OkuMoney (OkuM / USDOku) EVM Contracts
  *
  * Upgrades the implementation behind one or more existing UUPS proxies to the
  * freshly-compiled source in `./src`. Works against:
@@ -8,25 +8,32 @@
  *   - A live network: uses the signer derived from PRIVATE_KEY. Aborts if the
  *     signer doesn't already hold the contract-specific upgrader role.
  *
- * v1 supports `LitePSM` and `OkuDollar`. Future targets are added by extending
- * the UPGRADE_TARGETS table and adding a matching state reader in ./preState.ts.
+ * Targets: `OkuM`, `USDOku`, `USDOkuWrapper`, `SubscriptionModule`,
+ * `RedemptionQueue`. New ones are added by extending the UPGRADE_TARGETS table
+ * and adding a matching state reader in ./preState.ts.
+ *
+ * THIS CANNOT CROSS THE v0.3 -> v0.4 BOUNDARY. The two-token refactor renamed
+ * contracts AND changed their ERC-7201 storage namespaces, so a v0.3 proxy is
+ * not upgradeable to a v0.4 implementation — OZ's layout validation will refuse,
+ * and it is right to. v0.4 is a fresh deployment (see
+ * config/deploymentVersion.ts). This script is for v0.4-onward upgrades.
  *
  * Usage:
  *
  *   # Fork rehearsal (terminal 1: `FORK_NETWORK=sepolia npm run node`)
- *   TARGETS=LitePSM,OkuDollar npx hardhat run scripts/upgrade/index.ts --network localhost
+ *   TARGETS=SubscriptionModule,OkuM npx hardhat run scripts/upgrade/index.ts --network localhost
  *
  *   # Live network
- *   TARGETS=LitePSM,OkuDollar npx hardhat run scripts/upgrade/index.ts --network sepolia
+ *   TARGETS=SubscriptionModule,OkuM npx hardhat run scripts/upgrade/index.ts --network sepolia
  *
  *   # Single target
- *   TARGETS=LitePSM npx hardhat run scripts/upgrade/index.ts --network base
+ *   TARGETS=USDOkuWrapper npx hardhat run scripts/upgrade/index.ts --network base
  *
  *   # Override proxy address (debugging; defaults to scripts/config/addresses.json)
- *   TARGETS=LitePSM PROXY_LitePSM=0x... npx hardhat run scripts/upgrade/index.ts --network sepolia
+ *   TARGETS=OkuM PROXY_OkuM=0x... npx hardhat run scripts/upgrade/index.ts --network sepolia
  *
  *   # Skip Etherscan verification of the new impl
- *   TARGETS=LitePSM SKIP_VERIFY=true npx hardhat run scripts/upgrade/index.ts --network base
+ *   TARGETS=OkuM SKIP_VERIFY=true npx hardhat run scripts/upgrade/index.ts --network base
  *
  * Storage-layout safety:
  *   The OpenZeppelin upgrades plugin (`upgrades.upgradeProxy`) validates the new
@@ -86,16 +93,25 @@ interface UpgradeTarget {
 const UPGRADE_TARGETS: Record<string, UpgradeTarget> = {
   // UUPS proxies — upgrade gated by the contract's own _authorizeUpgrade role.
   //
-  // v0.3 dropped `OkuMoney` with the dual-token model. Its v0.2 proxies are
-  // RETIRED, not upgraded: the storage layouts are unrelated and there is no
-  // migration path from a share ledger to a raw ledger. Do not re-add it here.
+  // RETIRED, NOT UPGRADEABLE-TO. Do not re-add any of these:
+  //   `OkuMoney`  (v0.2) — share ledger; no path to a raw ledger.
+  //   `OkuDollar` (v0.3) — continuous multiplier. OkuM is stepwise: the four
+  //                        trajectory fields (baseMultiplier, ratePerSecond,
+  //                        lastAccrualTime, rateEnd) are gone from the token and
+  //                        the ERC-7201 namespaces were re-derived under new
+  //                        labels. There is no migration, only a fresh deploy;
+  //                        see DEPLOYMENT_VERSION v0.4.
+  //   `LitePSM`   (v0.3) — renamed to SubscriptionModule, and its storage
+  //                        namespace label changed with it, so the slot moved.
   //
   // `OkuMultiplierAdapter` is intentionally absent — it is immutable and
   // non-upgradeable by design, so a bounds change means deploying a new one and
   // re-pointing consumers.
-  OkuDollar:       { factory: "OkuDollar",       upgraderRole: ROLES.OKU_UPGRADER },
-  RedemptionQueue: { factory: "RedemptionQueue", upgraderRole: ROLES.QUEUE_UPGRADER },
-  LitePSM:         { factory: "LitePSM",         upgraderRole: ROLES.PSM_UPGRADER },
+  OkuM:               { factory: "OkuM",               upgraderRole: ROLES.OKU_UPGRADER },
+  USDOku:             { factory: "USDOku",             upgraderRole: ROLES.OKU_UPGRADER },
+  USDOkuWrapper:      { factory: "USDOkuWrapper",      upgraderRole: ROLES.WRAPPER_UPGRADER },
+  SubscriptionModule: { factory: "SubscriptionModule", upgraderRole: ROLES.PSM_UPGRADER },
+  RedemptionQueue:    { factory: "RedemptionQueue",    upgraderRole: ROLES.QUEUE_UPGRADER },
 };
 
 // Networks where Etherscan-family verification is supported.
@@ -571,7 +587,7 @@ async function ensureUpgraderRole(
   );
 
   // On a freshly-restarted fork, ROLES.DEFAULT_ADMIN_ROLE is held by whoever
-  // originally called `initialize`. For OkuDollar's role-grant policy that is
+  // originally called `initialize`. For every proxy's role-grant policy that is
   // also the dev wallet, so the same impersonated signer should be able to
   // self-grant. We still go through grantRole to keep this path generic in
   // case the admin diverges from the signer.
@@ -745,10 +761,10 @@ async function upgradeOne(
   //      Phase B (`upgradeToAndCall`): we call the UUPS hook directly so we own
   //      the resulting tx receipt (the plugin's upgradeProxy wraps these into one
   //      call that surfaces only the impl-deploy tx, which isn't useful here).
-  //      Empty calldata: no re-initialization needed for the mintUsdOku fix or
-  //      any state-preserving patch. Future migrations that need to call a
-  //      reinitializer should extend the dispatch table with a `migrationCalldata`
-  //      field rather than hard-coding it here.
+      //      Empty calldata: no re-initialization needed for a state-preserving
+      //      patch. Future migrations that need to call a reinitializer should
+      //      extend the dispatch table with a `migrationCalldata` field rather
+      //      than hard-coding it here.
   //
   //    Transparent:
   //      Single-phase via `upgrades.upgradeProxy`. The plugin still does the
@@ -1115,7 +1131,7 @@ function parseTargets(): string[] {
   if (!raw) {
     throw new Error(
       `TARGETS env var not set. Specify one or more contracts to upgrade, e.g. ` +
-        `TARGETS=LitePSM,OkuDollar. Known targets: ${Object.keys(UPGRADE_TARGETS).join(", ")}.`
+        `TARGETS=SubscriptionModule,OkuM. Known targets: ${Object.keys(UPGRADE_TARGETS).join(", ")}.`
     );
   }
   const list = Array.from(
@@ -1174,7 +1190,7 @@ async function main() {
   const targets = parseTargets();
 
   logger.header(
-    `OkuDollar Upgrade on ${chainConfig.name}${isFork ? " (LOCAL FORK)" : ""}`
+    `OkuMoney Upgrade on ${chainConfig.name}${isFork ? " (LOCAL FORK)" : ""}`
   );
   logger.info(`Network: ${networkName} (chainId: ${chainConfig.chainId})`);
   logger.info(`Address book key: ${bookKey}${isFork ? " (live key reused on fork)" : ""}`);

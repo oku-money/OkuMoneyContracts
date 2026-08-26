@@ -18,11 +18,20 @@ interface ContractSpec {
   name: string; // contract name (also the artifact filename)
 }
 
+/**
+ * The production surface, in the order a consumer meets it.
+ *
+ * Interfaces (`IOkuM`, `IUSDOku`) are deliberately absent: they are a subset of
+ * the concrete ABIs, and shipping both invites integrators to bind against the
+ * narrower one and then discover a missing method at runtime.
+ */
 const PRODUCTION_CONTRACTS: ContractSpec[] = [
-  { sol: "token/OkuDollar.sol", name: "OkuDollar" },
-  { sol: "oracle/OkuMultiplierAdapter.sol", name: "OkuMultiplierAdapter" },
-  { sol: "psm/LitePSM.sol", name: "LitePSM" },
+  { sol: "token/OkuM.sol", name: "OkuM" },
+  { sol: "token/USDOku.sol", name: "USDOku" },
+  { sol: "wrapper/USDOkuWrapper.sol", name: "USDOkuWrapper" },
+  { sol: "psm/SubscriptionModule.sol", name: "SubscriptionModule" },
   { sol: "psm/RedemptionQueue.sol", name: "RedemptionQueue" },
+  { sol: "oracle/OkuMultiplierAdapter.sol", name: "OkuMultiplierAdapter" },
 ];
 
 const HARDHAT_ARTIFACTS_DIR = path.resolve(__dirname, "../../artifacts/src");

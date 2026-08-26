@@ -2,8 +2,15 @@
  * Address book utilities for saving and loading deployed contract addresses
  *
  * The on-disk file mixes two shapes under one top-level object:
- *   1. Per-network maps of contract-name -> proxy address (e.g. addresses["base"].LitePSM).
- *      These are managed by the existing save/load/has helpers below.
+ *   1. Per-network maps of contract-name -> proxy address (e.g.
+ *      addresses["base"].SubscriptionModule). These are managed by the existing
+ *      save/load/has helpers below.
+ *
+ *      The key is the HARDHAT CONTRACT NAME, not a friendly label, and that is
+ *      load-bearing: callers pass the same string to `loadAddress()` and to
+ *      `ethers.getContractFactory()`, so the two cannot diverge. The repo-root
+ *      registry (see addressRegistry.ts) is where the camelCase consumer-facing
+ *      names live.
  *   2. A reserved `upgrades` key whose value is { [bookKey]: UpgradeRecord[] }.
  *      Append-only audit trail of proxy upgrades. Lookups by contract name skip
  *      this key (it's not a chain entry) — see `loadNetworkAddresses`.
@@ -23,7 +30,7 @@ export const UPGRADES_KEY = "upgrades";
  * to forensically reconstruct an upgrade later without touching the chain.
  */
 export interface UpgradeRecord {
-  /** Contract name as known to hardhat (e.g. "LitePSM"). */
+  /** Contract name as known to hardhat (e.g. "SubscriptionModule"). */
   contract: string;
   /** Proxy address — never changes across an upgrade. */
   proxy: string;

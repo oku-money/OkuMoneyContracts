@@ -14,10 +14,22 @@ import { loadAddress, hasAddress } from "../utils/addressBook";
 import { resolveNetworkContext } from "../utils/networkContext";
 import { logger } from "../utils/logger";
 
+/**
+ * Address-book key -> hardhat factory name. Identical in every case since v0.4;
+ * the indirection is kept because the two diverged during the v0.3 rename and
+ * will again the next time a contract is renamed without a fresh deploy.
+ *
+ * A v0.3 proxy checked against a v0.4 factory reports INCOMPATIBLE, correctly:
+ * the ERC-7201 namespaces were re-derived under new labels, so there is no
+ * upgrade path. That is the expected output when pointing this at a pre-v0.4
+ * address book, not a bug in the probe.
+ */
 const TARGETS: Record<string, string> = {
-  OkuDollar: "OkuDollar",
+  OkuM: "OkuM",
+  USDOku: "USDOku",
+  USDOkuWrapper: "USDOkuWrapper",
+  SubscriptionModule: "SubscriptionModule",
   RedemptionQueue: "RedemptionQueue",
-  LitePSM: "LitePSM",
 };
 
 async function main() {

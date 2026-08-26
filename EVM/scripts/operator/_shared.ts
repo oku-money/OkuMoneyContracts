@@ -4,6 +4,11 @@
  * Extracted in the v0.3 refactor: every operator script previously carried its
  * own copy of the arg parser and the fork-impersonation logic, which had already
  * drifted between files. One copy, one behaviour.
+ *
+ * v0.4 additionally centralises the Solidity constant mirrors. They were
+ * duplicated per script (`const MAX_FEE_BPS = 100n` in setFees.ts, etc.), which
+ * was survivable with one bound per script and is not survivable now that a
+ * single operation can be constrained by three of them at once.
  */
 
 import { ethers, network } from "hardhat";
@@ -20,14 +25,48 @@ export const PRECISION = 10n ** 18n;
 export const SECONDS_PER_YEAR = 365n * 24n * 60n * 60n;
 export const BASIS_POINTS = 10_000n;
 
-/** Mirrors `Constants.MAX_IMPLIED_APR` (bps) — keep in sync with Solidity. */
+// ---------------------------------------------------------------------------
+// Mirrors of `src/lib/Constants.sol` — keep in sync with Solidity.
+//
+// These exist so a script can explain a bound BEFORE the node rejects the tx.
+// A revert selector on a hardware-wallet screen is not an explanation.
+// ---------------------------------------------------------------------------
+
+/** `Constants.MAX_IMPLIED_APR` (bps). Binds `USDOku.setUsdOkuRate`. */
 export const MAX_IMPLIED_APR_BPS = 1000n;
-/** Mirrors `Constants.MAX_RATE_DURATION`. */
+/** `Constants.MAX_RATE_DURATION`. Binds `USDOku.setUsdOkuRate`. */
 export const MAX_RATE_DURATION_SECONDS = 30n * 24n * 60n * 60n;
+/** `Constants.MAX_STEP_BPS`. Ceiling on a single `M_oku` step. */
+export const MAX_STEP_BPS = 100n;
+/** `Constants.MAX_FEE_BPS`. Ceiling on `tin` and on `tout`, each. */
+export const MAX_FEE_BPS = 100n;
+/** `Constants.MAX_SOLVENCY_GAP_BPS`. How far `M_usd` liability may outrun backing. */
+export const MAX_SOLVENCY_GAP_BPS = 100n;
+/** `Constants.MAX_SYNC_WINDOW`. Ceiling on the post-step sync window. */
+export const MAX_SYNC_WINDOW_SECONDS = 15n * 60n;
+/** `Constants.MAX_MULTIPLIER`. Absolute ceiling on `M_oku` and on projected `M_usd`. */
+export const MAX_MULTIPLIER = 10n ** 24n;
 
 export const DRY_RUN = process.env.DRY_RUN === "true";
 export const YES_MAINNET =
   process.argv.includes("--yes-mainnet") || process.env.YES_MAINNET === "true";
+
+/**
+ * Every contract an operator script can address, by hardhat contract name.
+ *
+ * The name doubles as the address-book key (see utils/addressBook.ts), so this
+ * union is also the set of valid book keys. Note `RedemptionQueue` survived the
+ * v0.3 -> v0.4 rename unchanged while its siblings did not — a stale book entry
+ * under that key will attach cleanly to a RETIRED v0.3 queue, so scripts that
+ * touch it should cross-check `queue.okuM()` against the OkuM they expect.
+ */
+export type OperatorContract =
+  | "OkuM"
+  | "USDOku"
+  | "USDOkuWrapper"
+  | "SubscriptionModule"
+  | "RedemptionQueue"
+  | "OkuMultiplierAdapter";
 
 /** `--name=value`, `--name value`, or the SCREAMING_SNAKE env var. */
 export function parseArg(name: string): string | undefined {
@@ -94,8 +133,14 @@ export async function resolveOperatorSigner(isFork: boolean): Promise<Signer> {
 /** Boilerplate: resolve context, apply the mainnet guard, load a contract. */
 export async function setup(
   label: string,
-  contractName: "OkuDollar" | "LitePSM" | "RedemptionQueue" | "OkuMultiplierAdapter"
-): Promise<{ contract: Contract; signer: Signer; bookKey: string; networkName: string; isFork: boolean }> {
+  contractName: OperatorContract
+): Promise<{
+  contract: Contract;
+  signer: Signer;
+  bookKey: string;
+  networkName: string;
+  isFork: boolean;
+}> {
   const ctx = await resolveNetworkContext();
   logger.header(`${label} (${ctx.networkName})`);
   mainnetGuard(ctx.networkName, { yesMainnet: YES_MAINNET, dryRun: DRY_RUN });
@@ -120,6 +165,28 @@ export async function setup(
   };
 }
 
+/**
+ * Attach a SECOND contract from the same address book, bound to the same signer.
+ *
+ * The two-token model made this routine: almost every write against one
+ * contract now has a precondition living on another (fees on the module gate
+ * steps on OkuM; wrapper backing gates rates on USDOku), and reading that
+ * precondition is the difference between explaining a revert and reproducing it.
+ */
+export async function attachAlso(
+  contractName: OperatorContract,
+  bookKey: string,
+  signer: Signer
+): Promise<Contract> {
+  const address = loadAddress(bookKey, contractName);
+  if (!address) {
+    throw new Error(`Missing ${contractName} in the address book for ${bookKey}`);
+  }
+  const contract = (await getDeployedContract(contractName, address)).connect(signer) as Contract;
+  logger.info(`${contractName}: ${address}`);
+  return contract;
+}
+
 /** Submit unless DRY_RUN, then log the hash. */
 export async function submit(label: string, fn: () => Promise<any>): Promise<void> {
   if (DRY_RUN) {
@@ -131,7 +198,14 @@ export async function submit(label: string, fn: () => Promise<any>): Promise<voi
   logger.success(`${label} tx: ${receipt.hash}`);
 }
 
-/** Nominal (simple) annualization, matching `ScaledUIAmountUpgradeable._impliedAprBps`. */
+/**
+ * Nominal (simple) annualization of a per-second rate, in bps.
+ *
+ * Mirrors `USDOku._impliedAprBps`. Note this lives on USDOku ONLY: OkuM has no
+ * per-second rate at all any more, it steps. Annualizing an OkuM step means
+ * dividing by the mark interval, which is an off-chain policy number this
+ * module has no business guessing at.
+ */
 export function impliedAprBps(ratePerSecond: bigint): bigint {
   if (ratePerSecond <= PRECISION) return 0n;
   return ((ratePerSecond - PRECISION) * SECONDS_PER_YEAR * BASIS_POINTS) / PRECISION;
@@ -140,6 +214,20 @@ export function impliedAprBps(ratePerSecond: bigint): bigint {
 /** Inverse of the above: the per-second rate that annualizes to `bps`. */
 export function ratePerSecondForAprBps(bps: bigint): bigint {
   return PRECISION + (bps * PRECISION) / (BASIS_POINTS * SECONDS_PER_YEAR);
+}
+
+/**
+ * Step size in basis points of `oldMultiplier`, rounded UP.
+ *
+ * Mirrors `ScaledUIAmountUpgradeable._stepMultiplier`, INCLUDING the rounding
+ * direction, which is not cosmetic: the coverage comparison is
+ * `tin + tout >= stepBps`, so rounding the step down here would let a script
+ * green-light a step the contract then refuses.
+ */
+export function stepBps(oldMultiplier: bigint, newMultiplier: bigint): bigint {
+  if (newMultiplier <= oldMultiplier) return 0n;
+  const numerator = (newMultiplier - oldMultiplier) * BASIS_POINTS;
+  return (numerator + oldMultiplier - 1n) / oldMultiplier; // ceilDiv
 }
 
 export function runScript(main: () => Promise<void>): void {

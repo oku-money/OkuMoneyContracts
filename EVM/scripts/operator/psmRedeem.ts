@@ -1,7 +1,8 @@
 /**
- * Redeem rUSDOku for USDC through the PSM.
+ * Redeem OkuM for USDC through the SubscriptionModule.
  *
- * Replaces v0.2's `redeemOkuM.ts`.
+ * File name kept as `psmRedeem.ts` across the `LitePSM -> SubscriptionModule`
+ * rename; see psmMint.ts for why.
  *
  * TWO MODES, and the difference matters:
  *
@@ -13,11 +14,15 @@
  *
  * THE MAX-SEND RULE: for a true max-redeem always use `--raw max`. Deriving the
  * amount from the displayed balance is the shape of the May-2026 Sepolia
- * incident — see `test/psm/MaxSend.t.sol` before changing any of this.
+ * `InsufficientBalance()` incident — see `test/psm/MaxSend.t.sol` before
+ * changing any of this. It stays benign only because `fromUIAmount` floors;
+ * "fixing" the dust by rounding up makes it revert.
  *
- * If the PSM's USDC buffer cannot cover the payout the redemption is QUEUED
+ * If the module's USDC buffer cannot cover the payout the redemption is QUEUED
  * rather than settled, and this script reports that. A queued holder keeps
- * earning: the escrowed raw amount appreciates with the multiplier.
+ * earning: the escrowed raw amount appreciates with `M_oku`, and settlement
+ * charges the LOWER of the fee snapshotted at enqueue and the fee prevailing at
+ * processing.
  *
  * Usage:
  *   npx hardhat run scripts/operator/psmRedeem.ts --network sepolia --raw max
@@ -32,10 +37,11 @@ import { logger } from "../utils/logger";
 import { DRY_RUN, parseArg, runScript, setup, submit } from "./_shared";
 
 async function main() {
-  const { contract: psm, signer } = await setup("psmRedeem", "LitePSM");
+  const { contract: moduleContract, signer } =
+    await setup("psmRedeem", "SubscriptionModule");
 
-  const tokenAddr = await (psm as any).okuDollar();
-  const token = (await getDeployedContract("OkuDollar", tokenAddr)).connect(signer) as any;
+  const tokenAddr = await (moduleContract as any).okuM();
+  const okuM = (await getDeployedContract("OkuM", tokenAddr)).connect(signer) as any;
 
   const rawArg = parseArg("raw");
   const uiArg = parseArg("ui");
@@ -44,17 +50,27 @@ async function main() {
   }
 
   const who = await signer.getAddress();
-  const rawBalance: bigint = await token.balanceOf(who);
-  const uiBalance: bigint = await token.balanceOfUI(who);
-  const multiplier: bigint = await token.uiMultiplier();
+  const rawBalance: bigint = await okuM.balanceOf(who);
+  const uiBalance: bigint = await okuM.balanceOfUI(who);
+  const multiplier: bigint = await okuM.uiMultiplier();
+  const tout: bigint = await (moduleContract as any).tout();
 
   logger.info(`Caller:        ${who}`);
-  logger.info(`uiMultiplier:  ${ethers.formatEther(multiplier)}`);
-  logger.info(`Raw balance:   ${ethers.formatEther(rawBalance)}`);
+  logger.info(`M_oku:         ${ethers.formatEther(multiplier)}`);
+  logger.info(`tout:          ${tout}bps (already reflected in the quote)`);
+  logger.info(`Raw balance:   ${ethers.formatEther(rawBalance)} OkuM`);
   logger.info(`UI balance:    $${ethers.formatEther(uiBalance)}`);
 
-  const psmAddress = await (psm as any).getAddress();
-  const redeemableNow: bigint = await (psm as any).redeemableNow();
+  if (await okuM.isSyncLocked()) {
+    const until: bigint = await okuM.syncLockedUntil();
+    throw new Error(
+      `A multiplier step is propagating: the module reverts SyncWindowActive until ` +
+        `${new Date(Number(until) * 1000).toISOString()}. Bounded and auto-expiring — retry.`
+    );
+  }
+
+  const moduleAddress = await (moduleContract as any).getAddress();
+  const redeemableNow: bigint = await (moduleContract as any).redeemableNow();
   logger.info(`Instant capacity (raw): ${ethers.formatEther(redeemableNow)}`);
 
   let rawAmount: bigint;
@@ -68,7 +84,7 @@ async function main() {
     }
   } else {
     uiAmount = ethers.parseEther(uiArg!);
-    rawAmount = await token.fromUIAmount(uiAmount);
+    rawAmount = await okuM.fromUIAmount(uiAmount);
     useUiEntrypoint = true;
     logger.warning(
       `--ui floors the UI->raw conversion (${ethers.formatEther(uiAmount)} -> ` +
@@ -84,10 +100,17 @@ async function main() {
     );
   }
 
-  const quoted: bigint = await (psm as any).quoteRedeem(rawAmount);
-  logger.info(`Quoted USDC out: ${ethers.formatUnits(quoted, 6)}`);
+  const usdcDecimals = Number(
+    await (await ethers.getContractAt("MockUSDC", await okuM.asset())).decimals()
+  );
+  const quoted: bigint = await (moduleContract as any).quoteRedeem(rawAmount);
+  logger.info(`Quoted USDC out: ${ethers.formatUnits(quoted, usdcDecimals)}`);
   if (rawAmount > redeemableNow) {
-    logger.warning("Buffer is short — this redemption will be QUEUED, not settled.");
+    logger.warning(
+      "Buffer is short — this redemption will be QUEUED, not settled, and this " +
+        "script will report 0 USDC received. The escrowed OkuM keeps appreciating " +
+        "with M_oku while it waits."
+    );
   }
 
   if (DRY_RUN) {
@@ -95,14 +118,14 @@ async function main() {
     return;
   }
 
-  await submit("approve", () => token.approve(psmAddress, rawAmount));
+  await submit("approve", () => okuM.approve(moduleAddress, rawAmount));
   if (useUiEntrypoint) {
-    await submit("redeemUiAmount", () => (psm as any).redeemUiAmount(uiAmount));
+    await submit("redeemUiAmount", () => (moduleContract as any).redeemUiAmount(uiAmount));
   } else {
-    await submit("redeem", () => (psm as any).redeem(rawAmount));
+    await submit("redeem", () => (moduleContract as any).redeem(rawAmount));
   }
 
-  const residual: bigint = await token.balanceOf(who);
+  const residual: bigint = await okuM.balanceOf(who);
   logger.success(`Residual raw balance: ${ethers.formatEther(residual)}`);
   if (rawArg === "max" && residual !== 0n) {
     logger.warning(`Expected 0 residual after --raw max, got ${residual}`);

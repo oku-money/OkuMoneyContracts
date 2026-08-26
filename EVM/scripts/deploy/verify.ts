@@ -5,7 +5,7 @@
  *   npx hardhat run scripts/deploy/verify.ts --network sepolia
  */
 
-import { run, upgrades } from "hardhat";
+import { ethers, run, upgrades } from "hardhat";
 import { loadAddressBook } from "../utils/addressBook";
 import { getNetworkName } from "../config/chains";
 import { logger } from "../utils/logger";
@@ -82,11 +82,16 @@ async function main() {
   }
   console.log();
 
-  // Proxy contracts
-  // OkuBridge / OkuBridgeRouter removed in the noBridge refactor; PSM is the
-  // sole user-facing mint/burn surface.
-  const proxyContracts = ["OkuDollar", "RedemptionQueue", "LitePSM"];
-  
+  // UUPS proxies — verify the implementation behind each, since that is where
+  // the source lives. Mirrors PROXY_CONTRACTS in deploy/index.ts.
+  const proxyContracts = [
+    "OkuM",
+    "USDOku",
+    "USDOkuWrapper",
+    "SubscriptionModule",
+    "RedemptionQueue",
+  ];
+
   for (const contractName of proxyContracts) {
     const address = addresses[contractName];
     if (address) {
@@ -95,10 +100,28 @@ async function main() {
     }
   }
 
-  // Non-proxy contracts
+  // Non-proxy contracts. `OkuMultiplierAdapter` is immutable by design (a
+  // bounds change means deploying a new one), so it has no implementation slot
+  // to chase — but its constructor args must be supplied for the bytecode to
+  // match. They are re-derived here from the deployed adapter rather than
+  // hardcoded, so this stays correct if deploy/index.ts retunes the bounds.
   if (addresses.MockUSDC) {
     logger.info("Verifying MockUSDC...");
     await verifyNonProxy(addresses.MockUSDC, "MockUSDC");
+  }
+
+  if (addresses.OkuMultiplierAdapter) {
+    logger.info("Verifying OkuMultiplierAdapter...");
+    const adapter = await ethers.getContractAt(
+      "OkuMultiplierAdapter",
+      addresses.OkuMultiplierAdapter
+    );
+    await verifyNonProxy(addresses.OkuMultiplierAdapter, "OkuMultiplierAdapter", [
+      await adapter.token(),
+      await adapter.minAnswer(),
+      await adapter.maxAnswer(),
+      await adapter.stalenessThreshold(),
+    ]);
   }
 
   logger.success("\nVerification complete");

@@ -1,10 +1,15 @@
 /**
  * Rescue a stuck redemption-queue entry (QUEUE_RESCUER role required).
  *
- * Calls `RedemptionQueue.rescueQueueEntry(index, alternateRecipient)`,
- * which returns the rUSDOku for the entry to `alternateRecipient` and
- * clears the slot without burning. Use when an entry is permanently
- * unprocessable (e.g. the original user has been USDC-blacklisted).
+ * Calls `RedemptionQueue.rescueQueueEntry(index, alternateRecipient)`, which
+ * returns the escrowed OkuM for the entry to `alternateRecipient` and clears the
+ * slot WITHOUT burning. Use when an entry is permanently unprocessable — e.g.
+ * the original user has been USDC-blacklisted, so `processQueue` can never
+ * deliver their payout and soft-skips them forever.
+ *
+ * This returns SHARES, not dollars: the entry's raw OkuM comes back at whatever
+ * `M_oku` is now, which is worth more than when it was queued. No double spend
+ * is possible — the entry is cleared and its escrow released in the same call.
  *
  * Usage:
  *   NETWORK=base npx hardhat run scripts/operator/rescueQueueEntry.ts --network base \
@@ -23,6 +28,7 @@ import { loadAddress } from "../utils/addressBook";
 import { getDeployedContract } from "../utils/deploy";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
+import { resolveOperatorSigner } from "./_shared";
 
 function parseArg(name: string): string | undefined {
   const a = process.argv.find((x) => x.startsWith(`--${name}=`) || x.startsWith(`--${name} `));
@@ -50,7 +56,12 @@ async function main() {
   const queueAddr = loadAddress(ctx.bookKey, "RedemptionQueue");
   if (!queueAddr) throw new Error(`Missing RedemptionQueue in address book for ${ctx.bookKey}`);
 
-  const [signer] = await ethers.getSigners();
+  // Signer resolution goes through the shared helper rather than
+  // `getSigners()[0]`: on a fork the mnemonic accounts hold no roles, so every
+  // privileged call here would revert AccessControlUnauthorizedAccount against
+  // a correctly-wired deployment. On a live network the helper returns the same
+  // PRIVATE_KEY signer, so behaviour there is unchanged.
+  const signer = await resolveOperatorSigner(ctx.isFork);
   const queue = (await getDeployedContract("RedemptionQueue", queueAddr)).connect(signer);
 
   const head = await (queue as any).queueHead();
@@ -63,13 +74,26 @@ async function main() {
     throw new Error(`--index ${index} out of range [${head}, ${tail})`);
   }
 
-  // Best-effort read of the entry; some impls expose getQueueEntry().
+  // Pre-state read. `getQueueEntryValue` is a CONSERVATIVE FLOOR on the payout,
+  // not the exact settlement amount: it applies the entry's snapshotted `tout`,
+  // whereas settlement charges `min(snapshot, live)`. Erring low is correct for
+  // a quote — a holder is never told to expect more than they get.
   try {
     const entry = await (queue as any).getQueueEntry(index);
-    logger.info(`Entry user: ${entry.user}`);
+    logger.info(`Entry user:      ${entry.user}`);
     logger.info(`Entry rawAmount: ${ethers.formatUnits(entry.rawAmount, 18)} OkuM`);
-  } catch {
-    logger.warning("getQueueEntry() not available; skipping pre-state read");
+    logger.info(`Entry toutBps:   ${entry.toutBps} (snapshotted at enqueue)`);
+    logger.info(
+      `Queued at:       ${new Date(Number(entry.timestamp) * 1000).toISOString()}`
+    );
+    const okuMAddr: string = await (queue as any).okuM();
+    const okuM = await ethers.getContractAt("OkuM", okuMAddr);
+    logger.info(
+      `Current UI value: $${ethers.formatEther(await (okuM as any).toUIAmount(entry.rawAmount))} ` +
+        `(appreciated with M_oku while queued)`
+    );
+  } catch (e: any) {
+    logger.warning(`Pre-state read failed (${e?.message?.slice(0, 80) ?? e}); continuing`);
   }
 
   if (DRY_RUN) {

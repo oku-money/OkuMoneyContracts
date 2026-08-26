@@ -1,8 +1,9 @@
 /**
- * Unified Deployment Script for the OkuDollar (rUSDOku) EVM Contracts
+ * Unified Deployment Script for the OkuMoney (OkuM / USDOku) EVM Contracts
  *
- * Deploys all contracts and configures roles in a single execution.
- * Works for both local fork testing (via hardhat network) and live testnet.
+ * Deploys all contracts, configures roles, and performs the post-deploy wiring
+ * that the two-token model REQUIRES in order to function at all. Works for both
+ * local fork testing (via the hardhat/localhost network) and live testnet.
  *
  * Usage:
  *   # Local fork (auto-forks Eth Sepolia via hardhat.config.ts)
@@ -14,7 +15,43 @@
  * Options (via env vars):
  *   SKIP_MOCK_USDC=true   - Skip MockUSDC deployment (use existing USDC)
  *   RESET_FORK=true       - Reset hardhat fork to clean state before deploying
+ *   FRESH_DEPLOY=true     - Ignore address-book reuse; always redeploy
  *   VERIFY=true           - Verify contracts on Etherscan after deployment
+ *   DEPLOY_TIN / DEPLOY_TOUT - override the initial fee schedule (bps)
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE ORDER BELOW IS NOT NEGOTIABLE
+ * ---------------------------------------------------------------------------
+ *
+ *   1. MockUSDC (testnet only)
+ *   2. OkuM             — owns `asset()` / `usdcDecimalMultiplier()`, which the
+ *                         module and queue cross-assert against in their own
+ *                         initializers. It must exist first or they revert.
+ *   3. RedemptionQueue  — the module's initializer takes its address.
+ *   4. SubscriptionModule
+ *   5. USDOku           — no dependency on any of the above (its initializer
+ *                         takes only name/symbol/admin), but it is deployed
+ *                         after so the wrapper can follow immediately.
+ *   6. USDOkuWrapper    — binds OkuM + USDOku.
+ *   7. Role wiring      — contract grants only; never to an EOA.
+ *   8. FAIL-CLOSED WIRING. Four writes without which the system is inert (the
+ *      first three block yield marking entirely; the fourth only blocks the
+ *      USDC<->USDOku convenience path):
+ *        okuM.setStepFeeSource(module)   — else every `setOkuMultiplier` reverts
+ *                                          `StepNotCovered` (coverage reads 0)
+ *        usdOku.setSolvencySource(wrapper) — else `setUsdOkuRate` reverts
+ *                                          `SolvencyGapExceeded` as soon as any
+ *                                          liability exists
+ *        module.setFees(tin, tout)      — with tin+tout == 0 NO step is
+ *                                          possible, because step coverage
+ *                                          requires `tin + tout >= stepBps`
+ *        module.setUsdOkuWrapper(wrapper) — else `mintUsdOku`/`redeemUsdOku`
+ *                                          revert `UsdOkuWrapperNotSet`
+ *      All four are deliberately fail-closed in the contracts: a
+ *      half-configured deployment cannot mark a multiplier it cannot cover,
+ *      and cannot offer a one-transaction USDOku path it hasn't wired.
+ *   9. OkuMultiplierAdapter (non-proxy, immutable)
+ *  10. verifyDeployment
  */
 
 import { ethers, network, upgrades, run } from "hardhat";
@@ -56,6 +93,29 @@ const VERIFIABLE_NETWORKS = [
   "bsc",
 ];
 
+/** Every UUPS proxy in the system. Drives Etherscan proxy verification. */
+const PROXY_CONTRACTS = [
+  "OkuM",
+  "USDOku",
+  "USDOkuWrapper",
+  "SubscriptionModule",
+  "RedemptionQueue",
+];
+
+/** Contract names expected in the address book after a complete testnet run. */
+const EXPECTED_CONTRACTS = [
+  "MockUSDC",
+  "OkuM",
+  "RedemptionQueue",
+  "SubscriptionModule",
+  "USDOku",
+  "USDOkuWrapper",
+  "OkuMultiplierAdapter",
+];
+
+/** `type(IScaledUIAmount).interfaceId` — ERC-8056 core. */
+const IID_SCALED_UI_CORE = "0xa60bf13d";
+
 // Dev wallet address for impersonation on local fork (centralized in chains.ts)
 const DEV_WALLET = DEV_WALLET_ADDRESS;
 
@@ -66,18 +126,33 @@ const DEV_WALLET = DEV_WALLET_ADDRESS;
 interface DeploymentConfig {
   maxSupply: bigint;
   minterAllowance: bigint;
+  /** Mint fee, bps. Part of the step-coverage budget. */
+  tin: bigint;
+  /** Redemption fee, bps. Part of the step-coverage budget. */
+  tout: bigint;
 }
 
 function getDeploymentConfig(): DeploymentConfig {
   return {
     maxSupply: ethers.parseUnits("1000000000", 18), // 1 billion
     minterAllowance: ethers.parseUnits("1000000000", 18), // 1 billion
+
+    // Testnet default fee schedule. `tin + tout` IS the step-coverage budget:
+    // `OkuM.setOkuMultiplier` refuses any step whose `stepBps` exceeds it, so
+    // this number caps the mark cadence rather than merely pricing it.
+    //
+    // 50 bps of combined coverage buys roughly a monthly mark at a 5% annual
+    // target (~40.7 bps/month), with headroom. A daily cadence needs only
+    // ~1.4 bps and a weekly one ~9.6 bps, so 50 is generous for testnet; a
+    // quarterly cadence would NOT fit and would need the MAX_FEE_BPS ceiling
+    // on both sides (100 + 100 = 200 bps of coverage).
+    //
+    // tin=0 keeps subscription free on testnet; all coverage sits on the exit
+    // side, which is where the step-arbitrage round trip has to pay.
+    tin: BigInt(process.env.DEPLOY_TIN ?? "0"),
+    tout: BigInt(process.env.DEPLOY_TOUT ?? "50"),
   };
 }
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
 
 // ============================================================================
 // Transient-error Retry Helpers
@@ -94,7 +169,7 @@ function getDeploymentConfig(): DeploymentConfig {
 //
 // All of these are recoverable by waiting briefly and retrying — re-running
 // the operation re-fetches a fresh nonce and re-broadcasts. Without retry,
-// any one of ~25 sequential txs in a full deploy can torpedo the whole run.
+// any one of ~35 sequential txs in a full deploy can torpedo the whole run.
 
 const TRANSIENT_PATTERNS = [
   /nonce too low/i,
@@ -373,10 +448,10 @@ async function verifyProxy(proxyAddress: string, contractName: string): Promise<
     // Get implementation address
     const implAddress = await upgrades.erc1967.getImplementationAddress(proxyAddress);
     logger.info(`    Implementation: ${implAddress}`);
-    
+
     // Verify implementation contract
     await verifyContract(implAddress);
-    
+
     // Also try to verify the proxy itself (links proxy to implementation on Etherscan)
     // This uses hardhat-upgrades' built-in proxy verification
     try {
@@ -394,7 +469,7 @@ async function verifyProxy(proxyAddress: string, contractName: string): Promise<
   }
 }
 
-async function verifyAllContracts(networkName: string): Promise<void> {
+async function verifyAllContracts(networkName: string, stepNo: number): Promise<void> {
   if (!VERIFIABLE_NETWORKS.includes(networkName)) {
     logger.info("Skipping verification (not a verifiable network)");
     return;
@@ -405,25 +480,20 @@ async function verifyAllContracts(networkName: string): Promise<void> {
     return;
   }
 
-  logger.step(7, "Verifying Contracts on Etherscan");
+  logger.step(stepNo, "Verifying Contracts on Etherscan");
   logger.info("  Waiting 30s for Etherscan to index contracts...");
   await new Promise(resolve => setTimeout(resolve, 30000));
 
   const addresses = loadAddressBook()[networkName] || {};
 
-  // Proxy contracts need special handling. OkuBridge/OkuBridgeRouter were removed
-  // in the noBridge refactor; v1 cross-chain transfers are PSM-mediated mint/burn
-  // orchestrated off-chain.
-  const proxyContracts = ["OkuDollar", "RedemptionQueue", "LitePSM"];
-  
   for (const contractName of Object.keys(addresses)) {
     const address = addresses[contractName];
     logger.info(`  Verifying ${contractName} at ${address}...`);
 
-    if (proxyContracts.includes(contractName)) {
+    if (PROXY_CONTRACTS.includes(contractName)) {
       await verifyProxy(address, contractName);
     } else {
-      // Non-proxy contracts (like MockUSDC)
+      // Non-proxy contracts (MockUSDC, OkuMultiplierAdapter).
       await verifyContract(address);
     }
   }
@@ -446,7 +516,7 @@ async function deployMockUSDC(bookKey: string, deployer: Signer): Promise<string
   const MockUSDC = await ethers.getContractFactory("MockUSDC", deployer);
 
   // CREATE2 path: MockUSDC must be deterministic across chains so the
-  // downstream PSM + queue proxies (whose constructor args include the
+  // downstream module + queue proxies (whose initializer args include the
   // USDC address) also end up with identical addresses across chains.
   if (await create2FactoryAvailable(ethers.provider)) {
     return await withRetry("deploy MockUSDC (CREATE2)", async () => {
@@ -481,39 +551,43 @@ async function deployMockUSDC(bookKey: string, deployer: Signer): Promise<string
   });
 }
 
-async function deployToken(
+async function deployOkuM(
   deployer: Signer,
   deployerAddress: string,
   bookKey: string,
   usdcAddress: string,
   config: DeploymentConfig
 ): Promise<Contract> {
-  logger.step(2, "Deploying OkuDollar (rUSDOku)");
+  logger.step(2, "Deploying OkuM (the share token)");
 
-  // The token MUST be deployed before the PSM and queue: both cross-assert
-  // `token.asset()` and `token.usdcDecimalMultiplier()` in their initializers,
-  // so the token is the single source of truth for the USDC binding.
-  const okuDollar = await deployUUPSProxy(
-    "OkuDollar",
-    ["Oku Dollar", "rUSDOku", usdcAddress, deployerAddress, config.maxSupply],
+  // OkuM MUST be deployed before the module and the queue: both cross-assert
+  // `okuM.asset()` and `okuM.usdcDecimalMultiplier()` in their initializers, so
+  // the token is the single source of truth for the USDC binding.
+  //
+  // Symbol is "OkuM", deliberately without an `r`/`s` prefix — an `r` prefix
+  // reads as *rebasing*, which is precisely backwards for a fixed-balance
+  // share token. USDOku is the leg that rebases.
+  const okuM = await deployUUPSProxy(
+    "OkuM",
+    ["Oku Money", "OkuM", usdcAddress, deployerAddress, config.maxSupply],
     bookKey,
     deployer
   );
-  logger.success(`  OkuDollar: ${await okuDollar.getAddress()}`);
-  return okuDollar;
+  logger.success(`  OkuM: ${await okuM.getAddress()}`);
+  return okuM;
 }
 
 async function deployRedemptionQueue(
   deployer: Signer,
   deployerAddress: string,
   bookKey: string,
-  okuDollarAddress: string,
+  okuMAddress: string,
   usdcAddress: string
 ): Promise<Contract> {
   logger.info("  Deploying RedemptionQueue...");
   const redemptionQueue = await deployUUPSProxy(
     "RedemptionQueue",
-    [okuDollarAddress, usdcAddress, deployerAddress],
+    [okuMAddress, usdcAddress, deployerAddress],
     bookKey,
     deployer
   );
@@ -521,39 +595,83 @@ async function deployRedemptionQueue(
   return redemptionQueue;
 }
 
-async function deployPSM(
+async function deploySubscriptionModule(
   deployer: Signer,
   deployerAddress: string,
   bookKey: string,
-  okuDollarAddress: string,
+  okuMAddress: string,
   redemptionQueueAddress: string,
-  usdcAddress: string,
-  _config: DeploymentConfig
+  usdcAddress: string
 ): Promise<Contract> {
-  logger.step(3, "Deploying LitePSM");
+  logger.step(3, "Deploying SubscriptionModule");
 
-  const litePSM = await deployUUPSProxy(
-    "LitePSM",
-    [okuDollarAddress, usdcAddress, redemptionQueueAddress, deployerAddress],
+  const subscriptionModule = await deployUUPSProxy(
+    "SubscriptionModule",
+    [okuMAddress, usdcAddress, redemptionQueueAddress, deployerAddress],
     bookKey,
     deployer
   );
-  logger.success(`  LitePSM: ${await litePSM.getAddress()}`);
-  return litePSM;
+  logger.success(`  SubscriptionModule: ${await subscriptionModule.getAddress()}`);
+  return subscriptionModule;
+}
+
+async function deployUsdOku(
+  deployer: Signer,
+  deployerAddress: string,
+  bookKey: string
+): Promise<Contract> {
+  logger.step(4, "Deploying USDOku (the rebasing dollar token)");
+
+  // No USDC binding and no OkuM reference in the initializer: USDOku never
+  // prices a conversion, so it needs neither. The wrapper is what ties it to
+  // OkuM, and `setSolvencySource` (step 6) is what lets its rate authority see
+  // realized backing.
+  const usdOku = await deployUUPSProxy(
+    "USDOku",
+    ["USD Oku", "USDOku", deployerAddress],
+    bookKey,
+    deployer
+  );
+  logger.success(`  USDOku: ${await usdOku.getAddress()}`);
+  return usdOku;
+}
+
+async function deployUsdOkuWrapper(
+  deployer: Signer,
+  deployerAddress: string,
+  bookKey: string,
+  okuMAddress: string,
+  usdOkuAddress: string
+): Promise<Contract> {
+  logger.info("  Deploying USDOkuWrapper...");
+  const wrapper = await deployUUPSProxy(
+    "USDOkuWrapper",
+    [okuMAddress, usdOkuAddress, deployerAddress],
+    bookKey,
+    deployer
+  );
+  logger.success(`  USDOkuWrapper: ${await wrapper.getAddress()}`);
+  return wrapper;
 }
 
 async function deployOracleAdapter(
   deployer: Signer,
   bookKey: string,
-  okuDollarAddress: string
+  okuMAddress: string,
+  stepNo: number
 ): Promise<Contract | null> {
-  logger.info("  Deploying OkuMultiplierAdapter...");
+  logger.step(stepNo, "Deploying OkuMultiplierAdapter");
 
-  // Bounds: the multiplier starts at 1e18 and only rises. `minAnswer` sits just
-  // below to catch a corrupted read; `maxAnswer` of 10e18 is ~48 years of
-  // headroom at the 1000bps APR cap, and a value above it should stop a lending
-  // market rather than be silently priced. `stalenessThreshold` of 7 days means a
-  // missed 30-day rate renewal surfaces to consumers within a week.
+  // Bounds: `M_oku` starts at 1e18 and only rises. `minAnswer` sits just below
+  // to catch a corrupted read; `maxAnswer` of 10e18 is decades of headroom at
+  // any plausible T-Bill mark cadence, and a value above it should stop a
+  // lending market rather than be silently priced. `stalenessThreshold` of
+  // 7 days means a lapsed mark surfaces to consumers within a week — the
+  // multiplier stays flat and truthful in the meantime, but nobody should keep
+  // pricing collateral off an unmarked index indefinitely.
+  //
+  // There is deliberately NO adapter for `M_usd`: it is a declared payout rate,
+  // not a value a lending market should price collateral against.
   const minAnswer = ethers.parseUnits("0.99", 18);
   const maxAnswer = ethers.parseUnits("10", 18);
   const staleness = 7 * 24 * 60 * 60;
@@ -562,7 +680,7 @@ async function deployOracleAdapter(
   if (existing) return existing;
 
   const Factory = await ethers.getContractFactory("OkuMultiplierAdapter", deployer);
-  const deployed = await Factory.deploy(okuDollarAddress, minAnswer, maxAnswer, staleness);
+  const deployed = await Factory.deploy(okuMAddress, minAnswer, maxAnswer, staleness);
   await deployed.waitForDeployment();
   const address = await deployed.getAddress();
   saveAddress(bookKey, "OkuMultiplierAdapter", address);
@@ -572,110 +690,293 @@ async function deployOracleAdapter(
 
 async function configureRoles(
   deployerAddress: string,
-  okuDollar: Contract,
+  okuM: Contract,
   redemptionQueue: Contract,
-  litePSM: Contract,
-  config: DeploymentConfig
+  subscriptionModule: Contract,
+  usdOku: Contract,
+  usdOkuWrapper: Contract,
+  config: DeploymentConfig,
+  stepNo: number
 ): Promise<void> {
-  logger.step(4, "Configuring Roles");
+  logger.step(stepNo, "Configuring Roles");
 
-  const litePSMAddress = await litePSM.getAddress();
-  const redemptionQueueAddress = await redemptionQueue.getAddress();
+  const moduleAddress = await subscriptionModule.getAddress();
+  const queueAddress = await redemptionQueue.getAddress();
+  const wrapperAddress = await usdOkuWrapper.getAddress();
+  const okuMAddress = await okuM.getAddress();
+  const usdOkuAddress = await usdOku.getAddress();
 
-  // Fail-fast: all three contracts must agree on the USDC binding and its
-  // decimal multiplier BEFORE any role is granted, so a mismatch aborts with no
-  // partially-roled proxies to unwind. The initializers already cross-assert
-  // this on-chain; re-checking here turns a revert-at-init into a clear message.
-  const tokenAsset = (await okuDollar.asset()).toString();
-  const psmUsdc = (await litePSM.usdc()).toString();
+  // Fail-fast: OkuM, the module and the queue must agree on the USDC binding
+  // and its decimal multiplier BEFORE any role is granted, so a mismatch aborts
+  // with no partially-roled proxies to unwind. The initializers already
+  // cross-assert this on-chain; re-checking here turns a revert-at-init into a
+  // clear message.
+  //
+  // USDOku and the wrapper are deliberately absent from this check: neither
+  // holds a USDC binding. USDOku is denominated in dollars and the wrapper
+  // converts OkuM <-> USDOku at `M_oku`, so USDC never enters either.
+  const tokenAsset = (await okuM.asset()).toString();
+  const moduleUsdc = (await subscriptionModule.usdc()).toString();
   const queueUsdc = (await redemptionQueue.usdc()).toString();
   if (
-    tokenAsset.toLowerCase() !== psmUsdc.toLowerCase() ||
+    tokenAsset.toLowerCase() !== moduleUsdc.toLowerCase() ||
     tokenAsset.toLowerCase() !== queueUsdc.toLowerCase()
   ) {
     throw new Error(
-      `USDC mismatch: token=${tokenAsset} psm=${psmUsdc} queue=${queueUsdc}. ` +
+      `USDC mismatch: okuM=${tokenAsset} module=${moduleUsdc} queue=${queueUsdc}. ` +
         `Aborting before role grants.`
     );
   }
-  const tokenDm = (await okuDollar.usdcDecimalMultiplier()).toString();
-  const psmDm = (await litePSM.usdcDecimalMultiplier()).toString();
+  const tokenDm = (await okuM.usdcDecimalMultiplier()).toString();
+  const moduleDm = (await subscriptionModule.usdcDecimalMultiplier()).toString();
   const queueDm = (await redemptionQueue.usdcDecimalMultiplier()).toString();
-  if (tokenDm !== psmDm || tokenDm !== queueDm) {
+  if (tokenDm !== moduleDm || tokenDm !== queueDm) {
     throw new Error(
-      `Decimal multiplier mismatch: token=${tokenDm} psm=${psmDm} queue=${queueDm}.`
+      `Decimal multiplier mismatch: okuM=${tokenDm} module=${moduleDm} queue=${queueDm}.`
     );
   }
   logger.info(`  USDC binding verified: ${tokenAsset} (decimalMultiplier ${tokenDm})`);
 
+  // Fail-fast: the wrapper must be bound to the two tokens we just deployed.
+  // A wrapper pointing at a stale OkuM would price conversions off the wrong
+  // multiplier — and because the queue/module keys are name-stable across the
+  // v0.3 -> v0.4 rename, a stale address-book entry is a realistic way to get
+  // there.
+  const wrapperOkuM = (await usdOkuWrapper.okuM()).toString();
+  const wrapperUsdOku = (await usdOkuWrapper.usdOku()).toString();
+  if (
+    wrapperOkuM.toLowerCase() !== okuMAddress.toLowerCase() ||
+    wrapperUsdOku.toLowerCase() !== usdOkuAddress.toLowerCase()
+  ) {
+    throw new Error(
+      `Wrapper binding mismatch: wrapper.okuM()=${wrapperOkuM} (expected ${okuMAddress}), ` +
+        `wrapper.usdOku()=${wrapperUsdOku} (expected ${usdOkuAddress}).`
+    );
+  }
+  logger.info(`  Wrapper binding verified: okuM=${wrapperOkuM} usdOku=${wrapperUsdOku}`);
+
   // ---- Contract grants. These must NEVER go to a key. ----
-  // LitePSM mints on `mint` and burns on the instant-redeem path.
-  await sendAndWait("Grant OKU_MINTER to LitePSM", () =>
-    okuDollar.grantRole(ROLES.OKU_MINTER, litePSMAddress));
-  await sendAndWait("Grant OKU_BURNER to LitePSM", () =>
-    okuDollar.grantRole(ROLES.OKU_BURNER, litePSMAddress));
-  // RedemptionQueue burns per entry in `processQueue`. It never mints — the v1
-  // queue minted rebase deltas; there are no rebases now.
-  await sendAndWait("Grant OKU_BURNER to RedemptionQueue", () =>
-    okuDollar.grantRole(ROLES.OKU_BURNER, redemptionQueueAddress));
+  // The module mints on `mint` and burns on the instant-redeem path.
+  await sendAndWait("Grant OkuM.OKU_MINTER to SubscriptionModule", () =>
+    okuM.grantRole(ROLES.OKU_MINTER, moduleAddress));
+  await sendAndWait("Grant OkuM.OKU_BURNER to SubscriptionModule", () =>
+    okuM.grantRole(ROLES.OKU_BURNER, moduleAddress));
+  // RedemptionQueue burns per entry in `processQueue`. It never mints.
+  await sendAndWait("Grant OkuM.OKU_BURNER to RedemptionQueue", () =>
+    okuM.grantRole(ROLES.OKU_BURNER, queueAddress));
+
+  await sendAndWait("Set SubscriptionModule minter allowance", () =>
+    okuM.configureMinterAllowance(moduleAddress, config.minterAllowance));
+
+  // The wrapper is the ONLY minter and burner of USDOku. Same role constants as
+  // OkuM's, but AccessControl mappings are per contract, so these are entirely
+  // separate grants — holding OKU_MINTER on OkuM confers nothing here.
+  await sendAndWait("Grant USDOku.OKU_MINTER to USDOkuWrapper", () =>
+    usdOku.grantRole(ROLES.OKU_MINTER, wrapperAddress));
+  await sendAndWait("Grant USDOku.OKU_BURNER to USDOkuWrapper", () =>
+    usdOku.grantRole(ROLES.OKU_BURNER, wrapperAddress));
+
   // Deliberately post-init: avoids a circular dependency and keeps the deploy
   // admin from calling enqueue/processQueue directly.
-  await sendAndWait("Grant QUEUE_PSM to LitePSM", () =>
-    redemptionQueue.grantRole(ROLES.QUEUE_PSM, litePSMAddress));
-
-  await sendAndWait("Set LitePSM minter allowance", () =>
-    okuDollar.configureMinterAllowance(litePSMAddress, config.minterAllowance));
+  await sendAndWait("Grant Queue.QUEUE_PSM to SubscriptionModule", () =>
+    redemptionQueue.grantRole(ROLES.QUEUE_PSM, moduleAddress));
 
   // ---- Operational roles. Testnet: all to the deployer. ----
   // Production: run grantRolesMainnet.ts to split across cold/warm/orchestrator.
-  await sendAndWait("Grant OKU_RATE_SETTER to Admin", () =>
-    okuDollar.grantRole(ROLES.OKU_RATE_SETTER, deployerAddress));
-  await sendAndWait("Grant OKU_GUARDIAN to Admin", () =>
-    okuDollar.grantRole(ROLES.OKU_GUARDIAN, deployerAddress));
-  await sendAndWait("Grant OKU_ALLOWANCE_MANAGER to Admin", () =>
-    okuDollar.grantRole(ROLES.OKU_ALLOWANCE_MANAGER, deployerAddress));
-  await sendAndWait("Grant OKU_PAUSER to Admin", () =>
-    okuDollar.grantRole(ROLES.OKU_PAUSER, deployerAddress));
-  await sendAndWait("Grant OKU_UNPAUSER to Admin", () =>
-    okuDollar.grantRole(ROLES.OKU_UNPAUSER, deployerAddress));
-  await sendAndWait("Grant OKU_BLACKLISTER to Admin", () =>
-    okuDollar.grantRole(ROLES.OKU_BLACKLISTER, deployerAddress));
-  await sendAndWait("Grant OKU_UNBLACKLISTER to Admin", () =>
-    okuDollar.grantRole(ROLES.OKU_UNBLACKLISTER, deployerAddress));
-  await sendAndWait("Grant OKU_CAP_MANAGER to Admin", () =>
-    okuDollar.grantRole(ROLES.OKU_CAP_MANAGER, deployerAddress));
+  //
+  // OkuM's initializer already granted the deployer the full set, so most of
+  // these are idempotent no-ops on a fresh deploy. They are re-issued anyway so
+  // the script is also a repair tool for a deployment whose roles were
+  // partially rotated — a grant that is already held costs one `hasRole`-shaped
+  // no-op tx and removes an entire class of "which roles did we actually move?"
+  // question from the runbook.
+  for (const role of [
+    "OKU_RATE_SETTER",
+    "OKU_GUARDIAN",
+    "OKU_ALLOWANCE_MANAGER",
+    "OKU_PAUSER",
+    "OKU_UNPAUSER",
+    "OKU_BLACKLISTER",
+    "OKU_UNBLACKLISTER",
+    "OKU_CAP_MANAGER",
+  ] as const) {
+    await sendAndWait(`Grant OkuM.${role} to Admin`, () =>
+      okuM.grantRole(ROLES[role], deployerAddress));
+  }
 
-  await sendAndWait("Grant PSM_PAUSER to Admin", () =>
-    litePSM.grantRole(ROLES.PSM_PAUSER, deployerAddress));
-  await sendAndWait("Grant PSM_UNPAUSER to Admin", () =>
-    litePSM.grantRole(ROLES.PSM_UNPAUSER, deployerAddress));
-  await sendAndWait("Grant PSM_BUFFER_DEPOSITOR to Admin", () =>
-    litePSM.grantRole(ROLES.PSM_BUFFER_DEPOSITOR, deployerAddress));
-  await sendAndWait("Grant PSM_BUFFER_WITHDRAWER to Admin", () =>
-    litePSM.grantRole(ROLES.PSM_BUFFER_WITHDRAWER, deployerAddress));
-  await sendAndWait("Grant PSM_QUEUE_PROCESSOR to Admin", () =>
-    litePSM.grantRole(ROLES.PSM_QUEUE_PROCESSOR, deployerAddress));
+  // USDOku carries the same OKU_* surface minus OKU_ALLOWANCE_MANAGER (it has
+  // no minter-allowance system — the wrapper is the only minter, and gating it
+  // twice would add a way to brick wrapping with no corresponding safety gain).
+  for (const role of [
+    "OKU_RATE_SETTER",
+    "OKU_GUARDIAN",
+    "OKU_PAUSER",
+    "OKU_UNPAUSER",
+    "OKU_BLACKLISTER",
+    "OKU_UNBLACKLISTER",
+    "OKU_CAP_MANAGER",
+  ] as const) {
+    await sendAndWait(`Grant USDOku.${role} to Admin`, () =>
+      usdOku.grantRole(ROLES[role], deployerAddress));
+  }
 
-  await sendAndWait("Grant QUEUE_RESCUER to Admin", () =>
+  for (const role of [
+    "PSM_PAUSER",
+    "PSM_UNPAUSER",
+    "PSM_BUFFER_DEPOSITOR",
+    "PSM_BUFFER_WITHDRAWER",
+    "PSM_QUEUE_PROCESSOR",
+    "PSM_FEE_MANAGER",
+  ] as const) {
+    await sendAndWait(`Grant SubscriptionModule.${role} to Admin`, () =>
+      subscriptionModule.grantRole(ROLES[role], deployerAddress));
+  }
+
+  // WRAPPER_ADMIN is the USDOku sunset lever (`setWrapEnabled`). There is no
+  // corresponding lever for `unwrap`, by design. WRAPPER_RESERVE_MANAGER is
+  // the mirror-image recovery path (`withdrawSurplus`) once realized marks
+  // overtake declared liability.
+  for (const role of [
+    "WRAPPER_PAUSER",
+    "WRAPPER_UNPAUSER",
+    "WRAPPER_ADMIN",
+    "WRAPPER_RESERVE_MANAGER",
+  ] as const) {
+    await sendAndWait(`Grant USDOkuWrapper.${role} to Admin`, () =>
+      usdOkuWrapper.grantRole(ROLES[role], deployerAddress));
+  }
+
+  await sendAndWait("Grant Queue.QUEUE_RESCUER to Admin", () =>
     redemptionQueue.grantRole(ROLES.QUEUE_RESCUER, deployerAddress));
+}
+
+/**
+ * The three writes that turn a set of deployed proxies into a working system.
+ *
+ * Every one of them is FAIL-CLOSED in the contracts, which means a deployment
+ * that skips this step does not misbehave — it simply refuses to mark a
+ * multiplier or a rate. That is the correct default, and it is also why this
+ * step has to be explicit and loudly logged: the failure mode is "nothing
+ * happens when the orchestrator ticks", which is easy to misdiagnose as an
+ * orchestrator bug.
+ */
+async function wireFailClosedDependencies(
+  okuM: Contract,
+  usdOku: Contract,
+  subscriptionModule: Contract,
+  usdOkuWrapper: Contract,
+  config: DeploymentConfig,
+  stepNo: number
+): Promise<void> {
+  logger.step(stepNo, "Post-deploy wiring (REQUIRED — all four fail closed)");
+
+  const moduleAddress = await subscriptionModule.getAddress();
+  const wrapperAddress = await usdOkuWrapper.getAddress();
+
+  // 1. Step coverage source. `OkuM.setOkuMultiplier` reads `tin`/`tout` from
+  //    here to check `tin + tout >= stepBps`. An unwired source reads as ZERO
+  //    coverage, so every step reverts `StepNotCovered` — including the very
+  //    first one, at any size.
+  const currentFeeSource = (await okuM.stepFeeSource()).toString();
+  if (currentFeeSource.toLowerCase() === moduleAddress.toLowerCase()) {
+    logger.info(`  okuM.stepFeeSource already ${moduleAddress} — skipping`);
+  } else {
+    await sendAndWait(`Set okuM.stepFeeSource = SubscriptionModule`, () =>
+      okuM.setStepFeeSource(moduleAddress));
+  }
+
+  // 2. Solvency source. `USDOku.setUsdOkuRate` projects the liability to
+  //    `rateEnd` and compares it against `wrapper.realizedBacking()`. An
+  //    unwired source reads backing as zero, so once ANY USDOku exists the
+  //    rate write reverts `SolvencyGapExceeded` with an infinite gap. It
+  //    happens to succeed while `totalShares == 0` (no liability to outrun),
+  //    which is exactly the sort of "worked on the empty deployment, broke on
+  //    the first user" trap worth wiring before anyone wraps.
+  const currentSolvencySource = (await usdOku.solvencySource()).toString();
+  if (currentSolvencySource.toLowerCase() === wrapperAddress.toLowerCase()) {
+    logger.info(`  usdOku.solvencySource already ${wrapperAddress} — skipping`);
+  } else {
+    await sendAndWait(`Set usdOku.solvencySource = USDOkuWrapper`, () =>
+      usdOku.setSolvencySource(wrapperAddress));
+  }
+
+  // 3. Fee schedule. Fees ship at zero, and at zero combined fees the
+  //    step-coverage invariant admits NO step of any size. This is not a
+  //    tunable nicety: without it the multiplier can never move and the
+  //    product delivers no yield.
+  const currentTin: bigint = await subscriptionModule.tin();
+  const currentTout: bigint = await subscriptionModule.tout();
+  const combined = config.tin + config.tout;
+
+  if (currentTin === config.tin && currentTout === config.tout) {
+    logger.info(`  Fees already tin=${currentTin} tout=${currentTout} — skipping`);
+  } else {
+    if (combined === 0n) {
+      throw new Error(
+        `Refusing to set tin=0 tout=0: with zero combined fees the step-coverage ` +
+          `invariant (tin + tout >= stepBps) admits no multiplier step at all, so ` +
+          `the deployment would be permanently unable to mark yield. Set ` +
+          `DEPLOY_TOUT to a value sized to your intended mark cadence.`
+      );
+    }
+    await sendAndWait(`Set fees tin=${config.tin}bps tout=${config.tout}bps`, () =>
+      subscriptionModule.setFees(config.tin, config.tout));
+  }
+
+  logger.warning(
+    `  STEP COVERAGE: tin + tout = ${combined}bps is the HARD CEILING on any ` +
+      `single M_oku step. \`setOkuMultiplier\` reverts StepNotCovered above it.`
+  );
+  logger.warning(
+    `  Size this to the intended mark cadence, not to a revenue target. At a 5% ` +
+      `annual mark: ~1.4bps daily, ~9.6bps weekly, ~40.7bps monthly. ` +
+      `${combined}bps therefore supports a cadence up to roughly ` +
+      `${combined >= 41n ? "monthly" : combined >= 10n ? "weekly" : "daily"}.`
+  );
+  logger.warning(
+    `  And it is a RATCHET: OkuM.stepHighWaterMark floors \`setFees\` at the ` +
+      `largest step ever taken (FeesBelowStepFloor), so fees can never drop ` +
+      `below coverage a past step relied on. Only the cold-gated ` +
+      `\`resetStepHighWaterMark\` clears it, and that emits an alarm event.`
+  );
+
+  // 4. USDOku wrapper wiring. `mintUsdOku` / `redeemUsdOku` on the module
+  //    revert `UsdOkuWrapperNotSet` until this is set — the one-transaction
+  //    USDC <-> USDOku convenience path is otherwise unreachable. Wired last
+  //    because the module initializes before the wrapper even exists (deploy
+  //    order is OkuM, queue, module, USDOku, wrapper).
+  const currentWrapper = (await subscriptionModule.usdOkuWrapper()).toString();
+  if (currentWrapper.toLowerCase() === wrapperAddress.toLowerCase()) {
+    logger.info(`  module.usdOkuWrapper already ${wrapperAddress} — skipping`);
+  } else {
+    await sendAndWait(`Set module.usdOkuWrapper = USDOkuWrapper`, () =>
+      subscriptionModule.setUsdOkuWrapper(wrapperAddress));
+  }
 }
 
 async function verifyDeployment(
   bookKey: string,
-  okuDollar: Contract,
-  litePSM: Contract,
-  redemptionQueue: Contract
+  okuM: Contract,
+  subscriptionModule: Contract,
+  redemptionQueue: Contract,
+  usdOku: Contract,
+  usdOkuWrapper: Contract,
+  stepNo: number
 ): Promise<void> {
-  logger.step(6, "Verifying Deployment");
+  logger.step(stepNo, "Verifying Deployment");
 
-  const litePSMAddress = await litePSM.getAddress();
+  const moduleAddress = await subscriptionModule.getAddress();
   const queueAddress = await redemptionQueue.getAddress();
+  const wrapperAddress = await usdOkuWrapper.getAddress();
 
   const checks: Array<[string, boolean]> = [
-    ["LitePSM has OKU_MINTER", await okuDollar.hasRole(ROLES.OKU_MINTER, litePSMAddress)],
-    ["LitePSM has OKU_BURNER", await okuDollar.hasRole(ROLES.OKU_BURNER, litePSMAddress)],
-    ["Queue has OKU_BURNER", await okuDollar.hasRole(ROLES.OKU_BURNER, queueAddress)],
-    ["LitePSM has QUEUE_PSM", await redemptionQueue.hasRole(ROLES.QUEUE_PSM, litePSMAddress)],
+    // --- Contract role grants. Without these, mint/redeem/wrap/unwrap revert. ---
+    ["Module has OkuM.OKU_MINTER", await okuM.hasRole(ROLES.OKU_MINTER, moduleAddress)],
+    ["Module has OkuM.OKU_BURNER", await okuM.hasRole(ROLES.OKU_BURNER, moduleAddress)],
+    ["Queue has OkuM.OKU_BURNER", await okuM.hasRole(ROLES.OKU_BURNER, queueAddress)],
+    ["Module has Queue.QUEUE_PSM", await redemptionQueue.hasRole(ROLES.QUEUE_PSM, moduleAddress)],
+    ["Wrapper has USDOku.OKU_MINTER", await usdOku.hasRole(ROLES.OKU_MINTER, wrapperAddress)],
+    ["Wrapper has USDOku.OKU_BURNER", await usdOku.hasRole(ROLES.OKU_BURNER, wrapperAddress)],
   ];
   let failed = false;
   for (const [label, ok] of checks) {
@@ -683,39 +984,110 @@ async function verifyDeployment(
     if (!ok) failed = true;
   }
   if (failed) {
-    throw new Error("Required contract role grants are missing — mint/redeem would revert.");
+    throw new Error(
+      "Required contract role grants are missing — mint/redeem/wrap/unwrap would revert."
+    );
   }
 
-  // A key must never hold a contract-only role.
+  // ERC-165. The two tokens must answer the ERC-8056 probe DIFFERENTLY, and
+  // asserting both directions is the point:
+  //
+  //   OkuM   TRUE  — fixed raw balances scaled by `uiMultiplier()` for display.
+  //                  A false here means every wallet doing capability detection
+  //                  silently falls back to raw balances with no indication why.
+  //   USDOku FALSE — `balanceOf` already returns dollars. A true here would make
+  //                  an 8056-aware wallet apply a scaling factor to an
+  //                  already-scaled balance, i.e. display the value squared.
+  //                  That is a worse failure than no support at all, which is
+  //                  why this is a hard abort rather than a warning.
+  const okuMSupports = await okuM.supportsInterface(IID_SCALED_UI_CORE);
+  const usdOkuSupports = await usdOku.supportsInterface(IID_SCALED_UI_CORE);
+  logger.info(`  OkuM   supportsInterface(${IID_SCALED_UI_CORE}): ${okuMSupports} (want true)`);
+  logger.info(`  USDOku supportsInterface(${IID_SCALED_UI_CORE}): ${usdOkuSupports} (want false)`);
+  if (!okuMSupports) {
+    throw new Error("OkuM does not advertise ERC-8056 — refusing to record the deploy.");
+  }
+  if (usdOkuSupports) {
+    throw new Error(
+      "USDOku advertises ERC-8056. Its balanceOf is already dollar-denominated, so an " +
+        "8056-aware wallet would double-scale it. Refusing to record the deploy."
+    );
+  }
+
+  // Multiplier self-consistency. Steps are immediate, so ERC-8056's pending
+  // extension is implemented degenerately and `uiMultiplier() == newUIMultiplier()`
+  // is an ALWAYS-TRUE invariant of this token, not a genesis-only coincidence.
+  // A mismatch means the pending-multiplier semantics have drifted back toward
+  // future-dated steps, which the sync window cannot fence.
+  const m: bigint = await okuM.uiMultiplier();
+  const newM: bigint = await okuM.newUIMultiplier();
+  const effectiveAt: bigint = await okuM.effectiveAt();
+  const lastStepped: bigint = await okuM.lastSteppedAt();
+  logger.info(
+    `  OkuM uiMultiplier=${m} newUIMultiplier=${newM} ` +
+      `effectiveAt=${effectiveAt} lastSteppedAt=${lastStepped}`
+  );
+  if (m !== newM) {
+    throw new Error(
+      `uiMultiplier (${m}) != newUIMultiplier (${newM}). Steps are immediate, so ` +
+        `these must be equal at all times.`
+    );
+  }
+  if (effectiveAt !== lastStepped) {
+    throw new Error(
+      `effectiveAt (${effectiveAt}) != lastSteppedAt (${lastStepped}); ERC-8056's ` +
+        `effectiveAt is defined as the timestamp of the last step.`
+    );
+  }
+
+  // The fail-closed wiring. Each of these reverts the corresponding authority
+  // write if unset, so a deployment that lands here misconfigured is silently
+  // inert rather than loudly broken.
+  const feeSource = (await okuM.stepFeeSource()).toString();
+  const solvencySource = (await usdOku.solvencySource()).toString();
+  logger.info(`  okuM.stepFeeSource:      ${feeSource}`);
+  logger.info(`  usdOku.solvencySource:   ${solvencySource}`);
+  if (feeSource.toLowerCase() !== moduleAddress.toLowerCase()) {
+    throw new Error(
+      `okuM.stepFeeSource is ${feeSource}, expected the module at ${moduleAddress}. ` +
+        `setOkuMultiplier would revert StepNotCovered on every call.`
+    );
+  }
+  if (solvencySource.toLowerCase() !== wrapperAddress.toLowerCase()) {
+    throw new Error(
+      `usdOku.solvencySource is ${solvencySource}, expected the wrapper at ` +
+        `${wrapperAddress}. setUsdOkuRate would revert SolvencyGapExceeded once ` +
+        `any USDOku liability exists.`
+    );
+  }
+
+  const tin: bigint = await subscriptionModule.tin();
+  const tout: bigint = await subscriptionModule.tout();
+  logger.info(`  Fee schedule: tin=${tin}bps tout=${tout}bps (coverage ${tin + tout}bps)`);
+  if (tin + tout === 0n) {
+    throw new Error(
+      "tin + tout == 0: no multiplier step of any size is possible (StepNotCovered). " +
+        "Run scripts/operator/setFees.ts before declaring this deployment live."
+    );
+  }
+
+  // Wrapper genesis state. Zero liability against zero backing is defined as a
+  // zero gap (not the `int256.max` sentinel), so a fresh deployment reads clean.
+  const wrapEnabled: boolean = await usdOkuWrapper.wrapEnabled();
+  const liability: bigint = await usdOkuWrapper.declaredLiability();
+  const backing: bigint = await usdOkuWrapper.realizedBacking();
+  const gapBps: bigint = await usdOkuWrapper.solvencyGapBps();
+  logger.info(
+    `  Wrapper: wrapEnabled=${wrapEnabled} declaredLiability=${liability} ` +
+      `realizedBacking=${backing} solvencyGapBps=${gapBps}`
+  );
+  if (!wrapEnabled) {
+    logger.warning("  wrap is DISABLED on a fresh deployment — the sunset lever is already pulled?");
+  }
+
   const book = loadAddressBook();
   const contracts = book[bookKey] || {};
-
-  // ERC-165: confirm the deployed token actually advertises ERC-8056. If this is
-  // false, every wallet and explorer doing capability detection will fall back to
-  // showing raw balances with no indication why.
-  const IID_SCALED_UI_CORE = "0xa60bf13d";
-  const supportsScaledUi = await okuDollar.supportsInterface(IID_SCALED_UI_CORE);
-  logger.info(`  Token advertises IScaledUIAmount (${IID_SCALED_UI_CORE}): ${supportsScaledUi}`);
-  if (!supportsScaledUi) {
-    throw new Error("Token does not advertise ERC-8056 — refusing to record the deploy.");
-  }
-
-  // Sanity: the multiplier must be live and self-consistent at genesis.
-  const m = (await okuDollar.uiMultiplier()).toString();
-  const newM = (await okuDollar.newUIMultiplier()).toString();
-  logger.info(`  uiMultiplier=${m} newUIMultiplier=${newM} effectiveAt=${(await okuDollar.effectiveAt()).toString()}`);
-  if (m !== newM) {
-    logger.warning("  uiMultiplier != newUIMultiplier at genesis — a rate is already scheduled.");
-  }
-
-  const expectedContracts = [
-    "MockUSDC",
-    "OkuDollar",
-    "RedemptionQueue",
-    "LitePSM",
-    "OkuMultiplierAdapter",
-  ];
-  const missing = expectedContracts.filter(c => !contracts[c]);
+  const missing = EXPECTED_CONTRACTS.filter(c => !contracts[c]);
   if (missing.length > 0) {
     logger.warning(`  Missing contracts in address book: ${missing.join(", ")}`);
   } else {
@@ -734,7 +1106,7 @@ async function main() {
   const { networkName, bookKey, isFork, chainConfig } = ctx;
   const config = getDeploymentConfig();
 
-  logger.header(`OkuDollar (rUSDOku) Deployment to ${chainConfig.name}${isFork ? " (LOCAL FORK)" : ""}`);
+  logger.header(`OkuMoney (OkuM + USDOku) Deployment to ${chainConfig.name}${isFork ? " (LOCAL FORK)" : ""}`);
   logger.info(`Network: ${networkName} (chainId: ${chainConfig.chainId})`);
   logger.info(`Address book key: ${bookKey}`);
 
@@ -742,13 +1114,29 @@ async function main() {
   let deployer: Signer;
 
   if (isFork) {
-    // Impersonate dev wallet for local fork testing.
-    // Uses actual on-chain balance from forked network (no artificial funding).
+    // Impersonate dev wallet for local fork testing. The forked account's real
+    // on-chain balance is inherited, but a fresh local node (or a dev wallet
+    // that has never been funded on the forked chain) can leave it at zero —
+    // top up from a mnemonic account so a rehearsal is not gated on testnet
+    // faucet state.
     logger.info(`Impersonating dev wallet: ${DEV_WALLET}`);
     await network.provider.request({
       method: "hardhat_impersonateAccount",
       params: [DEV_WALLET],
     });
+    const devBalance = await ethers.provider.getBalance(DEV_WALLET);
+    if (devBalance < ethers.parseEther("1")) {
+      const [funder] = await ethers.getSigners();
+      logger.info(
+        `  Dev wallet holds ${ethers.formatEther(devBalance)} ETH on this fork; ` +
+          `topping up from ${await funder.getAddress()}`
+      );
+      const fundTx = await funder.sendTransaction({
+        to: DEV_WALLET,
+        value: ethers.parseEther("100"),
+      });
+      await fundTx.wait();
+    }
     deployer = await ethers.getSigner(DEV_WALLET);
   } else {
     // Use real signer from private key for live networks
@@ -804,56 +1192,83 @@ async function main() {
     usdcAddress = await deployMockUSDC(bookKey, deployer);
   }
 
-  // Step 2: Deploy the token FIRST. The PSM and queue initializers both read
-  // `token.asset()` / `token.usdcDecimalMultiplier()` and revert on mismatch, so
+  // Step 2: OkuM FIRST. The module and queue initializers both read
+  // `okuM.asset()` / `okuM.usdcDecimalMultiplier()` and revert on mismatch, so
   // the token is the single source of truth for the USDC binding.
-  const okuDollar = await deployToken(deployer, deployerAddress, bookKey, usdcAddress, config);
-  const okuDollarAddress = await okuDollar.getAddress();
+  const okuM = await deployOkuM(deployer, deployerAddress, bookKey, usdcAddress, config);
+  const okuMAddress = await okuM.getAddress();
 
   const redemptionQueue = await deployRedemptionQueue(
     deployer,
     deployerAddress,
     bookKey,
-    okuDollarAddress,
+    okuMAddress,
     usdcAddress
   );
 
-  // Step 3: Deploy PSM
-  const litePSM = await deployPSM(
+  // Step 3: the subscription/redemption surface.
+  const subscriptionModule = await deploySubscriptionModule(
     deployer,
     deployerAddress,
     bookKey,
-    okuDollarAddress,
+    okuMAddress,
     await redemptionQueue.getAddress(),
-    usdcAddress,
-    config
+    usdcAddress
   );
 
-  // Step 4: Configure roles
+  // Step 4: the transitional dollar leg. USDOku exists to cover the gap while
+  // ERC-8056 wallet support lands and is expected to be sunset; the wrapper is
+  // where OkuM <-> USDOku is priced, always at `M_oku`, never at `M_usd`.
+  const usdOku = await deployUsdOku(deployer, deployerAddress, bookKey);
+  const usdOkuWrapper = await deployUsdOkuWrapper(
+    deployer,
+    deployerAddress,
+    bookKey,
+    okuMAddress,
+    await usdOku.getAddress()
+  );
+
+  // Step 5: role wiring.
   await configureRoles(
     deployerAddress,
-    okuDollar,
+    okuM,
     redemptionQueue,
-    litePSM,
-    config
+    subscriptionModule,
+    usdOku,
+    usdOkuWrapper,
+    config,
+    5
   );
 
-  // Step 5: Oracle adapter. Ships WITH the contracts, not after: lending markets
+  // Step 6: the wiring without which nothing works.
+  await wireFailClosedDependencies(
+    okuM,
+    usdOku,
+    subscriptionModule,
+    usdOkuWrapper,
+    config,
+    6
+  );
+
+  // Step 7: Oracle adapter. Ships WITH the contracts, not after: lending markets
   // will price off the multiplier regardless, and a hand-rolled integration has
   // no bounds and no staleness signal.
-  await deployOracleAdapter(deployer, bookKey, okuDollarAddress);
+  await deployOracleAdapter(deployer, bookKey, okuMAddress, 7);
 
-  // Step 6: Verify deployment state
+  // Step 8: Verify deployment state
   await verifyDeployment(
     bookKey,
-    okuDollar,
-    litePSM,
-    redemptionQueue
+    okuM,
+    subscriptionModule,
+    redemptionQueue,
+    usdOku,
+    usdOkuWrapper,
+    8
   );
 
-  // Step 7: Etherscan verification (live networks only — never on a fork)
+  // Step 9: Etherscan verification (live networks only — never on a fork)
   if (!isFork) {
-    await verifyAllContracts(networkName);
+    await verifyAllContracts(networkName, 9);
   }
 
   // Summary
@@ -877,15 +1292,23 @@ async function main() {
         rpcUrl: metadata.rpcUrl,
         explorer: metadata.explorer,
         contracts: {
-          okuDollar: addresses.OkuDollar,
-          litePSM: addresses.LitePSM,
+          okuM: addresses.OkuM,
+          usdOku: addresses.USDOku,
+          usdOkuWrapper: addresses.USDOkuWrapper,
+          subscriptionModule: addresses.SubscriptionModule,
           redemptionQueue: addresses.RedemptionQueue,
           okuMultiplierAdapter: addresses.OkuMultiplierAdapter,
-          mockUSDC: addresses.MockUSDC,
+          mockUsdc: addresses.MockUSDC,
         },
-        // Capability flags so the SDK and orchestrator can gate on features
-        // without an on-chain probe. See EVM/README.md § Address book.
-        standards: ["ERC-20", "ERC-2612", "ERC-8056", "ERC-4626-conversion-subset"],
+        // Capability flags PER TOKEN so the SDK and orchestrator can gate on
+        // features without an on-chain probe. Per-token rather than
+        // per-deployment because the two legs differ on exactly the flag that
+        // matters most: OkuM is ERC-8056 and USDOku deliberately is not.
+        // See EVM/README.md § Address book.
+        standards: {
+          okuM: ["ERC-20", "ERC-2612", "ERC-8056", "ERC-4626-conversion-subset"],
+          usdOku: ["ERC-20", "ERC-2612", "rebasing"],
+        },
         deployer: deployerAddress,
       });
     } catch (err: any) {
@@ -895,8 +1318,13 @@ async function main() {
 
   logger.info("Next steps:");
   logger.info("1. Check the updated addresses.json at the repo root");
-  logger.info("2. Deploy SVM: cd ../SVM/oku-programs && NETWORK=devnet npm run deploy:programs && npm run deploy:init");
-  logger.info("3. Test PSM flow: npx hardhat run scripts/test/test-onchain.ts --network " + networkName);
+  logger.info(
+    `2. Size the fee schedule for real: tin+tout is currently ` +
+      `${config.tin + config.tout}bps and caps every M_oku step ` +
+      `(scripts/operator/setFees.ts)`
+  );
+  logger.info("3. Deploy SVM: cd ../SVM/oku-programs && NETWORK=devnet npm run deploy:programs && npm run deploy:init");
+  logger.info("4. Smoke-test the full flow: npx hardhat run scripts/test/smoke.ts --network " + networkName + " --write");
 }
 
 main()

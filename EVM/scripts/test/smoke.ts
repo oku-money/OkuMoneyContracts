@@ -45,7 +45,7 @@ import { loadAddress, hasAddress } from "../utils/addressBook";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
 import { mainnetGuard } from "../utils/mainnetGuard";
-import { resolveOperatorSigner } from "../operator/_shared";
+import { resolveOperatorSigner, MAX_STEP_BPS } from "../operator/_shared";
 
 const WRITE = process.argv.includes("--write") || process.env.WRITE === "true";
 const YES_MAINNET =
@@ -70,7 +70,7 @@ const IID = {
 
 const PRECISION = 10n ** 18n;
 const BASIS_POINTS = 10_000n;
-const MAX_STEP_BPS = 100n;
+
 
 let failures = 0;
 function check(label: string, ok: boolean, detail = "") {
@@ -202,7 +202,6 @@ async function main() {
   const pending: bigint = await okuM.newUIMultiplier();
   const effectiveAt: bigint = await okuM.effectiveAt();
   const lastStepped: bigint = await okuM.lastSteppedAt();
-  const highWater: bigint = await okuM.stepHighWaterMark();
   const halted: boolean = await okuM.accrualHalted();
   const mUsd: bigint = await usdOku.usdOkuIndex();
   const usdRate: bigint = await usdOku.ratePerSecond();
@@ -211,7 +210,6 @@ async function main() {
 
   logger.info(`  M_oku (stepwise)   ${ethers.formatEther(multiplier)}`);
   logger.info(`    lastSteppedAt    ${new Date(Number(lastStepped) * 1000).toISOString()}`);
-  logger.info(`    stepHighWaterMark ${highWater}bps`);
   logger.info(`    accrualHalted    ${halted}`);
   logger.info(`  M_usd (continuous) ${ethers.formatEther(mUsd)}`);
   logger.info(`    ratePerSecond    ${usdRate}`);
@@ -312,30 +310,28 @@ async function main() {
 
   // ---- 7. Fail-closed wiring ----
   logger.info("");
-  logger.info("7. Fail-closed wiring");
-  const feeSource: string = await okuM.stepFeeSource();
+  logger.info("7. Fail-closed wiring and step coverage");
   const solvencySource: string = await usdOku.solvencySource();
   const tin: bigint = await moduleContract.tin();
   const tout: bigint = await moduleContract.tout();
-  check(
-    "okuM.stepFeeSource == SubscriptionModule",
-    feeSource.toLowerCase() === moduleAddr.toLowerCase(),
-    `else every setOkuMultiplier reverts StepNotCovered (got ${feeSource})`
-  );
   check(
     "usdOku.solvencySource == USDOkuWrapper",
     solvencySource.toLowerCase() === wrapperAddr.toLowerCase(),
     `else setUsdOkuRate reverts SolvencyGapExceeded (got ${solvencySource})`
   );
+  // Step coverage is per-leg and static. There is no `stepFeeSource` to check
+  // (the token stopped reading the schedule) and no high-water mark to compare
+  // against (the ratchet is gone) — the floor is a constant, so both legs being
+  // at or above it IS the whole invariant.
   check(
-    "tin + tout > 0",
-    tin + tout > 0n,
-    `coverage=${tin + tout}bps; at zero, NO multiplier step is possible`
+    "tin >= MAX_STEP_BPS (per-leg step coverage)",
+    tin >= MAX_STEP_BPS,
+    `tin=${tin}bps floor=${MAX_STEP_BPS}bps`
   );
   check(
-    "tin + tout >= stepHighWaterMark (fee ratchet holds)",
-    tin + tout >= highWater,
-    `coverage=${tin + tout}bps floor=${highWater}bps`
+    "tout >= MAX_STEP_BPS (per-leg step coverage)",
+    tout >= MAX_STEP_BPS,
+    `tout=${tout}bps floor=${MAX_STEP_BPS}bps`
   );
 
   // ---- 8. Write path: the full round trip ----
@@ -407,20 +403,14 @@ async function main() {
       );
 
       // ---- 8b. Step M_oku ----
-      // Sized to what coverage allows, capped at MAX_STEP_BPS. This is the whole
-      // step-coverage rule in one expression: the largest legal mark is
-      // min(tin + tout, MAX_STEP_BPS).
-      const coverage = tin + tout;
-      const stepSize = coverage > MAX_STEP_BPS ? MAX_STEP_BPS : coverage;
+      // The largest legal mark is simply MAX_STEP_BPS. It no longer depends on
+      // the fee schedule: coverage is guaranteed by the per-leg floor asserted
+      // in section 7, so the fee cannot be the binding constraint.
+      const stepSize = MAX_STEP_BPS;
       let stepped = false;
 
       if (halted) {
         logger.warning("  Stepping skipped: accrual is halted (AccrualIsHalted).");
-      } else if (stepSize === 0n) {
-        logger.warning(
-          "  Stepping skipped: zero coverage, so no step is possible. This is the " +
-            "fail-closed behaviour, not a bug — set fees first."
-        );
       } else if (!(await okuM.hasRole(ROLES.OKU_RATE_SETTER, who))) {
         logger.warning(`  Stepping skipped: ${who} does not hold OKU_RATE_SETTER on OkuM.`);
       } else {
@@ -436,7 +426,6 @@ async function main() {
         const after: bigint = await okuM.uiMultiplier();
         check("M_oku stepped up", after === target, `${ethers.formatEther(before)} -> ${ethers.formatEther(after)}`);
         check("uiMultiplier == newUIMultiplier after the step", after === (await okuM.newUIMultiplier()));
-        check("stepHighWaterMark ratcheted", (await okuM.stepHighWaterMark()) >= stepSize);
         check(
           "raw balance unchanged by a step; only its dollar value moved",
           (await okuM.balanceOf(who)) === rawAfterMint,
@@ -579,7 +568,7 @@ async function main() {
             "step coverage held: mint -> step -> redeem was not profitable",
             net <= 0n,
             `net=${ethers.formatUnits(net, usdcDecimals)} USDC across a ${stepSize}bps ` +
-              `step with ${coverage}bps of coverage`
+              `step paying tin=${tin}bps + tout=${tout}bps`
           );
         } else if (stepped) {
           logger.info(

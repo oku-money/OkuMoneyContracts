@@ -36,8 +36,19 @@ export const BASIS_POINTS = 10_000n;
 export const MAX_IMPLIED_APR_BPS = 1000n;
 /** `Constants.MAX_RATE_DURATION`. Binds `USDOku.setUsdOkuRate`. */
 export const MAX_RATE_DURATION_SECONDS = 30n * 24n * 60n * 60n;
-/** `Constants.MAX_STEP_BPS`. Ceiling on a single `M_oku` step. */
-export const MAX_STEP_BPS = 100n;
+/**
+ * `Constants.MAX_STEP_BPS`. Ceiling on a single `M_oku` step AND the per-leg
+ * floor under `tin`/`tout`.
+ *
+ * The single number defining step coverage: `setOkuMultiplier` refuses steps
+ * above it, `setFees` refuses fee legs below it, so every admissible step is
+ * covered on each leg for all time. Raising it permits a coarser mark cadence
+ * and simultaneously raises the minimum fee — the two cannot drift apart.
+ *
+ * PROVISIONAL at 5 (daily cadence at ~5% APY, ~3.5x headroom over the ~1.37bps
+ * a day actually needs).
+ */
+export const MAX_STEP_BPS = 5n;
 /** `Constants.MAX_FEE_BPS`. Ceiling on `tin` and on `tout`, each. */
 export const MAX_FEE_BPS = 100n;
 /** `Constants.MAX_SOLVENCY_GAP_BPS`. How far `M_usd` liability may outrun backing. */

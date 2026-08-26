@@ -76,14 +76,12 @@ async function haltOkuM(okuM: any): Promise<void> {
   const multiplier: bigint = await okuM.uiMultiplier();
   const halted: boolean = await okuM.accrualHalted();
   const lastStepped: bigint = await okuM.lastSteppedAt();
-  const highWater: bigint = await okuM.stepHighWaterMark();
 
   logger.info(`uiMultiplier:      ${ethers.formatEther(multiplier)}`);
   logger.info(`accrualHalted:     ${halted}`);
   logger.info(
     `lastSteppedAt:     ${new Date(Number(lastStepped) * 1000).toISOString()}`
   );
-  logger.info(`stepHighWaterMark: ${highWater}bps`);
 
   if (halted) {
     logger.warning(

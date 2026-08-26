@@ -41,7 +41,7 @@
 import { ethers } from "hardhat";
 
 import { logger } from "../utils/logger";
-import { DRY_RUN, attachAlso, runScript, setup, submit } from "./_shared";
+import { DRY_RUN, MAX_STEP_BPS, attachAlso, runScript, setup, submit } from "./_shared";
 
 async function main() {
   const { contract: okuM, signer, bookKey } = await setup("resumeAccrual", "OkuM");
@@ -50,8 +50,6 @@ async function main() {
   const halted: boolean = await (okuM as any).accrualHalted();
   const multiplier: bigint = await (okuM as any).uiMultiplier();
   const lastStepped: bigint = await (okuM as any).lastSteppedAt();
-  const highWater: bigint = await (okuM as any).stepHighWaterMark();
-  const feeSource: string = await (okuM as any).stepFeeSource();
   const tin: bigint = await (moduleContract as any).tin();
   const tout: bigint = await (moduleContract as any).tout();
   const now = BigInt((await ethers.provider.getBlock("latest"))!.timestamp);
@@ -63,8 +61,6 @@ async function main() {
     `lastSteppedAt:     ${new Date(Number(lastStepped) * 1000).toISOString()} ` +
       `(${(Number(now - lastStepped) / 86_400).toFixed(1)} days ago)`
   );
-  logger.info(`stepHighWaterMark: ${highWater}bps`);
-  logger.info(`stepFeeSource:     ${feeSource}`);
   logger.info(`Coverage tin+tout: ${tin + tout}bps (tin=${tin} tout=${tout})`);
 
   if (!halted) {
@@ -74,20 +70,25 @@ async function main() {
     );
   }
 
-  // Resuming into a configuration that cannot step is a silent trap: the flag
-  // clears, the runbook says "recovered", and the next mark still reverts — with
-  // a different selector. Surface it now.
-  if (feeSource === ethers.ZeroAddress) {
+  // Resuming into a configuration that cannot step used to be a silent trap:
+  // the flag cleared, the runbook said "recovered", and the next mark still
+  // reverted with a different selector. That whole class is gone — the halt flag
+  // is now the ONLY thing that can block a mark, because step coverage is
+  // guaranteed by constants rather than by configuration. Asserted rather than
+  // assumed, so a regression here is loud.
+  if (tin < MAX_STEP_BPS || tout < MAX_STEP_BPS) {
     logger.warning(
-      "stepFeeSource is UNSET. Clearing the halt will not make stepping work: " +
-        "coverage reads as zero, so setOkuMultiplier reverts StepNotCovered instead " +
-        "of AccrualIsHalted. Wire it (also OKU_CAP_MANAGER) in the same session."
+      `Fees are below the per-leg step-coverage floor (tin=${tin} tout=${tout}, ` +
+        `floor ${MAX_STEP_BPS}bps). This should be unreachable — initialize seeds ` +
+        `the floor and setFees refuses to go below it — so it suggests the ` +
+        `deployed bytecode is not the reviewed source. Investigate before ` +
+        `declaring the incident closed.`
     );
-  } else if (tin + tout === 0n) {
-    logger.warning(
-      "Combined fees are ZERO. Clearing the halt will not make stepping work: " +
-        "step coverage requires tin + tout >= stepBps, so no step of any size can " +
-        "land. Set fees (scripts/operator/setFees.ts) in the same session."
+  } else {
+    logger.info(
+      `Step coverage is satisfied by construction (tin=${tin}bps tout=${tout}bps, ` +
+        `each >= ${MAX_STEP_BPS}bps), so clearing the halt is sufficient to ` +
+        `restore marking. No fee or wiring step is required.`
     );
   }
 

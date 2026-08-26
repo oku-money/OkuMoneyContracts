@@ -14,25 +14,33 @@
  *
  *     profit per unit = M1/M0 - 1 - (tin + tout)/10_000
  *
- * The STEP-COVERAGE INVARIANT is `tin + tout >= stepBps` for every step taken,
- * and it is enforced from both ends:
+ * The STEP-COVERAGE INVARIANT is STATIC and PER-LEG:
  *
- *   - `OkuM.setOkuMultiplier` reverts `StepNotCovered` if the proposed step
- *     exceeds what the CURRENT fees cover. Consequence: at tin = tout = 0 no
- *     step of any size is possible, so a deployment with zero fees can never
- *     mark yield.
- *   - This function reverts `FeesBelowStepFloor` if the new combined value would
- *     drop below `OkuM.stepHighWaterMark()` — the largest step ever taken.
- *     Coverage is a RATCHET: it cannot retroactively evaporate from under a step
- *     that already landed. Only the cold-gated `OkuM.resetStepHighWaterMark()`
- *     clears the floor, and it emits an alarmed event because its honest
- *     precondition (the supply outstanding at the time of the big step has
- *     substantially turned over) is not verifiable on-chain.
+ *     MAX_STEP_BPS <= tin  <= MAX_FEE_BPS
+ *     MAX_STEP_BPS <= tout <= MAX_FEE_BPS
  *
- * SIZING. Size to the intended MARK CADENCE, not to a revenue target. At a 5%
- * annual mark: ~1.4bps daily, ~9.6bps weekly, ~40.7bps monthly. Each side is
- * bounded by MAX_FEE_BPS (100 = 1%), so the maximum achievable coverage is
- * 200bps and the maximum single step is MAX_STEP_BPS (100bps) regardless.
+ * and `OkuM.setOkuMultiplier` independently refuses any step above
+ * `MAX_STEP_BPS`. Composed, every admissible step is covered on each leg for
+ * all time. This function can therefore only ever RAISE fees above a floor that
+ * `initialize` already seeded; it cannot create or remove coverage.
+ *
+ * PER-LEG RATHER THAN COMBINED, because a cross-chain round trip pays `tin` on
+ * the chain it mints on and `tout` on the chain it redeems on. Fees of `(0, 2N)`
+ * here and `(2N, 0)` on the peer chain would each satisfy a combined check while
+ * that pairing paid nothing at all.
+ *
+ * WHAT USED TO BE HERE. The old design read `tin + tout` back into the token at
+ * multiplier-write time (`StepNotCovered`), ratcheted a `stepHighWaterMark`,
+ * floored this function against that mark (`FeesBelowStepFloor`), and offered a
+ * cold `resetStepHighWaterMark` escape hatch. All of it is gone. Setting fees is
+ * now an ordinary bounded parameter write with no coupling to step history and
+ * no way to break the invariant.
+ *
+ * SIZING. `MAX_STEP_BPS` is the number that matters and it is a compile-time
+ * constant, not something this script sets: it is simultaneously the cadence
+ * bound and the fee floor. At a 5% annual mark a step is ~1.4bps daily, ~9.6bps
+ * weekly, ~40.7bps monthly. Raising fees ABOVE the floor buys no extra cadence —
+ * it is purely a revenue//haircut decision.
  *
  * THE WINDOW IS NOT THE DEFENCE. The post-step sync window fences cross-chain
  * propagation; it does nothing about step arbitrage, because holding raw across
@@ -84,19 +92,14 @@ async function main() {
 
   const oldTin: bigint = await (moduleContract as any).tin();
   const oldTout: bigint = await (moduleContract as any).tout();
-  const floorBps: bigint = await (okuM as any).stepHighWaterMark();
-  const feeSource: string = await (okuM as any).stepFeeSource();
-  const moduleAddress = await moduleContract.getAddress();
-
   logger.info("");
-  logger.info(`tin:               ${oldTin}bps -> ${newTin}bps`);
-  logger.info(`tout:              ${oldTout}bps -> ${newTout}bps`);
+  logger.info(`tin:            ${oldTin}bps -> ${newTin}bps`);
+  logger.info(`tout:           ${oldTout}bps -> ${newTout}bps`);
+  logger.info(`round trip:     ${oldTin + oldTout}bps -> ${newTin + newTout}bps`);
   logger.info(
-    `coverage tin+tout: ${oldTin + oldTout}bps -> ${newTin + newTout}bps ` +
-      `(cap on any single M_oku step)`
+    `per-leg floor:  ${MAX_STEP_BPS}bps (MAX_STEP_BPS, a compile-time constant)`
   );
-  logger.info(`stepHighWaterMark: ${floorBps}bps (hard floor under the combined value)`);
-  logger.info(`okuM.stepFeeSource:${feeSource}`);
+  logger.info(`per-leg cap:    ${MAX_FEE_BPS}bps (MAX_FEE_BPS)`);
 
   for (const [label, v] of [
     ["tin", newTin],
@@ -110,52 +113,34 @@ async function main() {
     }
   }
 
-  // Mirror the on-chain ratchet so the failure is legible rather than a selector.
-  if (newTin + newTout < floorBps) {
-    throw new Error(
-      `PRE-CONDITION FAILED: combined ${newTin + newTout}bps is below ` +
-        `stepHighWaterMark ${floorBps}bps; the contract reverts ` +
-        `FeesBelowStepFloor(${newTin + newTout}, ${floorBps}).\n` +
-        `  WHY: a ${floorBps}bps step has already been taken, and it relied on ` +
-        `${floorBps}bps of round-trip coverage. Letting fees fall below that would ` +
-        `retroactively open the mint-hold-redeem round trip on a step that already ` +
-        `landed.\n` +
-        `  If the supply outstanding at the time of that step has genuinely turned ` +
-        `over, OKU_CAP_MANAGER (cold) can clear the floor with ` +
-        `OkuM.resetStepHighWaterMark() — but that emits StepHighWaterMarkReset, ` +
-        `which should be alarmed on, and it reopens historical exposure.`
-    );
+  // Mirror the on-chain per-leg floor so the failure is legible rather than a
+  // bare selector.
+  for (const [label, v] of [
+    ["tin", newTin],
+    ["tout", newTout],
+  ] as const) {
+    if (v < MAX_STEP_BPS) {
+      throw new Error(
+        `PRE-CONDITION FAILED: ${label}=${v}bps is below MAX_STEP_BPS ` +
+          `(${MAX_STEP_BPS}bps); the contract reverts FeeBelowStepFloor(${v}, ` +
+          `${MAX_STEP_BPS}).\n` +
+          `  WHY: each leg must independently cover the largest step ` +
+          `setOkuMultiplier can take, which is exactly MAX_STEP_BPS. Per-leg ` +
+          `rather than combined because a cross-chain round trip pays tin on one ` +
+          `chain and tout on the other, so a zero leg anywhere is a free leg for ` +
+          `that pairing.\n` +
+          `  There is no escape hatch and no way to lower this. Changing it means ` +
+          `changing MAX_STEP_BPS in Constants.sol, which is a code change with a ` +
+          `matching cadence decision — deliberately not an operator action.`
+      );
+    }
   }
 
-  if (feeSource.toLowerCase() !== moduleAddress.toLowerCase()) {
-    logger.warning(
-      `okuM.stepFeeSource is ${feeSource}, not this module (${moduleAddress}). ` +
-        `Changing fees here will therefore NOT change what OkuM's step-coverage ` +
-        `check reads. Fix the wiring (OKU_CAP_MANAGER: okuM.setStepFeeSource) or ` +
-        `this call has no effect on stepping.`
-    );
-  }
-
-  if (newTin + newTout === 0n) {
-    logger.warning(
-      "Setting combined fees to ZERO. This does not merely make the module free — " +
-        "it makes MULTIPLIER STEPS IMPOSSIBLE. Step coverage requires " +
-        "tin + tout >= stepBps, so setOkuMultiplier will revert StepNotCovered for " +
-        "any step of any size, and the product will deliver no yield until fees are " +
-        "restored. Only correct if you are deliberately parking the deployment."
-    );
-  } else if (newTin + newTout < 10n) {
-    logger.warning(
-      `Combined coverage of ${newTin + newTout}bps only supports a DAILY mark ` +
-        `cadence (~1.4bps) at a 5% annual target. A weekly mark needs ~9.6bps and a ` +
-        `monthly one ~40.7bps; anything larger will revert StepNotCovered.`
-    );
-  }
-  if (newTin + newTout > MAX_STEP_BPS) {
+  if (newTin > MAX_STEP_BPS || newTout > MAX_STEP_BPS) {
     logger.info(
-      `Coverage ${newTin + newTout}bps exceeds MAX_STEP_BPS (${MAX_STEP_BPS}bps), so ` +
-        `the per-step ceiling — not coverage — is now the binding constraint. Extra ` +
-        `coverage beyond ${MAX_STEP_BPS}bps buys no additional cadence.`
+      `Fees above the ${MAX_STEP_BPS}bps floor buy no additional mark cadence — ` +
+        `the cadence bound is MAX_STEP_BPS on the step side, not the fee side. ` +
+        `Anything above the floor is a revenue/haircut decision.`
     );
   }
 

@@ -63,7 +63,7 @@ const ONE_TOKEN = 10n ** 18n;
 //     once at init and the single source of truth the module and queue
 //     cross-assert against; if either moved, pricing would silently diverge.
 //   - The multiplier triple (uiMultiplier, newUIMultiplier, effectiveAt) and the
-//     step-coverage ratchet (stepHighWaterMark) preserved. All stored, all
+//     accrual-halt flag and sync-window config preserved. All stored, all
 //     timestamp-free.
 //   - `convertToAssets(1e18)` preserved — the ERC-4626 value layer. Included as
 //     well as `uiMultiplier` because it exercises the multiplier AND the decimal
@@ -73,7 +73,7 @@ const ONE_TOKEN = 10n ** 18n;
 //     check on the inputs alone.
 //   - The fail-closed wiring (stepFeeSource) and the guardian flag
 //     (accrualHalted) preserved. A silently-cleared stepFeeSource turns every
-//     subsequent mark into StepNotCovered; a silently-cleared accrualHalted
+//     subsequent write; a silently-cleared accrualHalted
 //     un-does an active incident response.
 //   - Sync-window configuration preserved.
 //   - Supply cap and current supply preserved.
@@ -96,9 +96,7 @@ export async function readOkuMState(c: Contract): Promise<StateSnapshot> {
     uiMultiplier,
     newUIMultiplier,
     effectiveAt,
-    stepHighWaterMark,
     convertToAssets,
-    stepFeeSource,
     accrualHalted,
     syncWindowDuration,
     maxSupply,
@@ -114,9 +112,7 @@ export async function readOkuMState(c: Contract): Promise<StateSnapshot> {
     c.uiMultiplier(),
     c.newUIMultiplier(),
     c.effectiveAt(),
-    c.stepHighWaterMark(),
     c.convertToAssets(ONE_TOKEN),
-    c.stepFeeSource(),
     c.accrualHalted(),
     c.syncWindowDuration(),
     c.maxSupply(),
@@ -134,9 +130,7 @@ export async function readOkuMState(c: Contract): Promise<StateSnapshot> {
     uiMultiplier: uiMultiplier.toString(),
     newUIMultiplier: newUIMultiplier.toString(),
     effectiveAt: effectiveAt.toString(),
-    stepHighWaterMark: stepHighWaterMark.toString(),
     "convertToAssets(1e18)": convertToAssets.toString(),
-    stepFeeSource: String(stepFeeSource),
     accrualHalted: String(accrualHalted),
     syncWindowDuration: syncWindowDuration.toString(),
     maxSupply: maxSupply.toString(),

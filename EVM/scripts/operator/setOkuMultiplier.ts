@@ -21,29 +21,34 @@
  * USDOku's job. It is also what Token-2022's `ScaledUiAmount` does on SVM, so
  * both chains carry the same value at the same cadence.
  *
- * FIVE ON-CHAIN BOUNDS, each with its own revert:
+ * FOUR ON-CHAIN BOUNDS, each with its own revert:
  *   MultiplierCannotDecrease  strict monotonicity; a no-op write is also refused
  *                             (it would re-arm the sync window for free)
- *   StepAboveMaximum          a single step may not exceed MAX_STEP_BPS (100)
- *   StepNotCovered            `tin + tout >= stepBps` must hold — see below
+ *   StepAboveMaximum          a single step may not exceed MAX_STEP_BPS
  *   MultiplierAboveMaximum    cumulative ceiling, MAX_MULTIPLIER (1e24)
  *   AccrualIsHalted           the guardian's flag is set; cold must
  *                             `resumeAccrual` first (resumeAccrual.ts)
  *
- * STEP COVERAGE IS THE ONE THAT WILL SURPRISE YOU. The round trip
- * mint-at-M0 / redeem-at-M1 extracts the step from the USDC buffer unless the
- * combined fee covers it, so the token refuses any step larger than
- * `SubscriptionModule.tin() + tout()`. Consequences worth internalising:
+ * NO STEP-COVERAGE CHECK HERE, and its absence is the notable change. The token
+ * used to read `SubscriptionModule.tin() + tout()` at write time and refuse any
+ * step the current fees did not cover (`StepNotCovered`), with a
+ * `stepHighWaterMark` ratchet stopping fees dropping afterwards. That is gone.
  *
- *   - At tin = tout = 0, NO step of any size is possible. Fees ship at zero.
- *   - An unwired `stepFeeSource` reads as ZERO coverage, so a deployment that
- *     skipped that wiring cannot step at all (deploy/index.ts step 6).
- *   - Coverage is a ratchet: the largest step ever taken becomes a floor under
- *     `setFees` (`stepHighWaterMark`). Taking a big step today permanently
- *     raises the minimum fee until cold clears it.
+ * Coverage is now guaranteed by construction instead: `setFees` floors EACH leg
+ * at `MAX_STEP_BPS`, and this write caps a step at `MAX_STEP_BPS`, so every
+ * admissible step is covered on each leg for all time. Consequences for an
+ * operator:
  *
- * This script pre-checks all of it and refuses locally, with the arithmetic
- * shown, rather than letting a cold signer discover a selector on a screen.
+ *   - The fee schedule can no longer block a mark. There is no wiring step to
+ *     forget and no ordering to get wrong.
+ *   - `MAX_STEP_BPS` alone sets the maximum mark, so it alone sets the MINIMUM
+ *     cadence. A long outage must be walked over several marks.
+ *   - Taking a large mark no longer has a permanent side effect on the fee
+ *     floor. There is no ratchet to raise and no escape hatch to call.
+ *
+ * This script pre-checks the remaining bounds and refuses locally, with the
+ * arithmetic shown, rather than letting a cold signer discover a selector on a
+ * screen.
  *
  * THE SYNC WINDOW ARMS ITSELF. There is no begin/end protocol any more (v0.3's
  * `beginSyncWindow.ts` / `endSyncWindow.ts` are deleted, and the instructions
@@ -145,25 +150,22 @@ async function main() {
     );
   }
 
-  // Step coverage. Read from the module (which is where the fee schedule lives)
-  // AND cross-check that the token is actually pointed at it: an unwired
-  // `stepFeeSource` makes coverage read as zero on-chain no matter what the
-  // module says, which is the single most confusing way for this call to fail.
-  const feeSource: string = await (okuM as any).stepFeeSource();
-  const moduleAddress = await moduleContract.getAddress();
+  // The fee schedule is printed for context only — it does not gate this write
+  // any more. Both legs are floored at MAX_STEP_BPS on-chain, so coverage of
+  // any admissible step is automatic.
   const tin: bigint = await (moduleContract as any).tin();
   const tout: bigint = await (moduleContract as any).tout();
-  const coverage = tin + tout;
-  const highWater: bigint = await (okuM as any).stepHighWaterMark();
   const halted: boolean = await (okuM as any).accrualHalted();
 
   logger.info("");
   logger.info(`Current M_oku:      ${ethers.formatEther(current)}`);
   logger.info(`Target M_oku:       ${ethers.formatEther(target)}`);
   logger.info(`Step:               ${step}bps (rounded up, as the contract does)`);
-  logger.info(`Coverage tin+tout:  ${coverage}bps (tin=${tin} tout=${tout})`);
-  logger.info(`stepFeeSource:      ${feeSource}`);
-  logger.info(`stepHighWaterMark:  ${highWater}bps (current floor under setFees)`);
+  logger.info(`Step ceiling:       ${MAX_STEP_BPS}bps (MAX_STEP_BPS)`);
+  logger.info(
+    `Fees (context only): tin=${tin}bps tout=${tout}bps — each >= ${MAX_STEP_BPS}bps ` +
+      `by construction, so this step is covered whatever its size below the ceiling`
+  );
   logger.info(`accrualHalted:      ${halted}`);
   logger.info(
     `syncWindowDuration: ${await (okuM as any).syncWindowDuration()}s ` +
@@ -180,46 +182,22 @@ async function main() {
     );
   }
 
-  if (feeSource === ethers.ZeroAddress) {
+  if (step > MAX_STEP_BPS) {
     throw new Error(
-      `PRE-CONDITION FAILED: okuM.stepFeeSource is unset, so step coverage reads ` +
-        `as ZERO regardless of the module's actual fees and EVERY step reverts ` +
-        `StepNotCovered. This is fail-closed by design. Fix with ` +
-        `okuM.setStepFeeSource(${moduleAddress}) from OKU_CAP_MANAGER — it is ` +
-        `step 6 of scripts/deploy/index.ts and was evidently skipped.`
-    );
-  }
-  if (feeSource.toLowerCase() !== moduleAddress.toLowerCase()) {
-    throw new Error(
-      `PRE-CONDITION FAILED: okuM.stepFeeSource is ${feeSource} but the address ` +
-        `book's SubscriptionModule is ${moduleAddress}. Coverage will be read ` +
-        `from the OTHER contract, so the fees printed above are not the fees ` +
-        `that will be checked. Resolve the disagreement before signing.`
-    );
-  }
-
-  if (step > coverage) {
-    throw new Error(
-      `PRE-CONDITION FAILED: step ${step}bps exceeds coverage ${coverage}bps; the ` +
-        `contract reverts StepNotCovered(${step}, ${coverage}).\n` +
+      `PRE-CONDITION FAILED: step ${step}bps exceeds MAX_STEP_BPS ` +
+        `(${MAX_STEP_BPS}bps); the contract reverts StepAboveMaximum(${step}, ` +
+        `${MAX_STEP_BPS}).\n` +
         `  WHY: mint at M0 then redeem at M1 extracts the step from the USDC ` +
-        `buffer unless the round-trip fee covers it — profit per unit is ` +
-        `M1/M0 - 1 - (tin + tout)/10000.\n` +
-        `  TWO FIXES, and they are not equivalent:\n` +
-        `    (a) raise tin+tout to >= ${step}bps first ` +
-        `(scripts/operator/setFees.ts). Charges every subscriber and redeemer.\n` +
-        `    (b) take a smaller step: --step-bps=${coverage} or lower. Under-marks ` +
-        `this period; the unrecognised yield is not lost, it lands in the next mark.`
-    );
-  }
-
-  if (step > highWater) {
-    logger.warning(
-      `This step (${step}bps) exceeds the current stepHighWaterMark (${highWater}bps), ` +
-        `so it will RATCHET the floor under setFees to ${step}bps. From then on ` +
-        `tin+tout can never drop below ${step}bps (FeesBelowStepFloor) unless cold ` +
-        `calls resetStepHighWaterMark, which emits an alarmed event. A one-off large ` +
-        `mark therefore permanently raises the minimum fee.`
+        `buffer unless the fee covers it. Rather than checking the live fee, the ` +
+        `protocol bounds the step at exactly the amount each fee leg is ` +
+        `guaranteed to cover, so a step above this bound could not be covered by ` +
+        `any admissible schedule.\n` +
+        `  ONE FIX: take a smaller step, --step-bps=${MAX_STEP_BPS} or lower. ` +
+        `Raising fees does NOT help any more — the ceiling is a constant, not a ` +
+        `function of the schedule. Under-marking this period loses nothing: the ` +
+        `unrecognised yield lands in the next mark.\n` +
+        `  If marks are routinely hitting this bound, the cadence is too slow for ` +
+        `MAX_STEP_BPS and that is a parameter decision, not an operator one.`
     );
   }
 
@@ -259,7 +237,6 @@ async function main() {
   }
 
   logger.success(`M_oku = ${ethers.formatEther(confirmed)} (step ${step}bps)`);
-  logger.success(`New stepHighWaterMark: ${await (okuM as any).stepHighWaterMark()}bps`);
   if (lockedUntil > 0n) {
     logger.warning(
       `Sync window armed until ${new Date(Number(lockedUntil) * 1000).toISOString()}. ` +

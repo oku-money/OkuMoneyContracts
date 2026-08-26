@@ -34,19 +34,20 @@
  *                         after so the wrapper can follow immediately.
  *   6. USDOkuWrapper    — binds OkuM + USDOku.
  *   7. Role wiring      — contract grants only; never to an EOA.
- *   8. FAIL-CLOSED WIRING. Four writes without which the system is inert (the
- *      first three block yield marking entirely; the fourth only blocks the
- *      USDC<->USDOku convenience path):
- *        okuM.setStepFeeSource(module)   — else every `setOkuMultiplier` reverts
- *                                          `StepNotCovered` (coverage reads 0)
+ *   8. FAIL-CLOSED WIRING. Two writes without which the system is inert:
  *        usdOku.setSolvencySource(wrapper) — else `setUsdOkuRate` reverts
  *                                          `SolvencyGapExceeded` as soon as any
  *                                          liability exists
- *        module.setFees(tin, tout)      — with tin+tout == 0 NO step is
- *                                          possible, because step coverage
- *                                          requires `tin + tout >= stepBps`
  *        module.setUsdOkuWrapper(wrapper) — else `mintUsdOku`/`redeemUsdOku`
  *                                          revert `UsdOkuWrapperNotSet`
+ *
+ *      Down from four. `okuM.setStepFeeSource(module)` is gone entirely — the
+ *      token no longer reads the fee schedule, because step coverage is a
+ *      static relationship between constants rather than a runtime check. And
+ *      `module.setFees` is no longer required: `initialize` seeds both legs at
+ *      the coverage floor, so the deployment is accrual-ready before any
+ *      configuration. `setFees` is now an optional raise, applied below only
+ *      when the configured values differ from the shipped floor.
  *      All four are deliberately fail-closed in the contracts: a
  *      half-configured deployment cannot mark a multiplier it cannot cover,
  *      and cannot offer a one-transaction USDOku path it hasn't wired.
@@ -65,6 +66,7 @@ import {
 import { resolveNetworkContext } from "../utils/networkContext";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
+import { MAX_STEP_BPS } from "../operator/_shared";
 import {
   CREATE2_FACTORY,
   saltFor,
@@ -116,6 +118,8 @@ const EXPECTED_CONTRACTS = [
 /** `type(IScaledUIAmount).interfaceId` — ERC-8056 core. */
 const IID_SCALED_UI_CORE = "0xa60bf13d";
 
+
+
 // Dev wallet address for impersonation on local fork (centralized in chains.ts)
 const DEV_WALLET = DEV_WALLET_ADDRESS;
 
@@ -137,20 +141,21 @@ function getDeploymentConfig(): DeploymentConfig {
     maxSupply: ethers.parseUnits("1000000000", 18), // 1 billion
     minterAllowance: ethers.parseUnits("1000000000", 18), // 1 billion
 
-    // Testnet default fee schedule. `tin + tout` IS the step-coverage budget:
-    // `OkuM.setOkuMultiplier` refuses any step whose `stepBps` exceeds it, so
-    // this number caps the mark cadence rather than merely pricing it.
+    // Default fee schedule: BOTH LEGS AT THE STEP-COVERAGE FLOOR.
     //
-    // 50 bps of combined coverage buys roughly a monthly mark at a 5% annual
-    // target (~40.7 bps/month), with headroom. A daily cadence needs only
-    // ~1.4 bps and a weekly one ~9.6 bps, so 50 is generous for testnet; a
-    // quarterly cadence would NOT fit and would need the MAX_FEE_BPS ceiling
-    // on both sides (100 + 100 = 200 bps of coverage).
+    // `MAX_STEP_BPS` is the floor under each leg and the ceiling on a single
+    // step, so shipping at the floor is the cheapest schedule the contracts
+    // admit while still covering every admissible mark. It matches what
+    // `initialize` already seeded, so the default deploy performs no `setFees`
+    // call at all.
     //
-    // tin=0 keeps subscription free on testnet; all coverage sits on the exit
-    // side, which is where the step-arbitrage round trip has to pay.
-    tin: BigInt(process.env.DEPLOY_TIN ?? "0"),
-    tout: BigInt(process.env.DEPLOY_TOUT ?? "50"),
+    // `tin: 0` is NO LONGER VALID and would be rejected on-chain. The old
+    // "keep subscription free, put all coverage on the exit" split worked under
+    // a COMBINED coverage rule; the rule is now per-leg, because a cross-chain
+    // round trip pays `tin` on the chain it mints on and `tout` on the chain it
+    // redeems on, so a zero leg anywhere is a free leg for that pairing.
+    tin: BigInt(process.env.DEPLOY_TIN ?? MAX_STEP_BPS.toString()),
+    tout: BigInt(process.env.DEPLOY_TOUT ?? MAX_STEP_BPS.toString()),
   };
 }
 
@@ -851,41 +856,32 @@ async function configureRoles(
 }
 
 /**
- * The three writes that turn a set of deployed proxies into a working system.
+ * The writes that turn a set of deployed proxies into a working system.
  *
- * Every one of them is FAIL-CLOSED in the contracts, which means a deployment
- * that skips this step does not misbehave — it simply refuses to mark a
- * multiplier or a rate. That is the correct default, and it is also why this
- * step has to be explicit and loudly logged: the failure mode is "nothing
- * happens when the orchestrator ticks", which is easy to misdiagnose as an
- * orchestrator bug.
+ * Both remaining ones are FAIL-CLOSED in the contracts, which means a
+ * deployment that skips this step does not misbehave — it simply refuses to
+ * mark a rate, or refuses the USDC<->USDOku convenience path. That is the
+ * correct default, and it is also why this step has to be explicit and loudly
+ * logged: the failure mode is "nothing happens when the orchestrator ticks",
+ * which is easy to misdiagnose as an orchestrator bug.
+ *
+ * WAS THREE WRITES, NOW TWO. `okuM.setStepFeeSource(module)` is gone: the token
+ * no longer reads the module's fee schedule, because step coverage became a
+ * static relationship between constants. That removed both the write and the
+ * token -> module dependency it created.
  */
 async function wireFailClosedDependencies(
-  okuM: Contract,
   usdOku: Contract,
   subscriptionModule: Contract,
   usdOkuWrapper: Contract,
   config: DeploymentConfig,
   stepNo: number
 ): Promise<void> {
-  logger.step(stepNo, "Post-deploy wiring (REQUIRED — all four fail closed)");
+  logger.step(stepNo, "Post-deploy wiring (REQUIRED — both fail closed)");
 
-  const moduleAddress = await subscriptionModule.getAddress();
   const wrapperAddress = await usdOkuWrapper.getAddress();
 
-  // 1. Step coverage source. `OkuM.setOkuMultiplier` reads `tin`/`tout` from
-  //    here to check `tin + tout >= stepBps`. An unwired source reads as ZERO
-  //    coverage, so every step reverts `StepNotCovered` — including the very
-  //    first one, at any size.
-  const currentFeeSource = (await okuM.stepFeeSource()).toString();
-  if (currentFeeSource.toLowerCase() === moduleAddress.toLowerCase()) {
-    logger.info(`  okuM.stepFeeSource already ${moduleAddress} — skipping`);
-  } else {
-    await sendAndWait(`Set okuM.stepFeeSource = SubscriptionModule`, () =>
-      okuM.setStepFeeSource(moduleAddress));
-  }
-
-  // 2. Solvency source. `USDOku.setUsdOkuRate` projects the liability to
+  // 1. Solvency source. `USDOku.setUsdOkuRate` projects the liability to
   //    `rateEnd` and compares it against `wrapper.realizedBacking()`. An
   //    unwired source reads backing as zero, so once ANY USDOku exists the
   //    rate write reverts `SolvencyGapExceeded` with an infinite gap. It
@@ -900,44 +896,56 @@ async function wireFailClosedDependencies(
       usdOku.setSolvencySource(wrapperAddress));
   }
 
-  // 3. Fee schedule. Fees ship at zero, and at zero combined fees the
-  //    step-coverage invariant admits NO step of any size. This is not a
-  //    tunable nicety: without it the multiplier can never move and the
-  //    product delivers no yield.
+  // 2. Fee schedule — an OPTIONAL RAISE, no longer a required enable.
+  //
+  //    `SubscriptionModule.initialize` seeds both legs at `MAX_STEP_BPS`, the
+  //    per-leg step-coverage floor, so the deployment can mark yield
+  //    immediately and there is no ordering for an operator to get wrong. This
+  //    replaces a required `setFees` call that the old dynamic-coverage design
+  //    needed before any step was possible.
+  //
+  //    Values BELOW the floor are rejected on-chain (`FeeBelowStepFloor`), so
+  //    the previous "refuse tin=0 tout=0" guard here is now redundant with the
+  //    contract. Kept as a pre-flight check anyway, to fail with an
+  //    explanation rather than a bare custom error.
   const currentTin: bigint = await subscriptionModule.tin();
   const currentTout: bigint = await subscriptionModule.tout();
-  const combined = config.tin + config.tout;
+
+  if (config.tin < MAX_STEP_BPS || config.tout < MAX_STEP_BPS) {
+    throw new Error(
+      `Refusing to set tin=${config.tin} tout=${config.tout}: each leg must be ` +
+        `at least MAX_STEP_BPS (${MAX_STEP_BPS}bps), the per-leg step-coverage ` +
+        `floor. The contract rejects this with FeeBelowStepFloor. Per-leg rather ` +
+        `than combined because a cross-chain round trip pays tin on the chain it ` +
+        `mints on and tout on the chain it redeems on.`
+    );
+  }
 
   if (currentTin === config.tin && currentTout === config.tout) {
     logger.info(`  Fees already tin=${currentTin} tout=${currentTout} — skipping`);
   } else {
-    if (combined === 0n) {
-      throw new Error(
-        `Refusing to set tin=0 tout=0: with zero combined fees the step-coverage ` +
-          `invariant (tin + tout >= stepBps) admits no multiplier step at all, so ` +
-          `the deployment would be permanently unable to mark yield. Set ` +
-          `DEPLOY_TOUT to a value sized to your intended mark cadence.`
-      );
-    }
     await sendAndWait(`Set fees tin=${config.tin}bps tout=${config.tout}bps`, () =>
       subscriptionModule.setFees(config.tin, config.tout));
   }
 
   logger.warning(
-    `  STEP COVERAGE: tin + tout = ${combined}bps is the HARD CEILING on any ` +
-      `single M_oku step. \`setOkuMultiplier\` reverts StepNotCovered above it.`
+    `  STEP COVERAGE is static: MAX_STEP_BPS (${MAX_STEP_BPS}bps) is BOTH the ` +
+      `hard ceiling on any single M_oku step (StepAboveMaximum) AND the floor ` +
+      `under each fee leg (FeeBelowStepFloor). Composed, every admissible step ` +
+      `is covered on each leg independently, permanently, with no state.`
   );
   logger.warning(
-    `  Size this to the intended mark cadence, not to a revenue target. At a 5% ` +
-      `annual mark: ~1.4bps daily, ~9.6bps weekly, ~40.7bps monthly. ` +
-      `${combined}bps therefore supports a cadence up to roughly ` +
-      `${combined >= 41n ? "monthly" : combined >= 10n ? "weekly" : "daily"}.`
+    `  MAX_STEP_BPS therefore sets the MINIMUM mark cadence. At a 5% annual ` +
+      `mark a step is ~1.4bps daily, ~9.6bps weekly, ~40.7bps monthly, so ` +
+      `${MAX_STEP_BPS}bps supports up to roughly ` +
+      `${MAX_STEP_BPS >= 41n ? "monthly" : MAX_STEP_BPS >= 10n ? "weekly" : "daily"}. ` +
+      `A longer outage must be walked over several marks — this is the ` +
+      `operator-absence protection working as designed, not a limitation.`
   );
   logger.warning(
-    `  And it is a RATCHET: OkuM.stepHighWaterMark floors \`setFees\` at the ` +
-      `largest step ever taken (FeesBelowStepFloor), so fees can never drop ` +
-      `below coverage a past step relied on. Only the cold-gated ` +
-      `\`resetStepHighWaterMark\` clears it, and that emits an alarm event.`
+    `  There is NO high-water ratchet and NO reset escape hatch any more. Fees ` +
+      `can be raised freely and lowered only to the floor, which by ` +
+      `construction still covers every step the protocol can take.`
   );
 
   // 4. USDOku wrapper wiring. `mintUsdOku` / `redeemUsdOku` on the module
@@ -1043,16 +1051,8 @@ async function verifyDeployment(
   // The fail-closed wiring. Each of these reverts the corresponding authority
   // write if unset, so a deployment that lands here misconfigured is silently
   // inert rather than loudly broken.
-  const feeSource = (await okuM.stepFeeSource()).toString();
   const solvencySource = (await usdOku.solvencySource()).toString();
-  logger.info(`  okuM.stepFeeSource:      ${feeSource}`);
   logger.info(`  usdOku.solvencySource:   ${solvencySource}`);
-  if (feeSource.toLowerCase() !== moduleAddress.toLowerCase()) {
-    throw new Error(
-      `okuM.stepFeeSource is ${feeSource}, expected the module at ${moduleAddress}. ` +
-        `setOkuMultiplier would revert StepNotCovered on every call.`
-    );
-  }
   if (solvencySource.toLowerCase() !== wrapperAddress.toLowerCase()) {
     throw new Error(
       `usdOku.solvencySource is ${solvencySource}, expected the wrapper at ` +
@@ -1061,13 +1061,23 @@ async function verifyDeployment(
     );
   }
 
+  // STEP COVERAGE, verified as the per-leg invariant it now is. Each leg must
+  // independently cover the largest admissible step, so this is two checks
+  // rather than one on the sum: `(0, 2N)` would pass a combined check while
+  // leaving the mint leg free for a cross-chain pairing.
   const tin: bigint = await subscriptionModule.tin();
   const tout: bigint = await subscriptionModule.tout();
-  logger.info(`  Fee schedule: tin=${tin}bps tout=${tout}bps (coverage ${tin + tout}bps)`);
-  if (tin + tout === 0n) {
+  logger.info(
+    `  Fee schedule: tin=${tin}bps tout=${tout}bps ` +
+      `(floor ${MAX_STEP_BPS}bps per leg, round trip ${tin + tout}bps)`
+  );
+  if (tin < MAX_STEP_BPS || tout < MAX_STEP_BPS) {
     throw new Error(
-      "tin + tout == 0: no multiplier step of any size is possible (StepNotCovered). " +
-        "Run scripts/operator/setFees.ts before declaring this deployment live."
+      `Fee below the per-leg step-coverage floor: tin=${tin} tout=${tout}, floor ` +
+        `${MAX_STEP_BPS}bps. This should be unreachable — initialize seeds the ` +
+        `floor and setFees rejects anything below it — so reaching here means ` +
+        `MAX_STEP_BPS in this script has drifted from Constants.sol, or the ` +
+        `deployed bytecode is not the reviewed source.`
     );
   }
 
@@ -1241,14 +1251,7 @@ async function main() {
   );
 
   // Step 6: the wiring without which nothing works.
-  await wireFailClosedDependencies(
-    okuM,
-    usdOku,
-    subscriptionModule,
-    usdOkuWrapper,
-    config,
-    6
-  );
+  await wireFailClosedDependencies(usdOku, subscriptionModule, usdOkuWrapper, config, 6);
 
   // Step 7: Oracle adapter. Ships WITH the contracts, not after: lending markets
   // will price off the multiplier regardless, and a hand-rolled integration has

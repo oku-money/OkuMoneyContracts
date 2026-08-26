@@ -73,7 +73,7 @@ export const ROLES = {
   OKU_UNBLACKLISTER: h("OKU_UNBLACKLISTER"),
   /**
    * Cold economic/safety policy. On OkuM this also gates
-   * `setSyncWindowDuration`, `setStepFeeSource`, `resetStepHighWaterMark` and
+   * `setSyncWindowDuration` and
    * `resumeAccrual`; on USDOku it gates `setSolvencySource`.
    */
   OKU_CAP_MANAGER: h("OKU_CAP_MANAGER"),
@@ -94,8 +94,8 @@ export const ROLES = {
    *
    * Load-bearing in the two-token model: `tin + tout` is the step-coverage
    * budget. At zero fees NO multiplier step is possible at all, and the
-   * combined value can never drop below OkuM's `stepHighWaterMark`
-   * (`FeesBelowStepFloor`).
+   * each leg can never drop below `Constants.MAX_STEP_BPS`, the static per-leg
+   * step-coverage floor (`FeeBelowStepFloor`).
    */
   PSM_FEE_MANAGER: h("PSM_FEE_MANAGER"),
 

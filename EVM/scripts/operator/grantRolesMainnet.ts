@@ -15,8 +15,8 @@
  * TWO THINGS ARE NEW IN v0.4 AND WORTH PAUSING ON:
  *
  *   1. `OKU_CAP_MANAGER` on OkuM now gates `resumeAccrual` — the only way to
- *      clear the guardian's sticky halt — as well as `setStepFeeSource` and
- *      `resetStepHighWaterMark`. On USDOku it gates `setSolvencySource`. It was
+ *      clear the guardian's sticky halt — as well as `setSyncWindowDuration`.
+ *      On USDOku it gates `setSolvencySource`. It was
  *      a supply-cap role; it is now the cold counterweight to the warm
  *      guardian, which is a materially larger responsibility.
  *
@@ -64,6 +64,9 @@ import { loadAddress } from "../utils/addressBook";
 import { getDeployedContract } from "../utils/deploy";
 import { ROLES } from "../config/roles";
 import { logger } from "../utils/logger";
+import { MAX_STEP_BPS } from "./_shared";
+
+
 
 // ============================================================================
 // Configuration — from environment (REQUIRED on mainnet)
@@ -112,7 +115,7 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
       "OKU_UPGRADER",
       "OKU_UNPAUSER",
       "OKU_UNBLACKLISTER",
-      // Now also: resumeAccrual, setStepFeeSource, resetStepHighWaterMark,
+      // Now also: resumeAccrual, setSyncWindowDuration,
       // setSyncWindowDuration.
       "OKU_CAP_MANAGER",
       "OKU_ALLOWANCE_MANAGER",
@@ -401,15 +404,6 @@ async function main() {
     // last moment anyone looks at this deployment as a whole — and both of these
     // are silent when wrong (nothing reverts until the orchestrator's first
     // tick, which will be after the deployer key has been revoked).
-    const feeSource: string = await (contracts.OkuM as any).stepFeeSource();
-    const moduleAddr = await contracts.SubscriptionModule.getAddress();
-    if (feeSource.toLowerCase() !== moduleAddr.toLowerCase()) {
-      throw new Error(
-        `okuM.stepFeeSource is ${feeSource}, expected ${moduleAddr}. Every ` +
-          `setOkuMultiplier would revert StepNotCovered. Fix it BEFORE revoking the ` +
-          `deployer's DEFAULT_ADMIN_ROLE — afterwards it needs the cold multisig.`
-      );
-    }
     const solvencySource: string = await (contracts.USDOku as any).solvencySource();
     const wrapperAddr = await contracts.USDOkuWrapper.getAddress();
     if (solvencySource.toLowerCase() !== wrapperAddr.toLowerCase()) {
@@ -418,18 +412,22 @@ async function main() {
           `setUsdOkuRate would revert SolvencyGapExceeded once any USDOku exists.`
       );
     }
+    // Per-leg step coverage. `initialize` seeds the floor and `setFees` refuses
+    // to go below it, so this should be unreachable — which is exactly why it is
+    // worth asserting at a handover: reaching it means the deployed bytecode is
+    // not the reviewed source.
     const tin: bigint = await (contracts.SubscriptionModule as any).tin();
     const tout: bigint = await (contracts.SubscriptionModule as any).tout();
-    if (tin + tout === 0n) {
+    if (tin < MAX_STEP_BPS || tout < MAX_STEP_BPS) {
       throw new Error(
-        `tin + tout == 0, so no multiplier step of any size is possible ` +
-          `(StepNotCovered). Set the fee schedule before handing the keys over — ` +
-          `afterwards it requires the cold multisig holding PSM_FEE_MANAGER.`
+        `Fee below the per-leg step-coverage floor: tin=${tin} tout=${tout}, ` +
+          `floor ${MAX_STEP_BPS}bps. Raising it afterwards requires the cold ` +
+          `multisig holding PSM_FEE_MANAGER, so fix it BEFORE the handover.`
       );
     }
     logger.info(
-      `  [verified] fail-closed wiring: stepFeeSource, solvencySource, ` +
-        `tin+tout=${tin + tout}bps`
+      `  [verified] fail-closed wiring: solvencySource; per-leg coverage ` +
+        `tin=${tin}bps tout=${tout}bps (floor ${MAX_STEP_BPS}bps)`
     );
   }
 

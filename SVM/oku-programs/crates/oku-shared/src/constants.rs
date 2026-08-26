@@ -30,10 +30,8 @@ pub const PRECISION: u64 = 1_000_000_000;
 /// Basis-points denominator (10_000 = 100%). Mirrors EVM
 /// `Constants.BASIS_POINTS`.
 ///
-/// Retained for EVM constant parity. The SVM PSM is currently fee-free,
-/// so no on-chain instruction consumes this value; it is kept so the
-/// SVM ↔ EVM constant set stays 1:1 and so a future fee path (should one
-/// be added) has the denominator already defined and audited.
+/// Consumed by the `tin`/`tout` fee math and the step-coverage
+/// primitives (`step_is_covered`, `step_bps_ceil`).
 pub const BASIS_POINTS: u64 = 10_000;
 
 // ---------------------------------------------------------------------------
@@ -65,20 +63,22 @@ pub const TOKEN_DECIMALS: u8 = 6;
 // The sync window closes the *cross-chain* arbitrage surface: while a
 // multiplier tick is propagating, EVM and SVM briefly disagree on the
 // price, and any conversion through the multiplier during that interval
-// transacts at a stale price on one side. The window blocks exactly the
-// price-sensitive instructions until the orchestrator has confirmed both
-// chains landed the tick.
+// transacts at a stale price on one side. Every multiplier write arms an
+// auto-expiring lock on exactly the price-sensitive instructions; the lock
+// releases on its own after `sync_window_secs` — there is no close
+// instruction and no epoch protocol. Cross-chain parity is verified
+// off-chain by comparing the multiplier VALUES directly
+// (`scripts/admin/check-sync-parity.ts`).
 //
 // It does NOT address the *local* step-arbitrage surface (holding raw
-// across a discrete step) — that is what `tout` exists for. See the
+// across a discrete step) — that is what the fees exist for. See the
 // module note on fees below.
 //
-// Both bounds are compile-time constants, not config fields, so a warm
-// key cannot widen the window or shrink the gap. Wall-clock seconds
-// rather than slots: Solana slot times stretch under congestion, which
-// is precisely when cross-chain propagation is slowest, so a
-// slot-denominated window would shrink exactly when it needs to be
-// longest.
+// The ceiling is a compile-time constant, not a config field, so a warm
+// key cannot widen the window. Wall-clock seconds rather than slots:
+// Solana slot times stretch under congestion, which is precisely when
+// cross-chain propagation is slowest, so a slot-denominated window would
+// shrink exactly when it needs to be longest.
 
 /// Hard ceiling on a single sync window, in seconds.
 ///
@@ -99,31 +99,23 @@ pub const MAX_SYNC_WINDOW_SECS: i64 = 900;
 /// design is trying to remove.
 ///
 /// 60s is a cross-chain propagation budget, not an economic parameter: the
-/// orchestrator normally closes the window explicitly (`end_sync_window`) as
-/// soon as the tick lands everywhere, so the configured length only matters
-/// when that confirmation never arrives. Adjustable within
+/// lock only needs to outlast "the tick has landed on every chain". It
+/// expires on its own — there is no close instruction. Adjustable within
 /// `MAX_SYNC_WINDOW_SECS` via `set_sync_window_secs`.
 ///
 /// EVM mirror: `Constants.DEFAULT_SYNC_WINDOW`.
 pub const DEFAULT_SYNC_WINDOW_SECS: i64 = 60;
 
-/// Minimum wall-clock gap between the end of one sync window and the
-/// start of the next, in seconds.
+/// Hard ceiling on a single multiplier step, in basis points (100 = 1%).
 ///
-/// This is the anti-griefing bound. Without it, a compromised rebaser
-/// could chain `set_multiplier(current + 1)` calls back-to-back and hold
-/// a permanent redemption lock. With it, the on-chain availability floor
-/// is `GAP / (GAP + MAX_WINDOW)` = `21600 / 22500` = **96%**, regardless
-/// of operator behaviour.
+/// A single write can never move the multiplier more than 1%, however much
+/// combined fee coverage (`tin + tout`, up to 2%) is configured. That
+/// implies a MINIMUM rebase cadence: a long outage cannot be caught up in
+/// one jump, it has to be walked in bounded steps, each of which arms the
+/// sync window and is individually covered by fees.
 ///
-/// Note the interaction with the clamp rule: a multiplier write inside
-/// the gap still *succeeds*, it just does not re-arm the window (see
-/// `sync_window_gap_elapsed`). Blocking the write instead would make the
-/// rate/multiplier setter censorable, which the EVM side explicitly
-/// forbids (`OkuDollar.setYieldRate` is deliberately not pause-gated).
-///
-/// EVM mirror: `Constants.MIN_SYNC_WINDOW_GAP`.
-pub const MIN_SYNC_WINDOW_GAP_SECS: i64 = 21_600;
+/// EVM mirror: `Constants.MAX_STEP_BPS` (enforced in `_stepMultiplier`).
+pub const MAX_STEP_BPS: u64 = 100;
 
 // ---------------------------------------------------------------------------
 // PSM fees (tin / tout)
@@ -132,14 +124,17 @@ pub const MIN_SYNC_WINDOW_GAP_SECS: i64 = 21_600;
 // Restores the `tin`/`tout` parameters from the upstream this PSM was
 // ported from (`makerdao/dss-lite-psm`), which the original port dropped.
 //
-// `tout` is the fix for *local* step arbitrage: SVM's multiplier steps
+// The fees are the fix for *local* step arbitrage: SVM's multiplier steps
 // discretely (Token-2022 rejects `ScaledUiAmount` + `InterestBearingConfig`
 // on one mint, so continuous accrual is unavailable), and a discrete step
 // lets anyone mint at `M0`, hold across the step, and redeem at `M1` for
 // a risk-free profit equal to the whole step. A window cannot prevent
-// this — the attacker simply transacts outside it. A `tout` exceeding the
-// maximum single-step yield makes the round trip unprofitable by
-// construction, permanently and independently of rebase cadence.
+// this — the attacker simply transacts outside it. A round trip pays
+// `tin` on the way in and `tout` on the way out, so a COMBINED
+// `tin + tout` exceeding the single-step yield makes it unprofitable by
+// construction, permanently and independently of rebase cadence. That
+// combined figure is what the step-coverage invariant enforces,
+// mirroring EVM (`OkuM.setOkuMultiplier` / `SubscriptionModule.setFees`).
 //
 // Both default to 0, so the mechanism ships audited but economically
 // inert and is enabled by configuration.

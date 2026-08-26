@@ -59,25 +59,3 @@ pub struct DistributeYield<'info> {
     /// Token-2022 program
     pub token_2022_program: Program<'info, Token2022>,
 }
-
-/// Context for opening / closing the cross-chain multiplier sync window.
-///
-/// Held by `rebaser` rather than a dedicated role: the orchestrator that
-/// writes the multiplier is the same actor that knows when a tick has
-/// landed on both chains, so a separate key would add plumbing without
-/// adding separation. Deliberately does **not** take the mint — opening a
-/// window touches no token state, and keeping the account set minimal
-/// keeps the instruction cheap enough to bundle with the tick.
-#[derive(Accounts)]
-pub struct SyncWindow<'info> {
-    /// Rebaser role — the orchestrator driving the cross-chain tick.
-    pub rebaser: Signer<'info>,
-
-    #[account(
-        mut,
-        seeds = [PsmConfig::SEED],
-        bump = config.bump,
-        has_one = rebaser @ LitePsmError::Unauthorized
-    )]
-    pub config: Account<'info, PsmConfig>,
-}

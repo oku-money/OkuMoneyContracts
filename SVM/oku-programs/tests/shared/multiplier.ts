@@ -145,10 +145,9 @@ export async function setMultiplierAndSettle(
 /**
  * Warp past an armed sync window so price-sensitive instructions are callable.
  *
- * Uses wall-clock expiry rather than `end_sync_window`, because closing
- * explicitly now requires a multiplier write to have landed in that epoch
- * (`NoWriteInEpoch`) and the auto-armed window carries whatever epoch was
- * current at the time.
+ * Wall-clock expiry is the ONLY way out: there is no close instruction. Every
+ * multiplier write arms the window and nothing but the clock releases it, which
+ * is what makes the liveness backstop structural rather than a fallback path.
  */
 export async function clearSyncWindow(
   h: BankrunHarness,

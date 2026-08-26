@@ -35,5 +35,5 @@ pub mod yield_lock;
 pub use constants::*;
 pub use math::*;
 pub use step_coverage::{step_bps_ceil, step_is_covered};
-pub use sync_window::{sync_window_end, sync_window_engaged, sync_window_gap_elapsed};
+pub use sync_window::{sync_window_end, sync_window_engaged};
 pub use yield_lock::yield_lock_engaged;

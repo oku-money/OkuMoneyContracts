@@ -36,7 +36,6 @@
     "admin:thaw-account": "tsx scripts/admin/thaw-account.ts",
     "admin:deposit-buffer": "tsx scripts/admin/deposit-buffer.ts",
     "admin:withdraw-buffer": "tsx scripts/admin/withdraw-buffer.ts",
-    "admin:sync-window": "tsx scripts/admin/sync-window.ts",
     "admin:set-sync-window-secs": "tsx scripts/admin/set-sync-window-secs.ts",
     "admin:set-fees": "tsx scripts/admin/set-fees.ts",
     "admin:check-sync-parity": "tsx scripts/admin/check-sync-parity.ts",

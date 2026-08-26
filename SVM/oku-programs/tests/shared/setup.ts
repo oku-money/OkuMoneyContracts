@@ -46,17 +46,15 @@ export const DECIMALS = 6;
 export const MAX_FEE_BPS = 100;
 /** `oku_shared::DEFAULT_SYNC_WINDOW_SECS` — window length written at init. */
 export const DEFAULT_SYNC_WINDOW_SECS = 60;
-/** `oku_shared::MIN_SYNC_WINDOW_GAP_SECS`. */
-export const MIN_SYNC_WINDOW_GAP_SECS = 21_600;
 
 /**
  * Default `tout` applied by `initializePsm`.
  *
  * WHY TESTS MUST SET A FEE AT ALL. The program refuses any multiplier increase
- * unless `tout_bps` covers the step (`step_is_covered`), and ships at 0 bps —
- * fail-closed, so the step-arbitrage condition cannot be created by accident.
- * A suite that wants to move the multiplier therefore has to configure a fee
- * first, exactly as a real deployment does.
+ * unless `tin_bps + tout_bps` covers the step (`step_is_covered`), and both
+ * ship at 0 bps — fail-closed, so the step-arbitrage condition cannot be
+ * created by accident. A suite that wants to move the multiplier therefore has
+ * to configure a fee first, exactly as a real deployment does.
  *
  * `MAX_FEE_BPS` is used so no test is ever blocked by coverage. Note the
  * consequence: it also caps a single step at 1%, so a test that wants a large

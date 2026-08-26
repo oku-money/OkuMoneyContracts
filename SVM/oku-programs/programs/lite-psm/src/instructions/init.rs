@@ -265,29 +265,29 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     // Yield distribution lock - starts at 0 (no lock)
     config.last_yield_distribution_slot = 0;
 
-    // Cross-chain sync window — ships ON.
+    // Post-step sync window — ships ON.
     //
     // Defaulting to a live 60s window rather than 0 means a fresh deployment
-    // is protected from block zero instead of depending on someone remembering
-    // to enable it. 60s is a cross-chain propagation budget; the orchestrator
-    // normally closes the window explicitly long before it expires.
+    // is protected from the first mark instead of depending on someone
+    // remembering to enable it. 60s is a cross-chain propagation budget: it
+    // need only cover the interval between the first chain's write and the
+    // last's.
     //
-    // `sync_lock_until_ts = 0` is never engaged for a real timestamp and is a
-    // valid gap anchor, so the first window can be opened immediately.
+    // `sync_lock_until_ts = 0` is never engaged for a real timestamp, so
+    // nothing is locked until the first multiplier write arms it.
     config.sync_lock_until_ts = 0;
-    config.sync_epoch = 0;
-    config.last_write_epoch = 0;
     config.sync_window_secs = DEFAULT_SYNC_WINDOW_SECS;
 
-    // PSM fees — ship at 0 bps, and that is now FAIL-CLOSED rather than a
-    // silent hole: `step_is_covered` rejects every multiplier increase while
-    // `tout_bps == 0`, so the protocol cannot rebase until a redemption fee
-    // sized to the intended cadence has been set. The operator cannot create
-    // the step-arbitrage condition, rather than being trusted not to.
+    // PSM fees — ship at 0 bps, and that is FAIL-CLOSED rather than a silent
+    // hole: `step_is_covered` rejects every multiplier increase while
+    // `tin_bps + tout_bps == 0`, so the protocol cannot rebase until a fee
+    // schedule sized to the intended cadence has been set. The operator
+    // cannot create the step-arbitrage condition, rather than being trusted
+    // not to.
     config.tin_bps = 0;
     config.tout_bps = 0;
 
-    // No steps taken yet, so no floor under `tout_bps`.
+    // No steps taken yet, so no floor under `tin_bps + tout_bps`.
     config.max_step_bps = 0;
 
     // Two-step `role_admin` transfer slot — empty until

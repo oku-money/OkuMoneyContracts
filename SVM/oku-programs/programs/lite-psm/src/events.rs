@@ -279,37 +279,18 @@ pub struct TokenMetadataUpdatedEvent {
 // Cross-chain multiplier sync window
 // ===========================================================================
 
-/// Emitted when a cross-chain multiplier sync window opens.
+/// Emitted when a multiplier write armed the post-step sync window.
 ///
-/// `auto_armed` distinguishes the two paths, which matters for monitoring:
-/// `false` is the orchestrator explicitly opening a window as step 1 of a
-/// tick (the healthy case), `true` is the fail-closed arm that fires on a
-/// multiplier write which had no window open. A sustained stream of
-/// `auto_armed: true` means the orchestrator is writing multipliers
-/// without running the tick protocol, and should alarm.
+/// One event per write, and there is no matching "closed" event: the lock
+/// expires on its own and nothing releases it early. Its ABSENCE on a
+/// multiplier write means `sync_window_secs` is 0, i.e. the protection is
+/// switched off — which is the condition worth alarming on, rather than any
+/// property of an individual window.
 #[event]
-pub struct SyncWindowOpened {
-    /// Orchestrator-assigned tick number; must match the peer chain's.
-    pub epoch: u64,
-    /// Inclusive Unix timestamp through which price-sensitive
-    /// instructions are blocked.
+pub struct SyncWindowArmed {
+    /// Exclusive Unix timestamp until which price-sensitive instructions
+    /// are blocked.
     pub until_ts: i64,
-    /// `true` when armed implicitly by a multiplier write rather than by
-    /// an explicit `begin_sync_window`.
-    pub auto_armed: bool,
-    pub timestamp: i64,
-}
-
-/// Emitted when a sync window is closed early via `end_sync_window`,
-/// i.e. the orchestrator confirmed the tick landed on every chain.
-///
-/// Absence of this event before `until_ts` means the window expired on its
-/// own — the liveness backstop fired rather than the happy path. Worth
-/// alarming on, since it usually means the orchestrator died mid-tick and
-/// the chains may now disagree on `sync_epoch`.
-#[event]
-pub struct SyncWindowClosed {
-    pub epoch: u64,
     pub timestamp: i64,
 }
 

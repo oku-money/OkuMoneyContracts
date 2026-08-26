@@ -6,18 +6,24 @@
 //! and the SVM write, the two sides disagree on the price of a raw token,
 //! and any instruction that converts value *through* the multiplier during
 //! that interval transacts at a stale price on one side. The sync window
-//! is a bounded, auto-expiring, epoch-attested block on exactly those
-//! instructions.
+//! is a bounded, auto-expiring lock on exactly those instructions, armed
+//! by every multiplier write and released by nothing but the clock.
+//!
+//! There is no open/close protocol and no on-chain attestation of the
+//! peer chain's state: whether both chains actually landed a tick is
+//! verified off-chain by comparing the multiplier VALUES directly
+//! (`scripts/admin/check-sync-parity.ts`).
 //!
 //! # What this is NOT for
 //!
 //! This does not prevent *local* step arbitrage — minting at `M0`, holding
 //! across a discrete step, and redeeming at `M1`. That attack does not
 //! require transacting during the window, so widening the window does not
-//! deter it; it only lengthens the attacker's holding period. The fee
-//! (`tout`) is the mechanism for that. Keeping the two concerns separate
-//! is deliberate: one is spatial (cross-chain divergence), the other is
-//! temporal (discontinuity in time).
+//! deter it; it only lengthens the attacker's holding period. The fees
+//! (`tin + tout`, see [`crate::step_coverage`]) are the mechanism for
+//! that. Keeping the two concerns separate is deliberate: one is spatial
+//! (cross-chain divergence), the other is temporal (discontinuity in
+//! time).
 //!
 //! # Relationship to the yield lock
 //!
@@ -63,48 +69,8 @@ pub const fn sync_window_engaged(lock_until_ts: i64, now_ts: i64) -> bool {
     now_ts < lock_until_ts
 }
 
-/// Return `true` when enough wall-clock time has elapsed since the end of
-/// the previous window for a new one to be armed.
-///
-/// `last_lock_until_ts` is the end of the most recent window — which is
-/// the same storage field the engagement check reads, so no separate
-/// "last window end" field is needed. An early release truncates that
-/// field to `now` rather than zeroing it, precisely so it remains a valid
-/// gap anchor.
-///
-/// # Why callers must not turn a `false` here into an error
-///
-/// On the multiplier-write path a `false` means "write, but do not re-arm
-/// the window". It must never mean "reject the write". Rejecting would
-/// make the multiplier setter censorable by anyone who can open a window,
-/// inverting the trust model — the EVM side documents `setYieldRate` as
-/// deliberately un-gated so an operator can zero the rate during an
-/// incident. Only the explicit `begin_sync_window` entrypoint treats a
-/// `false` as a hard error.
-#[inline]
-pub const fn sync_window_gap_elapsed(
-    last_lock_until_ts: i64,
-    now_ts: i64,
-    min_gap_secs: i64,
-) -> bool {
-    // Never-armed sentinel: the first window must be openable immediately.
-    //
-    // Checked explicitly rather than left to the arithmetic. Without it the
-    // first window could not open until `min_gap_secs` past the Unix epoch —
-    // unreachable on a real cluster, which is precisely what would make it a
-    // latent trap, surfacing only on a fresh local validator whose clock
-    // starts near zero.
-    if last_lock_until_ts == 0 {
-        return true;
-    }
-    // Saturating: `last_lock_until_ts` is bounded by a real timestamp plus
-    // `MAX_SYNC_WINDOW_SECS` in practice, but a corrupt or adversarial
-    // value near `i64::MAX` must not wrap into a spuriously-elapsed gap.
-    now_ts >= last_lock_until_ts.saturating_add(min_gap_secs)
-}
-
 /// Compute the (exclusive) end timestamp for a window of `window_secs`
-/// opened at `now_ts`, saturating rather than wrapping.
+/// armed at `now_ts`, saturating rather than wrapping.
 ///
 /// Returns `now_ts` itself when `window_secs == 0`, which combined with
 /// the exclusive bound in [`sync_window_engaged`] means a zero-length
@@ -117,7 +83,7 @@ pub const fn sync_window_end(now_ts: i64, window_secs: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::{MAX_SYNC_WINDOW_SECS, MIN_SYNC_WINDOW_GAP_SECS};
+    use crate::constants::MAX_SYNC_WINDOW_SECS;
 
     // A representative "now" well clear of the zero sentinel.
     const NOW: i64 = 1_800_000_000;
@@ -163,11 +129,11 @@ mod tests {
 
     #[test]
     fn zero_window_is_completely_inert() {
-        // The "ships inert" property, stated as an assertion rather than a
-        // comment. A zero-length window must block NOTHING — not even the
-        // second it was armed in. An inclusive upper bound would fail this
-        // and silently gate the remainder of the current second, which
-        // spans many slots.
+        // The "window disabled" property, stated as an assertion rather
+        // than a comment. A zero-length window must block NOTHING — not
+        // even the second it was armed in. An inclusive upper bound would
+        // fail this and silently gate the remainder of the current second,
+        // which spans many slots.
         let end = sync_window_end(NOW, 0);
         assert_eq!(end, NOW);
         // Not engaged at the arming instant, nor at any later instant.
@@ -179,77 +145,17 @@ mod tests {
         assert!(!sync_window_engaged(end, NOW + 10_000));
     }
 
-    // ---- gap ----
-
     #[test]
-    fn gap_elapsed_from_zero_sentinel() {
-        // First window after init must be openable immediately — including on
-        // a chain whose clock starts near zero, which is why the sentinel is
-        // explicit rather than incidental to the arithmetic.
-        assert!(sync_window_gap_elapsed(0, NOW, MIN_SYNC_WINDOW_GAP_SECS));
-        assert!(sync_window_gap_elapsed(0, 1, MIN_SYNC_WINDOW_GAP_SECS));
-        assert!(sync_window_gap_elapsed(0, 0, MIN_SYNC_WINDOW_GAP_SECS));
-    }
-
-    #[test]
-    fn gap_not_elapsed_immediately_after_a_window() {
-        let end = sync_window_end(NOW, MAX_SYNC_WINDOW_SECS);
-        assert!(!sync_window_gap_elapsed(
-            end,
-            end + 1,
-            MIN_SYNC_WINDOW_GAP_SECS
-        ));
-    }
-
-    #[test]
-    fn gap_boundary_is_inclusive() {
-        let end = sync_window_end(NOW, 0);
-        let exactly = end + MIN_SYNC_WINDOW_GAP_SECS;
-        assert!(!sync_window_gap_elapsed(
-            end,
-            exactly - 1,
-            MIN_SYNC_WINDOW_GAP_SECS
-        ));
-        assert!(sync_window_gap_elapsed(
-            end,
-            exactly,
-            MIN_SYNC_WINDOW_GAP_SECS
-        ));
-    }
-
-    #[test]
-    fn gap_does_not_wrap_near_i64_max() {
-        // The property that matters: a corrupt or adversarial
-        // `last_lock_until` near `i64::MAX` must not wrap into a small
-        // sum and thereby report the gap as elapsed at a realistic
-        // `now`. Were `saturating_add` swapped for `+` in a release
-        // build, this would wrap negative and pass the `>=`.
-        assert!(!sync_window_gap_elapsed(
-            i64::MAX,
-            NOW,
-            MIN_SYNC_WINDOW_GAP_SECS
-        ));
-        assert!(!sync_window_gap_elapsed(
-            i64::MAX - 1,
-            NOW,
-            MIN_SYNC_WINDOW_GAP_SECS
-        ));
-        // Terminal behaviour, asserted so it is a decision rather than an
-        // accident: once `last + gap` saturates at `i64::MAX`, only
-        // `now == i64::MAX` clears the gap. That is year ~292277026596,
-        // so it is unreachable rather than exploitable — and it fails
-        // *closed* for every timestamp below it, which is the safe
-        // direction.
-        assert!(sync_window_gap_elapsed(
-            i64::MAX - 1,
-            i64::MAX,
-            MIN_SYNC_WINDOW_GAP_SECS
-        ));
-        assert!(!sync_window_gap_elapsed(
-            i64::MAX - 1,
-            i64::MAX - 1,
-            MIN_SYNC_WINDOW_GAP_SECS
-        ));
+    fn rearming_extends_but_never_exceeds_window_from_now() {
+        // Back-to-back writes each re-arm from their own `now`, so the
+        // lock horizon is always `now + window_secs` and never accumulates
+        // beyond it. A compromised rebaser looping writes therefore holds
+        // the lock only for as long as it keeps paying for writes, and the
+        // horizon is bounded by `MAX_SYNC_WINDOW_SECS` past the last one.
+        let first = sync_window_end(NOW, MAX_SYNC_WINDOW_SECS);
+        let second = sync_window_end(NOW + 10, MAX_SYNC_WINDOW_SECS);
+        assert!(second > first);
+        assert_eq!(second - (NOW + 10), MAX_SYNC_WINDOW_SECS);
     }
 
     // ---- end computation ----
@@ -261,16 +167,5 @@ mod tests {
             sync_window_end(i64::MAX - 1, MAX_SYNC_WINDOW_SECS),
             i64::MAX
         );
-    }
-
-    /// The availability floor claimed in the constants documentation is
-    /// arithmetic, so assert it rather than trusting the comment: a
-    /// worst-case duty cycle of one maximal window per minimal gap must
-    /// leave redemption open at least 96% of the time.
-    #[test]
-    fn availability_floor_holds() {
-        let cycle = MIN_SYNC_WINDOW_GAP_SECS + MAX_SYNC_WINDOW_SECS;
-        let open = MIN_SYNC_WINDOW_GAP_SECS;
-        assert!(open * 100 / cycle >= 96);
     }
 }

@@ -1,4 +1,4 @@
-//! Cross-chain multiplier sync window — Anchor bindings.
+//! Post-step multiplier sync window — Anchor bindings.
 //!
 //! The pure timestamp comparisons live in `oku_shared::sync_window`; this
 //! module is the Anchor-error mapping plus the `Clock::get()` sysvar read,
@@ -19,25 +19,42 @@
 //! own recovery paths mid-tick. The rule is one line: **gated iff the
 //! instruction converts value through the multiplier.**
 //!
+//! # Auto-arm only
+//!
+//! Every multiplier write arms the lock; nothing but the clock releases
+//! it. There is no open/close protocol, no epoch, and no inter-window gap.
+//!
+//! The epoch protocol this replaced existed to make "a tick completed on
+//! every chain" externally verifiable, and it never actually did: equal
+//! epochs proved both chains *wrote*, never that they wrote the same
+//! VALUE. Parity is now checked off-chain against the multiplier values
+//! directly (`scripts/admin/check-sync-parity.ts`), which is strictly
+//! stronger and needs no on-chain bookkeeping. Everything the epoch
+//! required in turn — a `last_write_epoch` attestation so a window could
+//! not be opened and closed empty, an anti-grief gap so windows could not
+//! be chained — went with it. Arming on the write makes the fence and the
+//! tick the same transaction, so there is no unfenced-tick case to guard
+//! against in the first place.
+//!
 //! # What it does not defend
 //!
 //! Local step arbitrage — see the scope note in
-//! [`crate::helpers::yield_lock`]. That is the `tout` fee's job.
+//! [`crate::helpers::yield_lock`]. That is the `tin + tout` fee's job, via
+//! [`oku_shared::step_coverage`].
 
 use crate::errors::LitePsmError;
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
-use oku_shared::{
-    sync_window_end, sync_window_engaged, sync_window_gap_elapsed, MAX_SYNC_WINDOW_SECS,
-    MIN_SYNC_WINDOW_GAP_SECS,
-};
+use oku_shared::{sync_window_end, sync_window_engaged, MAX_SYNC_WINDOW_SECS};
 
-/// Reject price-sensitive operations while a cross-chain multiplier tick
-/// is in flight.
+/// Reject price-sensitive operations while a multiplier step is
+/// propagating across chains.
 ///
 /// Call this alongside — not instead of — [`crate::helpers::check_yield_lock`].
 /// The two guard different properties in different units and neither
-/// subsumes the other.
+/// subsumes the other: the yield lock is a same-slot atomic-re-entry fence
+/// measured in slots, this is a multi-second propagation window measured
+/// in wall-clock seconds.
 pub fn check_sync_window(config: &PsmConfig) -> Result<()> {
     let clock = Clock::get()?;
     require!(
@@ -47,36 +64,25 @@ pub fn check_sync_window(config: &PsmConfig) -> Result<()> {
     Ok(())
 }
 
-/// Arm the window from the multiplier-write path, honouring the
-/// inter-window gap.
+/// Arm the window from the multiplier-write path.
 ///
 /// Returns `true` if the window was armed.
 ///
-/// # Clamp, never revert
+/// # Assign, never extend
 ///
-/// If the gap has not elapsed this declines to re-arm and returns `false`
-/// — it does **not** error. A multiplier write must never be blockable by
-/// window state, because that would let anyone able to open a window
-/// censor the rebaser, and the EVM twin (`OkuDollar.setYieldRate`) is
-/// explicitly documented as un-gated so an operator can zero the rate
-/// during an incident. The gap bound still holds: an attacker looping
-/// `set_multiplier(current + 1)` gets at most one window per gap period,
-/// preserving the availability floor.
+/// The lock end is overwritten with `now + sync_window_secs` rather than
+/// pushed out from its previous value. That is what makes the
+/// `MAX_SYNC_WINDOW_SECS` bound hold by construction rather than by
+/// argument: no sequence of writes, however adversarial, can stack a
+/// window past the ceiling. A compromised rebaser looping writes still
+/// re-arms only for one window length at a time — and cannot write at all
+/// without taking a real, fee-covered, `MAX_STEP_BPS`-bounded step, which
+/// is a far louder and more self-limiting action than holding a lock open.
 pub fn arm_sync_window(config: &mut PsmConfig, now_ts: i64) -> bool {
-    // Inert configuration: write nothing at all.
-    //
-    // Returning early rather than falling through to a zero-length window
-    // matters for more than the (already inert) engagement check —
-    // `sync_lock_until_ts` doubles as the inter-window gap anchor, so
-    // arming here would move that anchor on every multiplier write and
-    // could then reject a later explicit `begin_sync_window` for up to
-    // `MIN_SYNC_WINDOW_GAP_SECS` after the operator enables the feature.
-    // It would also emit a `SyncWindowOpened` event for a window that
-    // blocks nothing, which is noise an alert rule would have to special-case.
+    // Inert configuration: write nothing at all, so a disabled window
+    // never emits an event for a lock that blocks nothing — noise an
+    // alert rule would otherwise have to special-case.
     if config.sync_window_secs == 0 {
-        return false;
-    }
-    if !sync_window_gap_elapsed(config.sync_lock_until_ts, now_ts, MIN_SYNC_WINDOW_GAP_SECS) {
         return false;
     }
     config.sync_lock_until_ts = sync_window_end(now_ts, config.sync_window_secs);

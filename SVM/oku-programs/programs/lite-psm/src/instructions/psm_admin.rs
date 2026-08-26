@@ -427,19 +427,18 @@ pub fn update_token_metadata(ctx: Context<UpdateTokenMetadata>) -> Result<()> {
     Ok(())
 }
 
-/// Set the cross-chain sync window length in seconds (CAP_MANAGER only).
+/// Set the post-step sync window length in seconds (CAP_MANAGER only).
 ///
-/// `0` disables the window entirely, which is the initialization default:
-/// the mechanism ships audited but inert and is switched on once the
-/// cross-chain tick cadence is settled. Bounded by
-/// `MAX_SYNC_WINDOW_SECS`, so no key — cold included — can turn this into
-/// an indefinite redemption block.
+/// `0` disables the window entirely. It ships ON at
+/// `DEFAULT_SYNC_WINDOW_SECS` so a fresh deployment is protected from the
+/// first mark. Bounded by `MAX_SYNC_WINDOW_SECS`, so no key — cold
+/// included — can turn this into an indefinite redemption block.
 ///
 /// Sized from cross-chain propagation, not from arbitrage economics: the
-/// window only needs to outlast "both chains have landed the tick", which
-/// the orchestrator confirms explicitly via `end_sync_window` anyway. The
-/// configured value is the fallback for when that confirmation never
-/// arrives.
+/// window need only outlast the interval between the first chain's write
+/// and the last's. It is NOT the step-arbitrage control — the fees are,
+/// since an attacker holding raw across a step never transacts during the
+/// window and is therefore indifferent to its length.
 pub fn set_sync_window_secs(ctx: Context<CapManagerParams>, new_secs: i64) -> Result<()> {
     validate_sync_window_secs(new_secs)?;
 
@@ -454,21 +453,25 @@ pub fn set_sync_window_secs(ctx: Context<CapManagerParams>, new_secs: i64) -> Re
 
 /// Set the PSM `tin` / `tout` fee schedule in basis points (CAP_MANAGER only).
 ///
-/// # What `tout` is for
+/// # What the fees are for
 ///
-/// SVM's multiplier moves in discrete steps (Token-2022 forbids
-/// `ScaledUiAmount` alongside `InterestBearingConfig`, so continuous
-/// accrual is unavailable here as it is on EVM). A discrete step is
-/// free money to anyone who mints at `M0`, holds across the step, and
-/// redeems at `M1` — no risk, no meaningful holding period, repeatable
-/// every step, bounded only by `minter_allowance` and buffer depth.
+/// The multiplier moves in discrete steps on both chains (Token-2022
+/// forbids `ScaledUiAmount` alongside `InterestBearingConfig`, so
+/// continuous accrual is unavailable here — and the EVM twin is stepwise
+/// by design so both sides carry the same value at the same cadence). A
+/// discrete step is free money to anyone who mints at `M0`, holds across
+/// the step, and redeems at `M1` — no risk, no meaningful holding period,
+/// repeatable every step, bounded only by `minter_allowance` and buffer
+/// depth.
 ///
 /// The sync window does **not** stop this: the attacker never needs to
 /// transact while the window is open, so widening it only lengthens their
-/// hold. A `tout` exceeding the yield delivered by one step is what makes
-/// the round trip lossy, permanently and independently of tick cadence.
-/// Set it accordingly — at a weekly cadence and 5% APY one step is
-/// ~9.6 bps, so `tout` must exceed that with margin.
+/// hold. A round trip pays `tin` going in and `tout` coming out, so it is
+/// the COMBINED `tin + tout` exceeding one step's yield that makes the
+/// round trip lossy — permanently, and independently of tick cadence. A
+/// `tout`-only rule leaks the mint-side half. Set them accordingly: at a
+/// weekly cadence and 5% APY one step is ~9.6 bps, so `tin + tout` must
+/// exceed that with margin.
 ///
 /// Both fees accrue to the USDC buffer (no recipient, no transfer), so
 /// they raise the collateral ratio rather than being swept.
@@ -481,20 +484,28 @@ pub fn set_fees(ctx: Context<CapManagerParams>, tin_bps: u64, tout_bps: u64) -> 
 
     // ---- STEP-ARBITRAGE COVERAGE (half 2 of 2) ----
     //
-    // `tout` may not drop below the largest step ever taken. Half 1 (the
-    // `step_is_covered` check at write time) stops exposure being created that
-    // the fee does not cover; this stops the coverage being removed afterwards.
+    // The COMBINED `tin + tout` may not drop below the largest step ever
+    // taken. Half 1 (the `step_is_covered` check at write time) stops exposure
+    // being created that the fees do not cover; this stops the coverage being
+    // removed afterwards.
     //
-    // Without it: raise tout, take a big step, lower tout — and everyone who
+    // Without it: raise fees, take a big step, lower fees — and everyone who
     // held across the step gets a cheap exit. The attacker's edge is locked in
     // the moment the step lands and never decays, which is why a time-based
     // cooldown does not work here and a high-water mark does.
     //
-    // Only pins against steps ACTUALLY taken: if every step was 1.4 bps, the fee
-    // can still be lowered to 1.4 bps. Clearing the mark is possible but is a
-    // separate, explicitly-named instruction.
+    // Binding the SUM rather than `tout` alone matters: coverage may legally be
+    // carried entirely by `tin`, and a `tout`-only floor would then permit
+    // dropping to zero total coverage while still passing.
+    //
+    // Only pins against steps ACTUALLY taken: if every step was 1.4 bps, the
+    // fees can still be lowered to 1.4 bps combined. Clearing the mark is
+    // possible but is a separate, explicitly-named instruction.
+    let combined_bps = tin_bps
+        .checked_add(tout_bps)
+        .ok_or(LitePsmError::Overflow)?;
     require!(
-        tout_bps >= ctx.accounts.config.max_step_bps,
+        combined_bps >= ctx.accounts.config.max_step_bps,
         LitePsmError::FeeBelowStepHighWaterMark
     );
 
@@ -518,7 +529,7 @@ pub fn set_fees(ctx: Context<CapManagerParams>, tin_bps: u64, tout_bps: u64) -> 
 ///
 /// # Read this before calling
 ///
-/// `max_step_bps` is the floor under `tout_bps`, and it exists so a step that
+/// `max_step_bps` is the floor under `tin_bps + tout_bps`, and it exists so a step that
 /// was covered when it was taken cannot be un-covered later. Clearing it
 /// **reopens that historical exposure**: anyone still holding raw acquired
 /// before a large past step can then redeem at a fee that no longer covers it.

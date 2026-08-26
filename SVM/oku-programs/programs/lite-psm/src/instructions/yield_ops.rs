@@ -11,17 +11,14 @@
 //! Taken from https://github.com/makerdao/sdai/blob/master/src/SavingsDai.sol
 
 use crate::constants::{MAX_MULTIPLIER, PRECISION};
-use crate::contexts::{DistributeYield, SetMultiplier, SyncWindow};
+use crate::contexts::{DistributeYield, SetMultiplier};
 use crate::errors::LitePsmError;
 use crate::events::*;
 use crate::helpers::{arm_sync_window, check_yield_lock};
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_2022::spl_token_2022::extension::scaled_ui_amount::instruction::update_multiplier;
-use oku_shared::{
-    step_bps_ceil, step_is_covered, sync_window_end, sync_window_gap_elapsed,
-    MIN_SYNC_WINDOW_GAP_SECS,
-};
+use oku_shared::{step_bps_ceil, step_is_covered};
 
 /// Write a new multiplier to the OkuM mint's ScaledUiAmountConfig extension
 /// via CPI, stamp the yield-distribution slot, and arm the cross-chain sync
@@ -37,7 +34,7 @@ use oku_shared::{
 /// earlier design used it to pre-announce the step MakerDAO-OSM style. It
 /// was dropped deliberately: scheduling makes the step *predictable* but
 /// does not make it *smaller*, so it does not reduce step-arbitrage
-/// profit at all — that is `tout`'s job, and `tout` handles it regardless
+/// profit at all — that is the fees' job, and they handle it regardless
 /// of timing. Meanwhile scheduling would add a second timing parameter
 /// the orchestrator must align across chains, and would decouple "the
 /// write landed" from "the price changed", which is exactly the ambiguity
@@ -57,15 +54,24 @@ fn write_multiplier_and_stamp<'info>(
     // repeatable. The sync window cannot help; the attacker never transacts
     // while it is open.
     //
-    // Refuse to create exposure the current `tout` does not cover. At
-    // `tout_bps == 0` this rejects every increase, so rebasing is impossible
-    // until a fee is configured — the operator cannot create the arbitrage
-    // condition rather than being trusted not to.
+    // Refuse to create exposure the current fees do not cover. The coverage
+    // figure is the COMBINED `tin + tout`, because a round trip pays both —
+    // a `tout`-only rule leaks the mint-side half whenever `tin` carried part
+    // of the burden. Mirrors EVM (`OkuM.setOkuMultiplier` reads
+    // `tin() + tout()` from the module).
     //
-    // Half 2 is the `max_step_bps` floor in `set_fees`, which stops the fee
+    // At zero fees this rejects every increase, so rebasing is impossible
+    // until a fee schedule is configured — the operator cannot create the
+    // arbitrage condition rather than being trusted not to.
+    //
+    // Half 2 is the `max_step_bps` floor in `set_fees`, which stops the fees
     // being lowered afterwards. Neither half is sufficient alone.
+    let coverage_bps = config
+        .tin_bps
+        .checked_add(config.tout_bps)
+        .ok_or(LitePsmError::Overflow)?;
     require!(
-        step_is_covered(current_multiplier, new_multiplier, config.tout_bps),
+        step_is_covered(current_multiplier, new_multiplier, coverage_bps),
         LitePsmError::StepExceedsFeeCoverage
     );
 
@@ -103,132 +109,20 @@ fn write_multiplier_and_stamp<'info>(
     let clock = Clock::get()?;
     config.last_yield_distribution_slot = clock.slot;
 
-    // Attest that a write actually landed in the current epoch. `end_sync_window`
-    // requires this, so a window cannot be opened and closed with nothing having
-    // happened — which would otherwise leave `sync_epoch` claiming a completed
-    // tick against an untouched multiplier, and make the cross-chain parity
-    // check report a false OK.
-    config.last_write_epoch = config.sync_epoch;
-
-    // Fail-closed: arm the sync window on every multiplier write, so a
-    // tick can never land completely unfenced even if the orchestrator
-    // forgot to open a window first.
+    // Arm the sync window. The fence and the tick are the same transaction,
+    // so a step can never land unfenced — there is no ordering for an
+    // operator to get wrong and no separate open call to forget.
     //
-    // Clamped, never fatal — if the inter-window gap has not elapsed this
-    // declines to re-arm and the write still succeeds. See
-    // `helpers::sync_window::arm_sync_window` for why a multiplier write
-    // must never be rejectable on window state.
-    let armed = arm_sync_window(config, clock.unix_timestamp);
-    if armed {
-        emit!(SyncWindowOpened {
-            epoch: config.sync_epoch,
+    // Assigns rather than extends, which is what bounds the window by
+    // construction. See `helpers::sync_window::arm_sync_window`.
+    if arm_sync_window(config, clock.unix_timestamp) {
+        emit!(SyncWindowArmed {
             until_ts: config.sync_lock_until_ts,
-            auto_armed: true,
             timestamp: clock.unix_timestamp,
         });
     }
 
     Ok(clock)
-}
-
-/// Open a cross-chain multiplier sync window (REBASER only).
-///
-/// Blocks the price-sensitive instructions (`mint_oku_m`, `redeem_oku_m`)
-/// while a multiplier tick propagates between EVM and SVM, so nobody can
-/// transact against a price only one chain has updated.
-///
-/// # Epoch discipline
-///
-/// `epoch` must be exactly `stored + 1`. The orchestrator assigns the same
-/// number on both chains for a given tick, which makes
-/// `epoch_evm == epoch_svm` an externally checkable statement that no tick
-/// is mid-flight. Requiring strict succession stops a replayed or
-/// out-of-order open from silently reusing a number and defeating that
-/// check.
-///
-/// # Liveness
-///
-/// The window auto-expires after at most `MAX_SYNC_WINDOW_SECS`; there is
-/// no code path that extends it indefinitely, so a dead orchestrator
-/// cannot brick redemption. `MIN_SYNC_WINDOW_GAP_SECS` between windows
-/// bounds the duty cycle, giving an on-chain availability floor.
-pub fn begin_sync_window(ctx: Context<SyncWindow>, epoch: u64) -> Result<()> {
-    let clock = Clock::get()?;
-    let config = &mut ctx.accounts.config;
-
-    let expected = config
-        .sync_epoch
-        .checked_add(1)
-        .ok_or(LitePsmError::Overflow)?;
-    require!(epoch == expected, LitePsmError::EpochMismatch);
-
-    // Unlike the auto-arm path, an explicit open DOES fail on an
-    // unelapsed gap. Nothing depends on this call succeeding for the
-    // protocol to stay safe, so it is free to be strict — and being
-    // strict here is what makes the availability floor enforceable.
-    require!(
-        sync_window_gap_elapsed(
-            config.sync_lock_until_ts,
-            clock.unix_timestamp,
-            MIN_SYNC_WINDOW_GAP_SECS
-        ),
-        LitePsmError::SyncWindowGapNotElapsed
-    );
-
-    config.sync_epoch = epoch;
-    config.sync_lock_until_ts = sync_window_end(clock.unix_timestamp, config.sync_window_secs);
-
-    emit!(SyncWindowOpened {
-        epoch,
-        until_ts: config.sync_lock_until_ts,
-        auto_armed: false,
-        timestamp: clock.unix_timestamp,
-    });
-
-    Ok(())
-}
-
-/// Close the current sync window early (REBASER only).
-///
-/// Called once the orchestrator has confirmed the tick landed on every
-/// chain. `epoch` must equal the stored epoch, so a stale release cannot
-/// close a window it never observed.
-///
-/// Truncates `sync_lock_until_ts` to now rather than zeroing it: that
-/// field doubles as the anchor for the inter-window gap check, and zeroing
-/// would reset the gap and let windows be chained back-to-back.
-pub fn end_sync_window(ctx: Context<SyncWindow>, epoch: u64) -> Result<()> {
-    let clock = Clock::get()?;
-    let config = &mut ctx.accounts.config;
-
-    require!(epoch == config.sync_epoch, LitePsmError::EpochMismatch);
-
-    // A window may only be closed if a multiplier write actually landed in it.
-    //
-    // Without this, "open, forget to write, close" advances `sync_epoch` against
-    // an untouched multiplier, and the cross-chain parity check — which compares
-    // epochs — reports OK. That is a false negative on the only completion check
-    // the system has. With it, `sync_epoch` means "this chain wrote for tick N".
-    //
-    // If the write genuinely cannot be made, let the window auto-expire instead;
-    // the epoch then visibly lags, which is the correct signal.
-    require!(
-        config.last_write_epoch == epoch,
-        LitePsmError::NoWriteInEpoch
-    );
-
-    // Only ever move the end backwards. Guards against a same-second
-    // double-close pushing the gap anchor forward.
-    if config.sync_lock_until_ts > clock.unix_timestamp {
-        config.sync_lock_until_ts = clock.unix_timestamp;
-    }
-
-    emit!(SyncWindowClosed {
-        epoch,
-        timestamp: clock.unix_timestamp,
-    });
-
-    Ok(())
 }
 
 /// Set OkuM multiplier directly

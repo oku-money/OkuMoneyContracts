@@ -1,41 +1,49 @@
 #!/usr/bin/env tsx
 /**
- * Cross-chain multiplier sync-parity check.
+ * Cross-chain multiplier parity check.
  *
- * THIS IS THE ARTIFACT THAT MAKES "both sides have updated" VERIFIABLE.
+ * THIS IS THE ARTIFACT THAT MAKES "both chains agree on the price" VERIFIABLE.
  *
- * Neither chain can observe the other — there is no bridge, no oracle and no
- * message passing between them. So the on-chain contracts cannot themselves
- * assert that a multiplier tick landed everywhere. What they CAN do is record an
- * orchestrator-assigned tick number (`sync_epoch` on SVM, `syncEpoch()` on EVM)
- * that is identical across chains for a given tick. Equality of those numbers,
- * checked from outside, is then a meaningful statement:
+ * Neither chain can observe the other — no bridge, no oracle, no message passing
+ * between them for multiplier state. So the on-chain contracts cannot themselves
+ * assert that a mark landed everywhere. Checked from outside, though, the
+ * assertion is direct and strong:
  *
- *     epoch_evm == epoch_svm  AND  no window open  =>  no tick in flight
+ *     M_oku(evm) / 1e9 == multiplier(svm)   =>   both chains price a raw token identically
  *
- * Run this before opening a window (to confirm a clean starting state) and after
- * closing one (to confirm the tick completed symmetrically). Wire it into
- * monitoring: a persistent epoch mismatch means an orchestrator died mid-tick
- * and the chains may be pricing differently.
+ * WHY THIS REPLACED THE EPOCH CHECK. An earlier design had each chain record an
+ * orchestrator-assigned `sync_epoch` per tick and compared those numbers. That
+ * only ever proved both chains *wrote something* for tick N — never that they
+ * wrote the SAME VALUE, which is the property anyone actually cares about. It
+ * also needed a chain of supporting machinery to mean even that much (a
+ * write-landed-in-epoch attestation so a window could not be opened and closed
+ * empty, an anti-grief gap so windows could not be chained). Comparing values
+ * directly subsumes all of it: a wrong-value write is caught, a missing write is
+ * caught, and there is nothing on-chain to keep in sync.
  *
- * NOTE ON MULTIPLIER VALUES. This deliberately does NOT assert that the two
- * multipliers are equal. They never are: EVM accrues continuously while SVM
- * steps, and the two use different precision scales (1e18 vs 1e9). The
- * meaningful cross-chain assertion is about tick *completion*, not value
- * identity. The value skew is reported for information only.
+ * Run it after every mark, and wire it into monitoring. A persistent mismatch
+ * means the two chains are pricing differently and cross-chain flow should stop
+ * until it is resolved.
+ *
+ * PRECISION. EVM carries 18 decimals, SVM 9. Exact parity means
+ * `evm_raw == svm_raw * 1e9`. The comparison is done in integer SVM units, so a
+ * mark that is genuinely identical compares equal with no floating point
+ * anywhere. `--tolerance` is expressed in SVM units (1 unit = 1e-9) and defaults
+ * to 0.
  *
  * Usage:
  *   tsx scripts/admin/check-sync-parity.ts --evm=baseSepolia --svm=devnet
  *   tsx scripts/admin/check-sync-parity.ts --evm=base --svm=mainnet-beta --strict
  *
  * CLI:
- *   --evm=<chain>    EVM chain key in addresses.json::evm
- *   --svm=<network>  SVM network key in addresses.json::svm
- *   --strict         Exit non-zero on ANY divergence (for CI / monitoring)
+ *   --evm=<chain>      EVM chain key in addresses.json::evm
+ *   --svm=<network>    SVM network key in addresses.json::svm
+ *   --tolerance=<n>    Permitted |difference| in SVM units (default 0)
+ *   --strict           Exit non-zero on ANY divergence, warnings included
  *
  * Exit codes:
- *   0  epochs agree and no window is open
- *   1  divergence detected (or a window is open, under --strict)
+ *   0  multipliers agree within tolerance
+ *   1  divergence detected (or any warning, under --strict)
  *   2  configuration / connectivity error
  */
 
@@ -58,19 +66,29 @@ function arg(name: string): string | undefined {
 const STRICT = process.argv.includes('--strict');
 const EVM_CHAIN = arg('evm');
 const SVM_NETWORK = arg('svm') ?? 'devnet';
+const TOLERANCE = BigInt(arg('tolerance') ?? '0');
 
 const ROOT = path.resolve(__dirname, '../../../..');
 const ADDRESSES = path.join(ROOT, 'addresses.json');
-const EVM_ABI = path.join(ROOT, 'artifacts/evm/OkuDollar.json');
 const SVM_IDL = path.join(ROOT, 'artifacts/svm/lite_psm.json');
 
-const OKU_DOLLAR_ABI = [
-  'function syncEpoch() view returns (uint256)',
-  'function syncLockedUntil() view returns (uint256)',
-  'function isSyncLocked() view returns (bool)',
-  'function syncWindowDuration() view returns (uint256)',
+/**
+ * Inline ABI fragment rather than the exported artifact, deliberately.
+ *
+ * A monitoring script must not fail because an artifact was regenerated with a
+ * renamed contract or a reordered ABI. These four signatures are stable by
+ * design; depending on them directly is the robust choice.
+ */
+const OKU_M_ABI = [
   'function uiMultiplier() view returns (uint256)',
+  'function isSyncLocked() view returns (bool)',
+  'function syncLockedUntil() view returns (uint256)',
+  'function syncWindowDuration() view returns (uint256)',
+  'function stepHighWaterMark() view returns (uint256)',
 ];
+
+/** EVM precision (1e18) over SVM precision (1e9). */
+const PRECISION_RATIO = 10n ** 9n;
 
 function fail(msg: string, code = 2): never {
   console.error(`\x1b[31mERROR\x1b[0m ${msg}`);
@@ -84,28 +102,30 @@ async function readEvm(chain: string) {
   const entry = book.evm?.[chain];
   if (!entry) fail(`unknown EVM chain "${chain}". Known: ${Object.keys(book.evm ?? {}).join(', ')}`);
 
-  const addr = entry.contracts?.okuDollar;
-  if (!addr) fail(`no okuDollar address recorded for EVM chain "${chain}"`);
+  // `okuM` is the current key; `okuDollar` is accepted so a registry written by
+  // an older deploy still resolves rather than failing opaquely.
+  const addr = entry.contracts?.okuM ?? entry.contracts?.okuDollar;
+  if (!addr) fail(`no okuM address recorded for EVM chain "${chain}"`);
 
   const provider = new ethers.JsonRpcProvider(process.env.EVM_RPC_URL ?? entry.rpcUrl);
-  const token = new ethers.Contract(addr, OKU_DOLLAR_ABI, provider);
+  const token = new ethers.Contract(addr, OKU_M_ABI, provider);
 
-  const [epoch, lockedUntil, locked, duration, multiplier] = await Promise.all([
-    token.syncEpoch(),
-    token.syncLockedUntil(),
-    token.isSyncLocked(),
-    token.syncWindowDuration(),
+  const [multiplier, locked, lockedUntil, duration, stepHwm] = await Promise.all([
     token.uiMultiplier(),
+    token.isSyncLocked(),
+    token.syncLockedUntil(),
+    token.syncWindowDuration(),
+    token.stepHighWaterMark(),
   ]);
 
   return {
     address: addr,
-    epoch: BigInt(epoch),
-    lockedUntil: BigInt(lockedUntil),
+    /** Raw 1e18-scaled multiplier. */
+    raw: BigInt(multiplier),
     locked: Boolean(locked),
+    lockedUntil: BigInt(lockedUntil),
     duration: BigInt(duration),
-    // 1e18-scaled on EVM.
-    multiplier: Number(ethers.formatUnits(multiplier, 18)),
+    stepHwm: BigInt(stepHwm),
   };
 }
 
@@ -116,7 +136,10 @@ async function readSvm(network: string) {
 
   const programId = entry.programs?.litePsm;
   const configPda = entry.pdas?.psmConfig;
-  if (!programId || !configPda) fail(`incomplete SVM entry for "${network}" (need programs.litePsm + pdas.psmConfig)`);
+  const mint = entry.mints?.okuM;
+  if (!programId || !configPda) {
+    fail(`incomplete SVM entry for "${network}" (need programs.litePsm + pdas.psmConfig)`);
+  }
 
   const connection = new Connection(process.env.SVM_RPC_URL ?? entry.rpcUrl, 'confirmed');
   // Read-only: a throwaway wallet is sufficient, nothing is signed.
@@ -130,17 +153,49 @@ async function readSvm(network: string) {
   const nowTs = BigInt(Math.floor(Date.now() / 1000));
   const lockUntil = BigInt(cfg.syncLockUntilTs.toString());
 
+  // THE MULTIPLIER'S SOURCE OF TRUTH IS THE MINT EXTENSION, not the config
+  // account. Reading it from the mint is the same read the token program itself
+  // performs when it computes a UI amount, so a parity check against it is a
+  // check against what wallets actually display.
+  const raw = await readMintMultiplier(connection, mint ?? cfg.okuMMint.toString());
+
   return {
     programId,
     configPda,
-    epoch: BigInt(cfg.syncEpoch.toString()),
-    lockedUntil: lockUntil,
+    mint: mint ?? cfg.okuMMint.toString(),
+    /** Raw 1e9-scaled multiplier. */
+    raw,
     // Exclusive upper bound, matching `sync_window_engaged`.
     locked: nowTs < lockUntil,
+    lockedUntil: lockUntil,
     duration: BigInt(cfg.syncWindowSecs.toString()),
-    toutBps: BigInt(cfg.toutBps.toString()),
     tinBps: BigInt(cfg.tinBps.toString()),
+    toutBps: BigInt(cfg.toutBps.toString()),
+    maxStepBps: BigInt(cfg.maxStepBps.toString()),
   };
+}
+
+/**
+ * Read the `ScaledUiAmountConfig` multiplier off a Token-2022 mint and return
+ * it as an integer in SVM units (1e9 scale).
+ *
+ * The extension stores the multiplier as an f64. Converting through
+ * `Math.round(f * 1e9)` is exact for every value the program can write: the
+ * program derives the f64 from a `u64 / 1e9`, and doubles represent every such
+ * quotient below 2^53 without loss.
+ */
+async function readMintMultiplier(connection: Connection, mint: string): Promise<bigint> {
+  const { getMint, getScaledUiAmountConfig, TOKEN_2022_PROGRAM_ID } = await import(
+    '@solana/spl-token'
+  );
+  const info = await getMint(connection, new PublicKey(mint), 'confirmed', TOKEN_2022_PROGRAM_ID);
+  const cfg = getScaledUiAmountConfig(info);
+  if (!cfg) fail(`mint ${mint} has no ScaledUiAmountConfig extension`);
+  return BigInt(Math.round(Number(cfg.multiplier) * 1e9));
+}
+
+function fmt(raw: bigint, decimals: number): string {
+  return ethers.formatUnits(raw, decimals);
 }
 
 async function main() {
@@ -148,75 +203,97 @@ async function main() {
     fail('required: --evm=<chain>  (e.g. --evm=baseSepolia)');
   }
 
-  console.log(`\nCross-chain sync parity:  EVM=${EVM_CHAIN}  SVM=${SVM_NETWORK}\n`);
+  console.log(`\nCross-chain multiplier parity:  EVM=${EVM_CHAIN}  SVM=${SVM_NETWORK}\n`);
 
   const [evm, svm] = await Promise.all([readEvm(EVM_CHAIN), readSvm(SVM_NETWORK)]);
 
-  const row = (k: string, a: unknown, b: unknown) =>
-    console.log(`  ${k.padEnd(20)} ${String(a).padEnd(24)} ${String(b)}`);
+  // Compare in SVM units: floor the EVM value into 1e9 scale. Exact parity is
+  // `evm.raw == svm.raw * 1e9`, so any nonzero remainder is itself divergence
+  // and is surfaced rather than silently truncated.
+  const evmInSvmUnits = evm.raw / PRECISION_RATIO;
+  const evmRemainder = evm.raw % PRECISION_RATIO;
+  const diff = evmInSvmUnits > svm.raw ? evmInSvmUnits - svm.raw : svm.raw - evmInSvmUnits;
 
-  console.log(`  ${'FIELD'.padEnd(20)} ${'EVM'.padEnd(24)} SVM`);
-  console.log(`  ${'-'.repeat(20)} ${'-'.repeat(24)} ${'-'.repeat(24)}`);
-  row('syncEpoch', evm.epoch, svm.epoch);
+  const row = (k: string, a: unknown, b: unknown) =>
+    console.log(`  ${k.padEnd(22)} ${String(a).padEnd(26)} ${String(b)}`);
+
+  console.log(`  ${'FIELD'.padEnd(22)} ${'EVM'.padEnd(26)} SVM`);
+  console.log(`  ${'-'.repeat(22)} ${'-'.repeat(26)} ${'-'.repeat(26)}`);
+  row('multiplier', fmt(evm.raw, 18), fmt(svm.raw, 9));
+  row('multiplier (raw)', evm.raw, svm.raw);
   row('windowOpen', evm.locked, svm.locked);
   row('lockedUntil', evm.lockedUntil, svm.lockedUntil);
   row('windowDuration', `${evm.duration}s`, `${svm.duration}s`);
-  row('tout (bps)', 'n/a (continuous)', svm.toutBps);
+  row('stepHighWaterMark', `${evm.stepHwm} bps`, `${svm.maxStepBps} bps`);
+  row('tin+tout', 'see module', `${svm.tinBps + svm.toutBps} bps`);
+  console.log('');
+  console.log(`  difference: ${diff} SVM unit(s)   (tolerance ${TOLERANCE})`);
   console.log('');
 
   const problems: string[] = [];
+  let fatal = false;
 
-  if (evm.epoch !== svm.epoch) {
+  if (diff > TOLERANCE) {
+    fatal = true;
     problems.push(
-      `EPOCH MISMATCH: EVM=${evm.epoch} SVM=${svm.epoch}. A tick is in flight or one ` +
-        `chain's write/close never landed. Until these agree the two chains may be ` +
-        `pricing a raw token differently.`
+      `MULTIPLIER MISMATCH: EVM=${fmt(evm.raw, 18)} SVM=${fmt(svm.raw, 9)} ` +
+        `(difference ${diff} SVM units > tolerance ${TOLERANCE}). The two chains are ` +
+        `pricing a raw token differently. Stop cross-chain flow and reconcile against ` +
+        `the intended mark before continuing.`
+    );
+  }
+
+  if (evmRemainder !== 0n) {
+    problems.push(
+      `EVM multiplier is not representable at SVM precision (remainder ${evmRemainder} ` +
+        `of 1e9). A mark should be chosen so both chains can carry it exactly; ` +
+        `otherwise the chains permanently differ by sub-1e-9 dust.`
     );
   }
 
   if (evm.locked || svm.locked) {
     problems.push(
-      `WINDOW OPEN (EVM=${evm.locked}, SVM=${svm.locked}). Mint/redeem are gated on ` +
-        `at least one chain. Expected mid-tick; investigate if it persists past ` +
-        `the configured duration.`
+      `WINDOW OPEN (EVM=${evm.locked}, SVM=${svm.locked}). Multiplier-priced ` +
+        `operations are gated on at least one chain. Expected immediately after a ` +
+        `mark; investigate if it persists past the configured duration.`
     );
   }
 
   if (evm.duration !== svm.duration) {
     problems.push(
-      `ASYMMETRIC WINDOW DURATION: EVM=${evm.duration}s SVM=${svm.duration}s. Ticks ` +
+      `ASYMMETRIC WINDOW DURATION: EVM=${evm.duration}s SVM=${svm.duration}s. Marks ` +
         `will gate for different lengths on each chain; align them.`
     );
   }
 
   if (svm.duration === 0n) {
     problems.push(
-      'SVM sync window is DISABLED (sync_window_secs = 0) — cross-chain ticks are ' +
-        'not gated on that chain.'
+      'SVM sync window is DISABLED (sync_window_secs = 0) — marks are not gated on ' +
+        'that chain.'
     );
   }
   if (evm.duration === 0n) {
     problems.push(
-      'EVM sync window is DISABLED (syncWindowDuration = 0) — cross-chain ticks are ' +
-        'not gated on that chain.'
+      'EVM sync window is DISABLED (syncWindowDuration = 0) — marks are not gated on ' +
+        'that chain.'
     );
   }
 
-  // Informational only: these are never equal by construction.
-  console.log(`  EVM uiMultiplier: ${evm.multiplier.toFixed(9)}`);
-  console.log(
-    '  (SVM multiplier lives on the Token-2022 mint at 1e9 precision and steps\n' +
-      '   discretely, so exact equality is not expected or asserted.)\n'
-  );
+  if (evm.stepHwm !== svm.maxStepBps) {
+    problems.push(
+      `STEP HIGH-WATER MARK DIVERGENCE: EVM=${evm.stepHwm} bps SVM=${svm.maxStepBps} bps. ` +
+        `The two chains have taken differently-sized largest steps, which means their ` +
+        `fee floors differ. Usually a sign that marks were not applied symmetrically.`
+    );
+  }
 
   if (problems.length === 0) {
-    console.log('\x1b[32mPARITY OK\x1b[0m — epochs agree, no window open.\n');
+    console.log('\x1b[32mPARITY OK\x1b[0m — both chains carry the same multiplier.\n');
     process.exit(0);
   }
 
   for (const p of problems) console.log(`\x1b[33m!\x1b[0m ${p}\n`);
 
-  const fatal = evm.epoch !== svm.epoch;
   if (STRICT || fatal) {
     console.error('\x1b[31mPARITY FAILED\x1b[0m\n');
     process.exit(1);

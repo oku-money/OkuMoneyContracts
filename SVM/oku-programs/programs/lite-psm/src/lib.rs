@@ -190,46 +190,34 @@ pub mod lite_psm {
         instructions::yield_ops::distribute_yield(ctx, yield_amount)
     }
 
-    // ===== Cross-chain sync window =====
+    // ===== Post-step sync window =====
     //
-    // Step 1 and step 3 of the cross-chain multiplier tick protocol:
+    // There is deliberately NO open/close protocol. Every multiplier write
+    // (`set_multiplier` / `distribute_yield`) arms the lock for
+    // `sync_window_secs`, during which `mint_oku_m` and `redeem_oku_m` are
+    // rejected so nobody transacts against a price only some chains have
+    // updated. The lock expires on its own; a dead orchestrator cannot
+    // brick redemption.
     //
-    //   begin_sync_window(N) on every chain
-    //     -> set_multiplier / distribute_yield on every chain
-    //   end_sync_window(N) on every chain
-    //
-    // Between the open and the close, `mint_oku_m` and `redeem_oku_m` are
-    // rejected, so no one can transact against a price that only some
-    // chains have updated. `sync_epoch` is orchestrator-assigned and
-    // identical across chains, making `epoch_evm == epoch_svm` an
-    // externally verifiable "no tick in flight" check.
-
-    /// Open a cross-chain multiplier sync window (REBASER only).
-    /// `epoch` must be exactly the stored epoch + 1.
-    pub fn begin_sync_window(ctx: Context<SyncWindow>, epoch: u64) -> Result<()> {
-        instructions::yield_ops::begin_sync_window(ctx, epoch)
-    }
-
-    /// Close the current sync window early (REBASER only), once the tick
-    /// is confirmed landed on every chain. `epoch` must equal the stored
-    /// epoch so a stale call cannot close a window it never observed.
-    pub fn end_sync_window(ctx: Context<SyncWindow>, epoch: u64) -> Result<()> {
-        instructions::yield_ops::end_sync_window(ctx, epoch)
-    }
+    // Cross-chain completion is verified off-chain by comparing the
+    // multiplier VALUES on each chain (`scripts/admin/check-sync-parity.ts`).
+    // The epoch counter this replaced could only ever prove that both
+    // chains wrote, never that they wrote the same number.
 
     // ===== Protocol parameters (cold multisig) =====
 
     /// Set the sync-window length in seconds (CAP_MANAGER only).
-    /// `0` = inert, which is the initialization default. Bounded by
+    /// `0` = inert. Ships ON at `DEFAULT_SYNC_WINDOW_SECS`; bounded by
     /// `MAX_SYNC_WINDOW_SECS`.
     pub fn set_sync_window_secs(ctx: Context<CapManagerParams>, new_secs: i64) -> Result<()> {
         instructions::psm_admin::set_sync_window_secs(ctx, new_secs)
     }
 
     /// Set the `tin` / `tout` fee schedule in basis points (CAP_MANAGER
-    /// only). `tout` is the local step-arbitrage control and must exceed
-    /// the yield delivered by a single multiplier step. Both bounded by
-    /// `MAX_FEE_BPS`; both default to 0.
+    /// only). The COMBINED `tin + tout` is the local step-arbitrage
+    /// control and must cover every step taken so far
+    /// (`max_step_bps`). Both bounded by `MAX_FEE_BPS`; both default to 0,
+    /// which means no step is possible until a schedule is set.
     pub fn set_fees(ctx: Context<CapManagerParams>, tin_bps: u64, tout_bps: u64) -> Result<()> {
         instructions::psm_admin::set_fees(ctx, tin_bps, tout_bps)
     }

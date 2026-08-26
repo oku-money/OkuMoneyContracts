@@ -1,5 +1,5 @@
 /**
- * Cross-chain multiplier sync window + PSM `tin`/`tout` fees.
+ * Post-step sync window + PSM `tin`/`tout` fees.
  *
  * These two mechanisms address two structurally different arbitrage
  * surfaces around a multiplier update, and the tests are organised to keep
@@ -8,19 +8,35 @@
  *   - **Sync window** — cross-chain. Profit requires *transacting while the
  *     chains disagree*, during the interval between the EVM write and the
  *     SVM write. Blocking the price-sensitive instructions for that
- *     interval removes the opportunity entirely.
+ *     interval removes the opportunity entirely. Armed automatically by
+ *     every multiplier write; released by nothing but the clock.
  *
- *   - **`tout` fee** — local. Profit requires *holding raw across a
+ *   - **`tin + tout` fees** — local. Profit requires *holding raw across a
  *     discrete step*, which needs no transaction during any window at all.
- *     The window is powerless here; only a fee exceeding the step's yield
- *     makes the round trip lossy. See
+ *     The window is powerless here; only fees covering the step's yield
+ *     make the round trip lossy. See
  *     `describe("local step arbitrage")` below, which demonstrates both
  *     the attack and the fix.
  *
- * Both ship inert (`sync_window_secs = 0`, `tin = tout = 0`) and are
- * enabled by configuration, so the first describe block pins that
- * property — a regression there would silently change behaviour for every
- * existing deployment.
+ * THERE IS NO OPEN/CLOSE PROTOCOL. An earlier design had
+ * `begin_sync_window(epoch)` / `end_sync_window(epoch)` with an
+ * orchestrator-assigned epoch, a write-landed-in-epoch attestation, and an
+ * anti-grief gap between windows. All of it is gone, and the reduction is
+ * worth recording because the machinery looked load-bearing:
+ *
+ *   - The epoch existed to make cross-chain tick completion verifiable, and
+ *     it never did: equal epochs proved both chains WROTE, never that they
+ *     wrote the same VALUE. Parity is now checked off-chain against the
+ *     multiplier values directly, which catches wrong-value writes too.
+ *   - Every other piece existed to contain the previous piece. An explicit
+ *     open could be left unused, so closing needed a write attestation;
+ *     opens could be chained, so they needed a gap. Arming on the write
+ *     makes the fence and the tick the same transaction, so none of those
+ *     failure modes exist.
+ *
+ * The window ships ON (`DEFAULT_SYNC_WINDOW_SECS`); fees ship at zero,
+ * which is FAIL-CLOSED rather than a hole — no step is possible until a fee
+ * schedule exists. The first describe block pins both.
  *
  * Clock discipline: the sync window is wall-clock (`warpBy`) while the
  * pre-existing yield fence is slot-based (`warpSlots`). This suite uses
@@ -72,9 +88,8 @@ const PRECISION = new BN(1_000_000_000); // 1e9, matches oku-shared::PRECISION
 const BASIS_POINTS = new BN(10_000);
 const MAX_FEE_BPS = 100; // oku-shared::MAX_FEE_BPS
 const MAX_SYNC_WINDOW_SECS = 900; // oku-shared::MAX_SYNC_WINDOW_SECS
-const MIN_SYNC_WINDOW_GAP_SECS = 21_600; // oku-shared::MIN_SYNC_WINDOW_GAP_SECS
 
-describe("cross-chain sync window + PSM fees", () => {
+describe("post-step sync window + PSM fees", () => {
   let h: BankrunHarness;
   let provider: anchor.AnchorProvider;
   let psm: Program<LitePsm>;
@@ -141,20 +156,6 @@ describe("cross-chain sync window + PSM fees", () => {
     psm.methods
       .setFees(new BN(tinBps), new BN(toutBps))
       .accountsPartial({ capManager: signer.publicKey, config: psmConfigPda })
-      .signers([signer])
-      .rpc();
-
-  const beginWindow = (epoch: number, signer: Keypair = orchestrator) =>
-    psm.methods
-      .beginSyncWindow(new BN(epoch))
-      .accountsPartial({ rebaser: signer.publicKey, config: psmConfigPda })
-      .signers([signer])
-      .rpc();
-
-  const endWindow = (epoch: number, signer: Keypair = orchestrator) =>
-    psm.methods
-      .endSyncWindow(new BN(epoch))
-      .accountsPartial({ rebaser: signer.publicKey, config: psmConfigPda })
       .signers([signer])
       .rpc();
 
@@ -234,35 +235,21 @@ describe("cross-chain sync window + PSM fees", () => {
     return new BN(m.supply.toString());
   };
 
-  /**
-   * Advance past the inter-window gap so a fresh window can be opened.
-   *
-   * Computed from the stored anchor rather than warping a fixed amount: a
-   * preceding test may have left `sync_lock_until_ts` in the future, in which
-   * case a blind warp lands short and `begin_sync_window` reverts.
-   */
-  const clearGap = async () => {
-    const c: any = await cfg();
-    const lockUntil = Number(c.syncLockUntilTs.toString());
-    const clock = await h.context.banksClient.getClock();
-    const now = Number(clock.unixTimestamp);
-    const earliest = lockUntil + MIN_SYNC_WINDOW_GAP_SECS;
-    if (now <= earliest) await warpBy(h, earliest - now + 1);
-  };
-
   /** Warp past any armed window. */
   const clearWindow = () => clearSyncWindow(h, psm as any, psmConfigPda);
 
   /**
-   * A covered multiplier write inside the current epoch.
+   * A covered multiplier write — the only way to arm the window.
    *
-   * `end_sync_window` now requires one, so any test that opens a window must
-   * also write before it can close.
+   * Sizes the step to half the configured combined fee so it is always
+   * covered, and never zero (a no-op write is rejected by the strict-increase
+   * guard).
    */
-  const writeInEpoch = async () => {
+  const markMultiplier = async () => {
+    const c: any = await cfg();
+    const coverage = c.tinBps.toNumber() + c.toutBps.toNumber();
     const m = await readMultiplierFromMint(h, okuMMint);
-    const tout = (await cfg()).toutBps.toNumber();
-    const step = m.muln(Math.max(1, Math.floor(tout / 2))).divn(10_000);
+    const step = m.muln(Math.max(1, Math.floor(coverage / 2))).divn(10_000);
     await setMultiplier(m.add(step.gtn(0) ? step : new BN(1)));
   };
 
@@ -375,9 +362,8 @@ describe("cross-chain sync window + PSM fees", () => {
       // The window ships ON. Protection that depends on someone remembering to
       // switch it on is not protection.
       expect(c.syncWindowSecs.toNumber()).to.equal(DEFAULT_SYNC_WINDOW_SECS);
+      // Nothing is locked until the first multiplier write arms it.
       expect(c.syncLockUntilTs.toNumber()).to.equal(0);
-      expect(c.syncEpoch.toNumber()).to.equal(0);
-      expect(c.lastWriteEpoch.toNumber()).to.equal(0);
 
       // Fees ship at zero — which is now fail-closed, not a hole. See below.
       expect(c.tinBps.toNumber()).to.equal(0);
@@ -385,13 +371,13 @@ describe("cross-chain sync window + PSM fees", () => {
       expect(c.maxStepBps.toNumber()).to.equal(0);
     });
 
-    it("refuses to rebase at all while tout is zero", async () => {
+    it("refuses to rebase at all while tin+tout is zero", async () => {
       // THE fail-closed property, and the reason shipping fees at 0 is safe.
       //
-      // With no redemption fee, any multiplier increase creates a step nothing
-      // covers, so the program refuses it outright. The operator is unable to
-      // create the arbitrage condition rather than merely trusted not to, and
-      // configuring a fee sized to the intended cadence becomes a precondition
+      // With no fees, any multiplier increase creates a step nothing covers,
+      // so the program refuses it outright. The operator is unable to create
+      // the arbitrage condition rather than merely trusted not to, and
+      // configuring fees sized to the intended cadence becomes a precondition
       // of rebasing rather than a step someone might forget.
       await setFees(0, 0);
       const m = await readMultiplierFromMint(h, okuMMint);
@@ -429,15 +415,39 @@ describe("cross-chain sync window + PSM fees", () => {
       expect(mark).to.be.at.most(10, "mark must never exceed the fee that permitted it");
     });
 
-    it("caps a single step at MAX_FEE_BPS however high the fee is set", async () => {
-      // A derived bound worth stating: tout <= MAX_FEE_BPS, and step <= tout,
-      // so the multiplier can never move more than 1% in one write. That in
-      // turn implies a MINIMUM rebase cadence — a long outage cannot be caught
-      // up in a single step.
-      await setFees(0, MAX_FEE_BPS);
+    it("caps a single step at the combined fee however it is split", async () => {
+      // A derived bound worth stating: each leg is capped at MAX_FEE_BPS and
+      // step <= tin + tout, so the multiplier can never move more than 2% in
+      // one write. That in turn implies a MINIMUM rebase cadence — a long
+      // outage cannot be caught up in a single step.
+      await setFees(MAX_FEE_BPS, MAX_FEE_BPS);
       const m = await readMultiplierFromMint(h, okuMMint);
-      const overCeiling = m.add(m.muln(MAX_FEE_BPS + 1).divn(10_000));
+      const overCeiling = m.add(m.muln(2 * MAX_FEE_BPS + 1).divn(10_000));
       await expectBankrunError(() => setMultiplier(overCeiling), "StepExceedsFeeCoverage");
+    });
+
+    it("counts tin toward coverage, not tout alone", async () => {
+      // THE reason the rule binds the SUM. A round trip pays tin going in and
+      // tout coming out, so coverage carried entirely by tin closes the
+      // arbitrage just as well. A tout-only rule would refuse this step while
+      // permitting an identically-profitable one elsewhere — wrong in both
+      // directions.
+      await resetMark();
+      await setFees(20, 0);
+      const m = await readMultiplierFromMint(h, okuMMint);
+      await setMultiplier(m.add(m.muln(20).divn(10_000)));
+      expect((await cfg()).maxStepBps.toNumber()).to.be.at.least(20);
+    });
+
+    it("refuses a step that exceeds tin + tout combined", async () => {
+      await resetMark();
+      await setFees(5, 5);
+      const m = await readMultiplierFromMint(h, okuMMint);
+      await expectBankrunError(
+        () => setMultiplier(m.add(m.muln(15).divn(10_000))),
+        "StepExceedsFeeCoverage"
+      );
+      await setMultiplier(m.add(m.muln(10).divn(10_000)));
     });
 
     it("applies the same coverage rule to distribute_yield", async () => {
@@ -462,7 +472,7 @@ describe("cross-chain sync window + PSM fees", () => {
   // =========================================================================
 
   describe("fee high-water mark", () => {
-    it("refuses to lower tout below a step already taken", async () => {
+    it("refuses to lower tin + tout below a step already taken", async () => {
       await resetMark();
       await setFees(0, MAX_FEE_BPS);
 
@@ -472,7 +482,7 @@ describe("cross-chain sync window + PSM fees", () => {
       const mark = (await cfg()).maxStepBps.toNumber();
       expect(mark).to.be.at.least(50);
 
-      // THE MANIPULATION THIS BLOCKS: raise tout, take a big step, drop tout —
+      // THE MANIPULATION THIS BLOCKS: raise fees, take a big step, drop fees —
       // handing a cheap exit to everyone who held across the step. The
       // attacker's edge is locked in when the step lands and never decays,
       // which is why a time-based cooldown would not close this and a
@@ -480,14 +490,18 @@ describe("cross-chain sync window + PSM fees", () => {
       await expectBankrunError(() => setFees(0, mark - 1), "FeeBelowStepHighWaterMark");
       await expectBankrunError(() => setFees(0, 0), "FeeBelowStepHighWaterMark");
 
-      // At or above the mark is fine.
+      // At or above the mark is fine — and the SPLIT is free, because only the
+      // sum is load-bearing. A tout-only floor would wrongly refuse this.
       await setFees(0, mark);
+      await setFees(mark, 0);
+      const half = Math.floor(mark / 2);
+      await setFees(half, mark - half);
     });
 
     it("only pins against steps actually taken", async () => {
-      // Not "the fee can never fall". A protocol that only ever took 1 bps
-      // steps can still lower tout to 1 bps — the floor tracks reality, not
-      // the historical maximum fee.
+      // Not "the fees can never fall". A protocol that only ever took 1 bps
+      // steps can still lower the combined fee to 1 bps — the floor tracks
+      // reality, not the historical maximum fee.
       await resetMark();
       await setFees(0, MAX_FEE_BPS);
       const m = await readMultiplierFromMint(h, okuMMint);
@@ -553,9 +567,31 @@ describe("cross-chain sync window + PSM fees", () => {
       await expectBankrunError(() => setWindowSecs(60, orchestrator), "Unauthorized");
     });
 
-    it("restricts window open/close to rebaser", async () => {
-      await expectBankrunError(() => beginWindow(1, coldMultisig), "Unauthorized");
-      await expectBankrunError(() => endWindow(0, warmMultisig), "Unauthorized");
+    it("restricts the multiplier write — the only way to arm a window — to rebaser", async () => {
+      // With the open/close instructions gone, the window has no dedicated
+      // entrypoint and therefore no dedicated key. The only actor who can arm
+      // it is the one who can mark the multiplier, which is exactly the
+      // separation the old two-instruction design was reaching for.
+      await resetMark();
+      await setFees(0, MAX_FEE_BPS);
+      const m = await readMultiplierFromMint(h, okuMMint);
+      const target = m.add(m.muln(10).divn(10_000));
+      for (const wrong of [coldMultisig, warmMultisig]) {
+        await expectBankrunError(
+          () =>
+            psm.methods
+              .setMultiplier(target)
+              .accountsPartial({
+                rebaser: wrong.publicKey,
+                config: psmConfigPda,
+                okuMMint,
+                token2022Program: TOKEN_2022_PROGRAM_ID,
+              })
+              .signers([wrong])
+              .rpc(),
+          "Unauthorized"
+        );
+      }
     });
   });
 
@@ -598,17 +634,22 @@ describe("cross-chain sync window + PSM fees", () => {
       await setWindowSecs(0);
     });
 
-    it("blocks mint and redeem while open, and both resume after early close", async () => {
-      await clearGap();
-      const epoch = (await cfg()).syncEpoch.toNumber() + 1;
-      await beginWindow(epoch);
+    it("arms on a multiplier write and blocks mint and redeem until it expires", async () => {
+      await clearWindow();
+      await markMultiplier();
+
+      const c: any = await cfg();
+      const clock = await h.context.banksClient.getClock();
+      expect(c.syncLockUntilTs.toNumber()).to.equal(
+        Number(clock.unixTimestamp) + 120,
+        "armed for exactly the configured duration, from now"
+      );
 
       await expectBankrunError(() => mint(new BN(10_000_000)), "SyncWindowActive");
       await expectBankrunError(() => redeem(new BN(1_000_000)), "SyncWindowActive");
 
-      await writeInEpoch();
-      await endWindow(epoch);
-
+      // No close instruction exists — only the clock releases it.
+      await warpBy(h, 121);
       await mint(new BN(10_000_000));
       await redeem(new BN(1_000_000));
     });
@@ -618,24 +659,43 @@ describe("cross-chain sync window + PSM fees", () => {
       // cross-chain PAIR does: burning 100 raw at M=1.04 destroys $104 of claim
       // while minting 100 raw at M=1.05 creates $105. "Raw-conserving" is a
       // per-instruction property that does not survive the round trip.
-      await clearGap();
-      const epoch = (await cfg()).syncEpoch.toNumber() + 1;
-      await beginWindow(epoch);
+      await clearWindow();
+      await markMultiplier();
 
       await expectBankrunError(() => directMint(new BN(1_000)), "SyncWindowActive");
       await expectBankrunError(() => directBurn(new BN(1_000)), "SyncWindowActive");
 
-      await writeInEpoch();
-      await endWindow(epoch);
+      await warpBy(h, 121);
+      await directMint(new BN(1_000));
     });
 
-    it("auto-expires without an explicit close (liveness backstop)", async () => {
+    it("re-arms from now on a second write, never stacking past the ceiling", async () => {
+      // ASSIGN, NEVER EXTEND. This is what makes the MAX_SYNC_WINDOW_SECS bound
+      // hold by construction: no sequence of writes can push a single window
+      // past the ceiling, so a compromised rebaser looping writes still cannot
+      // hold a longer lock than one window — and cannot write at all without
+      // taking a real, fee-covered, bounded step.
+      await clearWindow();
+      await markMultiplier();
+      const first = (await cfg()).syncLockUntilTs.toNumber();
+
+      await warpBy(h, 10);
+      await markMultiplier();
+      const second = (await cfg()).syncLockUntilTs.toNumber();
+
+      expect(second - first).to.equal(10, "re-armed from now, not appended to");
+
+      const clock = await h.context.banksClient.getClock();
+      expect(second - Number(clock.unixTimestamp)).to.be.at.most(MAX_SYNC_WINDOW_SECS);
+    });
+
+    it("auto-expires without any transaction (liveness backstop)", async () => {
       // If the orchestrator dies mid-tick, redemption must resume unaided —
       // otherwise the mechanism is a bricking vector worse than the arbitrage
-      // it prevents.
-      await clearGap();
-      const epoch = (await cfg()).syncEpoch.toNumber() + 1;
-      await beginWindow(epoch);
+      // it prevents. Under the old design this was one of two release paths;
+      // now it is the only one, which makes the property structural.
+      await clearWindow();
+      await markMultiplier();
       await expectBankrunError(() => redeem(new BN(1_000_000)), "SyncWindowActive");
 
       await warpBy(h, 121);
@@ -643,9 +703,8 @@ describe("cross-chain sync window + PSM fees", () => {
     });
 
     it("leaves multiplier-independent instructions open while engaged", async () => {
-      await clearGap();
-      const epoch = (await cfg()).syncEpoch.toNumber() + 1;
-      await beginWindow(epoch);
+      await clearWindow();
+      await markMultiplier();
 
       // Buffer movement is at par — a stale multiplier cannot misprice it.
       await psm.methods
@@ -662,130 +721,48 @@ describe("cross-chain sync window + PSM fees", () => {
         .rpc();
 
       // And the multiplier itself stays writable: the window must never
-      // censor the rebaser.
-      await writeInEpoch();
-      await endWindow(epoch);
+      // censor the rebaser. Under the old design this needed an argument
+      // (the clamp-not-reject rule); now it is simply true, because the
+      // write path never consults the window at all.
+      await markMultiplier();
+      await clearWindow();
     });
-  });
 
-  // =========================================================================
-  // Epoch discipline
-  // =========================================================================
-
-  describe("epoch discipline", () => {
-    before(async () => {
-      await resetMark();
-      await setFees(0, MAX_FEE_BPS);
-      await setWindowSecs(60);
-    });
-    after(async () => {
+    it("is completely inert at a zero duration", async () => {
+      await clearWindow();
       await setWindowSecs(0);
-    });
+      const before = (await cfg()).syncLockUntilTs.toNumber();
 
-    it("requires begin to advance the epoch by exactly one", async () => {
-      await clearGap();
-      const current = (await cfg()).syncEpoch.toNumber();
+      await markMultiplier();
 
-      await expectBankrunError(() => beginWindow(current), "EpochMismatch");
-      await expectBankrunError(() => beginWindow(current + 2), "EpochMismatch");
-
-      await beginWindow(current + 1);
-      expect((await cfg()).syncEpoch.toNumber()).to.equal(current + 1);
-      await writeInEpoch();
-      await endWindow(current + 1);
-    });
-
-    it("requires close to match the open, so a stale release cannot fire", async () => {
-      await clearGap();
-      const epoch = (await cfg()).syncEpoch.toNumber() + 1;
-      await beginWindow(epoch);
-      await writeInEpoch();
-
-      await expectBankrunError(() => endWindow(epoch - 1), "EpochMismatch");
-      await expectBankrunError(() => redeem(new BN(1_000_000)), "SyncWindowActive");
-
-      await endWindow(epoch);
-      await redeem(new BN(1_000_000));
-    });
-
-    it("refuses to close a window in which no multiplier write landed", async () => {
-      // Without this, "open, forget to write, close" advances sync_epoch
-      // against an untouched multiplier and the cross-chain parity check —
-      // which compares epochs — reports a false OK. This is what makes
-      // sync_epoch mean "this chain actually wrote for tick N".
-      await clearGap();
-      const epoch = (await cfg()).syncEpoch.toNumber() + 1;
-      await beginWindow(epoch);
-
-      await expectBankrunError(() => endWindow(epoch), "NoWriteInEpoch");
-
-      // The write makes the close legal.
-      await writeInEpoch();
-      await endWindow(epoch);
-      expect((await cfg()).lastWriteEpoch.toNumber()).to.equal(epoch);
-    });
-  });
-
-  // =========================================================================
-  // Anti-griefing gap
-  // =========================================================================
-
-  describe("anti-griefing gap", () => {
-    before(async () => {
-      await resetMark();
-      await setFees(0, MAX_FEE_BPS);
-      await setWindowSecs(60);
-    });
-    after(async () => {
-      await setWindowSecs(0);
-    });
-
-    it("refuses a second explicit window inside the gap", async () => {
-      await clearGap();
-      const epoch = (await cfg()).syncEpoch.toNumber() + 1;
-      await beginWindow(epoch);
-      await writeInEpoch();
-      await endWindow(epoch);
-
-      await expectBankrunError(() => beginWindow(epoch + 1), "SyncWindowGapNotElapsed");
-
-      await clearGap();
-      await beginWindow(epoch + 1);
-      await writeInEpoch();
-      await endWindow(epoch + 1);
-    });
-
-    it("clamps rather than reverts when a multiplier write lands inside the gap", async () => {
-      // THE anti-griefing property. A rebaser looping set_multiplier must not
-      // be able to hold a permanent lock — but the write must also never be
-      // REJECTED on window state, or anyone able to open a window could censor
-      // the rebaser.
-      await clearGap();
-      const epoch = (await cfg()).syncEpoch.toNumber() + 1;
-      await beginWindow(epoch);
-      await writeInEpoch();
-      await endWindow(epoch);
-
-      const anchorTs = (await cfg()).syncLockUntilTs.toNumber();
-
-      for (let i = 0; i < 3; i++) {
-        await warpBy(h, 2);
-        await writeInEpoch(); // must SUCCEED
-      }
-
+      // Asserts the field is UNTOUCHED, not that it is zero: a window armed
+      // earlier in the suite leaves a stale (expired) timestamp behind, and the
+      // property that matters is that an inert configuration writes nothing —
+      // no anchor update and no event for a lock that blocks nothing.
       expect((await cfg()).syncLockUntilTs.toNumber()).to.equal(
-        anchorTs,
-        "gap anchor moved: a window was re-armed inside the gap"
+        before,
+        "an inert window must not touch the anchor at all"
       );
       await redeem(new BN(1_000_000));
+      await setWindowSecs(120);
     });
 
-    it("auto-arms fail-closed once the gap has elapsed", async () => {
-      await clearGap();
-      await writeInEpoch();
-      await expectBankrunError(() => redeem(new BN(1_000_000)), "SyncWindowActive");
-      await warpBy(h, 61);
-      await redeem(new BN(1_000_000));
+    it("also arms on distribute_yield", async () => {
+      // The other route to the multiplier. If it did not arm, the fence would
+      // have a hole exactly as wide as the instruction.
+      await setWindowSecs(120);
+      await clearWindow();
+      const supply = await totalSupply();
+      const m = await readMultiplierFromMint(h, okuMMint);
+      // A step comfortably inside the 100 bps fee coverage.
+      const bump = m.muln(10).divn(10_000);
+      const amount = bump.mul(supply).div(PRECISION);
+      if (amount.gtn(0)) {
+        await distributeYield(amount);
+        expect((await cfg()).syncLockUntilTs.toNumber()).to.be.greaterThan(0);
+        await expectBankrunError(() => redeem(new BN(1_000_000)), "SyncWindowActive");
+        await warpBy(h, 121);
+      }
     });
   });
 
@@ -878,13 +855,13 @@ describe("cross-chain sync window + PSM fees", () => {
      * This is the attack the sync window CANNOT touch — the attacker never
      * transacts while a window is open, so no window length deters it.
      *
-     * The defence is no longer "set a big enough tout and hope". Two on-chain
+     * The defence is no longer "set a big enough fee and hope". Two on-chain
      * halves make it impossible:
      *
-     *   1. a step larger than `tout` covers is refused outright, so the
+     *   1. a step larger than `tin + tout` covers is refused outright, so the
      *      arbitrage condition cannot be created; and
-     *   2. `tout` cannot later fall below a step already taken, so coverage
-     *      cannot be removed after the fact.
+     *   2. `tin + tout` cannot later fall below a step already taken, so
+     *      coverage cannot be removed after the fact.
      *
      * The first test below is therefore the important one: the historical
      * "profitable with no fee" case is now UNREACHABLE.
@@ -897,7 +874,7 @@ describe("cross-chain sync window + PSM fees", () => {
 
       const m = await readMultiplierFromMint(h, okuMMint);
       // Every increase, from a 1-unit nudge to a full 1%, is refused while no
-      // fee is configured. There is no zero-fee step to arbitrage.
+      // fees are configured. There is no zero-fee step to arbitrage.
       await expectBankrunError(() => setMultiplier(m.addn(1)), "StepExceedsFeeCoverage");
       await expectBankrunError(
         () => setMultiplier(m.add(m.muln(100).divn(10_000))),
@@ -930,6 +907,31 @@ describe("cross-chain sync window + PSM fees", () => {
       );
     });
 
+    it("is unprofitable when coverage is carried entirely by tin", async () => {
+      // The case a `tout`-only rule would leak. The attacker pays the whole
+      // coverage on the way IN, so the round trip is closed just as tightly —
+      // and the sum rule is what permits the step in the first place.
+      await resetMark();
+      await setFees(MAX_FEE_BPS, 0);
+
+      const rawBefore = await okuMBal(userOkuMAta);
+      await mint(DEPOSIT);
+      const acquired = new BN((await okuMBal(userOkuMAta)) - rawBefore);
+
+      const m = await readMultiplierFromMint(h, okuMMint);
+      await setMultiplier(m.add(m.muln(MAX_FEE_BPS).divn(10_000)));
+      await clearWindow();
+
+      const usdcBefore = await usdcBal(userUsdcAta);
+      await redeem(acquired);
+      const proceeds = (await usdcBal(userUsdcAta)) - usdcBefore;
+
+      expect(proceeds).to.be.at.most(
+        DEPOSIT.toNumber(),
+        "tin-carried coverage must close the round trip too"
+      );
+    });
+
     it("stays unprofitable after the fee is lowered as far as it can go", async () => {
       // The manipulation the high-water mark blocks, end to end: take the
       // biggest step the fee allows, then try to cheapen the exit.
@@ -944,7 +946,7 @@ describe("cross-chain sync window + PSM fees", () => {
       await setMultiplier(m.add(m.muln(MAX_FEE_BPS).divn(10_000)));
       await clearWindow();
 
-      // Lower tout as far as the floor permits — no further.
+      // Lower the combined fee as far as the floor permits — no further.
       const mark = (await cfg()).maxStepBps.toNumber();
       await setFees(0, mark);
 

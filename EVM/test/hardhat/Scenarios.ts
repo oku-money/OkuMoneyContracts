@@ -78,11 +78,11 @@ const DAY = 24n * 60n * 60n;
 const MAX_RATE_DURATION = 30n * DAY;
 
 /** `Constants.MAX_STEP_BPS` — the per-step ceiling on `M_oku`. */
-const MAX_STEP_BPS = 5n;
+const MAX_STEP_BPS = 2n;
 /** `Constants.MAX_SOLVENCY_GAP_BPS` — the cumulative ceiling on the gap. */
 const MAX_SOLVENCY_GAP_BPS = 100n;
-/** `Constants.DEFAULT_SYNC_WINDOW`. */
-const DEFAULT_SYNC_WINDOW = 60n;
+/** `Constants.MIN_MARK_INTERVAL`. Minimum wall-clock gap between two marks. */
+const MIN_MARK_INTERVAL = 60n * 60n;
 
 /** ~5% APY as a per-second `M_usd` rate. The live Sepolia rate. */
 const RATE_5_PCT_APY = 1_000_000_001_546_176_000n;
@@ -261,18 +261,11 @@ async function warp(seconds: bigint) {
   await ethers.provider.send("evm_mine", []);
 }
 
-/**
- * Advance past any armed post-step sync window, mining exactly at
- * `syncLockedUntil()` — the bound is exclusive, so that timestamp is already
- * unlocked. No-op when nothing is armed.
- */
-async function clearSyncWindow(s: System) {
-  const until: bigint = await s.okuM.syncLockedUntil();
-  if ((await now()) < until) {
-    await ethers.provider.send("evm_setNextBlockTimestamp", [Number(until)]);
-    await ethers.provider.send("evm_mine", []);
-  }
-}
+// NOTE: `clearSyncWindow` was removed with the sync window. Nothing user-facing
+// is fenced by a mark any more, so there is nothing to clear. What a fixture
+// must now advance past is `MIN_MARK_INTERVAL`, which gates the OPERATOR'S next
+// mark — see `readyMark`.
+
 
 // ============================================================================
 // M_oku — the stepwise realized index
@@ -301,15 +294,28 @@ async function stepToNoClear(s: System, target: bigint) {
     if (iterations++ > 500) throw new Error("stepToNoClear: too many steps");
     let next = current + (current * MAX_STEP_BPS) / BPS;
     if (next > target) next = target;
+    // Marks are cadence-limited (`MIN_MARK_INTERVAL`), so a walk has to advance
+    // the clock between them. Note what is NOT here any more: no warp is needed
+    // afterwards, because nothing user-facing is fenced by a mark.
+    await readyMark(s);
     await (await s.okuM.setOkuMultiplier(next)).wait();
     current = next;
+  }
+}
+
+/** Advance the clock just far enough that the next mark is admissible. */
+async function readyMark(s: System) {
+  const nextAt: bigint = await s.okuM.nextMarkAllowedAt();
+  const now = BigInt((await ethers.provider.getBlock("latest"))!.timestamp);
+  if (now < nextAt) {
+    await ethers.provider.send("evm_increaseTime", [Number(nextAt - now) + 1]);
+    await ethers.provider.send("evm_mine", []);
   }
 }
 
 /** Step `M_oku` to `target`, then clear the window so pricing ops work again. */
 async function stepTo(s: System, target: bigint) {
   await stepToNoClear(s, target);
-  await clearSyncWindow(s);
 }
 
 /** Step `M_oku` up by `bps` basis points of its current value. */
@@ -337,6 +343,7 @@ async function stepToAtLeast(s: System, target: bigint) {
   let m: bigint = await s.okuM.uiMultiplier();
   let iterations = 0;
   while (m < target) {
+    await readyMark(s);
     if (iterations++ > 500) {
       throw new Error(
         `stepToAtLeast: ${target} unreachable from ${m} in 500 steps of ` +
@@ -349,7 +356,6 @@ async function stepToAtLeast(s: System, target: bigint) {
     await (await s.okuM.setOkuMultiplier(next)).wait();
     m = next;
   }
-  await clearSyncWindow(s);
   expect(await s.okuM.uiMultiplier()).to.be.greaterThanOrEqual(target);
 }
 
@@ -556,7 +562,7 @@ describe("OkuM / USDOku — integrator capability detection", () => {
     expect(await s.usdOku.decimals()).to.equal(18n);
   });
 
-  it("starts with both indices at parity, fees at the coverage floor", async () => {
+  it("starts with both indices at parity, free to enter and covered to exit", async () => {
     expect(await s.okuM.uiMultiplier()).to.equal(PRECISION);
     // Steps are immediate, so ERC-8056's pending extension is degenerate and
     // this equality is an ALWAYS invariant, not a genesis coincidence.
@@ -565,13 +571,13 @@ describe("OkuM / USDOku — integrator capability detection", () => {
 
     expect(await s.usdOku.usdOkuIndex()).to.equal(PRECISION);
     expect(await s.usdOku.solvencySource()).to.equal(s.a.wrapper);
-    expect(await s.okuM.syncWindowDuration()).to.equal(DEFAULT_SYNC_WINDOW);
     expect(await s.okuM.accrualHalted()).to.equal(false);
 
     // Fees ship AT the per-leg step-coverage floor, so the deployment can mark
     // yield with no configuration. `initialize` seeds it; `setFees` can only
     // raise it. The fixture performs no fee write at all.
-    expect(await s.module.tin()).to.equal(MAX_STEP_BPS);
+    // Deposits free, exits covered. `tin` has no floor; `tout` does.
+    expect(await s.module.tin()).to.equal(0n);
     expect(await s.module.tout()).to.equal(MAX_STEP_BPS);
   });
 });
@@ -760,34 +766,47 @@ describe("USDOku — the full rate cycle: declared ahead, then behind", () => {
     expect(await s.usdOku.impliedAprBps()).to.equal(0n);
   });
 
-  it("arms an advisory window on a mark, and gates NOTHING on this chain", async () => {
-    // INVERTED DELIBERATELY. This test used to assert the module and wrapper
-    // were fenced. They are not any more, and that is the change: a
-    // single-chain operation priced at this chain's own `M_oku` is correct
-    // whatever a peer chain believes, so gating it bought nothing and cost a
-    // 60-second outage on every user-facing path after every mark.
+  it("gates NOTHING on this chain when a mark lands", async () => {
+    // The sync window is GONE on EVM. It gated nothing: narrowed to "bridge
+    // legs", EVM turned out to have none — `OkuM.mint`/`burn` are the shared
+    // supply hooks the module and queue use for ordinary local subscription and
+    // redemption, so gating them would gate the whole PSM.
     //
-    // The window's purpose is to fence value crossing a multiplier boundary
-    // between chains. On SVM that pair has dedicated instructions
-    // (`mint_oku_m_direct` / `burn_oku_m_direct`) and they ARE gated. EVM has no
-    // equivalent — `okuM.mint`/`burn` here are the shared supply hooks the
-    // module and queue use for ordinary subscription and redemption, so gating
-    // them would gate the whole PSM.
-    await stepToNoClear(s, ((await s.okuM.uiMultiplier()) * 10_005n) / 10_000n);
-    expect(await s.okuM.isSyncLocked()).to.equal(true);
+    // This test is the regression guard. Every operation below reverted at some
+    // point during the refactor; all of them must stay live through a mark,
+    // because the price they transact at is this chain's own `M_oku` and that is
+    // correct whatever a peer chain currently believes.
+    await stepToNoClear(s, ((await s.okuM.uiMultiplier()) * 10_001n) / 10_000n);
 
-    // Observable, which is the point: monitoring and the future bridge adapter
-    // read this.
-    expect(await s.okuM.syncLockedUntil()).to.be.greaterThan(0n);
-
-    // And nothing is blocked. Every one of these was a revert before.
     await (await s.usdc.mint(s.a.alice, 1_000n * 10n ** 6n)).wait();
     await (await as(s.usdc, s.alice).approve(s.a.module, 1_000n * 10n ** 6n)).wait();
     await (await as(s.module, s.alice).mint(1_000n * 10n ** 6n)).wait();
-    await (await s.usdOku.setUsdOkuRate(PRECISION, (await now()) + MAX_RATE_DURATION)).wait();
 
-    await clearSyncWindow(s);
-    expect(await s.okuM.isSyncLocked()).to.equal(false);
+    const raw: bigint = await s.okuM.balanceOf(s.a.alice);
+    await (await as(s.okuM, s.alice).approve(s.a.wrapper, raw / 2n)).wait();
+    await (await as(s.wrapper, s.alice)["wrap(uint256)"](raw / 2n)).wait();
+
+    await (await s.usdOku.setUsdOkuRate(PRECISION, (await now()) + MAX_RATE_DURATION)).wait();
+  });
+
+  it("cadence-limits the OPERATOR instead — the only time gate left", async () => {
+    await readyMark(s);
+    const m: bigint = await s.okuM.uiMultiplier();
+    await (await s.okuM.setOkuMultiplier(m + (m * MAX_STEP_BPS) / BPS)).wait();
+
+    // A second mark immediately after is refused. This is what makes
+    // MAX_STEP_BPS a bound on yield per unit TIME rather than per call.
+    await expect(s.okuM.setOkuMultiplier((await s.okuM.uiMultiplier()) + 1n))
+      .to.be.revertedWithCustomError(s.okuM, "MarkTooSoon");
+
+    // And `distributeYield` is not a second door around it.
+    await expect(s.okuM.distributeYield(1n)).to.be.revertedWithCustomError(
+      s.okuM,
+      "MarkTooSoon"
+    );
+
+    await readyMark(s);
+    await (await s.okuM.setOkuMultiplier((await s.okuM.uiMultiplier()) + 1n)).wait();
   });
 
   it("closes the gap and crosses back over 10000 bps as realized catches up", async () => {
@@ -842,7 +861,7 @@ describe("USDOku — the full rate cycle: declared ahead, then behind", () => {
 // conversion-pricing assertions below run at >= 5x AND against a nonzero gap.
 
 /**
- * TARGET REDUCED FROM 5x TO 1.25x.
+ * TARGET REDUCED FROM 5x TO 1.10x.
  *
  * At `MAX_STEP_BPS` = 5 a 5x multiplier needs ~3,220 marks, which is correct
  * behaviour — the step ceiling IS a minimum-cadence rule — but is not walkable
@@ -854,10 +873,13 @@ describe("USDOku — the full rate cycle: declared ahead, then behind", () => {
  * by writing the ERC-7201 slot directly, which is the only tractable way to
  * reach them.
  */
-describe("OkuM / USDOku — elevated-multiplier regime (>= 1.25x, nonzero gap)", () => {
+describe("OkuM / USDOku — elevated-multiplier regime (>= 1.10x, nonzero gap)", () => {
   let s: System;
   let multiplier: bigint;
-  const TARGET = (5n * PRECISION) / 4n;
+  // ~1.10x. At `MAX_STEP_BPS` = 2 with a 1-hour cadence this is ~480 marks,
+  // near the practical ceiling for an RPC-driven walk. Higher multipliers are
+  // Foundry's, where the ERC-7201 slot can be written directly.
+  const TARGET = (11n * PRECISION) / 10n;
 
   before(async function () {
     this.timeout(600_000);
@@ -867,42 +889,38 @@ describe("OkuM / USDOku — elevated-multiplier regime (>= 1.25x, nonzero gap)",
     await seedBuffer(s, 5_000_000n * 10n ** 6n);
   });
 
-  it("reached a materially non-unit multiplier by legitimate steps only", async () => {
+  it("reached a materially non-unit multiplier by legitimate marks only", async () => {
     expect(multiplier).to.be.greaterThanOrEqual(TARGET);
     expect(await s.okuM.newUIMultiplier()).to.equal(multiplier);
     expect(await s.okuM.effectiveAt()).to.equal(await s.okuM.lastSteppedAt());
   });
 
-  it("keeps every fee leg at or above the step-coverage floor throughout", async () => {
+  it("keeps the exit fee at or above the step-coverage floor throughout", async () => {
     // The invariant that replaced the ratchet, and it is unconditional: no
     // sequence of marks can move the floor, because the floor is a constant.
-    expect(await s.module.tin()).to.be.greaterThanOrEqual(MAX_STEP_BPS);
+    // Note it binds the EXIT leg only — `tin` is free, and ships at zero.
     expect(await s.module.tout()).to.be.greaterThanOrEqual(MAX_STEP_BPS);
 
-    // Neither leg can be lowered past it, whatever has been marked.
-    await expect(s.module.setFees(0, 50)).to.be.revertedWithCustomError(
-      s.module,
-      "FeeBelowStepFloor"
-    );
+    // `tout` cannot be lowered past it, whatever has been marked.
     await expect(
-      s.module.setFees(MAX_STEP_BPS - 1n, MAX_STEP_BPS)
+      s.module.setFees(0, MAX_STEP_BPS - 1n)
     ).to.be.revertedWithCustomError(s.module, "FeeBelowStepFloor");
 
-    // Raising is free.
-    await (await s.module.setFees(50, 50)).wait();
+    // Raising is free, and a zero mint fee stays valid.
+    await (await s.module.setFees(0, 50)).wait();
   });
 
   it("mints fewer raw units than dollars deposited", async () => {
     const raw = await psmMint(s, s.alice, 10_000n * 10n ** 6n);
-    // At >=1.25x, 10,000 USDC buys <=8,000 raw. Bound scaled with the target
+    // At >=1.10x, 10,000 USDC buys <=9,100 raw. Bound scaled with the target
     // when it came down from 5x — see this describe's header.
-    expect(raw).to.be.lessThanOrEqual(8000n * PRECISION);
+    expect(raw).to.be.lessThanOrEqual(9100n * PRECISION);
     expect(raw).to.be.greaterThan(0n);
-    // But displays as ~$9,950 — the deposit net of the 50 bps `tin` this block
-    // raised fees to above.
+    // And displays as the FULL $10,000: `tin` is zero, so nothing is withheld on
+    // the way in. The 50 bps this block configured sits on `tout` alone.
     const ui: bigint = await s.okuM.balanceOfUI(s.a.alice);
-    expect(ui).to.be.greaterThan(9_949n * PRECISION);
-    expect(ui).to.be.lessThan(9_951n * PRECISION);
+    expect(ui).to.be.greaterThan(9_999n * PRECISION);
+    expect(ui).to.be.lessThanOrEqual(10_000n * PRECISION);
   });
 
   it("holds the value/display parity bound at high multiplier", async () => {
@@ -1013,6 +1031,8 @@ describe("Operator absence — sticky halt on OkuM, flat index on USDOku", () =>
   });
 
   it("haltAccrual is STICKY: it blocks every later step, not just the current one", async () => {
+    // Captured AFTER the mark this test takes, so the assertion below isolates
+    // the halt's effect rather than the mark's.
     await stepBy(s, 10n);
     const frozen: bigint = await s.okuM.uiMultiplier();
 
@@ -1035,10 +1055,15 @@ describe("Operator absence — sticky halt on OkuM, flat index on USDOku", () =>
     expect(await s.okuM.uiMultiplier()).to.equal(frozen);
     expect(await s.okuM.newUIMultiplier()).to.equal(frozen);
 
-    // A halt is deliberately NOT a sync window: nothing about the multiplier
-    // changed, so there is nothing to fence — and arming one would hand the warm
-    // guardian key a repeatable mint/redeem block the RBAC model denies it.
-    expect(await s.okuM.isSyncLocked()).to.equal(false);
+    // A halt does not consume the mark cadence: nothing about the multiplier
+    // changed, so `lastSteppedAt` must not move. Otherwise the warm guardian key
+    // could delay the next legitimate mark at will — a withhold power the RBAC
+    // model does not grant it.
+    // A halt is not a mark: it must not move `lastSteppedAt` and therefore must
+    // not push out the next admissible mark.
+    const afterHalt: bigint = await s.okuM.lastSteppedAt();
+    await (await s.okuM.haltAccrual()).wait();
+    expect(await s.okuM.lastSteppedAt()).to.equal(afterHalt);
   });
 
   it("resumeAccrual (cold) lifts the halt and stepping works again", async () => {
@@ -1186,12 +1211,11 @@ describe("RedemptionQueue — lifecycle", () => {
     await (await s.module.withdrawUsdc(s.a.admin, await s.usdc.balanceOf(s.a.module))).wait();
     await (await as(s.module, s.alice).redeem(raw)).wait();
 
-    await stepToNoClear(s, ((await s.okuM.uiMultiplier()) * 10_005n) / 10_000n);
-    expect(await s.okuM.isSyncLocked()).to.equal(true);
-    // Not blocked: processing prices locally and correctly.
+    await stepToNoClear(s, ((await s.okuM.uiMultiplier()) * 10_001n) / 10_000n);
+    // Not blocked: processing prices locally and correctly, and nothing on this
+    // chain is fenced by a mark.
     await seedBuffer(s, 1_000n * 10n ** 6n);
     await (await s.module.processQueue(1, 2, await s.queue.totalQueuedUsdc())).wait();
-    await clearSyncWindow(s);
 
     await (await s.module.pause()).wait();
     await seedBuffer(s, 1_000n * 10n ** 6n);
@@ -1436,8 +1460,11 @@ describe("OkuMultiplierAdapter — fresh, stale, refreshed", () => {
     // `M_oku` is a discrete mark, not a trajectory, so "accrual stopped" has no
     // referent. The honest signal is staleness of the last mark, below.
     expect(fnNames(feed)).to.not.include("isAccrualStopped");
-    expect(fnNames(feed)).to.include("isSyncLocked");
-    expect(fnNames(feed)).to.include("syncLockedUntil");
+    // The sync-window passthroughs went too — they surfaced a mechanism that
+    // gated nothing, and their NatSpec claimed module mint/redeem reverted,
+    // which had stopped being true.
+    expect(fnNames(feed)).to.not.include("isSyncLocked");
+    expect(fnNames(feed)).to.not.include("syncLockedUntil");
   });
 
   it("tracks the multiplier across a mark, and re-anchors staleness on it", async () => {
@@ -1469,16 +1496,16 @@ describe("OkuMultiplierAdapter — fresh, stale, refreshed", () => {
     expect(answer).to.equal(await s.okuM.uiMultiplier());
   });
 
-  it("surfaces the sync window without folding it into isHealthy", async () => {
-    // The multiplier is genuinely correct during a window — the step that armed
-    // it has already landed here. Reporting unhealthy would trigger needless
-    // liquidation pauses on an accurate feed.
-    await stepToNoClear(s, ((await s.okuM.uiMultiplier()) * 10_040n) / 10_000n);
-    expect(await feed.isSyncLocked()).to.equal(true);
-    expect(await feed.syncLockedUntil()).to.equal(await s.okuM.syncLockedUntil());
+  it("stays healthy through a mark — the price is correct, not in flux", async () => {
+    // Previously "surfaces the sync window without folding it into isHealthy".
+    // There is no window to surface any more, but the underlying property is
+    // unchanged and worth keeping: a mark does not make the feed unhealthy.
+    // Reporting otherwise would trigger needless liquidation pauses on an
+    // accurate price.
+    await stepToNoClear(s, ((await s.okuM.uiMultiplier()) * 10_001n) / 10_000n);
     expect(await feed.isHealthy()).to.equal(true);
-    await clearSyncWindow(s);
-    expect(await feed.isSyncLocked()).to.equal(false);
+    const [, answer] = await feed.latestRoundData();
+    expect(answer).to.equal(await s.okuM.uiMultiplier());
   });
 
   it("refuses historical rounds — it is a live derivation, not a push feed", async () => {
@@ -1538,8 +1565,6 @@ describe("UUPS upgrade path — OZ layout validator on all five proxies", () => 
       supply: await s.okuM.totalSupply(),
       bal: await s.okuM.balanceOf(s.a.alice),
       maxSupply: await s.okuM.maxSupply(),
-      window: await s.okuM.syncWindowDuration(),
-      lockedUntil: await s.okuM.syncLockedUntil(),
       allowance: await s.okuM.minterAllowance(s.a.module),
     };
 
@@ -1560,8 +1585,6 @@ describe("UUPS upgrade path — OZ layout validator on all five proxies", () => 
     expect(await up.totalSupply()).to.equal(before.supply);
     expect(await up.balanceOf(s.a.alice)).to.equal(before.bal);
     expect(await up.maxSupply()).to.equal(before.maxSupply);
-    expect(await up.syncWindowDuration()).to.equal(before.window);
-    expect(await up.syncLockedUntil()).to.equal(before.lockedUntil);
     expect(await up.minterAllowance(s.a.module)).to.equal(before.allowance);
     expect(await up.supportsInterface(IID.core)).to.equal(
       true,

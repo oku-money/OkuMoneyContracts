@@ -15,8 +15,8 @@
  * TWO THINGS ARE NEW IN v0.4 AND WORTH PAUSING ON:
  *
  *   1. `OKU_CAP_MANAGER` on OkuM now gates `resumeAccrual` — the only way to
- *      clear the guardian's sticky halt — as well as `setSyncWindowDuration`.
- *      On USDOku it gates `setSolvencySource`. It was
+ *      clear the guardian's sticky halt. On USDOku it gates
+ *      `setSolvencySource`. It was
  *      a supply-cap role; it is now the cold counterweight to the warm
  *      guardian, which is a materially larger responsibility.
  *
@@ -115,7 +115,7 @@ function buildRoleMap(_cold: string, _warm: string, _orch: string): {
       "OKU_UPGRADER",
       "OKU_UNPAUSER",
       "OKU_UNBLACKLISTER",
-      // Now also: resumeAccrual, setSyncWindowDuration,
+      // Now also: resumeAccrual,
       // setSyncWindowDuration.
       "OKU_CAP_MANAGER",
       "OKU_ALLOWANCE_MANAGER",

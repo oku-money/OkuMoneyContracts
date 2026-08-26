@@ -34,7 +34,7 @@ import {
   warpBy,
   warpSlots,
 } from './bankrun';
-import { MAX_FEE_BPS, MAX_STEP_BPS } from './setup';
+import { MAX_FEE_BPS, MAX_STEP_BPS, MIN_MARK_INTERVAL_SECS } from './setup';
 
 const BASIS_POINTS = 10_000;
 
@@ -101,9 +101,12 @@ export async function stepMultiplierTo(
       .signers([rebaser])
       .rpc();
 
-    // Clear the same-slot fence, then any window the write may have armed.
+    // Clear the same-slot fence, then any window the write armed, then the
+    // MARK CADENCE — `MIN_MARK_INTERVAL_SECS` gates the next mark, so a walk
+    // has to advance the wall clock between iterations as well as the slot.
     await warpSlots(h, 1);
     await clearSyncWindow(h, program, configPda);
+    await warpBy(h, MIN_MARK_INTERVAL_SECS);
 
     current = await readMultiplierFromMint(h, okuMMint);
   }
@@ -199,11 +202,11 @@ export function expectedRedeemNet(
 /**
  * Net USDC credited on a mint of `usdcIn` after `tinBps`.
  *
- * The mint-side twin of `expectedRedeemNet`, needed now that `tin` is nonzero
- * by default: `initialize` seeds both legs at `MAX_STEP_BPS` and neither can
- * return to zero, so a 1:1 mint expectation is no longer correct anywhere.
+ * The mint-side twin of `expectedRedeemNet`. Defaults to `tin = 0`, which is
+ * what ships — so a 1:1 mint expectation is correct again by default, and this
+ * helper is only needed by suites that deliberately raise `tin`.
  */
-export function expectedMintNet(usdcIn: BN, tinBps: number = MAX_STEP_BPS): BN {
+export function expectedMintNet(usdcIn: BN, tinBps: number = 0): BN {
   if (tinBps === 0) return usdcIn;
   const fee = usdcIn.muln(tinBps).addn(BASIS_POINTS - 1).divn(BASIS_POINTS); // ceil
   return usdcIn.sub(fee);

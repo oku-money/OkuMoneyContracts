@@ -193,8 +193,13 @@ describe("ScaledUiAmount extension behavior", () => {
     // UNCHANGED by a multiplier update, not what it started at.
     expect(rawBefore).to.be.greaterThan(0);
 
-    // Bump multiplier to 2.0 (2_000_000_000)
-    const newMultiplier = new BN(2_000_000_000);
+    // TARGETS REDUCED. At `MAX_STEP_BPS` = 2 with a 1-hour cadence, reaching
+    // 2.0x takes ~3,500 marks — correct behaviour (the cadence bound doing its
+    // job) but not walkable in a bankrun test. 1.01x takes ~50 and exercises
+    // every property here: raw balances unchanged, UI value scaled, conversion
+    // monotone. The high-multiplier regime is Foundry's, where the multiplier
+    // slot can be written directly.
+    const newMultiplier = new BN(1_010_000_000); // 1.01x
     await stepMultiplierTo(h, program as any, orchestrator, configPda, okuMMint, newMultiplier);
 
     await warpSlots(h, 1);
@@ -214,7 +219,7 @@ describe("ScaledUiAmount extension behavior", () => {
 
   it("mint amount decreases as multiplier increases", async () => {
     // Set multiplier to 3.0
-    const m3 = new BN(3_000_000_000);
+    const m3 = new BN(1_020_000_000); // 1.02x — see the note above
     await stepMultiplierTo(h, program as any, orchestrator, configPda, okuMMint, m3);
     await warpSlots(h, 1);
 
@@ -242,11 +247,11 @@ describe("ScaledUiAmount extension behavior", () => {
     // rather than a hardcoded figure so the fee value is not baked in twice.
     const creditedAt3x = expectedMintNet(new BN(1_000_000), DEFAULT_TEST_TIN_BPS);
     expect(rawMintedAt3x).to.equal(
-      creditedAt3x.mul(PRECISION).div(new BN(3_000_000_000)).toNumber()
+      creditedAt3x.mul(PRECISION).div(m3).toNumber()
     );
 
     // Now bump multiplier to 6.0 and mint another 1 USDC
-    const m6 = new BN(6_000_000_000);
+    const m6 = new BN(1_040_000_000); // 1.04x — see the note above
     await stepMultiplierTo(h, program as any, orchestrator, configPda, okuMMint, m6);
 
     await warpSlots(h, 1);
@@ -271,7 +276,7 @@ describe("ScaledUiAmount extension behavior", () => {
     // At multiplier 6.0: raw = credited * PRECISION / 6e9, credited net of `tin`.
     const creditedAt6x = expectedMintNet(new BN(1_000_000), DEFAULT_TEST_TIN_BPS);
     expect(rawMintedAt6x).to.equal(
-      creditedAt6x.mul(PRECISION).div(new BN(6_000_000_000)).toNumber()
+      creditedAt6x.mul(PRECISION).div(m6).toNumber()
     );
 
     // Confirm: higher multiplier -> fewer raw tokens per USDC
@@ -284,7 +289,7 @@ describe("ScaledUiAmount extension behavior", () => {
 
   it("redeem returns more USDC per raw token as multiplier increases", async () => {
     // Set multiplier to 8.0
-    const m8 = new BN(8_000_000_000);
+    const m8 = new BN(1_060_000_000); // 1.06x — see the note above
     await stepMultiplierTo(h, program as any, orchestrator, configPda, okuMMint, m8);
     await warpSlots(h, 1);
 
@@ -344,7 +349,7 @@ describe("ScaledUiAmount extension behavior", () => {
 
   it("setMultiplier cannot decrease multiplier", async () => {
     // Set multiplier to 2.0 first
-    const higher = new BN(2_000_000_000);
+    const higher = new BN(1_010_000_000); // 1.01x — see the cadence note above
     await stepMultiplierTo(h, program as any, orchestrator, configPda, okuMMint, higher);
 
     await warpSlots(h, 1);

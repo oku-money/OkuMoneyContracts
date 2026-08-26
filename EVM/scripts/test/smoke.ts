@@ -38,7 +38,7 @@
  *   YES_MAINNET=true bypass the mainnet guard on a --write run
  */
 
-import { ethers, network } from "hardhat";
+import { ethers } from "hardhat";
 
 import { resolveNetworkContext } from "../utils/networkContext";
 import { loadAddress, hasAddress } from "../utils/addressBook";
@@ -81,38 +81,9 @@ function check(label: string, ok: boolean, detail = "") {
   }
 }
 
-/**
- * Get past a post-step sync window.
- *
- * On a fork we jump the clock, which is the only way to keep a rehearsal fast.
- * On a live network there is nothing to do but wait: the window has no close
- * instruction by design (each chain fences itself and the lock auto-expires),
- * so "wait it out" is the entire recovery procedure and is bounded by
- * MAX_SYNC_WINDOW at 15 minutes.
- */
-async function waitOutSyncWindow(okuM: any, isFork: boolean): Promise<void> {
-  if (!(await okuM.isSyncLocked())) return;
-
-  const until: bigint = await okuM.syncLockedUntil();
-  const now = BigInt((await ethers.provider.getBlock("latest"))!.timestamp);
-  const remaining = until > now ? until - now : 0n;
-
-  if (isFork) {
-    logger.info(`  Sync window engaged for ${remaining}s — advancing fork clock past it`);
-    await network.provider.send("evm_increaseTime", [Number(remaining) + 1]);
-    await network.provider.send("evm_mine", []);
-  } else {
-    logger.info(
-      `  Sync window engaged for ${remaining}s — waiting it out (there is no close ` +
-        `instruction; the lock auto-expires)`
-    );
-    await new Promise((r) => setTimeout(r, (Number(remaining) + 3) * 1000));
-  }
-
-  if (await okuM.isSyncLocked()) {
-    throw new Error("Still sync-locked after waiting out the window; investigate.");
-  }
-}
+// NOTE: `waitOutSyncWindow` was removed with the sync window. Nothing on EVM
+// is time-gated for a user any more; the only cadence bound is on the
+// OPERATOR'S mark (`MIN_MARK_INTERVAL`), and a smoke run takes at most one.
 
 async function main() {
   const ctx = await resolveNetworkContext();
@@ -369,8 +340,6 @@ async function main() {
     if ((await usdc.balanceOf(who)) < amount) {
       logger.warning(`  Insufficient USDC for ${who} — skipping write path`);
     } else {
-      await waitOutSyncWindow(okuM, ctx.isFork);
-
       // ---- 8a. Subscribe ----
       // Recorded so the round-trip economics check at the end knows whether the
       // final position is attributable to THIS run's deposit. Re-running against
@@ -431,19 +400,19 @@ async function main() {
           (await okuM.balanceOf(who)) === rawAfterMint,
           `totalSupplyUI $${ethers.formatEther(supplyBefore)} -> $${ethers.formatEther(await okuM.totalSupplyUI())}`
         );
-        check("the step armed the sync window", await okuM.isSyncLocked());
 
-        // Everything downstream prices through the multiplier, so it is all
-        // fenced until the window lifts. Prove the fence exists, then clear it.
-        let wrapReverted = false;
+        // INVERTED from the previous version, which asserted `wrap` was fenced
+        // here. Nothing downstream of a mark is fenced any more: the sync window
+        // is gone on EVM, so a holder can wrap, unwrap, mint and redeem in the
+        // same block a mark lands in. Asserted rather than merely no longer
+        // checked, so a re-introduced gate fails the smoke run.
+        let wrapWorks = true;
         try {
           await wrapper.connect(signer).wrap.staticCall(1n);
         } catch {
-          wrapReverted = true;
+          wrapWorks = false;
         }
-        check("wrap is blocked while the sync window is engaged", wrapReverted);
-
-        await waitOutSyncWindow(okuM, ctx.isFork);
+        check("wrap stays live immediately after a mark", wrapWorks);
       }
 
       // ---- 8c. Wrap ----

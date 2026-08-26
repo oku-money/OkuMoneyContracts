@@ -50,13 +50,19 @@
  * arithmetic shown, rather than letting a cold signer discover a selector on a
  * screen.
  *
- * THE SYNC WINDOW ARMS ITSELF. There is no begin/end protocol any more (v0.3's
- * `beginSyncWindow.ts` / `endSyncWindow.ts` are deleted, and the instructions
- * with them). Every successful step auto-arms a bounded lock on everything that
- * prices through the multiplier — module mint/redeem, queue processing, wrapper
- * wrap/unwrap — which expires on its own after `syncWindowDuration()`. Each
- * chain fences itself; cross-chain parity is verified off-chain by comparing
- * multiplier VALUES, which equal epoch counters never actually proved.
+ * NOTHING IS FENCED BY THIS CALL. The post-step sync window is gone on EVM: it
+ * gated nothing (EVM has no bridge instruction — `mint`/`burn` are the shared
+ * supply hooks the PSM uses), so module mint/redeem, queue processing and
+ * wrapper wrap/unwrap all stay live through a mark. That is the point: a holder
+ * must be able to enter or exit at any moment, including the one a mark lands
+ * in, and the price they get is this chain's own `M_oku`, which is correct.
+ *
+ * SVM keeps a window on its two dedicated bridge instructions. Cross-chain
+ * parity is verified off-chain by comparing multiplier VALUES.
+ *
+ * WHAT IS GATED is the NEXT mark: `MIN_MARK_INTERVAL` must elapse first. That
+ * is what makes `MAX_STEP_BPS` a bound on yield per unit time rather than per
+ * call.
  *
  * Two ways to specify the target — `--step-bps` is preferred for a routine mark
  * because it is the number the coverage rule is stated in:
@@ -168,8 +174,8 @@ async function main() {
   );
   logger.info(`accrualHalted:      ${halted}`);
   logger.info(
-    `syncWindowDuration: ${await (okuM as any).syncWindowDuration()}s ` +
-      `(auto-armed by this write)`
+    `Next mark allowed at: ` +
+      `${new Date(Number(await (okuM as any).nextMarkAllowedAt()) * 1000).toISOString()}`
   );
 
   if (halted) {
@@ -221,8 +227,6 @@ async function main() {
 
   const confirmed: bigint = await (okuM as any).uiMultiplier();
   const pending: bigint = await (okuM as any).newUIMultiplier();
-  const lockedUntil: bigint = await (okuM as any).syncLockedUntil();
-
   if (confirmed !== target) {
     throw new Error(
       `POST-CONDITION FAILED: uiMultiplier is ${confirmed}, expected ${target}.`
@@ -237,16 +241,11 @@ async function main() {
   }
 
   logger.success(`M_oku = ${ethers.formatEther(confirmed)} (step ${step}bps)`);
-  if (lockedUntil > 0n) {
-    logger.warning(
-      `Sync window armed until ${new Date(Number(lockedUntil) * 1000).toISOString()}. ` +
-        `Module mint/redeem, queue processing and wrapper wrap/unwrap revert ` +
-        `SyncWindowActive until then. It expires on its own — there is nothing to close.`
-    );
-  } else {
-    logger.warning(
-      `syncWindowDuration is 0, so no window was armed and the step landed unfenced. ` +
-        `On a multi-chain deployment that leaves the propagation interval exposed.`
+  {
+    const nextAt: bigint = await (okuM as any).nextMarkAllowedAt();
+    logger.info(
+      `Next mark allowed at ${new Date(Number(nextAt) * 1000).toISOString()} ` +
+        `(MIN_MARK_INTERVAL). No user-facing operation is blocked in the meantime.`
     );
   }
   logger.info(

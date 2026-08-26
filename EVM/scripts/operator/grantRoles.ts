@@ -149,7 +149,7 @@ const ROLE_MAP: Record<string, readonly RoleName[]> = {
     "OKU_GUARDIAN",
     "OKU_BLACKLISTER",
     "OKU_UNBLACKLISTER",
-    // Also gates setSyncWindowDuration / resumeAccrual.
+    // Also gates resumeAccrual.
     "OKU_CAP_MANAGER",
     "OKU_ALLOWANCE_MANAGER",
   ],

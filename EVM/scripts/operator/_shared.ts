@@ -37,24 +37,24 @@ export const MAX_IMPLIED_APR_BPS = 1000n;
 /** `Constants.MAX_RATE_DURATION`. Binds `USDOku.setUsdOkuRate`. */
 export const MAX_RATE_DURATION_SECONDS = 30n * 24n * 60n * 60n;
 /**
- * `Constants.MAX_STEP_BPS`. Ceiling on a single `M_oku` step AND the per-leg
- * floor under `tin`/`tout`.
+ * `Constants.MAX_STEP_BPS`. Ceiling on a single `M_oku` mark AND the floor under
+ * `tout`.
  *
- * The single number defining step coverage: `setOkuMultiplier` refuses steps
- * above it, `setFees` refuses fee legs below it, so every admissible step is
- * covered on each leg for all time. Raising it permits a coarser mark cadence
- * and simultaneously raises the minimum fee — the two cannot drift apart.
+ * The single number defining step coverage: `setOkuMultiplier` refuses marks
+ * above it, `setFees` refuses a `tout` below it, so the exit fee always covers
+ * the largest mark. `tin` has no floor and ships at zero — the arbitrage gain is
+ * realised on exit, so taxing entry buys nothing.
  *
- * PROVISIONAL at 5 (daily cadence at ~5% APY, ~3.5x headroom over the ~1.37bps
- * a day actually needs).
+ * PROVISIONAL at 2 (6-hourly cadence at ~5% APY: ~0.34 bps per mark, ~6x
+ * headroom, and one mark absorbs ~1.5 days of catch-up).
  */
-export const MAX_STEP_BPS = 5n;
+export const MAX_STEP_BPS = 2n;
 /** `Constants.MAX_FEE_BPS`. Ceiling on `tin` and on `tout`, each. */
 export const MAX_FEE_BPS = 100n;
 /** `Constants.MAX_SOLVENCY_GAP_BPS`. How far `M_usd` liability may outrun backing. */
 export const MAX_SOLVENCY_GAP_BPS = 100n;
-/** `Constants.MAX_SYNC_WINDOW`. Ceiling on the post-step sync window. */
-export const MAX_SYNC_WINDOW_SECONDS = 15n * 60n;
+/** `Constants.MIN_MARK_INTERVAL`. Minimum wall-clock gap between two marks. */
+export const MIN_MARK_INTERVAL_SECONDS = 60n * 60n;
 /** `Constants.MAX_MULTIPLIER`. Absolute ceiling on `M_oku` and on projected `M_usd`. */
 export const MAX_MULTIPLIER = 10n ** 24n;
 

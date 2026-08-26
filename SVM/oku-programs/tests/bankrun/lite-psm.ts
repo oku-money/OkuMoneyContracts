@@ -24,9 +24,11 @@ import {
   MAX_STEP_BPS,
   DEFAULT_TEST_TIN_BPS,
   DEFAULT_TEST_TOUT_BPS,
+  MIN_MARK_INTERVAL_SECS,
 } from "../shared/setup";
 import { clearSyncWindow, expectedMintNet, expectedRedeemNet } from "../shared/multiplier";
 import {
+  warpBy,
   BankrunHarness,
   startBankrun,
   fundKeypairs,
@@ -668,7 +670,7 @@ describe("lite-psm", () => {
 
         // Stamp the yield-lock slot via set_multiplier.
         const m0 = await readMultiplierFromMint(h2, okuMMint2);
-        const m1 = m0.add(m0.muln(4).divn(10_000)); // +4 bps (MAX_STEP_BPS is 5)
+        const m1 = m0.add(m0.muln(1).divn(10_000)); // +1 bps (MAX_STEP_BPS is 2)
         await program2.methods
           .setMultiplier(m1)
           .accountsPartial({
@@ -805,8 +807,11 @@ describe("lite-psm", () => {
   // ==========================================================================
   describe("yield operations", () => {
     it("rebaser can distribute yield via multiplier increase", async () => {
-      // Multiplier has been bumped by previous tests. Set to a higher value.
-      const newMultiplier = new BN(1_000_400_000); // +4 bps (MAX_STEP_BPS is 5)
+      // Multiplier has been bumped by previous tests, and marks are cadence-
+      // limited now, so advance the wall clock past `MIN_MARK_INTERVAL_SECS`.
+      await warpBy(h, MIN_MARK_INTERVAL_SECS);
+      const current = await readMultiplierFromMint(h, okuMMint);
+      const newMultiplier = current.add(current.muln(1).divn(10_000)); // +1 bps
       
       await program.methods
         .setMultiplier(newMultiplier)
@@ -869,8 +874,9 @@ describe("lite-psm", () => {
       // multiplier bump stays under `MAX_STEP_BPS` (5 bps). The step ceiling
       // binds `distribute_yield` exactly as it binds `set_multiplier` — there
       // is deliberately no second door past the gates.
+      await warpBy(h, MIN_MARK_INTERVAL_SECS);
       const currentM = BigInt((await readMultiplierFromMint(h, okuMMint)).toString());
-      const maxBump = (currentM * 4n) / 10_000n; // 4 bps, one under the ceiling
+      const maxBump = (currentM * 1n) / 10_000n; // 1 bps, one under the ceiling
       const maxYield = (maxBump * supply) / PRECISION_BI;
       const yieldAmount = maxYield < 1_000n ? maxYield : 1_000n;
       const expectedBump = (yieldAmount * PRECISION_BI) / supply;

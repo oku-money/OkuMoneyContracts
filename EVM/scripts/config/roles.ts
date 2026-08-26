@@ -73,7 +73,7 @@ export const ROLES = {
   OKU_UNBLACKLISTER: h("OKU_UNBLACKLISTER"),
   /**
    * Cold economic/safety policy. On OkuM this also gates
-   * `setSyncWindowDuration` and
+   * `setStepFeeSource` (removed) and
    * `resumeAccrual`; on USDOku it gates `setSolvencySource`.
    */
   OKU_CAP_MANAGER: h("OKU_CAP_MANAGER"),

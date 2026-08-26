@@ -520,7 +520,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
       const curMultiplierE1 = await readMultiplierFromMint(ctx.h, ctx.okuMMint);
       // +0.99%: a single step can never exceed MAX_FEE_BPS (1%), because the
       // program refuses any step the redemption fee does not cover.
-      const newMultiplier = curMultiplierE1.add(curMultiplierE1.muln(4).divn(10_000));
+      const newMultiplier = curMultiplierE1.add(curMultiplierE1.muln(1).divn(10_000));
       await ctx.psm.methods.setMultiplier(newMultiplier)
         .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: ctx.configPda, okuMMint: ctx.okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID })
         .signers([psmOrchestrator]).rpc();
@@ -601,7 +601,7 @@ describe("realWorldUsage (SVM) edge cases", () => {
       // Multiplier tick (+1%) between legs
       await warpSlots(ctx.h, 1);
       const curMultiplierE3 = await readMultiplierFromMint(ctx.h, ctx.okuMMint);
-      const newMultiplier = curMultiplierE3.add(curMultiplierE3.muln(4).divn(10_000));
+      const newMultiplier = curMultiplierE3.add(curMultiplierE3.muln(1).divn(10_000));
       await ctx.psm.methods.setMultiplier(newMultiplier)
         .accountsPartial({ rebaser: psmOrchestrator.publicKey, config: ctx.configPda, okuMMint: ctx.okuMMint, token2022Program: TOKEN_2022_PROGRAM_ID })
         .signers([psmOrchestrator]).rpc();

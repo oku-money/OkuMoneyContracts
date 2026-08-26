@@ -43,6 +43,7 @@ import {
   ensurePSMUnpaused,
   mintOkuMViaProgram,
   DECIMALS,
+  MIN_MARK_INTERVAL_SECS,
 } from "../shared/setup";
 import { clearSyncWindow, expectedRedeemNet } from "../shared/multiplier";
 import {
@@ -200,9 +201,10 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
     );
 
     // ===== Tick: bump the multiplier, then redeem again =====
-    // 4 bps, inside `MAX_STEP_BPS` (5) with headroom for the f64 round-trip.
+    // 1 bps, inside `MAX_STEP_BPS` (2) with headroom for the f64 round-trip.
     // Was 1%, which the tightened step ceiling now refuses.
-    const m1 = m0.add(m0.muln(4).divn(10_000));
+    const m1 = m0.add(m0.muln(1).divn(10_000));
+    await warpBy(h, MIN_MARK_INTERVAL_SECS);
     await psm.methods
       .setMultiplier(m1)
       .accountsPartial({
@@ -269,10 +271,16 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
       unpackMint(okuMMint, mintAcct0!, TOKEN_2022_PROGRAM_ID).supply.toString()
     );
 
-    // === Tick A: distribute_yield($10) ===
-    const yieldA = new BN(10_000_000); // $10 in 6-decimal terms
+    // === Tick A: distribute_yield ===
+    // Sized under `MAX_STEP_BPS` (2 bps) against the live supply. A flat $10
+    // implied a ~4 bps bump at this supply, which the tightened mark ceiling
+    // now refuses — the bound is on the IMPLIED step, not on the dollar amount.
+    const maxYield = m0.muln(1).divn(10_000).mul(supply0).div(PRECISION);
+    const yieldA = BN.min(new BN(10_000_000), maxYield);
     const expectedDeltaA = yieldA.mul(PRECISION).div(supply0);
     const mAExpected = m0.add(expectedDeltaA);
+
+    await warpBy(h, MIN_MARK_INTERVAL_SECS);
 
     await psm.methods
       .distributeYield(yieldA)
@@ -299,9 +307,13 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
     const supplyB = new BN(
       unpackMint(okuMMint, mintAcctB!, TOKEN_2022_PROGRAM_ID).supply.toString()
     );
-    const yieldB = new BN(20_000_000);
+    // Same sizing rule as Tick A: bounded by the implied step, not the dollars.
+    const maxYieldB = mAExpected.muln(1).divn(10_000).mul(supplyB).div(PRECISION);
+    const yieldB = BN.min(new BN(20_000_000), maxYieldB);
     const expectedDeltaB = yieldB.mul(PRECISION).div(supplyB);
     const mBExpected = mAExpected.add(expectedDeltaB);
+
+    await warpBy(h, MIN_MARK_INTERVAL_SECS);
 
     await psm.methods
       .distributeYield(yieldB)
@@ -385,7 +397,8 @@ describe("rate changes over time (slot + wall-clock progression)", () => {
 
     let mCurrent = mStart;
     for (let i = 0; i < 3; i++) {
-      const next = mCurrent.add(mCurrent.muln(4).divn(10_000)); // +4 bps
+      const next = mCurrent.add(mCurrent.muln(1).divn(10_000)); // +1 bps
+      await warpBy(h, MIN_MARK_INTERVAL_SECS);
       await psm.methods
         .setMultiplier(next)
         .accountsPartial({
@@ -559,7 +572,7 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
     const m0 = await readMultiplierFromMint(h, okuMMint);
     // +0.99% — just inside what the 1% test `tout` covers, since the program
     // now refuses a step the redemption fee cannot cover.
-    const m1 = m0.add(m0.muln(4).divn(10_000));
+    const m1 = m0.add(m0.muln(1).divn(10_000));
 
     // Stamp the yield-lock slot.
     //
@@ -567,6 +580,7 @@ describe("sandwich lock under manual slot control (autoBumpSlot=false)", () => {
     // specifically about the same-slot fence, and settling either guard would
     // defeat the thing under test. The sync window is separately disabled in
     // this describe's setup so the two mechanisms can be observed in isolation.
+    await warpBy(h, MIN_MARK_INTERVAL_SECS);
     await psm.methods
       .setMultiplier(m1)
       .accountsPartial({

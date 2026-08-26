@@ -48,7 +48,7 @@ export const MAX_FEE_BPS = 100;
  * `oku_shared::MAX_STEP_BPS` — simultaneously the per-step ceiling and the
  * PER-LEG floor under `tin`/`tout`. The single number defining step coverage.
  */
-export const MAX_STEP_BPS = 5;
+export const MAX_STEP_BPS = 2;
 /** `oku_shared::DEFAULT_SYNC_WINDOW_SECS` — window length written at init. */
 export const DEFAULT_SYNC_WINDOW_SECS = 60;
 
@@ -71,21 +71,24 @@ export const DEFAULT_SYNC_WINDOW_SECS = 60;
 export const DEFAULT_TEST_TOUT_BPS = MAX_FEE_BPS;
 
 /**
- * Default `tin` applied by `initializePsm` — the per-leg floor.
+ * Default `tin` applied by `initializePsm` — ZERO.
  *
- * Exported so suites can state fee-adjusted expectations against the value the
- * fixture actually configured rather than hardcoding 5.
+ * `tin` has no floor: the step-arbitrage gain is realised on exit, so `tout`
+ * alone closes it and a deposit fee would only tax permissionless entry.
+ * Deposits are 1:1 again, which is what the product is for.
  */
-export const DEFAULT_TEST_TIN_BPS = MAX_STEP_BPS;
+export const DEFAULT_TEST_TIN_BPS = 0;
+
+/** `oku_shared::MIN_MARK_INTERVAL_SECS` — minimum gap between two marks. */
+export const MIN_MARK_INTERVAL_SECS = 3_600;
 
 export interface InitializePsmOptions {
   /**
    * `tout` to configure immediately after `initialize`. Defaults to
    * `DEFAULT_TEST_TOUT_BPS`.
    *
-   * CLAMPED UP to `MAX_STEP_BPS`: the per-leg floor is enforced on-chain, so
-   * there is no reachable state below it. Passing `0` no longer observes a
-   * fail-closed state — it gets the floor.
+   * CLAMPED UP to `MAX_STEP_BPS`: the exit-leg floor is enforced on-chain, so
+   * there is no reachable state below it.
    */
   toutBps?: number;
   /** `tin` to configure. Defaults to 0. */
@@ -230,8 +233,10 @@ export async function initializePsm(
   // `MAX_STEP_BPS` are rejected on-chain (`FeeBelowStepFloor`), so both
   // defaults are clamped up to the floor — a suite asking for 0 gets the floor,
   // which is the minimum reachable state rather than an error.
+  // `tout` is clamped UP to the floor (there is no reachable state below it);
+  // `tin` is passed through, including zero, which is the shipped default.
   const toutBps = Math.max(options.toutBps ?? DEFAULT_TEST_TOUT_BPS, MAX_STEP_BPS);
-  const tinBps = Math.max(options.tinBps ?? 0, MAX_STEP_BPS);
+  const tinBps = options.tinBps ?? DEFAULT_TEST_TIN_BPS;
   {
     await program.methods
       .setFees(new BN(tinBps), new BN(toutBps))

@@ -71,13 +71,9 @@ contract ScaledUIHarness is ScaledUIAmountUpgradeable {
     // ============ Exposed authority path (ungated) ============
 
     /// @notice Raw `_stepMultiplier`, with none of the token's policy layered on
-    ///         (no role gate, no halt flag, no step-coverage check, no window).
+    ///         (no role gate, no halt flag, no window).
     function step(uint256 newMultiplier) external returns (uint256 stepBps) {
         return _stepMultiplier(newMultiplier);
-    }
-
-    function resetHighWaterMark() external {
-        _resetStepHighWaterMark();
     }
 
     // ============ Minimal raw ledger for the balances extension ============

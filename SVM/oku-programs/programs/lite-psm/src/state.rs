@@ -142,35 +142,22 @@ pub struct PsmConfig {
     // on. The fees are the mechanism that closes *local* step arbitrage —
     // minting at `M0`, holding across a discrete multiplier step, and
     // redeeming at `M1`. The sync window cannot address that (the attacker
-    // transacts outside it); a combined `tin + tout` exceeding the maximum
-    // step yield makes the round trip unprofitable by construction.
+    // transacts outside it).
     //
-    // Both default to 0 and are individually bounded by `MAX_FEE_BPS`.
+    // Bounded above by `MAX_FEE_BPS` and below, PER LEG, by `MAX_STEP_BPS`.
+    // Composed with `set_multiplier`'s `step_bps <= MAX_STEP_BPS` bound, every
+    // step is covered on each leg for all time — so no high-water mark, no
+    // ratchet and no escape hatch is needed. Per-leg rather than combined
+    // because a cross-chain round trip pays `tin` on one chain and `tout` on
+    // the other; see `set_fees`.
+    //
+    // Both default to 0, which is BELOW the floor: fees ship inert and
+    // `set_fees` must be called once before the multiplier can move.
     /// Mint fee in basis points, charged on the USDC deposited.
     pub tin_bps: u64,
 
     /// Redemption fee in basis points, charged on the USDC paid out.
     pub tout_bps: u64,
-
-    /// High-water mark of every multiplier step ever taken, in basis points,
-    /// rounded up. `set_fees` refuses any `tin_bps + tout_bps` below it.
-    ///
-    /// This is the second half of the step-arbitrage invariant. The first half
-    /// (`step_is_covered`, enforced at write time) stops an operator creating
-    /// exposure the current fees do not cover. This half stops them *removing*
-    /// coverage afterwards — otherwise "raise fees, take a big step, lower
-    /// fees" hands a cheap exit to everyone who held across the step.
-    ///
-    /// A time-based cooldown was considered and rejected: the attacker's edge is
-    /// locked in when the step lands and does not decay, and the multiplier is
-    /// monotonic so waiting costs them nothing. A cooldown delays the profit
-    /// rather than removing it. A high-water mark has no expiry.
-    ///
-    /// Less restrictive than it sounds: it pins the fees only against steps
-    /// actually taken. If every step was 1.4 bps, the combined fees can still
-    /// be lowered to 1.4 bps. Cleared only by the explicit, separately-gated
-    /// `reset_step_high_water_mark`.
-    pub max_step_bps: u64,
 }
 
 impl PsmConfig {
@@ -212,11 +199,11 @@ impl PsmConfig {
 //            allowance_manager, rebaser, direct_minter, direct_burner)
 //         1  pending_role_admin
 //         3  token refs (usdc_mint, oku_m_mint, vault_usdc)
-//   80  10 8-byte scalars (u64/i64):
+//   72  9 8-byte scalars (u64/i64):
 //         5 pre-existing (max_supply, minter_allowance,
 //           last_yield_distribution_slot, direct_minter_allowance,
 //           direct_burner_allowance)
 //         2 sync window (sync_lock_until_ts, sync_window_secs)
-//         3 fees / step coverage (tin_bps, tout_bps, max_step_bps)
+//         2 fees (tin_bps, tout_bps)
 //   1   is_paused (bool)
-const _: () = assert!(PsmConfig::LEN == 602);
+const _: () = assert!(PsmConfig::LEN == 594);

@@ -21,7 +21,7 @@ use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_2022_extensions::spl_token_metadata_interface;
 use anchor_spl::token_interface;
-use oku_shared::MAX_FEE_BPS;
+use oku_shared::{MAX_FEE_BPS, MAX_STEP_BPS};
 use spl_token_metadata_interface::state::Field;
 
 /// Pause the PSM (emergency response)
@@ -482,32 +482,22 @@ pub fn set_fees(ctx: Context<CapManagerParams>, tin_bps: u64, tout_bps: u64) -> 
     require!(tin_bps <= MAX_FEE_BPS, LitePsmError::FeeAboveMax);
     require!(tout_bps <= MAX_FEE_BPS, LitePsmError::FeeAboveMax);
 
-    // ---- STEP-ARBITRAGE COVERAGE (half 2 of 2) ----
+    // ---- STEP-ARBITRAGE COVERAGE (the whole of it) ----
     //
-    // The COMBINED `tin + tout` may not drop below the largest step ever
-    // taken. Half 1 (the `step_is_covered` check at write time) stops exposure
-    // being created that the fees do not cover; this stops the coverage being
-    // removed afterwards.
+    // Each leg independently covers the largest step the protocol can take.
+    // Composed with `set_multiplier`'s `step_bps <= MAX_STEP_BPS` check, every
+    // admissible step is covered permanently, with no state.
     //
-    // Without it: raise fees, take a big step, lower fees — and everyone who
-    // held across the step gets a cheap exit. The attacker's edge is locked in
-    // the moment the step lands and never decays, which is why a time-based
-    // cooldown does not work here and a high-water mark does.
+    // PER-LEG RATHER THAN COMBINED, and this is the reason: a cross-chain round
+    // trip pays `tin` on the chain it mints on and `tout` on the chain it
+    // redeems on. A combined `tin + tout` bound enforced separately on each
+    // chain does not bound that pair — `(0, 2x)` here and `(2x, 0)` on EVM both
+    // satisfy a combined check while the cross-chain round trip pays nothing.
     //
-    // Binding the SUM rather than `tout` alone matters: coverage may legally be
-    // carried entirely by `tin`, and a `tout`-only floor would then permit
-    // dropping to zero total coverage while still passing.
-    //
-    // Only pins against steps ACTUALLY taken: if every step was 1.4 bps, the
-    // fees can still be lowered to 1.4 bps combined. Clearing the mark is
-    // possible but is a separate, explicitly-named instruction.
-    let combined_bps = tin_bps
-        .checked_add(tout_bps)
-        .ok_or(LitePsmError::Overflow)?;
-    require!(
-        combined_bps >= ctx.accounts.config.max_step_bps,
-        LitePsmError::FeeBelowStepHighWaterMark
-    );
+    // Fails closed: the shipped `(0, 0)` is below the floor, so `set_fees` must
+    // be called once before any multiplier increase is possible.
+    require!(tin_bps >= MAX_STEP_BPS, LitePsmError::FeeBelowStepFloor);
+    require!(tout_bps >= MAX_STEP_BPS, LitePsmError::FeeBelowStepFloor);
 
     let config = &mut ctx.accounts.config;
     let old_tin_bps = config.tin_bps;
@@ -525,36 +515,10 @@ pub fn set_fees(ctx: Context<CapManagerParams>, tin_bps: u64, tout_bps: u64) -> 
     Ok(())
 }
 
-/// Clear the multiplier-step high-water mark (CAP_MANAGER only).
-///
-/// # Read this before calling
-///
-/// `max_step_bps` is the floor under `tin_bps + tout_bps`, and it exists so a step that
-/// was covered when it was taken cannot be un-covered later. Clearing it
-/// **reopens that historical exposure**: anyone still holding raw acquired
-/// before a large past step can then redeem at a fee that no longer covers it.
-///
-/// This is deliberately a separate, explicitly-named instruction rather than a
-/// side effect of `set_fees`, so it cannot happen by accident during a routine
-/// fee change and shows up unambiguously in an audit trail.
-///
-/// # When it is legitimate
-///
-/// Moving to a materially finer cadence — e.g. a protocol that ran on weekly
-/// ~9.6 bps steps switching to hourly ~0.06 bps steps — would otherwise be
-/// pinned at the old weekly fee forever. The honest precondition is that the
-/// raw supply outstanding at the time of the large step has substantially
-/// turned over, which the chain cannot verify. That judgement is the cold
-/// multisig's, which is why this sits on `cap_manager`.
-pub fn reset_step_high_water_mark(ctx: Context<CapManagerParams>) -> Result<()> {
-    let config = &mut ctx.accounts.config;
-    let old_mark = config.max_step_bps;
-    config.max_step_bps = 0;
-
-    emit!(StepHighWaterMarkReset {
-        old_mark_bps: old_mark,
-        tout_bps_at_reset: config.tout_bps,
-    });
-
-    Ok(())
-}
+// `reset_step_high_water_mark` was removed here along with the `max_step_bps`
+// ratchet it cleared. The static per-leg fee floor (`MAX_STEP_BPS`) needs no
+// escape hatch: there is no accumulated state to unwind, and moving to a
+// coarser or finer cadence is a change to the constant, reviewed as code,
+// rather than a cold-multisig call whose honest precondition (that supply
+// outstanding at the time of a large past step has substantially turned over)
+// was never verifiable on-chain.

@@ -73,9 +73,11 @@ contract RedemptionQueueTest is BaseTest {
 
         assertEq(queue.totalQueuedRaw(), 0);
         assertEq(token.balanceOf(address(queue)), 0);
-        assertApproxEqAbs(usdc.balanceOf(user1), 1000e6, 1);
-        assertApproxEqAbs(usdc.balanceOf(user2), 2000e6, 1);
-        assertApproxEqAbs(usdc.balanceOf(user3), 3000e6, 1);
+        // Payouts are net of the `tout` snapshotted on each entry, which is
+        // nonzero by default now that fees ship at the step-coverage floor.
+        assertApproxEqAbs(usdc.balanceOf(user1), _afterTout(1000e6), 1);
+        assertApproxEqAbs(usdc.balanceOf(user2), _afterTout(2000e6), 1);
+        assertApproxEqAbs(usdc.balanceOf(user3), _afterTout(3000e6), 1);
         assertEq(token.totalSupply(), 0);
     }
 
@@ -88,7 +90,7 @@ contract RedemptionQueueTest is BaseTest {
         vm.prank(queueProcessor);
         module.processQueue(0, 3, 1500e6);
 
-        assertApproxEqAbs(usdc.balanceOf(user1), 1000e6, 1);
+        assertApproxEqAbs(usdc.balanceOf(user1), _afterTout(1000e6), 1);
         assertEq(usdc.balanceOf(user2), 0, "must not skip ahead");
         assertEq(usdc.balanceOf(user3), 0);
         assertGt(queue.totalQueuedRaw(), 0);

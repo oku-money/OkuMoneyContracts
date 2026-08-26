@@ -320,16 +320,9 @@ pub struct FeesSet {
     pub new_tout_bps: u64,
 }
 
-/// Emitted when `reset_step_high_water_mark` clears the step floor under
-/// `tout_bps`.
-///
-/// ALARM ON THIS. It reopens historical step-arbitrage exposure: raw acquired
-/// before a large past step can subsequently be redeemed at a fee that no
-/// longer covers that step. Legitimate only when the supply outstanding at the
-/// time of the step has substantially turned over — a judgement the chain
-/// cannot make, which is why the action is cold-gated and separately named.
-#[event]
-pub struct StepHighWaterMarkReset {
-    pub old_mark_bps: u64,
-    pub tout_bps_at_reset: u64,
-}
+// NOTE: `StepHighWaterMarkReset` was removed along with the `max_step_bps`
+// ratchet. The static per-leg fee floor (`MAX_STEP_BPS`) has no accumulated
+// state and therefore no reset action to observe. `FeesSet` above remains the
+// only fee-policy event, and is now sufficient on its own: since the floor is a
+// constant, a `FeesSet` payload is fully interpretable without also knowing the
+// step history.

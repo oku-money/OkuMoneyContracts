@@ -98,19 +98,6 @@ contract USDOkuWrapper is
         }
     }
 
-    // ============ Modifiers ============
-
-    /// @dev Wrap and unwrap price through `M_oku`, so both are fenced while a
-    ///      multiplier step is propagating. Same rule as the module: gated iff
-    ///      the operation prices through the multiplier.
-    modifier whenNotSyncLocked() {
-        IOkuM okuM_ = _getWrapperStorage().okuM;
-        if (okuM_.isSyncLocked()) {
-            revert SyncWindowActive(okuM_.syncLockedUntil());
-        }
-        _;
-    }
-
     // ============ Errors ============
 
     /// @notice `wrap` has been disabled (USDOku sunset step 1). Unwrap is open.
@@ -118,8 +105,7 @@ contract USDOkuWrapper is
     error AmountTooSmall();
     /// @notice The wrapper's OkuM buffer cannot cover this unwrap.
     error InsufficientBacking(uint256 available, uint256 required);
-    /// @notice A multiplier step is propagating; retry after `lockedUntil`.
-    error SyncWindowActive(uint256 lockedUntil);
+
     /// @notice A `withdrawSurplus` request would leave `realizedBacking()`
     ///         below `declaredLiability()`.
     /// @dev The bound is deliberately stricter than "within
@@ -214,7 +200,6 @@ contract USDOkuWrapper is
         external
         nonReentrant
         whenNotPaused
-        whenNotSyncLocked
         returns (uint256 usdOkuOut)
     {
         return _wrap(okuMAmount, msg.sender);
@@ -235,7 +220,6 @@ contract USDOkuWrapper is
         external
         nonReentrant
         whenNotPaused
-        whenNotSyncLocked
         returns (uint256 usdOkuOut)
     {
         return _wrap(okuMAmount, receiver);
@@ -269,7 +253,6 @@ contract USDOkuWrapper is
         external
         nonReentrant
         whenNotPaused
-        whenNotSyncLocked
         returns (uint256 okuMOut)
     {
         return _unwrap(usdOkuAmount, msg.sender);
@@ -289,7 +272,6 @@ contract USDOkuWrapper is
         external
         nonReentrant
         whenNotPaused
-        whenNotSyncLocked
         returns (uint256 okuMOut)
     {
         return _unwrap(usdOkuAmount, receiver);
@@ -413,7 +395,6 @@ contract USDOkuWrapper is
         external
         nonReentrant
         whenNotPaused
-        whenNotSyncLocked
         onlyRole(Roles.WRAPPER_RESERVE_MANAGER)
     {
         if (to == address(0)) revert Errors.ZeroAddress();

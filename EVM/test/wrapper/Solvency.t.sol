@@ -371,7 +371,13 @@ contract SolvencyTest is BaseTest {
         assertLe(mid, int256(Constants.MAX_SOLVENCY_GAP_BPS), "but within the bound");
 
         // Phase 2 — realized marks catch up and overtake.
-        _stepBy(Constants.MAX_STEP_BPS);
+        //
+        // 5 days at 5% APY is ~6.85 bps of declared growth, which a single
+        // `MAX_STEP_BPS` (5 bps) mark cannot overtake. Walking the realized
+        // index up to the declared one is exactly what the orchestrator does,
+        // and the extra marks are the minimum-cadence property working as
+        // intended rather than an obstacle.
+        _stepToAtLeast(usdOku.usdOkuIndex());
         assertLe(wrapper.solvencyGapBps(), 0, "realized has overtaken");
         assertGe(wrapper.backingRatioBps(), Constants.BASIS_POINTS);
     }

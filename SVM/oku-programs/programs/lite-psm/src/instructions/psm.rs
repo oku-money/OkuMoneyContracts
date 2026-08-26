@@ -9,7 +9,7 @@ use crate::contexts::{DepositBuffer, MintOkuM, RedeemOkuM, WithdrawBuffer};
 use crate::errors::LitePsmError;
 use crate::events::*;
 use crate::helpers::{
-    apply_fee, check_sync_window, check_yield_lock, dollars_to_raw, raw_to_dollars,
+    apply_fee, check_yield_lock, dollars_to_raw, raw_to_dollars,
 };
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
@@ -31,7 +31,6 @@ pub fn mint_oku_m(ctx: Context<MintOkuM>, usdc_amount: u64) -> Result<()> {
     // mint as well as redeem is what makes the window a complete answer to
     // cross-chain divergence — leaving the entry side open would just move
     // the mispricing rather than remove it.
-    check_sync_window(&ctx.accounts.config)?;
 
     // Read state
     let is_paused = ctx.accounts.config.is_paused;
@@ -168,7 +167,6 @@ pub fn redeem_oku_m(
 
     // Cross-chain sync window: redeem prices through the multiplier, so it
     // must not execute while a tick is propagating between chains.
-    check_sync_window(&ctx.accounts.config)?;
 
     // Read state
     let is_paused = ctx.accounts.config.is_paused;

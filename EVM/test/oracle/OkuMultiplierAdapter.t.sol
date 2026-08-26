@@ -197,7 +197,7 @@ contract OkuMultiplierAdapterTest is BaseTest {
         assertFalse(feed.isSyncLocked());
         assertEq(feed.syncLockedUntil(), 0);
 
-        _stepNoWarp(1.001e18);
+        _stepNoWarp(1.0001e18);
 
         assertTrue(feed.isSyncLocked(), "adapter must surface the module gate");
         assertEq(feed.syncLockedUntil(), token.syncLockedUntil());
@@ -218,7 +218,7 @@ contract OkuMultiplierAdapterTest is BaseTest {
     function test_SyncWindow_DoesNotAffectHealth() public {
         assertTrue(feed.isHealthy());
 
-        _stepNoWarp(1.001e18);
+        _stepNoWarp(1.0001e18);
 
         assertTrue(feed.isSyncLocked());
         assertTrue(feed.isHealthy(), "an accurate price must not be marked unhealthy");

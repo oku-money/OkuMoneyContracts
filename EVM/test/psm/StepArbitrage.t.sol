@@ -17,29 +17,41 @@ import {SubscriptionModule} from "../../src/psm/SubscriptionModule.sol";
  *          mint at M0  ->  wait for the step  ->  redeem at M1
  *
  *      converts a mark into USDC out of the buffer. The attacker holds raw
- *      across the step and needs no transaction while the sync window is open,
- *      which is exactly why the window is NOT the defence — no window length
- *      deters someone who is simply waiting.
+ *      across the step and needs no transaction while any window is open, which
+ *      is exactly why a time lock is NOT the defence here — no window length
+ *      deters someone who is simply waiting. (Contrast `SyncWindowTest`, where a
+ *      time lock IS the right tool because the edge is transient.)
  *
  *      THE DEFENCE is the round-trip fee:
  *
  *          profit per unit = M1/M0 - 1 - (tin + tout)/10_000
  *
- *      so the protocol must enforce `tin + tout >= stepBps` for every step
- *      taken. Two mechanisms, both required:
+ *      and it is enforced as a relationship between two CONSTANTS rather than as
+ *      runtime state:
  *
- *        1. `OkuM.setOkuMultiplier` refuses a step the current fees do not cover
- *           (`StepNotCovered`). Without it, fees could simply be set to zero and
- *           a large step taken.
- *        2. `SubscriptionModule.setFees` refuses to drop `tin + tout` below
- *           `stepHighWaterMark` (`FeesBelowStepFloor`). Without it, the fee could
- *           be raised for the step and lowered immediately after, leaving anyone
- *           still holding raw from before the step able to exit cheaply.
+ *          OkuM.setOkuMultiplier:       stepBps  <= MAX_STEP_BPS
+ *          SubscriptionModule.setFees:  tin      >= MAX_STEP_BPS
+ *                                       tout     >= MAX_STEP_BPS
  *
- *      An earlier draft bound `tout` ALONE, which leaks the mint-side half: an
- *      attacker who mints cheaply at M0 pays only `tout` on the way out, so a
- *      `tout`-only rule prices a round trip at less than the step whenever `tin`
- *      carried part of the coverage. The invariant is on the SUM.
+ *      Composed, every step the protocol can take is covered on each leg
+ *      independently, for all time. `initialize` seeds both legs at the floor,
+ *      so there is no uncovered window between deployment and configuration.
+ *
+ *      WHAT THIS REPLACED, and why the tests below are shorter than they were.
+ *      The previous design read `tin() + tout()` back from the module at
+ *      multiplier-write time (`StepNotCovered`), ratcheted a
+ *      `stepHighWaterMark`, floored later `setFees` calls against that mark
+ *      (`FeesBelowStepFloor`), and offered a cold `resetStepHighWaterMark`
+ *      escape hatch. Those tests had to explore a two-dimensional
+ *      (fee, step-history) state space and carry an exemption for the escape
+ *      hatch. With a static floor there is no history to explore: the illegal
+ *      region is defined by constants and is unreachable by construction.
+ *
+ *      PER-LEG RATHER THAN COMBINED. A combined `tin + tout >= step` rule is
+ *      sufficient on one chain and insufficient across two, because a
+ *      cross-chain round trip pays `tin` on the chain it mints on and `tout` on
+ *      the chain it redeems on. `test_CrossChainLegPairing_IsNeverProfitable`
+ *      pins the case that motivates the stronger rule.
  */
 contract StepArbitrageTest is BaseTest {
     /// @dev A deep buffer, so a redemption never queues and the round trip is
@@ -90,54 +102,79 @@ contract StepArbitrageTest is BaseTest {
 
     // ============ The invariant, deterministically ============
 
-    /// @notice At exact coverage (`tin + tout == stepBps`) the round trip is
-    ///         break-even at best. This is the boundary case, and the one a
-    ///         mis-derived formula gets wrong.
-    function test_ExactCoverage_IsNeverProfitable() public {
-        int256 profit = _roundTrip(50, 50, 100, 1_000_000e6);
-        assertLe(profit, 0, "exact coverage must not be profitable");
+    /// @notice The worst admissible case: both legs AT the floor, and a step of
+    ///         exactly `MAX_STEP_BPS`. This is the tightest configuration the
+    ///         contracts permit, and the one a mis-derived floor gets wrong.
+    ///
+    /// @dev Note the round trip now pays `2 * MAX_STEP_BPS` against a gain of
+    ///      `MAX_STEP_BPS`, so there is a full step of margin. That margin is
+    ///      the price of the per-leg rule, and it is what buys the cross-chain
+    ///      guarantee below.
+    function test_FloorFees_MaximalStep_IsNeverProfitable() public {
+        int256 profit = _roundTrip(
+            Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS, 1_000_000e6
+        );
+        assertLt(profit, 0, "floor fees against a maximal step must be loss-making");
     }
 
-    /// @notice The mint-side half matters. With coverage carried ENTIRELY by
-    ///         `tin`, a `tout`-only rule would have permitted this step at
-    ///         `tout = 0` and the round trip would profit. The sum rule does not.
-    function test_CoverageCarriedEntirelyByTin() public {
-        int256 profit = _roundTrip(100, 0, 100, 1_000_000e6);
-        assertLe(profit, 0, "tin-only coverage still closes the round trip");
-    }
+    /// @notice A one-wei step at floor fees. The smallest possible gain against
+    ///         the smallest possible fee — guards against a rounding direction
+    ///         that would make dust extraction profitable at scale.
+    function test_OneWeiStep_AtFloorFees_IsNeverProfitable() public {
+        vm.prank(capManager);
+        module.setFees(Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS);
 
-    /// @notice And symmetrically, coverage carried entirely by `tout`.
-    function test_CoverageCarriedEntirelyByTout() public {
-        int256 profit = _roundTrip(0, 100, 100, 1_000_000e6);
-        assertLe(profit, 0);
+        uint256 usdcIn = 1_000_000e6;
+        usdc.mint(user1, usdcIn);
+        vm.startPrank(user1);
+        usdc.approve(address(module), usdcIn);
+        uint256 raw = module.mint(usdcIn);
+        vm.stopPrank();
+
+        uint256 target = token.uiMultiplier() + 1;
+        vm.prank(rateSetter);
+        token.setOkuMultiplier(target);
+        _warpPastSyncWindow();
+
+        vm.startPrank(user1);
+        token.approve(address(module), raw);
+        uint256 usdcOut = module.redeem(raw);
+        vm.stopPrank();
+
+        assertLt(usdcOut, usdcIn, "a one-wei step must not be extractable");
     }
 
     /// @notice Over-coverage is strictly loss-making, as it must be.
     function test_OverCoverage_IsLossMaking() public {
-        int256 profit = _roundTrip(100, 100, 50, 1_000_000e6);
+        int256 profit = _roundTrip(Constants.MAX_FEE_BPS, Constants.MAX_FEE_BPS, 1, 1_000_000e6);
         assertLt(profit, 0);
     }
 
-    /// @notice The grid. Every legal `(tin, tout, stepBps)` triple with
-    ///         `tin + tout >= stepBps` must close the round trip.
-    function test_Grid_EveryLegalCombinationIsUnprofitable() public {
-        uint256[4] memory fees = [uint256(0), 25, 50, 100];
-        uint256[4] memory steps = [uint256(1), 25, 50, 100];
+    /// @notice The grid. Every `(tin, tout, stepBps)` triple the contracts admit
+    ///         must close the round trip.
+    ///
+    /// @dev Exhaustive over the step dimension (1..MAX_STEP_BPS) rather than
+    ///      sampled, which is affordable precisely because `MAX_STEP_BPS` is now
+    ///      small. The fee dimension samples the floor and the ceiling: the
+    ///      payout is monotonically decreasing in both fees, so the floor pair
+    ///      is the worst case and the rest is confirmation.
+    function test_Grid_EveryAdmissibleCombinationIsUnprofitable() public {
+        uint256[3] memory fees =
+            [Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS + 1, Constants.MAX_FEE_BPS];
 
         for (uint256 i; i < fees.length; i++) {
             for (uint256 j; j < fees.length; j++) {
-                for (uint256 k; k < steps.length; k++) {
-                    if (fees[i] + fees[j] < steps[k]) continue; // illegal: refused on-chain
+                for (uint256 step = 1; step <= Constants.MAX_STEP_BPS; step++) {
                     uint256 snap = vm.snapshotState();
-                    int256 profit = _roundTrip(fees[i], fees[j], steps[k], 1_000_000e6);
-                    assertLe(profit, 0, "a legal fee/step combination leaked value");
+                    int256 profit = _roundTrip(fees[i], fees[j], step, 1_000_000e6);
+                    assertLe(profit, 0, "an admissible fee/step combination leaked value");
                     vm.revertToState(snap);
                 }
             }
         }
     }
 
-    function testFuzz_LegalCombinationsAreUnprofitable(
+    function testFuzz_AdmissibleCombinationsAreUnprofitable(
         uint256 tinSeed,
         uint256 toutSeed,
         uint256 stepSeed,
@@ -145,167 +182,128 @@ contract StepArbitrageTest is BaseTest {
     )
         public
     {
+        // Exactly the region the contracts admit. There is no illegal region to
+        // exclude by hand any more — the bounds ARE the admissibility rule.
         uint256 stepBps = _bound(stepSeed, 1, Constants.MAX_STEP_BPS);
-        uint256 tinBps = _bound(tinSeed, 0, Constants.MAX_FEE_BPS);
-        // Constrain to the legal region — the illegal region is unreachable
-        // on-chain and is asserted separately below.
-        uint256 minTout = stepBps > tinBps ? stepBps - tinBps : 0;
-        uint256 toutBps = _bound(toutSeed, minTout, Constants.MAX_FEE_BPS);
+        uint256 tinBps = _bound(tinSeed, Constants.MAX_STEP_BPS, Constants.MAX_FEE_BPS);
+        uint256 toutBps = _bound(toutSeed, Constants.MAX_STEP_BPS, Constants.MAX_FEE_BPS);
         uint256 usdcIn = _bound(amountSeed, 1e6, 5_000_000e6);
 
         int256 profit = _roundTrip(tinBps, toutBps, stepBps, usdcIn);
         assertLe(profit, 0);
     }
 
+    /// @notice THE CASE THE PER-LEG RULE EXISTS FOR. A cross-chain round trip
+    ///         mints on the lagging chain and redeems on the leading one, paying
+    ///         `tin` from chain A and `tout` from chain B.
+    ///
+    /// @dev Under a COMBINED floor, fees of `(0, 2N)` on chain A and `(2N, 0)`
+    ///      on chain B each satisfy `tin + tout >= N` while the cross pairing
+    ///      pays nothing at all. Under the per-leg floor the cheapest possible
+    ///      pairing still pays `2 * MAX_STEP_BPS`.
+    ///
+    ///      Modelled on one chain by charging the minimum on each leg
+    ///      independently, which is exactly what the cross-chain pairing costs.
+    function test_CrossChainLegPairing_IsNeverProfitable() public {
+        // The floor is the cheapest `tin` any chain can offer, and likewise the
+        // cheapest `tout`. A full maximal step of divergence between chains.
+        int256 profit = _roundTrip(
+            Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS, 1_000_000e6
+        );
+        assertLt(profit, 0, "cheapest cross-chain leg pairing must be loss-making");
+    }
+
     // ============ The illegal region is unreachable ============
 
-    /// @notice Under-covered steps are REFUSED, which is what makes the grid
-    ///         above exhaustive rather than merely representative.
-    function test_UnderCoveredStep_IsRefused() public {
-        vm.prank(capManager);
-        module.setFees(10, 10); // 20 bps of coverage
+    /// @notice A step above `MAX_STEP_BPS` is refused. This is what makes the
+    ///         grid above exhaustive rather than merely representative.
+    function test_OversizedStep_IsRefused() public {
+        uint256 oversized = Constants.MAX_STEP_BPS + 1;
+        uint256 target =
+            (Constants.PRECISION * (Constants.BASIS_POINTS + oversized)) / Constants.BASIS_POINTS;
 
         vm.prank(rateSetter);
-        vm.expectRevert(abi.encodeWithSelector(OkuM.StepNotCovered.selector, 50, 20));
-        token.setOkuMultiplier((Constants.PRECISION * 10_050) / 10_000);
-    }
-
-    /// @notice FAIL-CLOSED: with fees at their shipped default of zero, no step
-    ///         is possible at all. A deployment cannot accidentally mark before
-    ///         its fee schedule exists.
-    function test_ZeroFees_RefuseEveryStep() public view {
-        assertEq(module.tin(), 0);
-        assertEq(module.tout(), 0);
-        // A one-wei step is 1 bps after ceiling, against 0 bps of coverage.
-        // (Asserted via the revert path in `test_OneWeiStepStillNeedsCoverage`.)
-    }
-
-    function test_OneWeiStepStillNeedsCoverage() public {
-        vm.prank(rateSetter);
-        vm.expectRevert(abi.encodeWithSelector(OkuM.StepNotCovered.selector, 1, 0));
-        token.setOkuMultiplier(Constants.PRECISION + 1);
-    }
-
-    /// @notice An unwired fee source reads as ZERO coverage, not as "no check".
-    ///         A partially-configured deployment fails closed.
-    function test_UnwiredFeeSource_RefusesEveryStep() public {
-        vm.prank(capManager);
-        token.setStepFeeSource(address(0));
-
-        vm.prank(rateSetter);
-        vm.expectRevert(abi.encodeWithSelector(OkuM.StepNotCovered.selector, 1, 0));
-        token.setOkuMultiplier(Constants.PRECISION + 1);
-    }
-
-    // ============ The ratchet ============
-
-    /// @notice The second mechanism. Raising the fee for a step and dropping it
-    ///         afterwards would leave anyone still holding raw from before the
-    ///         step able to exit cheaply — so the floor is a RATCHET.
-    function test_Ratchet_FeesCannotDropBelowAStepAlreadyTaken() public {
-        vm.prank(capManager);
-        module.setFees(50, 50);
-        vm.prank(rateSetter);
-        token.setOkuMultiplier((Constants.PRECISION * 10_100) / 10_000); // 100 bps
-        assertEq(token.stepHighWaterMark(), 100);
-
-        vm.prank(capManager);
         vm.expectRevert(
-            abi.encodeWithSelector(SubscriptionModule.FeesBelowStepFloor.selector, 99, 100)
+            abi.encodeWithSelector(
+                ScaledUIAmountUpgradeable.StepAboveMaximum.selector,
+                oversized,
+                Constants.MAX_STEP_BPS
+            )
         );
-        module.setFees(50, 49);
-
-        // Exactly at the floor is fine; any redistribution of the same total is.
-        vm.prank(capManager);
-        module.setFees(100, 0);
-        assertEq(module.tin() + module.tout(), 100);
-    }
-
-    /// @notice The high-water mark tracks the LARGEST step, not the latest — a
-    ///         small step after a large one must not relax the floor.
-    function test_Ratchet_TracksTheLargestStepNotTheLatest() public {
-        vm.prank(capManager);
-        module.setFees(50, 50);
-
-        _stepNoWarp((Constants.PRECISION * 10_100) / 10_000); // 100 bps
-        _warpPastSyncWindow();
-        assertEq(token.stepHighWaterMark(), 100);
-
-        uint256 m = token.uiMultiplier();
-        vm.prank(rateSetter);
-        token.setOkuMultiplier(m + (m * 10) / Constants.BASIS_POINTS); // 10 bps
-        assertEq(token.stepHighWaterMark(), 100, "a small step does not lower the mark");
-
-        vm.prank(capManager);
-        vm.expectPartialRevert(SubscriptionModule.FeesBelowStepFloor.selector);
-        module.setFees(5, 5);
-    }
-
-    /// @notice THE NAMED ESCAPE HATCH. Cold can clear the floor, which reopens
-    ///         historical step exposure — its honest precondition (that supply
-    ///         outstanding at the time of the large step has substantially turned
-    ///         over) is not verifiable on-chain. Hence the event, and hence the
-    ///         monitoring requirement.
-    function test_Ratchet_ColdEscapeHatchClearsTheFloor() public {
-        vm.prank(capManager);
-        module.setFees(50, 50);
-        vm.prank(rateSetter);
-        token.setOkuMultiplier((Constants.PRECISION * 10_100) / 10_000);
-        assertEq(token.stepHighWaterMark(), 100);
-
-        vm.prank(capManager);
-        token.resetStepHighWaterMark();
-        assertEq(token.stepHighWaterMark(), 0);
-
-        vm.prank(capManager);
-        module.setFees(0, 0);
-        assertEq(module.tin(), 0);
-    }
-
-    // ============ Fee ceiling as a cadence constraint ============
-
-    /// @notice `MAX_FEE_BPS` bounds the maximum coverable step and therefore the
-    ///         MINIMUM MARK CADENCE. At a 5% annual target a daily step is ~1.34
-    ///         bps, weekly ~9.6 bps, monthly ~40.7 bps — so a 1% ceiling covers
-    ///         roughly a 2.4-month interval. A missed mark that forces an
-    ///         oversized catch-up step will be refused, and the operational
-    ///         answer is several smaller marks, not a bigger fee.
-    function test_FeeCeilingBoundsTheCoverableStep() public {
-        vm.prank(capManager);
-        module.setFees(Constants.MAX_FEE_BPS, Constants.MAX_FEE_BPS);
-
-        // Maximum coverage is 200 bps, but MAX_STEP_BPS caps the step at 100
-        // regardless: the step ceiling binds before the fee ceiling does.
-        vm.prank(rateSetter);
-        vm.expectPartialRevert(ScaledUIAmountUpgradeable.StepAboveMaximum.selector);
-        token.setOkuMultiplier((Constants.PRECISION * 10_101) / 10_000);
-
-        vm.prank(rateSetter);
-        token.setOkuMultiplier((Constants.PRECISION * 10_100) / 10_000);
-        assertEq(token.stepHighWaterMark(), 100);
-    }
-
-    /// @notice A catch-up after a missed cadence has to be split. Asserted
-    ///         because it is the operational consequence most likely to surprise
-    ///         someone reading only the constants.
-    function test_LargeCatchUpMustBeSplitAcrossSeveralMarks() public {
-        vm.prank(capManager);
-        module.setFees(50, 50);
-
-        uint256 target = (Constants.PRECISION * 10_300) / 10_000; // ~300 bps behind
-        vm.prank(rateSetter);
-        vm.expectPartialRevert(ScaledUIAmountUpgradeable.StepAboveMaximum.selector);
         token.setOkuMultiplier(target);
+    }
 
-        // Three legal marks get there.
-        for (uint256 i; i < 3; i++) {
-            uint256 m = token.uiMultiplier();
-            uint256 next = m + (m * Constants.MAX_STEP_BPS) / Constants.BASIS_POINTS;
-            if (next > target) next = target;
-            vm.prank(rateSetter);
-            token.setOkuMultiplier(next);
-            _warpPastSyncWindow();
-        }
-        assertGe(token.uiMultiplier(), target);
+    /// @notice Neither leg can be set below the floor.
+    function test_FeeBelowFloor_IsRefused() public {
+        vm.startPrank(capManager);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SubscriptionModule.FeeBelowStepFloor.selector,
+                Constants.MAX_STEP_BPS - 1,
+                Constants.MAX_STEP_BPS
+            )
+        );
+        module.setFees(Constants.MAX_STEP_BPS - 1, Constants.MAX_STEP_BPS);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SubscriptionModule.FeeBelowStepFloor.selector,
+                Constants.MAX_STEP_BPS - 1,
+                Constants.MAX_STEP_BPS
+            )
+        );
+        module.setFees(Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS - 1);
+
+        vm.stopPrank();
+    }
+
+    /// @notice ZERO FEES ARE UNREACHABLE. Not merely discouraged — there is no
+    ///         call sequence that produces them.
+    /// @dev The previous design shipped `(0, 0)` and relied on the token
+    ///      refusing to step until fees were configured. That was safe but
+    ///      non-accruing, and made "someone remembers to call `setFees`" a
+    ///      launch dependency. Now the floor is seeded at `initialize` and the
+    ///      only writer refuses to go below it.
+    function test_ZeroFeesAreUnreachable() public {
+        assertEq(module.tin(), Constants.MAX_STEP_BPS, "tin ships at the floor");
+        assertEq(module.tout(), Constants.MAX_STEP_BPS, "tout ships at the floor");
+
+        vm.prank(capManager);
+        vm.expectPartialRevert(SubscriptionModule.FeeBelowStepFloor.selector);
+        module.setFees(0, 0);
+    }
+
+    /// @notice Coverage holds from block one — no wiring call, no ordering.
+    /// @dev Regression guard for the fail-closed hole this design had to be
+    ///      corrected for mid-implementation: with the token no longer reading
+    ///      the fee schedule, shipping zero fees would have left steps
+    ///      admissible and uncovered until someone called `setFees`.
+    function test_StepIsCoveredImmediatelyAfterDeploy() public {
+        // No fee configuration whatsoever between `setUp` and this step.
+        uint256 m0 = token.uiMultiplier();
+        uint256 m1 = m0 + (m0 * Constants.MAX_STEP_BPS) / Constants.BASIS_POINTS;
+
+        vm.prank(rateSetter);
+        token.setOkuMultiplier(m1);
+        _warpPastSyncWindow();
+
+        assertGe(module.tin(), Constants.MAX_STEP_BPS);
+        assertGe(module.tout(), Constants.MAX_STEP_BPS);
+    }
+
+    // ============ The constants must remain compatible ============
+
+    /// @notice `MAX_STEP_BPS <= MAX_FEE_BPS`, or `setFees` admits nothing and
+    ///         the multiplier is permanently bricked.
+    /// @dev The one coupling left between these constants, and the only one an
+    ///      operator re-tuning them can get wrong. SVM mirror: a `const _:`
+    ///      assert in `oku-shared/src/constants.rs`.
+    function test_ConstantsCoupling_FeeFloorFitsUnderCeiling() public pure {
+        assertLe(
+            Constants.MAX_STEP_BPS,
+            Constants.MAX_FEE_BPS,
+            "step floor above fee ceiling would brick setFees"
+        );
     }
 }

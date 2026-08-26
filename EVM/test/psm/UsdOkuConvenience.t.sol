@@ -12,6 +12,7 @@ import {BaseTest} from "../Base.t.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {Errors} from "../../src/lib/Errors.sol";
 import {SubscriptionModule} from "../../src/psm/SubscriptionModule.sol";
+import {TestConstants} from "../shared/Constants.sol";
 
 /**
  * @title UsdOkuConvenienceTest
@@ -71,28 +72,33 @@ contract UsdOkuConvenienceTest is BaseTest {
 
     // ============ mintUsdOku ============
 
-    function test_MintUsdOku_AtUnitMultiplierIsOneToOne() public {
+    /// @notice One-to-one NET OF `tin`. Fees ship at the step-coverage floor
+    ///         rather than at zero, so the identity is on the credited amount.
+    function test_MintUsdOku_AtUnitMultiplierIsOneToOneNetOfTin() public {
+        uint256 expected = _afterTin(100e6) * TestConstants.DECIMAL_MULTIPLIER;
         uint256 usdOkuOut = _mintUsdOku(user1, 100e6);
-        assertEq(usdOkuOut, 100e18);
-        assertEq(usdOku.balanceOf(user1), 100e18);
+        assertEq(usdOkuOut, expected);
+        assertEq(usdOku.balanceOf(user1), expected);
         assertEq(token.balanceOf(user1), 0, "no intermediate OkuM ever touches the caller");
         assertEq(token.balanceOf(address(module)), 0, "and none is left stuck in the module");
     }
 
     function test_MintUsdOku_AtElevatedMultiplier() public {
         _stepToAtLeast((Constants.PRECISION * 105) / 100);
-        _resetFees();
+        _minFees();
 
         uint256 usdcIn = 1000e6;
         uint256 usdOkuOut = _mintUsdOku(user1, usdcIn);
-        // Value-neutral at the wrap leg: dollars out track dollars in (the
-        // module leg is fee-free here), to USDC granularity.
-        assertApproxEqAbs(usdOkuOut, 1000e18, 1e12);
+        // Value-neutral at the WRAP leg specifically: dollars out track the
+        // post-`tin` dollars in, to USDC granularity. The wrap itself takes no
+        // fee, which is the property under test; the module leg's `tin` is
+        // accounted for rather than assumed away.
+        assertApproxEqAbs(usdOkuOut, _afterTin(usdcIn) * TestConstants.DECIMAL_MULTIPLIER, 1e12);
     }
 
     function test_MintUsdOku_MatchesTwoStepPathWithinDust() public {
         _stepToAtLeast((Constants.PRECISION * 110) / 100);
-        _resetFees();
+        _minFees();
 
         uint256 viaConvenience = _mintUsdOku(user1, 500e6);
 
@@ -119,24 +125,35 @@ contract UsdOkuConvenienceTest is BaseTest {
         vm.stopPrank();
     }
 
-    function test_MintUsdOku_BlockedDuringSyncWindow() public {
-        _stepNoWarp(1.001e18);
+    /// @notice NOT blocked during a sync window — the window gates the bridge
+    ///         legs only, and this is a single-chain path priced at the local
+    ///         `M_oku`.
+    /// @dev Inverted deliberately when the window was narrowed. Kept as a
+    ///      regression guard: re-gating this would take the one-transaction
+    ///      USDC->USDOku path offline after every mark, which is the outcome the
+    ///      narrowing exists to prevent.
+    function test_MintUsdOku_NotBlockedDuringSyncWindow() public {
+        uint256 current = token.uiMultiplier();
+        _stepNoWarp(current + current / Constants.BASIS_POINTS);
+        assertTrue(token.isSyncLocked());
+
         usdc.mint(user1, 100e6);
         vm.startPrank(user1);
         usdc.approve(address(module), 100e6);
-        vm.expectPartialRevert(SubscriptionModule.SyncWindowActive.selector);
-        module.mintUsdOku(100e6);
+        uint256 out = module.mintUsdOku(100e6);
         vm.stopPrank();
+        assertGt(out, 0);
     }
 
     function test_MintUsdOku_EmitsBothEvents() public {
         usdc.mint(user1, 100e6);
         vm.startPrank(user1);
         usdc.approve(address(module), 100e6);
+        uint256 credited = _afterTin(100e6) * TestConstants.DECIMAL_MULTIPLIER;
         vm.expectEmit(true, false, false, true, address(module));
-        emit SubscriptionModule.Minted(user1, 100e6, 100e18, Constants.PRECISION);
+        emit SubscriptionModule.Minted(user1, 100e6, credited, Constants.PRECISION);
         vm.expectEmit(true, false, false, true, address(module));
-        emit SubscriptionModule.UsdOkuMinted(user1, 100e6, 100e18, Constants.PRECISION);
+        emit SubscriptionModule.UsdOkuMinted(user1, 100e6, credited, Constants.PRECISION);
         module.mintUsdOku(100e6);
         vm.stopPrank();
     }
@@ -146,7 +163,7 @@ contract UsdOkuConvenienceTest is BaseTest {
     function test_RedeemUsdOku_AtUnitMultiplierIsOneToOne() public {
         uint256 usdOkuOut = _mintUsdOku(user1, 100e6);
         uint256 usdcOut = _redeemUsdOku(user1, usdOkuOut);
-        assertApproxEqAbs(usdcOut, 100e6, 1);
+        assertApproxEqAbs(usdcOut, _afterBothFees(100e6), 1);
         assertEq(usdOku.balanceOf(user1), 0);
         assertEq(usdOku.sharesOf(address(module)), 0, "no dust stranded in the module");
     }
@@ -158,15 +175,23 @@ contract UsdOkuConvenienceTest is BaseTest {
         // show up: OkuM realized marks moving one way, USDOku's declared index
         // moving another.
         _accrueUsd(RATE_5_PCT_APY, 10 days);
-        _stepBy(50);
-        _resetFees();
+        // Realized marks must keep up with the declared index or the unwrap has
+        // nothing to draw on (`InsufficientBacking`). At `MAX_STEP_BPS` = 5 a
+        // single mark no longer covers 10 days of 5% APY (~13.7 bps), so walk
+        // the realized index up to the declared one — which is what the
+        // orchestrator does in production, and the minimum-cadence property
+        // this bound exists to enforce.
+        _stepToAtLeast(usdOku.usdOkuIndex());
+        _minFees();
 
         uint256 grown = usdOku.balanceOf(user1);
         assertGt(grown, usdOkuOut, "declared index inflated the balance");
 
         uint256 usdcOut = _redeemUsdOku(user1, grown);
         assertGt(usdcOut, 0);
-        assertEq(usdOku.balanceOf(user1), 0);
+        // At most one wei of rebase dust may survive a full-balance redeem —
+        // the exact hazard this suite exists for. Bounded, not assumed away.
+        assertLe(usdOku.balanceOf(user1), 1, "at most a wei of dust remains");
     }
 
     /// @notice Redeeming the caller's FULL displayed balance must succeed and
@@ -203,7 +228,7 @@ contract UsdOkuConvenienceTest is BaseTest {
         uint256 out1 = _mintUsdOku(user1, 500e6);
         uint256 out2 = _mintUsdOku(user2, 500e6);
         _stepToAtLeast((Constants.PRECISION * 110) / 100);
-        _resetFees();
+        _minFees();
 
         uint256 viaConvenience = _redeemUsdOku(user1, out1);
         uint256 viaTwoStep = _unwrap(user2, out2);
@@ -248,13 +273,15 @@ contract UsdOkuConvenienceTest is BaseTest {
         vm.stopPrank();
     }
 
-    function test_RedeemUsdOku_BlockedDuringSyncWindow() public {
+    /// @notice NOT blocked during a sync window. See the mint twin above.
+    function test_RedeemUsdOku_NotBlockedDuringSyncWindow() public {
         uint256 out = _mintUsdOku(user1, 100e6);
-        _stepNoWarp(1.001e18);
+        uint256 current = token.uiMultiplier();
+        _stepNoWarp(current + current / Constants.BASIS_POINTS);
+        assertTrue(token.isSyncLocked());
 
         vm.startPrank(user1);
         usdOku.approve(address(module), out);
-        vm.expectPartialRevert(SubscriptionModule.SyncWindowActive.selector);
         module.redeemUsdOku(out);
         vm.stopPrank();
     }

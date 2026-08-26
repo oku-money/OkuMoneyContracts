@@ -1,6 +1,7 @@
-//! Multiplier-step / fee-coverage primitives.
+//! Multiplier-step sizing primitive, and the proof that the static fee floor
+//! covers every step it admits.
 //!
-//! # The problem these solve
+//! # The problem
 //!
 //! On a chain whose multiplier moves in DISCRETE STEPS, a step is free money
 //! without a fee:
@@ -11,109 +12,80 @@
 //!
 //! Zero holding time, zero risk, repeatable every step. The cross-chain sync
 //! window does not help: the attacker never transacts while it is open, so its
-//! length is irrelevant to them.
+//! length is irrelevant to them. The fees are the only control.
 //!
-//! The fees are the control — but only if they actually cover the step. A
-//! round trip pays `tin` on the way in and `tout` on the way out, so the
-//! coverage figure is the COMBINED `tin + tout`, mirroring EVM
-//! (`OkuM.setOkuMultiplier` reads `tin() + tout()` from the module). Before
-//! this module that was an operational commitment (someone had to pick big
-//! enough fees). These primitives turn it into an on-chain invariant.
+//! # The invariant, and why it needs no state
 //!
-//! # The two halves of the invariant
+//! Coverage is enforced as a relationship between two constants rather than as
+//! a runtime read:
 //!
-//! Neither is sufficient alone:
+//! ```text
+//!     set_multiplier / distribute_yield:  step_bps <= MAX_STEP_BPS
+//!     set_fees:                           tin_bps  >= MAX_STEP_BPS
+//!                                         tout_bps >= MAX_STEP_BPS
+//! ```
 //!
-//! - [`step_is_covered`] — enforced when the multiplier is written. Stops an
-//!   operator from *creating* exposure the current fees do not cover.
-//! - a fee floor at the step high-water mark ([`step_bps_ceil`] feeds it) —
-//!   enforced when fees are changed. Stops an operator from *removing* coverage
-//!   after the fact, which would otherwise let anyone who held across the step
-//!   exit cheaply.
+//! Every step the program can take is therefore covered on each leg
+//! independently, for all time. [`step_bps_ceil`] is all this module needs to
+//! provide; the comparison itself is a single `<=` at each site.
 //!
-//! Together: at all times, `tin + tout` covers every step that has ever
-//! occurred.
+//! # What this replaced
+//!
+//! An earlier design read `step_is_covered(tin + tout)` at multiplier-write
+//! time, ratcheted a `max_step_bps` high-water mark, floored later `set_fees`
+//! calls against that mark, and provided a cold `reset_step_high_water_mark`
+//! escape hatch to clear it. Three coupled mutable mechanisms maintaining one
+//! inequality, plus an escape hatch whose honest precondition — that supply
+//! outstanding at the time of a large past step had substantially turned over —
+//! was not verifiable on-chain.
+//!
+//! The static floor is strictly stronger (the ratchet only ever covered steps
+//! that had actually occurred), needs no account space, and has no escape hatch
+//! to model. Changing cadence is now an edit to `MAX_STEP_BPS`, reviewed as
+//! code.
+//!
+//! # Why per-leg rather than combined
+//!
+//! A combined `tin + tout >= step` bound is sufficient for a single chain and
+//! insufficient across two. A cross-chain round trip pays `tin` on the chain it
+//! mints on and `tout` on the chain it redeems on, so fees of `(0, 2x)` here
+//! and `(2x, 0)` on EVM each satisfy a combined check while the pair pays
+//! nothing at all. Only a per-leg floor survives that composition. The cost is
+//! that the minimum round trip is `2 * MAX_STEP_BPS` rather than
+//! `MAX_STEP_BPS`.
 //!
 //! # Why a time-based cooldown was rejected
 //!
 //! An earlier design used a cooldown on fee decreases. It does not work. The
 //! attacker's edge is locked in the instant the step lands and does not decay,
-//! and the multiplier is monotonic so waiting costs them nothing — no price risk
-//! to sit through. A cooldown therefore converts an instant profit into a
-//! delayed profit rather than eliminating it. The high-water mark has no expiry
-//! and is strictly less restrictive in the common case: if every step was
-//! 1.4 bps, the combined fees can still be lowered to 1.4 bps.
+//! and the multiplier is monotonic so waiting costs them nothing — no price
+//! risk to sit through. A cooldown converts an instant profit into a delayed
+//! profit rather than eliminating it.
+//!
+//! Contrast the sync window ([`crate::sync_window`]), where a time lock IS the
+//! right tool: cross-chain divergence is transient and self-correcting, so
+//! waiting genuinely removes the edge.
 //!
 //! # Scope
 //!
-//! Only meaningful on a stepped chain. The EVM twin (`OkuM`) is now stepwise
-//! too and enforces the same `tin + tout >= step_bps` rule plus the same
-//! high-water-mark floor, so the invariant is chain-symmetric.
+//! Chain-symmetric. The EVM twin enforces the identical pair of rules in
+//! `OkuM.setOkuMultiplier` and `SubscriptionModule.setFees`.
 //!
 //! No `anchor-lang`, no `solana-program`, no I/O — pure arithmetic.
 
 use crate::constants::BASIS_POINTS;
 
-/// Is the step `old_multiplier -> new_multiplier` covered by `coverage_bps`
-/// (the combined `tin + tout`)?
-///
-/// Exact form, deliberately not routed through a bps conversion:
-///
-/// ```text
-///     (M1 - M0) * 10_000  <=  coverage_bps * M0
-/// ```
-///
-/// # Why the exact form rather than comparing rounded bps
-///
-/// Converting the step to basis points first would floor a sub-1-bps step to
-/// zero, so at `coverage_bps == 0` a long series of tiny increments would each
-/// pass and together reproduce an arbitrarily large uncovered step. Ceiling the
-/// conversion instead over-charges high-frequency operators: an hourly 0.06 bps
-/// step would demand a 1 bps fee, 16x more than it needs. The exact inequality
-/// has neither problem.
-///
-/// # Fail-closed at zero
-///
-/// At `coverage_bps == 0` the right-hand side is `0`, so no strict increase can
-/// satisfy it. Rebasing is therefore impossible until a fee is configured —
-/// the operator cannot create the arbitrage condition, rather than being
-/// trusted not to.
-///
-/// Returns `true` for a non-increasing step; the caller enforces strict
-/// monotonicity separately and would already have rejected it.
-///
-/// # Proof of no-profit
-///
-/// A covered round trip pays `tin` on the deposit and `tout` on the payout,
-/// and the step it holds across satisfies `M1 - M0 <= (tin + tout) * M0`.
-/// The gross gain ratio is `M1 / M0 <= 1 + tin + tout`, while the fee drag is
-/// the factor `(1 - tin)(1 - tout)`, and
-/// `(1 - tin)(1 - tout)(1 + tin + tout) <= 1` for all fees in range. So the
-/// profit condition is never met — including when the entire coverage sits on
-/// one leg. Verified by `proof_covered_step_is_never_profitable` across every
-/// `tin`/`tout` split of the coverage.
-#[inline]
-pub fn step_is_covered(old_multiplier: u64, new_multiplier: u64, coverage_bps: u64) -> bool {
-    if new_multiplier <= old_multiplier {
-        return true;
-    }
-    // u128: at MAX_MULTIPLIER (1e15) the left side reaches 1e19, which fits u64
-    // only barely. Widening removes the question.
-    let delta = (new_multiplier as u128) - (old_multiplier as u128);
-    let lhs = delta * (BASIS_POINTS as u128);
-    let rhs = (coverage_bps as u128) * (old_multiplier as u128);
-    lhs <= rhs
-}
-
 /// The step `old -> new` expressed in basis points, rounded **up**.
 ///
-/// Feeds the fee high-water mark and the `MAX_STEP_BPS` single-step ceiling.
-/// Ceiling because the mark becomes a floor on future fees: rounding down
-/// could let the fees be lowered a fraction below what the step actually
-/// needs.
+/// Feeds the `MAX_STEP_BPS` single-step ceiling. Ceiling rather than floor
+/// because the result is compared against a bound the step must not exceed:
+/// rounding down would let a fractionally-oversized step through, and at
+/// sub-1-bps granularity would floor a real increase to zero.
 ///
-/// Returns `0` for a non-increasing step. `None` only if the result exceeds
-/// `u64`, which `MAX_MULTIPLIER` makes unreachable in practice.
+/// Returns `0` for a non-increasing step (callers enforce strict monotonicity
+/// separately and would already have rejected it). `None` only on a zero
+/// denominator or a `u64` overflow, which `MAX_MULTIPLIER` makes unreachable in
+/// practice.
 #[inline]
 pub fn step_bps_ceil(old_multiplier: u64, new_multiplier: u64) -> Option<u64> {
     if new_multiplier <= old_multiplier {
@@ -133,75 +105,7 @@ pub fn step_bps_ceil(old_multiplier: u64, new_multiplier: u64) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::{MAX_FEE_BPS, MAX_MULTIPLIER, MAX_STEP_BPS, PRECISION};
-
-    // ---- step_is_covered ----
-
-    #[test]
-    fn zero_coverage_forbids_any_increase() {
-        // The fail-closed property: rebasing is impossible until a fee is set.
-        assert!(!step_is_covered(PRECISION, PRECISION + 1, 0));
-        assert!(!step_is_covered(PRECISION, PRECISION * 2, 0));
-        // A non-increase is vacuously covered (rejected elsewhere as non-monotonic).
-        assert!(step_is_covered(PRECISION, PRECISION, 0));
-    }
-
-    #[test]
-    fn exact_boundary_is_covered() {
-        // Step of exactly the coverage: 1e9 -> 1e9 + 15bps, tin + tout = 15bps.
-        let m0 = PRECISION;
-        let m1 = m0 + m0 * 15 / 10_000;
-        assert!(step_is_covered(m0, m1, 15));
-        assert!(!step_is_covered(m0, m1 + 1, 15));
-    }
-
-    #[test]
-    fn coverage_is_the_combined_tin_plus_tout() {
-        // The same 15 bps of coverage works however it is split between the
-        // legs — the predicate sees only the sum, exactly as EVM's
-        // `tin() + tout()` read does.
-        let m0 = PRECISION;
-        let m1 = m0 + m0 * 15 / 10_000;
-        for (tin, tout) in [(0u64, 15u64), (15, 0), (7, 8), (5, 10)] {
-            assert!(step_is_covered(m0, m1, tin + tout), "split {tin}/{tout}");
-        }
-        // ...and 14 bps total does not, however split.
-        assert!(!step_is_covered(m0, m1, 14));
-    }
-
-    #[test]
-    fn sub_bps_steps_do_not_need_a_whole_bps_of_fee() {
-        // The reason for the exact form: an hourly ~0.06 bps step must not be
-        // forced to carry a 1 bps fee.
-        let m0 = 1_000_000_000u64;
-        let m1 = m0 + 6_000; // 0.06 bps
-        assert!(step_is_covered(m0, m1, 1));
-        // ...but it is still not free.
-        assert!(!step_is_covered(m0, m1, 0));
-    }
-
-    #[test]
-    fn realistic_cadences_against_realistic_fees() {
-        let m0 = PRECISION;
-        let step = |bps_x100: u64| m0 + m0 * bps_x100 / 1_000_000;
-        // daily ~1.37bps under 15bps combined coverage: covered.
-        assert!(step_is_covered(m0, step(137), 15));
-        // weekly ~9.62bps under 15bps combined coverage: covered.
-        assert!(step_is_covered(m0, step(962), 15));
-        // weekly ~9.62bps under 5bps combined coverage: NOT covered.
-        assert!(!step_is_covered(m0, step(962), 5));
-    }
-
-    #[test]
-    fn does_not_overflow_at_extremes() {
-        assert!(step_is_covered(
-            MAX_MULTIPLIER - 1,
-            MAX_MULTIPLIER,
-            MAX_FEE_BPS
-        ));
-        assert!(!step_is_covered(1, MAX_MULTIPLIER, MAX_FEE_BPS));
-        assert!(step_is_covered(u64::MAX - 1, u64::MAX, MAX_FEE_BPS));
-    }
+    use crate::constants::{MAX_FEE_BPS, MAX_STEP_BPS, PRECISION};
 
     // ---- step_bps_ceil ----
 
@@ -210,7 +114,8 @@ mod tests {
         let m0 = 1_000_000_000u64;
         // Exactly 15 bps.
         assert_eq!(step_bps_ceil(m0, m0 + 1_500_000), Some(15));
-        // A hair over 15 bps must report 16, not 15 — the mark becomes a floor.
+        // A hair over 15 bps must report 16, not 15 — the value is compared
+        // against a ceiling the step must not exceed.
         assert_eq!(step_bps_ceil(m0, m0 + 1_500_001), Some(16));
         // Any increase is at least 1 bps once ceiled.
         assert_eq!(step_bps_ceil(m0, m0 + 1), Some(1));
@@ -229,76 +134,91 @@ mod tests {
 
     #[test]
     fn max_step_bps_bounds_the_single_step() {
-        // The `MAX_STEP_BPS` ceiling is enforced by the program against the
-        // CEILED step size, so a step a hair over 1% reports 101 and is
-        // refused even though combined coverage can reach 200 bps.
+        // The ceiling is enforced against the CEILED step size, so a step a
+        // hair over the bound reports one more and is refused.
         let m0 = PRECISION;
         let at_ceiling = m0 + m0 * MAX_STEP_BPS / 10_000;
         assert_eq!(step_bps_ceil(m0, at_ceiling), Some(MAX_STEP_BPS));
         assert_eq!(step_bps_ceil(m0, at_ceiling + 1), Some(MAX_STEP_BPS + 1));
     }
 
-    // ---- the two halves, composed ----
-
-    /// The composed invariant: a step permitted under the combined coverage
-    /// can never later be un-covered, because the high-water mark it writes
-    /// becomes the floor under `tin + tout`.
     #[test]
-    fn covered_step_pins_the_future_fee_floor() {
+    fn realistic_daily_cadence_fits_the_bound() {
+        // ~1.37 bps daily at 5% APY, against a 5 bps bound: ~3.5x headroom, so
+        // a missed day is caught up in one write.
         let m0 = PRECISION;
-        let coverage = 15u64;
-        let m1 = m0 + m0 * coverage / 10_000;
-
-        assert!(step_is_covered(m0, m1, coverage));
-        let mark = step_bps_ceil(m0, m1).unwrap();
-        assert!(
-            mark <= coverage,
-            "mark must not exceed the coverage that permitted it"
-        );
-
-        // Any future combined fee at or above the mark still covers the
-        // original step, for a redemption at any later multiplier (>= m1 >= m0).
-        for future_coverage in mark..=(2 * MAX_FEE_BPS) {
-            assert!(step_is_covered(m0, m1, future_coverage));
-        }
-        // Below the mark it does not.
-        if mark > 0 {
-            assert!(!step_is_covered(m0, m1, mark - 1));
-        }
+        let daily = m0 + m0 * 137 / 1_000_000;
+        assert!(step_bps_ceil(m0, daily).unwrap() <= MAX_STEP_BPS);
+        // Three missed days still fit.
+        let three_days = m0 + m0 * 411 / 1_000_000;
+        assert!(step_bps_ceil(m0, three_days).unwrap() <= MAX_STEP_BPS);
     }
 
-    /// Direct economic statement: a covered step cannot yield a profitable
-    /// mint-hold-redeem round trip, using the same floor/ceil rounding the
-    /// program applies — for every split of the coverage between the legs.
+    // ---- the composed invariant ----
+
+    /// The whole step-arbitrage defence, stated as a test: for every step the
+    /// program admits and every fee schedule `set_fees` admits, a
+    /// mint-hold-redeem round trip returns no more than it cost.
+    ///
+    /// Note what is NOT quantified here: there is no dependence on which steps
+    /// happened previously, because the floor is static. That absence is the
+    /// simplification.
     #[test]
-    fn covered_step_round_trip_is_never_profitable() {
+    fn admissible_step_under_admissible_fees_is_never_profitable() {
         let deposit: u64 = 1_000_000_000; // 1000 units at 6dp
-        for coverage in 1..=(2 * MAX_FEE_BPS) {
-            for m0 in [PRECISION, PRECISION + 12_345, 2 * PRECISION] {
-                // Largest step this coverage permits.
-                let m1 = m0 + (coverage as u128 * m0 as u128 / 10_000) as u64;
-                if !step_is_covered(m0, m1, coverage) {
+        for m0 in [PRECISION, PRECISION + 12_345, 2 * PRECISION] {
+            // Every step the program admits, up to and including the ceiling.
+            for step_bps in 1..=MAX_STEP_BPS {
+                let m1 = m0 + (step_bps as u128 * m0 as u128 / 10_000) as u64;
+                if step_bps_ceil(m0, m1).unwrap() > MAX_STEP_BPS {
                     continue;
                 }
-                // Every way of splitting the coverage across tin/tout that
-                // respects the per-leg MAX_FEE_BPS bound.
-                for tin in 0..=coverage.min(MAX_FEE_BPS) {
-                    let tout = coverage - tin;
-                    if tout > MAX_FEE_BPS {
-                        continue;
+                // Every fee schedule `set_fees` admits: each leg in
+                // [MAX_STEP_BPS, MAX_FEE_BPS]. Sampling the floor and the
+                // ceiling of each leg is sufficient — the round-trip payout is
+                // monotonically decreasing in both fees, so the floor pair is
+                // the worst case.
+                for tin in [MAX_STEP_BPS, MAX_FEE_BPS] {
+                    for tout in [MAX_STEP_BPS, MAX_FEE_BPS] {
+                        let credited = crate::math::apply_fee(deposit, tin).unwrap();
+                        let raw = crate::math::dollars_to_raw(credited, m0).unwrap();
+                        let gross = crate::math::raw_to_dollars(raw, m1).unwrap();
+                        let net = crate::math::apply_fee(gross, tout).unwrap();
+                        assert!(
+                            net <= deposit,
+                            "admissible step profited: tin={tin} tout={tout} \
+                             m0={m0} m1={m1} step={step_bps} in={deposit} out={net}"
+                        );
                     }
-                    let credited = crate::math::apply_fee(deposit, tin).unwrap();
-                    let raw = crate::math::dollars_to_raw(credited, m0).unwrap();
-                    let gross = crate::math::raw_to_dollars(raw, m1).unwrap();
-                    let net = crate::math::apply_fee(gross, tout).unwrap();
-                    assert!(
-                        net <= deposit,
-                        "covered step profited: tin={tin} tout={tout} m0={m0} m1={m1} \
-                         in={deposit} out={net}"
-                    );
                 }
             }
         }
+    }
+
+    /// The cross-chain composition the per-leg floor exists for: minting on one
+    /// chain and redeeming on the other pays `tin` from chain A and `tout` from
+    /// chain B, and must still be lossy across a full step of divergence.
+    ///
+    /// Under a COMBINED floor this would fail — `(0, 2x)` and `(2x, 0)` both
+    /// satisfy `tin + tout >= step` while the cross pair pays nothing.
+    #[test]
+    fn cross_chain_leg_pairing_is_never_profitable() {
+        let deposit: u64 = 1_000_000_000;
+        let m0 = PRECISION;
+        // Worst case: a full maximal step of divergence between the chains.
+        let m1 = m0 + m0 * MAX_STEP_BPS / 10_000;
+        // Mint on the lagging chain at its floor `tin`, redeem on the leading
+        // chain at its floor `tout` — the cheapest possible pairing.
+        let tin_a = MAX_STEP_BPS;
+        let tout_b = MAX_STEP_BPS;
+        let credited = crate::math::apply_fee(deposit, tin_a).unwrap();
+        let raw = crate::math::dollars_to_raw(credited, m0).unwrap();
+        let gross = crate::math::raw_to_dollars(raw, m1).unwrap();
+        let net = crate::math::apply_fee(gross, tout_b).unwrap();
+        assert!(
+            net <= deposit,
+            "cross-chain pairing profited: in={deposit} out={net}"
+        );
     }
 }
 
@@ -309,75 +229,74 @@ mod tests {
 #[cfg(kani)]
 mod verification {
     use super::*;
-    use crate::constants::{MAX_FEE_BPS, PRECISION};
+    use crate::constants::{MAX_FEE_BPS, MAX_STEP_BPS, PRECISION};
     use crate::math::{apply_fee, dollars_to_raw, raw_to_dollars};
 
-    /// THE proof. If a step is covered by `tin + tout`, a mint-hold-redeem
-    /// round trip across that step cannot return more than it cost — for every
-    /// deposit, every fee pair in range, and every step the predicate admits.
+    /// THE proof. For every step the program admits (`step_bps <=
+    /// MAX_STEP_BPS`) and every fee schedule `set_fees` admits (each leg in
+    /// `[MAX_STEP_BPS, MAX_FEE_BPS]`), a mint-hold-redeem round trip cannot
+    /// return more than it cost.
     ///
-    /// This is the formal statement of the entire step-arbitrage defence.
+    /// This is the formal statement of the entire step-arbitrage defence. It is
+    /// strictly simpler than the proof it replaces: the old one had to assume
+    /// `step_is_covered(m0, m1, tin + tout)` — a relation between the step and
+    /// the live fee schedule — whereas this quantifies the two independently,
+    /// because the constants already guarantee the relation.
     #[kani::proof]
-    fn proof_covered_step_is_never_profitable() {
+    fn proof_admissible_step_under_admissible_fees_is_never_profitable() {
         let deposit: u64 = kani::any();
         let m0: u64 = kani::any();
         let m1: u64 = kani::any();
         let tin_bps: u64 = kani::any();
         let tout_bps: u64 = kani::any();
 
-        // Domain: realistic multipliers and in-range fees. Bounded to keep the
-        // model checker tractable; the arithmetic is scale-free.
+        // Domain: realistic multipliers. Bounded to keep the model checker
+        // tractable; the arithmetic is scale-free.
         kani::assume(m0 >= PRECISION);
         kani::assume(m0 <= PRECISION + (u16::MAX as u64));
         kani::assume(m1 > m0);
         kani::assume(m1 <= PRECISION + (u32::MAX as u64));
-        kani::assume(tin_bps <= MAX_FEE_BPS);
-        kani::assume(tout_bps <= MAX_FEE_BPS);
         kani::assume(deposit <= u32::MAX as u64);
 
-        // Only reason about steps the program would actually permit.
-        kani::assume(step_is_covered(m0, m1, tin_bps + tout_bps));
+        // Exactly the fee schedules `set_fees` admits.
+        kani::assume(tin_bps >= MAX_STEP_BPS && tin_bps <= MAX_FEE_BPS);
+        kani::assume(tout_bps >= MAX_STEP_BPS && tout_bps <= MAX_FEE_BPS);
 
-        // Mint at m0 (paying tin), hold across the step, redeem at m1 (paying
-        // tout) — the exact rounding the program uses (floor on user credit,
-        // ceil on fee).
-        if let Some(credited) = apply_fee(deposit, tin_bps) {
-            if let Some(raw) = dollars_to_raw(credited, m0) {
-                if let Some(gross) = raw_to_dollars(raw, m1) {
-                    if let Some(net) = apply_fee(gross, tout_bps) {
-                        assert!(net <= deposit, "covered step was profitable");
+        // Exactly the steps `set_multiplier` admits.
+        if let Some(step_bps) = step_bps_ceil(m0, m1) {
+            kani::assume(step_bps <= MAX_STEP_BPS);
+
+            // Mint at m0 (paying tin), hold across the step, redeem at m1
+            // (paying tout) — the exact rounding the program uses.
+            if let Some(credited) = apply_fee(deposit, tin_bps) {
+                if let Some(raw) = dollars_to_raw(credited, m0) {
+                    if let Some(gross) = raw_to_dollars(raw, m1) {
+                        if let Some(net) = apply_fee(gross, tout_bps) {
+                            assert!(net <= deposit, "admissible step was profitable");
+                        }
                     }
                 }
             }
         }
     }
 
-    /// Zero combined coverage admits no increase at all — the fail-closed
-    /// property that makes "ships with fees off" safe rather than a silent
-    /// hole.
+    /// The ceiling rounding is conservative: a step reported as within the
+    /// bound really is within the bound, with no fractional slack. Guards the
+    /// `div_ceil` against being weakened to a truncating divide.
     #[kani::proof]
-    fn proof_zero_coverage_admits_no_step() {
+    fn proof_step_bps_ceil_is_conservative() {
         let m0: u64 = kani::any();
         let m1: u64 = kani::any();
+        kani::assume(m0 >= PRECISION);
+        kani::assume(m0 <= PRECISION + (u32::MAX as u64));
         kani::assume(m1 > m0);
-        assert!(!step_is_covered(m0, m1, 0));
-    }
+        kani::assume(m1 <= PRECISION + (u32::MAX as u64));
 
-    /// The high-water mark never exceeds the coverage that permitted the step,
-    /// so writing the mark can never immediately invalidate the fee schedule
-    /// that just permitted it.
-    #[kani::proof]
-    fn proof_mark_never_exceeds_permitting_coverage() {
-        let m0: u64 = kani::any();
-        let m1: u64 = kani::any();
-        let coverage_bps: u64 = kani::any();
-        kani::assume(m0 > 0);
-        kani::assume(m1 > m0);
-        kani::assume(coverage_bps <= 2 * MAX_FEE_BPS);
-        kani::assume(step_is_covered(m0, m1, coverage_bps));
-
-        if let Some(mark) = step_bps_ceil(m0, m1) {
-            assert!(mark <= coverage_bps);
+        if let Some(bps) = step_bps_ceil(m0, m1) {
+            // The reported bps, applied back to m0, reaches at least m1 — i.e.
+            // it never under-reports the step.
+            let reconstructed = (m0 as u128) + (bps as u128 * m0 as u128) / (BASIS_POINTS as u128);
+            assert!(reconstructed >= m1 as u128, "step_bps_ceil under-reported");
         }
     }
 }

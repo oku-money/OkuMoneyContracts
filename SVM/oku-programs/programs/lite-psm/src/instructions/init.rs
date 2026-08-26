@@ -12,7 +12,7 @@ use anchor_spl::token_2022::spl_token_2022::{
 };
 use anchor_spl::token_2022_extensions::spl_pod;
 use anchor_spl::token_2022_extensions::spl_token_metadata_interface;
-use oku_shared::DEFAULT_SYNC_WINDOW_SECS;
+use oku_shared::{DEFAULT_SYNC_WINDOW_SECS, MAX_STEP_BPS};
 use spl_token_metadata_interface::state::TokenMetadata;
 
 /// Parameter bundle for [`initialize`]. Bundling the initialization
@@ -278,17 +278,26 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     config.sync_lock_until_ts = 0;
     config.sync_window_secs = DEFAULT_SYNC_WINDOW_SECS;
 
-    // PSM fees — ship at 0 bps, and that is FAIL-CLOSED rather than a silent
-    // hole: `step_is_covered` rejects every multiplier increase while
-    // `tin_bps + tout_bps == 0`, so the protocol cannot rebase until a fee
-    // schedule sized to the intended cadence has been set. The operator
-    // cannot create the step-arbitrage condition, rather than being trusted
-    // not to.
-    config.tin_bps = 0;
-    config.tout_bps = 0;
-
-    // No steps taken yet, so no floor under `tin_bps + tout_bps`.
-    config.max_step_bps = 0;
+    // PSM fees — ship AT THE STEP-COVERAGE FLOOR, not at zero.
+    //
+    // Load-bearing, not a convenience. `set_multiplier` does not read the fee
+    // schedule: coverage is guaranteed by the invariant `tin_bps, tout_bps >=
+    // MAX_STEP_BPS` holding at all times. Shipping zero would leave a window
+    // between `initialize` and the first `set_fees` in which steps were
+    // admissible and uncovered — precisely the arbitrage condition. There is no
+    // "installed but inert" state for this mechanism, and that is the point:
+    // the program is accrual-ready and covered from `initialize`, with no
+    // ordering an operator can get wrong.
+    //
+    // The earlier design shipped `(0, 0)` and relied on `step_is_covered`
+    // reading the schedule at write time and failing closed. That made a
+    // zero-fee deployment safe but non-accruing, i.e. a launch-blocking step
+    // someone had to remember. Cold can raise either leg later, never lower it
+    // below here.
+    //
+    // EVM mirror: `SubscriptionModule.initialize`.
+    config.tin_bps = MAX_STEP_BPS;
+    config.tout_bps = MAX_STEP_BPS;
 
     // Two-step `role_admin` transfer slot — empty until
     // `set_authority(RoleAdmin, ...)` proposes a rotation.

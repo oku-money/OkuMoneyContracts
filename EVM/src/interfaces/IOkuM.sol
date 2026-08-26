@@ -15,9 +15,8 @@ import {IScaledUIAmountBalances} from "./erc8056/IScaledUIAmountBalances.sol";
  *        - `IERC20`                       — the raw accounting layer
  *        - `IScaledUIAmount` + extensions — the ERC-8056 display layer
  *      and adds only what is unique to this token: the value-layer anchor
- *      (`asset`, `usdcDecimalMultiplier`), the step-coverage anchor
- *      (`stepHighWaterMark`), the sync-window views, and the role-gated supply
- *      hooks the module, queue and wrapper call.
+ *      (`asset`, `usdcDecimalMultiplier`), the sync-window views, and the
+ *      role-gated supply hooks the module, queue and wrapper call.
  */
 interface IOkuM is IERC20, IScaledUIAmount, IScaledUIAmountConversion, IScaledUIAmountBalances {
     // ============ Value-layer anchor ============
@@ -30,13 +29,6 @@ interface IOkuM is IERC20, IScaledUIAmount, IScaledUIAmountConversion, IScaledUI
 
     /// @notice `10 ** (18 - IERC20Metadata(asset()).decimals())`. `1e12` for Circle USDC.
     function usdcDecimalMultiplier() external view returns (uint256);
-
-    // ============ Step coverage ============
-
-    /// @notice Largest single `M_oku` step ever taken, in basis points.
-    /// @dev Floors the module's `tin + tout` fee schedule so fees cannot drop
-    ///      below a step already taken. Read by `SubscriptionModule.setFees`.
-    function stepHighWaterMark() external view returns (uint256);
 
     // ============ Post-step sync window ============
 

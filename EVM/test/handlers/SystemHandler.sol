@@ -61,10 +61,13 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     uint256 public ghostMaxUsdIndex;
     /// @notice Raw tokens donated (not minted) to the queue.
     uint256 public ghostQueueDonations;
-    /// @notice True once `resetStepHighWaterMark` has fired, after which the
-    ///         `tin + tout >= stepHighWaterMark` coupling no longer holds for
-    ///         steps taken before the reset.
-    bool public ghostStepFloorReset;
+    /// @notice Largest single `M_oku` step the fuzzer has actually landed, in
+    ///         basis points, ceiled the same way the contract ceils it.
+    /// @dev Recorded here rather than read from the token, which no longer
+    ///      stores it — the high-water mark was removed with the ratchet. The
+    ///      ghost keeps the step-size invariant checkable without reintroducing
+    ///      production state that exists only for a test.
+    uint256 public ghostMaxStepBps;
     /// @notice Largest declared liability the wrapper has ever carried.
     /// @dev The scale the absolute solvency shortfall is bounded against. A
     ///      HIGH-WATER MARK rather than the live figure, deliberately: exits
@@ -270,22 +273,18 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
 
     // ============ M_oku authority ============
 
-    /// @notice Take a legal step, setting covering fees first.
+    /// @notice Take a legal step.
     ///
-    /// @dev The step-coverage rule means a step is only possible when
-    ///      `tin + tout >= stepBps`, so an action that stepped without
-    ///      arranging coverage would revert `StepNotCovered` on essentially
-    ///      every call — pure noise that depresses the success rate without ever
-    ///      moving the multiplier. Arranging coverage here is what makes the
-    ///      action exercise the *system* rather than the guard; the guard itself
-    ///      is asserted deterministically in `StepArbitrageTest`.
+    /// @dev No fee arrangement needed any more: coverage is static, seeded at
+    ///      the floor by `initialize` and unlowerable, so every step inside
+    ///      `MAX_STEP_BPS` is covered by construction. The bound below is
+    ///      therefore the *only* thing standing between this action and a
+    ///      revert, which is what makes the action exercise the system rather
+    ///      than the guard. The guard is asserted deterministically in
+    ///      `StepArbitrageTest`.
     function stepMultiplier(uint256 stepSeed) external {
         _beginCall();
         uint256 stepBps = _bound(stepSeed, 1, Constants.MAX_STEP_BPS);
-
-        uint256 half = (stepBps + 1) / 2;
-        vm.prank(capManager);
-        try module.setFees(half, stepBps > half ? stepBps - half : half) {} catch {}
 
         uint256 current = token.uiMultiplier();
         uint256 next = current + (current * stepBps) / Constants.BASIS_POINTS;
@@ -294,6 +293,8 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
         vm.prank(rateSetter);
         try token.setOkuMultiplier(next) {
             successes++;
+            uint256 landed = ((next - current) * Constants.BASIS_POINTS + current - 1) / current;
+            if (landed > ghostMaxStepBps) ghostMaxStepBps = landed;
         } catch {}
         _observe();
     }
@@ -316,19 +317,10 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
         _observe();
     }
 
-    /// @notice The cold escape hatch under the step-coverage ratchet.
-    /// @dev Sets the ghost flag so the `tin + tout >= stepHighWaterMark`
-    ///      invariant knows the coupling was deliberately broken. This is the
-    ///      only path by which that invariant may cease to hold, which is
-    ///      exactly the property worth pinning.
-    function resetStepFloor() external {
-        _beginCall();
-        vm.prank(capManager);
-        try token.resetStepHighWaterMark() {
-            ghostStepFloorReset = true;
-            successes++;
-        } catch {}
-    }
+    // NOTE: `resetStepFloor` was removed along with the step high-water-mark
+    // ratchet it exercised. There is no longer any path by which the
+    // `tin, tout >= MAX_STEP_BPS` coupling can cease to hold, which is why the
+    // corresponding invariant no longer needs a ghost-flag escape clause.
 
     // ============ M_usd authority ============
 
@@ -401,18 +393,15 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
 
     // ============ Fees and window ============
 
-    /// @notice Explore the full legal fee range above the step floor.
-    /// @dev Bounded below by `stepHighWaterMark` so the call effectively always
-    ///      succeeds — the point is to make every *other* action run against a
-    ///      fee-bearing configuration, not to probe the floor (which `FeesTest`
-    ///      does deterministically).
+    /// @notice Explore the full legal fee range above the static step floor.
+    /// @dev Bounded below by `MAX_STEP_BPS` — a constant now, not a read — so
+    ///      the call effectively always succeeds. The point is to make every
+    ///      *other* action run against a varying fee-bearing configuration, not
+    ///      to probe the floor (which `FeesTest` does deterministically).
     function setFees(uint256 tinSeed, uint256 toutSeed) external {
         _beginCall();
-        uint256 floorBps = token.stepHighWaterMark();
-        uint256 newTin = _bound(tinSeed, 0, Constants.MAX_FEE_BPS);
-        uint256 minTout = floorBps > newTin ? floorBps - newTin : 0;
-        if (minTout > Constants.MAX_FEE_BPS) return;
-        uint256 newTout = _bound(toutSeed, minTout, Constants.MAX_FEE_BPS);
+        uint256 newTin = _bound(tinSeed, Constants.MAX_STEP_BPS, Constants.MAX_FEE_BPS);
+        uint256 newTout = _bound(toutSeed, Constants.MAX_STEP_BPS, Constants.MAX_FEE_BPS);
         vm.prank(capManager);
         try module.setFees(newTin, newTout) {
             successes++;

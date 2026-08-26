@@ -106,26 +106,31 @@ contract SystemInvariantsTest is BaseTest {
         assertLe(token.effectiveAt(), block.timestamp);
     }
 
-    function invariant_StepHighWaterMarkWithinBound() public view {
-        assertLe(token.stepHighWaterMark(), Constants.MAX_STEP_BPS);
+    /// @notice STEP COVERAGE, the economic invariant of the whole design, now
+    ///         stated unconditionally: each leg independently covers the largest
+    ///         step the protocol can take, at every reachable state.
+    ///
+    /// @dev No ghost flag and no escape clause, and that absence is the point.
+    ///      The previous formulation was `tin + tout >= stepHighWaterMark`
+    ///      *unless* the cold reset had fired — a conditional invariant with a
+    ///      fuzzer-reachable exemption. With a static floor there is no state to
+    ///      exempt: no sequence of admin calls can reach a configuration where
+    ///      this fails, because `setFees` is the only writer and it rejects
+    ///      anything below the floor.
+    ///
+    ///      Composed with `invariant_StepWithinBound` below, this is the full
+    ///      no-profit condition.
+    function invariant_StepCoverageHoldsPerLeg() public view {
+        assertGe(module.tin(), Constants.MAX_STEP_BPS, "tin fell below the step floor");
+        assertGe(module.tout(), Constants.MAX_STEP_BPS, "tout fell below the step floor");
     }
 
-    /// @notice STEP COVERAGE, the economic invariant of the whole design. Once a
-    ///         step of N bps has landed, the round-trip fee cannot fall below N —
-    ///         which is what makes mint-at-M0 / redeem-at-M1 unprofitable.
-    ///
-    /// @dev Holds unconditionally UNLESS the cold escape hatch fired. That
-    ///      conditional is not a weakening of the test: it is the honest
-    ///      statement of the property, and the ghost flag exists so the one
-    ///      permitted way out of the ratchet is the only way out the fuzzer can
-    ///      find.
-    function invariant_StepCoverageRatchet() public view {
-        if (handler.ghostStepFloorReset()) return;
-        assertGe(
-            module.tin() + module.tout(),
-            token.stepHighWaterMark(),
-            "fees fell below a step already taken"
-        );
+    /// @notice The other half: no step ever exceeds what the floor covers.
+    /// @dev Checked against the observed maximum rather than the live value,
+    ///      since the live multiplier says nothing about the size of the jumps
+    ///      that produced it.
+    function invariant_StepWithinBound() public view {
+        assertLe(handler.ghostMaxStepBps(), Constants.MAX_STEP_BPS, "a step exceeded the bound");
     }
 
     // ============ M_usd ============

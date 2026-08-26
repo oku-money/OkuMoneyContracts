@@ -31,7 +31,7 @@ pub const PRECISION: u64 = 1_000_000_000;
 /// `Constants.BASIS_POINTS`.
 ///
 /// Consumed by the `tin`/`tout` fee math and the step-coverage
-/// primitives (`step_is_covered`, `step_bps_ceil`).
+/// primitives (`step_bps_ceil`).
 pub const BASIS_POINTS: u64 = 10_000;
 
 // ---------------------------------------------------------------------------
@@ -106,16 +106,33 @@ pub const MAX_SYNC_WINDOW_SECS: i64 = 900;
 /// EVM mirror: `Constants.DEFAULT_SYNC_WINDOW`.
 pub const DEFAULT_SYNC_WINDOW_SECS: i64 = 60;
 
-/// Hard ceiling on a single multiplier step, in basis points (100 = 1%).
+/// Hard ceiling on a single multiplier step, in basis points. ALSO the
+/// per-leg floor under `tin_bps` and `tout_bps`.
 ///
-/// A single write can never move the multiplier more than 1%, however much
-/// combined fee coverage (`tin + tout`, up to 2%) is configured. That
-/// implies a MINIMUM rebase cadence: a long outage cannot be caught up in
-/// one jump, it has to be walked in bounded steps, each of which arms the
-/// sync window and is individually covered by fees.
+/// THE single number that defines the step-arbitrage defence. Exactly two
+/// rules reference it:
 ///
-/// EVM mirror: `Constants.MAX_STEP_BPS` (enforced in `_stepMultiplier`).
-pub const MAX_STEP_BPS: u64 = 100;
+/// ```text
+///     set_multiplier / distribute_yield:  step_bps <= MAX_STEP_BPS
+///     set_fees:                           tin_bps  >= MAX_STEP_BPS
+///                                         tout_bps >= MAX_STEP_BPS
+/// ```
+///
+/// Composed, every step the program can take is covered on each leg
+/// independently, permanently, with no stored state. Raising this permits a
+/// coarser cadence and simultaneously raises the minimum fee, so the two
+/// cannot drift apart.
+///
+/// Implies a MINIMUM cadence: a long outage cannot be caught up in one jump
+/// and must be walked in bounded steps. At 5 bps and ~5% APY a daily mark is
+/// ~1.37 bps, so a missed day is caught up in a single write and a missed
+/// three days still fits.
+///
+/// PROVISIONAL — assumes a DAILY mark cadence. Must satisfy
+/// `MAX_STEP_BPS <= MAX_FEE_BPS`, asserted below.
+///
+/// EVM mirror: `Constants.MAX_STEP_BPS`.
+pub const MAX_STEP_BPS: u64 = 5;
 
 // ---------------------------------------------------------------------------
 // PSM fees (tin / tout)
@@ -129,15 +146,17 @@ pub const MAX_STEP_BPS: u64 = 100;
 // on one mint, so continuous accrual is unavailable), and a discrete step
 // lets anyone mint at `M0`, hold across the step, and redeem at `M1` for
 // a risk-free profit equal to the whole step. A window cannot prevent
-// this — the attacker simply transacts outside it. A round trip pays
-// `tin` on the way in and `tout` on the way out, so a COMBINED
-// `tin + tout` exceeding the single-step yield makes it unprofitable by
-// construction, permanently and independently of rebase cadence. That
-// combined figure is what the step-coverage invariant enforces,
-// mirroring EVM (`OkuM.setOkuMultiplier` / `SubscriptionModule.setFees`).
+// this — the attacker simply transacts outside it.
 //
-// Both default to 0, so the mechanism ships audited but economically
-// inert and is enabled by configuration.
+// Each leg is floored at `MAX_STEP_BPS`, so a round trip pays at least twice
+// the largest admissible step and is lossy by construction, permanently and
+// independently of cadence. PER-LEG rather than combined because a
+// cross-chain round trip pays `tin` on the chain it mints on and `tout` on
+// the chain it redeems on: `(0, 2x)` here and `(2x, 0)` on EVM would each
+// satisfy a combined check while the pair paid nothing.
+//
+// Both default to 0 — BELOW the floor — so the mechanism ships audited but
+// economically inert, and no step is possible until it is configured.
 
 /// Hard ceiling on `tin_bps` / `tout_bps`, in basis points (100 = 1%).
 ///
@@ -148,3 +167,9 @@ pub const MAX_STEP_BPS: u64 = 100;
 ///
 /// EVM mirror: `Constants.MAX_FEE_BPS`.
 pub const MAX_FEE_BPS: u64 = 100;
+
+/// The fee floor must leave `set_fees` a non-empty admissible range.
+/// Without this, `MAX_STEP_BPS > MAX_FEE_BPS` would make every fee schedule
+/// simultaneously too low and too high, bricking the multiplier permanently.
+/// EVM mirror: `ConstantsCouplingTest`.
+const _: () = assert!(MAX_STEP_BPS <= MAX_FEE_BPS);

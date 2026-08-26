@@ -37,12 +37,24 @@ import {IScaledUIAmountBalances} from "../interfaces/erc8056/IScaledUIAmountBala
  *      implementation's documented `>=`/`>` boundary defect — there is never a
  *      matured-but-uncrystallized pending value.
  *
- *      STEP COVERAGE. Every step records `stepBps` and ratchets
- *      `stepHighWaterMark`, the floor under the module's `tin + tout` fee
- *      schedule. The inheriting token enforces `tin + tout >= stepBps` at write
- *      time; the module enforces `tin + tout >= stepHighWaterMark` at fee-set
- *      time. Together they close local step arbitrage
- *      (mint-at-M0 / redeem-at-M1 across a step).
+ *      STEP COVERAGE IS STATIC, NOT DYNAMIC. This layer enforces only
+ *      `stepBps <= MAX_STEP_BPS`. Fee coverage is guaranteed elsewhere and by
+ *      construction: `SubscriptionModule.setFees` requires
+ *      `tin >= MAX_STEP_BPS` AND `tout >= MAX_STEP_BPS`, so every admissible
+ *      step is covered on *each* leg independently, for all time, with no
+ *      state.
+ *
+ *      This replaces an earlier design in which the token read `tin() + tout()`
+ *      back from the module at write time and ratcheted a `stepHighWaterMark`
+ *      that floored future fee changes. Three coupled mutable mechanisms
+ *      maintained one inequality; the static floor makes the inequality a
+ *      property of the constants instead, and is strictly stronger — the
+ *      ratchet only ever covered steps that had actually occurred.
+ *
+ *      PER-LEG, NOT COMBINED, and this is load-bearing: a cross-chain round
+ *      trip pays `tin` on one chain and `tout` on the other, so a combined
+ *      `tin + tout` bound on each chain separately does not bound the pair.
+ *      Only a per-leg floor survives that composition.
  *
  *      This contract deliberately does NOT hold raw balances, allowances, or
  *      total supply. Those stay in OZ's `ERC20Upgradeable` namespace, untouched.
@@ -63,10 +75,6 @@ abstract contract ScaledUIAmountUpgradeable is
         uint256 multiplier;
         /// @dev Timestamp of the last step. ERC-8056's `effectiveAt()`.
         uint256 lastSteppedAt;
-        /// @dev Largest `stepBps` ever taken. Floors the module's `tin + tout`
-        ///      so fees cannot later drop below a step already taken. Cleared
-        ///      only by the cold-gated `resetStepHighWaterMark`.
-        uint256 stepHighWaterMark;
     }
 
     // keccak256(abi.encode(uint256(keccak256("okumoney.storage.ScaledUIAmount")) - 1)) & ~bytes32(uint256(0xff))
@@ -93,11 +101,6 @@ abstract contract ScaledUIAmountUpgradeable is
     /// @param newMultiplier `M_oku` after the step.
     /// @param stepBps Step size in basis points of the old value, rounded up.
     event OkuMultiplierStepped(uint256 oldMultiplier, uint256 newMultiplier, uint256 stepBps);
-
-    /// @notice The cold-gated step-coverage escape hatch fired.
-    /// @dev Clears the fee floor and reopens historical step exposure. Should be
-    ///      rare and deliberate — ALARM ON THIS EVENT.
-    event StepHighWaterMarkReset(uint256 oldMark);
 
     // ============ Initialization ============
 
@@ -158,21 +161,14 @@ abstract contract ScaledUIAmountUpgradeable is
         return _getScaledUIAmountStorage().lastSteppedAt;
     }
 
-    /// @notice Largest single step ever taken, in basis points.
-    /// @dev Floors the module's `tin + tout`. See step coverage in the README.
-    function stepHighWaterMark() public view virtual returns (uint256) {
-        return _getScaledUIAmountStorage().stepHighWaterMark;
-    }
-
     // ============ Internal: step management ============
 
-    /// @dev Applies an immediate, bounded, monotone step and ratchets the
-    ///      high-water mark. The inheriting token layers policy on top (role
-    ///      gate, halt flag, step-coverage fee check, sync-window arming).
+    /// @dev Applies an immediate, bounded, monotone step. The inheriting token
+    ///      layers policy on top (role gate, halt flag, sync-window arming).
     ///
-    ///      `stepBps` rounds UP: the coverage comparison `tin + tout >= stepBps`
-    ///      must be conservative, and rounding the step down would let a
-    ///      fractionally-larger-than-covered step through.
+    ///      `stepBps` rounds UP: the `MAX_STEP_BPS` comparison must be
+    ///      conservative, and rounding the step down would let a
+    ///      fractionally-oversized step through.
     ///
     ///      Emits both `OkuMultiplierStepped` (protocol) and
     ///      `UIMultiplierUpdated` (ERC-8056 required).
@@ -195,21 +191,8 @@ abstract contract ScaledUIAmountUpgradeable is
 
         $.multiplier = newMultiplier_;
         $.lastSteppedAt = block.timestamp;
-        if (stepBps > $.stepHighWaterMark) $.stepHighWaterMark = stepBps;
 
         emit OkuMultiplierStepped(old, newMultiplier_, stepBps);
         emit UIMultiplierUpdated(old, newMultiplier_, block.timestamp);
-    }
-
-    /// @dev Clears the step high-water mark. Cold-only escape hatch, gated by
-    ///      the inheriting token. Its honest precondition — that supply
-    ///      outstanding at the time of the large step has substantially turned
-    ///      over — is not verifiable on-chain, which is why the event should be
-    ///      alarmed on.
-    function _resetStepHighWaterMark() internal {
-        ScaledUIAmountStorage storage $ = _getScaledUIAmountStorage();
-        uint256 oldMark = $.stepHighWaterMark;
-        $.stepHighWaterMark = 0;
-        emit StepHighWaterMarkReset(oldMark);
     }
 }

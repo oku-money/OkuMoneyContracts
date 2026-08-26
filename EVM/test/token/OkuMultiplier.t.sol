@@ -24,8 +24,12 @@ import {ScaledUIHarness} from "../mocks/ScaledUIHarness.sol";
  *        3. monotonicity (strict)        -> `MultiplierCannotDecrease`
  *        4. `MAX_MULTIPLIER` ceiling     -> `MultiplierAboveMaximum`
  *        5. `MAX_STEP_BPS` per step      -> `StepAboveMaximum` (stepBps ceils)
- *        6. step coverage vs fee source  -> `StepNotCovered`
- *        7. arm the sync window
+ *        6. arm the sync window
+ *
+ *      There is NO step-coverage check here any more. The token does not read
+ *      the module's fee schedule at all: coverage is guaranteed by the static
+ *      per-leg floor in `SubscriptionModule.setFees` composed with check 5.
+ *      See `StepArbitrageTest` for that invariant.
  */
 contract OkuMultiplierTest is BaseTest {
     // ============ Monotonicity (strict) ============
@@ -62,7 +66,7 @@ contract OkuMultiplierTest is BaseTest {
     function test_Step_AboveMaxStepReverts() public {
         // Fees at their combined max (200 bps) so coverage is NOT the binding
         // constraint — this isolates the per-step ceiling.
-        _setFeesForStep(2 * Constants.MAX_FEE_BPS);
+        _setFeesForStep(Constants.MAX_STEP_BPS);
         uint256 current = token.uiMultiplier();
         uint256 tooFar = current + (current * (Constants.MAX_STEP_BPS + 1)) / Constants.BASIS_POINTS;
         vm.prank(rateSetter);
@@ -83,13 +87,12 @@ contract OkuMultiplierTest is BaseTest {
         vm.prank(rateSetter);
         token.setOkuMultiplier(target);
         assertEq(token.uiMultiplier(), target);
-        assertEq(token.stepHighWaterMark(), Constants.MAX_STEP_BPS);
     }
 
     /// @notice `stepBps` rounds UP: one wei above a max-step target tips into
     ///         `MAX_STEP_BPS + 1` and reverts.
     function test_Step_OneWeiAboveMaxStepRoundsUpAndReverts() public {
-        _setFeesForStep(2 * Constants.MAX_FEE_BPS);
+        _setFeesForStep(Constants.MAX_STEP_BPS);
         uint256 current = token.uiMultiplier();
         uint256 target = current + (current * Constants.MAX_STEP_BPS) / Constants.BASIS_POINTS + 1;
         vm.prank(rateSetter);
@@ -97,19 +100,16 @@ contract OkuMultiplierTest is BaseTest {
         token.setOkuMultiplier(target);
     }
 
-    /// @notice `stepBps` rounds UP: a 1-wei step on 1e18 is 1 bp, not 0. A
-    ///         zero-bps step would need zero coverage and slip past the fee
-    ///         invariant, which is exactly why the ceil matters.
+    /// @notice `stepBps` rounds UP: a 1-wei step on 1e18 is 1 bp, not 0. The
+    ///         ceil is what keeps the `MAX_STEP_BPS` comparison conservative, so
+    ///         a fractionally-oversized step cannot round its way through.
     function test_StepBps_RoundsUp_OneWeiIsOneBp() public {
-        _setFeesForStep(1);
         uint256 old = token.uiMultiplier();
 
         vm.expectEmit(address(token));
         emit ScaledUIAmountUpgradeable.OkuMultiplierStepped(old, old + 1, 1);
         vm.prank(rateSetter);
         token.setOkuMultiplier(old + 1);
-
-        assertEq(token.stepHighWaterMark(), 1, "hwm ratchets to the ceil'd step");
     }
 
     // ============ MAX_MULTIPLIER ============
@@ -148,91 +148,37 @@ contract OkuMultiplierTest is BaseTest {
         h.step(Constants.MAX_MULTIPLIER + 1);
     }
 
-    // ============ Step coverage ============
+    // ============ Step coverage lives elsewhere now ============
 
-    /// @notice At deploy fees are 0, so NO step is possible until `setFees`.
-    ///         This is the fail-closed shipping state.
-    function test_Step_ImpossibleAtDeployFees() public {
-        assertEq(module.tin() + module.tout(), 0, "fees ship at zero");
+    /// @notice The token takes a step at deploy fees with no configuration at
+    ///         all — and that is SAFE, because `initialize` seeded the module's
+    ///         fees at the coverage floor.
+    ///
+    /// @dev This test previously asserted the opposite ("no step is possible
+    ///      until `setFees`"), which was the fail-closed shipping state of the
+    ///      old dynamic-coverage design. Inverted deliberately. The invariant it
+    ///      protected is now structural rather than procedural: there is no
+    ///      reachable state with fees below the floor, so there is nothing for
+    ///      the token to check and no ordering for an operator to get wrong.
+    function test_Step_PossibleImmediatelyAtDeployFees() public {
+        assertEq(module.tin(), Constants.MAX_STEP_BPS, "tin ships at the floor");
+        assertEq(module.tout(), Constants.MAX_STEP_BPS, "tout ships at the floor");
+
         vm.prank(rateSetter);
-        vm.expectRevert(abi.encodeWithSelector(OkuM.StepNotCovered.selector, 1, 0));
         token.setOkuMultiplier(Constants.PRECISION + 1);
+        assertEq(token.uiMultiplier(), Constants.PRECISION + 1);
     }
 
-    function test_Step_NotCoveredWhenFeesTooLow() public {
-        vm.prank(capManager);
-        module.setFees(10, 10);
-        uint256 current = token.uiMultiplier();
-        // 21 bps step against 20 bps of coverage.
-        uint256 target = current + (current * 21) / Constants.BASIS_POINTS;
-        vm.prank(rateSetter);
-        vm.expectRevert(abi.encodeWithSelector(OkuM.StepNotCovered.selector, 21, 20));
-        token.setOkuMultiplier(target);
-    }
-
-    function test_Step_CoverageBoundaryExactlyEqualAccepted() public {
-        vm.prank(capManager);
-        module.setFees(10, 10);
-        uint256 current = token.uiMultiplier();
-        uint256 target = current + (current * 20) / Constants.BASIS_POINTS;
-        vm.prank(rateSetter);
-        token.setOkuMultiplier(target);
-        assertEq(token.uiMultiplier(), target);
-    }
-
-    /// @notice An unwired fee source reads as zero coverage — fail-closed. A
-    ///         fresh token that was never pointed at a module cannot step at all.
-    function test_Step_FeeSourceUnsetIsFailClosed() public {
-        _setFeesForStep(Constants.MAX_STEP_BPS); // fees exist on the module...
-        vm.prank(capManager);
-        token.setStepFeeSource(address(0)); // ...but the token no longer reads them.
-
-        vm.prank(rateSetter);
-        vm.expectRevert(abi.encodeWithSelector(OkuM.StepNotCovered.selector, 1, 0));
-        token.setOkuMultiplier(Constants.PRECISION + 1);
-    }
-
-    function test_SetStepFeeSource_EmitsAndRewires() public {
-        vm.expectEmit(address(token));
-        emit OkuM.StepFeeSourceSet(address(module), address(0));
-        vm.prank(capManager);
-        token.setStepFeeSource(address(0));
-        assertEq(token.stepFeeSource(), address(0));
-
-        vm.prank(capManager);
-        token.setStepFeeSource(address(module));
-        assertEq(token.stepFeeSource(), address(module));
-    }
-
-    // ============ High-water mark ratchet ============
-
-    function test_HighWaterMark_RatchetsToLargestStep() public {
-        assertEq(token.stepHighWaterMark(), 0);
-        _stepBy(10);
-        assertEq(token.stepHighWaterMark(), 10);
-        _stepBy(40);
-        assertEq(token.stepHighWaterMark(), 40);
-        // A smaller step must NOT lower the mark.
-        _stepBy(5);
-        assertEq(token.stepHighWaterMark(), 40, "ratchet never descends");
-    }
-
-    function test_ResetHighWaterMark_ClearsAndEmits() public {
-        _stepBy(40);
-        assertEq(token.stepHighWaterMark(), 40);
-
-        vm.expectEmit(address(token));
-        emit ScaledUIAmountUpgradeable.StepHighWaterMarkReset(40);
-        vm.prank(capManager);
-        token.resetStepHighWaterMark();
-
-        assertEq(token.stepHighWaterMark(), 0);
-    }
-
-    function test_ResetHighWaterMark_RequiresCapManager() public {
-        vm.prank(rateSetter);
-        vm.expectPartialRevert(IAccessControl.AccessControlUnauthorizedAccount.selector);
-        token.resetStepHighWaterMark();
+    /// @notice The token exposes no fee-source surface. An integrator probing
+    ///         for the old coupling must get a clean absence.
+    /// @dev Compile-time assertion by absence: `setStepFeeSource`,
+    ///      `stepFeeSource` and `stepHighWaterMark` no longer exist on `OkuM`,
+    ///      so any reference here would fail to build. Asserted dynamically in
+    ///      the Hardhat suite via ABI introspection.
+    function test_Step_NoFeeSourceCoupling() public view {
+        // The step bound is a constant, readable without touching the module.
+        assertEq(Constants.MAX_STEP_BPS, 5, "provisional daily-cadence value");
+        assertLe(Constants.MAX_STEP_BPS, Constants.MAX_FEE_BPS);
     }
 
     // ============ Guardian halt ============
@@ -327,22 +273,16 @@ contract OkuMultiplierTest is BaseTest {
         token.resumeAccrual();
     }
 
-    function test_SetStepFeeSource_RequiresCapManager() public {
-        vm.prank(rateSetter);
-        vm.expectPartialRevert(IAccessControl.AccessControlUnauthorizedAccount.selector);
-        token.setStepFeeSource(address(0));
-    }
-
     // ============ Events ============
 
     function test_Step_EmitsAllThreeEvents() public {
-        _setFeesForStep(50);
+        _setFeesForStep(Constants.MAX_STEP_BPS);
         uint256 old = token.uiMultiplier();
-        uint256 target = old + (old * 50) / Constants.BASIS_POINTS;
+        uint256 target = old + (old * Constants.MAX_STEP_BPS) / Constants.BASIS_POINTS;
         uint256 expectedLock = block.timestamp + token.syncWindowDuration();
 
         vm.expectEmit(address(token));
-        emit ScaledUIAmountUpgradeable.OkuMultiplierStepped(old, target, 50);
+        emit ScaledUIAmountUpgradeable.OkuMultiplierStepped(old, target, Constants.MAX_STEP_BPS);
         vm.expectEmit(address(token));
         emit IScaledUIAmount.UIMultiplierUpdated(old, target, block.timestamp);
         vm.expectEmit(address(token));
@@ -357,7 +297,7 @@ contract OkuMultiplierTest is BaseTest {
     /// @notice Emergency levers must survive a pause: correcting the multiplier
     ///         during an incident must always be possible.
     function test_SetOkuMultiplier_WorksWhilePaused() public {
-        _setFeesForStep(10);
+        _setFeesForStep(Constants.MAX_STEP_BPS);
         vm.prank(pauser);
         token.pause();
         vm.prank(rateSetter);
@@ -394,6 +334,5 @@ contract OkuMultiplierTest is BaseTest {
         vm.prank(rateSetter);
         token.setOkuMultiplier(target);
         assertEq(token.uiMultiplier(), target);
-        assertLe(token.stepHighWaterMark(), bps, "ceil'd step never exceeds the request");
     }
 }

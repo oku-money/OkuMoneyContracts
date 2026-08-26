@@ -214,20 +214,11 @@ pub mod lite_psm {
     }
 
     /// Set the `tin` / `tout` fee schedule in basis points (CAP_MANAGER
-    /// only). The COMBINED `tin + tout` is the local step-arbitrage
-    /// control and must cover every step taken so far
-    /// (`max_step_bps`). Both bounded by `MAX_FEE_BPS`; both default to 0,
-    /// which means no step is possible until a schedule is set.
+    /// only). This is the local step-arbitrage control. Each leg is bounded
+    /// below by `MAX_STEP_BPS` and above by `MAX_FEE_BPS`; both default to 0,
+    /// which is below the floor, so no step is possible until a schedule is
+    /// set.
     pub fn set_fees(ctx: Context<CapManagerParams>, tin_bps: u64, tout_bps: u64) -> Result<()> {
         instructions::psm_admin::set_fees(ctx, tin_bps, tout_bps)
-    }
-
-    /// Clear the multiplier-step high-water mark (CAP_MANAGER only).
-    ///
-    /// REOPENS HISTORICAL STEP-ARBITRAGE EXPOSURE. Separate from `set_fees` so
-    /// it cannot happen as a side effect of a routine fee change. See the
-    /// instruction doc for when this is legitimate.
-    pub fn reset_step_high_water_mark(ctx: Context<CapManagerParams>) -> Result<()> {
-        instructions::psm_admin::reset_step_high_water_mark(ctx)
     }
 }

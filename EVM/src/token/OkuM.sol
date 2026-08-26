@@ -16,6 +16,7 @@ import {
     ERC20PermitUpgradeable
 } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {ScaledUIAmountUpgradeable} from "../lib/ScaledUIAmountUpgradeable.sol";
 import {Constants} from "../lib/Constants.sol";
@@ -29,13 +30,6 @@ import {
 } from "../interfaces/erc8056/IScaledUIAmountNewUIMultiplier.sol";
 import {IScaledUIAmountConversion} from "../interfaces/erc8056/IScaledUIAmountConversion.sol";
 import {IScaledUIAmountBalances} from "../interfaces/erc8056/IScaledUIAmountBalances.sol";
-
-/// @dev Minimal read surface of the fee schedule that step coverage binds to.
-///      Declared locally to avoid a circular import with the module.
-interface IStepFeeSource {
-    function tin() external view returns (uint256);
-    function tout() external view returns (uint256);
-}
 
 /**
  * @title OkuM
@@ -99,11 +93,6 @@ contract OkuM is
         /// @dev Global supply cap in raw units. Bounded by `MAX_TOTAL_SUPPLY`.
         uint256 maxSupply;
         mapping(address => bool) isBlacklisted;
-        /// @dev Where step coverage reads `tin`/`tout` from — the
-        ///      SubscriptionModule proxy. Zero = fail-closed: every step refused
-        ///      until wired, so a partially-configured deployment cannot step
-        ///      uncovered.
-        address stepFeeSource;
         /// @dev Guardian halt flag. While true, `setOkuMultiplier` reverts.
         bool accrualHalted;
     }
@@ -160,11 +149,15 @@ contract OkuM is
     error SyncWindowTooLong(uint256 requested, uint256 maximum);
     /// @notice The guardian halted stepping; `resumeAccrual` (cold) lifts it.
     error AccrualIsHalted();
-    /// @notice The proposed step exceeds what the round-trip fee covers.
-    /// @dev Step coverage: `tin + tout >= stepBps` must hold for every step, or
-    ///      the round trip mint-at-M0 / redeem-at-M1 extracts the step from the
-    ///      buffer. Raise the fees first, or take a smaller step.
-    error StepNotCovered(uint256 stepBps, uint256 coverageBps);
+    /// @notice `distributeYield` called with zero supply outstanding.
+    /// @dev There is nobody to distribute to, and the per-share delta would
+    ///      divide by zero. Mint first, or use `setOkuMultiplier`.
+    error NoSupplyToDistributeTo();
+    /// @notice `distributeYield`'s amount was too small to move `M_oku` by 1 wei.
+    /// @dev Fails loudly rather than silently accepting a no-op that would still
+    ///      stamp `lastSteppedAt` and re-arm the sync window. Mirrors SVM's
+    ///      `YieldTooSmall`.
+    error YieldTooSmall(uint256 yieldAmount, uint256 totalSupply);
 
     // ============ Events ============
 
@@ -185,8 +178,15 @@ contract OkuM is
     event AccrualHalted(uint256 atMultiplier);
     /// @notice Cold lifted the guardian halt.
     event AccrualResumed(uint256 atMultiplier);
-    /// @notice The step-coverage fee source was (re)wired.
-    event StepFeeSourceSet(address indexed oldSource, address indexed newSource);
+
+    /// @notice Dollar-denominated yield was distributed by stepping `M_oku`.
+    /// @param yieldAmount Dollars handed in (18 dp).
+    /// @param totalSupply Raw supply the amount was spread across.
+    /// @param newMultiplier `M_oku` after the step.
+    /// @dev Emitted in addition to `OkuMultiplierStepped` and
+    ///      `UIMultiplierUpdated`, so the dollar intent is recoverable from logs
+    ///      rather than only the resulting index.
+    event YieldDistributed(uint256 yieldAmount, uint256 totalSupply, uint256 newMultiplier);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -349,24 +349,9 @@ contract OkuM is
         return _getOkuMStorage().isBlacklisted[account];
     }
 
-    /// @inheritdoc IOkuM
-    function stepHighWaterMark()
-        public
-        view
-        override(ScaledUIAmountUpgradeable, IOkuM)
-        returns (uint256)
-    {
-        return super.stepHighWaterMark();
-    }
-
     /// @notice Whether the guardian has blocked further multiplier steps.
     function accrualHalted() external view returns (bool) {
         return _getOkuMStorage().accrualHalted;
-    }
-
-    /// @notice Where step coverage reads the `tin`/`tout` fee schedule from.
-    function stepFeeSource() external view returns (address) {
-        return _getOkuMStorage().stepFeeSource;
     }
 
     // ============ Multiplier authority ============
@@ -379,9 +364,17 @@ contract OkuM is
     ///
     ///        - monotonicity (`MultiplierCannotDecrease`)
     ///        - `MAX_STEP_BPS` per step (`StepAboveMaximum`)
-    ///        - step coverage `tin + tout >= stepBps` (`StepNotCovered`)
     ///        - `MAX_MULTIPLIER` cumulative (`MultiplierAboveMaximum`)
     ///        - the guardian halt flag (`AccrualIsHalted`)
+    ///
+    ///      FEE COVERAGE IS NOT CHECKED HERE, because it cannot fail.
+    ///      `SubscriptionModule.setFees` enforces `tin >= MAX_STEP_BPS` and
+    ///      `tout >= MAX_STEP_BPS`, and this function enforces
+    ///      `stepBps <= MAX_STEP_BPS`, so every admissible step is covered on
+    ///      each leg independently, for all time. The earlier design read
+    ///      `tin() + tout()` back from the module here and ratcheted a
+    ///      high-water mark to stop fees dropping afterwards; the static floor
+    ///      makes both redundant and is strictly stronger.
     ///
     ///      NOT pause-gated, by design: correcting the multiplier during an
     ///      incident must always be possible.
@@ -392,21 +385,50 @@ contract OkuM is
     ///      write, and cross-chain parity is verified off-chain by comparing
     ///      multiplier values directly.
     function setOkuMultiplier(uint256 newMultiplier) external onlyRole(Roles.OKU_RATE_SETTER) {
-        OkuMStorage storage $ = _getOkuMStorage();
-        if ($.accrualHalted) revert AccrualIsHalted();
-
-        uint256 stepBps = _stepMultiplier(newMultiplier);
-
-        // Step coverage. Fail-closed: an unwired fee source reads as zero
-        // coverage, so no step can land before the module is connected.
-        uint256 coverage = 0;
-        address feeSource = $.stepFeeSource;
-        if (feeSource != address(0)) {
-            coverage = IStepFeeSource(feeSource).tin() + IStepFeeSource(feeSource).tout();
-        }
-        if (stepBps > coverage) revert StepNotCovered(stepBps, coverage);
-
+        if (_getOkuMStorage().accrualHalted) revert AccrualIsHalted();
+        _stepMultiplier(newMultiplier);
         _armSyncWindow();
+    }
+
+    /// @notice Distribute `yieldAmount` of dollar-denominated yield across all
+    ///         holders by stepping `M_oku`.
+    /// @dev Convenience over `setOkuMultiplier`, and the EVM twin of SVM's
+    ///      `distribute_yield`. Both chains therefore expose the same two
+    ///      mark-entry shapes: set the index, or hand over a dollar amount and
+    ///      let the contract derive the index.
+    ///
+    ///      `newMultiplier = uiMultiplier() + yieldAmount * PRECISION / totalSupply()`
+    ///
+    ///      Routes through the identical validation path as `setOkuMultiplier`
+    ///      — there is deliberately no second door past the gates. A
+    ///      `yieldAmount` too small to move the multiplier by one wei reverts
+    ///      rather than silently no-opping, mirroring SVM's `YieldTooSmall`.
+    function distributeYield(uint256 yieldAmount)
+        external
+        onlyRole(Roles.OKU_RATE_SETTER)
+        returns (uint256 newMultiplier)
+    {
+        if (_getOkuMStorage().accrualHalted) {
+            revert AccrualIsHalted();
+        }
+        if (yieldAmount == 0) revert Errors.ZeroAmount();
+
+        uint256 supply = totalSupply();
+        if (supply == 0) revert NoSupplyToDistributeTo();
+
+        // Floor: the undistributed remainder stays in the buffer as surplus
+        // rather than being conjured into the index.
+        uint256 delta = Math.mulDiv(yieldAmount, Constants.PRECISION, supply);
+        if (delta == 0) revert YieldTooSmall(yieldAmount, supply);
+
+        newMultiplier = uiMultiplier() + delta;
+
+        // `_stepMultiplier` re-applies monotonicity, `MAX_STEP_BPS` and
+        // `MAX_MULTIPLIER`; `delta > 0` already guarantees the first.
+        _stepMultiplier(newMultiplier);
+        _armSyncWindow();
+
+        emit YieldDistributed(yieldAmount, supply, newMultiplier);
     }
 
     /// @notice Block further multiplier steps, immediately.
@@ -429,32 +451,43 @@ contract OkuM is
         emit AccrualResumed(uiMultiplier());
     }
 
-    /// @notice Wire the step-coverage fee source (the SubscriptionModule proxy).
-    /// @dev Cold economic policy. Zero is allowed and fail-closed: it disables
-    ///      stepping entirely rather than disabling the coverage check.
-    function setStepFeeSource(address newSource) external onlyRole(Roles.OKU_CAP_MANAGER) {
-        OkuMStorage storage $ = _getOkuMStorage();
-        address old = $.stepFeeSource;
-        $.stepFeeSource = newSource;
-        emit StepFeeSourceSet(old, newSource);
-    }
-
-    /// @notice Clear the step high-water mark, unfreezing the fee floor.
-    /// @dev Cold-only escape hatch; reopens historical step exposure. Emits
-    ///      `StepHighWaterMarkReset` — alarm on it.
-    function resetStepHighWaterMark() external onlyRole(Roles.OKU_CAP_MANAGER) {
-        _resetStepHighWaterMark();
-    }
-
     // ============ Post-step sync window ============
     //
     // `M_oku` steps on every chain in the same orchestrator tick, and the tick
-    // is not atomic across chains. Each chain fences ITSELF: the write above
-    // arms a bounded lock on everything that prices through the multiplier
-    // (module mint/redeem, queue processing, wrapper wrap/unwrap). The lock
-    // auto-expires; there is no close call, no epoch, and no cross-chain
-    // bookkeeping. Off-chain parity verification compares the multiplier VALUES
-    // (`check-sync-parity.ts`), which equal epochs never actually proved.
+    // is not atomic across chains. Every `setOkuMultiplier` write arms a
+    // bounded, auto-expiring window recording that fact. There is no close
+    // call, no epoch, and no cross-chain bookkeeping; off-chain parity
+    // verification compares the multiplier VALUES (`check-sync-parity.ts`),
+    // which equal epochs never actually proved.
+    //
+    // WHAT IT GATES ON THIS CHAIN TODAY: NOTHING. Stated plainly because the
+    // alternative is protection that looks present and is not.
+    //
+    // The window's purpose is to fence value crossing a multiplier boundary
+    // between chains. Raw is conserved per-instruction, but a cross-chain PAIR
+    // prices: burning 100 raw where M=1.04 destroys $104 of claim while minting
+    // 100 raw where M=1.05 creates $105, conjuring $1 from a mid-tick
+    // divergence. On SVM that pair has dedicated instructions
+    // (`mint_oku_m_direct` / `burn_oku_m_direct`) and they ARE gated.
+    //
+    // EVM has no such instruction. `mint` and `burn` here are the shared supply
+    // hooks the module and the queue use for ordinary local subscription and
+    // redemption, so gating them would gate the entire PSM — a 60-second outage
+    // on every mint and redeem after every mark, to protect a bridge that does
+    // not exist yet. An earlier draft of this refactor did exactly that before
+    // the transitive effect was noticed.
+    //
+    // So on EVM the window is an ADVISORY SIGNAL: `isSyncLocked()` and
+    // `syncLockedUntil()` are exposed for monitoring and for the bridge adapter
+    // that will consult them. WHEN AN EVM BRIDGE IS BUILT IT MUST GATE ON
+    // `isSyncLocked()`, and it should do so in its own contract rather than by
+    // adding the modifier back here. Tracked in TRACKER.md.
+    //
+    // A time lock is the right tool for cross-chain divergence and the wrong
+    // tool for step arbitrage, because the two edges differ in kind: divergence
+    // is transient and self-correcting (once the lagging chain ticks the edge is
+    // zero), whereas a step's gain is permanent and waiting costs the attacker
+    // nothing. Hence a lock for the bridge, a fee floor for the steps.
 
     /// @notice True while the post-step sync window is engaged.
     /// @dev Exclusive upper bound. A zero-length window is therefore genuinely
@@ -561,6 +594,7 @@ contract OkuM is
     /// @inheritdoc IOkuM
     /// @dev Minting `amount` raw at `uiMultiplier() = 1.05e18` creates $1.05*amount
     ///      of displayed value. The module handles the USDC conversion.
+    ///
     function mint(address to, uint256 amount) external onlyRole(Roles.OKU_MINTER) whenNotPaused {
         OkuMStorage storage $ = _getOkuMStorage();
 
@@ -579,6 +613,7 @@ contract OkuM is
     /// @inheritdoc IOkuM
     /// @dev Burns the caller's own balance. Allowed while paused. Burning does
     ///      NOT restore minter allowance.
+    ///
     function burn(uint256 amount) external onlyRole(Roles.OKU_BURNER) {
         _burn(msg.sender, amount);
     }

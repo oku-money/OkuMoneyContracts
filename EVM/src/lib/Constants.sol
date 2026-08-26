@@ -49,20 +49,36 @@ library Constants {
 
     // ============ M_oku authority bounds (OkuM, stepwise) ============
 
-    /// @notice Ceiling on a single `M_oku` step, in basis points.
-    /// @dev Binds together with `MAX_FEE_BPS` via the step-coverage invariant
-    ///      `tin + tout >= stepBps`: a step larger than the round-trip fee can
-    ///      cover is refused (`StepNotCovered`), so the *effective* ceiling is
-    ///      `min(MAX_STEP_BPS, tin + tout)`.
+    /// @notice Ceiling on a single `M_oku` step, in basis points. ALSO the floor
+    ///         under each of `tin` and `tout`.
+    /// @dev THE single number that defines the step-arbitrage defence. Two rules
+    ///      reference it and nothing else does:
     ///
-    ///      At a 5% annual target a daily step is ~1.34 bps, weekly ~9.6 bps,
-    ///      monthly ~40.7 bps. 100 bps covers steps up to roughly a 2.4-month
-    ///      cadence.
+    ///          OkuM.setOkuMultiplier:        stepBps <= MAX_STEP_BPS
+    ///          SubscriptionModule.setFees:   tin >= MAX_STEP_BPS
+    ///                                        tout >= MAX_STEP_BPS
     ///
-    ///      PLACEHOLDER — needs a treasury number and a published cadence.
+    ///      Composed, every step the protocol can take is covered on each leg
+    ///      independently, permanently, with no state. Raising this number
+    ///      permits a coarser mark cadence and simultaneously raises the minimum
+    ///      fee; the two cannot drift apart.
+    ///
+    ///      SIZING. At a 5% annual target a daily step is ~1.37 bps, weekly
+    ///      ~9.6 bps, monthly ~40.7 bps. At 5 bps a daily cadence carries ~3.5x
+    ///      headroom, so a missed day is caught up in one write and a missed
+    ///      three days still fits. A longer outage must be walked over several
+    ///      ticks — the direct analogue of `MAX_IMPLIED_APR`'s catch-up limit on
+    ///      USDOku, and the same deliberate operator-absence protection.
+    ///
+    ///      COST. The minimum round trip becomes 10 bps (0.05% per leg).
+    ///
+    ///      PROVISIONAL — assumes a DAILY mark cadence at ~5% APY. Needs
+    ///      treasury sign-off on the cadence, after which this number follows
+    ///      mechanically. Must satisfy `MAX_STEP_BPS <= MAX_FEE_BPS`, asserted
+    ///      in `ConstantsCouplingTest`.
     ///
     ///      SVM mirror: `oku_shared::MAX_STEP_BPS`.
-    uint256 internal constant MAX_STEP_BPS = 100;
+    uint256 internal constant MAX_STEP_BPS = 5;
 
     /// @notice Absolute ceiling for the cumulative `M_oku` multiplier.
     /// @dev `1e24` = $1,000,000 of value per raw token. Mirrors the SVM-side
@@ -149,15 +165,25 @@ library Constants {
     // `M_oku` is stepwise and written on every chain by the same orchestrator
     // tick. A tick is not atomic across chains, so for a short interval the two
     // sides price a raw token differently. Each chain fences ITSELF: every
-    // `setOkuMultiplier` write auto-arms a bounded lock on the operations that
-    // price through the multiplier. There is no cross-chain epoch protocol —
+    // `setOkuMultiplier` write auto-arms a bounded lock on the BRIDGE LEGS
+    // (`OkuM.mint` / `OkuM.burn`). There is no cross-chain epoch protocol —
     // parity is verified off-chain by comparing the multiplier VALUES directly
     // (`check-sync-parity.ts`), which is strictly stronger than any epoch
     // bookkeeping (equal epochs never proved equal values).
     //
-    // The window is NOT a step-arbitrage defence: holding raw across a step
-    // needs no transaction while the window is open, so no window length deters
-    // it. The step-coverage invariant (`tin + tout >= stepBps`) is the control.
+    // SCOPE: BRIDGE LEGS ONLY. A single-chain operation priced at its own
+    // chain's `M_oku` is correct by definition whatever the peer believes, so
+    // gating module mint/redeem or wrapper wrap/unwrap bought nothing and cost
+    // an outage after every mark. The bridge is the one place raw crosses a
+    // multiplier boundary: burning 100 raw at M=1.04 destroys $104 of claim
+    // while minting 100 raw at M=1.05 creates $105.
+    //
+    // The window is NOT a step-arbitrage defence, and no window length would
+    // make it one: holding raw across a step needs no transaction. The two
+    // edges differ in kind — cross-chain divergence is transient and
+    // self-correcting, so waiting removes it, whereas a step's gain is
+    // permanent. Hence a time lock for the bridge, a fee floor
+    // (`MAX_STEP_BPS`) for the steps.
 
     /// @notice Hard ceiling on the post-step sync window.
     /// @dev Liveness backstop: mint/redeem resume unaided after at most this
@@ -183,10 +209,14 @@ library Constants {
     // ============ Module fees ============
 
     /// @notice Hard ceiling on `tin` / `tout`, in basis points (100 = 1%).
-    /// @dev Anti-confiscation bound AND the binding constraint on maximum step
-    ///      size via step coverage. The worst case of a compromised cold key is
+    /// @dev Anti-confiscation bound. The worst case of a compromised cold key is
     ///      a 1% haircut per side rather than seizure of every mint and
     ///      redemption.
+    ///
+    ///      No longer couples to step size: the fee FLOOR is `MAX_STEP_BPS` and
+    ///      this is the independent ceiling. The two only interact through the
+    ///      requirement `MAX_STEP_BPS <= MAX_FEE_BPS`, without which `setFees`
+    ///      would admit no value at all.
     ///
     ///      SVM mirror: `oku_shared::MAX_FEE_BPS`.
     uint256 internal constant MAX_FEE_BPS = 100;

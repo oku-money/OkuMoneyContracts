@@ -23,29 +23,38 @@ contract SubscriptionModuleTest is BaseTest {
 
     // ============ Mint ============
 
-    function test_Mint_AtUnitMultiplier_IsOneToOne() public {
+    /// @notice At a unit multiplier a mint is one-to-one NET OF `tin`.
+    /// @dev Previously asserted an exact 100e6 -> 100e18, which held only
+    ///      because fees shipped at zero. They now ship at the step-coverage
+    ///      floor, so the one-to-one property is on the post-fee deposit. The
+    ///      whole deposit still lands in the buffer — the fee is withheld from
+    ///      the credit, not taken out of the contract.
+    function test_Mint_AtUnitMultiplier_IsOneToOneNetOfTin() public {
+        uint256 credited = _afterTin(100e6);
         uint256 rawOut = _psmMint(user1, 100e6);
-        assertEq(rawOut, 100e18);
-        assertEq(token.balanceOf(user1), 100e18);
-        assertEq(token.balanceOfUI(user1), 100e18);
-        assertEq(usdc.balanceOf(address(module)), 100e6);
+
+        assertEq(rawOut, credited * DM, "one-to-one on the credited amount");
+        assertEq(token.balanceOf(user1), credited * DM);
+        assertEq(token.balanceOfUI(user1), credited * DM);
+        assertEq(usdc.balanceOf(address(module)), 100e6, "the fee stays in the buffer");
     }
 
     /// @notice The README's worked example: at $1.05, 100 USDC buys ~95.24 raw,
     ///         which displays as $100.
     function test_Mint_AtElevatedMultiplier_BuysFewerRawSameDollars() public {
         _accrueToAtLeast((Constants.PRECISION * 105) / 100);
-        // Fee-free math below: reaching an elevated multiplier requires steps,
-        // and every step ratchets the `tin + tout` floor. `_resetFees` clears it
-        // via the cold escape hatch so this test measures pure multiplier
-        // conversion. Fee-inclusive behaviour is `FeesTest`'s job.
-        _resetFees();
+        // Pin fees at the MINIMUM the contracts admit, so this test measures
+        // multiplier conversion against a known, small fee rather than against
+        // whatever a previous step left configured. Zero is not reachable —
+        // see `_minFees`. Fee-inclusive behaviour is `FeesTest`'s job.
+        _minFees();
         uint256 m = token.uiMultiplier();
 
+        uint256 credited = _afterTin(100e6);
         uint256 rawOut = _psmMint(user1, 100e6);
-        assertLt(rawOut, 100e18, "fewer raw tokens at a higher multiplier");
-        assertApproxEqAbs(token.balanceOfUI(user1), 100e18, DM, "but the same dollar value");
-        assertEq(rawOut, (100e18 * Constants.PRECISION) / m);
+        assertLt(rawOut, credited * DM, "fewer raw tokens at a higher multiplier");
+        assertApproxEqAbs(token.balanceOfUI(user1), credited * DM, DM, "but the same dollar value");
+        assertEq(rawOut, (credited * DM * Constants.PRECISION) / m);
     }
 
     function test_Mint_ZeroReverts() public {
@@ -67,12 +76,19 @@ contract SubscriptionModuleTest is BaseTest {
     ///      reachability.
     function test_Mint_OneUsdcUnitAlwaysYieldsNonZeroRaw() public {
         _accrueToAtLeast(1000 * Constants.PRECISION);
-        // Fee-free math below: reaching an elevated multiplier requires steps,
-        // and every step ratchets the `tin + tout` floor. `_resetFees` clears it
-        // via the cold escape hatch so this test measures pure multiplier
-        // conversion. Fee-inclusive behaviour is `FeesTest`'s job.
-        _resetFees();
-        assertGt(module.quoteMint(1), 0, "6dp USDC cannot floor to zero raw");
+        // Pin fees at the MINIMUM the contracts admit, so this test measures
+        // multiplier conversion against a known, small fee rather than against
+        // whatever a previous step left configured. Zero is not reachable —
+        // see `_minFees`. Fee-inclusive behaviour is `FeesTest`'s job.
+        _minFees();
+        // A single 6dp unit is entirely consumed by the ceil-rounded `tin` at
+        // any nonzero fee, so the smallest mint that yields raw is now larger
+        // than one unit. That is a real consequence of the mandatory fee floor,
+        // not a rounding bug: `AmountTooSmall` is the module's guard for it.
+        assertEq(_afterTin(1), 0, "one unit is fully consumed by the fee");
+        uint256 smallest = Constants.BASIS_POINTS / Constants.MAX_STEP_BPS;
+        assertGt(module.quoteMint(smallest), 0, "but a fee-surviving amount still mints");
+        assertLt(Constants.MAX_MULTIPLIER, DM * Constants.PRECISION, "1e24 < 1e30");
         assertLt(Constants.MAX_MULTIPLIER, DM * Constants.PRECISION, "1e24 < 1e30");
     }
 
@@ -121,16 +137,15 @@ contract SubscriptionModuleTest is BaseTest {
         t.grantRole(Roles.OKU_MINTER, address(p));
         t.configureMinterAllowance(address(p), MINTER_ALLOWANCE);
         t.grantRole(Roles.OKU_RATE_SETTER, rateSetter);
-        // Step coverage is fail-closed: without the fee source wired and a
-        // covering fee set, `setOkuMultiplier` below would revert
-        // `StepNotCovered`. Wiring it here rather than working around it keeps
-        // this fixture honest about the production precondition.
-        t.setStepFeeSource(address(p));
-        p.setFees(50, 50);
+        // Step coverage needs no wiring and no per-step arrangement: `initialize`
+        // seeded both legs at `MAX_STEP_BPS` and they cannot go below it, so the
+        // step below is covered already. Raised here only to exercise a
+        // non-floor schedule against an 18dp asset.
+        p.setFees(Constants.MAX_FEE_BPS, Constants.MAX_FEE_BPS);
         vm.stopPrank();
 
         vm.prank(rateSetter);
-        t.setOkuMultiplier((Constants.PRECISION * 10_050) / 10_000);
+        t.setOkuMultiplier((Constants.PRECISION * 10_005) / 10_000); // 5 bps == MAX_STEP_BPS
         vm.warp(block.timestamp + t.syncWindowDuration());
         assertGt(t.uiMultiplier(), Constants.PRECISION);
 
@@ -186,7 +201,7 @@ contract SubscriptionModuleTest is BaseTest {
         uint256 usdcOut = module.redeem(rawOut);
         vm.stopPrank();
 
-        assertEq(usdcOut, 100e6);
+        assertEq(usdcOut, _afterBothFees(100e6), "round trip pays tin then tout");
         assertEq(token.balanceOf(user1), 0);
         assertEq(token.totalSupply(), 0, "redeemed tokens are burned");
     }
@@ -194,11 +209,11 @@ contract SubscriptionModuleTest is BaseTest {
     function test_Redeem_RoundTripPreservesValueWithinDust() public {
         _seedBuffer(1_000_000e6);
         _accrue(RATE_5_PCT_APY, 20 days);
-        // Fee-free math below: reaching an elevated multiplier requires steps,
-        // and every step ratchets the `tin + tout` floor. `_resetFees` clears it
-        // via the cold escape hatch so this test measures pure multiplier
-        // conversion. Fee-inclusive behaviour is `FeesTest`'s job.
-        _resetFees();
+        // Pin fees at the MINIMUM the contracts admit, so this test measures
+        // multiplier conversion against a known, small fee rather than against
+        // whatever a previous step left configured. Zero is not reachable —
+        // see `_minFees`. Fee-inclusive behaviour is `FeesTest`'s job.
+        _minFees();
 
         uint256 rawOut = _psmMint(user1, 12_345e6);
         vm.startPrank(user1);
@@ -206,8 +221,12 @@ contract SubscriptionModuleTest is BaseTest {
         uint256 usdcOut = module.redeem(rawOut);
         vm.stopPrank();
 
-        assertLe(usdcOut, 12_345e6, "round trip must never gain");
-        assertGe(usdcOut + 1, 12_345e6, "and loses at most one USDC unit");
+        // The round trip loses exactly the two fees plus at most one unit of
+        // conversion dust. Stated against the fee-adjusted figure so the dust
+        // bound stays as tight as it was.
+        uint256 expected = _afterBothFees(12_345e6);
+        assertLe(usdcOut, expected, "round trip must never gain");
+        assertGe(usdcOut + 1, expected, "and loses at most one USDC unit beyond fees");
     }
 
     /// @notice Yield earned between mint and redeem is paid out.
@@ -308,7 +327,9 @@ contract SubscriptionModuleTest is BaseTest {
         vm.prank(queueProcessor);
         module.processQueue(0, 1, owed);
 
-        assertEq(usdc.balanceOf(user1), owed);
+        // `owed` is the gross claim recorded at enqueue; the payout applies the
+        // `tout` snapshotted on the entry. Both are now nonzero by default.
+        assertEq(usdc.balanceOf(user1), _afterTout(owed));
         assertEq(queue.totalQueuedRaw(), 0);
         assertEq(token.totalSupply(), 0, "burned on processing");
     }

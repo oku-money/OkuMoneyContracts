@@ -34,8 +34,11 @@ import {MockUSDC} from "./mocks/MockUSDC.sol";
  *        - `QUEUE_PSM` -> module proxy (never in `initialize`)
  *        - OkuM `OKU_MINTER`/`OKU_BURNER` -> module; `OKU_BURNER` -> queue
  *        - USDOku `OKU_MINTER`/`OKU_BURNER` -> wrapper
- *        - `OkuM.setStepFeeSource(module)` — step coverage fail-closed until this
  *        - `USDOku.setSolvencySource(wrapper)`
+ *
+ *      Step coverage needs no wiring step: `tin`/`tout` are seeded at
+ *      `MAX_STEP_BPS` by `SubscriptionModule.initialize` and can never go
+ *      below it, so every admissible step is covered from block one.
  */
 abstract contract BaseTest is Actors {
     // ============ Rate constants (M_usd, USDOku) ============
@@ -150,9 +153,9 @@ abstract contract BaseTest is Actors {
         // Post-deploy grant, deliberately not in `initialize`.
         queue.grantRole(Roles.QUEUE_PSM, address(module));
 
-        // Post-deploy wiring: step coverage and solvency both fail closed
-        // until these two writes land.
-        token.setStepFeeSource(address(module));
+        // Post-deploy wiring: solvency fails closed until this write lands.
+        // Step coverage needs no wiring — it is a property of the constants,
+        // seeded at the floor by `SubscriptionModule.initialize`.
         usdOku.setSolvencySource(address(wrapper));
 
         // Named-actor grants so tests can prank the specific role.
@@ -223,16 +226,15 @@ abstract contract BaseTest is Actors {
 
     // ============ M_oku step helpers ============
 
-    /// @dev Ensure `tin + tout` covers a step of `stepBps` (split as evenly as
-    ///      `MAX_FEE_BPS` allows), via the fee manager.
-    function _setFeesForStep(uint256 stepBps) internal {
-        uint256 half = (stepBps + 1) / 2;
-        uint256 tin_ = half > Constants.MAX_FEE_BPS ? Constants.MAX_FEE_BPS : half;
-        uint256 tout_ = stepBps > tin_ ? stepBps - tin_ : tin_;
-        if (tout_ > Constants.MAX_FEE_BPS) tout_ = Constants.MAX_FEE_BPS;
-        vm.prank(capManager);
-        module.setFees(tin_, tout_);
-    }
+    /// @dev No-op retained as a seam. Step coverage is static now: `tin` and
+    ///      `tout` are seeded at `MAX_STEP_BPS` by `initialize` and floored
+    ///      there forever, so any step `setOkuMultiplier` admits is already
+    ///      covered and nothing needs arranging per-step.
+    ///
+    ///      Kept rather than deleted because a dozen fixtures call it to express
+    ///      "make sure this step is legal", which remains a meaningful intent
+    ///      even though the answer is now always yes.
+    function _setFeesForStep(uint256) internal pure {}
 
     /// @dev Move `M_oku` to `newMultiplier`, covering fees first, then warp past
     ///      the post-step sync window so subsequent pricing ops do not revert.
@@ -277,6 +279,13 @@ abstract contract BaseTest is Actors {
     ///      vacuously against a multiplier that never reached the value under
     ///      test. ~1% per step: 5x needs ~162 steps, `MAX_MULTIPLIER` ~1,390.
     function _stepToAtLeast(uint256 target) internal {
+        // Beyond a few hundred marks the walk stops being a meaningful
+        // simulation and becomes a runtime problem, so hand off to the direct
+        // write. The step bound itself is asserted in `OkuMultiplierTest`.
+        if (target > (token.uiMultiplier() * 12) / 10) {
+            _forceMultiplier(target);
+            return;
+        }
         uint256 iterations;
         while (token.uiMultiplier() < target) {
             require(iterations < 3000, "_stepToAtLeast: target unreachable");
@@ -291,6 +300,10 @@ abstract contract BaseTest is Actors {
 
     /// @dev Step `M_oku` up to exactly `target`, in `MAX_STEP_BPS`-sized chunks.
     function _stepUpTo(uint256 target) internal {
+        if (target > (token.uiMultiplier() * 12) / 10) {
+            _forceMultiplier(target);
+            return;
+        }
         uint256 iterations;
         while (token.uiMultiplier() < target) {
             require(iterations < 3000, "_stepUpTo: target unreachable");
@@ -334,15 +347,71 @@ abstract contract BaseTest is Actors {
         _stepToAtLeast(target);
     }
 
-    /// @dev Return to a fee-free schedule after stepping. Because
-    ///      `stepHighWaterMark` floors `setFees`, this requires the cold
-    ///      `resetStepHighWaterMark` escape hatch first — exactly the production
-    ///      path, exercised here deliberately.
-    function _resetFees() internal {
-        vm.startPrank(capManager);
-        token.resetStepHighWaterMark();
-        module.setFees(0, 0);
-        vm.stopPrank();
+    /// @dev Drop to the MINIMUM admissible fee schedule.
+    ///
+    ///      NOT a fee-free schedule — there is no longer any such thing. The
+    ///      per-leg step-coverage floor (`MAX_STEP_BPS`) is permanent and
+    ///      `initialize` already seeds it, so the least a suite can charge is
+    ///      the floor on both legs. Suites that want to isolate conversion math
+    ///      from fee drag must account for `MAX_STEP_BPS` on each leg rather
+    ///      than assume it away.
+    function _minFees() internal {
+        vm.prank(capManager);
+        module.setFees(Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS);
+    }
+
+    // ============ Fee-aware expectation helpers ============
+    //
+    // Fees are no longer zero at deploy — `SubscriptionModule.initialize` seeds
+    // both legs at `MAX_STEP_BPS` and they can never go lower, because the token
+    // stopped reading the schedule and a zero-fee window would be an
+    // uncovered-step window. Suites that used to assert exact 1:1 round trips
+    // must therefore state the fee explicitly rather than assume it away.
+    //
+    // These route through the SAME `MathLib.applyFee` the contracts use, so an
+    // expectation cannot drift from the implementation's rounding.
+
+    /// @dev `usdcIn` less the live `tin`, ceil-rounded exactly as the module does.
+    function _afterTin(uint256 usdcIn) internal view returns (uint256) {
+        return MathLib.applyFee(usdcIn, module.tin());
+    }
+
+    /// @dev `usdcOut` less the live `tout`, ceil-rounded exactly as the module does.
+    function _afterTout(uint256 usdcOut) internal view returns (uint256) {
+        return MathLib.applyFee(usdcOut, module.tout());
+    }
+
+    /// @dev A full USDC round trip's expected output: both legs charged.
+    function _afterBothFees(uint256 usdcIn) internal view returns (uint256) {
+        return _afterTout(_afterTin(usdcIn));
+    }
+
+    /// @dev Force `M_oku` to `target` by writing storage directly, bypassing
+    ///      `setOkuMultiplier` and every bound on it.
+    ///
+    ///      WHY THIS EXISTS. `MAX_STEP_BPS` is 5, so reaching a high multiplier
+    ///      legitimately takes thousands of marks — ~3,220 to reach 5x and
+    ///      ~27,600 to reach `MAX_MULTIPLIER`. That is correct behaviour (it is
+    ///      the minimum-cadence property doing its job) but it makes
+    ///      high-multiplier states unreachable in a test at any acceptable
+    ///      runtime. Before `MAX_STEP_BPS` was tightened from 100 these suites
+    ///      walked there in ~1,390 steps, which was merely slow.
+    ///
+    ///      Writes the ERC-7201 `okumoney.storage.ScaledUIAmount` slot: word 0
+    ///      is `multiplier`, word 1 is `lastSteppedAt`. Both are set so
+    ///      `effectiveAt()` stays truthful and staleness math does not underflow.
+    ///
+    ///      USE ONLY to reach a starting state. Never to test the authority
+    ///      itself — `OkuMultiplierTest` owns the bounds and must go through
+    ///      `setOkuMultiplier`.
+    function _forceMultiplier(uint256 target) internal {
+        bytes32 slot = keccak256(
+            abi.encode(uint256(keccak256("okumoney.storage.ScaledUIAmount")) - 1)
+        ) & ~bytes32(uint256(0xff));
+        require(target >= token.uiMultiplier(), "_forceMultiplier: would decrease");
+        vm.store(address(token), slot, bytes32(target));
+        vm.store(address(token), bytes32(uint256(slot) + 1), bytes32(block.timestamp));
+        assertEq(token.uiMultiplier(), target, "_forceMultiplier: slot mismatch");
     }
 
     /// @dev Advance time past the currently-armed sync window, if any.

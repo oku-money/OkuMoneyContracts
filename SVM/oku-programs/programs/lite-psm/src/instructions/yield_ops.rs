@@ -18,7 +18,7 @@ use crate::helpers::{arm_sync_window, check_yield_lock};
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_2022::spl_token_2022::extension::scaled_ui_amount::instruction::update_multiplier;
-use oku_shared::{step_bps_ceil, step_is_covered};
+use oku_shared::{step_bps_ceil, MAX_STEP_BPS};
 
 /// Write a new multiplier to the OkuM mint's ScaledUiAmountConfig extension
 /// via CPI, stamp the yield-distribution slot, and arm the cross-chain sync
@@ -54,35 +54,26 @@ fn write_multiplier_and_stamp<'info>(
     // repeatable. The sync window cannot help; the attacker never transacts
     // while it is open.
     //
-    // Refuse to create exposure the current fees do not cover. The coverage
-    // figure is the COMBINED `tin + tout`, because a round trip pays both —
-    // a `tout`-only rule leaks the mint-side half whenever `tin` carried part
-    // of the burden. Mirrors EVM (`OkuM.setOkuMultiplier` reads
-    // `tin() + tout()` from the module).
+    // ---- STEP-ARBITRAGE COVERAGE (the whole of it) ----
     //
-    // At zero fees this rejects every increase, so rebasing is impossible
-    // until a fee schedule is configured — the operator cannot create the
-    // arbitrage condition rather than being trusted not to.
+    // Bound the step at `MAX_STEP_BPS` and stop. Coverage is not read from the
+    // fee schedule here and cannot fail, because `set_fees` enforces
+    // `tin_bps >= MAX_STEP_BPS` and `tout_bps >= MAX_STEP_BPS`: every step this
+    // check admits is covered on each leg independently, for all time.
     //
-    // Half 2 is the `max_step_bps` floor in `set_fees`, which stops the fees
-    // being lowered afterwards. Neither half is sufficient alone.
-    let coverage_bps = config
-        .tin_bps
-        .checked_add(config.tout_bps)
-        .ok_or(LitePsmError::Overflow)?;
-    require!(
-        step_is_covered(current_multiplier, new_multiplier, coverage_bps),
-        LitePsmError::StepExceedsFeeCoverage
-    );
-
-    // Record the step so the fee can never later drop below it. Ceiled, since
-    // the mark becomes a floor. `proof_mark_never_exceeds_permitting_fee`
-    // guarantees this cannot invalidate the fee that just permitted the step.
+    // This replaces a `step_is_covered(tin + tout)` read plus a `max_step_bps`
+    // high-water ratchet that floored later `set_fees` calls plus a cold
+    // `reset_step_high_water_mark` escape hatch. The static floor subsumes all
+    // three and is strictly stronger — the ratchet only ever covered steps that
+    // had actually been taken.
+    //
+    // Ceiled, so a fractionally-oversized step cannot round its way through.
     let step_bps =
         step_bps_ceil(current_multiplier, new_multiplier).ok_or(LitePsmError::Overflow)?;
-    if step_bps > config.max_step_bps {
-        config.max_step_bps = step_bps;
-    }
+    require!(
+        step_bps <= MAX_STEP_BPS,
+        LitePsmError::StepAboveMax
+    );
 
     let new_multiplier_f64 = new_multiplier as f64 / PRECISION as f64;
 

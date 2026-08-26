@@ -49,20 +49,23 @@ import {USDOkuWrapper} from "../wrapper/USDOkuWrapper.sol";
  *      FEES ARE A LIVE DEFENCE, NOT PARITY PARAMETERS. `M_oku` steps, so the
  *      round trip mint-at-M0 / redeem-at-M1 extracts the step unless fees cover
  *      it: `profit per unit = M1/M0 - 1 - (tin + tout)/10_000`. The
- *      STEP-COVERAGE INVARIANT binds the combined round-trip cost:
+ *      STEP-COVERAGE INVARIANT is static and per-leg:
  *
- *          tin + tout >= stepBps   for every step taken
+ *          MAX_STEP_BPS <= tin,  MAX_STEP_BPS <= tout       (`setFees`, here)
+ *          stepBps <= MAX_STEP_BPS                          (`OkuM.setOkuMultiplier`)
  *
- *      enforced two ways — `OkuM.setOkuMultiplier` reverts `StepNotCovered` if
- *      the proposed step exceeds what current fees cover, and OkuM's
- *      `stepHighWaterMark` floors `setFees` here so fees cannot later drop
- *      below a step already taken.
+ *      Composed, every admissible step is covered on each leg independently for
+ *      all time. No state, no ratchet, no cross-contract read, and no escape
+ *      hatch — the guarantee is a property of the constants. Per-leg rather than
+ *      combined because a cross-chain round trip pays `tin` on one chain and
+ *      `tout` on the other; see `setFees` for the full argument.
  *
- *      POST-STEP SYNC WINDOW. Every `setOkuMultiplier` write arms a bounded,
- *      auto-expiring lock; `mint`, `redeem`, `redeemUiAmount` and `processQueue`
- *      revert while `okuM.isSyncLocked()`. It fences the write itself and the
- *      cross-chain propagation interval; it is NOT the step-arbitrage defence
- *      (fees are — holding raw across a step needs no transaction).
+ *      NOT SYNC-WINDOW GATED. Nothing in this contract is. A single-chain
+ *      operation priced at this chain's own `M_oku` is correct by definition
+ *      whatever a peer chain believes, so the window would buy nothing while
+ *      costing a post-mark outage on every mint and redeem. The window fences
+ *      the bridge legs (`OkuM.mint`/`burn`), where raw crosses a multiplier
+ *      boundary and the pair genuinely mis-prices.
  *
  *      USDC <-> USDOku IN ONE TRANSACTION. `mintUsdOku` / `redeemUsdOku` chain
  *      the OkuM leg above through `USDOkuWrapper.wrap`/`unwrap` so a user never
@@ -95,13 +98,13 @@ contract SubscriptionModule is
         IERC20 usdc;
         RedemptionQueue redemptionQueue;
         uint256 usdcDecimalMultiplier;
-        /// @dev Mint fee in bps, charged on deposited USDC. Bounded by
-        ///      `MAX_FEE_BPS`; `tin + tout` floored by OkuM's
-        ///      `stepHighWaterMark`. Defaults to 0 — fees ship inert, which also
-        ///      means no step can land until a covering fee is set.
+        /// @dev Mint fee in bps, charged on deposited USDC. Bounded above by
+        ///      `MAX_FEE_BPS` and below by `MAX_STEP_BPS` (per-leg step
+        ///      coverage). Seeded at the floor by `initialize` and never
+        ///      permitted below it, so coverage holds from block one.
         uint256 tin;
         /// @dev Redemption fee in bps, charged on the USDC paid out. Same
-        ///      bounds. Together with `tin` this is the step-arbitrage control.
+        ///      bounds. Each leg independently covers a maximal step.
         uint256 tout;
         /// @dev The USDOku wrapper, wired post-deploy (it does not exist yet
         ///      when this contract initializes — deploy order is OkuM, queue,
@@ -122,28 +125,6 @@ contract SubscriptionModule is
 
     // ============ Modifiers ============
 
-    /// @dev Reject operations that convert value through the multiplier while a
-    ///      step is propagating.
-    ///
-    ///      GATING RULE: an operation is sync-gated iff it prices through the
-    ///      multiplier. That is the whole rule, and it is what keeps the
-    ///      exemptions principled rather than ad hoc — `depositBuffer`,
-    ///      `withdrawUsdc` and `advanceHead` all move value at par or move no
-    ///      value, so a stale multiplier cannot mis-price them.
-    ///
-    ///      Read from the token rather than mirrored here: one source of truth,
-    ///      and the token is where the multiplier authority lives.
-    modifier whenNotSyncLocked() {
-        IOkuM okuM_ = _getModuleStorage().okuM;
-        if (okuM_.isSyncLocked()) {
-            // Second read only on the revert path, so the happy path pays for
-            // one call rather than two. Gives the caller a retry-after instead
-            // of an opaque failure.
-            revert SyncWindowActive(okuM_.syncLockedUntil());
-        }
-        _;
-    }
-
     // ============ Errors ============
 
     error AmountTooSmall();
@@ -159,18 +140,13 @@ contract SubscriptionModule is
     error DecimalMultiplierMismatch(uint256 expected, uint256 derived);
     /// @notice `sweepToken` cannot move USDC — the buffer has its own gated path.
     error CannotSweepAsset();
-    /// @notice A multiplier step is propagating; operations that price through
-    ///         the multiplier are blocked until it lands.
-    /// @dev Distinct from `EnforcedPause`: bounded, auto-expiring, and armed by
-    ///      the multiplier write itself rather than by incident response.
-    ///      Integrators should retry rather than treat it as an outage.
-    error SyncWindowActive(uint256 lockedUntil);
     /// @notice Proposed `tin` or `tout` exceeds `MAX_FEE_BPS`.
     error FeeAboveMaximum(uint256 requested, uint256 maximum);
-    /// @notice Proposed `tin + tout` would drop below a step already taken.
-    /// @dev Step coverage is a ratchet: `stepHighWaterMark` floors the combined
-    ///      fee until cold explicitly resets it on the token.
-    error FeesBelowStepFloor(uint256 combinedBps, uint256 floorBps);
+    /// @notice Proposed `tin` or `tout` is below the static step-coverage floor.
+    /// @dev Each leg must independently cover the largest admissible step
+    ///      (`MAX_STEP_BPS`). See `setFees` for why the floor is per-leg rather
+    ///      than on the combined round trip.
+    error FeeBelowStepFloor(uint256 requested, uint256 floorBps);
     /// @notice `mintUsdOku` / `redeemUsdOku` called before `setUsdOkuWrapper`.
     error UsdOkuWrapperNotSet();
 
@@ -240,6 +216,24 @@ contract SubscriptionModule is
         uint256 expected = IOkuM(_okuM).usdcDecimalMultiplier();
         if (expected != derived) revert DecimalMultiplierMismatch(expected, derived);
         $.usdcDecimalMultiplier = derived;
+
+        // Fees ship AT THE STEP-COVERAGE FLOOR, not at zero.
+        //
+        // This is load-bearing, not a convenience. `OkuM.setOkuMultiplier` does
+        // not read the fee schedule — coverage is guaranteed by the invariant
+        // `tin, tout >= MAX_STEP_BPS` holding at all times. Shipping zero would
+        // leave a window between deployment and the first `setFees` call in
+        // which steps were admissible and uncovered, which is precisely the
+        // arbitrage condition. There is no "inert but installed" state for this
+        // mechanism, and that is the point: the protocol is accrual-ready and
+        // covered from `initialize`, with no ordering an operator can get wrong.
+        //
+        // The earlier design shipped `(0, 0)` and relied on the token reading
+        // the schedule back and failing closed. That made zero-fee deployment
+        // safe but non-accruing, i.e. a launch-blocking step someone had to
+        // remember. Cold can raise either leg later, never lower it below here.
+        $.tin = Constants.MAX_STEP_BPS;
+        $.tout = Constants.MAX_STEP_BPS;
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(Roles.PSM_UPGRADER, _admin);
@@ -364,13 +358,7 @@ contract SubscriptionModule is
     /// @notice Mint OkuM by depositing USDC.
     /// @param usdcAmount USDC to deposit, native decimals.
     /// @return rawOut Raw OkuM minted to the caller.
-    function mint(uint256 usdcAmount)
-        external
-        nonReentrant
-        whenNotPaused
-        whenNotSyncLocked
-        returns (uint256 rawOut)
-    {
+    function mint(uint256 usdcAmount) external nonReentrant whenNotPaused returns (uint256 rawOut) {
         return _mint(usdcAmount, msg.sender);
     }
 
@@ -386,7 +374,6 @@ contract SubscriptionModule is
         external
         nonReentrant
         whenNotPaused
-        whenNotSyncLocked
         returns (uint256 usdOkuOut)
     {
         SubscriptionModuleStorage storage $ = _getModuleStorage();
@@ -455,7 +442,6 @@ contract SubscriptionModule is
         external
         nonReentrant
         whenNotPaused
-        whenNotSyncLocked
         returns (uint256 usdcOut)
     {
         return _redeem(msg.sender, rawAmount, true);
@@ -479,7 +465,6 @@ contract SubscriptionModule is
         external
         nonReentrant
         whenNotPaused
-        whenNotSyncLocked
         returns (uint256 usdcOut)
     {
         if (uiAmount == 0) revert Errors.ZeroAmount();
@@ -507,7 +492,6 @@ contract SubscriptionModule is
         external
         nonReentrant
         whenNotPaused
-        whenNotSyncLocked
         returns (uint256 usdcOut)
     {
         if (usdOkuAmount == 0) revert Errors.ZeroAmount();
@@ -641,7 +625,6 @@ contract SubscriptionModule is
     )
         external
         nonReentrant
-        whenNotSyncLocked
         onlyRole(Roles.PSM_QUEUE_PROCESSOR)
     {
         SubscriptionModuleStorage storage $ = _getModuleStorage();
@@ -717,11 +700,29 @@ contract SubscriptionModule is
     ///      than `OKU_CAP_MANAGER` itself because AccessControl mappings are
     ///      per-contract: no new key, but a correctly-scoped capability.
     ///
-    ///      Both fees bounded by `MAX_FEE_BPS`; the combination floored by
-    ///      OkuM's `stepHighWaterMark` — fees cannot drop below a step already
-    ///      taken (`FeesBelowStepFloor`), or the coverage a past step relied on
-    ///      would silently evaporate. Cold can clear the floor via
-    ///      `OkuM.resetStepHighWaterMark`, which is alarmed.
+    ///      THE STEP-COVERAGE FLOOR LIVES HERE, and it is static:
+    ///
+    ///          MAX_STEP_BPS <= tin <= MAX_FEE_BPS
+    ///          MAX_STEP_BPS <= tout <= MAX_FEE_BPS
+    ///
+    ///      Since `OkuM.setOkuMultiplier` independently caps a step at
+    ///      `MAX_STEP_BPS`, every admissible step is covered on each leg for all
+    ///      time — no state, no ratchet, no escape hatch, and nothing the token
+    ///      needs to read back from this contract.
+    ///
+    ///      PER-LEG RATHER THAN COMBINED, and the difference matters. A
+    ///      cross-chain round trip pays `tin` on the chain it mints on and
+    ///      `tout` on the chain it redeems on, so a combined `tin + tout` bound
+    ///      enforced separately on each chain does not bound the pair: fees of
+    ///      `(0, 2x)` on one chain and `(2x, 0)` on the other each satisfy a
+    ///      combined check while the cross-chain round trip pays nothing. A
+    ///      per-leg floor is the only form that survives that composition.
+    ///
+    ///      `initialize` seeds both legs AT the floor, so the invariant holds
+    ///      from deployment and this function can only ever raise them. There
+    ///      is deliberately no way to reach a zero-fee state: `setOkuMultiplier`
+    ///      does not read the schedule, so a zero-fee window would be an
+    ///      uncovered-step window.
     ///
     ///      Fees accrue to the USDC buffer: `tin` is deposited but not credited,
     ///      `tout` is owed but not paid out. There is no recipient address and no
@@ -737,13 +738,14 @@ contract SubscriptionModule is
         if (newTout > Constants.MAX_FEE_BPS) {
             revert FeeAboveMaximum(newTout, Constants.MAX_FEE_BPS);
         }
+        if (newTin < Constants.MAX_STEP_BPS) {
+            revert FeeBelowStepFloor(newTin, Constants.MAX_STEP_BPS);
+        }
+        if (newTout < Constants.MAX_STEP_BPS) {
+            revert FeeBelowStepFloor(newTout, Constants.MAX_STEP_BPS);
+        }
 
         SubscriptionModuleStorage storage $ = _getModuleStorage();
-
-        uint256 floorBps = $.okuM.stepHighWaterMark();
-        if (newTin + newTout < floorBps) {
-            revert FeesBelowStepFloor(newTin + newTout, floorBps);
-        }
 
         uint256 oldTin = $.tin;
         uint256 oldTout = $.tout;

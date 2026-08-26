@@ -7,6 +7,7 @@ import {BaseTest} from "../Base.t.sol";
 import {Constants} from "../../src/lib/Constants.sol";
 import {Roles} from "../../src/lib/Roles.sol";
 import {OkuM} from "../../src/token/OkuM.sol";
+import {ScaledUIAmountUpgradeable} from "../../src/lib/ScaledUIAmountUpgradeable.sol";
 import {SubscriptionModule} from "../../src/psm/SubscriptionModule.sol";
 import {USDOkuWrapper} from "../../src/wrapper/USDOkuWrapper.sol";
 
@@ -16,9 +17,29 @@ import {USDOkuWrapper} from "../../src/wrapper/USDOkuWrapper.sol";
  *         it can never outlive its bound.
  *
  * @dev THE MECHANISM IS AUTO-ARM ONLY. Every `setOkuMultiplier` write arms a
- *      lock of `syncWindowDuration()` seconds on the operations that price
- *      through the multiplier. The lock expires on its own. There is no
+ *      lock of `syncWindowDuration()` seconds on THE BRIDGE LEGS — `OkuM.mint`
+ *      and `OkuM.burn`. The lock expires on its own. There is no
  *      `beginSyncWindow`, no `endSyncWindow`, no epoch, and no inter-window gap.
+ *
+ *      SCOPE IS BRIDGE LEGS ONLY, and the narrowing is the substance of this
+ *      suite. An earlier version gated eleven call sites: module `mint`,
+ *      `redeem`, `redeemUiAmount`, `mintUsdOku`, `redeemUsdOku`, `processQueue`,
+ *      and five wrapper entry points. All of those are SINGLE-CHAIN operations
+ *      priced at this chain's own `M_oku`, which is correct by definition
+ *      whatever a peer chain currently believes — so the gate bought nothing and
+ *      cost a post-mark outage on every user-facing operation.
+ *
+ *      The bridge is the one place value crosses a multiplier boundary. Raw is
+ *      conserved per-instruction, but the cross-chain PAIR prices: burning 100
+ *      raw where M=1.04 destroys $104 of claim while minting 100 raw where
+ *      M=1.05 creates $105, conjuring $1 out of a mid-tick divergence.
+ *
+ *      WHY A TIME LOCK IS RIGHT HERE AND WRONG FOR STEP ARBITRAGE. The two edges
+ *      differ in kind. Cross-chain divergence is transient and self-correcting —
+ *      once the lagging chain ticks the edge is exactly zero, so making the
+ *      attacker wait removes it. A step's gain is permanent and the multiplier is
+ *      monotone, so waiting costs a step-arbitrageur nothing and no window length
+ *      deters them; that is the fee floor's job (`StepArbitrageTest`).
  *
  *      That is a deliberate reduction from an earlier orchestrator-driven epoch
  *      protocol, and the reasoning is worth stating because the machinery looked
@@ -53,10 +74,9 @@ contract SyncWindowTest is BaseTest {
     function setUp() public override {
         super.setUp();
         _seedBuffer(1_000_000e6);
-        // A covering fee schedule, so steps in this suite are about the window
-        // rather than about step coverage (which `StepArbitrageTest` owns).
-        vm.prank(capManager);
-        module.setFees(50, 50);
+        // No fee arrangement needed: `initialize` seeds both legs at the step
+        // floor, so every step in this suite is covered already. Step coverage
+        // is `StepArbitrageTest`'s subject, not this one's.
     }
 
     // ============ Ships on ============
@@ -76,11 +96,12 @@ contract SyncWindowTest is BaseTest {
 
     function test_Step_ArmsTheWindowForExactlyDuration() public {
         uint256 expected = block.timestamp + token.syncWindowDuration();
+        uint256 target_ = _smallStepTarget();
 
         vm.expectEmit(false, false, false, true, address(token));
         emit OkuM.SyncWindowArmed(expected);
         vm.prank(rateSetter);
-        token.setOkuMultiplier(1.001e18);
+        token.setOkuMultiplier(target_);
 
         assertTrue(token.isSyncLocked());
         assertEq(token.syncLockedUntil(), expected);
@@ -91,13 +112,15 @@ contract SyncWindowTest is BaseTest {
     ///         `MAX_SYNC_WINDOW` bound hold by construction rather than by
     ///         argument.
     function test_StepDuringOpenWindow_ReArmsWithoutStacking() public {
+        uint256 target_ = _smallStepTarget();
         vm.prank(rateSetter);
-        token.setOkuMultiplier(1.001e18);
+        token.setOkuMultiplier(target_);
         uint256 first = token.syncLockedUntil();
 
         vm.warp(block.timestamp + 10);
+        target_ = _smallStepTarget();
         vm.prank(rateSetter);
-        token.setOkuMultiplier(1.002e18);
+        token.setOkuMultiplier(target_);
         uint256 second = token.syncLockedUntil();
 
         assertEq(second, block.timestamp + token.syncWindowDuration());
@@ -119,98 +142,128 @@ contract SyncWindowTest is BaseTest {
 
     /// @notice A rejected step arms nothing — the arm is downstream of every
     ///         guard, so a reverted write leaves no trace.
+    /// @dev `StepAboveMaximum` is now the only size-related rejection.
+    ///      `StepNotCovered` is gone: the token no longer reads the fee schedule,
+    ///      because the static per-leg floor makes coverage unconditional.
     function test_RejectedStep_ArmsNothing() public {
-        // Drop coverage below the step so `StepNotCovered` is the binding
-        // rejection rather than `StepAboveMaximum`. The two bounds coincide at
-        // `MAX_FEE_BPS == MAX_STEP_BPS == 100`, so a fully-covered schedule
-        // makes the coverage check unreachable by construction — which is worth
-        // knowing: at maximum fees, step coverage never binds and only the step
-        // ceiling does.
-        vm.startPrank(capManager);
-        token.resetStepHighWaterMark();
-        module.setFees(1, 1);
-        vm.stopPrank();
+        uint256 oversized = Constants.PRECISION
+            * (Constants.BASIS_POINTS + Constants.MAX_STEP_BPS + 1) / Constants.BASIS_POINTS;
 
         vm.prank(rateSetter);
-        vm.expectPartialRevert(OkuM.StepNotCovered.selector);
-        token.setOkuMultiplier(1.005e18); // 50 bps against 2 bps of coverage
+        vm.expectPartialRevert(ScaledUIAmountUpgradeable.StepAboveMaximum.selector);
+        token.setOkuMultiplier(oversized);
         assertFalse(token.isSyncLocked());
     }
 
-    // ============ What is gated ============
+    // ============ What it gates on this chain: nothing ============
 
-    function test_Gated_ModuleMint() public {
-        _psmMint(user1, 100e6);
-        _stepNoWarp(1.001e18);
+    /// @notice THE EVM WINDOW GATES NOTHING ON-CHAIN, and that is deliberate.
+    ///
+    /// @dev The window fences value crossing a multiplier boundary between
+    ///      chains. On SVM that pair has dedicated instructions
+    ///      (`mint_oku_m_direct` / `burn_oku_m_direct`) and they are gated. EVM
+    ///      has no equivalent: `OkuM.mint` and `OkuM.burn` are the shared supply
+    ///      hooks the module and queue use for ordinary local subscription and
+    ///      redemption, so gating them gates the entire PSM.
+    ///
+    ///      An earlier draft of this refactor did gate them, on the theory that
+    ///      they were "the bridge legs". They are not — this test is the
+    ///      regression guard for that mistake, and asserts the supply hooks stay
+    ///      callable inside an open window.
+    function test_SupplyHooks_NotGated() public {
+        _stepNoWarp(_smallStepTarget());
+        assertTrue(token.isSyncLocked(), "window is open");
 
-        usdc.mint(user1, 100e6);
-        vm.startPrank(user1);
-        usdc.approve(address(module), 100e6);
-        vm.expectPartialRevert(SubscriptionModule.SyncWindowActive.selector);
-        module.mint(100e6);
-        vm.stopPrank();
+        vm.prank(minter);
+        token.mint(user1, 100e18);
+        assertEq(token.balanceOf(user1), 100e18);
+
+        vm.prank(minter);
+        token.mint(burner, 50e18);
+        vm.prank(burner);
+        token.burn(10e18);
+        assertEq(token.balanceOf(burner), 40e18);
     }
 
-    function test_Gated_ModuleRedeem() public {
+    /// @notice The window is still fully observable — it is an advisory signal
+    ///         for monitoring and for the future bridge adapter.
+    function test_AdvisorySignal_IsObservable() public {
+        _stepNoWarp(_smallStepTarget());
+        assertTrue(token.isSyncLocked());
+        assertEq(token.syncLockedUntil(), block.timestamp + token.syncWindowDuration());
+        assertLe(token.syncLockedUntil() - block.timestamp, Constants.MAX_SYNC_WINDOW);
+    }
+
+    // ============ What is NOT gated: everything single-chain ============
+    //
+    // These are the eleven call sites the narrowing freed. Each is priced at
+    // this chain's own `M_oku` and is therefore correct mid-divergence; the
+    // assertions below are the regression guard against the gate creeping back.
+
+    /// @notice Module mint prices locally and is not gated.
+    function test_NotGated_ModuleMint() public {
+        _stepNoWarp(_smallStepTarget());
+        assertTrue(token.isSyncLocked());
+        _psmMint(user1, 100e6);
+    }
+
+    /// @notice Module redeem prices locally and is not gated. THE most important
+    ///         entry here: a holder must be able to exit during a mark.
+    function test_NotGated_ModuleRedeem() public {
         uint256 raw = _psmMint(user1, 100e6);
-        _stepNoWarp(1.001e18);
+        _stepNoWarp(_smallStepTarget());
+        assertTrue(token.isSyncLocked());
 
         vm.startPrank(user1);
         token.approve(address(module), raw);
-        vm.expectPartialRevert(SubscriptionModule.SyncWindowActive.selector);
-        module.redeem(raw);
+        uint256 out = module.redeem(raw);
         vm.stopPrank();
+        assertGt(out, 0);
     }
 
-    function test_Gated_ModuleRedeemUiAmount() public {
-        _psmMint(user1, 100e6);
-        _stepNoWarp(1.001e18);
+    function test_NotGated_ModuleRedeemUiAmount() public {
+        _psmMint(user1, 1000e6);
+        _stepNoWarp(_smallStepTarget());
 
         vm.startPrank(user1);
         token.approve(address(module), type(uint256).max);
-        vm.expectPartialRevert(SubscriptionModule.SyncWindowActive.selector);
         module.redeemUiAmount(10e18);
         vm.stopPrank();
     }
 
-    /// @notice Queue processing prices at the live multiplier, so it is gated —
-    ///         but note it is deliberately NOT pause-gated. The distinction is
-    ///         the point: pause is unbounded incident response and could strand
-    ///         queued users indefinitely; this window is bounded by
-    ///         `MAX_SYNC_WINDOW`.
-    function test_Gated_ProcessQueue() public {
+    /// @notice Queue processing prices at the live local multiplier, so queued
+    ///         users are never stranded by a mark landing.
+    function test_NotGated_ProcessQueue() public {
         _queueOneRedemption();
-        _stepNoWarp(1.001e18);
+        _stepNoWarp(_smallStepTarget());
+        assertTrue(token.isSyncLocked());
 
+        _seedBuffer(10_000e6);
         vm.prank(queueProcessor);
-        vm.expectPartialRevert(SubscriptionModule.SyncWindowActive.selector);
         module.processQueue(0, 1, 1000e6);
     }
 
-    function test_Gated_WrapperWrap() public {
+    function test_NotGated_WrapperWrap() public {
         uint256 raw = _psmMint(user1, 100e6);
-        _stepNoWarp(1.001e18);
+        _stepNoWarp(_smallStepTarget());
 
         vm.startPrank(user1);
         token.approve(address(wrapper), raw);
-        vm.expectPartialRevert(USDOkuWrapper.SyncWindowActive.selector);
-        wrapper.wrap(raw);
+        uint256 out = wrapper.wrap(raw);
         vm.stopPrank();
+        assertGt(out, 0);
     }
 
-    function test_Gated_WrapperUnwrap() public {
+    function test_NotGated_WrapperUnwrap() public {
         uint256 raw = _psmMint(user1, 100e6);
         uint256 usdOkuOut = _wrap(user1, raw);
-        _stepNoWarp(token.uiMultiplier() + 1e15);
+        _stepNoWarp(_smallStepTarget());
 
         vm.startPrank(user1);
         usdOku.approve(address(wrapper), usdOkuOut);
-        vm.expectPartialRevert(USDOkuWrapper.SyncWindowActive.selector);
         wrapper.unwrap(usdOkuOut);
         vm.stopPrank();
     }
-
-    // ============ What is NOT gated ============
 
     /// @notice `setUsdOkuRate` is deliberately NOT gated, and this is the
     ///         subtlest call in the design.
@@ -225,7 +278,7 @@ contract SyncWindowTest is BaseTest {
     ///      nothing and would make the rate setter blockable during exactly the
     ///      incident in which it most needs to be able to write.
     function test_NotGated_SetUsdOkuRate() public {
-        _stepNoWarp(1.001e18);
+        _stepNoWarp(_smallStepTarget());
         assertTrue(token.isSyncLocked());
 
         vm.prank(rateSetter);
@@ -236,7 +289,7 @@ contract SyncWindowTest is BaseTest {
     /// @notice Buffer movement is at par — no multiplier in the arithmetic, so
     ///         nothing a stale multiplier could misprice.
     function test_NotGated_BufferMovement() public {
-        _stepNoWarp(1.001e18);
+        _stepNoWarp(_smallStepTarget());
 
         usdc.mint(bufferDepositor, 500e6);
         vm.startPrank(bufferDepositor);
@@ -254,7 +307,7 @@ contract SyncWindowTest is BaseTest {
     ///         for a display concern.
     function test_NotGated_RawTransfers() public {
         uint256 raw = _psmMint(user1, 100e6);
-        _stepNoWarp(1.001e18);
+        _stepNoWarp(_smallStepTarget());
 
         vm.prank(user1);
         token.transfer(user2, raw / 2);
@@ -264,7 +317,7 @@ contract SyncWindowTest is BaseTest {
     /// @notice Emergency levers stay callable. A window must never be able to
     ///         block incident response.
     function test_NotGated_EmergencyLevers() public {
-        _stepNoWarp(1.001e18);
+        _stepNoWarp(_smallStepTarget());
 
         vm.prank(guardian);
         token.haltAccrual();
@@ -284,7 +337,7 @@ contract SyncWindowTest is BaseTest {
     ///         system is already open. This is what lets a zero-length window be
     ///         genuinely inert rather than blocking the rest of the second.
     function test_Expiry_UpperBoundIsExclusive() public {
-        _stepNoWarp(1.001e18);
+        _stepNoWarp(_smallStepTarget());
         uint256 lockedUntil = token.syncLockedUntil();
 
         vm.warp(lockedUntil - 1);
@@ -300,7 +353,7 @@ contract SyncWindowTest is BaseTest {
     ///         redemption. Under the old begin/end design this was a property of
     ///         the auto-expiry path; here it is the only path.
     function test_Expiry_NeedsNoTransaction() public {
-        _stepNoWarp(1.001e18);
+        _stepNoWarp(_smallStepTarget());
         assertTrue(token.isSyncLocked());
 
         vm.warp(block.timestamp + Constants.MAX_SYNC_WINDOW);
@@ -314,8 +367,9 @@ contract SyncWindowTest is BaseTest {
         vm.prank(capManager);
         token.setSyncWindowDuration(0);
 
+        uint256 target_ = _smallStepTarget();
         vm.prank(rateSetter);
-        token.setOkuMultiplier(1.001e18);
+        token.setOkuMultiplier(target_);
 
         assertFalse(token.isSyncLocked());
         assertEq(token.syncLockedUntil(), 0, "an inert window never writes the anchor");
@@ -339,13 +393,15 @@ contract SyncWindowTest is BaseTest {
         vm.prank(capManager);
         token.setSyncWindowDuration(Constants.MAX_SYNC_WINDOW);
 
+        uint256 target_ = _smallStepTarget();
         vm.prank(rateSetter);
-        token.setOkuMultiplier(1.001e18);
+        token.setOkuMultiplier(target_);
         assertLe(token.syncLockedUntil() - block.timestamp, Constants.MAX_SYNC_WINDOW);
 
         vm.warp(block.timestamp + 1);
+        target_ = _smallStepTarget();
         vm.prank(rateSetter);
-        token.setOkuMultiplier(1.002e18);
+        token.setOkuMultiplier(target_);
         assertLe(token.syncLockedUntil() - block.timestamp, Constants.MAX_SYNC_WINDOW);
     }
 
@@ -362,7 +418,7 @@ contract SyncWindowTest is BaseTest {
     ///         is still paused; an unpaused module inside a window is still
     ///         gated.
     function test_IndependentOfPause() public {
-        _stepNoWarp(1.001e18);
+        _stepNoWarp(_smallStepTarget());
         vm.prank(psmPauser);
         module.pause();
 
@@ -378,6 +434,14 @@ contract SyncWindowTest is BaseTest {
     }
 
     // ============ Helpers ============
+
+    /// @dev A target one bps above the current multiplier — always inside
+    ///      `MAX_STEP_BPS`, so these tests never trip the step ceiling while
+    ///      trying to arm a window.
+    function _smallStepTarget() internal view returns (uint256) {
+        uint256 current = token.uiMultiplier();
+        return current + (current / Constants.BASIS_POINTS);
+    }
 
     /// @dev Drain the buffer, then redeem so the redemption is escrowed.
     function _queueOneRedemption() internal {

@@ -185,26 +185,25 @@ pub enum LitePsmError {
     FeeAboveMax,
 
     // ===== Step-arbitrage coverage =====
-    /// The proposed multiplier step is larger than `tin_bps + tout_bps`
-    /// covers, so a mint-hold-redeem round trip across it would be profitable.
+    /// The proposed multiplier step exceeds `MAX_STEP_BPS`.
     ///
-    /// The COMBINED fee is the coverage figure because a round trip pays both
-    /// legs; a `tout`-only rule leaks the mint-side half.
-    ///
-    /// At zero total fees this rejects EVERY increase — rebasing is impossible
-    /// until a fee schedule is configured. That is deliberate: it makes the
-    /// operator unable to create the arbitrage condition rather than merely
-    /// trusted not to.
-    #[msg("Multiplier step exceeds what tin+tout covers (raise fees or take a smaller step)")]
-    StepExceedsFeeCoverage,
+    /// `MAX_STEP_BPS` is simultaneously the per-step ceiling here and the
+    /// per-leg fee floor in `set_fees`, which is what makes coverage automatic.
+    /// A larger mark must be walked over several ticks.
+    #[msg("Multiplier step exceeds MAX_STEP_BPS (take a smaller step)")]
+    StepAboveMax,
 
-    /// The proposed `tin_bps + tout_bps` is below `max_step_bps`, the
-    /// high-water mark of steps already taken.
+    /// The proposed `tin_bps` or `tout_bps` is below `MAX_STEP_BPS`.
     ///
-    /// Lowering it would retroactively un-cover a past step and hand a cheap
-    /// exit to anyone who held across it. Clear the mark with
-    /// `reset_step_high_water_mark` first, understanding that doing so reopens
-    /// that historical exposure.
-    #[msg("Proposed tin+tout is below the step high-water mark")]
-    FeeBelowStepHighWaterMark,
+    /// Each leg must independently cover the largest admissible step, because a
+    /// cross-chain round trip pays `tin` on one chain and `tout` on the other.
+    #[msg("Proposed fee is below the per-leg step-coverage floor (MAX_STEP_BPS)")]
+    FeeBelowStepFloor,
 }
+
+// NOTE: `StepExceedsFeeCoverage` and `FeeBelowStepHighWaterMark` were removed
+// here along with the `max_step_bps` ratchet they served, and replaced by
+// `StepAboveMax` / `FeeBelowStepFloor` above. Unlike the earlier `SyncWindow*`
+// removals these were NOT preserved as reserved slots, because the same
+// refactor shrank `PsmConfig` and therefore already mandates a fresh deploy —
+// there is no on-chain consumer whose error codes could shift underneath it.

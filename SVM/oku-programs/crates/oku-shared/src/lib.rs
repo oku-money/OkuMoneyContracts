@@ -34,6 +34,6 @@ pub mod yield_lock;
 // `use oku_shared::{PRECISION, mul_div_floor};` instead of nested paths.
 pub use constants::*;
 pub use math::*;
-pub use step_coverage::{step_bps_ceil, step_is_covered};
+pub use step_coverage::step_bps_ceil;
 pub use sync_window::{sync_window_end, sync_window_engaged};
 pub use yield_lock::yield_lock_engaged;

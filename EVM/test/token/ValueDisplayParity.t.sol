@@ -128,23 +128,27 @@ contract ValueDisplayParityTest is BaseTest {
 
     // ============ Module pricing agrees with the value layer ============
 
-    /// @dev `quoteMint`/`quoteRedeem` are fee-inclusive while `convertToShares`/
-    ///      `convertToAssets` are fee-free, so the identity only holds at zero
-    ///      fees. Stepping floors the fee schedule at the step size, so the
-    ///      fixtures use `_resetFees()` (the cold `resetStepHighWaterMark`
-    ///      escape hatch, then `setFees(0, 0)`) to restore fee-free math at an
-    ///      elevated multiplier.
+    /// @dev `quoteMint`/`quoteRedeem` are fee-INCLUSIVE while `convertToShares`/
+    ///      `convertToAssets` are the fee-free ERC-4626 value views. The identity
+    ///      between them therefore runs through the fee, not around it.
+    ///
+    ///      This test previously asserted raw equality and used `_resetFees()` to
+    ///      reach a zero-fee state first. Zero fees are no longer reachable —
+    ///      the per-leg step-coverage floor is permanent — so the relationship is
+    ///      now stated explicitly, which is strictly more informative: it pins
+    ///      WHERE the fee enters the pipeline (on the USDC leg, before
+    ///      conversion) rather than only that the two agree when it is absent.
     function test_ModuleQuoteAgreesWithConvertToShares() public {
         _step(1_027_400_000_000_000_001);
-        _resetFees();
+        _minFees();
         uint256 usdcIn = 1234e6;
-        assertEq(module.quoteMint(usdcIn), token.convertToShares(usdcIn));
+        assertEq(module.quoteMint(usdcIn), token.convertToShares(_afterTin(usdcIn)));
     }
 
     function test_ModuleQuoteRedeemAgreesWithConvertToAssets() public {
         _step(1_027_400_000_000_000_001);
-        _resetFees();
+        _minFees();
         uint256 rawIn = 987e18;
-        assertEq(module.quoteRedeem(rawIn), token.convertToAssets(rawIn));
+        assertEq(module.quoteRedeem(rawIn), _afterTout(token.convertToAssets(rawIn)));
     }
 }

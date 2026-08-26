@@ -490,10 +490,23 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     ///      `invariant_WrapperBackingFloor` never see a withdrawal-shaped
     ///      state transition, only accrual-shaped ones. Bounded to whatever
     ///      `surplus()` reports right now, so it can never itself open a gap.
+    /// @dev The `surplus() == 0` check runs BEFORE `_beginCall()`, deliberately
+    ///      not counting toward `calls`. `surplus()` is zero unless a prior
+    ///      donation left the wrapper over-backed, which is the uncommon case
+    ///      throughout most of a campaign — counting every no-op call here
+    ///      would depress `successes/calls` by a fixed amount unrelated to
+    ///      whether the SYSTEM is being exercised, tripping
+    ///      `invariant_HandlerIsActuallyExercisingTheSystem` on a harness
+    ///      calibration issue rather than a protocol one. Every other
+    ///      early-return action in this handler still counts its call because
+    ///      its "nothing to do" case (e.g. an actor with a zero balance) is a
+    ///      property of the fuzzer's random actor choice, not a near-permanent
+    ///      background state — the distinction is what makes skipping the
+    ///      counter here the right call and not a precedent to generalize.
     function withdrawWrapperSurplus() external {
-        _beginCall();
         uint256 available = wrapper.surplus();
         if (available == 0) return;
+        _beginCall();
         vm.prank(wrapperReserveManager);
         try wrapper.withdrawSurplus(treasury, available) {
             successes++;

@@ -194,6 +194,15 @@ async function deploySystem(): Promise<System> {
   const wrapperAddr = await wrapper.getAddress();
 
   // ---- Contract grants. These never go to a key in production. ----
+  // Test-only: the admin needs supply authority to mint raw directly in
+  // fixtures. `initialize` deliberately no longer grants OKU_MINTER/OKU_BURNER
+  // to the deploy admin — supply authority belongs to contracts, and issuing it
+  // to an EOA only to revoke it later made "no EOA can mint" a property of a
+  // script assertion rather than of the contract. Granted explicitly here so
+  // the grant is visible as a test affordance, not inherited silently.
+  await (await okuM.grantRole(R("OKU_MINTER"), adminAddr)).wait();
+  await (await okuM.grantRole(R("OKU_BURNER"), adminAddr)).wait();
+
   await (await okuM.grantRole(R("OKU_MINTER"), moduleAddr)).wait();
   await (await okuM.grantRole(R("OKU_BURNER"), moduleAddr)).wait();
   await (await okuM.grantRole(R("OKU_BURNER"), queueAddr)).wait();
@@ -371,8 +380,8 @@ async function seedBuffer(s: System, usdcAmount: bigint) {
 }
 
 /**
- * Mint raw OkuM directly, bypassing the module. The admin already holds
- * `OKU_MINTER` from `initialize`; only the per-minter allowance needs topping up.
+ * Mint raw OkuM directly, bypassing the module. The fixture grants the admin
+ * `OKU_MINTER` explicitly (see `deploySystem`) — `initialize` does not.
  */
 async function mintRaw(s: System, to: string, amount: bigint) {
   if ((await s.okuM.minterAllowance(s.a.admin)) < amount) {

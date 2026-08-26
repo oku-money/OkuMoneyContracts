@@ -261,19 +261,32 @@ abstract contract BaseTest is Actors {
             return;
         }
         _stepNoWarp(newMultiplier);
-        _warpPastSyncWindow();
+        // Leaves the clock ready for a subsequent mark. Harmless for suites that
+        // do not take one.
+        _warpPastMarkInterval();
     }
 
-    /// @dev Step without clearing the window — for sync-window tests.
+    /// @dev Mark WITHOUT advancing the clock afterwards, for suites that need to
+    ///      observe state as of the mark block.
+    ///
+    ///      Still warps BEFORE the mark, because `MIN_MARK_INTERVAL` gates every
+    ///      mark including the first (`__ScaledUIAmount_init` stamps
+    ///      `lastSteppedAt` at deployment). That is the cadence control doing
+    ///      its job, not a fixture wart.
     function _stepNoWarp(uint256 newMultiplier) internal {
         uint256 current = token.uiMultiplier();
         require(newMultiplier > current, "_step: not increasing");
-        uint256 stepBps =
-            ((newMultiplier - current) * Constants.BASIS_POINTS + current - 1) / current;
-        uint256 combined = module.tin() + module.tout();
-        if (combined < stepBps) _setFeesForStep(stepBps);
+        _readyMark();
+        _readyMark();
         vm.prank(rateSetter);
         token.setOkuMultiplier(newMultiplier);
+    }
+
+    /// @dev Advance the clock just far enough that the next mark is admissible.
+    ///      No-op if it already is.
+    function _readyMark() internal {
+        uint256 nextAllowed = token.lastSteppedAt() + Constants.MIN_MARK_INTERVAL;
+        if (block.timestamp < nextAllowed) vm.warp(nextAllowed);
     }
 
     /// @dev Step `M_oku` up by `bps` basis points of its current value.
@@ -355,17 +368,16 @@ abstract contract BaseTest is Actors {
         _stepToAtLeast(target);
     }
 
-    /// @dev Drop to the MINIMUM admissible fee schedule.
+    /// @dev Drop to the MINIMUM admissible fee schedule: `tin = 0`, `tout` at
+    ///      the step-coverage floor.
     ///
-    ///      NOT a fee-free schedule — there is no longer any such thing. The
-    ///      per-leg step-coverage floor (`MAX_STEP_BPS`) is permanent and
-    ///      `initialize` already seeds it, so the least a suite can charge is
-    ///      the floor on both legs. Suites that want to isolate conversion math
-    ///      from fee drag must account for `MAX_STEP_BPS` on each leg rather
-    ///      than assume it away.
+    ///      Minting is genuinely fee-free — only the EXIT leg carries a floor,
+    ///      because that is where the step-arbitrage gain would be realised.
+    ///      Suites isolating conversion math from fee drag can therefore assume
+    ///      1:1 on the mint side, but must account for `MAX_STEP_BPS` on redeem.
     function _minFees() internal {
         vm.prank(capManager);
-        module.setFees(Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS);
+        module.setFees(0, Constants.MAX_STEP_BPS);
     }
 
     // ============ Fee-aware expectation helpers ============
@@ -422,12 +434,15 @@ abstract contract BaseTest is Actors {
         assertEq(token.uiMultiplier(), target, "_forceMultiplier: slot mismatch");
     }
 
-    /// @dev Advance time past the currently-armed sync window, if any.
-    function _warpPastSyncWindow() internal {
-        uint256 lockedUntil = token.syncLockedUntil();
-        if (block.timestamp < lockedUntil) {
-            vm.warp(lockedUntil);
-        }
+    /// @dev Advance a full `MIN_MARK_INTERVAL` from now.
+    ///
+    ///      Replaces `_warpPastSyncWindow`. The sync window is gone — it gated
+    ///      nothing on EVM. What a fixture must warp past now is the cadence
+    ///      bound, which gates the OPERATOR'S MARK rather than any user
+    ///      operation. That inversion is the point of the change: no user-facing
+    ///      path in this system is time-gated any more.
+    function _warpPastMarkInterval() internal {
+        vm.warp(block.timestamp + Constants.MIN_MARK_INTERVAL);
     }
 
     // ============ M_usd accrual helpers (USDOku) ============

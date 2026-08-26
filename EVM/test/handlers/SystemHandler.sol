@@ -61,6 +61,14 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
     uint256 public ghostMaxUsdIndex;
     /// @notice Raw tokens donated (not minted) to the queue.
     uint256 public ghostQueueDonations;
+    /// @notice Smallest gap between two consecutive marks the fuzzer has landed.
+    /// @dev `type(uint256).max` until at least two marks exist. Backs
+    ///      `invariant_MarksRespectCadence` — the cadence bound cannot be read
+    ///      off live state, so it has to be observed as it happens.
+    uint256 public ghostMinMarkGap = type(uint256).max;
+    /// @dev Timestamp of the last mark the fuzzer landed. `0` = none yet.
+    uint256 public ghostLastMarkAt;
+
     /// @notice Largest single `M_oku` step the fuzzer has actually landed, in
     ///         basis points, ceiled the same way the contract ceils it.
     /// @dev Recorded here rather than read from the token, which no longer
@@ -290,11 +298,23 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
         uint256 next = current + (current * stepBps) / Constants.BASIS_POINTS;
         if (next <= current) next = current + 1;
 
+        // Marks are cadence-limited now, so the fuzzer must advance the clock
+        // to land one. Warping here rather than filtering the action keeps the
+        // success rate meaningful — otherwise nearly every attempt would revert
+        // `MarkTooSoon` and look like a harness failure.
+        vm.warp(block.timestamp + Constants.MIN_MARK_INTERVAL);
+
         vm.prank(rateSetter);
         try token.setOkuMultiplier(next) {
             successes++;
             uint256 landed = ((next - current) * Constants.BASIS_POINTS + current - 1) / current;
             if (landed > ghostMaxStepBps) ghostMaxStepBps = landed;
+
+            if (ghostLastMarkAt != 0) {
+                uint256 gap = block.timestamp - ghostLastMarkAt;
+                if (gap < ghostMinMarkGap) ghostMinMarkGap = gap;
+            }
+            ghostLastMarkAt = block.timestamp;
         } catch {}
         _observe();
     }
@@ -393,14 +413,16 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
 
     // ============ Fees and window ============
 
-    /// @notice Explore the full legal fee range above the static step floor.
-    /// @dev Bounded below by `MAX_STEP_BPS` — a constant now, not a read — so
-    ///      the call effectively always succeeds. The point is to make every
-    ///      *other* action run against a varying fee-bearing configuration, not
-    ///      to probe the floor (which `FeesTest` does deterministically).
+    /// @notice Explore the full legal fee range.
+    /// @dev `tin` is bounded from ZERO — it has no floor, and the fuzzer should
+    ///      spend real time in the free-deposit configuration that ships.
+    ///      `tout` is bounded below by `MAX_STEP_BPS`, a constant rather than a
+    ///      read. The point is to make every *other* action run against a
+    ///      varying fee configuration, not to probe the floor (which `FeesTest`
+    ///      does deterministically).
     function setFees(uint256 tinSeed, uint256 toutSeed) external {
         _beginCall();
-        uint256 newTin = _bound(tinSeed, Constants.MAX_STEP_BPS, Constants.MAX_FEE_BPS);
+        uint256 newTin = _bound(tinSeed, 0, Constants.MAX_FEE_BPS);
         uint256 newTout = _bound(toutSeed, Constants.MAX_STEP_BPS, Constants.MAX_FEE_BPS);
         vm.prank(capManager);
         try module.setFees(newTin, newTout) {
@@ -408,24 +430,10 @@ contract SystemHandler is CommonBase, StdCheats, StdUtils {
         } catch {}
     }
 
-    /// @notice Enable a deliberately short window so the fuzzer explores the
-    ///         gated paths without wedging itself closed.
-    /// @dev The window gates `mint`, `redeem`, `redeemUiAmount`, `processQueue`,
-    ///      `wrap` and `unwrap` — i.e. every action that moves value through the
-    ///      multiplier. A long duration here would suppress the handler's
-    ///      success rate and trip `invariant_HandlerIsActuallyExercisingTheSystem`
-    ///      with what looks like a harness failure but is really the fuzzer
-    ///      wedging itself shut. Keeping it a few seconds means `_beginCall`'s
-    ///      12s bump reliably clears it. The real bound is asserted in
-    ///      `SyncWindowTest`.
-    function setSyncWindowDuration(uint256 durationSeed) external {
-        _beginCall();
-        uint256 duration = _bound(durationSeed, 0, 30);
-        vm.prank(capManager);
-        try token.setSyncWindowDuration(duration) {
-            successes++;
-        } catch {}
-    }
+    // NOTE: `setSyncWindowDuration` was removed with the sync window. Nothing
+    // replaces it: `MIN_MARK_INTERVAL` is not configurable, and it gates the
+    // OPERATOR's mark rather than any user action — so there is no longer a
+    // time-based gate for the fuzzer to wedge itself behind.
 
     // ============ Adversarial actions ============
 

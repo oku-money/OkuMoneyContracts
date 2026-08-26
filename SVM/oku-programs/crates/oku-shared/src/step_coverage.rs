@@ -21,8 +21,7 @@
 //!
 //! ```text
 //!     set_multiplier / distribute_yield:  step_bps <= MAX_STEP_BPS
-//!     set_fees:                           tin_bps  >= MAX_STEP_BPS
-//!                                         tout_bps >= MAX_STEP_BPS
+//!     set_fees:                           tout_bps >= MAX_STEP_BPS
 //! ```
 //!
 //! Every step the program can take is therefore covered on each leg
@@ -44,15 +43,22 @@
 //! to model. Changing cadence is now an edit to `MAX_STEP_BPS`, reviewed as
 //! code.
 //!
-//! # Why per-leg rather than combined
+//! # Why the EXIT leg, and only the exit leg
 //!
-//! A combined `tin + tout >= step` bound is sufficient for a single chain and
-//! insufficient across two. A cross-chain round trip pays `tin` on the chain it
-//! mints on and `tout` on the chain it redeems on, so fees of `(0, 2x)` here
-//! and `(2x, 0)` on EVM each satisfy a combined check while the pair pays
-//! nothing at all. Only a per-leg floor survives that composition. The cost is
-//! that the minimum round trip is `2 * MAX_STEP_BPS` rather than
-//! `MAX_STEP_BPS`.
+//! The arbitrage gain is realised on exit: the only operation that draws USDC
+//! out of the vault is `redeem_oku_m`, and it always charges `tout_bps`. So
+//! `tout >= step` is sufficient and `tin` is irrelevant —
+//!
+//! ```text
+//!     net <= D(1 + s)(1 - tout) < D    for every s <= MAX_STEP_BPS <= tout
+//! ```
+//!
+//! including with `tin = 0`, which is what ships. It holds cross-chain too:
+//! whichever chain the attacker exits on charges its own `tout`, and every
+//! chain floors it.
+//!
+//! An earlier revision floored BOTH legs, on a cross-chain leg-pairing argument
+//! that does not survive that observation. Deposits are free.
 //!
 //! # Why a time-based cooldown was rejected
 //!
@@ -143,15 +149,21 @@ mod tests {
     }
 
     #[test]
-    fn realistic_daily_cadence_fits_the_bound() {
-        // ~1.37 bps daily at 5% APY, against a 5 bps bound: ~3.5x headroom, so
-        // a missed day is caught up in one write.
+    fn realistic_cadence_fits_the_bound() {
+        // The intended cadence is 6-HOURLY: ~0.34 bps per mark at 5% APY,
+        // against a 2 bps bound. ~6x headroom.
         let m0 = PRECISION;
-        let daily = m0 + m0 * 137 / 1_000_000;
-        assert!(step_bps_ceil(m0, daily).unwrap() <= MAX_STEP_BPS);
-        // Three missed days still fit.
-        let three_days = m0 + m0 * 411 / 1_000_000;
-        assert!(step_bps_ceil(m0, three_days).unwrap() <= MAX_STEP_BPS);
+        let six_hourly = m0 + m0 * 34 / 1_000_000; // 0.34 bps
+        assert!(step_bps_ceil(m0, six_hourly).unwrap() <= MAX_STEP_BPS);
+
+        // Catch-up: one mark absorbs ~1.5 days of missed yield (~2 bps).
+        let day_and_a_half = m0 + m0 * 200 / 1_000_000; // 2.00 bps
+        assert!(step_bps_ceil(m0, day_and_a_half).unwrap() <= MAX_STEP_BPS);
+
+        // Beyond that it must be walked over several marks — the minimum-cadence
+        // property, working as intended.
+        let three_days = m0 + m0 * 411 / 1_000_000; // 4.11 bps
+        assert!(step_bps_ceil(m0, three_days).unwrap() > MAX_STEP_BPS);
     }
 
     // ---- the composed invariant ----
@@ -173,12 +185,11 @@ mod tests {
                 if step_bps_ceil(m0, m1).unwrap() > MAX_STEP_BPS {
                     continue;
                 }
-                // Every fee schedule `set_fees` admits: each leg in
-                // [MAX_STEP_BPS, MAX_FEE_BPS]. Sampling the floor and the
-                // ceiling of each leg is sufficient — the round-trip payout is
-                // monotonically decreasing in both fees, so the floor pair is
-                // the worst case.
-                for tin in [MAX_STEP_BPS, MAX_FEE_BPS] {
+                // Every fee schedule `set_fees` admits. `tin` starts at ZERO
+                // (no floor); `tout` at `MAX_STEP_BPS`. The payout is
+                // monotonically decreasing in both, so `(0, MAX_STEP_BPS)` is
+                // the worst case and the rest is confirmation.
+                for tin in [0, MAX_FEE_BPS] {
                     for tout in [MAX_STEP_BPS, MAX_FEE_BPS] {
                         let credited = crate::math::apply_fee(deposit, tin).unwrap();
                         let raw = crate::math::dollars_to_raw(credited, m0).unwrap();
@@ -195,21 +206,19 @@ mod tests {
         }
     }
 
-    /// The cross-chain composition the per-leg floor exists for: minting on one
-    /// chain and redeeming on the other pays `tin` from chain A and `tout` from
-    /// chain B, and must still be lossy across a full step of divergence.
+    /// The cross-chain composition, at the cheapest possible pairing: mint on
+    /// the chain with ZERO `tin`, redeem on the chain at its floor `tout`.
     ///
-    /// Under a COMBINED floor this would fail — `(0, 2x)` and `(2x, 0)` both
-    /// satisfy `tin + tout >= step` while the cross pair pays nothing.
+    /// This is why flooring only the exit leg is sufficient cross-chain as well
+    /// as locally — whichever chain the attacker exits on charges its own
+    /// `tout`, and every chain floors it.
     #[test]
     fn cross_chain_leg_pairing_is_never_profitable() {
         let deposit: u64 = 1_000_000_000;
         let m0 = PRECISION;
-        // Worst case: a full maximal step of divergence between the chains.
+        // Worst case: a full maximal mark of divergence between the chains.
         let m1 = m0 + m0 * MAX_STEP_BPS / 10_000;
-        // Mint on the lagging chain at its floor `tin`, redeem on the leading
-        // chain at its floor `tout` — the cheapest possible pairing.
-        let tin_a = MAX_STEP_BPS;
+        let tin_a = 0;
         let tout_b = MAX_STEP_BPS;
         let credited = crate::math::apply_fee(deposit, tin_a).unwrap();
         let raw = crate::math::dollars_to_raw(credited, m0).unwrap();
@@ -232,10 +241,14 @@ mod verification {
     use crate::constants::{MAX_FEE_BPS, MAX_STEP_BPS, PRECISION};
     use crate::math::{apply_fee, dollars_to_raw, raw_to_dollars};
 
-    /// THE proof. For every step the program admits (`step_bps <=
-    /// MAX_STEP_BPS`) and every fee schedule `set_fees` admits (each leg in
-    /// `[MAX_STEP_BPS, MAX_FEE_BPS]`), a mint-hold-redeem round trip cannot
-    /// return more than it cost.
+    /// THE proof. For every mark the program admits (`step_bps <=
+    /// MAX_STEP_BPS`) and every fee schedule `set_fees` admits — `tout` in
+    /// `[MAX_STEP_BPS, MAX_FEE_BPS]`, `tin` ANYWHERE in `[0, MAX_FEE_BPS]` — a
+    /// mint-hold-redeem round trip cannot return more than it cost.
+    ///
+    /// Quantifying `tin` from ZERO is the load-bearing part: it is what proves
+    /// the exit leg alone closes the attack, and therefore that deposits can be
+    /// free.
     ///
     /// This is the formal statement of the entire step-arbitrage defence. It is
     /// strictly simpler than the proof it replaces: the old one had to assume
@@ -258,8 +271,10 @@ mod verification {
         kani::assume(m1 <= PRECISION + (u32::MAX as u64));
         kani::assume(deposit <= u32::MAX as u64);
 
-        // Exactly the fee schedules `set_fees` admits.
-        kani::assume(tin_bps >= MAX_STEP_BPS && tin_bps <= MAX_FEE_BPS);
+        // Exactly the fee schedules `set_fees` admits. Note `tin_bps` has NO
+        // floor — it may be zero, and ships that way. The proof must hold there,
+        // which is the whole point of flooring only the exit leg.
+        kani::assume(tin_bps <= MAX_FEE_BPS);
         kani::assume(tout_bps >= MAX_STEP_BPS && tout_bps <= MAX_FEE_BPS);
 
         // Exactly the steps `set_multiplier` admits.

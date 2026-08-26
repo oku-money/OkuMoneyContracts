@@ -264,7 +264,7 @@ pub struct PsmConfig {
     // Yield: last_yield_distribution_slot
     // Two-step RoleAdmin: pending_role_admin
     // Cross-chain sync window: sync_lock_until_ts, sync_window_secs
-    // Fees: tin_bps, tout_bps, max_step_bps
+    // Fees: tin_bps, tout_bps
 }
 ```
 
@@ -345,9 +345,17 @@ however adversarial, can chain windows past `MAX_SYNC_WINDOW_SECS`, so the
 is gone too; there is nothing left for it to guard against.
 
 **Gating rule:** an instruction is sync-gated **iff it can move value across a
-multiplier boundary**. Gated: `mint_oku_m`, `redeem_oku_m`, `mint_oku_m_direct`,
-`burn_oku_m_direct`. Not gated: `deposit_buffer`, `withdraw_buffer`, and every
-admin path.
+multiplier boundary between chains**. Gated: `mint_oku_m_direct`,
+`burn_oku_m_direct` — the bridge legs, and only those. Not gated: `mint_oku_m`,
+`redeem_oku_m`, `deposit_buffer`, `withdraw_buffer`, and every admin path.
+
+> **`mint_oku_m` / `redeem_oku_m` were gated and are not any more.** They are
+> single-chain: the price they transact at is *this* chain's own multiplier,
+> which is correct whatever the peer chain currently believes. Gating them
+> bought no security and cost a `sync_window_secs` outage on subscription and
+> redemption after every mark — the two paths a user most needs available. The
+> EVM twin removed the equivalent gating from the module, the queue and the
+> wrapper at the same time.
 
 > **The rule is deliberately not "does it price locally".** An earlier revision
 > exempted the direct bridge legs on exactly that basis — neither reads the
@@ -412,77 +420,92 @@ risk, no meaningful holding period, repeatable every step, bounded only by
 actually held.
 
 The sync window does **not** prevent this — the attacker never transacts while it
-is open.
+is open, and the multiplier is monotone so waiting costs them nothing. Fees are
+the only control.
 
 #### The coverage invariant
 
-Sizing the fees correctly is **not** left to the operator. Two on-chain halves
-make step arbitrage impossible rather than merely discouraged. The coverage
-figure is the **COMBINED `tin_bps + tout_bps`**, not `tout` alone: a round trip
-pays `tin` going in and `tout` coming out, so coverage carried entirely by
-`tin` should count against the step — a `tout`-only rule would wrongly permit a
-step whenever `tin` alone already covered it (mirrors EVM, which reads
-`tin() + tout()` from the same check):
+Sizing the fees correctly is **not** left to the operator, and it is **not**
+runtime state. Coverage is a relationship between two constants:
 
 ```rust
-// half 1 — at every multiplier write (set_multiplier, distribute_yield):
-require!( (M1 - M0) * 10_000  <=  (tin_bps + tout_bps) * M0 );  // StepExceedsFeeCoverage
-max_step_bps = max(max_step_bps, ceil_bps(M0 -> M1));
+// at every multiplier write (set_multiplier, distribute_yield):
+require!( step_bps_ceil(M0, M1) <= MAX_STEP_BPS );   // StepAboveMax
 
-// half 2 — at every fee change (set_fees):
-require!( new_tin_bps + new_tout_bps >= max_step_bps );          // FeeBelowStepHighWaterMark
+// at every fee change (set_fees):
+require!( tin_bps  >= MAX_STEP_BPS );                // FeeBelowStepFloor
+require!( tout_bps >= MAX_STEP_BPS );                // FeeBelowStepFloor
 ```
 
-**Half 1** stops an operator *creating* exposure the combined fee does not
-cover. **Half 2** stops them *removing* coverage afterwards. Neither is
-sufficient alone.
+Composed, every step the program can take is covered on **each leg
+independently**, for all time, with no account space and no history to consult.
+`initialize` seeds both legs at `MAX_STEP_BPS`, so coverage holds from the first
+slot.
 
-*Proof.* A covered round trip pays `tin` on the deposit and `tout` on the
-payout, and the step it holds across satisfies `M1 − M0 ≤ (tin + tout)·M0`
-(half 1). The gross gain ratio is `M1/M0 ≤ 1 + tin + tout`, while the fee drag
-is the factor `(1 − tin)(1 − tout)`, and `(1 − tin)(1 − tout)(1 + tin + tout) ≤
-1` for every `tin`/`tout` split in range — including when the entire coverage
-sits on one leg. The profit condition is never met, for any holding period and
-any later redemption, because half 2 guarantees the combined fee never falls
-below the step. Verified by
-`oku_shared::step_coverage::verification::proof_covered_step_is_never_profitable`
-(Kani, fuzzed over every `tin`/`tout` split) and by
-`tests/bankrun/sync-window-and-fees.ts § local step arbitrage`.
+**Per-leg, not combined**, and this is the reason. A cross-chain round trip pays
+`tin` on the chain it mints on and `tout` on the chain it redeems on. Fees of
+`(0, 2N)` here and `(2N, 0)` on EVM would each satisfy a combined
+`tin + tout >= step` check while that pairing paid nothing at all. Only a per-leg
+floor survives the composition. The cost is that the minimum round trip is
+`2 × MAX_STEP_BPS` rather than `MAX_STEP_BPS`.
+
+*Proof.* The worst case the program admits is a step of exactly `MAX_STEP_BPS`
+against fees of exactly `MAX_STEP_BPS` on each leg. The gross gain ratio is
+`M1/M0 ≤ 1 + s` where `s = MAX_STEP_BPS`, while the fee drag is the factor
+`(1 − s)²`, and `(1 − s)²(1 + s) ≤ 1` for all `s` in range — with a full step of
+margin. Holding period and later redemption price are irrelevant: the floor is a
+constant, so no future fee change can weaken it. Verified by
+`oku_shared::step_coverage::verification::proof_admissible_step_under_admissible_fees_is_never_profitable`
+(Kani) and by
+`tests/bankrun/sync-window-and-fees.ts § local step arbitrage`, which includes
+the cheapest cross-chain leg pairing.
+
+**What this replaced, and why.** The earlier design had four interacting parts: a
+`step_is_covered(tin + tout)` read at write time, a `max_step_bps` high-water
+ratchet, a floor on later `set_fees` calls against that ratchet, and a cold
+`reset_step_high_water_mark` escape hatch. Each existed to contain the previous
+one, and the escape hatch's honest precondition — that the raw supply outstanding
+when a large step landed had substantially turned over — was not verifiable
+on-chain, so the program could only make the action deliberate and loud, never
+safe. The static floor is strictly stronger (the ratchet only ever covered steps
+that had *actually occurred*), costs 8 bytes less of `PsmConfig`, and removes the
+un-modelled trust surface entirely.
+
+A time-based cooldown on fee decreases was also considered and rejected: the
+attacker's edge is locked in the instant the step lands and does not decay, and
+the multiplier is monotonic so waiting costs them nothing. A cooldown delays the
+profit rather than removing it. Note the contrast with the sync window, where a
+time lock **is** the right tool — cross-chain divergence is transient and
+self-correcting, so waiting genuinely removes the edge, whereas a step's gain is
+permanent.
 
 Two consequences worth internalising:
 
-- **`tin = tout = 0` means the protocol cannot rebase at all.** Every increase
-  fails half 1 (`coverage_bps == 0`). This is why shipping fees at 0 is
-  fail-closed rather than a hole: an operator cannot create the arbitrage
-  condition, and configuring a fee schedule sized to the intended cadence
-  becomes a precondition of rebasing rather than a step someone might forget.
-- **A single step can never exceed `MAX_FEE_BPS` (1%),** since `step ≤ tin +
-  tout ≤ 2 × 100 bps` is checked per-write against the pre-step combined fee,
-  and each leg is individually capped at `MAX_FEE_BPS`. That implies a
-  **minimum cadence**: at 5% APY the multiplier cannot be advanced more than a
-  few months' worth in one write, so a long outage must be caught up over
-  several steps, each re-arming its own sync window. This is the direct
-  analogue of the `MAX_IMPLIED_APR` catch-up limitation on the EVM side.
-
-A time-based cooldown on fee decreases was considered and rejected: the
-attacker's edge is locked in the instant the step lands and does not decay, and
-the multiplier is monotonic so waiting costs them nothing. A cooldown delays the
-profit rather than removing it. The high-water mark has no expiry — and is
-*less* restrictive in the common case, because it pins only against steps
-actually taken (all-1.4 bps steps still permit lowering the combined fee to 1.4
-bps).
-
-Clearing the mark is possible via `reset_step_high_water_mark` (cap_manager), a
-separate and deliberately-named instruction — never a side effect of `set_fees`.
-It reopens historical exposure and emits `StepHighWaterMarkReset`; **alarm on it.**
+- **Fees ship AT the floor, not at zero, and can never return to zero.** The
+  program no longer reads the fee schedule at multiplier-write time, so a
+  zero-fee window would be an *uncovered-step* window rather than a fail-closed
+  state. Shipping covered also removes a launch-ordering dependency: the program
+  is accrual-ready from `initialize`.
+- **A single step can never exceed `MAX_STEP_BPS`.** That implies a **minimum
+  cadence**: at 5% APY a daily mark is ~1.37 bps against a 5 bps ceiling (~3.5x
+  headroom, so a missed three days still fits), but a long outage must be caught
+  up over several marks, each re-arming its own sync window. This is the direct
+  analogue of the `MAX_IMPLIED_APR` catch-up limitation on the EVM side, and it
+  is the operator-absence protection working as designed.
 
 Sizing, at 5% APY:
 
-| Cadence | Step | `tin + tout` must be at least |
-|---|---|---|
-| hourly | ~0.06 bps | 1 bps |
-| daily | ~1.4 bps | ~2 bps |
-| weekly | ~9.6 bps | ~10 bps + margin |
+| Cadence | Step | `MAX_STEP_BPS` must be at least | Minimum round trip |
+|---|---|---|---|
+| hourly | ~0.06 bps | 1 bps | 2 bps |
+| daily | ~1.37 bps | 2 bps (5 shipped, for headroom) | 10 bps |
+| weekly | ~9.6 bps | 10 bps | 20 bps |
+| monthly | ~40.7 bps | 41 bps | 82 bps |
+
+Note the coupling runs one way now: `MAX_STEP_BPS` sets both the cadence bound
+and the minimum fee, so choosing a coarser cadence necessarily makes the product
+more expensive to enter and exit. That trade-off is explicit rather than
+emergent.
 
 Fees are **withheld, not forwarded**: `tin` enters the vault without OkuM minted
 against it, `tout` is owed but never transferred out. Both raise the collateral
@@ -661,9 +684,9 @@ Full list (31 variants) in `programs/lite-psm/src/errors.rs`. Key errors:
 - `YieldTooSmall` — `distribute_yield` amount truncates to zero.
 - `Paused` — operation attempted while system is paused.
 - `Unauthorized` — caller lacks the required role.
-- `SyncWindowActive` — a multiplier tick is propagating cross-chain; price-sensitive ops blocked.
-- `StepExceedsFeeCoverage` — the step from a multiplier write exceeds what `tin_bps + tout_bps` covers.
-- `FeeBelowStepHighWaterMark` — proposed `tin_bps + tout_bps` is below the largest step ever taken.
+- `SyncWindowActive` — a multiplier tick is propagating cross-chain; the bridge legs are blocked until it expires.
+- `StepAboveMax` — the step from a multiplier write exceeds `MAX_STEP_BPS`.
+- `FeeBelowStepFloor` — a proposed `tin_bps`/`tout_bps` is below `MAX_STEP_BPS`, the per-leg step-coverage floor.
 
 ---
 
@@ -920,7 +943,7 @@ All admin scripts live under `scripts/admin/`. Each:
 | `admin:set-multiplier` | `set_multiplier` | `rebaser` (stamps yield slot + arms sync window) |
 | `admin:distribute-yield` | `distribute_yield` | `rebaser` (stamps yield slot + arms sync window) |
 | `admin:set-sync-window-secs` | `set_sync_window_secs` (0 disables; ≤ `MAX_SYNC_WINDOW_SECS`) | `cap_manager` |
-| `admin:set-fees` | `set_fees` (`tin`/`tout`, ≤ `MAX_FEE_BPS`) — combined `tin + tout` is the step-arbitrage control. `reset_step_high_water_mark` has no CLI wrapper yet; call it directly | `cap_manager` |
+| `admin:set-fees` | `set_fees` — each leg in `[MAX_STEP_BPS, MAX_FEE_BPS]`. The per-leg floor is the step-arbitrage control; there is no reset instruction because there is no accumulated state | `cap_manager` |
 | `admin:check-sync-parity` | read-only cross-chain **multiplier VALUE** comparison (EVM `uiMultiplier()` vs SVM mint's `ScaledUiAmountConfig.multiplier`, `--tolerance` flag) — strictly stronger than the old epoch check, since equal epochs never proved equal values | none (read-only) |
 | `admin:freeze-account` / `admin:thaw-account` | `freeze_account` / `thaw_account` | `freezer` / `unfreezer` |
 | `admin:deposit-buffer` / `admin:withdraw-buffer` | `deposit_buffer` / `withdraw_buffer` | `buffer_depositor` / `buffer_withdrawer` |
@@ -1044,8 +1067,8 @@ not a design gap on either side:
 
 | Aspect | EVM | SVM |
 |---|---|---|
-| Sync-gated surfaces | `SubscriptionModule.mint`/`redeem`/`redeemUiAmount`/`mintUsdOku`/`redeemUsdOku`, `RedemptionQueue.processQueue`, `USDOkuWrapper.wrap`/`unwrap`/`withdrawSurplus` | `mint_oku_m`, `redeem_oku_m`, `mint_oku_m_direct`, `burn_oku_m_direct` |
-| Step-coverage invariant | `StepNotCovered` at `setOkuMultiplier` + `stepHighWaterMark` floor at `setFees` — combined `tin + tout` | `StepExceedsFeeCoverage` at write + `max_step_bps` floor at `set_fees` — combined `tin_bps + tout_bps` |
+| Sync-gated surfaces | **NOTHING.** EVM has no dedicated bridge instruction — `OkuM.mint`/`burn` are the shared supply hooks the module and queue use for ordinary local subscription and redemption, so gating them would gate the whole PSM. The window is exposed as an advisory signal (`isSyncLocked`, `syncLockedUntil`) for monitoring and for the bridge adapter that will consult it | `mint_oku_m_direct`, `burn_oku_m_direct` — the bridge legs, and only those |
+| Step-coverage invariant | `StepAboveMaximum` at `setOkuMultiplier` + per-leg `FeeBelowStepFloor` at `setFees` — both against the `MAX_STEP_BPS` constant | `StepAboveMax` at write + per-leg `FeeBelowStepFloor` at `set_fees` — identical rule, same constant |
 | Window default | `DEFAULT_SYNC_WINDOW` (60s) | `DEFAULT_SYNC_WINDOW_SECS` (60s) |
 | Open/close protocol | none — auto-arm only, same as SVM | none — auto-arm only, same as EVM |
 | Cross-chain completion check | off-chain, by multiplier **value** (`check-sync-parity.ts`), not epoch — same script, same direction | off-chain, by multiplier **value** (`check-sync-parity.ts`) |
@@ -1057,7 +1080,7 @@ not a design gap on either side:
 | `USDOku`'s `setUsdOkuRate` | **not** sync-gated — moves no value; its solvency check reads `M_oku` but is provably conservative mid-tick | N/A — no continuous-accrual instrument on SVM |
 | Same-slot fence | none — no continuous-accrual concern remains once `OkuM` is stepwise on both chains; EVM never had one for `OkuM` | `last_yield_distribution_slot`, SVM-only, self-fences same-slot re-entry |
 | `processQueue` under window | **gated** (prices at the live multiplier), unlike under pause | N/A — no queue |
-| Combined fee role | **load-bearing on both chains** — zero fees blocks every step (`StepNotCovered` / `StepExceedsFeeCoverage`) | **load-bearing** — zero fees blocks every step |
+| Fee floor role | **load-bearing on both chains** — each leg floored at `MAX_STEP_BPS`, seeded there by `initialize`, and unreachable below it | **identical** — same constant, same per-leg rule |
 | Queued-fee snapshot | `QueueEntry.toutBps`, packed into the entry's existing free bits; settles at `min(snapshot, live)` | N/A — no queue |
 | Window/fee setter | `OKU_CAP_MANAGER` (window), `PSM_FEE_MANAGER` (fees) — split because AccessControl is per-contract | `cap_manager` for both |
 

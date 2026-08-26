@@ -329,7 +329,6 @@ separate pending-rate staging field exists.
 |---|---|
 | `newMultiplier >= currentMultiplier` (monotone) | `MultiplierCannotDecrease` |
 | Step size `<= MAX_STEP_BPS` | `StepAboveMaximum` |
-| Round-trip fee covers the step (see Fees) | `StepNotCovered` |
 | `newMultiplier <= MAX_MULTIPLIER` | `MultiplierAboveMaximum` |
 | Guardian has not halted accrual | `AccrualIsHalted` |
 
@@ -449,8 +448,9 @@ value-bearing multiplier.
 
 Controls capping damage from a compromised setter key:
 
-- **`MAX_STEP_BPS`** — ceiling on any single `M_oku` step. The binding bound on
-  the value layer.
+- **`MAX_STEP_BPS`** — ceiling on any single `M_oku` step, AND the per-leg floor
+  under `tin`/`tout`. The binding bound on the value layer, and the single number
+  that defines step coverage (see Fees).
 - **`MAX_IMPLIED_APR`** (1000 bps nominal) + **`MAX_RATE_DURATION`** (30 days) —
   bound `M_usd`. Worst-case over-accrual per segment ≈ **0.82%**.
 - **`MAX_SOLVENCY_GAP_BPS`** — bounds how far declared can outrun realized
@@ -568,7 +568,6 @@ struct ScaledUIAmountStorage {
                                 // Steps are immediate, so newUIMultiplier()
                                 // just returns `multiplier` too — no separate
                                 // pending-value field exists.
-    uint256 stepHighWaterMark; // Largest step taken; floors tin+tout. See Fees.
 }
 
 // erc7201:okumoney.storage.OkuM                  — OkuM token policy
@@ -903,15 +902,42 @@ mint-side half:
 tin + tout >= stepBps    for every step taken
 ```
 
-Enforced two ways: `setOkuMultiplier` reverts `StepNotCovered` if the proposed
-step exceeds what current fees cover, and `stepHighWaterMark` floors `setFees` so
-fees cannot later drop below a step already taken.
+**Enforced as a relationship between two constants, not as runtime state:**
 
-`MAX_FEE_BPS` is 100 (1%), which bounds the maximum coverable step and therefore
-the **minimum step cadence**. At a 5% target: a daily step is ~1.34 bps, weekly
-~9.6 bps, monthly ~40.7 bps. A 1% ceiling covers steps up to roughly a 2.4-month
-interval. Publish the intended cadence and hold to it; a missed mark that forces
-an oversized catch-up step will be refused.
+```
+setOkuMultiplier:  stepBps  <= MAX_STEP_BPS          // StepAboveMaximum
+setFees:           tin      >= MAX_STEP_BPS          // FeeBelowStepFloor
+                   tout     >= MAX_STEP_BPS          // FeeBelowStepFloor
+```
+
+Composed, every step the protocol can take is covered on **each leg
+independently**, for all time, with no stored state. `initialize` seeds both legs
+at the floor, so coverage holds from block one — there is no wiring step to
+forget and no ordering to get wrong.
+
+**Per-leg rather than combined**, and the difference is load-bearing. A
+cross-chain round trip pays `tin` on the chain it mints on and `tout` on the
+chain it redeems on, so a combined `tin + tout` bound enforced separately on each
+chain does not bound the pair: `(0, 2N)` here and `(2N, 0)` on the peer each
+satisfy a combined check while the cross pairing pays nothing. The cost is that
+the minimum round trip is `2 * MAX_STEP_BPS`.
+
+**What this replaced.** The token used to read `tin() + tout()` back from the
+module at write time (`StepNotCovered`), ratchet a `stepHighWaterMark`, floor
+later `setFees` calls against that mark (`FeesBelowStepFloor`), and expose a cold
+`resetStepHighWaterMark` escape hatch. Four interacting mechanisms maintaining
+one inequality, plus an escape hatch whose honest precondition — that supply
+outstanding at the time of a large past step had substantially turned over — was
+not verifiable on-chain. The static floor is strictly stronger (the ratchet only
+ever covered steps that had *actually occurred*), removes the token→module
+dependency, and removes the un-modelled trust surface.
+
+`MAX_STEP_BPS` therefore sets the **minimum mark cadence**. At a 5% target a
+daily step is ~1.37 bps, weekly ~9.6 bps, monthly ~40.7 bps. At the provisional
+5 bps a daily cadence carries ~3.5x headroom and a missed three days still fits;
+a longer outage must be walked over several marks. That is the same
+operator-absence protection `MAX_IMPLIED_APR` provides on USDOku, and it is
+deliberate rather than a limitation.
 
 Fees are **withheld, not forwarded** — `tin` enters the buffer with no OkuM
 minted against it, `tout` is owed but never transferred out. No recipient, no
@@ -1193,7 +1219,7 @@ solvency bound.
 | `BASIS_POINTS` | `10_000` | Convention |
 | `SECONDS_PER_YEAR` | `365 days` | Annualization base |
 | **`M_oku` authority** | | |
-| `MAX_STEP_BPS` | **TBD** | Ceiling on one step. Binds with `MAX_FEE_BPS` via step coverage. **Placeholder — needs a treasury number and a published cadence** |
+| `MAX_STEP_BPS` | **5 (provisional)** | Ceiling on one step AND the per-leg floor under `tin`/`tout`. The single number defining step coverage. Sized for a DAILY cadence at ~5% APY (~1.37 bps/day, ~3.5x headroom). **Needs treasury sign-off on the cadence, after which this follows mechanically** |
 | `MAX_MULTIPLIER` | `1e24` | Cumulative ceiling. Round-number convention |
 | **`M_usd` authority** | | |
 | `MAX_IMPLIED_APR` | `1000` bps | Nominal (simple) annualization. At the cap the per-second ceiling compounds to ~10.52% APY — delivered APY sits slightly above nominal by construction, documented rather than corrected because a monotone-in-rate check is cheaper to audit than an `rpow` round trip in the setter. **Placeholder** |
@@ -1230,7 +1256,7 @@ dependency and keeping admin from calling `enqueue` / `processQueue` directly.
 | `*_UPGRADER` | Cold | Replace logic via UUPS | Nothing — mitigated by fork rehearsal and diff review |
 | `OKU_ALLOWANCE_MANAGER` | Cold | Set `minterAllowance` | Capped at `maxSupply`; minting still needs `OKU_MINTER` |
 | `OKU_CAP_MANAGER` | Cold | `setMaxSupply`, `setSyncWindowDuration` | Cap cannot go below `totalSupply()`; window bounded by `MAX_SYNC_WINDOW` |
-| `PSM_FEE_MANAGER` | Cold | `setFees`, `setUsdOkuWrapper` | `MAX_FEE_BPS`; floored by `stepHighWaterMark`; cannot retroactively change queued entries |
+| `PSM_FEE_MANAGER` | Cold | `setFees`, `setUsdOkuWrapper` | Each leg in `[MAX_STEP_BPS, MAX_FEE_BPS]`; cannot retroactively change queued entries |
 | `PSM_BUFFER_WITHDRAWER` | Cold | Drain buffer | Cannot drop below outstanding queue obligations |
 | `WRAPPER_ADMIN` | Cold | Disable `wrap` (sunset step 1) | **Cannot disable `unwrap`** — deliberate |
 | `WRAPPER_RESERVE_MANAGER` | Cold | `withdrawSurplus` | Bounded by `surplus()`; post-withdrawal `realizedBacking() >= declaredLiability()` always. Distinct from `WRAPPER_ADMIN` — moving capital out is a different capability than gating the sunset switch |
@@ -1264,7 +1290,7 @@ would defeat the prefix convention that keeps a grant on one contract from being
 mistaken for a grant on another. `setUsdOkuWrapper` (post-deploy wiring of the
 USDOku ↔ USDC convenience path) reuses `PSM_FEE_MANAGER` for the same reason —
 same cold key already performs this class of one-time wiring, e.g.
-`OkuM.setStepFeeSource` and `USDOku.setSolvencySource`.
+`USDOku.setSolvencySource`.
 
 ---
 
@@ -1286,7 +1312,7 @@ fromUIAmount(toUIAmount(x)) ∈ [x-1, x]                      // fuzzed, full ra
 // M_oku
 M_oku >= previousM_oku                                      // monotone
 stepBps <= MAX_STEP_BPS                                     // every step
-tin + tout >= stepHighWaterMark                             // step coverage
+tin >= MAX_STEP_BPS && tout >= MAX_STEP_BPS                 // step coverage
 M_oku <= MAX_MULTIPLIER
 uiMultiplier() == newUIMultiplier() once past effectiveAt()  // ERC-8056 boundary contract
 
@@ -1354,7 +1380,7 @@ npx hardhat compile && npx hardhat test              # layout validator + scenar
 | Suite | Covers |
 |---|---|
 | `ERC8056Conformance` | All four interface IDs; conversion round-trips; balance identities; `UIMultiplierUpdated`; the `uiMultiplier() == newUIMultiplier()` boundary contract. **Cross-checked against `jumpboxtech/erc-8056-conformance`**, not against the EIP's reference implementation |
-| `StepArbitrageTest` | **New.** The round trip across a step at every legal `(tin, tout, stepBps)` combination, asserting profit ≤ 0. Plus `stepHighWaterMark` flooring `setFees`, and `StepNotCovered` rejection |
+| `StepArbitrageTest` | The round trip across a step at every admissible `(tin, tout, stepBps)` combination, asserting profit ≤ 0 — exhaustive over the step dimension now that `MAX_STEP_BPS` is small. Plus the per-leg floor (`FeeBelowStepFloor`), the step ceiling (`StepAboveMaximum`), the cross-chain leg pairing, and that zero fees are unreachable |
 | `SolvencyTest` | Gap accounting across wrap/unwrap/step/rate sequences; `SolvencyGapExceeded` on `setUsdOkuRate`; unwrap never gated on solvency; gap closing as realized catches up; `withdrawSurplus` — bounded by `surplus()`, `ExceedsSurplus` rejection, post-withdrawal `realizedBacking() >= declaredLiability()` |
 | `WrapperTest` | `wrap`/`unwrap` price at `M_oku` and never `M_usd` (differential against a mutant that uses `M_usd`); round-trip dust; sunset — `wrap` disabled, `unwrap` still open; the `receiver`-parameterized overloads |
 | `UsdOkuConvenienceTest` | `mintUsdOku`/`redeemUsdOku` end to end; `UsdOkuWrapperNotSet` before wiring; the share-delta rounding proof pinned against a mutant that passes the nominal amount straight through; sync-gating |
@@ -1556,7 +1582,6 @@ at that point in the order above. Wire it afterward, each a one-time
 cross-reference on the same class of cold key, though the role constant differs
 per contract (AccessControl mappings are per-contract):
 
-- `OkuM.setStepFeeSource(module)` — step-coverage fee reads (`OKU_CAP_MANAGER`)
 - `USDOku.setSolvencySource(wrapper)` — solvency projection reads
   (`OKU_CAP_MANAGER`)
 - `SubscriptionModule.setUsdOkuWrapper(wrapper)` — enables `mintUsdOku` /

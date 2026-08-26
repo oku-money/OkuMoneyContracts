@@ -64,6 +64,7 @@
     "operator:processQueue": "hardhat run scripts/operator/processQueue.ts",
     "operator:configureMinterAllowance": "hardhat run scripts/operator/configureMinterAllowance.ts",
     "operator:setOkuMultiplier": "hardhat run scripts/operator/setOkuMultiplier.ts",
+    "operator:distributeYield": "hardhat run scripts/operator/distributeYield.ts",
     "operator:setUsdOkuRate": "hardhat run scripts/operator/setUsdOkuRate.ts",
     "operator:setFees": "hardhat run scripts/operator/setFees.ts",
     "operator:setSyncWindowDuration": "hardhat run scripts/operator/setSyncWindowDuration.ts",

@@ -92,16 +92,10 @@ async function main() {
     );
   }
 
-  // The sync window blocks processQueue. Bounded and auto-expiring, so this is
-  // a "come back in a moment", not a failure.
-  const okuM = await ethers.getContractAt("OkuM", moduleOkuM);
-  if (await (okuM as any).isSyncLocked()) {
-    const until: bigint = await (okuM as any).syncLockedUntil();
-    throw new Error(
-      `A multiplier step is propagating: processQueue reverts SyncWindowActive until ` +
-        `${new Date(Number(until) * 1000).toISOString()}. Retry after that.`
-    );
-  }
+  // NOTE: the sync window no longer blocks processQueue, and this script no
+  // longer refuses to run while one is open. Queued users were being delayed for
+  // a price that was already correct: the queue prices at this chain's own
+  // `M_oku`, and a peer chain's in-flight mark does not make that wrong.
 
   let totalDrained = 0;
   let batches = 0;

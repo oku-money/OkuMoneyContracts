@@ -50,35 +50,72 @@ library Constants {
     // ============ M_oku authority bounds (OkuM, stepwise) ============
 
     /// @notice Ceiling on a single `M_oku` step, in basis points. ALSO the floor
-    ///         under each of `tin` and `tout`.
-    /// @dev THE single number that defines the step-arbitrage defence. Two rules
-    ///      reference it and nothing else does:
+    ///         under `tout`.
+    /// @dev THE single number defining the step-arbitrage defence, and the only
+    ///      economic parameter this design really has. Two rules reference it:
     ///
     ///          OkuM.setOkuMultiplier:        stepBps <= MAX_STEP_BPS
-    ///          SubscriptionModule.setFees:   tin >= MAX_STEP_BPS
-    ///                                        tout >= MAX_STEP_BPS
+    ///          SubscriptionModule.setFees:   tout    >= MAX_STEP_BPS
     ///
-    ///      Composed, every step the protocol can take is covered on each leg
-    ///      independently, permanently, with no state. Raising this number
-    ///      permits a coarser mark cadence and simultaneously raises the minimum
-    ///      fee; the two cannot drift apart.
+    ///      Composed, the largest mark the protocol can take is at most what the
+    ///      exit fee charges, so the round trip mint-hold-redeem is loss-making
+    ///      for every mark and every fee the contracts admit. No state, no
+    ///      ratchet, no cross-contract read.
     ///
-    ///      SIZING. At a 5% annual target a daily step is ~1.37 bps, weekly
-    ///      ~9.6 bps, monthly ~40.7 bps. At 5 bps a daily cadence carries ~3.5x
-    ///      headroom, so a missed day is caught up in one write and a missed
-    ///      three days still fits. A longer outage must be walked over several
-    ///      ticks — the direct analogue of `MAX_IMPLIED_APR`'s catch-up limit on
-    ///      USDOku, and the same deliberate operator-absence protection.
+    ///      TOUT ONLY, NOT BOTH LEGS. The attacker's gain is realised on EXIT,
+    ///      and the only exit that drains the buffer is `redeem`, which always
+    ///      charges `tout`. `tin` is irrelevant to the attack — including
+    ///      cross-chain, since whichever chain they exit on charges its own
+    ///      `tout`. So deposits are free.
     ///
-    ///      COST. The minimum round trip becomes 10 bps (0.05% per leg).
+    ///      THE FEE IS THE PRICE OF DISCRETENESS, and the mark cadence is the
+    ///      dial that sets it. One mark is worth `APY x interval`:
     ///
-    ///      PROVISIONAL — assumes a DAILY mark cadence at ~5% APY. Needs
-    ///      treasury sign-off on the cadence, after which this number follows
-    ///      mechanically. Must satisfy `MAX_STEP_BPS <= MAX_FEE_BPS`, asserted
-    ///      in `ConstantsCouplingTest`.
+    ///          monthly   ~40.7 bps      weekly   ~9.6 bps
+    ///          daily      ~1.37 bps     6-hourly ~0.34 bps
+    ///          hourly     ~0.057 bps
+    ///
+    ///      Mark more often and the required fee approaches zero — which is
+    ///      exactly why continuously-accruing designs (Maker's `chi`, Aave's
+    ///      liquidity index, Ondo's USDY oracle) need no fee at all. We cannot
+    ///      accrue continuously because Token-2022's `ScaledUiAmount` stores a
+    ///      discrete multiplier, so this fee is the exact cost of that
+    ///      constraint and nothing more.
+    ///
+    ///      AT 2 BPS, SIZED FOR A 6-HOURLY CADENCE: ~0.34 bps per mark leaves
+    ///      ~6x headroom, and one mark can absorb ~1.5 days of catch-up after an
+    ///      outage. A longer outage is walked over several marks.
+    ///
+    ///      Must satisfy `MAX_STEP_BPS <= MAX_FEE_BPS`, asserted in
+    ///      `StepArbitrageTest`.
     ///
     ///      SVM mirror: `oku_shared::MAX_STEP_BPS`.
-    uint256 internal constant MAX_STEP_BPS = 5;
+    uint256 internal constant MAX_STEP_BPS = 2;
+
+    /// @notice Minimum wall-clock gap between two `M_oku` marks.
+    /// @dev Makes `MAX_STEP_BPS` mean what everyone assumes it means.
+    ///
+    ///      Without this, `MAX_STEP_BPS` bounds ONE step but nothing bounds how
+    ///      many land in a block: a compromised `OKU_RATE_SETTER` could loop
+    ///      `setOkuMultiplier`, each call individually legal, and compound the
+    ///      multiplier arbitrarily fast — bounded only by `MAX_MULTIPLIER`. The
+    ///      per-step ceiling gave the APPEARANCE of bounding the rate of change
+    ///      without doing so.
+    ///
+    ///      With it, yield is bounded per unit time rather than per call, which
+    ///      is the property the exit fee is sized against.
+    ///
+    ///      Ondo enforces the same control on OUSG at 23 hours
+    ///      (`RWAOracleRateCheck.MIN_PRICE_UPDATE_WINDOW`). One hour is chosen
+    ///      instead because our cadence is far finer; it is well under the
+    ///      intended 6-hourly interval, so it never binds in normal operation.
+    ///
+    ///      DOES NOT BLOCK INCIDENT RESPONSE: `haltAccrual` is separate,
+    ///      immediate, and ungated. The lever for "this mark was wrong" is to
+    ///      halt, not to overwrite within the hour.
+    ///
+    ///      SVM mirror: `oku_shared::MIN_MARK_INTERVAL_SECS`.
+    uint256 internal constant MIN_MARK_INTERVAL = 1 hours;
 
     /// @notice Absolute ceiling for the cumulative `M_oku` multiplier.
     /// @dev `1e24` = $1,000,000 of value per raw token. Mirrors the SVM-side
@@ -160,51 +197,24 @@ library Constants {
     ///      token's own balances need it. Asserted in `MulDivBoundsTest`.
     uint256 internal constant MAX_TOTAL_SUPPLY = 1e33;
 
-    // ============ Post-step sync window ============
+    // ============ Post-step sync window — REMOVED ============
     //
-    // `M_oku` is stepwise and written on every chain by the same orchestrator
-    // tick. A tick is not atomic across chains, so for a short interval the two
-    // sides price a raw token differently. Each chain fences ITSELF: every
-    // `setOkuMultiplier` write auto-arms a bounded lock on the BRIDGE LEGS
-    // (`OkuM.mint` / `OkuM.burn`). There is no cross-chain epoch protocol —
-    // parity is verified off-chain by comparing the multiplier VALUES directly
-    // (`check-sync-parity.ts`), which is strictly stronger than any epoch
-    // bookkeeping (equal epochs never proved equal values).
+    // `MAX_SYNC_WINDOW` and `DEFAULT_SYNC_WINDOW` are gone, along with the
+    // mechanism. On EVM the window gated nothing: it was narrowed to "bridge
+    // legs", and EVM has no bridge leg — `OkuM.mint`/`burn` are the shared
+    // supply hooks the module and queue use for ordinary local subscription and
+    // redemption, so gating them would gate the entire PSM.
     //
-    // SCOPE: BRIDGE LEGS ONLY. A single-chain operation priced at its own
-    // chain's `M_oku` is correct by definition whatever the peer believes, so
-    // gating module mint/redeem or wrapper wrap/unwrap bought nothing and cost
-    // an outage after every mark. The bridge is the one place raw crosses a
-    // multiplier boundary: burning 100 raw at M=1.04 destroys $104 of claim
-    // while minting 100 raw at M=1.05 creates $105.
+    // A future EVM bridge adapter needs no protocol state to reproduce it:
     //
-    // The window is NOT a step-arbitrage defence, and no window length would
-    // make it one: holding raw across a step needs no transaction. The two
-    // edges differ in kind — cross-chain divergence is transient and
-    // self-correcting, so waiting removes it, whereas a step's gain is
-    // permanent. Hence a time lock for the bridge, a fee floor
-    // (`MAX_STEP_BPS`) for the steps.
-
-    /// @notice Hard ceiling on the post-step sync window.
-    /// @dev Liveness backstop: mint/redeem resume unaided after at most this
-    ///      long. There is no code path that extends a window past this bound,
-    ///      which is what stops the mechanism becoming an indefinite pause held
-    ///      by a key warmer than `PSM_UNPAUSER`.
-    ///
-    ///      SVM mirror: `oku_shared::MAX_SYNC_WINDOW_SECS`.
-    uint256 internal constant MAX_SYNC_WINDOW = 15 minutes;
-
-    /// @notice Sync window length written at `initialize`.
-    /// @dev Deployments ship with the window ON. A zero default would leave the
-    ///      protection installed but inert, and therefore dependent on someone
-    ///      remembering to enable it — the class of dependency this design
-    ///      exists to remove.
-    ///
-    ///      A cross-chain propagation budget, not an economic parameter: it need
-    ///      only cover the time between the first chain's write and the last's.
-    ///
-    ///      SVM mirror: `oku_shared::DEFAULT_SYNC_WINDOW_SECS`.
-    uint256 internal constant DEFAULT_SYNC_WINDOW = 60;
+    //     if (block.timestamp < okuM.lastSteppedAt() + PROPAGATION_BUDGET) revert;
+    //
+    // `lastSteppedAt` is stored anyway for ERC-8056's `effectiveAt()`. The check
+    // belongs in the adapter, at the point of use.
+    //
+    // SVM keeps its window, where it gates two dedicated bridge instructions
+    // (`mint_oku_m_direct` / `burn_oku_m_direct`) that genuinely move value
+    // across a multiplier boundary as a pair.
 
     // ============ Module fees ============
 
@@ -213,10 +223,10 @@ library Constants {
     ///      a 1% haircut per side rather than seizure of every mint and
     ///      redemption.
     ///
-    ///      No longer couples to step size: the fee FLOOR is `MAX_STEP_BPS` and
-    ///      this is the independent ceiling. The two only interact through the
-    ///      requirement `MAX_STEP_BPS <= MAX_FEE_BPS`, without which `setFees`
-    ///      would admit no value at all.
+    ///      Applies to both legs. Only `tout` also has a FLOOR
+    ///      (`MAX_STEP_BPS`); `tin` is free to be zero, and ships that way. The
+    ///      two constants interact only through `MAX_STEP_BPS <= MAX_FEE_BPS`,
+    ///      without which `setFees` would admit no `tout` at all.
     ///
     ///      SVM mirror: `oku_shared::MAX_FEE_BPS`.
     uint256 internal constant MAX_FEE_BPS = 100;

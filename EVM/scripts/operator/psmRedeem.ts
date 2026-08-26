@@ -61,13 +61,11 @@ async function main() {
   logger.info(`Raw balance:   ${ethers.formatEther(rawBalance)} OkuM`);
   logger.info(`UI balance:    $${ethers.formatEther(uiBalance)}`);
 
-  if (await okuM.isSyncLocked()) {
-    const until: bigint = await okuM.syncLockedUntil();
-    throw new Error(
-      `A multiplier step is propagating: the module reverts SyncWindowActive until ` +
-        `${new Date(Number(until) * 1000).toISOString()}. Bounded and auto-expiring — retry.`
-    );
-  }
+  // NOTE: no sync-window pre-check any more. The module is not sync-gated —
+  // the window fences cross-chain bridge legs, and a single-chain redemption is
+  // priced at this chain's own `M_oku`, which is correct whatever a peer chain
+  // currently believes. Refusing to submit while a window was open was a
+  // self-imposed outage on the one path a holder most needs available.
 
   const moduleAddress = await (moduleContract as any).getAddress();
   const redeemableNow: bigint = await (moduleContract as any).redeemableNow();

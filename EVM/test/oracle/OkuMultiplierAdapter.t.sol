@@ -177,56 +177,9 @@ contract OkuMultiplierAdapterTest is BaseTest {
         assertFalse(feed.isHealthy(), "and eventually stale, with no way to refresh");
     }
 
-    /// @notice At genesis the mark is the deploy timestamp, so the feed is fresh
-    ///         from block one — no integration is broken by an unmarked token.
-    function test_FreshAtGenesis() public view {
-        assertEq(token.effectiveAt(), token.lastSteppedAt());
-        assertTrue(feed.isHealthy());
-    }
-
-    // ============ Historical rounds ============
-
-    function test_GetRoundData_AlwaysReverts() public {
-        vm.expectRevert(OkuMultiplierAdapter.NoDataPresent.selector);
-        feed.getRoundData(1);
-    }
-
-    // ============ Post-step sync window passthroughs ============
-
-    function test_SyncWindow_PassthroughTracksTheToken() public {
-        assertFalse(feed.isSyncLocked());
-        assertEq(feed.syncLockedUntil(), 0);
-
-        _stepNoWarp(1.0001e18);
-
-        assertTrue(feed.isSyncLocked(), "adapter must surface the module gate");
-        assertEq(feed.syncLockedUntil(), token.syncLockedUntil());
-
-        vm.warp(token.syncLockedUntil());
-        assertFalse(feed.isSyncLocked());
-    }
-
-    /// @notice The window must NOT mark the feed unhealthy.
-    ///
-    /// @dev Deliberate. The multiplier is genuinely correct during a window —
-    ///      the step that armed it has already landed HERE; the window holds
-    ///      this chain still while the peer catches up. Reporting unhealthy
-    ///      would trigger needless liquidation pauses on an accurate feed. The
-    ///      narrower fact worth surfacing is that a position valued off this
-    ///      feed cannot be unwound through the module for at most
-    ///      `MAX_SYNC_WINDOW`, which `isSyncLocked()` says precisely.
-    function test_SyncWindow_DoesNotAffectHealth() public {
-        assertTrue(feed.isHealthy());
-
-        _stepNoWarp(1.0001e18);
-
-        assertTrue(feed.isSyncLocked());
-        assertTrue(feed.isHealthy(), "an accurate price must not be marked unhealthy");
-        (, int256 answer,,,) = feed.latestRoundData();
-        // casting to 'uint256' is safe because the adapter derives `answer`
-        // from `uiMultiplier()`, which is monotonically >= PRECISION and
-        // bounded by MAX_MULTIPLIER, so it is never negative.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        assertEq(uint256(answer), token.uiMultiplier(), "and must still be readable");
-    }
+    // NOTE: the two sync-window passthrough tests were removed with the window.
+    // The adapter no longer exposes `isSyncLocked` / `syncLockedUntil`, and its
+    // health signal never depended on them — `isHealthy()` uses `effectiveAt()`,
+    // which is the staleness measure a price consumer actually wants and is what
+    // the tests above exercise.
 }

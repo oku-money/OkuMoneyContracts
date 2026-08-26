@@ -484,19 +484,20 @@ pub fn set_fees(ctx: Context<CapManagerParams>, tin_bps: u64, tout_bps: u64) -> 
 
     // ---- STEP-ARBITRAGE COVERAGE (the whole of it) ----
     //
-    // Each leg independently covers the largest step the protocol can take.
-    // Composed with `set_multiplier`'s `step_bps <= MAX_STEP_BPS` check, every
-    // admissible step is covered permanently, with no state.
+    // `tout_bps` covers the largest mark the program can take. Composed with
+    // `set_multiplier`'s `step_bps <= MAX_STEP_BPS` check, every admissible mark
+    // is covered permanently, with no stored state.
     //
-    // PER-LEG RATHER THAN COMBINED, and this is the reason: a cross-chain round
-    // trip pays `tin` on the chain it mints on and `tout` on the chain it
-    // redeems on. A combined `tin + tout` bound enforced separately on each
-    // chain does not bound that pair — `(0, 2x)` here and `(2x, 0)` on EVM both
-    // satisfy a combined check while the cross-chain round trip pays nothing.
+    // TOUT ONLY. The gain is realised on EXIT, and the only exit that drains the
+    // vault is `redeem_oku_m`, which always charges `tout_bps`:
     //
-    // Fails closed: the shipped `(0, 0)` is below the floor, so `set_fees` must
-    // be called once before any multiplier increase is possible.
-    require!(tin_bps >= MAX_STEP_BPS, LitePsmError::FeeBelowStepFloor);
+    //     net <= D(1 + s)(1 - tout) < D   for every s <= MAX_STEP_BPS <= tout
+    //
+    // `tin_bps` is irrelevant to the attack and has no floor, so deposits are
+    // free. That matters: permissionless frictionless entry is the product.
+    // An earlier revision floored both legs on a cross-chain leg-pairing
+    // argument that does not survive the observation above — whichever chain the
+    // attacker exits on charges its own `tout`.
     require!(tout_bps >= MAX_STEP_BPS, LitePsmError::FeeBelowStepFloor);
 
     let config = &mut ctx.accounts.config;

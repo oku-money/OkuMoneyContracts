@@ -107,8 +107,8 @@ contract SystemInvariantsTest is BaseTest {
     }
 
     /// @notice STEP COVERAGE, the economic invariant of the whole design, now
-    ///         stated unconditionally: each leg independently covers the largest
-    ///         step the protocol can take, at every reachable state.
+    ///         stated unconditionally: the EXIT fee covers the largest mark the
+    ///         protocol can take, at every reachable state.
     ///
     /// @dev No ghost flag and no escape clause, and that absence is the point.
     ///      The previous formulation was `tin + tout >= stepHighWaterMark`
@@ -120,8 +120,7 @@ contract SystemInvariantsTest is BaseTest {
     ///
     ///      Composed with `invariant_StepWithinBound` below, this is the full
     ///      no-profit condition.
-    function invariant_StepCoverageHoldsPerLeg() public view {
-        assertGe(module.tin(), Constants.MAX_STEP_BPS, "tin fell below the step floor");
+    function invariant_StepCoverageHoldsOnExit() public view {
         assertGe(module.tout(), Constants.MAX_STEP_BPS, "tout fell below the step floor");
     }
 
@@ -171,27 +170,24 @@ contract SystemInvariantsTest is BaseTest {
 
     // ============ Post-step sync window ============
 
-    /// @notice The window can never outlive its bound, from any reachable state.
+    /// @notice Marks are cadence-limited: no two land closer than
+    ///         `MIN_MARK_INTERVAL` apart.
     ///
-    /// @dev This is the property that keeps the mechanism from degenerating into
-    ///      an unbounded pause on a warmer key. The handler drives
-    ///      `stepMultiplier` (which arms) and `setSyncWindowDuration` in
-    ///      arbitrary interleavings, so if any path could stack or extend a
-    ///      window past `MAX_SYNC_WINDOW` the fuzzer should find it.
+    /// @dev Replaces `invariant_SyncWindowWithinBound`, which is gone with the
+    ///      window. This is the invariant that actually protects value: it is
+    ///      what turns `MAX_STEP_BPS` from a bound on one call into a bound on
+    ///      yield per unit TIME, and therefore what the exit fee is sized
+    ///      against. Without it a compromised rate setter could loop marks and
+    ///      compound past what any fee covers.
     ///
-    ///      Note this holds *by construction* now in a way it did not under the
-    ///      begin/end design: there is exactly one write site
-    ///      (`_armSyncWindow`), and it assigns rather than extends.
-    function invariant_SyncWindowWithinBound() public view {
-        uint256 lockedUntil = token.syncLockedUntil();
-        if (lockedUntil > block.timestamp) {
-            assertLe(
-                lockedUntil - block.timestamp,
-                Constants.MAX_SYNC_WINDOW,
-                "sync window exceeded its ceiling"
-            );
+    ///      Checked against the handler's observed minimum gap rather than
+    ///      against live state, because the live multiplier says nothing about
+    ///      how closely spaced the marks that produced it were.
+    function invariant_MarksRespectCadence() public view {
+        uint256 minGap = handler.ghostMinMarkGap();
+        if (minGap != type(uint256).max) {
+            assertGe(minGap, Constants.MIN_MARK_INTERVAL, "two marks landed too close together");
         }
-        assertLe(token.syncWindowDuration(), Constants.MAX_SYNC_WINDOW);
     }
 
     // ============ Display / value coherence ============

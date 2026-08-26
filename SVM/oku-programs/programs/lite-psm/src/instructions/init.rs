@@ -278,26 +278,28 @@ pub fn initialize(ctx: Context<Initialize>, params: InitializeParams) -> Result<
     config.sync_lock_until_ts = 0;
     config.sync_window_secs = DEFAULT_SYNC_WINDOW_SECS;
 
-    // PSM fees — ship AT THE STEP-COVERAGE FLOOR, not at zero.
+    // DEPOSITS ARE FREE. EXITS PAY THE MARK.
     //
-    // Load-bearing, not a convenience. `set_multiplier` does not read the fee
-    // schedule: coverage is guaranteed by the invariant `tin_bps, tout_bps >=
-    // MAX_STEP_BPS` holding at all times. Shipping zero would leave a window
-    // between `initialize` and the first `set_fees` in which steps were
-    // admissible and uncovered — precisely the arbitrage condition. There is no
-    // "installed but inert" state for this mechanism, and that is the point:
-    // the program is accrual-ready and covered from `initialize`, with no
-    // ordering an operator can get wrong.
+    // `tin_bps = 0` is the design, not a placeholder: the step-arbitrage gain is
+    // realised on exit, so `tout_bps` alone closes it and a deposit fee would
+    // only tax permissionless entry.
     //
-    // The earlier design shipped `(0, 0)` and relied on `step_is_covered`
-    // reading the schedule at write time and failing closed. That made a
-    // zero-fee deployment safe but non-accruing, i.e. a launch-blocking step
-    // someone had to remember. Cold can raise either leg later, never lower it
-    // below here.
+    // `tout_bps` ships AT the floor, and that IS load-bearing. `set_multiplier`
+    // does not read the fee schedule — coverage is guaranteed by
+    // `tout_bps >= MAX_STEP_BPS` holding at all times. Shipping `tout_bps = 0`
+    // would leave a window between `initialize` and the first `set_fees` in
+    // which marks were admissible and uncovered, which is precisely the
+    // arbitrage condition. So the program is accrual-ready and covered from
+    // `initialize`, with no ordering an operator can get wrong.
     //
     // EVM mirror: `SubscriptionModule.initialize`.
-    config.tin_bps = MAX_STEP_BPS;
+    config.tin_bps = 0;
     config.tout_bps = MAX_STEP_BPS;
+
+    // No mark taken yet. `0` means the first mark is not gated by the interval,
+    // which is the right behaviour: there is no prior mark to be too close to,
+    // and a fresh deployment should be able to establish its index immediately.
+    config.last_mark_ts = 0;
 
     // Two-step `role_admin` transfer slot — empty until
     // `set_authority(RoleAdmin, ...)` proposes a rotation.

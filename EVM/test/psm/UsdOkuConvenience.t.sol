@@ -125,17 +125,15 @@ contract UsdOkuConvenienceTest is BaseTest {
         vm.stopPrank();
     }
 
-    /// @notice NOT blocked during a sync window — the window gates the bridge
-    ///         legs only, and this is a single-chain path priced at the local
-    ///         `M_oku`.
-    /// @dev Inverted deliberately when the window was narrowed. Kept as a
-    ///      regression guard: re-gating this would take the one-transaction
-    ///      USDC->USDOku path offline after every mark, which is the outcome the
-    ///      narrowing exists to prevent.
-    function test_MintUsdOku_NotBlockedDuringSyncWindow() public {
+    /// @notice NOT blocked immediately after a mark.
+    /// @dev The one-transaction USDC->USDOku path must stay live at all times.
+    ///      It was briefly gated by the sync window; that window is gone on EVM
+    ///      entirely, and this is the regression guard against any time-based
+    ///      gate reappearing on a user-facing path. The only thing time-gated in
+    ///      this system now is the operator's mark.
+    function test_MintUsdOku_NotBlockedImmediatelyAfterAMark() public {
         uint256 current = token.uiMultiplier();
         _stepNoWarp(current + current / Constants.BASIS_POINTS);
-        assertTrue(token.isSyncLocked());
 
         usdc.mint(user1, 100e6);
         vm.startPrank(user1);
@@ -273,12 +271,13 @@ contract UsdOkuConvenienceTest is BaseTest {
         vm.stopPrank();
     }
 
-    /// @notice NOT blocked during a sync window. See the mint twin above.
-    function test_RedeemUsdOku_NotBlockedDuringSyncWindow() public {
+    /// @notice NOT blocked immediately after a mark. See the mint twin above.
+    ///         This is the more important of the two: a holder must always be
+    ///         able to exit.
+    function test_RedeemUsdOku_NotBlockedImmediatelyAfterAMark() public {
         uint256 out = _mintUsdOku(user1, 100e6);
         uint256 current = token.uiMultiplier();
         _stepNoWarp(current + current / Constants.BASIS_POINTS);
-        assertTrue(token.isSyncLocked());
 
         vm.startPrank(user1);
         usdOku.approve(address(module), out);

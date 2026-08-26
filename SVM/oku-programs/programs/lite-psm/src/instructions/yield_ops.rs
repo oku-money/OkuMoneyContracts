@@ -18,7 +18,7 @@ use crate::helpers::{arm_sync_window, check_yield_lock};
 use crate::state::PsmConfig;
 use anchor_lang::prelude::*;
 use anchor_spl::token_2022::spl_token_2022::extension::scaled_ui_amount::instruction::update_multiplier;
-use oku_shared::{step_bps_ceil, MAX_STEP_BPS};
+use oku_shared::{step_bps_ceil, MAX_STEP_BPS, MIN_MARK_INTERVAL_SECS};
 
 /// Write a new multiplier to the OkuM mint's ScaledUiAmountConfig extension
 /// via CPI, stamp the yield-distribution slot, and arm the cross-chain sync
@@ -56,10 +56,10 @@ fn write_multiplier_and_stamp<'info>(
     //
     // ---- STEP-ARBITRAGE COVERAGE (the whole of it) ----
     //
-    // Bound the step at `MAX_STEP_BPS` and stop. Coverage is not read from the
+    // Bound the mark at `MAX_STEP_BPS` and stop. Coverage is not read from the
     // fee schedule here and cannot fail, because `set_fees` enforces
-    // `tin_bps >= MAX_STEP_BPS` and `tout_bps >= MAX_STEP_BPS`: every step this
-    // check admits is covered on each leg independently, for all time.
+    // `tout_bps >= MAX_STEP_BPS` — and the exit leg is where the arbitrage gain
+    // would be realised.
     //
     // This replaces a `step_is_covered(tin + tout)` read plus a `max_step_bps`
     // high-water ratchet that floored later `set_fees` calls plus a cold
@@ -67,13 +67,32 @@ fn write_multiplier_and_stamp<'info>(
     // three and is strictly stronger — the ratchet only ever covered steps that
     // had actually been taken.
     //
-    // Ceiled, so a fractionally-oversized step cannot round its way through.
+    // Ceiled, so a fractionally-oversized mark cannot round its way through.
     let step_bps =
         step_bps_ceil(current_multiplier, new_multiplier).ok_or(LitePsmError::Overflow)?;
     require!(
         step_bps <= MAX_STEP_BPS,
         LitePsmError::StepAboveMax
     );
+
+    // ---- MARK CADENCE ----
+    //
+    // What makes the bound above a bound on yield per unit TIME rather than per
+    // call. Without it, `MAX_STEP_BPS` limits one mark while nothing limits how
+    // many land in a slot, so a compromised `rebaser` could loop this
+    // instruction and compound arbitrarily fast.
+    //
+    // `last_mark_ts == 0` (fresh deployment) is never too soon — there is no
+    // prior mark to be close to.
+    let now_ts = Clock::get()?.unix_timestamp;
+    if config.last_mark_ts != 0 {
+        let next_allowed = config
+            .last_mark_ts
+            .checked_add(MIN_MARK_INTERVAL_SECS)
+            .ok_or(LitePsmError::Overflow)?;
+        require!(now_ts >= next_allowed, LitePsmError::MarkTooSoon);
+    }
+    config.last_mark_ts = now_ts;
 
     let new_multiplier_f64 = new_multiplier as f64 / PRECISION as f64;
 

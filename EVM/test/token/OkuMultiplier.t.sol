@@ -37,6 +37,7 @@ contract OkuMultiplierTest is BaseTest {
     function test_Step_EqualValueReverts() public {
         _setFeesForStep(Constants.MAX_STEP_BPS);
         uint256 current = token.uiMultiplier();
+        _readyMark();
         vm.prank(rateSetter);
         vm.expectRevert(Errors.MultiplierCannotDecrease.selector);
         token.setOkuMultiplier(current);
@@ -46,6 +47,7 @@ contract OkuMultiplierTest is BaseTest {
         _setFeesForStep(Constants.MAX_STEP_BPS);
         _stepBy(50);
         uint256 current = token.uiMultiplier();
+        _readyMark();
         vm.prank(rateSetter);
         vm.expectRevert(Errors.MultiplierCannotDecrease.selector);
         token.setOkuMultiplier(current - 1);
@@ -69,6 +71,7 @@ contract OkuMultiplierTest is BaseTest {
         _setFeesForStep(Constants.MAX_STEP_BPS);
         uint256 current = token.uiMultiplier();
         uint256 tooFar = current + (current * (Constants.MAX_STEP_BPS + 1)) / Constants.BASIS_POINTS;
+        _readyMark();
         vm.prank(rateSetter);
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -84,6 +87,7 @@ contract OkuMultiplierTest is BaseTest {
         _setFeesForStep(Constants.MAX_STEP_BPS);
         uint256 current = token.uiMultiplier();
         uint256 target = current + (current * Constants.MAX_STEP_BPS) / Constants.BASIS_POINTS;
+        _readyMark();
         vm.prank(rateSetter);
         token.setOkuMultiplier(target);
         assertEq(token.uiMultiplier(), target);
@@ -95,6 +99,7 @@ contract OkuMultiplierTest is BaseTest {
         _setFeesForStep(Constants.MAX_STEP_BPS);
         uint256 current = token.uiMultiplier();
         uint256 target = current + (current * Constants.MAX_STEP_BPS) / Constants.BASIS_POINTS + 1;
+        _readyMark();
         vm.prank(rateSetter);
         vm.expectPartialRevert(ScaledUIAmountUpgradeable.StepAboveMaximum.selector);
         token.setOkuMultiplier(target);
@@ -108,6 +113,7 @@ contract OkuMultiplierTest is BaseTest {
 
         vm.expectEmit(address(token));
         emit ScaledUIAmountUpgradeable.OkuMultiplierStepped(old, old + 1, 1);
+        _readyMark();
         vm.prank(rateSetter);
         token.setOkuMultiplier(old + 1);
     }
@@ -119,6 +125,7 @@ contract OkuMultiplierTest is BaseTest {
     ///         would also have been oversized.
     function test_Step_AboveMaxMultiplierReverts() public {
         _setFeesForStep(Constants.MAX_STEP_BPS);
+        _readyMark();
         vm.prank(rateSetter);
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -161,9 +168,10 @@ contract OkuMultiplierTest is BaseTest {
     ///      reachable state with fees below the floor, so there is nothing for
     ///      the token to check and no ordering for an operator to get wrong.
     function test_Step_PossibleImmediatelyAtDeployFees() public {
-        assertEq(module.tin(), Constants.MAX_STEP_BPS, "tin ships at the floor");
-        assertEq(module.tout(), Constants.MAX_STEP_BPS, "tout ships at the floor");
+        assertEq(module.tin(), 0, "deposits ship free");
+        assertEq(module.tout(), Constants.MAX_STEP_BPS, "exits ship covered");
 
+        _readyMark();
         vm.prank(rateSetter);
         token.setOkuMultiplier(Constants.PRECISION + 1);
         assertEq(token.uiMultiplier(), Constants.PRECISION + 1);
@@ -177,7 +185,7 @@ contract OkuMultiplierTest is BaseTest {
     ///      the Hardhat suite via ABI introspection.
     function test_Step_NoFeeSourceCoupling() public view {
         // The step bound is a constant, readable without touching the module.
-        assertEq(Constants.MAX_STEP_BPS, 5, "provisional daily-cadence value");
+        assertEq(Constants.MAX_STEP_BPS, 2, "provisional 6-hourly-cadence value");
         assertLe(Constants.MAX_STEP_BPS, Constants.MAX_FEE_BPS);
     }
 
@@ -196,6 +204,7 @@ contract OkuMultiplierTest is BaseTest {
         uint256 yieldAmount = 100e18; // $100 across 1,000,000 raw = 1 bp
         uint256 expected = token.uiMultiplier() + (yieldAmount * Constants.PRECISION) / supply;
 
+        _readyMark();
         vm.prank(rateSetter);
         uint256 got = token.distributeYield(yieldAmount);
 
@@ -215,6 +224,7 @@ contract OkuMultiplierTest is BaseTest {
 
         vm.expectEmit(address(token));
         emit OkuM.YieldDistributed(yieldAmount, supply, expected);
+        _readyMark();
         vm.prank(rateSetter);
         token.distributeYield(yieldAmount);
     }
@@ -227,6 +237,7 @@ contract OkuMultiplierTest is BaseTest {
         // Enough dollars to imply a step above the ceiling.
         uint256 tooMuch = (1_000_000e18 * (Constants.MAX_STEP_BPS + 2)) / Constants.BASIS_POINTS;
 
+        _readyMark();
         vm.prank(rateSetter);
         vm.expectPartialRevert(ScaledUIAmountUpgradeable.StepAboveMaximum.selector);
         token.distributeYield(tooMuch);
@@ -239,28 +250,50 @@ contract OkuMultiplierTest is BaseTest {
         vm.prank(guardian);
         token.haltAccrual();
 
+        _readyMark();
         vm.prank(rateSetter);
         vm.expectRevert(OkuM.AccrualIsHalted.selector);
         token.distributeYield(100e18);
     }
 
-    /// @notice Arms the sync window, exactly as `setOkuMultiplier` does — a step
-    ///         must never land unfenced regardless of which entry point took it.
-    function test_DistributeYield_ArmsSyncWindow() public {
+    /// @notice Subject to `MIN_MARK_INTERVAL`, exactly as `setOkuMultiplier`
+    ///         is — the cadence bound must not have a second door around it.
+    function test_DistributeYield_RespectsMarkInterval() public {
         vm.prank(minter);
         token.mint(user1, 1_000_000e18);
 
+        _readyMark();
         vm.prank(rateSetter);
         token.distributeYield(100e18);
-        assertTrue(token.isSyncLocked());
+
+        // A second mark immediately after is refused, whichever entry point
+        // takes it. Deliberately NO `_readyMark()` here — the whole point is
+        // that the clock has not advanced.
+        vm.prank(rateSetter);
+        vm.expectPartialRevert(OkuM.MarkTooSoon.selector);
+        token.distributeYield(100e18);
+
+        // Read BEFORE the cheatcode: an external call in argument position
+        // consumes `vm.expectPartialRevert`, exactly as it consumes `vm.prank`.
+        uint256 nudge = token.uiMultiplier() + 1;
+        vm.prank(rateSetter);
+        vm.expectPartialRevert(OkuM.MarkTooSoon.selector);
+        token.setOkuMultiplier(nudge);
+
+        _warpPastMarkInterval();
+        _readyMark();
+        vm.prank(rateSetter);
+        token.distributeYield(100e18);
     }
 
     /// @notice A no-op must fail loudly rather than stamp `lastSteppedAt` and
-    ///         re-arm the window for free. Mirrors SVM's `YieldTooSmall`.
+    ///         consume the cadence budget for free. Mirrors SVM's
+    ///         `YieldTooSmall`.
     function test_DistributeYield_TooSmallToMoveIndexReverts() public {
         vm.prank(minter);
         token.mint(user1, 1_000_000e18);
 
+        _readyMark();
         vm.prank(rateSetter);
         vm.expectPartialRevert(OkuM.YieldTooSmall.selector);
         token.distributeYield(1); // 1 wei across 1e24 raw floors to 0
@@ -270,6 +303,7 @@ contract OkuMultiplierTest is BaseTest {
         vm.prank(minter);
         token.mint(user1, 1_000_000e18);
 
+        _readyMark();
         vm.prank(rateSetter);
         vm.expectRevert(Errors.ZeroAmount.selector);
         token.distributeYield(0);
@@ -280,6 +314,7 @@ contract OkuMultiplierTest is BaseTest {
     ///         operator can tell "mint first" from "send more".
     function test_DistributeYield_ZeroSupplyReverts() public {
         assertEq(token.totalSupply(), 0);
+        _readyMark();
         vm.prank(rateSetter);
         vm.expectRevert(OkuM.NoSupplyToDistributeTo.selector);
         token.distributeYield(100e18);
@@ -303,11 +338,17 @@ contract OkuMultiplierTest is BaseTest {
         token.mint(user1, 3e18); // an awkward divisor
 
         uint256 before = token.uiMultiplier();
+        // Sized under `MAX_STEP_BPS`: 2 bps of 3e18 raw at M = 1.0 is 6e14, so
+        // 4e14 leaves headroom while still not dividing evenly.
+        uint256 yieldAmount = 4e14;
+        _readyMark();
         vm.prank(rateSetter);
-        token.distributeYield(1e15);
+        token.distributeYield(yieldAmount);
 
         uint256 delta = token.uiMultiplier() - before;
-        assertLe(delta * 3e18 / Constants.PRECISION, 1e15, "never distributes more than given");
+        assertLe(
+            delta * 3e18 / Constants.PRECISION, yieldAmount, "never distributes more than given"
+        );
     }
 
     // ============ Guardian halt ============
@@ -321,6 +362,7 @@ contract OkuMultiplierTest is BaseTest {
         token.haltAccrual();
         assertTrue(token.accrualHalted());
 
+        _readyMark();
         vm.prank(rateSetter);
         vm.expectRevert(OkuM.AccrualIsHalted.selector);
         token.setOkuMultiplier(Constants.PRECISION + 1);
@@ -338,19 +380,23 @@ contract OkuMultiplierTest is BaseTest {
         token.resumeAccrual();
         assertFalse(token.accrualHalted());
 
+        _readyMark();
         vm.prank(rateSetter);
         token.setOkuMultiplier(Constants.PRECISION + 1);
         assertEq(token.uiMultiplier(), Constants.PRECISION + 1);
     }
 
-    /// @notice A halt must not arm the sync window: nothing about the current
-    ///         multiplier changed, and arming would hand the warm guardian key a
-    ///         repeatable mint/redeem block the RBAC model denies it.
-    function test_HaltAccrual_DoesNotArmWindow() public {
+    /// @notice A halt does not consume the mark cadence: nothing about the
+    ///         current multiplier changed, so `lastSteppedAt` must not move.
+    ///         Otherwise the warm guardian key could delay the next legitimate
+    ///         mark by an hour at will — a withhold power the RBAC model does
+    ///         not grant it.
+    function test_HaltAccrual_DoesNotConsumeMarkCadence() public {
+        uint256 before = token.lastSteppedAt();
         vm.prank(guardian);
         token.haltAccrual();
-        assertFalse(token.isSyncLocked());
-        assertEq(token.syncLockedUntil(), 0);
+        assertEq(token.lastSteppedAt(), before, "halting is not a mark");
+        assertEq(token.nextMarkAllowedAt(), before + Constants.MIN_MARK_INTERVAL);
     }
 
     /// @notice Monotone-safe: the guardian can only withhold, never reduce.
@@ -404,19 +450,18 @@ contract OkuMultiplierTest is BaseTest {
 
     // ============ Events ============
 
-    function test_Step_EmitsAllThreeEvents() public {
-        _setFeesForStep(Constants.MAX_STEP_BPS);
+    /// @dev Two events now, not three — `SyncWindowArmed` went with the window.
+    function test_Step_EmitsBothEvents() public {
+        _warpPastMarkInterval();
         uint256 old = token.uiMultiplier();
         uint256 target = old + (old * Constants.MAX_STEP_BPS) / Constants.BASIS_POINTS;
-        uint256 expectedLock = block.timestamp + token.syncWindowDuration();
 
         vm.expectEmit(address(token));
         emit ScaledUIAmountUpgradeable.OkuMultiplierStepped(old, target, Constants.MAX_STEP_BPS);
         vm.expectEmit(address(token));
         emit IScaledUIAmount.UIMultiplierUpdated(old, target, block.timestamp);
-        vm.expectEmit(address(token));
-        emit OkuM.SyncWindowArmed(expectedLock);
 
+        _readyMark();
         vm.prank(rateSetter);
         token.setOkuMultiplier(target);
     }
@@ -429,6 +474,7 @@ contract OkuMultiplierTest is BaseTest {
         _setFeesForStep(Constants.MAX_STEP_BPS);
         vm.prank(pauser);
         token.pause();
+        _readyMark();
         vm.prank(rateSetter);
         token.setOkuMultiplier(Constants.PRECISION + Constants.PRECISION / 10_000);
         assertGt(token.uiMultiplier(), Constants.PRECISION);
@@ -447,9 +493,9 @@ contract OkuMultiplierTest is BaseTest {
     function test_Step_PendingEqualsLiveAndEffectiveAtIsNow() public {
         _stepBy(25);
         assertEq(token.uiMultiplier(), token.newUIMultiplier(), "steps are immediate");
-        // `_step` warps to the end of the sync window; `effectiveAt` stays at
-        // the write timestamp.
-        assertEq(token.effectiveAt(), block.timestamp - token.syncWindowDuration());
+        // `_step` warps past the mark interval AFTER writing, so `effectiveAt`
+        // sits one interval behind now.
+        assertEq(token.effectiveAt(), block.timestamp - Constants.MIN_MARK_INTERVAL);
         assertEq(token.lastSteppedAt(), token.effectiveAt());
     }
 
@@ -460,6 +506,7 @@ contract OkuMultiplierTest is BaseTest {
         _setFeesForStep(bps);
         uint256 old = token.uiMultiplier();
         uint256 target = old + (old * bps) / Constants.BASIS_POINTS;
+        _readyMark();
         vm.prank(rateSetter);
         token.setOkuMultiplier(target);
         assertEq(token.uiMultiplier(), target);

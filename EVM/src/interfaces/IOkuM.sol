@@ -15,8 +15,8 @@ import {IScaledUIAmountBalances} from "./erc8056/IScaledUIAmountBalances.sol";
  *        - `IERC20`                       — the raw accounting layer
  *        - `IScaledUIAmount` + extensions — the ERC-8056 display layer
  *      and adds only what is unique to this token: the value-layer anchor
- *      (`asset`, `usdcDecimalMultiplier`), the sync-window views, and the
- *      role-gated supply hooks the module, queue and wrapper call.
+ *      (`asset`, `usdcDecimalMultiplier`) and the role-gated supply hooks the
+ *      module, queue and wrapper call.
  */
 interface IOkuM is IERC20, IScaledUIAmount, IScaledUIAmountConversion, IScaledUIAmountBalances {
     // ============ Value-layer anchor ============
@@ -29,26 +29,6 @@ interface IOkuM is IERC20, IScaledUIAmount, IScaledUIAmountConversion, IScaledUI
 
     /// @notice `10 ** (18 - IERC20Metadata(asset()).decimals())`. `1e12` for Circle USDC.
     function usdcDecimalMultiplier() external view returns (uint256);
-
-    // ============ Post-step sync window ============
-
-    /// @notice True while a multiplier step is propagating across chains.
-    /// @dev Armed automatically by every `setOkuMultiplier` write. Read by the
-    ///      module, queue path and wrapper to gate every operation that converts
-    ///      value through the multiplier. Lives on the token because the token
-    ///      owns the multiplier authority, so the dependency points
-    ///      consumer -> token rather than the reverse.
-    ///
-    ///      Bounded and auto-expiring by construction (`MAX_SYNC_WINDOW`), so a
-    ///      consumer can treat a `true` here as transient rather than as an
-    ///      indefinite outage.
-    function isSyncLocked() external view returns (bool);
-
-    /// @notice Exclusive timestamp at which the current sync window lifts.
-    /// @dev Surfaced so a blocked caller can be told when to retry, rather than
-    ///      having to poll. Only read on the revert path, so it costs nothing on
-    ///      a successful call.
-    function syncLockedUntil() external view returns (uint256);
 
     // ============ Supply hooks (role-gated) ============
 

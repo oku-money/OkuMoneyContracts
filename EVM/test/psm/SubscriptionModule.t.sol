@@ -59,6 +59,7 @@ contract SubscriptionModuleTest is BaseTest {
 
     function test_Mint_ZeroReverts() public {
         vm.prank(user1);
+        _readyMark();
         vm.expectRevert(Errors.ZeroAmount.selector);
         module.mint(0);
     }
@@ -81,13 +82,12 @@ contract SubscriptionModuleTest is BaseTest {
         // whatever a previous step left configured. Zero is not reachable —
         // see `_minFees`. Fee-inclusive behaviour is `FeesTest`'s job.
         _minFees();
-        // A single 6dp unit is entirely consumed by the ceil-rounded `tin` at
-        // any nonzero fee, so the smallest mint that yields raw is now larger
-        // than one unit. That is a real consequence of the mandatory fee floor,
-        // not a rounding bug: `AmountTooSmall` is the module's guard for it.
-        assertEq(_afterTin(1), 0, "one unit is fully consumed by the fee");
-        uint256 smallest = Constants.BASIS_POINTS / Constants.MAX_STEP_BPS;
-        assertGt(module.quoteMint(smallest), 0, "but a fee-surviving amount still mints");
+        // `tin` ships at ZERO, so a single 6dp unit survives the fee leg intact
+        // and still mints. This is a direct product consequence of flooring only
+        // the exit leg: the smallest possible deposit is not taxed out of
+        // existence on the way in.
+        assertEq(_afterTin(1), 1, "no mint fee, so one unit survives");
+        assertGt(module.quoteMint(1), 0, "6dp USDC cannot floor to zero raw");
         assertLt(Constants.MAX_MULTIPLIER, DM * Constants.PRECISION, "1e24 < 1e30");
         assertLt(Constants.MAX_MULTIPLIER, DM * Constants.PRECISION, "1e24 < 1e30");
     }
@@ -143,10 +143,12 @@ contract SubscriptionModuleTest is BaseTest {
         // non-floor schedule against an 18dp asset.
         p.setFees(Constants.MAX_FEE_BPS, Constants.MAX_FEE_BPS);
         vm.stopPrank();
-
+        // `t` is a fresh deployment: `initialize` stamped its own
+        // `lastSteppedAt`, so its first mark is cadence-gated too.
+        vm.warp(block.timestamp + Constants.MIN_MARK_INTERVAL);
         vm.prank(rateSetter);
-        t.setOkuMultiplier((Constants.PRECISION * 10_005) / 10_000); // 5 bps == MAX_STEP_BPS
-        vm.warp(block.timestamp + t.syncWindowDuration());
+        t.setOkuMultiplier((Constants.PRECISION * 10_002) / 10_000); // 2 bps == MAX_STEP_BPS
+        vm.warp(block.timestamp + Constants.MIN_MARK_INTERVAL);
         assertGt(t.uiMultiplier(), Constants.PRECISION);
 
         asset18.mint(user1, 10);

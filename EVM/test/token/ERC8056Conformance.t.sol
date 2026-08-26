@@ -185,14 +185,14 @@ contract ERC8056ConformanceTest is BaseTest {
     function test_ImmediateStep_PendingAlwaysEqualsLive() public {
         assertEq(token.uiMultiplier(), token.newUIMultiplier(), "genesis");
 
-        _stepNoWarp(1.0005e18);
-        assertEq(token.uiMultiplier(), 1.0005e18, "step is live in its own block");
-        assertEq(token.newUIMultiplier(), 1.0005e18, "pending == live in the write block");
+        _stepNoWarp(1.0002e18);
+        assertEq(token.uiMultiplier(), 1.0002e18, "step is live in its own block");
+        assertEq(token.newUIMultiplier(), 1.0002e18, "pending == live in the write block");
         assertEq(token.effectiveAt(), block.timestamp, "effectiveAt is the write timestamp");
 
         vm.warp(block.timestamp + 365 days);
         assertEq(token.uiMultiplier(), token.newUIMultiplier(), "and forever after");
-        assertEq(token.uiMultiplier(), 1.0005e18, "stepwise: flat between steps");
+        assertEq(token.uiMultiplier(), 1.0002e18, "stepwise: flat between steps");
     }
 
     /// @notice `effectiveAt()` tracks the LAST step, not any schedule.
@@ -201,7 +201,7 @@ contract ERC8056ConformanceTest is BaseTest {
         assertEq(token.effectiveAt(), t0);
 
         _stepBy(10); // steps now, then warps past the window
-        uint256 stepTs = block.timestamp - token.syncWindowDuration();
+        uint256 stepTs = block.timestamp - Constants.MIN_MARK_INTERVAL;
         assertEq(token.effectiveAt(), stepTs);
 
         vm.warp(block.timestamp + 30 days);
@@ -221,6 +221,7 @@ contract ERC8056ConformanceTest is BaseTest {
     function test_UIMultiplierUpdated_EmittedOnEveryStep() public {
         _setFeesForStep(10);
         vm.recordLogs();
+        _readyMark();
         vm.prank(rateSetter);
         token.setOkuMultiplier(1.0001e18); // 1 bps: inside MAX_STEP_BPS
 

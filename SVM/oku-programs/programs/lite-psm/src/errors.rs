@@ -197,8 +197,16 @@ pub enum LitePsmError {
     ///
     /// Each leg must independently cover the largest admissible step, because a
     /// cross-chain round trip pays `tin` on one chain and `tout` on the other.
-    #[msg("Proposed fee is below the per-leg step-coverage floor (MAX_STEP_BPS)")]
+    #[msg("Proposed tout_bps is below the step-coverage floor (MAX_STEP_BPS)")]
     FeeBelowStepFloor,
+
+    /// A mark was attempted less than `MIN_MARK_INTERVAL_SECS` after the last.
+    ///
+    /// Bounds yield per unit TIME rather than per call. Not an
+    /// incident-response obstacle: pausing and the guardian levers are separate
+    /// and ungated.
+    #[msg("Multiplier mark attempted too soon after the previous one")]
+    MarkTooSoon,
 }
 
 // NOTE: `StepExceedsFeeCoverage` and `FeeBelowStepHighWaterMark` were removed

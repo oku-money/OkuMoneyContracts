@@ -107,32 +107,6 @@ contract OkuM is
         }
     }
 
-    /// @dev Post-step sync window. Lives in its own namespace, and on the token
-    ///      rather than the module, because the multiplier authority is here:
-    ///      fail-closed arming is a local write rather than a token -> module
-    ///      call, which would invert the dependency direction.
-    ///
-    ///      Two `uint64`s pack into a single slot. `uint64` seconds overflows in
-    ///      year ~584 billion.
-    /// @custom:storage-location erc7201:okumoney.storage.SyncWindow
-    struct SyncWindowStorage {
-        /// @dev Exclusive: the first timestamp at which the window is no longer
-        ///      engaged. `0` = never armed.
-        uint64 lockedUntil;
-        /// @dev Configured window length in seconds. `0` = inert.
-        uint64 duration;
-    }
-
-    // keccak256(abi.encode(uint256(keccak256("okumoney.storage.SyncWindow")) - 1)) & ~bytes32(uint256(0xff))
-    bytes32 private constant SYNCWINDOW_STORAGE_LOCATION =
-        0xf060659b9b87033111ee98a1780759ec75c780b1b57099783a2cb524034dd300;
-
-    function _getSyncWindowStorage() private pure returns (SyncWindowStorage storage $) {
-        assembly {
-            $.slot := SYNCWINDOW_STORAGE_LOCATION
-        }
-    }
-
     // ============ Errors ============
 
     error ExceedsSupplyCap(uint256 requested, uint256 cap);
@@ -145,8 +119,12 @@ contract OkuM is
     error NotBlacklisted();
     /// @notice The configured asset reports more decimals than supported (>18).
     error AssetDecimalsTooLarge(uint8 reported);
-    /// @notice Proposed sync-window duration exceeds `MAX_SYNC_WINDOW`.
-    error SyncWindowTooLong(uint256 requested, uint256 maximum);
+    /// @notice A mark was attempted less than `MIN_MARK_INTERVAL` after the last.
+    /// @dev Bounds yield per unit TIME rather than per call. Without it,
+    ///      `MAX_STEP_BPS` bounds one step while nothing bounds how many land in
+    ///      a block. Not an incident-response obstacle: `haltAccrual` is
+    ///      separate, immediate and ungated.
+    error MarkTooSoon(uint256 nextAllowedAt);
     /// @notice The guardian halted stepping; `resumeAccrual` (cold) lifts it.
     error AccrualIsHalted();
     /// @notice `distributeYield` called with zero supply outstanding.
@@ -167,11 +145,6 @@ contract OkuM is
     event MaxSupplyUpdated(uint256 oldMaxSupply, uint256 newMaxSupply);
     event Blacklisted(address indexed account);
     event Unblacklisted(address indexed account);
-
-    /// @notice A multiplier step armed the post-step sync window.
-    /// @param lockedUntil Exclusive timestamp at which the window lifts.
-    event SyncWindowArmed(uint256 lockedUntil);
-    event SyncWindowDurationUpdated(uint256 oldDuration, uint256 newDuration);
 
     /// @notice The guardian blocked further steps.
     /// @param atMultiplier The multiplier frozen in place.
@@ -234,15 +207,23 @@ contract OkuM is
 
         $.maxSupply = initialMaxSupply;
 
-        // Sync window ships ON — see `Constants.DEFAULT_SYNC_WINDOW`.
-        _getSyncWindowStorage().duration = uint64(Constants.DEFAULT_SYNC_WINDOW);
-
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(Roles.OKU_UPGRADER, _admin);
         _grantRole(Roles.OKU_PAUSER, _admin);
         _grantRole(Roles.OKU_UNPAUSER, _admin);
-        _grantRole(Roles.OKU_MINTER, _admin);
-        _grantRole(Roles.OKU_BURNER, _admin);
+        // OKU_MINTER / OKU_BURNER are DELIBERATELY NOT GRANTED HERE.
+        //
+        // Supply authority belongs to contracts, never to an EOA. The module and
+        // the queue receive it post-deploy, exactly as `QUEUE_PSM` does. The
+        // deploy admin previously received both and had to be revoked, which
+        // made "no EOA can mint" a property of a script assertion in
+        // `grantRolesMainnet.ts` rather than of the contract.
+        //
+        // Neither grant was an arbitrage vector — `mint` is defused by
+        // `minterAllowance` defaulting to 0, and `burn` only destroys the
+        // caller's own balance — but privilege residue that has to be cleaned
+        // up is worse than privilege never issued. `_admin` retains
+        // DEFAULT_ADMIN_ROLE and can therefore grant either role deliberately.
         _grantRole(Roles.OKU_RATE_SETTER, _admin);
         _grantRole(Roles.OKU_GUARDIAN, _admin);
         _grantRole(Roles.OKU_BLACKLISTER, _admin);
@@ -364,30 +345,27 @@ contract OkuM is
     ///
     ///        - monotonicity (`MultiplierCannotDecrease`)
     ///        - `MAX_STEP_BPS` per step (`StepAboveMaximum`)
+    ///        - `MIN_MARK_INTERVAL` between steps (`MarkTooSoon`)
     ///        - `MAX_MULTIPLIER` cumulative (`MultiplierAboveMaximum`)
     ///        - the guardian halt flag (`AccrualIsHalted`)
     ///
     ///      FEE COVERAGE IS NOT CHECKED HERE, because it cannot fail.
-    ///      `SubscriptionModule.setFees` enforces `tin >= MAX_STEP_BPS` and
-    ///      `tout >= MAX_STEP_BPS`, and this function enforces
-    ///      `stepBps <= MAX_STEP_BPS`, so every admissible step is covered on
-    ///      each leg independently, for all time. The earlier design read
-    ///      `tin() + tout()` back from the module here and ratcheted a
-    ///      high-water mark to stop fees dropping afterwards; the static floor
+    ///      `SubscriptionModule.setFees` enforces `tout >= MAX_STEP_BPS` and
+    ///      this function enforces `stepBps <= MAX_STEP_BPS`, so the exit fee
+    ///      always covers the largest mark the protocol can take. The earlier
+    ///      design read `tin() + tout()` back from the module here and ratcheted
+    ///      a high-water mark to stop fees dropping afterwards; the static floor
     ///      makes both redundant and is strictly stronger.
+    ///
+    ///      The bound is per-step; `MIN_MARK_INTERVAL` is what makes it a bound
+    ///      per unit time, and therefore what the fee is actually sized against.
     ///
     ///      NOT pause-gated, by design: correcting the multiplier during an
     ///      incident must always be possible.
-    ///
-    ///      Arms the post-step sync window unconditionally (when a nonzero
-    ///      duration is configured), so a step can never land unfenced. There is
-    ///      no separate begin/end protocol: each chain fences itself on its own
-    ///      write, and cross-chain parity is verified off-chain by comparing
-    ///      multiplier values directly.
     function setOkuMultiplier(uint256 newMultiplier) external onlyRole(Roles.OKU_RATE_SETTER) {
         if (_getOkuMStorage().accrualHalted) revert AccrualIsHalted();
+        _enforceMarkInterval();
         _stepMultiplier(newMultiplier);
-        _armSyncWindow();
     }
 
     /// @notice Distribute `yieldAmount` of dollar-denominated yield across all
@@ -411,6 +389,10 @@ contract OkuM is
         if (_getOkuMStorage().accrualHalted) {
             revert AccrualIsHalted();
         }
+        // Same cadence bound as `setOkuMultiplier`. This entry point must not be
+        // a second door around it, or the rate limit would be trivially
+        // bypassable by alternating the two.
+        _enforceMarkInterval();
         if (yieldAmount == 0) revert Errors.ZeroAmount();
 
         uint256 supply = totalSupply();
@@ -426,7 +408,6 @@ contract OkuM is
         // `_stepMultiplier` re-applies monotonicity, `MAX_STEP_BPS` and
         // `MAX_MULTIPLIER`; `delta > 0` already guarantees the first.
         _stepMultiplier(newMultiplier);
-        _armSyncWindow();
 
         emit YieldDistributed(yieldAmount, supply, newMultiplier);
     }
@@ -451,88 +432,41 @@ contract OkuM is
         emit AccrualResumed(uiMultiplier());
     }
 
-    // ============ Post-step sync window ============
-    //
-    // `M_oku` steps on every chain in the same orchestrator tick, and the tick
-    // is not atomic across chains. Every `setOkuMultiplier` write arms a
-    // bounded, auto-expiring window recording that fact. There is no close
-    // call, no epoch, and no cross-chain bookkeeping; off-chain parity
-    // verification compares the multiplier VALUES (`check-sync-parity.ts`),
-    // which equal epochs never actually proved.
-    //
-    // WHAT IT GATES ON THIS CHAIN TODAY: NOTHING. Stated plainly because the
-    // alternative is protection that looks present and is not.
-    //
-    // The window's purpose is to fence value crossing a multiplier boundary
-    // between chains. Raw is conserved per-instruction, but a cross-chain PAIR
-    // prices: burning 100 raw where M=1.04 destroys $104 of claim while minting
-    // 100 raw where M=1.05 creates $105, conjuring $1 from a mid-tick
-    // divergence. On SVM that pair has dedicated instructions
-    // (`mint_oku_m_direct` / `burn_oku_m_direct`) and they ARE gated.
-    //
-    // EVM has no such instruction. `mint` and `burn` here are the shared supply
-    // hooks the module and the queue use for ordinary local subscription and
-    // redemption, so gating them would gate the entire PSM — a 60-second outage
-    // on every mint and redeem after every mark, to protect a bridge that does
-    // not exist yet. An earlier draft of this refactor did exactly that before
-    // the transitive effect was noticed.
-    //
-    // So on EVM the window is an ADVISORY SIGNAL: `isSyncLocked()` and
-    // `syncLockedUntil()` are exposed for monitoring and for the bridge adapter
-    // that will consult them. WHEN AN EVM BRIDGE IS BUILT IT MUST GATE ON
-    // `isSyncLocked()`, and it should do so in its own contract rather than by
-    // adding the modifier back here. Tracked in TRACKER.md.
-    //
-    // A time lock is the right tool for cross-chain divergence and the wrong
-    // tool for step arbitrage, because the two edges differ in kind: divergence
-    // is transient and self-correcting (once the lagging chain ticks the edge is
-    // zero), whereas a step's gain is permanent and waiting costs the attacker
-    // nothing. Hence a lock for the bridge, a fee floor for the steps.
+    // ============ Mark interval ============
 
-    /// @notice True while the post-step sync window is engaged.
-    /// @dev Exclusive upper bound. A zero-length window is therefore genuinely
-    ///      inert rather than blocking the remainder of the current second.
-    function isSyncLocked() public view returns (bool) {
-        return block.timestamp < uint256(_getSyncWindowStorage().lockedUntil);
+    /// @notice Earliest timestamp at which the next mark may land.
+    /// @dev Surfaced so an orchestrator can schedule against it rather than
+    ///      discovering `MarkTooSoon` on submission.
+    function nextMarkAllowedAt() external view returns (uint256) {
+        return effectiveAt() + Constants.MIN_MARK_INTERVAL;
     }
 
-    /// @notice Exclusive timestamp at which the current window lifts.
-    function syncLockedUntil() external view returns (uint256) {
-        return uint256(_getSyncWindowStorage().lockedUntil);
+    /// @dev Reject a mark landing sooner than `MIN_MARK_INTERVAL` after the last.
+    ///
+    ///      Reads the timestamp stored anyway for ERC-8056's `effectiveAt()`
+    ///      (aliased as `lastSteppedAt()`), so this control costs one comparison
+    ///      and no additional state. `__ScaledUIAmount_init` stamps it at
+    ///      deployment, so the first mark is gated rather than free.
+    function _enforceMarkInterval() internal view {
+        uint256 nextAllowed = effectiveAt() + Constants.MIN_MARK_INTERVAL;
+        if (block.timestamp < nextAllowed) revert MarkTooSoon(nextAllowed);
     }
 
-    /// @notice Configured window length in seconds. `0` = inert.
-    function syncWindowDuration() external view returns (uint256) {
-        return uint256(_getSyncWindowStorage().duration);
-    }
-
-    /// @notice Set the sync-window length in seconds. `0` disables the window.
-    /// @dev `OKU_CAP_MANAGER` (cold) — this is economic/safety policy, the same
-    ///      class as `setMaxSupply`, so it reuses that role rather than adding
-    ///      one. Bounded by `MAX_SYNC_WINDOW`, so no key can turn this into an
-    ///      indefinite block: worst case, a compromised rate setter re-arming on
-    ///      every write still cannot hold a single window longer than 15 minutes.
-    function setSyncWindowDuration(uint256 newDuration) external onlyRole(Roles.OKU_CAP_MANAGER) {
-        if (newDuration > Constants.MAX_SYNC_WINDOW) {
-            revert SyncWindowTooLong(newDuration, Constants.MAX_SYNC_WINDOW);
-        }
-        SyncWindowStorage storage $ = _getSyncWindowStorage();
-        uint256 old = uint256($.duration);
-        // casting to 'uint64' is safe because the bound check immediately above
-        // caps `newDuration` at `MAX_SYNC_WINDOW` (15 minutes).
-        // forge-lint: disable-next-line(unsafe-typecast)
-        $.duration = uint64(newDuration);
-        emit SyncWindowDurationUpdated(old, newDuration);
-    }
-
-    /// @dev Arm the window. Writes nothing when `duration == 0`, so an inert
-    ///      configuration never emits a window event.
-    function _armSyncWindow() internal {
-        SyncWindowStorage storage $ = _getSyncWindowStorage();
-        if ($.duration == 0) return;
-        $.lockedUntil = uint64(block.timestamp + $.duration);
-        emit SyncWindowArmed($.lockedUntil);
-    }
+    // ============ Post-step sync window — REMOVED ============
+    //
+    // The window gated nothing on this chain. It was narrowed to "bridge legs",
+    // and EVM has no bridge leg: `mint` and `burn` here are the shared supply
+    // hooks the module and queue use for ordinary local subscription and
+    // redemption, so gating them would gate the entire PSM. An earlier draft of
+    // this refactor did exactly that before the transitive effect was noticed.
+    //
+    // Nothing is lost. A future bridge adapter reproduces it in one line, in its
+    // own contract, using state we store anyway for ERC-8056:
+    //
+    //     if (block.timestamp < okuM.lastSteppedAt() + PROPAGATION_BUDGET) revert;
+    //
+    // SVM keeps its window, where it gates two dedicated bridge instructions
+    // that genuinely move value across a multiplier boundary as a pair.
 
     // ============ ERC-20 hook: pause + blacklist + UI event ============
 

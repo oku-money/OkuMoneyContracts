@@ -158,6 +158,23 @@ pub struct PsmConfig {
 
     /// Redemption fee in basis points, charged on the USDC paid out.
     pub tout_bps: u64,
+
+    /// Unix timestamp of the last multiplier mark. `0` until the first one.
+    ///
+    /// Backs `MIN_MARK_INTERVAL_SECS`, which is what makes `MAX_STEP_BPS` a
+    /// bound on yield per unit TIME rather than per call. Without it a
+    /// compromised `rebaser` could loop `set_multiplier` — each call
+    /// individually legal — and compound the multiplier arbitrarily fast.
+    ///
+    /// WALL-CLOCK, deliberately, and therefore NOT a reuse of
+    /// `last_yield_distribution_slot`. That field is a same-slot reentrancy
+    /// fence measured in slots; this is a cadence control measured in seconds,
+    /// and slot times stretch under exactly the congestion that would delay a
+    /// mark. Two mechanisms, two units, both correct for their own property.
+    ///
+    /// EVM mirror: `OkuM` reads `effectiveAt()`, which ERC-8056 makes it store
+    /// anyway — so EVM needs no extra field where SVM does.
+    pub last_mark_ts: i64,
 }
 
 impl PsmConfig {
@@ -199,11 +216,12 @@ impl PsmConfig {
 //            allowance_manager, rebaser, direct_minter, direct_burner)
 //         1  pending_role_admin
 //         3  token refs (usdc_mint, oku_m_mint, vault_usdc)
-//   72  9 8-byte scalars (u64/i64):
+//   80  10 8-byte scalars (u64/i64):
 //         5 pre-existing (max_supply, minter_allowance,
 //           last_yield_distribution_slot, direct_minter_allowance,
 //           direct_burner_allowance)
 //         2 sync window (sync_lock_until_ts, sync_window_secs)
 //         2 fees (tin_bps, tout_bps)
+//         1 mark cadence (last_mark_ts)
 //   1   is_paused (bool)
-const _: () = assert!(PsmConfig::LEN == 594);
+const _: () = assert!(PsmConfig::LEN == 602);

@@ -49,16 +49,16 @@ import {USDOkuWrapper} from "../wrapper/USDOkuWrapper.sol";
  *      FEES ARE A LIVE DEFENCE, NOT PARITY PARAMETERS. `M_oku` steps, so the
  *      round trip mint-at-M0 / redeem-at-M1 extracts the step unless fees cover
  *      it: `profit per unit = M1/M0 - 1 - (tin + tout)/10_000`. The
- *      STEP-COVERAGE INVARIANT is static and per-leg:
+ *      STEP-COVERAGE INVARIANT is static, and lives on the EXIT leg only:
  *
- *          MAX_STEP_BPS <= tin,  MAX_STEP_BPS <= tout       (`setFees`, here)
+ *          MAX_STEP_BPS <= tout                             (`setFees`, here)
  *          stepBps <= MAX_STEP_BPS                          (`OkuM.setOkuMultiplier`)
  *
- *      Composed, every admissible step is covered on each leg independently for
- *      all time. No state, no ratchet, no cross-contract read, and no escape
- *      hatch — the guarantee is a property of the constants. Per-leg rather than
- *      combined because a cross-chain round trip pays `tin` on one chain and
- *      `tout` on the other; see `setFees` for the full argument.
+ *      Composed, the exit fee always covers the largest mark the protocol can
+ *      take, so the round trip is loss-making. No state, no ratchet, no
+ *      cross-contract read, no escape hatch. `tin` is unconstrained and ships at
+ *      ZERO: the arbitrage gain is realised on exit, so a deposit fee closes
+ *      nothing and only taxes entry. See `setFees` for the proof.
  *
  *      NOT SYNC-WINDOW GATED. Nothing in this contract is. A single-chain
  *      operation priced at this chain's own `M_oku` is correct by definition
@@ -99,12 +99,14 @@ contract SubscriptionModule is
         RedemptionQueue redemptionQueue;
         uint256 usdcDecimalMultiplier;
         /// @dev Mint fee in bps, charged on deposited USDC. Bounded above by
-        ///      `MAX_FEE_BPS` and below by `MAX_STEP_BPS` (per-leg step
-        ///      coverage). Seeded at the floor by `initialize` and never
-        ///      permitted below it, so coverage holds from block one.
+        ///      `MAX_FEE_BPS`, with NO floor — ships at 0 and may stay there.
+        ///      Step arbitrage is closed on the exit leg, so a deposit fee is
+        ///      pure product friction.
         uint256 tin;
-        /// @dev Redemption fee in bps, charged on the USDC paid out. Same
-        ///      bounds. Each leg independently covers a maximal step.
+        /// @dev Redemption fee in bps, charged on the USDC paid out. Bounded
+        ///      above by `MAX_FEE_BPS` and below by `MAX_STEP_BPS`. THIS is the
+        ///      step-arbitrage control; seeded at the floor by `initialize` and
+        ///      never permitted below it, so coverage holds from block one.
         uint256 tout;
         /// @dev The USDOku wrapper, wired post-deploy (it does not exist yet
         ///      when this contract initializes — deploy order is OkuM, queue,
@@ -217,22 +219,22 @@ contract SubscriptionModule is
         if (expected != derived) revert DecimalMultiplierMismatch(expected, derived);
         $.usdcDecimalMultiplier = derived;
 
-        // Fees ship AT THE STEP-COVERAGE FLOOR, not at zero.
+        // DEPOSITS ARE FREE. EXITS PAY THE MARK.
         //
-        // This is load-bearing, not a convenience. `OkuM.setOkuMultiplier` does
-        // not read the fee schedule — coverage is guaranteed by the invariant
-        // `tin, tout >= MAX_STEP_BPS` holding at all times. Shipping zero would
-        // leave a window between deployment and the first `setFees` call in
-        // which steps were admissible and uncovered, which is precisely the
-        // arbitrage condition. There is no "inert but installed" state for this
-        // mechanism, and that is the point: the protocol is accrual-ready and
-        // covered from `initialize`, with no ordering an operator can get wrong.
+        // `tin = 0` is not a placeholder — it is the design. The step-arbitrage
+        // gain is realised on exit, so `tout` alone closes it and a deposit fee
+        // would buy nothing while taxing the thing the product is for:
+        // permissionless, frictionless, atomic entry.
         //
-        // The earlier design shipped `(0, 0)` and relied on the token reading
-        // the schedule back and failing closed. That made zero-fee deployment
-        // safe but non-accruing, i.e. a launch-blocking step someone had to
-        // remember. Cold can raise either leg later, never lower it below here.
-        $.tin = Constants.MAX_STEP_BPS;
+        // `tout` ships AT the floor, and that IS load-bearing.
+        // `OkuM.setOkuMultiplier` does not read the fee schedule — coverage is
+        // guaranteed by `tout >= MAX_STEP_BPS` holding at all times. Shipping
+        // `tout = 0` would leave a window between deployment and the first
+        // `setFees` call in which marks were admissible and uncovered, which is
+        // precisely the arbitrage condition. So there is no "installed but
+        // inert" state: the protocol is accrual-ready and covered from
+        // `initialize`, with no ordering an operator can get wrong.
+        $.tin = 0;
         $.tout = Constants.MAX_STEP_BPS;
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
@@ -700,29 +702,37 @@ contract SubscriptionModule is
     ///      than `OKU_CAP_MANAGER` itself because AccessControl mappings are
     ///      per-contract: no new key, but a correctly-scoped capability.
     ///
-    ///      THE STEP-COVERAGE FLOOR LIVES HERE, and it is static:
+    ///      THE STEP-COVERAGE FLOOR LIVES HERE, and it applies to `tout` ONLY:
     ///
-    ///          MAX_STEP_BPS <= tin <= MAX_FEE_BPS
+    ///          0            <= tin  <= MAX_FEE_BPS
     ///          MAX_STEP_BPS <= tout <= MAX_FEE_BPS
     ///
-    ///      Since `OkuM.setOkuMultiplier` independently caps a step at
-    ///      `MAX_STEP_BPS`, every admissible step is covered on each leg for all
-    ///      time — no state, no ratchet, no escape hatch, and nothing the token
-    ///      needs to read back from this contract.
+    ///      Since `OkuM.setOkuMultiplier` independently caps a mark at
+    ///      `MAX_STEP_BPS`, the exit fee always covers the largest mark the
+    ///      protocol can take — no state, no ratchet, no escape hatch, and
+    ///      nothing the token needs to read back from this contract.
     ///
-    ///      PER-LEG RATHER THAN COMBINED, and the difference matters. A
-    ///      cross-chain round trip pays `tin` on the chain it mints on and
-    ///      `tout` on the chain it redeems on, so a combined `tin + tout` bound
-    ///      enforced separately on each chain does not bound the pair: fees of
-    ///      `(0, 2x)` on one chain and `(2x, 0)` on the other each satisfy a
-    ///      combined check while the cross-chain round trip pays nothing. A
-    ///      per-leg floor is the only form that survives that composition.
+    ///      WHY `tout` ALONE IS SUFFICIENT. The step-arbitrage gain is realised
+    ///      on EXIT, and the only exit that drains the buffer is `redeem`, which
+    ///      always charges `tout`:
     ///
-    ///      `initialize` seeds both legs AT the floor, so the invariant holds
-    ///      from deployment and this function can only ever raise them. There
-    ///      is deliberately no way to reach a zero-fee state: `setOkuMultiplier`
-    ///      does not read the schedule, so a zero-fee window would be an
-    ///      uncovered-step window.
+    ///          raw   = floor(D / M0)              <= D / M0
+    ///          gross = floor(raw * M1)            <= D(1 + s)
+    ///          net   = gross - ceil(gross * tout) <= D(1 + s)(1 - s) < D
+    ///
+    ///      for every mark `s <= MAX_STEP_BPS <= tout`. Loss-making with
+    ///      `tin = 0`. This holds cross-chain too: whichever chain the attacker
+    ///      exits on charges its own `tout`.
+    ///
+    ///      An earlier revision floored BOTH legs, on a cross-chain leg-pairing
+    ///      argument that does not survive the observation above. `tin` is
+    ///      irrelevant to the attack, so deposits are free — which matters,
+    ///      because frictionless permissionless entry is the product.
+    ///
+    ///      `initialize` seeds `tout` AT the floor, so the invariant holds from
+    ///      deployment and this function can only ever raise it. There is no way
+    ///      to reach a zero-`tout` state: `setOkuMultiplier` does not read the
+    ///      schedule, so that would be an uncovered-mark window.
     ///
     ///      Fees accrue to the USDC buffer: `tin` is deposited but not credited,
     ///      `tout` is owed but not paid out. There is no recipient address and no
@@ -737,9 +747,6 @@ contract SubscriptionModule is
         }
         if (newTout > Constants.MAX_FEE_BPS) {
             revert FeeAboveMaximum(newTout, Constants.MAX_FEE_BPS);
-        }
-        if (newTin < Constants.MAX_STEP_BPS) {
-            revert FeeBelowStepFloor(newTin, Constants.MAX_STEP_BPS);
         }
         if (newTout < Constants.MAX_STEP_BPS) {
             revert FeeBelowStepFloor(newTout, Constants.MAX_STEP_BPS);

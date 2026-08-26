@@ -107,32 +107,59 @@ pub const MAX_SYNC_WINDOW_SECS: i64 = 900;
 pub const DEFAULT_SYNC_WINDOW_SECS: i64 = 60;
 
 /// Hard ceiling on a single multiplier step, in basis points. ALSO the
-/// per-leg floor under `tin_bps` and `tout_bps`.
+/// floor under `tout_bps`.
 ///
-/// THE single number that defines the step-arbitrage defence. Exactly two
-/// rules reference it:
+/// THE single number defining the step-arbitrage defence. Two rules reference
+/// it:
 ///
 /// ```text
-///     set_multiplier / distribute_yield:  step_bps <= MAX_STEP_BPS
-///     set_fees:                           tin_bps  >= MAX_STEP_BPS
-///                                         tout_bps >= MAX_STEP_BPS
+///     set_multiplier / distribute_yield:  step_bps  <= MAX_STEP_BPS
+///     set_fees:                           tout_bps  >= MAX_STEP_BPS
 /// ```
 ///
-/// Composed, every step the program can take is covered on each leg
-/// independently, permanently, with no stored state. Raising this permits a
-/// coarser cadence and simultaneously raises the minimum fee, so the two
-/// cannot drift apart.
+/// Composed, the largest mark the program can take is at most what the exit fee
+/// charges, so mint-hold-redeem is loss-making for every mark and every fee the
+/// program admits. No stored state.
 ///
-/// Implies a MINIMUM cadence: a long outage cannot be caught up in one jump
-/// and must be walked in bounded steps. At 5 bps and ~5% APY a daily mark is
-/// ~1.37 bps, so a missed day is caught up in a single write and a missed
-/// three days still fits.
+/// TOUT ONLY, NOT BOTH LEGS. The gain is realised on EXIT, and the only exit
+/// that drains the vault is `redeem_oku_m`, which always charges `tout_bps`.
+/// `tin_bps` is irrelevant to the attack — including cross-chain, since
+/// whichever chain the attacker exits on charges its own `tout`. Deposits are
+/// free.
 ///
-/// PROVISIONAL — assumes a DAILY mark cadence. Must satisfy
-/// `MAX_STEP_BPS <= MAX_FEE_BPS`, asserted below.
+/// THE FEE IS THE PRICE OF DISCRETENESS. One mark is worth `APY x interval`:
+/// monthly ~40.7 bps, weekly ~9.6 bps, daily ~1.37 bps, 6-hourly ~0.34 bps,
+/// hourly ~0.057 bps. Mark more often and the required fee approaches zero —
+/// which is why continuously-accruing designs need none. Token-2022's
+/// `ScaledUiAmount` stores a DISCRETE multiplier, so this fee is the exact cost
+/// of that constraint and nothing more.
+///
+/// AT 2 BPS, SIZED FOR A 6-HOURLY CADENCE: ~6x headroom, and one mark absorbs
+/// ~1.5 days of catch-up after an outage.
 ///
 /// EVM mirror: `Constants.MAX_STEP_BPS`.
-pub const MAX_STEP_BPS: u64 = 5;
+pub const MAX_STEP_BPS: u64 = 2;
+
+/// Minimum wall-clock gap between two multiplier marks, in seconds.
+///
+/// Makes `MAX_STEP_BPS` mean what everyone assumes it means. Without it,
+/// `MAX_STEP_BPS` bounds ONE step while nothing bounds how many land in a slot:
+/// a compromised `rebaser` could loop `set_multiplier`, each call individually
+/// legal, and compound the multiplier arbitrarily fast — bounded only by
+/// `MAX_MULTIPLIER`. With it, yield is bounded per unit TIME, which is what the
+/// exit fee is sized against.
+///
+/// Ondo enforces the same control on OUSG at 23 hours
+/// (`RWAOracleRateCheck.MIN_PRICE_UPDATE_WINDOW`). One hour is used here because
+/// our cadence is far finer; it never binds at the intended 6-hourly interval.
+///
+/// WALL-CLOCK, not slots: the cadence is a wall-clock property, and slot times
+/// stretch under exactly the congestion that would delay a mark. Distinct from
+/// the same-slot yield fence ([`crate::yield_lock`]), which is a reentrancy-class
+/// guard measured in slots and is untouched by this.
+///
+/// EVM mirror: `Constants.MIN_MARK_INTERVAL`.
+pub const MIN_MARK_INTERVAL_SECS: i64 = 3_600;
 
 // ---------------------------------------------------------------------------
 // PSM fees (tin / tout)
@@ -148,15 +175,14 @@ pub const MAX_STEP_BPS: u64 = 5;
 // a risk-free profit equal to the whole step. A window cannot prevent
 // this — the attacker simply transacts outside it.
 //
-// Each leg is floored at `MAX_STEP_BPS`, so a round trip pays at least twice
-// the largest admissible step and is lossy by construction, permanently and
-// independently of cadence. PER-LEG rather than combined because a
-// cross-chain round trip pays `tin` on the chain it mints on and `tout` on
-// the chain it redeems on: `(0, 2x)` here and `(2x, 0)` on EVM would each
-// satisfy a combined check while the pair paid nothing.
+// `tout_bps` is floored at `MAX_STEP_BPS`, so an exit always pays at least the
+// largest admissible mark and the round trip is lossy by construction,
+// permanently and independently of cadence. `tin_bps` has NO floor and ships
+// at zero: the gain is realised on exit, so a deposit fee closes nothing.
 //
-// Both default to 0 — BELOW the floor — so the mechanism ships audited but
-// economically inert, and no step is possible until it is configured.
+// `tout_bps` ships AT the floor rather than at zero — the program no longer
+// reads the fee schedule at write time, so a zero-`tout` window would be an
+// uncovered-mark window rather than a fail-closed state.
 
 /// Hard ceiling on `tin_bps` / `tout_bps`, in basis points (100 = 1%).
 ///
@@ -168,8 +194,8 @@ pub const MAX_STEP_BPS: u64 = 5;
 /// EVM mirror: `Constants.MAX_FEE_BPS`.
 pub const MAX_FEE_BPS: u64 = 100;
 
-/// The fee floor must leave `set_fees` a non-empty admissible range.
-/// Without this, `MAX_STEP_BPS > MAX_FEE_BPS` would make every fee schedule
+/// The `tout` floor must leave `set_fees` a non-empty admissible range.
+/// Without this, `MAX_STEP_BPS > MAX_FEE_BPS` would make every `tout_bps`
 /// simultaneously too low and too high, bricking the multiplier permanently.
-/// EVM mirror: `ConstantsCouplingTest`.
+/// EVM mirror: `StepArbitrageTest::test_ConstantsCoupling_FeeFloorFitsUnderCeiling`.
 const _: () = assert!(MAX_STEP_BPS <= MAX_FEE_BPS);

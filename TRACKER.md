@@ -18,65 +18,81 @@ removable post-launch.
 
 ## 🔴 Blocks external exposure
 
-### Multiplier-arbitrage parameters must be chosen `[both]`
+### `MAX_STEP_BPS` needs treasury sign-off on the mark cadence `[both]`
 
-The mechanisms are built, enforced and tested. What is **not** decided is the
-numbers they are configured with. Read
-[`SVM/README.md § Fees`](SVM/README.md) for the invariant these feed. Step
-coverage is now the combined `tin_bps + tout_bps` on both chains (see the
-Decisions log entry below), which changes the "needs" column for the fee pair.
+**Reduced from a four-constant puzzle to one number.** The mechanisms are built,
+enforced and tested; what is not decided is the published mark cadence, and
+`MAX_STEP_BPS` follows from it mechanically.
+
+`MAX_STEP_BPS` is now simultaneously the ceiling on a single `M_oku` step and the
+per-leg floor under `tin`/`tout`:
+
+```
+setOkuMultiplier / set_multiplier:  stepBps  <= MAX_STEP_BPS
+setFees          / set_fees:        tin      >= MAX_STEP_BPS
+                                    tout     >= MAX_STEP_BPS
+```
+
+Composed, every admissible step is covered on each leg for all time, with no
+stored state. So the cadence decision and the fee decision are the same decision
+and cannot drift apart.
 
 | Parameter | Ships as | Needs |
 |---|---|---|
-| SVM rebase **cadence** | undecided | The driver for everything below |
-| `tin_bps + tout_bps` (combined step coverage) | both **0** (fail-closed) | Combined must exceed one step's yield. ~2 bps daily, >10 bps weekly at 5% APY. Either `tin` or `tout` alone is no longer the right thing to reason about — it's the sum |
-| `sync_window_secs` / `syncWindowDuration` | 60 s (ships **on**) | Confirm 60 s is the right propagation budget for the intended chain set |
-| `MAX_SYNC_WINDOW` / `MIN_SYNC_WINDOW_GAP` | 15 min / 6 h | **Stale — see Decisions log.** `MIN_SYNC_WINDOW_GAP` no longer exists (the epoch protocol it gated was removed); `MAX_SYNC_WINDOW` (15 min fail-open expiry) still applies |
-| `MAX_FEE_BPS` | 100 (1%) | Confirm 1% is an acceptable worst-case haircut. Also caps the coverable step size, i.e. sets the *minimum* `M_oku` mark cadence — see the placeholder-parameter coupling item below |
+| Mark **cadence** | assumed DAILY | The one decision. Everything below follows |
+| `MAX_STEP_BPS` | **5** (provisional) | Confirm 5 bps suits a daily mark at the intended APY. ~1.37 bps/day at 5%, so ~3.5x headroom — a missed three days still fits in one mark |
+| `tin` / `tout` | both **5** (seeded at the floor by `initialize`) | Confirm a 10 bps minimum round trip is acceptable product pricing. Raising either leg buys no extra cadence; it is purely revenue/haircut |
+| `MAX_FEE_BPS` | 100 (1%) | Confirm 1% is an acceptable worst-case haircut from a compromised cold key. No longer couples to step size |
+| `sync_window_secs` / `syncWindowDuration` | 60 s (ships on) | Confirm 60 s is the right cross-chain propagation budget. SVM-side only in effect — see the EVM note below |
+| `MAX_SYNC_WINDOW` | 15 min | Fail-open expiry ceiling. Unchanged |
 
-**`tin + tout = 0` means the protocol cannot rebase at all.** `step_is_covered`
-rejects every multiplier increase while no combined fee is configured, so this
-is fail-closed and cannot be silently forgotten — but it does mean **yield does
-not accrue on SVM (or step on EVM's `OkuM`) until fees are set**. That is the
-launch-blocking edge.
+**The old "`tin + tout = 0` means the protocol cannot rebase" launch-blocking
+edge is GONE.** `initialize` seeds both legs at the floor on both chains, so a
+fresh deployment is accrual-ready with no configuration and no ordering to get
+wrong. That was the single most likely launch mistake and it is now unreachable:
+`setFees` refuses anything below the floor, so there is no zero-fee state.
 
-**Derived constraint, needs sign-off:** `step ≤ tin + tout ≤ MAX_FEE_BPS` caps a
-single multiplier step at 1% — roughly 73 days of yield at 5% APY. This implies a
-**minimum cadence**: a longer outage cannot be caught up in one write and must be
-walked over several ticks. (The old `MIN_SYNC_WINDOW_GAP`-spaced-ticks framing no
-longer applies — see Decisions log — ticks are now only rate-limited by how often
-someone is willing to arm a window, not by an on-chain gap.) Direct analogue of
-the existing `MAX_IMPLIED_APR` catch-up limitation on EVM.
+**Derived constraint, still needs sign-off:** `MAX_STEP_BPS` caps a single mark,
+so it sets a **minimum cadence**. A longer outage cannot be caught up in one
+write and must be walked over several marks. Direct analogue of the existing
+`MAX_IMPLIED_APR` catch-up limitation on `M_usd`, and deliberate.
 
-**Historical correction worth keeping.** An earlier version of this file said the
-multiplier skew "is not user-exploitable because bridging is orchestrator-mediated".
-That was true only of the *cross-chain* surface. The *local* SVM surface — mint
-before a step, redeem after — needed no bridge, was fully permissionless, and the
-pre-existing same-slot fence does not prevent it (mint at slot `N-1`, step at `N`,
-redeem at `N+1`). That surface is what `tin + tout` coverage closes.
+**Historical corrections worth keeping.** (1) An early version of this file said
+the multiplier skew "is not user-exploitable because bridging is
+orchestrator-mediated". True only of the cross-chain surface; the *local* SVM
+surface — mint before a step, redeem after — needed no bridge and was fully
+permissionless. That is what per-leg fee coverage closes. (2) A later version
+described coverage as the combined `tin + tout`. That is sufficient on one chain
+and insufficient across two: a cross-chain round trip pays `tin` on the chain it
+mints on and `tout` on the chain it redeems on, so `(0, 2N)` here and `(2N, 0)`
+there each satisfy a combined check while the pairing pays nothing. Hence
+per-leg.
 
-### Placeholder treasury numbers are coupled, not independent `[EVM]`
+### `MAX_IMPLIED_APR` / `MAX_SOLVENCY_GAP_BPS` remain coupled `[EVM]`
 
-`MAX_STEP_BPS`, `MAX_IMPLIED_APR`, `MAX_SOLVENCY_GAP_BPS` (all `EVM/src/lib/Constants.sol`)
-and the SubscriptionModule `tin`/`tout` deploy defaults all interact and **must
-be tuned together**. Per `Constants.sol`'s own comments:
+**Narrowed.** `MAX_STEP_BPS` and the `tin`/`tout` defaults no longer participate
+in this coupling — step coverage became a self-contained relationship between
+`MAX_STEP_BPS` and itself, and the fee defaults are now derived from it rather
+than tuned independently. What remains is the `M_usd` pair:
 
-- `MAX_SOLVENCY_GAP_BPS` is a **cumulative** ceiling on `USDOku`'s declared-vs-backed
-  gap, not a per-write one. Worst-case over-accrual inside a single maximum-length
-  rate segment (`MAX_IMPLIED_APR` over `MAX_RATE_DURATION` = 30 days) is ~79 bps —
-  *below* the current 100 bps bound. So at current placeholder values, no single
-  rate write starting from a zero gap can ever be refused; the bound only bites
-  after several consecutive segments have out-run realized marks. Raise
-  `MAX_SOLVENCY_GAP_BPS` above ~79 bps and it stops being able to catch even a
-  *single* pathological write — it becomes purely a multi-segment backstop.
-- `MAX_FEE_BPS` (the `tin + tout` ceiling, `SVM`/`OkuM` shared) caps the coverable
-  `M_oku` step size, which sets the *minimum* mark cadence: a longer gap between
-  marks needs a bigger step, and a bigger step needs more fee to stay covered.
+- `MAX_SOLVENCY_GAP_BPS` is a **cumulative** ceiling on USDOku's
+  declared-vs-backed gap, not a per-write one. Worst-case over-accrual inside a
+  single maximum-length rate segment (`MAX_IMPLIED_APR` over
+  `MAX_RATE_DURATION` = 30 days) is ~79 bps — *below* the current 100 bps bound.
+  So at current values no single rate write starting from a zero gap can be
+  refused; the bound only bites after several consecutive segments have out-run
+  realized marks. Raise it above ~79 bps and it stops being able to catch even a
+  single pathological write, becoming purely a multi-segment backstop.
+- Neither can be picked in isolation without silently changing what the other
+  guarantees. `SolvencyTest` asserts the cumulative behaviour explicitly so the
+  relationship cannot change unnoticed.
 
-None of `MAX_STEP_BPS`, `MAX_IMPLIED_APR`, `MAX_SOLVENCY_GAP_BPS`, or the
-`tin`/`tout` defaults can be picked in isolation without silently changing what
-the others actually guarantee. **This blocks audit scoping** — see
-`EVM/README.md` Open questions 1–3, which name the same coupling.
+**Newly relevant:** `MAX_STEP_BPS` at 5 bps means realized marks advance slowly,
+so a declared `M_usd` rate that outpaces the mark cadence will open a gap faster
+than marks can close it. At 5% APY declared and a daily mark this is balanced;
+at a coarser mark cadence it is not. The two cadences must be chosen together.
+
+See `EVM/README.md` Open questions.
 
 ---
 
@@ -84,16 +100,13 @@ the others actually guarantee. **This blocks audit scoping** — see
 
 ### Multiplier-arbitrage follow-ups `[both]`
 
-- **`reset_step_high_water_mark` is an un-modelled trust surface `[SVM]`.**
-  Cold-multisig only, deliberately separate from `set_fees`, and emits
-  `StepHighWaterMarkReset` — but it clears the floor under `tout` and reopens
-  historical step exposure. Its honest precondition (that supply outstanding at
-  the time of the large step has substantially turned over) is **not verifiable
-  on-chain** — the contract can only make the action deliberate and loud, not
-  safe. Decide whether that is acceptable or whether the escape hatch should be
-  removed entirely (accepting that a one-off large step then pins the fee
-  permanently). The corresponding alarm and runbook entry are the operator
-  team's, per this file's scope note.
+- ~~**`reset_step_high_water_mark` is an un-modelled trust surface `[SVM]`.**~~
+  **CLOSED by deletion.** The escape hatch is gone, and so is the
+  `max_step_bps` ratchet it cleared. The static per-leg fee floor has no
+  accumulated state to unwind, so there is nothing to reset and no
+  unverifiable-precondition action to model. The EVM twin
+  (`OkuM.resetStepHighWaterMark`) went with it. Changing cadence is now an edit
+  to `MAX_STEP_BPS`, reviewed as code.
 
 - **Cross-chain *value* equality is not proven `[both]`.** Since the sync-window
   simplification (see Decisions log), `check-sync-parity.ts` compares
@@ -122,25 +135,73 @@ the others actually guarantee. **This blocks audit scoping** — see
   rather than a naive "alarm above N bps" threshold on the ratio.
 
 - **Kani proofs are not run in CI `[SVM]`.** `crates/oku-shared/src/step_coverage.rs`
-  carries `proof_covered_step_is_never_profitable` (the formal statement of the
-  whole step-arbitrage defence), plus `proof_zero_fee_admits_no_step` and
-  `proof_mark_never_exceeds_permitting_fee`; `math.rs` carries three more. They
-  are `#[cfg(kani)]` and only run under `cargo kani`, which **no CI job
-  invokes**. The properties are also covered by ordinary unit tests, so this is a
+  carries `proof_admissible_step_under_admissible_fees_is_never_profitable` (the
+  formal statement of the whole step-arbitrage defence) and
+  `proof_step_bps_ceil_is_conservative`; `math.rs` carries three more. They are
+  `#[cfg(kani)]` and only run under `cargo kani`, which **no CI job invokes**.
+  The properties are also covered by ordinary unit tests, so this is a
   strengthening rather than a gap — but a proof nobody runs will rot.
 
-- **`PsmConfig` grew to 618 bytes.** Pinned by the compile-time assert in
-  `state.rs`. Makes the fresh devnet redeploy below **mandatory** rather than
-  merely advisable — see that section for the full deployed-surface delta.
+  Note the proof got materially simpler with the static floor: it no longer has
+  to assume a relation between the step and the live fee schedule, because the
+  constants already guarantee it. Two proofs replaced three.
 
-- **EVM `initialize` grants `OKU_MINTER` / `OKU_BURNER` to `_admin` `[EVM]`.**
-  Privilege residue, not an arbitrage vector: `mint` is defused by
-  `minterAllowance` defaulting to 0, and `burn` only destroys the caller's own
-  balance. But the deploy admin retains a live `OKU_BURNER` until revoked, and
-  the "contract-only" property is currently enforced by an assertion in
-  `grantRolesMainnet.ts` rather than by the contract. Consider dropping both
-  grants from `initialize`, mirroring how `QUEUE_PSM` is deliberately granted
-  post-deploy.
+- **`PsmConfig` is 594 bytes.** Pinned by the compile-time assert in `state.rs`.
+  Shrank from 602 when `max_step_bps` was removed with the ratchet. A size change
+  alone makes the fresh devnet redeploy below **mandatory** rather than merely
+  advisable — see that section for the full deployed-surface delta.
+
+- ~~**EVM `initialize` grants `OKU_MINTER` / `OKU_BURNER` to `_admin` `[EVM]`.**~~
+  **DONE.** Both grants dropped from `initialize`. Supply authority now reaches
+  only contracts, and "no EOA can mint" is a property of the contract rather than
+  of an assertion in `grantRolesMainnet.ts`. `_admin` retains
+  `DEFAULT_ADMIN_ROLE` and can grant either role deliberately; the Hardhat
+  fixture does so explicitly, so the affordance is visible rather than
+  inherited.
+
+- **`USDOkuWrapper`'s five `nonReentrant` guards are UNTESTED `[EVM]`.**
+  `ReentrancyTest` covers the module and the queue against a hostile asset, but
+  the wrapper cannot be reached that way: it never touches USDC. Its only
+  external calls are to `OkuM` and `USDOku`, both protocol-controlled, so there
+  is no untrusted callee to reenter from and the guards are defence-in-depth
+  against a future change rather than protection against a present vector.
+
+  An earlier draft of that suite appeared to cover them by arming a callback
+  during `module.redeemUsdOku`; the selector assertion proved it did not — the
+  module calls `wrapper.unwrap` first and pays USDC out afterwards, so the
+  wrapper's guard is already released when the hostile transfer fires, and the
+  reentrant `wrap` was failing on an allowance check.
+  `test_WrapperGuardsAreNotReachableViaHostileAsset` documents this and will
+  fail if it ever becomes guard-blocked. Covering them properly needs a hostile
+  `OkuM` or `USDOku` mock.
+
+- **`SubscriptionModule.depositBuffer` has no `nonReentrant` `[EVM]`.**
+  Found by the same suite. Safe as-is — role-gated, pulls USDC inward only, and
+  reads no state across the external call that it then writes — and recorded so
+  a reviewer does not add a guard and assume `ReentrancyTest` covers it. The
+  test asserts the *absence* explicitly.
+
+- **An EVM bridge adapter must gate on `isSyncLocked()` `[EVM]`.**
+  The sync window gates nothing on EVM today, because EVM has no dedicated
+  bridge instruction — `OkuM.mint`/`burn` are the shared supply hooks the module
+  and queue use for ordinary local subscription and redemption, so gating them
+  would gate the whole PSM. The window is armed, bounded and fully observable
+  (`isSyncLocked`, `syncLockedUntil`) as an advisory signal.
+
+  When a bridge adapter is built it MUST consult it, and should do so in its own
+  contract rather than by adding the modifier back to `OkuM`. Without that, a
+  mid-tick cross-chain pairing conjures the divergence: burning 100 raw where
+  M=1.04 destroys $104 of claim while minting 100 raw where M=1.05 creates $105.
+  SVM already gates its dedicated legs (`mint_oku_m_direct` /
+  `burn_oku_m_direct`).
+
+- **`check-sync-parity.ts` should also compare FEE parity `[both]`.**
+  It compares `M_oku` values across chains, which is the right check for
+  divergence. But the per-leg fee floor is what makes a cross-chain round trip
+  lossy, and it is enforced per-chain against a per-chain constant — so if
+  `MAX_STEP_BPS` ever differs between the EVM and SVM builds, the cross pairing
+  is under-covered and nothing on-chain would notice. Cheap to add and strictly
+  stronger than a value-only comparison.
 
 - **No CI drift check on `artifacts/svm/` `[SVM]`.** `artifacts/evm/` is gated
   (`.github/workflows/test.yml`), so a stale EVM ABI fails the build. The SVM IDL
@@ -200,16 +261,21 @@ Notable deployed-surface facts vs. any older devnet build:
   `MultiplierUnpackFailed`, `ScaledUiExtensionMissing`,
   `MultiplierOutOfRange`.
 - `update_token_metadata` instruction is present.
-- **`PsmConfig` is 618 bytes** (was 562, then 602). Adds the sync-window fields
-  (`sync_lock_until_ts`, `sync_epoch`, `last_write_epoch`, `sync_window_secs`)
-  and the fee / step-coverage fields (`tin_bps`, `tout_bps`, `max_step_bps`).
-  A size change alone makes a fresh deploy mandatory.
-- New instructions: `begin_sync_window`, `end_sync_window`,
-  `set_sync_window_secs`, `set_fees`, `reset_step_high_water_mark`.
-- New error variants appended (codes 6026-6033): `SyncWindowActive`,
-  `SyncWindowGapNotElapsed`, `EpochMismatch`, `SyncWindowTooLong`,
-  `FeeAboveMax`, `StepExceedsFeeCoverage`, `FeeBelowStepHighWaterMark`,
-  `NoWriteInEpoch`. Appended deliberately so existing codes did not shift.
+- **`PsmConfig` is 594 bytes** (was 562, then 602, then 618). Adds the
+  sync-window fields (`sync_lock_until_ts`, `sync_window_secs`) and the fee
+  fields (`tin_bps`, `tout_bps`). The epoch fields (`sync_epoch`,
+  `last_write_epoch`) and `max_step_bps` were added and then removed again — do
+  not expect them. A size change alone makes a fresh deploy mandatory.
+- New instructions: `set_sync_window_secs`, `set_fees`. `begin_sync_window`,
+  `end_sync_window` and `reset_step_high_water_mark` were added and then removed;
+  the current surface is 23 instructions.
+- Error variants: `SyncWindowActive`, `SyncWindowTooLong`, `FeeAboveMax`,
+  `StepAboveMax`, `FeeBelowStepFloor`. `SyncWindowGapNotElapsed`,
+  `EpochMismatch`, `NoWriteInEpoch`, `StepExceedsFeeCoverage` and
+  `FeeBelowStepHighWaterMark` were added and then removed. **Codes shifted** as a
+  result — earlier revisions appended deliberately to avoid that, but the
+  `PsmConfig` size change already mandates a fresh deploy, so there is no
+  on-chain consumer to protect.
 
 **Follow-up required before this can be closed:** rebuild, deploy fresh
 to devnet (new PDA + mint), re-verify with the bankrun/devnet suites,
@@ -227,24 +293,19 @@ Note the new files added by the arbitrage work (`tests/shared/multiplier.ts`,
 `tests/bankrun/sync-window-and-fees.ts`) and the four new admin CLIs do type-check
 clean; the pre-existing variance issue is unchanged.
 
-### `addresses.json` still carries retired-layout live entries `[EVM]`
+### `addresses.json` is wiped and awaits a fresh deploy `[EVM]`
 
-Root `addresses.json` currently has `evm.<network>.contracts` keyed as
-`okuMoney` / `okuDollar` / `litePSM` (plus `redemptionQueue`, `mockUSDC`) across
-every listed EVM network (sepolia, base, bsc, bscTestnet, baseSepolia,
-arbSepolia), all pointing at addresses from the retired single-token storage
-layout that predates this refactor. Nothing is upgradeable in place across that
-boundary, so these entries are stale and unusable against the current
-`OkuM`/`USDOku`/`USDOkuWrapper`/`SubscriptionModule`/`RedemptionQueue` set — a
-consumer reading this file today would attach to dead or wrong-shaped
-contracts. `addresses.json` is marked auto-generated/do-not-hand-edit, so the
-correct fix is a fresh deploy per network (via `scripts/deploy/index.ts`,
-which is idempotent/resumable and will overwrite `addresses.json` on run), not
-a manual edit. **Until that redeploy happens, this file is actively
-misleading** and should probably be wiped or annotated as stale rather than
-left looking current. Retired addresses, for institutional memory — all
-identical across every listed network, i.e. never actually independently
-redeployed per chain:
+**Corrected.** An earlier version of this entry described the file as populated
+with retired-layout entries and "actively misleading". It was **wiped in
+`b38e112`**; there are no live EVM entries now. What remains open is simply that
+nothing has been redeployed since, so the file is empty rather than wrong.
+
+`addresses.json` is marked auto-generated/do-not-hand-edit, so the fix is a fresh
+deploy per network via `scripts/deploy/index.ts` (idempotent/resumable, overwrites
+the file on run) rather than a manual edit.
+
+Retired addresses, for institutional memory — all identical across every listed
+network, i.e. never actually independently redeployed per chain:
 
 | Key | Address |
 |---|---|
@@ -267,30 +328,25 @@ re-introduce a lint runner (dylint or an alternative) in CI.
 
 ## ⚪ Post-launch / low priority
 
-### `RedemptionQueue.QueueEntry` storage packing `[EVM]`
+### ~~`RedemptionQueue.QueueEntry` storage packing `[EVM]`~~ — DONE
 
-**Still open, deliberately not bundled with the fee work.** The `tout` snapshot
-added for per-entry fee pinning is a `uint16` declared immediately after `user`,
-so it occupies the 96 free bits already in that slot and costs nothing — the entry
-is still three slots. The packing optimisation below is independent, carries its
-own ceiling caveat, and was left alone rather than folded into a change it has
-nothing to do with.
+Packed to two slots, saving ~20k gas per `enqueue`:
 
-Currently three `uint256` fields per entry = three storage slots.
-`address user` (160 bits) + `uint96 rawAmount` + `uint48 timestamp` would pack
-into two, saving ~20k gas per `enqueue`.
+```
+slot 0:  user (160) + toutBps (16) + timestamp (48)  = 224 bits
+slot 1:  rawAmount (128)
+```
 
-**The v0.2 caution no longer applies.** That entry said "storage-layout change
-on a UUPS proxy — defer to v2". v0.3 is a *fresh* CREATE2 deploy with no live
-state, so this is free to do right now and progressively more expensive after
-the first mainnet deploy. If it is wanted, do it before `v0.3` ships.
+**Used `uint128`, not the `uint96` this entry originally proposed.** `uint96`
+maxes at ~7.9e28, which is **below** `Constants.MAX_TOTAL_SUPPLY` (1e33), so it
+would have introduced a real per-entry ceiling requiring a new bound and revert
+path in `enqueue` — the caveat this entry flagged. `uint128` leaves ~3.4e5
+headroom over the supply cap, so the bound is unreachable by construction and
+needs no check. `RedemptionQueueTest` probes the storage slots directly and pins
+the headroom, so a future cap raise trips a test rather than truncating an entry.
 
-**Caveat on the width.** `uint96` maxes at ~7.9e28, which comfortably holds any
-entry under the 1e9-token deploy cap (1e27 raw) but does **not** hold
-`Constants.MAX_TOTAL_SUPPLY` (1e33). Packing therefore introduces a real ceiling
-on a single queue entry that the current `uint256` does not have. Either accept
-it and enforce a matching bound in `enqueue`, or use `uint128`
-(still packs to two slots with `address` + `uint48` spilling one word).
+Done now because it was free now: a UUPS layout change with no live state. After
+the first mainnet deploy it stops being a refactor and becomes a migration.
 
 ### Solana 3 → 4 SDK bump `[SVM]`
 
@@ -377,17 +433,25 @@ kill-list is finalised:
   rotation by the cold multisig via Squads; a documented IDL call in
   the runbook is sufficient. Build CLIs only if the runbook requires
   them.
-- `reset-step-high-water-mark.ts` — no CLI. Deliberate for now: the action
-  reopens historical step exposure and should be a considered, one-off cold
-  multisig call rather than something with a convenient wrapper. Revisit only
-  if the runbook ends up needing it regularly, which would itself be a smell.
+- ~~`reset-step-high-water-mark.ts`~~ — **moot.** The instruction no longer
+  exists.
 
-**Shipped by the arbitrage work** (listed so the gap analysis above stays
-honest): EVM `beginSyncWindow.ts`, `endSyncWindow.ts`,
-`setSyncWindowDuration.ts`, `setFees.ts`; SVM `sync-window.ts`,
-`set-sync-window-secs.ts`, `set-fees.ts`, `check-sync-parity.ts`. The
-pre-existing `pause.ts` / `unpause.ts` `--target` bug (documented
-`okuM|usdOku`, only `token|psm` accepted) was fixed at the same time.
+**Still missing, worth building before the backend integrates:**
+
+- EVM `mintUsdOku.ts` / `redeemUsdOku.ts` — the one-transaction USDC↔USDOku
+  path has contract functions and quote views but no operator CLI. `psmMint.ts`
+  / `psmRedeem.ts` cover only the OkuM leg. Low effort; the backend will want
+  the USDOku path.
+
+**Shipped:** EVM `setSyncWindowDuration.ts`, `setFees.ts`,
+`setOkuMultiplier.ts`, `distributeYield.ts` (new — the dollar-denominated mark
+entry, restoring cross-chain symmetry with SVM's `distribute_yield`),
+`haltAccrual.ts`, `resumeAccrual.ts`, `solvencyStatus.ts`, `wrapperSunset.ts`;
+SVM `sync-window.ts`, `set-sync-window-secs.ts`, `set-fees.ts`,
+`check-sync-parity.ts`. `beginSyncWindow.ts` / `endSyncWindow.ts` were shipped
+and then deleted with the epoch protocol. The pre-existing `pause.ts` /
+`unpause.ts` `--target` bug (documented `okuM|usdOku`, only `token|psm`
+accepted) was fixed along the way.
 
 ---
 
@@ -396,6 +460,69 @@ pre-existing `pause.ts` / `unpause.ts` `--target` bug (documented
 Recorded because several of these are counter-intuitive, and re-deriving them
 from the code alone would be slow. Each is a *closed* decision; reopen only with
 the reasoning below in hand.
+
+**STEP COVERAGE IS STATIC AND PER-LEG. (Latest, supersedes the combined-coverage
+entries further down.)**
+
+```
+setOkuMultiplier / set_multiplier:  stepBps  <= MAX_STEP_BPS
+setFees          / set_fees:        tin      >= MAX_STEP_BPS
+                                    tout     >= MAX_STEP_BPS
+```
+
+Replaced four interacting mechanisms — a `tin() + tout()` read back into the
+token at write time, a `stepHighWaterMark` ratchet, a floor on later `setFees`
+calls against that mark, and a cold `resetStepHighWaterMark` escape hatch — with
+a relationship between two constants. Strictly stronger: the ratchet only ever
+covered steps that had *actually occurred*, whereas the floor covers every step
+the protocol *can* take. Also removes the token→module dependency and the
+escape hatch's unverifiable precondition.
+
+**Per-leg rather than combined, and this was the decisive argument.** A combined
+`tin + tout >= step` rule is sufficient on one chain and insufficient across two:
+a cross-chain round trip pays `tin` on the chain it mints on and `tout` on the
+chain it redeems on, so `(0, 2N)` on one chain and `(2N, 0)` on the other each
+satisfy a combined check while the pairing pays nothing at all. Cost: the minimum
+round trip is `2 × MAX_STEP_BPS` rather than `MAX_STEP_BPS`.
+
+**Fees ship AT the floor, not at zero.** This was a correction made mid-
+implementation, and it is the one non-obvious consequence. Once the token stops
+reading the fee schedule, "ships inert at zero fees" is no longer fail-closed —
+it is an *uncovered-step window* lasting until someone calls `setFees`. So
+`initialize` seeds both legs at `MAX_STEP_BPS` on both chains and `setFees` can
+only raise them. Side benefit: the launch-blocking "remember to set fees or the
+protocol cannot accrue" step disappears.
+
+**Industry precedent, deliberately not invented here.** The accepted defences for
+a discretely-marked share token are (a) continuous accrual, (b) a
+subscription/redemption fee at least as large as the mark, (c) a settlement
+delay. (a) is unavailable: ERC-8056 and Token-2022 `ScaledUiAmount` both define
+the multiplier as a *stored discrete value*, so it cannot accrue per-second. We
+use (b) — the same `tin`/`tout` shape as MakerDAO's PSM, which this module was
+ported from — and already have (c) in the redemption queue. Nothing beyond that
+is ours.
+
+**THE SYNC WINDOW GATES ONLY BRIDGE LEGS, and on EVM that means nothing yet.**
+A single-chain operation priced at its own chain's `M_oku` is correct whatever the
+peer believes, so the previous gating of module mint/redeem, queue processing and
+wrapper wrap/unwrap (11 EVM call sites, 2 SVM instructions) bought no security
+and cost an outage after every mark. SVM keeps the window on
+`mint_oku_m_direct` / `burn_oku_m_direct`, which genuinely do move value across a
+multiplier boundary as a pair.
+
+EVM has no counterpart instruction: `OkuM.mint`/`burn` are the shared supply
+hooks the module and queue use for ordinary local subscription and redemption. An
+early attempt at this change DID gate them, on the theory that they were "the
+bridge legs", and transitively re-gated the entire PSM. The window is therefore
+retained on EVM as an armed, bounded, fully observable advisory signal, and the
+bridge adapter — when it exists — must consult it. Tracked above.
+
+**Why a time lock is right for one and wrong for the other.** The two edges
+differ in kind. Cross-chain divergence is *transient and self-correcting*: once
+the lagging chain ticks, the edge is exactly zero, so making the attacker wait
+removes it. A step's gain is *permanent* and the multiplier is monotone, so
+waiting costs a step-arbitrageur nothing and no window length deters them. Hence
+a lock for the bridge, a fee floor for the steps.
 
 **Two harms, two mechanisms, no substitution.** Cross-chain divergence needs a
 *window* (profit requires transacting while chains disagree). Local step

@@ -1240,59 +1240,6 @@
       ]
     },
     {
-      "name": "reset_step_high_water_mark",
-      "docs": [
-        "Clear the multiplier-step high-water mark (CAP_MANAGER only).",
-        "",
-        "REOPENS HISTORICAL STEP-ARBITRAGE EXPOSURE. Separate from `set_fees` so",
-        "it cannot happen as a side effect of a routine fee change. See the",
-        "instruction doc for when this is legitimate."
-      ],
-      "discriminator": [
-        228,
-        172,
-        87,
-        4,
-        88,
-        19,
-        98,
-        125
-      ],
-      "accounts": [
-        {
-          "name": "cap_manager",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  115,
-                  109,
-                  95,
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": []
-    },
-    {
       "name": "set_authority",
       "discriminator": [
         133,
@@ -1463,10 +1410,10 @@
       "name": "set_fees",
       "docs": [
         "Set the `tin` / `tout` fee schedule in basis points (CAP_MANAGER",
-        "only). The COMBINED `tin + tout` is the local step-arbitrage",
-        "control and must cover every step taken so far",
-        "(`max_step_bps`). Both bounded by `MAX_FEE_BPS`; both default to 0,",
-        "which means no step is possible until a schedule is set."
+        "only). This is the local step-arbitrage control. Each leg is bounded",
+        "below by `MAX_STEP_BPS` and above by `MAX_FEE_BPS`; both default to 0,",
+        "which is below the floor, so no step is possible until a schedule is",
+        "set."
       ],
       "discriminator": [
         137,
@@ -2285,19 +2232,6 @@
       ]
     },
     {
-      "name": "StepHighWaterMarkReset",
-      "discriminator": [
-        18,
-        13,
-        32,
-        72,
-        152,
-        242,
-        110,
-        173
-      ]
-    },
-    {
       "name": "SyncWindowArmed",
       "discriminator": [
         158,
@@ -2524,13 +2458,13 @@
     },
     {
       "code": 6029,
-      "name": "StepExceedsFeeCoverage",
-      "msg": "Multiplier step exceeds what tin+tout covers (raise fees or take a smaller step)"
+      "name": "StepAboveMax",
+      "msg": "Multiplier step exceeds MAX_STEP_BPS (take a smaller step)"
     },
     {
       "code": 6030,
-      "name": "FeeBelowStepHighWaterMark",
-      "msg": "Proposed tin+tout is below the step high-water mark"
+      "name": "FeeBelowStepFloor",
+      "msg": "Proposed fee is below the per-leg step-coverage floor (MAX_STEP_BPS)"
     }
   ],
   "types": [
@@ -3364,30 +3298,6 @@
               "Redemption fee in basis points, charged on the USDC paid out."
             ],
             "type": "u64"
-          },
-          {
-            "name": "max_step_bps",
-            "docs": [
-              "High-water mark of every multiplier step ever taken, in basis points,",
-              "rounded up. `set_fees` refuses any `tin_bps + tout_bps` below it.",
-              "",
-              "This is the second half of the step-arbitrage invariant. The first half",
-              "(`step_is_covered`, enforced at write time) stops an operator creating",
-              "exposure the current fees do not cover. This half stops them *removing*",
-              "coverage afterwards — otherwise \"raise fees, take a big step, lower",
-              "fees\" hands a cheap exit to everyone who held across the step.",
-              "",
-              "A time-based cooldown was considered and rejected: the attacker's edge is",
-              "locked in when the step lands and does not decay, and the multiplier is",
-              "monotonic so waiting costs them nothing. A cooldown delays the profit",
-              "rather than removing it. A high-water mark has no expiry.",
-              "",
-              "Less restrictive than it sounds: it pins the fees only against steps",
-              "actually taken. If every step was 1.4 bps, the combined fees can still",
-              "be lowered to 1.4 bps. Cleared only by the explicit, separately-gated",
-              "`reset_step_high_water_mark`."
-            ],
-            "type": "u64"
           }
         ]
       }
@@ -3503,32 +3413,6 @@
           {
             "name": "pending_admin",
             "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "StepHighWaterMarkReset",
-      "docs": [
-        "Emitted when `reset_step_high_water_mark` clears the step floor under",
-        "`tout_bps`.",
-        "",
-        "ALARM ON THIS. It reopens historical step-arbitrage exposure: raw acquired",
-        "before a large past step can subsequently be redeemed at a fee that no",
-        "longer covers that step. Legitimate only when the supply outstanding at the",
-        "time of the step has substantially turned over — a judgement the chain",
-        "cannot make, which is why the action is cold-gated and separately named."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "old_mark_bps",
-            "type": "u64"
-          },
-          {
-            "name": "tout_bps_at_reset",
-            "type": "u64"
           }
         ]
       }

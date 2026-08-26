@@ -56,18 +56,11 @@ async function main() {
   logger.info(`Quoted raw out:  ${ethers.formatEther(quoted)}`);
   logger.info(`Displays as:     $${ethers.formatEther(await okuM.toUIAmount(quoted))}`);
 
-  // The sync window is the one revert an otherwise-valid mint hits, and it is
-  // transient by construction — worth naming rather than surfacing as an opaque
-  // failure.
-  if (await okuM.isSyncLocked()) {
-    const until: bigint = await okuM.syncLockedUntil();
-    throw new Error(
-      `A multiplier step is propagating: the module reverts SyncWindowActive until ` +
-        `${new Date(Number(until) * 1000).toISOString()}. This is bounded and ` +
-        `auto-expiring (MAX_SYNC_WINDOW is 15 minutes) — retry, do not treat it as ` +
-        `an outage.`
-    );
-  }
+  // NOTE: no sync-window pre-check any more. The module is not sync-gated —
+  // the window fences cross-chain bridge legs, and a single-chain mint or
+  // redeem is priced at this chain's own `M_oku`, which is correct whatever a
+  // peer chain currently believes. This script used to refuse to submit while a
+  // window was open; that was a self-imposed outage.
   if (await (moduleContract as any).paused()) {
     throw new Error("SubscriptionModule is paused — mint and redeem are blocked.");
   }

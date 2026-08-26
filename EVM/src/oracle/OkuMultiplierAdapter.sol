@@ -156,31 +156,10 @@ contract OkuMultiplierAdapter {
         return true;
     }
 
-    // ============ Post-step sync window ============
-    //
-    // Surfaced so a consumer can see that the module is refusing to transact
-    // against the price this adapter is publishing.
-    //
-    // DELIBERATELY NOT FOLDED INTO `isHealthy()`. The multiplier is genuinely
-    // correct during a window — the step that armed it has already landed here;
-    // the window holds this chain still while the peer catches up. Reporting
-    // unhealthy would trigger needless liquidation pauses on an accurate feed.
-    // The asymmetry worth knowing about is narrower than "bad price": for at
-    // most `MAX_SYNC_WINDOW`, a position valued off this feed cannot be unwound
-    // through the module. Consumers who care can branch on it; the rest are no
-    // worse off than before.
-
-    /// @notice True while the post-step sync window is engaged, during which
-    ///         `SubscriptionModule` mint/redeem revert.
-    /// @dev Bounded and auto-expiring by construction, so treat a `true` here as
-    ///      transient (retry) rather than as an outage.
-    function isSyncLocked() external view returns (bool) {
-        return token.isSyncLocked();
-    }
-
-    /// @notice Exclusive timestamp at which the current sync window lifts.
-    ///         `0` when none has ever been armed.
-    function syncLockedUntil() external view returns (uint256) {
-        return token.syncLockedUntil();
-    }
+    // NOTE: `isSyncLocked` / `syncLockedUntil` passthroughs were removed with
+    // the sync window itself. They surfaced a mechanism that gated nothing, and
+    // their NatSpec claimed "`SubscriptionModule` mint/redeem revert" — which
+    // had stopped being true. `isHealthy()` never depended on them; it uses
+    // `effectiveAt()`, which is the staleness signal a price consumer actually
+    // wants.
 }

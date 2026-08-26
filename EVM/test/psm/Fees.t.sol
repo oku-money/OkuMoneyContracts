@@ -39,9 +39,8 @@ contract FeesTest is BaseTest {
     uint256 internal constant TOUT = 50; // 50 bps
     uint256 internal constant TIN = 25; // 25 bps
 
-    /// @dev The minimum either leg can be set to. Replaces the `0` these tests
-    ///      used to pass when isolating one leg's effect: "off" is now the
-    ///      step-coverage floor, because zero is unreachable.
+    /// @dev "Off" for the EXIT leg — the step-coverage floor, the least `tout`
+    ///      can ever be. The mint leg's "off" is a plain 0.
     uint256 internal constant FLOOR = Constants.MAX_STEP_BPS;
 
     function setUp() public override {
@@ -64,25 +63,32 @@ contract FeesTest is BaseTest {
 
     // ============ Ships covered, not inert ============
 
-    /// @notice Fees ship AT THE STEP-COVERAGE FLOOR, not at zero.
+    /// @notice DEPOSITS ARE FREE. EXITS PAY THE MARK.
     ///
-    /// @dev This test previously asserted `tin == tout == 0` ("ships inert").
-    ///      Inverted deliberately. The old design let the token read the fee
-    ///      schedule back and refuse to step while it was zero, which made a
-    ///      zero-fee deployment safe but non-accruing. The token no longer reads
-    ///      the schedule, so a zero-fee window would be an UNCOVERED-STEP
-    ///      window — hence `initialize` seeds the floor and `setFees` can only
-    ///      raise it.
-    function test_ShipsCovered_BothFeesAtFloor() public view {
-        assertEq(module.tin(), Constants.MAX_STEP_BPS);
-        assertEq(module.tout(), Constants.MAX_STEP_BPS);
+    /// @dev `tin` ships at 0 with no floor; `tout` ships at the step-coverage
+    ///      floor and can never go below it.
+    ///
+    ///      The asymmetry is the design, and it went through two corrections to
+    ///      get here. It first asserted `tin == tout == 0` ("ships inert"),
+    ///      which was safe only because the token used to read the fee schedule
+    ///      back and refuse to mark while it was empty. It then asserted both
+    ///      legs at the floor, which was safe but taxed entry for nothing. The
+    ///      arbitrage gain is realised on EXIT, so `tout` alone closes it —
+    ///      leaving permissionless deposits frictionless, which is the product.
+    function test_ShipsFreeToEnter_CoveredToExit() public view {
+        assertEq(module.tin(), 0, "deposits are free");
+        assertEq(module.tout(), Constants.MAX_STEP_BPS, "exits cover the mark");
     }
 
-    /// @notice There is no reachable zero-fee state.
-    function test_ZeroFeesUnreachable() public {
+    /// @notice `tout = 0` is unreachable; `tin = 0` is the shipped default.
+    function test_ZeroToutUnreachable_ZeroTinFine() public {
         vm.prank(capManager);
         vm.expectPartialRevert(SubscriptionModule.FeeBelowStepFloor.selector);
         module.setFees(0, 0);
+
+        vm.prank(capManager);
+        module.setFees(0, Constants.MAX_STEP_BPS);
+        assertEq(module.tin(), 0);
     }
 
     /// @dev The fee helpers must still be exact identities AT zero, even though
@@ -103,7 +109,7 @@ contract FeesTest is BaseTest {
     ///         post-fee.
     function test_Regression_ToutDoesNotTripSlippageFloor() public {
         uint256 raw = _psmMint(user1, 1000e6);
-        _setFees(FLOOR, TOUT);
+        _setFees(0, TOUT);
 
         uint256 out = _redeemAs(user1, raw);
         assertGt(out, 0, "redemption reverted or paid nothing with tout enabled");
@@ -136,7 +142,7 @@ contract FeesTest is BaseTest {
 
     function test_Tout_WithholdsExactCeilRoundedFee() public {
         uint256 raw = _psmMint(user1, 1000e6);
-        _setFees(FLOOR, TOUT);
+        _setFees(0, TOUT);
 
         uint256 gross = MathLib.dollarsToUsdc(
             MathLib.toUiAmount(raw, token.uiMultiplier()), token.usdcDecimalMultiplier()
@@ -174,7 +180,7 @@ contract FeesTest is BaseTest {
     ///      buffer keeps them, so a fee raises the collateral ratio.
     function test_Fee_AccruesToBuffer() public {
         uint256 raw = _psmMint(user1, 1000e6);
-        _setFees(FLOOR, TOUT);
+        _setFees(0, TOUT);
 
         uint256 gross = MathLib.dollarsToUsdc(
             MathLib.toUiAmount(raw, token.uiMultiplier()), token.usdcDecimalMultiplier()
@@ -191,7 +197,7 @@ contract FeesTest is BaseTest {
     ///      rather than burn the user's tokens for a zero transfer.
     function test_Tout_RejectsRedemptionFullyConsumedByFee() public {
         _psmMint(user1, 1000e6);
-        _setFees(FLOOR, Constants.MAX_FEE_BPS);
+        _setFees(0, Constants.MAX_FEE_BPS);
 
         // One USDC-unit's worth of raw: gross = 1, fee = ceil(1 * 100/10000) = 1,
         // net = 0.
@@ -234,7 +240,7 @@ contract FeesTest is BaseTest {
         vm.prank(bufferWithdrawer);
         module.withdrawUsdc(treasury, buffered);
 
-        _setFees(FLOOR, TOUT);
+        _setFees(0, TOUT);
         _redeemAs(user1, raw);
         assertEq(queue.queueLength(), 1, "expected a queued entry");
         // casting to 'uint16' is safe because TOUT is a 50-bps constant.
@@ -242,7 +248,7 @@ contract FeesTest is BaseTest {
         assertEq(queue.getQueueEntry(0).toutBps, uint16(TOUT), "tout not snapshotted");
 
         // Governance raises the fee AFTER this user queued.
-        _setFees(FLOOR, Constants.MAX_FEE_BPS);
+        _setFees(0, Constants.MAX_FEE_BPS);
 
         uint256 gross = MathLib.dollarsToUsdc(
             MathLib.toUiAmount(raw, token.uiMultiplier()), token.usdcDecimalMultiplier()
@@ -269,7 +275,7 @@ contract FeesTest is BaseTest {
         vm.prank(bufferWithdrawer);
         module.withdrawUsdc(treasury, buffered);
 
-        _setFees(FLOOR, TOUT);
+        _setFees(0, TOUT);
         _redeemAs(user1, raw);
 
         uint256 gross = MathLib.dollarsToUsdc(
@@ -294,12 +300,12 @@ contract FeesTest is BaseTest {
         module.withdrawUsdc(treasury, buffered);
 
         // Queue at the maximum fee.
-        _setFees(FLOOR, Constants.MAX_FEE_BPS);
+        _setFees(0, Constants.MAX_FEE_BPS);
         _redeemAs(user1, raw);
         assertEq(queue.getQueueEntry(0).toutBps, uint16(Constants.MAX_FEE_BPS));
 
         // Governance then CUTS the fee.
-        _setFees(FLOOR, TOUT);
+        _setFees(0, TOUT);
 
         uint256 gross = MathLib.dollarsToUsdc(
             MathLib.toUiAmount(raw, token.uiMultiplier()), token.usdcDecimalMultiplier()
@@ -359,7 +365,7 @@ contract FeesTest is BaseTest {
             )
         );
         vm.prank(capManager);
-        module.setFees(FLOOR, Constants.MAX_FEE_BPS + 1);
+        module.setFees(0, Constants.MAX_FEE_BPS + 1);
     }
 
     function test_SetFees_AcceptsExactlyMax() public {
@@ -381,7 +387,7 @@ contract FeesTest is BaseTest {
             )
         );
         vm.prank(psmPauser);
-        module.setFees(FLOOR, TOUT);
+        module.setFees(0, TOUT);
 
         // Holding the token's cap-manager role is NOT sufficient on the PSM.
         assertTrue(token.hasRole(Roles.OKU_CAP_MANAGER, capManager));

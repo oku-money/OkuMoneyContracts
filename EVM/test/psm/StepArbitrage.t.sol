@@ -19,8 +19,10 @@ import {SubscriptionModule} from "../../src/psm/SubscriptionModule.sol";
  *      converts a mark into USDC out of the buffer. The attacker holds raw
  *      across the step and needs no transaction while any window is open, which
  *      is exactly why a time lock is NOT the defence here — no window length
- *      deters someone who is simply waiting. (Contrast `SyncWindowTest`, where a
- *      time lock IS the right tool because the edge is transient.)
+ *      deters someone who is simply waiting. Contrast cross-chain divergence,
+ *      where a time lock IS the right tool because the edge is transient — that
+ *      mechanism survives on SVM and was deleted on EVM, which has no bridge
+ *      leg to fence.
  *
  *      THE DEFENCE is the round-trip fee:
  *
@@ -86,9 +88,10 @@ contract StepArbitrageTest is BaseTest {
         uint256 m0 = token.uiMultiplier();
         uint256 m1 = m0 + (m0 * stepBps) / Constants.BASIS_POINTS;
         if (m1 <= m0) m1 = m0 + 1;
+        _readyMark();
         vm.prank(rateSetter);
         token.setOkuMultiplier(m1);
-        _warpPastSyncWindow();
+        _warpPastMarkInterval();
 
         // Redeem at M1.
         vm.startPrank(user1);
@@ -111,9 +114,8 @@ contract StepArbitrageTest is BaseTest {
     ///      the price of the per-leg rule, and it is what buys the cross-chain
     ///      guarantee below.
     function test_FloorFees_MaximalStep_IsNeverProfitable() public {
-        int256 profit = _roundTrip(
-            Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS, 1_000_000e6
-        );
+        // THE worst case: free entry, floor exit, maximal mark.
+        int256 profit = _roundTrip(0, Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS, 1_000_000e6);
         assertLt(profit, 0, "floor fees against a maximal step must be loss-making");
     }
 
@@ -122,7 +124,7 @@ contract StepArbitrageTest is BaseTest {
     ///         that would make dust extraction profitable at scale.
     function test_OneWeiStep_AtFloorFees_IsNeverProfitable() public {
         vm.prank(capManager);
-        module.setFees(Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS);
+        module.setFees(0, Constants.MAX_STEP_BPS);
 
         uint256 usdcIn = 1_000_000e6;
         usdc.mint(user1, usdcIn);
@@ -132,9 +134,10 @@ contract StepArbitrageTest is BaseTest {
         vm.stopPrank();
 
         uint256 target = token.uiMultiplier() + 1;
+        _readyMark();
         vm.prank(rateSetter);
         token.setOkuMultiplier(target);
-        _warpPastSyncWindow();
+        _warpPastMarkInterval();
 
         vm.startPrank(user1);
         token.approve(address(module), raw);
@@ -159,14 +162,16 @@ contract StepArbitrageTest is BaseTest {
     ///      payout is monotonically decreasing in both fees, so the floor pair
     ///      is the worst case and the rest is confirmation.
     function test_Grid_EveryAdmissibleCombinationIsUnprofitable() public {
-        uint256[3] memory fees =
-            [Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS + 1, Constants.MAX_FEE_BPS];
+        // `tin` from ZERO — it has no floor, and the free-deposit configuration
+        // that ships is the one that most needs to be proven safe.
+        uint256[3] memory tins = [uint256(0), Constants.MAX_STEP_BPS, Constants.MAX_FEE_BPS];
+        uint256[2] memory touts = [Constants.MAX_STEP_BPS, Constants.MAX_FEE_BPS];
 
-        for (uint256 i; i < fees.length; i++) {
-            for (uint256 j; j < fees.length; j++) {
+        for (uint256 i; i < tins.length; i++) {
+            for (uint256 j; j < touts.length; j++) {
                 for (uint256 step = 1; step <= Constants.MAX_STEP_BPS; step++) {
                     uint256 snap = vm.snapshotState();
-                    int256 profit = _roundTrip(fees[i], fees[j], step, 1_000_000e6);
+                    int256 profit = _roundTrip(tins[i], touts[j], step, 1_000_000e6);
                     assertLe(profit, 0, "an admissible fee/step combination leaked value");
                     vm.revertToState(snap);
                 }
@@ -185,7 +190,7 @@ contract StepArbitrageTest is BaseTest {
         // Exactly the region the contracts admit. There is no illegal region to
         // exclude by hand any more — the bounds ARE the admissibility rule.
         uint256 stepBps = _bound(stepSeed, 1, Constants.MAX_STEP_BPS);
-        uint256 tinBps = _bound(tinSeed, Constants.MAX_STEP_BPS, Constants.MAX_FEE_BPS);
+        uint256 tinBps = _bound(tinSeed, 0, Constants.MAX_FEE_BPS);
         uint256 toutBps = _bound(toutSeed, Constants.MAX_STEP_BPS, Constants.MAX_FEE_BPS);
         uint256 usdcIn = _bound(amountSeed, 1e6, 5_000_000e6);
 
@@ -207,9 +212,7 @@ contract StepArbitrageTest is BaseTest {
     function test_CrossChainLegPairing_IsNeverProfitable() public {
         // The floor is the cheapest `tin` any chain can offer, and likewise the
         // cheapest `tout`. A full maximal step of divergence between chains.
-        int256 profit = _roundTrip(
-            Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS, 1_000_000e6
-        );
+        int256 profit = _roundTrip(0, Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS, 1_000_000e6);
         assertLt(profit, 0, "cheapest cross-chain leg pairing must be loss-making");
     }
 
@@ -222,6 +225,7 @@ contract StepArbitrageTest is BaseTest {
         uint256 target =
             (Constants.PRECISION * (Constants.BASIS_POINTS + oversized)) / Constants.BASIS_POINTS;
 
+        _readyMark();
         vm.prank(rateSetter);
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -233,8 +237,8 @@ contract StepArbitrageTest is BaseTest {
         token.setOkuMultiplier(target);
     }
 
-    /// @notice Neither leg can be set below the floor.
-    function test_FeeBelowFloor_IsRefused() public {
+    /// @notice `tout` cannot be set below the floor. `tin` has no floor.
+    function test_ToutBelowFloor_IsRefused_TinIsFree() public {
         vm.startPrank(capManager);
 
         vm.expectRevert(
@@ -244,18 +248,12 @@ contract StepArbitrageTest is BaseTest {
                 Constants.MAX_STEP_BPS
             )
         );
-        module.setFees(Constants.MAX_STEP_BPS - 1, Constants.MAX_STEP_BPS);
+        module.setFees(0, Constants.MAX_STEP_BPS - 1);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                SubscriptionModule.FeeBelowStepFloor.selector,
-                Constants.MAX_STEP_BPS - 1,
-                Constants.MAX_STEP_BPS
-            )
-        );
-        module.setFees(Constants.MAX_STEP_BPS, Constants.MAX_STEP_BPS - 1);
-
+        // A zero mint fee is not merely tolerated, it is the shipped default.
+        module.setFees(0, Constants.MAX_STEP_BPS);
         vm.stopPrank();
+        assertEq(module.tin(), 0);
     }
 
     /// @notice ZERO FEES ARE UNREACHABLE. Not merely discouraged — there is no
@@ -265,9 +263,9 @@ contract StepArbitrageTest is BaseTest {
     ///      non-accruing, and made "someone remembers to call `setFees`" a
     ///      launch dependency. Now the floor is seeded at `initialize` and the
     ///      only writer refuses to go below it.
-    function test_ZeroFeesAreUnreachable() public {
-        assertEq(module.tin(), Constants.MAX_STEP_BPS, "tin ships at the floor");
-        assertEq(module.tout(), Constants.MAX_STEP_BPS, "tout ships at the floor");
+    function test_ZeroExitFeeIsUnreachable() public {
+        assertEq(module.tin(), 0, "deposits ship free");
+        assertEq(module.tout(), Constants.MAX_STEP_BPS, "exits ship at the floor");
 
         vm.prank(capManager);
         vm.expectPartialRevert(SubscriptionModule.FeeBelowStepFloor.selector);
@@ -284,12 +282,12 @@ contract StepArbitrageTest is BaseTest {
         uint256 m0 = token.uiMultiplier();
         uint256 m1 = m0 + (m0 * Constants.MAX_STEP_BPS) / Constants.BASIS_POINTS;
 
+        _readyMark();
         vm.prank(rateSetter);
         token.setOkuMultiplier(m1);
-        _warpPastSyncWindow();
+        _warpPastMarkInterval();
 
-        assertGe(module.tin(), Constants.MAX_STEP_BPS);
-        assertGe(module.tout(), Constants.MAX_STEP_BPS);
+        assertGe(module.tout(), Constants.MAX_STEP_BPS, "the exit leg covers it");
     }
 
     // ============ The constants must remain compatible ============
